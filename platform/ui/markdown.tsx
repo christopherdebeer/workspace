@@ -87,11 +87,34 @@ export const safeFrameUrl = (raw: unknown): string | null => cleanUrl(raw, 'fram
  *  host's knowledge, not the renderer's. */
 export type DocHrefResolver = (href: string, base?: string) => string | null;
 
+/**
+ * A fence's location in the SOURCE markdown — what makes fence-grain editing
+ * possible at all. `body` is the range of the fenced content between the fence
+ * lines; `block` covers the whole fence including them. A host splices an
+ * edited body straight back into the owning fact's text:
+ *
+ *   md.slice(0, body.from) + next + md.slice(body.to)
+ *
+ * Only TOP-LEVEL fences carry a range. A fence nested in a list or blockquote
+ * has no reliable offset (marked's nested `raw` doesn't reconstruct the source
+ * byte-for-byte through container tokens), and editing against a wrong offset
+ * would corrupt the document — so those render read-only rather than guess.
+ */
+export interface FenceRange {
+  body: { from: number; to: number };
+  block: { from: number; to: number };
+}
+
 /** What a host may do with a fence beyond the static floor. Returning `null`
  *  (or omitting the hook) falls back to chips + `<pre>` — the declaration,
  *  legibly, which is always a correct rendering. */
 export interface FenceRender {
-  (ctx: { meta: FenceMeta; body: string; opts: MdOpts }): React.ReactNode | null;
+  (ctx: { meta: FenceMeta; body: string; opts: MdOpts; range: FenceRange | null }): React.ReactNode | null;
+}
+
+/** Extra chrome for a fence's chip row (a host's edit affordance). */
+export interface FenceActions {
+  (ctx: { meta: FenceMeta; body: string; range: FenceRange | null }): React.ReactNode | null;
 }
 
 /** Options threaded through the renderer (all optional — plain rendering
@@ -114,6 +137,8 @@ export interface MdOpts {
   resolveDocHref?: DocHrefResolver;
   /** A host's richer fence rendering (display-only viewers, embeds). */
   renderFence?: FenceRender;
+  /** Extra chrome in a fence's chip row — a host's edit affordance. */
+  fenceActions?: FenceActions;
   /** Suppress the fence chip row (a host that draws its own). */
   hideFenceChips?: boolean;
   /** Nested markdown → tokens. Required for ```md fences to render as
@@ -174,10 +199,12 @@ const chipHue = (s: string): number => {
 /** The fence's declaration as a chip row — the same vocabulary and class names
  *  lit's `addFenceChips` emits (ADR-0063 gem 1), so one stylesheet dresses
  *  both surfaces and a fence looks the same wherever it is read. */
-export function FenceChips({ meta, o }: { meta: FenceMeta; o: MdOpts }): React.JSX.Element | null {
+export function FenceChips({ meta, o, actions }: { meta: FenceMeta; o: MdOpts; actions?: React.ReactNode }): React.JSX.Element | null {
   const attrs = Object.entries(meta.attrs).filter(([k, v]) => !NOISY_ATTRS.has(k) && v !== 'true');
   const hasMeta = meta.isOutput || meta.directives.length > 0 || meta.tags.length > 0 || attrs.length > 0 || !!meta.source || !!meta.output || !!meta.file;
-  if (!hasMeta || meta.directives.includes('hidemeta')) return null;
+  // A bare fence carries no declaration to draw — but if the host offered an
+  // action (an edit affordance) the row still has to exist to hold it.
+  if ((!hasMeta && !actions) || meta.directives.includes('hidemeta')) return null;
   const chip = (cls: string, text: string, colored = true, node?: React.ReactNode): React.JSX.Element => (
     <span key={`${cls}:${text}`} className={`fchip ${cls}`} style={colored ? { borderLeftColor: `hsl(${chipHue(text)} 45% 55%)` } : undefined}>
       {node ?? text}
@@ -190,7 +217,7 @@ export function FenceChips({ meta, o }: { meta: FenceMeta; o: MdOpts }): React.J
   return (
     <div className="fence-chips">
       {meta.isOutput ? chip('fc-out', '⤷ output', false) : null}
-      {chip('fc-lang', meta.lang || 'txt', false)}
+      {hasMeta ? chip('fc-lang', meta.lang || 'txt', false) : null}
       {meta.file ? chip('fc-file', meta.file) : null}
       {meta.directives.map((d) => chip(`fc-dir${d === 'error' ? ' fc-error' : ''}`, `!${d}`))}
       {attrs.map(([k, v]) => chip('fc-attr', `${k}=${v}`))}
@@ -200,21 +227,45 @@ export function FenceChips({ meta, o }: { meta: FenceMeta; o: MdOpts }): React.J
             srcIsFact ? <FactLink factKey={src} o={o}>{`< ${src}`}</FactLink> : undefined)
         : null}
       {meta.output ? chip('fc-target', `> ${[meta.output.lang, meta.output.file].filter(Boolean).join(' ')}`) : null}
+      {actions}
     </div>
   );
+}
+
+/**
+ * Where a fence token's BODY sits inside the source, given the token's own
+ * start offset. The fence line runs to the first newline; the body is `text`
+ * located from there (so an indented or `~~~` fence lands correctly), and the
+ * closing fence is whatever follows. Returns null when the body can't be
+ * located unambiguously — a caller must never splice against a guess.
+ */
+export function fenceRangeOf(t: MdToken, start: number): FenceRange | null {
+  const raw = typeof t.raw === 'string' ? t.raw : '';
+  if (!raw) return null;
+  const nl = raw.indexOf('\n');
+  if (nl < 0) return null; // a one-line fence has no body to edit
+  const text = String(t.text ?? '');
+  const block = { from: start, to: start + raw.length };
+  if (!text) return { body: { from: start + nl + 1, to: start + nl + 1 }, block };
+  const at = raw.indexOf(text, nl + 1);
+  if (at < 0) return null;
+  return { body: { from: start + at, to: start + at + text.length }, block };
 }
 
 /** One fenced block: its declaration (chips) plus its body. The body is the
  *  host's `renderFence` when it claims the fence, then the built-in `md`
  *  nesting (incl. admonitions), then the static `<pre>` floor. */
-function Fence({ info, code, o, k }: { info: string; code: string; o: MdOpts; k: string }): React.JSX.Element {
+function Fence({ info, code, o, k, range }: { info: string; code: string; o: MdOpts; k: string; range: FenceRange | null }): React.JSX.Element {
   const meta = parseFenceMeta(info);
-  const chips = o.hideFenceChips ? null : <FenceChips meta={meta} o={o} />;
+  const actions = o.fenceActions?.({ meta, body: code, range }) ?? null;
+  const chips = o.hideFenceChips ? null : (
+    <FenceChips meta={meta} o={o} actions={actions} />
+  );
 
   // The host's viewers/embeds get first refusal — but never for a fence with a
   // `< source`, which is a REFERENCE: its body is a placeholder, and resolving
   // it needs a substrate read the static core deliberately doesn't do.
-  const hosted = o.renderFence && !meta.source ? o.renderFence({ meta, body: code, opts: o }) : null;
+  const hosted = o.renderFence && !meta.source ? o.renderFence({ meta, body: code, opts: o, range }) : null;
   if (hosted != null) return <div key={k} className={`fence${meta.isOutput ? ' fence-output' : ''}`}>{chips}{hosted}</div>;
 
   // A markdown fence names the markdown renderer: render its body as markdown
@@ -304,10 +355,23 @@ export function renderInline(tokens: MdToken[] | undefined, key: string, o: MdOp
   });
 }
 
-export function renderBlocks(tokens: MdToken[] | undefined, key = 'b', o: MdOpts = {}): React.ReactNode {
+/**
+ * Render top-level block tokens.
+ *
+ * `origin` opts into SOURCE OFFSET tracking: marked's top-level `raw` values
+ * concatenate back to the document verbatim, so a running sum over them gives
+ * each token its true start — which is what lets a fence be edited in place
+ * and spliced back. Pass `0` from a top-level render over the whole text; omit
+ * it (the default) for nested renders, where offsets would be relative to a
+ * container's `raw` rather than the document and so must not be trusted.
+ */
+export function renderBlocks(tokens: MdToken[] | undefined, key = 'b', o: MdOpts = {}, origin?: number): React.ReactNode {
   if (!tokens?.length) return null;
+  let at = origin;
   return tokens.map((t, i) => {
     const k = `${key}:${i}`;
+    const start = at;
+    if (at !== undefined) at += String(t.raw ?? '').length;
     switch (t.type) {
       case 'space':
         return null;
@@ -324,7 +388,7 @@ export function renderBlocks(tokens: MdToken[] | undefined, key = 'b', o: MdOpts
         // info-string and render it as such (chips + body). marked keeps only
         // the first word in `lang`, so the raw info-string is recovered from
         // the token's `raw` fence line.
-        return <Fence key={k} k={k} info={fenceInfoOf(t)} code={String(t.text ?? '')} o={o} />;
+        return <Fence key={k} k={k} info={fenceInfoOf(t)} code={String(t.text ?? '')} o={o} range={start === undefined ? null : fenceRangeOf(t, start)} />;
       case 'hr':
         return <hr key={k} />;
       case 'list': {

@@ -74,6 +74,11 @@
     .fact-md .fchip.fc-out{border-left-color:var(--md-link);opacity:1}
     .fact-md .fchip.fc-error{border-left-color:#b5523c}
     .fact-md .fchip.fc-link a{text-decoration:none;color:var(--md-link)}
+    /* The fence-grain edit affordance: quiet until reached for, and a real
+       touch target (the chip row is the only chrome a fence gets). */
+    .fact-md .fchip.fc-edit{border-left-color:transparent;background:none;opacity:.45}
+    .fact-md .fchip.fc-edit:hover,.fact-md .fchip.fc-edit:focus-visible{opacity:1;color:var(--md-link)}
+    .fact-md .fence:hover .fchip.fc-edit{opacity:.8}
     .fact-md .fence-chips+pre{margin-top:0}
     /* An output cell is something a run PRODUCED — dashed plate, so it reads
        as accreted rather than authored. */

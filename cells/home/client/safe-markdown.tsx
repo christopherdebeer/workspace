@@ -33,6 +33,7 @@ import {
 } from '@parc/ui';
 import { resolveDocHref } from './doc-links';
 import { DISPLAY_VIEWERS, ViewerBody } from './viewers';
+import { CodeEditor } from './editor';
 
 export { resolveDocHref, safeNavigationUrl, safeImageUrl, safeFrameUrl };
 export type { MdOpts };
@@ -64,6 +65,153 @@ function hostOpts(o: MdOpts): MdOpts {
   return { ...o, lex, resolveDocHref, renderFence };
 }
 
+/* ── fence-grain editing ───────────────────────────────────────────────────
+ * The finest grain reading mode offers: edit ONE fence's body without opening
+ * the whole fact. The core hands each top-level fence its source range, so a
+ * commit is a splice back into the owning text — `md.slice(0,from) + next +
+ * md.slice(to)` — and the owner writes exactly one fact.
+ *
+ * dotlit's cell WAS this unit ("a cell is the unit of authoring, execution,
+ * linking and reuse"), and its defining bug class was that editing a
+ * transcluded cell persisted a COPY inline. Splicing back into the owning fact
+ * is the substrate's answer: the fence has one home, and the edit goes there.
+ * A fence that renders from a `< source` reference is therefore NOT editable
+ * here — its content belongs to the source fact, and editing must route there,
+ * not fork a copy into the referrer.  */
+
+/** Who owns the text a fence lives in, and how to write it back. */
+export interface FenceEditTarget {
+  /** Commit spliced text. Rejecting (throwing) leaves the editor open. */
+  save: (next: string) => Promise<void>;
+  /** The full source the ranges index into. */
+  source: string;
+}
+
+const EDIT_CHIP: React.CSSProperties = {
+  border: 'none', background: 'none', cursor: 'pointer', font: 'inherit',
+  color: 'inherit', opacity: 0.7, padding: '0.1em 0.35em',
+  // A tappable target, not a 10px glyph — this is a phone-first surface.
+  minWidth: 32, minHeight: 24,
+};
+
+/** An editing session over one fence: which range, and the live draft. */
+interface FenceDraft { from: number; to: number; body: string; lang: string }
+
+/**
+ * Keep the CLOSING fence on its own line.
+ *
+ * marked's fence `text` excludes the newline before the closing delimiter, so
+ * for a non-empty body that newline sits outside the edited range and survives
+ * a splice untouched. An EMPTY body has a zero-width range sitting directly on
+ * the closing delimiter, so writing into it would yield ```` ```js\nbody``` ````
+ * — a fence that no longer closes, silently swallowing the rest of the
+ * document on the next parse. Add the separator when it isn't already there.
+ */
+export function closeSafely(body: string, source: string, to: number): string {
+  if (body.endsWith('\n') || source[to] === '\n') return body;
+  return `${body}\n`;
+}
+
+function useFenceEditing(edit: FenceEditTarget | undefined): {
+  opts: Pick<MdOpts, 'renderFence' | 'fenceActions'>;
+  error: string | null;
+} {
+  const [draft, setDraft] = React.useState<FenceDraft | null>(null);
+  const [busy, setBusy] = React.useState(false);
+  const [error, setError] = React.useState<string | null>(null);
+  const editRef = React.useRef(edit);
+  editRef.current = edit;
+
+  if (!edit) return { opts: { renderFence }, error: null };
+
+  const commit = async (body: string): Promise<void> => {
+    const target = editRef.current;
+    if (!target || !draft) return;
+    setBusy(true);
+    setError(null);
+    const next = target.source.slice(0, draft.from) + closeSafely(body, target.source, draft.to) + target.source.slice(draft.to);
+    try {
+      await target.save(next);
+      setDraft(null);
+    } catch (err) {
+      setError((err as Error)?.message || 'save failed');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const opts: Pick<MdOpts, 'renderFence' | 'fenceActions'> = {
+    renderFence: (ctx) => {
+      const open = draft && ctx.range && ctx.range.body.from === draft.from;
+      if (open) {
+        return (
+          <FenceEditor
+            key={`fence-edit-${draft.from}`}
+            draft={draft}
+            busy={busy}
+            onChange={(body) => setDraft((d) => (d ? { ...d, body } : d))}
+            onSave={(body) => void commit(body)}
+            onCancel={() => { setDraft(null); setError(null); }}
+          />
+        );
+      }
+      return renderFence(ctx);
+    },
+    fenceActions: ({ meta, body, range }) => {
+      // No range → a nested fence, whose offsets can't be trusted (see the
+      // core's FenceRange doc). A `< source` fence belongs to another fact.
+      if (!range || meta.source) return null;
+      if (draft && range.body.from === draft.from) return null;
+      return (
+        <button
+          type="button"
+          className="fchip fc-edit"
+          style={EDIT_CHIP}
+          title="Edit this fence"
+          aria-label="Edit this fence"
+          onClick={() => { setError(null); setDraft({ from: range.body.from, to: range.body.to, body, lang: meta.attrs.viewer || meta.lang }); }}
+        >
+          ✎
+        </button>
+      );
+    },
+  };
+  return { opts, error };
+}
+
+/** The in-place fence editor: the shared CodeMirror, sized to the fence. No
+ *  `[[` completion — a fence body is code, and `[[` in code is literal. */
+function FenceEditor({ draft, busy, onChange, onSave, onCancel }: {
+  draft: FenceDraft;
+  busy: boolean;
+  onChange: (v: string) => void;
+  onSave: (v: string) => void;
+  onCancel: () => void;
+}): React.JSX.Element {
+  const prose = draft.lang === 'md' || draft.lang === 'markdown';
+  return (
+    <div style={{ display: 'grid', gap: '0.4rem' }}>
+      <CodeEditor
+        value={draft.body}
+        lang={prose ? 'markdown' : draft.lang === 'json' ? 'json' : 'text'}
+        wikiComplete={prose}
+        autofocus
+        minRows={Math.min(20, Math.max(3, draft.body.split('\n').length + 1))}
+        onChange={onChange}
+        onSave={onSave}
+        onCancel={onCancel}
+        palette={{ text: 'inherit', dim: 'inherit', border: 'rgba(127,127,127,0.35)', inputBg: 'transparent' }}
+      />
+      <div style={{ display: 'flex', gap: '0.4rem', fontSize: '0.72rem', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace' }}>
+        <button type="button" onClick={() => onSave(draft.body)} disabled={busy} style={{ ...EDIT_CHIP, opacity: 1, border: '1px solid currentColor', borderRadius: 6, padding: '0.2em 0.7em' }}>
+          {busy ? 'saving…' : 'save'}
+        </button>
+        <button type="button" onClick={onCancel} style={{ ...EDIT_CHIP, borderRadius: 6, padding: '0.2em 0.7em' }}>cancel</button>
+      </div>
+    </div>
+  );
+}
+
 /** Render ONE LINE of markdown INLINE — no block/`<p>` wrapping — for titles and
  *  headlines, which may carry bold, italic, inline code, or a link. Newlines are
  *  flattened to spaces (a title is a single line); falls back to plain text if
@@ -83,7 +231,8 @@ export function InlineMarkdown({ text, ...o }: { text: string } & MdOpts): React
   return <>{renderInline(tokens, 'inline', hostOpts(o))}</>;
 }
 
-export function SafeMarkdown({ text, tone = 'light', ...o }: { text: string } & MdOpts): React.JSX.Element {
+export function SafeMarkdown({ text, tone = 'light', edit, ...o }: { text: string; /** Enable fence-grain in-place editing over this body. */ edit?: FenceEditTarget } & MdOpts): React.JSX.Element {
+  const fence = useFenceEditing(edit);
   let tokens: MdToken[] = [];
   try {
     tokens = lex(text);
@@ -97,7 +246,15 @@ export function SafeMarkdown({ text, tone = 'light', ...o }: { text: string } & 
   // variants (see static/index.html); dark is the default.
   return (
     <div className={tone === 'light' ? 'fact-md on-paper' : 'fact-md'} style={{ fontSize: '0.85rem', lineHeight: 1.5, overflowWrap: 'anywhere', minWidth: 0 }}>
-      {renderBlocks(tokens, 'b', hostOpts({ ...o, tone }))}
+      {/* `0` opts into source-offset tracking — this IS the top-level render
+          over the whole text, so a fence's range indexes the real document
+          (see renderBlocks' `origin`). Without it fences render read-only. */}
+      {renderBlocks(tokens, 'b', { ...hostOpts({ ...o, tone }), ...fence.opts }, edit ? 0 : undefined)}
+      {fence.error ? (
+        <div role="alert" style={{ color: '#b5523c', fontSize: '0.72rem', fontFamily: 'ui-monospace, SFMono-Regular, Menlo, monospace', marginTop: '0.4rem' }}>
+          fence save failed: {fence.error}
+        </div>
+      ) : null}
     </div>
   );
 }

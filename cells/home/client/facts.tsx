@@ -8,8 +8,9 @@ import * as React from 'react';
 import { createPortal } from 'react-dom';
 import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, type TypeDecl, type AssembleSpec, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
 import { ink } from './ink';
-import { SafeMarkdown, InlineMarkdown, safeFrameUrl, safeImageUrl, safeNavigationUrl } from './safe-markdown';
+import { SafeMarkdown, InlineMarkdown, safeFrameUrl, safeImageUrl, safeNavigationUrl, type FenceEditTarget } from './safe-markdown';
 import { ViewerBody, DISPLAY_VIEWERS } from './viewers';
+import { CodeEditor } from './editor';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { cellUrl } from './bridge';
 import { localize, mcpCall } from './lib';
@@ -184,15 +185,61 @@ function strField(v: unknown, keys: string[]): string | undefined {
   }
   return undefined;
 }
+const BODY_FIELDS = ['content', 'body', 'text', 'description', 'note', 'md', 'markdown'];
+
 /** The markdown/text body of a fact value (string, or its content-ish field). */
 function bodyText(v: unknown): string {
   if (typeof v === 'string') return v;
-  return strField(v, ['content', 'body', 'text', 'description', 'note', 'md', 'markdown']) ?? '';
+  return strField(v, BODY_FIELDS) ?? '';
+}
+
+/** WHICH field `bodyText` read — what an in-place edit must write back to.
+ *  `null` means the value IS the body (a bare string fact). `undefined` means
+ *  there is no text body, so there is nothing to edit in place. */
+function bodyField(v: unknown): string | null | undefined {
+  if (typeof v === 'string') return null;
+  if (!v || typeof v !== 'object') return undefined;
+  const o = v as Record<string, unknown>;
+  return BODY_FIELDS.find((k) => typeof o[k] === 'string' && o[k]);
+}
+
+/**
+ * Write an edited body back to the fact that owns it — the commit half of
+ * fence-grain editing.
+ *
+ * The edit lands on the ONE field the body was read from, leaving the rest of
+ * the value untouched, and rides `ifVersion` so a concurrent write loses
+ * rather than silently clobbers. This is the anti-drift property the whole
+ * design turns on (docs/dotlit-review §4): a fence has exactly one home, and
+ * editing it goes there — never into a copy at the point of display.
+ */
+function bodyEditTarget(
+  e: ListEntry,
+  source: string,
+  onSaved?: (entry: ListEntry) => void,
+): { save: (next: string) => Promise<void>; source: string } | undefined {
+  const field = bodyField(e.value);
+  if (field === undefined) return undefined;
+  return {
+    source,
+    save: async (next: string) => {
+      const value = field === null ? next : { ...(e.value as Record<string, unknown>), [field]: next };
+      const r = await mcpCall('act', 'workspace.remember', {
+        key: e.key,
+        value,
+        ...(e._meta?.type ? { type: e._meta.type } : {}),
+        ...(typeof e._meta?.version === 'number' ? { ifVersion: e._meta.version } : {}),
+      });
+      if (!r.ok) throw new Error(typeof r.value === 'string' ? r.value : 'save failed');
+      const saved = (r.value && typeof r.value === 'object' ? r.value : {}) as { value?: unknown; _meta?: ListEntry['_meta'] };
+      onSaved?.({ ...e, value: Object.prototype.hasOwnProperty.call(saved, 'value') ? saved.value : value, _meta: saved._meta ?? e._meta });
+    },
+  };
 }
 
 /** Render a fact body by a built-in `hint` kind. SSR-safe: deterministic, no
  *  browser globals. Returns null when there's nothing to draw (caller falls back). */
-function HintBody({ kind, e, tone = 'dark' }: { kind: string; e: ListEntry; tone?: 'light' | 'dark' }): React.JSX.Element | null {
+function HintBody({ kind, e, tone = 'dark', edit }: { kind: string; e: ListEntry; tone?: 'light' | 'dark'; edit?: FenceEditTarget }): React.JSX.Element | null {
   const v = e.value;
   switch (kind) {
     case 'md':
@@ -201,7 +248,7 @@ function HintBody({ kind, e, tone = 'dark' }: { kind: string; e: ListEntry; tone
       if (!md) return null;
       // Fact links ([[wiki]]s) in any markdown body open in place, with an
       // origin-aware href for new-tab (`/r/` exists only at the apex).
-      return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} onFactLink={(k, frag) => openFact({ key: k }, frag)} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
+      return <SafeMarkdown text={md.replace(/\r\n/g, '\n')} edit={edit} onFactLink={(k, frag) => openFact({ key: k }, frag)} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
     }
     case 'image': {
       const src = safeImageUrl(strField(v, ['src', 'url', 'href', 'image']));
@@ -342,7 +389,11 @@ function ClampedBody({ children }: { children: React.ReactNode }): React.JSX.Ele
  * render one markdown body. No lit code, no iframe — the substrate does the join.
  * Fails soft: a bad/empty read falls back to the fact's own body or summary.
  */
-export function DocBody({ e, initialMd, spec, tone = 'dark', anchor }: { e: ListEntry; initialMd?: string; spec?: AssembleSpec; tone?: 'light' | 'dark'; anchor?: string }): React.JSX.Element {
+export function DocBody({ e, initialMd, spec, tone = 'dark', anchor, editable }: { e: ListEntry; initialMd?: string; spec?: AssembleSpec; tone?: 'light' | 'dark'; anchor?: string;
+  /** Let each assembled MEMBER be edited where it is read. An assembled doc
+   *  is a view over member facts, so the edit belongs to the member — this is
+   *  the grain at which reading mode becomes writing mode. */
+  editable?: boolean }): React.JSX.Element {
   const type = e._meta?.type;
   // The CONTAINER key. Declared (ADR-0093): a container type assembles its own
   // key; a member type (`containerTagPrefix`) delegates via its container tag.
@@ -363,7 +414,7 @@ export function DocBody({ e, initialMd, spec, tone = 'dark', anchor }: { e: List
   // Membership assembly keeps PER-MEMBER sections (not one joined string) so
   // each member is an addressable target: `#<member-key>` deep links and the
   // member banner's "part of" jump both scroll to their section.
-  const [sections, setSections] = useState<Array<{ key: string; content: string }> | null>(null);
+  const [sections, setSections] = useState<Array<{ key: string; content: string; type?: string | null; version?: number }> | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'fail'>(initialMd ? 'ready' : 'loading');
   const bodyRef = React.useRef<HTMLDivElement | null>(null);
   // The audience fallback (ADR-0093 / docs-sync ADR-0027): when membership
@@ -408,13 +459,13 @@ export function DocBody({ e, initialMd, spec, tone = 'dark', anchor }: { e: List
     void mcpCall('read', 'workspace.edges', { around: docKey, membership: true, shape: 'full' })
       .then(async (r) => {
         if (!live) return;
-        const members = (r.ok ? (r.value as { members?: Array<{ key?: string; value?: unknown; placement?: { seq?: number } }> } | null)?.members : null) ?? [];
+        const members = (r.ok ? (r.value as { members?: Array<{ key?: string; value?: unknown; placement?: { seq?: number }; _meta?: { type?: string | null; version?: number } }> } | null)?.members : null) ?? [];
         const secs = members
-          .map((m) => ({ key: String(m.key ?? ''), seq: Number(m.placement?.seq ?? 0), content: memberText(m.value) }))
+          .map((m) => ({ key: String(m.key ?? ''), seq: Number(m.placement?.seq ?? 0), content: memberText(m.value), type: m._meta?.type, version: m._meta?.version }))
           .sort((a, b) => a.seq - b.seq)
           .filter((m) => m.content);
         if (secs.length) {
-          setSections(secs.map(({ key, content }) => ({ key, content })));
+          setSections(secs.map(({ key, content, type, version }) => ({ key, content, type, version })));
           setMd(null);
           setState('ready');
           return;
@@ -465,11 +516,28 @@ export function DocBody({ e, initialMd, spec, tone = 'dark', anchor }: { e: List
     if (el) setTimeout(() => el.scrollIntoView({ block: 'start', behavior: 'smooth' }), 60);
   }, [state, sections, anchor]);
   if (state === 'ready' && sections?.length) {
+    // Each section IS a member fact, so an edit inside it writes THAT fact —
+    // never the container, and never a copy. `spec.field` names where the text
+    // lives on a declared vocabulary (`content` for a doc-block); an
+    // undeclared member falls back to the body heuristic.
+    const memberEdit = (sec: { key: string; content: string; type?: string | null; version?: number }): FenceEditTarget | undefined => {
+      if (!editable) return undefined;
+      return bodyEditTarget(
+        { key: sec.key, value: spec?.field ? { [spec.field]: sec.content } : sec.content, _meta: { type: sec.type ?? undefined, version: sec.version } },
+        sec.content,
+        (saved) => setSections((cur) => cur?.map((s2) => (s2.key === sec.key
+          // Re-read the saved body back into the assembled view, and carry the
+          // NEW version forward so a second edit in the same session doesn't
+          // fail its ifVersion check against a stale number.
+          ? { ...s2, content: spec?.field ? String((saved.value as Record<string, unknown>)?.[spec.field] ?? '') : String(saved.value ?? ''), version: saved._meta?.version ?? s2.version }
+          : s2)) ?? cur),
+      );
+    };
     return (
       <div ref={bodyRef} style={{ display: 'grid', gap: '0.2rem' }}>
         {sections.map((sec) => (
           <section key={sec.key} data-mkey={sec.key} style={{ scrollMarginTop: '3.2rem' }}>
-            <SafeMarkdown text={sec.content.replace(/\r\n/g, '\n')} base={mdBase} onFactLink={onFactLink} factHref={factHref} tone={tone} />
+            <SafeMarkdown text={sec.content.replace(/\r\n/g, '\n')} edit={memberEdit(sec)} base={mdBase} onFactLink={onFactLink} factHref={factHref} tone={tone} />
           </section>
         ))}
       </div>
@@ -581,7 +649,11 @@ export function FactBodyFailed({ e, tone = 'dark' }: { e: ListEntry; tone?: 'lig
   );
 }
 
-export function FactBody(props: { e: ListEntry; embed?: boolean; full?: boolean; tone?: 'light' | 'dark'; initialMd?: string; anchor?: string }): React.JSX.Element | null {
+/** `editable` opts a body into fence-grain in-place editing (and, for an
+ *  assembled container, per-member editing): the caller says the reader may
+ *  write, and `onSaved` carries the fresh entry back so the surface re-reads
+ *  from the write rather than from a stale copy. */
+export function FactBody(props: { e: ListEntry; embed?: boolean; full?: boolean; tone?: 'light' | 'dark'; initialMd?: string; anchor?: string; editable?: boolean; onSaved?: (entry: ListEntry) => void }): React.JSX.Element | null {
   return (
     // Keyed by the fact: a boundary latches once it has failed, so without this
     // a single bad fact would poison every fact drilled to after it.
@@ -591,7 +663,7 @@ export function FactBody(props: { e: ListEntry; embed?: boolean; full?: boolean;
   );
 }
 
-function FactBodyInner({ e, embed = false, full = false, tone = 'dark', initialMd, anchor }: { e: ListEntry; embed?: boolean; full?: boolean; tone?: 'light' | 'dark'; initialMd?: string; anchor?: string }): React.JSX.Element | null {
+function FactBodyInner({ e, embed = false, full = false, tone = 'dark', initialMd, anchor, editable, onSaved }: { e: ListEntry; embed?: boolean; full?: boolean; tone?: 'light' | 'dark'; initialMd?: string; anchor?: string; editable?: boolean; onSaved?: (entry: ListEntry) => void }): React.JSX.Element | null {
   // A composite fact reads as its WHOLE assembled body when fully open — the
   // substrate joins membership+order; we just concatenate (see DocBody).
   // WHICH types assemble is DECLARED (ADR-0093 `assemble` intent), so any
@@ -610,11 +682,11 @@ function FactBodyInner({ e, embed = false, full = false, tone = 'dark', initialM
       return (
         <div style={{ display: 'grid' }}>
           <MemberContext e={e} tagPrefix={memberTagPrefix} tone={tone} />
-          {own ? <SafeMarkdown text={own.replace(/\r\n/g, '\n')} tone={tone} onFactLink={(k, frag) => openFact({ key: k }, frag)} factHref={(k) => localize(`/r/${k}`)} /> : <span style={{ fontSize: '0.85rem' }}>{factTitle(e)}</span>}
+          {own ? <SafeMarkdown text={own.replace(/\r\n/g, '\n')} tone={tone} edit={editable ? bodyEditTarget(e, own, onSaved) : undefined} onFactLink={(k, frag) => openFact({ key: k }, frag)} factHref={(k) => localize(`/r/${k}`)} /> : <span style={{ fontSize: '0.85rem' }}>{factTitle(e)}</span>}
         </div>
       );
     }
-    if (asm || t === 'doc' || t === 'doc-block') return <DocBody e={e} spec={asm} tone={tone} initialMd={initialMd} anchor={anchor} />;
+    if (asm || t === 'doc' || t === 'doc-block') return <DocBody e={e} spec={asm} tone={tone} initialMd={initialMd} anchor={anchor} editable={editable} />;
   }
   const resolved = resolve(e, 'render', typeDecls);
   // A cell-authored `ui://` renderer (ADR-0039) federates this type's render —
@@ -634,7 +706,10 @@ function FactBodyInner({ e, embed = false, full = false, tone = 'dark', initialM
   }
   const hint = resolved?.hint;
   if (hint) {
-    const el = HintBody({ kind: hint, e, tone });
+    // Fence-grain editing only in the FULL read: a clamped card preview has no
+    // room for an editor, and its fence offsets index a body nobody can see.
+    const edit = full && editable ? bodyEditTarget(e, bodyText(e.value), onSaved) : undefined;
+    const el = HintBody({ kind: hint, e, tone, edit });
     if (el) return !full && LONGFORM_HINTS.has(hint) ? <ClampedBody>{el}</ClampedBody> : el;
   }
   // A declared PURE VIEWER (the Present facet's `{viewer}` binding — the shape
@@ -655,7 +730,7 @@ function FactBodyInner({ e, embed = false, full = false, tone = 'dark', initialM
   if (full) {
     const body = bodyText(e.value);
     if (body) {
-      return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} onFactLink={(k, frag) => openFact({ key: k }, frag)} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
+      return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} edit={editable ? bodyEditTarget(e, body, onSaved) : undefined} onFactLink={(k, frag) => openFact({ key: k }, frag)} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
     }
     if (typeof e.value === 'string') return <span style={{ fontSize: '0.85rem', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{e.value}</span>;
     // A structured value with no declared viewer reads as a collapsible JSON
@@ -1003,15 +1078,19 @@ function FactEditor({
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
 
-  const save = async (): Promise<void> => {
+  // `src` overrides the React state: the editor's Mod-Enter commit hands us its
+  // CURRENT document, and the onChange that precedes it may not have flushed
+  // through setState yet — saving `text` there would drop the last keystrokes.
+  const save = async (src?: string): Promise<void> => {
+    const raw = src ?? text;
     let value: unknown;
     if (useForm) {
       value = form;
     } else if (isStr) {
-      value = text;
+      value = raw;
     } else {
       try {
-        value = JSON.parse(text);
+        value = JSON.parse(raw);
       } catch {
         setErr('Invalid JSON');
         return;
@@ -1042,12 +1121,21 @@ function FactEditor({
         <SchemaForm schema={schema} value={form} onChange={setForm} palette={{ text: t.text, dim: t.dim, border: t.line, inputBg: t.panel, accent: t.accent, danger: t.danger }} />
       ) : (
         <>
-          <textarea
+          {/* The shared CodeMirror 6 editor (`@c15r/editor`), lazily imported —
+              a string value edits as markdown (so `[[` completes facts and the
+              prose reads like prose), a structured value as JSON. Degrades to
+              a textarea if the module can't load. */}
+          <CodeEditor
             value={text}
-            onChange={(ev) => setText(ev.target.value)}
-            rows={Math.min(18, Math.max(4, text.split('\n').length + 1))}
-            spellCheck={false}
-            style={{ ...inputStyle(t), padding: '0.55rem', fontFamily: theme.mono }}
+            lang={isStr ? 'markdown' : 'json'}
+            wikiComplete={isStr}
+            autofocus
+            placeholder={isStr ? 'markdown…' : 'JSON value…'}
+            minRows={Math.min(18, Math.max(4, text.split('\n').length + 1))}
+            onChange={setText}
+            onSave={(v) => { setText(v); void save(v); }}
+            onCancel={onCancel}
+            palette={{ text: t.text, dim: t.dim, border: t.line, inputBg: t.panel }}
           />
           {!isStr ? <span style={{ color: t.dim, fontSize: '0.68rem' }}>No schema — editing the raw JSON value.</span> : null}
         </>
@@ -1109,7 +1197,12 @@ export function FactDetail({ e, compact, tone = 'dark', anchor }: { e: ListEntry
       ) : (
         <>
           <div style={{ fontSize: '0.85rem', lineHeight: 1.5 }}>
-            <FactBody e={entry} full tone={tone} anchor={anchor} />
+            {/* In-place editing rides the same rule as the Edit button below:
+                a system (`_`-prefixed) fact is machinery, not content. A write
+                the reader isn't granted fails at the gateway and surfaces as
+                the fence editor's error — the affordance doesn't need to
+                pre-guess the grant. */}
+            <FactBody e={entry} full tone={tone} anchor={anchor} editable={!system} onSaved={setEntry} />
           </div>
           {hints?.length ? (
             <div style={{ display: 'grid', gap: '0.2rem', border: `1px solid ${t.line}`, borderRadius: 8, padding: '0.5rem 0.6rem', background: t.panel }}>
