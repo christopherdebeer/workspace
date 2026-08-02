@@ -9,7 +9,7 @@ import { createPortal } from 'react-dom';
 import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, type TypeDecl, type AssembleSpec, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
 import { ink } from './ink';
 import { SafeMarkdown, InlineMarkdown, safeFrameUrl, safeImageUrl, safeNavigationUrl } from './safe-markdown';
-import { ViewerBody } from './viewers';
+import { ViewerBody, DISPLAY_VIEWERS } from './viewers';
 import { DEFAULT_TYPE_DECLS } from './type-decls';
 import { cellUrl } from './bridge';
 import { localize, mcpCall } from './lib';
@@ -225,11 +225,60 @@ function HintBody({ kind, e, tone = 'dark' }: { kind: string; e: ListEntry; tone
       const n = typeof v === 'number' ? String(v) : (strField(v, ['value', 'count', 'n', 'total']) ?? bodyText(v));
       return n ? <strong style={{ fontFamily: theme.serif, fontSize: '1.4rem' }}>{n}</strong> : null;
     }
+    case 'file':
+      return <FileBody e={e} tone={tone} />;
     case 'fields':
       return <FieldsBody value={v} />;
     default:
       return null;
   }
+}
+
+/** Human-readable byte size for a file card. */
+function humanBytes(n: unknown): string | null {
+  if (typeof n !== 'number' || !Number.isFinite(n) || n < 0) return null;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(n < 10240 ? 1 : 0)} KB`;
+  return `${(n / 1048576).toFixed(1)} MB`;
+}
+
+/**
+ * A `file` fact (ADR-0027), rendered by what it actually IS.
+ *
+ * `file` is one type over a heterogeneous corpus: small text stores `content`
+ * inline, binary/large objects carry `s3Key`/`url` and no body at all. It
+ * declared a flat `markdown` render, so a PNG resolved to the markdown hint,
+ * found no text, and fell through to the raw-JSON floor — the value's own
+ * `contentType` sitting unread two fields away. Dispatch on it instead:
+ * images paint, text reads as markdown, and anything else gets an honest card
+ * (what it is, how big, where it lives) rather than a stringified pointer.
+ */
+function FileBody({ e, tone = 'dark' }: { e: ListEntry; tone?: 'light' | 'dark' }): React.JSX.Element | null {
+  const t = SHEET_TONE[tone];
+  const v = (e.value && typeof e.value === 'object' ? e.value : {}) as Record<string, unknown>;
+  const ct = typeof v.contentType === 'string' ? v.contentType : '';
+  const body = bodyText(v);
+  if (ct.startsWith('image/')) {
+    const src = safeImageUrl(v.url);
+    if (src) return <img src={src} alt={factTitle(e)} loading="lazy" referrerPolicy="no-referrer" style={{ maxWidth: '100%', borderRadius: 8, display: 'block' }} />;
+  }
+  // Inline text (the docs corpus): markdown for markdown, plain otherwise.
+  if (body) {
+    if (ct === 'text/markdown' || ct === 'text/x-markdown' || !ct || /\.mdx?$/.test(String(v.path ?? ''))) {
+      return <SafeMarkdown text={body.replace(/\r\n/g, '\n')} onFactLink={(k, frag) => openFact({ key: k }, frag)} factHref={(k) => localize(`/r/${k}`)} tone={tone} />;
+    }
+    return <CodeBlock>{body.slice(0, 4000)}</CodeBlock>;
+  }
+  // No body — a pointer. Say so plainly instead of dumping the envelope.
+  const href = safeNavigationUrl(v.url);
+  const meta = [ct, humanBytes(v.bytes), typeof v.source === 'string' ? v.source : null].filter(Boolean).join('  ·  ');
+  return (
+    <div style={{ display: 'grid', gap: '0.3rem', border: `1px solid ${t.line}`, borderRadius: 8, padding: '0.6rem 0.7rem' }}>
+      <span style={{ fontFamily: theme.mono, fontSize: '0.78rem', overflowWrap: 'anywhere' }}>{typeof v.path === 'string' ? v.path : e.key}</span>
+      {meta ? <span style={{ color: t.dim, fontSize: '0.68rem', fontFamily: theme.mono }}>{meta}</span> : null}
+      {href ? <a href={href} rel="noreferrer" style={{ color: t.accent, fontFamily: theme.mono, fontSize: '0.75rem', justifySelf: 'start' }}>open ↗</a> : null}
+    </div>
+  );
 }
 
 /** A few scalar fields of a structured value, as a compact definition list. */
@@ -480,7 +529,69 @@ function MemberContext({ e, tagPrefix, tone = 'dark' }: { e: ListEntry; tagPrefi
   );
 }
 
-export function FactBody({ e, embed = false, full = false, tone = 'dark', initialMd, anchor }: { e: ListEntry; embed?: boolean; full?: boolean; tone?: 'light' | 'dark'; initialMd?: string; anchor?: string }): React.JSX.Element | null {
+/**
+ * Never invisible, never fatal (ADR-0056's contract, applied to home).
+ *
+ * Every individual render path already fails soft — a viewer that can't load
+ * degrades to `<pre>`, a failed doc assembly falls back to the fact's own body.
+ * What was missing is the outer guard: a fact whose VALUE doesn't match the
+ * shape its declared renderer assumes throws during render, and an unguarded
+ * throw unmounts the whole React subtree — so one malformed fact took out the
+ * peek sheet, or the landing's ground content, rather than just itself.
+ *
+ * The fallback is the fact card + an error badge: the reader still sees WHAT
+ * the fact is and can still act on it, and the failure is legible rather than
+ * a blank sheet. (SSR is unaffected — boundaries don't catch in
+ * `renderToString`; the server path has its own guard.)
+ */
+export class FactBodyBoundary extends React.Component<
+  { children: React.ReactNode; fallback: React.ReactNode },
+  { failed: boolean }
+> {
+  constructor(props: { children: React.ReactNode; fallback: React.ReactNode }) {
+    super(props);
+    this.state = { failed: false };
+  }
+
+  static getDerivedStateFromError(): { failed: boolean } {
+    return { failed: true };
+  }
+
+  componentDidCatch(err: unknown): void {
+    // Console only: a render failure is a defect to fix, not a fact to write.
+    // eslint-disable-next-line no-console
+    console.error('fact body render failed', err);
+  }
+
+  render(): React.ReactNode {
+    return this.state.failed ? this.props.fallback : this.props.children;
+  }
+}
+
+/** The error-badge fallback: the fact's own fields, plus an honest note. */
+export function FactBodyFailed({ e, tone = 'dark' }: { e: ListEntry; tone?: 'light' | 'dark' }): React.JSX.Element {
+  const t = SHEET_TONE[tone];
+  return (
+    <div style={{ display: 'grid', gap: '0.35rem' }}>
+      <span style={{ color: t.danger, fontFamily: theme.mono, fontSize: '0.7rem' }}>
+        ⚠ this fact&apos;s renderer failed — showing its fields
+      </span>
+      <FieldsBody value={e.value} />
+    </div>
+  );
+}
+
+export function FactBody(props: { e: ListEntry; embed?: boolean; full?: boolean; tone?: 'light' | 'dark'; initialMd?: string; anchor?: string }): React.JSX.Element | null {
+  return (
+    // Keyed by the fact: a boundary latches once it has failed, so without this
+    // a single bad fact would poison every fact drilled to after it.
+    <FactBodyBoundary key={props.e.key} fallback={<FactBodyFailed e={props.e} tone={props.tone} />}>
+      <FactBodyInner {...props} />
+    </FactBodyBoundary>
+  );
+}
+
+function FactBodyInner({ e, embed = false, full = false, tone = 'dark', initialMd, anchor }: { e: ListEntry; embed?: boolean; full?: boolean; tone?: 'light' | 'dark'; initialMd?: string; anchor?: string }): React.JSX.Element | null {
   // A composite fact reads as its WHOLE assembled body when fully open — the
   // substrate joins membership+order; we just concatenate (see DocBody).
   // WHICH types assemble is DECLARED (ADR-0093 `assemble` intent), so any
@@ -525,6 +636,15 @@ export function FactBody({ e, embed = false, full = false, tone = 'dark', initia
   if (hint) {
     const el = HintBody({ kind: hint, e, tone });
     if (el) return !full && LONGFORM_HINTS.has(hint) ? <ClampedBody>{el}</ClampedBody> : el;
+  }
+  // A declared PURE VIEWER (the Present facet's `{viewer}` binding — the shape
+  // the legacy `_types/<type>` facts use for csv/json/mermaid/style). Mounts
+  // the same @c15r/viewers module the hint kinds do; an unknown viewer name
+  // falls through rather than mounting nothing.
+  const viewer = resolved?.viewer;
+  if (viewer && DISPLAY_VIEWERS.has(viewer)) {
+    const code = viewer === 'json' && typeof e.value !== 'string' ? JSON.stringify(e.value, null, 2) : bodyText(e.value);
+    if (code) return <ViewerBody lang={viewer} code={code} />;
   }
   if (embed) {
     const src = handlerUrl(resolve(e, 'embed', typeDecls));
