@@ -1,0 +1,65 @@
+/**
+ * The two read-cost contracts from the 2026-08-02 cost review (the ~$0.37/doc
+ * decomposition finding): a PREFIX query pushes the prefix down to the store
+ * instead of listing the whole partition and filtering in memory, and
+ * `neighbors` with derived:false (the authored-only fast path) never lists the
+ * partition at all. Both are pinned via a spying store wrapper — behaviour
+ * stays correct AND the expensive call shape is structurally gone.
+ */
+import { createObservedState, createMemoryStateStore } from '../platform/runtime';
+import type { Identity, StateStore } from '../platform/runtime';
+
+const ID: Identity = { user: 'o', scopes: [] };
+
+function spyStore(): { store: StateStore; listCalls: Array<string | undefined> } {
+  const inner = createMemoryStateStore();
+  const listCalls: Array<string | undefined> = [];
+  const store: StateStore = {
+    ...inner,
+    list: async (scope: string, keyPrefix?: string) => {
+      listCalls.push(keyPrefix);
+      return inner.list(scope, keyPrefix);
+    },
+  };
+  return { store, listCalls };
+}
+
+async function seed(store: StateStore) {
+  const state = createObservedState(store);
+  await state.put({ scope: 'o', key: 'doc-order:x/a', value: { seq: 0 }, type: 'doc-order' }, ID);
+  await state.put({ scope: 'o', key: 'doc-order:x/b', value: { seq: 1 }, type: 'doc-order' }, ID);
+  await state.put({ scope: 'o', key: 'kb/other', value: { title: 'other' }, type: 'knowledge' }, ID);
+  await state.link('o', 'doc-order:x/a', 'related', 'kb/other', null, ID);
+  return state;
+}
+
+describe('read-cost contracts (2026-08-02)', () => {
+  it('a prefix query pushes the prefix down to the store — no whole-partition list', async () => {
+    const { store, listCalls } = spyStore();
+    const state = await seed(store);
+    listCalls.length = 0;
+    const res = await state.query('o', { prefix: 'doc-order:x/', limit: 50 }, ID);
+    expect(res.entries.map((e) => e.key).sort()).toEqual(['doc-order:x/a', 'doc-order:x/b']);
+    // Every list issued for this query carried the prefix; none read the world.
+    expect(listCalls.length).toBeGreaterThan(0);
+    expect(listCalls.every((p) => p === 'doc-order:x/')).toBe(true);
+  });
+
+  it('neighbors derived:false is the authored-only fast path — no partition list at all', async () => {
+    const { store, listCalls } = spyStore();
+    const state = await seed(store);
+    listCalls.length = 0;
+    const r = await state.neighbors('o', 'doc-order:x/a', { derived: false });
+    expect(r.outbound.map((e) => `${e.rel}→${e.to}`)).toEqual(['related→kb/other']);
+    expect(Object.keys(r.entries)).toContain('kb/other'); // hydrated by point-get
+    expect(listCalls).toEqual([]);
+  });
+
+  it('neighbors WITH the backbone still lists (the honest default is unchanged)', async () => {
+    const { store, listCalls } = spyStore();
+    const state = await seed(store);
+    listCalls.length = 0;
+    await state.neighbors('o', 'doc-order:x/a', {});
+    expect(listCalls.length).toBeGreaterThan(0);
+  });
+});

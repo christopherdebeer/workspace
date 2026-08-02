@@ -262,7 +262,12 @@ async function finishDecompose(token: string, plan: ReturnType<typeof planDecomp
   if (existingOrder.length > 0) {
     const results = await Promise.all(plan.blocks.map(async (b) => {
       const wanted: EdgeRef[] = plan.edges.filter((e) => e.from === b.key).map((e) => ({ to: e.to, rel: e.rel }));
-      const nb = (await gw(token, 'workspace.edges', { around: b.key }).catch(() => null)) as NeighborsResult | null;
+      // derived:false — the authored-only fast path (2026-08-02 cost review):
+      // this loop runs once PER BLOCK, and with the backbone derivation each
+      // call read the whole facts partition (~the entire per-doc storm cost).
+      // We only diff authored related/references edges, so authored-only is
+      // not just cheaper — it is the correct question.
+      const nb = (await gw(token, 'workspace.edges', { around: b.key, derived: false }).catch(() => null)) as NeighborsResult | null;
       const existing = (nb?.outbound ?? []).filter((e) => e.rel === 'related' || e.rel === 'references');
       const { toAdd, toRemove } = diffEdges(existing, wanted);
       await Promise.all(toRemove.map((e) => gw(token, 'workspace.unlink', { from: b.key, to: e.to, rel: e.rel }).catch(() => undefined)));

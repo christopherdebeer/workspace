@@ -1480,6 +1480,12 @@ export interface NeighborsOptions {
   /** Resolved per-type Reference rules (managedBy + embedded + key-encoded), so a
    *  type's derived edges show up in traversal. Injected by the handler. */
   typeRules?: Record<string, TypeRules>;
+  /** false = AUTHORED-ONLY fast path (2026-08-02 cost review): skip the
+   *  derived backbone, whose computation needs a full partition read to
+   *  answer a one-key question — the lit decompose finish pass paid that
+   *  read PER BLOCK. Two targeted edge queries + point-get hydration;
+   *  neighbour scores lose only their centrality term. */
+  derived?: boolean;
 }
 
 export interface NeighborsResult {
@@ -2170,13 +2176,25 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const rankingHead = bare && opts?.limit !== undefined ? await store.currentSeq(scope) : null;
       const sCall = callSalience(baseSalience(await loadSalienceConfig(scope)), opts?.lens, opts?.salience, await loadLensesConfig(scope));
       const queryTypeRules = opts?.typeRules;
-      // Type is index-served; tag/prefix filter the (bounded) candidate set.
-      const records = opts?.type ? await store.listByType(scope, opts.type) : await store.list(scope);
-      // Reuse the full-partition read for signals when there's no type filter —
-      // otherwise `signalsFor` issues a SECOND `store.list(scope)` (a duplicate
-      // multi-page DDB scan, ~half the query's latency). With a type filter the
-      // candidates are a subset, so signals still need the whole graph.
-      const signals = await signalsFor(scope, nowMs, sCall.windowMs, opts?.type ? undefined : records, queryTypeRules);
+      // Type is index-served; PREFIX pushes down to the store (2026-08-02 cost
+      // review: the store always supported begins_with on the sort key, but
+      // query never passed it — every prefix-scoped read, e.g. the lit
+      // decompose order loop, paid a FULL partition read per page). tag/
+      // contains still filter the candidate set in memory.
+      const records = opts?.type
+        ? await store.listByType(scope, opts.type)
+        : await store.list(scope, opts?.prefix || undefined);
+      // Signals: reuse the partition read when it was genuinely whole (no
+      // type, no prefix). A PREFIX-scoped listing takes degree-0 signals
+      // instead — centrality is a whole-graph quantity, and paying a
+      // whole-graph read to rank a prefix slice was the cost defect; the
+      // recency/touch terms live on each record and are unaffected. (Type
+      // queries keep honest centrality: signalsFor does its own reads.)
+      const signals = opts?.type
+        ? await signalsFor(scope, nowMs, sCall.windowMs, undefined, queryTypeRules)
+        : opts?.prefix
+          ? new Map<string, KeySignals>()
+          : await signalsFor(scope, nowMs, sCall.windowMs, records, queryTypeRules);
       const candidates = records.filter((rec) => {
         // A cache is not content (recall's rule for its digest, applied to the
         // whole `_index/` derived namespace): the ranking digest would otherwise
@@ -2289,16 +2307,21 @@ export function createObservedState(store: StateStore, salience?: SalienceOption
       const nowMs = Date.now();
       // Honor the scope's `_config/salience` so neighbor scores match recall (ADR-0006).
       const sCall = baseSalience(await loadSalienceConfig(scope));
+      // derived:false = the authored-only fast path (see NeighborsOptions):
+      // no partition read, no backbone, degree-0 scores on the entries.
+      const wantDerived = opts?.derived !== false;
       const [authoredOut, authoredIn, records] = await Promise.all([
         dir !== 'in' ? store.edgesFrom(scope, key, opts?.rel) : Promise.resolve([]),
         dir !== 'out' ? store.edgesTo(scope, key, opts?.rel) : Promise.resolve([]),
-        store.list(scope),
+        wantDerived ? store.list(scope) : Promise.resolve([] as StateRecord[]),
       ]);
       // The derived backbone is one hop too: a fact's type/cell/renderer/views.
-      const derived = deriveBackboneEdges(records, opts?.typeRules).filter((e) => !opts?.rel || e.rel === opts.rel);
+      const derived = wantDerived ? deriveBackboneEdges(records, opts?.typeRules).filter((e) => !opts?.rel || e.rel === opts.rel) : [];
       const outbound: AnnotatedEdge[] = [...authoredOut, ...(dir !== 'in' ? derived.filter((e) => e.from === key) : [])];
       const inbound: AnnotatedEdge[] = [...authoredIn, ...(dir !== 'out' ? derived.filter((e) => e.to === key) : [])];
-      const signals = await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules);
+      const signals = wantDerived
+        ? await signalsFor(scope, nowMs, sCall.windowMs, records, opts?.typeRules)
+        : new Map<string, KeySignals>();
       const neighborKeys = new Set<string>();
       for (const e of outbound) neighborKeys.add(e.to);
       for (const e of inbound) neighborKeys.add(e.from);
