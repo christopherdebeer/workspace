@@ -17,9 +17,10 @@ import { marked } from 'marked';
 import { bodyText, fieldsToHtml, wikiLinkExtension, parseFenceMeta } from '@parc/ui';
 
 // The fence meta-grammar (ADR-0059) — one grammar, parsed AND serialized,
-// shared by SSR, client, and tests (tests/lit-fence.test.ts pins it). It now
-// lives in @parc/ui (docs/home-hosts-lit.md step 1) so home's reader classifies
-// fences identically; these re-exports keep lit's own import surface stable.
+// shared by SSR, client, and tests (tests/lit-fence.test.ts pins it). It lives
+// in `@parc/ui` now (docs/home-hosts-lit.md step 1) so home classifies fences
+// identically instead of rendering them as dead code; re-exported here so
+// lit's own `from '../shared'` importers are unchanged.
 export { parseFenceMeta, fenceToString, fenceTagsOf, type FenceMeta } from '@parc/ui';
 
 /** A document is a *view* over facts: thin metadata only. Membership + order live

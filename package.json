@@ -5,7 +5,7 @@
     "workspace": "bin/workspace.js"
   },
   "scripts": {
-    "build": "tsc && npm run typecheck:client && cp -r scripts dist/scripts",
+    "build": "tsc && npm run typecheck:client && npm run typecheck:editor && cp -r scripts dist/scripts",
     "typecheck:client": "tsc -p tsconfig.client.json",
     "watch": "tsc -w",
     "test": "jest",
@@ -13,7 +13,8 @@
     "cdk": "cdk",
     "synth": "cdk synth",
     "deploy": "node bin/deploy.js",
-    "destroy": "cdk destroy"
+    "destroy": "cdk destroy",
+    "typecheck:editor": "tsc -p tsconfig.editor.json"
   },
   "dependencies": {
     "@aws-sdk/client-athena": "^3.1078.0",
@@ -32,6 +33,13 @@
     "esbuild-wasm": "^0.25.12"
   },
   "devDependencies": {
+    "@codemirror/autocomplete": "^6.20.3",
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/lang-json": "^6.0.2",
+    "@codemirror/lang-markdown": "^6.5.1",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.7",
     "@modelcontextprotocol/ext-apps": "^1.7.4",
     "@simplewebauthn/browser": "^13.3.0",
     "@types/jest": "^29.5.5",

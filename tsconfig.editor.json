@@ -1,0 +1,16 @@
+{
+  "// purpose": "Type-check the @c15r/editor cell client against the real CodeMirror 6 packages. Cell sources are otherwise unchecked by the build (tsconfig.json covers bin/lib/platform/services; tsconfig.client.json covers platform/ui + services/**/client), and this cell is the one place we depend on a large third-party API surface — so its imports are pinned by the compiler rather than by hope. The @codemirror/* devDependencies exist for THIS check; at runtime the cell bundler externalizes them to the esm.sh pins in client/imports.json.",
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": [],
+    "noEmit": true
+  },
+  "include": ["cells/editor/client"]
+}
