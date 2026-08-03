@@ -93,7 +93,9 @@ async function findSpawn(): Promise<{ lat: number; lon: number; name: string | n
   // Default: a KNOWN start (testing/demos want determinism) — the west side of
   // Central Park. Random-anywhere is the deliberate gesture: `elsewhere ↻`
   // (which navigates with ?random=1) or a hand-typed param.
-  if (!p.has('random')) return { lat: 40.7811, lon: -73.9665, name: 'Central Park, New York' };
+  // Probed against the live road grid: this is ON West Drive (tarmac from
+  // frame one), not mid-meadow — a spawn that answers the throttle instantly.
+  if (!p.has('random')) return { lat: 40.7816, lon: -73.972, name: 'Central Park, New York' };
   for (let i = 0; i < 4; i++) {
     // Uniform over the sphere (asin), clipped to the inhabited belt.
     const lat = clamp((Math.asin(Math.random() * 2 - 1) * 180) / Math.PI, -50, 66);
@@ -370,6 +372,32 @@ const B_MATS = [0xa59a85, 0x92897a, 0x9d937f, 0x878071].map((c) => {
     new THREE.MeshLambertMaterial({ color: side, side: DS }),
   ] as [THREE.Material, THREE.Material];
 });
+// ── the map layer (minimap base, FOG_SPAN frame, north-up) ─────────
+// Streamed features draw themselves here as they register; the minimap
+// composites this under the fog mask, so the map only shows what the fog has
+// ceded — the chart fills in as you explore.
+const MAP_PX = 1024;
+const mapLayer = document.createElement('canvas');
+mapLayer.width = mapLayer.height = MAP_PX;
+const mapCtx = mapLayer.getContext('2d')!;
+mapCtx.fillStyle = '#141b14';
+mapCtx.fillRect(0, 0, MAP_PX, MAP_PX);
+const mapPt = (x: number, z: number): [number, number] => [((x + FOG_SPAN / 2) / FOG_SPAN) * MAP_PX, ((z + FOG_SPAN / 2) / FOG_SPAN) * MAP_PX];
+const M_PER_PX = FOG_SPAN / MAP_PX;
+function mapSeg(ax: number, az: number, bx: number, bz: number, width: number, color: string): void {
+  const [x0, z0] = mapPt(ax, az), [x1, z1] = mapPt(bx, bz);
+  mapCtx.strokeStyle = color;
+  mapCtx.lineWidth = Math.max(1, width / M_PER_PX);
+  mapCtx.lineCap = 'round';
+  mapCtx.beginPath(); mapCtx.moveTo(x0, z0); mapCtx.lineTo(x1, z1); mapCtx.stroke();
+}
+function mapPoly(pts: Array<[number, number]>, color: string): void {
+  mapCtx.fillStyle = color;
+  mapCtx.beginPath();
+  pts.forEach(([x, z], i) => { const [px, pz] = mapPt(x, z); i ? mapCtx.lineTo(px, pz) : mapCtx.moveTo(px, pz); });
+  mapCtx.closePath(); mapCtx.fill();
+}
+
 // ── collision & surface grids (24m cells) ──────────────────────────
 const GRID = 24;
 const gkey = (x: number, z: number): string => `${Math.floor(x / GRID)},${Math.floor(z / GRID)}`;
@@ -429,6 +457,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     );
     uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
     if (drivable) addSeg(roadGrid, { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2 });
+    mapSeg(x0, z0, x1, z1, drivable ? Math.max(width, 14) : 8, drivable ? '#a8a294' : 'rgba(150,142,120,0.4)');
   }
   if (!verts.length) return;
   const geo = new THREE.BufferGeometry();
@@ -465,6 +494,7 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
     mesh.position.y = 0;
   }
   worldGroup.add(mesh);
+  mapPoly(pts, collide === 'solid' ? 'rgba(70,66,58,0.9)' : collide === 'water' ? '#1d3a55' : 'rgba(34,54,32,0.9)');
   if (collide === 'solid') {
     for (let i = 0; i < pts.length; i++) {
       const [ax, az] = pts[i], [bx, bz] = pts[(i + 1) % pts.length];
@@ -478,10 +508,82 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
         if (pointInPoly(gx * GRID + GRID / 2, gz * GRID + GRID / 2, pts)) waterCells.add(`${gx},${gz}`);
   }
 }
+// ── OSM tile cache (localStorage, LRU) ─────────────────────────────
+// Overpass is a shared public instance with moods; a tile you have seen once
+// should never depend on it again. Slimmed way geometry per tile, ~50-tile
+// LRU — the Central Park default becomes instant and offline-proof on the
+// second visit.
+interface OsmWay { id: number; tags?: Record<string, string>; geometry: Array<{ lat: number; lon: number }> }
+const OSM_CACHE_V = 1;
+const osmCacheKey = (x: number, y: number): string => `drive.osm.${OSM_CACHE_V}.${OSM_Z}.${x}.${y}`;
+function readTileCache(x: number, y: number): OsmWay[] | null {
+  try {
+    const raw = localStorage.getItem(osmCacheKey(x, y));
+    return raw ? (JSON.parse(raw) as OsmWay[]) : null;
+  } catch { return null; }
+}
+function writeTileCache(x: number, y: number, els: OsmWay[]): void {
+  const k = osmCacheKey(x, y);
+  const slim = JSON.stringify(els.map((e) => ({ id: e.id, tags: e.tags, geometry: e.geometry })));
+  const put = (): void => {
+    localStorage.setItem(k, slim);
+    const idx: string[] = JSON.parse(localStorage.getItem('drive.osm.idx') ?? '[]').filter((v: string) => v !== k);
+    idx.push(k);
+    while (idx.length > 50) localStorage.removeItem(idx.shift()!);
+    localStorage.setItem('drive.osm.idx', JSON.stringify(idx));
+  };
+  try { put(); } catch {
+    // Quota: evict the oldest half and try once more.
+    try {
+      const idx: string[] = JSON.parse(localStorage.getItem('drive.osm.idx') ?? '[]');
+      idx.splice(0, Math.ceil(idx.length / 2)).forEach((old) => localStorage.removeItem(old));
+      localStorage.setItem('drive.osm.idx', JSON.stringify(idx));
+      put();
+    } catch { /* give up gracefully */ }
+  }
+}
+
+function renderWays(els: OsmWay[]): void {
+  for (const el of els) {
+    if (!el.geometry || seenWays.has(el.id)) continue;
+    seenWays.add(el.id);
+    const pts: Array<[number, number]> = el.geometry.map((g) => toLocal(g.lat, g.lon));
+    const tags = el.tags ?? {};
+    if (tags.highway) {
+      const w = ROAD_W[tags.highway] ?? 4;
+      // Foot infrastructure renders but doesn't grip like tarmac.
+      const minor = ['footway', 'path', 'cycleway', 'track'].includes(tags.highway);
+      ribbon(pts, w, minor ? MAT.minor : MAT.road, minor ? 1.2 : 1.6, !minor);
+    } else if (tags.building) {
+      const levels = parseFloat(tags['building:levels'] ?? '') || 2;
+      polygon(pts, B_MATS[el.id % B_MATS.length], 0.9, clamp(levels * 3.1, 3, 90), 'solid');
+    } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
+      polygon(pts, MAT.water, 1.0, 0, 'water');
+    } else {
+      polygon(pts, MAT.green, 0.6);
+    }
+  }
+}
+
+// "No roads yet" must read as LOADING, not a broken world.
+const osmStatus = document.createElement('div');
+osmStatus.textContent = '🛰 streaming roads…';
+Object.assign(osmStatus.style, {
+  position: 'fixed', left: '12px', top: 'calc(max(10px, env(safe-area-inset-top)) + 44px)', zIndex: '10',
+  color: 'rgba(245,196,83,0.85)', font: '0.68rem ui-monospace, monospace',
+  textShadow: '0 1px 4px rgba(0,0,0,0.8)', pointerEvents: 'none', display: 'none',
+} as Partial<CSSStyleDeclaration>);
+document.body.appendChild(osmStatus);
+let osmPending = 0;
+const osmNote = (d: number): void => { osmPending += d; osmStatus.style.display = osmPending > 0 ? 'block' : 'none'; };
+
 async function loadOsmTile(x: number, y: number): Promise<void> {
   const key = `${x}/${y}`;
   if (osmLoaded.has(key)) return;
   osmLoaded.add(key);
+  const cached = readTileCache(x, y);
+  if (cached) { renderWays(cached); return; }
+  osmNote(1);
   if (osmInFlight >= 2) { await new Promise<void>((r) => osmQueue.push(r)); }
   osmInFlight++;
   try {
@@ -496,28 +598,13 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
       way["leisure"~"park|pitch|garden"](${bbox});
     );out geom 2000;`;
     const r = await overpass(q);
-    for (const el of r.elements ?? []) {
-      if (el.type !== 'way' || !el.geometry || seenWays.has(el.id)) continue;
-      seenWays.add(el.id);
-      const pts: Array<[number, number]> = el.geometry.map((g: { lat: number; lon: number }) => toLocal(g.lat, g.lon));
-      const tags = el.tags ?? {};
-      if (tags.highway) {
-        const w = ROAD_W[tags.highway] ?? 4;
-        // Foot infrastructure renders but doesn't grip like tarmac.
-        const minor = ['footway', 'path', 'cycleway', 'track'].includes(tags.highway);
-        ribbon(pts, w, minor ? MAT.minor : MAT.road, minor ? 1.2 : 1.6, !minor);
-      } else if (tags.building) {
-        const levels = parseFloat(tags['building:levels'] ?? '') || 2;
-        polygon(pts, B_MATS[el.id % B_MATS.length], 0.9, clamp(levels * 3.1, 3, 90), 'solid');
-      } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
-        polygon(pts, MAT.water, 1.0, 0, 'water');
-      } else {
-        polygon(pts, MAT.green, 0.6);
-      }
-    }
+    const ways = ((r.elements ?? []) as Array<OsmWay & { type?: string }>).filter((e) => e.type === 'way' && e.geometry);
+    writeTileCache(x, y, ways);
+    renderWays(ways);
   } catch { setTimeout(() => osmLoaded.delete(key), 8000); /* backoff, then a later pass retries */ }
   finally {
     osmInFlight--;
+    osmNote(-1);
     osmQueue.shift()?.();
   }
 }
@@ -566,7 +653,8 @@ halo.position.y = 0.15;
 car.add(halo);
 scene.add(car);
 const state = { x: 0, z: 0, heading: 0, speed: 0 };
-(window as unknown as { __drive?: object }).__drive = state; // debug/test handle (read-only use)
+(window as unknown as { __drive?: object; __surfaceAt?: (x: number, z: number) => string }).__drive = state;
+(window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
 
 // ── input: keyboard + a VISIBLE one-thumb stick, second finger = brake ──
 const keys = new Set<string>();
@@ -646,10 +734,79 @@ function input(): { throttle: number; steer: number; brake: boolean } {
   return { throttle: clamp(throttle, -1, 1), steer: clamp(steer, -1, 1), brake: brakeId !== null || keys.has(' ') };
 }
 
+// ── minimap: north-up, fog-masked, car-centred ─────────────────────
+const MINI = 138, MINI_SPAN = 1500; // px, metres across
+const mini = document.createElement('canvas');
+mini.width = mini.height = MINI * 2;
+Object.assign(mini.style, {
+  position: 'fixed', left: '12px', bottom: 'max(44px, calc(env(safe-area-inset-bottom) + 34px))',
+  width: `${MINI}px`, height: `${MINI}px`, zIndex: '10', pointerEvents: 'none',
+  border: '1px solid rgba(245,196,83,0.35)', borderRadius: '10px',
+  background: 'rgba(4,6,11,0.9)',
+} as Partial<CSSStyleDeclaration>);
+document.body.appendChild(mini);
+const miniCtx = mini.getContext('2d')!;
+function drawMinimap(): void {
+  const S = MINI * 2;
+  const spanPx = MINI_SPAN / M_PER_PX;                 // map-layer px the window spans
+  const [cx, cz] = mapPt(state.x, state.z);
+  const sx = cx - spanPx / 2, sz = cz - spanPx / 2;
+  miniCtx.clearRect(0, 0, S, S);
+  miniCtx.save();
+  miniCtx.beginPath();
+  miniCtx.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2);
+  miniCtx.clip();
+  miniCtx.fillStyle = '#0a0f0a';
+  miniCtx.fillRect(0, 0, S, S);
+  miniCtx.drawImage(mapLayer, sx, sz, spanPx, spanPx, 0, 0, S, S);
+  // Fog over the chart: the fog canvas is stored flipped for the GPU (flipY),
+  // so flip it back while compositing — unexplored stays unknown on the map too.
+  miniCtx.save();
+  miniCtx.translate(0, S);
+  miniCtx.scale(1, -1);
+  miniCtx.drawImage(fogCanvas, sx, FOG_PX - sz - spanPx, spanPx, spanPx, 0, 0, S, S);
+  miniCtx.restore();
+  // The car: an amber heading wedge, always centre.
+  miniCtx.translate(S / 2, S / 2);
+  miniCtx.rotate(state.heading);
+  miniCtx.fillStyle = '#f5c453';
+  miniCtx.beginPath();
+  miniCtx.moveTo(0, -9); miniCtx.lineTo(6, 7); miniCtx.lineTo(-6, 7);
+  miniCtx.closePath(); miniCtx.fill();
+  miniCtx.restore();
+  // North tick.
+  miniCtx.fillStyle = 'rgba(245,196,83,0.8)';
+  miniCtx.font = '600 18px ui-monospace, monospace';
+  miniCtx.textAlign = 'center';
+  miniCtx.fillText('N', S / 2, 24);
+}
+
+// ── camera modes: top-down chart ⇄ low chase ───────────────────────
+let camMode: 'top' | 'chase' = 'top';
+const camPos = new THREE.Vector3();
+let camInit = false;
+const camBtn = document.createElement('button');
+camBtn.textContent = 'cam: top';
+Object.assign(camBtn.style, {
+  position: 'fixed', right: '12px', top: 'calc(max(10px, env(safe-area-inset-top)) + 40px)', zIndex: '11',
+  background: 'rgba(8,12,20,0.55)', color: '#f5c453', border: '1px solid rgba(245,196,83,0.4)',
+  borderRadius: '8px', padding: '0.35rem 0.7rem', font: 'inherit', fontSize: '0.74rem', cursor: 'pointer',
+} as Partial<CSSStyleDeclaration>);
+document.body.appendChild(camBtn);
+function toggleCam(): void {
+  camMode = camMode === 'top' ? 'chase' : 'top';
+  camBtn.textContent = `cam: ${camMode}`;
+  halo.visible = camMode === 'top'; // the marker is chart furniture, not scenery
+  camInit = false;                  // snap to the new rig, then resume smoothing
+}
+camBtn.addEventListener('click', toggleCam);
+addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'c') toggleCam(); });
+
 // ── main loop ──────────────────────────────────────────────────────
 const speedEl = $('speed');
 let last = performance.now();
 let streamAt = 0;
+let miniAt = 0;
 // Surface grip: tarmac is fast, everything else asks you to slow down —
 // which turns "follow the real roads" into the game.
 const SURFACE = {
@@ -707,16 +864,29 @@ function tick(now: number): void {
   car.rotation.y = -state.heading;
   reveal(state.x, state.z);
   if (now > streamAt) { streamAt = now + 1200; streamWorld(state.x, state.z); }
-  // Chase-from-above camera: mostly top-down, tilted a touch for the relief.
-  const dist = CAM.base + Math.abs(state.speed) * 3.6 * CAM.perKmh;
-  const tiltRad = (CAM.tilt * Math.PI) / 180;
-  camera.position.set(state.x, ground + dist * Math.sin(tiltRad), state.z + dist * Math.cos(tiltRad));
-  camera.lookAt(state.x, ground, state.z);
+  // Two rigs. TOP: the chart view, tilted a touch for relief. CHASE: low and
+  // behind, where speed is legible and the fog reads as a night horizon.
+  const fwdX = Math.sin(state.heading), fwdZ = -Math.cos(state.heading);
+  if (camMode === 'top') {
+    const dist = CAM.base + Math.abs(state.speed) * 3.6 * CAM.perKmh;
+    const tiltRad = (CAM.tilt * Math.PI) / 180;
+    camPos.set(state.x, ground + dist * Math.sin(tiltRad), state.z + dist * Math.cos(tiltRad));
+  } else {
+    const back = 30 + Math.abs(state.speed) * 0.5;
+    camPos.set(state.x - fwdX * back, sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 13, state.z - fwdZ * back);
+  }
+  // Critically-damped-ish follow: snap on mode change, ease in play (the chase
+  // rig swings through corners instead of being welded to the bumper).
+  if (!camInit) { camera.position.copy(camPos); camInit = true; }
+  else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
+  if (camMode === 'top') camera.lookAt(state.x, ground, state.z);
+  else camera.lookAt(state.x + fwdX * 22, ground + 3, state.z + fwdZ * 22);
   camera.updateMatrixWorld();
   fogMat.uniforms.groundY.value = ground;
   fogMat.uniforms.camPos.value.copy(camera.position);
   fogMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
   speedEl.innerHTML = `${Math.round(Math.abs(state.speed) * 3.6)}<small> km/h</small>`;
+  if (now > miniAt) { miniAt = now + 250; drawMinimap(); }
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
 }

@@ -75,7 +75,7 @@ const SHELL = `<!doctype html>
   <div class="hud" id="place"><b id="place-name">…</b><br><span class="dim" id="place-coords"></span></div>
   <button id="reroll" title="Start over somewhere else on Earth">elsewhere ↻</button>
   <div class="hud" id="speed">0<small> km/h</small></div>
-  <div class="hud" id="hint">WASD / arrows · space = brake · touch: thumb stick, 2nd finger = brake</div>
+  <div class="hud" id="hint">WASD/arrows · space=brake · C=camera · touch: stick + 2nd finger brake</div>
   <script type="module" src="/app.js"></script>
 </body>
 </html>`;
