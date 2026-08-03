@@ -125,8 +125,10 @@ async function fetchHeights(x: number, y: number): Promise<Float32Array | null> 
     const res = await fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${TERRAIN_Z}/${x}/${y}.png`);
     if (!res.ok) return null;
     const bmp = await createImageBitmap(await res.blob());
-    const cv = new OffscreenCanvas(256, 256);
-    const cx = cv.getContext('2d')!;
+    const cv = typeof OffscreenCanvas !== 'undefined'
+      ? new OffscreenCanvas(256, 256)
+      : Object.assign(document.createElement('canvas'), { width: 256, height: 256 });
+    const cx = (cv as OffscreenCanvas).getContext('2d') as OffscreenCanvasRenderingContext2D;
     cx.drawImage(bmp, 0, 0);
     const d = cx.getImageData(0, 0, 256, 256).data;
     const out = new Float32Array(256 * 256);
@@ -189,22 +191,48 @@ const fogCtx = fogCanvas.getContext('2d')!;
 fogCtx.fillStyle = 'rgba(4,6,11,0.985)';
 fogCtx.fillRect(0, 0, FOG_PX, FOG_PX);
 const fogTex = new THREE.CanvasTexture(fogCanvas);
-const fogPlane = new THREE.Mesh(
-  new THREE.PlaneGeometry(FOG_SPAN, FOG_SPAN),
-  new THREE.MeshBasicMaterial({ map: fogTex, transparent: true, depthWrite: false }),
-);
-fogPlane.rotation.x = -Math.PI / 2;
-// Height set per-frame: it rides ~150m above the car's ground so the camera
-// (~197m+ up) always looks THROUGH it. Tall peaks may pierce it — distant
-// summits standing out of the mist is a feature, not a bug.
-fogPlane.renderOrder = 50;
-scene.add(fogPlane);
+// SCREEN-SPACE fog pass. The old 3D fog plane sat ~50m under the camera, so
+// the screen sampled a tiny, hugely magnified window of the mask — the "fog"
+// was a blurry blob that lagged the reveal throttle (dark while driving,
+// clearing when you stopped). This fullscreen pass reconstructs each pixel's
+// GROUND point through the camera and samples the mask exactly — the fog is
+// pinned to the world at any zoom, speed, or tilt.
+const fogMat = new THREE.ShaderMaterial({
+  transparent: true,
+  depthTest: false,
+  depthWrite: false,
+  uniforms: {
+    mask: { value: fogTex },
+    invPV: { value: new THREE.Matrix4() },
+    camPos: { value: new THREE.Vector3() },
+    groundY: { value: 0 },
+    span: { value: FOG_SPAN },
+  },
+  vertexShader: 'varying vec2 vNdc; void main(){ vNdc = position.xy; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  fragmentShader: `
+    uniform sampler2D mask; uniform mat4 invPV; uniform vec3 camPos;
+    uniform float groundY; uniform float span; varying vec2 vNdc;
+    void main(){
+      vec4 far = invPV * vec4(vNdc, 1.0, 1.0);
+      vec3 dir = normalize(far.xyz / far.w - camPos);
+      float t = (groundY - camPos.y) / min(dir.y, -1e-4);
+      vec3 wp = camPos + dir * t;
+      vec2 uv = (wp.xz + span * 0.5) / span;
+      float a = (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) ? 0.985 : texture2D(mask, uv).a;
+      gl_FragColor = vec4(0.016, 0.024, 0.043, a);
+    }`,
+});
+const fogPass = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), fogMat);
+fogPass.frustumCulled = false;
+fogPass.renderOrder = 100;
+scene.add(fogPass);
 let lastRevealX = Infinity, lastRevealZ = Infinity;
 function reveal(ex: number, ez: number): void {
   if (Math.hypot(ex - lastRevealX, ez - lastRevealZ) < REVEAL_M * 0.18) return;
   lastRevealX = ex; lastRevealZ = ez;
   const px = ((ex + FOG_SPAN / 2) / FOG_SPAN) * FOG_PX;
-  const pz = ((ez + FOG_SPAN / 2) / FOG_SPAN) * FOG_PX;
+  // flipY: CanvasTexture uploads row 0 at v=1, so +z (v up) writes low rows.
+  const pz = FOG_PX - ((ez + FOG_SPAN / 2) / FOG_SPAN) * FOG_PX;
   const pr = (REVEAL_M / FOG_SPAN) * FOG_PX;
   const grad = fogCtx.createRadialGradient(px, pz, pr * 0.35, px, pz, pr);
   grad.addColorStop(0, 'rgba(0,0,0,1)');
@@ -566,6 +594,10 @@ let stick: { id: number; x0: number; y0: number; dx: number; dy: number } | null
 let brakeId: number | null = null;
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
+  // Capture: without it, a finger lifted over interactive chrome (the reroll
+  // button) never fires pointerup HERE — the brake finger leaked and stayed
+  // held forever, which read as "the car is stuck".
+  try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ }
   if (!stick) {
     stick = { id: e.pointerId, x0: e.clientX, y0: e.clientY, dx: 0, dy: 0 };
     stickBase.style.display = stickNub.style.display = 'block';
@@ -596,6 +628,10 @@ const endStick = (e: PointerEvent): void => {
 };
 canvas.addEventListener('pointerup', endStick);
 canvas.addEventListener('pointercancel', endStick);
+// Belt to the capture's braces: any release anywhere clears these too.
+addEventListener('pointerup', endStick);
+addEventListener('pointercancel', endStick);
+addEventListener('blur', () => { stick = null; brakeId = null; keys.clear(); stickBase.style.display = stickNub.style.display = 'none'; });
 function input(): { throttle: number; steer: number; brake: boolean } {
   let throttle = 0, steer = 0;
   if (keys.has('w') || keys.has('arrowup')) throttle += 1;
@@ -670,13 +706,16 @@ function tick(now: number): void {
   car.position.set(state.x, ground + 1.8, state.z);
   car.rotation.y = -state.heading;
   reveal(state.x, state.z);
-  fogPlane.position.y = ground + 150;
   if (now > streamAt) { streamAt = now + 1200; streamWorld(state.x, state.z); }
   // Chase-from-above camera: mostly top-down, tilted a touch for the relief.
   const dist = CAM.base + Math.abs(state.speed) * 3.6 * CAM.perKmh;
   const tiltRad = (CAM.tilt * Math.PI) / 180;
   camera.position.set(state.x, ground + dist * Math.sin(tiltRad), state.z + dist * Math.cos(tiltRad));
   camera.lookAt(state.x, ground, state.z);
+  camera.updateMatrixWorld();
+  fogMat.uniforms.groundY.value = ground;
+  fogMat.uniforms.camPos.value.copy(camera.position);
+  fogMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
   speedEl.innerHTML = `${Math.round(Math.abs(state.speed) * 3.6)}<small> km/h</small>`;
   renderer.render(scene, camera);
   requestAnimationFrame(tick);
@@ -702,6 +741,10 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
     baseElev = anchor[v * 256 + u];
   }
   bootMsg('laying down the roads…');
+  // The spawn tile must be IN the height field before the first frame — the
+  // car, drapes, and camera all read it; starting on y=0 then popping up a
+  // second later read as "stuck in the terrain".
+  await loadTerrainTile(tx, ty);
   streamWorld(0, 0);
   reveal(0, 0);
   $('boot').classList.add('done');
