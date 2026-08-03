@@ -551,11 +551,21 @@ function surfaceAt(x: number, z: number): Surface {
 }
 
 function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false): void {
+  // Subdivide to ~12m steps first: OSM ways only carry vertices where the road
+  // BENDS, so a long straight segment used to bridge every terrain dip between
+  // its endpoints like a causeway. Dense sampling makes the ribbon hug the
+  // heightfield.
+  const dense: Array<[number, number]> = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const [ax, az] = pts[i - 1], [bx, bz] = pts[i];
+    const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 12));
+    for (let s = 1; s <= steps; s++) dense.push([ax + ((bx - ax) * s) / steps, az + ((bz - az) * s) / steps]);
+  }
   const verts: number[] = [];
   const uvs: number[] = [];
   let along = 0; // metres travelled — v wraps every 20m (the roadTex period)
-  for (let i = 0; i < pts.length - 1; i++) {
-    const [x0, z0] = pts[i], [x1, z1] = pts[i + 1];
+  for (let i = 0; i < dense.length - 1; i++) {
+    const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
     const dx = x1 - x0, dz = z1 - z0;
     const len = Math.hypot(dx, dz) || 1;
     const nx = (-dz / len) * width / 2, nz = (dx / len) * width / 2;
@@ -695,14 +705,16 @@ function renderWays(els: OsmWay[]): void {
       const w = ROAD_W[tags.highway] ?? 5;
       // Foot infrastructure renders but doesn't grip like tarmac.
       const minor = ['footway', 'path', 'cycleway', 'track'].includes(tags.highway);
-      ribbon(pts, w, minor ? MAT.minor : MAT.road, minor ? 1.2 : 1.6, !minor);
+      // Curb-scale lifts (was 1.6m — roads read as elevated causeways). The
+      // stack keeps its z-order: green 0.2 < water 0.3 < minor 0.45 < road 0.6.
+      ribbon(pts, w, minor ? MAT.minor : MAT.road, minor ? 0.45 : 0.6, !minor);
     } else if (tags.building) {
       const levels = parseFloat(tags['building:levels'] ?? '') || 2;
       polygon(pts, B_MATS[el.id % B_MATS.length], 0.9, clamp(levels * 3.1, 3, 90), 'solid');
     } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
-      polygon(pts, MAT.water, 1.0, 0, 'water');
+      polygon(pts, MAT.water, 0.3, 0, 'water');
     } else {
-      polygon(pts, MAT.green, 0.6);
+      polygon(pts, MAT.green, 0.2);
     }
   }
 }
@@ -881,9 +893,23 @@ function input(): { throttle: number; steer: number; brake: boolean } {
   if (keys.has('a') || keys.has('arrowleft')) steer -= 1;
   if (keys.has('d') || keys.has('arrowright')) steer += 1;
   if (stick) {
-    // Squared response: |v|·v — precision near centre, authority at the rim.
-    throttle += -(stick.dy * Math.abs(stick.dy));
-    steer += stick.dx * Math.abs(stick.dx);
+    const mag = Math.min(1, Math.hypot(stick.dx, stick.dy));
+    if (camMode === 'top' && mag > 0.02) {
+      // The chart view is always north-up, so the stick is DIRECTIONAL there:
+      // push where you want to go on screen and the car steers itself onto
+      // that bearing. (Relative gas/steer read inverted whenever the car
+      // pointed south.)
+      const want = Math.atan2(stick.dx, -stick.dy);
+      const diff = Math.atan2(Math.sin(want - state.heading), Math.cos(want - state.heading));
+      steer += clamp(diff / 0.5, -1, 1);
+      // Full throttle on the bearing; a steering creep when it's behind —
+      // the car arcs around instead of confusingly reversing.
+      throttle += mag * clamp(Math.cos(diff) * 1.4, 0.35, 1);
+    } else {
+      // Squared response: |v|·v — precision near centre, authority at the rim.
+      throttle += -(stick.dy * Math.abs(stick.dy));
+      steer += stick.dx * Math.abs(stick.dx);
+    }
   }
   return { throttle: clamp(throttle, -1, 1), steer: clamp(steer, -1, 1), brake: brakeId !== null || keys.has(' ') };
 }
@@ -965,12 +991,12 @@ let miniAt = 0;
 // which turns "follow the real roads" into the game. `ride` is the car's
 // height over the sampled field (roads are draped 1.6m proud of it).
 const SURFACE = {
-  road: { max: 50, drag: 0.28, ride: 1.75 },
-  ground: { max: 12, drag: 1.6, ride: 0.9 },
-  water: { max: 3.5, drag: 3.5, ride: 0.55 },
+  road: { max: 50, drag: 0.28, ride: 0.65 },
+  ground: { max: 12, drag: 1.6, ride: 0.45 },
+  water: { max: 3.5, drag: 3.5, ride: 0.2 },
 } as const;
 let steerCur = 0; // smoothed — keyboard taps ramp instead of snapping
-let rideCur = 1.75; // eased ride height (road drape ⇄ bare ground)
+let rideCur = 0.65; // eased ride height (road drape ⇄ bare ground)
 function tick(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
