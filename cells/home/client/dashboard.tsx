@@ -22,6 +22,17 @@ const { useState, useEffect } = React;
  *  key loads, the last entry stays on screen until the fetch resolves, so the
  *  ground never blanks mid-transition. */
 const peekCache = new Map<string, ListEntry>();
+
+/** An in-place save on the GROUND (fence/member-grain) hands back the saved
+ *  entry — prime the cache and tell every live `useFactPeek` of that key, so
+ *  the rendered body and its `_meta.version` (the next edit's ifVersion)
+ *  refresh without a refetch. */
+const FACT_PEEK_UPDATED = 'home:fact-peek-updated';
+function primeFactPeek(entry: ListEntry): void {
+  peekCache.set(entry.key, entry);
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<ListEntry>(FACT_PEEK_UPDATED, { detail: entry }));
+}
+
 function useFactPeek(key: string | null | undefined, seed?: ListEntry): ListEntry | null {
   // Seed synchronously from cache — or the server's SSR-peeked entry (a
   // /r/<key> deep link) — so the first paint shows the fact, no flash. The
@@ -47,6 +58,16 @@ function useFactPeek(key: string | null | undefined, seed?: ListEntry): ListEntr
       })
       .catch(() => { /* keep the current entry on error rather than blanking */ });
     return () => { live = false; };
+  }, [key]);
+  // In-place saves broadcast the fresh entry (see primeFactPeek).
+  useEffect(() => {
+    if (!key) return;
+    const onUpdate = (ev: Event): void => {
+      const entry = (ev as CustomEvent<ListEntry>).detail;
+      if (entry?.key === key) setEntry(entry);
+    };
+    window.addEventListener(FACT_PEEK_UPDATED, onUpdate as EventListener);
+    return () => window.removeEventListener(FACT_PEEK_UPDATED, onUpdate as EventListener);
   }, [key]);
   return entry;
 }
@@ -452,7 +473,7 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
           <div className="FactReading_loader" style={{ width: '100%', maxWidth: 680, display: 'grid', gap: '1rem' }}>
             { reading ? (
               <>
-                <FactReading e={reading} tone="light" head={false} showBody footer initialMd={selectedMd} />
+                <FactReading e={reading} tone="light" head={false} showBody footer initialMd={selectedMd} editable={!!authed} onSaved={primeFactPeek} />
                 <FactReadingFooter e={reading} tone="light" authed={!!authed} />
               </>
             ) : selectedMd ? (

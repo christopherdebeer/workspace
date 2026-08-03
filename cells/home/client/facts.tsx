@@ -792,7 +792,7 @@ const SHEET_TONE = {
  * body follows — and since SafeMarkdown inherits `color`, it's mode-aware for
  * free (it just takes the tone's text colour).
  */
-export function FactReading({ e, tone = 'light', onImage = false, head = true, showBody = false, compact = false, initialMd, footer = false }: {
+export function FactReading({ e, tone = 'light', onImage = false, head = true, showBody = false, compact = false, initialMd, footer = false, editable = false, onSaved }: {
   e: ListEntry;
   tone?: 'light' | 'dark';
   onImage?: boolean;
@@ -808,6 +808,10 @@ export function FactReading({ e, tone = 'light', onImage = false, head = true, s
   /** A FactReadingFooter follows (caller-rendered) — suppress the old inline
    *  open-link so the trailer owns the actions. */
   footer?: boolean;
+  /** Fence/member-grain in-place editing on the body (the peek already has
+   *  it; the GROUND reading — the graph-selected fact — was missing it). */
+  editable?: boolean;
+  onSaved?: (entry: ListEntry) => void;
 }): React.JSX.Element {
   const c = READING_TONE[tone];
   const shadow = onImage ? '0 1px 12px rgba(8,29,36,0.6)' : undefined;
@@ -835,7 +839,7 @@ export function FactReading({ e, tone = 'light', onImage = false, head = true, s
         // inherited shadow carries the legibility), on paper/ink keep the dim.
         <div style={{ fontFamily: theme.mono, fontSize: compact ? '0.64rem' : '0.72rem', color: onImage ? 'rgba(239,233,220,0.9)' : c.dim, ...clip }}>{meta.join('  ·  ')}</div>
       ) : null}
-      {showBody ? <div style={{ color: c.text, fontSize: '0.9rem', lineHeight: 1.6, marginTop: head ? '0.2rem' : 0 }}><FactBody e={e} full tone={tone} initialMd={initialMd} /></div> : null}
+      {showBody ? <div style={{ color: c.text, fontSize: '0.9rem', lineHeight: 1.6, marginTop: head ? '0.2rem' : 0 }}><FactBody e={e} full tone={tone} initialMd={initialMd} editable={editable && !e.key.startsWith('_')} onSaved={onSaved} /></div> : null}
       {/* The trailer (provenance · relationships · actions) is the shared
           FactReadingFooter — rendered by the caller AFTER the body, so the reading
           reads the same wherever a fact is met. FactReading itself stays just
@@ -880,9 +884,12 @@ export function FactReadingFooter({ e, tone = 'light', authed = false }: { e: Li
             jump isn't a bare arrow into the unknown (the managing cell is part
             of the affordance, resolved from the handler's own cellRef). */}
         {open ? <a href={localize(open.href)} style={actionStyle(t)}>Open{open.cell ? ` in ${open.cell}` : ''} ↗</a> : null}
-        {edit ? <a href={localize(edit.href)} style={actionStyle(t)}>Edit{edit.cell ? ` in ${edit.cell}` : ''} ↗</a>
-          : authed && !system ? <button onClick={() => editFact(e)} style={{ ...actionStyle(t), background: t.actionFill, cursor: 'pointer' }}>Edit</button>
-          : null}
+        {/* Both affordances, not either/or: the declared cell editor (the
+            type's REAL editor — lit's doc surface) and the generic in-place
+            edit. Hiding in-place behind the declared handler made docs and
+            doc-blocks the ONLY facts you couldn't touch where you read them. */}
+        {edit ? <a href={localize(edit.href)} style={actionStyle(t)}>Edit{edit.cell ? ` in ${edit.cell}` : ''} ↗</a> : null}
+        {authed && !system ? <button onClick={() => editFact(e)} style={{ ...actionStyle(t), background: t.actionFill, cursor: 'pointer' }}>Edit</button> : null}
       </div>
     </div>
   );
@@ -1245,7 +1252,9 @@ export function FactDetail({ e, compact, tone = 'dark', anchor, startEditing = f
           {!compact ? (
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
               {open ? <a href={open} style={actionStyle(t)}>Open ↗</a> : null}
-              {edit ? <a href={edit} style={actionStyle(t)}>Edit in cell ↗</a> : !system ? (
+              {/* Both, not either/or — see FactReadingFooter. */}
+              {edit ? <a href={edit} style={actionStyle(t)}>Edit in cell ↗</a> : null}
+              {!system ? (
                 <button onClick={() => setEditing(true)} style={{ ...actionStyle(t), background: t.actionFill, cursor: 'pointer' }}>Edit</button>
               ) : null}
             </div>
