@@ -531,39 +531,69 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
         if (pointInPoly(gx * GRID + GRID / 2, gz * GRID + GRID / 2, pts)) waterCells.add(`${gx},${gz}`);
   }
 }
-// ── OSM tile cache (localStorage, LRU) ─────────────────────────────
+// ── OSM tile cache (IndexedDB, LRU by timestamp) ───────────────────
 // Overpass is a shared public instance with moods; a tile you have seen once
-// should never depend on it again. Slimmed way geometry per tile, ~50-tile
-// LRU — the Central Park default becomes instant and offline-proof on the
-// second visit.
+// should never depend on it again. localStorage was the wrong pot: this cell
+// shares the parc.land origin's ~5MB quota with every other cell, and one
+// dense urban tile (buildings with full geometry) is hundreds of KB — every
+// write quota-failed silently and a reload refetched the whole ring.
+// IndexedDB gets an origin quota in the hundreds of MB.
 interface OsmWay { id: number; tags?: Record<string, string>; geometry: Array<{ lat: number; lon: number }> }
-const OSM_CACHE_V = 1;
-const osmCacheKey = (x: number, y: number): string => `drive.osm.${OSM_CACHE_V}.${OSM_Z}.${x}.${y}`;
-function readTileCache(x: number, y: number): OsmWay[] | null {
+// Only the tags renderWays actually reads — the rest is dead weight per way.
+const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure'];
+let osmDb: IDBDatabase | null = null;
+const osmDbReady: Promise<void> = new Promise((resolve) => {
   try {
-    const raw = localStorage.getItem(osmCacheKey(x, y));
-    return raw ? (JSON.parse(raw) as OsmWay[]) : null;
-  } catch { return null; }
-}
-function writeTileCache(x: number, y: number, els: OsmWay[]): void {
-  const k = osmCacheKey(x, y);
-  const slim = JSON.stringify(els.map((e) => ({ id: e.id, tags: e.tags, geometry: e.geometry })));
-  const put = (): void => {
-    localStorage.setItem(k, slim);
-    const idx: string[] = JSON.parse(localStorage.getItem('drive.osm.idx') ?? '[]').filter((v: string) => v !== k);
-    idx.push(k);
-    while (idx.length > 50) localStorage.removeItem(idx.shift()!);
-    localStorage.setItem('drive.osm.idx', JSON.stringify(idx));
-  };
-  try { put(); } catch {
-    // Quota: evict the oldest half and try once more.
+    const req = indexedDB.open('drive-cache', 1);
+    req.onupgradeneeded = () => { req.result.createObjectStore('osm').createIndex('ts', 'ts'); };
+    req.onsuccess = () => { osmDb = req.result; resolve(); };
+    req.onerror = () => resolve();
+  } catch { resolve(); }
+});
+// Free the shared origin quota from the failed localStorage era.
+try { for (const k of Object.keys(localStorage)) if (k.startsWith('drive.osm.')) localStorage.removeItem(k); } catch { /* fine */ }
+const osmCacheKey = (x: number, y: number): string => `${OSM_Z}/${x}/${y}`;
+async function readTileCache(x: number, y: number): Promise<OsmWay[] | null> {
+  await osmDbReady;
+  if (!osmDb) return null;
+  return new Promise((resolve) => {
     try {
-      const idx: string[] = JSON.parse(localStorage.getItem('drive.osm.idx') ?? '[]');
-      idx.splice(0, Math.ceil(idx.length / 2)).forEach((old) => localStorage.removeItem(old));
-      localStorage.setItem('drive.osm.idx', JSON.stringify(idx));
-      put();
-    } catch { /* give up gracefully */ }
-  }
+      const rq = osmDb!.transaction('osm', 'readonly').objectStore('osm').get(osmCacheKey(x, y));
+      rq.onsuccess = () => resolve((rq.result as { ways?: OsmWay[] } | undefined)?.ways ?? null);
+      rq.onerror = () => resolve(null);
+    } catch { resolve(null); }
+  });
+}
+let osmWritesSincePrune = 0;
+function writeTileCache(x: number, y: number, els: OsmWay[]): void {
+  if (!osmDb) return;
+  const ways = els.map((e) => {
+    let tags: Record<string, string> | undefined;
+    for (const t of KEEP_TAGS) { const v = e.tags?.[t]; if (v !== undefined) (tags ??= {})[t] = v; }
+    return { id: e.id, tags, geometry: e.geometry };
+  });
+  try {
+    osmDb.transaction('osm', 'readwrite').objectStore('osm').put({ ts: Date.now(), ways }, osmCacheKey(x, y));
+    if (++osmWritesSincePrune >= 25) { osmWritesSincePrune = 0; pruneTileCache(); }
+  } catch { /* cache is best-effort */ }
+}
+function pruneTileCache(): void {
+  // Keep the newest ~600 tiles (a few days of wandering); drop oldest-first.
+  try {
+    const store = osmDb!.transaction('osm', 'readwrite').objectStore('osm');
+    const count = store.count();
+    count.onsuccess = () => {
+      let extra = count.result - 600;
+      if (extra <= 0) return;
+      const cur = store.index('ts').openCursor();
+      cur.onsuccess = () => {
+        const c = cur.result;
+        if (!c || extra-- <= 0) return;
+        c.delete();
+        c.continue();
+      };
+    };
+  } catch { /* cache is best-effort */ }
 }
 
 function renderWays(els: OsmWay[]): void {
@@ -604,7 +634,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
   const key = `${x}/${y}`;
   if (osmLoaded.has(key)) return;
   osmLoaded.add(key);
-  const cached = readTileCache(x, y);
+  const cached = await readTileCache(x, y);
   if (cached) { renderWays(cached); return; }
   osmNote(1);
   if (osmInFlight >= 2) { await new Promise<void>((r) => osmQueue.push(r)); }
