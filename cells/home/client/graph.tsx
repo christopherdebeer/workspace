@@ -1417,8 +1417,12 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       };
       // A finger tap wobbles 8–12px on a phone — the old 6px "it's a drag"
       // threshold was eating most label taps on touch (they registered as
-      // micro-orbits, so nothing ever selected).
+      // micro-orbits, so nothing ever selected). Per-pointer-type, set on
+      // pointerdown; distance is EUCLIDEAN (the Manhattan sum tripped ~40%
+      // earlier on diagonal wobble, defeating the threshold's intent).
       let dragThreshold = 6;
+      const DRAG_THRESHOLD_MOUSE = 6;
+      const DRAG_THRESHOLD_TOUCH = 12;
       let pointerDown = false;
       let hoverPickRaf = 0;
       let hoverLabelTimer: ReturnType<typeof setTimeout> | null = null;
@@ -1463,6 +1467,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const rotPerPx = (): number => (camera.fov * Math.PI / 180) / Math.max(H, 1);
       const onDown = (e: PointerEvent): void => {
         pointers.set(e.pointerId, { x: e.clientX, y: e.clientY });
+        dragThreshold = e.pointerType === 'touch' ? DRAG_THRESHOLD_TOUCH : DRAG_THRESHOLD_MOUSE;
         downX = e.clientX; downY = e.clientY; moved = false; pointerDown = true;
         lastPX = e.clientX; lastPY = e.clientY;
         velRX = velRY = 0; shellQT = null; // a touch stops the glide/turn
@@ -1477,7 +1482,7 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
       const onMove = (e: PointerEvent): void => {
         const tracked = pointers.get(e.pointerId);
         if (tracked) { tracked.x = e.clientX; tracked.y = e.clientY; }
-        if (pointerDown && Math.abs(e.clientX - downX) + Math.abs(e.clientY - downY) > dragThreshold) {
+        if (pointerDown && Math.hypot(e.clientX - downX, e.clientY - downY) > dragThreshold) {
           moved = true;
           setHover(null);
         }
@@ -1675,7 +1680,13 @@ function ThreeGraph({ selectedKey, onSelect, visible, onReach, revealNonce, vant
         // the scene (owner), so they light up as they hydrate rather than being
         // silently dropped for being off-scene.
         hiSet = new Set(allKeys); selKey = null; setNbr(null);
-        showRing(null);
+        showRing(null); showCrumb(null);
+        // Tell the app the selection cleared (inventory §5.3: this used to
+        // bypass the funnel, leaving App/URL holding a key the scene had
+        // dropped). Pre-seed lastExternal so the state echo doesn't bounce
+        // back through select() and wipe the hit set we just lit.
+        lastExternal.current = null;
+        selectRef.current(null);
         applyNodeAlpha(); applyEdgeColor(); syncBeamLabels();
         for (const k of allKeys) if (!nodeById.has(k)) void hydrateKey(k);
         // Turn the shell to the hits already present (their centroid seat

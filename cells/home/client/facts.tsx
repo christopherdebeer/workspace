@@ -831,7 +831,7 @@ export function FactReading({ e, tone = 'light', onImage = false, head = true, s
           { !onImage && <span aria-hidden style={{ fontSize: compact ? '0.95rem' : '1.15rem', flexShrink: 0 }}>{typeIcon(e)}</span> }
           {/* Titles may be markdown (bold/italic/inline code/link) — render the
               inline marks, not the raw `**…**`. Plain titles are unchanged. */}
-          <h2 style={{ margin: 0, fontFamily: theme.serif, fontWeight: 600, fontSize: compact ? '0.98rem' : 'clamp(1.2rem, 4.2vw, 1.7rem)', lineHeight: 1.2, color: c.text, minWidth: 0, ...clip }}><InlineMarkdown text={factTitle(e)} /></h2>
+          <h2 style={{ margin: 0, fontFamily: theme.serif, fontWeight: 600, fontSize: compact ? '0.98rem' : 'clamp(1.2rem, 4.2vw, 1.7rem)', lineHeight: 1.2, color: c.text, minWidth: 0, ...clip }}><InlineMarkdown text={factTitle(e)} onFactLink={(k, frag) => openFact({ key: k }, frag)} factHref={(k) => localize(`/r/${k}`)} /></h2>
         </div>
       ) : null}
       {head && meta.length ? (
@@ -839,7 +839,7 @@ export function FactReading({ e, tone = 'light', onImage = false, head = true, s
         // inherited shadow carries the legibility), on paper/ink keep the dim.
         <div style={{ fontFamily: theme.mono, fontSize: compact ? '0.64rem' : '0.72rem', color: onImage ? 'rgba(239,233,220,0.9)' : c.dim, ...clip }}>{meta.join('  ·  ')}</div>
       ) : null}
-      {showBody ? <div style={{ color: c.text, fontSize: '0.9rem', lineHeight: 1.6, marginTop: head ? '0.2rem' : 0 }}><FactBody e={e} full tone={tone} initialMd={initialMd} editable={editable && !e.key.startsWith('_')} onSaved={onSaved} /></div> : null}
+      {showBody ? <div style={{ color: c.text, fontSize: '0.9rem', lineHeight: 1.6, marginTop: head ? '0.2rem' : 0 }}><FactBody e={e} full tone={tone} initialMd={initialMd} editable={canEditInPlace(e, editable)} onSaved={onSaved} /></div> : null}
       {/* The trailer (provenance · relationships · actions) is the shared
           FactReadingFooter — rendered by the caller AFTER the body, so the reading
           reads the same wherever a fact is met. FactReading itself stays just
@@ -865,7 +865,6 @@ export function FactReadingFooter({ e, tone = 'light', authed = false }: { e: Li
   const m = e._meta;
   const open = factAction(e, 'open');
   const edit = factAction(e, 'edit');
-  const system = e.key.startsWith('_');
   const prov: string[] = [];
   if (m?.type) prov.push(m.type);
   const when = relTime(m?.updatedAt);
@@ -889,7 +888,7 @@ export function FactReadingFooter({ e, tone = 'light', authed = false }: { e: Li
             edit. Hiding in-place behind the declared handler made docs and
             doc-blocks the ONLY facts you couldn't touch where you read them. */}
         {edit ? <a href={localize(edit.href)} style={actionStyle(t)}>Edit{edit.cell ? ` in ${edit.cell}` : ''} ↗</a> : null}
-        {authed && !system ? <button onClick={() => editFact(e)} style={{ ...actionStyle(t), background: t.actionFill, cursor: 'pointer' }}>Edit</button> : null}
+        {canEditInPlace(e, authed) ? <button onClick={() => editFact(e)} style={{ ...actionStyle(t), background: t.actionFill, cursor: 'pointer' }}>Edit</button> : null}
       </div>
     </div>
   );
@@ -923,6 +922,15 @@ export function openFact(e: ListEntry, anchor?: string): void {
  *  second Edit tap inside it). */
 export function editFact(e: ListEntry): void {
   if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<ListEntry & { edit?: boolean }>(FACT_DETAIL_EVENT, { detail: { ...e, edit: true } }));
+}
+
+/** THE edit gate, spelled once (inventory §5.4/6.2): in-place editing needs a
+ *  signed-in writer and a non-system fact. Every surface — ground footer, peek
+ *  actions, fence ✎, palette inline — asks this one question, so a guest never
+ *  sees an affordance that can only fail at the gateway, and `_` rows are
+ *  uneditable everywhere by the same rule. */
+export function canEditInPlace(e: ListEntry, authed: boolean): boolean {
+  return authed && !e.key.startsWith('_');
 }
 
 const shortKey = (k: string): string => (k.length > 22 ? k.slice(0, 21) + '…' : k);
@@ -1189,7 +1197,7 @@ export function InlineFactEditor({ e, onCancel, onSaved, tone = 'dark' }: { e: L
 /** The peek body: the fact rendered by its viewer (full, not clamped), its
  *  provenance line, its neighbourhood, and the actions — escalate to the type's
  *  page/editor when declared, else edit generically in place. */
-export function FactDetail({ e, compact, tone = 'dark', anchor, startEditing = false }: { e: ListEntry; compact?: boolean; tone?: Tone; anchor?: string; /** Open with the editor already up (the one-tap edit path — see `editFact`). */ startEditing?: boolean }): React.JSX.Element {
+export function FactDetail({ e, compact, tone = 'dark', anchor, startEditing = false, authed = false }: { e: ListEntry; compact?: boolean; tone?: Tone; anchor?: string; /** Open with the editor already up (the one-tap edit path — see `editFact`). */ startEditing?: boolean; /** The one edit gate (canEditInPlace) needs the session — plumbed from App. */ authed?: boolean }): React.JSX.Element {
   const t = SHEET_TONE[tone];
   const [entry, setEntry] = useState<ListEntry>(e);
   const [editing, setEditing] = useState(startEditing && e.value !== undefined);
@@ -1204,7 +1212,6 @@ export function FactDetail({ e, compact, tone = 'dark', anchor, startEditing = f
   const open = factHref(entry);
   const edit = factEdit(entry);
   const meta = entry._meta;
-  const system = entry.key.startsWith('_');
   // The type's declared fields (ADR-0002 shape.fields), additively on $types.
   const fields = (declFor(entry, typeDecls) as { fields?: FormField[] } | undefined)?.fields;
   return (
@@ -1228,12 +1235,7 @@ export function FactDetail({ e, compact, tone = 'dark', anchor, startEditing = f
       ) : (
         <>
           <div style={{ fontSize: '0.85rem', lineHeight: 1.5 }}>
-            {/* In-place editing rides the same rule as the Edit button below:
-                a system (`_`-prefixed) fact is machinery, not content. A write
-                the reader isn't granted fails at the gateway and surfaces as
-                the fence editor's error — the affordance doesn't need to
-                pre-guess the grant. */}
-            <FactBody e={entry} full tone={tone} anchor={anchor} editable={!system} onSaved={setEntry} />
+            <FactBody e={entry} full tone={tone} anchor={anchor} editable={canEditInPlace(entry, authed)} onSaved={setEntry} />
           </div>
           {hints?.length ? (
             <div style={{ display: 'grid', gap: '0.2rem', border: `1px solid ${t.line}`, borderRadius: 8, padding: '0.5rem 0.6rem', background: t.panel }}>
@@ -1251,10 +1253,10 @@ export function FactDetail({ e, compact, tone = 'dark', anchor, startEditing = f
           ) : null}
           {!compact ? (
             <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-              {open ? <a href={open} style={actionStyle(t)}>Open ↗</a> : null}
+              {open ? <a href={localize(open)} style={actionStyle(t)}>Open ↗</a> : null}
               {/* Both, not either/or — see FactReadingFooter. */}
-              {edit ? <a href={edit} style={actionStyle(t)}>Edit in cell ↗</a> : null}
-              {!system ? (
+              {edit ? <a href={localize(edit)} style={actionStyle(t)}>Edit in cell ↗</a> : null}
+              {canEditInPlace(entry, authed) ? (
                 <button onClick={() => setEditing(true)} style={{ ...actionStyle(t), background: t.actionFill, cursor: 'pointer' }}>Edit</button>
               ) : null}
             </div>
@@ -1267,7 +1269,7 @@ export function FactDetail({ e, compact, tone = 'dark', anchor, startEditing = f
 
 /** Mounted once at the app root: listens for `openFact`, hydrates a bare {key}
  *  via peek, and renders the modal. Returns null when nothing is open. */
-export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange, onRevealGround }: { tone?: Tone; onCurrent?: (key: string | null) => void; /** Fires when the stack opens/closes — the app minimizes the palette under it. */ onOpenChange?: (open: boolean) => void; /** Fires while the 1/1 sheet is being dragged toward ground — the Landing restores the REAL ground content behind it for the reveal. */ onRevealGround?: (revealing: boolean) => void } = {}): React.JSX.Element | null {
+export function FactDetailHost({ tone = 'dark', authed = false, onCurrent, onOpenChange, onRevealGround }: { tone?: Tone; authed?: boolean; onCurrent?: (key: string | null) => void; /** Fires when the stack opens/closes — the app minimizes the palette under it. */ onOpenChange?: (open: boolean) => void; /** Fires while the 1/1 sheet is being dragged toward ground — the Landing restores the REAL ground content behind it for the reveal. */ onRevealGround?: (revealing: boolean) => void } = {}): React.JSX.Element | null {
   const t = SHEET_TONE[tone];
   // A drill HISTORY with a cursor — not a plain stack. openFact pushes at the
   // cursor (truncating any forward history); back moves the cursor DOWN and the
@@ -1535,7 +1537,7 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange, onRevea
                 ) : null}
               </div>
               <div style={{ padding: isCur ? '0.7rem 0.9rem calc(1.6rem + env(safe-area-inset-bottom))' : '0.45rem 0.9rem 0.9rem' }}>
-                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} startEditing={frame.edit} />
+                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} startEditing={frame.edit} authed={authed} />
               </div>
             </section>
           );
@@ -1642,7 +1644,7 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange, onRevea
                 ) : null}
               </div>
               <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: `0.7rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom)${isFront && cursor < total - 1 ? ` + ${PEEK}px` : ''})` }}>
-                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} startEditing={frame.edit} />
+                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} startEditing={frame.edit} authed={authed} />
               </div>
             </div>
           );

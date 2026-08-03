@@ -25,9 +25,9 @@
 import * as React from 'react';
 import { theme, SchemaForm, isFormable, type FormFieldSchema, type FormPalette } from '@parc/ui';
 import { authFetch } from './bridge';
-import { getJson, mcpCall } from './lib';
+import { getJson, mcpCall, localize } from './lib';
 import { FederatedRendererFrame, FederatedFormFrame } from './federated';
-import { factHref, typeIcon, factTitle, FactBody, type ListEntry } from './facts';
+import { factHref, typeIcon, factTitle, FactBody, openFact, type ListEntry } from './facts';
 import { CONSOLE_RESULT_EVENT } from './graph';
 import { TunePanel } from './tune-panel';
 import { readHashState, writeHashState } from './urlstate';
@@ -487,7 +487,10 @@ export function Console({ authed, seed, onSelectKey, collapsed = false, onCollap
 
   const activate = async (it: Item): Promise<void> => {
     if (it.kind === 'fact') {
-      onSelectKey?.(it.e.key);
+      // ONE chip contract (inventory §5.7): a search hit opens a READING in
+      // one gesture — the peek host reports the frame as the selection, so
+      // the graph re-aims as before, and `overlaid` collapses this sheet.
+      openFact(it.e.value !== undefined ? it.e : { key: it.e.key });
       return;
     }
     // The tuner opens into its own live panel (see focusedView) — never a blind
@@ -879,7 +882,8 @@ function ResultBody({ o }: { o: Output }): React.JSX.Element {
   const screen = { ...inset, padding: '0.55rem', color: ink.text } as const;
   if (isFactShaped(o.value)) {
     const e: ListEntry = { key: (o.value as { key?: string }).key || o.argsKey || '', value: (o.value as { value: unknown }).value, _meta: (o.value as { _meta?: ListEntry['_meta'] })._meta };
-    const to = factHref(e);
+    const raw = factHref(e);
+    const to = raw ? localize(raw) : null;
     const title = `${typeIcon(e) ? typeIcon(e) + ' ' : ''}${factTitle(e)}`;
     return (
       <div style={{ ...screen, display: 'grid', gap: '0.3rem' }}>
@@ -896,7 +900,8 @@ function ResultBody({ o }: { o: Output }): React.JSX.Element {
     return (
       <div style={{ ...screen, display: 'grid', gap: '0.4rem', maxHeight: 420, overflowY: 'auto', overscrollBehavior: 'contain' }}>
         {list.slice(0, 12).map((e) => {
-          const to = factHref(e);
+          const rawTo = factHref(e);
+          const to = rawTo ? localize(rawTo) : null;
           const title = `${typeIcon(e) ? typeIcon(e) + ' ' : ''}${factTitle(e)}`;
           return (
             <div key={e.key} style={{ display: 'grid', gap: '0.15rem', paddingBottom: '0.4rem', borderBottom: `1px solid ${ink.line}` }}>

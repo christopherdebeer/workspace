@@ -494,7 +494,10 @@ export function Landing({ session, onExplore, authed, canEnter, selectedKey, sel
           // at the Content bottom (below), for every branch.
           <div style={{ width: '100%', maxWidth: 780, display: 'grid', gap: '1.4rem' }}>
             <div className="FactReading_loader" style={{ width: '100%', maxWidth: 680, display: 'grid', gap: '1rem', margin: '0 auto' }}>
-              <DocBody e={landingEntry} initialMd={landingBody} tone="light" />
+              {/* editable: the landing doc was the ONE fact you couldn't edit
+                  where you read it (inventory §5.8) — it takes the same
+                  member/fence ✎ as any other ground read now. */}
+              <DocBody e={landingEntry} initialMd={landingBody} tone="light" editable={!!authed} />
             </div>
           </div>
         ) : (
