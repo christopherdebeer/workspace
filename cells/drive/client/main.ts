@@ -17,10 +17,10 @@
 import * as THREE from 'three';
 
 // ── tuning ─────────────────────────────────────────────────────────
-const TERRAIN_Z = 13;         // terrarium tile zoom (~4.9km/cos(lat) per tile)
+const TERRAIN_Z = 14;         // terrarium tile zoom (~2.4km/cos(lat), ~9.5m/px — z13 washed out the hills roads tunnel through)
 const OSM_Z = 16;             // overpass tile zoom (~600m — keeps per-query weight low)
 const OSM_RING = 1;           // load a (2R+1)² neighbourhood of vector tiles
-const TERRAIN_RING = 1;
+const TERRAIN_RING = 2;       // wider ring at the finer zoom keeps the horizon populated
 const REVEAL_M = 150;         // fog hole radius around the car, metres
 const FOG_SPAN = 12000;       // fog canvas coverage, metres (centred on spawn)
 const FOG_PX = 1024;
@@ -357,6 +357,41 @@ function reveal(ex: number, ez: number): void {
   fogTex.needsUpdate = true;
 }
 
+// ── ghosting (x-ray along the camera→car sight line) ───────────────
+// When a hill (or the ground above a tunnel) sits between the viewer and the
+// car, its fragments dissolve into a screen-door pattern so the car stays
+// visible. Patched into the terrain/green materials via onBeforeCompile.
+const ghostU = {
+  uGhostCar: { value: new THREE.Vector3() },
+  uGhostCam: { value: new THREE.Vector3() },
+};
+function ghostify(mat: THREE.Material): void {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uGhostCar = ghostU.uGhostCar;
+    sh.uniforms.uGhostCam = ghostU.uGhostCam;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGhostW;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGhostW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vGhostW;\nuniform vec3 uGhostCar;\nuniform vec3 uGhostCam;')
+      .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+      {
+        vec3 ab = uGhostCar - uGhostCam;
+        float t = dot(vGhostW - uGhostCam, ab) / max(dot(ab, ab), 1.0);
+        if (t > 0.05 && t < 0.97) {
+          vec3 p = uGhostCam + ab * t;
+          // Only fragments that rise ABOVE the sight line are occluders —
+          // without the height test the corridor dissolved the ordinary
+          // ground grazing beneath the ray in chase cam.
+          if (length(vGhostW.xz - p.xz) < 6.0 + t * 8.0 && vGhostW.y > p.y - 0.3
+              && mod(floor(gl_FragCoord.x) + floor(gl_FragCoord.y), 2.0) < 1.0) discard;
+        }
+      }`);
+  };
+}
+const terrainMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+ghostify(terrainMat);
+
 // ── terrain meshes ─────────────────────────────────────────────────
 const terrainLoaded = new Set<string>();
 async function loadTerrainTile(x: number, y: number): Promise<void> {
@@ -393,7 +428,7 @@ async function loadTerrainTile(x: number, y: number): Promise<void> {
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, new THREE.MeshLambertMaterial({ vertexColors: true }));
+  const mesh = new THREE.Mesh(geo, terrainMat);
   mesh.position.set(cxm, 0, czm);
   worldGroup.add(mesh);
 }
@@ -474,7 +509,15 @@ const MAT = {
   minor: new THREE.MeshLambertMaterial({ map: pathTex, transparent: true, opacity: 0.85, side: DS }),
   water: new THREE.MeshLambertMaterial({ map: waterTex, side: DS }),
   green: new THREE.MeshLambertMaterial({ map: greenTex, side: DS }),
-};
+  // Tunnel interior: emissive so the tube reads even with no light inside.
+  tunnel: new THREE.MeshLambertMaterial({ color: 0x2a2d34, emissive: 0x0b0d12, side: DS }),
+  portal: new THREE.MeshLambertMaterial({ color: 0x4d4a42, side: DS }),
+} as const;
+// Green drapes conform to the terrain, so a wooded hill occludes like one —
+// and the tunnel shell is the carved hill itself, so it ghosts too (the car
+// inside stays visible through the screen-door).
+ghostify(MAT.green);
+ghostify(MAT.tunnel);
 // Building tints vary per way id so a block reads as parcels, not one slab.
 // Extrude material slots: [0]=caps (roof), [1]=side walls (darker).
 const B_MATS = [0xa59a85, 0x92897a, 0x9d937f, 0x878071].map((c) => {
@@ -513,7 +556,7 @@ function mapPoly(pts: Array<[number, number]>, color: string): void {
 // ── collision & surface grids (24m cells) ──────────────────────────
 const GRID = 24;
 const gkey = (x: number, z: number): string => `${Math.floor(x / GRID)},${Math.floor(z / GRID)}`;
-interface Seg { ax: number; az: number; bx: number; bz: number; hw: number }
+interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?: number; yb?: number }
 const wallGrid = new Map<string, Seg[]>();   // building edges — solid
 const roadGrid = new Map<string, Seg[]>();   // drivable centrelines + half-width
 const waterCells = new Set<string>();        // coarse water mask
@@ -549,8 +592,24 @@ function surfaceAt(x: number, z: number): Surface {
   }
   return waterCells.has(gkey(x, z)) ? 'water' : 'ground';
 }
+// The road's own elevation at (x,z) — differs from the terrain wherever the
+// profile smoothing decided a stretch is a tunnel or bridge.
+function roadHeightAt(x: number, z: number): number | null {
+  let best: number | null = null, bd = Infinity;
+  for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
+    if (seg.ya === undefined || seg.yb === undefined) continue;
+    const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
+    const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    const d = Math.hypot(x - (seg.ax + dx * t), z - (seg.az + dz * t));
+    if (d <= seg.hw + 0.8 && d < bd) { bd = d; best = seg.ya + (seg.yb - seg.ya) * t; }
+  }
+  return best;
+}
 
-function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false): void {
+type RoadMode = 'none' | 'auto' | 'tunnel' | 'bridge';
+const TUNNEL_TOL = 5;  // metres of terrain above the smoothed profile ⇒ tunnel
+const TUNNEL_H = 5;    // clearance of the carved tube
+function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none'): void {
   // Subdivide to ~12m steps first: OSM ways only carry vertices where the road
   // BENDS, so a long straight segment used to bridge every terrain dip between
   // its endpoints like a causeway. Dense sampling makes the ribbon hug the
@@ -561,16 +620,55 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 12));
     for (let s = 1; s <= steps; s++) dense.push([ax + ((bx - ax) * s) / steps, az + ((bz - az) * s) / steps]);
   }
+  const n = dense.length;
+  const elev = dense.map(([x, z]) => sampleHeight(x, z));
+  // Roads get their own longitudinal PROFILE. Terrain draping alone sends a
+  // road over every hill in its path; real roads keep grade and go THROUGH.
+  // Where a ~500m-smoothed profile sits more than TUNNEL_TOL below the terrain
+  // the run becomes a tunnel: the road takes the portal-to-portal chord and a
+  // carved tube is built around it. OSM tunnel/bridge tags force whole-way runs.
+  const prof = elev.slice();
+  const runs: Array<[number, number]> = [];
+  if (mode !== 'none' && n > 4) {
+    if (mode === 'tunnel' || mode === 'bridge') runs.push([0, n - 1]);
+    else {
+      const avg = (src: number[]): number[] => src.map((_, i) => {
+        let s = 0, c = 0;
+        for (let j = Math.max(0, i - 20); j <= Math.min(n - 1, i + 20); j++) { s += src[j]; c++; }
+        return s / c;
+      });
+      const sm = avg(avg(elev));
+      let a = -1;
+      for (let i = 0; i < n; i++) {
+        const deep = elev[i] - sm[i] > TUNNEL_TOL;
+        if (deep && a < 0) a = i;
+        if ((!deep || i === n - 1) && a >= 0) {
+          if (i - a >= 2) runs.push([Math.max(0, a - 1), Math.min(n - 1, i)]);
+          a = -1;
+        }
+      }
+    }
+    for (const [a, b] of runs) for (let i = a; i <= b; i++) {
+      const chord = elev[a] + ((elev[b] - elev[a]) * (i - a)) / (b - a);
+      // Tagged tunnels cap at the terrain: the z13 heightfield can't resolve
+      // small knolls, and an uncapped chord under flat data left a giant
+      // exposed tube sitting on the ground. Bridges ride the chord.
+      prof[i] = mode === 'tunnel' ? Math.min(chord, elev[i]) : chord;
+    }
+  }
+  const flat = mode !== 'none'; // profiled roads get a flat cross-section
   const verts: number[] = [];
   const uvs: number[] = [];
   let along = 0; // metres travelled — v wraps every 20m (the roadTex period)
-  for (let i = 0; i < dense.length - 1; i++) {
+  for (let i = 0; i < n - 1; i++) {
     const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
     const dx = x1 - x0, dz = z1 - z0;
     const len = Math.hypot(dx, dz) || 1;
     const nx = (-dz / len) * width / 2, nz = (dx / len) * width / 2;
-    const y00 = sampleHeight(x0 + nx, z0 + nz) + lift, y01 = sampleHeight(x0 - nx, z0 - nz) + lift;
-    const y10 = sampleHeight(x1 + nx, z1 + nz) + lift, y11 = sampleHeight(x1 - nx, z1 - nz) + lift;
+    const y00 = (flat ? prof[i] : sampleHeight(x0 + nx, z0 + nz)) + lift;
+    const y01 = (flat ? prof[i] : sampleHeight(x0 - nx, z0 - nz)) + lift;
+    const y10 = (flat ? prof[i + 1] : sampleHeight(x1 + nx, z1 + nz)) + lift;
+    const y11 = (flat ? prof[i + 1] : sampleHeight(x1 - nx, z1 - nz)) + lift;
     const v0 = along / 20, v1 = (along + len) / 20;
     along += len;
     verts.push(
@@ -578,7 +676,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       x1 + nx, y10, z1 + nz, x1 - nx, y11, z1 - nz, x0 - nx, y01, z0 - nz,
     );
     uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
-    if (drivable) addSeg(roadGrid, { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2 });
+    if (drivable) addSeg(roadGrid, { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1] });
     mapSeg(x0, z0, x1, z1, drivable ? Math.max(width, 14) : 8, drivable ? '#a8a294' : 'rgba(150,142,120,0.4)');
   }
   if (!verts.length) return;
@@ -587,6 +685,55 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
   geo.computeVertexNormals();
   worldGroup.add(new THREE.Mesh(geo, mat));
+  if (mode !== 'bridge') for (const [a, b] of runs) {
+    // Tube only where the road is genuinely BURIED — where the terrain covers
+    // the profile. An unburied stretch (coarse heightfield, shallow cut) stays
+    // an open road; the tube would otherwise stand exposed like a dark box.
+    let s = -1;
+    for (let i = a; i <= b; i++) {
+      const buried = elev[i] - prof[i] > 1.2;
+      if (buried && s < 0) s = i;
+      if ((!buried || i === b) && s >= 0) {
+        const e = buried ? i : i - 1;
+        if (e - s >= 2) tunnelTube(dense, prof, s, e, width, lift);
+        s = -1;
+      }
+    }
+  }
+}
+// The carved space: side walls + ceiling along a tunnel run, portal lintels at
+// the mouths, and solid collision so the car can't drive out through the rock.
+function tunnelTube(dense: Array<[number, number]>, prof: number[], a: number, b: number, width: number, lift: number): void {
+  const tv: number[] = [];
+  const quadPush = (...p: number[]): void => {
+    tv.push(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
+  };
+  for (let i = a; i < b; i++) {
+    const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
+    const dx = x1 - x0, dz = z1 - z0;
+    const len = Math.hypot(dx, dz) || 1;
+    const nx = (-dz / len) * (width / 2 + 0.6), nz = (dx / len) * (width / 2 + 0.6);
+    const yA = prof[i] + lift, yB = prof[i + 1] + lift;
+    quadPush(x0 + nx, yA, z0 + nz, x1 + nx, yB, z1 + nz, x0 + nx, yA + TUNNEL_H, z0 + nz, x1 + nx, yB + TUNNEL_H, z1 + nz);
+    quadPush(x0 - nx, yA, z0 - nz, x1 - nx, yB, z1 - nz, x0 - nx, yA + TUNNEL_H, z0 - nz, x1 - nx, yB + TUNNEL_H, z1 - nz);
+    quadPush(x0 + nx, yA + TUNNEL_H, z0 + nz, x1 + nx, yB + TUNNEL_H, z1 + nz, x0 - nx, yA + TUNNEL_H, z0 - nz, x1 - nx, yB + TUNNEL_H, z1 - nz);
+    addSeg(wallGrid, { ax: x0 + nx, az: z0 + nz, bx: x1 + nx, bz: z1 + nz, hw: 0 });
+    addSeg(wallGrid, { ax: x0 - nx, az: z0 - nz, bx: x1 - nx, bz: z1 - nz, hw: 0 });
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tv), 3));
+  geo.computeVertexNormals();
+  worldGroup.add(new THREE.Mesh(geo, MAT.tunnel));
+  for (const end of [a, b]) {
+    const i0 = end === a ? a : b - 1, i1 = end === a ? a + 1 : b;
+    const [x0, z0] = dense[i0], [x1, z1] = dense[i1];
+    const ang = Math.atan2(z1 - z0, x1 - x0);
+    const lintel = new THREE.Mesh(new THREE.BoxGeometry(width + 3, 1.6, 1.2), MAT.portal);
+    const [px, pz] = dense[end];
+    lintel.position.set(px, prof[end] + lift + TUNNEL_H + 0.3, pz);
+    lintel.rotation.y = ang + Math.PI / 2; // across the road, not along it
+    worldGroup.add(lintel);
+  }
 }
 function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Material[], lift: number, extrude = 0, collide?: 'solid' | 'water'): void {
   if (pts.length < 3) return;
@@ -639,7 +786,7 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
 // IndexedDB gets an origin quota in the hundreds of MB.
 interface OsmWay { id: number; tags?: Record<string, string>; geometry: Array<{ lat: number; lon: number }> }
 // Only the tags renderWays actually reads — the rest is dead weight per way.
-const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure'];
+const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'layer'];
 let osmDb: IDBDatabase | null = null;
 const osmDbReady: Promise<void> = new Promise((resolve) => {
   try {
@@ -651,7 +798,7 @@ const osmDbReady: Promise<void> = new Promise((resolve) => {
 });
 // Free the shared origin quota from the failed localStorage era.
 try { for (const k of Object.keys(localStorage)) if (k.startsWith('drive.osm.')) localStorage.removeItem(k); } catch { /* fine */ }
-const osmCacheKey = (x: number, y: number): string => `${OSM_Z}/${x}/${y}`;
+const osmCacheKey = (x: number, y: number): string => `2/${OSM_Z}/${x}/${y}`; // v2: keeps tunnel/bridge tags
 async function readTileCache(x: number, y: number): Promise<OsmWay[] | null> {
   await osmDbReady;
   if (!osmDb) return null;
@@ -707,7 +854,11 @@ function renderWays(els: OsmWay[]): void {
       const minor = ['footway', 'path', 'cycleway', 'track'].includes(tags.highway);
       // Curb-scale lifts (was 1.6m — roads read as elevated causeways). The
       // stack keeps its z-order: green 0.2 < water 0.3 < minor 0.45 < road 0.6.
-      ribbon(pts, w, minor ? MAT.minor : MAT.road, minor ? 0.45 : 0.6, !minor);
+      const mode: RoadMode = minor ? 'none'
+        : tags.tunnel && tags.tunnel !== 'no' ? 'tunnel'
+        : tags.bridge && tags.bridge !== 'no' ? 'bridge'
+        : 'auto';
+      ribbon(pts, w, minor ? MAT.minor : MAT.road, minor ? 0.45 : 0.6, !minor, mode);
     } else if (tags.building) {
       const levels = parseFloat(tags['building:levels'] ?? '') || 2;
       polygon(pts, B_MATS[el.id % B_MATS.length], 0.9, clamp(levels * 3.1, 3, 90), 'solid');
@@ -810,6 +961,8 @@ scene.add(car);
 const state = { x: 0, z: 0, heading: 0, speed: 0 };
 (window as unknown as { __drive?: object; __surfaceAt?: (x: number, z: number) => string }).__drive = state;
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
+(window as unknown as { __probe?: object }).__probe = (x: number, z: number) =>
+  ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z) });
 (window as unknown as { __roadDir?: (x: number, z: number) => [number, number] | null }).__roadDir = (x, z) => {
   let best: Seg | null = null, bd = Infinity;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
@@ -997,6 +1150,7 @@ const SURFACE = {
 } as const;
 let steerCur = 0; // smoothed — keyboard taps ramp instead of snapping
 let rideCur = 0.65; // eased ride height (road drape ⇄ bare ground)
+let prevGround: number | null = null; // last frame's resolved ground (tunnel guard)
 function tick(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
@@ -1044,7 +1198,15 @@ function tick(now: number): void {
     if (!hit) break;
   }
   if (scraping) state.speed *= Math.exp(-5 * dt);
-  const ground = sampleHeight(state.x, state.z);
+  let ground = sampleHeight(state.x, state.z);
+  if (surfKind === 'road') {
+    // On a road the car rides the ROAD's profile (tunnel chords included) —
+    // but only if it's near the car's current level, so driving over the hill
+    // a tunnel passes under doesn't teleport the car down into the tube.
+    const rh = roadHeightAt(state.x, state.z);
+    if (rh !== null && Math.abs(rh - (prevGround ?? ground)) < 4) ground = rh;
+  }
+  prevGround = ground;
   // Off-road is BUMPY (realism foundation, aesthetics later): a speed-scaled
   // shake in ride height + pitch/roll, plus body roll into the steer. Two
   // incommensurate sines read as rattle, not metronome.
@@ -1079,6 +1241,8 @@ function tick(now: number): void {
   else camera.lookAt(state.x + fwdX * 18, ground + 1.6, state.z + fwdZ * 18);
   camera.updateMatrixWorld();
   skyDome.position.copy(camera.position);
+  ghostU.uGhostCar.value.set(state.x, ground + 1.2, state.z);
+  ghostU.uGhostCam.value.copy(camera.position);
   compMat.uniforms.camPos.value.copy(camera.position);
   compMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
   speedEl.innerHTML = `${Math.round(Math.abs(state.speed) * 3.6)}<small> km/h</small>`;
