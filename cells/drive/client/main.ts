@@ -173,19 +173,51 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05070c);
 const camera = new THREE.PerspectiveCamera(55, 1, 1, 30000);
-scene.add(new THREE.AmbientLight(0xbfd0e8, 0.55));
-const sun = new THREE.DirectionalLight(0xfff2d8, 1.0);
-sun.position.set(-600, 900, -400);
+
+// ── sky ────────────────────────────────────────────────────────────
+// A real sky, not a backdrop color: gradient dome with the sun sitting low
+// on the horizon (mostly north-ish so the default chase view catches it),
+// and the scene's directional light aimed from the same place.
+const SUN_DIR = new THREE.Vector3(0.45, 0.075, -0.8).normalize();
+const skyMat = new THREE.ShaderMaterial({
+  side: THREE.BackSide,
+  depthWrite: false,
+  uniforms: { sunDir: { value: SUN_DIR } },
+  vertexShader: 'varying vec3 vDir; void main(){ vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+  fragmentShader: `
+    uniform vec3 sunDir; varying vec3 vDir;
+    void main(){
+      vec3 d = normalize(vDir);
+      float az = pow(max(dot(normalize(vec3(d.x, 0.0, d.z)), normalize(vec3(sunDir.x, 0.0, sunDir.z))), 0.0), 3.0);
+      vec3 zen = vec3(0.010, 0.016, 0.038);
+      vec3 hor = mix(vec3(0.085, 0.115, 0.16), vec3(0.50, 0.22, 0.075), az);
+      vec3 col = mix(hor, zen, pow(clamp(d.y, 0.0, 1.0), 0.42));
+      float sd = max(dot(d, sunDir), 0.0);
+      col += vec3(1.0, 0.55, 0.22) * (smoothstep(0.9996, 0.99985, sd) * 1.4 + pow(sd, 24.0) * 0.30);
+      col = mix(vec3(0.012, 0.017, 0.026), col, smoothstep(-0.06, 0.005, d.y));
+      gl_FragColor = vec4(col, 1.0);
+    }`,
+});
+const skyDome = new THREE.Mesh(new THREE.SphereGeometry(20000, 32, 16), skyMat);
+skyDome.frustumCulled = false;
+skyDome.renderOrder = -10;
+scene.add(skyDome);
+
+scene.add(new THREE.HemisphereLight(0x93a6c8, 0x2c3629, 0.62));
+const sun = new THREE.DirectionalLight(0xffd2a0, 1.15);
+sun.position.copy(SUN_DIR).multiplyScalar(2000);
 scene.add(sun);
 
 const worldGroup = new THREE.Group();
 scene.add(worldGroup);
 
+let resizePost: (() => void) | null = null; // set by the atmosphere pipeline below
 function resize(): void {
   const w = innerWidth, h = innerHeight;
   renderer.setSize(w, h, false);
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
+  resizePost?.();
 }
 addEventListener('resize', resize);
 resize();
@@ -197,57 +229,114 @@ const fogCtx = fogCanvas.getContext('2d')!;
 fogCtx.fillStyle = 'rgba(4,6,11,0.985)';
 fogCtx.fillRect(0, 0, FOG_PX, FOG_PX);
 const fogTex = new THREE.CanvasTexture(fogCanvas);
-// SCREEN-SPACE fog pass. The old 3D fog plane sat ~50m under the camera, so
-// the screen sampled a tiny, hugely magnified window of the mask — the "fog"
-// was a blurry blob that lagged the reveal throttle (dark while driving,
-// clearing when you stopped). This fullscreen pass reconstructs each pixel's
-// GROUND point through the camera and samples the mask exactly — the fog is
-// pinned to the world at any zoom, speed, or tilt.
-const fogMat = new THREE.ShaderMaterial({
-  transparent: true,
-  depthTest: false,
-  depthWrite: false,
+// ── atmosphere pipeline (fog of war as depth, not a veil) ──────────
+// The fog is a POST-PROCESS now. A transparent overlay could only dim at one
+// flat opacity, which read as a grey wall pasted on the screen. Instead the
+// scene renders to a target, a half-res blurred copy is built from it, and a
+// composite pass reconstructs each pixel's GROUND point through the camera
+// (so the fog stays pinned to the world at any zoom or tilt) and mixes
+// sharp -> blurred -> haze by how far and how unexplored that point is:
+// distance genuinely blurs and dims, and the haze warms toward the sun.
+const QUAD_VS = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
+const rtType = renderer.extensions.has('EXT_color_buffer_float') || renderer.extensions.has('EXT_color_buffer_half_float')
+  ? THREE.HalfFloatType
+  : THREE.UnsignedByteType;
+const mkRT = (depth: boolean): THREE.WebGLRenderTarget => {
+  const rt = new THREE.WebGLRenderTarget(2, 2, { type: rtType, depthBuffer: depth });
+  rt.texture.minFilter = THREE.LinearFilter;
+  rt.texture.magFilter = THREE.LinearFilter;
+  return rt;
+};
+const rtScene = mkRT(true);
+rtScene.samples = 4; // the canvas's MSAA doesn't apply to render targets
+// Real per-pixel depth: fog by each pixel's TRUE distance, not by where its
+// screen ray meets the ground plane — otherwise a tall building far away gets
+// a haze seam across it (fogged base, "sky-crisp" top).
+rtScene.depthTexture = new THREE.DepthTexture(2, 2);
+const rtA = mkRT(false), rtB = mkRT(false);
+resizePost = () => {
+  const w = Math.max(2, Math.round(innerWidth * renderer.getPixelRatio()));
+  const h = Math.max(2, Math.round(innerHeight * renderer.getPixelRatio()));
+  rtScene.setSize(w, h);
+  rtA.setSize(w >> 1, h >> 1);
+  rtB.setSize(w >> 1, h >> 1);
+};
+resizePost();
+const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
+const quadScene = new THREE.Scene();
+const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
+quad.frustumCulled = false;
+quadScene.add(quad);
+const runPass = (mat: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | null): void => {
+  quad.material = mat;
+  renderer.setRenderTarget(target);
+  renderer.render(quadScene, quadCam);
+};
+const blurMat = new THREE.ShaderMaterial({
+  uniforms: { src: { value: null }, dirPx: { value: new THREE.Vector2() } },
+  vertexShader: QUAD_VS,
+  fragmentShader: `
+    uniform sampler2D src; uniform vec2 dirPx; varying vec2 vUv;
+    void main(){
+      vec3 c = texture2D(src, vUv).rgb * 0.2270270270;
+      vec2 o1 = dirPx * 1.3846153846, o2 = dirPx * 3.2307692308;
+      c += (texture2D(src, vUv + o1).rgb + texture2D(src, vUv - o1).rgb) * 0.3162162162;
+      c += (texture2D(src, vUv + o2).rgb + texture2D(src, vUv - o2).rgb) * 0.0702702703;
+      gl_FragColor = vec4(c, 1.0);
+    }`,
+});
+const compMat = new THREE.ShaderMaterial({
   uniforms: {
+    sceneTex: { value: null },
+    softTex: { value: null },
+    depthTex: { value: rtScene.depthTexture },
     mask: { value: fogTex },
     invPV: { value: new THREE.Matrix4() },
     camPos: { value: new THREE.Vector3() },
-    groundY: { value: 0 },
     span: { value: FOG_SPAN },
+    sunXZ: { value: new THREE.Vector2(SUN_DIR.x, SUN_DIR.z).normalize() },
   },
-  vertexShader: 'varying vec2 vNdc; void main(){ vNdc = position.xy; gl_Position = vec4(position.xy, 0.0, 1.0); }',
+  vertexShader: QUAD_VS,
   fragmentShader: `
-    uniform sampler2D mask; uniform mat4 invPV; uniform vec3 camPos;
-    uniform float groundY; uniform float span; varying vec2 vNdc;
+    uniform sampler2D sceneTex; uniform sampler2D softTex; uniform sampler2D depthTex;
+    uniform sampler2D mask; uniform mat4 invPV; uniform vec3 camPos; uniform float span;
+    uniform vec2 sunXZ; varying vec2 vUv;
+    vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
+    vec3 hazeAt(vec3 d){
+      float w = pow(max(dot(normalize(d.xz), sunXZ), 0.0), 3.0);
+      return mix(vec3(0.030, 0.042, 0.062), vec3(0.19, 0.11, 0.05), w);
+    }
     void main(){
-      vec4 far = invPV * vec4(vNdc, 1.0, 1.0);
+      vec3 sharp = texture2D(sceneTex, vUv).rgb;
+      vec3 soft = texture2D(softTex, vUv).rgb;
+      float z = texture2D(depthTex, vUv).r;
+      vec4 far = invPV * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
       vec3 dir = normalize(far.xyz / far.w - camPos);
-      // Rays that never reach the ground are SKY. The old min(dir.y,-1e-4)
-      // clamp sent them to a garbage far-behind point -> out-of-mask -> the
-      // whole sky above the horizon painted solid black in chase cam. Fog of
-      // war lives on the terrain: sky gets only a thin haze band that decays
-      // above the horizon, and the skybox shows through untouched.
-      vec3 haze = vec3(0.10, 0.13, 0.19);
-      if (dir.y > -0.012) {
-        float band = exp(-max(dir.y, 0.0) * 20.0);
-        gl_FragColor = vec4(haze, band * 0.5);
-        return;
+      vec3 col;
+      if (z >= 0.99995) {
+        // Nothing drawn here (the sky dome writes no depth): crisp sky with a
+        // soft luminous band hugging the horizon.
+        float band = exp(-abs(dir.y) * 26.0);
+        col = mix(sharp, mix(soft, hazeAt(dir), 0.5), band * 0.5);
+      } else {
+        // Fog by the pixel's TRUE surface point: distance sets how much it
+        // blurs and dims (aerial perspective); the fog-of-war mask at that
+        // point sets how much is hidden. Buildings fog as whole objects.
+        vec4 wp4 = invPV * vec4(vUv * 2.0 - 1.0, z * 2.0 - 1.0, 1.0);
+        vec3 wp = wp4.xyz / wp4.w;
+        float t = distance(wp, camPos);
+        vec2 uv = (wp.xz + span * 0.5) / span;
+        float m = (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) ? 1.0 : texture2D(mask, uv).a / 0.985;
+        float near = 1.0 - exp(-t / 260.0);  // fast ramp: the fog-of-war wall
+        float deep = 1.0 - exp(-t / 1400.0); // slow ramp: aerial perspective
+        float blurF = clamp(m * (0.45 + 0.55 * near) + deep * 0.55, 0.0, 1.0);
+        float dimF = min(m * mix(0.55, 0.95, near) + (1.0 - m) * deep * 0.55, 0.95);
+        col = mix(sharp, soft, blurF);
+        col = mix(col, hazeAt(dir), dimF);
       }
-      float t = (groundY - camPos.y) / dir.y;
-      vec3 wp = camPos + dir * t;
-      vec2 uv = (wp.xz + span * 0.5) / span;
-      float m = (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) ? 1.0 : texture2D(mask, uv).a / 0.985;
-      // Atmosphere, not void: unexplored ground is a haze wall that thickens
-      // with distance; explored ground keeps a faint depth haze so the world
-      // recedes instead of ending at a hard black edge.
-      float dist = 1.0 - exp(-t / 600.0);
-      float a = m * mix(0.82, 0.96, dist) + (1.0 - m) * dist * 0.25;
-      gl_FragColor = vec4(haze, min(a, 0.96));
+      gl_FragColor = vec4(srgb(col), 1.0);
     }`,
 });
-const fogPass = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), fogMat);
-fogPass.frustumCulled = false;
-fogPass.renderOrder = 100;
-scene.add(fogPass);
 let lastRevealX = Infinity, lastRevealZ = Infinity;
 function reveal(ex: number, ez: number): void {
   if (Math.hypot(ex - lastRevealX, ez - lastRevealZ) < REVEAL_M * 0.18) return;
@@ -963,12 +1052,21 @@ function tick(now: number): void {
   if (camMode === 'top') camera.lookAt(state.x, ground, state.z);
   else camera.lookAt(state.x + fwdX * 18, ground + 1.6, state.z + fwdZ * 18);
   camera.updateMatrixWorld();
-  fogMat.uniforms.groundY.value = ground;
-  fogMat.uniforms.camPos.value.copy(camera.position);
-  fogMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
+  skyDome.position.copy(camera.position);
+  compMat.uniforms.camPos.value.copy(camera.position);
+  compMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
   speedEl.innerHTML = `${Math.round(Math.abs(state.speed) * 3.6)}<small> km/h</small>`;
   if (now > miniAt) { miniAt = now + 250; drawMinimap(); }
+  // scene → target, two separable blur rounds at half res, composite to canvas
+  renderer.setRenderTarget(rtScene);
   renderer.render(scene, camera);
+  blurMat.uniforms.src.value = rtScene.texture; blurMat.uniforms.dirPx.value.set(1 / rtA.width, 0); runPass(blurMat, rtA);
+  blurMat.uniforms.src.value = rtA.texture; blurMat.uniforms.dirPx.value.set(0, 1 / rtA.height); runPass(blurMat, rtB);
+  blurMat.uniforms.src.value = rtB.texture; blurMat.uniforms.dirPx.value.set(2 / rtA.width, 0); runPass(blurMat, rtA);
+  blurMat.uniforms.src.value = rtA.texture; blurMat.uniforms.dirPx.value.set(0, 2 / rtA.height); runPass(blurMat, rtB);
+  compMat.uniforms.sceneTex.value = rtScene.texture;
+  compMat.uniforms.softTex.value = rtB.texture;
+  runPass(compMat, null);
   requestAnimationFrame(tick);
 }
 
