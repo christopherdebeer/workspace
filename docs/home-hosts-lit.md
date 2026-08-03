@@ -71,11 +71,30 @@ hosts, and the live layer stays where the trust is.
   top after hydration. lit remains the only place fences go *live* — that
   asymmetry is correct: execution belongs to the editor's trust context, the
   reader shows declarations.
-  *Not done. lit's SSR emits HTML strings and its client ladder mutates the
-  resulting DOM (`pre[data-fence]` queries); moving it to elements is a real
-  change to that seam, not a swap. The grammar is now shared, so lit and home
-  classify a fence identically — this step removes lit's remaining markup
-  copy, and is contained now that the core exists.*
+  *Not done, and the blocker is now diagnosed precisely rather than guessed.*
+
+  *lit's `renderMarkdown` returns an HTML STRING, consumed through
+  `dangerouslySetInnerHTML` in six places across `shared.tsx`, `index.ts` and
+  `client/main.tsx`. Its live ladder (`enhanceFences`) then queries the
+  resulting DOM for `pre[data-fence]` and **mutates** it — `pre.replaceWith(box)`
+  for every board embed, transclusion, viewer, repl and agent cell. React
+  elements and imperative `replaceWith` don't compose, so this is not a swap of
+  one renderer for another: it is a rewrite of how lit's execution tier attaches.*
+
+  *Two routes, neither free:*
+  *(a) port `enhanceFences` onto the core's `renderFence` seam — lit's whole
+  live ladder becomes React. Correct end state, largest change, and it touches
+  the one surface where code actually executes.*
+  *(b) have lit's `renderMarkdown` render the shared React tree through
+  `renderToStaticMarkup`. Small, keeps the string pipeline and the ladder
+  intact — but puts `react-dom/server` in lit's browser bundle.*
+
+  *What is NOT at risk meanwhile: the fence GRAMMAR is already shared (step 1),
+  so home and lit classify identically, and the core deliberately emits lit's
+  own class names and attributes (`md-fence`, `dir-*`, `fence-output`,
+  `fence-chips`/`fchip fc-*`, `data-fence`, `data-output-lang`). The remaining
+  duplication is markup emission over an already-shared classification — the
+  cheap half of the fork, not the expensive one.*
 - [x] 4. Static-safe fence types (mermaid, csv/json tables) can render from
   the shared core in home — display, not execution.
   *Done, via `cells/home/client/viewers.tsx` (split out of `facts.tsx` so a
