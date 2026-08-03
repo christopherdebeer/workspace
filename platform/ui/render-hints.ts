@@ -34,6 +34,26 @@ export function bodyText(v: unknown): string {
   return '';
 }
 
+/**
+ * WHICH field `bodyText` read — the write target for an in-place edit.
+ *
+ *   - a string name → the value's field to write back to;
+ *   - `null`        → the value IS the body (a bare string fact);
+ *   - `undefined`   → no text body, so nothing to edit in place.
+ *
+ * Deliberately colocated with `bodyText` over the SAME `BODY_FIELDS` list.
+ * These two must agree by construction: if the read list and the write target
+ * ever diverge, an in-place edit displays one field and saves to another —
+ * which looks like the edit silently vanishing, and at worst buries the
+ * original body under a field nothing renders.
+ */
+export function bodyField(v: unknown): string | null | undefined {
+  if (typeof v === 'string') return null;
+  if (!v || typeof v !== 'object') return undefined;
+  const obj = v as Record<string, unknown>;
+  return BODY_FIELDS.find((f) => typeof obj[f] === 'string' && obj[f]);
+}
+
 /** Resolve a `present.label`/path (e.g. `value.title`) against an entry `{ value, _meta }`. */
 export function resolvePath(root: unknown, path: string): unknown {
   return path.split('.').reduce<unknown>((o, k) => (o == null ? undefined : (o as Record<string, unknown>)[k]), root);

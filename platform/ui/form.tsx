@@ -34,6 +34,25 @@ export interface FormFieldSchema {
   items?: FormFieldSchema;
   properties?: Record<string, FormFieldSchema>;
   required?: string[];
+  /** A finer shape than `type` — today `markdown`, from a type declaration's
+   *  own field vocabulary (ADR-0002 `shape.fields`). Drives the long-text
+   *  seam: a declared markdown body should not land in a one-line input. */
+  format?: string;
+}
+
+/** What the long-text seam is handed. `@parc/ui` cannot import an editor (the
+ *  kit is pre-bundled with only React external, and CodeMirror lives in a
+ *  cell), so a host INJECTS one — the same dependency-injection shape as
+ *  `HintDeps.md` in render-hints. Without an injection the textarea stands. */
+export interface LongTextProps {
+  name: string;
+  value: string;
+  onChange: (next: string) => void;
+  /** `markdown` when the declaration says so — a host can light up the right
+   *  grammar and offer `[[` completion only where prose is expected. */
+  format?: string;
+  placeholder?: string;
+  palette: FormPalette;
 }
 
 export interface FormPalette {
@@ -77,13 +96,16 @@ export interface SchemaFormProps {
   value: Record<string, unknown>;
   onChange: (next: Record<string, unknown>) => void;
   palette?: Partial<FormPalette>;
+  /** Render long/markdown string fields with a richer editor (see
+   *  `LongTextProps`). Omitted → the built-in textarea. */
+  renderLongText?: (props: LongTextProps) => React.ReactNode;
 }
 
 /** Render every property of an object schema as a field; unrenderable shapes
  *  degrade per-field (see `FieldRow`). Returns `null` if the top-level schema
  *  itself isn't a formable object — the caller's own raw-JSON view is the
  *  fallback for that case (e.g. a target with no `properties` at all). */
-export function SchemaForm({ schema, value, onChange, palette }: SchemaFormProps): React.JSX.Element | null {
+export function SchemaForm({ schema, value, onChange, palette, renderLongText }: SchemaFormProps): React.JSX.Element | null {
   if (!isFormable(schema)) return null;
   const p: FormPalette = { ...DEFAULT_FORM_PALETTE, ...palette };
   const props = schema!.properties!;
@@ -97,7 +119,7 @@ export function SchemaForm({ schema, value, onChange, palette }: SchemaFormProps
   return (
     <div style={{ display: 'grid', gap: '0.7rem' }}>
       {Object.entries(props).map(([key, fs]) => (
-        <FieldRow key={key} name={key} schema={fs} required={required.has(key)} value={value[key]} onChange={(v) => set(key, v)} palette={p} />
+        <FieldRow key={key} name={key} schema={fs} required={required.has(key)} value={value[key]} onChange={(v) => set(key, v)} palette={p} renderLongText={renderLongText} />
       ))}
     </div>
   );
@@ -110,6 +132,7 @@ function FieldRow({
   value,
   onChange,
   palette: p,
+  renderLongText,
 }: {
   name: string;
   schema: FormFieldSchema;
@@ -117,6 +140,7 @@ function FieldRow({
   value: unknown;
   onChange: (v: unknown) => void;
   palette: FormPalette;
+  renderLongText?: (props: LongTextProps) => React.ReactNode;
 }): React.JSX.Element {
   const label = (
     <label style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', flexWrap: 'wrap', fontFamily: p.mono, fontSize: '0.78rem', color: p.dim }}>
@@ -225,16 +249,23 @@ function FieldRow({
       </div>
     );
   }
-  // string (default) — a longer-looking field (a description, content, prompt) gets a textarea.
-  const long = name === 'content' || name === 'text' || name === 'prompt' || name === 'body' || name === 'description' || (schema.description?.length ?? 0) > 100;
+  // string (default) — a longer-looking field (a description, content, prompt)
+  // gets a textarea, or the host's injected editor when one is offered. A
+  // DECLARED markdown field always counts as long: a type that says its body is
+  // markdown should never be edited through a one-line input.
+  const str = typeof value === 'string' ? value : '';
+  const long = schema.format === 'markdown' || name === 'content' || name === 'text' || name === 'prompt' || name === 'body' || name === 'description' || (schema.description?.length ?? 0) > 100;
+  const rich = long && renderLongText
+    ? renderLongText({ name, value: str, onChange: (next: string) => onChange(next || undefined), format: schema.format, placeholder: schema.description, palette: p })
+    : null;
   return (
     <div style={{ display: 'grid', gap: '0.25rem' }}>
       {label}
-      {long ? (
-        <textarea value={typeof value === 'string' ? value : ''} onChange={(e) => onChange(e.target.value || undefined)} rows={3} style={inputStyle} />
+      {rich ?? (long ? (
+        <textarea value={str} onChange={(e) => onChange(e.target.value || undefined)} rows={3} style={inputStyle} />
       ) : (
-        <input type="text" value={typeof value === 'string' ? value : ''} onChange={(e) => onChange(e.target.value || undefined)} style={inputStyle} />
-      )}
+        <input type="text" value={str} onChange={(e) => onChange(e.target.value || undefined)} style={inputStyle} />
+      ))}
     </div>
   );
 }

@@ -210,7 +210,13 @@ export function FenceChips({ meta, o, actions }: { meta: FenceMeta; o: MdOpts; a
       {node ?? text}
     </span>
   );
-  const src = meta.fromSource;
+  // `fromSource` is `filename ?? uri`, which is empty whenever the grammar
+  // couldn't classify the source token as a path — so fall back to the source's
+  // `lang`, where an unclassified bare token lands. Belt to the grammar's
+  // braces: `< doc:x` now parses correctly (`:` is path-shaped), but a source
+  // shape we haven't met yet should still show its declaration rather than
+  // silently vanishing from the chip row.
+  const src = meta.fromSource ?? meta.source?.lang;
   // A source that names a fact key is itself navigable — the transclusion's
   // provenance is a link, not a label.
   const srcIsFact = !!src && /[:/]/.test(src) && !/^https?:|^\/\//.test(src);

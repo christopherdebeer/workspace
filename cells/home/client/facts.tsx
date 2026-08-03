@@ -6,7 +6,7 @@
  */
 import * as React from 'react';
 import { createPortal } from 'react-dom';
-import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, type TypeDecl, type AssembleSpec, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
+import { Card, Heading, Badge, Button, Anchor, CodeBlock, theme, resolve, declFor, iconOf, titleOf, bodyText, bodyField, type TypeDecl, type AssembleSpec, SchemaForm, isFormable, type FormFieldSchema } from '@parc/ui';
 import { ink } from './ink';
 import { SafeMarkdown, InlineMarkdown, safeFrameUrl, safeImageUrl, safeNavigationUrl, type FenceEditTarget } from './safe-markdown';
 import { ViewerBody, DISPLAY_VIEWERS } from './viewers';
@@ -185,23 +185,13 @@ function strField(v: unknown, keys: string[]): string | undefined {
   }
   return undefined;
 }
-const BODY_FIELDS = ['content', 'body', 'text', 'description', 'note', 'md', 'markdown'];
-
-/** The markdown/text body of a fact value (string, or its content-ish field). */
-function bodyText(v: unknown): string {
-  if (typeof v === 'string') return v;
-  return strField(v, BODY_FIELDS) ?? '';
-}
-
-/** WHICH field `bodyText` read — what an in-place edit must write back to.
- *  `null` means the value IS the body (a bare string fact). `undefined` means
- *  there is no text body, so there is nothing to edit in place. */
-function bodyField(v: unknown): string | null | undefined {
-  if (typeof v === 'string') return null;
-  if (!v || typeof v !== 'object') return undefined;
-  const o = v as Record<string, unknown>;
-  return BODY_FIELDS.find((k) => typeof o[k] === 'string' && o[k]);
-}
+// `bodyText` / `bodyField` come from the SHARED @parc/ui pair (see the import
+// above). Home carried its own `bodyText` whose field list had drifted: it was
+// missing `statement`, so a `claim` fact — whose whole content IS its
+// statement — fell through to the `fields` hint and truncated a normal
+// sentence mid-word at 160 chars. Taking the shared one fixes that, and taking
+// `bodyField` from beside it keeps the read field and the in-place-edit WRITE
+// target provably the same field.
 
 /**
  * Write an edited body back to the fact that owns it — the commit half of
@@ -874,10 +864,12 @@ export function FactReadingFooter({ e, tone = 'light', authed = false }: { e: Li
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
         {/* Actions name their DESTINATION cell — "Open in @c15r/lit" — so the
             jump isn't a bare arrow into the unknown (the managing cell is part
-            of the affordance, resolved from the handler's own cellRef). */}
+            of the affordance, resolved from the handler's own cellRef).
+            The generic Edit uses `editFact`, not `openFact`: one tap lands in
+            the editor, rather than in a peek you must then find Edit inside. */}
         {open ? <a href={localize(open.href)} style={actionStyle(t)}>Open{open.cell ? ` in ${open.cell}` : ''} ↗</a> : null}
         {edit ? <a href={localize(edit.href)} style={actionStyle(t)}>Edit{edit.cell ? ` in ${edit.cell}` : ''} ↗</a>
-          : authed && !system ? <button onClick={() => openFact(e)} style={{ ...actionStyle(t), background: t.actionFill, cursor: 'pointer' }}>Edit</button>
+          : authed && !system ? <button onClick={() => editFact(e)} style={{ ...actionStyle(t), background: t.actionFill, cursor: 'pointer' }}>Edit</button>
           : null}
       </div>
     </div>
@@ -900,11 +892,28 @@ export interface Edge {
 
 const FACT_DETAIL_EVENT = 'home:fact-detail';
 
+/** What `openFact`/`editFact` put on the wire: the entry, plus where to land
+ *  (`anchor`, a member section) and how (`startEditing`, the one-tap edit). */
+type FactDetailRequest = ListEntry & { anchor?: string; startEditing?: boolean };
+
 /** Open the progressive detail modal for a fact (or a bare {key}; hydrated by
  *  peek). `anchor` scrolls an assembled container to the named member's
  *  section once the body renders (the member→whole deep link). */
 export function openFact(e: ListEntry, anchor?: string): void {
-  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<ListEntry & { anchor?: string }>(FACT_DETAIL_EVENT, { detail: anchor ? { ...e, anchor } : e }));
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<FactDetailRequest>(FACT_DETAIL_EVENT, { detail: anchor ? { ...e, anchor } : e }));
+}
+
+/**
+ * Open a fact's peek with the EDITOR ALREADY UP — one tap from wherever the
+ * fact is being read, instead of open-peek-then-find-Edit.
+ *
+ * This is the whole-fact entry point; the finer grains are reached in place
+ * (a fence's ✎, an assembled doc's per-member edit) and never come through
+ * here. Same event, one more flag, so every surface that can already summon a
+ * peek can summon an edit for free.
+ */
+export function editFact(e: ListEntry, anchor?: string): void {
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<FactDetailRequest>(FACT_DETAIL_EVENT, { detail: { ...e, ...(anchor ? { anchor } : {}), startEditing: true } }));
 }
 
 const shortKey = (k: string): string => (k.length > 22 ? k.slice(0, 21) + '…' : k);
@@ -1041,7 +1050,12 @@ function fieldsToFormSchema(fields: FormField[]): FormFieldSchema {
   const required: string[] = [];
   for (const f of fields) {
     const type = f.type === 'markdown' ? 'string' : f.type === 'string' || f.type === 'boolean' || f.type === 'number' ? f.type : undefined;
-    properties[f.name] = { type, description: f.description };
+    // `markdown` collapses to JSON-Schema's `string`, but the fact that it IS
+    // markdown is the interesting part — carry it in `format` so the long-text
+    // seam can hand the field a real editor instead of a one-line input. A
+    // `protocol`'s whole body is a declared markdown field; it was being edited
+    // through a single-line box.
+    properties[f.name] = { type, description: f.description, ...(f.type === 'markdown' ? { format: 'markdown' } : {}) };
     if (f.required) required.push(f.name);
   }
   return { type: 'object', properties, required };
@@ -1118,7 +1132,25 @@ function FactEditor({
   return (
     <div style={{ display: 'grid', gap: '0.5rem' }}>
       {useForm ? (
-        <SchemaForm schema={schema} value={form} onChange={setForm} palette={{ text: t.text, dim: t.dim, border: t.line, inputBg: t.panel, accent: t.accent, danger: t.danger }} />
+        <SchemaForm
+          schema={schema}
+          value={form}
+          onChange={setForm}
+          palette={{ text: t.text, dim: t.dim, border: t.line, inputBg: t.panel, accent: t.accent, danger: t.danger }}
+          renderLongText={(f) => (
+            <CodeEditor
+              key={f.name}
+              value={f.value}
+              lang={f.format === 'markdown' ? 'markdown' : 'text'}
+              wikiComplete={f.format === 'markdown'}
+              placeholder={f.placeholder}
+              minRows={Math.min(16, Math.max(3, f.value.split('\n').length + 1))}
+              onChange={f.onChange}
+              onSave={() => void save()}
+              palette={{ text: t.text, dim: t.dim, border: t.line, inputBg: t.panel }}
+            />
+          )}
+        />
       ) : (
         <>
           {/* The shared CodeMirror 6 editor (`@c15r/editor`), lazily imported —
@@ -1160,16 +1192,18 @@ export function InlineFactEditor({ e, onCancel, onSaved, tone = 'dark' }: { e: L
 /** The peek body: the fact rendered by its viewer (full, not clamped), its
  *  provenance line, its neighbourhood, and the actions — escalate to the type's
  *  page/editor when declared, else edit generically in place. */
-export function FactDetail({ e, compact, tone = 'dark', anchor }: { e: ListEntry; compact?: boolean; tone?: Tone; anchor?: string }): React.JSX.Element {
+export function FactDetail({ e, compact, tone = 'dark', anchor, startEditing = false }: { e: ListEntry; compact?: boolean; tone?: Tone; anchor?: string;
+  /** Open with the editor already up — the one-tap `editFact` path. */
+  startEditing?: boolean }): React.JSX.Element {
   const t = SHEET_TONE[tone];
   const [entry, setEntry] = useState<ListEntry>(e);
-  const [editing, setEditing] = useState(false);
+  const [editing, setEditing] = useState(startEditing);
   const [hints, setHints] = useState<string[] | null>(null);
   useEffect(() => {
     setEntry(e);
-    setEditing(false);
+    setEditing(startEditing);
     setHints(null);
-  }, [e]);
+  }, [e, startEditing]);
   const open = factHref(entry);
   const edit = factEdit(entry);
   const meta = entry._meta;
@@ -1246,12 +1280,12 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange, onRevea
   // docked landing stack reads by MAIN page scroll, so back/forward restore
   // where you were in the frame you return to (owner: "remembered scrolls on
   // pop"). The dark (graph) stack scrolls internally and ignores these.
-  const [hist, setHist] = useState<{ frames: Array<{ id: number; entry: ListEntry; anchor?: string; scrollY?: number }>; cursor: number }>({ frames: [], cursor: -1 });
+  const [hist, setHist] = useState<{ frames: Array<{ id: number; entry: ListEntry; anchor?: string; scrollY?: number; startEditing?: boolean }>; cursor: number }>({ frames: [], cursor: -1 });
   const nextId = React.useRef(1);
   const { frames, cursor } = hist;
   const current = cursor >= 0 ? frames[cursor] : null;
   const closeAll = (): void => setHist({ frames: [], cursor: -1 });
-  const saveScroll = (fr: Array<{ id: number; entry: ListEntry; anchor?: string; scrollY?: number }>, i: number): typeof fr => {
+  const saveScroll = (fr: Array<{ id: number; entry: ListEntry; anchor?: string; scrollY?: number; startEditing?: boolean }>, i: number): typeof fr => {
     if (i < 0 || typeof window === 'undefined') return fr;
     const next = fr.slice();
     next[i] = { ...next[i], scrollY: window.scrollY };
@@ -1350,17 +1384,24 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange, onRevea
   }, []);
   useEffect(() => {
     const onOpen = (ev: Event): void => {
-      const detail = (ev as CustomEvent<ListEntry & { anchor?: string }>).detail;
+      const detail = (ev as CustomEvent<FactDetailRequest>).detail;
       if (!detail?.key) return;
-      const { anchor, ...rest } = detail;
+      const { anchor, startEditing, ...rest } = detail;
       const entry = rest as ListEntry;
       setHist((h) => {
-        // Re-opening the fact you're already on is a no-op.
-        if (h.cursor >= 0 && h.frames[h.cursor].entry.key === entry.key) return h;
+        // Re-opening the fact you're already on is a no-op — UNLESS this is the
+        // one-tap EDIT of it (`editFact` on the fact you're reading must open
+        // the editor, not silently do nothing).
+        if (h.cursor >= 0 && h.frames[h.cursor].entry.key === entry.key) {
+          if (!startEditing || h.frames[h.cursor].startEditing) return h;
+          const same = h.frames.slice();
+          same[h.cursor] = { ...same[h.cursor], startEditing: true };
+          return { ...h, frames: same };
+        }
         // A new path truncates any forward history (browser-nav semantics).
         // The departing frame remembers its page scroll (docked-stack pop).
         const kept = saveScroll(h.frames.slice(0, h.cursor + 1), h.cursor);
-        return { frames: [...kept, { id: nextId.current++, entry, anchor }], cursor: kept.length };
+        return { frames: [...kept, { id: nextId.current++, entry, anchor, startEditing }], cursor: kept.length };
       });
       if (detail.value === undefined) {
         const requestedKey = detail.key;
@@ -1496,7 +1537,7 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange, onRevea
                 ) : null}
               </div>
               <div style={{ padding: isCur ? '0.7rem 0.9rem calc(1.6rem + env(safe-area-inset-bottom))' : '0.45rem 0.9rem 0.9rem' }}>
-                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} />
+                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} startEditing={frame.startEditing} />
               </div>
             </section>
           );
@@ -1603,7 +1644,7 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange, onRevea
                 ) : null}
               </div>
               <div style={{ flex: 1, minHeight: 0, overflowY: 'auto', overscrollBehavior: 'contain', padding: `0.7rem 0.9rem calc(0.9rem + env(safe-area-inset-bottom)${isFront && cursor < total - 1 ? ` + ${PEEK}px` : ''})` }}>
-                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} />
+                <FactDetail e={fEntry} tone={tone} anchor={frame.anchor} startEditing={frame.startEditing} />
               </div>
             </div>
           );
