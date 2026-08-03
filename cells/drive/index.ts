@@ -70,12 +70,12 @@ const SHELL = `<!doctype html>
   <canvas id="scene"></canvas>
   <div id="boot"><div class="card">
     <div class="t">drive</div>
-    <div class="s" id="boot-msg">finding a road somewhere on Earth…</div>
+    <div class="s" id="boot-msg">warming up…</div>
   </div></div>
   <div class="hud" id="place"><b id="place-name">…</b><br><span class="dim" id="place-coords"></span></div>
   <button id="reroll" title="Start over somewhere else on Earth">elsewhere ↻</button>
   <div class="hud" id="speed">0<small> km/h</small></div>
-  <div class="hud" id="hint">drive: WASD / arrows · touch: drag = steer + throttle</div>
+  <div class="hud" id="hint">WASD / arrows · space = brake · touch: thumb stick, 2nd finger = brake</div>
   <script type="module" src="/app.js"></script>
 </body>
 </html>`;

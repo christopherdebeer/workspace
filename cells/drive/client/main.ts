@@ -26,6 +26,7 @@ const FOG_SPAN = 12000;       // fog canvas coverage, metres (centred on spawn)
 const FOG_PX = 1024;
 const CAR = { accel: 14, brake: 22, drag: 0.7, maxFwd: 38, maxRev: 8, wheelbase: 3.2, steerMax: 0.62 };
 const CAM = { base: 210, perKmh: 1.1, tilt: 70 };
+const CAR_R = 4.0;            // collision circle — matched to the cartographic car scale
 
 // ── geo helpers (local metres around the spawn; x=east, z=south) ───
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
@@ -89,6 +90,10 @@ async function findSpawn(): Promise<{ lat: number; lon: number; name: string | n
   const p = new URLSearchParams(location.search);
   const qlat = parseFloat(p.get('lat') ?? ''), qlon = parseFloat(p.get('lon') ?? '');
   if (Number.isFinite(qlat) && Number.isFinite(qlon)) return { lat: qlat, lon: qlon, name: null };
+  // Default: a KNOWN start (testing/demos want determinism) — the west side of
+  // Central Park. Random-anywhere is the deliberate gesture: `elsewhere ↻`
+  // (which navigates with ?random=1) or a hand-typed param.
+  if (!p.has('random')) return { lat: 40.7811, lon: -73.9665, name: 'Central Park, New York' };
   for (let i = 0; i < 4; i++) {
     // Uniform over the sphere (asin), clipped to the inhabited belt.
     const lat = clamp((Math.asin(Math.random() * 2 - 1) * 180) / Math.PI, -50, 66);
@@ -260,18 +265,127 @@ const seenWays = new Set<number>();
 let osmInFlight = 0;
 const osmQueue: Array<() => void> = [];
 const ROAD_W: Record<string, number> = { motorway: 9, trunk: 8, primary: 7.5, secondary: 6.5, tertiary: 6, residential: 5, unclassified: 5, service: 3.2, living_street: 4.5, track: 2.8, footway: 2.2, path: 2.0, cycleway: 2.4, pedestrian: 4 };
+// ── procedural detail textures ─────────────────────────────────────
+// Known details render as TEXTURE, not just flat colour: lane markings on the
+// asphalt, grain on the terrain, ripple on water, stipple foliage, roof grain.
+// All generated once on a small canvas — zero downloads, tinted by the same
+// Lambert lighting as everything else.
+function canvasTex(size: number, repeatX: number, repeatY: number, draw: (c: CanvasRenderingContext2D, s: number) => void): THREE.Texture {
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  draw(cv.getContext('2d')!, size);
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(repeatX, repeatY);
+  return t;
+}
+function speckle(c: CanvasRenderingContext2D, s: number, colors: string[], n: number, r = 1.6): void {
+  for (let i = 0; i < n; i++) {
+    c.fillStyle = colors[i % colors.length];
+    c.fillRect(Math.random() * s, Math.random() * s, r + Math.random() * r, r + Math.random() * r);
+  }
+}
+// Road: u spans the width, v runs 20m per wrap — centre dash ≈ 8m on / 12m off,
+// solid pale edge lines. Drawn horizontal-major then used vertically via UVs.
+const roadTex = canvasTex(128, 1, 1, (c, s) => {
+  c.fillStyle = '#3a3f46'; c.fillRect(0, 0, s, s);
+  speckle(c, s, ['rgba(255,255,255,0.045)', 'rgba(0,0,0,0.12)'], 260);
+  c.fillStyle = 'rgba(226,220,203,0.5)';
+  c.fillRect(5, 0, 3, s); c.fillRect(s - 8, 0, 3, s);      // edge lines
+  c.fillStyle = 'rgba(232,226,208,0.75)';
+  c.fillRect(s / 2 - 2, 0, 4, Math.round(s * 0.4));        // centre dash
+});
+const pathTex = canvasTex(64, 1, 1, (c, s) => {
+  c.fillStyle = '#847d6c'; c.fillRect(0, 0, s, s);
+  speckle(c, s, ['rgba(60,54,40,0.35)', 'rgba(255,250,235,0.12)'], 90);
+});
+const grainTex = canvasTex(256, 200, 200, (c, s) => {
+  c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
+  speckle(c, s, ['rgba(0,0,0,0.10)', 'rgba(0,0,0,0.05)', 'rgba(255,255,255,0.06)'], 900);
+});
+// Shape/roof UVs are world metres (ShapeGeometry copies XY into UV) — repeat
+// scales metres→tiles.
+const waterTex = canvasTex(128, 1 / 26, 1 / 26, (c, s) => {
+  c.fillStyle = '#1d3a55'; c.fillRect(0, 0, s, s);
+  c.strokeStyle = 'rgba(126,168,204,0.14)'; c.lineWidth = 2;
+  for (let i = 0; i < 7; i++) {
+    c.beginPath();
+    const y = Math.random() * s;
+    c.moveTo(0, y); c.bezierCurveTo(s / 3, y - 6, (2 * s) / 3, y + 6, s, y);
+    c.stroke();
+  }
+});
+const greenTex = canvasTex(128, 1 / 20, 1 / 20, (c, s) => {
+  c.fillStyle = '#1c3320'; c.fillRect(0, 0, s, s);
+  speckle(c, s, ['rgba(10,24,12,0.5)', 'rgba(58,96,52,0.28)'], 240, 2.6);
+});
+const roofTex = canvasTex(128, 1 / 10, 1 / 10, (c, s) => {
+  c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
+  speckle(c, s, ['rgba(0,0,0,0.10)', 'rgba(0,0,0,0.05)'], 300);
+});
 // DoubleSide throughout: ribbon winding and the rotate+mirror extrusion leave
 // face orientation mixed — lighting both sides costs little at this scene size
 // and makes every surface reliably visible from the top-down camera.
+const DS = THREE.DoubleSide;
 const MAT = {
-  road: new THREE.MeshLambertMaterial({ color: 0x3c4148, side: THREE.DoubleSide }),
-  minor: new THREE.MeshLambertMaterial({ color: 0x8a8474, transparent: true, opacity: 0.7, side: THREE.DoubleSide }),
-  building: new THREE.MeshLambertMaterial({ color: 0x9a8f7c, side: THREE.DoubleSide }),
-  water: new THREE.MeshLambertMaterial({ color: 0x1d3a55, side: THREE.DoubleSide }),
-  green: new THREE.MeshLambertMaterial({ color: 0x1c3320, side: THREE.DoubleSide }),
+  road: new THREE.MeshLambertMaterial({ map: roadTex, side: DS }),
+  minor: new THREE.MeshLambertMaterial({ map: pathTex, transparent: true, opacity: 0.85, side: DS }),
+  water: new THREE.MeshLambertMaterial({ map: waterTex, side: DS }),
+  green: new THREE.MeshLambertMaterial({ map: greenTex, side: DS }),
 };
-function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number): void {
+// Building tints vary per way id so a block reads as parcels, not one slab.
+// Extrude material slots: [0]=caps (roof), [1]=side walls (darker).
+const B_MATS = [0xa59a85, 0x92897a, 0x9d937f, 0x878071].map((c) => {
+  const side = new THREE.Color(c).multiplyScalar(0.72);
+  return [
+    new THREE.MeshLambertMaterial({ color: c, map: roofTex, side: DS }),
+    new THREE.MeshLambertMaterial({ color: side, side: DS }),
+  ] as [THREE.Material, THREE.Material];
+});
+// ── collision & surface grids (24m cells) ──────────────────────────
+const GRID = 24;
+const gkey = (x: number, z: number): string => `${Math.floor(x / GRID)},${Math.floor(z / GRID)}`;
+interface Seg { ax: number; az: number; bx: number; bz: number; hw: number }
+const wallGrid = new Map<string, Seg[]>();   // building edges — solid
+const roadGrid = new Map<string, Seg[]>();   // drivable centrelines + half-width
+const waterCells = new Set<string>();        // coarse water mask
+function addSeg(grid: Map<string, Seg[]>, seg: Seg): void {
+  const m = seg.hw + 8; // insert with margin so a single-cell query suffices
+  const x0 = Math.floor((Math.min(seg.ax, seg.bx) - m) / GRID), x1 = Math.floor((Math.max(seg.ax, seg.bx) + m) / GRID);
+  const z0 = Math.floor((Math.min(seg.az, seg.bz) - m) / GRID), z1 = Math.floor((Math.max(seg.az, seg.bz) + m) / GRID);
+  for (let cx = x0; cx <= x1; cx++) for (let cz = z0; cz <= z1; cz++) {
+    const k = `${cx},${cz}`;
+    let arr = grid.get(k);
+    if (!arr) grid.set(k, (arr = []));
+    arr.push(seg);
+  }
+}
+function closestOnSeg(px: number, pz: number, s: Seg): [number, number] {
+  const dx = s.bx - s.ax, dz = s.bz - s.az;
+  const t = clamp(((px - s.ax) * dx + (pz - s.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+  return [s.ax + dx * t, s.az + dz * t];
+}
+function pointInPoly(px: number, pz: number, pts: Array<[number, number]>): boolean {
+  let inside = false;
+  for (let i = 0, j = pts.length - 1; i < pts.length; j = i++) {
+    const [xi, zi] = pts[i], [xj, zj] = pts[j];
+    if (zi > pz !== zj > pz && px < ((xj - xi) * (pz - zi)) / (zj - zi) + xi) inside = !inside;
+  }
+  return inside;
+}
+type Surface = 'road' | 'water' | 'ground';
+function surfaceAt(x: number, z: number): Surface {
+  for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
+    const [cx, cz] = closestOnSeg(x, z, seg);
+    if (Math.hypot(x - cx, z - cz) <= seg.hw + 0.8) return 'road';
+  }
+  return waterCells.has(gkey(x, z)) ? 'water' : 'ground';
+}
+
+function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false): void {
   const verts: number[] = [];
+  const uvs: number[] = [];
+  let along = 0; // metres travelled — v wraps every 20m (the roadTex period)
   for (let i = 0; i < pts.length - 1; i++) {
     const [x0, z0] = pts[i], [x1, z1] = pts[i + 1];
     const dx = x1 - x0, dz = z1 - z0;
@@ -279,32 +393,62 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const nx = (-dz / len) * width / 2, nz = (dx / len) * width / 2;
     const y00 = sampleHeight(x0 + nx, z0 + nz) + lift, y01 = sampleHeight(x0 - nx, z0 - nz) + lift;
     const y10 = sampleHeight(x1 + nx, z1 + nz) + lift, y11 = sampleHeight(x1 - nx, z1 - nz) + lift;
+    const v0 = along / 20, v1 = (along + len) / 20;
+    along += len;
     verts.push(
       x0 + nx, y00, z0 + nz, x1 + nx, y10, z1 + nz, x0 - nx, y01, z0 - nz,
       x1 + nx, y10, z1 + nz, x1 - nx, y11, z1 - nz, x0 - nx, y01, z0 - nz,
     );
+    uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
+    if (drivable) addSeg(roadGrid, { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2 });
   }
   if (!verts.length) return;
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
   geo.computeVertexNormals();
   worldGroup.add(new THREE.Mesh(geo, mat));
 }
-function polygon(pts: Array<[number, number]>, mat: THREE.Material, lift: number, extrude = 0): void {
+function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Material[], lift: number, extrude = 0, collide?: 'solid' | 'water'): void {
   if (pts.length < 3) return;
   const shape = new THREE.Shape(pts.map(([x, z]) => new THREE.Vector2(x, z)));
   let cx = 0, cz = 0;
   for (const [x, z] of pts) { cx += x; cz += z; }
   cx /= pts.length; cz /= pts.length;
-  const base = sampleHeight(cx, cz) + lift;
   const geo = extrude > 0
     ? new THREE.ExtrudeGeometry(shape, { depth: extrude, bevelEnabled: false })
     : new THREE.ShapeGeometry(shape);
   geo.rotateX(Math.PI / 2); // shape XY → world XZ (y down after rotate; extrude goes up via scale)
   if (extrude > 0) geo.scale(1, -1, 1);
   const mesh = new THREE.Mesh(geo, mat);
-  mesh.position.y = base;
+  if (extrude > 0) {
+    // A building sits on its footprint's LOWEST corner so it never floats on a
+    // slope (the roof stays level; the downhill wall just gets taller).
+    let minH = Infinity;
+    for (const [x, z] of pts) minH = Math.min(minH, sampleHeight(x, z));
+    mesh.position.y = minH + lift;
+  } else {
+    // Flat drapes CONFORM to the terrain per-vertex — a centroid-height plane
+    // floated above (or sank under) any park/lake bigger than the local slope,
+    // swallowing the car and its halo (Central Park made this vivid).
+    const posA = geo.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < posA.count; i++) posA.setY(i, sampleHeight(posA.getX(i), posA.getZ(i)) + lift);
+    geo.computeVertexNormals();
+    mesh.position.y = 0;
+  }
   worldGroup.add(mesh);
+  if (collide === 'solid') {
+    for (let i = 0; i < pts.length; i++) {
+      const [ax, az] = pts[i], [bx, bz] = pts[(i + 1) % pts.length];
+      addSeg(wallGrid, { ax, az, bx, bz, hw: 0 });
+    }
+  } else if (collide === 'water') {
+    let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
+    for (const [x, z] of pts) { minx = Math.min(minx, x); minz = Math.min(minz, z); maxx = Math.max(maxx, x); maxz = Math.max(maxz, z); }
+    for (let gx = Math.floor(minx / GRID); gx <= Math.floor(maxx / GRID); gx++)
+      for (let gz = Math.floor(minz / GRID); gz <= Math.floor(maxz / GRID); gz++)
+        if (pointInPoly(gx * GRID + GRID / 2, gz * GRID + GRID / 2, pts)) waterCells.add(`${gx},${gz}`);
+  }
 }
 async function loadOsmTile(x: number, y: number): Promise<void> {
   const key = `${x}/${y}`;
@@ -331,13 +475,14 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
       const tags = el.tags ?? {};
       if (tags.highway) {
         const w = ROAD_W[tags.highway] ?? 4;
-        const minor = w < 2.5;
-        ribbon(pts, w, minor ? MAT.minor : MAT.road, minor ? 1.2 : 1.6);
+        // Foot infrastructure renders but doesn't grip like tarmac.
+        const minor = ['footway', 'path', 'cycleway', 'track'].includes(tags.highway);
+        ribbon(pts, w, minor ? MAT.minor : MAT.road, minor ? 1.2 : 1.6, !minor);
       } else if (tags.building) {
         const levels = parseFloat(tags['building:levels'] ?? '') || 2;
-        polygon(pts, MAT.building, 0.9, clamp(levels * 3.1, 3, 90));
+        polygon(pts, B_MATS[el.id % B_MATS.length], 0.9, clamp(levels * 3.1, 3, 90), 'solid');
       } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
-        polygon(pts, MAT.water, 1.0);
+        polygon(pts, MAT.water, 1.0, 0, 'water');
       } else {
         polygon(pts, MAT.green, 0.6);
       }
@@ -383,61 +528,144 @@ const car = new THREE.Group();
 car.scale.setScalar(3.2);
 const halo = new THREE.Mesh(
   new THREE.CircleGeometry(3.4, 24),
-  new THREE.MeshBasicMaterial({ color: 0xf5c453, transparent: true, opacity: 0.35, depthWrite: false }),
+  // A MARKER, not scenery: no depth test, drawn late — the player's position
+  // is never allowed to be swallowed by a drape or a rooftop.
+  new THREE.MeshBasicMaterial({ color: 0xf5c453, transparent: true, opacity: 0.35, depthWrite: false, depthTest: false }),
 );
+halo.renderOrder = 40;
 halo.rotation.x = -Math.PI / 2;
 halo.position.y = 0.15;
 car.add(halo);
 scene.add(car);
 const state = { x: 0, z: 0, heading: 0, speed: 0 };
+(window as unknown as { __drive?: object }).__drive = state; // debug/test handle (read-only use)
 
-// ── input: keyboard + one-thumb touch stick ────────────────────────
+// ── input: keyboard + a VISIBLE one-thumb stick, second finger = brake ──
 const keys = new Set<string>();
 addEventListener('keydown', (e) => { keys.add(e.key.toLowerCase()); });
 addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); });
+
+// The stick appears WHERE the thumb lands (no fixed gutter to find blind),
+// with a base ring + nub so the current input is always visible. Dead zone
+// then a squared response curve: fine steering near centre, full lock at the
+// rim. Any second finger anywhere is the brake — the two-finger gesture you
+// make instinctively when something is coming up fast.
+const STICK_R = 56, STICK_DEAD = 8;
+function stickEl(size: number, style: Partial<CSSStyleDeclaration>): HTMLDivElement {
+  const el = document.createElement('div');
+  Object.assign(el.style, {
+    position: 'fixed', width: `${size}px`, height: `${size}px`, borderRadius: '50%',
+    transform: 'translate(-50%, -50%)', pointerEvents: 'none', display: 'none', zIndex: '12',
+  } as Partial<CSSStyleDeclaration>, style);
+  document.body.appendChild(el);
+  return el;
+}
+const stickBase = stickEl(STICK_R * 2 + 12, { border: '1.5px solid rgba(245,196,83,0.4)', background: 'rgba(8,12,20,0.25)' });
+const stickNub = stickEl(46, { background: 'rgba(245,196,83,0.75)', boxShadow: '0 2px 10px rgba(0,0,0,0.5)' });
 let stick: { id: number; x0: number; y0: number; dx: number; dy: number } | null = null;
+let brakeId: number | null = null;
 canvas.addEventListener('pointerdown', (e) => {
-  if (e.pointerType !== 'touch' || stick) return;
-  stick = { id: e.pointerId, x0: e.clientX, y0: e.clientY, dx: 0, dy: 0 };
+  if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (!stick) {
+    stick = { id: e.pointerId, x0: e.clientX, y0: e.clientY, dx: 0, dy: 0 };
+    stickBase.style.display = stickNub.style.display = 'block';
+    stickBase.style.left = stickNub.style.left = `${e.clientX}px`;
+    stickBase.style.top = stickNub.style.top = `${e.clientY}px`;
+  } else if (brakeId === null) {
+    brakeId = e.pointerId; // second finger, anywhere: brake
+  }
 });
 canvas.addEventListener('pointermove', (e) => {
   if (stick?.id !== e.pointerId) return;
-  stick.dx = clamp((e.clientX - stick.x0) / 70, -1, 1);
-  stick.dy = clamp((e.clientY - stick.y0) / 70, -1, 1);
+  const rx = e.clientX - stick.x0, ry = e.clientY - stick.y0;
+  const len = Math.hypot(rx, ry);
+  const cl = Math.min(len, STICK_R);
+  const ux = len ? rx / len : 0, uy = len ? ry / len : 0;
+  stickNub.style.left = `${stick.x0 + ux * cl}px`;
+  stickNub.style.top = `${stick.y0 + uy * cl}px`;
+  const mag = Math.max(0, cl - STICK_DEAD) / (STICK_R - STICK_DEAD);
+  stick.dx = ux * mag;
+  stick.dy = uy * mag;
 });
-const endStick = (e: PointerEvent) => { if (stick?.id === e.pointerId) stick = null; };
+const endStick = (e: PointerEvent): void => {
+  if (stick?.id === e.pointerId) {
+    stick = null;
+    stickBase.style.display = stickNub.style.display = 'none';
+  }
+  if (brakeId === e.pointerId) brakeId = null;
+};
 canvas.addEventListener('pointerup', endStick);
 canvas.addEventListener('pointercancel', endStick);
-function input(): { throttle: number; steer: number } {
+function input(): { throttle: number; steer: number; brake: boolean } {
   let throttle = 0, steer = 0;
   if (keys.has('w') || keys.has('arrowup')) throttle += 1;
   if (keys.has('s') || keys.has('arrowdown')) throttle -= 1;
   if (keys.has('a') || keys.has('arrowleft')) steer -= 1;
   if (keys.has('d') || keys.has('arrowright')) steer += 1;
-  if (stick) { throttle += -stick.dy; steer += stick.dx; }
-  return { throttle: clamp(throttle, -1, 1), steer: clamp(steer, -1, 1) };
+  if (stick) {
+    // Squared response: |v|·v — precision near centre, authority at the rim.
+    throttle += -(stick.dy * Math.abs(stick.dy));
+    steer += stick.dx * Math.abs(stick.dx);
+  }
+  return { throttle: clamp(throttle, -1, 1), steer: clamp(steer, -1, 1), brake: brakeId !== null || keys.has(' ') };
 }
 
 // ── main loop ──────────────────────────────────────────────────────
 const speedEl = $('speed');
 let last = performance.now();
 let streamAt = 0;
+// Surface grip: tarmac is fast, everything else asks you to slow down —
+// which turns "follow the real roads" into the game.
+const SURFACE = {
+  road: { max: CAR.maxFwd, drag: CAR.drag },
+  ground: { max: 15, drag: 1.5 },
+  water: { max: 4, drag: 3.2 },
+} as const;
+let steerCur = 0; // smoothed — keyboard taps ramp instead of snapping
 function tick(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  const { throttle, steer } = input();
+  const { throttle, steer, brake } = input();
+  const surf = SURFACE[surfaceAt(state.x, state.z)];
   // Arcade bicycle model: thrust minus drag, steering authority grows then
   // saturates with speed so the car neither pivots in place nor becomes twitchy.
-  const thrust = throttle >= 0 ? throttle * CAR.accel : throttle * CAR.brake;
+  const thrust = brake
+    ? -Math.sign(state.speed) * CAR.brake * 1.4
+    : throttle >= 0 ? throttle * CAR.accel : throttle * CAR.brake;
   state.speed += thrust * dt;
-  state.speed -= state.speed * CAR.drag * dt;
-  state.speed = clamp(state.speed, -CAR.maxRev, CAR.maxFwd);
+  state.speed -= state.speed * surf.drag * dt;
+  if (brake && Math.abs(state.speed) < 1.2) state.speed = 0;
+  state.speed = clamp(state.speed, -CAR.maxRev, surf.max);
+  const SRATE = 7; // full-lock in ~0.14s — responsive but not snappy
+  steerCur += clamp(steer - steerCur, -SRATE * dt, SRATE * dt);
   if (Math.abs(state.speed) > 0.1) {
     const dir = state.speed >= 0 ? 1 : -1;
-    state.heading += (steer * CAR.steerMax * clamp(Math.abs(state.speed) / 9, 0.25, 1) * state.speed * dt * dir) / CAR.wheelbase;
+    state.heading += (steerCur * CAR.steerMax * clamp(Math.abs(state.speed) / 9, 0.25, 1) * state.speed * dt * dir) / CAR.wheelbase;
   }
   state.x += Math.sin(state.heading) * state.speed * dt;
   state.z -= Math.cos(state.heading) * state.speed * dt;
+  // Buildings are solid: push the car circle out of any nearby wall edge and
+  // scrub speed while in contact — sliding along a façade falls out of the
+  // push-out geometry for free.
+  let scraping = false;
+  for (let pass = 0; pass < 2; pass++) {
+    const walls = wallGrid.get(gkey(state.x, state.z));
+    if (!walls) break;
+    let hit = false;
+    for (const seg of walls) {
+      const [cx2, cz2] = closestOnSeg(state.x, state.z, seg);
+      const d = Math.hypot(state.x - cx2, state.z - cz2);
+      if (d < CAR_R) {
+        const push = (CAR_R - d) / (d || 1e-4);
+        state.x += (state.x - cx2) * push;
+        state.z += (state.z - cz2) * push;
+        hit = true;
+      }
+    }
+    scraping = scraping || hit;
+    if (!hit) break;
+  }
+  if (scraping) state.speed *= Math.exp(-5 * dt);
   const ground = sampleHeight(state.x, state.z);
   car.position.set(state.x, ground + 1.8, state.z);
   car.rotation.y = -state.heading;
@@ -455,7 +683,7 @@ function tick(now: number): void {
 }
 
 // ── boot ───────────────────────────────────────────────────────────
-$('reroll').addEventListener('click', () => { location.href = location.pathname; });
+$('reroll').addEventListener('click', () => { location.href = location.pathname + '?random=1'; });
 (async () => {
   const spawn = await findSpawn();
   origin = { lat: spawn.lat, lon: spawn.lon, mLon: M_LAT * Math.cos((spawn.lat * Math.PI) / 180) };
