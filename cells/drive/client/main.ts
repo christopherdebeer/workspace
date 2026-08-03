@@ -221,11 +221,27 @@ const fogMat = new THREE.ShaderMaterial({
     void main(){
       vec4 far = invPV * vec4(vNdc, 1.0, 1.0);
       vec3 dir = normalize(far.xyz / far.w - camPos);
-      float t = (groundY - camPos.y) / min(dir.y, -1e-4);
+      // Rays that never reach the ground are SKY. The old min(dir.y,-1e-4)
+      // clamp sent them to a garbage far-behind point -> out-of-mask -> the
+      // whole sky above the horizon painted solid black in chase cam. Fog of
+      // war lives on the terrain: sky gets only a thin haze band that decays
+      // above the horizon, and the skybox shows through untouched.
+      vec3 haze = vec3(0.10, 0.13, 0.19);
+      if (dir.y > -0.012) {
+        float band = exp(-max(dir.y, 0.0) * 20.0);
+        gl_FragColor = vec4(haze, band * 0.5);
+        return;
+      }
+      float t = (groundY - camPos.y) / dir.y;
       vec3 wp = camPos + dir * t;
       vec2 uv = (wp.xz + span * 0.5) / span;
-      float a = (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) ? 0.985 : texture2D(mask, uv).a;
-      gl_FragColor = vec4(0.016, 0.024, 0.043, a);
+      float m = (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) ? 1.0 : texture2D(mask, uv).a / 0.985;
+      // Atmosphere, not void: unexplored ground is a haze wall that thickens
+      // with distance; explored ground keeps a faint depth haze so the world
+      // recedes instead of ending at a hard black edge.
+      float dist = 1.0 - exp(-t / 600.0);
+      float a = m * mix(0.82, 0.96, dist) + (1.0 - m) * dist * 0.25;
+      gl_FragColor = vec4(haze, min(a, 0.96));
     }`,
 });
 const fogPass = new THREE.Mesh(new THREE.PlaneGeometry(2, 2), fogMat);
@@ -298,7 +314,10 @@ const osmLoaded = new Set<string>();
 const seenWays = new Set<number>();
 let osmInFlight = 0;
 const osmQueue: Array<() => void> = [];
-const ROAD_W: Record<string, number> = { motorway: 9, trunk: 8, primary: 7.5, secondary: 6.5, tertiary: 6, residential: 5, unclassified: 5, service: 3.2, living_street: 4.5, track: 2.8, footway: 2.2, path: 2.0, cycleway: 2.4, pedestrian: 4 };
+// Full carriageway widths (both directions), not lane widths — OSM ways are
+// centerlines, and rendering them single-lane narrow made the real-size car
+// look like it straddled the whole street.
+const ROAD_W: Record<string, number> = { motorway: 13, trunk: 12, primary: 10.5, secondary: 9.5, tertiary: 8.5, residential: 7.5, unclassified: 7, service: 4.5, living_street: 6.5, track: 3.5, footway: 2.2, path: 2.0, cycleway: 2.6, pedestrian: 6 };
 // ── procedural detail textures ─────────────────────────────────────
 // Known details render as TEXTURE, not just flat colour: lane markings on the
 // asphalt, grain on the terrain, ripple on water, stipple foliage, roof grain.
@@ -554,7 +573,7 @@ function renderWays(els: OsmWay[]): void {
     const pts: Array<[number, number]> = el.geometry.map((g) => toLocal(g.lat, g.lon));
     const tags = el.tags ?? {};
     if (tags.highway) {
-      const w = ROAD_W[tags.highway] ?? 4;
+      const w = ROAD_W[tags.highway] ?? 5;
       // Foot infrastructure renders but doesn't grip like tarmac.
       const minor = ['footway', 'path', 'cycleway', 'track'].includes(tags.highway);
       ribbon(pts, w, minor ? MAT.minor : MAT.road, minor ? 1.2 : 1.6, !minor);
@@ -630,13 +649,13 @@ function streamWorld(ex: number, ez: number): void {
 // ── the car ────────────────────────────────────────────────────────
 const car = new THREE.Group();
 {
-  const body = new THREE.Mesh(new THREE.BoxGeometry(2, 0.9, 4.4), new THREE.MeshLambertMaterial({ color: 0xd8442e }));
-  body.position.y = 0.75;
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.7, 0.7, 2), new THREE.MeshLambertMaterial({ color: 0x20242c }));
-  cabin.position.set(0, 1.4, -0.2);
-  const wheelGeo = new THREE.BoxGeometry(0.4, 0.6, 0.9);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.85, 4.2), new THREE.MeshLambertMaterial({ color: 0xd8442e }));
+  body.position.y = 0.72;
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.65, 1.9), new THREE.MeshLambertMaterial({ color: 0x20242c }));
+  cabin.position.set(0, 1.32, -0.2);
+  const wheelGeo = new THREE.BoxGeometry(0.38, 0.58, 0.85);
   const wheelMat = new THREE.MeshLambertMaterial({ color: 0x11141a });
-  for (const [wx, wz] of [[-1.05, 1.45], [1.05, 1.45], [-1.05, -1.45], [1.05, -1.45]]) {
+  for (const [wx, wz] of [[-0.95, 1.4], [0.95, 1.4], [-0.95, -1.4], [0.95, -1.4]]) {
     const wheel = new THREE.Mesh(wheelGeo, wheelMat);
     wheel.position.set(wx, 0.35, wz);
     car.add(wheel);
@@ -900,10 +919,10 @@ function tick(now: number): void {
     const tiltRad = (CAM.tilt * Math.PI) / 180;
     camPos.set(state.x, ground + dist * Math.sin(tiltRad), state.z + dist * Math.cos(tiltRad));
   } else {
-    const back = 11 + Math.abs(state.speed) * 0.35;
+    const back = 13 + Math.abs(state.speed) * 0.35;
     camPos.set(
       state.x - fwdX * back,
-      sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 4.8 + bump * 0.12,
+      sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 5.4 + bump * 0.12,
       state.z - fwdZ * back,
     );
   }
@@ -912,7 +931,7 @@ function tick(now: number): void {
   if (!camInit) { camera.position.copy(camPos); camInit = true; }
   else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
   if (camMode === 'top') camera.lookAt(state.x, ground, state.z);
-  else camera.lookAt(state.x + fwdX * 15, ground + 1.6, state.z + fwdZ * 15);
+  else camera.lookAt(state.x + fwdX * 18, ground + 1.6, state.z + fwdZ * 18);
   camera.updateMatrixWorld();
   fogMat.uniforms.groundY.value = ground;
   fogMat.uniforms.camPos.value.copy(camera.position);
