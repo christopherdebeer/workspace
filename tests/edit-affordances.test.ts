@@ -56,6 +56,34 @@ describe('bodyText and bodyField agree on one field', () => {
   });
 });
 
+describe('an in-place edit preserves the rest of the fact', () => {
+  // The commit shape `{...value, [bodyField(value)]: next}` is what keeps an
+  // edit from being destructive. Per-member editing on an assembled doc got
+  // this wrong first time: it rebuilt a stand-in entry from the rendered TEXT
+  // (`{content: shown}`) and wrote that back, silently dropping every other
+  // field the member carried. Pinned as a plain data property here — the
+  // component that performs it is exercised through DocBody.
+  const commit = (value: unknown, next: string): unknown => {
+    const f = bodyField(value);
+    return f === null ? next : { ...(value as Record<string, unknown>), [f as string]: next };
+  };
+
+  it('keeps sibling fields when the body changes', () => {
+    const member = { content: 'old body', id: 'blk-1', fold: false, seq: 2.5 };
+    expect(commit(member, 'new body')).toEqual({ content: 'new body', id: 'blk-1', fold: false, seq: 2.5 });
+  });
+
+  it('writes the field the body was actually READ from', () => {
+    // No `content` — the body is the claim's statement, so that is the target.
+    const claim = { statement: 'old', confidence: 0.8, support: ['a'] };
+    expect(commit(claim, 'new')).toEqual({ statement: 'new', confidence: 0.8, support: ['a'] });
+  });
+
+  it('replaces a bare string value wholesale', () => {
+    expect(commit('old', 'new')).toBe('new');
+  });
+});
+
 describe('the SchemaForm long-text seam', () => {
   const schema = {
     type: 'object',

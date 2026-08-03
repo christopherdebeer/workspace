@@ -17,6 +17,19 @@ const respond = (statusCode: number, contentType: string, body: string, extra: R
  * needs a session and can be served to anyone.
  *
  * `git truth: cells/editor/client/main.ts`.
+ *
+ * FIRST DEPLOY. `cell-sync push` writes files into a cell that already exists;
+ * it does not provision one. So this cell is created once, then pushed like
+ * any other. It must be PUBLIC for the same reason `@c15r/viewers` is: home is
+ * guest-exposed at the apex and imports the module cross-origin with no
+ * session, so anonymous GETs have to be allowed.
+ *
+ *   act cells.create { name: "editor", public: true, code: "export const handler = async () => ({ statusCode: 200, body: '' });" }
+ *   node scripts/cell-sync.mjs push editor --deploy
+ *
+ * (The `code` above is a placeholder the push immediately overwrites —
+ * `cells.create` requires one.) Until the cell is live, every host degrades to
+ * its textarea floor, so nothing is blocked on the deploy.
  */
 export const handler = async (event: { rawPath?: string; requestContext?: { http?: { method?: string } } }) => {
   const method = event.requestContext?.http?.method ?? 'GET';

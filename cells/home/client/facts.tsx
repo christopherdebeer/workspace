@@ -404,7 +404,7 @@ export function DocBody({ e, initialMd, spec, tone = 'dark', anchor, editable }:
   // Membership assembly keeps PER-MEMBER sections (not one joined string) so
   // each member is an addressable target: `#<member-key>` deep links and the
   // member banner's "part of" jump both scroll to their section.
-  const [sections, setSections] = useState<Array<{ key: string; content: string; type?: string | null; version?: number }> | null>(null);
+  const [sections, setSections] = useState<Array<{ key: string; content: string; value?: unknown; type?: string | null; version?: number }> | null>(null);
   const [state, setState] = useState<'loading' | 'ready' | 'fail'>(initialMd ? 'ready' : 'loading');
   const bodyRef = React.useRef<HTMLDivElement | null>(null);
   // The audience fallback (ADR-0093 / docs-sync ADR-0027): when membership
@@ -451,11 +451,14 @@ export function DocBody({ e, initialMd, spec, tone = 'dark', anchor, editable }:
         if (!live) return;
         const members = (r.ok ? (r.value as { members?: Array<{ key?: string; value?: unknown; placement?: { seq?: number }; _meta?: { type?: string | null; version?: number } }> } | null)?.members : null) ?? [];
         const secs = members
-          .map((m) => ({ key: String(m.key ?? ''), seq: Number(m.placement?.seq ?? 0), content: memberText(m.value), type: m._meta?.type, version: m._meta?.version }))
+          // The member's WHOLE value rides along, not just its text: an edit
+          // writes the member fact back, and rebuilding it from the rendered
+          // text alone would drop every other field it carries.
+          .map((m) => ({ key: String(m.key ?? ''), seq: Number(m.placement?.seq ?? 0), content: memberText(m.value), value: m.value, type: m._meta?.type, version: m._meta?.version }))
           .sort((a, b) => a.seq - b.seq)
           .filter((m) => m.content);
         if (secs.length) {
-          setSections(secs.map(({ key, content, type, version }) => ({ key, content, type, version })));
+          setSections(secs.map(({ key, content, value, type, version }) => ({ key, content, value, type, version })));
           setMd(null);
           setState('ready');
           return;
@@ -510,18 +513,21 @@ export function DocBody({ e, initialMd, spec, tone = 'dark', anchor, editable }:
     // never the container, and never a copy. `spec.field` names where the text
     // lives on a declared vocabulary (`content` for a doc-block); an
     // undeclared member falls back to the body heuristic.
-    const memberEdit = (sec: { key: string; content: string; type?: string | null; version?: number }): FenceEditTarget | undefined => {
+    const memberEdit = (sec: { key: string; content: string; value?: unknown; type?: string | null; version?: number }): FenceEditTarget | undefined => {
       if (!editable) return undefined;
-      return bodyEditTarget(
-        { key: sec.key, value: spec?.field ? { [spec.field]: sec.content } : sec.content, _meta: { type: sec.type ?? undefined, version: sec.version } },
-        sec.content,
-        (saved) => setSections((cur) => cur?.map((s2) => (s2.key === sec.key
-          // Re-read the saved body back into the assembled view, and carry the
-          // NEW version forward so a second edit in the same session doesn't
-          // fail its ifVersion check against a stale number.
-          ? { ...s2, content: spec?.field ? String((saved.value as Record<string, unknown>)?.[spec.field] ?? '') : String(saved.value ?? ''), version: saved._meta?.version ?? s2.version }
-          : s2)) ?? cur),
-      );
+      // The edit target is the member's REAL entry — its own value, its own
+      // version. Rebuilding a stand-in from the rendered text (`{content}`)
+      // would have written that object back over the member, silently dropping
+      // every other field on it; and `bodyField` picks the write target from
+      // the real value, so a member whose body lives somewhere other than
+      // `spec.field` still edits the field it actually renders from.
+      const entry: ListEntry = { key: sec.key, value: sec.value, _meta: { type: sec.type ?? undefined, version: sec.version } };
+      return bodyEditTarget(entry, sec.content, (saved) => setSections((cur) => cur?.map((s2) => (s2.key === sec.key
+        // Re-read the saved body back into the assembled view, and carry the
+        // NEW value + version forward so a second edit in the same session
+        // neither loses fields nor fails its ifVersion check on a stale number.
+        ? { ...s2, content: bodyText(saved.value), value: saved.value, version: saved._meta?.version ?? s2.version }
+        : s2)) ?? cur));
     };
     return (
       <div ref={bodyRef} style={{ display: 'grid', gap: '0.2rem' }}>
@@ -1603,11 +1609,13 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange, onRevea
               style={{
                 position: 'absolute',
                 bottom: SHEET_BOTTOM,
-                // CONTINUATION of the ground (owner): on the landing the sheet
-                // matches the content column's width and cream, wears only a
-                // hairline lip + a soft rise — a layer OF the content sheet, not
-                // a bordered card floating over it. Dark keeps its inked edge.
-                width: tone === 'light' ? 'min(780px, 100vw)' : 'min(720px, 100vw)',
+                // Only the DARK stack reaches here — the light (landing) tone
+                // returned its docked in-flow portal above — so the sheet wears
+                // the ink field's inked edge and its own width. (These were
+                // `tone === 'light' ? … : …` conditionals left behind when the
+                // light stack moved into the portal: dead branches the compiler
+                // flagged as impossible comparisons.)
+                width: 'min(720px, 100vw)',
                 ...(isFront ? { maxHeight: SHEET_MAX } : { height: sheetH ? `${sheetH}px` : `${hFallback}px`, maxHeight: SHEET_MAX }),
                 transform: `translateY(${translateY}px)`,
                 transition: dragging ? 'none' : 'transform 0.2s ease',
@@ -1618,9 +1626,8 @@ export function FactDetailHost({ tone = 'dark', onCurrent, onOpenChange, onRevea
                 overflow: 'hidden',
                 borderTopLeftRadius: 14,
                 borderTopRightRadius: 14,
-                ...(tone === 'light'
-                  ? { border: 'none', borderTop: `1px solid ${t.line}` }
-                  : { border: `1px solid ${t.line}`, borderBottom: 'none' }),
+                border: `1px solid ${t.line}`,
+                borderBottom: 'none',
                 background: t.bg,
                 color: t.text,
                 boxShadow: t.shadow,

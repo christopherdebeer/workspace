@@ -22,7 +22,8 @@
  *    unusable, and a line-number gutter costs ~3 characters of a narrow column.
  *  - the editor grows with its content rather than scrolling internally, so
  *    the PAGE scrolls — one scroll context, which is what the docked peek
- *    stack already assumes.
+ *    stack already assumes. Bounded at `maxHeight` (70dvh) only so a very long
+ *    document keeps CodeMirror's viewport virtualization; see MountOptions.
  *  - `autocapitalize`/`autocorrect` are on for prose, off for code.
  *
  * Loaded lazily by its hosts (a dynamic import, like the viewers module and
@@ -68,6 +69,20 @@ export interface MountOptions {
    * e.g. editing a code fence body).
    */
   completeFact?: (query: string) => Promise<FactCompletion[]>;
+  /**
+   * The height past which the editor scrolls INTERNALLY instead of growing
+   * (default `70dvh`).
+   *
+   * Growing is the right default — one scroll context, the page scrolls, which
+   * is what the docked peek stack already assumes, and nested scroll regions
+   * are miserable on a phone. But CodeMirror only virtualizes its viewport when
+   * its scroller is BOUNDED: at `height: auto` it renders every line, so a
+   * thousand-line fact would build a thousand-line DOM to edit one paragraph.
+   * The cap is set high enough that ordinary edits — a fence body, a
+   * paragraph, a note — never reach it, and only the pathological case pays
+   * for a nested scroller.
+   */
+  maxHeight?: string;
 }
 
 export interface EditorHandle {
@@ -82,7 +97,8 @@ export interface EditorHandle {
  * `currentColor`/`transparent` rather than declaring one, so the SAME module
  * looks right on home's ink field, home's cream trailhead, and lit's paper.
  * Only structure and metrics are asserted here. */
-const baseTheme = EditorView.theme({
+function baseTheme(maxHeight: string): Extension {
+  return EditorView.theme({
   '&': {
     // 16px: below this, iOS Safari zooms on focus and never zooms back.
     fontSize: '16px',
@@ -98,7 +114,17 @@ const baseTheme = EditorView.theme({
   },
   '.cm-line': { padding: '0 0.15rem' },
   '&.cm-focused': { outline: 'none' },
-  '.cm-scroller': { fontFamily: 'inherit', lineHeight: 'inherit' },
+  // Grow with the content, but bound it — see MountOptions.maxHeight for why
+  // (CodeMirror only virtualizes a BOUNDED scroller). The safe-area inset goes
+  // on the SCROLLER, not the wrapper: on a phone the last line otherwise sits
+  // under the home indicator.
+  '.cm-scroller': {
+    fontFamily: 'inherit',
+    lineHeight: 'inherit',
+    overflow: 'auto',
+    maxHeight,
+    paddingBottom: 'env(safe-area-inset-bottom)',
+  },
   '.cm-cursor, .cm-dropCursor': { borderLeftColor: 'currentColor', borderLeftWidth: '2px' },
   // The selection layer needs an explicit colour — `currentColor` at full
   // opacity would hide the text under it.
@@ -127,7 +153,8 @@ const baseTheme = EditorView.theme({
     color: 'inherit',
   },
   '.cm-completionDetail': { marginLeft: 'auto', opacity: 0.6, fontStyle: 'normal', fontSize: '0.8em' },
-});
+  });
+}
 
 /** `[[` — the substrate's cross-surface link syntax, completed from live facts.
  *  lit hand-rolled this against a textarea (a caret-position popover); as a
@@ -207,7 +234,7 @@ export function mount(host: HTMLElement, opts: MountOptions): EditorHandle {
     syntaxHighlighting(defaultHighlightStyle, { fallback: true }),
     // One scroll context: the editor grows, the page scrolls (see header).
     EditorView.lineWrapping,
-    baseTheme,
+    baseTheme(opts.maxHeight ?? '70dvh'),
     langCompartment.of(langExtension(opts.lang)),
     keymap.of([...closeBracketsKeymap, ...defaultKeymap, ...historyKeymap, ...completionKeymap, ...foldKeymap, indentWithTab]),
     EditorView.editable.of(editable),
