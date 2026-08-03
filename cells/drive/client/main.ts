@@ -24,9 +24,13 @@ const TERRAIN_RING = 1;
 const REVEAL_M = 150;         // fog hole radius around the car, metres
 const FOG_SPAN = 12000;       // fog canvas coverage, metres (centred on spawn)
 const FOG_PX = 1024;
-const CAR = { accel: 14, brake: 22, drag: 0.7, maxFwd: 38, maxRev: 8, wheelbase: 3.2, steerMax: 0.62 };
-const CAM = { base: 210, perKmh: 1.1, tilt: 70 };
-const CAR_R = 4.0;            // collision circle — matched to the cartographic car scale
+// Equilibrium speed is accel/drag — the old 0.7 drag capped the car at 72km/h
+// no matter what maxFwd said. Road drag now yields ~180km/h flat out; grass
+// ~36; water a wallow. Steering authority FALLS with speed (below) so 180
+// doesn't mean a 180°/s twitch.
+const CAR = { accel: 16, brake: 26, maxRev: 9, wheelbase: 2.9, steerMax: 0.6 };
+const CAM = { base: 175, perKmh: 1.1, tilt: 70 };
+const CAR_R = 2.4;            // collision circle — a real car's half-diagonal plus a whisker
 
 // ── geo helpers (local metres around the spawn; x=east, z=south) ───
 const clamp = (v: number, a: number, b: number) => Math.max(a, Math.min(b, v));
@@ -639,10 +643,11 @@ const car = new THREE.Group();
   }
   car.add(body, cabin);
 }
-// Cartographic, not to-scale: from a 200m camera a 4m car is two pixels.
-car.scale.setScalar(3.2);
+// REAL SIZE (owner: the 3.2x cartographic car straddled whole roads and made
+// every speed read as a crawl). In the top chart view the car is small — the
+// halo is the position marker; in chase it reads true against lane widths.
 const halo = new THREE.Mesh(
-  new THREE.CircleGeometry(3.4, 24),
+  new THREE.CircleGeometry(7, 28),
   // A MARKER, not scenery: no depth test, drawn late — the player's position
   // is never allowed to be swallowed by a drape or a rooftop.
   new THREE.MeshBasicMaterial({ color: 0xf5c453, transparent: true, opacity: 0.35, depthWrite: false, depthTest: false }),
@@ -655,6 +660,17 @@ scene.add(car);
 const state = { x: 0, z: 0, heading: 0, speed: 0 };
 (window as unknown as { __drive?: object; __surfaceAt?: (x: number, z: number) => string }).__drive = state;
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
+(window as unknown as { __roadDir?: (x: number, z: number) => [number, number] | null }).__roadDir = (x, z) => {
+  let best: Seg | null = null, bd = Infinity;
+  for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
+    const [cx, cz] = closestOnSeg(x, z, seg);
+    const d = Math.hypot(x - cx, z - cz);
+    if (d < bd) { bd = d; best = seg; }
+  }
+  if (!best) return null;
+  const dx = best.bx - best.ax, dz = best.bz - best.az, l = Math.hypot(dx, dz) || 1;
+  return [dx / l, dz / l];
+};
 
 // ── input: keyboard + a VISIBLE one-thumb stick, second finger = brake ──
 const keys = new Set<string>();
@@ -808,18 +824,21 @@ let last = performance.now();
 let streamAt = 0;
 let miniAt = 0;
 // Surface grip: tarmac is fast, everything else asks you to slow down —
-// which turns "follow the real roads" into the game.
+// which turns "follow the real roads" into the game. `ride` is the car's
+// height over the sampled field (roads are draped 1.6m proud of it).
 const SURFACE = {
-  road: { max: CAR.maxFwd, drag: CAR.drag },
-  ground: { max: 15, drag: 1.5 },
-  water: { max: 4, drag: 3.2 },
+  road: { max: 50, drag: 0.28, ride: 1.75 },
+  ground: { max: 12, drag: 1.6, ride: 0.9 },
+  water: { max: 3.5, drag: 3.5, ride: 0.55 },
 } as const;
 let steerCur = 0; // smoothed — keyboard taps ramp instead of snapping
+let rideCur = 1.75; // eased ride height (road drape ⇄ bare ground)
 function tick(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   const { throttle, steer, brake } = input();
-  const surf = SURFACE[surfaceAt(state.x, state.z)];
+  const surfKind = surfaceAt(state.x, state.z);
+  const surf = SURFACE[surfKind];
   // Arcade bicycle model: thrust minus drag, steering authority grows then
   // saturates with speed so the car neither pivots in place nor becomes twitchy.
   const thrust = brake
@@ -832,8 +851,10 @@ function tick(now: number): void {
   const SRATE = 7; // full-lock in ~0.14s — responsive but not snappy
   steerCur += clamp(steer - steerCur, -SRATE * dt, SRATE * dt);
   if (Math.abs(state.speed) > 0.1) {
-    const dir = state.speed >= 0 ? 1 : -1;
-    state.heading += (steerCur * CAR.steerMax * clamp(Math.abs(state.speed) / 9, 0.25, 1) * state.speed * dt * dir) / CAR.wheelbase;
+    // Authority decays with speed (like a real wheel): full lock is a parking
+    // move, a nudge at 180 — turn RATE stays sane across the whole range.
+    const authority = 1 / (1 + Math.abs(state.speed) / 12);
+    state.heading += (steerCur * CAR.steerMax * authority * state.speed * dt) / CAR.wheelbase;
   }
   state.x += Math.sin(state.heading) * state.speed * dt;
   state.z -= Math.cos(state.heading) * state.speed * dt;
@@ -860,8 +881,15 @@ function tick(now: number): void {
   }
   if (scraping) state.speed *= Math.exp(-5 * dt);
   const ground = sampleHeight(state.x, state.z);
-  car.position.set(state.x, ground + 1.8, state.z);
-  car.rotation.y = -state.heading;
+  // Off-road is BUMPY (realism foundation, aesthetics later): a speed-scaled
+  // shake in ride height + pitch/roll, plus body roll into the steer. Two
+  // incommensurate sines read as rattle, not metronome.
+  const tsec = now / 1000;
+  const bumpAmp = surfKind === 'ground' && Math.abs(state.speed) > 2 ? Math.min(1, Math.abs(state.speed) / 8) : 0;
+  const bump = bumpAmp * (Math.sin(tsec * 23.7) * 0.6 + Math.sin(tsec * 13.1) * 0.4);
+  rideCur += clamp(surf.ride - rideCur, -6 * dt, 6 * dt); // ease across kerbs
+  car.position.set(state.x, ground + rideCur + bump * 0.22, state.z);
+  car.rotation.set(bump * 0.05, -state.heading, -steerCur * 0.06 * Math.min(1, Math.abs(state.speed) / 15) + bump * 0.04);
   reveal(state.x, state.z);
   if (now > streamAt) { streamAt = now + 1200; streamWorld(state.x, state.z); }
   // Two rigs. TOP: the chart view, tilted a touch for relief. CHASE: low and
@@ -872,15 +900,19 @@ function tick(now: number): void {
     const tiltRad = (CAM.tilt * Math.PI) / 180;
     camPos.set(state.x, ground + dist * Math.sin(tiltRad), state.z + dist * Math.cos(tiltRad));
   } else {
-    const back = 30 + Math.abs(state.speed) * 0.5;
-    camPos.set(state.x - fwdX * back, sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 13, state.z - fwdZ * back);
+    const back = 11 + Math.abs(state.speed) * 0.35;
+    camPos.set(
+      state.x - fwdX * back,
+      sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 4.8 + bump * 0.12,
+      state.z - fwdZ * back,
+    );
   }
   // Critically-damped-ish follow: snap on mode change, ease in play (the chase
   // rig swings through corners instead of being welded to the bumper).
   if (!camInit) { camera.position.copy(camPos); camInit = true; }
   else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
   if (camMode === 'top') camera.lookAt(state.x, ground, state.z);
-  else camera.lookAt(state.x + fwdX * 22, ground + 3, state.z + fwdZ * 22);
+  else camera.lookAt(state.x + fwdX * 15, ground + 1.6, state.z + fwdZ * 15);
   camera.updateMatrixWorld();
   fogMat.uniforms.groundY.value = ground;
   fogMat.uniforms.camPos.value.copy(camera.position);
