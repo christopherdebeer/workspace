@@ -369,11 +369,13 @@ function revealStamp(ex: number, ez: number): void {
   const pz = FOG_PX - ((ez + FOG_SPAN / 2) / FOG_SPAN) * FOG_PX;
   const pr = (REVEAL_M / FOG_SPAN) * FOG_PX;
   const grad = fogCtx.createRadialGradient(px, pz, pr * 0.15, px, pz, pr);
-  // A LONG feather (0.15r solid → 0 at the rim) with many overlapping stamps
-  // integrates into a smooth field; the old short 0.35r ramp left each punch
-  // legible as its own disc, which read as the fog clearing in patches.
-  grad.addColorStop(0, 'rgba(0,0,0,0.85)');
-  grad.addColorStop(0.55, 'rgba(0,0,0,0.35)');
+  // FULLY opaque core, long feather. The core must reach 1.0 or the swath you
+  // drive through never clears completely — a 0.85 core left permanent haze
+  // that no amount of driving could scrub off. The feather is what keeps
+  // overlapping stamps integrating smoothly instead of reading as discs.
+  grad.addColorStop(0, 'rgba(0,0,0,1)');
+  grad.addColorStop(0.45, 'rgba(0,0,0,0.92)');
+  grad.addColorStop(0.75, 'rgba(0,0,0,0.4)');
   grad.addColorStop(1, 'rgba(0,0,0,0)');
   fogCtx.globalCompositeOperation = 'destination-out';
   fogCtx.fillStyle = grad;
@@ -664,7 +666,9 @@ const MAT = {
 // and the tunnel shell is the carved hill itself, so it ghosts too (the car
 // inside stays visible through the screen-door).
 ghostify(MAT.green);
-ghostify(MAT.tunnel);
+// NOT the tunnel shell: dithering holes in a dark interior against the sky
+// reads as a ragged black cut-out, not as transparency. A buried tube needs
+// no ghosting anyway — the hillside above it is already doing the work.
 // Building tints vary per way id so a block reads as parcels, not one slab.
 // Extrude material slots: [0]=caps (roof), [1]=side walls (darker).
 const B_MATS = [0xa59a85, 0x92897a, 0x9d937f, 0x878071].map((c, i) => {
@@ -807,6 +811,17 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   }
   const n = dense.length;
   const elev = dense.map(([x, z]) => sampleHeight(x, z));
+  // Terrain across the tube's FULL WIDTH, not just the centreline. A road in
+  // a cutting has ground overhead at the centre while the hillside falls away
+  // at the edges — sizing on the centreline alone left the walls standing
+  // proud of the slope (measured 3.6m out in Cairo).
+  const halfW = width / 2 + 1.2;
+  const elevMin = dense.map(([x, z], i) => {
+    const [ax2, az2] = dense[Math.max(0, i - 1)], [bx2, bz2] = dense[Math.min(n - 1, i + 1)];
+    const tx = bx2 - ax2, tz = bz2 - az2, tl = Math.hypot(tx, tz) || 1;
+    const ox = (-tz / tl) * halfW, oz = (tx / tl) * halfW;
+    return Math.min(sampleHeight(x, z), sampleHeight(x + ox, z + oz), sampleHeight(x - ox, z - oz));
+  });
   // Roads get their own longitudinal PROFILE. Terrain draping alone sends a
   // road over every hill in its path; real roads keep grade and go THROUGH.
   // Where a ~500m-smoothed profile sits more than TUNNEL_TOL below the terrain
@@ -876,11 +891,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // an open road; the tube would otherwise stand exposed like a dark box.
     let s = -1;
     for (let i = a; i <= b; i++) {
-      const buried = elev[i] - prof[i] > 1.2;
+      // FULLY buried: there must be enough ground overhead to contain the
+      // whole tube. The old 1.2m threshold let a 5m shell stand almost four
+      // metres proud of flat ground — the black arch hanging over the road.
+      const buried = elevMin[i] - prof[i] > TUNNEL_H + 0.6;
       if (buried && s < 0) s = i;
       if ((!buried || i === b) && s >= 0) {
         const e = buried ? i : i - 1;
-        if (e - s >= 2) tunnelTube(dense, prof, s, e, width, lift);
+        if (e - s >= 2) tunnelTube(dense, prof, elevMin, s, e, width, lift);
         s = -1;
       }
     }
@@ -888,7 +906,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
 }
 // The carved space: side walls + ceiling along a tunnel run, portal lintels at
 // the mouths, and solid collision so the car can't drive out through the rock.
-function tunnelTube(dense: Array<[number, number]>, prof: number[], a: number, b: number, width: number, lift: number): void {
+function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number[], a: number, b: number, width: number, lift: number): void {
+  // Belt and braces: the ceiling can never poke out through the hillside.
+  const ceil = (i: number): number => Math.min(prof[i] + lift + TUNNEL_H, elev[i] - 0.4);
   const tv: number[] = [];
   const quadPush = (...p: number[]): void => {
     tv.push(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
@@ -899,24 +919,27 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], a: number, b
     const len = Math.hypot(dx, dz) || 1;
     const nx = (-dz / len) * (width / 2 + 0.6), nz = (dx / len) * (width / 2 + 0.6);
     const yA = prof[i] + lift, yB = prof[i + 1] + lift;
-    quadPush(x0 + nx, yA, z0 + nz, x1 + nx, yB, z1 + nz, x0 + nx, yA + TUNNEL_H, z0 + nz, x1 + nx, yB + TUNNEL_H, z1 + nz);
-    quadPush(x0 - nx, yA, z0 - nz, x1 - nx, yB, z1 - nz, x0 - nx, yA + TUNNEL_H, z0 - nz, x1 - nx, yB + TUNNEL_H, z1 - nz);
-    quadPush(x0 + nx, yA + TUNNEL_H, z0 + nz, x1 + nx, yB + TUNNEL_H, z1 + nz, x0 - nx, yA + TUNNEL_H, z0 - nz, x1 - nx, yB + TUNNEL_H, z1 - nz);
-    const top = Math.max(yA, yB) + TUNNEL_H;
+    const cA = ceil(i), cB = ceil(i + 1);
+    quadPush(x0 + nx, yA, z0 + nz, x1 + nx, yB, z1 + nz, x0 + nx, cA, z0 + nz, x1 + nx, cB, z1 + nz);
+    quadPush(x0 - nx, yA, z0 - nz, x1 - nx, yB, z1 - nz, x0 - nx, cA, z0 - nz, x1 - nx, cB, z1 - nz);
+    quadPush(x0 + nx, cA, z0 + nz, x1 + nx, cB, z1 + nz, x0 - nx, cA, z0 - nz, x1 - nx, cB, z1 - nz);
+    const top = Math.max(cA, cB);
     addSeg(wallGrid, { ax: x0 + nx, az: z0 + nz, bx: x1 + nx, bz: z1 + nz, hw: 0, ya: top, yb: top });
     addSeg(wallGrid, { ax: x0 - nx, az: z0 - nz, bx: x1 - nx, bz: z1 - nz, hw: 0, ya: top, yb: top });
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tv), 3));
   geo.computeVertexNormals();
-  worldGroup.add(new THREE.Mesh(geo, MAT.tunnel));
+  const tube = new THREE.Mesh(geo, MAT.tunnel);
+  tube.userData.tunnel = true; // so a probe can check none of it breaches the surface
+  worldGroup.add(tube);
   for (const end of [a, b]) {
     const i0 = end === a ? a : b - 1, i1 = end === a ? a + 1 : b;
     const [x0, z0] = dense[i0], [x1, z1] = dense[i1];
     const ang = Math.atan2(z1 - z0, x1 - x0);
     const lintel = new THREE.Mesh(new THREE.BoxGeometry(width + 3, 1.6, 1.2), MAT.portal);
     const [px, pz] = dense[end];
-    lintel.position.set(px, prof[end] + lift + TUNNEL_H + 0.3, pz);
+    lintel.position.set(px, ceil(end) + 0.3, pz);
     lintel.rotation.y = ang + Math.PI / 2; // across the road, not along it
     worldGroup.add(lintel);
   }
@@ -1340,6 +1363,29 @@ const state = { x: 0, z: 0, heading: 0, speed: 0 };
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z) });
+// Fog-of-war opacity at a world point (0 = fully cleared, 1 = untouched).
+(window as unknown as { __fogAt?: object }).__fogAt = (x: number, z: number): number => {
+  const px = Math.round(((x + FOG_SPAN / 2) / FOG_SPAN) * FOG_PX);
+  const pz = Math.round(FOG_PX - ((z + FOG_SPAN / 2) / FOG_SPAN) * FOG_PX);
+  return fogCtx.getImageData(clamp(px, 0, FOG_PX - 1), clamp(pz, 0, FOG_PX - 1), 1, 1).data[3] / 251;
+};
+// Every tunnel shell vertex that stands proud of the terrain it should be under.
+(window as unknown as { __tunnelBreach?: object }).__tunnelBreach = (): object => {
+  let meshes = 0, worst = -Infinity, breaching = 0;
+  worldGroup.traverse((o) => {
+    if (!(o as THREE.Mesh).isMesh || !o.userData.tunnel) return;
+    meshes++;
+    const p = ((o as THREE.Mesh).geometry.attributes.position as THREE.BufferAttribute);
+    let bad = false;
+    for (let i = 0; i < p.count; i++) {
+      const over = p.getY(i) - sampleHeight(p.getX(i), p.getZ(i));
+      if (over > worst) worst = over;
+      if (over > 0.5) bad = true;
+    }
+    if (bad) breaching++;
+  });
+  return { meshes, breaching, worstAboveGround: worst === -Infinity ? null : +worst.toFixed(2) };
+};
 (window as unknown as { __roadDir?: (x: number, z: number) => [number, number] | null }).__roadDir = (x, z) => {
   let best: Seg | null = null, bd = Infinity;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
