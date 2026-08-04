@@ -1030,10 +1030,13 @@ const wheelMeshes: THREE.Mesh[] = [];
 // every speed read as a crawl). In the top chart view the car is small — the
 // halo is the position marker; in chase it reads true against lane widths.
 const halo = new THREE.Mesh(
-  new THREE.CircleGeometry(7, 28),
+  // A RING, not a disc — a filled circle drawn depth-free painted straight
+  // over the truck, so the chart view showed a gold coin where the vehicle
+  // should be. The ring frames it instead.
+  new THREE.RingGeometry(5.2, 6.6, 32),
   // A MARKER, not scenery: no depth test, drawn late — the player's position
   // is never allowed to be swallowed by a drape or a rooftop.
-  new THREE.MeshBasicMaterial({ color: 0xf5c453, transparent: true, opacity: 0.35, depthWrite: false, depthTest: false }),
+  new THREE.MeshBasicMaterial({ color: 0xf5c453, transparent: true, opacity: 0.45, depthWrite: false, depthTest: false }),
 );
 halo.renderOrder = 40;
 halo.rotation.x = -Math.PI / 2;
@@ -1081,12 +1084,57 @@ const stickBase = stickEl(STICK_R * 2 + 12, { border: '1.5px solid rgba(245,196,
 const stickNub = stickEl(46, { background: 'rgba(245,196,83,0.75)', boxShadow: '0 2px 10px rgba(0,0,0,0.5)' });
 let stick: { id: number; x0: number; y0: number; dx: number; dy: number } | null = null;
 let brakeId: number | null = null;
+// The chart (top) view pans and zooms like a map: the stick lives PINNED at
+// bottom-right there; dragging anywhere else pans, pinching zooms, and the
+// wheel zooms on desktop. Chase keeps the appear-where-the-thumb-lands stick
+// with second-finger brake.
+let panX = 0, panZ = 0, zoomT = 1, zoomCur = 1;
+const panPtrs = new Map<number, { x: number; y: number }>();
+const stickHome = (): { x: number; y: number } => ({ x: innerWidth - 84, y: innerHeight - 118 });
+function updateStickHome(): void {
+  if (camMode === 'top') {
+    const h = stickHome();
+    stickBase.style.display = 'block';
+    stickBase.style.left = `${h.x}px`;
+    stickBase.style.top = `${h.y}px`;
+    if (!stick) {
+      stickNub.style.display = 'block';
+      stickNub.style.left = `${h.x}px`;
+      stickNub.style.top = `${h.y}px`;
+    }
+  } else if (!stick) {
+    stickBase.style.display = stickNub.style.display = 'none';
+  }
+}
+addEventListener('resize', updateStickHome);
+const setStickFrom = (e: PointerEvent): void => {
+  if (!stick) return;
+  const rx = e.clientX - stick.x0, ry = e.clientY - stick.y0;
+  const len = Math.hypot(rx, ry);
+  const cl = Math.min(len, STICK_R);
+  const ux = len ? rx / len : 0, uy = len ? ry / len : 0;
+  stickNub.style.left = `${stick.x0 + ux * cl}px`;
+  stickNub.style.top = `${stick.y0 + uy * cl}px`;
+  const mag = Math.max(0, cl - STICK_DEAD) / (STICK_R - STICK_DEAD);
+  stick.dx = ux * mag;
+  stick.dy = uy * mag;
+};
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   // Capture: without it, a finger lifted over interactive chrome (the reroll
   // button) never fires pointerup HERE — the brake finger leaked and stayed
   // held forever, which read as "the car is stuck".
   try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ }
+  if (camMode === 'top') {
+    const h = stickHome();
+    if (!stick && Math.hypot(e.clientX - h.x, e.clientY - h.y) <= STICK_R * 1.4) {
+      stick = { id: e.pointerId, x0: h.x, y0: h.y, dx: 0, dy: 0 };
+      setStickFrom(e);
+    } else {
+      panPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    }
+    return;
+  }
   if (!stick) {
     stick = { id: e.pointerId, x0: e.clientX, y0: e.clientY, dx: 0, dy: 0 };
     stickBase.style.display = stickNub.style.display = 'block';
@@ -1097,21 +1145,35 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 });
 canvas.addEventListener('pointermove', (e) => {
-  if (stick?.id !== e.pointerId) return;
-  const rx = e.clientX - stick.x0, ry = e.clientY - stick.y0;
-  const len = Math.hypot(rx, ry);
-  const cl = Math.min(len, STICK_R);
-  const ux = len ? rx / len : 0, uy = len ? ry / len : 0;
-  stickNub.style.left = `${stick.x0 + ux * cl}px`;
-  stickNub.style.top = `${stick.y0 + uy * cl}px`;
-  const mag = Math.max(0, cl - STICK_DEAD) / (STICK_R - STICK_DEAD);
-  stick.dx = ux * mag;
-  stick.dy = uy * mag;
+  if (stick?.id === e.pointerId) { setStickFrom(e); return; }
+  const prev = panPtrs.get(e.pointerId);
+  if (!prev || camMode !== 'top') return;
+  const cur = { x: e.clientX, y: e.clientY };
+  if (panPtrs.size === 1) {
+    // metres per screen px at the current viewing distance
+    const k = (CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh) / innerHeight;
+    panX -= (cur.x - prev.x) * k;
+    panZ -= (cur.y - prev.y) * k;
+  } else if (panPtrs.size === 2) {
+    const other = [...panPtrs.entries()].find(([id]) => id !== e.pointerId)?.[1];
+    if (other) {
+      const d0 = Math.hypot(prev.x - other.x, prev.y - other.y);
+      const d1 = Math.hypot(cur.x - other.x, cur.y - other.y);
+      if (d0 > 12 && d1 > 12) zoomT = clamp(zoomT * (d0 / d1), 0.3, 3.2);
+    }
+  }
+  panPtrs.set(e.pointerId, cur);
 });
+addEventListener('wheel', (e) => {
+  if (camMode !== 'top') return;
+  zoomT = clamp(zoomT * Math.exp(e.deltaY * 0.0012), 0.3, 3.2);
+  e.preventDefault();
+}, { passive: false });
 const endStick = (e: PointerEvent): void => {
+  panPtrs.delete(e.pointerId);
   if (stick?.id === e.pointerId) {
     stick = null;
-    stickBase.style.display = stickNub.style.display = 'none';
+    updateStickHome();
   }
   if (brakeId === e.pointerId) brakeId = null;
 };
@@ -1120,9 +1182,9 @@ canvas.addEventListener('pointercancel', endStick);
 // Belt to the capture's braces: any release anywhere clears these too.
 addEventListener('pointerup', endStick);
 addEventListener('pointercancel', endStick);
-addEventListener('blur', () => { stick = null; brakeId = null; keys.clear(); stickBase.style.display = stickNub.style.display = 'none'; });
+addEventListener('blur', () => { stick = null; brakeId = null; panPtrs.clear(); keys.clear(); updateStickHome(); });
 function input(): { throttle: number; steer: number; brake: boolean } {
-  let throttle = 0, steer = 0;
+  let throttle = 0, steer = 0, stickBrake = false;
   if (keys.has('w') || keys.has('arrowup')) throttle += 1;
   if (keys.has('s') || keys.has('arrowdown')) throttle -= 1;
   if (keys.has('a') || keys.has('arrowleft')) steer -= 1;
@@ -1136,17 +1198,21 @@ function input(): { throttle: number; steer: number; brake: boolean } {
       // pointed south.)
       const want = Math.atan2(stick.dx, -stick.dy);
       const diff = Math.atan2(Math.sin(want - state.heading), Math.cos(want - state.heading));
-      steer += clamp(diff / 0.5, -1, 1);
-      // Full throttle on the bearing; a steering creep when it's behind —
-      // the car arcs around instead of confusingly reversing.
-      throttle += mag * clamp(Math.cos(diff) * 1.4, 0.35, 1);
+      if (Math.abs(diff) > 2.7 && Math.abs(state.speed) > 0.5) {
+        stickBrake = true; // pulling straight against travel = brake
+      } else {
+        steer += clamp(diff / 0.5, -1, 1);
+        // Full throttle on the bearing; a steering creep when it's behind —
+        // the car arcs around instead of confusingly reversing.
+        throttle += mag * clamp(Math.cos(diff) * 1.4, 0.35, 1);
+      }
     } else {
       // Squared response: |v|·v — precision near centre, authority at the rim.
       throttle += -(stick.dy * Math.abs(stick.dy));
       steer += stick.dx * Math.abs(stick.dx);
     }
   }
-  return { throttle: clamp(throttle, -1, 1), steer: clamp(steer, -1, 1), brake: brakeId !== null || keys.has(' ') };
+  return { throttle: clamp(throttle, -1, 1), steer: clamp(steer, -1, 1), brake: brakeId !== null || keys.has(' ') || stickBrake };
 }
 
 // ── minimap: north-up, fog-masked, car-centred ─────────────────────
@@ -1213,9 +1279,12 @@ function toggleCam(): void {
   camBtn.textContent = `cam: ${camMode}`;
   halo.visible = camMode === 'top'; // the marker is chart furniture, not scenery
   camInit = false;                  // snap to the new rig, then resume smoothing
+  panX = panZ = 0;                  // pan is a glance, not a state to carry over
+  updateStickHome();
 }
 camBtn.addEventListener('click', toggleCam);
 addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'c') toggleCam(); });
+updateStickHome(); // boot in top mode: the pinned stick is visible from frame one
 
 // ── «translation»: place names in an alien script ──────────────────
 // Tap the location (top-left) to toggle. Deterministic per string — the same
@@ -1475,14 +1544,24 @@ function tick(now: number): void {
   // behind, where speed is legible and the fog reads as a night horizon.
   const fwdX = Math.sin(state.heading), fwdZ = -Math.cos(state.heading);
   if (camMode === 'top') {
-    const dist = CAM.base + Math.abs(state.speed) * 3.6 * CAM.perKmh;
+    zoomCur += (zoomT - zoomCur) * Math.min(1, 8 * dt);
+    // Pan is a glance around the chart — it drifts home once you drive.
+    if (stick || Math.abs(state.speed) > 6) { const f = Math.exp(-2.5 * dt); panX *= f; panZ *= f; }
+    const dist = CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh;
     const tiltRad = (CAM.tilt * Math.PI) / 180;
-    camPos.set(state.x, ground + dist * Math.sin(tiltRad), state.z + dist * Math.cos(tiltRad));
+    const tgtY = sampleHeight(state.x + panX, state.z + panZ);
+    camPos.set(state.x + panX, tgtY + dist * Math.sin(tiltRad), state.z + panZ + dist * Math.cos(tiltRad));
   } else {
     const back = 13 + Math.abs(state.speed) * 0.35;
     camPos.set(
       state.x - fwdX * back,
-      Math.max(sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 5.4, bodyY + 3.2),
+      // ABOVE the vehicle, always: on a steep climb the ground under the
+      // camera is far below the truck, so tie the floor to the body and add
+      // pitch lift to keep looking down the slope at it.
+      Math.max(
+        sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 5.4,
+        bodyY + 4.2 + Math.max(0, Math.sin(pitchC)) * back,
+      ),
       state.z - fwdZ * back,
     );
   }
@@ -1490,7 +1569,7 @@ function tick(now: number): void {
   // rig swings through corners instead of being welded to the bumper).
   if (!camInit) { camera.position.copy(camPos); camInit = true; }
   else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
-  if (camMode === 'top') camera.lookAt(state.x, ground, state.z);
+  if (camMode === 'top') camera.lookAt(state.x + panX, sampleHeight(state.x + panX, state.z + panZ), state.z + panZ);
   else camera.lookAt(state.x + fwdX * 18, ground + 1.6, state.z + fwdZ * 18);
   camera.updateMatrixWorld();
   skyDome.position.copy(camera.position);
