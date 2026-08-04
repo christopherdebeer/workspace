@@ -490,64 +490,132 @@ const osmQueue: Array<() => void> = [];
 // centerlines, and rendering them single-lane narrow made the real-size car
 // look like it straddled the whole street.
 const ROAD_W: Record<string, number> = { motorway: 13, trunk: 12, primary: 10.5, secondary: 9.5, tertiary: 8.5, residential: 7.5, unclassified: 7, service: 4.5, living_street: 6.5, track: 3.5, footway: 2.2, path: 2.0, cycleway: 2.6, pedestrian: 6 };
-// ── procedural detail textures ─────────────────────────────────────
-// Known details render as TEXTURE, not just flat colour: lane markings on the
-// asphalt, grain on the terrain, ripple on water, stipple foliage, roof grain.
-// All generated once on a small canvas — zero downloads, tinted by the same
-// Lambert lighting as everything else.
-function canvasTex(size: number, repeatX: number, repeatY: number, draw: (c: CanvasRenderingContext2D, s: number) => void): THREE.Texture {
+// ── procedural detail textures (deterministic, weathered) ──────────
+// Known details render as TEXTURE, not just flat colour — and the world is
+// DECAYING GRACEFULLY: cracked asphalt with growth in the seams, crumbling
+// walls with moss and vines, weathered roofs. Everything is generated from a
+// seeded RNG (mulberry32), so the same crumbling world grows back identically
+// on every device — the first brick of the solarpunk overhaul.
+function mulberry32(seed: number): () => number {
+  let a = seed >>> 0;
+  return () => {
+    a = (a + 0x6d2b79f5) | 0;
+    let t = Math.imul(a ^ (a >>> 15), 1 | a);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+type Rng = () => number;
+function canvasTex(size: number, repeatX: number, repeatY: number, seed: number, draw: (c: CanvasRenderingContext2D, s: number, r: Rng) => void): THREE.Texture {
   const cv = document.createElement('canvas');
   cv.width = cv.height = size;
-  draw(cv.getContext('2d')!, size);
+  draw(cv.getContext('2d')!, size, mulberry32(seed));
   const t = new THREE.CanvasTexture(cv);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
   t.repeat.set(repeatX, repeatY);
   return t;
 }
-function speckle(c: CanvasRenderingContext2D, s: number, colors: string[], n: number, r = 1.6): void {
+function speckle(c: CanvasRenderingContext2D, s: number, r: Rng, colors: string[], n: number, rad = 1.6): void {
   for (let i = 0; i < n; i++) {
     c.fillStyle = colors[i % colors.length];
-    c.fillRect(Math.random() * s, Math.random() * s, r + Math.random() * r, r + Math.random() * r);
+    c.fillRect(r() * s, r() * s, rad + r() * rad, rad + r() * rad);
+  }
+}
+// A crack is a random walk with momentum — jagged, branchless, believable.
+function cracks(c: CanvasRenderingContext2D, s: number, r: Rng, n: number, color: string): void {
+  c.strokeStyle = color;
+  c.lineWidth = 1;
+  for (let i = 0; i < n; i++) {
+    let x = r() * s, y = r() * s, ang = r() * Math.PI * 2;
+    c.beginPath();
+    c.moveTo(x, y);
+    for (let j = 0, steps = 4 + Math.floor(r() * 5); j < steps; j++) {
+      ang += (r() - 0.5) * 1.2;
+      x += Math.cos(ang) * (3 + r() * 6);
+      y += Math.sin(ang) * (3 + r() * 6);
+      c.lineTo(x, y);
+    }
+    c.stroke();
+  }
+}
+// Moss/overgrowth: clustered soft blobs in layered greens.
+function moss(c: CanvasRenderingContext2D, s: number, r: Rng, n: number, colors: string[]): void {
+  for (let i = 0; i < n; i++) {
+    const cx = r() * s, cy = r() * s, blob = 2 + r() * 5;
+    for (let j = 0; j < 6; j++) {
+      c.fillStyle = colors[j % colors.length];
+      c.beginPath();
+      c.arc(cx + (r() - 0.5) * blob * 2, cy + (r() - 0.5) * blob * 2, 1 + (r() * blob) / 2, 0, Math.PI * 2);
+      c.fill();
+    }
   }
 }
 // Road: u spans the width, v runs 20m per wrap — centre dash ≈ 8m on / 12m off,
-// solid pale edge lines. Drawn horizontal-major then used vertically via UVs.
-const roadTex = canvasTex(128, 1, 1, (c, s) => {
+// pale edge lines, cracked and patched, growth creeping in from the verges.
+const roadTex = canvasTex(128, 1, 1, 101, (c, s, r) => {
   c.fillStyle = '#3a3f46'; c.fillRect(0, 0, s, s);
-  speckle(c, s, ['rgba(255,255,255,0.045)', 'rgba(0,0,0,0.12)'], 260);
-  c.fillStyle = 'rgba(226,220,203,0.5)';
-  c.fillRect(5, 0, 3, s); c.fillRect(s - 8, 0, 3, s);      // edge lines
-  c.fillStyle = 'rgba(232,226,208,0.75)';
+  speckle(c, s, r, ['rgba(255,255,255,0.045)', 'rgba(0,0,0,0.12)'], 260);
+  for (let i = 0; i < 3; i++) { // tar patches over old repairs
+    c.fillStyle = 'rgba(20,23,28,0.35)';
+    c.fillRect(10 + r() * (s - 40), r() * s, 14 + r() * 22, 8 + r() * 14);
+  }
+  cracks(c, s, r, 6, 'rgba(12,14,18,0.5)');
+  c.fillStyle = 'rgba(226,220,203,0.45)';
+  c.fillRect(5, 0, 3, s); c.fillRect(s - 8, 0, 3, s);      // worn edge lines
+  c.fillStyle = 'rgba(232,226,208,0.7)';
   c.fillRect(s / 2 - 2, 0, 4, Math.round(s * 0.4));        // centre dash
+  for (let i = 0; i < 26; i++) { // the verges are losing to the green
+    const edge = r() < 0.5 ? 2 + r() * 8 : s - 2 - r() * 8;
+    c.fillStyle = i % 2 ? 'rgba(64,96,44,0.5)' : 'rgba(40,66,32,0.55)';
+    c.fillRect(edge, r() * s, 1.5 + r() * 2.5, 2 + r() * 3);
+  }
 });
-const pathTex = canvasTex(64, 1, 1, (c, s) => {
+const pathTex = canvasTex(64, 1, 1, 102, (c, s, r) => {
   c.fillStyle = '#847d6c'; c.fillRect(0, 0, s, s);
-  speckle(c, s, ['rgba(60,54,40,0.35)', 'rgba(255,250,235,0.12)'], 90);
-});
-const grainTex = canvasTex(256, 200, 200, (c, s) => {
-  c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-  speckle(c, s, ['rgba(0,0,0,0.10)', 'rgba(0,0,0,0.05)', 'rgba(255,255,255,0.06)'], 900);
+  speckle(c, s, r, ['rgba(60,54,40,0.35)', 'rgba(255,250,235,0.12)'], 90);
+  cracks(c, s, r, 3, 'rgba(50,44,32,0.4)');
+  moss(c, s, r, 3, ['rgba(64,96,44,0.4)', 'rgba(42,70,32,0.35)']);
 });
 // Shape/roof UVs are world metres (ShapeGeometry copies XY into UV) — repeat
 // scales metres→tiles.
-const waterTex = canvasTex(128, 1 / 26, 1 / 26, (c, s) => {
+const waterTex = canvasTex(128, 1 / 26, 1 / 26, 103, (c, s, r) => {
   c.fillStyle = '#1d3a55'; c.fillRect(0, 0, s, s);
   c.strokeStyle = 'rgba(126,168,204,0.14)'; c.lineWidth = 2;
   for (let i = 0; i < 7; i++) {
     c.beginPath();
-    const y = Math.random() * s;
+    const y = r() * s;
     c.moveTo(0, y); c.bezierCurveTo(s / 3, y - 6, (2 * s) / 3, y + 6, s, y);
     c.stroke();
   }
 });
-const greenTex = canvasTex(128, 1 / 20, 1 / 20, (c, s) => {
+const greenTex = canvasTex(128, 1 / 20, 1 / 20, 104, (c, s, r) => {
   c.fillStyle = '#1c3320'; c.fillRect(0, 0, s, s);
-  speckle(c, s, ['rgba(10,24,12,0.5)', 'rgba(58,96,52,0.28)'], 240, 2.6);
+  speckle(c, s, r, ['rgba(10,24,12,0.5)', 'rgba(58,96,52,0.28)'], 240, 2.6);
+  speckle(c, s, r, ['rgba(88,120,58,0.3)', 'rgba(70,104,48,0.25)'], 70, 1.2); // grass blades catching light
+  for (let i = 0; i < 8; i++) { // sparse wildflowers
+    c.fillStyle = i % 2 ? 'rgba(214,196,120,0.5)' : 'rgba(196,150,170,0.4)';
+    c.fillRect(r() * s, r() * s, 1.5, 1.5);
+  }
 });
-const roofTex = canvasTex(128, 1 / 10, 1 / 10, (c, s) => {
+const roofTex = canvasTex(128, 1 / 10, 1 / 10, 105, (c, s, r) => {
   c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
-  speckle(c, s, ['rgba(0,0,0,0.10)', 'rgba(0,0,0,0.05)'], 300);
+  speckle(c, s, r, ['rgba(0,0,0,0.10)', 'rgba(0,0,0,0.05)'], 300);
+  c.strokeStyle = 'rgba(0,0,0,0.10)'; c.lineWidth = 1;
+  for (let i = 16; i < s; i += 26) { c.beginPath(); c.moveTo(0, i); c.lineTo(s, i); c.stroke(); } // panel seams
+  cracks(c, s, r, 3, 'rgba(30,26,18,0.25)');
+  moss(c, s, r, 6, ['rgba(64,96,44,0.45)', 'rgba(42,70,32,0.4)', 'rgba(96,128,60,0.3)']);
 });
+// Crumbling walls, two variants so neighbouring parcels don't twin: floor
+// bands, cracks, and moss/vines claiming the concrete. White base — the
+// per-parcel material colour tints it.
+const wallTexes = [7101, 7102].map((seed) => canvasTex(128, 1 / 9, 1 / 9, seed, (c, s, r) => {
+  c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
+  c.fillStyle = 'rgba(0,0,0,0.10)';
+  for (let y = 10; y < s; y += 24) c.fillRect(0, y, s, 3); // floor bands
+  speckle(c, s, r, ['rgba(0,0,0,0.08)', 'rgba(255,255,255,0.05)'], 240);
+  cracks(c, s, r, 5, 'rgba(20,16,10,0.35)');
+  moss(c, s, r, 7, ['rgba(64,96,44,0.5)', 'rgba(42,70,32,0.45)', 'rgba(96,128,60,0.35)']);
+}));
 // DoubleSide throughout: ribbon winding and the rotate+mirror extrusion leave
 // face orientation mixed — lighting both sides costs little at this scene size
 // and makes every surface reliably visible from the top-down camera.
@@ -568,13 +636,27 @@ ghostify(MAT.green);
 ghostify(MAT.tunnel);
 // Building tints vary per way id so a block reads as parcels, not one slab.
 // Extrude material slots: [0]=caps (roof), [1]=side walls (darker).
-const B_MATS = [0xa59a85, 0x92897a, 0x9d937f, 0x878071].map((c) => {
+const B_MATS = [0xa59a85, 0x92897a, 0x9d937f, 0x878071].map((c, i) => {
   const side = new THREE.Color(c).multiplyScalar(0.72);
   return [
     new THREE.MeshLambertMaterial({ color: c, map: roofTex, side: DS }),
-    new THREE.MeshLambertMaterial({ color: side, side: DS }),
+    new THREE.MeshLambertMaterial({ color: side, map: wallTexes[i % wallTexes.length], side: DS }),
   ] as [THREE.Material, THREE.Material];
 });
+// ── the sea ────────────────────────────────────────────────────────
+// Terrarium tiles carry BATHYMETRY and OSM's open sea has no water polygon
+// (coastline ≠ natural=water), so coasts rendered as sunken seabed. One vast
+// plane at sea level fills every below-sea basin; land simply occludes it.
+// Disabled when the spawn itself sits in a true depression (Death Valley).
+const seaTex = waterTex.clone();
+seaTex.repeat.set(1550, 1550); // plane UVs are 0..1 across 40km → ~26m ripple tiles
+seaTex.needsUpdate = true;
+const sea = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), new THREE.MeshLambertMaterial({ map: seaTex, side: DS }));
+sea.rotation.x = -Math.PI / 2;
+sea.position.y = -1e6; // parked until boot anchors sea level
+scene.add(sea);
+let seaOn = false;
+
 // ── the map layer (minimap base, FOG_SPAN frame, north-up) ─────────
 // Streamed features draw themselves here as they register; the minimap
 // composites this under the fog mask, so the map only shows what the fog has
@@ -661,7 +743,8 @@ function surfaceAt(x: number, z: number): Surface {
     const [cx, cz] = closestOnSeg(x, z, seg);
     if (Math.hypot(x - cx, z - cz) <= seg.hw + 0.8) return 'road';
   }
-  return waterCells.has(gkey(x, z)) ? 'water' : 'ground';
+  if (waterCells.has(gkey(x, z))) return 'water';
+  return seaOn && sampleHeight(x, z) < -baseElev - 0.6 ? 'water' : 'ground';
 }
 // The road's own elevation at (x,z) — differs from the terrain wherever the
 // profile smoothing decided a stretch is a tunnel or bridge.
@@ -1543,6 +1626,8 @@ function tick(now: number): void {
       // car's current level, so the hill above a tunnel doesn't swallow us.
       const rh = roadHeightAt(wxw, wzw);
       if (rh !== null && Math.abs(rh - (prevGround ?? g)) < 4) g = rh;
+    } else if (sk === 'water' && seaOn) {
+      g = Math.max(g, -baseElev - 0.35); // wallow at the SURFACE, not the seabed
     }
     rawSum += g;
     const sw = SURFACE[sk];
@@ -1680,6 +1765,9 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
     const v = clamp(Math.round(((b.latN - spawn.lat) / (b.latN - b.latS)) * 255), 0, 255);
     baseElev = anchor[v * 256 + u];
   }
+  // Anchor the sea to true sea level — unless the land here is itself below
+  // it (a depression), in which case there is no sea to show.
+  if (baseElev >= -2) { seaOn = true; sea.position.y = -baseElev + 0.1; }
   bootMsg('laying down the roads…');
   // The spawn tile must be IN the height field before the first frame — the
   // car, drapes, and camera all read it; starting on y=0 then popping up a
