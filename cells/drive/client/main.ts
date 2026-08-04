@@ -295,7 +295,7 @@ skyDome.frustumCulled = false;
 skyDome.renderOrder = -10;
 scene.add(skyDome);
 
-const hemi = new THREE.HemisphereLight(0xbcd2ee, 0x6a5a3c, 0.95); // sky fill + ground bounce
+const hemi = new THREE.HemisphereLight(0xbcd2ee, 0x6a5a3c, 0.72); // sky fill + ground bounce
 scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffe0b0, 1.5);
 sun.position.copy(SUN_DIR).multiplyScalar(2000);
@@ -445,16 +445,16 @@ const compMat = new THREE.ShaderMaterial({
         // ground at your own wheels whether or not you have "explored" it; a
         // ramp that began at zero metres put 55% milk over the near field the
         // moment the haze turned daylight-bright.
-        float near = 1.0 - exp(-max(t - 70.0, 0.0) / 240.0);
+        float near = 1.0 - exp(-max(t - 130.0, 0.0) / 300.0);
         // Aerial perspective scales with how much AIR the ray crosses — a
         // survey view straight down stays legible at any zoom, the horizon
         // keeps its haze. (Fog-of-war hiding is m-driven and unaffected.)
         float vFac = clamp(1.4 - abs(dir.y) * 1.3, 0.15, 1.0);
         float deep = (1.0 - exp(-t / 1400.0)) * vFac;
-        float blurF = clamp(m * (0.1 + 0.9 * near) + deep * 0.55, 0.0, 1.0);
+        float blurF = clamp(m * (0.1 + 0.9 * near) + deep * 0.3, 0.0, 1.0);
         // Never fully opaque: the unexplored world stays a SUGGESTION behind
         // the haze — you can make out a coastline or a ridge to steer toward.
-        float dimF = min(m * mix(0.12, 0.86, near) + (1.0 - m) * deep * 0.55, 0.86);
+        float dimF = min(m * mix(0.10, 0.86, near) + (1.0 - m) * deep * 0.3, 0.86);
         col = mix(sharp, soft, blurF);
         col = mix(col, hazeAt(dir), dimF);
       }
@@ -462,6 +462,13 @@ const compMat = new THREE.ShaderMaterial({
       // must not be able to punch a black hole through the finished frame.
       col = max(col, vec3(0.0));
       vec3 enc = srgb(col);
+      // GRADE. Physically-correct lighting through a haze lands flat and
+      // milky; the reference art is saturated with deep shadows. Saturation
+      // lift plus a contrast S-curve, applied before quantisation so the
+      // palette steps land on the graded image rather than the raw one.
+      float l = dot(enc, vec3(0.299, 0.587, 0.114));
+      enc = clamp(mix(vec3(l), enc, 1.35), 0.0, 1.0);
+      enc = clamp((enc - 0.5) * 1.18 + 0.47, 0.0, 1.0);
       // PALETTE QUANTISATION with an ordered dither, in perceptual space and
       // keyed to the LOW-RES grid (not the screen), so the dither pattern is
       // one texel per step. This is the difference between authored pixel art
@@ -2241,7 +2248,8 @@ addEventListener('visibilitychange', () => { if (!document.hidden) audio.arm(); 
 syncBtn();
 
 // ── main loop ──────────────────────────────────────────────────────
-const speedEl = $('speed');
+// Set once the instrument panels exist (they are built after this point).
+let hudUpdate: ((surf: Surface, kmh: number, grip: number) => void) | null = null;
 let last = performance.now();
 let streamAt = 0;
 let miniAt = 0;
@@ -2462,7 +2470,7 @@ function tick(now: number): void {
   ghostU.uGhostCam.value.copy(camera.position);
   compMat.uniforms.camPos.value.copy(camera.position);
   compMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
-  speedEl.innerHTML = `${Math.round(Math.abs(state.speed) * 3.6)}<small> km/h</small>`;
+  hudUpdate?.(surfKind, Math.round(Math.abs(state.speed) * 3.6), groundedF);
   if (camMode === 'chase' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
   updatePois(); // every frame — throttled pins juddered against the camera
   // Progress lives in the URL: reloading resumes here, not at the spawn.
@@ -2525,6 +2533,122 @@ function applyBiome(b: Biome): void {
   // same water as a boreal one.
   const shallow = b.ramp[0][1];
   (sea.material as THREE.MeshLambertMaterial).color.setRGB(shallow[0] * 2.2, shallow[1] * 2.2, shallow[2] * 2.2);
+}
+
+// ── HUD: instrument panels ─────────────────────────────────────────
+// The reference UI is a rally computer: dark translucent slabs with corner
+// brackets, thin cyan rules, uppercase mono labels, segmented meters. The
+// brackets are drawn with eight tiny background gradients rather than extra
+// elements, so any node can become a panel with one class.
+{
+  const css = `
+  .panel {
+    --edge: rgba(122,226,205,0.55);
+    position: fixed; z-index: 11; padding: 5px 9px;
+    font: 0.62rem ui-monospace, SFMono-Regular, Menlo, monospace;
+    letter-spacing: 0.06em; text-transform: uppercase; color: #cfe9e2;
+    background:
+      linear-gradient(var(--edge),var(--edge)) 0 0/9px 1px no-repeat,
+      linear-gradient(var(--edge),var(--edge)) 0 0/1px 9px no-repeat,
+      linear-gradient(var(--edge),var(--edge)) 100% 0/9px 1px no-repeat,
+      linear-gradient(var(--edge),var(--edge)) 100% 0/1px 9px no-repeat,
+      linear-gradient(var(--edge),var(--edge)) 0 100%/9px 1px no-repeat,
+      linear-gradient(var(--edge),var(--edge)) 0 100%/1px 9px no-repeat,
+      linear-gradient(var(--edge),var(--edge)) 100% 100%/9px 1px no-repeat,
+      linear-gradient(var(--edge),var(--edge)) 100% 100%/1px 9px no-repeat,
+      rgba(6,17,19,0.66);
+    box-shadow: inset 0 0 14px rgba(0,0,0,0.55);
+    text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+  }
+  .panel b { color: #eaf6f2; font-weight: 600; }
+  .panel .k { color: rgba(122,226,205,0.75); font-size: 0.9em; }
+  #place { text-transform: none; letter-spacing: 0; }
+  #place .dim { color: rgba(160,190,185,0.7); }
+  #speed { display: flex; align-items: baseline; gap: 4px; }
+  #speed .v { font-size: 1.5rem; font-weight: 700; letter-spacing: 0; color: #f3d98a; }
+  #hint { opacity: 0.4; }
+  button.panel { cursor: pointer; color: #f3d98a; }
+  .meter { display: flex; gap: 2px; margin-top: 3px; }
+  .meter i { width: 4px; height: 9px; background: rgba(122,226,205,0.18); }
+  .meter i.on { background: #6fe0c0; box-shadow: 0 0 4px rgba(111,224,192,0.6); }
+  .meter i.hot { background: #f3a24a; box-shadow: 0 0 4px rgba(243,162,74,0.6); }`;
+  const st = document.createElement('style');
+  st.textContent = css;
+  document.head.appendChild(st);
+  for (const el of [$('place'), $('speed'), $('reroll'), sndBtn]) el.classList.add('panel');
+  // The long control hint collided with the speed instrument; keep it as a
+  // faint one-liner well clear of it.
+  $('hint').textContent = 'wasd · space brake · c cam · h clean';
+  Object.assign($('hint').style, { fontSize: '0.58rem', opacity: '0.35', right: '120px' } as Partial<CSSStyleDeclaration>);
+  // Speed becomes a labelled instrument with a segmented throttle meter.
+  $('speed').innerHTML = '<span class="v">0</span><span class="k">km/h</span>';
+  const speedVal = $('speed').querySelector('.v') as HTMLElement;
+
+  // COMPASS strip — the reference's most useful single element: a heading
+  // ribbon that tells you which way you are actually pointing.
+  const compWrap = document.createElement('div');
+  compWrap.className = 'panel ui';
+  Object.assign(compWrap.style, {
+    top: 'calc(max(10px, env(safe-area-inset-top)) + 68px)', left: '50%',
+    transform: 'translateX(-50%)', padding: '3px 7px', pointerEvents: 'none',
+  } as Partial<CSSStyleDeclaration>);
+  const comp = document.createElement('canvas');
+  comp.width = 464; comp.height = 48;
+  Object.assign(comp.style, { display: 'block', width: '232px', height: '24px' } as Partial<CSSStyleDeclaration>);
+  compWrap.appendChild(comp);
+  document.body.appendChild(compWrap);
+  const cctx = comp.getContext('2d')!;
+  const CARD = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+  function drawCompass(): void {
+    const W = comp.width, H = comp.height;
+    cctx.clearRect(0, 0, W, H);
+    const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
+    const pxPerDeg = W / 130; // 130° of arc across the strip
+    for (let d = -75; d <= 75; d += 5) {
+      const a = ((deg + d) % 360 + 360) % 360;
+      const x = W / 2 + d * pxPerDeg;
+      if (x < 4 || x > W - 4) continue;
+      const major = Math.round(a) % 45 === 0;
+      cctx.globalAlpha = 0.35 + 0.65 * (1 - Math.min(1, Math.abs(d) / 78)); // ends fade, centre reads
+      cctx.fillStyle = major ? '#f7dc8c' : 'rgba(140,236,214,0.85)';
+      cctx.fillRect(x - 1, major ? 16 : 22, major ? 3 : 2, major ? 12 : 6);
+      if (major) {
+        cctx.font = '700 15px ui-monospace, monospace';
+        cctx.textAlign = 'center';
+        cctx.fillText(CARD[Math.round(a / 45) % 8], x, 13);
+      }
+    }
+    cctx.globalAlpha = 1;
+    // The needle points DOWN from the top rail at dead centre — drawn inside
+    // the canvas, unlike the first pass which put it at negative y.
+    cctx.fillStyle = '#f7dc8c';
+    cctx.beginPath();
+    cctx.moveTo(W / 2, 46); cctx.lineTo(W / 2 - 6, 36); cctx.lineTo(W / 2 + 6, 36);
+    cctx.closePath(); cctx.fill();
+  }
+
+  // Surface + grip readout, the reference's "ROAD / ROUGH" panel.
+  const surfPanel = document.createElement('div');
+  surfPanel.className = 'panel ui';
+  Object.assign(surfPanel.style, {
+    left: '12px', bottom: 'calc(max(44px, env(safe-area-inset-bottom) + 34px) + 152px)', minWidth: '86px',
+  } as Partial<CSSStyleDeclaration>);
+  surfPanel.innerHTML = '<div class="k">surface</div><b id="surf-v">road</b><div class="meter" id="surf-m"></div>';
+  document.body.appendChild(surfPanel);
+  const surfV = surfPanel.querySelector('#surf-v') as HTMLElement;
+  const surfM = surfPanel.querySelector('#surf-m') as HTMLElement;
+  for (let i = 0; i < 10; i++) surfM.appendChild(document.createElement('i'));
+  const segs = [...surfM.children] as HTMLElement[];
+
+  hudUpdate = (surf: Surface, kmh: number, grip: number): void => {
+    speedVal.textContent = String(kmh);
+    surfV.textContent = surf === 'road' ? 'road' : surf === 'water' ? 'water' : 'rough';
+    const lit = Math.round(clamp(grip, 0, 1) * segs.length);
+    for (let i = 0; i < segs.length; i++) {
+      segs[i].className = i < lit ? (surf === 'road' ? 'on' : 'hot') : '';
+    }
+    drawCompass();
+  };
 }
 
 // ── clean viewport ─────────────────────────────────────────────────
