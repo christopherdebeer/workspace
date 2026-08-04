@@ -352,7 +352,9 @@ const compMat = new THREE.ShaderMaterial({
         float vFac = clamp(1.4 - abs(dir.y) * 1.3, 0.15, 1.0);
         float deep = (1.0 - exp(-t / 1400.0)) * vFac;
         float blurF = clamp(m * (0.45 + 0.55 * near) + deep * 0.55, 0.0, 1.0);
-        float dimF = min(m * mix(0.55, 0.95, near) + (1.0 - m) * deep * 0.55, 0.95);
+        // Never fully opaque: the unexplored world stays a SUGGESTION behind
+        // the haze — you can make out a coastline or a ridge to steer toward.
+        float dimF = min(m * mix(0.55, 0.86, near) + (1.0 - m) * deep * 0.55, 0.86);
         col = mix(sharp, soft, blurF);
         col = mix(col, hazeAt(dir), dimF);
       }
@@ -360,15 +362,18 @@ const compMat = new THREE.ShaderMaterial({
     }`,
 });
 let lastRevealX = Infinity, lastRevealZ = Infinity;
-function reveal(ex: number, ez: number): void {
-  if (Math.hypot(ex - lastRevealX, ez - lastRevealZ) < REVEAL_M * 0.18) return;
-  lastRevealX = ex; lastRevealZ = ez;
+// One soft punch at a world point.
+function revealStamp(ex: number, ez: number): void {
   const px = ((ex + FOG_SPAN / 2) / FOG_SPAN) * FOG_PX;
   // flipY: CanvasTexture uploads row 0 at v=1, so +z (v up) writes low rows.
   const pz = FOG_PX - ((ez + FOG_SPAN / 2) / FOG_SPAN) * FOG_PX;
   const pr = (REVEAL_M / FOG_SPAN) * FOG_PX;
-  const grad = fogCtx.createRadialGradient(px, pz, pr * 0.35, px, pz, pr);
-  grad.addColorStop(0, 'rgba(0,0,0,1)');
+  const grad = fogCtx.createRadialGradient(px, pz, pr * 0.15, px, pz, pr);
+  // A LONG feather (0.15r solid → 0 at the rim) with many overlapping stamps
+  // integrates into a smooth field; the old short 0.35r ramp left each punch
+  // legible as its own disc, which read as the fog clearing in patches.
+  grad.addColorStop(0, 'rgba(0,0,0,0.85)');
+  grad.addColorStop(0.55, 'rgba(0,0,0,0.35)');
   grad.addColorStop(1, 'rgba(0,0,0,0)');
   fogCtx.globalCompositeOperation = 'destination-out';
   fogCtx.fillStyle = grad;
@@ -376,6 +381,22 @@ function reveal(ex: number, ez: number): void {
   fogCtx.arc(px, pz, pr, 0, Math.PI * 2);
   fogCtx.fill();
   fogCtx.globalCompositeOperation = 'source-over';
+}
+function reveal(ex: number, ez: number): void {
+  const step = REVEAL_M * 0.06; // ~9m — dense enough that stamps blur together
+  const d = Math.hypot(ex - lastRevealX, ez - lastRevealZ);
+  if (d < step) return;
+  if (!Number.isFinite(lastRevealX)) {
+    revealStamp(ex, ez);
+  } else {
+    // STAMP ALONG THE PATH, not just at the new position: at 180km/h a frame
+    // covers 50m, so discrete punches left scalloped gaps behind the car.
+    const n = Math.min(24, Math.ceil(d / step));
+    for (let i = 1; i <= n; i++) {
+      revealStamp(lastRevealX + ((ex - lastRevealX) * i) / n, lastRevealZ + ((ez - lastRevealZ) * i) / n);
+    }
+  }
+  lastRevealX = ex; lastRevealZ = ez;
   fogTex.needsUpdate = true;
 }
 
@@ -1186,6 +1207,80 @@ halo.rotation.x = -Math.PI / 2;
 halo.position.y = 0.15;
 car.add(halo);
 scene.add(car);
+// ── dust: what the tires throw up off-road ─────────────────────────
+// A world-space particle pool (no per-frame allocation). Emitted at the rear
+// contacts when the wheels are on loose ground, drifting up and back before
+// settling — the visual proof that the surface under you changed.
+const DUST_N = 220;
+const dustPos = new Float32Array(DUST_N * 3);
+const dustVel = new Float32Array(DUST_N * 3);
+const dustLife = new Float32Array(DUST_N);   // 1 → 0
+const dustSeed = new Float32Array(DUST_N);   // size jitter
+let dustHead = 0;
+const dustGeo = new THREE.BufferGeometry();
+dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
+dustGeo.setAttribute('aLife', new THREE.BufferAttribute(dustLife, 1));
+dustGeo.setAttribute('aSeed', new THREE.BufferAttribute(dustSeed, 1));
+dustGeo.frustumCulled = false;
+const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  uniforms: { uColor: { value: new THREE.Color(0x9a8f76) } },
+  vertexShader: `
+    attribute float aLife; attribute float aSeed; varying float vLife;
+    void main(){
+      vLife = aLife;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      // Metre-scale puffs that billow as they age (the 260 constant made each
+      // particle a 300px blob — the truck vanished inside its own dust).
+      gl_PointSize = (3.2 + aSeed * 3.4) * (1.9 - aLife) * (95.0 / max(-mv.z, 1.0));
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `
+    uniform vec3 uColor; varying float vLife;
+    void main(){
+      vec2 d = gl_PointCoord - 0.5;
+      float r = dot(d, d);
+      if (r > 0.25) discard;                       // round puff
+      float soft = smoothstep(0.25, 0.02, r);
+      gl_FragColor = vec4(uColor, soft * vLife * 0.14); // haze, not smoke screen
+    }`,
+}));
+dustPoints.frustumCulled = false;
+dustPoints.renderOrder = 30;
+scene.add(dustPoints);
+function emitDust(x: number, y: number, z: number, vx: number, vz: number): void {
+  const i = dustHead = (dustHead + 1) % DUST_N;
+  dustPos[i * 3] = x + (Math.random() - 0.5) * 0.8;
+  dustPos[i * 3 + 1] = y + 0.15;
+  dustPos[i * 3 + 2] = z + (Math.random() - 0.5) * 0.8;
+  dustVel[i * 3] = vx + (Math.random() - 0.5) * 2.2;
+  dustVel[i * 3 + 1] = 1.1 + Math.random() * 1.6;
+  dustVel[i * 3 + 2] = vz + (Math.random() - 0.5) * 2.2;
+  dustLife[i] = 1;
+  dustSeed[i] = Math.random();
+}
+function stepDust(dt: number): void {
+  let any = false;
+  for (let i = 0; i < DUST_N; i++) {
+    if (dustLife[i] <= 0) continue;
+    any = true;
+    dustLife[i] = Math.max(0, dustLife[i] - dt * 1.05);
+    const k = Math.exp(-1.8 * dt); // air drag settles the plume
+    dustVel[i * 3] *= k;
+    dustVel[i * 3 + 2] *= k;
+    dustVel[i * 3 + 1] = dustVel[i * 3 + 1] * k - 0.9 * dt;
+    dustPos[i * 3] += dustVel[i * 3] * dt;
+    dustPos[i * 3 + 1] += dustVel[i * 3 + 1] * dt;
+    dustPos[i * 3 + 2] += dustVel[i * 3 + 2] * dt;
+  }
+  if (any) {
+    (dustGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+    (dustGeo.attributes.aLife as THREE.BufferAttribute).needsUpdate = true;
+    (dustGeo.attributes.aSeed as THREE.BufferAttribute).needsUpdate = true;
+  }
+}
+
 const state = { x: 0, z: 0, heading: 0, speed: 0 };
 (window as unknown as { __drive?: object; __surfaceAt?: (x: number, z: number) => string }).__drive = state;
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
@@ -1559,6 +1654,110 @@ function updatePois(): void {
   }
 }
 
+// ── audio: everything synthesised, nothing downloaded ──────────────
+// Foundations only, but real: an engine whose pitch follows the drivetrain,
+// tire roar coloured by the surface underneath, wind that rises with speed,
+// and impacts when the suspension bottoms out. One noise buffer, a handful of
+// nodes, no assets — and it must be armed by a gesture (iOS autoplay policy).
+const audio = (() => {
+  let ctx: AudioContext | null = null;
+  let master: GainNode | null = null;
+  let engA: OscillatorNode, engB: OscillatorNode, engFilt: BiquadFilterNode, engGain: GainNode;
+  let roarGain: GainNode, roarFilt: BiquadFilterNode, windGain: GainNode, windFilt: BiquadFilterNode;
+  let noiseBuf: AudioBuffer;
+  let on = true;
+  try { on = localStorage.getItem('drive.mute') !== '1'; } catch { /* fine */ }
+  const build = (): void => {
+    const AC = (window as unknown as { AudioContext?: typeof AudioContext; webkitAudioContext?: typeof AudioContext });
+    const Ctor = AC.AudioContext ?? AC.webkitAudioContext;
+    if (!Ctor) return;
+    ctx = new Ctor();
+    master = ctx.createGain();
+    master.gain.value = on ? 0.55 : 0;
+    master.connect(ctx.destination);
+    // Two seconds of white noise, looped — the source of tires and wind.
+    noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
+    const d = noiseBuf.getChannelData(0);
+    for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+    // Engine: detuned saw + square through a lowpass that opens with revs.
+    engFilt = ctx.createBiquadFilter(); engFilt.type = 'lowpass'; engFilt.frequency.value = 700;
+    engGain = ctx.createGain(); engGain.gain.value = 0;
+    engFilt.connect(engGain); engGain.connect(master);
+    engA = ctx.createOscillator(); engA.type = 'sawtooth'; engA.frequency.value = 40;
+    engB = ctx.createOscillator(); engB.type = 'square'; engB.frequency.value = 60;
+    const engMix = ctx.createGain(); engMix.gain.value = 0.5;
+    engA.connect(engFilt); engB.connect(engMix); engMix.connect(engFilt);
+    engA.start(); engB.start();
+    // Tire roar: bandpassed noise, centre frequency set by the surface.
+    const roarSrc = ctx.createBufferSource(); roarSrc.buffer = noiseBuf; roarSrc.loop = true;
+    roarFilt = ctx.createBiquadFilter(); roarFilt.type = 'bandpass'; roarFilt.frequency.value = 300; roarFilt.Q.value = 0.7;
+    roarGain = ctx.createGain(); roarGain.gain.value = 0;
+    roarSrc.connect(roarFilt); roarFilt.connect(roarGain); roarGain.connect(master); roarSrc.start();
+    // Wind: highpassed noise that climbs with the square of speed.
+    const windSrc = ctx.createBufferSource(); windSrc.buffer = noiseBuf; windSrc.loop = true;
+    windFilt = ctx.createBiquadFilter(); windFilt.type = 'highpass'; windFilt.frequency.value = 900;
+    windGain = ctx.createGain(); windGain.gain.value = 0;
+    windSrc.connect(windFilt); windFilt.connect(windGain); windGain.connect(master); windSrc.start();
+  };
+  const arm = (): void => {
+    if (!ctx) build();
+    if (ctx?.state === 'suspended') void ctx.resume();
+  };
+  return {
+    arm,
+    get on(): boolean { return on; },
+    toggle(): boolean {
+      on = !on;
+      try { localStorage.setItem('drive.mute', on ? '0' : '1'); } catch { /* fine */ }
+      if (on) arm();
+      if (master && ctx) master.gain.setTargetAtTime(on ? 0.55 : 0, ctx.currentTime, 0.05);
+      return on;
+    },
+    // Called every frame; all parameters glide so nothing zippers.
+    update(speed: number, throttle: number, surf: Surface, grounded: number): void {
+      if (!ctx || !master || ctx.state !== 'running') return;
+      const t = ctx.currentTime, v = Math.abs(speed);
+      // Revs: rising within a gear, dropping as it "shifts" every ~14m/s.
+      const gear = Math.floor(v / 14);
+      const rev = (v - gear * 14) / 14;
+      const f = 42 + rev * 96 + gear * 10;
+      engA.frequency.setTargetAtTime(f, t, 0.07);
+      engB.frequency.setTargetAtTime(f * 1.5, t, 0.07);
+      engFilt.frequency.setTargetAtTime(500 + rev * 1500 + v * 22, t, 0.09);
+      engGain.gain.setTargetAtTime(0.1 + Math.abs(throttle) * 0.16 * grounded + Math.min(v / 60, 0.1), t, 0.09);
+      // Tarmac hisses high and thin; loose ground growls low and loud.
+      const road = surf === 'road';
+      roarFilt.frequency.setTargetAtTime(road ? 1150 : 320, t, 0.12);
+      roarGain.gain.setTargetAtTime(Math.min(v / 34, 1) * (road ? 0.1 : 0.3) * grounded, t, 0.1);
+      windGain.gain.setTargetAtTime(Math.min((v * v) / 2600, 0.9) * 0.13, t, 0.15);
+    },
+    // A short filtered burst — landings, kerb strikes, scrapes.
+    thud(force: number): void {
+      if (!ctx || !master || ctx.state !== 'running' || !on) return;
+      const t = ctx.currentTime;
+      const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+      const bp = ctx.createBiquadFilter(); bp.type = 'lowpass'; bp.frequency.value = 220 + force * 180;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(Math.min(0.5, force * 0.42), t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+      src.connect(bp); bp.connect(g); g.connect(master);
+      src.start(t); src.stop(t + 0.3);
+    },
+  };
+})();
+const sndBtn = document.createElement('button');
+sndBtn.textContent = audio.on ? '♪ on' : '♪ off';
+Object.assign(sndBtn.style, {
+  position: 'fixed', right: '12px', top: 'calc(max(10px, env(safe-area-inset-top)) + 40px)', zIndex: '11',
+  background: 'rgba(8,12,20,0.55)', color: '#f5c453', border: '1px solid rgba(245,196,83,0.4)',
+  borderRadius: '8px', padding: '0.35rem 0.7rem', font: 'inherit', fontSize: '0.74rem', cursor: 'pointer',
+} as Partial<CSSStyleDeclaration>);
+document.body.appendChild(sndBtn);
+sndBtn.addEventListener('click', () => { sndBtn.textContent = audio.toggle() ? '♪ on' : '♪ off'; });
+// Any first gesture arms the context (autoplay policy).
+canvas.addEventListener('pointerdown', () => audio.arm(), { once: false });
+addEventListener('keydown', () => audio.arm());
+
 // ── main loop ──────────────────────────────────────────────────────
 const speedEl = $('speed');
 let last = performance.now();
@@ -1575,9 +1774,11 @@ const writeUrl = (la: number, lo: number): void => {
 // which turns "follow the real roads" into the game. `lift` is how proud the
 // drawn drape sits of the sampled field (wheels touch the visible surface);
 // `rough` scales the spatial roughness field the tires ride over.
+// Equilibrium speed is accel/drag, so `drag` — not `max` — is the real
+// governor: off-road doubles to ~115km/h by halving drag (0.5 = 16/32).
 const SURFACE = {
   road: { max: 50, drag: 0.28, lift: 0.6, rough: 0.015 },
-  ground: { max: 16, drag: 1.15, lift: 0.25, rough: 0.16 }, // monster truck: off-road is its element
+  ground: { max: 32, drag: 0.5, lift: 0.25, rough: 0.16 }, // monster truck: off-road is its element
   water: { max: 3.5, drag: 3.5, lift: 0.3, rough: 0.05 },
 } as const;
 // Deterministic washboard: bumps live in the WORLD (wavelengths ~2–4m), so
@@ -1593,6 +1794,7 @@ let bodyY = 0, vBodyY = 0, pitchC = 0, vPitch = 0, rollC = 0, vRoll = 0;
 let wheelSpin = 0, groundedF = 1, bodyInit = false;
 let steerCur = 0; // smoothed — keyboard taps ramp instead of snapping
 let prevGround: number | null = null; // last frame's resolved ground (tunnel guard)
+let dustBudget = 0;                   // fractional particles carried between frames
 function tick(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
@@ -1648,11 +1850,15 @@ function tick(now: number): void {
   // ── suspension: the truck LIES on the terrain via 4 wheel contacts ──
   const sinH = Math.sin(state.heading), cosH = Math.cos(state.heading);
   const contacts: number[] = [];
+  const wheelWorld: Array<[number, number]> = [];
+  const wheelSurf: Surface[] = [];
   let rawSum = 0;
   for (const [wx, wz] of WHEELS) {
     const wxw = state.x + wx * cosH - wz * sinH;
     const wzw = state.z + wx * sinH + wz * cosH;
     const sk = surfaceAt(wxw, wzw);
+    wheelWorld.push([wxw, wzw]);
+    wheelSurf.push(sk);
     let g = sampleHeight(wxw, wzw);
     if (sk === 'road') {
       // Ride the ROAD's profile (tunnel chords included) — but only near the
@@ -1679,7 +1885,10 @@ function tick(now: number): void {
   let aY = SUSP.k * (tY - bodyY) - SUSP.d * vBodyY;
   if (aY < -9.81) aY = -9.81; // falling is gravity's job — crests launch
   vBodyY += aY * dt; bodyY += vBodyY * dt;
-  if (bodyY < tY - SUSP.travel) { bodyY = tY - SUSP.travel; if (vBodyY < 0) vBodyY *= -0.25; } // bump stop
+  if (bodyY < tY - SUSP.travel) {
+    bodyY = tY - SUSP.travel;
+    if (vBodyY < 0) { if (vBodyY < -2.5) audio.thud(Math.min(3, -vBodyY / 3)); vBodyY *= -0.25; } // bump stop
+  }
   vPitch += (SUSP.ka * (tPitch - pitchC) - SUSP.da * vPitch) * dt; pitchC += vPitch * dt;
   vRoll += (SUSP.ka * (tRoll - rollC) - SUSP.da * vRoll) * dt; rollC += vRoll * dt;
   // Articulation: wheels chase their own contact while the sprung body lags.
@@ -1697,6 +1906,20 @@ function tick(now: number): void {
   wheelSpin += (state.speed / WHEEL_R) * dt;
   car.position.set(state.x, bodyY, state.z);
   car.rotation.set(pitchC, -state.heading, rollC);
+  // Dust off the loose stuff — rate follows speed, thrown back along travel.
+  const v = Math.abs(state.speed);
+  if (v > 3 && groundedF > 0.2) {
+    dustBudget += v * dt * 1.1;
+    while (dustBudget >= 1) {
+      dustBudget -= 1;
+      const i = 2 + Math.floor(Math.random() * 2); // rear wheels
+      if (wheelSurf[i] === 'road') continue;
+      const [wxw, wzw] = wheelWorld[i];
+      emitDust(wxw, contacts[i], wzw, -sinH * v * 0.28, cosH * v * 0.28);
+    }
+  } else dustBudget = 0;
+  stepDust(dt);
+  audio.update(state.speed, throttle, surfKind, groundedF);
   reveal(state.x, state.z);
   if (now > streamAt) { streamAt = now + 1200; streamWorld(state.x, state.z); }
   // Two rigs. TOP: the chart view, tilted a touch for relief. CHASE: low and
