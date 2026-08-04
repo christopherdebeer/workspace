@@ -996,7 +996,7 @@ type VegKind = 'broadleaf' | 'conifer' | 'palm' | 'snag' | 'bush' | 'rock';
 interface VegSite { x: number; z: number; k: VegKind; s: number; rot: number; h: number; c: THREE.Color }
 const VEG_CELL = 220;                       // spatial bucket, metres
 const vegGrid = new Map<string, VegSite[]>();
-const VEG_RANGE = 900;                      // plants are shown within this
+const VEG_RANGE = 700;                      // plants are shown within this
 const vegKey = (x: number, z: number): string => `${Math.floor(x / VEG_CELL)},${Math.floor(z / VEG_CELL)}`;
 
 // Archetypes. Each is a squat, flat-shaded silhouette that survives the pixel
@@ -1036,7 +1036,7 @@ function rockGeo(): THREE.BufferGeometry {
   g.translate(0, 0.35, 0);
   return g;
 }
-const VEG_CAP: Record<VegKind, number> = { broadleaf: 900, conifer: 800, palm: 400, snag: 300, bush: 1300, rock: 500 };
+const VEG_CAP: Record<VegKind, number> = { broadleaf: 1600, conifer: 1400, palm: 600, snag: 450, bush: 2600, rock: 900 };
 const vegDummy = new THREE.Object3D();
 function vegMesh(geo: THREE.BufferGeometry, mat: THREE.Material, cap: number): THREE.InstancedMesh {
   const m = new THREE.InstancedMesh(geo, mat, cap);
@@ -1063,7 +1063,7 @@ const vegMeshes: Record<VegKind, THREE.InstancedMesh> = {
 };
 const trunkGeo2 = new THREE.CylinderGeometry(0.14, 0.2, 1, 5);
 trunkGeo2.translate(0, 0.5, 0);
-const trunks = vegMesh(trunkGeo2, woodMat, 2200);
+const trunks = vegMesh(trunkGeo2, woodMat, 3600);
 const TRUNKED: VegKind[] = ['broadleaf', 'conifer', 'palm'];
 
 // What grows where. Weights per biome, so a palm never appears in Tromsø and
@@ -1084,6 +1084,61 @@ function pickKind(r: () => number): VegKind {
   return mix[0][0];
 }
 
+// Plants grow in COMPANY. A clump is one dominant species with a scatter of
+// members packed toward its centre (sqrt-biased radius), plus the odd
+// interloper of another species — which is what stops a wood reading as a
+// grid of lone trees. Members land in whichever bucket they fall in, so a
+// clump straddling a cell boundary still works.
+const vegTint = new THREE.Color();
+function pushSite(x: number, z: number, kind: VegKind, r: () => number): void {
+  if (surfaceAt(x, z) !== 'ground') return;         // not on tarmac or water
+  for (const seg of wallGrid.get(gkey(x, z)) ?? []) {
+    const [cx2, cz2] = closestOnSeg(x, z, seg);
+    if (Math.hypot(x - cx2, z - cz2) < 5) return;   // nor inside a building
+  }
+  const big = kind === 'bush' || kind === 'rock';
+  vegTint.setHSL(
+    kind === 'rock' ? 0.09 + r() * 0.04 : biome.vegHue[0] + r() * biome.vegHue[1],
+    kind === 'rock' ? 0.05 + r() * 0.06 : 0.32 + r() * 0.25,
+    kind === 'rock' ? 0.22 + r() * 0.14 : biome.vegLit[0] + r() * biome.vegLit[1],
+  );
+  const site: VegSite = {
+    x, z, k: kind,
+    s: big ? 0.6 + r() * 0.9 : 1.4 + r() * 2.2,
+    rot: r() * Math.PI * 2,
+    h: TRUNKED.includes(kind) ? 1.1 + r() * 2.2 : 0,
+    c: vegTint.clone(),
+  };
+  const key = vegKey(x, z);
+  let cell = vegGrid.get(key);
+  if (!cell) vegGrid.set(key, (cell = []));
+  cell.push(site);
+}
+function plantClump(cx: number, cz: number, rad: number, count: number, dominant: VegKind, r: () => number): void {
+  for (let i = 0; i < count; i++) {
+    // sqrt-biased radius packs members toward the middle and thins the edge,
+    // so a clump has a core and a fringe rather than a hard disc.
+    const t = Math.pow(r(), 0.62) * rad;
+    const a = r() * Math.PI * 2;
+    // One member in six is a different species — mixed stands, not monoculture.
+    pushSite(cx + Math.cos(a) * t, cz + Math.sin(a) * t, r() < 0.83 ? dominant : pickKind(r), r);
+  }
+}
+// Where clumps WANT to be: a low-frequency field, so woodland gathers into
+// belts and thickets across cell boundaries instead of respecting the grid.
+function vegDensity(x: number, z: number): number {
+  const h = (px: number, pz: number): number => {
+    const n = Math.sin(px * 12.9898 + pz * 78.233) * 43758.5453;
+    return n - Math.floor(n);
+  };
+  const sx = x * 0.0011, sz = z * 0.0011;
+  const ix = Math.floor(sx), iz = Math.floor(sz);
+  const fx = sx - ix, fz = sz - iz;
+  const u = fx * fx * (3 - 2 * fx), v = fz * fz * (3 - 2 * fz);
+  return (h(ix, iz) * (1 - u) + h(ix + 1, iz) * u) * (1 - v)
+    + (h(ix, iz + 1) * (1 - u) + h(ix + 1, iz + 1) * u) * v;
+}
+
 // Deposit sites for a polygon — no GPU work, just numbers in a bucket.
 function scatterVeg(pts: Array<[number, number]>, seed: number, tags: Record<string, string>): void {
   let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
@@ -1095,34 +1150,20 @@ function scatterVeg(pts: Array<[number, number]>, seed: number, tags: Record<str
   if (w < 6 || d < 6 || w > 6000 || d > 6000) return;
   const wooded = tags.landuse === 'forest' || tags.natural === 'wood';
   const bare = tags.leisure === 'pitch' || tags.landuse === 'grass' || tags.landuse === 'meadow';
-  const per = wooded ? 90 : bare ? 900 : 300;   // m² per plant — denser than before
-  const n = Math.min(700, Math.floor((w * d) / per));
+  // Area per CLUMP, not per plant — a wood is a handful of thickets.
+  const per = wooded ? 900 : bare ? 9000 : 3000;
+  const n = Math.min(120, Math.floor((w * d) / per));
   if (n < 1) return;
   const r = mulberry32(seed >>> 0);
-  const tint = new THREE.Color();
   for (let k = 0, tries = 0; k < n && tries < n * 5; tries++) {
     const x = minx + r() * w, z = minz + r() * d;
     if (!pointInPoly(x, z, pts)) continue;
-    if (surfaceAt(x, z) === 'road') continue;   // never in the carriageway
     k++;
-    const kind: VegKind = wooded && r() < 0.75 ? (biome.name === 'boreal' || biome.name === 'alpine' ? 'conifer' : 'broadleaf') : pickKind(r);
-    const big = kind === 'bush' || kind === 'rock';
-    tint.setHSL(
-      kind === 'rock' ? 0.09 + r() * 0.04 : biome.vegHue[0] + r() * biome.vegHue[1],
-      kind === 'rock' ? 0.05 + r() * 0.06 : 0.32 + r() * 0.25,
-      kind === 'rock' ? 0.22 + r() * 0.14 : biome.vegLit[0] + r() * biome.vegLit[1],
-    );
-    const site: VegSite = {
-      x, z, k: kind,
-      s: big ? 0.6 + r() * 0.9 : 1.4 + r() * 2.2,
-      rot: r() * Math.PI * 2,
-      h: TRUNKED.includes(kind) ? 1.1 + r() * 2.2 : 0,
-      c: tint.clone(),
-    };
-    const key = vegKey(x, z);
-    let cell = vegGrid.get(key);
-    if (!cell) vegGrid.set(key, (cell = []));
-    cell.push(site);
+    const dominant: VegKind = wooded && r() < 0.8
+      ? (biome.name === 'boreal' || biome.name === 'alpine' ? 'conifer' : 'broadleaf')
+      : pickKind(r);
+    const rad = wooded ? 10 + r() * 20 : 5 + r() * 13;
+    plantClump(x, z, rad, Math.round((wooded ? 14 : 7) + r() * (wooded ? 22 : 12)), dominant, r);
   }
 }
 
@@ -1138,36 +1179,23 @@ function seedCell(gx: number, gz: number): void {
   if (vegSeeded.has(key)) return;
   vegSeeded.add(key);
   const r = mulberry32(((gx * 73856093) ^ (gz * 19349663)) >>> 0);
-  // Density by biome: boreal and tropical are crowded, arid is sparse scrub.
-  const per = biome.name === 'arid' ? 2600 : biome.name === 'tropical' ? 700 : biome.name === 'boreal' ? 900 : 1400;
-  const n = Math.floor((VEG_CELL * VEG_CELL) / per);
-  const tint = new THREE.Color();
-  const cell: VegSite[] = vegGrid.get(key) ?? [];
-  for (let i = 0; i < n; i++) {
+  if (!vegGrid.has(key)) vegGrid.set(key, []);
+  // How many thickets this cell wants: biome sets the ceiling, the density
+  // field decides whether this particular patch of ground is woodland or open.
+  const ceiling = biome.name === 'arid' ? 4 : biome.name === 'tropical' ? 14 : biome.name === 'boreal' ? 12 : 9;
+  const dens = vegDensity(gx * VEG_CELL + VEG_CELL / 2, gz * VEG_CELL + VEG_CELL / 2);
+  const clumps = Math.round(ceiling * (0.15 + dens * 1.25));
+  for (let i = 0; i < clumps; i++) {
     const x = gx * VEG_CELL + r() * VEG_CELL, z = gz * VEG_CELL + r() * VEG_CELL;
-    if (surfaceAt(x, z) !== 'ground') continue;      // not on tarmac or water
-    let blocked = false;                              // nor inside a building
-    for (const seg of wallGrid.get(gkey(x, z)) ?? []) {
-      const [cx2, cz2] = closestOnSeg(x, z, seg);
-      if (Math.hypot(x - cx2, z - cz2) < 6) { blocked = true; break; }
-    }
-    if (blocked) continue;
-    const kind = pickKind(r);
-    const big = kind === 'bush' || kind === 'rock';
-    tint.setHSL(
-      kind === 'rock' ? 0.09 + r() * 0.04 : biome.vegHue[0] + r() * biome.vegHue[1],
-      kind === 'rock' ? 0.05 + r() * 0.06 : 0.32 + r() * 0.25,
-      kind === 'rock' ? 0.22 + r() * 0.14 : biome.vegLit[0] + r() * biome.vegLit[1],
-    );
-    cell.push({
-      x, z, k: kind,
-      s: big ? 0.6 + r() * 0.9 : 1.4 + r() * 2.2,
-      rot: r() * Math.PI * 2,
-      h: TRUNKED.includes(kind) ? 1.1 + r() * 2.2 : 0,
-      c: tint.clone(),
-    });
+    const rad = 6 + r() * 16 * (0.4 + dens);
+    const count = Math.round((5 + r() * 14) * (0.5 + dens));
+    plantClump(x, z, rad, count, pickKind(r), r);
   }
-  vegGrid.set(key, cell);
+  // A few genuine loners — a lone snag or boulder still reads as deliberate.
+  const strays = Math.round(r() * 3);
+  for (let i = 0; i < strays; i++) {
+    pushSite(gx * VEG_CELL + r() * VEG_CELL, gz * VEG_CELL + r() * VEG_CELL, r() < 0.5 ? 'rock' : 'snag', r);
+  }
 }
 
 // Refill the instanced meshes from the sites nearest the truck. Called on a
@@ -1179,8 +1207,20 @@ function refreshVeg(): void {
   const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
   const reach = Math.ceil(VEG_RANGE / VEG_CELL);
   const r2 = VEG_RANGE * VEG_RANGE;
-  for (let gx = cx - reach; gx <= cx + reach; gx++) {
-    for (let gz = cz - reach; gz <= cz + reach; gz++) {
+  // NEAREST FIRST. Walk cells in rings outward from the truck, so when a pool
+  // fills it is the far plants that get dropped — visiting the grid in raster
+  // order let distant thickets eat the caps and leave the ground you are
+  // actually looking at bare.
+  const ring: Array<[number, number]> = [];
+  for (let d = 0; d <= reach; d++) {
+    for (let gx = cx - d; gx <= cx + d; gx++) {
+      for (let gz = cz - d; gz <= cz + d; gz++) {
+        if (Math.max(Math.abs(gx - cx), Math.abs(gz - cz)) === d) ring.push([gx, gz]);
+      }
+    }
+  }
+  for (const [gx, gz] of ring) {
+    {
       seedCell(gx, gz);
       const cell = vegGrid.get(`${gx},${gz}`);
       if (!cell) continue;
@@ -1198,7 +1238,7 @@ function refreshVeg(): void {
         mesh.setMatrixAt(i, vegDummy.matrix);
         mesh.setColorAt(i, v.c);
         counts[v.k] = i + 1;
-        if (v.h > 0 && trunkN < 2200) {
+        if (v.h > 0 && trunkN < 3600) {
           vegDummy.position.set(v.x, y, v.z);
           vegDummy.rotation.set(0, 0, 0);
           vegDummy.scale.set(v.s * 0.42, v.h + v.s * 0.3, v.s * 0.42);
