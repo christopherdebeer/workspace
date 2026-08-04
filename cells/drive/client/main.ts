@@ -2803,25 +2803,26 @@ function meter(x: number, y: number, n: number, lit: number, col: string, w = 3,
     hctx.fillRect(x + i * (w + gap), y, w, h);
   }
 }
-// Buttons live in HUD space; taps are hit-tested against these rects.
-interface Btn { x: number; y: number; w: number; h: number; label: () => string; hit: () => void; col: () => string }
-const buttons: Btn[] = [];
-function hudButton(b: Btn): void { buttons.push(b); }
-hudButton({
-  x: 0, y: 0, w: 0, h: 0, col: () => UI.gold, label: () => 'ELSEWHERE',
-  hit: () => { location.href = location.pathname + '?random=1'; },
-});
-hudButton({
-  x: 0, y: 0, w: 0, h: 0,
-  col: () => (audio.on && audio.state === 'running' ? UI.good : UI.soft),
-  label: () => (!audio.on ? 'SND OFF' : audio.state === 'running' ? 'SND ON' : 'SND TAP'),
-  hit: () => {
-    const blocked = audio.on && audio.state !== 'running';
-    audio.arm();
-    if (!blocked) audio.toggle();
+// One MENU holds the affordances, so the top of the screen belongs to the
+// compass. Items are hit-tested only while it is open.
+interface Item { label: () => string; hit: () => void; col: () => string }
+const menu: Item[] = [
+  { col: () => UI.gold, label: () => 'ELSEWHERE', hit: () => { location.href = location.pathname + '?random=1'; } },
+  {
+    col: () => (audio.on && audio.state === 'running' ? UI.good : UI.soft),
+    label: () => (!audio.on ? 'SOUND OFF' : audio.state === 'running' ? 'SOUND ON' : 'SOUND TAP'),
+    hit: () => {
+      const blocked = audio.on && audio.state !== 'running';
+      audio.arm();
+      if (!blocked) audio.toggle();
+    },
   },
-});
-hudButton({ x: 0, y: 0, w: 0, h: 0, col: () => UI.soft, label: () => 'HIDE', hit: () => setClean(true) });
+  { col: () => UI.edge, label: () => (alien ? 'SCRIPT ALIEN' : 'SCRIPT PLAIN'), hit: () => toggleAlien() },
+  { col: () => UI.soft, label: () => 'HIDE HUD', hit: () => { menuOpen = false; setClean(true); } },
+];
+let menuOpen = false;
+let menuRect = { x: 0, y: 0, w: 0, h: 0 };
+const itemRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
 const CARD8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 let placeLine = '';
 // POI pins, filled by updatePois and drawn in the pixel font.
@@ -2850,44 +2851,13 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
       textEdge(label, x + 3, y + 2, p.c);
     }
   }
-  // ── place ──
-  if (placeLine) {
-    const avail = HW - btnW - pad * 3;
-    const shown = fit(placeLine, avail - 8);
-    const w = Math.min(avail, textW(shown) + 8);
-    textEdge(shown, pad + 1, pad + 3, UI.text);
-    placeRect = { x: pad, y: pad, w, h: 12 }; // tap it to toggle «translation»
-  }
-  // ── weather ──
-  {
-    const w = WX[wx.sky];
-    const wet = wx.wet > 0.05;
-    const lab = wet && wx.rain < 0.1 ? `${w.label} WET` : w.label;
-    textEdge(lab, pad + 1, pad + 15, wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft);
-    if (streaming) textEdge('· STREAMING', pad + 3 + textW(lab), pad + 15, UI.dim);
-  }
-  if (wx.warn && performance.now() < wx.warn) {
-    const t2 = 'STORM APPROACHING';
-    const w2 = textW(t2) + 10;
-    const x2 = Math.round((HW - w2) / 2);
-    textEdge(t2, x2 + 5, Math.round(HH * 0.32) + 3, UI.bad);
-  }
-  // ── buttons, stacked top-right ──
-  let by = pad;
-  for (const b of buttons) {
-    b.w = textW(b.label()) + 8; b.h = 12; b.x = HW - b.w - pad; b.y = by;
-    panel(b.x, b.y, b.w, b.h, b.col());
-    text(hctx, b.label(), b.x + 4, b.y + 3, b.col());
-    by += b.h + 3;
-  }
-  // ── compass ribbon ──
-  const cw = Math.min(116, HW - btnW - pad * 6);
-  const cx0 = Math.max(pad, Math.round((HW - btnW - pad * 2 - cw) / 2)), cy0 = pad + 30;
+  // ── compass: the full width of the screen, centred ──
+  const cw = HW - pad * 2, cx0 = pad, cy0 = pad;
   hctx.fillStyle = UI.dim;                       // two hairline rails, no slab
   hctx.fillRect(cx0, cy0 + 8, cw, 1);
   hctx.fillRect(cx0, cy0 + 14, cw, 1);
   const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
-  const perDeg = cw / 140;
+  const perDeg = cw / 150;
   // Walk ABSOLUTE bearings (fixed multiples of 5 degrees) and place each at its
   // offset from the heading. Walking offsets from a moving heading meant a
   // tick was "major" only when round(heading + d) happened to land on 45 — so
@@ -2895,7 +2865,7 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   for (let b = 0; b < 360; b += 5) {
     let d = b - deg;
     if (d > 180) d -= 360; else if (d < -180) d += 360;
-    if (Math.abs(d) > 70) continue;
+    if (Math.abs(d) > 75) continue;
     const x = Math.round(cx0 + cw / 2 + d * perDeg);
     if (x < cx0 + 3 || x > cx0 + cw - 3) continue;
     const major = b % 45 === 0;
@@ -2903,12 +2873,52 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     hctx.fillRect(x, cy0 + (major ? 9 : 11), 1, major ? 4 : 2);
     if (major) {
       const lab = CARD8[(b / 45) % 8];
-      textEdge(lab, Math.round(x - textW(lab) / 2), cy0 + 2, UI.text);
+      textEdge(lab, Math.round(x - textW(lab) / 2), cy0 + 1, UI.text);
     }
   }
-  hctx.fillStyle = UI.gold;
-  hctx.fillRect(cx0 + cw / 2 - 1, cy0 + 1, 3, 1);
-  hctx.fillRect(cx0 + cw / 2, cy0 + 1, 1, 3);
+  hctx.fillStyle = UI.gold;                      // heading needle, dead centre
+  hctx.fillRect(Math.round(cx0 + cw / 2) - 2, cy0 + 16, 5, 1);
+  hctx.fillRect(Math.round(cx0 + cw / 2) - 1, cy0 + 17, 3, 1);
+  hctx.fillRect(Math.round(cx0 + cw / 2), cy0 + 18, 1, 1);
+  // ── place, and the menu button opposite it ──
+  const row = cy0 + 22;
+  const mLabel = menuOpen ? 'CLOSE' : 'MENU';
+  const menuW = textW(mLabel) + 8;
+  menuRect = { x: HW - menuW - pad, y: row, w: menuW, h: 12 };
+  panel(menuRect.x, menuRect.y, menuW, 12, menuOpen ? UI.gold : UI.edge);
+  text(hctx, mLabel, menuRect.x + 4, row + 3, menuOpen ? UI.gold : UI.edge);
+  if (placeLine) {
+    const shown = fit(placeLine, HW - menuW - pad * 4);
+    textEdge(shown, pad + 1, row + 3, UI.text);
+    placeRect = { x: pad, y: row, w: textW(shown) + 4, h: 10 }; // tap to toggle «translation»
+  }
+  // ── weather ──
+  {
+    const w = WX[wx.sky];
+    const wet = wx.wet > 0.05;
+    const lab = wet && wx.rain < 0.1 ? `${w.label} WET` : w.label;
+    textEdge(lab, pad + 1, row + 13, wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft);
+    if (streaming) textEdge('· STREAMING', pad + 3 + textW(lab), row + 13, UI.dim);
+  }
+  if (wx.warn && performance.now() < wx.warn) {
+    const t2 = 'STORM APPROACHING';
+    const w2 = textW(t2) + 10;
+    const x2 = Math.round((HW - w2) / 2);
+    textEdge(t2, x2 + 5, Math.round(HH * 0.32) + 3, UI.bad);
+  }
+  // ── the menu itself ──
+  itemRects.length = 0;
+  if (menuOpen) {
+    let iw = 0;
+    for (const it of menu) iw = Math.max(iw, textW(it.label()) + 10);
+    const ix = HW - iw - pad, iy = row + 14;
+    panel(ix, iy, iw, menu.length * 11 + 4, UI.gold);
+    for (let i = 0; i < menu.length; i++) {
+      const y = iy + 3 + i * 11;
+      text(hctx, menu[i].label(), ix + 5, y, menu[i].col());
+      itemRects.push({ x: ix, y: y - 2, w: iw, h: 11, i });
+    }
+  }
   // ── minimap, bottom-left ──
   const mw = Math.min(58, Math.floor(HW * 0.34));
   const mx = pad, my = HH - mw - pad - 20;
@@ -2944,13 +2954,16 @@ function setClean(on: boolean): void {
 function hudTap(cx: number, cy: number): boolean {
   if (document.body.classList.contains('clean')) return false;
   const x = cx / hudS, y = cy / hudS;
-  for (const b of buttons) {
-    if (x >= b.x - 2 && x <= b.x + b.w + 2 && y >= b.y - 2 && y <= b.y + b.h + 2) { b.hit(); return true; }
+  const inside = (r: { x: number; y: number; w: number; h: number }, m = 2): boolean =>
+    x >= r.x - m && x <= r.x + r.w + m && y >= r.y - m && y <= r.y + r.h + m;
+  if (inside(menuRect)) { menuOpen = !menuOpen; return true; }
+  if (menuOpen) {
+    for (const r of itemRects) if (inside(r, 0)) { menu[r.i].hit(); menuOpen = false; return true; }
+    menuOpen = false; // a tap anywhere else dismisses
+    return true;
   }
-  const d = dockRect;
-  if (x >= d.x && x <= d.x + d.w && y >= d.y && y <= d.y + d.h) { toggleCam(); return true; }
-  const p = placeRect;
-  if (x >= p.x && x <= p.x + p.w && y >= p.y && y <= p.y + p.h) { toggleAlien(); return true; }
+  if (inside(dockRect, 0)) { toggleCam(); return true; }
+  if (inside(placeRect)) { toggleAlien(); return true; }
   return false;
 }
 let placeRect = { x: 0, y: 0, w: 0, h: 0 };
