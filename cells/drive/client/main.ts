@@ -1231,9 +1231,9 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
     void main(){
       vLife = aLife;
       vec4 mv = modelViewMatrix * vec4(position, 1.0);
-      // Metre-scale puffs that billow as they age (the 260 constant made each
-      // particle a 300px blob — the truck vanished inside its own dust).
-      gl_PointSize = (3.2 + aSeed * 3.4) * (1.9 - aLife) * (95.0 / max(-mv.z, 1.0));
+      // Big, billowing puffs (two thirds of the first pass — full size buried
+      // the truck, metre-scale read as pinpricks).
+      gl_PointSize = (7.0 + aSeed * 9.0) * (2.1 - aLife) * (175.0 / max(-mv.z, 1.0));
       gl_Position = projectionMatrix * mv;
     }`,
   fragmentShader: `
@@ -1243,7 +1243,7 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
       float r = dot(d, d);
       if (r > 0.25) discard;                       // round puff
       float soft = smoothstep(0.25, 0.02, r);
-      gl_FragColor = vec4(uColor, soft * vLife * 0.14); // haze, not smoke screen
+      gl_FragColor = vec4(uColor, soft * vLife * 0.26); // thick plume, still see-through
     }`,
 }));
 dustPoints.frustumCulled = false;
@@ -1265,7 +1265,7 @@ function stepDust(dt: number): void {
   for (let i = 0; i < DUST_N; i++) {
     if (dustLife[i] <= 0) continue;
     any = true;
-    dustLife[i] = Math.max(0, dustLife[i] - dt * 1.05);
+    dustLife[i] = Math.max(0, dustLife[i] - dt * 0.9);
     const k = Math.exp(-1.8 * dt); // air drag settles the plume
     dustVel[i * 3] *= k;
     dustVel[i * 3 + 2] *= k;
@@ -1700,12 +1700,30 @@ const audio = (() => {
     windSrc.connect(windFilt); windFilt.connect(windGain); windGain.connect(master); windSrc.start();
   };
   const arm = (): void => {
+    // iOS mutes Web Audio with the RINGER SWITCH unless the page declares a
+    // playback session (16.4+). Without this the graph runs perfectly and you
+    // hear nothing — which is exactly how it failed on the phone.
+    try {
+      const ns = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
+      if (ns) ns.type = 'playback';
+    } catch { /* not supported — silent switch still applies */ }
     if (!ctx) build();
-    if (ctx?.state === 'suspended') void ctx.resume();
+    if (!ctx) return;
+    // Must be *inside* the gesture: resume, then push a 1-sample silent buffer
+    // through — Safari only truly unlocks once something has been played.
+    if (ctx.state !== 'running') void ctx.resume();
+    try {
+      const s = ctx.createBufferSource();
+      s.buffer = ctx.createBuffer(1, 1, ctx.sampleRate);
+      s.connect(ctx.destination);
+      s.start(0);
+    } catch { /* fine */ }
+    syncBtn();
   };
   return {
     arm,
     get on(): boolean { return on; },
+    get state(): string { return ctx ? ctx.state : 'none'; },
     toggle(): boolean {
       on = !on;
       try { localStorage.setItem('drive.mute', on ? '0' : '1'); } catch { /* fine */ }
@@ -1745,18 +1763,35 @@ const audio = (() => {
     },
   };
 })();
+// The button reports the TRUTH: '♪ tap' means the context exists but the
+// browser hasn't unlocked it yet, so a silent failure is never mistaken for
+// a working mix.
 const sndBtn = document.createElement('button');
-sndBtn.textContent = audio.on ? '♪ on' : '♪ off';
 Object.assign(sndBtn.style, {
   position: 'fixed', right: '12px', top: 'calc(max(10px, env(safe-area-inset-top)) + 40px)', zIndex: '11',
   background: 'rgba(8,12,20,0.55)', color: '#f5c453', border: '1px solid rgba(245,196,83,0.4)',
   borderRadius: '8px', padding: '0.35rem 0.7rem', font: 'inherit', fontSize: '0.74rem', cursor: 'pointer',
 } as Partial<CSSStyleDeclaration>);
 document.body.appendChild(sndBtn);
-sndBtn.addEventListener('click', () => { sndBtn.textContent = audio.toggle() ? '♪ on' : '♪ off'; });
-// Any first gesture arms the context (autoplay policy).
-canvas.addEventListener('pointerdown', () => audio.arm(), { once: false });
-addEventListener('keydown', () => audio.arm());
+function syncBtn(): void {
+  sndBtn.textContent = !audio.on ? '♪ off' : audio.state === 'running' ? '♪ on' : '♪ tap';
+}
+sndBtn.addEventListener('click', () => {
+  // Tapping a '♪ tap' button must UNLOCK, not mute — only toggle when the
+  // sound is already doing what the label claims.
+  const blocked = audio.on && audio.state !== 'running';
+  audio.arm();
+  if (!blocked) audio.toggle();
+  syncBtn();
+});
+// ANY first gesture arms the context. iOS grants user activation on
+// touchend/click far more reliably than on pointerdown, so listen broadly and
+// keep listening (a backgrounded tab suspends the context again).
+for (const ev of ['pointerdown', 'touchend', 'click', 'keydown']) {
+  addEventListener(ev, () => audio.arm(), { passive: true });
+}
+addEventListener('visibilitychange', () => { if (!document.hidden) audio.arm(); });
+syncBtn();
 
 // ── main loop ──────────────────────────────────────────────────────
 const speedEl = $('speed');
@@ -1909,7 +1944,7 @@ function tick(now: number): void {
   // Dust off the loose stuff — rate follows speed, thrown back along travel.
   const v = Math.abs(state.speed);
   if (v > 3 && groundedF > 0.2) {
-    dustBudget += v * dt * 1.1;
+    dustBudget += v * dt * 1.6;
     while (dustBudget >= 1) {
       dustBudget -= 1;
       const i = 2 + Math.floor(Math.random() * 2); // rear wheels
