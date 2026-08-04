@@ -123,9 +123,16 @@ async function placeName(lat: number, lon: number): Promise<string | null> {
 }
 
 // ── terrain: terrarium heightfields → displaced, slope-shaded mesh ─
-interface HeightTile { xs: number; zs: number; w: number; h: number; data: Float32Array }
+interface HeightTile { tx: number; ty: number; xs: number; zs: number; w: number; h: number; data: Float32Array }
 const heightTiles = new Map<string, HeightTile>();
 let baseElev = 0;
+// One texel on the GLOBAL z-level pixel grid; overflowing pixel coords walk
+// into the neighbouring tile. Returns null where no tile is loaded.
+function texel(tx: number, ty: number, px: number, pz: number): number | null {
+  const t = heightTiles.get(`${tx + Math.floor(px / 256)}/${ty + Math.floor(pz / 256)}`);
+  if (!t) return null;
+  return t.data[(((pz % 256) + 256) % 256) * 256 + (((px % 256) + 256) % 256)];
+}
 async function fetchHeights(x: number, y: number): Promise<Float32Array | null> {
   try {
     const res = await fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${TERRAIN_Z}/${x}/${y}.png`);
@@ -145,11 +152,17 @@ async function fetchHeights(x: number, y: number): Promise<Float32Array | null> 
 function sampleHeight(ex: number, ez: number): number {
   for (const t of heightTiles.values()) {
     if (ex < t.xs || ez < t.zs || ex >= t.xs + t.w || ez >= t.zs + t.h) continue;
-    const u = ((ex - t.xs) / t.w) * 255, v = ((ez - t.zs) / t.h) * 255;
+    // GLOBAL pixel grid: sample i is centred at xs + (i+0.5)·w/256 and the
+    // bilinear neighbourhood crosses into adjacent tiles. The old per-tile
+    // 0..255 stretch pinned two DIFFERENT global samples to the same border
+    // line (this tile's 255, the neighbour's 0) and clamped instead of
+    // crossing — a visible crack along every tile edge.
+    const u = ((ex - t.xs) / t.w) * 256 - 0.5, v = ((ez - t.zs) / t.h) * 256 - 0.5;
     const x0 = Math.floor(u), z0 = Math.floor(v), fx = u - x0, fz = v - z0;
-    const x1 = Math.min(255, x0 + 1), z1 = Math.min(255, z0 + 1);
-    const g = (xx: number, zz: number) => t.data[zz * 256 + xx];
-    return (g(x0, z0) * (1 - fx) + g(x1, z0) * fx) * (1 - fz) + (g(x0, z1) * (1 - fx) + g(x1, z1) * fx) * fz - baseElev;
+    const base = texel(t.tx, t.ty, clamp(x0, 0, 255), clamp(z0, 0, 255)) ?? 0;
+    const g = (px: number, pz: number): number => texel(t.tx, t.ty, px, pz) ?? base;
+    return (g(x0, z0) * (1 - fx) + g(x0 + 1, z0) * fx) * (1 - fz)
+      + (g(x0, z0 + 1) * (1 - fx) + g(x0 + 1, z0 + 1) * fx) * fz - baseElev;
   }
   return 0;
 }
@@ -365,7 +378,10 @@ const ghostU = {
   uGhostCar: { value: new THREE.Vector3() },
   uGhostCam: { value: new THREE.Vector3() },
 };
-function ghostify(mat: THREE.Material): void {
+// (Pattern per SimonDev's "customizing materials": extend the built-ins by
+// splicing GLSL into their chunk includes rather than rewriting materials —
+// the same hook carries the ghost corridor and the terrain's detail mottle.)
+function ghostify(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uGhostCar = ghostU.uGhostCar;
     sh.uniforms.uGhostCam = ghostU.uGhostCam;
@@ -387,13 +403,57 @@ function ghostify(mat: THREE.Material): void {
               && mod(floor(gl_FragCoord.x) + floor(gl_FragCoord.y), 2.0) < 1.0) discard;
         }
       }`);
+    if (opts.detail) {
+      // World-space mottle (~30–80m blobs) breaks the flat-shaded banding of
+      // the vertex-colored terrain without any texture upload.
+      sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
+      {
+        vec2 gp = vGhostW.xz;
+        float gn = sin(gp.x * 0.131 + sin(gp.y * 0.093) * 2.0) * sin(gp.y * 0.117 + sin(gp.x * 0.071) * 2.0);
+        diffuseColor.rgb *= 0.955 + 0.045 * gn;
+      }`);
+    }
   };
 }
 const terrainMat = new THREE.MeshLambertMaterial({ vertexColors: true });
-ghostify(terrainMat);
+ghostify(terrainMat, { detail: true });
 
 // ── terrain meshes ─────────────────────────────────────────────────
 const terrainLoaded = new Set<string>();
+const terrainMeshes = new Map<string, THREE.Mesh>();
+function buildTerrainMesh(t: HeightTile): void {
+  const key = `${t.tx}/${t.ty}`;
+  const SEG = 96;
+  const geo = new THREE.PlaneGeometry(t.w, t.h, SEG, SEG);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const colors = new Float32Array(pos.count * 3);
+  const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
+  const cell = t.w / SEG;
+  for (let i = 0; i < pos.count; i++) {
+    const ex = pos.getX(i) + cxm, ez = pos.getZ(i) + czm;
+    // The SAME bilinear field the roads/buildings/car sample (sampleHeight) —
+    // a nearest-pixel mesh disagreed with it by metres and swallowed every
+    // draped layer under the terrain skin.
+    const elev = sampleHeight(ex, ez);
+    const elevAbs = elev + baseElev;
+    pos.setY(i, elev);
+    const u = clamp(Math.round(((ex - t.xs) / t.w) * 255), 0, 255);
+    const v = clamp(Math.round(((ez - t.zs) / t.h) * 255), 0, 255);
+    const du = t.data[v * 256 + Math.min(255, u + 1)] - t.data[v * 256 + u];
+    const dv = t.data[Math.min(255, v + 1) * 256 + u] - t.data[v * 256 + u];
+    const [r, g, bb] = terrainPalette(elevAbs, Math.hypot(du, dv) / Math.max(cell, 1));
+    colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  const old = terrainMeshes.get(key);
+  if (old) { worldGroup.remove(old); old.geometry.dispose(); }
+  const mesh = new THREE.Mesh(geo, terrainMat);
+  mesh.position.set(cxm, 0, czm);
+  terrainMeshes.set(key, mesh);
+  worldGroup.add(mesh);
+}
 async function loadTerrainTile(x: number, y: number): Promise<void> {
   const key = `${x}/${y}`;
   if (terrainLoaded.has(key)) return;
@@ -403,34 +463,17 @@ async function loadTerrainTile(x: number, y: number): Promise<void> {
   const b = tileBounds(x, y, TERRAIN_Z);
   const [wx0, wz0] = toLocal(b.latN, b.lonW);
   const [wx1, wz1] = toLocal(b.latS, b.lonE);
-  heightTiles.set(key, { xs: Math.min(wx0, wx1), zs: Math.min(wz0, wz1), w: Math.abs(wx1 - wx0), h: Math.abs(wz1 - wz0), data });
-  const SEG = 96;
-  const geo = new THREE.PlaneGeometry(Math.abs(wx1 - wx0), Math.abs(wz1 - wz0), SEG, SEG);
-  geo.rotateX(-Math.PI / 2);
-  const pos = geo.attributes.position as THREE.BufferAttribute;
-  const colors = new Float32Array(pos.count * 3);
-  const cxm = (wx0 + wx1) / 2, czm = (wz0 + wz1) / 2;
-  const cell = Math.abs(wx1 - wx0) / SEG;
-  for (let i = 0; i < pos.count; i++) {
-    const ex = pos.getX(i) + cxm, ez = pos.getZ(i) + czm;
-    // The SAME bilinear field the roads/buildings/car sample (sampleHeight) —
-    // a nearest-pixel mesh disagreed with it by metres and swallowed every
-    // draped layer under the terrain skin.
-    const elev = sampleHeight(ex, ez);
-    const elevAbs = elev + baseElev;
-    pos.setY(i, elev);
-    const u = clamp(Math.round(((ex - Math.min(wx0, wx1)) / Math.abs(wx1 - wx0)) * 255), 0, 255);
-    const v = clamp(Math.round(((ez - Math.min(wz0, wz1)) / Math.abs(wz1 - wz0)) * 255), 0, 255);
-    const du = data[v * 256 + Math.min(255, u + 1)] - data[v * 256 + u];
-    const dv = data[Math.min(255, v + 1) * 256 + u] - data[v * 256 + u];
-    const [r, g, bb] = terrainPalette(elevAbs, Math.hypot(du, dv) / Math.max(cell, 1));
-    colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
+  const tile: HeightTile = { tx: x, ty: y, xs: Math.min(wx0, wx1), zs: Math.min(wz0, wz1), w: Math.abs(wx1 - wx0), h: Math.abs(wz1 - wz0), data };
+  heightTiles.set(key, tile);
+  buildTerrainMesh(tile);
+  // A tile built before its neighbour arrived clamped its border strip.
+  // Rebuild the loaded neighbours so both sides of every edge sample the
+  // same cross-tile field — this is what stitches the seams shut.
+  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+    if (!dx && !dy) continue;
+    const nt = heightTiles.get(`${x + dx}/${y + dy}`);
+    if (nt && terrainMeshes.has(`${x + dx}/${y + dy}`)) buildTerrainMesh(nt);
   }
-  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
-  geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, terrainMat);
-  mesh.position.set(cxm, 0, czm);
-  worldGroup.add(mesh);
 }
 
 // ── OSM vectors ────────────────────────────────────────────────────
@@ -786,7 +829,7 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
 // IndexedDB gets an origin quota in the hundreds of MB.
 interface OsmWay { id: number; tags?: Record<string, string>; geometry: Array<{ lat: number; lon: number }> }
 // Only the tags renderWays actually reads — the rest is dead weight per way.
-const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'layer'];
+const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'layer', 'name'];
 let osmDb: IDBDatabase | null = null;
 const osmDbReady: Promise<void> = new Promise((resolve) => {
   try {
@@ -798,7 +841,7 @@ const osmDbReady: Promise<void> = new Promise((resolve) => {
 });
 // Free the shared origin quota from the failed localStorage era.
 try { for (const k of Object.keys(localStorage)) if (k.startsWith('drive.osm.')) localStorage.removeItem(k); } catch { /* fine */ }
-const osmCacheKey = (x: number, y: number): string => `2/${OSM_Z}/${x}/${y}`; // v2: keeps tunnel/bridge tags
+const osmCacheKey = (x: number, y: number): string => `3/${OSM_Z}/${x}/${y}`; // v3: keeps tunnel/bridge/name tags
 async function readTileCache(x: number, y: number): Promise<OsmWay[] | null> {
   await osmDbReady;
   if (!osmDb) return null;
@@ -842,12 +885,30 @@ function pruneTileCache(): void {
   } catch { /* cache is best-effort */ }
 }
 
+// ── points of interest (named features become HUD waypoints) ───────
+interface Poi { name: string; x: number; z: number; kind: 'park' | 'water' | 'place' }
+const pois = new Map<string, Poi>();
+function notePoi(tags: Record<string, string>, pts: Array<[number, number]>): void {
+  const name = tags.name;
+  if (!name || pois.has(name) || pois.size >= 400) return;
+  const kind: Poi['kind'] | null =
+    tags.natural === 'water' || tags.waterway ? 'water'
+    : tags.building ? 'place'
+    : tags.leisure || tags.landuse ? 'park'
+    : null; // named streets are not destinations
+  if (!kind) return;
+  let cx = 0, cz = 0;
+  for (const [x, z] of pts) { cx += x; cz += z; }
+  pois.set(name, { name, x: cx / pts.length, z: cz / pts.length, kind });
+}
+
 function renderWays(els: OsmWay[]): void {
   for (const el of els) {
     if (!el.geometry || seenWays.has(el.id)) continue;
     seenWays.add(el.id);
     const pts: Array<[number, number]> = el.geometry.map((g) => toLocal(g.lat, g.lon));
     const tags = el.tags ?? {};
+    notePoi(tags, pts);
     if (tags.highway) {
       const w = ROAD_W[tags.highway] ?? 5;
       // Foot infrastructure renders but doesn't grip like tarmac.
@@ -1135,11 +1196,75 @@ function toggleCam(): void {
 camBtn.addEventListener('click', toggleCam);
 addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'c') toggleCam(); });
 
+// ── POI HUD: bearing labels to nearby named places ─────────────────
+// Named parks/waters/buildings from the OSM stream become waypoints. On
+// screen they sit at their world position (far ones pinned to the horizon
+// along their bearing, not to a ground point buried in haze); off screen
+// they clamp to the side edge with an arrow.
+const poiWrap = document.createElement('div');
+Object.assign(poiWrap.style, { position: 'fixed', inset: '0', zIndex: '9', pointerEvents: 'none', overflow: 'hidden' } as Partial<CSSStyleDeclaration>);
+document.body.appendChild(poiWrap);
+const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a' };
+const poiEls = Array.from({ length: 5 }, () => {
+  const el = document.createElement('div');
+  Object.assign(el.style, {
+    position: 'absolute', display: 'none', font: '0.6rem ui-monospace, monospace', color: '#efe9dc',
+    whiteSpace: 'nowrap', background: 'rgba(8,12,20,0.5)', padding: '2px 7px', borderRadius: '7px',
+    textShadow: '0 1px 3px rgba(0,0,0,0.9)', maxWidth: '46vw', overflow: 'hidden', textOverflow: 'ellipsis',
+  } as Partial<CSSStyleDeclaration>);
+  poiWrap.appendChild(el);
+  return el;
+});
+const poiVec = new THREE.Vector3(), poiView = new THREE.Vector3(), camFwd = new THREE.Vector3();
+const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}m` : `${(m / 1000).toFixed(1)}km`);
+function updatePois(): void {
+  const near = [...pois.values()]
+    .map((p) => ({ p, d: Math.hypot(p.x - state.x, p.z - state.z) }))
+    .filter((e) => e.d > 25 && e.d < 3000)
+    .sort((a, b) => a.d - b.d)
+    .slice(0, poiEls.length);
+  camera.getWorldDirection(camFwd);
+  for (let i = 0; i < poiEls.length; i++) {
+    const el = poiEls[i], e = near[i];
+    if (!e) { el.style.display = 'none'; continue; }
+    const { p, d } = e;
+    const dx = p.x - state.x, dz = p.z - state.z;
+    const dc = Math.min(d, 900); // beyond ~900m: pin to the horizon on its bearing
+    const wx = state.x + (dx / d) * dc, wz = state.z + (dz / d) * dc;
+    poiVec.set(wx, sampleHeight(wx, wz) + 8 + dc * 0.012, wz);
+    poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
+    el.style.borderLeft = `2px solid ${POI_COLORS[p.kind]}`;
+    el.style.display = 'block';
+    if (poiView.z < -1) {
+      poiVec.project(camera);
+      if (Math.abs(poiVec.x) <= 0.94) {
+        el.textContent = `${p.name} · ${fmtDist(d)}`;
+        el.style.transform = 'translate(-50%, -100%)';
+        el.style.right = 'auto';
+        el.style.left = `${(poiVec.x * 0.5 + 0.5) * innerWidth}px`;
+        el.style.top = `${clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.14, innerHeight * 0.8)}px`;
+        continue;
+      }
+    }
+    // Off-screen: side chip with an arrow, stacked by proximity rank.
+    el.style.transform = 'none';
+    el.style.top = `${innerHeight * (0.28 + i * 0.055)}px`;
+    if (camFwd.x * dz - camFwd.z * dx > 0) {
+      el.style.left = 'auto'; el.style.right = '8px';
+      el.textContent = `${p.name} · ${fmtDist(d)} ▶`;
+    } else {
+      el.style.right = 'auto'; el.style.left = '8px';
+      el.textContent = `◀ ${p.name} · ${fmtDist(d)}`;
+    }
+  }
+}
+
 // ── main loop ──────────────────────────────────────────────────────
 const speedEl = $('speed');
 let last = performance.now();
 let streamAt = 0;
 let miniAt = 0;
+let poiAt = 0;
 // Surface grip: tarmac is fast, everything else asks you to slow down —
 // which turns "follow the real roads" into the game. `ride` is the car's
 // height over the sampled field (roads are draped 1.6m proud of it).
@@ -1247,6 +1372,7 @@ function tick(now: number): void {
   compMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
   speedEl.innerHTML = `${Math.round(Math.abs(state.speed) * 3.6)}<small> km/h</small>`;
   if (now > miniAt) { miniAt = now + 250; drawMinimap(); }
+  if (now > poiAt) { poiAt = now + 150; updatePois(); }
   // scene → target, two separable blur rounds at half res, composite to canvas
   renderer.setRenderTarget(rtScene);
   renderer.render(scene, camera);
