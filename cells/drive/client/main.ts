@@ -1190,6 +1190,60 @@ const wheelMeshes: THREE.Mesh[] = [];
     wheelMeshes.push(wheel);
   }
 }
+// ── lamps and beams ────────────────────────────────────────────────
+// Front is -z. Lamps are emissive quads (they read at any distance); the
+// BEAMS are additive cones that fade along their length, and one real
+// spotlight throws an actual pool of light down the road. All parented to the
+// car, so the beams sweep with pitch and roll over every crest.
+const headMat = new THREE.MeshBasicMaterial({ color: 0xfff1cf });
+const tailMat = new THREE.MeshBasicMaterial({ color: 0x8e1a12 });
+const BEAM_LEN = 26, BEAM_R = 4.0;
+const beamGeo = new THREE.ConeGeometry(BEAM_R, BEAM_LEN, 18, 1, true);
+beamGeo.translate(0, -BEAM_LEN / 2, 0); // apex to the origin (the lamp)
+beamGeo.rotateX(Math.PI / 2);           // and open it along -z, straight ahead
+const beamMat = new THREE.ShaderMaterial({
+  transparent: true,
+  depthWrite: false,
+  blending: THREE.AdditiveBlending,
+  side: THREE.DoubleSide,
+  uniforms: { uLen: { value: BEAM_LEN }, uRad: { value: BEAM_R }, uAmp: { value: 1 } },
+  vertexShader: `
+    uniform float uLen; uniform float uRad;
+    varying float vD; varying float vR;
+    void main(){
+      vD = clamp(-position.z / uLen, 0.0, 1.0);
+      vR = length(position.xy) / max(vD * uRad, 0.001); // 0 on axis, 1 at the rim
+      gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+    }`,
+  fragmentShader: `
+    uniform float uAmp; varying float vD; varying float vR;
+    void main(){
+      float a = pow(1.0 - vD, 1.7) * (1.0 - vR * vR) * 0.17 * uAmp;
+      gl_FragColor = vec4(vec3(1.0, 0.94, 0.78) * a, a);
+    }`,
+});
+const beams: THREE.Mesh[] = [];
+for (const sx of [-0.62, 0.62]) {
+  const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.24, 0.1), headMat);
+  lamp.position.set(sx, 1.02, -2.02);
+  const beam = new THREE.Mesh(beamGeo, beamMat);
+  beam.position.set(sx, 1.02, -2.05);
+  // Aimed properly DOWN at the tarmac: a shallow beam ran level to the
+  // horizon and read as two searchlights pointing at the sky over the roof.
+  beam.rotation.x = -0.11;
+  beam.renderOrder = 20;
+  beams.push(beam);
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.2, 0.1), tailMat);
+  tail.position.set(sx, 1.02, 2.02);
+  car.add(lamp, beam, tail);
+}
+// One spotlight for the actual pool of light (two would double the cost of
+// every lit material for a difference nobody can see). Intensity is in
+// CANDELA since three r155 — the old "3.2" was a rounding error, not a lamp.
+const headSpot = new THREE.SpotLight(0xfff0d0, 300, 110, 0.52, 0.65, 1.0);
+headSpot.position.set(0, 1.1, -2.0);
+headSpot.target.position.set(0, -1.6, -30);
+car.add(headSpot, headSpot.target);
 // REAL SIZE (owner: the 3.2x cartographic car straddled whole roads and made
 // every speed read as a crawl). In the top chart view the car is small — the
 // halo is the position marker; in chase it reads true against lane widths.
@@ -1984,6 +2038,11 @@ function tick(now: number): void {
   wheelSpin += (state.speed / WHEEL_R) * dt;
   car.position.set(state.x, bodyY, state.z);
   car.rotation.set(pitchC, -state.heading, rollC);
+  // Brake lights flare; reversing washes them pale. Beams brighten with the
+  // dust they have to cut through, and dim in the chart view where a pair of
+  // 34m cones would just be glare on the map.
+  tailMat.color.setHex(brake ? 0xff3a24 : state.speed < -0.5 ? 0xe8ded0 : 0x8e1a12);
+  beamMat.uniforms.uAmp.value = camMode === 'chase' ? 1 : 0.25;
   // Dust off the loose stuff — rate follows speed, thrown back along travel.
   const v = Math.abs(state.speed);
   if (v > 3 && groundedF > 0.2) {
