@@ -271,11 +271,29 @@ const skyMat = new THREE.ShaderMaterial({
     uHorizon: { value: new THREE.Vector3() },
     uSunDisc: { value: new THREE.Vector3() },
     uBelow: { value: new THREE.Vector3() },
+    uCloud: { value: 0 }, uTime: { value: 0 },
   },
   vertexShader: 'varying vec3 vDir; void main(){ vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
   fragmentShader: `
     uniform vec3 sunDir; uniform vec3 uZenith; uniform vec3 uHorizon;
-    uniform vec3 uSunDisc; uniform vec3 uBelow; varying vec3 vDir;
+    uniform vec3 uSunDisc; uniform vec3 uBelow; uniform float uCloud; uniform float uTime;
+    varying vec3 vDir;
+    // Value-noise fBm. Clouds are GENERATED, not photographed: a skybox set
+    // would be fixed images that could never answer to the weather system,
+    // where this deck thickens, darkens and drifts with it — and inherits the
+    // biome palette for free.
+    float h21(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
+    float vnoise(vec2 p){
+      vec2 i = floor(p), f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), f.x),
+                 mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), f.x), f.y);
+    }
+    float fbm(vec2 p){
+      float a = 0.5, s = 0.0;
+      for (int i = 0; i < 5; i++) { s += a * vnoise(p); p *= 2.07; a *= 0.5; }
+      return s;
+    }
     void main(){
       vec3 d = normalize(vDir);
       float az = pow(max(dot(normalize(vec3(d.x, 0.0, d.z)), normalize(vec3(sunDir.x, 0.0, sunDir.z))), 0.0), 3.0);
@@ -286,6 +304,25 @@ const skyMat = new THREE.ShaderMaterial({
       // halo, not the 1° pinprick physical accuracy would give you.
       col += uSunDisc * smoothstep(0.9915, 0.9945, sd) * 1.5;
       col += uSunDisc * (pow(sd, 60.0) * 0.5 + pow(sd, 8.0) * 0.22);
+      // ── cloud deck ──
+      if (d.y > 0.015 && uCloud > 0.01) {
+        // Project onto a flat deck: no parallax (the dome rides the camera),
+        // which is right for cloud at altitude, and it stretches toward the
+        // horizon exactly as a real deck does.
+        vec2 p = d.xz / max(d.y, 0.05) * 1.4 + vec2(uTime * 0.006, uTime * 0.0022);
+        float n = fbm(p);
+        // Coverage opens up as the front arrives; a storm nearly fills the sky.
+        float cov = smoothstep(0.62 - uCloud * 0.42, 0.92 - uCloud * 0.30, n);
+        // Fake lighting: sample again a step toward the sun — where the deck
+        // thins in that direction the edge is lit, where it thickens it is base.
+        float lit = clamp((n - fbm(p + normalize(sunDir.xz + vec2(0.001)) * 0.35)) * 3.2 + 0.5, 0.0, 1.0);
+        vec3 base = mix(uZenith * 1.6, uSunDisc * 0.5, 0.35) * (1.0 - uCloud * 0.55);
+        vec3 top = mix(vec3(0.86, 0.88, 0.92), uSunDisc, 0.35 + az * 0.4);
+        vec3 cloud = mix(base, top, lit) * (1.0 - uCloud * 0.35);
+        // Fade the deck out at the horizon so it never cuts a hard line.
+        cov *= smoothstep(0.015, 0.16, d.y);
+        col = mix(col, cloud, clamp(cov, 0.0, 1.0) * 0.95);
+      }
       col = mix(uBelow, col, smoothstep(-0.06, 0.02, d.y));
       gl_FragColor = vec4(col, 1.0);
     }`,
@@ -466,7 +503,10 @@ const compMat = new THREE.ShaderMaterial({
         // ground at your own wheels whether or not you have "explored" it; a
         // ramp that began at zero metres put 55% milk over the near field the
         // moment the haze turned daylight-bright.
-        float near = 1.0 - exp(-max(t - 130.0, 0.0) / 300.0);
+        // A LONG, soft falloff. A 300m ramp meant the world ended just past
+        // the next junction; over ~900m the fog reads as distance rather than
+        // as a wall, and a ridge two kilometres out is still a suggestion.
+        float near = 1.0 - exp(-max(t - 260.0, 0.0) / 900.0);
         // Aerial perspective scales with how much AIR the ray crosses — a
         // survey view straight down stays legible at any zoom, the horizon
         // keeps its haze. (Fog-of-war hiding is m-driven and unaffected.)
@@ -1659,6 +1699,8 @@ function stepWeather(now: number, dt: number): void {
   sun.intensity = biome.sunI * (1 - wx.cloud * 0.72);
   hemi.intensity = biome.hemiI * (1 + wx.cloud * 0.35);
   compMat.uniforms.uBloom.value = 0.75 - wx.cloud * 0.35;
+  skyMat.uniforms.uCloud.value = wx.cloud;
+  skyMat.uniforms.uTime.value = now / 1000;
   // Overcast desaturates the haze toward slate and thickens it.
   const g = (c: Rgb): THREE.Vector3 => {
     const l = (c[0] + c[1] + c[2]) / 3;
@@ -2822,6 +2864,7 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     const wet = wx.wet > 0.05;
     const lab = wet && wx.rain < 0.1 ? `${w.label} WET` : w.label;
     textEdge(lab, pad + 1, pad + 15, wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft);
+    if (streaming) textEdge('· STREAMING', pad + 3 + textW(lab), pad + 15, UI.dim);
   }
   if (wx.warn && performance.now() < wx.warn) {
     const t2 = 'STORM APPROACHING';
@@ -2866,7 +2909,6 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   hctx.fillStyle = UI.gold;
   hctx.fillRect(cx0 + cw / 2 - 1, cy0 + 1, 3, 1);
   hctx.fillRect(cx0 + cw / 2, cy0 + 1, 1, 3);
-  if (streaming) textEdge('STREAMING', pad + 1, pad + 26, UI.soft);
   // ── minimap, bottom-left ──
   const mw = Math.min(58, Math.floor(HW * 0.34));
   const mx = pad, my = HH - mw - pad - 20;
