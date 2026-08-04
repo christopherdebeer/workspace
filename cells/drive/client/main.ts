@@ -989,21 +989,42 @@ function streamWorld(ex: number, ez: number): void {
     for (let dy = -OSM_RING; dy <= OSM_RING; dy++) void loadOsmTile(ox + dx, oy + dy);
 }
 
-// ── the car ────────────────────────────────────────────────────────
+// ── the car: monster-truck stance with per-wheel suspension ────────
+// The group's origin is the AXLE PLANE (wheel centres at rest). The body
+// rides high above it; each wheel hangs in a steering pivot whose local y is
+// its suspension deflection, so wheels track the terrain while the sprung
+// body lags on its springs.
+const WHEEL_R = 0.85, WHEEL_W = 0.62, TRACK = 1.18, AXLE = 1.52;
+// Local wheel anchors [x, z] — FL, FR, RL, RR (forward is -z).
+const WHEELS: Array<[number, number]> = [[-TRACK, -AXLE], [TRACK, -AXLE], [-TRACK, AXLE], [TRACK, AXLE]];
 const car = new THREE.Group();
+car.rotation.order = 'YXZ'; // yaw first, then pitch/roll about the CAR's axes
+const wheelPivots: THREE.Group[] = [];
+const wheelMeshes: THREE.Mesh[] = [];
 {
-  const body = new THREE.Mesh(new THREE.BoxGeometry(1.85, 0.85, 4.2), new THREE.MeshLambertMaterial({ color: 0xd8442e }));
-  body.position.y = 0.72;
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.55, 0.65, 1.9), new THREE.MeshLambertMaterial({ color: 0x20242c }));
-  cabin.position.set(0, 1.32, -0.2);
-  const wheelGeo = new THREE.BoxGeometry(0.38, 0.58, 0.85);
-  const wheelMat = new THREE.MeshLambertMaterial({ color: 0x11141a });
-  for (const [wx, wz] of [[-0.95, 1.4], [0.95, 1.4], [-0.95, -1.4], [0.95, -1.4]]) {
-    const wheel = new THREE.Mesh(wheelGeo, wheelMat);
-    wheel.position.set(wx, 0.35, wz);
-    car.add(wheel);
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.8, 4.0), new THREE.MeshLambertMaterial({ color: 0xd8442e }));
+  body.position.y = 0.88;
+  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.6, 1.8), new THREE.MeshLambertMaterial({ color: 0x20242c }));
+  cabin.position.set(0, 1.5, -0.15);
+  const chassis = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.24, 3.3), new THREE.MeshLambertMaterial({ color: 0x2a2118 }));
+  chassis.position.y = 0.4; // exposed frame under the raised body
+  car.add(body, cabin, chassis);
+  const tireMat = new THREE.MeshLambertMaterial({ color: 0x14171c, flatShading: true });
+  const hubMat = new THREE.MeshLambertMaterial({ color: 0x8f8574, flatShading: true });
+  for (const [wx, wz] of WHEELS) {
+    const pivot = new THREE.Group();
+    pivot.position.set(wx, 0, wz);
+    const tireGeo = new THREE.CylinderGeometry(WHEEL_R, WHEEL_R, WHEEL_W, 12);
+    tireGeo.rotateZ(Math.PI / 2);
+    const wheel = new THREE.Mesh(tireGeo, tireMat);
+    const hubGeo = new THREE.CylinderGeometry(WHEEL_R * 0.42, WHEEL_R * 0.42, WHEEL_W + 0.08, 8);
+    hubGeo.rotateZ(Math.PI / 2);
+    wheel.add(new THREE.Mesh(hubGeo, hubMat));
+    pivot.add(wheel);
+    car.add(pivot);
+    wheelPivots.push(pivot);
+    wheelMeshes.push(wheel);
   }
-  car.add(body, cabin);
 }
 // REAL SIZE (owner: the 3.2x cartographic car straddled whole roads and made
 // every speed read as a crawl). In the top chart view the car is small — the
@@ -1266,15 +1287,26 @@ let streamAt = 0;
 let miniAt = 0;
 let poiAt = 0;
 // Surface grip: tarmac is fast, everything else asks you to slow down —
-// which turns "follow the real roads" into the game. `ride` is the car's
-// height over the sampled field (roads are draped 1.6m proud of it).
+// which turns "follow the real roads" into the game. `lift` is how proud the
+// drawn drape sits of the sampled field (wheels touch the visible surface);
+// `rough` scales the spatial roughness field the tires ride over.
 const SURFACE = {
-  road: { max: 50, drag: 0.28, ride: 0.65 },
-  ground: { max: 12, drag: 1.6, ride: 0.45 },
-  water: { max: 3.5, drag: 3.5, ride: 0.2 },
+  road: { max: 50, drag: 0.28, lift: 0.6, rough: 0.015 },
+  ground: { max: 16, drag: 1.15, lift: 0.25, rough: 0.16 }, // monster truck: off-road is its element
+  water: { max: 3.5, drag: 3.5, lift: 0.3, rough: 0.05 },
 } as const;
+// Deterministic washboard: bumps live in the WORLD (wavelengths ~2–4m), so
+// shake frequency scales with speed and each wheel rides its own profile.
+function roughNoise(x: number, z: number): number {
+  return Math.sin(x * 1.7 + Math.sin(z * 0.9) * 2.0) * 0.5 + Math.sin(z * 2.3 + x * 0.8) * 0.35 + Math.sin((x - z) * 3.7) * 0.15;
+}
+// Sprung body: damped springs for heave/pitch/roll. Downward acceleration is
+// capped at gravity, so a crest taken fast LAUNCHES the truck; landings
+// compress hard and bounce off the bump stops.
+const SUSP = { k: 55, d: 8.5, ka: 40, da: 7.6, travel: 0.42, droop: 0.4 };
+let bodyY = 0, vBodyY = 0, pitchC = 0, vPitch = 0, rollC = 0, vRoll = 0;
+let wheelSpin = 0, groundedF = 1, bodyInit = false;
 let steerCur = 0; // smoothed — keyboard taps ramp instead of snapping
-let rideCur = 0.65; // eased ride height (road drape ⇄ bare ground)
 let prevGround: number | null = null; // last frame's resolved ground (tunnel guard)
 function tick(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
@@ -1287,16 +1319,21 @@ function tick(now: number): void {
   const thrust = brake
     ? -Math.sign(state.speed) * CAR.brake * 1.4
     : throttle >= 0 ? throttle * CAR.accel : throttle * CAR.brake;
-  state.speed += thrust * dt;
-  state.speed -= state.speed * surf.drag * dt;
-  if (brake && Math.abs(state.speed) < 1.2) state.speed = 0;
-  state.speed = clamp(state.speed, -CAR.maxRev, surf.max);
+  // Grip comes from wheels on the ground: airborne there's no drive, no
+  // braking, barely any steering — and gravity along the body's pitch makes
+  // climbs cost speed and descents pay it back.
+  const grip = groundedF;
+  state.speed += thrust * grip * dt;
+  state.speed -= 9.81 * Math.sin(pitchC) * grip * dt;
+  state.speed -= state.speed * surf.drag * (0.1 + 0.9 * grip) * dt;
+  if (brake && grip > 0.4 && Math.abs(state.speed) < 1.2) state.speed = 0;
+  state.speed = clamp(state.speed, -CAR.maxRev, surf.max * 1.25); // downhill may overrun the flat cap
   const SRATE = 7; // full-lock in ~0.14s — responsive but not snappy
   steerCur += clamp(steer - steerCur, -SRATE * dt, SRATE * dt);
   if (Math.abs(state.speed) > 0.1) {
     // Authority decays with speed (like a real wheel): full lock is a parking
     // move, a nudge at 180 — turn RATE stays sane across the whole range.
-    const authority = 1 / (1 + Math.abs(state.speed) / 12);
+    const authority = (0.15 + 0.85 * grip) / (1 + Math.abs(state.speed) / 12);
     state.heading += (steerCur * CAR.steerMax * authority * state.speed * dt) / CAR.wheelbase;
   }
   state.x += Math.sin(state.heading) * state.speed * dt;
@@ -1323,24 +1360,56 @@ function tick(now: number): void {
     if (!hit) break;
   }
   if (scraping) state.speed *= Math.exp(-5 * dt);
-  let ground = sampleHeight(state.x, state.z);
-  if (surfKind === 'road') {
-    // On a road the car rides the ROAD's profile (tunnel chords included) —
-    // but only if it's near the car's current level, so driving over the hill
-    // a tunnel passes under doesn't teleport the car down into the tube.
-    const rh = roadHeightAt(state.x, state.z);
-    if (rh !== null && Math.abs(rh - (prevGround ?? ground)) < 4) ground = rh;
+  // ── suspension: the truck LIES on the terrain via 4 wheel contacts ──
+  const sinH = Math.sin(state.heading), cosH = Math.cos(state.heading);
+  const contacts: number[] = [];
+  let rawSum = 0;
+  for (const [wx, wz] of WHEELS) {
+    const wxw = state.x + wx * cosH - wz * sinH;
+    const wzw = state.z + wx * sinH + wz * cosH;
+    const sk = surfaceAt(wxw, wzw);
+    let g = sampleHeight(wxw, wzw);
+    if (sk === 'road') {
+      // Ride the ROAD's profile (tunnel chords included) — but only near the
+      // car's current level, so the hill above a tunnel doesn't swallow us.
+      const rh = roadHeightAt(wxw, wzw);
+      if (rh !== null && Math.abs(rh - (prevGround ?? g)) < 4) g = rh;
+    }
+    rawSum += g;
+    const sw = SURFACE[sk];
+    contacts.push(g + sw.lift + roughNoise(wxw, wzw) * sw.rough);
   }
-  prevGround = ground;
-  // Off-road is BUMPY (realism foundation, aesthetics later): a speed-scaled
-  // shake in ride height + pitch/roll, plus body roll into the steer. Two
-  // incommensurate sines read as rattle, not metronome.
-  const tsec = now / 1000;
-  const bumpAmp = surfKind === 'ground' && Math.abs(state.speed) > 2 ? Math.min(1, Math.abs(state.speed) / 8) : 0;
-  const bump = bumpAmp * (Math.sin(tsec * 23.7) * 0.6 + Math.sin(tsec * 13.1) * 0.4);
-  rideCur += clamp(surf.ride - rideCur, -6 * dt, 6 * dt); // ease across kerbs
-  car.position.set(state.x, ground + rideCur + bump * 0.22, state.z);
-  car.rotation.set(bump * 0.05, -state.heading, -steerCur * 0.06 * Math.min(1, Math.abs(state.speed) / 15) + bump * 0.04);
+  prevGround = rawSum / 4;
+  const [cFL, cFR, cRL, cRR] = contacts;
+  const ground = (cFL + cFR + cRL + cRR) / 4;
+  const tY = ground + WHEEL_R; // axle-plane target
+  const drive = brake ? -Math.sign(state.speed) * CAR.brake : throttle * (throttle >= 0 ? CAR.accel : CAR.brake);
+  const tPitch = Math.asin(clamp((cFL + cFR - cRL - cRR) / 2 / (2 * AXLE), -0.45, 0.45))
+    + clamp(drive * 0.004, -0.06, 0.06); // throttle squat / brake dive
+  const tRoll = Math.asin(clamp((cFR + cRR - cFL - cRL) / 2 / (2 * TRACK), -0.45, 0.45))
+    + clamp(steerCur * Math.abs(state.speed) * 0.004, -0.09, 0.09); // lean out of the corner
+  if (!bodyInit) { bodyInit = true; bodyY = tY; pitchC = tPitch; rollC = tRoll; }
+  let aY = SUSP.k * (tY - bodyY) - SUSP.d * vBodyY;
+  if (aY < -9.81) aY = -9.81; // falling is gravity's job — crests launch
+  vBodyY += aY * dt; bodyY += vBodyY * dt;
+  if (bodyY < tY - SUSP.travel) { bodyY = tY - SUSP.travel; if (vBodyY < 0) vBodyY *= -0.25; } // bump stop
+  vPitch += (SUSP.ka * (tPitch - pitchC) - SUSP.da * vPitch) * dt; pitchC += vPitch * dt;
+  vRoll += (SUSP.ka * (tRoll - rollC) - SUSP.da * vRoll) * dt; rollC += vRoll * dt;
+  // Articulation: wheels chase their own contact while the sprung body lags.
+  groundedF = 0;
+  for (let i = 0; i < 4; i++) {
+    const [wx, wz] = WHEELS[i];
+    const plane = bodyY - wz * Math.sin(pitchC) + wx * Math.sin(rollC);
+    const def = clamp(contacts[i] + WHEEL_R - plane, -SUSP.droop, SUSP.travel);
+    if (def > -SUSP.droop + 0.03) groundedF += 0.25;
+    wheelPivots[i].position.y = def;
+    wheelMeshes[i].scale.y = 1 - (0.1 * Math.max(0, def)) / SUSP.travel; // tire give under load
+    wheelMeshes[i].rotation.x = wheelSpin;
+    if (i < 2) wheelPivots[i].rotation.y = -steerCur * 0.42;
+  }
+  wheelSpin += (state.speed / WHEEL_R) * dt;
+  car.position.set(state.x, bodyY, state.z);
+  car.rotation.set(pitchC, -state.heading, rollC);
   reveal(state.x, state.z);
   if (now > streamAt) { streamAt = now + 1200; streamWorld(state.x, state.z); }
   // Two rigs. TOP: the chart view, tilted a touch for relief. CHASE: low and
@@ -1354,7 +1423,7 @@ function tick(now: number): void {
     const back = 13 + Math.abs(state.speed) * 0.35;
     camPos.set(
       state.x - fwdX * back,
-      sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 5.4 + bump * 0.12,
+      Math.max(sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 5.4, bodyY + 3.2),
       state.z - fwdZ * back,
     );
   }
