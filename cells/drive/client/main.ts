@@ -1217,6 +1217,43 @@ function toggleCam(): void {
 camBtn.addEventListener('click', toggleCam);
 addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'c') toggleCam(); });
 
+// ── «translation»: place names in an alien script ──────────────────
+// Tap the location (top-left) to toggle. Deterministic per string — the same
+// place always garbles to the same glyphs, so landmarks stay RECOGNIZABLE
+// even unreadable (the future trek mechanic depends on that). Yi syllables:
+// a big, coherent block that renders everywhere and reads properly foreign.
+let alien = false;
+try { alien = localStorage.getItem('drive.alien') === '1'; } catch { /* fine */ }
+const alienCache = new Map<string, string>();
+function alienize(s: string): string {
+  if (!alien) return s;
+  let out = alienCache.get(s);
+  if (out !== undefined) return out;
+  out = '';
+  let h = 2166136261;
+  for (const ch of s) {
+    if (/[a-z0-9]/i.test(ch)) {
+      h = Math.imul(h ^ ch.toLowerCase().charCodeAt(0), 16777619) >>> 0;
+      out += String.fromCharCode(0xa000 + (h % 0x48c));
+    } else out += ch; // keep spaces & punctuation: the name's rhythm survives
+  }
+  alienCache.set(s, out);
+  return out;
+}
+let placeLabel = '…';
+const renderPlace = (): void => { $('place-name').textContent = alienize(placeLabel); };
+{
+  const placeHud = $('place');
+  placeHud.style.pointerEvents = 'auto';
+  placeHud.style.cursor = 'pointer';
+  placeHud.title = 'toggle translation';
+  placeHud.addEventListener('click', () => {
+    alien = !alien;
+    try { localStorage.setItem('drive.alien', alien ? '1' : '0'); } catch { /* fine */ }
+    renderPlace();
+  });
+}
+
 // ── POI HUD: bearing labels to nearby named places ─────────────────
 // Named parks/waters/buildings from the OSM stream become waypoints. On
 // screen they sit at their world position (far ones pinned to the horizon
@@ -1226,15 +1263,33 @@ const poiWrap = document.createElement('div');
 Object.assign(poiWrap.style, { position: 'fixed', inset: '0', zIndex: '9', pointerEvents: 'none', overflow: 'hidden' } as Partial<CSSStyleDeclaration>);
 document.body.appendChild(poiWrap);
 const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a' };
+// On-screen POIs are MAP PINS: label over a stem over a dot, the dot sitting
+// exactly on the world point. Off-screen ones collapse to edge arrows.
 const poiEls = Array.from({ length: 5 }, () => {
-  const el = document.createElement('div');
-  Object.assign(el.style, {
-    position: 'absolute', display: 'none', font: '0.6rem ui-monospace, monospace', color: '#efe9dc',
-    whiteSpace: 'nowrap', background: 'rgba(8,12,20,0.5)', padding: '2px 7px', borderRadius: '7px',
-    textShadow: '0 1px 3px rgba(0,0,0,0.9)', maxWidth: '46vw', overflow: 'hidden', textOverflow: 'ellipsis',
+  const wrap = document.createElement('div');
+  Object.assign(wrap.style, {
+    position: 'absolute', display: 'none', flexDirection: 'column', alignItems: 'center',
   } as Partial<CSSStyleDeclaration>);
-  poiWrap.appendChild(el);
-  return el;
+  const label = document.createElement('div');
+  Object.assign(label.style, {
+    font: '0.6rem ui-monospace, monospace', color: '#efe9dc', whiteSpace: 'nowrap',
+    background: 'rgba(8,12,20,0.55)', padding: '2px 7px', borderRadius: '7px',
+    border: '1px solid rgba(239,233,220,0.16)', textShadow: '0 1px 3px rgba(0,0,0,0.9)',
+    maxWidth: '46vw', overflow: 'hidden', textOverflow: 'ellipsis',
+  } as Partial<CSSStyleDeclaration>);
+  const stem = document.createElement('div');
+  Object.assign(stem.style, {
+    width: '1.5px', height: '15px',
+    background: 'linear-gradient(rgba(239,233,220,0.75), rgba(239,233,220,0.1))',
+  } as Partial<CSSStyleDeclaration>);
+  const dot = document.createElement('div');
+  Object.assign(dot.style, {
+    width: '7px', height: '7px', borderRadius: '50%', marginTop: '-1px',
+    boxShadow: '0 1px 5px rgba(0,0,0,0.8)',
+  } as Partial<CSSStyleDeclaration>);
+  wrap.append(label, stem, dot);
+  poiWrap.appendChild(wrap);
+  return { wrap, label, stem, dot };
 });
 const poiVec = new THREE.Vector3(), poiView = new THREE.Vector3(), camFwd = new THREE.Vector3();
 const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}m` : `${(m / 1000).toFixed(1)}km`);
@@ -1246,36 +1301,40 @@ function updatePois(): void {
     .slice(0, poiEls.length);
   camera.getWorldDirection(camFwd);
   for (let i = 0; i < poiEls.length; i++) {
-    const el = poiEls[i], e = near[i];
-    if (!e) { el.style.display = 'none'; continue; }
+    const { wrap, label, stem, dot } = poiEls[i];
+    const e = near[i];
+    if (!e) { wrap.style.display = 'none'; continue; }
     const { p, d } = e;
     const dx = p.x - state.x, dz = p.z - state.z;
     const dc = Math.min(d, 900); // beyond ~900m: pin to the horizon on its bearing
     const wx = state.x + (dx / d) * dc, wz = state.z + (dz / d) * dc;
-    poiVec.set(wx, sampleHeight(wx, wz) + 8 + dc * 0.012, wz);
+    poiVec.set(wx, sampleHeight(wx, wz) + 2, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
-    el.style.borderLeft = `2px solid ${POI_COLORS[p.kind]}`;
-    el.style.display = 'block';
+    wrap.style.display = 'flex';
+    dot.style.background = POI_COLORS[p.kind];
     if (poiView.z < -1) {
       poiVec.project(camera);
       if (Math.abs(poiVec.x) <= 0.94) {
-        el.textContent = `${p.name} · ${fmtDist(d)}`;
-        el.style.transform = 'translate(-50%, -100%)';
-        el.style.right = 'auto';
-        el.style.left = `${(poiVec.x * 0.5 + 0.5) * innerWidth}px`;
-        el.style.top = `${clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.14, innerHeight * 0.8)}px`;
+        // MAP PIN: the dot sits on the spot, the label floats off it.
+        label.textContent = `${alienize(p.name)} · ${fmtDist(d)}`;
+        stem.style.display = dot.style.display = 'block';
+        wrap.style.transform = 'translate(-50%, -100%)';
+        wrap.style.right = 'auto';
+        wrap.style.left = `${(poiVec.x * 0.5 + 0.5) * innerWidth}px`;
+        wrap.style.top = `${clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.14, innerHeight * 0.82)}px`;
         continue;
       }
     }
     // Off-screen: side chip with an arrow, stacked by proximity rank.
-    el.style.transform = 'none';
-    el.style.top = `${innerHeight * (0.28 + i * 0.055)}px`;
+    stem.style.display = dot.style.display = 'none';
+    wrap.style.transform = 'none';
+    wrap.style.top = `${innerHeight * (0.28 + i * 0.055)}px`;
     if (camFwd.x * dz - camFwd.z * dx > 0) {
-      el.style.left = 'auto'; el.style.right = '8px';
-      el.textContent = `${p.name} · ${fmtDist(d)} ▶`;
+      wrap.style.left = 'auto'; wrap.style.right = '8px';
+      label.textContent = `${alienize(p.name)} · ${fmtDist(d)} ▶`;
     } else {
-      el.style.right = 'auto'; el.style.left = '8px';
-      el.textContent = `◀ ${p.name} · ${fmtDist(d)}`;
+      wrap.style.right = 'auto'; wrap.style.left = '8px';
+      label.textContent = `◀ ${alienize(p.name)} · ${fmtDist(d)}`;
     }
   }
 }
@@ -1461,9 +1520,10 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
   const spawn = await findSpawn();
   origin = { lat: spawn.lat, lon: spawn.lon, mLon: M_LAT * Math.cos((spawn.lat * Math.PI) / 180) };
   $('place-coords').textContent = `${spawn.lat.toFixed(4)}, ${spawn.lon.toFixed(4)}`;
-  $('place-name').textContent = spawn.name ?? '…';
+  placeLabel = spawn.name ?? '…';
+  renderPlace();
   history.replaceState(null, '', `?lat=${spawn.lat.toFixed(5)}&lon=${spawn.lon.toFixed(5)}`);
-  void placeName(spawn.lat, spawn.lon).then((n) => { if (n) $('place-name').textContent = n; });
+  void placeName(spawn.lat, spawn.lon).then((n) => { if (n) { placeLabel = n; renderPlace(); } });
   bootMsg('reading the terrain…');
   // Anchor elevation: the spawn tile loads first so heights are relative to it.
   const [tx, ty] = tileAt(spawn.lat, spawn.lon, TERRAIN_Z);
