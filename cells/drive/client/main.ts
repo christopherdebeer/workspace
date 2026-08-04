@@ -1664,6 +1664,7 @@ const audio = (() => {
   let master: GainNode | null = null;
   let engA: OscillatorNode, engB: OscillatorNode, engFilt: BiquadFilterNode, engGain: GainNode;
   let roarGain: GainNode, roarFilt: BiquadFilterNode, windGain: GainNode, windFilt: BiquadFilterNode;
+  let gritSrc: AudioBufferSourceNode, gritGain: GainNode, gritFilt: BiquadFilterNode;
   let noiseBuf: AudioBuffer;
   let on = true;
   try { on = localStorage.getItem('drive.mute') !== '1'; } catch { /* fine */ }
@@ -1693,6 +1694,29 @@ const audio = (() => {
     roarFilt = ctx.createBiquadFilter(); roarFilt.type = 'bandpass'; roarFilt.frequency.value = 300; roarFilt.Q.value = 0.7;
     roarGain = ctx.createGain(); roarGain.gain.value = 0;
     roarSrc.connect(roarFilt); roarFilt.connect(roarGain); roarGain.connect(master); roarSrc.start();
+    // GRIT: the gravel bed. Not steady noise — a few seconds of individual
+    // stone impacts (sharp attack, short decay, random pitch), looped and
+    // sped up with the truck so loose ground CRUNCHES rather than hisses.
+    const gritBuf = ctx.createBuffer(1, ctx.sampleRate * 4, ctx.sampleRate);
+    const gd = gritBuf.getChannelData(0);
+    const grains = Math.floor(ctx.sampleRate * 4 * 0.012); // ~530 stones/sec of loop
+    for (let g = 0; g < grains; g++) {
+      const at = Math.floor(Math.random() * (gd.length - 900));
+      const len = 60 + Math.floor(Math.random() * 700);
+      const amp = 0.25 + Math.random() * 0.75;
+      const ring = 0.04 + Math.random() * 0.5; // a little pitch per stone
+      for (let i = 0; i < len; i++) {
+        const env = Math.exp((-i / len) * 6);
+        gd[at + i] += (Math.random() * 2 - 1) * env * amp * 0.5 + Math.sin(i * ring) * env * amp * 0.12;
+      }
+    }
+    let peak = 0;
+    for (let i = 0; i < gd.length; i++) peak = Math.max(peak, Math.abs(gd[i]));
+    if (peak > 0) for (let i = 0; i < gd.length; i++) gd[i] /= peak;
+    gritSrc = ctx.createBufferSource(); gritSrc.buffer = gritBuf; gritSrc.loop = true;
+    gritFilt = ctx.createBiquadFilter(); gritFilt.type = 'bandpass'; gritFilt.frequency.value = 1400; gritFilt.Q.value = 0.5;
+    gritGain = ctx.createGain(); gritGain.gain.value = 0;
+    gritSrc.connect(gritFilt); gritFilt.connect(gritGain); gritGain.connect(master); gritSrc.start();
     // Wind: highpassed noise that climbs with the square of speed.
     const windSrc = ctx.createBufferSource(); windSrc.buffer = noiseBuf; windSrc.loop = true;
     windFilt = ctx.createBiquadFilter(); windFilt.type = 'highpass'; windFilt.frequency.value = 900;
@@ -1746,8 +1770,27 @@ const audio = (() => {
       // Tarmac hisses high and thin; loose ground growls low and loud.
       const road = surf === 'road';
       roarFilt.frequency.setTargetAtTime(road ? 1150 : 320, t, 0.12);
-      roarGain.gain.setTargetAtTime(Math.min(v / 34, 1) * (road ? 0.1 : 0.3) * grounded, t, 0.1);
+      roarGain.gain.setTargetAtTime(Math.min(v / 34, 1) * (road ? 0.1 : 0.26) * grounded, t, 0.1);
       windGain.gain.setTargetAtTime(Math.min((v * v) / 2600, 0.9) * 0.13, t, 0.15);
+      // Gravel: absent on tarmac, dominant off it. Rate (playbackRate) AND
+      // level rise with speed, so the crunch density tracks the wheels.
+      const loose = road ? 0 : surf === 'water' ? 0.12 : 1;
+      gritSrc.playbackRate.setTargetAtTime(0.55 + Math.min(v / 26, 1.35), t, 0.12);
+      gritFilt.frequency.setTargetAtTime(surf === 'water' ? 700 : 900 + Math.min(v * 26, 1400), t, 0.15);
+      gritGain.gain.setTargetAtTime(Math.min(v / 12, 1) * 0.3 * loose * grounded, t, 0.09);
+    },
+    // A stone spat out from under a tire — sharp, pitched, very short.
+    stone(): void {
+      if (!ctx || !master || ctx.state !== 'running' || !on) return;
+      const t = ctx.currentTime;
+      const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+      const bp = ctx.createBiquadFilter();
+      bp.type = 'bandpass'; bp.frequency.value = 1100 + Math.random() * 2600; bp.Q.value = 4 + Math.random() * 8;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.16 + Math.random() * 0.14, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05 + Math.random() * 0.06);
+      src.connect(bp); bp.connect(g); g.connect(master);
+      src.start(t); src.stop(t + 0.14);
     },
     // A short filtered burst — landings, kerb strikes, scrapes.
     thud(force: number): void {
@@ -1951,6 +1994,8 @@ function tick(now: number): void {
       if (wheelSurf[i] === 'road') continue;
       const [wxw, wzw] = wheelWorld[i];
       emitDust(wxw, contacts[i], wzw, -sinH * v * 0.28, cosH * v * 0.28);
+      if (Math.random() < 0.1) audio.stone(); // the pings ride the same plume
+
     }
   } else dustBudget = 0;
   stepDust(dt);
