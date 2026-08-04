@@ -346,7 +346,11 @@ const compMat = new THREE.ShaderMaterial({
         vec2 uv = (wp.xz + span * 0.5) / span;
         float m = (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) ? 1.0 : texture2D(mask, uv).a / 0.985;
         float near = 1.0 - exp(-t / 260.0);  // fast ramp: the fog-of-war wall
-        float deep = 1.0 - exp(-t / 1400.0); // slow ramp: aerial perspective
+        // Aerial perspective scales with how much AIR the ray crosses — a
+        // survey view straight down stays legible at any zoom, the horizon
+        // keeps its haze. (Fog-of-war hiding is m-driven and unaffected.)
+        float vFac = clamp(1.4 - abs(dir.y) * 1.3, 0.15, 1.0);
+        float deep = (1.0 - exp(-t / 1400.0)) * vFac;
         float blurF = clamp(m * (0.45 + 0.55 * near) + deep * 0.55, 0.0, 1.0);
         float dimF = min(m * mix(0.55, 0.95, near) + (1.0 - m) * deep * 0.55, 0.95);
         col = mix(sharp, soft, blurF);
@@ -1298,14 +1302,14 @@ canvas.addEventListener('pointermove', (e) => {
     if (other) {
       const d0 = Math.hypot(prev.x - other.x, prev.y - other.y);
       const d1 = Math.hypot(cur.x - other.x, cur.y - other.y);
-      if (d0 > 12 && d1 > 12) zoomT = clamp(zoomT * (d0 / d1), 0.3, 3.2);
+      if (d0 > 12 && d1 > 12) zoomT = clamp(zoomT * (d0 / d1), 0.25, 12); // survey the whole fog span
     }
   }
   panPtrs.set(e.pointerId, cur);
 });
 addEventListener('wheel', (e) => {
   if (camMode !== 'top') return;
-  zoomT = clamp(zoomT * Math.exp(e.deltaY * 0.0012), 0.3, 3.2);
+  zoomT = clamp(zoomT * Math.exp(e.deltaY * 0.0012), 0.25, 12);
   e.preventDefault();
 }, { passive: false });
 const endStick = (e: PointerEvent): void => {
@@ -1356,15 +1360,26 @@ function input(): { throttle: number; steer: number; brake: boolean } {
 
 // ── minimap: north-up, fog-masked, car-centred ─────────────────────
 const MINI = 138, MINI_SPAN = 1500; // px, metres across
+// The corner DOCK always shows the OTHER view — chart minimap while chasing,
+// live POV preview while charting — and tapping it swaps which is fullscreen.
+const mapDock = document.createElement('div');
+Object.assign(mapDock.style, {
+  position: 'fixed', left: '12px', bottom: 'max(44px, calc(env(safe-area-inset-bottom) + 34px))',
+  width: `${MINI}px`, height: `${MINI}px`, zIndex: '10', cursor: 'pointer',
+  border: '1px solid rgba(245,196,83,0.35)', borderRadius: '10px', overflow: 'hidden',
+} as Partial<CSSStyleDeclaration>);
+document.body.appendChild(mapDock);
+mapDock.addEventListener('click', () => toggleCam());
 const mini = document.createElement('canvas');
 mini.width = mini.height = MINI * 2;
 Object.assign(mini.style, {
-  position: 'fixed', left: '12px', bottom: 'max(44px, calc(env(safe-area-inset-bottom) + 34px))',
-  width: `${MINI}px`, height: `${MINI}px`, zIndex: '10', pointerEvents: 'none',
-  border: '1px solid rgba(245,196,83,0.35)', borderRadius: '10px',
-  background: 'rgba(4,6,11,0.9)',
+  position: 'absolute', inset: '0', width: '100%', height: '100%',
+  background: 'rgba(4,6,11,0.9)', pointerEvents: 'none',
 } as Partial<CSSStyleDeclaration>);
-document.body.appendChild(mini);
+mapDock.appendChild(mini);
+function updateDock(): void {
+  mini.style.visibility = camMode === 'top' ? 'hidden' : 'visible'; // hidden ⇒ the GL POV preview shows through
+}
 const miniCtx = mini.getContext('2d')!;
 function drawMinimap(): void {
   const S = MINI * 2;
@@ -1405,25 +1420,19 @@ function drawMinimap(): void {
 let camMode: 'top' | 'chase' = 'top';
 const camPos = new THREE.Vector3();
 let camInit = false;
-const camBtn = document.createElement('button');
-camBtn.textContent = 'cam: top';
-Object.assign(camBtn.style, {
-  position: 'fixed', right: '12px', top: 'calc(max(10px, env(safe-area-inset-top)) + 40px)', zIndex: '11',
-  background: 'rgba(8,12,20,0.55)', color: '#f5c453', border: '1px solid rgba(245,196,83,0.4)',
-  borderRadius: '8px', padding: '0.35rem 0.7rem', font: 'inherit', fontSize: '0.74rem', cursor: 'pointer',
-} as Partial<CSSStyleDeclaration>);
-document.body.appendChild(camBtn);
+const miniCam = new THREE.PerspectiveCamera(60, 1, 1, 30000); // the dock's POV preview rig
 function toggleCam(): void {
   camMode = camMode === 'top' ? 'chase' : 'top';
-  camBtn.textContent = `cam: ${camMode}`;
   halo.visible = camMode === 'top'; // the marker is chart furniture, not scenery
+  if (camMode === 'chase') halo.scale.setScalar(1);
   camInit = false;                  // snap to the new rig, then resume smoothing
   panX = panZ = 0;                  // pan is a glance, not a state to carry over
   updateStickHome();
+  updateDock();
 }
-camBtn.addEventListener('click', toggleCam);
 addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'c') toggleCam(); });
 updateStickHome(); // boot in top mode: the pinned stick is visible from frame one
+updateDock();
 
 // ── «translation»: place names in an alien script ──────────────────
 // Tap the location (top-left) to toggle. Deterministic per string — the same
@@ -1695,6 +1704,7 @@ function tick(now: number): void {
   const fwdX = Math.sin(state.heading), fwdZ = -Math.cos(state.heading);
   if (camMode === 'top') {
     zoomCur += (zoomT - zoomCur) * Math.min(1, 8 * dt);
+    halo.scale.setScalar(Math.max(1, zoomCur)); // the ring must survive the zoom-out
     // Pan is a glance around the chart — it drifts home once you drive.
     if (stick || Math.abs(state.speed) > 6) { const f = Math.exp(-2.5 * dt); panX *= f; panZ *= f; }
     const dist = CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh;
@@ -1739,7 +1749,7 @@ function tick(now: number): void {
   compMat.uniforms.camPos.value.copy(camera.position);
   compMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
   speedEl.innerHTML = `${Math.round(Math.abs(state.speed) * 3.6)}<small> km/h</small>`;
-  if (now > miniAt) { miniAt = now + 250; drawMinimap(); }
+  if (camMode === 'chase' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
   updatePois(); // every frame — throttled pins juddered against the camera
   // Progress lives in the URL: reloading resumes here, not at the spawn.
   if (now > urlAt) {
@@ -1761,6 +1771,26 @@ function tick(now: number): void {
   compMat.uniforms.sceneTex.value = rtScene.texture;
   compMat.uniforms.softTex.value = rtB.texture;
   runPass(compMat, null);
+  if (camMode === 'top') {
+    // The dock's POV preview: raw scene from the chase rig, scissored into
+    // the corner over the composite (autoClear respects the scissor).
+    const r = mapDock.getBoundingClientRect();
+    const vx = r.left, vy = innerHeight - r.bottom, vw = r.width, vh = r.height;
+    miniCam.position.set(
+      state.x - fwdX * 13,
+      Math.max(sampleHeight(state.x - fwdX * 13, state.z - fwdZ * 13) + 5.4, bodyY + 4.2),
+      state.z - fwdZ * 13,
+    );
+    miniCam.lookAt(state.x + fwdX * 18, ground + 1.6, state.z + fwdZ * 18);
+    renderer.setScissorTest(true);
+    renderer.setViewport(vx, vy, vw, vh);
+    renderer.setScissor(vx, vy, vw, vh);
+    halo.visible = false; // the zoom-scaled chart ring has no place in the POV
+    renderer.render(scene, miniCam);
+    halo.visible = true;
+    renderer.setScissorTest(false);
+    renderer.setViewport(0, 0, innerWidth, innerHeight);
+  }
   requestAnimationFrame(tick);
 }
 
