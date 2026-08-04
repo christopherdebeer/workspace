@@ -355,12 +355,15 @@ rtScene.samples = 0; // MSAA would soften exactly the edges we want hard
 // a haze seam across it (fogged base, "sky-crisp" top).
 rtScene.depthTexture = new THREE.DepthTexture(2, 2);
 const rtA = mkRT(false), rtB = mkRT(false);
+const rtC = mkRT(false), rtD = mkRT(false); // bright-pass ping-pong for bloom
 resizePost = () => {
   const h = Math.min(PIX_H, Math.round(innerHeight));
   const w = Math.max(2, Math.round((innerWidth / innerHeight) * h));
   rtScene.setSize(w, Math.max(2, h));
   rtA.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
   rtB.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
+  rtC.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
+  rtD.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
   pixSize.set(w, Math.max(2, h));
 };
 resizePost();
@@ -387,6 +390,20 @@ const blurMat = new THREE.ShaderMaterial({
       gl_FragColor = vec4(c, 1.0);
     }`,
 });
+// Bright-pass for bloom: keep only what is genuinely emitting — the sun disc,
+// lamps, tail lights, the solar array's specular. Everything else is lit
+// surface and must not smear.
+const brightMat = new THREE.ShaderMaterial({
+  uniforms: { src: { value: null }, uCut: { value: 0.62 } },
+  vertexShader: QUAD_VS,
+  fragmentShader: `
+    uniform sampler2D src; uniform float uCut; varying vec2 vUv;
+    void main(){
+      vec3 c = texture2D(src, vUv).rgb;
+      float b = max(c.r, max(c.g, c.b));
+      gl_FragColor = vec4(c * smoothstep(uCut, uCut + 0.35, b), 1.0);
+    }`,
+});
 const compMat = new THREE.ShaderMaterial({
   uniforms: {
     sceneTex: { value: null },
@@ -400,10 +417,14 @@ const compMat = new THREE.ShaderMaterial({
     uPix: { value: pixSize }, // the low-res grid, for dithering
     uHazeBase: { value: new THREE.Vector3() },
     uHazeSun: { value: new THREE.Vector3() },
+    bloomTex: { value: null },
+    uBloom: { value: 0.75 },
+    uScan: { value: 0.06 },
   },
   vertexShader: QUAD_VS,
   fragmentShader: `
     uniform sampler2D sceneTex; uniform sampler2D softTex; uniform sampler2D depthTex;
+    uniform sampler2D bloomTex; uniform float uBloom; uniform float uScan;
     uniform sampler2D mask; uniform mat4 invPV; uniform vec3 camPos; uniform float span;
     uniform vec2 sunXZ; uniform vec2 uPix; uniform vec3 uHazeBase; uniform vec3 uHazeSun; varying vec2 vUv;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
@@ -461,6 +482,9 @@ const compMat = new THREE.ShaderMaterial({
       // Never hand a negative (or NaN) to pow(): one bad fragment upstream
       // must not be able to punch a black hole through the finished frame.
       col = max(col, vec3(0.0));
+      // BLOOM: added in linear space, before the tonemap, so a bright lamp
+      // blooms into the haze around it rather than onto the finished image.
+      col += texture2D(bloomTex, vUv).rgb * uBloom;
       vec3 enc = srgb(col);
       // GRADE. Physically-correct lighting through a haze lands flat and
       // milky; the reference art is saturated with deep shadows. Saturation
@@ -479,6 +503,9 @@ const compMat = new THREE.ShaderMaterial({
       // gradients while flat areas stay flat.
       float d = (bayer4(floor(vUv * uPix)) - 0.5) * 0.6;
       enc = floor(enc * LEVELS + d + 0.5) / LEVELS;
+      // Scanlines on the PIXEL grid (every other buffer row), so they scale
+      // with the art instead of shimmering against the display's real pixels.
+      enc *= 1.0 - uScan * mod(floor(vUv.y * uPix.y), 2.0);
       gl_FragColor = vec4(clamp(enc, 0.0, 1.0), 1.0);
     }`.replace(/LEVELS/g, '14.0'),
 });
@@ -1594,6 +1621,113 @@ halo.rotation.x = -Math.PI / 2;
 halo.position.y = 0.15;
 car.add(halo);
 scene.add(car);
+// ── weather ────────────────────────────────────────────────────────
+// Four states that drift into one another on a slow clock, biased by biome
+// (the desert rarely storms; the tropics rarely stay clear). Everything reads
+// from `wx`: sun and fill strength, haze density, rain, and — the part that
+// matters for driving — how much grip the ground has left.
+type Sky = 'clear' | 'haze' | 'rain' | 'storm';
+const WX: Record<Sky, { cloud: number; rain: number; label: string }> = {
+  clear: { cloud: 0, rain: 0, label: 'CLEAR' },
+  haze: { cloud: 0.45, rain: 0, label: 'HAZE' },
+  rain: { cloud: 0.75, rain: 0.6, label: 'RAIN' },
+  storm: { cloud: 0.95, rain: 1, label: 'STORM' },
+};
+const wx = { sky: 'clear' as Sky, next: 'clear' as Sky, cloud: 0, rain: 0, wet: 0, at: 0, warn: 0 };
+function rollWeather(now: number): void {
+  if (now < wx.at) return;
+  wx.at = now + (90 + Math.random() * 150) * 1000; // a front lasts 1.5–4 minutes
+  // Biome bias: arid stays dry, tropical turns often, boreal broods.
+  const b = biome.name;
+  const table: Sky[] = b === 'arid' ? ['clear', 'clear', 'clear', 'haze', 'haze', 'rain']
+    : b === 'tropical' ? ['clear', 'haze', 'rain', 'rain', 'storm', 'haze']
+    : b === 'boreal' ? ['haze', 'haze', 'clear', 'rain', 'storm', 'haze']
+    : b === 'alpine' ? ['clear', 'haze', 'clear', 'storm', 'haze', 'rain']
+    : ['clear', 'haze', 'clear', 'rain', 'haze', 'storm'];
+  wx.next = table[Math.floor(Math.random() * table.length)];
+  wx.warn = wx.next === 'storm' && wx.sky !== 'storm' ? now + 12000 : 0;
+}
+function stepWeather(now: number, dt: number): void {
+  rollWeather(now);
+  const t = WX[wx.next];
+  const k = Math.min(1, dt * 0.12);                 // fronts arrive slowly
+  wx.cloud += (t.cloud - wx.cloud) * k;
+  wx.rain += (t.rain - wx.rain) * k;
+  wx.sky = wx.cloud > 0.85 ? 'storm' : wx.rain > 0.15 ? 'rain' : wx.cloud > 0.25 ? 'haze' : 'clear';
+  // Ground stays wet after the rain stops, and dries out slowly.
+  wx.wet = clamp(wx.wet + (wx.rain > 0.1 ? dt * 0.09 : -dt * 0.02), 0, 1);
+  sun.intensity = biome.sunI * (1 - wx.cloud * 0.72);
+  hemi.intensity = biome.hemiI * (1 + wx.cloud * 0.35);
+  compMat.uniforms.uBloom.value = 0.75 - wx.cloud * 0.35;
+  // Overcast desaturates the haze toward slate and thickens it.
+  const g = (c: Rgb): THREE.Vector3 => {
+    const l = (c[0] + c[1] + c[2]) / 3;
+    const m = 1 - wx.cloud * 0.7;
+    return new THREE.Vector3(
+      (c[0] * m + l * (1 - m)) * (1 + wx.cloud * 0.25),
+      (c[1] * m + l * (1 - m)) * (1 + wx.cloud * 0.28),
+      (c[2] * m + l * (1 - m)) * (1 + wx.cloud * 0.4),
+    );
+  };
+  compMat.uniforms.uHazeBase.value.copy(g(biome.hazeBase));
+  compMat.uniforms.uHazeSun.value.copy(g(biome.hazeSun));
+  (skyMat.uniforms.uZenith.value as THREE.Vector3).copy(g(biome.zenith));
+  (skyMat.uniforms.uHorizon.value as THREE.Vector3).copy(g(biome.horizon));
+  stepRain(dt);
+}
+
+// Rain lives in a box that FOLLOWS the camera and wraps, so a few hundred
+// streaks look like weather everywhere instead of a patch you drive out of.
+const RAIN_N = 900, RAIN_BOX = 46;
+const rainPos = new Float32Array(RAIN_N * 3);
+for (let i = 0; i < RAIN_N; i++) {
+  rainPos[i * 3] = (Math.random() - 0.5) * RAIN_BOX;
+  rainPos[i * 3 + 1] = Math.random() * RAIN_BOX;
+  rainPos[i * 3 + 2] = (Math.random() - 0.5) * RAIN_BOX;
+}
+const rainGeo = new THREE.BufferGeometry();
+rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
+const rainMat = new THREE.ShaderMaterial({
+  transparent: true, depthWrite: false,
+  uniforms: { uAmt: { value: 0 } },
+  vertexShader: `
+    uniform float uAmt; varying float vA;
+    void main(){
+      vA = uAmt;
+      vec4 mv = modelViewMatrix * vec4(position, 1.0);
+      gl_PointSize = max(1.0, 2.5 * (40.0 / max(-mv.z, 1.0)));
+      gl_Position = projectionMatrix * mv;
+    }`,
+  fragmentShader: `
+    varying float vA;
+    void main(){
+      // A streak, not a dot: squash the sprite vertically.
+      vec2 d = (gl_PointCoord - 0.5) * vec2(4.0, 1.0);
+      if (dot(d, d) > 0.25) discard;
+      gl_FragColor = vec4(0.72, 0.82, 0.92, vA * 0.5);
+    }`,
+});
+const rain = new THREE.Points(rainGeo, rainMat);
+rain.frustumCulled = false;
+scene.add(rain);
+function stepRain(dt: number): void {
+  rainMat.uniforms.uAmt.value = wx.rain;
+  rain.visible = wx.rain > 0.02;
+  if (!rain.visible) return;
+  const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+  const fall = (14 + wx.rain * 12) * dt;
+  for (let i = 0; i < RAIN_N; i++) {
+    let y = rainPos[i * 3 + 1] - fall;
+    let x = rainPos[i * 3], z = rainPos[i * 3 + 2];
+    // Wrap relative to the camera in all three axes.
+    if (y < cy - RAIN_BOX * 0.35) { y += RAIN_BOX; x = cx + (Math.random() - 0.5) * RAIN_BOX; z = cz + (Math.random() - 0.5) * RAIN_BOX; }
+    if (x - cx > RAIN_BOX / 2) x -= RAIN_BOX; else if (cx - x > RAIN_BOX / 2) x += RAIN_BOX;
+    if (z - cz > RAIN_BOX / 2) z -= RAIN_BOX; else if (cz - z > RAIN_BOX / 2) z += RAIN_BOX;
+    rainPos[i * 3] = x; rainPos[i * 3 + 1] = y; rainPos[i * 3 + 2] = z;
+  }
+  (rainGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
+}
+
 // ── dust: what the tires throw up off-road ─────────────────────────
 // A world-space particle pool (no per-frame allocation). Emitted at the rear
 // contacts when the wheels are on loose ground, drifting up and back before
@@ -1671,6 +1805,7 @@ function stepDust(dt: number): void {
 const state = { x: 0, z: 0, heading: 0, speed: 0 };
 (window as unknown as { __drive?: object; __surfaceAt?: (x: number, z: number) => string }).__drive = state;
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
+(window as unknown as { __wx?: object }).__wx = wx; // debug/test handle
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z) });
 // Fog-of-war opacity at a world point (0 = fully cleared, 1 = untouched).
@@ -1984,7 +2119,7 @@ function updatePois(): void {
     .map((p) => ({ p, d: Math.hypot(p.x - state.x, p.z - state.z) }))
     .filter((e) => e.d > 25 && e.d < 3000)
     .sort((a, b) => a.d - b.d)
-    .slice(0, 5);
+    .slice(0, 3);
   camera.getWorldDirection(camFwd);
   poiDraw = [];
   for (let i = 0; i < near.length; i++) {
@@ -2009,7 +2144,7 @@ function updatePois(): void {
     // Off-screen: an edge chip on the side the waypoint actually lies.
     const right = camFwd.x * dz - camFwd.z * dx > 0;
     poiDraw.push({
-      x: 0, y: innerHeight * (0.3 + i * 0.05),
+      x: 0, y: innerHeight * (0.34 + i * 0.055),
       t: right ? `${label} >` : `< ${label}`, c: POI_COLORS[p.kind], edge: right ? 1 : -1,
     });
   }
@@ -2117,7 +2252,7 @@ const audio = (() => {
       return on;
     },
     // Called every frame; all parameters glide so nothing zippers.
-    update(speed: number, throttle: number, surf: Surface, grounded: number): void {
+    update(speed: number, throttle: number, surf: Surface, grounded: number, rainAmt = 0): void {
       if (!ctx || !master || ctx.state !== 'running') return;
       const t = ctx.currentTime, v = Math.abs(speed);
       // Revs: rising within a gear, dropping as it "shifts" every ~14m/s.
@@ -2132,7 +2267,9 @@ const audio = (() => {
       const road = surf === 'road';
       roarFilt.frequency.setTargetAtTime(road ? 1150 : 320, t, 0.12);
       roarGain.gain.setTargetAtTime(Math.min(v / 34, 1) * (road ? 0.1 : 0.26) * grounded, t, 0.1);
-      windGain.gain.setTargetAtTime(Math.min((v * v) / 2600, 0.9) * 0.13, t, 0.15);
+      // Rain rides the wind channel: same filtered noise, opened up and lifted.
+      windFilt.frequency.setTargetAtTime(900 - rainAmt * 500, t, 0.4);
+      windGain.gain.setTargetAtTime(Math.min((v * v) / 2600, 0.9) * 0.13 + rainAmt * 0.16, t, 0.15);
       // Gravel: absent on tarmac, dominant off it. Rate (playbackRate) AND
       // level rise with speed, so the crunch density tracks the wheels.
       const loose = road ? 0 : surf === 'water' ? 0.12 : 1;
@@ -2219,6 +2356,7 @@ function tick(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
   const { throttle, steer, brake } = input();
+  stepWeather(now, dt);
   const surfKind = surfaceAt(state.x, state.z);
   const surf = SURFACE[surfKind];
   // Arcade bicycle model: thrust minus drag, steering authority grows then
@@ -2232,9 +2370,11 @@ function tick(now: number): void {
   const grip = groundedF;
   state.speed += thrust * grip * dt;
   state.speed -= 9.81 * Math.sin(pitchC) * grip * dt;
-  state.speed -= state.speed * surf.drag * (0.1 + 0.9 * grip) * dt;
+  // Wet ground drags and caps lower — the weather is felt through the wheels.
+  const wetDrag = 1 + wx.wet * (surfKind === 'road' ? 0.35 : 0.7);
+  state.speed -= state.speed * surf.drag * wetDrag * (0.1 + 0.9 * grip) * dt;
   if (brake && grip > 0.4 && Math.abs(state.speed) < 1.2) state.speed = 0;
-  state.speed = clamp(state.speed, -CAR.maxRev, surf.max * 1.25); // downhill may overrun the flat cap
+  state.speed = clamp(state.speed, -CAR.maxRev, surf.max * (1.25 - wx.wet * 0.2)); // downhill may overrun the flat cap
   const SRATE = 7; // full-lock in ~0.14s — responsive but not snappy
   steerCur += clamp(steer - steerCur, -SRATE * dt, SRATE * dt);
   if (Math.abs(state.speed) > 0.1) {
@@ -2334,7 +2474,7 @@ function tick(now: number): void {
   // Dust off the loose stuff — rate follows speed, thrown back along travel.
   const v = Math.abs(state.speed);
   if (v > 3 && groundedF > 0.2) {
-    dustBudget += v * dt * 1.15;
+    dustBudget += v * dt * 1.15 * (1 - wx.wet * 0.9); // wet ground raises no dust
     while (dustBudget >= 1) {
       dustBudget -= 1;
       const i = 2 + Math.floor(Math.random() * 2); // rear wheels
@@ -2346,7 +2486,7 @@ function tick(now: number): void {
     }
   } else dustBudget = 0;
   stepDust(dt);
-  audio.update(state.speed, throttle, surfKind, groundedF);
+  audio.update(state.speed, throttle, surfKind, groundedF, wx.rain);
   reveal(state.x, state.z);
   if (now > streamAt) { streamAt = now + 1200; streamWorld(state.x, state.z); }
   // Two rigs. TOP: the chart view, tilted a touch for relief. CHASE: low and
@@ -2420,8 +2560,14 @@ function tick(now: number): void {
   blurMat.uniforms.src.value = rtA.texture; blurMat.uniforms.dirPx.value.set(0, 1 / rtA.height); runPass(blurMat, rtB);
   blurMat.uniforms.src.value = rtB.texture; blurMat.uniforms.dirPx.value.set(2 / rtA.width, 0); runPass(blurMat, rtA);
   blurMat.uniforms.src.value = rtA.texture; blurMat.uniforms.dirPx.value.set(0, 2 / rtA.height); runPass(blurMat, rtB);
+  // Bright-pass, then two blur rounds of its own — bloom must not reuse the
+  // depth-of-field blur, which is built from the WHOLE image.
+  brightMat.uniforms.src.value = rtScene.texture; runPass(brightMat, rtC);
+  blurMat.uniforms.src.value = rtC.texture; blurMat.uniforms.dirPx.value.set(1.5 / rtC.width, 0); runPass(blurMat, rtD);
+  blurMat.uniforms.src.value = rtD.texture; blurMat.uniforms.dirPx.value.set(0, 1.5 / rtC.height); runPass(blurMat, rtC);
   compMat.uniforms.sceneTex.value = rtScene.texture;
   compMat.uniforms.softTex.value = rtB.texture;
+  compMat.uniforms.bloomTex.value = rtC.texture;
   runPass(compMat, null);
   if (camMode === 'top') {
     // The dock's POV preview: raw scene from the chase rig, scissored into
@@ -2568,6 +2714,15 @@ function panel(x: number, y: number, w: number, h: number, edge = UI.edge): void
     hctx.fillRect(cx, cy + (dy < 0 ? -3 : 0), 1, 4);
   }
 }
+// Glow on accents the way pixel art does it: the same shape drawn one pixel
+// out at low alpha. A real blur would soften the font and undo the point of
+// the bitmap grid.
+function glowText(s: string, x: number, y: number, col: string, sc = 1): void {
+  hctx.globalAlpha = 0.22;
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) text(hctx, s, x + dx * sc, y + dy * sc, col, sc);
+  hctx.globalAlpha = 1;
+  text(hctx, s, x, y, col, sc);
+}
 function meter(x: number, y: number, n: number, lit: number, col: string, w = 3, h = 5, gap = 1): void {
   for (let i = 0; i < n; i++) {
     hctx.fillStyle = i < lit ? col : 'rgba(87,201,176,0.16)';
@@ -2606,7 +2761,7 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   // ── POI pins first, so panels overlay them ──
   const btnW = textW('ELSEWHERE') + 8;
   for (const p of poiDraw) {
-    const label = fit(p.t, HW - 14);
+    const label = fit(p.t, Math.round(HW * 0.62));
     const w = textW(label) + 6;
     if (p.edge === 0) {
       const x = clamp(Math.round(p.x / hudS) - w / 2, 2, HW - w - 2);
@@ -2632,6 +2787,22 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     text(hctx, shown, pad + 4, pad + 3, UI.text);
     placeRect = { x: pad, y: pad, w, h: 12 }; // tap it to toggle «translation»
   }
+  // ── weather ──
+  {
+    const w = WX[wx.sky];
+    const wet = wx.wet > 0.05;
+    const lab = wet && wx.rain < 0.1 ? `${w.label} WET` : w.label;
+    const ww = textW(lab) + 8;
+    panel(pad, pad + 15, ww, 11, wx.sky === 'storm' ? UI.bad : UI.edge);
+    text(hctx, lab, pad + 4, pad + 17, wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft);
+  }
+  if (wx.warn && performance.now() < wx.warn) {
+    const t2 = 'STORM APPROACHING';
+    const w2 = textW(t2) + 10;
+    const x2 = Math.round((HW - w2) / 2);
+    panel(x2, Math.round(HH * 0.32), w2, 13, UI.bad);
+    glowText(t2, x2 + 5, Math.round(HH * 0.32) + 3, UI.bad);
+  }
   // ── buttons, stacked top-right ──
   let by = pad;
   for (const b of buttons) {
@@ -2642,7 +2813,7 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   }
   // ── compass ribbon ──
   const cw = Math.min(116, HW - btnW - pad * 6);
-  const cx0 = Math.max(pad, Math.round((HW - btnW - pad * 2 - cw) / 2)), cy0 = pad + 16;
+  const cx0 = Math.max(pad, Math.round((HW - btnW - pad * 2 - cw) / 2)), cy0 = pad + 30;
   panel(cx0, cy0, cw, 15);
   const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
   const perDeg = cw / 140;
@@ -2677,14 +2848,14 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   panel(pad, sy, 52, 24);
   text(hctx, 'SURFACE', pad + 3, sy + 3, UI.dim);
   const sname = surf === 'road' ? 'ROAD' : surf === 'water' ? 'WATER' : 'ROUGH';
-  text(hctx, sname, pad + 3, sy + 11, surf === 'road' ? UI.good : UI.hot);
+  glowText(sname, pad + 3, sy + 11, surf === 'road' ? UI.good : UI.hot);
   meter(pad + 3, sy + 19, 10, Math.round(clamp(grip, 0, 1) * 10), surf === 'road' ? UI.good : UI.hot, 3, 3, 1);
   // ── speed, bottom-right ──
   const digits = String(kmh);
   const sw = textW(digits, 2) + textW('KM/H') + 12;
   const sx = HW - sw - pad, spy = HH - 20 - pad;
   panel(sx, spy, sw, 18, UI.gold);
-  text(hctx, digits, sx + 4, spy + 3, UI.gold, 2);
+  glowText(digits, sx + 4, spy + 3, UI.gold, 2);
   text(hctx, 'KM/H', sx + 8 + textW(digits, 2), spy + 9, UI.edge);
 }
 let dockRect = { x: 0, y: 0, w: 0, h: 0 };
