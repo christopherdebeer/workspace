@@ -62,8 +62,13 @@ const SHELL = `<!doctype html>
     background: #05070c; transition: opacity 0.6s ease; }
   #boot.done { opacity: 0; pointer-events: none; }
   #boot .card { text-align: center; display: grid; gap: 0.6rem; padding: 1rem; }
-  #boot .t { font-size: 1.05rem; color: #f5c453; }
+  #boot .t { font-size: 1.05rem; color: #f5c453; letter-spacing: 0.3em; }
   #boot .s { font-size: 0.72rem; opacity: 0.65; max-width: 34ch; line-height: 1.5; }
+  /* Armed and waiting for the tap that unlocks audio. */
+  #boot.ready { cursor: pointer; }
+  #boot.ready .s { opacity: 1; color: #6fe0c0; letter-spacing: 0.22em; text-transform: uppercase;
+    animation: pulse 1.4s ease-in-out infinite; }
+  @keyframes pulse { 0%, 100% { opacity: 0.45 } 50% { opacity: 1 } }
 </style>
 </head>
 <body>

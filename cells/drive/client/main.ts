@@ -1737,20 +1737,23 @@ const dustPos = new Float32Array(DUST_N * 3);
 const dustVel = new Float32Array(DUST_N * 3);
 const dustLife = new Float32Array(DUST_N);   // 1 → 0
 const dustSeed = new Float32Array(DUST_N);   // size jitter
+const dustKind = new Float32Array(DUST_N);  // 0 = dust, 1 = water
 let dustHead = 0;
 const dustGeo = new THREE.BufferGeometry();
 dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
 dustGeo.setAttribute('aLife', new THREE.BufferAttribute(dustLife, 1));
 dustGeo.setAttribute('aSeed', new THREE.BufferAttribute(dustSeed, 1));
+dustGeo.setAttribute('aKind', new THREE.BufferAttribute(dustKind, 1));
 dustGeo.frustumCulled = false;
 const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
   transparent: true,
   depthWrite: false,
-  uniforms: { uColor: { value: new THREE.Color(0x9a8f76) } },
+  uniforms: { uColor: { value: new THREE.Color(0x9a8f76) }, uWater: { value: new THREE.Color(0xcfe6f2) } },
   vertexShader: `
-    attribute float aLife; attribute float aSeed; varying float vLife;
+    attribute float aLife; attribute float aSeed; attribute float aKind;
+    varying float vLife; varying float vKind;
     void main(){
-      vLife = aLife;
+      vLife = aLife; vKind = aKind;
       vec4 mv = modelViewMatrix * vec4(position, 1.0);
       // Big, billowing puffs (two thirds of the first pass — full size buried
       // the truck, metre-scale read as pinpricks).
@@ -1758,39 +1761,46 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
       gl_Position = projectionMatrix * mv;
     }`,
   fragmentShader: `
-    uniform vec3 uColor; varying float vLife;
+    uniform vec3 uColor; uniform vec3 uWater; varying float vLife; varying float vKind;
     void main(){
       vec2 d = gl_PointCoord - 0.5;
       float r = dot(d, d);
       if (r > 0.25) discard;                       // round puff
       float soft = smoothstep(0.25, 0.02, r);
-      gl_FragColor = vec4(uColor, soft * vLife * 0.14); // reads against sand; dense enough was a white-out
+      // Water throws bright, hard-edged droplets; dry ground throws soft dust.
+      vec3 col = mix(uColor, uWater, vKind);
+      float a = mix(soft * vLife * 0.14, smoothstep(0.25, 0.12, r) * vLife * 0.5, vKind);
+      gl_FragColor = vec4(col, a);
     }`,
 }));
 dustPoints.frustumCulled = false;
 dustPoints.renderOrder = 30;
 scene.add(dustPoints);
-function emitDust(x: number, y: number, z: number, vx: number, vz: number): void {
+function emitDust(x: number, y: number, z: number, vx: number, vz: number, water = false): void {
   const i = dustHead = (dustHead + 1) % DUST_N;
-  dustPos[i * 3] = x + (Math.random() - 0.5) * 0.8;
-  dustPos[i * 3 + 1] = y + 0.15;
-  dustPos[i * 3 + 2] = z + (Math.random() - 0.5) * 0.8;
-  dustVel[i * 3] = vx + (Math.random() - 0.5) * 2.2;
-  dustVel[i * 3 + 1] = 1.1 + Math.random() * 1.6;
-  dustVel[i * 3 + 2] = vz + (Math.random() - 0.5) * 2.2;
+  const spread = water ? 1.6 : 0.8;
+  dustPos[i * 3] = x + (Math.random() - 0.5) * spread;
+  dustPos[i * 3 + 1] = y + (water ? 0.05 : 0.15);
+  dustPos[i * 3 + 2] = z + (Math.random() - 0.5) * spread;
+  // A splash is thrown OUT and up hard, then falls back; dust drifts.
+  dustVel[i * 3] = vx + (Math.random() - 0.5) * (water ? 5.5 : 2.2);
+  dustVel[i * 3 + 1] = water ? 2.2 + Math.random() * 2.6 : 1.1 + Math.random() * 1.6;
+  dustVel[i * 3 + 2] = vz + (Math.random() - 0.5) * (water ? 5.5 : 2.2);
   dustLife[i] = 1;
   dustSeed[i] = Math.random();
+  dustKind[i] = water ? 1 : 0;
 }
 function stepDust(dt: number): void {
   let any = false;
   for (let i = 0; i < DUST_N; i++) {
     if (dustLife[i] <= 0) continue;
     any = true;
-    dustLife[i] = Math.max(0, dustLife[i] - dt * 0.9);
-    const k = Math.exp(-1.8 * dt); // air drag settles the plume
+    dustLife[i] = Math.max(0, dustLife[i] - dt * (dustKind[i] > 0.5 ? 1.8 : 0.9));
+    const wet = dustKind[i] > 0.5;
+    const k = Math.exp((wet ? -0.7 : -1.8) * dt); // droplets carry; dust settles
     dustVel[i * 3] *= k;
     dustVel[i * 3 + 2] *= k;
-    dustVel[i * 3 + 1] = dustVel[i * 3 + 1] * k - 0.9 * dt;
+    dustVel[i * 3 + 1] = dustVel[i * 3 + 1] * k - (wet ? 9.0 : 0.9) * dt;
     dustPos[i * 3] += dustVel[i * 3] * dt;
     dustPos[i * 3 + 1] += dustVel[i * 3 + 1] * dt;
     dustPos[i * 3 + 2] += dustVel[i * 3 + 2] * dt;
@@ -1799,6 +1809,7 @@ function stepDust(dt: number): void {
     (dustGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
     (dustGeo.attributes.aLife as THREE.BufferAttribute).needsUpdate = true;
     (dustGeo.attributes.aSeed as THREE.BufferAttribute).needsUpdate = true;
+    (dustGeo.attributes.aKind as THREE.BufferAttribute).needsUpdate = true;
   }
 }
 
@@ -2474,14 +2485,26 @@ function tick(now: number): void {
   // Dust off the loose stuff — rate follows speed, thrown back along travel.
   const v = Math.abs(state.speed);
   if (v > 3 && groundedF > 0.2) {
-    dustBudget += v * dt * 1.15 * (1 - wx.wet * 0.9); // wet ground raises no dust
+    const anyWater = wheelSurf.some((k) => k === 'water');
+    // Wet ground raises no dust — but water itself throws plenty.
+    dustBudget += v * dt * (anyWater ? 2.2 : 1.15 * (1 - wx.wet * 0.9));
     while (dustBudget >= 1) {
       dustBudget -= 1;
-      const i = 2 + Math.floor(Math.random() * 2); // rear wheels
+      // WATER throws from the FRONT wheels — that is where a bow wave comes
+      // from; dry ground throws from the rears, where the drive is.
+      const water = wheelSurf[0] === 'water' || wheelSurf[2] === 'water';
+      const i = water ? Math.floor(Math.random() * 2) : 2 + Math.floor(Math.random() * 2);
       if (wheelSurf[i] === 'road') continue;
       const [wxw, wzw] = wheelWorld[i];
-      emitDust(wxw, contacts[i], wzw, -sinH * v * 0.28, cosH * v * 0.28);
-      if (Math.random() < 0.1) audio.stone(); // the pings ride the same plume
+      const wet = wheelSurf[i] === 'water';
+      emitDust(wxw, contacts[i], wzw, -sinH * v * (wet ? 0.1 : 0.28), cosH * v * (wet ? 0.1 : 0.28), wet);
+      if (wet) {
+        // The WAKE: a pair of droplets thrown sideways from the hull, so the
+        // truck leaves a widening V behind it rather than a plume.
+        const side = (Math.random() < 0.5 ? 1 : -1) * (1.1 + Math.random() * 0.6);
+        emitDust(state.x + cosH * side, contacts[i], state.z + sinH * side,
+          cosH * side * 2.2 - sinH * v * 0.1, sinH * side * 2.2 + cosH * v * 0.1, true);
+      } else if (Math.random() < 0.1) audio.stone(); // the pings ride the same plume
 
     }
   } else dustBudget = 0;
@@ -2714,6 +2737,15 @@ function panel(x: number, y: number, w: number, h: number, edge = UI.edge): void
     hctx.fillRect(cx, cy + (dy < 0 ? -3 : 0), 1, 4);
   }
 }
+// Legibility WITHOUT a box: a one-pixel dark outline around the glyphs. Boxes
+// are reserved for real instruments (things you read a value off, or press);
+// labels floating over the world just get an edge.
+function textEdge(s: string, x: number, y: number, col: string, sc = 1): void {
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+    text(hctx, s, x + dx * sc, y + dy * sc, 'rgba(4,10,11,0.85)', sc);
+  }
+  text(hctx, s, x, y, col, sc);
+}
 // Glow on accents the way pixel art does it: the same shape drawn one pixel
 // out at low alpha. A real blur would soften the font and undo the point of
 // the bitmap grid.
@@ -2764,18 +2796,16 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     const label = fit(p.t, Math.round(HW * 0.62));
     const w = textW(label) + 6;
     if (p.edge === 0) {
-      const x = clamp(Math.round(p.x / hudS) - w / 2, 2, HW - w - 2);
+      const x = clamp(Math.round(p.x / hudS - w / 2), 2, HW - w - 2);
       const y = clamp(Math.round(p.y / hudS), 22, HH - 40);
-      panel(x, y - 13, w, 11, p.c);
-      text(hctx, label, x + 3, y - 11, UI.text);
+      textEdge(label, x + 3, y - 11, UI.text);
       hctx.fillStyle = p.c;
-      hctx.fillRect(x + w / 2, y - 2, 1, 4);      // stem
-      hctx.fillRect(x + w / 2 - 1, y + 2, 3, 3);  // pin head
+      hctx.fillRect(Math.round(x + w / 2), y - 3, 1, 5);      // stem
+      hctx.fillRect(Math.round(x + w / 2) - 1, y + 2, 3, 3);  // pin head
     } else {
       const y = clamp(Math.round(p.y / hudS), 20, HH - 30);
       const x = p.edge > 0 ? HW - w - 3 : 3;
-      panel(x, y, w, 11, p.c);
-      text(hctx, label, x + 3, y + 2, UI.text);
+      textEdge(label, x + 3, y + 2, p.c);
     }
   }
   // ── place ──
@@ -2783,8 +2813,7 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     const avail = HW - btnW - pad * 3;
     const shown = fit(placeLine, avail - 8);
     const w = Math.min(avail, textW(shown) + 8);
-    panel(pad, pad, w, 12);
-    text(hctx, shown, pad + 4, pad + 3, UI.text);
+    textEdge(shown, pad + 1, pad + 3, UI.text);
     placeRect = { x: pad, y: pad, w, h: 12 }; // tap it to toggle «translation»
   }
   // ── weather ──
@@ -2792,16 +2821,13 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     const w = WX[wx.sky];
     const wet = wx.wet > 0.05;
     const lab = wet && wx.rain < 0.1 ? `${w.label} WET` : w.label;
-    const ww = textW(lab) + 8;
-    panel(pad, pad + 15, ww, 11, wx.sky === 'storm' ? UI.bad : UI.edge);
-    text(hctx, lab, pad + 4, pad + 17, wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft);
+    textEdge(lab, pad + 1, pad + 15, wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft);
   }
   if (wx.warn && performance.now() < wx.warn) {
     const t2 = 'STORM APPROACHING';
     const w2 = textW(t2) + 10;
     const x2 = Math.round((HW - w2) / 2);
-    panel(x2, Math.round(HH * 0.32), w2, 13, UI.bad);
-    glowText(t2, x2 + 5, Math.round(HH * 0.32) + 3, UI.bad);
+    textEdge(t2, x2 + 5, Math.round(HH * 0.32) + 3, UI.bad);
   }
   // ── buttons, stacked top-right ──
   let by = pad;
@@ -2814,25 +2840,33 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   // ── compass ribbon ──
   const cw = Math.min(116, HW - btnW - pad * 6);
   const cx0 = Math.max(pad, Math.round((HW - btnW - pad * 2 - cw) / 2)), cy0 = pad + 30;
-  panel(cx0, cy0, cw, 15);
+  hctx.fillStyle = UI.dim;                       // two hairline rails, no slab
+  hctx.fillRect(cx0, cy0 + 8, cw, 1);
+  hctx.fillRect(cx0, cy0 + 14, cw, 1);
   const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
   const perDeg = cw / 140;
-  for (let d = -70; d <= 70; d += 5) {
-    const a = ((deg + d) % 360 + 360) % 360;
+  // Walk ABSOLUTE bearings (fixed multiples of 5 degrees) and place each at its
+  // offset from the heading. Walking offsets from a moving heading meant a
+  // tick was "major" only when round(heading + d) happened to land on 45 — so
+  // the cardinals blinked on and off instead of sliding.
+  for (let b = 0; b < 360; b += 5) {
+    let d = b - deg;
+    if (d > 180) d -= 360; else if (d < -180) d += 360;
+    if (Math.abs(d) > 70) continue;
     const x = Math.round(cx0 + cw / 2 + d * perDeg);
     if (x < cx0 + 3 || x > cx0 + cw - 3) continue;
-    const major = Math.round(a) % 45 === 0;
+    const major = b % 45 === 0;
     hctx.fillStyle = major ? UI.gold : UI.dim;
     hctx.fillRect(x, cy0 + (major ? 9 : 11), 1, major ? 4 : 2);
     if (major) {
-      const lab = CARD8[Math.round(a / 45) % 8];
-      text(hctx, lab, x - textW(lab) / 2, cy0 + 2, UI.text);
+      const lab = CARD8[(b / 45) % 8];
+      textEdge(lab, Math.round(x - textW(lab) / 2), cy0 + 2, UI.text);
     }
   }
   hctx.fillStyle = UI.gold;
   hctx.fillRect(cx0 + cw / 2 - 1, cy0 + 1, 3, 1);
   hctx.fillRect(cx0 + cw / 2, cy0 + 1, 1, 3);
-  if (streaming) text(hctx, 'STREAMING', cx0 + 2, cy0 + 18, UI.dim);
+  if (streaming) textEdge('STREAMING', pad + 1, pad + 26, UI.soft);
   // ── minimap, bottom-left ──
   const mw = Math.min(58, Math.floor(HW * 0.34));
   const mx = pad, my = HH - mw - pad - 20;
@@ -2939,6 +2973,22 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
   await loadTerrainTile(tx, ty);
   streamWorld(0, 0);
   reveal(0, 0);
+  // TAP TO START. The splash is the natural place to take the gesture the
+  // browser demands before any audio can play — arming it here means sound is
+  // simply on when the world appears, instead of the player discovering a
+  // muted game and hunting for a button.
+  bootMsg('tap to start');
+  $('boot').classList.add('ready');
+  await new Promise<void>((go) => {
+    const start = (): void => {
+      audio.arm();
+      removeEventListener('pointerdown', start);
+      removeEventListener('keydown', start);
+      go();
+    };
+    addEventListener('pointerdown', start);
+    addEventListener('keydown', start);
+  });
   $('boot').classList.add('done');
   requestAnimationFrame((t) => { last = t; requestAnimationFrame(tick); });
 })();
