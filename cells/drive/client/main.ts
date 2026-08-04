@@ -358,6 +358,9 @@ const compMat = new THREE.ShaderMaterial({
         col = mix(sharp, soft, blurF);
         col = mix(col, hazeAt(dir), dimF);
       }
+      // Never hand a negative (or NaN) to pow(): one bad fragment upstream
+      // must not be able to punch a black hole through the finished frame.
+      col = max(col, vec3(0.0));
       gl_FragColor = vec4(srgb(col), 1.0);
     }`,
 });
@@ -447,7 +450,64 @@ function ghostify(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
     }
   };
 }
-const terrainMat = new THREE.MeshLambertMaterial({ vertexColors: true });
+// A procedural NORMAL MAP gives the terrain surface relief the 9.5m-per-pixel
+// heightfield can never carry — tussocks and stony ground catching the low
+// sun. Built from a summed-octave value-noise height field, differentiated
+// into tangent-space normals. Deterministic, ~40kB of canvas, no download.
+function normalTex(size: number, seed: number, octaves: number, strength: number, repeat: number): THREE.Texture {
+  const r = mulberry32(seed);
+  // Wrapping value noise: a lattice of random values, bilinearly interpolated
+  // with a smoothstep fade, tiled so the texture repeats seamlessly.
+  const lattice = (g: number): Float32Array => {
+    const a = new Float32Array(g * g);
+    for (let i = 0; i < a.length; i++) a[i] = r();
+    return a;
+  };
+  const h = new Float32Array(size * size);
+  let amp = 1, total = 0;
+  for (let o = 0; o < octaves; o++) {
+    const g = 4 << o;               // lattice resolution doubles each octave
+    const L = lattice(g);
+    const f = (t: number): number => t * t * (3 - 2 * t);
+    for (let y = 0; y < size; y++) {
+      const gy = (y / size) * g, y0 = Math.floor(gy), fy = f(gy - y0);
+      for (let x = 0; x < size; x++) {
+        const gx = (x / size) * g, x0 = Math.floor(gx), fx = f(gx - x0);
+        const i00 = L[(y0 % g) * g + (x0 % g)], i10 = L[(y0 % g) * g + ((x0 + 1) % g)];
+        const i01 = L[((y0 + 1) % g) * g + (x0 % g)], i11 = L[((y0 + 1) % g) * g + ((x0 + 1) % g)];
+        h[y * size + x] += amp * ((i00 * (1 - fx) + i10 * fx) * (1 - fy) + (i01 * (1 - fx) + i11 * fx) * fy);
+      }
+    }
+    total += amp;
+    amp *= 0.55;
+  }
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  const ctx2 = cv.getContext('2d')!;
+  const img = ctx2.createImageData(size, size);
+  const at = (x: number, y: number): number => h[((y + size) % size) * size + ((x + size) % size)] / total;
+  for (let y = 0; y < size; y++) for (let x = 0; x < size; x++) {
+    // Central differences → slope → tangent-space normal, packed to 0..255.
+    const dx = (at(x + 1, y) - at(x - 1, y)) * strength;
+    const dy = (at(x, y + 1) - at(x, y - 1)) * strength;
+    const len = Math.hypot(dx, dy, 1);
+    const i = (y * size + x) * 4;
+    img.data[i] = ((-dx / len) * 0.5 + 0.5) * 255;
+    img.data[i + 1] = ((-dy / len) * 0.5 + 0.5) * 255;
+    img.data[i + 2] = (1 / len) * 0.5 * 255 + 127.5;
+    img.data[i + 3] = 255;
+  }
+  ctx2.putImageData(img, 0, 0);
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(repeat, repeat);
+  return t;
+}
+const terrainMat = new THREE.MeshLambertMaterial({
+  vertexColors: true,
+  normalMap: normalTex(256, 9001, 4, 9, 70), // tile UVs are 0..1 over ~2.4km ⇒ ~34m per repeat
+  normalScale: new THREE.Vector2(0.32, 0.32), // relief, not crumpled foil
+});
 ghostify(terrainMat, { detail: true });
 
 // ── terrain meshes ─────────────────────────────────────────────────
@@ -691,6 +751,91 @@ sea.rotation.x = -Math.PI / 2;
 sea.position.y = -1e6; // parked until boot anchors sea level
 scene.add(sea);
 let seaOn = false;
+
+// ── vegetation: two instanced archetypes, deterministically scattered ──
+// Overgrowth is GEOMETRY, not texture. Every green polygon seeds its own
+// mulberry32 from its way id, so the same park grows the same trees on every
+// device and every visit. Two InstancedMeshes cover the whole world — two
+// draw calls, however many thousand plants.
+const VEG_MAX = 3600;
+const vegDummy = new THREE.Object3D();
+function vegMesh(geo: THREE.BufferGeometry, mat: THREE.Material): THREE.InstancedMesh {
+  const m = new THREE.InstancedMesh(geo, mat, VEG_MAX);
+  m.count = 0;
+  m.frustumCulled = false; // instances are spread across the whole world
+  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  scene.add(m);
+  return m;
+}
+// Canopy: a squashed icosahedron, flat-shaded — chunky enough to survive the
+// eventual pixel-art pass, cheap enough to plant thousands of.
+const canopyGeo = new THREE.IcosahedronGeometry(1, 0);
+canopyGeo.scale(1, 0.85, 1);
+const trunkGeo = new THREE.CylinderGeometry(0.16, 0.22, 1, 5);
+trunkGeo.translate(0, 0.5, 0);
+// NOT vertexColors: per-instance tint arrives through instanceColor, which
+// three defines independently. Asking for vertexColors on geometry that has
+// no color attribute multiplies by an unbound (black) attribute.
+const treeMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+const trunkMat = new THREE.MeshLambertMaterial({ color: 0x3a2c20, flatShading: true });
+const bushMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+const trees = vegMesh(canopyGeo, treeMat);
+const trunks = vegMesh(trunkGeo, trunkMat);
+const bushes = vegMesh(canopyGeo, bushMat);
+for (const m of [trees, bushes]) m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(VEG_MAX * 3), 3);
+ghostify(treeMat);
+ghostify(bushMat);
+const vegTint = new THREE.Color();
+function plant(kind: 'tree' | 'bush', x: number, z: number, y: number, r: () => number): void {
+  const mesh = kind === 'tree' ? trees : bushes;
+  if (mesh.count >= VEG_MAX) return;
+  const i = mesh.count++;
+  const s = kind === 'tree' ? 1.7 + r() * 2.3 : 0.7 + r() * 0.9;
+  const trunkH = kind === 'tree' ? 1.4 + r() * 1.8 : 0;
+  vegDummy.position.set(x, y + trunkH + s * 0.55, z);
+  vegDummy.rotation.set((r() - 0.5) * 0.25, r() * Math.PI, (r() - 0.5) * 0.25);
+  vegDummy.scale.set(s, s * (0.8 + r() * 0.5), s);
+  vegDummy.updateMatrix();
+  mesh.setMatrixAt(i, vegDummy.matrix);
+  // Sun-bleached to deep shade, so a stand of trees never reads as one blob.
+  vegTint.setHSL(0.22 + r() * 0.07, 0.32 + r() * 0.25, 0.2 + r() * 0.16);
+  mesh.setColorAt(i, vegTint);
+  mesh.instanceMatrix.needsUpdate = true;
+  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
+  if (kind === 'tree' && trunks.count < VEG_MAX) {
+    const j = trunks.count++;
+    vegDummy.position.set(x, y, z);
+    vegDummy.rotation.set(0, 0, 0);
+    vegDummy.scale.set(s * 0.5, trunkH + s * 0.4, s * 0.5);
+    vegDummy.updateMatrix();
+    trunks.setMatrixAt(j, vegDummy.matrix);
+    trunks.instanceMatrix.needsUpdate = true;
+  }
+}
+// Scatter inside a polygon by rejection sampling — density and mix set by
+// what the land actually is.
+function scatterVeg(pts: Array<[number, number]>, seed: number, tags: Record<string, string>): void {
+  let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
+  for (const [x, z] of pts) {
+    minx = Math.min(minx, x); maxx = Math.max(maxx, x);
+    minz = Math.min(minz, z); maxz = Math.max(maxz, z);
+  }
+  const w = maxx - minx, d = maxz - minz;
+  if (w < 6 || d < 6 || w > 4000 || d > 4000) return;
+  const wooded = tags.landuse === 'forest' || tags.natural === 'wood';
+  const bare = tags.leisure === 'pitch' || tags.landuse === 'grass' || tags.landuse === 'meadow';
+  const per = wooded ? 260 : bare ? 2600 : 900; // m² per plant
+  const n = Math.min(90, Math.floor((w * d) / per));
+  if (n < 1) return;
+  const r = mulberry32(seed >>> 0);
+  for (let k = 0, tries = 0; k < n && tries < n * 6; tries++) {
+    const x = minx + r() * w, z = minz + r() * d;
+    if (!pointInPoly(x, z, pts)) continue;
+    if (surfaceAt(x, z) === 'road') continue; // never in the carriageway
+    k++;
+    plant(wooded || r() < 0.45 ? 'tree' : 'bush', x, z, sampleHeight(x, z), r);
+  }
+}
 
 // ── the map layer (minimap base, FOG_SPAN frame, north-up) ─────────
 // Streamed features draw themselves here as they register; the minimap
@@ -1096,6 +1241,7 @@ function renderWays(els: OsmWay[]): void {
       polygon(pts, MAT.water, 0.3, 0, 'water');
     } else {
       polygon(pts, MAT.green, 0.2);
+      scatterVeg(pts, el.id, tags);
     }
   }
 }
@@ -1235,13 +1381,19 @@ const beamMat = new THREE.ShaderMaterial({
     varying float vD; varying float vR;
     void main(){
       vD = clamp(-position.z / uLen, 0.0, 1.0);
-      vR = length(position.xy) / max(vD * uRad, 0.001); // 0 on axis, 1 at the rim
+      vR = clamp(length(position.xy) / max(vD * uRad, 0.001), 0.0, 1.0); // 0 on axis, 1 at the rim
       gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
     }`,
   fragmentShader: `
     uniform float uAmp; varying float vD; varying float vR;
     void main(){
-      float a = pow(1.0 - vD, 1.7) * (1.0 - vR * vR) * 0.17 * uAmp;
+      // EVERY term clamped. Interpolation can overshoot a varying by an ulp at
+      // grazing angles, and pow() with a negative base is NaN in GLSL — one NaN
+      // fragment in an additive pass poisons the render target, smears through
+      // the half-res blur, and comes out of the tonemap as a hard black blob.
+      // That was the "black arch" over the truck, not the tunnels.
+      float d = clamp(vD, 0.0, 1.0), r = clamp(vR, 0.0, 1.0);
+      float a = max(pow(max(1.0 - d, 0.0), 1.7) * (1.0 - r * r) * 0.17 * uAmp, 0.0);
       gl_FragColor = vec4(vec3(1.0, 0.94, 0.78) * a, a);
     }`,
 });
