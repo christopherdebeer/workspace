@@ -167,15 +167,17 @@ function sampleHeight(ex: number, ez: number): number {
   return 0;
 }
 const terrainPalette = (elev: number, slope: number): [number, number, number] => {
-  // Sea → shore → lowland green → upland ochre → rock → snow, dimmed by slope.
+  // Solarpunk desert: cyan shallows → warm sand → ochre scrub → dry upland →
+  // bare rock → snow. The emerald in this world comes from the VEGETATION
+  // standing on the sand, not from painting the ground green.
   let r: number, g: number, b: number;
-  if (elev <= 0.5) [r, g, b] = [0.09, 0.16, 0.24];
-  else if (elev < 60) [r, g, b] = [0.16, 0.24, 0.14];
-  else if (elev < 300) [r, g, b] = [0.2, 0.26, 0.15];
-  else if (elev < 900) [r, g, b] = [0.29, 0.26, 0.17];
-  else if (elev < 1800) [r, g, b] = [0.32, 0.29, 0.26];
-  else [r, g, b] = [0.55, 0.58, 0.62];
-  const shade = 1 - clamp(slope * 1.6, 0, 0.55);
+  if (elev <= 0.5) [r, g, b] = [0.07, 0.30, 0.35];
+  else if (elev < 60) [r, g, b] = [0.44, 0.37, 0.22];
+  else if (elev < 300) [r, g, b] = [0.41, 0.33, 0.19];
+  else if (elev < 900) [r, g, b] = [0.37, 0.27, 0.15];
+  else if (elev < 1800) [r, g, b] = [0.33, 0.28, 0.23];
+  else [r, g, b] = [0.62, 0.63, 0.65];
+  const shade = 1 - clamp(slope * 1.4, 0, 0.45);
   return [r * shade, g * shade, b * shade];
 };
 
@@ -191,7 +193,9 @@ const camera = new THREE.PerspectiveCamera(55, 1, 1, 30000);
 // A real sky, not a backdrop color: gradient dome with the sun sitting low
 // on the horizon (mostly north-ish so the default chase view catches it),
 // and the scene's directional light aimed from the same place.
-const SUN_DIR = new THREE.Vector3(0.45, 0.075, -0.8).normalize();
+// GOLDEN HOUR, not night: the sun climbs off the horizon so the world is lit
+// rather than merely silhouetted, while keeping the long warm rake.
+const SUN_DIR = new THREE.Vector3(0.42, 0.34, -0.78).normalize();
 const skyMat = new THREE.ShaderMaterial({
   side: THREE.BackSide,
   depthWrite: false,
@@ -202,12 +206,12 @@ const skyMat = new THREE.ShaderMaterial({
     void main(){
       vec3 d = normalize(vDir);
       float az = pow(max(dot(normalize(vec3(d.x, 0.0, d.z)), normalize(vec3(sunDir.x, 0.0, sunDir.z))), 0.0), 3.0);
-      vec3 zen = vec3(0.010, 0.016, 0.038);
-      vec3 hor = mix(vec3(0.085, 0.115, 0.16), vec3(0.50, 0.22, 0.075), az);
+      vec3 zen = vec3(0.055, 0.135, 0.30);                                   // clean desert blue overhead
+      vec3 hor = mix(vec3(0.55, 0.48, 0.36), vec3(0.95, 0.60, 0.26), az);    // sand haze warming to gold
       vec3 col = mix(hor, zen, pow(clamp(d.y, 0.0, 1.0), 0.42));
       float sd = max(dot(d, sunDir), 0.0);
-      col += vec3(1.0, 0.55, 0.22) * (smoothstep(0.9996, 0.99985, sd) * 1.4 + pow(sd, 24.0) * 0.30);
-      col = mix(vec3(0.012, 0.017, 0.026), col, smoothstep(-0.06, 0.005, d.y));
+      col += vec3(1.0, 0.72, 0.34) * (smoothstep(0.9994, 0.99975, sd) * 1.6 + pow(sd, 20.0) * 0.42);
+      col = mix(vec3(0.30, 0.26, 0.22), col, smoothstep(-0.06, 0.02, d.y));
       gl_FragColor = vec4(col, 1.0);
     }`,
 });
@@ -216,8 +220,8 @@ skyDome.frustumCulled = false;
 skyDome.renderOrder = -10;
 scene.add(skyDome);
 
-scene.add(new THREE.HemisphereLight(0x93a6c8, 0x2c3629, 0.62));
-const sun = new THREE.DirectionalLight(0xffd2a0, 1.15);
+scene.add(new THREE.HemisphereLight(0xbcd2ee, 0x6a5a3c, 0.7)); // sky fill + warm sand bounce
+const sun = new THREE.DirectionalLight(0xffe0b0, 1.5);
 sun.position.copy(SUN_DIR).multiplyScalar(2000);
 scene.add(sun);
 
@@ -254,25 +258,30 @@ const QUAD_VS = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(pos
 const rtType = renderer.extensions.has('EXT_color_buffer_float') || renderer.extensions.has('EXT_color_buffer_half_float')
   ? THREE.HalfFloatType
   : THREE.UnsignedByteType;
-const mkRT = (depth: boolean): THREE.WebGLRenderTarget => {
+const mkRT = (depth: boolean, nearest = false): THREE.WebGLRenderTarget => {
   const rt = new THREE.WebGLRenderTarget(2, 2, { type: rtType, depthBuffer: depth });
-  rt.texture.minFilter = THREE.LinearFilter;
-  rt.texture.magFilter = THREE.LinearFilter;
+  rt.texture.minFilter = nearest ? THREE.NearestFilter : THREE.LinearFilter;
+  rt.texture.magFilter = nearest ? THREE.NearestFilter : THREE.LinearFilter;
   return rt;
 };
-const rtScene = mkRT(true);
-rtScene.samples = 4; // the canvas's MSAA doesn't apply to render targets
+// PIXEL GRID. The scene is rendered into a genuinely low-resolution buffer and
+// magnified with NearestFilter — that is what pixelates GEOMETRY EDGES, which
+// no amount of low-res texturing can do on its own. It also costs a fraction
+// of the fill rate, which buys back everything the post chain spends.
+const PIX_H = 320; // vertical resolution of the rendered world
+const rtScene = mkRT(true, true);
+rtScene.samples = 0; // MSAA would soften exactly the edges we want hard
 // Real per-pixel depth: fog by each pixel's TRUE distance, not by where its
 // screen ray meets the ground plane — otherwise a tall building far away gets
 // a haze seam across it (fogged base, "sky-crisp" top).
 rtScene.depthTexture = new THREE.DepthTexture(2, 2);
 const rtA = mkRT(false), rtB = mkRT(false);
 resizePost = () => {
-  const w = Math.max(2, Math.round(innerWidth * renderer.getPixelRatio()));
-  const h = Math.max(2, Math.round(innerHeight * renderer.getPixelRatio()));
-  rtScene.setSize(w, h);
-  rtA.setSize(w >> 1, h >> 1);
-  rtB.setSize(w >> 1, h >> 1);
+  const h = Math.min(PIX_H, Math.round(innerHeight));
+  const w = Math.max(2, Math.round((innerWidth / innerHeight) * h));
+  rtScene.setSize(w, Math.max(2, h));
+  rtA.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
+  rtB.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
 };
 resizePost();
 const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -322,7 +331,7 @@ const compMat = new THREE.ShaderMaterial({
       float horiz = clamp(length(d.xz) * 1.6, 0.0, 1.0);
       vec2 dir2 = d.xz / max(length(d.xz), 1e-4);
       float w = pow(max(dot(dir2, sunXZ), 0.0), 3.0) * horiz * horiz;
-      return mix(vec3(0.030, 0.042, 0.062), vec3(0.19, 0.11, 0.05), w);
+      return mix(vec3(0.24, 0.21, 0.17), vec3(0.50, 0.35, 0.17), w); // sand haze, gold toward the sun
     }
     void main(){
       vec3 sharp = texture2D(sceneTex, vUv).rgb;
@@ -605,6 +614,11 @@ function canvasTex(size: number, repeatX: number, repeatY: number, seed: number,
   draw(cv.getContext('2d')!, size, mulberry32(seed));
   const t = new THREE.CanvasTexture(cv);
   t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  // NEAREST everywhere: crisp texels are half the pixel look. Mipmapping stays
+  // ON (nearest-within-mip) or distant surfaces shimmer as texels fall below
+  // the pixel grid — the classic failure of naive pixel-art 3D.
+  t.magFilter = THREE.NearestFilter;
+  t.minFilter = THREE.NearestMipmapNearestFilter;
   t.repeat.set(repeatX, repeatY);
   return t;
 }
@@ -1393,7 +1407,9 @@ const beamMat = new THREE.ShaderMaterial({
       // the half-res blur, and comes out of the tonemap as a hard black blob.
       // That was the "black arch" over the truck, not the tunnels.
       float d = clamp(vD, 0.0, 1.0), r = clamp(vR, 0.0, 1.0);
-      float a = max(pow(max(1.0 - d, 0.0), 1.7) * (1.0 - r * r) * 0.17 * uAmp, 0.0);
+      // Daylight: the beam is a hint, not a searchlight. (The old night value
+      // painted a white wedge across a sunlit desert.)
+      float a = max(pow(max(1.0 - d, 0.0), 1.7) * (1.0 - r * r) * 0.07 * uAmp, 0.0);
       gl_FragColor = vec4(vec3(1.0, 0.94, 0.78) * a, a);
     }`,
 });
@@ -1415,7 +1431,7 @@ for (const sx of [-0.62, 0.62]) {
 // One spotlight for the actual pool of light (two would double the cost of
 // every lit material for a difference nobody can see). Intensity is in
 // CANDELA since three r155 — the old "3.2" was a rounding error, not a lamp.
-const headSpot = new THREE.SpotLight(0xfff0d0, 300, 110, 0.52, 0.65, 1.0);
+const headSpot = new THREE.SpotLight(0xfff0d0, 90, 110, 0.52, 0.65, 1.0);
 headSpot.position.set(0, 1.1, -2.0);
 headSpot.target.position.set(0, -1.6, -30);
 car.add(headSpot, headSpot.target);
@@ -1472,7 +1488,7 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
       float r = dot(d, d);
       if (r > 0.25) discard;                       // round puff
       float soft = smoothstep(0.25, 0.02, r);
-      gl_FragColor = vec4(uColor, soft * vLife * 0.26); // thick plume, still see-through
+      gl_FragColor = vec4(uColor, soft * vLife * 0.14); // reads against sand; dense enough was a white-out
     }`,
 }));
 dustPoints.frustumCulled = false;
@@ -1780,6 +1796,7 @@ function toggleCam(): void {
 addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'c') toggleCam(); });
 updateStickHome(); // boot in top mode: the pinned stick is visible from frame one
 updateDock();
+
 
 // ── «translation»: place names in an alien script ──────────────────
 // Tap the location (top-left) to toggle. Deterministic per string — the same
@@ -2244,7 +2261,7 @@ function tick(now: number): void {
   // Dust off the loose stuff — rate follows speed, thrown back along travel.
   const v = Math.abs(state.speed);
   if (v > 3 && groundedF > 0.2) {
-    dustBudget += v * dt * 1.6;
+    dustBudget += v * dt * 1.15;
     while (dustBudget >= 1) {
       dustBudget -= 1;
       const i = 2 + Math.floor(Math.random() * 2); // rear wheels
@@ -2352,6 +2369,43 @@ function tick(now: number): void {
     renderer.setViewport(0, 0, innerWidth, innerHeight);
   }
   requestAnimationFrame(tick);
+}
+
+// ── clean viewport ─────────────────────────────────────────────────
+// Everything chrome-like carries .ui, so one class on <body> strips the screen
+// back to raw pixels — no minimap, no pins, no text. 'h' or the ⛶ button, and
+// a double-tap anywhere brings it back (never trust a hidden button to undo
+// itself). Declared last: every element it references must already exist.
+{
+  const st = document.createElement('style');
+  st.textContent = 'body.clean .ui, body.clean .hud, body.clean #reroll { display: none !important; }';
+  document.head.appendChild(st);
+  for (const el of [$('reroll'), sndBtn, mapDock, poiWrap, mini, stickBase, stickNub]) el.classList.add('ui');
+  const cleanBtn = document.createElement('button');
+  cleanBtn.textContent = '⛶';
+  cleanBtn.title = 'clean viewport (h · double-tap to exit)';
+  Object.assign(cleanBtn.style, {
+    position: 'fixed', right: '12px', top: 'calc(max(10px, env(safe-area-inset-top)) + 78px)', zIndex: '11',
+    background: 'rgba(8,12,20,0.55)', color: '#f5c453', border: '1px solid rgba(245,196,83,0.4)',
+    borderRadius: '8px', padding: '0.3rem 0.6rem', font: 'inherit', fontSize: '0.74rem', cursor: 'pointer',
+  } as Partial<CSSStyleDeclaration>);
+  cleanBtn.classList.add('ui');
+  document.body.appendChild(cleanBtn);
+  const clean = (): boolean => document.body.classList.contains('clean');
+  const setClean = (on: boolean): void => {
+    document.body.classList.toggle('clean', on);
+    if (!on) updateStickHome(); // the pinned stick has to come back with it
+    try { localStorage.setItem('drive.clean', on ? '1' : '0'); } catch { /* fine */ }
+  };
+  try { if (localStorage.getItem('drive.clean') === '1') document.body.classList.add('clean'); } catch { /* fine */ }
+  cleanBtn.addEventListener('click', () => setClean(true));
+  let lastTap = 0;
+  canvas.addEventListener('pointerdown', () => {
+    const t = performance.now();
+    if (clean() && t - lastTap < 320) setClean(false);
+    lastTap = t;
+  });
+  addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'h') setClean(!clean()); });
 }
 
 // ── boot ───────────────────────────────────────────────────────────
