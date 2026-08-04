@@ -1388,8 +1388,8 @@ async function renderGated(x: number, y: number, ways: OsmWay[]): Promise<void> 
 }
 
 // "No roads yet" must read as LOADING, not a broken world.
-const osmStatus = document.createElement('div');
-osmStatus.textContent = '🛰 streaming roads…';
+const osmStatus = document.createElement('div'); // retained only as a no-op sink
+osmStatus.textContent = '';
 Object.assign(osmStatus.style, {
   position: 'fixed', left: '12px', top: 'calc(max(10px, env(safe-area-inset-top)) + 44px)', zIndex: '10',
   color: 'rgba(245,196,83,0.85)', font: '0.68rem ui-monospace, monospace',
@@ -1397,7 +1397,7 @@ Object.assign(osmStatus.style, {
 } as Partial<CSSStyleDeclaration>);
 document.body.appendChild(osmStatus);
 let osmPending = 0;
-const osmNote = (d: number): void => { osmPending += d; osmStatus.style.display = osmPending > 0 ? 'block' : 'none'; };
+const osmNote = (d: number): void => { osmPending += d; streaming = osmPending > 0; };
 
 async function loadOsmTile(x: number, y: number): Promise<void> {
   const key = `${x}/${y}`;
@@ -1769,6 +1769,7 @@ const setStickFrom = (e: PointerEvent): void => {
 };
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (hudTap(e.clientX, e.clientY)) return; // an instrument swallowed it
   // Capture: without it, a finger lifted over interactive chrome (the reroll
   // button) never fires pointerup HERE — the brake finger leaked and stayed
   // held forever, which read as "the car is stuck".
@@ -1867,14 +1868,14 @@ function input(): { throttle: number; steer: number; brake: boolean } {
 const MINI = 138, MINI_SPAN = 1500; // px, metres across
 // The corner DOCK always shows the OTHER view — chart minimap while chasing,
 // live POV preview while charting — and tapping it swaps which is fullscreen.
-const mapDock = document.createElement('div');
+const mapDock = document.createElement('div'); // offscreen holder for the map canvas
 Object.assign(mapDock.style, {
   position: 'fixed', left: '12px', bottom: 'max(44px, calc(env(safe-area-inset-bottom) + 34px))',
   width: `${MINI}px`, height: `${MINI}px`, zIndex: '10', cursor: 'pointer',
   border: '1px solid rgba(245,196,83,0.35)', borderRadius: '10px', overflow: 'hidden',
 } as Partial<CSSStyleDeclaration>);
+mapDock.style.display = 'none';
 document.body.appendChild(mapDock);
-mapDock.addEventListener('click', () => toggleCam());
 const mini = document.createElement('canvas');
 mini.width = mini.height = MINI * 2;
 Object.assign(mini.style, {
@@ -1882,9 +1883,7 @@ Object.assign(mini.style, {
   background: 'rgba(4,6,11,0.9)', pointerEvents: 'none',
 } as Partial<CSSStyleDeclaration>);
 mapDock.appendChild(mini);
-function updateDock(): void {
-  mini.style.visibility = camMode === 'top' ? 'hidden' : 'visible'; // hidden ⇒ the GL POV preview shows through
-}
+function updateDock(): void { /* the HUD decides what the corner shows */ }
 const miniCtx = mini.getContext('2d')!;
 function drawMinimap(): void {
   const S = MINI * 2;
@@ -1964,104 +1963,55 @@ function alienize(s: string): string {
   return out;
 }
 let placeLabel = '…';
-const renderPlace = (): void => { $('place-name').textContent = alienize(placeLabel); };
-{
-  const placeHud = $('place');
-  placeHud.style.pointerEvents = 'auto';
-  placeHud.style.cursor = 'pointer';
-  placeHud.title = 'toggle translation';
-  placeHud.addEventListener('click', () => {
-    alien = !alien;
-    try { localStorage.setItem('drive.alien', alien ? '1' : '0'); } catch { /* fine */ }
-    renderPlace();
-  });
+// The HUD reads placeLine each frame; toggling translation just rewrites it.
+const renderPlace = (): void => { placeLine = alienize(placeLabel).toUpperCase(); };
+function toggleAlien(): void {
+  alien = !alien;
+  try { localStorage.setItem('drive.alien', alien ? '1' : '0'); } catch { /* fine */ }
+  alienCache.clear();
+  renderPlace();
 }
 
-// ── POI HUD: bearing labels to nearby named places ─────────────────
-// Named parks/waters/buildings from the OSM stream become waypoints. On
-// screen they sit at their world position (far ones pinned to the horizon
-// along their bearing, not to a ground point buried in haze); off screen
-// they clamp to the side edge with an arrow.
-const poiWrap = document.createElement('div');
-Object.assign(poiWrap.style, { position: 'fixed', inset: '0', zIndex: '9', pointerEvents: 'none', overflow: 'hidden' } as Partial<CSSStyleDeclaration>);
-document.body.appendChild(poiWrap);
+// ── POI waypoints ──────────────────────────────────────────────────
+// Named parks/waters/buildings from the OSM stream become waypoints. This
+// only COMPUTES them; the pixel HUD draws them, so labels share the world's
+// grid and font instead of being browser text floating above it.
 const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a' };
-// On-screen POIs are MAP PINS: label over a stem over a dot, the dot sitting
-// exactly on the world point. Off-screen ones collapse to edge arrows.
-const poiEls = Array.from({ length: 5 }, () => {
-  const wrap = document.createElement('div');
-  Object.assign(wrap.style, {
-    // Positioned ENTIRELY via translate3d each frame — left/top writes forced
-    // layout and, updated on a 150ms throttle, made the pins judder against
-    // the 60fps camera. Compositor-only motion, every frame, stays glued.
-    position: 'absolute', left: '0', top: '0', display: 'none', flexDirection: 'column', alignItems: 'center',
-    willChange: 'transform',
-  } as Partial<CSSStyleDeclaration>);
-  const label = document.createElement('div');
-  Object.assign(label.style, {
-    font: '0.6rem ui-monospace, monospace', color: '#efe9dc', whiteSpace: 'nowrap',
-    background: 'rgba(8,12,20,0.55)', padding: '2px 7px', borderRadius: '7px',
-    border: '1px solid rgba(239,233,220,0.16)', textShadow: '0 1px 3px rgba(0,0,0,0.9)',
-    maxWidth: '46vw', overflow: 'hidden', textOverflow: 'ellipsis',
-  } as Partial<CSSStyleDeclaration>);
-  const stem = document.createElement('div');
-  Object.assign(stem.style, {
-    width: '1.5px', height: '15px',
-    background: 'linear-gradient(rgba(239,233,220,0.75), rgba(239,233,220,0.1))',
-  } as Partial<CSSStyleDeclaration>);
-  const dot = document.createElement('div');
-  Object.assign(dot.style, {
-    width: '7px', height: '7px', borderRadius: '50%', marginTop: '-1px',
-    boxShadow: '0 1px 5px rgba(0,0,0,0.8)',
-  } as Partial<CSSStyleDeclaration>);
-  wrap.append(label, stem, dot);
-  poiWrap.appendChild(wrap);
-  return { wrap, label, stem, dot, text: '' };
-});
 const poiVec = new THREE.Vector3(), poiView = new THREE.Vector3(), camFwd = new THREE.Vector3();
-const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}m` : `${(m / 1000).toFixed(1)}km`);
+const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}M` : `${(m / 1000).toFixed(1)}KM`);
 function updatePois(): void {
   const near = [...pois.values()]
     .map((p) => ({ p, d: Math.hypot(p.x - state.x, p.z - state.z) }))
     .filter((e) => e.d > 25 && e.d < 3000)
     .sort((a, b) => a.d - b.d)
-    .slice(0, poiEls.length);
+    .slice(0, 5);
   camera.getWorldDirection(camFwd);
-  for (let i = 0; i < poiEls.length; i++) {
-    const el = poiEls[i];
-    const e = near[i];
-    if (!e) { el.wrap.style.display = 'none'; continue; }
-    const { p, d } = e;
+  poiDraw = [];
+  for (let i = 0; i < near.length; i++) {
+    const { p, d } = near[i];
     const dx = p.x - state.x, dz = p.z - state.z;
     const dc = Math.min(d, 900); // beyond ~900m: pin to the horizon on its bearing
     const wx = state.x + (dx / d) * dc, wz = state.z + (dz / d) * dc;
     poiVec.set(wx, sampleHeight(wx, wz) + 2, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
-    el.wrap.style.display = 'flex';
-    el.dot.style.background = POI_COLORS[p.kind];
-    const setText = (t: string): void => { if (el.text !== t) { el.text = t; el.label.textContent = t; } };
+    const label = `${alienize(p.name).toUpperCase()} ${fmtDist(d)}`;
     if (poiView.z < -1) {
       poiVec.project(camera);
-      if (Math.abs(poiVec.x) <= 0.94) {
-        // MAP PIN: the dot sits on the spot, the label floats off it.
-        setText(`${alienize(p.name)} · ${fmtDist(d)}`);
-        el.stem.style.display = el.dot.style.display = 'block';
-        const px = (poiVec.x * 0.5 + 0.5) * innerWidth;
-        const py = clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.14, innerHeight * 0.82);
-        el.wrap.style.transform = `translate3d(${px.toFixed(1)}px, ${py.toFixed(1)}px, 0) translate(-50%, -100%)`;
+      if (Math.abs(poiVec.x) <= 0.92) {
+        poiDraw.push({
+          x: (poiVec.x * 0.5 + 0.5) * innerWidth,
+          y: clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.16, innerHeight * 0.8),
+          t: label, c: POI_COLORS[p.kind], edge: 0,
+        });
         continue;
       }
     }
-    // Off-screen: side chip with an arrow, stacked by proximity rank.
-    el.stem.style.display = el.dot.style.display = 'none';
-    const py = innerHeight * (0.28 + i * 0.055);
-    if (camFwd.x * dz - camFwd.z * dx > 0) {
-      setText(`${alienize(p.name)} · ${fmtDist(d)} ▶`);
-      el.wrap.style.transform = `translate3d(${innerWidth - 8}px, ${py.toFixed(1)}px, 0) translateX(-100%)`;
-    } else {
-      setText(`◀ ${alienize(p.name)} · ${fmtDist(d)}`);
-      el.wrap.style.transform = `translate3d(8px, ${py.toFixed(1)}px, 0)`;
-    }
+    // Off-screen: an edge chip on the side the waypoint actually lies.
+    const right = camFwd.x * dz - camFwd.z * dx > 0;
+    poiDraw.push({
+      x: 0, y: innerHeight * (0.3 + i * 0.05),
+      t: right ? `${label} >` : `< ${label}`, c: POI_COLORS[p.kind], edge: right ? 1 : -1,
+    });
   }
 }
 
@@ -2217,27 +2167,10 @@ const audio = (() => {
     },
   };
 })();
-// The button reports the TRUTH: '♪ tap' means the context exists but the
-// browser hasn't unlocked it yet, so a silent failure is never mistaken for
-// a working mix.
-const sndBtn = document.createElement('button');
-Object.assign(sndBtn.style, {
-  position: 'fixed', right: '12px', top: 'calc(max(10px, env(safe-area-inset-top)) + 40px)', zIndex: '11',
-  background: 'rgba(8,12,20,0.55)', color: '#f5c453', border: '1px solid rgba(245,196,83,0.4)',
-  borderRadius: '8px', padding: '0.35rem 0.7rem', font: 'inherit', fontSize: '0.74rem', cursor: 'pointer',
-} as Partial<CSSStyleDeclaration>);
-document.body.appendChild(sndBtn);
-function syncBtn(): void {
-  sndBtn.textContent = !audio.on ? '♪ off' : audio.state === 'running' ? '♪ on' : '♪ tap';
-}
-sndBtn.addEventListener('click', () => {
-  // Tapping a '♪ tap' button must UNLOCK, not mute — only toggle when the
-  // sound is already doing what the label claims.
-  const blocked = audio.on && audio.state !== 'running';
-  audio.arm();
-  if (!blocked) audio.toggle();
-  syncBtn();
-});
+// The sound button reports the TRUTH: 'TAP' means the context exists but the
+// browser hasn't unlocked it yet, so a silent failure is never mistaken for a
+// working mix.
+const syncBtn = (): void => { /* label is drawn from audio state each frame */ };
 // ANY first gesture arms the context. iOS grants user activation on
 // touchend/click far more reliably than on pointerdown, so listen broadly and
 // keep listening (a backgrounded tab suspends the context again).
@@ -2245,11 +2178,8 @@ for (const ev of ['pointerdown', 'touchend', 'click', 'keydown']) {
   addEventListener(ev, () => audio.arm(), { passive: true });
 }
 addEventListener('visibilitychange', () => { if (!document.hidden) audio.arm(); });
-syncBtn();
 
 // ── main loop ──────────────────────────────────────────────────────
-// Set once the instrument panels exist (they are built after this point).
-let hudUpdate: ((surf: Surface, kmh: number, grip: number) => void) | null = null;
 let last = performance.now();
 let streamAt = 0;
 let miniAt = 0;
@@ -2470,7 +2400,7 @@ function tick(now: number): void {
   ghostU.uGhostCam.value.copy(camera.position);
   compMat.uniforms.camPos.value.copy(camera.position);
   compMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
-  hudUpdate?.(surfKind, Math.round(Math.abs(state.speed) * 3.6), groundedF);
+  drawHud(surfKind, Math.round(Math.abs(state.speed) * 3.6), groundedF);
   if (camMode === 'chase' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
   updatePois(); // every frame — throttled pins juddered against the camera
   // Progress lives in the URL: reloading resumes here, not at the spawn.
@@ -2496,8 +2426,8 @@ function tick(now: number): void {
   if (camMode === 'top') {
     // The dock's POV preview: raw scene from the chase rig, scissored into
     // the corner over the composite (autoClear respects the scissor).
-    const r = mapDock.getBoundingClientRect();
-    const vx = r.left, vy = innerHeight - r.bottom, vw = r.width, vh = r.height;
+    const dr = dockRect;
+    const vx = dr.x * hudS, vy = innerHeight - (dr.y + dr.h) * hudS, vw = dr.w * hudS, vh = dr.h * hudS;
     miniCam.position.set(
       state.x - fwdX * 13,
       Math.max(sampleHeight(state.x - fwdX * 13, state.z - fwdZ * 13) + 5.4, bodyY + 4.2),
@@ -2535,121 +2465,248 @@ function applyBiome(b: Biome): void {
   (sea.material as THREE.MeshLambertMaterial).color.setRGB(shallow[0] * 2.2, shallow[1] * 2.2, shallow[2] * 2.2);
 }
 
-// ── HUD: instrument panels ─────────────────────────────────────────
-// The reference UI is a rally computer: dark translucent slabs with corner
-// brackets, thin cyan rules, uppercase mono labels, segmented meters. The
-// brackets are drawn with eight tiny background gradients rather than extra
-// elements, so any node can become a panel with one class.
-{
-  const css = `
-  .panel {
-    --edge: rgba(122,226,205,0.55);
-    position: fixed; z-index: 11; padding: 5px 9px;
-    font: 0.62rem ui-monospace, SFMono-Regular, Menlo, monospace;
-    letter-spacing: 0.06em; text-transform: uppercase; color: #cfe9e2;
-    background:
-      linear-gradient(var(--edge),var(--edge)) 0 0/9px 1px no-repeat,
-      linear-gradient(var(--edge),var(--edge)) 0 0/1px 9px no-repeat,
-      linear-gradient(var(--edge),var(--edge)) 100% 0/9px 1px no-repeat,
-      linear-gradient(var(--edge),var(--edge)) 100% 0/1px 9px no-repeat,
-      linear-gradient(var(--edge),var(--edge)) 0 100%/9px 1px no-repeat,
-      linear-gradient(var(--edge),var(--edge)) 0 100%/1px 9px no-repeat,
-      linear-gradient(var(--edge),var(--edge)) 100% 100%/9px 1px no-repeat,
-      linear-gradient(var(--edge),var(--edge)) 100% 100%/1px 9px no-repeat,
-      rgba(6,17,19,0.66);
-    box-shadow: inset 0 0 14px rgba(0,0,0,0.55);
-    text-shadow: 0 1px 3px rgba(0,0,0,0.9);
-  }
-  .panel b { color: #eaf6f2; font-weight: 600; }
-  .panel .k { color: rgba(122,226,205,0.75); font-size: 0.9em; }
-  #place { text-transform: none; letter-spacing: 0; }
-  #place .dim { color: rgba(160,190,185,0.7); }
-  #speed { display: flex; align-items: baseline; gap: 4px; }
-  #speed .v { font-size: 1.5rem; font-weight: 700; letter-spacing: 0; color: #f3d98a; }
-  #hint { opacity: 0.4; }
-  button.panel { cursor: pointer; color: #f3d98a; }
-  .meter { display: flex; gap: 2px; margin-top: 3px; }
-  .meter i { width: 4px; height: 9px; background: rgba(122,226,205,0.18); }
-  .meter i.on { background: #6fe0c0; box-shadow: 0 0 4px rgba(111,224,192,0.6); }
-  .meter i.hot { background: #f3a24a; box-shadow: 0 0 4px rgba(243,162,74,0.6); }`;
-  const st = document.createElement('style');
-  st.textContent = css;
-  document.head.appendChild(st);
-  for (const el of [$('place'), $('speed'), $('reroll'), sndBtn]) el.classList.add('panel');
-  // The long control hint collided with the speed instrument; keep it as a
-  // faint one-liner well clear of it.
-  $('hint').textContent = 'wasd · space brake · c cam · h clean';
-  Object.assign($('hint').style, { fontSize: '0.58rem', opacity: '0.35', right: '120px' } as Partial<CSSStyleDeclaration>);
-  // Speed becomes a labelled instrument with a segmented throttle meter.
-  $('speed').innerHTML = '<span class="v">0</span><span class="k">km/h</span>';
-  const speedVal = $('speed').querySelector('.v') as HTMLElement;
-
-  // COMPASS strip — the reference's most useful single element: a heading
-  // ribbon that tells you which way you are actually pointing.
-  const compWrap = document.createElement('div');
-  compWrap.className = 'panel ui';
-  Object.assign(compWrap.style, {
-    top: 'calc(max(10px, env(safe-area-inset-top)) + 68px)', left: '50%',
-    transform: 'translateX(-50%)', padding: '3px 7px', pointerEvents: 'none',
-  } as Partial<CSSStyleDeclaration>);
-  const comp = document.createElement('canvas');
-  comp.width = 464; comp.height = 48;
-  Object.assign(comp.style, { display: 'block', width: '232px', height: '24px' } as Partial<CSSStyleDeclaration>);
-  compWrap.appendChild(comp);
-  document.body.appendChild(compWrap);
-  const cctx = comp.getContext('2d')!;
-  const CARD = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
-  function drawCompass(): void {
-    const W = comp.width, H = comp.height;
-    cctx.clearRect(0, 0, W, H);
-    const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
-    const pxPerDeg = W / 130; // 130° of arc across the strip
-    for (let d = -75; d <= 75; d += 5) {
-      const a = ((deg + d) % 360 + 360) % 360;
-      const x = W / 2 + d * pxPerDeg;
-      if (x < 4 || x > W - 4) continue;
-      const major = Math.round(a) % 45 === 0;
-      cctx.globalAlpha = 0.35 + 0.65 * (1 - Math.min(1, Math.abs(d) / 78)); // ends fade, centre reads
-      cctx.fillStyle = major ? '#f7dc8c' : 'rgba(140,236,214,0.85)';
-      cctx.fillRect(x - 1, major ? 16 : 22, major ? 3 : 2, major ? 12 : 6);
-      if (major) {
-        cctx.font = '700 15px ui-monospace, monospace';
-        cctx.textAlign = 'center';
-        cctx.fillText(CARD[Math.round(a / 45) % 8], x, 13);
+// ── pixel font ─────────────────────────────────────────────────────
+// A real 5x7 bitmap font, not a system font shrunk down. Each glyph is seven
+// rows of five bits, base32-encoded (0-v = 0-31, bit 4 leftmost). Drawn as
+// literal rectangles into the low-res HUD buffer, so every stroke lands on the
+// pixel grid — the thing a hinted, anti-aliased system font can never do.
+const GLYPHS: Record<string, string> = {
+  ' ': '0000000', A: 'ehhvhhh', B: 'uhhuhhu', C: 'ehggghe', D: 'sihhhis', E: 'vgguggv',
+  F: 'vgguggg', G: 'ehgnhhf', H: 'hhhvhhh', I: 'e44444e', J: '72222ic', K: 'hikokih',
+  L: 'ggggggv', M: 'hrllhhh', N: 'hhpljhh', O: 'ehhhhhe', P: 'uhhuggg', Q: 'ehhhlid',
+  R: 'uhhukih', S: 'fgge11u', T: 'v444444', U: 'hhhhhhe', V: 'hhhhha4', W: 'hhhllrh',
+  X: 'hha4ahh', Y: 'hha4444', Z: 'v1248gv',
+  '0': 'ehjlphe', '1': '4c4444e', '2': 'eh1248v', '3': 'v4221he', '4': '26aiv22',
+  '5': 'vgu11he', '6': '68guhhe', '7': 'v124888', '8': 'ehhehhe', '9': 'ehhf12c',
+  '.': '00000cc', ',': '0000c48', ':': '0cc0cc0', '/': '122488g', '-': '000v000',
+  '%': 'hi4449h', '·': '000c000', '!': '4444404', '?': 'eh12404', '(': '2488842',
+  ')': '8422248', '+': '044v440', '>': '8421248', '<': '248g842', '=': '00v0v00',
+  '#': 'alvlvla', '*': '04ava40', '"': 'aa00000', "'": '4400000', '°': 'cic0000',
+};
+const B32 = '0123456789abcdefghijklmnopqrstuv';
+const FW = 5, FH = 7;
+function glyphRows(ch: string): string {
+  return GLYPHS[ch] ?? GLYPHS[ch.toUpperCase()] ?? GLYPHS['?'];
+}
+/** Width in pixels of `s` at scale `sc` (1px letter spacing). */
+const textW = (s: string, sc = 1): number => s.length * (FW + 1) * sc;
+/** Hard-truncate to fit a pixel width — no ellipsis glyph in a 5x7 font. */
+const fit = (s: string, maxPx: number): string => {
+  const n = Math.max(1, Math.floor(maxPx / (FW + 1)));
+  return s.length <= n ? s : `${s.slice(0, n - 1)}.`;
+};
+function text(c: CanvasRenderingContext2D, s: string, x: number, y: number, col: string, sc = 1): void {
+  c.fillStyle = col;
+  let cx = x;
+  for (const ch of s) {
+    // Anything outside the bitmap set — Arabic, Yi, accented Latin — is drawn
+    // from the system font at glyph size. It lands on the same low-res buffer
+    // and gets magnified with everything else, so a Cairo or Tromsø place name
+    // still reads as pixels rather than as a row of '?'.
+    if (!GLYPHS[ch] && !GLYPHS[ch.toUpperCase()] && ch !== ' ') {
+      c.font = `${FH * sc}px ui-monospace, monospace`;
+      c.textAlign = 'left';
+      c.fillText(ch, cx, y + FH * sc);
+      cx += (FW + 1) * sc;
+      continue;
+    }
+    const rows = glyphRows(ch);
+    for (let r = 0; r < FH; r++) {
+      const bits = B32.indexOf(rows[r]);
+      if (bits <= 0) continue;
+      for (let b = 0; b < FW; b++) {
+        if (bits & (1 << (FW - 1 - b))) c.fillRect(cx + b * sc, y + r * sc, sc, sc);
       }
     }
-    cctx.globalAlpha = 1;
-    // The needle points DOWN from the top rail at dead centre — drawn inside
-    // the canvas, unlike the first pass which put it at negative y.
-    cctx.fillStyle = '#f7dc8c';
-    cctx.beginPath();
-    cctx.moveTo(W / 2, 46); cctx.lineTo(W / 2 - 6, 36); cctx.lineTo(W / 2 + 6, 36);
-    cctx.closePath(); cctx.fill();
+    cx += (FW + 1) * sc;
   }
-
-  // Surface + grip readout, the reference's "ROAD / ROUGH" panel.
-  const surfPanel = document.createElement('div');
-  surfPanel.className = 'panel ui';
-  Object.assign(surfPanel.style, {
-    left: '12px', bottom: 'calc(max(44px, env(safe-area-inset-bottom) + 34px) + 152px)', minWidth: '86px',
-  } as Partial<CSSStyleDeclaration>);
-  surfPanel.innerHTML = '<div class="k">surface</div><b id="surf-v">road</b><div class="meter" id="surf-m"></div>';
-  document.body.appendChild(surfPanel);
-  const surfV = surfPanel.querySelector('#surf-v') as HTMLElement;
-  const surfM = surfPanel.querySelector('#surf-m') as HTMLElement;
-  for (let i = 0; i < 10; i++) surfM.appendChild(document.createElement('i'));
-  const segs = [...surfM.children] as HTMLElement[];
-
-  hudUpdate = (surf: Surface, kmh: number, grip: number): void => {
-    speedVal.textContent = String(kmh);
-    surfV.textContent = surf === 'road' ? 'road' : surf === 'water' ? 'water' : 'rough';
-    const lit = Math.round(clamp(grip, 0, 1) * segs.length);
-    for (let i = 0; i < segs.length; i++) {
-      segs[i].className = i < lit ? (surf === 'road' ? 'on' : 'hot') : '';
-    }
-    drawCompass();
-  };
 }
+
+// ── HUD: one low-res canvas, drawn in the pixel font ───────────────
+// The DOM version could never reach the reference: system fonts are hinted
+// and anti-aliased, CSS borders sit on CSS pixels, and none of it shares the
+// world's pixel grid. Everything is now drawn into a buffer roughly a third
+// of screen resolution and magnified with nearest-neighbour, so the HUD is
+// made of the same pixels as the world behind it.
+const hud = document.createElement('canvas');
+Object.assign(hud.style, {
+  position: 'fixed', inset: '0', width: '100%', height: '100%', zIndex: '10',
+  pointerEvents: 'none', imageRendering: 'pixelated',
+} as Partial<CSSStyleDeclaration>);
+hud.classList.add('ui');
+document.body.appendChild(hud);
+const hctx = hud.getContext('2d')!;
+// The reference's limited palette.
+const UI = {
+  ink: '#0a1417', edge: '#57c9b0', dim: '#3d6f66', text: '#d6efe7', soft: '#7fa39c',
+  gold: '#f2c14e', hot: '#e2703a', good: '#6fe0a0', bad: '#d94f4f',
+};
+let hudS = 3;            // world pixels per HUD pixel
+let HW = 2, HH = 2;      // HUD buffer size
+function hudResize(): void {
+  // Two screen pixels per HUD pixel on a phone: chunky enough to read as
+  // 8-bit, fine enough that a place name and the instruments coexist.
+  hudS = innerWidth < 760 ? 2 : 3;
+  HW = Math.max(80, Math.round(innerWidth / hudS));
+  HH = Math.max(80, Math.round(innerHeight / hudS));
+  hud.width = HW; hud.height = HH;
+  hctx.imageSmoothingEnabled = false;
+}
+addEventListener('resize', hudResize);
+hudResize();
+// Panel: 1px rule, corner brackets, dark fill — the reference's whole chrome
+// vocabulary in one primitive.
+function panel(x: number, y: number, w: number, h: number, edge = UI.edge): void {
+  hctx.fillStyle = 'rgba(8,20,23,0.78)';
+  hctx.fillRect(x, y, w, h);
+  hctx.fillStyle = UI.dim;
+  hctx.fillRect(x, y, w, 1); hctx.fillRect(x, y + h - 1, w, 1);
+  hctx.fillRect(x, y, 1, h); hctx.fillRect(x + w - 1, y, 1, h);
+  hctx.fillStyle = edge;                       // brackets, 4px arms
+  for (const [cx, cy, dx, dy] of [[x, y, 1, 1], [x + w - 1, y, -1, 1], [x, y + h - 1, 1, -1], [x + w - 1, y + h - 1, -1, -1]] as const) {
+    hctx.fillRect(cx + (dx < 0 ? -3 : 0), cy, 4, 1);
+    hctx.fillRect(cx, cy + (dy < 0 ? -3 : 0), 1, 4);
+  }
+}
+function meter(x: number, y: number, n: number, lit: number, col: string, w = 3, h = 5, gap = 1): void {
+  for (let i = 0; i < n; i++) {
+    hctx.fillStyle = i < lit ? col : 'rgba(87,201,176,0.16)';
+    hctx.fillRect(x + i * (w + gap), y, w, h);
+  }
+}
+// Buttons live in HUD space; taps are hit-tested against these rects.
+interface Btn { x: number; y: number; w: number; h: number; label: () => string; hit: () => void; col: () => string }
+const buttons: Btn[] = [];
+function hudButton(b: Btn): void { buttons.push(b); }
+hudButton({
+  x: 0, y: 0, w: 0, h: 0, col: () => UI.gold, label: () => 'ELSEWHERE',
+  hit: () => { location.href = location.pathname + '?random=1'; },
+});
+hudButton({
+  x: 0, y: 0, w: 0, h: 0,
+  col: () => (audio.on && audio.state === 'running' ? UI.good : UI.soft),
+  label: () => (!audio.on ? 'SND OFF' : audio.state === 'running' ? 'SND ON' : 'SND TAP'),
+  hit: () => {
+    const blocked = audio.on && audio.state !== 'running';
+    audio.arm();
+    if (!blocked) audio.toggle();
+  },
+});
+hudButton({ x: 0, y: 0, w: 0, h: 0, col: () => UI.soft, label: () => 'HIDE', hit: () => setClean(true) });
+const CARD8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+let placeLine = '';
+// POI pins, filled by updatePois and drawn in the pixel font.
+interface PoiDraw { x: number; y: number; t: string; c: string; edge: 0 | -1 | 1 }
+let poiDraw: PoiDraw[] = [];
+let streaming = false;
+
+function drawHud(surf: Surface, kmh: number, grip: number): void {
+  hctx.clearRect(0, 0, HW, HH);
+  const pad = 4;
+  // ── POI pins first, so panels overlay them ──
+  const btnW = textW('ELSEWHERE') + 8;
+  for (const p of poiDraw) {
+    const label = fit(p.t, HW - 14);
+    const w = textW(label) + 6;
+    if (p.edge === 0) {
+      const x = clamp(Math.round(p.x / hudS) - w / 2, 2, HW - w - 2);
+      const y = clamp(Math.round(p.y / hudS), 22, HH - 40);
+      panel(x, y - 13, w, 11, p.c);
+      text(hctx, label, x + 3, y - 11, UI.text);
+      hctx.fillStyle = p.c;
+      hctx.fillRect(x + w / 2, y - 2, 1, 4);      // stem
+      hctx.fillRect(x + w / 2 - 1, y + 2, 3, 3);  // pin head
+    } else {
+      const y = clamp(Math.round(p.y / hudS), 20, HH - 30);
+      const x = p.edge > 0 ? HW - w - 3 : 3;
+      panel(x, y, w, 11, p.c);
+      text(hctx, label, x + 3, y + 2, UI.text);
+    }
+  }
+  // ── place ──
+  if (placeLine) {
+    const avail = HW - btnW - pad * 3;
+    const shown = fit(placeLine, avail - 8);
+    const w = Math.min(avail, textW(shown) + 8);
+    panel(pad, pad, w, 12);
+    text(hctx, shown, pad + 4, pad + 3, UI.text);
+    placeRect = { x: pad, y: pad, w, h: 12 }; // tap it to toggle «translation»
+  }
+  // ── buttons, stacked top-right ──
+  let by = pad;
+  for (const b of buttons) {
+    b.w = textW(b.label()) + 8; b.h = 12; b.x = HW - b.w - pad; b.y = by;
+    panel(b.x, b.y, b.w, b.h, b.col());
+    text(hctx, b.label(), b.x + 4, b.y + 3, b.col());
+    by += b.h + 3;
+  }
+  // ── compass ribbon ──
+  const cw = Math.min(116, HW - btnW - pad * 6);
+  const cx0 = Math.max(pad, Math.round((HW - btnW - pad * 2 - cw) / 2)), cy0 = pad + 16;
+  panel(cx0, cy0, cw, 15);
+  const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
+  const perDeg = cw / 140;
+  for (let d = -70; d <= 70; d += 5) {
+    const a = ((deg + d) % 360 + 360) % 360;
+    const x = Math.round(cx0 + cw / 2 + d * perDeg);
+    if (x < cx0 + 3 || x > cx0 + cw - 3) continue;
+    const major = Math.round(a) % 45 === 0;
+    hctx.fillStyle = major ? UI.gold : UI.dim;
+    hctx.fillRect(x, cy0 + (major ? 9 : 11), 1, major ? 4 : 2);
+    if (major) {
+      const lab = CARD8[Math.round(a / 45) % 8];
+      text(hctx, lab, x - textW(lab) / 2, cy0 + 2, UI.text);
+    }
+  }
+  hctx.fillStyle = UI.gold;
+  hctx.fillRect(cx0 + cw / 2 - 1, cy0 + 1, 3, 1);
+  hctx.fillRect(cx0 + cw / 2, cy0 + 1, 1, 3);
+  if (streaming) text(hctx, 'STREAMING', cx0 + 2, cy0 + 18, UI.dim);
+  // ── minimap, bottom-left ──
+  const mw = Math.min(58, Math.floor(HW * 0.34));
+  const mx = pad, my = HH - mw - pad - 20;
+  panel(mx, my, mw, mw, UI.dim);
+  hctx.save();
+  hctx.beginPath(); hctx.rect(mx + 1, my + 1, mw - 2, mw - 2); hctx.clip();
+  hctx.drawImage(mini, mx + 1, my + 1, mw - 2, mw - 2);
+  hctx.restore();
+  text(hctx, 'N', mx + mw / 2 - 3, my + 2, UI.gold);
+  dockRect = { x: mx, y: my, w: mw, h: mw };
+  // ── surface + grip, above the map ──
+  const sy = my - 26;
+  panel(pad, sy, 52, 24);
+  text(hctx, 'SURFACE', pad + 3, sy + 3, UI.dim);
+  const sname = surf === 'road' ? 'ROAD' : surf === 'water' ? 'WATER' : 'ROUGH';
+  text(hctx, sname, pad + 3, sy + 11, surf === 'road' ? UI.good : UI.hot);
+  meter(pad + 3, sy + 19, 10, Math.round(clamp(grip, 0, 1) * 10), surf === 'road' ? UI.good : UI.hot, 3, 3, 1);
+  // ── speed, bottom-right ──
+  const digits = String(kmh);
+  const sw = textW(digits, 2) + textW('KM/H') + 12;
+  const sx = HW - sw - pad, spy = HH - 20 - pad;
+  panel(sx, spy, sw, 18, UI.gold);
+  text(hctx, digits, sx + 4, spy + 3, UI.gold, 2);
+  text(hctx, 'KM/H', sx + 8 + textW(digits, 2), spy + 9, UI.edge);
+}
+let dockRect = { x: 0, y: 0, w: 0, h: 0 };
+function setClean(on: boolean): void {
+  document.body.classList.toggle('clean', on);
+  if (!on) updateStickHome(); // the pinned stick has to come back with it
+  try { localStorage.setItem('drive.clean', on ? '1' : '0'); } catch { /* fine */ }
+}
+// Taps: buttons first, then the camera dock, then fall through to driving.
+function hudTap(cx: number, cy: number): boolean {
+  if (document.body.classList.contains('clean')) return false;
+  const x = cx / hudS, y = cy / hudS;
+  for (const b of buttons) {
+    if (x >= b.x - 2 && x <= b.x + b.w + 2 && y >= b.y - 2 && y <= b.y + b.h + 2) { b.hit(); return true; }
+  }
+  const d = dockRect;
+  if (x >= d.x && x <= d.x + d.w && y >= d.y && y <= d.y + d.h) { toggleCam(); return true; }
+  const p = placeRect;
+  if (x >= p.x && x <= p.x + p.w && y >= p.y && y <= p.y + p.h) { toggleAlien(); return true; }
+  return false;
+}
+let placeRect = { x: 0, y: 0, w: 0, h: 0 };
 
 // ── clean viewport ─────────────────────────────────────────────────
 // Everything chrome-like carries .ui, so one class on <body> strips the screen
@@ -2658,27 +2715,13 @@ function applyBiome(b: Biome): void {
 // itself). Declared last: every element it references must already exist.
 {
   const st = document.createElement('style');
-  st.textContent = 'body.clean .ui, body.clean .hud, body.clean #reroll { display: none !important; }';
+  // The shell's own text chrome is retired — everything is drawn in the HUD
+  // buffer now. Keep only the boot card.
+  st.textContent = 'body.clean .ui { display: none !important; } .hud, #reroll { display: none !important; }';
   document.head.appendChild(st);
-  for (const el of [$('reroll'), sndBtn, mapDock, poiWrap, mini, stickBase, stickNub]) el.classList.add('ui');
-  const cleanBtn = document.createElement('button');
-  cleanBtn.textContent = '⛶';
-  cleanBtn.title = 'clean viewport (h · double-tap to exit)';
-  Object.assign(cleanBtn.style, {
-    position: 'fixed', right: '12px', top: 'calc(max(10px, env(safe-area-inset-top)) + 78px)', zIndex: '11',
-    background: 'rgba(8,12,20,0.55)', color: '#f5c453', border: '1px solid rgba(245,196,83,0.4)',
-    borderRadius: '8px', padding: '0.3rem 0.6rem', font: 'inherit', fontSize: '0.74rem', cursor: 'pointer',
-  } as Partial<CSSStyleDeclaration>);
-  cleanBtn.classList.add('ui');
-  document.body.appendChild(cleanBtn);
+  for (const el of [mini, stickBase, stickNub]) el.classList.add('ui');
   const clean = (): boolean => document.body.classList.contains('clean');
-  const setClean = (on: boolean): void => {
-    document.body.classList.toggle('clean', on);
-    if (!on) updateStickHome(); // the pinned stick has to come back with it
-    try { localStorage.setItem('drive.clean', on ? '1' : '0'); } catch { /* fine */ }
-  };
   try { if (localStorage.getItem('drive.clean') === '1') document.body.classList.add('clean'); } catch { /* fine */ }
-  cleanBtn.addEventListener('click', () => setClean(true));
   let lastTap = 0;
   canvas.addEventListener('pointerdown', () => {
     const t = performance.now();
@@ -2693,7 +2736,6 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
 (async () => {
   const spawn = await findSpawn();
   origin = { lat: spawn.lat, lon: spawn.lon, mLon: M_LAT * Math.cos((spawn.lat * Math.PI) / 180) };
-  $('place-coords').textContent = `${spawn.lat.toFixed(4)}, ${spawn.lon.toFixed(4)}`;
   placeLabel = spawn.name ?? '…';
   renderPlace();
   // Resume orientation and camera from the URL (written live while driving).
