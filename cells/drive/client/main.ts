@@ -316,7 +316,12 @@ const compMat = new THREE.ShaderMaterial({
     uniform vec2 sunXZ; varying vec2 vUv;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
     vec3 hazeAt(vec3 d){
-      float w = pow(max(dot(normalize(d.xz), sunXZ), 0.0), 3.0);
+      // Sun-warming only for rays that travel HORIZONTALLY through air. A
+      // near-vertical ray has a near-zero xz to normalize — noise blew up
+      // into a starburst at the nadir and painted half the chart brown.
+      float horiz = clamp(length(d.xz) * 1.6, 0.0, 1.0);
+      vec2 dir2 = d.xz / max(length(d.xz), 1e-4);
+      float w = pow(max(dot(dir2, sunXZ), 0.0), 3.0) * horiz * horiz;
       return mix(vec3(0.030, 0.042, 0.062), vec3(0.19, 0.11, 0.05), w);
     }
     void main(){
@@ -627,6 +632,29 @@ function pointInPoly(px: number, pz: number, pts: Array<[number, number]>): bool
   }
   return inside;
 }
+// First wall crossing (as a 0..1 fraction along a→b) that stands taller than
+// camY — used to pull the chase camera in front of façades instead of letting
+// it phase inside buildings (the "black slab across the sky" failure).
+function wallHitAlong(ax: number, az: number, bx: number, bz: number, camY: number): number {
+  let sMin = 1;
+  const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / (GRID / 2)));
+  const seen = new Set<Seg[]>();
+  for (let i = 0; i <= steps; i++) {
+    const segs = wallGrid.get(gkey(ax + ((bx - ax) * i) / steps, az + ((bz - az) * i) / steps));
+    if (!segs || seen.has(segs)) continue;
+    seen.add(segs);
+    for (const s of segs) {
+      if (s.ya !== undefined && camY > s.ya) continue; // clean over the roof
+      const r1x = bx - ax, r1z = bz - az, r2x = s.bx - s.ax, r2z = s.bz - s.az;
+      const den = r1x * r2z - r1z * r2x;
+      if (Math.abs(den) < 1e-9) continue;
+      const t = ((s.ax - ax) * r2z - (s.az - az) * r2x) / den;
+      const u = ((s.ax - ax) * r1z - (s.az - az) * r1x) / den;
+      if (t >= 0.02 && t <= 1 && u >= 0 && u <= 1 && t < sMin) sMin = t;
+    }
+  }
+  return sMin;
+}
 type Surface = 'road' | 'water' | 'ground';
 function surfaceAt(x: number, z: number): Surface {
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
@@ -760,8 +788,9 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], a: number, b
     quadPush(x0 + nx, yA, z0 + nz, x1 + nx, yB, z1 + nz, x0 + nx, yA + TUNNEL_H, z0 + nz, x1 + nx, yB + TUNNEL_H, z1 + nz);
     quadPush(x0 - nx, yA, z0 - nz, x1 - nx, yB, z1 - nz, x0 - nx, yA + TUNNEL_H, z0 - nz, x1 - nx, yB + TUNNEL_H, z1 - nz);
     quadPush(x0 + nx, yA + TUNNEL_H, z0 + nz, x1 + nx, yB + TUNNEL_H, z1 + nz, x0 - nx, yA + TUNNEL_H, z0 - nz, x1 - nx, yB + TUNNEL_H, z1 - nz);
-    addSeg(wallGrid, { ax: x0 + nx, az: z0 + nz, bx: x1 + nx, bz: z1 + nz, hw: 0 });
-    addSeg(wallGrid, { ax: x0 - nx, az: z0 - nz, bx: x1 - nx, bz: z1 - nz, hw: 0 });
+    const top = Math.max(yA, yB) + TUNNEL_H;
+    addSeg(wallGrid, { ax: x0 + nx, az: z0 + nz, bx: x1 + nx, bz: z1 + nz, hw: 0, ya: top, yb: top });
+    addSeg(wallGrid, { ax: x0 - nx, az: z0 - nz, bx: x1 - nx, bz: z1 - nz, hw: 0, ya: top, yb: top });
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tv), 3));
@@ -810,7 +839,10 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
   if (collide === 'solid') {
     for (let i = 0; i < pts.length; i++) {
       const [ax, az] = pts[i], [bx, bz] = pts[(i + 1) % pts.length];
-      addSeg(wallGrid, { ax, az, bx, bz, hw: 0 });
+      // ya carries the ROOF height so the chase camera knows whether a wall
+      // actually occludes it or it is looking clean over the top.
+      const top = (mesh.position.y || 0) + extrude;
+      addSeg(wallGrid, { ax, az, bx, bz, hw: 0, ya: top, yb: top });
     }
   } else if (collide === 'water') {
     let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
@@ -1573,6 +1605,17 @@ function tick(now: number): void {
       ),
       state.z - fwdZ * back,
     );
+    // Building in the sight line? Slide the camera in front of the façade
+    // (and down toward the truck) rather than phasing through the wall.
+    const hit = wallHitAlong(state.x, state.z, camPos.x, camPos.z, camPos.y);
+    if (hit < 1) {
+      const s = Math.max(0.18, hit - 0.08);
+      camPos.set(
+        state.x + (camPos.x - state.x) * s,
+        Math.max(bodyY + 2.6, camPos.y - (1 - s) * (camPos.y - bodyY - 2.6)),
+        state.z + (camPos.z - state.z) * s,
+      );
+    }
   }
   // Critically-damped-ish follow: snap on mode change, ease in play (the chase
   // rig swings through corners instead of being welded to the bumper).
