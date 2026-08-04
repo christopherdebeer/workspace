@@ -166,19 +166,85 @@ function sampleHeight(ex: number, ez: number): number {
   }
   return 0;
 }
+// ── biomes: one palette per world, not one world ───────────────────
+// The reference art gets its character from tight per-scene palettes — canyon
+// purple-gold, jungle grey-green, desert teal-sand. A biome drives the sky,
+// the haze, the ground ramp, the vegetation and the light together, so Cairo
+// and Edinburgh read as different worlds rather than the same world at
+// different times of day. Classified from latitude and elevation (a crude
+// stand-in for climate — good enough to feel authored, and overridable with
+// ?biome= for art direction).
+type Rgb = [number, number, number];
+interface Biome {
+  name: string;
+  zenith: Rgb; horizon: Rgb; sunDisc: Rgb; below: Rgb;
+  hazeBase: Rgb; hazeSun: Rgb;
+  ramp: Array<[number, Rgb]>;         // [max elevation, colour]
+  vegHue: [number, number]; vegLit: [number, number];
+  sun: number; sunI: number; hemiSky: number; hemiGnd: number; hemiI: number;
+}
+const BIOMES: Record<string, Biome> = {
+  arid: {
+    name: 'arid',
+    zenith: [0.055, 0.135, 0.30], horizon: [0.55, 0.48, 0.36], sunDisc: [1.0, 0.86, 0.55], below: [0.30, 0.26, 0.22],
+    hazeBase: [0.24, 0.21, 0.17], hazeSun: [0.50, 0.35, 0.17],
+    ramp: [[0.5, [0.07, 0.30, 0.35]], [60, [0.44, 0.37, 0.22]], [300, [0.41, 0.33, 0.19]], [900, [0.37, 0.27, 0.15]], [1800, [0.33, 0.28, 0.23]], [1e9, [0.62, 0.63, 0.65]]],
+    vegHue: [0.18, 0.06], vegLit: [0.18, 0.14],
+    sun: 0xffe0b0, sunI: 1.5, hemiSky: 0xbcd2ee, hemiGnd: 0x6a5a3c, hemiI: 0.95,
+  },
+  tropical: {
+    name: 'tropical',
+    zenith: [0.05, 0.14, 0.26], horizon: [0.40, 0.46, 0.38], sunDisc: [1.0, 0.92, 0.70], below: [0.16, 0.20, 0.16],
+    hazeBase: [0.20, 0.24, 0.20], hazeSun: [0.42, 0.40, 0.22],
+    ramp: [[0.5, [0.06, 0.26, 0.30]], [60, [0.14, 0.27, 0.14]], [300, [0.13, 0.24, 0.13]], [900, [0.16, 0.24, 0.14]], [1800, [0.24, 0.26, 0.20]], [1e9, [0.60, 0.62, 0.64]]],
+    vegHue: [0.26, 0.08], vegLit: [0.14, 0.16],
+    sun: 0xfff0cc, sunI: 1.35, hemiSky: 0xa8c8dc, hemiGnd: 0x2c4426, hemiI: 1.0,
+  },
+  temperate: {
+    name: 'temperate',
+    zenith: [0.05, 0.12, 0.28], horizon: [0.46, 0.44, 0.40], sunDisc: [1.0, 0.88, 0.62], below: [0.22, 0.22, 0.20],
+    hazeBase: [0.22, 0.22, 0.20], hazeSun: [0.46, 0.36, 0.20],
+    ramp: [[0.5, [0.07, 0.28, 0.33]], [60, [0.25, 0.29, 0.17]], [300, [0.24, 0.27, 0.16]], [900, [0.28, 0.26, 0.17]], [1800, [0.31, 0.29, 0.25]], [1e9, [0.66, 0.67, 0.69]]],
+    vegHue: [0.24, 0.07], vegLit: [0.16, 0.16],
+    sun: 0xffe6c2, sunI: 1.4, hemiSky: 0xb4ccea, hemiGnd: 0x4c5238, hemiI: 0.9,
+  },
+  boreal: {
+    name: 'boreal',
+    zenith: [0.05, 0.11, 0.27], horizon: [0.40, 0.44, 0.48], sunDisc: [1.0, 0.84, 0.62], below: [0.20, 0.22, 0.24],
+    hazeBase: [0.20, 0.23, 0.26], hazeSun: [0.42, 0.36, 0.26],
+    ramp: [[0.5, [0.06, 0.24, 0.31]], [60, [0.18, 0.25, 0.19]], [300, [0.17, 0.23, 0.18]], [900, [0.21, 0.23, 0.19]], [1800, [0.30, 0.31, 0.30]], [1e9, [0.74, 0.76, 0.78]]],
+    vegHue: [0.30, 0.06], vegLit: [0.12, 0.13],
+    sun: 0xffe2cc, sunI: 1.25, hemiSky: 0xaec6e4, hemiGnd: 0x3a4438, hemiI: 0.95,
+  },
+  alpine: {
+    name: 'alpine',
+    zenith: [0.04, 0.10, 0.30], horizon: [0.52, 0.54, 0.58], sunDisc: [1.0, 0.94, 0.80], below: [0.26, 0.27, 0.29],
+    hazeBase: [0.26, 0.28, 0.31], hazeSun: [0.48, 0.44, 0.36],
+    ramp: [[0.5, [0.08, 0.28, 0.36]], [60, [0.28, 0.30, 0.24]], [300, [0.30, 0.30, 0.26]], [900, [0.34, 0.33, 0.30]], [1800, [0.44, 0.45, 0.46]], [1e9, [0.86, 0.88, 0.90]]],
+    vegHue: [0.29, 0.05], vegLit: [0.13, 0.12],
+    sun: 0xfff2e0, sunI: 1.6, hemiSky: 0xc4d8f2, hemiGnd: 0x5a5e58, hemiI: 1.05,
+  },
+};
+let biome: Biome = BIOMES.temperate;
+function pickBiome(lat: number, elevAbs: number): Biome {
+  const q = new URLSearchParams(location.search).get('biome');
+  if (q && BIOMES[q]) return BIOMES[q];
+  if (elevAbs > 1500) return BIOMES.alpine;
+  const a = Math.abs(lat);
+  if (a <= 15) return BIOMES.tropical;
+  if (a <= 32) return BIOMES.arid;
+  if (a <= 50) return BIOMES.temperate;
+  return BIOMES.boreal;
+}
+
 const terrainPalette = (elev: number, slope: number): [number, number, number] => {
   // Solarpunk desert: cyan shallows → warm sand → ochre scrub → dry upland →
   // bare rock → snow. The emerald in this world comes from the VEGETATION
   // standing on the sand, not from painting the ground green.
-  let r: number, g: number, b: number;
-  if (elev <= 0.5) [r, g, b] = [0.07, 0.30, 0.35];
-  else if (elev < 60) [r, g, b] = [0.44, 0.37, 0.22];
-  else if (elev < 300) [r, g, b] = [0.41, 0.33, 0.19];
-  else if (elev < 900) [r, g, b] = [0.37, 0.27, 0.15];
-  else if (elev < 1800) [r, g, b] = [0.33, 0.28, 0.23];
-  else [r, g, b] = [0.62, 0.63, 0.65];
+  let c: Rgb = biome.ramp[biome.ramp.length - 1][1];
+  for (const [max, col] of biome.ramp) if (elev <= max) { c = col; break; }
   const shade = 1 - clamp(slope * 1.4, 0, 0.45);
-  return [r * shade, g * shade, b * shade];
+  return [c[0] * shade, c[1] * shade, c[2] * shade];
 };
 
 // ── the scene ──────────────────────────────────────────────────────
@@ -199,22 +265,28 @@ const SUN_DIR = new THREE.Vector3(0.42, 0.34, -0.78).normalize();
 const skyMat = new THREE.ShaderMaterial({
   side: THREE.BackSide,
   depthWrite: false,
-  uniforms: { sunDir: { value: SUN_DIR } },
+  uniforms: {
+    sunDir: { value: SUN_DIR },
+    uZenith: { value: new THREE.Vector3() },
+    uHorizon: { value: new THREE.Vector3() },
+    uSunDisc: { value: new THREE.Vector3() },
+    uBelow: { value: new THREE.Vector3() },
+  },
   vertexShader: 'varying vec3 vDir; void main(){ vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
   fragmentShader: `
-    uniform vec3 sunDir; varying vec3 vDir;
+    uniform vec3 sunDir; uniform vec3 uZenith; uniform vec3 uHorizon;
+    uniform vec3 uSunDisc; uniform vec3 uBelow; varying vec3 vDir;
     void main(){
       vec3 d = normalize(vDir);
       float az = pow(max(dot(normalize(vec3(d.x, 0.0, d.z)), normalize(vec3(sunDir.x, 0.0, sunDir.z))), 0.0), 3.0);
-      vec3 zen = vec3(0.055, 0.135, 0.30);                                   // clean desert blue overhead
-      vec3 hor = mix(vec3(0.55, 0.48, 0.36), vec3(0.95, 0.60, 0.26), az);    // sand haze warming to gold
-      vec3 col = mix(hor, zen, pow(clamp(d.y, 0.0, 1.0), 0.42));
+      vec3 hor = mix(uHorizon, uSunDisc * 0.86, az);   // horizon warming toward the sun
+      vec3 col = mix(hor, uZenith, pow(clamp(d.y, 0.0, 1.0), 0.42));
       float sd = max(dot(d, sunDir), 0.0);
       // A BIG disc, the way pixel-art skies draw it — ~7° across with a broad
       // halo, not the 1° pinprick physical accuracy would give you.
-      col += vec3(1.0, 0.86, 0.55) * smoothstep(0.9915, 0.9945, sd) * 1.5;
-      col += vec3(1.0, 0.66, 0.30) * (pow(sd, 60.0) * 0.5 + pow(sd, 8.0) * 0.22);
-      col = mix(vec3(0.30, 0.26, 0.22), col, smoothstep(-0.06, 0.02, d.y));
+      col += uSunDisc * smoothstep(0.9915, 0.9945, sd) * 1.5;
+      col += uSunDisc * (pow(sd, 60.0) * 0.5 + pow(sd, 8.0) * 0.22);
+      col = mix(uBelow, col, smoothstep(-0.06, 0.02, d.y));
       gl_FragColor = vec4(col, 1.0);
     }`,
 });
@@ -223,7 +295,8 @@ skyDome.frustumCulled = false;
 skyDome.renderOrder = -10;
 scene.add(skyDome);
 
-scene.add(new THREE.HemisphereLight(0xbcd2ee, 0x6a5a3c, 0.95)); // sky fill + warm sand bounce
+const hemi = new THREE.HemisphereLight(0xbcd2ee, 0x6a5a3c, 0.95); // sky fill + ground bounce
+scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffe0b0, 1.5);
 sun.position.copy(SUN_DIR).multiplyScalar(2000);
 scene.add(sun);
@@ -325,12 +398,14 @@ const compMat = new THREE.ShaderMaterial({
     span: { value: FOG_SPAN },
     sunXZ: { value: new THREE.Vector2(SUN_DIR.x, SUN_DIR.z).normalize() },
     uPix: { value: pixSize }, // the low-res grid, for dithering
+    uHazeBase: { value: new THREE.Vector3() },
+    uHazeSun: { value: new THREE.Vector3() },
   },
   vertexShader: QUAD_VS,
   fragmentShader: `
     uniform sampler2D sceneTex; uniform sampler2D softTex; uniform sampler2D depthTex;
     uniform sampler2D mask; uniform mat4 invPV; uniform vec3 camPos; uniform float span;
-    uniform vec2 sunXZ; uniform vec2 uPix; varying vec2 vUv;
+    uniform vec2 sunXZ; uniform vec2 uPix; uniform vec3 uHazeBase; uniform vec3 uHazeSun; varying vec2 vUv;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
     // Ordered (Bayer) dither, computed without array indexing so it compiles
     // on GLSL ES 1.0. Recursive 2x2 → 4x4.
@@ -343,7 +418,7 @@ const compMat = new THREE.ShaderMaterial({
       float horiz = clamp(length(d.xz) * 1.6, 0.0, 1.0);
       vec2 dir2 = d.xz / max(length(d.xz), 1e-4);
       float w = pow(max(dot(dir2, sunXZ), 0.0), 3.0) * horiz * horiz;
-      return mix(vec3(0.24, 0.21, 0.17), vec3(0.50, 0.35, 0.17), w); // sand haze, gold toward the sun
+      return mix(uHazeBase, uHazeSun, w); // the biome's haze, warming toward the sun
     }
     void main(){
       vec3 sharp = texture2D(sceneTex, vUv).rgb;
@@ -366,16 +441,20 @@ const compMat = new THREE.ShaderMaterial({
         float t = distance(wp, camPos);
         vec2 uv = (wp.xz + span * 0.5) / span;
         float m = (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) ? 1.0 : texture2D(mask, uv).a / 0.985;
-        float near = 1.0 - exp(-t / 260.0);  // fast ramp: the fog-of-war wall
+        // Fog of war starts BEYOND a clear bubble. You can obviously see the
+        // ground at your own wheels whether or not you have "explored" it; a
+        // ramp that began at zero metres put 55% milk over the near field the
+        // moment the haze turned daylight-bright.
+        float near = 1.0 - exp(-max(t - 70.0, 0.0) / 240.0);
         // Aerial perspective scales with how much AIR the ray crosses — a
         // survey view straight down stays legible at any zoom, the horizon
         // keeps its haze. (Fog-of-war hiding is m-driven and unaffected.)
         float vFac = clamp(1.4 - abs(dir.y) * 1.3, 0.15, 1.0);
         float deep = (1.0 - exp(-t / 1400.0)) * vFac;
-        float blurF = clamp(m * (0.45 + 0.55 * near) + deep * 0.55, 0.0, 1.0);
+        float blurF = clamp(m * (0.1 + 0.9 * near) + deep * 0.55, 0.0, 1.0);
         // Never fully opaque: the unexplored world stays a SUGGESTION behind
         // the haze — you can make out a coastline or a ridge to steer toward.
-        float dimF = min(m * mix(0.55, 0.86, near) + (1.0 - m) * deep * 0.55, 0.86);
+        float dimF = min(m * mix(0.12, 0.86, near) + (1.0 - m) * deep * 0.55, 0.86);
         col = mix(sharp, soft, blurF);
         col = mix(col, hazeAt(dir), dimF);
       }
@@ -835,7 +914,7 @@ function plant(kind: 'tree' | 'bush', x: number, z: number, y: number, r: () => 
   vegDummy.updateMatrix();
   mesh.setMatrixAt(i, vegDummy.matrix);
   // Sun-bleached to deep shade, so a stand of trees never reads as one blob.
-  vegTint.setHSL(0.22 + r() * 0.07, 0.32 + r() * 0.25, 0.2 + r() * 0.16);
+  vegTint.setHSL(biome.vegHue[0] + r() * biome.vegHue[1], 0.32 + r() * 0.25, biome.vegLit[0] + r() * biome.vegLit[1]);
   mesh.setColorAt(i, vegTint);
   mesh.instanceMatrix.needsUpdate = true;
   if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
@@ -2429,6 +2508,25 @@ function tick(now: number): void {
   requestAnimationFrame(tick);
 }
 
+// Dress every palette-driven surface from one biome. Declared late so it can
+// reach the sky, the composite, the lights and the sea alike.
+function applyBiome(b: Biome): void {
+  biome = b;
+  const v = (u: { value: THREE.Vector3 }, c: Rgb): void => u.value.set(c[0], c[1], c[2]);
+  v(skyMat.uniforms.uZenith as { value: THREE.Vector3 }, b.zenith);
+  v(skyMat.uniforms.uHorizon as { value: THREE.Vector3 }, b.horizon);
+  v(skyMat.uniforms.uSunDisc as { value: THREE.Vector3 }, b.sunDisc);
+  v(skyMat.uniforms.uBelow as { value: THREE.Vector3 }, b.below);
+  v(compMat.uniforms.uHazeBase as { value: THREE.Vector3 }, b.hazeBase);
+  v(compMat.uniforms.uHazeSun as { value: THREE.Vector3 }, b.hazeSun);
+  sun.color.setHex(b.sun); sun.intensity = b.sunI;
+  hemi.color.setHex(b.hemiSky); hemi.groundColor.setHex(b.hemiGnd); hemi.intensity = b.hemiI;
+  // The sea takes the biome's own shallows, so a tropical coast isn't the
+  // same water as a boreal one.
+  const shallow = b.ramp[0][1];
+  (sea.material as THREE.MeshLambertMaterial).color.setRGB(shallow[0] * 2.2, shallow[1] * 2.2, shallow[2] * 2.2);
+}
+
 // ── clean viewport ─────────────────────────────────────────────────
 // Everything chrome-like carries .ui, so one class on <body> strips the screen
 // back to raw pixels — no minimap, no pins, no text. 'h' or the ⛶ button, and
@@ -2494,6 +2592,9 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
   // Anchor the sea to true sea level — unless the land here is itself below
   // it (a depression), in which case there is no sea to show.
   if (baseElev >= -2) { seaOn = true; sea.position.y = -baseElev + 0.1; }
+  // Dress the world BEFORE any terrain mesh is built — the ground ramp is
+  // baked into vertex colours at build time.
+  applyBiome(pickBiome(spawn.lat, baseElev));
   bootMsg('laying down the roads…');
   // The spawn tile must be IN the height field before the first frame — the
   // car, drapes, and camera all read it; starting on y=0 then popping up a
