@@ -424,7 +424,7 @@ const terrainMat = new THREE.MeshLambertMaterial({ vertexColors: true });
 ghostify(terrainMat, { detail: true });
 
 // ── terrain meshes ─────────────────────────────────────────────────
-const terrainLoaded = new Set<string>();
+const terrainReady = new Map<string, Promise<void>>(); // per-tile load promise
 const terrainMeshes = new Map<string, THREE.Mesh>();
 function buildTerrainMesh(t: HeightTile): void {
   const key = `${t.tx}/${t.ty}`;
@@ -459,10 +459,16 @@ function buildTerrainMesh(t: HeightTile): void {
   terrainMeshes.set(key, mesh);
   worldGroup.add(mesh);
 }
-async function loadTerrainTile(x: number, y: number): Promise<void> {
+function loadTerrainTile(x: number, y: number): Promise<void> {
   const key = `${x}/${y}`;
-  if (terrainLoaded.has(key)) return;
-  terrainLoaded.add(key);
+  const existing = terrainReady.get(key);
+  if (existing) return existing;
+  const p = loadTerrainTileInner(x, y);
+  terrainReady.set(key, p);
+  return p;
+}
+async function loadTerrainTileInner(x: number, y: number): Promise<void> {
+  const key = `${x}/${y}`;
   const data = await fetchHeights(x, y);
   if (!data) return;
   const b = tileBounds(x, y, TERRAIN_Z);
@@ -1046,6 +1052,24 @@ function renderWays(els: OsmWay[]): void {
   }
 }
 
+// NEVER render features onto terrain that hasn't arrived. Heights are
+// sampled ONCE at build time; against the flat 0-fallback, a whole street
+// ends up hanging in the sky when the real slope loads underneath it (and
+// the OSM cache made this a near-certainty on reload — cached vectors beat
+// the S3 elevation fetches every time). Gate each vector tile on the
+// elevation tiles covering it, with a one-tile margin for spilling geometry.
+async function renderGated(x: number, y: number, ways: OsmWay[]): Promise<void> {
+  const b = tileBounds(x, y, OSM_Z);
+  const [txA, tyA] = tileAt(b.latN, b.lonW, TERRAIN_Z);
+  const [txB, tyB] = tileAt(b.latS, b.lonE, TERRAIN_Z);
+  const waits: Array<Promise<void>> = [];
+  for (let tx = Math.min(txA, txB) - 1; tx <= Math.max(txA, txB) + 1; tx++)
+    for (let ty = Math.min(tyA, tyB) - 1; ty <= Math.max(tyA, tyB) + 1; ty++)
+      waits.push(loadTerrainTile(tx, ty));
+  await Promise.all(waits);
+  renderWays(ways);
+}
+
 // "No roads yet" must read as LOADING, not a broken world.
 const osmStatus = document.createElement('div');
 osmStatus.textContent = '🛰 streaming roads…';
@@ -1063,7 +1087,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
   if (osmLoaded.has(key)) return;
   osmLoaded.add(key);
   const cached = await readTileCache(x, y);
-  if (cached) { renderWays(cached); return; }
+  if (cached) { await renderGated(x, y, cached); return; }
   osmNote(1);
   if (osmInFlight >= 2) { await new Promise<void>((r) => osmQueue.push(r)); }
   osmInFlight++;
@@ -1081,7 +1105,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     const r = await overpass(q);
     const ways = ((r.elements ?? []) as Array<OsmWay & { type?: string }>).filter((e) => e.type === 'way' && e.geometry);
     writeTileCache(x, y, ways);
-    renderWays(ways);
+    await renderGated(x, y, ways);
   } catch { setTimeout(() => osmLoaded.delete(key), 8000); /* backoff, then a later pass retries */ }
   finally {
     osmInFlight--;
