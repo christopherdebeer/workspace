@@ -210,7 +210,10 @@ const skyMat = new THREE.ShaderMaterial({
       vec3 hor = mix(vec3(0.55, 0.48, 0.36), vec3(0.95, 0.60, 0.26), az);    // sand haze warming to gold
       vec3 col = mix(hor, zen, pow(clamp(d.y, 0.0, 1.0), 0.42));
       float sd = max(dot(d, sunDir), 0.0);
-      col += vec3(1.0, 0.72, 0.34) * (smoothstep(0.9994, 0.99975, sd) * 1.6 + pow(sd, 20.0) * 0.42);
+      // A BIG disc, the way pixel-art skies draw it — ~7° across with a broad
+      // halo, not the 1° pinprick physical accuracy would give you.
+      col += vec3(1.0, 0.86, 0.55) * smoothstep(0.9915, 0.9945, sd) * 1.5;
+      col += vec3(1.0, 0.66, 0.30) * (pow(sd, 60.0) * 0.5 + pow(sd, 8.0) * 0.22);
       col = mix(vec3(0.30, 0.26, 0.22), col, smoothstep(-0.06, 0.02, d.y));
       gl_FragColor = vec4(col, 1.0);
     }`,
@@ -220,7 +223,7 @@ skyDome.frustumCulled = false;
 skyDome.renderOrder = -10;
 scene.add(skyDome);
 
-scene.add(new THREE.HemisphereLight(0xbcd2ee, 0x6a5a3c, 0.7)); // sky fill + warm sand bounce
+scene.add(new THREE.HemisphereLight(0xbcd2ee, 0x6a5a3c, 0.95)); // sky fill + warm sand bounce
 const sun = new THREE.DirectionalLight(0xffe0b0, 1.5);
 sun.position.copy(SUN_DIR).multiplyScalar(2000);
 scene.add(sun);
@@ -269,6 +272,9 @@ const mkRT = (depth: boolean, nearest = false): THREE.WebGLRenderTarget => {
 // no amount of low-res texturing can do on its own. It also costs a fraction
 // of the fill rate, which buys back everything the post chain spends.
 const PIX_H = 320; // vertical resolution of the rendered world
+// The live pixel-grid size. Shared BY REFERENCE with the composite's uniform,
+// so resize can run before the material exists without any ordering dance.
+const pixSize = new THREE.Vector2(2, 2);
 const rtScene = mkRT(true, true);
 rtScene.samples = 0; // MSAA would soften exactly the edges we want hard
 // Real per-pixel depth: fog by each pixel's TRUE distance, not by where its
@@ -282,6 +288,7 @@ resizePost = () => {
   rtScene.setSize(w, Math.max(2, h));
   rtA.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
   rtB.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
+  pixSize.set(w, Math.max(2, h));
 };
 resizePost();
 const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
@@ -317,13 +324,18 @@ const compMat = new THREE.ShaderMaterial({
     camPos: { value: new THREE.Vector3() },
     span: { value: FOG_SPAN },
     sunXZ: { value: new THREE.Vector2(SUN_DIR.x, SUN_DIR.z).normalize() },
+    uPix: { value: pixSize }, // the low-res grid, for dithering
   },
   vertexShader: QUAD_VS,
   fragmentShader: `
     uniform sampler2D sceneTex; uniform sampler2D softTex; uniform sampler2D depthTex;
     uniform sampler2D mask; uniform mat4 invPV; uniform vec3 camPos; uniform float span;
-    uniform vec2 sunXZ; varying vec2 vUv;
+    uniform vec2 sunXZ; uniform vec2 uPix; varying vec2 vUv;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
+    // Ordered (Bayer) dither, computed without array indexing so it compiles
+    // on GLSL ES 1.0. Recursive 2x2 → 4x4.
+    float bayer2(vec2 a){ a = floor(a); return fract(a.x * 0.5 + a.y * a.y * 0.75); }
+    float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
     vec3 hazeAt(vec3 d){
       // Sun-warming only for rays that travel HORIZONTALLY through air. A
       // near-vertical ray has a near-zero xz to normalize — noise blew up
@@ -370,8 +382,19 @@ const compMat = new THREE.ShaderMaterial({
       // Never hand a negative (or NaN) to pow(): one bad fragment upstream
       // must not be able to punch a black hole through the finished frame.
       col = max(col, vec3(0.0));
-      gl_FragColor = vec4(srgb(col), 1.0);
-    }`,
+      vec3 enc = srgb(col);
+      // PALETTE QUANTISATION with an ordered dither, in perceptual space and
+      // keyed to the LOW-RES grid (not the screen), so the dither pattern is
+      // one texel per step. This is the difference between authored pixel art
+      // and a merely pixelated render: flat bands of colour, gradients broken
+      // up by a visible weave rather than a smooth ramp.
+      // Partial-amplitude dither: full strength turned every flat surface into
+      // a visible checkerboard once magnified. 0.6 keeps the weave in
+      // gradients while flat areas stay flat.
+      float d = (bayer4(floor(vUv * uPix)) - 0.5) * 0.6;
+      enc = floor(enc * LEVELS + d + 0.5) / LEVELS;
+      gl_FragColor = vec4(clamp(enc, 0.0, 1.0), 1.0);
+    }`.replace(/LEVELS/g, '14.0'),
 });
 let lastRevealX = Infinity, lastRevealZ = Infinity;
 // One soft punch at a world point.
@@ -1356,6 +1379,39 @@ const wheelMeshes: THREE.Mesh[] = [];
   const chassis = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.24, 3.3), new THREE.MeshLambertMaterial({ color: 0x2a2118 }));
   chassis.position.y = 0.4; // exposed frame under the raised body
   car.add(body, cabin, chassis);
+  // THE RIG. The roof array is this vehicle's identity — an overland truck
+  // that carries its own power. Rack, panels, jerry cans, light bar.
+  const rackMat = new THREE.MeshLambertMaterial({ color: 0x22262c, flatShading: true });
+  const panelMat = new THREE.MeshLambertMaterial({ color: 0x14304e, emissive: 0x060f1c, flatShading: true });
+  const cargoMat = new THREE.MeshLambertMaterial({ color: 0x6b6250, flatShading: true });
+  const rack = new THREE.Mesh(new THREE.BoxGeometry(1.62, 0.07, 2.5), rackMat);
+  rack.position.set(0, 1.86, -0.05);
+  car.add(rack);
+  for (const [px, pz] of [[-0.72, 1.05], [0.72, 1.05], [-0.72, -1.1], [0.72, -1.1]]) {
+    const post = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.16, 0.09), rackMat);
+    post.position.set(px, 1.78, pz);
+    car.add(post);
+  }
+  // Two panels, tilted a few degrees to catch the low sun.
+  for (const pz of [-0.62, 0.52]) {
+    const panel = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.05, 1.02), panelMat);
+    panel.position.set(0, 1.93, pz);
+    panel.rotation.x = -0.06;
+    car.add(panel);
+  }
+  for (const px of [-0.52, 0.52]) { // jerry cans strapped at the tail of the rack
+    const can = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.4, 0.22), cargoMat);
+    can.position.set(px, 2.09, 1.12);
+    car.add(can);
+  }
+  const bar = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.12, 0.14), rackMat);
+  bar.position.set(0, 1.95, -1.28);
+  car.add(bar);
+  for (const px of [-0.38, 0.38]) { // spot pods on the light bar
+    const pod = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.08), new THREE.MeshBasicMaterial({ color: 0xfff1cf }));
+    pod.position.set(px, 1.95, -1.36);
+    car.add(pod);
+  }
   const tireMat = new THREE.MeshLambertMaterial({ color: 0x14171c, flatShading: true });
   const hubMat = new THREE.MeshLambertMaterial({ color: 0x8f8574, flatShading: true });
   for (const [wx, wz] of WHEELS) {
@@ -2289,15 +2345,17 @@ function tick(now: number): void {
     const tgtY = sampleHeight(state.x + panX, state.z + panZ);
     camPos.set(state.x + panX, tgtY + dist * Math.sin(tiltRad), state.z + panZ + dist * Math.cos(tiltRad));
   } else {
-    const back = 13 + Math.abs(state.speed) * 0.35;
+    // Framed like the reference art: close and low, the rig filling the lower
+    // third with the track running to a vanishing point on the horizon.
+    const back = 12.5 + Math.abs(state.speed) * 0.28;
     camPos.set(
       state.x - fwdX * back,
       // ABOVE the vehicle, always: on a steep climb the ground under the
       // camera is far below the truck, so tie the floor to the body and add
       // pitch lift to keep looking down the slope at it.
       Math.max(
-        sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 5.4,
-        bodyY + 4.2 + Math.max(0, Math.sin(pitchC)) * back,
+        sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 4.2,
+        bodyY + 3.4 + Math.max(0, Math.sin(pitchC)) * back,
       ),
       state.z - fwdZ * back,
     );
@@ -2318,7 +2376,7 @@ function tick(now: number): void {
   if (!camInit) { camera.position.copy(camPos); camInit = true; }
   else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
   if (camMode === 'top') camera.lookAt(state.x + panX, sampleHeight(state.x + panX, state.z + panZ), state.z + panZ);
-  else camera.lookAt(state.x + fwdX * 18, ground + 1.6, state.z + fwdZ * 18);
+  else camera.lookAt(state.x + fwdX * 24, ground + 2.4, state.z + fwdZ * 24);
   camera.updateMatrixWorld();
   skyDome.position.copy(camera.position);
   ghostU.uGhostCar.value.set(state.x, ground + 1.2, state.z);
