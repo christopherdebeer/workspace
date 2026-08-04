@@ -984,68 +984,107 @@ sea.position.y = -1e6; // parked until boot anchors sea level
 scene.add(sea);
 let seaOn = false;
 
-// ── vegetation: two instanced archetypes, deterministically scattered ──
-// Overgrowth is GEOMETRY, not texture. Every green polygon seeds its own
-// mulberry32 from its way id, so the same park grows the same trees on every
-// device and every visit. Two InstancedMeshes cover the whole world — two
-// draw calls, however many thousand plants.
-const VEG_MAX = 3600;
+// ── vegetation: a recycling field, not a one-shot pool ─────────────
+// The old version planted each polygon once into a fixed pool and stopped
+// when it filled — drive far enough and the world went bare forever. Now
+// every green polygon deposits cheap SITES (a handful of floats each, held in
+// a spatial grid), and the instanced meshes are refilled each second from the
+// sites nearest the truck. Plants far behind are recycled to dress the ground
+// ahead, so density is constant however far you drive, and the site list can
+// hold tens of thousands for the cost of the numbers.
+type VegKind = 'broadleaf' | 'conifer' | 'palm' | 'snag' | 'bush' | 'rock';
+interface VegSite { x: number; z: number; k: VegKind; s: number; rot: number; h: number; c: THREE.Color }
+const VEG_CELL = 220;                       // spatial bucket, metres
+const vegGrid = new Map<string, VegSite[]>();
+const VEG_RANGE = 900;                      // plants are shown within this
+const vegKey = (x: number, z: number): string => `${Math.floor(x / VEG_CELL)},${Math.floor(z / VEG_CELL)}`;
+
+// Archetypes. Each is a squat, flat-shaded silhouette that survives the pixel
+// grid; variety comes from shape as much as tint.
+function conifer(): THREE.BufferGeometry {
+  const g = new THREE.ConeGeometry(1, 2.6, 6);
+  g.translate(0, 1.3, 0);
+  return g;
+}
+function broadleaf(): THREE.BufferGeometry {
+  const g = new THREE.IcosahedronGeometry(1, 0);
+  g.scale(1, 0.82, 1);
+  g.translate(0, 1, 0);
+  return g;
+}
+function palm(): THREE.BufferGeometry {
+  // A flattened star of fronds — reads as a palm crown in silhouette.
+  const g = new THREE.ConeGeometry(1.5, 0.5, 5, 1, true);
+  g.rotateX(Math.PI);
+  g.translate(0, 1.1, 0);
+  return g;
+}
+function snag(): THREE.BufferGeometry {
+  const g = new THREE.CylinderGeometry(0.1, 0.22, 2.4, 5);
+  g.translate(0, 1.2, 0);
+  return g;
+}
+function bushGeo(): THREE.BufferGeometry {
+  const g = new THREE.IcosahedronGeometry(1, 0);
+  g.scale(1.1, 0.7, 1.1);
+  g.translate(0, 0.6, 0);
+  return g;
+}
+function rockGeo(): THREE.BufferGeometry {
+  const g = new THREE.IcosahedronGeometry(1, 0);
+  g.scale(1.2, 0.6, 0.95);
+  g.translate(0, 0.35, 0);
+  return g;
+}
+const VEG_CAP: Record<VegKind, number> = { broadleaf: 900, conifer: 800, palm: 400, snag: 300, bush: 1300, rock: 500 };
 const vegDummy = new THREE.Object3D();
-function vegMesh(geo: THREE.BufferGeometry, mat: THREE.Material): THREE.InstancedMesh {
-  const m = new THREE.InstancedMesh(geo, mat, VEG_MAX);
+function vegMesh(geo: THREE.BufferGeometry, mat: THREE.Material, cap: number): THREE.InstancedMesh {
+  const m = new THREE.InstancedMesh(geo, mat, cap);
   m.count = 0;
-  m.frustumCulled = false; // instances are spread across the whole world
+  m.frustumCulled = false;                  // instances span the whole field
   m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
   scene.add(m);
   return m;
 }
-// Canopy: a squashed icosahedron, flat-shaded — chunky enough to survive the
-// eventual pixel-art pass, cheap enough to plant thousands of.
-const canopyGeo = new THREE.IcosahedronGeometry(1, 0);
-canopyGeo.scale(1, 0.85, 1);
-const trunkGeo = new THREE.CylinderGeometry(0.16, 0.22, 1, 5);
-trunkGeo.translate(0, 0.5, 0);
-// NOT vertexColors: per-instance tint arrives through instanceColor, which
-// three defines independently. Asking for vertexColors on geometry that has
-// no color attribute multiplies by an unbound (black) attribute.
-const treeMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
-const trunkMat = new THREE.MeshLambertMaterial({ color: 0x3a2c20, flatShading: true });
-const bushMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
-const trees = vegMesh(canopyGeo, treeMat);
-const trunks = vegMesh(trunkGeo, trunkMat);
-const bushes = vegMesh(canopyGeo, bushMat);
-for (const m of [trees, bushes]) m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(VEG_MAX * 3), 3);
-ghostify(treeMat);
-ghostify(bushMat);
-const vegTint = new THREE.Color();
-function plant(kind: 'tree' | 'bush', x: number, z: number, y: number, r: () => number): void {
-  const mesh = kind === 'tree' ? trees : bushes;
-  if (mesh.count >= VEG_MAX) return;
-  const i = mesh.count++;
-  const s = kind === 'tree' ? 1.7 + r() * 2.3 : 0.7 + r() * 0.9;
-  const trunkH = kind === 'tree' ? 1.4 + r() * 1.8 : 0;
-  vegDummy.position.set(x, y + trunkH + s * 0.55, z);
-  vegDummy.rotation.set((r() - 0.5) * 0.25, r() * Math.PI, (r() - 0.5) * 0.25);
-  vegDummy.scale.set(s, s * (0.8 + r() * 0.5), s);
-  vegDummy.updateMatrix();
-  mesh.setMatrixAt(i, vegDummy.matrix);
-  // Sun-bleached to deep shade, so a stand of trees never reads as one blob.
-  vegTint.setHSL(biome.vegHue[0] + r() * biome.vegHue[1], 0.32 + r() * 0.25, biome.vegLit[0] + r() * biome.vegLit[1]);
-  mesh.setColorAt(i, vegTint);
-  mesh.instanceMatrix.needsUpdate = true;
-  if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-  if (kind === 'tree' && trunks.count < VEG_MAX) {
-    const j = trunks.count++;
-    vegDummy.position.set(x, y, z);
-    vegDummy.rotation.set(0, 0, 0);
-    vegDummy.scale.set(s * 0.5, trunkH + s * 0.4, s * 0.5);
-    vegDummy.updateMatrix();
-    trunks.setMatrixAt(j, vegDummy.matrix);
-    trunks.instanceMatrix.needsUpdate = true;
-  }
+// White base colours: every plant's hue arrives through instanceColor.
+const leafMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+const woodMat = new THREE.MeshLambertMaterial({ color: 0x4a3826, flatShading: true });
+const stoneMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+ghostify(leafMat);
+ghostify(stoneMat);
+const vegMeshes: Record<VegKind, THREE.InstancedMesh> = {
+  broadleaf: vegMesh(broadleaf(), leafMat, VEG_CAP.broadleaf),
+  conifer: vegMesh(conifer(), leafMat, VEG_CAP.conifer),
+  palm: vegMesh(palm(), leafMat, VEG_CAP.palm),
+  snag: vegMesh(snag(), woodMat, VEG_CAP.snag),
+  bush: vegMesh(bushGeo(), leafMat, VEG_CAP.bush),
+  rock: vegMesh(rockGeo(), stoneMat, VEG_CAP.rock),
+};
+const trunkGeo2 = new THREE.CylinderGeometry(0.14, 0.2, 1, 5);
+trunkGeo2.translate(0, 0.5, 0);
+const trunks = vegMesh(trunkGeo2, woodMat, 2200);
+const TRUNKED: VegKind[] = ['broadleaf', 'conifer', 'palm'];
+
+// What grows where. Weights per biome, so a palm never appears in Tromsø and
+// the desert gets snags and rock instead of canopy.
+const VEG_MIX: Record<string, Array<[VegKind, number]>> = {
+  arid: [['bush', 5], ['rock', 4], ['snag', 2], ['palm', 1], ['broadleaf', 1]],
+  tropical: [['broadleaf', 5], ['palm', 4], ['bush', 4], ['rock', 1]],
+  temperate: [['broadleaf', 5], ['conifer', 3], ['bush', 4], ['rock', 1], ['snag', 1]],
+  boreal: [['conifer', 7], ['bush', 3], ['rock', 2], ['snag', 2]],
+  alpine: [['conifer', 4], ['rock', 6], ['bush', 2], ['snag', 2]],
+};
+function pickKind(r: () => number): VegKind {
+  const mix = VEG_MIX[biome.name] ?? VEG_MIX.temperate;
+  let total = 0;
+  for (const [, w] of mix) total += w;
+  let t = r() * total;
+  for (const [k, w] of mix) { t -= w; if (t <= 0) return k; }
+  return mix[0][0];
 }
-// Scatter inside a polygon by rejection sampling — density and mix set by
-// what the land actually is.
+
+// Deposit sites for a polygon — no GPU work, just numbers in a bucket.
 function scatterVeg(pts: Array<[number, number]>, seed: number, tags: Record<string, string>): void {
   let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
   for (const [x, z] of pts) {
@@ -1053,20 +1092,235 @@ function scatterVeg(pts: Array<[number, number]>, seed: number, tags: Record<str
     minz = Math.min(minz, z); maxz = Math.max(maxz, z);
   }
   const w = maxx - minx, d = maxz - minz;
-  if (w < 6 || d < 6 || w > 4000 || d > 4000) return;
+  if (w < 6 || d < 6 || w > 6000 || d > 6000) return;
   const wooded = tags.landuse === 'forest' || tags.natural === 'wood';
   const bare = tags.leisure === 'pitch' || tags.landuse === 'grass' || tags.landuse === 'meadow';
-  const per = wooded ? 260 : bare ? 2600 : 900; // m² per plant
-  const n = Math.min(90, Math.floor((w * d) / per));
+  const per = wooded ? 90 : bare ? 900 : 300;   // m² per plant — denser than before
+  const n = Math.min(700, Math.floor((w * d) / per));
   if (n < 1) return;
   const r = mulberry32(seed >>> 0);
-  for (let k = 0, tries = 0; k < n && tries < n * 6; tries++) {
+  const tint = new THREE.Color();
+  for (let k = 0, tries = 0; k < n && tries < n * 5; tries++) {
     const x = minx + r() * w, z = minz + r() * d;
     if (!pointInPoly(x, z, pts)) continue;
-    if (surfaceAt(x, z) === 'road') continue; // never in the carriageway
+    if (surfaceAt(x, z) === 'road') continue;   // never in the carriageway
     k++;
-    plant(wooded || r() < 0.45 ? 'tree' : 'bush', x, z, sampleHeight(x, z), r);
+    const kind: VegKind = wooded && r() < 0.75 ? (biome.name === 'boreal' || biome.name === 'alpine' ? 'conifer' : 'broadleaf') : pickKind(r);
+    const big = kind === 'bush' || kind === 'rock';
+    tint.setHSL(
+      kind === 'rock' ? 0.09 + r() * 0.04 : biome.vegHue[0] + r() * biome.vegHue[1],
+      kind === 'rock' ? 0.05 + r() * 0.06 : 0.32 + r() * 0.25,
+      kind === 'rock' ? 0.22 + r() * 0.14 : biome.vegLit[0] + r() * biome.vegLit[1],
+    );
+    const site: VegSite = {
+      x, z, k: kind,
+      s: big ? 0.6 + r() * 0.9 : 1.4 + r() * 2.2,
+      rot: r() * Math.PI * 2,
+      h: TRUNKED.includes(kind) ? 1.1 + r() * 2.2 : 0,
+      c: tint.clone(),
+    };
+    const key = vegKey(x, z);
+    let cell = vegGrid.get(key);
+    if (!cell) vegGrid.set(key, (cell = []));
+    cell.push(site);
   }
+}
+
+// AMBIENT SCATTER. Polygons alone can never dress the world: the big parks
+// and forests are OSM *relations*, and our query only asks for ways, so a
+// place like Central Park deposits nothing. Every cell near the truck is
+// therefore seeded procedurally from a hash of its own coordinates —
+// deterministic, so the same scrub grows in the same spot forever — and
+// polygon scatter then piles extra density into the parks we DO get.
+const vegSeeded = new Set<string>();
+function seedCell(gx: number, gz: number): void {
+  const key = `${gx},${gz}`;
+  if (vegSeeded.has(key)) return;
+  vegSeeded.add(key);
+  const r = mulberry32(((gx * 73856093) ^ (gz * 19349663)) >>> 0);
+  // Density by biome: boreal and tropical are crowded, arid is sparse scrub.
+  const per = biome.name === 'arid' ? 2600 : biome.name === 'tropical' ? 700 : biome.name === 'boreal' ? 900 : 1400;
+  const n = Math.floor((VEG_CELL * VEG_CELL) / per);
+  const tint = new THREE.Color();
+  const cell: VegSite[] = vegGrid.get(key) ?? [];
+  for (let i = 0; i < n; i++) {
+    const x = gx * VEG_CELL + r() * VEG_CELL, z = gz * VEG_CELL + r() * VEG_CELL;
+    if (surfaceAt(x, z) !== 'ground') continue;      // not on tarmac or water
+    let blocked = false;                              // nor inside a building
+    for (const seg of wallGrid.get(gkey(x, z)) ?? []) {
+      const [cx2, cz2] = closestOnSeg(x, z, seg);
+      if (Math.hypot(x - cx2, z - cz2) < 6) { blocked = true; break; }
+    }
+    if (blocked) continue;
+    const kind = pickKind(r);
+    const big = kind === 'bush' || kind === 'rock';
+    tint.setHSL(
+      kind === 'rock' ? 0.09 + r() * 0.04 : biome.vegHue[0] + r() * biome.vegHue[1],
+      kind === 'rock' ? 0.05 + r() * 0.06 : 0.32 + r() * 0.25,
+      kind === 'rock' ? 0.22 + r() * 0.14 : biome.vegLit[0] + r() * biome.vegLit[1],
+    );
+    cell.push({
+      x, z, k: kind,
+      s: big ? 0.6 + r() * 0.9 : 1.4 + r() * 2.2,
+      rot: r() * Math.PI * 2,
+      h: TRUNKED.includes(kind) ? 1.1 + r() * 2.2 : 0,
+      c: tint.clone(),
+    });
+  }
+  vegGrid.set(key, cell);
+}
+
+// Refill the instanced meshes from the sites nearest the truck. Called on a
+// slow tick — the field only needs to change as fast as you drive through it.
+let vegAt = 0;
+function refreshVeg(): void {
+  const counts: Record<string, number> = { broadleaf: 0, conifer: 0, palm: 0, snag: 0, bush: 0, rock: 0 };
+  let trunkN = 0;
+  const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
+  const reach = Math.ceil(VEG_RANGE / VEG_CELL);
+  const r2 = VEG_RANGE * VEG_RANGE;
+  for (let gx = cx - reach; gx <= cx + reach; gx++) {
+    for (let gz = cz - reach; gz <= cz + reach; gz++) {
+      seedCell(gx, gz);
+      const cell = vegGrid.get(`${gx},${gz}`);
+      if (!cell) continue;
+      for (const v of cell) {
+        const dx = v.x - state.x, dz = v.z - state.z;
+        if (dx * dx + dz * dz > r2) continue;
+        const mesh = vegMeshes[v.k];
+        const i = counts[v.k];
+        if (i >= VEG_CAP[v.k]) continue;
+        const y = sampleHeight(v.x, v.z);
+        vegDummy.position.set(v.x, y + v.h, v.z);
+        vegDummy.rotation.set(0, v.rot, 0);
+        vegDummy.scale.setScalar(v.s);
+        vegDummy.updateMatrix();
+        mesh.setMatrixAt(i, vegDummy.matrix);
+        mesh.setColorAt(i, v.c);
+        counts[v.k] = i + 1;
+        if (v.h > 0 && trunkN < 2200) {
+          vegDummy.position.set(v.x, y, v.z);
+          vegDummy.rotation.set(0, 0, 0);
+          vegDummy.scale.set(v.s * 0.42, v.h + v.s * 0.3, v.s * 0.42);
+          vegDummy.updateMatrix();
+          trunks.setMatrixAt(trunkN++, vegDummy.matrix);
+        }
+      }
+    }
+  }
+  for (const k of Object.keys(vegMeshes) as VegKind[]) {
+    const m = vegMeshes[k];
+    m.count = counts[k];
+    m.instanceMatrix.needsUpdate = true;
+    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+  }
+  trunks.count = trunkN;
+  trunks.instanceMatrix.needsUpdate = true;
+  // Forget buckets far behind so a long drive cannot grow the site list
+  // without bound. They regenerate identically if you come back.
+  if (vegGrid.size > 900) {
+    for (const key of vegGrid.keys()) {
+      const [kx, kz] = key.split(',').map(Number);
+      if (Math.abs(kx - cx) > reach + 3 || Math.abs(kz - cz) > reach + 3) {
+        vegGrid.delete(key);
+        vegSeeded.delete(key);
+      }
+    }
+  }
+}
+
+// ── wildlife ───────────────────────────────────────────────────────
+// Two populations, both boids-lite and both aware of the truck. They live in
+// a box that follows the car and wraps, like the rain — so the world always
+// has something alive in it without simulating a planet.
+const BIRD_N = 46, BIRD_BOX = 260;
+const birdGeo = new THREE.ConeGeometry(0.5, 1.6, 3);   // a chevron in silhouette
+birdGeo.rotateX(-Math.PI / 2);
+const birdMat = new THREE.MeshLambertMaterial({ color: 0x2a2f36, flatShading: true });
+const birds = new THREE.InstancedMesh(birdGeo, birdMat, BIRD_N);
+birds.frustumCulled = false;
+birds.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+scene.add(birds);
+const HERD_N = 18, HERD_BOX = 220;
+const herdGeo = new THREE.BoxGeometry(0.7, 0.8, 1.7);
+herdGeo.translate(0, 0.75, 0);
+const herdMat = new THREE.MeshLambertMaterial({ color: 0x6b5a41, flatShading: true });
+const herd = new THREE.InstancedMesh(herdGeo, herdMat, HERD_N);
+herd.frustumCulled = false;
+herd.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+scene.add(herd);
+interface Critter { x: number; y: number; z: number; vx: number; vy: number; vz: number; ph: number }
+const mkPop = (n: number, box: number, air: boolean): Critter[] =>
+  Array.from({ length: n }, () => ({
+    x: (Math.random() - 0.5) * box, y: air ? 30 + Math.random() * 40 : 0, z: (Math.random() - 0.5) * box,
+    vx: (Math.random() - 0.5) * 6, vy: 0, vz: (Math.random() - 0.5) * 6, ph: Math.random() * 6.283,
+  }));
+const flock = mkPop(BIRD_N, BIRD_BOX, true);
+const graze = mkPop(HERD_N, HERD_BOX, false);
+const critterDummy = new THREE.Object3D();
+// One boids step: cohere to the local centre, separate from close neighbours,
+// align with their heading — then flee the truck, which overrides everything.
+function stepPop(pop: Critter[], mesh: THREE.InstancedMesh, dt: number, o: {
+  box: number; air: boolean; speed: number; fear: number; sep: number; turn: number;
+}): void {
+  const cx = camera.position.x, cz = camera.position.z;
+  let mx = 0, mz = 0, mvx = 0, mvz = 0;
+  for (const c of pop) { mx += c.x; mz += c.z; mvx += c.vx; mvz += c.vz; }
+  mx /= pop.length; mz /= pop.length; mvx /= pop.length; mvz /= pop.length;
+  let n = 0;
+  for (const c of pop) {
+    let ax = (mx - c.x) * 0.06 + (mvx - c.vx) * 0.35;   // cohesion + alignment
+    let az = (mz - c.z) * 0.06 + (mvz - c.vz) * 0.35;
+    for (const d of pop) {                               // separation
+      if (d === c) continue;
+      const dx = c.x - d.x, dz = c.z - d.z;
+      const q = dx * dx + dz * dz;
+      if (q < o.sep * o.sep && q > 1e-4) { const f = (o.sep - Math.sqrt(q)) * 0.5; ax += (dx / Math.sqrt(q)) * f; az += (dz / Math.sqrt(q)) * f; }
+    }
+    // FLEE. Close to the truck they break formation entirely — that reaction
+    // is what makes them read as alive rather than as scenery that moves.
+    const fx = c.x - state.x, fz = c.z - state.z;
+    const fd = Math.hypot(fx, fz);
+    if (fd < o.fear) {
+      const p = (1 - fd / o.fear) * o.speed * 6;
+      ax += (fx / (fd || 1)) * p;
+      az += (fz / (fd || 1)) * p;
+      if (o.air) c.vy += 6 * dt;                          // birds climb away
+    }
+    c.vx += ax * dt * o.turn; c.vz += az * dt * o.turn;
+    c.ph += dt * (o.air ? 9 : 3);
+    // Hold a cruising speed rather than accelerating forever.
+    const sp = Math.hypot(c.vx, c.vz) || 1e-3;
+    const want = o.speed * (fd < o.fear ? 2.2 : 1);
+    c.vx = (c.vx / sp) * (sp + (want - sp) * Math.min(1, dt * 2));
+    c.vz = (c.vz / sp) * (sp + (want - sp) * Math.min(1, dt * 2));
+    c.x += c.vx * dt; c.z += c.vz * dt;
+    if (o.air) {
+      c.vy += (34 + Math.sin(c.ph * 0.2) * 12 - c.y) * 0.25 * dt;  // hold altitude
+      c.vy *= 0.96;
+      c.y += c.vy * dt;
+    } else {
+      c.y = sampleHeight(c.x, c.z);
+    }
+    // Wrap around the camera so the population is always where you are.
+    const h = o.box / 2;
+    if (c.x - cx > h) c.x -= o.box; else if (cx - c.x > h) c.x += o.box;
+    if (c.z - cz > h) c.z -= o.box; else if (cz - c.z > h) c.z += o.box;
+    const yaw = Math.atan2(c.vx, c.vz);
+    critterDummy.position.set(c.x, c.y, c.z);
+    critterDummy.rotation.set(0, yaw, o.air ? Math.sin(c.ph) * 0.5 : 0); // birds bank on the wingbeat
+    critterDummy.scale.setScalar(o.air ? 1 : 1.1 + Math.sin(c.ph * 0.5) * 0.04);
+    critterDummy.updateMatrix();
+    mesh.setMatrixAt(n++, critterDummy.matrix);
+  }
+  mesh.count = n;
+  mesh.instanceMatrix.needsUpdate = true;
+}
+function stepWildlife(dt: number): void {
+  // Rain grounds the birds; a storm keeps them down entirely.
+  birds.visible = wx.rain < 0.5;
+  if (birds.visible) stepPop(flock, birds, dt, { box: BIRD_BOX, air: true, speed: 11, fear: 55, sep: 7, turn: 1 });
+  stepPop(graze, herd, dt, { box: HERD_BOX, air: false, speed: 2.2, fear: 45, sep: 5, turn: 1.6 });
 }
 
 // ── the map layer (minimap base, FOG_SPAN frame, north-up) ─────────
@@ -1917,6 +2171,14 @@ const state = { x: 0, z: 0, heading: 0, speed: 0 };
 (window as unknown as { __drive?: object; __surfaceAt?: (x: number, z: number) => string }).__drive = state;
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
 (window as unknown as { __wx?: object }).__wx = wx; // debug/test handle
+(window as unknown as { __life?: object }).__life = () => ({
+  sites: [...vegGrid.values()].reduce((n, c) => n + c.length, 0),
+  cells: vegGrid.size,
+  shown: Object.fromEntries(Object.entries(vegMeshes).map(([k, m]) => [k, m.count])),
+  trunks: trunks.count,
+  birds: birds.count,
+  herd: herd.count,
+});
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z) });
 // Fog-of-war opacity at a world point (0 = fully cleared, 1 = untouched).
@@ -2626,6 +2888,8 @@ function tick(now: number): void {
     }
   } else dustBudget = 0;
   stepDust(dt);
+  stepWildlife(dt);
+  if (now > vegAt) { vegAt = now + 900; refreshVeg(); }
   audio.update(state.speed, throttle, surfKind, groundedF, wx.rain);
   reveal(state.x, state.z);
   if (now > streamAt) { streamAt = now + 1200; streamWorld(state.x, state.z); }
