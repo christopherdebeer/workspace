@@ -455,6 +455,9 @@ const compMat = new THREE.ShaderMaterial({
     uHazeBase: { value: new THREE.Vector3() },
     uHazeSun: { value: new THREE.Vector3() },
     bloomTex: { value: null },
+    uFlash: { value: 0 },
+    uSunUv: { value: new THREE.Vector2(0.5, 1.4) },
+    uSunVis: { value: 0 },
     uBloom: { value: 0.75 },
     uScan: { value: 0.06 },
   },
@@ -462,6 +465,7 @@ const compMat = new THREE.ShaderMaterial({
   fragmentShader: `
     uniform sampler2D sceneTex; uniform sampler2D softTex; uniform sampler2D depthTex;
     uniform sampler2D bloomTex; uniform float uBloom; uniform float uScan;
+    uniform float uFlash; uniform vec2 uSunUv; uniform float uSunVis;
     uniform sampler2D mask; uniform mat4 invPV; uniform vec3 camPos; uniform float span;
     uniform vec2 sunXZ; uniform vec2 uPix; uniform vec3 uHazeBase; uniform vec3 uHazeSun; varying vec2 vUv;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
@@ -525,6 +529,24 @@ const compMat = new THREE.ShaderMaterial({
       // BLOOM: added in linear space, before the tonemap, so a bright lamp
       // blooms into the haze around it rather than onto the finished image.
       col += texture2D(bloomTex, vUv).rgb * uBloom;
+      // LENS FLARE — restrained, and only when the sun is actually in frame
+      // and unoccluded. Three ghosts stepped along the sun-to-centre axis plus
+      // a soft horizontal streak; the palette quantiser downstream turns them
+      // into flat rings rather than a modern lens sim.
+      // Occluded by terrain or a building? Then there is no flare — one depth
+      // fetch at the sun's own screen position settles it.
+      float sunVis = uSunVis * step(0.99985, texture2D(depthTex, clamp(uSunUv, 0.0, 1.0)).r);
+      if (sunVis > 0.001) {
+        vec2 axis = vec2(0.5) - uSunUv;
+        float f = 0.0;
+        f += smoothstep(0.10, 0.0, length(vUv - (uSunUv + axis * 0.36))) * 0.55;
+        f += smoothstep(0.055, 0.0, length(vUv - (uSunUv + axis * 0.72))) * 0.40;
+        f += smoothstep(0.13, 0.0, length(vUv - (uSunUv + axis * 1.28))) * 0.20;
+        float dy = abs(vUv.y - uSunUv.y);
+        f += smoothstep(0.006, 0.0, dy) * smoothstep(0.6, 0.0, abs(vUv.x - uSunUv.x)) * 0.28;
+        col += mix(vec3(1.0, 0.82, 0.52), vec3(0.55, 0.85, 1.0), 0.35) * f * sunVis * 0.085;
+      }
+      col += vec3(0.85, 0.90, 1.0) * uFlash;   // lightning fills the whole frame
       vec3 enc = srgb(col);
       // GRADE. Physically-correct lighting through a haze lands flat and
       // milky; the reference art is saturated with deep shadows. Saturation
@@ -597,6 +619,8 @@ function reveal(ex: number, ez: number): void {
 const ghostU = {
   uGhostCar: { value: new THREE.Vector3() },
   uGhostCam: { value: new THREE.Vector3() },
+  uCloudS: { value: 0 },                       // cover, for cloud shadows
+  uWind: { value: new THREE.Vector2() },       // the deck's drift, shared with the sky
 };
 // (Pattern per SimonDev's "customizing materials": extend the built-ins by
 // splicing GLSL into their chunk includes rather than rewriting materials —
@@ -605,12 +629,30 @@ function ghostify(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uGhostCar = ghostU.uGhostCar;
     sh.uniforms.uGhostCam = ghostU.uGhostCam;
+    sh.uniforms.uCloudS = ghostU.uCloudS;
+    sh.uniforms.uWind = ghostU.uWind;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vGhostW;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGhostW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vGhostW;\nuniform vec3 uGhostCar;\nuniform vec3 uGhostCam;')
+      .replace('#include <common>', `#include <common>
+        varying vec3 vGhostW; uniform vec3 uGhostCar; uniform vec3 uGhostCam;
+        uniform float uCloudS; uniform vec2 uWind;
+        float gh21(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
+        float gvn(vec2 p){
+          vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(gh21(i), gh21(i + vec2(1.0, 0.0)), f.x),
+                     mix(gh21(i + vec2(0.0, 1.0)), gh21(i + vec2(1.0, 1.0)), f.x), f.y);
+        }
+        float gfbm(vec2 p){ float a = 0.5, s = 0.0; for (int i = 0; i < 4; i++) { s += a * gvn(p); p *= 2.07; a *= 0.5; } return s; }`)
       .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+      // CLOUD SHADOWS: the same kind of noise the sky draws its deck from,
+      // projected on the ground and drifting on the same wind — so shadow
+      // patches sweep across the terrain as a front comes over.
+      if (uCloudS > 0.01) {
+        float cs = gfbm(vGhostW.xz * 0.0035 + uWind);
+        gl_FragColor.rgb *= 1.0 - uCloudS * smoothstep(0.42, 0.72, cs) * 0.5;
+      }
       {
         vec3 ab = uGhostCar - uGhostCam;
         float t = dot(vGhostW - uGhostCam, ab) / max(dot(ab, ab), 1.0);
@@ -1673,7 +1715,7 @@ const WX: Record<Sky, { cloud: number; rain: number; label: string }> = {
   rain: { cloud: 0.75, rain: 0.6, label: 'RAIN' },
   storm: { cloud: 0.95, rain: 1, label: 'STORM' },
 };
-const wx = { sky: 'clear' as Sky, next: 'clear' as Sky, cloud: 0, rain: 0, wet: 0, at: 0, warn: 0 };
+const wx = { sky: 'clear' as Sky, next: 'clear' as Sky, cloud: 0, rain: 0, wet: 0, at: 0, warn: 0, flash: 0, bolt: 0 };
 function rollWeather(now: number): void {
   if (now < wx.at) return;
   wx.at = now + (90 + Math.random() * 150) * 1000; // a front lasts 1.5–4 minutes
@@ -1701,6 +1743,22 @@ function stepWeather(now: number, dt: number): void {
   compMat.uniforms.uBloom.value = 0.75 - wx.cloud * 0.35;
   skyMat.uniforms.uCloud.value = wx.cloud;
   skyMat.uniforms.uTime.value = now / 1000;
+  // Cloud shadows read the same cover and drift as the deck overhead.
+  ghostU.uCloudS.value = wx.cloud;
+  ghostU.uWind.value.set((now / 1000) * 0.006, (now / 1000) * 0.0022);
+  // LIGHTNING. A strike is a double flash — the leader, then the return
+  // stroke a beat later — and the thunder arrives after the sound has had
+  // time to travel, which is what sells the distance.
+  wx.flash = Math.max(0, wx.flash - dt * 7);
+  if (wx.bolt > 0 && now >= wx.bolt) { wx.flash = 0.55; wx.bolt = 0; }
+  if (wx.sky === 'storm' && wx.flash <= 0 && wx.bolt === 0 && Math.random() < dt * 0.22) {
+    wx.flash = 0.9;
+    wx.bolt = now + 60 + Math.random() * 90;             // the return stroke
+    const far = 0.25 + Math.random() * 0.75;             // 0 = overhead, 1 = far off
+    setTimeout(() => audio.thunder(far), far * 5200);
+  }
+  compMat.uniforms.uFlash.value = wx.flash * 0.5;
+  if (wx.flash > 0) { sun.intensity += wx.flash * 1.6; hemi.intensity += wx.flash * 1.2; }
   // Overcast desaturates the haze toward slate and thickens it.
   const g = (c: Rgb): THREE.Vector3 => {
     const l = (c[0] + c[1] + c[2]) / 3;
@@ -2330,6 +2388,22 @@ const audio = (() => {
       gritFilt.frequency.setTargetAtTime(surf === 'water' ? 700 : 900 + Math.min(v * 26, 1400), t, 0.15);
       gritGain.gain.setTargetAtTime(Math.min(v / 12, 1) * 0.3 * loose * grounded, t, 0.09);
     },
+    // Thunder: a low rumble whose attack softens and whose tail lengthens with
+    // distance — a near strike cracks, a far one rolls.
+    thunder(far: number): void {
+      if (!ctx || !master || ctx.state !== 'running' || !on) return;
+      const t = ctx.currentTime;
+      const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+      const lp = ctx.createBiquadFilter();
+      lp.type = 'lowpass'; lp.frequency.value = 420 - far * 300; lp.Q.value = 0.7;
+      const g = ctx.createGain();
+      const dur = 0.9 + far * 2.6, atk = 0.005 + far * 0.35;
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.55 - far * 0.32, t + atk);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      src.connect(lp); lp.connect(g); g.connect(master);
+      src.start(t); src.stop(t + dur + 0.1);
+    },
     // A stone spat out from under a tire — sharp, pitched, very short.
     stone(): void {
       if (!ctx || !master || ctx.state !== 'running' || !on) return;
@@ -2405,6 +2479,7 @@ let wheelSpin = 0, groundedF = 1, bodyInit = false;
 let steerCur = 0; // smoothed — keyboard taps ramp instead of snapping
 let prevGround: number | null = null; // last frame's resolved ground (tunnel guard)
 let dustBudget = 0;                   // fractional particles carried between frames
+const sunScreen = new THREE.Vector3();
 function tick(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
@@ -2604,6 +2679,14 @@ function tick(now: number): void {
   ghostU.uGhostCar.value.set(state.x, ground + 1.2, state.z);
   ghostU.uGhostCam.value.copy(camera.position);
   compMat.uniforms.camPos.value.copy(camera.position);
+  // Where the sun sits on screen, for the flare. Occlusion is left to the
+  // shader (one depth fetch); here we only ask whether it is in frame at all.
+  sunScreen.copy(SUN_DIR).multiplyScalar(9000).add(camera.position).project(camera);
+  const onScreen = sunScreen.z < 1 && Math.abs(sunScreen.x) < 1.5 && Math.abs(sunScreen.y) < 1.5;
+  compMat.uniforms.uSunUv.value.set(sunScreen.x * 0.5 + 0.5, sunScreen.y * 0.5 + 0.5);
+  compMat.uniforms.uSunVis.value = onScreen
+    ? clamp(1 - Math.max(Math.abs(sunScreen.x), Math.abs(sunScreen.y)) * 0.55, 0, 1) * (1 - wx.cloud * 0.85)
+    : 0;
   compMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
   drawHud(surfKind, Math.round(Math.abs(state.speed) * 3.6), groundedF);
   if (camMode === 'chase' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
