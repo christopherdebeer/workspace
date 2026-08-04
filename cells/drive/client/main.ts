@@ -970,6 +970,42 @@ const B_MATS = [0xa59a85, 0x92897a, 0x9d937f, 0x878071].map((c, i) => {
     new THREE.MeshLambertMaterial({ color: side, map: wallTexes[i % wallTexes.length], side: DS }),
   ] as [THREE.Material, THREE.Material];
 });
+// Water gets its own surface treatment. A static ripple texture reads as wet
+// paint; this scrolls two noise layers against each other for the swell,
+// brightens the crests, and adds a sun glint that tracks the light — enough
+// motion to look like liquid without leaving the palette.
+const waterU = { uWTime: { value: 0 } };
+function waterize(mat: THREE.Material): void {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uWTime = waterU.uWTime;
+    sh.uniforms.uWSun = { value: SUN_DIR };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vWPos; uniform float uWTime; uniform vec3 uWSun;
+        float wh(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
+        float wn(vec2 p){
+          vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(wh(i), wh(i + vec2(1.0, 0.0)), f.x),
+                     mix(wh(i + vec2(0.0, 1.0)), wh(i + vec2(1.0, 1.0)), f.x), f.y);
+        }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+      {
+        // Two layers drifting against each other: where they agree, a crest.
+        float a = wn(vWPos.xz * 0.09 + vec2(uWTime * 0.35, uWTime * 0.11));
+        float b = wn(vWPos.xz * 0.15 - vec2(uWTime * 0.21, uWTime * 0.4));
+        float swell = a * 0.6 + b * 0.4;
+        diffuseColor.rgb *= 0.72 + swell * 0.7;
+        // Glint: crests facing the sun catch it, and only on the sun's side.
+        vec2 toSun = normalize(uWSun.xz + vec2(1e-4));
+        float face = max(dot(normalize(vWPos.xz - cameraPosition.xz + 1e-4), toSun), 0.0);
+        diffuseColor.rgb += vec3(1.0, 0.94, 0.78) * pow(smoothstep(0.72, 1.0, swell), 2.0) * face * 0.55;
+      }`);
+  };
+}
+
 // ── the sea ────────────────────────────────────────────────────────
 // Terrarium tiles carry BATHYMETRY and OSM's open sea has no water polygon
 // (coastline ≠ natural=water), so coasts rendered as sunken seabed. One vast
@@ -978,7 +1014,10 @@ const B_MATS = [0xa59a85, 0x92897a, 0x9d937f, 0x878071].map((c, i) => {
 const seaTex = waterTex.clone();
 seaTex.repeat.set(1550, 1550); // plane UVs are 0..1 across 40km → ~26m ripple tiles
 seaTex.needsUpdate = true;
-const sea = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), new THREE.MeshLambertMaterial({ map: seaTex, side: DS }));
+const seaMat = new THREE.MeshLambertMaterial({ map: seaTex, side: DS });
+waterize(seaMat);
+waterize(MAT.water);
+const sea = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), seaMat);
 sea.rotation.x = -Math.PI / 2;
 sea.position.y = -1e6; // parked until boot anchors sea level
 scene.add(sea);
@@ -2037,6 +2076,7 @@ function stepWeather(now: number, dt: number): void {
   compMat.uniforms.uBloom.value = 0.75 - wx.cloud * 0.35;
   skyMat.uniforms.uCloud.value = wx.cloud;
   skyMat.uniforms.uTime.value = now / 1000;
+  waterU.uWTime.value = now / 1000;
   // Cloud shadows read the same cover and drift as the deck overhead.
   ghostU.uCloudS.value = wx.cloud;
   ghostU.uWind.value.set((now / 1000) * 0.006, (now / 1000) * 0.0022);
@@ -2151,7 +2191,10 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
       vec4 mv = modelViewMatrix * vec4(position, 1.0);
       // Big, billowing puffs (two thirds of the first pass — full size buried
       // the truck, metre-scale read as pinpricks).
-      gl_PointSize = (7.0 + aSeed * 9.0) * (2.1 - aLife) * (175.0 / max(-mv.z, 1.0));
+      // Water droplets are half the size of a dust puff — a wading truck
+      // displaces water, it does not throw a plume.
+      float sz = mix(7.0 + aSeed * 9.0, 3.5 + aSeed * 4.5, aKind);
+      gl_PointSize = sz * (2.1 - aLife) * (175.0 / max(-mv.z, 1.0));
       gl_Position = projectionMatrix * mv;
     }`,
   fragmentShader: `
@@ -2855,8 +2898,12 @@ function tick(now: number): void {
       // car's current level, so the hill above a tunnel doesn't swallow us.
       const rh = roadHeightAt(wxw, wzw);
       if (rh !== null && Math.abs(rh - (prevGround ?? g)) < 4) g = rh;
-    } else if (sk === 'water' && seaOn) {
-      g = Math.max(g, -baseElev - 0.35); // wallow at the SURFACE, not the seabed
+    } else if (sk === 'water') {
+      // Float LOW. The truck wades rather than skims: the hull settles until
+      // the water is up around the axles, which is why the splashes shrink —
+      // there is far less wheel left above the surface to throw anything.
+      if (seaOn) g = Math.max(g, -baseElev - 0.35);   // the surface, not the seabed
+      g -= WHEEL_R * 0.85;
     }
     rawSum += g;
     const sw = SURFACE[sk];
@@ -3060,7 +3107,7 @@ function applyBiome(b: Biome): void {
   // The sea takes the biome's own shallows, so a tropical coast isn't the
   // same water as a boreal one.
   const shallow = b.ramp[0][1];
-  (sea.material as THREE.MeshLambertMaterial).color.setRGB(shallow[0] * 2.2, shallow[1] * 2.2, shallow[2] * 2.2);
+  seaMat.color.setRGB(shallow[0] * 2.2, shallow[1] * 2.2, shallow[2] * 2.2);
 }
 
 // ── pixel font ─────────────────────────────────────────────────────
@@ -3081,6 +3128,19 @@ const GLYPHS: Record<string, string> = {
   ')': '8422248', '+': '044v440', '>': '8421248', '<': '248g842', '=': '00v0v00',
   '#': 'alvlvla', '*': '04ava40', '"': 'aa00000', "'": '4400000', '°': 'cic0000',
 };
+// A 3x5 face for secondary text. You cannot half-scale a bitmap font — 5x7 at
+// 0.5 is mush — so small text gets its own grid: three bits a row, five rows,
+// octal-encoded. Roughly half the area of the 5x7, still perfectly crisp.
+const GLYPHS_S: Record<string, string> = {
+  ' ': '00000', A: '25755', B: '65656', C: '34443', D: '65556', E: '74647', F: '74644',
+  G: '34553', H: '55755', I: '72227', J: '11152', K: '55655', L: '44447', M: '57755',
+  N: '57555', O: '25552', P: '65644', Q: '25563', R: '65655', S: '34216', T: '72222',
+  U: '55557', V: '55552', W: '55775', X: '55255', Y: '55222', Z: '71247',
+  '0': '75557', '1': '26227', '2': '61247', '3': '61216', '4': '55711', '5': '74616',
+  '6': '34652', '7': '71222', '8': '25252', '9': '25316',
+  '.': '00002', ',': '00024', '·': '00200', '-': '00700', '>': '42124', '<': '12421',
+  '/': '11244', "'": '22000', ':': '02020', '!': '22202', '?': '61202', '%': '52125',
+};
 const B32 = '0123456789abcdefghijklmnopqrstuv';
 const FW = 5, FH = 7;
 function glyphRows(ch: string): string {
@@ -3088,6 +3148,21 @@ function glyphRows(ch: string): string {
 }
 /** Width in pixels of `s` at scale `sc` (1px letter spacing). */
 const textW = (s: string, sc = 1): number => s.length * (FW + 1) * sc;
+/** The 3x5 face: width, and a draw that mirrors `text` on the smaller grid. */
+const textSW = (s: string): number => s.length * 4;
+function textSmall(c: CanvasRenderingContext2D, s: string, x: number, y: number, col: string): void {
+  c.fillStyle = col;
+  let cx = x;
+  for (const ch of s) {
+    const rows = GLYPHS_S[ch] ?? GLYPHS_S[ch.toUpperCase()] ?? GLYPHS_S['?'];
+    for (let r = 0; r < 5; r++) {
+      const bits = Number(rows[r]);
+      if (!bits) continue;
+      for (let b = 0; b < 3; b++) if (bits & (1 << (2 - b))) c.fillRect(cx + b, y + r, 1, 1);
+    }
+    cx += 4;
+  }
+}
 /** Hard-truncate to fit a pixel width — no ellipsis glyph in a 5x7 font. */
 const fit = (s: string, maxPx: number): string => {
   const n = Math.max(1, Math.floor(maxPx / (FW + 1)));
@@ -3169,6 +3244,12 @@ function panel(x: number, y: number, w: number, h: number, edge = UI.edge): void
 // Legibility WITHOUT a box: a one-pixel dark outline around the glyphs. Boxes
 // are reserved for real instruments (things you read a value off, or press);
 // labels floating over the world just get an edge.
+function textEdgeS(s: string, x: number, y: number, col: string): void {
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+    textSmall(hctx, s, x + dx, y + dy, 'rgba(4,10,11,0.85)');
+  }
+  textSmall(hctx, s, x, y, col);
+}
 function textEdge(s: string, x: number, y: number, col: string, sc = 1): void {
   for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
     text(hctx, s, x + dx * sc, y + dy * sc, 'rgba(4,10,11,0.85)', sc);
@@ -3224,25 +3305,22 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   const btnW = textW('ELSEWHERE') + 8;
   for (const p of poiDraw) {
     const label = fit(p.t, Math.round(HW * 0.62));
-    const w = textW(label) + 6;
+    const w = textSW(label) + 6;
     if (p.edge === 0) {
       const x = clamp(Math.round(p.x / hudS - w / 2), 2, HW - w - 2);
       const y = clamp(Math.round(p.y / hudS), 22, HH - 40);
-      textEdge(label, x + 3, y - 11, UI.text);
+      textEdgeS(label, x + 3, y - 9, UI.text);
       hctx.fillStyle = p.c;
       hctx.fillRect(Math.round(x + w / 2), y - 3, 1, 5);      // stem
       hctx.fillRect(Math.round(x + w / 2) - 1, y + 2, 3, 3);  // pin head
     } else {
       const y = clamp(Math.round(p.y / hudS), 20, HH - 30);
       const x = p.edge > 0 ? HW - w - 3 : 3;
-      textEdge(label, x + 3, y + 2, p.c);
+      textEdgeS(label, x + 3, y + 2, p.c);
     }
   }
   // ── compass: the full width of the screen, centred ──
   const cw = HW - pad * 2, cx0 = pad, cy0 = pad;
-  hctx.fillStyle = UI.dim;                       // two hairline rails, no slab
-  hctx.fillRect(cx0, cy0 + 8, cw, 1);
-  hctx.fillRect(cx0, cy0 + 14, cw, 1);
   const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
   const perDeg = cw / 150;
   // Walk ABSOLUTE bearings (fixed multiples of 5 degrees) and place each at its
