@@ -1337,7 +1337,11 @@ const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3
 const poiEls = Array.from({ length: 5 }, () => {
   const wrap = document.createElement('div');
   Object.assign(wrap.style, {
-    position: 'absolute', display: 'none', flexDirection: 'column', alignItems: 'center',
+    // Positioned ENTIRELY via translate3d each frame — left/top writes forced
+    // layout and, updated on a 150ms throttle, made the pins judder against
+    // the 60fps camera. Compositor-only motion, every frame, stays glued.
+    position: 'absolute', left: '0', top: '0', display: 'none', flexDirection: 'column', alignItems: 'center',
+    willChange: 'transform',
   } as Partial<CSSStyleDeclaration>);
   const label = document.createElement('div');
   Object.assign(label.style, {
@@ -1358,7 +1362,7 @@ const poiEls = Array.from({ length: 5 }, () => {
   } as Partial<CSSStyleDeclaration>);
   wrap.append(label, stem, dot);
   poiWrap.appendChild(wrap);
-  return { wrap, label, stem, dot };
+  return { wrap, label, stem, dot, text: '' };
 });
 const poiVec = new THREE.Vector3(), poiView = new THREE.Vector3(), camFwd = new THREE.Vector3();
 const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}m` : `${(m / 1000).toFixed(1)}km`);
@@ -1370,40 +1374,39 @@ function updatePois(): void {
     .slice(0, poiEls.length);
   camera.getWorldDirection(camFwd);
   for (let i = 0; i < poiEls.length; i++) {
-    const { wrap, label, stem, dot } = poiEls[i];
+    const el = poiEls[i];
     const e = near[i];
-    if (!e) { wrap.style.display = 'none'; continue; }
+    if (!e) { el.wrap.style.display = 'none'; continue; }
     const { p, d } = e;
     const dx = p.x - state.x, dz = p.z - state.z;
     const dc = Math.min(d, 900); // beyond ~900m: pin to the horizon on its bearing
     const wx = state.x + (dx / d) * dc, wz = state.z + (dz / d) * dc;
     poiVec.set(wx, sampleHeight(wx, wz) + 2, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
-    wrap.style.display = 'flex';
-    dot.style.background = POI_COLORS[p.kind];
+    el.wrap.style.display = 'flex';
+    el.dot.style.background = POI_COLORS[p.kind];
+    const setText = (t: string): void => { if (el.text !== t) { el.text = t; el.label.textContent = t; } };
     if (poiView.z < -1) {
       poiVec.project(camera);
       if (Math.abs(poiVec.x) <= 0.94) {
         // MAP PIN: the dot sits on the spot, the label floats off it.
-        label.textContent = `${alienize(p.name)} · ${fmtDist(d)}`;
-        stem.style.display = dot.style.display = 'block';
-        wrap.style.transform = 'translate(-50%, -100%)';
-        wrap.style.right = 'auto';
-        wrap.style.left = `${(poiVec.x * 0.5 + 0.5) * innerWidth}px`;
-        wrap.style.top = `${clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.14, innerHeight * 0.82)}px`;
+        setText(`${alienize(p.name)} · ${fmtDist(d)}`);
+        el.stem.style.display = el.dot.style.display = 'block';
+        const px = (poiVec.x * 0.5 + 0.5) * innerWidth;
+        const py = clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.14, innerHeight * 0.82);
+        el.wrap.style.transform = `translate3d(${px.toFixed(1)}px, ${py.toFixed(1)}px, 0) translate(-50%, -100%)`;
         continue;
       }
     }
     // Off-screen: side chip with an arrow, stacked by proximity rank.
-    stem.style.display = dot.style.display = 'none';
-    wrap.style.transform = 'none';
-    wrap.style.top = `${innerHeight * (0.28 + i * 0.055)}px`;
+    el.stem.style.display = el.dot.style.display = 'none';
+    const py = innerHeight * (0.28 + i * 0.055);
     if (camFwd.x * dz - camFwd.z * dx > 0) {
-      wrap.style.left = 'auto'; wrap.style.right = '8px';
-      label.textContent = `${alienize(p.name)} · ${fmtDist(d)} ▶`;
+      setText(`${alienize(p.name)} · ${fmtDist(d)} ▶`);
+      el.wrap.style.transform = `translate3d(${innerWidth - 8}px, ${py.toFixed(1)}px, 0) translateX(-100%)`;
     } else {
-      wrap.style.right = 'auto'; wrap.style.left = '8px';
-      label.textContent = `◀ ${alienize(p.name)} · ${fmtDist(d)}`;
+      setText(`◀ ${alienize(p.name)} · ${fmtDist(d)}`);
+      el.wrap.style.transform = `translate3d(8px, ${py.toFixed(1)}px, 0)`;
     }
   }
 }
@@ -1413,7 +1416,13 @@ const speedEl = $('speed');
 let last = performance.now();
 let streamAt = 0;
 let miniAt = 0;
-let poiAt = 0;
+let urlAt = 0, urlX = Infinity, urlZ = 0, urlH = 0;
+const writeUrl = (la: number, lo: number): void => {
+  const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
+  try {
+    history.replaceState(null, '', `?lat=${la.toFixed(5)}&lon=${lo.toFixed(5)}&h=${deg.toFixed(0)}${camMode === 'chase' ? '&cam=chase' : ''}`);
+  } catch { /* fine */ }
+};
 // Surface grip: tarmac is fast, everything else asks you to slow down —
 // which turns "follow the real roads" into the game. `lift` is how proud the
 // drawn drape sits of the sampled field (wheels touch the visible surface);
@@ -1579,7 +1588,17 @@ function tick(now: number): void {
   compMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
   speedEl.innerHTML = `${Math.round(Math.abs(state.speed) * 3.6)}<small> km/h</small>`;
   if (now > miniAt) { miniAt = now + 250; drawMinimap(); }
-  if (now > poiAt) { poiAt = now + 150; updatePois(); }
+  updatePois(); // every frame — throttled pins juddered against the camera
+  // Progress lives in the URL: reloading resumes here, not at the spawn.
+  if (now > urlAt) {
+    urlAt = now + 3000;
+    const dh = Math.abs(Math.atan2(Math.sin(state.heading - urlH), Math.cos(state.heading - urlH)));
+    if (Math.hypot(state.x - urlX, state.z - urlZ) > 8 || dh > 0.3) {
+      urlX = state.x; urlZ = state.z; urlH = state.heading;
+      const [la, lo] = localToLatLon(state.x, state.z);
+      writeUrl(la, lo);
+    }
+  }
   // scene → target, two separable blur rounds at half res, composite to canvas
   renderer.setRenderTarget(rtScene);
   renderer.render(scene, camera);
@@ -1601,7 +1620,12 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
   $('place-coords').textContent = `${spawn.lat.toFixed(4)}, ${spawn.lon.toFixed(4)}`;
   placeLabel = spawn.name ?? '…';
   renderPlace();
-  history.replaceState(null, '', `?lat=${spawn.lat.toFixed(5)}&lon=${spawn.lon.toFixed(5)}`);
+  // Resume orientation and camera from the URL (written live while driving).
+  const q = new URLSearchParams(location.search);
+  const h0 = parseFloat(q.get('h') ?? '');
+  if (Number.isFinite(h0)) state.heading = (h0 * Math.PI) / 180;
+  if (q.get('cam') === 'chase' && camMode === 'top') toggleCam();
+  writeUrl(spawn.lat, spawn.lon);
   void placeName(spawn.lat, spawn.lon).then((n) => { if (n) { placeLabel = n; renderPlace(); } });
   bootMsg('reading the terrain…');
   // Anchor elevation: the spawn tile loads first so heights are relative to it.
