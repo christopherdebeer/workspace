@@ -2355,6 +2355,56 @@ const SX = 0.7, SY = 0.8;
 const WHEEL_R = 0.45, WHEEL_W = 0.36, TRACK = 1.18 * SX, AXLE = 1.55;
 // Local wheel anchors [x, z] — FL, FR, RL, RR (forward is -z).
 const WHEELS: Array<[number, number]> = [[-TRACK, -AXLE], [TRACK, -AXLE], [-TRACK, AXLE], [TRACK, AXLE]];
+// ── bodywork ───────────────────────────────────────────────────────
+// Flat paint on flat slabs is what makes the hull read as a toy. This is the
+// truck's paint job: panel seams, weathered camo blotches over the red, and
+// road dust climbing the sills.
+//
+// It works in CAR-LOCAL space, taken straight from the vertex buffer, which is
+// why `add` bakes placement into the geometry. World space would swim as the
+// truck drives; per-part object space would restart the pattern on every box;
+// and UVs on BoxGeometry are 0..1 per face, so a texture map would land at a
+// different scale on every panel. Local position has none of those problems
+// and needs no UVs at all.
+function bodywork(mat: THREE.Material, amount: number): void {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uWear = { value: amount };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vBodyP; varying vec3 vBodyN;')
+      .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBodyP = position;\nvBodyN = normal;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vBodyP; varying vec3 vBodyN; uniform float uWear;
+        float bh(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 37.19); return fract(p.x * p.y); }
+        float bn(vec2 p){
+          vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(bh(i), bh(i + vec2(1.0, 0.0)), f.x),
+                     mix(bh(i + vec2(0.0, 1.0)), bh(i + vec2(1.0, 1.0)), f.x), f.y);
+        }
+        float bfbm(vec2 p){ float a = 0.5, s = 0.0; for (int i = 0; i < 4; i++) { s += a * bn(p); p *= 2.03; a *= 0.5; } return s; }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+      {
+        // Project onto whichever plane this face plants on, so seams run ALONG
+        // a panel instead of cutting across it at an angle.
+        vec3 an = abs(normalize(vBodyN));
+        vec2 uv = an.x > max(an.y, an.z) ? vBodyP.zy : (an.y > an.z ? vBodyP.xz : vBodyP.xy);
+        // Weathered camo over the paint: big soft patches of faded olive and
+        // sand, the reference's palette rather than a second colour of car.
+        float blot = smoothstep(0.46, 0.66, bfbm(uv * 1.5 + 4.3));
+        vec3 camo = mix(vec3(0.20, 0.23, 0.15), vec3(0.42, 0.38, 0.26), bfbm(uv * 2.6 + 9.1));
+        diffuseColor.rgb = mix(diffuseColor.rgb, camo, blot * 0.34 * uWear);
+        // Panel seams on a 0.34m grid, and a shadow just under each one.
+        vec2 g = fract(uv / 0.34);
+        float line = min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y));
+        diffuseColor.rgb *= 1.0 - (1.0 - smoothstep(0.0, 0.045, line)) * 0.3;
+        // Road dust up the sills — heaviest at the bottom, thrown as streaks.
+        float dust = smoothstep(0.62, 0.02, vBodyP.y) * (0.55 + 0.45 * bfbm(vec2(uv.x * 5.0, uv.y * 1.2)));
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.52, 0.45, 0.33), clamp(dust * 0.3 * uWear, 0.0, 0.4));
+        // And a fine grime speckle so no panel is ever a flat field of colour.
+        diffuseColor.rgb *= 1.0 - 0.13 * uWear * bfbm(uv * 9.0);
+      }`);
+  };
+}
 const tailMat = new THREE.MeshBasicMaterial({ color: 0x8e1a12 }); // brightens under braking
 const car = new THREE.Group();
 car.rotation.order = 'YXZ'; // yaw first, then pitch/roll about the CAR's axes
@@ -2366,11 +2416,19 @@ const wheelMeshes: THREE.Mesh[] = [];
   // body, and the gear an expedition truck actually carries. Every part is a
   // slab or a cylinder; the silhouette does the work at pixel resolution.
   const RED = 0xc4402c, DARK = 0x1b1f26, STEEL = 0x2a2f36, TAN = 0x6b6250;
-  const redMat = new THREE.MeshLambertMaterial({ color: RED, flatShading: true });
+  // DoubleSide: the extruded wheel arches are the one part whose winding is
+  // not under our control, and a flipped face there renders as a black hole.
+  const redMat = new THREE.MeshLambertMaterial({ color: RED, flatShading: true, side: DS });
   const glassMat = new THREE.MeshLambertMaterial({ color: DARK, flatShading: true });
   const steelMat = new THREE.MeshLambertMaterial({ color: STEEL, flatShading: true });
   const cargoMat = new THREE.MeshLambertMaterial({ color: TAN, flatShading: true });
+  bodywork(redMat, 1);
+  bodywork(steelMat, 0.35);
+  bodywork(cargoMat, 0.5);
   const panelMat = new THREE.MeshLambertMaterial({ color: 0x14304e, emissive: 0x060f1c, flatShading: true });
+  // Dark trim: arch lips, shut lines, handles. Unweathered — these are the
+  // rubber-and-plastic parts, and the paint shader would only muddy them.
+  const trimMat = new THREE.MeshLambertMaterial({ color: 0x241f1c, flatShading: true, side: DS });
   const tireMat = new THREE.MeshLambertMaterial({ color: 0x14171c, flatShading: true });
   const hubMat = new THREE.MeshLambertMaterial({ color: 0x8f8574, flatShading: true });
   // Every hull part sits DROP metres lower than its written y. The suspension
@@ -2382,10 +2440,18 @@ const wheelMeshes: THREE.Mesh[] = [];
   // the authored numbers below stay readable and the sheet is honoured in
   // exactly one place. Every geometry handed in here is freshly built, so
   // scaling it in place is safe.
-  const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number): THREE.Mesh => {
+  // Placement is baked into the GEOMETRY, not carried on the mesh. The bodywork
+  // shader below reads `position` straight out of the vertex buffer and needs
+  // it in CAR space — with the offset on the mesh instead, every part would
+  // have been centred on its own origin and the panel lines, dust gradient and
+  // camo would have restarted on each box.
+  // `rx` rakes a panel (windscreen, bonnet, solar) about its own centre, so it
+  // has to happen after the squeeze and before the translate.
+  const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number, rx = 0): THREE.Mesh => {
     geo.scale(SX, SY, 1);
+    if (rx) geo.rotateX(rx);
+    geo.translate(x * SX, (y - DROP) * SY, z);
     const m = new THREE.Mesh(geo, mat);
-    m.position.set(x * SX, (y - DROP) * SY, z);
     car.add(m);
     return m;
   };
@@ -2393,33 +2459,70 @@ const wheelMeshes: THREE.Mesh[] = [];
   // ── hull ──
   add(box(1.95, 0.85, 4.2), redMat, 0, 0.9, 0);                 // body tub
   add(box(1.35, 0.24, 3.4), steelMat, 0, 0.42, 0);              // exposed frame rails
-  add(box(1.7, 0.36, 1.15), redMat, 0, 1.5, -1.5);              // bonnet
+  // ── the nose is not a brick ──
+  // The bonnet falls away toward the grille and the leading edge is chamfered,
+  // so the front three-quarter reads as a vehicle rather than a shipping crate.
+  add(box(1.7, 0.34, 1.05), redMat, 0, 1.52, -1.46, -0.11);     // bonnet, sloping down
+  add(box(1.66, 0.2, 0.4), redMat, 0, 1.4, -1.98, -0.34);        // chamfer into the grille
+  for (const sx of [-0.8, 0.8]) add(box(0.16, 0.3, 1.0), redMat, sx, 1.5, -1.48, -0.11); // wing tops
   // The cab is RED with a dark GLASS BAND through it, not a black block. That
   // banding — red waist, black glass, red header and roof — is what makes the
   // reference read as one painted truck instead of a cargo pod on a chassis.
-  add(box(1.7, 0.78, 1.9), redMat, 0, 1.7, -0.45);              // cab shell
-  add(box(1.74, 0.34, 1.94), glassMat, 0, 1.86, -0.45);         // glazing band
-  // A, B and C pillars through the glazing. Without them the front elevation
-  // is a full-width black void where a windscreen should be, and the side is
-  // one long letterbox slot instead of separate windows — both exactly the
-  // sort of thing the orthographic views exist to catch.
-  // They sit ON the glass face (x = 0.87, the band's own half-width), not
-  // inboard of it: at 0.8 they were buried and invisible from the side.
-  for (const pz of [-1.36, -0.5, 0.44]) {
-    for (const px of [-0.87, 0.87]) add(box(0.16, 0.36, 0.16), redMat, px, 1.86, pz);
+  add(box(1.7, 0.78, 1.62), redMat, 0, 1.7, -0.31);             // cab shell
+  add(box(1.74, 0.34, 1.66), glassMat, 0, 1.86, -0.31);         // side glazing
+  // RAKED WINDSCREEN. A vertical pane is the single most box-like thing about
+  // the old hull; the reference leans it back over the bonnet. Sitting proud of
+  // the cab on its own tilt, it also gives the roofline something to end on.
+  add(box(1.66, 0.52, 0.1), glassMat, 0, 1.88, -1.2, 0.42);
+  for (const px of [-0.85, 0.85]) add(box(0.14, 0.56, 0.13), redMat, px, 1.88, -1.2, 0.42); // A-pillars, on the rake
+  // B and C pillars split the side glass into windows. They sit ON the glass
+  // face (x = 0.87, the band's own half-width), not inboard of it: at 0.8 they
+  // were buried inside it and invisible from the side elevation.
+  for (const pz of [-0.4, 0.42]) {
+    for (const px of [-0.87, 0.87]) add(box(0.16, 0.36, 0.15), redMat, px, 1.86, pz);
   }
-  add(box(1.74, 0.14, 1.98), redMat, 0, 2.14, -0.45);           // roof cap
+  add(box(1.74, 0.14, 1.78), redMat, 0, 2.14, -0.39);           // roof cap
+  add(box(1.7, 0.13, 0.3), redMat, 0, 2.11, -1.32, 0.3);        // roof leading edge, faired down
   // ── rear tub: side rails and a tailgate, so the back reads as open cargo ──
   for (const sx of [-0.92, 0.92]) add(box(0.11, 0.34, 1.7), redMat, sx, 1.5, 1.2);
   add(box(1.9, 0.34, 0.12), redMat, 0, 1.5, 2.02);
   // Sand ladders strapped along the tub — pure silhouette texture at 320p.
   for (const sx of [-1.0, 1.0]) add(box(0.07, 0.3, 1.45), cargoMat, sx, 1.5, 1.2);
-  // ── fenders tie the wheels to the body (they read as detached without) ──
-  // They have to reach DOWN to the tyre. At y=1.30 the flare cleared the tyre
-  // crown by 0.38m before the suspension even moved, and on 0.4m of droop the
-  // wheel visibly fell off the truck.
-  for (const [fx, fz] of [[-1.18, -AXLE], [1.18, -AXLE], [-1.18, AXLE], [1.18, AXLE]]) {
-    add(box(0.72, 0.3, 1.7), redMat, fx, 1.1, fz);
+  // ── wheel arches: ARCHES ──
+  // Four rectangles over four round tyres was the most obviously wrong thing on
+  // the side elevation. These are extruded annulus sectors, so the flare
+  // actually follows the tyre. They are built in FINAL metres and added
+  // directly — pushing a circle through the SX/SY squeeze would turn it into an
+  // ellipse while the tyre beside it stayed round.
+  {
+    const arch = (r0: number, r1: number, wid: number, mat: THREE.Material): void => {
+      const shape = new THREE.Shape();
+      shape.absarc(0, 0, r1, 0.12, Math.PI - 0.12, false);
+      shape.absarc(0, 0, r0, Math.PI - 0.12, 0.12, true);
+      const proto = new THREE.ExtrudeGeometry(shape, { depth: wid, bevelEnabled: false });
+      proto.rotateY(Math.PI / 2);        // arch plane → the truck's flank
+      proto.translate(-wid / 2, 0, 0);   // and centre it on the wheel
+      for (const [fx, fz] of WHEELS) {
+        const g = proto.clone();
+        g.translate(fx, 0, fz);
+        car.add(new THREE.Mesh(g, mat));
+      }
+      proto.dispose();
+    };
+    const R1 = WHEEL_R + 0.07;
+    // Body-coloured flare, then a dark trim lip WRAPPING its outer edge. Red on
+    // red, the flare vanished into the flank; every 4x4 that has flares this
+    // wide has them edged in something that isn't paint.
+    arch(R1, R1 + 0.16, WHEEL_W + 0.08, redMat);
+    arch(R1 + 0.13, R1 + 0.22, WHEEL_W + 0.14, trimMat);
+  }
+  // ── door cuts and handles ──
+  // The shader's panel grid is regular by nature; a door is not. These are the
+  // shut lines an eye actually looks for on a flank.
+  for (const sx of [-0.99, 0.99]) {
+    for (const dz of [-1.12, 0.02, 0.5]) add(box(0.05, 0.62, 0.05), trimMat, sx, 1.34, dz);
+    add(box(0.05, 0.05, 1.1), trimMat, sx, 1.63, -0.55);        // waist line
+    for (const dz of [-0.72, 0.3]) add(box(0.06, 0.06, 0.2), trimMat, sx, 1.5, dz); // handles
   }
   // ── protection: bull bar, winch, rock sills, tow points ──
   add(box(2.0, 0.26, 0.2), steelMat, 0, 0.95, -2.2);
@@ -2436,7 +2539,7 @@ const wheelMeshes: THREE.Mesh[] = [];
   // SIX panels in a 2x3 array, framed by the rack showing through the gaps —
   // the plan view of two big slabs read as one undifferentiated blue mass.
   for (const px of [-0.4, 0.4]) for (const pz of [-1.06, -0.24, 0.58]) {
-    add(box(0.72, 0.05, 0.74), panelMat, px, 2.33, pz).rotation.x = -0.05;
+    add(box(0.72, 0.05, 0.74), panelMat, px, 2.33, pz, -0.05);
   }
   for (const px of [-0.5, 0.5]) add(box(0.28, 0.38, 0.2), cargoMat, px, 2.48, 1.16); // jerry cans
   add(box(1.2, 0.12, 0.14), steelMat, 0, 2.35, -1.42);           // light bar
