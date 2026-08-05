@@ -195,6 +195,11 @@ interface CreateCellInput {
    *  scene assembly — the ADR-0043 Inc 4 lesson. Cost ≈ memory×duration, so
    *  raising it for CPU-bound work is close to cost-neutral. */
   memoryMb?: number;
+  /** ADR-0095 — give the cell a CDN-fronted public namespace at
+   *  `/@<owner>/<name>/~/…`, served from S3 with THIS CELL as the miss handler.
+   *  A hit never wakes the Lambda; a miss invokes it, and what it writes to its
+   *  own prefix is what the edge serves from then on. */
+  publicNamespace?: boolean;
 }
 
 const clampTimeout = (n: unknown): number | undefined => {
@@ -206,6 +211,20 @@ const clampMemory = (n: unknown): number | undefined => {
   const v = Number(n);
   return Number.isFinite(v) ? Math.min(3008, Math.max(128, Math.round(v))) : undefined;
 };
+
+/**
+ * The public-namespace arg for the cell template (ADR-0095). Keyed by the
+ * SLUG, because that is what the canonical address `/@<owner>/<slug>` carries
+ * and the S3 key has to match the request path byte for byte. (A caller who
+ * reaches the cell by some other spelling that slugifies the same still routes
+ * — it just always misses the object and falls through to the cell, which is
+ * correct-but-slow rather than wrong.)
+ */
+const publicNamespaceArg = (
+  on: boolean | undefined,
+  bucket: string,
+  name: string,
+): { bucket: string; name: string } | undefined => (on ? { bucket, name: slugify(name) } : undefined);
 
 async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<unknown> {
   // Scope (cells:create) is enforced at the /mcp gateway; forge is a backend
@@ -266,6 +285,7 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
     substrateTable: env.substrateTable,
     timeoutSeconds,
     memorySize: memoryMb,
+    publicNamespace: publicNamespaceArg(input.publicNamespace, env.codeBucket, input.name),
   });
   await deployStack(stackName, template);
 
@@ -282,6 +302,7 @@ async function createCell(input: CreateCellInput, ctx: ServiceContext): Promise<
     public: !!input.public,
     timeoutSeconds,
     memoryMb,
+    publicNamespace: !!input.publicNamespace,
     status: 'CREATING',
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
@@ -607,6 +628,10 @@ interface ConfigureCellInput extends CellRef {
    *  shell loads for a signed-out visitor (the client then handles sign-in for
    *  the owner's data). Registry-only — no stack rebuild. */
   public?: boolean;
+  /** ADR-0095 — the CDN-fronted public namespace. Unlike `public`, this DOES
+   *  re-render the stack: it grants the S3 statement and sets the env the
+   *  miss handler writes through. */
+  publicNamespace?: boolean;
 }
 async function configureCell(input: ConfigureCellInput, ctx: ServiceContext): Promise<unknown> {
   const user = requireUser(ctx.identity);
@@ -617,11 +642,17 @@ async function configureCell(input: ConfigureCellInput, ctx: ServiceContext): Pr
   if (!record) throw new Error(`Unknown cell "${cellId}"`);
   if (record.owner !== user) throw new ServiceAuthError('Only the owner can reconfigure a cell');
   const newPublic = input.public === undefined ? record.public : !!input.public;
+  // `publicNamespace` is a STACK change (an IAM statement plus the env the
+  // handler writes through), so it cannot take the registry-only fast path the
+  // way `public` can.
+  const newPublicNs =
+    input.publicNamespace === undefined ? !!record.publicNamespace : !!input.publicNamespace;
+  const nsChanged = newPublicNs !== !!record.publicNamespace;
   // Flip `public` without touching the stack (it lives in the registry record).
-  if (input.timeoutSeconds === undefined && input.memoryMb === undefined) {
+  if (input.timeoutSeconds === undefined && input.memoryMb === undefined && !nsChanged) {
     await registry.put({ ...record, public: newPublic, updatedAt: new Date().toISOString() });
     ctx.logger.info('cell reconfigured (registry)', { cellId, public: newPublic });
-    return { ok: true, cellId, public: newPublic, timeoutSeconds: record.timeoutSeconds ?? null, memoryMb: record.memoryMb ?? null };
+    return { ok: true, cellId, public: newPublic, publicNamespace: newPublicNs, timeoutSeconds: record.timeoutSeconds ?? null, memoryMb: record.memoryMb ?? null };
   }
   // Stack-shape change: either knob may arrive alone; the other keeps its
   // stored (or default) value so a memory-only change never resets timeout.
@@ -658,15 +689,20 @@ async function configureCell(input: ConfigureCellInput, ctx: ServiceContext): Pr
     substrateTable: env.substrateTable,
     timeoutSeconds,
     memorySize: memoryMb,
+    publicNamespace: publicNamespaceArg(newPublicNs, env.codeBucket, record.name),
   });
   await updateStack(record.stackName, template);
-  await registry.put({ ...record, public: newPublic, timeoutSeconds, memoryMb, updatedAt: new Date().toISOString() });
-  ctx.logger.info('cell reconfigured', { cellId, timeoutSeconds, memoryMb, public: newPublic });
+  await registry.put({
+    ...record, public: newPublic, publicNamespace: newPublicNs,
+    timeoutSeconds, memoryMb, updatedAt: new Date().toISOString(),
+  });
+  ctx.logger.info('cell reconfigured', { cellId, timeoutSeconds, memoryMb, public: newPublic, publicNamespace: newPublicNs });
   return {
     ok: true,
     cellId,
     timeoutSeconds,
     memoryMb,
+    publicNamespace: newPublicNs,
     note: 'stack update in progress — static/client assets need a cells.deploy after it completes',
   };
 }
@@ -1669,6 +1705,7 @@ const TOOLS: Record<string, ToolSpec> = {
         public: { type: 'boolean', description: 'Web-facing: allow anonymous GETs via /@<owner>/<name>' },
         timeoutSeconds: { type: 'number', description: 'Lambda timeout 10–300s (default 10)' },
         memoryMb: { type: 'number', description: 'Lambda memory 128–3008 MB (default 512). CPU scales with memory — the latency knob for CPU-bound SSR' },
+        publicNamespace: { type: 'boolean', description: 'ADR-0095: give the cell a CDN-fronted static prefix at /@owner/name/~/… served from S3, with the cell itself as the cache-miss handler — a hit never wakes the Lambda' },
       },
       required: ['name', 'code'],
       additionalProperties: false,
@@ -1925,6 +1962,7 @@ const TOOLS: Record<string, ToolSpec> = {
         timeoutSeconds: { type: 'number' },
         memoryMb: { type: 'number', description: 'Lambda memory 128–3008 MB (default 512)' },
         public: { type: 'boolean', description: 'Allow anonymous GETs through dispatch (the SPA shell loads signed-out; the client handles sign-in for data)' },
+        publicNamespace: { type: 'boolean', description: 'ADR-0095: give the cell a CDN-fronted static prefix at /@owner/name/~/… served from S3, with the cell itself as the cache-miss handler. Re-renders the stack.' },
       },
       additionalProperties: false,
     },

@@ -38,6 +38,15 @@ export interface CellTemplateParams {
    * can observe the reef but only its own slice. Writes stay mediated.
    */
   substrateTable?: { name: string; arn: string };
+  /**
+   * ADR-0095 — the cell's public namespace. When set, the cell's role may
+   * read/write `public/@<owner>/<name>/~/*` in the code bucket, and the edge
+   * serves that prefix from S3 with the cell as the fallback origin: a cache
+   * miss is a Lambda invocation, a hit is not. `name` is the cell's slug, which
+   * is what the URL (and therefore the key) carries — NOT the cellId, because
+   * the whole point is that CloudFront can map path→key without a lookup.
+   */
+  publicNamespace?: { bucket: string; name: string };
 }
 
 /** Deployment resource name for a cell: stable, predictable, ARN-scopable. */
@@ -83,6 +92,24 @@ export function buildCellTemplate(p: CellTemplateParams): Record<string, unknown
               ],
             },
           },
+        },
+      ]
+    : [];
+
+  // The public namespace (ADR-0095), narrowed to this cell's own prefix. The
+  // boundary already caps every cell at `public/@*/~/*`; this says which one.
+  // Keys are byte-identical to the request path — `public` + `/@owner/name/~/…`
+  // — so the edge needs no rewrite and no lookup to find the object.
+  const publicPrefix = p.publicNamespace
+    ? `public/@${p.owner}/${p.publicNamespace.name}/~/*`
+    : null;
+  const publicStatements = p.publicNamespace
+    ? [
+        {
+          Sid: 'OwnPublicNamespace',
+          Effect: 'Allow',
+          Action: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+          Resource: `arn:aws:s3:::${p.publicNamespace.bucket}/${publicPrefix}`,
         },
       ]
     : [];
@@ -175,6 +202,7 @@ export function buildCellTemplate(p: CellTemplateParams): Record<string, unknown
                     Condition: { StringEquals: { 'events:source': name } },
                   },
                   ...substrateStatements,
+                  ...publicStatements,
                 ],
               },
             },
@@ -210,6 +238,15 @@ export function buildCellTemplate(p: CellTemplateParams): Record<string, unknown
               TABLE_NAME: name,
               EVENT_BUS_NAME: p.eventBusName,
               ...(p.substrateTable ? { SUBSTRATE_TABLE: p.substrateTable.name } : {}),
+              // The handler needs to know where to PUT what it just computed.
+              // Prefix, not just bucket: the cell should never have to derive
+              // its own key shape from its owner and name.
+              ...(p.publicNamespace
+                ? {
+                    CELL_PUBLIC_BUCKET: p.publicNamespace.bucket,
+                    CELL_PUBLIC_PREFIX: `public/@${p.owner}/${p.publicNamespace.name}/~`,
+                  }
+                : {}),
             },
           },
           Tags: [

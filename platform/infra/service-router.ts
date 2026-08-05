@@ -5,6 +5,7 @@ import * as origins from 'aws-cdk-lib/aws-cloudfront-origins';
 import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import type * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import type * as s3 from 'aws-cdk-lib/aws-s3';
 import { HttpServiceCell } from './http-service-cell';
 
 /**
@@ -92,6 +93,36 @@ exports.handler = (event, _ctx, callback) => {
 };
 `;
 
+/**
+ * The path pattern for a cell's public namespace (ADR-0095). Two wildcards:
+ * one for `@<owner>/<cell>`, one for the object path under `~/`.
+ */
+export const PUBLIC_NS_PATTERN = '/@*/~/*';
+
+/**
+ * Cache policy for the public namespace. The cache key is the PATH ALONE — no
+ * query strings, no headers, no cookies — because everything a public object is
+ * addressed by lives in its path (that is what makes it an object). Version is
+ * in the path too (`~/osm/v1/…`), so a shape change is a new key rather than an
+ * invalidation.
+ *
+ * `minTtl: 0` lets a filled object's own `cache-control` govern, and the year
+ * ceiling lets it say `immutable` and be believed.
+ */
+function publicNamespaceCachePolicy(scope: Construct): cloudfront.CachePolicy {
+  return new cloudfront.CachePolicy(scope, 'PublicNamespaceCache', {
+    comment: 'Cell public namespace: path-keyed, origin-governed TTL',
+    minTtl: cdk.Duration.seconds(0),
+    defaultTtl: cdk.Duration.days(1),
+    maxTtl: cdk.Duration.days(365),
+    queryStringBehavior: cloudfront.CacheQueryStringBehavior.none(),
+    headerBehavior: cloudfront.CacheHeaderBehavior.none(),
+    cookieBehavior: cloudfront.CacheCookieBehavior.none(),
+    enableAcceptEncodingGzip: true,
+    enableAcceptEncodingBrotli: true,
+  });
+}
+
 export interface ServiceRouterProps {
   /** All cells to expose. Their manifest routes become CloudFront behaviours. */
   cells: HttpServiceCell[];
@@ -120,6 +151,17 @@ export interface ServiceRouterProps {
   cellDomainNames?: string[];
   /** ACM cert (us-east-1) covering `cellDomainNames`. */
   cellCertificate?: acm.ICertificate;
+
+  // ── the cell public namespace (ADR-0095) ──
+  /**
+   * The bucket holding cells' public namespaces (the control plane's code
+   * bucket). When set — together with `cellHostRouter` — a request under
+   * `/@<owner>/<cell>/~/<path>` is served from `s3://<bucket>/public/<path>`
+   * with the cell as the FALLBACK origin, so a cache hit costs one CloudFront
+   * request and one S3 GET and never wakes a Lambda. Unset ⇒ nothing changes
+   * and `~/` paths route like any other.
+   */
+  publicNamespaceBucket?: s3.IBucket;
 }
 
 /**
@@ -293,6 +335,51 @@ export class ServiceRouter extends Construct {
         : undefined;
 
     const additionalBehaviors: Record<string, cloudfront.BehaviorOptions> = {};
+
+    // ── the cell public namespace (ADR-0095) ──
+    // `/@<owner>/<cell>/~/<path>` is served from S3 with the cell as the
+    // FALLBACK origin: a hit is one CloudFront request and one S3 GET, a miss
+    // falls through to the cell, which computes the object, writes it, and
+    // returns the body. Every later request for that key is a hit.
+    //
+    // INSERTED FIRST, deliberately. CloudFront picks a behaviour by DECLARATION
+    // ORDER, not by specificity, and CDK emits `additionalBehaviors` in key
+    // insertion order — so registering this after dispatch's `/@*` would let
+    // `/@*` swallow every `~/` path. The failure is silent: it keeps working,
+    // through the Lambda, forever. `tests/public-namespace.test.ts` asserts the
+    // ordering so it cannot regress.
+    if (props.publicNamespaceBucket && props.cellHostRouter) {
+      const fallback = originByCell.get(props.cellHostRouter);
+      if (!fallback) throw new Error('publicNamespaceBucket requires cellHostRouter to be one of `cells`');
+      additionalBehaviors[PUBLIC_NS_PATTERN] = {
+        origin: new origins.OriginGroup({
+          // `originPath` is per-origin, which is the trick that keeps this
+          // small: S3 sees `/public` + the URI, so the object key is
+          // byte-identical to the request path and NOTHING has to rewrite
+          // anything. The fallback gets the URI untouched, which is exactly
+          // what dispatch already routes on.
+          primaryOrigin: origins.S3BucketOrigin.withOriginAccessControl(props.publicNamespaceBucket, {
+            originPath: '/public',
+          }),
+          fallbackOrigin: fallback,
+          // OAC without `s3:ListBucket` answers a missing key with 403, not
+          // 404. Take both — one of them IS the cache miss.
+          fallbackStatusCodes: [403, 404],
+        }),
+        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+        // Origin failover only covers GET/HEAD/OPTIONS, so the primitive is
+        // read-only by construction — which is the right constraint for a
+        // namespace whose misses are compute.
+        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+        cachePolicy: publicNamespaceCachePolicy(this),
+        compress: true,
+        // NO edge lambdas. The two above exist for the Function-URL auth path
+        // (body hashing for SigV4, un-mangling WWW-Authenticate); a static read
+        // needs neither, and leaving them off is what makes a hit actually free
+        // rather than nearly free.
+      };
+    }
+
     for (const cell of props.cells) {
       for (const route of cell.manifest.routes) {
         if (cell === defaultCell && route === '/*') continue;
@@ -310,6 +397,16 @@ export class ServiceRouter extends Construct {
       domainNames: props.domainNames,
       certificate: props.certificate,
       comment: 'Serverless multi-project platform router',
+      // NEVER CACHE A FAILURE. CloudFront caches error responses for 10s by
+      // default, which is harmless in front of the (uncached) service
+      // behaviours and actively wrong in front of the public namespace: a cell
+      // whose upstream is briefly down returns 503, and a cached 503 turns
+      // somebody else's bad minute into ours, for everyone, until it expires.
+      // Zeroed for the 5xx range only — a 404 is a real answer and may cache.
+      errorResponses: [500, 502, 503, 504].map((httpStatus) => ({
+        httpStatus,
+        ttl: cdk.Duration.seconds(0),
+      })),
     });
 
     new cdk.CfnOutput(this, 'DistributionDomain', {

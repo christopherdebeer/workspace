@@ -2687,6 +2687,43 @@ const osmNote = (d: number): void => { osmPending += d; streaming = osmPending >
 let osmFails = 0;
 let osmDown = false;
 
+// This cell's own path prefix. On the apex the page lives at `/@c15r/drive`;
+// on the cell host it lives at `/` and a CloudFront Function prepends the same
+// prefix. Deriving it from the pathname makes one relative fetch correct in
+// both places, which a hard-coded string is not.
+const CELL_BASE = (location.pathname.match(/^\/@[^/]+\/[^/]+/) ?? [''])[0];
+let tileProxyOk = true;   // one clean failure retires it for the session
+
+/**
+ * The tile, from this cell's public namespace (ADR-0095). A hit is CloudFront
+ * and S3 with no compute anywhere; a miss lands on the cell, which asks
+ * Overpass once for everybody and writes the object. Returns null if the proxy
+ * is unavailable, so the caller can fall back to hitting Overpass directly —
+ * a bad deploy here degrades to the old behaviour rather than an empty world.
+ */
+async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
+  if (!tileProxyOk) return null;
+  const ctl = new AbortController();
+  const bail = setTimeout(() => ctl.abort(), 30000);
+  try {
+    const res = await fetch(`${CELL_BASE}/~/osm/v1/${OSM_Z}/${x}/${y}`, { signal: ctl.signal });
+    // 503 is the cell telling us Overpass just failed IT — a real answer, and a
+    // reason to retry this tile later, not to abandon the proxy.
+    if (res.status === 503) throw new Error('fill failed');
+    if (!res.ok) { tileProxyOk = false; return null; }
+    const json = await res.json() as { ways?: Array<{ id: number; tags?: Record<string, string>; geometry?: Array<[number, number]> }> };
+    // Stored as [lat, lon] pairs — a third of the bytes of {lat, lon} objects,
+    // and the renderer wants the object shape, so widen on the way in.
+    return (json.ways ?? []).map((w) => ({
+      id: w.id,
+      tags: w.tags,
+      geometry: (w.geometry ?? []).map(([lat, lon]) => ({ lat, lon })),
+    })) as OsmWay[];
+  } catch {
+    return null;
+  } finally { clearTimeout(bail); }
+}
+
 async function loadOsmTile(x: number, y: number): Promise<void> {
   const key = `${x}/${y}`;
   if (osmLoaded.has(key)) return;
@@ -2697,18 +2734,23 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
   if (osmInFlight >= 2) { await new Promise<void>((r) => osmQueue.push(r)); }
   osmInFlight++;
   try {
-    const b = tileBounds(x, y, OSM_Z);
-    const bbox = `${b.latS},${b.lonW},${b.latN},${b.lonE}`;
-    const q = `[out:json][timeout:15];(
-      way["highway"](${bbox});
-      way["building"](${bbox});
-      way["natural"="water"](${bbox});
-      way["waterway"="riverbank"](${bbox});
-      way["landuse"~"forest|meadow|grass|recreation_ground"](${bbox});
-      way["leisure"~"park|pitch|garden"](${bbox});
-    );out geom 2000;`;
-    const r = await overpass(q);
-    const ways = ((r.elements ?? []) as Array<OsmWay & { type?: string }>).filter((e) => e.type === 'way' && e.geometry);
+    let ways = await proxyTile(x, y);
+    if (!ways) {
+      // The proxy could not answer. Go straight to the mirrors, exactly as
+      // before this cell had a namespace.
+      const b = tileBounds(x, y, OSM_Z);
+      const bbox = `${b.latS},${b.lonW},${b.latN},${b.lonE}`;
+      const q = `[out:json][timeout:15];(
+        way["highway"](${bbox});
+        way["building"](${bbox});
+        way["natural"="water"](${bbox});
+        way["waterway"="riverbank"](${bbox});
+        way["landuse"~"forest|meadow|grass|recreation_ground"](${bbox});
+        way["leisure"~"park|pitch|garden"](${bbox});
+      );out geom 2000;`;
+      const r = await overpass(q);
+      ways = ((r.elements ?? []) as Array<OsmWay & { type?: string }>).filter((e) => e.type === 'way' && e.geometry);
+    }
     osmFails = 0;
     osmDown = false;
     writeTileCache(x, y, ways);

@@ -48,6 +48,13 @@ export interface CellRecord {
   /** Public cells accept anonymous GETs via dispatch (a web-facing cell). */
   public: boolean;
   /**
+   * ADR-0095 — the cell owns a CDN-fronted static prefix at
+   * `/@<owner>/<slug>/~/…` and is the miss handler for it. Changing this
+   * re-renders the stack (it grants an S3 statement and sets the env the
+   * handler writes through), so it is not a registry-only flip like `public`.
+   */
+  publicNamespace?: boolean;
+  /**
    * The fact types this cell manages (from its `types.json`) — the canonical,
    * globally-readable type vocabulary (docs/type-vocabulary.md). Lives on the
    * registry (one global table) rather than a per-user slice, so every user —

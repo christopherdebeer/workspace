@@ -49,6 +49,15 @@ touches S3) and needs **no permission-boundary / cell-template change**.
 > files without a round-trip through forge). That extends the permission boundary
 > with an S3 statement scoped to the cell's prefix — additive, same isolation
 > shape as the per-cell table grant.
+>
+> **Built, for one namespace (ADR-0095).** The direct-role S3 grant now exists,
+> scoped to a *third* prefix: `public/@<owner>/<slug>/~/*`. A cell that declares
+> `publicNamespace` owns a CDN-fronted static prefix and is the **cache-miss
+> handler** for it — CloudFront reads S3 first and falls through to the cell only
+> when the object is absent, so a hit never wakes a Lambda. The boundary caps
+> every cell at the `public/@*/~/*` shape; the cell template narrows the inline
+> grant to that cell's own prefix. The `data/` prefix above is unchanged and
+> still forge-mediated.
 
 ## The file vocabulary (on `read`/`act`)
 
