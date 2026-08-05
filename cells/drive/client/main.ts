@@ -2399,6 +2399,15 @@ const wheelMeshes: THREE.Mesh[] = [];
   // reference read as one painted truck instead of a cargo pod on a chassis.
   add(box(1.7, 0.78, 1.9), redMat, 0, 1.7, -0.45);              // cab shell
   add(box(1.74, 0.34, 1.94), glassMat, 0, 1.86, -0.45);         // glazing band
+  // A, B and C pillars through the glazing. Without them the front elevation
+  // is a full-width black void where a windscreen should be, and the side is
+  // one long letterbox slot instead of separate windows — both exactly the
+  // sort of thing the orthographic views exist to catch.
+  // They sit ON the glass face (x = 0.87, the band's own half-width), not
+  // inboard of it: at 0.8 they were buried and invisible from the side.
+  for (const pz of [-1.36, -0.5, 0.44]) {
+    for (const px of [-0.87, 0.87]) add(box(0.16, 0.36, 0.16), redMat, px, 1.86, pz);
+  }
   add(box(1.74, 0.14, 1.98), redMat, 0, 2.14, -0.45);           // roof cap
   // ── rear tub: side rails and a tailgate, so the back reads as open cargo ──
   for (const sx of [-0.92, 0.92]) add(box(0.11, 0.34, 1.7), redMat, sx, 1.5, 1.2);
@@ -2424,8 +2433,10 @@ const wheelMeshes: THREE.Mesh[] = [];
     add(box(0.09, 0.16, 0.09), steelMat, px, 2.18, pz);
   }
   for (const cz of [-1.0, 0, 1.0]) add(box(1.62, 0.05, 0.09), steelMat, 0, 2.31, cz);
-  for (const pz of [-0.72, 0.44]) {                              // two tilted panels
-    add(box(1.5, 0.05, 1.0), panelMat, 0, 2.33, pz).rotation.x = -0.06;
+  // SIX panels in a 2x3 array, framed by the rack showing through the gaps —
+  // the plan view of two big slabs read as one undifferentiated blue mass.
+  for (const px of [-0.4, 0.4]) for (const pz of [-1.06, -0.24, 0.58]) {
+    add(box(0.72, 0.05, 0.74), panelMat, px, 2.33, pz).rotation.x = -0.05;
   }
   for (const px of [-0.5, 0.5]) add(box(0.28, 0.38, 0.2), cargoMat, px, 2.48, 1.16); // jerry cans
   add(box(1.2, 0.12, 0.14), steelMat, 0, 2.35, -1.42);           // light bar
@@ -2445,6 +2456,9 @@ const wheelMeshes: THREE.Mesh[] = [];
   for (const ry of [1.42, 1.76, 2.1]) add(box(0.5, 0.06, 0.06), steelMat, -0.51, ry, 2.22);
   add(box(0.13, 1.15, 0.13), steelMat, 0.86, 1.75, -1.2);
   add(box(0.13, 0.13, 0.42), steelMat, 0.86, 2.28, -1.36);
+  // ── the face ── grille between the lamps, so the nose is not a blank slab.
+  add(box(1.12, 0.34, 0.1), glassMat, 0, 1.28, -2.1);
+  for (const gy of [1.18, 1.3, 1.42]) add(box(1.06, 0.05, 0.13), steelMat, 0, gy, -2.11);
   // ── lamps ── small and set into the corners; big ones bloom into blobs.
   const headMat2 = new THREE.MeshBasicMaterial({ color: 0xfff1cf });
   for (const sx of [-0.66, 0.66]) add(box(0.3, 0.2, 0.1), headMat2, sx, 1.08, -2.13);
@@ -2557,6 +2571,35 @@ studioFill.position.set(-6, 3, -5);
 studio.add(studioFill, studioFill.target);
 const studioCam = new THREE.PerspectiveCamera(30, 1, 0.1, 200);
 let studioSpin = 0.6;
+// ── elevations ─────────────────────────────────────────────────────
+// The sheet is a set of ORTHOGRAPHIC views, and you cannot check a model
+// against them from a perspective 3/4: perspective foreshortens, so every
+// proportion you try to read off it is a guess. These are true elevations,
+// framed from the hull's own bounding box, with the suspension and steering
+// frozen so it is a drawing rather than a snapshot of a truck mid-bounce.
+// `dir` is the direction the camera looks ALONG; `up` orients the frame; `w`
+// and `h` name which local axes the view's width and height measure.
+const VIEWS: Array<{ id: string; dir: [number, number, number]; up: [number, number, number]; w: 'x' | 'y' | 'z'; h: 'x' | 'y' | 'z' }> = [
+  { id: '3/4', dir: [0, 0, 0], up: [0, 1, 0], w: 'z', h: 'y' },   // the perspective turntable
+  { id: 'FRONT', dir: [0, 0, 1], up: [0, 1, 0], w: 'x', h: 'y' }, // nose is -z, so look along +z
+  { id: 'REAR', dir: [0, 0, -1], up: [0, 1, 0], w: 'x', h: 'y' },
+  { id: 'LEFT', dir: [1, 0, 0], up: [0, 1, 0], w: 'z', h: 'y' },
+  { id: 'RIGHT', dir: [-1, 0, 0], up: [0, 1, 0], w: 'z', h: 'y' },
+  { id: 'TOP', dir: [0, -1, 0], up: [0, 0, -1], w: 'x', h: 'z' }, // nose up the frame
+];
+let vehView = 0;
+const studioOrtho = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.1, 200);
+const AXIS_SIZE = (b: THREE.Box3, a: 'x' | 'y' | 'z'): number => b.max[a] - b.min[a];
+// Half-extents in METRES for a given elevation at a given viewport aspect —
+// computed the same way by the renderer and by the HUD, so the grid the HUD
+// draws over the bay lines up with the truck the renderer puts in it.
+function orthoExtents(view: number, aspect: number): { hw: number; hh: number } {
+  const v = VIEWS[view];
+  const pad = 1.14;
+  let hw = (AXIS_SIZE(specBox, v.w) / 2) * pad, hh = (AXIS_SIZE(specBox, v.h) / 2) * pad;
+  if (hw / hh < aspect) hw = hh * aspect; else hh = hw / aspect;
+  return { hw, hh };
+}
 // The bay renders through the SAME pixel grid as the world. A smooth,
 // anti-aliased truck sitting inside a hand-built bitmap HUD reads as a leak
 // from another program — so it goes to a low-res target and is magnified with
@@ -2857,6 +2900,9 @@ const state = { x: 0, z: 0, heading: 0, speed: 0 };
 // Halo and beam cones are furniture, not bodywork, and are excluded.
 const SPEC_TARGET = { length: 4.9, width: 2.15, height: 2.35, wheelbase: 3.1, clearance: 0.45 };
 let specCache: Record<string, number> | null = null;
+// The hull's own bounding box, in car-local metres — the elevations frame
+// themselves from it, so a view is always the whole truck at a known scale.
+const specBox = new THREE.Box3();
 function truckSpec(): Record<string, number> {
   if (specCache) return specCache;
   // In the CAR's own frame, from vertices. A world-space Box3 of a yawed truck
@@ -2870,10 +2916,13 @@ function truckSpec(): Record<string, number> {
     const pos = geo.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) bb.expandByPoint(v.fromBufferAttribute(pos, i).applyMatrix4(child.matrix));
   }
+  // The wheels hang off pivots that move with the suspension, so the hull box
+  // stops at the axle plane; the tyres reach a radius below it.
+  specBox.copy(bb);
+  specBox.min.y = Math.min(specBox.min.y, -WHEEL_R);
+  specBox.min.x = Math.min(specBox.min.x, -TRACK - WHEEL_W / 2);
+  specBox.max.x = Math.max(specBox.max.x, TRACK + WHEEL_W / 2);
   const r = (n: number): number => +n.toFixed(2);
-  // The wheels hang off pivots that move with the suspension, so the static
-  // figures come from the geometry that defines them instead: the ground plane
-  // sits one wheel radius below the axle plane.
   return (specCache = {
     length: r(bb.max.z - bb.min.z),
     width: r(Math.max(bb.max.x - bb.min.x, TRACK * 2 + WHEEL_W)),
@@ -2883,6 +2932,17 @@ function truckSpec(): Record<string, number> {
   });
 }
 (window as unknown as { __spec?: object }).__spec = (): object => ({ ...truckSpec(), spec: SPEC_TARGET });
+// Open the vehicle bay on a named elevation, so a test can capture all five
+// and they can be compared against the sheet side by side.
+(window as unknown as { __view?: object }).__view = (id?: string): object => {
+  if (id !== undefined) {
+    const i = VIEWS.findIndex((v) => v.id === id.toUpperCase());
+    if (i < 0) return { error: `no such view: ${id}`, views: VIEWS.map((v) => v.id) };
+    menuTab = 0;
+    vehView = i;
+  }
+  return { view: VIEWS[vehView].id, views: VIEWS.map((v) => v.id) };
+};
 // How much of the frame the truck actually occupies. Chase framing is easy to
 // get wrong by eye — on a portrait phone the 55° fov is VERTICAL, so the
 // horizontal one is only ~30° and a stand-off that looks generous in plan puts
@@ -3772,17 +3832,42 @@ function renderStudio(dt: number): void {
   for (const b of beams) b.visible = false;
   studio.add(car);                       // reparent: three removes it from `scene`
   car.position.set(0, 0, 0);
-  car.rotation.set(0, studioSpin, 0);
-  // Far enough that a 4.9m truck fits broadside: the 30° figure is the
-  // VERTICAL fov, and at 8m the nose and the spare were being cropped off the
-  // sides every time it turned side-on.
-  const dist = 10.5;
-  studioCam.aspect = vw / Math.max(1, vh);
-  // Low, like the sheet's side elevations — looking down on it flattened the
-  // cab into the roof rack.
-  studioCam.position.set(Math.sin(0.9) * dist, 2.1, Math.cos(0.9) * dist);
-  studioCam.lookAt(0, 1.05, 0);
-  studioCam.updateProjectionMatrix();
+  const aspect = vw / Math.max(1, vh);
+  let cam: THREE.Camera = studioCam;
+  // An ELEVATION has to be a drawing, not a snapshot: freeze the suspension,
+  // the steering and the wheel spin so what you are comparing against the sheet
+  // is the model, not whatever the truck was doing when you opened the menu.
+  const susp = wheelPivots.map((p) => ({ y: p.position.y, ry: p.rotation.y }));
+  const spin = wheelMeshes.map((w) => w.rotation.x);
+  if (vehView === 0) {
+    car.rotation.set(0, studioSpin, 0);
+    // Far enough that a 4.9m truck fits broadside: the 30° figure is the
+    // VERTICAL fov, and at 8m the nose and the spare were cropped off the
+    // sides every time it turned side-on.
+    const dist = 10.5;
+    studioCam.aspect = aspect;
+    // Low, like the sheet's side elevations — looking down on it flattened the
+    // cab into the roof rack.
+    studioCam.position.set(Math.sin(0.9) * dist, 2.1, Math.cos(0.9) * dist);
+    studioCam.lookAt(0, 1.05, 0);
+    studioCam.updateProjectionMatrix();
+  } else {
+    const v = VIEWS[vehView];
+    car.rotation.set(0, 0, 0);
+    for (const p of wheelPivots) { p.position.y = 0; p.rotation.y = 0; }
+    for (const w of wheelMeshes) w.rotation.x = 0;
+    const { hw, hh } = orthoExtents(vehView, aspect);
+    studioOrtho.left = -hw; studioOrtho.right = hw;
+    studioOrtho.top = hh; studioOrtho.bottom = -hh;
+    studioOrtho.updateProjectionMatrix();
+    // Ortho: the stand-off only has to clear the far plane, so park it well out
+    // and aim through the hull's centre.
+    const c = specBox.getCenter(new THREE.Vector3());
+    studioOrtho.up.set(v.up[0], v.up[1], v.up[2]);
+    studioOrtho.position.set(c.x - v.dir[0] * 40, c.y - v.dir[1] * 40, c.z - v.dir[2] * 40);
+    studioOrtho.lookAt(c);
+    cam = studioOrtho;
+  }
   // Same pixels per metre as the world: PIX_H over the screen height.
   const grid = PIX_H / Math.max(1, innerHeight);
   const rw = Math.max(2, Math.round(vw * grid)), rh = Math.max(2, Math.round(vh * grid));
@@ -3791,8 +3876,10 @@ function renderStudio(dt: number): void {
   renderer.setRenderTarget(rtVeh);
   renderer.setClearColor(0x0b191d, 1);
   renderer.clear(true, true, false);
-  renderer.render(studio, studioCam);
+  renderer.render(studio, cam);
   renderer.setRenderTarget(null);
+  wheelPivots.forEach((p, i) => { p.position.y = susp[i].y; p.rotation.y = susp[i].ry; });
+  wheelMeshes.forEach((w, i) => { w.rotation.x = spin[i]; });
   renderer.setClearColor(0x05070c, 1);
   renderer.setScissorTest(true);
   renderer.setViewport(vx, vy, vw, vh);
@@ -4040,6 +4127,7 @@ let closeRect = { x: 0, y: 0, w: 0, h: 0 };
 // The hole the renderer scissors the studio render into (HUD pixels).
 let vehRect = { x: 0, y: 0, w: 0, h: 0 };
 const tabRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
+const viewRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
 const itemRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
 const CARD8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 let placeLine = '';
@@ -4136,6 +4224,7 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   }
   itemRects.length = 0;
   tabRects.length = 0;
+  viewRects.length = 0;
   vehRect = { x: 0, y: 0, w: 0, h: 0 };
   // ── the dock, bottom-left: whichever view ISN'T fullscreen ──
   // While charting, the renderer scissors a live POV preview into this square,
@@ -4211,14 +4300,52 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
   }
   const top = MY + 41;
   if (tab === 0) {
+    truckSpec(); // populates specBox, which the elevations frame themselves from
+    // ── view picker: the turntable plus the sheet's five elevations ──
+    let vx2 = MX + 5, vy2 = top;
+    for (let i = 0; i < VIEWS.length; i++) {
+      const w = textW(VIEWS[i].id) + 7;
+      if (vx2 + w > MX + MW - 5) { vx2 = MX + 5; vy2 += 14; }  // wrap, phone-width
+      const on = vehView === i;
+      if (on) panel(vx2, vy2, w, 12, UI.gold);
+      text(hctx, VIEWS[i].id, vx2 + 3, vy2 + 3, on ? UI.gold : UI.soft);
+      viewRects.push({ x: vx2, y: vy2, w, h: 12, i });
+      vx2 += w + 3;
+    }
     // ── the bay: a live window onto the actual truck ──
-    const vh = Math.min(160, Math.round(MH * 0.38));
-    vehRect = { x: MX + 4, y: top, w: MW - 8, h: vh };
+    // Its SHAPE follows the view. A side elevation is 4.9m by 2.35m and a plan
+    // is the other way up; forcing both into one square window wastes most of
+    // the panel on empty backdrop and shrinks the thing you came to look at.
+    const bayTop = vy2 + 16;
+    const bw = MW - 8;
+    const view = VIEWS[vehView];
+    const natural = vehView === 0 ? 1.3 : AXIS_SIZE(specBox, view.w) / AXIS_SIZE(specBox, view.h);
+    const vh = clamp(Math.round(bw / natural), 78, Math.round(MH * 0.5));
+    vehRect = { x: MX + 4, y: bayTop, w: bw, h: vh };
     frame(vehRect.x, vehRect.y, vehRect.w, vehRect.h, UI.edge);
+    if (vehView > 0) {
+      // A METRE GRID over the elevation, from the same extents the renderer
+      // frames with — the point of an orthographic view is that you can read
+      // proportions off it, and you cannot do that without a scale.
+      const { hw, hh } = orthoExtents(vehView, (vehRect.w * hudS) / (vehRect.h * hudS));
+      const pxPerM = vehRect.w / (hw * 2);
+      const cx3 = vehRect.x + vehRect.w / 2, cy3 = vehRect.y + vehRect.h / 2;
+      hctx.fillStyle = 'rgba(87,201,176,0.13)';
+      for (let m = -Math.ceil(hw); m <= hw; m++) {
+        const px = Math.round(cx3 + m * pxPerM);
+        if (px > vehRect.x && px < vehRect.x + vehRect.w) hctx.fillRect(px, vehRect.y + 1, 1, vehRect.h - 2);
+      }
+      for (let m = -Math.ceil(hh); m <= hh; m++) {
+        const py = Math.round(cy3 + m * pxPerM);
+        if (py > vehRect.y && py < vehRect.y + vehRect.h) hctx.fillRect(vehRect.x + 1, py, vehRect.w - 2, 1);
+      }
+      textSmall(hctx, `${AXIS_SIZE(specBox, view.w).toFixed(2)} X ${AXIS_SIZE(specBox, view.h).toFixed(2)} M  ·  1M GRID`,
+        vehRect.x + 4, vehRect.y + 3, UI.dim);
+    }
     textSmall(hctx, 'DAK 23', vehRect.x + 4, vehRect.y + vehRect.h - 8, UI.gold);
     // ── measured against the sheet ──
     const spec = truckSpec();
-    let y = top + vh + 6;
+    let y = bayTop + vh + 6;
     textSmall(hctx, 'DIMENSIONS      BUILT   SPEC', MX + 6, y, UI.dim);
     y += 8;
     for (const k of ['length', 'width', 'height', 'wheelbase', 'clearance'] as const) {
@@ -4286,6 +4413,7 @@ function hudTap(cx: number, cy: number): boolean {
     const tab = menuTab; // switching tabs below reassigns it mid-block
     if (inside(closeRect)) { menuTab = null; return true; }
     for (const r of tabRects) if (inside(r, 0)) { menuTab = r.i; return true; }
+    for (const r of viewRects) if (inside(r, 0)) { vehView = r.i; return true; }
     for (const r of itemRects) if (inside(r, 0)) { TAB_ITEMS[tab]?.[r.i]?.hit(); return true; }
     return true;
   }
