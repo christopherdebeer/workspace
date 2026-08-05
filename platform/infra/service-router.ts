@@ -100,6 +100,13 @@ exports.handler = (event, _ctx, callback) => {
 export const PUBLIC_NS_PATTERN = '/@*/~/*';
 
 /**
+ * The same namespace as seen from a cell's OWN host
+ * (`<owner>-<name>.<cellDomain>`), where the URI carries no owner/name prefix —
+ * the host-rewrite function adds it after the behaviour has been chosen.
+ */
+export const CELL_HOST_NS_PATTERN = '/~/*';
+
+/**
  * Cache policy for the public namespace. The cache key is the PATH ALONE — no
  * query strings, no headers, no cookies — because everything a public object is
  * addressed by lives in its path (that is what makes it an object). Version is
@@ -348,36 +355,42 @@ export class ServiceRouter extends Construct {
     // `/@*` swallow every `~/` path. The failure is silent: it keeps working,
     // through the Lambda, forever. `tests/public-namespace.test.ts` asserts the
     // ordering so it cannot regress.
-    if (props.publicNamespaceBucket && props.cellHostRouter) {
-      const fallback = originByCell.get(props.cellHostRouter);
-      if (!fallback) throw new Error('publicNamespaceBucket requires cellHostRouter to be one of `cells`');
-      additionalBehaviors[PUBLIC_NS_PATTERN] = {
-        origin: new origins.OriginGroup({
-          // `originPath` is per-origin, which is the trick that keeps this
-          // small: S3 sees `/public` + the URI, so the object key is
-          // byte-identical to the request path and NOTHING has to rewrite
-          // anything. The fallback gets the URI untouched, which is exactly
-          // what dispatch already routes on.
-          primaryOrigin: origins.S3BucketOrigin.withOriginAccessControl(props.publicNamespaceBucket, {
-            originPath: '/public',
-          }),
-          fallbackOrigin: fallback,
-          // OAC without `s3:ListBucket` answers a missing key with 403, not
-          // 404. Take both — one of them IS the cache miss.
-          fallbackStatusCodes: [403, 404],
+    const nsCache = props.publicNamespaceBucket ? publicNamespaceCachePolicy(this) : undefined;
+    const nsBehavior = (id: string, fn?: cloudfront.Function): cloudfront.BehaviorOptions => ({
+      origin: new origins.OriginGroup({
+        // `originPath` is per-origin, which is the trick that keeps this
+        // small: S3 sees `/public` + the URI, so the object key is
+        // byte-identical to the request path and NOTHING has to rewrite
+        // anything. The fallback gets the URI untouched, which is exactly
+        // what dispatch already routes on.
+        primaryOrigin: origins.S3BucketOrigin.withOriginAccessControl(props.publicNamespaceBucket!, {
+          originPath: '/public',
+          originId: id,
         }),
-        viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
-        // Origin failover only covers GET/HEAD/OPTIONS, so the primitive is
-        // read-only by construction — which is the right constraint for a
-        // namespace whose misses are compute.
-        allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
-        cachePolicy: publicNamespaceCachePolicy(this),
-        compress: true,
-        // NO edge lambdas. The two above exist for the Function-URL auth path
-        // (body hashing for SigV4, un-mangling WWW-Authenticate); a static read
-        // needs neither, and leaving them off is what makes a hit actually free
-        // rather than nearly free.
-      };
+        fallbackOrigin: originByCell.get(props.cellHostRouter!)!,
+        // OAC without `s3:ListBucket` answers a missing key with 403, not
+        // 404. Take both — one of them IS the cache miss.
+        fallbackStatusCodes: [403, 404],
+      }),
+      viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,
+      // Origin failover only covers GET/HEAD/OPTIONS, so the primitive is
+      // read-only by construction — which is the right constraint for a
+      // namespace whose misses are compute.
+      allowedMethods: cloudfront.AllowedMethods.ALLOW_GET_HEAD_OPTIONS,
+      cachePolicy: nsCache,
+      compress: true,
+      // NO edge lambdas. The two above exist for the Function-URL auth path
+      // (body hashing for SigV4, un-mangling WWW-Authenticate); a static read
+      // needs neither, and leaving them off is what makes a hit actually free
+      // rather than nearly free.
+      ...(fn ? { functionAssociations: [{ function: fn, eventType: cloudfront.FunctionEventType.VIEWER_REQUEST }] } : {}),
+    });
+
+    if (props.publicNamespaceBucket && props.cellHostRouter) {
+      if (!originByCell.get(props.cellHostRouter)) {
+        throw new Error('publicNamespaceBucket requires cellHostRouter to be one of `cells`');
+      }
+      additionalBehaviors[PUBLIC_NS_PATTERN] = nsBehavior('PublicNamespaceApex');
     }
 
     for (const cell of props.cells) {
@@ -431,7 +444,30 @@ export class ServiceRouter extends Construct {
         runtime: cloudfront.FunctionRuntime.JS_2_0,
         comment: 'Rewrite <owner>-<name>.<domain> to /@<owner>/<name> for dispatch',
       });
+      // The public namespace HERE TOO, and this is the one that matters: a
+      // navigation to `/@<owner>/<name>` on the apex 302s to this distribution
+      // (cell-origin isolation §5.7), so a cell's own client is served from
+      // `<owner>-<name>.<domain>` and every relative fetch it makes lands here.
+      // Adding the behaviour only to the apex would have left the actual users
+      // of the primitive on the uncached path — working, but through the Lambda,
+      // every time. Verified live before deploying: `GET parc.land/@c15r/drive`
+      // with `sec-fetch-dest: document` answers `302 → c15r-drive.on.parc.land`.
+      //
+      // The pattern is `/~/*` because a cell host has no `/@owner/name` prefix
+      // in the URI — CloudFront matches the behaviour on the ORIGINAL path and
+      // only then runs the viewer-request function that prepends it. So the
+      // rewrite still happens, and S3 is asked for the same key the apex would
+      // have asked for.
+      const cellNsBehaviors: Record<string, cloudfront.BehaviorOptions> = {};
+      if (props.publicNamespaceBucket) {
+        cellNsBehaviors[CELL_HOST_NS_PATTERN] = nsBehavior('PublicNamespaceCellHost', hostRewrite);
+      }
       this.cellDistribution = new cloudfront.Distribution(this, 'CellDistribution', {
+        additionalBehaviors: cellNsBehaviors,
+        errorResponses: [500, 502, 503, 504].map((httpStatus) => ({
+          httpStatus,
+          ttl: cdk.Duration.seconds(0),
+        })),
         defaultBehavior: {
           origin: cellOrigin,
           viewerProtocolPolicy: cloudfront.ViewerProtocolPolicy.REDIRECT_TO_HTTPS,

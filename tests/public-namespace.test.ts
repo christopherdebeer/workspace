@@ -19,7 +19,8 @@
 import { App, Stack } from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import * as s3 from 'aws-cdk-lib/aws-s3';
-import { ServiceRouter, PUBLIC_NS_PATTERN } from '../platform/infra/service-router';
+import * as acm from 'aws-cdk-lib/aws-certificatemanager';
+import { ServiceRouter, PUBLIC_NS_PATTERN, CELL_HOST_NS_PATTERN } from '../platform/infra/service-router';
 import { HttpServiceCell } from '../platform/infra/http-service-cell';
 import { buildCellTemplate } from '../services/cells/cell-template';
 import { trimWays, tileKey } from '../cells/drive/index';
@@ -37,17 +38,26 @@ function synth(withNamespace: boolean): Template {
     cells: [dispatch],
     defaultCell: dispatch,
     cellHostRouter: dispatch,
+    // The cell-host distribution is where a cell's own client actually lives
+    // (the apex 302s navigations to it), so both must be exercised.
+    cellDomainNames: ['*.on.example.test'],
+    cellCertificate: acm.Certificate.fromCertificateArn(
+      stack, 'Cert', 'arn:aws:acm:us-east-1:111111111111:certificate/abc'),
     publicNamespaceBucket: withNamespace ? bucket : undefined,
   });
   return Template.fromStack(stack);
 }
 
-/** The distribution's cache behaviours, in the order CloudFront will read them. */
-function behaviours(t: Template): Array<Record<string, unknown>> {
+/** Cache behaviours of a distribution, in the order CloudFront will read them. */
+function behavioursOf(t: Template, comment: string): Array<Record<string, unknown>> {
   const dists = t.findResources('AWS::CloudFront::Distribution');
-  const cfg = Object.values(dists)[0].Properties.DistributionConfig as Record<string, unknown>;
+  const match = Object.values(dists).find(
+    (d) => ((d.Properties.DistributionConfig as Record<string, unknown>).Comment as string)?.includes(comment));
+  const cfg = match!.Properties.DistributionConfig as Record<string, unknown>;
   return (cfg.CacheBehaviors ?? []) as Array<Record<string, unknown>>;
 }
+const behaviours = (t: Template) => behavioursOf(t, 'platform router');
+const cellBehaviours = (t: Template) => behavioursOf(t, 'Cell-namespace router');
 
 describe('ADR-0095 — the public namespace behaviour', () => {
   it('is declared BEFORE the /@* dispatch behaviour it would otherwise be swallowed by', () => {
@@ -101,10 +111,24 @@ describe('ADR-0095 — the public namespace behaviour', () => {
     }
   });
 
+  it('exists on the CELL-HOST distribution too — where a cell client actually runs', () => {
+    // A navigation to /@owner/name 302s to <owner>-<name>.<cellDomain>, so this
+    // is the distribution the game's own fetches hit. Adding the behaviour only
+    // to the apex would leave every real user on the uncached path.
+    const list = cellBehaviours(synth(true));
+    const pub = list.find((b) => b.PathPattern === CELL_HOST_NS_PATTERN);
+    expect(pub).toBeDefined();
+    // The host-rewrite function must still run, or S3 is asked for a key with
+    // no owner/name in it and every request is a miss.
+    expect(pub!.FunctionAssociations).toBeDefined();
+  });
+
   it('is opt-in: without a bucket the distribution is exactly as it was', () => {
-    const list = behaviours(synth(false));
+    const t = synth(false);
+    const list = behaviours(t);
     expect(list.find((b) => b.PathPattern === PUBLIC_NS_PATTERN)).toBeUndefined();
     expect(list.find((b) => b.PathPattern === '/@*')).toBeDefined();
+    expect(cellBehaviours(t).find((b) => b.PathPattern === CELL_HOST_NS_PATTERN)).toBeUndefined();
   });
 });
 
