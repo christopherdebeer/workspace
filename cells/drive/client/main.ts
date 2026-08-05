@@ -785,10 +785,11 @@ function buildTerrainMesh(t: HeightTile): void {
   const cell = t.w / SEG;
   for (let i = 0; i < pos.count; i++) {
     const ex = pos.getX(i) + cxm, ez = pos.getZ(i) + czm;
-    // The SAME bilinear field the roads/buildings/car sample (sampleHeight) —
+    // The SAME bilinear field the roads/buildings/car sample (groundAt) —
     // a nearest-pixel mesh disagreed with it by metres and swallowed every
-    // draped layer under the terrain skin.
-    const elev = sampleHeight(ex, ez);
+    // draped layer under the terrain skin. groundAt also applies the road
+    // corridor cut, so a hillside can never stand in a carriageway's airspace.
+    const elev = groundAt(ex, ez);
     const elevAbs = elev + baseElev;
     pos.setY(i, elev);
     const u = clamp(Math.round(((ex - t.xs) / t.w) * 255), 0, 255);
@@ -806,6 +807,41 @@ function buildTerrainMesh(t: HeightTile): void {
   mesh.position.set(cxm, 0, czm);
   terrainMeshes.set(key, mesh);
   worldGroup.add(mesh);
+}
+// Rebuilds are not free — 9409 vertices, each sampling the heightfield and
+// asking the road grid whether it is in a cutting. A tile arriving used to
+// rebuild all eight neighbours SYNCHRONOUSLY, and roads now want rebuilds too,
+// so they queue instead and the main loop spends one per frame on them.
+const terrainDirty = new Set<string>();
+function markTerrainDirty(key: string): void {
+  if (terrainMeshes.has(key)) terrainDirty.add(key);
+}
+// Every terrain tile a run of road passes through, plus a margin for the cut.
+// Sampled, not exhaustive: terrain tiles are ~2km across and road vertices are
+// 12m apart, so walking every one of them would ask the same question a hundred
+// times per tile.
+function dirtyTerrainAround(pts: Array<[number, number]>): void {
+  for (let i = 0; i < pts.length; i += 8) {
+    const [x, z] = pts[i];
+    const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) markTerrainDirty(`${tx + dx}/${ty + dy}`);
+  }
+  const [lx, lz] = pts[pts.length - 1];
+  const [tx, ty] = tileAt(origin.lat - lz / M_LAT, origin.lon + lx / origin.mLon, TERRAIN_Z);
+  markTerrainDirty(`${tx}/${ty}`);
+}
+// One rebuild at a time, and never two in the same fifth of a second. A tile is
+// ~9400 vertices, each sampling the heightfield and asking the road grid about
+// cuttings — cheap enough to hide in a frame, not cheap enough to do every
+// frame while a city streams in around you.
+let terrainAt = 0;
+function flushTerrain(now: number): void {
+  if (now - terrainAt < 200) return;
+  for (const key of terrainDirty) {
+    terrainDirty.delete(key);
+    const t = heightTiles.get(key);
+    if (t) { terrainAt = now; buildTerrainMesh(t); return; }
+  }
 }
 function loadTerrainTile(x: number, y: number): Promise<void> {
   const key = `${x}/${y}`;
@@ -830,8 +866,7 @@ async function loadTerrainTileInner(x: number, y: number): Promise<void> {
   // same cross-tile field — this is what stitches the seams shut.
   for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
     if (!dx && !dy) continue;
-    const nt = heightTiles.get(`${x + dx}/${y + dy}`);
-    if (nt && terrainMeshes.has(`${x + dx}/${y + dy}`)) buildTerrainMesh(nt);
+    markTerrainDirty(`${x + dx}/${y + dy}`);
   }
 }
 
@@ -935,6 +970,39 @@ const pathTex = canvasTex(64, 1, 1, 102, (c, s, r) => {
   cracks(c, s, r, 3, 'rgba(50,44,32,0.4)');
   moss(c, s, r, 3, ['rgba(64,96,44,0.4)', 'rgba(42,70,32,0.35)']);
 });
+// The cut face under a carriageway: a road is a SOLID, not a decal, and what
+// you see at its edge is the shoulder gravel over compacted sub-base over
+// earth. v runs DOWN the face (0 at the tarmac), so the strata read in order.
+const vergeTex = canvasTex(64, 1, 1, 119, (c, s, r) => {
+  c.fillStyle = '#4a4034'; c.fillRect(0, 0, s, s);
+  // Strata: pale shoulder chippings at the lip, darker base course, then soil.
+  const band = (y0: number, y1: number, fill: string): void => { c.fillStyle = fill; c.fillRect(0, y0 * s, s, (y1 - y0) * s); };
+  band(0, 0.1, '#6e6553');   // the shoulder itself, catching light
+  band(0.1, 0.26, '#3c3830'); // bound base course
+  band(0.26, 1, '#453a2c');   // subsoil
+  speckle(c, s, r, ['rgba(20,16,10,0.45)', 'rgba(214,204,180,0.18)'], 260, 1.4);
+  // Stones sit proud of the face and catch the light along their top edge.
+  for (let i = 0; i < 40; i++) {
+    const x = r() * s, y = 0.08 * s + r() * 0.92 * s, w = 1.5 + r() * 3, h = 1 + r() * 2.4;
+    c.fillStyle = `rgba(${120 + r() * 60 | 0},${112 + r() * 52 | 0},${94 + r() * 44 | 0},0.5)`;
+    c.fillRect(x, y, w, h);
+    c.fillStyle = 'rgba(236,228,206,0.22)';
+    c.fillRect(x, y, w, 1);
+  }
+  moss(c, s, r, 4, ['rgba(58,86,40,0.35)', 'rgba(40,64,30,0.3)']);
+  cracks(c, s, r, 4, 'rgba(16,13,8,0.4)');
+});
+// A deck fascia, for where the carriageway rides clear of the ground: the
+// same volume, but poured rather than cut.
+const deckTex = canvasTex(64, 1, 1, 120, (c, s, r) => {
+  c.fillStyle = '#5b5c58'; c.fillRect(0, 0, s, s);
+  c.fillStyle = 'rgba(20,22,24,0.4)'; c.fillRect(0, 0, s, Math.round(s * 0.12)); // shadow line under the lip
+  speckle(c, s, r, ['rgba(0,0,0,0.14)', 'rgba(255,255,255,0.06)'], 200, 1.3);
+  c.fillStyle = 'rgba(0,0,0,0.22)';
+  for (let x = 6; x < s; x += 21) c.fillRect(x, 0, 2, s);   // shutter joints
+  cracks(c, s, r, 3, 'rgba(22,24,26,0.35)');
+  moss(c, s, r, 3, ['rgba(56,84,40,0.3)', 'rgba(38,62,30,0.25)']);
+});
 // A TRACK IS TWO RUTS, not a ribbon. The ribbon's u runs across the width and
 // v along the length, so ruts are two bands at fixed u. Everything outside them
 // fades to fully transparent — that is what makes a track read as wear ON the
@@ -1025,6 +1093,11 @@ const MAT = {
   // precision available instead of with metres.
   water: new THREE.MeshLambertMaterial({ map: waterTex, side: DS, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }),
   green: new THREE.MeshLambertMaterial({ map: greenTex, side: DS }),
+  // The road's own thickness. FrontSide would be right if the winding were
+  // reliable; it isn't (see DS above), and a one-sided apron flickers out
+  // whenever the camera crosses the road.
+  verge: new THREE.MeshLambertMaterial({ map: vergeTex, side: DS }),
+  deck: new THREE.MeshLambertMaterial({ map: deckTex, side: DS }),
   // Tunnel interior: emissive so the tube reads even with no light inside.
   tunnel: new THREE.MeshLambertMaterial({ color: 0x2a2d34, emissive: 0x0b0d12, side: DS }),
   portal: new THREE.MeshLambertMaterial({ color: 0x4d4a42, side: DS }),
@@ -1410,7 +1483,7 @@ function refreshVeg(): void {
         const mesh = vegMeshes[v.k];
         const i = counts[v.k];
         if (i >= VEG_CAP[v.k] * vegScale) continue;
-        const y = sampleHeight(v.x, v.z);
+        const y = groundAt(v.x, v.z);
         vegDummy.position.set(v.x, y + v.h, v.z);
         vegDummy.rotation.set(0, v.rot, 0);
         vegDummy.scale.setScalar(v.s);
@@ -1670,7 +1743,7 @@ function stepPop(pop: Critter[], meshes: THREE.InstancedMesh[], dt: number, o: {
       c.vy *= 0.96;
       c.y += c.vy * dt;
     } else {
-      c.y = sampleHeight(c.x, c.z);
+      c.y = groundAt(c.x, c.z);
     }
     // Wrap around the camera so the population is always where you are.
     const h = o.box / 2;
@@ -1738,7 +1811,7 @@ function mapPoly(pts: Array<[number, number]>, color: string): void {
 // ── collision & surface grids (24m cells) ──────────────────────────
 const GRID = 24;
 const gkey = (x: number, z: number): string => `${Math.floor(x / GRID)},${Math.floor(z / GRID)}`;
-interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?: number; yb?: number; tk?: boolean }
+interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?: number; yb?: number; tk?: boolean; tn?: boolean }
 const wallGrid = new Map<string, Seg[]>();   // building edges — solid
 const roadGrid = new Map<string, Seg[]>();   // drivable centrelines + half-width
 const waterCells = new Set<string>();        // coarse water mask
@@ -1921,6 +1994,75 @@ function roadHeightAt(x: number, z: number): number | null {
   return best;
 }
 
+// ── the road corridor: a volume, not a decal ───────────────────────
+// A ribbon draped on the heightfield is a zero-thickness surface, and the
+// terrain MESH is not the heightfield: it carries one vertex every ~21m and
+// interpolates flat between them, while the ribbon samples the bilinear field
+// every 12m and again at both kerbs. On any curved hillside the two disagree
+// by metres, and the road either floats or is swallowed. Two halves fix it:
+//
+//   DOWN — every carriageway is extruded into a solid (see `apron` below), so
+//          the gap under a floating road is filled with earth instead of sky.
+//   UP   — the terrain is cut back out of the corridor, so nothing stands in
+//          the road's airspace. The cut is graded outward into a bank rather
+//          than left as a wall.
+// The ceiling sits BELOW the tarmac across the carriageway and rises at the
+// batter beyond the kerb, so the corridor's guaranteed clear airspace is ~3.2m
+// over the road and for five metres either side of it before a bank may start.
+const CUT_BATTER = 0.62;   // rise per metre out from the kerb — a ~32° cut face
+const CUT_REACH = 14;      // how far out the cut grades before nature resumes
+// The highest the ground is allowed to stand at (x,z), or null where no road
+// has an opinion. Tunnels are excluded: being buried is the entire point of
+// one, and carving their corridor would open every tunnel into a trench.
+function roadCeiling(x: number, z: number): number | null {
+  let best: number | null = null;
+  const cx0 = Math.floor((x - CUT_REACH) / GRID), cx1 = Math.floor((x + CUT_REACH) / GRID);
+  const cz0 = Math.floor((z - CUT_REACH) / GRID), cz1 = Math.floor((z + CUT_REACH) / GRID);
+  for (let cx = cx0; cx <= cx1; cx++) for (let cz = cz0; cz <= cz1; cz++) {
+    const arr = roadGrid.get(`${cx},${cz}`);
+    if (!arr) continue;
+    for (const seg of arr) {
+      if (seg.tn || seg.ya === undefined || seg.yb === undefined) continue;
+      const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
+      const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+      const d = Math.hypot(x - (seg.ax + dx * t), z - (seg.az + dz * t));
+      // A track is worn, not engineered: it gets a narrow, shallow cut so a
+      // hillside path reads as a groove rather than a road cutting.
+      const reach = seg.tk ? CUT_REACH * 0.45 : CUT_REACH;
+      const out = d - (seg.hw + 0.6);
+      if (out > reach) continue;
+      const y = seg.ya + (seg.yb - seg.ya) * t;
+      const ceil = y - 0.3 + Math.max(0, out) * (seg.tk ? CUT_BATTER * 1.7 : CUT_BATTER);
+      if (best === null || ceil < best) best = ceil;
+    }
+  }
+  return best;
+}
+// The VISIBLE ground: the heightfield, cut back where a road runs through it.
+// Everything that has to agree on where the surface is — the terrain mesh, the
+// wheels, the scatter — goes through this, so the cut is not a lie told only to
+// the renderer.
+function groundAt(x: number, z: number): number {
+  const h = sampleHeight(x, z);
+  const c = roadCeiling(x, z);
+  return c === null || c >= h ? h : c;
+}
+
+// Aprons accumulate across a whole vector tile and go up as two meshes, not two
+// per way. A city block is a thousand ways, and a thousand extra draw calls to
+// draw the same brown wall is the kind of thing that quietly costs 20fps.
+const apron = { cutV: [] as number[], cutUV: [] as number[], dckV: [] as number[], dckUV: [] as number[] };
+function flushAprons(): void {
+  for (const [v, u, m] of [[apron.cutV, apron.cutUV, MAT.verge], [apron.dckV, apron.dckUV, MAT.deck]] as const) {
+    if (!v.length) continue;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(v), 3));
+    g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(u), 2));
+    g.computeVertexNormals();
+    worldGroup.add(new THREE.Mesh(g, m));
+    v.length = 0; u.length = 0;
+  }
+}
 type RoadMode = 'none' | 'auto' | 'tunnel' | 'bridge';
 const TUNNEL_TOL = 5;  // metres of terrain above the smoothed profile ⇒ tunnel
 const TUNNEL_H = 5;    // clearance of the carved tube
@@ -1935,6 +2077,10 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 12));
     for (let s = 1; s <= steps; s++) dense.push([ax + ((bx - ax) * s) / steps, az + ((bz - az) * s) / steps]);
   }
+  // Only carriageways get a solid edge. A track is two ruts worn into the
+  // hillside — its ribbon is transparent everywhere but the ruts, so a pair of
+  // earth walls would stand along it with nothing on top of them.
+  const apronOn = drivable && !track;
   const n = dense.length;
   const elev = dense.map(([x, z]) => sampleHeight(x, z));
   // Terrain across the tube's FULL WIDTH, not just the centreline. A road in
@@ -1985,6 +2131,36 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const flat = mode !== 'none'; // profiled roads get a flat cross-section
   const verts: number[] = [];
   const uvs: number[] = [];
+  // The road's THICKNESS. Two side faces hanging off the kerbs, closing the
+  // gap between the carriageway and whatever the terrain mesh actually does
+  // underneath it. Earth where the road is cut into the ground, concrete where
+  // it rides clear of it, decided by how much daylight is under the run — which
+  // gets viaducts right without needing the OSM tag to be honest.
+  const segsOf: Seg[] = [];
+  const DECK_GAP = 3;     // above this much daylight it is a structure, not a bank
+  const DECK_D = 1.35;    // fascia depth
+  const APRON = 3.6;      // how far the cut face reaches below the ground it meets
+  const APRON_MAX = 16;   // …but never a cliff: a hillside is the terrain's job
+  // SMOOTHED along the way, and shared by both kerbs. Deciding per quad and per
+  // side made adjacent quads flip between a 4m curtain of soil and a 1.35m
+  // concrete lip, so the road's underside broke into floating blocks.
+  const daylight = apronOn
+    ? dense.map((_, i) => (flat ? prof[i] : elev[i]) + lift - elevMin[i])
+    : [];
+  const deckRun = daylight.map((_, i) => {
+    let s = 0, c = 0;
+    for (let j = Math.max(0, i - 4); j <= Math.min(n - 1, i + 4); j++) { s += daylight[j]; c++; }
+    return s / c > DECK_GAP;
+  });
+  const face = (
+    xA: number, yA: number, zA: number, xB: number, yB: number, zB: number,
+    bA: number, bB: number, u0: number, u1: number, deck: boolean,
+  ): void => {
+    const V = deck ? apron.dckV : apron.cutV, U = deck ? apron.dckUV : apron.cutUV;
+    const d0 = (yA - bA) / 4, d1 = (yB - bB) / 4;
+    V.push(xA, yA, zA, xB, yB, zB, xA, bA, zA, xB, yB, zB, xB, bB, zB, xA, bA, zA);
+    U.push(u0, 0, u1, 0, u0, d0, u1, 0, u1, d1, u0, d0);
+  };
   let along = 0; // metres travelled — v wraps every 20m (the roadTex period)
   for (let i = 0; i < n - 1; i++) {
     const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
@@ -1996,13 +2172,46 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const y10 = (flat ? prof[i + 1] : sampleHeight(x1 + nx, z1 + nz)) + lift;
     const y11 = (flat ? prof[i + 1] : sampleHeight(x1 - nx, z1 - nz)) + lift;
     const v0 = along / 20, v1 = (along + len) / 20;
-    along += len;
     verts.push(
       x0 + nx, y00, z0 + nz, x1 + nx, y10, z1 + nz, x0 - nx, y01, z0 - nz,
       x1 + nx, y10, z1 + nz, x1 - nx, y11, z1 - nz, x0 - nx, y01, z0 - nz,
     );
     uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
-    if (drivable) addSeg(roadGrid, { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track });
+    if (drivable) {
+      const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track };
+      addSeg(roadGrid, s);
+      segsOf.push(s);
+    }
+    if (apronOn) {
+      // Sample a whisker OUTBOARD of the kerb as well: on a side-slope the
+      // ground falls away past the edge, and a face that stopped at the kerb's
+      // own height left a sliver of daylight along the downhill side.
+      const ox = (-dz / len) * 2.2, oz = (dx / len) * 2.2;
+      const uA = along / 8, uB = (along + len) / 8;
+      const deck = deckRun[i] || deckRun[i + 1];
+      for (const sgn of [1, -1]) {
+        const ex0 = x0 + nx * sgn, ez0 = z0 + nz * sgn;
+        const ex1 = x1 + nx * sgn, ez1 = z1 + nz * sgn;
+        const ey0 = sgn > 0 ? y00 : y01, ey1 = sgn > 0 ? y10 : y11;
+        const g0 = Math.min(sampleHeight(ex0, ez0), sampleHeight(ex0 + ox * sgn, ez0 + oz * sgn));
+        const g1 = Math.min(sampleHeight(ex1, ez1), sampleHeight(ex1 + ox * sgn, ez1 + oz * sgn));
+        const b0 = deck ? ey0 - DECK_D : Math.max(Math.min(ey0, g0) - APRON, ey0 - APRON_MAX);
+        const b1 = deck ? ey1 - DECK_D : Math.max(Math.min(ey1, g1) - APRON, ey1 - APRON_MAX);
+        face(ex0, ey0, ez0, ex1, ey1, ez1, b0, b1, uA, uB, deck);
+      }
+      // Close the ends, so a way that stops at a junction shows a cut face
+      // rather than a hollow shell you can see straight into.
+      for (const [i0, at] of [[0, i === 0], [1, i === n - 2]] as Array<[number, boolean]>) {
+        if (!at) continue;
+        const px = i0 ? x1 : x0, pz = i0 ? z1 : z0;
+        const yL = i0 ? y10 : y00, yR = i0 ? y11 : y01;
+        const gL = sampleHeight(px + nx, pz + nz), gR = sampleHeight(px - nx, pz - nz);
+        const bL = deck ? yL - DECK_D : Math.max(Math.min(yL, gL) - APRON, yL - APRON_MAX);
+        const bR = deck ? yR - DECK_D : Math.max(Math.min(yR, gR) - APRON, yR - APRON_MAX);
+        face(px + nx, yL, pz + nz, px - nx, yR, pz - nz, bL, bR, 0, width / 8, deck);
+      }
+    }
+    along += len;
     // Tracks read as a fainter line on the chart — they are a route, not a road.
     mapSeg(x0, z0, x1, z1, drivable && !track ? Math.max(width, 14) : 9,
       track ? 'rgba(150,140,112,0.62)' : drivable ? '#a8a294' : 'rgba(150,142,120,0.4)');
@@ -2013,6 +2222,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
   geo.computeVertexNormals();
   worldGroup.add(new THREE.Mesh(geo, mat));
+  // The corridor cut is applied by the terrain builder, which may already have
+  // run for this ground — so tell it to run again.
+  if (drivable) dirtyTerrainAround(dense);
   if (mode !== 'bridge') for (const [a, b] of runs) {
     // Tube only where the road is genuinely BURIED — where the terrain covers
     // the profile. An unburied stretch (coarse heightfield, shallow cut) stays
@@ -2026,7 +2238,12 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       if (buried && s < 0) s = i;
       if ((!buried || i === b) && s >= 0) {
         const e = buried ? i : i - 1;
-        if (e - s >= 2) tunnelTube(dense, prof, elevMin, s, e, width, lift);
+        if (e - s >= 2) {
+          tunnelTube(dense, prof, elevMin, s, e, width, lift);
+          // These segments live UNDER the hill on purpose. Exempt them from the
+          // corridor cut, which would otherwise open every tunnel into a trench.
+          for (let k = s; k < e && k < segsOf.length; k++) segsOf[k].tn = true;
+        }
         s = -1;
       }
     }
@@ -2196,7 +2413,7 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
     // floated above (or sank under) any park/lake bigger than the local slope,
     // swallowing the car and its halo (Central Park made this vivid).
     const posA = geo.attributes.position as THREE.BufferAttribute;
-    for (let i = 0; i < posA.count; i++) posA.setY(i, sampleHeight(posA.getX(i), posA.getZ(i)) + lift);
+    for (let i = 0; i < posA.count; i++) posA.setY(i, groundAt(posA.getX(i), posA.getZ(i)) + lift);
     geo.computeVertexNormals();
     mesh.position.y = 0;
   }
@@ -2325,6 +2542,7 @@ function renderWays(els: OsmWay[]): void {
       scatterVeg(pts, el.id, tags);
     }
   }
+  flushAprons();
 }
 
 // NEVER render features onto terrain that hasn't arrived. Heights are
@@ -3225,6 +3443,23 @@ function truckSpec(): Record<string, number> {
   });
   return { meshes, breaching, worstAboveGround: worst === -Infinity ? null : +worst.toFixed(2) };
 };
+// What the tyres are doing: sideways velocity, how much of it is a slide, and
+// what the drivetrain thinks its own speed is.
+(window as unknown as { __slip?: object }).__slip = (): object => ({
+  slideV: +slideV.toFixed(2), skid: +skid.toFixed(3), grip: +groundedF.toFixed(2),
+  rev: +engRev.toFixed(2), gear: engGear,
+  kmh: Math.round(Math.abs(state.speed) * 3.6),
+  roll: +((gradeRoll * 180) / Math.PI).toFixed(1),
+});
+// The road corridor at a point: the raw heightfield, what the cut allows, and
+// therefore how much ground was taken out of the carriageway's airspace.
+(window as unknown as { __cut?: object }).__cut = (x?: number, z?: number): object => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const raw = sampleHeight(px, pz), ceil = roadCeiling(px, pz);
+  return { raw: +raw.toFixed(2), ceiling: ceil === null ? null : +ceil.toFixed(2),
+    ground: +groundAt(px, pz).toFixed(2), cut: ceil === null ? 0 : +Math.max(0, raw - ceil).toFixed(2),
+    pending: terrainDirty.size };
+};
 (window as unknown as { __roadDir?: (x: number, z: number) => [number, number] | null }).__roadDir = (x, z) => {
   let best: Seg | null = null, bd = Infinity;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
@@ -3528,7 +3763,7 @@ function updatePois(): void {
     const dx = p.x - state.x, dz = p.z - state.z;
     const dc = Math.min(d, 900); // beyond ~900m: pin to the horizon on its bearing
     const wx = state.x + (dx / d) * dc, wz = state.z + (dz / d) * dc;
-    poiVec.set(wx, sampleHeight(wx, wz) + 2, wz);
+    poiVec.set(wx, groundAt(wx, wz) + 2, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
     const rng = d < POI_RANGE;
     const label = `${alienize(p.name).toUpperCase()} ${fmtDist(d)}`;
@@ -3563,6 +3798,7 @@ const audio = (() => {
   let engA: OscillatorNode, engB: OscillatorNode, engFilt: BiquadFilterNode, engGain: GainNode;
   let roarGain: GainNode, roarFilt: BiquadFilterNode, windGain: GainNode, windFilt: BiquadFilterNode;
   let gritSrc: AudioBufferSourceNode, gritGain: GainNode, gritFilt: BiquadFilterNode;
+  let squealGain: GainNode, squealFilt: BiquadFilterNode, squealOsc: OscillatorNode;
   let noiseBuf: AudioBuffer;
   let on = true;
   try { on = localStorage.getItem('drive.mute') !== '1'; } catch { /* fine */ }
@@ -3615,6 +3851,19 @@ const audio = (() => {
     gritFilt = ctx.createBiquadFilter(); gritFilt.type = 'bandpass'; gritFilt.frequency.value = 1400; gritFilt.Q.value = 0.5;
     gritGain = ctx.createGain(); gritGain.gain.value = 0;
     gritSrc.connect(gritFilt); gritFilt.connect(gritGain); gritGain.connect(master); gritSrc.start();
+    // SQUEAL: a tyre that is sliding rather than rolling. Noise through a very
+    // narrow bandpass, plus a thin sawtooth at the same pitch so it has an edge
+    // — pure filtered noise reads as wind, not rubber.
+    const sqSrc = ctx.createBufferSource(); sqSrc.buffer = noiseBuf; sqSrc.loop = true;
+    squealFilt = ctx.createBiquadFilter(); squealFilt.type = 'bandpass';
+    squealFilt.frequency.value = 1500; squealFilt.Q.value = 14;
+    squealGain = ctx.createGain(); squealGain.gain.value = 0;
+    sqSrc.connect(squealFilt);
+    squealOsc = ctx.createOscillator(); squealOsc.type = 'sawtooth'; squealOsc.frequency.value = 1500;
+    const sqMix = ctx.createGain(); sqMix.gain.value = 0.05;
+    squealOsc.connect(sqMix); sqMix.connect(squealFilt);
+    squealFilt.connect(squealGain); squealGain.connect(master);
+    sqSrc.start(); squealOsc.start();
     // Wind: highpassed noise that climbs with the square of speed.
     const windSrc = ctx.createBufferSource(); windSrc.buffer = noiseBuf; windSrc.loop = true;
     windFilt = ctx.createBiquadFilter(); windFilt.type = 'highpass'; windFilt.frequency.value = 900;
@@ -3654,17 +3903,30 @@ const audio = (() => {
       return on;
     },
     // Called every frame; all parameters glide so nothing zippers.
-    update(speed: number, throttle: number, surf: Surface, grounded: number, rainAmt = 0): void {
+    update(speed: number, throttle: number, surf: Surface, grounded: number, rainAmt = 0, rev = 0, gear = 0, slip = 0): void {
       if (!ctx || !master || ctx.state !== 'running') return;
       const t = ctx.currentTime, v = Math.abs(speed);
-      // Revs: rising within a gear, dropping as it "shifts" every ~14m/s.
-      const gear = Math.floor(v / 14);
-      const rev = (v - gear * 14) / 14;
+      // Revs come from the DRIVETRAIN, not from road speed — the two part
+      // company the moment the wheels leave the ground, and the flare over a
+      // jump is the whole reason for the distinction.
       const f = 42 + rev * 96 + gear * 10;
       engA.frequency.setTargetAtTime(f, t, 0.07);
       engB.frequency.setTargetAtTime(f * 1.5, t, 0.07);
       engFilt.frequency.setTargetAtTime(500 + rev * 1500 + v * 22, t, 0.09);
-      engGain.gain.setTargetAtTime(0.1 + Math.abs(throttle) * 0.16 * grounded + Math.min(v / 60, 0.1), t, 0.09);
+      // Airborne the engine gets LOUDER, not quieter: it is unloaded and
+      // screaming. Multiplying by `grounded` had it fade out over every jump.
+      engGain.gain.setTargetAtTime(
+        0.1 + Math.abs(throttle) * 0.16 * (0.45 + 0.55 * grounded)
+          + (1 - grounded) * rev * 0.1 + Math.min(v / 60, 0.1), t, 0.09,
+      );
+      // Rubber that has stopped rolling. Loud on tarmac, largely lost under the
+      // gravel off it — and silent below a walking pace, where a slide is a
+      // slither, not a skid.
+      const bite = surf === 'road' ? 1 : surf === 'track' ? 0.45 : 0.18;
+      const sf = 1250 + Math.min(v * 14, 620) + slip * 260;
+      squealFilt.frequency.setTargetAtTime(sf, t, 0.08);
+      squealOsc.frequency.setTargetAtTime(sf, t, 0.08);
+      squealGain.gain.setTargetAtTime(slip * bite * grounded * Math.min(v / 7, 1) * 0.19, t, 0.06);
       // Tarmac hisses high and thin; loose ground growls low and loud. A graded
       // track sits between the two — you can hear which tier you are on.
       const road = surf === 'road';
@@ -3753,14 +4015,19 @@ const writeUrl = (la: number, lo: number): void => {
 // `rough` scales the spatial roughness field the tires ride over.
 // Equilibrium speed is accel/drag, so `drag` — not `max` — is the real
 // governor: off-road doubles to ~115km/h by halving drag (0.5 = 16/32).
+// `mu` is the friction circle's radius in g: how much acceleration the contact
+// patch can supply in ANY direction. A corner asks for v·ω of it; whatever the
+// tyres can't find becomes sideways velocity, and that is the whole of the
+// drift model. `lat` is how fast that sideways velocity scrubs off — tarmac
+// bites and recovers, gravel keeps sliding.
 const SURFACE = {
-  road: { max: 50, drag: 0.28, lift: 0.6, rough: 0.015 },
+  road: { max: 50, drag: 0.28, lift: 0.6, rough: 0.015, mu: 1.05, lat: 6.5 },
   // The middle tier: a graded dirt track. Equilibrium speed is accel/drag, so
   // 0.36 sits it between tarmac's 57m/s and open ground's 32 — quick enough
   // that finding a track is a relief, rough enough that it is not a road.
-  track: { max: 40, drag: 0.36, lift: 0.5, rough: 0.07 },
-  ground: { max: 32, drag: 0.5, lift: 0.25, rough: 0.16 }, // monster truck: off-road is its element
-  water: { max: 3.5, drag: 3.5, lift: 0.3, rough: 0.05 },
+  track: { max: 40, drag: 0.36, lift: 0.5, rough: 0.07, mu: 0.8, lat: 5 },
+  ground: { max: 32, drag: 0.5, lift: 0.25, rough: 0.16, mu: 0.6, lat: 3.2 }, // monster truck: off-road is its element
+  water: { max: 3.5, drag: 3.5, lift: 0.3, rough: 0.05, mu: 0.3, lat: 2 },
 } as const;
 // Deterministic washboard: bumps live in the WORLD (wavelengths ~2–4m), so
 // shake frequency scales with speed and each wheel rides its own profile.
@@ -3772,12 +4039,21 @@ function roughNoise(x: number, z: number): number {
 // compress hard and bounce off the bump stops.
 // Travel and droop scale with the wheel: on a 0.9m tyre the old 0.42m of
 // travel was most of the tyre's radius and the truck pogoed.
-const SUSP = { k: 55, d: 8.5, ka: 40, da: 7.6, travel: 0.24, droop: 0.22 };
+// Droop is now the longer half of the travel, as it is on anything built to go
+// where this truck goes: a wheel that can reach further DOWN keeps its load
+// through a dip instead of hanging, which is grip you get to keep.
+const SUSP = { k: 55, d: 8.5, ka: 40, da: 7.6, travel: 0.26, droop: 0.34 };
 let bodyY = 0, vBodyY = 0, pitchC = 0, vPitch = 0, rollC = 0, vRoll = 0;
 // The TERRAIN's grade under the wheels — what gravity actually pulls against —
 // and the lateral creep it produces. Written by the suspension pass, read by
 // the next frame's drive step; one frame of lag at 60fps is nothing.
 let gradePitch = 0, gradeRoll = 0, slideV = 0;
+// How hard the tyres are currently being asked to work beyond what they have
+// (0 = planted, 1 = fully away). Drives the squeal, the dust, and the HUD.
+let skid = 0;
+// The drivetrain's own state, separate from road speed — which is the point:
+// with the wheels off the ground they are no longer the same number.
+let engRev = 0, engGear = 0;
 let dbgSusp: object = {};
 // A shade over 9.81. Real gravity left long climbs feeling weightless once the
 // truck has 16m/s^2 of thrust to spend against it; this gives a hill enough
@@ -3817,25 +4093,68 @@ function tick(now: number): void {
   state.speed = clamp(state.speed, -CAR.maxRev, surf.max * (1.25 - wx.wet * 0.2)); // downhill may overrun the flat cap
   const SRATE = 7; // full-lock in ~0.14s — responsive but not snappy
   steerCur += clamp(steer - steerCur, -SRATE * dt, SRATE * dt);
+  let yawRate = 0;
   if (Math.abs(state.speed) > 0.1) {
     // Authority decays with speed (like a real wheel): full lock is a parking
     // move, a nudge at 180 — turn RATE stays sane across the whole range.
     const authority = (0.15 + 0.85 * grip) / (1 + Math.abs(state.speed) / 12);
-    state.heading += (steerCur * CAR.steerMax * authority * state.speed * dt) / CAR.wheelbase;
+    yawRate = (steerCur * CAR.steerMax * authority * state.speed) / CAR.wheelbase;
+    state.heading += yawRate * dt;
   }
   state.x += Math.sin(state.heading) * state.speed * dt;
   state.z -= Math.cos(state.heading) * state.speed * dt;
-  // SIDE-SLOPES DRAG YOU DOWNHILL. Nothing used to: you could traverse a 40°
-  // face as if it were a car park, which is most of why hills felt like they
-  // were made of cardboard. Modelled as a lateral velocity that tyres resist —
-  // tarmac holds you far better than scree — so it settles at a creep rather
-  // than accelerating away.
+  // ── the tyres have a budget, and it is spent in every direction at once ──
+  // Two things pull the truck sideways. A SIDE-SLOPE, always — nothing used
+  // to, and you could traverse a 40° face as if it were a car park. And a
+  // CORNER: turning at v with yaw rate ω demands v·ω of centripetal
+  // acceleration, while the contact patch can supply mu·g and no more, less
+  // whatever the throttle or the brakes have already claimed. What the tyres
+  // cannot supply, the truck keeps as sideways velocity — it runs wide, and on
+  // gravel it keeps running until the scrub bleeds it off. That is the drift.
   {
     const sH = Math.sin(state.heading), cH = Math.cos(state.heading);
-    slideV -= GRAV * Math.sin(gradeRoll) * grip * dt;
-    slideV -= slideV * (surfKind === 'road' ? 6.5 : surfKind === 'track' ? 5 : 3.2) * dt;
+    const budget = surf.mu * GRAV * grip * (1 - wx.wet * 0.28);
+    // Friction circle: hard braking or full throttle eats into cornering.
+    // Only partly — a fully coupled circle makes an arcade car undriveable.
+    const longG = Math.min(Math.abs(thrust), budget);
+    const lateral = Math.sqrt(Math.max(0, budget * budget - longG * longG * 0.5));
+    const gravLat = GRAV * Math.sin(gradeRoll) * grip;   // + = pulled to the car's LEFT
+    const demand = state.speed * yawRate;                // + = wants to accelerate RIGHT
+    // The slope's pull is served first; the corner gets what's left.
+    const spare = Math.max(0, lateral - Math.abs(gravLat));
+    const over = Math.max(0, Math.abs(demand) - spare);
+    // SATURATING, not linear. Full lock at 110km/h asks for five g of corner;
+    // feeding the whole 47m/s² shortfall in as sideways acceleration would fire
+    // the truck off the map sideways. What has to be true for the feel is that
+    // the slide appears the moment you pass the limit and deepens the further
+    // past it you go — not that the number is dimensionally honest.
+    slideV -= Math.sign(demand) * 8 * (1 - Math.exp(-over / 12)) * dt;
+    slideV -= gravLat * dt;                              // the hill you're standing on
+    slideV -= slideV * surf.lat * (0.3 + 0.7 * grip) * dt;
     state.x += cH * slideV * dt;   // (cos, sin) is the car's own right
     state.z += sH * slideV * dt;
+    // Sliding sideways is drag you chose. It also decides what you HEAR and
+    // what the wheels throw up.
+    if (Math.abs(slideV) > 0.6) state.speed *= Math.exp(-Math.min(1.4, Math.abs(slideV) * 0.16) * dt);
+    const want = clamp((Math.abs(slideV) - 0.5) / 3.5, 0, 1);
+    skid += (want - skid) * Math.min(1, (want > skid ? 9 : 3.5) * dt);
+  }
+  // ── revs: what the engine is doing, not what the road is doing ──
+  // Grounded, the two agree and the box shifts every 14m/s. Airborne there is
+  // no load at all: the throttle spins the engine straight up against its own
+  // inertia and it HANGS there, gear held, until the wheels land and drag it
+  // back. That flare is the sound of a jump.
+  {
+    const vAbs = Math.abs(state.speed);
+    if (grip > 0.06) {
+      engGear = Math.floor(vAbs / 14);
+      const t = (vAbs - engGear * 14) / 14;
+      engRev += (t - engRev) * Math.min(1, 15 * dt);
+    } else {
+      const t = throttle > 0.02 ? 1.06 + throttle * 0.1 : 0.14;
+      engRev += (t - engRev) * Math.min(1, (throttle > 0.02 ? 2.4 : 1.4) * dt);
+    }
+    engRev = clamp(engRev, 0, 1.2);
   }
   // INSIDE a footprint beats every edge test: no wall is within CAR_R from the
   // middle of a room, so the push-out below would happily leave you sealed in
@@ -3867,6 +4186,14 @@ function tick(now: number): void {
   // ── suspension: the truck LIES on the terrain via 4 wheel contacts ──
   const sinH = Math.sin(state.heading), cosH = Math.cos(state.heading);
   const contacts: number[] = [];
+  // The same four contacts WITHOUT the washboard. The sprung body must not be
+  // thrown by every pebble: the noise field runs at 2–4m wavelengths, so at
+  // 60km/h it asks the chassis for accelerations twenty times gravity, and the
+  // 1g descent cap means the body simply cannot follow — it hangs, the wheels
+  // reach full droop, and grip collapses on ground that is merely BUMPY. The
+  // body rides the smooth plane; the wheels ride the bumps. That is what a
+  // suspension is.
+  const smooth: number[] = [];
   const wheelWorld: Array<[number, number]> = [];
   const wheelSurf: Surface[] = [];
   let rawSum = 0;
@@ -3876,7 +4203,9 @@ function tick(now: number): void {
     const sk = surfaceAt(wxw, wzw);
     wheelWorld.push([wxw, wzw]);
     wheelSurf.push(sk);
-    let g = sampleHeight(wxw, wzw);
+    // groundAt, not sampleHeight: where a road is cut into a hillside the
+    // terrain has been carved back, and the wheels must ride what is drawn.
+    let g = groundAt(wxw, wzw);
     if (sk === 'road') {
       // Ride the ROAD's profile (tunnel chords included) — but only near the
       // car's current level, so the hill above a tunnel doesn't swallow us.
@@ -3891,10 +4220,11 @@ function tick(now: number): void {
     }
     rawSum += g;
     const sw = SURFACE[sk];
+    smooth.push(g + sw.lift);
     contacts.push(g + sw.lift + roughNoise(wxw, wzw) * sw.rough);
   }
   prevGround = rawSum / 4;
-  const [cFL, cFR, cRL, cRR] = contacts;
+  const [cFL, cFR, cRL, cRR] = smooth;
   const ground = (cFL + cFR + cRL + cRR) / 4;
   const tY = ground + WHEEL_R; // axle-plane target
   const drive = brake ? -Math.sign(state.speed) * CAR.brake : throttle * (throttle >= 0 ? CAR.accel : CAR.brake);
@@ -3924,7 +4254,26 @@ function tick(now: number): void {
   // no thrust, no braking, no steering, no gravity. Measured 3.9km of daylight
   // under the hull after a relocation.
   if (Math.abs(tY - bodyY) > 6) { bodyY = tY; vBodyY = 0; pitchC = tPitch; rollC = tRoll; }
-  let aY = SUSP.k * (tY - bodyY) - SUSP.d * vBodyY;
+  // THE DESCENT BUG. Capping downward acceleration at 1g is what makes a crest
+  // launch the truck, and it must stay — but it was applied in the WORLD frame,
+  // against a damper that wanted vBodyY = 0. On a sustained descent the ground
+  // is not standing still: at 20m/s down a 20° grade it falls away at 7.3m/s,
+  // and a body starting from zero needs 0.75s of free fall to match it — during
+  // which it is 2.7m behind, twelve times the suspension's droop. All four
+  // wheels hang, groundedF goes to zero, and with it thrust, braking, steering
+  // and gravity. Every dip re-triggered it, which is exactly why downhill felt
+  // like ice and uphill (where the spring PUSHES, uncapped, at k=55) felt fine.
+  //
+  // So the damper chases the ground's own vertical rate instead of zero. Its
+  // steady state on a constant grade is "planted, wheels loaded", and the 1g
+  // floor now only bites where the grade BREAKS — which is the launch we wanted.
+  // DOWNWARD ONLY. Climbing, the ground rises to meet a spring that is already
+  // pushing up at k=55 with nothing capping it, and that case was always fine —
+  // feeding it a positive reference instead had the damper shove the body
+  // skyward at 8.5×10.9 = 93m/s², which launched the truck off every hill it
+  // drove up. Measured: uphill grip fell from 1.00 to 0.26 before this clamp.
+  const terrainVy = clamp(state.speed * Math.tan(gradePitch), -28, 0);
+  let aY = SUSP.k * (tY - bodyY) - SUSP.d * (vBodyY - terrainVy);
   if (aY < -9.81) aY = -9.81; // falling is gravity's job — crests launch
   vBodyY += aY * dt; bodyY += vBodyY * dt;
   if (bodyY < tY - SUSP.travel) {
@@ -3943,7 +4292,11 @@ function tick(now: number): void {
     // 45 degrees and is why the old model capped out and let go of the ground.
     const plane = bodyY - wz * Math.tan(pitchC) + wx * Math.tan(rollC);
     const def = clamp(contacts[i] + WHEEL_R - plane, -SUSP.droop, SUSP.travel);
-    if (def > -SUSP.droop + 0.03) groundedF += 0.25;
+    // A RAMP, not a step. A wheel three centimetres off full droop used to
+    // count for nothing at all, so grip fell off a cliff over a single frame
+    // and the truck went from planted to helpless with no warning through the
+    // controls. Load fades in over the last 10cm of extension instead.
+    groundedF += 0.25 * clamp((def + SUSP.droop) / 0.1, 0, 1);
     wheelPivots[i].position.y = def;
     wheelMeshes[i].scale.y = 1 - (0.1 * Math.max(0, def)) / SUSP.travel; // tire give under load
     wheelMeshes[i].rotation.x = wheelSpin;
@@ -3953,7 +4306,9 @@ function tick(now: number): void {
     defs: wheelPivots.map((p) => +p.position.y.toFixed(3)),
     contacts: contacts.map((c) => +c.toFixed(2)),
     pitch: +((pitchC * 180) / Math.PI).toFixed(1), grounded: groundedF };
-  wheelSpin += (state.speed / WHEEL_R) * dt;
+  // With no load the wheels follow the ENGINE, not the road — so they blur up
+  // over a jump and are still spinning when the truck lands.
+  wheelSpin += ((groundedF > 0.06 ? state.speed : engRev * 26 * (throttle < -0.02 ? -1 : 1)) / WHEEL_R) * dt;
   car.position.set(state.x, bodyY, state.z);
   car.rotation.set(pitchC, -state.heading, rollC);
   // Brake lights flare; reversing washes them pale. Beams brighten with the
@@ -3968,14 +4323,17 @@ function tick(now: number): void {
   if (v > 3 && groundedF > 0.2) {
     const anyWater = wheelSurf.some((k) => k === 'water');
     // Wet ground raises no dust — but water itself throws plenty.
-    dustBudget += v * dt * (anyWater ? 2.2 : 1.15 * (1 - wx.wet * 0.9));
+    // A sliding tyre tears up far more than a rolling one.
+    dustBudget += v * dt * (anyWater ? 2.2 : 1.15 * (1 - wx.wet * 0.9)) * (1 + skid * 1.7);
     while (dustBudget >= 1) {
       dustBudget -= 1;
       // WATER throws from the FRONT wheels — that is where a bow wave comes
       // from; dry ground throws from the rears, where the drive is.
       const water = wheelSurf[0] === 'water' || wheelSurf[2] === 'water';
       const i = water ? Math.floor(Math.random() * 2) : 2 + Math.floor(Math.random() * 2);
-      if (wheelSurf[i] === 'road') continue;
+      // Tarmac raises nothing — unless the tyres are sliding across it, which
+      // raises smoke.
+      if (wheelSurf[i] === 'road' && skid < 0.3) continue;
       const [wxw, wzw] = wheelWorld[i];
       const wet = wheelSurf[i] === 'water';
       // Barely any launch velocity: dust is LEFT BEHIND, not thrown backward.
@@ -3993,10 +4351,11 @@ function tick(now: number): void {
     }
   } else dustBudget = 0;
   stepDust(dt);
+  flushTerrain(now);
   if (wildlifeOn) stepWildlife(dt);
   stepOdo(dt, now);
   if (now > vegAt) { vegAt = now + 900; refreshVeg(); }
-  audio.update(state.speed, throttle, surfKind, groundedF, wx.rain);
+  audio.update(state.speed, throttle, surfKind, groundedF, wx.rain, engRev, engGear, skid);
   reveal(state.x, state.z);
   if (now > streamAt) { streamAt = now + 1200; streamWorld(state.x, state.z); }
   // Two rigs. TOP: the chart view, tilted a touch for relief. CHASE: low and
@@ -4034,7 +4393,7 @@ function tick(now: number): void {
       // camera is far below the truck, so tie the floor to the body and add
       // pitch lift to keep looking down the slope at it.
       Math.max(
-        sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 4.6,
+        groundAt(state.x - fwdX * back, state.z - fwdZ * back) + 4.6,
         bodyY + 4.0 + Math.max(0, Math.sin(pitchC)) * back,
       ),
       state.z - fwdZ * back,
@@ -4107,7 +4466,7 @@ function tick(now: number): void {
     const vx = dr.x * hudS, vy = innerHeight - (dr.y + dr.h) * hudS, vw = dr.w * hudS, vh = dr.h * hudS;
     miniCam.position.set(
       state.x - fwdX * 11,
-      Math.max(sampleHeight(state.x - fwdX * 11, state.z - fwdZ * 11) + 4.3, bodyY + 3.6),
+      Math.max(groundAt(state.x - fwdX * 11, state.z - fwdZ * 11) + 4.3, bodyY + 3.6),
       state.z - fwdZ * 11,
     );
     miniCam.lookAt(state.x + fwdX * 20, ground + 1.3, state.z + fwdZ * 20);
@@ -4716,6 +5075,13 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     // Standing water is grip you have already lost — worth its own bar.
     textSmall(hctx, 'WET', pad + 3, sy + 34, UI.dim);
     meter(pad + 20, sy + 34, 12, Math.round(clamp(wx.wet, 0, 1) * 12), wx.wet > 0.5 ? UI.bad : UI.edge, 3, 3, 1);
+    // Grip you are losing RIGHT NOW. Only shown while it is happening — a
+    // permanently empty bar is noise, and this line is the one you glance at
+    // mid-corner.
+    if (skid > 0.06) {
+      const s = `SLIP${skid > 0.55 ? '!' : ''}`;
+      textSmall(hctx, s, pad + CONDW - textSW(s) - 4, sy + 34, skid > 0.55 ? UI.bad : UI.gold);
+    }
   }
   // ── the chart / POV dock ──
   const chart = camMode === 'top';
