@@ -1984,7 +1984,11 @@ function mapPoly(pts: Array<[number, number]>, color: string): void {
 // ── collision & surface grids (24m cells) ──────────────────────────
 const GRID = 24;
 const gkey = (x: number, z: number): string => `${Math.floor(x / GRID)},${Math.floor(z / GRID)}`;
-interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?: number; yb?: number; tk?: boolean; tn?: boolean }
+interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?: number; yb?: number; tk?: boolean; tn?: boolean;
+  /** The way's OSM name. Streets were deliberately excluded from the POI set
+   *  ("named streets are not destinations") — but the road you are ON is not a
+   *  destination, it is your position, and that is worth saying. */
+  nm?: string }
 const wallGrid = new Map<string, Seg[]>();   // building edges — solid
 const roadGrid = new Map<string, Seg[]>();   // drivable centrelines + half-width
 const waterCells = new Set<string>();        // coarse water mask
@@ -2153,6 +2157,34 @@ function surfaceAt(x: number, z: number): Surface {
   if (waterCells.has(gkey(x, z))) return 'water';
   return seaOn && sampleHeight(x, z) < -baseElev - 0.6 ? 'water' : 'ground';
 }
+/**
+ * The way you are on, or the nearest one you are not.
+ *
+ * Returns `{ name, on }` — `on` is true when the point is actually within the
+ * carriageway, false when the nearest named road is merely the closest thing
+ * to where you have parked in a field. The distinction is the whole value of
+ * the line: "OU KAAPSE WEG" and "NEAR OU KAAPSE WEG" are different facts, and
+ * a driver reading a HUD deserves to be told which one they are living in.
+ *
+ * Widening rings rather than one big sweep: on a road the answer is in the
+ * first ring and costs one grid cell, which is the case that runs every frame.
+ */
+function wayAt(x: number, z: number): { name: string; on: boolean } | null {
+  let best: string | null = null, bd = Infinity, on = false;
+  for (const reach of [0, 1, 2]) {
+    for (let cx = -reach; cx <= reach; cx++) for (let cz = -reach; cz <= reach; cz++) {
+      if (reach > 0 && Math.max(Math.abs(cx), Math.abs(cz)) < reach) continue;  // ring only
+      for (const seg of roadGrid.get(`${Math.floor(x / GRID) + cx},${Math.floor(z / GRID) + cz}`) ?? []) {
+        if (!seg.nm) continue;
+        const [px, pz] = closestOnSeg(x, z, seg);
+        const d = Math.hypot(x - px, z - pz);
+        if (d < bd) { bd = d; best = seg.nm; on = d <= seg.hw + 1; }
+      }
+    }
+    if (best) break;   // nearest ring with a named road wins
+  }
+  return best ? { name: best, on } : null;
+}
 // The road's own elevation at (x,z) — differs from the terrain wherever the
 // profile smoothing decided a stretch is a tunnel or bridge.
 function roadHeightAt(x: number, z: number): number | null {
@@ -2255,7 +2287,7 @@ function flushAprons(): void {
 type RoadMode = 'none' | 'auto' | 'tunnel' | 'bridge';
 const TUNNEL_TOL = 5;  // metres of terrain above the smoothed profile ⇒ tunnel
 const TUNNEL_H = 5;    // clearance of the carved tube
-function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false): void {
+function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string): void {
   // Subdivide to ~12m steps first: OSM ways only carry vertices where the road
   // BENDS, so a long straight segment used to bridge every terrain dip between
   // its endpoints like a causeway. Dense sampling makes the ribbon hug the
@@ -2519,7 +2551,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     );
     uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
     if (drivable) {
-      const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track };
+      const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name };
       addSeg(roadGrid, s);
       segsOf.push(s);
     }
@@ -2935,7 +2967,7 @@ function renderWays(els: OsmWay[]): void {
         : tags.bridge && tags.bridge !== 'no' ? 'bridge'
         : 'auto';
       ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : MAT.road,
-        track || stairs ? 0.5 : 0.6, !stairs, mode, track);
+        track || stairs ? 0.5 : 0.6, !stairs, mode, track, tags.name);
     } else if (tags.building) {
       building(pts, el.id, parseFloat(tags['building:levels'] ?? '') || 2);
     } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
@@ -3922,6 +3954,11 @@ function truckSpec(): Record<string, number> {
 (window as unknown as { __accept?: object }).__accept = (): void => acceptMission(performance.now());
 (window as unknown as { __camPos?: object }).__camPos = (): number[] =>
   [camera.position.x, camera.position.y, camera.position.z];
+// The way under the wheels, and the coordinate the HUD reports.
+(window as unknown as { __way?: object }).__way = (): object => {
+  const [la, lo] = localToLatLon(state.x, state.z);
+  return { way: wayAt(state.x, state.z), lat: +la.toFixed(5), lon: +lo.toFixed(5) };
+};
 // What stands between the truck and the drop at (x,z): the nearest parapet
 // segment, how far off it is, and how high its top sits. A rail that renders
 // but has no wall segment is the failure this exists to catch.
@@ -5707,43 +5744,17 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   // CONDITIONS you are driving in above it. Laid out from the bottom edge so
   // the stack stays put whatever the screen height is.
   const mw = Math.min(58, Math.floor(HW * 0.34));
-  const infoH = 16;
+  // Three lines now: the place, the way under the wheels, and the coordinate.
+  const infoH = 23;
   const infoY = HH - pad - infoH;
   const my = infoY - mw - 3;
   // ── the job ──
-  // Three states, one strip, always in the same place: an offer you can take,
-  // a destination with the distance left on it, and a confirmation. Drawn above
-  // the conditions panel so it never fights the dock for the same pixels.
+  // Drawn LATER (mid-top, see below); this only clears last frame's hit target.
   missionRect = { x: 0, y: 0, w: 0, h: 0 };
   const mx = pad;
   const CONDW = Math.max(74, mw + 16);
   const condH = 42;
   const sy = my - condH - 3;
-  if (mission && missionPhase !== 'none') {
-    const bh = 17, by = sy - bh - 3;
-    const bw = HW - pad * 2;
-    let head = '', body = '', col = UI.gold;
-    if (missionPhase === 'offered') {
-      head = missionReady ? 'TAP TO ACCEPT' : mission.giver.name;
-      body = missionReady ? mission.title : 'JOB WAITING';
-      col = missionReady ? UI.good : UI.dim;
-    } else if (missionPhase === 'active') {
-      const d = missionDest ? Math.hypot(missionDest.x - state.x, missionDest.z - state.z) : 0;
-      head = mission.title;
-      body = `${mission.brief}  ${fmtDist(d)}`;
-    } else {
-      head = 'ARRIVED';
-      body = `${mission.title} · ${(odo.trip / 1000).toFixed(1)}KM`;
-      col = UI.good;
-    }
-    // The confirmation earns eight seconds and then gets out of the way.
-    if (missionPhase !== 'done' || performance.now() - missionAt < 8000) {
-      panel(pad, by, bw, bh, missionReady || missionPhase === 'done' ? col : undefined);
-      textSmall(hctx, fitS(head, bw - 8), pad + 4, by + 3, col);
-      textSmall(hctx, fitS(body, bw - 8), pad + 4, by + 10, UI.text);
-      if (missionReady) missionRect = { x: pad, y: by, w: bw, h: bh };
-    }
-  }
   // ── conditions: surface, grip, weather, wetness, heading ──
   panel(pad, sy, CONDW, condH);
   const sname = surf === 'road' ? 'ROAD' : surf === 'track' ? 'TRACK' : surf === 'water' ? 'WATER' : 'ROUGH';
@@ -5794,8 +5805,27 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     } else {
       placeRect = { x: 0, y: 0, w: 0, h: 0 };
     }
+    // The WAY under the wheels, which is the finest-grained "where am I" the
+    // world can answer. The place name says Cape Town; this says Ou Kaapse Weg,
+    // and off the tarmac it says which road you left. Streaming/outage takes
+    // the line when there is nothing to report, since both mean the same thing:
+    // the world does not know where you are yet.
     if (osmDown) textEdgeS('NO WORLD DATA', pad + 1, infoY + 9, UI.bad);
-    else if (streaming) textEdgeS('STREAMING', pad + 1, infoY + 9, UI.dim);
+    else {
+      const w = wayAt(state.x, state.z);
+      const line = w ? (w.on ? alienize(w.name).toUpperCase() : `NEAR ${alienize(w.name).toUpperCase()}`)
+        : streaming ? 'STREAMING' : '';
+      if (line) textEdgeS(fitS(line, Math.round(HW * 0.6)), pad + 1, infoY + 9, w?.on ? UI.soft : UI.dim);
+    }
+    // GPS: TERTIARY. Present because a coordinate is the one thing you can act
+    // on outside the game — paste it, share it, come back to it — but in the
+    // micro face and the dimmest ink, under everything else. It is a reference,
+    // not a reading.
+    {
+      const [la, lo] = localToLatLon(state.x, state.z);
+      const g = `${la.toFixed(4)} ${lo.toFixed(4)}`;
+      textEdgeS(g, pad + 1, infoY + 16, UI.dim);
+    }
   }
   // ── speed, bottom-right ──
   const digits = String(kmh);
@@ -5809,6 +5839,48 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   {
     const o = fmtKm(odo.total);
     textEdgeS(o, HW - textSW(o) - pad - 1, spy - 8, UI.soft);
+  }
+  // ── the job, as a modal ──
+  // Mid-top and CENTRED, not a strip tucked over the conditions panel. A job is
+  // the only thing on this screen that asks something of you rather than
+  // reporting on you, and it should not have to compete with the instruments
+  // for a glance. Sized to its own content, with the title on its own line —
+  // room for a brief that reads like a sentence rather than a label.
+  {
+    missionRect = { x: 0, y: 0, w: 0, h: 0 };
+    const live = mission && missionPhase !== 'none'
+      && (missionPhase !== 'done' || performance.now() - missionAt < 9000);
+    if (mission && live) {
+      let kicker = '', head = '', body = '', col = UI.gold;
+      if (missionPhase === 'offered') {
+        kicker = alienize(mission.giver.name).toUpperCase();
+        head = mission.title;
+        body = missionReady ? 'TAP TO ACCEPT' : 'PULL UP TO TAKE THE JOB';
+        col = missionReady ? UI.good : UI.dim;
+      } else if (missionPhase === 'active') {
+        const d = missionDest ? Math.hypot(missionDest.x - state.x, missionDest.z - state.z) : 0;
+        kicker = 'ON THE JOB';
+        head = mission.title;
+        body = `${mission.brief} · ${fmtDist(d)}`;
+      } else {
+        kicker = 'ARRIVED';
+        head = mission.title;
+        body = `${(odo.trip / 1000).toFixed(1)}KM ON THE CLOCK`;
+        col = UI.good;
+      }
+      const inner = Math.max(textW(head), textSW(body) + 2, textSW(kicker) + 2);
+      const bw = Math.min(HW - pad * 2, inner + 16);
+      const bx = Math.round((HW - bw) / 2);
+      const by = Math.round(HH * 0.17);
+      const bh = 30;
+      panel(bx, by, bw, bh, col);
+      textSmall(hctx, fitS(kicker, bw - 10), bx + 5, by + 4, UI.dim);
+      glowText(fit(head, bw - 10), bx + 5, by + 11, col);
+      textSmall(hctx, fitS(body, bw - 10), bx + 5, by + 21, missionReady ? col : UI.text);
+      // Only an offer you can actually take is a tap target — an "on the job"
+      // panel that swallowed taps would eat the camera toggle for a whole drive.
+      if (missionReady) missionRect = { x: bx, y: by, w: bw, h: bh };
+    }
   }
   // LAST: the modal covers the instruments, not the other way round.
   if (menuTab !== null) drawMenu(menuTab, kmh, surf);
