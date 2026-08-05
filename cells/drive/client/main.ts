@@ -1502,6 +1502,12 @@ const herds = HERD_GEO.map((g) => {
   scene.add(m);
   return m;
 });
+// No animal is ever allowed within this of the truck. Wider than CAR_R (2.4)
+// by enough that even the bison's bulk clears the bodywork.
+const HERD_CLEAR = 4.8;
+// The closest any of them has come this session — a test drives at the herd
+// and asserts this never drops to the truck.
+let herdClosest = Infinity;
 interface Critter { x: number; y: number; z: number; vx: number; vy: number; vz: number; ph: number; sp: number; tint: THREE.Color }
 function pickSpecies(): number {
   const mix = HERD_MIX[biome.name] ?? HERD_MIX.temperate;
@@ -1547,22 +1553,61 @@ function stepPop(pop: Critter[], meshes: THREE.InstancedMesh[], dt: number, o: {
     }
     // FLEE. Close to the truck they break formation entirely — that reaction
     // is what makes them read as alive rather than as scenery that moves.
+    //
+    // Panic scales with how close the truck is AND how fast it is coming, and
+    // the bolt is biased SIDEWAYS: an animal sprinting straight down the line
+    // of a vehicle that is faster than it is an animal about to be hit, which
+    // is exactly how the old "run directly away" rule played out.
     const fx = c.x - state.x, fz = c.z - state.z;
-    const fd = Math.hypot(fx, fz);
-    if (fd < o.fear) {
-      const p = (1 - fd / o.fear) * o.speed * 6;
-      ax += (fx / (fd || 1)) * p;
-      az += (fz / (fd || 1)) * p;
-      if (o.air) c.vy += 6 * dt;                          // birds climb away
+    const fd = Math.hypot(fx, fz) || 1e-3;
+    const carV = Math.abs(state.speed);
+    // Reaction DISTANCE, not a fixed radius: what matters is how long they have
+    // before it arrives. A parked truck barely bothers them — you can idle up
+    // and watch — while one doing 90 sends the herd moving from 80m out.
+    const fear = o.fear + carV * (o.air ? 0.5 : 2.2);
+    const panic = fd < fear ? 1 - fd / fear : 0;
+    if (panic > 0) {
+      const hx = Math.sin(state.heading), hz = -Math.cos(state.heading); // truck forward
+      const side = Math.sign(fx * -hz + fz * hx) || 1;   // which flank it is already on
+      const mix = 0.4 + 0.6 * panic;                     // closer ⇒ more sideways
+      const ex = (fx / fd) * (1 - mix) + -hz * side * mix;
+      const ez = (fz / fd) * (1 - mix) + hx * side * mix;
+      const el = Math.hypot(ex, ez) || 1;
+      const p = panic * panic * o.speed * 30;
+      ax += (ex / el) * p;
+      az += (ez / el) * p;
+      if (o.air) c.vy += 9 * dt;                          // birds climb away
     }
-    c.vx += ax * dt * o.turn; c.vz += az * dt * o.turn;
-    c.ph += dt * (o.air ? 9 : 3);
-    // Hold a cruising speed rather than accelerating forever.
+    c.vx += ax * dt * o.turn * (1 + panic * 3); c.vz += az * dt * o.turn * (1 + panic * 3);
+    c.ph += dt * (o.air ? 9 : 3 + panic * 9);
+    // Hold a cruising speed rather than accelerating forever — except in a
+    // panic, where the whole point is to out-run whatever is chasing them.
     const sp = Math.hypot(c.vx, c.vz) || 1e-3;
-    const want = o.speed * (fd < o.fear ? 2.2 : 1);
-    c.vx = (c.vx / sp) * (sp + (want - sp) * Math.min(1, dt * 2));
-    c.vz = (c.vz / sp) * (sp + (want - sp) * Math.min(1, dt * 2));
+    const flatOut = Math.min(Math.max(o.speed * 4.5, carV * 1.2), o.air ? 30 : 22);
+    const want = o.speed + (flatOut - o.speed) * panic;
+    const k = Math.min(1, dt * (2 + 16 * panic));         // and accelerate hard
+    c.vx = (c.vx / sp) * (sp + (want - sp) * k);
+    c.vz = (c.vz / sp) * (sp + (want - sp) * k);
     c.x += c.vx * dt; c.z += c.vz * dt;
+    // THE GUARANTEE. Everything above is a force model, and a force model can
+    // only ever make a collision unlikely: the truck tops out around 25m/s and
+    // nothing on four legs here does. So a hard minimum separation backstops
+    // it — placed mostly sideways, because pushing an animal straight down the
+    // truck's line would drag it along the bumper instead of clearing it.
+    if (!o.air) {
+      const gx = c.x - state.x, gz = c.z - state.z;
+      const gd = Math.hypot(gx, gz);
+      if (gd < HERD_CLEAR) {
+        const hx = Math.sin(state.heading), hz = -Math.cos(state.heading);
+        const side = Math.sign(gx * -hz + gz * hx) || 1;
+        const ex = (gd > 1e-3 ? gx / gd : 0) * 0.3 + -hz * side * 0.7;
+        const ez = (gd > 1e-3 ? gz / gd : 0) * 0.3 + hx * side * 0.7;
+        const el = Math.hypot(ex, ez) || 1;
+        c.x = state.x + (ex / el) * HERD_CLEAR;
+        c.z = state.z + (ez / el) * HERD_CLEAR;
+      }
+      herdClosest = Math.min(herdClosest, Math.hypot(c.x - state.x, c.z - state.z));
+    }
     if (o.air) {
       c.vy += (34 + Math.sin(c.ph * 0.2) * 12 - c.y) * 0.25 * dt;  // hold altitude
       c.vy *= 0.96;
@@ -1604,7 +1649,7 @@ function stepWildlife(dt: number): void {
   // Rain grounds the birds; a storm keeps them down entirely.
   birds.visible = wx.rain < 0.5;
   if (birds.visible) stepPop(flock, [birds], dt, { box: BIRD_BOX, air: true, speed: 11, fear: 55, sep: 7, turn: 1 });
-  stepPop(graze, herds, dt, { box: HERD_BOX, air: false, speed: 2.4, fear: 48, sep: 6, turn: 1.6 });
+  stepPop(graze, herds, dt, { box: HERD_BOX, air: false, speed: 2.4, fear: 24, sep: 6, turn: 1.6 });
 }
 
 // ── the map layer (minimap base, FOG_SPAN frame, north-up) ─────────
@@ -2496,6 +2541,47 @@ halo.rotation.x = -Math.PI / 2;
 halo.position.y = 0.15;
 car.add(halo);
 scene.add(car);
+// ── the studio ─────────────────────────────────────────────────────
+// The menu's VEHICLE panel needs the truck on a clean backdrop, not wherever
+// it happens to be parked at dusk in the rain. Rather than clone it — four
+// materials, a suspension rig and two lamps deep — the real truck is BORROWED
+// into this scene for the one render and handed straight back, which also
+// means the panel can never show a stale copy of the model.
+const studio = new THREE.Scene();
+studio.add(new THREE.HemisphereLight(0xdaeef6, 0x2b2a22, 2.2));
+const studioKey = new THREE.DirectionalLight(0xfff2dc, 2.4);
+studioKey.position.set(5, 7, 4);
+studio.add(studioKey, studioKey.target);
+const studioFill = new THREE.DirectionalLight(0x9ecbe8, 0.85);
+studioFill.position.set(-6, 3, -5);
+studio.add(studioFill, studioFill.target);
+const studioCam = new THREE.PerspectiveCamera(30, 1, 0.1, 200);
+let studioSpin = 0.6;
+// The bay renders through the SAME pixel grid as the world. A smooth,
+// anti-aliased truck sitting inside a hand-built bitmap HUD reads as a leak
+// from another program — so it goes to a low-res target and is magnified with
+// nearest sampling, exactly like the scene pass.
+const rtVeh = mkRT(true, true);
+const vehCopyMat = new THREE.ShaderMaterial({
+  uniforms: { src: { value: null as THREE.Texture | null }, uPix: { value: new THREE.Vector2(2, 2) } },
+  vertexShader: QUAD_VS,
+  // The target is LINEAR, like the scene pass — so this has to do the encode
+  // and the palette step the composite does, or the bay comes out near-black
+  // and in smoother colour than everything around it.
+  fragmentShader: `
+    uniform sampler2D src; uniform vec2 uPix; varying vec2 vUv;
+    vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
+    float bayer2(vec2 a){ a = floor(a); return fract(a.x * 0.5 + a.y * a.y * 0.75); }
+    float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+    void main(){
+      vec3 enc = srgb(max(texture2D(src, vUv).rgb, 0.0));
+      float d = (bayer4(floor(vUv * uPix)) - 0.5) * 0.6;
+      enc = floor(enc * 14.0 + d + 0.5) / 14.0;
+      gl_FragColor = vec4(enc, 1.0);
+    }`,
+  depthTest: false,
+  depthWrite: false,
+});
 // ── weather ────────────────────────────────────────────────────────
 // Four states that drift into one another on a slow clock, biased by biome
 // (the desert rarely storms; the tropics rarely stay clear). Everything reads
@@ -2739,16 +2825,40 @@ const state = { x: 0, z: 0, heading: 0, speed: 0 };
     for (const [x, z] of pts) { cx += x; cz += z; }
     return { x: cx / pts.length, z: cz / pts.length, n: pts.length };
   });
+// What the HUD is currently pinning, and how far each one is — so a test can
+// walk the car in and confirm nothing vanishes as it arrives.
+(window as unknown as { __pins?: object }).__pins = (): object => {
+  const sorted = [...pois.values()]
+    .map((p) => ({ p, d: Math.hypot(p.x - state.x, p.z - state.z) }))
+    .sort((a, b) => a.d - b.d);
+  return {
+    drawn: poiDraw.map((p) => ({ t: p.t, edge: p.edge, rng: p.rng })),
+    nearest: sorted.slice(0, 3).map((e) => +e.d.toFixed(1)),
+    to: sorted[0] ? { x: sorted[0].p.x, z: sorted[0].p.z, name: sorted[0].p.name } : null,
+    range: POI_RANGE,
+  };
+};
+// Closest approach since the last call (and reset) — the "can you hit one?"
+// measurement. Anything at or above HERD_CLEAR means nothing was ever touched.
+(window as unknown as { __closest?: object }).__closest = (): object => {
+  const d = herdClosest;
+  herdClosest = Infinity;
+  return { closest: +d.toFixed(2), clearance: HERD_CLEAR };
+};
 // Where the herd actually is, so a test can go and look at it.
 (window as unknown as { __herd?: object }).__herd = (): object =>
   graze.map((c) => ({ x: +c.x.toFixed(1), z: +c.z.toFixed(1), sp: ['deer', 'bison', 'horse'][c.sp] }));
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z) });
-// The truck's ACTUAL dimensions, measured off the built scene graph rather
-// than off the arithmetic that was supposed to produce them — so the spec
-// sheet can be checked instead of assumed. Halo and beam cones are furniture,
-// not bodywork, and are excluded.
-(window as unknown as { __spec?: object }).__spec = (): object => {
+// The truck's ACTUAL dimensions, MEASURED off the built scene graph rather
+// than off the arithmetic that was supposed to produce them. The vehicle panel
+// in the menu shows these beside the sheet's targets, so the model can be
+// checked against the reference instead of assumed to match it.
+// Halo and beam cones are furniture, not bodywork, and are excluded.
+const SPEC_TARGET = { length: 4.9, width: 2.15, height: 2.35, wheelbase: 3.1, clearance: 0.45 };
+let specCache: Record<string, number> | null = null;
+function truckSpec(): Record<string, number> {
+  if (specCache) return specCache;
   // In the CAR's own frame, from vertices. A world-space Box3 of a yawed truck
   // on live suspension is an axis-aligned box around a rotated one, which
   // reported this hull 24cm taller than it is.
@@ -2761,18 +2871,18 @@ const state = { x: 0, z: 0, heading: 0, speed: 0 };
     for (let i = 0; i < pos.count; i++) bb.expandByPoint(v.fromBufferAttribute(pos, i).applyMatrix4(child.matrix));
   }
   const r = (n: number): number => +n.toFixed(2);
-  return {
-    // The wheels hang off pivots that move with the suspension, so the static
-    // figures come from the geometry that defines them instead: the ground
-    // plane sits one wheel radius below the axle plane.
+  // The wheels hang off pivots that move with the suspension, so the static
+  // figures come from the geometry that defines them instead: the ground plane
+  // sits one wheel radius below the axle plane.
+  return (specCache = {
     length: r(bb.max.z - bb.min.z),
     width: r(Math.max(bb.max.x - bb.min.x, TRACK * 2 + WHEEL_W)),
     height: r(bb.max.y + WHEEL_R),
     wheelbase: r(AXLE * 2),
     clearance: r(WHEEL_R + bb.min.y),
-    spec: { length: 4.9, width: 2.15, height: 2.35, wheelbase: 3.1, clearance: 0.45 },
-  };
-};
+  });
+}
+(window as unknown as { __spec?: object }).__spec = (): object => ({ ...truckSpec(), spec: SPEC_TARGET });
 // How much of the frame the truck actually occupies. Chase framing is easy to
 // get wrong by eye — on a portrait phone the 55° fov is VERTICAL, so the
 // horizontal one is only ~30° and a stand-off that looks generous in plan puts
@@ -3101,10 +3211,14 @@ function toggleAlien(): void {
 const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a' };
 const poiVec = new THREE.Vector3(), poiView = new THREE.Vector3(), camFwd = new THREE.Vector3();
 const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}M` : `${(m / 1000).toFixed(1)}KM`);
+// Close enough to act on. The pins used to be CULLED inside 25m, which threw
+// away exactly the moment they matter — you arrive at a place and it vanishes.
+// They now stay all the way in and switch to an in-range presentation instead.
+const POI_RANGE = 55;
 function updatePois(): void {
   const near = [...pois.values()]
     .map((p) => ({ p, d: Math.hypot(p.x - state.x, p.z - state.z) }))
-    .filter((e) => e.d > 25 && e.d < 3000)
+    .filter((e) => e.d < 3000)
     .sort((a, b) => a.d - b.d)
     .slice(0, 3);
   camera.getWorldDirection(camFwd);
@@ -3116,6 +3230,7 @@ function updatePois(): void {
     const wx = state.x + (dx / d) * dc, wz = state.z + (dz / d) * dc;
     poiVec.set(wx, sampleHeight(wx, wz) + 2, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
+    const rng = d < POI_RANGE;
     const label = `${alienize(p.name).toUpperCase()} ${fmtDist(d)}`;
     if (poiView.z < -1) {
       poiVec.project(camera);
@@ -3123,7 +3238,7 @@ function updatePois(): void {
         poiDraw.push({
           x: (poiVec.x * 0.5 + 0.5) * innerWidth,
           y: clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.16, innerHeight * 0.8),
-          t: label, c: POI_COLORS[p.kind], edge: 0,
+          t: label, c: POI_COLORS[p.kind], edge: 0, rng,
         });
         continue;
       }
@@ -3132,7 +3247,7 @@ function updatePois(): void {
     const right = camFwd.x * dz - camFwd.z * dx > 0;
     poiDraw.push({
       x: 0, y: innerHeight * (0.34 + i * 0.055),
-      t: right ? `${label} >` : `< ${label}`, c: POI_COLORS[p.kind], edge: right ? 1 : -1,
+      t: right ? `${label} >` : `< ${label}`, c: POI_COLORS[p.kind], edge: right ? 1 : -1, rng,
     });
   }
 }
@@ -3636,7 +3751,62 @@ function tick(now: number): void {
     renderer.setScissorTest(false);
     renderer.setViewport(0, 0, innerWidth, innerHeight);
   }
+  if (vehRect.w > 0) renderStudio(dt);
   requestAnimationFrame(tick);
+}
+// The menu's vehicle bay. The truck is BORROWED out of the world into the
+// studio for one render and handed straight back — no clone to drift out of
+// sync with the model, and a clean backdrop instead of whatever weather the
+// world happens to be having.
+function renderStudio(dt: number): void {
+  studioSpin += dt * 0.45;
+  const vx = vehRect.x * hudS, vw = vehRect.w * hudS, vh = vehRect.h * hudS;
+  const vy = innerHeight - (vehRect.y + vehRect.h) * hudS;
+  const pos = car.position.clone(), rot = car.rotation.clone();
+  const haloWas = halo.visible, spotWas = headSpot.visible;
+  const beamWas = beams.map((b) => b.visible);
+  // Beam cones are 26m long; at 8m from the camera they would fill the bay
+  // with additive haze. Chart furniture and the headlamp pool go too.
+  halo.visible = false;
+  headSpot.visible = false;
+  for (const b of beams) b.visible = false;
+  studio.add(car);                       // reparent: three removes it from `scene`
+  car.position.set(0, 0, 0);
+  car.rotation.set(0, studioSpin, 0);
+  // Far enough that a 4.9m truck fits broadside: the 30° figure is the
+  // VERTICAL fov, and at 8m the nose and the spare were being cropped off the
+  // sides every time it turned side-on.
+  const dist = 10.5;
+  studioCam.aspect = vw / Math.max(1, vh);
+  // Low, like the sheet's side elevations — looking down on it flattened the
+  // cab into the roof rack.
+  studioCam.position.set(Math.sin(0.9) * dist, 2.1, Math.cos(0.9) * dist);
+  studioCam.lookAt(0, 1.05, 0);
+  studioCam.updateProjectionMatrix();
+  // Same pixels per metre as the world: PIX_H over the screen height.
+  const grid = PIX_H / Math.max(1, innerHeight);
+  const rw = Math.max(2, Math.round(vw * grid)), rh = Math.max(2, Math.round(vh * grid));
+  rtVeh.setSize(rw, rh);
+  vehCopyMat.uniforms.uPix.value.set(rw, rh);
+  renderer.setRenderTarget(rtVeh);
+  renderer.setClearColor(0x0b191d, 1);
+  renderer.clear(true, true, false);
+  renderer.render(studio, studioCam);
+  renderer.setRenderTarget(null);
+  renderer.setClearColor(0x05070c, 1);
+  renderer.setScissorTest(true);
+  renderer.setViewport(vx, vy, vw, vh);
+  renderer.setScissor(vx, vy, vw, vh);
+  vehCopyMat.uniforms.src.value = rtVeh.texture;
+  runPass(vehCopyMat, null);
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, innerWidth, innerHeight);
+  scene.add(car);                        // and hand it back
+  car.position.copy(pos);
+  car.rotation.copy(rot);
+  halo.visible = haloWas;
+  headSpot.visible = spotWas;
+  beams.forEach((b, i) => { b.visible = beamWas[i]; });
 }
 
 // Dress every palette-driven surface from one biome. Declared late so it can
@@ -3834,30 +4004,47 @@ function meter(x: number, y: number, n: number, lit: number, col: string, w = 3,
     hctx.fillRect(x + i * (w + gap), y, w, h);
   }
 }
-// One MENU holds the affordances, so the top of the screen belongs to the
-// compass. Items are hit-tested only while it is open.
+// One MENU chip holds the affordances, so the top of the screen belongs to the
+// compass. It opens a MODAL — a dropdown had nowhere to put a vehicle bay, and
+// the sheet this game is drawn from is a page of panels, not a context menu.
 interface Item { label: () => string; hit: () => void; col: () => string }
-const menu: Item[] = [
-  { col: () => UI.gold, label: () => 'ELSEWHERE', hit: () => { location.href = location.pathname + '?random=1'; } },
-  {
-    col: () => (audio.on && audio.state === 'running' ? UI.good : UI.soft),
-    label: () => (!audio.on ? 'SOUND OFF' : audio.state === 'running' ? 'SOUND ON' : 'SOUND TAP'),
-    hit: () => {
-      const blocked = audio.on && audio.state !== 'running';
-      audio.arm();
-      if (!blocked) audio.toggle();
+const TABS = ['VEHICLE', 'WORLD', 'SYSTEM'];
+const TAB_ITEMS: Item[][] = [
+  [],   // the vehicle bay is a readout, not a control panel
+  [
+    { col: () => UI.gold, label: () => 'ELSEWHERE', hit: () => { location.href = location.pathname + '?random=1'; } },
+    { col: () => UI.edge, label: () => (alien ? 'SCRIPT ALIEN' : 'SCRIPT PLAIN'), hit: () => toggleAlien() },
+  ],
+  [
+    {
+      col: () => (audio.on && audio.state === 'running' ? UI.good : UI.soft),
+      label: () => (!audio.on ? 'SOUND OFF' : audio.state === 'running' ? 'SOUND ON' : 'SOUND TAP'),
+      hit: () => {
+        const blocked = audio.on && audio.state !== 'running';
+        audio.arm();
+        if (!blocked) audio.toggle();
+      },
     },
-  },
-  { col: () => UI.edge, label: () => (alien ? 'SCRIPT ALIEN' : 'SCRIPT PLAIN'), hit: () => toggleAlien() },
-  { col: () => UI.soft, label: () => 'HIDE HUD', hit: () => { menuOpen = false; setClean(true); } },
+    { col: () => UI.soft, label: () => 'HIDE HUD', hit: () => { menuTab = null; setClean(true); } },
+  ],
 ];
-let menuOpen = false;
+// Straight off the sheet — the parts of the rig that are not geometry.
+const SPEC_TEXT: Array<[string, string]> = [
+  ['CLASS', 'OVERLAND / RALLY'], ['DRIVE', '4X4'], ['CURB', '2100KG'], ['PAYLOAD', '800KG'],
+  ['FUEL', 'BIODIESEL / ALGAE'], ['RANGE', '1200KM EST'], ['SOLAR', '2.4KW PEAK'],
+  ['BATTERY', '10KWH LIFEPO4'], ['WATER', '120L'],
+];
+let menuTab: number | null = null;   // null = closed
 let menuRect = { x: 0, y: 0, w: 0, h: 0 };
+let closeRect = { x: 0, y: 0, w: 0, h: 0 };
+// The hole the renderer scissors the studio render into (HUD pixels).
+let vehRect = { x: 0, y: 0, w: 0, h: 0 };
+const tabRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
 const itemRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
 const CARD8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 let placeLine = '';
 // POI pins, filled by updatePois and drawn in the pixel font.
-interface PoiDraw { x: number; y: number; t: string; c: string; edge: 0 | -1 | 1 }
+interface PoiDraw { x: number; y: number; t: string; c: string; edge: 0 | -1 | 1; rng: boolean }
 let poiDraw: PoiDraw[] = [];
 let streaming = false;
 
@@ -3872,14 +4059,28 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     if (p.edge === 0) {
       const x = clamp(Math.round(p.x / hudS - w / 2), 2, HW - w - 2);
       const y = clamp(Math.round(p.y / hudS), 22, HH - 40);
-      textEdgeS(label, x + 3, y - 9, UI.text);
+      textEdgeS(label, x + 3, y - 9, p.rng ? UI.gold : UI.text);
       hctx.fillStyle = p.c;
       hctx.fillRect(Math.round(x + w / 2), y - 3, 1, 5);      // stem
       hctx.fillRect(Math.round(x + w / 2) - 1, y + 2, 3, 3);  // pin head
+      if (p.rng) {
+        // IN RANGE: brackets around the label. This is the state that becomes
+        // the interaction later — a place you have arrived AT, rather than one
+        // you are navigating toward.
+        const cxp = Math.round(x + w / 2);
+        hctx.fillStyle = UI.gold;
+        for (const s of [-1, 1]) {
+          const bx = cxp + s * Math.round(w / 2 + 2);
+          hctx.fillRect(bx, y - 12, 1, 8);
+          hctx.fillRect(bx - (s > 0 ? 2 : 0), y - 12, 3, 1);
+          hctx.fillRect(bx - (s > 0 ? 2 : 0), y - 5, 3, 1);
+        }
+        hctx.fillRect(cxp - 2, y + 1, 5, 1);                  // a base, not a point
+      }
     } else {
       const y = clamp(Math.round(p.y / hudS), 20, HH - 30);
       const x = p.edge > 0 ? HW - w - 3 : 3;
-      textEdgeS(label, x + 3, y + 2, p.c);
+      textEdgeS(label, x + 3, y + 2, p.rng ? UI.gold : p.c);
     }
   }
   // ── compass: the full width of the screen, centred ──
@@ -3910,11 +4111,10 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   hctx.fillRect(Math.round(cx0 + cw / 2), cy0 + 18, 1, 1);
   // ── place, and the menu button opposite it ──
   const row = cy0 + 22;
-  const mLabel = menuOpen ? 'CLOSE' : 'MENU';
-  const menuW = textW(mLabel) + 8;
+  const menuW = textW('MENU') + 8;
   menuRect = { x: HW - menuW - pad, y: row, w: menuW, h: 12 };
-  panel(menuRect.x, menuRect.y, menuW, 12, menuOpen ? UI.gold : UI.edge);
-  text(hctx, mLabel, menuRect.x + 4, row + 3, menuOpen ? UI.gold : UI.edge);
+  panel(menuRect.x, menuRect.y, menuW, 12, UI.edge);
+  text(hctx, 'MENU', menuRect.x + 4, row + 3, UI.edge);
   if (placeLine) {
     const shown = fit(placeLine, HW - menuW - pad * 4);
     textEdge(shown, pad + 1, row + 3, UI.text);
@@ -3934,19 +4134,9 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     const x2 = Math.round((HW - w2) / 2);
     textEdge(t2, x2 + 5, Math.round(HH * 0.32) + 3, UI.bad);
   }
-  // ── the menu itself ──
   itemRects.length = 0;
-  if (menuOpen) {
-    let iw = 0;
-    for (const it of menu) iw = Math.max(iw, textW(it.label()) + 10);
-    const ix = HW - iw - pad, iy = row + 14;
-    panel(ix, iy, iw, menu.length * 11 + 4, UI.gold);
-    for (let i = 0; i < menu.length; i++) {
-      const y = iy + 3 + i * 11;
-      text(hctx, menu[i].label(), ix + 5, y, menu[i].col());
-      itemRects.push({ x: ix, y: y - 2, w: iw, h: 11, i });
-    }
-  }
+  tabRects.length = 0;
+  vehRect = { x: 0, y: 0, w: 0, h: 0 };
   // ── the dock, bottom-left: whichever view ISN'T fullscreen ──
   // While charting, the renderer scissors a live POV preview into this square,
   // so the HUD must leave it EMPTY — blitting the minimap here painted straight
@@ -3979,6 +4169,104 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   panel(sx, spy, sw, 18, UI.gold);
   glowText(digits, sx + 4, spy + 3, UI.gold, 2);
   text(hctx, 'KM/H', sx + 8 + textW(digits, 2), spy + 9, UI.edge);
+  // LAST: the modal covers the instruments, not the other way round.
+  if (menuTab !== null) drawMenu(menuTab, kmh, surf);
+}
+// The interstitial. A scrim over the whole screen, a bordered page, tabs, and
+// on VEHICLE a hole the renderer draws the truck into — the same scissor trick
+// the POV dock uses, so the HUD must leave that rectangle EMPTY.
+function drawMenu(tab: number, kmh: number, surf: Surface): void {
+  hctx.fillStyle = 'rgba(6,14,17,0.9)';
+  hctx.fillRect(0, 0, HW, HH);
+  const MX = 5, MY = 5, MW = HW - 10, MH = HH - 10;
+  panel(MX, MY, MW, MH, UI.gold);
+  // ── header ──
+  text(hctx, 'PARIS', MX + 5, MY + 5, UI.gold);
+  // The arrow is drawn, not typed: → is not in the 5x7 set and the system-font
+  // fallback renders it as a stray dash at this size.
+  {
+    const ax = MX + 8 + textW('PARIS'), ay = MY + 8;
+    hctx.fillStyle = UI.hot;
+    hctx.fillRect(ax, ay, 7, 1);
+    hctx.fillRect(ax + 4, ay - 1, 1, 1); hctx.fillRect(ax + 5, ay - 2, 1, 1);
+    hctx.fillRect(ax + 4, ay + 1, 1, 1); hctx.fillRect(ax + 5, ay + 2, 1, 1);
+  }
+  text(hctx, 'DAKAR', MX + 19 + textW('PARIS'), MY + 5, UI.gold);
+  textSmall(hctx, 'SOLARPUNK RALLY RIG', MX + 5, MY + 14, UI.dim);
+  const cw2 = textW('X') + 8;
+  closeRect = { x: MX + MW - cw2 - 3, y: MY + 3, w: cw2, h: 12 };
+  panel(closeRect.x, closeRect.y, cw2, 12, UI.hot);
+  text(hctx, 'X', closeRect.x + 4, MY + 6, UI.hot);
+  hctx.fillStyle = UI.dim;
+  hctx.fillRect(MX + 4, MY + 21, MW - 8, 1);
+  // ── tabs ──
+  let tx = MX + 5;
+  for (let i = 0; i < TABS.length; i++) {
+    const w = textW(TABS[i]) + 8;
+    const on = tab === i;
+    if (on) panel(tx, MY + 25, w, 12, UI.gold);
+    text(hctx, TABS[i], tx + 4, MY + 28, on ? UI.gold : UI.soft);
+    tabRects.push({ x: tx, y: MY + 25, w, h: 12, i });
+    tx += w + 3;
+  }
+  const top = MY + 41;
+  if (tab === 0) {
+    // ── the bay: a live window onto the actual truck ──
+    const vh = Math.min(160, Math.round(MH * 0.38));
+    vehRect = { x: MX + 4, y: top, w: MW - 8, h: vh };
+    frame(vehRect.x, vehRect.y, vehRect.w, vehRect.h, UI.edge);
+    textSmall(hctx, 'DAK 23', vehRect.x + 4, vehRect.y + vehRect.h - 8, UI.gold);
+    // ── measured against the sheet ──
+    const spec = truckSpec();
+    let y = top + vh + 6;
+    textSmall(hctx, 'DIMENSIONS      BUILT   SPEC', MX + 6, y, UI.dim);
+    y += 8;
+    for (const k of ['length', 'width', 'height', 'wheelbase', 'clearance'] as const) {
+      const built = spec[k], want = SPEC_TARGET[k];
+      const ok = Math.abs(built - want) <= 0.03;
+      textSmall(hctx, k.toUpperCase(), MX + 6, y, UI.soft);
+      textSmall(hctx, `${built.toFixed(2)}M`, MX + 68, y, ok ? UI.good : UI.hot);
+      textSmall(hctx, `${want.toFixed(2)}M`, MX + 96, y, UI.dim);
+      y += 7;
+    }
+    y += 4;
+    for (const [k, v] of SPEC_TEXT) {
+      textSmall(hctx, k, MX + 6, y, UI.soft);
+      textSmall(hctx, v, MX + 46, y, UI.text);
+      y += 7;
+    }
+  } else {
+    // ── readouts, then the controls for this tab ──
+    let y = top;
+    const rows: Array<[string, string]> = tab === 1
+      ? [
+        ['PLACE', fit(placeLine || '—', MW - 60).toUpperCase()],
+        ['BIOME', biome.name.toUpperCase()],
+        ['WEATHER', WX[wx.sky].label + (wx.wet > 0.05 ? ' WET' : '')],
+        ['SURFACE', surf === 'road' ? 'ROAD' : surf === 'water' ? 'WATER' : 'ROUGH'],
+        ['SPEED', `${kmh} KM/H`],
+        ['HEADING', `${Math.round((((state.heading * 180) / Math.PI) % 360 + 360) % 360)}°`],
+      ]
+      : [
+        ['SOUND', audio.on ? (audio.state === 'running' ? 'ON' : 'NEEDS TAP') : 'OFF'],
+        ['RENDER', `${PIX_H}P PIXEL`],
+        ['SCRIPT', alien ? 'ALIEN' : 'PLAIN'],
+      ];
+    for (const [k, v] of rows) {
+      textSmall(hctx, k, MX + 6, y, UI.dim);
+      textSmall(hctx, v, MX + 52, y, UI.text);
+      y += 8;
+    }
+    y += 6;
+    const items = TAB_ITEMS[tab];
+    for (let i = 0; i < items.length; i++) {
+      const w = Math.max(textW(items[i].label()) + 10, 70);
+      panel(MX + 5, y, w, 13, items[i].col());
+      text(hctx, items[i].label(), MX + 10, y + 4, items[i].col());
+      itemRects.push({ x: MX + 5, y, w, h: 13, i });
+      y += 16;
+    }
+  }
 }
 let dockRect = { x: 0, y: 0, w: 0, h: 0 };
 function setClean(on: boolean): void {
@@ -3992,12 +4280,16 @@ function hudTap(cx: number, cy: number): boolean {
   const x = cx / hudS, y = cy / hudS;
   const inside = (r: { x: number; y: number; w: number; h: number }, m = 2): boolean =>
     x >= r.x - m && x <= r.x + r.w + m && y >= r.y - m && y <= r.y + r.h + m;
-  if (inside(menuRect)) { menuOpen = !menuOpen; return true; }
-  if (menuOpen) {
-    for (const r of itemRects) if (inside(r, 0)) { menu[r.i].hit(); menuOpen = false; return true; }
-    menuOpen = false; // a tap anywhere else dismisses
+  if (menuTab !== null) {
+    // The modal is MODAL: every tap inside it belongs to it, and none of them
+    // reach the world underneath.
+    const tab = menuTab; // switching tabs below reassigns it mid-block
+    if (inside(closeRect)) { menuTab = null; return true; }
+    for (const r of tabRects) if (inside(r, 0)) { menuTab = r.i; return true; }
+    for (const r of itemRects) if (inside(r, 0)) { TAB_ITEMS[tab]?.[r.i]?.hit(); return true; }
     return true;
   }
+  if (inside(menuRect)) { menuTab = 0; return true; }
   if (inside(dockRect, 0)) { toggleCam(); return true; }
   if (inside(placeRect)) { toggleAlien(); return true; }
   return false;
