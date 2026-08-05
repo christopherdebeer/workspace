@@ -5768,11 +5768,14 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     const w = WX[wx.sky];
     const wcol = wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft;
     textSmall(hctx, 'WEATHER', pad + 3, sy + 25, UI.dim);
-    textSmall(hctx, w.label, pad + 34, sy + 25, wcol);
     // The bearing rides on the weather line, not the wet line: beside a bar it
     // had four pixels of air and read as part of the meter.
     const hs = `${CARD8[Math.round(deg / 45) % 8]}${Math.round(deg)}`;
-    textSmall(hctx, hs, pad + CONDW - textSW(hs) - 4, sy + 25, UI.gold);
+    // Two readouts on one line need a hard divider between them, or CLEAR and
+    // W290 butt together into one word. Clip the label, never the bearing.
+    const hx = pad + CONDW - textSW(hs) - 4;
+    textSmall(hctx, fitS(w.label, hx - (pad + 34) - 4), pad + 34, sy + 25, wcol);
+    textSmall(hctx, hs, hx, sy + 25, UI.gold);
     // Standing water is grip you have already lost — worth its own bar.
     textSmall(hctx, 'WET', pad + 3, sy + 34, UI.dim);
     meter(pad + 20, sy + 34, 12, Math.round(clamp(wx.wet, 0, 1) * 12), wx.wet > 0.5 ? UI.bad : UI.edge, 3, 3, 1);
