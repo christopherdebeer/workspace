@@ -5752,7 +5752,9 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   // Drawn LATER (mid-top, see below); this only clears last frame's hit target.
   missionRect = { x: 0, y: 0, w: 0, h: 0 };
   const mx = pad;
-  const CONDW = Math.max(74, mw + 16);
+  // Floor sized so the widest weather word (STORM) and the widest bearing
+  // (NE270) both fit whole on one line with air between them.
+  const CONDW = Math.max(82, mw + 16);
   const condH = 42;
   const sy = my - condH - 3;
   // ── conditions: surface, grip, weather, wetness, heading ──
