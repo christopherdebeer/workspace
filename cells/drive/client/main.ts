@@ -78,14 +78,32 @@ const OVERPASS = [
 let overpassI = 0;
 async function overpass(query: string): Promise<any> {
   for (let attempt = 0; attempt < OVERPASS.length; attempt++) {
-    const url = OVERPASS[(overpassI + attempt) % OVERPASS.length];
+    // The index must come from `attempt` ALONE. Bumping overpassI inside the
+    // loop as well made each failure advance the cursor twice, so four attempts
+    // reached two distinct mirrors and skipped the other two entirely.
+    const idx = (overpassI + attempt) % OVERPASS.length;
+    // And a mirror that ACCEPTS the connection then never answers is the common
+    // failure, not one that refuses it — fetch has no default timeout, so a
+    // single sulking mirror stalled the whole world stream indefinitely. That
+    // is what "waited ages for roads" looked like from the inside.
+    const ctl = new AbortController();
+    // Generous: a busy-but-alive mirror can take half a minute on a dense
+    // urban tile, and cutting those off is worse than the hang this prevents.
+    // The bound only has to be finite.
+    const bail = setTimeout(() => ctl.abort(), 45000);
     try {
-      const res = await fetch(url, { method: 'POST', body: 'data=' + encodeURIComponent(query) });
+      const res = await fetch(OVERPASS[idx], {
+        method: 'POST', body: 'data=' + encodeURIComponent(query), signal: ctl.signal,
+      });
       if (res.status === 429 || res.status === 504) throw new Error('busy');
       if (!res.ok) throw new Error(String(res.status));
-      return await res.json();
+      const json = await res.json();
+      overpassI = idx; // stick with whichever mirror is actually answering today
+      return json;
     } catch {
-      overpassI++; // rotate mirrors on failure
+      /* next mirror */
+    } finally {
+      clearTimeout(bail);
     }
   }
   throw new Error('overpass unreachable');
@@ -961,15 +979,81 @@ ghostify(MAT.green);
 // NOT the tunnel shell: dithering holes in a dark interior against the sky
 // reads as a ragged black cut-out, not as transparency. A buried tube needs
 // no ghosting anyway — the hillside above it is already doing the work.
+// ── façades ────────────────────────────────────────────────────────
+// A wall texture gives you grain; it cannot give you a BUILDING. Openings have
+// to land on floors, doors have to be at street level, and ivy has to climb
+// from the ground — none of which a tiling bitmap knows about. So the openings
+// are generated in the fragment shader from the world position, with the
+// building's own base height taken from its model matrix, which means floors
+// line up per building no matter what the terrain under it is doing.
+function facade(mat: THREE.Material): void {
+  mat.onBeforeCompile = (sh) => {
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vFacW; varying vec3 vFacN; varying float vFacH;')
+      .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+        vec4 facW = modelMatrix * vec4(transformed, 1.0);
+        vFacW = facW.xyz;
+        vFacN = mat3(modelMatrix) * objectNormal;
+        vFacH = facW.y - modelMatrix[3][1];`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vFacW; varying vec3 vFacN; varying float vFacH;
+        float fah(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 41.31); return fract(p.x * p.y); }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+      {
+        vec3 fn = normalize(vFacN);
+        // Roofs and floor slabs get grime and nothing else — a window in the
+        // ceiling is the giveaway that this is a texture and not a building.
+        if (abs(fn.y) < 0.55) {
+          // Run the bay grid along whichever horizontal axis this wall faces.
+          float u = abs(fn.x) > abs(fn.z) ? vFacW.z : vFacW.x;
+          vec2 cell = vec2(u / 2.75, vFacH / 3.1);
+          vec2 idc = floor(cell), f = fract(cell);
+          float r = fah(idc + vec2(7.13, 3.31));
+          float win = step(0.2, f.x) * step(f.x, 0.8) * step(0.34, f.y) * step(f.y, 0.86);
+          float door = step(0.33, f.x) * step(f.x, 0.67) * step(0.03, f.y) * step(f.y, 0.6);
+          // Street level is doorways and shopfronts; above it, windows.
+          float ground = step(vFacH, 3.1);
+          float open = mix(win, mix(win * step(0.52, f.y), door, step(r, 0.36)), ground);
+          open *= step(r, 0.76);                    // the rest are bricked up
+          // Glass: mostly dark voids, a few catching the low sun.
+          vec3 glass = mix(vec3(0.05, 0.055, 0.07), vec3(0.13, 0.15, 0.17), fah(idc + vec2(2.7)));
+          glass = mix(glass, vec3(0.62, 0.44, 0.2), step(0.94, fah(idc + vec2(11.3, 5.7))) * 0.75);
+          diffuseColor.rgb = mix(diffuseColor.rgb, glass, open * 0.9);
+          // A one-pixel lintel/sill so the opening has an edge, not just a hole.
+          float lint = step(0.86, f.y) * step(0.2, f.x) * step(f.x, 0.8) * (1.0 - ground);
+          diffuseColor.rgb *= 1.0 - lint * 0.25;
+          // IVY. Whole columns of wall get claimed, thickest at the base and
+          // thinning as it climbs — which is what makes a ruin read as reclaimed
+          // rather than merely dirty.
+          float colv = floor(u * 0.8);
+          float vine = smoothstep(0.6, 0.95, fah(vec2(colv, 17.3)))
+            * exp(-vFacH * 0.13)
+            * (0.5 + 0.5 * fah(vec2(colv, floor(vFacH * 0.75))));
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.11, 0.21, 0.09), clamp(vine, 0.0, 0.8));
+        }
+        // Water staining below every horizontal break, on every face.
+        diffuseColor.rgb *= 1.0 - 0.16 * fah(floor(vFacW.xz * 1.7) + floor(vFacH * 2.3));
+      }`);
+  };
+}
 // Building tints vary per way id so a block reads as parcels, not one slab.
 // Extrude material slots: [0]=caps (roof), [1]=side walls (darker).
 const B_MATS = [0xa59a85, 0x92897a, 0x9d937f, 0x878071].map((c, i) => {
-  const side = new THREE.Color(c).multiplyScalar(0.72);
+  // Walls carry the detail now — openings, lintels, ivy — and at 0.72 under a
+  // low sun there was not enough wall left for any of it to read against.
+  const side = new THREE.Color(c).multiplyScalar(0.88);
+  const wall = new THREE.MeshLambertMaterial({ color: side, map: wallTexes[i % wallTexes.length], side: DS });
+  facade(wall);
   return [
     new THREE.MeshLambertMaterial({ color: c, map: roofTex, side: DS }),
-    new THREE.MeshLambertMaterial({ color: side, map: wallTexes[i % wallTexes.length], side: DS }),
+    wall,
   ] as [THREE.Material, THREE.Material];
 });
+// Ruins carry their weathering in vertex colours instead of a map, so every
+// wall segment can rot at its own rate.
+const ruinMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: DS });
+facade(ruinMat);
 // Water gets its own surface treatment. A static ripple texture reads as wet
 // paint; this scrolls two noise layers against each other for the swell,
 // brightens the crests, and adds a sun glint that tracks the light — enough
@@ -1320,33 +1404,138 @@ const birds = new THREE.InstancedMesh(birdGeo, birdMat, BIRD_N);
 birds.frustumCulled = false;
 birds.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 scene.add(birds);
-const HERD_N = 18, HERD_BOX = 220;
-const herdGeo = new THREE.BoxGeometry(0.7, 0.8, 1.7);
-herdGeo.translate(0, 0.75, 0);
-const herdMat = new THREE.MeshLambertMaterial({ color: 0x6b5a41, flatShading: true });
-const herd = new THREE.InstancedMesh(herdGeo, herdMat, HERD_N);
-herd.frustumCulled = false;
-herd.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-scene.add(herd);
-interface Critter { x: number; y: number; z: number; vx: number; vy: number; vz: number; ph: number }
+// ── the herd: three real animals, not one box ──────────────────────
+// Each species is a pile of coloured boxes welded into ONE BufferGeometry, so
+// a whole herd of them is still a single instanced draw. Local +z is forward
+// (that is what `yaw = atan2(vx, vz)` below implies), y=0 is the ground.
+function boxPart(w: number, h: number, d: number, x: number, y: number, z: number, col: number, rx = 0, ry = 0): THREE.BufferGeometry {
+  const g = new THREE.BoxGeometry(w, h, d).toNonIndexed();
+  if (rx) g.rotateX(rx);
+  if (ry) g.rotateY(ry);
+  g.translate(x, y, z);
+  const n = g.attributes.position.count;
+  const arr = new Float32Array(n * 3);
+  // Vertex colours live in LINEAR space — three converts a hex through
+  // ColorManagement on the way into Color, and does not touch the attribute.
+  const c = new THREE.Color(col);
+  for (let i = 0; i < n; i++) { arr[i * 3] = c.r; arr[i * 3 + 1] = c.g; arr[i * 3 + 2] = c.b; }
+  g.setAttribute('color', new THREE.BufferAttribute(arr, 3));
+  return g;
+}
+function mergeParts(parts: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  let total = 0;
+  for (const g of parts) total += g.attributes.position.count;
+  const pos = new Float32Array(total * 3), nor = new Float32Array(total * 3), col = new Float32Array(total * 3);
+  let o = 0;
+  for (const g of parts) {
+    pos.set(g.attributes.position.array as Float32Array, o * 3);
+    nor.set(g.attributes.normal.array as Float32Array, o * 3);
+    col.set(g.attributes.color.array as Float32Array, o * 3);
+    o += g.attributes.position.count;
+    g.dispose();
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  out.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+  out.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return out;
+}
+// Legs at the four corners, one call.
+const legs = (w: number, h: number, d: number, sx: number, fz: number, bz: number, col: number): THREE.BufferGeometry[] =>
+  [[-sx, fz], [sx, fz], [-sx, bz], [sx, bz]].map(([x, z]) => boxPart(w, h, d, x, h / 2, z, col));
+// DEER — light, long-legged, head carried high, antlers.
+const deerGeo = mergeParts([
+  boxPart(0.52, 0.6, 1.3, 0, 0.98, 0, 0x8a6136),          // barrel
+  boxPart(0.44, 0.3, 0.9, 0, 0.78, -0.15, 0xb09371),      // pale belly
+  boxPart(0.3, 0.24, 0.34, 0, 0.98, -0.7, 0xd8cdb4),      // rump patch
+  boxPart(0.26, 0.56, 0.28, 0, 1.4, 0.6, 0x8a6136, 0.35), // neck, raked forward
+  boxPart(0.23, 0.24, 0.48, 0, 1.66, 0.88, 0x7d5730),     // head
+  boxPart(0.32, 0.1, 0.1, 0, 1.76, 0.72, 0x6b4a2a),       // ears
+  ...[-0.09, 0.09].flatMap((sx) => [                       // antlers: beam + tines
+    boxPart(0.05, 0.42, 0.05, sx, 1.96, 0.74, 0xbdae90),
+    boxPart(0.05, 0.05, 0.3, sx, 2.1, 0.86, 0xbdae90),
+    boxPart(0.18, 0.05, 0.05, sx * 2.4, 2.14, 0.7, 0xbdae90),
+  ]),
+  boxPart(0.14, 0.2, 0.12, 0, 1.02, -0.72, 0xd8cdb4),     // flag tail
+  ...legs(0.11, 0.92, 0.13, 0.2, 0.48, -0.48, 0x5f4126),
+]);
+// BISON — mass forward: a shoulder hump twice the height of the hindquarters,
+// head slung low, stubby legs. The silhouette is the whole character.
+const bisonGeo = mergeParts([
+  boxPart(0.88, 0.8, 1.05, 0, 1.18, -0.5, 0x4a3a2c),      // hindquarters
+  boxPart(1.02, 1.12, 1.0, 0, 1.36, 0.42, 0x5d4a35),      // hump/shoulder shag
+  boxPart(0.9, 0.5, 0.5, 0, 1.02, 0.92, 0x382c22),        // chest
+  boxPart(0.58, 0.56, 0.62, 0, 0.96, 1.26, 0x2f2620),     // head, carried low
+  boxPart(0.5, 0.34, 0.2, 0, 0.66, 1.3, 0x241c17),        // beard
+  ...[-1, 1].map((s) => boxPart(0.3, 0.11, 0.11, s * 0.4, 1.22, 1.24, 0xa89a7d)),  // horns out
+  ...[-1, 1].map((s) => boxPart(0.11, 0.16, 0.11, s * 0.52, 1.32, 1.22, 0xa89a7d)),// and up
+  boxPart(0.12, 0.34, 0.12, 0, 1.1, -1.02, 0x2f2620),     // tail
+  ...legs(0.22, 0.82, 0.24, 0.32, 0.6, -0.6, 0x2b221b),
+]);
+// HORSE — the long one: deep barrel, arched neck, mane and a full tail.
+const horseGeo = mergeParts([
+  boxPart(0.6, 0.76, 1.7, 0, 1.3, -0.1, 0x6b4a34),        // barrel
+  boxPart(0.52, 0.3, 1.2, 0, 1.02, -0.1, 0x7d5b40),       // belly
+  boxPart(0.3, 0.72, 0.44, 0, 1.72, 0.78, 0x6b4a34, 0.42),// neck
+  boxPart(0.25, 0.28, 0.6, 0, 2.02, 1.06, 0x5c3e2b),      // head
+  boxPart(0.27, 0.16, 0.2, 0, 1.94, 1.32, 0x3a2618),      // muzzle
+  boxPart(0.12, 0.42, 0.66, 0, 1.98, 0.72, 0x2a2018),     // mane
+  boxPart(0.18, 0.6, 0.18, 0, 1.34, -1.0, 0x2a2018),      // tail
+  ...legs(0.15, 1.12, 0.17, 0.24, 0.62, -0.66, 0x4a3324),
+]);
+const HERD_GEO = [deerGeo, bisonGeo, horseGeo];
+// Who lives where. Weights per biome — no bison in the rainforest, and the
+// desert is horse country.
+const HERD_MIX: Record<string, number[]> = {
+  arid: [3, 1, 5], tropical: [7, 0, 2], temperate: [5, 3, 3], boreal: [6, 4, 1], alpine: [5, 3, 3],
+};
+const HERD_N = 26, HERD_BOX = 240;
+// White base: the product of the vertex colour and the per-instance tint IS
+// the final colour, so the material must not scale either of them.
+const herdMat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, flatShading: true });
+const herds = HERD_GEO.map((g) => {
+  const m = new THREE.InstancedMesh(g, herdMat, HERD_N);
+  m.frustumCulled = false;
+  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(HERD_N * 3).fill(1), 3);
+  m.instanceColor.setUsage(THREE.DynamicDrawUsage);
+  scene.add(m);
+  return m;
+});
+interface Critter { x: number; y: number; z: number; vx: number; vy: number; vz: number; ph: number; sp: number; tint: THREE.Color }
+function pickSpecies(): number {
+  const mix = HERD_MIX[biome.name] ?? HERD_MIX.temperate;
+  let total = 0;
+  for (const w of mix) total += w;
+  let t = Math.random() * total;
+  for (let i = 0; i < mix.length; i++) { t -= mix[i]; if (t <= 0) return i; }
+  return 0;
+}
 const mkPop = (n: number, box: number, air: boolean): Critter[] =>
   Array.from({ length: n }, () => ({
     x: (Math.random() - 0.5) * box, y: air ? 30 + Math.random() * 40 : 0, z: (Math.random() - 0.5) * box,
     vx: (Math.random() - 0.5) * 6, vy: 0, vz: (Math.random() - 0.5) * 6, ph: Math.random() * 6.283,
+    sp: air ? 0 : pickSpecies(),
+    // A coat is never twice the same: ±15% brightness, a touch warm or cool.
+    tint: new THREE.Color().setHSL(0.07 + Math.random() * 0.05, 0.18 + Math.random() * 0.2, 0.44 + Math.random() * 0.16)
+      .multiplyScalar(2.1),
   }));
 const flock = mkPop(BIRD_N, BIRD_BOX, true);
 const graze = mkPop(HERD_N, HERD_BOX, false);
 const critterDummy = new THREE.Object3D();
+// Yaw FIRST, then pitch about the animal's own axis — with the default XYZ
+// order a galloping bob would pitch about the world x and shear the herd.
+critterDummy.rotation.order = 'YXZ';
 // One boids step: cohere to the local centre, separate from close neighbours,
 // align with their heading — then flee the truck, which overrides everything.
-function stepPop(pop: Critter[], mesh: THREE.InstancedMesh, dt: number, o: {
+function stepPop(pop: Critter[], meshes: THREE.InstancedMesh[], dt: number, o: {
   box: number; air: boolean; speed: number; fear: number; sep: number; turn: number;
 }): void {
   const cx = camera.position.x, cz = camera.position.z;
   let mx = 0, mz = 0, mvx = 0, mvz = 0;
   for (const c of pop) { mx += c.x; mz += c.z; mvx += c.vx; mvz += c.vz; }
   mx /= pop.length; mz /= pop.length; mvx /= pop.length; mvz /= pop.length;
-  let n = 0;
+  const counts = meshes.map(() => 0);
   for (const c of pop) {
     let ax = (mx - c.x) * 0.06 + (mvx - c.vx) * 0.35;   // cohesion + alignment
     let az = (mz - c.z) * 0.06 + (mvz - c.vz) * 0.35;
@@ -1386,20 +1575,36 @@ function stepPop(pop: Critter[], mesh: THREE.InstancedMesh, dt: number, o: {
     if (c.x - cx > h) c.x -= o.box; else if (cx - c.x > h) c.x += o.box;
     if (c.z - cz > h) c.z -= o.box; else if (cz - c.z > h) c.z += o.box;
     const yaw = Math.atan2(c.vx, c.vz);
-    critterDummy.position.set(c.x, c.y, c.z);
-    critterDummy.rotation.set(0, yaw, o.air ? Math.sin(c.ph) * 0.5 : 0); // birds bank on the wingbeat
-    critterDummy.scale.setScalar(o.air ? 1 : 1.1 + Math.sin(c.ph * 0.5) * 0.04);
+    // GAIT. Four legs welded to the body can't stride, so the animal rides its
+    // own stride instead: a bob and a pitch on the same phase, scaled by how
+    // hard it is actually running. At a walk it is barely there; fleeing the
+    // truck the whole herd starts porpoising.
+    const gait = o.air ? 0 : Math.min(1, Math.hypot(c.vx, c.vz) / (o.speed * 2));
+    critterDummy.position.set(c.x, c.y + (o.air ? 0 : Math.abs(Math.sin(c.ph * 1.7)) * 0.14 * gait), c.z);
+    critterDummy.rotation.set(
+      o.air ? 0 : Math.sin(c.ph * 1.7 + 0.9) * 0.11 * gait,
+      yaw,
+      o.air ? Math.sin(c.ph) * 0.5 : Math.sin(c.ph * 0.85) * 0.04 * gait, // birds bank; beasts sway
+    );
+    critterDummy.scale.setScalar(o.air ? 1 : 0.94 + (c.sp === 1 ? 0.06 : 0.12) * Math.sin(c.ph * 0.5) + 0.06);
     critterDummy.updateMatrix();
-    mesh.setMatrixAt(n++, critterDummy.matrix);
+    const mesh = meshes[c.sp] ?? meshes[0];
+    const idx = counts[c.sp] ?? counts[0];
+    mesh.setMatrixAt(idx, critterDummy.matrix);
+    mesh.instanceColor?.setXYZ(idx, c.tint.r, c.tint.g, c.tint.b);
+    counts[c.sp] = idx + 1;
   }
-  mesh.count = n;
-  mesh.instanceMatrix.needsUpdate = true;
+  for (let i = 0; i < meshes.length; i++) {
+    meshes[i].count = counts[i];
+    meshes[i].instanceMatrix.needsUpdate = true;
+    if (meshes[i].instanceColor) meshes[i].instanceColor!.needsUpdate = true;
+  }
 }
 function stepWildlife(dt: number): void {
   // Rain grounds the birds; a storm keeps them down entirely.
   birds.visible = wx.rain < 0.5;
-  if (birds.visible) stepPop(flock, birds, dt, { box: BIRD_BOX, air: true, speed: 11, fear: 55, sep: 7, turn: 1 });
-  stepPop(graze, herd, dt, { box: HERD_BOX, air: false, speed: 2.2, fear: 45, sep: 5, turn: 1.6 });
+  if (birds.visible) stepPop(flock, [birds], dt, { box: BIRD_BOX, air: true, speed: 11, fear: 55, sep: 7, turn: 1 });
+  stepPop(graze, herds, dt, { box: HERD_BOX, air: false, speed: 2.4, fear: 48, sep: 6, turn: 1.6 });
 }
 
 // ── the map layer (minimap base, FOG_SPAN frame, north-up) ─────────
@@ -1458,6 +1663,109 @@ function pointInPoly(px: number, pz: number, pts: Array<[number, number]>): bool
     if (zi > pz !== zj > pz && px < ((xj - xi) * (pz - zi)) / (zj - zi) + xi) inside = !inside;
   }
   return inside;
+}
+// ── never inside a building ────────────────────────────────────────
+// The wall grid alone cannot save you here. It pushes the car off any edge
+// within CAR_R, which is exactly the wrong behaviour once you are PAST the
+// edge: stand in the middle of a warehouse and no segment is near enough to
+// push at all, and the moment you drive at a wall from the inside it shoves
+// you back in. You can spawn there, or a building can stream in on top of you.
+// So footprints are indexed as POLYGONS too, and containment is escaped by
+// leaving through the nearest wall rather than by bouncing off it.
+const plotGrid = new Map<string, Array<Array<[number, number]>>>();
+function addPlot(pts: Array<[number, number]>): void {
+  let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
+  for (const [x, z] of pts) { minx = Math.min(minx, x); minz = Math.min(minz, z); maxx = Math.max(maxx, x); maxz = Math.max(maxz, z); }
+  for (let cx = Math.floor(minx / GRID); cx <= Math.floor(maxx / GRID); cx++)
+    for (let cz = Math.floor(minz / GRID); cz <= Math.floor(maxz / GRID); cz++) {
+      const k = `${cx},${cz}`;
+      let arr = plotGrid.get(k);
+      if (!arr) plotGrid.set(k, (arr = []));
+      arr.push(pts);
+    }
+}
+// Nearest point on a polygon's boundary, and how far away it is.
+function nearestOnPoly(px: number, pz: number, pts: Array<[number, number]>): [number, number, number] {
+  let bx = px, bz = pz, bd = Infinity;
+  for (let i = 0; i < pts.length; i++) {
+    const [ax, az] = pts[i], [cx, cz] = pts[(i + 1) % pts.length];
+    const dx = cx - ax, dz = cz - az;
+    const t = clamp(((px - ax) * dx + (pz - az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    const qx = ax + dx * t, qz = az + dz * t;
+    const d = Math.hypot(px - qx, pz - qz);
+    if (d < bd) { bd = d; bx = qx; bz = qz; }
+  }
+  return [bx, bz, bd];
+}
+function insidePlot(x: number, z: number): boolean {
+  for (const pts of plotGrid.get(gkey(x, z)) ?? []) if (pointInPoly(x, z, pts)) return true;
+  return false;
+}
+// If (x,z) is inside any footprint, return a point OUTSIDE every footprint;
+// otherwise null.
+//
+// Leaving through the nearest wall is the cheap case and handles a lone
+// building. It is NOT enough on a real city block: Manhattan footprints share
+// party walls, so the nearest wall is often an interior one and stepping
+// through it just lands you in the neighbour. Measured on 456 drops into
+// midtown, wall-stepping alone left 280 still indoors. So when the cheap path
+// fails to find daylight, sweep outward on rings until a free point turns up —
+// that terminates as long as the block is finite, which every block is.
+function escapeBuildings(x: number, z: number, clear: number): [number, number] | null {
+  if (!insidePlot(x, z)) return null;
+  let ox = x, oz = z;
+  for (let pass = 0; pass < 6; pass++) {
+    let hit = false;
+    for (const pts of plotGrid.get(gkey(ox, oz)) ?? []) {
+      if (!pointInPoly(ox, oz, pts)) continue;
+      const [bx, bz, d] = nearestOnPoly(ox, oz, pts);
+      // `d` points INWARD (we are inside, b is on the wall), so stepping the
+      // other way from b leaves the building. Sitting exactly on the boundary
+      // makes that direction degenerate — then take the centroid as "inward".
+      let dx = ox - bx, dz = oz - bz;
+      if (d < 1e-3) {
+        let cx = 0, cz = 0;
+        for (const [px, pz] of pts) { cx += px; cz += pz; }
+        dx = cx / pts.length - bx; dz = cz / pts.length - bz;
+      }
+      const len = Math.hypot(dx, dz) || 1;
+      ox = bx - (dx / len) * clear;
+      oz = bz - (dz / len) * clear;
+      hit = true;
+    }
+    if (!hit) return [ox, oz];
+  }
+  // Still boxed in after six wall-steps: we are somewhere in the middle of a
+  // solid block. Sweep outward for daylight, preferring tarmac — the street is
+  // where a driver wants to be spat out anyway.
+  let fallback: [number, number] | null = null;
+  for (let rad = 8; rad <= 220; rad += 8) {
+    for (let i = 0; i < 24; i++) {
+      const a = (i / 24) * Math.PI * 2 + rad * 0.37; // stagger, so rings don't align
+      const px = x + Math.cos(a) * rad, pz = z + Math.sin(a) * rad;
+      if (insidePlot(px, pz)) continue;
+      const surf = surfaceAt(px, pz);
+      if (surf === 'road') return [px, pz];
+      if (surf === 'ground' && !fallback) fallback = [px, pz];
+    }
+    if (fallback) return fallback;
+  }
+  // Nothing free within 220m. Returning the wall-stepped point would drop the
+  // car inside ANOTHER building, and then this whole sweep would run again on
+  // the next frame, and the next — a teleport loop that also eats the frame
+  // budget. Better to report failure and leave the car where it is.
+  return null;
+}
+// Put the car outside. Called both when a building streams in around it and
+// every frame, so there is no way to end up sealed in — not by spawning, not
+// by a teleport, not by a push-out that overshoots through a party wall.
+function evictFromBuildings(): boolean {
+  const out = escapeBuildings(state.x, state.z, CAR_R + 1.2);
+  if (!out) return false;
+  state.x = out[0];
+  state.z = out[1];
+  state.speed *= 0.3; // being spat through a wall should cost you your momentum
+  return true;
 }
 // First wall crossing (as a 0..1 fraction along a→b) that stands taller than
 // camY — used to pull the chase camera in front of façades instead of letting
@@ -1654,6 +1962,107 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number
     worldGroup.add(lintel);
   }
 }
+// Everything a solid footprint owes the rest of the world: wall segments for
+// collision and camera occlusion, the polygon itself for containment, and an
+// immediate eviction if it just landed on the car.
+function claimSolid(pts: Array<[number, number]>, top: number): void {
+  for (let i = 0; i < pts.length; i++) {
+    const [ax, az] = pts[i], [bx, bz] = pts[(i + 1) % pts.length];
+    // ya carries the ROOF height so the chase camera knows whether a wall
+    // actually occludes it or it is looking clean over the top.
+    addSeg(wallGrid, { ax, az, bx, bz, hw: 0, ya: top, yb: top });
+  }
+  addPlot(pts);
+  // This building may have just materialised around the car — vectors stream in
+  // long after the spawn, and the spawn point is chosen before any of them
+  // exist. Evict immediately rather than waiting for the driver to notice they
+  // are sealed in.
+  if (pointInPoly(state.x, state.z, pts)) evictFromBuildings();
+}
+// ── a building, not a block ────────────────────────────────────────
+// Which way a given footprint goes is decided by its OSM id, so a street looks
+// the same on every reload and across every session. Roughly two in five of
+// the low-rise stock is an open shell: walls chewed down to varying heights,
+// whole bays collapsed, no roof, and something growing in the middle of it.
+// Towers stay intact — a twenty-storey open shell reads as a modelling bug.
+const buildStats = { intact: 0, ruin: 0, ruins: [] as Array<[number, number]> };
+function building(pts: Array<[number, number]>, id: number, levels: number): void {
+  const height = clamp(levels * 3.1, 3, 90);
+  const r = mulberry32((id * 2654435761) >>> 0);
+  r(); // first draw off a hashed seed is poorly distributed
+  if (height > 24 || r() > 0.42) {
+    buildStats.intact++;
+    polygon(pts, B_MATS[id % B_MATS.length], 0.9, height, 'solid');
+    return;
+  }
+  let minH = Infinity, cx = 0, cz = 0;
+  let minx = Infinity, maxx = -Infinity, minz = Infinity, maxz = -Infinity;
+  for (const [x, z] of pts) {
+    minH = Math.min(minH, sampleHeight(x, z));
+    cx += x; cz += z;
+    minx = Math.min(minx, x); maxx = Math.max(maxx, x);
+    minz = Math.min(minz, z); maxz = Math.max(maxz, z);
+  }
+  cx /= pts.length; cz /= pts.length;
+  const foot = minH - 0.6;                       // bury the base on the uphill side
+  const standing = Math.max(2.4, height * (0.5 + r() * 0.35));
+  const parts: THREE.BufferGeometry[] = [];
+  let tallest = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [ax, az] = pts[i], [bx, bz] = pts[(i + 1) % pts.length];
+    const len = Math.hypot(bx - ax, bz - az);
+    if (len < 0.6) continue;
+    const ang = Math.atan2(bx - ax, bz - az);    // local +z runs along the edge
+    const bays = Math.max(1, Math.round(len / 2.6));
+    for (let s = 0; s < bays; s++) {
+      if (r() < 0.12) continue;                  // a bay that came down entirely
+      const t = (s + 0.5) / bays;
+      // The chewed top: each bay keeps its own share of the wall, so the
+      // skyline of a ruin is ragged instead of a clean horizontal cut.
+      const top = standing * (0.42 + r() * 0.62);
+      tallest = Math.max(tallest, top);
+      const w = 0.55 + r() * 0.12;
+      const shade = 0.5 + r() * 0.34;            // each bay weathers differently
+      // y is relative to `foot`; the mesh is then placed AT foot, so the façade
+      // shader can read the building's base off the model matrix like it does
+      // for an extruded one. Built in absolute world y with the mesh at the
+      // origin, every ruin would have keyed its floors and doorways to sea
+      // level instead of to its own ground line.
+      parts.push(boxPart(
+        w, top, (len / bays) * 1.04,
+        ax + (bx - ax) * t, top / 2, az + (bz - az) * t,
+        new THREE.Color(0x9a8f7c).multiplyScalar(shade).getHex(), 0, ang,
+      ));
+    }
+  }
+  if (!parts.length) { buildStats.intact++; polygon(pts, B_MATS[id % B_MATS.length], 0.9, height, 'solid'); return; }
+  buildStats.ruin++;
+  if (buildStats.ruins.length < 400) buildStats.ruins.push([cx, cz]);
+  // Rubble where the roof landed, and scrub that moved in after it. The normal
+  // vegetation pass refuses to plant within 5m of a wall, which is exactly
+  // where a reclaimed ruin needs plants — so a ruin grows its own.
+  for (let i = 0; i < 14; i++) {
+    const a = r() * Math.PI * 2, rad = Math.sqrt(r());
+    const px = cx + Math.cos(a) * rad * (maxx - minx) * 0.42;
+    const pz = cz + Math.sin(a) * rad * (maxz - minz) * 0.42;
+    if (!pointInPoly(px, pz, pts)) continue;
+    const gy = sampleHeight(px, pz) - foot;      // same local frame as the walls
+    if (r() < 0.45) {
+      const s = 0.5 + r() * 1.3;                 // slab of fallen roof
+      parts.push(boxPart(s, 0.3 + r() * 0.4, s * (0.6 + r()), px, gy + 0.2, pz,
+        new THREE.Color(0x8e8474).multiplyScalar(0.45 + r() * 0.3).getHex(), 0, r() * 3));
+    } else {
+      const s = 0.9 + r() * 1.8, h = 1.1 + r() * 2.6;
+      parts.push(boxPart(s, h, s, px, gy + h / 2, pz,
+        new THREE.Color().setHSL(biome.vegHue[0] + r() * biome.vegHue[1], 0.34 + r() * 0.2, 0.15 + r() * 0.1).getHex(), 0, r() * 3));
+    }
+  }
+  const shell = new THREE.Mesh(mergeParts(parts), ruinMat);
+  shell.position.y = foot;                       // the base the façade shader reads
+  worldGroup.add(shell);
+  mapPoly(pts, 'rgba(70,66,58,0.9)');
+  claimSolid(pts, foot + tallest);
+}
 function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Material[], lift: number, extrude = 0, collide?: 'solid' | 'water'): void {
   if (pts.length < 3) return;
   const shape = new THREE.Shape(pts.map(([x, z]) => new THREE.Vector2(x, z)));
@@ -1684,13 +2093,7 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
   worldGroup.add(mesh);
   mapPoly(pts, collide === 'solid' ? 'rgba(70,66,58,0.9)' : collide === 'water' ? '#1d3a55' : 'rgba(34,54,32,0.9)');
   if (collide === 'solid') {
-    for (let i = 0; i < pts.length; i++) {
-      const [ax, az] = pts[i], [bx, bz] = pts[(i + 1) % pts.length];
-      // ya carries the ROOF height so the chase camera knows whether a wall
-      // actually occludes it or it is looking clean over the top.
-      const top = (mesh.position.y || 0) + extrude;
-      addSeg(wallGrid, { ax, az, bx, bz, hw: 0, ya: top, yb: top });
-    }
+    claimSolid(pts, (mesh.position.y || 0) + extrude);
   } else if (collide === 'water') {
     let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
     for (const [x, z] of pts) { minx = Math.min(minx, x); minz = Math.min(minz, z); maxx = Math.max(maxx, x); maxz = Math.max(maxz, z); }
@@ -1800,8 +2203,7 @@ function renderWays(els: OsmWay[]): void {
         : 'auto';
       ribbon(pts, w, minor ? MAT.minor : MAT.road, minor ? 0.45 : 0.6, !minor, mode);
     } else if (tags.building) {
-      const levels = parseFloat(tags['building:levels'] ?? '') || 2;
-      polygon(pts, B_MATS[el.id % B_MATS.length], 0.9, clamp(levels * 3.1, 3, 90), 'solid');
+      building(pts, el.id, parseFloat(tags['building:levels'] ?? '') || 2);
     } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
       polygon(pts, MAT.water, 0.3, 0, 'water');
     } else {
@@ -1892,9 +2294,20 @@ function streamWorld(ex: number, ez: number): void {
 // rides high above it; each wheel hangs in a steering pivot whose local y is
 // its suspension deflection, so wheels track the terrain while the sprung
 // body lags on its springs.
-// WHEEL_R drives the physics (contact plane, spin rate); WHEEL_W is cosmetic —
-// wider tyres plant the stance instead of leaving it on four narrow stilts.
-const WHEEL_R = 0.85, WHEEL_W = 0.74, TRACK = 1.18, AXLE = 1.52;
+// ── to the spec sheet ──────────────────────────────────────────────
+// PARIS → DAKAR, class overland/rally: 4.90m long, 2.15m wide, 2.35m tall,
+// 3.10m wheelbase, 0.45m ground clearance. The hull was already the right
+// LENGTH (4.88m) and badly wrong everywhere else — 3.08m across and 3.22m tall,
+// which is a monster truck, not a rally rig. The authored geometry below is
+// left in the numbers that read well, and SX/SY squeeze it onto the sheet;
+// z needs no factor because the length was already right.
+//
+// Everything the wheels touch follows from clearance: the lowest hull part
+// sits exactly on the axle plane, so GROUND CLEARANCE *is* the wheel radius,
+// and overall height is the hull top plus that radius.
+const SX = 0.7, SY = 0.8;
+// WHEEL_R drives the physics (contact plane, spin rate); WHEEL_W is cosmetic.
+const WHEEL_R = 0.45, WHEEL_W = 0.36, TRACK = 1.18 * SX, AXLE = 1.55;
 // Local wheel anchors [x, z] — FL, FR, RL, RR (forward is -z).
 const WHEELS: Array<[number, number]> = [[-TRACK, -AXLE], [TRACK, -AXLE], [-TRACK, AXLE], [TRACK, AXLE]];
 const tailMat = new THREE.MeshBasicMaterial({ color: 0x8e1a12 }); // brightens under braking
@@ -1920,9 +2333,14 @@ const wheelMeshes: THREE.Mesh[] = [];
   // where that put it left 1.3m of daylight under the tub and the truck walked
   // on stilts. One offset here beats re-deriving thirty numbers.
   const DROP = 0.3;
+  // Both the geometry and its placement go through the spec-sheet squeeze, so
+  // the authored numbers below stay readable and the sheet is honoured in
+  // exactly one place. Every geometry handed in here is freshly built, so
+  // scaling it in place is safe.
   const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number): THREE.Mesh => {
+    geo.scale(SX, SY, 1);
     const m = new THREE.Mesh(geo, mat);
-    m.position.set(x, y - DROP, z);
+    m.position.set(x * SX, (y - DROP) * SY, z);
     car.add(m);
     return m;
   };
@@ -1946,8 +2364,8 @@ const wheelMeshes: THREE.Mesh[] = [];
   // They have to reach DOWN to the tyre. At y=1.30 the flare cleared the tyre
   // crown by 0.38m before the suspension even moved, and on 0.4m of droop the
   // wheel visibly fell off the truck.
-  for (const [fx, fz] of [[-1.18, -1.52], [1.18, -1.52], [-1.18, 1.52], [1.18, 1.52]]) {
-    add(box(0.72, 0.24, 1.7), redMat, fx, 1.13, fz);
+  for (const [fx, fz] of [[-1.18, -AXLE], [1.18, -AXLE], [-1.18, AXLE], [1.18, AXLE]]) {
+    add(box(0.72, 0.3, 1.7), redMat, fx, 1.1, fz);
   }
   // ── protection: bull bar, winch, rock sills, tow points ──
   add(box(2.0, 0.26, 0.2), steelMat, 0, 0.95, -2.2);
@@ -2045,7 +2463,8 @@ for (const sx of [-0.62, 0.62]) {
   // The lamps themselves are part of the hull now; this loop only hangs the
   // visible beam cones off them.
   const beam = new THREE.Mesh(beamGeo, beamMat);
-  beam.position.set(sx, 0.78, -2.05); // = the hull lamp y, less the hull DROP
+  // Hung off the hull lamps, so it takes the same spec-sheet squeeze they do.
+  beam.position.set(sx * SX, 0.78 * SY, -2.05);
   // Aimed properly DOWN at the tarmac: a shallow beam ran level to the
   // horizon and read as two searchlights pointing at the sky over the roof.
   beam.rotation.x = -0.11;
@@ -2057,7 +2476,7 @@ for (const sx of [-0.62, 0.62]) {
 // every lit material for a difference nobody can see). Intensity is in
 // CANDELA since three r155 — the old "3.2" was a rounding error, not a lamp.
 const headSpot = new THREE.SpotLight(0xfff0d0, 90, 110, 0.52, 0.65, 1.0);
-headSpot.position.set(0, 0.8, -2.0); // likewise dropped with the hull
+headSpot.position.set(0, 0.78 * SY, -2.0); // likewise
 headSpot.target.position.set(0, -1.6, -30);
 car.add(headSpot, headSpot.target);
 // REAL SIZE (owner: the 3.2x cartographic car straddled whole roads and made
@@ -2307,10 +2726,53 @@ const state = { x: 0, z: 0, heading: 0, speed: 0 };
   shown: Object.fromEntries(Object.entries(vegMeshes).map(([k, m]) => [k, m.count])),
   trunks: trunks.count,
   birds: birds.count,
-  herd: herd.count,
+  herd: { deer: herds[0].count, bison: herds[1].count, horse: herds[2].count },
 });
+// Is a point sealed inside a building footprint? (0 = free.) A test drops the
+// car into the middle of every building it can find and asserts this stays 0.
+(window as unknown as { __inside?: object }).__inside = (x?: number, z?: number): boolean =>
+  (plotGrid.get(gkey(x ?? state.x, z ?? state.z)) ?? []).some((pts) => pointInPoly(x ?? state.x, z ?? state.z, pts));
+(window as unknown as { __built?: object }).__built = (): object => ({ ...buildStats });
+(window as unknown as { __plots?: object }).__plots = (): object =>
+  [...new Set([...plotGrid.values()].flat())].map((pts) => {
+    let cx = 0, cz = 0;
+    for (const [x, z] of pts) { cx += x; cz += z; }
+    return { x: cx / pts.length, z: cz / pts.length, n: pts.length };
+  });
+// Where the herd actually is, so a test can go and look at it.
+(window as unknown as { __herd?: object }).__herd = (): object =>
+  graze.map((c) => ({ x: +c.x.toFixed(1), z: +c.z.toFixed(1), sp: ['deer', 'bison', 'horse'][c.sp] }));
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z) });
+// The truck's ACTUAL dimensions, measured off the built scene graph rather
+// than off the arithmetic that was supposed to produce them — so the spec
+// sheet can be checked instead of assumed. Halo and beam cones are furniture,
+// not bodywork, and are excluded.
+(window as unknown as { __spec?: object }).__spec = (): object => {
+  // In the CAR's own frame, from vertices. A world-space Box3 of a yawed truck
+  // on live suspension is an axis-aligned box around a rotated one, which
+  // reported this hull 24cm taller than it is.
+  const bb = new THREE.Box3();
+  const v = new THREE.Vector3();
+  for (const child of car.children) {
+    const geo = (child as THREE.Mesh).geometry;
+    if (!geo || child === halo || beams.includes(child as THREE.Mesh)) continue;
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i++) bb.expandByPoint(v.fromBufferAttribute(pos, i).applyMatrix4(child.matrix));
+  }
+  const r = (n: number): number => +n.toFixed(2);
+  return {
+    // The wheels hang off pivots that move with the suspension, so the static
+    // figures come from the geometry that defines them instead: the ground
+    // plane sits one wheel radius below the axle plane.
+    length: r(bb.max.z - bb.min.z),
+    width: r(Math.max(bb.max.x - bb.min.x, TRACK * 2 + WHEEL_W)),
+    height: r(bb.max.y + WHEEL_R),
+    wheelbase: r(AXLE * 2),
+    clearance: r(WHEEL_R + bb.min.y),
+    spec: { length: 4.9, width: 2.15, height: 2.35, wheelbase: 3.1, clearance: 0.45 },
+  };
+};
 // How much of the frame the truck actually occupies. Chase framing is easy to
 // get wrong by eye — on a portrait phone the 55° fov is VERTICAL, so the
 // horizontal one is only ~30° and a stand-off that looks generous in plan puts
@@ -2320,7 +2782,7 @@ const state = { x: 0, z: 0, heading: 0, speed: 0 };
   // the halo ring and the 26m beam cones and report 200%-of-screen nonsense.
   const v = new THREE.Vector3();
   let minX = 9, maxX = -9, minY = 9, maxY = -9;
-  for (const x of [-1.53, 1.53]) for (const y of [-0.85, 2.7]) for (const z of [-2.48, 2.4]) {
+  for (const x of [-1.08, 1.08]) for (const y of [-WHEEL_R, 1.9]) for (const z of [-2.45, 2.45]) {
     v.set(x, y, z).applyMatrix4(car.matrixWorld).project(camera);
     minX = Math.min(minX, v.x); maxX = Math.max(maxX, v.x);
     minY = Math.min(minY, v.y); maxY = Math.max(maxY, v.y);
@@ -2887,7 +3349,9 @@ function roughNoise(x: number, z: number): number {
 // Sprung body: damped springs for heave/pitch/roll. Downward acceleration is
 // capped at gravity, so a crest taken fast LAUNCHES the truck; landings
 // compress hard and bounce off the bump stops.
-const SUSP = { k: 55, d: 8.5, ka: 40, da: 7.6, travel: 0.42, droop: 0.4 };
+// Travel and droop scale with the wheel: on a 0.9m tyre the old 0.42m of
+// travel was most of the tyre's radius and the truck pogoed.
+const SUSP = { k: 55, d: 8.5, ka: 40, da: 7.6, travel: 0.24, droop: 0.22 };
 let bodyY = 0, vBodyY = 0, pitchC = 0, vPitch = 0, rollC = 0, vRoll = 0;
 let wheelSpin = 0, groundedF = 1, bodyInit = false;
 let steerCur = 0; // smoothed — keyboard taps ramp instead of snapping
@@ -2927,6 +3391,11 @@ function tick(now: number): void {
   }
   state.x += Math.sin(state.heading) * state.speed * dt;
   state.z -= Math.cos(state.heading) * state.speed * dt;
+  // INSIDE a footprint beats every edge test: no wall is within CAR_R from the
+  // middle of a room, so the push-out below would happily leave you sealed in
+  // and then shove you back off the inner face of every wall you drove at.
+  // Check containment first, every frame.
+  evictFromBuildings();
   // Buildings are solid: push the car circle out of any nearby wall edge and
   // scrub speed while in contact — sliding along a façade falls out of the
   // push-out geometry for free.
@@ -3072,15 +3541,17 @@ function tick(now: number): void {
     // VERTICAL fov, so the horizontal one is only ~30° — at 12.5m the truck ate
     // half the width. Stand off far enough that it reads as a vehicle in a
     // landscape, and sit high enough to look over its own dust.
-    const back = 17.5 + Math.abs(state.speed) * 0.3;
+    // Distances came down with the truck: on the spec-sheet body (2.15m wide
+    // against the old 3.08m) the previous stand-off left it a speck.
+    const back = 13 + Math.abs(state.speed) * 0.26;
     camPos.set(
       state.x - fwdX * back,
       // ABOVE the vehicle, always: on a steep climb the ground under the
       // camera is far below the truck, so tie the floor to the body and add
       // pitch lift to keep looking down the slope at it.
       Math.max(
-        sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 6.4,
-        bodyY + 5.4 + Math.max(0, Math.sin(pitchC)) * back,
+        sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 4.6,
+        bodyY + 4.0 + Math.max(0, Math.sin(pitchC)) * back,
       ),
       state.z - fwdZ * back,
     );
@@ -3101,7 +3572,7 @@ function tick(now: number): void {
   if (!camInit) { camera.position.copy(camPos); camInit = true; }
   else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
   if (camMode === 'top') camera.lookAt(state.x + panX, sampleHeight(state.x + panX, state.z + panZ), state.z + panZ);
-  else camera.lookAt(state.x + fwdX * 30, ground + 1.8, state.z + fwdZ * 30);
+  else camera.lookAt(state.x + fwdX * 28, ground + 1.4, state.z + fwdZ * 28);
   camera.updateMatrixWorld();
   skyDome.position.copy(camera.position);
   ghostU.uGhostCar.value.set(state.x, ground + 1.2, state.z);
@@ -3151,11 +3622,11 @@ function tick(now: number): void {
     const dr = dockRect;
     const vx = dr.x * hudS, vy = innerHeight - (dr.y + dr.h) * hudS, vw = dr.w * hudS, vh = dr.h * hudS;
     miniCam.position.set(
-      state.x - fwdX * 15,
-      Math.max(sampleHeight(state.x - fwdX * 15, state.z - fwdZ * 15) + 6.0, bodyY + 4.9),
-      state.z - fwdZ * 15,
+      state.x - fwdX * 11,
+      Math.max(sampleHeight(state.x - fwdX * 11, state.z - fwdZ * 11) + 4.3, bodyY + 3.6),
+      state.z - fwdZ * 11,
     );
-    miniCam.lookAt(state.x + fwdX * 22, ground + 1.7, state.z + fwdZ * 22);
+    miniCam.lookAt(state.x + fwdX * 20, ground + 1.3, state.z + fwdZ * 20);
     renderer.setScissorTest(true);
     renderer.setViewport(vx, vy, vw, vh);
     renderer.setScissor(vx, vy, vw, vh);
@@ -3172,6 +3643,9 @@ function tick(now: number): void {
 // reach the sky, the composite, the lights and the sea alike.
 function applyBiome(b: Biome): void {
   biome = b;
+  // The herd is built at module load, before the spawn's biome is known — so
+  // re-roll which species are out there whenever the biome actually lands.
+  for (const c of graze) c.sp = pickSpecies();
   const v = (u: { value: THREE.Vector3 }, c: Rgb): void => u.value.set(c[0], c[1], c[2]);
   v(skyMat.uniforms.uZenith as { value: THREE.Vector3 }, b.zenith);
   v(skyMat.uniforms.uHorizon as { value: THREE.Vector3 }, b.horizon);
