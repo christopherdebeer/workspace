@@ -1008,6 +1008,93 @@ const railTex = canvasTex(32, 1, 1, 121, (c, s, r) => {
   }
   speckle(c, s, r, ['rgba(0,0,0,0.16)', 'rgba(255,255,255,0.07)'], 60, 1);
 });
+// ── road furniture ────────────────────────────────────────────────
+// One atlas, three panels side by side in u: chevrons for a bend, a warning
+// triangle, hazard stripes. All of them BATTERED — faded, dented, shot at,
+// rusting from the fixings out — but the legend still legible, because a sign
+// you cannot read is set dressing and a sign you can read is information.
+// v splits top/bottom into face and back (the back is bare galvanised).
+const SIGN_KINDS = 3;
+const signTex = canvasTex(192, 1, 1, 122, (c, s, r) => {
+  const W = s / SIGN_KINDS;
+  const rust = (x: number, y: number, w: number, h: number, n: number): void => {
+    for (let i = 0; i < n; i++) {
+      const rx = x + r() * w, ry = y + r() * h;
+      c.fillStyle = `rgba(${120 + r() * 60 | 0},${60 + r() * 40 | 0},${28 + r() * 24 | 0},${0.15 + r() * 0.5})`;
+      c.fillRect(rx, ry, 1 + r() * 4, 1 + r() * 4);
+    }
+  };
+  // Dents and shot holes read as dark pits with a bright lip on the light side.
+  const dings = (x: number, w: number, n: number): void => {
+    for (let i = 0; i < n; i++) {
+      const dx = x + 4 + r() * (w - 8), dy = 4 + r() * (s / 2 - 8), rad = 1.5 + r() * 3;
+      c.fillStyle = 'rgba(24,20,16,0.72)';
+      c.beginPath(); c.arc(dx, dy, rad, 0, Math.PI * 2); c.fill();
+      c.fillStyle = 'rgba(236,230,214,0.5)';
+      c.beginPath(); c.arc(dx - rad * 0.3, dy - rad * 0.3, rad * 0.55, 0, Math.PI * 2); c.fill();
+    }
+  };
+  for (let k = 0; k < SIGN_KINDS; k++) {
+    const x0 = k * W;
+    // The retroreflective ground. Yellow-green is the real-world colour for a
+    // temporary/hazard board and it is the one that survives this palette.
+    c.fillStyle = k === 1 ? '#d8cf4a' : '#d5c93f';
+    c.fillRect(x0, 0, W, s / 2);
+    // DRAWN FOR THE RESOLUTION IT IS SEEN AT. The scene renders at PIX_H and is
+    // magnified, so a board 26m away is roughly twenty pixels across — three
+    // slim chevrons became three grey smudges. Everything here is deliberately
+    // coarse: two fat marks instead of three fine ones, a two-pixel border
+    // instead of three, nothing thinner than a sixth of the panel.
+    const H = s / 2;
+    c.fillStyle = 'rgba(30,26,18,0.9)';
+    c.fillRect(x0 + 2, 2, W - 4, 2); c.fillRect(x0 + 2, H - 4, W - 4, 2);
+    c.fillRect(x0 + 2, 2, 2, H - 4); c.fillRect(x0 + W - 4, 2, 2, H - 4);
+    c.fillStyle = '#141109';
+    if (k === 0) {
+      // TWO fat chevrons: the sign that means THE ROAD GOES THIS WAY, NOW.
+      for (let i = 0; i < 2; i++) {
+        const cx = x0 + 8 + i * 26, w = 13, t = 11;
+        c.beginPath();
+        c.moveTo(cx, 9); c.lineTo(cx + w, H / 2); c.lineTo(cx, H - 9);
+        c.lineTo(cx + t, H - 9); c.lineTo(cx + w + t, H / 2); c.lineTo(cx + t, 9);
+        c.closePath(); c.fill();
+      }
+    } else if (k === 1) {
+      // A warning triangle, filled with a bar knocked out of it — a hollow
+      // outline disappears at this size, a solid mass does not.
+      c.beginPath();
+      c.moveTo(x0 + W / 2, 7); c.lineTo(x0 + W - 9, H - 9); c.lineTo(x0 + 9, H - 9);
+      c.closePath(); c.fill();
+      c.fillStyle = '#d5c93f';
+      c.fillRect(x0 + W / 2 - 4, H / 2 - 6, 8, 18);
+      c.fillRect(x0 + W / 2 - 4, H - 18, 8, 5);
+    } else {
+      // Hazard stripes: four wide bands, not eight narrow ones.
+      c.save();
+      c.beginPath(); c.rect(x0 + 5, 5, W - 10, H - 10); c.clip();
+      for (let i = -Math.round(H); i < W + H; i += 30) {
+        c.beginPath();
+        c.moveTo(x0 + i, 5); c.lineTo(x0 + i + 15, 5);
+        c.lineTo(x0 + i + 15 + H, H); c.lineTo(x0 + i + H, H);
+        c.closePath(); c.fill();
+      }
+      c.restore();
+    }
+    // Weather, in this order: grime over the legend, rust from the edges in,
+    // then the dents on top of everything (they are the most recent event).
+    c.fillStyle = 'rgba(96,88,60,0.16)'; c.fillRect(x0, 0, W, s / 2);
+    rust(x0, 0, W, 8, 40); rust(x0, s / 2 - 10, W, 10, 40);
+    rust(x0, 0, 8, s / 2, 30); rust(x0 + W - 8, 0, 8, s / 2, 30);
+    dings(x0, W, 5 + Math.floor(r() * 4));
+    // The back: galvanised, streaked, nothing to read.
+    c.fillStyle = '#6d6f6b'; c.fillRect(x0, s / 2, W, s / 2);
+    for (let i = 0; i < 40; i++) {           // rain streaks down the backplate
+      c.fillStyle = `rgba(${40 + r() * 30 | 0},${40 + r() * 26 | 0},${36 + r() * 22 | 0},${0.06 + r() * 0.14})`;
+      c.fillRect(x0 + r() * W, s / 2 + r() * (s / 2), 1 + r(), 4 + r() * 20);
+    }
+    rust(x0, s / 2, W, s / 2, 50);
+  }
+});
 // A deck fascia, for where the carriageway rides clear of the ground: the
 // same volume, but poured rather than cut.
 const deckTex = canvasTex(64, 1, 1, 120, (c, s, r) => {
@@ -1094,6 +1181,72 @@ const wallTexes = [7101, 7102].map((seed) => canvasTex(128, 1 / 9, 1 / 9, seed, 
 // face orientation mixed — lighting both sides costs little at this scene size
 // and makes every surface reliably visible from the top-down camera.
 const DS = THREE.DoubleSide;
+// The headlight the signs answer to. Updated once a frame from the car; the
+// signs read it in the fragment shader, so a whole roadside of them costs one
+// uniform write rather than a per-object light calculation.
+const beamProbe = {
+  uBeamPos: { value: new THREE.Vector3() },
+  uBeamDir: { value: new THREE.Vector3(0, 0, -1) },
+  uBeamAmt: { value: 1 },
+};
+/**
+ * RETROREFLECTION, which is not the same thing as being shiny. A road sign
+ * sends light back toward wherever it CAME FROM, so it is dazzling from the
+ * driver's seat and almost invisible from anywhere else — that asymmetry is the
+ * whole effect, and a normal specular highlight cannot produce it because it
+ * answers to the surface, not to the observer.
+ *
+ * So: brightness = (is the sign facing the car) × (is the car's beam pointed at
+ * the sign) × (falloff with distance). It lands in `emissive`, which means the
+ * bright-pass picks it up and the sign BLOOMS in the headlights, at night, from
+ * the one seat that should see it.
+ */
+function retroreflective(mat: THREE.Material): THREE.Material {
+  mat.onBeforeCompile = (shader) => {
+    shader.uniforms.uBeamPos = beamProbe.uBeamPos;
+    shader.uniforms.uBeamDir = beamProbe.uBeamDir;
+    shader.uniforms.uBeamAmt = beamProbe.uBeamAmt;
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;\nvarying vec3 vWNrm;')
+      .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+        vec4 rrW = modelMatrix * vec4(transformed, 1.0);
+        vWPos = rrW.xyz;
+        vWNrm = normalize(mat3(modelMatrix) * objectNormal);`);
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vWPos;
+        varying vec3 vWNrm;
+        uniform vec3 uBeamPos;
+        uniform vec3 uBeamDir;
+        uniform float uBeamAmt;`)
+      .replace('#include <dithering_fragment>', `
+        vec3 rrToCar = uBeamPos - vWPos;
+        float rrDist = length(rrToCar);
+        vec3 rrDirToCar = rrToCar / max(rrDist, 0.001);
+        // Facing the car at all? DoubleSide flips the normal, so take |dot| —
+        // the back of a sign is dark because the TEXTURE is, not because the
+        // geometry faces away.
+        float rrFace = abs(dot(normalize(vWNrm), rrDirToCar));
+        // Inside the beam? A tight cone: a sign off to the side stays dark
+        // until you are pointed at it, which is what makes a bend light up as
+        // you turn into it rather than all at once.
+        float rrAim = max(dot(uBeamDir, -rrDirToCar), 0.0);
+        float rrCone = pow(rrAim, 22.0);
+        // Real retroreflectors fall off far more slowly than a diffuse surface
+        // (they return the beam rather than scattering it), so this is 1/d, not
+        // 1/d². 90m of usable range on a dark road.
+        float rrFall = clamp(1.0 - rrDist / 90.0, 0.0, 1.0);
+        float rr = pow(rrFace, 3.0) * rrCone * rrFall * uBeamAmt;
+        // 1.3, not 2.6. At 2.6 the panel clipped to flat white in the beam and
+        // the chevrons went with it — a sign you cannot read is a lamp. This
+        // keeps it the brightest thing in the frame while the legend survives,
+        // which is the whole point of putting a legend on it.
+        gl_FragColor.rgb += diffuseColor.rgb * rr * 1.3;
+        #include <dithering_fragment>`);
+  };
+  mat.needsUpdate = true;
+  return mat;
+}
 const MAT = {
   road: new THREE.MeshLambertMaterial({ map: roadTex, side: DS }),
   minor: new THREE.MeshLambertMaterial({ map: pathTex, transparent: true, opacity: 0.85, side: DS }),
@@ -1117,6 +1270,7 @@ const MAT = {
   // alphaTest, not blending: a parapet is seen against sky, water and its own
   // deck at once, and a sorted transparent has no right answer for that.
   rail: new THREE.MeshLambertMaterial({ map: railTex, side: DS, transparent: true, alphaTest: 0.5 }),
+  sign: retroreflective(new THREE.MeshLambertMaterial({ map: signTex, side: DS })),
   // Tunnel interior: emissive so the tube reads even with no light inside.
   tunnel: new THREE.MeshLambertMaterial({ color: 0x2a2d34, emissive: 0x0b0d12, side: DS }),
   portal: new THREE.MeshLambertMaterial({ color: 0x4d4a42, side: DS }),
@@ -2074,13 +2228,20 @@ const apron = {
   cutV: [] as number[], cutUV: [] as number[],
   dckV: [] as number[], dckUV: [] as number[],
   rlV: [] as number[], rlUV: [] as number[],
+  sgV: [] as number[], sgUV: [] as number[],
 };
-const spanStats = { piers: 0, railM: 0, deckM: 0, maxDaylight: 0, at: null as [number, number] | null };
+const spanStats = {
+  piers: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0,
+  at: null as [number, number] | null,
+  // Where the boards went, and which way each faces — bounded, for probes.
+  signAt: [] as Array<{ x: number; z: number; fx: number; fz: number; kind: number }>,
+};
 function flushAprons(): void {
   for (const [v, u, m] of [
     [apron.cutV, apron.cutUV, MAT.verge],
     [apron.dckV, apron.dckUV, MAT.deck],
     [apron.rlV, apron.rlUV, MAT.rail],
+    [apron.sgV, apron.sgUV, MAT.sign],
   ] as const) {
     if (!v.length) continue;
     const g = new THREE.BufferGeometry();
@@ -2172,12 +2333,69 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const PIER_SPAN = 26;   // metres between piers
   const RAIL_AT = 2.6;    // drop past the kerb that earns a parapet
   const RAIL_H = 1;       // parapet height
+  // 2×CAR_R of push-out plus a lane to drive in. Below this a barrier would
+  // protect you from the drop by wedging you against the cliff instead.
+  const RAIL_MIN_W = 2 * CAR_R + 2.4;
+  const SIGN_EVERY = 85;  // metres of straight road between hazard boards
+  const BEND_DEG = 14;    // heading change over one 12m step that reads as "a bend"
+  // Deterministic per way: the same road grows the same signs on every device
+  // and every reload, which is what makes them landmarks rather than litter.
+  const signRng = mulberry32(Math.abs(Math.round(dense[0][0] * 31 + dense[0][1] * 17)) + n);
+  let signRun = SIGN_EVERY;   // so a way can post one early rather than never
+  /** Heading change at dense point `i`, in radians — how hard the road turns. */
+  const bendAt = (i: number): number => {
+    if (i <= 0 || i >= n - 1) return 0;
+    const ax2 = dense[i][0] - dense[i - 1][0], az2 = dense[i][1] - dense[i - 1][1];
+    const bx2 = dense[i + 1][0] - dense[i][0], bz2 = dense[i + 1][1] - dense[i][1];
+    const la = Math.hypot(ax2, az2) || 1, lb = Math.hypot(bx2, bz2) || 1;
+    return Math.acos(clamp((ax2 * bx2 + az2 * bz2) / (la * lb), -1, 1));
+  };
+  /** WHICH WAY it turns: the cross product's sign. The inside of the bend is
+   *  the `+n` side when this is positive, so the outside — where the sign goes,
+   *  and where your lights sweep as you turn in — is the negation. */
+  const bendSign = (i: number): number => {
+    if (i <= 0 || i >= n - 1) return 0;
+    const ax2 = dense[i][0] - dense[i - 1][0], az2 = dense[i][1] - dense[i - 1][1];
+    const bx2 = dense[i + 1][0] - dense[i][0], bz2 = dense[i + 1][1] - dense[i][1];
+    return ax2 * bz2 - az2 * bx2;
+  };
   // SMOOTHED along the way, and shared by both kerbs. Deciding per quad and per
   // side made adjacent quads flip between a 4m curtain of soil and a 1.35m
   // concrete lip, so the road's underside broke into floating blocks.
   const daylight = apronOn
     ? dense.map((_, i) => (flat ? prof[i] : elev[i]) + lift - elevMin[i])
     : [];
+  // WHERE THE RAIL GOES, decided for the whole way before any of it is drawn.
+  // Emitting per quad left holes: one 12m step whose drop dipped under the
+  // threshold — the inside of a bend, a bench in the slope — opened a gap you
+  // could drive straight out through at speed. Measured: the truck left the
+  // road through one and fell 34.5m with the barrier still reading "solid",
+  // because it never touched it. So the drop is sampled per index, then
+  // DILATED by two steps each way: a short gap closes, and the rail runs a
+  // little past the danger, which is what a real one does.
+  const railOn: boolean[][] = [[], []];
+  if (apronOn) {
+    const raw: boolean[][] = [[], []];
+    for (let i = 0; i < n; i++) {
+      const [ax2, az2] = dense[Math.max(0, i - 1)], [bx2, bz2] = dense[Math.min(n - 1, i + 1)];
+      const tx = bx2 - ax2, tz = bz2 - az2, tl = Math.hypot(tx, tz) || 1;
+      const px = (-tz / tl) * (width / 2), pz = (tx / tl) * (width / 2);
+      const ky = (flat ? prof[i] : sampleHeight(dense[i][0], dense[i][1])) + lift;
+      for (let sd = 0; sd < 2; sd++) {
+        const sgn = sd === 0 ? 1 : -1;
+        const ex = dense[i][0] + px * sgn, ez = dense[i][1] + pz * sgn;
+        const g = Math.min(sampleHeight(ex, ez), sampleHeight(ex + px * sgn, ez + pz * sgn));
+        raw[sd][i] = width > RAIL_MIN_W && ky - g > RAIL_AT;
+      }
+    }
+    for (let sd = 0; sd < 2; sd++) {
+      for (let i = 0; i < n; i++) {
+        let on = false;
+        for (let j = Math.max(0, i - 2); j <= Math.min(n - 1, i + 2); j++) on = on || raw[sd][j];
+        railOn[sd][i] = on;
+      }
+    }
+  }
   const deckRun = daylight.map((_, i) => {
     let s = 0, c = 0;
     for (let j = Math.max(0, i - 4); j <= Math.min(n - 1, i + 4); j++) { s += daylight[j]; c++; }
@@ -2226,7 +2444,12 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         [0, 0, 1, 0, 0, h, 1, h]);
     }
   };
-  // The parapet, standing on the deck's own overhang.
+  // The parapet, standing on the deck's own overhang — and SOLID. A barrier you
+  // can see and drive straight through is worse than no barrier: it tells you
+  // the edge is protected and then isn't. It goes in the wall grid, where the
+  // car's push-out already lives; `ya` carries its top, and `wallHitAlong`
+  // skips any wall the camera is above, so a 1m rail never occludes a chase cam
+  // sitting four metres over the truck.
   const rail = (
     xA: number, yA: number, zA: number, xB: number, yB: number, zB: number, u0: number, u1: number,
   ): void => {
@@ -2234,6 +2457,49 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     quad(apron.rlV, apron.rlUV,
       [xA, yA + RAIL_H, zA, xB, yB + RAIL_H, zB, xA, yA - 0.15, zA, xB, yB - 0.15, zB],
       [u0, 0, u1, 0, u0, 1, u1, 1]);
+    const top = Math.max(yA, yB) + RAIL_H;
+    addSeg(wallGrid, { ax: xA, az: zA, bx: xB, bz: zB, hw: 0, ya: top, yb: top });
+  };
+  /**
+   * A hazard board on a post, facing back down the road at whoever is coming.
+   * `side` is which kerb it stands on; `kind` picks a panel from the atlas.
+   * The panel is turned a few degrees INTO the traffic — a real one is, so the
+   * retroreflection reaches the driver rather than the sky.
+   */
+  const sign = (
+    px: number, py: number, pz: number, fwdX: number, fwdZ: number, side: number, kind: number,
+  ): void => {
+    const l = Math.hypot(fwdX, fwdZ) || 1;
+    const fx = fwdX / l, fz = fwdZ / l;
+    // Facing back along the way, canted 12° toward the carriageway.
+    const a = Math.atan2(-fx, -fz) + side * 0.21;
+    const rx = Math.cos(a), rz = -Math.sin(a);      // the panel's own width axis
+    const HW = 0.82, TOP = 2.0, BOT = 0.86;         // a 1.64m board, low enough to sit in the beam
+    const u0 = kind / SIGN_KINDS, u1 = (kind + 1) / SIGN_KINDS;
+    // Face (upper half of the atlas) and back (lower half) as one double-sided
+    // quad each, offset a few centimetres so they never z-fight.
+    for (const [n, v0, v1] of [[1, 0, 0.5], [-1, 0.5, 1]] as Array<[number, number, number]>) {
+      const ox = -rz * 0.03 * n, oz = rx * 0.03 * n;
+      quad(apron.sgV, apron.sgUV, [
+        px - rx * HW + ox, py + TOP, pz - rz * HW + oz,
+        px + rx * HW + ox, py + TOP, pz + rz * HW + oz,
+        px - rx * HW + ox, py + BOT, pz - rz * HW + oz,
+        px + rx * HW + ox, py + BOT, pz + rz * HW + oz,
+      ], [u0, v0, u1, v0, u0, v1, u1, v1]);
+    }
+    // The post. Same atlas, sampled from a blank corner of the backplate, so it
+    // reads as galvanised steel without needing a second material.
+    const PW = 0.055;
+    for (const [ax2, az2] of [[rx, rz], [-rz, rx]] as Array<[number, number]>) {
+      quad(apron.sgV, apron.sgUV, [
+        px - ax2 * PW, py + TOP, pz - az2 * PW,
+        px + ax2 * PW, py + TOP, pz + az2 * PW,
+        px - ax2 * PW, py - 0.3, pz - az2 * PW,
+        px + ax2 * PW, py - 0.3, pz + az2 * PW,
+      ], [u0 + 0.005, 0.97, u0 + 0.02, 0.97, u0 + 0.005, 0.99, u0 + 0.02, 0.99]);
+    }
+    spanStats.signs++;
+    if (spanStats.signAt.length < 400) spanStats.signAt.push({ x: px, z: pz, fx, fz, kind });
   };
   let along = 0; // metres travelled — v wraps every 20m (the roadTex period)
   let pierRun = PIER_SPAN;  // so the first bay of a span gets one
@@ -2266,6 +2532,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       const deck = deckRun[i] || deckRun[i + 1];
       const dd = deckDepth(Math.max(daylight[i], daylight[i + 1]));
       const bot: number[] = [];
+      const drop: number[] = [];
       for (const sgn of [1, -1]) {
         const ex0 = x0 + nx * sgn, ez0 = z0 + nz * sgn;
         const ex1 = x1 + nx * sgn, ez1 = z1 + nz * sgn;
@@ -2276,14 +2543,44 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         const b1 = deck ? ey1 - dd : Math.max(Math.min(ey1, g1) - APRON, ey1 - APRON_MAX);
         face(ex0, ey0, ez0, ex1, ey1, ez1, b0, b1, uA, uB, deck);
         bot.push(b0, b1);
+        drop.push(Math.max(ey0 - g0, ey1 - g1));
         // A parapet wherever the ground falls away past the kerb — the seaward
         // side of a shelf road as much as a bridge. It is the only thing that
         // tells you, at a glance, that the edge is an edge.
-        if (Math.max(ey0 - g0, ey1 - g1) > RAIL_AT) {
+        // From the dilated map above, not from this quad's own drop.
+        const sd = sgn > 0 ? 0 : 1;
+        if (railOn[sd][i] || railOn[sd][i + 1]) {
           // Right on the kerb line, not outboard of it: set any further out and
           // the parapet hangs in the air beside its own fascia.
           rail(ex0 + ox * sgn * 0.04, ey0, ez0 + oz * sgn * 0.04,
             ex1 + ox * sgn * 0.04, ey1, ez1 + oz * sgn * 0.04, along / 2.5, (along + len) / 2.5);
+        }
+      }
+      // ── hazard boards ──
+      // Two rules, and the second is the one that matters. On a straight, a
+      // sign every ~85m with a wide jitter, so the roadside has furniture
+      // without a rhythm. On a BEND, always — and on the OUTSIDE of it, which
+      // is both where the real ones go and where your headlights are pointing
+      // as you turn in. A chevron you meet mid-corner is the difference between
+      // reading the road and discovering it.
+      {
+        const turn = i + 1 < n - 1 ? bendAt(i + 1) : 0;
+        const sharp = turn > (BEND_DEG * Math.PI) / 180;
+        signRun += len;
+        if (sharp ? signRun > 16 : signRun > SIGN_EVERY * (0.55 + signRng() * 0.9)) {
+          signRun = 0;
+          // Outside of the bend = the side the road is turning AWAY from. On a
+          // straight, whichever side has the drop, else a coin.
+          const outward = sharp
+            ? -Math.sign(bendSign(i + 1)) || 1
+            : (drop[0] > drop[1] ? 1 : drop[1] > drop[0] ? -1 : signRng() < 0.5 ? 1 : -1);
+          const sx = x1 + nx * outward * 1.34, sz = z1 + nz * outward * 1.34;
+          const sy = (outward > 0 ? y10 : y11) - 0.1;
+          // Never plant one where the ground has fallen away — a post needs
+          // something to stand in, and a sign hanging over a cliff reads as a bug.
+          if (sy - sampleHeight(sx, sz) < 2.2) {
+            sign(sx, sy, sz, dx, dz, outward, sharp ? 0 : signRng() < 0.5 ? 1 : 2);
+          }
         }
       }
       if (deck) {
@@ -2601,7 +2898,7 @@ function pruneTileCache(): void {
 }
 
 // ── points of interest (named features become HUD waypoints) ───────
-interface Poi { name: string; x: number; z: number; kind: 'park' | 'water' | 'place' }
+interface Poi { name: string; x: number; z: number; kind: 'park' | 'water' | 'place' | 'mission'; pinned?: boolean }
 const pois = new Map<string, Poi>();
 function notePoi(tags: Record<string, string>, pts: Array<[number, number]>): void {
   const name = tags.name;
@@ -3442,7 +3739,7 @@ const state = { x: 0, z: 0, heading: 0, speed: 0 };
     .map((p) => ({ p, d: Math.hypot(p.x - state.x, p.z - state.z) }))
     .sort((a, b) => a.d - b.d);
   return {
-    drawn: poiDraw.map((p) => ({ t: p.t, edge: p.edge, rng: p.rng })),
+    drawn: poiDraw.map((p) => ({ t: p.t, edge: p.edge, rng: p.rng, hidden: p.hid, world: p.w })),
     nearest: sorted.slice(0, 3).map((e) => +e.d.toFixed(1)),
     to: sorted[0] ? { x: sorted[0].p.x, z: sorted[0].p.z, name: sorted[0].p.name } : null,
     range: POI_RANGE,
@@ -3610,9 +3907,39 @@ function truckSpec(): Record<string, number> {
 };
 // What the bridge builder actually built.
 (window as unknown as { __span?: object }).__span = (): object => ({
-  ...spanStats, railM: Math.round(spanStats.railM), deckM: Math.round(spanStats.deckM),
-  maxDaylight: +spanStats.maxDaylight.toFixed(1),
+  ...spanStats, signAt: spanStats.signAt.length, railM: Math.round(spanStats.railM),
+  deckM: Math.round(spanStats.deckM), maxDaylight: +spanStats.maxDaylight.toFixed(1),
 });
+/** Every hazard board placed so far, so a probe can stand in front of one. */
+(window as unknown as { __signs?: object }).__signs = (): object => spanStats.signAt;
+// The job: phase, both waypoints, and how far is left.
+(window as unknown as { __mission?: object }).__mission = (): object => ({
+  id: mission?.id ?? null, phase: missionPhase, ready: missionReady,
+  giver: missionGiver ? { pinned: !!missionGiver.pinned, d: +Math.hypot(missionGiver.x - state.x, missionGiver.z - state.z).toFixed(1) } : null,
+  dest: missionDest ? { pinned: !!missionDest.pinned, listed: pois.has(missionDest.name), d: +Math.hypot(missionDest.x - state.x, missionDest.z - state.z).toFixed(1) } : null,
+  best: missionBest === Infinity ? null : Math.round(missionBest),
+});
+(window as unknown as { __accept?: object }).__accept = (): void => acceptMission(performance.now());
+(window as unknown as { __camPos?: object }).__camPos = (): number[] =>
+  [camera.position.x, camera.position.y, camera.position.z];
+// What stands between the truck and the drop at (x,z): the nearest parapet
+// segment, how far off it is, and how high its top sits. A rail that renders
+// but has no wall segment is the failure this exists to catch.
+(window as unknown as { __barrier?: object }).__barrier = (x?: number, z?: number): object => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  let near = Infinity, top: number | null = null, count = 0;
+  let at: [number, number] | null = null;
+  for (let cx = -1; cx <= 1; cx++) for (let cz = -1; cz <= 1; cz++) {
+    for (const seg of wallGrid.get(`${Math.floor(px / GRID) + cx},${Math.floor(pz / GRID) + cz}`) ?? []) {
+      count++;
+      const [ax, az] = closestOnSeg(px, pz, seg);
+      const d = Math.hypot(px - ax, pz - az);
+      if (d < near) { near = d; top = seg.ya ?? null; at = [ax, az]; }
+    }
+  }
+  return { walls: count, nearest: near === Infinity ? null : +near.toFixed(2),
+    at, topY: top === null ? null : +top.toFixed(2), carR: CAR_R };
+};
 (window as unknown as { __roadDir?: (x: number, z: number) => [number, number] | null }).__roadDir = (x, z) => {
   let best: Seg | null = null, bd = Infinity;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
@@ -3896,19 +4223,66 @@ function toggleAlien(): void {
 // Named parks/waters/buildings from the OSM stream become waypoints. This
 // only COMPUTES them; the pixel HUD draws them, so labels share the world's
 // grid and font instead of being browser text floating above it.
-const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a' };
+const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a', mission: '#f5c453' };
 const poiVec = new THREE.Vector3(), poiView = new THREE.Vector3(), camFwd = new THREE.Vector3();
 const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}M` : `${(m / 1000).toFixed(1)}KM`);
 // Close enough to act on. The pins used to be CULLED inside 25m, which threw
 // away exactly the moment they matter — you arrive at a place and it vanishes.
 // They now stay all the way in and switch to an in-range presentation instead.
 const POI_RANGE = 55;
+/**
+ * Is the ground in the way? Marches the sight line from the camera to the
+ * waypoint and asks whether the terrain ever rises above it.
+ *
+ * A label is drawn in screen space, so it happily paints a place that is
+ * behind a hill as though it were sitting on the bonnet — "SILVERMINE DAM
+ * 860M" floating beside the truck with an entire ridge between the two. The
+ * label is not wrong about WHERE the dam is; it is wrong about whether you can
+ * SEE it, and those are different claims. Occluded ones get ghosted rather than
+ * hidden: you still want the bearing, you just should not read it as a view.
+ *
+ * Step count scales with distance (~14m apart, capped) — a fixed count would
+ * stride straight over a thin ridge at 900m and call it clear.
+ */
+function sightBlocked(px: number, py: number, pz: number): boolean {
+  const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+  const dist = Math.hypot(px - cx, pz - cz);
+  if (dist < 12) return false;
+  const steps = Math.round(clamp(dist / 14, 8, 70));
+  // Skip the ends: the ground under the camera and under the pin are both
+  // "in the way" of a ray that starts and finishes at ground level.
+  for (let i = 2; i < steps - 1; i++) {
+    const t = i / steps;
+    const sx = cx + (px - cx) * t, sz = cz + (pz - cz) * t;
+    // 1.5m of slack, so a kerb or a bump in the heightfield does not count as
+    // a mountain. What we are looking for is terrain, not noise.
+    if (groundAt(sx, sz) > cy + (py - cy) * t + 1.5) return true;
+  }
+  return false;
+}
+// Occlusion changes slowly — you have to drive somewhere for a ridge to move
+// out of the way — while `sightBlocked` marches up to 70 ground samples per
+// pin. Recomputing that for three pins every frame is ~200 heightfield lookups
+// a frame for an answer that is the same as it was 100ms ago. Cached per pin,
+// refreshed on a stagger so the three never land on the same frame.
+const sightCache = new Map<string, { at: number; hid: boolean }>();
+function sightBlockedCached(name: string, px: number, py: number, pz: number, i: number): boolean {
+  const now = performance.now();
+  const c = sightCache.get(name);
+  if (c && now - c.at < 140) return c.hid;
+  const hid = sightBlocked(px, py, pz);
+  sightCache.set(name, { at: now + i * 23, hid });
+  return hid;
+}
 function updatePois(): void {
-  const near = [...pois.values()]
-    .map((p) => ({ p, d: Math.hypot(p.x - state.x, p.z - state.z) }))
-    .filter((e) => e.d < 3000)
-    .sort((a, b) => a.d - b.d)
-    .slice(0, 3);
+  // Pinned waypoints (a mission's giver and its destination) are NOT subject to
+  // the nearest-three rule — the whole point of a destination is that it is far
+  // away and stays on screen the entire way there.
+  const all = [...pois.values()].map((p) => ({ p, d: Math.hypot(p.x - state.x, p.z - state.z) }));
+  const pinned = all.filter((e) => e.p.pinned).sort((a, b) => a.d - b.d);
+  const near = pinned.concat(
+    all.filter((e) => !e.p.pinned && e.d < 3000).sort((a, b) => a.d - b.d).slice(0, 3 - Math.min(2, pinned.length)),
+  );
   camera.getWorldDirection(camFwd);
   poiDraw = [];
   for (let i = 0; i < near.length; i++) {
@@ -3919,6 +4293,10 @@ function updatePois(): void {
     poiVec.set(wx, groundAt(wx, wz) + 2, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
     const rng = d < POI_RANGE;
+    // Occluded by the ground, or by a building tall enough to matter. Both are
+    // "you cannot see this from here", and the label should say so.
+    const hid = sightBlockedCached(p.name, poiVec.x, poiVec.y, poiVec.z, i)
+      || wallHitAlong(camera.position.x, camera.position.z, wx, wz, camera.position.y) < 0.98;
     const label = `${alienize(p.name).toUpperCase()} ${fmtDist(d)}`;
     if (poiView.z < -1) {
       poiVec.project(camera);
@@ -3926,7 +4304,8 @@ function updatePois(): void {
         poiDraw.push({
           x: (poiVec.x * 0.5 + 0.5) * innerWidth,
           y: clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.16, innerHeight * 0.8),
-          t: label, c: POI_COLORS[p.kind], edge: 0, rng,
+          t: label, c: POI_COLORS[p.kind], edge: 0, rng, hid,
+          w: [wx, wz, groundAt(wx, wz) + 2],
         });
         continue;
       }
@@ -3935,7 +4314,9 @@ function updatePois(): void {
     const right = camFwd.x * dz - camFwd.z * dx > 0;
     poiDraw.push({
       x: 0, y: innerHeight * (0.34 + i * 0.055),
-      t: right ? `${label} >` : `< ${label}`, c: POI_COLORS[p.kind], edge: right ? 1 : -1, rng,
+      // An edge chip is a BEARING, never a view — it points off-screen by
+      // definition — so it is never ghosted.
+      t: right ? `${label} >` : `< ${label}`, c: POI_COLORS[p.kind], edge: right ? 1 : -1, rng, hid: false,
     });
   }
 }
@@ -4159,7 +4540,10 @@ let urlAt = 0, urlX = Infinity, urlZ = 0, urlH = 0;
 const writeUrl = (la: number, lo: number): void => {
   const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
   try {
-    history.replaceState(null, '', `?lat=${la.toFixed(5)}&lon=${lo.toFixed(5)}&h=${deg.toFixed(0)}${camMode === 'chase' ? '&cam=chase' : ''}`);
+    // The mission id rides along, so the URL the game keeps rewriting stays a
+    // resumable link: reload mid-drive and the job is still on.
+    const m = mission && missionPhase !== 'done' ? `&m=${mission.id}` : '';
+    history.replaceState(null, '', `?lat=${la.toFixed(5)}&lon=${lo.toFixed(5)}&h=${deg.toFixed(0)}${camMode === 'chase' ? '&cam=chase' : ''}${m}`);
   } catch { /* fine */ }
 };
 // Surface grip: tarmac is fast, everything else asks you to slow down —
@@ -4471,6 +4855,18 @@ function tick(now: number): void {
   // against 0xc4402c paint the moment the truck was in its own shadow.
   tailMat.color.setHex(brake ? 0xff3a24 : state.speed < -0.5 ? 0xe8ded0 : 0xa8221a);
   beamMat.uniforms.uAmp.value = camMode === 'chase' ? 1 : 0.25;
+  // Feed the signs the headlight they answer to: one uniform write for the
+  // whole roadside. Taken from the LAMP, not the hull centre — a sign a few
+  // metres ahead is well inside the cone from the bumper and outside it from
+  // the middle of the truck. Dimmed in daylight, because a retroreflector that
+  // out-blooms the sun is a party trick, not a road sign.
+  beamProbe.uBeamPos.value.set(state.x + sinH * 2.3, bodyY + 0.75, state.z - cosH * 2.3);
+  beamProbe.uBeamDir.value.set(sinH, -0.06, -cosH).normalize();
+  // This world is permanently golden hour — there is no night to switch on for
+  // — so the effect is scaled to the light that DOES vary: cloud. Under a storm
+  // the ambient drops and the boards answer harder, which is exactly when a
+  // driver wants them and when the bloom has some dark to sit against.
+  beamProbe.uBeamAmt.value = (camMode === 'chase' ? 1 : 0.35) * (0.55 + 0.45 * wx.cloud);
   // Dust off the loose stuff — rate follows speed, thrown back along travel.
   const v = Math.abs(state.speed);
   if (v > 3 && groundedF > 0.2) {
@@ -4507,6 +4903,7 @@ function tick(now: number): void {
   flushTerrain(now);
   if (wildlifeOn) stepWildlife(dt);
   stepOdo(dt, now);
+  stepMission(now);
   if (now > vegAt) { vegAt = now + 900; refreshVeg(); }
   audio.update(state.speed, throttle, surfKind, groundedF, wx.rain, engRev, engGear, skid);
   reveal(state.x, state.z);
@@ -4974,7 +5371,76 @@ const TAB_ITEMS: Item[][] = [
 //
 // Names are kept inside the 5x7 bitmap set (no diacritics, no apostrophes);
 // anything outside it falls back to the system font and breaks the grid.
-interface Drive { name: string; sub: string; lat: number; lon: number; h: number }
+// ── missions ───────────────────────────────────────────────────────
+// The smallest thing that is actually a mission and not a waypoint: somewhere
+// you are GIVEN it, somewhere you have to GET to, and a state that survives the
+// drive between them. Both ends are pinned POIs, so the giver does not vanish
+// when you park at it and the destination does not vanish because it is 15km
+// away — the two failure modes that make a waypoint useless as a mission.
+//
+// Deliberately data, hung off a curated drive. A second mission is a second
+// entry, not a second system.
+interface Mission {
+  id: string;
+  giver: { name: string; lat: number; lon: number };
+  title: string;
+  brief: string;
+  dest: { name: string; lat: number; lon: number };
+  /** How close counts as arrived. */
+  within: number;
+}
+type MissionPhase = 'none' | 'offered' | 'active' | 'done';
+let mission: Mission | null = null;
+let missionPhase: MissionPhase = 'none';
+let missionGiver: Poi | null = null, missionDest: Poi | null = null;
+let missionAt = 0;         // when the current phase started (for the banner)
+let missionBest = Infinity; // closest approach to the destination so far
+/** Seed a mission's two pinned waypoints once the world origin is known. */
+function armMission(m: Mission): void {
+  mission = m;
+  missionPhase = 'offered';
+  const [gx, gz] = toLocal(m.giver.lat, m.giver.lon);
+  const [dx, dz] = toLocal(m.dest.lat, m.dest.lon);
+  missionGiver = { name: m.giver.name, x: gx, z: gz, kind: 'mission', pinned: true };
+  missionDest = { name: m.dest.name, x: dx, z: dz, kind: 'mission', pinned: true };
+  // The giver is pinned from the start; the destination only appears once the
+  // job is taken. A mission you have not accepted should not be telling you
+  // where to go.
+  pois.set(missionGiver.name, missionGiver);
+}
+function stepMission(now: number): void {
+  if (!mission) return;
+  const near = (p: Poi | null): number => (p ? Math.hypot(p.x - state.x, p.z - state.z) : Infinity);
+  if (missionPhase === 'offered' && near(missionGiver) < POI_RANGE) {
+    // The prompt is drawn by the HUD; acceptance is a tap on it.
+    missionReady = true;
+  } else if (missionPhase === 'offered') {
+    missionReady = false;
+  }
+  if (missionPhase === 'active') {
+    const d = near(missionDest);
+    missionBest = Math.min(missionBest, d);
+    if (d < mission.within) {
+      missionPhase = 'done';
+      missionAt = now;
+      if (missionDest) missionDest.pinned = false;
+      audio.thud(2);
+    }
+  }
+}
+function acceptMission(now: number): void {
+  if (!mission || missionPhase !== 'offered' || !missionDest) return;
+  missionPhase = 'active';
+  missionAt = now;
+  missionReady = false;
+  pois.set(missionDest.name, missionDest);
+  if (missionGiver) missionGiver.pinned = false;
+  audio.stone();
+}
+let missionReady = false;         // in range of the giver, not yet accepted
+let missionRect = { x: 0, y: 0, w: 0, h: 0 };
+
+interface Drive { name: string; sub: string; lat: number; lon: number; h: number; mission?: Mission }
 const DRIVES: Drive[] = [
   { name: 'PARIS', sub: 'TROCADERO · THE START', lat: 48.8617, lon: 2.289, h: 135 },
   { name: 'LAC ROSE', sub: 'SENEGAL · THE FINISH', lat: 14.839, lon: -17.235, h: 90 },
@@ -4990,12 +5456,31 @@ const DRIVES: Drive[] = [
   { name: 'TRANSFAGARASAN', sub: 'ROMANIA · THE RIDGE ROAD', lat: 45.6017, lon: 24.6172, h: 180 },
   { name: 'NORDSCHLEIFE', sub: 'EIFEL · THE GREEN HELL', lat: 50.3356, lon: 6.9475, h: 200 },
   { name: 'ICEFIELDS', sub: 'ALBERTA · THE PARKWAY', lat: 52.22, lon: -117.225, h: 160 },
-  { name: 'CHAPMANS PEAK', sub: 'CAPE TOWN', lat: -34.079, lon: 18.362, h: 180 },
+  // Starts at the reserve's admin office on Ou Kaapse Weg, not on the pass
+  // itself: a drive should begin somewhere you are GIVEN a reason to go, and
+  // end at the thing worth arriving at. The old spawn (-34.079, 18.362) is now
+  // the destination.
+  {
+    name: 'CHAPMANS PEAK', sub: 'CAPE TOWN · THE RUN OUT WEST', lat: -34.08716, lon: 18.42083, h: 290,
+    mission: {
+      id: 'chapmans-run',
+      giver: { name: 'ADMIN OFFICE', lat: -34.08716, lon: 18.42083 },
+      title: 'THE RUN OUT WEST',
+      brief: 'TAKE THE PASS TO THE HEADLAND',
+      dest: { name: 'CHAPMANS PEAK', lat: -34.079, lon: 18.362 },
+      within: 90,
+    },
+  },
   { name: 'JOKULSARLON', sub: 'ICELAND · THE RING ROAD', lat: 64.048, lon: -16.18, h: 270 },
 ];
 const startDrive = (d: Drive): void => {
-  location.href = `${location.pathname}?lat=${d.lat}&lon=${d.lon}&h=${d.h}&cam=chase`;
+  const m = d.mission ? `&m=${d.mission.id}` : '';
+  location.href = `${location.pathname}?lat=${d.lat}&lon=${d.lon}&h=${d.h}&cam=chase${m}`;
 };
+/** A drive's mission, by the id the spawn URL carries — so a shared link
+ *  arrives with the job already on it. */
+const missionById = (id: string): Mission | null =>
+  DRIVES.find((d) => d.mission?.id === id)?.mission ?? null;
 let drivePage = 0, drivePages = 1;
 const driveRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
 let drivePageRect = { x: 0, y: 0, w: 0, h: 0 };
@@ -5105,7 +5590,9 @@ const itemRects: Array<{ x: number; y: number; w: number; h: number; i: number }
 const CARD8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 let placeLine = '';
 // POI pins, filled by updatePois and drawn in the pixel font.
-interface PoiDraw { x: number; y: number; t: string; c: string; edge: 0 | -1 | 1; rng: boolean }
+interface PoiDraw { x: number; y: number; t: string; c: string; edge: 0 | -1 | 1; rng: boolean; hid: boolean;
+  /** Where the pin actually is, so a probe can check the sight line itself. */
+  w?: [number, number, number] }
 let poiDraw: PoiDraw[] = [];
 let streaming = false;
 
@@ -5120,6 +5607,26 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     if (p.edge === 0) {
       const x = clamp(Math.round(p.x / hudS - w / 2), 2, HW - w - 2);
       const y = clamp(Math.round(p.y / hudS), 22, HH - 40);
+      // GHOSTED WHEN YOU CANNOT SEE IT. A screen-space label knows where a
+      // place is, not whether there is a mountain in front of it — so a dam
+      // 860m away behind a ridge was painting itself beside the bonnet at full
+      // strength, which reads as "there it is" rather than "it is that way".
+      // Occluded pins keep their position and lose their solidity: dimmed text,
+      // a dashed stem, and a hollow head. Still a bearing; no longer a sighting.
+      const cxm = Math.round(x + w / 2);
+      if (p.hid) {
+        hctx.save();
+        hctx.globalAlpha = 0.42;
+        textEdgeS(label, x + 3, y - 9, p.rng ? UI.gold : UI.dim);
+        hctx.fillStyle = p.c;
+        for (let sy = y - 3; sy < y + 2; sy += 2) hctx.fillRect(cxm, sy, 1, 1);   // dashed stem
+        hctx.fillRect(cxm - 1, y + 2, 3, 1);                                      // hollow head
+        hctx.fillRect(cxm - 1, y + 4, 3, 1);
+        hctx.fillRect(cxm - 1, y + 3, 1, 1);
+        hctx.fillRect(cxm + 1, y + 3, 1, 1);
+        hctx.restore();
+        continue;
+      }
       textEdgeS(label, x + 3, y - 9, p.rng ? UI.gold : UI.text);
       hctx.fillStyle = p.c;
       hctx.fillRect(Math.round(x + w / 2), y - 3, 1, 5);      // stem
@@ -5203,10 +5710,40 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   const infoH = 16;
   const infoY = HH - pad - infoH;
   const my = infoY - mw - 3;
+  // ── the job ──
+  // Three states, one strip, always in the same place: an offer you can take,
+  // a destination with the distance left on it, and a confirmation. Drawn above
+  // the conditions panel so it never fights the dock for the same pixels.
+  missionRect = { x: 0, y: 0, w: 0, h: 0 };
   const mx = pad;
   const CONDW = Math.max(74, mw + 16);
   const condH = 42;
   const sy = my - condH - 3;
+  if (mission && missionPhase !== 'none') {
+    const bh = 17, by = sy - bh - 3;
+    const bw = HW - pad * 2;
+    let head = '', body = '', col = UI.gold;
+    if (missionPhase === 'offered') {
+      head = missionReady ? 'TAP TO ACCEPT' : mission.giver.name;
+      body = missionReady ? mission.title : 'JOB WAITING';
+      col = missionReady ? UI.good : UI.dim;
+    } else if (missionPhase === 'active') {
+      const d = missionDest ? Math.hypot(missionDest.x - state.x, missionDest.z - state.z) : 0;
+      head = mission.title;
+      body = `${mission.brief}  ${fmtDist(d)}`;
+    } else {
+      head = 'ARRIVED';
+      body = `${mission.title} · ${(odo.trip / 1000).toFixed(1)}KM`;
+      col = UI.good;
+    }
+    // The confirmation earns eight seconds and then gets out of the way.
+    if (missionPhase !== 'done' || performance.now() - missionAt < 8000) {
+      panel(pad, by, bw, bh, missionReady || missionPhase === 'done' ? col : undefined);
+      textSmall(hctx, fitS(head, bw - 8), pad + 4, by + 3, col);
+      textSmall(hctx, fitS(body, bw - 8), pad + 4, by + 10, UI.text);
+      if (missionReady) missionRect = { x: pad, y: by, w: bw, h: bh };
+    }
+  }
   // ── conditions: surface, grip, weather, wetness, heading ──
   panel(pad, sy, CONDW, condH);
   const sname = surf === 'road' ? 'ROAD' : surf === 'track' ? 'TRACK' : surf === 'water' ? 'WATER' : 'ROUGH';
@@ -5506,6 +6043,9 @@ function hudTap(cx: number, cy: number): boolean {
     return true;
   }
   if (inside(menuRect)) { menuTab = 0; return true; }
+  // Before the dock, because the accept prompt sits above it and a tap that
+  // lands on both should take the job rather than flip the camera.
+  if (missionReady && missionRect.w && inside(missionRect, 4)) { acceptMission(performance.now()); return true; }
   if (inside(dockRect, 0)) { toggleCam(); return true; }
   if (inside(placeRect)) { toggleAlien(); return true; }
   return false;
@@ -5552,6 +6092,10 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
   const h0 = parseFloat(q.get('h') ?? '');
   if (Number.isFinite(h0)) state.heading = (h0 * Math.PI) / 180;
   if (q.get('cam') === 'chase' && camMode === 'top') toggleCam();
+  // The job, if this spawn carries one. Armed AFTER `origin` is set, because
+  // both its waypoints are lat/lon and have to be projected into local metres.
+  const mid = q.get('m');
+  if (mid) { const m = missionById(mid); if (m) armMission(m); }
   writeUrl(spawn.lat, spawn.lon);
   void placeName(spawn.lat, spawn.lon).then((n) => { if (n) { placeLabel = n; renderPlace(); } });
   bootMsg('reading the terrain…');
