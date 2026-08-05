@@ -23,6 +23,7 @@ import * as acm from 'aws-cdk-lib/aws-certificatemanager';
 import { ServiceRouter, PUBLIC_NS_PATTERN, CELL_HOST_NS_PATTERN } from '../platform/infra/service-router';
 import { HttpServiceCell } from '../platform/infra/http-service-cell';
 import { buildCellTemplate } from '../services/cells/cell-template';
+import { __toRecordForTests } from '../services/cells/registry';
 import { trimWays, tileKey } from '../cells/drive/index';
 
 function synth(withNamespace: boolean): Template {
@@ -198,5 +199,37 @@ describe('ADR-0095 — the drive cell as miss handler', () => {
   it('an untagged way still round-trips (tags default to {}, never undefined)', () => {
     const out = trimWays([{ type: 'way', id: 7, geometry: [{ lat: 0, lon: 0 }] }]);
     expect(out[0].tags).toEqual({});
+  });
+});
+
+describe('ADR-0095 — the registry must not silently drop stack-shape fields', () => {
+  // `toRecord` is an explicit projection: a field it does not name is dropped
+  // on read, so the NEXT configureCell that omits that knob re-renders the
+  // stack without it. This was not theoretical — live,
+  // `configureCell {timeoutSeconds: 30}` answered `publicNamespace: false` and
+  // took away the S3 grant the previous call had just granted.
+  it('round-trips publicNamespace, timeoutSeconds and memoryMb', () => {
+    const stored = {
+      pk: 'CELL#drive-x', sk: 'A',
+      cellId: 'drive-x', name: 'drive', owner: 'c15r', description: null,
+      functionName: 'cell-drive-x', stackName: 'cell-drive-x', grants: ['c15r'],
+      public: true, publicNamespace: true, timeoutSeconds: 30, memoryMb: 512,
+      status: 'ACTIVE', createdAt: 'now', updatedAt: 'now',
+    };
+    const back = __toRecordForTests(stored);
+    expect(back.publicNamespace).toBe(true);
+    expect(back.timeoutSeconds).toBe(30);
+    expect(back.memoryMb).toBe(512);
+  });
+
+  it('leaves them absent when the stored item never had them', () => {
+    const back = __toRecordForTests({
+      cellId: 'x', name: 'x', owner: 'c15r', description: null,
+      functionName: 'f', stackName: 's', grants: [], public: false,
+      status: 'ACTIVE', createdAt: 'now', updatedAt: 'now',
+    });
+    expect(back.publicNamespace).toBeUndefined();
+    expect(back.timeoutSeconds).toBeUndefined();
+    expect(back.memoryMb).toBeUndefined();
   });
 });

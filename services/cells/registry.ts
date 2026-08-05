@@ -123,12 +123,28 @@ function toRecord(item: DynamoDB.DocumentClient.AttributeMap): CellRecord {
     ...(Array.isArray(item.ssrReads) ? { ssrReads: item.ssrReads as CellRecord['ssrReads'] } : {}),
     ...(Array.isArray(item.callerWrites) ? { callerWrites: item.callerWrites as CellRecord['callerWrites'] } : {}),
     public: !!item.public,
+    // These three are STACK SHAPE, and `toRecord` is an explicit projection —
+    // anything not named here is silently dropped on read, so a subsequent
+    // configureCell that omits a knob re-renders the stack WITHOUT it. Caught
+    // live: `configureCell {timeoutSeconds:30}` came back `publicNamespace:
+    // false` and removed the S3 grant it had just been given, because the
+    // read-back said the cell never had one. `timeoutSeconds`/`memoryMb` had
+    // the same hole — the comment in configureCell promising that "a
+    // memory-only change never resets timeout" was not true, because the
+    // stored value never survived the read.
+    ...(typeof item.publicNamespace === 'boolean' ? { publicNamespace: item.publicNamespace } : {}),
+    ...(typeof item.timeoutSeconds === 'number' ? { timeoutSeconds: item.timeoutSeconds } : {}),
+    ...(typeof item.memoryMb === 'number' ? { memoryMb: item.memoryMb } : {}),
     status: item.status as CellStatus,
     ...(item.deploy && typeof item.deploy === 'object' ? { deploy: item.deploy as DeployState } : {}),
     createdAt: String(item.createdAt),
     updatedAt: String(item.updatedAt),
   };
 }
+
+/** The projection above, exposed for tests — a dropped field here is a stack
+ *  knob silently reset on the next reconfigure. */
+export const __toRecordForTests = toRecord;
 
 export interface CellRegistry {
   put(record: CellRecord): Promise<void>;

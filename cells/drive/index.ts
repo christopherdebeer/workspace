@@ -99,9 +99,16 @@ const SHELL = `<!doctype html>
 // minute upstream becomes our bad week.
 const TILE_RE = /^\/~\/osm\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 const OVERPASS = 'https://overpass-api.de/api/interpreter';
-// Well under the 60s CloudFront origin timeout: the edge should be waiting on
-// us, never the other way round.
-const UPSTREAM_MS = 20000;
+// Two ceilings sit above this and it must clear BOTH: CloudFront's 60s origin
+// read timeout, and — the one that actually bit — the cell's own Lambda
+// timeout. Measured on the first live run with the 10s default: three of four
+// tiles came back `502 Error from cloudfront` at ~10.7s, because the function
+// was killed mid-fetch and never got to return its own 503. A 502 from a dead
+// Lambda is strictly worse than a 503 from a live one: no `retry-after`, no
+// `no-store`, and nothing in the logs saying which upstream failed. The cell is
+// configured at 30s (`cells.configureCell timeoutSeconds`), and this stays
+// under it so the handler always outlives its own request and can say why.
+const UPSTREAM_MS = 22000;
 
 /** Tile bounds on the standard web-mercator grid (the client's `tileBounds`). */
 function tileBounds(z: number, x: number, y: number) {
