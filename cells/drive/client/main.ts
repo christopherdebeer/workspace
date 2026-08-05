@@ -2953,6 +2953,8 @@ const state = { x: 0, z: 0, heading: 0, speed: 0 };
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
 (window as unknown as { __wx?: object }).__wx = wx; // debug/test handle
 (window as unknown as { __life?: object }).__life = () => ({
+  roadCells: roadGrid.size,
+  wallCells: wallGrid.size,
   sites: [...vegGrid.values()].reduce((n, c) => n + c.length, 0),
   cells: vegGrid.size,
   shown: Object.fromEntries(Object.entries(vegMeshes).map(([k, m]) => [k, m.count])),
@@ -3037,6 +3039,14 @@ function truckSpec(): Record<string, number> {
 (window as unknown as { __spec?: object }).__spec = (): object => ({ ...truckSpec(), spec: SPEC_TARGET });
 // Open the vehicle bay on a named elevation, so a test can capture all five
 // and they can be compared against the sheet side by side.
+// The curated starts, and a way to take one without a tap.
+(window as unknown as { __drives?: object }).__drives = (n?: number): object => {
+  if (n === undefined) return DRIVES.map((d, i) => ({ i, name: d.name, sub: d.sub, lat: d.lat, lon: d.lon, h: d.h }));
+  const d = DRIVES[n];
+  if (!d) return { error: `no drive ${n}` };
+  startDrive(d);
+  return { going: d.name };
+};
 (window as unknown as { __view?: object }).__view = (id?: string): object => {
   if (id !== undefined) {
     const i = VIEWS.findIndex((v) => v.id === id.toUpperCase());
@@ -4061,10 +4071,27 @@ function glyphRows(ch: string): string {
 const textW = (s: string, sc = 1): number => s.length * (FW + 1) * sc;
 /** The 3x5 face: width, and a draw that mirrors `text` on the smaller grid. */
 const textSW = (s: string): number => s.length * 4;
+/** `fit` for the 3x5 micro font — the 5x7 version truncates it by a third. */
+const fitS = (s: string, maxPx: number): string => {
+  const n = Math.max(1, Math.floor(maxPx / 4));
+  return s.length <= n ? s : `${s.slice(0, n - 1)}.`;
+};
 function textSmall(c: CanvasRenderingContext2D, s: string, x: number, y: number, col: string): void {
   c.fillStyle = col;
   let cx = x;
   for (const ch of s) {
+    // Same system-font escape hatch the 5x7 face has. Without it the micro font
+    // silently mapped every unknown character to '?', so a POI pin in Giza or
+    // Reykjavík came out as a row of question marks — the curated destinations
+    // walk straight into Arabic and Icelandic, which is how this surfaced.
+    if (!GLYPHS_S[ch] && !GLYPHS_S[ch.toUpperCase()] && ch !== ' ') {
+      c.font = '6px ui-monospace, monospace';
+      c.textAlign = 'left';
+      c.fillText(ch, cx, y + 5);
+      c.fillStyle = col;
+      cx += 4;
+      continue;
+    }
     const rows = GLYPHS_S[ch] ?? GLYPHS_S[ch.toUpperCase()] ?? GLYPHS_S['?'];
     for (let r = 0; r < 5; r++) {
       const bits = Number(rows[r]);
@@ -4218,6 +4245,41 @@ const TAB_ITEMS: Item[][] = [
     { col: () => UI.soft, label: () => 'HIDE HUD', hit: () => { menuTab = null; setClean(true); } },
   ],
 ];
+// ── curated starts ─────────────────────────────────────────────────
+// `ELSEWHERE` drops you anywhere on Earth with roads, which is the whole point
+// of it — and also means the good stuff is a lottery. These are AUTHORED: real
+// coordinates on real roads, each facing the way the place is worth looking at.
+// The spawn URL already carries lat/lon, a heading and a camera mode, so a
+// drive is nothing more than a composed link — which is also what makes this
+// the natural place to hang checkpoints and missions off later.
+//
+// Names are kept inside the 5x7 bitmap set (no diacritics, no apostrophes);
+// anything outside it falls back to the system font and breaks the grid.
+interface Drive { name: string; sub: string; lat: number; lon: number; h: number }
+const DRIVES: Drive[] = [
+  { name: 'PARIS', sub: 'TROCADERO · THE START', lat: 48.8617, lon: 2.289, h: 135 },
+  { name: 'LAC ROSE', sub: 'SENEGAL · THE FINISH', lat: 14.839, lon: -17.235, h: 90 },
+  { name: 'GIZA', sub: 'EGYPT · THE PYRAMIDS', lat: 29.9765, lon: 31.132, h: 45 },
+  { name: 'WADI RUM', sub: 'JORDAN · VALLEY OF THE MOON', lat: 29.5765, lon: 35.42, h: 90 },
+  { name: 'SOSSUSVLEI', sub: 'NAMIBIA · THE RED DUNES', lat: -24.728, lon: 15.345, h: 90 },
+  { name: 'UYUNI', sub: 'BOLIVIA · THE SALT FLAT', lat: -20.2, lon: -67.5, h: 270 },
+  { name: 'DEATH VALLEY', sub: 'BADWATER BASIN', lat: 36.2296, lon: -116.7665, h: 0 },
+  { name: 'MONUMENT VALLEY', sub: 'UTAH · US 163', lat: 37.103, lon: -109.993, h: 200 },
+  { name: 'BIG SUR', sub: 'CALIFORNIA · BIXBY CREEK', lat: 36.3714, lon: -121.9019, h: 340 },
+  { name: 'STELVIO', sub: 'ITALY · 48 HAIRPINS', lat: 46.5285, lon: 10.4541, h: 200 },
+  { name: 'TROLLSTIGEN', sub: 'NORWAY · THE TROLL LADDER', lat: 62.4558, lon: 7.671, h: 180 },
+  { name: 'TRANSFAGARASAN', sub: 'ROMANIA · THE RIDGE ROAD', lat: 45.6017, lon: 24.6172, h: 180 },
+  { name: 'NORDSCHLEIFE', sub: 'EIFEL · THE GREEN HELL', lat: 50.3356, lon: 6.9475, h: 200 },
+  { name: 'ICEFIELDS', sub: 'ALBERTA · THE PARKWAY', lat: 52.22, lon: -117.225, h: 160 },
+  { name: 'CHAPMANS PEAK', sub: 'CAPE TOWN', lat: -34.079, lon: 18.362, h: 180 },
+  { name: 'JOKULSARLON', sub: 'ICELAND · THE RING ROAD', lat: 64.048, lon: -16.18, h: 270 },
+];
+const startDrive = (d: Drive): void => {
+  location.href = `${location.pathname}?lat=${d.lat}&lon=${d.lon}&h=${d.h}&cam=chase`;
+};
+let drivePage = 0, drivePages = 1;
+const driveRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
+let drivePageRect = { x: 0, y: 0, w: 0, h: 0 };
 // Straight off the sheet — the parts of the rig that are not geometry.
 const SPEC_TEXT: Array<[string, string]> = [
   ['CLASS', 'OVERLAND / RALLY'], ['DRIVE', '4X4'], ['CURB', '2100KG'], ['PAYLOAD', '800KG'],
@@ -4328,6 +4390,7 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   itemRects.length = 0;
   tabRects.length = 0;
   viewRects.length = 0;
+  driveRects.length = 0;
   vehRect = { x: 0, y: 0, w: 0, h: 0 };
   // ── the dock, bottom-left: whichever view ISN'T fullscreen ──
   // While charting, the renderer scissors a live POV preview into this square,
@@ -4470,12 +4533,10 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
     let y = top;
     const rows: Array<[string, string]> = tab === 1
       ? [
-        ['PLACE', fit(placeLine || '—', MW - 60).toUpperCase()],
-        ['BIOME', biome.name.toUpperCase()],
-        ['WEATHER', WX[wx.sky].label + (wx.wet > 0.05 ? ' WET' : '')],
-        ['SURFACE', surf === 'road' ? 'ROAD' : surf === 'water' ? 'WATER' : 'ROUGH'],
-        ['SPEED', `${kmh} KM/H`],
-        ['HEADING', `${Math.round((((state.heading * 180) / Math.PI) % 360 + 360) % 360)}°`],
+        ['HERE', fitS(placeLine || 'LOCATING', MW - 60).toUpperCase()],
+        ['BIOME', `${biome.name.toUpperCase()} · ${WX[wx.sky].label}${wx.wet > 0.05 ? ' WET' : ''}`],
+        // No degree sign: it is not in the 3x5 set and renders as '?'.
+        ['HEADING', `${Math.round((((state.heading * 180) / Math.PI) % 360 + 360) % 360)} DEG · ${kmh} KM/H`],
       ]
       : [
         ['SOUND', audio.on ? (audio.state === 'running' ? 'ON' : 'NEEDS TAP') : 'OFF'],
@@ -4489,6 +4550,37 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
     }
     y += 6;
     const items = TAB_ITEMS[tab];
+    if (tab === 1) {
+      // ── the curated starts ──
+      // The list takes whatever room is left between the readouts and the
+      // buttons, and pages if the screen is too short for all of it — a phone
+      // in landscape has barely a third of the height of one held upright.
+      const btnH = items.length * 16 + 8;
+      const room = Math.max(2, MY + MH - 6 - btnH - (y + 10));
+      const perPage = Math.max(3, Math.floor(room / 11));
+      const pages = Math.ceil(DRIVES.length / perPage);
+      drivePages = pages;
+      drivePage = clamp(drivePage, 0, pages - 1);
+      textSmall(hctx, 'DESTINATIONS', MX + 6, y, UI.dim);
+      if (pages > 1) {
+        const lab = `${drivePage + 1}/${pages} >`;
+        drivePageRect = { x: MX + MW - textSW(lab) - 10, y: y - 2, w: textSW(lab) + 8, h: 9 };
+        textSmall(hctx, lab, drivePageRect.x + 4, y, UI.gold);
+      } else {
+        drivePageRect = { x: 0, y: 0, w: 0, h: 0 };
+      }
+      y += 9;
+      const from = drivePage * perPage;
+      for (let i = from; i < Math.min(DRIVES.length, from + perPage); i++) {
+        const d = DRIVES[i];
+        text(hctx, fit(d.name, MW * 0.52), MX + 6, y, UI.text);
+        const sub = fitS(d.sub, MW * 0.46);
+        textSmall(hctx, sub, MX + MW - textSW(sub) - 7, y + 2, UI.dim);
+        driveRects.push({ x: MX + 4, y: y - 2, w: MW - 8, h: 11, i });
+        y += 11;
+      }
+      y = MY + MH - 6 - btnH;
+    }
     for (let i = 0; i < items.length; i++) {
       const w = Math.max(textW(items[i].label()) + 10, 70);
       panel(MX + 5, y, w, 13, items[i].col());
@@ -4517,6 +4609,8 @@ function hudTap(cx: number, cy: number): boolean {
     if (inside(closeRect)) { menuTab = null; return true; }
     for (const r of tabRects) if (inside(r, 0)) { menuTab = r.i; return true; }
     for (const r of viewRects) if (inside(r, 0)) { vehView = r.i; return true; }
+    if (drivePageRect.w && inside(drivePageRect, 2)) { drivePage = (drivePage + 1) % drivePages; return true; }
+    for (const r of driveRects) if (inside(r, 0)) { startDrive(DRIVES[r.i]); return true; }
     for (const r of itemRects) if (inside(r, 0)) { TAB_ITEMS[tab]?.[r.i]?.hit(); return true; }
     return true;
   }
