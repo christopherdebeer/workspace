@@ -992,6 +992,22 @@ const vergeTex = canvasTex(64, 1, 1, 119, (c, s, r) => {
   moss(c, s, r, 4, ['rgba(58,86,40,0.35)', 'rgba(40,64,30,0.3)']);
   cracks(c, s, r, 4, 'rgba(16,13,8,0.4)');
 });
+// A parapet: solid kerb, open balusters, capped rail. Alpha-cut, so the sky
+// shows between the posts — a solid wall at this height would read as a
+// trench, and the gaps are what make a drop legible as a drop.
+const railTex = canvasTex(32, 1, 1, 121, (c, s, r) => {
+  c.clearRect(0, 0, s, s);
+  const px = (x: number, y: number, w: number, h: number, f: string): void => { c.fillStyle = f; c.fillRect(x, y, w, h); };
+  px(0, 0, s, Math.round(s * 0.16), '#8a877c');                 // the capping rail
+  px(0, Math.round(s * 0.14), s, 2, 'rgba(20,20,18,0.5)');      // its shadow
+  px(0, Math.round(s * 0.7), s, Math.round(s * 0.3), '#6b675c'); // the solid kerb
+  px(0, Math.round(s * 0.7), s, 2, 'rgba(236,230,212,0.35)');
+  for (let x = 2; x < s; x += 8) {                              // balusters
+    px(x, Math.round(s * 0.16), 3, Math.round(s * 0.54), '#7b776c');
+    px(x, Math.round(s * 0.16), 1, Math.round(s * 0.54), 'rgba(236,230,212,0.28)');
+  }
+  speckle(c, s, r, ['rgba(0,0,0,0.16)', 'rgba(255,255,255,0.07)'], 60, 1);
+});
 // A deck fascia, for where the carriageway rides clear of the ground: the
 // same volume, but poured rather than cut.
 const deckTex = canvasTex(64, 1, 1, 120, (c, s, r) => {
@@ -1098,6 +1114,9 @@ const MAT = {
   // whenever the camera crosses the road.
   verge: new THREE.MeshLambertMaterial({ map: vergeTex, side: DS }),
   deck: new THREE.MeshLambertMaterial({ map: deckTex, side: DS }),
+  // alphaTest, not blending: a parapet is seen against sky, water and its own
+  // deck at once, and a sorted transparent has no right answer for that.
+  rail: new THREE.MeshLambertMaterial({ map: railTex, side: DS, transparent: true, alphaTest: 0.5 }),
   // Tunnel interior: emissive so the tube reads even with no light inside.
   tunnel: new THREE.MeshLambertMaterial({ color: 0x2a2d34, emissive: 0x0b0d12, side: DS }),
   portal: new THREE.MeshLambertMaterial({ color: 0x4d4a42, side: DS }),
@@ -2051,9 +2070,18 @@ function groundAt(x: number, z: number): number {
 // Aprons accumulate across a whole vector tile and go up as two meshes, not two
 // per way. A city block is a thousand ways, and a thousand extra draw calls to
 // draw the same brown wall is the kind of thing that quietly costs 20fps.
-const apron = { cutV: [] as number[], cutUV: [] as number[], dckV: [] as number[], dckUV: [] as number[] };
+const apron = {
+  cutV: [] as number[], cutUV: [] as number[],
+  dckV: [] as number[], dckUV: [] as number[],
+  rlV: [] as number[], rlUV: [] as number[],
+};
+const spanStats = { piers: 0, railM: 0, deckM: 0, maxDaylight: 0, at: null as [number, number] | null };
 function flushAprons(): void {
-  for (const [v, u, m] of [[apron.cutV, apron.cutUV, MAT.verge], [apron.dckV, apron.dckUV, MAT.deck]] as const) {
+  for (const [v, u, m] of [
+    [apron.cutV, apron.cutUV, MAT.verge],
+    [apron.dckV, apron.dckUV, MAT.deck],
+    [apron.rlV, apron.rlUV, MAT.rail],
+  ] as const) {
     if (!v.length) continue;
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(v), 3));
@@ -2138,9 +2166,12 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // gets viaducts right without needing the OSM tag to be honest.
   const segsOf: Seg[] = [];
   const DECK_GAP = 3;     // above this much daylight it is a structure, not a bank
-  const DECK_D = 1.35;    // fascia depth
   const APRON = 3.6;      // how far the cut face reaches below the ground it meets
   const APRON_MAX = 16;   // …but never a cliff: a hillside is the terrain's job
+  const PIER_AT = 5;      // daylight past which a span needs holding up
+  const PIER_SPAN = 26;   // metres between piers
+  const RAIL_AT = 2.6;    // drop past the kerb that earns a parapet
+  const RAIL_H = 1;       // parapet height
   // SMOOTHED along the way, and shared by both kerbs. Deciding per quad and per
   // side made adjacent quads flip between a 4m curtain of soil and a 1.35m
   // concrete lip, so the road's underside broke into floating blocks.
@@ -2152,6 +2183,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     for (let j = Math.max(0, i - 4); j <= Math.min(n - 1, i + 4); j++) { s += daylight[j]; c++; }
     return s / c > DECK_GAP;
   });
+  // A viaduct's beam gets deeper as it gets longer — a 1.35m lip under a
+  // thirty-metre span reads as paper. Depth follows the daylight it crosses.
+  const deckDepth = (gap: number): number => clamp(1.15 + gap * 0.085, 1.15, 3.6);
   const face = (
     xA: number, yA: number, zA: number, xB: number, yB: number, zB: number,
     bA: number, bB: number, u0: number, u1: number, deck: boolean,
@@ -2161,7 +2195,48 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     V.push(xA, yA, zA, xB, yB, zB, xA, bA, zA, xB, yB, zB, xB, bB, zB, xA, bA, zA);
     U.push(u0, 0, u1, 0, u0, d0, u1, 0, u1, d1, u0, d0);
   };
+  // Any quad, in world space, into a chosen accumulator. The soffit needs a
+  // horizontal face and `face` only makes vertical ones.
+  const quad = (V: number[], U: number[], p: number[], uv: number[]): void => {
+    V.push(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8],
+      p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
+    U.push(uv[0], uv[1], uv[2], uv[3], uv[4], uv[5], uv[2], uv[3], uv[6], uv[7], uv[4], uv[5]);
+  };
+  // A pier: four splayed faces from the soffit down into whatever is below,
+  // which for the bridge in the screenshot is the bed of a lake. Wider across
+  // the carriageway than along it, so it reads as holding the road up rather
+  // than as a post someone left there.
+  const pier = (cx: number, cz: number, ax: number, az: number, top: number, bot: number, halfW: number): void => {
+    const tl = Math.hypot(ax, az) || 1;
+    const ux = ax / tl, uz = az / tl;              // along the road
+    const vx = -uz, vz = ux;                       // across it
+    const corner = (s: number, k: number): [number, number] => [
+      cx + vx * halfW * s + ux * 1.05 * k, cz + vz * halfW * s + uz * 1.05 * k,
+    ];
+    spanStats.piers++;
+    const SPLAY = 1.22;                            // the base is broader than the neck
+    const cs: Array<[number, number]> = [[1, 1], [1, -1], [-1, -1], [-1, 1]];
+    for (let i = 0; i < 4; i++) {
+      const [s0, k0] = cs[i], [s1, k1] = cs[(i + 1) % 4];
+      const [tx0, tz0] = corner(s0, k0), [tx1, tz1] = corner(s1, k1);
+      const [bx0, bz0] = corner(s0 * SPLAY, k0 * SPLAY), [bx1, bz1] = corner(s1 * SPLAY, k1 * SPLAY);
+      const h = (top - bot) / 4;
+      quad(apron.dckV, apron.dckUV,
+        [tx0, top, tz0, tx1, top, tz1, bx0, bot, bz0, bx1, bot, bz1],
+        [0, 0, 1, 0, 0, h, 1, h]);
+    }
+  };
+  // The parapet, standing on the deck's own overhang.
+  const rail = (
+    xA: number, yA: number, zA: number, xB: number, yB: number, zB: number, u0: number, u1: number,
+  ): void => {
+    spanStats.railM += Math.hypot(xB - xA, zB - zA);
+    quad(apron.rlV, apron.rlUV,
+      [xA, yA + RAIL_H, zA, xB, yB + RAIL_H, zB, xA, yA - 0.15, zA, xB, yB - 0.15, zB],
+      [u0, 0, u1, 0, u0, 1, u1, 1]);
+  };
   let along = 0; // metres travelled — v wraps every 20m (the roadTex period)
+  let pierRun = PIER_SPAN;  // so the first bay of a span gets one
   for (let i = 0; i < n - 1; i++) {
     const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
     const dx = x1 - x0, dz = z1 - z0;
@@ -2189,15 +2264,46 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       const ox = (-dz / len) * 2.2, oz = (dx / len) * 2.2;
       const uA = along / 8, uB = (along + len) / 8;
       const deck = deckRun[i] || deckRun[i + 1];
+      const dd = deckDepth(Math.max(daylight[i], daylight[i + 1]));
+      const bot: number[] = [];
       for (const sgn of [1, -1]) {
         const ex0 = x0 + nx * sgn, ez0 = z0 + nz * sgn;
         const ex1 = x1 + nx * sgn, ez1 = z1 + nz * sgn;
         const ey0 = sgn > 0 ? y00 : y01, ey1 = sgn > 0 ? y10 : y11;
         const g0 = Math.min(sampleHeight(ex0, ez0), sampleHeight(ex0 + ox * sgn, ez0 + oz * sgn));
         const g1 = Math.min(sampleHeight(ex1, ez1), sampleHeight(ex1 + ox * sgn, ez1 + oz * sgn));
-        const b0 = deck ? ey0 - DECK_D : Math.max(Math.min(ey0, g0) - APRON, ey0 - APRON_MAX);
-        const b1 = deck ? ey1 - DECK_D : Math.max(Math.min(ey1, g1) - APRON, ey1 - APRON_MAX);
+        const b0 = deck ? ey0 - dd : Math.max(Math.min(ey0, g0) - APRON, ey0 - APRON_MAX);
+        const b1 = deck ? ey1 - dd : Math.max(Math.min(ey1, g1) - APRON, ey1 - APRON_MAX);
         face(ex0, ey0, ez0, ex1, ey1, ez1, b0, b1, uA, uB, deck);
+        bot.push(b0, b1);
+        // A parapet wherever the ground falls away past the kerb — the seaward
+        // side of a shelf road as much as a bridge. It is the only thing that
+        // tells you, at a glance, that the edge is an edge.
+        if (Math.max(ey0 - g0, ey1 - g1) > RAIL_AT) {
+          // Right on the kerb line, not outboard of it: set any further out and
+          // the parapet hangs in the air beside its own fascia.
+          rail(ex0 + ox * sgn * 0.04, ey0, ez0 + oz * sgn * 0.04,
+            ex1 + ox * sgn * 0.04, ey1, ez1 + oz * sgn * 0.04, along / 2.5, (along + len) / 2.5);
+        }
+      }
+      if (deck) {
+        spanStats.deckM += len;
+        if (daylight[i] > spanStats.maxDaylight) { spanStats.maxDaylight = daylight[i]; spanStats.at = [x0, z0]; }
+        // Close the beam underneath. A pair of fascias with nothing between
+        // them is a curtain, and from below — which is exactly where you see a
+        // viaduct from — it read as a black void with no bottom.
+        quad(apron.dckV, apron.dckUV,
+          [x0 + nx, bot[0], z0 + nz, x1 + nx, bot[1], z1 + nz,
+            x0 - nx, bot[2], z0 - nz, x1 - nx, bot[3], z1 - nz],
+          [0, uA, 0, uB, width / 4, uA, width / 4, uB]);
+        // And hold it up. Otherwise the road is simply hanging there, which is
+        // what a thirty-metre span over a lake looked like.
+        pierRun += len;
+        if (daylight[i] > PIER_AT && pierRun >= PIER_SPAN) {
+          pierRun = 0;
+          pier(x0, z0, dx, dz, (bot[0] + bot[2]) / 2 + 0.05,
+            Math.min(elevMin[i], sampleHeight(x0, z0)) - 1.2, width * 0.32);
+        }
       }
       // Close the ends, so a way that stops at a junction shows a cut face
       // rather than a hollow shell you can see straight into.
@@ -2206,8 +2312,8 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         const px = i0 ? x1 : x0, pz = i0 ? z1 : z0;
         const yL = i0 ? y10 : y00, yR = i0 ? y11 : y01;
         const gL = sampleHeight(px + nx, pz + nz), gR = sampleHeight(px - nx, pz - nz);
-        const bL = deck ? yL - DECK_D : Math.max(Math.min(yL, gL) - APRON, yL - APRON_MAX);
-        const bR = deck ? yR - DECK_D : Math.max(Math.min(yR, gR) - APRON, yR - APRON_MAX);
+        const bL = deck ? yL - dd : Math.max(Math.min(yL, gL) - APRON, yL - APRON_MAX);
+        const bR = deck ? yR - dd : Math.max(Math.min(yR, gR) - APRON, yR - APRON_MAX);
         face(px + nx, yL, pz + nz, px - nx, yR, pz - nz, bL, bR, 0, width / 8, deck);
       }
     }
@@ -3460,6 +3566,11 @@ function truckSpec(): Record<string, number> {
     ground: +groundAt(px, pz).toFixed(2), cut: ceil === null ? 0 : +Math.max(0, raw - ceil).toFixed(2),
     pending: terrainDirty.size };
 };
+// What the bridge builder actually built.
+(window as unknown as { __span?: object }).__span = (): object => ({
+  ...spanStats, railM: Math.round(spanStats.railM), deckM: Math.round(spanStats.deckM),
+  maxDaylight: +spanStats.maxDaylight.toFixed(1),
+});
 (window as unknown as { __roadDir?: (x: number, z: number) => [number, number] | null }).__roadDir = (x, z) => {
   let best: Seg | null = null, bd = Infinity;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
