@@ -237,8 +237,17 @@ export const handler = async (event: { rawPath?: string; requestContext?: { http
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
   if (method !== 'GET') return respond(405, 'application/json', JSON.stringify({ error: 'read-only' }));
-  const tile = path.match(TILE_RE);
-  if (tile) return serveTile(path, tile);
+  // The public namespace is a CACHED surface, so anything under `~/` that this
+  // cell does not serve must say so plainly. Falling through to the SPA shell
+  // put a day-long copy of the whole page in the CDN under a tile-shaped key —
+  // observed on the first live probe, before any tile existed.
+  if (path.startsWith('/~/')) {
+    const tile = path.match(TILE_RE);
+    if (tile) return serveTile(path, tile);
+    return respond(404, 'application/json', JSON.stringify({ error: 'no such object' }), {
+      'cache-control': 'no-store',
+    });
+  }
   try {
     if (path === '/app.js') {
       return respond(200, 'application/javascript; charset=utf-8', readFileSync(join(__dirname, 'app.js'), 'utf8'), {
