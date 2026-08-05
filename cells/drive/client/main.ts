@@ -272,6 +272,15 @@ renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05070c);
 const camera = new THREE.PerspectiveCamera(55, 1, 1, 30000);
+// The near plane moves with the chart camera; only rebuild the projection when
+// it actually changes, since every uniform derived from it follows.
+let nearLock = 0;   // test handle: force a near plane to measure the difference
+function setNear(n: number): void {
+  if (nearLock) n = nearLock;
+  if (Math.abs(camera.near - n) < n * 0.02) return;
+  camera.near = n;
+  camera.updateProjectionMatrix();
+}
 
 // ── sky ────────────────────────────────────────────────────────────
 // A real sky, not a backdrop color: gradient dome with the sun sitting low
@@ -973,7 +982,11 @@ const DS = THREE.DoubleSide;
 const MAT = {
   road: new THREE.MeshLambertMaterial({ map: roadTex, side: DS }),
   minor: new THREE.MeshLambertMaterial({ map: pathTex, transparent: true, opacity: 0.85, side: DS }),
-  water: new THREE.MeshLambertMaterial({ map: waterTex, side: DS }),
+  // polygonOffset as well as the lift: water and terrain are two nearly
+  // coincident surfaces, and a constant lift alone cannot win at every camera
+  // distance. The offset is in depth-buffer units, so it scales with the
+  // precision available instead of with metres.
+  water: new THREE.MeshLambertMaterial({ map: waterTex, side: DS, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }),
   green: new THREE.MeshLambertMaterial({ map: greenTex, side: DS }),
   // Tunnel interior: emissive so the tube reads even with no light inside.
   tunnel: new THREE.MeshLambertMaterial({ color: 0x2a2d34, emissive: 0x0b0d12, side: DS }),
@@ -2257,7 +2270,7 @@ function renderWays(els: OsmWay[]): void {
     } else if (tags.building) {
       building(pts, el.id, parseFloat(tags['building:levels'] ?? '') || 2);
     } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
-      polygon(pts, MAT.water, 0.3, 0, 'water');
+      polygon(pts, MAT.water, 0.45, 0, 'water');
     } else {
       polygon(pts, MAT.green, 0.2);
       scatterVeg(pts, el.id, tags);
@@ -2671,7 +2684,11 @@ const halo = new THREE.Mesh(
   // A RING, not a disc — a filled circle drawn depth-free painted straight
   // over the truck, so the chart view showed a gold coin where the vehicle
   // should be. The ring frames it instead.
-  new THREE.RingGeometry(5.2, 6.6, 32),
+  // A HAIRLINE — 0.55m where it was 1.4m, a gold doughnut that hid the truck it
+  // was supposed to point at. It scales with zoom, so its SCREEN thickness is
+  // constant at every distance; thinner than this and it falls under one pixel
+  // of the 320p buffer and disappears entirely.
+  new THREE.RingGeometry(6.05, 6.6, 40),
   // A MARKER, not scenery: no depth test, drawn late — the player's position
   // is never allowed to be swallowed by a drape or a rooftop.
   new THREE.MeshBasicMaterial({ color: 0xf5c453, transparent: true, opacity: 0.45, depthWrite: false, depthTest: false }),
@@ -3070,6 +3087,21 @@ function truckSpec(): Record<string, number> {
 // Open the vehicle bay on a named elevation, so a test can capture all five
 // and they can be compared against the sheet side by side.
 // The curated starts, and a way to take one without a tap.
+// The slope the wheels are actually on, and the sideways creep it is causing.
+(window as unknown as { __grade?: object }).__grade = (): object => ({
+  pitch: +((gradePitch * 180) / Math.PI).toFixed(1),
+  roll: +((gradeRoll * 180) / Math.PI).toFixed(1),
+  slide: +slideV.toFixed(2),
+  speed: +state.speed.toFixed(2),
+  grip: +groundedF.toFixed(2),
+});
+// Force the near plane (0 restores automatic) so a test can measure what the
+// depth-precision fix is actually worth.
+(window as unknown as { __susp?: object }).__susp = (): object => dbgSusp;
+(window as unknown as { __near?: object }).__near = (n?: number): object => {
+  nearLock = n ?? 0;
+  return { near: camera.near, lock: nearLock };
+};
 (window as unknown as { __odo?: object }).__odo = (): object => ({ total: Math.round(odo.total), trip: Math.round(odo.trip) });
 (window as unknown as { __drives?: object }).__drives = (n?: number): object => {
   if (n === undefined) return DRIVES.map((d, i) => ({ i, name: d.name, sub: d.sub, lat: d.lat, lon: d.lon, h: d.h }));
@@ -3244,14 +3276,14 @@ canvas.addEventListener('pointermove', (e) => {
     if (other) {
       const d0 = Math.hypot(prev.x - other.x, prev.y - other.y);
       const d1 = Math.hypot(cur.x - other.x, cur.y - other.y);
-      if (d0 > 12 && d1 > 12) zoomT = clamp(zoomT * (d0 / d1), 0.25, 12); // survey the whole fog span
+      if (d0 > 12 && d1 > 12) zoomT = clamp(zoomT * (d0 / d1), 0.25, 44); // survey a whole region
     }
   }
   panPtrs.set(e.pointerId, cur);
 });
 addEventListener('wheel', (e) => {
   if (camMode !== 'top') return;
-  zoomT = clamp(zoomT * Math.exp(e.deltaY * 0.0012), 0.25, 12);
+  zoomT = clamp(zoomT * Math.exp(e.deltaY * 0.0012), 0.25, 44);
   e.preventDefault();
 }, { passive: false });
 const endStick = (e: PointerEvent): void => {
@@ -3675,6 +3707,15 @@ function roughNoise(x: number, z: number): number {
 // travel was most of the tyre's radius and the truck pogoed.
 const SUSP = { k: 55, d: 8.5, ka: 40, da: 7.6, travel: 0.24, droop: 0.22 };
 let bodyY = 0, vBodyY = 0, pitchC = 0, vPitch = 0, rollC = 0, vRoll = 0;
+// The TERRAIN's grade under the wheels — what gravity actually pulls against —
+// and the lateral creep it produces. Written by the suspension pass, read by
+// the next frame's drive step; one frame of lag at 60fps is nothing.
+let gradePitch = 0, gradeRoll = 0, slideV = 0;
+let dbgSusp: object = {};
+// A shade over 9.81. Real gravity left long climbs feeling weightless once the
+// truck has 16m/s^2 of thrust to spend against it; this gives a hill enough
+// authority that you pick your line up it.
+const GRAV = 11.5;
 let wheelSpin = 0, groundedF = 1, bodyInit = false;
 let steerCur = 0; // smoothed — keyboard taps ramp instead of snapping
 let prevGround: number | null = null; // last frame's resolved ground (tunnel guard)
@@ -3697,7 +3738,11 @@ function tick(now: number): void {
   // climbs cost speed and descents pay it back.
   const grip = groundedF;
   state.speed += thrust * grip * dt;
-  state.speed -= 9.81 * Math.sin(pitchC) * grip * dt;
+  // Gravity acts on the GROUND's grade, not on the sprung body's pitch. pitchC
+  // is damped by the suspension, carries a throttle-squat fudge, and is clamped
+  // to 26 degrees — so it under-read every real hill and lagged the ones it did
+  // see. gradePitch comes straight off the four wheel contacts.
+  state.speed -= GRAV * Math.sin(gradePitch) * grip * dt;
   // Wet ground drags and caps lower — the weather is felt through the wheels.
   const wetDrag = 1 + wx.wet * (surfKind === 'road' ? 0.35 : 0.7);
   state.speed -= state.speed * surf.drag * wetDrag * (0.1 + 0.9 * grip) * dt;
@@ -3713,6 +3758,18 @@ function tick(now: number): void {
   }
   state.x += Math.sin(state.heading) * state.speed * dt;
   state.z -= Math.cos(state.heading) * state.speed * dt;
+  // SIDE-SLOPES DRAG YOU DOWNHILL. Nothing used to: you could traverse a 40°
+  // face as if it were a car park, which is most of why hills felt like they
+  // were made of cardboard. Modelled as a lateral velocity that tyres resist —
+  // tarmac holds you far better than scree — so it settles at a creep rather
+  // than accelerating away.
+  {
+    const sH = Math.sin(state.heading), cH = Math.cos(state.heading);
+    slideV -= GRAV * Math.sin(gradeRoll) * grip * dt;
+    slideV -= slideV * (surfKind === 'road' ? 6.5 : 3.2) * dt;
+    state.x += cH * slideV * dt;   // (cos, sin) is the car's own right
+    state.z += sH * slideV * dt;
+  }
   // INSIDE a footprint beats every edge test: no wall is within CAR_R from the
   // middle of a room, so the push-out below would happily leave you sealed in
   // and then shove you back off the inner face of every wall you drove at.
@@ -3774,11 +3831,32 @@ function tick(now: number): void {
   const ground = (cFL + cFR + cRL + cRR) / 4;
   const tY = ground + WHEEL_R; // axle-plane target
   const drive = brake ? -Math.sign(state.speed) * CAR.brake : throttle * (throttle >= 0 ? CAR.accel : CAR.brake);
-  const tPitch = Math.asin(clamp((cFL + cFR - cRL - cRR) / 2 / (2 * AXLE), -0.45, 0.45))
+  // ATAN, not asin. The argument is rise over run — a TANGENT — and asin of a
+  // tangent both under-reports every slope and saturates: clamped at 0.45 it
+  // could not express more than 27 degrees. On anything steeper the body stayed
+  // flat while the ground fell away, the suspension ran out of droop, and
+  // `groundedF` went to zero — so the truck lost thrust, braking, steering AND
+  // gravity exactly when it was on the steepest ground. That is what made hills
+  // feel uncontrollable, and no amount of extra gravity would have fixed it,
+  // because gravity is multiplied by the grip that had just vanished.
+  const tPitch = clamp(Math.atan((cFL + cFR - cRL - cRR) / 2 / (2 * AXLE)), -1.0, 1.0)
     + clamp(drive * 0.004, -0.06, 0.06); // throttle squat / brake dive
-  const tRoll = Math.asin(clamp((cFR + cRR - cFL - cRL) / 2 / (2 * TRACK), -0.45, 0.45))
+  const tRoll = clamp(Math.atan((cFR + cRR - cFL - cRL) / 2 / (2 * TRACK)), -1.0, 1.0)
     + clamp(steerCur * Math.abs(state.speed) * 0.004, -0.09, 0.09); // lean out of the corner
+  // atan2, not asin: the pitch/roll above are clamped for the BODY's benefit
+  // (a 45 degree lean looks wrong), but gravity should see the real angle.
+  gradePitch = Math.atan2((cFL + cFR - cRL - cRR) / 2, 2 * AXLE);
+  gradeRoll = Math.atan2((cFR + cRR - cFL - cRL) / 2, 2 * TRACK);
   if (!bodyInit) { bodyInit = true; bodyY = tY; pitchC = tPitch; rollC = tRoll; }
+  // SNAP when the ground moves further than any suspension could follow. The
+  // body descends at 9.81 and no faster (that cap is what makes crests launch
+  // you), so after anything that repositions the truck — a spawn, a curated
+  // start, a shove out of a building, a tunnel chord, terrain streaming in at a
+  // different height — it can be left hundreds of metres in the air, falling
+  // for tens of seconds with all four wheels drooped and therefore ZERO grip:
+  // no thrust, no braking, no steering, no gravity. Measured 3.9km of daylight
+  // under the hull after a relocation.
+  if (Math.abs(tY - bodyY) > 6) { bodyY = tY; vBodyY = 0; pitchC = tPitch; rollC = tRoll; }
   let aY = SUSP.k * (tY - bodyY) - SUSP.d * vBodyY;
   if (aY < -9.81) aY = -9.81; // falling is gravity's job — crests launch
   vBodyY += aY * dt; bodyY += vBodyY * dt;
@@ -3792,7 +3870,11 @@ function tick(now: number): void {
   groundedF = 0;
   for (let i = 0; i < 4; i++) {
     const [wx, wz] = WHEELS[i];
-    const plane = bodyY - wz * Math.sin(pitchC) + wx * Math.sin(rollC);
+    // TAN, to match the atan above. The wheel's ground sample is taken at a
+    // horizontal offset of wz, so the terrain rises by wz*tan(grade) across it
+    // — a sin here needed pitchC = asin(tan(grade)), which has no solution past
+    // 45 degrees and is why the old model capped out and let go of the ground.
+    const plane = bodyY - wz * Math.tan(pitchC) + wx * Math.tan(rollC);
     const def = clamp(contacts[i] + WHEEL_R - plane, -SUSP.droop, SUSP.travel);
     if (def > -SUSP.droop + 0.03) groundedF += 0.25;
     wheelPivots[i].position.y = def;
@@ -3800,6 +3882,10 @@ function tick(now: number): void {
     wheelMeshes[i].rotation.x = wheelSpin;
     if (i < 2) wheelPivots[i].rotation.y = -steerCur * 0.42;
   }
+  dbgSusp = { bodyY: +bodyY.toFixed(2), tY: +tY.toFixed(2), ground: +ground.toFixed(2),
+    defs: wheelPivots.map((p) => +p.position.y.toFixed(3)),
+    contacts: contacts.map((c) => +c.toFixed(2)),
+    pitch: +((pitchC * 180) / Math.PI).toFixed(1), grounded: groundedF };
   wheelSpin += (state.speed / WHEEL_R) * dt;
   car.position.set(state.x, bodyY, state.z);
   car.rotation.set(pitchC, -state.heading, rollC);
@@ -3858,7 +3944,15 @@ function tick(now: number): void {
     const tiltRad = (CAM.tilt * Math.PI) / 180;
     const tgtY = sampleHeight(state.x + panX, state.z + panZ);
     camPos.set(state.x + panX, tgtY + dist * Math.sin(tiltRad), state.z + panZ + dist * Math.cos(tiltRad));
+    // PUSH THE NEAR PLANE OUT with the camera. Depth precision is governed by
+    // the near/far RATIO, and at 1:30000 a lake drape sitting a few centimetres
+    // over the terrain lands in the same depth bucket as the ground — which is
+    // the flicker, and it gets worse the further out you zoom. Nothing is
+    // within 8% of the orbit distance from a camera tilted 70° off the ground,
+    // so this is free.
+    setNear(Math.max(1, dist * 0.08));
   } else {
+    setNear(1);
     // Framed like the reference art: the rig in the lower third with the track
     // running to a vanishing point. On a PORTRAIT phone the 55° figure is the
     // VERTICAL fov, so the horizontal one is only ~30° — at 12.5m the truck ate
