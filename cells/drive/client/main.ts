@@ -4497,26 +4497,15 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   hctx.fillRect(Math.round(cx0 + cw / 2) - 2, cy0 + 16, 5, 1);
   hctx.fillRect(Math.round(cx0 + cw / 2) - 1, cy0 + 17, 3, 1);
   hctx.fillRect(Math.round(cx0 + cw / 2), cy0 + 18, 1, 1);
-  // ── place, and the menu button opposite it ──
+  // ── the menu button ──
+  // The top of the screen belongs to the COMPASS now. Place and weather used to
+  // sit under it and were the first thing your eye hit while driving, which is
+  // backwards: they are things you check, not things you steer by.
   const row = cy0 + 22;
   const menuW = textW('MENU') + 8;
   menuRect = { x: HW - menuW - pad, y: row, w: menuW, h: 12 };
   panel(menuRect.x, menuRect.y, menuW, 12, UI.edge);
   text(hctx, 'MENU', menuRect.x + 4, row + 3, UI.edge);
-  if (placeLine) {
-    const shown = fit(placeLine, HW - menuW - pad * 4);
-    textEdge(shown, pad + 1, row + 3, UI.text);
-    placeRect = { x: pad, y: row, w: textW(shown) + 4, h: 10 }; // tap to toggle «translation»
-  }
-  // ── weather ──
-  {
-    const w = WX[wx.sky];
-    const wet = wx.wet > 0.05;
-    const lab = wet && wx.rain < 0.1 ? `${w.label} WET` : w.label;
-    textEdge(lab, pad + 1, row + 13, wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft);
-    if (osmDown) textEdge('· NO WORLD DATA', pad + 3 + textW(lab), row + 13, UI.bad);
-    else if (streaming) textEdge('· STREAMING', pad + 3 + textW(lab), row + 13, UI.dim);
-  }
   if (wx.warn && performance.now() < wx.warn) {
     const t2 = 'STORM APPROACHING';
     const w2 = textW(t2) + 10;
@@ -4534,8 +4523,40 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   // so the HUD must leave it EMPTY — blitting the minimap here painted straight
   // over that preview, and it only ever looked right on a session that had
   // never been in chase (a blank minimap canvas let the POV show through).
+  // The left column reads bottom-up: WHERE you are under the chart, and the
+  // CONDITIONS you are driving in above it. Laid out from the bottom edge so
+  // the stack stays put whatever the screen height is.
   const mw = Math.min(58, Math.floor(HW * 0.34));
-  const mx = pad, my = HH - mw - pad - 20;
+  const infoH = 16;
+  const infoY = HH - pad - infoH;
+  const my = infoY - mw - 3;
+  const mx = pad;
+  const CONDW = Math.max(74, mw + 16);
+  const condH = 42;
+  const sy = my - condH - 3;
+  // ── conditions: surface, grip, weather, wetness, heading ──
+  panel(pad, sy, CONDW, condH);
+  const sname = surf === 'road' ? 'ROAD' : surf === 'water' ? 'WATER' : 'ROUGH';
+  const scol = surf === 'road' ? UI.good : UI.hot;
+  textSmall(hctx, 'SURFACE', pad + 3, sy + 3, UI.dim);
+  glowText(sname, pad + 3, sy + 10, scol);
+  meter(pad + 3, sy + 18, 10, Math.round(clamp(grip, 0, 1) * 10), scol, 3, 3, 1);
+  {
+    // Weather belongs with the other things that decide how the truck behaves,
+    // not floating under the place name where it read as a caption.
+    const w = WX[wx.sky];
+    const wcol = wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft;
+    textSmall(hctx, 'WEATHER', pad + 3, sy + 25, UI.dim);
+    textSmall(hctx, w.label, pad + 34, sy + 25, wcol);
+    // The bearing rides on the weather line, not the wet line: beside a bar it
+    // had four pixels of air and read as part of the meter.
+    const hs = `${CARD8[Math.round(deg / 45) % 8]}${Math.round(deg)}`;
+    textSmall(hctx, hs, pad + CONDW - textSW(hs) - 4, sy + 25, UI.gold);
+    // Standing water is grip you have already lost — worth its own bar.
+    textSmall(hctx, 'WET', pad + 3, sy + 34, UI.dim);
+    meter(pad + 20, sy + 34, 12, Math.round(clamp(wx.wet, 0, 1) * 12), wx.wet > 0.5 ? UI.bad : UI.edge, 3, 3, 1);
+  }
+  // ── the chart / POV dock ──
   const chart = camMode === 'top';
   if (chart) frame(mx, my, mw, mw, UI.dim);
   else {
@@ -4547,13 +4568,18 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   }
   text(hctx, chart ? 'POV' : 'N', mx + mw / 2 - (chart ? 8 : 3), my + 2, UI.gold);
   dockRect = { x: mx, y: my, w: mw, h: mw };
-  // ── surface + grip, above the map ──
-  const sy = my - 26;
-  panel(pad, sy, 52, 24);
-  text(hctx, 'SURFACE', pad + 3, sy + 3, UI.dim);
-  const sname = surf === 'road' ? 'ROAD' : surf === 'water' ? 'WATER' : 'ROUGH';
-  glowText(sname, pad + 3, sy + 11, surf === 'road' ? UI.good : UI.hot);
-  meter(pad + 3, sy + 19, 10, Math.round(clamp(grip, 0, 1) * 10), surf === 'road' ? UI.good : UI.hot, 3, 3, 1);
+  // ── where you are, and whether the world is still arriving ──
+  {
+    const shown = fit(placeLine || '', Math.round(HW * 0.62));
+    if (shown) {
+      textEdge(shown, pad + 1, infoY, UI.text);
+      placeRect = { x: pad, y: infoY - 1, w: textW(shown) + 4, h: 10 }; // tap toggles «translation»
+    } else {
+      placeRect = { x: 0, y: 0, w: 0, h: 0 };
+    }
+    if (osmDown) textEdgeS('NO WORLD DATA', pad + 1, infoY + 9, UI.bad);
+    else if (streaming) textEdgeS('STREAMING', pad + 1, infoY + 9, UI.dim);
+  }
   // ── speed, bottom-right ──
   const digits = String(kmh);
   const sw = textW(digits, 2) + textW('KM/H') + 12;
