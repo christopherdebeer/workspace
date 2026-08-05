@@ -1892,56 +1892,101 @@ function streamWorld(ex: number, ez: number): void {
 // rides high above it; each wheel hangs in a steering pivot whose local y is
 // its suspension deflection, so wheels track the terrain while the sprung
 // body lags on its springs.
-const WHEEL_R = 0.85, WHEEL_W = 0.62, TRACK = 1.18, AXLE = 1.52;
+// WHEEL_R drives the physics (contact plane, spin rate); WHEEL_W is cosmetic —
+// wider tyres plant the stance instead of leaving it on four narrow stilts.
+const WHEEL_R = 0.85, WHEEL_W = 0.74, TRACK = 1.18, AXLE = 1.52;
 // Local wheel anchors [x, z] — FL, FR, RL, RR (forward is -z).
 const WHEELS: Array<[number, number]> = [[-TRACK, -AXLE], [TRACK, -AXLE], [-TRACK, AXLE], [TRACK, AXLE]];
+const tailMat = new THREE.MeshBasicMaterial({ color: 0x8e1a12 }); // brightens under braking
 const car = new THREE.Group();
 car.rotation.order = 'YXZ'; // yaw first, then pitch/roll about the CAR's axes
 const wheelPivots: THREE.Group[] = [];
 const wheelMeshes: THREE.Mesh[] = [];
 {
-  const body = new THREE.Mesh(new THREE.BoxGeometry(1.8, 0.8, 4.0), new THREE.MeshLambertMaterial({ color: 0xd8442e }));
-  body.position.y = 0.88;
-  const cabin = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.6, 1.8), new THREE.MeshLambertMaterial({ color: 0x20242c }));
-  cabin.position.set(0, 1.5, -0.15);
-  const chassis = new THREE.Mesh(new THREE.BoxGeometry(1.35, 0.24, 3.3), new THREE.MeshLambertMaterial({ color: 0x2a2118 }));
-  chassis.position.y = 0.4; // exposed frame under the raised body
-  car.add(body, cabin, chassis);
-  // THE RIG. The roof array is this vehicle's identity — an overland truck
-  // that carries its own power. Rack, panels, jerry cans, light bar.
-  const rackMat = new THREE.MeshLambertMaterial({ color: 0x22262c, flatShading: true });
+  // Built against the reference: a boxy overland 4x4 — glasshouse cab set
+  // back, short bonnet, open rear tub, fender flares tying the wheels to the
+  // body, and the gear an expedition truck actually carries. Every part is a
+  // slab or a cylinder; the silhouette does the work at pixel resolution.
+  const RED = 0xc4402c, DARK = 0x1b1f26, STEEL = 0x2a2f36, TAN = 0x6b6250;
+  const redMat = new THREE.MeshLambertMaterial({ color: RED, flatShading: true });
+  const glassMat = new THREE.MeshLambertMaterial({ color: DARK, flatShading: true });
+  const steelMat = new THREE.MeshLambertMaterial({ color: STEEL, flatShading: true });
+  const cargoMat = new THREE.MeshLambertMaterial({ color: TAN, flatShading: true });
   const panelMat = new THREE.MeshLambertMaterial({ color: 0x14304e, emissive: 0x060f1c, flatShading: true });
-  const cargoMat = new THREE.MeshLambertMaterial({ color: 0x6b6250, flatShading: true });
-  const rack = new THREE.Mesh(new THREE.BoxGeometry(1.62, 0.07, 2.5), rackMat);
-  rack.position.set(0, 1.86, -0.05);
-  car.add(rack);
-  for (const [px, pz] of [[-0.72, 1.05], [0.72, 1.05], [-0.72, -1.1], [0.72, -1.1]]) {
-    const post = new THREE.Mesh(new THREE.BoxGeometry(0.09, 0.16, 0.09), rackMat);
-    post.position.set(px, 1.78, pz);
-    car.add(post);
-  }
-  // Two panels, tilted a few degrees to catch the low sun.
-  for (const pz of [-0.62, 0.52]) {
-    const panel = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.05, 1.02), panelMat);
-    panel.position.set(0, 1.93, pz);
-    panel.rotation.x = -0.06;
-    car.add(panel);
-  }
-  for (const px of [-0.52, 0.52]) { // jerry cans strapped at the tail of the rack
-    const can = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.4, 0.22), cargoMat);
-    can.position.set(px, 2.09, 1.12);
-    car.add(can);
-  }
-  const bar = new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.12, 0.14), rackMat);
-  bar.position.set(0, 1.95, -1.28);
-  car.add(bar);
-  for (const px of [-0.38, 0.38]) { // spot pods on the light bar
-    const pod = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.16, 0.08), new THREE.MeshBasicMaterial({ color: 0xfff1cf }));
-    pod.position.set(px, 1.95, -1.36);
-    car.add(pod);
-  }
   const tireMat = new THREE.MeshLambertMaterial({ color: 0x14171c, flatShading: true });
   const hubMat = new THREE.MeshLambertMaterial({ color: 0x8f8574, flatShading: true });
+  // Every hull part sits DROP metres lower than its written y. The suspension
+  // geometry wants the group origin on the axle plane, but hanging the body
+  // where that put it left 1.3m of daylight under the tub and the truck walked
+  // on stilts. One offset here beats re-deriving thirty numbers.
+  const DROP = 0.3;
+  const add = (geo: THREE.BufferGeometry, mat: THREE.Material, x: number, y: number, z: number): THREE.Mesh => {
+    const m = new THREE.Mesh(geo, mat);
+    m.position.set(x, y - DROP, z);
+    car.add(m);
+    return m;
+  };
+  const box = (w: number, h: number, d: number): THREE.BoxGeometry => new THREE.BoxGeometry(w, h, d);
+  // ── hull ──
+  add(box(1.95, 0.85, 4.2), redMat, 0, 0.9, 0);                 // body tub
+  add(box(1.35, 0.24, 3.4), steelMat, 0, 0.42, 0);              // exposed frame rails
+  add(box(1.7, 0.36, 1.15), redMat, 0, 1.5, -1.5);              // bonnet
+  // The cab is RED with a dark GLASS BAND through it, not a black block. That
+  // banding — red waist, black glass, red header and roof — is what makes the
+  // reference read as one painted truck instead of a cargo pod on a chassis.
+  add(box(1.7, 0.78, 1.9), redMat, 0, 1.7, -0.45);              // cab shell
+  add(box(1.74, 0.34, 1.94), glassMat, 0, 1.86, -0.45);         // glazing band
+  add(box(1.74, 0.14, 1.98), redMat, 0, 2.14, -0.45);           // roof cap
+  // ── rear tub: side rails and a tailgate, so the back reads as open cargo ──
+  for (const sx of [-0.92, 0.92]) add(box(0.11, 0.34, 1.7), redMat, sx, 1.5, 1.2);
+  add(box(1.9, 0.34, 0.12), redMat, 0, 1.5, 2.02);
+  // Sand ladders strapped along the tub — pure silhouette texture at 320p.
+  for (const sx of [-1.0, 1.0]) add(box(0.07, 0.3, 1.45), cargoMat, sx, 1.5, 1.2);
+  // ── fenders tie the wheels to the body (they read as detached without) ──
+  // They have to reach DOWN to the tyre. At y=1.30 the flare cleared the tyre
+  // crown by 0.38m before the suspension even moved, and on 0.4m of droop the
+  // wheel visibly fell off the truck.
+  for (const [fx, fz] of [[-1.18, -1.52], [1.18, -1.52], [-1.18, 1.52], [1.18, 1.52]]) {
+    add(box(0.72, 0.24, 1.7), redMat, fx, 1.13, fz);
+  }
+  // ── protection: bull bar, winch, rock sills, tow points ──
+  add(box(2.0, 0.26, 0.2), steelMat, 0, 0.95, -2.2);
+  add(box(0.52, 0.24, 0.28), steelMat, 0, 1.0, -2.34);          // winch drum
+  for (const sx of [-0.62, 0.62]) add(box(0.12, 0.5, 0.12), steelMat, sx, 1.2, -2.2);
+  for (const sx of [-1.03, 1.03]) add(box(0.13, 0.13, 2.5), steelMat, sx, 0.52, 0);
+  add(box(1.7, 0.22, 0.16), steelMat, 0, 0.95, 2.16);
+  // ── roof rack, solar array, cargo ──
+  add(box(1.66, 0.07, 2.6), steelMat, 0, 2.26, -0.1);
+  for (const [px, pz] of [[-0.74, 1.08], [0.74, 1.08], [-0.74, -1.28], [0.74, -1.28]]) {
+    add(box(0.09, 0.16, 0.09), steelMat, px, 2.18, pz);
+  }
+  for (const cz of [-1.0, 0, 1.0]) add(box(1.62, 0.05, 0.09), steelMat, 0, 2.31, cz);
+  for (const pz of [-0.72, 0.44]) {                              // two tilted panels
+    add(box(1.5, 0.05, 1.0), panelMat, 0, 2.33, pz).rotation.x = -0.06;
+  }
+  for (const px of [-0.5, 0.5]) add(box(0.28, 0.38, 0.2), cargoMat, px, 2.48, 1.16); // jerry cans
+  add(box(1.2, 0.12, 0.14), steelMat, 0, 2.35, -1.42);           // light bar
+  for (const px of [-0.38, 0.38]) {
+    add(box(0.2, 0.15, 0.08), new THREE.MeshBasicMaterial({ color: 0xfff1cf }), px, 2.35, -1.5);
+  }
+  // ── spare on a swing-out carrier, ladder opposite, snorkel up the A-pillar ──
+  // OFF-CENTRE and smaller: dead-centre and full size it was a black hole where
+  // the back of the truck should be, and it buried both tail lights.
+  const spareGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.28, 10);
+  spareGeo.rotateX(Math.PI / 2);
+  add(spareGeo, new THREE.MeshLambertMaterial({ color: 0x1c2026, flatShading: true }), 0.52, 1.42, 2.26);
+  const spareHub = new THREE.CylinderGeometry(0.19, 0.19, 0.32, 8);
+  spareHub.rotateX(Math.PI / 2);
+  add(spareHub, hubMat, 0.52, 1.42, 2.26);                       // pale centre, so it isn't a void
+  for (const sx of [-0.72, -0.3]) add(box(0.07, 0.95, 0.07), steelMat, sx, 1.75, 2.22); // ladder rails
+  for (const ry of [1.42, 1.76, 2.1]) add(box(0.5, 0.06, 0.06), steelMat, -0.51, ry, 2.22);
+  add(box(0.13, 1.15, 0.13), steelMat, 0.86, 1.75, -1.2);
+  add(box(0.13, 0.13, 0.42), steelMat, 0.86, 2.28, -1.36);
+  // ── lamps ── small and set into the corners; big ones bloom into blobs.
+  const headMat2 = new THREE.MeshBasicMaterial({ color: 0xfff1cf });
+  for (const sx of [-0.66, 0.66]) add(box(0.3, 0.2, 0.1), headMat2, sx, 1.08, -2.13);
+  for (const sx of [-0.78, 0.78]) add(box(0.22, 0.26, 0.08), tailMat, sx, 1.1, 2.12);
+  // ── wheels ──
   for (const [wx, wz] of WHEELS) {
     const pivot = new THREE.Group();
     pivot.position.set(wx, 0, wz);
@@ -1957,14 +2002,12 @@ const wheelMeshes: THREE.Mesh[] = [];
     wheelMeshes.push(wheel);
   }
 }
-// ── lamps and beams ────────────────────────────────────────────────
-// Front is -z. Lamps are emissive quads (they read at any distance); the
-// BEAMS are additive cones that fade along their length, and one real
-// spotlight throws an actual pool of light down the road. All parented to the
-// car, so the beams sweep with pitch and roll over every crest.
-const headMat = new THREE.MeshBasicMaterial({ color: 0xfff1cf });
-const tailMat = new THREE.MeshBasicMaterial({ color: 0x8e1a12 });
+// ── beams ──────────────────────────────────────────────────────────
+// Front is -z. The BEAMS are additive cones that fade along their length, and
+// one real spotlight throws a pool down the road. Parented to the car, so
+// they sweep with pitch and roll over every crest.
 const BEAM_LEN = 26, BEAM_R = 4.0;
+
 const beamGeo = new THREE.ConeGeometry(BEAM_R, BEAM_LEN, 18, 1, true);
 beamGeo.translate(0, -BEAM_LEN / 2, 0); // apex to the origin (the lamp)
 beamGeo.rotateX(Math.PI / 2);           // and open it along -z, straight ahead
@@ -1999,24 +2042,22 @@ const beamMat = new THREE.ShaderMaterial({
 });
 const beams: THREE.Mesh[] = [];
 for (const sx of [-0.62, 0.62]) {
-  const lamp = new THREE.Mesh(new THREE.BoxGeometry(0.34, 0.24, 0.1), headMat);
-  lamp.position.set(sx, 1.02, -2.02);
+  // The lamps themselves are part of the hull now; this loop only hangs the
+  // visible beam cones off them.
   const beam = new THREE.Mesh(beamGeo, beamMat);
-  beam.position.set(sx, 1.02, -2.05);
+  beam.position.set(sx, 0.78, -2.05); // = the hull lamp y, less the hull DROP
   // Aimed properly DOWN at the tarmac: a shallow beam ran level to the
   // horizon and read as two searchlights pointing at the sky over the roof.
   beam.rotation.x = -0.11;
   beam.renderOrder = 20;
   beams.push(beam);
-  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.2, 0.1), tailMat);
-  tail.position.set(sx, 1.02, 2.02);
-  car.add(lamp, beam, tail);
+  car.add(beam);
 }
 // One spotlight for the actual pool of light (two would double the cost of
 // every lit material for a difference nobody can see). Intensity is in
 // CANDELA since three r155 — the old "3.2" was a rounding error, not a lamp.
 const headSpot = new THREE.SpotLight(0xfff0d0, 90, 110, 0.52, 0.65, 1.0);
-headSpot.position.set(0, 1.1, -2.0);
+headSpot.position.set(0, 0.8, -2.0); // likewise dropped with the hull
 headSpot.target.position.set(0, -1.6, -30);
 car.add(headSpot, headSpot.target);
 // REAL SIZE (owner: the 3.2x cartographic car straddled whole roads and made
@@ -2189,12 +2230,15 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
     void main(){
       vLife = aLife; vKind = aKind;
       vec4 mv = modelViewMatrix * vec4(position, 1.0);
-      // Big, billowing puffs (two thirds of the first pass — full size buried
-      // the truck, metre-scale read as pinpricks).
-      // Water droplets are half the size of a dust puff — a wading truck
-      // displaces water, it does not throw a plume.
-      float sz = mix(7.0 + aSeed * 9.0, 3.5 + aSeed * 4.5, aKind);
-      gl_PointSize = sz * (2.1 - aLife) * (175.0 / max(-mv.z, 1.0));
+      // Billowing, but CAPPED. The 1/distance term is unbounded, and the oldest
+      // puffs — which were also the biggest — end up nearest the chase camera:
+      // a single one reached ~290px on a 320px-tall target, so the trail
+      // stopped being a plume and became a windscreen. Cap the projected size
+      // and let the puff grow modestly instead of doubling.
+      // Water droplets stay small — a wading truck displaces water, it does
+      // not throw a plume.
+      float sz = mix(4.6 + aSeed * 5.2, 3.5 + aSeed * 4.5, aKind);
+      gl_PointSize = min(sz * (1.5 - aLife * 0.5) * (175.0 / max(-mv.z, 1.0)), 34.0);
       gl_Position = projectionMatrix * mv;
     }`,
   fragmentShader: `
@@ -2206,7 +2250,10 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
       float soft = smoothstep(0.25, 0.02, r);
       // Water throws bright, hard-edged droplets; dry ground throws soft dust.
       vec3 col = mix(uColor, uWater, vKind);
-      float a = mix(soft * vLife * 0.14, smoothstep(0.25, 0.12, r) * vLife * 0.5, vKind);
+      // Dust thins on the SQUARE of its life: the trailing end of the plume is
+      // the part hanging in front of the camera, so it has to be nearly gone by
+      // the time the truck has driven out from under it.
+      float a = mix(soft * vLife * vLife * 0.2, smoothstep(0.25, 0.12, r) * vLife * 0.5, vKind);
       gl_FragColor = vec4(col, a);
     }`,
 }));
@@ -2221,7 +2268,7 @@ function emitDust(x: number, y: number, z: number, vx: number, vz: number, water
   dustPos[i * 3 + 2] = z + (Math.random() - 0.5) * spread;
   // A splash is thrown OUT and up hard, then falls back; dust drifts.
   dustVel[i * 3] = vx + (Math.random() - 0.5) * (water ? 5.5 : 2.2);
-  dustVel[i * 3 + 1] = water ? 2.2 + Math.random() * 2.6 : 1.1 + Math.random() * 1.6;
+  dustVel[i * 3 + 1] = water ? 2.2 + Math.random() * 2.6 : 0.7 + Math.random() * 1.1;
   dustVel[i * 3 + 2] = vz + (Math.random() - 0.5) * (water ? 5.5 : 2.2);
   dustLife[i] = 1;
   dustSeed[i] = Math.random();
@@ -2264,6 +2311,28 @@ const state = { x: 0, z: 0, heading: 0, speed: 0 };
 });
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z) });
+// How much of the frame the truck actually occupies. Chase framing is easy to
+// get wrong by eye — on a portrait phone the 55° fov is VERTICAL, so the
+// horizontal one is only ~30° and a stand-off that looks generous in plan puts
+// the truck across half the screen. Percentages, not vibes.
+(window as unknown as { __frame?: object }).__frame = (): object => {
+  // The HULL's own extents, in car-local space. `setFromObject` would swallow
+  // the halo ring and the 26m beam cones and report 200%-of-screen nonsense.
+  const v = new THREE.Vector3();
+  let minX = 9, maxX = -9, minY = 9, maxY = -9;
+  for (const x of [-1.53, 1.53]) for (const y of [-0.85, 2.7]) for (const z of [-2.48, 2.4]) {
+    v.set(x, y, z).applyMatrix4(car.matrixWorld).project(camera);
+    minX = Math.min(minX, v.x); maxX = Math.max(maxX, v.x);
+    minY = Math.min(minY, v.y); maxY = Math.max(maxY, v.y);
+  }
+  return {
+    widthPct: Math.round(((maxX - minX) / 2) * 100),
+    heightPct: Math.round(((maxY - minY) / 2) * 100),
+    centreY: Math.round(((minY + maxY) / 2) * 100), // -100 = bottom edge, +100 = top
+    dist: +Math.hypot(camera.position.x - car.position.x, camera.position.z - car.position.z).toFixed(1),
+    lift: +(camera.position.y - car.position.y).toFixed(1),
+  };
+};
 // Fog-of-war opacity at a world point (0 = fully cleared, 1 = untouched).
 (window as unknown as { __fogAt?: object }).__fogAt = (x: number, z: number): number => {
   const px = Math.round(((x + FOG_SPAN / 2) / FOG_SPAN) * FOG_PX);
@@ -2946,7 +3015,9 @@ function tick(now: number): void {
   // Brake lights flare; reversing washes them pale. Beams brighten with the
   // dust they have to cut through, and dim in the chart view where a pair of
   // 34m cones would just be glare on the map.
-  tailMat.color.setHex(brake ? 0xff3a24 : state.speed < -0.5 ? 0xe8ded0 : 0x8e1a12);
+  // Idle lenses have to out-saturate the body they sit on — 0x8e1a12 vanished
+  // against 0xc4402c paint the moment the truck was in its own shadow.
+  tailMat.color.setHex(brake ? 0xff3a24 : state.speed < -0.5 ? 0xe8ded0 : 0xa8221a);
   beamMat.uniforms.uAmp.value = camMode === 'chase' ? 1 : 0.25;
   // Dust off the loose stuff — rate follows speed, thrown back along travel.
   const v = Math.abs(state.speed);
@@ -2963,7 +3034,10 @@ function tick(now: number): void {
       if (wheelSurf[i] === 'road') continue;
       const [wxw, wzw] = wheelWorld[i];
       const wet = wheelSurf[i] === 'water';
-      emitDust(wxw, contacts[i], wzw, -sinH * v * (wet ? 0.1 : 0.28), cosH * v * (wet ? 0.1 : 0.28), wet);
+      // Barely any launch velocity: dust is LEFT BEHIND, not thrown backward.
+      // Pushing it back down the heading drove it straight into the chase
+      // camera and greyed out the whole view.
+      emitDust(wxw, contacts[i], wzw, -sinH * v * 0.05, cosH * v * 0.05, wet);
       if (wet) {
         // The WAKE: a pair of droplets thrown sideways from the hull, so the
         // truck leaves a widening V behind it rather than a plume.
@@ -2993,17 +3067,20 @@ function tick(now: number): void {
     const tgtY = sampleHeight(state.x + panX, state.z + panZ);
     camPos.set(state.x + panX, tgtY + dist * Math.sin(tiltRad), state.z + panZ + dist * Math.cos(tiltRad));
   } else {
-    // Framed like the reference art: close and low, the rig filling the lower
-    // third with the track running to a vanishing point on the horizon.
-    const back = 12.5 + Math.abs(state.speed) * 0.28;
+    // Framed like the reference art: the rig in the lower third with the track
+    // running to a vanishing point. On a PORTRAIT phone the 55° figure is the
+    // VERTICAL fov, so the horizontal one is only ~30° — at 12.5m the truck ate
+    // half the width. Stand off far enough that it reads as a vehicle in a
+    // landscape, and sit high enough to look over its own dust.
+    const back = 17.5 + Math.abs(state.speed) * 0.3;
     camPos.set(
       state.x - fwdX * back,
       // ABOVE the vehicle, always: on a steep climb the ground under the
       // camera is far below the truck, so tie the floor to the body and add
       // pitch lift to keep looking down the slope at it.
       Math.max(
-        sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 4.2,
-        bodyY + 3.4 + Math.max(0, Math.sin(pitchC)) * back,
+        sampleHeight(state.x - fwdX * back, state.z - fwdZ * back) + 6.4,
+        bodyY + 5.4 + Math.max(0, Math.sin(pitchC)) * back,
       ),
       state.z - fwdZ * back,
     );
@@ -3024,7 +3101,7 @@ function tick(now: number): void {
   if (!camInit) { camera.position.copy(camPos); camInit = true; }
   else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
   if (camMode === 'top') camera.lookAt(state.x + panX, sampleHeight(state.x + panX, state.z + panZ), state.z + panZ);
-  else camera.lookAt(state.x + fwdX * 24, ground + 2.4, state.z + fwdZ * 24);
+  else camera.lookAt(state.x + fwdX * 30, ground + 1.8, state.z + fwdZ * 30);
   camera.updateMatrixWorld();
   skyDome.position.copy(camera.position);
   ghostU.uGhostCar.value.set(state.x, ground + 1.2, state.z);
@@ -3074,11 +3151,11 @@ function tick(now: number): void {
     const dr = dockRect;
     const vx = dr.x * hudS, vy = innerHeight - (dr.y + dr.h) * hudS, vw = dr.w * hudS, vh = dr.h * hudS;
     miniCam.position.set(
-      state.x - fwdX * 13,
-      Math.max(sampleHeight(state.x - fwdX * 13, state.z - fwdZ * 13) + 5.4, bodyY + 4.2),
-      state.z - fwdZ * 13,
+      state.x - fwdX * 15,
+      Math.max(sampleHeight(state.x - fwdX * 15, state.z - fwdZ * 15) + 6.0, bodyY + 4.9),
+      state.z - fwdZ * 15,
     );
-    miniCam.lookAt(state.x + fwdX * 18, ground + 1.6, state.z + fwdZ * 18);
+    miniCam.lookAt(state.x + fwdX * 22, ground + 1.7, state.z + fwdZ * 22);
     renderer.setScissorTest(true);
     renderer.setViewport(vx, vy, vw, vh);
     renderer.setScissor(vx, vy, vw, vh);
@@ -3241,6 +3318,18 @@ function panel(x: number, y: number, w: number, h: number, edge = UI.edge): void
     hctx.fillRect(cx, cy + (dy < 0 ? -3 : 0), 1, 4);
   }
 }
+// `panel` minus the fill: a border for a hole the RENDERER draws through.
+function frame(x: number, y: number, w: number, h: number, edge = UI.edge): void {
+  hctx.clearRect(x, y, w, h);
+  hctx.fillStyle = UI.dim;
+  hctx.fillRect(x, y, w, 1); hctx.fillRect(x, y + h - 1, w, 1);
+  hctx.fillRect(x, y, 1, h); hctx.fillRect(x + w - 1, y, 1, h);
+  hctx.fillStyle = edge;
+  for (const [cx, cy, dx, dy] of [[x, y, 1, 1], [x + w - 1, y, -1, 1], [x, y + h - 1, 1, -1], [x + w - 1, y + h - 1, -1, -1]] as const) {
+    hctx.fillRect(cx + (dx < 0 ? -3 : 0), cy, 4, 1);
+    hctx.fillRect(cx, cy + (dy < 0 ? -3 : 0), 1, 4);
+  }
+}
 // Legibility WITHOUT a box: a one-pixel dark outline around the glyphs. Boxes
 // are reserved for real instruments (things you read a value off, or press);
 // labels floating over the world just get an edge.
@@ -3384,15 +3473,23 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
       itemRects.push({ x: ix, y: y - 2, w: iw, h: 11, i });
     }
   }
-  // ── minimap, bottom-left ──
+  // ── the dock, bottom-left: whichever view ISN'T fullscreen ──
+  // While charting, the renderer scissors a live POV preview into this square,
+  // so the HUD must leave it EMPTY — blitting the minimap here painted straight
+  // over that preview, and it only ever looked right on a session that had
+  // never been in chase (a blank minimap canvas let the POV show through).
   const mw = Math.min(58, Math.floor(HW * 0.34));
   const mx = pad, my = HH - mw - pad - 20;
-  panel(mx, my, mw, mw, UI.dim);
-  hctx.save();
-  hctx.beginPath(); hctx.rect(mx + 1, my + 1, mw - 2, mw - 2); hctx.clip();
-  hctx.drawImage(mini, mx + 1, my + 1, mw - 2, mw - 2);
-  hctx.restore();
-  text(hctx, 'N', mx + mw / 2 - 3, my + 2, UI.gold);
+  const chart = camMode === 'top';
+  if (chart) frame(mx, my, mw, mw, UI.dim);
+  else {
+    panel(mx, my, mw, mw, UI.dim);
+    hctx.save();
+    hctx.beginPath(); hctx.rect(mx + 1, my + 1, mw - 2, mw - 2); hctx.clip();
+    hctx.drawImage(mini, mx + 1, my + 1, mw - 2, mw - 2);
+    hctx.restore();
+  }
+  text(hctx, chart ? 'POV' : 'N', mx + mw / 2 - (chart ? 8 : 3), my + 2, UI.gold);
   dockRect = { x: mx, y: my, w: mw, h: mw };
   // ── surface + grip, above the map ──
   const sy = my - 26;
