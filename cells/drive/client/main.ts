@@ -843,7 +843,7 @@ const osmQueue: Array<() => void> = [];
 // Full carriageway widths (both directions), not lane widths — OSM ways are
 // centerlines, and rendering them single-lane narrow made the real-size car
 // look like it straddled the whole street.
-const ROAD_W: Record<string, number> = { motorway: 13, trunk: 12, primary: 10.5, secondary: 9.5, tertiary: 8.5, residential: 7.5, unclassified: 7, service: 4.5, living_street: 6.5, track: 3.5, footway: 2.2, path: 2.0, cycleway: 2.6, pedestrian: 6 };
+const ROAD_W: Record<string, number> = { motorway: 13, trunk: 12, primary: 10.5, secondary: 9.5, tertiary: 8.5, residential: 7.5, unclassified: 7, service: 4.5, living_street: 6.5, track: 6.5, footway: 4.5, path: 4.5, cycleway: 5, bridleway: 5, steps: 2.2, pedestrian: 6 };
 // ── procedural detail textures (deterministic, weathered) ──────────
 // Known details render as TEXTURE, not just flat colour — and the world is
 // DECAYING GRACEFULLY: cracked asphalt with growth in the seams, crumbling
@@ -935,6 +935,37 @@ const pathTex = canvasTex(64, 1, 1, 102, (c, s, r) => {
   cracks(c, s, r, 3, 'rgba(50,44,32,0.4)');
   moss(c, s, r, 3, ['rgba(64,96,44,0.4)', 'rgba(42,70,32,0.35)']);
 });
+// A TRACK IS TWO RUTS, not a ribbon. The ribbon's u runs across the width and
+// v along the length, so ruts are two bands at fixed u. Everything outside them
+// fades to fully transparent — that is what makes a track read as wear ON the
+// hillside rather than a strip of pavement laid over it, and it means the
+// terrain's own colour carries straight through the middle.
+const trackTex = canvasTex(64, 1, 1, 118, (c, s, r) => {
+  c.clearRect(0, 0, s, s);
+  const RUT = [0.29, 0.71];
+  for (let y = 0; y < s; y++) {
+    // A slow wander, so the ruts are not drawn with a ruler.
+    const wob = Math.sin(y * 0.19) * 0.018 + Math.sin(y * 0.07 + 1.7) * 0.012;
+    for (const u of RUT) {
+      const cx = (u + wob) * s, half = s * 0.088;
+      for (let x = Math.floor(cx - half * 2.2); x <= Math.ceil(cx + half * 2.2); x++) {
+        const t = Math.abs(x - cx) / half;
+        const a = t < 1 ? 0.9 : Math.max(0, 0.9 - (t - 1) * 0.75);   // hard core, soft shoulder
+        if (a <= 0.01) continue;
+        const lit = 0.55 + 0.45 * r();
+        c.fillStyle = `rgba(${Math.round(150 * lit)},${Math.round(138 * lit)},${Math.round(112 * lit)},${a})`;
+        c.fillRect((x + s) % s, y, 1, 1);
+      }
+    }
+    // The crown between the ruts keeps its scrub — scuffed, not bare.
+    for (let x = Math.round(s * 0.4); x < Math.round(s * 0.6); x++) {
+      if (r() > 0.34) continue;
+      c.fillStyle = `rgba(122,118,92,${0.1 + r() * 0.22})`;
+      c.fillRect(x, y, 1, 1);
+    }
+  }
+  speckle(c, s, r, ['rgba(48,44,34,0.5)', 'rgba(226,218,196,0.28)'], 120, 1.1); // grit in the ruts
+});
 // Shape/roof UVs are world metres (ShapeGeometry copies XY into UV) — repeat
 // scales metres→tiles.
 const waterTex = canvasTex(128, 1 / 26, 1 / 26, 103, (c, s, r) => {
@@ -982,6 +1013,12 @@ const DS = THREE.DoubleSide;
 const MAT = {
   road: new THREE.MeshLambertMaterial({ map: roadTex, side: DS }),
   minor: new THREE.MeshLambertMaterial({ map: pathTex, transparent: true, opacity: 0.85, side: DS }),
+  // Ruts: alpha-cut, and depth-offset because it lies a few centimetres over
+  // terrain it is meant to look part of.
+  track: new THREE.MeshLambertMaterial({
+    map: trackTex, transparent: true, side: DS, depthWrite: false,
+    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
+  }),
   // polygonOffset as well as the lift: water and terrain are two nearly
   // coincident surfaces, and a constant lift alone cannot win at every camera
   // distance. The offset is in depth-buffer units, so it scales with the
@@ -1701,7 +1738,7 @@ function mapPoly(pts: Array<[number, number]>, color: string): void {
 // ── collision & surface grids (24m cells) ──────────────────────────
 const GRID = 24;
 const gkey = (x: number, z: number): string => `${Math.floor(x / GRID)},${Math.floor(z / GRID)}`;
-interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?: number; yb?: number }
+interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?: number; yb?: number; tk?: boolean }
 const wallGrid = new Map<string, Seg[]>();   // building edges — solid
 const roadGrid = new Map<string, Seg[]>();   // drivable centrelines + half-width
 const waterCells = new Set<string>();        // coarse water mask
@@ -1855,12 +1892,18 @@ function wallHitAlong(ax: number, az: number, bx: number, bz: number, camY: numb
   }
   return sMin;
 }
-type Surface = 'road' | 'water' | 'ground';
+type Surface = 'road' | 'track' | 'water' | 'ground';
 function surfaceAt(x: number, z: number): Surface {
+  // Scan them ALL: tarmac wins wherever a track crosses or joins a road, and
+  // returning on the first hit made that depend on insertion order.
+  let onTrack = false;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
     const [cx, cz] = closestOnSeg(x, z, seg);
-    if (Math.hypot(x - cx, z - cz) <= seg.hw + 0.8) return 'road';
+    if (Math.hypot(x - cx, z - cz) > seg.hw + 0.8) continue;
+    if (!seg.tk) return 'road';
+    onTrack = true;
   }
+  if (onTrack) return 'track';
   if (waterCells.has(gkey(x, z))) return 'water';
   return seaOn && sampleHeight(x, z) < -baseElev - 0.6 ? 'water' : 'ground';
 }
@@ -1881,7 +1924,7 @@ function roadHeightAt(x: number, z: number): number | null {
 type RoadMode = 'none' | 'auto' | 'tunnel' | 'bridge';
 const TUNNEL_TOL = 5;  // metres of terrain above the smoothed profile ⇒ tunnel
 const TUNNEL_H = 5;    // clearance of the carved tube
-function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none'): void {
+function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false): void {
   // Subdivide to ~12m steps first: OSM ways only carry vertices where the road
   // BENDS, so a long straight segment used to bridge every terrain dip between
   // its endpoints like a causeway. Dense sampling makes the ribbon hug the
@@ -1959,8 +2002,10 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       x1 + nx, y10, z1 + nz, x1 - nx, y11, z1 - nz, x0 - nx, y01, z0 - nz,
     );
     uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
-    if (drivable) addSeg(roadGrid, { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1] });
-    mapSeg(x0, z0, x1, z1, drivable ? Math.max(width, 14) : 8, drivable ? '#a8a294' : 'rgba(150,142,120,0.4)');
+    if (drivable) addSeg(roadGrid, { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track });
+    // Tracks read as a fainter line on the chart — they are a route, not a road.
+    mapSeg(x0, z0, x1, z1, drivable && !track ? Math.max(width, 14) : 9,
+      track ? 'rgba(150,140,112,0.62)' : drivable ? '#a8a294' : 'rgba(150,142,120,0.4)');
   }
   if (!verts.length) return;
   const geo = new THREE.BufferGeometry();
@@ -2258,15 +2303,19 @@ function renderWays(els: OsmWay[]): void {
     notePoi(tags, pts);
     if (tags.highway) {
       const w = ROAD_W[tags.highway] ?? 5;
-      // Foot infrastructure renders but doesn't grip like tarmac.
-      const minor = ['footway', 'path', 'cycleway', 'track'].includes(tags.highway);
+      // THREE tiers, not two. A mountain path used to render as decoration you
+      // could not feel underfoot — you crossed Chapman's Peak reading ROUGH the
+      // whole way. Tracks now carry their own grip, and are drawn as ruts.
+      const track = ['track', 'path', 'bridleway', 'cycleway', 'footway'].includes(tags.highway);
+      const stairs = tags.highway === 'steps';   // nothing drives up steps
       // Curb-scale lifts (was 1.6m — roads read as elevated causeways). The
-      // stack keeps its z-order: green 0.2 < water 0.3 < minor 0.45 < road 0.6.
-      const mode: RoadMode = minor ? 'none'
+      // stack keeps its z-order: green 0.2 < water 0.3 < track 0.5 < road 0.6.
+      const mode: RoadMode = track || stairs ? 'none'
         : tags.tunnel && tags.tunnel !== 'no' ? 'tunnel'
         : tags.bridge && tags.bridge !== 'no' ? 'bridge'
         : 'auto';
-      ribbon(pts, w, minor ? MAT.minor : MAT.road, minor ? 0.45 : 0.6, !minor, mode);
+      ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : MAT.road,
+        track || stairs ? 0.5 : 0.6, !stairs, mode, track);
     } else if (tags.building) {
       building(pts, el.id, parseFloat(tags['building:levels'] ?? '') || 2);
     } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
@@ -3097,6 +3146,18 @@ function truckSpec(): Record<string, number> {
 });
 // Force the near plane (0 restores automatic) so a test can measure what the
 // depth-precision fix is actually worth.
+// What the road grid actually holds, by tier — the difference between "there
+// are no tracks here" and "the classifier never fired".
+(window as unknown as { __tiers?: object }).__tiers = (): object => {
+  const seen = new Set<Seg>();
+  for (const arr of roadGrid.values()) for (const g of arr) seen.add(g);
+  let road = 0, track = 0;
+  let sample: [number, number] | null = null;
+  for (const g of seen) {
+    if (g.tk) { track++; if (!sample) sample = [(g.ax + g.bx) / 2, (g.az + g.bz) / 2]; } else road++;
+  }
+  return { roadSegs: road, trackSegs: track, sample };
+};
 (window as unknown as { __susp?: object }).__susp = (): object => dbgSusp;
 (window as unknown as { __near?: object }).__near = (n?: number): object => {
   nearLock = n ?? 0;
@@ -3604,16 +3665,18 @@ const audio = (() => {
       engB.frequency.setTargetAtTime(f * 1.5, t, 0.07);
       engFilt.frequency.setTargetAtTime(500 + rev * 1500 + v * 22, t, 0.09);
       engGain.gain.setTargetAtTime(0.1 + Math.abs(throttle) * 0.16 * grounded + Math.min(v / 60, 0.1), t, 0.09);
-      // Tarmac hisses high and thin; loose ground growls low and loud.
+      // Tarmac hisses high and thin; loose ground growls low and loud. A graded
+      // track sits between the two — you can hear which tier you are on.
       const road = surf === 'road';
-      roarFilt.frequency.setTargetAtTime(road ? 1150 : 320, t, 0.12);
-      roarGain.gain.setTargetAtTime(Math.min(v / 34, 1) * (road ? 0.1 : 0.26) * grounded, t, 0.1);
+      const hard = road ? 1 : surf === 'track' ? 0.55 : 0;
+      roarFilt.frequency.setTargetAtTime(320 + hard * 830, t, 0.12);
+      roarGain.gain.setTargetAtTime(Math.min(v / 34, 1) * (0.26 - hard * 0.16) * grounded, t, 0.1);
       // Rain rides the wind channel: same filtered noise, opened up and lifted.
       windFilt.frequency.setTargetAtTime(900 - rainAmt * 500, t, 0.4);
       windGain.gain.setTargetAtTime(Math.min((v * v) / 2600, 0.9) * 0.13 + rainAmt * 0.16, t, 0.15);
       // Gravel: absent on tarmac, dominant off it. Rate (playbackRate) AND
       // level rise with speed, so the crunch density tracks the wheels.
-      const loose = road ? 0 : surf === 'water' ? 0.12 : 1;
+      const loose = road ? 0 : surf === 'water' ? 0.12 : surf === 'track' ? 0.45 : 1;
       gritSrc.playbackRate.setTargetAtTime(0.55 + Math.min(v / 26, 1.35), t, 0.12);
       gritFilt.frequency.setTargetAtTime(surf === 'water' ? 700 : 900 + Math.min(v * 26, 1400), t, 0.15);
       gritGain.gain.setTargetAtTime(Math.min(v / 12, 1) * 0.3 * loose * grounded, t, 0.09);
@@ -3692,6 +3755,10 @@ const writeUrl = (la: number, lo: number): void => {
 // governor: off-road doubles to ~115km/h by halving drag (0.5 = 16/32).
 const SURFACE = {
   road: { max: 50, drag: 0.28, lift: 0.6, rough: 0.015 },
+  // The middle tier: a graded dirt track. Equilibrium speed is accel/drag, so
+  // 0.36 sits it between tarmac's 57m/s and open ground's 32 — quick enough
+  // that finding a track is a relief, rough enough that it is not a road.
+  track: { max: 40, drag: 0.36, lift: 0.5, rough: 0.07 },
   ground: { max: 32, drag: 0.5, lift: 0.25, rough: 0.16 }, // monster truck: off-road is its element
   water: { max: 3.5, drag: 3.5, lift: 0.3, rough: 0.05 },
 } as const;
@@ -3766,7 +3833,7 @@ function tick(now: number): void {
   {
     const sH = Math.sin(state.heading), cH = Math.cos(state.heading);
     slideV -= GRAV * Math.sin(gradeRoll) * grip * dt;
-    slideV -= slideV * (surfKind === 'road' ? 6.5 : 3.2) * dt;
+    slideV -= slideV * (surfKind === 'road' ? 6.5 : surfKind === 'track' ? 5 : 3.2) * dt;
     state.x += cH * slideV * dt;   // (cos, sin) is the car's own right
     state.z += sH * slideV * dt;
   }
@@ -4630,8 +4697,8 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   const sy = my - condH - 3;
   // ── conditions: surface, grip, weather, wetness, heading ──
   panel(pad, sy, CONDW, condH);
-  const sname = surf === 'road' ? 'ROAD' : surf === 'water' ? 'WATER' : 'ROUGH';
-  const scol = surf === 'road' ? UI.good : UI.hot;
+  const sname = surf === 'road' ? 'ROAD' : surf === 'track' ? 'TRACK' : surf === 'water' ? 'WATER' : 'ROUGH';
+  const scol = surf === 'road' ? UI.good : surf === 'track' ? UI.edge : UI.hot;
   textSmall(hctx, 'SURFACE', pad + 3, sy + 3, UI.dim);
   glowText(sname, pad + 3, sy + 10, scol);
   meter(pad + 3, sy + 18, 10, Math.round(clamp(grip, 0, 1) * 10), scol, 3, 3, 1);
