@@ -399,7 +399,7 @@ const mkRT = (depth: boolean, nearest = false): THREE.WebGLRenderTarget => {
 // magnified with NearestFilter — that is what pixelates GEOMETRY EDGES, which
 // no amount of low-res texturing can do on its own. It also costs a fraction
 // of the fill rate, which buys back everything the post chain spends.
-const PIX_H = 320; // vertical resolution of the rendered world
+let PIX_H = 320; // vertical resolution of the rendered world — a live dial
 // The live pixel-grid size. Shared BY REFERENCE with the composite's uniform,
 // so resize can run before the material exists without any ordering dance.
 const pixSize = new THREE.Vector2(2, 2);
@@ -478,11 +478,15 @@ const compMat = new THREE.ShaderMaterial({
     uSunVis: { value: 0 },
     uBloom: { value: 0.75 },
     uScan: { value: 0.06 },
+    uLevels: { value: 14 },
+    uFow: { value: 0 },
+    uFlare: { value: 1 },
   },
   vertexShader: QUAD_VS,
   fragmentShader: `
     uniform sampler2D sceneTex; uniform sampler2D softTex; uniform sampler2D depthTex;
     uniform sampler2D bloomTex; uniform float uBloom; uniform float uScan;
+    uniform float uLevels; uniform float uFow; uniform float uFlare;
     uniform float uFlash; uniform vec2 uSunUv; uniform float uSunVis;
     uniform sampler2D mask; uniform mat4 invPV; uniform vec3 camPos; uniform float span;
     uniform vec2 sunXZ; uniform vec2 uPix; uniform vec3 uHazeBase; uniform vec3 uHazeSun; varying vec2 vUv;
@@ -521,6 +525,9 @@ const compMat = new THREE.ShaderMaterial({
         float t = distance(wp, camPos);
         vec2 uv = (wp.xz + span * 0.5) / span;
         float m = (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) ? 1.0 : texture2D(mask, uv).a / 0.985;
+        // uFow 0 hands the whole world over as explored, leaving only aerial
+        // perspective — the fog of war becomes a setting rather than a law.
+        m *= uFow;
         // Fog of war starts BEYOND a clear bubble. You can obviously see the
         // ground at your own wheels whether or not you have "explored" it; a
         // ramp that began at zero metres put 55% milk over the near field the
@@ -562,7 +569,7 @@ const compMat = new THREE.ShaderMaterial({
         f += smoothstep(0.13, 0.0, length(vUv - (uSunUv + axis * 1.28))) * 0.20;
         float dy = abs(vUv.y - uSunUv.y);
         f += smoothstep(0.006, 0.0, dy) * smoothstep(0.6, 0.0, abs(vUv.x - uSunUv.x)) * 0.28;
-        col += mix(vec3(1.0, 0.82, 0.52), vec3(0.55, 0.85, 1.0), 0.35) * f * sunVis * 0.085;
+        col += mix(vec3(1.0, 0.82, 0.52), vec3(0.55, 0.85, 1.0), 0.35) * f * sunVis * 0.085 * uFlare;
       }
       col += vec3(0.85, 0.90, 1.0) * uFlash;   // lightning fills the whole frame
       vec3 enc = srgb(col);
@@ -582,12 +589,12 @@ const compMat = new THREE.ShaderMaterial({
       // a visible checkerboard once magnified. 0.6 keeps the weave in
       // gradients while flat areas stay flat.
       float d = (bayer4(floor(vUv * uPix)) - 0.5) * 0.6;
-      enc = floor(enc * LEVELS + d + 0.5) / LEVELS;
+      enc = floor(enc * uLevels + d + 0.5) / uLevels;
       // Scanlines on the PIXEL grid (every other buffer row), so they scale
       // with the art instead of shimmering against the display's real pixels.
       enc *= 1.0 - uScan * mod(floor(vUv.y * uPix.y), 2.0);
       gl_FragColor = vec4(clamp(enc, 0.0, 1.0), 1.0);
-    }`.replace(/LEVELS/g, '14.0'),
+    }`,
 });
 let lastRevealX = Infinity, lastRevealZ = Infinity;
 // One soft punch at a world point.
@@ -1352,7 +1359,7 @@ function refreshVeg(): void {
         if (dx * dx + dz * dz > r2) continue;
         const mesh = vegMeshes[v.k];
         const i = counts[v.k];
-        if (i >= VEG_CAP[v.k]) continue;
+        if (i >= VEG_CAP[v.k] * vegScale) continue;
         const y = sampleHeight(v.x, v.z);
         vegDummy.position.set(v.x, y + v.h, v.z);
         vegDummy.rotation.set(0, v.rot, 0);
@@ -2287,6 +2294,12 @@ Object.assign(osmStatus.style, {
 document.body.appendChild(osmStatus);
 let osmPending = 0;
 const osmNote = (d: number): void => { osmPending += d; streaming = osmPending > 0; };
+// Overpass is a busy public service that 504s under load, and when it does the
+// HUD used to sit on "STREAMING" forever with no way to tell a quiet corner of
+// the map from an outage. Two failures in a row is an outage; any success
+// clears it.
+let osmFails = 0;
+let osmDown = false;
 
 async function loadOsmTile(x: number, y: number): Promise<void> {
   const key = `${x}/${y}`;
@@ -2310,9 +2323,14 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     );out geom 2000;`;
     const r = await overpass(q);
     const ways = ((r.elements ?? []) as Array<OsmWay & { type?: string }>).filter((e) => e.type === 'way' && e.geometry);
+    osmFails = 0;
+    osmDown = false;
     writeTileCache(x, y, ways);
     await renderGated(x, y, ways);
-  } catch { setTimeout(() => osmLoaded.delete(key), 8000); /* backoff, then a later pass retries */ }
+  } catch {
+    if (++osmFails >= 2) osmDown = true;
+    setTimeout(() => osmLoaded.delete(key), 8000); /* backoff, then a later pass retries */
+  }
   finally {
     osmInFlight--;
     osmNote(-1);
@@ -2368,13 +2386,16 @@ const WHEELS: Array<[number, number]> = [[-TRACK, -AXLE], [TRACK, -AXLE], [-TRAC
 // and needs no UVs at all.
 function bodywork(mat: THREE.Material, amount: number): void {
   mat.onBeforeCompile = (sh) => {
-    sh.uniforms.uWear = { value: amount };
+    // ONE shared uniform so the weathering dial can move every painted panel at
+    // once; each material's own share is baked into the source as a literal.
+    sh.uniforms.uWear = wearU;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vBodyP; varying vec3 vBodyN;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvBodyP = position;\nvBodyN = normal;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vBodyP; varying vec3 vBodyN; uniform float uWear;
+        #define WEAR (uWear * SHARE)
         float bh(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 37.19); return fract(p.x * p.y); }
         float bn(vec2 p){
           vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
@@ -2392,19 +2413,20 @@ function bodywork(mat: THREE.Material, amount: number): void {
         // sand, the reference's palette rather than a second colour of car.
         float blot = smoothstep(0.46, 0.66, bfbm(uv * 1.5 + 4.3));
         vec3 camo = mix(vec3(0.20, 0.23, 0.15), vec3(0.42, 0.38, 0.26), bfbm(uv * 2.6 + 9.1));
-        diffuseColor.rgb = mix(diffuseColor.rgb, camo, blot * 0.34 * uWear);
+        diffuseColor.rgb = mix(diffuseColor.rgb, camo, blot * 0.34 * WEAR);
         // Panel seams on a 0.34m grid, and a shadow just under each one.
         vec2 g = fract(uv / 0.34);
         float line = min(min(g.x, 1.0 - g.x), min(g.y, 1.0 - g.y));
         diffuseColor.rgb *= 1.0 - (1.0 - smoothstep(0.0, 0.045, line)) * 0.3;
         // Road dust up the sills — heaviest at the bottom, thrown as streaks.
         float dust = smoothstep(0.62, 0.02, vBodyP.y) * (0.55 + 0.45 * bfbm(vec2(uv.x * 5.0, uv.y * 1.2)));
-        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.52, 0.45, 0.33), clamp(dust * 0.3 * uWear, 0.0, 0.4));
+        diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.52, 0.45, 0.33), clamp(dust * 0.3 * WEAR, 0.0, 0.4));
         // And a fine grime speckle so no panel is ever a flat field of colour.
-        diffuseColor.rgb *= 1.0 - 0.13 * uWear * bfbm(uv * 9.0);
-      }`);
+        diffuseColor.rgb *= 1.0 - 0.13 * WEAR * bfbm(uv * 9.0);
+      }`).replace(/SHARE/g, amount.toFixed(3));
   };
 }
+let bodyMat: THREE.MeshLambertMaterial | null = null;
 const tailMat = new THREE.MeshBasicMaterial({ color: 0x8e1a12 }); // brightens under braking
 const car = new THREE.Group();
 car.rotation.order = 'YXZ'; // yaw first, then pitch/roll about the CAR's axes
@@ -2422,6 +2444,7 @@ const wheelMeshes: THREE.Mesh[] = [];
   const glassMat = new THREE.MeshLambertMaterial({ color: DARK, flatShading: true });
   const steelMat = new THREE.MeshLambertMaterial({ color: STEEL, flatShading: true });
   const cargoMat = new THREE.MeshLambertMaterial({ color: TAN, flatShading: true });
+  bodyMat = redMat;
   bodywork(redMat, 1);
   bodywork(steelMat, 0.35);
   bodywork(cargoMat, 0.5);
@@ -2709,20 +2732,27 @@ function orthoExtents(view: number, aspect: number): { hw: number; hh: number } 
 // nearest sampling, exactly like the scene pass.
 const rtVeh = mkRT(true, true);
 const vehCopyMat = new THREE.ShaderMaterial({
-  uniforms: { src: { value: null as THREE.Texture | null }, uPix: { value: new THREE.Vector2(2, 2) } },
+  uniforms: {
+    src: { value: null as THREE.Texture | null },
+    uPix: { value: new THREE.Vector2(2, 2) },
+    uLevels: { value: 14 },
+  },
   vertexShader: QUAD_VS,
-  // The target is LINEAR, like the scene pass — so this has to do the encode
-  // and the palette step the composite does, or the bay comes out near-black
-  // and in smoother colour than everything around it.
+  // The target is LINEAR, like the scene pass — so this has to do the encode,
+  // the GRADE and the palette step the composite ends on, or an inset comes out
+  // near-black and in smoother, flatter colour than everything around it.
   fragmentShader: `
-    uniform sampler2D src; uniform vec2 uPix; varying vec2 vUv;
+    uniform sampler2D src; uniform vec2 uPix; uniform float uLevels; varying vec2 vUv;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
     float bayer2(vec2 a){ a = floor(a); return fract(a.x * 0.5 + a.y * a.y * 0.75); }
     float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
     void main(){
       vec3 enc = srgb(max(texture2D(src, vUv).rgb, 0.0));
+      float l = dot(enc, vec3(0.299, 0.587, 0.114));
+      enc = clamp(mix(vec3(l), enc, 1.35), 0.0, 1.0);
+      enc = clamp((enc - 0.5) * 1.18 + 0.47, 0.0, 1.0);
       float d = (bayer4(floor(vUv * uPix)) - 0.5) * 0.6;
-      enc = floor(enc * 14.0 + d + 0.5) / 14.0;
+      enc = floor(enc * uLevels + d + 0.5) / uLevels;
       gl_FragColor = vec4(enc, 1.0);
     }`,
   depthTest: false,
@@ -2770,7 +2800,7 @@ function stepWeather(now: number, dt: number): void {
   skyMat.uniforms.uTime.value = now / 1000;
   waterU.uWTime.value = now / 1000;
   // Cloud shadows read the same cover and drift as the deck overhead.
-  ghostU.uCloudS.value = wx.cloud;
+  ghostU.uCloudS.value = cloudShadowOn ? wx.cloud : 0;
   ghostU.uWind.value.set((now / 1000) * 0.006, (now / 1000) * 0.0022);
   // LIGHTNING. A strike is a double flash — the leader, then the return
   // stroke a beat later — and the thunder arrives after the sound has had
@@ -3040,6 +3070,7 @@ function truckSpec(): Record<string, number> {
 // Open the vehicle bay on a named elevation, so a test can capture all five
 // and they can be compared against the sheet side by side.
 // The curated starts, and a way to take one without a tap.
+(window as unknown as { __odo?: object }).__odo = (): object => ({ total: Math.round(odo.total), trip: Math.round(odo.trip) });
 (window as unknown as { __drives?: object }).__drives = (n?: number): object => {
   if (n === undefined) return DRIVES.map((d, i) => ({ i, name: d.name, sub: d.sub, lat: d.lat, lon: d.lon, h: d.h }));
   const d = DRIVES[n];
@@ -3305,11 +3336,14 @@ function drawMinimap(): void {
   miniCtx.drawImage(mapLayer, sx, sz, spanPx, spanPx, 0, 0, S, S);
   // Fog over the chart: the fog canvas is stored flipped for the GPU (flipY),
   // so flip it back while compositing — unexplored stays unknown on the map too.
-  miniCtx.save();
-  miniCtx.translate(0, S);
-  miniCtx.scale(1, -1);
-  miniCtx.drawImage(fogCanvas, sx, FOG_PX - sz - spanPx, spanPx, spanPx, 0, 0, S, S);
-  miniCtx.restore();
+  // With the fog dialled off the chart is a chart, not a scratchcard.
+  if ((compMat.uniforms.uFow as { value: number }).value > 0) {
+    miniCtx.save();
+    miniCtx.translate(0, S);
+    miniCtx.scale(1, -1);
+    miniCtx.drawImage(fogCanvas, sx, FOG_PX - sz - spanPx, spanPx, spanPx, 0, 0, S, S);
+    miniCtx.restore();
+  }
   // The car: an amber heading wedge, always centre.
   miniCtx.translate(S / 2, S / 2);
   miniCtx.rotate(state.heading);
@@ -3806,7 +3840,8 @@ function tick(now: number): void {
     }
   } else dustBudget = 0;
   stepDust(dt);
-  stepWildlife(dt);
+  if (wildlifeOn) stepWildlife(dt);
+  stepOdo(dt, now);
   if (now > vegAt) { vegAt = now + 900; refreshVeg(); }
   audio.update(state.speed, throttle, surfKind, groundedF, wx.rain);
   reveal(state.x, state.z);
@@ -3915,14 +3950,13 @@ function tick(now: number): void {
       state.z - fwdZ * 11,
     );
     miniCam.lookAt(state.x + fwdX * 20, ground + 1.3, state.z + fwdZ * 20);
-    renderer.setScissorTest(true);
-    renderer.setViewport(vx, vy, vw, vh);
-    renderer.setScissor(vx, vy, vw, vh);
     halo.visible = false; // the zoom-scaled chart ring has no place in the POV
-    renderer.render(scene, miniCam);
+    // Through the SAME low-res target, nearest magnification, sRGB encode,
+    // grade and palette dither as the world. Rendered straight to the screen it
+    // was a smooth, full-colour window inside a hand-built bitmap HUD — the one
+    // thing on screen that did not look like the game.
+    blitPixelated(scene, miniCam, vx, vy, vw, vh);
     halo.visible = true;
-    renderer.setScissorTest(false);
-    renderer.setViewport(0, 0, innerWidth, innerHeight);
   }
   if (vehRect.w > 0) renderStudio(dt);
   requestAnimationFrame(tick);
@@ -3931,6 +3965,33 @@ function tick(now: number): void {
 // studio for one render and handed straight back — no clone to drift out of
 // sync with the model, and a clean backdrop instead of whatever weather the
 // world happens to be having.
+// Render a scene into a corner of the screen THROUGH the world's pixel grid:
+// a low-res target, nearest magnification, and the same encode/grade/palette
+// the composite ends on. Both insets — the POV dock and the vehicle bay — go
+// through here, because a smooth full-colour window inside a bitmap HUD reads
+// as a leak from another program.
+function blitPixelated(
+  what: THREE.Scene, cam: THREE.Camera, vx: number, vy: number, vw: number, vh: number, clear = 0x05070c,
+): void {
+  const grid = PIX_H / Math.max(1, innerHeight);   // same pixels per metre as the world
+  const rw = Math.max(2, Math.round(vw * grid)), rh = Math.max(2, Math.round(vh * grid));
+  rtVeh.setSize(rw, rh);
+  vehCopyMat.uniforms.uPix.value.set(rw, rh);
+  vehCopyMat.uniforms.uLevels.value = (compMat.uniforms.uLevels as { value: number }).value;
+  renderer.setRenderTarget(rtVeh);
+  renderer.setClearColor(clear, 1);
+  renderer.clear(true, true, false);
+  renderer.render(what, cam);
+  renderer.setRenderTarget(null);
+  renderer.setClearColor(0x05070c, 1);
+  renderer.setScissorTest(true);
+  renderer.setViewport(vx, vy, vw, vh);
+  renderer.setScissor(vx, vy, vw, vh);
+  vehCopyMat.uniforms.src.value = rtVeh.texture;
+  runPass(vehCopyMat, null);
+  renderer.setScissorTest(false);
+  renderer.setViewport(0, 0, innerWidth, innerHeight);
+}
 function renderStudio(dt: number): void {
   studioSpin += dt * 0.45;
   const vx = vehRect.x * hudS, vw = vehRect.w * hudS, vh = vehRect.h * hudS;
@@ -3981,26 +4042,11 @@ function renderStudio(dt: number): void {
     studioOrtho.lookAt(c);
     cam = studioOrtho;
   }
-  // Same pixels per metre as the world: PIX_H over the screen height.
-  const grid = PIX_H / Math.max(1, innerHeight);
-  const rw = Math.max(2, Math.round(vw * grid)), rh = Math.max(2, Math.round(vh * grid));
-  rtVeh.setSize(rw, rh);
-  vehCopyMat.uniforms.uPix.value.set(rw, rh);
-  renderer.setRenderTarget(rtVeh);
-  renderer.setClearColor(0x0b191d, 1);
-  renderer.clear(true, true, false);
-  renderer.render(studio, cam);
-  renderer.setRenderTarget(null);
+  // Lighter than it looks: the copy pass applies the world's contrast curve,
+  // which crushes a near-black backdrop to flat black.
+  blitPixelated(studio, cam, vx, vy, vw, vh, 0x17343d);
   wheelPivots.forEach((p, i) => { p.position.y = susp[i].y; p.rotation.y = susp[i].ry; });
   wheelMeshes.forEach((w, i) => { w.rotation.x = spin[i]; });
-  renderer.setClearColor(0x05070c, 1);
-  renderer.setScissorTest(true);
-  renderer.setViewport(vx, vy, vw, vh);
-  renderer.setScissor(vx, vy, vw, vh);
-  vehCopyMat.uniforms.src.value = rtVeh.texture;
-  runPass(vehCopyMat, null);
-  renderer.setScissorTest(false);
-  renderer.setViewport(0, 0, innerWidth, innerHeight);
   scene.add(car);                        // and hand it back
   car.position.copy(pos);
   car.rotation.copy(rot);
@@ -4280,6 +4326,95 @@ const startDrive = (d: Drive): void => {
 let drivePage = 0, drivePages = 1;
 const driveRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
 let drivePageRect = { x: 0, y: 0, w: 0, h: 0 };
+
+// ── dials ──────────────────────────────────────────────────────────
+// Every one of these was a constant buried somewhere in the render chain. A
+// dial CYCLES rather than sliding: a stepped list reads at 3x5 pixels, a slider
+// does not, and there is nothing here whose value is worth more resolution than
+// four named steps.
+interface Dial { key: string; label: string; opts: string[]; apply: (i: number) => void; at: number }
+interface DialGroup { title: string; dials: Dial[] }
+const dial = (key: string, label: string, opts: string[], def: number, apply: (i: number) => void): Dial =>
+  ({ key, label, opts, apply, at: def });
+const cu = compMat.uniforms as Record<string, { value: number }>;
+let vegScale = 1;         // multiplies every VEG_CAP
+let wildlifeOn = true;
+let cloudShadowOn = true;
+const wearU = { value: 1 };  // shared by every bodywork material
+const BODY_COLORS: Array<[string, number]> = [
+  ['RUST', 0xc4402c], ['EMBER', 0xd0642a], ['SAND', 0xc0a068],
+  ['OLIVE', 0x6a7245], ['FOREST', 0x3d5a3c], ['STEEL', 0x44647c],
+];
+const DIAL_GROUPS: DialGroup[] = [
+  {
+    title: 'RENDER',
+    dials: [
+      dial('pix', 'PIXEL', ['240P', '320P', '480P', 'FULL'], 1, (i) => {
+        PIX_H = [240, 320, 480, 4096][i];
+        resizePost();
+      }),
+      dial('pal', 'PALETTE', ['8', '14', '24', 'OFF'], 1, (i) => { cu.uLevels.value = [8, 14, 24, 255][i]; }),
+      dial('scan', 'SCANLINES', ['OFF', 'LOW', 'HIGH'], 1, (i) => { cu.uScan.value = [0, 0.06, 0.14][i]; }),
+      dial('bloom', 'BLOOM', ['OFF', 'LOW', 'MED', 'HIGH'], 2, (i) => { cu.uBloom.value = [0, 0.4, 0.75, 1.2][i]; }),
+      dial('flare', 'LENS FLARE', ['OFF', 'ON'], 1, (i) => { cu.uFlare.value = i; }),
+    ],
+  },
+  {
+    title: 'WORLD',
+    dials: [
+      // Default OFF. It was the right call when the world was empty and the
+      // point was to reward exploring; now it mostly hides the scenery you
+      // came for, and every roof reads black because you can never drive
+      // inside a building footprint to reveal it.
+      dial('fow', 'FOG OF WAR', ['OFF', 'ON'], 0, (i) => { cu.uFow.value = i; }),
+      dial('veg', 'VEGETATION', ['NONE', 'SPARSE', 'FULL'], 2, (i) => { vegScale = [0, 0.35, 1][i]; }),
+      dial('life', 'WILDLIFE', ['OFF', 'ON'], 1, (i) => {
+        wildlifeOn = i === 1;
+        birds.visible = wildlifeOn;
+        for (const h of herds) h.visible = wildlifeOn;
+      }),
+      dial('cloud', 'CLOUD SHADOW', ['OFF', 'ON'], 1, (i) => { cloudShadowOn = i === 1; }),
+    ],
+  },
+  {
+    title: 'VEHICLE',
+    dials: [
+      dial('wear', 'WEATHERING', ['CLEAN', 'WORN', 'BEATEN'], 1, (i) => { wearU.value = [0.15, 1, 1.8][i]; }),
+      dial('paint', 'PAINT', BODY_COLORS.map(([n]) => n), 0, (i) => { bodyMat?.color.setHex(BODY_COLORS[i][1]); }),
+    ],
+  },
+];
+const DIALS: Dial[] = DIAL_GROUPS.flatMap((g) => g.dials);
+const dialRects: Array<{ x: number; y: number; w: number; h: number; d: Dial }> = [];
+function applyDials(): void {
+  for (const d of DIALS) d.apply(d.at);
+}
+function saveDials(): void {
+  try { localStorage.setItem('drive.dials', JSON.stringify(Object.fromEntries(DIALS.map((d) => [d.key, d.at])))); } catch { /* fine */ }
+}
+function loadDials(): void {
+  try {
+    const raw = JSON.parse(localStorage.getItem('drive.dials') ?? '{}') as Record<string, number>;
+    for (const d of DIALS) if (Number.isInteger(raw[d.key])) d.at = clamp(raw[d.key], 0, d.opts.length - 1);
+  } catch { /* fine */ }
+}
+
+// ── odometer ───────────────────────────────────────────────────────
+// Metres, cumulative across every session on this device, plus the distance
+// since this page loaded. Persisted on a slow clock — this is a number you
+// want to survive a reload, not one worth a write per frame.
+const odo = { total: 0, trip: 0, at: 0 };
+try { odo.total = Number(localStorage.getItem('drive.odo') ?? 0) || 0; } catch { /* fine */ }
+const fmtKm = (m: number): string => (m < 1000 ? `${Math.round(m)} M` : `${(m / 1000).toFixed(m < 100000 ? 1 : 0)} KM`);
+function stepOdo(dt: number, now: number): void {
+  const d = Math.abs(state.speed) * dt;
+  odo.total += d;
+  odo.trip += d;
+  if (now > odo.at) {
+    odo.at = now + 8000;
+    try { localStorage.setItem('drive.odo', String(Math.round(odo.total))); } catch { /* fine */ }
+  }
+}
 // Straight off the sheet — the parts of the rig that are not geometry.
 const SPEC_TEXT: Array<[string, string]> = [
   ['CLASS', 'OVERLAND / RALLY'], ['DRIVE', '4X4'], ['CURB', '2100KG'], ['PAYLOAD', '800KG'],
@@ -4379,7 +4514,8 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     const wet = wx.wet > 0.05;
     const lab = wet && wx.rain < 0.1 ? `${w.label} WET` : w.label;
     textEdge(lab, pad + 1, row + 13, wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft);
-    if (streaming) textEdge('· STREAMING', pad + 3 + textW(lab), row + 13, UI.dim);
+    if (osmDown) textEdge('· NO WORLD DATA', pad + 3 + textW(lab), row + 13, UI.bad);
+    else if (streaming) textEdge('· STREAMING', pad + 3 + textW(lab), row + 13, UI.dim);
   }
   if (wx.warn && performance.now() < wx.warn) {
     const t2 = 'STORM APPROACHING';
@@ -4391,6 +4527,7 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   tabRects.length = 0;
   viewRects.length = 0;
   driveRects.length = 0;
+  dialRects.length = 0;
   vehRect = { x: 0, y: 0, w: 0, h: 0 };
   // ── the dock, bottom-left: whichever view ISN'T fullscreen ──
   // While charting, the renderer scissors a live POV preview into this square,
@@ -4424,6 +4561,12 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   panel(sx, spy, sw, 18, UI.gold);
   glowText(digits, sx + 4, spy + 3, UI.gold, 2);
   text(hctx, 'KM/H', sx + 8 + textW(digits, 2), spy + 9, UI.edge);
+  // The odometer rides above the speed, in the micro face — it is a number you
+  // glance at between drives, not one you read at 90km/h.
+  {
+    const o = fmtKm(odo.total);
+    textEdgeS(o, HW - textSW(o) - pad - 1, spy - 8, UI.soft);
+  }
   // LAST: the modal covers the instruments, not the other way round.
   if (menuTab !== null) drawMenu(menuTab, kmh, surf);
 }
@@ -4467,17 +4610,21 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
   const top = MY + 41;
   if (tab === 0) {
     truckSpec(); // populates specBox, which the elevations frame themselves from
-    // ── view picker: the turntable plus the sheet's five elevations ──
+    // ── view picker ──
+    // Drawn in the MICRO face and a row shorter than the tabs above: these
+    // choose a view WITHIN a section, and at the same weight they competed with
+    // the section tabs for which row of chips you were meant to read first.
     let vx2 = MX + 5, vy2 = top;
     for (let i = 0; i < VIEWS.length; i++) {
-      const w = textW(VIEWS[i].id) + 7;
-      if (vx2 + w > MX + MW - 5) { vx2 = MX + 5; vy2 += 14; }  // wrap, phone-width
+      const w = textSW(VIEWS[i].id) + 6;
+      if (vx2 + w > MX + MW - 5) { vx2 = MX + 5; vy2 += 11; }  // wrap, phone-width
       const on = vehView === i;
-      if (on) panel(vx2, vy2, w, 12, UI.gold);
-      text(hctx, VIEWS[i].id, vx2 + 3, vy2 + 3, on ? UI.gold : UI.soft);
-      viewRects.push({ x: vx2, y: vy2, w, h: 12, i });
+      if (on) frame(vx2, vy2, w, 9, UI.gold);
+      textSmall(hctx, VIEWS[i].id, vx2 + 3, vy2 + 2, on ? UI.gold : UI.soft);
+      viewRects.push({ x: vx2, y: vy2, w, h: 9, i });
       vx2 += w + 3;
     }
+    vy2 -= 3; // the shorter chips leave the bay too far down otherwise
     // ── the bay: a live window onto the actual truck ──
     // Its SHAPE follows the view. A side elevation is 4.9m by 2.35m and a plan
     // is the other way up; forcing both into one square window wastes most of
@@ -4528,6 +4675,8 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
       textSmall(hctx, v, MX + 46, y, UI.text);
       y += 7;
     }
+    // The rig's own dials live with the rig, not in a settings screen.
+    drawDials(DIAL_GROUPS.filter((g) => g.title === 'VEHICLE'), MX, MW, y + 5);
   } else {
     // ── readouts, then the controls for this tab ──
     let y = top;
@@ -4540,14 +4689,18 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
       ]
       : [
         ['SOUND', audio.on ? (audio.state === 'running' ? 'ON' : 'NEEDS TAP') : 'OFF'],
-        ['RENDER', `${PIX_H}P PIXEL`],
         ['SCRIPT', alien ? 'ALIEN' : 'PLAIN'],
       ];
+    if (tab === 1) {
+      rows.push(['DRIVEN', `${fmtKm(odo.trip)} TRIP · ${fmtKm(odo.total)} TOTAL`]);
+      rows.push(['VECTORS', osmDown ? 'UNAVAILABLE - RETRYING' : streaming ? 'STREAMING' : 'LOADED']);
+    }
     for (const [k, v] of rows) {
       textSmall(hctx, k, MX + 6, y, UI.dim);
       textSmall(hctx, v, MX + 52, y, UI.text);
       y += 8;
     }
+    if (tab === 2) y = drawDials(DIAL_GROUPS.filter((g) => g.title !== 'VEHICLE'), MX, MW, y + 4);
     y += 6;
     const items = TAB_ITEMS[tab];
     if (tab === 1) {
@@ -4590,6 +4743,31 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
     }
   }
 }
+// A group of dials: a rule with its title, then one row each. The value sits
+// right-aligned in gold, which is the only thing on the row you can change, and
+// the whole row is the target — chasing a 20px-wide word with a thumb is not a
+// control.
+function drawDials(groups: DialGroup[], MX: number, MW: number, y0: number): number {
+  let y = y0;
+  for (const g of groups) {
+    // Rule to the RIGHT of the title, not behind it. Clearing a gap for the
+    // text punched a hole straight through the modal's scrim to the world.
+    textSmall(hctx, g.title, MX + 7, y, UI.edge);
+    hctx.fillStyle = UI.dim;
+    const tw = textSW(g.title) + 12;
+    hctx.fillRect(MX + tw, y + 2, MW - tw - 7, 1);
+    y += 9;
+    for (const d of g.dials) {
+      textSmall(hctx, d.label, MX + 8, y, UI.soft);
+      const v = d.opts[d.at];
+      textSmall(hctx, v, MX + MW - textSW(v) - 9, y, UI.gold);
+      dialRects.push({ x: MX + 5, y: y - 2, w: MW - 10, h: 9, d });
+      y += 9;
+    }
+    y += 4;
+  }
+  return y;
+}
 let dockRect = { x: 0, y: 0, w: 0, h: 0 };
 function setClean(on: boolean): void {
   document.body.classList.toggle('clean', on);
@@ -4609,6 +4787,13 @@ function hudTap(cx: number, cy: number): boolean {
     if (inside(closeRect)) { menuTab = null; return true; }
     for (const r of tabRects) if (inside(r, 0)) { menuTab = r.i; return true; }
     for (const r of viewRects) if (inside(r, 0)) { vehView = r.i; return true; }
+    for (const r of dialRects) {
+      if (!inside(r, 0)) continue;
+      r.d.at = (r.d.at + 1) % r.d.opts.length;   // dials CYCLE; there is no slider
+      r.d.apply(r.d.at);
+      saveDials();
+      return true;
+    }
     if (drivePageRect.w && inside(drivePageRect, 2)) { drivePage = (drivePage + 1) % drivePages; return true; }
     for (const r of driveRects) if (inside(r, 0)) { startDrive(DRIVES[r.i]); return true; }
     for (const r of itemRects) if (inside(r, 0)) { TAB_ITEMS[tab]?.[r.i]?.hit(); return true; }
@@ -4645,6 +4830,11 @@ let placeRect = { x: 0, y: 0, w: 0, h: 0 };
 }
 
 // ── boot ───────────────────────────────────────────────────────────
+// Settings first: PIXEL resizes the render targets and PAINT reaches into a
+// material, so they have to land before the first frame rather than on the
+// first time the menu is opened.
+loadDials();
+applyDials();
 $('reroll').addEventListener('click', () => { location.href = location.pathname + '?random=1'; });
 (async () => {
   const spawn = await findSpawn();
