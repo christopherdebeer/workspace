@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { gzipSync } from 'node:zlib';
+import { gzipSync, deflateSync, inflateSync } from 'node:zlib';
 
 /**
  * `@c15r/drive` — a standalone side-project cell: a top-down car game over the
@@ -98,6 +98,7 @@ const SHELL = `<!doctype html>
 // permanent invocation — and (2) a failure must never be written, or one bad
 // minute upstream becomes our bad week.
 const TILE_RE = /^\/~\/osm\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+const COVER_RE = /^\/~\/cover\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // THREE upstreams, not one. Measured on a 12km corridor through Death Valley:
 // 7 of 25 cold tiles came back 503 at 9–12.5s because the single upstream was
 // rate-limiting (HTTP 429) or timing out (504). A failure is deliberately never
@@ -128,6 +129,235 @@ const OVERPASS_MIRRORS = [
 // seconds is better retried later, when it may well be warm.
 const UPSTREAM_MS = 12000;   // the whole budget, across every mirror
 const ATTEMPT_MS = 5000;     // …and no single mirror may spend all of it
+
+// ── land cover: what is actually growing here ──────────────────────
+//
+// The renderer used to pick a biome from LATITUDE — one palette for a whole
+// world, so the Sahara and the Nile delta came out identical — and scatter
+// vegetation from whichever OSM landuse polygons happened to be tagged. ESA
+// WorldCover answers the question properly: eleven classes, ten metres, the
+// whole planet, CC-BY-4.0 and free.
+//
+// It cannot be fetched by the browser — the bucket serves no CORS headers and
+// its preflight 403s — so it comes through this namespace like the vectors do.
+// Which is the better shape anyway: the source is a 36000×36000 GeoTIFF per 3°
+// cell, and what the client wants is a small mercator tile.
+//
+// NO GEOTIFF LIBRARY. The files are 8-bit, single band, DEFLATE, predictor 1,
+// tiled 1024×1024, with a seven-level overview pyramid (36000→562) — which
+// means `node:zlib` and about eighty lines of IFD walking is the whole reader,
+// and the pyramid lets us pull the level whose resolution already matches the
+// zoom asked for. Measured: ONE 40KB range request, inflated in 5ms, covers
+// 38km square at 37m/px.
+const WORLDCOVER = 'https://esa-worldcover.s3.amazonaws.com/v200/2021/map';
+const WC_SPAN = 3;        // degrees per source file
+const WC_FULL = 36000;    // pixels across at full resolution
+const WC_TILE = 1024;     // internal tile size, every level
+
+/** The source file covering a point, named from its south-west corner. */
+function wcFile(lat: number, lon: number): { url: string; lat0: number; lon0: number } {
+  const lat0 = Math.floor(lat / WC_SPAN) * WC_SPAN;
+  const lon0 = Math.floor(lon / WC_SPAN) * WC_SPAN;
+  const ns = lat0 < 0 ? `S${String(-lat0).padStart(2, '0')}` : `N${String(lat0).padStart(2, '0')}`;
+  const ew = lon0 < 0 ? `W${String(-lon0).padStart(3, '0')}` : `E${String(lon0).padStart(3, '0')}`;
+  return { url: `${WORLDCOVER}/ESA_WorldCover_10m_2021_v200_${ns}${ew}_Map.tif`, lat0, lon0 };
+}
+
+interface WcLevel { w: number; h: number; off: number[]; cnt: number[] }
+const wcRange = async (url: string, a: number, b: number): Promise<Buffer> => {
+  const r = await fetch(url, { headers: { Range: `bytes=${a}-${b}` } });
+  if (!r.ok && r.status !== 206 && r.status !== 200) throw new Error(`cover HTTP ${r.status}`);
+  return Buffer.from(await r.arrayBuffer());
+};
+
+/** Walk the IFD chain far enough to know where every tile of every overview
+ *  lives. The header and all the offset arrays sit in the first 64KB. */
+export function wcLevels(head: Buffer): WcLevel[] {
+  if (head.toString('ascii', 0, 2) !== 'II' || head.readUInt16LE(2) !== 42) {
+    throw new Error('cover: not a little-endian classic TIFF');
+  }
+  const u16 = (o: number): number => head.readUInt16LE(o);
+  const u32 = (o: number): number => head.readUInt32LE(o);
+  const out: WcLevel[] = [];
+  let off = u32(4);
+  while (off && off + 2 < head.length && out.length < 12) {
+    const n = u16(off);
+    const d: Record<number, number | number[]> = {};
+    for (let i = 0; i < n; i++) {
+      const e = off + 2 + i * 12;
+      const tag = u16(e), type = u16(e + 2), num = u32(e + 4), vo = e + 8;
+      if (type === 3 && num === 1) d[tag] = u16(vo);
+      else if (type === 4 && num === 1) d[tag] = u32(vo);
+      else if (type === 4) {
+        const p = num * 4 <= 4 ? vo : u32(vo);
+        const arr: number[] = [];
+        for (let k = 0; k < num; k++) arr.push(u32(p + k * 4));
+        d[tag] = arr;
+      }
+    }
+    const w = d[256] as number, h = d[257] as number;
+    const offs = d[324], cnts = d[325];
+    if (w && h && offs !== undefined && cnts !== undefined) {
+      out.push({
+        w, h,
+        off: Array.isArray(offs) ? offs : [offs],
+        cnt: Array.isArray(cnts) ? cnts : [cnts],
+      });
+    }
+    off = u32(off + 2 + n * 12);
+  }
+  if (!out.length) throw new Error('cover: no tiled IFD found');
+  return out;
+}
+
+/** The coarsest overview still finer than what the request asks for. Sampling
+ *  a 10m grid to draw a 40m pixel is thirty-two times the bytes for a number
+ *  that rounds to the same class. */
+export function wcLevelFor(z: number): number {
+  const outDeg = 360 / (2 ** z * 256);
+  let best = 0;
+  for (let L = 0; L < 7; L++) if ((WC_SPAN * 2 ** L) / WC_FULL <= outDeg) best = L;
+  return best;
+}
+
+// ── PNG, by hand ───────────────────────────────────────────────────
+// 8-bit greyscale, because the PIXEL VALUE IS THE CLASS: 10 tree, 20 shrub, 30
+// grass, 40 crop, 50 built, 60 bare, 70 snow, 80 water, 90 wetland, 95
+// mangrove, 100 moss, 0 nothing known. The client reads the red channel of an
+// ImageBitmap exactly as it already does for terrarium elevation, so this adds
+// a data source without adding a decoder.
+const CRC_TAB = (() => {
+  const t = new Int32Array(256);
+  for (let n = 0; n < 256; n++) {
+    let c = n;
+    for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
+    t[n] = c;
+  }
+  return t;
+})();
+function crc32(buf: Buffer): number {
+  let c = -1;
+  for (let i = 0; i < buf.length; i++) c = CRC_TAB[(c ^ buf[i]) & 0xff] ^ (c >>> 8);
+  return (c ^ -1) >>> 0;
+}
+function pngChunk(type: string, body: Buffer): Buffer {
+  const len = Buffer.alloc(4); len.writeUInt32BE(body.length);
+  const td = Buffer.concat([Buffer.from(type, 'ascii'), body]);
+  const crc = Buffer.alloc(4); crc.writeUInt32BE(crc32(td));
+  return Buffer.concat([len, td, crc]);
+}
+export function greyPng(px: Uint8Array, size: number): Buffer {
+  const ihdr = Buffer.alloc(13);
+  ihdr.writeUInt32BE(size, 0); ihdr.writeUInt32BE(size, 4);
+  ihdr[8] = 8; ihdr[9] = 0; ihdr[10] = 0; ihdr[11] = 0; ihdr[12] = 0;   // 8-bit grey
+  // One filter byte per scanline, filter 0 (none) — the data is class indices,
+  // and delta-filtering indices only makes them harder to compress.
+  const raw = Buffer.alloc((size + 1) * size);
+  for (let y = 0; y < size; y++) {
+    raw[y * (size + 1)] = 0;
+    Buffer.from(px.buffer, px.byteOffset + y * size, size).copy(raw, y * (size + 1) + 1);
+  }
+  return Buffer.concat([
+    Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]),
+    pngChunk('IHDR', ihdr),
+    pngChunk('IDAT', deflateSync(raw, { level: 9 })),
+    pngChunk('IEND', Buffer.alloc(0)),
+  ]);
+}
+
+const COVER_PX = 256;
+/** Build one web-mercator cover tile out of whatever source cells it lands on. */
+export async function coverTile(z: number, x: number, y: number): Promise<Buffer> {
+  const L = wcLevelFor(z);
+  const n = 2 ** z;
+  const out = new Uint8Array(COVER_PX * COVER_PX);   // 0 = nothing known
+  // Everything this tile needs, gathered before a byte is fetched: the source
+  // files it overlaps, and within each the 1024-pixel blocks it touches. A
+  // mercator tile is small enough that this is usually one file and one block.
+  const heads = new Map<string, Promise<WcLevel[] | null>>();
+  const blocks = new Map<string, Promise<Buffer | null>>();
+  const lonOf = (px: number): number => ((x + px / COVER_PX) / n) * 360 - 180;
+  const latOf = (py: number): number => {
+    const t = Math.PI * (1 - (2 * (y + py / COVER_PX)) / n);
+    return (Math.atan(Math.sinh(t)) * 180) / Math.PI;
+  };
+  const headFor = (url: string): Promise<WcLevel[] | null> => {
+    let p = heads.get(url);
+    if (!p) {
+      p = wcRange(url, 0, 65535).then(wcLevels).catch(() => null);
+      heads.set(url, p);
+    }
+    return p;
+  };
+  // Pass one: resolve headers. Pass two: pull blocks. Pass three: fill.
+  const want: Array<{ i: number; url: string; sx: number; sy: number }> = [];
+  for (let j = 0; j < COVER_PX; j++) {
+    const lat = latOf(j + 0.5);
+    for (let i = 0; i < COVER_PX; i++) {
+      const lon = lonOf(i + 0.5);
+      const f = wcFile(lat, lon);
+      want.push({ i: j * COVER_PX + i, url: f.url, sx: (lon - f.lon0) / WC_SPAN, sy: (f.lat0 + WC_SPAN - lat) / WC_SPAN });
+    }
+  }
+  await Promise.all([...new Set(want.map((w) => w.url))].map(headFor));
+  for (const w of want) {
+    const lv = await heads.get(w.url);
+    if (!lv) continue;
+    const f = lv[Math.min(L, lv.length - 1)];
+    const px = Math.min(f.w - 1, Math.max(0, Math.floor(w.sx * f.w)));
+    const py = Math.min(f.h - 1, Math.max(0, Math.floor(w.sy * f.h)));
+    const across = Math.ceil(f.w / WC_TILE);
+    const bi = Math.floor(py / WC_TILE) * across + Math.floor(px / WC_TILE);
+    const key = `${w.url}#${L}#${bi}`;
+    if (!blocks.has(key) && f.off[bi] !== undefined) {
+      blocks.set(key, wcRange(w.url, f.off[bi], f.off[bi] + f.cnt[bi] - 1)
+        .then((b) => inflateSync(b) as Buffer).catch(() => null));
+    }
+  }
+  await Promise.all(blocks.values());
+  for (const w of want) {
+    const lv = await heads.get(w.url);
+    if (!lv) continue;
+    const f = lv[Math.min(L, lv.length - 1)];
+    const px = Math.min(f.w - 1, Math.max(0, Math.floor(w.sx * f.w)));
+    const py = Math.min(f.h - 1, Math.max(0, Math.floor(w.sy * f.h)));
+    const across = Math.ceil(f.w / WC_TILE);
+    const blk = await blocks.get(`${w.url}#${L}#${Math.floor(py / WC_TILE) * across + Math.floor(px / WC_TILE)}`);
+    if (!blk) continue;
+    out[w.i] = blk[(py % WC_TILE) * WC_TILE + (px % WC_TILE)] ?? 0;
+  }
+  return greyPng(out, COVER_PX);
+}
+
+async function serveCover(path: string, m: RegExpMatchArray) {
+  const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (z < 1 || z > 16 || x >= 2 ** z || y >= 2 ** z) {
+    return respond(400, 'application/json', JSON.stringify({ error: 'tile out of range' }));
+  }
+  let png: Buffer;
+  try {
+    png = await coverTile(z, x, y);
+  } catch (err) {
+    // Same rule as the vectors: a failure is retried, never stored.
+    return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {
+      'retry-after': '5', 'cache-control': 'no-store',
+    });
+  }
+  // An all-zero tile is a REAL answer — WorldCover is a land product, so open
+  // ocean legitimately has no class — and storing it is what stops every sea
+  // tile being a permanent invocation.
+  try { await putTile(path, png, 'image/png', null); } catch { /* best effort */ }
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': 'image/png',
+      'cache-control': 'public, max-age=604800, immutable',
+      'access-control-allow-origin': '*',
+    },
+    body: png.toString('base64'),
+    isBase64Encoded: true,
+  };
+}
 
 /** Tile bounds on the standard web-mercator grid (the client's `tileBounds`). */
 function tileBounds(z: number, x: number, y: number) {
@@ -239,7 +469,12 @@ export function tileKey(path: string, prefix = process.env.CELL_PUBLIC_PREFIX ??
   return `${prefix}${path.slice(2)}`;
 }
 
-async function putTile(path: string, body: Buffer): Promise<void> {
+async function putTile(
+  path: string,
+  body: Buffer,
+  contentType = 'application/json; charset=utf-8',
+  contentEncoding: string | null = 'gzip',
+): Promise<void> {
   const bucket = process.env.CELL_PUBLIC_BUCKET;
   if (!bucket) return; // no namespace configured — serve, don't store
   const key = tileKey(path);
@@ -250,8 +485,10 @@ async function putTile(path: string, body: Buffer): Promise<void> {
     Bucket: bucket,
     Key: key,
     Body: body,
-    ContentType: 'application/json; charset=utf-8',
-    ContentEncoding: 'gzip',
+    ContentType: contentType,
+    // A PNG is already compressed; declaring gzip on it would make the edge
+    // hand the browser a file it cannot decode.
+    ...(contentEncoding ? { ContentEncoding: contentEncoding } : {}),
     // The object carries its own policy: the edge honours this, and the path
     // is versioned (`osm/v1/…`) so `immutable` is a promise we can keep.
     CacheControl: 'public, max-age=604800, immutable',
@@ -305,6 +542,8 @@ export const handler = async (event: { rawPath?: string; requestContext?: { http
   if (path.startsWith('/~/')) {
     const tile = path.match(TILE_RE);
     if (tile) return serveTile(path, tile);
+    const cover = path.match(COVER_RE);
+    if (cover) return serveCover(path, cover);
     return respond(404, 'application/json', JSON.stringify({ error: 'no such object' }), {
       'cache-control': 'no-store',
     });

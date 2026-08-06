@@ -26,7 +26,8 @@ import { ServiceRouter, PUBLIC_NS_PATTERN, CELL_HOST_NS_PATTERN } from '../platf
 import { HttpServiceCell } from '../platform/infra/http-service-cell';
 import { buildCellTemplate } from '../services/cells/cell-template';
 import { __toRecordForTests } from '../services/cells/registry';
-import { trimWays, tileKey, askOverpass } from '../cells/drive/index';
+import { inflateSync } from 'node:zlib';
+import { trimWays, tileKey, askOverpass, wcLevelFor, greyPng } from '../cells/drive/index';
 
 function synth(withNamespace: boolean): Template {
   const app = new App();
@@ -247,6 +248,56 @@ describe('the drive cell asking Overpass', () => {
     stub(async () => boom(504));
     await expect(askOverpass('...')).rejects.toThrow(/overpass-api\.de.*kumi.*private\.coffee/s);
     expect(hosts).toHaveLength(3);
+  });
+});
+
+// The land-cover reader is hand-rolled — no GeoTIFF library, no PNG library —
+// so the two pure halves of it are worth pinning: picking an overview level,
+// and emitting a PNG a browser will actually decode. The network half is
+// exercised against the real bucket by the probe in the session scratch, not
+// here; a unit test should not depend on ESA's uptime.
+describe('the drive cell reading land cover', () => {
+  it('picks the coarsest overview still finer than the tile asked for', () => {
+    // Source levels are 3°/(36000>>L). A z12 tile is 360/(4096·256)°/px, which
+    // level 2 (3°/9000) just clears — 32× fewer bytes than the full 10m grid
+    // for a number that rounds to the same class.
+    expect(wcLevelFor(12)).toBe(2);
+    expect(wcLevelFor(14)).toBe(0);   // near-native detail
+    expect(wcLevelFor(10)).toBe(4);   // far out, coarse is plenty
+  });
+
+  it('never picks a level off the end of the pyramid', () => {
+    for (let z = 1; z <= 16; z++) {
+      const L = wcLevelFor(z);
+      expect(L).toBeGreaterThanOrEqual(0);
+      expect(L).toBeLessThan(7);
+    }
+  });
+
+  it('emits a greyscale PNG that decodes back to the exact class indices', () => {
+    const px = new Uint8Array(256 * 256);
+    for (let i = 0; i < px.length; i++) px[i] = (i * 7) % 101;  // spans every class code
+    const png = greyPng(px, 256);
+    expect([...png.subarray(0, 8)]).toEqual([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+    let p = 8, w = 0, h = 0, depth = 0, colour = 0;
+    const idat: Buffer[] = [];
+    while (p < png.length) {
+      const len = png.readUInt32BE(p);
+      const type = png.toString('ascii', p + 4, p + 8);
+      const body = png.subarray(p + 8, p + 8 + len);
+      // Every chunk carries a CRC32 the decoder will check.
+      expect(png.readUInt32BE(p + 8 + len)).toBeGreaterThanOrEqual(0);
+      if (type === 'IHDR') { w = body.readUInt32BE(0); h = body.readUInt32BE(4); depth = body[8]; colour = body[9]; }
+      if (type === 'IDAT') idat.push(body);
+      p += 12 + len;
+    }
+    expect([w, h, depth, colour]).toEqual([256, 256, 8, 0]);   // colour 0 = greyscale
+    const raw = inflateSync(Buffer.concat(idat));
+    for (let y = 0; y < 256; y++) {
+      expect(raw[y * 257]).toBe(0);                             // filter: none
+      for (let x = 0; x < 256; x++) expect(raw[y * 257 + 1 + x]).toBe(px[y * 256 + x]);
+    }
   });
 });
 
