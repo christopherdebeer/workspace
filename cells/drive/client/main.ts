@@ -327,6 +327,9 @@ const BIOMES: Record<string, Biome> = {
   },
 };
 let biome: Biome = BIOMES.temperate;
+/** The latitude guess. It is a poor one — it gives a whole world ONE palette,
+ *  so the Sahara and the Nile delta came out identical — but it is what stands
+ *  in until real land cover arrives, and cover is never guaranteed. */
 function pickBiome(lat: number, elevAbs: number): Biome {
   const q = new URLSearchParams(location.search).get('biome');
   if (q && BIOMES[q]) return BIOMES[q];
@@ -337,8 +340,65 @@ function pickBiome(lat: number, elevAbs: number): Biome {
   if (a <= 50) return BIOMES.temperate;
   return BIOMES.boreal;
 }
+/** …and the answer, once WorldCover has landed: what is actually growing over
+ *  the ground around you. Latitude still breaks the ties a cover class cannot —
+ *  forest is boreal at 60° and jungle at 5°, and the pixel says only "trees". */
+function biomeFromCover(lat: number, elevAbs: number): Biome | null {
+  if (new URLSearchParams(location.search).get('biome')) return null;  // art direction wins
+  const hist = new Map<number, number>();
+  let n = 0;
+  for (let dz = -2400; dz <= 2400; dz += 200) {
+    for (let dx = -2400; dx <= 2400; dx += 200) {
+      const c = sampleCover(state.x + dx, state.z + dz);
+      if (c === null) continue;
+      hist.set(c, (hist.get(c) ?? 0) + 1); n++;
+    }
+  }
+  if (n < 40) return null;                              // not enough cover to judge on
+  // Water and built-up say nothing about climate — a harbour and a city sit in
+  // whatever biome surrounds them — so they get no vote.
+  let top = 0, best = 0;
+  for (const [c, k] of hist) {
+    if (c === COVER.water || c === COVER.built || !c) continue;
+    if (k > best) { best = k; top = c; }
+  }
+  if (!top) return null;
+  const a = Math.abs(lat);
+  if (top === COVER.snow || elevAbs > 2000) return BIOMES.alpine;
+  if (top === COVER.mangrove) return BIOMES.tropical;
+  if (top === COVER.bare) return BIOMES.arid;
+  if (top === COVER.shrub) return a >= 55 ? BIOMES.boreal : BIOMES.arid;
+  if (top === COVER.moss) return elevAbs > 1200 ? BIOMES.alpine : BIOMES.boreal;
+  if (top === COVER.tree || top === COVER.wetland) {
+    return a <= 20 ? BIOMES.tropical : a >= 52 ? BIOMES.boreal : BIOMES.temperate;
+  }
+  // Grass and cropland are temperate almost everywhere, but savannah is real.
+  if (top === COVER.grass) return a <= 18 ? BIOMES.tropical : a >= 58 ? BIOMES.boreal : BIOMES.temperate;
+  return BIOMES.temperate;
+}
+// Settled ONCE, the first time cover reaches the car. Re-picking mid-drive
+// would pop the sky, the haze and the light together, and a seam you can see is
+// worse than a biome that is a shade wrong for the last mile of a long crossing.
+let biomeSettled = false;
 
-const terrainPalette = (elev: number, slope: number): [number, number, number] => {
+// Where each land-cover class pulls the ground colour. Deliberately muted and
+// inside the existing solarpunk range: these are a shift in character, not a
+// satellite photograph. Bare has no entry — the ramp is already sand and rock,
+// which is exactly what bare ground is.
+const COVER_TINT: Record<number, Rgb> = {
+  10: [0.16, 0.26, 0.15],   // tree      — deep canopy
+  20: [0.34, 0.33, 0.19],   // shrub     — olive scrub
+  30: [0.40, 0.42, 0.22],   // grass     — dry sward
+  40: [0.46, 0.41, 0.18],   // crop      — worked earth and stubble
+  50: [0.38, 0.37, 0.35],   // built     — the grey of a made surface
+  70: [0.86, 0.89, 0.93],   // snow
+  80: [0.13, 0.29, 0.34],   // water
+  90: [0.24, 0.30, 0.22],   // wetland
+  95: [0.15, 0.27, 0.20],   // mangrove
+  100: [0.36, 0.38, 0.32],  // moss/lichen
+};
+const COVER_MIX = 0.55;     // how far toward the tint the biome ramp is pulled
+const terrainPalette = (elev: number, slope: number, cover?: number | null): [number, number, number] => {
   // Solarpunk desert: cyan shallows → warm sand → ochre scrub → dry upland →
   // bare rock → snow. The emerald in this world comes from the VEGETATION
   // standing on the sand, not from painting the ground green.
@@ -354,6 +414,16 @@ const terrainPalette = (elev: number, slope: number): [number, number, number] =
   for (let i = start; i < biome.ramp.length; i++) {
     const [max, col] = biome.ramp[i];
     if (elev <= max || i === biome.ramp.length - 1) { c = col; break; }
+  }
+  // WHAT IS ACTUALLY GROWING ON IT. The elevation ramp knows how high the
+  // ground is and nothing else, so farmland, forest and salt pan at the same
+  // altitude came out the same colour. Cover pulls the ramp toward the real
+  // character of the ground — but only PART of the way, because the ramp is
+  // where the art direction lives and a photographic land-cover map would
+  // flatten the whole look. Data sets the fact; the palette keeps the feel.
+  if (cover !== null && cover !== undefined) {
+    const t = COVER_TINT[cover];
+    if (t) c = [c[0] + (t[0] - c[0]) * COVER_MIX, c[1] + (t[1] - c[1]) * COVER_MIX, c[2] + (t[2] - c[2]) * COVER_MIX];
   }
   const shade = 1 - clamp(slope * 1.4, 0, 0.45);
   return [c[0] * shade, c[1] * shade, c[2] * shade];
@@ -901,7 +971,7 @@ function buildTerrainMesh(t: HeightTile): void {
     const v = clamp(Math.round(((ez - t.zs) / t.h) * 255), 0, 255);
     const du = t.data[v * 256 + Math.min(255, u + 1)] - t.data[v * 256 + u];
     const dv = t.data[Math.min(255, v + 1) * 256 + u] - t.data[v * 256 + u];
-    const [r, g, bb] = terrainPalette(elevAbs, Math.hypot(du, dv) / Math.max(cell, 1));
+    const [r, g, bb] = terrainPalette(elevAbs, Math.hypot(du, dv) / Math.max(cell, 1), sampleCover(ex, ez));
     colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -1707,6 +1777,45 @@ const VEG_MIX: Record<string, Array<[VegKind, number]>> = {
   boreal: [['conifer', 7], ['bush', 3], ['rock', 2], ['snag', 2]],
   alpine: [['conifer', 4], ['rock', 6], ['bush', 2], ['snag', 2]],
 };
+// Thickets per VEG_CELL by land-cover class. The point of the spread is that
+// the ground now differs from itself: a forest cell and the ploughed field
+// beside it are 18 and 1, where before both took the biome's single number.
+const COVER_VEG: Record<number, number> = {
+  10: 18,   // tree     — closed canopy
+  20: 8,    // shrub
+  30: 4,    // grass    — the odd thicket in open sward
+  40: 1,    // crop     — a worked field is worked
+  50: 2,    // built    — street trees and gardens
+  60: 0,    // bare     — nothing grows on a salt pan
+  70: 0,    // snow
+  80: 0,    // water
+  90: 7,    // wetland
+  95: 14,   // mangrove
+  100: 1,   // moss/lichen
+};
+/** WHAT species, from what is actually there. Cover names the ground; the
+ *  biome's own mix still supplies the character, so a boreal forest is
+ *  conifers and a tropical one is palms without cover having to say so. */
+function coverKind(cover: number | null, r: () => number): VegKind {
+  if (cover === COVER.mangrove) return r() < 0.75 ? 'palm' : 'broadleaf';
+  if (cover === COVER.tree) {
+    const mix = VEG_MIX[biome.name] ?? VEG_MIX.temperate;
+    // Drop bushes and rocks: this pixel says CANOPY, so pick a tree from the
+    // biome's mix and only fall back to the general roll if it has none.
+    const trees = mix.filter(([k]) => k === 'broadleaf' || k === 'conifer' || k === 'palm');
+    if (trees.length) {
+      let total = 0;
+      for (const [, w] of trees) total += w;
+      let t = r() * total;
+      for (const [k, w] of trees) { t -= w; if (t <= 0) return k; }
+      return trees[0][0];
+    }
+  }
+  if (cover === COVER.shrub || cover === COVER.grass || cover === COVER.crop) {
+    return r() < 0.82 ? 'bush' : pickKind(r);
+  }
+  return pickKind(r);
+}
 function pickKind(r: () => number): VegKind {
   const mix = VEG_MIX[biome.name] ?? VEG_MIX.temperate;
   let total = 0;
@@ -1812,21 +1921,35 @@ function seedCell(gx: number, gz: number): void {
   vegSeeded.add(key);
   const r = mulberry32(((gx * 73856093) ^ (gz * 19349663)) >>> 0);
   if (!vegGrid.has(key)) vegGrid.set(key, []);
-  // How many thickets this cell wants: biome sets the ceiling, the density
-  // field decides whether this particular patch of ground is woodland or open.
-  const ceiling = biome.name === 'arid' ? 4 : biome.name === 'tropical' ? 14 : biome.name === 'boreal' ? 12 : 9;
-  const dens = vegDensity(gx * VEG_CELL + VEG_CELL / 2, gz * VEG_CELL + VEG_CELL / 2);
+  const mx = gx * VEG_CELL + VEG_CELL / 2, mz = gz * VEG_CELL + VEG_CELL / 2;
+  // WHAT GROWS HERE IS A FACT, not a guess. The biome ceiling below stands in
+  // only until WorldCover has this ground: it is one number for a whole world,
+  // so the wheat field, the shelterbelt beside it and the bare hill behind
+  // were all planted at the same rate out of the same species mix.
+  const cover = sampleCover(mx, mz);
+  const ceiling = cover !== null
+    ? (COVER_VEG[cover] ?? 6)
+    : (biome.name === 'arid' ? 4 : biome.name === 'tropical' ? 14 : biome.name === 'boreal' ? 12 : 9);
+  // …and HOW MUCH of it, where, is still the noise field's business. Cover is
+  // 37m data; it must never become a visible grid of thickets, so the density
+  // field keeps deciding which patch of a cover class is thick and which is
+  // open, exactly as before.
+  const dens = vegDensity(mx, mz);
   const clumps = Math.round(ceiling * (0.15 + dens * 1.25));
   for (let i = 0; i < clumps; i++) {
     const x = gx * VEG_CELL + r() * VEG_CELL, z = gz * VEG_CELL + r() * VEG_CELL;
     const rad = 6 + r() * 16 * (0.4 + dens);
     const count = Math.round((5 + r() * 14) * (0.5 + dens));
-    plantClump(x, z, rad, count, pickKind(r), r);
+    plantClump(x, z, rad, count, coverKind(sampleCover(x, z), r), r);
   }
   // A few genuine loners — a lone snag or boulder still reads as deliberate.
+  // Bare ground and ice get boulders and nothing else: a dead tree standing in
+  // a salt pan is the kind of detail that reads as a bug.
   const strays = Math.round(r() * 3);
+  const stony = cover === COVER.bare || cover === COVER.snow || cover === COVER.built;
   for (let i = 0; i < strays; i++) {
-    pushSite(gx * VEG_CELL + r() * VEG_CELL, gz * VEG_CELL + r() * VEG_CELL, r() < 0.5 ? 'rock' : 'snag', r);
+    pushSite(gx * VEG_CELL + r() * VEG_CELL, gz * VEG_CELL + r() * VEG_CELL,
+      stony || r() < 0.5 ? 'rock' : 'snag', r);
   }
 }
 
@@ -3863,6 +3986,22 @@ function streamWorld(ex: number, ez: number): void {
     const [cx0, cy0] = tileAt(lat, lon, COVER_Z);
     for (let dx = -cRing; dx <= cRing; dx++)
       for (let dy = -cRing; dy <= cRing; dy++) void loadCoverTile(cx0 + dx, cy0 + dy);
+    // The moment there is enough real cover to judge on, the world stops being
+    // a latitude band and becomes the place it actually is. Once only.
+    if (!biomeSettled) {
+      const b = biomeFromCover(origin.lat, baseElev);
+      if (b) {
+        biomeSettled = true;
+        if (b !== biome) {
+          applyBiome(b);
+          // Everything already painted was painted from the guess: the ground
+          // colour, and every thicket the old species mix planted.
+          for (const k of terrainMeshes.keys()) terrainDirty.add(k);
+          vegSeeded.clear();
+          vegGrid.clear();
+        }
+      }
+    }
   }
   const [ox, oy] = tileAt(lat, lon, OSM_Z);
   const oRing = clamp(Math.ceil(r / tileMetres(OSM_Z)), OSM_RING, OSM_RING_MAX);
@@ -5011,6 +5150,10 @@ function meshHeightAt(x: number, z: number): number | null {
   return hits.length ? +(4000 - hits[0].distance).toFixed(2) : null;
 }
 (window as unknown as { __meshAt?: object }).__meshAt = meshHeightAt;
+/** Which palette the world settled on, and whether real cover chose it or the
+ *  latitude guess is still standing in. */
+(window as unknown as { __biome?: object }).__biome = (): object =>
+  ({ name: biome.name, fromCover: biomeSettled });
 /** What the world is actually made of around the car, straight off WorldCover.
  *  The class under the wheels, and the mix over a radius — which is the number
  *  the biome is chosen from, so it is the one worth being able to read. */
