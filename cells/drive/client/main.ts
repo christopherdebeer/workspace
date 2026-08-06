@@ -31,6 +31,11 @@ const FOG_PX = 1024;
 // doesn't mean a 180°/s twitch.
 const CAR = { accel: 16, brake: 26, maxRev: 9, wheelbase: 2.9, steerMax: 0.6 };
 const CAM = { base: 175, perKmh: 1.1, tilt: 70 };
+// 44 put the camera 6.8km up over a 4.8×8.3km view — a regional chart, but
+// only just, and the streaming never followed it out there. 260 reaches ~40km
+// across, which is a whole mountain range, a coastline, or the far end of a
+// pass you have not driven yet.
+const ZOOM_MIN = 0.25, ZOOM_MAX = 260;
 const CAR_R = 2.4;            // collision circle — a real car's half-diagonal plus a whisker
 
 // ── geo helpers (local metres around the spawn; x=east, z=south) ───
@@ -152,9 +157,9 @@ function texel(tx: number, ty: number, px: number, pz: number): number | null {
   if (!t) return null;
   return t.data[(((pz % 256) + 256) % 256) * 256 + (((px % 256) + 256) % 256)];
 }
-async function fetchHeights(x: number, y: number): Promise<Float32Array | null> {
+async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promise<Float32Array | null> {
   try {
-    const res = await fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${TERRAIN_Z}/${x}/${y}.png`);
+    const res = await fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`);
     if (!res.ok) return null;
     const bmp = await createImageBitmap(await res.blob());
     const cv = typeof OffscreenCanvas !== 'undefined'
@@ -276,10 +281,14 @@ const camera = new THREE.PerspectiveCamera(55, 1, 1, 30000);
 // The near plane moves with the chart camera; only rebuild the projection when
 // it actually changes, since every uniform derived from it follows.
 let nearLock = 0;   // test handle: force a near plane to measure the difference
-function setNear(n: number): void {
+function setNear(n: number, far = 30000): void {
   if (nearLock) n = nearLock;
-  if (Math.abs(camera.near - n) < n * 0.02) return;
+  if (Math.abs(camera.near - n) < n * 0.02 && camera.far === far) return;
   camera.near = n;
+  // The FAR plane has to move too. A camera 43km up over a chart at full zoom
+  // sits well outside a fixed 30km frustum and clips the entire world away —
+  // which is what raising the zoom ceiling would otherwise have bought.
+  camera.far = far;
   camera.updateProjectionMatrix();
 }
 
@@ -3486,15 +3495,137 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
 function localToLatLon(ex: number, ez: number): [number, number] {
   return [origin.lat - ez / M_LAT, origin.lon + ex / origin.mLon];
 }
+/** Ground metres across one tile at a zoom, at this world's latitude. */
+const tileMetres = (z: number): number =>
+  (40075016.7 / 2 ** z) * Math.cos((origin.lat * Math.PI) / 180);
+/** Half the ground the camera can see — the radius streaming has to serve.
+ *  Derived from the rig, not guessed: distance × tan(half-fov) with the tilt
+ *  folded in, which is what the frustum actually lands on. */
+function viewRadius(): number {
+  if (camMode !== 'top') return 900;
+  const dist = CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh;
+  const halfV = Math.tan(((camera.fov / 2) * Math.PI) / 180);
+  // The far edge of a tilted frustum reaches further than the near edge; the
+  // /cos term is that stretch, capped so a near-horizon tilt cannot ask for
+  // the whole planet.
+  return Math.min(60000, dist * halfV * Math.max(1, 1 / Math.cos(((90 - CAM.tilt) * Math.PI) / 180)) * 1.35);
+}
+// Two budgets, and they are budgets rather than radii because the cost of the
+// two layers is nothing alike. A terrain tile is a PNG and a mesh; an OSM tile
+// is a vector query whose geometry cost is unbounded in a city. So terrain
+// widens generously and roads widen a little.
+// 7×7 fine tiles ≈ 14km. Not larger: every fine tile is 16.6k vertices each
+// asking the road grid about cuttings, so 9×9 is 1.35M vertices of rebuild
+// queued behind a 200ms throttle — nearly a minute of hitching for ground the
+// coarse shell renders for a three-hundredth of the cost.
+const TERRAIN_RING_MAX = 3;
+// 9×9 vector tiles ≈ 4.5km, and this is the one that cannot be solved by
+// widening. Covering a 47km chart at OSM_Z would be 8649 tiles; the road
+// network is a disc around the car by construction, and the wide view is
+// landform. Anything more honest than this needs a coarser road source.
+const OSM_RING_MAX = 4;
 function streamWorld(ex: number, ez: number): void {
   const [lat, lon] = localToLatLon(ex, ez);
+  const r = viewRadius();
   const [tx, ty] = tileAt(lat, lon, TERRAIN_Z);
-  for (let dx = -TERRAIN_RING; dx <= TERRAIN_RING; dx++)
-    for (let dy = -TERRAIN_RING; dy <= TERRAIN_RING; dy++) void loadTerrainTile(tx + dx, ty + dy);
+  // Rings grow with the VIEW, not just the car. Zooming out used to change
+  // nothing at all — measured: 25 height tiles and 65 ways at zoom 1 and at
+  // zoom 44 alike — so the chart was an aerial photograph of a 1.5km disc of
+  // roads adrift in blank hillside.
+  const tRing = clamp(Math.ceil(r / tileMetres(TERRAIN_Z)), TERRAIN_RING, TERRAIN_RING_MAX);
+  for (let dx = -tRing; dx <= tRing; dx++)
+    for (let dy = -tRing; dy <= tRing; dy++) void loadTerrainTile(tx + dx, ty + dy);
   const [ox, oy] = tileAt(lat, lon, OSM_Z);
-  for (let dx = -OSM_RING; dx <= OSM_RING; dx++)
-    for (let dy = -OSM_RING; dy <= OSM_RING; dy++) void loadOsmTile(ox + dx, oy + dy);
+  const oRing = clamp(Math.ceil(r / tileMetres(OSM_Z)), OSM_RING, OSM_RING_MAX);
+  for (let dx = -oRing; dx <= oRing; dx++)
+    for (let dy = -oRing; dy <= oRing; dy++) void loadOsmTile(ox + dx, oy + dy);
+  // Beyond the fine layer's reach, a COARSE shell so the land does not simply
+  // stop. Only fetched once the view is wide enough to see past the fine ring.
+  if (r > tileMetres(TERRAIN_Z) * 1.5) {
+    const [fx, fy] = tileAt(lat, lon, FAR_Z);
+    const fRing = clamp(Math.ceil(r / tileMetres(FAR_Z)), 1, FAR_RING_MAX);
+    for (let dx = -fRing; dx <= fRing; dx++)
+      for (let dy = -fRing; dy <= fRing; dy++) void loadFarTile(fx + dx, fy + dy);
+  }
 }
+
+// ── the far shell: coarse terrain for the wide view ────────────────
+// Raising the zoom ceiling without this just shows a bigger void. Fine tiles
+// cannot be the answer — covering 40km at TERRAIN_Z would be 441 tiles and
+// seven million vertices — so distance gets its own layer three zooms coarser:
+// 25 tiles cover ~80km for about 60k vertices, one three-hundredth the cost.
+//
+// It is a BACKDROP, never a surface. Nothing samples it: not the wheels, not
+// the scatter, not groundAt. It is drawn only when the chart is zoomed far
+// enough out that the fine ring cannot fill the frame, which also means the
+// seam between the two layers is never on screen at an angle where a few
+// metres of disagreement could show.
+const FAR_Z = 11;
+const FAR_RING_MAX = 2;       // 5×5 coarse tiles ≈ 81km, which covers the widest chart
+const FAR_SEG = 48;
+const farTiles = new Set<string>();
+const farMeshes = new Map<string, THREE.Mesh>();
+const farGroup = new THREE.Group();
+farGroup.visible = false;
+worldGroup.add(farGroup);
+// Four at a time. Asking for a whole ring at once is a thundering herd against
+// one S3 bucket: a measured 49-tile request landed 9 meshes and left the rest
+// racing each other for sockets.
+let farInFlight = 0;
+const farQueue: Array<() => void> = [];
+async function loadFarTile(x: number, y: number): Promise<void> {
+  const key = `${x}/${y}`;
+  if (farTiles.has(key)) return;
+  farTiles.add(key);
+  if (farInFlight >= 4) await new Promise<void>((go) => farQueue.push(go));
+  farInFlight++;
+  const data = await fetchHeights(x, y, FAR_Z).finally(() => {
+    farInFlight--;
+    farQueue.shift()?.();
+  });
+  if (!data) { farTiles.delete(key); return; }
+  const b = tileBounds(x, y, FAR_Z);
+  const [wx0, wz0] = toLocal(b.latN, b.lonW);
+  const [wx1, wz1] = toLocal(b.latS, b.lonE);
+  const xs = Math.min(wx0, wx1), zs = Math.min(wz0, wz1);
+  const w = Math.abs(wx1 - wx0), h = Math.abs(wz1 - wz0);
+  const geo = new THREE.PlaneGeometry(w, h, FAR_SEG, FAR_SEG);
+  geo.rotateX(-Math.PI / 2);
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const colors = new Float32Array(pos.count * 3);
+  // SLOPE IS SHADED PER TEXEL, NOT PER VERTEX. du/dv are the rise across one
+  // heightfield pixel, so the divisor has to be a pixel's ground width — and
+  // the fine builder happens to use twice that. Dividing by this layer's own
+  // vertex spacing instead made every coarse hillside read five times flatter
+  // than the same hillside in the fine layer, which is what drew a hard-edged
+  // rectangle of "real" terrain around the car on the wide chart.
+  const cell = w / 128;
+  for (let i = 0; i < pos.count; i++) {
+    // Sampled from THIS tile's own pixels — no cross-tile bilinear, no road
+    // grid, no cut. A seam of a few metres between coarse tiles is invisible
+    // from the only altitude this layer is ever seen at.
+    const u = clamp(Math.round(((pos.getX(i) + w / 2) / w) * 255), 0, 255);
+    const v = clamp(Math.round(((pos.getZ(i) + h / 2) / h) * 255), 0, 255);
+    const raw = data[v * 256 + u];
+    pos.setY(i, raw - baseElev - FAR_DROP);
+    const du = data[v * 256 + Math.min(255, u + 1)] - raw;
+    const dv = data[Math.min(255, v + 1) * 256 + u] - raw;
+    const [r, g, bb] = terrainPalette(raw, Math.hypot(du, dv) / Math.max(cell, 1));
+    colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  geo.computeVertexNormals();
+  const mesh = new THREE.Mesh(geo, terrainMat);
+  mesh.position.set(xs + w / 2, 0, zs + h / 2);
+  farMeshes.set(key, mesh);
+  farGroup.add(mesh);
+}
+/** Sunk far enough that the fine layer always wins where both exist, shallow
+ *  enough that the lip around the fine ring does not draw its own shadow. The
+ *  boundary is still findable on the wide chart — inside it there are road
+ *  cuttings and outside there are not — but that is honest level of detail
+ *  rather than an artefact. */
+const FAR_DROP = 12;
 
 // ── the car: monster-truck stance with per-wheel suspension ────────
 // The group's origin is the AXLE PLANE (wheel centres at rest). The body
@@ -4566,7 +4697,33 @@ function meshHeightAt(x: number, z: number): number | null {
  *  screen — the only honest answer to "why can't I see them". */
 (window as unknown as { __setcpv?: object }).__setcpv = (v: number): void => { cpVis = v; };
 (window as unknown as { __setcam?: object }).__setcam = (m: CamMode): void => setCam(m);
-(window as unknown as { __zoom?: object }).__zoom = (z: number): void => { zoomT = clamp(z, 0.25, 44); };
+(window as unknown as { __zoom?: object }).__zoom = (z: number): void => { zoomT = clamp(z, ZOOM_MIN, ZOOM_MAX); };
+/** How much GROUND the camera actually covers, by unprojecting the screen
+ *  corners onto the car's ground plane. The honest answer to "how far out can
+ *  I see", which no constant in this file states directly. */
+(window as unknown as { __far?: object }).__far = (): object =>
+  ({ tiles: farMeshes.size, shown: farGroup.visible, radius: Math.round(viewRadius()), farPlane: camera.far });
+(window as unknown as { __viewSpan?: object }).__viewSpan = (): object => {
+  const y0 = groundAt(state.x, state.z);
+  const hit = (nx: number, ny: number): [number, number] | null => {
+    const a = new THREE.Vector3(nx, ny, -1).unproject(camera);
+    const bq = new THREE.Vector3(nx, ny, 1).unproject(camera);
+    const d = bq.sub(a);
+    if (Math.abs(d.y) < 1e-6) return null;
+    const t = (y0 - a.y) / d.y;
+    if (t < 0) return null;                     // that corner looks at the sky
+    return [a.x + d.x * t, a.z + d.z * t];
+  };
+  const c = [hit(-1, -1), hit(1, -1), hit(-1, 1), hit(1, 1)];
+  const got = c.filter(Boolean) as Array<[number, number]>;
+  if (got.length < 2) return { wide: null, deep: null, note: 'horizon in frame' };
+  const xs = got.map((q) => q[0]), zs = got.map((q) => q[1]);
+  return {
+    wide: Math.round(Math.max(...xs) - Math.min(...xs)),
+    deep: Math.round(Math.max(...zs) - Math.min(...zs)),
+    corners: got.length,
+  };
+};
 /** Real drive's whole state, and a way to inject fixes so the mode can be
  *  tested without a car: __real() reads, __feed(lat,lon,head,spd) writes one. */
 (window as unknown as { __real?: object }).__real = (): object => ({
@@ -4739,14 +4896,14 @@ canvas.addEventListener('pointermove', (e) => {
     if (other) {
       const d0 = Math.hypot(prev.x - other.x, prev.y - other.y);
       const d1 = Math.hypot(cur.x - other.x, cur.y - other.y);
-      if (d0 > 12 && d1 > 12) zoomT = clamp(zoomT * (d0 / d1), 0.25, 44); // survey a whole region
+      if (d0 > 12 && d1 > 12) zoomT = clamp(zoomT * (d0 / d1), ZOOM_MIN, ZOOM_MAX); // survey a whole region
     }
   }
   panPtrs.set(e.pointerId, cur);
 });
 addEventListener('wheel', (e) => {
   if (camMode !== 'top') return;
-  zoomT = clamp(zoomT * Math.exp(e.deltaY * 0.0012), 0.25, 44);
+  zoomT = clamp(zoomT * Math.exp(e.deltaY * 0.0012), ZOOM_MIN, ZOOM_MAX);
   e.preventDefault();
 }, { passive: false });
 const endStick = (e: PointerEvent): void => {
@@ -5718,6 +5875,10 @@ function tick(now: number): void {
   const fwdX = Math.sin(state.heading), fwdZ = -Math.cos(state.heading);
   if (camMode === 'top') {
     zoomCur += (zoomT - zoomCur) * Math.min(1, 8 * dt);
+    // The coarse shell is a backdrop for the wide view and nothing else: shown
+    // only once the frustum reaches past the fine ring, so its seam is never
+    // on screen at an angle that could reveal it.
+    farGroup.visible = zoomCur > 6;
     halo.scale.setScalar(Math.max(1, zoomCur)); // the ring must survive the zoom-out
     // Pan is a glance around the chart — it drifts home once you drive.
     if (stick || Math.abs(state.speed) > 6) { const f = Math.exp(-2.5 * dt); panX *= f; panZ *= f; }
@@ -5731,8 +5892,9 @@ function tick(now: number): void {
     // the flicker, and it gets worse the further out you zoom. Nothing is
     // within 8% of the orbit distance from a camera tilted 70° off the ground,
     // so this is free.
-    setNear(Math.max(1, dist * 0.08));
+    setNear(Math.max(1, dist * 0.08), Math.max(30000, dist * 4));
   } else if (camMode === 'cab') {
+    farGroup.visible = false;
     // THE DRIVER'S SEAT. The eye is a point on the body, so it takes the body's
     // whole attitude — pitch, roll and the suspension's own heave — which is
     // what makes a cattle grid felt rather than watched. Everything else in
@@ -5760,6 +5922,7 @@ function tick(now: number): void {
       camPos.z + fwdZ * 40 * cs,
     );
   } else {
+    farGroup.visible = false;
     setNear(1);
     // Framed like the reference art: the rig in the lower third with the track
     // running to a vanishing point. On a PORTRAIT phone the 55° figure is the
