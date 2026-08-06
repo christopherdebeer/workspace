@@ -2412,11 +2412,48 @@ const CUT_WASH = 0.008;    // the bench's own fall, kerb to lip
 const CUT_TAIL = 14;       // how far past the bench the batter grades before nature resumes
 const CUT_REACH = 14;      // tracks only: a worn groove, not an engineered cutting
 let CUT_SLACK = 23;        // bench width — the mesh cell diagonal, set from the origin latitude
+// A cutting has an angle of repose and so does an embankment, and it is the
+// same earth either way — so the ground is protected outward from a road at
+// the batter's own slope. See the bed, below.
+const CUT_FILL = CUT_BATTER;
+// …but only as far as the apron can follow it down. The bed is a claim that
+// the ground here belongs to a road, and a claim reaching further than the
+// 3.6m skirt would raise earth the road cannot meet — a wall standing beside
+// the carriageway wherever a ramp runs past a street. Past this the ground is
+// the neighbouring terrace's business again, which is the old behaviour, so
+// the fix can only ever fill a hole and never build one.
+const CUT_BED = 3.6 / CUT_FILL;   // ≈5.8m — where the bed has fallen one apron
 // The highest the ground is allowed to stand at (x,z), or null where no road
 // has an opinion. Tunnels are excluded: being buried is the entire point of
 // one, and carving their corridor would open every tunnel into a trench.
+//
+// A CUT AND A BED, not just a cut. The bench above is a flat terrace at the
+// road's own level reaching CUT_SLACK past the kerb, and combining terraces
+// with a bare `min` says: wherever two roads come within two bench-widths of
+// each other, the lower one planes the ground down to itself — straight
+// through the upper one's foundation. There is no vertical term anywhere in
+// the old test, so a road 21m away and 2m lower excavated the ground from
+// under this one and left it standing over a flat-bottomed trench on a 3.6m
+// skirt. Measured before this, as the share of road undercut deeper than the
+// apron can reach: Bormio 8.6%, Chapman's Peak 11.5%, and — flat, median
+// cross-fall 0.07 — CAIRO 19.6%, worst case 23.9m.
+//
+// So it is not an alpine bug at all. It needs two roads within two terraces of
+// each other at different heights, which is a switchback, a terraced street
+// and a grade-separated junction alike; what a mountain adds is bare ground to
+// see it against.
+//
+// So each segment now contributes two numbers — a CEILING it cuts down to
+// (min: any cutting in reach may remove ground) and a BED it stands on (max:
+// no cutting may pass through a road's own foundation), the bed falling away
+// at the fill slope so the protection tapers into the neighbouring terrace
+// instead of stepping down to it.
+// `hard` keeps the guarantee the bench was built for: under a carriageway the
+// ground stays below that carriageway, whatever any other road wants.
 function roadCeiling(x: number, z: number): number | null {
-  let best: number | null = null;
+  let ceil: number | null = null;   // what the cuttings take away
+  let bed: number | null = null;    // what no cutting may take
+  let hard: number | null = null;   // carriageways directly overhead
   const R = CUT_SLACK + CUT_TAIL + 2;
   const cx0 = Math.floor((x - R) / GRID), cx1 = Math.floor((x + R) / GRID);
   const cz0 = Math.floor((z - R) / GRID), cz1 = Math.floor((z + R) / GRID);
@@ -2435,14 +2472,25 @@ function roadCeiling(x: number, z: number): number | null {
       // bury one.
       if (seg.tk ? out > CUT_REACH * 0.45 : out > CUT_SLACK + CUT_TAIL) continue;
       const y = seg.ya + (seg.yb - seg.ya) * t;
-      const ceil = seg.tk
+      const c = seg.tk
         ? y - 0.3 + Math.max(0, out) * CUT_BATTER * 1.7
         : y - 0.3 + Math.min(Math.max(out, 0), CUT_SLACK) * CUT_WASH
           + Math.max(0, out - CUT_SLACK) * CUT_BATTER;
-      if (best === null || ceil < best) best = ceil;
+      if (ceil === null || c < ceil) ceil = c;
+      if (out <= CUT_BED) {
+        const b = y - 0.3 - Math.max(0, out) * CUT_FILL;
+        if (bed === null || b > bed) bed = b;
+      }
+      if (out <= 0 && (hard === null || y - 0.3 < hard)) hard = y - 0.3;
     }
   }
-  return best;
+  if (ceil === null) return null;
+  let g = bed === null ? ceil : Math.max(ceil, bed);
+  // A road ten metres above and twenty across has a real embankment between
+  // you and it — but its toe stops at your kerb, it does not roll over your
+  // carriageway. Without this the bed would bury the lower road.
+  if (hard !== null && g > hard) g = hard;
+  return g;
 }
 // The VISIBLE ground: the heightfield, cut back where a road runs through it.
 // Everything that has to agree on where the surface is — the terrain mesh, the
@@ -2607,8 +2655,19 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // SMOOTHED along the way, and shared by both kerbs. Deciding per quad and per
   // side made adjacent quads flip between a 4m curtain of soil and a 1.35m
   // concrete lip, so the road's underside broke into floating blocks.
+  //
+  // Measured from the ground under the road's OWN CENTRELINE, not from the
+  // lowest ground across its width. `elevMin` reaches a half-width out to each
+  // side and takes the minimum, which on a side slope is just half-width times
+  // the cross-fall — so a shelf road CUT INTO a hillside read as a road flying
+  // over one, and got a concrete deck and piers for it. Chapman's Peak was
+  // rendering 12% of its length as viaduct and 6% on piers with not one real
+  // viaduct on it. A bridge is a road with air under its middle; a bank is a
+  // road with a hill on one side, and telling them apart is what the
+  // centreline does and the minimum cannot. `elevMin` still sizes the apron
+  // faces, which is the side-slope job it was added for.
   const daylight = apronOn
-    ? dense.map((_, i) => (flat ? prof[i] : elev[i]) + lift - elevMin[i])
+    ? dense.map((_, i) => (flat ? prof[i] : elev[i]) + lift - elev[i])
     : [];
   // WHERE THE RAIL GOES, decided for the whole way before any of it is drawn.
   // Emitting per quad left holes: one 12m step whose drop dipped under the
@@ -2641,7 +2700,12 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       }
     }
   }
+  // A TAGGED bridge is a deck whatever the heightfield thinks. Someone stood
+  // there and wrote `bridge=yes`, and that beats a z14 DEM which cannot resolve
+  // the gully it spans — Chapman's Peak's one real bridge measures barely any
+  // daylight and would otherwise be drawn as a bank across a dip.
   const deckRun = daylight.map((_, i) => {
+    if (mode === 'bridge') return true;
     let s = 0, c = 0;
     for (let j = Math.max(0, i - 4); j <= Math.min(n - 1, i + 4); j++) { s += daylight[j]; c++; }
     return s / c > DECK_GAP;
@@ -4880,6 +4944,124 @@ function meshHeightAt(x: number, z: number): number | null {
   }
   return { name, segs: segs.length, samples: n, buried, pct: n ? +(buried / n * 100).toFixed(1) : 0,
     meanDepth: buried ? +(sum / buried).toFixed(2) : 0, worst: +worst.toFixed(2), worstAt };
+};
+/** THE CROSS-SECTION. `__bury` and `__float` both walk the centreline, and a
+ *  road on a hillside is a thing that goes wrong ACROSS its width — the uphill
+ *  bank, the downhill fall, the cut, the deck. This cuts a transect at every
+ *  sampled point and reports what each layer says at each offset, so a delta
+ *  can be attributed instead of guessed at.
+ *
+ *  `slope` is the terrain's own cross-fall at the road (metres per metre) —
+ *  the number every cross-slope defect scales with, and the one thing no
+ *  existing handle reports. */
+(window as unknown as { __xsec?: object }).__xsec = (name?: string, step = 60): object => {
+  const seen = new Set<Seg>();
+  const segs: Seg[] = [];
+  for (const arr of roadGrid.values()) for (const s of arr) {
+    if (s.tn || s.ya === undefined || seen.has(s)) continue;
+    if (name !== undefined && s.nm !== name) continue;
+    seen.add(s); segs.push(s);
+  }
+  const OFF = [-30, -20, -12, -6, 0, 6, 12, 20, 30];
+  const rows: Array<Record<string, unknown>> = [];
+  let along = 0;
+  for (const s of segs) {
+    const L = Math.hypot(s.bx - s.ax, s.bz - s.az) || 1;
+    along += L;
+    if (along < step) continue;
+    along = 0;
+    const x = (s.ax + s.bx) / 2, z = (s.az + s.bz) / 2;
+    const ux = (s.bx - s.ax) / L, uz = (s.bz - s.az) / L;
+    const px = -uz, pz = ux;                       // across the carriageway
+    const road = ((s.ya as number) + (s.yb as number)) / 2;
+    const cut: Array<number | null> = [], fld: number[] = [], msh: Array<number | null> = [];
+    for (const o of OFF) {
+      const qx = x + px * o, qz = z + pz * o;
+      fld.push(+sampleHeight(qx, qz).toFixed(2));
+      const c = roadCeiling(qx, qz);
+      cut.push(c === null ? null : +c.toFixed(2));
+      const m = meshHeightAt(qx, qz);
+      msh.push(m === null ? null : +(m - road).toFixed(2));
+    }
+    // The cross-fall, and the `daylight` the deck/pier classifier derives —
+    // recomputed here exactly as `ribbon` does it, from the centreline. The
+    // authority on what was actually BUILT is `__span`; this is the input.
+    const hw = s.hw + 1.2;
+    const gL = sampleHeight(x + px * hw, z + pz * hw);
+    const gR = sampleHeight(x - px * hw, z - pz * hw);
+    // THE NUMBER. `roadCeiling` is a MIN over every segment in reach, so a
+    // road 30m away and 12m lower carves the ground out from under THIS one.
+    // Its own bed asks for road−0.3; anything below that was taken by a
+    // neighbour, and the road is left standing over the hole on a 3.6m skirt.
+    const ownBed = road - 0.3;
+    const c0 = roadCeiling(x, z);
+    // WHICH segment won the min, and where it stands relative to this road:
+    // `d` its plan distance, `dy` how far below. A neighbour that is far in
+    // plan AND far below is a road on a different bench — it has no business
+    // excavating this one, and if that is what keeps winning, the min is the
+    // defect rather than the mesh that samples it.
+    let won: { d: number; dy: number } | null = null;
+    {
+      let best = Infinity;
+      const R = CUT_SLACK + CUT_TAIL + 2;
+      for (let cx = Math.floor((x - R) / GRID); cx <= Math.floor((x + R) / GRID); cx++) {
+        for (let cz = Math.floor((z - R) / GRID); cz <= Math.floor((z + R) / GRID); cz++) {
+          for (const q of roadGrid.get(`${cx},${cz}`) ?? []) {
+            if (q.tn || q.ya === undefined || q.yb === undefined) continue;
+            const qdx = q.bx - q.ax, qdz = q.bz - q.az;
+            const qt = clamp(((x - q.ax) * qdx + (z - q.az) * qdz) / (qdx * qdx + qdz * qdz || 1), 0, 1);
+            const qd = Math.hypot(x - (q.ax + qdx * qt), z - (q.az + qdz * qt));
+            const out = qd - (q.hw + 0.6);
+            if (q.tk ? out > CUT_REACH * 0.45 : out > CUT_SLACK + CUT_TAIL) continue;
+            const qy = q.ya + (q.yb - q.ya) * qt;
+            const ceil = q.tk
+              ? qy - 0.3 + Math.max(0, out) * CUT_BATTER * 1.7
+              : qy - 0.3 + Math.min(Math.max(out, 0), CUT_SLACK) * CUT_WASH
+                + Math.max(0, out - CUT_SLACK) * CUT_BATTER;
+            if (ceil < best) { best = ceil; won = { d: +qd.toFixed(1), dy: +(road - qy).toFixed(1) }; }
+          }
+        }
+      }
+    }
+    rows.push({
+      at: [Math.round(x), Math.round(z)], nm: s.nm ?? null,
+      road: +road.toFixed(2),
+      undercut: c0 === null ? 0 : +Math.max(0, ownBed - c0).toFixed(2),
+      by: won,
+      slope: +(Math.abs(gL - gR) / (2 * hw)).toFixed(2),
+      daylight: +(road + 0.22 - sampleHeight(x, z)).toFixed(2),
+      fieldRel: fld.map((v) => +(v - road).toFixed(2)),   // terrain − road
+      cutRel: cut.map((v) => (v === null ? null : +(v - road).toFixed(2))),
+      meshRel: msh,                                       // rendered mesh − road
+    });
+  }
+  const dl = rows.map((r) => r.daylight as number).sort((a, b) => a - b);
+  const sl = rows.map((r) => r.slope as number).sort((a, b) => a - b);
+  const uc = rows.map((r) => r.undercut as number).sort((a, b) => a - b);
+  // INDEPENDENT of `roadCeiling` — a raycast against the triangles that were
+  // actually drawn, at the centreline and just outside each kerb. `undercut`
+  // is computed from the same function the fix changes and would agree with
+  // itself; this asks the rendered world instead. How far the ground has
+  // dropped away beneath the carriageway is the defect, in one number.
+  const kerb = OFF.indexOf(0);
+  const gap = rows.flatMap((r) => {
+    const m = r.meshRel as Array<number | null>;
+    return [m[kerb], m[kerb - 1], m[kerb + 1]].filter((v): v is number => v !== null).map((v) => -v);
+  }).sort((a, b) => a - b);
+  return {
+    offsets: OFF, samples: rows.length,
+    slope: sl.length ? { med: sl[sl.length >> 1], max: sl[sl.length - 1] } : null,
+    daylight: dl.length ? { med: dl[dl.length >> 1], max: dl[dl.length - 1] } : null,
+    undercut: uc.length ? { med: uc[uc.length >> 1], max: uc[uc.length - 1] } : null,
+    meshGap: gap.length ? { med: +gap[gap.length >> 1].toFixed(2), max: +gap[gap.length - 1].toFixed(2) } : null,
+    // Past APRON (3.6m) the drawn skirt cannot reach the drawn ground: open air.
+    gapOverApron: gap.length ? +(gap.filter((v) => v > 3.6).length / gap.length * 100).toFixed(1) : 0,
+    // Past APRON (3.6m) the skirt cannot reach the ground the cut has left.
+    overApron: rows.length ? +(rows.filter((r) => (r.undercut as number) > 3.6).length / rows.length * 100).toFixed(1) : 0,
+    deckPct: rows.length ? +(rows.filter((r) => (r.daylight as number) > 3).length / rows.length * 100).toFixed(1) : 0,
+    pierPct: rows.length ? +(rows.filter((r) => (r.daylight as number) > 5).length / rows.length * 100).toFixed(1) : 0,
+    rows: rows.slice(0, 24),
+  };
 };
 /** The sign atlas as drawn, so the panels can be checked without hunting for
  *  one in the world and photographing a different sign by mistake. */
