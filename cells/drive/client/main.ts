@@ -5281,10 +5281,17 @@ const stickHome = (): { x: number; y: number } => {
   car.updateWorldMatrix(true, false);
   stickVec.setFromMatrixPosition(car.matrixWorld).project(camera);
   const m = STICK_R + 14;
-  return {
-    x: clamp((stickVec.x * 0.5 + 0.5) * innerWidth, m, innerWidth - m),
-    y: clamp((0.5 - stickVec.y * 0.5) * innerHeight, m, innerHeight - m),
-  };
+  // Behind the camera projects to a mirrored point; treat it as off-screen.
+  const off = stickVec.z > 1;
+  let x = clamp((off ? -stickVec.x : stickVec.x) * 0.5 * innerWidth + innerWidth / 2, m, innerWidth - m);
+  const y = clamp((0.5 - (off ? -stickVec.y : stickVec.y) * 0.5) * innerHeight, m, innerHeight - m);
+  // PAN THE TRUCK OFF-SCREEN and the clamp slides the stick along the edge —
+  // straight back onto the tachometer, which is the corner this move exists to
+  // get off. The instrument cluster is the one place it may not rest, so shove
+  // it clear rather than let the fallback undo the fix.
+  const cx = innerWidth * 0.56, cy = innerHeight * 0.70;
+  if (x > cx && y > cy) x = Math.max(m, cx - STICK_R * 0.5);
+  return { x, y };
 };
 function updateStickHome(): void {
   // Nothing to steer with when the car is steering itself. Leaving a live stick
@@ -7910,7 +7917,15 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
     const bw = MW - 8;
     const view = VIEWS[vehView];
     const natural = vehView === 0 ? 1.3 : AXIS_SIZE(specBox, view.w) / AXIS_SIZE(specBox, view.h);
-    const vh = clamp(Math.round(bw / natural), 78, Math.round(MH * 0.5));
+    // The bay takes WHAT IS LEFT, not a fixed fraction. SETUP added three rows
+    // at the foot of this tab and TYRES fell off the bottom of the panel; a
+    // fraction of MH did not fix it because the 3/4 view's natural height was
+    // already under the cap, so the clamp never bound. Everything below the bay
+    // is a known number of known-height rows, so subtract them and the bay can
+    // never crowd a control off the screen again — on any phone.
+    const tailH = 8 + 5 * 7 + 4 + SPEC_TEXT.length * 7 + 5   // dims + spec sheet
+      + 2 * 13 + 5 * 9 + 6;                                  // 2 dial groups, 5 dials
+    const vh = clamp(Math.round(bw / natural), 78, Math.max(78, MY + MH - bayTop - tailH));
     vehRect = { x: MX + 4, y: bayTop, w: bw, h: vh };
     frame(vehRect.x, vehRect.y, vehRect.w, vehRect.h, UI.edge);
     if (vehView > 0) {
