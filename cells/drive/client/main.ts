@@ -2432,6 +2432,10 @@ function mapPoly(pts: Array<[number, number]>, color: string): void {
 }
 
 // ── collision & surface grids (24m cells) ──────────────────────────
+// The three rungs of the surface ladder, as qualities. Declared here because
+// the road grid and surfaceAt both stand on them; the tables and the physics
+// that read them live down with SURFACE.
+const Q_ROAD = 1, Q_TRACK = 0.55, Q_GROUND = 0.2;
 const GRID = 24;
 const gkey = (x: number, z: number): string => `${Math.floor(x / GRID)},${Math.floor(z / GRID)}`;
 interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?: number; yb?: number; tk?: boolean; tn?: boolean;
@@ -2441,7 +2445,11 @@ interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?:
   nm?: string;
   /** A guard rail rather than a wall. Still solid, but glancing it costs you
    *  almost nothing — see the collision scrub. */
-  sl?: boolean }
+  sl?: boolean;
+  /** Surface quality 0..1 from the way's surface/smoothness/tracktype tags —
+   *  see wayQuality. Absent where the way said nothing, and then the class
+   *  default stands in. */
+  sq?: number }
 const wallGrid = new Map<string, Seg[]>();   // building edges — solid
 const roadGrid = new Map<string, Seg[]>();   // drivable centrelines + half-width
 const waterCells = new Set<string>();        // coarse water mask
@@ -2596,17 +2604,32 @@ function wallHitAlong(ax: number, az: number, bx: number, bz: number, camY: numb
   return sMin;
 }
 type Surface = 'road' | 'track' | 'water' | 'ground';
+/**
+ * The surface quality that the LAST call to `surfaceAt` resolved — 1 for new
+ * tarmac, down to 0.1 for a sand piste. Read it straight after the call that
+ * set it.
+ *
+ * A side channel rather than a returned pair because `surfaceAt` runs four
+ * times a frame for the wheels alone and again for every ring point of a
+ * building escape sweep, and allocating a result object on that path buys
+ * nothing but garbage.
+ */
+let surfQ = Q_ROAD;
 function surfaceAt(x: number, z: number): Surface {
   // Scan them ALL: tarmac wins wherever a track crosses or joins a road, and
-  // returning on the first hit made that depend on insertion order.
-  let onTrack = false;
+  // returning on the first hit made that depend on insertion order. Where two
+  // of a kind overlap the BETTER surface wins for the same reason — you are
+  // driving on the top one.
+  let road = -1, track = -1;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
     const [cx, cz] = closestOnSeg(x, z, seg);
     if (Math.hypot(x - cx, z - cz) > seg.hw + 0.8) continue;
-    if (!seg.tk) return 'road';
-    onTrack = true;
+    if (seg.tk) track = Math.max(track, seg.sq ?? Q_TRACK);
+    else road = Math.max(road, seg.sq ?? Q_ROAD);
   }
-  if (onTrack) return 'track';
+  if (road >= 0) { surfQ = road; return 'road'; }
+  if (track >= 0) { surfQ = track; return 'track'; }
+  surfQ = Q_GROUND;
   if (waterCells.has(gkey(x, z))) return 'water';
   const sl = seaLevelY();
   return sl !== null && sampleHeight(x, z) < sl - 0.7 ? 'water' : 'ground';
@@ -2874,7 +2897,7 @@ function flushAprons(): void {
 type RoadMode = 'none' | 'auto' | 'tunnel' | 'bridge';
 const TUNNEL_TOL = 5;  // metres of terrain above the smoothed profile ⇒ tunnel
 const TUNNEL_H = 5;    // clearance of the carved tube
-function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string): void {
+function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number): void {
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
   // point here has real elevation under it; if one does not, the profile would
   // be built against sampleHeight's 0 and bake a causeway that no later tile
@@ -3174,7 +3197,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     );
     uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
     if (drivable) {
-      const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name };
+      const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name, sq };
       addSeg(roadGrid, s);
       segsOf.push(s);
     }
@@ -3524,7 +3547,7 @@ interface OsmWay {
   ck?: string;
 }
 // Only the tags renderWays actually reads — the rest is dead weight per way.
-// amenity/shop feed repair POIs; surface/smoothness/tracktype will feed wear.
+// amenity/shop feed repair POIs; surface/smoothness/tracktype feed wayQuality.
 // The S3 tiles keep EVERY tag — this list is only the client cache's diet.
 const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'layer', 'name', 'amenity', 'shop', 'surface', 'smoothness', 'tracktype'];
 let osmDb: IDBDatabase | null = null;
@@ -3645,7 +3668,7 @@ function renderWays(els: OsmWay[]): void {
         : tags.bridge && tags.bridge !== 'no' ? 'bridge'
         : 'auto';
       ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : MAT.road,
-        track || stairs ? 0.18 : 0.22, !stairs, mode, track, tags.name);
+        track || stairs ? 0.18 : 0.22, !stairs, mode, track, tags.name, wayQuality(tags, track));
       if (unbuilt !== refusedAt) { seenWays.delete(dk); continue; }
       // Steps are named and drawn but nothing drives them, so they earn no
       // checkpoints — a road you cannot survey should not sit in the log.
@@ -5188,11 +5211,21 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
   accel: +rig.accel.toFixed(2), svc: rig.svc,
 });
 (window as unknown as { __rigset?: object }).__rigset = (o: Partial<typeof rig>): void => { Object.assign(rig, o); };
+// What a set of OSM tags is worth as a driving surface, and the physics it
+// buys — so the tag ladder can be measured directly rather than inferred from
+// how the truck felt.
+(window as unknown as { __surfq?: object }).__surfq = (tags: Record<string, string>, track = false): object => {
+  const q = wayQuality(tags, track);
+  const p = surfaceFor(track ? 'track' : 'road', q);
+  return { q: +q.toFixed(3), mu: +p.mu.toFixed(3), drag: +p.drag.toFixed(3), rough: +p.rough.toFixed(4), max: +p.max.toFixed(1) };
+};
 (window as unknown as { __contact?: object }).__contact = (x: number, z: number): object => {
   const sk = surfaceAt(x, z);
+  const q = surfQ;                    // before anything else can re-resolve it
   const e = roadEdge(x, z);
   return {
-    surface: sk, contact: +tyreHeight(x, z, sk, groundAt(x, z)).toFixed(3),
+    surface: sk, q: +q.toFixed(3), mu: +surfaceFor(sk, q).mu.toFixed(3),
+    contact: +tyreHeight(x, z, sk, groundAt(x, z)).toFixed(3),
     base: +groundAt(x, z).toFixed(3), out: e ? +e.out.toFixed(2) : null,
   };
 };
@@ -6510,6 +6543,75 @@ const SURFACE = {
   ground: { max: 32, drag: 0.5, lift: 0.10, rough: 0.16, mu: 0.6, lat: 3.2 }, // monster truck: off-road is its element
   water: { max: 3.5, drag: 3.5, lift: 0.12, rough: 0.05, mu: 0.3, lat: 2 },
 } as const;
+type SurfParams = { max: number; drag: number; lift: number; rough: number; mu: number; lat: number };
+// ── what the road is actually made of ──────────────────────────────
+// `highway=*` says what a way is FOR. It says nothing about what it is MADE OF,
+// and OSM has been telling us all along: `surface`, `smoothness` and
+// `tracktype` were cached on every way and read by nobody, so a sand piste
+// through the Sahara and a fresh German autobahn were the same three numbers.
+// They are now one continuous quality 0..1 — 1 is new tarmac, 0 is barely a
+// surface at all — and every grip, drag and wear term reads it.
+const SURF_Q: Record<string, number> = {
+  asphalt: 1, concrete: 0.97, 'concrete:plates': 0.88, chipseal: 0.95, paved: 0.93,
+  paving_stones: 0.85, metal: 0.82, wood: 0.76, bricks: 0.72, sett: 0.6,
+  cobblestone: 0.55, unhewn_cobblestone: 0.45, compacted: 0.7, fine_gravel: 0.62,
+  gravel: 0.5, pebblestone: 0.44, rock: 0.34, unpaved: 0.45, ground: 0.38,
+  dirt: 0.36, earth: 0.36, grass: 0.34, woodchips: 0.3, mud: 0.22, sand: 0.24,
+  stone: 0.5, grass_paver: 0.62, snow: 0.3, ice: 0.22, salt: 0.55,
+};
+// A rider's judgement of the ride, which is a different fact from the material:
+// a resurfaced gravel road can be smoother than a broken asphalt one.
+const SMOOTH_Q: Record<string, number> = {
+  excellent: 1, good: 0.9, intermediate: 0.75, bad: 0.55, very_bad: 0.4,
+  horrible: 0.28, very_horrible: 0.18, impassable: 0.1,
+};
+// The forestry grading, which is the only surface fact most tracks carry.
+const TRACK_Q: Record<string, number> = { grade1: 0.82, grade2: 0.62, grade3: 0.5, grade4: 0.38, grade5: 0.26 };
+/**
+ * A way's surface quality from its tags, defaulting to the quality that its
+ * class already implied — so an untagged road behaves EXACTLY as it did before
+ * this existed, and only real data moves it.
+ *
+ * `surface` and `tracktype` are both statements about what the way IS, so
+ * either one REPLACES the class default rather than being capped by it — a
+ * grade1 track is firmer than a nameless one, and refusing to let it say so
+ * would make the tag worthless. Where both are present the worse wins, and
+ * `smoothness` — a rider's verdict on the ride, which is a different fact from
+ * the material — caps whatever the material claimed: `surface=asphalt` with
+ * `smoothness=very_bad` is a broken road, not a good one.
+ */
+function wayQuality(tags: Record<string, string>, track: boolean): number {
+  const mat = SURF_Q[tags.surface ?? ''];
+  const grade = TRACK_Q[tags.tracktype ?? ''];
+  let q = mat !== undefined && grade !== undefined ? Math.min(mat, grade)
+    : mat ?? grade ?? (track ? Q_TRACK : Q_ROAD);
+  const ride = SMOOTH_Q[tags.smoothness ?? ''];
+  if (ride !== undefined) q = Math.min(q, ride);
+  return clamp(q, 0.1, 1);
+}
+/**
+ * The physics of a surface of quality `q`. ROAD / TRACK / GROUND stop being
+ * three discrete tiers and become three rungs of one continuous ladder, so the
+ * whole range between them is now reachable and the endpoints are unchanged:
+ * q=1 is the old road, q=0.55 the old track, q=0.2 the old open ground.
+ *
+ * `lift` is NOT interpolated. It is the draped layers' z-order as much as it is
+ * a ride height, and a road drawn at road lift whose tyres sat at track lift is
+ * a truck hovering over its own carriageway.
+ */
+function surfaceFor(kind: Surface, q: number): SurfParams {
+  const base = SURFACE[kind];
+  if (kind === 'water') return base;
+  const [A, B, t] = q >= Q_TRACK
+    ? [SURFACE.road, SURFACE.track, (Q_ROAD - q) / (Q_ROAD - Q_TRACK)]
+    : [SURFACE.track, SURFACE.ground, (Q_TRACK - q) / (Q_TRACK - Q_GROUND)];
+  const f = clamp(t, 0, 1);
+  return {
+    max: A.max + (B.max - A.max) * f, drag: A.drag + (B.drag - A.drag) * f,
+    rough: A.rough + (B.rough - A.rough) * f, mu: A.mu + (B.mu - A.mu) * f,
+    lat: A.lat + (B.lat - A.lat) * f, lift: base.lift,
+  };
+}
 // Deterministic washboard: bumps live in the WORLD (wavelengths ~2–4m), so
 // shake frequency scales with speed and each wheel rides its own profile.
 function roughNoise(x: number, z: number): number {
@@ -6565,7 +6667,7 @@ const rigPower = (): number =>
 // Player tuning, from the RIG tab. Grip is a genuine trade: a softer compound
 // finds more of the surface and gives its tread up to do it.
 const tune = { steer: 1, susp: 1, grip: 1, tyreWear: 1 };
-function stepRig(dt: number, v: number, sk: Surface, sunUp: number): void {
+function stepRig(dt: number, v: number, q: number, sunUp: number): void {
   if (dt <= 0) return;
   // Solar: the array only makes power with the sun up and the sky open.
   rig.solarKw = SOLAR_KW * clamp(sunUp, 0, 1) * (1 - wx.cloud * 0.65);
@@ -6582,12 +6684,18 @@ function stepRig(dt: number, v: number, sk: Surface, sunUp: number): void {
   // canvas. It is now 0.02/s at full slip, and scaled by speed: locking up at
   // walking pace is not what destroys a tyre. A hard sideways minute costs
   // about a fifth of the tread, which is punishing without being a countdown.
-  const abrasive = sk === 'road' ? 0.02 : sk === 'track' ? 0.12 : 0.2;
+  //
+  // Abrasion is now a function of the SURFACE QUALITY rather than the road
+  // class, so the sett-paved lane and the sand piste each cost what they should
+  // instead of both being "not tarmac". The rungs land on the old numbers:
+  // q=1 → 0.02, q=0.55 → 0.12, q=0.2 → 0.2.
+  const abrasive = 0.02 + (1 - clamp(q, 0, 1)) * 0.225;
   const slipWear = skid * 0.02 * clamp(v / 14, 0, 1);
   rig.tyre = clamp(rig.tyre - (slipWear + (v / 28) * abrasive * 0.0012) * tune.tyreWear * dt, 0, 1);
   // The suspension wears on washboard at speed — the environment costing you,
-  // slowly, the way the odometer climbs.
-  rig.susp = clamp(rig.susp - (v / 28) * (sk === 'road' ? 0.008 : 0.1) * 0.0072 * dt, 0, 1);
+  // slowly, the way the odometer climbs. Same ladder: a graded track is now
+  // genuinely gentler on the dampers than open desert, which it is.
+  rig.susp = clamp(rig.susp - (v / 28) * (0.008 + (1 - clamp(q, 0, 1)) * 0.115) * 0.0072 * dt, 0, 1);
 }
 /** A landing. Severity 0..1 from how hard the body came down. */
 function rigLanding(sev: number): void {
@@ -6634,7 +6742,8 @@ function tick(now: number): void {
   stepSun();
   stepWeather(now, dt);
   const surfKind = surfaceAt(state.x, state.z);
-  const surf = SURFACE[surfKind];
+  const surfQual = surfQ;                       // set by the call above
+  const surf = surfaceFor(surfKind, surfQual);
   if (real.on) stepReal(dt);
   // Arcade bicycle model: thrust minus drag, steering authority grows then
   // saturates with speed so the car neither pivots in place nor becomes twitchy.
@@ -6798,6 +6907,7 @@ function tick(now: number): void {
     const wxw = state.x + wx * cosH - wz * sinH;
     const wzw = state.z + wx * sinH + wz * cosH;
     const sk = surfaceAt(wxw, wzw);
+    const sw = surfaceFor(sk, surfQ);   // this wheel's own surface, its own tags
     wheelWorld.push([wxw, wzw]);
     wheelSurf.push(sk);
     // ONE continuous field, lift already folded in — see tyreHeight. The kerb
@@ -6805,7 +6915,6 @@ function tick(now: number): void {
     // not a stair.
     const g = tyreHeight(wxw, wzw, sk, prevGround ?? groundAt(wxw, wzw));
     rawSum += g;
-    const sw = SURFACE[sk];
     smooth.push(g);
     contacts.push(g + roughNoise(wxw, wzw) * sw.rough);
   }
@@ -6982,7 +7091,7 @@ function tick(now: number): void {
     rigPrevGrounded = groundedF;
     // The array sees the TRUE sun, not the raked moonlight vector: at night it
     // makes nothing, which is the whole reason the pack matters.
-    stepRig(dt, Math.abs(state.speed), surfKind,
+    stepRig(dt, Math.abs(state.speed), surfQual,
       Math.max(0, Math.sin(sunAlt)) * (1 - wx.cloud * 0.2));
     // SERVICE. Stop beside somewhere that plausibly has tools — a marked
     // garage or fuel stop heals fast, any named building slowly — and the rig
@@ -7124,7 +7233,7 @@ function tick(now: number): void {
     ? clamp(1 - Math.max(Math.abs(sunScreen.x), Math.abs(sunScreen.y)) * 0.55, 0, 1) * (1 - wx.cloud * 0.85)
     : 0;
   compMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
-  drawHud(surfKind, Math.round(Math.abs(state.speed) * 3.6), groundedF);
+  drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF);
   if (camMode !== 'top' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
   updatePois(); // every frame — throttled pins juddered against the camera
   // Progress lives in the URL: reloading resumes here, not at the spawn.
@@ -7833,7 +7942,7 @@ interface PoiDraw { x: number; y: number; t: string; c: string; edge: 0 | -1 | 1
 let poiDraw: PoiDraw[] = [];
 let streaming = false;
 
-function drawHud(surf: Surface, kmh: number, grip: number): void {
+function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   hctx.clearRect(0, 0, HW, HH);
   const pad = 4;
   // Filled and hollow diamonds, plotted a row at a time. At this resolution a
@@ -8228,8 +8337,12 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
         ey -= 12;
       };
       erow('WET', cells(wx.wet), wx.wet > 0.5 ? UI.bad : UI.edge);
-      const sname = surf === 'road' ? 'ROAD' : surf === 'track' ? 'TRACK' : surf === 'water' ? 'WATER' : 'ROUGH';
-      const scol = surf === 'road' ? UI.good : surf === 'track' ? UI.edge : UI.hot;
+      // Named from the SURFACE QUALITY, not the OSM class. A residential street
+      // tagged surface=sand is not a road to drive like one, and the panel that
+      // tells you what is under the wheels should say so — the three words are
+      // the three rungs of the same ladder the physics is standing on.
+      const sname = surf === 'water' ? 'WATER' : sq >= 0.8 ? 'ROAD' : sq >= 0.45 ? 'TRACK' : 'ROUGH';
+      const scol = sname === 'ROAD' ? UI.good : sname === 'TRACK' ? UI.edge : UI.hot;
       erow(sname, cells(grip), scol, scol);
       const w = WX[wx.sky];
       const hs = `${CARD8[Math.round(deg / 45) % 8]}${Math.round(deg)}`;
