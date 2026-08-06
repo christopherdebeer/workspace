@@ -4861,6 +4861,10 @@ function meshHeightAt(x: number, z: number): number | null {
 /** Checkpoint marker visibility, and how many markers a frame actually put on
  *  screen — the only honest answer to "why can't I see them". */
 (window as unknown as { __setcpv?: object }).__setcpv = (v: number): void => { cpVis = v; };
+(window as unknown as { __menutab?: object }).__menutab = (t?: number | null): number | null => {
+  if (t !== undefined) menuTab = t;
+  return menuTab;
+};
 (window as unknown as { __setcam?: object }).__setcam = (m: CamMode): void => setCam(m);
 (window as unknown as { __zoom?: object }).__zoom = (z: number): void => { zoomT = clamp(z, ZOOM_MIN, ZOOM_MAX); };
 /** How much GROUND the camera actually covers, by unprojecting the screen
@@ -5691,9 +5695,18 @@ let prevGround: number | null = null; // last frame's resolved ground (tunnel gu
 let dustBudget = 0;                   // fractional particles carried between frames
 const sunScreen = new THREE.Vector3();
 function tick(now: number): void {
-  const dt = Math.min(0.05, (now - last) / 1000);
+  // PAUSED WHILE THE MENU IS UP, and the "when appropriate" is real drive: the
+  // car outside is still moving whatever this screen is doing, so freezing the
+  // position there would just desync the map from the road you are on. The
+  // world still RENDERS while paused — the menu is a scrim over a live scene,
+  // not a black screen — but nothing integrates, so you can open it mid-corner
+  // and come back to the same corner.
+  const paused = menuTab !== null && !real.on;
+  const dt = paused ? 0 : Math.min(0.05, (now - last) / 1000);
   last = now;
-  const { throttle, steer, brake } = real.on ? { throttle: 0, steer: 0, brake: false } : input();
+  const { throttle, steer, brake } = real.on || paused
+    ? { throttle: 0, steer: 0, brake: false }
+    : input();
   stepWeather(now, dt);
   const surfKind = surfaceAt(state.x, state.z);
   const surf = SURFACE[surfKind];
@@ -6514,12 +6527,19 @@ function meter(x: number, y: number, n: number, lit: number, col: string, w = 3,
 // compass. It opens a MODAL — a dropdown had nowhere to put a vehicle bay, and
 // the sheet this game is drawn from is a page of panels, not a context menu.
 interface Item { label: () => string; hit: () => void; col: () => string }
-const TABS = ['VEHICLE', 'WORLD', 'SYSTEM'];
+// DRIVE is the splash: the screen the game opens on, and the same screen the
+// MENU button opens later. There is no separate title card any more — the
+// boot overlay is a progress readout and nothing else, so "start" and "main
+// menu" are one place rather than two that say different things.
+const TABS = ['DRIVE', 'SURVEY', 'RIG', 'WORLD', 'SYSTEM'];
+const T_DRIVE = 0, T_SURVEY = 1, T_RIG = 2, T_WORLD = 3, T_SYSTEM = 4;
 const TAB_ITEMS: Item[][] = [
-  [],   // the vehicle bay is a readout, not a control panel
   [
-    // The mode, not a dial: it changes what every control means, so it sits at
-    // the top of the world list where you choose where to be.
+    // The splash's own buttons: go, or change what "go" means. Closing the
+    // menu IS starting, which is why this reads DRIVE rather than RESUME —
+    // there is nothing behind it that has not already begun.
+    { col: () => UI.good, label: () => 'DRIVE', hit: () => { audio.arm(); menuTab = null; } },
+    // A mode, not a dial: it changes what every control means.
     {
       col: () => (real.on ? UI.good : real.err ? UI.bad : UI.hot),
       label: () => (real.on ? 'REAL DRIVE ON' : real.err ? fit(real.err, 150) : 'REAL DRIVE'),
@@ -6529,6 +6549,10 @@ const TAB_ITEMS: Item[][] = [
       },
     },
     { col: () => UI.gold, label: () => 'ELSEWHERE', hit: () => { location.href = location.pathname + '?random=1'; } },
+  ],
+  [],   // the survey is a readout
+  [],   // and so is the vehicle bay
+  [
     { col: () => UI.edge, label: () => (alien ? 'SCRIPT ALIEN' : 'SCRIPT PLAIN'), hit: () => toggleAlien() },
   ],
   [
@@ -7263,17 +7287,111 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
   hctx.fillStyle = UI.dim;
   hctx.fillRect(MX + 4, MY + 21, MW - 8, 1);
   // ── tabs ──
-  let tx = MX + 5;
+  // Wrapped, because five sections do not fit one row on a narrow phone and a
+  // tab you cannot reach is worse than a tab on a second line.
+  let tx = MX + 5, ty2 = MY + 25;
   for (let i = 0; i < TABS.length; i++) {
     const w = textW(TABS[i]) + 8;
+    if (tx + w > MX + MW - 5) { tx = MX + 5; ty2 += 14; }
     const on = tab === i;
-    if (on) panel(tx, MY + 25, w, 12, UI.gold);
-    text(hctx, TABS[i], tx + 4, MY + 28, on ? UI.gold : UI.soft);
-    tabRects.push({ x: tx, y: MY + 25, w, h: 12, i });
+    if (on) panel(tx, ty2, w, 12, UI.gold);
+    text(hctx, TABS[i], tx + 4, ty2 + 3, on ? UI.gold : UI.soft);
+    tabRects.push({ x: tx, y: ty2, w, h: 12, i });
     tx += w + 3;
   }
-  const top = MY + 41;
-  if (tab === 0) {
+  const tabBottom = ty2 + 12;
+  const top = tabBottom + 4;
+  if (tab === T_DRIVE) {
+    // ── the splash ──
+    // Where you are, big; what you have driven; and the three things that
+    // change what happens next. Deliberately sparse: this is the screen the
+    // game opens on, and a wall of controls is not a title card.
+    let y = top + 4;
+    glowText(fit((placeLine || 'LOCATING').toUpperCase(), MW - 12), MX + 6, y, UI.gold);
+    y += 12;
+    const [la0, lo0] = localToLatLon(state.x, state.z);
+    textSmall(hctx, `${biome.name.toUpperCase()} · ${WX[wx.sky].label} · ${la0.toFixed(3)} ${lo0.toFixed(3)}`,
+      MX + 6, y, UI.dim);
+    y += 12;
+    hctx.fillStyle = UI.dim; hctx.fillRect(MX + 5, y, MW - 10, 1);
+    y += 6;
+    const claimed = [...survey.values()].filter((r) => r.claimed).length;
+    for (const [k, v] of [
+      ['DRIVEN', `${fmtKm(odo.trip)} TRIP · ${fmtKm(odo.total)} TOTAL`],
+      ['SURVEYED', `${claimed} ${claimed === 1 ? 'ROAD' : 'ROADS'} CLAIMED`],
+      ['MODE', real.on ? 'REAL DRIVE · GPS' : 'FREE DRIVE'],
+      ['WORLD', osmDown ? 'VECTORS UNAVAILABLE' : streaming ? 'STREAMING' : 'LOADED'],
+    ] as Array<[string, string]>) {
+      textSmall(hctx, k, MX + 6, y, UI.dim);
+      textSmall(hctx, v, MX + 52, y, UI.text);
+      y += 8;
+    }
+    const items = TAB_ITEMS[T_DRIVE];
+    y = MY + MH - 6 - (items.length * 16 + 8);
+    for (let i = 0; i < items.length; i++) {
+      const w = Math.max(textW(items[i].label()) + 10, 84);
+      panel(MX + 5, y, w, 13, items[i].col());
+      text(hctx, items[i].label(), MX + 10, y + 4, items[i].col());
+      itemRects.push({ x: MX + 5, y, w, h: 13, i });
+      y += 16;
+    }
+  } else if (tab === T_SURVEY) {
+    // ── the survey ──
+    // The road under the wheels first, because that is the one you can change
+    // right now, then every road worth claiming, longest first. A bar rather
+    // than a percentage: the question is "how much of this is left", and a bar
+    // answers it without being read.
+    let y = top;
+    const here = surveyHere();
+    const roads = [...survey.values()].filter(surveyEligible).sort((a, b) => b.len - a.len);
+    const totalCps = roads.reduce((n, r) => n + r.cps.length, 0);
+    const gotCps = roads.reduce((n, r) => n + r.got, 0);
+    textSmall(hctx, 'UNDER THE WHEELS', MX + 6, y, UI.dim);
+    y += 9;
+    if (here) {
+      text(hctx, fit(alienize(here.r.name).toUpperCase(), MW - 60), MX + 6, y, UI.text);
+      const tally = here.r.claimed ? 'DRIVEN' : `${here.r.got}/${here.r.cps.length}`;
+      textSmall(hctx, tally, MX + MW - textSW(tally) - 7, y + 2,
+        here.r.claimed ? UI.good : here.ready ? UI.gold : UI.dim);
+      y += 11;
+      meter(MX + 6, y, 24, Math.round(here.frac * 24), here.r.claimed ? UI.good : UI.edge, 3, 3, 1);
+      y += 8;
+      // The gate, stated plainly — a road at 100% that will not claim is the
+      // single most confusing state this mechanic can be in.
+      textSmall(hctx, here.r.claimed ? 'CLAIMED' : here.ready ? 'SURVEYED · DRIVE A MAJORITY' : 'STILL SURVEYING THIS ROAD',
+        MX + 6, y, here.r.claimed ? UI.good : here.ready ? UI.soft : UI.dim);
+      y += 11;
+    } else {
+      textSmall(hctx, osmDown ? 'NO WORLD DATA' : 'NO NAMED ROAD NEARBY', MX + 6, y, UI.dim);
+      y += 11;
+    }
+    hctx.fillStyle = UI.dim; hctx.fillRect(MX + 5, y, MW - 10, 1);
+    y += 5;
+    textSmall(hctx, `ROADS ${roads.length}`, MX + 6, y, UI.dim);
+    {
+      const lab = `${gotCps}/${totalCps} CHECKPOINTS`;
+      textSmall(hctx, lab, MX + MW - textSW(lab) - 7, y, UI.dim);
+    }
+    y += 9;
+    const room = Math.max(0, MY + MH - 8 - y);
+    for (const r of roads.slice(0, Math.floor(room / 10))) {
+      const frac = r.got / r.cps.length;
+      const col = r.claimed ? UI.good : frac > SURVEY_MAJORITY ? UI.gold : UI.soft;
+      // Four columns, and each one owns its own strip: the name is CLIPPED to
+      // its column rather than allowed to run, because a long road name walked
+      // straight over the distance beside it.
+      const nameW = Math.floor(MW * 0.46) - 8;
+      const kmX = MX + 6 + nameW + 4;          // distance, right-aligned into the gap
+      const barX = Math.round(MX + MW * 0.62);
+      textSmall(hctx, fitS(alienize(r.name).toUpperCase(), nameW), MX + 6, y, col);
+      const km = r.len >= 1000 ? `${(r.len / 1000).toFixed(1)}K` : `${Math.round(r.len)}M`;
+      textSmall(hctx, km, Math.max(kmX, barX - 6 - textSW(km)), y, UI.dim);
+      meter(barX, y + 1, 10, Math.round(frac * 10), col, 2, 3, 1);
+      const n = `${r.got}/${r.cps.length}`;
+      textSmall(hctx, n, MX + MW - textSW(n) - 7, y, UI.dim);
+      y += 10;
+    }
+  } else if (tab === T_RIG) {
     truckSpec(); // populates specBox, which the elevations frame themselves from
     // ── view picker ──
     // Drawn in the MICRO face and a row shorter than the tabs above: these
@@ -7345,7 +7463,7 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
   } else {
     // ── readouts, then the controls for this tab ──
     let y = top;
-    const rows: Array<[string, string]> = tab === 1
+    const rows: Array<[string, string]> = tab === T_WORLD
       ? [
         ['HERE', fitS(placeLine || 'LOCATING', MW - 60).toUpperCase()],
         ['BIOME', `${biome.name.toUpperCase()} · ${WX[wx.sky].label}${wx.wet > 0.05 ? ' WET' : ''}`],
@@ -7356,7 +7474,7 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
         ['SOUND', audio.on ? (audio.state === 'running' ? 'ON' : 'NEEDS TAP') : 'OFF'],
         ['SCRIPT', alien ? 'ALIEN' : 'PLAIN'],
       ];
-    if (tab === 1) {
+    if (tab === T_WORLD) {
       rows.push(['DRIVEN', `${fmtKm(odo.trip)} TRIP · ${fmtKm(odo.total)} TOTAL`]);
       rows.push(['VECTORS', osmDown ? 'UNAVAILABLE - RETRYING' : streaming ? 'STREAMING' : 'LOADED']);
     }
@@ -7365,10 +7483,10 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
       textSmall(hctx, v, MX + 52, y, UI.text);
       y += 8;
     }
-    if (tab === 2) y = drawDials(DIAL_GROUPS.filter((g) => g.title !== 'VEHICLE'), MX, MW, y + 4);
+    if (tab === T_SYSTEM) y = drawDials(DIAL_GROUPS.filter((g) => g.title !== 'VEHICLE'), MX, MW, y + 4);
     y += 6;
     const items = TAB_ITEMS[tab];
-    if (tab === 1) {
+    if (tab === T_WORLD) {
       // ── the curated starts ──
       // The list takes whatever room is left between the readouts and the
       // buttons, and pages if the screen is too short for all of it — a phone
@@ -7560,26 +7678,19 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
   // browser demands before any audio can play — arming it here means sound is
   // simply on when the world appears, instead of the player discovering a
   // muted game and hunting for a button.
-  bootMsg('tap to start');
+  // `ready` then `done` in the same breath: ready is the signal that the world
+  // is up (a probe waits on it), done is the overlay lifting off the menu.
+  bootMsg('ready');
   $('boot').classList.add('ready');
-  await new Promise<void>((go) => {
-    const start = (): void => {
-      audio.arm();
-      removeEventListener('pointerdown', start);
-      removeEventListener('keydown', start);
-      go();
-    };
-    addEventListener('pointerdown', start);
-    addEventListener('keydown', start);
-  });
   $('boot').classList.add('done');
-  // START AND THE MAIN MENU ARE THE SAME THING. The splash exists only to take
-  // the gesture the browser demands before audio can play; behind it the world
-  // is already loaded and running. So the first thing it hands you is the menu
-  // — where you go, what you drive, and whether the device is steering — with
-  // the place you spawned in living behind it. Except when a link has already
-  // said where to go, in which case you asked for a drive, not a menu.
+  // START AND THE MAIN MENU ARE THE SAME THING — one screen, not a title card
+  // that hands off to a different screen with different words on it. The boot
+  // overlay is now purely a progress readout; when the world is up it lifts
+  // and the menu is there, on its DRIVE tab, with the place you spawned in
+  // live behind it. The browser's audio gesture is taken by whatever you tap
+  // first, which on this screen is a button that means something.
+  // A link that already says where to go skips it: that asked for a drive.
   if (real.on) beginRealWatch();
-  else if (!q.get('lat') && !q.get('m')) menuTab = 1;
+  else if (!q.get('lat') && !q.get('m')) menuTab = T_DRIVE;
   requestAnimationFrame((t) => { last = t; requestAnimationFrame(tick); });
 })();
