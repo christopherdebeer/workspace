@@ -1878,8 +1878,56 @@ let seaOn = false;
 // which never has roads below the waterline — and it rises home. Latched by
 // place, not for the session, so one desert basin does not drain the Atlantic.
 let dryAt: [number, number] | null = null;
+// ── where the water actually sits ──────────────────────────────────
+// "Sea level is elevation zero" is an assumption about the DEM's datum, and
+// terrarium does not keep it. Measured 4km due west into the open Pacific off
+// Big Sur: the mosaic has no bathymetry there and fills the ocean at a FLAT
+// +1.2m, while the sea plane sat at +0.1 — so the seabed skin covered the
+// water and the truck drove to the horizon on a green plain, with deer
+// standing on it. WorldCover called every one of those samples water.
+//
+// So ask the water where it is. Cover says which ground is water and the
+// heightfield says how high that ground stands; the sea belongs just above it.
+// This only ever NUDGES sea level — a measurement further than 60m from zero
+// is a mountain lake, not an ocean, and is ignored rather than used to flood
+// the world to its level.
+let seaDatum: number | null = null;
+let seaDatumN = 0;
+function measureSeaDatum(): void {
+  const wet: number[] = [], dry: number[] = [];
+  for (let a = 0; a < 48; a++) {
+    const c = Math.cos((a / 48) * Math.PI * 2), s = Math.sin((a / 48) * Math.PI * 2);
+    for (let r = 200; r <= 5000; r += 200) {
+      const x = state.x + c * r, z = state.z + s * r;
+      const cv = sampleCover(x, z);
+      if (cv === null) continue;
+      (cv === COVER.water ? wet : dry).push(sampleHeight(x, z) + baseElev);
+    }
+  }
+  if (wet.length < 40) return;             // a pond must never move the ocean
+  wet.sort((p, q) => p - q);
+  // The MEDIAN. Measured off Big Sur, the ocean fill is a flat plate: p25
+  // through p90 all read exactly 1.2m, with a thin tail near 0 and a lone 45m
+  // outlier where a river was caught. The median is the plate; a low
+  // percentile lands in the tail and leaves the plate proud of the water.
+  const lvl = wet[wet.length >> 1];
+  if (Math.abs(lvl) > 60) return;          // that far from zero is a lake, not the sea
+  // And the sea is the LOWEST thing in a landscape. If this water stands above
+  // a fifth of the dry land around it, it is a tarn perched in the hills and
+  // must not be allowed to set the level everything else drowns under.
+  if (dry.length >= 40) {
+    dry.sort((p, q) => p - q);
+    if (lvl > dry[Math.floor(dry.length * 0.2)]) return;
+  }
+  seaDatum = lvl;
+  seaDatumN = wet.length;
+}
+/** Absolute elevation of the sea surface. The 0.4 is freeboard: the DEM's
+ *  ocean fill is a flat plate, and a plane at exactly its height z-fights with
+ *  it instead of covering it. */
+function seaSurfaceAbs(): number { return seaDatum === null ? 0.1 : seaDatum + 0.4; }
 function noteDryLand(x: number, z: number, y: number): void {
-  if (y + baseElev > -1) return;   // not meaningfully below sea level
+  if (y + baseElev > seaSurfaceAbs() - 1.1) return;   // not meaningfully below sea level
   // Keep the evidence nearest the car, so leaving the basin actually raises
   // the sea again instead of chasing the most recently streamed tile.
   if (!dryAt || Math.hypot(x - state.x, z - state.z) < Math.hypot(dryAt[0] - state.x, dryAt[1] - state.z)) {
@@ -1896,7 +1944,7 @@ function seaLevelY(): number | null {
   // it should be visible. That is a rarer world and a milder failure than an
   // ocean closing over a truck parked below sea level on dry salt.
   if (dryAt && Math.hypot(dryAt[0] - state.x, dryAt[1] - state.z) < 30000) return null;
-  return -baseElev + 0.1;
+  return seaSurfaceAbs() - baseElev;
 }
 
 // ── vegetation: a recycling field, not a one-shot pool ─────────────
@@ -2469,6 +2517,11 @@ function stepPop(pop: Critter[], meshes: THREE.InstancedMesh[], dt: number, o: {
     const h = o.box / 2;
     if (c.x - cx > h) c.x -= o.box; else if (cx - c.x > h) c.x += o.box;
     if (c.z - cz > h) c.z -= o.box; else if (cz - c.z > h) c.z += o.box;
+    // NOTHING GRAZES ON THE SEA. The herd wraps around the camera, so on a
+    // coast half of it lands on open water. It keeps simulating out there —
+    // the flock forces will walk it back ashore within seconds — but it is not
+    // drawn, because a deer standing on the Pacific is worse than no deer.
+    if (!o.air && surfaceAt(c.x, c.z) === 'water') continue;
     const yaw = Math.atan2(c.vx, c.vz);
     // GAIT. Four legs welded to the body can't stride, so the animal rides its
     // own stride instead: a bob and a pitch on the same phase, scaled by how
@@ -2728,6 +2781,12 @@ function surfaceAt(x: number, z: number): Surface {
   if (track >= 0) { surfQ = track; return 'track'; }
   surfQ = Q_GROUND;
   if (waterCells.has(gkey(x, z))) return 'water';
+  // WHAT THE GROUND IS beats how high the DEM thinks it is. Off Big Sur the
+  // elevation source fills the whole ocean at a flat +1.2m, so the height test
+  // below called four kilometres of open Pacific dry ground and let the truck
+  // drive out onto it. WorldCover knows the difference at 10m, and a road laid
+  // over water is a bridge, which is why this sits AFTER the carriageways.
+  if (sampleCover(x, z) === COVER.water) return 'water';
   const sl = seaLevelY();
   return sl !== null && sampleHeight(x, z) < sl - 0.7 ? 'water' : 'ground';
 }
@@ -4257,6 +4316,10 @@ function streamWorld(ex: number, ez: number): void {
     // The moment there is enough real cover to judge on, the world stops being
     // a latitude band and becomes the place it actually is. Once only.
     if (!biomeSettled) {
+      // Cover also knows which ground is water, and water is the only honest
+      // witness to where sea level sits in THIS DEM's datum. Same moment, same
+      // data — and the plane slews up to meet it rather than snapping.
+      if (seaDatum === null) measureSeaDatum();
       const b = biomeFromCover(origin.lat, baseElev);
       if (b) {
         biomeSettled = true;
@@ -5207,6 +5270,7 @@ function stepReal(dt: number): boolean {
 }
 (window as unknown as { __drive?: object; __surfaceAt?: (x: number, z: number) => string }).__drive = state;
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
+(window as unknown as { __coverAt?: (x: number, z: number) => number | null }).__coverAt = sampleCover;
 (window as unknown as { __wx?: object }).__wx = wx; // debug/test handle
 (window as unknown as { __life?: object }).__life = () => ({
   roadCells: roadGrid.size,
@@ -5563,9 +5627,10 @@ function meshHeightAt(x: number, z: number): number | null {
 };
 /** The sea's whole case file: anchored where, live or stood down, and why. */
 (window as unknown as { __sea?: object }).__sea = (force?: boolean): object => {
-  if (force === true) { dryAt = null; sea.position.y = -baseElev + 0.1; }  // re-flood, to reproduce the bug
+  if (force === true) { dryAt = null; sea.position.y = seaSurfaceAbs() - baseElev; }  // re-flood, to reproduce the bug
   return {
     seaOn, y: +sea.position.y.toFixed(1), live: seaLevelY() !== null, baseElev: +baseElev.toFixed(1),
+    datum: seaDatum === null ? null : +seaDatum.toFixed(2), datumN: seaDatumN,
     dryAt: dryAt ? [Math.round(dryAt[0]), Math.round(dryAt[1])] : null,
     dryDist: dryAt ? Math.round(Math.hypot(dryAt[0] - state.x, dryAt[1] - state.z)) : null,
   };
@@ -8955,7 +9020,7 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
   // already in a depression starts with its own dry-land evidence so the
   // basin is never flooded, not even for a frame.
   seaOn = true;
-  if (baseElev >= -2) { sea.position.y = -baseElev + 0.1; }
+  if (baseElev >= -2) { sea.position.y = seaSurfaceAbs() - baseElev; }
   else { dryAt = [0, 0]; sea.position.y = -60; }
   // Dress the world BEFORE any terrain mesh is built — the ground ramp is
   // baked into vertex colours at build time.
