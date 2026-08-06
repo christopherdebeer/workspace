@@ -7293,100 +7293,106 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     }
   }
   // ── the rig, bottom-right ──
-  // The reference sheet's terminal table married to its dial: every stat is
-  // LABEL · BAR · VALUE on one grid, PERSISTENT — a row that jumps in and out
-  // teaches you nothing about the quantity it reports, so nothing here
-  // appears or vanishes. Momentary truths (slip, solar surplus, servicing)
-  // are LEDs: always present, lit when true. Two groups, ENV over RIG, each
-  // under its own header line. All of it bare over the world.
+  // The corner is three instruments now, and each owns its ground. The TABLE:
+  // micro label RIGHT-ALIGNED above a right-aligned bar, no values — the bar
+  // IS the value, and a percentage beside every bar was the same number said
+  // twice. Two headed groups, ENV over RIG, every row persistent. The LEDs
+  // live OUTSIDE the table, a small stack beside the dial where they balance
+  // the corner instead of crowding the header. And the TACHOMETER is a
+  // tachometer: the lit sweep is the ENGINE — the same engRev the audio
+  // whines with, gear-ratcheted, flaring into the redline when the wheels
+  // leave the ground — with the speed as the number in the middle of it.
   {
     const R = HW - pad;                      // the shared right edge
     const CELLS = 10, PITCH = 3, BARW = CELLS * PITCH - 1;
-    const COL_W = 74;                        // label column → value column span
-    const Lx = R - COL_W;                    // labels start here
-    const Bx = R - 26 - BARW;                // bars end a full value's width short of the edge
     const cells = (f: number): number => Math.round(clamp(f, 0, 1) * CELLS);
-    // ── the dial, lifted to make room for the trip line beneath it ──
-    const DR = 19;
+    // ── the dial ──
+    const DR = 26;
     const cx = R - DR, cy = HH - pad - DR - 9;
     {
-      // A full bezel of faint minor ticks first — the ring exists even where
-      // the sweep has nothing to say — then the lit sweep over it.
-      for (let i = 0; i < 36; i++) {
-        const a = (i / 36) * Math.PI * 2;
-        hctx.fillStyle = 'rgba(87,201,176,0.14)';
-        hctx.fillRect(Math.round(cx + Math.cos(a) * DR), Math.round(cy + Math.sin(a) * DR), 1, 1);
+      // The bezel, as the reference draws it: fine minor ticks the whole way
+      // round, a longer major every quarter-turn octant — the ring exists
+      // even where the sweep is dark.
+      for (let i = 0; i < 48; i++) {
+        const a = (i / 48) * Math.PI * 2;
+        const major = i % 6 === 0;
+        hctx.fillStyle = major ? 'rgba(87,201,176,0.4)' : 'rgba(87,201,176,0.16)';
+        for (let r = DR; r <= DR + (major ? 1 : 0); r++) {
+          hctx.fillRect(Math.round(cx + Math.cos(a) * r), Math.round(cy + Math.sin(a) * r), 1, 1);
+        }
       }
-      const SEGS = 14;
+      // The sweep: REVS, not speed. engRev runs 0..1.2 — the last sixth is
+      // the flare band the audio screams through, so the geometry and the
+      // sound redline together.
+      const SEGS = 18;
       const A0 = 0.75 * Math.PI, SWEEP = 1.5 * Math.PI;
-      const frac = clamp(Math.abs(state.speed) / (surf.max * 1.25), 0, 1);
+      const frac = clamp(engRev / 1.2, 0, 1);
       const lit = Math.round(frac * SEGS);
       for (let i = 0; i < SEGS; i++) {
         const a = A0 + ((i + 0.5) / SEGS) * SWEEP;
         const on = i < lit;
-        let col = i / SEGS > 0.8 ? UI.hot : UI.gold;
+        let col = (i + 1) / SEGS > 0.83 ? UI.hot : UI.gold;
         if (on && i === lit - 1) col = rig.accel > 1.5 ? UI.good : rig.accel < -2.5 ? UI.bad : col;
         hctx.fillStyle = on ? col : 'rgba(87,201,176,0.22)';
-        for (let r = DR - 5; r <= DR - 1; r += 2) {
+        for (let r = DR - 7; r <= DR - 3; r += 2) {
           hctx.fillRect(Math.round(cx + Math.cos(a) * r) - 1, Math.round(cy + Math.sin(a) * r) - 1, 2, 2);
         }
       }
+      // The card in the middle, top to bottom as the reference sets it:
+      // speed, its unit, the rev scale, the revs.
       const digits = String(kmh);
-      glowText(digits, cx - Math.round(textW(digits, 2) / 2) + 1, cy - 10, UI.gold, 2);
-      textEdgeS('KM/H', cx - Math.round(textSW('KM/H') / 2) + 1, cy + 6, UI.edge);
-      // The engine line, as the reference writes it: thousands of RPM, from
-      // the same rev state the audio whines with.
-      const rpm = `${Math.max(1, Math.round(1 + engRev * 6))}K RPM`;
-      textEdgeS(rpm, cx - Math.round(textSW(rpm) / 2) + 1, cy + 13, UI.dim);
+      glowText(digits, cx - Math.round(textW(digits, 2) / 2) + 1, cy - 15, UI.gold, 2);
+      textEdgeS('KM/H', cx - Math.round(textSW('KM/H') / 2) + 1, cy + 2, UI.edge);
+      textEdgeS('X1000 RPM', cx - Math.round(textSW('X1000 RPM') / 2) + 1, cy + 9, UI.dim);
+      const rk = String(Math.max(1, Math.round(1 + engRev * 6)));
+      glowText(rk, cx - Math.round(textW(rk) / 2), cy + 16, engRev > 1 ? UI.hot : UI.edge);
       // TRIP, under the speedometer — the number that belongs to this drive.
       const o = `${fmtKm(odo.trip)} · ${fmtKm(odo.total)}`;
       textEdgeS(o, R - textSW(o), HH - pad - 6, UI.dim);
     }
-    // ── the table ──
-    const row = (label: string, lit: number, col: string, value: string, vcol: string): void => {
-      textEdgeS(label, Lx, y, UI.dim);
-      meter(Bx, y + 1, CELLS, lit, col, 2, 3, 1);
-      textEdgeS(value, R - textSW(value), y, vcol);
-      y -= 9;
-    };
-    // A fixed LED: the label is always there, ink when dark, lit when true.
-    const led = (x: number, label: string, on: boolean, col: string): number => {
-      textEdgeS(label, x - textSW(label), y, on ? col : 'rgba(87,201,176,0.28)');
-      return x - textSW(label) - 6;
-    };
-    let y = cy - DR - 12;
-    // RIG, bottom group: the stocks the world spends.
-    row('SUSP', cells(rig.susp), rig.susp < 0.3 ? UI.bad : rig.susp < 0.6 ? UI.gold : UI.soft,
-      `${Math.round(rig.susp * 100)}%`, UI.soft);
-    row('HULL', cells(rig.hull), rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft,
-      `${Math.round(rig.hull * 100)}%`, UI.soft);
-    row('TYRE', cells(rig.tyre), rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft,
-      `${Math.round(rig.tyre * 100)}%`, UI.soft);
-    row('BATT', cells(rig.batt), rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good,
-      `${Math.round(rig.batt * 100)}%`, UI.soft);
+    // ── the LEDs, beside the dial ──
+    // Momentary truths, out of the table: always present, ink when dark.
     {
-      textEdgeS('RIG', Lx, y, UI.edge);
-      let lx = R;
-      lx = led(lx, 'SVC', rig.svc, UI.edge);
-      lx = led(lx, 'SOL', rig.solarKw > rig.drawKw, UI.gold);
-      led(lx, skid > 0.55 ? 'SLIP!' : 'SLIP', skid > 0.06, skid > 0.55 ? UI.bad : UI.gold);
-      y -= 11;
+      const lx = cx - DR - 6;
+      let ly = cy - 8;
+      const led = (label: string, on: boolean, col: string): void => {
+        textEdgeS(label, lx - textSW(label), ly, on ? col : 'rgba(87,201,176,0.28)');
+        ly += 8;
+      };
+      led(skid > 0.55 ? 'SLIP!' : 'SLIP', skid > 0.06, skid > 0.55 ? UI.bad : UI.gold);
+      led('SOL', rig.solarKw > rig.drawKw, UI.gold);
+      led('SVC', rig.svc, UI.edge);
     }
+    // ── the table: label over bar, right-aligned, no numbers ──
+    let y = cy - DR - 14;
+    const row = (label: string, lit: number, col: string, labelCol = UI.dim): void => {
+      textEdgeS(label, R - textSW(label), y, labelCol);
+      meter(R - BARW, y + 6, CELLS, lit, col, 2, 3, 1);
+      y -= 12;
+    };
+    // RIG, bottom group: the stocks the world spends.
+    row('SUSP', cells(rig.susp), rig.susp < 0.3 ? UI.bad : rig.susp < 0.6 ? UI.gold : UI.soft);
+    row('HULL', cells(rig.hull), rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft);
+    row('TYRE', cells(rig.tyre), rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft);
+    row('BATT', cells(rig.batt), rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good);
+    textEdgeS('RIG', R - textSW('RIG'), y, UI.edge);
+    y -= 11;
     // ENV, top group: what the world is doing to the rig.
-    row('WET', cells(wx.wet), wx.wet > 0.5 ? UI.bad : UI.edge, `${Math.round(wx.wet * 100)}%`, UI.soft);
+    row('WET', cells(wx.wet), wx.wet > 0.5 ? UI.bad : UI.edge);
     {
       const sname = surf === 'road' ? 'ROAD' : surf === 'track' ? 'TRACK' : surf === 'water' ? 'WATER' : 'ROUGH';
       const scol = surf === 'road' ? UI.good : surf === 'track' ? UI.edge : UI.hot;
-      row('SURF', cells(grip), scol, sname, scol);
+      row(sname, cells(grip), scol, scol);
     }
     {
       const w = WX[wx.sky];
       const hs = `${CARD8[Math.round(deg / 45) % 8]}${Math.round(deg)}`;
-      textEdgeS('ENV', Lx, y, UI.edge);
       textEdgeS(hs, R - textSW(hs), y, UI.gold);
-      const wl = w.label;
-      textEdgeS(wl, R - textSW(hs) - 5 - textSW(wl), y,
+      let lx = R - textSW(hs) - 5;
+      textEdgeS(w.label, lx - textSW(w.label), y,
         wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft);
+      lx -= textSW(w.label) + 5;
+      textEdgeS('ENV', lx - textSW('ENV'), y, UI.edge);
     }
   }
   // ── the job, as a modal ──
