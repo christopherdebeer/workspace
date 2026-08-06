@@ -16,6 +16,8 @@
  *    byte-identical to the request path; if `tileKey` drifts, every fill writes
  *    somewhere the edge never looks and every request is a miss.
  */
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { App, Stack } from 'aws-cdk-lib';
 import { Template, Match } from 'aws-cdk-lib/assertions';
 import * as s3 from 'aws-cdk-lib/aws-s3';
@@ -231,5 +233,32 @@ describe('ADR-0095 — the registry must not silently drop stack-shape fields', 
     expect(back.publicNamespace).toBeUndefined();
     expect(back.timeoutSeconds).toBeUndefined();
     expect(back.memoryMb).toBeUndefined();
+  });
+});
+
+/**
+ * The drive cell's HTML shell is a template literal, so a stray backtick in it
+ * — even inside a CSS comment — silently ends the string and the whole module
+ * stops parsing. That is invisible to `tsc` here (cells are not in the app
+ * tsconfig) and only surfaces as a FAILED DEPLOY, which is the worst place to
+ * find it. This costs a millisecond and catches the whole class.
+ */
+describe('drive cell shell', () => {
+  const src = readFileSync(join(__dirname, '..', 'cells', 'drive', 'index.ts'), 'utf8');
+
+  it('closes its template literal and carries a whole document', () => {
+    const m = src.match(/const SHELL = `([\s\S]*?)`;/);
+    expect(m).not.toBeNull();
+    const html = m![1];
+    expect(html).toContain('<!doctype html>');
+    expect(html).toContain('</html>');
+    expect(html).toContain('id="scene"');
+  });
+
+  it('has no backtick between the shell delimiters', () => {
+    const start = src.indexOf('const SHELL = `') + 'const SHELL = `'.length;
+    const end = src.indexOf('</html>', start);
+    expect(end).toBeGreaterThan(start);
+    expect(src.slice(start, end)).not.toContain('`');
   });
 });

@@ -70,8 +70,9 @@ const SHELL = `<!doctype html>
   #boot .t { font-size: 1.05rem; color: #f5c453; letter-spacing: 0.3em; }
   #boot .s { font-size: 0.72rem; opacity: 0.65; max-width: 34ch; line-height: 1.5; }
   /* The world is up. There is no tap to wait for any more — the menu behind
-     this overlay IS the start screen — so `ready` is a state marker rather
-     than a prompt, and `done` lifts the overlay off it. */
+     this overlay IS the start screen — so 'ready' is a state marker rather
+     than a prompt, and 'done' lifts the overlay off it. NO BACKTICKS IN HERE:
+     this whole shell is a template literal, and one closes it. */
   #boot.ready .s { color: #6fe0c0; letter-spacing: 0.22em; text-transform: uppercase; }
 </style>
 </head>
