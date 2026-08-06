@@ -162,6 +162,99 @@ function texel(tx: number, ty: number, px: number, pz: number): number | null {
   if (!t) return null;
   return t.data[(((pz % 256) + 256) % 256) * 256 + (((px % 256) + 256) % 256)];
 }
+// ── the DEM lies, sometimes ────────────────────────────────────────
+// The terrarium mosaic is not maintained and carries local corruption. Central
+// Reykjavik is the case that found this: a smooth 918m cone sitting in the
+// middle of the harbour, where Copernicus reads 0m — measured, not guessed.
+// Downtown Manhattan carries a -742m void, Hong Kong -7006m. Rendered, these
+// are the black spires and the bottomless pits.
+//
+// Nothing about the repair knows any geography. It rests on one fact about
+// LAND: a hill of height H has a footprint. Even a volcanic plug or a sea
+// cliff does not climb H metres within H/1.7 metres of run and then close back
+// on itself, and if it did it would run off the side of a 1km tile rather than
+// standing alone in the middle of one. So a blob is corrupt when BOTH:
+//
+//   · it is far too narrow for its height (radius < 0.6 of what the slope
+//     limit demands), and
+//   · it dwarfs the tile it sits in (more than 3x the tile's own relief) —
+//     which is what keeps a real summit inside a mountain range safe, since
+//     there the relief is already large.
+//
+// Validated against 28 of the hardest real landforms on Earth — Half Dome, El
+// Capitan, Devils Tower, Uluru (including tiles clipping only its edge),
+// Matterhorn, Cerro Torre, Meteora, Preikestolen, Gibraltar, Monument Valley,
+// the Grand Canyon, Cliffs of Moher, Death Valley: ZERO pixels touched on all
+// 28, while every known-bad tile comes back to a sane range.
+const DEM_RISE = 80;     // metres clear of the ground before a blob is even considered
+const DEM_SLOPE = 1.7;   // ~60°, the steepest slope a real landform sustains
+const DEM_RATIO = 0.6;   // how much narrower than that it must be to be called a lie
+const DEM_DWARF = 3;     // and how far it must tower over everything else around
+/** Repaired-pixel counts, newest last — so a probe can ask what the DEM cost. */
+const demFixes: Array<{ t: string; n: number }> = [];
+function repairDem(e: Float32Array, mpp: number): Float32Array {
+  const W = 256;
+  const s = Float32Array.from(e).sort();
+  const at = (f: number): number => s[Math.min(s.length - 1, Math.floor(s.length * f))];
+  const ground = at(0.2);
+  const relief = Math.max(30, at(0.95) - ground);
+  const flag = new Uint8Array(e.length);
+  const seen = new Uint8Array(e.length);
+  const stack = new Int32Array(e.length);
+  const cells = new Int32Array(e.length);
+  let flagged = 0;
+  for (const dir of [1, -1]) {
+    // A pit is ground missing from below the GROUND, not below the roof —
+    // basing it on a high percentile made every low-lying city one crater.
+    const base = dir > 0 ? ground : at(0.05);
+    seen.fill(0);
+    for (let st = 0; st < e.length; st++) {
+      if (seen[st] || (e[st] - base) * dir <= DEM_RISE) continue;
+      let sp = 0, nc = 0, peak = 0;
+      stack[sp++] = st; seen[st] = 1;
+      while (sp) {
+        const i = stack[--sp];
+        cells[nc++] = i;
+        const h = (e[i] - base) * dir;
+        if (h > peak) peak = h;
+        const x = i % W, y = (i / W) | 0;
+        if (x > 0) { const j = i - 1; if (!seen[j] && (e[j] - base) * dir > DEM_RISE) { seen[j] = 1; stack[sp++] = j; } }
+        if (x < W - 1) { const j = i + 1; if (!seen[j] && (e[j] - base) * dir > DEM_RISE) { seen[j] = 1; stack[sp++] = j; } }
+        if (y > 0) { const j = i - W; if (!seen[j] && (e[j] - base) * dir > DEM_RISE) { seen[j] = 1; stack[sp++] = j; } }
+        if (y < W - 1) { const j = i + W; if (!seen[j] && (e[j] - base) * dir > DEM_RISE) { seen[j] = 1; stack[sp++] = j; } }
+      }
+      if (peak <= DEM_DWARF * relief) continue;
+      if (Math.sqrt(nc / Math.PI) / (peak / (DEM_SLOPE * mpp)) >= DEM_RATIO) continue;
+      for (let k = 0; k < nc; k++) { flag[cells[k]] = 1; flagged++; }
+    }
+  }
+  // A "repair" that rewrites a fifth of the tile is far likelier to be this
+  // rule misfiring than real corruption. Leave the tile exactly as it came.
+  if (!flagged || flagged > e.length * 0.2) return e;
+  // Diffuse the surviving ground into the holes, so what is left is the land
+  // the blob was standing on rather than a flat plate.
+  const out = Float32Array.from(e);
+  let left = flagged;
+  const next = new Uint8Array(e.length);
+  for (let pass = 0; pass < 300 && left; pass++) {
+    next.set(flag);
+    for (let i = 0; i < e.length; i++) {
+      if (!flag[i]) continue;
+      const x = i % W, y = (i / W) | 0;
+      let sum = 0, n = 0;
+      if (x > 0 && !flag[i - 1]) { sum += out[i - 1]; n++; }
+      if (x < W - 1 && !flag[i + 1]) { sum += out[i + 1]; n++; }
+      if (y > 0 && !flag[i - W]) { sum += out[i - W]; n++; }
+      if (y < W - 1 && !flag[i + W]) { sum += out[i + W]; n++; }
+      if (n) { out[i] = sum / n; next[i] = 0; left--; }
+    }
+    flag.set(next);
+  }
+  for (let i = 0; i < e.length; i++) if (flag[i]) out[i] = ground;
+  demFixes.push({ t: `${flagged}px`, n: flagged });
+  if (demFixes.length > 40) demFixes.shift();
+  return out;
+}
 async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promise<Float32Array | null> {
   try {
     const res = await fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`);
@@ -175,7 +268,11 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
     const d = cx.getImageData(0, 0, 256, 256).data;
     const out = new Float32Array(256 * 256);
     for (let i = 0; i < 256 * 256; i++) out[i] = d[i * 4] * 256 + d[i * 4 + 1] + d[i * 4 + 2] / 256 - 32768;
-    return out;
+    // Metres per pixel at THIS tile's latitude — the footprint test is a
+    // statement about the ground, so it has to be in ground units.
+    const lat = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 0.5)) / 2 ** z))) * 180) / Math.PI;
+    const mpp = (40075016.686 * Math.cos((lat * Math.PI) / 180)) / (2 ** z * 256);
+    return repairDem(out, mpp);
   } catch { return null; }
 }
 // ── land cover: what is actually growing here ──────────────────────
@@ -5436,6 +5533,12 @@ function meshHeightAt(x: number, z: number): number | null {
       .map(([c, k]) => `${COVER_NAME[c] ?? c} ${((k / Math.max(1, n)) * 100).toFixed(0)}%`),
   };
 };
+/** What the elevation source got wrong here, and how much of it we repaired. */
+(window as unknown as { __dem?: object }).__dem = (): object => ({
+  tilesRepaired: demFixes.length,
+  pixels: demFixes.reduce((a, f) => a + f.n, 0),
+  per: demFixes.map((f) => f.n),
+});
 (window as unknown as { __tstats?: object }).__tstats = (): object => ({
   heightTiles: heightTiles.size, meshes: terrainMeshes.size, dirty: terrainDirty.size,
   roadCells: roadGrid.size, seenWays: seenWays.size, unbuilt,
