@@ -18,6 +18,7 @@ import * as THREE from 'three';
 
 // ── tuning ─────────────────────────────────────────────────────────
 const TERRAIN_Z = 14;         // terrarium tile zoom (~2.4km/cos(lat), ~9.5m/px — z13 washed out the hills roads tunnel through)
+const TERRAIN_SEG = 128;      // terrain mesh vertices per tile edge — sets the cell the road cut must out-span
 const OSM_Z = 16;             // overpass tile zoom (~600m — keeps per-query weight low)
 const OSM_RING = 1;           // load a (2R+1)² neighbourhood of vector tiles
 const TERRAIN_RING = 2;       // wider ring at the finer zoom keeps the horizon populated
@@ -783,7 +784,7 @@ const terrainReady = new Map<string, Promise<void>>(); // per-tile load promise
 const terrainMeshes = new Map<string, THREE.Mesh>();
 function buildTerrainMesh(t: HeightTile): void {
   const key = `${t.tx}/${t.ty}`;
-  const SEG = 96;
+  const SEG = TERRAIN_SEG;
   const geo = new THREE.PlaneGeometry(t.w, t.h, SEG, SEG);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -815,7 +816,7 @@ function buildTerrainMesh(t: HeightTile): void {
   terrainMeshes.set(key, mesh);
   worldGroup.add(mesh);
 }
-// Rebuilds are not free — 9409 vertices, each sampling the heightfield and
+// Rebuilds are not free — 16.6k vertices, each sampling the heightfield and
 // asking the road grid whether it is in a cutting. A tile arriving used to
 // rebuild all eight neighbours SYNCHRONOUSLY, and roads now want rebuilds too,
 // so they queue instead and the main loop spends one per frame on them.
@@ -2347,18 +2348,32 @@ function roadHeightAt(x: number, z: number): number | null {
 //   UP   — the terrain is cut back out of the corridor, so nothing stands in
 //          the road's airspace. The cut is graded outward into a bank rather
 //          than left as a wall.
-// The ceiling sits BELOW the tarmac across the carriageway and rises at the
-// batter beyond the kerb, so the corridor's guaranteed clear airspace is ~3.2m
-// over the road and for five metres either side of it before a bank may start.
-const CUT_BATTER = 0.62;   // rise per metre out from the kerb — a ~32° cut face
-const CUT_REACH = 14;      // how far out the cut grades before nature resumes
+// The ceiling sits BELOW the tarmac across the carriageway and rises beyond
+// the kerb — but NOT at the batter straight away, and the reason is the
+// terrain mesh's own sampling. The cut lives in a FIELD; the mesh samples it
+// at TERRAIN_SEG vertices per tile (~16m apart) and draws straight triangles
+// between them. A ceiling that rises 32° from the kerb permits a vertex 10m
+// out to stand 6m over the road, and the chord from there to the far side
+// bridges clean over the corridor: Natural Bridge Road measured 5.6% of its
+// length under such chords, the truck roof-deep in a hillside that the field
+// said was cut. So the ceiling holds a near-flat BENCH (a 1.7° wash, enough
+// to shed the dead-level look) out to the mesh cell diagonal — every corner
+// of every triangle a road can pass through is inside that distance, so no
+// chord can stand higher than wash·slack ≈ 0.7m below the road surface — and
+// only beyond the bench does the 32° batter climb away.
+const CUT_BATTER = 0.62;   // rise per metre out past the bench — a ~32° cut face
+const CUT_WASH = 0.03;     // the bench's own fall, kerb to lip
+const CUT_TAIL = 14;       // how far past the bench the batter grades before nature resumes
+const CUT_REACH = 14;      // tracks only: a worn groove, not an engineered cutting
+let CUT_SLACK = 23;        // bench width — the mesh cell diagonal, set from the origin latitude
 // The highest the ground is allowed to stand at (x,z), or null where no road
 // has an opinion. Tunnels are excluded: being buried is the entire point of
 // one, and carving their corridor would open every tunnel into a trench.
 function roadCeiling(x: number, z: number): number | null {
   let best: number | null = null;
-  const cx0 = Math.floor((x - CUT_REACH) / GRID), cx1 = Math.floor((x + CUT_REACH) / GRID);
-  const cz0 = Math.floor((z - CUT_REACH) / GRID), cz1 = Math.floor((z + CUT_REACH) / GRID);
+  const R = CUT_SLACK + CUT_TAIL + 2;
+  const cx0 = Math.floor((x - R) / GRID), cx1 = Math.floor((x + R) / GRID);
+  const cz0 = Math.floor((z - R) / GRID), cz1 = Math.floor((z + R) / GRID);
   for (let cx = cx0; cx <= cx1; cx++) for (let cz = cz0; cz <= cz1; cz++) {
     const arr = roadGrid.get(`${cx},${cz}`);
     if (!arr) continue;
@@ -2367,13 +2382,17 @@ function roadCeiling(x: number, z: number): number | null {
       const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
       const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
       const d = Math.hypot(x - (seg.ax + dx * t), z - (seg.az + dz * t));
-      // A track is worn, not engineered: it gets a narrow, shallow cut so a
-      // hillside path reads as a groove rather than a road cutting.
-      const reach = seg.tk ? CUT_REACH * 0.45 : CUT_REACH;
       const out = d - (seg.hw + 0.6);
-      if (out > reach) continue;
+      // A track is worn, not engineered: it keeps its narrow, shallow groove
+      // rather than a benched cutting. It also FOLLOWS the terrain instead of
+      // holding a profile, so the chord problem the bench exists for cannot
+      // bury one.
+      if (seg.tk ? out > CUT_REACH * 0.45 : out > CUT_SLACK + CUT_TAIL) continue;
       const y = seg.ya + (seg.yb - seg.ya) * t;
-      const ceil = y - 0.3 + Math.max(0, out) * (seg.tk ? CUT_BATTER * 1.7 : CUT_BATTER);
+      const ceil = seg.tk
+        ? y - 0.3 + Math.max(0, out) * CUT_BATTER * 1.7
+        : y - 0.3 + Math.min(Math.max(out, 0), CUT_SLACK) * CUT_WASH
+          + Math.max(0, out - CUT_SLACK) * CUT_BATTER;
       if (best === null || ceil < best) best = ceil;
     }
   }
@@ -6892,6 +6911,10 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
 (async () => {
   const spawn = await findSpawn();
   origin = { lat: spawn.lat, lon: spawn.lon, mLon: M_LAT * Math.cos((spawn.lat * Math.PI) / 180) };
+  // The bench must span the terrain mesh's cell diagonal — the farthest any
+  // triangle corner can sit from a road passing through it. Tile ground width
+  // shrinks with cos(latitude), so this is a per-world number, not a constant.
+  CUT_SLACK = ((40075016.7 / 2 ** TERRAIN_Z) * Math.cos((spawn.lat * Math.PI) / 180) / TERRAIN_SEG) * Math.SQRT2;
   placeLabel = spawn.name ?? '…';
   renderPlace();
   // Resume orientation and camera from the URL (written live while driving).
