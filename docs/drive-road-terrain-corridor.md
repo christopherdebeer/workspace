@@ -100,12 +100,14 @@ sampleHeight(x,z)  the heightfield — the ground with no roads in it
 groundAt(x,z)      = min(sampleHeight, roadCeiling) — what is drawn and driven
 ```
 
-Everything in the world goes through `groundAt`: the terrain mesh, the wheels,
-the scatter, vegetation, POI markers, camera occlusion. **`ribbon()` is the
-only consumer of the raw field** — and `ribbon()` is what decides the road
-surface, the apron depth, the deck-versus-bank classification, the pier
-bottoms, the rail placement and the sign footings. Every one of those is sized
-against a ground that stops existing the moment the road is built.
+Everything that has to agree on where the visible surface *is* goes through
+`groundAt`: the terrain mesh, the wheels, the scatter, vegetation, POI markers,
+camera occlusion. **`ribbon()` reads the raw field instead** — and `ribbon()`
+is what decides the road surface, the apron depth, the deck-versus-bank
+classification, the pier bottoms, the rail placement and the sign footings.
+Every one of those is sized against a ground that stops existing the moment the
+road is built. (Building footprints read the raw field too, but a building sits
+on ground no road has an opinion about far more often than a road does.)
 
 That mismatch is what turns the trench into a visible hole. It is also
 load-order dependent: a road built early sizes its skirt against raw terrain, a
