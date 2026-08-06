@@ -2403,7 +2403,12 @@ function roadHeightAt(x: number, z: number): number | null {
 // chord can stand higher than wash·slack ≈ 0.7m below the road surface — and
 // only beyond the bench does the 32° batter climb away.
 const CUT_BATTER = 0.62;   // rise per metre out past the bench — a ~32° cut face
-const CUT_WASH = 0.03;     // the bench's own fall, kerb to lip
+// The bench lip must finish below the road SURFACE, and the surface just came
+// down from profile+0.6 to profile+0.22. At 0.03 the lip rose 0.66m over a
+// 22m bench — a third of a metre ABOVE the new tarmac, which would bury the
+// road the bench exists to protect. 0.008 keeps it ~0.3m clear at every
+// latitude while still shedding the dead-level look.
+const CUT_WASH = 0.008;    // the bench's own fall, kerb to lip
 const CUT_TAIL = 14;       // how far past the bench the batter grades before nature resumes
 const CUT_REACH = 14;      // tracks only: a worn groove, not an engineered cutting
 let CUT_SLACK = 23;        // bench width — the mesh cell diagonal, set from the origin latitude
@@ -3210,14 +3215,16 @@ function renderWays(els: OsmWay[]): void {
       // whole way. Tracks now carry their own grip, and are drawn as ruts.
       const track = ['track', 'path', 'bridleway', 'cycleway', 'footway'].includes(tags.highway);
       const stairs = tags.highway === 'steps';   // nothing drives up steps
-      // Curb-scale lifts (was 1.6m — roads read as elevated causeways). The
-      // stack keeps its z-order: green 0.2 < water 0.3 < track 0.5 < road 0.6.
+      // These MUST equal SURFACE[].lift — the ribbon is drawn at profile+lift
+      // and the tyre sits at profile+lift, so a disagreement is a truck
+      // hovering over its own road. Stack order: green .08 < water .12 <
+      // track .18 < road .22.
       const mode: RoadMode = track || stairs ? 'none'
         : tags.tunnel && tags.tunnel !== 'no' ? 'tunnel'
         : tags.bridge && tags.bridge !== 'no' ? 'bridge'
         : 'auto';
       ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : MAT.road,
-        track || stairs ? 0.5 : 0.6, !stairs, mode, track, tags.name);
+        track || stairs ? 0.18 : 0.22, !stairs, mode, track, tags.name);
       if (unbuilt !== refusedAt) { seenWays.delete(dk); continue; }
       // Steps are named and drawn but nothing drives them, so they earn no
       // checkpoints — a road you cannot survey should not sit in the log.
@@ -3225,9 +3232,9 @@ function renderWays(els: OsmWay[]): void {
     } else if (tags.building) {
       building(pts, el.id, parseFloat(tags['building:levels'] ?? '') || 2);
     } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
-      polygon(pts, MAT.water, 0.45, 0, 'water');
+      polygon(pts, MAT.water, 0.12, 0, 'water');
     } else {
-      polygon(pts, MAT.green, 0.2);
+      polygon(pts, MAT.green, 0.08);
       scatterVeg(pts, el.id, tags);
     }
   }
@@ -4568,6 +4575,68 @@ function stepReal(dt: number): boolean {
   graze.map((c) => ({ x: +c.x.toFixed(1), z: +c.z.toFixed(1), sp: ['deer', 'bison', 'horse'][c.sp] }));
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z) });
+/** The nearest drivable centreline: how far OUTSIDE its kerb this point is
+ *  (negative on the carriageway), and the road's own surface height there. */
+function roadEdge(x: number, z: number): { out: number; y: number; track: boolean } | null {
+  let best: { out: number; y: number; track: boolean } | null = null;
+  for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
+    if (seg.ya === undefined || seg.yb === undefined) continue;
+    const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
+    const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    const d = Math.hypot(x - (seg.ax + dx * t), z - (seg.az + dz * t));
+    const out = d - seg.hw;
+    if (!best || out < best.out) best = { out, y: seg.ya + (seg.yb - seg.ya) * t, track: !!seg.tk };
+  }
+  return best;
+}
+/** Where a tyre sits, as ONE CONTINUOUS FIELD.
+ *
+ * The old version switched between the road profile and the terrain on a hard
+ * in/out test and added a different constant to each — so a wheel crossing a
+ * kerb teleported. Measured on Ou Kaapse Weg: 1.09m in a single 0.5m step,
+ * of which 0.35m was nothing but the two lift constants disagreeing. Those
+ * constants are a RENDER z-order device (green under water under track under
+ * road, so draped layers do not fight for depth); reusing them as a wheel
+ * offset turned the draw order into a kerb the suspension had to climb.
+ *
+ * Now the road's surface is faired into the verge over KERB_FAIR metres with
+ * a smoothstep, which is what a real shoulder is anyway.
+ */
+const KERB_FAIR = 2.2;
+function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
+  const gnd = groundAt(x, z) + SURFACE.ground.lift;
+  if (sk === 'water') {
+    let g = groundAt(x, z);
+    const sl = seaLevelY();
+    if (sl !== null) g = Math.max(g, sl - 0.45);
+    return g - WHEEL_R * 0.85 + SURFACE.water.lift;
+  }
+  const e = roadEdge(x, z);
+  if (!e || e.out > KERB_FAIR) return gnd;
+  // The tunnel guard, kept: a road chording under a hill must not drag the
+  // wheels down to it just because the corridor is overhead.
+  if (Math.abs(e.y - near) > 4) return gnd;
+  const top = e.y + (e.track ? SURFACE.track.lift : SURFACE.road.lift);
+  const t = clamp(1 - e.out / KERB_FAIR, 0, 1);
+  return gnd + (top - gnd) * (t * t * (3 - 2 * t));
+}
+/** The height a WHEEL would sit at here — the same expression the suspension
+ *  uses, so a probe can walk across a kerb and read the step the tyres feel
+ *  rather than the one the eye reports. */
+(window as unknown as { __rig?: object }).__rig = (): object => ({
+  batt: +rig.batt.toFixed(3), solarKw: +rig.solarKw.toFixed(2), drawKw: +rig.drawKw.toFixed(2),
+  tyre: +rig.tyre.toFixed(4), hull: +rig.hull.toFixed(4), susp: +rig.susp.toFixed(2),
+  accel: +rig.accel.toFixed(2),
+});
+(window as unknown as { __rigset?: object }).__rigset = (o: Partial<typeof rig>): void => { Object.assign(rig, o); };
+(window as unknown as { __contact?: object }).__contact = (x: number, z: number): object => {
+  const sk = surfaceAt(x, z);
+  const e = roadEdge(x, z);
+  return {
+    surface: sk, contact: +tyreHeight(x, z, sk, groundAt(x, z)).toFixed(3),
+    base: +groundAt(x, z).toFixed(3), out: e ? +e.out.toFixed(2) : null,
+  };
+};
 // The truck's ACTUAL dimensions, MEASURED off the built scene graph rather
 // than off the arithmetic that was supposed to produce them. The vehicle panel
 // in the menu shows these beside the sheet's targets, so the model can be
@@ -5651,13 +5720,18 @@ const writeUrl = (la: number, lo: number): void => {
 // drift model. `lat` is how fast that sideways velocity scrubs off — tarmac
 // bites and recovers, gravel keeps sliding.
 const SURFACE = {
-  road: { max: 50, drag: 0.28, lift: 0.6, rough: 0.015, mu: 1.05, lat: 6.5 },
+  // `lift` is how far a tyre sits above the sampled surface. It doubles as the
+  // draped layers' z-order, so the two must agree or the truck floats over the
+  // road it is drawn on — but at 0.6/0.5/0.25 the stack was CURB HEIGHT, and
+  // every road became a platform to climb onto. Compressed to real kerb scale;
+  // the ordering that keeps green under water under track under road survives.
+  road: { max: 50, drag: 0.28, lift: 0.22, rough: 0.015, mu: 1.05, lat: 6.5 },
   // The middle tier: a graded dirt track. Equilibrium speed is accel/drag, so
   // 0.36 sits it between tarmac's 57m/s and open ground's 32 — quick enough
   // that finding a track is a relief, rough enough that it is not a road.
-  track: { max: 40, drag: 0.36, lift: 0.5, rough: 0.07, mu: 0.8, lat: 5 },
-  ground: { max: 32, drag: 0.5, lift: 0.25, rough: 0.16, mu: 0.6, lat: 3.2 }, // monster truck: off-road is its element
-  water: { max: 3.5, drag: 3.5, lift: 0.3, rough: 0.05, mu: 0.3, lat: 2 },
+  track: { max: 40, drag: 0.36, lift: 0.18, rough: 0.07, mu: 0.8, lat: 5 },
+  ground: { max: 32, drag: 0.5, lift: 0.10, rough: 0.16, mu: 0.6, lat: 3.2 }, // monster truck: off-road is its element
+  water: { max: 3.5, drag: 3.5, lift: 0.12, rough: 0.05, mu: 0.3, lat: 2 },
 } as const;
 // Deterministic washboard: bumps live in the WORLD (wavelengths ~2–4m), so
 // shake frequency scales with speed and each wheel rides its own profile.
@@ -5681,6 +5755,41 @@ let gradePitch = 0, gradeRoll = 0, slideV = 0;
 // How hard the tyres are currently being asked to work beyond what they have
 // (0 = planted, 1 = fully away). Drives the squeal, the dust, and the HUD.
 let skid = 0;
+let rigPrevV = 0;
+// ── the rig's own condition ────────────────────────────────────────
+// Every one of these is INTEGRATED FROM WHAT ACTUALLY HAPPENS, because a gauge
+// that moves on a timer is worse than no gauge: it teaches you to ignore the
+// instruments. Battery is a real energy balance against the sheet's 2.4kW
+// array and 10kWh pack; tyres wear on slip and rough ground; the hull takes
+// what the barriers and the landings give it; suspension is live travel.
+const rig = {
+  batt: 1,        // state of charge, 0..1
+  solarKw: 0,     // what the array is making right now
+  drawKw: 0,      // what the drive is taking
+  tyre: 1,        // tread left
+  hull: 1,        // bodywork
+  susp: 0,        // live |travel| used, 0..1
+  accel: 0,       // m/s², smoothed — what the driver feels
+};
+const BATT_KWH = 10, SOLAR_KW = 2.4;
+function stepRig(dt: number, v: number, sk: Surface, sunUp: number): void {
+  if (dt <= 0) return;
+  // Solar: the array only makes power with the sun up and the sky open.
+  rig.solarKw = SOLAR_KW * clamp(sunUp, 0, 1) * (1 - wx.cloud * 0.65);
+  // Draw: a standing load plus a square law on speed. Tuned so a full pack
+  // runs about three hours flat out, and daylight cruising roughly breaks
+  // even — which is the whole point of a solar overlander.
+  rig.drawKw = 0.3 + (v / 28) ** 2 * 2.7;
+  rig.batt = clamp(rig.batt + ((rig.solarKw - rig.drawKw) * (dt / 3600)) / BATT_KWH, 0, 1);
+  // Tread goes to slip first and abrasion second; rock and gravel eat it far
+  // faster than tarmac.
+  const abrasive = sk === 'road' ? 0.02 : sk === 'track' ? 0.12 : 0.2;
+  rig.tyre = clamp(rig.tyre - (skid * 0.004 + (v / 28) * abrasive * 0.00012) * dt * 60, 0, 1);
+}
+/** A hit worth remembering. `sq` is how square it was, 0 a graze and 1 head-on. */
+function rigImpact(sq: number, v: number): void {
+  rig.hull = clamp(rig.hull - sq * clamp(v / 20, 0, 1) * 0.02, 0, 1);
+}
 // The drivetrain's own state, separate from road speed — which is the point:
 // with the wheels off the ground they are no longer the same number.
 let engRev = 0, engGear = 0;
@@ -5845,7 +5954,10 @@ function tick(now: number): void {
     }
     if (!hit) break;
   }
-  if (scrape >= 0) state.speed *= Math.exp(-5 * scrape * dt);
+  if (scrape >= 0) {
+    state.speed *= Math.exp(-5 * scrape * dt);
+    rigImpact(scrape, Math.abs(state.speed));
+  }
   // ── suspension: the truck LIES on the terrain via 4 wheel contacts ──
   const sinH = Math.sin(state.heading), cosH = Math.cos(state.heading);
   const contacts: number[] = [];
@@ -5866,25 +5978,14 @@ function tick(now: number): void {
     const sk = surfaceAt(wxw, wzw);
     wheelWorld.push([wxw, wzw]);
     wheelSurf.push(sk);
-    // groundAt, not sampleHeight: where a road is cut into a hillside the
-    // terrain has been carved back, and the wheels must ride what is drawn.
-    let g = groundAt(wxw, wzw);
-    if (sk === 'road') {
-      // Ride the ROAD's profile (tunnel chords included) — but only near the
-      // car's current level, so the hill above a tunnel doesn't swallow us.
-      const rh = roadHeightAt(wxw, wzw);
-      if (rh !== null && Math.abs(rh - (prevGround ?? g)) < 4) g = rh;
-    } else if (sk === 'water') {
-      // Float LOW. The truck wades rather than skims: the hull settles until
-      // the water is up around the axles, which is why the splashes shrink —
-      // there is far less wheel left above the surface to throw anything.
-      { const sl = seaLevelY(); if (sl !== null) g = Math.max(g, sl - 0.45); }   // the surface, not the seabed
-      g -= WHEEL_R * 0.85;
-    }
+    // ONE continuous field, lift already folded in — see tyreHeight. The kerb
+    // is faired rather than stepped, so a wheel crossing it is a shoulder and
+    // not a stair.
+    const g = tyreHeight(wxw, wzw, sk, prevGround ?? groundAt(wxw, wzw));
     rawSum += g;
     const sw = SURFACE[sk];
-    smooth.push(g + sw.lift);
-    contacts.push(g + sw.lift + roughNoise(wxw, wzw) * sw.rough);
+    smooth.push(g);
+    contacts.push(g + roughNoise(wxw, wzw) * sw.rough);
   }
   prevGround = rawSum / 4;
   const [cFL, cFR, cRL, cRR] = smooth;
@@ -6042,6 +6143,17 @@ function tick(now: number): void {
   }
   if (wildlifeOn) stepWildlife(dt);
   stepOdo(dt, now);
+  // The rig's condition, from the frame that just happened. SUN_DIR.y is the
+  // sun's elevation, so it doubles as "is the array making anything".
+  {
+    const prevV = rigPrevV; rigPrevV = state.speed;
+    if (dt > 0) rig.accel += ((state.speed - prevV) / dt - rig.accel) * Math.min(1, 6 * dt);
+    // Normalised by the LARGER of bump and droop: droop is 0.34 against 0.26
+    // of travel, so dividing by travel alone pegged the gauge at 1.31 sitting
+    // still on a crest.
+    rig.susp = Math.max(...wheelPivots.map((w) => Math.abs(w.position.y))) / Math.max(SUSP.travel, SUSP.droop);
+    stepRig(dt, Math.abs(state.speed), surfKind, SUN_DIR.y * (1 - wx.cloud * 0.2));
+  }
   stepMission(now);
   stepSurvey(now);
   // THE CAR IS EVIDENCE TOO. Dry-land proof used to come only from a ribbon
@@ -7072,43 +7184,12 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
   // Drawn LATER (mid-top, see below); this only clears last frame's hit target.
   missionRect = { x: 0, y: 0, w: 0, h: 0 };
   const mx = pad;
-  // Floor sized so the widest weather word (STORM) and the widest bearing
-  // (NE270) both fit whole on one line with air between them.
-  const CONDW = Math.max(82, mw + 16);
-  const condH = 42;
-  const sy = my - condH - 3;
-  // ── conditions: surface, grip, weather, wetness, heading ──
-  panel(pad, sy, CONDW, condH);
-  const sname = surf === 'road' ? 'ROAD' : surf === 'track' ? 'TRACK' : surf === 'water' ? 'WATER' : 'ROUGH';
-  const scol = surf === 'road' ? UI.good : surf === 'track' ? UI.edge : UI.hot;
-  textSmall(hctx, 'SURFACE', pad + 3, sy + 3, UI.dim);
-  glowText(sname, pad + 3, sy + 10, scol);
-  meter(pad + 3, sy + 18, 10, Math.round(clamp(grip, 0, 1) * 10), scol, 3, 3, 1);
-  {
-    // Weather belongs with the other things that decide how the truck behaves,
-    // not floating under the place name where it read as a caption.
-    const w = WX[wx.sky];
-    const wcol = wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft;
-    textSmall(hctx, 'WEATHER', pad + 3, sy + 25, UI.dim);
-    // The bearing rides on the weather line, not the wet line: beside a bar it
-    // had four pixels of air and read as part of the meter.
-    const hs = `${CARD8[Math.round(deg / 45) % 8]}${Math.round(deg)}`;
-    // Two readouts on one line need a hard divider between them, or CLEAR and
-    // W290 butt together into one word. Clip the label, never the bearing.
-    const hx = pad + CONDW - textSW(hs) - 4;
-    textSmall(hctx, fitS(w.label, hx - (pad + 34) - 4), pad + 34, sy + 25, wcol);
-    textSmall(hctx, hs, hx, sy + 25, UI.gold);
-    // Standing water is grip you have already lost — worth its own bar.
-    textSmall(hctx, 'WET', pad + 3, sy + 34, UI.dim);
-    meter(pad + 20, sy + 34, 12, Math.round(clamp(wx.wet, 0, 1) * 12), wx.wet > 0.5 ? UI.bad : UI.edge, 3, 3, 1);
-    // Grip you are losing RIGHT NOW. Only shown while it is happening — a
-    // permanently empty bar is noise, and this line is the one you glance at
-    // mid-corner.
-    if (skid > 0.06) {
-      const s = `SLIP${skid > 0.55 ? '!' : ''}`;
-      textSmall(hctx, s, pad + CONDW - textSW(s) - 4, sy + 34, skid > 0.55 ? UI.bad : UI.gold);
-    }
-  }
+  // The conditions used to sit in a boxed panel above the chart, bottom LEFT,
+  // with the speedometer alone in the opposite corner — so reading "what am I
+  // driving on" and "how fast" was a glance across the whole screen. Both are
+  // answers about the vehicle, and they now share one corner. Drawn bare, with
+  // the one-pixel ink outline the world labels use: a black box over a game
+  // this dark is a hole in the picture, and none of this is a control.
   // ── the chart / POV dock ──
   const chart = camMode === 'top';
   if (chart) frame(mx, my, mw, mw, UI.dim);
@@ -7177,18 +7258,91 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
       }
     }
   }
-  // ── speed, bottom-right ──
-  const digits = String(kmh);
-  const sw = textW(digits, 2) + textW('KM/H') + 12;
-  const sx = HW - sw - pad, spy = HH - 20 - pad;
-  panel(sx, spy, sw, 18, UI.gold);
-  glowText(digits, sx + 4, spy + 3, UI.gold, 2);
-  text(hctx, 'KM/H', sx + 8 + textW(digits, 2), spy + 9, UI.edge);
-  // The odometer rides above the speed, in the micro face — it is a number you
-  // glance at between drives, not one you read at 90km/h.
+  // ── the rig, bottom-right ──
+  // One stack, built from the bottom up so the speed always sits in the same
+  // place however many rows are above it. Everything is right-aligned to the
+  // same edge and drawn bare — no fill, no frame — so the world reads through
+  // the instruments instead of being punched out behind them.
   {
-    const o = fmtKm(odo.total);
-    textEdgeS(o, HW - textSW(o) - pad - 1, spy - 8, UI.soft);
+    const R = HW - pad;                      // the shared right edge
+    let y = HH - pad - 15;
+    // SPEED, biggest thing on the screen and the only one at 2x.
+    const digits = String(kmh);
+    const unitW = textSW('KM/H');
+    textEdgeS('KM/H', R - unitW, y + 9, UI.edge);
+    glowText(digits, R - unitW - 3 - textW(digits, 2), y, UI.gold, 2);
+    // ACCELERATION, as a signed bar growing from the middle: what the truck is
+    // doing to you right now, which the number alone never conveys.
+    y -= 8;
+    {
+      const a = clamp(rig.accel / 6, -1, 1);
+      const cells = 10, mid = R - cells * 3;
+      hctx.fillStyle = UI.dim;
+      for (let i = 0; i < cells; i++) hctx.fillRect(mid + i * 3, y + 3, 2, 1);
+      const n = Math.round(Math.abs(a) * (cells / 2));
+      hctx.fillStyle = a >= 0 ? UI.good : UI.hot;
+      for (let i = 0; i < n; i++) {
+        const c = a >= 0 ? cells / 2 + i : cells / 2 - 1 - i;
+        hctx.fillRect(mid + c * 3, y + 1, 2, 3);
+      }
+      textEdgeS('ACCEL', mid - textSW('ACCEL') - 4, y, UI.dim);
+    }
+    // The rig's condition. A bar each, and the label only in the micro face —
+    // these are glanced at, not read.
+    const barR = (label: string, frac: number, col: string, note?: string): void => {
+      y -= 8;
+      const cells = 10;
+      meter(R - cells * 3, y + 1, cells, Math.round(clamp(frac, 0, 1) * cells), col, 2, 3, 1);
+      let lx = R - cells * 3 - 4;
+      if (note) { textEdgeS(note, lx - textSW(note), y, col); lx -= textSW(note) + 4; }
+      textEdgeS(label, lx - textSW(label), y, UI.dim);
+    };
+    // Only what is worth a row. A full tank and an undamaged hull say nothing,
+    // so they stay quiet until they have something to report — the screen
+    // earns its density back when the rig starts costing you something.
+    if (rig.hull < 0.97) barR('HULL', rig.hull, rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft);
+    if (rig.tyre < 0.97) barR('TYRE', rig.tyre, rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft);
+    // Suspension is a LIVE reading, not a stock: shown only while it is
+    // actually working, or it is a bar twitching at you for the whole drive.
+    if (rig.susp > 0.55) barR('SUSP', rig.susp, rig.susp > 0.9 ? UI.hot : UI.soft);
+    barR('BATT', rig.batt, rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good,
+      rig.solarKw > rig.drawKw ? '+SOL' : undefined);
+    // ── conditions, same stack ──
+    y -= 9;
+    {
+      // Standing water is grip you have already lost.
+      if (wx.wet > 0.03) {
+        meter(R - 30, y + 1, 10, Math.round(clamp(wx.wet, 0, 1) * 10), wx.wet > 0.5 ? UI.bad : UI.edge, 2, 3, 1);
+        textEdgeS('WET', R - 34 - textSW('WET'), y, UI.dim);
+      }
+      // Grip you are losing RIGHT NOW — the one line you read mid-corner.
+      if (skid > 0.06) {
+        const sl = `SLIP${skid > 0.55 ? '!' : ''}`;
+        textEdgeS(sl, R - 34 - textSW('WET') - 6 - textSW(sl), y, skid > 0.55 ? UI.bad : UI.gold);
+      }
+    }
+    y -= 8;
+    {
+      const w = WX[wx.sky];
+      const hs = `${CARD8[Math.round(deg / 45) % 8]}${Math.round(deg)}`;
+      textEdgeS(hs, R - textSW(hs), y, UI.gold);
+      textEdgeS(w.label, R - textSW(hs) - 5 - textSW(w.label), y,
+        wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft);
+    }
+    // SURFACE, with its grip bar — the thing that decides what the controls do.
+    y -= 11;
+    {
+      const sname = surf === 'road' ? 'ROAD' : surf === 'track' ? 'TRACK' : surf === 'water' ? 'WATER' : 'ROUGH';
+      const scol = surf === 'road' ? UI.good : surf === 'track' ? UI.edge : UI.hot;
+      meter(R - 30, y + 3, 10, Math.round(clamp(grip, 0, 1) * 10), scol, 2, 3, 1);
+      glowText(sname, R - 34 - textW(sname), y, scol);
+    }
+    // The odometer tops the stack, dimmest: a number you read between drives.
+    y -= 9;
+    {
+      const o = `${fmtKm(odo.trip)} · ${fmtKm(odo.total)}`;
+      textEdgeS(o, R - textSW(o), y, UI.dim);
+    }
   }
   // ── the job, as a modal ──
   // Mid-top and CENTRED, not a strip tucked over the conditions panel. A job is
