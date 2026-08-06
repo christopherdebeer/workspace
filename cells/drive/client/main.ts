@@ -178,6 +178,69 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
     return out;
   } catch { return null; }
 }
+// ── land cover: what is actually growing here ──────────────────────
+// ESA WorldCover, 10m, global, through this cell's namespace (the bucket has no
+// CORS, so the browser cannot reach it directly — see the cover route). The
+// tile is an 8-bit greyscale PNG whose PIXEL VALUE IS THE CLASS, which means it
+// decodes through the same createImageBitmap path as terrarium elevation and
+// costs no new decoder. Measured live: 784 BYTES for the 9.8km of Death Valley,
+// ~5KB for a tile of Manhattan — a whole session's ecology for less than one
+// vector tile.
+const COVER_Z = 12;   // ~9.8km per tile; the source pyramid has a level at 37m/px
+// The WorldCover legend, as the values actually stored in the pixel.
+const COVER = { tree: 10, shrub: 20, grass: 30, crop: 40, built: 50, bare: 60,
+  snow: 70, water: 80, wetland: 90, mangrove: 95, moss: 100 } as const;
+const COVER_NAME: Record<number, string> = {
+  10: 'FOREST', 20: 'SCRUB', 30: 'GRASS', 40: 'FARMLAND', 50: 'URBAN', 60: 'BARREN',
+  70: 'ICE', 80: 'WATER', 90: 'WETLAND', 95: 'MANGROVE', 100: 'TUNDRA',
+};
+interface CoverTile { xs: number; zs: number; w: number; h: number; data: Uint8Array }
+const coverTiles = new Map<string, CoverTile>();
+const coverAsked = new Set<string>();
+async function loadCoverTile(x: number, y: number): Promise<void> {
+  const key = `${x}/${y}`;
+  if (coverAsked.has(key)) return;
+  coverAsked.add(key);
+  try {
+    const res = await fetch(`${CELL_BASE}/~/cover/v1/${COVER_Z}/${x}/${y}`);
+    if (!res.ok) throw new Error(`cover ${res.status}`);
+    const bmp = await createImageBitmap(await res.blob());
+    const cv = typeof OffscreenCanvas !== 'undefined'
+      ? new OffscreenCanvas(256, 256)
+      : Object.assign(document.createElement('canvas'), { width: 256, height: 256 });
+    const cx = (cv as OffscreenCanvas).getContext('2d') as OffscreenCanvasRenderingContext2D;
+    cx.drawImage(bmp, 0, 0);
+    const d = cx.getImageData(0, 0, 256, 256).data;
+    const data = new Uint8Array(256 * 256);
+    for (let i = 0; i < data.length; i++) data[i] = d[i * 4];   // red channel IS the class
+    const b = tileBounds(x, y, COVER_Z);
+    const [wx0, wz0] = toLocal(b.latN, b.lonW);
+    const [wx1, wz1] = toLocal(b.latS, b.lonE);
+    coverTiles.set(key, {
+      xs: Math.min(wx0, wx1), zs: Math.min(wz0, wz1),
+      w: Math.abs(wx1 - wx0), h: Math.abs(wz1 - wz0), data,
+    });
+  } catch {
+    // Let a later pass ask again — a cover miss is a softer failure than a road
+    // one (everything downstream has a fallback), so it just retries slowly.
+    setTimeout(() => coverAsked.delete(key), 20000);
+  }
+}
+/** The land-cover class at a world point, or `null` where nothing has loaded.
+ *  NEAREST, never interpolated: halfway between forest (10) and shrub (20) is
+ *  not "15", it is a different class entirely. Every caller must handle null
+ *  and keep whatever it did before — cover refines the world, it does not gate
+ *  it, and a tile that has not arrived must never blank the ground. */
+function sampleCover(ex: number, ez: number): number | null {
+  for (const t of coverTiles.values()) {
+    if (ex < t.xs || ez < t.zs || ex >= t.xs + t.w || ez >= t.zs + t.h) continue;
+    const px = Math.min(255, Math.max(0, Math.floor(((ex - t.xs) / t.w) * 256)));
+    const pz = Math.min(255, Math.max(0, Math.floor(((ez - t.zs) / t.h) * 256)));
+    const v = t.data[pz * 256 + px];
+    return v || null;   // 0 is "no class here" (open ocean), not a class
+  }
+  return null;
+}
 /** Is there any elevation data under this point at all? sampleHeight answers
  *  0 where there is none — "spawn level" — which is a fiction anything built
  *  against will be wrong by the depth of whatever basin it is crossing. */
@@ -3792,6 +3855,15 @@ function streamWorld(ex: number, ez: number): void {
   const tRing = clamp(Math.ceil(r / tileMetres(TERRAIN_Z)), TERRAIN_RING, TERRAIN_RING_MAX);
   for (let dx = -tRing; dx <= tRing; dx++)
     for (let dy = -tRing; dy <= tRing; dy++) void loadTerrainTile(tx + dx, ty + dy);
+  // Land cover, over the FULL terrain footprint rather than the road ring: it
+  // paints the ground and plants the vegetation, so it has to reach as far as
+  // you can see, and at ~1–5KB a tile covering 9.8km that costs nothing.
+  {
+    const cRing = clamp(Math.ceil(r / tileMetres(COVER_Z)), 1, 3);
+    const [cx0, cy0] = tileAt(lat, lon, COVER_Z);
+    for (let dx = -cRing; dx <= cRing; dx++)
+      for (let dy = -cRing; dy <= cRing; dy++) void loadCoverTile(cx0 + dx, cy0 + dy);
+  }
   const [ox, oy] = tileAt(lat, lon, OSM_Z);
   const oRing = clamp(Math.ceil(r / tileMetres(OSM_Z)), OSM_RING, OSM_RING_MAX);
   // WHERE THE CAR IS ABOUT TO BE. A symmetric ring spends half its tiles behind
@@ -4939,6 +5011,29 @@ function meshHeightAt(x: number, z: number): number | null {
   return hits.length ? +(4000 - hits[0].distance).toFixed(2) : null;
 }
 (window as unknown as { __meshAt?: object }).__meshAt = meshHeightAt;
+/** What the world is actually made of around the car, straight off WorldCover.
+ *  The class under the wheels, and the mix over a radius — which is the number
+ *  the biome is chosen from, so it is the one worth being able to read. */
+(window as unknown as { __cover?: object }).__cover = (radius = 3000, step = 120): object => {
+  const here = sampleCover(state.x, state.z);
+  const hist = new Map<number, number>();
+  let n = 0;
+  for (let dz = -radius; dz <= radius; dz += step) {
+    for (let dx = -radius; dx <= radius; dx += step) {
+      if (dx * dx + dz * dz > radius * radius) continue;
+      const c = sampleCover(state.x + dx, state.z + dz);
+      if (c === null) continue;
+      hist.set(c, (hist.get(c) ?? 0) + 1); n++;
+    }
+  }
+  return {
+    tiles: coverTiles.size, asked: coverAsked.size,
+    here: here === null ? null : `${here} ${COVER_NAME[here] ?? '?'}`,
+    samples: n,
+    mix: [...hist.entries()].sort((a, b) => b[1] - a[1])
+      .map(([c, k]) => `${COVER_NAME[c] ?? c} ${((k / Math.max(1, n)) * 100).toFixed(0)}%`),
+  };
+};
 (window as unknown as { __tstats?: object }).__tstats = (): object => ({
   heightTiles: heightTiles.size, meshes: terrainMeshes.size, dirty: terrainDirty.size,
   roadCells: roadGrid.size, seenWays: seenWays.size, unbuilt,
