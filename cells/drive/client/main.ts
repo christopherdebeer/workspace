@@ -4127,6 +4127,135 @@ function stepDust(dt: number): void {
 }
 
 const state = { x: 0, z: 0, heading: 0, speed: 0 };
+
+// ── real drive: the device is the controller ───────────────────────
+// The whole world already runs off real coordinates streamed from real
+// elevation and real roads. The only fiction is the bicycle model in tick().
+// Take that out, feed the position straight from the GPS, and the game becomes
+// an instrument you can put on the dash of an actual car: the road you are on
+// named in the corner, checkpoints on the way ahead, the survey filling in as
+// you actually drive it.
+//
+// It is a MODE, not a dial, because it changes what the controls mean. There
+// is no throttle, no collision, no way to be stuck in a building — the car is
+// wherever the device says it is, and everything else in the frame is there to
+// be looked at, never touched.
+interface RealFix { lat: number; lon: number; acc: number; head: number | null; spd: number | null; at: number }
+const real = {
+  on: false,
+  watch: 0,
+  fix: null as RealFix | null,
+  prev: null as RealFix | null,
+  err: '' as string,
+  /** Metres from the world origin — past ~5km the fog and chart canvases,
+   *  which are baked around the spawn, run out of frame. */
+  drift: 0,
+  wake: null as { release: () => Promise<void> } | null,
+};
+/** Ask once, so the permission prompt happens on a real tap and we can report a
+ *  refusal, then reboot the world anchored where the device actually is. */
+function startRealDrive(): void {
+  if (!navigator.geolocation) { real.err = 'NO GPS ON THIS DEVICE'; return; }
+  real.err = 'WAITING FOR A FIX';
+  navigator.geolocation.getCurrentPosition(
+    (p) => {
+      const h = Number.isFinite(p.coords.heading as number) ? (p.coords.heading as number) : 0;
+      // A reload, exactly as a curated drive does it: the world's origin is set
+      // at boot and everything local — fog, chart, float precision — is baked
+      // around it, so ARRIVING somewhere is cheaper and safer than moving the
+      // world under a running session.
+      location.href = `${location.pathname}?lat=${p.coords.latitude.toFixed(5)}`
+        + `&lon=${p.coords.longitude.toFixed(5)}&h=${Math.round(h)}&cam=cab&real=1`;
+    },
+    (e) => {
+      real.err = e.code === e.PERMISSION_DENIED ? 'LOCATION PERMISSION REFUSED'
+        : e.code === e.POSITION_UNAVAILABLE ? 'NO POSITION AVAILABLE' : 'LOCATION TIMED OUT';
+    },
+    { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
+  );
+}
+/** Keep the screen awake. Dropped whenever the tab is hidden, so it has to be
+ *  re-taken on the way back — a phone on a windscreen mount will background
+ *  itself at every notification. */
+async function takeWakeLock(): Promise<void> {
+  try {
+    const n = navigator as unknown as { wakeLock?: { request: (t: string) => Promise<{ release: () => Promise<void> }> } };
+    if (!n.wakeLock) return;
+    real.wake = await n.wakeLock.request('screen');
+  } catch { /* a refused wake lock is a dimmer screen, not a broken drive */ }
+}
+function beginRealWatch(): void {
+  real.on = true;
+  real.err = 'WAITING FOR A FIX';
+  void takeWakeLock();
+  addEventListener('visibilitychange', () => { if (!document.hidden && real.on) void takeWakeLock(); });
+  real.watch = navigator.geolocation.watchPosition(
+    (p) => {
+      const c = p.coords;
+      real.prev = real.fix;
+      real.fix = {
+        lat: c.latitude, lon: c.longitude, acc: c.accuracy,
+        head: Number.isFinite(c.heading as number) ? (c.heading as number) : null,
+        spd: Number.isFinite(c.speed as number) ? (c.speed as number) : null,
+        at: performance.now(),
+      };
+      real.err = '';
+    },
+    (e) => { real.err = e.code === e.PERMISSION_DENIED ? 'LOCATION PERMISSION REFUSED' : 'GPS SIGNAL LOST'; },
+    { enableHighAccuracy: true, timeout: 30000, maximumAge: 1000 },
+  );
+}
+/** Drive `state` from the fix. Returns false when there is nothing to go on,
+ *  so the caller can leave the truck parked rather than teleport it to 0,0. */
+function stepReal(dt: number): boolean {
+  const f = real.fix;
+  if (!f) return false;
+  const [tx, tz] = toLocal(f.lat, f.lon);
+  real.drift = Math.hypot(tx, tz);
+  // Ease toward the fix rather than snapping to it. A consumer GPS reports at
+  // 1Hz with metres of jitter; snapping makes a parked car twitch and a moving
+  // one stutter between samples. 3.5/s covers a 1Hz sample without visible lag.
+  const k = 1 - Math.exp(-3.5 * dt);
+  state.x += (tx - state.x) * k;
+  state.z += (tz - state.z) * k;
+  // Heading: the receiver's own course when it has one — it only does above a
+  // few km/h — else the bearing between the last two fixes, else hold. NEVER
+  // derive it from jitter while stopped, or the truck spins on the spot.
+  let want: number | null = null;
+  if (f.head !== null && (f.spd ?? 0) > 1.4) want = (f.head * Math.PI) / 180;
+  else if (real.prev) {
+    const [px, pz] = toLocal(real.prev.lat, real.prev.lon);
+    if (Math.hypot(tx - px, tz - pz) > 4) want = Math.atan2(tx - px, -(tz - pz));
+  }
+  if (want !== null) {
+    const d = Math.atan2(Math.sin(want - state.heading), Math.cos(want - state.heading));
+    state.heading += d * (1 - Math.exp(-2.5 * dt));
+  }
+  // Speed is reported, not integrated: the odometer and the engine note should
+  // agree with the car you are sitting in, not with a differentiated position.
+  // A STALE FIX IS NOT A SPEED. Holding the last reported figure leaves a
+  // stationary truck reading 50km/h under a tunnel, which is the one number on
+  // this screen a driver might actually believe. After three seconds without a
+  // sample the speedo winds down, and the coordinate line says why.
+  const stale = (performance.now() - f.at) / 1000;
+  const target = stale > 3 ? 0
+    : f.spd !== null ? Math.abs(f.spd)
+    : Math.hypot(tx - state.x, tz - state.z) / Math.max(dt, 0.016);
+  state.speed += (target - state.speed) * (1 - Math.exp(-2 * dt));
+  // RE-ANCHOR, BUT ONLY AT A STANDSTILL. The chart and the fog are canvases
+  // baked around the spawn and 12km wide; past about 5km out the minimap has
+  // nothing left to draw. The 3D world, the roads and the survey are all
+  // unbounded and carry on regardless, so the failure is a blank corner rather
+  // than a broken drive — which is what makes it safe to wait. Re-anchoring
+  // means a reload, and a reload at 100km/h is a black screen on a windscreen
+  // mount, so it waits for you to stop. Survey progress is keyed by position
+  // in localStorage and survives it.
+  if (real.drift > 5000 && Math.abs(state.speed) < 2) {
+    location.href = `${location.pathname}?lat=${f.lat.toFixed(5)}&lon=${f.lon.toFixed(5)}`
+      + `&h=${Math.round(((state.heading * 180) / Math.PI + 360) % 360)}&cam=${camMode}&real=1`;
+  }
+  return true;
+}
 (window as unknown as { __drive?: object; __surfaceAt?: (x: number, z: number) => string }).__drive = state;
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
 (window as unknown as { __wx?: object }).__wx = wx; // debug/test handle
@@ -4438,6 +4567,23 @@ function meshHeightAt(x: number, z: number): number | null {
 (window as unknown as { __setcpv?: object }).__setcpv = (v: number): void => { cpVis = v; };
 (window as unknown as { __setcam?: object }).__setcam = (m: CamMode): void => setCam(m);
 (window as unknown as { __zoom?: object }).__zoom = (z: number): void => { zoomT = clamp(z, 0.25, 44); };
+/** Real drive's whole state, and a way to inject fixes so the mode can be
+ *  tested without a car: __real() reads, __feed(lat,lon,head,spd) writes one. */
+(window as unknown as { __real?: object }).__real = (): object => ({
+  on: real.on, err: real.err, drift: Math.round(real.drift),
+  fix: real.fix ? { acc: real.fix.acc, head: real.fix.head, spd: real.fix.spd, ageMs: Math.round(performance.now() - real.fix.at) } : null,
+  car: [Math.round(state.x), Math.round(state.z)],
+  headingDeg: Math.round(((state.heading * 180) / Math.PI + 360) % 360),
+  kmh: +(state.speed * 3.6).toFixed(1),
+});
+(window as unknown as { __toll?: object }).__toll = (x: number, z: number): [number, number] => localToLatLon(x, z);
+(window as unknown as { __feed?: object }).__feed =
+  (lat: number, lon: number, head: number | null = null, spd: number | null = null, acc = 8): void => {
+    real.on = true;
+    real.prev = real.fix;
+    real.fix = { lat, lon, acc, head, spd, at: performance.now() };
+    real.err = '';
+  };
 (window as unknown as { __cpdraw?: object }).__cpdraw = (): number => cpDraw.length;
 (window as unknown as { __cpwhy?: object }).__cpwhy = (): object => cpCull;
 /** A named road's drivable centrelines, so a test can traverse the ROAD rather
@@ -4522,6 +4668,9 @@ let panX = 0, panZ = 0, zoomT = 1, zoomCur = 1;
 const panPtrs = new Map<number, { x: number; y: number }>();
 const stickHome = (): { x: number; y: number } => ({ x: innerWidth - 84, y: innerHeight - 118 });
 function updateStickHome(): void {
+  // Nothing to steer with when the car is steering itself. Leaving a live stick
+  // on screen in a moving vehicle is an invitation to touch it.
+  if (real.on) { stickBase.style.display = stickNub.style.display = 'none'; return; }
   if (camMode === 'top') {
     const h = stickHome();
     stickBase.style.display = 'block';
@@ -5222,42 +5371,47 @@ const sunScreen = new THREE.Vector3();
 function tick(now: number): void {
   const dt = Math.min(0.05, (now - last) / 1000);
   last = now;
-  const { throttle, steer, brake } = input();
+  const { throttle, steer, brake } = real.on ? { throttle: 0, steer: 0, brake: false } : input();
   stepWeather(now, dt);
   const surfKind = surfaceAt(state.x, state.z);
   const surf = SURFACE[surfKind];
+  if (real.on) stepReal(dt);
   // Arcade bicycle model: thrust minus drag, steering authority grows then
   // saturates with speed so the car neither pivots in place nor becomes twitchy.
-  const thrust = brake
+  // SKIPPED ENTIRELY under real drive — the position is a measurement, and
+  // integrating a model on top of it would fight the receiver for the truck.
+  const thrust = real.on ? 0 : brake
     ? -Math.sign(state.speed) * CAR.brake * 1.4
     : throttle >= 0 ? throttle * CAR.accel : throttle * CAR.brake;
   // Grip comes from wheels on the ground: airborne there's no drive, no
   // braking, barely any steering — and gravity along the body's pitch makes
   // climbs cost speed and descents pay it back.
   const grip = groundedF;
-  state.speed += thrust * grip * dt;
-  // Gravity acts on the GROUND's grade, not on the sprung body's pitch. pitchC
-  // is damped by the suspension, carries a throttle-squat fudge, and is clamped
-  // to 26 degrees — so it under-read every real hill and lagged the ones it did
-  // see. gradePitch comes straight off the four wheel contacts.
-  state.speed -= GRAV * Math.sin(gradePitch) * grip * dt;
-  // Wet ground drags and caps lower — the weather is felt through the wheels.
-  const wetDrag = 1 + wx.wet * (surfKind === 'road' ? 0.35 : 0.7);
-  state.speed -= state.speed * surf.drag * wetDrag * (0.1 + 0.9 * grip) * dt;
-  if (brake && grip > 0.4 && Math.abs(state.speed) < 1.2) state.speed = 0;
-  state.speed = clamp(state.speed, -CAR.maxRev, surf.max * (1.25 - wx.wet * 0.2)); // downhill may overrun the flat cap
-  const SRATE = 7; // full-lock in ~0.14s — responsive but not snappy
-  steerCur += clamp(steer - steerCur, -SRATE * dt, SRATE * dt);
   let yawRate = 0;
-  if (Math.abs(state.speed) > 0.1) {
-    // Authority decays with speed (like a real wheel): full lock is a parking
-    // move, a nudge at 180 — turn RATE stays sane across the whole range.
-    const authority = (0.15 + 0.85 * grip) / (1 + Math.abs(state.speed) / 12);
-    yawRate = (steerCur * CAR.steerMax * authority * state.speed) / CAR.wheelbase;
-    state.heading += yawRate * dt;
+  if (!real.on) {
+    state.speed += thrust * grip * dt;
+    // Gravity acts on the GROUND's grade, not on the sprung body's pitch. pitchC
+    // is damped by the suspension, carries a throttle-squat fudge, and is clamped
+    // to 26 degrees — so it under-read every real hill and lagged the ones it did
+    // see. gradePitch comes straight off the four wheel contacts.
+    state.speed -= GRAV * Math.sin(gradePitch) * grip * dt;
+    // Wet ground drags and caps lower — the weather is felt through the wheels.
+    const wetDrag = 1 + wx.wet * (surfKind === 'road' ? 0.35 : 0.7);
+    state.speed -= state.speed * surf.drag * wetDrag * (0.1 + 0.9 * grip) * dt;
+    if (brake && grip > 0.4 && Math.abs(state.speed) < 1.2) state.speed = 0;
+    state.speed = clamp(state.speed, -CAR.maxRev, surf.max * (1.25 - wx.wet * 0.2)); // downhill may overrun the flat cap
+    const SRATE = 7; // full-lock in ~0.14s — responsive but not snappy
+    steerCur += clamp(steer - steerCur, -SRATE * dt, SRATE * dt);
+    if (Math.abs(state.speed) > 0.1) {
+      // Authority decays with speed (like a real wheel): full lock is a parking
+      // move, a nudge at 180 — turn RATE stays sane across the whole range.
+      const authority = (0.15 + 0.85 * grip) / (1 + Math.abs(state.speed) / 12);
+      yawRate = (steerCur * CAR.steerMax * authority * state.speed) / CAR.wheelbase;
+      state.heading += yawRate * dt;
+    }
+    state.x += Math.sin(state.heading) * state.speed * dt;
+    state.z -= Math.cos(state.heading) * state.speed * dt;
   }
-  state.x += Math.sin(state.heading) * state.speed * dt;
-  state.z -= Math.cos(state.heading) * state.speed * dt;
   // ── the tyres have a budget, and it is spent in every direction at once ──
   // Two things pull the truck sideways. A SIDE-SLOPE, always — nothing used
   // to, and you could traverse a 40° face as if it were a car park. And a
@@ -5266,7 +5420,7 @@ function tick(now: number): void {
   // whatever the throttle or the brakes have already claimed. What the tyres
   // cannot supply, the truck keeps as sideways velocity — it runs wide, and on
   // gravel it keeps running until the scrub bleeds it off. That is the drift.
-  {
+  if (!real.on) {
     const sH = Math.sin(state.heading), cH = Math.cos(state.heading);
     const budget = surf.mu * GRAV * grip * (1 - wx.wet * 0.28);
     // Friction circle: hard braking or full throttle eats into cornering.
@@ -5315,14 +5469,18 @@ function tick(now: number): void {
   // middle of a room, so the push-out below would happily leave you sealed in
   // and then shove you back off the inner face of every wall you drove at.
   // Check containment first, every frame.
-  evictFromBuildings();
+  // NOT under real drive: OSM footprints are approximate and a real road often
+  // runs within a metre of a mapped building. Shoving the truck out would fight
+  // the receiver and desync the whole frame from the car you are sitting in —
+  // and being "stuck in a building" is not a thing that can happen to you.
+  if (!real.on) evictFromBuildings();
   // Buildings are solid: push the car circle out of any nearby wall edge and
   // scrub speed while in contact — sliding along a façade falls out of the
   // push-out geometry for free.
   // How square the hit was, worst case over everything touched this frame: 0 is
   // a graze straight along the barrier, 1 is driving into it head-on.
   let scrape = -1;
-  for (let pass = 0; pass < 2; pass++) {
+  for (let pass = 0; pass < 2 && !real.on; pass++) {
     const walls = wallGrid.get(gkey(state.x, state.z));
     if (!walls) break;
     let hit = false;
@@ -6023,6 +6181,16 @@ const TABS = ['VEHICLE', 'WORLD', 'SYSTEM'];
 const TAB_ITEMS: Item[][] = [
   [],   // the vehicle bay is a readout, not a control panel
   [
+    // The mode, not a dial: it changes what every control means, so it sits at
+    // the top of the world list where you choose where to be.
+    {
+      col: () => (real.on ? UI.good : real.err ? UI.bad : UI.hot),
+      label: () => (real.on ? 'REAL DRIVE ON' : real.err ? fit(real.err, 150) : 'REAL DRIVE'),
+      hit: () => {
+        if (real.on) { location.href = location.pathname; return; }  // back to the menu, model driving
+        startRealDrive();
+      },
+    },
     { col: () => UI.gold, label: () => 'ELSEWHERE', hit: () => { location.href = location.pathname + '?random=1'; } },
     { col: () => UI.edge, label: () => (alien ? 'SCRIPT ALIEN' : 'SCRIPT PLAIN'), hit: () => toggleAlien() },
   ],
@@ -6633,6 +6801,19 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
       const [la, lo] = localToLatLon(state.x, state.z);
       const g = `${la.toFixed(4)} ${lo.toFixed(4)}`;
       textEdgeS(g, pad + 1, infoY + 16, UI.dim);
+      // Under real drive the coordinate stops being a reference and becomes a
+      // reading off an instrument, so it says how much to trust it: the fix
+      // accuracy, and how long since one arrived. A stale fix looks exactly
+      // like a stationary car unless the HUD says otherwise.
+      if (real.on) {
+        const f = real.fix;
+        const age = f ? (performance.now() - f.at) / 1000 : Infinity;
+        const s = !f ? (real.err || 'NO FIX')
+          : age > 12 ? `FIX ${age.toFixed(0)}S OLD`
+          : `±${Math.round(f.acc)}M`;
+        const col = !f || age > 12 ? UI.bad : f.acc > 25 ? UI.gold : UI.good;
+        textEdgeS(s, pad + 1 + textSW(g) + 5, infoY + 16, col);
+      }
     }
   }
   // ── speed, bottom-right ──
@@ -7000,6 +7181,10 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
   const h0 = parseFloat(q.get('h') ?? '');
   if (Number.isFinite(h0)) state.heading = (h0 * Math.PI) / 180;
   { const c = q.get('cam'); if (c === 'chase' || c === 'cab') setCam(c); }
+  // Armed here, taken up once the splash gesture lands: watchPosition before
+  // that would burn a fix (and a permission prompt) against a world that has
+  // not finished streaming.
+  real.on = q.get('real') === '1';
   // The job, if this spawn carries one. Armed AFTER `origin` is set, because
   // both its waypoints are lat/lon and have to be projected into local metres.
   const mid = q.get('m');
@@ -7051,5 +7236,13 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
     addEventListener('keydown', start);
   });
   $('boot').classList.add('done');
+  // START AND THE MAIN MENU ARE THE SAME THING. The splash exists only to take
+  // the gesture the browser demands before audio can play; behind it the world
+  // is already loaded and running. So the first thing it hands you is the menu
+  // — where you go, what you drive, and whether the device is steering — with
+  // the place you spawned in living behind it. Except when a link has already
+  // said where to go, in which case you asked for a drive, not a menu.
+  if (real.on) beginRealWatch();
+  else if (!q.get('lat') && !q.get('m')) menuTab = 1;
   requestAnimationFrame((t) => { last = t; requestAnimationFrame(tick); });
 })();
