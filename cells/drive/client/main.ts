@@ -1014,7 +1014,12 @@ const railTex = canvasTex(32, 1, 1, 121, (c, s, r) => {
 // rusting from the fixings out — but the legend still legible, because a sign
 // you cannot read is set dressing and a sign you can read is information.
 // v splits top/bottom into face and back (the back is bare galvanised).
-const SIGN_KINDS = 3;
+// 0 chevrons · 1 warning triangle · 2 hazard stripes · 3 direction board ·
+// 4 edge delineator. The last two exist because a road lined end to end with
+// yellow hazard boards reads as roadworks, not as a road: most furniture on a
+// real route is a marker post, and the only sign that earns a whole board on a
+// straight is one telling you where the turning goes.
+const SIGN_KINDS = 5;
 const signTex = canvasTex(192, 1, 1, 122, (c, s, r) => {
   const W = s / SIGN_KINDS;
   const rust = (x: number, y: number, w: number, h: number, n: number): void => {
@@ -1037,8 +1042,14 @@ const signTex = canvasTex(192, 1, 1, 122, (c, s, r) => {
   for (let k = 0; k < SIGN_KINDS; k++) {
     const x0 = k * W;
     // The retroreflective ground. Yellow-green is the real-world colour for a
-    // temporary/hazard board and it is the one that survives this palette.
-    c.fillStyle = k === 1 ? '#d8cf4a' : '#d5c93f';
+    // temporary/hazard board and it is the one that survives this palette; a
+    // direction board is the dark green of a route sign, a delineator white.
+    // A delineator's BODY is dark on purpose. The retroreflective pass adds
+    // diffuse back into the fragment, so a near-white panel caught square in
+    // the headlights clips to a featureless white slab — which is exactly what
+    // the first version of this post did. Keep the body dark and let the
+    // reflector band be the only thing that lights up.
+    c.fillStyle = k === 3 ? '#1f4034' : k === 4 ? '#4a5049' : k === 1 ? '#d8cf4a' : '#d5c93f';
     c.fillRect(x0, 0, W, s / 2);
     // DRAWN FOR THE RESOLUTION IT IS SEEN AT. The scene renders at PIX_H and is
     // magnified, so a board 26m away is roughly twenty pixels across — three
@@ -1046,11 +1057,33 @@ const signTex = canvasTex(192, 1, 1, 122, (c, s, r) => {
     // coarse: two fat marks instead of three fine ones, a two-pixel border
     // instead of three, nothing thinner than a sixth of the panel.
     const H = s / 2;
-    c.fillStyle = 'rgba(30,26,18,0.9)';
-    c.fillRect(x0 + 2, 2, W - 4, 2); c.fillRect(x0 + 2, H - 4, W - 4, 2);
-    c.fillRect(x0 + 2, 2, 2, H - 4); c.fillRect(x0 + W - 4, 2, 2, H - 4);
+    // A delineator has no border — it is a post, not a board, and a frame drawn
+    // round something six pixels wide is the whole thing.
+    if (k !== 4) {
+      c.fillStyle = k === 3 ? 'rgba(226,232,220,0.92)' : 'rgba(30,26,18,0.9)';
+      c.fillRect(x0 + 2, 2, W - 4, 2); c.fillRect(x0 + 2, H - 4, W - 4, 2);
+      c.fillRect(x0 + 2, 2, 2, H - 4); c.fillRect(x0 + W - 4, 2, 2, H - 4);
+    }
     c.fillStyle = '#141109';
-    if (k === 0) {
+    if (k === 3) {
+      // A direction board: one fat arrow and two weight bars standing in for a
+      // destination and its distance. Actual lettering is unreadable at the
+      // twenty-odd pixels this is seen across, and a smudge of fake text reads
+      // worse than an honest glyph.
+      c.fillStyle = '#e8efe2';
+      const my = H / 2 - 2, ah = 13;
+      c.beginPath();
+      c.moveTo(x0 + W - 10, my); c.lineTo(x0 + W - 24, my - ah); c.lineTo(x0 + W - 24, my - 5);
+      c.lineTo(x0 + 10, my - 5); c.lineTo(x0 + 10, my + 5); c.lineTo(x0 + W - 24, my + 5);
+      c.lineTo(x0 + W - 24, my + ah);
+      c.closePath(); c.fill();
+      c.fillRect(x0 + 10, H - 16, W - 34, 4);
+    } else if (k === 4) {
+      // A delineator post: one reflective band near the top, nothing else. The
+      // most common thing at a roadside and the cheapest to read at speed.
+      c.fillStyle = '#d24334';
+      c.fillRect(x0 + 5, 9, W - 10, 15);
+    } else if (k === 0) {
       // TWO fat chevrons: the sign that means THE ROAD GOES THIS WAY, NOW.
       for (let i = 0; i < 2; i++) {
         const cx = x0 + 8 + i * 26, w = 13, t = 11;
@@ -1082,10 +1115,13 @@ const signTex = canvasTex(192, 1, 1, 122, (c, s, r) => {
     }
     // Weather, in this order: grime over the legend, rust from the edges in,
     // then the dents on top of everything (they are the most recent event).
-    c.fillStyle = 'rgba(96,88,60,0.16)'; c.fillRect(x0, 0, W, s / 2);
-    rust(x0, 0, W, 8, 40); rust(x0, s / 2 - 10, W, 10, 40);
-    rust(x0, 0, 8, s / 2, 30); rust(x0 + W - 8, 0, 8, s / 2, 30);
-    dings(x0, W, 5 + Math.floor(r() * 4));
+    // A hazard board has stood there for years; a route sign gets replaced when
+    // it stops being readable, so it wears at about a third the rate.
+    const wear = k >= 3 ? 0.35 : 1;
+    c.fillStyle = `rgba(96,88,60,${0.16 * wear})`; c.fillRect(x0, 0, W, s / 2);
+    rust(x0, 0, W, 8, 40 * wear); rust(x0, s / 2 - 10, W, 10, 40 * wear);
+    rust(x0, 0, 8, s / 2, 30 * wear); rust(x0 + W - 8, 0, 8, s / 2, 30 * wear);
+    dings(x0, W, Math.round((5 + Math.floor(r() * 4)) * wear));
     // The back: galvanised, streaked, nothing to read.
     c.fillStyle = '#6d6f6b'; c.fillRect(x0, s / 2, W, s / 2);
     for (let i = 0; i < 40; i++) {           // rain streaks down the backplate
@@ -1988,7 +2024,10 @@ interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?:
   /** The way's OSM name. Streets were deliberately excluded from the POI set
    *  ("named streets are not destinations") — but the road you are ON is not a
    *  destination, it is your position, and that is worth saying. */
-  nm?: string }
+  nm?: string;
+  /** A guard rail rather than a wall. Still solid, but glancing it costs you
+   *  almost nothing — see the collision scrub. */
+  sl?: boolean }
 const wallGrid = new Map<string, Seg[]>();   // building edges — solid
 const roadGrid = new Map<string, Seg[]>();   // drivable centrelines + half-width
 const waterCells = new Set<string>();        // coarse water mask
@@ -2185,6 +2224,68 @@ function wayAt(x: number, z: number): { name: string; on: boolean } | null {
   }
   return best ? { name: best, on } : null;
 }
+/** Proper 2D segment crossing — endpoints touching does not count. */
+function segsCross(
+  ax: number, az: number, bx: number, bz: number,
+  cx: number, cz: number, dx: number, dz: number,
+): boolean {
+  const s1 = (bx - ax) * (cz - az) - (bz - az) * (cx - ax);
+  const s2 = (bx - ax) * (dz - az) - (bz - az) * (dx - ax);
+  const s3 = (dx - cx) * (az - cz) - (dz - cz) * (ax - cx);
+  const s4 = (dx - cx) * (bz - cz) - (dz - cz) * (bx - cx);
+  return s1 > 0 !== s2 > 0 && s3 > 0 !== s4 > 0;
+}
+/**
+ * Does a parapet run here cut across another road?
+ *
+ * A rail is drawn parallel to its own centreline, so its own road can never
+ * cross it — but a side road joining does, and a barrier sealing off a
+ * junction is both wrong to look at and wrong to drive. The test is a genuine
+ * crossing rather than a proximity check precisely because of that asymmetry:
+ * proximity would fire on the road the rail belongs to.
+ */
+function railCrossesRoad(ax: number, az: number, bx: number, bz: number): boolean {
+  const L = Math.hypot(bx - ax, bz - az);
+  // Reach a little past each end, so the gap opens wide enough to drive through
+  // rather than leaving a stub of rail across the mouth of the turning.
+  const ex = L > 0.01 ? ((bx - ax) / L) * 5 : 0, ez = L > 0.01 ? ((bz - az) / L) * 5 : 0;
+  const x0 = ax - ex, z0 = az - ez, x1 = bx + ex, z1 = bz + ez;
+  const seen = new Set<Seg>();
+  const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / (GRID / 2)));
+  for (let s = 0; s <= steps; s++) {
+    const t = s / steps;
+    for (const seg of roadGrid.get(gkey(x0 + (x1 - x0) * t, z0 + (z1 - z0) * t)) ?? []) {
+      if (seen.has(seg)) continue;
+      seen.add(seg);
+      if (segsCross(x0, z0, x1, z1, seg.ax, seg.az, seg.bx, seg.bz)) return true;
+    }
+  }
+  return false;
+}
+/**
+ * Do two or more differently-aligned roads meet within reach of this point?
+ *
+ * Used to decide where a direction board earns its place. Alignment is the
+ * test, not count: a single road passing through contributes many nearly
+ * parallel segments, and counting those would put a route sign every fifty
+ * metres of open highway.
+ */
+function junctionNear(x: number, z: number, reach = 22): boolean {
+  let base: [number, number] | null = null;
+  for (let cx = -1; cx <= 1; cx++) for (let cz = -1; cz <= 1; cz++) {
+    for (const seg of roadGrid.get(`${Math.floor(x / GRID) + cx},${Math.floor(z / GRID) + cz}`) ?? []) {
+      const [px, pz] = closestOnSeg(x, z, seg);
+      if (Math.hypot(x - px, z - pz) > reach) continue;
+      const l = Math.hypot(seg.bx - seg.ax, seg.bz - seg.az) || 1;
+      const ux = (seg.bx - seg.ax) / l, uz = (seg.bz - seg.az) / l;
+      if (!base) { base = [ux, uz]; continue; }
+      // |cos| so a segment pointing back down the same road still counts as
+      // parallel; 0.82 is about 35° apart.
+      if (Math.abs(base[0] * ux + base[1] * uz) < 0.82) return true;
+    }
+  }
+  return false;
+}
 // The road's own elevation at (x,z) — differs from the terrain wherever the
 // profile smoothing decided a stretch is a tunnel or bridge.
 function roadHeightAt(x: number, z: number): number | null {
@@ -2368,7 +2469,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // 2×CAR_R of push-out plus a lane to drive in. Below this a barrier would
   // protect you from the drop by wedging you against the cliff instead.
   const RAIL_MIN_W = 2 * CAR_R + 2.4;
-  const SIGN_EVERY = 85;  // metres of straight road between hazard boards
+  // Metres of straight road between roadside furniture. Was 85, which lined an
+  // ordinary suburban street with hazard boards every few seconds and made the
+  // whole world read as a permanent contraflow. On a straight the default is
+  // now a marker post, and a hazard board only appears where there is a drop
+  // to be warned about.
+  const SIGN_EVERY = 190;
+  const SIGN_DROP = 2.2;  // metres of fall past the kerb that earns a real warning
   const BEND_DEG = 14;    // heading change over one 12m step that reads as "a bend"
   // Deterministic per way: the same road grows the same signs on every device
   // and every reload, which is what makes them landmarks rather than litter.
@@ -2490,7 +2597,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       [xA, yA + RAIL_H, zA, xB, yB + RAIL_H, zB, xA, yA - 0.15, zA, xB, yB - 0.15, zB],
       [u0, 0, u1, 0, u0, 1, u1, 1]);
     const top = Math.max(yA, yB) + RAIL_H;
-    addSeg(wallGrid, { ax: xA, az: zA, bx: xB, bz: zB, hw: 0, ya: top, yb: top });
+    addSeg(wallGrid, { ax: xA, az: zA, bx: xB, bz: zB, hw: 0, ya: top, yb: top, sl: true });
   };
   /**
    * A hazard board on a post, facing back down the road at whoever is coming.
@@ -2500,13 +2607,21 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
    */
   const sign = (
     px: number, py: number, pz: number, fwdX: number, fwdZ: number, side: number, kind: number,
+    scale = 1, wide = 1,
   ): void => {
     const l = Math.hypot(fwdX, fwdZ) || 1;
     const fx = fwdX / l, fz = fwdZ / l;
     // Facing back along the way, canted 12° toward the carriageway.
     const a = Math.atan2(-fx, -fz) + side * 0.21;
     const rx = Math.cos(a), rz = -Math.sin(a);      // the panel's own width axis
-    const HW = 0.82, TOP = 2.0, BOT = 0.86;         // a 1.64m board, low enough to sit in the beam
+    // A 1.64m board at scale 1, low enough to sit in the beam. Scale drives the
+    // width and the panel's own height while leaving the FOOT on the ground:
+    // a delineator is a short post, a direction board a wide one, and both
+    // still stand in the dirt rather than floating at hazard-board height.
+    // Width is separate from height because the atlas cell is one aspect and
+    // roadside furniture is not: a delineator is a narrow post, a direction
+    // board a wide plate, and both are the same texture.
+    const HW = 0.82 * scale * wide, TOP = 0.86 + 1.14 * scale, BOT = 0.86;
     const u0 = kind / SIGN_KINDS, u1 = (kind + 1) / SIGN_KINDS;
     // Face (upper half of the atlas) and back (lower half) as one double-sided
     // quad each, offset a few centimetres so they never z-fight.
@@ -2584,22 +2699,31 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         if (railOn[sd][i] || railOn[sd][i + 1]) {
           // Right on the kerb line, not outboard of it: set any further out and
           // the parapet hangs in the air beside its own fascia.
-          rail(ex0 + ox * sgn * 0.04, ey0, ez0 + oz * sgn * 0.04,
-            ex1 + ox * sgn * 0.04, ey1, ez1 + oz * sgn * 0.04, along / 2.5, (along + len) / 2.5);
+          const rx0 = ex0 + ox * sgn * 0.04, rz0 = ez0 + oz * sgn * 0.04;
+          const rx1 = ex1 + ox * sgn * 0.04, rz1 = ez1 + oz * sgn * 0.04;
+          // Open at junctions. This deliberately reintroduces the kind of gap
+          // the dilated rail map exists to prevent — but a gap where a road
+          // leaves is a turning, not a hole over a drop.
+          if (!railCrossesRoad(rx0, rz0, rx1, rz1)) {
+            rail(rx0, ey0, rz0, rx1, ey1, rz1, along / 2.5, (along + len) / 2.5);
+          }
         }
       }
-      // ── hazard boards ──
-      // Two rules, and the second is the one that matters. On a straight, a
-      // sign every ~85m with a wide jitter, so the roadside has furniture
-      // without a rhythm. On a BEND, always — and on the OUTSIDE of it, which
-      // is both where the real ones go and where your headlights are pointing
-      // as you turn in. A chevron you meet mid-corner is the difference between
-      // reading the road and discovering it.
+      // ── roadside furniture ──
+      // WHAT the sign is now follows from what the road is doing, rather than
+      // every post being a hazard board. A chevron means the road turns here
+      // and there is somewhere to fall; a triangle means it turns; a marker
+      // post means nothing at all, which is what most roadside furniture
+      // means, and is why it can be common without becoming noise.
       {
         const turn = i + 1 < n - 1 ? bendAt(i + 1) : 0;
         const sharp = turn > (BEND_DEG * Math.PI) / 180;
+        const fall = Math.max(drop[0], drop[1]) > SIGN_DROP;
+        // Chevrons still march through a bend with a drop — that is the case
+        // they were added for and it is the one worth keeping dense.
+        const gap = sharp && fall ? 18 : sharp ? 60 : SIGN_EVERY * (0.55 + signRng() * 0.9);
         signRun += len;
-        if (sharp ? signRun > 16 : signRun > SIGN_EVERY * (0.55 + signRng() * 0.9)) {
+        if (signRun > gap) {
           signRun = 0;
           // Outside of the bend = the side the road is turning AWAY from. On a
           // straight, whichever side has the drop, else a coin.
@@ -2611,7 +2735,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           // Never plant one where the ground has fallen away — a post needs
           // something to stand in, and a sign hanging over a cliff reads as a bug.
           if (sy - sampleHeight(sx, sz) < 2.2) {
-            sign(sx, sy, sz, dx, dz, outward, sharp ? 0 : signRng() < 0.5 ? 1 : 2);
+            let kind: number, scale: number, wide: number;
+            if (sharp && fall) { kind = 0; scale = 1; wide = 1; }
+            else if (sharp) { kind = 1; scale = 0.86; wide = 1; }
+            else if (fall) { kind = 2; scale = 0.9; wide = 1; }
+            else if (junctionNear(sx, sz)) { kind = 3; scale = 1.2; wide = 1.4; }
+            else { kind = 4; scale = 0.55; wide = 0.42; }
+            // A little size jitter on top, so a run of posts is not a stencil.
+            sign(sx, sy, sz, dx, dz, outward, kind, scale * (0.88 + signRng() * 0.24), wide);
           }
         }
       }
@@ -4138,6 +4269,30 @@ function truckSpec(): Record<string, number> {
   ...spanStats, signAt: spanStats.signAt.length, railM: Math.round(spanStats.railM),
   deckM: Math.round(spanStats.deckM), maxDaylight: +spanStats.maxDaylight.toFixed(1),
 });
+/** The sign atlas as drawn, so the panels can be checked without hunting for
+ *  one in the world and photographing a different sign by mistake. */
+(window as unknown as { __signtex?: object }).__signtex = (): string =>
+  (signTex.image as HTMLCanvasElement).toDataURL();
+/** Every guard rail and every road centreline, so a probe can check that no
+ *  barrier has been drawn across a turning. */
+(window as unknown as { __rails?: object }).__rails = (): number[][] => {
+  const out: number[][] = [], seen = new Set<Seg>();
+  for (const arr of wallGrid.values()) for (const s of arr) {
+    if (!s.sl || seen.has(s)) continue;
+    seen.add(s);
+    out.push([+s.ax.toFixed(2), +s.az.toFixed(2), +s.bx.toFixed(2), +s.bz.toFixed(2)]);
+  }
+  return out;
+};
+(window as unknown as { __roadsegs?: object }).__roadsegs = (): number[][] => {
+  const out: number[][] = [], seen = new Set<Seg>();
+  for (const arr of roadGrid.values()) for (const s of arr) {
+    if (seen.has(s)) continue;
+    seen.add(s);
+    out.push([+s.ax.toFixed(2), +s.az.toFixed(2), +s.bx.toFixed(2), +s.bz.toFixed(2)]);
+  }
+  return out;
+};
 /** Every hazard board placed so far, so a probe can stand in front of one. */
 (window as unknown as { __signs?: object }).__signs = (): object => spanStats.signAt;
 // The job: phase, both waypoints, and how far is left.
@@ -5027,7 +5182,9 @@ function tick(now: number): void {
   // Buildings are solid: push the car circle out of any nearby wall edge and
   // scrub speed while in contact — sliding along a façade falls out of the
   // push-out geometry for free.
-  let scraping = false;
+  // How square the hit was, worst case over everything touched this frame: 0 is
+  // a graze straight along the barrier, 1 is driving into it head-on.
+  let scrape = -1;
   for (let pass = 0; pass < 2; pass++) {
     const walls = wallGrid.get(gkey(state.x, state.z));
     if (!walls) break;
@@ -5040,12 +5197,25 @@ function tick(now: number): void {
         state.x += (state.x - cx2) * push;
         state.z += (state.z - cz2) * push;
         hit = true;
+        // A GUARD RAIL IS NOT A WALL. Losing the same speed to a barrier you
+        // brushed at five degrees as to one you hit square made a mountain
+        // pass punish the exact line you want to be driving — tight to the
+        // edge. Charge only for the component of travel that went INTO the
+        // rail; along it is free. Buildings keep the flat penalty: hitting a
+        // façade at any angle is a crash, not a lean.
+        let sq = 1;
+        if (seg.sl) {
+          const sx = seg.bx - seg.ax, sz = seg.bz - seg.az;
+          const sl = Math.hypot(sx, sz) || 1;
+          const along = Math.abs((Math.sin(state.heading) * sx + -Math.cos(state.heading) * sz) / sl);
+          sq = clamp(1 - along, 0, 1);
+        }
+        if (sq > scrape) scrape = sq;
       }
     }
-    scraping = scraping || hit;
     if (!hit) break;
   }
-  if (scraping) state.speed *= Math.exp(-5 * dt);
+  if (scrape >= 0) state.speed *= Math.exp(-5 * scrape * dt);
   // ── suspension: the truck LIES on the terrain via 4 wheel contacts ──
   const sinH = Math.sin(state.heading), cosH = Math.cos(state.heading);
   const contacts: number[] = [];
