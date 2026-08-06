@@ -2968,6 +2968,9 @@ function renderWays(els: OsmWay[]): void {
         : 'auto';
       ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : MAT.road,
         track || stairs ? 0.5 : 0.6, !stairs, mode, track, tags.name);
+      // Steps are named and drawn but nothing drives them, so they earn no
+      // checkpoints — a road you cannot survey should not sit in the log.
+      if (tags.name && !stairs) noteSurvey(tags.name, pts, track);
     } else if (tags.building) {
       building(pts, el.id, parseFloat(tags['building:levels'] ?? '') || 2);
     } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
@@ -2979,6 +2982,198 @@ function renderWays(els: OsmWay[]): void {
   }
   flushAprons();
 }
+
+// ── survey: invisible checkpoints along named ways ─────────────────
+// A named road is not a line. Measured against live OSM: it arrives as a
+// median of 4 fragments here and 39 for one Paris avenue, and those
+// fragments frequently refuse to chain end-to-end (longest chain covers
+// only 32% of "Avenue de New York"). So checkpoints are laid down PER
+// FRAGMENT by arc length and never by chaining — chaining bought 2 points
+// of spacing quality and cost robustness everywhere it mattered.
+//
+// The dedup radius is not tidiness, it is the difference between a
+// winnable mechanic and a broken one. A city street carries its
+// carriageways, service road and pavement under one name; sampling all of
+// them doubles the denominator while the player can only ever drive one,
+// so a majority becomes unreachable. Collapsing same-road candidates
+// within DEDUP lifted the worst-case single-traverse coverage from 38% to
+// 50% across Trocadero.
+const SURVEY_P = 250;          // metres between checkpoints along a fragment
+const SURVEY_DEDUP = 100;      // same-road candidates closer than this collapse
+const SURVEY_CAPTURE = 12;     // how near counts as collected
+const SURVEY_MIN = 400;        // roads shorter than this are not worth claiming
+const SURVEY_MAJORITY = 0.5;   // "a majority" — measured as reachable on 95%+ of roads
+interface Checkpoint { x: number; z: number; key: string; got: boolean; at?: number }
+interface SurveyRoad {
+  name: string;
+  cps: Checkpoint[];
+  len: number;
+  got: number;
+  track: boolean;
+  /** The vector tiles this road's geometry actually crosses. */
+  tiles: Set<string>;
+  /** Latched once claimed — a road never un-unlocks. */
+  claimed: boolean;
+  claimedAt: number;
+}
+const survey = new Map<string, SurveyRoad>();
+/** Checkpoints already collected, keyed by position so the record survives a
+ *  reload and a different spawn origin. */
+const surveyGot = new Set<string>();
+const surveyClaimed = new Set<string>();
+/** OSM tiles whose ways have actually been rendered — NOT the same as the
+ *  requested set, which is marked before the fetch even starts. */
+const osmDone = new Set<string>();
+const cpKey = (x: number, z: number): string => {
+  const [lat, lon] = localToLatLon(x, z);
+  return `${lat.toFixed(5)},${lon.toFixed(5)}`;   // ~1m — a checkpoint's identity is its place
+};
+/** Lay checkpoints along one fragment of a named road. */
+function noteSurvey(name: string, pts: Array<[number, number]>, track: boolean): void {
+  let r = survey.get(name);
+  if (!r) survey.set(name, (r = { name, cps: [], len: 0, got: 0, track,
+    tiles: new Set(), claimed: false, claimedAt: 0 }));
+  // Phase at P/2 so a fragment shorter than the pitch still earns one
+  // checkpoint at its middle rather than nothing at all.
+  let acc = SURVEY_P / 2;
+  for (let i = 1; i < pts.length; i++) {
+    const [ax, az] = pts[i - 1], [bx, bz] = pts[i];
+    const L = Math.hypot(bx - ax, bz - az);
+    if (L < 1e-6) continue;
+    r.len += L;
+    // Stamp the tiles the road itself crosses, sampling inside long segments so
+    // a straight kilometre does not skip the tiles it passes through.
+    for (let s = 0; s <= Math.ceil(L / 200); s++) {
+      const t = s / Math.max(1, Math.ceil(L / 200));
+      const [plat, plon] = localToLatLon(ax + (bx - ax) * t, az + (bz - az) * t);
+      const [tx, ty] = tileAt(plat, plon, OSM_Z);
+      r.tiles.add(`${tx}/${ty}`);
+    }
+    let s = 0;
+    while (acc <= L - s + 1e-9) {
+      s += acc;
+      const t = s / L, x = ax + (bx - ax) * t, z = az + (bz - az) * t;
+      acc = SURVEY_P;
+      let dup = false;
+      for (const c of r.cps) if (Math.hypot(c.x - x, c.z - z) < SURVEY_DEDUP) { dup = true; break; }
+      if (dup) continue;
+      const key = cpKey(x, z);
+      const got = surveyGot.has(key);
+      r.cps.push({ x, z, key, got });
+      if (got) r.got++;
+    }
+    acc -= L - s;
+  }
+  if (surveyClaimed.has(name)) r.claimed = true;
+}
+/** Is the road's extent settled? The denominator grows while tiles stream —
+ *  Ou Kaapse Weg reads 4352m from one ring of tiles and 10058m from two — so
+ *  claiming before the survey closes would let you take a 10km pass by
+ *  driving its first half-kilometre. A road is only claimable once every
+ *  vector tile touching its bounding box has actually rendered. */
+// Memoised against the number of rendered tiles: the answer can only change
+// when a new tile lands, and the walk is ~270 set lookups for a long road that
+// the HUD would otherwise repeat every frame for every road on screen.
+// Both counts matter: a new tile can complete the ring, and a new fragment can
+// extend the road into tiles nobody has asked for yet.
+const surveyedCache = new Map<string, { done: number; tiles: number; v: boolean }>();
+function surveyed(r: SurveyRoad): boolean {
+  const c = surveyedCache.get(r.name);
+  if (c && c.done === osmDone.size && c.tiles === r.tiles.size) return c.v;
+  const v = surveyedRaw(r);
+  surveyedCache.set(r.name, { done: osmDone.size, tiles: r.tiles.size, v });
+  return v;
+}
+function surveyedRaw(r: SurveyRoad): boolean {
+  if (!r.tiles.size) return false;
+  // The tiles the road CROSSES, dilated by one — not the tiles of its bounding
+  // box. A bounding box is the wrong shape for a road: Chapman's Peak coils
+  // through 15km inside a 3km square, and demanding the box's corners would
+  // ask the player to drive to places the road never goes, so a road driven
+  // end to end sat at 9/9 collected and never became claimable. The dilation
+  // is what answers the real question — does this road continue into a tile I
+  // have not seen? — because a road can only extend past a loaded tile through
+  // one of its neighbours.
+  for (const k of r.tiles) {
+    const [tx, ty] = k.split('/').map(Number);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++)
+      if (!osmDone.has(`${tx + dx}/${ty + dy}`)) return false;
+  }
+  return true;
+}
+const surveyEligible = (r: SurveyRoad): boolean => r.len >= SURVEY_MIN && r.cps.length >= 2;
+/** The road under the wheels, its progress, and whether it can be claimed. */
+function surveyHere(): { r: SurveyRoad; frac: number; ready: boolean } | null {
+  const w = wayAt(state.x, state.z);
+  if (!w) return null;
+  const r = survey.get(w.name);
+  if (!r || !surveyEligible(r)) return null;
+  return { r, frac: r.got / r.cps.length, ready: surveyed(r) };
+}
+let surveyFlash = 0;          // capture ping, decays over a few frames
+let surveyClaim: { name: string; at: number; n: number } | null = null;
+let surveyLast: [number, number] | null = null;
+function stepSurvey(now: number): void {
+  // SWEPT, not sampled. Testing the car's position once a frame makes capture a
+  // function of frame rate: at 180km/h on a 20fps phone you jump 2.5m a frame,
+  // and on a browser throttled to 4fps you jump 12.5m — past a 12m checkpoint
+  // without ever being inside it. Test the SEGMENT travelled since last frame
+  // and the radius means the same thing at every frame rate.
+  let prev = surveyLast;
+  surveyLast = [state.x, state.z];
+  // A respawn moves the car kilometres between two frames. Sweeping THAT would
+  // draw a line across the map and collect every checkpoint it crossed, so any
+  // jump too long to be driving is treated as no previous position at all.
+  // 60m in a frame is 3.6km/h faster than the car can go at 60fps.
+  if (prev && Math.hypot(state.x - prev[0], state.z - prev[1]) > 60) prev = null;
+  const nearSwept = (cx: number, cz: number): number => {
+    if (!prev) return Math.hypot(cx - state.x, cz - state.z);
+    const dx = state.x - prev[0], dz = state.z - prev[1];
+    const t = clamp(((cx - prev[0]) * dx + (cz - prev[1]) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    return Math.hypot(cx - (prev[0] + dx * t), cz - (prev[1] + dz * t));
+  };
+  const w = wayAt(state.x, state.z);
+  // Capture demands you actually be ON the named way. 15% of checkpoints sit
+  // within 12m of a DIFFERENT named road (junctions, slip roads), so pure
+  // proximity would credit the wrong street. Strict capture, lenient
+  // completion: the majority threshold is where the tolerance lives.
+  if (w && w.on) {
+    const r = survey.get(w.name);
+    if (r) {
+      for (const c of r.cps) {
+        if (c.got) continue;
+        if (nearSwept(c.x, c.z) > SURVEY_CAPTURE) continue;
+        c.got = true; c.at = now; r.got++;
+        surveyGot.add(c.key);
+        surveyFlash = 1;
+        audio.stone();
+        saveSurvey();
+      }
+      if (!r.claimed && surveyEligible(r) && r.got / r.cps.length > SURVEY_MAJORITY && surveyed(r)) {
+        r.claimed = true; r.claimedAt = now;
+        surveyClaimed.add(r.name);
+        surveyClaim = { name: r.name, at: now, n: r.cps.length };
+        audio.thud(2);
+        saveSurvey();
+      }
+    }
+  }
+  if (surveyFlash > 0) surveyFlash = Math.max(0, surveyFlash - 0.04);
+}
+// Positions, not indices: a reload spawns a new origin and every local
+// coordinate shifts, but a checkpoint's latitude does not.
+const SURVEY_CAP = 20000;
+function saveSurvey(): void {
+  try {
+    const got = [...surveyGot];
+    localStorage.setItem('drive.survey.cp', JSON.stringify(got.slice(-SURVEY_CAP)));
+    localStorage.setItem('drive.survey.done', JSON.stringify([...surveyClaimed]));
+  } catch { /* a full quota costs progress, never the drive */ }
+}
+try {
+  for (const k of JSON.parse(localStorage.getItem('drive.survey.cp') ?? '[]') as string[]) surveyGot.add(k);
+  for (const k of JSON.parse(localStorage.getItem('drive.survey.done') ?? '[]') as string[]) surveyClaimed.add(k);
+} catch { /* fine */ }
 
 // NEVER render features onto terrain that hasn't arrived. Heights are
 // sampled ONCE at build time; against the flat 0-fallback, a whole street
@@ -3058,7 +3253,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
   if (osmLoaded.has(key)) return;
   osmLoaded.add(key);
   const cached = await readTileCache(x, y);
-  if (cached) { await renderGated(x, y, cached); return; }
+  if (cached) { await renderGated(x, y, cached); osmDone.add(key); return; }
   osmNote(1);
   if (osmInFlight >= 2) { await new Promise<void>((r) => osmQueue.push(r)); }
   osmInFlight++;
@@ -3084,6 +3279,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     osmDown = false;
     writeTileCache(x, y, ways);
     await renderGated(x, y, ways);
+    osmDone.add(key);
   } catch {
     if (++osmFails >= 2) osmDown = true;
     setTimeout(() => osmLoaded.delete(key), 8000); /* backoff, then a later pass retries */
@@ -3952,6 +4148,37 @@ function truckSpec(): Record<string, number> {
   best: missionBest === Infinity ? null : Math.round(missionBest),
 });
 (window as unknown as { __accept?: object }).__accept = (): void => acceptMission(performance.now());
+// The survey: the road under the wheels, and every road worth claiming.
+(window as unknown as { __survey?: object }).__survey = (): object => {
+  const here = surveyHere();
+  const roads = [...survey.values()].filter(surveyEligible).sort((a, b) => b.len - a.len).map((r) => ({
+    name: r.name, len: Math.round(r.len), cps: r.cps.length, got: r.got,
+    frac: +(r.got / r.cps.length).toFixed(2), surveyed: surveyed(r), claimed: r.claimed, track: r.track,
+  }));
+  return {
+    here: here ? { name: here.r.name, got: here.r.got, cps: here.r.cps.length,
+      frac: +here.frac.toFixed(2), surveyed: here.ready, claimed: here.r.claimed } : null,
+    roads: roads.slice(0, 20),
+    totals: { roads: roads.length, claimed: roads.filter((r) => r.claimed).length,
+      cps: roads.reduce((s, r) => s + r.cps, 0), got: roads.reduce((s, r) => s + r.got, 0) },
+  };
+};
+/** Every checkpoint of a named road, for a probe that wants to drive them. */
+(window as unknown as { __cps?: object }).__cps = (name: string): object =>
+  (survey.get(name)?.cps ?? []).map((c) => ({ x: +c.x.toFixed(1), z: +c.z.toFixed(1), got: c.got }));
+/** A named road's drivable centrelines, so a test can traverse the ROAD rather
+ *  than teleport onto the checkpoints and grade its own homework. */
+(window as unknown as { __wayGeom?: object }).__wayGeom = (name: string): number[][] => {
+  const out: number[][] = [], seen = new Set<string>();
+  for (const arr of roadGrid.values()) for (const s of arr) {
+    if (s.nm !== name) continue;
+    const k = `${s.ax.toFixed(1)},${s.az.toFixed(1)},${s.bx.toFixed(1)},${s.bz.toFixed(1)}`;
+    if (seen.has(k)) continue;
+    seen.add(k);
+    out.push([+s.ax.toFixed(2), +s.az.toFixed(2), +s.bx.toFixed(2), +s.bz.toFixed(2)]);
+  }
+  return out;
+};
 (window as unknown as { __camPos?: object }).__camPos = (): number[] =>
   [camera.position.x, camera.position.y, camera.position.z];
 // The way under the wheels, and the coordinate the HUD reports.
@@ -4354,6 +4581,36 @@ function updatePois(): void {
       // An edge chip is a BEARING, never a view — it points off-screen by
       // definition — so it is never ghosted.
       t: right ? `${label} >` : `< ${label}`, c: POI_COLORS[p.kind], edge: right ? 1 : -1, rng, hid: false,
+    });
+  }
+  updateCps();
+}
+// Checkpoint markers, only when a dial has asked for them. The mechanic is
+// designed around NOT drawing these — the tally moving is the whole signal —
+// but "invisible feels right" is a claim you can only test by driving the
+// version that isn't.
+interface CpDraw { x: number; y: number; got: boolean; age: number }
+let cpDraw: CpDraw[] = [];
+function updateCps(): void {
+  cpDraw = [];
+  if (cpVis === 0) return;
+  const w = wayAt(state.x, state.z);
+  const r = w ? survey.get(w.name) : null;
+  if (!r) return;
+  const now = performance.now();
+  for (const c of r.cps) {
+    const age = c.at ? now - c.at : Infinity;
+    // PING shows only what you just took; GHOST shows what is still out there.
+    if (cpVis === 1 ? age > 1400 : c.got && age > 1400) continue;
+    if (Math.hypot(c.x - state.x, c.z - state.z) > 500) continue;
+    poiVec.set(c.x, groundAt(c.x, c.z) + 1.2, c.z);
+    if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) continue;
+    poiVec.project(camera);
+    if (Math.abs(poiVec.x) > 0.98 || Math.abs(poiVec.y) > 0.98) continue;
+    cpDraw.push({
+      x: (poiVec.x * 0.5 + 0.5) * innerWidth,
+      y: (-poiVec.y * 0.5 + 0.5) * innerHeight,
+      got: c.got, age,
     });
   }
 }
@@ -4941,6 +5198,7 @@ function tick(now: number): void {
   if (wildlifeOn) stepWildlife(dt);
   stepOdo(dt, now);
   stepMission(now);
+  stepSurvey(now);
   if (now > vegAt) { vegAt = now + 900; refreshVeg(); }
   audio.update(state.speed, throttle, surfKind, groundedF, wx.rain, engRev, engGear, skid);
   reveal(state.x, state.z);
@@ -5425,6 +5683,17 @@ interface Mission {
   dest: { name: string; lat: number; lon: number };
   /** How close counts as arrived. */
   within: number;
+  /** The way you are supposed to take. Arriving is not enough — checkpoints on
+   *  this road must be collected, which is the only thing that distinguishes
+   *  driving the pass from driving over the mountain at it.
+   *
+   *  `atLeast` is a COUNT, not a fraction, and defaults to a majority. A
+   *  majority is the right rule for claiming a road, where the whole road is
+   *  the subject. It is the wrong rule for a job, where the road is only the
+   *  route: Chapman's Peak Drive measures 15km of switchbacks and a player
+   *  joining it near the headland would drive the pass honestly and still be
+   *  refused. A count states what the job actually asks for. */
+  via?: { name: string; atLeast?: number };
 }
 type MissionPhase = 'none' | 'offered' | 'active' | 'done';
 let mission: Mission | null = null;
@@ -5445,6 +5714,23 @@ function armMission(m: Mission): void {
   // where to go.
   pois.set(missionGiver.name, missionGiver);
 }
+/** Progress along a mission's required way — null when it asks for none. The
+ *  survey gate is deliberately NOT applied here. Claiming a road permanently
+ *  demands its full extent be known; a job only demands you took it, and by
+ *  the time you reach the far end you have streamed the whole road by driving
+ *  it. Applying the gate would leave a mission uncompletable on a stretch the
+ *  player had honestly driven. */
+function viaProgress(m: Mission): { got: number; need: number; met: boolean } | null {
+  if (!m.via) return null;
+  const r = survey.get(m.via.name);
+  const n = r?.cps.length ?? 0;
+  const need = m.via.atLeast ?? Math.floor(n / 2) + 1;
+  const got = r?.got ?? 0;
+  // A road that has not streamed yet reports need 1 and got 0, which is
+  // correctly "not met" rather than accidentally "met" on an empty set.
+  return { got, need: Math.max(1, need), met: got >= Math.max(1, need) };
+}
+const viaMet = (m: Mission): boolean => { const v = viaProgress(m); return !v || v.met; };
 function stepMission(now: number): void {
   if (!mission) return;
   const near = (p: Poi | null): number => (p ? Math.hypot(p.x - state.x, p.z - state.z) : Infinity);
@@ -5457,7 +5743,7 @@ function stepMission(now: number): void {
   if (missionPhase === 'active') {
     const d = near(missionDest);
     missionBest = Math.min(missionBest, d);
-    if (d < mission.within) {
+    if (d < mission.within && viaMet(mission)) {
       missionPhase = 'done';
       missionAt = now;
       if (missionDest) missionDest.pinned = false;
@@ -5505,7 +5791,20 @@ const DRIVES: Drive[] = [
       title: 'THE RUN OUT WEST',
       brief: 'TAKE THE PASS TO THE HEADLAND',
       dest: { name: 'CHAPMANS PEAK', lat: -34.079, lon: 18.362 },
-      within: 90,
+      // 120, not 90: the pass passes no nearer than 104m to the headland, so a
+      // 90m radius could only be reached by leaving the road at the end.
+      within: 120,
+      // The brief says TAKE THE PASS. Without this it was a suggestion — the
+      // headland is reachable by pointing the truck at it and climbing.
+      //
+      // SIX, and a count rather than a majority, because the headland sits at
+      // the MIDDLE of the pass: 4496m of road, 18 checkpoints, closest
+      // approach to the destination at 48% along it. Driving in from either
+      // end collects 9 — exactly half, never a majority — so requiring one
+      // would have shipped a mission that cannot be completed. Six is about
+      // 1.5km of pass: enough that you have to have driven it, low enough to
+      // survive joining part way along.
+      via: { name: "Chapman's Peak Drive", atLeast: 6 },
     },
   },
   { name: 'JOKULSARLON', sub: 'ICELAND · THE RING ROAD', lat: 64.048, lon: -16.18, h: 270 },
@@ -5535,6 +5834,7 @@ const cu = compMat.uniforms as Record<string, { value: number }>;
 let vegScale = 1;         // multiplies every VEG_CAP
 let wildlifeOn = true;
 let cloudShadowOn = true;
+let cpVis = 0;            // 0 hidden · 1 ping on capture · 2 ghosted markers
 const wearU = { value: 1 };  // shared by every bodywork material
 const BODY_COLORS: Array<[string, number]> = [
   ['RUST', 0xc4402c], ['EMBER', 0xd0642a], ['SAND', 0xc0a068],
@@ -5569,6 +5869,11 @@ const DIAL_GROUPS: DialGroup[] = [
         for (const h of herds) h.visible = wildlifeOn;
       }),
       dial('cloud', 'CLOUD SHADOW', ['OFF', 'ON'], 1, (i) => { cloudShadowOn = i === 1; }),
+      // How much a checkpoint tells you about itself. HIDDEN is the design as
+      // asked for — you feel the tally move and nothing else. The other two
+      // exist because "invisible" is a claim about feel that can only be
+      // settled by driving the alternatives.
+      dial('cpv', 'CHECKPOINTS', ['HIDDEN', 'PING', 'GHOST'], 0, (i) => { cpVis = i; }),
     ],
   },
   {
@@ -5636,7 +5941,33 @@ let streaming = false;
 function drawHud(surf: Surface, kmh: number, grip: number): void {
   hctx.clearRect(0, 0, HW, HH);
   const pad = 4;
-  // ── POI pins first, so panels overlay them ──
+  // ── checkpoint markers, under everything ──
+  // A collected one blooms and fades; an uncollected one is a bare unlit pip.
+  // Never a label and never a distance: the moment a checkpoint tells you how
+  // far away it is, you drive to IT instead of driving the road, which is the
+  // one thing this mechanic exists to avoid.
+  for (const c of cpDraw) {
+    const x = Math.round(c.x / hudS), y = Math.round(c.y / hudS);
+    if (x < 1 || y < 1 || x > HW - 2 || y > HH - 2) continue;
+    if (c.got) {
+      const k = clamp(1 - c.age / 1400, 0, 1);
+      hctx.save();
+      hctx.globalAlpha = k;
+      hctx.fillStyle = UI.good;
+      const rr = Math.round(1 + (1 - k) * 3);
+      hctx.fillRect(x - rr, y, rr * 2 + 1, 1);
+      hctx.fillRect(x, y - rr, 1, rr * 2 + 1);
+      hctx.restore();
+    } else {
+      hctx.save();
+      hctx.globalAlpha = 0.5;
+      hctx.fillStyle = UI.dim;
+      hctx.fillRect(x, y, 1, 1);
+      hctx.fillRect(x - 2, y, 1, 1); hctx.fillRect(x + 2, y, 1, 1);
+      hctx.restore();
+    }
+  }
+  // ── POI pins next, so panels overlay them ──
   const btnW = textW('ELSEWHERE') + 8;
   for (const p of poiDraw) {
     const label = fit(p.t, Math.round(HW * 0.62));
@@ -5820,7 +6151,19 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
       const w = wayAt(state.x, state.z);
       const line = w ? (w.on ? alienize(w.name).toUpperCase() : `NEAR ${alienize(w.name).toUpperCase()}`)
         : streaming ? 'STREAMING' : '';
-      if (line) textEdgeS(fitS(line, Math.round(HW * 0.6)), pad + 1, infoY + 9, w?.on ? UI.soft : UI.dim);
+      // The survey tally rides on the way line and takes its room first, so the
+      // road name is what gets clipped. A count you cannot read is worse than a
+      // name you can only half read.
+      const s = surveyHere();
+      const tally = s ? (s.r.claimed ? 'DRIVEN' : `${s.r.got}/${s.r.cps.length}`) : '';
+      const tw = tally ? textSW(tally) + 4 : 0;
+      if (line) textEdgeS(fitS(line, Math.round(HW * 0.6) - tw), pad + 1, infoY + 9, w?.on ? UI.soft : UI.dim);
+      if (s && line) {
+        // Dim while the extent is still settling — the denominator is not yet
+        // trustworthy and the HUD should not pretend otherwise.
+        const col = s.r.claimed ? UI.good : !s.ready ? UI.dim : s.frac > SURVEY_MAJORITY ? UI.gold : UI.soft;
+        textEdgeS(tally, pad + 1 + Math.min(textSW(line), Math.round(HW * 0.6) - tw) + 4, infoY + 9, col);
+      }
     }
     // GPS: TERTIARY. Present because a coordinate is the one thing you can act
     // on outside the game — paste it, share it, come back to it — but in the
@@ -5864,9 +6207,18 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
         col = missionReady ? UI.good : UI.dim;
       } else if (missionPhase === 'active') {
         const d = missionDest ? Math.hypot(missionDest.x - state.x, missionDest.z - state.z) : 0;
+        const v = viaProgress(mission);
         kicker = 'ON THE JOB';
         head = mission.title;
-        body = `${mission.brief} · ${fmtDist(d)}`;
+        // Once you are at the destination the distance stops being the news —
+        // what is left of the route does. Standing on the finish reading
+        // "0M" with nothing happening would look like a broken mission.
+        body = v && d < mission.within && !v.met
+          ? `TAKE ${alienize(mission.via?.name ?? '').toUpperCase()} · ${v.got}/${v.need}`
+          : v && !v.met
+            ? `${mission.brief} · ${fmtDist(d)} · ${v.got}/${v.need}`
+            : `${mission.brief} · ${fmtDist(d)}`;
+        if (v && d < mission.within && !v.met) col = UI.hot;
       } else {
         kicker = 'ARRIVED';
         head = mission.title;
@@ -5885,6 +6237,21 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
       // Only an offer you can actually take is a tap target — an "on the job"
       // panel that swallowed taps would eat the camera toggle for a whole drive.
       if (missionReady) missionRect = { x: bx, y: by, w: bw, h: bh };
+    }
+    // ── a road claimed ──
+    // Deliberately NOT a modal. Claiming a road is something you did, not
+    // something you must answer, so it sits under the mission slot, states
+    // itself, and leaves. Nothing to dismiss and nothing to tap.
+    if (surveyClaim && performance.now() - surveyClaim.at < 6000) {
+      const head = alienize(surveyClaim.name).toUpperCase();
+      const body = `${surveyClaim.n} CHECKPOINTS`;
+      const bw = Math.min(HW - pad * 2, Math.max(textW(head), textSW(body) + 2, textSW('SURVEYED') + 2) + 16);
+      const bx = Math.round((HW - bw) / 2);
+      const by = Math.round(HH * 0.17) + (mission ? 36 : 0);
+      panel(bx, by, bw, 30, UI.good);
+      textSmall(hctx, 'SURVEYED', bx + 5, by + 4, UI.dim);
+      glowText(fit(head, bw - 10), bx + 5, by + 11, UI.good);
+      textSmall(hctx, fitS(body, bw - 10), bx + 5, by + 21, UI.text);
     }
   }
   // LAST: the modal covers the instruments, not the other way round.
