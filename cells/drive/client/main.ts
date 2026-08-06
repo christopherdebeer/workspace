@@ -7924,7 +7924,8 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
     // is a known number of known-height rows, so subtract them and the bay can
     // never crowd a control off the screen again — on any phone.
     const tailH = 8 + 5 * 7 + 4 + SPEC_TEXT.length * 7 + 5   // dims + spec sheet
-      + 2 * 13 + 5 * 9 + 6;                                  // 2 dial groups, 5 dials
+      + 2 * 13 + 5 * 9 + 6                                   // 2 dial groups, 5 dials
+      + 12;                                                  // and clear of the frame
     const vh = clamp(Math.round(bw / natural), 78, Math.max(78, MY + MH - bayTop - tailH));
     vehRect = { x: MX + 4, y: bayTop, w: bw, h: vh };
     frame(vehRect.x, vehRect.y, vehRect.w, vehRect.h, UI.edge);
