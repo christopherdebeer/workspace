@@ -5078,7 +5078,18 @@ function meshHeightAt(x: number, z: number): number | null {
   }
   return out;
 };
-(window as unknown as { __roadsegsRaw?: object }).__roadsegsRaw = (): number[][] => [];
+/** Solid BUILDING edges — the other half of wallGrid, which `__rails` filters
+ *  out. A probe that wants to measure what a real crash costs needs something
+ *  to crash into, and a guard rail is deliberately the cheap case. */
+(window as unknown as { __walls?: object }).__walls = (): number[][] => {
+  const out: number[][] = [], seen = new Set<Seg>();
+  for (const arr of wallGrid.values()) for (const s of arr) {
+    if (s.sl || seen.has(s)) continue;
+    seen.add(s);
+    out.push([+s.ax.toFixed(2), +s.az.toFixed(2), +s.bx.toFixed(2), +s.bz.toFixed(2)]);
+  }
+  return out;
+};
 (window as unknown as { __roadsegs?: object }).__roadsegs = (): number[][] => {
   const out: number[][] = [], seen = new Set<Seg>();
   for (const arr of roadGrid.values()) for (const s of arr) {
@@ -5241,7 +5252,15 @@ function stickEl(size: number, style: Partial<CSSStyleDeclaration>): HTMLDivElem
   return el;
 }
 const stickBase = stickEl(STICK_R * 2 + 12, { border: '1.5px solid rgba(245,196,83,0.4)', background: 'rgba(8,12,20,0.25)' });
-const stickNub = stickEl(46, { background: 'rgba(245,196,83,0.75)', boxShadow: '0 2px 10px rgba(0,0,0,0.5)' });
+// HOLLOW. A solid disc was fine parked in a corner, but the nub now rests on
+// the truck in the chart view and a filled one blanked out the vehicle it is
+// steering — you could see the ring and not the thing inside it. A heavy rim
+// over a wash of colour reads just as clearly as an input and lets the truck,
+// its halo and its heading show straight through.
+const stickNub = stickEl(46, {
+  background: 'rgba(245,196,83,0.16)', border: '3px solid rgba(245,196,83,0.8)',
+  boxSizing: 'border-box', boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
+});
 let stick: { id: number; x0: number; y0: number; dx: number; dy: number } | null = null;
 let brakeId: number | null = null;
 // The chart (top) view pans and zooms like a map: the stick lives PINNED at
@@ -5250,7 +5269,23 @@ let brakeId: number | null = null;
 // with second-finger brake.
 let panX = 0, panZ = 0, zoomT = 1, zoomCur = 1;
 const panPtrs = new Map<number, { x: number; y: number }>();
-const stickHome = (): { x: number; y: number } => ({ x: innerWidth - 84, y: innerHeight - 118 });
+// ON THE TRUCK, not in the corner. Pinned bottom-right the stick sat straight
+// on top of the tachometer and read as a lens flare rather than a control. In
+// the chart view the vehicle already carries a ring — the halo — at the exact
+// size of the stick base, so the two become one object: the thing you steer and
+// the control that steers it are in the same place, and your thumb is over the
+// truck rather than over the instruments. Clamped inboard so a hard pan can
+// never leave the stick off-screen or under the corner readouts.
+const stickVec = new THREE.Vector3();
+const stickHome = (): { x: number; y: number } => {
+  car.updateWorldMatrix(true, false);
+  stickVec.setFromMatrixPosition(car.matrixWorld).project(camera);
+  const m = STICK_R + 14;
+  return {
+    x: clamp((stickVec.x * 0.5 + 0.5) * innerWidth, m, innerWidth - m),
+    y: clamp((0.5 - stickVec.y * 0.5) * innerHeight, m, innerHeight - m),
+  };
+};
 function updateStickHome(): void {
   // Nothing to steer with when the car is steering itself. Leaving a live stick
   // on screen in a moving vehicle is an invitation to touch it.
@@ -5962,6 +5997,21 @@ const rig = {
   svc: false,     // parked at a place that can work on the rig
 };
 const BATT_KWH = 10, SOLAR_KW = 2.4;
+// HOW THE RIG BEARS ON THE DRIVE. Until now every one of these stocks was
+// written, drawn, and read by nothing — you could grind the tyres to the canvas
+// and the truck handled identically, which makes the gauges decoration. Each
+// wear stock now buys a real term, and each keeps a floor: a ruined rig is
+// meant to be worse to drive, not stranded on a hillside with no way home.
+const rigGrip = (): number => 0.72 + 0.28 * rig.tyre;    // tread → mu and lateral
+const rigDamp = (): number => 0.55 + 0.45 * rig.susp;    // dampers → body control
+// A bent truck pushes more air and binds somewhere; a flat pack limps. Below
+// 8% charge the drive is rationed rather than cut, because being unable to move
+// is the one failure with no way out of it.
+const rigPower = (): number =>
+  (0.75 + 0.25 * rig.hull) * (rig.batt <= 0 ? 0.3 : rig.batt < 0.08 ? 0.55 : 1);
+// Player tuning, from the RIG tab. Grip is a genuine trade: a softer compound
+// finds more of the surface and gives its tread up to do it.
+const tune = { steer: 1, susp: 1, grip: 1, tyreWear: 1 };
 function stepRig(dt: number, v: number, sk: Surface, sunUp: number): void {
   if (dt <= 0) return;
   // Solar: the array only makes power with the sun up and the sky open.
@@ -5973,11 +6023,18 @@ function stepRig(dt: number, v: number, sk: Surface, sunUp: number): void {
   rig.batt = clamp(rig.batt + ((rig.solarKw - rig.drawKw) * (dt / 3600)) / BATT_KWH, 0, 1);
   // Tread goes to slip first and abrasion second; rock and gravel eat it far
   // faster than tarmac.
+  //
+  // The slip term was 0.004 per frame at 60fps — 0.24 of the tread PER SECOND
+  // of full slide, so four seconds of drifting took a new set of tyres to the
+  // canvas. It is now 0.02/s at full slip, and scaled by speed: locking up at
+  // walking pace is not what destroys a tyre. A hard sideways minute costs
+  // about a fifth of the tread, which is punishing without being a countdown.
   const abrasive = sk === 'road' ? 0.02 : sk === 'track' ? 0.12 : 0.2;
-  rig.tyre = clamp(rig.tyre - (skid * 0.004 + (v / 28) * abrasive * 0.00012) * dt * 60, 0, 1);
+  const slipWear = skid * 0.02 * clamp(v / 14, 0, 1);
+  rig.tyre = clamp(rig.tyre - (slipWear + (v / 28) * abrasive * 0.0012) * tune.tyreWear * dt, 0, 1);
   // The suspension wears on washboard at speed — the environment costing you,
   // slowly, the way the odometer climbs.
-  rig.susp = clamp(rig.susp - (v / 28) * (sk === 'road' ? 0.008 : 0.1) * 0.00012 * dt * 60, 0, 1);
+  rig.susp = clamp(rig.susp - (v / 28) * (sk === 'road' ? 0.008 : 0.1) * 0.0072 * dt, 0, 1);
 }
 /** A landing. Severity 0..1 from how hard the body came down. */
 function rigLanding(sev: number): void {
@@ -5985,9 +6042,15 @@ function rigLanding(sev: number): void {
   rig.tyre = clamp(rig.tyre - sev * 0.008, 0, 1);
   if (sev > 0.6) rig.hull = clamp(rig.hull - (sev - 0.6) * 0.02, 0, 1);
 }
-/** A hit worth remembering. `sq` is how square it was, 0 a graze and 1 head-on. */
-function rigImpact(sq: number, v: number): void {
-  rig.hull = clamp(rig.hull - sq * clamp(v / 20, 0, 1) * 0.02, 0, 1);
+/** A hit, charged on the SPEED IT ACTUALLY COST YOU rather than per frame.
+ *  The scrape loop runs every frame you are in contact, and the old flat 0.02
+ *  a frame meant 1.2 of hull per second — a second of leaning on a guard rail
+ *  wrote the truck off. Billing the impulse gets both ends right for free: a
+ *  graze along a barrier sheds almost no speed and costs almost nothing, while
+ *  driving into a façade sheds all of it at once and hurts. */
+function rigImpact(lost: number): void {
+  if (lost <= 0.15) return;
+  rig.hull = clamp(rig.hull - lost * 0.006, 0, 1);
 }
 // The drivetrain's own state, separate from road speed — which is the point:
 // with the wheels off the ground they are no longer the same number.
@@ -6023,9 +6086,12 @@ function tick(now: number): void {
   // saturates with speed so the car neither pivots in place nor becomes twitchy.
   // SKIPPED ENTIRELY under real drive — the position is a measurement, and
   // integrating a model on top of it would fight the receiver for the truck.
+  // A battered hull and a flat pack cost DRIVE; worn tyres cost BRAKING, which
+  // is the same contact patch the cornering budget comes out of below.
+  const power = rigPower();
   const thrust = real.on ? 0 : brake
-    ? -Math.sign(state.speed) * CAR.brake * 1.4
-    : throttle >= 0 ? throttle * CAR.accel : throttle * CAR.brake;
+    ? -Math.sign(state.speed) * CAR.brake * 1.4 * rigGrip()
+    : throttle >= 0 ? throttle * CAR.accel * power : throttle * CAR.brake * rigGrip();
   // Grip comes from wheels on the ground: airborne there's no drive, no
   // braking, barely any steering — and gravity along the body's pitch makes
   // climbs cost speed and descents pay it back.
@@ -6043,12 +6109,12 @@ function tick(now: number): void {
     state.speed -= state.speed * surf.drag * wetDrag * (0.1 + 0.9 * grip) * dt;
     if (brake && grip > 0.4 && Math.abs(state.speed) < 1.2) state.speed = 0;
     state.speed = clamp(state.speed, -CAR.maxRev, surf.max * (1.25 - wx.wet * 0.2)); // downhill may overrun the flat cap
-    const SRATE = 7; // full-lock in ~0.14s — responsive but not snappy
+    const SRATE = 7 * tune.steer; // full-lock in ~0.14s at STOCK
     steerCur += clamp(steer - steerCur, -SRATE * dt, SRATE * dt);
     if (Math.abs(state.speed) > 0.1) {
       // Authority decays with speed (like a real wheel): full lock is a parking
       // move, a nudge at 180 — turn RATE stays sane across the whole range.
-      const authority = (0.15 + 0.85 * grip) / (1 + Math.abs(state.speed) / 12);
+      const authority = (0.15 + 0.85 * grip) * tune.steer / (1 + Math.abs(state.speed) / 12);
       yawRate = (steerCur * CAR.steerMax * authority * state.speed) / CAR.wheelbase;
       state.heading += yawRate * dt;
     }
@@ -6065,7 +6131,9 @@ function tick(now: number): void {
   // gravel it keeps running until the scrub bleeds it off. That is the drift.
   if (!real.on) {
     const sH = Math.sin(state.heading), cH = Math.cos(state.heading);
-    const budget = surf.mu * GRAV * grip * (1 - wx.wet * 0.28);
+    // Tread and compound both act here, on the one thing a tyre actually is:
+    // how much acceleration the contact patch can supply before it lets go.
+    const budget = surf.mu * rigGrip() * tune.grip * GRAV * grip * (1 - wx.wet * 0.28);
     // Friction circle: hard braking or full throttle eats into cornering.
     // Only partly — a fully coupled circle makes an arcade car undriveable.
     const longG = Math.min(Math.abs(thrust), budget);
@@ -6154,8 +6222,9 @@ function tick(now: number): void {
     if (!hit) break;
   }
   if (scrape >= 0) {
+    const was = Math.abs(state.speed);
     state.speed *= Math.exp(-5 * scrape * dt);
-    rigImpact(scrape, Math.abs(state.speed));
+    rigImpact(was - Math.abs(state.speed));
   }
   // ── suspension: the truck LIES on the terrain via 4 wheel contacts ──
   const sinH = Math.sin(state.heading), cosH = Math.cos(state.heading);
@@ -6236,15 +6305,19 @@ function tick(now: number): void {
   // skyward at 8.5×10.9 = 93m/s², which launched the truck off every hill it
   // drove up. Measured: uphill grip fell from 1.00 to 0.26 before this clamp.
   const terrainVy = clamp(state.speed * Math.tan(gradePitch), -28, 0);
-  let aY = SUSP.k * (tY - bodyY) - SUSP.d * (vBodyY - terrainVy);
+  // The SOFTNESS dial moves the spring; worn dampers only lose damping, which
+  // is what a tired damper actually does — the truck starts to float and keep
+  // moving after the bump has finished, and the wheels spend longer light.
+  const sK = tune.susp, sD = rigDamp();
+  let aY = SUSP.k * sK * (tY - bodyY) - SUSP.d * sD * (vBodyY - terrainVy);
   if (aY < -9.81) aY = -9.81; // falling is gravity's job — crests launch
   vBodyY += aY * dt; bodyY += vBodyY * dt;
   if (bodyY < tY - SUSP.travel) {
     bodyY = tY - SUSP.travel;
     if (vBodyY < 0) { if (vBodyY < -2.5) audio.thud(Math.min(3, -vBodyY / 3)); vBodyY *= -0.25; } // bump stop
   }
-  vPitch += (SUSP.ka * (tPitch - pitchC) - SUSP.da * vPitch) * dt; pitchC += vPitch * dt;
-  vRoll += (SUSP.ka * (tRoll - rollC) - SUSP.da * vRoll) * dt; rollC += vRoll * dt;
+  vPitch += (SUSP.ka * sK * (tPitch - pitchC) - SUSP.da * sD * vPitch) * dt; pitchC += vPitch * dt;
+  vRoll += (SUSP.ka * sK * (tRoll - rollC) - SUSP.da * sD * vRoll) * dt; rollC += vRoll * dt;
   // Articulation: wheels chase their own contact while the sprung body lags.
   groundedF = 0;
   for (let i = 0; i < 4; i++) {
@@ -6543,6 +6616,9 @@ function tick(now: number): void {
     halo.visible = true;
   }
   if (vehRect.w > 0) renderStudio(dt);
+  // The stick rides the truck in the chart view, so its home moves whenever the
+  // truck or the pan does — which is every frame, not just on resize.
+  if (camMode === 'top' && !stick) updateStickHome();
   requestAnimationFrame(tick);
 }
 // The menu's vehicle bay. The truck is BORROWED out of the world into the
@@ -7066,10 +7142,10 @@ let drivePageRect = { x: 0, y: 0, w: 0, h: 0 };
 // dial CYCLES rather than sliding: a stepped list reads at 3x5 pixels, a slider
 // does not, and there is nothing here whose value is worth more resolution than
 // four named steps.
-interface Dial { key: string; label: string; opts: string[]; apply: (i: number) => void; at: number }
+interface Dial { key: string; label: string; opts: string[]; apply: (i: number) => void; at: number; bar?: boolean }
 interface DialGroup { title: string; dials: Dial[] }
-const dial = (key: string, label: string, opts: string[], def: number, apply: (i: number) => void): Dial =>
-  ({ key, label, opts, apply, at: def });
+const dial = (key: string, label: string, opts: string[], def: number, apply: (i: number) => void, bar = false): Dial =>
+  ({ key, label, opts, apply, at: def, bar });
 const cu = compMat.uniforms as Record<string, { value: number }>;
 let vegScale = 1;         // multiplies every VEG_CAP
 let wildlifeOn = true;
@@ -7122,6 +7198,28 @@ const DIAL_GROUPS: DialGroup[] = [
     dials: [
       dial('wear', 'WEATHERING', ['CLEAN', 'WORN', 'BEATEN'], 1, (i) => { wearU.value = [0.15, 1, 1.8][i]; }),
       dial('paint', 'PAINT', BODY_COLORS.map(([n]) => n), 0, (i) => { bodyMat?.color.setHex(BODY_COLORS[i][1]); }),
+    ],
+  },
+  // The SETUP a driver would actually change between stages, and unlike the
+  // render dials these are felt rather than seen. Every one is a trade, or it
+  // would just be a difficulty slider with extra steps.
+  {
+    title: 'SETUP',
+    dials: [
+      // Rack speed AND authority together: QUICK turns in harder and gets there
+      // sooner, which on gravel is exactly how you spin it.
+      dial('steer', 'STEERING', ['CALM', 'STOCK', 'QUICK', 'RALLY'], 1,
+        (i) => { tune.steer = [0.72, 1, 1.3, 1.65][i]; }, true),
+      // Spring rate. SOFT soaks up washboard and wallows through corners;
+      // STIFF holds a line on tarmac and skates over anything rough.
+      dial('susp', 'SUSPENSION', ['SOFT', 'STOCK', 'FIRM', 'STIFF'], 1,
+        (i) => { tune.susp = [0.62, 1, 1.45, 2][i]; }, true),
+      // Compound. Grip is bought with tread: the sticky set finds another
+      // quarter of the surface and gives itself up three times as fast.
+      dial('grip', 'TYRES', ['HARD', 'STOCK', 'SOFT', 'STICKY'], 1, (i) => {
+        tune.grip = [0.88, 1, 1.12, 1.25][i];
+        tune.tyreWear = [0.5, 1, 1.9, 3.2][i];
+      }, true),
     ],
   },
 ];
@@ -7552,29 +7650,38 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
       meter(R - BARW, y + 6, CELLS, lit, col, 2, 3, 1);
       y -= 12;
     };
-    // RIG, bottom group: the stocks the world spends.
+    // RIG, right column: the stocks the world spends, beside the instrument
+    // they are read against.
     row('SUSP', cells(rig.susp), rig.susp < 0.3 ? UI.bad : rig.susp < 0.6 ? UI.gold : UI.soft);
     row('HULL', cells(rig.hull), rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft);
     row('TYRE', cells(rig.tyre), rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft);
     row('BATT', cells(rig.batt), rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good);
     textEdgeS('RIG', R - textSW('RIG'), y, UI.edge);
-    y -= 11;
-    // ENV, top group: what the world is doing to the rig.
-    row('WET', cells(wx.wet), wx.wet > 0.5 ? UI.bad : UI.edge);
+    // ── ENV, the LEFT column: what the world is doing ──
+    // The two groups answer different questions and were stacked in one corner
+    // reading as one table. ENV is about the world, and the left column is
+    // already where the world is described — the place, the way, the
+    // coordinate — so it belongs on that side, mirrored: label over bar, both
+    // aligned LEFT to the same edge the place name uses.
     {
+      const L = pad + 1;
+      let ey = my - 13;                // stacked upward, clear of the chart/POV dock
+      const erow = (label: string, lit: number, col: string, labelCol = UI.dim): void => {
+        meter(L, ey + 6, CELLS, lit, col, 2, 3, 1);
+        textEdgeS(label, L, ey, labelCol);
+        ey -= 12;
+      };
+      erow('WET', cells(wx.wet), wx.wet > 0.5 ? UI.bad : UI.edge);
       const sname = surf === 'road' ? 'ROAD' : surf === 'track' ? 'TRACK' : surf === 'water' ? 'WATER' : 'ROUGH';
       const scol = surf === 'road' ? UI.good : surf === 'track' ? UI.edge : UI.hot;
-      row(sname, cells(grip), scol, scol);
-    }
-    {
+      erow(sname, cells(grip), scol, scol);
       const w = WX[wx.sky];
       const hs = `${CARD8[Math.round(deg / 45) % 8]}${Math.round(deg)}`;
-      textEdgeS(hs, R - textSW(hs), y, UI.gold);
-      let lx = R - textSW(hs) - 5;
-      textEdgeS(w.label, lx - textSW(w.label), y,
-        wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft);
-      lx -= textSW(w.label) + 5;
-      textEdgeS('ENV', lx - textSW('ENV'), y, UI.edge);
+      textEdgeS('ENV', L, ey, UI.edge);
+      let lx = L + textSW('ENV') + 5;
+      textEdgeS(w.label, lx, ey, wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft);
+      lx += textSW(w.label) + 5;
+      textEdgeS(hs, lx, ey, UI.gold);
     }
   }
   // ── the job, as a modal ──
@@ -7845,8 +7952,9 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
       textSmall(hctx, v, MX + 46, y, UI.text);
       y += 7;
     }
-    // The rig's own dials live with the rig, not in a settings screen.
-    drawDials(DIAL_GROUPS.filter((g) => g.title === 'VEHICLE'), MX, MW, y + 5);
+    // The rig's own dials live with the rig, not in a settings screen — how it
+    // looks, and now how it drives.
+    drawDials(DIAL_GROUPS.filter((g) => g.title === 'VEHICLE' || g.title === 'SETUP'), MX, MW, y + 5);
   } else {
     // ── readouts, then the controls for this tab ──
     let y = top;
@@ -7870,7 +7978,10 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
       textSmall(hctx, v, MX + 52, y, UI.text);
       y += 8;
     }
-    if (tab === T_SYSTEM) y = drawDials(DIAL_GROUPS.filter((g) => g.title !== 'VEHICLE'), MX, MW, y + 4);
+    // VEHICLE and SETUP both belong to the rig and are drawn in that tab.
+    if (tab === T_SYSTEM) {
+      y = drawDials(DIAL_GROUPS.filter((g) => g.title !== 'VEHICLE' && g.title !== 'SETUP'), MX, MW, y + 4);
+    }
     y += 6;
     const items = TAB_ITEMS[tab];
     if (tab === T_WORLD) {
@@ -7930,7 +8041,14 @@ function drawDials(groups: DialGroup[], MX: number, MW: number, y0: number): num
     for (const d of g.dials) {
       textSmall(hctx, d.label, MX + 8, y, UI.soft);
       const v = d.opts[d.at];
-      textSmall(hctx, v, MX + MW - textSW(v) - 9, y, UI.gold);
+      const vx = MX + MW - textSW(v) - 9;
+      textSmall(hctx, v, vx, y, UI.gold);
+      // A SETUP dial also draws its position in the range, in the same meter
+      // the cluster uses for everything else. A render option is a choice
+      // between named things and a word says it all; a setup is a point on a
+      // scale, and "FIRM" alone does not tell you how much of the travel is
+      // left above it.
+      if (d.bar) meter(vx - d.opts.length * 3 - 4, y + 1, d.opts.length, d.at + 1, UI.gold, 2, 4, 1);
       dialRects.push({ x: MX + 5, y: y - 2, w: MW - 10, h: 9, d });
       y += 9;
     }
