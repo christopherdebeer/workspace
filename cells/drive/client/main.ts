@@ -4166,6 +4166,11 @@ function truckSpec(): Record<string, number> {
 /** Every checkpoint of a named road, for a probe that wants to drive them. */
 (window as unknown as { __cps?: object }).__cps = (name: string): object =>
   (survey.get(name)?.cps ?? []).map((c) => ({ x: +c.x.toFixed(1), z: +c.z.toFixed(1), got: c.got }));
+/** Checkpoint marker visibility, and how many markers a frame actually put on
+ *  screen — the only honest answer to "why can't I see them". */
+(window as unknown as { __setcpv?: object }).__setcpv = (v: number): void => { cpVis = v; };
+(window as unknown as { __cpdraw?: object }).__cpdraw = (): number => cpDraw.length;
+(window as unknown as { __cpwhy?: object }).__cpwhy = (): object => cpCull;
 /** A named road's drivable centrelines, so a test can traverse the ROAD rather
  *  than teleport onto the checkpoints and grade its own homework. */
 (window as unknown as { __wayGeom?: object }).__wayGeom = (name: string): number[][] => {
@@ -4589,29 +4594,56 @@ function updatePois(): void {
 // designed around NOT drawing these — the tally moving is the whole signal —
 // but "invisible feels right" is a claim you can only test by driving the
 // version that isn't.
-interface CpDraw { x: number; y: number; got: boolean; age: number }
+interface CpDraw { x: number; y: number; tx: number; ty: number; got: boolean; age: number; d: number }
 let cpDraw: CpDraw[] = [];
+// 700m was too short to ever see one: checkpoints sit 250m apart on a road
+// that bends, so from any given spot most of them are behind you or round the
+// next headland. A beam stands 26m tall and reads from well over a kilometre.
+const CP_SIGHT = 1400;     // how far a marker carries
+const CP_BEAM_H = 26;      // metres of light column in BEAM mode
+const cpCull = { vis: 0, total: 0, taken: 0, far: 0, behind: 0, offscreen: 0, drawn: 0 };
 function updateCps(): void {
   cpDraw = [];
+  cpCull.vis = cpVis;
+  cpCull.total = cpCull.taken = cpCull.far = cpCull.behind = cpCull.offscreen = cpCull.drawn = 0;
   if (cpVis === 0) return;
-  const w = wayAt(state.x, state.z);
-  const r = w ? survey.get(w.name) : null;
-  if (!r) return;
   const now = performance.now();
-  for (const c of r.cps) {
-    const age = c.at ? now - c.at : Infinity;
-    // PING shows only what you just took; GHOST shows what is still out there.
-    if (cpVis === 1 ? age > 1400 : c.got && age > 1400) continue;
-    if (Math.hypot(c.x - state.x, c.z - state.z) > 500) continue;
-    poiVec.set(c.x, groundAt(c.x, c.z) + 1.2, c.z);
-    if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) continue;
-    poiVec.project(camera);
-    if (Math.abs(poiVec.x) > 0.98 || Math.abs(poiVec.y) > 0.98) continue;
-    cpDraw.push({
-      x: (poiVec.x * 0.5 + 0.5) * innerWidth,
-      y: (-poiVec.y * 0.5 + 0.5) * innerHeight,
-      got: c.got, age,
-    });
+  // EVERY nearby road, not just the one under the wheels. Scoping this to
+  // wayAt() was why ghosts looked broken: the marker for the checkpoint you
+  // are driving towards vanished the moment a wheel touched the verge, and
+  // never appeared at all for the road you were about to turn onto.
+  for (const r of survey.values()) {
+    for (const c of r.cps) {
+      cpCull.total++;
+      const age = c.at ? now - c.at : Infinity;
+      // PING shows ONLY what you just took, and nothing else, ever. The other
+      // modes add the ones still out there.
+      if (cpVis === 1 ? age > 1400 : c.got && age > 1400) { cpCull.taken++; continue; }
+      const d = Math.hypot(c.x - state.x, c.z - state.z);
+      if (d > CP_SIGHT) { cpCull.far++; continue; }
+      const g = groundAt(c.x, c.z);
+      poiVec.set(c.x, g + 1.2, c.z);
+      if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) { cpCull.behind++; continue; }
+      poiVec.project(camera);
+      // Horizontal only. Culling on Y threw away every checkpoint whose foot
+      // sits below the viewport — which is most of the near ones under a chase
+      // camera, and exactly the ones whose beam would be tallest on screen.
+      if (Math.abs(poiVec.x) > 1.25) { cpCull.offscreen++; continue; }
+      cpCull.drawn++;
+      const sx = (poiVec.x * 0.5 + 0.5) * innerWidth;
+      const sy = (-poiVec.y * 0.5 + 0.5) * innerHeight;
+      // Project the top of the column too, so the beam keeps real perspective
+      // — a fixed pixel height would stand up straight on a hillside and lie
+      // about which way is up.
+      poiVec.set(c.x, g + CP_BEAM_H, c.z).project(camera);
+      cpDraw.push({
+        x: sx, y: sy,
+        tx: (poiVec.x * 0.5 + 0.5) * innerWidth,
+        ty: (-poiVec.y * 0.5 + 0.5) * innerHeight,
+        got: c.got, age, d,
+      });
+      if (cpDraw.length >= 60) return;
+    }
   }
 }
 
@@ -5834,7 +5866,8 @@ const cu = compMat.uniforms as Record<string, { value: number }>;
 let vegScale = 1;         // multiplies every VEG_CAP
 let wildlifeOn = true;
 let cloudShadowOn = true;
-let cpVis = 0;            // 0 hidden · 1 ping on capture · 2 ghosted markers
+// 0 hidden · 1 ping the take only · 2 ghost the ones still out there · 3 beam
+let cpVis = 0;
 const wearU = { value: 1 };  // shared by every bodywork material
 const BODY_COLORS: Array<[string, number]> = [
   ['RUST', 0xc4402c], ['EMBER', 0xd0642a], ['SAND', 0xc0a068],
@@ -5873,7 +5906,7 @@ const DIAL_GROUPS: DialGroup[] = [
       // asked for — you feel the tally move and nothing else. The other two
       // exist because "invisible" is a claim about feel that can only be
       // settled by driving the alternatives.
-      dial('cpv', 'CHECKPOINTS', ['HIDDEN', 'PING', 'GHOST'], 0, (i) => { cpVis = i; }),
+      dial('cpv', 'CHECKPOINTS', ['HIDDEN', 'PING', 'GHOST', 'BEAM'], 0, (i) => { cpVis = i; }),
     ],
   },
   {
@@ -5941,31 +5974,89 @@ let streaming = false;
 function drawHud(surf: Surface, kmh: number, grip: number): void {
   hctx.clearRect(0, 0, HW, HH);
   const pad = 4;
+  // Filled and hollow diamonds, plotted a row at a time. At this resolution a
+  // marker is about seven pixels across, so it is drawn, not stroked.
+  function diamond(cx: number, cy: number, r: number): void {
+    for (let dy = -r; dy <= r; dy++) {
+      const w = r - Math.abs(dy);
+      hctx.fillRect(cx - w, cy + dy, w * 2 + 1, 1);
+    }
+  }
+  function diamondOutline(cx: number, cy: number, r: number): void {
+    for (let dy = -r; dy <= r; dy++) {
+      const w = r - Math.abs(dy);
+      if (Math.abs(dy) === r) { hctx.fillRect(cx - w, cy + dy, w * 2 + 1, 1); continue; }
+      hctx.fillRect(cx - w, cy + dy, 1, 1);
+      hctx.fillRect(cx + w, cy + dy, 1, 1);
+    }
+  }
   // ── checkpoint markers, under everything ──
-  // A collected one blooms and fades; an uncollected one is a bare unlit pip.
   // Never a label and never a distance: the moment a checkpoint tells you how
-  // far away it is, you drive to IT instead of driving the road, which is the
-  // one thing this mechanic exists to avoid.
+  // far away it is you drive to IT instead of driving the road, which is the
+  // one thing this mechanic exists to avoid. Shape and brightness only.
   for (const c of cpDraw) {
     const x = Math.round(c.x / hudS), y = Math.round(c.y / hudS);
-    if (x < 1 || y < 1 || x > HW - 2 || y > HH - 2) continue;
+    const ty0 = Math.round(c.ty / hudS);
+    if (x < -4 || x > HW + 4) continue;
+    // A beam whose foot is below the screen still shows its column, so the
+    // vertical test has to consider the top of the marker as well as its base.
+    if (Math.min(y, ty0) > HH + 4 || Math.max(y, ty0) < -4) continue;
     if (c.got) {
+      // The take: a cross that blooms outward and fades. This is the whole of
+      // PING, and it rides along under GHOST and BEAM too.
       const k = clamp(1 - c.age / 1400, 0, 1);
+      const rr = Math.round(2 + (1 - k) * 6);
       hctx.save();
       hctx.globalAlpha = k;
       hctx.fillStyle = UI.good;
-      const rr = Math.round(1 + (1 - k) * 3);
       hctx.fillRect(x - rr, y, rr * 2 + 1, 1);
       hctx.fillRect(x, y - rr, 1, rr * 2 + 1);
+      hctx.globalAlpha = k * 0.8;
+      hctx.fillRect(x - 1, y - 1, 3, 3);
       hctx.restore();
-    } else {
-      hctx.save();
-      hctx.globalAlpha = 0.5;
-      hctx.fillStyle = UI.dim;
-      hctx.fillRect(x, y, 1, 1);
-      hctx.fillRect(x - 2, y, 1, 1); hctx.fillRect(x + 2, y, 1, 1);
-      hctx.restore();
+      continue;
     }
+    // Nearer reads brighter, so a wall of distant markers never out-shouts the
+    // one you are about to reach.
+    const near = clamp(1 - c.d / CP_SIGHT, 0, 1);
+    hctx.save();
+    if (cpVis === 3) {
+      // BEAM: a column of light standing on the checkpoint. Drawn as stacked
+      // pixels rather than a stroked line because a 1px diagonal line
+      // antialiases into a grey smear at this resolution, and everything else
+      // on this canvas is hard-edged.
+      const ty = ty0, tx = c.tx / hudS;
+      const h = y - ty;
+      if (h > 1) {
+        hctx.fillStyle = UI.edge;
+        for (let i = 0; i <= h; i++) {
+          const t = i / h;                       // 0 at the foot, 1 at the top
+          hctx.globalAlpha = (0.85 - t * 0.72) * (0.35 + 0.65 * near);
+          // Lean with the projection: a column beside the camera leans away,
+          // and a beam drawn dead vertical would read as a HUD overlay rather
+          // than something standing in the world.
+          hctx.fillRect(Math.round(x + (tx - x) * t), y - i, t < 0.35 ? 2 : 1, 1);
+        }
+      }
+      hctx.globalAlpha = 0.5 + 0.5 * near;
+      hctx.fillStyle = UI.gold;
+      diamond(x, y, 3);
+      hctx.restore();
+      continue;
+    }
+    // GHOST: a hollow diamond on a short stem. It has to survive being drawn
+    // over scrub and shadow at 2px per HUD pixel, so it gets a dark seat
+    // underneath it — the same trick the POI pins use — rather than more alpha.
+    hctx.globalAlpha = 0.85;
+    hctx.fillStyle = UI.ink;
+    diamond(x, y - 5, 4);
+    hctx.fillRect(x, y - 4, 1, 5);
+    hctx.globalAlpha = 0.45 + 0.55 * near;
+    hctx.fillStyle = UI.edge;
+    diamondOutline(x, y - 5, 3);
+    hctx.fillRect(x, y - 2, 1, 3);
+    hctx.fillRect(x - 1, y, 3, 1);
+    hctx.restore();
   }
   // ── POI pins next, so panels overlay them ──
   const btnW = textW('ELSEWHERE') + 8;
