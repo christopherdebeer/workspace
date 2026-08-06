@@ -7259,87 +7259,100 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     }
   }
   // ── the rig, bottom-right ──
-  // One stack, built from the bottom up so the speed always sits in the same
-  // place however many rows are above it. Everything is right-aligned to the
-  // same edge and drawn bare — no fill, no frame — so the world reads through
-  // the instruments instead of being punched out behind them.
+  // One instrument, one grammar. The SPEED is a circular dial of pixel tick
+  // bars — a tachometer sweep, 135° up over the top to 45° — scaled to THIS
+  // surface's own cap, so a full ring means flat out on the ground you are
+  // actually on rather than some absolute the truck never reaches off-road.
+  // Everything above it is one repeated primitive: a micro label RIGHT-ALIGNED
+  // over a right-aligned bar of the same ten cells, all on one shared edge,
+  // all bare. No fills, no frames — a black box over a game this dark is a
+  // hole in the picture.
   {
     const R = HW - pad;                      // the shared right edge
-    let y = HH - pad - 15;
-    // SPEED, biggest thing on the screen and the only one at 2x.
-    const digits = String(kmh);
-    const unitW = textSW('KM/H');
-    textEdgeS('KM/H', R - unitW, y + 9, UI.edge);
-    glowText(digits, R - unitW - 3 - textW(digits, 2), y, UI.gold, 2);
-    // ACCELERATION, as a signed bar growing from the middle: what the truck is
-    // doing to you right now, which the number alone never conveys.
-    y -= 8;
+    const CELLS = 10, PITCH = 3, BARW = CELLS * PITCH - 1;
+    // ── the dial ──
+    const DR = 19;                           // outer radius, ticks 6px deep
+    const cx = R - DR, cy = HH - pad - DR - 1;
     {
+      const SEGS = 14;
+      const A0 = 0.75 * Math.PI, SWEEP = 1.5 * Math.PI;
+      // The cap the physics actually enforces (dry): surface max × 1.25.
+      const frac = clamp(Math.abs(state.speed) / (surf.max * 1.25), 0, 1);
+      const lit = Math.round(frac * SEGS);
+      for (let i = 0; i < SEGS; i++) {
+        const a = A0 + ((i + 0.5) / SEGS) * SWEEP;
+        const on = i < lit;
+        // The top of the range is drawn hot even unlit — a redline you can see
+        // coming. The LEADING tick takes the acceleration: pulling reads good,
+        // hard braking reads hot, which is the accelerometer folded into the
+        // dial the way a needle's swing rate would carry it.
+        let col = i / SEGS > 0.8 ? UI.hot : UI.gold;
+        if (on && i === lit - 1) col = rig.accel > 1.5 ? UI.good : rig.accel < -2.5 ? UI.bad : col;
+        // 2×2 blocks along the radius, not single pixels: a 1px dotted radial
+        // dissolved into noise on the diagonals at this resolution.
+        hctx.fillStyle = on ? col : 'rgba(87,201,176,0.22)';
+        for (let r = DR - 5; r <= DR; r += 2) {
+          hctx.fillRect(Math.round(cx + Math.cos(a) * r) - 1, Math.round(cy + Math.sin(a) * r) - 1, 2, 2);
+        }
+      }
+      const digits = String(kmh);
+      glowText(digits, cx - Math.round(textW(digits, 2) / 2) + 1, cy - 6, UI.gold, 2);
+      // The unit sits in the dial's own mouth — the 90° gap the sweep leaves
+      // at the bottom is exactly a label's worth of room.
+      textEdgeS('KM/H', cx - Math.round(textSW('KM/H') / 2) + 1, cy + DR - 4, UI.edge);
+    }
+    // ── the stack: label over bar, one primitive for everything ──
+    let y = cy - DR - 12;
+    const row = (label: string, lit: number, col: string, labelCol = UI.dim, note?: string): void => {
+      textEdgeS(label, R - textSW(label), y, labelCol);
+      if (note) textEdgeS(note, R - textSW(label) - 5 - textSW(note), y, col);
+      meter(R - BARW, y + 6, CELLS, lit, col, 2, 3, 1);
+      y -= 12;
+    };
+    const cells = (f: number): number => Math.round(clamp(f, 0, 1) * CELLS);
+    // ACCELERATION: the same ten cells, but signed from the middle — thrust
+    // fills right in green, braking fills left in ember.
+    {
+      textEdgeS('ACCEL', R - textSW('ACCEL'), y, UI.dim);
       const a = clamp(rig.accel / 6, -1, 1);
-      const cells = 10, mid = R - cells * 3;
-      hctx.fillStyle = UI.dim;
-      for (let i = 0; i < cells; i++) hctx.fillRect(mid + i * 3, y + 3, 2, 1);
-      const n = Math.round(Math.abs(a) * (cells / 2));
+      const mid = R - BARW;
+      hctx.fillStyle = 'rgba(87,201,176,0.16)';
+      for (let i = 0; i < CELLS; i++) hctx.fillRect(mid + i * PITCH, y + 7, 2, 1);
+      const n = Math.round(Math.abs(a) * (CELLS / 2));
       hctx.fillStyle = a >= 0 ? UI.good : UI.hot;
       for (let i = 0; i < n; i++) {
-        const c = a >= 0 ? cells / 2 + i : cells / 2 - 1 - i;
-        hctx.fillRect(mid + c * 3, y + 1, 2, 3);
+        const c = a >= 0 ? CELLS / 2 + i : CELLS / 2 - 1 - i;
+        hctx.fillRect(mid + c * PITCH, y + 6, 2, 3);
       }
-      textEdgeS('ACCEL', mid - textSW('ACCEL') - 4, y, UI.dim);
+      y -= 12;
     }
-    // The rig's condition. A bar each, and the label only in the micro face —
-    // these are glanced at, not read.
-    const barR = (label: string, frac: number, col: string, note?: string): void => {
-      y -= 8;
-      const cells = 10;
-      meter(R - cells * 3, y + 1, cells, Math.round(clamp(frac, 0, 1) * cells), col, 2, 3, 1);
-      let lx = R - cells * 3 - 4;
-      if (note) { textEdgeS(note, lx - textSW(note), y, col); lx -= textSW(note) + 4; }
-      textEdgeS(label, lx - textSW(label), y, UI.dim);
-    };
-    // Only what is worth a row. A full tank and an undamaged hull say nothing,
-    // so they stay quiet until they have something to report — the screen
-    // earns its density back when the rig starts costing you something.
-    if (rig.hull < 0.97) barR('HULL', rig.hull, rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft);
-    if (rig.tyre < 0.97) barR('TYRE', rig.tyre, rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft);
-    // Suspension is a LIVE reading, not a stock: shown only while it is
-    // actually working, or it is a bar twitching at you for the whole drive.
-    if (rig.susp > 0.55) barR('SUSP', rig.susp, rig.susp > 0.9 ? UI.hot : UI.soft);
-    barR('BATT', rig.batt, rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good,
-      rig.solarKw > rig.drawKw ? '+SOL' : undefined);
-    // ── conditions, same stack ──
-    y -= 9;
+    // Only what is worth a row. A full pack and an unmarked hull say nothing;
+    // the screen earns its density back when the rig starts costing you.
+    row('BATT', cells(rig.batt), rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good,
+      UI.dim, rig.solarKw > rig.drawKw ? '+SOL' : undefined);
+    if (rig.susp > 0.55) row('SUSP', cells(rig.susp), rig.susp > 0.9 ? UI.hot : UI.soft);
+    if (rig.tyre < 0.97) row('TYRE', cells(rig.tyre), rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft);
+    if (rig.hull < 0.97) row('HULL', cells(rig.hull), rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft);
+    if (wx.wet > 0.03) row('WET', cells(wx.wet), wx.wet > 0.5 ? UI.bad : UI.edge);
+    // SURFACE: its NAME is the label — coloured, since what you are on is the
+    // reading — and its bar is the grip it is giving you. SLIP flashes beside
+    // it, because that is the moment the label and the bar part company.
     {
-      // Standing water is grip you have already lost.
-      if (wx.wet > 0.03) {
-        meter(R - 30, y + 1, 10, Math.round(clamp(wx.wet, 0, 1) * 10), wx.wet > 0.5 ? UI.bad : UI.edge, 2, 3, 1);
-        textEdgeS('WET', R - 34 - textSW('WET'), y, UI.dim);
-      }
-      // Grip you are losing RIGHT NOW — the one line you read mid-corner.
-      if (skid > 0.06) {
-        const sl = `SLIP${skid > 0.55 ? '!' : ''}`;
-        textEdgeS(sl, R - 34 - textSW('WET') - 6 - textSW(sl), y, skid > 0.55 ? UI.bad : UI.gold);
-      }
+      const sname = surf === 'road' ? 'ROAD' : surf === 'track' ? 'TRACK' : surf === 'water' ? 'WATER' : 'ROUGH';
+      const scol = surf === 'road' ? UI.good : surf === 'track' ? UI.edge : UI.hot;
+      row(sname, cells(grip), scol, scol,
+        skid > 0.06 ? `SLIP${skid > 0.55 ? '!' : ''}` : undefined);
     }
-    y -= 8;
+    // The header of the column: where the sky is and where you are pointed,
+    // then the odometer, dimmest — a number read between drives, not during.
+    y += 4;
     {
       const w = WX[wx.sky];
       const hs = `${CARD8[Math.round(deg / 45) % 8]}${Math.round(deg)}`;
       textEdgeS(hs, R - textSW(hs), y, UI.gold);
       textEdgeS(w.label, R - textSW(hs) - 5 - textSW(w.label), y,
         wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft);
-    }
-    // SURFACE, with its grip bar — the thing that decides what the controls do.
-    y -= 11;
-    {
-      const sname = surf === 'road' ? 'ROAD' : surf === 'track' ? 'TRACK' : surf === 'water' ? 'WATER' : 'ROUGH';
-      const scol = surf === 'road' ? UI.good : surf === 'track' ? UI.edge : UI.hot;
-      meter(R - 30, y + 3, 10, Math.round(clamp(grip, 0, 1) * 10), scol, 2, 3, 1);
-      glowText(sname, R - 34 - textW(sname), y, scol);
-    }
-    // The odometer tops the stack, dimmest: a number you read between drives.
-    y -= 9;
-    {
+      y -= 8;
       const o = `${fmtKm(odo.trip)} · ${fmtKm(odo.total)}`;
       textEdgeS(o, R - textSW(o), y, UI.dim);
     }
