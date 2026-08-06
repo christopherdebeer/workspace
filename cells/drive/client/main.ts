@@ -3122,7 +3122,9 @@ interface OsmWay {
   ck?: string;
 }
 // Only the tags renderWays actually reads — the rest is dead weight per way.
-const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'layer', 'name'];
+// amenity/shop feed repair POIs; surface/smoothness/tracktype will feed wear.
+// The S3 tiles keep EVERY tag — this list is only the client cache's diet.
+const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'layer', 'name', 'amenity', 'shop', 'surface', 'smoothness', 'tracktype'];
 let osmDb: IDBDatabase | null = null;
 const osmDbReady: Promise<void> = new Promise((resolve) => {
   try {
@@ -3134,7 +3136,7 @@ const osmDbReady: Promise<void> = new Promise((resolve) => {
 });
 // Free the shared origin quota from the failed localStorage era.
 try { for (const k of Object.keys(localStorage)) if (k.startsWith('drive.osm.')) localStorage.removeItem(k); } catch { /* fine */ }
-const osmCacheKey = (x: number, y: number): string => `3/${OSM_Z}/${x}/${y}`; // v3: keeps tunnel/bridge/name tags
+const osmCacheKey = (x: number, y: number): string => `4/${OSM_Z}/${x}/${y}`; // v4: keeps amenity/shop/surface tags
 async function readTileCache(x: number, y: number): Promise<OsmWay[] | null> {
   await osmDbReady;
   if (!osmDb) return null;
@@ -3179,13 +3181,18 @@ function pruneTileCache(): void {
 }
 
 // ── points of interest (named features become HUD waypoints) ───────
-interface Poi { name: string; x: number; z: number; kind: 'park' | 'water' | 'place' | 'mission'; pinned?: boolean }
+interface Poi { name: string; x: number; z: number; kind: 'park' | 'water' | 'place' | 'mission' | 'repair'; pinned?: boolean }
 const pois = new Map<string, Poi>();
 function notePoi(tags: Record<string, string>, pts: Array<[number, number]>): void {
   const name = tags.name;
   if (!name || pois.has(name) || pois.size >= 400) return;
+  // A garage or a fuel stop is worth marking even before the game does
+  // anything with it — and now the game does: they are where the rig heals.
+  const fix = ['fuel', 'charging_station', 'car_wash'].includes(tags.amenity ?? '')
+    || ['car_repair', 'car', 'car_parts', 'tyres'].includes(tags.shop ?? '');
   const kind: Poi['kind'] | null =
-    tags.natural === 'water' || tags.waterway ? 'water'
+    fix ? 'repair'
+    : tags.natural === 'water' || tags.waterway ? 'water'
     : tags.building ? 'place'
     : tags.leisure || tags.landuse ? 'park'
     : null; // named streets are not destinations
@@ -4625,8 +4632,8 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
  *  rather than the one the eye reports. */
 (window as unknown as { __rig?: object }).__rig = (): object => ({
   batt: +rig.batt.toFixed(3), solarKw: +rig.solarKw.toFixed(2), drawKw: +rig.drawKw.toFixed(2),
-  tyre: +rig.tyre.toFixed(4), hull: +rig.hull.toFixed(4), susp: +rig.susp.toFixed(2),
-  accel: +rig.accel.toFixed(2),
+  tyre: +rig.tyre.toFixed(4), hull: +rig.hull.toFixed(4), susp: +rig.susp.toFixed(4),
+  accel: +rig.accel.toFixed(2), svc: rig.svc,
 });
 (window as unknown as { __rigset?: object }).__rigset = (o: Partial<typeof rig>): void => { Object.assign(rig, o); };
 (window as unknown as { __contact?: object }).__contact = (x: number, z: number): object => {
@@ -5322,7 +5329,7 @@ function toggleAlien(): void {
 // Named parks/waters/buildings from the OSM stream become waypoints. This
 // only COMPUTES them; the pixel HUD draws them, so labels share the world's
 // grid and font instead of being browser text floating above it.
-const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a', mission: '#f5c453' };
+const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a', mission: '#f5c453', repair: '#e2703a' };
 const poiVec = new THREE.Vector3(), poiView = new THREE.Vector3(), camFwd = new THREE.Vector3();
 const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}M` : `${(m / 1000).toFixed(1)}KM`);
 // Close enough to act on. The pins used to be CULLED inside 25m, which threw
@@ -5755,7 +5762,7 @@ let gradePitch = 0, gradeRoll = 0, slideV = 0;
 // How hard the tyres are currently being asked to work beyond what they have
 // (0 = planted, 1 = fully away). Drives the squeal, the dust, and the HUD.
 let skid = 0;
-let rigPrevV = 0;
+let rigPrevV = 0, rigPrevGrounded = 1;
 // ── the rig's own condition ────────────────────────────────────────
 // Every one of these is INTEGRATED FROM WHAT ACTUALLY HAPPENS, because a gauge
 // that moves on a timer is worse than no gauge: it teaches you to ignore the
@@ -5768,8 +5775,9 @@ const rig = {
   drawKw: 0,      // what the drive is taking
   tyre: 1,        // tread left
   hull: 1,        // bodywork
-  susp: 0,        // live |travel| used, 0..1
+  susp: 1,        // dampers and bushes — a STOCK, spent by landings and washboard
   accel: 0,       // m/s², smoothed — what the driver feels
+  svc: false,     // parked at a place that can work on the rig
 };
 const BATT_KWH = 10, SOLAR_KW = 2.4;
 function stepRig(dt: number, v: number, sk: Surface, sunUp: number): void {
@@ -5785,6 +5793,15 @@ function stepRig(dt: number, v: number, sk: Surface, sunUp: number): void {
   // faster than tarmac.
   const abrasive = sk === 'road' ? 0.02 : sk === 'track' ? 0.12 : 0.2;
   rig.tyre = clamp(rig.tyre - (skid * 0.004 + (v / 28) * abrasive * 0.00012) * dt * 60, 0, 1);
+  // The suspension wears on washboard at speed — the environment costing you,
+  // slowly, the way the odometer climbs.
+  rig.susp = clamp(rig.susp - (v / 28) * (sk === 'road' ? 0.008 : 0.1) * 0.00012 * dt * 60, 0, 1);
+}
+/** A landing. Severity 0..1 from how hard the body came down. */
+function rigLanding(sev: number): void {
+  rig.susp = clamp(rig.susp - sev * 0.03, 0, 1);
+  rig.tyre = clamp(rig.tyre - sev * 0.008, 0, 1);
+  if (sev > 0.6) rig.hull = clamp(rig.hull - (sev - 0.6) * 0.02, 0, 1);
 }
 /** A hit worth remembering. `sq` is how square it was, 0 a graze and 1 head-on. */
 function rigImpact(sq: number, v: number): void {
@@ -6148,11 +6165,28 @@ function tick(now: number): void {
   {
     const prevV = rigPrevV; rigPrevV = state.speed;
     if (dt > 0) rig.accel += ((state.speed - prevV) / dt - rig.accel) * Math.min(1, 6 * dt);
-    // Normalised by the LARGER of bump and droop: droop is 0.34 against 0.26
-    // of travel, so dividing by travel alone pegged the gauge at 1.31 sitting
-    // still on a crest.
-    rig.susp = Math.max(...wheelPivots.map((w) => Math.abs(w.position.y))) / Math.max(SUSP.travel, SUSP.droop);
+    // A LANDING: airborne last frame, planted this frame, with the body still
+    // falling hard. This is where jumps and drops spend the rig.
+    if (groundedF > 0.5 && rigPrevGrounded < 0.2 && vBodyY < -5) {
+      rigLanding(clamp((-vBodyY - 5) / 9, 0, 1));
+    }
+    rigPrevGrounded = groundedF;
     stepRig(dt, Math.abs(state.speed), surfKind, SUN_DIR.y * (1 - wx.cloud * 0.2));
+    // SERVICE. Stop beside somewhere that plausibly has tools — a marked
+    // garage or fuel stop heals fast, any named building slowly — and the rig
+    // is worked on while you wait. Driving off stops the work.
+    rig.svc = false;
+    if (dt > 0 && Math.abs(state.speed) < 0.8) {
+      for (const poi of pois.values()) {
+        if (poi.kind !== 'repair' && poi.kind !== 'place') continue;
+        if (Math.hypot(poi.x - state.x, poi.z - state.z) > POI_RANGE) continue;
+        rig.svc = true;
+        const rate = poi.kind === 'repair' ? 3 : 1;
+        rig.batt = clamp(rig.batt + dt * 0.02 * rate, 0, 1);
+        for (const k of ['tyre', 'hull', 'susp'] as const) rig[k] = clamp(rig[k] + dt * 0.008 * rate, 0, 1);
+        break;
+      }
+    }
   }
   stepMission(now);
   stepSurvey(now);
@@ -7259,102 +7293,100 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
     }
   }
   // ── the rig, bottom-right ──
-  // One instrument, one grammar. The SPEED is a circular dial of pixel tick
-  // bars — a tachometer sweep, 135° up over the top to 45° — scaled to THIS
-  // surface's own cap, so a full ring means flat out on the ground you are
-  // actually on rather than some absolute the truck never reaches off-road.
-  // Everything above it is one repeated primitive: a micro label RIGHT-ALIGNED
-  // over a right-aligned bar of the same ten cells, all on one shared edge,
-  // all bare. No fills, no frames — a black box over a game this dark is a
-  // hole in the picture.
+  // The reference sheet's terminal table married to its dial: every stat is
+  // LABEL · BAR · VALUE on one grid, PERSISTENT — a row that jumps in and out
+  // teaches you nothing about the quantity it reports, so nothing here
+  // appears or vanishes. Momentary truths (slip, solar surplus, servicing)
+  // are LEDs: always present, lit when true. Two groups, ENV over RIG, each
+  // under its own header line. All of it bare over the world.
   {
     const R = HW - pad;                      // the shared right edge
     const CELLS = 10, PITCH = 3, BARW = CELLS * PITCH - 1;
-    // ── the dial ──
-    const DR = 19;                           // outer radius, ticks 6px deep
-    const cx = R - DR, cy = HH - pad - DR - 1;
+    const COL_W = 74;                        // label column → value column span
+    const Lx = R - COL_W;                    // labels start here
+    const Bx = R - 26 - BARW;                // bars end a full value's width short of the edge
+    const cells = (f: number): number => Math.round(clamp(f, 0, 1) * CELLS);
+    // ── the dial, lifted to make room for the trip line beneath it ──
+    const DR = 19;
+    const cx = R - DR, cy = HH - pad - DR - 9;
     {
+      // A full bezel of faint minor ticks first — the ring exists even where
+      // the sweep has nothing to say — then the lit sweep over it.
+      for (let i = 0; i < 36; i++) {
+        const a = (i / 36) * Math.PI * 2;
+        hctx.fillStyle = 'rgba(87,201,176,0.14)';
+        hctx.fillRect(Math.round(cx + Math.cos(a) * DR), Math.round(cy + Math.sin(a) * DR), 1, 1);
+      }
       const SEGS = 14;
       const A0 = 0.75 * Math.PI, SWEEP = 1.5 * Math.PI;
-      // The cap the physics actually enforces (dry): surface max × 1.25.
       const frac = clamp(Math.abs(state.speed) / (surf.max * 1.25), 0, 1);
       const lit = Math.round(frac * SEGS);
       for (let i = 0; i < SEGS; i++) {
         const a = A0 + ((i + 0.5) / SEGS) * SWEEP;
         const on = i < lit;
-        // The top of the range is drawn hot even unlit — a redline you can see
-        // coming. The LEADING tick takes the acceleration: pulling reads good,
-        // hard braking reads hot, which is the accelerometer folded into the
-        // dial the way a needle's swing rate would carry it.
         let col = i / SEGS > 0.8 ? UI.hot : UI.gold;
         if (on && i === lit - 1) col = rig.accel > 1.5 ? UI.good : rig.accel < -2.5 ? UI.bad : col;
-        // 2×2 blocks along the radius, not single pixels: a 1px dotted radial
-        // dissolved into noise on the diagonals at this resolution.
         hctx.fillStyle = on ? col : 'rgba(87,201,176,0.22)';
-        for (let r = DR - 5; r <= DR; r += 2) {
+        for (let r = DR - 5; r <= DR - 1; r += 2) {
           hctx.fillRect(Math.round(cx + Math.cos(a) * r) - 1, Math.round(cy + Math.sin(a) * r) - 1, 2, 2);
         }
       }
       const digits = String(kmh);
-      glowText(digits, cx - Math.round(textW(digits, 2) / 2) + 1, cy - 6, UI.gold, 2);
-      // The unit sits in the dial's own mouth — the 90° gap the sweep leaves
-      // at the bottom is exactly a label's worth of room.
-      textEdgeS('KM/H', cx - Math.round(textSW('KM/H') / 2) + 1, cy + DR - 4, UI.edge);
+      glowText(digits, cx - Math.round(textW(digits, 2) / 2) + 1, cy - 10, UI.gold, 2);
+      textEdgeS('KM/H', cx - Math.round(textSW('KM/H') / 2) + 1, cy + 6, UI.edge);
+      // The engine line, as the reference writes it: thousands of RPM, from
+      // the same rev state the audio whines with.
+      const rpm = `${Math.max(1, Math.round(1 + engRev * 6))}K RPM`;
+      textEdgeS(rpm, cx - Math.round(textSW(rpm) / 2) + 1, cy + 13, UI.dim);
+      // TRIP, under the speedometer — the number that belongs to this drive.
+      const o = `${fmtKm(odo.trip)} · ${fmtKm(odo.total)}`;
+      textEdgeS(o, R - textSW(o), HH - pad - 6, UI.dim);
     }
-    // ── the stack: label over bar, one primitive for everything ──
-    let y = cy - DR - 12;
-    const row = (label: string, lit: number, col: string, labelCol = UI.dim, note?: string): void => {
-      textEdgeS(label, R - textSW(label), y, labelCol);
-      if (note) textEdgeS(note, R - textSW(label) - 5 - textSW(note), y, col);
-      meter(R - BARW, y + 6, CELLS, lit, col, 2, 3, 1);
-      y -= 12;
+    // ── the table ──
+    const row = (label: string, lit: number, col: string, value: string, vcol: string): void => {
+      textEdgeS(label, Lx, y, UI.dim);
+      meter(Bx, y + 1, CELLS, lit, col, 2, 3, 1);
+      textEdgeS(value, R - textSW(value), y, vcol);
+      y -= 9;
     };
-    const cells = (f: number): number => Math.round(clamp(f, 0, 1) * CELLS);
-    // ACCELERATION: the same ten cells, but signed from the middle — thrust
-    // fills right in green, braking fills left in ember.
-    {
-      textEdgeS('ACCEL', R - textSW('ACCEL'), y, UI.dim);
-      const a = clamp(rig.accel / 6, -1, 1);
-      const mid = R - BARW;
-      hctx.fillStyle = 'rgba(87,201,176,0.16)';
-      for (let i = 0; i < CELLS; i++) hctx.fillRect(mid + i * PITCH, y + 7, 2, 1);
-      const n = Math.round(Math.abs(a) * (CELLS / 2));
-      hctx.fillStyle = a >= 0 ? UI.good : UI.hot;
-      for (let i = 0; i < n; i++) {
-        const c = a >= 0 ? CELLS / 2 + i : CELLS / 2 - 1 - i;
-        hctx.fillRect(mid + c * PITCH, y + 6, 2, 3);
-      }
-      y -= 12;
-    }
-    // Only what is worth a row. A full pack and an unmarked hull say nothing;
-    // the screen earns its density back when the rig starts costing you.
+    // A fixed LED: the label is always there, ink when dark, lit when true.
+    const led = (x: number, label: string, on: boolean, col: string): number => {
+      textEdgeS(label, x - textSW(label), y, on ? col : 'rgba(87,201,176,0.28)');
+      return x - textSW(label) - 6;
+    };
+    let y = cy - DR - 12;
+    // RIG, bottom group: the stocks the world spends.
+    row('SUSP', cells(rig.susp), rig.susp < 0.3 ? UI.bad : rig.susp < 0.6 ? UI.gold : UI.soft,
+      `${Math.round(rig.susp * 100)}%`, UI.soft);
+    row('HULL', cells(rig.hull), rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft,
+      `${Math.round(rig.hull * 100)}%`, UI.soft);
+    row('TYRE', cells(rig.tyre), rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft,
+      `${Math.round(rig.tyre * 100)}%`, UI.soft);
     row('BATT', cells(rig.batt), rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good,
-      UI.dim, rig.solarKw > rig.drawKw ? '+SOL' : undefined);
-    if (rig.susp > 0.55) row('SUSP', cells(rig.susp), rig.susp > 0.9 ? UI.hot : UI.soft);
-    if (rig.tyre < 0.97) row('TYRE', cells(rig.tyre), rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft);
-    if (rig.hull < 0.97) row('HULL', cells(rig.hull), rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft);
-    if (wx.wet > 0.03) row('WET', cells(wx.wet), wx.wet > 0.5 ? UI.bad : UI.edge);
-    // SURFACE: its NAME is the label — coloured, since what you are on is the
-    // reading — and its bar is the grip it is giving you. SLIP flashes beside
-    // it, because that is the moment the label and the bar part company.
+      `${Math.round(rig.batt * 100)}%`, UI.soft);
+    {
+      textEdgeS('RIG', Lx, y, UI.edge);
+      let lx = R;
+      lx = led(lx, 'SVC', rig.svc, UI.edge);
+      lx = led(lx, 'SOL', rig.solarKw > rig.drawKw, UI.gold);
+      led(lx, skid > 0.55 ? 'SLIP!' : 'SLIP', skid > 0.06, skid > 0.55 ? UI.bad : UI.gold);
+      y -= 11;
+    }
+    // ENV, top group: what the world is doing to the rig.
+    row('WET', cells(wx.wet), wx.wet > 0.5 ? UI.bad : UI.edge, `${Math.round(wx.wet * 100)}%`, UI.soft);
     {
       const sname = surf === 'road' ? 'ROAD' : surf === 'track' ? 'TRACK' : surf === 'water' ? 'WATER' : 'ROUGH';
       const scol = surf === 'road' ? UI.good : surf === 'track' ? UI.edge : UI.hot;
-      row(sname, cells(grip), scol, scol,
-        skid > 0.06 ? `SLIP${skid > 0.55 ? '!' : ''}` : undefined);
+      row('SURF', cells(grip), scol, sname, scol);
     }
-    // The header of the column: where the sky is and where you are pointed,
-    // then the odometer, dimmest — a number read between drives, not during.
-    y += 4;
     {
       const w = WX[wx.sky];
       const hs = `${CARD8[Math.round(deg / 45) % 8]}${Math.round(deg)}`;
+      textEdgeS('ENV', Lx, y, UI.edge);
       textEdgeS(hs, R - textSW(hs), y, UI.gold);
-      textEdgeS(w.label, R - textSW(hs) - 5 - textSW(w.label), y,
+      const wl = w.label;
+      textEdgeS(wl, R - textSW(hs) - 5 - textSW(wl), y,
         wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft);
-      y -= 8;
-      const o = `${fmtKm(odo.trip)} · ${fmtKm(odo.total)}`;
-      textEdgeS(o, R - textSW(o), y, UI.dim);
     }
   }
   // ── the job, as a modal ──
