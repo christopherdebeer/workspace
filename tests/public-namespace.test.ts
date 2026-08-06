@@ -192,11 +192,30 @@ describe('ADR-0095 — the drive cell as miss handler', () => {
   it('keeps only what the renderer reads, at 6dp', () => {
     const out = trimWays([
       { type: 'way', id: 1, tags: { highway: 'residential' }, geometry: [{ lat: 51.5074123456, lon: -0.1278123456 }] },
-      { type: 'node', id: 2, geometry: [{ lat: 1, lon: 2 }] },      // not a way
-      { type: 'way', id: 3, tags: { building: 'yes' } },            // no geometry
+      { type: 'way', id: 3, tags: { building: 'yes' } },            // no geometry at all
     ]);
     expect(out).toHaveLength(1);
     expect(out[0]).toEqual({ id: 1, tags: { highway: 'residential' }, geometry: [[51.507412, -0.127812]] });
+  });
+
+  // A FUEL STATION IS A NODE, and so is a viewpoint, a summit and most
+  // garages. Dropping everything that was not a `way` is what left the rig
+  // with nowhere to be serviced; a node carries its position in lat/lon rather
+  // than a geometry array, and normalising it to a one-point geometry here is
+  // what lets the renderer keep a single code path.
+  it('turns a node into a one-point geometry rather than dropping it', () => {
+    const out = trimWays([
+      { type: 'node', id: 9, tags: { amenity: 'fuel', name: 'Badwater Fuel' }, lat: 36.2301234567, lon: -116.7699876 },
+    ]);
+    expect(out).toHaveLength(1);
+    expect(out[0]).toEqual({
+      id: 9, tags: { amenity: 'fuel', name: 'Badwater Fuel' }, geometry: [[36.230123, -116.769988]],
+    });
+  });
+
+  it('still drops anything with no position at all', () => {
+    expect(trimWays([{ type: 'node', id: 4, tags: { amenity: 'fuel' } }])).toHaveLength(0);
+    expect(trimWays([{ type: 'relation', id: 5, tags: { landuse: 'forest' } }])).toHaveLength(0);
   });
 
   it('an untagged way still round-trips (tags default to {}, never undefined)', () => {

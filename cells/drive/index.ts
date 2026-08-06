@@ -10,7 +10,7 @@ import { gzipSync, deflateSync, inflateSync } from 'node:zlib';
  * behind fog of war.
  *
  * The OSM vectors come through this cell's PUBLIC NAMESPACE (ADR-0095): the
- * client asks the edge for `~/osm/v1/<z>/<x>/<y>`, which is an object in S3
+ * client asks the edge for `~/osm/v2/<z>/<x>/<y>`, which is an object in S3
  * served by CloudFront with no compute in the path. Only a MISS reaches this
  * handler, which asks Overpass once, trims the answer to what the renderer
  * reads, writes the object, and returns it. `git truth: cells/drive/client/main.ts`.
@@ -31,7 +31,10 @@ const CSP = [
   // `'self'`), but the Overpass hosts stay in the list: the client falls back
   // to them directly if the cell's own tile route fails, so a bad deploy here
   // degrades to the old behaviour instead of an empty world.
-  "connect-src 'self' https://esm.sh https://overpass-api.de https://overpass.kumi.systems https://overpass.osm.jp https://overpass.private.coffee https://s3.amazonaws.com https://nominatim.openstreetmap.org",
+  // …plus api.open-meteo.com, which is the live sky: cloud cover, rain and the
+  // wind that pushes the deck across it. No key, CORS open, and if it is
+  // unreachable the synthetic weather chain simply keeps running.
+  "connect-src 'self' https://esm.sh https://overpass-api.de https://overpass.kumi.systems https://overpass.osm.jp https://overpass.private.coffee https://s3.amazonaws.com https://nominatim.openstreetmap.org https://api.open-meteo.com",
   "img-src data: blob:",
   'worker-src blob:',
   "base-uri 'none'",
@@ -97,7 +100,7 @@ const SHELL = `<!doctype html>
 // written — otherwise every ocean tile is a permanent miss and therefore a
 // permanent invocation — and (2) a failure must never be written, or one bad
 // minute upstream becomes our bad week.
-const TILE_RE = /^\/~\/osm\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+const TILE_RE = /^\/~\/osm\/v2\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 const COVER_RE = /^\/~\/cover\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // THREE upstreams, not one. Measured on a 12km corridor through Death Valley:
 // 7 of 25 cold tiles came back 503 at 9–12.5s because the single upstream was
@@ -373,17 +376,41 @@ function tileBounds(z: number, x: number, y: number) {
 function overpassQuery(z: number, x: number, y: number): string {
   const b = tileBounds(z, x, y);
   const bbox = `${b.latS},${b.lonW},${b.latN},${b.lonE}`;
+  // A FUEL STATION IS A NODE. So is a viewpoint, a summit, and most garages —
+  // and this query asked only for ways, which is why the rig had nowhere to be
+  // serviced and the map had nothing worth driving to. `nwr` fixes that class
+  // of thing outright. Rivers were the same shape of miss: only `riverbank`
+  // POLYGONS were fetched, and the overwhelming majority of rivers in OSM are
+  // a LINE with no polygon at all, so anything short of a major river simply
+  // did not exist.
+  //
+  // Deliberately NOT here: barriers (walls, fences, hedges) and the wider
+  // man_made set. They are the most numerous objects in a city by a distance,
+  // the sim already grows its own guard rails, and we have just spent real
+  // effort making tiles arrive in time. Measured at Bormio, the additions below
+  // cost +20% bytes and +39% elements, which is a fair price; barriers were
+  // several times that on their own.
   return `[out:json][timeout:15];(
       way["highway"](${bbox});
       way["building"](${bbox});
-      way["natural"="water"](${bbox});
-      way["waterway"="riverbank"](${bbox});
-      way["landuse"~"forest|meadow|grass|recreation_ground"](${bbox});
-      way["leisure"~"park|pitch|garden"](${bbox});
+      way["natural"~"water|coastline|cliff|scrub|wetland|bare_rock|sand"](${bbox});
+      way["waterway"~"riverbank|river|stream|canal"](${bbox});
+      way["landuse"~"forest|meadow|grass|recreation_ground|farmland|orchard|vineyard|quarry"](${bbox});
+      way["leisure"~"park|pitch|garden|nature_reserve"](${bbox});
+      way["railway"~"rail|light_rail|tram|narrow_gauge"](${bbox});
+      nwr["amenity"~"^(fuel|charging_station|car_wash)$"](${bbox});
+      nwr["shop"~"^(car_repair|car|car_parts|tyres)$"](${bbox});
+      node["tourism"~"^(viewpoint|camp_site|picnic_site)$"](${bbox});
+      node["natural"="peak"](${bbox});
     );out geom 2000;`;
 }
 
-interface RawWay { type?: string; id: number; tags?: Record<string, string>; geometry?: Array<{ lat: number; lon: number }> }
+interface RawWay {
+  type?: string; id: number; tags?: Record<string, string>;
+  geometry?: Array<{ lat: number; lon: number }>;
+  /** Nodes carry their position directly rather than as a geometry array. */
+  lat?: number; lon?: number;
+}
 
 /** One mirror, once. Throws with the reason so the caller can try the next. */
 async function askMirror(url: string, query: string, ms: number): Promise<RawWay[]> {
@@ -448,12 +475,18 @@ export async function askOverpass(query: string): Promise<RawWay[]> {
 export function trimWays(elements: RawWay[]): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   for (const el of elements) {
-    if (el.type !== 'way' || !el.geometry?.length) continue;
-    out.push({
-      id: el.id,
-      tags: el.tags ?? {},
-      geometry: el.geometry.map((g) => [+g.lat.toFixed(6), +g.lon.toFixed(6)]),
-    });
+    // A NODE IS A ONE-POINT GEOMETRY. Dropping everything that was not a `way`
+    // is what silently threw away every fuel station, viewpoint and summit the
+    // query now asks for — they are nodes, and a node keeps its position in
+    // `lat`/`lon` rather than in a geometry array. Normalising here means the
+    // renderer sees one shape for everything and needs no second code path.
+    const geom = el.geometry?.length
+      ? el.geometry.map((g) => [+g.lat.toFixed(6), +g.lon.toFixed(6)])
+      : el.type === 'node' && el.lat !== undefined && el.lon !== undefined
+        ? [[+el.lat.toFixed(6), +el.lon.toFixed(6)]]
+        : null;
+    if (!geom) continue;
+    out.push({ id: el.id, tags: el.tags ?? {}, geometry: geom });
   }
   return out;
 }

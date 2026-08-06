@@ -456,7 +456,40 @@ function setNear(n: number, far = 30000): void {
 // and the scene's directional light aimed from the same place.
 // GOLDEN HOUR, not night: the sun climbs off the horizon so the world is lit
 // rather than merely silhouetted, while keeping the long warm rake.
+// WHERE THE SUN ACTUALLY IS. This was a constant — altitude 19.9°, azimuth 28°,
+// on every point of the Earth, forever. Measured against the real thing at one
+// instant: 43° wrong in elevation over Death Valley, and four of five test
+// spawns should have been in the dark while the game rendered mid-afternoon.
+//
+// It needs NO DATASET AND NO NETWORK: solar position is arithmetic on the date
+// and the place, good to well under a degree, and about forty lines. And the
+// sky shader was already written for a moving sun — it warms the horizon toward
+// the sun's azimuth, draws the disc from a dot product, and lights its cloud
+// layer by sampling the noise field offset TOWARD the sun. Nothing is baked.
+// The vector below is MUTATED IN PLACE rather than replaced, because every
+// shader uniform holds a reference to this exact object; move it and the whole
+// atmosphere follows for free.
 const SUN_DIR = new THREE.Vector3(0.42, 0.34, -0.78).normalize();
+// Where the LIGHT comes from, which below the horizon is not where the sun is.
+const LIGHT_DIR = new THREE.Vector3().copy(SUN_DIR);
+/** Sun altitude and azimuth for a place and an instant (NOAA's low-precision
+ *  algorithm — a fraction of a degree, which is far finer than a pixel). */
+function solarAngles(lat: number, lon: number, when: Date): { alt: number; az: number } {
+  const d = when.getTime() / 86400000 + 2440587.5 - 2451545.0;   // days from J2000
+  const rad = Math.PI / 180;
+  const g = (357.529 + 0.98560028 * d) * rad;                    // mean anomaly
+  const q = 280.459 + 0.98564736 * d;                            // mean longitude
+  const L = (q + 1.915 * Math.sin(g) + 0.020 * Math.sin(2 * g)) * rad;  // ecliptic longitude
+  const e = (23.439 - 0.00000036 * d) * rad;                     // obliquity
+  const ra = Math.atan2(Math.cos(e) * Math.sin(L), Math.cos(L));
+  const dec = Math.asin(Math.sin(e) * Math.sin(L));
+  const gmst = (18.697374558 + 24.06570982441908 * d) % 24;      // sidereal time at Greenwich
+  const ha = ((gmst * 15 + lon) * rad) - ra;                     // local hour angle
+  const la = lat * rad;
+  const alt = Math.asin(Math.sin(la) * Math.sin(dec) + Math.cos(la) * Math.cos(dec) * Math.cos(ha));
+  const az = Math.atan2(-Math.sin(ha), Math.tan(dec) * Math.cos(la) - Math.sin(la) * Math.cos(ha));
+  return { alt, az };
+}
 const skyMat = new THREE.ShaderMaterial({
   side: THREE.BackSide,
   depthWrite: false,
@@ -467,11 +500,15 @@ const skyMat = new THREE.ShaderMaterial({
     uSunDisc: { value: new THREE.Vector3() },
     uBelow: { value: new THREE.Vector3() },
     uCloud: { value: 0 }, uTime: { value: 0 },
+    // The deck drifts on the REAL wind: direction and speed from the live
+    // observation, so the sky moves the way the sky over that place is moving.
+    uWind: { value: new THREE.Vector2(0.006, 0.0022) },
   },
   vertexShader: 'varying vec3 vDir; void main(){ vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
   fragmentShader: `
     uniform vec3 sunDir; uniform vec3 uZenith; uniform vec3 uHorizon;
     uniform vec3 uSunDisc; uniform vec3 uBelow; uniform float uCloud; uniform float uTime;
+    uniform vec2 uWind;
     varying vec3 vDir;
     // Value-noise fBm. Clouds are GENERATED, not photographed: a skybox set
     // would be fixed images that could never answer to the weather system,
@@ -504,7 +541,7 @@ const skyMat = new THREE.ShaderMaterial({
         // Project onto a flat deck: no parallax (the dome rides the camera),
         // which is right for cloud at altitude, and it stretches toward the
         // horizon exactly as a real deck does.
-        vec2 p = d.xz / max(d.y, 0.05) * 1.4 + vec2(uTime * 0.006, uTime * 0.0022);
+        vec2 p = d.xz / max(d.y, 0.05) * 1.4 + uWind * uTime;
         float n = fbm(p);
         // Coverage opens up as the front arrives; a storm nearly fills the sky.
         float cov = smoothstep(0.62 - uCloud * 0.42, 0.92 - uCloud * 0.30, n);
@@ -532,6 +569,85 @@ scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffe0b0, 1.5);
 sun.position.copy(SUN_DIR).multiplyScalar(2000);
 scene.add(sun);
+
+// ── the clock ──────────────────────────────────────────────────────
+// LIVE means the real sun over the real place at the real moment, which is the
+// point of the exercise. But a world you can only photograph at whatever
+// o'clock it happens to be is a world you cannot art-direct, so the dial and
+// `?t=` force a LOCAL SOLAR hour: noon is when the sun crosses the meridian
+// HERE, which is what makes "noon" mean the same thing in Bormio and Borneo.
+const TIME_MODES = ['LIVE', 'DAWN', 'NOON', 'DUSK', 'NIGHT'] as const;
+const TIME_HOUR: Record<number, number | null> = { 0: null, 1: 6, 2: 12, 3: 18, 4: 0 };
+let timeMode = 0;
+// Read here, APPLIED AFTER the dials load — see the boot sequence. A dial that
+// remembers itself in localStorage will otherwise stamp on the query parameter.
+const timeFromUrl = TIME_MODES.indexOf(
+  ((new URLSearchParams(location.search).get('t') ?? '').toUpperCase()) as typeof TIME_MODES[number]);
+if (timeFromUrl >= 0) timeMode = timeFromUrl;
+function worldNow(): Date {
+  const h = TIME_HOUR[timeMode];
+  if (h === null) return new Date();
+  // Local solar hour → UTC. Longitude is the whole of the conversion: the sun
+  // is over the meridian at local solar noon by definition.
+  const now = new Date();
+  const utcH = h - origin.lon / 15;
+  return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0)
+    + utcH * 3600000);
+}
+// Night sky, for the colours the biome only supplies in daylight versions.
+const NIGHT_SKY: { zenith: Rgb; horizon: Rgb; disc: Rgb; below: Rgb } = {
+  zenith: [0.010, 0.017, 0.042], horizon: [0.045, 0.055, 0.095],
+  disc: [0.20, 0.23, 0.31],       // a cold glow, never a second sun
+  below: [0.015, 0.017, 0.028],
+};
+/** 0 in the dark, 1 in open daylight, smooth across civil twilight. Everything
+ *  that used to be a fixed brightness is scaled by this. */
+let dayF = 1;
+let sunAlt = 0.35, sunAz = 0.5;
+const sunSetV = new THREE.Vector3();
+function stepSun(): void {
+  const { alt, az } = solarAngles(origin.lat, origin.lon, worldNow());
+  sunAlt = alt; sunAz = az;
+  // World axes: +x east, −z north. Azimuth runs from north through east.
+  const ca = Math.cos(alt);
+  SUN_DIR.set(ca * Math.sin(az), Math.sin(alt), -ca * Math.cos(az));
+  // TWO VECTORS, and conflating them put a moon the size of a hillside in the
+  // night sky. SUN_DIR is where the sun ACTUALLY IS — the sky shader draws its
+  // disc from it, so below the horizon there is correctly no disc at all. The
+  // LIGHT is a different question: it must still come from above or the terrain
+  // is lit from underneath and every hill turns inside out, so at night it
+  // keeps the compass bearing and takes a shallow rake. That is moonlight.
+  LIGHT_DIR.copy(SUN_DIR);
+  if (LIGHT_DIR.y < 0.02) {
+    sunSetV.set(LIGHT_DIR.x, 0, LIGHT_DIR.z).normalize().multiplyScalar(0.93);
+    LIGHT_DIR.set(sunSetV.x, 0.36, sunSetV.z).normalize();
+  }
+  sun.position.copy(LIGHT_DIR).multiplyScalar(2000);
+  const sxz = skyMat.uniforms.sunXZ as { value: THREE.Vector2 } | undefined;
+  if (sxz) sxz.value.set(LIGHT_DIR.x, LIGHT_DIR.z).normalize();
+  const degs = (alt * 180) / Math.PI;
+  dayF = clamp((degs + 6) / 9, 0, 1);              // civil twilight is −6° to +3°
+  // GOLDEN HOUR IS NOT A FILTER. Low sun travels through more atmosphere, so it
+  // reddens — the same physics that makes the horizon warm in the sky shader.
+  const low = clamp(1 - degs / 12, 0, 1);
+  const warm = new THREE.Color(biome.sun).lerp(new THREE.Color(0xff7a2e), low * 0.75);
+  sun.color.copy(dayF > 0.02 ? warm : new THREE.Color(0x9fb4d8));   // moonlight is cold
+  applySkyTint();
+}
+/** The biome's daylight palette, faded toward night by the sun's altitude. */
+function applySkyTint(): void {
+  const b = biome;
+  const mix = (a: Rgb, c: Rgb): THREE.Vector3 =>
+    new THREE.Vector3(a[0] + (c[0] - a[0]) * dayF, a[1] + (c[1] - a[1]) * dayF, a[2] + (c[2] - a[2]) * dayF);
+  const u = skyMat.uniforms as Record<string, { value: THREE.Vector3 }>;
+  u.uZenith.value.copy(mix(NIGHT_SKY.zenith, b.zenith));
+  u.uHorizon.value.copy(mix(NIGHT_SKY.horizon, b.horizon));
+  u.uSunDisc.value.copy(mix(NIGHT_SKY.disc, b.sunDisc));
+  u.uBelow.value.copy(mix(NIGHT_SKY.below, b.below));
+  const c = compMat.uniforms as Record<string, { value: THREE.Vector3 }>;
+  c.uHazeBase.value.copy(mix(NIGHT_SKY.zenith, b.hazeBase));
+  c.uHazeSun.value.copy(mix(NIGHT_SKY.horizon, b.hazeSun));
+}
 
 const worldGroup = new THREE.Group();
 scene.add(worldGroup);
@@ -645,7 +761,7 @@ const compMat = new THREE.ShaderMaterial({
     invPV: { value: new THREE.Matrix4() },
     camPos: { value: new THREE.Vector3() },
     span: { value: FOG_SPAN },
-    sunXZ: { value: new THREE.Vector2(SUN_DIR.x, SUN_DIR.z).normalize() },
+    sunXZ: { value: new THREE.Vector2(LIGHT_DIR.x, LIGHT_DIR.z).normalize() },
     uPix: { value: pixSize }, // the low-res grid, for dithering
     uHazeBase: { value: new THREE.Vector3() },
     uHazeSun: { value: new THREE.Vector3() },
@@ -1608,7 +1724,7 @@ const waterU = { uWTime: { value: 0 } };
 function waterize(mat: THREE.Material): void {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uWTime = waterU.uWTime;
-    sh.uniforms.uWSun = { value: SUN_DIR };
+    sh.uniforms.uWSun = { value: LIGHT_DIR };
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
@@ -1899,6 +2015,11 @@ function scatterVeg(pts: Array<[number, number]>, seed: number, tags: Record<str
   for (let k = 0, tries = 0; k < n && tries < n * 5; tries++) {
     const x = minx + r() * w, z = minz + r() * d;
     if (!pointInPoly(x, z, pts)) continue;
+    // THE GROUND OVERRULES THE TAG. A polygon says what someone mapped; cover
+    // says what is actually there, and an OSM `landuse=grass` over a salt pan
+    // or a frozen lake should not sprout a thicket because of it.
+    const cv = sampleCover(x, z);
+    if (cv !== null && (COVER_VEG[cv] ?? 6) <= 0) continue;
     k++;
     const dominant: VegKind = wooded && r() < 0.8
       ? (biome.name === 'boreal' || biome.name === 'alpine' ? 'conifer' : 'broadleaf')
@@ -3417,7 +3538,7 @@ const osmDbReady: Promise<void> = new Promise((resolve) => {
 });
 // Free the shared origin quota from the failed localStorage era.
 try { for (const k of Object.keys(localStorage)) if (k.startsWith('drive.osm.')) localStorage.removeItem(k); } catch { /* fine */ }
-const osmCacheKey = (x: number, y: number): string => `4/${OSM_Z}/${x}/${y}`; // v4: keeps amenity/shop/surface tags
+const osmCacheKey = (x: number, y: number): string => `5/${OSM_Z}/${x}/${y}`; // v5: nodes, rivers, rails
 async function readTileCache(x: number, y: number): Promise<OsmWay[] | null> {
   await osmDbReady;
   if (!osmDb) return null;
@@ -3483,6 +3604,14 @@ function notePoi(tags: Record<string, string>, pts: Array<[number, number]>): vo
   pois.set(name, { name, x: cx / pts.length, z: cz / pts.length, kind });
 }
 
+// Watercourse widths, by class. A stream you can straddle, a canal you cannot.
+const WATER_W: Record<string, number> = { river: 14, canal: 9, stream: 4.5 };
+/** Is this way an AREA we should fill and plant, or a line we should not?
+ *  `natural=scrub|wetland|sand|bare_rock` are areas; `coastline` and `cliff`
+ *  share the key and are lines, which is exactly the trap. */
+const AREA_TAG = (t: Record<string, string>): boolean =>
+  !!t.landuse || !!t.leisure
+  || ['scrub', 'wetland', 'sand', 'bare_rock', 'wood', 'grassland', 'heath'].includes(t.natural ?? '');
 function renderWays(els: OsmWay[]): void {
   for (const el of els) {
     // Clipped lines carry their own key; areas still dedupe on the bare id, so
@@ -3496,6 +3625,10 @@ function renderWays(els: OsmWay[]): void {
     const pts: Array<[number, number]> = el.geometry.map((g) => toLocal(g.lat, g.lon));
     const tags = el.tags ?? {};
     notePoi(tags, pts);
+    // A POINT is a place, not a shape. Fuel stations, garages, viewpoints and
+    // summits arrive as single-node geometries; notePoi above has already put
+    // them on the map, and there is nothing to extrude, drape or scatter.
+    if (pts.length < 2) continue;
     if (tags.highway) {
       const w = ROAD_W[tags.highway] ?? 5;
       // THREE tiers, not two. A mountain path used to render as decoration you
@@ -3517,14 +3650,29 @@ function renderWays(els: OsmWay[]): void {
       // Steps are named and drawn but nothing drives them, so they earn no
       // checkpoints — a road you cannot survey should not sit in the log.
       if (tags.name && !stairs) noteSurvey(tags.name, pts, track);
+    } else if (WATER_W[tags.waterway ?? '']) {
+      // A RIVER IS A LINE. Only `riverbank` polygons used to be fetched, and
+      // almost every watercourse in OSM is a line with no polygon at all — so
+      // anything short of a major river simply did not exist. Drawn as a draped
+      // ribbon at the water lift, wide by class, and NOT drivable: it is water,
+      // and the surface field already knows to slow you in it.
+      ribbon(pts, WATER_W[tags.waterway as string], MAT.water, 0.12, false, 'none', false, tags.name);
+    } else if (tags.railway) {
+      // Rails read as a narrow dark line across the country and a thing you
+      // bump over at a crossing. Not drivable — nobody drives a railway.
+      ribbon(pts, 3.4, MAT.minor, 0.2, false, 'none', false, tags.name);
     } else if (tags.building) {
       building(pts, el.id, parseFloat(tags['building:levels'] ?? '') || 2);
     } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
       polygon(pts, MAT.water, 0.12, 0, 'water');
-    } else {
+    } else if (AREA_TAG(tags)) {
       polygon(pts, MAT.green, 0.08);
       scatterVeg(pts, el.id, tags);
     }
+    // Anything else — a coastline, a cliff edge, an unrecognised line — is
+    // deliberately dropped rather than fed to the polygon path. The old `else`
+    // caught everything, which was harmless while the query only returned
+    // areas; with lines in the answer it would paint a river green.
   }
   flushAprons();
 }
@@ -3854,7 +4002,7 @@ async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
   const ctl = new AbortController();
   const bail = setTimeout(() => ctl.abort(), TILE_WAIT_MS);
   try {
-    const res = await fetch(`${CELL_BASE}/~/osm/v1/${OSM_Z}/${x}/${y}`, { signal: ctl.signal });
+    const res = await fetch(`${CELL_BASE}/~/osm/v2/${OSM_Z}/${x}/${y}`, { signal: ctl.signal });
     // 503 is the cell telling us Overpass just failed IT — a real answer, and a
     // reason to retry this tile later, not to abandon the proxy.
     if (res.status === 503) throw new Error('fill failed');
@@ -4535,7 +4683,53 @@ const WX: Record<Sky, { cloud: number; rain: number; label: string }> = {
   storm: { cloud: 0.95, rain: 1, label: 'STORM' },
 };
 const wx = { sky: 'clear' as Sky, next: 'clear' as Sky, cloud: 0, rain: 0, wet: 0, at: 0, warn: 0, flash: 0, bolt: 0 };
+// ── the weather that is actually happening ─────────────────────────
+// The chain below invents a front every couple of minutes out of a six-entry
+// table. It is a decent toy and it stays — as the OFFLINE fallback, and because
+// a real sky that is clear for an hour is boring to develop against. But the
+// truth is one fetch away: Open-Meteo answers with CORS and no key, and knows
+// the cloud cover, the rain, the temperature and — the one that changes how the
+// sky MOVES — the wind that is pushing it all along.
+const live = {
+  on: false, at: 0, tempC: null as number | null,
+  windKmh: 0, windDeg: 0, code: 0,
+};
+async function fetchLiveWeather(): Promise<void> {
+  if (performance.now() < live.at) return;
+  live.at = performance.now() + 900000;   // the upstream updates every 15 minutes
+  try {
+    const u = 'https://api.open-meteo.com/v1/forecast'
+      + `?latitude=${origin.lat.toFixed(4)}&longitude=${origin.lon.toFixed(4)}`
+      + '&current=temperature_2m,cloud_cover,precipitation,wind_speed_10m,wind_direction_10m,weather_code'
+      + '&timezone=UTC';
+    const res = await fetch(u);
+    if (!res.ok) throw new Error(String(res.status));
+    const j = await res.json() as { current?: Record<string, number> };
+    const c = j.current;
+    if (!c) throw new Error('no current');
+    live.tempC = c.temperature_2m ?? null;
+    live.windKmh = c.wind_speed_10m ?? 0;
+    live.windDeg = c.wind_direction_10m ?? 0;
+    live.code = c.weather_code ?? 0;
+    // WMO code is the honest signal for precipitation type and violence; cloud
+    // cover alone cannot tell drizzle from a thunderstorm.
+    const code = live.code, cover = (c.cloud_cover ?? 0) / 100;
+    wx.next = code >= 95 ? 'storm'
+      : code >= 51 || (c.precipitation ?? 0) > 0.05 ? 'rain'
+      : cover > 0.25 ? 'haze' : 'clear';
+    // Cloud cover is a MEASUREMENT, so it overrides the sky state's nominal
+    // value: an overcast dry day is not the same picture as a rainy one.
+    WX_LIVE.cloud = cover;
+    live.on = true;
+    wx.at = performance.now() + 900000;   // stand the synthetic chain down
+  } catch {
+    live.on = false;
+    live.at = performance.now() + 120000; // try again in a couple of minutes
+  }
+}
+const WX_LIVE = { cloud: 0 };
 function rollWeather(now: number): void {
+  if (live.on) return;                    // the real sky is in charge
   if (now < wx.at) return;
   wx.at = now + (90 + Math.random() * 150) * 1000; // a front lasts 1.5–4 minutes
   // Biome bias: arid stays dry, tropical turns often, boreal broods.
@@ -4550,22 +4744,41 @@ function rollWeather(now: number): void {
 }
 function stepWeather(now: number, dt: number): void {
   rollWeather(now);
+  void fetchLiveWeather();
   const t = WX[wx.next];
   const k = Math.min(1, dt * 0.12);                 // fronts arrive slowly
-  wx.cloud += (t.cloud - wx.cloud) * k;
+  // Live cover is a measurement and beats the sky state's nominal figure: an
+  // overcast dry day and a rainy one are the same word and a different picture.
+  wx.cloud += ((live.on ? WX_LIVE.cloud : t.cloud) - wx.cloud) * k;
   wx.rain += (t.rain - wx.rain) * k;
   wx.sky = wx.cloud > 0.85 ? 'storm' : wx.rain > 0.15 ? 'rain' : wx.cloud > 0.25 ? 'haze' : 'clear';
   // Ground stays wet after the rain stops, and dries out slowly.
   wx.wet = clamp(wx.wet + (wx.rain > 0.1 ? dt * 0.09 : -dt * 0.02), 0, 1);
-  sun.intensity = biome.sunI * (1 - wx.cloud * 0.72);
-  hemi.intensity = biome.hemiI * (1 + wx.cloud * 0.35);
-  compMat.uniforms.uBloom.value = 0.75 - wx.cloud * 0.35;
+  // Everything that was a fixed brightness is now scaled by where the sun is.
+  // The night floor is not zero: a pitch-black world is not atmospheric, it is
+  // unplayable, so moonlight keeps about a tenth of the key and the hemisphere
+  // fill stays up to carry shape without colour.
+  sun.intensity = biome.sunI * (1 - wx.cloud * 0.72) * (0.09 + 0.91 * dayF);
+  hemi.intensity = biome.hemiI * (1 + wx.cloud * 0.35) * (0.30 + 0.70 * dayF);
+  compMat.uniforms.uBloom.value = (0.75 - wx.cloud * 0.35) * (0.45 + 0.55 * dayF);
   skyMat.uniforms.uCloud.value = wx.cloud;
   skyMat.uniforms.uTime.value = now / 1000;
   waterU.uWTime.value = now / 1000;
   // Cloud shadows read the same cover and drift as the deck overhead.
   ghostU.uCloudS.value = cloudShadowOn ? wx.cloud : 0;
-  ghostU.uWind.value.set((now / 1000) * 0.006, (now / 1000) * 0.0022);
+  // ONE WIND, and it is the real one. Open-Meteo reports the direction the air
+  // is coming FROM, so the deck travels toward bearing+180; the sample offset
+  // runs the other way again, because shifting a noise field moves what you see
+  // in the opposite direction. Both the sky deck and the shadows it throws on
+  // the ground read this, so they can never drift apart.
+  {
+    const toDeg = (live.on ? live.windDeg : 250) + 180;
+    const t = (toDeg * Math.PI) / 180;
+    const spd = (live.on ? live.windKmh : 12) * 0.0005;   // 12km/h ≈ the old fixed drift
+    const wxv = -Math.sin(t) * spd, wzv = Math.cos(t) * spd;
+    (skyMat.uniforms.uWind as { value: THREE.Vector2 }).value.set(wxv, wzv);
+    ghostU.uWind.value.set(wxv * (now / 1000), wzv * (now / 1000));
+  }
   // LIGHTNING. A strike is a double flash — the leader, then the return
   // stroke a beat later — and the thunder arrives after the sound has had
   // time to travel, which is what sells the distance.
@@ -5150,6 +5363,19 @@ function meshHeightAt(x: number, z: number): number | null {
   return hits.length ? +(4000 - hits[0].distance).toFixed(2) : null;
 }
 (window as unknown as { __meshAt?: object }).__meshAt = meshHeightAt;
+/** The sky's whole case file: where the sun is, what hour the world thinks it
+ *  is, and whether the weather is a measurement or the synthetic chain. */
+(window as unknown as { __sky?: object }).__sky = (): object => ({
+  time: TIME_MODES[timeMode],
+  utc: worldNow().toISOString(),
+  sunAltDeg: +((sunAlt * 180) / Math.PI).toFixed(1),
+  sunAzDeg: +((((sunAz * 180) / Math.PI) % 360 + 360) % 360).toFixed(0),
+  dayF: +dayF.toFixed(3),
+  night: sunAlt < 0,
+  live: live.on,
+  tempC: live.tempC, windKmh: live.windKmh, windDeg: live.windDeg, wmo: live.code,
+  sky: wx.sky, cloud: +wx.cloud.toFixed(2), rain: +wx.rain.toFixed(2),
+});
 /** Which palette the world settled on, and whether real cover chose it or the
  *  latitude guess is still standing in. */
 (window as unknown as { __biome?: object }).__biome = (): object =>
@@ -6405,6 +6631,7 @@ function tick(now: number): void {
   const { throttle, steer, brake } = real.on || paused
     ? { throttle: 0, steer: 0, brake: false }
     : input();
+  stepSun();
   stepWeather(now, dt);
   const surfKind = surfaceAt(state.x, state.z);
   const surf = SURFACE[surfKind];
@@ -6753,7 +6980,10 @@ function tick(now: number): void {
       rigLanding(clamp((-vBodyY - 5) / 9, 0, 1));
     }
     rigPrevGrounded = groundedF;
-    stepRig(dt, Math.abs(state.speed), surfKind, SUN_DIR.y * (1 - wx.cloud * 0.2));
+    // The array sees the TRUE sun, not the raked moonlight vector: at night it
+    // makes nothing, which is the whole reason the pack matters.
+    stepRig(dt, Math.abs(state.speed), surfKind,
+      Math.max(0, Math.sin(sunAlt)) * (1 - wx.cloud * 0.2));
     // SERVICE. Stop beside somewhere that plausibly has tools — a marked
     // garage or fuel stop heals fast, any named building slowly — and the rig
     // is worked on while you wait. Driving off stops the work.
@@ -7049,14 +7279,10 @@ function applyBiome(b: Biome): void {
   // The herd is built at module load, before the spawn's biome is known — so
   // re-roll which species are out there whenever the biome actually lands.
   for (const c of graze) c.sp = pickSpecies();
-  const v = (u: { value: THREE.Vector3 }, c: Rgb): void => u.value.set(c[0], c[1], c[2]);
-  v(skyMat.uniforms.uZenith as { value: THREE.Vector3 }, b.zenith);
-  v(skyMat.uniforms.uHorizon as { value: THREE.Vector3 }, b.horizon);
-  v(skyMat.uniforms.uSunDisc as { value: THREE.Vector3 }, b.sunDisc);
-  v(skyMat.uniforms.uBelow as { value: THREE.Vector3 }, b.below);
-  v(compMat.uniforms.uHazeBase as { value: THREE.Vector3 }, b.hazeBase);
-  v(compMat.uniforms.uHazeSun as { value: THREE.Vector3 }, b.hazeSun);
-  sun.color.setHex(b.sun); sun.intensity = b.sunI;
+  // The six sky colours are the DAYLIGHT versions of themselves; how much of
+  // each survives depends on where the sun is, so the clock paints them.
+  applySkyTint();
+  sun.intensity = b.sunI;
   hemi.color.setHex(b.hemiSky); hemi.groundColor.setHex(b.hemiGnd); hemi.intensity = b.hemiI;
   // The sea takes the biome's own shallows, so a tropical coast isn't the
   // same water as a boreal one.
@@ -7513,6 +7739,9 @@ const DIAL_GROUPS: DialGroup[] = [
         for (const h of herds) h.visible = wildlifeOn;
       }),
       dial('cloud', 'CLOUD SHADOW', ['OFF', 'ON'], 1, (i) => { cloudShadowOn = i === 1; }),
+      // LIVE is the real sun over the real place at this moment. The rest force
+      // a LOCAL SOLAR hour, so "noon" means the same thing at every longitude.
+      dial('time', 'TIME', [...TIME_MODES], 0, (i) => { timeMode = i; }),
       // How much a checkpoint tells you about itself. HIDDEN is the design as
       // asked for — you feel the tally move and nothing else. The other two
       // exist because "invisible" is a claim about feel that can only be
@@ -8462,6 +8691,13 @@ let placeRect = { x: 0, y: 0, w: 0, h: 0 };
 // first time the menu is opened.
 loadDials();
 applyDials();
+// …and THEN the URL, because a dial that persists to localStorage will happily
+// overwrite a query parameter that was read before it. `?t=DUSK` silently did
+// nothing for exactly this reason: every mode rendered the live sun.
+if (timeFromUrl >= 0) {
+  const d = DIALS.find((x) => x.key === 'time');
+  if (d) { d.at = timeFromUrl; d.apply(timeFromUrl); }
+}
 $('reroll').addEventListener('click', () => { location.href = location.pathname + '?random=1'; });
 (async () => {
   const spawn = await findSpawn();
