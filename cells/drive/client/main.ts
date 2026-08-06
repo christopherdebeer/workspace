@@ -4436,6 +4436,8 @@ function meshHeightAt(x: number, z: number): number | null {
 /** Checkpoint marker visibility, and how many markers a frame actually put on
  *  screen — the only honest answer to "why can't I see them". */
 (window as unknown as { __setcpv?: object }).__setcpv = (v: number): void => { cpVis = v; };
+(window as unknown as { __setcam?: object }).__setcam = (m: CamMode): void => setCam(m);
+(window as unknown as { __zoom?: object }).__zoom = (z: number): void => { zoomT = clamp(z, 0.25, 44); };
 (window as unknown as { __cpdraw?: object }).__cpdraw = (): number => cpDraw.length;
 (window as unknown as { __cpwhy?: object }).__cpwhy = (): object => cpCull;
 /** A named road's drivable centrelines, so a test can traverse the ROAD rather
@@ -4703,19 +4705,36 @@ function drawMinimap(): void {
   miniCtx.fillText('N', S / 2, 24);
 }
 
-// ── camera modes: top-down chart ⇄ low chase ───────────────────────
-let camMode: 'top' | 'chase' = 'top';
+// ── camera modes: top-down chart → low chase → the driver's seat ───
+// Three rigs, cycled by the same control. CAB is the one that costs nothing
+// and changes everything: the world at 1.6m with the A-pillars in the way is
+// a different game from the world at 18m behind, and it is the seat the
+// headlights, the wipers and the retroreflective signs were all built for.
+type CamMode = 'top' | 'chase' | 'cab';
+const CAM_ORDER: CamMode[] = ['top', 'chase', 'cab'];
+let camMode: CamMode = 'top';
 const camPos = new THREE.Vector3();
+const camAim = new THREE.Vector3();
 let camInit = false;
 const miniCam = new THREE.PerspectiveCamera(60, 1, 1, 30000); // the dock's POV preview rig
-function toggleCam(): void {
-  camMode = camMode === 'top' ? 'chase' : 'top';
+/** The driver's eye, in the car's own frame: right-hand seat, just behind the
+ *  windscreen (which stands at z −1.2) and below the roof band at y 2.09. */
+const EYE = { x: 0.42, y: 1.9, z: -0.42 };
+function setCam(m: CamMode): void {
+  camMode = m;
   halo.visible = camMode === 'top'; // the marker is chart furniture, not scenery
-  if (camMode === 'chase') halo.scale.setScalar(1);
+  if (camMode !== 'top') halo.scale.setScalar(1);
   camInit = false;                  // snap to the new rig, then resume smoothing
   panX = panZ = 0;                  // pan is a glance, not a state to carry over
+  // From the driver's seat you are INSIDE the shell, so the near plane has to
+  // clear the dashboard rather than the bonnet.
+  camera.fov = camMode === 'cab' ? 68 : 55;
+  camera.updateProjectionMatrix();
   updateStickHome();
   updateDock();
+}
+function toggleCam(): void {
+  setCam(CAM_ORDER[(CAM_ORDER.indexOf(camMode) + 1) % CAM_ORDER.length]);
 }
 addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'c') toggleCam(); });
 updateStickHome(); // boot in top mode: the pinned stick is visible from frame one
@@ -4875,19 +4894,25 @@ function updateCps(): void {
   cpCull.total = cpCull.taken = cpCull.far = cpCull.behind = cpCull.offscreen = cpCull.drawn = 0;
   if (cpVis === 0) return;
   const now = performance.now();
-  // EVERY nearby road, not just the one under the wheels. Scoping this to
-  // wayAt() was why ghosts looked broken: the marker for the checkpoint you
-  // are driving towards vanished the moment a wheel touched the verge, and
-  // never appeared at all for the road you were about to turn onto.
-  for (const r of survey.values()) {
-    for (const c of r.cps) {
+  // THE ROAD YOU ARE ON, and only that one. Drawing every nearby road turned a
+  // junction into a thicket of markers belonging to streets you were not
+  // driving. wayAt() is what makes this safe to scope: it answers with the
+  // nearest NAMED road whether or not you are between its kerbs, so a wheel on
+  // the verge no longer blanks the markers you are steering at.
+  const here = wayAt(state.x, state.z);
+  const road = here ? survey.get(here.name) : null;
+  if (road) {
+    for (const c of road.cps) {
       cpCull.total++;
       const age = c.at ? now - c.at : Infinity;
       // PING shows ONLY what you just took, and nothing else, ever. The other
       // modes add the ones still out there.
       if (cpVis === 1 ? age > 1400 : c.got && age > 1400) { cpCull.taken++; continue; }
       const d = Math.hypot(c.x - state.x, c.z - state.z);
-      if (d > CP_SIGHT) { cpCull.far++; continue; }
+      // The chart shows the WHOLE way. Its whole job is the shape of a road you
+      // are not looking at, and a 1.4km horizon on a view that zooms to 44x
+      // would clip the run exactly where surveying it gets interesting.
+      if (camMode !== 'top' && d > CP_SIGHT) { cpCull.far++; continue; }
       const g = groundAt(c.x, c.z);
       poiVec.set(c.x, g + 1.2, c.z);
       if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) { cpCull.behind++; continue; }
@@ -4909,7 +4934,7 @@ function updateCps(): void {
         ty: (-poiVec.y * 0.5 + 0.5) * innerHeight,
         got: c.got, age, d,
       });
-      if (cpDraw.length >= 60) return;
+      if (cpDraw.length >= (camMode === 'top' ? 400 : 60)) return;
     }
   }
 }
@@ -5136,7 +5161,7 @@ const writeUrl = (la: number, lo: number): void => {
     // The mission id rides along, so the URL the game keeps rewriting stays a
     // resumable link: reload mid-drive and the job is still on.
     const m = mission && missionPhase !== 'done' ? `&m=${mission.id}` : '';
-    history.replaceState(null, '', `?lat=${la.toFixed(5)}&lon=${lo.toFixed(5)}&h=${deg.toFixed(0)}${camMode === 'chase' ? '&cam=chase' : ''}${m}`);
+    history.replaceState(null, '', `?lat=${la.toFixed(5)}&lon=${lo.toFixed(5)}&h=${deg.toFixed(0)}${camMode === 'top' ? '' : `&cam=${camMode}`}${m}`);
   } catch { /* fine */ }
 };
 // Surface grip: tarmac is fast, everything else asks you to slow down —
@@ -5462,7 +5487,8 @@ function tick(now: number): void {
   // Idle lenses have to out-saturate the body they sit on — 0x8e1a12 vanished
   // against 0xc4402c paint the moment the truck was in its own shadow.
   tailMat.color.setHex(brake ? 0xff3a24 : state.speed < -0.5 ? 0xe8ded0 : 0xa8221a);
-  beamMat.uniforms.uAmp.value = camMode === 'chase' ? 1 : 0.25;
+  // Volumetric beam: strongest where the eye is nearly in line with it.
+  beamMat.uniforms.uAmp.value = camMode === 'cab' ? 1.25 : camMode === 'chase' ? 1 : 0.25;
   // Feed the signs the headlight they answer to: one uniform write for the
   // whole roadside. Taken from the LAMP, not the hull centre — a sign a few
   // metres ahead is well inside the cone from the bumper and outside it from
@@ -5474,7 +5500,10 @@ function tick(now: number): void {
   // — so the effect is scaled to the light that DOES vary: cloud. Under a storm
   // the ambient drops and the boards answer harder, which is exactly when a
   // driver wants them and when the bloom has some dark to sit against.
-  beamProbe.uBeamAmt.value = (camMode === 'chase' ? 1 : 0.35) * (0.55 + 0.45 * wx.cloud);
+  // Retroreflection is an ANGLE, and from the driver's seat that angle is
+  // almost exactly zero — which is the entire physical reason road signs are
+  // built this way, so the cab is where they should blaze.
+  beamProbe.uBeamAmt.value = (camMode === 'cab' ? 1.5 : camMode === 'chase' ? 1 : 0.35) * (0.55 + 0.45 * wx.cloud);
   // Dust off the loose stuff — rate follows speed, thrown back along travel.
   const v = Math.abs(state.speed);
   if (v > 3 && groundedF > 0.2) {
@@ -5545,6 +5574,33 @@ function tick(now: number): void {
     // within 8% of the orbit distance from a camera tilted 70° off the ground,
     // so this is free.
     setNear(Math.max(1, dist * 0.08));
+  } else if (camMode === 'cab') {
+    // THE DRIVER'S SEAT. The eye is a point on the body, so it takes the body's
+    // whole attitude — pitch, roll and the suspension's own heave — which is
+    // what makes a cattle grid felt rather than watched. Everything else in
+    // this branch exists because you are now inside the shell: the near plane
+    // has to clear the dashboard, and the aim point rides the same rotation
+    // rather than a fixed world offset, or the truck would appear to steer
+    // separately from the view through its own screen.
+    setNear(0.12);
+    const cs = Math.cos(pitchC), sn = Math.sin(pitchC);
+    // The car's own basis: forward is -z in model space, and the group is
+    // rotated (pitchC, -heading, rollC) in YXZ order.
+    const eyeLocalY = EYE.y * cs - EYE.z * sn;
+    const eyeLocalZ = EYE.y * sn + EYE.z * cs;
+    const rx = Math.cos(state.heading), rz = Math.sin(state.heading);   // the car's right
+    camPos.set(
+      state.x + rx * EYE.x + fwdX * -eyeLocalZ,
+      bodyY + eyeLocalY,
+      state.z + rz * EYE.x + fwdZ * -eyeLocalZ,
+    );
+    // Look down the bonnet, 40m out, carrying pitch so a crest shows sky and a
+    // descent shows road.
+    camAim.set(
+      camPos.x + fwdX * 40 * cs,
+      camPos.y - Math.sin(pitchC) * 40,
+      camPos.z + fwdZ * 40 * cs,
+    );
   } else {
     setNear(1);
     // Framed like the reference art: the rig in the lower third with the track
@@ -5580,9 +5636,13 @@ function tick(now: number): void {
   }
   // Critically-damped-ish follow: snap on mode change, ease in play (the chase
   // rig swings through corners instead of being welded to the bumper).
-  if (!camInit) { camera.position.copy(camPos); camInit = true; }
+  // The cab is WELDED to the body — no smoothing at all. A lerped eye lags the
+  // shell it is supposed to be inside, and at 25/s that reads as the whole
+  // truck sliding around the camera every time you turn in.
+  if (!camInit || camMode === 'cab') { camera.position.copy(camPos); camInit = true; }
   else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
   if (camMode === 'top') camera.lookAt(state.x + panX, sampleHeight(state.x + panX, state.z + panZ), state.z + panZ);
+  else if (camMode === 'cab') { camera.lookAt(camAim); camera.rotateZ(-rollC); }
   else camera.lookAt(state.x + fwdX * 28, ground + 1.4, state.z + fwdZ * 28);
   camera.updateMatrixWorld();
   skyDome.position.copy(camera.position);
@@ -5599,7 +5659,7 @@ function tick(now: number): void {
     : 0;
   compMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
   drawHud(surfKind, Math.round(Math.abs(state.speed) * 3.6), groundedF);
-  if (camMode === 'chase' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
+  if (camMode !== 'top' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
   updatePois(); // every frame — throttled pins juddered against the camera
   // Progress lives in the URL: reloading resumes here, not at the spawn.
   if (now > urlAt) {
@@ -6308,9 +6368,27 @@ function drawHud(surf: Surface, kmh: number, grip: number): void {
       continue;
     }
     // Nearer reads brighter, so a wall of distant markers never out-shouts the
-    // one you are about to reach.
-    const near = clamp(1 - c.d / CP_SIGHT, 0, 1);
+    // one you are about to reach — and the falloff is STEPPED, in four bands,
+    // not a smooth ramp. Everything else on this canvas is quantised; a
+    // continuous fade over a hundred markers reads as a rendering artefact
+    // where four discrete depths read as a legend. On the chart every marker
+    // is equally far from a camera five hundred metres up, so the banding
+    // there is by distance from the CAR, which is the thing being answered.
+    const bands = 4;
+    const near = Math.round(clamp(1 - c.d / CP_SIGHT, 0, 1) * (bands - 1)) / (bands - 1);
     hctx.save();
+    if (camMode === 'top') {
+      // Chart furniture: a flat pip, no stem and no column. A stem drawn under
+      // a camera looking straight down is a single pixel of nothing, and the
+      // beam would stand toward the lens.
+      hctx.globalAlpha = 0.35 + 0.65 * near;
+      hctx.fillStyle = UI.ink;
+      diamond(x, y, 3);
+      hctx.fillStyle = cpVis === 3 ? UI.gold : UI.edge;
+      diamondOutline(x, y, 2);
+      hctx.restore();
+      continue;
+    }
     if (cpVis === 3) {
       // BEAM: a column of light standing on the checkpoint. Drawn as stacked
       // pixels rather than a stroked line because a 1px diagonal line
@@ -6921,7 +6999,7 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
   const q = new URLSearchParams(location.search);
   const h0 = parseFloat(q.get('h') ?? '');
   if (Number.isFinite(h0)) state.heading = (h0 * Math.PI) / 180;
-  if (q.get('cam') === 'chase' && camMode === 'top') toggleCam();
+  { const c = q.get('cam'); if (c === 'chase' || c === 'cab') setCam(c); }
   // The job, if this spawn carries one. Armed AFTER `origin` is set, because
   // both its waypoints are lat/lon and have to be projected into local metres.
   const mid = q.get('m');
