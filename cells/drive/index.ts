@@ -98,7 +98,18 @@ const SHELL = `<!doctype html>
 // permanent invocation — and (2) a failure must never be written, or one bad
 // minute upstream becomes our bad week.
 const TILE_RE = /^\/~\/osm\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
-const OVERPASS = 'https://overpass-api.de/api/interpreter';
+// THREE upstreams, not one. Measured on a 12km corridor through Death Valley:
+// 7 of 25 cold tiles came back 503 at 9–12.5s because the single upstream was
+// rate-limiting (HTTP 429) or timing out (504). A failure is deliberately never
+// stored, so those tiles fail again on every reload — which reads to a player
+// as "roads don't load here, permanently", though nothing is cached at all.
+// Rotating mirrors turns the commonest failure (a 429, which comes back
+// instantly) into a sub-second detour instead of a dead tile.
+const OVERPASS_MIRRORS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://overpass.private.coffee/api/interpreter',
+];
 // Two ceilings sit above this and it must clear BOTH: CloudFront's 60s origin
 // read timeout, and — the one that actually bit — the cell's own Lambda
 // timeout. Measured on the first live run with the 10s default: three of four
@@ -108,7 +119,8 @@ const OVERPASS = 'https://overpass-api.de/api/interpreter';
 // `no-store`, and nothing in the logs saying which upstream failed. The cell is
 // configured at 30s (`cells.configureCell timeoutSeconds`), and this stays
 // under it so the handler always outlives its own request and can say why.
-const UPSTREAM_MS = 22000;
+const UPSTREAM_MS = 22000;   // the whole budget, across every mirror
+const ATTEMPT_MS = 9000;     // …and no single mirror may spend all of it
 
 /** Tile bounds on the standard web-mercator grid (the client's `tileBounds`). */
 function tileBounds(z: number, x: number, y: number) {
@@ -135,6 +147,61 @@ function overpassQuery(z: number, x: number, y: number): string {
 }
 
 interface RawWay { type?: string; id: number; tags?: Record<string, string>; geometry?: Array<{ lat: number; lon: number }> }
+
+/** One mirror, once. Throws with the reason so the caller can try the next. */
+async function askMirror(url: string, query: string, ms: number): Promise<RawWay[]> {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(), ms);
+  let res: Response;
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      // Overpass answers a default Node fetch with 406. The browser always
+      // sent its own UA so this never bit the client; server-side it is the
+      // difference between data and nothing.
+      headers: {
+        'content-type': 'application/x-www-form-urlencoded',
+        accept: 'application/json',
+        'user-agent': 'parc.land-drive/1.0 (+https://parc.land/@c15r/drive)',
+      },
+      body: `data=${encodeURIComponent(query)}`,
+      signal: ctl.signal,
+    });
+  } finally { clearTimeout(timer); }
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const json = (await res.json()) as { elements?: RawWay[]; remark?: string };
+  // A TIMED-OUT Overpass query answers HTTP 200 with an empty element list and
+  // puts the reason in `remark`. Nothing downstream can tell that apart from
+  // open desert, so without this check one slow minute upstream is written to
+  // S3 as a legitimately-empty tile — `immutable`, for a week, for everyone —
+  // and cached in every browser that fetched it. Never seen in the wild here
+  // (a 25-tile corridor audit found zero disagreements with Overpass), which
+  // is precisely why it is worth closing before it is.
+  if (json.remark && /timed out|out of memory|runtime error/i.test(json.remark)) {
+    throw new Error(`remark: ${json.remark.slice(0, 120)}`);
+  }
+  return json.elements ?? [];
+}
+
+/**
+ * The query, against each mirror in turn until one answers or the budget runs
+ * out. The commonest failure is a 429 that returns immediately, so the rotation
+ * usually costs milliseconds rather than a whole attempt window.
+ */
+export async function askOverpass(query: string): Promise<RawWay[]> {
+  const deadline = Date.now() + UPSTREAM_MS;
+  const tried: string[] = [];
+  for (const url of OVERPASS_MIRRORS) {
+    const left = deadline - Date.now();
+    if (left < 1500) break;   // not enough room to be worth the round trip
+    try {
+      return await askMirror(url, query, Math.min(ATTEMPT_MS, left));
+    } catch (err) {
+      tried.push(`${new URL(url).host} ${(err as Error).message ?? err}`);
+    }
+  }
+  throw new Error(tried.length ? tried.join(' | ') : 'no upstream tried');
+}
 
 /**
  * Everything `renderWays` reads and nothing else, at 6dp (~11cm — an order of
@@ -191,27 +258,7 @@ async function serveTile(path: string, m: RegExpMatchArray) {
   }
   let ways: Array<Record<string, unknown>>;
   try {
-    const ctl = new AbortController();
-    const timer = setTimeout(() => ctl.abort(), UPSTREAM_MS);
-    let res: Response;
-    try {
-      res = await fetch(OVERPASS, {
-        method: 'POST',
-        // Overpass answers a default Node fetch with 406. The browser always
-        // sent its own UA so this never bit the client; server-side it is the
-        // difference between data and nothing.
-        headers: {
-          'content-type': 'application/x-www-form-urlencoded',
-          accept: 'application/json',
-          'user-agent': 'parc.land-drive/1.0 (+https://parc.land/@c15r/drive)',
-        },
-        body: `data=${encodeURIComponent(overpassQuery(z, x, y))}`,
-        signal: ctl.signal,
-      });
-    } finally { clearTimeout(timer); }
-    if (!res.ok) throw new Error(`overpass HTTP ${res.status}`);
-    const json = (await res.json()) as { elements?: RawWay[] };
-    ways = trimWays(json.elements ?? []);
+    ways = trimWays(await askOverpass(overpassQuery(z, x, y)));
   } catch (err) {
     // WRITE NOTHING. A 503 is retried; a stored failure is not.
     return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {

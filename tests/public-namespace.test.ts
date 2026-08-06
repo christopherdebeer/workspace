@@ -26,7 +26,7 @@ import { ServiceRouter, PUBLIC_NS_PATTERN, CELL_HOST_NS_PATTERN } from '../platf
 import { HttpServiceCell } from '../platform/infra/http-service-cell';
 import { buildCellTemplate } from '../services/cells/cell-template';
 import { __toRecordForTests } from '../services/cells/registry';
-import { trimWays, tileKey } from '../cells/drive/index';
+import { trimWays, tileKey, askOverpass } from '../cells/drive/index';
 
 function synth(withNamespace: boolean): Template {
   const app = new App();
@@ -201,6 +201,52 @@ describe('ADR-0095 — the drive cell as miss handler', () => {
   it('an untagged way still round-trips (tags default to {}, never undefined)', () => {
     const out = trimWays([{ type: 'way', id: 7, geometry: [{ lat: 0, lon: 0 }] }]);
     expect(out[0].tags).toEqual({});
+  });
+});
+
+// A tile that fails is retried; a tile that is WRITTEN is immutable for a week
+// and cached in every browser that saw it. So the one thing this handler must
+// never do is mistake a failure for an empty tile — and Overpass reports a
+// timed-out query as HTTP 200 with no elements and a `remark`, which is exactly
+// what open desert looks like.
+describe('the drive cell asking Overpass', () => {
+  const ok = (body: unknown): Response => ({
+    ok: true, status: 200, json: async () => body,
+  } as unknown as Response);
+  const boom = (status: number): Response => ({
+    ok: false, status, json: async () => ({}),
+  } as unknown as Response);
+  const realFetch = global.fetch;
+  const hosts: string[] = [];
+  afterEach(() => { global.fetch = realFetch; hosts.length = 0; });
+  const stub = (fn: (url: string) => Promise<Response>): void => {
+    global.fetch = ((url: string) => { hosts.push(new URL(url).host); return fn(url); }) as typeof fetch;
+  };
+
+  it('refuses a timed-out query rather than storing it as empty desert', async () => {
+    stub(async () => ok({ elements: [], remark: 'runtime error: Query timed out in "query" at line 3' }));
+    await expect(askOverpass('...')).rejects.toThrow(/timed out/i);
+  });
+
+  it('still accepts a genuinely empty tile — most of the planet is one', async () => {
+    stub(async () => ok({ elements: [] }));
+    await expect(askOverpass('...')).resolves.toEqual([]);
+    expect(hosts).toHaveLength(1); // no pointless mirror rotation on success
+  });
+
+  it('rotates to the next mirror when the first rate-limits', async () => {
+    stub(async (url) => (url.includes('overpass-api.de')
+      ? boom(429)
+      : ok({ elements: [{ type: 'way', id: 1, geometry: [{ lat: 0, lon: 0 }] }] })));
+    const out = await askOverpass('...');
+    expect(out).toHaveLength(1);
+    expect(hosts).toEqual(['overpass-api.de', 'overpass.kumi.systems']);
+  });
+
+  it('names every mirror it tried when they all fail', async () => {
+    stub(async () => boom(504));
+    await expect(askOverpass('...')).rejects.toThrow(/overpass-api\.de.*kumi.*private\.coffee/s);
+    expect(hosts).toHaveLength(3);
   });
 });
 

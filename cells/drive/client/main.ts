@@ -61,6 +61,11 @@ const tileBounds = (x: number, y: number, z: number) => {
   const latS = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 1)) / n))) * 180) / Math.PI;
   return { latN, latS, lonW, lonE };
 };
+/** The middle of an OSM tile in local metres — what the tile queue sorts by. */
+const tileCentreLocal = (x: number, y: number): [number, number] => {
+  const b = tileBounds(x, y, OSM_Z);
+  return toLocal((b.latN + b.latS) / 2, (b.lonW + b.lonE) / 2);
+};
 
 // ── boot UI ────────────────────────────────────────────────────────
 const $ = (id: string) => document.getElementById(id) as HTMLElement;
@@ -916,8 +921,34 @@ const seenWays = new Set<string>();
  *  at or near zero once clipping is doing its job — a rising count means the
  *  gate is leaking again. */
 let unbuilt = 0;
+// THE TILE GATE. Two-at-a-time with a plain FIFO queue is what breaks a long
+// drive: a slow tile (measured: 9–12.5s when the upstream rate-limits) holds
+// half the pipe, a backlog forms, and FIFO then serves the tile you drove past
+// forty seconds ago before the one under your bonnet. Six at a time, served
+// NEAREST-FIRST to where the car is about to be, and anything that has fallen
+// out of the ring while it waited is dropped rather than fetched.
+const OSM_GATE = 6;
 let osmInFlight = 0;
-const osmQueue: Array<() => void> = [];
+interface OsmWait { x: number; y: number; go: (run: boolean) => void }
+const osmQueue: OsmWait[] = [];
+/** Where tiles are wanted (the car thrown forward along its heading), and how
+ *  far from the CAR a tile may sit before the queue gives up on it. */
+let osmFocusX = 0, osmFocusZ = 0, osmCarX = 0, osmCarZ = 0, osmRingR = Infinity;
+function osmRelease(): void {
+  let best = -1, bestD = Infinity;
+  for (let i = 0; i < osmQueue.length; i++) {
+    const w = osmQueue[i];
+    const [wx, wz] = tileCentreLocal(w.x, w.y);
+    if (Math.hypot(wx - osmCarX, wz - osmCarZ) > osmRingR) {
+      osmQueue.splice(i, 1); i--;
+      w.go(false);            // left the ring — forget it, a later pass can ask again
+      continue;
+    }
+    const d = Math.hypot(wx - osmFocusX, wz - osmFocusZ);
+    if (d < bestD) { bestD = d; best = i; }
+  }
+  if (best >= 0 && osmInFlight < OSM_GATE) osmQueue.splice(best, 1)[0].go(true);
+}
 // Full carriageway widths (both directions), not lane widths — OSM ways are
 // centerlines, and rendering them single-lane narrow made the real-size car
 // look like it straddled the whole street.
@@ -3660,7 +3691,12 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     return;
   }
   osmNote(1);
-  if (osmInFlight >= 2) { await new Promise<void>((r) => osmQueue.push(r)); }
+  if (osmInFlight >= OSM_GATE) {
+    const run = await new Promise<boolean>((r) => { osmQueue.push({ x, y, go: r }); });
+    // Dropped: the car left this tile behind while it sat in the queue. Forget
+    // it was ever asked for, so a later pass can ask again if you come back.
+    if (!run) { osmLoaded.delete(key); osmNote(-1); return; }
+  }
   osmInFlight++;
   try {
     let ways = await proxyTile(x, y);
@@ -3697,7 +3733,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
   finally {
     osmInFlight--;
     osmNote(-1);
-    osmQueue.shift()?.();
+    osmRelease();
   }
 }
 
@@ -3747,8 +3783,25 @@ function streamWorld(ex: number, ez: number): void {
     for (let dy = -tRing; dy <= tRing; dy++) void loadTerrainTile(tx + dx, ty + dy);
   const [ox, oy] = tileAt(lat, lon, OSM_Z);
   const oRing = clamp(Math.ceil(r / tileMetres(OSM_Z)), OSM_RING, OSM_RING_MAX);
-  for (let dx = -oRing; dx <= oRing; dx++)
-    for (let dy = -oRing; dy <= oRing; dy++) void loadOsmTile(ox + dx, oy + dy);
+  // WHERE THE CAR IS ABOUT TO BE. A symmetric ring spends half its tiles behind
+  // you: in cab view the ring is 5×5 and only ten of those tiles are ahead, so
+  // at 126km/h you have ~1.0–1.5km of forward margin and the queue is busy
+  // fetching the country you have already crossed. The disc around the car
+  // stays (you must never lose the ground under the wheels) and an extra ring
+  // is added AHEAD only — a lozenge, not a bigger circle, so the cost is a
+  // handful of tiles rather than the square of the radius.
+  const tm = tileMetres(OSM_Z);
+  const look = Math.min(oRing * tm, Math.abs(state.speed) * 14);   // ~14s of travel
+  osmCarX = ex; osmCarZ = ez;
+  osmFocusX = ex + Math.sin(state.heading) * look;
+  osmFocusZ = ez - Math.cos(state.heading) * look;
+  const ext = oRing + 1;
+  osmRingR = (ext + 0.75) * tm;   // past this the queue stops believing in a tile
+  for (let dx = -ext; dx <= ext; dx++) for (let dy = -ext; dy <= ext; dy++) {
+    if (Math.max(Math.abs(dx), Math.abs(dy)) <= oRing) { void loadOsmTile(ox + dx, oy + dy); continue; }
+    const [cx, cz] = tileCentreLocal(ox + dx, oy + dy);
+    if (Math.hypot(cx - osmFocusX, cz - osmFocusZ) <= oRing * tm) void loadOsmTile(ox + dx, oy + dy);
+  }
   // Beyond the fine layer's reach, a COARSE shell so the land does not simply
   // stop. Only fetched once the view is wide enough to see past the fine ring.
   if (r > tileMetres(TERRAIN_Z) * 1.5) {
@@ -4878,7 +4931,25 @@ function meshHeightAt(x: number, z: number): number | null {
 (window as unknown as { __tstats?: object }).__tstats = (): object => ({
   heightTiles: heightTiles.size, meshes: terrainMeshes.size, dirty: terrainDirty.size,
   roadCells: roadGrid.size, seenWays: seenWays.size, unbuilt,
+  osmDone: osmDone.size, inFlight: osmInFlight, queued: osmQueue.length,
 });
+/** IS THE ROAD AHEAD THERE YET? Walks the car's heading in `step` metres and
+ *  reports, per sample, whether the vector tile covering that point has
+ *  finished loading. The whole streaming question in one array: a run of
+ *  `true` is road you can drive into, the first `false` is where the world
+ *  runs out in front of you. */
+(window as unknown as { __ahead?: object }).__ahead = (upTo = 2500, step = 250): object => {
+  const out: boolean[] = [];
+  for (let d = 0; d <= upTo; d += step) {
+    const x = state.x + Math.sin(state.heading) * d;
+    const z = state.z - Math.cos(state.heading) * d;
+    const [la, lo] = localToLatLon(x, z);
+    const [tx, ty] = tileAt(la, lo, OSM_Z);
+    out.push(osmDone.has(`${tx}/${ty}`));
+  }
+  const firstGap = out.indexOf(false);
+  return { step, cover: out, ready: firstGap < 0 ? upTo : firstGap * step, inFlight: osmInFlight, queued: osmQueue.length };
+};
 /** The sea's whole case file: anchored where, live or stood down, and why. */
 (window as unknown as { __sea?: object }).__sea = (force?: boolean): object => {
   if (force === true) { dryAt = null; sea.position.y = -baseElev + 0.1; }  // re-flood, to reproduce the bug
