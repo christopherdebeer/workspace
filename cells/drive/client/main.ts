@@ -173,6 +173,15 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
     return out;
   } catch { return null; }
 }
+/** Is there any elevation data under this point at all? sampleHeight answers
+ *  0 where there is none — "spawn level" — which is a fiction anything built
+ *  against will be wrong by the depth of whatever basin it is crossing. */
+function hasHeight(ex: number, ez: number): boolean {
+  for (const t of heightTiles.values()) {
+    if (ex >= t.xs && ez >= t.zs && ex < t.xs + t.w && ez < t.zs + t.h) return true;
+  }
+  return false;
+}
 function sampleHeight(ex: number, ez: number): number {
   for (const t of heightTiles.values()) {
     if (ex < t.xs || ez < t.zs || ex >= t.xs + t.w || ez >= t.zs + t.h) continue;
@@ -266,7 +275,18 @@ const terrainPalette = (elev: number, slope: number): [number, number, number] =
   // bare rock → snow. The emerald in this world comes from the VEGETATION
   // standing on the sand, not from painting the ground green.
   let c: Rgb = biome.ramp[biome.ramp.length - 1][1];
-  for (const [max, col] of biome.ramp) if (elev <= max) { c = col; break; }
+  // THE SHALLOWS BAND IS ABOUT WATER, NOT ABOUT ALTITUDE. Every ramp opens
+  // with a cyan for ground at or below sea level, which is right on a coast
+  // and catastrophic in a basin: Death Valley's floor is 86m down, so the
+  // whole of it — salt pan, alluvial fan, the road itself — came out painted
+  // as sea shallows, and every screenshot of it looked like a flood. Where
+  // this world has already proved it has dry land below sea level, skip
+  // straight to the land colours.
+  const start = dryAt ? 1 : 0;
+  for (let i = start; i < biome.ramp.length; i++) {
+    const [max, col] = biome.ramp[i];
+    if (elev <= max || i === biome.ramp.length - 1) { c = col; break; }
+  }
   const shade = 1 - clamp(slope * 1.4, 0, 0.45);
   return [c[0] * shade, c[1] * shade, c[2] * shade];
 };
@@ -889,7 +909,13 @@ async function loadTerrainTileInner(x: number, y: number): Promise<void> {
 
 // ── OSM vectors ────────────────────────────────────────────────────
 const osmLoaded = new Set<string>();
-const seenWays = new Set<number>();
+// Keyed by STRING, not id: a clipped line is one key per vector tile it
+// crosses, an area is its bare id.
+const seenWays = new Set<string>();
+/** Ribbons refused because the ground under them had not arrived. Should stay
+ *  at or near zero once clipping is doing its job — a rising count means the
+ *  gate is leaking again. */
+let unbuilt = 0;
 let osmInFlight = 0;
 const osmQueue: Array<() => void> = [];
 // Full carriageway widths (both directions), not lane widths — OSM ways are
@@ -1486,7 +1512,13 @@ function noteDryLand(x: number, z: number, y: number): void {
 /** The sea surface's local y where it is live, or null where it is sunk. */
 function seaLevelY(): number | null {
   if (!seaOn) return null;
-  if (dryAt && Math.hypot(dryAt[0] - state.x, dryAt[1] - state.z) < 8000) return null;
+  // 30km, not 8. A dry basin is a REGION — Death Valley's floor runs 200km —
+  // and an 8km leash meant driving one valley put the anchor behind you and
+  // flooded the ground you were standing on. The cost is the genuine inverse
+  // case: a polder within 30km of a real coast will hold the sea down where
+  // it should be visible. That is a rarer world and a milder failure than an
+  // ocean closing over a truck parked below sea level on dry salt.
+  if (dryAt && Math.hypot(dryAt[0] - state.x, dryAt[1] - state.z) < 30000) return null;
   return -baseElev + 0.1;
 }
 
@@ -2452,6 +2484,12 @@ type RoadMode = 'none' | 'auto' | 'tunnel' | 'bridge';
 const TUNNEL_TOL = 5;  // metres of terrain above the smoothed profile ⇒ tunnel
 const TUNNEL_H = 5;    // clearance of the carved tube
 function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string): void {
+  // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
+  // point here has real elevation under it; if one does not, the profile would
+  // be built against sampleHeight's 0 and bake a causeway that no later tile
+  // can ever correct, because a way is rendered exactly once. Refusing is the
+  // right failure: the OSM tile is retried, and it comes back with terrain.
+  for (const [px, pz] of pts) if (!hasHeight(px, pz)) { unbuilt++; return; }
   // Subdivide to ~12m steps first: OSM ways only carry vertices where the road
   // BENDS, so a long straight segment used to bridge every terrain dip between
   // its endpoints like a causeway. Dense sampling makes the ribbon hug the
@@ -3071,7 +3109,13 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
 // dense urban tile (buildings with full geometry) is hundreds of KB — every
 // write quota-failed silently and a reload refetched the whole ring.
 // IndexedDB gets an origin quota in the hundreds of MB.
-interface OsmWay { id: number; tags?: Record<string, string>; geometry: Array<{ lat: number; lon: number }> }
+interface OsmWay {
+  id: number; tags?: Record<string, string>; geometry: Array<{ lat: number; lon: number }>;
+  /** Dedupe key. A way clipped across several vector tiles arrives once per
+   *  tile under the SAME id, so the id alone would render the first piece and
+   *  silently drop the rest. */
+  ck?: string;
+}
 // Only the tags renderWays actually reads — the rest is dead weight per way.
 const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'layer', 'name'];
 let osmDb: IDBDatabase | null = null;
@@ -3148,8 +3192,14 @@ function notePoi(tags: Record<string, string>, pts: Array<[number, number]>): vo
 
 function renderWays(els: OsmWay[]): void {
   for (const el of els) {
-    if (!el.geometry || seenWays.has(el.id)) continue;
-    seenWays.add(el.id);
+    // Clipped lines carry their own key; areas still dedupe on the bare id, so
+    // a lake straddling two vector tiles is still drawn exactly once.
+    const dk = el.ck ?? String(el.id);
+    if (!el.geometry || seenWays.has(dk)) continue;
+    // Marked BEFORE the build, and unmarked below if the build refused — a way
+    // that could not be drawn for want of terrain has to stay eligible.
+    seenWays.add(dk);
+    const refusedAt = unbuilt;
     const pts: Array<[number, number]> = el.geometry.map((g) => toLocal(g.lat, g.lon));
     const tags = el.tags ?? {};
     notePoi(tags, pts);
@@ -3168,6 +3218,7 @@ function renderWays(els: OsmWay[]): void {
         : 'auto';
       ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : MAT.road,
         track || stairs ? 0.5 : 0.6, !stairs, mode, track, tags.name);
+      if (unbuilt !== refusedAt) { seenWays.delete(dk); continue; }
       // Steps are named and drawn but nothing drives them, so they earn no
       // checkpoints — a road you cannot survey should not sit in the log.
       if (tags.name && !stairs) noteSurvey(tags.name, pts, track);
@@ -3381,6 +3432,64 @@ try {
 // the OSM cache made this a near-certainty on reload — cached vectors beat
 // the S3 elevation fetches every time). Gate each vector tile on the
 // elevation tiles covering it, with a one-tile margin for spilling geometry.
+/**
+ * Cut a polyline down to the runs that lie inside a lat/lon box, adding the
+ * exact crossing point wherever it leaves or re-enters.
+ *
+ * This is what makes the elevation gate above mean anything. Overpass `out
+ * geom` returns a way's COMPLETE geometry, never clipped to the bbox that
+ * asked for it — Badwater Road comes back as one way spanning 34km — so
+ * "gate the tile on the terrain under it" was gating a 600m tile and then
+ * building 34km of road, 72% of it over ground where sampleHeight has no
+ * data and answers 0. Adjacent tiles produce pieces that meet exactly on the
+ * shared boundary, so there is neither a gap nor doubled geometry.
+ */
+function clipToBounds(
+  geom: Array<{ lat: number; lon: number }>,
+  b: { latN: number; latS: number; lonW: number; lonE: number },
+): Array<Array<{ lat: number; lon: number }>> {
+  const inside = (p: { lat: number; lon: number }): boolean =>
+    p.lat <= b.latN && p.lat >= b.latS && p.lon >= b.lonW && p.lon <= b.lonE;
+  // Where the segment a→b crosses the box edge, as a fraction along it.
+  const cross = (a: { lat: number; lon: number }, c: { lat: number; lon: number }): number => {
+    let t = 1;
+    const hit = (num: number, den: number): void => {
+      if (Math.abs(den) < 1e-12) return;
+      const q = num / den;
+      if (q > 0 && q < t) {
+        const lat = a.lat + (c.lat - a.lat) * q, lon = a.lon + (c.lon - a.lon) * q;
+        // Only a crossing that lands ON the box counts; the other three edge
+        // lines are hit somewhere out in space.
+        if (lat <= b.latN + 1e-9 && lat >= b.latS - 1e-9 && lon >= b.lonW - 1e-9 && lon <= b.lonE + 1e-9) t = q;
+      }
+    };
+    hit(b.latN - a.lat, c.lat - a.lat); hit(b.latS - a.lat, c.lat - a.lat);
+    hit(b.lonW - a.lon, c.lon - a.lon); hit(b.lonE - a.lon, c.lon - a.lon);
+    return t;
+  };
+  const runs: Array<Array<{ lat: number; lon: number }>> = [];
+  let cur: Array<{ lat: number; lon: number }> = [];
+  for (let i = 0; i < geom.length; i++) {
+    const p = geom[i], pin = inside(p);
+    if (pin) {
+      if (!cur.length && i > 0) {
+        // Entering: walk back from p toward the outside point for the edge.
+        const t = cross(p, geom[i - 1]);
+        cur.push({ lat: p.lat + (geom[i - 1].lat - p.lat) * t, lon: p.lon + (geom[i - 1].lon - p.lon) * t });
+      }
+      cur.push(p);
+      continue;
+    }
+    if (cur.length) {
+      const a = geom[i - 1], t = cross(a, p);
+      cur.push({ lat: a.lat + (p.lat - a.lat) * t, lon: a.lon + (p.lon - a.lon) * t });
+      runs.push(cur);
+      cur = [];
+    }
+  }
+  if (cur.length) runs.push(cur);
+  return runs.filter((r) => r.length > 1);
+}
 async function renderGated(x: number, y: number, ways: OsmWay[]): Promise<void> {
   const b = tileBounds(x, y, OSM_Z);
   const [txA, tyA] = tileAt(b.latN, b.lonW, TERRAIN_Z);
@@ -3390,7 +3499,19 @@ async function renderGated(x: number, y: number, ways: OsmWay[]): Promise<void> 
     for (let ty = Math.min(tyA, tyB) - 1; ty <= Math.max(tyA, tyB) + 1; ty++)
       waits.push(loadTerrainTile(tx, ty));
   await Promise.all(waits);
-  renderWays(ways);
+  // Clip the LINES; leave the areas alone. A building or a lake is a closed
+  // ring — cutting it with a polyline clipper would leave an open chain that
+  // fills as a wedge — and they are small enough to sit inside the gate's
+  // one-tile margin anyway.
+  const out: OsmWay[] = [];
+  const key = `${x}/${y}`;
+  for (const el of ways) {
+    if (!el.geometry) continue;
+    if (!(el.tags ?? {}).highway) { out.push(el); continue; }
+    const runs = clipToBounds(el.geometry, b);
+    for (let i = 0; i < runs.length; i++) out.push({ ...el, geometry: runs[i], ck: `${el.id}@${key}#${i}` });
+  }
+  renderWays(out);
 }
 
 // "No roads yet" must read as LOADING, not a broken world.
@@ -3453,7 +3574,13 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
   if (osmLoaded.has(key)) return;
   osmLoaded.add(key);
   const cached = await readTileCache(x, y);
-  if (cached) { await renderGated(x, y, cached); osmDone.add(key); return; }
+  if (cached) {
+    const before = unbuilt;
+    await renderGated(x, y, cached);
+    if (unbuilt !== before) setTimeout(() => osmLoaded.delete(key), 3000);
+    else osmDone.add(key);
+    return;
+  }
   osmNote(1);
   if (osmInFlight >= 2) { await new Promise<void>((r) => osmQueue.push(r)); }
   osmInFlight++;
@@ -3478,8 +3605,13 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     osmFails = 0;
     osmDown = false;
     writeTileCache(x, y, ways);
+    const before = unbuilt;
     await renderGated(x, y, ways);
-    osmDone.add(key);
+    // A tile that refused any ribbon for want of terrain is NOT done. Let it
+    // be requested again once the elevation it needed has landed, or the road
+    // is simply missing for the rest of the session.
+    if (unbuilt !== before) setTimeout(() => osmLoaded.delete(key), 3000);
+    else osmDone.add(key);
   } catch {
     if (++osmFails >= 2) osmDown = true;
     setTimeout(() => osmLoaded.delete(key), 8000); /* backoff, then a later pass retries */
@@ -4605,7 +4737,7 @@ function meshHeightAt(x: number, z: number): number | null {
 (window as unknown as { __meshAt?: object }).__meshAt = meshHeightAt;
 (window as unknown as { __tstats?: object }).__tstats = (): object => ({
   heightTiles: heightTiles.size, meshes: terrainMeshes.size, dirty: terrainDirty.size,
-  roadCells: roadGrid.size, seenWays: seenWays.size,
+  roadCells: roadGrid.size, seenWays: seenWays.size, unbuilt,
 });
 /** The sea's whole case file: anchored where, live or stood down, and why. */
 (window as unknown as { __sea?: object }).__sea = (force?: boolean): object => {
@@ -4614,6 +4746,38 @@ function meshHeightAt(x: number, z: number): number | null {
     seaOn, y: +sea.position.y.toFixed(1), live: seaLevelY() !== null, baseElev: +baseElev.toFixed(1),
     dryAt: dryAt ? [Math.round(dryAt[0]), Math.round(dryAt[1])] : null,
     dryDist: dryAt ? Math.round(Math.hypot(dryAt[0] - state.x, dryAt[1] - state.z)) : null,
+  };
+};
+/** The inverse of __bury: where the ROAD stands above the terrain it should be
+ *  lying on. Also reports whether the ground under each offender was inside a
+ *  loaded height tile when the ribbon was built, because sampleHeight answers
+ *  0 — spawn level — for anywhere it has no tile, and a road built against
+ *  that fiction floats by exactly the depth of the basin it is crossing. */
+(window as unknown as { __float?: object }).__float = (name: string): object => {
+  const seen = new Set<Seg>();
+  const rows: Array<{ at: number[]; lift: number; tiled: boolean }> = [];
+  for (const arr of roadGrid.values()) for (const s of arr) {
+    if (s.nm !== name || s.tn || s.ya === undefined || seen.has(s)) continue;
+    seen.add(s);
+    const mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2;
+    const road = ((s.ya as number) + (s.yb as number)) / 2;
+    const g = sampleHeight(mx, mz);
+    // Is there a height tile covering this point at all?
+    let tiled = false;
+    for (const t of heightTiles.values()) {
+      if (mx >= t.xs && mz >= t.zs && mx < t.xs + t.w && mz < t.zs + t.h) { tiled = true; break; }
+    }
+    rows.push({ at: [Math.round(mx), Math.round(mz)], lift: +(road - g).toFixed(1), tiled });
+  }
+  const lifts = rows.map((r) => r.lift).sort((a, b) => a - b);
+  const bad = rows.filter((r) => r.lift > 4);
+  return {
+    name, segs: rows.length,
+    lift: lifts.length ? { min: lifts[0], med: lifts[lifts.length >> 1], max: lifts[lifts.length - 1] } : null,
+    over4m: bad.length,
+    pct: rows.length ? +(bad.length / rows.length * 100).toFixed(1) : 0,
+    untiled: rows.filter((r) => !r.tiled).length,
+    worst: rows.slice().sort((a, b) => b.lift - a.lift).slice(0, 5),
   };
 };
 /** Walk a named road and report where the rendered terrain stands above the
@@ -4656,6 +4820,7 @@ function meshHeightAt(x: number, z: number): number | null {
   }
   return out;
 };
+(window as unknown as { __roadsegsRaw?: object }).__roadsegsRaw = (): number[][] => [];
 (window as unknown as { __roadsegs?: object }).__roadsegs = (): number[][] => {
   const out: number[][] = [], seen = new Set<Seg>();
   for (const arr of roadGrid.values()) for (const s of arr) {
@@ -5866,6 +6031,15 @@ function tick(now: number): void {
   stepOdo(dt, now);
   stepMission(now);
   stepSurvey(now);
+  // THE CAR IS EVIDENCE TOO. Dry-land proof used to come only from a ribbon
+  // being built, and Badwater Road is a single OSM way — so it fired once, at
+  // the spawn, and never again. Drive 8km up the valley and the anchor was
+  // left behind, the sea judged itself back on, and Death Valley flooded to
+  // absolute zero around a truck standing on its floor. Sitting on a road
+  // below sea level is the same proof, and it follows you.
+  if (seaOn && (surfKind === 'road' || surfKind === 'track')) {
+    noteDryLand(state.x, state.z, groundAt(state.x, state.z));
+  }
   if (now > vegAt) { vegAt = now + 900; refreshVeg(); }
   audio.update(state.speed, throttle, surfKind, groundedF, wx.rain, engRev, engGear, skid);
   reveal(state.x, state.z);
