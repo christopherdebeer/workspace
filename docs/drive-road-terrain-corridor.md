@@ -144,20 +144,26 @@ Paired runs, same bundle, same probe, differing only in the changed lines.
 against the triangles that were actually drawn**, so it does not agree with the
 fix by construction.
 
-| | Bormio before | Bormio after | Chapman's before | Chapman's after |
-|---|---|---|---|---|
-| worst undercut | 7.3 m | **0.6 m** | 36.6 m | 10.2 m |
-| road undercut past the apron | 8.6% | **0%** | 10.1% | **0.2%** |
-| worst rendered gap under the road | 8.6 m | **2.8 m** | 33.9 m | 28.5 m |
-| rendered gap past the apron | 10.3% | **0%** | 14.8% | 8.1% |
-| piers built | 0 | 0 | 59 | **0** |
-| deck built | 0 m | 0 m | 3000 m | **32 m** |
+| | Bormio | | Chapman's Peak | | Cairo | |
+|---|---|---|---|---|---|---|
+| | before | after | before | after | before | after |
+| worst undercut | 7.3 m | **0.6 m** | 36.6 m | 10.2 m | 23.9 m | 10.5 m |
+| road undercut past the apron | 8.6% | **0%** | 10.1% | **0.2%** | 19.6% | **2.3%** |
+| worst rendered gap under the road | 8.6 m | **2.8 m** | 33.9 m | 28.5 m | — | 16.7 m |
+| rendered gap past the apron | 10.3% | **0%** | 14.8% | 8.1% | — | 5.3% |
+| piers built | 0 | 0 | 59 | **0** | — | 2 |
+| deck built | 0 m | 0 m | 3000 m | **32 m** | — | 1937 m |
 
-Chapman's Peak keeps a residual because it has genuine grade separation: where
-a road passes directly over another, the ground beneath must stay at the lower
-road's level, and no bed can or should lift it. That is what a bridge is for —
-and the 32 m of deck now built is the one OSM-tagged bridge on the road, in
-place of the 3 km of invented viaduct.
+(Cairo's rendered-gap and span columns are blank before because that run
+predated the `meshGap` metric.)
+
+Every site keeps a residual, and in each case it is the same thing: genuine
+grade separation. Where a road passes directly over another the ground beneath
+must stay at the lower road's level, and no bed can or should lift it — the
+surviving culprits are all 27 m away and 5–7 m below. That is exactly what a
+bridge is for, and the deck numbers show the classifier now agreeing: Chapman's
+Peak drops from 3 km of invented viaduct on 59 piers to the 32 m span that is
+actually tagged there, while Cairo keeps its 1937 m of real flyover.
 
 The residual `meshGap` is not a defect either. On a shelf road the ground
 genuinely falls away past the downhill kerb; that is a bank. `undercut` — ground
