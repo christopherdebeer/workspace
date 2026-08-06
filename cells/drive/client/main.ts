@@ -317,6 +317,11 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
       xs: Math.min(wx0, wx1), zs: Math.min(wz0, wz1),
       w: Math.abs(wx1 - wx0), h: Math.abs(wz1 - wz0), data,
     });
+    // Terrain built before this arrived was coloured from a guess and, more
+    // importantly, has no seabed under its water. Rebuild what this tile
+    // covers — staggered by the rebuild throttle, so it costs a few frames
+    // spread over seconds rather than a hitch.
+    coverDirtiedTerrain(Math.min(wx0, wx1), Math.min(wz0, wz1), Math.abs(wx1 - wx0), Math.abs(wz1 - wz0));
   } catch {
     // Let a later pass ask again — a cover miss is a softer failure than a road
     // one (everything downstream has a fallback), so it just retries slowly.
@@ -1177,14 +1182,22 @@ function buildTerrainMesh(t: HeightTile): void {
     // a nearest-pixel mesh disagreed with it by metres and swallowed every
     // draped layer under the terrain skin. groundAt also applies the road
     // corridor cut, so a hillside can never stand in a carriageway's airspace.
-    const elev = groundAt(ex, ez);
+    const cv = sampleCover(ex, ez);
+    let elev = groundAt(ex, ez);
+    // GIVE THE SEA A FLOOR. The elevation source carries no bathymetry: it
+    // fills the ocean with a flat plate AT the waterline, so once the water
+    // plane was placed correctly the Pacific rendered as a 40cm lagoon over
+    // its own bed — measured 0.4m deep for two kilometres straight out. Where
+    // cover says water, the bed drops to a depth that reads as sea. It only
+    // ever lowers ground, and the step at the shoreline is itself underwater.
+    if (cv === COVER.water) elev = Math.min(elev, seaSurfaceAbs() - baseElev - SEA_BED);
     const elevAbs = elev + baseElev;
     pos.setY(i, elev);
     const u = clamp(Math.round(((ex - t.xs) / t.w) * 255), 0, 255);
     const v = clamp(Math.round(((ez - t.zs) / t.h) * 255), 0, 255);
     const du = t.data[v * 256 + Math.min(255, u + 1)] - t.data[v * 256 + u];
     const dv = t.data[Math.min(255, v + 1) * 256 + u] - t.data[v * 256 + u];
-    const [r, g, bb] = terrainPalette(elevAbs, Math.hypot(du, dv) / Math.max(cell, 1), sampleCover(ex, ez));
+    const [r, g, bb] = terrainPalette(elevAbs, Math.hypot(du, dv) / Math.max(cell, 1), cv);
     colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -1201,6 +1214,17 @@ function buildTerrainMesh(t: HeightTile): void {
 // rebuild all eight neighbours SYNCHRONOUSLY, and roads now want rebuilds too,
 // so they queue instead and the main loop spends one per frame on them.
 const terrainDirty = new Set<string>();
+/** How far under the surface the seabed is dropped where cover says water.
+ *  Deep enough to read as open sea through the water shader, shallow enough
+ *  that the shelf at the shoreline stays a shelf rather than a trench. */
+const SEA_BED = 6;
+/** Every built terrain tile overlapping a world rectangle, marked for rebuild. */
+function coverDirtiedTerrain(xs: number, zs: number, w: number, h: number): void {
+  for (const [key, t] of heightTiles) {
+    if (t.xs > xs + w || t.zs > zs + h || t.xs + t.w < xs || t.zs + t.h < zs) continue;
+    markTerrainDirty(key);
+  }
+}
 function markTerrainDirty(key: string): void {
   if (terrainMeshes.has(key)) terrainDirty.add(key);
 }
@@ -4319,7 +4343,12 @@ function streamWorld(ex: number, ez: number): void {
       // Cover also knows which ground is water, and water is the only honest
       // witness to where sea level sits in THIS DEM's datum. Same moment, same
       // data — and the plane slews up to meet it rather than snapping.
-      if (seaDatum === null) measureSeaDatum();
+      if (seaDatum === null) {
+        measureSeaDatum();
+        // The waterline just moved, and every seabed was cut against the old
+        // one. Everything already built has to be cut again.
+        if (seaDatum !== null) for (const k of terrainMeshes.keys()) terrainDirty.add(k);
+      }
       const b = biomeFromCover(origin.lat, baseElev);
       if (b) {
         biomeSettled = true;
