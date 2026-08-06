@@ -695,8 +695,15 @@ function ghostify(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
           // Only fragments that rise ABOVE the sight line are occluders —
           // without the height test the corridor dissolved the ordinary
           // ground grazing beneath the ray in chase cam.
-          if (length(vGhostW.xz - p.xz) < 6.0 + t * 8.0 && vGhostW.y > p.y - 0.3
-              && mod(floor(gl_FragCoord.x) + floor(gl_FragCoord.y), 2.0) < 1.0) discard;
+          float gDist = length(vGhostW.xz - p.xz);
+          float gRad = 6.0 + t * 8.0;
+          if (gDist < gRad && vGhostW.y > p.y - 0.3) {
+            // 50% screen-door at the fringe, 75% in the core: a single
+            // checkerboard left the truck readable as a silhouette but the
+            // road under it as murk — "ghosted" was only ever half done.
+            if (mod(floor(gl_FragCoord.x) + floor(gl_FragCoord.y), 2.0) < 1.0) discard;
+            if (gDist < gRad * 0.55 && mod(floor(gl_FragCoord.y), 2.0) < 1.0) discard;
+          }
         }
       }`);
     if (opts.detail) {
@@ -1445,6 +1452,33 @@ sea.rotation.x = -Math.PI / 2;
 sea.position.y = -1e6; // parked until boot anchors sea level
 scene.add(sea);
 let seaOn = false;
+// ── dry land below sea level ───────────────────────────────────────
+// The sea used to be a BOOT decision: spawn at or above sea level and a 40km
+// plane sits at absolute zero for the rest of the session. Then you drive
+// into Death Valley — Badwater Road bottoms out 85m below sea level — and the
+// game floods it: the road runs under a rippling teal ceiling, because the
+// plane cannot know the basin is dry. Coastline data would settle it properly
+// and OSM's open sea has none, so the evidence used instead is the map itself:
+// A DRIVABLE ROAD BELOW SEA LEVEL MEANS THE LAND THERE IS DRY (Badwater,
+// the Dead Sea shore, a Dutch polder). While the car is near such evidence
+// the plane is drawn down out of sight; drive back toward a real coast —
+// which never has roads below the waterline — and it rises home. Latched by
+// place, not for the session, so one desert basin does not drain the Atlantic.
+let dryAt: [number, number] | null = null;
+function noteDryLand(x: number, z: number, y: number): void {
+  if (y + baseElev > -1) return;   // not meaningfully below sea level
+  // Keep the evidence nearest the car, so leaving the basin actually raises
+  // the sea again instead of chasing the most recently streamed tile.
+  if (!dryAt || Math.hypot(x - state.x, z - state.z) < Math.hypot(dryAt[0] - state.x, dryAt[1] - state.z)) {
+    dryAt = [x, z];
+  }
+}
+/** The sea surface's local y where it is live, or null where it is sunk. */
+function seaLevelY(): number | null {
+  if (!seaOn) return null;
+  if (dryAt && Math.hypot(dryAt[0] - state.x, dryAt[1] - state.z) < 8000) return null;
+  return -baseElev + 0.1;
+}
 
 // ── vegetation: a recycling field, not a one-shot pool ─────────────
 // The old version planted each polygon once into a fixed pool and stopped
@@ -2194,7 +2228,8 @@ function surfaceAt(x: number, z: number): Surface {
   }
   if (onTrack) return 'track';
   if (waterCells.has(gkey(x, z))) return 'water';
-  return seaOn && sampleHeight(x, z) < -baseElev - 0.6 ? 'water' : 'ground';
+  const sl = seaLevelY();
+  return sl !== null && sampleHeight(x, z) < sl - 0.7 ? 'water' : 'ground';
 }
 /**
  * The way you are on, or the nearest one you are not.
@@ -2791,6 +2826,12 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // The corridor cut is applied by the terrain builder, which may already have
   // run for this ground — so tell it to run again.
   if (drivable) dirtyTerrainAround(dense);
+  // A drivable road below sea level is proof the land here is dry — the
+  // evidence that keeps the sea plane out of Badwater and a polder alike.
+  // Tunnels excluded: an undersea tunnel is under a sea that is really there.
+  if (drivable && mode !== 'tunnel') {
+    for (let i = 0; i < dense.length; i += 10) noteDryLand(dense[i][0], dense[i][1], prof[i]);
+  }
   if (mode !== 'bridge') for (const [a, b] of runs) {
     // Tube only where the road is genuinely BURIED — where the terrain covers
     // the profile. An unburied stretch (coarse heightfield, shallow cut) stays
@@ -4269,6 +4310,58 @@ function truckSpec(): Record<string, number> {
   ...spanStats, signAt: spanStats.signAt.length, railM: Math.round(spanStats.railM),
   deckM: Math.round(spanStats.deckM), maxDaylight: +spanStats.maxDaylight.toFixed(1),
 });
+/** The RENDERED terrain surface at (x,z) — a raycast against the actual
+ *  meshes, which is not the same thing as groundAt: the mesh linearly
+ *  interpolates between vertices, and the road-corridor cut lives in the
+ *  field, not the triangles. The difference between these two numbers is
+ *  exactly the burial bug this handle exists to measure. */
+const meshRay = new THREE.Raycaster();
+const meshRayO = new THREE.Vector3(), meshRayD = new THREE.Vector3(0, -1, 0);
+function meshHeightAt(x: number, z: number): number | null {
+  meshRayO.set(x, 4000, z);
+  meshRay.set(meshRayO, meshRayD);
+  const hits = meshRay.intersectObjects([...terrainMeshes.values()], false);
+  return hits.length ? +(4000 - hits[0].distance).toFixed(2) : null;
+}
+(window as unknown as { __meshAt?: object }).__meshAt = meshHeightAt;
+(window as unknown as { __tstats?: object }).__tstats = (): object => ({
+  heightTiles: heightTiles.size, meshes: terrainMeshes.size, dirty: terrainDirty.size,
+  roadCells: roadGrid.size, seenWays: seenWays.size,
+});
+/** The sea's whole case file: anchored where, live or stood down, and why. */
+(window as unknown as { __sea?: object }).__sea = (force?: boolean): object => {
+  if (force === true) { dryAt = null; sea.position.y = -baseElev + 0.1; }  // re-flood, to reproduce the bug
+  return {
+    seaOn, y: +sea.position.y.toFixed(1), live: seaLevelY() !== null, baseElev: +baseElev.toFixed(1),
+    dryAt: dryAt ? [Math.round(dryAt[0]), Math.round(dryAt[1])] : null,
+    dryDist: dryAt ? Math.round(Math.hypot(dryAt[0] - state.x, dryAt[1] - state.z)) : null,
+  };
+};
+/** Walk a named road and report where the rendered terrain stands above the
+ *  carriageway — the "road buried in the hillside" defect, quantified. */
+(window as unknown as { __bury?: object }).__bury = (name: string): object => {
+  const segs: Seg[] = [];
+  const seen = new Set<Seg>();
+  for (const arr of roadGrid.values()) for (const s of arr) {
+    if (s.nm !== name || s.tn || s.ya === undefined || seen.has(s)) continue;
+    seen.add(s); segs.push(s);
+  }
+  let n = 0, buried = 0, worst = 0, worstAt: number[] | null = null, sum = 0;
+  for (const s of segs) {
+    const L = Math.hypot(s.bx - s.ax, s.bz - s.az);
+    for (let t = 0; t <= 1; t += Math.max(0.2, 24 / Math.max(L, 1))) {
+      const x = s.ax + (s.bx - s.ax) * t, z = s.az + (s.bz - s.az) * t;
+      const top = (s.ya as number) + ((s.yb as number) - (s.ya as number)) * t + 0.6;
+      const m = meshHeightAt(x, z);
+      if (m === null) continue;
+      n++;
+      const d = m - top;
+      if (d > 0.05) { buried++; sum += d; if (d > worst) { worst = d; worstAt = [+x.toFixed(0), +z.toFixed(0)]; } }
+    }
+  }
+  return { name, segs: segs.length, samples: n, buried, pct: n ? +(buried / n * 100).toFixed(1) : 0,
+    meanDepth: buried ? +(sum / buried).toFixed(2) : 0, worst: +worst.toFixed(2), worstAt };
+};
 /** The sign atlas as drawn, so the panels can be checked without hunting for
  *  one in the world and photographing a different sign by mistake. */
 (window as unknown as { __signtex?: object }).__signtex = (): string =>
@@ -5248,7 +5341,7 @@ function tick(now: number): void {
       // Float LOW. The truck wades rather than skims: the hull settles until
       // the water is up around the axles, which is why the splashes shrink —
       // there is far less wheel left above the surface to throw anything.
-      if (seaOn) g = Math.max(g, -baseElev - 0.35);   // the surface, not the seabed
+      { const sl = seaLevelY(); if (sl !== null) g = Math.max(g, sl - 0.45); }   // the surface, not the seabed
       g -= WHEEL_R * 0.85;
     }
     rawSum += g;
@@ -5397,6 +5490,15 @@ function tick(now: number): void {
   } else dustBudget = 0;
   stepDust(dt);
   flushTerrain(now);
+  // The sea keeps its station off a coast and stands down over dry basins.
+  // Slewed, not snapped: the transition happens kilometres before the basin
+  // floor is reachable, and a falling waterline reads as the lake this basin
+  // once was rather than a render toggle.
+  if (seaOn) {
+    const sl = seaLevelY();
+    const target = sl ?? groundAt(state.x, state.z) - 60;
+    sea.position.y += clamp(target - sea.position.y, -0.5, 0.5);
+  }
   if (wildlifeOn) stepWildlife(dt);
   stepOdo(dt, now);
   stepMission(now);
@@ -6815,7 +6917,12 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
   }
   // Anchor the sea to true sea level — unless the land here is itself below
   // it (a depression), in which case there is no sea to show.
-  if (baseElev >= -2) { seaOn = true; sea.position.y = -baseElev + 0.1; }
+  // The sea is on for every spawn that could ever reach a coast; a spawn
+  // already in a depression starts with its own dry-land evidence so the
+  // basin is never flooded, not even for a frame.
+  seaOn = true;
+  if (baseElev >= -2) { sea.position.y = -baseElev + 0.1; }
+  else { dryAt = [0, 0]; sea.position.y = -60; }
   // Dress the world BEFORE any terrain mesh is built — the ground ramp is
   // baked into vertex colours at build time.
   applyBiome(pickBiome(spawn.lat, baseElev));
