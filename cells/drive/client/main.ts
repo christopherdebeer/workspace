@@ -7816,6 +7816,9 @@ const TAB_ITEMS: Item[][] = [
   [],   // the survey is a readout
   [],   // and so is the vehicle bay
   [
+    // SAVE THIS SPOT sits in WORLD, beside the destinations it writes into —
+    // the list and the thing that adds to it are one control surface.
+    { col: () => UI.gold, label: () => 'SAVE THIS SPOT', hit: () => saveSpot() },
     { col: () => UI.edge, label: () => (alien ? 'SCRIPT ALIEN' : 'SCRIPT PLAIN'), hit: () => toggleAlien() },
   ],
   [
@@ -7948,7 +7951,7 @@ const DRIVES: Drive[] = [
   { name: 'UYUNI', sub: 'BOLIVIA · THE SALT FLAT', lat: -20.2, lon: -67.5, h: 270 },
   { name: 'DEATH VALLEY', sub: 'BADWATER BASIN', lat: 36.2296, lon: -116.7665, h: 0 },
   { name: 'MONUMENT VALLEY', sub: 'UTAH · US 163', lat: 37.103, lon: -109.993, h: 200 },
-  { name: 'BIG SUR', sub: 'CALIFORNIA · BIXBY CREEK', lat: 36.3714, lon: -121.9019, h: 340 },
+  { name: 'BIG SUR', sub: 'CALIFORNIA · HIGHWAY 1', lat: 36.3731, lon: -121.90433, h: 127 },
   { name: 'STELVIO', sub: 'ITALY · 48 HAIRPINS', lat: 46.5285, lon: 10.4541, h: 200 },
   { name: 'TROLLSTIGEN', sub: 'NORWAY · THE TROLL LADDER', lat: 62.4558, lon: 7.671, h: 180 },
   { name: 'TRANSFAGARASAN', sub: 'ROMANIA · THE RIDGE ROAD', lat: 45.6017, lon: 24.6172, h: 180 },
@@ -7992,8 +7995,59 @@ const startDrive = (d: Drive): void => {
  *  arrives with the job already on it. */
 const missionById = (id: string): Mission | null =>
   DRIVES.find((d) => d.mission?.id === id)?.mission ?? null;
+// ── spots you found yourself ───────────────────────────────────────
+// The curated drives are authored links. A spot is the same shape, written by
+// the player instead: park somewhere worth coming back to and it joins the
+// list. Deliberately the SAME `Drive` record, so everything downstream —
+// rendering, the tap target, startDrive, the shareable URL — already works.
+//
+// It names itself. A text field would mean a DOM input over a canvas menu and
+// a keyboard over a phone-sized viewport, to ask for something the game
+// already knows: the road under the wheels and the place around it. Both are
+// already on the HUD, and both are already in the bitmap set.
+const SPOTS_KEY = 'drive.spots.v1';
+let spots: Drive[] = [];
+function loadSpots(): void {
+  try {
+    const raw = JSON.parse(localStorage.getItem(SPOTS_KEY) ?? '[]') as Drive[];
+    spots = Array.isArray(raw)
+      ? raw.filter((d) => d && typeof d.lat === 'number' && typeof d.lon === 'number').slice(0, 40)
+      : [];
+  } catch { spots = []; }
+}
+function saveSpots(): void {
+  try { localStorage.setItem(SPOTS_KEY, JSON.stringify(spots)); } catch { /* full or blocked: the list is still live this session */ }
+}
+/** Everything the destinations list shows: your own first, then the authored
+ *  ones. Recomputed per frame — the list is tens of entries, not thousands. */
+const allDrives = (): Drive[] => [...spots, ...DRIVES];
+/** Save where the truck is standing, named from what is around it. */
+function saveSpot(): void {
+  const [la, lo] = localToLatLon(state.x, state.z);
+  const h = Math.round((((state.heading * 180) / Math.PI) % 360 + 360) % 360);
+  const w = wayAt(state.x, state.z);
+  // Kept inside the 5x7 bitmap set, like the authored names: anything outside
+  // it falls back to the system font mid-word and breaks the grid, and OSM is
+  // full of Sæbraut and Kärntner Straße.
+  const safe = (t: string): string => t.toUpperCase().replace(/[^A-Z0-9 ,·.-]/g, '').replace(/\s+/g, ' ').trim();
+  // The road is the better name — it is what you would say to someone else —
+  // and the place is the context. With no road, the place carries the name and
+  // the coordinate carries the detail.
+  const place = placeLabel === '…' ? '' : safe(placeLabel);
+  const coord = `${la.toFixed(3)} ${lo.toFixed(3)}`;
+  const road = w ? safe(w.name) : '';
+  const name = road || place || 'WAYPOINT';
+  const sub = road ? place || coord : coord;
+  spots.unshift({ name, sub, lat: +la.toFixed(5), lon: +lo.toFixed(5), h });
+  if (spots.length > 40) spots.length = 40;
+  saveSpots();
+  drivePage = 0;                       // the new one is at the top of page one
+  audio.stone();
+}
 let drivePage = 0, drivePages = 1;
 const driveRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
+/** The delete target on a saved row, carrying that row's index in `spots`. */
+const spotDelRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
 let drivePageRect = { x: 0, y: 0, w: 0, h: 0 };
 
 // ── dials ──────────────────────────────────────────────────────────
@@ -8341,6 +8395,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   tabRects.length = 0;
   viewRects.length = 0;
   driveRects.length = 0;
+  spotDelRects.length = 0;
   dialRects.length = 0;
   vehRect = { x: 0, y: 0, w: 0, h: 0 };
   // ── the dock, bottom-left: whichever view ISN'T fullscreen ──
@@ -8866,8 +8921,9 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
       // in landscape has barely a third of the height of one held upright.
       const btnH = items.length * 16 + 8;
       const room = Math.max(2, MY + MH - 6 - btnH - (y + 10));
+      const list = allDrives();
       const perPage = Math.max(3, Math.floor(room / 11));
-      const pages = Math.ceil(DRIVES.length / perPage);
+      const pages = Math.ceil(list.length / perPage);
       drivePages = pages;
       drivePage = clamp(drivePage, 0, pages - 1);
       textSmall(hctx, 'DESTINATIONS', MX + 6, y, UI.dim);
@@ -8880,12 +8936,20 @@ function drawMenu(tab: number, kmh: number, surf: Surface): void {
       }
       y += 9;
       const from = drivePage * perPage;
-      for (let i = from; i < Math.min(DRIVES.length, from + perPage); i++) {
-        const d = DRIVES[i];
-        text(hctx, fit(d.name, MW * 0.52), MX + 6, y, UI.text);
-        const sub = fitS(d.sub, MW * 0.46);
-        textSmall(hctx, sub, MX + MW - textSW(sub) - 7, y + 2, UI.dim);
-        driveRects.push({ x: MX + 4, y: y - 2, w: MW - 8, h: 11, i });
+      for (let i = from; i < Math.min(list.length, from + perPage); i++) {
+        const d = list[i];
+        // Yours read in gold and carry a delete target; the authored ones do
+        // not, because you cannot delete the map.
+        const mine = i < spots.length;
+        const delW = mine ? 11 : 0;
+        text(hctx, fit(d.name, MW * 0.52), MX + 6, y, mine ? UI.gold : UI.text);
+        const sub = fitS(d.sub, MW * 0.46 - delW);
+        textSmall(hctx, sub, MX + MW - textSW(sub) - 7 - delW, y + 2, UI.dim);
+        if (mine) {
+          textSmall(hctx, 'X', MX + MW - 11, y + 2, UI.soft);
+          spotDelRects.push({ x: MX + MW - 16, y: y - 2, w: 14, h: 11, i });
+        }
+        driveRects.push({ x: MX + 4, y: y - 2, w: MW - 8 - delW, h: 11, i });
         y += 11;
       }
       y = MY + MH - 6 - btnH;
@@ -8958,7 +9022,9 @@ function hudTap(cx: number, cy: number): boolean {
       return true;
     }
     if (drivePageRect.w && inside(drivePageRect, 2)) { drivePage = (drivePage + 1) % drivePages; return true; }
-    for (const r of driveRects) if (inside(r, 0)) { startDrive(DRIVES[r.i]); return true; }
+    // Delete before select: the X sits inside the row it belongs to.
+    for (const r of spotDelRects) if (inside(r, 0)) { spots.splice(r.i, 1); saveSpots(); audio.stone(); return true; }
+    for (const r of driveRects) { const d = allDrives()[r.i]; if (d && inside(r, 0)) { startDrive(d); return true; } }
     for (const r of itemRects) if (inside(r, 0)) { TAB_ITEMS[tab]?.[r.i]?.hit(); return true; }
     return true;
   }
@@ -9000,6 +9066,7 @@ let placeRect = { x: 0, y: 0, w: 0, h: 0 };
 // material, so they have to land before the first frame rather than on the
 // first time the menu is opened.
 loadDials();
+loadSpots();
 applyDials();
 // …and THEN the URL, because a dial that persists to localStorage will happily
 // overwrite a query parameter that was read before it. `?t=DUSK` silently did
