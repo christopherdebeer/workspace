@@ -119,8 +119,15 @@ const OVERPASS_MIRRORS = [
 // `no-store`, and nothing in the logs saying which upstream failed. The cell is
 // configured at 30s (`cells.configureCell timeoutSeconds`), and this stays
 // under it so the handler always outlives its own request and can say why.
-const UPSTREAM_MS = 22000;   // the whole budget, across every mirror
-const ATTEMPT_MS = 9000;     // …and no single mirror may spend all of it
+// …but SPEND LESS OF IT FAILING. Rotating mirrors made the failure path longer
+// (three attempts where there had been one), and a slow failure is worse than a
+// fast one: the client holds a fetch slot for the whole of it, and six held
+// slots stall the ring. The point of mirrors is to SUCCEED more often, not to
+// spend longer losing — and the commonest failure, a 429, returns instantly, so
+// a short budget still fits all three. A tile that cannot be got in twelve
+// seconds is better retried later, when it may well be warm.
+const UPSTREAM_MS = 12000;   // the whole budget, across every mirror
+const ATTEMPT_MS = 5000;     // …and no single mirror may spend all of it
 
 /** Tile bounds on the standard web-mercator grid (the client's `tileBounds`). */
 function tileBounds(z: number, x: number, y: number) {

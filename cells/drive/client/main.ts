@@ -3655,10 +3655,18 @@ let tileProxyOk = true;   // one clean failure retires it for the session
  * is unavailable, so the caller can fall back to hitting Overpass directly —
  * a bad deploy here degrades to the old behaviour rather than an empty world.
  */
+// A SLOT IS THE SCARCE THING, not a tile. At 30s this waited out the cell's
+// whole upstream budget and then spent the same slot asking Overpass directly
+// as well — so one unlucky tile could occupy a sixth of the pipe for the better
+// part of a minute. Measured after mirrors went in: six slots stuck at once and
+// NOT ONE tile completed for 3.6km of driving. Nine seconds, then let go: the
+// tile is re-queued by a later pass, and by then it is often warm because the
+// cell filled it in the background anyway.
+const TILE_WAIT_MS = 9000;
 async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
   if (!tileProxyOk) return null;
   const ctl = new AbortController();
-  const bail = setTimeout(() => ctl.abort(), 30000);
+  const bail = setTimeout(() => ctl.abort(), TILE_WAIT_MS);
   try {
     const res = await fetch(`${CELL_BASE}/~/osm/v1/${OSM_Z}/${x}/${y}`, { signal: ctl.signal });
     // 503 is the cell telling us Overpass just failed IT — a real answer, and a
@@ -3673,9 +3681,12 @@ async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
       tags: w.tags,
       geometry: (w.geometry ?? []).map(([lat, lon]) => ({ lat, lon })),
     })) as OsmWay[];
-  } catch {
-    return null;
   } finally { clearTimeout(bail); }
+  // NOTE: no catch. A timeout or a network blip is THIS TILE failing, and the
+  // caller's backoff already handles that; swallowing it here dropped the
+  // request into the direct-Overpass path and paid for the same tile twice.
+  // `null` now means one thing only — the proxy itself is not answering — so
+  // the fallback still covers a bad deploy and nothing else.
 }
 
 async function loadOsmTile(x: number, y: number): Promise<void> {
