@@ -1885,9 +1885,17 @@ function facade(mat: THREE.Material): void {
 // and value stays high, which is what old paint in strong light actually looks
 // like — the dirt lives in the façade shader and the wall texture, so the base
 // colour does not have to carry the grime as well.
+// CEILED AT 0xbe ON ANY CHANNEL, and that ceiling is not taste — it is the
+// bloom threshold. The bright pass cuts at 0.62 on the max channel in LINEAR
+// space, and a hex is decoded sRGB→linear before it ever reaches a shader:
+// 0xa5 is linear 0.376, but 0xd8 is 0.686. The first pass at "lighter" used
+// values around 0xd0 and so roughly DOUBLED the reflectance, which put lit
+// walls over the cut — buildings bloomed, and additive bloom took them from
+// bright to pure white. 0xbe is linear 0.514, ×0.88 for the wall = 0.45, which
+// still clears the cut with headroom under a strong sun.
 const B_MATS = [
-  0xd8cfbc, 0xc9bda6, 0xe0d8c6, 0xbfae95, 0xd6c3a4, 0xcbb89e,
-  0xc4c2b4, 0xd9cdc4, 0xbfc4bd, 0xcdb9b0, 0xc2c7cb, 0xd4cbb0,
+  0xbab0a0, 0xb0a694, 0xbeb5a6, 0xa89c88, 0xb9ab92, 0xb1a28c,
+  0xadaba0, 0xbcb0a6, 0xa8aea6, 0xb4a49c, 0xaab0b4, 0xb8b09a,
 ].map((c, i) => {
   // Walls carry the detail now — openings, lintels, ivy — and at 0.72 under a
   // low sun there was not enough wall left for any of it to read against.
@@ -1895,7 +1903,10 @@ const B_MATS = [
   const wall = new THREE.MeshLambertMaterial({ color: side, map: wallTexes[i % wallTexes.length], side: DS });
   facade(wall);
   return [
-    new THREE.MeshLambertMaterial({ color: c, map: roofTex, side: DS }),
+    // The roof takes the same headroom as the wall. It used the raw hex, which
+    // was safe while the palette topped out at 0xa5 and is not once it does
+    // not — a roof is the surface most likely to be square-on to a high sun.
+    new THREE.MeshLambertMaterial({ color: new THREE.Color(c).multiplyScalar(0.82), map: roofTex, side: DS }),
     wall,
   ] as [THREE.Material, THREE.Material];
 });
@@ -4205,8 +4216,16 @@ const buildStats = { intact: 0, ruin: 0, ruins: [] as Array<[number, number]> };
  *  buildings. The hash decorrelates neighbours while staying stable per
  *  building, which is what makes a street read as a street. */
 const bPaint = (id: number): number => {
+  // EVERY STEP FORCED UNSIGNED. `^=` evaluates to a SIGNED int32, so once the
+  // hash passes 2^31 — about half of all ids — `h % n` came out NEGATIVE,
+  // B_MATS[-5] was undefined, and `new Mesh(geo, undefined)` fell back to
+  // three's default material: an UNLIT white MeshBasicMaterial. That is the
+  // building-shaped white slab, flat 1.0 at any hour, sailing over the bloom
+  // cut and glowing. Half the buildings in the world, from one missing `>>>`.
   let h = (id * 2654435761) >>> 0;
-  h ^= h >>> 15; h = Math.imul(h, 2246822507) >>> 0; h ^= h >>> 13;
+  h = (h ^ (h >>> 15)) >>> 0;
+  h = Math.imul(h, 2246822507) >>> 0;
+  h = (h ^ (h >>> 13)) >>> 0;
   return h % B_MATS.length;
 };
 function building(pts: Array<[number, number]>, id: number, levels: number): void {
@@ -6213,6 +6232,20 @@ function stepReal(dt: number): boolean {
       tris: Math.round((m.geometry?.getAttribute('position')?.count ?? 0) / 3),
       parent: m.parent?.name ?? '',
       data: JSON.stringify(m.userData ?? {}).slice(0, 80),
+      // What it is actually PAINTED with. When something renders white the
+      // question is whether its colour is white, its map is missing, or the
+      // light on it is: this answers the first two directly.
+      mats: (Array.isArray(m.material) ? m.material : [m.material]).map((mm) => {
+        const q = mm as THREE.MeshLambertMaterial;
+        return {
+          t: q?.type,
+          col: q?.color ? `#${q.color.getHexString()}` : null,
+          emis: q?.emissive ? `#${q.emissive.getHexString()}` : null,
+          map: q?.map ? 'yes' : 'no',
+          vcol: !!q?.vertexColors,
+          groups: m.geometry?.groups?.length ?? 0,
+        };
+      }),
     };
   });
 };
