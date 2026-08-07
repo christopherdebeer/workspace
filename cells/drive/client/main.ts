@@ -6102,6 +6102,43 @@ const real = {
   drift: 0,
   wake: null as { release: () => Promise<void> } | null,
 };
+/** The Permissions API's view of geolocation, cached for the denial copy. */
+let geoPerm = 'unknown';
+function refreshGeoPerm(): Promise<string> {
+  const perms = (navigator as unknown as {
+    permissions?: { query: (d: { name: string }) => Promise<{ state: string }> };
+  }).permissions;
+  if (!perms?.query) return Promise.resolve(geoPerm);
+  return perms.query({ name: 'geolocation' }).then(
+    (s) => { geoPerm = s.state; return geoPerm; },
+    () => geoPerm,
+  );
+}
+/**
+ * PERMISSION_DENIED is three different faults wearing one error code, and the
+ * permission STATE is what tells them apart. `denied` = this site is blocked
+ * in the browser (a remembered "don't allow", or a per-site setting). But a
+ * denial while the state still says `prompt` — or even `granted` — means NO
+ * PROMPT WAS EVER SHOWN: the browser itself has no location access (iOS:
+ * Settings → Privacy → Location Services → Safari Websites set to Never, or
+ * Location Services off entirely), or the page is inside an app's webview
+ * that swallows the prompt. Seen live as "it just says refused but I never
+ * got a prompt" — the one message this copy exists to never send again.
+ */
+function deniedCopy(): string {
+  if (geoPerm === 'denied') return 'BLOCKED FOR THIS SITE - ALLOW LOCATION IN BROWSER SETTINGS';
+  if (geoPerm === 'prompt' || geoPerm === 'granted') return 'NO PROMPT CAME - LOCATION IS OFF FOR THE BROWSER IN DEVICE SETTINGS';
+  return 'LOCATION REFUSED - ALLOW IN BROWSER';
+}
+function geoFail(e: GeolocationPositionError, into: (s: string) => void): void {
+  if (e.code === e.PERMISSION_DENIED) {
+    into(deniedCopy());                                  // best current guess…
+    void refreshGeoPerm().then(() => into(deniedCopy())); // …refined once the state answers
+  } else {
+    into(e.code === e.POSITION_UNAVAILABLE ? 'NO POSITION AVAILABLE' : 'LOCATION TIMED OUT');
+  }
+}
+void refreshGeoPerm();   // warm the cache so the first denial reads right
 /** Ask once, so the permission prompt happens on a real tap and we can report a
  *  refusal, then reboot the world anchored where the device actually is. */
 function startRealDrive(): void {
@@ -6117,10 +6154,7 @@ function startRealDrive(): void {
       location.href = `${location.pathname}?lat=${p.coords.latitude.toFixed(5)}`
         + `&lon=${p.coords.longitude.toFixed(5)}&h=${Math.round(h)}&cam=cab&real=1`;
     },
-    (e) => {
-      real.err = e.code === e.PERMISSION_DENIED ? 'LOCATION REFUSED - ALLOW IN BROWSER'
-        : e.code === e.POSITION_UNAVAILABLE ? 'NO POSITION AVAILABLE' : 'LOCATION TIMED OUT';
-    },
+    (e) => geoFail(e, (s) => { real.err = s; }),
     { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
   );
 }
@@ -6151,7 +6185,10 @@ function beginRealWatch(): void {
       };
       real.err = '';
     },
-    (e) => { real.err = e.code === e.PERMISSION_DENIED ? 'LOCATION REFUSED - ALLOW IN BROWSER' : 'GPS SIGNAL LOST'; },
+    (e) => {
+      if (e.code === e.PERMISSION_DENIED) geoFail(e, (s) => { real.err = s; });
+      else real.err = 'GPS SIGNAL LOST';
+    },
     { enableHighAccuracy: true, timeout: 30000, maximumAge: 1000 },
   );
 }
@@ -6238,6 +6275,17 @@ function stepReal(dt: number): boolean {
   }
   return true;
 }
+/** The geolocation case file: everything a "refused but no prompt" report
+ *  needs in one call — secure context, Permissions state, webview tells. */
+(window as unknown as { __gps?: object }).__gps = async (): Promise<object> => ({
+  secure: isSecureContext,
+  hasGeolocation: !!navigator.geolocation,
+  permission: await refreshGeoPerm(),
+  standalone: matchMedia('(display-mode: standalone)').matches,
+  realOn: real.on,
+  realErr: real.err,
+  ua: navigator.userAgent,
+});
 (window as unknown as { __drive?: object; __surfaceAt?: (x: number, z: number) => string }).__drive = state;
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
 (window as unknown as { __coverAt?: (x: number, z: number) => number | null }).__coverAt = sampleCover;
@@ -10307,8 +10355,7 @@ const menu = createMenu({
         location.href = `${location.pathname}?lat=${p.coords.latitude.toFixed(5)}`
           + `&lon=${p.coords.longitude.toFixed(5)}&h=${h}&cam=chase`;
       },
-      (e) => status(e.code === e.PERMISSION_DENIED ? 'LOCATION REFUSED - ALLOW IN BROWSER'
-        : e.code === e.POSITION_UNAVAILABLE ? 'NO POSITION AVAILABLE' : 'LOCATION TIMED OUT', true),
+      (e) => geoFail(e, (s) => status(s, true)),
       { enableHighAccuracy: true, timeout: 20000, maximumAge: 30000 },
     );
   },
