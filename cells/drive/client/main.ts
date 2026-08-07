@@ -16,6 +16,8 @@
  */
 import * as THREE from 'three';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
+import { PIXEL_FONT } from './font';
+import { createOverlays } from './overlays';
 
 // ── tuning ─────────────────────────────────────────────────────────
 const TERRAIN_Z = 14;         // terrarium tile zoom (~2.4km/cos(lat), ~9.5m/px — z13 washed out the hills roads tunnel through)
@@ -7692,38 +7694,11 @@ updateStickHome(); // boot in top mode: the pinned stick is visible from frame o
 updateDock();
 
 
-// ── «translation»: place names in an alien script ──────────────────
-// Tap the location (top-left) to toggle. Deterministic per string — the same
-// place always garbles to the same glyphs, so landmarks stay RECOGNIZABLE
-// even unreadable (the future trek mechanic depends on that). Yi syllables:
-// a big, coherent block that renders everywhere and reads properly foreign.
-let alien = false;
-try { alien = localStorage.getItem('drive.alien') === '1'; } catch { /* fine */ }
-const alienCache = new Map<string, string>();
-function alienize(s: string): string {
-  if (!alien) return s;
-  let out = alienCache.get(s);
-  if (out !== undefined) return out;
-  out = '';
-  let h = 2166136261;
-  for (const ch of s) {
-    if (/[a-z0-9]/i.test(ch)) {
-      h = Math.imul(h ^ ch.toLowerCase().charCodeAt(0), 16777619) >>> 0;
-      out += String.fromCharCode(0xa000 + (h % 0x48c));
-    } else out += ch; // keep spaces & punctuation: the name's rhythm survives
-  }
-  alienCache.set(s, out);
-  return out;
-}
+// The «alien script» mechanic (place names garbled into Yi syllables) is
+// retired — it was carried by the bitmap font's per-character fallback, and
+// the trek mechanic it existed for never arrived.
 let placeLabel = '…';
-// The HUD reads placeLine each frame; toggling translation just rewrites it.
-const renderPlace = (): void => { placeLine = alienize(placeLabel).toUpperCase(); };
-function toggleAlien(): void {
-  alien = !alien;
-  try { localStorage.setItem('drive.alien', alien ? '1' : '0'); } catch { /* fine */ }
-  alienCache.clear();
-  renderPlace();
-}
+const renderPlace = (): void => { placeLine = placeLabel.toUpperCase(); };
 
 // ── POI waypoints ──────────────────────────────────────────────────
 // Named parks/waters/buildings from the OSM stream become waypoints. This
@@ -7803,7 +7778,10 @@ function updatePois(): void {
     // "you cannot see this from here", and the label should say so.
     const hid = sightBlockedCached(p.name, poiVec.x, poiVec.y, poiVec.z, i)
       || wallHitAlong(camera.position.x, camera.position.z, wx, wz, camera.position.y) < 0.98;
-    const label = `${alienize(p.name).toUpperCase()} ${fmtDist(d)}`;
+    // WHAT KIND of place leads the label: a job reads '!', a place that will
+    // service the rig reads '+'. Colour alone never survived the glance test.
+    const badge = p.kind === 'mission' ? '! ' : p.kind === 'repair' ? '+ ' : '';
+    const label = `${badge}${p.name.toUpperCase()} ${fmtDist(d)}`;
     if (poiView.z < -1) {
       poiVec.project(camera);
       if (Math.abs(poiVec.x) <= 0.92) {
@@ -7811,6 +7789,7 @@ function updatePois(): void {
           x: (poiVec.x * 0.5 + 0.5) * innerWidth,
           y: clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.16, innerHeight * 0.8),
           t: label, c: POI_COLORS[p.kind], edge: 0, rng, hid,
+          name: p.name, kind: p.kind, pinned: !!p.pinned, d,
           w: [wx, wz, groundAt(wx, wz) + 2],
         });
         continue;
@@ -7823,6 +7802,7 @@ function updatePois(): void {
       // An edge chip is a BEARING, never a view — it points off-screen by
       // definition — so it is never ghosted.
       t: right ? `${label} >` : `< ${label}`, c: POI_COLORS[p.kind], edge: right ? 1 : -1, rng, hid: false,
+      name: p.name, kind: p.kind, pinned: !!p.pinned, d,
     });
   }
   updateCps();
@@ -8915,6 +8895,7 @@ function tick(now: number): void {
     navBend = paused || camMode === 'top' ? null : nextBend(state.x, state.z, state.heading);
   }
   drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF);
+  stepOverlays();
   if (camMode === 'cab' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
   updatePois(); // every frame — throttled pins juddered against the camera
   // Progress lives in the URL: reloading resumes here, not at the spawn.
@@ -9116,106 +9097,60 @@ function applyBiome(b: Biome): void {
   grassTint.setHSL(b.vegHue[0] + 0.012, 0.34, b.vegLit[0] * 0.82 + 0.06);
 }
 
-// ── pixel font ─────────────────────────────────────────────────────
-// A real 5x7 bitmap font, not a system font shrunk down. Each glyph is seven
-// rows of five bits, base32-encoded (0-v = 0-31, bit 4 leftmost). Drawn as
-// literal rectangles into the low-res HUD buffer, so every stroke lands on the
-// pixel grid — the thing a hinted, anti-aliased system font can never do.
-const GLYPHS: Record<string, string> = {
-  ' ': '0000000', A: 'ehhvhhh', B: 'uhhuhhu', C: 'ehggghe', D: 'sihhhis', E: 'vgguggv',
-  F: 'vgguggg', G: 'ehgnhhf', H: 'hhhvhhh', I: 'e44444e', J: '72222ic', K: 'hikokih',
-  L: 'ggggggv', M: 'hrllhhh', N: 'hhpljhh', O: 'ehhhhhe', P: 'uhhuggg', Q: 'ehhhlid',
-  R: 'uhhukih', S: 'fgge11u', T: 'v444444', U: 'hhhhhhe', V: 'hhhhha4', W: 'hhhllrh',
-  X: 'hha4ahh', Y: 'hha4444', Z: 'v1248gv',
-  '0': 'ehjlphe', '1': '4c4444e', '2': 'eh1248v', '3': 'v4221he', '4': '26aiv22',
-  '5': 'vgu11he', '6': '68guhhe', '7': 'v124888', '8': 'ehhehhe', '9': 'ehhf12c',
-  '.': '00000cc', ',': '0000c48', ':': '0cc0cc0', '/': '122488g', '-': '000v000',
-  '%': 'hi4449h', '·': '000c000', '!': '4444404', '?': 'eh12404', '(': '2488842',
-  ')': '8422248', '+': '044v440', '>': '8421248', '<': '248g842', '=': '00v0v00',
-  '#': 'alvlvla', '*': '04ava40', '"': 'aa00000', "'": '4400000', '°': 'cic0000',
+// ── pixel type, from the web font ──────────────────────────────────
+// The hand-drawn 5x7 and 3x5 bitmap tables are retired: all HUD text is now
+// Silkscreen (client/font.ts) via fillText into the same low-res buffer. The
+// face is designed on an 8px em with 1px units, so at integer sizes and
+// integer positions its squares land on the buffer's pixel grid and the
+// nearest-neighbour magnification keeps them hard. Two consequences the old
+// tables never had: advances are PROPORTIONAL (all measurement goes through
+// measureText, cached), and anything the face lacks — Arabic, CJK — falls
+// back to the monospace stack per string rather than per glyph.
+const FONT_PX = 8;
+const HUD_FONT = `'${PIXEL_FONT}', ui-monospace, monospace`;
+const setFont = (c: CanvasRenderingContext2D, px: number): void => {
+  c.font = `${px}px ${HUD_FONT}`;
+  c.textAlign = 'left';
+  c.textBaseline = 'alphabetic';
 };
-// A 3x5 face for secondary text. You cannot half-scale a bitmap font — 5x7 at
-// 0.5 is mush — so small text gets its own grid: three bits a row, five rows,
-// octal-encoded. Roughly half the area of the 5x7, still perfectly crisp.
-const GLYPHS_S: Record<string, string> = {
-  ' ': '00000', A: '25755', B: '65656', C: '34443', D: '65556', E: '74647', F: '74644',
-  G: '34553', H: '55755', I: '72227', J: '11152', K: '55655', L: '44447', M: '57755',
-  N: '57555', O: '25552', P: '65644', Q: '25563', R: '65655', S: '34216', T: '72222',
-  U: '55557', V: '55552', W: '55775', X: '55255', Y: '55222', Z: '71247',
-  '0': '75557', '1': '26227', '2': '61247', '3': '61216', '4': '55711', '5': '74616',
-  '6': '34652', '7': '71222', '8': '25252', '9': '25316',
-  '.': '00002', ',': '00024', '·': '00200', '-': '00700', '>': '42124', '<': '12421',
-  '/': '11244', "'": '22000', ':': '02020', '!': '22202', '?': '61202', '%': '52125',
-};
-const B32 = '0123456789abcdefghijklmnopqrstuv';
-const FW = 5, FH = 7;
-function glyphRows(ch: string): string {
-  return GLYPHS[ch] ?? GLYPHS[ch.toUpperCase()] ?? GLYPHS['?'];
-}
-/** Width in pixels of `s` at scale `sc` (1px letter spacing). */
-const textW = (s: string, sc = 1): number => s.length * (FW + 1) * sc;
-/** The 3x5 face: width, and a draw that mirrors `text` on the smaller grid. */
-const textSW = (s: string): number => s.length * 4;
-/** `fit` for the 3x5 micro font — the 5x7 version truncates it by a third. */
-const fitS = (s: string, maxPx: number): string => {
-  const n = Math.max(1, Math.floor(maxPx / 4));
-  return s.length <= n ? s : `${s.slice(0, n - 1)}.`;
-};
-function textSmall(c: CanvasRenderingContext2D, s: string, x: number, y: number, col: string): void {
-  c.fillStyle = col;
-  let cx = x;
-  for (const ch of s) {
-    // Same system-font escape hatch the 5x7 face has. Without it the micro font
-    // silently mapped every unknown character to '?', so a POI pin in Giza or
-    // Reykjavík came out as a row of question marks — the curated destinations
-    // walk straight into Arabic and Icelandic, which is how this surfaced.
-    if (!GLYPHS_S[ch] && !GLYPHS_S[ch.toUpperCase()] && ch !== ' ') {
-      c.font = '6px ui-monospace, monospace';
-      c.textAlign = 'left';
-      c.fillText(ch, cx, y + 5);
-      c.fillStyle = col;
-      cx += 4;
-      continue;
-    }
-    const rows = GLYPHS_S[ch] ?? GLYPHS_S[ch.toUpperCase()] ?? GLYPHS_S['?'];
-    for (let r = 0; r < 5; r++) {
-      const bits = Number(rows[r]);
-      if (!bits) continue;
-      for (let b = 0; b < 3; b++) if (bits & (1 << (2 - b))) c.fillRect(cx + b, y + r, 1, 1);
-    }
-    cx += 4;
+// Measured widths, cached — drawHud asks for a few hundred a frame and most
+// of them (labels, units, cardinal letters) never change.
+const measCache = new Map<string, number>();
+function measure(s: string, px: number): number {
+  const k = `${px}|${s}`;
+  let w = measCache.get(k);
+  if (w === undefined) {
+    setFont(hctx, px);
+    w = Math.ceil(hctx.measureText(s).width);
+    if (measCache.size > 4000) measCache.clear();   // speed digits etc. churn
+    measCache.set(k, w);
   }
+  return w;
 }
-/** Hard-truncate to fit a pixel width — no ellipsis glyph in a 5x7 font. */
-const fit = (s: string, maxPx: number): string => {
-  const n = Math.max(1, Math.floor(maxPx / (FW + 1)));
-  return s.length <= n ? s : `${s.slice(0, n - 1)}.`;
-};
+const textW = (s: string, sc = 1): number => measure(s, FONT_PX * sc);
+const textSW = (s: string): number => measure(s, FONT_PX);
+/** Truncate to a pixel width with a '.' — measured, not counted, because the
+ *  face is proportional now. */
+function fit(s: string, maxPx: number): string {
+  if (measure(s, FONT_PX) <= maxPx) return s;
+  let n = Math.min(s.length - 1, Math.max(1, Math.floor(maxPx / 5)));
+  while (n > 1 && measure(`${s.slice(0, n)}.`, FONT_PX) > maxPx) n--;
+  return `${s.slice(0, n)}.`;
+}
+const fitS = fit;
 function text(c: CanvasRenderingContext2D, s: string, x: number, y: number, col: string, sc = 1): void {
   c.fillStyle = col;
-  let cx = x;
-  for (const ch of s) {
-    // Anything outside the bitmap set — Arabic, Yi, accented Latin — is drawn
-    // from the system font at glyph size. It lands on the same low-res buffer
-    // and gets magnified with everything else, so a Cairo or Tromsø place name
-    // still reads as pixels rather than as a row of '?'.
-    if (!GLYPHS[ch] && !GLYPHS[ch.toUpperCase()] && ch !== ' ') {
-      c.font = `${FH * sc}px ui-monospace, monospace`;
-      c.textAlign = 'left';
-      c.fillText(ch, cx, y + FH * sc);
-      cx += (FW + 1) * sc;
-      continue;
-    }
-    const rows = glyphRows(ch);
-    for (let r = 0; r < FH; r++) {
-      const bits = B32.indexOf(rows[r]);
-      if (bits <= 0) continue;
-      for (let b = 0; b < FW; b++) {
-        if (bits & (1 << (FW - 1 - b))) c.fillRect(cx + b * sc, y + r * sc, sc, sc);
-      }
-    }
-    cx += (FW + 1) * sc;
-  }
+  setFont(c, FONT_PX * sc);
+  // Baseline sits where the old 5x7 glyph block ended, so call sites keep
+  // their meaning: (x, y) is still the top-left of the text.
+  c.fillText(s, Math.round(x), Math.round(y) + 7 * sc);
+}
+/** The old 3x5 micro face, now the same 8px face — kept as its own entry
+ *  point so the call sites (and any future re-split) stay legible. */
+function textSmall(c: CanvasRenderingContext2D, s: string, x: number, y: number, col: string): void {
+  c.fillStyle = col;
+  setFont(c, FONT_PX);
+  c.fillText(s, Math.round(x), Math.round(y) + 6);
 }
 
 // ── HUD: one low-res canvas, drawn in the pixel font ───────────────
@@ -9415,7 +9350,6 @@ function acceptMission(now: number): void {
   audio.stone();
 }
 let missionReady = false;         // in range of the giver, not yet accepted
-let missionRect = { x: 0, y: 0, w: 0, h: 0 };
 
 interface Drive { name: string; sub: string; lat: number; lon: number; h: number; mission?: Mission }
 const DRIVES: Drive[] = [
@@ -9680,13 +9614,17 @@ const SPEC_TEXT: Array<[string, string]> = [
   ['FUEL', 'BIODIESEL / ALGAE'], ['RANGE', '1200KM EST'], ['SOLAR', '2.4KW PEAK'],
   ['BATTERY', '10KWH LIFEPO4'], ['WATER', '120L'],
 ];
-let menuRect = { x: 0, y: 0, w: 0, h: 0 };   // the HUD's MENU chip (canvas-drawn)
 const CARD8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 let placeLine = '';
 // POI pins, filled by updatePois and drawn in the pixel font.
 interface PoiDraw { x: number; y: number; t: string; c: string; edge: 0 | -1 | 1; rng: boolean; hid: boolean;
+  /** Which POI this is (the `pois` key), what it is, and how far — the draw
+   *  pass scales beams by distance and the tap handler pins by name. */
+  name: string; kind: Poi['kind']; pinned: boolean; d: number;
   /** Where the pin actually is, so a probe can check the sight line itself. */
   w?: [number, number, number] }
+/** Tap targets over the drawn pins (HUD px) — generous, a label is small. */
+const poiRects: Array<{ x: number; y: number; w: number; h: number; name: string; kind: Poi['kind'] }> = [];
 let poiDraw: PoiDraw[] = [];
 let streaming = false;
 
@@ -9808,57 +9746,75 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.fillRect(x - 1, y, 3, 1);
     hctx.restore();
   }
-  // ── POI pins next, so panels overlay them ──
-  const btnW = textW('ELSEWHERE') + 8;
-  for (const p of poiDraw) {
-    const label = fit(p.t, Math.round(HW * 0.62));
+  // ── POI pins: beams out of the world, labels in lanes ──
+  // Two changes over the old stem-and-head pins, both from driving cities:
+  // 1) LANES. Distant pins in the same view piled their labels onto one
+  //    another. Labels now claim horizontal lanes — an overlapped label
+  //    CLIMBS a row and its leader lengthens to reach back down to the spot,
+  //    so a skyline of places reads as a skyline of places.
+  // 2) THE LEADER IS A BEAM. The checkpoint BEAM vocabulary, in the POI's
+  //    own colour: a column of light standing on the place, brighter and
+  //    wider as you close on it — a fuel stop glows out of its forecourt.
+  //    Occlusion keeps its meaning: a place you cannot see is a dashed rumour.
+  poiRects.length = 0;
+  const inView = poiDraw.filter((p) => p.edge === 0).sort((a, b) => a.x - b.x);
+  const lanes: number[] = [];        // right edge of the last label per lane
+  for (const p of inView) {
+    const label = fit(p.t, Math.round(HW * 0.5));
     const w = textSW(label) + 6;
-    if (p.edge === 0) {
-      const x = clamp(Math.round(p.x / hudS - w / 2), 2, HW - w - 2);
-      const y = clamp(Math.round(p.y / hudS), 22, HH - 40);
-      // GHOSTED WHEN YOU CANNOT SEE IT. A screen-space label knows where a
-      // place is, not whether there is a mountain in front of it — so a dam
-      // 860m away behind a ridge was painting itself beside the bonnet at full
-      // strength, which reads as "there it is" rather than "it is that way".
-      // Occluded pins keep their position and lose their solidity: dimmed text,
-      // a dashed stem, and a hollow head. Still a bearing; no longer a sighting.
-      const cxm = Math.round(x + w / 2);
-      if (p.hid) {
-        hctx.save();
-        hctx.globalAlpha = 0.42;
-        textEdgeS(label, x + 3, y - 9, p.rng ? UI.gold : UI.dim);
-        hctx.fillStyle = p.c;
-        for (let sy = y - 3; sy < y + 2; sy += 2) hctx.fillRect(cxm, sy, 1, 1);   // dashed stem
-        hctx.fillRect(cxm - 1, y + 2, 3, 1);                                      // hollow head
-        hctx.fillRect(cxm - 1, y + 4, 3, 1);
-        hctx.fillRect(cxm - 1, y + 3, 1, 1);
-        hctx.fillRect(cxm + 1, y + 3, 1, 1);
-        hctx.restore();
-        continue;
-      }
-      textEdgeS(label, x + 3, y - 9, p.rng ? UI.gold : UI.text);
-      hctx.fillStyle = p.c;
-      hctx.fillRect(Math.round(x + w / 2), y - 3, 1, 5);      // stem
-      hctx.fillRect(Math.round(x + w / 2) - 1, y + 2, 3, 3);  // pin head
-      if (p.rng) {
-        // IN RANGE: brackets around the label. This is the state that becomes
-        // the interaction later — a place you have arrived AT, rather than one
-        // you are navigating toward.
-        const cxp = Math.round(x + w / 2);
-        hctx.fillStyle = UI.gold;
-        for (const s of [-1, 1]) {
-          const bx = cxp + s * Math.round(w / 2 + 2);
-          hctx.fillRect(bx, y - 12, 1, 8);
-          hctx.fillRect(bx - (s > 0 ? 2 : 0), y - 12, 3, 1);
-          hctx.fillRect(bx - (s > 0 ? 2 : 0), y - 5, 3, 1);
-        }
-        hctx.fillRect(cxp - 2, y + 1, 5, 1);                  // a base, not a point
-      }
-    } else {
-      const y = clamp(Math.round(p.y / hudS), 20, HH - 30);
-      const x = p.edge > 0 ? HW - w - 3 : 3;
-      textEdgeS(label, x + 3, y + 2, p.rng ? UI.gold : p.c);
+    const ax = clamp(Math.round(p.x / hudS), 4, HW - 4);      // the beam's foot
+    const ay = clamp(Math.round(p.y / hudS), 30, HH - 40);
+    const x = clamp(Math.round(ax - w / 2), 2, HW - w - 2);
+    let lane = 0;
+    while (lane < 3 && lanes[lane] !== undefined && x < lanes[lane] + 6) lane++;
+    lanes[lane] = x + w;
+    const ly = ay - 13 - lane * 12;                            // label row for this lane
+    const near = clamp(1 - p.d / 900, 0, 1);
+    const ghost = p.hid ? 0.3 : 1;
+    hctx.save();
+    // The beam doubles as the leader line: foot on the place, top under the
+    // label, alpha falling with height, width and brightness with distance.
+    const h = ay - (ly + 9);
+    const bw = p.rng ? 3 : near > 0.55 ? 2 : 1;
+    hctx.fillStyle = p.c;
+    for (let i = 0; i <= h; i++) {
+      const t = i / Math.max(1, h);
+      if (p.hid && (i & 2)) continue;                          // dashed when occluded
+      hctx.globalAlpha = (0.9 - t * 0.6) * (0.3 + 0.7 * near) * ghost;
+      hctx.fillRect(ax - (bw >> 1), ay - i, bw, 1);
     }
+    // The foot: a dark seat so the light reads against bright ground.
+    hctx.globalAlpha = ghost;
+    hctx.fillStyle = UI.ink;
+    hctx.fillRect(ax - 2, ay, 5, 2);
+    hctx.fillStyle = p.c;
+    hctx.fillRect(ax - 1, ay, 3, p.rng ? 2 : 1);
+    // The label. Gold when in range or pinned by hand; dimmed when occluded.
+    hctx.globalAlpha = p.hid ? 0.55 : 1;
+    textEdgeS(label, x + 3, ly, p.rng || p.pinned ? UI.gold : p.hid ? UI.dim : UI.text);
+    if (p.rng) {
+      // IN RANGE: brackets around the label — a place you have arrived AT.
+      hctx.fillStyle = UI.gold;
+      for (const s of [-1, 1] as const) {
+        const bx = Math.round(x + w / 2) + s * Math.round(w / 2 + 2);
+        hctx.fillRect(bx, ly - 3, 1, 12);
+        hctx.fillRect(bx - (s > 0 ? 2 : 0), ly - 3, 3, 1);
+        hctx.fillRect(bx - (s > 0 ? 2 : 0), ly + 8, 3, 1);
+      }
+    }
+    hctx.restore();
+    // The whole assembly — label AND beam — is the tap target, padded out:
+    // a pin is a thing you point at with a thumb, not a 5px word.
+    poiRects.push({ x: x - 5, y: ly - 7, w: w + 10, h: ay - ly + 12, name: p.name, kind: p.kind });
+  }
+  for (const p of poiDraw) {
+    if (p.edge === 0) continue;
+    const label = fit(p.t, Math.round(HW * 0.5));
+    const w = textSW(label) + 6;
+    const y = clamp(Math.round(p.y / hudS), 20, HH - 30);
+    const x = p.edge > 0 ? HW - w - 3 : 3;
+    textEdgeS(label, x + 3, y + 2, p.rng || p.pinned ? UI.gold : p.c);
+    poiRects.push({ x: x - 3, y: y - 5, w: w + 8, h: 18, name: p.name, kind: p.kind });
   }
   // ── compass: the full width of the screen, centred ──
   const cw = HW - pad * 2, cx0 = pad, cy0 = pad;
@@ -9886,15 +9842,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   hctx.fillRect(Math.round(cx0 + cw / 2) - 2, cy0 + 16, 5, 1);
   hctx.fillRect(Math.round(cx0 + cw / 2) - 1, cy0 + 17, 3, 1);
   hctx.fillRect(Math.round(cx0 + cw / 2), cy0 + 18, 1, 1);
-  // ── the menu button ──
-  // The top of the screen belongs to the COMPASS now. Place and weather used to
-  // sit under it and were the first thing your eye hit while driving, which is
-  // backwards: they are things you check, not things you steer by.
-  const row = cy0 + 22;
-  const menuW = textW('MENU') + 8;
-  menuRect = { x: HW - menuW - pad, y: row, w: menuW, h: 12 };
-  panel(menuRect.x, menuRect.y, menuW, 12, UI.edge);
-  text(hctx, 'MENU', menuRect.x + 4, row + 3, UI.edge);
+  // The MENU button is DOM now (client/overlays.ts) — it opens a DOM menu,
+  // and a canvas chip that existed to be a hit target was the wrong tool.
   if (wx.warn && performance.now() < wx.warn) {
     const t2 = 'STORM APPROACHING';
     const w2 = textW(t2) + 10;
@@ -9924,12 +9873,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // the stack stays put whatever the screen height is.
   const mw = Math.min(58, Math.floor(HW * 0.34));
   // Three lines now: the place, the way under the wheels, and the coordinate.
-  const infoH = 23;
+  const infoH = 30;
   const infoY = HH - pad - infoH;
   const my = infoY - mw - 3;
-  // ── the job ──
-  // Drawn LATER (mid-top, see below); this only clears last frame's hit target.
-  missionRect = { x: 0, y: 0, w: 0, h: 0 };
   const mx = pad;
   // The conditions used to sit in a boxed panel above the chart, bottom LEFT,
   // with the speedometer alone in the opposite corner — so reading "what am I
@@ -9955,21 +9901,16 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // ── where you are, and whether the world is still arriving ──
   {
     const shown = fit(placeLine || '', Math.round(HW * 0.62));
-    if (shown) {
-      textEdge(shown, pad + 1, infoY, UI.text);
-      placeRect = { x: pad, y: infoY - 1, w: textW(shown) + 4, h: 10 }; // tap toggles «translation»
-    } else {
-      placeRect = { x: 0, y: 0, w: 0, h: 0 };
-    }
+    if (shown) textEdge(shown, pad + 1, infoY, UI.text);
     // The WAY under the wheels, which is the finest-grained "where am I" the
     // world can answer. The place name says Cape Town; this says Ou Kaapse Weg,
     // and off the tarmac it says which road you left. Streaming/outage takes
     // the line when there is nothing to report, since both mean the same thing:
     // the world does not know where you are yet.
-    if (osmDown) textEdgeS('NO WORLD DATA', pad + 1, infoY + 9, UI.bad);
+    if (osmDown) textEdgeS('NO WORLD DATA', pad + 1, infoY + 11, UI.bad);
     else {
       const w = wayAt(state.x, state.z);
-      const line = w ? (w.on ? alienize(w.name).toUpperCase() : `NEAR ${alienize(w.name).toUpperCase()}`)
+      const line = w ? (w.on ? w.name.toUpperCase() : `NEAR ${w.name.toUpperCase()}`)
         : streaming ? 'STREAMING' : '';
       // The survey tally rides on the way line and takes its room first, so the
       // road name is what gets clipped. A count you cannot read is worse than a
@@ -9977,12 +9918,12 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       const s = surveyHere();
       const tally = s ? (s.r.claimed ? 'DRIVEN' : `${s.r.got}/${s.r.cps.length}`) : '';
       const tw = tally ? textSW(tally) + 4 : 0;
-      if (line) textEdgeS(fitS(line, Math.round(HW * 0.6) - tw), pad + 1, infoY + 9, w?.on ? UI.soft : UI.dim);
+      if (line) textEdgeS(fitS(line, Math.round(HW * 0.6) - tw), pad + 1, infoY + 11, w?.on ? UI.soft : UI.dim);
       if (s && line) {
         // Dim while the extent is still settling — the denominator is not yet
         // trustworthy and the HUD should not pretend otherwise.
         const col = s.r.claimed ? UI.good : !s.ready ? UI.dim : s.frac > SURVEY_MAJORITY ? UI.gold : UI.soft;
-        textEdgeS(tally, pad + 1 + Math.min(textSW(line), Math.round(HW * 0.6) - tw) + 4, infoY + 9, col);
+        textEdgeS(tally, pad + 1 + Math.min(textSW(line), Math.round(HW * 0.6) - tw) + 4, infoY + 11, col);
       }
     }
     // GPS: TERTIARY. Present because a coordinate is the one thing you can act
@@ -9992,7 +9933,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     {
       const [la, lo] = localToLatLon(state.x, state.z);
       const g = `${la.toFixed(4)} ${lo.toFixed(4)}`;
-      textEdgeS(g, pad + 1, infoY + 16, UI.dim);
+      textEdgeS(g, pad + 1, infoY + 21, UI.dim);
       // Under real drive the coordinate stops being a reference and becomes a
       // reading off an instrument, so it says how much to trust it: the fix
       // accuracy, and how long since one arrived. A stale fix looks exactly
@@ -10004,7 +9945,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
           : age > 12 ? `FIX ${age.toFixed(0)}S OLD`
           : `±${Math.round(f.acc)}M`;
         const col = !f || age > 12 ? UI.bad : f.acc > 25 ? UI.gold : UI.good;
-        textEdgeS(s, pad + 1 + textSW(g) + 5, infoY + 16, col);
+        textEdgeS(s, pad + 1 + textSW(g) + 5, infoY + 21, col);
       }
     }
   }
@@ -10059,9 +10000,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       const digits = String(kmh);
       glowText(digits, cx - Math.round(textW(digits, 2) / 2) + 1, cy - 15, UI.gold, 2);
       textEdgeS('KM/H', cx - Math.round(textSW('KM/H') / 2) + 1, cy + 2, UI.edge);
-      textEdgeS('X1000 RPM', cx - Math.round(textSW('X1000 RPM') / 2) + 1, cy + 9, UI.dim);
+      textEdgeS('X1000 RPM', cx - Math.round(textSW('X1000 RPM') / 2) + 1, cy + 11, UI.dim);
       const rk = String(Math.max(1, Math.round(1 + engRev * 6)));
-      glowText(rk, cx - Math.round(textW(rk) / 2), cy + 16, engRev > 1 ? UI.hot : UI.edge);
+      glowText(rk, cx - Math.round(textW(rk) / 2), cy + 20, engRev > 1 ? UI.hot : UI.edge);
       // TRIP, under the speedometer — the number that belongs to this drive.
       const o = `${fmtKm(odo.trip)} · ${fmtKm(odo.total)}`;
       textEdgeS(o, R - textSW(o), HH - pad - 6, UI.dim);
@@ -10070,21 +10011,21 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // Momentary truths, out of the table: always present, ink when dark.
     {
       const lx = cx - DR - 6;
-      let ly = cy - 8;
+      let ly = cy - 12;
       const led = (label: string, on: boolean, col: string): void => {
         textEdgeS(label, lx - textSW(label), ly, on ? col : 'rgba(87,201,176,0.28)');
-        ly += 8;
+        ly += 10;
       };
       led(skid > 0.55 ? 'SLIP!' : 'SLIP', skid > 0.06, skid > 0.55 ? UI.bad : UI.gold);
       led('SOL', rig.solarKw > rig.drawKw, UI.gold);
       led('SVC', rig.svc, UI.edge);
     }
     // ── the table: label over bar, right-aligned, no numbers ──
-    let y = cy - DR - 14;
+    let y = cy - DR - 16;
     const row = (label: string, lit: number, col: string, labelCol = UI.dim): void => {
       textEdgeS(label, R - textSW(label), y, labelCol);
-      meter(R - BARW, y + 6, CELLS, lit, col, 2, 3, 1);
-      y -= 12;
+      meter(R - BARW, y + 8, CELLS, lit, col, 2, 3, 1);
+      y -= 14;
     };
     // RIG, right column: the stocks the world spends, beside the instrument
     // they are read against.
@@ -10103,9 +10044,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       const L = pad + 1;
       let ey = my - 13;                // stacked upward, clear of the chart/POV dock
       const erow = (label: string, lit: number, col: string, labelCol = UI.dim): void => {
-        meter(L, ey + 6, CELLS, lit, col, 2, 3, 1);
+        meter(L, ey + 8, CELLS, lit, col, 2, 3, 1);
         textEdgeS(label, L, ey, labelCol);
-        ey -= 12;
+        ey -= 14;
       };
       erow('WET', cells(wx.wet), wx.wet > 0.5 ? UI.bad : UI.edge);
       // Named from the SURFACE QUALITY, not the OSM class. A residential street
@@ -10124,73 +10065,57 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       textEdgeS(hs, lx, ey, UI.gold);
     }
   }
-  // ── the job, as a modal ──
-  // Mid-top and CENTRED, not a strip tucked over the conditions panel. A job is
-  // the only thing on this screen that asks something of you rather than
-  // reporting on you, and it should not have to compete with the instruments
-  // for a glance. Sized to its own content, with the title on its own line —
-  // room for a brief that reads like a sentence rather than a label.
-  {
-    missionRect = { x: 0, y: 0, w: 0, h: 0 };
-    const live = mission && missionPhase !== 'none'
-      && (missionPhase !== 'done' || performance.now() - missionAt < 9000);
-    if (mission && live) {
-      let kicker = '', head = '', body = '', col = UI.gold;
-      if (missionPhase === 'offered') {
-        kicker = alienize(mission.giver.name).toUpperCase();
-        head = mission.title;
-        body = missionReady ? 'TAP TO ACCEPT' : 'PULL UP TO TAKE THE JOB';
-        col = missionReady ? UI.good : UI.dim;
-      } else if (missionPhase === 'active') {
-        const d = missionDest ? Math.hypot(missionDest.x - state.x, missionDest.z - state.z) : 0;
-        const v = viaProgress(mission);
-        kicker = 'ON THE JOB';
-        head = mission.title;
-        // Once you are at the destination the distance stops being the news —
-        // what is left of the route does. Standing on the finish reading
-        // "0M" with nothing happening would look like a broken mission.
-        body = v && d < mission.within && !v.met
-          ? `TAKE ${alienize(mission.via?.name ?? '').toUpperCase()} · ${v.got}/${v.need}`
+  // The mission card and the survey-claim toast are DOM now (client/
+  // overlays.ts, fed from stepOverlays below) — they behave like UI, not like
+  // instruments, and they were the last text on this canvas that wanted real
+  // layout.
+}
+/** The job and the claim, as DOM state — pushed every frame, diffed there. */
+function stepOverlays(): void {
+  let mc: import('./overlays').MissionCard | null = null;
+  const live = mission && missionPhase !== 'none'
+    && (missionPhase !== 'done' || performance.now() - missionAt < 9000);
+  if (mission && live) {
+    if (missionPhase === 'offered') {
+      mc = {
+        kicker: mission.giver.name.toUpperCase(),
+        head: mission.title,
+        body: missionReady ? 'TAP TO ACCEPT' : 'PULL UP TO TAKE THE JOB',
+        tone: missionReady ? 'good' : 'dim',
+        ready: missionReady,
+      };
+    } else if (missionPhase === 'active') {
+      const d = missionDest ? Math.hypot(missionDest.x - state.x, missionDest.z - state.z) : 0;
+      const v = viaProgress(mission);
+      // Once you are at the destination the distance stops being the news —
+      // what is left of the route does. Standing on the finish reading "0M"
+      // with nothing happening would look like a broken mission.
+      const atButShort = v && d < mission.within && !v.met;
+      mc = {
+        kicker: 'ON THE JOB',
+        head: mission.title,
+        body: atButShort
+          ? `TAKE ${(mission.via?.name ?? '').toUpperCase()} · ${v.got}/${v.need}`
           : v && !v.met
             ? `${mission.brief} · ${fmtDist(d)} · ${v.got}/${v.need}`
-            : `${mission.brief} · ${fmtDist(d)}`;
-        if (v && d < mission.within && !v.met) col = UI.hot;
-      } else {
-        kicker = 'ARRIVED';
-        head = mission.title;
-        body = `${(odo.trip / 1000).toFixed(1)}KM ON THE CLOCK`;
-        col = UI.good;
-      }
-      const inner = Math.max(textW(head), textSW(body) + 2, textSW(kicker) + 2);
-      const bw = Math.min(HW - pad * 2, inner + 16);
-      const bx = Math.round((HW - bw) / 2);
-      const by = Math.round(HH * 0.17);
-      const bh = 30;
-      panel(bx, by, bw, bh, col);
-      textSmall(hctx, fitS(kicker, bw - 10), bx + 5, by + 4, UI.dim);
-      glowText(fit(head, bw - 10), bx + 5, by + 11, col);
-      textSmall(hctx, fitS(body, bw - 10), bx + 5, by + 21, missionReady ? col : UI.text);
-      // Only an offer you can actually take is a tap target — an "on the job"
-      // panel that swallowed taps would eat the camera toggle for a whole drive.
-      if (missionReady) missionRect = { x: bx, y: by, w: bw, h: bh };
-    }
-    // ── a road claimed ──
-    // Deliberately NOT a modal. Claiming a road is something you did, not
-    // something you must answer, so it sits under the mission slot, states
-    // itself, and leaves. Nothing to dismiss and nothing to tap.
-    if (surveyClaim && performance.now() - surveyClaim.at < 6000) {
-      const head = alienize(surveyClaim.name).toUpperCase();
-      const body = `${surveyClaim.n} CHECKPOINTS`;
-      const bw = Math.min(HW - pad * 2, Math.max(textW(head), textSW(body) + 2, textSW('SURVEYED') + 2) + 16);
-      const bx = Math.round((HW - bw) / 2);
-      const by = Math.round(HH * 0.17) + (mission ? 36 : 0);
-      panel(bx, by, bw, 30, UI.good);
-      textSmall(hctx, 'SURVEYED', bx + 5, by + 4, UI.dim);
-      glowText(fit(head, bw - 10), bx + 5, by + 11, UI.good);
-      textSmall(hctx, fitS(body, bw - 10), bx + 5, by + 21, UI.text);
+            : `${mission.brief} · ${fmtDist(d)}`,
+        tone: atButShort ? 'hot' : 'gold',
+        ready: false,
+      };
+    } else {
+      mc = {
+        kicker: 'ARRIVED',
+        head: mission.title,
+        body: `${(odo.trip / 1000).toFixed(1)}KM ON THE CLOCK`,
+        tone: 'good',
+        ready: false,
+      };
     }
   }
-  // LAST: the modal covers the instruments, not the other way round.
+  overlays.mission(mc);
+  overlays.toast(surveyClaim && performance.now() - surveyClaim.at < 6000
+    ? { kicker: 'SURVEYED', head: surveyClaim.name.toUpperCase(), body: `${surveyClaim.n} CHECKPOINTS` }
+    : null);
 }
 let dockRect = { x: 0, y: 0, w: 0, h: 0 };
 function setClean(on: boolean): void {
@@ -10207,15 +10132,18 @@ function hudTap(cx: number, cy: number): boolean {
   // The modal is MODAL — but it is DOM now, sitting over this canvas, so a
   // tap that reaches here while it is up can only be a stray; swallow it.
   if (menu.tab() !== null) return true;
-  if (inside(menuRect)) { menu.open(); return true; }
-  // Before the dock, because the accept prompt sits above it and a tap that
-  // lands on both should take the job rather than flip the camera.
-  if (missionReady && missionRect.w && inside(missionRect, 4)) { acceptMission(performance.now()); return true; }
   if (inside(dockRect, 0)) { toggleCam(); return true; }
-  if (inside(placeRect)) { toggleAlien(); return true; }
+  // A tap on a pin PINS it — the place stays on screen past the
+  // nearest-three rule until tapped again. Mission pins belong to the job
+  // and are not yours to unpin.
+  for (const r of poiRects) {
+    if (!inside(r, 2) || r.kind === 'mission') continue;
+    const poi = pois.get(r.name);
+    if (poi) { poi.pinned = !poi.pinned; audio.stone(); }
+    return true;
+  }
   return false;
 }
-let placeRect = { x: 0, y: 0, w: 0, h: 0 };
 
 // ── clean viewport ─────────────────────────────────────────────────
 // Everything chrome-like carries .ui, so one class on <body> strips the screen
@@ -10224,9 +10152,7 @@ let placeRect = { x: 0, y: 0, w: 0, h: 0 };
 // itself). Declared last: every element it references must already exist.
 {
   const st = document.createElement('style');
-  // The shell's own text chrome is retired — everything is drawn in the HUD
-  // buffer now. Keep only the boot card.
-  st.textContent = 'body.clean .ui { display: none !important; } .hud, #reroll { display: none !important; }';
+  st.textContent = 'body.clean .ui { display: none !important; }';
   document.head.appendChild(st);
   for (const el of [mini, stickBase, stickNub]) el.classList.add('ui');
   const clean = (): boolean => document.body.classList.contains('clean');
@@ -10243,7 +10169,7 @@ let placeRect = { x: 0, y: 0, w: 0, h: 0 };
 // ── the menu ───────────────────────────────────────────────────────
 // DOM, not canvas — layout and the open/closed state live in `client/menu.ts`;
 // this context is everything it may read or do. The rule for what goes in it:
-// data crosses as plain strings and numbers (already alienized, already
+// data crosses as plain strings and numbers (already
 // upper-cased, already formatted), actions cross as closures — the menu never
 // touches game state directly, so everything it can affect is listed here.
 const menu = createMenu({
@@ -10271,14 +10197,13 @@ const menu = createMenu({
   ],
   systemRows: () => [
     ['SOUND', audio.on ? (audio.state === 'running' ? 'ON' : 'NEEDS TAP') : 'OFF'],
-    ['SCRIPT', alien ? 'ALIEN' : 'PLAIN'],
   ],
   real: () => ({ on: real.on, err: real.err }),
   surveyHere: () => {
     const here = surveyHere();
     if (!here) return null;
     return {
-      name: alienize(here.r.name).toUpperCase(),
+      name: here.r.name.toUpperCase(),
       tally: here.r.claimed ? 'DRIVEN' : `${here.r.got}/${here.r.cps.length}`,
       frac: here.frac,
       // The gate, stated plainly — a road at 100% that will not claim is the
@@ -10299,7 +10224,7 @@ const menu = createMenu({
     .map((r) => {
       const frac = r.got / r.cps.length;
       return {
-        name: alienize(r.name).toUpperCase(),
+        name: r.name.toUpperCase(),
         km: r.len >= 1000 ? `${(r.len / 1000).toFixed(1)}K` : `${Math.round(r.len)}M`,
         frac,
         tally: `${r.got}/${r.cps.length}`,
@@ -10348,8 +10273,6 @@ const menu = createMenu({
   },
   elsewhere: () => { location.href = location.pathname + '?random=1'; },
   saveSpot: () => saveSpot(),
-  scriptLabel: () => (alien ? 'SCRIPT ALIEN' : 'SCRIPT PLAIN'),
-  toggleScript: () => toggleAlien(),
   soundLabel: () => (!audio.on ? 'SOUND OFF' : audio.state === 'running' ? 'SOUND ON' : 'SOUND TAP'),
   soundTone: () => (audio.on && audio.state === 'running' ? 'good' : 'soft'),
   soundTap: () => {
@@ -10379,6 +10302,13 @@ const menu = createMenu({
   },
 });
 
+// The DOM half of the HUD: the MENU button, the job card, the claim toast.
+const overlays = createOverlays(
+  { edge: UI.edge, dim: UI.dim, text: UI.text, soft: UI.soft, gold: UI.gold, hot: UI.hot, good: UI.good, bad: UI.bad },
+  () => menu.open(),
+  () => acceptMission(performance.now()),
+);
+
 // ── boot ───────────────────────────────────────────────────────────
 // Settings first: PIXEL resizes the render targets and PAINT reaches into a
 // material, so they have to land before the first frame rather than on the
@@ -10395,8 +10325,15 @@ if (timeFromUrl >= 0) {
   const d = DIALS.find((x) => x.key === 'time');
   if (d) { d.at = timeFromUrl; d.apply(timeFromUrl); }
 }
-$('reroll').addEventListener('click', () => { location.href = location.pathname + '?random=1'; });
 (async () => {
+  // The HUD face, before the first frame — fillText with an unloaded FontFace
+  // silently uses the fallback, and one monospace frame magnified through the
+  // pixel pipeline reads as a glitch. createMenu has already kicked the load;
+  // this just refuses to draw until it lands (or 2s, whichever is first).
+  await Promise.race([
+    document.fonts.load(`8px '${PIXEL_FONT}'`).catch(() => null),
+    new Promise((r) => setTimeout(r, 2000)),
+  ]);
   const spawn = await findSpawn();
   origin = { lat: spawn.lat, lon: spawn.lon, mLon: M_LAT * Math.cos((spawn.lat * Math.PI) / 180) };
   // The bench must span the terrain mesh's cell diagonal — the farthest any

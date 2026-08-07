@@ -77,8 +77,6 @@ export interface MenuCtx {
   realToggle(): void;
   elsewhere(): void;
   saveSpot(): void;
-  scriptLabel(): string;
-  toggleScript(): void;
   soundLabel(): string;
   soundTone(): Tone;
   soundTap(): void;
@@ -502,12 +500,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       snd.style.color = col;
       snd.style.borderColor = col;
     });
-    const script = button('', C.edge, () => { ctx.toggleScript(); refresh(); });
-    updaters.push(() => {
-      const label = ctx.scriptLabel();
-      if (script.textContent !== label) script.textContent = label;
-    });
-    foot.append(snd, script, button('HIDE HUD', C.soft, () => { close(); ctx.hideHud(); }));
+    foot.append(snd, button('HIDE HUD', C.soft, () => { close(); ctx.hideHud(); }));
   }
 
   // ── render / refresh ───────────────────────────────────────────────
@@ -517,7 +510,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       const h = ctx.surveyHere();
       return `s|${h?.name}|${h?.tally}|${h?.state}|${ctx.surveyRoads().map((r) => r.tally).join(',')}`;
     }
-    if (tab === T_WORLD) return `w|${ctx.drives().length}|${ctx.scriptLabel()}`;
+    if (tab === T_WORLD) return `w|${ctx.drives().length}`;
     return String(tab);
   }
 

@@ -53,22 +53,10 @@ const SHELL = `<!doctype html>
 <style>
   *, *::before, *::after { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #05070c; color: #efe9dc;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    /* Silkscreen lands when the game module injects its @font-face; until
+       then the monospace stack holds the line. */
+    font-family: Silkscreen, ui-monospace, SFMono-Regular, Menlo, monospace; }
   #scene { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; }
-  .hud { position: fixed; z-index: 10; pointer-events: none; }
-  #place { top: max(10px, env(safe-area-inset-top)); left: 12px; right: 92px; font-size: 0.78rem;
-    text-shadow: 0 1px 6px rgba(0,0,0,0.8); line-height: 1.35; }
-  #place b { font-size: 0.92rem; font-weight: 600; }
-  #place .dim { opacity: 0.6; font-size: 0.68rem; }
-  #speed { bottom: max(12px, env(safe-area-inset-bottom)); right: 14px; font-size: 1.3rem; font-weight: 700;
-    text-shadow: 0 1px 6px rgba(0,0,0,0.9); }
-  #speed small { font-size: 0.6em; opacity: 0.6; font-weight: 400; }
-  #reroll { position: fixed; z-index: 11; top: max(10px, env(safe-area-inset-top)); right: 12px;
-    background: rgba(8,12,20,0.55); color: #f5c453; border: 1px solid rgba(245,196,83,0.4);
-    border-radius: 8px; padding: 0.35rem 0.7rem; font: inherit; font-size: 0.74rem; cursor: pointer;
-    backdrop-filter: blur(6px); }
-  #hint { bottom: max(12px, env(safe-area-inset-bottom)); left: 14px; font-size: 0.66rem; opacity: 0.55;
-    text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
   #boot { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
     background: #05070c; transition: opacity 0.6s ease; }
   #boot.done { opacity: 0; pointer-events: none; }
@@ -88,10 +76,6 @@ const SHELL = `<!doctype html>
     <div class="t">drive</div>
     <div class="s" id="boot-msg">warming up…</div>
   </div></div>
-  <div class="hud" id="place"><b id="place-name">…</b><br><span class="dim" id="place-coords"></span></div>
-  <button id="reroll" title="Start over somewhere else on Earth">elsewhere ↻</button>
-  <div class="hud" id="speed">0<small> km/h</small></div>
-  <div class="hud" id="hint">WASD/arrows · space=brake · C=camera · touch: stick + 2nd finger brake</div>
   <script type="module" src="/app.js"></script>
 </body>
 </html>`;
