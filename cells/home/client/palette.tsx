@@ -16,7 +16,7 @@
 import * as React from 'react';
 import { theme } from '@parc/ui';
 import { Console } from './console';
-import { typeIcon, factTitle, factHref, factEdit, FactDetail, FactReading, InlineFactEditor, type ListEntry } from './facts';
+import { typeIcon, factTitle, factHref, factEdit, FactDetail, FactReading, InlineFactEditor, openFact, canEditInPlace, type ListEntry } from './facts';
 import { localize, mcpCall } from './lib';
 import { ink } from './ink';
 import { TUNE, TUNE_EVENT, TUNE_RESET_EVENT } from './graph/tune';
@@ -38,7 +38,7 @@ interface NeighborRef { key: string; rel: string; entry: ListEntry }
 /** The selected fact's context: peeked content + its neighbourhood as chips +
  *  the verbs that can act on it (ADR-0049 — `$catalog {for}`; tapping one
  *  seeds the console). */
-function ContextPanel({ factKey, bodyOpen, setBodyOpen, mini = false, onRestore, onSelectKey, onClear, onCommand, onBack, trailCount = 0 }: { factKey: string; bodyOpen: boolean; setBodyOpen: (v: boolean | ((b: boolean) => boolean)) => void; /** Minimized: a slim look-at strip (icon + title + ×) instead of the full panel. */ mini?: boolean; onRestore?: () => void; onSelectKey: (k: string) => void; onClear: () => void; onCommand: (target: string) => void; /** Selection-back trail (drills through chips/search push it) — ‹ steps back. */ onBack?: () => void; trailCount?: number }): React.JSX.Element {
+function ContextPanel({ factKey, bodyOpen, setBodyOpen, mini = false, onRestore, onSelectKey, onClear, onCommand, onBack, trailCount = 0, authed = false }: { factKey: string; authed?: boolean; bodyOpen: boolean; setBodyOpen: (v: boolean | ((b: boolean) => boolean)) => void; /** Minimized: a slim look-at strip (icon + title + ×) instead of the full panel. */ mini?: boolean; onRestore?: () => void; onSelectKey: (k: string) => void; onClear: () => void; onCommand: (target: string) => void; /** Selection-back trail (drills through chips/search push it) — ‹ steps back. */ onBack?: () => void; trailCount?: number }): React.JSX.Element {
   const [entry, setEntry] = useState<ListEntry | null>(null);
   const [neighbors, setNeighbors] = useState<NeighborRef[]>([]);
   const [verbs, setVerbs] = useState<Array<{ target: string; kind: string }>>([]);
@@ -96,7 +96,9 @@ function ContextPanel({ factKey, bodyOpen, setBodyOpen, mini = false, onRestore,
   const e = entry ?? ({ key: factKey } as ListEntry);
   const href = factHref(e);
   const editHref = entry ? factEdit(e) : null;
-  const canEditInline = !!entry && !editHref && !factKey.startsWith('_');
+  // The ONE edit gate (facts.canEditInPlace); a declared edit surface no
+  // longer suppresses in-place editing (both affordances render — §5.5).
+  const canEditInline = !!entry && canEditInPlace(e, authed);
   // A chip whose label is an icon and an ellipsis says nothing — only
   // neighbours with a resolvable TITLE earn a chip.
   const namedNeighbors = neighbors.filter((n) => !!factTitle(n.entry));
@@ -192,7 +194,7 @@ function ContextPanel({ factKey, bodyOpen, setBodyOpen, mini = false, onRestore,
               }}
             />
           ) : (
-            <FactDetail e={entry} compact />
+            <FactDetail e={entry} compact authed={authed} />
           )}
         </div>
       ) : null}
@@ -224,7 +226,10 @@ function ContextPanel({ factKey, bodyOpen, setBodyOpen, mini = false, onRestore,
                 key={`${n.rel}:${n.key}`}
                 style={{ ...chip, maxWidth: 250, display: 'inline-flex', alignItems: 'center', gap: '0.3rem' }}
                 title={`${inbound ? `${rel} from` : `${rel} to`} ${n.key}`}
-                onClick={() => onSelectKey(n.key)}
+                // ONE chip contract (inventory §5.4 rec 3): a fact chip opens a
+                // READING (the peek); the graph re-aim is the side-effect (the
+                // peek host reports its frame as the selection).
+                onClick={() => openFact(n.entry.value !== undefined ? n.entry : { key: n.key })}
               >
                 <span aria-hidden style={{ flexShrink: 0 }}>{typeIcon(n.entry)}</span>
                 <span style={{ overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', minWidth: 0 }}>{factTitle(n.entry)}</span>
@@ -456,7 +461,7 @@ export function Palette({ authed, selectedKey, onSelectKey, onClear, overlaid = 
       >
         <span aria-hidden style={{ width: 34, height: 4, borderRadius: 999, background: ink.line }} />
       </div>
-      {selectedKey ? <ContextPanel factKey={selectedKey} bodyOpen={bodyOpen} setBodyOpen={setBodyOpen} mini={mini || overlaid} onRestore={() => setMini(false)} onSelectKey={drillTo} onClear={clearAll} onCommand={onCommand} onBack={trailBack} trailCount={trail.length} /> : null}
+      {selectedKey ? <ContextPanel factKey={selectedKey} authed={authed} bodyOpen={bodyOpen} setBodyOpen={setBodyOpen} mini={mini || overlaid} onRestore={() => setMini(false)} onSelectKey={drillTo} onClear={clearAll} onCommand={onCommand} onBack={trailBack} trailCount={trail.length} /> : null}
       {/* The Console stays MOUNTED whether or not its sheet shows — collapsing
           must not cost the query, the matches, or the graph highlights. */}
       <Console

@@ -96,6 +96,20 @@ export class DynamicCellControlPlane extends Construct {
           actions: ['lambda:InvokeFunction'],
           resources: [fnArn],
         }),
+        // ADR-0095 — the public namespace. A cell that declares one is the
+        // miss handler for its own CDN-fronted static prefix, so it must be
+        // able to write the object it just computed. The boundary caps every
+        // cell at the `public/@*/~/*` shape; the cell template narrows the
+        // inline grant to that cell's own `public/@<owner>/<name>/~/*`. Same
+        // two-level discipline as the substrate read grant above: the boundary
+        // says which SHAPE of key is reachable at all, the template says which
+        // one this cell owns. `docs/cell-storage-s3.md` calls this v2 and
+        // describes it as additive — this is it.
+        new iam.PolicyStatement({
+          sid: 'OwnPublicNamespace',
+          actions: ['s3:GetObject', 's3:PutObject', 's3:DeleteObject'],
+          resources: [`${this.codeBucket.bucketArn}/public/@*/~/*`],
+        }),
         // The organ-to-reef read path: the boundary *caps* dynamic cells at
         // read-only substrate access; each cell's role policy narrows this to
         // its owner's scope partitions with a `dynamodb:LeadingKeys` condition

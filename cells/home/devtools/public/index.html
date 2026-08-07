@@ -45,6 +45,30 @@
     .fact-md th,.fact-md td{border:1px solid var(--md-border);padding:.25em .55em;text-align:left}
     .fact-md th{background:var(--md-th-bg)}
     .fact-md img{border-radius:8px}
+    /* — fences as DECLARATIONS — mirror of static/index.html; keep in sync. */
+    .fact-md .fence,.fact-md .md-fence{margin:.6em 0}
+    .fact-md .fence-chips{display:flex;flex-wrap:wrap;gap:.3rem;margin:0 0 .3em;font:600 .68em ui-monospace,SFMono-Regular,Menlo,monospace}
+    .fact-md .fchip{
+      border-left:3px solid var(--md-rule);
+      background:var(--md-icode-bg);
+      color:inherit;opacity:.85;
+      padding:.1em .45em;border-radius:0 4px 4px 0;white-space:nowrap;
+    }
+    .fact-md .fchip.fc-lang{opacity:1;font-weight:700}
+    .fact-md .fchip.fc-out{border-left-color:var(--md-link);opacity:1}
+    .fact-md .fchip.fc-error{border-left-color:#b5523c}
+    .fact-md .fchip.fc-link a{text-decoration:none;color:var(--md-link)}
+    .fact-md .fchip.fc-edit{border-left-color:transparent;background:none;opacity:.45}
+    .fact-md .fchip.fc-edit:hover,.fact-md .fchip.fc-edit:focus-visible{opacity:1;color:var(--md-link)}
+    .fact-md .fence:hover .fchip.fc-edit{opacity:.8}
+    .fact-md .fence-chips+pre{margin-top:0}
+    .fact-md .fence-output>pre{border:1px dashed var(--md-border)}
+    .fact-md .md-fence{border-left:2px solid var(--md-border);padding-left:.9em}
+    .fact-md .md-fence[class*=dir-]{border:1px solid var(--md-border);border-left-width:4px;border-radius:8px;padding:.55em .9em}
+    .fact-md .md-fence.dir-warn{border-left-color:#c78a1d}
+    .fact-md .md-fence.dir-error{border-left-color:#b5523c}
+    .fact-md .md-fence.dir-info{border-left-color:#3b6ea5}
+    .fact-md .md-fence.dir-success,.fact-md .md-fence.dir-note{border-left-color:var(--md-link)}
   </style>
 </head>
 <body>

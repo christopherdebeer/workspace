@@ -53,6 +53,10 @@ export interface TypeHandler {
   renderer?: string;
   /** A built-in render hint (`markdown` / `metric` / …). */
   hint?: string;
+  /** A named PURE VIEWER (`json` / `csv` / `mermaid` / `style` — the
+   *  `@c15r/viewers` set). Distinct from `hint`: a hint is drawn by the
+   *  surface itself, a viewer is a shared module the surface mounts. */
+  viewer?: string;
   /** Resolved target cell for `path` (set by `resolve`; consumer → `cellUrl`). */
   cellRef?: { owner: string; name: string };
   /** Declarative composite assembly (ADR-0093) — passed through verbatim. */
@@ -68,6 +72,15 @@ export interface TypeDecl {
   label?: string;
   /** Per-intent handlers; a list is tried in order (the first that fully resolves wins). */
   handlers?: Partial<Record<Intent, TypeHandler | TypeHandler[]>>;
+  /** The gateway-resolved Present facet (ADR-0012). `render` is the OTHER
+   *  spelling of a render binding — `{hint}` or `{viewer}` — carried by
+   *  declarations that predate `handlers` (the legacy `_types/<type>` facts
+   *  still live in slices: `csv`, `json`, `mermaid`, `style`). `resolve` reads
+   *  it as the render fallback so those types stop falling through to the
+   *  markdown floor; see the `render` intent below. */
+  present?: { icon?: string; label?: string; render?: { hint?: string; viewer?: string } };
+  /** Legacy flat spelling of `present.render.viewer` (same facts, older shape). */
+  viewer?: string;
 }
 
 export interface VocabFact {
@@ -188,11 +201,36 @@ export function declFor(fact: VocabFact, decls: Record<string, TypeDecl>): TypeD
  * signal (most specific first) and, within it, each handler in order, templating
  * against the fact; the first fully-resolved handler wins.
  */
+/**
+ * The Present facet's render binding, as a handler (ADR-0012). A declaration
+ * carries its render EITHER as `handlers.render[]` (the current shape) or as
+ * `present.render` / a flat `viewer` (the shape the older `_types/<type>`
+ * facts still in slices use). Only the first was ever consumed, so a fact
+ * typed `mermaid`/`csv`/`json`/`style` resolved to nothing and fell through to
+ * the markdown floor — rendered as a wall of text next to surfaces that draw
+ * the identical content as a diagram or a table.
+ */
+function presentRender(decl: TypeDecl | undefined): TypeHandler | null {
+  const r = decl?.present?.render;
+  if (r && typeof r.hint === 'string' && r.hint) return { hint: r.hint };
+  const viewer = (r && typeof r.viewer === 'string' ? r.viewer : undefined) ?? decl?.viewer;
+  return typeof viewer === 'string' && viewer ? { viewer } : null;
+}
+
 export function resolve(fact: VocabFact, intent: Intent, decls: Record<string, TypeDecl>): TypeHandler | null {
   for (const sig of typeSignals(fact)) {
     const decl = decls[sig.type];
     const handlers = asList(decl?.handlers?.[intent]);
-    if (!handlers.length) continue;
+    if (!handlers.length) {
+      // No `handlers.render` — fall back to the Present facet for THIS signal
+      // before moving to a less specific one, so a type's own (legacy) render
+      // binding still beats a key-prefix or tag match.
+      if (intent === 'render' && decl) {
+        const pr = presentRender(decl);
+        if (pr) return pr;
+      }
+      continue;
+    }
     const ctx: TemplateCtx = { id: deriveId(fact.key), key: fact.key, type: sig.type, match: sig.match, value: fact.value };
     // The owner that an unqualified cell ref inherits — the type's manager owner.
     const managerRef = parseCellRef(decl?.manager, '');
@@ -222,9 +260,16 @@ export function resolve(fact: VocabFact, intent: Intent, decls: Record<string, T
       }
       if (ok && h.renderer !== undefined) resolved.renderer = h.renderer;
       if (ok && h.hint !== undefined) resolved.hint = h.hint;
+      if (ok && h.viewer !== undefined) resolved.viewer = h.viewer;
       // Declaration data, not an address: passed through verbatim (ADR-0093).
       if (ok && h.assemble !== undefined) resolved.assemble = h.assemble;
-      if (ok && (resolved.cellRef || resolved.surface || resolved.act || resolved.renderer || resolved.hint || resolved.assemble)) return resolved;
+      if (ok && (resolved.cellRef || resolved.surface || resolved.act || resolved.renderer || resolved.hint || resolved.viewer || resolved.assemble)) return resolved;
+    }
+    // Handlers existed but none applied (every template had a missing
+    // variable) — the Present facet is still a valid render binding.
+    if (intent === 'render') {
+      const pr = presentRender(decl);
+      if (pr) return pr;
     }
   }
   return null;

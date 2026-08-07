@@ -64,6 +64,35 @@ export function extractWikiTargets(md: string): string[] {
   return [...out];
 }
 
+/** The `[[…]]` inline extension for surfaces that consume marked's TOKENS
+ *  rather than its HTML (the React renderer in `markdown.tsx`): no `renderer`,
+ *  and the token carries the RESOLVED target so the element renderer never
+ *  re-implements slugging.
+ *
+ *  Home's own copy of this tokenizer took `[[text]]` verbatim as a fact key —
+ *  so `[[some doc title]]` linked to `/r/some doc title` (dead) where lit
+ *  resolved `doc:some-doc-title`, and a `[[key#fragment]]` kept the `#` in the
+ *  key. Sharing the resolver is what closes that divergence. */
+export function wikiLinkTokenExtension(): {
+  name: string;
+  level: 'inline';
+  start: (src: string) => number | undefined;
+  tokenizer: (src: string) => ({ type: string; raw: string; text: string } & WikiTarget) | undefined;
+} {
+  return {
+    name: 'wikilink',
+    level: 'inline',
+    start: (src: string) => {
+      const i = src.indexOf('[[');
+      return i < 0 ? undefined : i;
+    },
+    tokenizer: (src: string) => {
+      const m = /^\[\[([^\]]+)\]\]/.exec(src);
+      return m ? { type: 'wikilink', raw: m[0], text: m[1], ...resolveWikiTarget(m[1]) } : undefined;
+    },
+  };
+}
+
 /** A `marked` inline extension for `[[…]]`, parameterized by the surface's own
  *  anchor renderer (lit: href into its routes; the card: a data-key peek link).
  *  Pass to `marked.use({ extensions: [wikiLinkExtension(renderAnchor)] })`. */

@@ -72,18 +72,25 @@ export function isFormable(schema: FormFieldSchema | undefined): boolean {
   return !!schema && schema.type === 'object' && !!schema.properties;
 }
 
+/** A surface-supplied renderer for LONG string fields (content/text/body/…).
+ *  The upgrade seam for a real editor (@parc/ui CodeEditor) over the 3-row
+ *  textarea floor — injected so plain forms stay dependency-light. */
+export type LongTextRenderer = (props: { name: string; value: string; onChange: (v: string | undefined) => void }) => React.ReactNode;
+
 export interface SchemaFormProps {
   schema: FormFieldSchema | undefined;
   value: Record<string, unknown>;
   onChange: (next: Record<string, unknown>) => void;
   palette?: Partial<FormPalette>;
+  /** Optional long-text field upgrade (see `LongTextRenderer`). */
+  longText?: LongTextRenderer;
 }
 
 /** Render every property of an object schema as a field; unrenderable shapes
  *  degrade per-field (see `FieldRow`). Returns `null` if the top-level schema
  *  itself isn't a formable object — the caller's own raw-JSON view is the
  *  fallback for that case (e.g. a target with no `properties` at all). */
-export function SchemaForm({ schema, value, onChange, palette }: SchemaFormProps): React.JSX.Element | null {
+export function SchemaForm({ schema, value, onChange, palette, longText }: SchemaFormProps): React.JSX.Element | null {
   if (!isFormable(schema)) return null;
   const p: FormPalette = { ...DEFAULT_FORM_PALETTE, ...palette };
   const props = schema!.properties!;
@@ -97,7 +104,7 @@ export function SchemaForm({ schema, value, onChange, palette }: SchemaFormProps
   return (
     <div style={{ display: 'grid', gap: '0.7rem' }}>
       {Object.entries(props).map(([key, fs]) => (
-        <FieldRow key={key} name={key} schema={fs} required={required.has(key)} value={value[key]} onChange={(v) => set(key, v)} palette={p} />
+        <FieldRow key={key} name={key} schema={fs} required={required.has(key)} value={value[key]} onChange={(v) => set(key, v)} palette={p} longText={longText} />
       ))}
     </div>
   );
@@ -110,6 +117,7 @@ function FieldRow({
   value,
   onChange,
   palette: p,
+  longText,
 }: {
   name: string;
   schema: FormFieldSchema;
@@ -117,6 +125,7 @@ function FieldRow({
   value: unknown;
   onChange: (v: unknown) => void;
   palette: FormPalette;
+  longText?: LongTextRenderer;
 }): React.JSX.Element {
   const label = (
     <label style={{ display: 'flex', alignItems: 'baseline', gap: '0.4rem', flexWrap: 'wrap', fontFamily: p.mono, fontSize: '0.78rem', color: p.dim }}>
@@ -225,12 +234,15 @@ function FieldRow({
       </div>
     );
   }
-  // string (default) — a longer-looking field (a description, content, prompt) gets a textarea.
+  // string (default) — a longer-looking field (a description, content, prompt)
+  // gets the surface's long-text editor when injected, else the textarea floor.
   const long = name === 'content' || name === 'text' || name === 'prompt' || name === 'body' || name === 'description' || (schema.description?.length ?? 0) > 100;
   return (
     <div style={{ display: 'grid', gap: '0.25rem' }}>
       {label}
-      {long ? (
+      {long && longText ? (
+        <div style={{ ...inputStyle, padding: 0 }}>{longText({ name, value: typeof value === 'string' ? value : '', onChange: (v) => onChange(v || undefined) })}</div>
+      ) : long ? (
         <textarea value={typeof value === 'string' ? value : ''} onChange={(e) => onChange(e.target.value || undefined)} rows={3} style={inputStyle} />
       ) : (
         <input type="text" value={typeof value === 'string' ? value : ''} onChange={(e) => onChange(e.target.value || undefined)} style={inputStyle} />

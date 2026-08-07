@@ -229,10 +229,22 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // The 1/1 sheet is being dragged toward ground: restore the REAL ground
   // content behind it (the docked Landing un-collapses for the reveal).
   const [groundReveal, setGroundReveal] = useState(false);
+  // THE GROUND RULE (docs/home-interaction-inventory.md §1): the ground
+  // changes only by DELIBERATE acts of reading — a trailhead tap, a deep
+  // link, an exit commit. A tap in the ENTERED graph re-aims the sky
+  // (selection) without rewriting what the trailhead reads behind it; the
+  // adoption happens once, at exit (both exits — see toLanding/onExitCommit).
+  const enteredRef = React.useRef(false);
+  const selectedKeyRef = React.useRef<string | null>(null);
+  // The last SCENE-BORN selection — what a dismissed peek stack re-aims the
+  // sky at. Was proxied by groundKey, which only worked while entered-graph
+  // taps (wrongly) rewrote the ground.
+  const lastSceneKeyRef = React.useRef<string | null>(null);
   const selectByNode = useCallback((n: GraphNode | null) => {
     setSelectedNode(n);
     setSelectedKey(n?.key ?? null);
-    setGroundKey(n?.key ?? null);
+    lastSceneKeyRef.current = n?.key ?? null;
+    if (!enteredRef.current) setGroundKey(n?.key ?? null);
   }, []);
   // Selection is shareable view-state (urlstate.ts). We DON'T seed useState from
   // the hash — that would diverge from the server's null and break hydration.
@@ -244,7 +256,7 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
     if (!hashSelHydrated.current) {
       hashSelHydrated.current = true;
       const s = readHashState().selected;
-      if (s) { setSelectedKey(s); setGroundKey(s); }
+      if (s) { setSelectedKey(s); setGroundKey(s); lastSceneKeyRef.current = s; }
       return;
     }
     writeHashState({ selected: selectedKey ?? undefined });
@@ -260,6 +272,9 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   const [entered, setEntered] = useState(() => {
     try { return sessionStorage.getItem('parc.home.entered') === '1'; } catch { return false; }
   });
+  // Live mirrors for the once-created callbacks above (selectByNode/toLanding).
+  enteredRef.current = entered;
+  selectedKeyRef.current = selectedKey;
   // `leaving` drives the day→night DISSOLVE: on enter, the dusk-sky + landing
   // overlay fades to 0 over ~0.9s (revealing the night graph beneath at full
   // strength), THEN unmounts. Not just an opacity pop — the sky washes away.
@@ -288,6 +303,9 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
   // snapping the peel back to rest in the SAME batch so it never re-mounts mid-peel
   // (a committed/partial pull was surviving the round-trip and staying peeled).
   const toLanding = useCallback(() => {
+    // Exit ADOPTS the selection as the ground (the deliberate act) — both
+    // exits now agree; the grip commit's own adoption is a harmless repeat.
+    if (selectedKeyRef.current) setGroundKey(selectedKeyRef.current);
     try { sessionStorage.removeItem('parc.home.entered'); } catch { /* private mode */ }
     setPull(0);
     setLeaving(false);
@@ -688,14 +706,15 @@ export function App({ initial }: { initial?: Boot } = {}): React.JSX.Element {
           graph's folded node ids, so the pan lands. */}
       <FactDetailHost
         tone={entered ? 'dark' : 'light'}
+        authed={authed}
         onCurrent={(k) => { if (k) setSelectedKey(k); }}
         onOpenChange={(open) => {
           setPeekOpen(open);
-          // Dismissing the LAST sheet re-aims the sky at the GROUND fact
-          // (owner): the stack's selections are aim-only and end with the
-          // stack — the graph returns to what the ground is actually showing
-          // (the last scene-born selection), not the last thing drilled.
-          if (!open) setSelectedKey(groundKey);
+          // Dismissing the LAST sheet re-aims the sky at the last SCENE-BORN
+          // selection (owner): the stack's selections are aim-only and end
+          // with the stack. (Formerly groundKey — a proxy that held only
+          // while entered-graph taps wrongly rewrote the ground.)
+          if (!open) setSelectedKey(lastSceneKeyRef.current);
         }}
         onRevealGround={setGroundReveal}
       />

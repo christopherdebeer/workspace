@@ -546,6 +546,11 @@ export class PlatformStack extends cdk.Stack {
       cellHostRouter: dispatch,
       cellDomainNames,
       cellCertificate,
+      // ADR-0095 — a cell that declares a public namespace is the miss handler
+      // for its own CDN-fronted prefix in this bucket. The same bucket the
+      // control plane already uses for cell code; `public/` is a new prefix
+      // beside `cells/`, and the permission boundary caps every cell to it.
+      publicNamespaceBucket: controlPlane.codeBucket,
     });
 
     // Make the auth cell self-consistent with the public origin via an explicit
