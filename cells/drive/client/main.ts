@@ -3220,7 +3220,23 @@ const CUT_BATTER = 0.62;   // rise per metre out past the bench — a ~32° cut 
 // 22m bench — a third of a metre ABOVE the new tarmac, which would bury the
 // road the bench exists to protect. 0.008 keeps it ~0.3m clear at every
 // latitude while still shedding the dead-level look.
-const CUT_WASH = 0.008;    // the bench's own fall, kerb to lip
+// ── THE VERTICAL BUDGET, in one place ──────────────────────────────
+// The visible daylight between tarmac and ground on FLAT land is exactly
+// CUT_CLEAR + the road lift: the cut lowers the ground to profile−CUT_CLEAR
+// and the deck is drawn at profile+lift. Measured before this was named:
+// 0.55m median at Noordhoek, Big Sur AND dead-flat Death Valley — the
+// "roads hover half a metre" report was these two constants, not error.
+// The apron skirts then render that daylight as walls, which is what made
+// every road read as a slab on a plinth.
+//
+// The budget cannot go to zero: the terrain mesh samples the cut field at
+// vertices ~16m apart and draws straight chords between them, so the deck
+// must clear the highest chord the bench permits. The inequality is
+//   lift + CUT_CLEAR − CUT_WASH·CUT_SLACK  >  0   (with margin)
+// At 0.18 + 0.12 − 0.004·22.4 ≈ 0.21 the margin holds at every latitude and
+// every TERRAIN dial setting, and the designed gap falls from 0.52 to 0.30.
+const CUT_CLEAR = 0.12;    // how far below the profile the cut planes the ground
+const CUT_WASH = 0.004;    // the bench's own fall, kerb to lip
 const CUT_TAIL = 14;       // how far past the bench the batter grades before nature resumes
 const CUT_REACH = 14;      // tracks only: a worn groove, not an engineered cutting
 let CUT_SLACK = 23;        // bench width — the mesh cell diagonal, set from the origin latitude
@@ -3292,15 +3308,15 @@ function roadCeiling(x: number, z: number): number | null {
       if (seg.tk ? out > CUT_REACH * 0.45 : out > CUT_SLACK + CUT_TAIL) continue;
       const y = seg.ya + (seg.yb - seg.ya) * t;
       const c = seg.tk
-        ? y - 0.3 + Math.max(0, out) * CUT_BATTER * 1.7
-        : y - 0.3 + Math.min(Math.max(out, 0), CUT_SLACK) * CUT_WASH
+        ? y - CUT_CLEAR + Math.max(0, out) * CUT_BATTER * 1.7
+        : y - CUT_CLEAR + Math.min(Math.max(out, 0), CUT_SLACK) * CUT_WASH
           + Math.max(0, out - CUT_SLACK) * CUT_BATTER;
       if (ceil === null || c < ceil) ceil = c;
       if (out <= CUT_BED) {
-        const b = y - 0.3 - Math.max(0, out) * CUT_FILL;
+        const b = y - CUT_CLEAR - Math.max(0, out) * CUT_FILL;
         if (bed === null || b > bed) bed = b;
       }
-      if (out <= 0 && (hard === null || y - 0.3 < hard)) hard = y - 0.3;
+      if (out <= 0 && (hard === null || y - CUT_CLEAR < hard)) hard = y - CUT_CLEAR;
     }
   }
   if (ceil === null) return null;
@@ -4201,13 +4217,13 @@ function renderWays(els: OsmWay[]): void {
       // These MUST equal SURFACE[].lift — the ribbon is drawn at profile+lift
       // and the tyre sits at profile+lift, so a disagreement is a truck
       // hovering over its own road. Stack order: green .08 < water .12 <
-      // track .18 < road .22.
+      // track .15 < rail .16 < road .18.
       const mode: RoadMode = track || stairs ? 'none'
         : tags.tunnel && tags.tunnel !== 'no' ? 'tunnel'
         : tags.bridge && tags.bridge !== 'no' ? 'bridge'
         : 'auto';
       ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : MAT.road,
-        track || stairs ? 0.18 : 0.22, !stairs, mode, track, tags.name, wayQuality(tags, track));
+        track || stairs ? SURFACE.track.lift : SURFACE.road.lift, !stairs, mode, track, tags.name, wayQuality(tags, track));
       if (unbuilt !== refusedAt) { seenWays.delete(dk); continue; }
       // Steps are named and drawn but nothing drives them, so they earn no
       // checkpoints — a road you cannot survey should not sit in the log.
@@ -4222,7 +4238,7 @@ function renderWays(els: OsmWay[]): void {
     } else if (tags.railway) {
       // Rails read as a narrow dark line across the country and a thing you
       // bump over at a crossing. Not drivable — nobody drives a railway.
-      ribbon(pts, 3.4, MAT.minor, 0.2, false, 'none', false, tags.name);
+      ribbon(pts, 3.4, MAT.minor, 0.16, false, 'none', false, tags.name);
     } else if (tags.building) {
       building(pts, el.id, parseFloat(tags['building:levels'] ?? '') || 2);
     } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
@@ -6277,8 +6293,8 @@ function meshHeightAt(x: number, z: number): number | null {
             if (q.tk ? out > CUT_REACH * 0.45 : out > CUT_SLACK + CUT_TAIL) continue;
             const qy = q.ya + (q.yb - q.ya) * qt;
             const ceil = q.tk
-              ? qy - 0.3 + Math.max(0, out) * CUT_BATTER * 1.7
-              : qy - 0.3 + Math.min(Math.max(out, 0), CUT_SLACK) * CUT_WASH
+              ? qy - CUT_CLEAR + Math.max(0, out) * CUT_BATTER * 1.7
+              : qy - CUT_CLEAR + Math.min(Math.max(out, 0), CUT_SLACK) * CUT_WASH
                 + Math.max(0, out - CUT_SLACK) * CUT_BATTER;
             if (ceil < best) { best = ceil; won = { d: +qd.toFixed(1), dy: +(road - qy).toFixed(1) }; }
           }
@@ -7285,11 +7301,11 @@ const SURFACE = {
   // road it is drawn on — but at 0.6/0.5/0.25 the stack was CURB HEIGHT, and
   // every road became a platform to climb onto. Compressed to real kerb scale;
   // the ordering that keeps green under water under track under road survives.
-  road: { max: 50, drag: 0.28, lift: 0.22, rough: 0.015, mu: 1.05, lat: 6.5 },
+  road: { max: 50, drag: 0.28, lift: 0.18, rough: 0.015, mu: 1.05, lat: 6.5 },
   // The middle tier: a graded dirt track. Equilibrium speed is accel/drag, so
   // 0.36 sits it between tarmac's 57m/s and open ground's 32 — quick enough
   // that finding a track is a relief, rough enough that it is not a road.
-  track: { max: 40, drag: 0.36, lift: 0.18, rough: 0.07, mu: 0.8, lat: 5 },
+  track: { max: 40, drag: 0.36, lift: 0.15, rough: 0.07, mu: 0.8, lat: 5 },
   ground: { max: 32, drag: 0.5, lift: 0.10, rough: 0.16, mu: 0.6, lat: 3.2 }, // monster truck: off-road is its element
   water: { max: 3.5, drag: 3.5, lift: 0.12, rough: 0.05, mu: 0.3, lat: 2 },
 } as const;
