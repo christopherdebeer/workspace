@@ -10243,7 +10243,7 @@ const menu = createMenu({
     return [
       ['DRIVEN', `${fmtKm(odo.trip)} TRIP · ${fmtKm(odo.total)} TOTAL`],
       ['SURVEYED', `${claimed} ${claimed === 1 ? 'ROAD' : 'ROADS'} CLAIMED`],
-      ['MODE', real.on ? 'REAL DRIVE · GPS' : 'FREE DRIVE'],
+      ['MODE', real.on ? 'GPS DRIVE' : 'FREE DRIVE'],
       ['WORLD', osmDown ? 'VECTORS UNAVAILABLE' : streaming ? 'STREAMING' : 'LOADED'],
     ];
   },

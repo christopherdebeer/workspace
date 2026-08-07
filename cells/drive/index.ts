@@ -36,6 +36,9 @@ const CSP = [
   // unreachable the synthetic weather chain simply keeps running.
   "connect-src 'self' https://esm.sh https://overpass-api.de https://overpass.kumi.systems https://overpass.osm.jp https://overpass.private.coffee https://s3.amazonaws.com https://nominatim.openstreetmap.org https://api.open-meteo.com",
   "img-src data: blob:",
+  // The menu's pixel face (Silkscreen) ships inside the bundle as data: URIs —
+  // no font host, so the page stays self-contained.
+  'font-src data:',
   'worker-src blob:',
   "base-uri 'none'",
   "form-action 'none'",
