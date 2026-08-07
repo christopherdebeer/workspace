@@ -8901,6 +8901,13 @@ function tick(now: number): void {
   else if (camMode === 'cab') { camera.lookAt(camAim); camera.rotateZ(-rollC); }
   else camera.lookAt(state.x + fwdX * 28, ground + 1.4, state.z + fwdZ * 28);
   camera.updateMatrixWorld();
+  // Refresh the INVERSE now, not at render time. Everything below that
+  // projects — the sun flare, the fog composite's invPV, and above all the
+  // POI/checkpoint screen positions — reads camera.matrixWorldInverse, and
+  // three only recomputes it inside renderer.render(). Left stale, every
+  // overlay projected through LAST frame's camera and trailed the world by
+  // a frame while panning — pins visibly sliding off their buildings.
+  camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
   skyDome.position.copy(camera.position);
   // The dome rides with the camera, but its RADIUS is fixed at 20km and the
   // chart's near plane grows with altitude — at the widest zoom the near plane
@@ -8928,10 +8935,13 @@ function tick(now: number): void {
     navAt = now + 600;
     navBend = paused || camMode === 'top' ? null : nextBend(state.x, state.z, state.heading);
   }
+  // Project FIRST, draw SECOND — updatePois used to run after drawHud, so
+  // the HUD drew the PREVIOUS frame's projections on top of this frame's
+  // world: a second frame of trailing on top of the stale-inverse one.
+  updatePois(); // every frame — throttled pins juddered against the camera
   drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF);
   stepOverlays();
   if (camMode === 'cab' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
-  updatePois(); // every frame — throttled pins juddered against the camera
   // Progress lives in the URL: reloading resumes here, not at the spawn.
   if (now > urlAt) {
     urlAt = now + 3000;
