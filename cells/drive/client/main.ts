@@ -9540,6 +9540,21 @@ const BODY_COLORS: Array<[string, number]> = [
   ['RUST', 0xc4402c], ['EMBER', 0xd0642a], ['SAND', 0xc0a068],
   ['OLIVE', 0x6a7245], ['FOREST', 0x3d5a3c], ['STEEL', 0x44647c],
 ];
+// A CUSTOM paint sits beside the presets, not among them: the dial keeps its
+// six named liveries, and the picker writes any hex over the top. Whichever
+// was touched LAST wins, and the custom one survives reloads on its own key —
+// cycling the preset dial is what clears it (see cycleDial in the menu ctx).
+let customPaint: string | null = null;
+try { customPaint = localStorage.getItem('drive.paint'); } catch { /* fine */ }
+function setCustomPaint(hex: string): void {
+  customPaint = hex;
+  try { localStorage.setItem('drive.paint', hex); } catch { /* fine */ }
+  bodyMat?.color.set(hex);
+}
+function clearCustomPaint(): void {
+  customPaint = null;
+  try { localStorage.removeItem('drive.paint'); } catch { /* fine */ }
+}
 const DIAL_GROUPS: DialGroup[] = [
   {
     title: 'RENDER',
@@ -10320,9 +10335,12 @@ const menu = createMenu({
   cycleDial: (d) => {
     const dl = d as Dial;                        // the menu holds the same objects
     dl.at = (dl.at + 1) % dl.opts.length;        // dials CYCLE; there is no slider
+    if (dl.key === 'paint') clearCustomPaint();  // a preset chosen ON PURPOSE beats the swatch
     dl.apply(dl.at);
     saveDials();
   },
+  paint: () => `#${bodyMat?.color.getHexString() ?? 'c4402c'}`,
+  setPaint: (hex) => setCustomPaint(hex),
   drive: () => audio.arm(),
   realToggle: () => {
     if (real.on) { location.href = location.pathname; return; }  // back to the menu, model driving
@@ -10368,6 +10386,8 @@ const menu = createMenu({
 loadDials();
 loadSpots();
 applyDials();
+// The custom paint rides OVER whatever preset the dial just applied.
+if (customPaint) bodyMat?.color.set(customPaint);
 // …and THEN the URL, because a dial that persists to localStorage will happily
 // overwrite a query parameter that was read before it. `?t=DUSK` silently did
 // nothing for exactly this reason: every mode rendered the live sun.

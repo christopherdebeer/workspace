@@ -69,6 +69,9 @@ export interface MenuCtx {
   // ── dials ──
   dialGroups(which: 'rig' | 'system'): DialGroupRef[];
   cycleDial(d: DialRef): void;
+  /** The bodywork's current colour as #rrggbb, and the custom override. */
+  paint(): string;
+  setPaint(hex: string): void;
   // ── actions ──
   drive(): void;
   realToggle(): void;
@@ -107,7 +110,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   style.textContent = `${PIXEL_FONT_CSS}
   #menu { position: fixed; inset: 0; z-index: 15; display: none;
     font-family: '${PIXEL_FONT}', ui-monospace, Menlo, monospace; color: ${C.text};
-    font-size: 8px; line-height: 1.5; -webkit-user-select: none; user-select: none; }
+    font-size: 12px; line-height: 1.5; -webkit-user-select: none; user-select: none; }
   #menu .m-scrim { position: absolute; background: rgba(6,14,17,0.92); }
   #menu .m-panel { position: absolute; inset: 10px; border: 1px solid ${C.dim};
     display: flex; flex-direction: column; padding: 10px 0 10px; min-height: 0; }
@@ -115,57 +118,59 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   #menu button { font: inherit; }
   #menu .m-head { display: flex; align-items: center; gap: 8px; padding: 0 12px; min-height: 22px; }
   #menu .m-back { cursor: pointer; color: ${C.soft}; border: 1px solid ${C.dim};
-    background: rgba(8,20,23,0.78); padding: 3px 8px 2px; font-size: 8px; }
+    background: rgba(8,20,23,0.78); padding: 3px 8px 2px; font-size: 10px; }
   #menu .m-title { color: ${C.gold}; font-weight: 700; font-size: 16px; }
   #menu .m-title .arrow { color: ${C.hot}; }
-  #menu .m-sub { padding: 2px 12px 6px; color: ${C.dim}; font-size: 8px; letter-spacing: 2px; }
+  #menu .m-sub { padding: 2px 12px 6px; color: ${C.dim}; font-size: 10px; letter-spacing: 2px; }
   #menu .m-x { margin-left: auto; cursor: pointer; color: ${C.hot}; border: 1px solid ${C.hot};
-    background: rgba(8,20,23,0.78); padding: 3px 8px 2px; font-size: 8px; }
+    background: rgba(8,20,23,0.78); padding: 3px 8px 2px; font-size: 10px; }
   #menu .m-rule { border-top: 1px solid ${C.dim}; margin: 4px 8px; }
   #menu .m-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
     padding: 6px 12px 4px; display: flex; flex-direction: column; }
   #menu .m-place { color: ${C.gold}; font-size: 16px; font-weight: 700;
     text-shadow: 0 0 8px rgba(242,193,78,0.45); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #menu .m-dimline { color: ${C.dim}; font-size: 8px; margin: 2px 0 6px; }
-  #menu table.m-kv { border-collapse: collapse; font-size: 8px; }
+  #menu .m-dimline { color: ${C.dim}; font-size: 10px; margin: 2px 0 6px; }
+  #menu table.m-kv { border-collapse: collapse; font-size: 11px; }
   #menu table.m-kv td { padding: 1px 1.2em 1px 0; vertical-align: baseline; }
   #menu table.m-kv td:first-child { color: ${C.dim}; padding-right: 1.6em; white-space: nowrap; }
   #menu .m-foot { padding: 8px 12px 0; display: grid; gap: 5px; justify-items: start; }
   #menu .m-btn { letter-spacing: 1px; cursor: pointer; min-width: 14em;
-    text-align: left; padding: 5px 10px 4px; background: rgba(8,20,23,0.78); border: 1px solid; font-size: 8px; }
+    text-align: left; padding: 5px 10px 4px; background: rgba(8,20,23,0.78); border: 1px solid; font-size: 12px; }
   #menu .m-cta { display: block; width: 100%; cursor: pointer; text-align: center; letter-spacing: 2px;
     font-size: 16px; font-weight: 700; padding: 9px 10px 7px; margin: 8px 0 0;
     color: ${C.good}; border: 1px solid ${C.good}; background: rgba(111,224,160,0.08); }
-  #menu .m-cta.alt { font-size: 8px; font-weight: 400; padding: 6px 10px 5px;
+  #menu .m-cta.alt { font-size: 12px; font-weight: 400; padding: 6px 10px 5px;
     color: ${C.hot}; border-color: ${C.hot}; background: rgba(8,20,23,0.5); }
   #menu .m-nav { margin-top: 10px; display: grid; gap: 5px; }
   #menu .m-navrow { display: flex; align-items: baseline; gap: 8px; cursor: pointer;
     border: 1px solid ${C.dim}; background: rgba(8,20,23,0.5); padding: 7px 10px 6px; }
   #menu .m-navrow .name { font-size: 16px; color: ${C.text}; }
-  #menu .m-navrow .sub { margin-left: auto; color: ${C.dim}; font-size: 8px; text-align: right; }
+  #menu .m-navrow .sub { margin-left: auto; color: ${C.dim}; font-size: 10px; text-align: right; }
   #menu .m-navrow .chev { color: ${C.gold}; font-size: 16px; }
-  #menu .m-sect { color: ${C.edge}; font-size: 8px; letter-spacing: 2px;
+  #menu .m-sect { color: ${C.edge}; font-size: 10px; letter-spacing: 2px;
     display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; }
   #menu .m-sect::after { content: ''; flex: 1; border-top: 1px solid ${C.dim}; }
   #menu .m-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; }
   #menu .m-row.hit { cursor: pointer; }
   #menu .m-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  #menu .m-row .sub { margin-left: auto; color: ${C.dim}; font-size: 8px; text-align: right;
+  #menu .m-row .sub { margin-left: auto; color: ${C.dim}; font-size: 10px; text-align: right;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; max-width: 55%; }
   #menu .m-row .del { color: ${C.soft}; cursor: pointer; padding: 0 6px; flex-shrink: 0; }
   #menu .m-meter { display: inline-flex; gap: 1px; align-self: center; flex-shrink: 0; }
   #menu .m-meter i { width: 4px; height: 4px; background: rgba(87,201,176,0.16); }
   #menu .m-dial { display: flex; align-items: baseline; gap: 8px; padding: 3px 2px; cursor: pointer; }
-  #menu .m-dial .lab { color: ${C.soft}; font-size: 8px; }
-  #menu .m-dial .val { margin-left: auto; color: ${C.gold}; font-size: 8px; }
+  #menu .m-dial .lab { color: ${C.soft}; font-size: 12px; }
+  #menu .m-dial .val { margin-left: auto; color: ${C.gold}; font-size: 12px; }
+  #menu input[type=color] { margin-left: auto; width: 38px; height: 20px; padding: 1px;
+    border: 1px solid ${C.dim}; background: rgba(8,20,23,0.78); cursor: pointer; }
   #menu .m-views { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
-  #menu .m-view { font-size: 8px; cursor: pointer; padding: 3px 6px 2px;
+  #menu .m-view { font-size: 10px; cursor: pointer; padding: 3px 6px 2px;
     background: none; border: 1px solid transparent; color: ${C.soft}; }
   #menu .m-view.on { border-color: ${C.gold}; color: ${C.gold}; }
   #menu .m-bay { position: relative; border: 1px solid ${C.dim}; height: 200px; margin: 2px 0 8px; flex-shrink: 0; }
   #menu .m-bay.hero { height: auto; flex: 1; min-height: 130px; margin: 6px 0 0; }
-  #menu .m-bay .cap { position: absolute; top: 3px; left: 5px; color: ${C.dim}; font-size: 8px; }
-  #menu .m-bay .tag { position: absolute; bottom: 3px; left: 5px; color: ${C.gold}; font-size: 8px; }
+  #menu .m-bay .cap { position: absolute; top: 3px; left: 5px; color: ${C.dim}; font-size: 10px; }
+  #menu .m-bay .tag { position: absolute; bottom: 3px; left: 5px; color: ${C.gold}; font-size: 10px; }
   `;
   document.head.appendChild(style);
 
@@ -413,7 +418,25 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     });
     bayEl = mkBay();
     body.append(views, bayEl);
-    dialsInto(body, ctx.dialGroups('rig'));
+    for (const g of ctx.dialGroups('rig')) {
+      dialsInto(body, [g]);
+      if (g.title !== 'VEHICLE') continue;
+      // The custom swatch lives WITH the paint dial it overrides: any hex,
+      // native picker, persisted — and the preset dial clears it when cycled,
+      // so the updater keeps the swatch honest about what the truck wears.
+      const row = el('div', 'm-dial');
+      row.style.cursor = 'default';
+      row.append(el('span', 'lab', 'PAINT · CUSTOM'));
+      const input = el('input', '');
+      input.type = 'color';
+      input.value = ctx.paint();
+      input.addEventListener('input', () => ctx.setPaint(input.value));
+      updaters.push(() => {
+        if (document.activeElement !== input && input.value !== ctx.paint()) input.value = ctx.paint();
+      });
+      row.appendChild(input);
+      body.appendChild(row);
+    }
     const t = el('table', 'm-kv');
     {
       const tr = el('tr', '');
