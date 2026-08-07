@@ -7814,7 +7814,9 @@ function updatePois(): void {
 // designed around NOT drawing these — the tally moving is the whole signal —
 // but "invisible feels right" is a claim you can only test by driving the
 // version that isn't.
-interface CpDraw { x: number; y: number; tx: number; ty: number; got: boolean; age: number; d: number; hid: boolean }
+interface CpDraw { x: number; y: number; tx: number; ty: number; got: boolean; age: number; d: number; hid: boolean;
+  /** The job's route markers: forced beams, gold, numbered along the road. */
+  job?: boolean; n?: number }
 let cpDraw: CpDraw[] = [];
 // 700m was too short to ever see one: checkpoints sit 250m apart on a road
 // that bends, so from any given spot most of them are behind you or round the
@@ -7826,59 +7828,80 @@ function updateCps(): void {
   cpDraw = [];
   cpCull.vis = cpVis;
   cpCull.total = cpCull.taken = cpCull.far = cpCull.behind = cpCull.offscreen = cpCull.drawn = 0;
-  if (cpVis === 0) return;
   const now = performance.now();
+  const cap = camMode === 'top' ? 400 : 80;
+  const push = (c: Checkpoint, job: boolean, n: number): void => {
+    cpCull.total++;
+    const age = c.at ? now - c.at : Infinity;
+    // PING shows ONLY what you just took, and nothing else, ever. The other
+    // modes — and the job's route — add the ones still out there.
+    if ((!job && cpVis === 1) ? age > 1400 : c.got && age > 1400) { cpCull.taken++; return; }
+    const d = Math.hypot(c.x - state.x, c.z - state.z);
+    // The chart shows the WHOLE way, and so does a JOB: its route is the one
+    // set of markers whose far end is exactly what you need to see. Distance
+    // still dims them (the banding in the draw pass floors, not zeroes), it
+    // just no longer erases them.
+    if (!job && camMode !== 'top' && d > CP_SIGHT) { cpCull.far++; return; }
+    const g = groundAt(c.x, c.z);
+    poiVec.set(c.x, g + 1.2, c.z);
+    if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) { cpCull.behind++; return; }
+    poiVec.project(camera);
+    // Horizontal only. Culling on Y threw away every checkpoint whose foot
+    // sits below the viewport — which is most of the near ones under a chase
+    // camera, and exactly the ones whose beam would be tallest on screen.
+    if (Math.abs(poiVec.x) > 1.25) { cpCull.offscreen++; return; }
+    cpCull.drawn++;
+    const sx = (poiVec.x * 0.5 + 0.5) * innerWidth;
+    const sy = (-poiVec.y * 0.5 + 0.5) * innerHeight;
+    // Project the top of the column too, so the beam keeps real perspective
+    // — a fixed pixel height would stand up straight on a hillside and lie
+    // about which way is up.
+    poiVec.set(c.x, g + CP_BEAM_H, c.z).project(camera);
+    // Can you actually SEE this one? Same claim the POI pins make, and the
+    // same answer: a marker behind a ridge is right about where it is and
+    // wrong about whether it is in view, so it ghosts rather than vanishes.
+    // Cached and staggered — occlusion changes at driving speed, not frame
+    // rate, and sightBlocked marches up to seventy ground samples.
+    if (c.hidAt === undefined || now - c.hidAt > 400) {
+      c.hidAt = now + (cpCull.drawn % 7) * 40;
+      c.hid = sightBlocked(c.x, g + 1.2, c.z)
+        || wallHitAlong(camera.position.x, camera.position.z, c.x, c.z, camera.position.y) < 0.98;
+    }
+    cpDraw.push({
+      x: sx, y: sy,
+      tx: (poiVec.x * 0.5 + 0.5) * innerWidth,
+      ty: (-poiVec.y * 0.5 + 0.5) * innerHeight,
+      got: c.got, age, d, hid: camMode !== 'top' && !!c.hid,
+      job, n,
+    });
+  };
+  // THE JOB'S ROUTE, always lit — the CHECKPOINTS dial styles free driving,
+  // but a route you accepted is navigation, not decoration: every marker on
+  // the via road stands as a numbered gold beam for the whole drive.
+  const viaName = mission && missionPhase === 'active' ? mission.via?.name : undefined;
+  if (viaName) {
+    const r = survey.get(viaName);
+    if (r) {
+      let i = 0;
+      for (const c of r.cps) {
+        i++;
+        if (cpDraw.length >= cap) break;
+        push(c, true, i);
+      }
+    }
+  }
+  if (cpVis === 0) return;
   // THE ROAD YOU ARE ON, and only that one. Drawing every nearby road turned a
   // junction into a thicket of markers belonging to streets you were not
   // driving. wayAt() is what makes this safe to scope: it answers with the
   // nearest NAMED road whether or not you are between its kerbs, so a wheel on
   // the verge no longer blanks the markers you are steering at.
   const here = wayAt(state.x, state.z);
-  const road = here ? survey.get(here.name) : null;
+  const road = here && here.name !== viaName ? survey.get(here.name) : null;
   if (road) {
     for (const c of road.cps) {
-      cpCull.total++;
-      const age = c.at ? now - c.at : Infinity;
-      // PING shows ONLY what you just took, and nothing else, ever. The other
-      // modes add the ones still out there.
-      if (cpVis === 1 ? age > 1400 : c.got && age > 1400) { cpCull.taken++; continue; }
-      const d = Math.hypot(c.x - state.x, c.z - state.z);
-      // The chart shows the WHOLE way. Its whole job is the shape of a road you
-      // are not looking at, and a 1.4km horizon on a view that zooms to 44x
-      // would clip the run exactly where surveying it gets interesting.
-      if (camMode !== 'top' && d > CP_SIGHT) { cpCull.far++; continue; }
-      const g = groundAt(c.x, c.z);
-      poiVec.set(c.x, g + 1.2, c.z);
-      if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) { cpCull.behind++; continue; }
-      poiVec.project(camera);
-      // Horizontal only. Culling on Y threw away every checkpoint whose foot
-      // sits below the viewport — which is most of the near ones under a chase
-      // camera, and exactly the ones whose beam would be tallest on screen.
-      if (Math.abs(poiVec.x) > 1.25) { cpCull.offscreen++; continue; }
-      cpCull.drawn++;
-      const sx = (poiVec.x * 0.5 + 0.5) * innerWidth;
-      const sy = (-poiVec.y * 0.5 + 0.5) * innerHeight;
-      // Project the top of the column too, so the beam keeps real perspective
-      // — a fixed pixel height would stand up straight on a hillside and lie
-      // about which way is up.
-      poiVec.set(c.x, g + CP_BEAM_H, c.z).project(camera);
-      // Can you actually SEE this one? Same claim the POI pins make, and the
-      // same answer: a marker behind a ridge is right about where it is and
-      // wrong about whether it is in view, so it ghosts rather than vanishes.
-      // Cached and staggered — occlusion changes at driving speed, not frame
-      // rate, and sightBlocked marches up to seventy ground samples.
-      if (c.hidAt === undefined || now - c.hidAt > 400) {
-        c.hidAt = now + (cpCull.drawn % 7) * 40;
-        c.hid = sightBlocked(c.x, g + 1.2, c.z)
-          || wallHitAlong(camera.position.x, camera.position.z, c.x, c.z, camera.position.y) < 0.98;
-      }
-      cpDraw.push({
-        x: sx, y: sy,
-        tx: (poiVec.x * 0.5 + 0.5) * innerWidth,
-        ty: (-poiVec.y * 0.5 + 0.5) * innerHeight,
-        got: c.got, age, d, hid: camMode !== 'top' && !!c.hid,
-      });
-      if (cpDraw.length >= (camMode === 'top' ? 400 : 60)) return;
+      if (cpDraw.length >= cap) return;
+      push(c, false, 0);
     }
   }
 }
@@ -9134,13 +9157,34 @@ const textW = (s: string, sc = 1): number => measure(s, FONT_PX * sc);
 const textSW = (s: string): number => measure(s, FONT_PX);
 /** Truncate to a pixel width with a '.' — measured, not counted, because the
  *  face is proportional now. */
-function fit(s: string, maxPx: number): string {
-  if (measure(s, FONT_PX) <= maxPx) return s;
+function fitPx(s: string, maxPx: number, px: number): string {
+  if (measure(s, px) <= maxPx) return s;
   let n = Math.min(s.length - 1, Math.max(1, Math.floor(maxPx / 5)));
-  while (n > 1 && measure(`${s.slice(0, n)}.`, FONT_PX) > maxPx) n--;
+  while (n > 1 && measure(`${s.slice(0, n)}.`, px) > maxPx) n--;
   return `${s.slice(0, n)}.`;
 }
+const fit = (s: string, maxPx: number): string => fitPx(s, maxPx, FONT_PX);
 const fitS = fit;
+// ── the POI voice: half the size of everything else ────────────────
+// A label standing IN the world should whisper next to the instruments that
+// report on the car. Half of 8px leaves Silkscreen's 1px units at 0.5px —
+// off its own grid, so these go through the rasterizer soft and come out of
+// the magnification as small type with rounded corners rather than mush;
+// the ink outline is what keeps them legible over bright ground.
+const POI_PX = 4;
+function textPoi(c: CanvasRenderingContext2D, s: string, x: number, y: number, col: string): void {
+  c.fillStyle = col;
+  setFont(c, POI_PX);
+  c.fillText(s, Math.round(x), Math.round(y) + POI_PX - 1);
+}
+function textEdgeP(s: string, x: number, y: number, col: string): void {
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+    textPoi(hctx, s, x + dx, y + dy, 'rgba(4,10,11,0.85)');
+  }
+  textPoi(hctx, s, x, y, col);
+}
+const textPW = (s: string): number => measure(s, POI_PX);
+const fitP = (s: string, maxPx: number): string => fitPx(s, maxPx, POI_PX);
 function text(c: CanvasRenderingContext2D, s: string, x: number, y: number, col: string, sc = 1): void {
   c.fillStyle = col;
   setFont(c, FONT_PX * sc);
@@ -9749,12 +9793,13 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       hctx.globalAlpha = 0.35 + 0.65 * near;
       hctx.fillStyle = UI.ink;
       diamond(x, y, 3);
-      hctx.fillStyle = cpVis === 3 ? UI.gold : UI.edge;
+      hctx.fillStyle = c.job || cpVis === 3 ? UI.gold : UI.edge;
       diamondOutline(x, y, 2);
+      if (c.job && c.n) textEdgeP(String(c.n), x + 5, y - 6, UI.gold);
       hctx.restore();
       continue;
     }
-    if (cpVis === 3) {
+    if (cpVis === 3 || c.job) {
       // BEAM: a column of light standing on the checkpoint. Drawn as stacked
       // pixels rather than a stroked line because a 1px diagonal line
       // antialiases into a grey smear at this resolution, and everything else
@@ -9762,7 +9807,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       const ty = ty0, tx = c.tx / hudS;
       const h = y - ty;
       if (h > 1) {
-        hctx.fillStyle = UI.edge;
+        // The job's route burns GOLD; the dial's beams keep the survey teal.
+        hctx.fillStyle = c.job ? UI.gold : UI.edge;
         for (let i = 0; i <= h; i++) {
           const t = i / h;                       // 0 at the foot, 1 at the top
           hctx.globalAlpha = (0.85 - t * 0.72) * (0.35 + 0.65 * near) * ghost;
@@ -9775,6 +9821,12 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       hctx.globalAlpha = (0.5 + 0.5 * near) * ghost;
       hctx.fillStyle = UI.gold;
       diamond(x, y, 3);
+      // Its place in the run, beside the foot — the number is the answer to
+      // "which one is next", dimming and ghosting with its beam.
+      if (c.job && c.n && !c.got) {
+        hctx.globalAlpha = (0.45 + 0.55 * near) * ghost;
+        textEdgeP(String(c.n), x + 5, y - 7, UI.gold);
+      }
       hctx.restore();
       continue;
     }
@@ -9806,23 +9858,23 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   const inView = poiDraw.filter((p) => p.edge === 0).sort((a, b) => a.x - b.x);
   const lanes: number[] = [];        // right edge of the last label per lane
   for (const p of inView) {
-    const label = fit(p.t, Math.round(HW * 0.5));
+    const label = fitP(p.t, Math.round(HW * 0.5));
     const iconCh = KIND_ICON[p.kind];
-    const iw = iconCh ? 10 : 0;
-    const w = textSW(label) + 6 + iw;
+    const iw = iconCh ? 7 : 0;
+    const w = textPW(label) + 4 + iw;
     const ax = clamp(Math.round(p.x / hudS), 4, HW - 4);      // the beam's foot
     const ay = clamp(Math.round(p.y / hudS), 30, HH - 40);
     const x = clamp(Math.round(ax - w / 2), 2, HW - w - 2);
     let lane = 0;
-    while (lane < 3 && lanes[lane] !== undefined && x < lanes[lane] + 6) lane++;
+    while (lane < 3 && lanes[lane] !== undefined && x < lanes[lane] + 5) lane++;
     lanes[lane] = x + w;
-    const ly = ay - 13 - lane * 12;                            // label row for this lane
+    const ly = ay - 10 - lane * 8;                             // label row for this lane
     const near = clamp(1 - p.d / 900, 0, 1);
     const ghost = p.hid ? 0.3 : 1;
     hctx.save();
     // The beam doubles as the leader line: foot on the place, top under the
     // label, alpha falling with height, width and brightness with distance.
-    const h = ay - (ly + 9);
+    const h = ay - (ly + 5);
     const bw = p.rng ? 3 : near > 0.55 ? 2 : 1;
     hctx.fillStyle = p.c;
     for (let i = 0; i <= h; i++) {
@@ -9840,34 +9892,34 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // The label — its KIND leading it as a glyph where one exists. Gold when
     // in range or pinned by hand; dimmed when occluded.
     hctx.globalAlpha = p.hid ? 0.55 : 1;
-    if (iconCh) hudIconEdge(iconCh, x + 2, ly - 1, p.c);
-    textEdgeS(label, x + 3 + iw, ly, p.rng || p.pinned ? UI.gold : p.hid ? UI.dim : UI.text);
+    if (iconCh) hudIconEdge(iconCh, x + 1, ly - 1, p.c, 5);
+    textEdgeP(label, x + 2 + iw, ly, p.rng || p.pinned ? UI.gold : p.hid ? UI.dim : UI.text);
     if (p.rng) {
       // IN RANGE: brackets around the label — a place you have arrived AT.
       hctx.fillStyle = UI.gold;
       for (const s of [-1, 1] as const) {
         const bx = Math.round(x + w / 2) + s * Math.round(w / 2 + 2);
-        hctx.fillRect(bx, ly - 3, 1, 12);
-        hctx.fillRect(bx - (s > 0 ? 2 : 0), ly - 3, 3, 1);
-        hctx.fillRect(bx - (s > 0 ? 2 : 0), ly + 8, 3, 1);
+        hctx.fillRect(bx, ly - 2, 1, 8);
+        hctx.fillRect(bx - (s > 0 ? 2 : 0), ly - 2, 3, 1);
+        hctx.fillRect(bx - (s > 0 ? 2 : 0), ly + 5, 3, 1);
       }
     }
     hctx.restore();
     // The whole assembly — label AND beam — is the tap target, padded out:
-    // a pin is a thing you point at with a thumb, not a 5px word.
-    poiRects.push({ x: x - 5, y: ly - 7, w: w + 10, h: ay - ly + 12, name: p.name, kind: p.kind });
+    // a pin is a thing you point at with a thumb, not a 4px word.
+    poiRects.push({ x: x - 5, y: ly - 6, w: w + 10, h: ay - ly + 10, name: p.name, kind: p.kind });
   }
   for (const p of poiDraw) {
     if (p.edge === 0) continue;
-    const label = fit(p.t, Math.round(HW * 0.5));
+    const label = fitP(p.t, Math.round(HW * 0.5));
     const iconCh = KIND_ICON[p.kind];
-    const iw = iconCh ? 10 : 0;
-    const w = textSW(label) + 6 + iw;
+    const iw = iconCh ? 7 : 0;
+    const w = textPW(label) + 4 + iw;
     const y = clamp(Math.round(p.y / hudS), 20, HH - 30);
     const x = p.edge > 0 ? HW - w - 3 : 3;
-    if (iconCh) hudIconEdge(iconCh, x + 2, y + 1, p.c);
-    textEdgeS(label, x + 3 + iw, y + 2, p.rng || p.pinned ? UI.gold : p.c);
-    poiRects.push({ x: x - 3, y: y - 5, w: w + 8, h: 18, name: p.name, kind: p.kind });
+    if (iconCh) hudIconEdge(iconCh, x + 1, y + 1, p.c, 5);
+    textEdgeP(label, x + 2 + iw, y + 2, p.rng || p.pinned ? UI.gold : p.c);
+    poiRects.push({ x: x - 3, y: y - 4, w: w + 8, h: 14, name: p.name, kind: p.kind });
   }
   // ── compass: the full width of the screen, centred ──
   const cw = HW - pad * 2, cx0 = pad, cy0 = pad;
