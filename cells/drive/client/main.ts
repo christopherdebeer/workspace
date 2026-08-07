@@ -18,7 +18,33 @@ import * as THREE from 'three';
 
 // ── tuning ─────────────────────────────────────────────────────────
 const TERRAIN_Z = 14;         // terrarium tile zoom (~2.4km/cos(lat), ~9.5m/px — z13 washed out the hills roads tunnel through)
-const TERRAIN_SEG = 128;      // terrain mesh vertices per tile edge — sets the cell the road cut must out-span
+// Terrain mesh vertices per tile edge, and the most consequential number in
+// the file — it sets the cell size, the cell size sets how wide the road cut
+// has to reach, and that reach is what carves a canyon beside every road.
+//
+// THE CHAIN, measured at Noordhoek: a mesh cell is the diagonal a road may
+// hide inside, so the cut must clamp ground out to that diagonal or a far
+// triangle corner stays high and the surface it spans buries the road. Out to
+// that distance the bench must also be FLAT, because the rule that keeps it
+// safe is that its outer lip finishes below the tarmac — on a 22m bench that
+// caps the fall at 0.02/m, which is flat. So a coarse mesh forces a wide
+// bench, a wide bench forces a level one, and a level 22m bench planes the
+// landscape down to road level on both sides. In a dense network the minimum
+// across every road wins and a whole junction ends up at the height of its
+// lowest carriageway, with the rest standing on plinths above it.
+//
+// The only lever is the cell. Measured across four sites:
+//
+//   seg   bench    triangles   tile build   cut worst   cut mean
+//   128   22.4m       280k        36ms        -9.54m     -3.22m
+//   192   14.9m       525k       126ms        -7.31m     -2.19m
+//   256   11.2m       870k       108ms        -6.21m     -1.71m
+//
+// Three times the geometry for a 47% better cut, and Bormio reaches 1.13M
+// triangles. That is not a default for a game played on a phone, and it is
+// too big a difference to decide on someone else's behalf — so it is a dial,
+// starting where it always was.
+let terrainSeg = 128;
 const OSM_Z = 16;             // overpass tile zoom (~600m — keeps per-query weight low)
 const OSM_RING = 1;           // load a (2R+1)² neighbourhood of vector tiles
 const TERRAIN_RING = 2;       // wider ring at the finer zoom keeps the horizon populated
@@ -1174,7 +1200,7 @@ const terrainReady = new Map<string, Promise<void>>(); // per-tile load promise
 const terrainMeshes = new Map<string, THREE.Mesh>();
 function buildTerrainMesh(t: HeightTile): void {
   const key = `${t.tx}/${t.ty}`;
-  const SEG = TERRAIN_SEG;
+  const SEG = terrainSeg;
   const geo = new THREE.PlaneGeometry(t.w, t.h, SEG, SEG);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -1264,12 +1290,19 @@ function dirtyTerrainAround(pts: Array<[number, number]>): void {
 // cuttings — cheap enough to hide in a frame, not cheap enough to do every
 // frame while a city streams in around you.
 let terrainAt = 0;
+let terrainMs = 0;
 function flushTerrain(now: number): void {
   if (now - terrainAt < 200) return;
   for (const key of terrainDirty) {
     terrainDirty.delete(key);
     const t = heightTiles.get(key);
-    if (t) { terrainAt = now; buildTerrainMesh(t); return; }
+    if (t) {
+      terrainAt = now;
+      const t0 = performance.now();
+      buildTerrainMesh(t);
+      terrainMs = performance.now() - t0;
+      return;
+    }
   }
 }
 function loadTerrainTile(x: number, y: number): Promise<void> {
@@ -3171,7 +3204,7 @@ function roadHeightAt(x: number, z: number): number | null {
 // The ceiling sits BELOW the tarmac across the carriageway and rises beyond
 // the kerb — but NOT at the batter straight away, and the reason is the
 // terrain mesh's own sampling. The cut lives in a FIELD; the mesh samples it
-// at TERRAIN_SEG vertices per tile (~16m apart) and draws straight triangles
+// at terrainSeg vertices per tile (~16m apart) and draws straight triangles
 // between them. A ceiling that rises 32° from the kerb permits a vertex 10m
 // out to stand 6m over the road, and the chord from there to the far side
 // bridges clean over the corridor: Natural Bridge Road measured 5.6% of its
@@ -3191,6 +3224,13 @@ const CUT_WASH = 0.008;    // the bench's own fall, kerb to lip
 const CUT_TAIL = 14;       // how far past the bench the batter grades before nature resumes
 const CUT_REACH = 14;      // tracks only: a worn groove, not an engineered cutting
 let CUT_SLACK = 23;        // bench width — the mesh cell diagonal, set from the origin latitude
+/** The bench must span the terrain mesh's cell diagonal: the farthest a
+ *  triangle corner can sit from a road passing through that cell. Tile ground
+ *  width shrinks with cos(latitude) and the cell shrinks with the mesh
+ *  resolution, so this is a per-world, per-setting number. */
+function recalcSlack(): void {
+  CUT_SLACK = ((40075016.7 / 2 ** TERRAIN_Z) * Math.cos((origin.lat * Math.PI) / 180) / terrainSeg) * Math.SQRT2;
+}
 // A cutting has an angle of repose and so does an embankment, and it is the
 // same earth either way — so the ground is protected outward from a road at
 // the batter's own slope. See the bed, below.
@@ -5692,7 +5732,7 @@ function stepReal(dt: number): boolean {
   vegTris += (trunks.count * (trunks.geometry.getAttribute('position')?.count ?? 0)) / 3;
   return {
     calls: r.calls, tris: r.triangles, progs: renderer.info.programs?.length ?? 0,
-    vegMs: +vegMs.toFixed(1), swardMs: +swardMs.toFixed(1),
+    vegMs: +vegMs.toFixed(1), swardMs: +swardMs.toFixed(1), terrainMs: +terrainMs.toFixed(1), seg: terrainSeg, slack: +CUT_SLACK.toFixed(1),
     vegInstances: vegN, vegTris: Math.round(vegTris), veg,
   };
 };
@@ -8624,6 +8664,19 @@ const DIAL_GROUPS: DialGroup[] = [
       dial('grass', 'GRASS', ['OFF', 'LOW', 'MEDIUM', 'HIGH', 'LUSH'], 2, (i) => {
         grassScale = [0, 0.45, 1, 1.9, 3.2][i];
       }),
+      // TERRAIN detail, and what it really buys is ROADS. A finer mesh means a
+      // smaller cell, a smaller cell means the road cut reaches less far, and
+      // that reach is what planes the ground beside a road down to its level.
+      // Measured at Noordhoek: the cut goes from 9.5m deep to 6.2m across the
+      // three steps, and the frame goes from 280k triangles to 870k. Rebuilds
+      // every tile in sight, so it costs a few seconds of streaming too.
+      dial('tseg', 'TERRAIN', ['COARSE', 'FINE', 'FINEST'], 0, (i) => {
+        const want = [128, 192, 256][i];
+        if (want === terrainSeg) return;
+        terrainSeg = want;
+        recalcSlack();
+        for (const k of terrainMeshes.keys()) terrainDirty.add(k);
+      }),
       dial('life', 'WILDLIFE', ['OFF', 'ON'], 1, (i) => {
         wildlifeOn = i === 1;
         birds.visible = wildlifeOn;
@@ -9613,7 +9666,7 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
   // The bench must span the terrain mesh's cell diagonal — the farthest any
   // triangle corner can sit from a road passing through it. Tile ground width
   // shrinks with cos(latitude), so this is a per-world number, not a constant.
-  CUT_SLACK = ((40075016.7 / 2 ** TERRAIN_Z) * Math.cos((spawn.lat * Math.PI) / 180) / TERRAIN_SEG) * Math.SQRT2;
+  recalcSlack();
   placeLabel = spawn.name ?? '…';
   renderPlace();
   // Resume orientation and camera from the URL (written live while driving).
