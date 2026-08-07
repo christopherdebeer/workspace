@@ -9375,13 +9375,27 @@ function acceptMission(now: number): void {
   missionPhase = 'active';
   missionAt = now;
   missionReady = false;
+  // Accepted means DRIVING now — the card collapses to the top-left chip at
+  // once; the chip reopens it, the reopened card's X collapses it again.
+  missionMin = true;
   pois.set(missionDest.name, missionDest);
   if (missionGiver) missionGiver.pinned = false;
+  audio.stone();
+}
+/** Walking away from a job: both pins released, the phase reset. The OSM
+ *  stream re-grows the giver's namesake POI on its own. */
+function abandonMission(): void {
+  if (!mission || missionPhase === 'none') return;
+  if (missionGiver) { missionGiver.pinned = false; pois.delete(missionGiver.name); }
+  if (missionDest) { missionDest.pinned = false; pois.delete(missionDest.name); }
+  missionPhase = 'none';
+  missionMin = false;
   audio.stone();
 }
 let missionReady = false;         // in range of the giver, not yet accepted
 let missionNear = false;          // close enough that the offer card speaks
 let missionDismissed = false;     // the X, until you drive away and back
+let missionMin = false;           // the active job, collapsed to its chip
 
 interface Drive { name: string; sub: string; lat: number; lon: number; h: number; mission?: Mission }
 const DRIVES: Drive[] = [
@@ -10141,6 +10155,10 @@ function stepOverlays(): void {
             : `${mission.brief} · ${fmtDist(d)}`,
         tone: atButShort ? 'hot' : 'gold',
         ready: false,
+        dismissable: true,          // the X collapses an active job to its chip
+        abandonable: true,
+        minimized: missionMin,
+        chip: v ? `${fmtDist(d)} · ${v.got}/${v.need}` : fmtDist(d),
       };
     } else {
       mc = {
@@ -10347,7 +10365,11 @@ const overlays = createOverlays(
   { edge: UI.edge, dim: UI.dim, text: UI.text, soft: UI.soft, gold: UI.gold, hot: UI.hot, good: UI.good, bad: UI.bad },
   () => menu.open(),
   () => acceptMission(performance.now()),
-  () => { missionDismissed = true; },
+  // One X, two meanings: an OFFER is put away until you come back; an
+  // ACTIVE job just folds down to its chip.
+  () => { if (missionPhase === 'active') missionMin = true; else missionDismissed = true; },
+  () => { missionMin = false; },
+  () => abandonMission(),
 );
 
 // ── boot ───────────────────────────────────────────────────────────

@@ -11,6 +11,7 @@
  * body.clean rule) strips them with the rest of the chrome.
  */
 import { PIXEL_FONT } from './font';
+import { ICON, ICON_FONT } from './icons';
 
 type Tone = 'edge' | 'dim' | 'text' | 'soft' | 'gold' | 'hot' | 'good' | 'bad';
 
@@ -21,8 +22,13 @@ export interface MissionCard {
   tone: Tone;
   /** True when a tap accepts the job — the only time the card body takes taps. */
   ready: boolean;
-  /** Offers can be put away; the game re-arms the X by distance. */
+  /** Offers can be put away; on an ACTIVE job the same X collapses to the chip. */
   dismissable?: boolean;
+  /** An active job can be walked away from — rendered as its own small act. */
+  abandonable?: boolean;
+  /** Collapsed: the card stands down and this label rides the top-left chip. */
+  minimized?: boolean;
+  chip?: string;
 }
 export interface ToastCard { kicker: string; head: string; body: string }
 
@@ -36,6 +42,8 @@ export function createOverlays(
   onMenu: () => void,
   onAccept: () => void,
   onDismiss: () => void,
+  onExpand: () => void,
+  onAbandon: () => void,
 ): Overlays {
   const C = colors;
   const style = document.createElement('style');
@@ -62,6 +70,13 @@ export function createOverlays(
   .ov .x { position: absolute; top: -1px; right: -1px; padding: 3px 7px 2px; cursor: pointer;
     color: ${C.soft}; border: 1px solid ${C.dim}; background: rgba(8,20,23,0.9);
     font-size: 10px; line-height: 1; display: none; pointer-events: auto; }
+  .ov .abandon { margin-top: 3px; font-size: 10px; color: ${C.dim}; cursor: pointer;
+    display: none; pointer-events: auto; text-decoration: underline; text-underline-offset: 2px; }
+  #ov-job { top: calc(env(safe-area-inset-top, 0px) + 46px); left: 10px; cursor: pointer;
+    color: ${C.gold}; border: 1px solid ${C.gold}; background: rgba(8,20,23,0.78);
+    padding: 4px 9px 3px; font: inherit; font-family: inherit; font-size: 10px;
+    letter-spacing: 1px; display: none; }
+  #ov-job .ico { font-family: '${ICON_FONT}'; font-weight: 900; margin-right: 0.5em; }
   `;
   document.head.appendChild(style);
 
@@ -95,6 +110,23 @@ export function createOverlays(
   mx.textContent = 'X';
   mx.addEventListener('click', (e) => { e.stopPropagation(); onDismiss(); });
   m.root.appendChild(mx);
+  const mab = document.createElement('div');
+  mab.className = 'abandon';
+  mab.textContent = 'ABANDON JOB';
+  mab.addEventListener('click', (e) => { e.stopPropagation(); onAbandon(); });
+  m.root.appendChild(mab);
+  // The chip the active job collapses to — the job's whole state at a glance,
+  // parked top-left where it stops competing with the road.
+  const chip = document.createElement('button');
+  chip.id = 'ov-job';
+  chip.className = 'ov ui';
+  const chipIco = document.createElement('span');
+  chipIco.className = 'ico';
+  chipIco.textContent = ICON.flag;
+  const chipLab = document.createElement('span');
+  chip.append(chipIco, chipLab);
+  chip.addEventListener('click', onExpand);
+  document.body.appendChild(chip);
   const t = card('ov-toast');
   t.kicker.textContent = 'SURVEYED';
   t.head.style.color = C.good;
@@ -102,11 +134,18 @@ export function createOverlays(
   let mKey = '', tKey = '', mReady = false;
   return {
     mission(mc) {
-      const key = mc ? `${mc.kicker}|${mc.head}|${mc.body}|${mc.tone}|${mc.ready}` : '';
+      const key = mc ? `${mc.kicker}|${mc.head}|${mc.body}|${mc.tone}|${mc.ready}|${mc.minimized}|${mc.chip}` : '';
       if (key === mKey) return;
       mKey = key;
       mReady = !!mc?.ready;
-      if (!mc) { m.root.style.display = 'none'; return; }
+      if (!mc) { m.root.style.display = 'none'; chip.style.display = 'none'; return; }
+      if (mc.minimized && mc.chip) {
+        m.root.style.display = 'none';
+        chipLab.textContent = mc.chip;
+        chip.style.display = 'block';
+        return;
+      }
+      chip.style.display = 'none';
       m.kicker.textContent = mc.kicker;
       m.head.textContent = mc.head;
       m.head.style.color = C[mc.tone];
@@ -116,6 +155,7 @@ export function createOverlays(
       m.root.style.cursor = mc.ready ? 'pointer' : 'default';
       m.root.style.pointerEvents = mc.ready ? 'auto' : 'none';
       mx.style.display = mc.dismissable ? 'block' : 'none';
+      mab.style.display = mc.abandonable ? 'block' : 'none';
       m.root.style.display = 'block';
     },
     toast(tc) {
