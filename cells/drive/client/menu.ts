@@ -29,6 +29,7 @@
  * getters and actions and owns only layout and the open/closed state.
  */
 import { PIXEL_FONT, PIXEL_FONT_CSS, loadPixelFont } from './font';
+import { ICON, ICON_FONT, loadIcons } from './icons';
 
 // Screen indices are the probe API (__menutab) and predate the redesign:
 // 0 was the DRIVE tab and is now the splash hub; the rest keep their numbers.
@@ -102,6 +103,7 @@ export interface MenuHandle {
 export function createMenu(ctx: MenuCtx): MenuHandle {
   const C = ctx.colors;
   loadPixelFont();
+  loadIcons();
 
   // ── chrome ─────────────────────────────────────────────────────────
   const style = document.createElement('style');
@@ -161,6 +163,11 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   #menu .m-dial .val { margin-left: auto; color: ${C.gold}; font-size: 12px; }
   #menu input[type=color] { margin-left: auto; width: 38px; height: 20px; padding: 1px;
     border: 1px solid ${C.dim}; background: rgba(8,20,23,0.78); cursor: pointer; }
+  #menu .ico { font-family: '${ICON_FONT}'; font-weight: 900; font-style: normal;
+    font-size: 12px; width: 1.3em; display: inline-block; text-align: center; flex-shrink: 0; }
+  #menu .m-navrow .ico { font-size: 15px; color: ${C.edge}; align-self: center; }
+  #menu .m-btn .ico, #menu .m-cta .ico { margin-right: 0.5em; font-size: 11px; }
+  #menu .m-row .ico { font-size: 10px; align-self: center; }
   #menu .m-views { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 8px; }
   #menu .m-view { font-size: 10px; cursor: pointer; padding: 3px 6px 2px;
     background: none; border: 1px solid transparent; color: ${C.soft}; }
@@ -289,12 +296,26 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     return t;
   };
 
-  const button = (label: string, col: string, hit: () => void): HTMLButtonElement => {
-    const b = el('button', 'm-btn', label);
+  const ico = (ch: string, col = ''): HTMLElement => {
+    const i = el('span', 'ico', ch);
+    if (col) i.style.color = col;
+    return i;
+  };
+
+  /** Buttons carry their label in a `.lab` span so updaters can rewrite the
+   *  words without wiping an icon sitting beside them. */
+  const button = (label: string, col: string, hit: () => void, icon = ''): HTMLButtonElement => {
+    const b = el('button', 'm-btn');
+    if (icon) b.appendChild(ico(icon));
+    b.appendChild(el('span', 'lab', label));
     b.style.color = col;
     b.style.borderColor = col;
     b.addEventListener('click', hit);
     return b;
+  };
+  const setLab = (b: HTMLElement, s: string): void => {
+    const lab = b.querySelector('.lab') as HTMLElement | null;
+    if (lab && lab.textContent !== s) lab.textContent = s;
   };
 
   const mkBay = (hero = false): HTMLElement => {
@@ -337,27 +358,28 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     bindText(situation, ctx.situation);
     bayEl = mkBay(true);
     body.append(place, situation, kvTable(ctx.driveStats), bayEl);
-    const cta = el('button', 'm-cta', 'DRIVE');
+    const cta = el('button', 'm-cta');
+    cta.append(ico(ICON.car), el('span', 'lab', 'DRIVE'));
     cta.addEventListener('click', () => { ctx.drive(); close(); });
     const gps = el('button', 'm-cta alt');
+    gps.append(ico(ICON.gps), el('span', 'lab', ''));
     gps.addEventListener('click', () => { ctx.realToggle(); refresh(); });
     updaters.push(() => {
       const r = ctx.real();
-      const label = r.on ? 'GPS DRIVE ON - TAP TO END' : r.err ? r.err : 'GPS DRIVE - THE DEVICE IS THE CAR';
+      setLab(gps, r.on ? 'GPS DRIVE ON - TAP TO END' : r.err ? r.err : 'GPS DRIVE - THE DEVICE IS THE CAR');
       const col = r.on ? C.good : r.err ? C.bad : C.hot;
-      if (gps.textContent !== label) gps.textContent = label;
       gps.style.color = col;
       gps.style.borderColor = col;
     });
     const nav = el('div', 'm-nav');
-    for (const [t, name, sub] of [
-      [T_RIG, 'RIG', 'TUNE AND DRESS THE TRUCK'],
-      [T_WORLD, 'DRIVES', 'DESTINATIONS · SPOTS · ELSEWHERE'],
-      [T_SURVEY, 'SURVEYS', 'ROADS DRIVEN AND CLAIMED'],
-      [T_SYSTEM, 'SETTINGS', 'RENDER · WORLD · SOUND'],
-    ] as Array<[number, string, string]>) {
+    for (const [t, name, sub, icon] of [
+      [T_RIG, 'RIG', 'TUNE AND DRESS THE TRUCK', ICON.truck],
+      [T_WORLD, 'DRIVES', 'DESTINATIONS · SPOTS · ELSEWHERE', ICON.map],
+      [T_SURVEY, 'SURVEYS', 'ROADS DRIVEN AND CLAIMED', ICON.flag],
+      [T_SYSTEM, 'SETTINGS', 'RENDER · WORLD · SOUND', ICON.gear],
+    ] as Array<[number, string, string, string]>) {
       const row = el('div', 'm-navrow');
-      row.append(el('span', 'name', name), el('span', 'sub', sub), el('span', 'chev', '>'));
+      row.append(ico(icon), el('span', 'name', name), el('span', 'sub', sub), el('span', 'chev', '>'));
       row.addEventListener('click', () => setTab(t));
       nav.appendChild(row);
     }
@@ -464,7 +486,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       name.style.color = C.hot;
       const sub = el('span', 'sub', currentStatus?.s ?? 'WHERE THE DEVICE IS');
       if (currentStatus?.bad) sub.style.color = C.bad;
-      row.append(name, sub);
+      row.append(ico(ICON.here, C.hot), name, sub);
       row.addEventListener('click', () => {
         ctx.goCurrent((s, bad) => { currentStatus = { s, bad: !!bad }; sub.textContent = s; sub.style.color = bad ? C.bad : C.dim; });
       });
@@ -475,7 +497,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       const name = el('span', 'name', d.name);
       name.style.color = d.mine ? C.gold : C.text;
       const sub = el('span', 'sub', d.sub);
-      row.append(name, sub);
+      row.append(ico(d.mine ? ICON.tack : ICON.pin, d.mine ? C.gold : C.dim), name, sub);
       if (d.mine) {
         const x = el('span', 'del', 'X');
         x.addEventListener('click', (e) => { e.stopPropagation(); ctx.deleteSpot(i); render(); });
@@ -485,22 +507,22 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       body.appendChild(row);
     });
     foot.append(
-      button('SAVE THIS SPOT', C.gold, () => { ctx.saveSpot(); render(); }),
-      button('ELSEWHERE - ANYWHERE ON EARTH', C.gold, () => ctx.elsewhere()),
+      button('SAVE THIS SPOT', C.gold, () => { ctx.saveSpot(); render(); }, ICON.save),
+      button('ELSEWHERE - ANYWHERE ON EARTH', C.gold, () => ctx.elsewhere(), ICON.dice),
     );
   }
 
   function renderSettings(): void {
     body.appendChild(kvTable(ctx.systemRows));
     dialsInto(body, ctx.dialGroups('system'));
-    const snd = button('', C.soft, () => { ctx.soundTap(); refresh(); });
+    const snd = button('', C.soft, () => { ctx.soundTap(); refresh(); }, ICON.sound);
     updaters.push(() => {
-      const label = ctx.soundLabel(), col = tone(ctx.soundTone());
-      if (snd.textContent !== label) snd.textContent = label;
+      const col = tone(ctx.soundTone());
+      setLab(snd, ctx.soundLabel());
       snd.style.color = col;
       snd.style.borderColor = col;
     });
-    foot.append(snd, button('HIDE HUD', C.soft, () => { close(); ctx.hideHud(); }));
+    foot.append(snd, button('HIDE HUD', C.soft, () => { close(); ctx.hideHud(); }, ICON.hide));
   }
 
   // ── render / refresh ───────────────────────────────────────────────
@@ -538,6 +560,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
 
   function open(t = T_DRIVE): void {
     root.style.display = 'block';
+    document.body.classList.add('menu-open');   // overlays.ts hides the HUD's DOM behind the scrim
     currentStatus = null;
     setTab(t);
   }
@@ -546,6 +569,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     tab = null;
     bayEl = null;
     root.style.display = 'none';
+    document.body.classList.remove('menu-open');
   }
 
   function bayRect(): Rect | null {

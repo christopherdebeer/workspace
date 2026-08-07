@@ -39,6 +39,9 @@ export function createOverlays(
   style.textContent = `
   .ov { position: fixed; z-index: 11; font-family: '${PIXEL_FONT}', ui-monospace, monospace;
     color: ${C.text}; -webkit-user-select: none; user-select: none; }
+  /* The menu's scrim is translucent by design — anything ghosting through it
+     reads as a defect, so the overlays stand down while the menu is up. */
+  body.menu-open .ov { display: none !important; }
   #ov-menu { top: calc(env(safe-area-inset-top, 0px) + 46px); right: 10px;
     cursor: pointer; color: ${C.edge}; border: 1px solid ${C.edge};
     background: rgba(8,20,23,0.78); padding: 4px 10px 3px; font: inherit;

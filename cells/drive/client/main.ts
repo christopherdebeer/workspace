@@ -17,6 +17,7 @@
 import * as THREE from 'three';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT } from './font';
+import { ICON, ICON_FONT } from './icons';
 import { createOverlays } from './overlays';
 
 // ── tuning ─────────────────────────────────────────────────────────
@@ -7778,10 +7779,7 @@ function updatePois(): void {
     // "you cannot see this from here", and the label should say so.
     const hid = sightBlockedCached(p.name, poiVec.x, poiVec.y, poiVec.z, i)
       || wallHitAlong(camera.position.x, camera.position.z, wx, wz, camera.position.y) < 0.98;
-    // WHAT KIND of place leads the label: a job reads '!', a place that will
-    // service the rig reads '+'. Colour alone never survived the glance test.
-    const badge = p.kind === 'mission' ? '! ' : p.kind === 'repair' ? '+ ' : '';
-    const label = `${badge}${p.name.toUpperCase()} ${fmtDist(d)}`;
+    const label = `${p.name.toUpperCase()} ${fmtDist(d)}`;
     if (poiView.z < -1) {
       poiVec.project(camera);
       if (Math.abs(poiVec.x) <= 0.92) {
@@ -9152,6 +9150,19 @@ function textSmall(c: CanvasRenderingContext2D, s: string, x: number, y: number,
   setFont(c, FONT_PX);
   c.fillText(s, Math.round(x), Math.round(y) + 6);
 }
+/** A Font Awesome glyph on the HUD buffer. Drawn at 8px it goes a touch
+ *  soft against the pixel face — used sparingly, where a WORD would be
+ *  worse: the POI kind marks. FA solid only exists at weight 900. */
+function hudIcon(ch: string, x: number, y: number, col: string, px = 8): void {
+  hctx.fillStyle = col;
+  hctx.font = `900 ${px}px '${ICON_FONT}'`;
+  hctx.textAlign = 'left';
+  hctx.textBaseline = 'alphabetic';
+  hctx.fillText(ch, Math.round(x), Math.round(y) + px - 1);
+}
+/** Which kinds carry a mark: a job, and a place that services the rig.
+ *  The rest are already told apart by their beam colour. */
+const KIND_ICON: Partial<Record<Poi['kind'], string>> = { mission: ICON.flag, repair: ICON.wrench };
 
 // ── HUD: one low-res canvas, drawn in the pixel font ───────────────
 // The DOM version could never reach the reference: system fonts are hinted
@@ -9761,7 +9772,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   const lanes: number[] = [];        // right edge of the last label per lane
   for (const p of inView) {
     const label = fit(p.t, Math.round(HW * 0.5));
-    const w = textSW(label) + 6;
+    const iconCh = KIND_ICON[p.kind];
+    const iw = iconCh ? 10 : 0;
+    const w = textSW(label) + 6 + iw;
     const ax = clamp(Math.round(p.x / hudS), 4, HW - 4);      // the beam's foot
     const ay = clamp(Math.round(p.y / hudS), 30, HH - 40);
     const x = clamp(Math.round(ax - w / 2), 2, HW - w - 2);
@@ -9789,9 +9802,11 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.fillRect(ax - 2, ay, 5, 2);
     hctx.fillStyle = p.c;
     hctx.fillRect(ax - 1, ay, 3, p.rng ? 2 : 1);
-    // The label. Gold when in range or pinned by hand; dimmed when occluded.
+    // The label — its KIND leading it as a glyph where one exists. Gold when
+    // in range or pinned by hand; dimmed when occluded.
     hctx.globalAlpha = p.hid ? 0.55 : 1;
-    textEdgeS(label, x + 3, ly, p.rng || p.pinned ? UI.gold : p.hid ? UI.dim : UI.text);
+    if (iconCh) hudIcon(iconCh, x + 2, ly - 1, p.c);
+    textEdgeS(label, x + 3 + iw, ly, p.rng || p.pinned ? UI.gold : p.hid ? UI.dim : UI.text);
     if (p.rng) {
       // IN RANGE: brackets around the label — a place you have arrived AT.
       hctx.fillStyle = UI.gold;
@@ -9810,10 +9825,13 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   for (const p of poiDraw) {
     if (p.edge === 0) continue;
     const label = fit(p.t, Math.round(HW * 0.5));
-    const w = textSW(label) + 6;
+    const iconCh = KIND_ICON[p.kind];
+    const iw = iconCh ? 10 : 0;
+    const w = textSW(label) + 6 + iw;
     const y = clamp(Math.round(p.y / hudS), 20, HH - 30);
     const x = p.edge > 0 ? HW - w - 3 : 3;
-    textEdgeS(label, x + 3, y + 2, p.rng || p.pinned ? UI.gold : p.c);
+    if (iconCh) hudIcon(iconCh, x + 2, y + 1, p.c);
+    textEdgeS(label, x + 3 + iw, y + 2, p.rng || p.pinned ? UI.gold : p.c);
     poiRects.push({ x: x - 3, y: y - 5, w: w + 8, h: 18, name: p.name, kind: p.kind });
   }
   // ── compass: the full width of the screen, centred ──
@@ -10331,7 +10349,10 @@ if (timeFromUrl >= 0) {
   // pixel pipeline reads as a glitch. createMenu has already kicked the load;
   // this just refuses to draw until it lands (or 2s, whichever is first).
   await Promise.race([
-    document.fonts.load(`8px '${PIXEL_FONT}'`).catch(() => null),
+    Promise.all([
+      document.fonts.load(`8px '${PIXEL_FONT}'`),
+      document.fonts.load(`900 8px '${ICON_FONT}'`),
+    ]).catch(() => null),
     new Promise((r) => setTimeout(r, 2000)),
   ]);
   const spawn = await findSpawn();
