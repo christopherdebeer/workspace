@@ -15,6 +15,7 @@
  * backend.
  */
 import * as THREE from 'three';
+import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 
 // ── tuning ─────────────────────────────────────────────────────────
 const TERRAIN_Z = 14;         // terrarium tile zoom (~2.4km/cos(lat), ~9.5m/px — z13 washed out the hills roads tunnel through)
@@ -6117,7 +6118,7 @@ function startRealDrive(): void {
         + `&lon=${p.coords.longitude.toFixed(5)}&h=${Math.round(h)}&cam=cab&real=1`;
     },
     (e) => {
-      real.err = e.code === e.PERMISSION_DENIED ? 'LOCATION PERMISSION REFUSED'
+      real.err = e.code === e.PERMISSION_DENIED ? 'LOCATION REFUSED - ALLOW IN BROWSER'
         : e.code === e.POSITION_UNAVAILABLE ? 'NO POSITION AVAILABLE' : 'LOCATION TIMED OUT';
     },
     { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
@@ -6150,8 +6151,40 @@ function beginRealWatch(): void {
       };
       real.err = '';
     },
-    (e) => { real.err = e.code === e.PERMISSION_DENIED ? 'LOCATION PERMISSION REFUSED' : 'GPS SIGNAL LOST'; },
+    (e) => { real.err = e.code === e.PERMISSION_DENIED ? 'LOCATION REFUSED - ALLOW IN BROWSER' : 'GPS SIGNAL LOST'; },
     { enableHighAccuracy: true, timeout: 30000, maximumAge: 1000 },
+  );
+}
+/**
+ * Arriving with `?real=1` used to call `watchPosition` straight from boot —
+ * and a watch started WITHOUT a gesture is exactly what Safari auto-denies
+ * once its "Allow Once" grant died with the reload that startRealDrive
+ * itself performs. So the whole mode read as "REAL DRIVE just says refused":
+ * you allowed it, the page reloaded to anchor the world, and the reload
+ * burned the grant. Ask the Permissions API which case this is: a sticky
+ * grant (Chrome/Android — also every mid-drive re-anchor reload) starts the
+ * watch immediately; a prompt-again state waits for the first tap so the
+ * prompt has a gesture to hang off; a hard denial says where to fix it
+ * instead of pretending to wait for a fix that can never come.
+ */
+function bootRealDrive(): void {
+  if (!navigator.geolocation) { real.err = 'NO GPS ON THIS DEVICE'; return; }
+  const armTap = (): void => {
+    real.err = 'TAP TO START GPS';
+    const once = (): void => { removeEventListener('pointerdown', once); beginRealWatch(); };
+    addEventListener('pointerdown', once);
+  };
+  const perms = (navigator as unknown as {
+    permissions?: { query: (d: { name: string }) => Promise<{ state: string }> };
+  }).permissions;
+  if (!perms?.query) { armTap(); return; }
+  perms.query({ name: 'geolocation' }).then(
+    (s) => {
+      if (s.state === 'granted') beginRealWatch();
+      else if (s.state === 'denied') real.err = 'LOCATION BLOCKED - CHECK BROWSER SETTINGS';
+      else armTap();
+    },
+    armTap,
   );
 }
 /** Drive `state` from the fix. Returns false when there is nothing to go on,
@@ -6501,7 +6534,7 @@ function truckSpec(): Record<string, number> {
   if (id !== undefined) {
     const i = VIEWS.findIndex((v) => v.id === id.toUpperCase());
     if (i < 0) return { error: `no such view: ${id}`, views: VIEWS.map((v) => v.id) };
-    menuTab = 0;
+    menu.open(T_RIG);
     vehView = i;
   }
   return { view: VIEWS[vehView].id, views: VIEWS.map((v) => v.id) };
@@ -7145,8 +7178,8 @@ function meshHeightAt(x: number, z: number): number | null {
  *  screen — the only honest answer to "why can't I see them". */
 (window as unknown as { __setcpv?: object }).__setcpv = (v: number): void => { cpVis = v; };
 (window as unknown as { __menutab?: object }).__menutab = (t?: number | null): number | null => {
-  if (t !== undefined) menuTab = t;
-  return menuTab;
+  if (t !== undefined) { if (t === null) menu.close(); else menu.open(t); }
+  return menu.tab();
 };
 (window as unknown as { __setcam?: object }).__setcam = (m: CamMode): void => setCam(m);
 (window as unknown as { __zoom?: object }).__zoom = (z: number): void => { zoomT = clamp(z, ZOOM_MIN, ZOOM_MAX); };
@@ -8287,7 +8320,7 @@ function tick(now: number): void {
   // world still RENDERS while paused — the menu is a scrim over a live scene,
   // not a black screen — but nothing integrates, so you can open it mid-corner
   // and come back to the same corner.
-  const paused = (menuTab !== null || hidden) && !real.on;
+  const paused = (menu.tab() !== null || hidden) && !real.on;
   const dt = paused ? 0 : Math.min(0.05, (now - last) / 1000);
   last = now;
   const { throttle, steer, brake } = real.on || paused
@@ -8907,7 +8940,7 @@ function tick(now: number): void {
     if (camMode === 'chase') ghostCab(false);
     halo.visible = camMode === 'top';
   }
-  if (vehRect.w > 0) renderStudio(dt);
+  { const bay = menu.bayRect(); if (bay) renderStudio(dt, bay); }
   // The stick rides the truck in the chart view, so its home moves whenever the
   // truck or the pan does — which is every frame, not just on resize.
   if (camMode === 'top' && !stick) updateStickHome();
@@ -8944,10 +8977,12 @@ function blitPixelated(
   renderer.setScissorTest(false);
   renderer.setViewport(0, 0, innerWidth, innerHeight);
 }
-function renderStudio(dt: number): void {
+function renderStudio(dt: number, bay: BayRect): void {
   studioSpin += dt * 0.45;
-  const vx = vehRect.x * hudS, vw = vehRect.w * hudS, vh = vehRect.h * hudS;
-  const vy = innerHeight - (vehRect.y + vehRect.h) * hudS;
+  // The bay arrives in CSS pixels straight off the menu's DOM (the menu owns
+  // the hole in its own scrim); GL wants it bottom-up.
+  const vx = bay.x, vw = bay.w, vh = bay.h;
+  const vy = innerHeight - (bay.y + bay.h);
   // The bay shows the TRUCK, whatever view borrowed it from: un-ghost the
   // shell for this render if the cab view has it translucent.
   const wasGhost = camMode === 'cab';
@@ -9224,53 +9259,9 @@ function meter(x: number, y: number, n: number, lit: number, col: string, w = 3,
   }
 }
 // One MENU chip holds the affordances, so the top of the screen belongs to the
-// compass. It opens a MODAL — a dropdown had nowhere to put a vehicle bay, and
-// the sheet this game is drawn from is a page of panels, not a context menu.
-interface Item { label: () => string; hit: () => void; col: () => string }
-// DRIVE is the splash: the screen the game opens on, and the same screen the
-// MENU button opens later. There is no separate title card any more — the
-// boot overlay is a progress readout and nothing else, so "start" and "main
-// menu" are one place rather than two that say different things.
-const TABS = ['DRIVE', 'SURVEY', 'RIG', 'WORLD', 'SYSTEM'];
-const T_DRIVE = 0, T_SURVEY = 1, T_RIG = 2, T_WORLD = 3, T_SYSTEM = 4;
-const TAB_ITEMS: Item[][] = [
-  [
-    // The splash's own buttons: go, or change what "go" means. Closing the
-    // menu IS starting, which is why this reads DRIVE rather than RESUME —
-    // there is nothing behind it that has not already begun.
-    { col: () => UI.good, label: () => 'DRIVE', hit: () => { audio.arm(); menuTab = null; } },
-    // A mode, not a dial: it changes what every control means.
-    {
-      col: () => (real.on ? UI.good : real.err ? UI.bad : UI.hot),
-      label: () => (real.on ? 'REAL DRIVE ON' : real.err ? fit(real.err, 150) : 'REAL DRIVE'),
-      hit: () => {
-        if (real.on) { location.href = location.pathname; return; }  // back to the menu, model driving
-        startRealDrive();
-      },
-    },
-    { col: () => UI.gold, label: () => 'ELSEWHERE', hit: () => { location.href = location.pathname + '?random=1'; } },
-  ],
-  [],   // the survey is a readout
-  [],   // and so is the vehicle bay
-  [
-    // SAVE THIS SPOT sits in WORLD, beside the destinations it writes into —
-    // the list and the thing that adds to it are one control surface.
-    { col: () => UI.gold, label: () => 'SAVE THIS SPOT', hit: () => saveSpot() },
-    { col: () => UI.edge, label: () => (alien ? 'SCRIPT ALIEN' : 'SCRIPT PLAIN'), hit: () => toggleAlien() },
-  ],
-  [
-    {
-      col: () => (audio.on && audio.state === 'running' ? UI.good : UI.soft),
-      label: () => (!audio.on ? 'SOUND OFF' : audio.state === 'running' ? 'SOUND ON' : 'SOUND TAP'),
-      hit: () => {
-        const blocked = audio.on && audio.state !== 'running';
-        audio.arm();
-        if (!blocked) audio.toggle();
-      },
-    },
-    { col: () => UI.soft, label: () => 'HIDE HUD', hit: () => { menuTab = null; setClean(true); } },
-  ],
-];
+// compass. The menu itself is DOM now — layout, tabs and buttons live in
+// `client/menu.ts`; everything it shows or does comes back here through the
+// context handed to `createMenu` (below, before boot).
 // ── curated starts ─────────────────────────────────────────────────
 // `ELSEWHERE` drops you anywhere on Earth with roads, which is the whole point
 // of it — and also means the good stuff is a lottery. These are AUTHORED: real
@@ -9478,14 +9469,8 @@ function saveSpot(): void {
   spots.unshift({ name, sub, lat: +la.toFixed(5), lon: +lo.toFixed(5), h });
   if (spots.length > 40) spots.length = 40;
   saveSpots();
-  drivePage = 0;                       // the new one is at the top of page one
   audio.stone();
 }
-let drivePage = 0, drivePages = 1;
-const driveRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
-/** The delete target on a saved row, carrying that row's index in `spots`. */
-const spotDelRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
-let drivePageRect = { x: 0, y: 0, w: 0, h: 0 };
 
 // ── dials ──────────────────────────────────────────────────────────
 // Every one of these was a constant buried somewhere in the render chain. A
@@ -9597,7 +9582,6 @@ const DIAL_GROUPS: DialGroup[] = [
   },
 ];
 const DIALS: Dial[] = DIAL_GROUPS.flatMap((g) => g.dials);
-const dialRects: Array<{ x: number; y: number; w: number; h: number; d: Dial }> = [];
 function applyDials(): void {
   for (const d of DIALS) d.apply(d.at);
 }
@@ -9633,14 +9617,7 @@ const SPEC_TEXT: Array<[string, string]> = [
   ['FUEL', 'BIODIESEL / ALGAE'], ['RANGE', '1200KM EST'], ['SOLAR', '2.4KW PEAK'],
   ['BATTERY', '10KWH LIFEPO4'], ['WATER', '120L'],
 ];
-let menuTab: number | null = null;   // null = closed
-let menuRect = { x: 0, y: 0, w: 0, h: 0 };
-let closeRect = { x: 0, y: 0, w: 0, h: 0 };
-// The hole the renderer scissors the studio render into (HUD pixels).
-let vehRect = { x: 0, y: 0, w: 0, h: 0 };
-const tabRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
-const viewRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
-const itemRects: Array<{ x: number; y: number; w: number; h: number; i: number }> = [];
+let menuRect = { x: 0, y: 0, w: 0, h: 0 };   // the HUD's MENU chip (canvas-drawn)
 const CARD8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 let placeLine = '';
 // POI pins, filled by updatePois and drawn in the pixel font.
@@ -9652,6 +9629,12 @@ let streaming = false;
 
 function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   hctx.clearRect(0, 0, HW, HH);
+  // While the DOM menu is up the HUD stands down entirely. Its scrim used to
+  // be painted over these pixels in this same buffer; now the menu sits above
+  // this canvas, and the RIG tab's bay is a HOLE through it to the renderer —
+  // any instrument left drawn here would show through that hole on top of the
+  // truck.
+  if (menu.tab() !== null) return;
   const pad = 4;
   // Filled and hollow diamonds, plotted a row at a time. At this resolution a
   // marker is about seven pixels across, so it is drawn, not stroked.
@@ -9868,13 +9851,6 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const line = navBend.left ? `<< ${call}` : `${call} >>`;
     textEdge(line, Math.round((HW - textW(line)) / 2), Math.round(HH * 0.22), col);
   }
-  itemRects.length = 0;
-  tabRects.length = 0;
-  viewRects.length = 0;
-  driveRects.length = 0;
-  spotDelRects.length = 0;
-  dialRects.length = 0;
-  vehRect = { x: 0, y: 0, w: 0, h: 0 };
   // ── the dock, bottom-left: whichever view ISN'T fullscreen ──
   // While charting, the renderer scissors a live POV preview into this square,
   // so the HUD must leave it EMPTY — blitting the minimap here painted straight
@@ -10152,328 +10128,6 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     }
   }
   // LAST: the modal covers the instruments, not the other way round.
-  if (menuTab !== null) drawMenu(menuTab, kmh, surf);
-}
-// The interstitial. A scrim over the whole screen, a bordered page, tabs, and
-// on VEHICLE a hole the renderer draws the truck into — the same scissor trick
-// the POV dock uses, so the HUD must leave that rectangle EMPTY.
-function drawMenu(tab: number, kmh: number, surf: Surface): void {
-  hctx.fillStyle = 'rgba(6,14,17,0.9)';
-  hctx.fillRect(0, 0, HW, HH);
-  const MX = 5, MY = 5, MW = HW - 10, MH = HH - 10;
-  panel(MX, MY, MW, MH, UI.gold);
-  // ── header ──
-  text(hctx, 'PARIS', MX + 5, MY + 5, UI.gold);
-  // The arrow is drawn, not typed: → is not in the 5x7 set and the system-font
-  // fallback renders it as a stray dash at this size.
-  {
-    const ax = MX + 8 + textW('PARIS'), ay = MY + 8;
-    hctx.fillStyle = UI.hot;
-    hctx.fillRect(ax, ay, 7, 1);
-    hctx.fillRect(ax + 4, ay - 1, 1, 1); hctx.fillRect(ax + 5, ay - 2, 1, 1);
-    hctx.fillRect(ax + 4, ay + 1, 1, 1); hctx.fillRect(ax + 5, ay + 2, 1, 1);
-  }
-  text(hctx, 'DAKAR', MX + 19 + textW('PARIS'), MY + 5, UI.gold);
-  textSmall(hctx, 'SOLARPUNK RALLY RIG', MX + 5, MY + 14, UI.dim);
-  const cw2 = textW('X') + 8;
-  closeRect = { x: MX + MW - cw2 - 3, y: MY + 3, w: cw2, h: 12 };
-  panel(closeRect.x, closeRect.y, cw2, 12, UI.hot);
-  text(hctx, 'X', closeRect.x + 4, MY + 6, UI.hot);
-  hctx.fillStyle = UI.dim;
-  hctx.fillRect(MX + 4, MY + 21, MW - 8, 1);
-  // ── tabs ──
-  // Wrapped, because five sections do not fit one row on a narrow phone and a
-  // tab you cannot reach is worse than a tab on a second line.
-  let tx = MX + 5, ty2 = MY + 25;
-  for (let i = 0; i < TABS.length; i++) {
-    const w = textW(TABS[i]) + 8;
-    if (tx + w > MX + MW - 5) { tx = MX + 5; ty2 += 14; }
-    const on = tab === i;
-    if (on) panel(tx, ty2, w, 12, UI.gold);
-    text(hctx, TABS[i], tx + 4, ty2 + 3, on ? UI.gold : UI.soft);
-    tabRects.push({ x: tx, y: ty2, w, h: 12, i });
-    tx += w + 3;
-  }
-  const tabBottom = ty2 + 12;
-  const top = tabBottom + 4;
-  if (tab === T_DRIVE) {
-    // ── the splash ──
-    // Where you are, big; what you have driven; and the three things that
-    // change what happens next. Deliberately sparse: this is the screen the
-    // game opens on, and a wall of controls is not a title card.
-    let y = top + 4;
-    glowText(fit((placeLine || 'LOCATING').toUpperCase(), MW - 12), MX + 6, y, UI.gold);
-    y += 12;
-    const [la0, lo0] = localToLatLon(state.x, state.z);
-    textSmall(hctx, `${biome.name.toUpperCase()} · ${WX[wx.sky].label} · ${la0.toFixed(3)} ${lo0.toFixed(3)}`,
-      MX + 6, y, UI.dim);
-    y += 12;
-    hctx.fillStyle = UI.dim; hctx.fillRect(MX + 5, y, MW - 10, 1);
-    y += 6;
-    const claimed = [...survey.values()].filter((r) => r.claimed).length;
-    for (const [k, v] of [
-      ['DRIVEN', `${fmtKm(odo.trip)} TRIP · ${fmtKm(odo.total)} TOTAL`],
-      ['SURVEYED', `${claimed} ${claimed === 1 ? 'ROAD' : 'ROADS'} CLAIMED`],
-      ['MODE', real.on ? 'REAL DRIVE · GPS' : 'FREE DRIVE'],
-      ['WORLD', osmDown ? 'VECTORS UNAVAILABLE' : streaming ? 'STREAMING' : 'LOADED'],
-    ] as Array<[string, string]>) {
-      textSmall(hctx, k, MX + 6, y, UI.dim);
-      textSmall(hctx, v, MX + 52, y, UI.text);
-      y += 8;
-    }
-    const items = TAB_ITEMS[T_DRIVE];
-    y = MY + MH - 6 - (items.length * 16 + 8);
-    for (let i = 0; i < items.length; i++) {
-      const w = Math.max(textW(items[i].label()) + 10, 84);
-      panel(MX + 5, y, w, 13, items[i].col());
-      text(hctx, items[i].label(), MX + 10, y + 4, items[i].col());
-      itemRects.push({ x: MX + 5, y, w, h: 13, i });
-      y += 16;
-    }
-  } else if (tab === T_SURVEY) {
-    // ── the survey ──
-    // The road under the wheels first, because that is the one you can change
-    // right now, then every road worth claiming, longest first. A bar rather
-    // than a percentage: the question is "how much of this is left", and a bar
-    // answers it without being read.
-    let y = top;
-    const here = surveyHere();
-    const roads = [...survey.values()].filter(surveyEligible).sort((a, b) => b.len - a.len);
-    const totalCps = roads.reduce((n, r) => n + r.cps.length, 0);
-    const gotCps = roads.reduce((n, r) => n + r.got, 0);
-    textSmall(hctx, 'UNDER THE WHEELS', MX + 6, y, UI.dim);
-    y += 9;
-    if (here) {
-      text(hctx, fit(alienize(here.r.name).toUpperCase(), MW - 60), MX + 6, y, UI.text);
-      const tally = here.r.claimed ? 'DRIVEN' : `${here.r.got}/${here.r.cps.length}`;
-      textSmall(hctx, tally, MX + MW - textSW(tally) - 7, y + 2,
-        here.r.claimed ? UI.good : here.ready ? UI.gold : UI.dim);
-      y += 11;
-      meter(MX + 6, y, 24, Math.round(here.frac * 24), here.r.claimed ? UI.good : UI.edge, 3, 3, 1);
-      y += 8;
-      // The gate, stated plainly — a road at 100% that will not claim is the
-      // single most confusing state this mechanic can be in.
-      textSmall(hctx, here.r.claimed ? 'CLAIMED' : here.ready ? 'SURVEYED · DRIVE A MAJORITY' : 'STILL SURVEYING THIS ROAD',
-        MX + 6, y, here.r.claimed ? UI.good : here.ready ? UI.soft : UI.dim);
-      y += 11;
-    } else {
-      textSmall(hctx, osmDown ? 'NO WORLD DATA' : 'NO NAMED ROAD NEARBY', MX + 6, y, UI.dim);
-      y += 11;
-    }
-    hctx.fillStyle = UI.dim; hctx.fillRect(MX + 5, y, MW - 10, 1);
-    y += 5;
-    textSmall(hctx, `ROADS ${roads.length}`, MX + 6, y, UI.dim);
-    {
-      const lab = `${gotCps}/${totalCps} CHECKPOINTS`;
-      textSmall(hctx, lab, MX + MW - textSW(lab) - 7, y, UI.dim);
-    }
-    y += 9;
-    const room = Math.max(0, MY + MH - 8 - y);
-    for (const r of roads.slice(0, Math.floor(room / 10))) {
-      const frac = r.got / r.cps.length;
-      const col = r.claimed ? UI.good : frac > SURVEY_MAJORITY ? UI.gold : UI.soft;
-      // Four columns, and each one owns its own strip: the name is CLIPPED to
-      // its column rather than allowed to run, because a long road name walked
-      // straight over the distance beside it.
-      const nameW = Math.floor(MW * 0.46) - 8;
-      const kmX = MX + 6 + nameW + 4;          // distance, right-aligned into the gap
-      const barX = Math.round(MX + MW * 0.62);
-      textSmall(hctx, fitS(alienize(r.name).toUpperCase(), nameW), MX + 6, y, col);
-      const km = r.len >= 1000 ? `${(r.len / 1000).toFixed(1)}K` : `${Math.round(r.len)}M`;
-      textSmall(hctx, km, Math.max(kmX, barX - 6 - textSW(km)), y, UI.dim);
-      meter(barX, y + 1, 10, Math.round(frac * 10), col, 2, 3, 1);
-      const n = `${r.got}/${r.cps.length}`;
-      textSmall(hctx, n, MX + MW - textSW(n) - 7, y, UI.dim);
-      y += 10;
-    }
-  } else if (tab === T_RIG) {
-    truckSpec(); // populates specBox, which the elevations frame themselves from
-    // ── view picker ──
-    // Drawn in the MICRO face and a row shorter than the tabs above: these
-    // choose a view WITHIN a section, and at the same weight they competed with
-    // the section tabs for which row of chips you were meant to read first.
-    let vx2 = MX + 5, vy2 = top;
-    for (let i = 0; i < VIEWS.length; i++) {
-      const w = textSW(VIEWS[i].id) + 6;
-      if (vx2 + w > MX + MW - 5) { vx2 = MX + 5; vy2 += 11; }  // wrap, phone-width
-      const on = vehView === i;
-      if (on) frame(vx2, vy2, w, 9, UI.gold);
-      textSmall(hctx, VIEWS[i].id, vx2 + 3, vy2 + 2, on ? UI.gold : UI.soft);
-      viewRects.push({ x: vx2, y: vy2, w, h: 9, i });
-      vx2 += w + 3;
-    }
-    vy2 -= 3; // the shorter chips leave the bay too far down otherwise
-    // ── the bay: a live window onto the actual truck ──
-    // Its SHAPE follows the view. A side elevation is 4.9m by 2.35m and a plan
-    // is the other way up; forcing both into one square window wastes most of
-    // the panel on empty backdrop and shrinks the thing you came to look at.
-    const bayTop = vy2 + 16;
-    const bw = MW - 8;
-    const view = VIEWS[vehView];
-    const natural = vehView === 0 ? 1.3 : AXIS_SIZE(specBox, view.w) / AXIS_SIZE(specBox, view.h);
-    // The bay takes WHAT IS LEFT, not a fixed fraction. SETUP added three rows
-    // at the foot of this tab and TYRES fell off the bottom of the panel; a
-    // fraction of MH did not fix it because the 3/4 view's natural height was
-    // already under the cap, so the clamp never bound. Everything below the bay
-    // is a known number of known-height rows, so subtract them and the bay can
-    // never crowd a control off the screen again — on any phone.
-    const tailH = 8 + 5 * 7 + 4 + SPEC_TEXT.length * 7 + 5   // dims + spec sheet
-      + 2 * 13 + 5 * 9 + 6                                   // 2 dial groups, 5 dials
-      + 12;                                                  // and clear of the frame
-    const vh = clamp(Math.round(bw / natural), 78, Math.max(78, MY + MH - bayTop - tailH));
-    vehRect = { x: MX + 4, y: bayTop, w: bw, h: vh };
-    frame(vehRect.x, vehRect.y, vehRect.w, vehRect.h, UI.edge);
-    if (vehView > 0) {
-      // A METRE GRID over the elevation, from the same extents the renderer
-      // frames with — the point of an orthographic view is that you can read
-      // proportions off it, and you cannot do that without a scale.
-      const { hw, hh } = orthoExtents(vehView, (vehRect.w * hudS) / (vehRect.h * hudS));
-      const pxPerM = vehRect.w / (hw * 2);
-      const cx3 = vehRect.x + vehRect.w / 2, cy3 = vehRect.y + vehRect.h / 2;
-      hctx.fillStyle = 'rgba(87,201,176,0.13)';
-      for (let m = -Math.ceil(hw); m <= hw; m++) {
-        const px = Math.round(cx3 + m * pxPerM);
-        if (px > vehRect.x && px < vehRect.x + vehRect.w) hctx.fillRect(px, vehRect.y + 1, 1, vehRect.h - 2);
-      }
-      for (let m = -Math.ceil(hh); m <= hh; m++) {
-        const py = Math.round(cy3 + m * pxPerM);
-        if (py > vehRect.y && py < vehRect.y + vehRect.h) hctx.fillRect(vehRect.x + 1, py, vehRect.w - 2, 1);
-      }
-      textSmall(hctx, `${AXIS_SIZE(specBox, view.w).toFixed(2)} X ${AXIS_SIZE(specBox, view.h).toFixed(2)} M  ·  1M GRID`,
-        vehRect.x + 4, vehRect.y + 3, UI.dim);
-    }
-    textSmall(hctx, 'DAK 23', vehRect.x + 4, vehRect.y + vehRect.h - 8, UI.gold);
-    // ── measured against the sheet ──
-    const spec = truckSpec();
-    let y = bayTop + vh + 6;
-    textSmall(hctx, 'DIMENSIONS      BUILT   SPEC', MX + 6, y, UI.dim);
-    y += 8;
-    for (const k of ['length', 'width', 'height', 'wheelbase', 'clearance'] as const) {
-      const built = spec[k], want = SPEC_TARGET[k];
-      const ok = Math.abs(built - want) <= 0.03;
-      textSmall(hctx, k.toUpperCase(), MX + 6, y, UI.soft);
-      textSmall(hctx, `${built.toFixed(2)}M`, MX + 68, y, ok ? UI.good : UI.hot);
-      textSmall(hctx, `${want.toFixed(2)}M`, MX + 96, y, UI.dim);
-      y += 7;
-    }
-    y += 4;
-    for (const [k, v] of SPEC_TEXT) {
-      textSmall(hctx, k, MX + 6, y, UI.soft);
-      textSmall(hctx, v, MX + 46, y, UI.text);
-      y += 7;
-    }
-    // The rig's own dials live with the rig, not in a settings screen — how it
-    // looks, and now how it drives.
-    drawDials(DIAL_GROUPS.filter((g) => g.title === 'VEHICLE' || g.title === 'SETUP'), MX, MW, y + 5);
-  } else {
-    // ── readouts, then the controls for this tab ──
-    let y = top;
-    const rows: Array<[string, string]> = tab === T_WORLD
-      ? [
-        ['HERE', fitS(placeLine || 'LOCATING', MW - 60).toUpperCase()],
-        ['BIOME', `${biome.name.toUpperCase()} · ${WX[wx.sky].label}${wx.wet > 0.05 ? ' WET' : ''}`],
-        // No degree sign: it is not in the 3x5 set and renders as '?'.
-        ['HEADING', `${Math.round((((state.heading * 180) / Math.PI) % 360 + 360) % 360)} DEG · ${kmh} KM/H`],
-      ]
-      : [
-        ['SOUND', audio.on ? (audio.state === 'running' ? 'ON' : 'NEEDS TAP') : 'OFF'],
-        ['SCRIPT', alien ? 'ALIEN' : 'PLAIN'],
-      ];
-    if (tab === T_WORLD) {
-      rows.push(['DRIVEN', `${fmtKm(odo.trip)} TRIP · ${fmtKm(odo.total)} TOTAL`]);
-      rows.push(['VECTORS', osmDown ? 'UNAVAILABLE - RETRYING' : streaming ? 'STREAMING' : 'LOADED']);
-    }
-    for (const [k, v] of rows) {
-      textSmall(hctx, k, MX + 6, y, UI.dim);
-      textSmall(hctx, v, MX + 52, y, UI.text);
-      y += 8;
-    }
-    // VEHICLE and SETUP both belong to the rig and are drawn in that tab.
-    if (tab === T_SYSTEM) {
-      y = drawDials(DIAL_GROUPS.filter((g) => g.title !== 'VEHICLE' && g.title !== 'SETUP'), MX, MW, y + 4);
-    }
-    y += 6;
-    const items = TAB_ITEMS[tab];
-    if (tab === T_WORLD) {
-      // ── the curated starts ──
-      // The list takes whatever room is left between the readouts and the
-      // buttons, and pages if the screen is too short for all of it — a phone
-      // in landscape has barely a third of the height of one held upright.
-      const btnH = items.length * 16 + 8;
-      const room = Math.max(2, MY + MH - 6 - btnH - (y + 10));
-      const list = allDrives();
-      const perPage = Math.max(3, Math.floor(room / 11));
-      const pages = Math.ceil(list.length / perPage);
-      drivePages = pages;
-      drivePage = clamp(drivePage, 0, pages - 1);
-      textSmall(hctx, 'DESTINATIONS', MX + 6, y, UI.dim);
-      if (pages > 1) {
-        const lab = `${drivePage + 1}/${pages} >`;
-        drivePageRect = { x: MX + MW - textSW(lab) - 10, y: y - 2, w: textSW(lab) + 8, h: 9 };
-        textSmall(hctx, lab, drivePageRect.x + 4, y, UI.gold);
-      } else {
-        drivePageRect = { x: 0, y: 0, w: 0, h: 0 };
-      }
-      y += 9;
-      const from = drivePage * perPage;
-      for (let i = from; i < Math.min(list.length, from + perPage); i++) {
-        const d = list[i];
-        // Yours read in gold and carry a delete target; the authored ones do
-        // not, because you cannot delete the map.
-        const mine = i < spots.length;
-        const delW = mine ? 11 : 0;
-        text(hctx, fit(d.name, MW * 0.52), MX + 6, y, mine ? UI.gold : UI.text);
-        const sub = fitS(d.sub, MW * 0.46 - delW);
-        textSmall(hctx, sub, MX + MW - textSW(sub) - 7 - delW, y + 2, UI.dim);
-        if (mine) {
-          textSmall(hctx, 'X', MX + MW - 11, y + 2, UI.soft);
-          spotDelRects.push({ x: MX + MW - 16, y: y - 2, w: 14, h: 11, i });
-        }
-        driveRects.push({ x: MX + 4, y: y - 2, w: MW - 8 - delW, h: 11, i });
-        y += 11;
-      }
-      y = MY + MH - 6 - btnH;
-    }
-    for (let i = 0; i < items.length; i++) {
-      const w = Math.max(textW(items[i].label()) + 10, 70);
-      panel(MX + 5, y, w, 13, items[i].col());
-      text(hctx, items[i].label(), MX + 10, y + 4, items[i].col());
-      itemRects.push({ x: MX + 5, y, w, h: 13, i });
-      y += 16;
-    }
-  }
-}
-// A group of dials: a rule with its title, then one row each. The value sits
-// right-aligned in gold, which is the only thing on the row you can change, and
-// the whole row is the target — chasing a 20px-wide word with a thumb is not a
-// control.
-function drawDials(groups: DialGroup[], MX: number, MW: number, y0: number): number {
-  let y = y0;
-  for (const g of groups) {
-    // Rule to the RIGHT of the title, not behind it. Clearing a gap for the
-    // text punched a hole straight through the modal's scrim to the world.
-    textSmall(hctx, g.title, MX + 7, y, UI.edge);
-    hctx.fillStyle = UI.dim;
-    const tw = textSW(g.title) + 12;
-    hctx.fillRect(MX + tw, y + 2, MW - tw - 7, 1);
-    y += 9;
-    for (const d of g.dials) {
-      textSmall(hctx, d.label, MX + 8, y, UI.soft);
-      const v = d.opts[d.at];
-      const vx = MX + MW - textSW(v) - 9;
-      textSmall(hctx, v, vx, y, UI.gold);
-      // A SETUP dial also draws its position in the range, in the same meter
-      // the cluster uses for everything else. A render option is a choice
-      // between named things and a word says it all; a setup is a point on a
-      // scale, and "FIRM" alone does not tell you how much of the travel is
-      // left above it.
-      if (d.bar) meter(vx - d.opts.length * 3 - 4, y + 1, d.opts.length, d.at + 1, UI.gold, 2, 4, 1);
-      dialRects.push({ x: MX + 5, y: y - 2, w: MW - 10, h: 9, d });
-      y += 9;
-    }
-    y += 4;
-  }
-  return y;
 }
 let dockRect = { x: 0, y: 0, w: 0, h: 0 };
 function setClean(on: boolean): void {
@@ -10487,28 +10141,10 @@ function hudTap(cx: number, cy: number): boolean {
   const x = cx / hudS, y = cy / hudS;
   const inside = (r: { x: number; y: number; w: number; h: number }, m = 2): boolean =>
     x >= r.x - m && x <= r.x + r.w + m && y >= r.y - m && y <= r.y + r.h + m;
-  if (menuTab !== null) {
-    // The modal is MODAL: every tap inside it belongs to it, and none of them
-    // reach the world underneath.
-    const tab = menuTab; // switching tabs below reassigns it mid-block
-    if (inside(closeRect)) { menuTab = null; return true; }
-    for (const r of tabRects) if (inside(r, 0)) { menuTab = r.i; return true; }
-    for (const r of viewRects) if (inside(r, 0)) { vehView = r.i; return true; }
-    for (const r of dialRects) {
-      if (!inside(r, 0)) continue;
-      r.d.at = (r.d.at + 1) % r.d.opts.length;   // dials CYCLE; there is no slider
-      r.d.apply(r.d.at);
-      saveDials();
-      return true;
-    }
-    if (drivePageRect.w && inside(drivePageRect, 2)) { drivePage = (drivePage + 1) % drivePages; return true; }
-    // Delete before select: the X sits inside the row it belongs to.
-    for (const r of spotDelRects) if (inside(r, 0)) { spots.splice(r.i, 1); saveSpots(); audio.stone(); return true; }
-    for (const r of driveRects) { const d = allDrives()[r.i]; if (d && inside(r, 0)) { startDrive(d); return true; } }
-    for (const r of itemRects) if (inside(r, 0)) { TAB_ITEMS[tab]?.[r.i]?.hit(); return true; }
-    return true;
-  }
-  if (inside(menuRect)) { menuTab = 0; return true; }
+  // The modal is MODAL — but it is DOM now, sitting over this canvas, so a
+  // tap that reaches here while it is up can only be a stray; swallow it.
+  if (menu.tab() !== null) return true;
+  if (inside(menuRect)) { menu.open(); return true; }
   // Before the dock, because the accept prompt sits above it and a tap that
   // lands on both should take the job rather than flip the camera.
   if (missionReady && missionRect.w && inside(missionRect, 4)) { acceptMission(performance.now()); return true; }
@@ -10540,6 +10176,143 @@ let placeRect = { x: 0, y: 0, w: 0, h: 0 };
   });
   addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'h') setClean(!clean()); });
 }
+
+// ── the menu ───────────────────────────────────────────────────────
+// DOM, not canvas — layout and the open/closed state live in `client/menu.ts`;
+// this context is everything it may read or do. The rule for what goes in it:
+// data crosses as plain strings and numbers (already alienized, already
+// upper-cased, already formatted), actions cross as closures — the menu never
+// touches game state directly, so everything it can affect is listed here.
+const menu = createMenu({
+  colors: { edge: UI.edge, dim: UI.dim, text: UI.text, soft: UI.soft, gold: UI.gold, hot: UI.hot, good: UI.good, bad: UI.bad },
+  place: () => (placeLine || 'LOCATING').toUpperCase(),
+  situation: () => {
+    const [la, lo] = localToLatLon(state.x, state.z);
+    return `${biome.name.toUpperCase()} · ${WX[wx.sky].label} · ${la.toFixed(3)} ${lo.toFixed(3)}`;
+  },
+  driveStats: () => {
+    const claimed = [...survey.values()].filter((r) => r.claimed).length;
+    return [
+      ['DRIVEN', `${fmtKm(odo.trip)} TRIP · ${fmtKm(odo.total)} TOTAL`],
+      ['SURVEYED', `${claimed} ${claimed === 1 ? 'ROAD' : 'ROADS'} CLAIMED`],
+      ['MODE', real.on ? 'REAL DRIVE · GPS' : 'FREE DRIVE'],
+      ['WORLD', osmDown ? 'VECTORS UNAVAILABLE' : streaming ? 'STREAMING' : 'LOADED'],
+    ];
+  },
+  worldRows: () => [
+    ['HERE', (placeLine || 'LOCATING').toUpperCase()],
+    ['BIOME', `${biome.name.toUpperCase()} · ${WX[wx.sky].label}${wx.wet > 0.05 ? ' WET' : ''}`],
+    ['HEADING', `${Math.round((((state.heading * 180) / Math.PI) % 360 + 360) % 360)} DEG · ${Math.round(Math.abs(state.speed) * 3.6)} KM/H`],
+    ['DRIVEN', `${fmtKm(odo.trip)} TRIP · ${fmtKm(odo.total)} TOTAL`],
+    ['VECTORS', osmDown ? 'UNAVAILABLE - RETRYING' : streaming ? 'STREAMING' : 'LOADED'],
+  ],
+  systemRows: () => [
+    ['SOUND', audio.on ? (audio.state === 'running' ? 'ON' : 'NEEDS TAP') : 'OFF'],
+    ['SCRIPT', alien ? 'ALIEN' : 'PLAIN'],
+  ],
+  real: () => ({ on: real.on, err: real.err }),
+  surveyHere: () => {
+    const here = surveyHere();
+    if (!here) return null;
+    return {
+      name: alienize(here.r.name).toUpperCase(),
+      tally: here.r.claimed ? 'DRIVEN' : `${here.r.got}/${here.r.cps.length}`,
+      frac: here.frac,
+      // The gate, stated plainly — a road at 100% that will not claim is the
+      // single most confusing state this mechanic can be in.
+      state: here.r.claimed ? 'CLAIMED' : here.ready ? 'SURVEYED · DRIVE A MAJORITY' : 'STILL SURVEYING THIS ROAD',
+      tone: here.r.claimed ? 'good' : here.ready ? 'gold' : 'dim',
+    };
+  },
+  surveyTotals: () => {
+    const roads = [...survey.values()].filter(surveyEligible);
+    return {
+      roads: roads.length,
+      got: roads.reduce((n, r) => n + r.got, 0),
+      total: roads.reduce((n, r) => n + r.cps.length, 0),
+    };
+  },
+  surveyRoads: () => [...survey.values()].filter(surveyEligible).sort((a, b) => b.len - a.len).slice(0, 80)
+    .map((r) => {
+      const frac = r.got / r.cps.length;
+      return {
+        name: alienize(r.name).toUpperCase(),
+        km: r.len >= 1000 ? `${(r.len / 1000).toFixed(1)}K` : `${Math.round(r.len)}M`,
+        frac,
+        tally: `${r.got}/${r.cps.length}`,
+        tone: r.claimed ? 'good' as const : frac > SURVEY_MAJORITY ? 'gold' as const : 'soft' as const,
+      };
+    }),
+  drives: () => allDrives().map((d, i) => ({ name: d.name, sub: d.sub, mine: i < spots.length })),
+  views: () => VIEWS.map((v) => v.id),
+  vehView: () => vehView,
+  setVehView: (i) => { vehView = i; },
+  dims: () => {
+    const spec = truckSpec();
+    return (['length', 'width', 'height', 'wheelbase', 'clearance'] as const).map((k) => ({
+      k: k.toUpperCase(),
+      built: `${spec[k].toFixed(2)}M`,
+      spec: `${SPEC_TARGET[k].toFixed(2)}M`,
+      ok: Math.abs(spec[k] - SPEC_TARGET[k]) <= 0.03,
+    }));
+  },
+  specText: () => SPEC_TEXT,
+  bayGrid: (w, h) => {
+    if (vehView === 0) return null;   // no metre grid over a perspective 3/4
+    truckSpec();                      // refreshes specBox, which orthoExtents reads
+    const v = VIEWS[vehView];
+    const { hw } = orthoExtents(vehView, w / Math.max(1, h));
+    return {
+      pxPerM: w / (hw * 2),
+      caption: `${AXIS_SIZE(specBox, v.w).toFixed(2)} X ${AXIS_SIZE(specBox, v.h).toFixed(2)} M · 1M GRID`,
+    };
+  },
+  dialGroups: (which) => DIAL_GROUPS.filter((g) =>
+    which === 'rig' ? g.title === 'VEHICLE' || g.title === 'SETUP' : g.title !== 'VEHICLE' && g.title !== 'SETUP'),
+  cycleDial: (d) => {
+    const dl = d as Dial;                        // the menu holds the same objects
+    dl.at = (dl.at + 1) % dl.opts.length;        // dials CYCLE; there is no slider
+    dl.apply(dl.at);
+    saveDials();
+  },
+  drive: () => audio.arm(),
+  realToggle: () => {
+    if (real.on) { location.href = location.pathname; return; }  // back to the menu, model driving
+    startRealDrive();
+  },
+  elsewhere: () => { location.href = location.pathname + '?random=1'; },
+  saveSpot: () => saveSpot(),
+  scriptLabel: () => (alien ? 'SCRIPT ALIEN' : 'SCRIPT PLAIN'),
+  toggleScript: () => toggleAlien(),
+  soundLabel: () => (!audio.on ? 'SOUND OFF' : audio.state === 'running' ? 'SOUND ON' : 'SOUND TAP'),
+  soundTone: () => (audio.on && audio.state === 'running' ? 'good' : 'soft'),
+  soundTap: () => {
+    const blocked = audio.on && audio.state !== 'running';
+    audio.arm();
+    if (!blocked) audio.toggle();
+  },
+  hideHud: () => setClean(true),
+  startDrive: (i) => { const d = allDrives()[i]; if (d) startDrive(d); },
+  deleteSpot: (i) => { spots.splice(i, 1); saveSpots(); audio.stone(); },
+  // CURRENT: a destination, not a mode. One fix from this tap's gesture, then
+  // the same composed-link arrival every other destination uses — the model
+  // keeps driving, nothing about the controls changes.
+  goCurrent: (status) => {
+    if (!navigator.geolocation) { status('NO GPS ON THIS DEVICE', true); return; }
+    status('LOCATING…');
+    navigator.geolocation.getCurrentPosition(
+      (p) => {
+        status('FOUND — LOADING');
+        const h = Number.isFinite(p.coords.heading as number) ? Math.round(p.coords.heading as number) : 0;
+        location.href = `${location.pathname}?lat=${p.coords.latitude.toFixed(5)}`
+          + `&lon=${p.coords.longitude.toFixed(5)}&h=${h}&cam=chase`;
+      },
+      (e) => status(e.code === e.PERMISSION_DENIED ? 'LOCATION REFUSED - ALLOW IN BROWSER'
+        : e.code === e.POSITION_UNAVAILABLE ? 'NO POSITION AVAILABLE' : 'LOCATION TIMED OUT', true),
+      { enableHighAccuracy: true, timeout: 20000, maximumAge: 30000 },
+    );
+  },
+});
 
 // ── boot ───────────────────────────────────────────────────────────
 // Settings first: PIXEL resizes the render targets and PAINT reaches into a
@@ -10624,7 +10397,7 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
   // live behind it. The browser's audio gesture is taken by whatever you tap
   // first, which on this screen is a button that means something.
   // A link that already says where to go skips it: that asked for a drive.
-  if (real.on) beginRealWatch();
-  else if (!q.get('lat') && !q.get('m')) menuTab = T_DRIVE;
+  if (real.on) bootRealDrive();
+  else if (!q.get('lat') && !q.get('m')) menu.open(T_DRIVE);
   requestAnimationFrame((t) => { last = t; requestAnimationFrame(tick); });
 })();
