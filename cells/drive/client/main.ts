@@ -3104,6 +3104,89 @@ function wayAt(x: number, z: number): { name: string; on: boolean } | null {
   }
   return best ? { name: best, on } : null;
 }
+/** ── nav: the next bend on the road under the wheels ──────────────
+ *
+ * A co-driver's call, computed rather than authored: chain the segments of
+ * the CURRENT named way forward from the car — endpoint adjacency, taking the
+ * straightest continuation at every join so a side road of the same name does
+ * not hijack the call — then slide a short window down the polyline summing
+ * signed heading change. The first window past the threshold is the bend; its
+ * summed angle is the severity and its sign is the side.
+ *
+ * Named ways only. That is not a cop-out: the chain NEEDS an identity to
+ * follow through junctions, and an unnamed track through a field is exactly
+ * where a driver reads the ground instead of a pace note.
+ */
+interface NavBend { dist: number; ang: number; left: boolean }
+const NAV_REACH = 350;              // how far ahead the co-driver reads
+const NAV_WIN = 30;                 // metres a "corner" is allowed to span
+const NAV_MIN = (22 * Math.PI) / 180; // below this it is a kink, not a call
+function nextBend(x: number, z: number, heading: number): NavBend | null {
+  // The seg under the car — same test wayAt runs, but keeping the seg.
+  let cur: Seg | null = null, bd = Infinity;
+  for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
+    if (!seg.nm) continue;
+    const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
+    const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    const d = Math.hypot(x - (seg.ax + dx * t), z - (seg.az + dz * t));
+    if (d < bd && d <= seg.hw + 2) { bd = d; cur = seg; }
+  }
+  if (!cur) return null;
+  const name = cur.nm;
+  // Travel direction: whichever way along the seg the heading points.
+  const hx = Math.sin(heading), hz = -Math.cos(heading);
+  const fwd = (cur.bx - cur.ax) * hx + (cur.bz - cur.az) * hz >= 0;
+  // If the car is essentially AT the far end already, start the chain there.
+  const pts: Array<[number, number]> = [[x, z]];
+  let ex = fwd ? cur.bx : cur.ax, ez = fwd ? cur.bz : cur.az;
+  let dirX = ex - x, dirZ = ez - z;
+  let leg = Math.hypot(dirX, dirZ);
+  if (leg > 0.5) { dirX /= leg; dirZ /= leg; pts.push([ex, ez]); }
+  else { dirX = hx; dirZ = hz; }
+  const used = new Set<Seg>([cur]);
+  let total = leg;
+  for (let hop = 0; hop < 80 && total < NAV_REACH + NAV_WIN; hop++) {
+    let nxt: Seg | null = null, fromA = false, best = 0.1;
+    for (const seg of roadGrid.get(gkey(ex, ez)) ?? []) {
+      if (seg.nm !== name || used.has(seg)) continue;
+      for (const a of [true, false]) {
+        const jx = a ? seg.ax : seg.bx, jz = a ? seg.az : seg.bz;
+        if (Math.hypot(jx - ex, jz - ez) > 1.5) continue;
+        let vx = a ? seg.bx - seg.ax : seg.ax - seg.bx;
+        let vz = a ? seg.bz - seg.az : seg.az - seg.bz;
+        const l = Math.hypot(vx, vz) || 1; vx /= l; vz /= l;
+        const dot = vx * dirX + vz * dirZ;
+        if (dot > best) { best = dot; nxt = seg; fromA = a; }
+      }
+    }
+    if (!nxt) break;
+    used.add(nxt);
+    const px = fromA ? nxt.bx : nxt.ax, pz = fromA ? nxt.bz : nxt.az;
+    dirX = px - ex; dirZ = pz - ez;
+    const l = Math.hypot(dirX, dirZ) || 1; dirX /= l; dirZ /= l;
+    total += l; ex = px; ez = pz;
+    pts.push([ex, ez]);
+  }
+  if (pts.length < 3) return null;
+  // Signed turn at each interior vertex, and the distance to it.
+  const turns: Array<{ d: number; a: number }> = [];
+  let run = 0;
+  for (let i = 1; i < pts.length - 1; i++) {
+    const ax = pts[i][0] - pts[i - 1][0], az = pts[i][1] - pts[i - 1][1];
+    const bx = pts[i + 1][0] - pts[i][0], bz = pts[i + 1][1] - pts[i][1];
+    run += Math.hypot(ax, az);
+    // +cross = the polyline swings the way a growing heading does: RIGHT.
+    turns.push({ d: run, a: Math.atan2(ax * bz - az * bx, ax * bx + az * bz) });
+  }
+  // Slide the window: first vertex whose next 30m accumulate past threshold.
+  for (let i = 0; i < turns.length; i++) {
+    if (turns[i].d > NAV_REACH) break;
+    let sum = 0;
+    for (let j = i; j < turns.length && turns[j].d - turns[i].d <= NAV_WIN; j++) sum += turns[j].a;
+    if (Math.abs(sum) >= NAV_MIN) return { dist: turns[i].d, ang: sum, left: sum < 0 };
+  }
+  return null;
+}
 /** Proper 2D segment crossing — endpoints touching does not count. */
 function segsCross(
   ax: number, az: number, bx: number, bz: number,
@@ -4990,6 +5073,10 @@ car.name = 'car';
 car.rotation.order = 'YXZ'; // yaw first, then pitch/roll about the CAR's axes
 const wheelPivots: THREE.Group[] = [];
 const wheelMeshes: THREE.Mesh[] = [];
+// The truck's own materials, collected so the cab view can ghost the shell —
+// CAR-LOCAL ONLY. woodMat/leafMat are shared with the world's vegetation, and
+// ghosting those would fade every tree in the game with the bonnet.
+const cabMats: THREE.MeshLambertMaterial[] = [];
 {
   // Built against the reference: a boxy overland 4x4 — glasshouse cab set
   // back, short bonnet, open rear tub, fender flares tying the wheels to the
@@ -5012,6 +5099,7 @@ const wheelMeshes: THREE.Mesh[] = [];
   const trimMat = new THREE.MeshLambertMaterial({ color: 0x241f1c, flatShading: true, side: DS });
   const tireMat = new THREE.MeshLambertMaterial({ color: 0x14171c, flatShading: true });
   const hubMat = new THREE.MeshLambertMaterial({ color: 0x8f8574, flatShading: true });
+  cabMats.push(redMat, glassMat, steelMat, cargoMat, panelMat, trimMat, tireMat, hubMat);
   // Every hull part sits DROP metres lower than its written y. The suspension
   // geometry wants the group origin on the axle plane, but hanging the body
   // where that put it left 1.3m of daylight under the tub and the truck walked
@@ -6480,6 +6568,9 @@ function meshHeightAt(x: number, z: number): number | null {
 };
 (window as unknown as { __camPos?: object }).__camPos = (): number[] =>
   [camera.position.x, camera.position.y, camera.position.z];
+// The co-driver's current call, plus one on demand for any pose.
+(window as unknown as { __nav?: object }).__nav = (x?: number, z?: number, h?: number): object | null =>
+  x === undefined ? navBend : nextBend(x, z ?? state.z, h ?? state.heading);
 // The way under the wheels, and the coordinate the HUD reports.
 (window as unknown as { __way?: object }).__way = (): object => {
   const [la, lo] = localToLatLon(state.x, state.z);
@@ -6748,9 +6839,16 @@ function input(): { throttle: number; steer: number; brake: boolean } {
         throttle += mag * clamp(Math.cos(diff) * 1.4, 0.35, 1);
       }
     } else {
-      // Squared response: |v|·v — precision near centre, authority at the rim.
+      // Squared response for the throttle: |v|·v — precision near centre,
+      // authority at the rim.
       throttle += -(stick.dy * Math.abs(stick.dy));
-      steer += stick.dx * Math.abs(stick.dx);
+      // The steer wants a harder bend than the throttle: at speed the whole
+      // useful range is the first quarter of stick travel, and |v|·v was still
+      // eager enough there to make lane-keeping a wrestle. Cubic with a small
+      // linear floor — s³ carries the middle of the range, the 22% floor keeps
+      // the first millimetre of input alive instead of dead.
+      const sd = stick.dx;
+      steer += sd * sd * sd * 0.78 + sd * 0.22;
     }
   }
   return { throttle: clamp(throttle, -1, 1), steer: clamp(steer, -1, 1), brake: brakeId !== null || keys.has(' ') || stickBrake };
@@ -6758,8 +6856,9 @@ function input(): { throttle: number; steer: number; brake: boolean } {
 
 // ── minimap: north-up, fog-masked, car-centred ─────────────────────
 const MINI = 138, MINI_SPAN = 1500; // px, metres across
-// The corner DOCK always shows the OTHER view — chart minimap while chasing,
-// live POV preview while charting — and tapping it swaps which is fullscreen.
+// The corner DOCK always shows the NEXT view in the cycle — chase POV while
+// charting, cab POV while chasing, chart minimap from the cab — so the tap
+// that swaps fullscreen is never a surprise.
 const mapDock = document.createElement('div'); // offscreen holder for the map canvas
 Object.assign(mapDock.style, {
   position: 'fixed', left: '12px', bottom: 'max(44px, calc(env(safe-area-inset-bottom) + 34px))',
@@ -6827,9 +6926,25 @@ const camPos = new THREE.Vector3();
 const camAim = new THREE.Vector3();
 let camInit = false;
 const miniCam = new THREE.PerspectiveCamera(60, 1, 1, 30000); // the dock's POV preview rig
-/** The driver's eye, in the car's own frame: right-hand seat, just behind the
- *  windscreen (which stands at z −1.2) and below the roof band at y 2.09. */
-const EYE = { x: 0.42, y: 1.9, z: -0.42 };
+/** The driver's eye, in the car's own frame: right-hand seat, pushed up to the
+ *  windscreen header (roof band tops out at y 2.09, the glass stands at
+ *  z −1.2) so the sightline clears the scuttle and runs down the bonnet. The
+ *  seat put the horizon behind sheet metal; with the shell ghosted in cab
+ *  mode the roof line reads as a frame around the road, not a ceiling. */
+const EYE = { x: 0.42, y: 2.16, z: -0.95 };
+/** Ghost the truck's shell for the through-the-cab views: still there — the
+ *  bonnet is the speed reference peripheral vision steers by — but translucent
+ *  enough to see the road through. depthWrite off so the world never sorts
+ *  behind a transparent panel. */
+function ghostCab(on: boolean): void {
+  for (const m of cabMats) {
+    m.transparent = on;
+    // The BODY reads a touch stronger than the glass and trim: the bonnet is
+    // the speed reference peripheral vision steers by, the rest is just frame.
+    m.opacity = on ? (m === bodyMat ? 0.3 : 0.16) : 1;
+    m.depthWrite = !on;
+  }
+}
 function setCam(m: CamMode): void {
   camMode = m;
   halo.visible = camMode === 'top'; // the marker is chart furniture, not scenery
@@ -6840,6 +6955,7 @@ function setCam(m: CamMode): void {
   // clear the dashboard rather than the bonnet.
   camera.fov = camMode === 'cab' ? 68 : 55;
   camera.updateProjectionMatrix();
+  ghostCab(camMode === 'cab');
   updateStickHome();
   updateDock();
 }
@@ -7280,6 +7396,10 @@ addEventListener('visibilitychange', () => {
 let last = performance.now();
 let streamAt = 0;
 let miniAt = 0;
+// The co-driver's slow tick: the next bend on this road, refreshed well below
+// frame rate — a pace note is stable for seconds, the chain walk is not free.
+let navBend: NavBend | null = null;
+let navAt = 0;
 let urlAt = 0, urlX = Infinity, urlZ = 0, urlH = 0;
 const writeUrl = (la: number, lo: number): void => {
   const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
@@ -7942,10 +8062,12 @@ function tick(now: number): void {
       state.z + rz * EYE.x + fwdZ * -eyeLocalZ,
     );
     // Look down the bonnet, 40m out, carrying pitch so a crest shows sky and a
-    // descent shows road.
+    // descent shows road. The fixed 2.4m drop is ~3.5° of down-angle: from an
+    // eye at the roof line the level view put the bonnet exactly ON the frame
+    // edge, and a driver's eyes rest on the road, not the horizon.
     camAim.set(
       camPos.x + fwdX * 40 * cs,
-      camPos.y - Math.sin(pitchC) * 40,
+      camPos.y - Math.sin(pitchC) * 40 - 2.4,
       camPos.z + fwdZ * 40 * cs,
     );
   } else {
@@ -8013,8 +8135,12 @@ function tick(now: number): void {
     ? clamp(1 - Math.max(Math.abs(sunScreen.x), Math.abs(sunScreen.y)) * 0.55, 0, 1) * (1 - wx.cloud * 0.85)
     : 0;
   compMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
+  if (now > navAt) {
+    navAt = now + 600;
+    navBend = paused || camMode === 'top' ? null : nextBend(state.x, state.z, state.heading);
+  }
   drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF);
-  if (camMode !== 'top' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
+  if (camMode === 'cab' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
   updatePois(); // every frame — throttled pins juddered against the camera
   // Progress lives in the URL: reloading resumes here, not at the spawn.
   if (now > urlAt) {
@@ -8042,24 +8168,50 @@ function tick(now: number): void {
   compMat.uniforms.softTex.value = rtB.texture;
   compMat.uniforms.bloomTex.value = rtC.texture;
   runPass(compMat, null);
-  if (camMode === 'top') {
-    // The dock's POV preview: raw scene from the chase rig, scissored into
-    // the corner over the composite (autoClear respects the scissor).
+  if (camMode !== 'cab') {
+    // The dock previews the view a tap will SWITCH TO — chase rig while
+    // charting, the driver's seat while chasing (the cab's next view is the
+    // chart, and the HUD draws the minimap there instead). Scissored raw scene
+    // over the composite (autoClear respects the scissor).
     const dr = dockRect;
     const vx = dr.x * hudS, vy = innerHeight - (dr.y + dr.h) * hudS, vw = dr.w * hudS, vh = dr.h * hudS;
-    miniCam.position.set(
-      state.x - fwdX * 11,
-      Math.max(groundAt(state.x - fwdX * 11, state.z - fwdZ * 11) + 4.3, bodyY + 3.6),
-      state.z - fwdZ * 11,
-    );
-    miniCam.lookAt(state.x + fwdX * 20, ground + 1.3, state.z + fwdZ * 20);
+    if (camMode === 'top') {
+      miniCam.fov = 60;
+      miniCam.position.set(
+        state.x - fwdX * 11,
+        Math.max(groundAt(state.x - fwdX * 11, state.z - fwdZ * 11) + 4.3, bodyY + 3.6),
+        state.z - fwdZ * 11,
+      );
+      miniCam.lookAt(state.x + fwdX * 20, ground + 1.3, state.z + fwdZ * 20);
+    } else {
+      // The cab preview stands exactly where the cab rig will: same eye, same
+      // body attitude, same ghosted shell — so the tap changes nothing but size.
+      miniCam.fov = 68;
+      const cs = Math.cos(pitchC), sn = Math.sin(pitchC);
+      const eyeLocalY = EYE.y * cs - EYE.z * sn;
+      const eyeLocalZ = EYE.y * sn + EYE.z * cs;
+      const rx = Math.cos(state.heading), rz = Math.sin(state.heading);
+      miniCam.position.set(
+        state.x + rx * EYE.x + fwdX * -eyeLocalZ,
+        bodyY + eyeLocalY,
+        state.z + rz * EYE.x + fwdZ * -eyeLocalZ,
+      );
+      miniCam.lookAt(
+        miniCam.position.x + fwdX * 40 * cs,
+        miniCam.position.y - sn * 40 - 2.4,
+        miniCam.position.z + fwdZ * 40 * cs,
+      );
+    }
+    miniCam.updateProjectionMatrix();
     halo.visible = false; // the zoom-scaled chart ring has no place in the POV
+    if (camMode === 'chase') ghostCab(true);
     // Through the SAME low-res target, nearest magnification, sRGB encode,
     // grade and palette dither as the world. Rendered straight to the screen it
     // was a smooth, full-colour window inside a hand-built bitmap HUD — the one
     // thing on screen that did not look like the game.
     blitPixelated(scene, miniCam, vx, vy, vw, vh);
-    halo.visible = true;
+    if (camMode === 'chase') ghostCab(false);
+    halo.visible = camMode === 'top';
   }
   if (vehRect.w > 0) renderStudio(dt);
   // The stick rides the truck in the chart view, so its home moves whenever the
@@ -8102,6 +8254,10 @@ function renderStudio(dt: number): void {
   studioSpin += dt * 0.45;
   const vx = vehRect.x * hudS, vw = vehRect.w * hudS, vh = vehRect.h * hudS;
   const vy = innerHeight - (vehRect.y + vehRect.h) * hudS;
+  // The bay shows the TRUCK, whatever view borrowed it from: un-ghost the
+  // shell for this render if the cab view has it translucent.
+  const wasGhost = camMode === 'cab';
+  if (wasGhost) ghostCab(false);
   const pos = car.position.clone(), rot = car.rotation.clone();
   const haloWas = halo.visible, spotWas = headSpot.visible;
   const beamWas = beams.map((b) => b.visible);
@@ -8159,6 +8315,7 @@ function renderStudio(dt: number): void {
   halo.visible = haloWas;
   headSpot.visible = spotWas;
   beams.forEach((b, i) => { b.visible = beamWas[i]; });
+  if (wasGhost) ghostCab(true);
 }
 
 // Dress every palette-driven surface from one biome. Declared late so it can
@@ -8731,7 +8888,7 @@ const DIAL_GROUPS: DialGroup[] = [
       // Rack speed AND authority together: QUICK turns in harder and gets there
       // sooner, which on gravel is exactly how you spin it.
       dial('steer', 'STEERING', ['CALM', 'STOCK', 'QUICK', 'RALLY'], 1,
-        (i) => { tune.steer = [0.72, 1, 1.3, 1.65][i]; }, true),
+        (i) => { tune.steer = [0.5, 1, 1.5, 2][i]; }, true),
       // Spring rate. SOFT soaks up washboard and wallows through corners;
       // STIFF holds a line on tarmac and skates over anything rough.
       dial('susp', 'SUSPENSION', ['SOFT', 'STOCK', 'FIRM', 'STIFF'], 1,
@@ -8997,6 +9154,19 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const x2 = Math.round((HW - w2) / 2);
     textEdge(t2, x2 + 5, Math.round(HH * 0.32) + 3, UI.bad);
   }
+  // ── the co-driver: the next bend, called before it arrives ──
+  // One line, mid-screen where the eyes already are, arrows on the side the
+  // road goes. Severity is the summed angle: a hairpin is not a sweeper.
+  if (navBend && camMode !== 'top') {
+    const deg = Math.abs((navBend.ang * 180) / Math.PI);
+    const sev = deg >= 70 ? 'HAIRPIN' : deg >= 45 ? 'HARD' : deg >= 30 ? '' : 'EASY';
+    const col = deg >= 70 ? UI.bad : deg >= 45 ? UI.hot : deg >= 30 ? UI.gold : UI.soft;
+    const side = navBend.left ? 'LEFT' : 'RIGHT';
+    const d = navBend.dist < 15 ? 'NOW' : `${Math.round(navBend.dist / 10) * 10}M`;
+    const call = [sev, side, d].filter(Boolean).join(' ');
+    const line = navBend.left ? `<< ${call}` : `${call} >>`;
+    textEdge(line, Math.round((HW - textW(line)) / 2), Math.round(HH * 0.22), col);
+  }
   itemRects.length = 0;
   tabRects.length = 0;
   viewRects.length = 0;
@@ -9027,9 +9197,11 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // answers about the vehicle, and they now share one corner. Drawn bare, with
   // the one-pixel ink outline the world labels use: a black box over a game
   // this dark is a hole in the picture, and none of this is a control.
-  // ── the chart / POV dock ──
-  const chart = camMode === 'top';
-  if (chart) frame(mx, my, mw, mw, UI.dim);
+  // ── the dock: always the view a tap will toggle TO ──
+  // top → chase POV, chase → cab POV (both scissored in by the renderer, so
+  // the HUD leaves an empty frame); cab → the chart minimap, drawn here.
+  const chart = camMode === 'cab';
+  if (!chart) frame(mx, my, mw, mw, UI.dim);
   else {
     panel(mx, my, mw, mw, UI.dim);
     hctx.save();
@@ -9037,7 +9209,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.drawImage(mini, mx + 1, my + 1, mw - 2, mw - 2);
     hctx.restore();
   }
-  text(hctx, chart ? 'POV' : 'N', mx + mw / 2 - (chart ? 8 : 3), my + 2, UI.gold);
+  const dockLabel = camMode === 'top' ? 'POV' : camMode === 'chase' ? 'CAB' : 'N';
+  text(hctx, dockLabel, mx + mw / 2 - (chart ? 3 : 8), my + 2, UI.gold);
   dockRect = { x: mx, y: my, w: mw, h: mw };
   // ── where you are, and whether the world is still arriving ──
   {
