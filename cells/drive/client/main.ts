@@ -7712,6 +7712,7 @@ const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}M` 
 // away exactly the moment they matter — you arrive at a place and it vanishes.
 // They now stay all the way in and switch to an in-range presentation instead.
 const POI_RANGE = 55;
+const POI_BEAM_H = 30;     // metres of light column — a shade over the checkpoints' 26
 /**
  * Is the ground in the way? Marches the sight line from the camera to the
  * waypoint and asks whether the terrain ever rises above it.
@@ -7788,9 +7789,16 @@ function updatePois(): void {
     if (poiView.z < -1) {
       poiVec.project(camera);
       if (Math.abs(poiVec.x) <= 0.92) {
+        const sx = (poiVec.x * 0.5 + 0.5) * innerWidth;
+        const sy = clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.16, innerHeight * 0.86);
+        // The beam top: a real column standing on the place, projected the
+        // same way the checkpoint beams project theirs — a few pixels at
+        // distance, towering as you arrive.
+        poiVec.set(wx, groundAt(wx, wz) + POI_BEAM_H, wz).project(camera);
         poiDraw.push({
-          x: (poiVec.x * 0.5 + 0.5) * innerWidth,
-          y: clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.16, innerHeight * 0.8),
+          x: sx, y: sy,
+          tx: (poiVec.x * 0.5 + 0.5) * innerWidth,
+          ty: (-poiVec.y * 0.5 + 0.5) * innerHeight,
           t: label, c: POI_COLORS[p.kind], edge: 0, rng, hid,
           name: p.name, kind: p.kind, pinned: !!p.pinned, d,
           w: [wx, wz, groundAt(wx, wz) + 2],
@@ -7805,7 +7813,7 @@ function updatePois(): void {
       // An edge chip is a BEARING, never a view — it points off-screen by
       // definition — so it is never ghosted.
       t: right ? `${label} >` : `< ${label}`, c: POI_COLORS[p.kind], edge: right ? 1 : -1, rng, hid: false,
-      name: p.name, kind: p.kind, pinned: !!p.pinned, d,
+      name: p.name, kind: p.kind, pinned: !!p.pinned, d, tx: 0, ty: 0,
     });
   }
   updateCps();
@@ -9426,9 +9434,11 @@ function acceptMission(now: number): void {
   if (missionGiver) missionGiver.pinned = false;
   audio.stone();
 }
-/** Walking away from a job: both pins released, the phase reset. The OSM
- *  stream re-grows the giver's namesake POI on its own. */
-function abandonMission(): void {
+/** Put the job down — completed (OK) or walked away from (ABANDON), the
+ *  bookkeeping is the same: both pins released and DELETED, so nothing about
+ *  the finished job stays sticky on the HUD. The OSM stream re-grows the
+ *  places' plain namesake POIs on its own. */
+function finishMission(): void {
   if (!mission || missionPhase === 'none') return;
   if (missionGiver) { missionGiver.pinned = false; pois.delete(missionGiver.name); }
   if (missionDest) { missionDest.pinned = false; pois.delete(missionDest.name); }
@@ -9711,6 +9721,9 @@ interface PoiDraw { x: number; y: number; t: string; c: string; edge: 0 | -1 | 1
   /** Which POI this is (the `pois` key), what it is, and how far — the draw
    *  pass scales beams by distance and the tap handler pins by name. */
   name: string; kind: Poi['kind']; pinned: boolean; d: number;
+  /** The beam top — a real 30m column's head, projected like the checkpoint
+   *  beams' — so the column leans with the world and grows as you close. */
+  tx: number; ty: number;
   /** Where the pin actually is, so a probe can check the sight line itself. */
   w?: [number, number, number] }
 /** Tap targets over the drawn pins (HUD px) — generous, a label is small. */
@@ -9863,32 +9876,38 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const iw = iconCh ? 7 : 0;
     const w = textPW(label) + 4 + iw;
     const ax = clamp(Math.round(p.x / hudS), 4, HW - 4);      // the beam's foot
-    const ay = clamp(Math.round(p.y / hudS), 30, HH - 40);
-    const x = clamp(Math.round(ax - w / 2), 2, HW - w - 2);
+    const ay = clamp(Math.round(p.y / hudS), 24, HH - 40);
+    const txp = clamp(Math.round(p.tx / hudS), 4, HW - 4);    // its head, world-projected
+    const typ = Math.round(p.ty / hudS);
+    const near = clamp(1 - p.d / 900, 0, 1);
+    const ghost = p.hid ? 0.3 : 1;
+    // The label rides the beam's head: a distant column projects a few pixels
+    // and the label hovers at a fixed height over the foot; a near one towers
+    // and carries its label up with it. Lanes stack overlaps further up.
+    const x = clamp(Math.round(txp - w / 2), 2, HW - w - 2);
     let lane = 0;
     while (lane < 3 && lanes[lane] !== undefined && x < lanes[lane] + 5) lane++;
     lanes[lane] = x + w;
-    const ly = ay - 10 - lane * 8;                             // label row for this lane
-    const near = clamp(1 - p.d / 900, 0, 1);
-    const ghost = p.hid ? 0.3 : 1;
+    const ly = Math.max(14, Math.min(ay - 12, typ - 6) - lane * 8);
     hctx.save();
-    // The beam doubles as the leader line: foot on the place, top under the
-    // label, alpha falling with height, width and brightness with distance.
-    const h = ay - (ly + 5);
-    const bw = p.rng ? 3 : near > 0.55 ? 2 : 1;
-    hctx.fillStyle = p.c;
-    for (let i = 0; i <= h; i++) {
-      const t = i / Math.max(1, h);
-      if (p.hid && (i & 2)) continue;                          // dashed when occluded
-      hctx.globalAlpha = (0.9 - t * 0.6) * (0.3 + 0.7 * near) * ghost;
-      hctx.fillRect(ax - (bw >> 1), ay - i, bw, 1);
+    // THE checkpoint beam, in the place's own colour: the same leaning
+    // column, the same alpha ramp, the same widths — one family of light.
+    const h = ay - (ly + 6);
+    if (h > 1) {
+      hctx.fillStyle = p.c;
+      for (let i = 0; i <= h; i++) {
+        const t = i / h;                       // 0 at the foot, 1 at the top
+        if (p.hid && (i & 2)) continue;        // dashed rumour behind a ridge
+        hctx.globalAlpha = (0.85 - t * 0.72) * (0.35 + 0.65 * near) * ghost;
+        hctx.fillRect(Math.round(ax + (txp - ax) * t), ay - i, t < 0.35 ? 2 : 1, 1);
+      }
     }
-    // The foot: a dark seat so the light reads against bright ground.
-    hctx.globalAlpha = ghost;
+    // The checkpoint foot: ink seat, kind-colour diamond, bigger in range.
+    hctx.globalAlpha = (0.5 + 0.5 * near) * ghost;
     hctx.fillStyle = UI.ink;
-    hctx.fillRect(ax - 2, ay, 5, 2);
+    diamond(ax, ay, 3);
     hctx.fillStyle = p.c;
-    hctx.fillRect(ax - 1, ay, 3, p.rng ? 2 : 1);
+    if (p.rng) diamond(ax, ay, 3); else diamondOutline(ax, ay, 2);
     // The label — its KIND leading it as a glyph where one exists. Gold when
     // in range or pinned by hand; dimmed when occluded.
     hctx.globalAlpha = p.hid ? 0.55 : 1;
@@ -9907,7 +9926,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.restore();
     // The whole assembly — label AND beam — is the tap target, padded out:
     // a pin is a thing you point at with a thumb, not a 4px word.
-    poiRects.push({ x: x - 5, y: ly - 6, w: w + 10, h: ay - ly + 10, name: p.name, kind: p.kind });
+    const rx = Math.min(x - 5, ax - 7);
+    poiRects.push({ x: rx, y: ly - 6, w: Math.max(x + w + 5, ax + 7) - rx, h: ay - ly + 12, name: p.name, kind: p.kind });
   }
   for (const p of poiDraw) {
     if (p.edge === 0) continue;
@@ -10178,8 +10198,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
 /** The job and the claim, as DOM state — pushed every frame, diffed there. */
 function stepOverlays(): void {
   let mc: import('./overlays').MissionCard | null = null;
-  const live = mission && missionPhase !== 'none'
-    && (missionPhase !== 'done' || performance.now() - missionAt < 9000);
+  // ARRIVED holds the screen until its OK — a finished job is put down by
+  // hand, not by a timer that may fire while the phone is on the mount.
+  const live = mission && missionPhase !== 'none';
   if (mission && live) {
     if (missionPhase === 'offered') {
       mc = missionNear && !missionDismissed ? {
@@ -10219,6 +10240,7 @@ function stepOverlays(): void {
         body: `${(odo.trip / 1000).toFixed(1)}KM ON THE CLOCK`,
         tone: 'good',
         ready: false,
+        ok: true,
       };
     }
   }
@@ -10421,7 +10443,8 @@ const overlays = createOverlays(
   // ACTIVE job just folds down to its chip.
   () => { if (missionPhase === 'active') missionMin = true; else missionDismissed = true; },
   () => { missionMin = false; },
-  () => abandonMission(),
+  () => finishMission(),
+  () => finishMission(),
 );
 
 // ── boot ───────────────────────────────────────────────────────────

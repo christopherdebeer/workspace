@@ -29,6 +29,8 @@ export interface MissionCard {
   /** Collapsed: the card stands down and this label rides the top-left chip. */
   minimized?: boolean;
   chip?: string;
+  /** ARRIVED asks for an explicit OK — a finished job is yours to put down. */
+  ok?: boolean;
 }
 export interface ToastCard { kicker: string; head: string; body: string }
 
@@ -44,6 +46,7 @@ export function createOverlays(
   onDismiss: () => void,
   onExpand: () => void,
   onAbandon: () => void,
+  onOk: () => void,
 ): Overlays {
   const C = colors;
   const style = document.createElement('style');
@@ -72,6 +75,10 @@ export function createOverlays(
     font-size: 10px; line-height: 1; display: none; pointer-events: auto; }
   .ov .abandon { margin-top: 3px; font-size: 10px; color: ${C.dim}; cursor: pointer;
     display: none; pointer-events: auto; text-decoration: underline; text-underline-offset: 2px; }
+  .ov .ok { margin: 5px auto 1px; padding: 4px 26px 3px; cursor: pointer; display: none;
+    pointer-events: auto; color: ${C.good}; border: 1px solid ${C.good};
+    background: rgba(111,224,160,0.08); font: inherit; font-family: inherit;
+    font-size: 12px; font-weight: 700; letter-spacing: 2px; }
   #ov-job { top: calc(env(safe-area-inset-top, 0px) + 46px); left: 10px; cursor: pointer;
     color: ${C.gold}; border: 1px solid ${C.gold}; background: rgba(8,20,23,0.78);
     padding: 4px 9px 3px; font: inherit; font-family: inherit; font-size: 10px;
@@ -115,6 +122,11 @@ export function createOverlays(
   mab.textContent = 'ABANDON JOB';
   mab.addEventListener('click', (e) => { e.stopPropagation(); onAbandon(); });
   m.root.appendChild(mab);
+  const mok = document.createElement('button');
+  mok.className = 'ok';
+  mok.textContent = 'OK';
+  mok.addEventListener('click', (e) => { e.stopPropagation(); onOk(); });
+  m.root.appendChild(mok);
   // The chip the active job collapses to — the job's whole state at a glance,
   // parked top-left where it stops competing with the road.
   const chip = document.createElement('button');
@@ -134,7 +146,7 @@ export function createOverlays(
   let mKey = '', tKey = '', mReady = false;
   return {
     mission(mc) {
-      const key = mc ? `${mc.kicker}|${mc.head}|${mc.body}|${mc.tone}|${mc.ready}|${mc.minimized}|${mc.chip}` : '';
+      const key = mc ? `${mc.kicker}|${mc.head}|${mc.body}|${mc.tone}|${mc.ready}|${mc.minimized}|${mc.chip}|${mc.ok}` : '';
       if (key === mKey) return;
       mKey = key;
       mReady = !!mc?.ready;
@@ -156,6 +168,7 @@ export function createOverlays(
       m.root.style.pointerEvents = mc.ready ? 'auto' : 'none';
       mx.style.display = mc.dismissable ? 'block' : 'none';
       mab.style.display = mc.abandonable ? 'block' : 'none';
+      mok.style.display = mc.ok ? 'block' : 'none';
       m.root.style.display = 'block';
     },
     toast(tc) {
