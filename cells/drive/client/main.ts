@@ -752,6 +752,7 @@ function applySkyTint(): void {
 }
 
 const worldGroup = new THREE.Group();
+worldGroup.name = 'world';   // so a pick can say WHERE a mesh came from
 scene.add(worldGroup);
 
 let resizePost: (() => void) | null = null; // set by the atmosphere pipeline below
@@ -1190,7 +1191,19 @@ function buildTerrainMesh(t: HeightTile): void {
     // its own bed — measured 0.4m deep for two kilometres straight out. Where
     // cover says water, the bed drops to a depth that reads as sea. It only
     // ever lowers ground, and the step at the shoreline is itself underwater.
-    if (cv === COVER.water) elev = Math.min(elev, seaSurfaceAbs() - baseElev - SEA_BED);
+    //
+    // ONLY THE SEA GETS A FLOOR. Cover calls mountain rivers and tarns water
+    // too, and they run hundreds of metres above sea level — cutting those to
+    // the waterline carves a chasm down the hillside they sit on, and leaves
+    // whatever escaped the cut standing over it as a slab. So the cut applies
+    // only where the ground is ALREADY at the water: within two metres of the
+    // sea surface, which is precisely the flat ocean plate the DEM draws and
+    // nothing else. That also makes it safe against a bad sea datum, which is
+    // the failure that found this.
+    if (cv === COVER.water) {
+      const seaLocal = seaSurfaceAbs() - baseElev;
+      if (elev <= seaLocal + 2) elev = Math.min(elev, seaLocal - SEA_BED);
+    }
     const elevAbs = elev + baseElev;
     pos.setY(i, elev);
     const u = clamp(Math.round(((ex - t.xs) / t.w) * 255), 0, 255);
@@ -1915,8 +1928,17 @@ let dryAt: [number, number] | null = null;
 // This only ever NUDGES sea level — a measurement further than 60m from zero
 // is a mountain lake, not an ocean, and is ignored rather than used to flood
 // the world to its level.
+//
+// AND IT IS NOT ALLOWED TO GUESS EARLY. Cover streams in, and this used to
+// latch on the first pass that found any water at all. Measured twice at the
+// same inland ridge above Big Sur: 45 samples put "sea level" at 30.9m, 370
+// samples put it at 1.2m — and the first answer was frozen for the session,
+// because it only ever measured once. It now needs a real sample at both ends
+// and has to say the same thing three passes running before it stops looking.
 let seaDatum: number | null = null;
 let seaDatumN = 0;
+let seaDatumSteady = 0;
+const SEA_MIN_SAMPLES = 150;
 function measureSeaDatum(): void {
   const wet: number[] = [], dry: number[] = [];
   for (let a = 0; a < 48; a++) {
@@ -1928,7 +1950,9 @@ function measureSeaDatum(): void {
       (cv === COVER.water ? wet : dry).push(sampleHeight(x, z) + baseElev);
     }
   }
-  if (wet.length < 40) return;             // a pond must never move the ocean
+  // A pond must never move the ocean, and neither must three tiles of cover
+  // that happened to land first. Both ends of the comparison have to be real.
+  if (wet.length < SEA_MIN_SAMPLES || dry.length < SEA_MIN_SAMPLES) return;
   wet.sort((p, q) => p - q);
   // The MEDIAN. Measured off Big Sur, the ocean fill is a flat plate: p25
   // through p90 all read exactly 1.2m, with a thin tail near 0 and a lone 45m
@@ -1939,10 +1963,9 @@ function measureSeaDatum(): void {
   // And the sea is the LOWEST thing in a landscape. If this water stands above
   // a fifth of the dry land around it, it is a tarn perched in the hills and
   // must not be allowed to set the level everything else drowns under.
-  if (dry.length >= 40) {
-    dry.sort((p, q) => p - q);
-    if (lvl > dry[Math.floor(dry.length * 0.2)]) return;
-  }
+  dry.sort((p, q) => p - q);
+  if (lvl > dry[Math.floor(dry.length * 0.2)]) return;
+  seaDatumSteady = seaDatum !== null && Math.abs(lvl - seaDatum) < 1 ? seaDatumSteady + 1 : 0;
   seaDatum = lvl;
   seaDatumN = wet.length;
 }
@@ -4337,18 +4360,21 @@ function streamWorld(ex: number, ez: number): void {
     const [cx0, cy0] = tileAt(lat, lon, COVER_Z);
     for (let dx = -cRing; dx <= cRing; dx++)
       for (let dy = -cRing; dy <= cRing; dy++) void loadCoverTile(cx0 + dx, cy0 + dy);
+    // Cover also knows which ground is water, and water is the only honest
+    // witness to where sea level sits in THIS DEM's datum. Kept OUTSIDE the
+    // biome latch on purpose: the biome is happy to settle on the first decent
+    // sample, and sea level is not — it keeps re-measuring as cover streams in
+    // until three passes running agree.
+    if (seaDatumSteady < 3) {
+      const was = seaDatum;
+      measureSeaDatum();
+      // The waterline just moved, and every seabed was cut against the old
+      // one. Everything already built has to be cut again.
+      if (seaDatum !== was) for (const k of terrainMeshes.keys()) terrainDirty.add(k);
+    }
     // The moment there is enough real cover to judge on, the world stops being
     // a latitude band and becomes the place it actually is. Once only.
     if (!biomeSettled) {
-      // Cover also knows which ground is water, and water is the only honest
-      // witness to where sea level sits in THIS DEM's datum. Same moment, same
-      // data — and the plane slews up to meet it rather than snapping.
-      if (seaDatum === null) {
-        measureSeaDatum();
-        // The waterline just moved, and every seabed was cut against the old
-        // one. Everything already built has to be cut again.
-        if (seaDatum !== null) for (const k of terrainMeshes.keys()) terrainDirty.add(k);
-      }
       const b = biomeFromCover(origin.lat, baseElev);
       if (b) {
         biomeSettled = true;
@@ -4411,6 +4437,7 @@ const FAR_SEG = 48;
 const farTiles = new Set<string>();
 const farMeshes = new Map<string, THREE.Mesh>();
 const farGroup = new THREE.Group();
+farGroup.name = 'far';
 farGroup.visible = false;
 worldGroup.add(farGroup);
 // Four at a time. Asking for a whole ring at once is a thundering herd against
@@ -4549,6 +4576,7 @@ function bodywork(mat: THREE.Material, amount: number): void {
 let bodyMat: THREE.MeshLambertMaterial | null = null;
 const tailMat = new THREE.MeshBasicMaterial({ color: 0x8e1a12 }); // brightens under braking
 const car = new THREE.Group();
+car.name = 'car';
 car.rotation.order = 'YXZ'; // yaw first, then pitch/roll about the CAR's axes
 const wheelPivots: THREE.Group[] = [];
 const wheelMeshes: THREE.Mesh[] = [];
@@ -5300,6 +5328,52 @@ function stepReal(dt: number): boolean {
 (window as unknown as { __drive?: object; __surfaceAt?: (x: number, z: number) => string }).__drive = state;
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
 (window as unknown as { __coverAt?: (x: number, z: number) => number | null }).__coverAt = sampleCover;
+/** WHAT IS UNDER THAT PIXEL. Screen point in NDC (-1..1), and every mesh the
+ *  ray passes through, nearest first — the only honest way to name a thing you
+ *  can see but cannot find in the data. */
+(window as unknown as { __pick?: object }).__pick = (nx: number, ny: number): object => {
+  const rc = new THREE.Raycaster();
+  rc.setFromCamera(new THREE.Vector2(nx, ny), camera);
+  rc.far = 60000;
+  const box = new THREE.Box3();
+  return rc.intersectObjects(scene.children, true).slice(0, 6).map((h) => {
+    box.setFromObject(h.object);
+    const m = h.object as THREE.Mesh;
+    return {
+      dist: Math.round(h.distance),
+      point: [Math.round(h.point.x), Math.round(h.point.y), Math.round(h.point.z)],
+      span: Math.round(Math.max(box.max.x - box.min.x, box.max.z - box.min.z)),
+      high: Math.round(box.max.y - box.min.y),
+      tris: Math.round((m.geometry?.getAttribute('position')?.count ?? 0) / 3),
+      parent: m.parent?.name ?? '',
+      data: JSON.stringify(m.userData ?? {}).slice(0, 80),
+    };
+  });
+};
+/** THE BIGGEST THINGS IN THE SCENE, by world bounding box. When something
+ *  enormous is standing in the sky, the fastest question is not "what could it
+ *  be" but "what IS it" — so this walks the graph and names the offenders. */
+(window as unknown as { __big?: object }).__big = (n = 8): object => {
+  const box = new THREE.Box3();
+  const out: Array<Record<string, unknown>> = [];
+  scene.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || !m.geometry) return;
+    box.setFromObject(m);
+    if (!Number.isFinite(box.min.x)) return;
+    const sx = box.max.x - box.min.x, sy = box.max.y - box.min.y, sz = box.max.z - box.min.z;
+    out.push({
+      span: Math.round(Math.max(sx, sz)), high: Math.round(sy),
+      top: Math.round(box.max.y), bot: Math.round(box.min.y),
+      at: [Math.round((box.min.x + box.max.x) / 2), Math.round((box.min.z + box.max.z) / 2)],
+      name: m.name || (m.parent?.name ?? ''),
+      mat: (m.material as THREE.Material & { name?: string })?.name ?? '',
+      tris: (m.geometry.getAttribute('position')?.count ?? 0) / 3,
+      data: Object.keys(m.userData ?? {}).join(','),
+    });
+  });
+  return out.sort((a, b) => (b.high as number) - (a.high as number)).slice(0, n);
+};
 (window as unknown as { __wx?: object }).__wx = wx; // debug/test handle
 (window as unknown as { __life?: object }).__life = () => ({
   roadCells: roadGrid.size,
