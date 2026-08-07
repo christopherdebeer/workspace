@@ -16,7 +16,7 @@
  */
 import * as THREE from 'three';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
-import { PIXEL_FONT } from './font';
+import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
 import { createOverlays } from './overlays';
 
@@ -9146,6 +9146,8 @@ const setFont = (c: CanvasRenderingContext2D, px: number): void => {
   c.font = `${px}px ${HUD_FONT}`;
   c.textAlign = 'left';
   c.textBaseline = 'alphabetic';
+  // The micro face (below) sets letterSpacing on this shared context; undo.
+  try { (c as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = '0px'; } catch { /* fine */ }
 };
 // Measured widths, cached — drawHud asks for a few hundred a frame and most
 // of them (labels, units, cardinal letters) never change.
@@ -9173,17 +9175,37 @@ function fitPx(s: string, maxPx: number, px: number): string {
 }
 const fit = (s: string, maxPx: number): string => fitPx(s, maxPx, FONT_PX);
 const fitS = fit;
-// ── the POI voice: half the size of everything else ────────────────
+// ── the POI voice: the MICRO face, half the size of everything else ──
 // A label standing IN the world should whisper next to the instruments that
-// report on the car. Half of 8px leaves Silkscreen's 1px units at 0.5px —
-// off its own grid, so these go through the rasterizer soft and come out of
-// the magnification as small type with rounded corners rather than mush;
-// the ink outline is what keeps them legible over bright ground.
-const POI_PX = 4;
+// report on the car. Halving Silkscreen put its 1px units at 0.5px — off its
+// own grid, soft — so the whisper gets a face DESIGNED at this size: Tiny5,
+// a 5px-grid pixel font, one hard pixel per stroke at 5px. Same recipe as
+// the old hand-drawn 3x5 table, sourced instead of drawn.
+const MICRO_PX = 5;
+const setMicro = (c: CanvasRenderingContext2D): void => {
+  c.font = `${MICRO_PX}px '${MICRO_FONT}', ui-monospace, monospace`;
+  c.textAlign = 'left';
+  c.textBaseline = 'alphabetic';
+  // Tiny5 sets its glyphs flush; a pixel of air keeps 5px words from
+  // reading as one run. (letterSpacing is ignored where unsupported, and
+  // measureText honours it, so widths stay truthful either way.)
+  try { (c as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = '1px'; } catch { /* fine */ }
+};
+function measureM(s: string): number {
+  const k = `µ|${s}`;
+  let w = measCache.get(k);
+  if (w === undefined) {
+    setMicro(hctx);
+    w = Math.ceil(hctx.measureText(s).width);
+    if (measCache.size > 4000) measCache.clear();
+    measCache.set(k, w);
+  }
+  return w;
+}
 function textPoi(c: CanvasRenderingContext2D, s: string, x: number, y: number, col: string): void {
   c.fillStyle = col;
-  setFont(c, POI_PX);
-  c.fillText(s, Math.round(x), Math.round(y) + POI_PX - 1);
+  setMicro(c);
+  c.fillText(s, Math.round(x), Math.round(y) + MICRO_PX - 1);
 }
 function textEdgeP(s: string, x: number, y: number, col: string): void {
   for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
@@ -9191,8 +9213,13 @@ function textEdgeP(s: string, x: number, y: number, col: string): void {
   }
   textPoi(hctx, s, x, y, col);
 }
-const textPW = (s: string): number => measure(s, POI_PX);
-const fitP = (s: string, maxPx: number): string => fitPx(s, maxPx, POI_PX);
+const textPW = measureM;
+function fitP(s: string, maxPx: number): string {
+  if (measureM(s) <= maxPx) return s;
+  let n = Math.min(s.length - 1, Math.max(1, Math.floor(maxPx / 3)));
+  while (n > 1 && measureM(`${s.slice(0, n)}.`) > maxPx) n--;
+  return `${s.slice(0, n)}.`;
+}
 function text(c: CanvasRenderingContext2D, s: string, x: number, y: number, col: string, sc = 1): void {
   c.fillStyle = col;
   setFont(c, FONT_PX * sc);
@@ -10471,6 +10498,7 @@ if (timeFromUrl >= 0) {
   await Promise.race([
     Promise.all([
       document.fonts.load(`8px '${PIXEL_FONT}'`),
+      document.fonts.load(`5px '${MICRO_FONT}'`),
       document.fonts.load(`900 8px '${ICON_FONT}'`),
     ]).catch(() => null),
     new Promise((r) => setTimeout(r, 2000)),
