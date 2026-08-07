@@ -2844,7 +2844,13 @@ interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?:
   /** Surface quality 0..1 from the way's surface/smoothness/tracktype tags —
    *  see wayQuality. Absent where the way said nothing, and then the class
    *  default stands in. */
-  sq?: number }
+  sq?: number;
+  /** CROSS-FALL at each end: metres the deck rises on the +normal side over
+   *  half a width. Carried on the segment so the height a wheel gets is the
+   *  height that was DRAWN — without it the mesh tilts to the hillside and the
+   *  physics keeps handing back the centreline, and the truck drives along a
+   *  cambered road on an invisible flat one. */
+  ca?: number; cb?: number }
 const wallGrid = new Map<string, Seg[]>();   // building edges — solid
 const roadGrid = new Map<string, Seg[]>();   // drivable centrelines + half-width
 const waterCells = new Set<string>();        // coarse water mask
@@ -3134,7 +3140,18 @@ function roadHeightAt(x: number, z: number): number | null {
     const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
     const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
     const d = Math.hypot(x - (seg.ax + dx * t), z - (seg.az + dz * t));
-    if (d <= seg.hw + 0.8 && d < bd) { bd = d; best = seg.ya + (seg.yb - seg.ya) * t; }
+    if (d <= seg.hw + 0.8 && d < bd) {
+      bd = d;
+      let y = seg.ya + (seg.yb - seg.ya) * t;
+      // Which SIDE of the centreline, as a signed fraction of the half-width —
+      // the same +normal the deck was tilted about when it was built.
+      if (seg.ca !== undefined && seg.cb !== undefined) {
+        const l = Math.hypot(dx, dz) || 1;
+        const side = ((x - (seg.ax + dx * t)) * (-dz / l) + (z - (seg.az + dz * t)) * (dx / l)) / (seg.hw || 1);
+        y += (seg.ca + (seg.cb - seg.ca) * t) * clamp(side, -1, 1);
+      }
+      best = y;
+    }
   }
   return best;
 }
@@ -3367,6 +3384,84 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     }
   }
   const flat = mode !== 'none'; // profiled roads get a flat cross-section
+  // ── hug the ground where there is nothing to bridge ────────────────
+  // A profiled road took ONE height for the whole cross-section: the
+  // centreline's. That is right for a viaduct and wrong for the other ninety
+  // per cent, because on any cross-slope the downhill kerb then floats — a 7m
+  // carriageway on a 15% side-slope stands half a metre clear of the hill it is
+  // supposedly cut into, which is exactly the gap you can see.
+  //
+  // So the deck now measures the ground under BOTH kerbs and does two things
+  // with it: it drops the centreline toward the mean of the two, and it tilts
+  // the deck to the cross-fall. It stays a PLANE either way — the carriageway
+  // never gets bumpy, it just stops pretending the hillside is level.
+  //
+  // Both are scaled by how much daylight is under the run, so the behaviour
+  // fades out exactly where it should: a road lying on the ground hugs it
+  // completely, an embankment half-commits, and a bridge or a tagged viaduct
+  // keeps its dead-flat deck and its clear span.
+  const tilt = new Array<number>(n).fill(0);
+  if (flat) {
+    const HUG_LO = 0.35;      // daylight below this and the deck is simply on the ground
+    const HUG_HI = 1.9;       // above this it is a structure and holds its line
+    const MAX_FALL = 0.85;    // metres of half-width drop — a cambered road, not a wall
+    // Each KERB is solved for directly, rather than deriving a centreline and a
+    // tilt and hoping the two land on the ground. Deriving them was the version
+    // that failed: "never raise the deck" and "put each kerb on its own ground"
+    // are different statements once the centreline stops being the mean of the
+    // two, and the difference showed up as a Chapman's Peak that got worse, not
+    // better. Solve the kerbs, then read the centreline and cross-fall back off
+    // them — those are now definitions rather than assumptions.
+    const edgeR = new Array<number>(n);
+    const edgeL = new Array<number>(n);
+    const profRaw = prof.slice();
+    for (let i = 0; i < n; i++) {
+      const [x, z] = dense[i];
+      const [ax2, az2] = dense[Math.max(0, i - 1)], [bx2, bz2] = dense[Math.min(n - 1, i + 1)];
+      const tx = bx2 - ax2, tz = bz2 - az2, tl = Math.hypot(tx, tz) || 1;
+      const ox = (-tz / tl) * (width / 2), oz = (tx / tl) * (width / 2);
+      const tR = sampleHeight(x + ox, z + oz), tL = sampleHeight(x - ox, z - oz);
+      const hug = mode === 'bridge'
+        ? 0
+        : 1 - clamp((prof[i] - Math.min(tL, tR, elev[i]) - HUG_LO) / (HUG_HI - HUG_LO), 0, 1);
+      // ONLY EVER DOWN. A road may be dropped onto the ground it is crossing;
+      // it may never be raised off it. Pushing to the MEAN of the two kerbs
+      // sounds even-handed and is not — a road usually sits in a shallow
+      // cutting, so the ground beside it averages ABOVE the centreline, and the
+      // even-handed version lifted the carriageway into the air on exactly the
+      // coastal roads it was meant to settle: measured at Big Sur it took the
+      // kerb gap from 16 samples over half a metre to 30.
+      edgeR[i] = prof[i] + Math.min(0, tR - prof[i]) * hug;
+      edgeL[i] = prof[i] + Math.min(0, tL - prof[i]) * hug;
+      // A carriageway is not a sheet thrown over a boulder: cap the cross-fall
+      // so the deck stays something that could have been built.
+      const half = (edgeR[i] - edgeL[i]) * 0.5;
+      if (Math.abs(half) > MAX_FALL) {
+        const mid = (edgeR[i] + edgeL[i]) * 0.5, k = Math.sign(half) * MAX_FALL;
+        edgeR[i] = mid + k; edgeL[i] = mid - k;
+      }
+    }
+    // Smoothed along the way before use. The heightfield is noisy at 9.5m/px
+    // and a deck taken straight from it would ripple; three passes of a 1-2-1
+    // kernel keep the grade a road could actually have been built to.
+    for (let pass = 0; pass < 3; pass++) {
+      const a = edgeR.slice(), b = edgeL.slice();
+      for (let i = 1; i < n - 1; i++) {
+        edgeR[i] = (a[i - 1] + a[i] * 2 + a[i + 1]) * 0.25;
+        edgeL[i] = (b[i - 1] + b[i] * 2 + b[i + 1]) * 0.25;
+      }
+    }
+    // Smoothing can only ever have raised a kerb back toward the profile it
+    // was pulled down from, never above it — so one last pass holds the
+    // promise: nothing ends up higher than the road the profile described.
+    for (let i = 0; i < n; i++) {
+      const cap = profRaw[i];
+      if (edgeR[i] > cap) edgeR[i] = cap;
+      if (edgeL[i] > cap) edgeL[i] = cap;
+      prof[i] = (edgeR[i] + edgeL[i]) * 0.5;
+      tilt[i] = (edgeR[i] - edgeL[i]) * 0.5;
+    }
+  }
   const verts: number[] = [];
   const uvs: number[] = [];
   // The road's THICKNESS. Two side faces hanging off the kerbs, closing the
@@ -3587,10 +3682,12 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const dx = x1 - x0, dz = z1 - z0;
     const len = Math.hypot(dx, dz) || 1;
     const nx = (-dz / len) * width / 2, nz = (dx / len) * width / 2;
-    const y00 = (flat ? prof[i] : sampleHeight(x0 + nx, z0 + nz)) + lift;
-    const y01 = (flat ? prof[i] : sampleHeight(x0 - nx, z0 - nz)) + lift;
-    const y10 = (flat ? prof[i + 1] : sampleHeight(x1 + nx, z1 + nz)) + lift;
-    const y11 = (flat ? prof[i + 1] : sampleHeight(x1 - nx, z1 - nz)) + lift;
+    // +n is the same side the cross-fall was measured on, so the tilt adds
+    // there and subtracts opposite: the deck stays one plane per bay.
+    const y00 = (flat ? prof[i] + tilt[i] : sampleHeight(x0 + nx, z0 + nz)) + lift;
+    const y01 = (flat ? prof[i] - tilt[i] : sampleHeight(x0 - nx, z0 - nz)) + lift;
+    const y10 = (flat ? prof[i + 1] + tilt[i + 1] : sampleHeight(x1 + nx, z1 + nz)) + lift;
+    const y11 = (flat ? prof[i + 1] - tilt[i + 1] : sampleHeight(x1 - nx, z1 - nz)) + lift;
     const v0 = along / 20, v1 = (along + len) / 20;
     verts.push(
       x0 + nx, y00, z0 + nz, x1 + nx, y10, z1 + nz, x0 - nx, y01, z0 - nz,
@@ -3598,7 +3695,8 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     );
     uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
     if (drivable) {
-      const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name, sq };
+      const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name, sq,
+        ca: tilt[i], cb: tilt[i + 1] };
       addSeg(roadGrid, s);
       segsOf.push(s);
     }
