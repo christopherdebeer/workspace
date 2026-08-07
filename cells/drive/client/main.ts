@@ -3402,16 +3402,51 @@ function stripsNear(x: number, z: number, R: number, into: Set<Seg>): void {
   }
 }
 const cutSet = new Set<Seg>();
+/** Does this carriageway strip reach into the square of mesh quads that share
+ *  the vertex (vx,vz)?
+ *
+ * THIS IS THE WHOLE REACH RULE. A vertex's height can only affect deck points
+ * inside the triangles that touch it, and those fill the square [V ± cutL]. A
+ * strip that misses that square cannot be chorded over by any triangle V
+ * belongs to, so it has no business clamping V — and clamping anyway is how a
+ * road on a hillside got planed down to the hairpin stacked 21m below it.
+ *
+ * A slab test of the centreline against the square grown by the carriageway
+ * half-width: exact in the axis directions (where the naive radius test is
+ * worst — a PARALLEL road 21m off is nowhere near a 15.8m square, yet sits
+ * well inside its 22m diagonal) and conservative at the corners, which is the
+ * safe direction to err. */
+function stripInReach(s: Seg, vx: number, vz: number, half: number): boolean {
+  const r = half + s.hw + 0.6;
+  const x0 = vx - r, x1 = vx + r, z0 = vz - r, z1 = vz + r;
+  const dx = s.bx - s.ax, dz = s.bz - s.az;
+  let tmin = 0, tmax = 1;
+  for (const [p, d, lo, hi] of [[s.ax, dx, x0, x1], [s.az, dz, z0, z1]] as const) {
+    if (Math.abs(d) < 1e-9) { if (p < lo || p > hi) return false; continue; }
+    let t1 = (lo - p) / d, t2 = (hi - p) / d;
+    if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
+    if (t1 > tmin) tmin = t1;
+    if (t2 < tmax) tmax = t2;
+    if (tmin > tmax) return false;
+  }
+  return true;
+}
 /** The MESH's ceiling: FLAT across the reach but PARALLEL to the deck along
  *  it — each vertex clamps to the nearest strip point's floor. Parallel is
  *  what makes the guarantee survive a gradient: the clamps of a crossed
  *  triangle's vertices are linear in along-road position, so their chord over
- *  any crossing point sits at that point's own floor, never above it. */
+ *  any crossing point sits at that point's own floor, never above it.
+ *
+ * Flat is not a choice: any outward grading `k·out` survives the barycentric
+ * blend as a POSITIVE term at the deck point itself, so it lifts the chord
+ * over the tarmac. The only lever on how much land gets planed is therefore
+ * the REACH, and the reach is now exactly the quads that share the vertex. */
 function cutAtVertex(x: number, z: number): number | null {
   cutSet.clear();
   stripsNear(x, z, 1, cutSet);
   let best: number | null = null;
   for (const sg of cutSet) {
+    if (!stripInReach(sg, x, z, cutL)) continue;
     const f = stripFloor(sg, x, z);
     if (best === null || f.y < best) best = f.y;
   }
@@ -4153,9 +4188,138 @@ function building(pts: Array<[number, number]>, id: number, levels: number): voi
   mapPoly(pts, 'rgba(70,66,58,0.9)');
   claimSolid(pts, foot + tallest);
 }
+/** Insert points along a ring so no edge is longer than `step`, up to a total
+ *  budget (past which the step is stretched rather than the count blown). */
+function densifyRing(pts: Array<[number, number]>, step: number, budget: number): Array<[number, number]> {
+  let per = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [ax, az] = pts[i], [bx, bz] = pts[(i + 1) % pts.length];
+    per += Math.hypot(bx - ax, bz - az);
+  }
+  const use = Math.max(step, per / budget);
+  if (per / use <= pts.length) return pts;      // already finer than asked
+  const out: Array<[number, number]> = [];
+  for (let i = 0; i < pts.length; i++) {
+    const [ax, az] = pts[i], [bx, bz] = pts[(i + 1) % pts.length];
+    out.push([ax, az]);
+    const n = Math.floor(Math.hypot(bx - ax, bz - az) / use);
+    for (let k = 1; k <= n; k++) out.push([ax + (bx - ax) * (k / (n + 1)), az + (bz - az) * (k / (n + 1))]);
+  }
+  return out;
+}
+/** How far a drape triangle may sit off the ground before it stops being a
+ *  tint and starts being a roof. Generous enough that ordinary relief inside a
+ *  park still draws, tight enough that nothing reads as a floating plane. */
+const DRAPE_TOL = 1.5;
+/** How far out a drape is still worth re-settling. Generous, because a sheet
+ *  in the air is legible right across a valley — the artefact that started
+ *  this was photographed kilometres from the car. */
+const DRAPE_SIGHT = 4000;
+/** Every draped area in the world, so the ground can move under them and they
+ *  can follow. A drape is built once from a way that arrives once — but
+ *  `groundAt` keeps changing after that (a road streams in and cuts its
+ *  corridor, a tile resettles), and a surface baked against the old field is
+ *  left hanging in the new one. Measured at Big Sur: the build-time filter
+ *  dropped 539 flying triangles and 72 MORE had appeared by the time the
+ *  world settled, the worst 26m up. The terrain mesh and the scatter both get
+ *  rebuilt when the field moves; this is the same contract for drapes. */
+const drapes: THREE.Mesh[] = [];
+/** Conform every vertex to the ground, then keep only the triangles that can
+ *  actually lie on it. Rebuilt from the FULL index each time, so a triangle
+ *  dropped while its ground was wrong comes back when the ground is right.
+ *
+ *  Sampled at the centroid AND the three edge midpoints: a single centroid
+ *  test passes big triangles that straddle a hill symmetrically while their
+ *  flanks are still in the air. */
+function conformDrape(mesh: THREE.Mesh): boolean {
+  const geo = mesh.geometry;
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const lift = mesh.userData.lift as number;
+  const full = mesh.userData.full as number[];
+  let moved = false;
+  for (let i = 0; i < pos.count; i++) {
+    const y = groundAt(pos.getX(i), pos.getZ(i)) + lift;
+    if (!moved && Math.abs(y - pos.getY(i)) > 0.01) moved = true;
+    pos.setY(i, y);
+  }
+  pos.needsUpdate = true;
+  const keep: number[] = [];
+  for (let t = 0; t < full.length; t += 3) {
+    const ia = full[t], ib = full[t + 1], ic = full[t + 2];
+    const ax = pos.getX(ia), ay = pos.getY(ia), az = pos.getZ(ia);
+    const bx = pos.getX(ib), by = pos.getY(ib), bz = pos.getZ(ib);
+    const cx = pos.getX(ic), cy = pos.getY(ic), cz = pos.getZ(ic);
+    let ok = true;
+    for (const [sx, sy, sz] of [
+      [(ax + bx + cx) / 3, (ay + by + cy) / 3, (az + bz + cz) / 3],
+      [(ax + bx) / 2, (ay + by) / 2, (az + bz) / 2],
+      [(bx + cx) / 2, (by + cy) / 2, (bz + cz) / 2],
+      [(cx + ax) / 2, (cy + ay) / 2, (cz + az) / 2],
+    ]) {
+      if (Math.abs(sy - (groundAt(sx, sz) + lift)) > DRAPE_TOL) { ok = false; break; }
+    }
+    if (ok) keep.push(ia, ib, ic);
+  }
+  const was = geo.index ? geo.index.count : -1;
+  if (moved || was !== keep.length) {
+    geo.setIndex(keep);
+    geo.computeVertexNormals();
+    return true;
+  }
+  return false;
+}
+let drapeMs = 0, drapeCursor = 0;
+/** Re-settle drapes onto the ground as it moves, ROUND-ROBIN UNDER A TIME
+ *  BUDGET. Sweeping all of them at once measured 41ms at Big Sur — a visible
+ *  stutter every time it fired — and the work is not urgent, only inevitable.
+ *  A few milliseconds per visit walks the whole set in a second or two.
+ *
+ *  Drapes that did not move go quiet, with a doubling backoff: once the world
+ *  around a park has finished streaming, re-conforming it every pass is pure
+ *  waste, and the steady state should cost nothing. Any real movement wakes it
+ *  again on its next turn. */
+function refreshDrapes(budgetMs: number): void {
+  if (!drapes.length) return;
+  const t0 = performance.now();
+  for (let looked = 0; looked < drapes.length; looked++) {
+    if (performance.now() - t0 > budgetMs) break;
+    if (drapeCursor >= drapes.length) drapeCursor = 0;
+    const m = drapes[drapeCursor];
+    if (!m.parent) { drapes.splice(drapeCursor, 1); continue; }  // evicted with its tile
+    drapeCursor++;
+    const skip = (m.userData.calm as number) ?? 0;
+    if (skip > 0) { m.userData.calm = skip - 1; continue; }
+    // Distance to the polygon's BOX, not to its centre: a coastal reserve runs
+    // for kilometres, so its centroid can sit far behind you while the sheet
+    // you are looking at is across the valley. Measured — centroid gating left
+    // 68 flying triangles at Big Sur, the worst 26m up, that box gating fixes.
+    const bb = m.userData.bb as [number, number, number, number];
+    const dx = Math.max(bb[0] - state.x, 0, state.x - bb[2]);
+    const dz = Math.max(bb[1] - state.z, 0, state.z - bb[3]);
+    if (Math.hypot(dx, dz) > DRAPE_SIGHT) { m.userData.calm = 8; continue; }
+    m.userData.calm = conformDrape(m) ? 0 : Math.min(16, (skip || 1) * 2);
+  }
+  drapeMs = performance.now() - t0;
+}
 function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Material[], lift: number, extrude = 0, collide?: 'solid' | 'water'): void {
   if (pts.length < 3) return;
-  const shape = new THREE.Shape(pts.map(([x, z]) => new THREE.Vector2(x, z)));
+  // THE SAME GATE THE RIBBON KEEPS, for the same reason. An area is drawn
+  // exactly once, so draping it against a heightfield that has not streamed in
+  // yet bakes a surface no later tile can correct — the ground rises under it
+  // and leaves it in the air. Measured at Big Sur: sheets 26m up that the
+  // build-time flyer test had waved through, because at build time the mesh
+  // and the field agreed on the wrong number. Refusing is the right failure:
+  // the OSM tile is retried once its terrain is there.
+  for (const [px, pz] of pts) if (!hasHeight(px, pz)) { unbuilt++; return; }
+  // DENSIFY THE OUTLINE FIRST. Ear-clipping only ever emits triangles whose
+  // corners are ring vertices, so a sparse outline is a guarantee of enormous
+  // triangles — an OSM forest boundary can run a kilometre between nodes, and
+  // the resulting triangle chords over every valley in between. Adding points
+  // along the ring costs nothing at draw time (the tessellator was going to
+  // emit roughly one triangle per vertex anyway) and is what lets the drape
+  // follow the ground at all. Capped so a coastline-sized ring cannot explode.
+  const ring = extrude > 0 ? pts : densifyRing(pts, 24, 3000);
+  const shape = new THREE.Shape(ring.map(([x, z]) => new THREE.Vector2(x, z)));
   let cx = 0, cz = 0;
   for (const [x, z] of pts) { cx += x; cz += z; }
   cx /= pts.length; cz /= pts.length;
@@ -4175,10 +4339,38 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
     // Flat drapes CONFORM to the terrain per-vertex — a centroid-height plane
     // floated above (or sank under) any park/lake bigger than the local slope,
     // swallowing the car and its halo (Central Park made this vivid).
+    // ...but conforming the RING says nothing about the MIDDLE. A ShapeGeometry
+    // has no interior vertices, so a sparse kilometre-scale outline (a state
+    // forest, a coastal reserve) triangulates into a handful of enormous
+    // triangles that chord straight over every valley they span — measured at
+    // Big Sur: edges up to 3.1km, centroids 41m into the air. That is the
+    // "sheet floating above the terrain", and no amount of vertex conforming
+    // can fix it because the offending surface is between the vertices.
+    //
+    // Triangles that cannot lie on the ground are DROPPED rather than drawn.
+    // Subdividing to fit would need eight rounds on a 3km edge (65536x the
+    // geometry); the ground beneath is already drawn, already tinted by land
+    // cover, and already carries the scatter — so the honest answer is to show
+    // it. A drape is a tint on ground that is flat enough to take one.
     const posA = geo.attributes.position as THREE.BufferAttribute;
-    for (let i = 0; i < posA.count; i++) posA.setY(i, groundAt(posA.getX(i), posA.getZ(i)) + lift);
-    geo.computeVertexNormals();
     mesh.position.y = 0;
+    mesh.userData.drape = collide === 'water' ? 'water' : 'area';
+    mesh.userData.lift = lift;
+    {
+      let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+      for (const [px, pz] of ring) {
+        if (px < x0) x0 = px; if (px > x1) x1 = px;
+        if (pz < z0) z0 = pz; if (pz > z1) z1 = pz;
+      }
+      mesh.userData.bb = [x0, z0, x1, z1];
+    }
+    // The FULL triangle list is kept so the filter can be re-run against a
+    // ground that has since moved, in either direction.
+    mesh.userData.full = geo.index
+      ? Array.from(geo.index.array as ArrayLike<number>)
+      : Array.from({ length: posA.count }, (_, i) => i);
+    conformDrape(mesh);
+    drapes.push(mesh);
   }
   worldGroup.add(mesh);
   mapPoly(pts, collide === 'solid' ? 'rgba(70,66,58,0.9)' : collide === 'water' ? '#1d3a55' : 'rgba(34,54,32,0.9)');
@@ -6172,6 +6364,164 @@ function truckSpec(): Record<string, number> {
 });
 // The road corridor at a point: the raw heightfield, what the cut allows, and
 // therefore how much ground was taken out of the carriageway's airspace.
+/** THE TERRACE: how far from a carriageway, and how deep, the drawn mesh sits
+ *  below the natural heightfield. The cut is supposed to plane the ground just
+ *  under the deck; if it planes it flat for tens of metres the road ends up
+ *  standing on a shelf. Reports the excavation profile perpendicular to every
+ *  sampled segment — natural minus DRAWN mesh, which is what the eye sees. */
+(window as unknown as { __terrace?: object }).__terrace = (R = 400, step = 80): object => {
+  const OFF = [0, 6, 12, 18, 24, 32, 40, 52, 64, 80];
+  const seen = new Set<Seg>();
+  const segs: Seg[] = [];
+  for (const arr of roadGrid.values()) for (const s of arr) {
+    if (s.tn || s.ya === undefined || seen.has(s)) continue;
+    seen.add(s);
+    if (Math.hypot((s.ax + s.bx) / 2 - state.x, (s.az + s.bz) / 2 - state.z) <= R) segs.push(s);
+  }
+  // Accumulate dig depth (natural − mesh) per offset, both sides.
+  const sum = OFF.map(() => 0), max = OFF.map(() => 0), n = OFF.map(() => 0);
+  let along = 0, cuts = 0;
+  for (const s of segs) {
+    const L = Math.hypot(s.bx - s.ax, s.bz - s.az) || 1;
+    along += L;
+    if (along < step) continue;
+    along = 0;
+    cuts++;
+    const x = (s.ax + s.bx) / 2, z = (s.az + s.bz) / 2;
+    const px = -(s.bz - s.az) / L, pz = (s.bx - s.ax) / L;
+    for (let i = 0; i < OFF.length; i++) {
+      for (const sign of [1, -1]) {
+        const qx = x + px * OFF[i] * sign, qz = z + pz * OFF[i] * sign;
+        const nat = sampleHeight(qx, qz);
+        const m = meshHeightAt(qx, qz);
+        if (m === null) continue;
+        const dig = nat - m;
+        sum[i] += dig; n[i]++;
+        if (dig > max[i]) max[i] = dig;
+        if (OFF[i] === 0) continue;
+      }
+    }
+  }
+  return {
+    xsecs: cuts, segs: segs.length, cutL: +cutL.toFixed(1), terrainSeg,
+    off: OFF,
+    mean: OFF.map((_, i) => (n[i] ? +(sum[i] / n[i]).toFixed(2) : null)),
+    worst: OFF.map((_, i) => +max[i].toFixed(2)),
+  };
+};
+/** WHY the dig is what it is, decomposed. At each sampled offset: the natural
+ *  field, the nearest strip's own deck floor, what the two cut rules return,
+ *  and the drawn mesh. The gap between `floor` and `nat` says the deck sits
+ *  low; the gap between `cutV` and `floor` says another strip won the min. */
+(window as unknown as { __digwhy?: object }).__digwhy = (R = 400, step = 80): object => {
+  const OFF = [0, 12, 24, 40];
+  const seen = new Set<Seg>();
+  const segs: Seg[] = [];
+  for (const arr of roadGrid.values()) for (const s of arr) {
+    if (s.tn || s.ya === undefined || seen.has(s)) continue;
+    seen.add(s);
+    if (Math.hypot((s.ax + s.bx) / 2 - state.x, (s.az + s.bz) / 2 - state.z) <= R) segs.push(s);
+  }
+  const acc = OFF.map(() => ({ nat: 0, floor: 0, cutV: 0, ceil: 0, mesh: 0, n: 0, stole: 0,
+    thiefOut: 0, thiefDrop: 0, thiefN: 0 }));
+  let along = 0;
+  for (const s of segs) {
+    const L = Math.hypot(s.bx - s.ax, s.bz - s.az) || 1;
+    along += L;
+    if (along < step) continue;
+    along = 0;
+    const x = (s.ax + s.bx) / 2, z = (s.az + s.bz) / 2;
+    const px = -(s.bz - s.az) / L, pz = (s.bx - s.ax) / L;
+    for (let i = 0; i < OFF.length; i++) {
+      const qx = x + px * OFF[i], qz = z + pz * OFF[i];
+      const m = meshHeightAt(qx, qz);
+      if (m === null) continue;
+      const own = stripFloor(s, qx, qz).y;      // THIS road's floor here
+      const cv = cutAtVertex(qx, qz);           // what the mesh rule clamps to
+      const ce = roadCeiling(qx, qz);           // what the field rule clamps to
+      const a = acc[i];
+      a.nat += sampleHeight(qx, qz); a.floor += own; a.mesh += m;
+      a.cutV += cv ?? own; a.ceil += ce ?? own;
+      if (cv !== null && cv < own - CUT_CLEAR - 0.01) {
+        a.stole++;
+        // WHO stole it, and from how far: the plan distance to the winning
+        // strip's edge decides whether a reach filter can cure this or whether
+        // the mesh cell itself is too coarse.
+        const near = new Set<Seg>();
+        stripsNear(qx, qz, 1, near);
+        let bestY = Infinity, bestOut = 0;
+        for (const sg of near) {
+          const f = stripFloor(sg, qx, qz);
+          if (f.y < bestY) { bestY = f.y; bestOut = f.out; }
+        }
+        a.thiefOut += bestOut; a.thiefDrop += own - bestY; a.thiefN++;
+      }
+      a.n++;
+    }
+  }
+  const at = (i: number): object | null => {
+    const a = acc[i];
+    if (!a.n) return null;
+    const q = (v: number): number => +(v / a.n).toFixed(2);
+    return { nat: q(a.nat), floor: q(a.floor), cutV: q(a.cutV), ceil: q(a.ceil), mesh: q(a.mesh),
+      floorBelowNat: q(a.nat - a.floor), meshBelowNat: q(a.nat - a.mesh), stole: a.stole, n: a.n,
+      thiefOut: a.thiefN ? +(a.thiefOut / a.thiefN).toFixed(1) : null,
+      thiefDrop: a.thiefN ? +(a.thiefDrop / a.thiefN).toFixed(2) : null };
+  };
+  return Object.fromEntries(OFF.map((o, i) => [`+${o}m`, at(i)]));
+};
+/** THE SHEETS: draped area polygons whose triangles chord over the relief.
+ *  A ShapeGeometry has no interior vertices, so conforming its RING to the
+ *  ground says nothing about the middle — measured as the height of each
+ *  triangle's own centroid above the ground beneath it. */
+(window as unknown as { __sheets?: object }).__sheets = (): object => {
+  const kinds: Record<string, { n: number; worst: number; over2: number; edge: number; tris: number }> = {};
+  for (const o of worldGroup.children) {
+    const m = o as THREE.Mesh;
+    const kind = m.userData?.drape as string | undefined;
+    if (!kind || !m.geometry) continue;
+    const k = kinds[kind] ?? (kinds[kind] = { n: 0, worst: 0, over2: 0, edge: 0, tris: 0 });
+    k.n++;
+    const pos = m.geometry.attributes.position as THREE.BufferAttribute;
+    const idx = m.geometry.index;
+    const tris = idx ? idx.count / 3 : pos.count / 3;
+    k.tris += tris;
+    for (let t = 0; t < tris; t++) {
+      const ia = idx ? idx.getX(t * 3) : t * 3;
+      const ib = idx ? idx.getX(t * 3 + 1) : t * 3 + 1;
+      const ic = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+      const ax = pos.getX(ia), ay = pos.getY(ia), az = pos.getZ(ia);
+      const bx = pos.getX(ib), by = pos.getY(ib), bz = pos.getZ(ib);
+      const cx2 = pos.getX(ic), cy = pos.getY(ic), cz2 = pos.getZ(ic);
+      const e = Math.max(Math.hypot(bx - ax, bz - az), Math.hypot(cx2 - bx, cz2 - bz), Math.hypot(ax - cx2, az - cz2));
+      if (e > k.edge) k.edge = e;
+      // A linear triangle's height at its centroid is the mean of its corners.
+      const mx = (ax + bx + cx2) / 3, mz = (az + bz + cz2) / 3;
+      const over = (ay + by + cy) / 3 - groundAt(mx, mz);
+      if (over > k.worst) k.worst = over;
+      if (over > 2) k.over2++;
+    }
+  }
+  for (const k of Object.values(kinds)) { k.worst = +k.worst.toFixed(1); k.edge = Math.round(k.edge); }
+  // What the build-time filter did, and what it WOULD do if re-run now: a gap
+  // between the two means the ground moved after the drape was baked.
+  let wouldDrop = 0;
+  for (const o of worldGroup.children) {
+    const m = o as THREE.Mesh;
+    if (!m.userData?.drape || !m.geometry) continue;
+    const pos = m.geometry.attributes.position as THREE.BufferAttribute;
+    const idx = m.geometry.index;
+    const tris = idx ? idx.count / 3 : pos.count / 3;
+    for (let t = 0; t < tris; t++) {
+      const ia = idx ? idx.getX(t * 3) : t * 3, ib = idx ? idx.getX(t * 3 + 1) : t * 3 + 1, ic = idx ? idx.getX(t * 3 + 2) : t * 3 + 2;
+      const mx = (pos.getX(ia) + pos.getX(ib) + pos.getX(ic)) / 3;
+      const my = (pos.getY(ia) + pos.getY(ib) + pos.getY(ic)) / 3;
+      const mz = (pos.getZ(ia) + pos.getZ(ib) + pos.getZ(ic)) / 3;
+      if (Math.abs(my - groundAt(mx, mz)) > DRAPE_TOL) wouldDrop++;
+    }
+  }
+  return { ...kinds, filter: { drapes: drapes.length, wouldDropNow: wouldDrop, drapeMs: +drapeMs.toFixed(1) } };
+};
 (window as unknown as { __cut?: object }).__cut = (x?: number, z?: number): object => {
   const px = x ?? state.x, pz = z ?? state.z;
   const raw = sampleHeight(px, pz), ceil = roadCeiling(px, pz);
@@ -7400,6 +7750,7 @@ let miniAt = 0;
 // frame rate — a pace note is stable for seconds, the chain walk is not free.
 let navBend: NavBend | null = null;
 let navAt = 0;
+let drapeAt = 0;
 let urlAt = 0, urlX = Infinity, urlZ = 0, urlH = 0;
 const writeUrl = (la: number, lo: number): void => {
   const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
@@ -8135,6 +8486,9 @@ function tick(now: number): void {
     ? clamp(1 - Math.max(Math.abs(sunScreen.x), Math.abs(sunScreen.y)) * 0.55, 0, 1) * (1 - wx.cloud * 0.85)
     : 0;
   compMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
+  // The drapes re-settle onto whatever the ground has become since they were
+  // baked — slower than the eye, faster than a drive across a valley.
+  if (!paused && now > drapeAt) { drapeAt = now + 200; refreshDrapes(3); }
   if (now > navAt) {
     navAt = now + 600;
     navBend = paused || camMode === 'top' ? null : nextBend(state.x, state.z, state.heading);

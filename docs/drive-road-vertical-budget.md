@@ -113,3 +113,89 @@ The bed proved to be compensation for the bench: with per-strip locality even
 Bormio's stacked hairpins cut *less* without it. Terrain build time unchanged
 (~30 ms/tile). Remaining refinement if ever needed: per-edge exact clamping
 inside the mesh builder, which would let `CUT_CLEAR` approach centimetres.
+
+## The min survived the rewrite (and had to be measured out)
+
+The section above claims the old "MIN across all roads in reach" was replaced.
+Half of it was: the *reach* shrank from a 22 m bench to a raster cell. The
+**min itself did not** — `cutAtVertex` still took the lowest strip found in a
+3×3 cell neighbourhood, which at a 15.8 m cell is any carriageway within
+~30 m. On a road network that is nearly always *some* lower road, so nearly
+every road was still being planed down to its neighbour:
+
+| | Death Valley (flat) | Chapman's Peak (stacked) |
+|---|---|---|
+| sections where a *different* strip set the floor | 9 / 9 | 67 / 71 |
+| the road's own deck floor below natural | 0.12 m ✓ | 0.25 m ✓ |
+| what the mesh actually clamped to, below that floor | 0.67 m | **3.75 m** |
+
+That is the "road ribbons render 0.5–1.0 m above the terrain" report, and it
+also explains why the **grass looked right while the road did not**: scatter
+reads `roadCeiling`, whose 32° grading makes a distant strip irrelevant, so
+the sward stayed at natural height over a mesh that had been dug out beneath
+it. Two rules, two answers, and the eye was reading the difference.
+
+**The rule now.** A vertex's height can only affect deck points inside the
+triangles that touch it, and those fill the square `[V ± cutL]`. So a strip
+clamps a vertex only if it actually reaches that square — a slab test of the
+centreline against the square grown by the carriageway half-width. Exact along
+the axes, where a radius test is worst: a road running *parallel* 21 m away is
+nowhere near a 15.8 m square, yet sits comfortably inside its 22 m diagonal.
+
+Flat-across is not a choice, and that is worth writing down so it is not
+re-litigated: any outward grading `k·out` survives the barycentric blend as a
+positive term *at the deck point itself*, so it lifts the chord over the
+tarmac. Absorbing it would need `CUT_CLEAR ≈ k · cutL` — metres of daylight.
+The only lever on how much land gets planed is therefore the REACH.
+
+| dig below natural, at the kerb | before | after |
+|---|---|---|
+| Death Valley (flat) | 1.02 m | **0.50 m** |
+| Noordhoek | 1.73 m | 1.34 m |
+| Chapman's Peak | 4.33 m | **2.82 m** |
+| Chapman's, 32 m out | 4.38 m | **1.50 m** |
+| deck breaches, 4 sites | 0 | **0** |
+| max tyre step | 4.3 m | 4.3 m |
+
+The residual is the mesh cell itself: reach scales with `cutL`, and the thief
+distance tracks it exactly (21.3 → 14.4 → 10.3 m across COARSE/FINE/FINEST),
+halving the dig at each step — Chapman's 2.85 → 1.89, Noordhoek 1.73 → 0.81.
+It costs 23 → 65 → 109 ms per tile and 1.8× the triangles, so the default
+stays COARSE and the TERRAIN dial is the honest place to spend it.
+
+## Sheets in the sky: the drapes had no such contract
+
+Separately reported and separately caused. `polygon()` conforms a drape's ring
+to the ground, but `ShapeGeometry` adds **no interior vertices** — so an OSM
+forest boundary with a kilometre between nodes triangulates into edges up to
+3.1 km that chord straight over every valley they span. Measured at Big Sur:
+223 triangles more than 2 m off the ground, the worst **41 m** up.
+
+Three things were wrong, and all three had to go:
+
+1. **No height gate.** `ribbon()` refuses to build until every point has real
+   elevation, precisely so it cannot "bake a causeway that no later tile can
+   correct". `polygon()` had no such guard and baked drapes against an
+   unstreamed field. Same one-line gate now.
+2. **Sparse outline.** The ring is densified to ~24 m (budgeted) before
+   triangulation, since ear-clipping only ever emits ring vertices: longest
+   edge 3140 → 278 m.
+3. **Built once, never revisited.** The ground keeps moving after a drape is
+   baked — a road streams in and cuts its corridor, a tile resettles. The
+   terrain mesh and the scatter both rebuild when the field moves; drapes now
+   do too, re-conformed and re-filtered from the *full* triangle list so a
+   triangle dropped while its ground was wrong comes back when it is right.
+   Round-robin under a 3 ms budget with a doubling backoff for ones that have
+   stopped moving — a single sweep measured 41 ms, which is a visible stutter.
+
+Gating by the polygon's **box** rather than its centroid mattered: a coastal
+reserve's centroid sits kilometres behind you while the sheet you are looking
+at is across the valley (68 flying triangles survived centroid gating).
+
+| draped areas | before | after |
+|---|---|---|
+| worst triangle above ground, Big Sur | 41.2 m | **1.5 m** |
+| triangles > 2 m off, Big Sur | 223 | **0** |
+| worst, Chapman's Peak | 3.9 m | **1.4 m** |
+| longest triangle edge | 3140 m | 278 m |
+| refresh cost | — | ~3 ms / 200 ms, amortised |
