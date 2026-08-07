@@ -1885,17 +1885,22 @@ function facade(mat: THREE.Material): void {
 // and value stays high, which is what old paint in strong light actually looks
 // like — the dirt lives in the façade shader and the wall texture, so the base
 // colour does not have to carry the grime as well.
-// CEILED AT 0xbe ON ANY CHANNEL, and that ceiling is not taste — it is the
-// bloom threshold. The bright pass cuts at 0.62 on the max channel in LINEAR
-// space, and a hex is decoded sRGB→linear before it ever reaches a shader:
-// 0xa5 is linear 0.376, but 0xd8 is 0.686. The first pass at "lighter" used
-// values around 0xd0 and so roughly DOUBLED the reflectance, which put lit
-// walls over the cut — buildings bloomed, and additive bloom took them from
-// bright to pure white. 0xbe is linear 0.514, ×0.88 for the wall = 0.45, which
-// still clears the cut with headroom under a strong sun.
+// HOW LIGHT THEY CAN BE IS A MEASURED NUMBER, not a guess. The bloom bright
+// pass thresholds the max channel of the PRE-TONEMAP LINEAR frame at 0.62, and
+// a hex is decoded sRGB→linear on the way in — so the question is what a lit
+// wall actually reads there. Reading the render target back (see __scenehist):
+// at noon in a sunlit town 99% of the frame sits under 0.5, and with this
+// palette exactly 5 pixels of ~56000 cross the cut. Incident light on a wall
+// is ~0.2-0.3, not the ~1.6 a naive reading of "sun intensity" suggests, so
+// even 0xdc (linear 0.70) lands nowhere near 0.62 once multiplied by it.
+//
+// Which means the earlier fear was misplaced: the blown-white buildings were
+// never the paint. They were an UNLIT MeshBasicMaterial sitting at a flat 1.0
+// (see bPaint) — a value no lit surface in this renderer comes close to. With
+// that fixed the palette is free to be as light as the art wants.
 const B_MATS = [
-  0xbab0a0, 0xb0a694, 0xbeb5a6, 0xa89c88, 0xb9ab92, 0xb1a28c,
-  0xadaba0, 0xbcb0a6, 0xa8aea6, 0xb4a49c, 0xaab0b4, 0xb8b09a,
+  0xd9d0be, 0xcfc3ac, 0xdcd4c4, 0xc3b49b, 0xd6c4a6, 0xcdba9f,
+  0xc9c7ba, 0xd8ccc2, 0xc2c8c0, 0xd0bcb2, 0xc4cad0, 0xd4cbb2,
 ].map((c, i) => {
   // Walls carry the detail now — openings, lintels, ivy — and at 0.72 under a
   // low sun there was not enough wall left for any of it to read against.
@@ -1903,10 +1908,10 @@ const B_MATS = [
   const wall = new THREE.MeshLambertMaterial({ color: side, map: wallTexes[i % wallTexes.length], side: DS });
   facade(wall);
   return [
-    // The roof takes the same headroom as the wall. It used the raw hex, which
-    // was safe while the palette topped out at 0xa5 and is not once it does
-    // not — a roof is the surface most likely to be square-on to a high sun.
-    new THREE.MeshLambertMaterial({ color: new THREE.Color(c).multiplyScalar(0.82), map: roofTex, side: DS }),
+    // A shade off the wall's tone. Not a bloom guard — the measurement above
+    // says there is ample room — but a roof is the one surface that goes
+    // square-on to a high sun, and it should not out-read its own walls.
+    new THREE.MeshLambertMaterial({ color: new THREE.Color(c).multiplyScalar(0.9), map: roofTex, side: DS }),
     wall,
   ] as [THREE.Material, THREE.Material];
 });
@@ -6725,6 +6730,67 @@ function truckSpec(): Record<string, number> {
   return { buildings: n, worstGap: +worstAll.toFixed(2), meanGap: n ? +(sum / n).toFixed(2) : 0,
     gapOver05: over05, gapOver25: over25, distinctPaints: paints.size };
 };
+/** THE LINEAR SCENE VALUE at a screen point, straight out of the render
+ *  target before tonemapping — which is the number the bloom bright-pass
+ *  actually thresholds. Guessing at it is how a 0.62 cut ended up blooming
+ *  brick walls: the only way to set that cut honestly is to know what a lit
+ *  SURFACE reads versus what a LAMP reads. */
+(window as unknown as { __scenepx?: object }).__scenepx = (nx: number, ny: number): object => {
+  const w = rtScene.width, h = rtScene.height;
+  const px = Math.round((nx * 0.5 + 0.5) * (w - 1));
+  const py = Math.round((ny * 0.5 + 0.5) * (h - 1));   // RT origin is bottom-left
+  const half = rtType === THREE.HalfFloatType;
+  const buf: ArrayBufferView = half ? new Uint16Array(4) : new Uint8Array(4);
+  renderer.readRenderTargetPixels(rtScene, px, py, 1, 1, buf);
+  const h2f = (u: number): number => {
+    const s = (u & 0x8000) >> 15, e = (u & 0x7c00) >> 10, f = u & 0x03ff;
+    if (e === 0) return (s ? -1 : 1) * 2 ** -14 * (f / 1024);
+    if (e === 31) return f ? NaN : (s ? -1 : 1) * Infinity;
+    return (s ? -1 : 1) * 2 ** (e - 15) * (1 + f / 1024);
+  };
+  const v = [0, 1, 2].map((i) => {
+    const raw = (buf as unknown as { [k: number]: number })[i];
+    return half ? h2f(raw) : raw / 255;
+  });
+  return { rgb: v.map((c) => +c.toFixed(3)), max: +Math.max(...v).toFixed(3),
+    half, cut: (brightMat.uniforms.uCut as { value: number }).value };
+};
+/** THE WHOLE FRAME'S linear histogram, so "how bright can a surface get"
+ *  stops being a guess. Reports the max, the fraction over the bloom cut, and
+ *  where the bulk of the image sits — which is what says how much headroom a
+ *  paint colour actually has before it starts to glow. */
+(window as unknown as { __scenehist?: object }).__scenehist = (): object => {
+  const w = rtScene.width, h = rtScene.height;
+  const half = rtType === THREE.HalfFloatType;
+  const buf: ArrayBufferView = half ? new Uint16Array(w * h * 4) : new Uint8Array(w * h * 4);
+  renderer.readRenderTargetPixels(rtScene, 0, 0, w, h, buf);
+  const h2f = (u: number): number => {
+    const s = (u & 0x8000) >> 15, e = (u & 0x7c00) >> 10, f = u & 0x03ff;
+    if (e === 0) return (s ? -1 : 1) * 2 ** -14 * (f / 1024);
+    if (e === 31) return f ? NaN : (s ? -1 : 1) * Infinity;
+    return (s ? -1 : 1) * 2 ** (e - 15) * (1 + f / 1024);
+  };
+  const arr = buf as unknown as { [k: number]: number };
+  const cut = (brightMat.uniforms.uCut as { value: number }).value;
+  let max = 0, over = 0, n = 0;
+  const bins = new Array(10).fill(0);   // 0..1 in tenths, last bin is >=1
+  for (let i = 0; i < w * h; i++) {
+    let m = 0;
+    for (let c = 0; c < 3; c++) {
+      const v = half ? h2f(arr[i * 4 + c]) : arr[i * 4 + c] / 255;
+      if (v > m) m = v;
+    }
+    if (!Number.isFinite(m)) continue;
+    n++;
+    if (m > max) max = m;
+    if (m >= cut) over++;
+    bins[Math.min(9, Math.floor(m * 10))]++;
+  }
+  return { px: n, max: +max.toFixed(3), cut, overCut: over,
+    overCutPct: +((over / Math.max(1, n)) * 100).toFixed(2),
+    p99: (() => { let c = 0; for (let b = 9; b >= 0; b--) { c += bins[b]; if (c > n * 0.01) return b / 10; } return 0; })(),
+    bins: bins.map((v) => +((v / Math.max(1, n)) * 100).toFixed(1)) };
+};
 (window as unknown as { __cut?: object }).__cut = (x?: number, z?: number): object => {
   const px = x ?? state.x, pz = z ?? state.z;
   const raw = sampleHeight(px, pz), ceil = roadCeiling(px, pz);
@@ -8083,12 +8149,19 @@ function roughNoise(x: number, z: number): number {
 // Droop is now the longer half of the travel, as it is on anything built to go
 // where this truck goes: a wheel that can reach further DOWN keeps its load
 // through a dip instead of hanging, which is grip you get to keep.
-const SUSP = { k: 55, d: 8.5, ka: 40, da: 7.6, travel: 0.26, droop: 0.34 };
+// `da` is CRITICAL DAMPING for `ka`, not a taste knob: 2*sqrt(40) = 12.6. At
+// the old 7.6 the attitude springs ran at zeta 0.60 — 1.0Hz with ~9% overshoot
+// and a full second to settle — while a road changes grade every 12m segment,
+// i.e. every 0.6s at 20m/s. They never settled, so the body was permanently
+// ringing at its own natural frequency instead of following the ground. That
+// ring is what reads as the truck bouncing down a hill.
+const SUSP = { k: 55, d: 8.5, ka: 40, da: 12.6, travel: 0.26, droop: 0.34 };
 let bodyY = 0, vBodyY = 0, pitchC = 0, vPitch = 0, rollC = 0, vRoll = 0;
 // The TERRAIN's grade under the wheels — what gravity actually pulls against —
 // and the lateral creep it produces. Written by the suspension pass, read by
 // the next frame's drive step; one frame of lag at 60fps is nothing.
 let gradePitch = 0, gradeRoll = 0, slideV = 0;
+let prevGradePitch = 0;   // last frame's terrain grade, for the feed-forward above
 // How hard the tyres are currently being asked to work beyond what they have
 // (0 = planted, 1 = fully away). Drives the squeal, the dust, and the HUD.
 let skid = 0;
@@ -8390,7 +8463,10 @@ function tick(now: number): void {
   // feel uncontrollable, and no amount of extra gravity would have fixed it,
   // because gravity is multiplied by the grip that had just vanished.
   const tPitch = clamp(Math.atan((cFL + cFR - cRL - cRR) / 2 / (2 * AXLE)), -1.0, 1.0)
-    + clamp(drive * 0.004, -0.06, 0.06); // throttle squat / brake dive
+    // Squat/dive at +-0.06 rad is 3.4 degrees, a THIRD of the 9.5 degrees of
+    // body-to-ground mismatch the travel can absorb — a large slice of the
+    // grip budget spent on a cosmetic lean. Halved.
+    + clamp(drive * 0.002, -0.03, 0.03); // throttle squat / brake dive
   const tRoll = clamp(Math.atan((cFR + cRR - cFL - cRL) / 2 / (2 * TRACK)), -1.0, 1.0)
     + clamp(steerCur * Math.abs(state.speed) * 0.004, -0.09, 0.09); // lean out of the corner
   // atan2, not asin: the pitch/roll above are clamped for the BODY's benefit
@@ -8435,9 +8511,35 @@ function tick(now: number): void {
   vBodyY += aY * dt; bodyY += vBodyY * dt;
   if (bodyY < tY - SUSP.travel) {
     bodyY = tY - SUSP.travel;
-    if (vBodyY < 0) { if (vBodyY < -2.5) audio.thud(Math.min(3, -vBodyY / 3)); vBodyY *= -0.25; } // bump stop
+    // A BUMP STOP IS NOT A TRAMPOLINE. Bouncing off it at any closing speed
+    // turned a sustained grade — where the travel limit is simply held, not
+    // struck — into a repeating bounce, because the stop was being touched
+    // every frame. Restitution now needs a real impact behind it; below that
+    // the body just rests on the stop.
+    if (vBodyY < -2.5) { audio.thud(Math.min(3, -vBodyY / 3)); vBodyY *= -0.25; }
+    else if (vBodyY < 0) vBodyY = 0;
   }
-  vPitch += (SUSP.ka * sK * (tPitch - pitchC) - SUSP.da * sD * vPitch) * dt; pitchC += vPitch * dt;
+  // THE DESCENT BUG, PITCH EDITION — the exact twin of the heave fix above,
+  // which was never applied to attitude. A spring chasing the grade has to
+  // build error before it moves, and on a road whose grade changes faster than
+  // the spring settles it is permanently behind. Measured on a Chapman's Peak
+  // descent: body pitch ran +6.6 degrees nose-up of the ground on average and
+  // +21.5 at worst, ALWAYS one-directional, never overshooting the other way.
+  //
+  // That error is not cosmetic, it is spent out of the suspension's travel
+  // budget: over a 3.1m wheelbase a mismatch of theta needs 1.55*tan(theta) of
+  // differential travel, and there is only +0.26/-0.34 — so past about 9.5
+  // degrees the wheels sit on their stops. 46% of descending frames had a
+  // wheel pegged and `grounded` fell to 0.50, which costs thrust, braking,
+  // steering AND gravity, all of them at once, on the steep bit.
+  //
+  // So the damper chases the ground's own rotation rate instead of zero, and
+  // a steady grade change is followed with no error to build. Same shape as
+  // terrainVy: reference the world's motion, do not fight it.
+  const gradeRate = dt > 0 ? clamp((gradePitch - prevGradePitch) / dt, -6, 6) : 0;
+  prevGradePitch = gradePitch;
+  vPitch += (SUSP.ka * sK * (tPitch - pitchC) - SUSP.da * sD * (vPitch - gradeRate)) * dt;
+  pitchC += vPitch * dt;
   vRoll += (SUSP.ka * sK * (tRoll - rollC) - SUSP.da * sD * vRoll) * dt; rollC += vRoll * dt;
   // Articulation: wheels chase their own contact while the sprung body lags.
   groundedF = 0;
