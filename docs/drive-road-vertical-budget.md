@@ -163,6 +163,51 @@ halving the dig at each step — Chapman's 2.85 → 1.89, Noordhoek 1.73 → 0.8
 It costs 23 → 65 → 109 ms per tile and 1.8× the triangles, so the default
 stays COARSE and the TERRAIN dial is the honest place to spend it.
 
+## Then stop clamping vertices at all
+
+Even with the reach exact, the profile was still a SHELF — Death Valley dug a
+flat 0.5 m for 24 m and then recovered. That is the signature of the remaining
+mistake, and the report that found it named it exactly: *"vehicle and grass
+seem to have the correct height, but terrain is rendered lower — I see through
+the grass to a lower terrain, exposing road sidewalls."*
+
+Two rules for one surface. The wheels and the scatter read `roadCeiling`,
+which grades away at the cut face and is back at natural ground within a metre
+or two of the kerb. The mesh read `cutAtVertex`, which pulled every vertex in
+reach FLAT down to the deck floor. So the grass stood on the ground and the
+mesh sank away beneath it, and the apron drawn between deck and dug ground is
+the "sidewall" — a wall that only exists because the two rules disagreed.
+
+The constraint was never about vertices. It is a linear inequality about the
+interpolated SURFACE at a deck point: `w₁h₁ + w₂h₂ + w₃h₃ ≤ floor − clear` for
+the containing triangle's barycentric weights. `carveCorridors` solves that
+directly — at each sampled deck point, if the blend is too high, take the
+least-squares step (each vertex drops by `excess · wᵢ / Σw²`). A vertex under
+the carriageway carries nearly all the weight and takes nearly all the drop; a
+vertex at the far corner of a clipped triangle carries almost none and barely
+moves. Only ever lowers, so iterating is monotone and cannot invent a new
+violation. Sampled at the centreline, both kerbs and just outside them, since
+the kerb is the lowest thing the ground has to clear.
+
+`cutAtVertex`, `stripInReach` and the whole flat-clamp rule are **gone** — the
+reach question stops existing once the solve is per triangle, because a
+triangle the strip never crosses is never touched.
+
+The profile is now a hug rather than a shelf (dig below natural, metres):
+
+| offset from centreline | 0 | 6 | 12 | 18 | 24 | 32 | 40 |
+|---|---|---|---|---|---|---|---|
+| Death Valley, flat clamp | 1.02 | 1.00 | 0.94 | 0.81 | 0.64 | 0.40 | 0.17 |
+| Death Valley, **solved** | 0.63 | 0.55 | 0.38 | 0.17 | **0.06** | 0.03 | 0.04 |
+| Chapman's, flat clamp | 4.33 | 4.36 | 4.39 | 4.43 | 4.42 | 4.38 | 3.84 |
+| Chapman's, **solved** | 1.94 | 1.80 | 1.41 | 1.01 | **0.77** | 0.62 | 0.47 |
+| Noordhoek, **solved** | 1.45 | 1.25 | 0.78 | 0.40 | **0.25** | 0.23 | 0.23 |
+
+Breaches stay 0 at all four sites and the max tyre step is unchanged (Bormio
+4.32 m, Death Valley 0.29 m). Terrain build got *faster* — 23.4 → 15.1 ms per
+tile — because 16.6k neighbourhood queries per tile were replaced by a bounded
+walk along the strips that are actually there.
+
 ## Sheets in the sky: the drapes had no such contract
 
 Separately reported and separately caused. `polygon()` conforms a drape's ring

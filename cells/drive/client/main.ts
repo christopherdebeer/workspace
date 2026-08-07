@@ -1207,16 +1207,14 @@ function buildTerrainMesh(t: HeightTile): void {
   const colors = new Float32Array(pos.count * 3);
   const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
   const cell = t.w / SEG;
+  // PASS ONE: the ground as the world says it is. The road corridor is carved
+  // afterwards, per triangle, because the constraint it has to satisfy is
+  // about the interpolated SURFACE at a deck point and not about any one
+  // vertex — see carveCorridors. Colour comes last, off the carved heights.
   for (let i = 0; i < pos.count; i++) {
     const ex = pos.getX(i) + cxm, ez = pos.getZ(i) + czm;
-    // The MESH takes the HARD cut rule (cutAtVertex): every vertex within one
-    // cell of a crossed cell clamps flat to that cell's deck floor, which is
-    // the form of the rule the no-chord-over-a-deck guarantee is provable in.
-    // The wheels ride the graded field instead — see roadCeiling.
     const cv = sampleCover(ex, ez);
-    const rawE = sampleHeight(ex, ez);
-    const vc = cutAtVertex(ex, ez);
-    let elev = vc !== null && vc < rawE ? vc : rawE;
+    let elev = sampleHeight(ex, ez);
     // GIVE THE SEA A FLOOR. The elevation source carries no bathymetry: it
     // fills the ocean with a flat plate AT the waterline, so once the water
     // plane was placed correctly the Pacific rendered as a 40cm lagoon over
@@ -1236,13 +1234,18 @@ function buildTerrainMesh(t: HeightTile): void {
       const seaLocal = seaSurfaceAbs() - baseElev;
       if (elev <= seaLocal + 2) elev = Math.min(elev, seaLocal - SEA_BED);
     }
-    const elevAbs = elev + baseElev;
     pos.setY(i, elev);
+  }
+  carveCorridors(t, geo, SEG);
+  // PASS TWO: colour, off the heights the carve settled on.
+  for (let i = 0; i < pos.count; i++) {
+    const ex = pos.getX(i) + cxm, ez = pos.getZ(i) + czm;
+    const elevAbs = pos.getY(i) + baseElev;
     const u = clamp(Math.round(((ex - t.xs) / t.w) * 255), 0, 255);
     const v = clamp(Math.round(((ez - t.zs) / t.h) * 255), 0, 255);
     const du = t.data[v * 256 + Math.min(255, u + 1)] - t.data[v * 256 + u];
     const dv = t.data[Math.min(255, v + 1) * 256 + u] - t.data[v * 256 + u];
-    const [r, g, bb] = terrainPalette(elevAbs, Math.hypot(du, dv) / Math.max(cell, 1), cv);
+    const [r, g, bb] = terrainPalette(elevAbs, Math.hypot(du, dv) / Math.max(cell, 1), sampleCover(ex, ez));
     colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -3402,56 +3405,6 @@ function stripsNear(x: number, z: number, R: number, into: Set<Seg>): void {
   }
 }
 const cutSet = new Set<Seg>();
-/** Does this carriageway strip reach into the square of mesh quads that share
- *  the vertex (vx,vz)?
- *
- * THIS IS THE WHOLE REACH RULE. A vertex's height can only affect deck points
- * inside the triangles that touch it, and those fill the square [V ± cutL]. A
- * strip that misses that square cannot be chorded over by any triangle V
- * belongs to, so it has no business clamping V — and clamping anyway is how a
- * road on a hillside got planed down to the hairpin stacked 21m below it.
- *
- * A slab test of the centreline against the square grown by the carriageway
- * half-width: exact in the axis directions (where the naive radius test is
- * worst — a PARALLEL road 21m off is nowhere near a 15.8m square, yet sits
- * well inside its 22m diagonal) and conservative at the corners, which is the
- * safe direction to err. */
-function stripInReach(s: Seg, vx: number, vz: number, half: number): boolean {
-  const r = half + s.hw + 0.6;
-  const x0 = vx - r, x1 = vx + r, z0 = vz - r, z1 = vz + r;
-  const dx = s.bx - s.ax, dz = s.bz - s.az;
-  let tmin = 0, tmax = 1;
-  for (const [p, d, lo, hi] of [[s.ax, dx, x0, x1], [s.az, dz, z0, z1]] as const) {
-    if (Math.abs(d) < 1e-9) { if (p < lo || p > hi) return false; continue; }
-    let t1 = (lo - p) / d, t2 = (hi - p) / d;
-    if (t1 > t2) { const t = t1; t1 = t2; t2 = t; }
-    if (t1 > tmin) tmin = t1;
-    if (t2 < tmax) tmax = t2;
-    if (tmin > tmax) return false;
-  }
-  return true;
-}
-/** The MESH's ceiling: FLAT across the reach but PARALLEL to the deck along
- *  it — each vertex clamps to the nearest strip point's floor. Parallel is
- *  what makes the guarantee survive a gradient: the clamps of a crossed
- *  triangle's vertices are linear in along-road position, so their chord over
- *  any crossing point sits at that point's own floor, never above it.
- *
- * Flat is not a choice: any outward grading `k·out` survives the barycentric
- * blend as a POSITIVE term at the deck point itself, so it lifts the chord
- * over the tarmac. The only lever on how much land gets planed is therefore
- * the REACH, and the reach is now exactly the quads that share the vertex. */
-function cutAtVertex(x: number, z: number): number | null {
-  cutSet.clear();
-  stripsNear(x, z, 1, cutSet);
-  let best: number | null = null;
-  for (const sg of cutSet) {
-    if (!stripInReach(sg, x, z, cutL)) continue;
-    const f = stripFloor(sg, x, z);
-    if (best === null || f.y < best) best = f.y;
-  }
-  return best === null ? null : best - CUT_CLEAR;
-}
 /** The FIELD's ceiling: the same strips, graded off the kerb at the face
  *  slope so nothing the tyres ride is discontinuous. */
 function roadCeiling(x: number, z: number): number | null {
@@ -3464,6 +3417,130 @@ function roadCeiling(x: number, z: number): number | null {
     if (best === null || c < best) best = c;
   }
   return best === null ? null : best - CUT_CLEAR;
+}
+/** The two triangles of every grid cell of a terrain tile, as index triples,
+ *  derived from the index buffer rather than from PlaneGeometry's internal
+ *  vertex order — which is the sort of assumption that survives until a three
+ *  release quietly changes it. Built once per (SEG, tile) and cached by SEG,
+ *  since every tile at a given dial setting shares the topology. */
+const cellTriCache = new Map<number, Int32Array>();
+function cellTriangles(geo: THREE.BufferGeometry, SEG: number): Int32Array {
+  const hit = cellTriCache.get(SEG);
+  if (hit) return hit;
+  const idx = geo.index as THREE.BufferAttribute;
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  // Local coords run -w/2..w/2; the cell index is derived from position, so
+  // the mapping holds whatever order the vertices were emitted in.
+  let minX = Infinity, minZ = Infinity, maxX = -Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    const x = pos.getX(i), z = pos.getZ(i);
+    if (x < minX) minX = x; if (x > maxX) maxX = x;
+    if (z < minZ) minZ = z;
+  }
+  const cell = (maxX - minX) / SEG;
+  const out = new Int32Array(SEG * SEG * 6).fill(-1);
+  const seen = new Int32Array(SEG * SEG);
+  for (let f = 0; f < idx.count / 3; f++) {
+    const a = idx.getX(f * 3), b = idx.getX(f * 3 + 1), c = idx.getX(f * 3 + 2);
+    const mx = (pos.getX(a) + pos.getX(b) + pos.getX(c)) / 3 - minX;
+    const mz = (pos.getZ(a) + pos.getZ(b) + pos.getZ(c)) / 3 - minZ;
+    const ix = clamp(Math.floor(mx / cell), 0, SEG - 1);
+    const iz = clamp(Math.floor(mz / cell), 0, SEG - 1);
+    const k = iz * SEG + ix;
+    if (seen[k] > 1) continue;
+    const o = k * 6 + seen[k] * 3;
+    out[o] = a; out[o + 1] = b; out[o + 2] = c;
+    seen[k]++;
+  }
+  cellTriCache.set(SEG, out);
+  return out;
+}
+/** THE CORRIDOR CARVE, solved per TRIANGLE instead of per vertex.
+ *
+ * The guarantee has only ever been about one thing: at a point ON a deck, the
+ * interpolated mesh must sit below it. Clamping every vertex in reach FLAT to
+ * the deck floor satisfies that, and it is what dug the trench — a vertex
+ * fifteen metres up the hillside was dragged down to road level because a
+ * triangle it belonged to happened to be crossed, so the mesh sank away from
+ * the ground the grass and the wheels were still standing on. Two rules for
+ * one surface, and the eye reads the difference as a road on a plinth.
+ *
+ * The constraint is a linear inequality, so solve it as one. At each sampled
+ * deck point the surface is w1h1 + w2h2 + w3h3 for the containing triangle's
+ * barycentric weights; if that exceeds the target, take the least-squares step
+ * that fixes it — each vertex drops by (excess · wi / Σw²). A vertex under the
+ * carriageway carries almost all the weight and takes almost all the drop; one
+ * at the far corner of a clipped triangle carries almost none and barely
+ * moves. That is the difference between a terrace and a road that hugs.
+ *
+ * Only ever lowers, so it cannot manufacture a new violation and iterating is
+ * monotone. Sampled across the full width, not just the centreline, because
+ * the kerbs are the lowest thing the ground has to clear.
+ */
+function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): void {
+  const cell = t.w / SEG;
+  const tris = cellTriangles(geo, SEG);
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  // Strips overlapping the tile. cutL IS the mesh cell, so the raster's own
+  // index is the right thing to walk — no geometry test needed to gather.
+  const near = new Set<Seg>();
+  const cx0 = Math.floor(t.xs / cutL) - 1, cx1 = Math.floor((t.xs + t.w) / cutL) + 1;
+  const cz0 = Math.floor(t.zs / cutL) - 1, cz1 = Math.floor((t.zs + t.h) / cutL) + 1;
+  for (let cx = cx0; cx <= cx1; cx++) {
+    for (let cz = cz0; cz <= cz1; cz++) {
+      const arr = cutCells.get(`${cx},${cz}`);
+      if (arr) for (const s of arr) near.add(s);
+    }
+  }
+  if (!near.size) return;
+  const enforce = (px: number, pz: number, tgt: number): void => {
+    const fx = (px - t.xs) / cell, fz = (pz - t.zs) / cell;
+    if (fx < 0 || fz < 0 || fx >= SEG || fz >= SEG) return;
+    const k = (Math.floor(fz) * SEG + Math.floor(fx)) * 6;
+    for (let h = 0; h < 2; h++) {
+      const a = tris[k + h * 3], b = tris[k + h * 3 + 1], c = tris[k + h * 3 + 2];
+      if (a < 0) continue;
+      // Barycentric in the XZ plane. Local coords, so shift the sample too.
+      const ax = pos.getX(a) + t.xs + t.w / 2, az = pos.getZ(a) + t.zs + t.h / 2;
+      const bx = pos.getX(b) + t.xs + t.w / 2, bz = pos.getZ(b) + t.zs + t.h / 2;
+      const cx = pos.getX(c) + t.xs + t.w / 2, cz = pos.getZ(c) + t.zs + t.h / 2;
+      const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+      if (Math.abs(d) < 1e-9) continue;
+      const w1 = ((bz - cz) * (px - cx) + (cx - bx) * (pz - cz)) / d;
+      const w2 = ((cz - az) * (px - cx) + (ax - cx) * (pz - cz)) / d;
+      const w3 = 1 - w1 - w2;
+      if (w1 < -1e-6 || w2 < -1e-6 || w3 < -1e-6) continue;   // not this half
+      const cur = w1 * pos.getY(a) + w2 * pos.getY(b) + w3 * pos.getY(c);
+      const over = cur - tgt;
+      if (over <= 0) return;
+      const norm = w1 * w1 + w2 * w2 + w3 * w3;
+      if (norm < 1e-9) return;
+      pos.setY(a, pos.getY(a) - (over * w1) / norm);
+      pos.setY(b, pos.getY(b) - (over * w2) / norm);
+      pos.setY(c, pos.getY(c) - (over * w3) / norm);
+      return;
+    }
+  };
+  // Two passes: a vertex shared by several deck samples wants the deepest of
+  // them, and one sweep leaves the later samples correcting the earlier.
+  for (let pass = 0; pass < 2; pass++) {
+    for (const s of near) {
+      const len = Math.hypot(s.bx - s.ax, s.bz - s.az);
+      const steps = Math.max(1, Math.ceil(len / (cell * 0.3)));
+      const ux = (s.bx - s.ax) / (len || 1), uz = (s.bz - s.az) / (len || 1);
+      for (let i = 0; i <= steps; i++) {
+        const u = i / steps;
+        const px = s.ax + (s.bx - s.ax) * u, pz = s.az + (s.bz - s.az) * u;
+        const f = stripFloor(s, px, pz);
+        const tgt = f.y - CUT_CLEAR;
+        // Centreline and both kerbs, plus a touch beyond, so the shoulder the
+        // apron sits on is held down too.
+        for (const off of [0, -s.hw, s.hw, -(s.hw + 0.6), s.hw + 0.6]) {
+          enforce(px - uz * off, pz + ux * off, tgt);
+        }
+      }
+    }
+  }
 }
 // The VISIBLE ground: the heightfield, cut back where a road runs through it.
 // Everything that has to agree on where the surface is — the terrain mesh, the
@@ -4572,7 +4649,12 @@ const SURVEY_DEDUP = 100;      // same-road candidates closer than this collapse
 const SURVEY_CAPTURE = 12;     // how near counts as collected
 const SURVEY_MIN = 400;        // roads shorter than this are not worth claiming
 const SURVEY_MAJORITY = 0.5;   // "a majority" — measured as reachable on 95%+ of roads
-interface Checkpoint { x: number; z: number; key: string; got: boolean; at?: number }
+interface Checkpoint { x: number; z: number; key: string; got: boolean; at?: number;
+  /** Cached line-of-sight, with the time it was taken — same reasoning as the
+   *  POI pins, but kept ON the checkpoint rather than in a Map: there can be
+   *  sixty of these on screen and a string key per marker per frame is the
+   *  expensive part of an answer that changes only when you drive somewhere. */
+  hid?: boolean; hidAt?: number }
 interface SurveyRoad {
   name: string;
   cps: Checkpoint[];
@@ -6412,7 +6494,10 @@ function truckSpec(): Record<string, number> {
 /** WHY the dig is what it is, decomposed. At each sampled offset: the natural
  *  field, the nearest strip's own deck floor, what the two cut rules return,
  *  and the drawn mesh. The gap between `floor` and `nat` says the deck sits
- *  low; the gap between `cutV` and `floor` says another strip won the min. */
+ *  low; the gap between `mesh` and `floor` says the carve took more than the
+ *  clearance, which on a coarse cell means a neighbouring deck shared the
+ *  triangle. `ceil` is what the wheels and the scatter ride, so `mesh` minus
+ *  `ceil` is exactly the daylight you can see under the grass. */
 (window as unknown as { __digwhy?: object }).__digwhy = (R = 400, step = 80): object => {
   const OFF = [0, 12, 24, 40];
   const seen = new Set<Seg>();
@@ -6422,7 +6507,7 @@ function truckSpec(): Record<string, number> {
     seen.add(s);
     if (Math.hypot((s.ax + s.bx) / 2 - state.x, (s.az + s.bz) / 2 - state.z) <= R) segs.push(s);
   }
-  const acc = OFF.map(() => ({ nat: 0, floor: 0, cutV: 0, ceil: 0, mesh: 0, n: 0, stole: 0,
+  const acc = OFF.map(() => ({ nat: 0, floor: 0, ceil: 0, mesh: 0, n: 0, stole: 0,
     thiefOut: 0, thiefDrop: 0, thiefN: 0 }));
   let along = 0;
   for (const s of segs) {
@@ -6437,12 +6522,11 @@ function truckSpec(): Record<string, number> {
       const m = meshHeightAt(qx, qz);
       if (m === null) continue;
       const own = stripFloor(s, qx, qz).y;      // THIS road's floor here
-      const cv = cutAtVertex(qx, qz);           // what the mesh rule clamps to
       const ce = roadCeiling(qx, qz);           // what the field rule clamps to
       const a = acc[i];
       a.nat += sampleHeight(qx, qz); a.floor += own; a.mesh += m;
-      a.cutV += cv ?? own; a.ceil += ce ?? own;
-      if (cv !== null && cv < own - CUT_CLEAR - 0.01) {
+      a.ceil += ce ?? own;
+      if (m < own - CUT_CLEAR - 0.01) {
         a.stole++;
         // WHO stole it, and from how far: the plan distance to the winning
         // strip's edge decides whether a reach filter can cure this or whether
@@ -6463,7 +6547,7 @@ function truckSpec(): Record<string, number> {
     const a = acc[i];
     if (!a.n) return null;
     const q = (v: number): number => +(v / a.n).toFixed(2);
-    return { nat: q(a.nat), floor: q(a.floor), cutV: q(a.cutV), ceil: q(a.ceil), mesh: q(a.mesh),
+    return { nat: q(a.nat), floor: q(a.floor), ceil: q(a.ceil), mesh: q(a.mesh),
       floorBelowNat: q(a.nat - a.floor), meshBelowNat: q(a.nat - a.mesh), stole: a.stole, n: a.n,
       thiefOut: a.thiefN ? +(a.thiefOut / a.thiefN).toFixed(1) : null,
       thiefDrop: a.thiefN ? +(a.thiefDrop / a.thiefN).toFixed(2) : null };
@@ -6901,7 +6985,9 @@ function meshHeightAt(x: number, z: number): number | null {
     real.fix = { lat, lon, acc, head, spd, at: performance.now() };
     real.err = '';
   };
-(window as unknown as { __cpdraw?: object }).__cpdraw = (): number => cpDraw.length;
+(window as unknown as { __cpdraw?: object }).__cpdraw = (): object =>
+  ({ n: cpDraw.length, hidden: cpDraw.filter((c) => c.hid).length,
+    d: cpDraw.map((c) => ({ d: Math.round(c.d), hid: c.hid })).slice(0, 12) });
 (window as unknown as { __cpwhy?: object }).__cpwhy = (): object => cpCull;
 /** A named road's drivable centrelines, so a test can traverse the ROAD rather
  *  than teleport onto the checkpoints and grade its own homework. */
@@ -7456,7 +7542,7 @@ function updatePois(): void {
 // designed around NOT drawing these — the tally moving is the whole signal —
 // but "invisible feels right" is a claim you can only test by driving the
 // version that isn't.
-interface CpDraw { x: number; y: number; tx: number; ty: number; got: boolean; age: number; d: number }
+interface CpDraw { x: number; y: number; tx: number; ty: number; got: boolean; age: number; d: number; hid: boolean }
 let cpDraw: CpDraw[] = [];
 // 700m was too short to ever see one: checkpoints sit 250m apart on a road
 // that bends, so from any given spot most of them are behind you or round the
@@ -7504,11 +7590,21 @@ function updateCps(): void {
       // — a fixed pixel height would stand up straight on a hillside and lie
       // about which way is up.
       poiVec.set(c.x, g + CP_BEAM_H, c.z).project(camera);
+      // Can you actually SEE this one? Same claim the POI pins make, and the
+      // same answer: a marker behind a ridge is right about where it is and
+      // wrong about whether it is in view, so it ghosts rather than vanishes.
+      // Cached and staggered — occlusion changes at driving speed, not frame
+      // rate, and sightBlocked marches up to seventy ground samples.
+      if (c.hidAt === undefined || now - c.hidAt > 400) {
+        c.hidAt = now + (cpCull.drawn % 7) * 40;
+        c.hid = sightBlocked(c.x, g + 1.2, c.z)
+          || wallHitAlong(camera.position.x, camera.position.z, c.x, c.z, camera.position.y) < 0.98;
+      }
       cpDraw.push({
         x: sx, y: sy,
         tx: (poiVec.x * 0.5 + 0.5) * innerWidth,
         ty: (-poiVec.y * 0.5 + 0.5) * innerHeight,
-        got: c.got, age, d,
+        got: c.got, age, d, hid: camMode !== 'top' && !!c.hid,
       });
       if (cpDraw.length >= (camMode === 'top' ? 400 : 60)) return;
     }
@@ -9365,6 +9461,13 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const bands = 4;
     const near = Math.round(clamp(1 - c.d / CP_SIGHT, 0, 1) * (bands - 1)) / (bands - 1);
     hctx.save();
+    // OCCLUDED READS AS A RUMOUR. The same claim the POI pins make: a marker
+    // behind a ridge knows where the checkpoint is and nothing about whether
+    // you can see it, and a beam at full strength through a mountain reads as
+    // "there it is". Ghosted hard rather than hidden — the road still runs
+    // that way, you just cannot see this bit of it. Applied as a blanket alpha
+    // so the pip, the stem and the whole light column dim together.
+    const ghost = c.hid ? 0.22 : 1;
     if (camMode === 'top') {
       // Chart furniture: a flat pip, no stem and no column. A stem drawn under
       // a camera looking straight down is a single pixel of nothing, and the
@@ -9388,14 +9491,14 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         hctx.fillStyle = UI.edge;
         for (let i = 0; i <= h; i++) {
           const t = i / h;                       // 0 at the foot, 1 at the top
-          hctx.globalAlpha = (0.85 - t * 0.72) * (0.35 + 0.65 * near);
+          hctx.globalAlpha = (0.85 - t * 0.72) * (0.35 + 0.65 * near) * ghost;
           // Lean with the projection: a column beside the camera leans away,
           // and a beam drawn dead vertical would read as a HUD overlay rather
           // than something standing in the world.
           hctx.fillRect(Math.round(x + (tx - x) * t), y - i, t < 0.35 ? 2 : 1, 1);
         }
       }
-      hctx.globalAlpha = 0.5 + 0.5 * near;
+      hctx.globalAlpha = (0.5 + 0.5 * near) * ghost;
       hctx.fillStyle = UI.gold;
       diamond(x, y, 3);
       hctx.restore();
@@ -9404,11 +9507,11 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // GHOST: a hollow diamond on a short stem. It has to survive being drawn
     // over scrub and shadow at 2px per HUD pixel, so it gets a dark seat
     // underneath it — the same trick the POI pins use — rather than more alpha.
-    hctx.globalAlpha = 0.85;
+    hctx.globalAlpha = 0.85 * ghost;
     hctx.fillStyle = UI.ink;
     diamond(x, y - 5, 4);
     hctx.fillRect(x, y - 4, 1, 5);
-    hctx.globalAlpha = 0.45 + 0.55 * near;
+    hctx.globalAlpha = (0.45 + 0.55 * near) * ghost;
     hctx.fillStyle = UI.edge;
     diamondOutline(x, y - 5, 3);
     hctx.fillRect(x, y - 2, 1, 3);
