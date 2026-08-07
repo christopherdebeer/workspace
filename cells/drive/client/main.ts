@@ -7762,8 +7762,13 @@ function updatePois(): void {
   // away and stays on screen the entire way there.
   const all = [...pois.values()].map((p) => ({ p, d: Math.hypot(p.x - state.x, p.z - state.z) }));
   const pinned = all.filter((e) => e.p.pinned).sort((a, b) => a.d - b.d);
+  // A pinned waypoint SHADOWS its namesake from the OSM stream: the mission's
+  // ADMIN OFFICE and the mapped Admin Office are the same place, and two pins
+  // 10m apart reading the same name is a defect, not information.
+  const shadowed = new Set(pinned.map((e) => e.p.name.toUpperCase()));
   const near = pinned.concat(
-    all.filter((e) => !e.p.pinned && e.d < 3000).sort((a, b) => a.d - b.d).slice(0, 3 - Math.min(2, pinned.length)),
+    all.filter((e) => !e.p.pinned && e.d < 3000 && !shadowed.has(e.p.name.toUpperCase()))
+      .sort((a, b) => a.d - b.d).slice(0, 3 - Math.min(2, pinned.length)),
   );
   camera.getWorldDirection(camFwd);
   poiDraw = [];
@@ -9160,6 +9165,14 @@ function hudIcon(ch: string, x: number, y: number, col: string, px = 8): void {
   hctx.textBaseline = 'alphabetic';
   hctx.fillText(ch, Math.round(x), Math.round(y) + px - 1);
 }
+/** …with the same one-pixel ink outline the floating labels wear — a glyph
+ *  beside outlined text and not outlined itself reads as pasted on. */
+function hudIconEdge(ch: string, x: number, y: number, col: string, px = 8): void {
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1], [-1, -1], [1, -1], [-1, 1], [1, 1]] as const) {
+    hudIcon(ch, x + dx, y + dy, 'rgba(4,10,11,0.85)', px);
+  }
+  hudIcon(ch, x, y, col, px);
+}
 /** Which kinds carry a mark: a job, and a place that services the rig.
  *  The rest are already told apart by their beam colour. */
 const KIND_ICON: Partial<Record<Poi['kind'], string>> = { mission: ICON.flag, repair: ICON.wrench };
@@ -9334,11 +9347,17 @@ const viaMet = (m: Mission): boolean => { const v = viaProgress(m); return !v ||
 function stepMission(now: number): void {
   if (!mission) return;
   const near = (p: Poi | null): number => (p ? Math.hypot(p.x - state.x, p.z - state.z) : Infinity);
-  if (missionPhase === 'offered' && near(missionGiver) < POI_RANGE) {
-    // The prompt is drawn by the HUD; acceptance is a tap on it.
-    missionReady = true;
-  } else if (missionPhase === 'offered') {
-    missionReady = false;
+  if (missionPhase === 'offered') {
+    const d = near(missionGiver);
+    // The prompt is drawn by the overlay; acceptance is a tap on it.
+    missionReady = d < POI_RANGE;
+    // The OFFER only speaks when you are APPROACHING the giver — from
+    // spawn-to-acceptance it used to sit mid-screen for the whole drive
+    // there, undismissable. Now the giver's flag pin carries the promise at
+    // distance, the card raises inside ~260m, an X puts it away, and
+    // driving off re-arms the X so coming back offers again.
+    missionNear = d < 260;
+    if (d > 320) missionDismissed = false;
   }
   if (missionPhase === 'active') {
     const d = near(missionDest);
@@ -9361,6 +9380,8 @@ function acceptMission(now: number): void {
   audio.stone();
 }
 let missionReady = false;         // in range of the giver, not yet accepted
+let missionNear = false;          // close enough that the offer card speaks
+let missionDismissed = false;     // the X, until you drive away and back
 
 interface Drive { name: string; sub: string; lat: number; lon: number; h: number; mission?: Mission }
 const DRIVES: Drive[] = [
@@ -9805,7 +9826,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // The label — its KIND leading it as a glyph where one exists. Gold when
     // in range or pinned by hand; dimmed when occluded.
     hctx.globalAlpha = p.hid ? 0.55 : 1;
-    if (iconCh) hudIcon(iconCh, x + 2, ly - 1, p.c);
+    if (iconCh) hudIconEdge(iconCh, x + 2, ly - 1, p.c);
     textEdgeS(label, x + 3 + iw, ly, p.rng || p.pinned ? UI.gold : p.hid ? UI.dim : UI.text);
     if (p.rng) {
       // IN RANGE: brackets around the label — a place you have arrived AT.
@@ -9830,7 +9851,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const w = textSW(label) + 6 + iw;
     const y = clamp(Math.round(p.y / hudS), 20, HH - 30);
     const x = p.edge > 0 ? HW - w - 3 : 3;
-    if (iconCh) hudIcon(iconCh, x + 2, y + 1, p.c);
+    if (iconCh) hudIconEdge(iconCh, x + 2, y + 1, p.c);
     textEdgeS(label, x + 3 + iw, y + 2, p.rng || p.pinned ? UI.gold : p.c);
     poiRects.push({ x: x - 3, y: y - 5, w: w + 8, h: 18, name: p.name, kind: p.kind });
   }
@@ -10095,13 +10116,14 @@ function stepOverlays(): void {
     && (missionPhase !== 'done' || performance.now() - missionAt < 9000);
   if (mission && live) {
     if (missionPhase === 'offered') {
-      mc = {
+      mc = missionNear && !missionDismissed ? {
         kicker: mission.giver.name.toUpperCase(),
         head: mission.title,
         body: missionReady ? 'TAP TO ACCEPT' : 'PULL UP TO TAKE THE JOB',
         tone: missionReady ? 'good' : 'dim',
         ready: missionReady,
-      };
+        dismissable: true,
+      } : null;
     } else if (missionPhase === 'active') {
       const d = missionDest ? Math.hypot(missionDest.x - state.x, missionDest.z - state.z) : 0;
       const v = viaProgress(mission);
@@ -10325,6 +10347,7 @@ const overlays = createOverlays(
   { edge: UI.edge, dim: UI.dim, text: UI.text, soft: UI.soft, gold: UI.gold, hot: UI.hot, good: UI.good, bad: UI.bad },
   () => menu.open(),
   () => acceptMission(performance.now()),
+  () => { missionDismissed = true; },
 );
 
 // ── boot ───────────────────────────────────────────────────────────

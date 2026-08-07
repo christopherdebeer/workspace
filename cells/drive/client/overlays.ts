@@ -19,8 +19,10 @@ export interface MissionCard {
   head: string;
   body: string;
   tone: Tone;
-  /** True when a tap accepts the job — the only time the card takes taps. */
+  /** True when a tap accepts the job — the only time the card body takes taps. */
   ready: boolean;
+  /** Offers can be put away; the game re-arms the X by distance. */
+  dismissable?: boolean;
 }
 export interface ToastCard { kicker: string; head: string; body: string }
 
@@ -33,6 +35,7 @@ export function createOverlays(
   colors: Record<Tone, string>,
   onMenu: () => void,
   onAccept: () => void,
+  onDismiss: () => void,
 ): Overlays {
   const C = colors;
   const style = document.createElement('style');
@@ -56,6 +59,9 @@ export function createOverlays(
   .ov .head { font-size: 16px; font-weight: 700; margin: 1px 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   .ov .body { font-size: 10px; }
+  .ov .x { position: absolute; top: -1px; right: -1px; padding: 3px 7px 2px; cursor: pointer;
+    color: ${C.soft}; border: 1px solid ${C.dim}; background: rgba(8,20,23,0.9);
+    font-size: 10px; line-height: 1; display: none; pointer-events: auto; }
   `;
   document.head.appendChild(style);
 
@@ -82,6 +88,13 @@ export function createOverlays(
   };
   const m = card('ov-mission');
   m.root.addEventListener('click', () => { if (mReady) onAccept(); });
+  // The X sits on the card's corner and keeps its own pointer-events, so an
+  // offer that is not yet takeable (card inert) can still be put away.
+  const mx = document.createElement('div');
+  mx.className = 'x';
+  mx.textContent = 'X';
+  mx.addEventListener('click', (e) => { e.stopPropagation(); onDismiss(); });
+  m.root.appendChild(mx);
   const t = card('ov-toast');
   t.kicker.textContent = 'SURVEYED';
   t.head.style.color = C.good;
@@ -102,6 +115,7 @@ export function createOverlays(
       m.root.style.borderColor = C[mc.tone];
       m.root.style.cursor = mc.ready ? 'pointer' : 'default';
       m.root.style.pointerEvents = mc.ready ? 'auto' : 'none';
+      mx.style.display = mc.dismissable ? 'block' : 'none';
       m.root.style.display = 'block';
     },
     toast(tc) {
