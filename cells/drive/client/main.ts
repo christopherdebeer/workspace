@@ -1875,6 +1875,8 @@ function facade(mat: THREE.Material): void {
       }`);
   };
 }
+/** Wall materials that take the skylight lift below. */
+const bldSkylit: THREE.MeshLambertMaterial[] = [];
 // Building tints vary per way id so a block reads as parcels, not one slab.
 // Extrude material slots: [0]=caps (roof), [1]=side walls (darker).
 // WORN PAINT, not four shades of mud. The old set was four colours a few
@@ -1898,20 +1900,27 @@ function facade(mat: THREE.Material): void {
 // never the paint. They were an UNLIT MeshBasicMaterial sitting at a flat 1.0
 // (see bPaint) — a value no lit surface in this renderer comes close to. With
 // that fixed the palette is free to be as light as the art wants.
+// FADED WHITE, WITH THE HUE AS THE VARIETY. Value sits high and close across
+// the set; what changes between buildings is the TINT — warm limewash, ochre,
+// rose, blue-grey, mint. That is what a lime-washed street actually looks
+// like: one brightness, many casts.
 const B_MATS = [
-  0xd9d0be, 0xcfc3ac, 0xdcd4c4, 0xc3b49b, 0xd6c4a6, 0xcdba9f,
-  0xc9c7ba, 0xd8ccc2, 0xc2c8c0, 0xd0bcb2, 0xc4cad0, 0xd4cbb2,
+  0xefe9dc, 0xe8dfcc, 0xf2ede4, 0xe3d8c4, 0xefe2cc, 0xe9dcc6,
+  0xe7e6dc, 0xf0e6de, 0xe2e8e1, 0xeeddd6, 0xe1e7ee, 0xece5d2,
 ].map((c, i) => {
   // Walls carry the detail now — openings, lintels, ivy — and at 0.72 under a
   // low sun there was not enough wall left for any of it to read against.
-  const side = new THREE.Color(c).multiplyScalar(0.88);
+  // The WALL keeps the full value now and the roof gives way instead. Walls
+  // are the paint; a roof is tile or felt and has no business being the
+  // brighter of the two.
+  const side = new THREE.Color(c);
   const wall = new THREE.MeshLambertMaterial({ color: side, map: wallTexes[i % wallTexes.length], side: DS });
   facade(wall);
+  bldSkylit.push(wall);
   return [
-    // A shade off the wall's tone. Not a bloom guard — the measurement above
-    // says there is ample room — but a roof is the one surface that goes
-    // square-on to a high sun, and it should not out-read its own walls.
-    new THREE.MeshLambertMaterial({ color: new THREE.Color(c).multiplyScalar(0.9), map: roofTex, side: DS }),
+    // A roof is tile or felt, not paint, and it is the one surface that goes
+    // square-on to a high sun — so it takes the darkening the wall used to.
+    new THREE.MeshLambertMaterial({ color: new THREE.Color(c).multiplyScalar(0.78), map: roofTex, side: DS }),
     wall,
   ] as [THREE.Material, THREE.Material];
 });
@@ -5850,6 +5859,20 @@ function stepWeather(now: number, dt: number): void {
   // fill stays up to carry shape without colour.
   sun.intensity = biome.sunI * (1 - wx.cloud * 0.72) * (0.09 + 0.91 * dayF);
   hemi.intensity = biome.hemiI * (1 + wx.cloud * 0.35) * (0.30 + 0.70 * dayF);
+  // SKYLIGHT ON THE WALLS. A HemisphereLight hands a VERTICAL face the flat
+  // 50/50 sky-ground blend — about 0.22 of incident here — so a wall turned
+  // away from the sun rendered at 0.22 x albedo = 0.13 linear, DARKER than the
+  // ground beside it at 0.154. Lime-washed paint reading darker than dirt is
+  // the "buildings are so dark" report, and it is a limitation of the rig
+  // rather than of the paint: there is no bounce off the street and no sky
+  // occlusion, so pale vertical surfaces are the one thing it under-lights.
+  //
+  // A small emissive proportional to the wall's own colour stands in for that
+  // missing bounce. Scaled by daylight so nothing glows at night, and sized
+  // against the measured budget: a sunlit wall reaches ~0.6 x 0.85 = 0.51 and
+  // this adds ~0.06, still clear of the 0.62 bright-pass cut.
+  const lift = 0.075 * dayF * (1 - wx.cloud * 0.3);
+  for (const w of bldSkylit) w.emissive.copy(w.color).multiplyScalar(lift);
   compMat.uniforms.uBloom.value = (0.75 - wx.cloud * 0.35) * (0.45 + 0.55 * dayF);
   skyMat.uniforms.uCloud.value = wx.cloud;
   skyMat.uniforms.uTime.value = now / 1000;
