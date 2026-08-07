@@ -2050,7 +2050,7 @@ function rockGeo(): THREE.BufferGeometry {
   g.translate(0, 0.35, 0);
   return g;
 }
-const VEG_CAP: Record<VegKind, number> = { broadleaf: 1600, conifer: 1400, palm: 600, snag: 450, bush: 2600, rock: 900, grass: 7000 };
+const VEG_CAP: Record<VegKind, number> = { broadleaf: 1600, conifer: 1400, palm: 600, snag: 450, bush: 2600, rock: 900, grass: 26000 };
 // ── grass ──────────────────────────────────────────────────────────
 // Sward was the one cover class the world could not draw. WorldCover calls it
 // grass, the palette painted it green, and then nothing grew there: the
@@ -2095,8 +2095,16 @@ const GRASS_M2: Record<number, number> = {
   95: 0.35,   // mangrove
   100: 0.18,  // moss
 };
-const GRASS_SIGHT = 46;      // metres — past this the ground texture does the work
-const GRASS_STEP = 1.5;      // slot spacing; density is dithered, not scaled
+// BANDED, because one lattice cannot be both dense and wide. A single 1m
+// spacing out to 130m is fifty thousand slots a pass; a single 3m spacing is
+// cheap and looks like a lawn someone mowed badly. So the step COARSENS with
+// distance — full density underfoot, coverage to the horizon of the layer —
+// and the dither thins the outer bands further so the edge fades rather than
+// ending on a line. [outer radius, slot spacing].
+const GRASS_BANDS: Array<[number, number]> = [[40, 1.0], [82, 1.9], [140, 3.4]];
+const GRASS_SIGHT = 140;     // the outermost band; past this the ground texture works
+/** Density and reach multiplier from the RIG dial. */
+let grassScale = 1;
 /** Per-kind draw distance. Grass is ankle height: at 50m it is a pixel of
  *  noise the terrain colour already provides, so drawing it there is pure
  *  cost. Everything else keeps the old full-field range. */
@@ -2361,49 +2369,89 @@ function seedCell(gx: number, gz: number): void {
 // tens of milliseconds and landing them on the same frame costs one visible
 // hitch a second instead of two small ones.
 let swardMs = 0;
+// groundAt is the expensive call in the sward — bilinear heightfield plus the
+// road-corridor cut — and at full density it was being asked seven thousand
+// times a pass, which measured 27ms and read as a stutter once a second. The
+// ground under a field does not need per-blade truth: it is sampled from a
+// ~9.5m/px heightfield to begin with, so an 8m lattice with bilinear
+// interpolation between corners is within centimetres of the real thing for a
+// fifth of the calls. Cleared each pass, since the truck has moved.
+const SWARD_G = 8;
+const swardCache = new Map<number, number>();
+function swardCorner(gx: number, gz: number): number {
+  const k = gx * 65536 + gz;
+  let v = swardCache.get(k);
+  if (v === undefined) { v = groundAt(gx * SWARD_G, gz * SWARD_G); swardCache.set(k, v); }
+  return v;
+}
+function swardGround(x: number, z: number): number {
+  const fx = x / SWARD_G, fz = z / SWARD_G;
+  const gx = Math.floor(fx), gz = Math.floor(fz);
+  const tx = fx - gx, tz = fz - gz;
+  const a = swardCorner(gx, gz), b = swardCorner(gx + 1, gz);
+  const c = swardCorner(gx, gz + 1), d = swardCorner(gx + 1, gz + 1);
+  return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
+}
 function refreshSward(): void {
   const t0 = performance.now();
-  const cap = Math.floor(VEG_CAP.grass * vegScale);
+  swardCache.clear();
+  const cap = Math.floor(VEG_CAP.grass * vegScale * grassScale);
   const gm = vegMeshes.grass;
   let n = 0;
-  const R = GRASS_SIGHT, R2 = R * R;
-  const x0 = Math.floor((state.x - R) / GRASS_STEP), x1 = Math.ceil((state.x + R) / GRASS_STEP);
-  const z0 = Math.floor((state.z - R) / GRASS_STEP), z1 = Math.ceil((state.z + R) / GRASS_STEP);
   // Cover is 37m data and sampleCover walks every loaded tile, so asking it per
   // tuft would be thousands of scans a second for an answer that cannot change
-  // within a blade's width. One lookup per 8m block instead.
+  // within a blade's width. One lookup per 8m block instead, and the block is
+  // remembered ACROSS bands because they sweep the same ground.
   let bx = Infinity, bz = Infinity, blockRate = 0;
-  for (let ix = x0; ix <= x1 && n < cap; ix++) {
-    for (let iz = z0; iz <= z1 && n < cap; iz++) {
-      const sx = ix * GRASS_STEP, sz = iz * GRASS_STEP;
-      const dx = sx - state.x, dz = sz - state.z;
-      const d2 = dx * dx + dz * dz;
-      if (d2 > R2) continue;
-      const qx = Math.floor(sx / 8), qz = Math.floor(sz / 8);
-      if (qx !== bx || qz !== bz) {
-        bx = qx; bz = qz;
-        const cv = sampleCover(qx * 8 + 4, qz * 8 + 4);
-        blockRate = cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3);
+  const reach = GRASS_BANDS[GRASS_BANDS.length - 1][0] * Math.min(1.6, 0.55 + grassScale * 0.6);
+  let inner = 0;
+  for (const [bandR, step] of GRASS_BANDS) {
+    const R = Math.min(bandR, reach), R2 = R * R, in2 = inner * inner;
+    inner = R;
+    if (R <= 0) continue;
+    const x0 = Math.floor((state.x - R) / step), x1 = Math.ceil((state.x + R) / step);
+    const z0 = Math.floor((state.z - R) / step), z1 = Math.ceil((state.z + R) / step);
+    const area = step * step;
+    for (let ix = x0; ix <= x1 && n < cap; ix++) {
+      for (let iz = z0; iz <= z1 && n < cap; iz++) {
+        const sx = ix * step, sz = iz * step;
+        const dx = sx - state.x, dz = sz - state.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 > R2 || d2 <= in2) continue;      // this band's annulus only
+        const qx = Math.floor(sx / 8), qz = Math.floor(sz / 8);
+        if (qx !== bx || qz !== bz) {
+          bx = qx; bz = qz;
+          const cv = sampleCover(qx * 8 + 4, qz * 8 + 4);
+          blockRate = cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3);
+        }
+        if (blockRate <= 0) continue;
+        // DITHERED, not scaled. Thinning by shrinking every blade turns a field
+        // into a lawn that fades; dropping whole tufts on a hash keeps the ones
+        // that remain full size, which is what reads at this pixel scale — and a
+        // tuft never pops, it stops existing at a range where it was one pixel.
+        //
+        // The fade runs over the WHOLE layer rather than per band, so the three
+        // lattices read as one field thinning outward instead of three rings.
+        const h1 = hash2(ix * 31 + Math.round(step * 10), iz);
+        const fade = 1 - Math.sqrt(d2) / reach;
+        if (h1 > blockRate * area * grassScale * (0.22 + 0.78 * fade * fade)) continue;
+        const h2 = hash2(ix + 9187, iz);
+        const wx2 = sx + (h2 - 0.5) * step * 0.9;
+        const wz2 = sz + (hash2(ix, iz + 4231) - 0.5) * step * 0.9;
+        // Keep off the carriageway — but ASK only where there is a road to be
+        // on. surfaceAt scans the road grid, and out in a field the answer is
+        // always the same; one Map lookup skips it for the great majority.
+        if (roadGrid.has(gkey(wx2, wz2)) && surfaceAt(wx2, wz2) !== 'ground') continue;
+        vegDummy.position.set(wx2, swardGround(wx2, wz2), wz2);
+        vegDummy.rotation.set(0, h2 * 6.283, 0);
+        // Tufts grow with distance so a far one still covers a pixel: the
+        // outer bands are sparse by design and would otherwise read as bald.
+        vegDummy.scale.setScalar((0.7 + h1 * 1.6) * (1 + Math.sqrt(d2) / reach * 0.9));
+        vegDummy.updateMatrix();
+        gm.setMatrixAt(n, vegDummy.matrix);
+        gm.setColorAt(n, grassTint);
+        n++;
       }
-      if (blockRate <= 0) continue;
-      // DITHERED, not scaled. Thinning by shrinking every blade turns a field
-      // into a lawn that fades; dropping whole tufts on a hash keeps the ones
-      // that remain full size, which is what reads at this pixel scale — and a
-      // tuft never pops, it stops existing at a range where it was one pixel.
-      const h1 = hash2(ix, iz);
-      const fade = 1 - d2 / R2;
-      if (h1 > blockRate * GRASS_STEP * GRASS_STEP * (0.35 + 0.65 * fade)) continue;
-      const h2 = hash2(ix + 9187, iz);
-      const wx2 = sx + (h2 - 0.5) * GRASS_STEP * 0.9;
-      const wz2 = sz + (hash2(ix, iz + 4231) - 0.5) * GRASS_STEP * 0.9;
-      if (surfaceAt(wx2, wz2) !== 'ground') continue;   // not on the carriageway
-      vegDummy.position.set(wx2, groundAt(wx2, wz2), wz2);
-      vegDummy.rotation.set(0, h2 * 6.283, 0);
-      vegDummy.scale.setScalar(0.7 + h1 * 1.6);
-      vegDummy.updateMatrix();
-      gm.setMatrixAt(n, vegDummy.matrix);
-      gm.setColorAt(n, grassTint);
-      n++;
     }
   }
   gm.count = n;
@@ -8471,6 +8519,13 @@ const DIAL_GROUPS: DialGroup[] = [
       // inside a building footprint to reveal it.
       dial('fow', 'FOG OF WAR', ['OFF', 'ON'], 0, (i) => { cu.uFow.value = i; }),
       dial('veg', 'VEGETATION', ['NONE', 'SPARSE', 'FULL'], 2, (i) => { vegScale = [0, 0.35, 1][i]; }),
+      // Grass is the one layer whose cost is worth handing over: it is the
+      // difference between a field and a golf course, and it is also the
+      // difference between a phone holding 60fps and not. Five steps, and the
+      // top two are deliberately past what I would ship as a default.
+      dial('grass', 'GRASS', ['OFF', 'LOW', 'MEDIUM', 'HIGH', 'LUSH'], 2, (i) => {
+        grassScale = [0, 0.45, 1, 1.9, 3.2][i];
+      }),
       dial('life', 'WILDLIFE', ['OFF', 'ON'], 1, (i) => {
         wildlifeOn = i === 1;
         birds.visible = wildlifeOn;
