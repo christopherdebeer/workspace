@@ -1209,12 +1209,14 @@ function buildTerrainMesh(t: HeightTile): void {
   const cell = t.w / SEG;
   for (let i = 0; i < pos.count; i++) {
     const ex = pos.getX(i) + cxm, ez = pos.getZ(i) + czm;
-    // The SAME bilinear field the roads/buildings/car sample (groundAt) —
-    // a nearest-pixel mesh disagreed with it by metres and swallowed every
-    // draped layer under the terrain skin. groundAt also applies the road
-    // corridor cut, so a hillside can never stand in a carriageway's airspace.
+    // The MESH takes the HARD cut rule (cutAtVertex): every vertex within one
+    // cell of a crossed cell clamps flat to that cell's deck floor, which is
+    // the form of the rule the no-chord-over-a-deck guarantee is provable in.
+    // The wheels ride the graded field instead — see roadCeiling.
     const cv = sampleCover(ex, ez);
-    let elev = groundAt(ex, ez);
+    const rawE = sampleHeight(ex, ez);
+    const vc = cutAtVertex(ex, ez);
+    let elev = vc !== null && vc < rawE ? vc : rawE;
     // GIVE THE SEA A FLOOR. The elevation source carries no bathymetry: it
     // fills the ocean with a flat plate AT the waterline, so once the water
     // plane was placed correctly the Pacific rendered as a 40cm lagoon over
@@ -3214,118 +3216,136 @@ function roadHeightAt(x: number, z: number): number | null {
 // of every triangle a road can pass through is inside that distance, so no
 // chord can stand higher than wash·slack ≈ 0.7m below the road surface — and
 // only beyond the bench does the 32° batter climb away.
-const CUT_BATTER = 0.62;   // rise per metre out past the bench — a ~32° cut face
-// The bench lip must finish below the road SURFACE, and the surface just came
-// down from profile+0.6 to profile+0.22. At 0.03 the lip rose 0.66m over a
-// 22m bench — a third of a metre ABOVE the new tarmac, which would bury the
-// road the bench exists to protect. 0.008 keeps it ~0.3m clear at every
-// latitude while still shedding the dead-level look.
 // ── THE VERTICAL BUDGET, in one place ──────────────────────────────
 // The visible daylight between tarmac and ground on FLAT land is exactly
 // CUT_CLEAR + the road lift: the cut lowers the ground to profile−CUT_CLEAR
 // and the deck is drawn at profile+lift. Measured before this was named:
-// 0.55m median at Noordhoek, Big Sur AND dead-flat Death Valley — the
-// "roads hover half a metre" report was these two constants, not error.
-// The apron skirts then render that daylight as walls, which is what made
-// every road read as a slab on a plinth.
+// 0.55m median at Noordhoek, Big Sur AND dead-flat Death Valley.
+const CUT_CLEAR = 0.12;    // how far below the deck floor the cut plane sits
+// ── the cut, as a raster of where carriageways actually are ────────
+// This replaces a 22m flat bench, a 14m graded tail, a 32° batter, a "bed"
+// and a "hard" layer — five mechanisms that were all compensating for one
+// fact: the terrain mesh draws straight chords between vertices a cell
+// apart, so any triangle a road passes through must have ALL THREE corners
+// held below the deck or the chord over the road stands proud of it.
 //
-// The budget cannot go to zero: the terrain mesh samples the cut field at
-// vertices ~16m apart and draws straight chords between them, so the deck
-// must clear the highest chord the bench permits. The inequality is
-//   lift + CUT_CLEAR − CUT_WASH·CUT_SLACK  >  0   (with margin)
-// At 0.18 + 0.12 − 0.004·22.4 ≈ 0.21 the margin holds at every latitude and
-// every TERRAIN dial setting, and the designed gap falls from 0.52 to 0.30.
-const CUT_CLEAR = 0.12;    // how far below the profile the cut planes the ground
-const CUT_WASH = 0.004;    // the bench's own fall, kerb to lip
-const CUT_TAIL = 14;       // how far past the bench the batter grades before nature resumes
-const CUT_REACH = 14;      // tracks only: a worn groove, not an engineered cutting
-let CUT_SLACK = 23;        // bench width — the mesh cell diagonal, set from the origin latitude
-/** The bench must span the terrain mesh's cell diagonal: the farthest a
- *  triangle corner can sit from a road passing through that cell. Tile ground
- *  width shrinks with cos(latitude) and the cell shrinks with the mesh
- *  resolution, so this is a per-world, per-setting number. */
-function recalcSlack(): void {
-  CUT_SLACK = ((40075016.7 / 2 ** TERRAIN_Z) * Math.cos((origin.lat * Math.PI) / 180) / terrainSeg) * Math.SQRT2;
-}
-// A cutting has an angle of repose and so does an embankment, and it is the
-// same earth either way — so the ground is protected outward from a road at
-// the batter's own slope. See the bed, below.
-const CUT_FILL = CUT_BATTER;
-// …but only as far as the apron can follow it down. The bed is a claim that
-// the ground here belongs to a road, and a claim reaching further than the
-// 3.6m skirt would raise earth the road cannot meet — a wall standing beside
-// the carriageway wherever a ramp runs past a street. Past this the ground is
-// the neighbouring terrace's business again, which is the old behaviour, so
-// the fix can only ever fill a hole and never build one.
-const CUT_BED = 3.6 / CUT_FILL;   // ≈5.8m — where the bed has fallen one apron
-// The highest the ground is allowed to stand at (x,z), or null where no road
-// has an opinion. Tunnels are excluded: being buried is the entire point of
-// one, and carving their corridor would open every tunnel into a trench.
+// The old answer clamped every point within a cell-diagonal of every kerb to
+// a flat terrace, and took the MIN across all roads in reach — which planed
+// whole junctions down to their lowest carriageway and carved a canyon
+// either side of every road (measured at Noordhoek: ground 9.5m below
+// natural, 34m from a 7m road).
 //
-// A CUT AND A BED, not just a cut. The bench above is a flat terrace at the
-// road's own level reaching CUT_SLACK past the kerb, and combining terraces
-// with a bare `min` says: wherever two roads come within two bench-widths of
-// each other, the lower one planes the ground down to itself — straight
-// through the upper one's foundation. There is no vertical term anywhere in
-// the old test, so a road 21m away and 2m lower excavated the ground from
-// under this one and left it standing over a flat-bottomed trench on a 3.6m
-// skirt. Measured before this, as the share of road undercut deeper than the
-// apron can reach: Bormio 8.6%, Chapman's Peak 11.5%, and — flat, median
-// cross-fall 0.07 — CAIRO 19.6%, worst case 23.9m.
-//
-// So it is not an alpine bug at all. It needs two roads within two terraces of
-// each other at different heights, which is a switchback, a terraced street
-// and a grade-separated junction alike; what a mountain adds is bare ground to
-// see it against.
-//
-// So each segment now contributes two numbers — a CEILING it cuts down to
-// (min: any cutting in reach may remove ground) and a BED it stands on (max:
-// no cutting may pass through a road's own foundation), the bed falling away
-// at the fill slope so the protection tapers into the neighbouring terrace
-// instead of stepping down to it.
-// `hard` keeps the guarantee the bench was built for: under a carriageway the
-// ground stays below that carriageway, whatever any other road wants.
-function roadCeiling(x: number, z: number): number | null {
-  let ceil: number | null = null;   // what the cuttings take away
-  let bed: number | null = null;    // what no cutting may take
-  let hard: number | null = null;   // carriageways directly overhead
-  const R = CUT_SLACK + CUT_TAIL + 2;
-  const cx0 = Math.floor((x - R) / GRID), cx1 = Math.floor((x + R) / GRID);
-  const cz0 = Math.floor((z - R) / GRID), cz1 = Math.floor((z + R) / GRID);
-  for (let cx = cx0; cx <= cx1; cx++) for (let cz = cz0; cz <= cz1; cz++) {
-    const arr = roadGrid.get(`${cx},${cz}`);
-    if (!arr) continue;
-    for (const seg of arr) {
-      if (seg.tn || seg.ya === undefined || seg.yb === undefined) continue;
-      const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
-      const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
-      const d = Math.hypot(x - (seg.ax + dx * t), z - (seg.az + dz * t));
-      const out = d - (seg.hw + 0.6);
-      // A track is worn, not engineered: it keeps its narrow, shallow groove
-      // rather than a benched cutting. It also FOLLOWS the terrain instead of
-      // holding a profile, so the chord problem the bench exists for cannot
-      // bury one.
-      if (seg.tk ? out > CUT_REACH * 0.45 : out > CUT_SLACK + CUT_TAIL) continue;
-      const y = seg.ya + (seg.yb - seg.ya) * t;
-      const c = seg.tk
-        ? y - CUT_CLEAR + Math.max(0, out) * CUT_BATTER * 1.7
-        : y - CUT_CLEAR + Math.min(Math.max(out, 0), CUT_SLACK) * CUT_WASH
-          + Math.max(0, out - CUT_SLACK) * CUT_BATTER;
-      if (ceil === null || c < ceil) ceil = c;
-      if (out <= CUT_BED) {
-        const b = y - CUT_CLEAR - Math.max(0, out) * CUT_FILL;
-        if (bed === null || b > bed) bed = b;
+// The new answer marks the lattice cells the carriageway strip actually
+// crosses, with the LOCAL deck floor of the strip in that cell. A consumer
+// asks the 3×3 neighbourhood around its point, which is precisely "could a
+// triangle through my point be crossed by that strip" — so the guarantee
+// (no chord over a deck) survives, while the clamp reaches at most two
+// cells past the kerb instead of a bench plus a tail, and the value it
+// clamps to is the nearest strip's own height rather than the minimum of
+// every road within forty metres.
+let cutL = 16;                                 // lattice spacing = the mesh cell
+const cutCells = new Map<string, Seg[]>();     // cell → the strips that cross it
+/** Mark every lattice cell a segment's carriageway strip touches. The cell
+ *  carries the SEGMENTS, not a number: a per-cell floor quantizes the deck
+ *  along its own gradient — measured at Noordhoek, a descending road floated
+ *  grade×cell ≈ 1.9m over its own cut — so height is always evaluated at the
+ *  nearest point of the strip instead, which keeps the clamp surface parallel
+ *  to the deck. */
+function rasterizeCut(s: Seg): void {
+  if (s.tn || s.ya === undefined || s.yb === undefined) return;
+  const r = s.hw + 0.6;
+  const len = Math.hypot(s.bx - s.ax, s.bz - s.az);
+  const steps = Math.max(1, Math.ceil(len / (cutL * 0.4)));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    const x = s.ax + (s.bx - s.ax) * t, z = s.az + (s.bz - s.az) * t;
+    for (let cx = Math.floor((x - r) / cutL); cx <= Math.floor((x + r) / cutL); cx++) {
+      for (let cz = Math.floor((z - r) / cutL); cz <= Math.floor((z + r) / cutL); cz++) {
+        const k = `${cx},${cz}`;
+        const arr = cutCells.get(k);
+        if (!arr) cutCells.set(k, [s]);
+        else if (!arr.includes(s)) arr.push(s);
       }
-      if (out <= 0 && (hard === null || y - CUT_CLEAR < hard)) hard = y - CUT_CLEAR;
     }
   }
-  if (ceil === null) return null;
-  let g = bed === null ? ceil : Math.max(ceil, bed);
-  // A road ten metres above and twenty across has a real embankment between
-  // you and it — but its toe stops at your kerb, it does not roll over your
-  // carriageway. Without this the bed would bury the lower road.
-  if (hard !== null && g > hard) g = hard;
-  return g;
+}
+/** The raster lattice is the terrain mesh cell: tile ground width over the
+ *  vertex count, shrinking with cos(latitude) — a per-world, per-dial number.
+ *  Changing it invalidates every rasterized cell, so they are all redone. */
+function recalcCut(): void {
+  cutL = (40075016.7 / 2 ** TERRAIN_Z) * Math.cos((origin.lat * Math.PI) / 180) / terrainSeg;
+  rebuildCut();
+}
+/** Re-raster every segment — the lattice spacing just changed under them. */
+function rebuildCut(): void {
+  cutCells.clear();
+  const seen = new Set<Seg>();
+  for (const arr of roadGrid.values()) for (const sg of arr) {
+    if (!seen.has(sg)) { seen.add(sg); rasterizeCut(sg); }
+  }
+}
+/** The deck FLOOR of a strip at the point of it nearest (x,z): profile minus
+ *  the cross-fall (the tilted kerb is the lowest thing ground must respect),
+ *  and the plan distance to the strip's edge. */
+function stripFloor(s: Seg, x: number, z: number): { y: number; out: number } {
+  const dx = s.bx - s.ax, dz = s.bz - s.az;
+  const t = clamp(((x - s.ax) * dx + (z - s.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+  const fA = (s.ya as number) - Math.abs(s.ca ?? 0), fB = (s.yb as number) - Math.abs(s.cb ?? 0);
+  return {
+    y: fA + (fB - fA) * t,
+    out: Math.hypot(x - (s.ax + dx * t), z - (s.az + dz * t)) - (s.hw + 0.6),
+  };
+}
+// TWO CONSUMERS, TWO RULES — because they need different things from the
+// same raster, and the first version of this used one rule and measured the
+// consequence. The MESH needs the hard rule: every vertex within one cell of
+// a crossed cell clamps flat to that cell's deck floor, which is what makes
+// "no chord over a deck" provable, and measured ZERO breaches at four sites
+// where the old bench had six. The WHEELS need a continuous rule: the hard
+// one steps by the whole cut depth at every cell boundary, and the suspension
+// read that as a 32m teleport beside a Bormio hairpin stack. So the field
+// version grades away from the marked cells at a cut-face slope instead —
+// same raster, same values, continuous everywhere, and equal to the hard rule
+// inside the cells where the guarantee actually binds.
+const CUT_FACE = 0.62;     // rise per metre off the kerb — a ~32° cut face
+/** Gather the distinct strips indexed in the (2R+1)² cells around a point. */
+function stripsNear(x: number, z: number, R: number, into: Set<Seg>): void {
+  const cx = Math.floor(x / cutL), cz = Math.floor(z / cutL);
+  for (let ax = cx - R; ax <= cx + R; ax++) {
+    for (let az = cz - R; az <= cz + R; az++) {
+      const arr = cutCells.get(`${ax},${az}`);
+      if (arr) for (const sg of arr) into.add(sg);
+    }
+  }
+}
+const cutSet = new Set<Seg>();
+/** The MESH's ceiling: FLAT across the reach but PARALLEL to the deck along
+ *  it — each vertex clamps to the nearest strip point's floor. Parallel is
+ *  what makes the guarantee survive a gradient: the clamps of a crossed
+ *  triangle's vertices are linear in along-road position, so their chord over
+ *  any crossing point sits at that point's own floor, never above it. */
+function cutAtVertex(x: number, z: number): number | null {
+  cutSet.clear();
+  stripsNear(x, z, 1, cutSet);
+  let best: number | null = null;
+  for (const sg of cutSet) {
+    const f = stripFloor(sg, x, z);
+    if (best === null || f.y < best) best = f.y;
+  }
+  return best === null ? null : best - CUT_CLEAR;
+}
+/** The FIELD's ceiling: the same strips, graded off the kerb at the face
+ *  slope so nothing the tyres ride is discontinuous. */
+function roadCeiling(x: number, z: number): number | null {
+  cutSet.clear();
+  stripsNear(x, z, 2, cutSet);
+  let best: number | null = null;
+  for (const sg of cutSet) {
+    const f = stripFloor(sg, x, z);
+    const c = f.y + Math.max(0, f.out) * CUT_FACE;
+    if (best === null || c < best) best = c;
+  }
+  return best === null ? null : best - CUT_CLEAR;
 }
 // The VISIBLE ground: the heightfield, cut back where a road runs through it.
 // Everything that has to agree on where the surface is — the terrain mesh, the
@@ -3874,9 +3894,6 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
   geo.computeVertexNormals();
   worldGroup.add(new THREE.Mesh(geo, mat));
-  // The corridor cut is applied by the terrain builder, which may already have
-  // run for this ground — so tell it to run again.
-  if (drivable) dirtyTerrainAround(dense);
   // A drivable road below sea level is proof the land here is dry — the
   // evidence that keeps the sea plane out of Badwater and a polder alike.
   // Tunnels excluded: an undersea tunnel is under a sea that is really there.
@@ -3906,6 +3923,11 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       }
     }
   }
+  // Rasterize LAST — the tunnel pass above is the final writer of `tn`, and a
+  // segment rasterized before its tunnel flag lands would trench the hill it
+  // is buried in.
+  for (const sg of segsOf) rasterizeCut(sg);
+  if (drivable) dirtyTerrainAround(dense);
 }
 // The carved space: side walls + ceiling along a tunnel run, portal lintels at
 // the mouths, and solid collision so the car can't drive out through the rock.
@@ -5748,7 +5770,7 @@ function stepReal(dt: number): boolean {
   vegTris += (trunks.count * (trunks.geometry.getAttribute('position')?.count ?? 0)) / 3;
   return {
     calls: r.calls, tris: r.triangles, progs: renderer.info.programs?.length ?? 0,
-    vegMs: +vegMs.toFixed(1), swardMs: +swardMs.toFixed(1), terrainMs: +terrainMs.toFixed(1), seg: terrainSeg, slack: +CUT_SLACK.toFixed(1),
+    vegMs: +vegMs.toFixed(1), swardMs: +swardMs.toFixed(1), terrainMs: +terrainMs.toFixed(1), seg: terrainSeg, cutL: +cutL.toFixed(1),
     vegInstances: vegN, vegTris: Math.round(vegTris), veg,
   };
 };
@@ -6267,38 +6289,22 @@ function meshHeightAt(x: number, z: number): number | null {
     const hw = s.hw + 1.2;
     const gL = sampleHeight(x + px * hw, z + pz * hw);
     const gR = sampleHeight(x - px * hw, z - pz * hw);
-    // THE NUMBER. `roadCeiling` is a MIN over every segment in reach, so a
-    // road 30m away and 12m lower carves the ground out from under THIS one.
-    // Its own bed asks for road−0.3; anything below that was taken by a
-    // neighbour, and the road is left standing over the hole on a 3.6m skirt.
-    const ownBed = road - 0.3;
+    // THE NUMBER. Anything below the road's own floor minus CUT_CLEAR was
+    // taken by a neighbouring strip sharing a raster cell — the failure class
+    // the old wide bench manufactured at scale and the raster only permits
+    // within one cell of a genuine crossing.
+    const ownBed = road - CUT_CLEAR;
     const c0 = roadCeiling(x, z);
-    // WHICH segment won the min, and where it stands relative to this road:
-    // `d` its plan distance, `dy` how far below. A neighbour that is far in
-    // plan AND far below is a road on a different bench — it has no business
-    // excavating this one, and if that is what keeps winning, the min is the
-    // defect rather than the mesh that samples it.
+    // WHICH strip won: its plan distance and how far below this road it runs.
     let won: { d: number; dy: number } | null = null;
     {
+      const near = new Set<Seg>();
+      stripsNear(x, z, 2, near);
       let best = Infinity;
-      const R = CUT_SLACK + CUT_TAIL + 2;
-      for (let cx = Math.floor((x - R) / GRID); cx <= Math.floor((x + R) / GRID); cx++) {
-        for (let cz = Math.floor((z - R) / GRID); cz <= Math.floor((z + R) / GRID); cz++) {
-          for (const q of roadGrid.get(`${cx},${cz}`) ?? []) {
-            if (q.tn || q.ya === undefined || q.yb === undefined) continue;
-            const qdx = q.bx - q.ax, qdz = q.bz - q.az;
-            const qt = clamp(((x - q.ax) * qdx + (z - q.az) * qdz) / (qdx * qdx + qdz * qdz || 1), 0, 1);
-            const qd = Math.hypot(x - (q.ax + qdx * qt), z - (q.az + qdz * qt));
-            const out = qd - (q.hw + 0.6);
-            if (q.tk ? out > CUT_REACH * 0.45 : out > CUT_SLACK + CUT_TAIL) continue;
-            const qy = q.ya + (q.yb - q.ya) * qt;
-            const ceil = q.tk
-              ? qy - CUT_CLEAR + Math.max(0, out) * CUT_BATTER * 1.7
-              : qy - CUT_CLEAR + Math.min(Math.max(out, 0), CUT_SLACK) * CUT_WASH
-                + Math.max(0, out - CUT_SLACK) * CUT_BATTER;
-            if (ceil < best) { best = ceil; won = { d: +qd.toFixed(1), dy: +(road - qy).toFixed(1) }; }
-          }
-        }
+      for (const sg of near) {
+        const f = stripFloor(sg, x, z);
+        const c = f.y + Math.max(0, f.out) * CUT_FACE;
+        if (c < best) { best = c; won = { d: +(f.out + sg.hw + 0.6).toFixed(1), dy: +(road - f.y).toFixed(1) }; }
       }
     }
     rows.push({
@@ -6307,7 +6313,7 @@ function meshHeightAt(x: number, z: number): number | null {
       undercut: c0 === null ? 0 : +Math.max(0, ownBed - c0).toFixed(2),
       by: won,
       slope: +(Math.abs(gL - gR) / (2 * hw)).toFixed(2),
-      daylight: +(road + 0.22 - sampleHeight(x, z)).toFixed(2),
+      daylight: +(road + SURFACE.road.lift - sampleHeight(x, z)).toFixed(2),
       fieldRel: fld.map((v) => +(v - road).toFixed(2)),   // terrain − road
       cutRel: cut.map((v) => (v === null ? null : +(v - road).toFixed(2))),
       meshRel: msh,                                       // rendered mesh − road
@@ -8690,7 +8696,7 @@ const DIAL_GROUPS: DialGroup[] = [
         const want = [128, 192, 256][i];
         if (want === terrainSeg) return;
         terrainSeg = want;
-        recalcSlack();
+        recalcCut();
         for (const k of terrainMeshes.keys()) terrainDirty.add(k);
       }),
       dial('life', 'WILDLIFE', ['OFF', 'ON'], 1, (i) => {
@@ -9682,7 +9688,7 @@ $('reroll').addEventListener('click', () => { location.href = location.pathname 
   // The bench must span the terrain mesh's cell diagonal — the farthest any
   // triangle corner can sit from a road passing through it. Tile ground width
   // shrinks with cos(latitude), so this is a per-world number, not a constant.
-  recalcSlack();
+  recalcCut();
   placeLabel = spawn.name ?? '…';
   renderPlace();
   // Resume orientation and camera from the URL (written live while driving).

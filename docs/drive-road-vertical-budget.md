@@ -80,22 +80,36 @@ planing a junction to its lowest carriageway. That is the bench's width, not
 the budget's height, and its width is forced by the mesh cell. The TERRAIN
 dial (COARSE/FINE/FINEST) trades triangles for bench width today.
 
-## The clean base (proposed, not built)
+## The clean base (built)
 
-Make the terrain mesh **conform to the road** instead of dodging it. Roads
-are fully known at mesh-build time — `dirtyTerrainAround` already rebuilds
-tiles when ways stream in. During `buildTerrainMesh`:
+The bench, tail, batter, bed and `hard` are gone, replaced by one structure:
+a lattice **raster of the carriageway strips** (`cutCells`, cell = the mesh
+cell), consulted by two rules that are both *parallel to the deck* (heights
+always evaluated at the nearest strip point — a per-cell floor quantizes the
+deck along its own gradient, measured as a 1.9 m float on Noordhoek's grades):
 
-- clamp a vertex only as far as *its own triangles* require: the constraint
-  is per-edge — the chord from an outside vertex must pass under the deck at
-  the kerb crossing — which is a linear bound computable per vertex from its
-  neighbours, not a flat terrace;
-- with chords constrained at source, `CUT_CLEAR` can approach centimetres,
-  the bench disappears, the bed/`hard` repair layer disappears with it, and
-  the aprons shrink to real kerbs.
+- **mesh rule** (`cutAtVertex`): flat across a 3×3-cell reach, parallel along
+  the road. Parallel is what makes the no-chord-over-a-deck guarantee survive
+  a gradient: the clamps of a crossed triangle's vertices are linear in
+  along-road position, so their chord over any crossing point sits at that
+  point's own floor.
+- **field rule** (`roadCeiling`, the wheels/scatter): same strips, graded off
+  the kerb at a 32° cut face — continuous, because the hard rule steps by the
+  whole cut depth at cell boundaries and the suspension read that as a 32 m
+  teleport beside a Bormio hairpin.
 
-One mechanism (mesh agrees with roads) replacing four (bench, bed, clear,
-apron walls). It is a rewrite of what `roadCeiling` means and of the mesh
-builder, with the failure mode "road buried in hillside" — build it fresh,
-with the breach probe (`breach.mjs` pattern: rendered mesh vs drawn deck over
-every carriageway sample) as the acceptance test, not at the end of a session.
+Two intermediate designs failed measurably on the way and are worth
+remembering: per-cell *floors* (deck quantization → 1.9 m float on grades),
+and one shared hard rule (32 m field steps). Accepted results:
+
+| site | cut beside road, worst | cut mean | breaches | tyre step |
+|---|---|---|---|---|
+| Noordhoek | −9.54 → **−1.75** | −3.22 → **−0.29** | 0 → 0 | 1.33 → 1.36 |
+| Big Sur | −4.93 → **−0.69** | −1.40 → **−0.07** | 0 → 0 | — |
+| Bormio | −3.92 → **−2.44** | −1.10 → **−0.61** | 2 → **0** | 14.6 → **4.3** |
+| Chapman's | −8.50 → **−3.34** | −4.31 → **−2.60** | 4 → **0** | 5.6 → **4.3** |
+
+The bed proved to be compensation for the bench: with per-strip locality even
+Bormio's stacked hairpins cut *less* without it. Terrain build time unchanged
+(~30 ms/tile). Remaining refinement if ever needed: per-edge exact clamping
+inside the mesh builder, which would let `CUT_CLEAR` approach centimetres.
