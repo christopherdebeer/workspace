@@ -2006,7 +2006,7 @@ function seaLevelY(): number | null {
 // sites nearest the truck. Plants far behind are recycled to dress the ground
 // ahead, so density is constant however far you drive, and the site list can
 // hold tens of thousands for the cost of the numbers.
-type VegKind = 'broadleaf' | 'conifer' | 'palm' | 'snag' | 'bush' | 'rock';
+type VegKind = 'broadleaf' | 'conifer' | 'palm' | 'snag' | 'bush' | 'rock' | 'grass';
 interface VegSite { x: number; z: number; k: VegKind; s: number; rot: number; h: number; c: THREE.Color }
 const VEG_CELL = 220;                       // spatial bucket, metres
 const vegGrid = new Map<string, VegSite[]>();
@@ -2050,7 +2050,66 @@ function rockGeo(): THREE.BufferGeometry {
   g.translate(0, 0.35, 0);
   return g;
 }
-const VEG_CAP: Record<VegKind, number> = { broadleaf: 1600, conifer: 1400, palm: 600, snag: 450, bush: 2600, rock: 900 };
+const VEG_CAP: Record<VegKind, number> = { broadleaf: 1600, conifer: 1400, palm: 600, snag: 450, bush: 2600, rock: 900, grass: 7000 };
+// ── grass ──────────────────────────────────────────────────────────
+// Sward was the one cover class the world could not draw. WorldCover calls it
+// grass, the palette painted it green, and then nothing grew there: the
+// thicket rate for class 30 is four per cell, which is the odd bush in an
+// otherwise bare field. This is the missing ground layer.
+//
+// Deliberately NOT the usual alpha-tested sprite recipe. That recipe exists to
+// carve a wispy blade out of a photographic texture, and it pays for it in
+// overdraw — the thing that actually hurts a phone, since a thousand mostly
+// transparent quads shade the same pixels over and over. Nothing else in this
+// world is textured; the trees are solid flat-shaded cones. So a tuft is three
+// solid tapered blades, NINE vertices, no texture, no alpha test, no blending
+// and therefore no overdraw at all. It is both cheaper than the sprite and a
+// better match for the art.
+function grassGeo(): THREE.BufferGeometry {
+  const v: number[] = [];
+  for (let b = 0; b < 3; b++) {
+    const a = (b / 3) * Math.PI * 2 + 0.7;
+    const dx = Math.cos(a), dz = Math.sin(a);
+    const w = 0.05, h = 0.26 + (b % 2) * 0.12, lean = 0.1;
+    // A base edge across the blade, tapering to a tip that leans outward.
+    v.push(dz * w, 0, -dx * w, -dz * w, 0, dx * w, dx * lean, h, dz * lean);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+  g.computeVertexNormals();
+  return g;
+}
+// How many tufts a square metre carries, by cover class. Zero is the important
+// entry: a salt pan, a snowfield and open water grow nothing, and the whole
+// point of reading cover is that they stay bare.
+const GRASS_M2: Record<number, number> = {
+  10: 0.30,   // tree     — forest floor, thinner than open ground
+  20: 0.40,   // shrub
+  30: 0.85,   // grass    — the case this exists for
+  40: 0.55,   // crop
+  50: 0.10,   // built
+  60: 0,      // bare
+  70: 0,      // snow
+  80: 0,      // water
+  90: 0.70,   // wetland
+  95: 0.35,   // mangrove
+  100: 0.18,  // moss
+};
+const GRASS_SIGHT = 46;      // metres — past this the ground texture does the work
+const GRASS_STEP = 1.5;      // slot spacing; density is dithered, not scaled
+/** Per-kind draw distance. Grass is ankle height: at 50m it is a pixel of
+ *  noise the terrain colour already provides, so drawing it there is pure
+ *  cost. Everything else keeps the old full-field range. */
+const VEG_SIGHT: Partial<Record<VegKind, number>> = { grass: GRASS_SIGHT };
+/** A stable 0..1 from a lattice slot. Same slot, same tuft, forever — which is
+ *  what lets grass be regenerated every second instead of remembered. */
+function hash2(a: number, b: number): number {
+  let h = (a * 73856093) ^ (b * 19349663);
+  h = Math.imul(h ^ (h >>> 15), 2246822507);
+  h = Math.imul(h ^ (h >>> 13), 3266489909);
+  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+const grassTint = new THREE.Color();
 const vegDummy = new THREE.Object3D();
 function vegMesh(geo: THREE.BufferGeometry, mat: THREE.Material, cap: number): THREE.InstancedMesh {
   const m = new THREE.InstancedMesh(geo, mat, cap);
@@ -2067,6 +2126,25 @@ const woodMat = new THREE.MeshLambertMaterial({ color: 0x4a3826, flatShading: tr
 const stoneMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
 ghostify(leafMat);
 ghostify(stoneMat);
+// ── wind, in the vertex shader ─────────────────────────────────────
+// Never from JavaScript. Animating instance matrices would mean rewriting and
+// re-uploading a 7000-entry matrix buffer every frame; the GPU can lean the
+// blades for nothing. Sway scales with height above the tuft's own base, so
+// the roots stay planted, and the phase is seeded from the instance's world
+// position so a field ripples rather than pulsing as one.
+const windU = { uTime: { value: 0 }, uGust: { value: new THREE.Vector2(0, 0) } };
+const grassMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, side: THREE.DoubleSide });
+grassMat.onBeforeCompile = (sh) => {
+  sh.uniforms.uTime = windU.uTime;
+  sh.uniforms.uGust = windU.uGust;
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', '#include <common>\nuniform float uTime; uniform vec2 uGust;')
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      float ph = instanceMatrix[3][0] * 0.31 + instanceMatrix[3][2] * 0.23;
+      float s = transformed.y * (0.55 + 0.45 * sin(uTime * 1.9 + ph));
+      transformed.xz += uGust * s;`);
+};
+ghostify(grassMat);
 const vegMeshes: Record<VegKind, THREE.InstancedMesh> = {
   broadleaf: vegMesh(broadleaf(), leafMat, VEG_CAP.broadleaf),
   conifer: vegMesh(conifer(), leafMat, VEG_CAP.conifer),
@@ -2074,6 +2152,7 @@ const vegMeshes: Record<VegKind, THREE.InstancedMesh> = {
   snag: vegMesh(snag(), woodMat, VEG_CAP.snag),
   bush: vegMesh(bushGeo(), leafMat, VEG_CAP.bush),
   rock: vegMesh(rockGeo(), stoneMat, VEG_CAP.rock),
+  grass: vegMesh(grassGeo(), grassMat, VEG_CAP.grass),
 };
 const trunkGeo2 = new THREE.CylinderGeometry(0.14, 0.2, 1, 5);
 trunkGeo2.translate(0, 0.5, 0);
@@ -2270,11 +2349,76 @@ function seedCell(gx: number, gz: number): void {
   }
 }
 
+// ── the sward ──────────────────────────────────────────────────────
+// Grass is NOT stored as sites. A 220m cell at nearly one tuft per square
+// metre is forty thousand entries, and the site list would be tens of
+// megabytes for something you can only see forty metres of. It is generated
+// straight into the instance buffer instead: a fixed lattice around the truck,
+// hashed per slot so the same tuft grows in the same place forever, and thrown
+// away the moment you look elsewhere.
+//
+// On its OWN clock, deliberately out of step with the tree refill: both are
+// tens of milliseconds and landing them on the same frame costs one visible
+// hitch a second instead of two small ones.
+let swardMs = 0;
+function refreshSward(): void {
+  const t0 = performance.now();
+  const cap = Math.floor(VEG_CAP.grass * vegScale);
+  const gm = vegMeshes.grass;
+  let n = 0;
+  const R = GRASS_SIGHT, R2 = R * R;
+  const x0 = Math.floor((state.x - R) / GRASS_STEP), x1 = Math.ceil((state.x + R) / GRASS_STEP);
+  const z0 = Math.floor((state.z - R) / GRASS_STEP), z1 = Math.ceil((state.z + R) / GRASS_STEP);
+  // Cover is 37m data and sampleCover walks every loaded tile, so asking it per
+  // tuft would be thousands of scans a second for an answer that cannot change
+  // within a blade's width. One lookup per 8m block instead.
+  let bx = Infinity, bz = Infinity, blockRate = 0;
+  for (let ix = x0; ix <= x1 && n < cap; ix++) {
+    for (let iz = z0; iz <= z1 && n < cap; iz++) {
+      const sx = ix * GRASS_STEP, sz = iz * GRASS_STEP;
+      const dx = sx - state.x, dz = sz - state.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > R2) continue;
+      const qx = Math.floor(sx / 8), qz = Math.floor(sz / 8);
+      if (qx !== bx || qz !== bz) {
+        bx = qx; bz = qz;
+        const cv = sampleCover(qx * 8 + 4, qz * 8 + 4);
+        blockRate = cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3);
+      }
+      if (blockRate <= 0) continue;
+      // DITHERED, not scaled. Thinning by shrinking every blade turns a field
+      // into a lawn that fades; dropping whole tufts on a hash keeps the ones
+      // that remain full size, which is what reads at this pixel scale — and a
+      // tuft never pops, it stops existing at a range where it was one pixel.
+      const h1 = hash2(ix, iz);
+      const fade = 1 - d2 / R2;
+      if (h1 > blockRate * GRASS_STEP * GRASS_STEP * (0.35 + 0.65 * fade)) continue;
+      const h2 = hash2(ix + 9187, iz);
+      const wx2 = sx + (h2 - 0.5) * GRASS_STEP * 0.9;
+      const wz2 = sz + (hash2(ix, iz + 4231) - 0.5) * GRASS_STEP * 0.9;
+      if (surfaceAt(wx2, wz2) !== 'ground') continue;   // not on the carriageway
+      vegDummy.position.set(wx2, groundAt(wx2, wz2), wz2);
+      vegDummy.rotation.set(0, h2 * 6.283, 0);
+      vegDummy.scale.setScalar(0.7 + h1 * 1.6);
+      vegDummy.updateMatrix();
+      gm.setMatrixAt(n, vegDummy.matrix);
+      gm.setColorAt(n, grassTint);
+      n++;
+    }
+  }
+  gm.count = n;
+  gm.instanceMatrix.needsUpdate = true;
+  if (gm.instanceColor) gm.instanceColor.needsUpdate = true;
+  swardMs = performance.now() - t0;
+}
+
 // Refill the instanced meshes from the sites nearest the truck. Called on a
 // slow tick — the field only needs to change as fast as you drive through it.
-let vegAt = 0;
+let vegAt = 0, swardAt = 0;
+let vegMs = 0;
 function refreshVeg(): void {
-  const counts: Record<string, number> = { broadleaf: 0, conifer: 0, palm: 0, snag: 0, bush: 0, rock: 0 };
+  const t0 = performance.now();
+  const counts: Record<string, number> = { broadleaf: 0, conifer: 0, palm: 0, snag: 0, bush: 0, rock: 0, grass: 0 };
   let trunkN = 0;
   const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
   const reach = Math.ceil(VEG_RANGE / VEG_CELL);
@@ -2321,6 +2465,7 @@ function refreshVeg(): void {
     }
   }
   for (const k of Object.keys(vegMeshes) as VegKind[]) {
+    if (k === 'grass') continue;              // the sward keeps its own clock
     const m = vegMeshes[k];
     m.count = counts[k];
     m.instanceMatrix.needsUpdate = true;
@@ -2328,6 +2473,7 @@ function refreshVeg(): void {
   }
   trunks.count = trunkN;
   trunks.instanceMatrix.needsUpdate = true;
+  vegMs = performance.now() - t0;
   // Forget buckets far behind so a long drive cannot grow the site list
   // without bound. They regenerate identically if you come back.
   if (vegGrid.size > 900) {
@@ -5058,6 +5204,13 @@ function stepWeather(now: number, dt: number): void {
     const wxv = -Math.sin(t) * spd, wzv = Math.cos(t) * spd;
     (skyMat.uniforms.uWind as { value: THREE.Vector2 }).value.set(wxv, wzv);
     ghostU.uWind.value.set(wxv * (now / 1000), wzv * (now / 1000));
+    // The same wind leans the grass. Amplitude in METRES of tip travel per
+    // metre of blade, so a stiff breeze lays a field over and a calm day
+    // barely stirs it; the gust term rides on top of the steady lean.
+    const kmh = live.on ? live.windKmh : 12;
+    const amp = clamp(kmh / 130, 0.02, 0.35);
+    windU.uTime.value = now / 1000;
+    windU.uGust.value.set(-Math.sin(t) * amp, Math.cos(t) * amp);
   }
   // LIGHTNING. A strike is a double flash — the leader, then the return
   // stroke a beat later — and the thunder arrives after the sound has had
@@ -5370,6 +5523,33 @@ function stepReal(dt: number): boolean {
 (window as unknown as { __coverAt?: (x: number, z: number) => number | null }).__coverAt = sampleCover;
 /** Camera mode and the double-tap state behind it — so a test can see WHY a
  *  tap did or did not become a teleport. */
+/** WHAT THE FRAME ACTUALLY COSTS — draw calls and triangles straight from the
+ *  renderer, beside the vegetation pools that are the usual suspect. */
+(window as unknown as { __gpu?: object }).__gpu = (): object => {
+  // renderer.info resets on every render() and the last one each frame is the
+  // fullscreen composite, so reading it cold reports two triangles. Draw one
+  // measurement frame of the WORLD and read that instead.
+  renderer.info.reset();
+  renderer.setRenderTarget(null);
+  renderer.render(scene, camera);
+  const r = renderer.info.render;
+  const veg: Record<string, number> = {};
+  let vegN = 0, vegTris = 0;
+  for (const k of Object.keys(vegMeshes) as VegKind[]) {
+    const m = vegMeshes[k];
+    veg[k] = m.count;
+    vegN += m.count;
+    vegTris += (m.count * (m.geometry.getAttribute('position')?.count ?? 0)) / 3;
+  }
+  veg.trunk = trunks.count;
+  vegN += trunks.count;
+  vegTris += (trunks.count * (trunks.geometry.getAttribute('position')?.count ?? 0)) / 3;
+  return {
+    calls: r.calls, tris: r.triangles, progs: renderer.info.programs?.length ?? 0,
+    vegMs: +vegMs.toFixed(1), swardMs: +swardMs.toFixed(1),
+    vegInstances: vegN, vegTris: Math.round(vegTris), veg,
+  };
+};
 (window as unknown as { __audioState?: object }).__audioState = (): object =>
   ({ state: audio.state, on: audio.on, hidden });
 (window as unknown as { __cam?: object }).__cam = (): object =>
@@ -7505,6 +7685,7 @@ function tick(now: number): void {
     noteDryLand(state.x, state.z, groundAt(state.x, state.z));
   }
   if (now > vegAt) { vegAt = now + 900; refreshVeg(); }
+  else if (now > swardAt) { swardAt = now + 700; refreshSward(); }
   audio.update(state.speed, throttle, surfKind, groundedF, wx.rain, engRev, engGear, skid);
   reveal(state.x, state.z);
   if (now > streamAt) { streamAt = now + 1200; streamWorld(state.x, state.z); }
@@ -7788,6 +7969,9 @@ function applyBiome(b: Biome): void {
   // same water as a boreal one.
   const shallow = b.ramp[0][1];
   seaMat.color.setRGB(shallow[0] * 2.2, shallow[1] * 2.2, shallow[2] * 2.2);
+  // Sward takes the biome's own foliage hue, a shade darker and duller than a
+  // canopy leaf — a dry grassland and a boreal meadow are not the same green.
+  grassTint.setHSL(b.vegHue[0] + 0.012, 0.34, b.vegLit[0] * 0.82 + 0.06);
 }
 
 // ── pixel font ─────────────────────────────────────────────────────
