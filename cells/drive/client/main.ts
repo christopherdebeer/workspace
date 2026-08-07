@@ -9146,8 +9146,6 @@ const setFont = (c: CanvasRenderingContext2D, px: number): void => {
   c.font = `${px}px ${HUD_FONT}`;
   c.textAlign = 'left';
   c.textBaseline = 'alphabetic';
-  // The micro face (below) sets letterSpacing on this shared context; undo.
-  try { (c as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = '0px'; } catch { /* fine */ }
 };
 // Measured widths, cached — drawHud asks for a few hundred a frame and most
 // of them (labels, units, cardinal letters) never change.
@@ -9177,35 +9175,77 @@ const fit = (s: string, maxPx: number): string => fitPx(s, maxPx, FONT_PX);
 const fitS = fit;
 // ── the POI voice: the MICRO face, half the size of everything else ──
 // A label standing IN the world should whisper next to the instruments that
-// report on the car. Halving Silkscreen put its 1px units at 0.5px — off its
-// own grid, soft — so the whisper gets a face DESIGNED at this size: Tiny5,
-// a 5px-grid pixel font, one hard pixel per stroke at 5px. Same recipe as
-// the old hand-drawn 3x5 table, sourced instead of drawn.
+// report on the car. The whisper is Tiny5, a face DESIGNED on a 5px grid —
+// but it is never handed to fillText at 5px: canvas text rasterization
+// antialiases regardless (Chromium mildly, iOS CoreText thoroughly), and
+// grey edges magnified through the pixel pipeline read as blur. Each glyph
+// is instead rasterized ONCE at 16x, thresholded at cell centres back to a
+// 1-bit grid, and drawn as fillRect runs — the old hand-drawn 3x5 table's
+// exact mechanism, with the font as the source of truth instead of a hex
+// string. Hard pixels on every browser, and any character the subset lacks
+// (an accented place name) quantizes through the same sieve.
 const MICRO_PX = 5;
-const setMicro = (c: CanvasRenderingContext2D): void => {
-  c.font = `${MICRO_PX}px '${MICRO_FONT}', ui-monospace, monospace`;
-  c.textAlign = 'left';
-  c.textBaseline = 'alphabetic';
-  // Tiny5 sets its glyphs flush; a pixel of air keeps 5px words from
-  // reading as one run. (letterSpacing is ignored where unsupported, and
-  // measureText honours it, so widths stay truthful either way.)
-  try { (c as CanvasRenderingContext2D & { letterSpacing?: string }).letterSpacing = '1px'; } catch { /* fine */ }
-};
-function measureM(s: string): number {
-  const k = `µ|${s}`;
-  let w = measCache.get(k);
-  if (w === undefined) {
-    setMicro(hctx);
-    w = Math.ceil(hctx.measureText(s).width);
-    if (measCache.size > 4000) measCache.clear();
-    measCache.set(k, w);
+interface MGlyph { w: number; rows: number[] }   // rows[0] = baseline-5; bit b = column b
+const microGlyphs = new Map<string, MGlyph>();
+// If boot's 2s font timeout ever races a slow load, glyphs would quantize
+// from the fallback face and stick; re-sieve once the fonts settle.
+void document.fonts?.ready?.then(() => microGlyphs.clear());
+let microCtx: CanvasRenderingContext2D | null = null;
+const MS = 16;                                   // supersample per micro pixel
+function microGlyph(ch: string): MGlyph {
+  let gl = microGlyphs.get(ch);
+  if (gl) return gl;
+  if (!microCtx) {
+    const cv = document.createElement('canvas');
+    cv.width = 12 * MS;
+    cv.height = 8 * MS;
+    microCtx = cv.getContext('2d', { willReadFrequently: true })!;
   }
+  const g = microCtx;
+  g.clearRect(0, 0, 12 * MS, 8 * MS);
+  // Tiny5's design grid is 8 UNITS PER EM with a 5px cap (measured: 'A' is
+  // 50 wide and 50 tall at an 80px em) — so the em that puts one design
+  // pixel on one sample cell is 8*MS, not 5*MS. Sampling on the wrong grid
+  // shredded every glyph into wedges.
+  g.font = `${8 * MS}px '${MICRO_FONT}', ui-monospace, monospace`;
+  g.textAlign = 'left';
+  g.textBaseline = 'alphabetic';
+  g.fillStyle = '#fff';
+  g.fillText(ch, 0, 5 * MS);                     // cap sits 0..5 rows; one descender row below
+  const w = clamp(Math.round(g.measureText(ch).width / MS), 1, 10);
+  const img = g.getImageData(0, 0, 12 * MS, 8 * MS);
+  const rows: number[] = [];
+  for (let r = 0; r < 7; r++) {
+    let bits = 0;
+    for (let b = 0; b < w; b++) {
+      const px = Math.round((b + 0.5) * MS), py = Math.round((r + 0.5) * MS);
+      if (img.data[(py * img.width + px) * 4 + 3] > 127) bits |= 1 << b;
+    }
+    rows.push(bits);
+  }
+  gl = { w, rows };
+  microGlyphs.set(ch, gl);
+  return gl;
+}
+function measureM(s: string): number {
+  let w = 0;
+  for (const ch of s) w += ch === ' ' ? 3 : microGlyph(ch).w + 1;
   return w;
 }
 function textPoi(c: CanvasRenderingContext2D, s: string, x: number, y: number, col: string): void {
   c.fillStyle = col;
-  setMicro(c);
-  c.fillText(s, Math.round(x), Math.round(y) + MICRO_PX - 1);
+  let cx = Math.round(x);
+  const ty = Math.round(y) - 1;                  // top row = baseline-5; baseline lands at y+4
+  for (const ch of s) {
+    if (ch === ' ') { cx += 3; continue; }
+    const gl = microGlyph(ch);
+    for (let r = 0; r < 7; r++) {
+      const bits = gl.rows[r];
+      if (!bits) continue;
+      for (let b = 0; b < gl.w; b++) if (bits & (1 << b)) c.fillRect(cx + b, ty + r, 1, 1);
+    }
+    cx += gl.w + 1;
+  }
 }
 function textEdgeP(s: string, x: number, y: number, col: string): void {
   for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
@@ -9908,18 +9948,20 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const typ = Math.round(p.ty / hudS);
     const near = clamp(1 - p.d / 900, 0, 1);
     const ghost = p.hid ? 0.3 : 1;
-    // The label rides the beam's head: a distant column projects a few pixels
-    // and the label hovers at a fixed height over the foot; a near one towers
-    // and carries its label up with it. Lanes stack overlaps further up.
-    const x = clamp(Math.round(txp - w / 2), 2, HW - w - 2);
+    // The column runs its FULL projected height; the label sits a third of
+    // the way up it — high enough to clear the foot, low enough that a
+    // towering nearby beam is not dragging its name into the compass. Far
+    // away the third collapses and a fixed hover keeps the name readable.
+    const beamTop = Math.min(ay - 6, Math.max(12, typ));
+    const h = ay - beamTop;
+    const x = clamp(Math.round(ax - w / 2), 2, HW - w - 2);
     let lane = 0;
     while (lane < 3 && lanes[lane] !== undefined && x < lanes[lane] + 5) lane++;
     lanes[lane] = x + w;
-    const ly = Math.max(14, Math.min(ay - 12, typ - 6) - lane * 8);
+    const ly = Math.max(12, ay - Math.max(11, Math.round(h / 3)) - lane * 8);
     hctx.save();
     // THE checkpoint beam, in the place's own colour: the same leaning
     // column, the same alpha ramp, the same widths — one family of light.
-    const h = ay - (ly + 6);
     if (h > 1) {
       hctx.fillStyle = p.c;
       for (let i = 0; i <= h; i++) {
