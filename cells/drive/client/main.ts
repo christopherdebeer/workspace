@@ -35,7 +35,11 @@ const CAM = { base: 175, perKmh: 1.1, tilt: 70 };
 // only just, and the streaming never followed it out there. 260 reaches ~40km
 // across, which is a whole mountain range, a coastline, or the far end of a
 // pass you have not driven yet.
-const ZOOM_MIN = 0.25, ZOOM_MAX = 260;
+// 1600 puts the camera 280km up. The ceiling used to be 260 (45km) because
+// that was as far as the coarse shell reached; the shell now picks its own
+// zoom level, so the limit is what is worth looking at rather than what is
+// loaded.
+const ZOOM_MIN = 0.25, ZOOM_MAX = 1600;
 const CAR_R = 2.4;            // collision circle — a real car's half-diagonal plus a whisker
 
 // ── geo helpers (local metres around the spawn; x=east, z=south) ───
@@ -4413,8 +4417,9 @@ function streamWorld(ex: number, ez: number): void {
   // Beyond the fine layer's reach, a COARSE shell so the land does not simply
   // stop. Only fetched once the view is wide enough to see past the fine ring.
   if (r > tileMetres(TERRAIN_Z) * 1.5) {
-    const [fx, fy] = tileAt(lat, lon, FAR_Z);
-    const fRing = clamp(Math.ceil(r / tileMetres(FAR_Z)), 1, FAR_RING_MAX);
+    setFarLevel(farLevelFor(r));
+    const [fx, fy] = tileAt(lat, lon, farZ);
+    const fRing = clamp(Math.ceil(r / tileMetres(farZ)), 1, FAR_RING_MAX);
     for (let dx = -fRing; dx <= fRing; dx++)
       for (let dy = -fRing; dy <= fRing; dy++) void loadFarTile(fx + dx, fy + dy);
   }
@@ -4431,9 +4436,38 @@ function streamWorld(ex: number, ez: number): void {
 // enough out that the fine ring cannot fill the frame, which also means the
 // seam between the two layers is never on screen at an angle where a few
 // metres of disagreement could show.
-const FAR_Z = 11;
-const FAR_RING_MAX = 2;       // 5×5 coarse tiles ≈ 81km, which covers the widest chart
+//
+// THE LEVEL IS NOT FIXED. One coarse zoom covers one band of chart zooms: z11
+// runs out at about 40km and past that the wide view is a small island of
+// terrain in a void. So the backdrop picks the coarsest level that still fills
+// the frame from a 5x5 ring, and switches whole — the old level is thrown away
+// rather than blended, because two shells of the same ground at different
+// resolutions z-fight along every ridge.
+const FAR_LEVELS = [11, 9, 7];
+let farZ = FAR_LEVELS[0];
+const FAR_RING_MAX = 2;       // 5×5 coarse tiles at whichever level is current
 const FAR_SEG = 48;
+/** The coarsest level whose 5x5 ring still reaches `radius`. */
+function farLevelFor(radius: number): number {
+  for (const z of FAR_LEVELS) if (radius <= tileMetres(z) * (FAR_RING_MAX + 0.5)) return z;
+  return FAR_LEVELS[FAR_LEVELS.length - 1];
+}
+function setFarLevel(z: number): void {
+  if (z === farZ) return;
+  farZ = z;
+  for (const m of farMeshes.values()) { farGroup.remove(m); m.geometry.dispose(); }
+  farMeshes.clear();
+  farTiles.clear();
+}
+// THE EARTH IS ROUND, and at this range that stops being pedantry. The drop
+// below a tangent plane is d²/2R: 8m at 10km, which nothing would notice, but
+// 125m at 40km and seven kilometres at 300km. The fine world stays flat — it
+// is a driving game and the truck lives inside the first kilometre — but the
+// BACKDROP is exactly the part where the curve is visible, and bending it is
+// one subtraction per vertex. Nothing samples this layer, so nothing downstream
+// has to agree with it.
+const EARTH_R = 6371000;
+const curveDrop = (dx: number, dz: number): number => (dx * dx + dz * dz) / (2 * EARTH_R);
 const farTiles = new Set<string>();
 const farMeshes = new Map<string, THREE.Mesh>();
 const farGroup = new THREE.Group();
@@ -4446,17 +4480,19 @@ worldGroup.add(farGroup);
 let farInFlight = 0;
 const farQueue: Array<() => void> = [];
 async function loadFarTile(x: number, y: number): Promise<void> {
-  const key = `${x}/${y}`;
+  const z = farZ;
+  const key = `${z}/${x}/${y}`;
   if (farTiles.has(key)) return;
   farTiles.add(key);
   if (farInFlight >= 4) await new Promise<void>((go) => farQueue.push(go));
   farInFlight++;
-  const data = await fetchHeights(x, y, FAR_Z).finally(() => {
+  const data = await fetchHeights(x, y, z).finally(() => {
     farInFlight--;
     farQueue.shift()?.();
   });
-  if (!data) { farTiles.delete(key); return; }
-  const b = tileBounds(x, y, FAR_Z);
+  // The level may have changed while this was in flight; that shell is gone.
+  if (!data || z !== farZ) { farTiles.delete(key); return; }
+  const b = tileBounds(x, y, z);
   const [wx0, wz0] = toLocal(b.latN, b.lonW);
   const [wx1, wz1] = toLocal(b.latS, b.lonE);
   const xs = Math.min(wx0, wx1), zs = Math.min(wz0, wz1);
@@ -4479,7 +4515,11 @@ async function loadFarTile(x: number, y: number): Promise<void> {
     const u = clamp(Math.round(((pos.getX(i) + w / 2) / w) * 255), 0, 255);
     const v = clamp(Math.round(((pos.getZ(i) + h / 2) / h) * 255), 0, 255);
     const raw = data[v * 256 + u];
-    pos.setY(i, raw - baseElev - FAR_DROP);
+    // World position of this vertex, so the curve is measured from the ORIGIN
+    // rather than from the tile — the drop has to be continuous across the
+    // whole shell or every tile edge becomes a step.
+    pos.setY(i, raw - baseElev - FAR_DROP
+      - curveDrop(xs + w / 2 + pos.getX(i), zs + h / 2 + pos.getZ(i)));
     const du = data[v * 256 + Math.min(255, u + 1)] - raw;
     const dv = data[Math.min(255, v + 1) * 256 + u] - raw;
     const [r, g, bb] = terrainPalette(raw, Math.hypot(du, dv) / Math.max(cell, 1));
@@ -5328,6 +5368,12 @@ function stepReal(dt: number): boolean {
 (window as unknown as { __drive?: object; __surfaceAt?: (x: number, z: number) => string }).__drive = state;
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
 (window as unknown as { __coverAt?: (x: number, z: number) => number | null }).__coverAt = sampleCover;
+/** Camera mode and the double-tap state behind it — so a test can see WHY a
+ *  tap did or did not become a teleport. */
+(window as unknown as { __audioState?: object }).__audioState = (): object =>
+  ({ state: audio.state, on: audio.on, hidden });
+(window as unknown as { __cam?: object }).__cam = (): object =>
+  ({ mode: camMode, stick: !!stick, zoom: +zoomCur.toFixed(1), tapAt: Math.round(tapAt), taps: tapSeen });
 /** WHAT IS UNDER THAT PIXEL. Screen point in NDC (-1..1), and every mesh the
  *  ray passes through, nearest first — the only honest way to name a thing you
  *  can see but cannot find in the data. */
@@ -6225,7 +6271,58 @@ addEventListener('wheel', (e) => {
   zoomT = clamp(zoomT * Math.exp(e.deltaY * 0.0012), ZOOM_MIN, ZOOM_MAX);
   e.preventDefault();
 }, { passive: false });
+// ── double tap the chart to go there ───────────────────────────────
+// The wide view is the only place in the game where you can see somewhere you
+// are not, and until now the only thing you could do about it was drive. A
+// double tap moves the truck to the point under your thumb.
+//
+// It moves IN WORLD rather than reloading: streaming already follows the truck
+// wherever it is, and the local projection is an equirectangular tangent plane
+// whose error goes as (d/R)² — a part in ten thousand at fifty kilometres, and
+// the terrain there has to stream in from scratch either way.
+let tapAt = 0, tapX = 0, tapY = 0, tapSeen = 0;
+// endStick is bound to the canvas AND to the window, so one release runs it
+// twice with the SAME event object. Without this the second run sees a tap
+// zero milliseconds old at zero distance and teleports on a single tap.
+let lastUp: Event | null = null;
+function chartToWorld(px: number, py: number): [number, number] {
+  // The same metres-per-pixel the pan uses, about the screen centre.
+  const k = (CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh) / innerHeight;
+  // The chart is tilted, so a pixel is worth more ground the further UP the
+  // screen it is. cos(tilt) undoes the foreshortening along the view axis.
+  const cz = Math.cos((CAM.tilt * Math.PI) / 180);
+  return [
+    state.x + panX + (px - innerWidth / 2) * k,
+    state.z + panZ + (py - innerHeight / 2) * k / Math.max(0.2, cz),
+  ];
+}
+function teleportTo(x: number, z: number): void {
+  state.x = x;
+  state.z = z;
+  state.speed = 0;
+  panX = 0; panZ = 0;
+  prevGround = null;              // the suspension must not carry the old ground over
+  bodyInit = false;
+  evictFromBuildings();
+  dryAt = null;                   // dry-basin evidence belongs to where you WERE
+  streamWorld(x, z);
+  audio.stone();
+}
 const endStick = (e: PointerEvent): void => {
+  if (camMode === 'top' && !stick && e.type === 'pointerup' && e !== lastUp) {
+    lastUp = e;
+    tapSeen++;
+    const now = performance.now();
+    // 450ms, not the 300 a desktop double-click assumes: this is a thumb on a
+    // phone reaching across a map, and the cost of being generous is nothing.
+    if (now - tapAt < 450 && Math.hypot(e.clientX - tapX, e.clientY - tapY) < 36) {
+      const [wx, wz] = chartToWorld(e.clientX, e.clientY);
+      teleportTo(wx, wz);
+      tapAt = 0;
+    } else {
+      tapAt = now; tapX = e.clientX; tapY = e.clientY;
+    }
+  }
   panPtrs.delete(e.pointerId);
   if (stick?.id === e.pointerId) {
     stick = null;
@@ -6670,6 +6767,9 @@ const audio = (() => {
   };
   return {
     arm,
+    /** Stand the graph down — a backgrounded tab must not keep an engine
+     *  running in it. `arm()` brings it back. */
+    hush(): void { try { void ctx?.suspend(); } catch { /* fine */ } },
     get on(): boolean { return on; },
     get state(): string { return ctx ? ctx.state : 'none'; },
     toggle(): boolean {
@@ -6773,7 +6873,20 @@ const syncBtn = (): void => { /* label is drawn from audio state each frame */ }
 for (const ev of ['pointerdown', 'touchend', 'click', 'keydown']) {
   addEventListener(ev, () => audio.arm(), { passive: true });
 }
-addEventListener('visibilitychange', () => { if (!document.hidden) audio.arm(); });
+// ── a hidden tab is not a drive ────────────────────────────────────
+// requestAnimationFrame is throttled or stopped in a background tab, but the
+// AUDIO graph is not: switch away mid-drive and the engine keeps running in
+// another tab forever. And a throttled loop still integrates — you come back
+// to a truck that has been idling somewhere the camera never was. So hiding
+// the page stands the whole thing down, and showing it starts the clock again
+// from now rather than from whenever you left.
+let hidden = document.hidden;
+addEventListener('visibilitychange', () => {
+  hidden = document.hidden;
+  if (hidden) { audio.hush(); return; }
+  last = performance.now();   // no accumulated gap to integrate through
+  audio.arm();
+});
 
 // ── main loop ──────────────────────────────────────────────────────
 let last = performance.now();
@@ -7004,7 +7117,7 @@ function tick(now: number): void {
   // world still RENDERS while paused — the menu is a scrim over a live scene,
   // not a black screen — but nothing integrates, so you can open it mid-corner
   // and come back to the same corner.
-  const paused = menuTab !== null && !real.on;
+  const paused = (menuTab !== null || hidden) && !real.on;
   const dt = paused ? 0 : Math.min(0.05, (now - last) / 1000);
   last = now;
   const { throttle, steer, brake } = real.on || paused
@@ -7492,6 +7605,13 @@ function tick(now: number): void {
   else camera.lookAt(state.x + fwdX * 28, ground + 1.4, state.z + fwdZ * 28);
   camera.updateMatrixWorld();
   skyDome.position.copy(camera.position);
+  // The dome rides with the camera, but its RADIUS is fixed at 20km and the
+  // chart's near plane grows with altitude — at the widest zoom the near plane
+  // stands 22km out and clips the entire sky away, which is a black band above
+  // the horizon. Keep the shell comfortably outside whatever the near plane is
+  // now; it is a gradient backdrop, so scaling it costs nothing and shows
+  // nothing.
+  skyDome.scale.setScalar(Math.max(1, (camera.near * 8) / 20000));
   ghostU.uGhostCar.value.set(state.x, ground + 1.2, state.z);
   ghostU.uGhostCam.value.copy(camera.position);
   compMat.uniforms.camPos.value.copy(camera.position);
