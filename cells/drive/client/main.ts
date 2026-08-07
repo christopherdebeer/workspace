@@ -1877,7 +1877,18 @@ function facade(mat: THREE.Material): void {
 }
 // Building tints vary per way id so a block reads as parcels, not one slab.
 // Extrude material slots: [0]=caps (roof), [1]=side walls (darker).
-const B_MATS = [0xa59a85, 0x92897a, 0x9d937f, 0x878071].map((c, i) => {
+// WORN PAINT, not four shades of mud. The old set was four colours a few
+// percent apart in the same tan, and picked by `id % 4` — OSM ids run
+// sequentially along a terrace, so a street came out as the same four
+// buildings repeating in order. Wider, lighter, and still weathered: limewash,
+// ochre, faded rose, washed blue-grey, sun-bleached mint. Saturation stays low
+// and value stays high, which is what old paint in strong light actually looks
+// like — the dirt lives in the façade shader and the wall texture, so the base
+// colour does not have to carry the grime as well.
+const B_MATS = [
+  0xd8cfbc, 0xc9bda6, 0xe0d8c6, 0xbfae95, 0xd6c3a4, 0xcbb89e,
+  0xc4c2b4, 0xd9cdc4, 0xbfc4bd, 0xcdb9b0, 0xc2c7cb, 0xd4cbb0,
+].map((c, i) => {
   // Walls carry the detail now — openings, lintels, ivy — and at 0.72 under a
   // low sun there was not enough wall left for any of it to read against.
   const side = new THREE.Color(c).multiplyScalar(0.88);
@@ -4188,13 +4199,23 @@ function claimSolid(pts: Array<[number, number]>, top: number): void {
 // whole bays collapsed, no roof, and something growing in the middle of it.
 // Towers stay intact — a twenty-storey open shell reads as a modelling bug.
 const buildStats = { intact: 0, ruin: 0, ruins: [] as Array<[number, number]> };
+/** Which paint this building wears. HASHED, not `id % n`: OSM ids are handed
+ *  out in creation order, so a terrace surveyed in one sitting has consecutive
+ *  ids and the modulo painted it as a repeating stripe of the same few
+ *  buildings. The hash decorrelates neighbours while staying stable per
+ *  building, which is what makes a street read as a street. */
+const bPaint = (id: number): number => {
+  let h = (id * 2654435761) >>> 0;
+  h ^= h >>> 15; h = Math.imul(h, 2246822507) >>> 0; h ^= h >>> 13;
+  return h % B_MATS.length;
+};
 function building(pts: Array<[number, number]>, id: number, levels: number): void {
   const height = clamp(levels * 3.1, 3, 90);
   const r = mulberry32((id * 2654435761) >>> 0);
   r(); // first draw off a hashed seed is poorly distributed
   if (height > 24 || r() > 0.42) {
     buildStats.intact++;
-    polygon(pts, B_MATS[id % B_MATS.length], 0.9, height, 'solid');
+    polygon(pts, B_MATS[bPaint(id)], 0.9, height, 'solid');
     return;
   }
   let minH = Infinity, cx = 0, cz = 0;
@@ -4237,7 +4258,7 @@ function building(pts: Array<[number, number]>, id: number, levels: number): voi
       ));
     }
   }
-  if (!parts.length) { buildStats.intact++; polygon(pts, B_MATS[id % B_MATS.length], 0.9, height, 'solid'); return; }
+  if (!parts.length) { buildStats.intact++; polygon(pts, B_MATS[bPaint(id)], 0.9, height, 'solid'); return; }
   buildStats.ruin++;
   if (buildStats.ruins.length < 400) buildStats.ruins.push([cx, cz]);
   // Rubble where the roof landed, and scrub that moved in after it. The normal
@@ -4400,18 +4421,49 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
   let cx = 0, cz = 0;
   for (const [x, z] of pts) { cx += x; cz += z; }
   cx /= pts.length; cz /= pts.length;
+  // FOUNDATIONS. An extrusion used to start at the lowest RING CORNER plus the
+  // lift, which leaves daylight under the downhill wall on any slope — and a
+  // corner is a poor proxy for the lowest ground anyway, since a footprint can
+  // straddle a dip its outline never touches. Sample the interior too, take the
+  // real minimum, and sink the box a plinth below it: the excess is buried, and
+  // burying costs nothing but a taller box on ground nobody can see under.
+  let base = 0, depth = extrude;
+  if (extrude > 0) {
+    let minG = Infinity, maxG = -Infinity;
+    const note = (x: number, z: number): void => {
+      const g = groundAt(x, z);
+      if (g < minG) minG = g;
+      if (g > maxG) maxG = g;
+    };
+    for (const [x, z] of pts) note(x, z);
+    let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+    for (const [x, z] of pts) {
+      if (x < x0) x0 = x; if (x > x1) x1 = x;
+      if (z < z0) z0 = z; if (z > z1) z1 = z;
+    }
+    const stepX = Math.max(2, (x1 - x0) / 6), stepZ = Math.max(2, (z1 - z0) / 6);
+    for (let x = x0; x <= x1; x += stepX) {
+      for (let z = z0; z <= z1; z += stepZ) if (pointInPoly(x, z, pts)) note(x, z);
+    }
+    if (!Number.isFinite(minG)) { minG = 0; maxG = 0; }
+    // Deep enough to swallow the footprint's own relief, with a floor so a
+    // building on the flat still has something under it when the terrain is
+    // rebuilt a little lower around it.
+    const plinth = clamp(maxG - minG + 1.4, 1.4, 14);
+    base = minG - plinth;
+    depth = extrude + lift + plinth;   // the TOP stays exactly where it was
+  }
   const geo = extrude > 0
-    ? new THREE.ExtrudeGeometry(shape, { depth: extrude, bevelEnabled: false })
+    ? new THREE.ExtrudeGeometry(shape, { depth, bevelEnabled: false })
     : new THREE.ShapeGeometry(shape);
   geo.rotateX(Math.PI / 2); // shape XY → world XZ (y down after rotate; extrude goes up via scale)
   if (extrude > 0) geo.scale(1, -1, 1);
   const mesh = new THREE.Mesh(geo, mat);
   if (extrude > 0) {
-    // A building sits on its footprint's LOWEST corner so it never floats on a
-    // slope (the roof stays level; the downhill wall just gets taller).
-    let minH = Infinity;
-    for (const [x, z] of pts) minH = Math.min(minH, sampleHeight(x, z));
-    mesh.position.y = minH + lift;
+    // Sunk to its plinth, worked out above: the roof stays level, the downhill
+    // wall gets taller, and the extra depth is underground.
+    mesh.position.y = base;
+    mesh.userData.bld = depth - extrude;   // how much of it is foundation
   } else {
     // Flat drapes CONFORM to the terrain per-vertex — a centroid-height plane
     // floated above (or sank under) any park/lake bigger than the local slope,
@@ -4452,7 +4504,9 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
   worldGroup.add(mesh);
   mapPoly(pts, collide === 'solid' ? 'rgba(70,66,58,0.9)' : collide === 'water' ? '#1d3a55' : 'rgba(34,54,32,0.9)');
   if (collide === 'solid') {
-    claimSolid(pts, (mesh.position.y || 0) + extrude);
+    // The collision top is the ROOF, which is the plinth's depth above the
+    // sunken base — not base+extrude, which would now be a storey short.
+    claimSolid(pts, base + depth);
   } else if (collide === 'water') {
     let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
     for (const [x, z] of pts) { minx = Math.min(minx, x); minz = Math.min(minz, z); maxx = Math.max(maxx, x); maxz = Math.max(maxz, z); }
@@ -6605,6 +6659,38 @@ function truckSpec(): Record<string, number> {
     }
   }
   return { ...kinds, filter: { drapes: drapes.length, wouldDropNow: wouldDrop, drapeMs: +drapeMs.toFixed(1) } };
+};
+/** DAYLIGHT UNDER THE WALLS: for every extruded building, how far its base
+ *  sits ABOVE the ground beneath its own footprint. Anything positive is a gap
+ *  you can see under, and on a slope the downhill corner is where it shows. */
+(window as unknown as { __bldgap?: object }).__bldgap = (): object => {
+  let n = 0, worstAll = 0, over05 = 0, over25 = 0, sum = 0;
+  const paints = new Map<number, number>();
+  for (const o of worldGroup.children) {
+    const m = o as THREE.Mesh;
+    if (!m.geometry || m.userData?.bld === undefined) continue;
+    n++;
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    const key = ((mats[1] ?? mats[0]) as THREE.MeshLambertMaterial).color?.getHex() ?? 0;
+    paints.set(key, (paints.get(key) ?? 0) + 1);
+    // The extrusion carries WORLD coordinates, and its y=0 vertices ARE the
+    // footprint outline — so sample there. A bounding-box corner is not on the
+    // footprint at all for an L-shape, and at Hout Bay that put the test point
+    // over a cliff and reported a 123m gap that does not exist.
+    const pos = m.geometry.attributes.position as THREE.BufferAttribute;
+    let worst = -Infinity;
+    for (let i = 0; i < pos.count; i++) {
+      if (Math.abs(pos.getY(i)) > 1e-3) continue;
+      worst = Math.max(worst, m.position.y - groundAt(pos.getX(i), pos.getZ(i)));
+    }
+    if (!Number.isFinite(worst)) { n--; continue; }
+    sum += worst;
+    if (worst > worstAll) worstAll = worst;
+    if (worst > 0.05) over05++;
+    if (worst > 0.25) over25++;
+  }
+  return { buildings: n, worstGap: +worstAll.toFixed(2), meanGap: n ? +(sum / n).toFixed(2) : 0,
+    gapOver05: over05, gapOver25: over25, distinctPaints: paints.size };
 };
 (window as unknown as { __cut?: object }).__cut = (x?: number, z?: number): object => {
   const px = x ?? state.x, pz = z ?? state.z;
