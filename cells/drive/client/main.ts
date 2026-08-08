@@ -9213,11 +9213,13 @@ function microGlyph(ch: string): MGlyph {
   }
   const g = microCtx;
   g.clearRect(0, 0, 12 * MS, 8 * MS);
-  // Tiny5's design grid is 8 UNITS PER EM with a 5px cap (measured: 'A' is
-  // 50 wide and 50 tall at an 80px em) — so the em that puts one design
-  // pixel on one sample cell is 8*MS, not 5*MS. Sampling on the wrong grid
-  // shredded every glyph into wedges.
-  g.font = `${8 * MS}px '${MICRO_FONT}', ui-monospace, monospace`;
+  // MEASURE THE GRID, never assume it: Micro 5 is an ELEVEN-unit em (caps 5
+  // units, 'A' advance 4 — 29.09/80ths and 36/80ths of an em, measured), so
+  // the em that puts one design pixel on one sample cell is 11*MS. Its
+  // predecessor here, Tiny5, was sampled on an assumed grid and shredded
+  // into wedges; correctly sampled it turned out to be a 5x5 face — not
+  // micro at all, which is why it was replaced.
+  g.font = `${11 * MS}px '${MICRO_FONT}', ui-monospace, monospace`;
   g.textAlign = 'left';
   g.textBaseline = 'alphabetic';
   g.fillStyle = '#fff';
