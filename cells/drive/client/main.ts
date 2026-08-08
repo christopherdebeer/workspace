@@ -2094,7 +2094,9 @@ function seaLevelY(): number | null {
 // ahead, so density is constant however far you drive, and the site list can
 // hold tens of thousands for the cost of the numbers.
 type VegKind = 'broadleaf' | 'conifer' | 'palm' | 'snag' | 'bush' | 'rock' | 'grass';
-interface VegSite { x: number; z: number; k: VegKind; s: number; rot: number; h: number; c: THREE.Color }
+interface VegSite { x: number; z: number; k: VegKind; s: number; rot: number; h: number; c: THREE.Color;
+  /** Last time the truck struck this (rocks) — one hit, not a machine gun. */
+  hit?: number }
 const VEG_CELL = 220;                       // spatial bucket, metres
 const vegGrid = new Map<string, VegSite[]>();
 const VEG_RANGE = 700;                      // plants are shown within this
@@ -8506,6 +8508,13 @@ function tick(now: number): void {
   // climbs cost speed and descents pay it back.
   const grip = groundedF;
   let yawRate = 0;
+  // PARKED IS A STATE, not a coincidence of forces. With no pedal down and no
+  // real speed left, static friction holds the truck on any sane grade —
+  // integrating grade-gravity and side-slope pull every frame instead had a
+  // "stopped" car creeping downhill forever. Past ~30° it genuinely rolls.
+  const parkHold = !real.on && !brake && Math.abs(throttle) < 0.02
+    && Math.abs(state.speed) < 0.45 && Math.abs(slideV) < 0.6
+    && Math.abs(Math.sin(gradePitch)) < 0.5 && Math.abs(Math.sin(gradeRoll)) < 0.5;
   if (!real.on) {
     state.speed += thrust * grip * dt;
     // Gravity acts on the GROUND's grade, not on the sprung body's pitch. pitchC
@@ -8517,6 +8526,7 @@ function tick(now: number): void {
     const wetDrag = 1 + wx.wet * (surfKind === 'road' ? 0.35 : 0.7);
     state.speed -= state.speed * surf.drag * wetDrag * (0.1 + 0.9 * grip) * dt;
     if (brake && grip > 0.4 && Math.abs(state.speed) < 1.2) state.speed = 0;
+    if (parkHold) state.speed = 0;
     state.speed = clamp(state.speed, -CAR.maxRev, surf.max * (1.25 - wx.wet * 0.2)); // downhill may overrun the flat cap
     const SRATE = 7 * tune.steer; // full-lock in ~0.14s at STOCK
     steerCur += clamp(steer - steerCur, -SRATE * dt, SRATE * dt);
@@ -8560,6 +8570,7 @@ function tick(now: number): void {
     slideV -= Math.sign(demand) * 8 * (1 - Math.exp(-over / 12)) * dt;
     slideV -= gravLat * dt;                              // the hill you're standing on
     slideV -= slideV * surf.lat * (0.3 + 0.7 * grip) * dt;
+    if (parkHold) slideV = 0;                            // the handbrake holds sideways too
     state.x += cH * slideV * dt;   // (cos, sin) is the car's own right
     state.z += sH * slideV * dt;
     // Sliding sideways is drag you chose. It also decides what you HEAR and
@@ -8634,6 +8645,32 @@ function tick(now: number): void {
     const was = Math.abs(state.speed);
     state.speed *= Math.exp(-5 * scrape * dt);
     rigImpact(was - Math.abs(state.speed));
+  }
+  // ── rocks: collideable, never blocking ──
+  // A boulder is not scenery you clip through and not a wall that traps you:
+  // hitting one COSTS — a bite of speed by its size, a crash, a scratch on
+  // the hull — and then the truck is past it. One charge per rock per second,
+  // so a boulder field rattles rather than bricks.
+  if (!real.on && groundedF > 0.25 && Math.abs(state.speed) > 1.2) {
+    const nowMs = performance.now();
+    const cx0 = Math.floor(state.x / VEG_CELL), cz0 = Math.floor(state.z / VEG_CELL);
+    const lx = state.x - cx0 * VEG_CELL, lz = state.z - cz0 * VEG_CELL;
+    // The car spans one bucket; a neighbour only matters within reach of it.
+    const xs = lx < 6 ? [cx0 - 1, cx0] : lx > VEG_CELL - 6 ? [cx0, cx0 + 1] : [cx0];
+    const zs = lz < 6 ? [cz0 - 1, cz0] : lz > VEG_CELL - 6 ? [cz0, cz0 + 1] : [cz0];
+    for (const gx of xs) for (const gz of zs) {
+      for (const site of vegGrid.get(`${gx},${gz}`) ?? []) {
+        if (site.k !== 'rock') continue;
+        if (Math.hypot(site.x - state.x, site.z - state.z) > CAR_R + site.s * 0.85) continue;
+        if (site.hit !== undefined && nowMs - site.hit < 1000) continue;
+        site.hit = nowMs;
+        const v = Math.abs(state.speed);
+        const cost = clamp(site.s * 0.28, 0.1, 0.42);   // a big boulder bites harder
+        state.speed *= 1 - cost;
+        rig.hull = clamp(rig.hull - site.s * 0.004 * Math.min(1, v / 12), 0, 1);
+        audio.crash(clamp((v * cost) / 4, 0.25, 0.9));
+      }
+    }
   }
   // ── suspension: the truck LIES on the terrain via 4 wheel contacts ──
   const sinH = Math.sin(state.heading), cosH = Math.cos(state.heading);
