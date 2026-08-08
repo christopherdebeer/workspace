@@ -7618,10 +7618,9 @@ function drawMinimap(): void {
   const [cx, cz] = mapPt(state.x, state.z);
   const sx = cx - spanPx / 2, sz = cz - spanPx / 2;
   miniCtx.clearRect(0, 0, S, S);
+  // The full square — a porthole inside a square panel wasted a third of an
+  // instrument that now has to read bends.
   miniCtx.save();
-  miniCtx.beginPath();
-  miniCtx.arc(S / 2, S / 2, S / 2 - 2, 0, Math.PI * 2);
-  miniCtx.clip();
   miniCtx.fillStyle = '#0a0f0a';
   miniCtx.fillRect(0, 0, S, S);
   miniCtx.drawImage(mapLayer, sx, sz, spanPx, spanPx, 0, 0, S, S);
@@ -7657,6 +7656,8 @@ function drawMinimap(): void {
 // headlights, the wipers and the retroreflective signs were all built for.
 type CamMode = 'top' | 'chase' | 'cab';
 let camMode: CamMode = 'chase';   // the road view is the game; the chart is a mode you visit
+let chaseH = 1;    // chase rig height multiplier — the CAMERA dials in SETTINGS
+let cabFov = 68;   // driver's-seat field of view
 const camPos = new THREE.Vector3();
 const camAim = new THREE.Vector3();
 let camInit = false;
@@ -7692,7 +7693,7 @@ function setCam(m: CamMode): void {
   panX = panZ = 0;                  // pan is a glance, not a state to carry over
   // From the driver's seat you are INSIDE the shell, so the near plane has to
   // clear the dashboard rather than the bonnet.
-  camera.fov = camMode === 'cab' ? 68 : 55;
+  camera.fov = camMode === 'cab' ? cabFov : 55;
   camera.updateProjectionMatrix();
   ghostCab(camMode === 'cab');
   updateStickHome();
@@ -9030,15 +9031,15 @@ function tick(now: number): void {
     // landscape, and sit high enough to look over its own dust.
     // Distances came down with the truck: on the spec-sheet body (2.15m wide
     // against the old 3.08m) the previous stand-off left it a speck.
-    const back = 13 + Math.abs(state.speed) * 0.26;
+    const back = 13 + (chaseH - 1) * 5 + Math.abs(state.speed) * 0.26;
     camPos.set(
       state.x - fwdX * back,
       // ABOVE the vehicle, always: on a steep climb the ground under the
       // camera is far below the truck, so tie the floor to the body and add
       // pitch lift to keep looking down the slope at it.
       Math.max(
-        groundAt(state.x - fwdX * back, state.z - fwdZ * back) + 4.6,
-        bodyY + 4.0 + Math.max(0, Math.sin(pitchC)) * back,
+        groundAt(state.x - fwdX * back, state.z - fwdZ * back) + 4.6 * chaseH,
+        bodyY + 4.0 * chaseH + Math.max(0, Math.sin(pitchC)) * back,
       ),
       state.z - fwdZ * back,
     );
@@ -9149,7 +9150,7 @@ function tick(now: number): void {
     } else {
       // The cab preview stands exactly where the cab rig will: same eye, same
       // body attitude, same ghosted shell — so the tap changes nothing but size.
-      miniCam.fov = 68;
+      miniCam.fov = cabFov;
       const cs = Math.cos(pitchC), sn = Math.sin(pitchC);
       const eyeLocalY = EYE.y * cs - EYE.z * sn;
       const eyeLocalZ = EYE.y * sn + EYE.z * cs;
@@ -9948,6 +9949,19 @@ const DIAL_GROUPS: DialGroup[] = [
       dial('paint', 'PAINT', BODY_COLORS.map(([n]) => n), 0, (i) => { bodyMat?.color.setHex(BODY_COLORS[i][1]); }),
     ],
   },
+  {
+    title: 'CAMERA',
+    dials: [
+      // Height scales the whole chase rig: floor clearance, body stand-off,
+      // and a little extra stand-back so AERIAL reads as a crane, not a mast.
+      dial('chaseh', 'CHASE HEIGHT', ['LOW', 'STOCK', 'HIGH', 'AERIAL'], 1,
+        (i) => { chaseH = [0.7, 1, 1.45, 2.1][i]; }, true),
+      dial('cabfov', 'CAB FOV', ['60', '68', '76', '84'], 1, (i) => {
+        cabFov = [60, 68, 76, 84][i];
+        if (camMode === 'cab') { camera.fov = cabFov; camera.updateProjectionMatrix(); }
+      }, true),
+    ],
+  },
   // The SETUP a driver would actually change between stages, and unlike the
   // render dials these are felt rather than seen. Every one is a trade, or it
   // would just be a difficulty slider with extra steps.
@@ -10327,8 +10341,6 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.drawImage(mini, mx + 1, my + 1, mw - 2, mw - 2);
     hctx.restore();
   }
-  const dockLabel = showMap ? 'N' : lastPov === 'cab' ? 'CAB' : 'POV';
-  text(hctx, dockLabel, mx + mw / 2 - (showMap ? 3 : 8), my + 2, UI.gold);
   dockRect = { x: mx, y: my, w: mw, h: mw };
   {
     const povLabel = lastPov === 'chase' ? 'CAB' : 'CHASE';   // what a tap switches TO
