@@ -7467,6 +7467,26 @@ function meshHeightAt(x: number, z: number): number | null {
   ({ n: cpDraw.length, hidden: cpDraw.filter((c) => c.hid).length,
     d: cpDraw.map((c) => ({ d: Math.round(c.d), hid: c.hid })).slice(0, 12) });
 (window as unknown as { __cpwhy?: object }).__cpwhy = (): object => cpCull;
+/** Every built segment of a named road, raw: midpoint, deck height, the
+ *  (cut) terrain under it, and the tunnel flag — for a probe that wants to
+ *  reconstruct the longitudinal profile and ask why it is shaped that way. */
+(window as unknown as { __profile?: object }).__profile = (name: string): number[][] => {
+  const seen = new Set<Seg>();
+  const out: number[][] = [];
+  for (const arr of roadGrid.values()) for (const s of arr) {
+    if (s.nm !== name || seen.has(s)) continue;
+    seen.add(s);
+    const mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2;
+    out.push([
+      +mx.toFixed(1), +mz.toFixed(1),
+      s.ya === undefined ? NaN : +(((s.ya as number) + (s.yb as number)) / 2).toFixed(2),
+      +sampleHeight(mx, mz).toFixed(2),
+      s.tn ? 1 : 0,
+      +s.ax.toFixed(1), +s.az.toFixed(1), +s.bx.toFixed(1), +s.bz.toFixed(1),
+    ]);
+  }
+  return out;
+};
 (window as unknown as { __tiledbg?: object }).__tiledbg = (v?: boolean): boolean => {
   tileDbg = v ?? !tileDbg;
   return tileDbg;
