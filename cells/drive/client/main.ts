@@ -3756,6 +3756,30 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // exposed tube sitting on the ground. Bridges ride the chord.
       prof[i] = mode === 'tunnel' ? Math.min(chord, elev[i]) : chord;
     }
+    // THE GRADE LINE. On a cliff face the 9.5m/px heightfield cannot resolve
+    // a road bench: a pixel averages the rock above the deck with the drop
+    // below it, so the sampled centreline rolls by metres from pixel to pixel
+    // and Chapman's Peak rode like a fairground. Along the ROAD, real
+    // elevation changes slowly — an engineered grade is the thing a road IS —
+    // so high-frequency content in the along-way profile is DEM error by
+    // definition, and a wide average (~±100m, twice) is the honest estimator.
+    // Where the line rides above the ground it earns the embankment, parapet
+    // and pier machinery below; where it cuts deep the burial pass already
+    // turns the run into a tunnel. The ENDS are pinned to the raw samples:
+    // fragments smooth independently, and two one-sided averages disagreeing
+    // at a shared tile-boundary vertex would step the deck mid-street.
+    if (mode === 'auto' && n > 8) {
+      const wide = (src: number[]): number[] => src.map((_, i) => {
+        let s = 0, c = 0;
+        for (let j = Math.max(0, i - 8); j <= Math.min(n - 1, i + 8); j++) { s += src[j]; c++; }
+        return s / c;
+      });
+      const eng = wide(wide(prof));
+      for (let i = 0; i < n; i++) {
+        const pin = clamp(Math.min(i, n - 1 - i) / 8, 0, 1);
+        prof[i] += (eng[i] - prof[i]) * pin;
+      }
+    }
   }
   const flat = mode !== 'none'; // profiled roads get a flat cross-section
   // ── hug the ground where there is nothing to bridge ────────────────
@@ -5783,7 +5807,11 @@ scene.add(car);
 // off) and the real hull draws after it (renderOrder 6) — repainting itself
 // over any pattern wherever it actually won the pixel. What survives is
 // pattern only where the world, not the truck, owns the depth.
-const xrayMat = new THREE.MeshBasicMaterial({ color: 0x57c9b0 });
+// Dim sea-teal, not the HUD's full mint: at night the world goes near-black
+// and a bright silhouette blob shouted over the whole frame. Roughly half
+// the luminance keeps it legible against a daylit hillside and discreet
+// against a dark one.
+const xrayMat = new THREE.MeshBasicMaterial({ color: 0x2f7568 });
 xrayMat.depthFunc = THREE.GreaterDepth;
 xrayMat.depthWrite = false;
 xrayMat.onBeforeCompile = (sh) => {
