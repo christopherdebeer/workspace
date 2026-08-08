@@ -4370,11 +4370,20 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       if (buried && s < 0) s = i;
       if ((!buried || i === b) && s >= 0) {
         const e = buried ? i : i - 1;
-        if (e - s >= 2) {
-          tunnelTube(dense, prof, elevMin, s, e, width, lift);
+        // THE PORTAL THROAT. The tube used to start at the first buried
+        // station, so the terrain mesh interpolated a wall of dirt straight
+        // across its mouth — the entrance was there and you could not see
+        // it. The first and last stations of the run stay OUT of the tube
+        // and OUT of the tn exemption instead: the ordinary corridor cut
+        // carves them into an open notch (burial is only just past the
+        // threshold there, well within the cut's reach), and the tube's
+        // lintel now stands at the back of a visible cutting.
+        const s2 = s + 1, e2 = e - 1;
+        if (e2 - s2 >= 2) {
+          tunnelTube(dense, prof, elevMin, s2, e2, width, lift);
           // These segments live UNDER the hill on purpose. Exempt them from the
           // corridor cut, which would otherwise open every tunnel into a trench.
-          for (let k = s; k < e && k < segsOf.length; k++) segsOf[k].tn = true;
+          for (let k = s2; k < e2 && k < segsOf.length; k++) segsOf[k].tn = true;
         }
         s = -1;
       }
@@ -8010,6 +8019,46 @@ let camInit = false;
 // How much of the chase stand-off the terrain currently allows (1 = all of
 // it). Smoothed asymmetrically in the chase branch; reset on mode change.
 let chasePull = 1;
+// How far into the tunnel rig the chase camera currently is: 1 under a roof,
+// rising ahead of a portal so the eye is already at mouth height on entry.
+let tunnelBlend = 0;
+// A spawn URL points at a ROAD, but the truck lands on groundAt — and where
+// the aligned profile runs beneath misregistered terrain (a bench under
+// phantom rock, a tunnel), that ground can stand tens of metres above the
+// deck the player meant to start on. Once the road has streamed in, one
+// correction: if the resting truck stands well off a deck that is right
+// there, put it ON the deck. GPS drives are exempt — position is truth.
+let spawnSnapped = false;
+function snapSpawnToDeck(nowMs: number): void {
+  if (spawnSnapped || real.on || nowMs > 60000) return;
+  if (Math.hypot(state.x, state.z) > 25 || Math.abs(state.speed) > 8) return;
+  let bx = 0, bz = 0, by = 0, bd = 15;
+  for (const dx of [0, -GRID, GRID]) for (const dz of [0, -GRID, GRID]) {
+    for (const s of roadGrid.get(gkey(state.x + dx, state.z + dz)) ?? []) {
+      if (s.ya === undefined || s.yb === undefined || s.tk) continue;
+      const [cx2, cz2] = closestOnSeg(state.x, state.z, s);
+      const d = Math.hypot(state.x - cx2, state.z - cz2);
+      if (d < bd) { bd = d; bx = cx2; bz = cz2; by = (s.ya + s.yb) / 2; }
+    }
+  }
+  if (bd >= 15) return;                    // no road here yet — keep waiting
+  spawnSnapped = true;
+  if (Math.abs(bodyY - by) < 2.5) return;  // already at road level: parked beside it is fine
+  state.x = bx; state.z = bz; state.speed = 0;
+  vBodyY = 0; prevGround = null; bodyInit = false;
+}
+/** The nearest profiled deck height to (x,z), or null when no road is close —
+ *  the reference the tunnel-ahead detector compares the terrain against. */
+function deckNear(x: number, z: number): number | null {
+  let best: number | null = null, bd = 14;
+  for (const s of roadGrid.get(gkey(x, z)) ?? []) {
+    if (s.ya === undefined || s.yb === undefined || s.tk) continue;
+    const [cx2, cz2] = closestOnSeg(x, z, s);
+    const d = Math.hypot(x - cx2, z - cz2);
+    if (d < bd) { bd = d; best = (s.ya + s.yb) / 2; }
+  }
+  return best;
+}
 const miniCam = new THREE.PerspectiveCamera(60, 1, 1, 30000); // the dock's POV preview rig
 /** The driver's eye, in the car's own frame: right-hand seat, pushed up to the
  *  windscreen header (roof band tops out at y 2.09, the glass stands at
@@ -8038,6 +8087,7 @@ function setCam(m: CamMode): void {
   if (m !== 'top') lastPov = m;
   camInit = false;                  // snap to the new rig, then resume smoothing
   chasePull = 1;                    // and forget any terrain pull-in from last time
+  tunnelBlend = 0;
   panX = panZ = 0;                  // pan is a glance, not a state to carry over
   // From the driver's seat you are INSIDE the shell, so the near plane has to
   // clear the dashboard rather than the bonnet.
@@ -9411,6 +9461,7 @@ function tick(now: number): void {
   prevSurfKind = surfKind;
   reveal(state.x, state.z);
   if (now > streamAt) { streamAt = now + 1200; streamWorld(state.x, state.z); }
+  snapSpawnToDeck(now);
   // Two rigs. TOP: the chart view, tilted a touch for relief. CHASE: low and
   // behind, where speed is legible and the fog reads as a night horizon.
   const fwdX = Math.sin(state.heading), fwdZ = -Math.cos(state.heading);
@@ -9481,8 +9532,21 @@ function tick(now: number): void {
     // ground" rule below would catapult the camera onto the hilltop to stare
     // at grass while the truck drives the tube. The old ghost corridor
     // existed largely to excuse exactly that. Ride INSIDE instead: close
-    // behind, under the ceiling, welded like the cab is.
-    if (groundAt(state.x, state.z) - bodyY > 4.5) {
+    // behind, under the ceiling, welded like the cab is — and start the
+    // descent BEFORE the portal: the detector looks down the road ahead for
+    // ground standing over the deck, so by the time the truck crosses the
+    // mouth the eye is already low enough to see through it, instead of
+    // watching the hillside swallow the rig and then cutting.
+    let roofW = groundAt(state.x, state.z) - bodyY > 4.5 ? 1 : 0;
+    if (!roofW && Math.abs(state.speed) > 0.5) {
+      for (const dA of [10, 20, 32, 46]) {
+        const qx = state.x + fwdX * dA, qz = state.z + fwdZ * dA;
+        const dk = deckNear(qx, qz);
+        if (dk !== null && groundAt(qx, qz) - dk > 4.5) { roofW = clamp(1 - dA / 60, 0, 1); break; }
+      }
+    }
+    tunnelBlend += (roofW - tunnelBlend) * (1 - Math.exp(-(roofW > tunnelBlend ? 7 : 2.2) * dt));
+    if (tunnelBlend > 0.98) {
       camPos.set(state.x - fwdX * 7, bodyY + 2.35, state.z - fwdZ * 7);
       chasePull = 1;    // the tube frames itself; don't carry a pull to the exit
     } else {
@@ -9539,6 +9603,12 @@ function tick(now: number): void {
           groundAt(camPos.x, camPos.z) + 2.4,
           bodyY + 2.6 + (camPos.y - bodyY - 2.6) * chasePull,
         );
+      }
+      // Approaching a portal: sink the whole rig toward the tunnel pose.
+      if (tunnelBlend > 0.01) {
+        camPos.x += (state.x - fwdX * 7 - camPos.x) * tunnelBlend;
+        camPos.y += (bodyY + 2.35 - camPos.y) * tunnelBlend;
+        camPos.z += (state.z - fwdZ * 7 - camPos.z) * tunnelBlend;
       }
     }
     }
