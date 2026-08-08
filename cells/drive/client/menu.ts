@@ -174,6 +174,17 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   #menu .m-view.on { border-color: ${C.gold}; color: ${C.gold}; }
   #menu .m-bay { position: relative; border: 1px solid ${C.dim}; height: 200px; margin: 2px 0 8px; flex-shrink: 0; }
   #menu .m-bay.hero { height: auto; flex: 1; min-height: 130px; margin: 6px 0 0; }
+  /* The hub: the live scene is the background, so the scrim stands down and
+     every floating word carries its own ink. */
+  #menu.hub .m-scrim { display: none !important; }
+  #menu .m-hubshade { position: absolute; top: -1px; left: -1px; right: -1px; height: 34%;
+    background: linear-gradient(rgba(4,10,11,0.85), rgba(4,10,11,0)); display: none; pointer-events: none; }
+  #menu.hub .m-hubshade { display: block; }
+  #menu.hub .m-title, #menu.hub .m-sub, #menu.hub .m-place, #menu.hub .m-dimline,
+  #menu.hub table.m-kv { text-shadow: 0 1px 3px rgba(4,10,11,0.95), 0 0 6px rgba(4,10,11,0.7); }
+  #menu.hub .m-navrow { background: rgba(8,20,23,0.74); }
+  #menu.hub .m-cta { background: rgba(8,20,23,0.74); }
+  #menu.hub .m-cta:first-child { background: rgba(24,52,40,0.8); }
   #menu .m-bay .cap { position: absolute; top: 3px; left: 5px; color: ${C.dim}; font-size: 10px; }
   #menu .m-bay .tag { position: absolute; bottom: 3px; left: 5px; color: ${C.gold}; font-size: 10px; }
   `;
@@ -190,6 +201,11 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   });
   const panel = document.createElement('div');
   panel.className = 'm-panel';
+  // Painted FIRST so everything else stacks over it: the hub's top shade,
+  // holding the header and stats legible against a bright sky.
+  const hubShade = document.createElement('div');
+  hubShade.className = 'm-hubshade';
+  panel.appendChild(hubShade);
   root.appendChild(panel);
   // Gold corner brackets, the reference's chrome vocabulary.
   for (const [v, h] of [['top', 'left'], ['top', 'right'], ['bottom', 'left'], ['bottom', 'right']]) {
@@ -358,7 +374,6 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     const situation = el('div', 'm-dimline', ctx.situation());
     bindText(place, ctx.place);
     bindText(situation, ctx.situation);
-    bayEl = mkBay(true);
     const kv = kvTable(ctx.driveStats);
     const cta = el('button', 'm-cta');
     cta.append(ico(ICON.car), el('span', 'lab', 'DRIVE'));
@@ -385,10 +400,13 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       row.addEventListener('click', () => setTab(t));
       nav.appendChild(row);
     }
-    // The hero window goes LAST in the flow, under the sections — that is
-    // where the chase camera actually puts the truck on screen, so the hole
-    // lands on the rig against its vista instead of on empty sky.
-    body.append(place, situation, kv, nav, bayEl);
+    // The scene IS the splash's background — no scrim, no window (the .hub
+    // class kills the strips): the rig stands in the live world behind
+    // everything, and the spacer holds the sections down where the chase
+    // camera keeps the truck visible between the stats and the buttons.
+    const spacer = el('div', '');
+    spacer.style.flex = '1';
+    body.append(place, situation, kv, spacer, nav);
     // DRIVE anchors the BOTTOM of the page — pinned in the foot, under the
     // sections, always reachable without scrolling past it.
     foot.append(cta, gps);
@@ -562,6 +580,9 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   function setTab(t: number): void {
     tab = t;
     body.scrollTop = 0;
+    // The hub is CLEAR — the live scene is its background; the pages keep
+    // the scrim (RIG punches its studio hole through it via bayRect).
+    root.classList.toggle('hub', t === T_DRIVE);
     if (t !== T_RIG && t !== T_DRIVE) scrimFull();
     render();
   }
