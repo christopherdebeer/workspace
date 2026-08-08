@@ -7939,6 +7939,9 @@ const audio = (() => {
   let roarGain: GainNode, roarFilt: BiquadFilterNode, windGain: GainNode, windFilt: BiquadFilterNode;
   let gritSrc: AudioBufferSourceNode, gritGain: GainNode, gritFilt: BiquadFilterNode;
   let squealGain: GainNode, squealFilt: BiquadFilterNode, squealOsc: OscillatorNode;
+  let scrapeGain: GainNode, scrapeFilt: BiquadFilterNode;
+  let waterGain: GainNode, waterFilt: BiquadFilterNode;
+  let crashAt = 0, creakAt = 0;   // one-shot cooldowns — a scrape is not a drum roll
   let noiseBuf: AudioBuffer;
   let on = true;
   try { on = localStorage.getItem('drive.mute') !== '1'; } catch { /* fine */ }
@@ -8009,6 +8012,19 @@ const audio = (() => {
     windFilt = ctx.createBiquadFilter(); windFilt.type = 'highpass'; windFilt.frequency.value = 900;
     windGain = ctx.createGain(); windGain.gain.value = 0;
     windSrc.connect(windFilt); windFilt.connect(windGain); windGain.connect(master); windSrc.start();
+    // Scrape: the continuous half of a collision — bodywork dragged along a
+    // wall or rail. A mid bandpass with some bite; gain rides contact + speed.
+    const scSrc = ctx.createBufferSource(); scSrc.buffer = noiseBuf; scSrc.loop = true;
+    scrapeFilt = ctx.createBiquadFilter(); scrapeFilt.type = 'bandpass';
+    scrapeFilt.frequency.value = 640; scrapeFilt.Q.value = 2.4;
+    scrapeGain = ctx.createGain(); scrapeGain.gain.value = 0;
+    scSrc.connect(scrapeFilt); scrapeFilt.connect(scrapeGain); scrapeGain.connect(master); scSrc.start();
+    // Water: the wash of a hull pushing through it — low, wide, speed-driven.
+    const waSrc = ctx.createBufferSource(); waSrc.buffer = noiseBuf; waSrc.loop = true;
+    waterFilt = ctx.createBiquadFilter(); waterFilt.type = 'bandpass';
+    waterFilt.frequency.value = 420; waterFilt.Q.value = 0.8;
+    waterGain = ctx.createGain(); waterGain.gain.value = 0;
+    waSrc.connect(waterFilt); waterFilt.connect(waterGain); waterGain.connect(master); waSrc.start();
   };
   const arm = (): void => {
     // iOS mutes Web Audio with the RINGER SWITCH unless the page declares a
@@ -8126,6 +8142,76 @@ const audio = (() => {
       g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
       src.connect(bp); bp.connect(g); g.connect(master);
       src.start(t); src.stop(t + 0.3);
+    },
+    // ── the rig meeting the world ──────────────────────────────────
+    /** A real hit: a deep body thump under a brighter clatter of panels.
+     *  Cooldown, because the scrape channel owns the continuous part. */
+    crash(force: number): void {
+      if (!ctx || !master || ctx.state !== 'running' || !on) return;
+      const now = performance.now();
+      if (now - crashAt < 400 || force < 0.2) return;
+      crashAt = now;
+      const t = ctx.currentTime;
+      const thump = ctx.createBufferSource(); thump.buffer = noiseBuf; thump.loop = true;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 150 + force * 170;
+      const g1 = ctx.createGain();
+      g1.gain.setValueAtTime(Math.min(0.6, 0.25 + force * 0.4), t);
+      g1.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+      thump.connect(lp); lp.connect(g1); g1.connect(master);
+      thump.start(t); thump.stop(t + 0.32);
+      const clat = ctx.createBufferSource(); clat.buffer = noiseBuf; clat.loop = true;
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1500; bp.Q.value = 1.4;
+      const g2 = ctx.createGain();
+      g2.gain.setValueAtTime(force * 0.3, t + 0.01);
+      g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
+      clat.connect(bp); bp.connect(g2); g2.connect(master);
+      clat.start(t); clat.stop(t + 0.22);
+    },
+    /** The chassis working — a short low groan for hits that flex the
+     *  suspension without bottoming it. */
+    creak(force: number): void {
+      if (!ctx || !master || ctx.state !== 'running' || !on) return;
+      const now = performance.now();
+      if (now - creakAt < 220) return;
+      creakAt = now;
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator(); osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(110 + force * 40, t);
+      osc.frequency.exponentialRampToValueAtTime(62, t + 0.14);
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 260; bp.Q.value = 2.5;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(force * 0.11, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+      osc.connect(bp); bp.connect(g); g.connect(master);
+      osc.start(t); osc.stop(t + 0.18);
+    },
+    /** Hitting water at speed: a broad wet slap, then the wash channel
+     *  carries the rest. */
+    splash(force: number): void {
+      if (!ctx || !master || ctx.state !== 'running' || !on) return;
+      const t = ctx.currentTime;
+      const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 900;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(Math.min(0.5, 0.2 + force * 0.35), t + 0.03);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+      src.connect(lp); lp.connect(g); g.connect(master);
+      src.start(t); src.stop(t + 0.55);
+    },
+    /** Continuous channels, set every frame from tick like everything in
+     *  update(): 0 releases them. */
+    scrape(level: number): void {
+      if (!ctx || !scrapeGain) return;
+      const t = ctx.currentTime;
+      scrapeGain.gain.setTargetAtTime(level * 0.22, t, 0.05);
+      scrapeFilt.frequency.setTargetAtTime(520 + level * 720, t, 0.08);
+    },
+    water(level: number): void {
+      if (!ctx || !waterGain) return;
+      const t = ctx.currentTime;
+      waterGain.gain.setTargetAtTime(level * 0.3, t, 0.09);
+      waterFilt.frequency.setTargetAtTime(380 + level * 280, t, 0.12);
     },
   };
 })();
@@ -8374,6 +8460,9 @@ function rigLanding(sev: number): void {
 function rigImpact(lost: number): void {
   if (lost <= 0.15) return;
   rig.hull = clamp(rig.hull - lost * 0.006, 0, 1);
+  // The hit you HEAR: a frame that cost real speed is a crash (the crash's
+  // own cooldown keeps a long scrape from machine-gunning).
+  audio.crash(clamp(lost / 5, 0, 1));
 }
 // The drivetrain's own state, separate from road speed — which is the point:
 // with the wheels off the ground they are no longer the same number.
@@ -8384,6 +8473,7 @@ let dbgSusp: object = {};
 // authority that you pick your line up it.
 const GRAV = 11.5;
 let wheelSpin = 0, groundedF = 1, bodyInit = false;
+let prevSurfKind: Surface = 'ground';   // last frame's ground, for the splash edge
 let steerCur = 0; // smoothed — keyboard taps ramp instead of snapping
 let prevGround: number | null = null; // last frame's resolved ground (tunnel guard)
 let dustBudget = 0;                   // fractional particles carried between frames
@@ -8648,6 +8738,9 @@ function tick(now: number): void {
     // every frame. Restitution now needs a real impact behind it; below that
     // the body just rests on the stop.
     if (vBodyY < -2.5) { audio.thud(Math.min(3, -vBodyY / 3)); vBodyY *= -0.25; }
+    // Under the bump stops' threshold the chassis still WORKS — a hard
+    // compression that doesn't bottom out groans instead of thumping.
+    else if (vBodyY < -1.3) audio.creak(clamp(-vBodyY / 3, 0.25, 0.85));
     else if (vBodyY < 0) vBodyY = 0;
   }
   // THE DESCENT BUG, PITCH EDITION — the exact twin of the heave fix above,
@@ -8814,6 +8907,15 @@ function tick(now: number): void {
   if (now > vegAt) { vegAt = now + 900; refreshVeg(); }
   else if (now > swardAt) { swardAt = now + 700; refreshSward(); }
   audio.update(state.speed, throttle, surfKind, groundedF, wx.rain, engRev, engGear, skid);
+  // The rig against the world: bodywork on a wall while moving, the hull's
+  // wash through water, and the slap of arriving in it with any speed on.
+  audio.scrape(scrape >= 0 && Math.abs(state.speed) > 1.5
+    ? clamp(Math.abs(state.speed) / 22, 0.15, 1) * (0.4 + 0.6 * Math.max(0, scrape)) : 0);
+  audio.water(surfKind === 'water' && groundedF > 0.2 ? clamp(Math.abs(state.speed) / 11, 0.12, 1) : 0);
+  if (surfKind === 'water' && prevSurfKind !== 'water' && Math.abs(state.speed) > 3) {
+    audio.splash(clamp(Math.abs(state.speed) / 14, 0.3, 1));
+  }
+  prevSurfKind = surfKind;
   reveal(state.x, state.z);
   if (now > streamAt) { streamAt = now + 1200; streamWorld(state.x, state.z); }
   // Two rigs. TOP: the chart view, tilted a touch for relief. CHASE: low and
@@ -10657,7 +10759,12 @@ if (timeFromUrl >= 0) {
   // live behind it. The browser's audio gesture is taken by whatever you tap
   // first, which on this screen is a button that means something.
   // A link that already says where to go skips it: that asked for a drive.
+  // ALWAYS the splash — a shared drive link, a saved spot, a mission start:
+  // every arrival lands on the hub with the world live behind it, and DRIVE
+  // is one tap. The exception is a GPS-drive re-anchor reload, which happens
+  // mid-drive on a windscreen mount: popping a menu over a moving car's
+  // instrument is the one wrong answer.
   if (real.on) bootRealDrive();
-  else if (!q.get('lat') && !q.get('m')) menu.open(T_DRIVE);
+  else menu.open(T_DRIVE);
   requestAnimationFrame((t) => { last = t; requestAnimationFrame(tick); });
 })();

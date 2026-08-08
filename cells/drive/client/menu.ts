@@ -383,7 +383,10 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       row.addEventListener('click', () => setTab(t));
       nav.appendChild(row);
     }
-    body.append(cta, gps, nav);
+    body.append(nav);
+    // DRIVE anchors the BOTTOM of the page — pinned in the foot, under the
+    // sections, always reachable without scrolling past it.
+    foot.append(cta, gps);
   }
 
   function renderSurveys(): void {
