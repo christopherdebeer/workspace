@@ -1369,6 +1369,11 @@ const OSM_GATE = 6;
 let osmInFlight = 0;
 interface OsmWait { x: number; y: number; go: (run: boolean) => void }
 const osmQueue: OsmWait[] = [];
+// Per-key wire state, kept ONLY so the tile-debug chart can tell the truth:
+// which keys are actually on the wire right now, and which last failed (the
+// failure itself only lives 8s in osmLoaded before the key is forgotten).
+const osmActive = new Set<string>();
+const osmFailedAt = new Map<string, number>();
 /** Where tiles are wanted (the car thrown forward along its heading), and how
  *  far from the CAR a tile may sit before the queue gives up on it. */
 let osmFocusX = 0, osmFocusZ = 0, osmCarX = 0, osmCarZ = 0, osmRingR = Infinity;
@@ -5102,6 +5107,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     if (!run) { osmLoaded.delete(key); osmNote(-1); return; }
   }
   osmInFlight++;
+  osmActive.add(key);
   try {
     let ways = await proxyTile(x, y);
     if (!ways) {
@@ -5122,6 +5128,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     }
     osmFails = 0;
     osmDown = false;
+    osmFailedAt.delete(key);
     writeTileCache(x, y, ways);
     const before = unbuilt;
     await renderGated(x, y, ways);
@@ -5132,10 +5139,12 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     else osmDone.add(key);
   } catch {
     if (++osmFails >= 2) osmDown = true;
+    osmFailedAt.set(key, performance.now());
     setTimeout(() => osmLoaded.delete(key), 8000); /* backoff, then a later pass retries */
   }
   finally {
     osmInFlight--;
+    osmActive.delete(key);
     osmNote(-1);
     osmRelease();
   }
@@ -7311,6 +7320,10 @@ function meshHeightAt(x: number, z: number): number | null {
   ({ n: cpDraw.length, hidden: cpDraw.filter((c) => c.hid).length,
     d: cpDraw.map((c) => ({ d: Math.round(c.d), hid: c.hid })).slice(0, 12) });
 (window as unknown as { __cpwhy?: object }).__cpwhy = (): object => cpCull;
+(window as unknown as { __tiledbg?: object }).__tiledbg = (v?: boolean): boolean => {
+  tileDbg = v ?? !tileDbg;
+  return tileDbg;
+};
 (window as unknown as { __roadline?: object }).__roadline = (): object =>
   ({ n: roadSegs.length, job: roadSegs.filter((s) => s.job).length,
     segs: roadSegs.slice(0, 4).map((s) => [Math.round(s.x1), Math.round(s.y1), Math.round(s.x2), Math.round(s.y2), Math.round(s.d)]) });
@@ -10009,6 +10022,8 @@ let wildlifeOn = true;
 let cloudShadowOn = true;
 // 0 hidden · 1 ping the take only · 2 ghost the ones still out there · 3 beam
 let cpVis = 0;
+// The streaming machinery drawn over the chart — see the TILE DEBUG dial.
+let tileDbg = false;
 const wearU = { value: 1 };  // shared by every bodywork material
 const BODY_COLORS: Array<[string, number]> = [
   ['RUST', 0xc4402c], ['EMBER', 0xd0642a], ['SAND', 0xc0a068],
@@ -10086,6 +10101,11 @@ const DIAL_GROUPS: DialGroup[] = [
       // exist because "invisible" is a claim about feel that can only be
       // settled by driving the alternatives.
       dial('cpv', 'CHECKPOINTS', ['HIDDEN', 'PING', 'GHOST', 'BEAM'], 0, (i) => { cpVis = i; }),
+      // The streaming layer made visible on the chart: the vector-tile grid,
+      // each tile wearing its state, plus fine-terrain and far-shell counts.
+      // A diagnostic, not a game surface — but streaming bugs only show
+      // themselves where streaming lives, which is the top-down view.
+      dial('tdbg', 'TILE DEBUG', ['OFF', 'ON'], 0, (i) => { tileDbg = i === 1; }),
     ],
   },
   {
@@ -10237,6 +10257,136 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       }
     }
     hctx.globalAlpha = 1;
+  }
+  // ── tile debug: the streaming machinery, made visible (chart only) ──
+  // The z16 vector grid over the chart, each tile wearing its state: DONE a
+  // green pip, ON THE WIRE a pulsing gold square, QUEUED its serving rank
+  // (the gate is nearest-first, not FIFO — the number is the order it will
+  // actually run), FAILED a red X waiting out its backoff, and a dim dot for
+  // requested-but-unsettled. Fine terrain outlines its own z14 tiles — teal
+  // built, gold still fetching, orange marked for rebuild — and the header
+  // carries the counts plus the far shell's level and fill.
+  if (camMode === 'top' && tileDbg) {
+    const dNow = performance.now();
+    const dProj = (wx: number, wz: number): [number, number] | null => {
+      poiVec.set(wx, groundAt(wx, wz), wz);
+      if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) return null;
+      poiVec.project(camera);
+      return [((poiVec.x * 0.5 + 0.5) * innerWidth) / hudS, ((-poiVec.y * 0.5 + 0.5) * innerHeight) / hudS];
+    };
+    const dSeg = (a: [number, number] | null, b: [number, number] | null): void => {
+      if (!a || !b) return;
+      const n = Math.max(1, Math.round(Math.hypot(b[0] - a[0], b[1] - a[1]) / 2));
+      for (let i = 0; i <= n; i++) {
+        hctx.fillRect(Math.round(a[0] + ((b[0] - a[0]) * i) / n), Math.round(a[1] + ((b[1] - a[1]) * i) / n), 1, 1);
+      }
+    };
+    const [dLat, dLon] = localToLatLon(state.x + panX, state.z + panZ);
+    const dR = viewRadius();
+    const [ox0, oy0] = tileAt(dLat, dLon, OSM_Z);
+    const oN = clamp(Math.ceil(dR / tileMetres(OSM_Z)), 1, 9);
+    // Every corner in the range projected once; lines and centres reuse them.
+    const dCor: Array<Array<[number, number] | null>> = [];
+    for (let j = 0; j <= oN * 2 + 1; j++) {
+      const row: Array<[number, number] | null> = [];
+      for (let i = 0; i <= oN * 2 + 1; i++) {
+        const b = tileBounds(ox0 - oN + i, oy0 - oN + j, OSM_Z);
+        const [wx, wz] = toLocal(b.latN, b.lonW);
+        row.push(dProj(wx, wz));
+      }
+      dCor.push(row);
+    }
+    hctx.fillStyle = UI.soft;
+    hctx.globalAlpha = 0.28;
+    for (let j = 0; j <= oN * 2 + 1; j++) for (let i = 0; i <= oN * 2 + 1; i++) {
+      if (i <= oN * 2) dSeg(dCor[j][i], dCor[j][i + 1]);
+      if (j <= oN * 2) dSeg(dCor[j][i], dCor[j + 1][i]);
+    }
+    // Serving rank under the SAME metric the gate uses: nearest to the focus.
+    const dRank = new Map<string, number>();
+    osmQueue
+      .map((w) => {
+        const [wx, wz] = tileCentreLocal(w.x, w.y);
+        return { k: `${w.x}/${w.y}`, d: Math.hypot(wx - osmFocusX, wz - osmFocusZ) };
+      })
+      .sort((a, b) => a.d - b.d)
+      .forEach((q, i) => dRank.set(q.k, i + 1));
+    for (let j = 0; j <= oN * 2; j++) for (let i = 0; i <= oN * 2; i++) {
+      const key = `${ox0 - oN + i}/${oy0 - oN + j}`;
+      const a = dCor[j][i], b = dCor[j + 1][i + 1];
+      if (!a || !b) continue;
+      const cx = Math.round((a[0] + b[0]) / 2), cy = Math.round((a[1] + b[1]) / 2);
+      if (cx < -4 || cx > HW + 4 || cy < -4 || cy > HH + 4) continue;
+      if (osmFailedAt.has(key) && dNow - (osmFailedAt.get(key) ?? 0) > 30000) osmFailedAt.delete(key);
+      // Every marker sits on an ink seat: a bare green pip is indistinguishable
+      // from a bush at chart scale, and this canvas has no other way to say
+      // "UI, not world" than the dark plate every other instrument stands on.
+      const seat = (r2: number): void => {
+        hctx.globalAlpha = 0.65;
+        hctx.fillStyle = UI.ink;
+        hctx.fillRect(cx - r2, cy - r2, r2 * 2 + 1, r2 * 2 + 1);
+      };
+      if (osmActive.has(key)) {
+        seat(2);
+        hctx.globalAlpha = 0.55 + 0.4 * Math.sin(dNow / 120);
+        hctx.fillStyle = UI.gold;
+        hctx.fillRect(cx - 1, cy - 1, 3, 3);
+      } else if (dRank.has(key)) {
+        seat(2);
+        hctx.globalAlpha = 0.75;
+        hctx.fillStyle = UI.soft;
+        hctx.fillRect(cx - 1, cy - 1, 2, 2);
+        textEdgeP(String(dRank.get(key)), cx + 3, cy - 3, UI.text);
+      } else if (osmFailedAt.has(key)) {
+        seat(4);
+        hctx.globalAlpha = 0.9;
+        hctx.fillStyle = UI.bad;
+        dSeg([cx - 3, cy - 3], [cx + 3, cy + 3]);
+        dSeg([cx - 3, cy + 3], [cx + 3, cy - 3]);
+      } else if (osmDone.has(key)) {
+        seat(2);
+        hctx.globalAlpha = 0.85;
+        hctx.fillStyle = UI.good;
+        hctx.fillRect(cx, cy, 2, 2);
+      } else if (osmLoaded.has(key)) {
+        // Requested but unsettled: cached-rendering, or refused for want of
+        // terrain and waiting to be forgotten and asked again.
+        hctx.globalAlpha = 0.6;
+        hctx.fillStyle = UI.dim;
+        hctx.fillRect(cx, cy, 1, 1);
+      }
+    }
+    // The fine-terrain ring, as outlines over its own (coarser) grid.
+    const [tx0, ty0] = tileAt(dLat, dLon, TERRAIN_Z);
+    const tN = clamp(Math.ceil(dR / tileMetres(TERRAIN_Z)), 1, 4);
+    const tCor: Array<Array<[number, number] | null>> = [];
+    for (let j = 0; j <= tN * 2 + 1; j++) {
+      const row: Array<[number, number] | null> = [];
+      for (let i = 0; i <= tN * 2 + 1; i++) {
+        const b = tileBounds(tx0 - tN + i, ty0 - tN + j, TERRAIN_Z);
+        const [wx, wz] = toLocal(b.latN, b.lonW);
+        row.push(dProj(wx, wz));
+      }
+      tCor.push(row);
+    }
+    for (let j = 0; j <= tN * 2; j++) for (let i = 0; i <= tN * 2; i++) {
+      const key = `${tx0 - tN + i}/${ty0 - tN + j}`;
+      if (!terrainReady.has(key)) continue;
+      hctx.fillStyle = terrainDirty.has(key) ? UI.hot : terrainMeshes.has(key) ? UI.edge : UI.gold;
+      hctx.globalAlpha = terrainDirty.has(key) ? 0.8 : 0.5;
+      dSeg(tCor[j][i], tCor[j][i + 1]);
+      dSeg(tCor[j][i], tCor[j + 1][i]);
+      dSeg(tCor[j + 1][i], tCor[j + 1][i + 1]);
+      dSeg(tCor[j][i + 1], tCor[j + 1][i + 1]);
+    }
+    hctx.globalAlpha = 1;
+    let fails = 0;
+    for (const [, at] of osmFailedAt) if (dNow - at < 30000) fails++;
+    textEdgeP(`Z${OSM_Z} DONE ${osmDone.size} WIRE ${osmInFlight} QUEUE ${osmQueue.length} FAIL ${fails}`,
+      6, 40, UI.text);
+    textEdgeP(`Z${TERRAIN_Z} MESH ${terrainMeshes.size} WAIT ${terrainReady.size - terrainMeshes.size}`
+      + ` REBUILD ${terrainDirty.size} · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`,
+      6, 48, UI.soft);
   }
   // ── checkpoint markers, under everything ──
   // Never a label and never a distance: the moment a checkpoint tells you how
