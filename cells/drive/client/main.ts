@@ -1377,6 +1377,16 @@ function osmRelease(): void {
 // centerlines, and rendering them single-lane narrow made the real-size car
 // look like it straddled the whole street.
 const ROAD_W: Record<string, number> = { motorway: 13, trunk: 12, primary: 10.5, secondary: 9.5, tertiary: 8.5, residential: 7.5, unclassified: 7, service: 4.5, living_street: 6.5, track: 6.5, footway: 4.5, path: 4.5, cycleway: 5, bridleway: 5, steps: 2.2, pedestrian: 6 };
+// The RULING GRADE a class is engineered to — what the profile clamp treats
+// as "steeper than this is probably not real". Motorways hold ~4% by design
+// and 7% only in extremis; alpine passes run 9-12%; town streets can defy
+// all of it, which is why the clamp carries a deviation budget, not a law.
+const GRADE_MAX: Record<string, number> = {
+  motorway: 0.07, motorway_link: 0.08, trunk: 0.08, trunk_link: 0.09,
+  primary: 0.1, primary_link: 0.1, secondary: 0.11, secondary_link: 0.11,
+  tertiary: 0.13, tertiary_link: 0.13, residential: 0.16, unclassified: 0.16,
+  service: 0.18, living_street: 0.16, pedestrian: 0.16,
+};
 // ── procedural detail textures (deterministic, weathered) ──────────
 // Known details render as TEXTURE, not just flat colour — and the world is
 // DECAYING GRACEFULLY: cracked asphalt with growth in the seams, crumbling
@@ -3689,7 +3699,7 @@ function flushAprons(): void {
 type RoadMode = 'none' | 'auto' | 'tunnel' | 'bridge';
 const TUNNEL_TOL = 5;  // metres of terrain above the smoothed profile ⇒ tunnel
 const TUNNEL_H = 5;    // clearance of the carved tube
-function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number): void {
+function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0): void {
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
   // point here has real elevation under it; if one does not, the profile would
   // be built against sampleHeight's 0 and bake a causeway that no later tile
@@ -3778,6 +3788,33 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       for (let i = 0; i < n; i++) {
         const pin = clamp(Math.min(i, n - 1 - i) / 8, 0, 1);
         prof[i] += (eng[i] - prof[i]) * pin;
+      }
+    }
+    // A ROAD CLASS IMPLIES A RULING GRADE. A motorway is BUILT to ~7%, an
+    // ordinary paved road to low teens — so any along-way grade past the
+    // class ceiling that survives the smoothing is DEM error, not geography.
+    // Clamped with a DEVIATION BUDGET rather than absolutely: a San
+    // Francisco street at 20% is honest and a hard clamp would run a viaduct
+    // through the neighbourhood, so the profile may stray at most a few
+    // metres from the measured line in service of the grade and then
+    // concedes. Noise needs only small corrections and dies; real steepness
+    // exceeds the budget and stays. Ends re-pinned as ever.
+    if (mode === 'auto' && n > 8 && maxGrade > 0) {
+      const base = prof.slice();
+      const DEV = 5;
+      for (let pass = 0; pass < 3; pass++) {
+        for (let i = 1; i < n; i++) {
+          const g = maxGrade * Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
+          prof[i] = clamp(clamp(prof[i], prof[i - 1] - g, prof[i - 1] + g), base[i] - DEV, base[i] + DEV);
+        }
+        for (let i = n - 2; i >= 0; i--) {
+          const g = maxGrade * Math.max(1, Math.hypot(dense[i + 1][0] - dense[i][0], dense[i + 1][1] - dense[i][1]));
+          prof[i] = clamp(clamp(prof[i], prof[i + 1] - g, prof[i + 1] + g), base[i] - DEV, base[i] + DEV);
+        }
+      }
+      for (let i = 0; i < n; i++) {
+        const pin = clamp(Math.min(i, n - 1 - i) / 8, 0, 1);
+        prof[i] = base[i] + (prof[i] - base[i]) * pin;
       }
     }
   }
@@ -4775,7 +4812,8 @@ function renderWays(els: OsmWay[]): void {
         : tags.bridge && tags.bridge !== 'no' ? 'bridge'
         : 'auto';
       ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : MAT.road,
-        track || stairs ? SURFACE.track.lift : SURFACE.road.lift, !stairs, mode, track, tags.name, wayQuality(tags, track));
+        track || stairs ? SURFACE.track.lift : SURFACE.road.lift, !stairs, mode, track, tags.name, wayQuality(tags, track),
+        GRADE_MAX[tags.highway] ?? 0.15);
       if (unbuilt !== refusedAt) { seenWays.delete(dk); continue; }
       // Steps are named and drawn but nothing drives them, so they earn no
       // checkpoints — a road you cannot survey should not sit in the log.
@@ -9320,6 +9358,16 @@ function tick(now: number): void {
     // Distances came down with the truck: on the spec-sheet body (2.15m wide
     // against the old 3.08m) the previous stand-off left it a speck.
     const back = 13 + (chaseH - 1) * 5 + Math.abs(state.speed) * 0.26;
+    // UNDER A ROOF? Inside a tunnel groundAt answers with the HILL — tn segs
+    // are exempt from the corridor cut on purpose — so every "stay above the
+    // ground" rule below would catapult the camera onto the hilltop to stare
+    // at grass while the truck drives the tube. The old ghost corridor
+    // existed largely to excuse exactly that. Ride INSIDE instead: close
+    // behind, under the ceiling, welded like the cab is.
+    if (groundAt(state.x, state.z) - bodyY > 4.5) {
+      camPos.set(state.x - fwdX * 7, bodyY + 2.35, state.z - fwdZ * 7);
+      chasePull = 1;    // the tube frames itself; don't carry a pull to the exit
+    } else {
     camPos.set(
       state.x - fwdX * back,
       // ABOVE the vehicle, always: on a steep climb the ground under the
@@ -9374,6 +9422,7 @@ function tick(now: number): void {
           bodyY + 2.6 + (camPos.y - bodyY - 2.6) * chasePull,
         );
       }
+    }
     }
   }
   // Critically-damped-ish follow: snap on mode change, ease in play (the chase
