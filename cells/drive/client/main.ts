@@ -157,12 +157,12 @@ async function findSpawn(): Promise<{ lat: number; lon: number; name: string | n
   const p = new URLSearchParams(location.search);
   const qlat = parseFloat(p.get('lat') ?? ''), qlon = parseFloat(p.get('lon') ?? '');
   if (Number.isFinite(qlat) && Number.isFinite(qlon)) return { lat: qlat, lon: qlon, name: null };
-  // Default: a KNOWN start (testing/demos want determinism) — the west side of
-  // Central Park. Random-anywhere is the deliberate gesture: `elsewhere ↻`
-  // (which navigates with ?random=1) or a hand-typed param.
-  // Probed against the live road grid: this is ON West Drive (tarmac from
-  // frame one), not mid-meadow — a spawn that answers the throttle instantly.
-  if (!p.has('random')) return { lat: 40.7816, lon: -73.972, name: 'Central Park, New York' };
+  // Default: the TOP OF EL CAPITAN, rig parked on the rim looking down the
+  // valley — the splash frames the truck against that vista in chase cam, so
+  // the first thing a new arrival sees is the game's whole pitch. Still a
+  // KNOWN start (testing/demos want determinism); random-anywhere stays the
+  // deliberate gesture: ELSEWHERE (?random=1) or a hand-typed param.
+  if (!p.has('random')) return { lat: 37.7351, lon: -119.637, name: 'El Capitan, Yosemite' };
   for (let i = 0; i < 4; i++) {
     // Uniform over the sphere (asin), clipped to the inhabited belt.
     const lat = clamp((Math.asin(Math.random() * 2 - 1) * 180) / Math.PI, -50, 66);
@@ -7409,17 +7409,11 @@ function updateStickHome(): void {
   // Nothing to steer with when the car is steering itself. Leaving a live stick
   // on screen in a moving vehicle is an invitation to touch it.
   if (real.on) { stickBase.style.display = stickNub.style.display = 'none'; return; }
-  if (camMode === 'top') {
-    const h = stickHome();
-    stickBase.style.display = 'block';
-    stickBase.style.left = `${h.x}px`;
-    stickBase.style.top = `${h.y}px`;
-    if (!stick) {
-      stickNub.style.display = 'block';
-      stickNub.style.left = `${h.x}px`;
-      stickNub.style.top = `${h.y}px`;
-    }
-  } else if (!stick) {
+  // The chart's stick is INVISIBLE now — pinned to the truck it kept reading
+  // as a stray ring pasted over the map. The grab zone is unchanged (the
+  // pointerdown handler works from stickHome(), not from these elements), so
+  // the thumb that knows where the truck is still steers it.
+  if (camMode === 'top' || !stick) {
     stickBase.style.display = stickNub.style.display = 'none';
   }
 }
@@ -7658,7 +7652,7 @@ function drawMinimap(): void {
 // headlights, the wipers and the retroreflective signs were all built for.
 type CamMode = 'top' | 'chase' | 'cab';
 const CAM_ORDER: CamMode[] = ['top', 'chase', 'cab'];
-let camMode: CamMode = 'top';
+let camMode: CamMode = 'chase';   // the road view is the game; the chart is a mode you visit
 const camPos = new THREE.Vector3();
 const camAim = new THREE.Vector3();
 let camInit = false;
@@ -10522,7 +10516,7 @@ function hudTap(cx: number, cy: number): boolean {
 // touches game state directly, so everything it can affect is listed here.
 const menu = createMenu({
   colors: { edge: UI.edge, dim: UI.dim, text: UI.text, soft: UI.soft, gold: UI.gold, hot: UI.hot, good: UI.good, bad: UI.bad },
-  place: () => (placeLine || 'LOCATING').toUpperCase(),
+  place: () => (placeLine && placeLine !== '…' ? placeLine : 'LOCATING').toUpperCase(),
   situation: () => {
     const [la, lo] = localToLatLon(state.x, state.z);
     return `${biome.name.toUpperCase()} · ${WX[wx.sky].label} · ${la.toFixed(3)} ${lo.toFixed(3)}`;
@@ -10537,7 +10531,7 @@ const menu = createMenu({
     ];
   },
   worldRows: () => [
-    ['HERE', (placeLine || 'LOCATING').toUpperCase()],
+    ['HERE', (placeLine && placeLine !== '…' ? placeLine : 'LOCATING').toUpperCase()],
     ['BIOME', `${biome.name.toUpperCase()} · ${WX[wx.sky].label}${wx.wet > 0.05 ? ' WET' : ''}`],
     ['HEADING', `${Math.round((((state.heading * 180) / Math.PI) % 360 + 360) % 360)} DEG · ${Math.round(Math.abs(state.speed) * 3.6)} KM/H`],
     ['DRIVEN', `${fmtKm(odo.trip)} TRIP · ${fmtKm(odo.total)} TOTAL`],
@@ -10704,7 +10698,10 @@ if (timeFromUrl >= 0) {
   const q = new URLSearchParams(location.search);
   const h0 = parseFloat(q.get('h') ?? '');
   if (Number.isFinite(h0)) state.heading = (h0 * Math.PI) / 180;
-  { const c = q.get('cam'); if (c === 'chase' || c === 'cab') setCam(c); }
+  { const c = q.get('cam'); if (c === 'chase' || c === 'cab' || c === 'top') setCam(c); }
+  // The default spawn faces its vista — El Capitan's rim looks southeast
+  // down the valley; a URL heading always wins.
+  if (!Number.isFinite(h0) && !q.get('lat') && !q.get('random')) state.heading = (145 * Math.PI) / 180;
   // Armed here, taken up once the splash gesture lands: watchPosition before
   // that would burn a fix (and a permission prompt) against a world that has
   // not finished streaming.

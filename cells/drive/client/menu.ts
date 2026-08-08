@@ -320,7 +320,10 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
 
   const mkBay = (hero = false): HTMLElement => {
     const bay = el('div', `m-bay${hero ? ' hero' : ''}`);
-    bay.append(el('div', 'cap'), el('div', 'tag', 'DAK 23'));
+    bay.appendChild(el('div', 'cap'));
+    // The splash hero is a WINDOW, not a studio: the hole shows the live
+    // scene — the rig in chase cam against wherever it stands — so no tag.
+    if (!hero) bay.appendChild(el('div', 'tag', 'DAK 23'));
     bayGridFor = '';
     return bay;
   };
@@ -351,13 +354,12 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   // four sections below as a stack. Closing the menu IS starting — there is
   // nothing behind DRIVE that has not already begun.
   function renderHome(): void {
-    ctx.setVehView(0);   // the hub always shows the turntable, not a leftover elevation
     const place = el('div', 'm-place', ctx.place());
     const situation = el('div', 'm-dimline', ctx.situation());
     bindText(place, ctx.place);
     bindText(situation, ctx.situation);
     bayEl = mkBay(true);
-    body.append(place, situation, kvTable(ctx.driveStats), bayEl);
+    const kv = kvTable(ctx.driveStats);
     const cta = el('button', 'm-cta');
     cta.append(ico(ICON.car), el('span', 'lab', 'DRIVE'));
     cta.addEventListener('click', () => { ctx.drive(); close(); });
@@ -383,7 +385,10 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       row.addEventListener('click', () => setTab(t));
       nav.appendChild(row);
     }
-    body.append(nav);
+    // The hero window goes LAST in the flow, under the sections — that is
+    // where the chase camera actually puts the truck on screen, so the hole
+    // lands on the rig against its vista instead of on empty sky.
+    body.append(place, situation, kv, nav, bayEl);
     // DRIVE anchors the BOTTOM of the page — pinned in the foot, under the
     // sections, always reachable without scrolling past it.
     foot.append(cta, gps);
@@ -590,6 +595,9 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     Object.assign(strips[1].style, { display: 'block', left: '0', top: px(y1), right: '0', bottom: '0' });
     Object.assign(strips[2].style, { display: 'block', left: '0', top: px(y0), width: px(x0), height: px(y1 - y0), right: 'auto', bottom: 'auto' });
     Object.assign(strips[3].style, { display: 'block', left: px(x1), top: px(y0), right: '0', height: px(y1 - y0), bottom: 'auto', width: 'auto' });
+    // The SPLASH hole is a window onto the live scene — the rig in chase cam
+    // against its vista. Only the RIG page wants the studio render aimed in.
+    if (tab !== T_RIG) return null;
     // The metre grid, from the same extents the renderer frames with.
     const grid = ctx.bayGrid(r.width, r.height);
     const key = grid ? `${ctx.vehView()}:${Math.round(r.width)}x${Math.round(r.height)}` : `plain:${ctx.vehView()}`;
