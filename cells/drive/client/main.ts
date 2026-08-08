@@ -7588,7 +7588,10 @@ function input(): { throttle: number; steer: number; brake: boolean } {
 }
 
 // ── minimap: north-up, fog-masked, car-centred ─────────────────────
-const MINI = 138, MINI_SPAN = 1500; // px, metres across
+// 1500m across a corner dock was an atlas, not an instrument: at that span
+// the bend you are entering is three pixels. 420m reads the NEXT few corners
+// — immediate navigation — and the full chart is one dock tap away anyway.
+const MINI = 138, MINI_SPAN = 420; // px, metres across
 // The corner DOCK always shows the NEXT view in the cycle — chase POV while
 // charting, cab POV while chasing, chart minimap from the cab — so the tap
 // that swaps fullscreen is never a surprise.
@@ -7653,7 +7656,6 @@ function drawMinimap(): void {
 // a different game from the world at 18m behind, and it is the seat the
 // headlights, the wipers and the retroreflective signs were all built for.
 type CamMode = 'top' | 'chase' | 'cab';
-const CAM_ORDER: CamMode[] = ['top', 'chase', 'cab'];
 let camMode: CamMode = 'chase';   // the road view is the game; the chart is a mode you visit
 const camPos = new THREE.Vector3();
 const camAim = new THREE.Vector3();
@@ -7678,8 +7680,12 @@ function ghostCab(on: boolean): void {
     m.depthWrite = !on;
   }
 }
+/** The POV you drive in (chase or cab) — what the chart returns you to, and
+ *  what the dock previews while you are up there. */
+let lastPov: CamMode = 'chase';
 function setCam(m: CamMode): void {
   camMode = m;
+  if (m !== 'top') lastPov = m;
   halo.visible = camMode === 'top'; // the marker is chart furniture, not scenery
   if (camMode !== 'top') halo.scale.setScalar(1);
   camInit = false;                  // snap to the new rig, then resume smoothing
@@ -7692,10 +7698,22 @@ function setCam(m: CamMode): void {
   updateStickHome();
   updateDock();
 }
+/** The DOCK's toggle: the chart, or back to whichever POV you drive in.
+ *  Two controls now instead of one three-way cycle — the old C-cycle made
+ *  "check the map and come back" a three-tap round trip through the cab. */
 function toggleCam(): void {
-  setCam(CAM_ORDER[(CAM_ORDER.indexOf(camMode) + 1) % CAM_ORDER.length]);
+  setCam(camMode === 'top' ? lastPov : 'top');
 }
-addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'c') toggleCam(); });
+/** The POV chip's toggle: chase ↔ cab. From the chart it just re-aims what
+ *  the dock previews and what you will drop back into. */
+function togglePov(): void {
+  lastPov = lastPov === 'chase' ? 'cab' : 'chase';
+  if (camMode !== 'top') setCam(lastPov);
+}
+addEventListener('keydown', (e) => {
+  if (e.key.toLowerCase() === 'c') toggleCam();
+  if (e.key.toLowerCase() === 'v') togglePov();
+});
 updateStickHome(); // boot in top mode: the pinned stick is visible from frame one
 updateDock();
 
@@ -9087,7 +9105,7 @@ function tick(now: number): void {
   updatePois(); // every frame — throttled pins juddered against the camera
   drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF);
   stepOverlays();
-  if (camMode === 'cab' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
+  if (camMode !== 'top' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
   // Progress lives in the URL: reloading resumes here, not at the spawn.
   if (now > urlAt) {
     urlAt = now + 3000;
@@ -9114,14 +9132,13 @@ function tick(now: number): void {
   compMat.uniforms.softTex.value = rtB.texture;
   compMat.uniforms.bloomTex.value = rtC.texture;
   runPass(compMat, null);
-  if (camMode !== 'cab') {
-    // The dock previews the view a tap will SWITCH TO — chase rig while
-    // charting, the driver's seat while chasing (the cab's next view is the
-    // chart, and the HUD draws the minimap there instead). Scissored raw scene
+  if (camMode === 'top') {
+    // The dock previews the POV a tap will DROP BACK INTO — only while
+    // charting; on the road the dock is the minimap now. Scissored raw scene
     // over the composite (autoClear respects the scissor).
     const dr = dockRect;
     const vx = dr.x * hudS, vy = innerHeight - (dr.y + dr.h) * hudS, vw = dr.w * hudS, vh = dr.h * hudS;
-    if (camMode === 'top') {
+    if (lastPov === 'chase') {
       miniCam.fov = 60;
       miniCam.position.set(
         state.x - fwdX * 11,
@@ -9150,13 +9167,13 @@ function tick(now: number): void {
     }
     miniCam.updateProjectionMatrix();
     halo.visible = false; // the zoom-scaled chart ring has no place in the POV
-    if (camMode === 'chase') ghostCab(true);
+    if (lastPov === 'cab') ghostCab(true);
     // Through the SAME low-res target, nearest magnification, sRGB encode,
     // grade and palette dither as the world. Rendered straight to the screen it
     // was a smooth, full-colour window inside a hand-built bitmap HUD — the one
     // thing on screen that did not look like the game.
     blitPixelated(scene, miniCam, vx, vy, vw, vh);
-    if (camMode === 'chase') ghostCab(false);
+    if (lastPov === 'cab') ghostCab(false);
     halo.visible = camMode === 'top';
   }
   { const bay = menu.bayRect(); if (bay) renderStudio(dt, bay); }
@@ -9550,6 +9567,48 @@ function meter(x: number, y: number, n: number, lit: number, col: string, w = 3,
     hctx.fillStyle = i < lit ? col : 'rgba(87,201,176,0.16)';
     hctx.fillRect(x + i * (w + gap), y, w, h);
   }
+}
+// ── the co-driver's arrow ──────────────────────────────────────────
+// The call is DRAWN now: a bent arrow whose geometry IS the bend — a lean,
+// an elbow, or a full hairpin folding back on itself — mirrored to its side
+// and coloured by severity. A shape reads at 120km/h; a sentence does not.
+function drawBendArrow(cxp: number, cyp: number, left: boolean, tier: number, col: string): void {
+  const cells: Array<[number, number]> = [];
+  const plot = (x: number, y: number): void => { cells.push([x, y]); };
+  // Built turning RIGHT on a unit grid (negative y is up), mirrored at draw.
+  let x = 0, y = 5;
+  for (; y >= 0; y--) plot(x, y);                        // the approach stem
+  let dx = 0, dy = -1;                                   // travel direction at the top
+  if (tier === 0) {                                      // EASY: a lean
+    for (let i = 0; i < 3; i++) { x++; y--; plot(x, y); }
+    dx = 1; dy = -1;
+  } else if (tier === 1) {                               // MEDIUM: lean into a run
+    x++; y--; plot(x, y);
+    for (let i = 0; i < 3; i++) { x++; plot(x, y); }
+    dx = 1; dy = 0;
+  } else if (tier === 2) {                               // HARD: a square elbow
+    for (let i = 0; i < 4; i++) { x++; plot(x, y); }
+    dx = 1; dy = 0;
+  } else {                                               // HAIRPIN: back on itself
+    for (let i = 0; i < 3; i++) { x++; plot(x, y); }
+    for (let i = 0; i < 5; i++) { y++; plot(x, y); }
+    dx = 0; dy = 1;
+  }
+  // The head: a tip and two flankers, perpendicular to the travel direction.
+  const fx = -dy, fy = dx;
+  plot(x + dx, y + dy);
+  plot(x + dx + fx, y + dy + fy);
+  plot(x + dx - fx, y + dy - fy);
+  plot(x + dx * 2, y + dy * 2);
+  const S = 2;                                           // chunky: 2 HUD px per cell
+  const draw = (ox: number, oy: number, c: string): void => {
+    hctx.fillStyle = c;
+    for (const [gx, gy] of cells) {
+      hctx.fillRect(cxp + (left ? -gx - 1 : gx) * S + ox, cyp + gy * S + oy, S, S);
+    }
+  };
+  for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) draw(ox, oy, 'rgba(4,10,11,0.85)');
+  draw(0, 0, col);
 }
 // One MENU chip holds the affordances, so the top of the screen belongs to the
 // compass. The menu itself is DOM now — layout, tabs and buttons live in
@@ -10219,18 +10278,19 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const x2 = Math.round((HW - w2) / 2);
     textEdge(t2, x2 + 5, Math.round(HH * 0.32) + 3, UI.bad);
   }
-  // ── the co-driver: the next bend, called before it arrives ──
-  // One line, mid-screen where the eyes already are, arrows on the side the
-  // road goes. Severity is the summed angle: a hairpin is not a sweeper.
+  // ── the co-driver: the next bend, DRAWN before it arrives ──
+  // The arrow is the call; the words are the footnote. Severity is the
+  // summed angle: a hairpin is not a sweeper.
   if (navBend && camMode !== 'top') {
     const deg = Math.abs((navBend.ang * 180) / Math.PI);
-    const sev = deg >= 70 ? 'HAIRPIN' : deg >= 45 ? 'HARD' : deg >= 30 ? '' : 'EASY';
-    const col = deg >= 70 ? UI.bad : deg >= 45 ? UI.hot : deg >= 30 ? UI.gold : UI.soft;
-    const side = navBend.left ? 'LEFT' : 'RIGHT';
+    const tier = deg >= 70 ? 3 : deg >= 45 ? 2 : deg >= 30 ? 1 : 0;
+    const col = [UI.soft, UI.gold, UI.hot, UI.bad][tier];
+    const acx = Math.round(HW / 2), acy = Math.round(HH * 0.16);
+    drawBendArrow(acx, acy, navBend.left, tier, col);
+    const sev = ['EASY', '', 'HARD', 'HAIRPIN'][tier];
     const d = navBend.dist < 15 ? 'NOW' : `${Math.round(navBend.dist / 10) * 10}M`;
-    const call = [sev, side, d].filter(Boolean).join(' ');
-    const line = navBend.left ? `<< ${call}` : `${call} >>`;
-    textEdge(line, Math.round((HW - textW(line)) / 2), Math.round(HH * 0.22), col);
+    const line = [sev, navBend.left ? 'LEFT' : 'RIGHT', d].filter(Boolean).join(' ');
+    textEdgeP(line, Math.round((HW - textPW(line)) / 2), acy + 15, col);
   }
   // ── the dock, bottom-left: whichever view ISN'T fullscreen ──
   // While charting, the renderer scissors a live POV preview into this square,
@@ -10255,8 +10315,11 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // ── the dock: always the view a tap will toggle TO ──
   // top → chase POV, chase → cab POV (both scissored in by the renderer, so
   // the HUD leaves an empty frame); cab → the chart minimap, drawn here.
-  const chart = camMode === 'cab';
-  if (!chart) frame(mx, my, mw, mw, UI.dim);
+  // The dock is the MAP while driving and the POV preview while charting —
+  // one toggle between the two ways of seeing where you are. The separate
+  // POV chip above it flips which seat you drive from.
+  const showMap = camMode !== 'top';
+  if (!showMap) frame(mx, my, mw, mw, UI.dim);
   else {
     panel(mx, my, mw, mw, UI.dim);
     hctx.save();
@@ -10264,9 +10327,17 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.drawImage(mini, mx + 1, my + 1, mw - 2, mw - 2);
     hctx.restore();
   }
-  const dockLabel = camMode === 'top' ? 'POV' : camMode === 'chase' ? 'CAB' : 'N';
-  text(hctx, dockLabel, mx + mw / 2 - (chart ? 3 : 8), my + 2, UI.gold);
+  const dockLabel = showMap ? 'N' : lastPov === 'cab' ? 'CAB' : 'POV';
+  text(hctx, dockLabel, mx + mw / 2 - (showMap ? 3 : 8), my + 2, UI.gold);
   dockRect = { x: mx, y: my, w: mw, h: mw };
+  {
+    const povLabel = lastPov === 'chase' ? 'CAB' : 'CHASE';   // what a tap switches TO
+    const pw = textW(povLabel) + 8;
+    // Beside the dock, not above it — above is the conditions column's ground.
+    povRect = { x: mx + mw + 4, y: my + mw - 12, w: pw, h: 12 };
+    panel(povRect.x, povRect.y, pw, 12, UI.edge);
+    text(hctx, povLabel, povRect.x + 4, povRect.y + 3, UI.edge);
+  }
   // ── where you are, and whether the world is still arriving ──
   {
     const shown = fit(placeLine || '', Math.round(HW * 0.62));
@@ -10497,6 +10568,7 @@ function stepOverlays(): void {
     : null);
 }
 let dockRect = { x: 0, y: 0, w: 0, h: 0 };
+let povRect = { x: 0, y: 0, w: 0, h: 0 };
 function setClean(on: boolean): void {
   document.body.classList.toggle('clean', on);
   if (!on) updateStickHome(); // the pinned stick has to come back with it
@@ -10511,6 +10583,7 @@ function hudTap(cx: number, cy: number): boolean {
   // The modal is MODAL — but it is DOM now, sitting over this canvas, so a
   // tap that reaches here while it is up can only be a stray; swallow it.
   if (menu.tab() !== null) return true;
+  if (inside(povRect, 0)) { togglePov(); return true; }
   if (inside(dockRect, 0)) { toggleCam(); return true; }
   // A tap on a pin PINS it — the place stays on screen past the
   // nearest-three rule until tapped again. Mission pins belong to the job
