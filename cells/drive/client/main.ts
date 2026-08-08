@@ -5715,25 +5715,11 @@ headSpot.position.set(0, 0.78 * SY, -2.0); // likewise
 headSpot.target.position.set(0, -1.6, -30);
 car.add(headSpot, headSpot.target);
 // REAL SIZE (owner: the 3.2x cartographic car straddled whole roads and made
-// every speed read as a crawl). In the top chart view the car is small — the
-// halo is the position marker; in chase it reads true against lane widths.
-const halo = new THREE.Mesh(
-  // A RING, not a disc — a filled circle drawn depth-free painted straight
-  // over the truck, so the chart view showed a gold coin where the vehicle
-  // should be. The ring frames it instead.
-  // A HAIRLINE — 0.55m where it was 1.4m, a gold doughnut that hid the truck it
-  // was supposed to point at. It scales with zoom, so its SCREEN thickness is
-  // constant at every distance; thinner than this and it falls under one pixel
-  // of the 320p buffer and disappears entirely.
-  new THREE.RingGeometry(6.05, 6.6, 40),
-  // A MARKER, not scenery: no depth test, drawn late — the player's position
-  // is never allowed to be swallowed by a drape or a rooftop.
-  new THREE.MeshBasicMaterial({ color: 0xf5c453, transparent: true, opacity: 0.45, depthWrite: false, depthTest: false }),
-);
-halo.renderOrder = 40;
-halo.rotation.x = -Math.PI / 2;
-halo.position.y = 0.15;
-car.add(halo);
+// every speed read as a crawl). The chart's position marker is NOT here any
+// more: the old gold halo ring was scene furniture parented to the car, which
+// meant it defaulted visible and leaked into the chase view at startup until
+// something called setCam. The marker is a HUD glyph now — an amber heading
+// wedge drawn only when the truck is too small to read (see drawHud).
 scene.add(car);
 // ── the studio ─────────────────────────────────────────────────────
 // The menu's VEHICLE panel needs the truck on a clean backdrop, not wherever
@@ -6562,7 +6548,7 @@ function truckSpec(): Record<string, number> {
   const v = new THREE.Vector3();
   for (const child of car.children) {
     const geo = (child as THREE.Mesh).geometry;
-    if (!geo || child === halo || beams.includes(child as THREE.Mesh)) continue;
+    if (!geo || beams.includes(child as THREE.Mesh)) continue;
     const pos = geo.attributes.position as THREE.BufferAttribute;
     for (let i = 0; i < pos.count; i++) bb.expandByPoint(v.fromBufferAttribute(pos, i).applyMatrix4(child.matrix));
   }
@@ -7404,8 +7390,8 @@ const stickBase = stickEl(STICK_R * 2 + 12, { border: '1.5px solid rgba(245,196,
 // HOLLOW. A solid disc was fine parked in a corner, but the nub now rests on
 // the truck in the chart view and a filled one blanked out the vehicle it is
 // steering — you could see the ring and not the thing inside it. A heavy rim
-// over a wash of colour reads just as clearly as an input and lets the truck,
-// its halo and its heading show straight through.
+// over a wash of colour reads just as clearly as an input and lets the truck
+// and its heading show straight through.
 const stickNub = stickEl(46, {
   background: 'rgba(245,196,83,0.16)', border: '3px solid rgba(245,196,83,0.8)',
   boxSizing: 'border-box', boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
@@ -7419,12 +7405,11 @@ let brakeId: number | null = null;
 let panX = 0, panZ = 0, zoomT = 1, zoomCur = 1;
 const panPtrs = new Map<number, { x: number; y: number }>();
 // ON THE TRUCK, not in the corner. Pinned bottom-right the stick sat straight
-// on top of the tachometer and read as a lens flare rather than a control. In
-// the chart view the vehicle already carries a ring — the halo — at the exact
-// size of the stick base, so the two become one object: the thing you steer and
-// the control that steers it are in the same place, and your thumb is over the
-// truck rather than over the instruments. Clamped inboard so a hard pan can
-// never leave the stick off-screen or under the corner readouts.
+// on top of the tachometer and read as a lens flare rather than a control.
+// Homing it on the vehicle makes the thing you steer and the control that
+// steers it one object, and puts your thumb over the truck rather than over
+// the instruments. Clamped inboard so a hard pan can never leave the stick
+// off-screen or under the corner readouts.
 const stickVec = new THREE.Vector3();
 const stickHome = (): { x: number; y: number } => {
   car.updateWorldMatrix(true, false);
@@ -7758,8 +7743,6 @@ let lastPov: CamMode = 'chase';
 function setCam(m: CamMode): void {
   camMode = m;
   if (m !== 'top') lastPov = m;
-  halo.visible = camMode === 'top'; // the marker is chart furniture, not scenery
-  if (camMode !== 'top') halo.scale.setScalar(1);
   camInit = false;                  // snap to the new rig, then resume smoothing
   panX = panZ = 0;                  // pan is a glance, not a state to carry over
   // From the driver's seat you are INSIDE the shell, so the near plane has to
@@ -9136,7 +9119,6 @@ function tick(now: number): void {
     // only once the frustum reaches past the fine ring, so its seam is never
     // on screen at an angle that could reveal it.
     farGroup.visible = zoomCur > 6;
-    halo.scale.setScalar(Math.max(1, zoomCur)); // the ring must survive the zoom-out
     // Pan is a glance around the chart — it drifts home once you drive.
     if (stick || Math.abs(state.speed) > 6) { const f = Math.exp(-2.5 * dt); panX *= f; panZ *= f; }
     const dist = CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh;
@@ -9326,7 +9308,6 @@ function tick(now: number): void {
       );
     }
     miniCam.updateProjectionMatrix();
-    halo.visible = false; // the zoom-scaled chart ring has no place in the POV
     if (lastPov === 'cab') ghostCab(true);
     // Through the SAME low-res target, nearest magnification, sRGB encode,
     // grade and palette dither as the world. Rendered straight to the screen it
@@ -9334,7 +9315,6 @@ function tick(now: number): void {
     // thing on screen that did not look like the game.
     blitPixelated(scene, miniCam, vx, vy, vw, vh);
     if (lastPov === 'cab') ghostCab(false);
-    halo.visible = camMode === 'top';
   }
   { const bay = menu.bayRect(); if (bay) renderStudio(dt, bay); }
   // The stick rides the truck in the chart view, so its home moves whenever the
@@ -9384,11 +9364,10 @@ function renderStudio(dt: number, bay: BayRect): void {
   const wasGhost = camMode === 'cab';
   if (wasGhost) ghostCab(false);
   const pos = car.position.clone(), rot = car.rotation.clone();
-  const haloWas = halo.visible, spotWas = headSpot.visible;
+  const spotWas = headSpot.visible;
   const beamWas = beams.map((b) => b.visible);
   // Beam cones are 26m long; at 8m from the camera they would fill the bay
-  // with additive haze. Chart furniture and the headlamp pool go too.
-  halo.visible = false;
+  // with additive haze. The headlamp pool goes too.
   headSpot.visible = false;
   for (const b of beams) b.visible = false;
   studio.add(car);                       // reparent: three removes it from `scene`
@@ -9437,7 +9416,6 @@ function renderStudio(dt: number, bay: BayRect): void {
   scene.add(car);                        // and hand it back
   car.position.copy(pos);
   car.rotation.copy(rot);
-  halo.visible = haloWas;
   headSpot.visible = spotWas;
   beams.forEach((b, i) => { b.visible = beamWas[i]; });
   if (wasGhost) ghostCab(true);
@@ -10576,6 +10554,51 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     if (iconCh) hudIconEdge(iconCh, x + 1, y + 1, p.c, 5);
     textEdgeP(label, x + 2 + iw, y + 2, p.rng || p.pinned ? UI.gold : p.c);
     poiRects.push({ x: x - 3, y: y - 4, w: w + 8, h: 14, name: p.name, kind: p.kind });
+  }
+  // ── the rig's own marker on the chart ──
+  // The minimap's amber heading wedge, at the truck's projected position —
+  // drawn ONLY once the truck falls below legibility (about seven HUD pixels
+  // nose to tail), so at street zooms you see the actual rig and at survey
+  // zooms you see the glyph the minimap already taught. Measured by projecting
+  // the wheelbase, not guessed from zoom: speed widens the chart too.
+  if (camMode === 'top') {
+    const gy = groundAt(state.x, state.z) + 1;
+    poiVec.set(state.x, gy, state.z);
+    if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z < -1) {
+      poiVec.project(camera);
+      const cx = ((poiVec.x * 0.5 + 0.5) * innerWidth) / hudS;
+      const cy = ((-poiVec.y * 0.5 + 0.5) * innerHeight) / hudS;
+      const ax = state.x + Math.sin(state.heading) * 5, az = state.z - Math.cos(state.heading) * 5;
+      poiVec.set(ax, groundAt(ax, az) + 1, az).project(camera);
+      const hx = ((poiVec.x * 0.5 + 0.5) * innerWidth) / hudS - cx;
+      const hy = ((-poiVec.y * 0.5 + 0.5) * innerHeight) / hudS - cy;
+      const len = Math.hypot(hx, hy);   // the wheelbase, in HUD pixels
+      if (len < 7 && len > 0.001) {
+        const dx = hx / len, dy = hy / len;
+        // Base 45% behind the centre, tip 55% ahead — the same wedge the
+        // minimap draws, rasterised as pixel runs with an ink pass under it.
+        const wedge = (L: number, hw: number, col: string): void => {
+          hctx.fillStyle = col;
+          const steps = Math.round(L * 2);
+          for (let i = 0; i <= steps; i++) {
+            const t = i / steps;
+            const bx = cx + dx * (L * t - L * 0.45), by = cy + dy * (L * t - L * 0.45);
+            const n = Math.round(hw * (1 - t));
+            for (let k = -n; k <= n; k++) {
+              hctx.fillRect(Math.round(bx - dy * k), Math.round(by + dx * k), 1, 1);
+            }
+          }
+        };
+        // Longer than it is wide, like the minimap's: a squat triangle at this
+        // size reads as a blob, not a bearing.
+        hctx.save();
+        hctx.globalAlpha = 0.85;
+        wedge(12, 4, UI.ink);
+        hctx.globalAlpha = 1;
+        wedge(10, 3, UI.gold);
+        hctx.restore();
+      }
+    }
   }
   // ── compass: the full width of the screen, centred ──
   const cw = HW - pad * 2, cx0 = pad, cy0 = pad;
