@@ -1076,31 +1076,31 @@ function reveal(ex: number, ez: number): void {
   fogTex.needsUpdate = true;
 }
 
-// ── ghosting (x-ray along the camera→car sight line) ───────────────
-// When a hill (or the ground above a tunnel) sits between the viewer and the
-// car, its fragments dissolve into a screen-door pattern so the car stays
-// visible. Patched into the terrain/green materials via onBeforeCompile.
-const ghostU = {
-  uGhostCar: { value: new THREE.Vector3() },
-  uGhostCam: { value: new THREE.Vector3() },
+// ── terrain dressing (cloud shadows + detail mottle) ───────────────
+// This hook used to carry the "ghost corridor" as well — a screen-door
+// dissolve of any fragment near the camera→car sight line. It had no
+// occlusion input at all, so it x-rayed the uphill bank on every hillside
+// road, shimmered in cab view where the sight line degenerates, and its
+// checkerboard crawled against the palette dither. The truck's visibility
+// is now the x-ray silhouette's job (see the car section): the depth
+// buffer answers "is this pixel of the rig hidden" exactly, per pixel,
+// and the world is never dissolved at all.
+const envU = {
   uCloudS: { value: 0 },                       // cover, for cloud shadows
   uWind: { value: new THREE.Vector2() },       // the deck's drift, shared with the sky
 };
 // (Pattern per SimonDev's "customizing materials": extend the built-ins by
-// splicing GLSL into their chunk includes rather than rewriting materials —
-// the same hook carries the ghost corridor and the terrain's detail mottle.)
-function ghostify(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
+// splicing GLSL into their chunk includes rather than rewriting materials.)
+function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
   mat.onBeforeCompile = (sh) => {
-    sh.uniforms.uGhostCar = ghostU.uGhostCar;
-    sh.uniforms.uGhostCam = ghostU.uGhostCam;
-    sh.uniforms.uCloudS = ghostU.uCloudS;
-    sh.uniforms.uWind = ghostU.uWind;
+    sh.uniforms.uCloudS = envU.uCloudS;
+    sh.uniforms.uWind = envU.uWind;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vGhostW;')
-      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvGhostW = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWorldP;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorldP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying vec3 vGhostW; uniform vec3 uGhostCar; uniform vec3 uGhostCam;
+        varying vec3 vWorldP;
         uniform float uCloudS; uniform vec2 uWind;
         float gh21(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
         float gvn(vec2 p){
@@ -1114,34 +1114,15 @@ function ghostify(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
       // projected on the ground and drifting on the same wind — so shadow
       // patches sweep across the terrain as a front comes over.
       if (uCloudS > 0.01) {
-        float cs = gfbm(vGhostW.xz * 0.0035 + uWind);
+        float cs = gfbm(vWorldP.xz * 0.0035 + uWind);
         gl_FragColor.rgb *= 1.0 - uCloudS * smoothstep(0.42, 0.72, cs) * 0.5;
-      }
-      {
-        vec3 ab = uGhostCar - uGhostCam;
-        float t = dot(vGhostW - uGhostCam, ab) / max(dot(ab, ab), 1.0);
-        if (t > 0.05 && t < 0.97) {
-          vec3 p = uGhostCam + ab * t;
-          // Only fragments that rise ABOVE the sight line are occluders —
-          // without the height test the corridor dissolved the ordinary
-          // ground grazing beneath the ray in chase cam.
-          float gDist = length(vGhostW.xz - p.xz);
-          float gRad = 6.0 + t * 8.0;
-          if (gDist < gRad && vGhostW.y > p.y - 0.3) {
-            // 50% screen-door at the fringe, 75% in the core: a single
-            // checkerboard left the truck readable as a silhouette but the
-            // road under it as murk — "ghosted" was only ever half done.
-            if (mod(floor(gl_FragCoord.x) + floor(gl_FragCoord.y), 2.0) < 1.0) discard;
-            if (gDist < gRad * 0.55 && mod(floor(gl_FragCoord.y), 2.0) < 1.0) discard;
-          }
-        }
       }`);
     if (opts.detail) {
       // World-space mottle (~30–80m blobs) breaks the flat-shaded banding of
       // the vertex-colored terrain without any texture upload.
       sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
       {
-        vec2 gp = vGhostW.xz;
+        vec2 gp = vWorldP.xz;
         float gn = sin(gp.x * 0.131 + sin(gp.y * 0.093) * 2.0) * sin(gp.y * 0.117 + sin(gp.x * 0.071) * 2.0);
         diffuseColor.rgb *= 0.955 + 0.045 * gn;
       }`);
@@ -1206,7 +1187,7 @@ const terrainMat = new THREE.MeshLambertMaterial({
   normalMap: normalTex(256, 9001, 4, 9, 70), // tile UVs are 0..1 over ~2.4km ⇒ ~34m per repeat
   normalScale: new THREE.Vector2(0.32, 0.32), // relief, not crumpled foil
 });
-ghostify(terrainMat, { detail: true });
+terrainFx(terrainMat, { detail: true });
 
 // ── terrain meshes ─────────────────────────────────────────────────
 const terrainReady = new Map<string, Promise<void>>(); // per-tile load promise
@@ -1831,7 +1812,7 @@ const MAT = {
 // Green drapes conform to the terrain, so a wooded hill occludes like one —
 // and the tunnel shell is the carved hill itself, so it ghosts too (the car
 // inside stays visible through the screen-door).
-ghostify(MAT.green);
+terrainFx(MAT.green);
 // NOT the tunnel shell: dithering holes in a dark interior against the sky
 // reads as a ragged black cut-out, not as transparency. A buried tube needs
 // no ghosting anyway — the hillside above it is already doing the work.
@@ -2227,8 +2208,8 @@ function vegMesh(geo: THREE.BufferGeometry, mat: THREE.Material, cap: number): T
 const leafMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
 const woodMat = new THREE.MeshLambertMaterial({ color: 0x4a3826, flatShading: true });
 const stoneMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
-ghostify(leafMat);
-ghostify(stoneMat);
+terrainFx(leafMat);
+terrainFx(stoneMat);
 // ── wind, in the vertex shader ─────────────────────────────────────
 // Never from JavaScript. Animating instance matrices would mean rewriting and
 // re-uploading a 7000-entry matrix buffer every frame; the GPU can lean the
@@ -2247,7 +2228,7 @@ grassMat.onBeforeCompile = (sh) => {
       float s = transformed.y * (0.55 + 0.45 * sin(uTime * 1.9 + ph));
       transformed.xz += uGust * s;`);
 };
-ghostify(grassMat);
+terrainFx(grassMat);
 const vegMeshes: Record<VegKind, THREE.InstancedMesh> = {
   broadleaf: vegMesh(broadleaf(), leafMat, VEG_CAP.broadleaf),
   conifer: vegMesh(conifer(), leafMat, VEG_CAP.conifer),
@@ -5788,6 +5769,53 @@ car.add(headSpot, headSpot.target);
 // something called setCam. The marker is a HUD glyph now — an amber heading
 // wedge drawn only when the truck is too small to read (see drawHud).
 scene.add(car);
+// ── the x-ray silhouette: the rig, wherever something hides it ─────
+// The depth buffer already knows, per pixel, whether the truck is occluded —
+// so occlusion handling is one extra draw of the hull with the depth test
+// REVERSED (GreaterDepth): its fragments pass exactly where the stored depth
+// is closer than the truck, i.e. where a hill or a roof stands in front. No
+// corridor heuristics, no dissolving the world, no false positives possible.
+//
+// The self-overdraw trap, solved by draw order alone: with the hull's parts
+// overlapping in screen space, a rear part's silhouette passes GreaterDepth
+// against the front part's stored depth and would stamp the pattern onto the
+// VISIBLE truck. So the silhouette draws first (renderOrder 5, depth write
+// off) and the real hull draws after it (renderOrder 6) — repainting itself
+// over any pattern wherever it actually won the pixel. What survives is
+// pattern only where the world, not the truck, owns the depth.
+const xrayMat = new THREE.MeshBasicMaterial({ color: 0x57c9b0 });
+xrayMat.depthFunc = THREE.GreaterDepth;
+xrayMat.depthWrite = false;
+xrayMat.onBeforeCompile = (sh) => {
+  // Screen-door at the LOW-RES buffer's own grid — reads as authored dither,
+  // and the composite's palette quantiser restyles the teal for free.
+  sh.fragmentShader = sh.fragmentShader.replace('#include <dithering_fragment>',
+    `#include <dithering_fragment>
+    if (mod(floor(gl_FragCoord.x) + floor(gl_FragCoord.y), 2.0) < 1.0) discard;`);
+};
+const xray = new THREE.Group();
+xray.visible = false;
+{
+  car.updateMatrixWorld(true);
+  const carInv = new THREE.Matrix4().copy(car.matrixWorld).invert();
+  car.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const src = m.material as THREE.Material;
+    // The headlight cones are light, not sheet metal — and additive haze in a
+    // reversed-depth pass would glow through every hillside.
+    if (src.blending === THREE.AdditiveBlending) return;
+    m.renderOrder = 6;
+    const g = new THREE.Mesh(m.geometry, xrayMat);
+    // Pose baked in the CAR's frame once — suspension articulation is
+    // centimetres, which a silhouette cannot show and does not need.
+    g.matrixAutoUpdate = false;
+    g.matrix.multiplyMatrices(carInv, m.matrixWorld);
+    g.renderOrder = 5;
+    xray.add(g);
+  });
+}
+scene.add(xray);
 // ── the studio ─────────────────────────────────────────────────────
 // The menu's VEHICLE panel needs the truck on a clean backdrop, not wherever
 // it happens to be parked at dusk in the rain. Rather than clone it — four
@@ -5974,7 +6002,7 @@ function stepWeather(now: number, dt: number): void {
   skyMat.uniforms.uTime.value = now / 1000;
   waterU.uWTime.value = now / 1000;
   // Cloud shadows read the same cover and drift as the deck overhead.
-  ghostU.uCloudS.value = cloudShadowOn ? wx.cloud : 0;
+  envU.uCloudS.value = cloudShadowOn ? wx.cloud : 0;
   // ONE WIND, and it is the real one. Open-Meteo reports the direction the air
   // is coming FROM, so the deck travels toward bearing+180; the sample offset
   // runs the other way again, because shifting a noise field moves what you see
@@ -5986,7 +6014,7 @@ function stepWeather(now: number, dt: number): void {
     const spd = (live.on ? live.windKmh : 12) * 0.0005;   // 12km/h ≈ the old fixed drift
     const wxv = -Math.sin(t) * spd, wzv = Math.cos(t) * spd;
     (skyMat.uniforms.uWind as { value: THREE.Vector2 }).value.set(wxv, wzv);
-    ghostU.uWind.value.set(wxv * (now / 1000), wzv * (now / 1000));
+    envU.uWind.value.set(wxv * (now / 1000), wzv * (now / 1000));
     // The same wind leans the grass. Amplitude in METRES of tip travel per
     // metre of blade, so a stiff breeze lays a field over and a calm day
     // barely stirs it; the gust term rides on top of the steady lean.
@@ -9064,6 +9092,13 @@ function tick(now: number): void {
   wheelSpin += ((groundedF > 0.06 ? state.speed : engRev * 26 * (throttle < -0.02 ? -1 : 1)) / WHEEL_R) * dt;
   car.position.set(state.x, bodyY, state.z);
   car.rotation.set(pitchC, -state.heading, rollC);
+  // The silhouette rides the same pose. Chase only: in cab you ARE the truck,
+  // and the chart looks too steeply down for terrain to stand in the way.
+  xray.visible = camMode === 'chase';
+  if (xray.visible) {
+    xray.position.copy(car.position);
+    xray.rotation.copy(car.rotation);
+  }
   // Brake lights flare; reversing washes them pale. Beams brighten with the
   // dust they have to cut through, and dim in the chart view where a pair of
   // 34m cones would just be glare on the map.
@@ -9307,8 +9342,6 @@ function tick(now: number): void {
   // now; it is a gradient backdrop, so scaling it costs nothing and shows
   // nothing.
   skyDome.scale.setScalar(Math.max(1, (camera.near * 8) / 20000));
-  ghostU.uGhostCar.value.set(state.x, ground + 1.2, state.z);
-  ghostU.uGhostCam.value.copy(camera.position);
   compMat.uniforms.camPos.value.copy(camera.position);
   // Where the sun sits on screen, for the flare. Occlusion is left to the
   // shader (one depth fetch); here we only ask whether it is in frame at all.
