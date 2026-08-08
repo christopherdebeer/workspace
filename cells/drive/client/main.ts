@@ -7520,10 +7520,46 @@ let tapAt = 0, tapX = 0, tapY = 0, tapSeen = 0;
 // zero milliseconds old at zero distance and teleports on a single tap.
 let lastUp: Event | null = null;
 function chartToWorld(px: number, py: number): [number, number] {
-  // The same metres-per-pixel the pan uses, about the screen centre.
+  // Through the ACTUAL camera, not a metres-per-pixel guess about the screen
+  // centre. The guess ignored where on the tilted chart the thumb landed and
+  // what height the ground there stands at, so a double tap went a fixed-ish
+  // distance in roughly the right direction — "go there" has to mean THERE.
+  // The camera's matrices are the ones the last rendered frame used, which is
+  // exactly the frame the thumb was aiming at.
+  const ray = new THREE.Vector3((px / innerWidth) * 2 - 1, -(py / innerHeight) * 2 + 1, 0.5)
+    .unproject(camera).sub(camera.position).normalize();
+  if (ray.y < -1e-3) {
+    // March the ray onto the heightfield and bisect the first crossing. Not
+    // an iterated plane intersection: that converges to whichever crossing
+    // its fixed point likes, and against a Yosemite cliff wall the point it
+    // liked could be across the valley from the point under the thumb.
+    const camY = camera.position.y;
+    // Far enough to pass under anything on screen — the chart centre's own
+    // ground minus the deepest relief a valley wall can hide (El Capitan's
+    // rim-to-floor is ~900m; 1500 leaves margin without costing resolution).
+    const tFar = (groundAt(state.x + panX, state.z + panZ) - 1500 - camY) / ray.y;
+    let tPrev = 0;
+    for (let i = 1; i <= 96; i++) {
+      const t = (tFar * i) / 96;
+      if (camY + ray.y * t <= groundAt(camera.position.x + ray.x * t, camera.position.z + ray.z * t)) {
+        let lo = tPrev, hi = t;
+        for (let j = 0; j < 14; j++) {
+          const m = (lo + hi) / 2;
+          if (camY + ray.y * m <= groundAt(camera.position.x + ray.x * m, camera.position.z + ray.z * m)) hi = m;
+          else lo = m;
+        }
+        const tm = (lo + hi) / 2;
+        return [camera.position.x + ray.x * tm, camera.position.z + ray.z * tm];
+      }
+      tPrev = t;
+    }
+    // Never crossed: the tap grazed past every slope on screen (a spire's
+    // silhouette, the void past a rim). Land at the far plane's foot.
+    return [camera.position.x + ray.x * tFar, camera.position.z + ray.z * tFar];
+  }
+  // A tap above the horizon has no ground under it. Keep the old flat-chart
+  // approximation as the fallback so the gesture still does something sane.
   const k = (CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh) / innerHeight;
-  // The chart is tilted, so a pixel is worth more ground the further UP the
-  // screen it is. cos(tilt) undoes the foreshortening along the view axis.
   const cz = Math.cos((CAM.tilt * Math.PI) / 180);
   return [
     state.x + panX + (px - innerWidth / 2) * k,
