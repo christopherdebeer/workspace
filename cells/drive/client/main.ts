@@ -2413,18 +2413,36 @@ function scatterVeg(pts: Array<[number, number]>, seed: number, tags: Record<str
 // deterministic, so the same scrub grows in the same spot forever — and
 // polygon scatter then piles extra density into the parks we DO get.
 const vegSeeded = new Set<string>();
+// Cells that asked to seed while their cover tile was still ON THE WIRE.
+// Seeding from the biome's one-number guess and freezing it painted a
+// razor-edged rectangle of wrong density the size of a cover tile: everything
+// seeded before the tile landed kept temperate-woodland scatter over bare
+// granite, while ground seeded after it read the rock and stayed sparse.
+// Deferral is BOUNDED — a dead cover endpoint must not leave the world bald.
+const vegDeferredAt = new Map<string, number>();
 function seedCell(gx: number, gz: number): void {
   const key = `${gx},${gz}`;
   if (vegSeeded.has(key)) return;
-  vegSeeded.add(key);
-  const r = mulberry32(((gx * 73856093) ^ (gz * 19349663)) >>> 0);
-  if (!vegGrid.has(key)) vegGrid.set(key, []);
   const mx = gx * VEG_CELL + VEG_CELL / 2, mz = gz * VEG_CELL + VEG_CELL / 2;
   // WHAT GROWS HERE IS A FACT, not a guess. The biome ceiling below stands in
   // only until WorldCover has this ground: it is one number for a whole world,
   // so the wheat field, the shelterbelt beside it and the bare hill behind
   // were all planted at the same rate out of the same species mix.
   const cover = sampleCover(mx, mz);
+  if (cover === null) {
+    const [cvLat, cvLon] = localToLatLon(mx, mz);
+    const [cvx, cvy] = tileAt(cvLat, cvLon, COVER_Z);
+    const ck = `${cvx}/${cvy}`;
+    if (coverAsked.has(ck) && !coverTiles.has(ck)) {
+      const t0 = vegDeferredAt.get(key) ?? performance.now();
+      vegDeferredAt.set(key, t0);
+      if (performance.now() - t0 < 30000) return;   // the fact is seconds away — wait for it
+    }
+  }
+  vegDeferredAt.delete(key);
+  vegSeeded.add(key);
+  const r = mulberry32(((gx * 73856093) ^ (gz * 19349663)) >>> 0);
+  if (!vegGrid.has(key)) vegGrid.set(key, []);
   const ceiling = cover !== null
     ? (COVER_VEG[cover] ?? 6)
     : (biome.name === 'arid' ? 4 : biome.name === 'tropical' ? 14 : biome.name === 'boreal' ? 12 : 9);
@@ -5227,6 +5245,7 @@ function streamWorld(ex: number, ez: number): void {
           for (const k of terrainMeshes.keys()) terrainDirty.add(k);
           vegSeeded.clear();
           vegGrid.clear();
+          vegDeferredAt.clear();
         }
       }
     }
@@ -7328,6 +7347,17 @@ function meshHeightAt(x: number, z: number): number | null {
 };
 (window as unknown as { __camPos?: object }).__camPos = (): number[] =>
   [camera.position.x, camera.position.y, camera.position.z];
+/** The camera's world basis + the body attitude, so a test can measure how
+ *  much of the rig's lean actually reaches the eye. */
+(window as unknown as { __camBasis?: object }).__camBasis = (): object => {
+  const e = camera.matrixWorld.elements;
+  return {
+    right: [+e[0].toFixed(3), +e[1].toFixed(3), +e[2].toFixed(3)],
+    up: [+e[4].toFixed(3), +e[5].toFixed(3), +e[6].toFixed(3)],
+    pitchC: +((pitchC * 180) / Math.PI).toFixed(1),
+    rollC: +((rollC * 180) / Math.PI).toFixed(1),
+  };
+};
 // The co-driver's current call, plus one on demand for any pose.
 (window as unknown as { __nav?: object }).__nav = (x?: number, z?: number, h?: number): object | null =>
   x === undefined ? navBend : nextBend(x, z ?? state.z, h ?? state.heading);
@@ -9153,14 +9183,16 @@ function tick(now: number): void {
       bodyY + eyeLocalY,
       state.z + rz * EYE.x + fwdZ * -eyeLocalZ,
     );
-    // Look down the bonnet, 40m out, carrying pitch so a crest shows sky and a
-    // descent shows road. The fixed 2.4m drop is ~3.5° of down-angle: from an
-    // eye at the roof line the level view put the bonnet exactly ON the frame
-    // edge, and a driver's eyes rest on the road, not the horizon.
+    // Look down the bonnet IN THE BODY'S OWN FRAME: 40m ahead of the eye and
+    // 2.4m below it (~3.5° of down-angle — a driver's eyes rest on the road,
+    // not the horizon), the whole offset rotated by the body's pitch. The old
+    // form SUBTRACTED the pitch term, so a climb aimed the gaze into the
+    // slope and a descent lifted it into the sky — inverted on exactly the
+    // ground where the seat most needs to read the road.
     camAim.set(
-      camPos.x + fwdX * 40 * cs,
-      camPos.y - Math.sin(pitchC) * 40 - 2.4,
-      camPos.z + fwdZ * 40 * cs,
+      camPos.x + fwdX * (40 * cs + 2.4 * sn),
+      camPos.y + 40 * sn - 2.4 * cs,
+      camPos.z + fwdZ * (40 * cs + 2.4 * sn),
     );
   } else {
     farGroup.visible = false;
@@ -9204,7 +9236,12 @@ function tick(now: number): void {
   if (!camInit || camMode === 'cab') { camera.position.copy(camPos); camInit = true; }
   else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
   if (camMode === 'top') camera.lookAt(state.x + panX, sampleHeight(state.x + panX, state.z + panZ), state.z + panZ);
-  else if (camMode === 'cab') { camera.lookAt(camAim); camera.rotateZ(-rollC); }
+  // Roll the head WITH the body, same axis and same sense: the camera's local
+  // z points backward exactly as the body's does (nose is -z), so the body's
+  // roll angle transfers directly. The negated form tilted the horizon the
+  // wrong way on every cross-slope — double the apparent lean instead of the
+  // seat carrying you through it.
+  else if (camMode === 'cab') { camera.lookAt(camAim); camera.rotateZ(rollC); }
   else camera.lookAt(state.x + fwdX * 28, ground + 1.4, state.z + fwdZ * 28);
   camera.updateMatrixWorld();
   // Refresh the INVERSE now, not at render time. Everything below that
