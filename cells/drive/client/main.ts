@@ -7851,6 +7851,9 @@ let cabFov = 68;   // driver's-seat field of view
 const camPos = new THREE.Vector3();
 const camAim = new THREE.Vector3();
 let camInit = false;
+// How much of the chase stand-off the terrain currently allows (1 = all of
+// it). Smoothed asymmetrically in the chase branch; reset on mode change.
+let chasePull = 1;
 const miniCam = new THREE.PerspectiveCamera(60, 1, 1, 30000); // the dock's POV preview rig
 /** The driver's eye, in the car's own frame: right-hand seat, pushed up to the
  *  windscreen header (roof band tops out at y 2.09, the glass stands at
@@ -7878,6 +7881,7 @@ function setCam(m: CamMode): void {
   camMode = m;
   if (m !== 'top') lastPov = m;
   camInit = false;                  // snap to the new rig, then resume smoothing
+  chasePull = 1;                    // and forget any terrain pull-in from last time
   panX = panZ = 0;                  // pan is a glance, not a state to carry over
   // From the driver's seat you are INSIDE the shell, so the near plane has to
   // clear the dashboard rather than the bonnet.
@@ -9337,6 +9341,39 @@ function tick(now: number): void {
         Math.max(bodyY + 2.6, camPos.y - (1 - s) * (camPos.y - bodyY - 2.6)),
         state.z + (camPos.z - state.z) * s,
       );
+    }
+    // TERRAIN in the sight line gets the same answer as a façade: DON'T SIT
+    // BEHIND IT. The x-ray silhouette says where the truck is, but the job of
+    // the chase view is the ROAD — through a hairpin cut into a cliff the old
+    // behaviour left the whole frame dark rock with a teal ghost in it. March
+    // the truck→camera line over the heightfield; on a blocker, pull the
+    // camera in just past it. Asymmetric smoothing: snap IN fast (a blind
+    // frame is the thing being fixed), release OUT slowly (a camera that
+    // breathes with every roadside knoll reads as pumping).
+    {
+      let sClear = 1;
+      const ay = bodyY + 2.2;   // the roof line, not the ground — sight to the truck
+      for (let i = 3; i <= 12; i++) {
+        const t = i / 12;
+        const ly = ay + (camPos.y - ay) * t;
+        if (groundAt(state.x + (camPos.x - state.x) * t, state.z + (camPos.z - state.z) * t) > ly - 1.2) {
+          sClear = Math.max(0.16, t - 0.12);
+          break;
+        }
+      }
+      chasePull = sClear < chasePull
+        ? chasePull + (sClear - chasePull) * (1 - Math.exp(-12 * dt))
+        : chasePull + (sClear - chasePull) * (1 - Math.exp(-1.4 * dt));
+      if (chasePull < 0.999) {
+        camPos.x = state.x + (camPos.x - state.x) * chasePull;
+        camPos.z = state.z + (camPos.z - state.z) * chasePull;
+        // Height re-settled at the slid position: above ITS ground (which may
+        // be the road corridor now) and never below the roof line.
+        camPos.y = Math.max(
+          groundAt(camPos.x, camPos.z) + 2.4,
+          bodyY + 2.6 + (camPos.y - bodyY - 2.6) * chasePull,
+        );
+      }
     }
   }
   // Critically-damped-ish follow: snap on mode change, ease in play (the chase
