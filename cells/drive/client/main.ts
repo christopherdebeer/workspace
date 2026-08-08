@@ -712,29 +712,38 @@ scene.add(sun);
 // o'clock it happens to be is a world you cannot art-direct, so the dial and
 // `?t=` force a LOCAL SOLAR hour: noon is when the sun crosses the meridian
 // HERE, which is what makes "noon" mean the same thing in Bormio and Borneo.
-const TIME_MODES = ['LIVE', 'DAWN', 'NOON', 'DUSK', 'NIGHT'] as const;
-const TIME_HOUR: Record<number, number | null> = { 0: null, 1: 6, 2: 12, 3: 18, 4: 0 };
+const TIME_MODES = ['CYCLE', 'LIVE', 'DAWN', 'NOON', 'DUSK', 'NIGHT'] as const;
+const TIME_HOUR: Record<string, number> = { DAWN: 6, NOON: 12, DUSK: 18, NIGHT: 0 };
 let timeMode = 0;
 // Read here, APPLIED AFTER the dials load — see the boot sequence. A dial that
 // remembers itself in localStorage will otherwise stamp on the query parameter.
 const timeFromUrl = TIME_MODES.indexOf(
   ((new URLSearchParams(location.search).get('t') ?? '').toUpperCase()) as typeof TIME_MODES[number]);
 if (timeFromUrl >= 0) timeMode = timeFromUrl;
+const cycleT0 = Date.now();
 function worldNow(): Date {
-  const h = TIME_HOUR[timeMode];
-  if (h === null) return new Date();
+  const mode = TIME_MODES[timeMode];
+  if (mode === 'LIVE') return new Date();
+  const now = new Date();
+  // CYCLE (the default): every session opens JUST BEFORE DAWN and runs the
+  // whole day in about an hour of driving — 24x, from 05:12 solar. LIVE
+  // (the real sun at the real moment) is one dial click away; arriving at
+  // 01:00 to a pitch-dark world was the point of the exercise and also the
+  // reason nobody could see it.
+  const h = mode === 'CYCLE'
+    ? (5.2 + ((Date.now() - cycleT0) / 3600000) * 24) % 24
+    : TIME_HOUR[mode];
   // Local solar hour → UTC. Longitude is the whole of the conversion: the sun
   // is over the meridian at local solar noon by definition.
-  const now = new Date();
   const utcH = h - origin.lon / 15;
   return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 0, 0, 0)
     + utcH * 3600000);
 }
 // Night sky, for the colours the biome only supplies in daylight versions.
 const NIGHT_SKY: { zenith: Rgb; horizon: Rgb; disc: Rgb; below: Rgb } = {
-  zenith: [0.010, 0.017, 0.042], horizon: [0.045, 0.055, 0.095],
+  zenith: [0.016, 0.025, 0.056], horizon: [0.062, 0.074, 0.118],
   disc: [0.20, 0.23, 0.31],       // a cold glow, never a second sun
-  below: [0.015, 0.017, 0.028],
+  below: [0.020, 0.023, 0.036],
 };
 /** 0 in the dark, 1 in open daylight, smooth across civil twilight. Everything
  *  that used to be a fixed brightness is scaled by this. */
@@ -5861,8 +5870,8 @@ function stepWeather(now: number, dt: number): void {
   // The night floor is not zero: a pitch-black world is not atmospheric, it is
   // unplayable, so moonlight keeps about a tenth of the key and the hemisphere
   // fill stays up to carry shape without colour.
-  sun.intensity = biome.sunI * (1 - wx.cloud * 0.72) * (0.09 + 0.91 * dayF);
-  hemi.intensity = biome.hemiI * (1 + wx.cloud * 0.35) * (0.30 + 0.70 * dayF);
+  sun.intensity = biome.sunI * (1 - wx.cloud * 0.72) * (0.16 + 0.84 * dayF);
+  hemi.intensity = biome.hemiI * (1 + wx.cloud * 0.35) * (0.42 + 0.58 * dayF);
   // SKYLIGHT ON THE WALLS. A HemisphereLight hands a VERTICAL face the flat
   // 50/50 sky-ground blend — about 0.22 of incident here — so a wall turned
   // away from the sun rendered at 0.22 x albedo = 0.13 linear, DARKER than the
@@ -7806,7 +7815,11 @@ function updatePois(): void {
         continue;
       }
     }
-    // Off-screen: an edge chip on the side the waypoint actually lies.
+    // Off-screen: an edge chip on the side the waypoint actually lies — but
+    // only for places that have EARNED the reminder: the job's pins, ones you
+    // pinned yourself, and anything close enough to act on. A distant park
+    // behind your head is not information, it is noise on the sightline.
+    if (!p.pinned && p.kind !== 'mission' && d >= 600) continue;
     const right = camFwd.x * dz - camFwd.z * dx > 0;
     poiDraw.push({
       x: 0, y: innerHeight * (0.34 + i * 0.055),
@@ -9999,10 +10012,12 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.fillStyle = p.c;
     if (p.rng) diamond(ax, ay, 3); else diamondOutline(ax, ay, 2);
     // The label — its KIND leading it as a glyph where one exists. Gold when
-    // in range or pinned by hand; dimmed when occluded.
-    hctx.globalAlpha = p.hid ? 0.55 : 1;
+    // in range or pinned by hand. Occlusion is the BEAM's story (dashed,
+    // ghosted); the words themselves stay legible — a name you cannot read
+    // is not a rumour, it is clutter.
+    hctx.globalAlpha = p.hid ? 0.9 : 1;
     if (iconCh) hudIconEdge(iconCh, x + 1, ly - 1, p.c, 5);
-    textEdgeP(label, x + 2 + iw, ly, p.rng || p.pinned ? UI.gold : p.hid ? UI.dim : UI.text);
+    textEdgeP(label, x + 2 + iw, ly, p.rng || p.pinned ? UI.gold : p.hid ? UI.soft : UI.text);
     if (p.rng) {
       // IN RANGE: brackets around the label — a place you have arrived AT.
       hctx.fillStyle = UI.gold;
@@ -10057,6 +10072,12 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   hctx.fillRect(Math.round(cx0 + cw / 2) - 2, cy0 + 16, 5, 1);
   hctx.fillRect(Math.round(cx0 + cw / 2) - 1, cy0 + 17, 3, 1);
   hctx.fillRect(Math.round(cx0 + cw / 2), cy0 + 18, 1, 1);
+  // The number lives WITH the instrument that shows it — it was a row in the
+  // conditions table, a screen away from the needle it restated.
+  {
+    const hdg = String(Math.round(deg)).padStart(3, '0');
+    textEdgeS(hdg, Math.round(cx0 + cw / 2 - textSW(hdg) / 2), cy0 + 21, UI.gold);
+  }
   // The MENU button is DOM now (client/overlays.ts) — it opens a DOM menu,
   // and a canvas chip that existed to be a hit target was the wrong tool.
   if (wx.warn && performance.now() < wx.warn) {
@@ -10248,7 +10269,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     row('HULL', cells(rig.hull), rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft);
     row('TYRE', cells(rig.tyre), rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft);
     row('BATT', cells(rig.batt), rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good);
-    textEdgeS('RIG', R - textSW('RIG'), y, UI.edge);
+
     // ── ENV, the LEFT column: what the world is doing ──
     // The two groups answer different questions and were stacked in one corner
     // reading as one table. ENV is about the world, and the left column is
@@ -10271,13 +10292,16 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       const sname = surf === 'water' ? 'WATER' : sq >= 0.8 ? 'ROAD' : sq >= 0.45 ? 'TRACK' : 'ROUGH';
       const scol = sname === 'ROAD' ? UI.good : sname === 'TRACK' ? UI.edge : UI.hot;
       erow(sname, cells(grip), scol, scol);
+      // WEATHER and WIND read like everything else in this column: a label
+      // over a bar. The word says what the sky is doing, the bar says how
+      // much of it (cover), and the wind bar is the same wind that leans the
+      // grass and pushes the cloud deck. The ENV/RIG captions are gone — the
+      // columns' sides of the screen say which is which.
       const w = WX[wx.sky];
-      const hs = `${CARD8[Math.round(deg / 45) % 8]}${Math.round(deg)}`;
-      textEdgeS('ENV', L, ey, UI.edge);
-      let lx = L + textSW('ENV') + 5;
-      textEdgeS(w.label, lx, ey, wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft);
-      lx += textSW(w.label) + 5;
-      textEdgeS(hs, lx, ey, UI.gold);
+      erow(w.label, cells(wx.cloud), wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft,
+        wx.sky === 'storm' ? UI.bad : UI.dim);
+      const windKmh = live.on ? live.windKmh : 12;
+      erow('WIND', cells(clamp(windKmh / 60, 0, 1)), windKmh > 38 ? UI.gold : UI.soft);
     }
   }
   // The mission card and the survey-claim toast are DOM now (client/
