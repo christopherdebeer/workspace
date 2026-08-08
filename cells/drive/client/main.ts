@@ -5269,24 +5269,41 @@ function streamWorld(ex: number, ez: number): void {
 // THE LEVEL IS NOT FIXED. One coarse zoom covers one band of chart zooms: z11
 // runs out at about 40km and past that the wide view is a small island of
 // terrain in a void. So the backdrop picks the coarsest level that still fills
-// the frame from a 5x5 ring, and switches whole — the old level is thrown away
-// rather than blended, because two shells of the same ground at different
-// resolutions z-fight along every ridge.
-const FAR_LEVELS = [11, 9, 7];
+// the frame from a 5x5 ring, and switches whole — the old level is not blended
+// with the new, because two shells of the same ground at different resolutions
+// z-fight along every ridge.
+//
+// z13 exists because the first zoom-out was the WORST swap: the fine ring's
+// ~15m cells handed straight to z11's ~300m cells, and the mountain you were
+// just driving visibly changed shape. z13 holds the first band (out to ~10km)
+// at ~60m cells, so fidelity steps down through the levels instead of falling
+// off a cliff at the edge of the fine ring.
+const FAR_LEVELS = [13, 11, 9, 7];
 let farZ = FAR_LEVELS[0];
 const FAR_RING_MAX = 2;       // 5×5 coarse tiles at whichever level is current
-const FAR_SEG = 48;
+const FAR_SEG = 64;           // 25 tiles ≈ 106k verts — still a rounding error next to the fine ring
 /** The coarsest level whose 5x5 ring still reaches `radius`. */
 function farLevelFor(radius: number): number {
   for (const z of FAR_LEVELS) if (radius <= tileMetres(z) * (FAR_RING_MAX + 0.5)) return z;
   return FAR_LEVELS[FAR_LEVELS.length - 1];
 }
+// The outgoing level HOLDS THE FRAME while the new one streams in. Disposing
+// it immediately swapped the whole backdrop to void and back over a second or
+// two of fetches, which read as the terrain re-rendering under the chart. The
+// retired shell is sunk a little further so the incoming level always wins the
+// depth test where both exist (no z-fighting), and is dropped the moment the
+// new ring has fully landed.
+let farRetired: THREE.Mesh[] = [];
 function setFarLevel(z: number): void {
   if (z === farZ) return;
   farZ = z;
-  for (const m of farMeshes.values()) { farGroup.remove(m); m.geometry.dispose(); }
+  for (const m of farMeshes.values()) { m.position.y -= 18; farRetired.push(m); }
   farMeshes.clear();
   farTiles.clear();
+}
+function dropRetiredFar(): void {
+  for (const m of farRetired) { farGroup.remove(m); m.geometry.dispose(); }
+  farRetired = [];
 }
 // THE EARTH IS ROUND, and at this range that stops being pedantry. The drop
 // below a tangent plane is d²/2R: 8m at 10km, which nothing would notice, but
@@ -5360,6 +5377,8 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   mesh.position.set(xs + w / 2, 0, zs + h / 2);
   farMeshes.set(key, mesh);
   farGroup.add(mesh);
+  // Last fetch of the batch home? The new level covers the frame now.
+  if (farInFlight === 0 && farQueue.length === 0) dropRetiredFar();
 }
 /** Sunk far enough that the fine layer always wins where both exist, shallow
  *  enough that the lip around the fine ring does not draw its own shadow. The
@@ -7292,6 +7311,9 @@ function meshHeightAt(x: number, z: number): number | null {
   ({ n: cpDraw.length, hidden: cpDraw.filter((c) => c.hid).length,
     d: cpDraw.map((c) => ({ d: Math.round(c.d), hid: c.hid })).slice(0, 12) });
 (window as unknown as { __cpwhy?: object }).__cpwhy = (): object => cpCull;
+(window as unknown as { __roadline?: object }).__roadline = (): object =>
+  ({ n: roadSegs.length, job: roadSegs.filter((s) => s.job).length,
+    segs: roadSegs.slice(0, 4).map((s) => [Math.round(s.x1), Math.round(s.y1), Math.round(s.x2), Math.round(s.y2), Math.round(s.d)]) });
 /** A named road's drivable centrelines, so a test can traverse the ROAD rather
  *  than teleport onto the checkpoints and grade its own homework. */
 (window as unknown as { __wayGeom?: object }).__wayGeom = (name: string): number[][] => {
@@ -7854,6 +7876,88 @@ interface CpDraw { x: number; y: number; tx: number; ty: number; got: boolean; a
   /** The job's route markers: forced beams, gold, numbered along the road. */
   job?: boolean; n?: number }
 let cpDraw: CpDraw[] = [];
+/** One screen-space stretch of the active way on the chart — the line the
+ *  pips are pearls on. Built only in top mode. */
+interface RoadSeg { x1: number; y1: number; x2: number; y2: number; job: boolean; d: number }
+let roadSegs: RoadSeg[] = [];
+// The line is drawn from the way's REAL centreline geometry, not by joining
+// checkpoints: the survey lays checkpoints fragment by fragment in tile-load
+// order, so consecutive entries are usually not neighbours on the road, and a
+// chart line threaded through them was one lonely dash. The road grid already
+// holds every drivable segment with its way name — collect the named ones (at
+// most once a second; streaming only ever adds), and project them fresh every
+// frame, because a cached projection slides against the scene the moment the
+// camera pans.
+interface RoadLineSeg { ax: number; ay: number; az: number; bx: number; by: number; bz: number;
+  mx: number; mz: number; job: boolean }
+let roadLineWorld: RoadLineSeg[] = [];
+let roadLineKey = ''; let roadLineAt = -1e9;
+function refreshRoadLine(via: string | undefined, cur: string | undefined, now: number): void {
+  const key = `${via ?? ''}|${cur ?? ''}`;
+  if (key === roadLineKey && now - roadLineAt < 1000) return;
+  roadLineKey = key; roadLineAt = now;
+  roadLineWorld = [];
+  if (!via && !cur) return;
+  const seen = new Set<string>();
+  for (const arr of roadGrid.values()) {
+    for (const s of arr) {
+      if ((s.nm !== via && s.nm !== cur) || !s.nm) continue;
+      // The grid buckets a segment into every 24m cell it crosses — one copy.
+      const k = `${s.ax.toFixed(1)},${s.az.toFixed(1)},${s.bx.toFixed(1)},${s.bz.toFixed(1)}`;
+      if (seen.has(k)) continue;
+      seen.add(k);
+      roadLineWorld.push({
+        ax: s.ax, ay: (s.ya ?? groundAt(s.ax, s.az)) + 1.2, az: s.az,
+        bx: s.bx, by: (s.yb ?? groundAt(s.bx, s.bz)) + 1.2, bz: s.bz,
+        mx: (s.ax + s.bx) / 2, mz: (s.az + s.bz) / 2, job: s.nm === via,
+      });
+      if (roadLineWorld.length >= 800) return;
+    }
+  }
+  // The via road usually lies BEYOND the loaded OSM ring — roads stream as a
+  // disc around the car, and the job is by construction somewhere else. Its
+  // survey checkpoints are route-ordered though, so past the ring's edge the
+  // gold line falls back to chords between them: coarser than real geometry,
+  // but it shows the whole run, and it hands over to the exact centreline as
+  // you drive into range.
+  if (via) {
+    const r = survey.get(via);
+    if (r) {
+      let pc: Checkpoint | null = null;
+      for (const c of r.cps) {
+        if (pc && Math.hypot(c.x - pc.x, c.z - pc.z) < SURVEY_P * 2.2) {
+          const dA = Math.hypot(pc.x - state.x, pc.z - state.z);
+          const dB = Math.hypot(c.x - state.x, c.z - state.z);
+          if (Math.min(dA, dB) > osmRingR * 0.8) {
+            roadLineWorld.push({
+              ax: pc.x, ay: groundAt(pc.x, pc.z) + 1.2, az: pc.z,
+              bx: c.x, by: groundAt(c.x, c.z) + 1.2, bz: c.z,
+              mx: (pc.x + c.x) / 2, mz: (pc.z + c.z) / 2, job: true,
+            });
+          }
+        }
+        pc = c;
+      }
+    }
+  }
+}
+function projectRoadLine(): void {
+  roadSegs = [];
+  for (const s of roadLineWorld) {
+    poiVec.set(s.ax, s.ay, s.az);
+    if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) continue;
+    poiVec.project(camera);
+    const x1 = (poiVec.x * 0.5 + 0.5) * innerWidth, y1 = (-poiVec.y * 0.5 + 0.5) * innerHeight;
+    poiVec.set(s.bx, s.by, s.bz);
+    if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) continue;
+    poiVec.project(camera);
+    roadSegs.push({
+      x1, y1,
+      x2: (poiVec.x * 0.5 + 0.5) * innerWidth, y2: (-poiVec.y * 0.5 + 0.5) * innerHeight,
+      job: s.job, d: Math.hypot(s.mx - state.x, s.mz - state.z),
+    });
+  }
+}
 // 700m was too short to ever see one: checkpoints sit 250m apart on a road
 // that bends, so from any given spot most of them are behind you or round the
 // next headland. A beam stands 26m tall and reads from well over a kilometre.
@@ -7926,7 +8030,6 @@ function updateCps(): void {
       }
     }
   }
-  if (cpVis === 0) return;
   // THE ROAD YOU ARE ON, and only that one. Drawing every nearby road turned a
   // junction into a thicket of markers belonging to streets you were not
   // driving. wayAt() is what makes this safe to scope: it answers with the
@@ -7934,9 +8037,16 @@ function updateCps(): void {
   // the verge no longer blanks the markers you are steering at.
   const here = wayAt(state.x, state.z);
   const road = here && here.name !== viaName ? survey.get(here.name) : null;
+  // The chart's road line is NAVIGATION, not checkpoint decoration — it stands
+  // whatever the CHECKPOINTS dial says. The dial only governs the markers.
+  if (camMode === 'top') {
+    refreshRoadLine(viaName, here?.name, now);
+    projectRoadLine();
+  } else roadSegs = [];
+  if (cpVis === 0) return;
   if (road) {
     for (const c of road.cps) {
-      if (cpDraw.length >= cap) return;
+      if (cpDraw.length >= cap) break;
       push(c, false, 0);
     }
   }
@@ -10062,6 +10172,35 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       hctx.fillRect(cx - w, cy + dy, 1, 1);
       hctx.fillRect(cx + w, cy + dy, 1, 1);
     }
+  }
+  // ── the active way, under its markers (chart only) ──
+  // The road the pips belong to, drawn as a line so the chart answers "which
+  // way does it RUN" and not just "where are its markers". Ink seat first,
+  // colour on top — and stepped fillRects rather than a stroked path, because
+  // a 1px diagonal stroke antialiases into grey smear on this canvas. Gold is
+  // the job's via; teal is the road under the wheels. Distance from the car
+  // dims it in the same four bands as the pips riding on it.
+  if (camMode === 'top' && roadSegs.length) {
+    for (let pass = 0; pass < 2; pass++) {
+      for (const s of roadSegs) {
+        const x1 = s.x1 / hudS, y1 = s.y1 / hudS, x2 = s.x2 / hudS, y2 = s.y2 / hudS;
+        if (Math.max(x1, x2) < -4 || Math.min(x1, x2) > HW + 4
+          || Math.max(y1, y2) < -4 || Math.min(y1, y2) > HH + 4) continue;
+        const near = Math.round(clamp(1 - s.d / CP_SIGHT, 0, 1) * 3) / 3;
+        hctx.fillStyle = pass === 0 ? UI.ink : s.job ? UI.gold : UI.edge;
+        // A floor high enough to trace the WHOLE road across the chart — this
+        // line is orientation, and orientation two valleys over is the point.
+        hctx.globalAlpha = pass === 0 ? 0.7 : (s.job ? 0.6 : 0.5) + 0.35 * near;
+        const n = Math.max(1, Math.round(Math.hypot(x2 - x1, y2 - y1) / 2));
+        for (let i = 0; i <= n; i++) {
+          const x = Math.round(x1 + ((x2 - x1) * i) / n);
+          const y = Math.round(y1 + ((y2 - y1) * i) / n);
+          if (pass === 0) hctx.fillRect(x - 1, y - 1, 3, 3);
+          else hctx.fillRect(x - 1, y - 1, 2, 2);
+        }
+      }
+    }
+    hctx.globalAlpha = 1;
   }
   // ── checkpoint markers, under everything ──
   // Never a label and never a distance: the moment a checkpoint tells you how
