@@ -3699,6 +3699,30 @@ function flushAprons(): void {
 type RoadMode = 'none' | 'auto' | 'tunnel' | 'bridge';
 const TUNNEL_TOL = 5;  // metres of terrain above the smoothed profile ⇒ tunnel
 const TUNNEL_H = 5;    // clearance of the carved tube
+/** The deck height an ALREADY BUILT road holds at (x,z), if any fragment ends
+ *  there — the continuity anchor for the fragment about to build. Fragments of
+ *  one way arrive independently (tile clipping, tag changes chop a road into
+ *  many short pieces), and pinning every end to the raw centreline sample
+ *  re-injected exactly the cliff contamination the bench solve dodges: short
+ *  fragments had no room to escape their own ends. Anchoring to the
+ *  neighbour's built deck instead lets the first fragment choose freely and
+ *  every later one join it seamlessly. */
+function deckAnchorAt(x: number, z: number): number | null {
+  let best: number | null = null, bd = 2.2;
+  for (const dx of [0, -GRID, GRID]) for (const dz of [0, -GRID, GRID]) {
+    for (const s of roadGrid.get(gkey(x + dx, z + dz)) ?? []) {
+      // Tracks and paths are DRAPED, not profiled — on a misregistered cliff
+      // their deck heights ARE the contamination, and a viewpoint footpath
+      // junctioning the road must not weld the carriageway to the rock above.
+      if (s.ya === undefined || s.yb === undefined || s.tk) continue;
+      const da = Math.hypot(s.ax - x, s.az - z);
+      if (da < bd) { bd = da; best = s.ya; }
+      const db = Math.hypot(s.bx - x, s.bz - z);
+      if (db < bd) { bd = db; best = s.yb; }
+    }
+  }
+  return best;
+}
 function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0): void {
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
   // point here has real elevation under it; if one does not, the profile would
@@ -3733,12 +3757,86 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const ox = (-tz / tl) * halfW, oz = (tx / tl) * halfW;
     return Math.min(sampleHeight(x, z), sampleHeight(x + ox, z + oz), sampleHeight(x - ox, z - oz));
   });
+  // THE ROAD FINDS ITS OWN BENCH. On a cliff face the mapped line and the
+  // DEM raster disagree horizontally by a pixel or two, and at Chapman's Peak
+  // that is worth ±130m of elevation — the centreline sample climbed a 170m
+  // phantom hill over 400m of level road, and no amount of along-way
+  // smoothing or grade-clamping can undo an error with a 400m wavelength.
+  // But the bench EXISTS in the raster, a couple of pixels to the side: so
+  // the profile is solved as a min-cost path over stations × lateral offsets
+  // (±2 DEM pixels), where staying near the mapped line is cheap and grade
+  // beyond the class ruling is expensive. On ordinary ground every candidate
+  // agrees and the solve is the centreline; on a misregistered cliff it
+  // walks the shelf of road-plausible elevations instead of the rock above.
+  // Ends anchor to whatever a neighbouring fragment already built there (see
+  // deckAnchorAt) — a hard pin to the centreline sample gave the cliff its
+  // contamination back at every one of the many short fragment joins.
+  const anchor0 = deckAnchorAt(dense[0][0], dense[0][1]);
+  const anchor1 = deckAnchorAt(dense[n - 1][0], dense[n - 1][1]);
+  const p0 = anchor0 === null ? null : anchor0 - lift;
+  const p1 = anchor1 === null ? null : anchor1 - lift;
+  let alg = elev;
+  if (mode === 'auto' && n > 4) {
+    const OFFS = [-16, -8, 0, 8, 16];
+    const K = OFFS.length;
+    const cand: number[][] = [];
+    for (let i = 0; i < n; i++) {
+      const [x, z] = dense[i];
+      const [ax2, az2] = dense[Math.max(0, i - 1)], [bx2, bz2] = dense[Math.min(n - 1, i + 1)];
+      const tx = bx2 - ax2, tz = bz2 - az2, tl = Math.hypot(tx, tz) || 1;
+      const px2 = -tz / tl, pz2 = tx / tl;
+      cand.push(OFFS.map((o) => sampleHeight(x + px2 * o, z + pz2 * o)));
+    }
+    const gCap = maxGrade > 0 ? maxGrade : 0.15;
+    const W_OFF = 0.35;    // cost per metre of lateral offset — the line is probably right
+    const W_G = 30;        // cost per squared metre of rise beyond the ruling grade
+    const W_PIN = 40;      // cost per metre of daylight against a neighbour's built deck
+    const INF = 1e9;
+    let prevC: number[] = cand[0].map((e, k) =>
+      Math.abs(OFFS[k]) * W_OFF + (p0 === null ? 0 : Math.abs(e - p0) * W_PIN));
+    const from: Int8Array[] = [];
+    for (let i = 1; i < n; i++) {
+      const d = Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
+      const cur = new Array<number>(K).fill(INF);
+      const bk = new Int8Array(K);
+      for (let k = 0; k < K; k++) {
+        const stat = Math.abs(OFFS[k]) * W_OFF
+          + (i === n - 1 && p1 !== null ? Math.abs(cand[i][k] - p1) * W_PIN : 0);
+        for (let j = 0; j < K; j++) {
+          if (prevC[j] >= INF) continue;
+          const excess = Math.max(0, Math.abs(cand[i][k] - cand[i - 1][j]) - gCap * d);
+          const c = prevC[j] + stat + (excess * excess * W_G) / d;
+          if (c < cur[k]) { cur[k] = c; bk[k] = j; }
+        }
+      }
+      from.push(bk);
+      prevC = cur;
+    }
+    let endK = 0;
+    for (let k = 1; k < K; k++) if (prevC[k] < prevC[endK]) endK = k;
+    const pick = new Array<number>(n).fill(endK);
+    for (let i = n - 1; i >= 1; i--) pick[i - 1] = from[i - 1][pick[i]];
+    alg = cand.map((cs, i) => cs[pick[i]]);
+    // The anchors are exact continuity, not just preferences: land the end
+    // stations ON them so the joined decks meet to the millimetre.
+    if (p0 !== null) alg[0] = p0;
+    if (p1 !== null) alg[n - 1] = p1;
+  } else if (mode !== 'none') {
+    // Chord fragments (tagged tunnels and bridges) take the same anchors:
+    // their portal elevations were the raw centreline before, which on a
+    // cliff was the contamination itself.
+    alg = elev.slice();
+    if (p0 !== null) alg[0] = p0;
+    if (p1 !== null) alg[n - 1] = p1;
+  }
   // Roads get their own longitudinal PROFILE. Terrain draping alone sends a
   // road over every hill in its path; real roads keep grade and go THROUGH.
   // Where a ~500m-smoothed profile sits more than TUNNEL_TOL below the terrain
   // the run becomes a tunnel: the road takes the portal-to-portal chord and a
-  // carved tube is built around it. OSM tunnel/bridge tags force whole-way runs.
-  const prof = elev.slice();
+  // carved tube is built around it. OSM tunnel/bridge tags force whole-way
+  // runs. Detection runs on the ALIGNED profile: phantom knolls the bench
+  // walk already dodged must not become phantom tunnels.
+  const prof = alg.slice();
   const runs: Array<[number, number]> = [];
   if (mode !== 'none' && n > 4) {
     if (mode === 'tunnel' || mode === 'bridge') runs.push([0, n - 1]);
@@ -3748,10 +3846,10 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         for (let j = Math.max(0, i - 20); j <= Math.min(n - 1, i + 20); j++) { s += src[j]; c++; }
         return s / c;
       });
-      const sm = avg(avg(elev));
+      const sm = avg(avg(alg));
       let a = -1;
       for (let i = 0; i < n; i++) {
-        const deep = elev[i] - sm[i] > TUNNEL_TOL;
+        const deep = alg[i] - sm[i] > TUNNEL_TOL;
         if (deep && a < 0) a = i;
         if ((!deep || i === n - 1) && a >= 0) {
           if (i - a >= 2) runs.push([Math.max(0, a - 1), Math.min(n - 1, i)]);
@@ -3760,11 +3858,11 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       }
     }
     for (const [a, b] of runs) for (let i = a; i <= b; i++) {
-      const chord = elev[a] + ((elev[b] - elev[a]) * (i - a)) / (b - a);
+      const chord = alg[a] + ((alg[b] - alg[a]) * (i - a)) / (b - a);
       // Tagged tunnels cap at the terrain: the z13 heightfield can't resolve
       // small knolls, and an uncapped chord under flat data left a giant
       // exposed tube sitting on the ground. Bridges ride the chord.
-      prof[i] = mode === 'tunnel' ? Math.min(chord, elev[i]) : chord;
+      prof[i] = mode === 'tunnel' ? Math.min(chord, alg[i]) : chord;
     }
     // THE GRADE LINE. On a cliff face the 9.5m/px heightfield cannot resolve
     // a road bench: a pixel averages the rock above the deck with the drop
