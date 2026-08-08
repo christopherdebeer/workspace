@@ -2212,6 +2212,7 @@ function hash2(a: number, b: number): number {
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
 }
 const grassTint = new THREE.Color();
+const swardCol = new THREE.Color();   // per-tuft scratch: tint blended toward the ground
 const vegDummy = new THREE.Object3D();
 function vegMesh(geo: THREE.BufferGeometry, mat: THREE.Material, cap: number): THREE.InstancedMesh {
   const m = new THREE.InstancedMesh(geo, mat, cap);
@@ -2514,7 +2515,13 @@ function refreshSward(): void {
   // tuft would be thousands of scans a second for an answer that cannot change
   // within a blade's width. One lookup per 8m block instead, and the block is
   // remembered ACROSS bands because they sweep the same ground.
+  // The block also carries the GROUND'S OWN COLOUR (the terrain palette at its
+  // centre), because the field's far edge is a colour problem: the outer bands
+  // are sparse by design, and a full-green tuft standing alone on ochre rock
+  // reads as litter. Tufts blend toward the ground they stand on as they near
+  // the reach — the field dissolves into the terrain instead of stopping.
   let bx = Infinity, bz = Infinity, blockRate = 0;
+  let blockR = 0, blockG = 0, blockB = 0;
   const reach = GRASS_BANDS[GRASS_BANDS.length - 1][0] * Math.min(1.6, 0.55 + grassScale * 0.6);
   let inner = 0;
   for (const [bandR, step] of GRASS_BANDS) {
@@ -2533,8 +2540,15 @@ function refreshSward(): void {
         const qx = Math.floor(sx / 8), qz = Math.floor(sz / 8);
         if (qx !== bx || qz !== bz) {
           bx = qx; bz = qz;
-          const cv = sampleCover(qx * 8 + 4, qz * 8 + 4);
+          const px2 = qx * 8 + 4, pz2 = qz * 8 + 4;
+          const cv = sampleCover(px2, pz2);
           blockRate = cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3);
+          // The same palette the terrain verts were painted with, at this
+          // block's own height, grade and cover — so the blend target IS the
+          // ground here, not a generic dirt.
+          const e0 = swardGround(px2, pz2);
+          const slope = Math.hypot(swardGround(px2 + 8, pz2) - e0, swardGround(px2, pz2 + 8) - e0) / 8;
+          [blockR, blockG, blockB] = terrainPalette(e0 + baseElev, slope, cv);
         }
         if (blockRate <= 0) continue;
         // DITHERED, not scaled. Thinning by shrinking every blade turns a field
@@ -2558,10 +2572,23 @@ function refreshSward(): void {
         vegDummy.rotation.set(0, h2 * 6.283, 0);
         // Tufts grow with distance so a far one still covers a pixel: the
         // outer bands are sparse by design and would otherwise read as bald.
-        vegDummy.scale.setScalar((0.7 + h1 * 1.6) * (1 + Math.sqrt(d2) / reach * 0.9));
+        const t = Math.sqrt(d2) / reach;
+        vegDummy.scale.setScalar((0.7 + h1 * 1.6) * (1 + t * 0.9));
         vegDummy.updateMatrix();
         gm.setMatrixAt(n, vegDummy.matrix);
-        gm.setColorAt(n, grassTint);
+        // Colour fade, NOT transparency: alpha on thousands of instances is a
+        // sorting problem and reads as ghost grass besides. Inside ~45% of the
+        // reach a tuft is the biome's own green; from there it slides toward
+        // the ground colour, ~85% of the way in by the last rank, so the far
+        // field is grass-shaped terrain rather than green confetti.
+        const fm = clamp((t - 0.45) / 0.55, 0, 1);
+        const mix = fm * fm * 0.85;
+        swardCol.setRGB(
+          grassTint.r + (blockR - grassTint.r) * mix,
+          grassTint.g + (blockG - grassTint.g) * mix,
+          grassTint.b + (blockB - grassTint.b) * mix,
+        );
+        gm.setColorAt(n, swardCol);
         n++;
       }
     }
@@ -2602,7 +2629,8 @@ function refreshVeg(): void {
       if (!cell) continue;
       for (const v of cell) {
         const dx = v.x - state.x, dz = v.z - state.z;
-        if (dx * dx + dz * dz > r2) continue;
+        const d2v = dx * dx + dz * dz;
+        if (d2v > r2) continue;
         const mesh = vegMeshes[v.k];
         const i = counts[v.k];
         if (i >= VEG_CAP[v.k] * vegScale) continue;
@@ -2612,7 +2640,27 @@ function refreshVeg(): void {
         vegDummy.scale.setScalar(v.s);
         vegDummy.updateMatrix();
         mesh.setMatrixAt(i, vegDummy.matrix);
-        mesh.setColorAt(i, v.c);
+        // The same dissolve the sward does, at the scatter's own horizon: the
+        // last ranks of scrub slide toward the colour of the ground they stand
+        // on instead of standing as saturated confetti against it (and instead
+        // of alpha, which sorts badly and reads as ghosts). Tall kinds keep
+        // more of themselves — a distant conifer is seen against the terrain
+        // BEHIND it, not under it.
+        const tt = Math.sqrt(d2v) / VEG_RANGE;
+        if (tt > 0.5) {
+          // LINEAR, not squared: a squared ramp left scrub on a 70%-range
+          // ridge line at nine-tenths saturation — precisely the confetti the
+          // dissolve exists to kill. Linear starts telling at mid-range.
+          const fmv = (tt - 0.5) / 0.5;
+          const mixv = fmv * (v.h > 0 ? 0.55 : 0.85);
+          const [tr, tg, tb] = terrainPalette(y + baseElev, 0, sampleCover(v.x, v.z));
+          swardCol.setRGB(
+            v.c.r + (tr - v.c.r) * mixv,
+            v.c.g + (tg - v.c.g) * mixv,
+            v.c.b + (tb - v.c.b) * mixv,
+          );
+          mesh.setColorAt(i, swardCol);
+        } else mesh.setColorAt(i, v.c);
         counts[v.k] = i + 1;
         if (v.h > 0 && trunkN < 3600) {
           vegDummy.position.set(v.x, y, v.z);
