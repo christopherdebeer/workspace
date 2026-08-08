@@ -9141,48 +9141,38 @@ function applyBiome(b: Biome): void {
   grassTint.setHSL(b.vegHue[0] + 0.012, 0.34, b.vegLit[0] * 0.82 + 0.06);
 }
 
-// ── pixel type, from the web font ──────────────────────────────────
-// The hand-drawn 5x7 and 3x5 bitmap tables are retired: all HUD text is now
-// Silkscreen (client/font.ts) via fillText into the same low-res buffer. The
-// face is designed on an 8px em with 1px units, so at integer sizes and
-// integer positions its squares land on the buffer's pixel grid and the
-// nearest-neighbour magnification keeps them hard. Two consequences the old
-// tables never had: advances are PROPORTIONAL (all measurement goes through
-// measureText, cached), and anything the face lacks — Arabic, CJK — falls
-// back to the monospace stack per string rather than per glyph.
-const FONT_PX = 8;
-const HUD_FONT = `'${PIXEL_FONT}', ui-monospace, monospace`;
-const setFont = (c: CanvasRenderingContext2D, px: number): void => {
-  c.font = `${px}px ${HUD_FONT}`;
-  c.textAlign = 'left';
-  c.textBaseline = 'alphabetic';
+// ── pixel type: the 5x7 table, back at the wheel ───────────────────
+// The web-font migration taught two things the hard way. fillText always
+// antialiases (iOS thoroughly), so canvas text must be drawn as fillRect
+// runs from 1-bit glyphs. And every small pixel webfont measured — Silkscreen,
+// Tiny5, Micro 5 — carries a 5-unit cap, so a HUD set entirely from them has
+// NO SIZE HIERARCHY: mini and micro came out the same height and the screen
+// read as one voice. The primary face is therefore the hand-drawn 5x7 table
+// again — 7-tall caps the instruments were tuned around, hard by
+// construction — with Micro 5 (sieved, below) as the 5-tall secondary and
+// Silkscreen kept for the DOM, where it belongs.
+const GLYPHS: Record<string, string> = {
+  ' ': '0000000', A: 'ehhvhhh', B: 'uhhuhhu', C: 'ehggghe', D: 'sihhhis', E: 'vgguggv',
+  F: 'vgguggg', G: 'ehgnhhf', H: 'hhhvhhh', I: 'e44444e', J: '72222ic', K: 'hikokih',
+  L: 'ggggggv', M: 'hrllhhh', N: 'hhpljhh', O: 'ehhhhhe', P: 'uhhuggg', Q: 'ehhhlid',
+  R: 'uhhukih', S: 'fgge11u', T: 'v444444', U: 'hhhhhhe', V: 'hhhhha4', W: 'hhhllrh',
+  X: 'hha4ahh', Y: 'hha4444', Z: 'v1248gv',
+  '0': 'ehjlphe', '1': '4c4444e', '2': 'eh1248v', '3': 'v4221he', '4': '26aiv22',
+  '5': 'vgu11he', '6': '68guhhe', '7': 'v124888', '8': 'ehhehhe', '9': 'ehhf12c',
+  '.': '00000cc', ',': '0000c48', ':': '0cc0cc0', '/': '122488g', '-': '000v000',
+  '%': 'hi4449h', '·': '000c000', '!': '4444404', '?': 'eh12404', '(': '2488842',
+  ')': '8422248', '+': '044v440', '>': '8421248', '<': '248g842', '=': '00v0v00',
+  '#': 'alvlvla', '*': '04ava40', '"': 'aa00000', "'": '4400000', '°': 'cic0000',
 };
-// Measured widths, cached — drawHud asks for a few hundred a frame and most
-// of them (labels, units, cardinal letters) never change.
-const measCache = new Map<string, number>();
-function measure(s: string, px: number): number {
-  const k = `${px}|${s}`;
-  let w = measCache.get(k);
-  if (w === undefined) {
-    setFont(hctx, px);
-    w = Math.ceil(hctx.measureText(s).width);
-    if (measCache.size > 4000) measCache.clear();   // speed digits etc. churn
-    measCache.set(k, w);
-  }
-  return w;
-}
-const textW = (s: string, sc = 1): number => measure(s, FONT_PX * sc);
-const textSW = (s: string): number => measure(s, FONT_PX);
-/** Truncate to a pixel width with a '.' — measured, not counted, because the
- *  face is proportional now. */
-function fitPx(s: string, maxPx: number, px: number): string {
-  if (measure(s, px) <= maxPx) return s;
-  let n = Math.min(s.length - 1, Math.max(1, Math.floor(maxPx / 5)));
-  while (n > 1 && measure(`${s.slice(0, n)}.`, px) > maxPx) n--;
-  return `${s.slice(0, n)}.`;
-}
-const fit = (s: string, maxPx: number): string => fitPx(s, maxPx, FONT_PX);
-const fitS = fit;
+const B32 = '0123456789abcdefghijklmnopqrstuv';
+const FW = 5, FH = 7;
+/** Width in pixels of `s` at scale `sc` (1px letter spacing). */
+const textW = (s: string, sc = 1): number => s.length * (FW + 1) * sc;
+/** Hard-truncate to fit a pixel width — no ellipsis glyph in a 5x7 font. */
+const fit = (s: string, maxPx: number): string => {
+  const n = Math.max(1, Math.floor(maxPx / (FW + 1)));
+  return s.length <= n ? s : `${s.slice(0, n - 1)}.`;
+};
 // ── the POI voice: the MICRO face, half the size of everything else ──
 // A label standing IN the world should whisper next to the instruments that
 // report on the car. The whisper is Tiny5, a face DESIGNED on a 5px grid —
@@ -9274,18 +9264,37 @@ function fitP(s: string, maxPx: number): string {
 }
 function text(c: CanvasRenderingContext2D, s: string, x: number, y: number, col: string, sc = 1): void {
   c.fillStyle = col;
-  setFont(c, FONT_PX * sc);
-  // Baseline sits where the old 5x7 glyph block ended, so call sites keep
-  // their meaning: (x, y) is still the top-left of the text.
-  c.fillText(s, Math.round(x), Math.round(y) + 7 * sc);
+  let cx = Math.round(x);
+  const ty = Math.round(y);
+  for (const ch of s) {
+    // Anything outside the bitmap set — Arabic, accented Latin — is drawn
+    // from the system font at glyph size. It lands on the same low-res buffer
+    // and gets magnified with everything else, so a Cairo or Tromsø place
+    // name still reads as pixels rather than as a row of '?'.
+    if (!GLYPHS[ch] && !GLYPHS[ch.toUpperCase()] && ch !== ' ') {
+      c.font = `${FH * sc}px ui-monospace, monospace`;
+      c.textAlign = 'left';
+      c.fillText(ch, cx, ty + FH * sc);
+      c.fillStyle = col;
+      cx += (FW + 1) * sc;
+      continue;
+    }
+    const rows = GLYPHS[ch] ?? GLYPHS[ch.toUpperCase()] ?? GLYPHS['?'];
+    for (let r = 0; r < FH; r++) {
+      const bits = B32.indexOf(rows[r]);
+      if (bits <= 0) continue;
+      for (let b = 0; b < FW; b++) {
+        if (bits & (1 << (FW - 1 - b))) c.fillRect(cx + b * sc, ty + r * sc, sc, sc);
+      }
+    }
+    cx += (FW + 1) * sc;
+  }
 }
-/** The old 3x5 micro face, now the same 8px face — kept as its own entry
- *  point so the call sites (and any future re-split) stay legible. */
-function textSmall(c: CanvasRenderingContext2D, s: string, x: number, y: number, col: string): void {
-  c.fillStyle = col;
-  setFont(c, FONT_PX);
-  c.fillText(s, Math.round(x), Math.round(y) + 6);
-}
+// The SECONDARY face is the Micro 5 sieve above — every textSmall call in
+// the HUD drops back to 5-tall glyphs, which is the hierarchy restored.
+const textSmall = textPoi;
+const textSW = measureM;
+const fitS = fitP;
 /** A Font Awesome glyph on the HUD buffer. Drawn at 8px it goes a touch
  *  soft against the pixel face — used sparingly, where a WORD would be
  *  worse: the POI kind marks. FA solid only exists at weight 900. */
@@ -10079,7 +10088,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // the stack stays put whatever the screen height is.
   const mw = Math.min(58, Math.floor(HW * 0.34));
   // Three lines now: the place, the way under the wheels, and the coordinate.
-  const infoH = 30;
+  const infoH = 23;
   const infoY = HH - pad - infoH;
   const my = infoY - mw - 3;
   const mx = pad;
@@ -10113,7 +10122,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // and off the tarmac it says which road you left. Streaming/outage takes
     // the line when there is nothing to report, since both mean the same thing:
     // the world does not know where you are yet.
-    if (osmDown) textEdgeS('NO WORLD DATA', pad + 1, infoY + 11, UI.bad);
+    if (osmDown) textEdgeS('NO WORLD DATA', pad + 1, infoY + 9, UI.bad);
     else {
       const w = wayAt(state.x, state.z);
       const line = w ? (w.on ? w.name.toUpperCase() : `NEAR ${w.name.toUpperCase()}`)
@@ -10124,12 +10133,12 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       const s = surveyHere();
       const tally = s ? (s.r.claimed ? 'DRIVEN' : `${s.r.got}/${s.r.cps.length}`) : '';
       const tw = tally ? textSW(tally) + 4 : 0;
-      if (line) textEdgeS(fitS(line, Math.round(HW * 0.6) - tw), pad + 1, infoY + 11, w?.on ? UI.soft : UI.dim);
+      if (line) textEdgeS(fitS(line, Math.round(HW * 0.6) - tw), pad + 1, infoY + 9, w?.on ? UI.soft : UI.dim);
       if (s && line) {
         // Dim while the extent is still settling — the denominator is not yet
         // trustworthy and the HUD should not pretend otherwise.
         const col = s.r.claimed ? UI.good : !s.ready ? UI.dim : s.frac > SURVEY_MAJORITY ? UI.gold : UI.soft;
-        textEdgeS(tally, pad + 1 + Math.min(textSW(line), Math.round(HW * 0.6) - tw) + 4, infoY + 11, col);
+        textEdgeS(tally, pad + 1 + Math.min(textSW(line), Math.round(HW * 0.6) - tw) + 4, infoY + 9, col);
       }
     }
     // GPS: TERTIARY. Present because a coordinate is the one thing you can act
@@ -10139,7 +10148,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     {
       const [la, lo] = localToLatLon(state.x, state.z);
       const g = `${la.toFixed(4)} ${lo.toFixed(4)}`;
-      textEdgeS(g, pad + 1, infoY + 21, UI.dim);
+      textEdgeS(g, pad + 1, infoY + 16, UI.dim);
       // Under real drive the coordinate stops being a reference and becomes a
       // reading off an instrument, so it says how much to trust it: the fix
       // accuracy, and how long since one arrived. A stale fix looks exactly
@@ -10151,7 +10160,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
           : age > 12 ? `FIX ${age.toFixed(0)}S OLD`
           : `±${Math.round(f.acc)}M`;
         const col = !f || age > 12 ? UI.bad : f.acc > 25 ? UI.gold : UI.good;
-        textEdgeS(s, pad + 1 + textSW(g) + 5, infoY + 21, col);
+        textEdgeS(s, pad + 1 + textSW(g) + 5, infoY + 16, col);
       }
     }
   }
@@ -10206,9 +10215,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       const digits = String(kmh);
       glowText(digits, cx - Math.round(textW(digits, 2) / 2) + 1, cy - 15, UI.gold, 2);
       textEdgeS('KM/H', cx - Math.round(textSW('KM/H') / 2) + 1, cy + 2, UI.edge);
-      textEdgeS('X1000 RPM', cx - Math.round(textSW('X1000 RPM') / 2) + 1, cy + 11, UI.dim);
+      textEdgeS('X1000 RPM', cx - Math.round(textSW('X1000 RPM') / 2) + 1, cy + 9, UI.dim);
       const rk = String(Math.max(1, Math.round(1 + engRev * 6)));
-      glowText(rk, cx - Math.round(textW(rk) / 2), cy + 20, engRev > 1 ? UI.hot : UI.edge);
+      glowText(rk, cx - Math.round(textW(rk) / 2), cy + 16, engRev > 1 ? UI.hot : UI.edge);
       // TRIP, under the speedometer — the number that belongs to this drive.
       const o = `${fmtKm(odo.trip)} · ${fmtKm(odo.total)}`;
       textEdgeS(o, R - textSW(o), HH - pad - 6, UI.dim);
@@ -10217,21 +10226,21 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // Momentary truths, out of the table: always present, ink when dark.
     {
       const lx = cx - DR - 6;
-      let ly = cy - 12;
+      let ly = cy - 8;
       const led = (label: string, on: boolean, col: string): void => {
         textEdgeS(label, lx - textSW(label), ly, on ? col : 'rgba(87,201,176,0.28)');
-        ly += 10;
+        ly += 8;
       };
       led(skid > 0.55 ? 'SLIP!' : 'SLIP', skid > 0.06, skid > 0.55 ? UI.bad : UI.gold);
       led('SOL', rig.solarKw > rig.drawKw, UI.gold);
       led('SVC', rig.svc, UI.edge);
     }
     // ── the table: label over bar, right-aligned, no numbers ──
-    let y = cy - DR - 16;
+    let y = cy - DR - 14;
     const row = (label: string, lit: number, col: string, labelCol = UI.dim): void => {
       textEdgeS(label, R - textSW(label), y, labelCol);
-      meter(R - BARW, y + 8, CELLS, lit, col, 2, 3, 1);
-      y -= 14;
+      meter(R - BARW, y + 6, CELLS, lit, col, 2, 3, 1);
+      y -= 12;
     };
     // RIG, right column: the stocks the world spends, beside the instrument
     // they are read against.
@@ -10250,9 +10259,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       const L = pad + 1;
       let ey = my - 13;                // stacked upward, clear of the chart/POV dock
       const erow = (label: string, lit: number, col: string, labelCol = UI.dim): void => {
-        meter(L, ey + 8, CELLS, lit, col, 2, 3, 1);
+        meter(L, ey + 6, CELLS, lit, col, 2, 3, 1);
         textEdgeS(label, L, ey, labelCol);
-        ey -= 14;
+        ey -= 12;
       };
       erow('WET', cells(wx.wet), wx.wet > 0.5 ? UI.bad : UI.edge);
       // Named from the SURFACE QUALITY, not the OSM class. A residential street
