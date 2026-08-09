@@ -2992,6 +2992,9 @@ interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?:
   /** A guard rail rather than a wall. Still solid, but glancing it costs you
    *  almost nothing — see the collision scrub. */
   sl?: boolean;
+  /** Which ribbon() build this segment came from — probe-only, for
+   *  attributing profile discontinuities to fragment boundaries. */
+  fd?: number;
   /** PORTAL PORCH: raise this segment's cut plane by this many metres. The
    *  first and last stations of a tunnel tube are cut to just above the
    *  collar rather than exempted — full exemption left the terrain mesh
@@ -3702,6 +3705,8 @@ function flushAprons(): void {
   }
 }
 type RoadMode = 'none' | 'auto' | 'tunnel' | 'bridge';
+let ribbonSeq = 0;
+const crumbDefer = new Map<string, number>();
 const TUNNEL_TOL = 5;  // metres of terrain above the smoothed profile ⇒ tunnel
 const TUNNEL_H = 5;    // clearance of the carved tube
 /** The deck height an ALREADY BUILT road holds at (x,z), if any fragment ends
@@ -3729,6 +3734,7 @@ function deckAnchorAt(x: number, z: number): number | null {
   return best;
 }
 function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false): void {
+  const fid = ++ribbonSeq;
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
   // point here has real elevation under it; if one does not, the profile would
   // be built against sampleHeight's 0 and bake a causeway that no later tile
@@ -3780,33 +3786,102 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const anchor1 = deckAnchorAt(dense[n - 1][0], dense[n - 1][1]);
   const p0 = anchor0 === null ? null : anchor0 - lift;
   const p1 = anchor1 === null ? null : anchor1 - lift;
-  let alg = elev;
-  if (mode === 'auto' && n > 4) {
-    // ±2 samples of the SOURCE's real resolution, not the tile's: high-zoom
-    // terrarium here is oversampled ~30m SRTM, so ±8m candidates were mostly
-    // re-reading the same underlying measurement.
-    const OFFS = [-24, -12, 0, 12, 24];
-    const K = OFFS.length;
-    const cand: number[][] = [];
-    for (let i = 0; i < n; i++) {
-      const [x, z] = dense[i];
-      const [ax2, az2] = dense[Math.max(0, i - 1)], [bx2, bz2] = dense[Math.min(n - 1, i + 1)];
-      const tx = bx2 - ax2, tz = bz2 - az2, tl = Math.hypot(tx, tz) || 1;
-      const px2 = -tz / tl, pz2 = tx / tl;
-      cand.push(OFFS.map((o) => sampleHeight(x + px2 * o, z + pz2 * o)));
+  // ±2 samples of the SOURCE's real resolution, not the tile's: high-zoom
+  // terrarium here is oversampled ~30m SRTM, so ±8m candidates were mostly
+  // re-reading the same underlying measurement.
+  const OFFS = [-24, -12, 0, 12, 24];
+  const K = OFFS.length;
+  const latCands = (i: number): number[] => {
+    const [x, z] = dense[i];
+    const [ax2, az2] = dense[Math.max(0, i - 1)], [bx2, bz2] = dense[Math.min(n - 1, i + 1)];
+    const tx = bx2 - ax2, tz = bz2 - az2, tl = Math.hypot(tx, tz) || 1;
+    const px2 = -tz / tl, pz2 = tx / tl;
+    return OFFS.map((o) => sampleHeight(x + px2 * o, z + pz2 * o));
+  };
+  /** The bench estimate for one station standing alone: the centreline where
+   *  the ground is calm; where the cross-section turns to cliff, the FLATTEST
+   *  candidate — the shelf. Not the lowest: on a coast road ±24m spans the
+   *  rock above AND the sea slope below, and "lowest" dove 80m off the road.
+   */
+  const flatOf = (cs: number[]): number => {
+    let bk = 2, bg = Infinity;
+    for (let k = 1; k < K - 1; k++) {
+      const g = Math.abs(cs[k + 1] - cs[k - 1]) + Math.abs(OFFS[k]) * 0.08;
+      if (g < bg) { bg = g; bk = k; }
     }
+    return cs[bk];
+  };
+  const benchAt = (i: number): number => {
+    const cs = latCands(i);
+    const f = clamp(Math.abs(cs[K - 1] - cs[0]) / 18, 0, 1);
+    return cs[2] + (flatOf(cs) - cs[2]) * f;
+  };
+  // A chaotic anchorless fragment DEFERS: on cliff ground any solve under a
+  // few hundred stations is luck, and anchoring propagates whatever luck
+  // built first. Refusing the build sends the tile back through the retry
+  // queue, and by the next pass a LONG neighbour — whose solve carries real
+  // evidence — exists to anchor to. Bounded per spot so an isolated short
+  // road still builds on the third ask rather than never.
+  if (mode === 'auto' && n <= 40 && p0 === null && p1 === null && drivable) {
+    const dkey = `${Math.round(dense[0][0])},${Math.round(dense[0][1])}`;
+    const seen = crumbDefer.get(dkey) ?? 0;
+    if (seen < 3) {
+      const chaotic = [0, n >> 1, n - 1].some((i) => {
+        const cs = latCands(i);
+        return Math.abs(cs[K - 1] - cs[0]) > 18;
+      });
+      if (chaotic) { crumbDefer.set(dkey, seen + 1); unbuilt++; return; }
+    }
+  }
+  let alg = elev;
+  // A CRUMB CANNOT PROFILE ITSELF. OSM splits a mountain road at every
+  // structure change — Chapman's Peak alternates gallery / open road / gallery
+  // in 40-55m pieces — and a fragment eight stations long is too short for
+  // the smoothing, the clamp, or the DP to out-vote its own contaminated
+  // samples: one such crumb solved 80m up the cliff and every neighbour
+  // welded or ramped to it. For short fragments, continuity IS the profile:
+  // ramp between both anchors, hold a single anchor with the bench's drift,
+  // or stand on the per-station bench and let later neighbours join it.
+  const chaoticHere = (): boolean => [0, n >> 1, n - 1].some((i) => {
+    const cs = latCands(i);
+    return Math.abs(cs[K - 1] - cs[0]) > 18;
+  });
+  if (mode === 'auto' && (n <= 16 || (n <= 40 && chaoticHere() && (p0 !== null || p1 !== null)))) {
+    if (p0 !== null && p1 !== null) {
+      alg = elev.map((_, i) => p0 + ((p1 - p0) * i) / (n - 1));
+    } else if (p0 !== null || p1 !== null) {
+      // LEVEL, not drifted: every DEM-derived drift term tried here smuggled
+      // the plateau back in one crumb at a time — a 40-90m gallery shelf is
+      // engineered near-level, and holding the anchor is closer to truth.
+      const a = (p0 ?? p1) as number;
+      alg = elev.map(() => a);
+    } else {
+      alg = elev.map((_, i) => benchAt(i));
+    }
+  } else if (mode === 'auto' && n > 4) {
+    const cand: number[][] = [];
+    for (let i = 0; i < n; i++) cand.push(latCands(i));
     const gCap = maxGrade > 0 ? maxGrade : 0.15;
     const W_OFF = 0.35;    // cost per metre of lateral offset — the line is probably right
     const W_G = 30;        // cost per squared metre of rise beyond the ruling grade
-    const W_PIN = 40;      // cost per metre of daylight against a neighbour's built deck
+    const W_PIN = 120;     // cost per metre of daylight against a neighbour's built deck — continuity nearly always wins
     const INF = 1e9;
     // How much a station's centreline sample can be TRUSTED: σz grows with
     // lateral gradient × horizontal misregistration, so where the candidates
     // span a cliff the lateral-offset cost relaxes — the mapped line's
     // elevation is nearly meaningless there and the walk should be free.
     const free = cand.map((cs) => clamp(Math.abs(cs[K - 1] - cs[0]) / 18, 0, 1));
+    // …free, but not NEUTRAL. On a cliff several elevations read as legal
+    // low-grade walks, and fragments solving the same road independently
+    // split between them — measured on Chapman's as 30-44m walls where a
+    // hill-solved fragment met bench-solved neighbours. A bias toward the
+    // FLATTEST shelf, active only where the terrain is chaotic, makes every
+    // fragment pick the same branch: the bench the road was cut on.
+    const flat = cand.map(flatOf);
     let prevC: number[] = cand[0].map((e, k) =>
-      Math.abs(OFFS[k]) * W_OFF * (1 - 0.75 * free[0]) + (p0 === null ? 0 : Math.abs(e - p0) * W_PIN));
+      Math.abs(OFFS[k]) * W_OFF * (1 - 0.75 * free[0])
+      + Math.abs(e - flat[0]) * 0.5 * free[0]
+      + (p0 === null ? 0 : Math.abs(e - p0) * W_PIN));
     const from: Int8Array[] = [];
     for (let i = 1; i < n; i++) {
       const d = Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
@@ -3814,6 +3889,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       const bk = new Int8Array(K);
       for (let k = 0; k < K; k++) {
         const stat = Math.abs(OFFS[k]) * W_OFF * (1 - 0.75 * free[i])
+          + Math.abs(cand[i][k] - flat[i]) * 0.5 * free[i]
           + (i === n - 1 && p1 !== null ? Math.abs(cand[i][k] - p1) * W_PIN : 0);
         for (let j = 0; j < K; j++) {
           if (prevC[j] >= INF) continue;
@@ -3830,17 +3906,23 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const pick = new Array<number>(n).fill(endK);
     for (let i = n - 1; i >= 1; i--) pick[i - 1] = from[i - 1][pick[i]];
     alg = cand.map((cs, i) => cs[pick[i]]);
-    // The anchors are exact continuity, not just preferences: land the end
-    // stations ON them so the joined decks meet to the millimetre.
-    if (p0 !== null) alg[0] = p0;
-    if (p1 !== null) alg[n - 1] = p1;
+    // Land the ends ON their anchors only when that is a WELD and not a
+    // WALL: a bolted end-station 30m from the station beside it was the
+    // measured undrivable step. Beyond weld range the soft pin has already
+    // pulled the walk as close as legal grade allows; the residual join
+    // step stays small and the low-bias above makes real conflicts rare.
+    if (p0 !== null && Math.abs(alg[0] - p0) < 4) alg[0] = p0;
+    if (p1 !== null && Math.abs(alg[n - 1] - p1) < 4) alg[n - 1] = p1;
   } else if (mode !== 'none') {
-    // Chord fragments (tagged tunnels and bridges) take the same anchors:
-    // their portal elevations were the raw centreline before, which on a
-    // cliff was the contamination itself.
+    // Chord fragments (tagged tunnels and bridges) anchor their portal
+    // elevations to neighbours where they exist — and where they DON'T, to
+    // the bench estimate, never the raw centreline. A short tagged bridge
+    // that built first on the cliff took a chord between two contaminated
+    // samples and stood as an 80m sky-viaduct that every later neighbour
+    // then ramped up to meet.
     alg = elev.slice();
-    if (p0 !== null) alg[0] = p0;
-    if (p1 !== null) alg[n - 1] = p1;
+    alg[0] = p0 ?? benchAt(0);
+    alg[n - 1] = p1 ?? benchAt(n - 1);
   }
   // Roads get their own longitudinal PROFILE. Terrain draping alone sends a
   // road over every hill in its path; real roads keep grade and go THROUGH.
@@ -4241,7 +4323,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     );
     uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
     if (drivable) {
-      const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name, sq,
+      const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name, sq, fd: fid,
         ca: tilt[i], cb: tilt[i + 1] };
       addSeg(roadGrid, s);
       segsOf.push(s);
@@ -7676,6 +7758,7 @@ function meshHeightAt(x: number, z: number): number | null {
       +sampleHeight(mx, mz).toFixed(2),
       s.tn ? 1 : 0,
       +s.ax.toFixed(1), +s.az.toFixed(1), +s.bx.toFixed(1), +s.bz.toFixed(1),
+      s.fd ?? -1,
     ]);
   }
   return out;
