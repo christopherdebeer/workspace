@@ -3526,6 +3526,17 @@ const cutCells = new Map<string, Seg[]>();     // cell → the strips that cross
  *  nearest point of the strip instead, which keeps the clamp surface parallel
  *  to the deck. */
 function rasterizeCut(s: Seg): void {
+  // A TRACK IS WORN INTO THE GROUND, NOT BUILT ON IT — and it must not carve.
+  // The lattice unit here is the terrain mesh cell (~21m), because that is the
+  // finest thing the mesh can express, so a 3m footpath was excavating a
+  // ~40m-wide flat shelf out of the mountainside and then floating over the
+  // middle of its own excavation: measured on the trails above Chapman's Peak
+  // at a median 2.12m and a worst 4.08m clear of the ground drawn under them,
+  // and never below it, because the carve only ever lowers. Dropped, the same
+  // trails measure 0.41m median and 1.53m worst, and the residual is two-sided
+  // — that part is the mesh interpolating flat between vertices, which every
+  // draped layer shares and which a carriageway hides behind its apron.
+  if (s.tk) return;
   if (s.tn || s.ya === undefined || s.yb === undefined) return;
   const r = s.hw + 0.6;
   const len = Math.hypot(s.bx - s.ax, s.bz - s.az);
@@ -3782,6 +3793,8 @@ const TUNNEL_H = 5;    // clearance of the carved tube
 // carriageway apart. Slack only covers the metre or so that tile clipping and
 // float error move a shared node by.
 const JUNC_R = 3;
+// Off only from a probe (`?noweld=1`), to measure continuity against grade.
+const endWeld = !/[?&]noweld=1/.test(location.search);
 // Off only from a probe (`?nopins=1`), to measure what the pins are worth
 // against the same tiles rather than against memory of a previous run.
 const juncPins = !/[?&]nopins=1/.test(location.search);
@@ -3864,6 +3877,29 @@ function benchFlat(cs: number[]): number {
   return bk < 0 ? med : cs[bk];
 }
 /**
+ * THE RULING GRADE, imposed on a finished profile in place.
+ *
+ * Forward then back, twice: any span steeper than the limit is redistributed
+ * as the longest possible ramp at just over the class grade, rather than left
+ * as a wall for one station to absorb. Absolute truth about a shelf road's
+ * elevation is unknowable in this data; drivability is not negotiable, so this
+ * is a law and not a cost term — every branch that can produce a profile ends
+ * up here, and so does every stage that reshapes one afterwards.
+ */
+function ruleGrade(dense: Array<[number, number]>, y: number[], gLim: number): void {
+  const n = y.length;
+  for (let r = 0; r < 2; r++) {
+    for (let i = 1; i < n; i++) {
+      const d = Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
+      y[i] = clamp(y[i], y[i - 1] - gLim * d, y[i - 1] + gLim * d);
+    }
+    for (let i = n - 2; i >= 1; i--) {
+      const d = Math.max(1, Math.hypot(dense[i + 1][0] - dense[i][0], dense[i + 1][1] - dense[i][1]));
+      y[i] = clamp(y[i], y[i + 1] - gLim * d, y[i + 1] + gLim * d);
+    }
+  }
+}
+/**
  * `pins[i]`, where present, is a height this station must hold — the deck an
  * ALREADY SOLVED road carries at the very same point. Junctions are the one
  * place where two roads have to agree, and OSM's own topology says where they
@@ -3919,24 +3955,10 @@ function solveChain(dense: Array<[number, number]>, maxGrade: number, p0: number
   // to meet them — which is what makes the two ribbons one surface where they
   // touch instead of two terraces with a wall between.
   if (pins) for (let i = 0; i < n; i++) if (pins[i] != null) alg[i] = pins[i] as number;
-  // THE RULING GRADE IS A LAW HERE, not a preference. Where chains solved in
-  // different tiles disagree about the absolute shelf, someone must absorb
-  // the difference — and the DP's soft costs concentrated it into one
-  // fragment as a 70% wall. Sequential slope-limiting (forward then back,
-  // twice) redistributes any infeasible span as a longest-possible ramp at
-  // just over the class grade: absolute truth is unknowable in this data,
-  // drivability is not negotiable.
-  const gLim = gCap * 1.2;
-  for (let r = 0; r < 2; r++) {
-    for (let i = 1; i < n; i++) {
-      const d = Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
-      alg[i] = clamp(alg[i], alg[i - 1] - gLim * d, alg[i - 1] + gLim * d);
-    }
-    for (let i = n - 2; i >= 1; i--) {
-      const d = Math.max(1, Math.hypot(dense[i + 1][0] - dense[i][0], dense[i + 1][1] - dense[i][1]));
-      alg[i] = clamp(alg[i], alg[i + 1] - gLim * d, alg[i + 1] + gLim * d);
-    }
-  }
+  // Where chains solved in different tiles disagree about the absolute shelf,
+  // someone must absorb the difference — and the DP's soft costs concentrated
+  // it into one fragment as a 70% wall.
+  ruleGrade(dense, alg, gCap * 1.2);
   return alg;
 }
 const HINT_CELL = 24;
@@ -4031,8 +4053,16 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // and a fragment covered by them takes them verbatim instead of solving
   // alone. Everything below (defer, crumb continuity, the solo DP) is the
   // fallback for fragments no chain covered.
+  // ITS OWN CHAIN'S HINTS, not the nearest road's. `densifyPts` subdivides each
+  // ORIGINAL segment independently, so the chain pre-pass and this ribbon lay
+  // stations on the same geometry at the same places — a way's own hints are a
+  // few centimetres away, never metres. The general 6m reach is right for
+  // asking "what is the road here"; used as a profile lookup it let a station
+  // pick up a DIFFERENT road passing within six metres, and two neighbouring
+  // stations landing on different roads is a vertical step in the carriageway.
+  // Measured where Coast Road meets Highway 1 at Big Sur.
   const hintEl: Array<number | null> = mode !== 'none' && drivable
-    ? dense.map(([x, z]) => hintAt(x, z)) : [];
+    ? dense.map(([x, z]) => hintAt(x, z, 2.5)) : [];
   const hinted = hintEl.filter((h) => h !== null).length >= n * 0.8 && n > 1;
   // A chaotic anchorless fragment DEFERS: on cliff ground any solve under a
   // few hundred stations is luck, and anchoring propagates whatever luck
@@ -4108,6 +4138,19 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     alg = elev.slice();
     alg[0] = p0 ?? benchAt(0);
     alg[n - 1] = p1 ?? benchAt(n - 1);
+  }
+  // THE RULING GRADE IS A LAW OVER EVERY BRANCH, not a feature of one of them.
+  // It used to live only inside solveChain, so the four branches that do not
+  // call it — hints taken verbatim, the ramp, the hold, the bench — could emit
+  // anything at all. Measured on Highway 1 at Big Sur: 12.66m of rise over
+  // 8.2m of carriageway, a 154% wall on a road whose class ruling grade is 7%,
+  // built by the hint branch. A road that goes vertical is not a road, whatever
+  // produced the numbers, so the limit is applied where the profile LEAVES the
+  // solver rather than at one of the places it is made.
+  const gLim = (maxGrade > 0 ? maxGrade : 0.15) * 1.2;
+  if (mode !== 'none' && n > 1) {
+    alg = alg.slice();   // `alg` may still BE `elev`; the raw samples are read again below
+    ruleGrade(dense, alg, gLim);
   }
   // Roads get their own longitudinal PROFILE. Terrain draping alone sends a
   // road over every hill in its path; real roads keep grade and go THROUGH.
@@ -4273,6 +4316,46 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       if (edgeL[i] > cap) edgeL[i] = cap;
       prof[i] = (edgeR[i] + edgeL[i]) * 0.5;
       tilt[i] = (edgeR[i] - edgeL[i]) * 0.5;
+    }
+    // AND AGAIN, because the hug just rewrote the profile the solver ruled.
+    // It pulls each station down toward its own kerb samples, and on rough
+    // ground neighbouring stations are pulled by very different amounts — the
+    // 1-2-1 smoothing above softens that but bounds nothing, so a 98% step
+    // survived on Coast Road at Big Sur with the pre-hug limit already applied.
+    // The centreline is what "grade" means, so it is the centreline that is
+    // ruled; the cross-fall rides with it and the section simply translates.
+    const before = prof.slice();
+    ruleGrade(dense, prof, gLim);
+    for (let i = 0; i < n; i++) {
+      const dy = prof[i] - before[i];
+      edgeR[i] += dy; edgeL[i] += dy;
+    }
+    // WELD LAST. An anchor is the neighbouring fragment's deck at the node the
+    // two share; the ruling grade is what a vehicle can climb. Where the data
+    // makes those contradict — Chapman's fragments either side of [110,-494]
+    // disagree by 17m about the same point — refusing the weld does not delete
+    // the disagreement, it stands it up as a CLIFF at the join, and a cliff is
+    // the one thing worse than a steep ramp. Measured: ruling the grade without
+    // this took the worst step on that road from 0.54m to 17.34m while fixing
+    // the walls, which is trading one undrivable thing for another.
+    //
+    // So the ends are taken from the neighbours and the residual is spread
+    // linearly over the whole fragment. Where the data is sound both residuals
+    // are centimetres and this does nothing; where it is not, the result is
+    // over the class grade but CONTINUOUS, and as shallow as this fragment's
+    // length allows — which is the same principle the limiter itself follows.
+    const d0 = p0 === null || !endWeld ? 0 : p0 - prof[0];
+    const d1 = p1 === null || !endWeld ? 0 : p1 - prof[n - 1];
+    if (d0 !== 0 || d1 !== 0) {
+      const arc = new Array<number>(n).fill(0);
+      for (let i = 1; i < n; i++) {
+        arc[i] = arc[i - 1] + Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
+      }
+      const total = arc[n - 1] || 1;
+      for (let i = 0; i < n; i++) {
+        const dy = d0 + (d1 - d0) * (arc[i] / total);
+        prof[i] += dy; edgeR[i] += dy; edgeL[i] += dy;
+      }
     }
   }
   const verts: number[] = [];
@@ -8123,6 +8206,31 @@ function meshHeightAt(x: number, z: number): number | null {
 // terrain under that deck sits. A terrace that exists in the terrain is a real
 // hillside; a terrace that exists only in the decks is one the profile solver
 // invented, and the parapets guarding it are guarding nothing.
+/** The steepest built segments near the truck, with the profile branch that
+ *  produced each — `pb` 1 hint, 2 ramp, 3 hold, 4 bench, 5 solo DP, 6 raw. A
+ *  near-vertical piece of carriageway is a law being broken somewhere, and
+ *  the branch says which. */
+(window as unknown as { __steep?: object }).__steep = (r = 400, top = 10): object => {
+  const seen = new Set<Seg>();
+  const rows: object[] = [];
+  const c = Math.ceil(r / GRID);
+  for (let cx = -c; cx <= c; cx++) for (let cz = -c; cz <= c; cz++) {
+    for (const s of roadGrid.get(`${Math.floor(state.x / GRID) + cx},${Math.floor(state.z / GRID) + cz}`) ?? []) {
+      if (seen.has(s) || s.tk || s.ya === undefined) continue;
+      seen.add(s);
+      const len = Math.hypot(s.bx - s.ax, s.bz - s.az);
+      if (len < 0.5) continue;
+      rows.push({ g: +(Math.abs((s.yb as number) - (s.ya as number)) / len * 100).toFixed(0),
+        len: +len.toFixed(1), rise: +((s.yb as number) - (s.ya as number)).toFixed(2),
+        nm: s.nm ?? null, pb: s.pb ?? -1, fd: s.fd ?? -1,
+        at: [+s.ax.toFixed(0), +s.az.toFixed(0)] });
+    }
+  }
+  rows.sort((a, b) => (b as { g: number }).g - (a as { g: number }).g);
+  const gs = rows.map((o) => (o as { g: number }).g);
+  return { segs: rows.length, over20pct: gs.filter((g) => g > 20).length,
+    over50pct: gs.filter((g) => g > 50).length, worst: rows.slice(0, top) };
+};
 /**
  * How far every ribbon near the truck stands off the ground, measured two ways.
  *
