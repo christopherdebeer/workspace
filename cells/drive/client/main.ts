@@ -8080,7 +8080,7 @@ function meshHeightAt(x: number, z: number): number | null {
 // in height. A rail whose crossing deck sits at the same level is a barrier
 // sealing a turning; one whose crossing deck is metres below is a real
 // overbridge and belongs there.
-(window as unknown as { __rails?: object }).__rails = (r = 60): object => {
+(window as unknown as { __railsNear?: object }).__railsNear = (r = 60): object => {
   const out: object[] = [];
   const seen = new Set<Seg>();
   const c = Math.ceil(r / GRID);
@@ -8123,6 +8123,51 @@ function meshHeightAt(x: number, z: number): number | null {
 // terrain under that deck sits. A terrace that exists in the terrain is a real
 // hillside; a terrace that exists only in the decks is one the profile solver
 // invented, and the parapets guarding it are guarding nothing.
+/**
+ * How far every ribbon near the truck stands off the ground, measured two ways.
+ *
+ * `field` is against `sampleHeight` — the bilinear heightfield the ribbon is
+ * DRAWN on, so for a draped way it can only ever be the lift constant.
+ * `mesh` is against the terrain actually rendered, which carries one vertex per
+ * lattice cell and interpolates flat between them. On any convex ground the two
+ * disagree, and that difference is the float you can see. Draped ways (tracks,
+ * paths) are the interesting case: they take no apron skirt to hide it.
+ */
+(window as unknown as { __lift?: object }).__lift = (r = 90): object => {
+  const by = new Map<string, { f: number[]; m: number[]; c: number[] }>();
+  const seen = new Set<Seg>();
+  const c = Math.ceil(r / GRID);
+  for (let cx = -c; cx <= c; cx++) for (let cz = -c; cz <= c; cz++) {
+    for (const s of roadGrid.get(`${Math.floor(state.x / GRID) + cx},${Math.floor(state.z / GRID) + cz}`) ?? []) {
+      if (seen.has(s) || s.tn || s.ya === undefined) continue;
+      seen.add(s);
+      const mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2;
+      if (Math.hypot(state.x - mx, state.z - mz) > r) continue;
+      // What the ribbon's own vertices carry here: draped ways follow the
+      // field, profiled ones hold their solved deck.
+      const lift = s.tk ? SURFACE.track.lift : SURFACE.road.lift;
+      const drawn = (s.tk ? sampleHeight(mx, mz) : ((s.ya as number) + (s.yb as number)) / 2) + lift;
+      const k = `${s.nm ?? '?'}${s.tk ? ' [track]' : ''}`;
+      let e = by.get(k);
+      if (!e) by.set(k, (e = { f: [], m: [], c: [] }));
+      e.f.push(drawn - sampleHeight(mx, mz));
+      const mh = meshHeightAt(mx, mz);
+      if (mh !== null) e.m.push(drawn - mh);
+      // The height the CUT was rasterized at (`ya`) against the height the
+      // ribbon was DRAWN at. For a profiled road these are the same number by
+      // construction; for a draped one they need not be, and if they are not
+      // the terrain is excavated to a level the way does not sit on.
+      e.c.push(((s.ya as number) + (s.yb as number)) / 2 - sampleHeight(mx, mz));
+    }
+  }
+  const band = (v: number[]): number[] | null => {
+    if (!v.length) return null;
+    const a = v.slice().sort((p, q) => p - q);
+    return [+a[0].toFixed(2), +a[a.length >> 1].toFixed(2), +a[a.length - 1].toFixed(2)];
+  };
+  return [...by].map(([k, e]) => ({ nm: k, segs: e.f.length,
+    overField: band(e.f), overMesh: band(e.m), cutVsDrawn: band(e.c) })).sort((a, b) => b.segs - a.segs);
+};
 // How much junction reconciliation actually happened: stations pinned to a
 // neighbouring road's settled deck, and kerb quads opened as a turning.
 (window as unknown as { __junc?: object }).__junc = (): object =>
