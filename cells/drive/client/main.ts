@@ -2995,6 +2995,9 @@ interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?:
   /** Which ribbon() build this segment came from — probe-only, for
    *  attributing profile discontinuities to fragment boundaries. */
   fd?: number;
+  /** Which profile branch produced it: 1 hint, 2 ramp, 3 hold, 4 bench,
+   *  5 solo DP, 6 raw/none — probe-only. */
+  pb?: number;
   /** PORTAL PORCH: raise this segment's cut plane by this many metres. The
    *  first and last stations of a tunnel tube are cut to just above the
    *  collar rather than exempted — full exemption left the terrain mesh
@@ -3740,8 +3743,12 @@ function deckAnchorAt(x: number, z: number): number | null {
 // CHAINS a tile's drivable ways end-to-end and solves the bench DP over the
 // whole chain — hundreds of stations of real evidence — publishing the
 // result as PROFILE HINTS that ribbon() consumes instead of solving alone.
-const BENCH_OFFS = [-24, -12, 0, 12, 24];
+// ±3 real DEM samples: misregistration on the worst cliffs exceeds two
+// pixels, and ±24m left the true bench just out of reach — measured at
+// Chapman's km 7.5, where the road sits 60m below a plateau-locked line.
+const BENCH_OFFS = [-45, -30, -15, 0, 15, 30, 45];
 const BENCH_K = BENCH_OFFS.length;
+const BENCH_C = BENCH_K >> 1;
 function densifyPts(pts: Array<[number, number]>): Array<[number, number]> {
   const dense: Array<[number, number]> = [pts[0]];
   for (let i = 1; i < pts.length; i++) {
@@ -3760,15 +3767,19 @@ function latCandsFor(dense: Array<[number, number]>, i: number): number[] {
   return BENCH_OFFS.map((o) => sampleHeight(x + px2 * o, z + pz2 * o));
 }
 function benchFlat(cs: number[]): number {
-  // Banded to the cross-section's MEDIAN: on a coast road the flattest thing
-  // in reach is the OCEAN, and an unbanded flatness search walked the road
-  // seventy metres down into it. The clifftop plateau falls to the same band.
+  // The flattest candidate that is NOT the water: on a coast road the
+  // flattest thing in reach is the OCEAN, and an unbanded search walked the
+  // road seventy metres down into it. Anything within 8m of the section's
+  // minimum is treated as the sea/lowest slope and excluded; where that
+  // excludes everything (ordinary flat ground) the spread is tiny and the
+  // answer is the median anyway.
+  const lo = Math.min(...cs);
   const sorted = cs.slice().sort((a, b) => a - b);
   const med = sorted[BENCH_K >> 1];
   let bk = -1, bg = Infinity;
   for (let k = 1; k < BENCH_K - 1; k++) {
-    if (Math.abs(cs[k] - med) > 25) continue;
-    const g = Math.abs(cs[k + 1] - cs[k - 1]) + Math.abs(BENCH_OFFS[k]) * 0.08;
+    if (cs[k] < lo + 8) continue;
+    const g = Math.abs(cs[k + 1] - cs[k - 1]) + Math.abs(BENCH_OFFS[k]) * 0.06;
     if (g < bg) { bg = g; bk = k; }
   }
   return bk < 0 ? med : cs[bk];
@@ -3811,6 +3822,24 @@ function solveChain(dense: Array<[number, number]>, maxGrade: number, p0: number
   const alg = cand.map((cs, i) => cs[pick[i]]);
   if (p0 !== null && Math.abs(alg[0] - p0) < 4) alg[0] = p0;
   if (p1 !== null && Math.abs(alg[n - 1] - p1) < 4) alg[n - 1] = p1;
+  // THE RULING GRADE IS A LAW HERE, not a preference. Where chains solved in
+  // different tiles disagree about the absolute shelf, someone must absorb
+  // the difference — and the DP's soft costs concentrated it into one
+  // fragment as a 70% wall. Sequential slope-limiting (forward then back,
+  // twice) redistributes any infeasible span as a longest-possible ramp at
+  // just over the class grade: absolute truth is unknowable in this data,
+  // drivability is not negotiable.
+  const gLim = gCap * 1.2;
+  for (let r = 0; r < 2; r++) {
+    for (let i = 1; i < n; i++) {
+      const d = Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
+      alg[i] = clamp(alg[i], alg[i - 1] - gLim * d, alg[i - 1] + gLim * d);
+    }
+    for (let i = n - 2; i >= 1; i--) {
+      const d = Math.max(1, Math.hypot(dense[i + 1][0] - dense[i][0], dense[i + 1][1] - dense[i][1]));
+      alg[i] = clamp(alg[i], alg[i + 1] - gLim * d, alg[i + 1] + gLim * d);
+    }
+  }
   return alg;
 }
 const HINT_CELL = 24;
@@ -3898,7 +3927,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const benchAt = (i: number): number => {
     const cs = latCands(i);
     const f = clamp(Math.abs(cs[K - 1] - cs[0]) / 18, 0, 1);
-    return cs[2] + (flatOf(cs) - cs[2]) * f;
+    return cs[BENCH_C] + (flatOf(cs) - cs[BENCH_C]) * f;
   };
   // THE WHOLE-WAY SOLVE, when renderWays has one: hints are the chain's
   // profile — continuous across every fragment of this road in the tile —
@@ -3927,6 +3956,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     }
   }
   let alg = elev;
+  let pbranch = 6;
   // A CRUMB CANNOT PROFILE ITSELF. OSM splits a mountain road at every
   // structure change — Chapman's Peak alternates gallery / open road / gallery
   // in 40-55m pieces — and a fragment eight stations long is too short for
@@ -3943,6 +3973,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     return false;
   };
   if (hinted) {
+    pbranch = 1;
     const idxs: number[] = [];
     for (let i = 0; i < n; i++) if (hintEl[i] !== null) idxs.push(i);
     alg = dense.map((_, i) => {
@@ -3954,17 +3985,21 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     if (p1 !== null && Math.abs(alg[n - 1] - p1) < 4) alg[n - 1] = p1;
   } else if (mode === 'auto' && (n <= 16 || (n <= 40 && chaoticHere() && (p0 !== null || p1 !== null)))) {
     if (p0 !== null && p1 !== null) {
+      pbranch = 2;
       alg = elev.map((_, i) => p0 + ((p1 - p0) * i) / (n - 1));
     } else if (p0 !== null || p1 !== null) {
       // LEVEL, not drifted: every DEM-derived drift term tried here smuggled
       // the plateau back in one crumb at a time — a 40-90m gallery shelf is
       // engineered near-level, and holding the anchor is closer to truth.
+      pbranch = 3;
       const a = (p0 ?? p1) as number;
       alg = elev.map(() => a);
     } else {
+      pbranch = 4;
       alg = elev.map((_, i) => benchAt(i));
     }
   } else if (mode === 'auto' && n > 4) {
+    pbranch = 5;
     alg = solveChain(dense, maxGrade, p0, p1);
   } else if (mode !== 'none') {
     // Chord fragments (tagged tunnels and bridges) anchor their portal
@@ -4376,7 +4411,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     );
     uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
     if (drivable) {
-      const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name, sq, fd: fid,
+      const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name, sq, fd: fid, pb: pbranch,
         ca: tilt[i], cb: tilt[i + 1] };
       addSeg(roadGrid, s);
       segsOf.push(s);
@@ -7860,7 +7895,7 @@ function meshHeightAt(x: number, z: number): number | null {
       +sampleHeight(mx, mz).toFixed(2),
       s.tn ? 1 : 0,
       +s.ax.toFixed(1), +s.az.toFixed(1), +s.bx.toFixed(1), +s.bz.toFixed(1),
-      s.fd ?? -1,
+      s.fd ?? -1, s.pb ?? -1,
     ]);
   }
   return out;
