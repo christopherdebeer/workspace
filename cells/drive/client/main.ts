@@ -3325,29 +3325,93 @@ function segsCross(
   const s4 = (dx - cx) * (bz - cz) - (dz - cz) * (bx - cx);
   return s1 > 0 !== s2 > 0 && s3 > 0 !== s4 > 0;
 }
+/** Shortest distance between two 2D segments. */
+function segSegDist(
+  ax: number, az: number, bx: number, bz: number,
+  cx: number, cz: number, dx: number, dz: number,
+): number {
+  if (segsCross(ax, az, bx, bz, cx, cz, dx, dz)) return 0;
+  return Math.min(
+    ptSegDist(ax, az, cx, cz, dx, dz), ptSegDist(bx, bz, cx, cz, dx, dz),
+    ptSegDist(cx, cz, ax, az, bx, bz), ptSegDist(dx, dz, ax, az, bx, bz),
+  );
+}
+/** Distance from a point to a segment. */
+function ptSegDist(px: number, pz: number, qx: number, qz: number, rx: number, rz: number): number {
+  const ux = rx - qx, uz = rz - qz;
+  const t = clamp(((px - qx) * ux + (pz - qz) * uz) / (ux * ux + uz * uz || 1), 0, 1);
+  return Math.hypot(px - (qx + ux * t), pz - (qz + uz * t));
+}
+// WHERE ROADS MEET, recorded as the chains are solved. The profile solver
+// already finds these — a station of one road sitting on the settled deck of
+// another — and it finds them from OSM's topology, which is the only witness
+// that knows a turning from a flyover. Recording them makes the answer
+// available to whichever of the two ribbons is built FIRST: the road grid only
+// ever holds what has already been drawn, so a test against it alone leaves the
+// main road walled off by a side road that had not streamed in yet.
+const juncGrid = new Map<string, Array<[number, number]>>();
+const juncStats = { pinned: 0, opened: 0 };
+function noteJunction(x: number, z: number): void {
+  juncStats.pinned++;
+  if (juncGrid.size > 8000) juncGrid.clear();
+  const k = gkey(x, z);
+  const arr = juncGrid.get(k);
+  if (arr) { if (arr.length < 400) arr.push([x, z]); } else juncGrid.set(k, [[x, z]]);
+}
 /**
- * Does a parapet run here cut across another road?
+ * Is this stretch of road the mouth of a turning?
  *
- * A rail is drawn parallel to its own centreline, so its own road can never
- * cross it — but a side road joining does, and a barrier sealing off a
- * junction is both wrong to look at and wrong to drive. The test is a genuine
- * crossing rather than a proximity check precisely because of that asymmetry:
- * proximity would fire on the road the rail belongs to.
+ * A parapet across a side road, and a wall of cut face under it, is both wrong
+ * to look at and wrong to drive — so the kerb opens wherever another road
+ * reaches it. Three things make that judgement safe:
+ *
+ * WIDTH, not centreline. A side road ENDS at the main road's edge as often as
+ * it crosses it, and its last node sits on the main centreline rather than past
+ * it, so a strict crossing test misses every T-junction — which is most of
+ * them. Both carriageways' half-widths are what have to touch.
+ *
+ * HEIGHT. A road passing metres below is a flyover, not a turning, and that is
+ * the one case where the parapet is the whole point. GRADE_SEP separates them.
+ *
+ * THE ROAD ITSELF. Its own segments are always within reach — and on a hairpin
+ * the limb below is too. Both are excluded by identity (same fragment, or same
+ * name) as well as by heading, because a hairpin's two limbs are neither
+ * parallel nor a junction, and dropping the rail between them is exactly the
+ * failure the rail exists to prevent.
  */
-function railCrossesRoad(ax: number, az: number, bx: number, bz: number): boolean {
+function roadMeetsHere(
+  ax: number, az: number, bx: number, bz: number, hw: number, y: number, fid: number, name?: string,
+): boolean {
   const L = Math.hypot(bx - ax, bz - az);
   // Reach a little past each end, so the gap opens wide enough to drive through
   // rather than leaving a stub of rail across the mouth of the turning.
   const ex = L > 0.01 ? ((bx - ax) / L) * 5 : 0, ez = L > 0.01 ? ((bz - az) / L) * 5 : 0;
   const x0 = ax - ex, z0 = az - ez, x1 = bx + ex, z1 = bz + ez;
+  const rl = Math.hypot(x1 - x0, z1 - z0) || 1;
+  const ux = (x1 - x0) / rl, uz = (z1 - z0) / rl;
   const seen = new Set<Seg>();
-  const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / (GRID / 2)));
+  const steps = Math.max(1, Math.ceil(rl / (GRID / 2)));
   for (let s = 0; s <= steps; s++) {
     const t = s / steps;
-    for (const seg of roadGrid.get(gkey(x0 + (x1 - x0) * t, z0 + (z1 - z0) * t)) ?? []) {
+    const qx = x0 + (x1 - x0) * t, qz = z0 + (z1 - z0) * t;
+    // A junction the solver already established here. It sits on this very
+    // centreline, so no width allowance is needed and no height test either:
+    // the pin that recorded it is what made the two decks agree.
+    for (const [jx, jz] of juncGrid.get(gkey(qx, qz)) ?? []) {
+      if (ptSegDist(jx, jz, x0, z0, x1, z1) < hw + 2) return true;
+    }
+    for (const seg of roadGrid.get(gkey(qx, qz)) ?? []) {
       if (seen.has(seg)) continue;
       seen.add(seg);
-      if (segsCross(x0, z0, x1, z1, seg.ax, seg.az, seg.bx, seg.bz)) return true;
+      // A footpath crossing is not somewhere a truck turns off.
+      if (seg.tk || seg.ya === undefined || seg.yb === undefined) continue;
+      if (seg.fd === fid || (name !== undefined && seg.nm === name)) continue;
+      const l = Math.hypot(seg.bx - seg.ax, seg.bz - seg.az) || 1;
+      // |cos| so the far carriageway of a dual road counts as parallel too.
+      if (Math.abs(ux * ((seg.bx - seg.ax) / l) + uz * ((seg.bz - seg.az) / l)) > 0.82) continue;
+      if (segSegDist(x0, z0, x1, z1, seg.ax, seg.az, seg.bx, seg.bz) - seg.hw - hw > 1.5) continue;
+      if (Math.abs((seg.ya + seg.yb) / 2 + SURFACE.road.lift - y) >= GRADE_SEP) continue;
+      return true;
     }
   }
   return false;
@@ -3712,6 +3776,21 @@ let ribbonSeq = 0;
 const crumbDefer = new Map<string, number>();
 const TUNNEL_TOL = 5;  // metres of terrain above the smoothed profile ⇒ tunnel
 const TUNNEL_H = 5;    // clearance of the carved tube
+// How close another road's solved deck must lie to a station before the two are
+// treated as meeting. Deliberately tight: ways that JOIN share a node, so the
+// distance is ~0, while two distinct roads running side by side are at least a
+// carriageway apart. Slack only covers the metre or so that tile clipping and
+// float error move a shared node by.
+const JUNC_R = 3;
+// Off only from a probe (`?nopins=1`), to measure what the pins are worth
+// against the same tiles rather than against memory of a previous run.
+const juncPins = !/[?&]nopins=1/.test(location.search);
+// Height difference past which two roads at the same spot are passing OVER one
+// another rather than meeting — the one case that still earns a parapet across
+// the other road's line. Below it there is a turning here, and a barrier across
+// a turning is both wrong to look at and wrong to drive.
+const GRADE_SEP = 2.6;
+const RAIL_H = 1;      // parapet height above the kerb it stands on
 /** The deck height an ALREADY BUILT road holds at (x,z), if any fragment ends
  *  there — the continuity anchor for the fragment about to build. Fragments of
  *  one way arrive independently (tile clipping, tag changes chop a road into
@@ -3784,7 +3863,17 @@ function benchFlat(cs: number[]): number {
   }
   return bk < 0 ? med : cs[bk];
 }
-function solveChain(dense: Array<[number, number]>, maxGrade: number, p0: number | null, p1: number | null): number[] {
+/**
+ * `pins[i]`, where present, is a height this station must hold — the deck an
+ * ALREADY SOLVED road carries at the very same point. Junctions are the one
+ * place where two roads have to agree, and OSM's own topology says where they
+ * are: two ways that meet share a node, and two ways that cross without one
+ * are grade separated. So a pin is simply "another road's solved deck lies
+ * within a whisker of this station", and the fact that it does is the evidence
+ * that you can turn there.
+ */
+function solveChain(dense: Array<[number, number]>, maxGrade: number, p0: number | null, p1: number | null,
+  pins?: Array<number | null>): number[] {
   const n = dense.length;
   const cand: number[][] = [];
   for (let i = 0; i < n; i++) cand.push(latCandsFor(dense, i));
@@ -3795,7 +3884,8 @@ function solveChain(dense: Array<[number, number]>, maxGrade: number, p0: number
   let prevC: number[] = cand[0].map((e, k) =>
     Math.abs(BENCH_OFFS[k]) * W_OFF * (1 - 0.75 * free[0])
     + Math.abs(e - flat[0]) * 0.5 * free[0]
-    + (p0 === null ? 0 : Math.abs(e - p0) * W_PIN));
+    + (p0 === null ? 0 : Math.abs(e - p0) * W_PIN)
+    + (pins?.[0] == null ? 0 : Math.abs(e - (pins[0] as number)) * W_PIN));
   const from: Int8Array[] = [];
   for (let i = 1; i < n; i++) {
     const d = Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
@@ -3804,7 +3894,8 @@ function solveChain(dense: Array<[number, number]>, maxGrade: number, p0: number
     for (let k = 0; k < BENCH_K; k++) {
       const stat = Math.abs(BENCH_OFFS[k]) * W_OFF * (1 - 0.75 * free[i])
         + Math.abs(cand[i][k] - flat[i]) * 0.5 * free[i]
-        + (i === n - 1 && p1 !== null ? Math.abs(cand[i][k] - p1) * W_PIN : 0);
+        + (i === n - 1 && p1 !== null ? Math.abs(cand[i][k] - p1) * W_PIN : 0)
+        + (pins?.[i] == null ? 0 : Math.abs(cand[i][k] - (pins[i] as number)) * W_PIN);
       for (let j = 0; j < BENCH_K; j++) {
         if (prevC[j] >= INF) continue;
         const excess = Math.max(0, Math.abs(cand[i][k] - cand[i - 1][j]) - gCap * d);
@@ -3822,6 +3913,12 @@ function solveChain(dense: Array<[number, number]>, maxGrade: number, p0: number
   const alg = cand.map((cs, i) => cs[pick[i]]);
   if (p0 !== null && Math.abs(alg[0] - p0) < 4) alg[0] = p0;
   if (p1 !== null && Math.abs(alg[n - 1] - p1) < 4) alg[n - 1] = p1;
+  // A junction pin is not a preference. The lateral candidates are DEM samples
+  // and none of them need land on the neighbour's deck, so the pinned stations
+  // are seated exactly and the slope limiter below ramps the rest of the chain
+  // to meet them — which is what makes the two ribbons one surface where they
+  // touch instead of two terraces with a wall between.
+  if (pins) for (let i = 0; i < n; i++) if (pins[i] != null) alg[i] = pins[i] as number;
   // THE RULING GRADE IS A LAW HERE, not a preference. Where chains solved in
   // different tiles disagree about the absolute shelf, someone must absorb
   // the difference — and the DP's soft costs concentrated it into one
@@ -3854,8 +3951,8 @@ function writeHints(dense: Array<[number, number]>, alg: number[]): void {
     if (arr) arr.push(e); else profileHints.set(k, [e]);
   }
 }
-function hintAt(x: number, z: number): number | null {
-  let best: number | null = null, bd = 6;
+function hintAt(x: number, z: number, reach = 6): number | null {
+  let best: number | null = null, bd = reach;
   for (const dx of [0, -HINT_CELL, HINT_CELL]) for (const dz of [0, -HINT_CELL, HINT_CELL]) {
     const arr = profileHints.get(`${Math.floor((x + dx) / HINT_CELL)},${Math.floor((z + dz) / HINT_CELL)}`);
     if (arr) for (const [hx, hz, he] of arr) {
@@ -4192,7 +4289,6 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const PIER_AT = 5;      // daylight past which a span needs holding up
   const PIER_SPAN = 26;   // metres between piers
   const RAIL_AT = 2.6;    // drop past the kerb that earns a parapet
-  const RAIL_H = 1;       // parapet height
   // 2×CAR_R of push-out plus a lane to drive in. Below this a barrier would
   // protect you from the drop by wedging you against the cliff instead.
   const RAIL_MIN_W = 2 * CAR_R + 2.4;
@@ -4434,25 +4530,32 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         const g1 = Math.min(sampleHeight(ex1, ez1), sampleHeight(ex1 + ox * sgn, ez1 + oz * sgn));
         const b0 = deck ? ey0 - dd : Math.max(Math.min(ey0, g0) - APRON, ey0 - APRON_MAX);
         const b1 = deck ? ey1 - dd : Math.max(Math.min(ey1, g1) - APRON, ey1 - APRON_MAX);
-        face(ex0, ey0, ez0, ex1, ey1, ez1, b0, b1, uA, uB, deck);
-        bot.push(b0, b1);
-        drop.push(Math.max(ey0 - g0, ey1 - g1));
         // A parapet wherever the ground falls away past the kerb — the seaward
         // side of a shelf road as much as a bridge. It is the only thing that
         // tells you, at a glance, that the edge is an edge.
         // From the dilated map above, not from this quad's own drop.
         const sd = sgn > 0 ? 0 : 1;
-        if (railOn[sd][i] || railOn[sd][i + 1]) {
+        const railHere = railOn[sd][i] || railOn[sd][i + 1];
+        // A WALL of cut face across a side road is the same fault as a barrier
+        // across it — you cannot turn through either — so both ask the same
+        // question. Only asked where something stands in the way at all: the
+        // answer costs a walk over the road grid, and on flat ground the fascia
+        // is a kerb lip that blocks nothing.
+        const open = (railHere || Math.max(ey0 - b0, ey1 - b1) > 1.2)
+          && roadMeetsHere(x0, z0, x1, z1, width / 2, (ey0 + ey1) / 2, fid, name);
+        if (open) juncStats.opened++;
+        // Where it opens, the fascia is cut back to a kerb lip: enough to close
+        // the seam between the two decks, not enough to be a wall between them.
+        // Dropping it altogether opened daylight under the ribbon's own edge.
+        face(ex0, ey0, ez0, ex1, ey1, ez1, open ? ey0 - 0.35 : b0, open ? ey1 - 0.35 : b1, uA, uB, deck);
+        bot.push(b0, b1);
+        drop.push(Math.max(ey0 - g0, ey1 - g1));
+        if (railHere && !open) {
           // Right on the kerb line, not outboard of it: set any further out and
           // the parapet hangs in the air beside its own fascia.
           const rx0 = ex0 + ox * sgn * 0.04, rz0 = ez0 + oz * sgn * 0.04;
           const rx1 = ex1 + ox * sgn * 0.04, rz1 = ez1 + oz * sgn * 0.04;
-          // Open at junctions. This deliberately reintroduces the kind of gap
-          // the dilated rail map exists to prevent — but a gap where a road
-          // leaves is a turning, not a hole over a drop.
-          if (!railCrossesRoad(rx0, rz0, rx1, rz1)) {
-            rail(rx0, ey0, rz0, rx1, ey1, rz1, along / 2.5, (along + len) / 2.5);
-          }
+          rail(rx0, ey0, rz0, rx1, ey1, rz1, along / 2.5, (along + len) / 2.5);
         }
       }
       // ── roadside furniture ──
@@ -5179,8 +5282,19 @@ function renderWays(els: OsmWay[]): void {
       if (dense.length < 8) continue;                  // single crumbs keep the fallback path
       const a0 = deckAnchorAt(dense[0][0], dense[0][1]);
       const a1 = deckAnchorAt(dense[dense.length - 1][0], dense[dense.length - 1][1]);
+      // JUNCTION PINS. Chains are solved one after another, so `profileHints`
+      // holds every road settled before this one — earlier chains this tile,
+      // and every tile already streamed. A hint sitting within JUNC_R of a
+      // station is another road's deck at this exact spot, which in OSM means
+      // the two ways share a node: a junction. Roads that cross WITHOUT a
+      // shared node are grade separated, their vertices land nowhere near each
+      // other, and nothing is pinned — which is precisely the distinction
+      // between a turning and a flyover, taken from the data rather than
+      // guessed from heights.
+      const pins = dense.map(([px, pz]) => (juncPins ? hintAt(px, pz, JUNC_R) : null));
+      for (let i = 0; i < dense.length; i++) if (pins[i] != null) noteJunction(dense[i][0], dense[i][1]);
       const alg = solveChain(dense, Math.min(...chain.map((m) => m.g)),
-        a0 === null ? null : a0 - SURFACE.road.lift, a1 === null ? null : a1 - SURFACE.road.lift);
+        a0 === null ? null : a0 - SURFACE.road.lift, a1 === null ? null : a1 - SURFACE.road.lift, pins);
       writeHints(dense, alg);
       for (const m of chain) hintedWays.add(m.key);
     }
@@ -7896,6 +8010,8 @@ function meshHeightAt(x: number, z: number): number | null {
       s.tn ? 1 : 0,
       +s.ax.toFixed(1), +s.az.toFixed(1), +s.bx.toFixed(1), +s.bz.toFixed(1),
       s.fd ?? -1, s.pb ?? -1,
+      s.ya === undefined ? NaN : +(s.ya as number).toFixed(2),
+      s.yb === undefined ? NaN : +(s.yb as number).toFixed(2),
     ]);
   }
   return out;
@@ -7958,6 +8074,95 @@ function meshHeightAt(x: number, z: number): number | null {
   }
   return { walls: count, nearest: near === Infinity ? null : +near.toFixed(2),
     at, topY: top === null ? null : +top.toFixed(2), carR: CAR_R };
+};
+// Every parapet run near the truck, and what each one is standing across:
+// which drivable decks its line crosses, and by how much their surfaces differ
+// in height. A rail whose crossing deck sits at the same level is a barrier
+// sealing a turning; one whose crossing deck is metres below is a real
+// overbridge and belongs there.
+(window as unknown as { __rails?: object }).__rails = (r = 60): object => {
+  const out: object[] = [];
+  const seen = new Set<Seg>();
+  const c = Math.ceil(r / GRID);
+  for (let cx = -c; cx <= c; cx++) for (let cz = -c; cz <= c; cz++) {
+    for (const w of wallGrid.get(`${Math.floor(state.x / GRID) + cx},${Math.floor(state.z / GRID) + cz}`) ?? []) {
+      if (!w.sl || seen.has(w)) continue;
+      seen.add(w);
+      const [px, pz] = closestOnSeg(state.x, state.z, w);
+      const d = Math.hypot(state.x - px, state.z - pz);
+      if (d > r) continue;
+      // Every non-parallel carriageway this parapet stands across, with the gap
+      // between the two decks. A rail with a hit under GRADE_SEP is a barrier
+      // across a turning and should not exist; one with a hit above it is an
+      // overbridge parapet and should.
+      const hits: object[] = [];
+      const rd = new Set<Seg>();
+      const wl = Math.hypot(w.bx - w.ax, w.bz - w.az) || 1;
+      const ux = (w.bx - w.ax) / wl, uz = (w.bz - w.az) / wl;
+      for (const t of [0, 0.5, 1]) {
+        const qx = w.ax + (w.bx - w.ax) * t, qz = w.az + (w.bz - w.az) * t;
+        for (const s of roadGrid.get(gkey(qx, qz)) ?? []) {
+          if (rd.has(s) || s.tk || s.ya === undefined) continue;
+          rd.add(s);
+          const l = Math.hypot(s.bx - s.ax, s.bz - s.az) || 1;
+          if (Math.abs(ux * ((s.bx - s.ax) / l) + uz * ((s.bz - s.az) / l)) > 0.82) continue;
+          const gap = segSegDist(w.ax, w.az, w.bx, w.bz, s.ax, s.az, s.bx, s.bz) - s.hw;
+          if (gap > 1.5) continue;
+          hits.push({ nm: s.nm ?? null,
+            dy: +((s.ya + (s.yb ?? s.ya)) / 2 + SURFACE.road.lift - ((w.ya ?? 0) - RAIL_H)).toFixed(2) });
+        }
+      }
+      out.push({ d: +d.toFixed(1), top: +(w.ya ?? 0).toFixed(2),
+        len: +wl.toFixed(1), crosses: hits });
+    }
+  }
+  out.sort((a, b) => (a as { d: number }).d - (b as { d: number }).d);
+  return { rails: out.length, crossing: out.filter((o) => (o as { crosses: object[] }).crosses.length).length, list: out.slice(0, 24) };
+};
+// Every distinct road near the truck: how high its deck sits, and how high the
+// terrain under that deck sits. A terrace that exists in the terrain is a real
+// hillside; a terrace that exists only in the decks is one the profile solver
+// invented, and the parapets guarding it are guarding nothing.
+// How much junction reconciliation actually happened: stations pinned to a
+// neighbouring road's settled deck, and kerb quads opened as a turning.
+(window as unknown as { __junc?: object }).__junc = (): object =>
+  ({ pins: juncPins, ...juncStats, points: juncGrid.size });
+(window as unknown as { __decks?: object }).__decks = (r = 70): object => {
+  const by = new Map<string, { n: number; dlo: number; dhi: number; glo: number; ghi: number; drop: number; out: number[] }>();
+  const seen = new Set<Seg>();
+  const c = Math.ceil(r / GRID);
+  for (let cx = -c; cx <= c; cx++) for (let cz = -c; cz <= c; cz++) {
+    for (const s of roadGrid.get(`${Math.floor(state.x / GRID) + cx},${Math.floor(state.z / GRID) + cz}`) ?? []) {
+      if (seen.has(s)) continue;
+      seen.add(s);
+      const mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2;
+      if (Math.hypot(state.x - mx, state.z - mz) > r) continue;
+      const k = `${s.nm ?? '?'}${s.tk ? ' (track)' : ''}`;
+      let e = by.get(k);
+      if (!e) by.set(k, (e = { n: 0, dlo: Infinity, dhi: -Infinity, glo: Infinity, ghi: -Infinity, drop: 0, out: [0, 0, 0] }));
+      const d = ((s.ya ?? 0) + (s.yb ?? 0)) / 2 + SURFACE.road.lift;
+      const g = sampleHeight(mx, mz);
+      // The kerb drop the rail rule actually reads: ground a half-width out.
+      const dx = s.bx - s.ax, dz = s.bz - s.az, l = Math.hypot(dx, dz) || 1;
+      const kx = (-dz / l) * s.hw, kz = (dx / l) * s.hw;
+      const kd = Math.max(d - sampleHeight(mx + kx, mz + kz), d - sampleHeight(mx - kx, mz - kz));
+      e.n++;
+      e.dlo = Math.min(e.dlo, d); e.dhi = Math.max(e.dhi, d);
+      e.glo = Math.min(e.glo, g); e.ghi = Math.max(e.ghi, g);
+      e.drop = Math.max(e.drop, kd);
+      // Does the fall KEEP GOING? A hillside does; a one-pixel DEM ripple does
+      // not. Sampled on whichever side the kerb drop was worse.
+      const sgn = d - sampleHeight(mx + kx, mz + kz) >= d - sampleHeight(mx - kx, mz - kz) ? 1 : -1;
+      for (let j = 0; j < 3; j++) {
+        const o = [3, 8, 16][j] / (Math.hypot(kx, kz) || 1);
+        e.out[j] = Math.max(e.out[j], d - sampleHeight(mx + kx * (sgn + o * sgn), mz + kz * (sgn + o * sgn)));
+      }
+    }
+  }
+  return [...by].map(([k, e]) => ({ nm: k, segs: e.n,
+    deck: [+e.dlo.toFixed(1), +e.dhi.toFixed(1)], terr: [+e.glo.toFixed(1), +e.ghi.toFixed(1)],
+    maxKerbDrop: +e.drop.toFixed(2), fallAt3_8_16: e.out.map((v) => +v.toFixed(2)) }))
+    .sort((a, b) => b.segs - a.segs);
 };
 (window as unknown as { __roadDir?: (x: number, z: number) => [number, number] | null }).__roadDir = (x, z) => {
   let best: Seg | null = null, bd = Infinity;
