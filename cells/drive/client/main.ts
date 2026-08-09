@@ -3733,6 +3733,109 @@ function deckAnchorAt(x: number, z: number): number | null {
   }
   return best;
 }
+
+// ── the whole-way profile solver ───────────────────────────────────
+// OSM chops a road at every structure change and tile edge; fragments
+// solving alone on cliff ground pick branches by luck. So renderWays first
+// CHAINS a tile's drivable ways end-to-end and solves the bench DP over the
+// whole chain — hundreds of stations of real evidence — publishing the
+// result as PROFILE HINTS that ribbon() consumes instead of solving alone.
+const BENCH_OFFS = [-24, -12, 0, 12, 24];
+const BENCH_K = BENCH_OFFS.length;
+function densifyPts(pts: Array<[number, number]>): Array<[number, number]> {
+  const dense: Array<[number, number]> = [pts[0]];
+  for (let i = 1; i < pts.length; i++) {
+    const [ax, az] = pts[i - 1], [bx, bz] = pts[i];
+    const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 12));
+    for (let s = 1; s <= steps; s++) dense.push([ax + ((bx - ax) * s) / steps, az + ((bz - az) * s) / steps]);
+  }
+  return dense;
+}
+function latCandsFor(dense: Array<[number, number]>, i: number): number[] {
+  const n = dense.length;
+  const [x, z] = dense[i];
+  const [ax2, az2] = dense[Math.max(0, i - 1)], [bx2, bz2] = dense[Math.min(n - 1, i + 1)];
+  const tx = bx2 - ax2, tz = bz2 - az2, tl = Math.hypot(tx, tz) || 1;
+  const px2 = -tz / tl, pz2 = tx / tl;
+  return BENCH_OFFS.map((o) => sampleHeight(x + px2 * o, z + pz2 * o));
+}
+function benchFlat(cs: number[]): number {
+  // Banded to the cross-section's MEDIAN: on a coast road the flattest thing
+  // in reach is the OCEAN, and an unbanded flatness search walked the road
+  // seventy metres down into it. The clifftop plateau falls to the same band.
+  const sorted = cs.slice().sort((a, b) => a - b);
+  const med = sorted[BENCH_K >> 1];
+  let bk = -1, bg = Infinity;
+  for (let k = 1; k < BENCH_K - 1; k++) {
+    if (Math.abs(cs[k] - med) > 25) continue;
+    const g = Math.abs(cs[k + 1] - cs[k - 1]) + Math.abs(BENCH_OFFS[k]) * 0.08;
+    if (g < bg) { bg = g; bk = k; }
+  }
+  return bk < 0 ? med : cs[bk];
+}
+function solveChain(dense: Array<[number, number]>, maxGrade: number, p0: number | null, p1: number | null): number[] {
+  const n = dense.length;
+  const cand: number[][] = [];
+  for (let i = 0; i < n; i++) cand.push(latCandsFor(dense, i));
+  const gCap = maxGrade > 0 ? maxGrade : 0.15;
+  const W_OFF = 0.35, W_G = 30, W_PIN = 120, INF = 1e9;
+  const free = cand.map((cs) => clamp(Math.abs(cs[BENCH_K - 1] - cs[0]) / 18, 0, 1));
+  const flat = cand.map(benchFlat);
+  let prevC: number[] = cand[0].map((e, k) =>
+    Math.abs(BENCH_OFFS[k]) * W_OFF * (1 - 0.75 * free[0])
+    + Math.abs(e - flat[0]) * 0.5 * free[0]
+    + (p0 === null ? 0 : Math.abs(e - p0) * W_PIN));
+  const from: Int8Array[] = [];
+  for (let i = 1; i < n; i++) {
+    const d = Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
+    const cur = new Array<number>(BENCH_K).fill(INF);
+    const bk = new Int8Array(BENCH_K);
+    for (let k = 0; k < BENCH_K; k++) {
+      const stat = Math.abs(BENCH_OFFS[k]) * W_OFF * (1 - 0.75 * free[i])
+        + Math.abs(cand[i][k] - flat[i]) * 0.5 * free[i]
+        + (i === n - 1 && p1 !== null ? Math.abs(cand[i][k] - p1) * W_PIN : 0);
+      for (let j = 0; j < BENCH_K; j++) {
+        if (prevC[j] >= INF) continue;
+        const excess = Math.max(0, Math.abs(cand[i][k] - cand[i - 1][j]) - gCap * d);
+        const c = prevC[j] + stat + (excess * excess * W_G) / d;
+        if (c < cur[k]) { cur[k] = c; bk[k] = j; }
+      }
+    }
+    from.push(bk);
+    prevC = cur;
+  }
+  let endK = 0;
+  for (let k = 1; k < BENCH_K; k++) if (prevC[k] < prevC[endK]) endK = k;
+  const pick = new Array<number>(n).fill(endK);
+  for (let i = n - 1; i >= 1; i--) pick[i - 1] = from[i - 1][pick[i]];
+  const alg = cand.map((cs, i) => cs[pick[i]]);
+  if (p0 !== null && Math.abs(alg[0] - p0) < 4) alg[0] = p0;
+  if (p1 !== null && Math.abs(alg[n - 1] - p1) < 4) alg[n - 1] = p1;
+  return alg;
+}
+const HINT_CELL = 24;
+const profileHints = new Map<string, Array<[number, number, number]>>();
+const hintedWays = new Set<string>();
+function writeHints(dense: Array<[number, number]>, alg: number[]): void {
+  if (profileHints.size > 6000) profileHints.clear();   // advisory data; rebuilt per tile
+  for (let i = 0; i < dense.length; i++) {
+    const k = `${Math.floor(dense[i][0] / HINT_CELL)},${Math.floor(dense[i][1] / HINT_CELL)}`;
+    const e: [number, number, number] = [dense[i][0], dense[i][1], alg[i]];
+    const arr = profileHints.get(k);
+    if (arr) arr.push(e); else profileHints.set(k, [e]);
+  }
+}
+function hintAt(x: number, z: number): number | null {
+  let best: number | null = null, bd = 6;
+  for (const dx of [0, -HINT_CELL, HINT_CELL]) for (const dz of [0, -HINT_CELL, HINT_CELL]) {
+    const arr = profileHints.get(`${Math.floor((x + dx) / HINT_CELL)},${Math.floor((z + dz) / HINT_CELL)}`);
+    if (arr) for (const [hx, hz, he] of arr) {
+      const d = Math.hypot(hx - x, hz - z);
+      if (d < bd) { bd = d; best = he; }
+    }
+  }
+  return best;
+}
 function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false): void {
   const fid = ++ribbonSeq;
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
@@ -3745,12 +3848,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // BENDS, so a long straight segment used to bridge every terrain dip between
   // its endpoints like a causeway. Dense sampling makes the ribbon hug the
   // heightfield.
-  const dense: Array<[number, number]> = [pts[0]];
-  for (let i = 1; i < pts.length; i++) {
-    const [ax, az] = pts[i - 1], [bx, bz] = pts[i];
-    const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 12));
-    for (let s = 1; s <= steps; s++) dense.push([ax + ((bx - ax) * s) / steps, az + ((bz - az) * s) / steps]);
-  }
+  const dense = densifyPts(pts);
   // Only carriageways get a solid edge. A track is two ruts worn into the
   // hillside — its ribbon is transparent everywhere but the ruts, so a pair of
   // earth walls would stand along it with nothing on top of them.
@@ -3789,47 +3887,42 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // ±2 samples of the SOURCE's real resolution, not the tile's: high-zoom
   // terrarium here is oversampled ~30m SRTM, so ±8m candidates were mostly
   // re-reading the same underlying measurement.
-  const OFFS = [-24, -12, 0, 12, 24];
-  const K = OFFS.length;
-  const latCands = (i: number): number[] => {
-    const [x, z] = dense[i];
-    const [ax2, az2] = dense[Math.max(0, i - 1)], [bx2, bz2] = dense[Math.min(n - 1, i + 1)];
-    const tx = bx2 - ax2, tz = bz2 - az2, tl = Math.hypot(tx, tz) || 1;
-    const px2 = -tz / tl, pz2 = tx / tl;
-    return OFFS.map((o) => sampleHeight(x + px2 * o, z + pz2 * o));
-  };
+  const K = BENCH_K;
+  const latCands = (i: number): number[] => latCandsFor(dense, i);
   /** The bench estimate for one station standing alone: the centreline where
    *  the ground is calm; where the cross-section turns to cliff, the FLATTEST
    *  candidate — the shelf. Not the lowest: on a coast road ±24m spans the
    *  rock above AND the sea slope below, and "lowest" dove 80m off the road.
    */
-  const flatOf = (cs: number[]): number => {
-    let bk = 2, bg = Infinity;
-    for (let k = 1; k < K - 1; k++) {
-      const g = Math.abs(cs[k + 1] - cs[k - 1]) + Math.abs(OFFS[k]) * 0.08;
-      if (g < bg) { bg = g; bk = k; }
-    }
-    return cs[bk];
-  };
+  const flatOf = benchFlat;
   const benchAt = (i: number): number => {
     const cs = latCands(i);
     const f = clamp(Math.abs(cs[K - 1] - cs[0]) / 18, 0, 1);
     return cs[2] + (flatOf(cs) - cs[2]) * f;
   };
+  // THE WHOLE-WAY SOLVE, when renderWays has one: hints are the chain's
+  // profile — continuous across every fragment of this road in the tile —
+  // and a fragment covered by them takes them verbatim instead of solving
+  // alone. Everything below (defer, crumb continuity, the solo DP) is the
+  // fallback for fragments no chain covered.
+  const hintEl: Array<number | null> = mode !== 'none' && drivable
+    ? dense.map(([x, z]) => hintAt(x, z)) : [];
+  const hinted = hintEl.filter((h) => h !== null).length >= n * 0.8 && n > 1;
   // A chaotic anchorless fragment DEFERS: on cliff ground any solve under a
   // few hundred stations is luck, and anchoring propagates whatever luck
   // built first. Refusing the build sends the tile back through the retry
   // queue, and by the next pass a LONG neighbour — whose solve carries real
   // evidence — exists to anchor to. Bounded per spot so an isolated short
   // road still builds on the third ask rather than never.
-  if (mode === 'auto' && n <= 40 && p0 === null && p1 === null && drivable) {
+  if (!hinted && mode === 'auto' && n <= 40 && p0 === null && p1 === null && drivable) {
     const dkey = `${Math.round(dense[0][0])},${Math.round(dense[0][1])}`;
     const seen = crumbDefer.get(dkey) ?? 0;
     if (seen < 3) {
-      const chaotic = [0, n >> 1, n - 1].some((i) => {
+      let chaotic = false;
+      for (let i = 0; i < n && !chaotic; i++) {
         const cs = latCands(i);
-        return Math.abs(cs[K - 1] - cs[0]) > 18;
-      });
+        chaotic = Math.abs(cs[K - 1] - cs[0]) > 18;
+      }
       if (chaotic) { crumbDefer.set(dkey, seen + 1); unbuilt++; return; }
     }
   }
@@ -3842,11 +3935,24 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // welded or ramped to it. For short fragments, continuity IS the profile:
   // ramp between both anchors, hold a single anchor with the bench's drift,
   // or stand on the per-station bench and let later neighbours join it.
-  const chaoticHere = (): boolean => [0, n >> 1, n - 1].some((i) => {
-    const cs = latCands(i);
-    return Math.abs(cs[K - 1] - cs[0]) > 18;
-  });
-  if (mode === 'auto' && (n <= 16 || (n <= 40 && chaoticHere() && (p0 !== null || p1 !== null)))) {
+  const chaoticHere = (): boolean => {
+    for (let i = 0; i < n; i++) {
+      const cs = latCands(i);
+      if (Math.abs(cs[K - 1] - cs[0]) > 18) return true;
+    }
+    return false;
+  };
+  if (hinted) {
+    const idxs: number[] = [];
+    for (let i = 0; i < n; i++) if (hintEl[i] !== null) idxs.push(i);
+    alg = dense.map((_, i) => {
+      let bj = idxs[0];
+      for (const j of idxs) if (Math.abs(i - j) < Math.abs(i - bj)) bj = j;
+      return hintEl[bj] as number;
+    });
+    if (p0 !== null && Math.abs(alg[0] - p0) < 4) alg[0] = p0;
+    if (p1 !== null && Math.abs(alg[n - 1] - p1) < 4) alg[n - 1] = p1;
+  } else if (mode === 'auto' && (n <= 16 || (n <= 40 && chaoticHere() && (p0 !== null || p1 !== null)))) {
     if (p0 !== null && p1 !== null) {
       alg = elev.map((_, i) => p0 + ((p1 - p0) * i) / (n - 1));
     } else if (p0 !== null || p1 !== null) {
@@ -3859,60 +3965,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       alg = elev.map((_, i) => benchAt(i));
     }
   } else if (mode === 'auto' && n > 4) {
-    const cand: number[][] = [];
-    for (let i = 0; i < n; i++) cand.push(latCands(i));
-    const gCap = maxGrade > 0 ? maxGrade : 0.15;
-    const W_OFF = 0.35;    // cost per metre of lateral offset — the line is probably right
-    const W_G = 30;        // cost per squared metre of rise beyond the ruling grade
-    const W_PIN = 120;     // cost per metre of daylight against a neighbour's built deck — continuity nearly always wins
-    const INF = 1e9;
-    // How much a station's centreline sample can be TRUSTED: σz grows with
-    // lateral gradient × horizontal misregistration, so where the candidates
-    // span a cliff the lateral-offset cost relaxes — the mapped line's
-    // elevation is nearly meaningless there and the walk should be free.
-    const free = cand.map((cs) => clamp(Math.abs(cs[K - 1] - cs[0]) / 18, 0, 1));
-    // …free, but not NEUTRAL. On a cliff several elevations read as legal
-    // low-grade walks, and fragments solving the same road independently
-    // split between them — measured on Chapman's as 30-44m walls where a
-    // hill-solved fragment met bench-solved neighbours. A bias toward the
-    // FLATTEST shelf, active only where the terrain is chaotic, makes every
-    // fragment pick the same branch: the bench the road was cut on.
-    const flat = cand.map(flatOf);
-    let prevC: number[] = cand[0].map((e, k) =>
-      Math.abs(OFFS[k]) * W_OFF * (1 - 0.75 * free[0])
-      + Math.abs(e - flat[0]) * 0.5 * free[0]
-      + (p0 === null ? 0 : Math.abs(e - p0) * W_PIN));
-    const from: Int8Array[] = [];
-    for (let i = 1; i < n; i++) {
-      const d = Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
-      const cur = new Array<number>(K).fill(INF);
-      const bk = new Int8Array(K);
-      for (let k = 0; k < K; k++) {
-        const stat = Math.abs(OFFS[k]) * W_OFF * (1 - 0.75 * free[i])
-          + Math.abs(cand[i][k] - flat[i]) * 0.5 * free[i]
-          + (i === n - 1 && p1 !== null ? Math.abs(cand[i][k] - p1) * W_PIN : 0);
-        for (let j = 0; j < K; j++) {
-          if (prevC[j] >= INF) continue;
-          const excess = Math.max(0, Math.abs(cand[i][k] - cand[i - 1][j]) - gCap * d);
-          const c = prevC[j] + stat + (excess * excess * W_G) / d;
-          if (c < cur[k]) { cur[k] = c; bk[k] = j; }
-        }
-      }
-      from.push(bk);
-      prevC = cur;
-    }
-    let endK = 0;
-    for (let k = 1; k < K; k++) if (prevC[k] < prevC[endK]) endK = k;
-    const pick = new Array<number>(n).fill(endK);
-    for (let i = n - 1; i >= 1; i--) pick[i - 1] = from[i - 1][pick[i]];
-    alg = cand.map((cs, i) => cs[pick[i]]);
-    // Land the ends ON their anchors only when that is a WELD and not a
-    // WALL: a bolted end-station 30m from the station beside it was the
-    // measured undrivable step. Beyond weld range the soft pin has already
-    // pulled the walk as close as legal grade allows; the residual join
-    // step stays small and the low-bias above makes real conflicts rare.
-    if (p0 !== null && Math.abs(alg[0] - p0) < 4) alg[0] = p0;
-    if (p1 !== null && Math.abs(alg[n - 1] - p1) < 4) alg[n - 1] = p1;
+    alg = solveChain(dense, maxGrade, p0, p1);
   } else if (mode !== 'none') {
     // Chord fragments (tagged tunnels and bridges) anchor their portal
     // elevations to neighbours where they exist — and where they DON'T, to
@@ -5048,6 +5101,55 @@ const AREA_TAG = (t: Record<string, string>): boolean =>
   !!t.landuse || !!t.leisure
   || ['scrub', 'wetland', 'sand', 'bare_rock', 'wood', 'grassland', 'heath'].includes(t.natural ?? '');
 function renderWays(els: OsmWay[]): void {
+  // PRE-PASS: chain this tile's drivable ways end-to-end and solve each
+  // chain's profile whole, publishing hints for the per-way builds below.
+  {
+    interface Mem { pts: Array<[number, number]>; name?: string; g: number; key: string }
+    const mems: Mem[] = [];
+    for (const el of els) {
+      const t = el.tags ?? {};
+      const key = el.ck ?? String(el.id);
+      if (!el.geometry || !t.highway || hintedWays.has(key)) continue;
+      if (['track', 'path', 'bridleway', 'cycleway', 'footway', 'steps'].includes(t.highway)) continue;
+      const pts: Array<[number, number]> = el.geometry.map((g2) => toLocal(g2.lat, g2.lon));
+      if (pts.length < 2) continue;
+      let ok = true;
+      for (const [px, pz] of pts) if (!hasHeight(px, pz)) { ok = false; break; }
+      if (ok) mems.push({ pts, name: t.name, g: GRADE_MAX[t.highway] ?? 0.15, key });
+    }
+    const joins = (a: [number, number], b: [number, number]): boolean =>
+      Math.hypot(a[0] - b[0], a[1] - b[1]) < 2;
+    while (mems.length) {
+      const chain: Mem[] = [mems.pop() as Mem];
+      let grew = true;
+      while (grew) {
+        grew = false;
+        const head = chain[0].pts[0];
+        const tail = chain[chain.length - 1].pts[chain[chain.length - 1].pts.length - 1];
+        for (let i = 0; i < mems.length; i++) {
+          const m = mems[i];
+          if (m.name !== chain[0].name) continue;      // one road, one chain
+          const a = m.pts[0], b = m.pts[m.pts.length - 1];
+          if (joins(a, tail)) { chain.push(m); mems.splice(i, 1); grew = true; break; }
+          if (joins(b, tail)) { chain.push({ ...m, pts: m.pts.slice().reverse() }); mems.splice(i, 1); grew = true; break; }
+          if (joins(b, head)) { chain.unshift(m); mems.splice(i, 1); grew = true; break; }
+          if (joins(a, head)) { chain.unshift({ ...m, pts: m.pts.slice().reverse() }); mems.splice(i, 1); grew = true; break; }
+        }
+      }
+      const all: Array<[number, number]> = [];
+      for (const m of chain) for (const pt of m.pts) {
+        if (!all.length || Math.hypot(pt[0] - all[all.length - 1][0], pt[1] - all[all.length - 1][1]) > 0.5) all.push(pt);
+      }
+      const dense = densifyPts(all);
+      if (dense.length < 8) continue;                  // single crumbs keep the fallback path
+      const a0 = deckAnchorAt(dense[0][0], dense[0][1]);
+      const a1 = deckAnchorAt(dense[dense.length - 1][0], dense[dense.length - 1][1]);
+      const alg = solveChain(dense, Math.min(...chain.map((m) => m.g)),
+        a0 === null ? null : a0 - SURFACE.road.lift, a1 === null ? null : a1 - SURFACE.road.lift);
+      writeHints(dense, alg);
+      for (const m of chain) hintedWays.add(m.key);
+    }
+  }
   for (const el of els) {
     // Clipped lines carry their own key; areas still dedupe on the bare id, so
     // a lake straddling two vector tiles is still drawn exactly once.
