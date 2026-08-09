@@ -2992,6 +2992,11 @@ interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?:
   /** A guard rail rather than a wall. Still solid, but glancing it costs you
    *  almost nothing — see the collision scrub. */
   sl?: boolean;
+  /** PORTAL PORCH: raise this segment's cut plane by this many metres. The
+   *  first and last stations of a tunnel tube are cut to just above the
+   *  collar rather than exempted — full exemption left the terrain mesh
+   *  interpolating a wall of hillside straight across the mouth. */
+  pc?: number;
   /** Surface quality 0..1 from the way's surface/smoothness/tracktype tags —
    *  see wayQuality. Absent where the way said nothing, and then the class
    *  default stands in. */
@@ -3489,7 +3494,7 @@ function rebuildCut(): void {
 function stripFloor(s: Seg, x: number, z: number): { y: number; out: number } {
   const dx = s.bx - s.ax, dz = s.bz - s.az;
   const t = clamp(((x - s.ax) * dx + (z - s.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
-  const fA = (s.ya as number) - Math.abs(s.ca ?? 0), fB = (s.yb as number) - Math.abs(s.cb ?? 0);
+  const fA = (s.ya as number) - Math.abs(s.ca ?? 0) + (s.pc ?? 0), fB = (s.yb as number) - Math.abs(s.cb ?? 0) + (s.pc ?? 0);
   return {
     y: fA + (fB - fA) * t,
     out: Math.hypot(x - (s.ax + dx * t), z - (s.az + dz * t)) - (s.hw + 0.6),
@@ -4373,17 +4378,19 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // THE PORTAL THROAT. The tube used to start at the first buried
         // station, so the terrain mesh interpolated a wall of dirt straight
         // across its mouth — the entrance was there and you could not see
-        // it. The first and last stations of the run stay OUT of the tube
-        // and OUT of the tn exemption instead: the ordinary corridor cut
-        // carves them into an open notch (burial is only just past the
-        // threshold there, well within the cut's reach), and the tube's
-        // lintel now stands at the back of a visible cutting.
+        // it. Three-stage mouth instead: the station outside the run cuts
+        // fully (an open notch — burial is only just past threshold there),
+        // the tube's own first station cuts to a PORCH just above the collar
+        // (pc — full exemption still curtained the opening with the wall the
+        // mesh interpolates to the uncut hill), and only the interior is
+        // exempt and lives under the hill.
         const s2 = s + 1, e2 = e - 1;
         if (e2 - s2 >= 2) {
           tunnelTube(dense, prof, elevMin, s2, e2, width, lift);
-          // These segments live UNDER the hill on purpose. Exempt them from the
-          // corridor cut, which would otherwise open every tunnel into a trench.
-          for (let k = s2; k < e2 && k < segsOf.length; k++) segsOf[k].tn = true;
+          for (let k = s2; k < e2 && k < segsOf.length; k++) {
+            if (k === s2 || k === e2 - 1) segsOf[k].pc = TUNNEL_H + 1.6;
+            else segsOf[k].tn = true;
+          }
         }
         s = -1;
       }
@@ -4398,8 +4405,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
 // The carved space: side walls + ceiling along a tunnel run, portal lintels at
 // the mouths, and solid collision so the car can't drive out through the rock.
 function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number[], a: number, b: number, width: number, lift: number): void {
-  // Belt and braces: the ceiling can never poke out through the hillside.
-  const ceil = (i: number): number => Math.min(prof[i] + lift + TUNNEL_H, elev[i] - 0.4);
+  // Belt and braces: the ceiling can never poke out through the hillside —
+  // EXCEPT at the mouths, which wear a straight collar at tube height. The
+  // mouth stations used to cap under the RAW terrain, but the portal-throat
+  // cut has since carved that ground away, and a ceiling capped against
+  // elevation that no longer exists hovered over the mouth as a dark slab.
+  const ceil = (i: number): number => (i <= a + 1 || i >= b - 1)
+    ? prof[i] + lift + TUNNEL_H
+    : Math.min(prof[i] + lift + TUNNEL_H, elev[i] - 0.4);
   const tv: number[] = [];
   const quadPush = (...p: number[]): void => {
     tv.push(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
