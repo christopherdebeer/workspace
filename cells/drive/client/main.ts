@@ -3728,7 +3728,7 @@ function deckAnchorAt(x: number, z: number): number | null {
   }
   return best;
 }
-function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0): void {
+function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false): void {
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
   // point here has real elevation under it; if one does not, the profile would
   // be built against sampleHeight's 0 and bake a causeway that no later tile
@@ -3782,7 +3782,10 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const p1 = anchor1 === null ? null : anchor1 - lift;
   let alg = elev;
   if (mode === 'auto' && n > 4) {
-    const OFFS = [-16, -8, 0, 8, 16];
+    // ±2 samples of the SOURCE's real resolution, not the tile's: high-zoom
+    // terrarium here is oversampled ~30m SRTM, so ±8m candidates were mostly
+    // re-reading the same underlying measurement.
+    const OFFS = [-24, -12, 0, 12, 24];
     const K = OFFS.length;
     const cand: number[][] = [];
     for (let i = 0; i < n; i++) {
@@ -3797,15 +3800,20 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const W_G = 30;        // cost per squared metre of rise beyond the ruling grade
     const W_PIN = 40;      // cost per metre of daylight against a neighbour's built deck
     const INF = 1e9;
+    // How much a station's centreline sample can be TRUSTED: σz grows with
+    // lateral gradient × horizontal misregistration, so where the candidates
+    // span a cliff the lateral-offset cost relaxes — the mapped line's
+    // elevation is nearly meaningless there and the walk should be free.
+    const free = cand.map((cs) => clamp(Math.abs(cs[K - 1] - cs[0]) / 18, 0, 1));
     let prevC: number[] = cand[0].map((e, k) =>
-      Math.abs(OFFS[k]) * W_OFF + (p0 === null ? 0 : Math.abs(e - p0) * W_PIN));
+      Math.abs(OFFS[k]) * W_OFF * (1 - 0.75 * free[0]) + (p0 === null ? 0 : Math.abs(e - p0) * W_PIN));
     const from: Int8Array[] = [];
     for (let i = 1; i < n; i++) {
       const d = Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
       const cur = new Array<number>(K).fill(INF);
       const bk = new Int8Array(K);
       for (let k = 0; k < K; k++) {
-        const stat = Math.abs(OFFS[k]) * W_OFF
+        const stat = Math.abs(OFFS[k]) * W_OFF * (1 - 0.75 * free[i])
           + (i === n - 1 && p1 !== null ? Math.abs(cand[i][k] - p1) * W_PIN : 0);
         for (let j = 0; j < K; j++) {
           if (prevC[j] >= INF) continue;
@@ -3843,7 +3851,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // walk already dodged must not become phantom tunnels.
   const prof = alg.slice();
   const runs: Array<[number, number]> = [];
-  if (mode !== 'none' && n > 4) {
+  if (mode !== 'none' && n > 4 && !canopy) {
     if (mode === 'tunnel' || mode === 'bridge') runs.push([0, n - 1]);
     else {
       const avg = (src: number[]): number[] => src.map((_, i) => {
@@ -4400,7 +4408,60 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // segment rasterized before its tunnel flag lands would trench the hill it
   // is buried in.
   for (const sg of segsOf) rasterizeCut(sg);
+  if (canopy && n > 2) canopyRun(dense, prof, width, lift);
   if (drivable) dirtyTerrainAround(dense);
+}
+// ── the gallery: a roof over open road ─────────────────────────────
+// An avalanche protector or covered way keeps the road's own grade and its
+// view: a slab overhead, a solid wall against the mountain, columns over the
+// drop. The uphill side is measured, not tagged — the wall goes where the
+// ground is.
+function canopyRun(dense: Array<[number, number]>, prof: number[], width: number, lift: number): void {
+  const n = dense.length;
+  const mid = n >> 1;
+  const [mxa, mza] = dense[Math.max(0, mid - 1)], [mxb, mzb] = dense[Math.min(n - 1, mid + 1)];
+  const mtx = mxb - mxa, mtz = mzb - mza, mtl = Math.hypot(mtx, mtz) || 1;
+  const mpx = -mtz / mtl, mpz = mtx / mtl;
+  const [cxm, czm] = dense[mid];
+  const up = sampleHeight(cxm + mpx * 14, czm + mpz * 14)
+    >= sampleHeight(cxm - mpx * 14, czm - mpz * 14) ? 1 : -1;
+  const hw = width / 2 + 0.7;
+  const roof = TUNNEL_H;         // clears the chase camera's stock ride height
+  const tv: number[] = [];
+  const quad = (a: number[], b: number[], c: number[], d: number[]): void => {
+    tv.push(...a, ...b, ...c, ...b, ...d, ...c);
+  };
+  let colAcc = 6;                // first column a few metres in, then every ~9m
+  for (let i = 0; i < n - 1; i++) {
+    const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
+    const dx = x1 - x0, dz = z1 - z0;
+    const len = Math.hypot(dx, dz) || 1;
+    const px2 = (-dz / len) * hw, pz2 = (dx / len) * hw;
+    const yA = prof[i] + lift, yB = prof[i + 1] + lift;
+    const rA = yA + roof, rB = yB + roof;
+    // roof slab
+    quad([x0 + px2, rA, z0 + pz2], [x1 + px2, rB, z1 + pz2],
+      [x0 - px2, rA, z0 - pz2], [x1 - px2, rB, z1 - pz2]);
+    // the mountain-side wall, deck to roof — solid to the eye and the hull
+    const ux = px2 * up, uz = pz2 * up;
+    quad([x0 + ux, yA, z0 + uz], [x1 + ux, yB, z1 + uz],
+      [x0 + ux, rA, z0 + uz], [x1 + ux, rB, z1 + uz]);
+    addSeg(wallGrid, { ax: x0 + ux, az: z0 + uz, bx: x1 + ux, bz: z1 + uz, hw: 0, ya: rA, yb: rB });
+    // columns on the open side, thin crossed fins
+    colAcc += len;
+    if (colAcc >= 9) {
+      colAcc = 0;
+      const cx2 = x0 - ux, cz2 = z0 - uz;
+      quad([cx2 - 0.3, yA, cz2], [cx2 + 0.3, yA, cz2], [cx2 - 0.3, rA, cz2], [cx2 + 0.3, rA, cz2]);
+      quad([cx2, yA, cz2 - 0.3], [cx2, yA, cz2 + 0.3], [cx2, rA, cz2 - 0.3], [cx2, rA, cz2 + 0.3]);
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tv), 3));
+  geo.computeVertexNormals();
+  const shell = new THREE.Mesh(geo, MAT.tunnel);
+  shell.userData.tunnel = true;
+  worldGroup.add(shell);
 }
 // The carved space: side walls + ceiling along a tunnel run, portal lintels at
 // the mouths, and solid collision so the car can't drive out through the rock.
@@ -4813,7 +4874,12 @@ interface OsmWay {
 // Only the tags renderWays actually reads — the rest is dead weight per way.
 // amenity/shop feed repair POIs; surface/smoothness/tracktype feed wayQuality.
 // The S3 tiles keep EVERY tag — this list is only the client cache's diet.
-const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'layer', 'name', 'amenity', 'shop', 'surface', 'smoothness', 'tracktype'];
+const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'layer', 'name', 'amenity', 'shop', 'surface', 'smoothness', 'tracktype',
+  // Structure evidence the profile solver can use: covered/avalanche galleries
+  // keep the road's own grade under a canopy, and the rest are weak-but-real
+  // signals (cut side, fill, mapped grade, clearance) held for when the
+  // vertical alignment learns to consume them.
+  'covered', 'cutting', 'embankment', 'incline', 'maxheight'];
 let osmDb: IDBDatabase | null = null;
 const osmDbReady: Promise<void> = new Promise((resolve) => {
   try {
@@ -4927,13 +4993,20 @@ function renderWays(els: OsmWay[]): void {
       // and the tyre sits at profile+lift, so a disagreement is a truck
       // hovering over its own road. Stack order: green .08 < water .12 <
       // track .15 < rail .16 < road .18.
+      // A GALLERY IS NOT A BORE. tunnel=avalanche_protector and covered=yes
+      // mean a roof over a road that keeps its own grade in the open air —
+      // OSM's own semantics say do not bury it. Treated as a tunnel they got
+      // a chord profile and a hill overhead; as a canopy the road profiles
+      // normally and wears a roof, a wall on the uphill side, and columns
+      // over the drop — which is what the real Chapman's overhang is.
+      const canopy = tags.tunnel === 'avalanche_protector' || (!!tags.covered && tags.covered !== 'no');
       const mode: RoadMode = track || stairs ? 'none'
-        : tags.tunnel && tags.tunnel !== 'no' ? 'tunnel'
+        : !canopy && tags.tunnel && tags.tunnel !== 'no' ? 'tunnel'
         : tags.bridge && tags.bridge !== 'no' ? 'bridge'
         : 'auto';
       ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : MAT.road,
         track || stairs ? SURFACE.track.lift : SURFACE.road.lift, !stairs, mode, track, tags.name, wayQuality(tags, track),
-        GRADE_MAX[tags.highway] ?? 0.15);
+        GRADE_MAX[tags.highway] ?? 0.15, canopy);
       if (unbuilt !== refusedAt) { seenWays.delete(dk); continue; }
       // Steps are named and drawn but nothing drives them, so they earn no
       // checkpoints — a road you cannot survey should not sit in the log.
