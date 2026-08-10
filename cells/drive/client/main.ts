@@ -1299,6 +1299,8 @@ function flushTerrain(now: number): void {
       terrainAt = now;
       const t0 = performance.now();
       buildTerrainMesh(t);
+      // The ground under this tile just moved; anything standing on it follows.
+      reseatBuildings(t);
       terrainMs = performance.now() - t0;
       return;
     }
@@ -2622,6 +2624,23 @@ function refreshVeg(): void {
         const dx = v.x - state.x, dz = v.z - state.z;
         const d2v = dx * dx + dz * dz;
         if (d2v > r2) continue;
+        // NOTHING GROWS ON THE TARMAC. `pushSite` already refuses a site on a
+        // carriageway, but a cell is seeded ONCE and the roads through it
+        // stream in afterwards — so every cell seeded before its own road
+        // arrived kept a hedge down the middle of it. Tested again here, where
+        // the road is finally known, with a margin that also keeps scrub off
+        // the shoulder you drive the wheels along.
+        //
+        // Rocks are the exception, thinned rather than cleared: a boulder that
+        // has come down onto the road is a hazard worth meeting, and they are
+        // the one kind the truck already knows how to hit. A stable per-site
+        // hash keeps the same quarter of them every frame instead of a verge
+        // that flickers.
+        const on = onCarriageway(v.x, v.z, 1.2);
+        if (on.road || on.track) {
+          if (v.k !== 'rock') continue;
+          if ((((v.x * 73856093) ^ (v.z * 19349663)) >>> 0) % 4 !== 0) continue;
+        }
         const mesh = vegMeshes[v.k];
         const i = counts[v.k];
         if (i >= VEG_CAP[v.k] * vegScale) continue;
@@ -2992,6 +3011,15 @@ interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?:
   /** A guard rail rather than a wall. Still solid, but glancing it costs you
    *  almost nothing — see the collision scrub. */
   sl?: boolean;
+  /** RUBBLE: a ruin's standing masonry. Occludes like a wall and costs like a
+   *  boulder, but never pushes the truck out — a roofless shell with two bays
+   *  down is something you CAN drive through, and being bounced off the inside
+   *  of one you had already entered is worse than the crash. */
+  ru?: boolean;
+  /** Last time this piece charged the truck, ms. Rate-limits `ru` segments the
+   *  way vegetation sites are rate-limited, so a shell rattles rather than
+   *  bricks. */
+  hit?: number;
   /** Which ribbon() build this segment came from — probe-only, for
    *  attributing profile discontinuities to fragment boundaries. */
   fd?: number;
@@ -3178,6 +3206,24 @@ type Surface = 'road' | 'track' | 'water' | 'ground';
  * nothing but garbage.
  */
 let surfQ = Q_ROAD;
+/**
+ * Is this point on a carriageway, and how far into one?
+ *
+ * `surfaceAt` answers a bigger question and sets `surfQ` on the way past, which
+ * makes it unusable from the vegetation passes — those run inside the same tick
+ * as the driving surface read and would clobber the grip the truck is standing
+ * on. `margin` widens the test past the kerb, so scrub can be kept off the
+ * shoulder as well as off the tarmac.
+ */
+function onCarriageway(x: number, z: number, margin = 0): { road: boolean; track: boolean } {
+  let road = false, track = false;
+  for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
+    const [cx, cz] = closestOnSeg(x, z, seg);
+    if (Math.hypot(x - cx, z - cz) > seg.hw + 0.8 + margin) continue;
+    if (seg.tk) track = true; else road = true;
+  }
+  return { road, track };
+}
 function surfaceAt(x: number, z: number): Surface {
   // Scan them ALL: tarmac wins wherever a track crosses or joins a road, and
   // returning on the first hit made that depend on insertion order. Where two
@@ -4942,13 +4988,59 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number
 // Everything a solid footprint owes the rest of the world: wall segments for
 // collision and camera occlusion, the polygon itself for containment, and an
 // immediate eviction if it just landed on the car.
-function claimSolid(pts: Array<[number, number]>, top: number): void {
+/**
+ * BUILDINGS RE-SEAT WHEN THE GROUND MOVES UNDER THEM.
+ *
+ * A footprint is drawn once, off the ground as it stood at that moment — but
+ * the terrain is rebuilt every time a road is carved through its tile, and a
+ * building beside a new cutting is left standing in the air or sunk to its
+ * windows. Each one keeps the footing height it was placed against, so a
+ * rebuild only has to measure the same thing again and shift by the difference.
+ *
+ * The measure is the ring corners alone. `polygon` rightly says corners are a
+ * poor proxy for a footprint's true minimum, but this is a DELTA between two
+ * readings of the same quantity, and the cheap measure is the consistent one.
+ */
+interface Seated { mesh: THREE.Object3D; pts: Array<[number, number]>; ref: number }
+const seated: Seated[] = [];
+const ringLow = (pts: Array<[number, number]>): number => {
+  let lo = Infinity;
+  for (const [x, z] of pts) lo = Math.min(lo, groundAt(x, z));
+  return lo;
+};
+function noteSeated(mesh: THREE.Object3D, pts: Array<[number, number]>): void {
+  if (seated.length > 4000) seated.splice(0, 1000);
+  seated.push({ mesh, pts, ref: ringLow(pts) });
+}
+/** Re-seat the buildings standing on a tile that has just been rebuilt. Bounded
+ *  to what is near enough to be looked at: a 2.4km terrain tile can hold a
+ *  city's worth of footprints, and the far ones will be re-seated by the next
+ *  rebuild that happens while they are close. */
+function reseatBuildings(t: HeightTile): void {
+  for (const b of seated) {
+    const [x, z] = b.pts[0];
+    if (x < t.xs || z < t.zs || x > t.xs + t.w || z > t.zs + t.h) continue;
+    if (Math.hypot(x - state.x, z - state.z) > 700) continue;
+    const now = ringLow(b.pts);
+    if (!Number.isFinite(now)) continue;
+    const dy = now - b.ref;
+    if (Math.abs(dy) < 0.05) continue;
+    b.mesh.position.y += dy;
+    b.ref = now;
+  }
+}
+function claimSolid(pts: Array<[number, number]>, top: number, rubble = false): void {
   for (let i = 0; i < pts.length; i++) {
     const [ax, az] = pts[i], [bx, bz] = pts[(i + 1) % pts.length];
     // ya carries the ROOF height so the chase camera knows whether a wall
     // actually occludes it or it is looking clean over the top.
-    addSeg(wallGrid, { ax, az, bx, bz, hw: 0, ya: top, yb: top });
+    addSeg(wallGrid, { ax, az, bx, bz, hw: 0, ya: top, yb: top, ru: rubble || undefined });
   }
+  // NO FOOTPRINT FOR A RUIN. `addPlot` exists so the truck can never end up
+  // sealed inside a room, and it escapes containment by shoving you out through
+  // the nearest wall. A ruin is a place you are allowed to be — driving into
+  // one and being spat back out of it is the bug, not the rescue.
+  if (rubble) return;
   addPlot(pts);
   // This building may have just materialised around the car — vectors stream in
   // long after the spawn, and the spawn point is chosen before any of them
@@ -4993,7 +5085,9 @@ function building(pts: Array<[number, number]>, id: number, levels: number): voi
   let minH = Infinity, cx = 0, cz = 0;
   let minx = Infinity, maxx = -Infinity, minz = Infinity, maxz = -Infinity;
   for (const [x, z] of pts) {
-    minH = Math.min(minH, sampleHeight(x, z));
+    // groundAt, not sampleHeight: the ground a ruin stands on is the one that
+    // gets drawn, and near a road those differ by the whole depth of the cut.
+    minH = Math.min(minH, groundAt(x, z));
     cx += x; cz += z;
     minx = Math.min(minx, x); maxx = Math.max(maxx, x);
     minz = Math.min(minz, z); maxz = Math.max(maxz, z);
@@ -5041,7 +5135,7 @@ function building(pts: Array<[number, number]>, id: number, levels: number): voi
     const px = cx + Math.cos(a) * rad * (maxx - minx) * 0.42;
     const pz = cz + Math.sin(a) * rad * (maxz - minz) * 0.42;
     if (!pointInPoly(px, pz, pts)) continue;
-    const gy = sampleHeight(px, pz) - foot;      // same local frame as the walls
+    const gy = groundAt(px, pz) - foot;          // same local frame as the walls
     if (r() < 0.45) {
       const s = 0.5 + r() * 1.3;                 // slab of fallen roof
       parts.push(boxPart(s, 0.3 + r() * 0.4, s * (0.6 + r()), px, gy + 0.2, pz,
@@ -5055,8 +5149,9 @@ function building(pts: Array<[number, number]>, id: number, levels: number): voi
   const shell = new THREE.Mesh(mergeParts(parts), ruinMat);
   shell.position.y = foot;                       // the base the façade shader reads
   worldGroup.add(shell);
+  noteSeated(shell, pts);
   mapPoly(pts, 'rgba(70,66,58,0.9)');
-  claimSolid(pts, foot + tallest);
+  claimSolid(pts, foot + tallest, true);
 }
 /** Insert points along a ring so no edge is longer than `step`, up to a total
  *  budget (past which the step is stretched rather than the count blown). */
@@ -5236,6 +5331,7 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
     // wall gets taller, and the extra depth is underground.
     mesh.position.y = base;
     mesh.userData.bld = depth - extrude;   // how much of it is foundation
+    if (collide === 'solid') noteSeated(mesh, pts);
   } else {
     // Flat drapes CONFORM to the terrain per-vertex — a centroid-height plane
     // floated above (or sank under) any park/lake bigger than the local slope,
@@ -8366,6 +8462,47 @@ function meshHeightAt(x: number, z: number): number | null {
   return Object.fromEntries(bands.map(([lo, hi], i) =>
     [`${lo}-${hi > 1e8 ? '∞' : hi}m from kerb`, band(acc[i])]));
 };
+/** What the world puts in the truck's way, and what it grows where it should
+ *  not: wall segments by kind, vegetation sites standing on a carriageway, and
+ *  how many buildings are registered for re-seating. */
+(window as unknown as { __place?: object }).__place = (x: number, z: number, h?: number): void => {
+  teleportTo(x, z);
+  if (h !== undefined) state.heading = h;
+};
+(window as unknown as { __solid?: object }).__solid = (r = 220): object => {
+  let solid = 0, rail = 0, rubble = 0;
+  const seen = new Set<Seg>();
+  const c = Math.ceil(r / GRID);
+  for (let cx = -c; cx <= c; cx++) for (let cz = -c; cz <= c; cz++) {
+    for (const w of wallGrid.get(`${Math.floor(state.x / GRID) + cx},${Math.floor(state.z / GRID) + cz}`) ?? []) {
+      if (seen.has(w)) continue;
+      seen.add(w);
+      if (Math.hypot(state.x - w.ax, state.z - w.az) > r) continue;
+      if (w.ru) rubble++; else if (w.sl) rail++; else solid++;
+    }
+  }
+  // Sites the scatter would DRAW — the same cull the draw loop applies.
+  let onRoad = 0, onRoadDrawn = 0, off = 0;
+  const g = Math.ceil(r / VEG_CELL);
+  const c0 = Math.floor(state.x / VEG_CELL), z0 = Math.floor(state.z / VEG_CELL);
+  for (let gx = c0 - g; gx <= c0 + g; gx++) for (let gz = z0 - g; gz <= z0 + g; gz++) {
+    for (const v of vegGrid.get(`${gx},${gz}`) ?? []) {
+      if (Math.hypot(v.x - state.x, v.z - state.z) > r) continue;
+      const on = onCarriageway(v.x, v.z, 1.2);
+      if (!on.road && !on.track) { off++; continue; }
+      onRoad++;
+      if (v.k === 'rock' && (((v.x * 73856093) ^ (v.z * 19349663)) >>> 0) % 4 === 0) onRoadDrawn++;
+    }
+  }
+  let near: number[] | null = null, nd = Infinity;
+  for (const [rx, rz] of buildStats.ruins) {
+    const d = Math.hypot(rx - state.x, rz - state.z);
+    if (d < nd) { nd = d; near = [+rx.toFixed(1), +rz.toFixed(1)]; }
+  }
+  return { nearestRuin: near, nearestRuinD: nd === Infinity ? null : +nd.toFixed(1),
+    walls: { solid, rail, rubble }, ruins: buildStats.ruin, intact: buildStats.intact,
+    veg: { offRoad: off, onRoadSeeded: onRoad, onRoadDrawn }, seated: seated.length };
+};
 /** The steepest built segments near the truck, with the profile branch that
  *  produced each — `pb` 1 hint, 2 ramp, 3 hold, 4 bench, 5 solo DP, 6 raw. A
  *  near-vertical piece of carriageway is a law being broken somewhere, and
@@ -10011,6 +10148,7 @@ function tick(now: number): void {
   // How square the hit was, worst case over everything touched this frame: 0 is
   // a graze straight along the barrier, 1 is driving into it head-on.
   let scrape = -1;
+  const nowMs = performance.now();
   for (let pass = 0; pass < 2 && !real.on; pass++) {
     const walls = wallGrid.get(gkey(state.x, state.z));
     if (!walls) break;
@@ -10019,6 +10157,22 @@ function tick(now: number): void {
       const [cx2, cz2] = closestOnSeg(state.x, state.z, seg);
       const d = Math.hypot(state.x - cx2, state.z - cz2);
       if (d < CAR_R) {
+        // RUBBLE IS NOT A WALL. A ruin's standing masonry costs you — a bite of
+        // speed, a knock to the hull, the noise — and then you are through it,
+        // exactly as a boulder does. It must not push, because a shell with two
+        // bays down is something you can drive INTO, and a push-out would then
+        // shove you off the inside of the walls you had already passed. Charged
+        // at most once a second per piece, so a ruin rattles rather than bricks.
+        if (seg.ru) {
+          if (pass > 0 || Math.abs(state.speed) < 1.2) continue;
+          if (seg.hit !== undefined && nowMs - seg.hit < 1000) continue;
+          seg.hit = nowMs;
+          const v = Math.abs(state.speed);
+          state.speed *= 0.76;
+          rig.hull = clamp(rig.hull - 0.006 * Math.min(1, v / 12), 0, 1);
+          audio.crash(clamp(v / 14, 0.25, 0.9));
+          continue;
+        }
         const push = (CAR_R - d) / (d || 1e-4);
         state.x += (state.x - cx2) * push;
         state.z += (state.z - cz2) * push;
@@ -10052,7 +10206,6 @@ function tick(now: number): void {
   // the hull — and then the truck is past it. One charge per rock per second,
   // so a boulder field rattles rather than bricks.
   if (!real.on && groundedF > 0.25 && Math.abs(state.speed) > 1.2) {
-    const nowMs = performance.now();
     const cx0 = Math.floor(state.x / VEG_CELL), cz0 = Math.floor(state.z / VEG_CELL);
     const lx = state.x - cx0 * VEG_CELL, lz = state.z - cz0 * VEG_CELL;
     // The car spans one bucket; a neighbour only matters within reach of it.
