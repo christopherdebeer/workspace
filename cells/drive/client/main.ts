@@ -3871,16 +3871,26 @@ const cutSet = new Set<Seg>();
  * buried 8.9% of one Rio avenue. This is the same query without the climb, so a
  * vertex may be taken down to the road it serves and no further.
  */
-// DEFAULT 0 — the shipped behaviour, and provably the shipped behaviour, since
-// multiplying the reach by zero leaves the floor exactly where it was. Live as
-// a knob (`?wash=0.25`) because the sweep it exists for is not finished: it
-// buys back the kerb lip at the price of letting terrain rise toward the
-// tarmac, and the two have to be judged together on a real screen.
-//   wash 0     lip median 0.99m   terrain above the deck 0%     road buried 0%
-//   wash 0.10  lip median 0.58m   terrain above the deck 10.7%  road buried 0%
-//   wash 0.25  lip median 0.34m   terrain above the deck 24.6%  road buried 1.5%
-// (Beach Road, Cape Town — the site where the plinth reads worst.)
-const CUT_WASH = Number(new URLSearchParams(location.search).get('wash') ?? 0);
+// THE SWEEP, FINISHED. This shipped at 0 — a dead-flat floor out to the full
+// two-cell reach — while the question it was waiting on was whether buying the
+// kerb lip back was worth letting terrain rise toward the tarmac. Noordhoek
+// answers it, because at 0 the excavated shelf is not subtle: a pale dirt bench
+// runs the length of every suburban road, which is the thing in the report that
+// started this ("we seem to unnecessarily cut away the terrain, revealing
+// apron"). Measured there, 260m radius, with the batter drawn:
+//   wash 0     lip median 0.46m  ground beside the road 0.44m below natural
+//              terrain through the tarmac 0%      moved vertices 240
+//   wash 0.10  lip median 0.16m  ground beside the road 0.15m below natural
+//              terrain through the tarmac 13.5% (p95 0.09m)   moved 136
+//   wash 0.25  lip median 0.10m  ground beside the road 0.10m below natural
+//              terrain through the tarmac 27.9% (p95 0.36m)   moved 94
+// 0.10 takes two thirds of the trench for pokes that are centimetres, which do
+// not read at all; 0.25's are decimetres, which do. Chapman's Peak at 0.10:
+// road buried 0.0%, worst step 0.16m, worst grade unchanged, and the samples
+// dug more than half a metre below natural within 6m of the kerb fall 61.1% to
+// 48.6%. Still a knob (`?wash=0`) — this is a judgement about looks, and looks
+// change when anything else on the verge does.
+const CUT_WASH = Number(new URLSearchParams(location.search).get('wash') ?? 0.1);
 function roadFloorHard(x: number, z: number): number | null {
   cutSet.clear();
   stripsNear(x, z, 2, cutSet);
@@ -3970,6 +3980,21 @@ function cellTriangles(geo: THREE.BufferGeometry, SEG: number): Int32Array {
  * monotone. Sampled across the full width, not just the centreline, because
  * the kerbs are the lowest thing the ground has to clear.
  */
+// ── CARVE ACCOUNTING ───────────────────────────────────────────────
+// Off unless asked for (`?cprobe=1`), because it holds every deck sample and
+// every moved vertex in the world. The question it exists to answer is not
+// "how deep did we dig" but "did we need to": for each deck sample it keeps the
+// target, the MESH height there before any carving, and the FIELD height — the
+// ground the world actually says is there. A sample where the field is already
+// below the target but the mesh is above it is a cut caused by nothing but the
+// mesh's own coarseness.
+// Kept PER TILE and replaced on every rebuild — a tile is recarved each time a
+// road inside it changes, so an append-only log would count the same excavation
+// four times and read as four times the damage.
+const CPROBE = /[?&]cprobe=1/.test(location.search);
+// s = [px, pz, tgt, meshBefore, field, offsetIndex]; v = [x, z, yBefore, yAfter]
+interface CarveLog { s: number[][]; v: number[][] }
+const carveLog = new Map<string, CarveLog>();
 function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): void {
   const cell = t.w / SEG;
   const tris = cellTriangles(geo, SEG);
@@ -4013,6 +4038,9 @@ function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): 
     }
     return lim[v];
   };
+  let recPass = 0, recOff = 0;
+  const log: CarveLog | null = CPROBE ? { s: [], v: [] } : null;
+  if (log) carveLog.set(`${t.tx}/${t.ty}`, log);
   const enforce = (px: number, pz: number, tgt: number): void => {
     const fx = (px - t.xs) / cell, fz = (pz - t.zs) / cell;
     if (fx < 0 || fz < 0 || fx >= SEG || fz >= SEG) return;
@@ -4031,13 +4059,35 @@ function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): 
       const w3 = 1 - w1 - w2;
       if (w1 < -1e-6 || w2 < -1e-6 || w3 < -1e-6) continue;   // not this half
       const cur = w1 * pos.getY(a) + w2 * pos.getY(b) + w3 * pos.getY(c);
+      // Recorded on the first pass only, and BEFORE the early-out, so the
+      // samples that needed nothing are counted too — the denominator is the
+      // whole point.
+      if (log && recPass === 0) log.s.push([px, pz, tgt, cur, sampleHeight(px, pz), recOff]);
       const over = cur - tgt;
       if (over <= 0) return;
-      const norm = w1 * w1 + w2 * w2 + w3 * w3;
+      // WHICH CORNER PAYS. Any set of drops with Σ wᵢ·dropᵢ = over satisfies the
+      // constraint exactly; the family dropᵢ = over·wᵢᵏ / Σwᵢᵏ⁺¹ does so for
+      // every k, and k picks how the bill is split. k=1 is least squares — the
+      // smallest total movement — and it is what spread the excavation into the
+      // field: a mesh cell is ~16m and a road 7m, so a corner ten metres out in
+      // the grass carries a real share of every kerb sample and takes a real
+      // share of every correction. Measured at Noordhoek under k=1: vertices
+      // 5–12m past the kerb dropped a median 0.19m and 12–25m out up to 1.3m,
+      // and the ground half a metre outside the tarmac ended 0.45m below the
+      // height the world gives it — which is not a road on a plinth, it is a
+      // trench around a road that never moved.
+      //
+      // k=2 bills by wᵢ² instead. A corner under the carriageway pays more, a
+      // corner out in the field pays almost nothing, and the constraint is
+      // satisfied just as exactly. Digging deeper next to the road is free: the
+      // tarmac and its apron cover it, and `limOf` still refuses to take any
+      // vertex below the deck floor it is serving, so concentrating the drop
+      // cannot dig a pit — it just stops the hole reaching the grass.
+      const norm = w1 * w1 * w1 + w2 * w2 * w2 + w3 * w3 * w3;
       if (norm < 1e-9) return;
-      pos.setY(a, Math.max(limOf(a), pos.getY(a) - (over * w1) / norm));
-      pos.setY(b, Math.max(limOf(b), pos.getY(b) - (over * w2) / norm));
-      pos.setY(c, Math.max(limOf(c), pos.getY(c) - (over * w3) / norm));
+      pos.setY(a, Math.max(limOf(a), pos.getY(a) - (over * w1 * w1) / norm));
+      pos.setY(b, Math.max(limOf(b), pos.getY(b) - (over * w2 * w2) / norm));
+      pos.setY(c, Math.max(limOf(c), pos.getY(c) - (over * w3 * w3) / norm));
       return;
     }
   };
@@ -4045,7 +4095,9 @@ function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): 
   // the deepest of them, and with the floor above a corner that hits its limit
   // cannot take its share of a correction — so the remainder has to find its
   // way onto the corners that still can, which takes another sweep.
+  const y0 = CPROBE ? Float32Array.from({ length: pos.count }, (_, i) => pos.getY(i)) : null;
   for (let pass = 0; pass < 3; pass++) {
+    recPass = pass;
     for (const s of near) {
       const len = Math.hypot(s.bx - s.ax, s.bz - s.az);
       const steps = Math.max(1, Math.ceil(len / (cell * 0.3)));
@@ -4057,9 +4109,18 @@ function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): 
         const tgt = f.y - CUT_CLEAR;
         // Centreline and both kerbs, plus a touch beyond, so the shoulder the
         // apron sits on is held down too.
-        for (const off of [0, -s.hw, s.hw, -(s.hw + 0.6), s.hw + 0.6]) {
-          enforce(px - uz * off, pz + ux * off, tgt);
+        const offs = [0, -s.hw, s.hw, -(s.hw + 0.6), s.hw + 0.6];
+        for (let o = 0; o < offs.length; o++) {
+          recOff = o;
+          enforce(px - uz * offs[o], pz + ux * offs[o], tgt);
         }
+      }
+    }
+  }
+  if (y0 && log) {
+    for (let i = 0; i < pos.count; i++) {
+      if (y0[i] - pos.getY(i) > 1e-4) {
+        log.v.push([pos.getX(i) + cxm, pos.getZ(i) + czm, y0[i], pos.getY(i)]);
       }
     }
   }
@@ -4760,22 +4821,38 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       const hug = mode === 'bridge'
         ? 0
         : 1 - clamp((prof[i] - Math.min(tL, tR, elev[i]) - HUG_LO) / (HUG_HI - HUG_LO), 0, 1);
-      // ONLY EVER DOWN. A road may be dropped onto the ground it is crossing;
-      // it may never be raised off it. Pushing to the MEAN of the two kerbs
-      // sounds even-handed and is not — a road usually sits in a shallow
-      // cutting, so the ground beside it averages ABOVE the centreline, and the
-      // even-handed version lifted the carriageway into the air on exactly the
-      // coastal roads it was meant to settle: measured at Big Sur it took the
-      // kerb gap from 16 samples over half a metre to 30.
-      edgeR[i] = prof[i] + Math.min(0, tR - prof[i]) * hug;
-      edgeL[i] = prof[i] + Math.min(0, tL - prof[i]) * hug;
+      // SEAT ON THE MEAN, TILT BY THE DIFFERENCE — never above the line the
+      // solver ruled.
+      //
+      // The rule here used to be ONLY EVER DOWN, per kerb: each edge was pulled
+      // down onto its own ground and never raised, and the centreline was then
+      // re-read as the mean of the two. That is not neutral. On any ground with
+      // cross-section noise the low kerb pulls and the high one cannot push
+      // back, so the deck sinks by about half the one-sided deviation at every
+      // station — and nothing ever lifts it again. Measured at Noordhoek: the
+      // deck ran a median 0.14m BELOW the field at its own centreline and 1.8m
+      // below at worst, which is ground the corridor carve then has to excavate
+      // out from under a road that was never above it. 15.2% of carve samples
+      // had real terrain over the deck; only 0.3% were mesh artefact. The
+      // digging was honest, the elevation it was digging to was not.
+      //
+      // Seating the SECTION on the mean of its two kerbs and taking the tilt
+      // from their difference puts each kerb on its own ground exactly when the
+      // ground is planar across the width — which is the flat and gently
+      // cambered case, i.e. most roads — so there is nothing left to cut. The
+      // failure the old rule was written against (a coast road lifted into the
+      // air, kerb gaps over half a metre going 16 → 30 at Big Sur) came from
+      // pushing to the mean UNCONDITIONALLY. Two things prevent it now: the
+      // seat is clamped at `prof`, so a section whose ground averages above the
+      // road stays in its cutting rather than climbing out of it, and `hug`
+      // still fades the whole thing to zero over any drop worth bridging, which
+      // is precisely the coastal case.
+      const seat = prof[i] + (Math.min(prof[i], (tR + tL) * 0.5) - prof[i]) * hug;
       // A carriageway is not a sheet thrown over a boulder: cap the cross-fall
       // so the deck stays something that could have been built.
-      const half = (edgeR[i] - edgeL[i]) * 0.5;
-      if (Math.abs(half) > MAX_FALL) {
-        const mid = (edgeR[i] + edgeL[i]) * 0.5, k = Math.sign(half) * MAX_FALL;
-        edgeR[i] = mid + k; edgeL[i] = mid - k;
-      }
+      const half = clamp((tR - tL) * 0.5 * hug, -MAX_FALL, MAX_FALL);
+      edgeR[i] = seat + half;
+      edgeL[i] = seat - half;
     }
     // Smoothed along the way before use. The heightfield is noisy at 9.5m/px
     // and a deck taken straight from it would ripple; three passes of a 1-2-1
@@ -4787,15 +4864,18 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         edgeL[i] = (b[i - 1] + b[i] * 2 + b[i + 1]) * 0.25;
       }
     }
-    // Smoothing can only ever have raised a kerb back toward the profile it
-    // was pulled down from, never above it — so one last pass holds the
-    // promise: nothing ends up higher than the road the profile described.
+    // Nothing ends up higher than the road the profile described — but the
+    // thing held to that promise is the CENTRELINE, not each kerb. Capping the
+    // edges individually is what the old down-only rule implied, and under the
+    // new seat it would shear the high side of every cross-fall back to the
+    // centreline and hand back exactly the sink this was written to remove: a
+    // road tilted into a hillside has its uphill kerb above its own centreline
+    // by construction, and that kerb is sitting on real ground.
     for (let i = 0; i < n; i++) {
-      const cap = profRaw[i];
-      if (edgeR[i] > cap) edgeR[i] = cap;
-      if (edgeL[i] > cap) edgeL[i] = cap;
       prof[i] = (edgeR[i] + edgeL[i]) * 0.5;
       tilt[i] = (edgeR[i] - edgeL[i]) * 0.5;
+      const over = prof[i] - profRaw[i];
+      if (over > 0) { prof[i] -= over; edgeR[i] -= over; edgeL[i] -= over; }
     }
     // AND AGAIN, because the hug just rewrote the profile the solver ruled.
     // It pulls each station down toward its own kerb samples, and on rough
@@ -8898,6 +8978,83 @@ function meshHeightAt(x: number, z: number): number | null {
   return { lip: band(lip), deckOverField: band(overField), meshUnderField: band(meshUnder), poke: band(poke),
     budget: +(SURFACE.road.lift + CUT_CLEAR).toFixed(2),
     pokeAbove0: poke.length ? +(poke.filter((v) => v > 0).length / poke.length * 100).toFixed(1) : 0 };
+};
+/**
+ * ARE WE CUTTING WHERE NOTHING NEEDED CUTTING?  (`?cprobe=1`)
+ *
+ * Every deck sample the carve tested carries three heights: the TARGET it has
+ * to hold the ground below, the MESH there before any carving, and the FIELD —
+ * the elevation the world actually reports at that exact point. That splits the
+ * excavation into two entirely different things:
+ *
+ *   needed   field > target — real ground standing over the road, a true cutting
+ *   artefact field ≤ target but mesh > target — the ground was already low
+ *            enough and only the mesh's straight chord between vertices a cell
+ *            apart stood proud. Digging here removes ground that was never in
+ *            the way, and takes the whole ~19m cell down with it.
+ *
+ * The vertex half reports the collateral: how far each moved vertex sits from
+ * the nearest carriageway edge, and how far it fell.
+ */
+(window as unknown as { __carve?: object }).__carve = (r = 260): object => {
+  if (!CPROBE) return { error: 'reload with ?cprobe=1' };
+  const S: number[][] = [], V: number[][] = [];
+  for (const l of carveLog.values()) {
+    for (const e of l.s) if (Math.hypot(e[0] - state.x, e[1] - state.z) <= r) S.push(e);
+    for (const e of l.v) if (Math.hypot(e[0] - state.x, e[1] - state.z) <= r) V.push(e);
+  }
+  if (!S.length) return { error: 'no carve samples in range' };
+  let needed = 0, artefact = 0, idle = 0;
+  const overMesh: number[] = [], overField: number[] = [], gap: number[] = [];
+  // …and the same split by WHERE across the section the sample was taken. A cut
+  // that lives at the shoulders is a cross-slope being benched, which is a real
+  // road. A cut that fires under the carriageway itself means the deck was
+  // seated below the ground it runs on, and the excavation is the road's fault.
+  const OFFN = ['centreline', 'kerb L', 'kerb R', 'shoulder L', 'shoulder R'];
+  const byOff = OFFN.map(() => ({ n: 0, cut: 0, gap: [] as number[] }));
+  for (const [, , tgt, mesh, field, off] of S) {
+    gap.push(field - tgt);                       // + = terrain genuinely above the road
+    const b = byOff[off] ?? byOff[0];
+    b.n++; b.gap.push(field - tgt);
+    if (mesh > tgt) {
+      b.cut++;
+      overMesh.push(mesh - tgt);
+      if (field > tgt) { needed++; overField.push(field - tgt); } else artefact++;
+    } else idle++;
+  }
+  // Collateral: the drop, banded by how far past the kerb the vertex sits.
+  const bands = [[0, 0], [0, 5], [5, 12], [12, 25], [25, 1e9]];
+  const drops = bands.map(() => [] as number[]);
+  for (const [x, z, ya, yb] of V) {
+    cutSet.clear();
+    stripsNear(x, z, 2, cutSet);
+    let out = Infinity;
+    for (const sg of cutSet) out = Math.min(out, stripFloor(sg, x, z).out);
+    const d = out <= 0 ? 0 : out;
+    const bi = out <= 0 ? 0 : bands.findIndex(([lo, hi], i) => i > 0 && d > lo && d <= hi);
+    if (bi >= 0) drops[bi].push(ya - yb);
+  }
+  const band = (v: number[]): object | null => {
+    if (!v.length) return null;
+    const a = v.slice().sort((p, q) => p - q);
+    return { n: a.length, med: +a[a.length >> 1].toFixed(2),
+      p95: +a[Math.floor(a.length * 0.95)].toFixed(2), max: +a[a.length - 1].toFixed(2) };
+  };
+  const pct = (n: number): number => +((n / S.length) * 100).toFixed(1);
+  return {
+    samples: S.length,
+    idle: `${idle} (${pct(idle)}%)`,               // mesh already below target
+    needed: `${needed} (${pct(needed)}%)`,          // real ground in the way
+    artefact: `${artefact} (${pct(artefact)}%)`,    // only the mesh was in the way
+    overMesh: band(overMesh), overField: band(overField),
+    fieldMinusTarget: band(gap),
+    bySection: Object.fromEntries(OFFN.map((nm, i) => [nm,
+      byOff[i].n ? { cutPct: +((byOff[i].cut / byOff[i].n) * 100).toFixed(1),
+        fieldOverTarget: band(byOff[i].gap) } : null])),
+    movedVerts: V.length,
+    dropByDistPastKerb: Object.fromEntries(bands.map(([lo, hi], i) =>
+      [i === 0 ? 'under carriageway' : `${lo}-${hi > 1e8 ? '∞' : hi}m out`, band(drops[i])])),
+  };
 };
 /**
  * Does the terrain normal map actually land where the shader will read it?
