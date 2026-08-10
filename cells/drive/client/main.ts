@@ -4151,7 +4151,10 @@ const apron = {
   sgV: [] as number[], sgUV: [] as number[],
 };
 const spanStats = {
-  piers: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0, fillQ: 0, fillM2: 0,
+  piers: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0,
+  // Why a kerb quad did or did not get a batter — one counter per branch, so
+  // "the fill stops halfway along this road" is attributable rather than argued.
+  fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0, fillQ: 0, fillM2: 0,
   at: null as [number, number] | null,
   // Where the boards went, and which way each faces — bounded, for probes.
   signAt: [] as Array<{ x: number; z: number; fx: number; fz: number; kind: number }>,
@@ -5048,7 +5051,15 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // metre, a deeper one runs out further, and where the ground never
         // comes back the road is genuinely RAISED and keeps its fascia, which
         // is what an embankment or a bridge should look like.
-        if (!open && !deck && vergeFill) {
+        if (deck) spanStats.fillDeck++;
+        // NOT gated on `open`. That flag exists to stop a tall vertical fascia
+        // standing across a turning — but a batter LIES ON THE GROUND and can
+        // block nothing, and a junction mouth is exactly where you want earth
+        // running from the road down to the verge rather than a bare edge.
+        // Measured before this was noticed: 2049 of ~9850 kerb quads around
+        // Noordhoek, 21%, were being skipped for no reason anyone could see
+        // except that the fascia beside them had been cut back.
+        if (!deck && vergeFill) {
           const BATT = 0.6;                      // metres of drop per metre out
           const STEPS = [0.6, 1.4, 2.4, 3.6, 5];
           const pts: Array<[number, number, number]> = [];  // d, y at A, y at B
@@ -5057,7 +5068,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
             const g0 = groundAt(ex0 + ox * sgn * f, ez0 + oz * sgn * f);
             const g1 = groundAt(ex1 + ox * sgn * f, ez1 + oz * sgn * f);
             // Ground already at the road on the very first step: no gap here.
-            if (!pts.length && g0 >= ey0 - 0.05 && g1 >= ey1 - 0.05) break;
+            if (!pts.length && g0 >= ey0 - 0.05 && g1 >= ey1 - 0.05) { spanStats.fillNoGap++; break; }
             const b0 = ey0 - d * BATT, b1 = ey1 - d * BATT;
             pts.push([d, Math.min(ey0, Math.max(g0, b0)), Math.min(ey1, Math.max(g1, b1))]);
             // Met the ground — the batter has run out and the fill ends here.
@@ -5065,7 +5076,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           }
           // Ran the full reach without meeting: the road stands clear of its
           // surroundings, and covering that would be inventing an embankment.
+          if (!pts.length || pts[pts.length - 1][0] >= 5) spanStats.fillUnmet += pts.length ? 1 : 0;
           if (pts.length && pts[pts.length - 1][0] < 5) {
+            spanStats.fillDrawn++;
             let px = 0, py0 = ey0, py1 = ey1;
             spanStats.fillQ += pts.length;
             spanStats.fillM2 += pts[pts.length - 1][0] * len;
