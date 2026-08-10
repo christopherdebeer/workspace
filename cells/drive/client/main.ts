@@ -3693,12 +3693,29 @@ const cutSet = new Set<Seg>();
  * buried 8.9% of one Rio avenue. This is the same query without the climb, so a
  * vertex may be taken down to the road it serves and no further.
  */
+// DEFAULT 0 — the shipped behaviour, and provably the shipped behaviour, since
+// multiplying the reach by zero leaves the floor exactly where it was. Live as
+// a knob (`?wash=0.25`) because the sweep it exists for is not finished: it
+// buys back the kerb lip at the price of letting terrain rise toward the
+// tarmac, and the two have to be judged together on a real screen.
+//   wash 0     lip median 0.99m   terrain above the deck 0%     road buried 0%
+//   wash 0.10  lip median 0.58m   terrain above the deck 10.7%  road buried 0%
+//   wash 0.25  lip median 0.34m   terrain above the deck 24.6%  road buried 1.5%
+// (Beach Road, Cape Town — the site where the plinth reads worst.)
+const CUT_WASH = Number(new URLSearchParams(location.search).get('wash') ?? 0);
 function roadFloorHard(x: number, z: number): number | null {
   cutSet.clear();
   stripsNear(x, z, 2, cutSet);
   let best: number | null = null;
   for (const sg of cutSet) {
-    const y = stripFloor(sg, x, z).y;
+    const f = stripFloor(sg, x, z);
+    // A WASH, not a plane. Dead flat out to the limit of reach planes a ~21m
+    // shelf either side of every road — the mesh cell is that wide, so a kerb
+    // sample drags corners that far out — and the road then reads as a plinth
+    // with the country stepping up away from it. A gentle rise lets the ground
+    // beyond the shoulder keep its own height while the corners that actually
+    // hold the carriageway still come all the way down.
+    const y = f.y + Math.max(0, f.out) * CUT_WASH;
     if (best === null || y < best) best = y;
   }
   return best === null ? null : best - CUT_CLEAR;
