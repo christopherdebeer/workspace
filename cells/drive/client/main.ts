@@ -1472,6 +1472,7 @@ function flushTerrain(now: number): void {
       buildTerrainMesh(t);
       // The ground under this tile just moved; anything standing on it follows.
       reseatBuildings(t);
+      redrape(t);
       flushBatter(t);
       terrainMs = performance.now() - t0;
       return;
@@ -4267,6 +4268,43 @@ function quadInto(V: number[], U: number[], p: number[], uv: number[]): void {
     p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
   U.push(uv[0], uv[1], uv[2], uv[3], uv[4], uv[5], uv[2], uv[3], uv[6], uv[7], uv[4], uv[5]);
 }
+/**
+ * DRAPED WAYS FOLLOW THE GROUND THEY ARE DRAWN ON.
+ *
+ * A track, a river, a railway — anything with `mode: 'none'` — is laid on the
+ * heightfield at build time and then never touched again. But the terrain under
+ * it does not hold still: the corridor carve digs a road's cutting after the
+ * fact, and the rendered mesh is a chord between vertices a cell apart rather
+ * than the field the drape sampled. So a trail crossing a road's cutting was
+ * left bridging its own excavation, and one running along a slope stood off the
+ * mesh by whatever the interpolation error happened to be.
+ *
+ * Registered here and re-draped from `flushTerrain`, the same deferral the
+ * batter uses and for the same reason: at build time the ground is a lie.
+ */
+interface Draped { geo: THREE.BufferGeometry; lift: number;
+  x0: number; z0: number; x1: number; z1: number }
+const drapedWays: Draped[] = [];
+/** Re-seat every draped vertex that falls inside a tile just rebuilt. */
+function redrape(t: HeightTile): void {
+  const tx1 = t.xs + t.w, tz1 = t.zs + t.h;
+  for (const d of drapedWays) {
+    if (d.x1 < t.xs || d.x0 > tx1 || d.z1 < t.zs || d.z0 > tz1) continue;
+    const pos = d.geo.attributes.position as THREE.BufferAttribute;
+    let touched = false;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), z = pos.getZ(i);
+      if (x < t.xs || z < t.zs || x >= tx1 || z >= tz1) continue;
+      pos.setY(i, groundAt(x, z) + d.lift);
+      touched = true;
+    }
+    if (touched) {
+      pos.needsUpdate = true;
+      d.geo.computeVertexNormals();
+      d.geo.computeBoundingSphere();
+    }
+  }
+}
 /** Build the shoulders for every parked kerb inside this tile, against the
  *  ground as it now stands, and retire them. */
 function flushBatter(t: HeightTile): void {
@@ -4620,12 +4658,21 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // be built against sampleHeight's 0 and bake a causeway that no later tile
   // can ever correct, because a way is rendered exactly once. Refusing is the
   // right failure: the OSM tile is retried, and it comes back with terrain.
-  for (const [px, pz] of pts) if (!hasHeight(px, pz)) { unbuilt++; return; }
   // Subdivide to ~12m steps first: OSM ways only carry vertices where the road
   // BENDS, so a long straight segment used to bridge every terrain dip between
   // its endpoints like a causeway. Dense sampling makes the ribbon hug the
   // heightfield.
   const dense = densifyPts(pts);
+  // …AND THE GATE IS KEPT ON THE DENSE POINTS, not the OSM nodes. Checking the
+  // nodes is checking the wrong thing for exactly the reason the densify above
+  // exists: a way carries vertices where it BENDS, so a straight river or trail
+  // can run kilometres between two nodes that both sit over loaded terrain
+  // while everything between them does not. `sampleHeight` answers 0 — spawn
+  // level — for anywhere it has no tile, so those middle stations were draped
+  // at the world origin's elevation and the way came out as a dead-flat band
+  // hanging in the sky over the valley. Photographed on Cabrillo Highway at
+  // Big Sur: two of them, a river and a trail, arcing over the ridge.
+  for (const [px, pz] of dense) if (!hasHeight(px, pz)) { unbuilt++; return; }
   // Only carriageways get a solid edge. A track is two ruts worn into the
   // hillside — its ribbon is transparent everywhere but the ruts, so a pair of
   // earth walls would stand along it with nothing on top of them.
@@ -5510,6 +5557,20 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
   geo.computeVertexNormals();
   worldGroup.add(new THREE.Mesh(geo, mat));
+  // A DRAPED way is registered to be re-seated whenever the terrain beneath it
+  // is rebuilt. A PROFILED one is not: its deck is a solved alignment that the
+  // ground is carved to meet, and re-draping it would throw that away and put
+  // the road back on the hillside the profile exists to cut through.
+  if (!flat) {
+    let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+    for (let i = 0; i < verts.length; i += 3) {
+      if (verts[i] < x0) x0 = verts[i];
+      if (verts[i] > x1) x1 = verts[i];
+      if (verts[i + 2] < z0) z0 = verts[i + 2];
+      if (verts[i + 2] > z1) z1 = verts[i + 2];
+    }
+    drapedWays.push({ geo, lift, x0, z0, x1, z1 });
+  }
   // A drivable road below sea level is proof the land here is dry — the
   // evidence that keeps the sea plane out of Badwater and a polder alike.
   // Tunnels excluded: an undersea tunnel is under a sea that is really there.
@@ -9184,6 +9245,37 @@ function meshHeightAt(x: number, z: number): number | null {
   return { lip: band(lip), deckOverField: band(overField), meshUnderField: band(meshUnder), poke: band(poke),
     budget: +(SURFACE.road.lift + CUT_CLEAR).toFixed(2),
     pokeAbove0: poke.length ? +(poke.filter((v) => v > 0).length / poke.length * 100).toFixed(1) : 0 };
+};
+/**
+ * DO DRAPED WAYS ACTUALLY SIT ON THE GROUND THAT IS DRAWN?
+ *
+ * Reads the VERTICES of every registered drape and compares each against
+ * `groundAt` at its own position. `__lift` cannot answer this: it recomputes
+ * the drape from `sampleHeight` rather than reading the geometry, so it reports
+ * the formula the way was built with and is blind to any later re-seating.
+ * Positive is a trail standing over the ground drawn beneath it.
+ */
+(window as unknown as { __drape?: object }).__drape = (r = 400): object => {
+  const off: number[] = [];
+  let ways = 0;
+  for (const d of drapedWays) {
+    if (d.x1 < state.x - r || d.x0 > state.x + r || d.z1 < state.z - r || d.z0 > state.z + r) continue;
+    ways++;
+    const pos = d.geo.attributes.position as THREE.BufferAttribute;
+    for (let i = 0; i < pos.count; i += 3) {
+      const x = pos.getX(i), z = pos.getZ(i);
+      if (Math.hypot(x - state.x, z - state.z) > r) continue;
+      off.push(pos.getY(i) - (groundAt(x, z) + d.lift));
+    }
+  }
+  if (!off.length) return { ways, error: 'no draped vertices in range' };
+  const a = off.slice().sort((p, q) => p - q);
+  return { ways, verts: a.length,
+    p05: +a[Math.floor(a.length * 0.05)].toFixed(2),
+    med: +a[a.length >> 1].toFixed(2),
+    p95: +a[Math.floor(a.length * 0.95)].toFixed(2),
+    worst: +Math.max(Math.abs(a[0]), Math.abs(a[a.length - 1])).toFixed(2),
+    over30cm: +((a.filter((v) => Math.abs(v) > 0.3).length / a.length) * 100).toFixed(1) };
 };
 /**
  * WHERE TWO PIECES OF ROAD DISAGREE ABOUT THE SAME POINT.
