@@ -4194,6 +4194,8 @@ const juncPins = !/[?&]nopins=1/.test(location.search);
 // a turning is both wrong to look at and wrong to drive.
 const GRADE_SEP = 2.6;
 const RAIL_H = 1;      // parapet height above the kerb it stands on
+// Off only from a probe (`?nofill=1`), to see the ditch the fill closes.
+const vergeFill = !/[?&]nofill=1/.test(location.search);
 /** The deck height an ALREADY BUILT road holds at (x,z), if any fragment ends
  *  there — the continuity anchor for the fragment about to build. Fragments of
  *  one way arrive independently (tile clipping, tag changes chop a road into
@@ -5021,6 +5023,37 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // the seam between the two decks, not enough to be a wall between them.
         // Dropping it altogether opened daylight under the ribbon's own edge.
         face(ex0, ey0, ez0, ex1, ey1, ez1, open ? ey0 - 0.35 : b0, open ? ey1 - 0.35 : b1, uA, uB, deck);
+        // ── the hillward ditch, filled ────────────────────────────────
+        // A mesh cell is ~19m and a carriageway is seven, so ONE triangle
+        // routinely spans the road and both verges. On a shelf road that means
+        // the seaward drop is interpolated straight across the tarmac and takes
+        // the HILLWARD verge down with it: measured along Chapman's Peak, the
+        // ground 0.3m past the uphill kerb sits a median 4.38m below it and
+        // does not climb back past the road until three to five metres out.
+        // 92.4% of hillward spans had one of these troughs.
+        //
+        // The carve cannot fix it — it only ever lowers, and the vertex it is
+        // lowering is doing honest work for the drop on the other side. Finer
+        // terrain would, but the resolution dial is deliberately coarse for
+        // phones. So the gap is closed the way a road crew would: fill it, and
+        // let the verge run from the kerb out to wherever the hill actually is.
+        if (!open && !deck && vergeFill) {
+          let fillD = 0, fillY = 0;
+          for (const d of [0.6, 1.2, 2, 3, 4.5, 6]) {
+            const gx = ex0 + ox * sgn * (d / 2.2), gz = ez0 + oz * sgn * (d / 2.2);
+            const gy = groundAt(gx, gz);
+            if (d === 0.6 && gy > ey0 - 0.3) break;    // no trough here at all
+            if (gy >= ey0 - 0.12) { fillD = d; fillY = gy; break; }
+          }
+          if (fillD > 0) {
+            const k = fillD / 2.2;
+            quad(apron.cutV, apron.cutUV, [
+              ex0, ey0, ez0, ex1, ey1, ez1,
+              ex0 + ox * sgn * k, fillY, ez0 + oz * sgn * k,
+              ex1 + ox * sgn * k, fillY, ez1 + oz * sgn * k,
+            ], [uA, 0, uB, 0, uA, fillD / 4, uB, fillD / 4]);
+          }
+        }
         bot.push(b0, b1);
         drop.push(Math.max(ey0 - g0, ey1 - g1));
         if (railHere && !open) {
@@ -8829,6 +8862,61 @@ function meshHeightAt(x: number, z: number): number | null {
     if (deg > worst) worst = deg;
   }
   return { tile: key, samples: cnt, meanDeg: +(sum / cnt).toFixed(2), worstDeg: +worst.toFixed(2) };
+};
+/**
+ * THE FIRST FEW METRES PAST THE KERB, per side, against the kerb's own height.
+ *
+ * `__xsec` starts at ±6m, which steps clean over the thing being described: a
+ * trough right against the carriageway on the hillward side, where the ground
+ * dips below the road edge before climbing into the slope. Negative here is
+ * ground BELOW the kerb it sits against.
+ */
+(window as unknown as { __verge?: object }).__verge = (r = 260): object => {
+  const D = [0.3, 1, 2, 3, 5, 8];
+  const up: number[][] = D.map(() => []);
+  const dn: number[][] = D.map(() => []);
+  let ditches = 0, spans = 0;
+  const seen = new Set<Seg>();
+  const c = Math.ceil(r / GRID);
+  for (let cx = -c; cx <= c; cx++) for (let cz = -c; cz <= c; cz++) {
+    for (const s of roadGrid.get(`${Math.floor(state.x / GRID) + cx},${Math.floor(state.z / GRID) + cz}`) ?? []) {
+      if (seen.has(s) || s.tk || s.tn || s.ya === undefined) continue;
+      seen.add(s);
+      const mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2;
+      if (Math.hypot(state.x - mx, state.z - mz) > r) continue;
+      const dx = s.bx - s.ax, dz = s.bz - s.az, l = Math.hypot(dx, dz) || 1;
+      const nx = -dz / l, nz = dx / l;
+      const deck = ((s.ya as number) + (s.yb as number)) / 2;
+      // Which side climbs: that is the hillward one.
+      const gA = groundAt(mx + nx * (s.hw + 6), mz + nz * (s.hw + 6));
+      const gB = groundAt(mx - nx * (s.hw + 6), mz - nz * (s.hw + 6));
+      for (const sg of [1, -1]) {
+        const hill = (sg > 0 ? gA : gB) > (sg > 0 ? gB : gA);
+        const kerbY = deck + (s.ca ?? 0) * sg + SURFACE.road.lift;
+        const acc = hill ? up : dn;
+        let lo = 0;
+        for (let k = 0; k < D.length; k++) {
+          const q = groundAt(mx + nx * sg * (s.hw + D[k]), mz + nz * sg * (s.hw + D[k])) - kerbY;
+          acc[k].push(q);
+          if (k < 4) lo = Math.min(lo, q);
+        }
+        // A DITCH: dips below the kerb close in, then climbs back past it.
+        if (hill) {
+          spans++;
+          const far = groundAt(mx + nx * sg * (s.hw + 8), mz + nz * sg * (s.hw + 8)) - kerbY;
+          if (lo < -0.35 && far > lo + 0.35) ditches++;
+        }
+      }
+    }
+  }
+  const band = (v: number[]): number[] | null => {
+    if (!v.length) return null;
+    const a = v.slice().sort((p, q) => p - q);
+    return [+a[Math.floor(a.length * 0.1)].toFixed(2), +a[a.length >> 1].toFixed(2), +a[Math.floor(a.length * 0.9)].toFixed(2)];
+  };
+  return { offsets: D,
+    hillward: up.map(band), seaward: dn.map(band),
+    hillSpans: spans, ditches, ditchPct: spans ? +(ditches / spans * 100).toFixed(1) : 0 };
 };
 /** What the world puts in the truck's way, and what it grows where it should
  *  not: wall segments by kind, vegetation sites standing on a carriageway, and
