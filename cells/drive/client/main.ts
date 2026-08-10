@@ -6542,7 +6542,7 @@ function pruneTileCache(): void {
 }
 
 // ── points of interest (named features become HUD waypoints) ───────
-interface Poi { name: string; x: number; z: number; kind: 'park' | 'water' | 'place' | 'mission' | 'repair'; pinned?: boolean }
+interface Poi { name: string; x: number; z: number; kind: 'park' | 'water' | 'place' | 'mission' | 'repair' | 'drone'; pinned?: boolean }
 const pois = new Map<string, Poi>();
 function notePoi(tags: Record<string, string>, pts: Array<[number, number]>): void {
   const name = tags.name;
@@ -9647,6 +9647,12 @@ function meshHeightAt(x: number, z: number): number | null {
     x: +drone.x.toFixed(1), z: +drone.z.toFixed(1),
     fromRig: +Math.hypot(drone.x - state.x, drone.z - state.z).toFixed(1) });
 (window as unknown as { __droneGo?: object }).__droneGo = (): void => droneToggle();
+(window as unknown as { __pov?: object }).__pov = (): void => togglePov();
+/** The POI table, so a test can assert the downed drone is actually in it. */
+(window as unknown as { __poiList?: object }).__poiList = (): object =>
+  [...pois.values()].map((p) => ({ name: p.name, kind: p.kind, pinned: !!p.pinned,
+    d: +Math.hypot(p.x - state.x, p.z - state.z).toFixed(0) }))
+    .filter((p) => p.pinned || p.kind === 'drone');
 /** Set the charge, for a test that would otherwise have to wait out a whole
  *  battery — headless runs the clock at about 60% of wall time, so draining it
  *  honestly takes six minutes of nothing. */
@@ -10697,6 +10703,12 @@ function hudFlash(m: string): void { flashMsg = m; flashUntil = performance.now(
 // a minute of air time and the whole of it is spent getting somewhere and
 // getting back. Run it flat and it does not vanish politely — it comes down
 // where it ran out, and the only way to get it back is to drive the rig there.
+// The name the downed drone is filed under. A `pinned` POI, which is what
+// takes it out of the nearest-three rule and keeps it on the edge of the screen
+// however far away it is — the same treatment a mission destination gets, and
+// for the same reason: the whole point of it is that it is somewhere else and
+// you have to go there.
+const DRONE_POI = 'DOWNED DRONE';
 const DRONE = {
   SPEED: 34,          // m/s flat out — fast enough to be worth launching
   YAW: 1.5,           // rad/s at full lock
@@ -10769,6 +10781,7 @@ function droneToggle(): void {
 /** Home, docked, recharging. */
 function droneDock(): void {
   drone.up = false; drone.falling = false; drone.downed = false; drone.batt = 1;
+  pois.delete(DRONE_POI);
   if (droneMesh) droneMesh.visible = false;
   setCam(lastPov);
   hudFlash('DRONE DOCKED');
@@ -10781,6 +10794,7 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
     // Collected by driving to it. The rig is the only recovery vehicle.
     if (Math.hypot(drone.dx - state.x, drone.dz - state.z) < 9) {
       drone.downed = false; drone.batt = 1;
+      pois.delete(DRONE_POI);
       if (droneMesh) droneMesh.visible = false;
       hudFlash('DRONE RECOVERED');
     }
@@ -10793,10 +10807,13 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
       drone.y = g + 0.4;
       drone.falling = false; drone.up = false;
       drone.downed = true; drone.dx = drone.x; drone.dz = drone.z;
+      pois.set(DRONE_POI, { name: DRONE_POI, x: drone.x, z: drone.z, kind: 'drone', pinned: true });
       setCam(lastPov);
       hudFlash('DRONE DOWN');
     }
-    if (droneMesh) droneMesh.position.set(drone.x, drone.y, drone.z);
+    // Falling and downed it is always drawn, whatever the view preference —
+    // it is the thing you are looking for.
+    if (droneMesh) { droneMesh.position.set(drone.x, drone.y, drone.z); droneMesh.visible = true; }
     return;
   }
   drone.batt = Math.max(0, drone.batt - dt / DRONE.LIFE);
@@ -10813,6 +10830,12 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
   if (droneMesh) {
     droneMesh.position.set(drone.x, drone.y, drone.z);
     droneMesh.rotation.y = -drone.heading;
+    // A NOSE CAMERA DOES NOT SEE ITS OWN AIRFRAME. The FPV eye sits at the
+    // drone's own position, so the body and its belly lamp filled the top of
+    // the frame — the same problem the cab view solves by ghosting the shell,
+    // except there the bonnet is worth keeping and here there is nothing to
+    // keep. It comes back the moment you switch to the trailing view.
+    droneMesh.visible = lastPov !== 'cab';
   }
 }
 /** The POV you drive in (chase or cab) — what the chart returns you to, and
@@ -10846,6 +10869,11 @@ function toggleCam(): void {
  *  the dock previews and what you will drop back into. */
 function togglePov(): void {
   lastPov = lastPov === 'chase' ? 'cab' : 'chase';
+  // THE PREFERENCE IS THE PREFERENCE, wherever you are looking from. Flying,
+  // it picks the drone's own two views — the trailing camera, or the one on
+  // its nose — rather than dumping you back in the truck, which is what
+  // switching to `lastPov` here used to do the moment you touched the chip.
+  if (camMode === 'drone') { setCam('drone'); return; }
   if (camMode !== 'top') setCam(lastPov);
 }
 addEventListener('keydown', (e) => {
@@ -10867,7 +10895,7 @@ const renderPlace = (): void => { placeLine = placeLabel.toUpperCase(); };
 // Named parks/waters/buildings from the OSM stream become waypoints. This
 // only COMPUTES them; the pixel HUD draws them, so labels share the world's
 // grid and font instead of being browser text floating above it.
-const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a', mission: '#f5c453', repair: '#e2703a' };
+const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a', mission: '#f5c453', repair: '#e2703a', drone: '#d8412f' };
 const poiVec = new THREE.Vector3(), poiView = new THREE.Vector3(), camFwd = new THREE.Vector3();
 const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}M` : `${(m / 1000).toFixed(1)}KM`);
 // Close enough to act on. The pins used to be CULLED inside 25m, which threw
@@ -12246,14 +12274,23 @@ function tick(now: number): void {
     // so this is free.
     setNear(Math.max(1, dist * 0.08), Math.max(30000, dist * 4));
   } else if (camMode === 'drone') {
-    // Behind and above, looking down its own nose. Far enough back that the
-    // drone is a legible object rather than a dot, high enough that the point
-    // of being up here — seeing what the road does next — actually lands.
+    // TWO VIEWS, the same two the rig has and chosen by the same chip. CHASE
+    // trails it: far enough back that the drone is a legible object rather than
+    // a dot, high enough that the point of being up here — seeing what the road
+    // does next — actually lands. CAB is the nose camera: no aircraft in the
+    // frame, a slightly tighter lens, and a steeper look down, which is what
+    // you actually want when you are reading ground rather than flying.
     farGroup.visible = true;
-    setNear(0.6, 30000);
     const dfx = Math.sin(drone.heading), dfz = -Math.cos(drone.heading);
-    camPos.set(drone.x - dfx * 13, drone.y + 6.5, drone.z - dfz * 13);
-    camAim.set(drone.x + dfx * 26, drone.y - 7, drone.z + dfz * 26);
+    if (lastPov === 'cab') {
+      setNear(0.3, 30000);
+      camPos.set(drone.x, drone.y - 0.35, drone.z);
+      camAim.set(drone.x + dfx * 30, drone.y - 13, drone.z + dfz * 30);
+    } else {
+      setNear(0.6, 30000);
+      camPos.set(drone.x - dfx * 13, drone.y + 6.5, drone.z - dfz * 13);
+      camAim.set(drone.x + dfx * 26, drone.y - 7, drone.z + dfz * 26);
+    }
   } else if (camMode === 'cab') {
     farGroup.visible = false;
     // THE DRIVER'S SEAT. The eye is a point on the body, so it takes the body's
@@ -12807,7 +12844,7 @@ function hudIconEdge(ch: string, x: number, y: number, col: string, px = 8): voi
 }
 /** Which kinds carry a mark: a job, and a place that services the rig.
  *  The rest are already told apart by their beam colour. */
-const KIND_ICON: Partial<Record<Poi['kind'], string>> = { mission: ICON.flag, repair: ICON.wrench };
+const KIND_ICON: Partial<Record<Poi['kind'], string>> = { mission: ICON.flag, repair: ICON.wrench, drone: ICON.warn };
 
 // ── HUD: one low-res canvas, drawn in the pixel font ───────────────
 // The DOM version could never reach the reference: system fonts are hinted
@@ -14169,9 +14206,10 @@ function hudTap(cx: number, cy: number): boolean {
   if (inside(dockRect, 0)) { toggleCam(); return true; }
   // A tap on a pin PINS it — the place stays on screen past the
   // nearest-three rule until tapped again. Mission pins belong to the job
-  // and are not yours to unpin.
+  // and are not yours to unpin; nor is a downed drone, which is a thing you
+  // have to go and collect rather than a bookmark you chose.
   for (const r of poiRects) {
-    if (!inside(r, 2) || r.kind === 'mission') continue;
+    if (!inside(r, 2) || r.kind === 'mission' || r.kind === 'drone') continue;
     const poi = pois.get(r.name);
     if (poi) { poi.pinned = !poi.pinned; audio.stone(); }
     return true;
