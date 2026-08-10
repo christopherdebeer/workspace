@@ -5218,11 +5218,35 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         //
         // So the kerb is recorded and the shoulder is built later, against the
         // ground that actually ends up there — see flushBatter.
+        if (deck) spanStats.fillDeck++;
         if (!deck) {
           pendingBatter.push({
             ax: ex0, az: ez0, bx: ex1, bz: ez1,
             nx: ox * sgn, nz: oz * sgn, y0: ey0, y1: ey1, uA, uB, fid, nm: name,
           });
+        }
+        // WHAT THIS SIDE OF THE BAY ENDED UP BEING. Three consumers downstream
+        // read these and nothing else tells them: the soffit and the piers are
+        // built from `bot`, and the roadside furniture asks `drop` whether
+        // there is anything here worth warning about. Deferring the batter took
+        // the whole tail of this loop out with it and left both arrays empty,
+        // so the soffit quad and every pier were assembled out of `undefined`
+        // and the signs could never see a fall. Nothing threw — NaN geometry
+        // just does not rasterize — which is why a viaduct over Bixby Creek
+        // still counted 60 piers and drew none of them.
+        bot.push(b0, b1);
+        drop.push(Math.max(ey0 - g0, ey1 - g1));
+        // THE PARAPET. Same deletion: `railHere` survived because the junction
+        // logic reads it, so the decision about where a barrier belongs was
+        // still being made correctly on every metre of road — and then thrown
+        // away. Measured at Big Sur afterwards: 0m of rail on 2.8km of viaduct
+        // and shelf road, with 69m of daylight under the worst of it.
+        if (railHere && !open) {
+          // Right on the kerb line, not outboard of it: set any further out and
+          // the parapet hangs in the air beside its own fascia.
+          const rx0 = ex0 + ox * sgn * 0.04, rz0 = ez0 + oz * sgn * 0.04;
+          const rx1 = ex1 + ox * sgn * 0.04, rz1 = ez1 + oz * sgn * 0.04;
+          rail(rx0, ey0, rz0, rx1, ey1, rz1, along / 2.5, (along + len) / 2.5);
         }
       }
       // ── roadside furniture ──
