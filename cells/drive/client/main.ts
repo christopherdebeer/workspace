@@ -4160,7 +4160,10 @@ const spanStats = {
   piers: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0,
   // Why a kerb quad did or did not get a batter — one counter per branch, so
   // "the fill stops halfway along this road" is attributable rather than argued.
-  fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0, fillQ: 0, fillM2: 0,
+  fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0,
+  // How big the gap actually was in the quads we declined to fill, banded —
+  // so "52% had no gap" can be checked rather than believed.
+  noGapBand: [0, 0, 0, 0] as number[], fillQ: 0, fillM2: 0,
   at: null as [number, number] | null,
   // Where the boards went, and which way each faces — bounded, for probes.
   signAt: [] as Array<{ x: number; z: number; fx: number; fz: number; kind: number }>,
@@ -5083,7 +5086,12 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
             const g0 = groundAt(qx0, qz0);
             const g1 = groundAt(qx1, qz1);
             // Ground already at the road on the very first step: no gap here.
-            if (!pts.length && g0 >= ey0 - 0.05 && g1 >= ey1 - 0.05) { spanStats.fillNoGap++; break; }
+            if (!pts.length && g0 >= ey0 - 0.05 && g1 >= ey1 - 0.05) {
+              spanStats.fillNoGap++;
+              const gap = Math.max(ey0 - g0, ey1 - g1);
+              spanStats.noGapBand[gap <= 0 ? 0 : gap < 0.02 ? 1 : gap < 0.035 ? 2 : 3]++;
+              break;
+            }
             const b0 = ey0 - d * BATT, b1 = ey1 - d * BATT;
             pts.push([d, Math.min(ey0, Math.max(g0, b0)), Math.min(ey1, Math.max(g1, b1))]);
             // Met the ground — the batter has run out and the fill ends here.
