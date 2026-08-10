@@ -7993,8 +7993,16 @@ function stepWeather(now: number, dt: number): void {
   // The night floor is not zero: a pitch-black world is not atmospheric, it is
   // unplayable, so moonlight keeps about a tenth of the key and the hemisphere
   // fill stays up to carry shape without colour.
-  sun.intensity = biome.sunI * (1 - wx.cloud * 0.72) * (0.16 + 0.84 * dayF);
-  hemi.intensity = biome.hemiI * (1 + wx.cloud * 0.35) * (0.42 + 0.58 * dayF);
+  // NIGHT IS DARK. The sky already mixes all the way to NIGHT_SKY — a zenith of
+  // (0.016, 0.025, 0.056), which is very nearly black — but the LIGHT on the
+  // world kept 16% of the sun and 42% of the sky fill, so the ground stayed lit
+  // for a dusk that the sky had already left. The frame read as evening with a
+  // black ceiling. Moonlight is about a millionth of sunlight; these are still
+  // enormously generous, because a game you cannot see is not a night, it is a
+  // blank screen — but they now sit far enough under the sky that the headlights
+  // are the thing you drive by.
+  sun.intensity = biome.sunI * (1 - wx.cloud * 0.72) * (0.05 + 0.95 * dayF);
+  hemi.intensity = biome.hemiI * (1 + wx.cloud * 0.35) * (0.17 + 0.83 * dayF);
   // SKYLIGHT ON THE WALLS. A HemisphereLight hands a VERTICAL face the flat
   // 50/50 sky-ground blend — about 0.22 of incident here — so a wall turned
   // away from the sun rendered at 0.22 x albedo = 0.13 linear, DARKER than the
@@ -8058,10 +8066,26 @@ function stepWeather(now: number, dt: number): void {
       (c[2] * m + l * (1 - m)) * (1 + wx.cloud * 0.4),
     );
   };
-  compMat.uniforms.uHazeBase.value.copy(g(biome.hazeBase));
-  compMat.uniforms.uHazeSun.value.copy(g(biome.hazeSun));
-  (skyMat.uniforms.uZenith.value as THREE.Vector3).copy(g(biome.zenith));
-  (skyMat.uniforms.uHorizon.value as THREE.Vector3).copy(g(biome.horizon));
+  // …AND THEN FADED TO NIGHT, which this did not do.
+  //
+  // `applySkyTint` mixes every sky colour toward NIGHT_SKY by `dayF` and gets it
+  // right — and then this ran, one line later in the same tick, and copied the
+  // DAYLIGHT biome palette straight over the two that matter. Measured at Cape
+  // Town with the sun 71.5° below the horizon and dayF exactly 0: zenith
+  // (0.062, 0.128, 0.282) against a night value of (0.016, 0.025, 0.056), and
+  // horizon (0.473, 0.457, 0.426) against (0.062, 0.074, 0.118) — four times
+  // and seven times too bright. `uBelow` and `uSunDisc` were correct, and they
+  // are precisely the two this function never touched, which is the whole
+  // diagnosis. Overcast still thickens and desaturates; it just does it to the
+  // colour the hour actually calls for.
+  const night = (c: Rgb, n: Rgb): THREE.Vector3 => {
+    const d = g(c);
+    return new THREE.Vector3(n[0] + (d.x - n[0]) * dayF, n[1] + (d.y - n[1]) * dayF, n[2] + (d.z - n[2]) * dayF);
+  };
+  compMat.uniforms.uHazeBase.value.copy(night(biome.hazeBase, NIGHT_SKY.zenith));
+  compMat.uniforms.uHazeSun.value.copy(night(biome.hazeSun, NIGHT_SKY.horizon));
+  (skyMat.uniforms.uZenith.value as THREE.Vector3).copy(night(biome.zenith, NIGHT_SKY.zenith));
+  (skyMat.uniforms.uHorizon.value as THREE.Vector3).copy(night(biome.horizon, NIGHT_SKY.horizon));
   stepRain(dt);
 }
 
@@ -9701,10 +9725,22 @@ function noteTags(t: Record<string, string>): void {
     surface: top(tagTally.surface), smoothness: top(tagTally.smoothness),
     tracktype: top(tagTally.tracktype), highway: top(tagTally.highway) };
 };
+/** What the sky is actually being told to be, so "it does not go dark" is a
+ *  number. `dayF` 0 means the palette should be fully NIGHT_SKY. */
+(window as unknown as { __sky?: object }).__sky = (): object => {
+  const u = skyMat.uniforms as Record<string, { value: THREE.Vector3 }>;
+  const v = (k: string): number[] => [+u[k].value.x.toFixed(3), +u[k].value.y.toFixed(3), +u[k].value.z.toFixed(3)];
+  return { dayF: +dayF.toFixed(3), sunAltDeg: +((sunAlt * 180) / Math.PI).toFixed(1),
+    zenith: v('uZenith'), horizon: v('uHorizon'), below: v('uBelow'),
+    sunI: +sun.intensity.toFixed(3), hemiI: +hemi.intensity.toFixed(3),
+    exposure: +renderer.toneMappingExposure.toFixed(2),
+    toneMapping: renderer.toneMapping };
+};
 /** The drone, for a headless test: where it is, what is left in it, and which
  *  of the three states it is in. */
 (window as unknown as { __drone?: object }).__drone = (): object =>
   ({ up: drone.up, downed: drone.downed, falling: drone.falling, recall: drone.recall,
+    rigSpeed: +state.speed.toFixed(3), rigAt: [+state.x.toFixed(2), +state.z.toFixed(2)],
     range: Math.round(drone.batt * DRONE.LIFE * DRONE.SPEED),
     batt: +drone.batt.toFixed(3), cam: camMode,
     y: +drone.y.toFixed(1), agl: +(drone.y - groundAt(drone.x, drone.z)).toFixed(1),
@@ -11466,7 +11502,10 @@ const audio = (() => {
       const loose = road ? 0 : surf === 'water' ? 0.12 : surf === 'track' ? 0.45 : 1;
       gritSrc.playbackRate.setTargetAtTime(0.55 + Math.min(v / 26, 1.35), t, 0.12);
       gritFilt.frequency.setTargetAtTime(surf === 'water' ? 700 : 900 + Math.min(v * 26, 1400), t, 0.15);
-      gritGain.gain.setTargetAtTime(Math.min(v / 12, 1) * 0.3 * loose * grounded, t, 0.09);
+      // Off the tarmac the grit IS the feedback — it is how a surface change
+      // announces itself before the handling does — and at 0.3 it sat under the
+      // engine at every speed that mattered.
+      gritGain.gain.setTargetAtTime(Math.min(v / 12, 1) * 0.46 * loose * grounded, t, 0.09);
     },
     // Thunder: a low rumble whose attack softens and whose tail lengthens with
     // distance — a near strike cracks, a far one rolls.
@@ -11904,6 +11943,14 @@ function tick(now: number): void {
   const { throttle, steer, brake } = drone.up
     ? { throttle: 0, steer: 0, brake: true }
     : raw2;
+  // THE HANDBRAKE IS ON WHILE YOU ARE NOT IN IT. Handing the controls over is
+  // not the same as parking: `brake: true` actually DEFEATS `parkHold` below
+  // (which requires no pedal), and even parked it gives up past ~30°, so a rig
+  // left on a hillside slid away from the pin that was marking it. Flying, the
+  // model is not integrated at all — the truck is a parked object, not a body
+  // in equilibrium.
+  const parked = drone.up;
+  if (parked) { state.speed = 0; slideV = 0; }
   stepSun();
   stepWeather(now, dt);
   const surfKind = surfaceAt(state.x, state.z);
@@ -11932,7 +11979,7 @@ function tick(now: number): void {
   const parkHold = !real.on && !brake && Math.abs(throttle) < 0.02
     && Math.abs(state.speed) < 0.45 && Math.abs(slideV) < 0.6
     && Math.abs(Math.sin(gradePitch)) < 0.5 && Math.abs(Math.sin(gradeRoll)) < 0.5;
-  if (!real.on) {
+  if (!real.on && !parked) {
     state.speed += thrust * grip * dt;
     // Gravity acts on the GROUND's grade, not on the sprung body's pitch. pitchC
     // is damped by the suspension, carries a throttle-squat fudge, and is clamped
