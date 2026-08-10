@@ -3741,11 +3741,85 @@ function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): 
     }
   }
 }
-// The VISIBLE ground: the heightfield, cut back where a road runs through it.
-// Everything that has to agree on where the surface is — the terrain mesh, the
-// wheels, the scatter — goes through this, so the cut is not a lie told only to
-// the renderer.
+/**
+ * THE RENDERED SURFACE, read analytically from the triangles it was built from.
+ *
+ * The same barycentric lookup `carveCorridors` uses to enforce its constraint,
+ * run in reverse: locate the tile, the lattice cell, the half of that cell, and
+ * interpolate. `meshHeightAt` answers the same question with a raycast against
+ * every terrain mesh in the world, which is fine for a probe and hopeless on a
+ * path the sward walks thousands of times a pass.
+ */
+function meshSurfaceAt(x: number, z: number): number | null {
+  const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
+  const key = `${tx}/${ty}`;
+  // A STALE MESH IS NOT AN AUTHORITY. A tile whose roads have changed still
+  // holds the uncut hillside until `flushTerrain` gets to it — one tile every
+  // 200ms — and for those frames the wheels would ride terrain standing over
+  // their own road. While it is dirty the closed form answers instead, which is
+  // exactly what it did before the mesh became the authority.
+  if (terrainDirty.has(key)) return null;
+  const mesh = terrainMeshes.get(key);
+  const t = heightTiles.get(key);
+  if (!mesh || !t) return null;
+  const geo = mesh.geometry;
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const SEG = Math.round(Math.sqrt(pos.count)) - 1;
+  if (SEG < 1) return null;
+  const cell = t.w / SEG;
+  const fx = (x - t.xs) / cell, fz = (z - t.zs) / cell;
+  if (fx < 0 || fz < 0 || fx >= SEG || fz >= SEG) return null;
+  const tris = cellTriangles(geo, SEG);
+  const k = (Math.floor(fz) * SEG + Math.floor(fx)) * 6;
+  const ox = t.xs + t.w / 2, oz = t.zs + t.h / 2;
+  for (let h = 0; h < 2; h++) {
+    const a = tris[k + h * 3], b = tris[k + h * 3 + 1], c = tris[k + h * 3 + 2];
+    if (a < 0) continue;
+    const ax = pos.getX(a) + ox, az = pos.getZ(a) + oz;
+    const bx = pos.getX(b) + ox, bz = pos.getZ(b) + oz;
+    const cx = pos.getX(c) + ox, cz = pos.getZ(c) + oz;
+    const d = (bz - cz) * (ax - cx) + (cx - bx) * (az - cz);
+    if (Math.abs(d) < 1e-9) continue;
+    const w1 = ((bz - cz) * (x - cx) + (cx - bx) * (z - cz)) / d;
+    const w2 = ((cz - az) * (x - cx) + (ax - cx) * (z - cz)) / d;
+    const w3 = 1 - w1 - w2;
+    if (w1 < -1e-6 || w2 < -1e-6 || w3 < -1e-6) continue;
+    return w1 * pos.getY(a) + w2 * pos.getY(b) + w3 * pos.getY(c);
+  }
+  return null;
+}
+/**
+ * THE GROUND — one surface, for everyone.
+ *
+ * This used to be a second, independent description of the ground: the
+ * heightfield clamped by `roadCeiling`'s closed form. The terrain you can SEE
+ * is built by `carveCorridors`, and the two disagreed — the field lets the
+ * ground climb at CUT_FACE the moment it leaves the kerb, while the carve pulls
+ * the corners of any triangle holding a kerb sample down to kerb level, and a
+ * mesh cell is ~21m while a road is 7m wide. Measured before this was unified:
+ * the mesh sat a median 0.70m below the field within 6m of a kerb in flat Rio,
+ * and 14.16m below on Chapman's Peak. The grass, the scatter and the wheels all
+ * read the field, so they stood on ground that was not there.
+ *
+ * So the rendered mesh is now the authority and everything reads it. The
+ * closed form remains as the fallback for ground no mesh has been built for
+ * yet — beyond the near tiles, or in the moment before a dirtied tile rebuilds.
+ */
 function groundAt(x: number, z: number): number {
+  const m = meshSurfaceAt(x, z);
+  if (m !== null) {
+    // THE SEA BED IS NOT GROUND. `buildTerrainMesh` drops water vertices
+    // SEA_BED below the waterline so the shader has depth to read; nothing
+    // stands or drives on it, and a truck entering the sea should meet the
+    // surface rather than sink six metres to a rendering device. Only paid for
+    // where the mesh is actually below the waterline — a genuine sub-sea basin
+    // has the field down there too, and keeps the mesh.
+    if (seaOn && m + baseElev < seaSurfaceAbs() - SEA_BED + 0.5) {
+      const h = sampleHeight(x, z);
+      if (h > m + 1) return h;
+    }
+    return m;
+  }
   const h = sampleHeight(x, z);
   const c = roadCeiling(x, z);
   return c === null || c >= h ? h : c;
