@@ -1710,6 +1710,7 @@ const SIGN_KINDS = 5;
 const CATS_U0 = 0.85, CATS_U1 = 0.96, CATS_V0 = 0.06, CATS_V1 = 0.11;
 const CATS_EVERY = 7;    // metres between studs — close enough to read as a line
 const POST_EVERY = 11;   // metres between edge posts where a parapet cannot go
+const CENTRE_EVERY = 9;  // metres between centreline reflectors
 const signTex = canvasTex(192, 1, 1, 122, (c, s, r) => {
   const W = s / SIGN_KINDS;
   const rust = (x: number, y: number, w: number, h: number, n: number): void => {
@@ -4441,6 +4442,13 @@ function deckAnchorAt(x: number, z: number): number | null {
       // their deck heights ARE the contamination, and a viewpoint footpath
       // junctioning the road must not weld the carriageway to the rock above.
       if (s.ya === undefined || s.yb === undefined || s.tk) continue;
+      // ENDS ONLY, deliberately. Reaching to the nearest point ALONG a segment
+      // instead looks more correct — a T-junction touches another way's middle,
+      // and the surface there is what you would want to weld to — and it was
+      // tried: it did not close the seam it was written for, and it handed
+      // anchors to fragments that would otherwise have gone to the whole-way
+      // DP, taking Chapman's junction pins from 386 to 269. An anchor is not a
+      // free good; it stops a fragment solving on real evidence.
       const da = Math.hypot(s.ax - x, s.az - z);
       if (da < bd) { bd = da; best = s.ya; }
       const db = Math.hypot(s.bx - x, s.bz - z);
@@ -5166,7 +5174,34 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // car's push-out already lives; `ya` carries its top, and `wallHitAlong`
   // skips any wall the camera is above, so a 1m rail never occludes a chase cam
   // sitting four metres over the truck.
+  /**
+   * A RETROREFLECTOR, AIMED AT THE DRIVER.
+   *
+   * The first version of these faced OUT of the barrier — normal across the
+   * road — and was invisible, which is exactly what the shader promises: the
+   * retroreflective term is `pow(|dot(normal, dirToCar)|, 3)`, and a stud
+   * thirty metres up the road has the car almost dead ahead of it, so a normal
+   * pointing sideways cubes to nothing. A real reflector is aimed back down the
+   * carriageway at oncoming traffic, and so is this one: the quad's WIDTH runs
+   * across the way and its normal runs ALONG it. Emitted into the sign mesh,
+   * which is the retroreflective material — dark until a beam finds it.
+   */
+  const stud = (px: number, py: number, pz: number,
+    ux: number, uz: number, half: number, high: number): void => {
+    const rx = -uz, rz = ux;                 // across the way
+    for (const nsg of [1, -1]) {             // one face each way down the road
+      const ox = ux * 0.04 * nsg, oz = uz * 0.04 * nsg;
+      quad(apron.sgV, apron.sgUV, [
+        px - rx * half + ox, py + high, pz - rz * half + oz,
+        px + rx * half + ox, py + high, pz + rz * half + oz,
+        px - rx * half + ox, py - high, pz - rz * half + oz,
+        px + rx * half + ox, py - high, pz + rz * half + oz,
+      ], [CATS_U0, CATS_V0, CATS_U1, CATS_V0, CATS_U0, CATS_V1, CATS_U1, CATS_V1]);
+    }
+    spanStats.cats++;
+  };
   let catsRun = 0;         // metres of barrier since the last stud
+  let centreRun = 0;       // …and along the carriageway since the last centre stud
   let postRun = 0;         // …and since the last reflector post
   const rail = (
     xA: number, yA: number, zA: number, xB: number, yB: number, zB: number, u0: number, u1: number,
@@ -5178,32 +5213,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       [u0, 0, u1, 0, u0, 1, u1, 1]);
     const top = Math.max(yA, yB) + RAIL_H;
     addSeg(wallGrid, { ax: xA, az: zA, bx: xB, bz: zB, hw: 0, ya: top, yb: top, sl: true });
-    // CAT'S EYES. A parapet is a grey band that vanishes at night exactly when
-    // it matters most. These are studs on its face, cut from the delineator's
-    // own reflector patch in the sign atlas and drawn into the SIGN mesh —
-    // which is the retroreflective material, so they are dead until your beam
-    // finds them and then they pick out the line of the edge ahead of you.
-    // Spaced by world distance, not per quad, so the run of them stays even
+    // CAT'S EYES on the parapet, spaced by world distance so the run stays even
     // through the short bays a bend is made of.
     const ux = (xB - xA) / (L || 1), uz = (zB - zA) / (L || 1);
-    const px2 = -uz, pz2 = ux;              // out of the barrier's face
     for (let s = CATS_EVERY - catsRun; s < L; s += CATS_EVERY) {
       const t = s / (L || 1);
-      const cx = xA + (xB - xA) * t, cz = zA + (zB - zA) * t;
-      const cy = yA + (yB - yA) * t + RAIL_H - 0.22;
-      const H = 0.09, W2 = 0.11;
-      // Both faces, a couple of centimetres proud, so an eye reads whichever
-      // side of the barrier you are on.
-      for (const nsg of [1, -1]) {
-        const ox2 = px2 * 0.05 * nsg, oz2 = pz2 * 0.05 * nsg;
-        quad(apron.sgV, apron.sgUV, [
-          cx - ux * W2 + ox2, cy + H, cz - uz * W2 + oz2,
-          cx + ux * W2 + ox2, cy + H, cz + uz * W2 + oz2,
-          cx - ux * W2 + ox2, cy - H, cz - uz * W2 + oz2,
-          cx + ux * W2 + ox2, cy - H, cz + uz * W2 + oz2,
-        ], [CATS_U0, CATS_V0, CATS_U1, CATS_V0, CATS_U0, CATS_V1, CATS_U1, CATS_V1]);
-      }
-      spanStats.cats++;
+      stud(xA + (xB - xA) * t, yA + (yB - yA) * t + RAIL_H - 0.24,
+        zA + (zB - zA) * t, ux, uz, 0.15, 0.11);
     }
     catsRun = (catsRun + L) % CATS_EVERY;
   };
@@ -5388,6 +5404,31 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
             sign(sx, Math.min(ey0, ey1) - 0.1, sz, dx, dz, sgn, 4, 0.5, 0.4);
             spanStats.posts++;
           }
+        }
+      }
+      // ── CENTRELINE STUDS ──
+      // The painted centre line is a texture on the tarmac: at night it is lit
+      // by whatever the headlights spill onto the road in front of you, which
+      // is about fifteen metres, and beyond that the way you are driving simply
+      // ends. A line of reflectors down the middle is what a real road uses to
+      // solve exactly that, and it is the cheapest possible answer here — the
+      // retroreflective material already exists and returns the beam at 1/d
+      // rather than 1/d², so the line runs out to ninety metres and tells you
+      // where the next bend goes before you are in it.
+      //
+      // Every drivable carriageway gets them, not just the ones with a barrier:
+      // the roads where you cannot see where you are going are the unlit rural
+      // ones, and those are the ones with no parapet.
+      if (drivable && !track) {
+        centreRun += len;
+        if (centreRun >= CENTRE_EVERY) {
+          centreRun -= CENTRE_EVERY;
+          const t = clamp(1 - centreRun / (len || 1), 0, 1);
+          const cx = x0 + dx * t, cz = z0 + dz * t;
+          const cyDeck = (y00 + y01) / 2 + ((y10 + y11) / 2 - (y00 + y01) / 2) * t;
+          // Sat ON the tarmac: the quad is vertical, so it is raised by its own
+          // half-height plus a little, or half of it is buried in the road.
+          stud(cx, cyDeck + 0.13, cz, dx / len, dz / len, 0.17, 0.11);
         }
       }
       // ── roadside furniture ──
@@ -9143,6 +9184,62 @@ function meshHeightAt(x: number, z: number): number | null {
   return { lip: band(lip), deckOverField: band(overField), meshUnderField: band(meshUnder), poke: band(poke),
     budget: +(SURFACE.road.lift + CUT_CLEAR).toFixed(2),
     pokeAbove0: poke.length ? +(poke.filter((v) => v > 0).length / poke.length * 100).toFixed(1) : 0 };
+};
+/**
+ * WHERE TWO PIECES OF ROAD DISAGREE ABOUT THE SAME POINT.
+ *
+ * A seam is the only way a deck can look "mismatched": the carriageway is one
+ * material everywhere, so a visible break across it is two fragments meeting at
+ * a shared node and claiming different heights. Reports the worst, with the
+ * fragment ids and names so a step can be attributed to a pair of ways rather
+ * than to a general feeling that bridges look wrong.
+ */
+(window as unknown as { __seams?: object }).__seams = (r = 260): object => {
+  const seen = new Set<Seg>();
+  const ends = new Map<string, Array<{ y: number; fd: number; nm: string; hw: number; pb: number }>>();
+  const c = Math.ceil(r / GRID);
+  for (let cx = -c; cx <= c; cx++) for (let cz = -c; cz <= c; cz++) {
+    for (const sg of roadGrid.get(`${Math.floor(state.x / GRID) + cx},${Math.floor(state.z / GRID) + cz}`) ?? []) {
+      if (seen.has(sg) || sg.tk || sg.ya === undefined || sg.yb === undefined) continue;
+      seen.add(sg);
+      for (const [x, z, y] of [[sg.ax, sg.az, sg.ya], [sg.bx, sg.bz, sg.yb]] as Array<[number, number, number]>) {
+        if (Math.hypot(x - state.x, z - state.z) > r) continue;
+        // Round to a metre: fragments that JOIN share a node, and tile clipping
+        // moves it by centimetres at most.
+        const k = `${Math.round(x)},${Math.round(z)}`;
+        const e = ends.get(k) ?? [];
+        e.push({ y, fd: sg.fd ?? -1, nm: sg.nm ?? '?', hw: sg.hw, pb: sg.pb ?? -1 });
+        ends.set(k, e);
+      }
+    }
+  }
+  const rows: Array<{ at: string; step: number; ways: string[];
+    frags: number[]; branches: number[]; ys: number[] }> = [];
+  for (const [k, es] of ends) {
+    if (es.length < 2) continue;
+    const ys = es.map((e) => e.y);
+    const step = Math.max(...ys) - Math.min(...ys);
+    // Two roads CROSSING at different levels is a flyover, not a seam — only
+    // count points where the pieces genuinely share a node.
+    if (step > GRADE_SEP) continue;
+    if (step < 0.02) continue;
+    rows.push({ at: k, step: +step.toFixed(2),
+      ways: [...new Set(es.map((e) => e.nm))], frags: [...new Set(es.map((e) => e.fd))],
+      // WHICH SOLVER PRODUCED EACH SIDE. 1 hint, 2 ramp, 3 hold, 4 bench,
+      // 5 solo DP, 6 raw chord — a bridge or tunnel is always 6, and a step
+      // between a 6 and anything else is a structure that did not weld.
+      branches: es.map((e) => e.pb), ys: es.map((e) => +e.y.toFixed(2)) });
+  }
+  rows.sort((a, b) => b.step - a.step);
+  const all = rows.map((v) => v.step).sort((a, b) => a - b);
+  return {
+    joins: ends.size, disagreeing: rows.length,
+    med: all.length ? +all[all.length >> 1].toFixed(2) : 0,
+    p95: all.length ? +all[Math.floor(all.length * 0.95)].toFixed(2) : 0,
+    over10cm: all.filter((v) => v > 0.1).length,
+    over30cm: all.filter((v) => v > 0.3).length,
+    worst: rows.slice(0, 8),
+  };
 };
 /**
  * IS EVERY ROAD EDGE EITHER MET BY GROUND OR MARKED?
