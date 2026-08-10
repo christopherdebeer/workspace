@@ -1402,6 +1402,7 @@ function buildTerrainMesh(t: HeightTile): void {
     pos.setY(i, elev);
   }
   carveCorridors(t, geo, SEG);
+  carveChannels(t, geo, SEG);
   // PASS TWO: colour, off the heights the carve settled on.
   for (let i = 0; i < pos.count; i++) {
     const ex = pos.getX(i) + cxm, ez = pos.getZ(i) + czm;
@@ -1474,6 +1475,7 @@ function flushTerrain(now: number): void {
       reseatBuildings(t);
       redrape(t);
       flushBatter(t);
+      flushCulverts(t);
       terrainMs = performance.now() - t0;
       return;
     }
@@ -5672,6 +5674,353 @@ function canopyRun(dense: Array<[number, number]>, prof: number[], width: number
 }
 // The carved space: side walls + ceiling along a tunnel run, portal lintels at
 // the mouths, and solid collision so the car can't drive out through the rock.
+// ── waterways, and the culverts that carry them under roads ────────
+// WATER DOES NOT FLOW UPHILL. A river was a plain drape: it took the ground
+// under it, station by station, and went wherever that went — over the crown of
+// every road embankment in its path, and (once drapes started following the
+// carved mesh) down into every road cutting and out the other side. Both are
+// the same mistake, which is treating a watercourse as decoration painted on
+// the terrain rather than as a thing with a direction and a gradient.
+//
+// The profile is solved instead, on the NATURAL field: the elevation OSM and
+// the DEM agree on before any road carved anything. Downhill is inferred from
+// the ground itself — the end that is higher is upstream — and the invert then
+// only ever descends. Where that puts the water under the ground, the water is
+// in a culvert, and the ground it is under is usually a road.
+const CULV_MAX = 9;        // deepest a culvert goes before we call the DEM wrong
+const CULV_MIN = 0.7;      // burial past which a run earns a bore rather than a dip
+const CULV_CLR = 0.35;     // headroom from invert to soffit on a plain pipe
+const CULV_RIG = 3.2;      // …and the bore height that fits a rig, where there is room
+// A channel is a `Seg` — same shape, same grid helpers — carrying the bed
+// height in ya/yb rather than a deck.
+const channelGrid = new Map<string, Seg[]>();
+const culvertStats = { ways: 0, runs: 0, rigSized: 0, m: 0, deepest: 0, uphillFixed: 0, crossings: 0,
+  // The claim this whole function exists to make, checked where it is made: the
+  // largest rise between consecutive stations IN FLOW ORDER, over every
+  // watercourse built. Monotone by construction, so anything but 0 is a bug.
+  worstRise: 0 };
+/** Every channel indexed near a point, from the 3×3 cells around it. */
+function channelsNear(x: number, z: number, into: Set<Seg>): void {
+  const cx = Math.floor(x / GRID), cz = Math.floor(z / GRID);
+  for (let ax = cx - 1; ax <= cx + 1; ax++) {
+    for (let az = cz - 1; az <= cz + 1; az++) {
+      const arr = channelGrid.get(`${ax},${az}`);
+      if (arr) for (const c of arr) into.add(c);
+    }
+  }
+}
+const chanSet = new Set<Seg>();
+/**
+ * THE BED, as a ceiling on the terrain — but never under a carriageway.
+ *
+ * A watercourse cuts its own channel, or it is a blue stripe lying on top of
+ * the countryside. The exception is the whole point of a culvert: where a road
+ * passes over, the ground must stay up to hold the road, and the water goes
+ * through the bore instead. So this returns null on tarmac, which leaves an
+ * open channel on each side and a plug of earth between them for the road to
+ * sit on and the bore to pass through.
+ */
+function channelFloorAt(x: number, z: number, ceiling: number): number | null {
+  chanSet.clear();
+  channelsNear(x, z, chanSet);
+  let best: number | null = null;
+  for (const c of chanSet) {
+    const dx = c.bx - c.ax, dz = c.bz - c.az;
+    const t = clamp(((x - c.ax) * dx + (z - c.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    const px = c.ax + dx * t, pz = c.az + dz * t;
+    const out = Math.hypot(x - px, z - pz) - c.hw;
+    if (out > 3) continue;
+    // Banks, not a trench: the bed at the middle, rising away at 1:1.
+    const y = (c.ya as number) + ((c.yb as number) - (c.ya as number)) * t + Math.max(0, out);
+    if (best === null || y < best) best = y;
+  }
+  // ORDER MATTERS FOR COST, not just for correctness. `onCarriageway` is a road
+  // grid walk, and asking it of every vertex a river passes near — before
+  // knowing whether the bed is even below the ground there — put twelve tiles
+  // behind on the rebuild queue at Chapman's, where before there were none.
+  // The vertex is only interesting if the bed would actually lower it, and that
+  // is a handful of arithmetic; the walk is asked of those alone.
+  if (best === null || best >= ceiling) return null;
+  if (onCarriageway(x, z, 0.6).road) return null;   // the road's plug of earth
+  return best;
+}
+/** Dig the watercourse beds inside a tile. Runs after `carveCorridors`, and
+ *  only ever lowers, so it cannot lift ground back over a road.
+ *
+ *  Driven from the CHANNELS, not from the vertices. Asking all 16k vertices of
+ *  a tile whether a river runs past them is a grid walk and a set allocation
+ *  each, on a path that already costs a tile rebuild; walking the handful of
+ *  channels instead and touching only the lattice under each one's bounding box
+ *  does the same work for the length of river actually present. */
+function carveChannels(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): void {
+  if (!channelGrid.size) return;
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const cell = t.w / SEG;
+  const seen = new Set<Seg>();
+  const cx0 = Math.floor(t.xs / GRID) - 1, cx1 = Math.floor((t.xs + t.w) / GRID) + 1;
+  const cz0 = Math.floor(t.zs / GRID) - 1, cz1 = Math.floor((t.zs + t.h) / GRID) + 1;
+  for (let gx = cx0; gx <= cx1; gx++) for (let gz = cz0; gz <= cz1; gz++) {
+    for (const c of channelGrid.get(`${gx},${gz}`) ?? []) seen.add(c);
+  }
+  if (!seen.size) return;
+  const touched = new Set<number>();
+  for (const c of seen) {
+    const m = c.hw + 3;
+    const ax = Math.floor((Math.min(c.ax, c.bx) - m - t.xs) / cell);
+    const bx = Math.ceil((Math.max(c.ax, c.bx) + m - t.xs) / cell);
+    const az = Math.floor((Math.min(c.az, c.bz) - m - t.zs) / cell);
+    const bz = Math.ceil((Math.max(c.az, c.bz) + m - t.zs) / cell);
+    for (let iz = Math.max(0, az); iz <= Math.min(SEG, bz); iz++) {
+      for (let ix = Math.max(0, ax); ix <= Math.min(SEG, bx); ix++) {
+        touched.add(iz * (SEG + 1) + ix);
+      }
+    }
+  }
+  for (const v of touched) {
+    const x = pos.getX(v) + t.xs + t.w / 2, z = pos.getZ(v) + t.zs + t.h / 2;
+    const f = channelFloorAt(x, z, pos.getY(v));
+    if (f !== null) pos.setY(v, f);
+  }
+}
+/**
+ * A WATERCOURSE: solved profile, carved bed, and a bore wherever it runs under
+ * something. Replaces the plain drape the river used to be.
+ */
+const builtRuns = new Map<string, Set<number>>();
+function waterway(pts: Array<[number, number]>, width: number, name?: string, key?: string): void {
+  const dense = densifyPts(pts);
+  const n = dense.length;
+  if (n < 2) return;
+  // CLIPPED TO THE GROUND THAT EXISTS, not refused for want of the rest.
+  //
+  // Overpass returns a way's WHOLE geometry when it clips the query box, so a
+  // river arrives 634 stations long and runs kilometres past anything streamed
+  // in. Refusing it outright — which is right for a road, whose profile is
+  // solved end to end — means the river is simply absent; drawing it anyway is
+  // what put a flat band in the sky, because `sampleHeight` answers 0 where it
+  // has no tile. A drape has no end-to-end solve to protect, so it is built in
+  // the runs that DO have terrain, and the way stays eligible so the rest
+  // arrives as the world streams. `builtRuns` remembers which stations already
+  // went up, so a retry adds the new ones instead of doubling the old.
+  const runs: Array<[number, number]> = [];
+  let a = -1;
+  for (let i = 0; i <= n; i++) {
+    const ok = i < n && hasHeight(dense[i][0], dense[i][1]);
+    if (ok && a < 0) a = i;
+    if ((!ok || i === n) && a >= 0) { if (i - a >= 2) runs.push([a, i - 1]); a = -1; }
+  }
+  const done = key === undefined ? null : builtRuns.get(key) ?? new Set<number>();
+  if (key !== undefined && done) builtRuns.set(key, done);
+  let skipped = false;
+  for (let i = 0; i < n; i++) if (!hasHeight(dense[i][0], dense[i][1])) { skipped = true; break; }
+  if (skipped) unbuilt++;
+  for (const [r0, r1] of runs) {
+    if (done && done.has(r0)) continue;
+    if (done) done.add(r0);
+    waterRun(dense.slice(r0, r1 + 1), width, name);
+  }
+}
+/** One continuous, fully-grounded stretch of watercourse. */
+function waterRun(dense: Array<[number, number]>, width: number, name?: string): void {
+  const n = dense.length;
+  if (n < 2) return;
+  void name;
+  // WHICH WAY IS DOWNHILL. OSM orders a waterway from source to mouth by
+  // convention and breaks that convention often enough not to trust it, and the
+  // ground is right here to be asked: average the first fifth against the last
+  // fifth and let the water run away from the higher end.
+  const raw = dense.map(([x, z]) => sampleHeight(x, z));
+  // SMOOTHED BEFORE THE GRADIENT IS BELIEVED, for the same reason the road's
+  // grade line is: at 9.5m per pixel the field rolls by metres from sample to
+  // sample, and a strictly descending invert taken off raw ground dives into
+  // the first dip and then runs buried until the ground falls that far again.
+  // Measured on the Big Sur River before this: 46 buried runs and 1758m of
+  // bore, none with more than 0.6m of cover — noise, drawn as tunnel.
+  const g = raw.slice();
+  for (let pass = 0; pass < 3; pass++) {
+    const a2 = g.slice();
+    for (let i = 1; i < n - 1; i++) g[i] = (a2[i - 1] + a2[i] * 2 + a2[i + 1]) * 0.25;
+  }
+  const k = Math.max(1, Math.round(n / 5));
+  let head = 0, tail = 0;
+  for (let i = 0; i < k; i++) { head += g[i]; tail += g[n - 1 - i]; }
+  const down = head / k >= tail / k;             // already ordered downhill?
+  const idx = (i: number): number => (down ? i : n - 1 - i);
+  // THE INVERT, monotone by construction. Capped: where the ground climbs more
+  // than a culvert's worth the DEM is describing a watershed the z14 raster
+  // cannot resolve, and burying nine metres of hill to prove a point about
+  // gradients would carve a canyon. There the water is allowed to daylight.
+  const inv = new Array<number>(n);
+  const daylit = new Array<boolean>(n).fill(false);
+  let run = g[idx(0)];
+  for (let i = 0; i < n; i++) {
+    const j = idx(i);
+    run = Math.min(run, g[j]);
+    if (run < g[j] - CULV_MAX) { run = g[j]; daylit[j] = true; culvertStats.uphillFixed++; }
+    inv[j] = run;
+  }
+  culvertStats.ways++;
+  // The self-check skips the stations that DELIBERATELY climbed. A daylighting
+  // is the solver conceding that the DEM has described a watershed it cannot
+  // resolve; counting those as failures measured the concession, not the claim.
+  for (let i = 1; i < n; i++) {
+    if (daylit[idx(i)]) continue;
+    const rise = inv[idx(i)] - inv[idx(i - 1)];
+    if (rise > culvertStats.worstRise) culvertStats.worstRise = rise;
+  }
+  // The visible water, and the bed the terrain is dug to.
+  const verts: number[] = [], uvs: number[] = [];
+  let along = 0;
+  for (let i = 0; i < n - 1; i++) {
+    const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
+    const dx = x1 - x0, dz = z1 - z0;
+    const len = Math.hypot(dx, dz) || 1;
+    const nx = (-dz / len) * (width / 2), nz = (dx / len) * (width / 2);
+    const yA = inv[i] + 0.025, yB = inv[i + 1] + 0.025;
+    const v0 = along / 20, v1 = (along + len) / 20;
+    verts.push(
+      x0 + nx, yA, z0 + nz, x1 + nx, yB, z1 + nz, x0 - nx, yA, z0 - nz,
+      x1 + nx, yB, z1 + nz, x1 - nx, yB, z1 - nz, x0 - nx, yA, z0 - nz,
+    );
+    uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
+    addSeg(channelGrid, { ax: x0, az: z0, bx: x1, bz: z1,
+      hw: width / 2, ya: inv[i] - 0.15, yb: inv[i + 1] - 0.15 });
+    along += len;
+    mapSeg(x0, z0, x1, z1, Math.max(width, 8), 'rgba(96,132,158,0.75)');
+  }
+  if (verts.length) {
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
+    geo.computeVertexNormals();
+    worldGroup.add(new THREE.Mesh(geo, MAT.water));
+  }
+  // THE BORES ARE DEFERRED, because at this moment there may be no road.
+  //
+  // A culvert exists where the water runs under a CARRIAGEWAY, and asking
+  // `onCarriageway` here asks it of whatever happens to have been built so far:
+  // rivers and roads arrive in the same OSM tile with no guaranteed order, and
+  // a river from a neighbouring tile is routinely built before the road it
+  // crosses exists at all. Measured at Big Sur, that found zero crossings on
+  // five watercourses. Parked instead, and scanned once the terrain tile they
+  // sit in is rebuilt — by which time every road in reach is in the grid. Same
+  // deferral, same reason, as the batter.
+  pendingWater.push({ dense, inv, raw, width });
+}
+/** A watercourse awaiting the roads that cross it. */
+interface PendingWater { dense: Array<[number, number]>; inv: number[]; raw: number[]; width: number }
+const pendingWater: PendingWater[] = [];
+/** Find and build the bores for every parked watercourse inside this tile. */
+function flushCulverts(t: HeightTile): void {
+  if (!pendingWater.length) return;
+  let kept = 0;
+  for (let w = 0; w < pendingWater.length; w++) {
+    const p = pendingWater[w];
+    const mid = p.dense[p.dense.length >> 1];
+    if (mid[0] < t.xs || mid[1] < t.zs || mid[0] > t.xs + t.w || mid[1] > t.zs + t.h) {
+      pendingWater[kept++] = p;                 // not this tile — keep waiting
+      continue;
+    }
+    const { dense, inv, raw, width } = p;
+    const n = dense.length;
+    // Buried alone is not a culvert — it is a channel, and `carveChannels` digs
+    // the ground down to the invert everywhere it is allowed to, which is the
+    // watercourse cutting its own bed. The one place it is not allowed to dig
+    // is under tarmac, because the road has to keep standing on something. That
+    // plug of earth is exactly where the water has nothing to run in, and
+    // exactly where a real culvert goes: the test for a bore is the test for
+    // the plug.
+    let a = -1;
+    for (let i = 0; i <= n; i++) {
+      // A CROSSING IS THE TEST, not a burial depth. The first version asked for
+      // CULV_MIN of cover as well, which is the embankment case only — and a
+      // stream meeting a road that sits at grade has no cover at all, so it got
+      // nothing and ran straight across the tarmac instead. `carveChannels`
+      // will not dig the bed under a carriageway (the road has to stand on
+      // something), so EVERY crossing needs a bore; the cover only decides how
+      // big it is. Measured at the Cabrillo Highway crossing, this is the
+      // difference between one culvert and none.
+      //
+      // Except under a bridge: there the road is already carried over the water
+      // and the deck stands far enough above the invert to say so.
+      const deck = i < n ? roadHeightAt(dense[i][0], dense[i][1]) : null;
+      const under = i < n && onCarriageway(dense[i][0], dense[i][1], 1.5).road
+        && (deck === null || deck - inv[i] < CULV_MAX);
+      if (under) culvertStats.crossings++;
+      if (under && a < 0) a = i;
+      if ((!under || i === n) && a >= 0) {
+        // Out to the headwalls: one station past the tarmac at each end, which
+        // is where the open channel starts and the mouth belongs.
+        culvert(dense, inv, raw, Math.max(0, a - 1), Math.min(n - 1, i), width, a, i - 1);
+        a = -1;
+      }
+    }
+  }
+  pendingWater.length = kept;
+}
+/** The bore itself: two walls, a soffit, a headwall at each mouth. Sized to
+ *  take a rig where the cover allows one, and a pipe where it does not. */
+function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
+  a: number, b: number, width: number, core0: number, core1: number): void {
+  if (b <= a) return;
+  // Cover is measured over the BURIED CORE, not over the mouths. The run is
+  // extended a station past the tarmac at each end so the headwalls stand in
+  // open channel; those stations have almost no ground over them by
+  // construction, and letting them into the minimum sized every bore at zero.
+  let cover = Infinity;
+  for (let i = core0; i <= core1; i++) cover = Math.min(cover, g[i] - inv[i]);
+  if (!isFinite(cover)) return;
+  // How tall the bore can be: the shallowest cover along the run, less a metre
+  // of earth over the soffit so the roof is not poking out of the road.
+  const room = cover - 1;
+  const rig = room >= CULV_RIG;
+  const H = rig ? CULV_RIG : Math.max(CULV_CLR, Math.min(room, 1.8));
+  const W = Math.max(width, rig ? 4.4 : 1.6);
+  culvertStats.runs++;
+  if (rig) culvertStats.rigSized++;
+  const tv: number[] = [];
+  const push = (...p: number[]): void => {
+    tv.push(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8],
+      p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
+  };
+  for (let i = a; i < b; i++) {
+    const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
+    const dx = x1 - x0, dz = z1 - z0;
+    const len = Math.hypot(dx, dz) || 1;
+    culvertStats.m += len;
+    const nx = (-dz / len) * (W / 2), nz = (dx / len) * (W / 2);
+    const yA = inv[i], yB = inv[i + 1];
+    const cA = yA + H, cB = yB + H;
+    push(x0 + nx, yA, z0 + nz, x1 + nx, yB, z1 + nz, x0 + nx, cA, z0 + nz, x1 + nx, cB, z1 + nz);
+    push(x0 - nx, yA, z0 - nz, x1 - nx, yB, z1 - nz, x0 - nx, cA, z0 - nz, x1 - nx, cB, z1 - nz);
+    push(x0 + nx, cA, z0 + nz, x1 + nx, cB, z1 + nz, x0 - nx, cA, z0 - nz, x1 - nx, cB, z1 - nz);
+    // The walls are solid. The soffit is not in the grid — the same rule the
+    // road tunnels use, so a chase camera riding above the bank is not shoved.
+    for (const sgn of [1, -1]) {
+      addSeg(wallGrid, { ax: x0 + nx * sgn, az: z0 + nz * sgn, bx: x1 + nx * sgn, bz: z1 + nz * sgn,
+        hw: 0, ya: Math.max(cA, cB), yb: Math.max(cA, cB) });
+    }
+  }
+  if (cover > culvertStats.deepest) culvertStats.deepest = cover;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tv), 3));
+  geo.computeVertexNormals();
+  const tube = new THREE.Mesh(geo, MAT.tunnel);
+  tube.userData.culvert = true;
+  worldGroup.add(tube);
+  // HEADWALLS. Without them the bore is a rectangular hole in a grass bank and
+  // reads as a hole in the world; with them it reads as something someone built.
+  for (const end of [a, b]) {
+    const i0 = end === a ? a : b - 1, i1 = end === a ? a + 1 : b;
+    const [x0, z0] = dense[i0], [x1, z1] = dense[i1];
+    const ang = Math.atan2(z1 - z0, x1 - x0);
+    const [px, pz] = dense[end];
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(W + 2.4, H + 1.1, 0.7), MAT.portal);
+    wall.position.set(px, inv[end] + (H + 1.1) / 2 - 0.4, pz);
+    wall.rotation.y = ang + Math.PI / 2;
+    worldGroup.add(wall);
+  }
+}
 function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number[], a: number, b: number, width: number, lift: number): void {
   // Belt and braces: the ceiling can never poke out through the hillside —
   // EXCEPT at the mouths, which wear a straight collar at tube height. The
@@ -6370,7 +6719,7 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
       // anything short of a major river simply did not exist. Drawn as a draped
       // ribbon at the water lift, wide by class, and NOT drivable: it is water,
       // and the surface field already knows to slow you in it.
-      ribbon(pts, WATER_W[tags.waterway as string], MAT.water, 0.025, false, 'none', false, tags.name);
+      waterway(pts, WATER_W[tags.waterway as string], tags.name, dk);
     } else if (tags.railway) {
       // Rails read as a narrow dark line across the country and a thing you
       // bump over at a crossing. Not drivable — nobody drives a railway.
@@ -6787,7 +7136,12 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
         way["highway"](${bbox});
         way["building"](${bbox});
         way["natural"="water"](${bbox});
-        way["waterway"="riverbank"](${bbox});
+        // MATCH THE PROXY. This asked for riverbank polygons only, while the
+        // cell's own query has fetched river, stream and canal LINES for some
+        // time — so every watercourse in the world quietly disappeared on any
+        // client that fell back to talking to Overpass directly, which is every
+        // headless harness and any session where the proxy is unreachable.
+        way["waterway"~"riverbank|river|stream|canal"](${bbox});
         way["landuse"~"forest|meadow|grass|recreation_ground"](${bbox});
         way["leisure"~"park|pitch|garden"](${bbox});
       );out geom 2000;`;
@@ -9246,6 +9600,13 @@ function meshHeightAt(x: number, z: number): number | null {
     budget: +(SURFACE.road.lift + CUT_CLEAR).toFixed(2),
     pokeAbove0: poke.length ? +(poke.filter((v) => v > 0).length / poke.length * 100).toFixed(1) : 0 };
 };
+/** Watercourses, and the bores carrying them under things. `uphillFixed` counts
+ *  stations where the invert had to daylight because the ground climbed more
+ *  than a culvert's worth — the DEM describing a watershed it cannot resolve. */
+(window as unknown as { __culverts?: object }).__culverts = (): object =>
+  ({ ...culvertStats, m: Math.round(culvertStats.m),
+    deepest: +culvertStats.deepest.toFixed(1),
+    worstRise: +culvertStats.worstRise.toFixed(4), channels: channelGrid.size });
 /**
  * DO DRAPED WAYS ACTUALLY SIT ON THE GROUND THAT IS DRAWN?
  *
