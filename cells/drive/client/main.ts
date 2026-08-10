@@ -1702,6 +1702,14 @@ const railTex = canvasTex(32, 1, 1, 121, (c, s, r) => {
 // real route is a marker post, and the only sign that earns a whole board on a
 // straight is one telling you where the turning goes.
 const SIGN_KINDS = 5;
+// The cat's eye is the delineator's own reflector band, sampled straight out of
+// the sign atlas rather than given a cell of its own — the band is already the
+// right thing (a small saturated patch on the retroreflective material) and a
+// sixth kind would have moved every other cell's UVs. Canvas coordinates: the
+// delineator is cell 4, its band is drawn at x0+5..x0+W-5, y 9..24 of 192.
+const CATS_U0 = 0.85, CATS_U1 = 0.96, CATS_V0 = 0.06, CATS_V1 = 0.11;
+const CATS_EVERY = 7;    // metres between studs — close enough to read as a line
+const POST_EVERY = 11;   // metres between edge posts where a parapet cannot go
 const signTex = canvasTex(192, 1, 1, 122, (c, s, r) => {
   const W = s / SIGN_KINDS;
   const rust = (x: number, y: number, w: number, h: number, n: number): void => {
@@ -4219,7 +4227,7 @@ const apron = {
   sgV: [] as number[], sgUV: [] as number[],
 };
 const spanStats = {
-  piers: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0,
+  piers: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0, cats: 0, posts: 0,
   // Why a kerb quad did or did not get a batter — one counter per branch, so
   // "the fill stops halfway along this road" is attributable rather than argued.
   fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0,
@@ -4240,8 +4248,16 @@ const spanStats = {
  */
 interface Batter { ax: number; az: number; bx: number; bz: number;
   nx: number; nz: number; y0: number; y1: number; uA: number; uB: number;
-  fid: number; nm?: string }
+  fid: number; nm?: string; rail: boolean }
 const pendingBatter: Batter[] = [];
+/**
+ * WHAT HAPPENED AT EVERY KERB, so "batter or rail, consistently" is a claim
+ * that can be checked. A road edge is one of three things: ground comes up to
+ * meet it, it is a drop with a barrier on it, or it is a drop with nothing —
+ * and the third is the only one that is a bug. Bounded; read by `__edges`.
+ */
+const edgeLog: Array<{ x: number; z: number; rail: boolean; batter: boolean;
+  met: boolean; clip: boolean; gap: number; reach: number }> = [];
 /** Two triangles into a vertex/uv pair. `ribbon` has its own local `quad`, and
  *  the only `quad` in scope out here is a THREE.Mesh — which the stub types are
  *  happy to let you call, and which would have thrown on the first shoulder. */
@@ -4256,7 +4272,34 @@ function flushBatter(t: HeightTile): void {
   if (!vergeFill || !pendingBatter.length) return;
   const V: number[] = [], U: number[] = [];
   const BATT = 0.6;                      // metres of drop per metre out
-  const STEPS = [0.6, 1.4, 2.4, 3.6, 5];
+  // AN EMBANKMENT IS ALLOWED TO BE AN EMBANKMENT. This used to stop at 5m —
+  // 3m of drop — and anything steeper than that was declared "the road stands
+  // clear of its surroundings" and given nothing at all: measured at Big Sur,
+  // 593 kerb runs with a bare fascia hanging in the air. But these are the
+  // bays that are NOT deck (a viaduct never gets here — see the `!deck` guard
+  // that parks them), so by construction every one of them is a road lying on
+  // the ground with a bank under it, and a bank that stops in mid-air is worse
+  // than one that reaches. The tail steps are only ever walked by the runs that
+  // need them: the loop breaks the moment the ground is met, which on ordinary
+  // ground is the first or second step.
+  const STEPS = [0.6, 1.4, 2.4, 3.6, 5, 7, 9.5, 12.5, 16];
+  const REACH = STEPS[STEPS.length - 1];
+  /** How far out this kerb may spread before it is over somebody else's tarmac.
+   *  Only asked when a coarse step says "blocked", because it costs a road-grid
+   *  walk per probe and the answer is `no limit` on almost every kerb. */
+  const clearTo = (b: Batter, lo: number, hi: number): number => {
+    let best = lo;
+    for (let d = lo + 0.25; d <= hi; d += 0.25) {
+      const f = d / 2.2;
+      // Their KERB LINE, not their reach: −0.8 cancels the slack `onCarriageway`
+      // adds for "near a road", so earth may run right up to the tarmac edge and
+      // stop, which is what a verge does.
+      if (onCarriageway(b.ax + b.nx * f, b.az + b.nz * f, -0.8, b.fid, b.nm).road
+        || onCarriageway(b.bx + b.nx * f, b.bz + b.nz * f, -0.8, b.fid, b.nm).road) break;
+      best = d;
+    }
+    return best;
+  };
   let kept = 0;
   for (let i = 0; i < pendingBatter.length; i++) {
     const b = pendingBatter[i];
@@ -4266,24 +4309,61 @@ function flushBatter(t: HeightTile): void {
       continue;
     }
     const pts: Array<[number, number, number]> = [];
-    for (const d of STEPS) {
+    // NEVER OVER ANOTHER ROAD — but a junction is a reason to STOP SHORT, not a
+    // reason to draw nothing. This used to `break` out of the whole loop the
+    // moment a step landed on somebody else's tarmac, and at a junction the
+    // side road's carriageway is inside the very first step, so the kerb got no
+    // earth at all for as far as the junction reached: the bare apron beside
+    // every turning. Now the step is clipped to the last clear distance and the
+    // batter is drawn up to it.
+    let lim = REACH, clipped = false;
+    let met = false, wet = false;
+    for (const d0 of STEPS) {
+      let d = d0;
+      if (d > lim) break;
+      const blocked = (dd: number): boolean => {
+        const f = dd / 2.2;
+        return onCarriageway(b.ax + b.nx * f, b.az + b.nz * f, -0.8, b.fid, b.nm).road
+          || onCarriageway(b.bx + b.nx * f, b.bz + b.nz * f, -0.8, b.fid, b.nm).road;
+      };
+      if (blocked(d)) {
+        // Somewhere between the last good step and this one is the tarmac edge.
+        lim = clearTo(b, pts.length ? pts[pts.length - 1][0] : 0, d);
+        clipped = true;
+        if (lim <= (pts.length ? pts[pts.length - 1][0] : 0) + 0.2) break;
+        d = lim;
+      }
       const f = d / 2.2;                 // nx/nz carry 2.2m of reach
       const qx0 = b.ax + b.nx * f, qz0 = b.az + b.nz * f;
       const qx1 = b.bx + b.nx * f, qz1 = b.bz + b.nz * f;
-      // Never over another road: at a junction this kerb lies on someone
-      // else's carriageway, and earth does not belong on their tarmac.
-      if (onCarriageway(qx0, qz0, -0.5, b.fid, b.nm).road
-        || onCarriageway(qx1, qz1, -0.5, b.fid, b.nm).road) break;
+      // EARTH STOPS AT THE WATER. Letting the bank run all the way to the bed
+      // turns every river crossing into a causeway — measured at Noordhoek, the
+      // longer reach did exactly that to the Silvermine outflow, filling the
+      // channel the road bridges. Where the cover says water the bank ends and
+      // whatever is holding the road up stays visible, which is the truth.
+      if (sampleCover(qx0, qz0) === COVER.water || sampleCover(qx1, qz1) === COVER.water) {
+        wet = true; break;
+      }
       const g0 = groundAt(qx0, qz0), g1 = groundAt(qx1, qz1);
-      if (!pts.length && g0 >= b.y0 - 0.05 && g1 >= b.y1 - 0.05) { spanStats.fillNoGap++; break; }
+      if (!pts.length && g0 >= b.y0 - 0.05 && g1 >= b.y1 - 0.05) {
+        spanStats.fillNoGap++; met = true; break;
+      }
       const c0 = b.y0 - d * BATT, c1 = b.y1 - d * BATT;
       pts.push([d, Math.min(b.y0, Math.max(g0, c0)), Math.min(b.y1, Math.max(g1, c1))]);
-      if (g0 >= c0 && g1 >= c1) break;   // met the ground; the batter ends here
+      if (g0 >= c0 && g1 >= c1) { met = true; break; }   // met the ground
+      if (clipped) break;                // ran out of room, not out of slope
     }
-    if (!pts.length || pts[pts.length - 1][0] >= 5) {
-      if (pts.length) spanStats.fillUnmet++;
-      continue;                          // nothing to draw, and nothing to keep
+    const reached = pts.length ? pts[pts.length - 1][0] : 0;
+    if (edgeLog.length < 40000) {
+      edgeLog.push({ x: (b.ax + b.bx) / 2, z: (b.az + b.bz) / 2, rail: b.rail,
+        batter: pts.length > 0, met, clip: clipped || wet,
+        gap: +(b.y0 - groundAt(b.ax, b.az)).toFixed(2), reach: reached });
     }
+    // A CLIPPED RUN IS STILL DRAWN. The old test threw away anything that had
+    // not met the ground by the last step, which conflated "this is a structure
+    // and earth would be a lie" with "there was a road in the way at 1.2m".
+    if (!pts.length) { spanStats.fillUnmet++; continue; }
+    if (!met && !clipped && !wet) spanStats.fillUnmet++;
     spanStats.fillDrawn++;
     let px = 0, py0 = b.y0, py1 = b.y1;
     for (const [d, y0, y1] of pts) {
@@ -4990,8 +5070,18 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // DILATED by two steps each way: a short gap closes, and the rail runs a
   // little past the danger, which is what a real one does.
   const railOn: boolean[][] = [[], []];
+  // AND WHERE A PARAPET WOULD DO MORE HARM THAN THE DROP. A solid barrier goes
+  // in the wall grid, so on a carriageway narrower than RAIL_MIN_W it protects
+  // you from the fall by wedging you against the rock — which is why the width
+  // gate exists. But the gate was the whole answer, so a 6m mountain road with
+  // eighty metres of air beside it got NOTHING: no parapet, and no earth either
+  // once the batter gave up. An unmarked edge is the one outcome a road edge
+  // must never be. Those runs get the thing a real narrow road gets instead —
+  // a line of reflector posts, which mark the edge without standing in it.
+  const postOn: boolean[][] = [[], []];
   if (apronOn) {
     const raw: boolean[][] = [[], []];
+    const rawP: boolean[][] = [[], []];
     for (let i = 0; i < n; i++) {
       const [ax2, az2] = dense[Math.max(0, i - 1)], [bx2, bz2] = dense[Math.min(n - 1, i + 1)];
       const tx = bx2 - ax2, tz = bz2 - az2, tl = Math.hypot(tx, tz) || 1;
@@ -5001,14 +5091,19 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         const sgn = sd === 0 ? 1 : -1;
         const ex = dense[i][0] + px * sgn, ez = dense[i][1] + pz * sgn;
         const g = Math.min(sampleHeight(ex, ez), sampleHeight(ex + px * sgn, ez + pz * sgn));
-        raw[sd][i] = width > RAIL_MIN_W && ky - g > RAIL_AT;
+        const drop = ky - g > RAIL_AT;
+        raw[sd][i] = width > RAIL_MIN_W && drop;
+        rawP[sd][i] = width <= RAIL_MIN_W && drop;
       }
     }
     for (let sd = 0; sd < 2; sd++) {
       for (let i = 0; i < n; i++) {
-        let on = false;
-        for (let j = Math.max(0, i - 2); j <= Math.min(n - 1, i + 2); j++) on = on || raw[sd][j];
+        let on = false, po = false;
+        for (let j = Math.max(0, i - 2); j <= Math.min(n - 1, i + 2); j++) {
+          on = on || raw[sd][j]; po = po || rawP[sd][j];
+        }
         railOn[sd][i] = on;
+        postOn[sd][i] = po;
       }
     }
   }
@@ -5071,15 +5166,46 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // car's push-out already lives; `ya` carries its top, and `wallHitAlong`
   // skips any wall the camera is above, so a 1m rail never occludes a chase cam
   // sitting four metres over the truck.
+  let catsRun = 0;         // metres of barrier since the last stud
+  let postRun = 0;         // …and since the last reflector post
   const rail = (
     xA: number, yA: number, zA: number, xB: number, yB: number, zB: number, u0: number, u1: number,
   ): void => {
-    spanStats.railM += Math.hypot(xB - xA, zB - zA);
+    const L = Math.hypot(xB - xA, zB - zA);
+    spanStats.railM += L;
     quad(apron.rlV, apron.rlUV,
       [xA, yA + RAIL_H, zA, xB, yB + RAIL_H, zB, xA, yA - 0.15, zA, xB, yB - 0.15, zB],
       [u0, 0, u1, 0, u0, 1, u1, 1]);
     const top = Math.max(yA, yB) + RAIL_H;
     addSeg(wallGrid, { ax: xA, az: zA, bx: xB, bz: zB, hw: 0, ya: top, yb: top, sl: true });
+    // CAT'S EYES. A parapet is a grey band that vanishes at night exactly when
+    // it matters most. These are studs on its face, cut from the delineator's
+    // own reflector patch in the sign atlas and drawn into the SIGN mesh —
+    // which is the retroreflective material, so they are dead until your beam
+    // finds them and then they pick out the line of the edge ahead of you.
+    // Spaced by world distance, not per quad, so the run of them stays even
+    // through the short bays a bend is made of.
+    const ux = (xB - xA) / (L || 1), uz = (zB - zA) / (L || 1);
+    const px2 = -uz, pz2 = ux;              // out of the barrier's face
+    for (let s = CATS_EVERY - catsRun; s < L; s += CATS_EVERY) {
+      const t = s / (L || 1);
+      const cx = xA + (xB - xA) * t, cz = zA + (zB - zA) * t;
+      const cy = yA + (yB - yA) * t + RAIL_H - 0.22;
+      const H = 0.09, W2 = 0.11;
+      // Both faces, a couple of centimetres proud, so an eye reads whichever
+      // side of the barrier you are on.
+      for (const nsg of [1, -1]) {
+        const ox2 = px2 * 0.05 * nsg, oz2 = pz2 * 0.05 * nsg;
+        quad(apron.sgV, apron.sgUV, [
+          cx - ux * W2 + ox2, cy + H, cz - uz * W2 + oz2,
+          cx + ux * W2 + ox2, cy + H, cz + uz * W2 + oz2,
+          cx - ux * W2 + ox2, cy - H, cz - uz * W2 + oz2,
+          cx + ux * W2 + ox2, cy - H, cz + uz * W2 + oz2,
+        ], [CATS_U0, CATS_V0, CATS_U1, CATS_V0, CATS_U0, CATS_V1, CATS_U1, CATS_V1]);
+      }
+      spanStats.cats++;
+    }
+    catsRun = (catsRun + L) % CATS_EVERY;
   };
   /**
    * A hazard board on a post, facing back down the road at whoever is coming.
@@ -5223,6 +5349,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           pendingBatter.push({
             ax: ex0, az: ez0, bx: ex1, bz: ez1,
             nx: ox * sgn, nz: oz * sgn, y0: ey0, y1: ey1, uA, uB, fid, nm: name,
+            rail: railHere || postOn[sd][i],
           });
         }
         // WHAT THIS SIDE OF THE BAY ENDED UP BEING. Three consumers downstream
@@ -5247,6 +5374,20 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           const rx0 = ex0 + ox * sgn * 0.04, rz0 = ez0 + oz * sgn * 0.04;
           const rx1 = ex1 + ox * sgn * 0.04, rz1 = ez1 + oz * sgn * 0.04;
           rail(rx0, ey0, rz0, rx1, ey1, rz1, along / 2.5, (along + len) / 2.5);
+        } else if (postOn[sd][i] && !open) {
+          // The narrow-road answer: reflector posts along the edge, spaced by
+          // world distance so a bend's short bays do not bunch them. They stand
+          // ON the verge and carry no collision — the point is to show you the
+          // edge, not to be the thing that stops you.
+          postRun += len;
+          if (postRun >= POST_EVERY) {
+            postRun = 0;
+            const t = 0.5;
+            const sx = ex0 + (ex1 - ex0) * t + ox * sgn * 0.28;
+            const sz = ez0 + (ez1 - ez0) * t + oz * sgn * 0.28;
+            sign(sx, Math.min(ey0, ey1) - 0.1, sz, dx, dz, sgn, 4, 0.5, 0.4);
+            spanStats.posts++;
+          }
         }
       }
       // ── roadside furniture ──
@@ -9002,6 +9143,50 @@ function meshHeightAt(x: number, z: number): number | null {
   return { lip: band(lip), deckOverField: band(overField), meshUnderField: band(meshUnder), poke: band(poke),
     budget: +(SURFACE.road.lift + CUT_CLEAR).toFixed(2),
     pokeAbove0: poke.length ? +(poke.filter((v) => v > 0).length / poke.length * 100).toFixed(1) : 0 };
+};
+/**
+ * IS EVERY ROAD EDGE EITHER MET BY GROUND OR MARKED?
+ *
+ * The claim worth testing is that a kerb has exactly three honest outcomes: the
+ * ground comes up to it (batter, or no gap at all), it is a drop and carries a
+ * barrier or posts, or it is a deck with a fascia and piers. Anything else is a
+ * road with an unmarked edge, and `bare` counts those. `clipped` is the
+ * junction case — earth stopped short because somebody else's tarmac was there,
+ * which is correct and is NOT bare, since a junction is a place you can drive
+ * off the edge on purpose.
+ */
+(window as unknown as { __edges?: object }).__edges = (r = 400): object => {
+  const near = edgeLog.filter((e) => Math.hypot(e.x - state.x, e.z - state.z) <= r);
+  if (!near.length) return { error: 'no kerbs recorded in range' };
+  let met = 0, railed = 0, bare = 0, partial = 0, junc = 0, juncBare = 0;
+  const bareGap: number[] = [];
+  for (const e of near) {
+    if (e.met) met++;
+    else if (e.rail) railed++;
+    else if (e.clip) { junc++; if (!e.batter) juncBare++; }   // ran into tarmac
+    else if (e.batter) { partial++; bareGap.push(e.gap); }
+    else { bare++; bareGap.push(e.gap); }
+  }
+  const band = (v: number[]): object | null => {
+    if (!v.length) return null;
+    const a = v.slice().sort((p, q) => p - q);
+    return { n: a.length, med: +a[a.length >> 1].toFixed(2),
+      p95: +a[Math.floor(a.length * 0.95)].toFixed(2), max: +a[a.length - 1].toFixed(2) };
+  };
+  const pct = (k: number): string => `${k} (${((k / near.length) * 100).toFixed(1)}%)`;
+  return {
+    kerbs: near.length,
+    groundMet: pct(met),          // earth reaches the ground, nothing more needed
+    railedOrPosted: pct(railed),  // a drop, and marked as one
+    stoppedAtJunction: pct(junc), // earth ran into another carriageway
+    // …of which drew NO earth at all, because the other tarmac started inside
+    // the first step. Those are the ones a driver reads as a bare apron.
+    junctionDrewNothing: pct(juncBare),
+    earthNoMark: pct(partial),    // earth drawn but it never met — unmarked drop
+    nothingAtAll: pct(bare),      // no earth, no barrier: the case that is a bug
+    unmarkedGap: band(bareGap),   // …and how far the ground actually is below
+    reach: band(near.map((e) => e.reach)),
+  };
 };
 /**
  * ARE WE CUTTING WHERE NOTHING NEEDED CUTTING?  (`?cprobe=1`)
