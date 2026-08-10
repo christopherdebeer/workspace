@@ -289,25 +289,104 @@ function repairDem(e: Float32Array, mpp: number): Float32Array {
   if (demFixes.length > 40) demFixes.shift();
   return out;
 }
-async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promise<Float32Array | null> {
-  try {
-    const res = await fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`);
-    if (!res.ok) return null;
-    const bmp = await createImageBitmap(await res.blob());
-    const cv = typeof OffscreenCanvas !== 'undefined'
-      ? new OffscreenCanvas(256, 256)
-      : Object.assign(document.createElement('canvas'), { width: 256, height: 256 });
-    const cx = (cv as OffscreenCanvas).getContext('2d') as OffscreenCanvasRenderingContext2D;
-    cx.drawImage(bmp, 0, 0);
-    const d = cx.getImageData(0, 0, 256, 256).data;
+/** Decode any terrarium-encoded PNG/WebP into a square Float32Array. Both
+ *  sources use the same RGB packing, so one decoder serves both. */
+async function decodeTerrarium(res: Response, px: number): Promise<Float32Array> {
+  const bmp = await createImageBitmap(await res.blob());
+  const cv = typeof OffscreenCanvas !== 'undefined'
+    ? new OffscreenCanvas(px, px)
+    : Object.assign(document.createElement('canvas'), { width: px, height: px });
+  const cx = (cv as OffscreenCanvas).getContext('2d') as OffscreenCanvasRenderingContext2D;
+  cx.drawImage(bmp, 0, 0, px, px);
+  const d = cx.getImageData(0, 0, px, px).data;
+  const out = new Float32Array(px * px);
+  for (let i = 0; i < px * px; i++) out[i] = d[i * 4] * 256 + d[i * 4 + 1] + d[i * 4 + 2] / 256 - 32768;
+  return out;
+}
+// ── MAPTERHORN: the same encoding, better ground ───────────────────
+// AWS's terrarium mosaic is unmaintained and, under this project's own tiles,
+// carries hard corruption: the z14 tile over Chapman's Peak holds 445 pixels
+// (0.68%) below −500m and bottoms out at −13,029m, and Beach Road's has 28 more
+// at −2,632m. `repairDem` was written to survive exactly that.
+//
+// Mapterhorn serves the SAME terrarium packing — so this decodes through the
+// same path and costs no new code — over Copernicus GLO-30 with national LiDAR
+// where it exists, in 512px lossless WebP, CORS-open. Measured on the same
+// ground: zero corrupt pixels at both Cape Town sites. Found by reading what
+// arnis (an OSM→Minecraft world generator with our elevation problem and none
+// of our rendering ones) switched to after demoting these same AWS tiles to
+// "legacy".
+//
+// Tiles are 512px over the SAME footprint as a 256px AWS tile at equal z, so a
+// straight 2×2 average lands twice-sampled ground in the frame the rest of the
+// engine already assumes. Absent tiles 404 — every pure-ocean one, and every
+// level past what the local source resolves — and fall back up the pyramid,
+// which is also how a coarse region degrades gracefully rather than failing.
+const MAPTERHORN = !/[?&]dem=aws/.test(location.search);
+const mthMissing = new Set<string>();
+const demSource = { mth: 0, aws: 0, none: 0 };
+async function fetchMapterhorn(x: number, y: number, z: number): Promise<Float32Array | null> {
+  // Up the pyramid until something exists; z6 is the floor (all land has a
+  // tile there), and each step up quarters the ground detail we can recover.
+  for (let up = 0; up <= z - 6; up++) {
+    const tz = z - up, tx = x >> up, ty = y >> up;
+    const key = `${tz}/${tx}/${ty}`;
+    if (mthMissing.has(key)) continue;
+    let raw: Float32Array;
+    try {
+      const res = await fetch(`https://tiles.mapterhorn.com/${key}.webp`);
+      if (!res.ok) { mthMissing.add(key); continue; }
+      raw = await decodeTerrarium(res, 512);
+    } catch {
+      // A tile that will not decode is a tile we do not have. Step UP the
+      // pyramid rather than abandoning the source — bailing out here sent
+      // every request at Chapman's Peak, where nothing exists below z12,
+      // straight back to the corrupt AWS tile.
+      mthMissing.add(key);
+      continue;
+    }
     const out = new Float32Array(256 * 256);
-    for (let i = 0; i < 256 * 256; i++) out[i] = d[i * 4] * 256 + d[i * 4 + 1] + d[i * 4 + 2] / 256 - 32768;
-    // Metres per pixel at THIS tile's latitude — the footprint test is a
-    // statement about the ground, so it has to be in ground units.
-    const lat = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 0.5)) / 2 ** z))) * 180) / Math.PI;
-    const mpp = (40075016.686 * Math.cos((lat * Math.PI) / 180)) / (2 ** z * 256);
-    return repairDem(out, mpp);
-  } catch { return null; }
+    if (up === 0) {
+      // Same footprint at twice the sampling: average each 2×2 down.
+      for (let j = 0; j < 256; j++) for (let i = 0; i < 256; i++) {
+        const a = j * 2 * 512 + i * 2;
+        out[j * 256 + i] = (raw[a] + raw[a + 1] + raw[a + 512] + raw[a + 513]) / 4;
+      }
+    } else {
+      // Our tile is one sub-rectangle of this ancestor; bilinear back up.
+      const span = 512 / 2 ** up;
+      const ox = (x - (tx << up)) * span, oy = (y - (ty << up)) * span;
+      for (let j = 0; j < 256; j++) for (let i = 0; i < 256; i++) {
+        const fx = ox + (i / 256) * span, fy = oy + (j / 256) * span;
+        const x0 = Math.floor(fx), y0 = Math.floor(fy);
+        const x1 = Math.min(511, x0 + 1), y1 = Math.min(511, y0 + 1);
+        const tx2 = fx - x0, ty2 = fy - y0;
+        const a = raw[y0 * 512 + x0], b = raw[y0 * 512 + x1];
+        const c = raw[y1 * 512 + x0], d2 = raw[y1 * 512 + x1];
+        out[j * 256 + i] = (a * (1 - tx2) + b * tx2) * (1 - ty2) + (c * (1 - tx2) + d2 * tx2) * ty2;
+      }
+    }
+    return out;
+  }
+  return null;
+}
+async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promise<Float32Array | null> {
+  let out: Float32Array | null = null;
+  if (MAPTERHORN) out = await fetchMapterhorn(x, y, z);
+  if (out) demSource.mth++;
+  else {
+    try {
+      const res = await fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`);
+      if (!res.ok) { demSource.none++; return null; }
+      out = await decodeTerrarium(res, 256);
+      demSource.aws++;
+    } catch { demSource.none++; return null; }
+  }
+  // Metres per pixel at THIS tile's latitude — the footprint test is a
+  // statement about the ground, so it has to be in ground units.
+  const lat = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 0.5)) / 2 ** z))) * 180) / Math.PI;
+  const mpp = (40075016.686 * Math.cos((lat * Math.PI) / 180)) / (2 ** z * 256);
+  return repairDem(out, mpp);
 }
 // ── land cover: what is actually growing here ──────────────────────
 // ESA WorldCover, 10m, global, through this cell's namespace (the bucket has no
@@ -8170,6 +8249,8 @@ function meshHeightAt(x: number, z: number): number | null {
   };
 };
 /** What the elevation source got wrong here, and how much of it we repaired. */
+(window as unknown as { __demsrc?: object }).__demsrc = (): object =>
+  ({ mapterhorn: MAPTERHORN, ...demSource, missingTiles: mthMissing.size });
 (window as unknown as { __dem?: object }).__dem = (): object => ({
   tilesRepaired: demFixes.length,
   pixels: demFixes.reduce((a, f) => a + f.n, 0),
