@@ -1472,6 +1472,7 @@ function flushTerrain(now: number): void {
       buildTerrainMesh(t);
       // The ground under this tile just moved; anything standing on it follows.
       reseatBuildings(t);
+      flushBatter(t);
       terrainMs = performance.now() - t0;
       return;
     }
@@ -4168,6 +4169,81 @@ const spanStats = {
   // Where the boards went, and which way each faces — bounded, for probes.
   signAt: [] as Array<{ x: number; z: number; fx: number; fz: number; kind: number }>,
 };
+/**
+ * KERBS AWAITING A SHOULDER.
+ *
+ * The batter cannot be built when the kerb is — the road has not carved its own
+ * corridor yet, so the ground beside it is still the untouched hillside. Each
+ * kerb span is parked here instead and given its earth once the terrain tile it
+ * sits in has been rebuilt with the cut in it.
+ */
+interface Batter { ax: number; az: number; bx: number; bz: number;
+  nx: number; nz: number; y0: number; y1: number; uA: number; uB: number;
+  fid: number; nm?: string }
+const pendingBatter: Batter[] = [];
+/** Two triangles into a vertex/uv pair. `ribbon` has its own local `quad`, and
+ *  the only `quad` in scope out here is a THREE.Mesh — which the stub types are
+ *  happy to let you call, and which would have thrown on the first shoulder. */
+function quadInto(V: number[], U: number[], p: number[], uv: number[]): void {
+  V.push(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8],
+    p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
+  U.push(uv[0], uv[1], uv[2], uv[3], uv[4], uv[5], uv[2], uv[3], uv[6], uv[7], uv[4], uv[5]);
+}
+/** Build the shoulders for every parked kerb inside this tile, against the
+ *  ground as it now stands, and retire them. */
+function flushBatter(t: HeightTile): void {
+  if (!vergeFill || !pendingBatter.length) return;
+  const V: number[] = [], U: number[] = [];
+  const BATT = 0.6;                      // metres of drop per metre out
+  const STEPS = [0.6, 1.4, 2.4, 3.6, 5];
+  let kept = 0;
+  for (let i = 0; i < pendingBatter.length; i++) {
+    const b = pendingBatter[i];
+    const mx = (b.ax + b.bx) / 2, mz = (b.az + b.bz) / 2;
+    if (mx < t.xs || mz < t.zs || mx > t.xs + t.w || mz > t.zs + t.h) {
+      pendingBatter[kept++] = b;         // not this tile — keep waiting
+      continue;
+    }
+    const pts: Array<[number, number, number]> = [];
+    for (const d of STEPS) {
+      const f = d / 2.2;                 // nx/nz carry 2.2m of reach
+      const qx0 = b.ax + b.nx * f, qz0 = b.az + b.nz * f;
+      const qx1 = b.bx + b.nx * f, qz1 = b.bz + b.nz * f;
+      // Never over another road: at a junction this kerb lies on someone
+      // else's carriageway, and earth does not belong on their tarmac.
+      if (onCarriageway(qx0, qz0, -0.5, b.fid, b.nm).road
+        || onCarriageway(qx1, qz1, -0.5, b.fid, b.nm).road) break;
+      const g0 = groundAt(qx0, qz0), g1 = groundAt(qx1, qz1);
+      if (!pts.length && g0 >= b.y0 - 0.05 && g1 >= b.y1 - 0.05) { spanStats.fillNoGap++; break; }
+      const c0 = b.y0 - d * BATT, c1 = b.y1 - d * BATT;
+      pts.push([d, Math.min(b.y0, Math.max(g0, c0)), Math.min(b.y1, Math.max(g1, c1))]);
+      if (g0 >= c0 && g1 >= c1) break;   // met the ground; the batter ends here
+    }
+    if (!pts.length || pts[pts.length - 1][0] >= 5) {
+      if (pts.length) spanStats.fillUnmet++;
+      continue;                          // nothing to draw, and nothing to keep
+    }
+    spanStats.fillDrawn++;
+    let px = 0, py0 = b.y0, py1 = b.y1;
+    for (const [d, y0, y1] of pts) {
+      const fa = px / 2.2, fb = d / 2.2;
+      quadInto(V, U, [
+        b.ax + b.nx * fa, py0, b.az + b.nz * fa,
+        b.bx + b.nx * fa, py1, b.bz + b.nz * fa,
+        b.ax + b.nx * fb, y0, b.az + b.nz * fb,
+        b.bx + b.nx * fb, y1, b.bz + b.nz * fb,
+      ], [b.uA, px / 4, b.uB, px / 4, b.uA, d / 4, b.uB, d / 4]);
+      px = d; py0 = y0; py1 = y1;
+    }
+  }
+  pendingBatter.length = kept;
+  if (!V.length) return;
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(V), 3));
+  g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(U), 2));
+  g.computeVertexNormals();
+  worldGroup.add(new THREE.Mesh(g, MAT.verge));
+}
 function flushAprons(): void {
   for (const [v, u, m] of [
     [apron.cutV, apron.cutUV, MAT.verge],
@@ -5049,82 +5125,24 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // terrain would, but the resolution dial is deliberately coarse for
         // phones. So the gap is closed the way a road crew would: fill it, and
         // let the verge run from the kerb out to wherever the hill actually is.
-        // A SHOULDER, not a patch. The first version looked for the point where
-        // the ground climbs back to road level and threw one flat quad at it,
-        // which meant a small gap got nothing at all — at Badwater the kerb
-        // stands a median 0.27m over its verge and the fill declined to run.
+        // THE BATTER IS DEFERRED, because at this instant the ground is a lie.
+        // `rasterizeCut` and `dirtyTerrainAround` both run at the END of this
+        // function, so while the apron is being built this road has not yet cut
+        // its own corridor: `groundAt` still returns the untouched hillside,
+        // which sits at or above the kerb almost everywhere. Deciding the
+        // shoulder here measured 89.4% of kerbs as having no gap at all — and
+        // then the carve ran, dug the corridor out from under them, and left
+        // the bare apron standing with no batter against it. That is exactly
+        // the load order you can watch on screen: terrain, then road, then the
+        // ground drops away.
         //
-        // What a road crew actually leaves is a batter: earth from the kerb
-        // falling at about its angle of repose until it meets the ground, and
-        // no further. That is self-tapering — a shallow gap is closed in half a
-        // metre, a deeper one runs out further, and where the ground never
-        // comes back the road is genuinely RAISED and keeps its fascia, which
-        // is what an embankment or a bridge should look like.
-        if (deck) spanStats.fillDeck++;
-        // NOT gated on `open`. That flag exists to stop a tall vertical fascia
-        // standing across a turning — but a batter LIES ON THE GROUND and can
-        // block nothing, and a junction mouth is exactly where you want earth
-        // running from the road down to the verge rather than a bare edge.
-        // Measured before this was noticed: 2049 of ~9850 kerb quads around
-        // Noordhoek, 21%, were being skipped for no reason anyone could see
-        // except that the fascia beside them had been cut back.
-        if (!deck && vergeFill) {
-          const BATT = 0.6;                      // metres of drop per metre out
-          const STEPS = [0.6, 1.4, 2.4, 3.6, 5];
-          const pts: Array<[number, number, number]> = [];  // d, y at A, y at B
-          for (const d of STEPS) {
-            const f = d / 2.2;                   // ox/oz carry 2.2m of reach
-            const qx0 = ex0 + ox * sgn * f, qz0 = ez0 + oz * sgn * f;
-            const qx1 = ex1 + ox * sgn * f, qz1 = ez1 + oz * sgn * f;
-            // NEVER OVER ANOTHER ROAD. Ungating this from `open` let a side
-            // road's batter run outboard from its own kerb — and at a junction
-            // that kerb lies ON the main carriageway, so the earth would be
-            // spread across somebody else's tarmac. Stop the strip at the
-            // first step that lands on a road surface.
-            if (onCarriageway(qx0, qz0, -0.5, fid, name).road
-              || onCarriageway(qx1, qz1, -0.5, fid, name).road) break;
-            const g0 = groundAt(qx0, qz0);
-            const g1 = groundAt(qx1, qz1);
-            // Ground already at the road on the very first step: no gap here.
-            if (!pts.length && g0 >= ey0 - 0.05 && g1 >= ey1 - 0.05) {
-              spanStats.fillNoGap++;
-              const gap = Math.max(ey0 - g0, ey1 - g1);
-              spanStats.noGapBand[gap <= 0 ? 0 : gap < 0.02 ? 1 : gap < 0.035 ? 2 : 3]++;
-              break;
-            }
-            const b0 = ey0 - d * BATT, b1 = ey1 - d * BATT;
-            pts.push([d, Math.min(ey0, Math.max(g0, b0)), Math.min(ey1, Math.max(g1, b1))]);
-            // Met the ground — the batter has run out and the fill ends here.
-            if (g0 >= b0 && g1 >= b1) break;
-          }
-          // Ran the full reach without meeting: the road stands clear of its
-          // surroundings, and covering that would be inventing an embankment.
-          if (!pts.length || pts[pts.length - 1][0] >= 5) spanStats.fillUnmet += pts.length ? 1 : 0;
-          if (pts.length && pts[pts.length - 1][0] < 5) {
-            spanStats.fillDrawn++;
-            let px = 0, py0 = ey0, py1 = ey1;
-            spanStats.fillQ += pts.length;
-            spanStats.fillM2 += pts[pts.length - 1][0] * len;
-            for (const [d, y0, y1] of pts) {
-              const fa = px / 2.2, fb = d / 2.2;
-              quad(apron.cutV, apron.cutUV, [
-                ex0 + ox * sgn * fa, py0, ez0 + oz * sgn * fa,
-                ex1 + ox * sgn * fa, py1, ez1 + oz * sgn * fa,
-                ex0 + ox * sgn * fb, y0, ez0 + oz * sgn * fb,
-                ex1 + ox * sgn * fb, y1, ez1 + oz * sgn * fb,
-              ], [uA, px / 4, uB, px / 4, uA, d / 4, uB, d / 4]);
-              px = d; py0 = y0; py1 = y1;
-            }
-          }
-        }
-        bot.push(b0, b1);
-        drop.push(Math.max(ey0 - g0, ey1 - g1));
-        if (railHere && !open) {
-          // Right on the kerb line, not outboard of it: set any further out and
-          // the parapet hangs in the air beside its own fascia.
-          const rx0 = ex0 + ox * sgn * 0.04, rz0 = ez0 + oz * sgn * 0.04;
-          const rx1 = ex1 + ox * sgn * 0.04, rz1 = ez1 + oz * sgn * 0.04;
-          rail(rx0, ey0, rz0, rx1, ey1, rz1, along / 2.5, (along + len) / 2.5);
+        // So the kerb is recorded and the shoulder is built later, against the
+        // ground that actually ends up there — see flushBatter.
+        if (!deck) {
+          pendingBatter.push({
+            ax: ex0, az: ez0, bx: ex1, bz: ez1,
+            nx: ox * sgn, nz: oz * sgn, y0: ey0, y1: ey1, uA, uB, fid, nm: name,
+          });
         }
       }
       // ── roadside furniture ──
