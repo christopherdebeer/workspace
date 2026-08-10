@@ -4151,7 +4151,7 @@ const apron = {
   sgV: [] as number[], sgUV: [] as number[],
 };
 const spanStats = {
-  piers: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0,
+  piers: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0, fillQ: 0, fillM2: 0,
   at: null as [number, number] | null,
   // Where the boards went, and which way each faces — bounded, for probes.
   signAt: [] as Array<{ x: number; z: number; fx: number; fz: number; kind: number }>,
@@ -5037,21 +5037,48 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // terrain would, but the resolution dial is deliberately coarse for
         // phones. So the gap is closed the way a road crew would: fill it, and
         // let the verge run from the kerb out to wherever the hill actually is.
+        // A SHOULDER, not a patch. The first version looked for the point where
+        // the ground climbs back to road level and threw one flat quad at it,
+        // which meant a small gap got nothing at all — at Badwater the kerb
+        // stands a median 0.27m over its verge and the fill declined to run.
+        //
+        // What a road crew actually leaves is a batter: earth from the kerb
+        // falling at about its angle of repose until it meets the ground, and
+        // no further. That is self-tapering — a shallow gap is closed in half a
+        // metre, a deeper one runs out further, and where the ground never
+        // comes back the road is genuinely RAISED and keeps its fascia, which
+        // is what an embankment or a bridge should look like.
         if (!open && !deck && vergeFill) {
-          let fillD = 0, fillY = 0;
-          for (const d of [0.6, 1.2, 2, 3, 4.5, 6]) {
-            const gx = ex0 + ox * sgn * (d / 2.2), gz = ez0 + oz * sgn * (d / 2.2);
-            const gy = groundAt(gx, gz);
-            if (d === 0.6 && gy > ey0 - 0.3) break;    // no trough here at all
-            if (gy >= ey0 - 0.12) { fillD = d; fillY = gy; break; }
+          const BATT = 0.6;                      // metres of drop per metre out
+          const STEPS = [0.6, 1.4, 2.4, 3.6, 5];
+          const pts: Array<[number, number, number]> = [];  // d, y at A, y at B
+          for (const d of STEPS) {
+            const f = d / 2.2;                   // ox/oz carry 2.2m of reach
+            const g0 = groundAt(ex0 + ox * sgn * f, ez0 + oz * sgn * f);
+            const g1 = groundAt(ex1 + ox * sgn * f, ez1 + oz * sgn * f);
+            // Ground already at the road on the very first step: no gap here.
+            if (!pts.length && g0 >= ey0 - 0.05 && g1 >= ey1 - 0.05) break;
+            const b0 = ey0 - d * BATT, b1 = ey1 - d * BATT;
+            pts.push([d, Math.min(ey0, Math.max(g0, b0)), Math.min(ey1, Math.max(g1, b1))]);
+            // Met the ground — the batter has run out and the fill ends here.
+            if (g0 >= b0 && g1 >= b1) break;
           }
-          if (fillD > 0) {
-            const k = fillD / 2.2;
-            quad(apron.cutV, apron.cutUV, [
-              ex0, ey0, ez0, ex1, ey1, ez1,
-              ex0 + ox * sgn * k, fillY, ez0 + oz * sgn * k,
-              ex1 + ox * sgn * k, fillY, ez1 + oz * sgn * k,
-            ], [uA, 0, uB, 0, uA, fillD / 4, uB, fillD / 4]);
+          // Ran the full reach without meeting: the road stands clear of its
+          // surroundings, and covering that would be inventing an embankment.
+          if (pts.length && pts[pts.length - 1][0] < 5) {
+            let px = 0, py0 = ey0, py1 = ey1;
+            spanStats.fillQ += pts.length;
+            spanStats.fillM2 += pts[pts.length - 1][0] * len;
+            for (const [d, y0, y1] of pts) {
+              const fa = px / 2.2, fb = d / 2.2;
+              quad(apron.cutV, apron.cutUV, [
+                ex0 + ox * sgn * fa, py0, ez0 + oz * sgn * fa,
+                ex1 + ox * sgn * fa, py1, ez1 + oz * sgn * fa,
+                ex0 + ox * sgn * fb, y0, ez0 + oz * sgn * fb,
+                ex1 + ox * sgn * fb, y1, ez1 + oz * sgn * fb,
+              ], [uA, px / 4, uB, px / 4, uA, d / 4, uB, d / 4]);
+              px = d; py0 = y0; py1 = y1;
+            }
           }
         }
         bot.push(b0, b1);
