@@ -9744,6 +9744,7 @@ function noteTags(t: Record<string, string>): void {
     range: Math.round(drone.batt * DRONE.LIFE * DRONE.SPEED),
     batt: +drone.batt.toFixed(3), cam: camMode,
     y: +drone.y.toFixed(1), agl: +(drone.y - groundAt(drone.x, drone.z)).toFixed(1),
+    cmdAlt: +drone.alt.toFixed(1),
     x: +drone.x.toFixed(1), z: +drone.z.toFixed(1),
     fromRig: +Math.hypot(drone.x - state.x, drone.z - state.z).toFixed(1) });
 (window as unknown as { __droneGo?: object }).__droneGo = (): void => droneToggle();
@@ -10377,6 +10378,12 @@ function showStickHold(on: boolean): void {
   stickNub.style.borderColor = on ? 'rgba(214,92,68,0.92)' : 'rgba(245,196,83,0.8)';
 }
 let brakeId: number | null = null;
+/** The second finger, while the drone is up: altitude. A rate control, like the
+ *  stick — displacement from where it landed is climb rate, not a target — so
+ *  you hold it to climb and let go to hold height. It cannot be the brake at
+ *  the same time because the rig is parked while you fly, which is exactly what
+ *  frees the finger up. */
+let lift: { id: number; y0: number; dy: number } | null = null;
 // The chart (top) view pans and zooms like a map: the stick lives PINNED at
 // bottom-right there; dragging anywhere else pans, pinching zooms, and the
 // wheel zooms on desktop. Chase keeps the appear-where-the-thumb-lands stick
@@ -10462,12 +10469,15 @@ canvas.addEventListener('pointerdown', (e) => {
     stickBase.style.display = stickNub.style.display = 'block';
     stickBase.style.left = stickNub.style.left = `${e.clientX}px`;
     stickBase.style.top = stickNub.style.top = `${e.clientY}px`;
+  } else if (drone.up && lift === null) {
+    lift = { id: e.pointerId, y0: e.clientY, dy: 0 };   // second finger: altitude
   } else if (brakeId === null) {
     brakeId = e.pointerId; // second finger, anywhere: brake
   }
 });
 canvas.addEventListener('pointermove', (e) => {
   if (stick?.id === e.pointerId) { setStickFrom(e); return; }
+  if (lift?.id === e.pointerId) { lift.dy = e.clientY - lift.y0; return; }
   const prev = panPtrs.get(e.pointerId);
   if (!prev || camMode !== 'top') return;
   const cur = { x: e.clientX, y: e.clientY };
@@ -10585,13 +10595,14 @@ const endStick = (e: PointerEvent): void => {
     updateStickHome();
   }
   if (brakeId === e.pointerId) brakeId = null;
+  if (lift?.id === e.pointerId) lift = null;
 };
 canvas.addEventListener('pointerup', endStick);
 canvas.addEventListener('pointercancel', endStick);
 // Belt to the capture's braces: any release anywhere clears these too.
 addEventListener('pointerup', endStick);
 addEventListener('pointercancel', endStick);
-addEventListener('blur', () => { stick = null; brakeId = null; panPtrs.clear(); keys.clear(); updateStickHome(); });
+addEventListener('blur', () => { stick = null; brakeId = null; lift = null; panPtrs.clear(); keys.clear(); updateStickHome(); });
 // The controls as the truck last received them — so a harness can drive the
 // stick with synthetic pointers and read what the driver would actually get,
 // rather than inferring it from how the truck moved.
@@ -10821,6 +10832,8 @@ const DRONE = {
   LIFE: 62,           // seconds of battery, full to flat
   DOCK: 18,           // within this of the rig it can land and recharge
   FALL: 24,           // how fast it comes down once the battery is gone
+  LO: 4, HI: 240,     // how low and how high you may command it
+  LIFT_PX: 90,        // pixels of drag for full climb rate
 };
 const drone = {
   up: false,          // in the air and under your control
@@ -10831,6 +10844,7 @@ const drone = {
   dx: 0, dz: 0,       // …there
   falling: false,
   recall: false,      // flying itself home, hands off
+  alt: 42,            // COMMANDED height over the ground, not a fixed one
 };
 let droneMesh: THREE.Object3D | null = null;
 /** A body and four rotor discs. Small, dark, and legible from above, which is
@@ -10884,6 +10898,7 @@ function droneToggle(): void {
   pois.set(RIG_POI, { name: RIG_POI, x: state.x, z: state.z, kind: 'rig', pinned: true });
   drone.x = state.x; drone.z = state.z;
   drone.y = groundAt(state.x, state.z) + 6;
+  drone.alt = DRONE.ALT;
   drone.heading = state.heading;
   if (!droneMesh) { droneMesh = droneModel(); worldGroup.add(droneMesh); }
   droneMesh.visible = true;
@@ -10948,17 +10963,36 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
       // Ease off the throttle through a hard turn, or it flies a wide arc past
       // the rig and burns the charge it was recalled to save.
       thr = clamp(1 - Math.abs(err) * 0.8, 0.15, 1);
-      if (Math.hypot(drone.x - state.x, drone.z - state.z) <= DRONE.DOCK) { droneDock(); return; }
+      // Over the rig AND low enough to be landing, not merely overhead: docking
+      // from cruise height is the jump this was written to remove. Creeps in on
+      // the last few metres so it settles rather than arrives.
+      const d2 = Math.hypot(drone.x - state.x, drone.z - state.z);
+      if (d2 <= DRONE.DOCK) {
+        thr = clamp(d2 / DRONE.DOCK, 0.05, 1);
+        if (drone.y - groundAt(drone.x, drone.z) <= DRONE.LO + 2.5) { droneDock(); return; }
+      }
     }
   }
   drone.heading += str * DRONE.YAW * dt;
   const v = thr * DRONE.SPEED;
   drone.x += Math.sin(drone.heading) * v * dt;
   drone.z += -Math.cos(drone.heading) * v * dt;
-  // Terrain-following: it holds a height over whatever is under it rather than
-  // an absolute altitude, so flying up a valley does not fly you into the side
-  // of it. Only ever a soft correction, so a ridge reads as a climb.
-  const want = groundAt(drone.x, drone.z) + DRONE.ALT;
+  // THE HEIGHT IS COMMANDED, not fixed. It was pinned at 42m over the ground,
+  // which is one useful altitude and no others: too high to read a track, too
+  // low to see over the next ridge. The second finger — or R and F — moves the
+  // commanded height at a rate, and terrain-following then holds THAT: fly up a
+  // valley and it still climbs the valley rather than into the side of it.
+  const liftRate = (lift ? clamp(-lift.dy / DRONE.LIFT_PX, -1, 1) : 0)
+    + (keys.has('r') ? 1 : 0) - (keys.has('f') ? 1 : 0);
+  if (liftRate !== 0) drone.alt = clamp(drone.alt + liftRate * DRONE.CLIMB * dt, DRONE.LO, DRONE.HI);
+  // RECALL DESCENDS ON THE WAY IN. It used to hold cruise height the whole way
+  // and then dock, which teleported the camera down the last forty metres and
+  // read as the drone falling into the truck. The commanded height now tapers
+  // with the distance still to run, so the last stretch is an approach: about
+  // 30m out at a hundred metres, five at twenty, and it touches down.
+  const home = Math.hypot(drone.x - state.x, drone.z - state.z);
+  const cmd = drone.recall ? Math.min(drone.alt, Math.max(DRONE.LO, home * 0.3)) : drone.alt;
+  const want = groundAt(drone.x, drone.z) + cmd;
   drone.y += clamp(want - drone.y, -DRONE.CLIMB * dt, DRONE.CLIMB * dt);
   if (droneMesh) {
     droneMesh.position.set(drone.x, drone.y, drone.z);
@@ -14146,6 +14180,13 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       hctx.fillRect(droneRect.x, by, bw, 3);
       hctx.fillStyle = drone.batt < 0.3 ? UI.bad : UI.good;
       hctx.fillRect(droneRect.x, by, Math.round(bw * drone.batt), 3);
+    }
+    // HEIGHT, because a control you cannot read is a control you cannot use.
+    // The second finger moves this number and nothing else on screen would say
+    // so. Above the bar, and only while there is something to fly.
+    if (drone.up) {
+      const agl = `${Math.round(drone.y - groundAt(drone.x, drone.z))}M`;
+      textEdgeS(agl, droneRect.x, droneRect.y - 13, drone.recall ? UI.good : UI.gold);
     }
   }
   // ── where you are, and whether the world is still arriving ──
