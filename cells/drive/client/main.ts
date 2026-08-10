@@ -9638,6 +9638,128 @@ function meshHeightAt(x: number, z: number): number | null {
     worst: +Math.max(Math.abs(a[0]), Math.abs(a[a.length - 1])).toFixed(2),
     over30cm: +((a.filter((v) => Math.abs(v) > 0.3).length / a.length) * 100).toFixed(1) };
 };
+/** The drone, for a headless test: where it is, what is left in it, and which
+ *  of the three states it is in. */
+(window as unknown as { __drone?: object }).__drone = (): object =>
+  ({ up: drone.up, downed: drone.downed, falling: drone.falling,
+    batt: +drone.batt.toFixed(3), cam: camMode,
+    y: +drone.y.toFixed(1), agl: +(drone.y - groundAt(drone.x, drone.z)).toFixed(1),
+    x: +drone.x.toFixed(1), z: +drone.z.toFixed(1),
+    fromRig: +Math.hypot(drone.x - state.x, drone.z - state.z).toFixed(1) });
+(window as unknown as { __droneGo?: object }).__droneGo = (): void => droneToggle();
+/** Set the charge, for a test that would otherwise have to wait out a whole
+ *  battery — headless runs the clock at about 60% of wall time, so draining it
+ *  honestly takes six minutes of nothing. */
+(window as unknown as { __droneBatt?: object }).__droneBatt = (v: number): void => { drone.batt = v; };
+/**
+ * ARE THE LEGS OF A JUNCTION ON ONE PLANE?
+ *
+ * `__seams` answers a different question — whether the legs agree about the
+ * HEIGHT of the node they share — and at Palo Colorado it says yes, to four
+ * centimetres. A junction can pass that and still look broken, because each leg
+ * arrives with its own grade and its own cross-fall: four ribbons crossing at
+ * four different tilts meet along creases, and the surface you drive over is
+ * faceted rather than paved.
+ *
+ * So this fits a PLANE through the deck of every leg near each node — sampled
+ * across the full width, because cross-fall is half the suspicion — and reports
+ * how far the legs' own surfaces sit from it. `rms` is the disagreement in
+ * metres over the junction's footprint; `worstLeg` names the node where it is
+ * largest.
+ */
+(window as unknown as { __legs?: object }).__legs = (r = 300, R = 7): object => {
+  // THE NODES COME FROM THE JUNCTION REGISTRY, not from coincident endpoints.
+  // Asking for three fragments to END at one point finds nothing at a T — the
+  // through road passes STRAIGHT ON and does not end there — which is why the
+  // first version of this reported zero junctions on a road full of them.
+  // `juncGrid` already holds every point the solver reconciled.
+  const nodes: Array<[number, number]> = [];
+  const nseen = new Set<string>();
+  const c = Math.ceil(r / GRID);
+  for (let gx = -c; gx <= c; gx++) for (let gz = -c; gz <= c; gz++) {
+    for (const [jx, jz] of juncGrid.get(`${Math.floor(state.x / GRID) + gx},${Math.floor(state.z / GRID) + gz}`) ?? []) {
+      if (Math.hypot(jx - state.x, jz - state.z) > r) continue;
+      const k = `${Math.round(jx / 6)},${Math.round(jz / 6)}`;   // one node per 6m
+      if (nseen.has(k)) continue;
+      nseen.add(k);
+      nodes.push([jx, jz]);
+    }
+  }
+  const rows: Array<{ at: string; legs: number; rms: number; worst: number; fall: number }> = [];
+  for (const [nx0, nz0] of nodes) {
+    // Every carriageway passing within a few metres of the node is a leg — and
+    // a road passing THROUGH contributes two, one arm each way.
+    const segs: Seg[] = [];
+    const sseen = new Set<Seg>();
+    for (let gx = -1; gx <= 1; gx++) for (let gz = -1; gz <= 1; gz++) {
+      for (const sg of roadGrid.get(`${Math.floor(nx0 / GRID) + gx},${Math.floor(nz0 / GRID) + gz}`) ?? []) {
+        if (sseen.has(sg) || sg.tk || sg.ya === undefined) continue;
+        sseen.add(sg);
+        const [cx2, cz2] = closestOnSeg(nx0, nz0, sg);
+        if (Math.hypot(cx2 - nx0, cz2 - nz0) <= sg.hw + 3) segs.push(sg);
+      }
+    }
+    // TWO IS A JUNCTION. Asking for three distinct fragments asks for a
+    // crossroads, and the overwhelming majority of junctions are T's: one road
+    // ending against another, which is two ways. That filter reported zero
+    // junctions on a road with 156 reconciled nodes.
+    const legs = new Set(segs.map((sg) => sg.fd ?? -1));
+    if (legs.size < 2) continue;
+    const k = `${Math.round(nx0)},${Math.round(nz0)}`;
+    // Sample each leg's own deck: centreline and both kerbs, R metres out.
+    const P: Array<[number, number, number]> = [];
+    let fall = 0;
+    for (const sg of segs) {
+      const dx = sg.bx - sg.ax, dz = sg.bz - sg.az;
+      const l = Math.hypot(dx, dz) || 1;
+      // Which end of this segment is the node, so we walk INTO the leg.
+      const atA = Math.hypot(sg.ax - nx0, sg.az - nz0) < Math.hypot(sg.bx - nx0, sg.bz - nz0);
+      const ux = (atA ? dx : -dx) / l, uz = (atA ? dz : -dz) / l;
+      const t = clamp(R / l, 0, 1);
+      const px = nx0 + ux * R, pz = nz0 + uz * R;
+      const base = atA
+        ? (sg.ya as number) + ((sg.yb as number) - (sg.ya as number)) * t
+        : (sg.yb as number) + ((sg.ya as number) - (sg.yb as number)) * t;
+      const cross = ((sg.ca ?? 0) + ((sg.cb ?? 0) - (sg.ca ?? 0)) * t);
+      fall = Math.max(fall, Math.abs(cross));
+      for (const side of [-1, 0, 1]) {
+        P.push([px - uz * sg.hw * side, pz + ux * sg.hw * side, base + cross * side]);
+      }
+    }
+    if (P.length < 6) continue;
+    // Least squares plane y = a·x + b·z + d over the leg samples.
+    let sx = 0, sz = 0, sy = 0;
+    for (const [x, z, y] of P) { sx += x; sz += z; sy += y; }
+    const n = P.length;
+    const mx = sx / n, mz = sz / n, my = sy / n;
+    let xx = 0, xz = 0, zz = 0, xy = 0, zy = 0;
+    for (const [x, z, y] of P) {
+      const dx2 = x - mx, dz2 = z - mz, dy = y - my;
+      xx += dx2 * dx2; xz += dx2 * dz2; zz += dz2 * dz2; xy += dx2 * dy; zy += dz2 * dy;
+    }
+    const det = xx * zz - xz * xz;
+    let a = 0, b = 0;
+    if (Math.abs(det) > 1e-6) { a = (xy * zz - zy * xz) / det; b = (zy * xx - xy * xz) / det; }
+    let ss = 0, worst = 0;
+    for (const [x, z, y] of P) {
+      const res = y - (my + a * (x - mx) + b * (z - mz));
+      ss += res * res;
+      if (Math.abs(res) > worst) worst = Math.abs(res);
+    }
+    rows.push({ at: k, legs: legs.size, rms: +Math.sqrt(ss / n).toFixed(3),
+      worst: +worst.toFixed(2), fall: +fall.toFixed(2) });
+  }
+  rows.sort((p, q) => q.worst - p.worst);
+  const all = rows.map((v) => v.rms).sort((p, q) => p - q);
+  return {
+    junctions: rows.length,
+    rmsMed: all.length ? +all[all.length >> 1].toFixed(3) : 0,
+    rmsP95: all.length ? +all[Math.floor(all.length * 0.95)].toFixed(3) : 0,
+    over10cm: rows.filter((v) => v.worst > 0.1).length,
+    over30cm: rows.filter((v) => v.worst > 0.3).length,
+    worstLeg: rows.slice(0, 6),
+  };
+};
 /**
  * WHERE TWO PIECES OF ROAD DISAGREE ABOUT THE SAME POINT.
  *
@@ -10494,7 +10616,7 @@ function drawMinimap(): void {
 // and changes everything: the world at 1.6m with the A-pillars in the way is
 // a different game from the world at 18m behind, and it is the seat the
 // headlights, the wipers and the retroreflective signs were all built for.
-type CamMode = 'top' | 'chase' | 'cab';
+type CamMode = 'top' | 'chase' | 'cab' | 'drone';
 let camMode: CamMode = 'chase';   // the road view is the game; the chart is a mode you visit
 let chaseH = 1;    // chase rig height multiplier — the CAMERA dials in SETTINGS
 let cabFov = 68;   // driver's-seat field of view
@@ -10564,12 +10686,144 @@ function ghostCab(on: boolean): void {
     m.depthWrite = !on;
   }
 }
+/** A LINE THAT SAYS WHAT JUST HAPPENED, for a couple of seconds. The HUD had no
+ *  general way to tell you anything — the storm banner is hard-wired to the
+ *  weather — and a drone you can strand needs to be able to say so. */
+let flashMsg = '', flashUntil = 0;
+function hudFlash(m: string): void { flashMsg = m; flashUntil = performance.now() + 2600; }
+// ── the scout drone ────────────────────────────────────────────────
+// A second thing to be, with one real constraint on it: the battery. Scouting
+// is only a decision if flying out costs something, so the drone carries about
+// a minute of air time and the whole of it is spent getting somewhere and
+// getting back. Run it flat and it does not vanish politely — it comes down
+// where it ran out, and the only way to get it back is to drive the rig there.
+const DRONE = {
+  SPEED: 34,          // m/s flat out — fast enough to be worth launching
+  YAW: 1.5,           // rad/s at full lock
+  ALT: 42,            // metres it holds over the ground below
+  CLIMB: 26,          // how fast it corrects toward that height
+  LIFE: 62,           // seconds of battery, full to flat
+  DOCK: 18,           // within this of the rig it can land and recharge
+  FALL: 24,           // how fast it comes down once the battery is gone
+};
+const drone = {
+  up: false,          // in the air and under your control
+  x: 0, z: 0, y: 0,   // where it is
+  heading: 0,
+  batt: 1,            // 1 full, 0 flat
+  downed: false,      // on the ground somewhere, waiting to be collected
+  dx: 0, dz: 0,       // …there
+  falling: false,
+};
+let droneMesh: THREE.Object3D | null = null;
+/** A body and four rotor discs. Small, dark, and legible from above, which is
+ *  the only angle you ever see it from while flying it. */
+function droneModel(): THREE.Object3D {
+  const g = new THREE.Group();
+  const body = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.34, 1.1),
+    new THREE.MeshLambertMaterial({ color: 0x2b2f33 }));
+  g.add(body);
+  const armMat = new THREE.MeshLambertMaterial({ color: 0x51585e });
+  const rotMat = new THREE.MeshLambertMaterial({ color: 0x8d959b, transparent: true, opacity: 0.55 });
+  for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]] as Array<[number, number]>) {
+    const arm = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.12, 0.16), armMat);
+    arm.position.set(sx * 0.55, 0, sz * 0.55);
+    arm.rotation.y = sx * sz > 0 ? Math.PI / 4 : -Math.PI / 4;
+    g.add(arm);
+    const rot = new THREE.Mesh(new THREE.CircleGeometry(0.62, 12), rotMat);
+    rot.rotateX(-Math.PI / 2);
+    rot.position.set(sx * 1.0, 0.14, sz * 1.0);
+    g.add(rot);
+  }
+  // A red belly light, so a downed drone is findable at night.
+  const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.16, 6, 5),
+    new THREE.MeshBasicMaterial({ color: 0xd8412f }));
+  lamp.position.y = -0.24;
+  g.add(lamp);
+  return g;
+}
+/** Launch, or bring it home. Refuses when the battery is flat and the drone is
+ *  lying in a field somewhere — that is what "recoverable with the vehicle"
+ *  means, and it is the whole cost of running it out. */
+function droneToggle(): void {
+  if (drone.downed) { hudFlash('DRONE DOWN — DRIVE TO IT'); return; }
+  if (drone.up) {
+    // Close enough to the rig? Land on it. Otherwise this is just the camera
+    // coming home while the drone flies itself back — which would make the
+    // battery meaningless. It stays where it is and keeps burning.
+    if (Math.hypot(drone.x - state.x, drone.z - state.z) <= DRONE.DOCK) droneDock();
+    else hudFlash('TOO FAR TO DOCK — FLY BACK');
+    return;
+  }
+  if (drone.batt < 0.05) { hudFlash('DRONE BATTERY FLAT'); return; }
+  drone.up = true;
+  drone.falling = false;
+  drone.x = state.x; drone.z = state.z;
+  drone.y = groundAt(state.x, state.z) + 6;
+  drone.heading = state.heading;
+  if (!droneMesh) { droneMesh = droneModel(); worldGroup.add(droneMesh); }
+  droneMesh.visible = true;
+  setCam('drone');
+  hudFlash('DRONE UP');
+}
+/** Home, docked, recharging. */
+function droneDock(): void {
+  drone.up = false; drone.falling = false; drone.downed = false; drone.batt = 1;
+  if (droneMesh) droneMesh.visible = false;
+  setCam(lastPov);
+  hudFlash('DRONE DOCKED');
+}
+/** Integrate the drone: your input flies it, the battery drains, and when it
+ *  is gone the thing comes down wherever it happens to be. */
+function stepDrone(dt: number, throttle: number, steer: number): void {
+  if (!drone.up && !drone.downed) return;
+  if (drone.downed) {
+    // Collected by driving to it. The rig is the only recovery vehicle.
+    if (Math.hypot(drone.dx - state.x, drone.dz - state.z) < 9) {
+      drone.downed = false; drone.batt = 1;
+      if (droneMesh) droneMesh.visible = false;
+      hudFlash('DRONE RECOVERED');
+    }
+    return;
+  }
+  if (drone.falling) {
+    drone.y -= DRONE.FALL * dt;
+    const g = groundAt(drone.x, drone.z);
+    if (drone.y <= g + 0.4) {
+      drone.y = g + 0.4;
+      drone.falling = false; drone.up = false;
+      drone.downed = true; drone.dx = drone.x; drone.dz = drone.z;
+      setCam(lastPov);
+      hudFlash('DRONE DOWN');
+    }
+    if (droneMesh) droneMesh.position.set(drone.x, drone.y, drone.z);
+    return;
+  }
+  drone.batt = Math.max(0, drone.batt - dt / DRONE.LIFE);
+  if (drone.batt <= 0) { drone.falling = true; hudFlash('BATTERY FLAT'); return; }
+  drone.heading += steer * DRONE.YAW * dt;
+  const v = throttle * DRONE.SPEED;
+  drone.x += Math.sin(drone.heading) * v * dt;
+  drone.z += -Math.cos(drone.heading) * v * dt;
+  // Terrain-following: it holds a height over whatever is under it rather than
+  // an absolute altitude, so flying up a valley does not fly you into the side
+  // of it. Only ever a soft correction, so a ridge reads as a climb.
+  const want = groundAt(drone.x, drone.z) + DRONE.ALT;
+  drone.y += clamp(want - drone.y, -DRONE.CLIMB * dt, DRONE.CLIMB * dt);
+  if (droneMesh) {
+    droneMesh.position.set(drone.x, drone.y, drone.z);
+    droneMesh.rotation.y = -drone.heading;
+  }
+}
 /** The POV you drive in (chase or cab) — what the chart returns you to, and
  *  what the dock previews while you are up there. */
 let lastPov: CamMode = 'chase';
 function setCam(m: CamMode): void {
   camMode = m;
-  if (m !== 'top') lastPov = m;
+  // 'drone' is not a SEAT. `lastPov` is what the chart returns you to and what
+  // the dock previews, and a drone that gets remembered there strands you in
+  // the air the next time you close the map.
+  if (m !== 'top' && m !== 'drone') lastPov = m;
   camInit = false;                  // snap to the new rig, then resume smoothing
   chasePull = 1;                    // and forget any terrain pull-in from last time
   tunnelBlend = 0;
@@ -10597,6 +10851,7 @@ function togglePov(): void {
 addEventListener('keydown', (e) => {
   if (e.key.toLowerCase() === 'c') toggleCam();
   if (e.key.toLowerCase() === 'v') togglePov();
+  if (e.key.toLowerCase() === 'g') droneToggle();
 });
 updateStickHome(); // boot in top mode: the pinned stick is visible from frame one
 updateDock();
@@ -11474,9 +11729,14 @@ function tick(now: number): void {
   const paused = (menu.tab() !== null || hidden) && !real.on;
   const dt = paused ? 0 : Math.min(0.05, (now - last) / 1000);
   last = now;
-  const { throttle, steer, brake } = real.on || paused
-    ? { throttle: 0, steer: 0, brake: false }
-    : input();
+  const raw2 = real.on || paused ? { throttle: 0, steer: 0, brake: false } : input();
+  // FLYING THE DRONE MEANS NOT DRIVING. The rig stays exactly where you left
+  // it — that is the whole point of scouting ahead — so the controls are handed
+  // over wholesale rather than shared.
+  stepDrone(dt, drone.up ? raw2.throttle : 0, drone.up ? raw2.steer : 0);
+  const { throttle, steer, brake } = drone.up
+    ? { throttle: 0, steer: 0, brake: true }
+    : raw2;
   stepSun();
   stepWeather(now, dt);
   const surfKind = surfaceAt(state.x, state.z);
@@ -11985,6 +12245,15 @@ function tick(now: number): void {
     // within 8% of the orbit distance from a camera tilted 70° off the ground,
     // so this is free.
     setNear(Math.max(1, dist * 0.08), Math.max(30000, dist * 4));
+  } else if (camMode === 'drone') {
+    // Behind and above, looking down its own nose. Far enough back that the
+    // drone is a legible object rather than a dot, high enough that the point
+    // of being up here — seeing what the road does next — actually lands.
+    farGroup.visible = true;
+    setNear(0.6, 30000);
+    const dfx = Math.sin(drone.heading), dfz = -Math.cos(drone.heading);
+    camPos.set(drone.x - dfx * 13, drone.y + 6.5, drone.z - dfz * 13);
+    camAim.set(drone.x + dfx * 26, drone.y - 7, drone.z + dfz * 26);
   } else if (camMode === 'cab') {
     farGroup.visible = false;
     // THE DRIVER'S SEAT. The eye is a point on the body, so it takes the body's
@@ -12128,6 +12397,7 @@ function tick(now: number): void {
   // wrong way on every cross-slope — double the apparent lean instead of the
   // seat carrying you through it.
   else if (camMode === 'cab') { camera.lookAt(camAim); camera.rotateZ(rollC); }
+  else if (camMode === 'drone') camera.lookAt(camAim);
   else camera.lookAt(state.x + fwdX * 28, ground + 1.4, state.z + fwdZ * 28);
   camera.updateMatrixWorld();
   // Refresh the INVERSE now, not at render time. Everything below that
@@ -13555,6 +13825,10 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   }
   // The MENU button is DOM now (client/overlays.ts) — it opens a DOM menu,
   // and a canvas chip that existed to be a hit target was the wrong tool.
+  if (performance.now() < flashUntil && flashMsg) {
+    const w3 = textW(flashMsg) + 10;
+    textEdge(flashMsg, Math.round((HW - w3) / 2) + 5, Math.round(HH * 0.26) + 3, UI.gold);
+  }
   if (wx.warn && performance.now() < wx.warn) {
     const t2 = 'STORM APPROACHING';
     const w2 = textW(t2) + 10;
@@ -13618,6 +13892,31 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     povRect = { x: mx + mw + 4, y: my + mw - 12, w: pw, h: 12 };
     panel(povRect.x, povRect.y, pw, 12, UI.edge);
     text(hctx, povLabel, povRect.x + 4, povRect.y + 3, UI.edge);
+    // THE DRONE CHIP, stacked directly over the seat toggle. Its label is what
+    // a tap DOES, like the chip below it: LAUNCH when it is stowed, DOCK when
+    // it is up and you are near enough to land it, and the state itself when
+    // neither is true — a drone lying in a field is not a button, it is a
+    // journey. Colour carries the battery: gold in the air, red once it is
+    // low enough that getting back is the only sensible plan.
+    const near = Math.hypot(drone.x - state.x, drone.z - state.z) <= DRONE.DOCK;
+    const dLabel = drone.downed ? 'DOWN' : drone.up ? (near ? 'DOCK' : 'FLY') : 'DRONE';
+    const dCol = drone.downed ? UI.bad
+      : drone.up ? (drone.batt < 0.3 ? UI.bad : UI.gold) : UI.edge;
+    const dw = textW(dLabel) + 8;
+    droneRect = { x: povRect.x, y: povRect.y - 14, w: dw, h: 12 };
+    panel(droneRect.x, droneRect.y, dw, 12, dCol);
+    text(hctx, dLabel, droneRect.x + 4, droneRect.y + 3, dCol);
+    // A battery strip under the chip while it is airborne, because the number
+    // that matters is how far you can still get, and it is only legible as a
+    // bar you can read without looking away from where you are flying.
+    if (drone.up || drone.downed) {
+      const bw = Math.max(dw, 26);
+      const by = droneRect.y - 5;
+      hctx.fillStyle = UI.dim;
+      hctx.fillRect(droneRect.x, by, bw, 3);
+      hctx.fillStyle = drone.batt < 0.3 ? UI.bad : UI.good;
+      hctx.fillRect(droneRect.x, by, Math.round(bw * drone.batt), 3);
+    }
   }
   // ── where you are, and whether the world is still arriving ──
   {
@@ -13850,6 +14149,7 @@ function stepOverlays(): void {
 }
 let dockRect = { x: 0, y: 0, w: 0, h: 0 };
 let povRect = { x: 0, y: 0, w: 0, h: 0 };
+let droneRect = { x: 0, y: 0, w: 0, h: 0 };
 function setClean(on: boolean): void {
   document.body.classList.toggle('clean', on);
   if (!on) updateStickHome(); // the pinned stick has to come back with it
@@ -13864,6 +14164,7 @@ function hudTap(cx: number, cy: number): boolean {
   // The modal is MODAL — but it is DOM now, sitting over this canvas, so a
   // tap that reaches here while it is up can only be a stray; swallow it.
   if (menu.tab() !== null) return true;
+  if (inside(droneRect, 2)) { droneToggle(); return true; }
   if (inside(povRect, 0)) { togglePov(); return true; }
   if (inside(dockRect, 0)) { toggleCam(); return true; }
   // A tap on a pin PINS it — the place stays on screen past the
