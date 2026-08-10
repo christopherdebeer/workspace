@@ -1351,8 +1351,11 @@ function terrainMatFor(t: HeightTile, key: string): THREE.MeshLambertMaterial {
   const m = new THREE.MeshLambertMaterial({
     vertexColors: true,
     normalMap: terrainNormalTex(t),
-    normalMapType: THREE.ObjectSpaceNormalMap,
   });
+  // Set after construction: three's Lambert PARAMETERS type omits
+  // `normalMapType` even though the material carries it and the shader honours
+  // it. Assigning the property is the same thing at runtime and type-checks.
+  m.normalMapType = THREE.ObjectSpaceNormalMap;
   // normalScale has no meaning for an object-space map — the stored vector IS
   // the normal — so strength is dialled by flattening toward up at build time.
   terrainFx(m, { detail: true });
@@ -1984,7 +1987,7 @@ const MAT = {
   // the drapes because it must win over every one of them where they overlap —
   // a road through a park, over a river, across a track.
   road: new THREE.MeshLambertMaterial({
-    map: roadTex, side: DS,
+    map: roadTex, side: DS, vertexColors: true,
     polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8,
   }),
   minor: new THREE.MeshLambertMaterial({
@@ -1993,8 +1996,19 @@ const MAT = {
   }),
   // Ruts: alpha-cut, and depth-offset because it lies a few centimetres over
   // terrain it is meant to look part of.
+  // OPACITY, not just alpha-cut. The ruts were a hard stencil over the ground —
+  // full-strength texels wherever the alpha passed — which is what made a track
+  // read as a decal laid on the hillside rather than a path worn into it. At
+  // 0.68, over a colour sampled from the terrain itself, it modulates the
+  // ground instead of replacing it. This is as close to "part of the terrain"
+  // as a drape can get: the mesh carries 128 vertices and a 256px map per tile,
+  // roughly 16m and 8m per sample, so a 3m track written into either would be a
+  // smear rather than a line — the resolution to paint it INTO the ground does
+  // not exist, and the honest alternative is to make the overlay behave like
+  // ground rather than like paint.
   track: new THREE.MeshLambertMaterial({
-    map: trackTex, transparent: true, side: DS, depthWrite: false,
+    map: trackTex, transparent: true, opacity: 0.68, side: DS, depthWrite: false,
+    vertexColors: true,
     polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6,
   }),
   // polygonOffset as well as the lift: water and terrain are two nearly
@@ -4653,7 +4667,7 @@ function hintAt(x: number, z: number, reach = 6): number | null {
   }
   return best;
 }
-function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false): void {
+function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number]): void {
   const fid = ++ribbonSeq;
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
   // point here has real elevation under it; if one does not, the profile would
@@ -5057,6 +5071,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   }
   const verts: number[] = [];
   const uvs: number[] = [];
+  // Per-vertex tint: what the way is made of, or for a track the colour of the
+  // ground it is worn into. See `roadTint`.
+  const cols: number[] = [];
   // The road's THICKNESS. Two side faces hanging off the kerbs, closing the
   // gap between the carriageway and whatever the terrain mesh actually does
   // underneath it. Earth where the road is cut into the ground, concrete where
@@ -5340,6 +5357,19 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       x1 + nx, y10, z1 + nz, x1 - nx, y11, z1 - nz, x0 - nx, y01, z0 - nz,
     );
     uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
+    // A TRACK TAKES THE GROUND'S OWN COLOUR. Two ruts painted a fixed brown sat
+    // on the hillside as a stripe of somebody else's palette; sampled from
+    // `terrainPalette` at the rut itself, they read as the ground worn through
+    // rather than as a decal over it — and the whole point of a track is that
+    // it is the ground, just used.
+    if (track) {
+      const [tr, tg, tb] = terrainPalette(elev[i] + baseElev,
+        Math.abs((elev[Math.min(n - 1, i + 1)] - elev[i]) / Math.max(len, 1)), sampleCover(x0, z0));
+      for (let k = 0; k < 6; k++) cols.push(tr * 1.06, tg * 0.99, tb * 0.9);
+    } else {
+      const c = tint ?? [1, 1, 1];
+      for (let k = 0; k < 6; k++) cols.push(c[0], c[1], c[2]);
+    }
     if (drivable) {
       const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name, sq, fd: fid, pb: pbranch,
         ca: tilt[i], cb: tilt[i + 1] };
@@ -5557,6 +5587,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
+  if (cols.length === verts.length) geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(cols), 3));
   geo.computeVertexNormals();
   worldGroup.add(new THREE.Mesh(geo, mat));
   // A DRAPED way is registered to be re-seated whenever the terrain beneath it
@@ -6542,7 +6573,7 @@ function pruneTileCache(): void {
 }
 
 // ── points of interest (named features become HUD waypoints) ───────
-interface Poi { name: string; x: number; z: number; kind: 'park' | 'water' | 'place' | 'mission' | 'repair' | 'drone'; pinned?: boolean }
+interface Poi { name: string; x: number; z: number; kind: 'park' | 'water' | 'place' | 'mission' | 'repair' | 'drone' | 'rig'; pinned?: boolean }
 const pois = new Map<string, Poi>();
 function notePoi(tags: Record<string, string>, pts: Array<[number, number]>): void {
   const name = tags.name;
@@ -6681,6 +6712,7 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
     // summits arrive as single-node geometries; notePoi above has already put
     // them on the map, and there is nothing to extrude, drape or scatter.
     if (pts.length < 2) continue;
+    noteTags(tags);
     if (tags.highway) {
       const w = ROAD_W[tags.highway] ?? 5;
       // THREE tiers, not two. A mountain path used to render as decoration you
@@ -6706,9 +6738,10 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
         : !canopy && tags.tunnel && tags.tunnel !== 'no' ? 'tunnel'
         : tags.bridge && tags.bridge !== 'no' ? 'bridge'
         : 'auto';
+      const wq = wayQuality(tags, track);
       ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : MAT.road,
-        track || stairs ? SURFACE.track.lift : SURFACE.road.lift, !stairs, mode, track, tags.name, wayQuality(tags, track),
-        GRADE_MAX[tags.highway] ?? 0.15, canopy);
+        track || stairs ? SURFACE.track.lift : SURFACE.road.lift, !stairs, mode, track, tags.name, wq,
+        GRADE_MAX[tags.highway] ?? 0.15, canopy, roadTint(tags, wq));
       if (unbuilt !== refusedAt) { seenWays.delete(dk); continue; }
       // Steps are named and drawn but nothing drives them, so they earn no
       // checkpoints — a road you cannot survey should not sit in the log.
@@ -8100,7 +8133,6 @@ dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
 dustGeo.setAttribute('aLife', new THREE.BufferAttribute(dustLife, 1));
 dustGeo.setAttribute('aSeed', new THREE.BufferAttribute(dustSeed, 1));
 dustGeo.setAttribute('aKind', new THREE.BufferAttribute(dustKind, 1));
-dustGeo.frustumCulled = false;
 const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
   transparent: true,
   depthWrite: false,
@@ -9638,10 +9670,42 @@ function meshHeightAt(x: number, z: number): number | null {
     worst: +Math.max(Math.abs(a[0]), Math.abs(a[a.length - 1])).toFixed(2),
     over30cm: +((a.filter((v) => Math.abs(v) > 0.3).length / a.length) * 100).toFixed(1) };
 };
+/**
+ * WHAT OSM ACTUALLY TELLS US ABOUT ROADS, AND WHAT WE DO WITH IT.
+ *
+ * The suspicion is that the query brings back far more about a road than the
+ * renderer spends — every carriageway is drawn from one material regardless of
+ * what it is made of. This tallies the tags as they arrive, so "we ignore the
+ * data" is a count rather than a feeling: `surfaces` is what the ways say they
+ * are paved with, `lanes`/`oneway`/`maxspeed` are kept-but-unread, and
+ * `quality` is the one number the renderer does consume — through physics only,
+ * never through a pixel.
+ */
+const tagTally = { ways: 0, surface: new Map<string, number>(), smoothness: new Map<string, number>(),
+  tracktype: new Map<string, number>(), highway: new Map<string, number>(), noSurface: 0 };
+function noteTags(t: Record<string, string>): void {
+  if (!t.highway) return;
+  tagTally.ways++;
+  const bump = (m: Map<string, number>, k?: string): void => { if (k) m.set(k, (m.get(k) ?? 0) + 1); };
+  bump(tagTally.highway, t.highway);
+  bump(tagTally.surface, t.surface);
+  bump(tagTally.smoothness, t.smoothness);
+  bump(tagTally.tracktype, t.tracktype);
+  if (!t.surface && !t.tracktype) tagTally.noSurface++;
+}
+(window as unknown as { __tags?: object }).__tags = (): object => {
+  const top = (m: Map<string, number>): Record<string, number> =>
+    Object.fromEntries([...m].sort((a, b) => b[1] - a[1]).slice(0, 12));
+  return { ways: tagTally.ways,
+    withoutAnySurfaceTag: `${tagTally.noSurface} (${tagTally.ways ? ((tagTally.noSurface / tagTally.ways) * 100).toFixed(1) : 0}%)`,
+    surface: top(tagTally.surface), smoothness: top(tagTally.smoothness),
+    tracktype: top(tagTally.tracktype), highway: top(tagTally.highway) };
+};
 /** The drone, for a headless test: where it is, what is left in it, and which
  *  of the three states it is in. */
 (window as unknown as { __drone?: object }).__drone = (): object =>
-  ({ up: drone.up, downed: drone.downed, falling: drone.falling,
+  ({ up: drone.up, downed: drone.downed, falling: drone.falling, recall: drone.recall,
+    range: Math.round(drone.batt * DRONE.LIFE * DRONE.SPEED),
     batt: +drone.batt.toFixed(3), cam: camMode,
     y: +drone.y.toFixed(1), agl: +(drone.y - groundAt(drone.x, drone.z)).toFixed(1),
     x: +drone.x.toFixed(1), z: +drone.z.toFixed(1),
@@ -10709,6 +10773,10 @@ function hudFlash(m: string): void { flashMsg = m; flashUntil = performance.now(
 // for the same reason: the whole point of it is that it is somewhere else and
 // you have to go there.
 const DRONE_POI = 'DOWNED DRONE';
+// …and the rig, while you are not in it. Flying out is only a decision if you
+// can find your way back, and a truck parked in scrub eight hundred metres away
+// is invisible from the air.
+const RIG_POI = 'RIG';
 const DRONE = {
   SPEED: 34,          // m/s flat out — fast enough to be worth launching
   YAW: 1.5,           // rad/s at full lock
@@ -10726,6 +10794,7 @@ const drone = {
   downed: false,      // on the ground somewhere, waiting to be collected
   dx: 0, dz: 0,       // …there
   falling: false,
+  recall: false,      // flying itself home, hands off
 };
 let droneMesh: THREE.Object3D | null = null;
 /** A body and four rotor discs. Small, dark, and legible from above, which is
@@ -10760,16 +10829,23 @@ function droneModel(): THREE.Object3D {
 function droneToggle(): void {
   if (drone.downed) { hudFlash('DRONE DOWN — DRIVE TO IT'); return; }
   if (drone.up) {
-    // Close enough to the rig? Land on it. Otherwise this is just the camera
-    // coming home while the drone flies itself back — which would make the
-    // battery meaningless. It stays where it is and keeps burning.
-    if (Math.hypot(drone.x - state.x, drone.z - state.z) <= DRONE.DOCK) droneDock();
-    else hudFlash('TOO FAR TO DOCK — FLY BACK');
+    // RECALL, at any range. The rule used to be "dock only within 18m", which
+    // made a drone flown to the edge of its range a thing you had to hand-fly
+    // home while watching the meter, and got it dropped in a field for want of
+    // a straight line. It now turns and flies itself back — but on its own
+    // battery, at its own speed, so the constraint is intact: recall from too
+    // far out simply runs the charge to nothing partway home, and it comes down
+    // there. The distance is the cost; the autopilot is only steering.
+    if (Math.hypot(drone.x - state.x, drone.z - state.z) <= DRONE.DOCK) { droneDock(); return; }
+    drone.recall = !drone.recall;
+    hudFlash(drone.recall ? 'RECALLING' : 'MANUAL');
     return;
   }
   if (drone.batt < 0.05) { hudFlash('DRONE BATTERY FLAT'); return; }
   drone.up = true;
   drone.falling = false;
+  drone.recall = false;
+  pois.set(RIG_POI, { name: RIG_POI, x: state.x, z: state.z, kind: 'rig', pinned: true });
   drone.x = state.x; drone.z = state.z;
   drone.y = groundAt(state.x, state.z) + 6;
   drone.heading = state.heading;
@@ -10781,7 +10857,9 @@ function droneToggle(): void {
 /** Home, docked, recharging. */
 function droneDock(): void {
   drone.up = false; drone.falling = false; drone.downed = false; drone.batt = 1;
+  drone.recall = false;
   pois.delete(DRONE_POI);
+  pois.delete(RIG_POI);
   if (droneMesh) droneMesh.visible = false;
   setCam(lastPov);
   hudFlash('DRONE DOCKED');
@@ -10808,6 +10886,7 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
       drone.falling = false; drone.up = false;
       drone.downed = true; drone.dx = drone.x; drone.dz = drone.z;
       pois.set(DRONE_POI, { name: DRONE_POI, x: drone.x, z: drone.z, kind: 'drone', pinned: true });
+      pois.delete(RIG_POI);
       setCam(lastPov);
       hudFlash('DRONE DOWN');
     }
@@ -10818,8 +10897,26 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
   }
   drone.batt = Math.max(0, drone.batt - dt / DRONE.LIFE);
   if (drone.batt <= 0) { drone.falling = true; hudFlash('BATTERY FLAT'); return; }
-  drone.heading += steer * DRONE.YAW * dt;
-  const v = throttle * DRONE.SPEED;
+  let thr = throttle, str = steer;
+  if (drone.recall) {
+    // Touching the controls takes it back — an autopilot you cannot override is
+    // a worse control than no autopilot.
+    if (Math.abs(throttle) > 0.2 || Math.abs(steer) > 0.2) {
+      drone.recall = false; hudFlash('MANUAL');
+    } else {
+      const want = Math.atan2(state.x - drone.x, -(state.z - drone.z));
+      let err = want - drone.heading;
+      while (err > Math.PI) err -= Math.PI * 2;
+      while (err < -Math.PI) err += Math.PI * 2;
+      str = clamp(err * 2.2, -1, 1);
+      // Ease off the throttle through a hard turn, or it flies a wide arc past
+      // the rig and burns the charge it was recalled to save.
+      thr = clamp(1 - Math.abs(err) * 0.8, 0.15, 1);
+      if (Math.hypot(drone.x - state.x, drone.z - state.z) <= DRONE.DOCK) { droneDock(); return; }
+    }
+  }
+  drone.heading += str * DRONE.YAW * dt;
+  const v = thr * DRONE.SPEED;
   drone.x += Math.sin(drone.heading) * v * dt;
   drone.z += -Math.cos(drone.heading) * v * dt;
   // Terrain-following: it holds a height over whatever is under it rather than
@@ -10895,7 +10992,7 @@ const renderPlace = (): void => { placeLine = placeLabel.toUpperCase(); };
 // Named parks/waters/buildings from the OSM stream become waypoints. This
 // only COMPUTES them; the pixel HUD draws them, so labels share the world's
 // grid and font instead of being browser text floating above it.
-const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a', mission: '#f5c453', repair: '#e2703a', drone: '#d8412f' };
+const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a', mission: '#f5c453', repair: '#e2703a', drone: '#d8412f', rig: '#f5c453' };
 const poiVec = new THREE.Vector3(), poiView = new THREE.Vector3(), camFwd = new THREE.Vector3();
 const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}M` : `${(m / 1000).toFixed(1)}KM`);
 // Close enough to act on. The pins used to be CULLED inside 25m, which threw
@@ -11590,6 +11687,48 @@ const TRACK_Q: Record<string, number> = { grade1: 0.82, grade2: 0.62, grade3: 0.
  * the material — caps whatever the material claimed: `surface=asphalt` with
  * `smoothness=very_bad` is a broken road, not a good one.
  */
+/**
+ * WHAT A ROAD LOOKS LIKE, from what OSM says it is.
+ *
+ * Every carriageway in the world was drawn from one texture at one colour,
+ * which made a farm service track and a trunk road the same object at different
+ * widths. The data to do better is already fetched and already parsed — it just
+ * never reached a pixel: `wayQuality` folds `surface`, `smoothness` and
+ * `tracktype` into one number and spends all of it on grip and drag.
+ *
+ * Measured before writing this, because "we ignore the data" deserved a count
+ * rather than a feeling — 378 ways at Noordhoek:
+ *   surface tag present    77 (20.4%)  — asphalt 66, paving_stones 5, gravel 3
+ *   smoothness, tracktype  0
+ *   highway class          378 (100%)  — service 190, residential 143, primary 10
+ * So `surface` is the SHARPER signal and the rarer one, and `highway` is the
+ * one that is always there. Both are used: the class sets the base — a service
+ * alley is pale and worn, a trunk road is dark and even — and an explicit
+ * surface overrides it, because someone standing there said so.
+ *
+ * Returned as a multiplier on the road texture, so the existing art keeps its
+ * markings and grain and only its colour moves.
+ */
+const SURF_TINT: Record<string, [number, number, number]> = {
+  asphalt: [0.92, 0.94, 0.98], concrete: [1.14, 1.13, 1.1], paved: [0.96, 0.97, 1],
+  paving_stones: [1.08, 1.02, 0.96], sett: [1.02, 0.98, 0.94], cobblestone: [1.02, 0.98, 0.94],
+  compacted: [1.2, 1.06, 0.84], gravel: [1.24, 1.1, 0.88], fine_gravel: [1.22, 1.09, 0.88],
+  dirt: [1.26, 1, 0.7], earth: [1.26, 1, 0.7], ground: [1.24, 1.02, 0.74],
+  unpaved: [1.2, 1.04, 0.82], sand: [1.34, 1.15, 0.8], grass: [1.0, 1.1, 0.8],
+};
+const CLASS_TINT: Record<string, [number, number, number]> = {
+  motorway: [0.88, 0.9, 0.96], trunk: [0.9, 0.92, 0.97], primary: [0.92, 0.94, 0.98],
+  secondary: [0.97, 0.98, 1], tertiary: [1, 1, 1],
+  residential: [1.05, 1.04, 1.02], unclassified: [1.06, 1.04, 1],
+  service: [1.12, 1.08, 1.02], living_street: [1.08, 1.05, 1.01],
+};
+function roadTint(tags: Record<string, string>, q: number): [number, number, number] {
+  const t = SURF_TINT[tags.surface ?? ''] ?? CLASS_TINT[tags.highway ?? ''] ?? [1, 1, 1];
+  // Quality darkens and dulls: a road nobody has resurfaced is not a different
+  // colour, it is a tireder one. Bounded so even the worst stays legible.
+  const w = 0.78 + 0.22 * q;
+  return [t[0] * w, t[1] * w, t[2] * w];
+}
 function wayQuality(tags: Record<string, string>, track: boolean): number {
   const mat = SURF_Q[tags.surface ?? ''];
   const grade = TRACK_Q[tags.tracktype ?? ''];
@@ -12844,7 +12983,7 @@ function hudIconEdge(ch: string, x: number, y: number, col: string, px = 8): voi
 }
 /** Which kinds carry a mark: a job, and a place that services the rig.
  *  The rest are already told apart by their beam colour. */
-const KIND_ICON: Partial<Record<Poi['kind'], string>> = { mission: ICON.flag, repair: ICON.wrench, drone: ICON.warn };
+const KIND_ICON: Partial<Record<Poi['kind'], string>> = { mission: ICON.flag, repair: ICON.wrench, drone: ICON.warn, rig: ICON.truck };
 
 // ── HUD: one low-res canvas, drawn in the pixel font ───────────────
 // The DOM version could never reach the reference: system fonts are hinted
@@ -13935,10 +14074,17 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // neither is true — a drone lying in a field is not a button, it is a
     // journey. Colour carries the battery: gold in the air, red once it is
     // low enough that getting back is the only sensible plan.
-    const near = Math.hypot(drone.x - state.x, drone.z - state.z) <= DRONE.DOCK;
-    const dLabel = drone.downed ? 'DOWN' : drone.up ? (near ? 'DOCK' : 'FLY') : 'DRONE';
-    const dCol = drone.downed ? UI.bad
-      : drone.up ? (drone.batt < 0.3 ? UI.bad : UI.gold) : UI.edge;
+    const home = Math.hypot(drone.x - state.x, drone.z - state.z);
+    const near = home <= DRONE.DOCK;
+    const dLabel = drone.downed ? 'DOWN'
+      : drone.up ? (near ? 'DOCK' : drone.recall ? 'MANUAL' : 'RECALL') : 'DRONE';
+    // RED WHEN IT CANNOT GET HOME. The charge left buys a fixed distance, so
+    // the honest warning is not "battery low" but "further than you can
+    // return" — with a fifth in hand for the turn and the wind you flew out on.
+    const range = drone.batt * DRONE.LIFE * DRONE.SPEED;
+    const marooned = drone.up && home > range * 0.8;
+    const dCol = drone.downed || marooned ? UI.bad
+      : drone.up ? (drone.recall ? UI.good : UI.gold) : UI.edge;
     const dw = textW(dLabel) + 8;
     droneRect = { x: povRect.x, y: povRect.y - 14, w: dw, h: 12 };
     panel(droneRect.x, droneRect.y, dw, 12, dCol);
@@ -14209,7 +14355,7 @@ function hudTap(cx: number, cy: number): boolean {
   // and are not yours to unpin; nor is a downed drone, which is a thing you
   // have to go and collect rather than a bookmark you chose.
   for (const r of poiRects) {
-    if (!inside(r, 2) || r.kind === 'mission' || r.kind === 'drone') continue;
+    if (!inside(r, 2) || r.kind === 'mission' || r.kind === 'drone' || r.kind === 'rig') continue;
     const poi = pois.get(r.name);
     if (poi) { poi.pinned = !poi.pinned; audio.stone(); }
     return true;
