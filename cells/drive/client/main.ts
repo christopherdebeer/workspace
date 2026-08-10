@@ -3400,9 +3400,15 @@ let surfQ = Q_ROAD;
  * on. `margin` widens the test past the kerb, so scrub can be kept off the
  * shoulder as well as off the tarmac.
  */
-function onCarriageway(x: number, z: number, margin = 0): { road: boolean; track: boolean } {
+function onCarriageway(x: number, z: number, margin = 0,
+  notFid?: number, notName?: string): { road: boolean; track: boolean } {
   let road = false, track = false;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
+    // Optionally blind to ONE road — the caller's own. A point just outboard of
+    // a kerb is still inside its own carriageway's reach, so a verge asking
+    // "am I over tarmac?" has to be told which tarmac is its own.
+    if (notFid !== undefined && seg.fd === notFid) continue;
+    if (notName !== undefined && seg.nm === notName) continue;
     const [cx, cz] = closestOnSeg(x, z, seg);
     if (Math.hypot(x - cx, z - cz) > seg.hw + 0.8 + margin) continue;
     if (seg.tk) track = true; else road = true;
@@ -5065,8 +5071,17 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           const pts: Array<[number, number, number]> = [];  // d, y at A, y at B
           for (const d of STEPS) {
             const f = d / 2.2;                   // ox/oz carry 2.2m of reach
-            const g0 = groundAt(ex0 + ox * sgn * f, ez0 + oz * sgn * f);
-            const g1 = groundAt(ex1 + ox * sgn * f, ez1 + oz * sgn * f);
+            const qx0 = ex0 + ox * sgn * f, qz0 = ez0 + oz * sgn * f;
+            const qx1 = ex1 + ox * sgn * f, qz1 = ez1 + oz * sgn * f;
+            // NEVER OVER ANOTHER ROAD. Ungating this from `open` let a side
+            // road's batter run outboard from its own kerb — and at a junction
+            // that kerb lies ON the main carriageway, so the earth would be
+            // spread across somebody else's tarmac. Stop the strip at the
+            // first step that lands on a road surface.
+            if (onCarriageway(qx0, qz0, -0.5, fid, name).road
+              || onCarriageway(qx1, qz1, -0.5, fid, name).road) break;
+            const g0 = groundAt(qx0, qz0);
+            const g1 = groundAt(qx1, qz1);
             // Ground already at the road on the very first step: no gap here.
             if (!pts.length && g0 >= ey0 - 0.05 && g1 >= ey1 - 0.05) { spanStats.fillNoGap++; break; }
             const b0 = ey0 - d * BATT, b1 = ey1 - d * BATT;
