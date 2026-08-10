@@ -3350,7 +3350,7 @@ function ptSegDist(px: number, pz: number, qx: number, qz: number, rx: number, r
 // ever holds what has already been drawn, so a test against it alone leaves the
 // main road walled off by a side road that had not streamed in yet.
 const juncGrid = new Map<string, Array<[number, number]>>();
-const juncStats = { pinned: 0, opened: 0 };
+const juncStats = { pinned: 0, opened: 0, chains: 0, maxChainM: 0, totalChainM: 0 };
 function noteJunction(x: number, z: number): void {
   juncStats.pinned++;
   if (juncGrid.size > 8000) juncGrid.clear();
@@ -5395,22 +5395,41 @@ const WATER_W: Record<string, number> = { river: 14, canal: 9, stream: 4.5 };
 const AREA_TAG = (t: Record<string, string>): boolean =>
   !!t.landuse || !!t.leisure
   || ['scrub', 'wetland', 'sand', 'bare_rock', 'wood', 'grassland', 'heath'].includes(t.natural ?? '');
-function renderWays(els: OsmWay[]): void {
+function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
   // PRE-PASS: chain this tile's drivable ways end-to-end and solve each
   // chain's profile whole, publishing hints for the per-way builds below.
   {
-    interface Mem { pts: Array<[number, number]>; name?: string; g: number; key: string }
-    const mems: Mem[] = [];
-    for (const el of els) {
+    interface Mem { pts: Array<[number, number]>; name?: string; g: number; key: string; fresh: boolean }
+    // ONE ENTRY PER OSM WAY, longest geometry wins. The same road reaches here
+    // twice: clipped to this tile in `els`, and whole in a neighbour's cached
+    // copy. The whole one is the better thing to solve over — the clip is a
+    // rendering boundary, not a feature of the road — while the build loop
+    // below still draws only the clipped piece that belongs to this tile.
+    const byId = new Map<string, { el: OsmWay; fresh: boolean }>();
+    const consider = (el: OsmWay, fresh: boolean): void => {
       const t = el.tags ?? {};
-      const key = el.ck ?? String(el.id);
-      if (!el.geometry || !t.highway || hintedWays.has(key)) continue;
-      if (['track', 'path', 'bridleway', 'cycleway', 'footway', 'steps'].includes(t.highway)) continue;
-      const pts: Array<[number, number]> = el.geometry.map((g2) => toLocal(g2.lat, g2.lon));
+      if (!el.geometry || !t.highway) return;
+      if (['track', 'path', 'bridleway', 'cycleway', 'footway', 'steps'].includes(t.highway)) return;
+      const id = String(el.id);
+      const prev = byId.get(id);
+      // `fresh` is sticky: a way this tile actually has to build stays fresh
+      // even when the neighbour's longer copy is the one we solve over.
+      if (!prev) byId.set(id, { el, fresh });
+      else {
+        if (el.geometry.length > (prev.el.geometry ?? []).length) prev.el = el;
+        prev.fresh ||= fresh;
+      }
+    };
+    for (const el of els) consider(el, !hintedWays.has(String(el.id)));
+    for (const el of halo) consider(el, false);
+    const mems: Mem[] = [];
+    for (const [id, { el, fresh }] of byId) {
+      const t = el.tags ?? {};
+      const pts: Array<[number, number]> = (el.geometry ?? []).map((g2) => toLocal(g2.lat, g2.lon));
       if (pts.length < 2) continue;
       let ok = true;
       for (const [px, pz] of pts) if (!hasHeight(px, pz)) { ok = false; break; }
-      if (ok) mems.push({ pts, name: t.name, g: GRADE_MAX[t.highway] ?? 0.15, key });
+      if (ok) mems.push({ pts, name: t.name, g: GRADE_MAX[t.highway] ?? 0.15, key: id, fresh });
     }
     const joins = (a: [number, number], b: [number, number]): boolean =>
       Math.hypot(a[0] - b[0], a[1] - b[1]) < 2;
@@ -5431,6 +5450,11 @@ function renderWays(els: OsmWay[]): void {
           if (joins(a, head)) { chain.unshift({ ...m, pts: m.pts.slice().reverse() }); mems.splice(i, 1); grew = true; break; }
         }
       }
+      // Nothing new in this chain — every member was already solved in some
+      // earlier tile's halo. Re-solving it would redo the same DP on every
+      // neighbouring tile that streams in, and publish hints identical to the
+      // ones already standing.
+      if (!chain.some((m) => m.fresh)) continue;
       const all: Array<[number, number]> = [];
       for (const m of chain) for (const pt of m.pts) {
         if (!all.length || Math.hypot(pt[0] - all[all.length - 1][0], pt[1] - all[all.length - 1][1]) > 0.5) all.push(pt);
@@ -5453,6 +5477,15 @@ function renderWays(els: OsmWay[]): void {
       const alg = solveChain(dense, Math.min(...chain.map((m) => m.g)),
         a0 === null ? null : a0 - SURFACE.road.lift, a1 === null ? null : a1 - SURFACE.road.lift, pins);
       writeHints(dense, alg);
+      {
+        let len = 0;
+        for (let i = 1; i < dense.length; i++) {
+          len += Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
+        }
+        juncStats.chains++;
+        juncStats.totalChainM += len;
+        juncStats.maxChainM = Math.max(juncStats.maxChainM, Math.round(len));
+      }
       for (const m of chain) hintedWays.add(m.key);
     }
   }
@@ -5810,7 +5843,20 @@ async function renderGated(x: number, y: number, ways: OsmWay[]): Promise<void> 
     const runs = clipToBounds(el.geometry, b);
     for (let i = 0; i < runs.length; i++) out.push({ ...el, geometry: runs[i], ck: `${el.id}@${key}#${i}` });
   }
-  renderWays(out);
+  // THE HALO. The profile solver's whole problem is that it only ever sees one
+  // 600m tile of a road at a time, and OSM has already chopped that road at
+  // every structure change before the clipper above chops it again at the tile
+  // edge. Neighbouring tiles that have already streamed are sitting in the
+  // cache as UNCLIPPED geometry, and reading them back costs one local
+  // IndexedDB hit each — so the chain pre-pass is given the 3×3 neighbourhood
+  // to solve over while the build loop still only builds this tile.
+  const halo: OsmWay[] = [];
+  const rings = await Promise.all(
+    [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]]
+      .map(([dx, dy]) => readTileCache(x + dx, y + dy)),
+  );
+  for (const r of rings) if (r) for (const el of r) if ((el.tags ?? {}).highway) halo.push(el);
+  renderWays(out, halo);
 }
 
 // "No roads yet" must read as LOADING, not a broken world.
@@ -8393,7 +8439,9 @@ function meshHeightAt(x: number, z: number): number | null {
 // How much junction reconciliation actually happened: stations pinned to a
 // neighbouring road's settled deck, and kerb quads opened as a turning.
 (window as unknown as { __junc?: object }).__junc = (): object =>
-  ({ pins: juncPins, ...juncStats, points: juncGrid.size });
+  ({ pins: juncPins, ...juncStats,
+    meanChainM: juncStats.chains ? Math.round(juncStats.totalChainM / juncStats.chains) : 0,
+    points: juncGrid.size });
 (window as unknown as { __decks?: object }).__decks = (r = 70): object => {
   const by = new Map<string, { n: number; dlo: number; dhi: number; glo: number; ghi: number; drop: number; out: number[] }>();
   const seen = new Set<Seg>();
