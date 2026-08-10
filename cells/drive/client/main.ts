@@ -8501,7 +8501,23 @@ addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); });
 // then a squared response curve: fine steering near centre, full lock at the
 // rim. Any second finger anywhere is the brake — the two-finger gesture you
 // make instinctively when something is coming up fast.
-const STICK_R = 56, STICK_DEAD = 8;
+// A DRIVING CONTROL, NOT A JOYSTICK. The nub used to be clamped to a CIRCLE and
+// the two axes read off the same unit vector, which makes the one input a
+// driver needs most — full power through a bend — unreachable by construction:
+// at the top-right rim both axes read 0.707, so the corner of the gate gave 50%
+// throttle and 43% lock. The axes are independent now and the gate is a
+// squircle, so the corners exist and the shape says so.
+//
+// Two further things follow from a thumb being a lever on a knuckle rather than
+// a gimbal. Its travel is an ARC, so reaching across for lock costs vertical
+// displacement — which is why the throttle saturates at 62% of travel and
+// leaves headroom above it for the arc to eat. And deliberate inputs should
+// need deliberate travel, so reverse wants nearly the whole stick.
+const STICK_R = 56;
+const STICK_DEAD_X = 10;      // wider: a thumb held at full throttle wanders
+const STICK_DEAD_Y = 6;
+const STICK_FWD = 0.62;       // fraction of travel to full throttle
+const STICK_REV = 0.9;        // …and to full reverse
 function stickEl(size: number, style: Partial<CSSStyleDeclaration>): HTMLDivElement {
   const el = document.createElement('div');
   Object.assign(el.style, {
@@ -8511,7 +8527,12 @@ function stickEl(size: number, style: Partial<CSSStyleDeclaration>): HTMLDivElem
   document.body.appendChild(el);
   return el;
 }
-const stickBase = stickEl(STICK_R * 2 + 12, { border: '1.5px solid rgba(245,196,83,0.4)', background: 'rgba(8,12,20,0.25)' });
+const stickBase = stickEl(STICK_R * 2 + 12, {
+  border: '1.5px solid rgba(245,196,83,0.4)', background: 'rgba(8,12,20,0.25)',
+  // A SQUIRCLE, because the gate is now square. A circular ring around
+  // independent axes lies about where full lock and full throttle live.
+  borderRadius: '32%',
+});
 // HOLLOW. A solid disc was fine parked in a corner, but the nub now rests on
 // the truck in the chart view and a filled one blanked out the vehicle it is
 // steering — you could see the ring and not the thing inside it. A heavy rim
@@ -8521,7 +8542,22 @@ const stickNub = stickEl(46, {
   background: 'rgba(245,196,83,0.16)', border: '3px solid rgba(245,196,83,0.8)',
   boxSizing: 'border-box', boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
 });
-let stick: { id: number; x0: number; y0: number; dx: number; dy: number } | null = null;
+// Metres per second below which the truck counts as stopped, so a held
+// against-travel input stops braking and takes up drive the other way.
+const STICK_STOP = 0.7;
+let stick: { id: number; x0: number; y0: number; dx: number; dy: number; ax: number; ay: number } | null = null;
+// Is the stick currently acting as a brake rather than a throttle? Drives the
+// nub's colour, so the control says which of its two jobs it is doing.
+let stickHold = false;
+let stickHoldShown = false;
+/** The nub goes red the moment the stick is braking rather than driving, so
+ *  the control tells you which of its two jobs it is doing. */
+function showStickHold(on: boolean): void {
+  if (on === stickHoldShown) return;
+  stickHoldShown = on;
+  stickNub.style.background = on ? 'rgba(214,92,68,0.22)' : 'rgba(245,196,83,0.16)';
+  stickNub.style.borderColor = on ? 'rgba(214,92,68,0.92)' : 'rgba(245,196,83,0.8)';
+}
 let brakeId: number | null = null;
 // The chart (top) view pans and zooms like a map: the stick lives PINNED at
 // bottom-right there; dragging anywhere else pans, pinching zooms, and the
@@ -8565,17 +8601,26 @@ function updateStickHome(): void {
   }
 }
 addEventListener('resize', updateStickHome);
+/** One axis: dead zone, then a linear ramp to full scale over `span` of travel. */
+const stickAxis = (v: number, dead: number, span: number): number =>
+  Math.sign(v) * clamp((Math.abs(v) - dead) / (STICK_R * span - dead), 0, 1);
 const setStickFrom = (e: PointerEvent): void => {
   if (!stick) return;
   const rx = e.clientX - stick.x0, ry = e.clientY - stick.y0;
+  // The nub rides the SQUARE gate, so what you see is what the axes read. A
+  // circular clamp under independent axes would show the nub stopping short of
+  // an input that was already at full scale.
+  stickNub.style.left = `${stick.x0 + clamp(rx, -STICK_R, STICK_R)}px`;
+  stickNub.style.top = `${stick.y0 + clamp(ry, -STICK_R, STICK_R)}px`;
+  stick.ax = stickAxis(rx, STICK_DEAD_X, 1);
+  // Up is forward and saturates early; down is reverse and wants the travel.
+  stick.ay = stickAxis(ry, STICK_DEAD_Y, ry < 0 ? STICK_FWD : STICK_REV);
+  // The TRUE vector, still, for the chart view — that stick is directional
+  // ("steer onto this bearing"), and per-axis scaling would bend the bearing.
   const len = Math.hypot(rx, ry);
-  const cl = Math.min(len, STICK_R);
-  const ux = len ? rx / len : 0, uy = len ? ry / len : 0;
-  stickNub.style.left = `${stick.x0 + ux * cl}px`;
-  stickNub.style.top = `${stick.y0 + uy * cl}px`;
-  const mag = Math.max(0, cl - STICK_DEAD) / (STICK_R - STICK_DEAD);
-  stick.dx = ux * mag;
-  stick.dy = uy * mag;
+  const mag = Math.max(0, Math.min(len, STICK_R) - STICK_DEAD_Y) / (STICK_R - STICK_DEAD_Y);
+  stick.dx = len ? (rx / len) * mag : 0;
+  stick.dy = len ? (ry / len) * mag : 0;
 };
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
@@ -8587,7 +8632,7 @@ canvas.addEventListener('pointerdown', (e) => {
   if (camMode === 'top') {
     const h = stickHome();
     if (!stick && Math.hypot(e.clientX - h.x, e.clientY - h.y) <= STICK_R * 1.4) {
-      stick = { id: e.pointerId, x0: h.x, y0: h.y, dx: 0, dy: 0 };
+      stick = { id: e.pointerId, x0: h.x, y0: h.y, dx: 0, dy: 0, ax: 0, ay: 0 };
       setStickFrom(e);
     } else {
       panPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
@@ -8595,7 +8640,7 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   if (!stick) {
-    stick = { id: e.pointerId, x0: e.clientX, y0: e.clientY, dx: 0, dy: 0 };
+    stick = { id: e.pointerId, x0: e.clientX, y0: e.clientY, dx: 0, dy: 0, ax: 0, ay: 0 };
     stickBase.style.display = stickNub.style.display = 'block';
     stickBase.style.left = stickNub.style.left = `${e.clientX}px`;
     stickBase.style.top = stickNub.style.top = `${e.clientY}px`;
@@ -8729,6 +8774,13 @@ canvas.addEventListener('pointercancel', endStick);
 addEventListener('pointerup', endStick);
 addEventListener('pointercancel', endStick);
 addEventListener('blur', () => { stick = null; brakeId = null; panPtrs.clear(); keys.clear(); updateStickHome(); });
+// The controls as the truck last received them — so a harness can drive the
+// stick with synthetic pointers and read what the driver would actually get,
+// rather than inferring it from how the truck moved.
+let lastInput = { throttle: 0, steer: 0, brake: false, hold: false };
+(window as unknown as { __input?: object }).__input = (): object =>
+  ({ ...lastInput, stick: stick ? { ax: +stick.ax.toFixed(3), ay: +stick.ay.toFixed(3) } : null,
+    speed: +state.speed.toFixed(2) });
 function input(): { throttle: number; steer: number; brake: boolean } {
   let throttle = 0, steer = 0, stickBrake = false;
   if (keys.has('w') || keys.has('arrowup')) throttle += 1;
@@ -8753,18 +8805,35 @@ function input(): { throttle: number; steer: number; brake: boolean } {
         throttle += mag * clamp(Math.cos(diff) * 1.4, 0.35, 1);
       }
     } else {
-      // Squared response for the throttle: |v|·v — precision near centre,
-      // authority at the rim.
-      throttle += -(stick.dy * Math.abs(stick.dy));
       // The steer wants a harder bend than the throttle: at speed the whole
       // useful range is the first quarter of stick travel, and |v|·v was still
       // eager enough there to make lane-keeping a wrestle. Cubic with a small
       // linear floor — s³ carries the middle of the range, the 22% floor keeps
-      // the first millimetre of input alive instead of dead.
-      const sd = stick.dx;
+      // the first millimetre of input alive instead of dead. Reads its OWN axis
+      // now, so full lock costs the throttle nothing.
+      const sd = stick.ax;
       steer += sd * sd * sd * 0.78 + sd * 0.22;
+      // THROUGH THE BRAKE, INTO REVERSE. Asking for travel against the way the
+      // truck is already going is a request to STOP, not to slam into reverse
+      // at speed — so it brakes, and only once the truck is genuinely nearly
+      // stationary does the same held input take up drive the other way. That
+      // is what every automatic does, it is what the hands expect, and it means
+      // the one control can do all three without a gear selector.
+      const want = -stick.ay;                       // +1 forward, −1 reverse
+      const against = want > 0.02 ? state.speed < -STICK_STOP
+        : want < -0.02 ? state.speed > STICK_STOP : false;
+      if (against) { stickBrake = true; stickHold = true; }
+      else {
+        stickHold = false;
+        // Squared: precision near centre, authority at the rim.
+        throttle += want * Math.abs(want);
+      }
     }
   }
+  if (!stick) stickHold = false;
+  showStickHold(stickHold);
+  lastInput = { throttle: clamp(throttle, -1, 1), steer: clamp(steer, -1, 1),
+    brake: brakeId !== null || keys.has(' ') || stickBrake, hold: stickHold };
   return { throttle: clamp(throttle, -1, 1), steer: clamp(steer, -1, 1), brake: brakeId !== null || keys.has(' ') || stickBrake };
 }
 
