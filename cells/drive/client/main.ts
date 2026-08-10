@@ -9749,11 +9749,20 @@ function noteTags(t: Record<string, string>): void {
     fromRig: +Math.hypot(drone.x - state.x, drone.z - state.z).toFixed(1) });
 (window as unknown as { __droneGo?: object }).__droneGo = (): void => droneToggle();
 (window as unknown as { __pov?: object }).__pov = (): void => togglePov();
+(window as unknown as { __setcam?: object }).__setcam = (m: CamMode): void => setCam(m);
+(window as unknown as { __togglecam?: object }).__togglecam = (): void => toggleCam();
 /** The POI table, so a test can assert the downed drone is actually in it. */
 (window as unknown as { __poiList?: object }).__poiList = (): object =>
   [...pois.values()].map((p) => ({ name: p.name, kind: p.kind, pinned: !!p.pinned,
-    d: +Math.hypot(p.x - state.x, p.z - state.z).toFixed(0) }))
+    // BOTH, so a test can tell which vehicle a distance is measured from.
+    d: +Math.hypot(p.x - viewX(), p.z - viewZ()).toFixed(0),
+    fromRig: +Math.hypot(p.x - state.x, p.z - state.z).toFixed(0) }))
     .filter((p) => p.pinned || p.kind === 'drone');
+/** Which vehicle the chart, the minimap and every distance are measured from. */
+(window as unknown as { __view?: object }).__view = (): object =>
+  ({ x: +viewX().toFixed(1), z: +viewZ().toFixed(1),
+    headingDeg: Math.round(((viewH() * 180) / Math.PI + 360) % 360),
+    isDrone: drone.up, cam: camMode });
 /** Set the charge, for a test that would otherwise have to wait out a whole
  *  battery — headless runs the clock at about 60% of wall time, so draining it
  *  honestly takes six minutes of nothing. */
@@ -10694,7 +10703,7 @@ const miniCtx = mini.getContext('2d')!;
 function drawMinimap(): void {
   const S = MINI * 2;
   const spanPx = MINI_SPAN / M_PER_PX;                 // map-layer px the window spans
-  const [cx, cz] = mapPt(state.x, state.z);
+  const [cx, cz] = mapPt(viewX(), viewZ());
   const sx = cx - spanPx / 2, sz = cz - spanPx / 2;
   miniCtx.clearRect(0, 0, S, S);
   // The full square — a porthole inside a square panel wasted a third of an
@@ -10715,7 +10724,7 @@ function drawMinimap(): void {
   }
   // The car: an amber heading wedge, always centre.
   miniCtx.translate(S / 2, S / 2);
-  miniCtx.rotate(state.heading);
+  miniCtx.rotate(viewH());
   miniCtx.fillStyle = '#f5c453';
   miniCtx.beginPath();
   miniCtx.moveTo(0, -9); miniCtx.lineTo(6, 7); miniCtx.lineTo(-6, 7);
@@ -11005,6 +11014,18 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
     droneMesh.visible = lastPov !== 'cab';
   }
 }
+/**
+ * WHICH VEHICLE THE WORLD IS MEASURED FROM.
+ *
+ * Once there are two things to be, "where am I" stops being `state` and becomes
+ * a question. Everything that answers it for the PLAYER rather than for the
+ * physics reads these: the chart, the minimap, how far a place is, which way
+ * the edge chips point. The rig's own `state` stays the truck's, because the
+ * truck is still a truck — it is parked, not relocated.
+ */
+function viewX(): number { return drone.up ? drone.x : state.x; }
+function viewZ(): number { return drone.up ? drone.z : state.z; }
+function viewH(): number { return drone.up ? drone.heading : state.heading; }
 /** The POV you drive in (chase or cab) — what the chart returns you to, and
  *  what the dock previews while you are up there. */
 let lastPov: CamMode = 'chase';
@@ -11030,7 +11051,10 @@ function setCam(m: CamMode): void {
  *  Two controls now instead of one three-way cycle — the old C-cycle made
  *  "check the map and come back" a three-tap round trip through the cab. */
 function toggleCam(): void {
-  setCam(camMode === 'top' ? lastPov : 'top');
+  // Coming back from the chart goes to whatever you were flying or driving —
+  // `lastPov` is a SEAT, and returning to a seat you are not in while the drone
+  // is up would strand it in the air with the camera in the cab.
+  setCam(camMode === 'top' ? (drone.up ? 'drone' : lastPov) : 'top');
 }
 /** The POV chip's toggle: chase ↔ cab. From the chart it just re-aims what
  *  the dock previews and what you will drop back into. */
@@ -11118,7 +11142,8 @@ function updatePois(): void {
   // Pinned waypoints (a mission's giver and its destination) are NOT subject to
   // the nearest-three rule — the whole point of a destination is that it is far
   // away and stays on screen the entire way there.
-  const all = [...pois.values()].map((p) => ({ p, d: Math.hypot(p.x - state.x, p.z - state.z) }));
+  const vx = viewX(), vz = viewZ();
+  const all = [...pois.values()].map((p) => ({ p, d: Math.hypot(p.x - vx, p.z - vz) }));
   const pinned = all.filter((e) => e.p.pinned).sort((a, b) => a.d - b.d);
   // A pinned waypoint SHADOWS its namesake from the OSM stream: the mission's
   // ADMIN OFFICE and the mapped Admin Office are the same place, and two pins
@@ -11132,9 +11157,9 @@ function updatePois(): void {
   poiDraw = [];
   for (let i = 0; i < near.length; i++) {
     const { p, d } = near[i];
-    const dx = p.x - state.x, dz = p.z - state.z;
+    const dx = p.x - vx, dz = p.z - vz;
     const dc = Math.min(d, 900); // beyond ~900m: pin to the horizon on its bearing
-    const wx = state.x + (dx / d) * dc, wz = state.z + (dz / d) * dc;
+    const wx = vx + (dx / d) * dc, wz = vz + (dz / d) * dc;
     poiVec.set(wx, groundAt(wx, wz) + 2, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
     const rng = d < POI_RANGE;
@@ -11287,7 +11312,11 @@ function updateCps(): void {
     // PING shows ONLY what you just took, and nothing else, ever. The other
     // modes — and the job's route — add the ones still out there.
     if ((!job && cpVis === 1) ? age > 1400 : c.got && age > 1400) { cpCull.taken++; return; }
-    const d = Math.hypot(c.x - state.x, c.z - state.z);
+    // Measured from whoever is CURRENT — this is a VISIBILITY test, not a
+    // claim: flying out and having every marker vanish because the parked truck
+    // is now far from them is the opposite of scouting. Claiming a checkpoint
+    // still needs the rig, and lives elsewhere.
+    const d = Math.hypot(c.x - viewX(), c.z - viewZ());
     // The chart shows the WHOLE way, and so does a JOB: its route is the one
     // set of markers whose far end is exactly what you need to see. Distance
     // still dims them (the banding in the draw pass floors, not zeroes), it
@@ -12481,11 +12510,15 @@ function tick(now: number): void {
     // on screen at an angle that could reveal it.
     farGroup.visible = zoomCur > 6;
     // Pan is a glance around the chart — it drifts home once you drive.
-    if (stick || Math.abs(state.speed) > 6) { const f = Math.exp(-2.5 * dt); panX *= f; panZ *= f; }
-    const dist = CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh;
+    if (stick || Math.abs(state.speed) > 6 || drone.up) { const f = Math.exp(-2.5 * dt); panX *= f; panZ *= f; }
+    // THE CHART IS OVER WHOEVER IS CURRENT. Flying, that is the drone: opening
+    // the map to find the drone and being shown the parked truck instead is the
+    // one thing the map must not do.
+    const tvx = viewX(), tvz = viewZ();
+    const dist = CAM.base * zoomCur + Math.abs(drone.up ? 0 : state.speed) * 3.6 * CAM.perKmh;
     const tiltRad = (CAM.tilt * Math.PI) / 180;
-    const tgtY = sampleHeight(state.x + panX, state.z + panZ);
-    camPos.set(state.x + panX, tgtY + dist * Math.sin(tiltRad), state.z + panZ + dist * Math.cos(tiltRad));
+    const tgtY = sampleHeight(tvx + panX, tvz + panZ);
+    camPos.set(tvx + panX, tgtY + dist * Math.sin(tiltRad), tvz + panZ + dist * Math.cos(tiltRad));
     // PUSH THE NEAR PLANE OUT with the camera. Depth precision is governed by
     // the near/far RATIO, and at 1:30000 a lake drape sitting a few centimetres
     // over the terrain lands in the same depth bucket as the ground — which is
@@ -12647,7 +12680,7 @@ function tick(now: number): void {
   // truck sliding around the camera every time you turn in.
   if (!camInit || camMode === 'cab') { camera.position.copy(camPos); camInit = true; }
   else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
-  if (camMode === 'top') camera.lookAt(state.x + panX, sampleHeight(state.x + panX, state.z + panZ), state.z + panZ);
+  if (camMode === 'top') camera.lookAt(viewX() + panX, sampleHeight(viewX() + panX, viewZ() + panZ), viewZ() + panZ);
   // Roll the head WITH the body, same axis and same sense: the camera's local
   // z points backward exactly as the body's does (nose is -z), so the body's
   // roll angle transfers directly. The negated form tilted the horizon the
