@@ -1188,6 +1188,98 @@ const terrainMat = new THREE.MeshLambertMaterial({
   normalScale: new THREE.Vector2(0.32, 0.32), // relief, not crumpled foil
 });
 terrainFx(terrainMat, { detail: true });
+// ── the hill's OWN normals ─────────────────────────────────────────
+// The light was reading the terrain at a coarser resolution than the paint was.
+// Lighting normals come from computeVertexNormals() over the built mesh, which
+// carries one vertex per lattice cell (~19m at the default dial), while
+// terrainPalette has always taken its slope straight from the tile at ~9.5m/px
+// — so the COLOUR knew about ridges and gullies the LIGHT could not see. And
+// the normalMap slot was spent on procedural value noise tiled every ~34m:
+// convincing micro-relief, but not this hill.
+//
+// The heightfield is already decoded and resident, so its normals cost a Sobel
+// over data we hold and nothing on the wire. Measured against Tilezen's own
+// `normal` tiles for the same ground, this agrees to a mean 13.0° at Big Sur
+// and 7.9° at Chapman's Peak — the residual being estimator convention, not
+// information, which is why the extra download is not worth making.
+const NRM_SCALE = Number(new URLSearchParams(location.search).get('nscale') ?? 0.35);
+// OBJECT SPACE, not tangent space. A tangent-space map would need the handedness
+// of three's UVs against PlaneGeometry's winding to come out right, and getting
+// that wrong inverts the shading of every north-facing slope in a way that is
+// easy to stare past. The terrain mesh carries no rotation, so its object space
+// IS world space, and the vector to store is simply the world normal — which is
+// checkable against the heightfield rather than against a rendering. See
+// __nrmcheck.
+//
+// The one mapping still to get right is which texel a world point lands on.
+// PlaneGeometry's uv.y grows with local +Y, and the geometry is rotated -90°
+// about X, so uv.y grows toward world -Z. A DataTexture does not flip, so v=0
+// is buffer row 0 — which therefore sits at MAX z, while the tile's own data
+// row 0 sits at MIN z. The rows are stored reversed for exactly that reason.
+function terrainNormalTex(t: HeightTile): THREE.DataTexture {
+  const W = 256;
+  const mpp = t.w / W;
+  const buf = new Uint8Array(W * W * 4);
+  for (let j = 0; j < W; j++) {
+    const j0 = Math.max(0, j - 1) * W, j1 = Math.min(W - 1, j + 1) * W;
+    const dj = (Math.min(W - 1, j + 1) - Math.max(0, j - 1)) * mpp;
+    for (let i = 0; i < W; i++) {
+      const i0 = Math.max(0, i - 1), i1 = Math.min(W - 1, i + 1);
+      const di = (i1 - i0) * mpp;
+      const dzdx = (t.data[j * W + i1] - t.data[j * W + i0]) / di;
+      const dzdz = (t.data[j1 + i] - t.data[j0 + i]) / dj;
+      // World normal of the heightfield: y is up, and the surface falls away
+      // from the gradient in x and z.
+      // FLATTENED TOWARD UP by NRM_SCALE. Taken raw, a 9.5m/px gradient on a
+      // sea cliff is a near-horizontal normal, and Chapman's rock faces went
+      // black under a high sun — physically defensible and much worse to look
+      // at than the smoothed mesh facets they replaced. Easing the gradient
+      // keeps the ridges and gullies the mesh cannot hold without pretending
+      // the whole cliff faces the camera.
+      const nx = -dzdx * NRM_SCALE, ny = 1, nz = -dzdz * NRM_SCALE;
+      const l = Math.hypot(nx, ny, nz) || 1;
+      const o = ((W - 1 - j) * W + i) * 4;     // rows reversed — see above
+      buf[o] = Math.round((nx / l * 0.5 + 0.5) * 255);
+      buf[o + 1] = Math.round((ny / l * 0.5 + 0.5) * 255);
+      buf[o + 2] = Math.round((nz / l * 0.5 + 0.5) * 255);
+      buf[o + 3] = 255;
+    }
+  }
+  const tex = new THREE.DataTexture(buf, W, W, THREE.RGBAFormat);
+  tex.needsUpdate = true;
+  return tex;
+}
+/** One material per terrain tile, because each carries its own normal map.
+ *  Retired with the mesh it belonged to — a DataTexture per tile is 256KB, and
+ *  the streamer rebuilds tiles constantly. */
+const terrainMats = new Map<string, THREE.MeshLambertMaterial>();
+function terrainMatFor(t: HeightTile, key: string): THREE.MeshLambertMaterial {
+  const old = terrainMats.get(key);
+  if (old) { old.normalMap?.dispose(); old.dispose(); }
+  // A quarter-megabyte of texture per tile, and nothing prunes the tile maps —
+  // drive far enough and that is real memory. Oldest first, never the one being
+  // built; the tile keeps the shared material until its own rebuild comes round.
+  if (terrainMats.size > 48) {
+    for (const k of [...terrainMats.keys()].slice(0, 16)) {
+      if (k === key) continue;
+      const m = terrainMats.get(k) as THREE.MeshLambertMaterial;
+      const mesh = terrainMeshes.get(k);
+      if (mesh && mesh.material === m) mesh.material = terrainMat;
+      m.normalMap?.dispose(); m.dispose();
+      terrainMats.delete(k);
+    }
+  }
+  const m = new THREE.MeshLambertMaterial({
+    vertexColors: true,
+    normalMap: terrainNormalTex(t),
+    normalMapType: THREE.ObjectSpaceNormalMap,
+  });
+  // normalScale has no meaning for an object-space map — the stored vector IS
+  // the normal — so strength is dialled by flattening toward up at build time.
+  terrainFx(m, { detail: true });
+  terrainMats.set(key, m);
+  return m;
+}
 
 // ── terrain meshes ─────────────────────────────────────────────────
 const terrainReady = new Map<string, Promise<void>>(); // per-tile load promise
@@ -1246,7 +1338,7 @@ function buildTerrainMesh(t: HeightTile): void {
   geo.computeVertexNormals();
   const old = terrainMeshes.get(key);
   if (old) { worldGroup.remove(old); old.geometry.dispose(); }
-  const mesh = new THREE.Mesh(geo, terrainMat);
+  const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? terrainMatFor(t, key) : terrainMat);
   mesh.position.set(cxm, 0, czm);
   terrainMeshes.set(key, mesh);
   worldGroup.add(mesh);
@@ -8611,6 +8703,51 @@ function meshHeightAt(x: number, z: number): number | null {
   return { lip: band(lip), deckOverField: band(overField), meshUnderField: band(meshUnder), poke: band(poke),
     budget: +(SURFACE.road.lift + CUT_CLEAR).toFixed(2),
     pokeAbove0: poke.length ? +(poke.filter((v) => v > 0).length / poke.length * 100).toFixed(1) : 0 };
+};
+/**
+ * Does the terrain normal map actually land where the shader will read it?
+ *
+ * Samples the map the way the fragment shader does — through the geometry's own
+ * UV mapping — and compares the decoded world normal against the one the
+ * heightfield gives analytically at the same point. A row-order or axis mistake
+ * shows up here as tens of degrees, deterministically, with nothing rendered
+ * and no scene to go wrong.
+ *
+ * Only a correctness test at `?nscale=1`. Below that the stored normal is
+ * deliberately eased toward up, so the disagreement it reports IS the easing —
+ * about 9° at the 0.35 default.
+ */
+(window as unknown as { __nrmcheck?: object }).__nrmcheck = (n = 400): object => {
+  const key = [...terrainMats.keys()][0];
+  const t = key ? heightTiles.get(key) : undefined;
+  const mat = key ? terrainMats.get(key) : undefined;
+  const tex = mat?.normalMap;
+  if (!t || !tex) return { error: 'no terrain normal map built' };
+  const buf = (tex.image as { data: Uint8Array }).data;
+  const W = 256, mpp = t.w / W;
+  let sum = 0, worst = 0, cnt = 0;
+  const r = mulberry32(7);
+  for (let k = 0; k < n; k++) {
+    // Somewhere inside the tile, clear of its edges.
+    const x = t.xs + (0.1 + r() * 0.8) * t.w;
+    const z = t.zs + (0.1 + r() * 0.8) * t.h;
+    // The geometry's UV: u along +X, v growing toward −Z.
+    const u = (x - t.xs) / t.w, v = 1 - (z - t.zs) / t.h;
+    const i = clamp(Math.round(u * (W - 1)), 0, W - 1);
+    const j = clamp(Math.round(v * (W - 1)), 0, W - 1);
+    const o = (j * W + i) * 4;
+    const mx = (buf[o] / 255) * 2 - 1, my = (buf[o + 1] / 255) * 2 - 1, mz = (buf[o + 2] / 255) * 2 - 1;
+    const ml = Math.hypot(mx, my, mz) || 1;
+    // …against the field's own normal at that point.
+    const ax = -(sampleHeight(x + mpp, z) - sampleHeight(x - mpp, z)) / (2 * mpp);
+    const az = -(sampleHeight(x, z + mpp) - sampleHeight(x, z - mpp)) / (2 * mpp);
+    const al = Math.hypot(ax, 1, az) || 1;
+    const dot = clamp((mx * ax + my * 1 + mz * az) / (ml * al), -1, 1);
+    const deg = (Math.acos(dot) * 180) / Math.PI;
+    sum += deg; cnt++;
+    if (deg > worst) worst = deg;
+  }
+  return { tile: key, samples: cnt, meanDeg: +(sum / cnt).toFixed(2), worstDeg: +worst.toFixed(2) };
 };
 /** What the world puts in the truck's way, and what it grows where it should
  *  not: wall segments by kind, vegetation sites standing on a carriageway, and
