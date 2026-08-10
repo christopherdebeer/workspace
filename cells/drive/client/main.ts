@@ -1794,20 +1794,34 @@ function retroreflective(mat: THREE.Material): THREE.Material {
   return mat;
 }
 const MAT = {
-  road: new THREE.MeshLambertMaterial({ map: roadTex, side: DS }),
-  minor: new THREE.MeshLambertMaterial({ map: pathTex, transparent: true, opacity: 0.85, side: DS }),
+  // The carriageway sits a few CENTIMETRES over ground that has been cut to
+  // receive it, so it needs the same treatment water and the ruts already had:
+  // depth-buffer bias rather than metres. It carries the strongest offset of
+  // the drapes because it must win over every one of them where they overlap —
+  // a road through a park, over a river, across a track.
+  road: new THREE.MeshLambertMaterial({
+    map: roadTex, side: DS,
+    polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8,
+  }),
+  minor: new THREE.MeshLambertMaterial({
+    map: pathTex, transparent: true, opacity: 0.85, side: DS,
+    polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6,
+  }),
   // Ruts: alpha-cut, and depth-offset because it lies a few centimetres over
   // terrain it is meant to look part of.
   track: new THREE.MeshLambertMaterial({
     map: trackTex, transparent: true, side: DS, depthWrite: false,
-    polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4,
+    polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6,
   }),
   // polygonOffset as well as the lift: water and terrain are two nearly
   // coincident surfaces, and a constant lift alone cannot win at every camera
   // distance. The offset is in depth-buffer units, so it scales with the
   // precision available instead of with metres.
   water: new THREE.MeshLambertMaterial({ map: waterTex, side: DS, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }),
-  green: new THREE.MeshLambertMaterial({ map: greenTex, side: DS }),
+  green: new THREE.MeshLambertMaterial({
+    map: greenTex, side: DS,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
+  }),
   // The road's own thickness. FrontSide would be right if the winding were
   // reliable; it isn't (see DS above), and a one-sided apron flickers out
   // whenever the camera crosses the road.
@@ -3541,7 +3555,14 @@ function roadHeightAt(x: number, z: number): number | null {
 // CUT_CLEAR + the road lift: the cut lowers the ground to profile−CUT_CLEAR
 // and the deck is drawn at profile+lift. Measured before this was named:
 // 0.55m median at Noordhoek, Big Sur AND dead-flat Death Valley.
-const CUT_CLEAR = 0.12;    // how far below the deck floor the cut plane sits
+// Was 0.12, which with the old 0.18 lift guaranteed 0.30m of daylight at every
+// kerb on dead-flat ground — a kerb, systematically, on every paved road in the
+// world. Safe to cut now for a reason that did not hold before: `groundAt` IS
+// the carved mesh, so this no longer has to cover a disagreement between the
+// closed form and the surface actually drawn. Measured at Rio before the
+// change: the ground never came within 0.31m of the tarmac at the 95th
+// percentile, so the whole budget was unused headroom.
+const CUT_CLEAR = 0.04;    // how far below the deck floor the cut plane sits
 // ── the cut, as a raster of where carriageways actually are ────────
 // This replaces a 22m flat bench, a 14m graded tail, a 32° batter, a "bed"
 // and a "hard" layer — five mechanisms that were all compensating for one
@@ -3621,10 +3642,21 @@ function rebuildCut(): void {
 function stripFloor(s: Seg, x: number, z: number): { y: number; out: number } {
   const dx = s.bx - s.ax, dz = s.bz - s.az;
   const t = clamp(((x - s.ax) * dx + (z - s.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
-  const fA = (s.ya as number) - Math.abs(s.ca ?? 0) + (s.pc ?? 0), fB = (s.yb as number) - Math.abs(s.cb ?? 0) + (s.pc ?? 0);
+  const px = s.ax + dx * t, pz = s.az + dz * t;
+  // THE CUT FOLLOWS THE CAMBER. This used to take `ya − |cross-fall|` — the
+  // LOWER kerb — for the whole width, which is safe and leaves a step exactly
+  // twice the cross-fall along the high side of every cambered road. Measured
+  // in flat Rio it was the largest term left in the kerb lip by some way, worth
+  // a median 0.68m against the 0.08m vertical budget. Reading the same tilted
+  // plane the deck was built on removes it and cannot expose anything: where
+  // the deck is higher, the ground under it is allowed to be higher too.
+  const l = Math.hypot(dx, dz) || 1;
+  const side = clamp(((x - px) * (-dz / l) + (z - pz) * (dx / l)) / (s.hw || 1), -1, 1);
+  const cross = ((s.ca ?? 0) + ((s.cb ?? 0) - (s.ca ?? 0)) * t) * side;
+  const fA = (s.ya as number) + (s.pc ?? 0), fB = (s.yb as number) + (s.pc ?? 0);
   return {
-    y: fA + (fB - fA) * t,
-    out: Math.hypot(x - (s.ax + dx * t), z - (s.az + dz * t)) - (s.hw + 0.6),
+    y: fA + (fB - fA) * t + cross,
+    out: Math.hypot(x - px, z - pz) - (s.hw + 0.6),
   };
 }
 // TWO CONSUMERS, TWO RULES — because they need different things from the
@@ -3650,6 +3682,27 @@ function stripsNear(x: number, z: number, R: number, into: Set<Seg>): void {
   }
 }
 const cutSet = new Set<Seg>();
+/**
+ * THE HARD FLOOR: the deck floor of the nearest strip, with no batter allowance.
+ *
+ * `roadCeiling` lets the ground climb away from the kerb at CUT_FACE, which is
+ * right for a FIELD — it is what makes a cutting look like a cutting rather
+ * than a trench. It is wrong as a limit on how deep a mesh VERTEX may be dug,
+ * because a vertex two metres out is then permitted to stand 1.2m over the deck
+ * and the chord from it bridges straight across the carriageway: measured, that
+ * buried 8.9% of one Rio avenue. This is the same query without the climb, so a
+ * vertex may be taken down to the road it serves and no further.
+ */
+function roadFloorHard(x: number, z: number): number | null {
+  cutSet.clear();
+  stripsNear(x, z, 2, cutSet);
+  let best: number | null = null;
+  for (const sg of cutSet) {
+    const y = stripFloor(sg, x, z).y;
+    if (best === null || y < best) best = y;
+  }
+  return best === null ? null : best - CUT_CLEAR;
+}
 /** The FIELD's ceiling: the same strips, graded off the kerb at the face
  *  slope so nothing the tyres ride is discontinuous. */
 function roadCeiling(x: number, z: number): number | null {
@@ -3738,6 +3791,33 @@ function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): 
     }
   }
   if (!near.size) return;
+  // HOW DEEP THIS VERTEX IS ALLOWED TO BE DUG.
+  //
+  // The carve satisfies a constraint at a point INSIDE a triangle by lowering
+  // all three corners, and a mesh cell is ~21m while a road is 7m wide — so
+  // corners far out in the field were being dragged down to hold a kerb sample.
+  // Measured beside the road in flat Rio: the deck sat 0.04m over natural
+  // ground (i.e. flush, its lift and no more) while the MESH sat 0.63m under
+  // it. All of the kerb step was excavation, none of it was the road.
+  //
+  // A vertex may be taken down to the DECK FLOOR of the road it is serving —
+  // `roadFloorHard`, the corridor rule without the batter's climb — and never
+  // below the ground the world put there. Not `roadCeiling`: that lets the
+  // ground rise away from the kerb, which is right for a field and disastrous
+  // as a digging limit, because the chord from a vertex standing proud bridges
+  // the carriageway. Computed lazily: only the handful of vertices a deck
+  // sample actually touches ever need it.
+  const lim = new Float32Array(pos.count);
+  const limDone = new Uint8Array(pos.count);
+  const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
+  const limOf = (v: number): number => {
+    if (!limDone[v]) {
+      limDone[v] = 1;
+      const c = roadFloorHard(pos.getX(v) + cxm, pos.getZ(v) + czm);
+      lim[v] = c === null ? -Infinity : Math.min(pos.getY(v), c);
+    }
+    return lim[v];
+  };
   const enforce = (px: number, pz: number, tgt: number): void => {
     const fx = (px - t.xs) / cell, fz = (pz - t.zs) / cell;
     if (fx < 0 || fz < 0 || fx >= SEG || fz >= SEG) return;
@@ -3760,15 +3840,17 @@ function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): 
       if (over <= 0) return;
       const norm = w1 * w1 + w2 * w2 + w3 * w3;
       if (norm < 1e-9) return;
-      pos.setY(a, pos.getY(a) - (over * w1) / norm);
-      pos.setY(b, pos.getY(b) - (over * w2) / norm);
-      pos.setY(c, pos.getY(c) - (over * w3) / norm);
+      pos.setY(a, Math.max(limOf(a), pos.getY(a) - (over * w1) / norm));
+      pos.setY(b, Math.max(limOf(b), pos.getY(b) - (over * w2) / norm));
+      pos.setY(c, Math.max(limOf(c), pos.getY(c) - (over * w3) / norm));
       return;
     }
   };
-  // Two passes: a vertex shared by several deck samples wants the deepest of
-  // them, and one sweep leaves the later samples correcting the earlier.
-  for (let pass = 0; pass < 2; pass++) {
+  // Three passes now, not two: a vertex shared by several deck samples wants
+  // the deepest of them, and with the floor above a corner that hits its limit
+  // cannot take its share of a correction — so the remainder has to find its
+  // way onto the corners that still can, which takes another sweep.
+  for (let pass = 0; pass < 3; pass++) {
     for (const s of near) {
       const len = Math.hypot(s.bx - s.ax, s.bz - s.az);
       const steps = Math.max(1, Math.ceil(len / (cell * 0.3)));
@@ -5610,8 +5692,11 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
       const stairs = tags.highway === 'steps';   // nothing drives up steps
       // These MUST equal SURFACE[].lift — the ribbon is drawn at profile+lift
       // and the tyre sits at profile+lift, so a disagreement is a truck
-      // hovering over its own road. Stack order: green .08 < water .12 <
-      // track .15 < rail .16 < road .18.
+      // hovering over its own road. Stack order: green .015 < water .025 <
+      // track .03 < rail .035 < road .04. The gaps are now millimetres and
+      // could not settle a depth test on their own; the polygonOffset on each
+      // material is what actually orders them, and these keep the physical
+      // sense of the stack for anything that reads a height.
       // A GALLERY IS NOT A BORE. tunnel=avalanche_protector and covered=yes
       // mean a roof over a road that keeps its own grade in the open air —
       // OSM's own semantics say do not bury it. Treated as a tunnel they got
@@ -5636,17 +5721,17 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
       // anything short of a major river simply did not exist. Drawn as a draped
       // ribbon at the water lift, wide by class, and NOT drivable: it is water,
       // and the surface field already knows to slow you in it.
-      ribbon(pts, WATER_W[tags.waterway as string], MAT.water, 0.12, false, 'none', false, tags.name);
+      ribbon(pts, WATER_W[tags.waterway as string], MAT.water, 0.025, false, 'none', false, tags.name);
     } else if (tags.railway) {
       // Rails read as a narrow dark line across the country and a thing you
       // bump over at a crossing. Not drivable — nobody drives a railway.
-      ribbon(pts, 3.4, MAT.minor, 0.16, false, 'none', false, tags.name);
+      ribbon(pts, 3.4, MAT.minor, 0.035, false, 'none', false, tags.name);
     } else if (tags.building) {
       building(pts, el.id, parseFloat(tags['building:levels'] ?? '') || 2);
     } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
-      polygon(pts, MAT.water, 0.12, 0, 'water');
+      polygon(pts, MAT.water, 0.025, 0, 'water');
     } else if (AREA_TAG(tags)) {
-      polygon(pts, MAT.green, 0.08);
+      polygon(pts, MAT.green, 0.015);
       scatterVeg(pts, el.id, tags);
     }
     // Anything else — a coastline, a cliff edge, an unrecognised line — is
@@ -8462,6 +8547,54 @@ function meshHeightAt(x: number, z: number): number | null {
   return Object.fromEntries(bands.map(([lo, hi], i) =>
     [`${lo}-${hi > 1e8 ? '∞' : hi}m from kerb`, band(acc[i])]));
 };
+/**
+ * HOW HIGH THE ROAD STANDS OFF ITS OWN GROUND.
+ *
+ * `lip` is the visible step at the kerb: the tarmac's surface against the
+ * rendered ground just outside it — what reads as a kerb when it is systematic.
+ * `poke` is the same measurement taken ON the carriageway, where a positive
+ * number is terrain coming up through the tarmac, which is what the clearance
+ * the lip is made of exists to prevent. The pair is the whole trade.
+ */
+(window as unknown as { __flush?: object }).__flush = (r = 220): object => {
+  const lip: number[] = [], poke: number[] = [], overField: number[] = [], meshUnder: number[] = [];
+  const seen = new Set<Seg>();
+  const c = Math.ceil(r / GRID);
+  for (let cx = -c; cx <= c; cx++) for (let cz = -c; cz <= c; cz++) {
+    for (const s of roadGrid.get(`${Math.floor(state.x / GRID) + cx},${Math.floor(state.z / GRID) + cz}`) ?? []) {
+      if (seen.has(s) || s.tk || s.tn || s.ya === undefined) continue;
+      seen.add(s);
+      const dx = s.bx - s.ax, dz = s.bz - s.az, l = Math.hypot(dx, dz) || 1;
+      if (Math.hypot((s.ax + s.bx) / 2 - state.x, (s.az + s.bz) / 2 - state.z) > r) continue;
+      const nx = -dz / l, nz = dx / l;
+      for (const t of [0.25, 0.5, 0.75]) {
+        const px = s.ax + dx * t, pz = s.az + dz * t;
+        const deck = (s.ya as number) + ((s.yb as number) - (s.ya as number)) * t + SURFACE.road.lift;
+        poke.push(groundAt(px, pz) - deck);
+        for (const sg of [1, -1]) {
+          // Half a metre OUTBOARD of the kerb: past the tarmac, onto the ground.
+          const ox = px + nx * sg * (s.hw + 0.5), oz = pz + nz * sg * (s.hw + 0.5);
+          lip.push(deck - groundAt(ox, oz));
+          // …and the same step split into the two things that can cause it:
+          // a deck riding above the ground the world says is there, and a mesh
+          // sitting below that ground because it was carved for this road.
+          const f = sampleHeight(ox, oz);
+          overField.push(deck - f);
+          meshUnder.push(f - groundAt(ox, oz));
+        }
+      }
+    }
+  }
+  const band = (v: number[]): object | null => {
+    if (!v.length) return null;
+    const a = v.slice().sort((p, q) => p - q);
+    return { n: a.length, p05: +a[Math.floor(a.length * 0.05)].toFixed(2),
+      med: +a[a.length >> 1].toFixed(2), p95: +a[Math.floor(a.length * 0.95)].toFixed(2) };
+  };
+  return { lip: band(lip), deckOverField: band(overField), meshUnderField: band(meshUnder), poke: band(poke),
+    budget: +(SURFACE.road.lift + CUT_CLEAR).toFixed(2),
+    pokeAbove0: poke.length ? +(poke.filter((v) => v > 0).length / poke.length * 100).toFixed(1) : 0 };
+};
 /** What the world puts in the truck's way, and what it grows where it should
  *  not: wall segments by kind, vegetation sites standing on a carriageway, and
  *  how many buildings are registered for re-seating. */
@@ -9809,11 +9942,11 @@ const SURFACE = {
   // road it is drawn on — but at 0.6/0.5/0.25 the stack was CURB HEIGHT, and
   // every road became a platform to climb onto. Compressed to real kerb scale;
   // the ordering that keeps green under water under track under road survives.
-  road: { max: 50, drag: 0.28, lift: 0.18, rough: 0.015, mu: 1.05, lat: 6.5 },
+  road: { max: 50, drag: 0.28, lift: 0.04, rough: 0.015, mu: 1.05, lat: 6.5 },
   // The middle tier: a graded dirt track. Equilibrium speed is accel/drag, so
   // 0.36 sits it between tarmac's 57m/s and open ground's 32 — quick enough
   // that finding a track is a relief, rough enough that it is not a road.
-  track: { max: 40, drag: 0.36, lift: 0.15, rough: 0.07, mu: 0.8, lat: 5 },
+  track: { max: 40, drag: 0.36, lift: 0.03, rough: 0.07, mu: 0.8, lat: 5 },
   ground: { max: 32, drag: 0.5, lift: 0.10, rough: 0.16, mu: 0.6, lat: 3.2 }, // monster truck: off-road is its element
   water: { max: 3.5, drag: 3.5, lift: 0.12, rough: 0.05, mu: 0.3, lat: 2 },
 } as const;
