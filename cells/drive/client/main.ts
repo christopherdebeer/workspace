@@ -8206,6 +8206,46 @@ function meshHeightAt(x: number, z: number): number | null {
 // terrain under that deck sits. A terrace that exists in the terrain is a real
 // hillside; a terrace that exists only in the decks is one the profile solver
 // invented, and the parapets guarding it are guarding nothing.
+/**
+ * WHERE THE TWO GROUNDS DISAGREE.
+ *
+ * `groundAt` — the closed-form field rule — is what the grass, the scatter and
+ * the wheels stand on. `carveCorridors` — an iterated per-triangle projection —
+ * is what the terrain mesh you can SEE was built by. They are two descriptions
+ * of one surface and they are supposed to agree wherever the guarantee binds.
+ * This samples a lattice and reports (mesh − field) banded by distance to the
+ * nearest carriageway, so a divergence can be attributed to the carve rather
+ * than argued about.
+ */
+(window as unknown as { __surfaces?: object }).__surfaces = (r = 160, step = 4): object => {
+  const bands = [[0, 6], [6, 15], [15, 30], [30, 60], [60, 1e9]];
+  const acc = bands.map(() => [] as number[]);
+  for (let dx = -r; dx <= r; dx += step) for (let dz = -r; dz <= r; dz += step) {
+    const x = state.x + dx, z = state.z + dz;
+    const m = meshHeightAt(x, z);
+    if (m === null) continue;
+    // Distance to the nearest drivable carriageway edge.
+    let near = Infinity;
+    for (let cx = -1; cx <= 1; cx++) for (let cz = -1; cz <= 1; cz++) {
+      for (const s of roadGrid.get(`${Math.floor(x / GRID) + cx},${Math.floor(z / GRID) + cz}`) ?? []) {
+        if (s.tk) continue;
+        const [px, pz] = closestOnSeg(x, z, s);
+        near = Math.min(near, Math.max(0, Math.hypot(x - px, z - pz) - s.hw));
+      }
+    }
+    const b = bands.findIndex(([lo, hi]) => near >= lo && near < hi);
+    if (b >= 0) acc[b].push(m - groundAt(x, z));
+  }
+  const band = (v: number[]): object | null => {
+    if (!v.length) return null;
+    const a = v.slice().sort((p, q) => p - q);
+    return { n: a.length, p05: +a[Math.floor(a.length * 0.05)].toFixed(2),
+      med: +a[a.length >> 1].toFixed(2), p95: +a[Math.floor(a.length * 0.95)].toFixed(2),
+      below50cm: +(a.filter((d) => d < -0.5).length / a.length * 100).toFixed(1) };
+  };
+  return Object.fromEntries(bands.map(([lo, hi], i) =>
+    [`${lo}-${hi > 1e8 ? '∞' : hi}m from kerb`, band(acc[i])]));
+};
 /** The steepest built segments near the truck, with the profile branch that
  *  produced each — `pb` 1 hint, 2 ramp, 3 hold, 4 bench, 5 solo DP, 6 raw. A
  *  near-vertical piece of carriageway is a law being broken somewhere, and
