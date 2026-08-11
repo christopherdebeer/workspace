@@ -1948,7 +1948,23 @@ const beamProbe = {
  * bright-pass picks it up and the sign BLOOMS in the headlights, at night, from
  * the one seat that should see it.
  */
-function retroreflective(mat: THREE.Material): THREE.Material {
+/**
+ * `cone` — how tightly the beam has to be aimed. `face` — how square the
+ * reflector has to be to the driver. `gain` — how hard it returns. `range` —
+ * how far it carries. A SIGN and a ROAD STUD are not the same optical device
+ * and were sharing one set of numbers: a sign is a large panel read off-axis
+ * and deserves a tight cone, a stud is a small thing on the surface you are
+ * driving along and has to answer at a glance from a long way off.
+ *
+ * Measured on a straight urban road at night before changing anything, with
+ * the shared numbers (cone 7, face 3, range 180): the product of the three
+ * terms averaged 0.006 within twenty metres and never exceeded 0.074 at any
+ * distance. Three sub-one factors multiplied together is a small number
+ * however generous each looks on its own, and that — not size, not depth — is
+ * why the centreline went dark a short way ahead.
+ */
+interface RRParams { cone: number; face: number; gain: number; range: number }
+function retroreflective(mat: THREE.Material, p: RRParams = { cone: 7, face: 3, gain: 1.3, range: 180 }): THREE.Material {
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.uBeamPos = beamProbe.uBeamPos;
     shader.uniforms.uBeamDir = beamProbe.uBeamDir;
@@ -1959,13 +1975,18 @@ function retroreflective(mat: THREE.Material): THREE.Material {
         vec4 rrW = modelMatrix * vec4(transformed, 1.0);
         vWPos = rrW.xyz;
         vWNrm = normalize(mat3(modelMatrix) * objectNormal);`);
+    const F = (x: number): string => x.toFixed(2);
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vWPos;
         varying vec3 vWNrm;
         uniform vec3 uBeamPos;
         uniform vec3 uBeamDir;
-        uniform float uBeamAmt;`)
+        uniform float uBeamAmt;
+        #define RR_CONE ${F(p.cone)}
+        #define RR_FACE ${F(p.face)}
+        #define RR_GAIN ${F(p.gain)}
+        #define RR_RANGE ${F(p.range)}`)
       .replace('#include <dithering_fragment>', `
         vec3 rrToCar = uBeamPos - vWPos;
         float rrDist = length(rrToCar);
@@ -1983,7 +2004,7 @@ function retroreflective(mat: THREE.Material): THREE.Material {
         // the side dark until you are roughly pointed at it, and lights the
         // line of the road through a bend, which is the entire purpose.
         float rrAim = max(dot(uBeamDir, -rrDirToCar), 0.0);
-        float rrCone = pow(rrAim, 7.0);
+        float rrCone = pow(rrAim, RR_CONE);
         // Real retroreflectors fall off far more slowly than a diffuse surface
         // (they return the beam rather than scattering it), so this is 1/d, not
         // 1/d². 90m of usable range on a dark road.
@@ -1991,13 +2012,13 @@ function retroreflective(mat: THREE.Material): THREE.Material {
         // longest-range thing on a dark road by a wide margin — that is what
         // they are for — and halving the brightness by 45m put the far end of
         // the line under the noise floor long before it went sub-pixel.
-        float rrFall = clamp(1.0 - rrDist / 180.0, 0.0, 1.0);
-        float rr = pow(rrFace, 3.0) * rrCone * rrFall * uBeamAmt;
+        float rrFall = clamp(1.0 - rrDist / RR_RANGE, 0.0, 1.0);
+        float rr = pow(rrFace, RR_FACE) * rrCone * rrFall * uBeamAmt;
         // 1.3, not 2.6. At 2.6 the panel clipped to flat white in the beam and
         // the chevrons went with it — a sign you cannot read is a lamp. This
         // keeps it the brightest thing in the frame while the legend survives,
         // which is the whole point of putting a legend on it.
-        gl_FragColor.rgb += diffuseColor.rgb * rr * 1.3;
+        gl_FragColor.rgb += diffuseColor.rgb * rr * RR_GAIN;
         #include <dithering_fragment>`);
   };
   mat.needsUpdate = true;
@@ -2052,6 +2073,26 @@ const MAT = {
   // deck at once, and a sorted transparent has no right answer for that.
   rail: new THREE.MeshLambertMaterial({ map: railTex, side: DS, transparent: true, alphaTest: 0.5 }),
   sign: retroreflective(new THREE.MeshLambertMaterial({ map: signTex, side: DS })),
+  // ROAD STUDS, and they need their own material for ONE reason: depth bias.
+  //
+  // The carriageway carries the strongest polygonOffset of every drape
+  // (-4 / -8), because it has to win over the green, the water and the tracks
+  // wherever they overlap. That offset scales with the depth SLOPE of the
+  // polygon, and a road seen down its own length is as slope-heavy as a surface
+  // gets — so far up the tarmac the road is pulled toward the camera by a large
+  // and growing amount. A centreline stud standing 17cm over it loses that race
+  // and is swallowed, while a stud on a parapet three quarters of a metre up
+  // clears it and stays visible: exactly the report, same material, same size,
+  // different height over a biased surface. Given a stronger bias of their own,
+  // the studs win where they physically ought to.
+  stud: (() => {
+    const m = new THREE.MeshLambertMaterial({ map: signTex, side: DS });
+    m.polygonOffset = true; m.polygonOffsetFactor = -6; m.polygonOffsetUnits = -12;
+    // A WIDER CONE, A FLATTER FACE LAW, MORE GAIN, MORE RANGE. A stud is read
+    // at a glance down the length of the road, often through a bend, and the
+    // sign's numbers left the product at a few per cent of white.
+    return retroreflective(m, { cone: 2, face: 1, gain: 3.4, range: 260 });
+  })(),
   // Tunnel interior: emissive so the tube reads even with no light inside.
   tunnel: new THREE.MeshLambertMaterial({ color: 0x2a2d34, emissive: 0x0b0d12, side: DS }),
   portal: new THREE.MeshLambertMaterial({ color: 0x4d4a42, side: DS }),
@@ -4266,6 +4307,7 @@ const apron = {
   dckV: [] as number[], dckUV: [] as number[],
   rlV: [] as number[], rlUV: [] as number[],
   sgV: [] as number[], sgUV: [] as number[],
+  stV: [] as number[], stUV: [] as number[],
 };
 const spanStats = {
   piers: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0, cats: 0, posts: 0,
@@ -4514,13 +4556,16 @@ function flushAprons(): void {
     [apron.dckV, apron.dckUV, MAT.deck],
     [apron.rlV, apron.rlUV, MAT.rail],
     [apron.sgV, apron.sgUV, MAT.sign],
+    [apron.stV, apron.stUV, MAT.stud],
   ] as const) {
     if (!v.length) continue;
     const g = new THREE.BufferGeometry();
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(v), 3));
     g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(u), 2));
     g.computeVertexNormals();
-    worldGroup.add(new THREE.Mesh(g, m));
+    const mm = new THREE.Mesh(g, m);
+    if (m === MAT.stud) mm.userData.stud = true;   // so a probe can find them
+    worldGroup.add(mm);
     v.length = 0; u.length = 0;
   }
 }
@@ -5337,7 +5382,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const rx = -uz, rz = ux;                 // across the way
     for (const nsg of [1, -1]) {             // one face each way down the road
       const ox = ux * 0.04 * nsg, oz = uz * 0.04 * nsg;
-      quad(apron.sgV, apron.sgUV, [
+      quad(apron.stV, apron.stUV, [
         px - rx * half + ox, py + high, pz - rz * half + oz,
         px + rx * half + ox, py + high, pz + rz * half + oz,
         px - rx * half + ox, py - high, pz - rz * half + oz,
@@ -5688,7 +5733,10 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           // — not dim, GONE, because a sub-pixel triangle either catches a
           // pixel centre or it does not. Size is what buys distance here, not
           // brightness.
-          stud(cx, cyDeck + 0.17, cz, dx / len, dz / len, 0.26, 0.16);
+          // Centre raised so the quad's LOWER edge clears the tarmac rather
+          // than grazing it: at +0.17 with a 0.16 half-height the bottom sat at
+          // one centimetre, which is inside every rounding the depth buffer has.
+          stud(cx, cyDeck + 0.22, cz, dx / len, dz / len, 0.26, 0.16);
         }
       }
       // ── roadside furniture ──
@@ -9898,6 +9946,67 @@ function meshHeightAt(x: number, z: number): number | null {
   return { lip: band(lip), deckOverField: band(overField), meshUnderField: band(meshUnder), poke: band(poke),
     budget: +(SURFACE.road.lift + CUT_CLEAR).toFixed(2),
     pokeAbove0: poke.length ? +(poke.filter((v) => v > 0).length / poke.length * 100).toFixed(1) : 0 };
+};
+/**
+ * WHY A ROAD STUD IS OR IS NOT VISIBLE, computed rather than guessed.
+ *
+ * Reported: barrier studs read at long range, centreline studs only right in
+ * front. Same material, same mesh — so the difference is not the material, and
+ * two attempts to reason it out from the shader were wrong. This walks the
+ * actual stud geometry, keeps the ones in front of the camera, and evaluates
+ * the retroreflective term the fragment shader uses — `pow(|n.d|,3) * pow(aim,7)
+ * * fall * amt` — per stud. Banded by distance, so "they go dark at X metres"
+ * becomes a number and the term that kills them is named.
+ */
+(window as unknown as { __studs?: object }).__studs = (): object => {
+  const bands = [[0, 20], [20, 40], [40, 70], [70, 110], [110, 200]];
+  const acc = bands.map(() => ({ n: 0, rr: 0, face: 0, cone: 0, fall: 0, px: 0 }));
+  const cam = camera.position;
+  const fwd = new THREE.Vector3();
+  camera.getWorldDirection(fwd);
+  const bp = beamProbe.uBeamPos.value as THREE.Vector3;
+  const bd = beamProbe.uBeamDir.value as THREE.Vector3;
+  const amt = beamProbe.uBeamAmt.value as number;
+  const v = new THREE.Vector3(), nrm = new THREE.Vector3();
+  for (const o of worldGroup.children) {
+    if (!(o as THREE.Mesh).userData?.stud) continue;
+    const geo = (o as THREE.Mesh).geometry;
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    const nat = geo.attributes.normal as THREE.BufferAttribute | undefined;
+    // One sample per quad (6 verts) is enough — they are 30cm across.
+    for (let i = 0; i < pos.count; i += 6) {
+      v.set(pos.getX(i), pos.getY(i), pos.getZ(i));
+      const d = v.distanceTo(cam);
+      if (d > 200) continue;
+      const toCam = new THREE.Vector3().subVectors(cam, v).normalize();
+      if (new THREE.Vector3().subVectors(v, cam).normalize().dot(fwd) < 0.2) continue;
+      if (nat) nrm.set(nat.getX(i), nat.getY(i), nat.getZ(i)).normalize(); else nrm.copy(toCam);
+      const face = Math.abs(nrm.dot(toCam));
+      const toFrag = new THREE.Vector3().subVectors(v, bp).normalize();
+      const aim = Math.max(bd.dot(toFrag), 0);
+      // The STUD's parameters, matching MAT.stud — the probe exists to predict
+      // what the fragment shader will do, so it has to use the same law.
+      const cone = Math.pow(aim, 2);
+      const fall = clamp(1 - v.distanceTo(bp) / 260, 0, 1);
+      const rr = face * cone * fall * amt * 3.4;
+      // …and how big it lands on screen, in device pixels of the RENDER target.
+      const pxPerM = (innerHeight * 0.5) / (Math.tan((camera.fov * Math.PI) / 360) * d);
+      const b = bands.findIndex(([lo, hi]) => d >= lo && d < hi);
+      if (b < 0) continue;
+      const a = acc[b];
+      a.n++; a.rr += rr; a.face += face; a.cone += cone; a.fall += fall;
+      a.px += 0.52 * pxPerM * (renderer.getPixelRatio() || 1) * (PIX_H / innerHeight);
+    }
+  }
+  const out: Record<string, unknown> = {};
+  bands.forEach(([lo, hi], i) => {
+    const a = acc[i];
+    out[`${lo}-${hi}m`] = a.n === 0 ? null : { n: a.n,
+      rr: +(a.rr / a.n).toFixed(4), face: +(a.face / a.n).toFixed(3),
+      cone: +(a.cone / a.n).toFixed(3), fall: +(a.fall / a.n).toFixed(3),
+      screenPx: +(a.px / a.n).toFixed(2) };
+  });
+  return { beamAmt: +amt.toFixed(2), ...out };
 };
 /** Watercourses, and the bores carrying them under things. `uphillFixed` counts
  *  stations where the invert had to daylight because the ground climbed more
