@@ -10006,6 +10006,28 @@ function meshHeightAt(x: number, z: number): number | null {
     } else { imu.sx = imu.sy = imu.sz = 0; imu.sa = 0; imu.sn = 0; }
     real.err = '';
   };
+/** The control surface, sampled without a thumb: one displacement from where
+ *  the stick was planted → the steer and throttle the truck would be asked for,
+ *  after the response curves. Lets a test sweep an arc and check that the
+ *  throttle does not move. */
+(window as unknown as { __stickAt?: object }).__stickAt =
+  (rx: number, ry: number): object => {
+    const rd = stickRead(rx, ry);
+    const sd = rd.ax;
+    const want = -rd.ay;
+    return {
+      steer: +clamp(sd * sd * sd * 0.78 + sd * 0.22, -1, 1).toFixed(4),
+      throttle: +(want * Math.abs(want)).toFixed(4),
+      reverse: rd.back,
+      r: +Math.hypot(rx, ry).toFixed(1),
+      degFromUp: +((Math.atan2(rx, -ry) * 180) / Math.PI).toFixed(1),
+    };
+  };
+(window as unknown as { __stickGeom?: object }).__stickGeom = (): object => ({
+  R: STICK_R, dead: STICK_DEAD, fade: STICK_FADE, gas: STICK_GAS, full: STICK_FULL, rev: STICK_REV,
+  arcDeg: +(STICK_ARC / DEG).toFixed(1), boundDeg: +(STICK_BOUND / DEG).toFixed(1),
+  revArcDeg: +(STICK_ARC_REV / DEG).toFixed(1),
+});
 /** What the phone's instruments are contributing, and whether they are being
  *  believed — the only way to tell a live gyro from a granted-but-silent one. */
 (window as unknown as { __imu?: object }).__imu = (): object => ({
@@ -10982,27 +11004,87 @@ addEventListener('keydown', (e) => { keys.add(e.key.toLowerCase()); });
 addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); });
 
 // The stick appears WHERE the thumb lands (no fixed gutter to find blind),
-// with a base ring + nub so the current input is always visible. Dead zone
-// then a squared response curve: fine steering near centre, full lock at the
-// rim. Any second finger anywhere is the brake — the two-finger gesture you
-// make instinctively when something is coming up fast.
-// A DRIVING CONTROL, NOT A JOYSTICK. The nub used to be clamped to a CIRCLE and
-// the two axes read off the same unit vector, which makes the one input a
-// driver needs most — full power through a bend — unreachable by construction:
-// at the top-right rim both axes read 0.707, so the corner of the gate gave 50%
-// throttle and 43% lock. The axes are independent now and the gate is a
-// squircle, so the corners exist and the shape says so.
+// with a base ring + nub so the current input is always visible. Any second
+// finger anywhere is the brake — the two-finger gesture you make instinctively
+// when something is coming up fast.
 //
-// Two further things follow from a thumb being a lever on a knuckle rather than
-// a gimbal. Its travel is an ARC, so reaching across for lock costs vertical
-// displacement — which is why the throttle saturates at 62% of travel and
-// leaves headroom above it for the arc to eat. And deliberate inputs should
-// need deliberate travel, so reverse wants nearly the whole stick.
+// POLAR, BECAUSE A THUMB IS A LEVER ON A KNUCKLE. It does not translate, it
+// SWEEPS: its comfortable motion is an arc about the joint, at roughly constant
+// reach. Two earlier models both fought that.
+//
+// A circular gate reading both axes off one unit vector made the input a driver
+// needs most — full power through a bend — unreachable by construction: at the
+// top-right rim both axes read 0.707, so the corner of the gate gave 50%
+// throttle and 43% lock. Independent axes on a SQUARE gate fixed the corner and
+// created a subtler version of the same problem: sweeping the thumb's natural
+// arc from straight-ahead across to lock walks DOWN the y axis, so every turn
+// came with a throttle lift nobody asked for. The 62%-of-travel throttle
+// saturation existed only to leave headroom for the arc to eat, which is a
+// workaround for reading a rotation as two translations.
+//
+// So: RADIUS IS THROTTLE, ANGLE IS STEERING. Push out to go, sweep round to
+// turn, and the sweep costs the throttle nothing because it does not change the
+// radius — which is the whole of what the arc problem was. The circumference is
+// a steering wheel: rotating the thumb through the arc rotates the wheels.
+//
+// The zones, measured from straight up:
+//   0 … ARC        steering ramps from centred to full lock
+//   ARC … BOUND    a full-lock PLATEAU, so holding maximum lock does not
+//                  require holding an exact angle
+//   BOUND … 180    reverse, mirrored about the vertical so pushing right still
+//                  turns the wheels right whichever way the truck is going
 const STICK_R = 56;
-const STICK_DEAD_X = 10;      // wider: a thumb held at full throttle wanders
-const STICK_DEAD_Y = 6;
-const STICK_FWD = 0.62;       // fraction of travel to full throttle
-const STICK_REV = 0.9;        // …and to full reverse
+const STICK_DEAD = 8;         // radius, px — below this there is neither gas nor lock
+const STICK_FADE = 12;        // …and steering reaches full authority this far above it
+// THE NEUTRAL RING. Throttle starts further out than steering finishes, so
+// between the two there is a band that turns the wheels and asks for no power
+// at all — a wheel with your foot off the pedal, which a polar stick otherwise
+// has no way to express: radius IS throttle, so without this, steering on a
+// trailing throttle down a hill would mean holding a sixth of the gas open.
+const STICK_GAS = 20;
+// Full throttle is a BAND at the rim, not a line on it. A thumb holding the
+// gas open wanders, and with the neutral ring eating the inner third there is
+// not enough radius left to spend a squared curve on reaching the very edge.
+const STICK_FULL = 0.75;      // fraction of travel to full throttle
+const STICK_REV = 0.85;       // …and to full reverse — deliberate inputs want travel
+const DEG = Math.PI / 180;
+const Q = new URLSearchParams(location.search);
+// Tunable from the URL because the only instrument that can judge these is a
+// thumb, and a redeploy per guess is not an iteration loop.
+const STICK_ARC = Number(Q.get('arc') ?? 95) * DEG;
+const STICK_BOUND = Number(Q.get('bound') ?? 120) * DEG;
+const STICK_ARC_REV = Number(Q.get('rarc') ?? 55) * DEG;
+/**
+ * One thumb position → what the truck is being asked to do. Pure, so a test can
+ * sweep the whole control surface without a pointer: `ax` is the steering
+ * demand before the response curve (−1 … 1) and `ay` is the throttle request
+ * with the screen's sign convention (negative = forward), matching what
+ * `input()` already reads.
+ */
+function stickRead(rx: number, ry: number): { ax: number; ay: number; back: boolean } {
+  const r = Math.hypot(rx, ry);
+  if (r < STICK_DEAD) return { ax: 0, ay: 0, back: false };
+  // 0 = straight up, +ve clockwise (to the driver's right).
+  const th = Math.atan2(rx, -ry);
+  const back = Math.abs(th) > STICK_BOUND;
+  // In reverse the zone's axis is straight DOWN, and the angle is mirrored
+  // about the vertical rather than rotated through it: pushing right steers
+  // right in both halves, which is what every arcade car does and what the
+  // hands expect. Rotating would swap left and right the moment you crossed
+  // the boundary.
+  const zone = back ? Math.sign(rx || 1) * (Math.PI - Math.abs(th)) : th;
+  // Angle is ill-defined near the origin — at r=12 a two-pixel wobble is ten
+  // degrees — so the lock fades in over the first few millimetres of travel
+  // rather than being live the instant the dead zone is cleared.
+  const fade = clamp((r - STICK_DEAD) / STICK_FADE, 0, 1);
+  const span = back ? STICK_REV : STICK_FULL;
+  const mag = clamp((r - STICK_GAS) / (STICK_R * span - STICK_GAS), 0, 1);
+  return {
+    ax: clamp(zone / (back ? STICK_ARC_REV : STICK_ARC), -1, 1) * fade,
+    ay: back ? mag : -mag,
+    back,
+  };
+}
 function stickEl(size: number, style: Partial<CSSStyleDeclaration>): HTMLDivElement {
   const el = document.createElement('div');
   Object.assign(el.style, {
@@ -11014,9 +11096,10 @@ function stickEl(size: number, style: Partial<CSSStyleDeclaration>): HTMLDivElem
 }
 const stickBase = stickEl(STICK_R * 2 + 12, {
   border: '1.5px solid rgba(245,196,83,0.4)', background: 'rgba(8,12,20,0.25)',
-  // A SQUIRCLE, because the gate is now square. A circular ring around
-  // independent axes lies about where full lock and full throttle live.
-  borderRadius: '32%',
+  // ROUND again, and this time the shape is the truth: under a polar reading
+  // the rim IS the locus of full throttle and the circumference IS the steering
+  // travel. The squircle was honest about a square gate; a square gate was the
+  // thing that was wrong.
 });
 // HOLLOW. A solid disc was fine parked in a corner, but the nub now rests on
 // the truck in the chart view and a filled one blanked out the vehicle it is
@@ -11092,24 +11175,22 @@ function updateStickHome(): void {
   }
 }
 addEventListener('resize', updateStickHome);
-/** One axis: dead zone, then a linear ramp to full scale over `span` of travel. */
-const stickAxis = (v: number, dead: number, span: number): number =>
-  Math.sign(v) * clamp((Math.abs(v) - dead) / (STICK_R * span - dead), 0, 1);
 const setStickFrom = (e: PointerEvent): void => {
   if (!stick) return;
   const rx = e.clientX - stick.x0, ry = e.clientY - stick.y0;
-  // The nub rides the SQUARE gate, so what you see is what the axes read. A
-  // circular clamp under independent axes would show the nub stopping short of
-  // an input that was already at full scale.
-  stickNub.style.left = `${stick.x0 + clamp(rx, -STICK_R, STICK_R)}px`;
-  stickNub.style.top = `${stick.y0 + clamp(ry, -STICK_R, STICK_R)}px`;
-  stick.ax = stickAxis(rx, STICK_DEAD_X, 1);
-  // Up is forward and saturates early; down is reverse and wants the travel.
-  stick.ay = stickAxis(ry, STICK_DEAD_Y, ry < 0 ? STICK_FWD : STICK_REV);
-  // The TRUE vector, still, for the chart view — that stick is directional
-  // ("steer onto this bearing"), and per-axis scaling would bend the bearing.
+  // The nub rides a CIRCLE, and now that is what the reading is: past the rim
+  // there is no more throttle, and the angle it is held at is all that is left
+  // to say. A square clamp here would show the nub in corners the model has no
+  // meaning for.
   const len = Math.hypot(rx, ry);
-  const mag = Math.max(0, Math.min(len, STICK_R) - STICK_DEAD_Y) / (STICK_R - STICK_DEAD_Y);
+  const k = len > STICK_R ? STICK_R / len : 1;
+  stickNub.style.left = `${stick.x0 + rx * k}px`;
+  stickNub.style.top = `${stick.y0 + ry * k}px`;
+  const rd = stickRead(rx, ry);
+  stick.ax = rd.ax; stick.ay = rd.ay;
+  // The TRUE vector, still, for the chart view — that stick is directional
+  // ("steer onto this bearing"), and the polar reading would bend the bearing.
+  const mag = Math.max(0, Math.min(len, STICK_R) - STICK_DEAD) / (STICK_R - STICK_DEAD);
   stick.dx = len ? (rx / len) * mag : 0;
   stick.dy = len ? (ry / len) * mag : 0;
 };
@@ -11301,11 +11382,12 @@ function input(): { throttle: number; steer: number; brake: boolean } {
       }
     } else {
       // The steer wants a harder bend than the throttle: at speed the whole
-      // useful range is the first quarter of stick travel, and |v|·v was still
-      // eager enough there to make lane-keeping a wrestle. Cubic with a small
-      // linear floor — s³ carries the middle of the range, the 22% floor keeps
-      // the first millimetre of input alive instead of dead. Reads its OWN axis
-      // now, so full lock costs the throttle nothing.
+      // useful range is the first few degrees of arc, and |v|·v was still eager
+      // enough there to make lane-keeping a wrestle. Cubic with a small linear
+      // floor — s³ carries the middle of the range, the 22% floor keeps the
+      // first degree of sweep alive instead of dead. The demand is an ANGLE
+      // now, so full lock costs the throttle nothing at all: the thumb sweeps
+      // the arc without changing its reach.
       const sd = stick.ax;
       steer += sd * sd * sd * 0.78 + sd * 0.22;
       // THROUGH THE BRAKE, INTO REVERSE. Asking for travel against the way the
