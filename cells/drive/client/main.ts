@@ -9315,7 +9315,8 @@ function truckSpec(): Record<string, number> {
  *  frame the world quietly runs SLOWER than the clock — which any test that
  *  compares an integrated path against a real-time script needs to know. */
 (window as unknown as { __clock?: object }).__clock = (): object =>
-  ({ wallS: +(performance.now() / 1000).toFixed(2), simS: +simT.toFixed(2), frames: simN });
+  ({ wallS: +(performance.now() / 1000).toFixed(2), simS: +simT.toFixed(2), frames: simN,
+    frameMs: +frameMs.toFixed(1), fps: Math.round(1000 / Math.max(frameMs, 1)) });
 (window as unknown as { __frame?: object }).__frame = (): object => {
   // The HULL's own extents, in car-local space. `setFromObject` would swallow
   // the halo ring and the 26m beam cones and report 200%-of-screen nonsense.
@@ -12367,6 +12368,11 @@ addEventListener('visibilitychange', () => {
 // ── main loop ──────────────────────────────────────────────────────
 let last = performance.now();
 let simT = 0, simN = 0;   // integrated sim seconds / frames, read by __clock()
+/** Smoothed WALL-clock frame time. Not derived from `dt`, which is capped at
+ *  50ms: on a frame slower than that the two diverge, and the divergence is
+ *  exactly the thing worth seeing — the world runs slower than the clock and
+ *  nothing else on screen says so. */
+let frameMs = 16.7;
 let streamAt = 0;
 let miniAt = 0;
 // The co-driver's slow tick: the next bend on this road, refreshed well below
@@ -12653,7 +12659,9 @@ function tick(now: number): void {
   // not a black screen — but nothing integrates, so you can open it mid-corner
   // and come back to the same corner.
   const paused = (menu.tab() !== null || hidden) && !real.on;
-  const dt = paused ? 0 : Math.min(0.05, (now - last) / 1000);
+  const raw = now - last;
+  if (raw > 0 && raw < 2000) frameMs += (raw - frameMs) * 0.1;
+  const dt = paused ? 0 : Math.min(0.05, raw / 1000);
   last = now;
   simT += dt; simN++;
   const raw2 = real.on || paused ? { throttle: 0, steer: 0, brake: false } : input();
@@ -14959,6 +14967,17 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
             tag === 'IMU' ? UI.good : UI.soft);
         }
       }
+      // FRAME RATE, same tertiary tier, right-aligned to the left column's own
+      // edge so it holds still instead of sliding about behind a coordinate
+      // that changes width. Always on: it costs one string, and the alternative
+      // is discovering a 20fps regression from a screenshot days later. Dim
+      // while it is fine, because a healthy number is not news — it speaks up
+      // at 40 and shouts under 25, which is where the sim clock starts losing
+      // to the wall clock and the world quietly runs in slow motion.
+      const fps = Math.round(1000 / Math.max(frameMs, 1));
+      const fs = `${fps}FPS`;
+      textEdgeS(fs, Math.round(HW * 0.66) - textSW(fs), infoY + 16,
+        fps < 25 ? UI.bad : fps < 40 ? UI.gold : UI.dim);
     }
   }
   // ── the rig, bottom-right ──
