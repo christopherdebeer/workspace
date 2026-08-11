@@ -8565,6 +8565,185 @@ const real = {
   drift: 0,
   wake: null as { release: () => Promise<void> } | null,
 };
+
+// ── the device as an inertial sensor ───────────────────────────────
+/**
+ * A consumer GPS reports at 1Hz. At 100km/h that is a 28m gap between the only
+ * two things this mode actually knows, and easing toward each fix spends that
+ * second dragging the truck toward a point the car has already left: lag on the
+ * straights, cut corners through bends, and a visible tick every time a sample
+ * lands. The phone has the instruments to fill the second in.
+ *
+ * NOT by double-integrating acceleration into position. A 0.1 m/s² bias — which
+ * is six tenths of a degree of tilt error leaking gravity into the horizontal —
+ * is 5cm of position error after one second and five METRES after ten. Inertial
+ * position is a between-fix interpolator and never a GPS replacement, and the
+ * moment it is asked to be one it invents a drive. What survives the arithmetic:
+ *
+ *   GYRO   yaw rate about the WORLD vertical. Drift over the one second that
+ *          matters is nothing, and it is what makes a corner look like a corner
+ *          instead of a staircase. It also turns the truck in a car park, where
+ *          the receiver's course is null and the old filter simply held still.
+ *   ACCEL  ONE integration, to trim speed between samples, re-anchored to the
+ *          receiver's own speed at every fix so the bias can never compound.
+ *
+ * Both are read MOUNT-AGNOSTICALLY, because a phone on a windscreen is at some
+ * unknown angle in some unknown cradle and asking the driver to declare it is
+ * not a feature. Gravity gives the world vertical in the device's own frame;
+ * the yaw rate is the projection of the rotation vector onto it; and the
+ * forward axis is LEARNED by correlating horizontal acceleration against the
+ * change in reported GPS speed. Mounted backwards is self-correcting — one hard
+ * brake and the sign flips.
+ *
+ * The magnetometer is deliberately not used. It would give absolute heading at
+ * a standstill, but it needs a second learned quantity (the cradle's yaw
+ * relative to the car) and it is sitting inside a steel box next to a charging
+ * cable. The gyro plus the receiver's own course covers the same ground without
+ * either problem.
+ */
+const IMU_OFF = new URLSearchParams(location.search).get('imu') === '0';
+const imu = {
+  on: false,
+  err: 'NOT STARTED',
+  /** Device-frame unit vector pointing at the sky, from smoothed gravity. */
+  ux: 0, uy: 0, uz: 1,
+  /** Device-frame unit vector pointing where the CAR goes, learned from GPS. */
+  fx: 0, fy: 0, fz: 0,
+  /** How much evidence the forward axis has, in m/s of GPS speed change. */
+  fw: 0,
+  /** rad/s about the world vertical, sign matching `state.heading`. */
+  yaw: 0,
+  /** Gyro zero learned while stopped — a cheap phone reads up to a degree a
+   *  second at rest, which is 60° of invented corner in a minute of traffic. */
+  gbias: 0,
+  /** m/s² along the forward axis, bias removed. */
+  along: 0,
+  /** The accelerometer's zero, measured against the receiver's own dv. */
+  abias: 0,
+  /** Horizontal acceleration accumulated since the last fix, device frame. */
+  sx: 0, sy: 0, sz: 0, sn: 0,
+  /** …and the raw along-axis figure over the same window. */
+  sa: 0,
+  n: 0,
+  at: 0,
+};
+/** True while the gyro is fresh enough to be steering with. */
+const gyroLive = (): boolean => imu.on && performance.now() - imu.at < 400;
+/** …and the forward axis has seen enough accelerations to be trusted. */
+const accelLive = (): boolean => gyroLive() && imu.fw > 4;
+function onMotion(e: DeviceMotionEvent): void {
+  const now = performance.now();
+  const dtm = clamp(imu.at ? (now - imu.at) / 1000 : (e.interval || 16) / 1000, 0.002, 0.2);
+  imu.at = now; imu.n++;
+  const g = e.accelerationIncludingGravity;
+  if (!g || g.x === null || g.y === null || g.z === null) return;
+  // UP, in the device's own frame. A device at rest reads +1g along whichever
+  // axis points at the sky, so raw gravity IS up — smoothed hard, because every
+  // pothole and every hand on the cradle is in the same signal. ~1.7s to follow
+  // a genuine re-mount, far too slow to be moved by a bump.
+  const gm = Math.hypot(g.x, g.y, g.z) || 1;
+  const kg = 1 - Math.exp(-0.6 * dtm);
+  imu.ux += (g.x / gm - imu.ux) * kg;
+  imu.uy += (g.y / gm - imu.uy) * kg;
+  imu.uz += (g.z / gm - imu.uz) * kg;
+  const um = Math.hypot(imu.ux, imu.uy, imu.uz) || 1;
+  imu.ux /= um; imu.uy /= um; imu.uz /= um;
+  const r = e.rotationRate;
+  if (r && r.alpha !== null) {
+    // rotationRate is about the device's own x (beta), y (gamma), z (alpha).
+    // The rotation that matters is the part about the world vertical, which is
+    // the projection onto `u` — no knowledge of the mount required. Negated
+    // because `state.heading` is a compass bearing, increasing clockwise from
+    // above, while a positive rotation about up is counter-clockwise.
+    const D = Math.PI / 180;
+    const raw = -(((r.beta ?? 0) * D) * imu.ux + ((r.gamma ?? 0) * D) * imu.uy + ((r.alpha ?? 0) * D) * imu.uz);
+    // ZERO-RATE UPDATE: whatever the gyro reads while the car is provably
+    // stopped is bias by definition. Learned slowly and only at a standstill,
+    // so a genuine slow turn is never mistaken for drift.
+    if (real.fix && (real.fix.spd ?? 9) < 0.4) imu.gbias += (raw - imu.gbias) * (1 - Math.exp(-0.3 * dtm));
+    imu.yaw = raw - imu.gbias;
+  }
+  // Linear acceleration, gravity removed. `e.acceleration` is the fused figure
+  // where the platform offers one; where it does not, subtracting the smoothed
+  // gravity vector gets to the same place with more noise.
+  const a = e.acceleration;
+  const ax = a && a.x !== null ? a.x : g.x - imu.ux * 9.81;
+  const ay = a && a.y !== null ? a.y : g.y - imu.uy * 9.81;
+  const az = a && a.z !== null ? a.z : g.z - imu.uz * 9.81;
+  // Only the horizontal part is the car accelerating; the rest is suspension.
+  const vert = ax * imu.ux + ay * imu.uy + az * imu.uz;
+  const hx = ax - vert * imu.ux, hy = ay - vert * imu.uy, hz = az - vert * imu.uz;
+  imu.sx += hx; imu.sy += hy; imu.sz += hz; imu.sn++;
+  const fm = Math.hypot(imu.fx, imu.fy, imu.fz);
+  if (fm > 1e-3) {
+    const raw = (hx * imu.fx + hy * imu.fy + hz * imu.fz) / fm;
+    imu.sa += raw;
+    imu.along = clamp(raw - imu.abias, -8, 8);
+  }
+}
+/**
+ * WHAT THE RECEIVER TEACHES THE PHONE, once per fix.
+ *
+ * WHICH WAY IS FORWARD: the mean horizontal acceleration over the interval,
+ * times the change in reported speed, points along the car's forward axis — and
+ * keeps pointing there under braking, because both terms flip sign together. A
+ * few real accelerations converge it; sitting at lights contributes nothing,
+ * because `dv` is zero.
+ *
+ * WHERE ITS ZERO IS: over that same interval the accelerometer and the receiver
+ * are measuring the same thing, so the gap between the mean `along` and dv/dt IS
+ * the bias, directly and without assuming anything about the drive. The first
+ * attempt high-passed `along` instead, on the theory that bias is the slow part
+ * — but so is a five-second acceleration, and subtracting it left a phantom
+ * DECELERATION of about 1 m/s² for the twenty seconds after every real one, so
+ * a car holding a steady 80 read as gently coasting. This term cannot make that
+ * mistake: a real acceleration shows up in dv as well, and cancels.
+ */
+function imuOnFix(dv: number, dtFix: number): void {
+  const n = imu.sn, mAlong = n ? imu.sa / n : 0;
+  if (n >= 4 && Math.abs(dv) >= 0.7) {
+    const mx = imu.sx / n, my = imu.sy / n, mz = imu.sz / n;
+    imu.fx += mx * dv; imu.fy += my * dv; imu.fz += mz * dv;
+    // Kept horizontal and unit-length, so `along` stays a plain m/s².
+    const vert = imu.fx * imu.ux + imu.fy * imu.uy + imu.fz * imu.uz;
+    imu.fx -= vert * imu.ux; imu.fy -= vert * imu.uy; imu.fz -= vert * imu.uz;
+    imu.fw = Math.min(imu.fw + Math.abs(dv), 40);
+  }
+  // Only once there is a forward axis to project onto, and only over a sane
+  // interval — a fix arriving after a tunnel would otherwise divide a minute of
+  // speed change by a second and call the result bias.
+  if (n >= 4 && imu.fw > 4 && dtFix > 0.3 && dtFix < 3) {
+    imu.abias = clamp(imu.abias + (mAlong - imu.abias - dv / dtFix) * 0.25, -6, 6);
+  }
+  imu.sx = imu.sy = imu.sz = 0; imu.sa = 0; imu.sn = 0;
+}
+/**
+ * iOS 13 put DeviceMotion behind its own permission, granted only from a real
+ * gesture — and `beginRealWatch` is sometimes reached WITHOUT one, because a
+ * sticky location grant starts the watch straight from boot. So a rejected ask
+ * is not a refusal, it is "not from a tap", and it waits for the next one.
+ */
+function startImu(): void {
+  if (IMU_OFF) { imu.err = 'IMU OFF'; return; }
+  if (imu.on) return;
+  const M = (window as unknown as {
+    DeviceMotionEvent?: { requestPermission?: () => Promise<string> };
+  }).DeviceMotionEvent;
+  if (!M) { imu.err = 'NO MOTION SENSORS'; return; }
+  const attach = (): void => { addEventListener('devicemotion', onMotion); imu.on = true; imu.err = ''; };
+  if (typeof M.requestPermission !== 'function') { attach(); return; }
+  M.requestPermission().then(
+    (s) => {
+      if (s === 'granted') attach();
+      else imu.err = 'MOTION REFUSED - ALLOW MOTION & ORIENTATION IN BROWSER SETTINGS';
+    },
+    () => {
+      imu.err = 'TAP TO ENABLE MOTION';
+      const once = (): void => { removeEventListener('pointerdown', once); startImu(); };
+      addEventListener('pointerdown', once);
+    },
+  );
+}
 /** The Permissions API's view of geolocation, cached for the denial copy. */
 let geoPerm = 'unknown';
 function refreshGeoPerm(): Promise<string> {
@@ -8635,17 +8814,33 @@ function beginRealWatch(): void {
   real.on = true;
   real.err = 'WAITING FOR A FIX';
   void takeWakeLock();
+  startImu();
   addEventListener('visibilitychange', () => { if (!document.hidden && real.on) void takeWakeLock(); });
   real.watch = navigator.geolocation.watchPosition(
     (p) => {
       const c = p.coords;
       real.prev = real.fix;
+      // WHEN the receiver made this fix, not when the callback got to run. A
+      // chipset takes a few hundred milliseconds to solve and hand up a
+      // position, and at 100km/h a 0.7s handover is twenty metres of road —
+      // which is most of what "the GPS lags" feels like from the driver's seat,
+      // and it is all recoverable, because the fix carries its own timestamp.
+      // Both figures come off the same system clock, so a phone set to the
+      // wrong time cancels itself out; the clamp is for the pathological device
+      // that stamps its fixes from somewhere else, where an unbounded "latency"
+      // would have the truck driving fifty metres ahead of the road.
+      const lag = clamp(Date.now() - p.timestamp, 0, 1500);
       real.fix = {
         lat: c.latitude, lon: c.longitude, acc: c.accuracy,
         head: Number.isFinite(c.heading as number) ? (c.heading as number) : null,
         spd: Number.isFinite(c.speed as number) ? (c.speed as number) : null,
-        at: performance.now(),
+        at: performance.now() - lag,
       };
+      // The only moment the receiver can teach the accelerometer anything: two
+      // speeds a second apart, against everything the phone felt in between.
+      if (real.prev && real.prev.spd !== null && real.fix.spd !== null) {
+        imuOnFix(real.fix.spd - real.prev.spd, (real.fix.at - real.prev.at) / 1000);
+      } else { imu.sx = imu.sy = imu.sz = 0; imu.sa = 0; imu.sn = 0; }
       real.err = '';
     },
     (e) => {
@@ -8692,38 +8887,100 @@ function bootRealDrive(): void {
 function stepReal(dt: number): boolean {
   const f = real.fix;
   if (!f) return false;
-  const [tx, tz] = toLocal(f.lat, f.lon);
-  real.drift = Math.hypot(tx, tz);
-  // Ease toward the fix rather than snapping to it. A consumer GPS reports at
-  // 1Hz with metres of jitter; snapping makes a parked car twitch and a moving
-  // one stutter between samples. 3.5/s covers a 1Hz sample without visible lag.
-  const k = 1 - Math.exp(-3.5 * dt);
-  state.x += (tx - state.x) * k;
-  state.z += (tz - state.z) * k;
+  const stale = (performance.now() - f.at) / 1000;
+
+  // ── PREDICT ────────────────────────────────────────────────────
+  // The car does not wait for the next sample, so neither does this. Between
+  // fixes the truck is flown on the instruments: turned by the gyro, moved at
+  // its own speed along its own heading, and trimmed by the accelerometer.
+  // Gated on actually MOVING — a phone jostled in a cradle at the lights would
+  // otherwise spin a stationary truck, which is the exact failure the old
+  // filter's "never derive heading from jitter" rule existed to prevent.
+  if (gyroLive() && Math.abs(state.speed) > 0.7 && stale < 12) state.heading += imu.yaw * dt;
+  state.x += state.speed * Math.sin(state.heading) * dt;
+  state.z -= state.speed * Math.cos(state.heading) * dt;
+  if (accelLive() && stale < 3) {
+    state.speed = Math.max(0, state.speed + imu.along * dt);
+  }
+
+  // ── CORRECT ────────────────────────────────────────────────────
+  const [tx0, tz0] = toLocal(f.lat, f.lon);
+  real.drift = Math.hypot(tx0, tz0);
+  // A fix says where the car WAS when the receiver sampled it, and it arrives
+  // late. Steering toward the raw point pulls a moving car BACKWARDS by however
+  // long the sample took to land — 28m at 100km/h — which is most of what the
+  // old easing filter felt like from the driver's seat. Carry it forward along
+  // the heading first, and the target is where the car is NOW.
+  const lead = Math.min(stale, 4) * Math.abs(f.spd ?? state.speed);
+  const tx = tx0 + Math.sin(state.heading) * lead;
+  const tz = tz0 - Math.cos(state.heading) * lead;
+  // How hard to pull is what the fix is worth. A ±5m fix outranks dead
+  // reckoning inside a second; a ±60m one — urban canyon, tunnel mouth, a
+  // cold start under trees — is barely worth listening to, and the inertial
+  // path should carry rather than be yanked sideways by it.
+  // Past a certain gap, easing is not smoothing, it is a slide. Coming out of a
+  // tunnel the dead-reckoned truck has been stopped for ten seconds while the
+  // car kept going, and a sixty-metre glide across the terrain to catch up reads
+  // as a bug where a cut reads as a re-acquisition. Only on a fix worth
+  // believing — a ±200m cold start must never be allowed to teleport anything.
+  const gap = Math.hypot(tx - state.x, tz - state.z);
+  if (gap > 60 && f.acc < 40) {
+    state.x = tx; state.z = tz;
+  } else {
+    const k = 1 - Math.exp(-clamp(16 / Math.max(f.acc, 5), 0.35, 3.5) * dt);
+    state.x += (tx - state.x) * k;
+    state.z += (tz - state.z) * k;
+  }
   // Heading: the receiver's own course when it has one — it only does above a
   // few km/h — else the bearing between the last two fixes, else hold. NEVER
-  // derive it from jitter while stopped, or the truck spins on the spot.
+  // derive it from jitter while stopped, or the truck spins on the spot. With
+  // the gyro live this is no longer the thing that turns the truck, it is the
+  // thing that stops the gyro's integration drifting, so it pulls gently.
   let want: number | null = null;
   if (f.head !== null && (f.spd ?? 0) > 1.4) want = (f.head * Math.PI) / 180;
   else if (real.prev) {
     const [px, pz] = toLocal(real.prev.lat, real.prev.lon);
-    if (Math.hypot(tx - px, tz - pz) > 4) want = Math.atan2(tx - px, -(tz - pz));
+    const d = Math.hypot(tx0 - px, tz0 - pz);
+    const dtf = Math.max(0.2, (f.at - real.prev.at) / 1000);
+    // TWO FIXES FOUR METRES APART ARE NOT A BEARING when both are ±8m — that is
+    // the shape of the noise, not a direction of travel. The old threshold was a
+    // flat 4m, and measured with a parked car and a phone being knocked about in
+    // its cradle it turned the truck through fifty degrees of pure jitter. It
+    // has to clear the receiver's own accuracy AND amount to walking pace.
+    if (d > Math.max(6, f.acc * 0.75) && d / dtf > 1.4) want = Math.atan2(tx0 - px, -(tz0 - pz));
   }
   if (want !== null) {
+    // A course is as stale as the fix it came on, and mid-bend that is a whole
+    // corner of error: anchoring to it dragged the truck ten degrees wide of a
+    // 9°/s curve. The gyro knows how far the car has turned since, so the
+    // anchor is carried forward the same way the position is — but only when
+    // the car is moving, or a jostled cradle at the lights gets multiplied by
+    // two seconds and thrown at the heading.
+    if (gyroLive() && Math.abs(state.speed) > 0.7) want += imu.yaw * Math.min(stale, 2);
     const d = Math.atan2(Math.sin(want - state.heading), Math.cos(want - state.heading));
-    state.heading += d * (1 - Math.exp(-2.5 * dt));
+    state.heading += d * (1 - Math.exp(-(gyroLive() ? 0.8 : 2.5) * dt));
   }
   // Speed is reported, not integrated: the odometer and the engine note should
   // agree with the car you are sitting in, not with a differentiated position.
   // A STALE FIX IS NOT A SPEED. Holding the last reported figure leaves a
   // stationary truck reading 50km/h under a tunnel, which is the one number on
-  // this screen a driver might actually believe. After three seconds without a
-  // sample the speedo winds down, and the coordinate line says why.
-  const stale = (performance.now() - f.at) / 1000;
+  // this screen a driver might actually believe — and the accelerometer is no
+  // help there, since a car at a constant 50 and a car parked read exactly the
+  // same. After three seconds without a sample the speedo winds down, and the
+  // coordinate line says why.
   const target = stale > 3 ? 0
-    : f.spd !== null ? Math.abs(f.spd)
-    : Math.hypot(tx - state.x, tz - state.z) / Math.max(dt, 0.016);
-  state.speed += (target - state.speed) * (1 - Math.exp(-2 * dt));
+    : f.spd !== null
+      // The reported speed is as old as the fix it came on. Braking hard, that
+      // is a couple of m/s of anchor pulling the speedo back UP while the car
+      // is slowing, so it is carried forward on the accelerometer like
+      // everything else — bounded, because a runaway integration here is a
+      // speedo that lies.
+      ? Math.max(0, Math.abs(f.spd) + (accelLive() ? clamp(imu.along * Math.min(stale, 1.5), -8, 8) : 0))
+      : Math.hypot(tx - state.x, tz - state.z) / Math.max(dt, 0.016);
+  // Hand the fast end over when the accelerometer has it: pulling hard toward a
+  // second-old speed undoes the trim it just applied. Still an anchor, just a
+  // slower one, so the integration can never run away from the receiver.
+  state.speed += (target - state.speed) * (1 - Math.exp(-(accelLive() && stale < 3 ? 0.7 : 2) * dt));
   // RE-ANCHOR, BUT ONLY AT A STANDSTILL. The chart and the fog are canvases
   // baked around the spawn and 12km wide; past about 5km out the minimap has
   // nothing left to draw. The 3D world, the roads and the survey are all
@@ -9054,6 +9311,11 @@ function truckSpec(): Record<string, number> {
 // get wrong by eye — on a portrait phone the 55° fov is VERTICAL, so the
 // horizontal one is only ~30° and a stand-off that looks generous in plan puts
 // the truck across half the screen. Percentages, not vibes.
+/** Integrated sim time against wall time. dt is capped at 50ms, so on a slow
+ *  frame the world quietly runs SLOWER than the clock — which any test that
+ *  compares an integrated path against a real-time script needs to know. */
+(window as unknown as { __clock?: object }).__clock = (): object =>
+  ({ wallS: +(performance.now() / 1000).toFixed(2), simS: +simT.toFixed(2), frames: simN });
 (window as unknown as { __frame?: object }).__frame = (): object => {
   // The HULL's own extents, in car-local space. `setFromObject` would swallow
   // the halo ring and the 26m beam cones and report 200%-of-screen nonsense.
@@ -9733,12 +9995,39 @@ function meshHeightAt(x: number, z: number): number | null {
 });
 (window as unknown as { __toll?: object }).__toll = (x: number, z: number): [number, number] => localToLatLon(x, z);
 (window as unknown as { __feed?: object }).__feed =
-  (lat: number, lon: number, head: number | null = null, spd: number | null = null, acc = 8): void => {
+  (lat: number, lon: number, head: number | null = null, spd: number | null = null, acc = 8,
+    ageMs = 0): void => {
     real.on = true;
     real.prev = real.fix;
-    real.fix = { lat, lon, acc, head, spd, at: performance.now() };
+    real.fix = { lat, lon, acc, head, spd, at: performance.now() - ageMs };
+    if (real.prev?.spd != null && spd != null) {
+      imuOnFix(spd - real.prev.spd, (real.fix.at - real.prev.at) / 1000);
+    } else { imu.sx = imu.sy = imu.sz = 0; imu.sa = 0; imu.sn = 0; }
     real.err = '';
   };
+/** What the phone's instruments are contributing, and whether they are being
+ *  believed — the only way to tell a live gyro from a granted-but-silent one. */
+(window as unknown as { __imu?: object }).__imu = (): object => ({
+  on: imu.on, err: imu.err, samples: imu.n, ageMs: imu.at ? Math.round(performance.now() - imu.at) : null,
+  gyroLive: gyroLive(), accelLive: accelLive(),
+  yawDegS: +((imu.yaw * 180) / Math.PI).toFixed(2),
+  gbiasDegS: +((imu.gbias * 180) / Math.PI).toFixed(3),
+  along: +imu.along.toFixed(3), abias: +imu.abias.toFixed(3),
+  up: [imu.ux, imu.uy, imu.uz].map((v) => +v.toFixed(3)),
+  fwd: [imu.fx, imu.fy, imu.fz].map((v) => +v.toFixed(3)),
+  fwdEvidence: +imu.fw.toFixed(2),
+});
+/** One fusion step, at a dt of the caller's choosing. Headless renders this
+ *  scene at two frames a second, so a test that let the render loop drive the
+ *  filter measured the frame rate and called it tracking error. */
+(window as unknown as { __stepReal?: object }).__stepReal = (dt: number): boolean => stepReal(dt);
+/** Attach the motion listener without the permission dance — the harness has no
+ *  sensors to ask for, so it dispatches synthetic DeviceMotionEvents instead. */
+(window as unknown as { __imuForce?: object }).__imuForce = (): void => {
+  if (imu.on) return;
+  addEventListener('devicemotion', onMotion);
+  imu.on = true; imu.err = '';
+};
 (window as unknown as { __cpdraw?: object }).__cpdraw = (): object =>
   ({ n: cpDraw.length, hidden: cpDraw.filter((c) => c.hid).length,
     d: cpDraw.map((c) => ({ d: Math.round(c.d), hid: c.hid })).slice(0, 12) });
@@ -12077,6 +12366,7 @@ addEventListener('visibilitychange', () => {
 
 // ── main loop ──────────────────────────────────────────────────────
 let last = performance.now();
+let simT = 0, simN = 0;   // integrated sim seconds / frames, read by __clock()
 let streamAt = 0;
 let miniAt = 0;
 // The co-driver's slow tick: the next bend on this road, refreshed well below
@@ -12365,6 +12655,7 @@ function tick(now: number): void {
   const paused = (menu.tab() !== null || hidden) && !real.on;
   const dt = paused ? 0 : Math.min(0.05, (now - last) / 1000);
   last = now;
+  simT += dt; simN++;
   const raw2 = real.on || paused ? { throttle: 0, steer: 0, brake: false } : input();
   // FLYING THE DRONE MEANS NOT DRIVING. The rig stays exactly where you left
   // it — that is the whole point of scouting ahead — so the controls are handed
@@ -14656,6 +14947,17 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
           : `±${Math.round(f.acc)}M`;
         const col = !f || age > 12 ? UI.bad : f.acc > 25 ? UI.gold : UI.good;
         textEdgeS(s, pad + 1 + textSW(g) + 5, infoY + 16, col);
+        // Whether the phone's own instruments are filling the second between
+        // fixes. On a windscreen mount this is the difference between a smooth
+        // drive and a stuttering one, and it fails SILENTLY — a refused motion
+        // permission, or a cradle that never sees an acceleration to learn its
+        // forward axis from, both look exactly like a working IMU otherwise.
+        // GYRO is turning the truck; IMU is that plus trimming its speed.
+        const tag = !imu.on ? '' : accelLive() ? 'IMU' : gyroLive() ? 'GYRO' : '';
+        if (tag) {
+          textEdgeS(tag, pad + 1 + textSW(g) + 5 + textSW(s) + 5, infoY + 16,
+            tag === 'IMU' ? UI.good : UI.soft);
+        }
       }
     }
   }
