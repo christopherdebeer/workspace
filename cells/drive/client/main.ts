@@ -11058,7 +11058,12 @@ const Q = new URLSearchParams(location.search);
 // thumb, and a redeploy per guess is not an iteration loop.
 const STICK_ARC = Number(Q.get('arc') ?? 95) * DEG;
 const STICK_BOUND = Number(Q.get('bound') ?? 120) * DEG;
-const STICK_ARC_REV = Number(Q.get('rarc') ?? 55) * DEG;
+// The braking half needs its lock plateau to MATCH the driving half's, not to
+// start unwinding the moment you cross. At 55 the sweep gave a 30-degree region
+// of drive-with-full-lock and a FIVE-degree one of brake-with-full-lock — so
+// trail-braking, the exact thing a corner is made of, landed on a knife edge.
+// 30 makes the two plateaus the same width.
+const STICK_ARC_REV = Number(Q.get('rarc') ?? 30) * DEG;
 /**
  * One thumb position → what the truck is being asked to do. Pure, so a test can
  * sweep the whole control surface without a pointer: `ax` is the steering
