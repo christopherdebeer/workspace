@@ -5403,6 +5403,20 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const ddx = bx2 - ax2, ddz = bz2 - az2, l = Math.hypot(ddx, ddz) || 1;
     return [-ddz / l, ddx / l];
   };
+  /** The MITRED KERB at a station: the same bisector, scaled to the road's own
+   *  half-width. Everything that hangs off the kerb — the fascia, the parapet,
+   *  the batter's inboard edge — is placed on this rather than on the bay's own
+   *  normal, so neighbouring bays share the point exactly and none of the three
+   *  breaks at a corner. The carriageway's gore reaches it too, so the tarmac
+   *  goes out to where its own furniture stands. */
+  const kerbMitre = (j: number, sgn: number, hw: number): [number, number] => {
+    const [px1, pz1] = bayN(j - 1), [px2, pz2] = bayN(j);
+    const mx2 = (px1 + px2) * 0.5, mz2 = (pz1 + pz2) * 0.5;
+    const m = Math.hypot(mx2, mz2);
+    if (m < 0.2) return [px2 * hw * sgn, pz2 * hw * sgn];
+    const k = hw * clamp(1 / m, 1, 2.4);
+    return [(mx2 / m) * k * sgn, (mz2 / m) * k * sgn];
+  };
   /** …and the MITRED outward reach at a STATION: the bisector of the two bays
    *  meeting there, lengthened so neighbouring strips' outer corners coincide.
    *  Scaled to the 2.2m the batter's step arithmetic is written in. */
@@ -5454,21 +5468,32 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       for (const sg of [1, -1]) {
         const px1 = x0 + pnx * sg, pz1 = z0 + pnz * sg;      // previous bay's kerb
         const cx1 = x0 + nx * sg, cz1 = z0 + nz * sg;        // this bay's kerb
-        if (Math.hypot(cx1 - px1, cz1 - pz1) < 0.02) continue;
+        const [mkx, mkz] = kerbMitre(i, sg, width / 2);      // where the furniture stands
+        const mx1 = x0 + mkx, mz1 = z0 + mkz;
         const ky = sg > 0 ? y00 : y01;
-        // Wound both ways by the two-sided material, so which side is "outside"
-        // does not have to be worked out — the inside one is degenerate-ish and
-        // lands under the tarmac either way.
-        verts.push(x0, cy, z0, px1, ky, pz1, cx1, ky, cz1);
-        uvs.push(0.5, v0, sg > 0 ? 0 : 1, v0, sg > 0 ? 0 : 1, v0);
-        if (track) {
-          const [tr2, tg2, tb2] = terrainPalette(elev[i] + baseElev, 0, sampleCover(x0, z0));
-          for (let k = 0; k < 3; k++) cols.push(tr2 * 1.06, tg2 * 0.99, tb2 * 0.9);
-        } else {
-          const c2 = tint ?? [1, 1, 1];
-          for (let k = 0; k < 3; k++) cols.push(c2[0], c2[1], c2[2]);
-        }
-        spanStats.gores++;
+        // TWO triangles, out to the mitred point and back. One triangle from
+        // kerb to kerb closes the wedge between the bays but stops short of
+        // where the parapet, the fascia and the batter now stand, which left a
+        // sliver of daylight between the tarmac and its own edge furniture. No
+        // threshold either: the first version skipped anything under 2cm, which
+        // is most of a gentle curve — a long shallow bend is a great many small
+        // wedges, and skipping each one individually still leaves the road
+        // notched the whole way round.
+        const push3 = (ax2: number, az2: number, bx2: number, bz2: number): void => {
+          if (Math.hypot(bx2 - ax2, bz2 - az2) < 0.002) return;
+          verts.push(x0, cy, z0, ax2, ky, az2, bx2, ky, bz2);
+          uvs.push(0.5, v0, sg > 0 ? 0 : 1, v0, sg > 0 ? 0 : 1, v0);
+          if (track) {
+            const [tr2, tg2, tb2] = terrainPalette(elev[i] + baseElev, 0, sampleCover(x0, z0));
+            for (let k = 0; k < 3; k++) cols.push(tr2 * 1.06, tg2 * 0.99, tb2 * 0.9);
+          } else {
+            const c2 = tint ?? [1, 1, 1];
+            for (let k = 0; k < 3; k++) cols.push(c2[0], c2[1], c2[2]);
+          }
+          spanStats.gores++;
+        };
+        push3(px1, pz1, mx1, mz1);
+        push3(mx1, mz1, cx1, cz1);
       }
     }
     pnx = nx; pnz = nz;
@@ -5502,8 +5527,15 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       const bot: number[] = [];
       const drop: number[] = [];
       for (const sgn of [1, -1]) {
-        const ex0 = x0 + nx * sgn, ez0 = z0 + nz * sgn;
-        const ex1 = x1 + nx * sgn, ez1 = z1 + nz * sgn;
+        // THE MITRED KERB, so the fascia, the parapet and the batter below all
+        // start and finish on the point their neighbours use. On the bay's own
+        // normal they each stepped at every corner: the barrier opened a gap you
+        // could see through on any bend worth calling a bend, and the earth and
+        // the fascia notched with it.
+        const [k0x, k0z] = kerbMitre(i, sgn, width / 2);
+        const [k1x, k1z] = kerbMitre(i + 1, sgn, width / 2);
+        const ex0 = x0 + k0x, ez0 = z0 + k0z;
+        const ex1 = x1 + k1x, ez1 = z1 + k1z;
         const ey0 = sgn > 0 ? y00 : y01, ey1 = sgn > 0 ? y10 : y11;
         const g0 = Math.min(sampleHeight(ex0, ez0), sampleHeight(ex0 + ox * sgn, ez0 + oz * sgn));
         const g1 = Math.min(sampleHeight(ex1, ez1), sampleHeight(ex1 + ox * sgn, ez1 + oz * sgn));
