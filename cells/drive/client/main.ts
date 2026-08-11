@@ -4248,7 +4248,7 @@ const spanStats = {
   piers: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0, cats: 0, posts: 0,
   // Why a kerb quad did or did not get a batter — one counter per branch, so
   // "the fill stops halfway along this road" is attributable rather than argued.
-  fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0, fillCap: 0,
+  fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0, fillCap: 0, gores: 0,
   // How big the gap actually was in the quads we declined to fill, banded —
   // so "52% had no gap" can be checked rather than believed.
   noGapBand: [0, 0, 0, 0] as number[], fillQ: 0, fillM2: 0,
@@ -5416,6 +5416,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const scale = 2.2 * clamp(1 / m, 1, 2.4);
     return [(mx2 / m) * scale * sgn, (mz2 / m) * scale * sgn];
   };
+  let pnx = 0, pnz = 0;   // the previous bay's half-width normal, for the gore
   let along = 0; // metres travelled — v wraps every 20m (the roadTex period)
   let pierRun = PIER_SPAN;  // so the first bay of a span gets one
   for (let i = 0; i < n - 1; i++) {
@@ -5435,6 +5436,42 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       x1 + nx, y10, z1 + nz, x1 - nx, y11, z1 - nz, x0 - nx, y01, z0 - nz,
     );
     uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
+    // THE CORNER GORE. Each bay is a rectangle about its OWN centreline, so at a
+    // bend the outgoing bay's kerb starts where the incoming bay's kerb
+    // finished — but rotated about the station. On the inside of the turn the
+    // two overlap harmlessly; on the OUTSIDE they part, and the wedge between
+    // them is a hole in the carriageway. At Trollstigen's hairpins that wedge is
+    // most of the road.
+    //
+    // Filled with a triangle per side, apex on the centreline, spanning from
+    // the previous bay's kerb to this one's. A gore rather than a mitre on
+    // purpose: mitring moves the kerb outward by 1/cos(half the turn), which at
+    // a hairpin is a carriageway several times its own width, and `Seg.hw` — the
+    // collision and surface half-width — would no longer describe the road that
+    // is drawn. The gore adds only the missing wedge and leaves the width alone.
+    if (i > 0) {
+      const cy = (flat ? prof[i] : elev[i]) + lift;
+      for (const sg of [1, -1]) {
+        const px1 = x0 + pnx * sg, pz1 = z0 + pnz * sg;      // previous bay's kerb
+        const cx1 = x0 + nx * sg, cz1 = z0 + nz * sg;        // this bay's kerb
+        if (Math.hypot(cx1 - px1, cz1 - pz1) < 0.02) continue;
+        const ky = sg > 0 ? y00 : y01;
+        // Wound both ways by the two-sided material, so which side is "outside"
+        // does not have to be worked out — the inside one is degenerate-ish and
+        // lands under the tarmac either way.
+        verts.push(x0, cy, z0, px1, ky, pz1, cx1, ky, cz1);
+        uvs.push(0.5, v0, sg > 0 ? 0 : 1, v0, sg > 0 ? 0 : 1, v0);
+        if (track) {
+          const [tr2, tg2, tb2] = terrainPalette(elev[i] + baseElev, 0, sampleCover(x0, z0));
+          for (let k = 0; k < 3; k++) cols.push(tr2 * 1.06, tg2 * 0.99, tb2 * 0.9);
+        } else {
+          const c2 = tint ?? [1, 1, 1];
+          for (let k = 0; k < 3; k++) cols.push(c2[0], c2[1], c2[2]);
+        }
+        spanStats.gores++;
+      }
+    }
+    pnx = nx; pnz = nz;
     // A TRACK TAKES THE GROUND'S OWN COLOUR. Two ruts painted a fixed brown sat
     // on the hillside as a stripe of somebody else's palette; sampled from
     // `terrainPalette` at the rut itself, they read as the ground worn through
