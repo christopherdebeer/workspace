@@ -5423,7 +5423,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     for (let s = CATS_EVERY - catsRun; s < L; s += CATS_EVERY) {
       const t = s / (L || 1);
       stud(xA + (xB - xA) * t, yA + (yB - yA) * t + RAIL_H - 0.24,
-        zA + (zB - zA) * t, ux, uz, 0.15, 0.11);
+        zA + (zB - zA) * t, ux, uz, 0.12, 0.09);
     }
     catsRun = (catsRun + L) % CATS_EVERY;
   };
@@ -5740,16 +5740,17 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           const cyDeck = (y00 + y01) / 2 + ((y10 + y11) / 2 - (y00 + y01) / 2) * t;
           // Sat ON the tarmac: the quad is vertical, so it is raised by its own
           // half-height plus a little, or half of it is buried in the road.
-          // Larger than a real road stud on purpose. The scene renders at a
-          // fraction of screen resolution and is magnified, so at sixty metres
-          // a 0.34m marker is about a pixel and a half and at ninety it is gone
-          // — not dim, GONE, because a sub-pixel triangle either catches a
-          // pixel centre or it does not. Size is what buys distance here, not
-          // brightness.
+          // Still oversized against a real 10cm stud — 0.30m across — because
+          // the scene renders at a fraction of screen resolution and is
+          // magnified, so a sub-pixel triangle does not dim, it vanishes: it
+          // either catches a pixel centre or it does not. It was 0.52m across
+          // while the road was drawing over its own studs and size was the only
+          // lever that seemed to reach; with the drape order fixed the run goes
+          // to the vanishing point and the marker can shrink toward life size.
           // Centre raised so the quad's LOWER edge clears the tarmac rather
-          // than grazing it: at +0.17 with a 0.16 half-height the bottom sat at
-          // one centimetre, which is inside every rounding the depth buffer has.
-          stud(cx, cyDeck + 0.22, cz, dx / len, dz / len, 0.26, 0.16);
+          // than grazing it: bottom at 6cm, well outside anything the depth
+          // buffer rounds away.
+          stud(cx, cyDeck + 0.15, cz, dx / len, dz / len, 0.15, 0.09);
         }
       }
       // ── roadside furniture ──
@@ -10008,7 +10009,7 @@ function meshHeightAt(x: number, z: number): number | null {
       if (b < 0) continue;
       const a = acc[b];
       a.n++; a.rr += rr; a.face += face; a.cone += cone; a.fall += fall;
-      a.px += 0.52 * pxPerM * (renderer.getPixelRatio() || 1) * (PIX_H / innerHeight);
+      a.px += 0.30 * pxPerM * (renderer.getPixelRatio() || 1) * (PIX_H / innerHeight);
     }
   }
   const out: Record<string, unknown> = {};
