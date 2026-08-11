@@ -5805,10 +5805,20 @@ const CULV_MAX = 9;        // deepest a culvert goes before we call the DEM wron
 const CULV_MIN = 0.7;      // burial past which a run earns a bore rather than a dip
 const CULV_CLR = 0.35;     // headroom from invert to soffit on a plain pipe
 const CULV_RIG = 3.2;      // …and the bore height that fits a rig, where there is room
+// Slab and cover between a culvert's soffit and the carriageway over it. The
+// bore is sized down to respect this, and if it cannot the bore is not built.
+const CULV_UNDER = 0.8;
 // A channel is a `Seg` — same shape, same grid helpers — carrying the bed
 // height in ya/yb rather than a deck.
 const channelGrid = new Map<string, Seg[]>();
 const culvertStats = { ways: 0, runs: 0, rigSized: 0, m: 0, deepest: 0, uphillFixed: 0, crossings: 0,
+  // Crossings with no room for a bore under the deck — the water passes at
+  // grade and nothing is built, which is better than concrete in the road.
+  tooTight: 0,
+  // The claim: a soffit never reaches the carriageway. Smallest gap between any
+  // bore's roof and the deck over it, in metres. Anything at or below zero is
+  // concrete in the road.
+  minUnder: Infinity,
   // The claim this whole function exists to make, checked where it is made: the
   // largest rise between consecutive stations IN FLOW ORDER, over every
   // watercourse built. Monotone by construction, so anything but 0 is a bug.
@@ -6074,6 +6084,29 @@ function flushCulverts(t: HeightTile): void {
 }
 /** The bore itself: two walls, a soffit, a headwall at each mouth. Sized to
  *  take a rig where the cover allows one, and a pipe where it does not. */
+/**
+ * THE LOWEST DECK OVER A POINT, asked with the SAME reach the crossing test
+ * uses. `roadHeightAt` wants a point within `hw + 0.8` — inside the tarmac —
+ * while a culvert crossing is detected out to `hw + 2.3`, so every station that
+ * qualified as a crossing sat outside the height query and answered null. The
+ * bore then sized itself against the field after all, which is the bug this was
+ * supposed to fix, silently.
+ */
+function deckOver(x: number, z: number, margin: number): number | null {
+  let best: number | null = null;
+  for (let gx = -1; gx <= 1; gx++) for (let gz = -1; gz <= 1; gz++) {
+    for (const sg of roadGrid.get(`${Math.floor(x / GRID) + gx},${Math.floor(z / GRID) + gz}`) ?? []) {
+      if (sg.tk || sg.ya === undefined || sg.yb === undefined) continue;
+      const dx = sg.bx - sg.ax, dz = sg.bz - sg.az;
+      const t = clamp(((x - sg.ax) * dx + (z - sg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+      const px = sg.ax + dx * t, pz = sg.az + dz * t;
+      if (Math.hypot(x - px, z - pz) > sg.hw + 0.8 + margin) continue;
+      const y = (sg.ya as number) + ((sg.yb as number) - (sg.ya as number)) * t;
+      if (best === null || y < best) best = y;
+    }
+  }
+  return best;
+}
 function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
   a: number, b: number, width: number, core0: number, core1: number): void {
   if (b <= a) return;
@@ -6081,14 +6114,26 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
   // extended a station past the tarmac at each end so the headwalls stand in
   // open channel; those stations have almost no ground over them by
   // construction, and letting them into the minimum sized every bore at zero.
+  // THE CEILING IS THE ROAD, not the ground. Cover was measured against the
+  // natural field — and a road in a cutting sits BELOW that field, so a bore
+  // sized to clear the ground rose straight through the carriageway. Reported
+  // as the conduit colliding with traffic on the road above, which is exactly
+  // what it was: a concrete box standing in the tarmac. The ceiling is now the
+  // lower of the ground and the deck itself, less the slab and cover a real
+  // culvert carries under a road.
   let cover = Infinity;
-  for (let i = core0; i <= core1; i++) cover = Math.min(cover, g[i] - inv[i]);
+  for (let i = core0; i <= core1; i++) {
+    const deck = deckOver(dense[i][0], dense[i][1], 1.5);
+    const roof = deck === null ? g[i] : Math.min(g[i], deck - CULV_UNDER);
+    cover = Math.min(cover, roof - inv[i]);
+  }
   if (!isFinite(cover)) return;
-  // How tall the bore can be: the shallowest cover along the run, less a metre
-  // of earth over the soffit so the roof is not poking out of the road.
-  const room = cover - 1;
+  const room = cover;
+  // No room at all is a real answer: the water passes at grade and there is
+  // nothing to build. Drawing a bore anyway is what put concrete in the road.
+  if (room < 0.2) { culvertStats.tooTight++; return; }
   const rig = room >= CULV_RIG;
-  const H = rig ? CULV_RIG : Math.max(CULV_CLR, Math.min(room, 1.8));
+  const H = rig ? CULV_RIG : clamp(room, CULV_CLR, 1.8);
   const W = Math.max(width, rig ? 4.4 : 1.6);
   culvertStats.runs++;
   if (rig) culvertStats.rigSized++;
@@ -6108,14 +6153,21 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
     push(x0 + nx, yA, z0 + nz, x1 + nx, yB, z1 + nz, x0 + nx, cA, z0 + nz, x1 + nx, cB, z1 + nz);
     push(x0 - nx, yA, z0 - nz, x1 - nx, yB, z1 - nz, x0 - nx, cA, z0 - nz, x1 - nx, cB, z1 - nz);
     push(x0 + nx, cA, z0 + nz, x1 + nx, cB, z1 + nz, x0 - nx, cA, z0 - nz, x1 - nx, cB, z1 - nz);
-    // The walls are solid. The soffit is not in the grid — the same rule the
-    // road tunnels use, so a chase camera riding above the bank is not shoved.
-    for (const sgn of [1, -1]) {
-      addSeg(wallGrid, { ax: x0 + nx * sgn, az: z0 + nz * sgn, bx: x1 + nx * sgn, bz: z1 + nz * sgn,
-        hw: 0, ya: Math.max(cA, cB), yb: Math.max(cA, cB) });
-    }
+    // NOTHING GOES IN THE WALL GRID. A road tunnel's walls are solid because
+    // you drive BETWEEN them; a culvert is buried, and the only thing near
+    // enough to hit its walls is the traffic on the road over the top. Putting
+    // them in the grid gave every vehicle crossing the culvert a wall to bounce
+    // off, which is the fault this pass exists to fix — the geometry was never
+    // the whole problem, the collision was.
   }
   if (cover > culvertStats.deepest) culvertStats.deepest = cover;
+  // Measured on the BUILT geometry, not on the sizing arithmetic — the point is
+  // to catch a soffit in the tarmac however it got there.
+  for (let i = core0; i <= core1; i++) {
+    const deck = deckOver(dense[i][0], dense[i][1], 1.5);
+    if (deck === null) continue;
+    culvertStats.minUnder = Math.min(culvertStats.minUnder, deck - (inv[i] + H));
+  }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tv), 3));
   geo.computeVertexNormals();
@@ -6129,8 +6181,15 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
     const [x0, z0] = dense[i0], [x1, z1] = dense[i1];
     const ang = Math.atan2(z1 - z0, x1 - x0);
     const [px, pz] = dense[end];
-    const wall = new THREE.Mesh(new THREE.BoxGeometry(W + 2.4, H + 1.1, 0.7), MAT.portal);
-    wall.position.set(px, inv[end] + (H + 1.1) / 2 - 0.4, pz);
+    // The headwall stands proud at the MOUTH, where there is no road overhead —
+    // but the mouth is only a station clear of the tarmac, so its top is held
+    // under the deck too if there happens to be one.
+    const hdeck = deckOver(px, pz, 1.5);
+    const hi = hdeck === null ? Infinity : hdeck - CULV_UNDER;
+    const top = Math.min(inv[end] + H + 0.7, hi);
+    const hh = Math.max(0.4, top - (inv[end] - 0.4));
+    const wall = new THREE.Mesh(new THREE.BoxGeometry(W + 2.4, hh, 0.7), MAT.portal);
+    wall.position.set(px, inv[end] - 0.4 + hh / 2, pz);
     wall.rotation.y = ang + Math.PI / 2;
     worldGroup.add(wall);
   }
@@ -9744,6 +9803,7 @@ function meshHeightAt(x: number, z: number): number | null {
  *  than a culvert's worth — the DEM describing a watershed it cannot resolve. */
 (window as unknown as { __culverts?: object }).__culverts = (): object =>
   ({ ...culvertStats, m: Math.round(culvertStats.m),
+    minUnder: isFinite(culvertStats.minUnder) ? +culvertStats.minUnder.toFixed(2) : null,
     deepest: +culvertStats.deepest.toFixed(1),
     worstRise: +culvertStats.worstRise.toFixed(4), channels: channelGrid.size });
 /**
