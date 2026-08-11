@@ -1974,15 +1974,24 @@ function retroreflective(mat: THREE.Material): THREE.Material {
         // the back of a sign is dark because the TEXTURE is, not because the
         // geometry faces away.
         float rrFace = abs(dot(normalize(vWNrm), rrDirToCar));
-        // Inside the beam? A tight cone: a sign off to the side stays dark
-        // until you are pointed at it, which is what makes a bend light up as
-        // you turn into it rather than all at once.
+        // Inside the beam? A cone, but nothing like as tight as it was. At
+        // pow 22 a reflector fifteen degrees off the axis returned less than
+        // half, and thirty degrees was four per cent — so on any bend the studs
+        // AHEAD went dark and only the ones beside the truck lit, which reads
+        // as "cat's eyes only work right in front of me". A real high beam has
+        // a hot spot you can see round a curve with. pow 7 keeps a sign off to
+        // the side dark until you are roughly pointed at it, and lights the
+        // line of the road through a bend, which is the entire purpose.
         float rrAim = max(dot(uBeamDir, -rrDirToCar), 0.0);
-        float rrCone = pow(rrAim, 22.0);
+        float rrCone = pow(rrAim, 7.0);
         // Real retroreflectors fall off far more slowly than a diffuse surface
         // (they return the beam rather than scattering it), so this is 1/d, not
         // 1/d². 90m of usable range on a dark road.
-        float rrFall = clamp(1.0 - rrDist / 90.0, 0.0, 1.0);
+        // 1/d, and now out to 180m rather than 90. Retroreflectors are the
+        // longest-range thing on a dark road by a wide margin — that is what
+        // they are for — and halving the brightness by 45m put the far end of
+        // the line under the noise floor long before it went sub-pixel.
+        float rrFall = clamp(1.0 - rrDist / 180.0, 0.0, 1.0);
         float rr = pow(rrFace, 3.0) * rrCone * rrFall * uBeamAmt;
         // 1.3, not 2.6. At 2.6 the panel clipped to flat white in the beam and
         // the chevrons went with it — a sign you cannot read is a lamp. This
@@ -5673,7 +5682,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           const cyDeck = (y00 + y01) / 2 + ((y10 + y11) / 2 - (y00 + y01) / 2) * t;
           // Sat ON the tarmac: the quad is vertical, so it is raised by its own
           // half-height plus a little, or half of it is buried in the road.
-          stud(cx, cyDeck + 0.13, cz, dx / len, dz / len, 0.17, 0.11);
+          // Larger than a real road stud on purpose. The scene renders at a
+          // fraction of screen resolution and is magnified, so at sixty metres
+          // a 0.34m marker is about a pixel and a half and at ninety it is gone
+          // — not dim, GONE, because a sub-pixel triangle either catches a
+          // pixel centre or it does not. Size is what buys distance here, not
+          // brightness.
+          stud(cx, cyDeck + 0.17, cz, dx / len, dz / len, 0.26, 0.16);
         }
       }
       // ── roadside furniture ──
@@ -7991,7 +8006,10 @@ for (const sx of [-0.62, 0.62]) {
 // One spotlight for the actual pool of light (two would double the cost of
 // every lit material for a difference nobody can see). Intensity is in
 // CANDELA since three r155 — the old "3.2" was a rounding error, not a lamp.
-const headSpot = new THREE.SpotLight(0xfff0d0, 90, 110, 0.52, 0.65, 1.0);
+// Range and intensity are set per frame — see the night boost below. These are
+// the DAY values, where the beam is a hint rather than a searchlight.
+const HEAD_DAY = { i: 90, d: 110 }, HEAD_NIGHT = { i: 260, d: 230 };
+const headSpot = new THREE.SpotLight(0xfff0d0, HEAD_DAY.i, HEAD_DAY.d, 0.52, 0.65, 1.0);
 headSpot.position.set(0, 0.78 * SY, -2.0); // likewise
 headSpot.target.position.set(0, -1.6, -30);
 car.add(headSpot, headSpot.target);
@@ -12609,6 +12627,25 @@ function tick(now: number): void {
   tailMat.color.setHex(brake ? 0xff3a24 : state.speed < -0.5 ? 0xe8ded0 : 0xa8221a);
   // Volumetric beam: strongest where the eye is nearly in line with it.
   beamMat.uniforms.uAmp.value = camMode === 'cab' ? 1.25 : camMode === 'chase' ? 1 : 0.25;
+  // HIGH BEAM AFTER DARK. One lamp spec cannot serve both: 110m of throw is
+  // generous in daylight, where the beam is only a hint, and short at night,
+  // where it is the only thing telling you where the road goes. Faded by the
+  // same `dayF` the sky and the sun use, so dusk is a ramp rather than a
+  // switch, and the cone that draws the light is lengthened with it.
+  {
+    const t2 = 1 - dayF;
+    headSpot.intensity = HEAD_DAY.i + (HEAD_NIGHT.i - HEAD_DAY.i) * t2;
+    headSpot.distance = HEAD_DAY.d + (HEAD_NIGHT.d - HEAD_DAY.d) * t2;
+    // The aim point moves OUT along the same line rather than down it: scaling
+    // both components keeps the dip angle and pushes the pool of light further
+    // ahead. Dropping the target instead would aim a high beam at the tarmac.
+    const k = 1 + 1.3 * t2;
+    headSpot.target.position.set(0, -1.6 * k, -30 * k);
+    // The visible cone is GEOMETRY — its length is baked into the vertices, so
+    // `uLen` only moves the shading along it. Scale the mesh; leave the uniform
+    // alone, since `vD` is computed from unscaled local z and stays correct.
+    for (const bm of beams) bm.scale.set(1 + 0.5 * t2, 1 + 0.5 * t2, k);
+  }
   // Feed the signs the headlight they answer to: one uniform write for the
   // whole roadside. Taken from the LAMP, not the hull centre — a sign a few
   // metres ahead is well inside the cone from the bumper and outside it from
