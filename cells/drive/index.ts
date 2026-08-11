@@ -34,7 +34,16 @@ const CSP = [
   // …plus api.open-meteo.com, which is the live sky: cloud cover, rain and the
   // wind that pushes the deck across it. No key, CORS open, and if it is
   // unreachable the synthetic weather chain simply keeps running.
-  "connect-src 'self' https://esm.sh https://overpass-api.de https://overpass.kumi.systems https://overpass.osm.jp https://overpass.private.coffee https://s3.amazonaws.com https://nominatim.openstreetmap.org https://api.open-meteo.com",
+  // …and tiles.mapterhorn.com, the ELEVATION. It was added to the client and
+  // not to this line, so every DEM request from a real browser was blocked by
+  // `default-src 'none'` while the headless harness — which relays through
+  // curl and never sees a CSP — measured it working perfectly. The client
+  // treats a thrown fetch as "this tile does not exist", so the whole source
+  // quietly disabled itself and fell back to AWS terrarium: the corrupt data
+  // Mapterhorn was brought in to replace, including the -13,029m hole at
+  // Chapman's Peak. Nothing reported it, because a silent fallback was the
+  // designed behaviour for a genuinely missing tile.
+  "connect-src 'self' https://esm.sh https://overpass-api.de https://overpass.kumi.systems https://overpass.osm.jp https://overpass.private.coffee https://s3.amazonaws.com https://nominatim.openstreetmap.org https://api.open-meteo.com https://tiles.mapterhorn.com",
   "img-src data: blob:",
   // The menu's pixel face (Silkscreen) ships inside the bundle as data: URIs —
   // no font host, so the page stays self-contained.

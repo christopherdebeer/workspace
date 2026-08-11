@@ -324,7 +324,13 @@ async function decodeTerrarium(res: Response, px: number): Promise<Float32Array>
 // which is also how a coarse region degrades gracefully rather than failing.
 const MAPTERHORN = !/[?&]dem=aws/.test(location.search);
 const mthMissing = new Set<string>();
-const demSource = { mth: 0, aws: 0, none: 0 };
+const demSource = { mth: 0, aws: 0, none: 0,
+  // Requests that never left the browser — a CSP block, a DNS failure, an
+  // offline device. NOT the same as a 404, and the difference matters: a 404
+  // means step up the pyramid, a throw means the source is unreachable and
+  // marking its tiles "missing" disables it for the whole session on the
+  // strength of a policy header. Counted so `__demsrc` can say so.
+  mthBlocked: 0 };
 async function fetchMapterhorn(x: number, y: number, z: number): Promise<Float32Array | null> {
   // Up the pyramid until something exists; z6 is the floor (all land has a
   // tile there), and each step up quarters the ground detail we can recover.
@@ -337,11 +343,19 @@ async function fetchMapterhorn(x: number, y: number, z: number): Promise<Float32
       const res = await fetch(`https://tiles.mapterhorn.com/${key}.webp`);
       if (!res.ok) { mthMissing.add(key); continue; }
       raw = await decodeTerrarium(res, 512);
-    } catch {
-      // A tile that will not decode is a tile we do not have. Step UP the
-      // pyramid rather than abandoning the source — bailing out here sent
-      // every request at Chapman's Peak, where nothing exists below z12,
-      // straight back to the corrupt AWS tile.
+    } catch (e) {
+      // A tile that will not DECODE is a tile we do not have: step UP the
+      // pyramid rather than abandoning the source — bailing out here sent every
+      // request at Chapman's Peak, where nothing exists below z12, straight
+      // back to the corrupt AWS tile.
+      //
+      // A request that never LEFT is a different thing entirely. `fetch`
+      // rejects with a TypeError when the policy refuses it, and treating that
+      // as "this tile is absent" walked the whole pyramid marking every level
+      // missing, then did the same for the next tile, until the source was
+      // silently dead for the session. Counted and reported instead, and the
+      // tile is not blamed for it.
+      if (e instanceof TypeError) { demSource.mthBlocked++; return null; }
       mthMissing.add(key);
       continue;
     }
