@@ -9314,6 +9314,11 @@ function truckSpec(): Record<string, number> {
 /** Integrated sim time against wall time. dt is capped at 50ms, so on a slow
  *  frame the world quietly runs SLOWER than the clock — which any test that
  *  compares an integrated path against a real-time script needs to know. */
+(window as unknown as { __phys?: object }).__phys = (): object => {
+  const o: Record<string, number> = {};
+  for (const k of Object.keys(physDbg)) o[k] = +physDbg[k].toFixed(3);
+  return o;
+};
 (window as unknown as { __clock?: object }).__clock = (): object =>
   ({ wallS: +(performance.now() / 1000).toFixed(2), simS: +simT.toFixed(2), frames: simN,
     frameMs: +frameMs.toFixed(1), fps: Math.round(1000 / Math.max(frameMs, 1)) });
@@ -12450,6 +12455,8 @@ addEventListener('visibilitychange', () => {
 // ── main loop ──────────────────────────────────────────────────────
 let last = performance.now();
 let simT = 0, simN = 0;   // integrated sim seconds / frames, read by __clock()
+/** The chassis, one frame deep — see the physics block for what each term is. */
+let physDbg: Record<string, number> = {};
 /** Smoothed WALL-clock frame time. Not derived from `dt`, which is capped at
  *  50ms: on a frame slower than that the two diverge, and the divergence is
  *  exactly the thing worth seeing — the world runs slower than the clock and
@@ -12782,7 +12789,29 @@ function tick(now: number): void {
   // braking, barely any steering — and gravity along the body's pitch makes
   // climbs cost speed and descents pay it back.
   const grip = groundedF;
-  let yawRate = 0;
+  let yawRate = 0;      // what the truck actually turned at
+  let yawWant = 0;      // …and what the wheels were asking for. The gap is understeer.
+  // ── what the contact patch can supply, computed BEFORE anything spends it ──
+  // This used to live below the integration, which meant the steering never saw
+  // it: the yaw rate was a kinematic figure with a speed fudge, free to rotate
+  // the truck at a hundred degrees a second at 110km/h — a corner radius of 17m,
+  // asking five g of a tyre that has one. The heading whipped round while the
+  // velocity carried straight on, which is a SPIN, and the one thing a driver
+  // never gets from a real vehicle by turning the wheel too far.
+  // Tread and compound both act here, on the one thing a tyre actually is: how
+  // much acceleration the contact patch can supply before it lets go.
+  const budget = surf.mu * rigGrip() * tune.grip * GRAV * grip * (1 - wx.wet * 0.28);
+  // Friction circle: hard braking or full throttle eats into cornering.
+  // Only partly — a fully coupled circle makes an arcade car undriveable.
+  const longG = Math.min(Math.abs(thrust), budget);
+  const lateral = Math.sqrt(Math.max(0, budget * budget - longG * longG * 0.5));
+  const gravLat = GRAV * Math.sin(gradeRoll) * grip;   // + = pulled to the car's LEFT
+  // The slope's pull is served first; the corner gets what's left.
+  const spare = Math.max(0, lateral - Math.abs(gravLat));
+  // HOW LOOSE THE GROUND IS, from the one number that already says so. On tarmac
+  // the front washes out and the truck pushes wide; on gravel the REAR gives up
+  // first and the nose comes round instead. Same excess, opposite handling.
+  const loose = clamp((1.05 - surf.mu) / 0.5, 0, 1);
   // PARKED IS A STATE, not a coincidence of forces. With no pedal down and no
   // real speed left, static friction holds the truck on any sane grade —
   // integrating grade-gravity and side-slope pull every frame instead had a
@@ -12806,11 +12835,38 @@ function tick(now: number): void {
     const SRATE = 7 * tune.steer; // full-lock in ~0.14s at STOCK
     steerCur += clamp(steer - steerCur, -SRATE * dt, SRATE * dt);
     if (Math.abs(state.speed) > 0.1) {
-      // Authority decays with speed (like a real wheel): full lock is a parking
-      // move, a nudge at 180 — turn RATE stays sane across the whole range.
-      const authority = (0.15 + 0.85 * grip) * tune.steer / (1 + Math.abs(state.speed) / 12);
-      yawRate = (steerCur * CAR.steerMax * authority * state.speed) / CAR.wheelbase;
+      // WHAT THE WHEELS ARE POINTED AT. A rack does not lose lock with speed —
+      // the old (1 + v/12) divisor was standing in for a grip limit it did not
+      // have. Airborne still costs authority, because a wheel in the air steers
+      // nothing.
+      const steerAng = steerCur * CAR.steerMax * (0.15 + 0.85 * grip) * tune.steer;
+      // …and what that geometry would rotate the truck at, if grip were free.
+      const kin = (state.speed * Math.tan(steerAng)) / CAR.wheelbase;
+      // …and what the tyres will actually hold: a corner at v with yaw ω needs
+      // v·ω of centripetal acceleration, so the fastest the truck can be turned
+      // is spare/v — 17°/s at 110km/h on tarmac, against the 101°/s the old
+      // model handed out. On loose ground the rear lets go before the front, so
+      // a slice of the excess still reaches the heading and the nose comes round.
+      // AIRBORNE THERE IS NO GRIP AND SO NO CAP — a wheel off the ground cannot
+      // be over its limit. Left to the grip term alone the budget goes to zero
+      // mid-jump and takes all steering with it, so the truck would land facing
+      // wherever it took off. The floor fades in exactly as the wheels leave,
+      // and the 15% air authority in `steerAng` still keeps it a nudge.
+      const capW = Math.max(
+        (spare / Math.max(Math.abs(state.speed), 1)) * (1 + loose * 0.75),
+        (1 - grip) * 0.6,
+      ) || 1e-4;
+      // SOFT, not a clip. Past the limit the wheel has to keep meaning something
+      // or the control goes dead in exactly the corner you care about; this
+      // approaches the cap asymptotically, so more lock still buys a little more
+      // rotation and a great deal more slide.
+      const over = Math.abs(kin) / Math.max(capW, 1e-4);
+      yawRate = kin / Math.pow(1 + Math.pow(over, 6), 1 / 6);
       state.heading += yawRate * dt;
+      // What the truck was ASKED for, kept for the slide below: the shortfall
+      // between the commanded corner and the one the tyres allowed is the whole
+      // of understeer, and it is what pushes the truck wide.
+      yawWant = kin;
     }
     state.x += Math.sin(state.heading) * state.speed * dt;
     state.z -= Math.cos(state.heading) * state.speed * dt;
@@ -12825,17 +12881,13 @@ function tick(now: number): void {
   // gravel it keeps running until the scrub bleeds it off. That is the drift.
   if (!real.on) {
     const sH = Math.sin(state.heading), cH = Math.cos(state.heading);
-    // Tread and compound both act here, on the one thing a tyre actually is:
-    // how much acceleration the contact patch can supply before it lets go.
-    const budget = surf.mu * rigGrip() * tune.grip * GRAV * grip * (1 - wx.wet * 0.28);
-    // Friction circle: hard braking or full throttle eats into cornering.
-    // Only partly — a fully coupled circle makes an arcade car undriveable.
-    const longG = Math.min(Math.abs(thrust), budget);
-    const lateral = Math.sqrt(Math.max(0, budget * budget - longG * longG * 0.5));
-    const gravLat = GRAV * Math.sin(gradeRoll) * grip;   // + = pulled to the car's LEFT
-    const demand = state.speed * yawRate;                // + = wants to accelerate RIGHT
-    // The slope's pull is served first; the corner gets what's left.
-    const spare = Math.max(0, lateral - Math.abs(gravLat));
+    // THE SHORTFALL IS MEASURED AGAINST WHAT WAS ASKED FOR, not against what the
+    // truck did. The yaw is now capped at the grip circle, so reading the
+    // ACHIEVED rate here would find the demand always satisfied and the slide
+    // would vanish along with the spin — no drift, no scrub, no gravel. The
+    // commanded corner is the honest input: how far past the tyres the driver
+    // reached is exactly how wide the truck runs.
+    const demand = state.speed * yawWant;                // + = wants to accelerate RIGHT
     const over = Math.max(0, Math.abs(demand) - spare);
     // SATURATING, not linear. Full lock at 110km/h asks for five g of corner;
     // feeding the whole 47m/s² shortfall in as sideways acceleration would fire
@@ -12848,6 +12900,19 @@ function tick(now: number): void {
     if (parkHold) slideV = 0;                            // the handbrake holds sideways too
     state.x += cH * slideV * dt;   // (cos, sin) is the car's own right
     state.z += sH * slideV * dt;
+    // What the chassis is doing, for a test that has no eyes: the commanded
+    // corner, the one grip allowed, and the gap between them. Radius and
+    // lateral g are the two figures that say whether the handling is physical.
+    physDbg = {
+      v: state.speed, steerCur, yawWant, yawRate,
+      radius: Math.abs(yawRate) > 1e-3 ? Math.abs(state.speed / yawRate) : Infinity,
+      latG: Math.abs(state.speed * yawRate) / GRAV,
+      askG: Math.abs(state.speed * yawWant) / GRAV,
+      budget, spare, loose, slideV, grip, mu: surf.mu,
+      // How far the truck is travelling from where it is POINTING. Understeer
+      // shows up here as a small angle with a big radius; a spin as a large one.
+      slipDeg: (Math.atan2(slideV, Math.max(Math.abs(state.speed), 0.01)) * 180) / Math.PI,
+    };
     // Sliding sideways is drag you chose. It also decides what you HEAR and
     // what the wheels throw up.
     if (Math.abs(slideV) > 0.6) state.speed *= Math.exp(-Math.min(1.4, Math.abs(slideV) * 0.16) * dt);
