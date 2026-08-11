@@ -4248,7 +4248,7 @@ const spanStats = {
   piers: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0, cats: 0, posts: 0,
   // Why a kerb quad did or did not get a batter — one counter per branch, so
   // "the fill stops halfway along this road" is attributable rather than argued.
-  fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0,
+  fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0, fillCap: 0,
   // How big the gap actually was in the quads we declined to fill, banded —
   // so "52% had no gap" can be checked rather than believed.
   noGapBand: [0, 0, 0, 0] as number[], fillQ: 0, fillM2: 0,
@@ -4265,7 +4265,18 @@ const spanStats = {
  * sits in has been rebuilt with the cut in it.
  */
 interface Batter { ax: number; az: number; bx: number; bz: number;
-  nx: number; nz: number; y0: number; y1: number; uA: number; uB: number;
+  /** Outward reach at EACH END, not one normal for the whole bay. A bay's own
+   *  normal is perpendicular to that bay alone, so at a corner two neighbouring
+   *  strips splay apart and leave a wedge of bare apron between them — the
+   *  gaps in the batter around every bend. These are MITRED: the average of the
+   *  two segment normals meeting at the station, lengthened by 1/cos(half the
+   *  turn) so the outboard corners of neighbouring strips land on the same
+   *  point and the earth closes. Capped, or a hairpin would throw a spike. */
+  nxA: number; nzA: number; nxB: number; nzB: number;
+  y0: number; y1: number; uA: number; uB: number;
+  /** Nothing adjoins this end — the run starts or stops here, so the earth
+   *  needs a face rather than an open edge. */
+  capA: boolean; capB: boolean;
   fid: number; nm?: string; rail: boolean }
 const pendingBatter: Batter[] = [];
 /**
@@ -4349,8 +4360,8 @@ function flushBatter(t: HeightTile): void {
       // Their KERB LINE, not their reach: −0.8 cancels the slack `onCarriageway`
       // adds for "near a road", so earth may run right up to the tarmac edge and
       // stop, which is what a verge does.
-      if (onCarriageway(b.ax + b.nx * f, b.az + b.nz * f, -0.8, b.fid, b.nm).road
-        || onCarriageway(b.bx + b.nx * f, b.bz + b.nz * f, -0.8, b.fid, b.nm).road) break;
+      if (onCarriageway(b.ax + b.nxA * f, b.az + b.nzA * f, -0.8, b.fid, b.nm).road
+        || onCarriageway(b.bx + b.nxB * f, b.bz + b.nzB * f, -0.8, b.fid, b.nm).road) break;
       best = d;
     }
     return best;
@@ -4378,8 +4389,8 @@ function flushBatter(t: HeightTile): void {
       if (d > lim) break;
       const blocked = (dd: number): boolean => {
         const f = dd / 2.2;
-        return onCarriageway(b.ax + b.nx * f, b.az + b.nz * f, -0.8, b.fid, b.nm).road
-          || onCarriageway(b.bx + b.nx * f, b.bz + b.nz * f, -0.8, b.fid, b.nm).road;
+        return onCarriageway(b.ax + b.nxA * f, b.az + b.nzA * f, -0.8, b.fid, b.nm).road
+          || onCarriageway(b.bx + b.nxB * f, b.bz + b.nzB * f, -0.8, b.fid, b.nm).road;
       };
       if (blocked(d)) {
         // Somewhere between the last good step and this one is the tarmac edge.
@@ -4389,8 +4400,8 @@ function flushBatter(t: HeightTile): void {
         d = lim;
       }
       const f = d / 2.2;                 // nx/nz carry 2.2m of reach
-      const qx0 = b.ax + b.nx * f, qz0 = b.az + b.nz * f;
-      const qx1 = b.bx + b.nx * f, qz1 = b.bz + b.nz * f;
+      const qx0 = b.ax + b.nxA * f, qz0 = b.az + b.nzA * f;
+      const qx1 = b.bx + b.nxB * f, qz1 = b.bz + b.nzB * f;
       // EARTH STOPS AT THE WATER. Letting the bank run all the way to the bed
       // turns every river crossing into a causeway — measured at Noordhoek, the
       // longer reach did exactly that to the Silvermine outflow, filling the
@@ -4409,25 +4420,59 @@ function flushBatter(t: HeightTile): void {
       if (clipped) break;                // ran out of room, not out of slope
     }
     const reached = pts.length ? pts[pts.length - 1][0] : 0;
+    // Logged with what was actually DRAWN, not with what was computed. Once a
+    // run that never met anything stopped being emitted, `pts.length > 0` was
+    // reporting earth that is not there — an instrument lying about the thing
+    // it exists to measure is worse than no instrument.
+    const drawn = pts.length > 0 && (met || clipped || wet);
     if (edgeLog.length < 40000) {
       edgeLog.push({ x: (b.ax + b.bx) / 2, z: (b.az + b.bz) / 2, rail: b.rail,
-        batter: pts.length > 0, met, clip: clipped || wet,
+        batter: drawn, met, clip: clipped || wet,
         gap: +(b.y0 - groundAt(b.ax, b.az)).toFixed(2), reach: reached });
     }
-    // A CLIPPED RUN IS STILL DRAWN. The old test threw away anything that had
-    // not met the ground by the last step, which conflated "this is a structure
-    // and earth would be a lie" with "there was a road in the way at 1.2m".
+    // A CLIPPED OR WET RUN IS STILL DRAWN — it stopped against something real,
+    // another carriageway or a watercourse, and the earth abuts it. A run that
+    // simply RAN OUT OF SLOPE is not: sixteen metres of bank ending in mid-air
+    // over a valley is the road standing clear of its surroundings, and drawing
+    // it was inventing an embankment that goes nowhere. It was being counted as
+    // unmet and drawn anyway, which is how a shelf of earth came to hang off
+    // the side of a road with nothing under it.
     if (!pts.length) { spanStats.fillUnmet++; continue; }
-    if (!met && !clipped && !wet) spanStats.fillUnmet++;
+    if (!met && !clipped && !wet) { spanStats.fillUnmet++; continue; }
     spanStats.fillDrawn++;
+    // THE ENDS OF A RUN GET A FACE. Where the next bay has no batter — the run
+    // starts, stops, or hands over to a deck — the strip simply ended, and you
+    // could see in under the earth from the side. A fan from the kerb out over
+    // the profile closes it.
+    for (const [end, on] of [[0, b.capA], [1, b.capB]] as Array<[number, boolean]>) {
+      if (!on || pts.length < 1) continue;
+      const ex = end ? b.bx : b.ax, ez = end ? b.bz : b.az;
+      const nx2 = end ? b.nxB : b.nxA, nz2 = end ? b.nzB : b.nzA;
+      const ky = end ? b.y1 : b.y0;
+      let ppx = 0, ppy = ky;
+      for (const p of pts) {
+        const d = p[0], y = end ? p[2] : p[1];
+        const fa = ppx / 2.2, fb = d / 2.2;
+        // A quad with its inboard edge collapsed onto the kerb point: the fan
+        // triangle, expressed in the one emitter this file has.
+        quadInto(V, U, [
+          ex, ky, ez,
+          ex, ky, ez,
+          ex + nx2 * fa, ppy, ez + nz2 * fa,
+          ex + nx2 * fb, y, ez + nz2 * fb,
+        ], [b.uA, 0, b.uA, 0, b.uA, ppx / 4, b.uA, d / 4]);
+        ppx = d; ppy = y;
+      }
+      spanStats.fillCap++;
+    }
     let px = 0, py0 = b.y0, py1 = b.y1;
     for (const [d, y0, y1] of pts) {
       const fa = px / 2.2, fb = d / 2.2;
       quadInto(V, U, [
-        b.ax + b.nx * fa, py0, b.az + b.nz * fa,
-        b.bx + b.nx * fa, py1, b.bz + b.nz * fa,
-        b.ax + b.nx * fb, y0, b.az + b.nz * fb,
-        b.bx + b.nx * fb, y1, b.bz + b.nz * fb,
+        b.ax + b.nxA * fa, py0, b.az + b.nzA * fa,
+        b.bx + b.nxB * fa, py1, b.bz + b.nzB * fa,
+        b.ax + b.nxA * fb, y0, b.az + b.nzA * fb,
+        b.bx + b.nxB * fb, y1, b.bz + b.nzB * fb,
       ], [b.uA, px / 4, b.uB, px / 4, b.uA, d / 4, b.uB, d / 4]);
       px = d; py0 = y0; py1 = y1;
     }
@@ -5164,7 +5209,19 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       for (let sd = 0; sd < 2; sd++) {
         const sgn = sd === 0 ? 1 : -1;
         const ex = dense[i][0] + px * sgn, ez = dense[i][1] + pz * sgn;
-        const g = Math.min(sampleHeight(ex, ez), sampleHeight(ex + px * sgn, ez + pz * sgn));
+        // FAR ENOUGH OUT TO SEE THE DROP. Two half-widths reaches about seven
+        // metres on an ordinary road, and a carriageway on a bank over a valley
+        // still has ground near its kerb at that range — so the test said "no
+        // drop" for exactly the edges with the most air beside them. Measured at
+        // Chapman's once the batter stopped inventing an embankment for them:
+        // five kerb runs with 16m to 27m of fall and neither earth nor barrier.
+        // The third sample reaches as far as the batter itself does.
+        const lx = px / (width / 2), lz = pz / (width / 2);   // unit, outward
+        const g = Math.min(
+          sampleHeight(ex, ez),
+          sampleHeight(ex + px * sgn, ez + pz * sgn),
+          sampleHeight(ex + lx * sgn * 12, ez + lz * sgn * 12),
+        );
         const drop = ky - g > RAIL_AT;
         raw[sd][i] = width > RAIL_MIN_W && drop;
         rawP[sd][i] = width <= RAIL_MIN_W && drop;
@@ -5338,6 +5395,27 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     spanStats.signs++;
     if (spanStats.signAt.length < 400) spanStats.signAt.push({ x: px, z: pz, fx, fz, kind });
   };
+  /** The outward normal of the bay starting at station j, as a unit vector. */
+  const bayN = (j: number): [number, number] => {
+    const k = clamp(j, 0, n - 2);
+    const ax2 = dense[k][0], az2 = dense[k][1];
+    const bx2 = dense[k + 1][0], bz2 = dense[k + 1][1];
+    const ddx = bx2 - ax2, ddz = bz2 - az2, l = Math.hypot(ddx, ddz) || 1;
+    return [-ddz / l, ddx / l];
+  };
+  /** …and the MITRED outward reach at a STATION: the bisector of the two bays
+   *  meeting there, lengthened so neighbouring strips' outer corners coincide.
+   *  Scaled to the 2.2m the batter's step arithmetic is written in. */
+  const mitreAt = (j: number, sgn: number): [number, number] => {
+    const [px1, pz1] = bayN(j - 1), [px2, pz2] = bayN(j);
+    const mx2 = (px1 + px2) * 0.5, mz2 = (pz1 + pz2) * 0.5;
+    const m = Math.hypot(mx2, mz2);
+    if (m < 0.2) return [px2 * 2.2 * sgn, pz2 * 2.2 * sgn];   // a near-reversal
+    // |average of two unit vectors| IS cos(half the angle between them), so the
+    // mitre length is 2.2/cos — capped, or a hairpin throws a spike.
+    const scale = 2.2 * clamp(1 / m, 1, 2.4);
+    return [(mx2 / m) * scale * sgn, (mz2 / m) * scale * sgn];
+  };
   let along = 0; // metres travelled — v wraps every 20m (the roadTex period)
   let pierRun = PIER_SPAN;  // so the first bay of a span gets one
   for (let i = 0; i < n - 1; i++) {
@@ -5441,9 +5519,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // ground that actually ends up there — see flushBatter.
         if (deck) spanStats.fillDeck++;
         if (!deck) {
+          const [maX, maZ] = mitreAt(i, sgn);
+          const [mbX, mbZ] = mitreAt(i + 1, sgn);
           pendingBatter.push({
             ax: ex0, az: ez0, bx: ex1, bz: ez1,
-            nx: ox * sgn, nz: oz * sgn, y0: ey0, y1: ey1, uA, uB, fid, nm: name,
+            nxA: maX, nzA: maZ, nxB: mbX, nzB: mbZ,
+            y0: ey0, y1: ey1, uA, uB, fid, nm: name,
+            capA: i === 0 || deckRun[i - 1] === true,
+            capB: i === n - 2 || deckRun[i + 2] === true,
             rail: railHere || postOn[sd][i],
           });
         }
