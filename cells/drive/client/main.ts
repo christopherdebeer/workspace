@@ -2032,11 +2032,21 @@ const MAT = {
   // a road through a park, over a river, across a track.
   road: new THREE.MeshLambertMaterial({
     map: roadTex, side: DS, vertexColors: true,
-    polygonOffset: true, polygonOffsetFactor: -4, polygonOffsetUnits: -8,
+    // ORDERED BY UNITS, NOT BY FACTOR. `polygonOffsetFactor` multiplies the
+    // polygon's own depth SLOPE, and a road seen down its own length is the
+    // most slope-heavy surface in the scene — so far up the tarmac a factor of
+    // -4 pulled the carriageway toward the camera by an amount that grew
+    // without bound and swallowed anything lying on it. That is why the
+    // centreline studs vanished a short way ahead while the parapet studs,
+    // three quarters of a metre higher, stayed: not brightness, not size, not
+    // the stud at all. The whole drape stack is now separated by UNITS, which
+    // is a constant in depth-buffer increments, with just enough factor left to
+    // do the job factor exists for.
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -12,
   }),
   minor: new THREE.MeshLambertMaterial({
     map: pathTex, transparent: true, opacity: 0.85, side: DS,
-    polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -8,
   }),
   // Ruts: alpha-cut, and depth-offset because it lies a few centimetres over
   // terrain it is meant to look part of.
@@ -2053,13 +2063,13 @@ const MAT = {
   track: new THREE.MeshLambertMaterial({
     map: trackTex, transparent: true, opacity: 0.68, side: DS, depthWrite: false,
     vertexColors: true,
-    polygonOffset: true, polygonOffsetFactor: -3, polygonOffsetUnits: -6,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -6,
   }),
   // polygonOffset as well as the lift: water and terrain are two nearly
   // coincident surfaces, and a constant lift alone cannot win at every camera
   // distance. The offset is in depth-buffer units, so it scales with the
   // precision available instead of with metres.
-  water: new THREE.MeshLambertMaterial({ map: waterTex, side: DS, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }),
+  water: new THREE.MeshLambertMaterial({ map: waterTex, side: DS, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }),
   green: new THREE.MeshLambertMaterial({
     map: greenTex, side: DS,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
@@ -2087,7 +2097,10 @@ const MAT = {
   // the studs win where they physically ought to.
   stud: (() => {
     const m = new THREE.MeshLambertMaterial({ map: signTex, side: DS });
-    m.polygonOffset = true; m.polygonOffsetFactor = -6; m.polygonOffsetUnits = -12;
+    // Above the carriageway in the same units ladder, and a matching factor —
+    // a stud quad is near VERTICAL, so its own slope term is almost nothing and
+    // the units are what carry it.
+    m.polygonOffset = true; m.polygonOffsetFactor = -1; m.polygonOffsetUnits = -20;
     // A WIDER CONE, A FLATTER FACE LAW, MORE GAIN, MORE RANGE. A stud is read
     // at a glance down the length of the road, often through a bend, and the
     // sign's numbers left the product at a few per cent of white.
