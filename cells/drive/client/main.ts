@@ -10028,9 +10028,11 @@ function meshHeightAt(x: number, z: number): number | null {
       degFromUp: +((Math.atan2(rx, -ry) * 180) / Math.PI).toFixed(1),
     };
   };
+(window as unknown as { __thumbFrame?: object }).__thumbFrame =
+  (x: number, y: number): object => thumbFrame(x, y);
 (window as unknown as { __stickGeom?: object }).__stickGeom = (): object => ({
-  R: STICK_R, neutral: STICK_NEUTRAL, slack: STICK_SLACK, fade: STICK_FADE,
-  arcDeg: +(STICK_ARC / DEG).toFixed(1),
+  half: STICK_HALF, gas: STICK_GAS, brake: STICK_BRAKE,
+  deadX: STICK_DEADX, deadY: STICK_DEADY, tiltMaxDeg: +(STICK_TILT_MAX / DEG).toFixed(1),
 });
 /** What the phone's instruments are contributing, and whether they are being
  *  believed — the only way to tell a live gyro from a granted-but-silent one. */
@@ -11037,63 +11039,67 @@ addEventListener('keyup', (e) => { keys.delete(e.key.toLowerCase()); });
 //                  require holding an exact angle
 //   BOUND … 180    reverse, mirrored about the vertical so pushing right still
 //                  turns the wheels right whichever way the truck is going
-const STICK_R = 58;           // the rim: full throttle
-// WHERE THE THUMB LANDS IS THE NEUTRAL RING, not the centre. The stick's centre
-// is planted this far BELOW the touch, so the thumb starts at twelve o'clock
-// asking for nothing: push out (up) to drive, pull in (down) to brake, sweep
-// round to steer. Screen-up and radially-out coincide at the moment you plant
-// it, which is why the gesture reads as up/down while the model reads as
-// out/in — and out/in is what makes the brake leave the steering alone.
-const STICK_NEUTRAL = 30;
-const STICK_SLACK = 5;        // …with a little either side that still means neither
-const STICK_FADE = 12;        // steering reaches full authority this far out
+// A RECTANGLE, TILTED TO THE THUMB. Up is throttle, down is brake by magnitude,
+// left and right are purely turn — so the lock a corner is being taken on
+// survives coming off the gas and onto the brakes, which is the property both
+// of the round models lost. On a circle, throttle and steering come off the same
+// two numbers no matter how you slice it: polar makes an arc free but ties the
+// brake to the angle, and a plain square gate ties the arc to the throttle.
+//
+// The tilt is what makes a square gate work on a thumb. A thumb does not
+// translate, it SWEEPS about its own base, so a lateral move on a screen-aligned
+// gate is also a vertical one and every turn came with a throttle lift nobody
+// asked for. Aligning the gate's axes with the thumb's own frame — one along the
+// reach, one along the sweep — removes that at the source, and it is a rotation
+// rather than a curve because over the width of the gate the arc departs from
+// its own tangent by about eight pixels, which is less than the dead zone.
+const STICK_HALF = 52;        // lateral travel to full lock
+const STICK_GAS = 48;         // …along the reach to full throttle
+const STICK_BRAKE = 40;       // …and back the other way to a full stop
+const STICK_DEADX = 7;        // a thumb held at lock wanders
+const STICK_DEADY = 6;
 const DEG = Math.PI / 180;
 const Q = new URLSearchParams(location.search);
 // Tunable from the URL because the only instrument that can judge these is a
 // thumb, and a redeploy per guess is not an iteration loop.
-const STICK_ARC = Number(Q.get('arc') ?? 95) * DEG;
+const STICK_TILT_MAX = Number(Q.get('tilt') ?? 42) * DEG;
 /**
- * One thumb position → what the truck is being asked to do. `rx, ry` are
- * measured from the stick's VIRTUAL CENTRE, which is not where the thumb landed
- * — see STICK_NEUTRAL. Pure, so a test can sweep the whole control surface
- * without a pointer: `ax` is the steering demand before the response curve
- * (−1 … 1) and `ay` is the longitudinal request with the screen's sign
- * convention (negative = drive), matching what `input()` already reads.
+ * One thumb position → what the truck is being asked to do, in the GATE's own
+ * coordinates: `across` is the sweep (+ve to the driver's right) and `along` is
+ * the reach (+ve away from the thumb's base, which is the throttle). Pure, so a
+ * test can walk the whole surface without a pointer. `ax` is the steering demand
+ * before the response curve and `ay` is the longitudinal request with the
+ * screen's sign convention (negative = drive), matching what `input()` reads.
  *
- * `lastA` is the steering held at the previous sample. Under heavy braking the
- * thumb is close to the centre, where two pixels of wobble is ten degrees of
- * angle — and unwinding the wheel because the driver braked hard is the exact
- * opposite of what that input asked for, so near the middle the lock is held
- * rather than recomputed.
+ * The two are read off different axes and neither term appears in the other,
+ * which is the whole point: braking cannot move the steering and steering cannot
+ * move the throttle, by construction rather than by tuning.
  */
-function stickRead(rx: number, ry: number, lastA = 0): { ax: number; ay: number; back: boolean } {
-  const r = Math.hypot(rx, ry);
-  // STEERING IS THE ANGLE AND NOTHING ELSE. Not a half of the gate, not a zone —
-  // the whole circle, so the lock a corner is being taken on survives anything
-  // the other hand of the control does. Past the arc it plateaus at full lock
-  // all the way round, so there is no orientation of the thumb that quietly
-  // straightens the wheels.
-  const th = Math.atan2(rx, -ry);         // 0 = away from the centre, +ve clockwise
-  const fade = clamp((r - 6) / STICK_FADE, 0, 1);
-  const ax = clamp(th / STICK_ARC, -1, 1) * fade + lastA * (1 - fade);
-  // LONGITUDINAL IS THE REACH. Out from the neutral ring is throttle, in from it
-  // is the brake, and because both are radial neither of them moves the angle:
-  // set the lock a bend needs, then come off the gas and onto the brakes through
-  // the whole corner without ever touching the steering. That is the property a
-  // square gate gives you and a half-and-half circle cannot — on a circle where
-  // straight-ahead and straight-back are both zero lock, full lock necessarily
-  // sits on the boundary between them.
-  const out = STICK_R - STICK_NEUTRAL - STICK_SLACK;
-  // Full brake at ten pixels out, not at the centre: the middle of the stick is
-  // the one place a thumb cannot aim, and an emergency stop that needs precision
-  // is not one.
-  const inn = STICK_NEUTRAL - STICK_SLACK - 10;
-  const ay = r > STICK_NEUTRAL + STICK_SLACK
-    ? -clamp((r - STICK_NEUTRAL - STICK_SLACK) / out, 0, 1)
-    : r < STICK_NEUTRAL - STICK_SLACK
-      ? clamp((STICK_NEUTRAL - STICK_SLACK - r) / inn, 0, 1)
-      : 0;
-  return { ax, ay, back: ay > 0 };
+function stickRead(across: number, along: number): { ax: number; ay: number; back: boolean } {
+  const ax = Math.sign(across)
+    * clamp((Math.abs(across) - STICK_DEADX) / (STICK_HALF - STICK_DEADX), 0, 1);
+  const gas = along > STICK_DEADY
+    ? clamp((along - STICK_DEADY) / (STICK_GAS - STICK_DEADY), 0, 1) : 0;
+  const brk = along < -STICK_DEADY
+    ? clamp((-along - STICK_DEADY) / (STICK_BRAKE - STICK_DEADY), 0, 1) : 0;
+  return { ax, ay: brk > 0 ? brk : -gas, back: brk > 0 };
+}
+/**
+ * THE THUMB'S OWN FRAME, from where it landed. The base of a thumb is at the
+ * bottom corner it came in from, so the line from there to the touch is the
+ * REACH axis (push out to accelerate, pull back to brake) and its perpendicular
+ * is the SWEEP axis (the arc, which is now pure steering). Which corner is
+ * guessed from the side of the screen the touch is on — a two-handed grip lands
+ * near the middle, where the tilt is small and the guess barely matters.
+ */
+function thumbFrame(x: number, y: number): { nx: number; ny: number; tx: number; ty: number } {
+  const px = x > innerWidth / 2 ? innerWidth * 0.94 : innerWidth * 0.06;
+  const py = innerHeight * 1.04;
+  // Clamped, because a touch level with the base would tilt the gate on its
+  // side, and a driver who reaches across the screen still expects up to be go.
+  const th = clamp(Math.atan2(x - px, py - y), -STICK_TILT_MAX, STICK_TILT_MAX);
+  const nx = Math.sin(th), ny = -Math.cos(th);   // reach: away from the base
+  return { nx, ny, tx: -ny, ty: nx };            // sweep: perpendicular to it
 }
 function stickEl(size: number, style: Partial<CSSStyleDeclaration>): HTMLDivElement {
   const el = document.createElement('div');
@@ -11104,34 +11110,37 @@ function stickEl(size: number, style: Partial<CSSStyleDeclaration>): HTMLDivElem
   document.body.appendChild(el);
   return el;
 }
-const stickBase = stickEl(STICK_R * 2, {
+const stickBase = stickEl(STICK_HALF * 2 + 14, {
   border: '1.5px solid rgba(245,196,83,0.34)', background: 'rgba(8,12,20,0.22)',
-  // ROUND, and the shape is the truth: the rim IS the locus of full throttle and
-  // the circumference IS the steering travel. The squircle was honest about a
-  // square gate; a square gate was the thing that was wrong.
+  // A RECTANGLE, and drawn tilted to whatever frame the thumb planted, because
+  // the shape and the angle are both part of the reading: the long axis is the
+  // pedal, the short axis is the wheel, and the lean is where your thumb thinks
+  // straight-ahead is.
+  height: `${STICK_GAS + STICK_BRAKE + 14}px`, borderRadius: '14px',
 });
-// THE NEUTRAL RING, drawn, because it is where the thumb starts and the whole
-// control is read relative to it — an unmarked one would leave the driver
-// guessing where the gas stops and the brakes begin.
-const stickRing = stickEl(STICK_NEUTRAL * 2, {
-  border: '1px dashed rgba(245,196,83,0.42)', background: 'transparent',
+// The neutral LINE: where the gas stops and the brakes begin, across the gate
+// rather than round it. Without it the tilt is invisible and the driver is
+// guessing which way is up.
+const stickRing = stickEl(STICK_HALF * 2 + 14, {
+  border: 'none', borderTop: '1px dashed rgba(245,196,83,0.45)', height: '0px',
+  background: 'transparent',
 });
 // HOLLOW. A solid disc was fine parked in a corner, but the nub now rests on
 // the truck in the chart view and a filled one blanked out the vehicle it is
 // steering — you could see the ring and not the thing inside it. A heavy rim
 // over a wash of colour reads just as clearly as an input and lets the truck
 // and its heading show straight through.
-const stickNub = stickEl(46, {
+const stickNub = stickEl(42, {
   background: 'rgba(245,196,83,0.16)', border: '3px solid rgba(245,196,83,0.8)',
   boxSizing: 'border-box', boxShadow: '0 2px 10px rgba(0,0,0,0.5)',
 });
 // Metres per second below which the truck counts as stopped, so a held
 // against-travel input stops braking and takes up drive the other way.
 const STICK_STOP = 0.7;
-// x0,y0 is where the THUMB landed; cx,cy is the stick's virtual centre, one
-// neutral radius below it. The chart view's directional stick still reads from
-// the touch point, so both are kept.
-let stick: { id: number; x0: number; y0: number; cx: number; cy: number;
+// x0,y0 is where the thumb landed and the gate's origin; n and t are its reach
+// and sweep axes, fixed at plant time so the frame cannot drift under the hand.
+let stick: { id: number; x0: number; y0: number;
+  nx: number; ny: number; tx: number; ty: number;
   dx: number; dy: number; ax: number; ay: number } | null = null;
 // Is the stick currently acting as a brake rather than a throttle? Drives the
 // nub's colour, so the control says which of its two jobs it is doing.
@@ -11168,7 +11177,7 @@ const stickVec = new THREE.Vector3();
 const stickHome = (): { x: number; y: number } => {
   car.updateWorldMatrix(true, false);
   stickVec.setFromMatrixPosition(car.matrixWorld).project(camera);
-  const m = STICK_R + 14;
+  const m = STICK_HALF + 14;
   // Behind the camera projects to a mirrored point; treat it as off-screen.
   const off = stickVec.z > 1;
   let x = clamp((off ? -stickVec.x : stickVec.x) * 0.5 * innerWidth + innerWidth / 2, m, innerWidth - m);
@@ -11178,7 +11187,7 @@ const stickHome = (): { x: number; y: number } => {
   // get off. The instrument cluster is the one place it may not rest, so shove
   // it clear rather than let the fallback undo the fix.
   const cx = innerWidth * 0.56, cy = innerHeight * 0.70;
-  if (x > cx && y > cy) x = Math.max(m, cx - STICK_R * 0.5);
+  if (x > cx && y > cy) x = Math.max(m, cx - STICK_HALF * 0.5);
   return { x, y };
 };
 function updateStickHome(): void {
@@ -11196,25 +11205,44 @@ function updateStickHome(): void {
 addEventListener('resize', updateStickHome);
 const setStickFrom = (e: PointerEvent): void => {
   if (!stick) return;
-  // Everything the model says is measured from the VIRTUAL CENTRE.
-  const rx = e.clientX - stick.cx, ry = e.clientY - stick.cy;
-  // The nub rides a CIRCLE, and that is what the reading is: past the rim there
-  // is no more throttle, and the angle it is held at is all that is left to say.
-  const len = Math.hypot(rx, ry);
-  const k = len > STICK_R ? STICK_R / len : 1;
-  stickNub.style.left = `${stick.cx + rx * k}px`;
-  stickNub.style.top = `${stick.cy + ry * k}px`;
-  const rd = stickRead(rx, ry, stick.ax);
+  const rx = e.clientX - stick.x0, ry = e.clientY - stick.y0;
+  // Into the gate's own axes. Everything downstream is one-dimensional.
+  const across = rx * stick.tx + ry * stick.ty;
+  const along = rx * stick.nx + ry * stick.ny;   // +ve = reaching out = throttle
+  const rd = stickRead(across, along);
   stick.ax = rd.ax; stick.ay = rd.ay;
-  // The TRUE vector for the chart view, from the TOUCH point rather than the
-  // centre — that stick is directional ("steer onto this bearing"), and both the
-  // polar reading and the offset centre would bend the bearing.
-  const tx = e.clientX - stick.x0, ty = e.clientY - stick.y0;
-  const tl = Math.hypot(tx, ty);
-  const mag = Math.max(0, Math.min(tl, STICK_R) - 8) / (STICK_R - 8);
-  stick.dx = tl ? (tx / tl) * mag : 0;
-  stick.dy = tl ? (ty / tl) * mag : 0;
+  // The nub rides the RECTANGLE, clamped per axis, so what you see is what the
+  // gate read — a round clamp would show it stopping short of an input that was
+  // already at full scale, which is the lie the first circular model told.
+  const ca = clamp(across, -STICK_HALF, STICK_HALF);
+  const cl = clamp(along, -STICK_BRAKE, STICK_GAS);
+  stickNub.style.left = `${stick.x0 + ca * stick.tx + cl * stick.nx}px`;
+  stickNub.style.top = `${stick.y0 + ca * stick.ty + cl * stick.ny}px`;
+  // The TRUE screen vector, still, for the chart view — that stick is
+  // directional ("steer onto this bearing"), and a tilted gate would tilt the
+  // bearing with it.
+  const tl = Math.hypot(rx, ry);
+  const mag = Math.max(0, Math.min(tl, STICK_HALF) - STICK_DEADY) / (STICK_HALF - STICK_DEADY);
+  stick.dx = tl ? (rx / tl) * mag : 0;
+  stick.dy = tl ? (ry / tl) * mag : 0;
 };
+/** Plant the gate, and draw it leaning the way the thumb does. */
+function placeStick(x: number, y: number, f: { nx: number; ny: number }): void {
+  // CSS rotates clockwise from the element's own up, which is (0,-1).
+  const deg = (Math.atan2(f.nx, -f.ny) * 180) / Math.PI;
+  // The rectangle is longer above the origin than below it, so its centre sits
+  // half the difference up the reach axis rather than on the touch.
+  const off = (STICK_GAS - STICK_BRAKE) / 2;
+  for (const el of [stickBase, stickRing]) {
+    el.style.transform = `translate(-50%, -50%) rotate(${deg}deg)`;
+  }
+  stickBase.style.left = `${x + f.nx * off}px`;
+  stickBase.style.top = `${y + f.ny * off}px`;
+  stickRing.style.left = `${x}px`;
+  stickRing.style.top = `${y}px`;
+  stickNub.style.left = `${x}px`;
+  stickNub.style.top = `${y}px`;
+}
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   if (hudTap(e.clientX, e.clientY)) return; // an instrument swallowed it
@@ -11224,8 +11252,8 @@ canvas.addEventListener('pointerdown', (e) => {
   try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ }
   if (camMode === 'top') {
     const h = stickHome();
-    if (!stick && Math.hypot(e.clientX - h.x, e.clientY - h.y) <= STICK_R * 1.4) {
-      stick = { id: e.pointerId, x0: h.x, y0: h.y, cx: h.x, cy: h.y + STICK_NEUTRAL,
+    if (!stick && Math.hypot(e.clientX - h.x, e.clientY - h.y) <= STICK_HALF * 1.4) {
+      stick = { id: e.pointerId, x0: h.x, y0: h.y, ...thumbFrame(h.x, h.y),
         dx: 0, dy: 0, ax: 0, ay: 0 };
       setStickFrom(e);
     } else {
@@ -11234,17 +11262,13 @@ canvas.addEventListener('pointerdown', (e) => {
     return;
   }
   if (!stick) {
-    // The centre goes a neutral radius BELOW the thumb, so the thumb starts on
-    // the neutral ring at twelve o'clock: asking for nothing, with the gas one
-    // push away and the brakes one pull back.
-    const cy = e.clientY + STICK_NEUTRAL;
-    stick = { id: e.pointerId, x0: e.clientX, y0: e.clientY, cx: e.clientX, cy,
+    // The gate is planted where the thumb landed, leaning into the thumb's own
+    // frame: neither gas nor brake, wheels straight, one push from full power.
+    const f = thumbFrame(e.clientX, e.clientY);
+    stick = { id: e.pointerId, x0: e.clientX, y0: e.clientY, ...f,
       dx: 0, dy: 0, ax: 0, ay: 0 };
     stickBase.style.display = stickNub.style.display = stickRing.style.display = 'block';
-    stickBase.style.left = stickRing.style.left = `${e.clientX}px`;
-    stickBase.style.top = stickRing.style.top = `${cy}px`;
-    stickNub.style.left = `${e.clientX}px`;
-    stickNub.style.top = `${e.clientY}px`;
+    placeStick(e.clientX, e.clientY, f);
   } else if (drone.up && lift === null) {
     lift = { id: e.pointerId, y0: e.clientY, dy: 0 };   // second finger: altitude
   } else if (brakeId === null) {
