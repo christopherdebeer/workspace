@@ -876,6 +876,25 @@ scene.add(sun.target);
 const shadowy = (o: THREE.Object3D, cast: boolean, receive: boolean): void => {
   o.castShadow = cast; o.receiveShadow = receive;
 };
+/**
+ * ONLY SOLID THINGS CAST. The depth pass does not care what a material looks
+ * like — it rasterises geometry — so anything transparent or additive writes
+ * itself into the shadow map as if it were made of wood.
+ *
+ * Found the hard way: flagging every mesh in the rig meant the HEADLIGHT BEAMS
+ * cast too, and they are twenty-six-metre additive cones. The truck threw a
+ * wedge of darkness down the road ahead of it, brightest exactly where the
+ * light was supposed to be, which reads as "the headlights are casting a
+ * shadow" because that is precisely what was happening. The halo ring and any
+ * glass would have done the same thing more quietly.
+ */
+const solidCaster = (m: THREE.Material): boolean =>
+  !m.transparent && m.blending === THREE.NormalBlending && (m.opacity ?? 1) >= 0.99;
+const castIfSolid = (o: THREE.Object3D): void => {
+  const raw = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+  const mats = Array.isArray(raw) ? raw : raw ? [raw] : [];
+  shadowy(o, mats.length > 0 && mats.every(solidCaster), false);
+};
 
 // ── the clock ──────────────────────────────────────────────────────
 // LIVE means the real sun over the real place at the real moment, which is the
@@ -8199,7 +8218,7 @@ car.add(headSpot, headSpot.target);
 // The rig throws a shadow, and so does every panel, wheel and light bar hung
 // off it. Nothing on the truck RECEIVES: the body is its own little studio and
 // self-shadowing at this map resolution is stripes, not shape.
-car.traverse((o) => { if ((o as THREE.Mesh).isMesh) shadowy(o, true, false); });
+car.traverse((o) => { if ((o as THREE.Mesh).isMesh) castIfSolid(o); });
 scene.add(car);
 // ── the x-ray silhouette: the rig, wherever something hides it ─────
 // The depth buffer already knows, per pixel, whether the truck is occluded —
@@ -15448,6 +15467,16 @@ function setClean(on: boolean): void {
   sunY: +SUN_DIR.y.toFixed(3), span: SHADOW_SPAN,
   bias: sun.shadow.bias, normalBias: sun.shadow.normalBias,
   terrainShadowSide: terrainMat.shadowSide,
+  // What on the rig is actually in the shadow map — the beams appearing here
+  // is the bug that put a wedge of dark down the road ahead of the truck.
+  rigCasters: (() => {
+    const on: string[] = [], off: string[] = [];
+    car.traverse((o) => {
+      if (!(o as THREE.Mesh).isMesh) return;
+      (o.castShadow ? on : off).push(o.name || (o as THREE.Mesh).material instanceof THREE.ShaderMaterial ? 'shader' : 'mesh');
+    });
+    return { casting: on.length, notCasting: off.length };
+  })(),
 });
 (window as unknown as { __hudrects?: object }).__hudrects = (): object =>
   ({ dock: dockRect, pov: povRect, mapUp: mapUpRect, drone: droneRect });
