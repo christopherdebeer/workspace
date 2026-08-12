@@ -14427,53 +14427,70 @@ function meter(x: number, y: number, n: number, lit: number, col: string, w = 3,
 // an elbow, or a full hairpin folding back on itself — mirrored to its side
 // and coloured by severity. A shape reads at 120km/h; a sentence does not.
 function drawBendArrow(cxp: number, cyp: number, left: boolean, tier: number): void {
-  const cells: Array<[number, number]> = [];
-  const plot = (x: number, y: number): void => { cells.push([x, y]); };
-  // Built turning RIGHT on a unit grid (negative y is up), mirrored at draw.
-  let x = 0, y = 5;
-  for (; y >= 0; y--) plot(x, y);                        // the approach stem
-  let dx = 0, dy = -1;                                   // travel direction at the top
-  if (tier === 0) {                                      // EASY: a lean
-    for (let i = 0; i < 3; i++) { x++; y--; plot(x, y); }
-    dx = 1; dy = -1;
-  } else if (tier === 1) {                               // MEDIUM: lean into a run
-    x++; y--; plot(x, y);
-    for (let i = 0; i < 3; i++) { x++; plot(x, y); }
-    dx = 1; dy = 0;
-  } else if (tier === 2) {                               // HARD: a square elbow
-    for (let i = 0; i < 4; i++) { x++; plot(x, y); }
-    dx = 1; dy = 0;
-  } else {                                               // HAIRPIN: back on itself
-    for (let i = 0; i < 3; i++) { x++; plot(x, y); }
-    for (let i = 0; i < 5; i++) { y++; plot(x, y); }
-    dx = 0; dy = 1;
-  }
-  // The head: a tip and two flankers, perpendicular to the travel direction.
-  const fx = -dy, fy = dx;
-  plot(x + dx, y + dy);
-  plot(x + dx + fx, y + dy + fy);
-  plot(x + dx - fx, y + dy - fy);
-  plot(x + dx * 2, y + dy * 2);
-  const S = 2;                                           // chunky: 2 HUD px per cell
-  const draw = (ox: number, oy: number, c: string): void => {
-    hctx.fillStyle = c;
-    for (const [gx, gy] of cells) {
-      hctx.fillRect(cxp + (left ? -gx - 1 : gx) * S + ox, cyp + gy * S + oy, S, S);
+  // ONE HUD PIXEL PER CELL, on a grid four times finer than the last one.
+  // The first version plotted a handful of cells and blew each one up to 2x2,
+  // which meant the arrowhead — a tip and two flankers — rasterised as a plus
+  // sign, and a "bend" was three steps of a staircase. The symbol occupies the
+  // same room on screen; it just has the pixels the HUD was always going to
+  // magnify anyway, so a triangle can be a triangle.
+  const cells = new Set<number>();
+  const put = (gx: number, gy: number): void => {
+    if (gx > -30 && gx < 30 && gy > -30 && gy < 30) cells.add((gx + 32) * 128 + (gy + 32));
+  };
+  /** A round brush, so a corner in the path does not pinch to a single cell. */
+  const dab = (gx: number, gy: number, r: number): void => {
+    for (let a = -r; a <= r; a++) for (let b = -r; b <= r; b++) if (a * a + b * b <= r * r + r) put(gx + a, gy + b);
+  };
+  const line = (x0: number, y0: number, x1: number, y1: number, r: number): void => {
+    const n = Math.max(1, Math.round(Math.hypot(x1 - x0, y1 - y0) * 2));
+    for (let i = 0; i <= n; i++) dab(Math.round(x0 + ((x1 - x0) * i) / n), Math.round(y0 + ((y1 - y0) * i) / n), r);
+  };
+  /** A SOLID TRIANGLE, widening from the tip back along the travel direction —
+   *  the thing a road sign actually puts at the end of an arrow. */
+  const head = (tx: number, ty: number, dx: number, dy: number, len: number, half: number): void => {
+    const px = -dy, py = dx;
+    for (let i = 0; i <= len; i++) {
+      const w = (half * i) / len;
+      const bx = tx - dx * i, by = ty - dy * i;
+      for (let j = -w; j <= w; j += 0.5) put(Math.round(bx + px * j), Math.round(by + py * j));
     }
   };
+  // Built turning RIGHT, mirrored at draw time. y grows downward, so the
+  // approach comes UP the screen from (0, 9). Each tier is the shape of the
+  // corner it names rather than a different number of steps of one staircase.
+  const PATHS: Array<{ pts: Array<[number, number]>; dir: [number, number] }> = [
+    // EASY: one long lean, never straightening.
+    { pts: [[0, 9], [0, 3], [5, -6]], dir: [0.49, -0.87] },
+    // MEDIUM: turn in, then a run holding the new line.
+    { pts: [[0, 9], [0, 4], [3, -1], [7, -4]], dir: [0.8, -0.6] },
+    // HARD: a near-square elbow — the road stops going that way and goes this.
+    { pts: [[0, 9], [0, 3], [2, -2], [8, -4]], dir: [0.96, -0.28] },
+    // HAIRPIN: round the top and back down past its own approach.
+    { pts: [[0, 9], [0, -2], [3, -6], [7, -4], [8, 2], [8, 7]], dir: [0, 1] },
+  ];
+  const P = PATHS[clamp(tier, 0, 3)];
+  for (let i = 1; i < P.pts.length; i++) line(P.pts[i - 1][0], P.pts[i - 1][1], P.pts[i][0], P.pts[i][1], 1);
+  const tip = P.pts[P.pts.length - 1];
+  head(tip[0] + P.dir[0] * 4, tip[1] + P.dir[1] * 4, P.dir[0], P.dir[1], 5, 3.4);
   // A ROAD SIGN, not a coloured arrow. Warning signs the world over are a WHITE
   // symbol carrying a hard dark stroke, and they are that way because the
   // silhouette has to survive rain, a low sun and a glance — which is the same
   // problem a call at 120km/h has. The severity used to be in the arrow's
   // colour, so the symbol changed hue with every bend and never became one
-  // remembered shape; it lives in the words underneath now, where a change of
-  // colour is a change of emphasis rather than a change of object.
-  // Stroked on all EIGHT neighbours at full cell size: a four-way outline
-  // leaves the diagonals of every elbow and every arrowhead bare, and a symbol
-  // with gaps in its own edge is not a sign, it is a sprite.
+  // remembered shape; it lives in the words underneath now.
+  const draw = (ox: number, oy: number, c: string): void => {
+    hctx.fillStyle = c;
+    for (const k of cells) {
+      const gx = Math.floor(k / 128) - 32, gy = (k % 128) - 32;
+      hctx.fillRect(cxp + (left ? -gx : gx) + ox, cyp + gy + oy, 1, 1);
+    }
+  };
+  // Stroked on all EIGHT neighbours: a four-way outline leaves the diagonals of
+  // every elbow and every arrowhead bare, and a symbol with gaps in its own
+  // edge is a sprite, not a sign.
   for (const [ox, oy] of
     [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]] as const) {
-    draw(ox * S, oy * S, 'rgba(4,10,11,0.92)');
+    draw(ox, oy, 'rgba(4,10,11,0.92)');
   }
   draw(0, 0, '#f4f8f6');
 }
@@ -15404,6 +15421,14 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // ── the co-driver: the next bend, DRAWN before it arrives ──
   // The arrow is the call; the words are the footnote. Severity is the
   // summed angle: a hairpin is not a sweeper.
+  // A CONTACT SHEET of every call, for judging the symbols against each other
+  // rather than one at a time. Test-only: nothing sets it in play.
+  if ((window as unknown as { __bendsheet?: boolean }).__bendsheet) {
+    for (let t = 0; t < 4; t++) {
+      drawBendArrow(Math.round(HW * 0.3), Math.round(HH * 0.12) + t * 26, false, t);
+      drawBendArrow(Math.round(HW * 0.7), Math.round(HH * 0.12) + t * 26, true, t);
+    }
+  }
   if (navBend && camMode !== 'top') {
     const deg = Math.abs((navBend.ang * 180) / Math.PI);
     const tier = deg >= 70 ? 3 : deg >= 45 ? 2 : deg >= 30 ? 1 : 0;
