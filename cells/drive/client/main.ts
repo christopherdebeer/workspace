@@ -18,6 +18,7 @@ import * as THREE from 'three';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
+import { RoadSolver, densifyPts } from './roadsolve';
 import { createOverlays } from './overlays';
 
 // ── tuning ─────────────────────────────────────────────────────────
@@ -4065,15 +4066,49 @@ function ptSegDist(px: number, pz: number, qx: number, qz: number, rx: number, r
 // available to whichever of the two ribbons is built FIRST: the road grid only
 // ever holds what has already been drawn, so a test against it alone leaves the
 // main road walled off by a side road that had not streamed in yet.
-const juncGrid = new Map<string, Array<[number, number]>>();
-const juncStats = { pinned: 0, opened: 0, chains: 0, maxChainM: 0, totalChainM: 0 };
-function noteJunction(x: number, z: number): void {
-  juncStats.pinned++;
-  if (juncGrid.size > 8000) juncGrid.clear();
-  const k = gkey(x, z);
-  const arr = juncGrid.get(k);
-  if (arr) { if (arr.length < 400) arr.push([x, z]); } else juncGrid.set(k, [[x, z]]);
-}
+/**
+ * The solver, wired to this build's world.
+ *
+ * The scalars arrive through GETTERS rather than by value: several of them —
+ * JUNC_R, SURFACE, the pin switch — are declared further down the file than
+ * this line, and reading a const before its declaration is a temporal-dead-zone
+ * throw at module load. A getter defers the read to the moment the solver
+ * actually asks, which is long after everything is up.
+ */
+const solver = new RoadSolver({
+  toLocal,
+  hasHeight,
+  gkey,
+  deckAnchorAt: (x, z) => deckAnchorAt(x, z),
+  solveChain: (dense, maxGrade, p0, p1, pins) => solveChain(dense, maxGrade, p0, p1, pins),
+  get gradeMax() { return GRADE_MAX; },
+  get roadLift() { return SURFACE.road.lift; },
+  get juncR() { return JUNC_R; },
+  get juncPins() { return juncPins; },
+});
+(window as unknown as { __chaindbg?: object }).__chaindbg = (): object => ({ ...solver.stats });
+/**
+ * EVERYTHING THE SOLVER NEEDS, AS JSON. Captured once from a real session and
+ * replayed in Node, so a question about chaining or junctions costs
+ * milliseconds instead of a headless browser at two frames a second.
+ *
+ * Deliberately small: tile EXTENTS rather than height data, because the only
+ * consumer of actual elevation is solveChain, which the tests inject. What is
+ * captured is exactly what decides whether a way reaches the solver at all —
+ * which is the question five rounds of browser debugging were spent on.
+ */
+(window as unknown as { __fixture?: object }).__fixture = (ways: OsmWay[][] = []): object => ({
+  origin: { lat: origin.lat, lon: origin.lon, mLon: origin.mLon, mLat: M_LAT },
+  grid: GRID,
+  juncR: JUNC_R,
+  roadLift: SURFACE.road.lift,
+  gradeMax: GRADE_MAX,
+  tiles: [...heightTiles.values()].map((t) => ({ xs: t.xs, zs: t.zs, w: t.w, h: t.h })),
+  ways: ways.length ? ways : undefined,
+});
+const juncGrid = solver.junctions;
+const juncStats = solver.stats;
+const noteJunction = (x: number, z: number): void => solver.noteJunction(x, z);
 /**
  * Is this stretch of road the mouth of a turning?
  *
@@ -5025,15 +5060,6 @@ function deckAnchorAt(x: number, z: number): number | null {
 const BENCH_OFFS = [-45, -30, -15, 0, 15, 30, 45];
 const BENCH_K = BENCH_OFFS.length;
 const BENCH_C = BENCH_K >> 1;
-function densifyPts(pts: Array<[number, number]>): Array<[number, number]> {
-  const dense: Array<[number, number]> = [pts[0]];
-  for (let i = 1; i < pts.length; i++) {
-    const [ax, az] = pts[i - 1], [bx, bz] = pts[i];
-    const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 12));
-    for (let s = 1; s <= steps; s++) dense.push([ax + ((bx - ax) * s) / steps, az + ((bz - az) * s) / steps]);
-  }
-  return dense;
-}
 function latCandsFor(dense: Array<[number, number]>, i: number): number[] {
   const n = dense.length;
   const [x, z] = dense[i];
@@ -5145,29 +5171,14 @@ function solveChain(dense: Array<[number, number]>, maxGrade: number, p0: number
   ruleGrade(dense, alg, gCap * 1.2);
   return alg;
 }
-const HINT_CELL = 24;
-const profileHints = new Map<string, Array<[number, number, number]>>();
-const hintedWays = new Set<string>();
-function writeHints(dense: Array<[number, number]>, alg: number[]): void {
-  if (profileHints.size > 6000) profileHints.clear();   // advisory data; rebuilt per tile
-  for (let i = 0; i < dense.length; i++) {
-    const k = `${Math.floor(dense[i][0] / HINT_CELL)},${Math.floor(dense[i][1] / HINT_CELL)}`;
-    const e: [number, number, number] = [dense[i][0], dense[i][1], alg[i]];
-    const arr = profileHints.get(k);
-    if (arr) arr.push(e); else profileHints.set(k, [e]);
-  }
-}
-function hintAt(x: number, z: number, reach = 6): number | null {
-  let best: number | null = null, bd = reach;
-  for (const dx of [0, -HINT_CELL, HINT_CELL]) for (const dz of [0, -HINT_CELL, HINT_CELL]) {
-    const arr = profileHints.get(`${Math.floor((x + dx) / HINT_CELL)},${Math.floor((z + dz) / HINT_CELL)}`);
-    if (arr) for (const [hx, hz, he] of arr) {
-      const d = Math.hypot(hx - x, hz - z);
-      if (d < bd) { bd = d; best = he; }
-    }
-  }
-  return best;
-}
+// The hint store, the junction registry and the chain assembly all moved to
+// `roadsolve.ts` — they never needed a renderer, and having them in here meant
+// every question about them cost a headless browser at two frames a second.
+// These aliases keep the call sites in this file reading as they did.
+const profileHints = solver.hints;
+const hintedWays = solver.hinted;
+const writeHints = (dense: Array<[number, number]>, alg: number[]): void => solver.writeHints(dense, alg);
+const hintAt = (x: number, z: number, reach = 6): number | null => solver.hintAt(x, z, reach);
 function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number]): void {
   const fid = ++ribbonSeq;
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
@@ -7279,114 +7290,26 @@ const WATER_W: Record<string, number> = { river: 14, canal: 9, stream: 4.5 };
 const AREA_TAG = (t: Record<string, string>): boolean =>
   !!t.landuse || !!t.leisure
   || ['scrub', 'wetland', 'sand', 'bare_rock', 'wood', 'grassland', 'heath'].includes(t.natural ?? '');
-/** WHY A WAY NEVER REACHES THE CHAIN SOLVER. Counted rather than reasoned
- *  about: the filters are cheap to read and impossible to guess between. */
-const chainDbg = { considered: 0, noHeight: 0, notDrivable: 0, chained: 0, dropped: [] as string[] };
-(window as unknown as { __chaindbg?: object }).__chaindbg = (): object => ({ ...chainDbg });
+/** Every call to renderWays, in order, while capture is armed — the tests
+ *  replay this sequence, so what they exercise is the real arrival order and
+ *  not a tidy reconstruction of it. Off unless a probe turns it on. */
+let wayTape: Array<{ els: OsmWay[]; halo: OsmWay[] }> | null = null;
+(window as unknown as { __tape?: object }).__tape = (on: boolean): number => {
+  if (on) { wayTape = []; return 0; }
+  const n = wayTape?.length ?? 0;
+  return n;
+};
+(window as unknown as { __tapeout?: object }).__tapeout = (): object =>
+  (wayTape ?? []).map((c) => ({
+    els: c.els.map((e) => ({ id: e.id, tags: e.tags, geometry: e.geometry })),
+    halo: c.halo.map((e) => ({ id: e.id, tags: e.tags, geometry: e.geometry })),
+  }));
 function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
-  // PRE-PASS: chain this tile's drivable ways end-to-end and solve each
-  // chain's profile whole, publishing hints for the per-way builds below.
-  {
-    interface Mem { pts: Array<[number, number]>; name?: string; g: number; key: string; fresh: boolean }
-    // ONE ENTRY PER OSM WAY, longest geometry wins. The same road reaches here
-    // twice: clipped to this tile in `els`, and whole in a neighbour's cached
-    // copy. The whole one is the better thing to solve over — the clip is a
-    // rendering boundary, not a feature of the road — while the build loop
-    // below still draws only the clipped piece that belongs to this tile.
-    const byId = new Map<string, { el: OsmWay; fresh: boolean }>();
-    const consider = (el: OsmWay, fresh: boolean): void => {
-      const t = el.tags ?? {};
-      if (!el.geometry || !t.highway) return;
-      if (['track', 'path', 'bridleway', 'cycleway', 'footway', 'steps'].includes(t.highway)) {
-        chainDbg.notDrivable++; return;
-      }
-      const id = String(el.id);
-      const prev = byId.get(id);
-      // `fresh` is sticky: a way this tile actually has to build stays fresh
-      // even when the neighbour's longer copy is the one we solve over.
-      if (!prev) byId.set(id, { el, fresh });
-      else {
-        if (el.geometry.length > (prev.el.geometry ?? []).length) prev.el = el;
-        prev.fresh ||= fresh;
-      }
-    };
-    for (const el of els) consider(el, !hintedWays.has(String(el.id)));
-    for (const el of halo) consider(el, false);
-    const mems: Mem[] = [];
-    for (const [id, { el, fresh }] of byId) {
-      const t = el.tags ?? {};
-      const pts: Array<[number, number]> = (el.geometry ?? []).map((g2) => toLocal(g2.lat, g2.lon));
-      if (pts.length < 2) continue;
-      let ok = true;
-      for (const [px, pz] of pts) if (!hasHeight(px, pz)) { ok = false; break; }
-      chainDbg.considered++;
-      if (ok) mems.push({ pts, name: t.name, g: GRADE_MAX[t.highway] ?? 0.15, key: id, fresh });
-      else {
-        chainDbg.noHeight++;
-        if (chainDbg.dropped.length < 12) {
-          chainDbg.dropped.push(`${t.name ?? '(unnamed)'} [${t.highway}] ${pts.length}pts`);
-        }
-      }
-    }
-    const joins = (a: [number, number], b: [number, number]): boolean =>
-      Math.hypot(a[0] - b[0], a[1] - b[1]) < 2;
-    while (mems.length) {
-      const chain: Mem[] = [mems.pop() as Mem];
-      let grew = true;
-      while (grew) {
-        grew = false;
-        const head = chain[0].pts[0];
-        const tail = chain[chain.length - 1].pts[chain[chain.length - 1].pts.length - 1];
-        for (let i = 0; i < mems.length; i++) {
-          const m = mems[i];
-          if (m.name !== chain[0].name) continue;      // one road, one chain
-          const a = m.pts[0], b = m.pts[m.pts.length - 1];
-          if (joins(a, tail)) { chain.push(m); mems.splice(i, 1); grew = true; break; }
-          if (joins(b, tail)) { chain.push({ ...m, pts: m.pts.slice().reverse() }); mems.splice(i, 1); grew = true; break; }
-          if (joins(b, head)) { chain.unshift(m); mems.splice(i, 1); grew = true; break; }
-          if (joins(a, head)) { chain.unshift({ ...m, pts: m.pts.slice().reverse() }); mems.splice(i, 1); grew = true; break; }
-        }
-      }
-      // Nothing new in this chain — every member was already solved in some
-      // earlier tile's halo. Re-solving it would redo the same DP on every
-      // neighbouring tile that streams in, and publish hints identical to the
-      // ones already standing.
-      if (!chain.some((m) => m.fresh)) continue;
-      const all: Array<[number, number]> = [];
-      for (const m of chain) for (const pt of m.pts) {
-        if (!all.length || Math.hypot(pt[0] - all[all.length - 1][0], pt[1] - all[all.length - 1][1]) > 0.5) all.push(pt);
-      }
-      const dense = densifyPts(all);
-      if (dense.length < 8) continue;                  // single crumbs keep the fallback path
-      const a0 = deckAnchorAt(dense[0][0], dense[0][1]);
-      const a1 = deckAnchorAt(dense[dense.length - 1][0], dense[dense.length - 1][1]);
-      // JUNCTION PINS. Chains are solved one after another, so `profileHints`
-      // holds every road settled before this one — earlier chains this tile,
-      // and every tile already streamed. A hint sitting within JUNC_R of a
-      // station is another road's deck at this exact spot, which in OSM means
-      // the two ways share a node: a junction. Roads that cross WITHOUT a
-      // shared node are grade separated, their vertices land nowhere near each
-      // other, and nothing is pinned — which is precisely the distinction
-      // between a turning and a flyover, taken from the data rather than
-      // guessed from heights.
-      const pins = dense.map(([px, pz]) => (juncPins ? hintAt(px, pz, JUNC_R) : null));
-      for (let i = 0; i < dense.length; i++) if (pins[i] != null) noteJunction(dense[i][0], dense[i][1]);
-      const alg = solveChain(dense, Math.min(...chain.map((m) => m.g)),
-        a0 === null ? null : a0 - SURFACE.road.lift, a1 === null ? null : a1 - SURFACE.road.lift, pins);
-      writeHints(dense, alg);
-      {
-        let len = 0;
-        for (let i = 1; i < dense.length; i++) {
-          len += Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
-        }
-        juncStats.chains++;
-        juncStats.totalChainM += len;
-        juncStats.maxChainM = Math.max(juncStats.maxChainM, Math.round(len));
-      }
-      chainDbg.chained += chain.length;
-      for (const m of chain) hintedWays.add(m.key);
-    }
-  }
+  wayTape?.push({ els, halo });
+  // PRE-PASS: chain this tile's drivable ways end-to-end and solve each chain's
+  // profile whole, publishing hints for the per-way builds below. Lives in
+  // `roadsolve.ts` now — see there for why.
+  solver.plan(els, halo);
   for (const el of els) {
     // Clipped lines carry their own key; areas still dedupe on the bare id, so
     // a lake straddling two vector tiles is still drawn exactly once.
