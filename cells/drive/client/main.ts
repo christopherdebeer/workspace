@@ -15432,13 +15432,17 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   if (navBend && camMode !== 'top') {
     const deg = Math.abs((navBend.ang * 180) / Math.PI);
     const tier = deg >= 70 ? 3 : deg >= 45 ? 2 : deg >= 30 ? 1 : 0;
-    const col = [UI.soft, UI.gold, UI.hot, UI.bad][tier];
     const acx = Math.round(HW / 2), acy = Math.round(HH * 0.16);
     drawBendArrow(acx, acy, navBend.left, tier);
-    const sev = ['EASY', '', 'HARD', 'HAIRPIN'][tier];
-    const d = navBend.dist < 15 ? 'NOW' : `${Math.round(navBend.dist / 10) * 10}M`;
-    const line = [sev, navBend.left ? 'LEFT' : 'RIGHT', d].filter(Boolean).join(' ');
-    textEdgeP(line, Math.round((HW - textPW(line)) / 2), acy + 15, col);
+    // THE SYMBOL IS THE CALL. It already carries the severity, in its shape,
+    // and the side, in which way it is mirrored — so "HAIRPIN LEFT" was the
+    // picture said again in words, and the severity colour was it said a third
+    // time. Three channels for one fact is not emphasis, it is noise you have
+    // to read past. What a shape genuinely cannot say is HOW FAR, so that is
+    // all the line says, in the same white as the symbol it sits under: one
+    // object, one voice, and a number.
+    const line = navBend.dist < 15 ? 'NOW' : `${Math.round(navBend.dist / 10) * 10}M`;
+    textEdgeP(line, Math.round((HW - textPW(line)) / 2), acy + 15, '#f4f8f6');
   }
   // ── the dock, bottom-left: whichever view ISN'T fullscreen ──
   // While charting, the renderer scissors a live POV preview into this square,
