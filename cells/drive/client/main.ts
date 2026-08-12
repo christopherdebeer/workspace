@@ -868,6 +868,44 @@ const SHADOW_Q = [
   { map: 2048, span: 150 },  // HIGH   — a ridge and its valley
 ];
 let shadowSpan = 110;
+/**
+ * HOW DARK A SHADOW IS. three gained `light.shadow.intensity` in r165 and this
+ * cell is on r160, so the knob does not exist — but the mask does. Every lit
+ * material calls getShadowMask(), which returns 1 in the light and 0 in shadow,
+ * and lifting its floor is the whole feature: mix(1, mask, k) leaves lit
+ * surfaces untouched and makes shadowed ones as dark as you ask for.
+ *
+ * The patch goes on the CHUNK, once, so it reaches every material — terrain,
+ * rig, vegetation, buildings — rather than needing a hook on each. The value
+ * rides in as a #define through `common`, which every shader includes, and
+ * changing it recompiles: a dial turn is a rare event and a define is worth
+ * more than a uniform slot in a fragment shader that already carries plenty.
+ *
+ * NOT the same as lifting the ambient light, which is the obvious alternative:
+ * that brightens the lit side too and washes the whole scene out. This moves
+ * only the parts the sun cannot see.
+ */
+const SHADOW_DARK = [0, 0.4, 0.7, 1];      // OFF · SOFT · MID · FULL
+const SHADOW_COMMON = THREE.ShaderChunk.common;
+let shadowMaskPatched = false;
+{
+  const c = THREE.ShaderChunk.shadowmask_pars_fragment;
+  if (c.includes('return shadow;')) {
+    THREE.ShaderChunk.shadowmask_pars_fragment =
+      c.replace('return shadow;', 'return mix( 1.0, shadow, SHADOW_DARKNESS );');
+    shadowMaskPatched = true;
+  }
+}
+function setShadowDark(i: number): void {
+  if (!shadowMaskPatched) return;                 // upstream chunk changed shape
+  const k = SHADOW_DARK[clamp(i, 0, SHADOW_DARK.length - 1)];
+  THREE.ShaderChunk.common = `#define SHADOW_DARKNESS ${k.toFixed(3)}\n${SHADOW_COMMON}`;
+  // Every program that already exists was built with the old number in it.
+  scene.traverse((o) => {
+    const raw = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+    for (const m of Array.isArray(raw) ? raw : raw ? [raw] : []) m.needsUpdate = true;
+  });
+}
 const shadowsWanted = new URLSearchParams(location.search).get('shadows') !== '0';
 sun.castShadow = shadowsWanted;
 /** Re-cut the sun's box. The map has to be DISPOSED by hand when its size
@@ -14609,6 +14647,10 @@ const DIAL_GROUPS: DialGroup[] = [
       // off — but it is the difference between a beam that lights a wall and
       // one that passes through it.
       dial('shead', 'HEADLAMP SHADOW', ['OFF', 'ON'], 1, (i) => { headShadowOn = i === 1; }),
+      // How dark the shadowed side goes. Costs nothing — it is a number in a
+      // shader, not a pass — and it is the dial that decides whether this
+      // world reads as overcast or as high desert.
+      dial('sdark', 'SHADOW DEPTH', ['OFF', 'SOFT', 'MID', 'FULL'], 2, (i) => { setShadowDark(i); }),
       // LIVE is the real sun over the real place at this moment. The rest force
       // a LOCAL SOLAR hour, so "noon" means the same thing at every longitude.
       dial('time', 'TIME', [...TIME_MODES], 0, (i) => { timeMode = i; }),
@@ -15573,6 +15615,7 @@ function setClean(on: boolean): void {
  *  screenshot cannot tell you that. */
 /** Is the sun actually casting, and from where — the two questions behind both
  *  "no terrain shadows" and "the headlights crawl at night". */
+(window as unknown as { __setdark?: object }).__setdark = (i: number): void => setShadowDark(i);
 (window as unknown as { __shadowdbg?: object }).__shadowdbg = (): object => ({
   enabled: renderer.shadowMap.enabled, casting: sun.castShadow,
   sunY: +SUN_DIR.y.toFixed(3), span: shadowSpan,
@@ -15599,7 +15642,7 @@ function setClean(on: boolean): void {
   })(),
   // The headlights are a real SpotLight, and whether it is in the shadow
   // system at all is the question people actually ask about it.
-  headlightCasts: headSpot.castShadow, headShadowOn,
+  headlightCasts: headSpot.castShadow, headShadowOn, maskPatched: shadowMaskPatched,
 });
 (window as unknown as { __hudrects?: object }).__hudrects = (): object =>
   ({ dock: dockRect, pov: povRect, mapUp: mapUpRect, drone: droneRect });
