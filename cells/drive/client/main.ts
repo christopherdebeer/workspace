@@ -11159,8 +11159,13 @@ canvas.addEventListener('pointermove', (e) => {
   if (panPtrs.size === 1) {
     // metres per screen px at the current viewing distance
     const k = (CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh) / innerHeight;
-    panX -= (cur.x - prev.x) * k;
-    panZ -= (cur.y - prev.y) * k;
+    // A DRAG IS A SCREEN GESTURE. On a turned chart the world axes are no
+    // longer the screen's, so the finger's delta is put through the same
+    // rotation the view is drawn with — otherwise dragging left walks the map
+    // off in whatever direction north happens to be.
+    const mr = mapRot(), fx = -(cur.x - prev.x) * k, fy = -(cur.y - prev.y) * k;
+    panX += fx * Math.cos(mr) + fy * Math.sin(mr);
+    panZ += fx * Math.sin(mr) - fy * Math.cos(mr);
   } else if (panPtrs.size === 2) {
     const other = [...panPtrs.entries()].find(([id]) => id !== e.pointerId)?.[1];
     if (other) {
@@ -11301,7 +11306,9 @@ function input(): { throttle: number; steer: number; brake: boolean; brakeF: num
       // push where you want to go on screen and the car steers itself onto
       // that bearing. (Relative gas/steer read inverted whenever the car
       // pointed south.)
-      const want = Math.atan2(stick.dx, -stick.dy);
+      // Push where you want to go ON SCREEN — so the bearing is read in the
+      // chart's own frame and turned back into a world one.
+      const want = mapRot() + Math.atan2(stick.dx, -stick.dy);
       const diff = Math.atan2(Math.sin(want - state.heading), Math.cos(want - state.heading));
       if (Math.abs(diff) > 2.7 && Math.abs(state.speed) > 0.5) {
         stickBrake = true; // pulling straight against travel = brake
@@ -11384,41 +11391,75 @@ Object.assign(mini.style, {
 mapDock.appendChild(mini);
 function updateDock(): void { /* the HUD decides what the corner shows */ }
 const miniCtx = mini.getContext('2d')!;
+/**
+ * NORTH UP or HEADING UP, for the chart and the minimap together — they are one
+ * instrument seen at two zooms and disagreeing about which way is up would be
+ * worse than either choice. North-up is a map you can share a bearing off;
+ * heading-up is the one you can steer by, because a left-hand bend is on the
+ * left of the screen. Sticky, because it is a preference and not a mode you
+ * visit.
+ */
+let mapHeadingUp = localStorage.getItem('drive.mapUp') === 'heading';
+/** The angle the chart is turned by: what screen-up points at, in world terms. */
+const mapRot = (): number => (mapHeadingUp ? viewH() : 0);
+function toggleMapUp(): void {
+  mapHeadingUp = !mapHeadingUp;
+  try { localStorage.setItem('drive.mapUp', mapHeadingUp ? 'heading' : 'north'); } catch { /* private mode */ }
+}
 function drawMinimap(): void {
   const S = MINI * 2;
-  const spanPx = MINI_SPAN / M_PER_PX;                 // map-layer px the window spans
+  const rot = mapRot();
+  // Turning a square window leaves its corners looking at nothing, so the
+  // extent drawn grows by root two — the diagonal — while the metres per pixel
+  // stay exactly as they were.
+  const K = rot ? Math.SQRT2 : 1;
+  const spanPx = (MINI_SPAN / M_PER_PX) * K;           // map-layer px the window spans
   const [cx, cz] = mapPt(viewX(), viewZ());
   const sx = cx - spanPx / 2, sz = cz - spanPx / 2;
+  const D = S * K;
   miniCtx.clearRect(0, 0, S, S);
   // The full square — a porthole inside a square panel wasted a third of an
   // instrument that now has to read bends.
-  miniCtx.save();
   miniCtx.fillStyle = '#0a0f0a';
   miniCtx.fillRect(0, 0, S, S);
-  miniCtx.drawImage(mapLayer, sx, sz, spanPx, spanPx, 0, 0, S, S);
+  miniCtx.save();
+  miniCtx.translate(S / 2, S / 2);
+  miniCtx.rotate(-rot);
+  miniCtx.drawImage(mapLayer, sx, sz, spanPx, spanPx, -D / 2, -D / 2, D, D);
   // Fog over the chart: the fog canvas is stored flipped for the GPU (flipY),
   // so flip it back while compositing — unexplored stays unknown on the map too.
+  // The flip goes INSIDE the rotation, because what is being undone is a
+  // mirroring about world z, and inside the turned frame that is still the
+  // axis the source rect was picked along.
   // With the fog dialled off the chart is a chart, not a scratchcard.
   if ((compMat.uniforms.uFow as { value: number }).value > 0) {
     miniCtx.save();
-    miniCtx.translate(0, S);
     miniCtx.scale(1, -1);
-    miniCtx.drawImage(fogCanvas, sx, FOG_PX - sz - spanPx, spanPx, spanPx, 0, 0, S, S);
+    miniCtx.drawImage(fogCanvas, sx, FOG_PX - sz - spanPx, spanPx, spanPx, -D / 2, -D / 2, D, D);
     miniCtx.restore();
   }
-  // The car: an amber heading wedge, always centre.
+  miniCtx.restore();
+  // The car: an amber wedge, always centre. Heading-up it points straight up by
+  // construction, because the chart under it has been turned by the same angle.
+  miniCtx.save();
   miniCtx.translate(S / 2, S / 2);
-  miniCtx.rotate(viewH());
+  miniCtx.rotate(viewH() - rot);
   miniCtx.fillStyle = '#f5c453';
   miniCtx.beginPath();
   miniCtx.moveTo(0, -9); miniCtx.lineTo(6, 7); miniCtx.lineTo(-6, 7);
   miniCtx.closePath(); miniCtx.fill();
   miniCtx.restore();
-  // North tick.
+  // NORTH RIDES ROUND THE RIM. Nailed to the top it was a label; carried to
+  // wherever north actually is, it is the one reading that makes a turning
+  // chart legible — and it lands back at the top of its own accord whenever
+  // the chart is north-up.
+  const nr = S / 2 - 16;
   miniCtx.fillStyle = 'rgba(245,196,83,0.8)';
   miniCtx.font = '600 18px ui-monospace, monospace';
   miniCtx.textAlign = 'center';
-  miniCtx.fillText('N', S / 2, 24);
+  miniCtx.textBaseline = 'middle';
+  miniCtx.fillText('N', S / 2 - Math.sin(rot) * nr, S / 2 - Math.cos(rot) * nr);
+  miniCtx.textBaseline = 'alphabetic';
 }
 
 // ── camera modes: top-down chart → low chase → the driver's seat ───
@@ -13237,7 +13278,14 @@ function tick(now: number): void {
     const dist = CAM.base * zoomCur + Math.abs(drone.up ? 0 : state.speed) * 3.6 * CAM.perKmh;
     const tiltRad = (CAM.tilt * Math.PI) / 180;
     const tgtY = sampleHeight(tvx + panX, tvz + panZ);
-    camPos.set(tvx + panX, tgtY + dist * Math.sin(tiltRad), tvz + panZ + dist * Math.cos(tiltRad));
+    // The camera stands OPPOSITE whatever screen-up is meant to point at: due
+    // south of the target for north-up, behind the truck along its own heading
+    // for heading-up. One offset, one angle, and the tilt is untouched.
+    const mrot = mapRot();
+    const back = dist * Math.cos(tiltRad);
+    camPos.set(tvx + panX - Math.sin(mrot) * back,
+      tgtY + dist * Math.sin(tiltRad),
+      tvz + panZ + Math.cos(mrot) * back);
     // PUSH THE NEAR PLANE OUT with the camera. Depth precision is governed by
     // the near/far RATIO, and at 1:30000 a lake drape sitting a few centimetres
     // over the terrain lands in the same depth bucket as the ground — which is
@@ -14895,22 +14943,35 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   }
   dockRect = { x: mx, y: my, w: mw, h: mw };
   {
-    const povLabel = lastPov === 'chase' ? 'CAB' : 'CHASE';   // what a tap switches TO
-    const pw = textW(povLabel) + 8;
-    // Beside the dock, not above it — above is the conditions column's ground.
-    povRect = { x: mx + mw + 4, y: my + mw - 12, w: pw, h: 12 };
-    panel(povRect.x, povRect.y, pw, 12, UI.edge);
-    text(hctx, povLabel, povRect.x + 4, povRect.y + 3, UI.edge);
-    // THE DRONE CHIP, stacked directly over the seat toggle. Its label is what
-    // a tap DOES, like the chip below it: LAUNCH when it is stowed, DOCK when
-    // it is up and you are near enough to land it, and the state itself when
-    // neither is true — a drone lying in a field is not a button, it is a
-    // journey. Colour carries the battery: gold in the air, red once it is
-    // low enough that getting back is the only sensible plan.
+    // ── THE DASH LIGHTS ──
+    // Three cells beside the dock, read bottom-up: the seat you drive from, the
+    // way the chart is pointed, and the drone. They were word chips, and words
+    // in a stack that size are a paragraph in the corner of a windscreen; a lamp
+    // is read without being looked at, which is the whole of what a dash light
+    // is for.
+    //
+    // A LAMP SHOWS STATE, NOT THE ACTION. The chips said what a tap would DO
+    // (CAB when you were in chase), which is the right idea for a button and
+    // the wrong one for an indicator: nothing else lit on this screen means
+    // "press me to stop". Lit is the thing being true — you are in the cab, the
+    // chart is turning with you — and dim is the alternative, present but off.
+    const CELL = 15, GAP = 3;
+    const cellX = mx + mw + 4;
+    const lamp = (y: number, glyph: string, col: string, lit: boolean): void => {
+      panel(cellX, y, CELL, CELL, lit ? col : UI.dim);
+      hudIconEdge(glyph, cellX + 4, y + 3, lit ? col : UI.dim, 8);
+    };
+    // BOTTOM: the seat. Lit in the cab, where the A-pillars and the headlights
+    // are; dim in chase, watching from outside.
+    povRect = { x: cellX, y: my + mw - CELL, w: CELL, h: CELL };
+    lamp(povRect.y, ICON.car, UI.edge, lastPov === 'cab');
+    // MIDDLE: which way the chart is up. Lit means it turns with you.
+    mapUpRect = { x: cellX, y: povRect.y - CELL - GAP, w: CELL, h: CELL };
+    lamp(mapUpRect.y, ICON.map, UI.edge, mapHeadingUp);
+    // TOP: the drone, keeping the colour it always carried — gold in the air,
+    // green once it is coming home on its own, red when it is down or further
+    // out than the charge can bring it back from.
     const home = Math.hypot(drone.x - state.x, drone.z - state.z);
-    const near = home <= DRONE.DOCK;
-    const dLabel = drone.downed ? 'DOWN'
-      : drone.up ? (near ? 'DOCK' : drone.recall ? 'MANUAL' : 'RECALL') : 'DRONE';
     // RED WHEN IT CANNOT GET HOME. The charge left buys a fixed distance, so
     // the honest warning is not "battery low" but "further than you can
     // return" — with a fifth in hand for the turn and the wind you flew out on.
@@ -14918,10 +14979,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const marooned = drone.up && home > range * 0.8;
     const dCol = drone.downed || marooned ? UI.bad
       : drone.up ? (drone.recall ? UI.good : UI.gold) : UI.edge;
-    const dw = textW(dLabel) + 8;
-    droneRect = { x: povRect.x, y: povRect.y - 14, w: dw, h: 12 };
-    panel(droneRect.x, droneRect.y, dw, 12, dCol);
-    text(hctx, dLabel, droneRect.x + 4, droneRect.y + 3, dCol);
+    droneRect = { x: cellX, y: mapUpRect.y - CELL - GAP, w: CELL, h: CELL };
+    lamp(droneRect.y, ICON.gps, dCol, drone.up || drone.downed);
+    const dw = CELL;
     // A battery strip under the chip while it is airborne, because the number
     // that matters is how far you can still get, and it is only legible as a
     // bar you can read without looking away from where you are flying.
@@ -15195,12 +15255,20 @@ function stepOverlays(): void {
 let dockRect = { x: 0, y: 0, w: 0, h: 0 };
 let povRect = { x: 0, y: 0, w: 0, h: 0 };
 let droneRect = { x: 0, y: 0, w: 0, h: 0 };
+let mapUpRect = { x: 0, y: 0, w: 0, h: 0 };
 function setClean(on: boolean): void {
   document.body.classList.toggle('clean', on);
   if (!on) updateStickHome(); // the pinned stick has to come back with it
   try { localStorage.setItem('drive.clean', on ? '1' : '0'); } catch { /* fine */ }
 }
 // Taps: buttons first, then the camera dock, then fall through to driving.
+/** Where the HUD thinks its own controls are, and how HUD pixels map to screen
+ *  ones — a lamp that does not respond to a tap has a wrong rect, and a
+ *  screenshot cannot tell you that. */
+(window as unknown as { __hudrects?: object }).__hudrects = (): object =>
+  ({ dock: dockRect, pov: povRect, mapUp: mapUpRect, drone: droneRect });
+(window as unknown as { __hudscale?: object }).__hudscale = (): number => hudS;
+(window as unknown as { __mapup?: object }).__mapup = (): string => (mapHeadingUp ? 'heading' : 'north');
 function hudTap(cx: number, cy: number): boolean {
   if (document.body.classList.contains('clean')) return false;
   const x = cx / hudS, y = cy / hudS;
@@ -15210,7 +15278,8 @@ function hudTap(cx: number, cy: number): boolean {
   // tap that reaches here while it is up can only be a stray; swallow it.
   if (menu.tab() !== null) return true;
   if (inside(droneRect, 2)) { droneToggle(); return true; }
-  if (inside(povRect, 0)) { togglePov(); return true; }
+  if (inside(mapUpRect, 2)) { toggleMapUp(); return true; }
+  if (inside(povRect, 2)) { togglePov(); return true; }
   if (inside(dockRect, 0)) { toggleCam(); return true; }
   // A tap on a pin PINS it — the place stays on screen past the
   // nearest-three rule until tapped again. Mission pins belong to the job
