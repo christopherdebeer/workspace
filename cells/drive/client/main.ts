@@ -10435,6 +10435,9 @@ function meshHeightAt(x: number, z: number): number | null {
   kmh: +(state.speed * 3.6).toFixed(1),
 });
 (window as unknown as { __toll?: object }).__toll = (x: number, z: number): [number, number] => localToLatLon(x, z);
+/** The other direction — a test needs to aim at a real place, not a guess. */
+(window as unknown as { __tolocal?: object }).__tolocal =
+  (lat: number, lon: number): [number, number] => toLocal(lat, lon);
 (window as unknown as { __feed?: object }).__feed =
   (lat: number, lon: number, head: number | null = null, spd: number | null = null, acc = 8,
     ageMs = 0): void => {
