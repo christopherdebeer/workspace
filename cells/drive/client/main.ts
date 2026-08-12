@@ -936,6 +936,10 @@ const castIfSolid = (o: THREE.Object3D): void => {
 // latitudes and dates BELOW it — and NOON puts it overhead, which are the two
 // lightings where a landscape's own shadows are either absent or invisible.
 // Nine and fifteen are where a dune has a lit face and a dark one.
+const SUN_ALT_FORCE = (() => {
+  const v = new URLSearchParams(location.search).get('sunalt');
+  return v === null || v === '' || !Number.isFinite(Number(v)) ? null : clamp(Number(v), -20, 89);
+})();
 const TIME_MODES = ['CYCLE', 'LIVE', 'DAWN', 'MORNING', 'NOON', 'AFTERNOON', 'DUSK', 'NIGHT'] as const;
 const TIME_HOUR: Record<string, number> = {
   DAWN: 6, MORNING: 9, NOON: 12, AFTERNOON: 15, DUSK: 18, NIGHT: 0,
@@ -987,6 +991,16 @@ function stepSun(): void {
   // World axes: +x east, −z north. Azimuth runs from north through east.
   const ca = Math.cos(alt);
   SUN_DIR.set(ca * Math.sin(az), Math.sin(alt), -ca * Math.cos(az));
+  // FORCE THE SUN'S HEIGHT, for looking at shadows. The presets are HOURS, and
+  // an hour is a different elevation at every latitude and date: three o'clock
+  // at Big Sur in August is a forty-five degree sun, which is exactly the angle
+  // where a hillside barely shades itself. ?sunalt=10 asks for ten degrees
+  // wherever you are, keeping the azimuth the clock gave it.
+  if (SUN_ALT_FORCE !== null) {
+    const a = (SUN_ALT_FORCE * Math.PI) / 180, c2 = Math.cos(a);
+    const m = Math.hypot(SUN_DIR.x, SUN_DIR.z) || 1;
+    SUN_DIR.set((SUN_DIR.x / m) * c2, Math.sin(a), (SUN_DIR.z / m) * c2);
+  }
   // TWO VECTORS, and conflating them put a moon the size of a hillside in the
   // night sky. SUN_DIR is where the sun ACTUALLY IS — the sky shader draws its
   // disc from it, so below the horizon there is correctly no disc at all. The
