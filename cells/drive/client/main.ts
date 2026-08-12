@@ -854,13 +854,41 @@ scene.add(sun);
  * on roughly the same pitch as the world's own pixels — cheaper AND more of a
  * piece with everything else on screen.
  */
-const SHADOW_SPAN = 110;       // half-width of the box, metres
+/**
+ * Tunable, because the whole feature is one extra scene pass and the right
+ * amount of it is a property of the DEVICE, not of the scene. Span and
+ * resolution move together: what matters is metres per texel — 0.16 at LOW,
+ * 0.21 at MED, 0.15 at HIGH — so the edge stays about as hard while the box
+ * grows to hold more of the world.
+ */
+const SHADOW_Q = [
+  { map: 0, span: 110 },     // OFF
+  { map: 512, span: 80 },    // LOW    — the truck and what is immediately round it
+  { map: 1024, span: 110 },  // MED
+  { map: 2048, span: 150 },  // HIGH   — a ridge and its valley
+];
+let shadowSpan = 110;
 const shadowsWanted = new URLSearchParams(location.search).get('shadows') !== '0';
 sun.castShadow = shadowsWanted;
+/** Re-cut the sun's box. The map has to be DISPOSED by hand when its size
+ *  changes or three keeps rendering into the old one at the old resolution. */
+function setShadowQ(i: number): void {
+  const q = SHADOW_Q[clamp(i, 0, SHADOW_Q.length - 1)];
+  renderer.shadowMap.enabled = shadowsWanted && q.map > 0;
+  shadowSpan = q.span;
+  if (q.map > 0) {
+    sun.shadow.mapSize.set(q.map, q.map);
+    sun.shadow.map?.dispose();
+    sun.shadow.map = null as unknown as THREE.WebGLRenderTarget;
+  }
+  const c = sun.shadow.camera;
+  c.left = -shadowSpan; c.right = shadowSpan; c.top = shadowSpan; c.bottom = -shadowSpan;
+  c.updateProjectionMatrix();
+}
 sun.shadow.mapSize.set(1024, 1024);
 const shCam = sun.shadow.camera;
-shCam.left = -SHADOW_SPAN; shCam.right = SHADOW_SPAN;
-shCam.top = SHADOW_SPAN; shCam.bottom = -SHADOW_SPAN;
+shCam.left = -shadowSpan; shCam.right = shadowSpan;
+shCam.top = shadowSpan; shCam.bottom = -shadowSpan;
 shCam.near = 1; shCam.far = 1400;
 // A depth bias tuned for a 200m box at 1024: too little and every lit surface
 // stripes itself (acne), too much and contact shadows detach from their feet.
@@ -8244,6 +8272,23 @@ for (const sx of [-0.62, 0.62]) {
 // the DAY values, where the beam is a hint rather than a searchlight.
 const HEAD_DAY = { i: 90, d: 110 }, HEAD_NIGHT = { i: 260, d: 230 };
 const headSpot = new THREE.SpotLight(0xfff0d0, HEAD_DAY.i, HEAD_DAY.d, 0.52, 0.65, 1.0);
+/**
+ * The beam occludes. A barrier stripes it, a trunk throws a shadow down the
+ * road, a sign's shadow races past — none of which existed, because the light
+ * passed through everything in the world.
+ *
+ * SMALL AND SHORT. Its far plane is matched to the beam's own reach rather than
+ * to the world: past the light's `distance` there is nothing lit to shade, and
+ * every metre of far plane spent out there is depth precision taken from the
+ * twenty metres that matter. Half the sun's resolution because a spot's frustum
+ * covers a cone rather than a box, so the texels land closer together anyway.
+ */
+let headShadowOn = true;
+headSpot.shadow.mapSize.set(512, 512);
+headSpot.shadow.camera.near = 1.5;
+headSpot.shadow.camera.far = 140;
+headSpot.shadow.bias = -0.002;
+headSpot.shadow.normalBias = 0.12;
 headSpot.position.set(0, 0.78 * SY, -2.0); // likewise
 headSpot.target.position.set(0, -1.6, -30);
 car.add(headSpot, headSpot.target);
@@ -13666,6 +13711,12 @@ function tick(now: number): void {
     // whole scene pass for half of every day.
     const up = SUN_DIR.y > 0.05;
     sun.castShadow = shadowsWanted && up;
+    // THE HEADLIGHTS CAST ONLY WHEN THE SUN DOES NOT, so there is never a
+    // second shadow pass on top of the first — the expensive thing about this
+    // was always going to be paying twice, and after dark the sun's pass is
+    // already switched off and its budget is going spare. Nothing to light in
+    // daylight anyway: a beam is invisible against a lit road.
+    headSpot.castShadow = headShadowOn && renderer.shadowMap.enabled && !up;
     if (up) {
       const sx = viewX(), sz = viewZ(), sy = sampleHeight(sx, sz);
       sun.target.position.set(sx, sy, sz);
@@ -14536,6 +14587,14 @@ const DIAL_GROUPS: DialGroup[] = [
         for (const h of herds) h.visible = wildlifeOn;
       }),
       dial('cloud', 'CLOUD SHADOW', ['OFF', 'ON'], 1, (i) => { cloudShadowOn = i === 1; }),
+      // One extra scene pass, so the right setting is a property of the phone
+      // rather than of the scene. MED is the shipped default; LOW is the one to
+      // reach for when the frame counter in the corner goes gold.
+      dial('shq', 'SHADOWS', ['OFF', 'LOW', 'MED', 'HIGH'], 2, (i) => { setShadowQ(i); }),
+      // Free in frame time — it only ever runs when the sun's pass is already
+      // off — but it is the difference between a beam that lights a wall and
+      // one that passes through it.
+      dial('shead', 'HEADLAMP SHADOW', ['OFF', 'ON'], 1, (i) => { headShadowOn = i === 1; }),
       // LIVE is the real sun over the real place at this moment. The rest force
       // a LOCAL SOLAR hour, so "noon" means the same thing at every longitude.
       dial('time', 'TIME', [...TIME_MODES], 0, (i) => { timeMode = i; }),
@@ -15502,7 +15561,7 @@ function setClean(on: boolean): void {
  *  "no terrain shadows" and "the headlights crawl at night". */
 (window as unknown as { __shadowdbg?: object }).__shadowdbg = (): object => ({
   enabled: renderer.shadowMap.enabled, casting: sun.castShadow,
-  sunY: +SUN_DIR.y.toFixed(3), span: SHADOW_SPAN,
+  sunY: +SUN_DIR.y.toFixed(3), span: shadowSpan,
   bias: sun.shadow.bias, normalBias: sun.shadow.normalBias,
   terrainShadowSide: terrainMat.shadowSide,
   // What on the rig is actually in the shadow map — the beams appearing here
@@ -15526,7 +15585,7 @@ function setClean(on: boolean): void {
   })(),
   // The headlights are a real SpotLight, and whether it is in the shadow
   // system at all is the question people actually ask about it.
-  headlightCasts: headSpot.castShadow,
+  headlightCasts: headSpot.castShadow, headShadowOn,
 });
 (window as unknown as { __hudrects?: object }).__hudrects = (): object =>
   ({ dock: dockRect, pov: povRect, mapUp: mapUpRect, drone: droneRect });
