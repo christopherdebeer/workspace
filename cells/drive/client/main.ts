@@ -4097,14 +4097,31 @@ const solver = new RoadSolver({
  * captured is exactly what decides whether a way reaches the solver at all —
  * which is the question five rounds of browser debugging were spent on.
  */
-(window as unknown as { __fixture?: object }).__fixture = (ways: OsmWay[][] = []): object => ({
+(window as unknown as { __fixture?: object }).__fixture = (heights = false): object => ({
   origin: { lat: origin.lat, lon: origin.lon, mLon: origin.mLon, mLat: M_LAT },
   grid: GRID,
   juncR: JUNC_R,
   roadLift: SURFACE.road.lift,
   gradeMax: GRADE_MAX,
-  tiles: [...heightTiles.values()].map((t) => ({ xs: t.xs, zs: t.zs, w: t.w, h: t.h })),
-  ways: ways.length ? ways : undefined,
+  // EXTENTS ALWAYS; SAMPLES ON REQUEST. Extents alone answer "did this way
+  // reach the solver", which is most questions and keeps a fixture at tens of
+  // kilobytes. The heights themselves are 256KB a tile and only the bench DP
+  // reads them — but without them a test cannot tell a flyover from a turning,
+  // because that judgement is entirely about how far a deck sits off the
+  // ground. Rounded to the centimetre: the solver's own tolerances are metres,
+  // and full float32 triples the file for precision nothing here uses.
+  tiles: [...heightTiles.values()].map((t) => ({
+    tx: t.tx, ty: t.ty, xs: t.xs, zs: t.zs, w: t.w, h: t.h,
+    data: heights ? Array.from(t.data, (v) => Math.round(v * 100) / 100) : undefined,
+  })),
+  baseElev,
+  // THE DECKS THIS SESSION ACTUALLY SETTLED ON. Full height grids would be
+  // megabytes and are only read by the bench DP; the SOLVED profiles are a few
+  // thousand triples and are the thing a flyover question is really about —
+  // "how far apart are these two roads where they appear to meet" is answered
+  // by their decks, not by the terrain under them. Centimetres.
+  hints: [...solver.hints.values()].flat()
+    .map(([hx, hz, hy]) => [Math.round(hx * 100) / 100, Math.round(hz * 100) / 100, Math.round(hy * 100) / 100]),
 });
 const juncGrid = solver.junctions;
 const juncStats = solver.stats;
