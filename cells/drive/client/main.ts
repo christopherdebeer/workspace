@@ -3970,9 +3970,19 @@ function nextBend(x: number, z: number, heading: number): NavBend | null {
   const hx = Math.sin(heading), hz = -Math.cos(heading);
   const fwd = (cur.bx - cur.ax) * hx + (cur.bz - cur.az) * hz >= 0;
   // If the car is essentially AT the far end already, start the chain there.
-  const pts: Array<[number, number]> = [[x, z]];
+  // START ON THE CENTRELINE, NOT AT THE CAR. The chain used to open at the
+  // car's own position, so the first leg ran from wherever in the lane you
+  // happened to be to the end of the segment — and the angle between THAT and
+  // the road beyond it counts as a turn. Sitting three metres off centre with a
+  // twelve-metre leg ahead is fourteen degrees of invented corner at the very
+  // first vertex, on a threshold of twenty-two: most of a call, conjured out of
+  // lane position, and it moves every time you drift. The projection is where
+  // the road is; the car is just near it.
+  const cdx = cur.bx - cur.ax, cdz = cur.bz - cur.az;
+  const ct = clamp(((x - cur.ax) * cdx + (z - cur.az) * cdz) / (cdx * cdx + cdz * cdz || 1), 0, 1);
+  const pts: Array<[number, number]> = [[cur.ax + cdx * ct, cur.az + cdz * ct]];
   let ex = fwd ? cur.bx : cur.ax, ez = fwd ? cur.bz : cur.az;
-  let dirX = ex - x, dirZ = ez - z;
+  let dirX = ex - pts[0][0], dirZ = ez - pts[0][1];
   let leg = Math.hypot(dirX, dirZ);
   if (leg > 0.5) { dirX /= leg; dirZ /= leg; pts.push([ex, ez]); }
   else { dirX = hx; dirZ = hz; }
@@ -14416,7 +14426,7 @@ function meter(x: number, y: number, n: number, lit: number, col: string, w = 3,
 // The call is DRAWN now: a bent arrow whose geometry IS the bend — a lean,
 // an elbow, or a full hairpin folding back on itself — mirrored to its side
 // and coloured by severity. A shape reads at 120km/h; a sentence does not.
-function drawBendArrow(cxp: number, cyp: number, left: boolean, tier: number, col: string): void {
+function drawBendArrow(cxp: number, cyp: number, left: boolean, tier: number): void {
   const cells: Array<[number, number]> = [];
   const plot = (x: number, y: number): void => { cells.push([x, y]); };
   // Built turning RIGHT on a unit grid (negative y is up), mirrored at draw.
@@ -14451,8 +14461,21 @@ function drawBendArrow(cxp: number, cyp: number, left: boolean, tier: number, co
       hctx.fillRect(cxp + (left ? -gx - 1 : gx) * S + ox, cyp + gy * S + oy, S, S);
     }
   };
-  for (const [ox, oy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) draw(ox, oy, 'rgba(4,10,11,0.85)');
-  draw(0, 0, col);
+  // A ROAD SIGN, not a coloured arrow. Warning signs the world over are a WHITE
+  // symbol carrying a hard dark stroke, and they are that way because the
+  // silhouette has to survive rain, a low sun and a glance — which is the same
+  // problem a call at 120km/h has. The severity used to be in the arrow's
+  // colour, so the symbol changed hue with every bend and never became one
+  // remembered shape; it lives in the words underneath now, where a change of
+  // colour is a change of emphasis rather than a change of object.
+  // Stroked on all EIGHT neighbours at full cell size: a four-way outline
+  // leaves the diagonals of every elbow and every arrowhead bare, and a symbol
+  // with gaps in its own edge is not a sign, it is a sprite.
+  for (const [ox, oy] of
+    [[-1, -1], [0, -1], [1, -1], [-1, 0], [1, 0], [-1, 1], [0, 1], [1, 1]] as const) {
+    draw(ox * S, oy * S, 'rgba(4,10,11,0.92)');
+  }
+  draw(0, 0, '#f4f8f6');
 }
 // One MENU chip holds the affordances, so the top of the screen belongs to the
 // compass. The menu itself is DOM now — layout, tabs and buttons live in
@@ -15386,7 +15409,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const tier = deg >= 70 ? 3 : deg >= 45 ? 2 : deg >= 30 ? 1 : 0;
     const col = [UI.soft, UI.gold, UI.hot, UI.bad][tier];
     const acx = Math.round(HW / 2), acy = Math.round(HH * 0.16);
-    drawBendArrow(acx, acy, navBend.left, tier, col);
+    drawBendArrow(acx, acy, navBend.left, tier);
     const sev = ['EASY', '', 'HARD', 'HAIRPIN'][tier];
     const d = navBend.dist < 15 ? 'NOW' : `${Math.round(navBend.dist / 10) * 10}M`;
     const line = [sev, navBend.left ? 'LEFT' : 'RIGHT', d].filter(Boolean).join(' ');
