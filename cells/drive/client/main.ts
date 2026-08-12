@@ -855,7 +855,8 @@ scene.add(sun);
  * piece with everything else on screen.
  */
 const SHADOW_SPAN = 110;       // half-width of the box, metres
-sun.castShadow = true;
+const shadowsWanted = new URLSearchParams(location.search).get('shadows') !== '0';
+sun.castShadow = shadowsWanted;
 sun.shadow.mapSize.set(1024, 1024);
 const shCam = sun.shadow.camera;
 shCam.left = -SHADOW_SPAN; shCam.right = SHADOW_SPAN;
@@ -863,8 +864,12 @@ shCam.top = SHADOW_SPAN; shCam.bottom = -SHADOW_SPAN;
 shCam.near = 1; shCam.far = 1400;
 // A depth bias tuned for a 200m box at 1024: too little and every lit surface
 // stripes itself (acne), too much and contact shadows detach from their feet.
-sun.shadow.bias = -0.0012;
-sun.shadow.normalBias = 0.6;
+// A 220m box at 1024 is about 0.21m per texel, so the normal offset wants to be
+// a texel or two — not the 0.6m it started at, which is three metres of slope
+// on a shallow dune and quietly erased every terrain-on-terrain shadow while
+// leaving the rig's own intact. That asymmetry was the tell.
+sun.shadow.bias = -0.0008;
+sun.shadow.normalBias = 0.25;
 scene.add(sun.target);
 /** Every shadow-relevant object goes through here, so "what casts" is one list
  *  rather than a flag repeated at a dozen construction sites. */
@@ -1265,6 +1270,14 @@ const envU = {
 // (Pattern per SimonDev's "customizing materials": extend the built-ins by
 // splicing GLSL into their chunk includes rather than rewriting materials.)
 function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
+  // THE SHADOW MAP HAS TO SEE THE FACES YOU CAN SEE. three's default for a
+  // FrontSide material is to render BACK faces into the depth map — sound for a
+  // closed object, where the far wall is a free bias — and terrain is not a
+  // closed object. Its back faces are the UNDERSIDE of the hill, so the depth
+  // recorded for a dune was the bottom of it and no ridge could ever shade its
+  // own valley. Front faces, and let the bias do the job the trick was standing
+  // in for.
+  mat.shadowSide = THREE.FrontSide;
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uCloudS = envU.uCloudS;
     sh.uniforms.uWind = envU.uWind;
@@ -13572,10 +13585,23 @@ function tick(now: number): void {
   // the rest of the drive. Aimed down the sun from high above, so the whole box
   // is inside the near/far range whatever the terrain does under it.
   {
-    const sx = viewX(), sz = viewZ(), sy = sampleHeight(sx, sz);
-    sun.target.position.set(sx, sy, sz);
-    sun.target.updateMatrixWorld();
-    sun.position.set(sx, sy, sz).addScaledVector(SUN_DIR, 700);
+    // NOTHING CASTS A SUN SHADOW AT NIGHT, and the reason is worth stating: the
+    // sun's direction is a real solar vector, so after dusk SUN_DIR.y is
+    // NEGATIVE and this line was placing the light seven hundred metres BELOW
+    // the ground with its shadow camera looking up through the terrain. The map
+    // it rendered was nonsense, and because the only illumination left after
+    // dark is the headlights, the nonsense showed up as the headlight beam
+    // crawling with blotches — a shadow bug wearing a lighting bug's clothes.
+    // Switching the caster off under the horizon fixes the artefact and skips a
+    // whole scene pass for half of every day.
+    const up = SUN_DIR.y > 0.05;
+    sun.castShadow = shadowsWanted && up;
+    if (up) {
+      const sx = viewX(), sz = viewZ(), sy = sampleHeight(sx, sz);
+      sun.target.position.set(sx, sy, sz);
+      sun.target.updateMatrixWorld();
+      sun.position.set(sx, sy, sz).addScaledVector(SUN_DIR, 700);
+    }
   }
   camera.updateMatrixWorld();
   // Refresh the INVERSE now, not at render time. Everything below that
@@ -15386,6 +15412,14 @@ function setClean(on: boolean): void {
 /** Where the HUD thinks its own controls are, and how HUD pixels map to screen
  *  ones — a lamp that does not respond to a tap has a wrong rect, and a
  *  screenshot cannot tell you that. */
+/** Is the sun actually casting, and from where — the two questions behind both
+ *  "no terrain shadows" and "the headlights crawl at night". */
+(window as unknown as { __shadowdbg?: object }).__shadowdbg = (): object => ({
+  enabled: renderer.shadowMap.enabled, casting: sun.castShadow,
+  sunY: +SUN_DIR.y.toFixed(3), span: SHADOW_SPAN,
+  bias: sun.shadow.bias, normalBias: sun.shadow.normalBias,
+  terrainShadowSide: terrainMat.shadowSide,
+});
 (window as unknown as { __hudrects?: object }).__hudrects = (): object =>
   ({ dock: dockRect, pov: povRect, mapUp: mapUpRect, drone: droneRect });
 (window as unknown as { __hudscale?: object }).__hudscale = (): number => hudS;
