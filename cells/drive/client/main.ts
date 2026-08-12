@@ -661,6 +661,13 @@ const terrainPalette = (elev: number, slope: number, cover?: number | null): [nu
 // ── the scene ──────────────────────────────────────────────────────
 const canvas = $('scene') as HTMLCanvasElement;
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+// See the sun light for why BASIC rather than PCF: this world is magnified from
+// 320 lines with nearest-neighbour, and a filtered shadow edge is detail
+// nothing downstream can hold. A dial, because it is the one addition here that
+// costs a whole extra scene pass and a phone that cannot afford it should be
+// able to say so.
+renderer.shadowMap.enabled = new URLSearchParams(location.search).get('shadows') !== '0';
+renderer.shadowMap.type = THREE.BasicShadowMap;
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05070c);
@@ -719,6 +726,44 @@ function solarAngles(lat: number, lon: number, when: Date): { alt: number; az: n
   const az = Math.atan2(-Math.sin(ha), Math.tan(dec) * Math.cos(la) - Math.sin(la) * Math.cos(ha));
   return { alt, az };
 }
+/**
+ * ONE CLOUD FIELD, for the sky and for the ground it shades.
+ *
+ * There were two. The sky drew an fBm deck in five octaves on a camera-relative
+ * plane; the terrain multiplied a DIFFERENT fBm in four octaves, at a different
+ * scale, through a different coverage curve, into its own fragment colour. They
+ * shared the cover value and the wind vector, so they thickened and drifted
+ * together and looked related — but the shadow crossing the road was never the
+ * cloud you could see overhead, because neither field knew where the other one
+ * was. It is the sort of mismatch nobody can point at and everybody feels.
+ *
+ * The deck is now anchored in the WORLD at a fixed altitude, so it has a
+ * position both shaders can ask about: the sky intersects it along the view ray,
+ * the ground walks up to it along the SUN ray, and both read the same function
+ * at the same phase. What that buys, beyond the shadows being honest: the deck
+ * parallaxes as you drive, and a shadow's edge arrives at the road at the moment
+ * the cloud's edge crosses the sun.
+ */
+const CLOUD_DECK_Y = 900;      // metres — high enough to be weather, low enough to move
+const CLOUD_SCALE = 0.0016;    // noise units per metre: patches about 600m across
+const CLOUD_GLSL = `
+  float clh21(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
+  float clvn(vec2 p){
+    vec2 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(clh21(i), clh21(i + vec2(1.0, 0.0)), f.x),
+               mix(clh21(i + vec2(0.0, 1.0)), clh21(i + vec2(1.0, 1.0)), f.x), f.y);
+  }
+  float clfbm(vec2 p){
+    float a = 0.5, s = 0.0;
+    for (int i = 0; i < 4; i++) { s += a * clvn(p); p *= 2.07; a *= 0.5; }
+    return s;
+  }
+  // How much of the sky this bit of deck fills. One curve, so a patch that
+  // reads as solid overhead is solid on the ground too.
+  float clCov(float n, float cover){
+    return smoothstep(0.60 - cover * 0.40, 0.90 - cover * 0.28, n);
+  }`;
 const skyMat = new THREE.ShaderMaterial({
   side: THREE.BackSide,
   depthWrite: false,
@@ -729,6 +774,8 @@ const skyMat = new THREE.ShaderMaterial({
     uSunDisc: { value: new THREE.Vector3() },
     uBelow: { value: new THREE.Vector3() },
     uCloud: { value: 0 }, uTime: { value: 0 },
+    uCamXZ: { value: new THREE.Vector2() },
+    uDeckY: { value: CLOUD_DECK_Y }, uCloudScale: { value: CLOUD_SCALE },
     // The deck drifts on the REAL wind: direction and speed from the live
     // observation, so the sky moves the way the sky over that place is moving.
     uWind: { value: new THREE.Vector2(0.006, 0.0022) },
@@ -737,24 +784,13 @@ const skyMat = new THREE.ShaderMaterial({
   fragmentShader: `
     uniform vec3 sunDir; uniform vec3 uZenith; uniform vec3 uHorizon;
     uniform vec3 uSunDisc; uniform vec3 uBelow; uniform float uCloud; uniform float uTime;
-    uniform vec2 uWind;
+    uniform vec2 uWind; uniform vec2 uCamXZ; uniform float uDeckY; uniform float uCloudScale;
     varying vec3 vDir;
     // Value-noise fBm. Clouds are GENERATED, not photographed: a skybox set
     // would be fixed images that could never answer to the weather system,
     // where this deck thickens, darkens and drifts with it — and inherits the
     // biome palette for free.
-    float h21(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
-    float vnoise(vec2 p){
-      vec2 i = floor(p), f = fract(p);
-      f = f * f * (3.0 - 2.0 * f);
-      return mix(mix(h21(i), h21(i + vec2(1.0, 0.0)), f.x),
-                 mix(h21(i + vec2(0.0, 1.0)), h21(i + vec2(1.0, 1.0)), f.x), f.y);
-    }
-    float fbm(vec2 p){
-      float a = 0.5, s = 0.0;
-      for (int i = 0; i < 5; i++) { s += a * vnoise(p); p *= 2.07; a *= 0.5; }
-      return s;
-    }
+    ${CLOUD_GLSL}
     void main(){
       vec3 d = normalize(vDir);
       float az = pow(max(dot(normalize(vec3(d.x, 0.0, d.z)), normalize(vec3(sunDir.x, 0.0, sunDir.z))), 0.0), 3.0);
@@ -767,16 +803,18 @@ const skyMat = new THREE.ShaderMaterial({
       col += uSunDisc * (pow(sd, 60.0) * 0.5 + pow(sd, 8.0) * 0.22);
       // ── cloud deck ──
       if (d.y > 0.015 && uCloud > 0.01) {
-        // Project onto a flat deck: no parallax (the dome rides the camera),
-        // which is right for cloud at altitude, and it stretches toward the
-        // horizon exactly as a real deck does.
-        vec2 p = d.xz / max(d.y, 0.05) * 1.4 + uWind * uTime;
-        float n = fbm(p);
+        // WHERE THE VIEW RAY MEETS THE DECK, in world metres. The dome still
+        // rides the camera, but the deck no longer does: it is a plane at a
+        // real altitude over real ground, which is what lets the terrain ask
+        // about the same patch of it. Stretches toward the horizon exactly as
+        // a deck does, and now parallaxes as you drive under it.
+        vec2 p = (uCamXZ + d.xz * (uDeckY / max(d.y, 0.05))) * uCloudScale + uWind;
+        float n = clfbm(p);
         // Coverage opens up as the front arrives; a storm nearly fills the sky.
-        float cov = smoothstep(0.62 - uCloud * 0.42, 0.92 - uCloud * 0.30, n);
+        float cov = clCov(n, uCloud);
         // Fake lighting: sample again a step toward the sun — where the deck
         // thins in that direction the edge is lit, where it thickens it is base.
-        float lit = clamp((n - fbm(p + normalize(sunDir.xz + vec2(0.001)) * 0.35)) * 3.2 + 0.5, 0.0, 1.0);
+        float lit = clamp((n - clfbm(p + normalize(sunDir.xz + vec2(0.001)) * 0.35)) * 3.2 + 0.5, 0.0, 1.0);
         vec3 base = mix(uZenith * 1.6, uSunDisc * 0.5, 0.35) * (1.0 - uCloud * 0.55);
         vec3 top = mix(vec3(0.86, 0.88, 0.92), uSunDisc, 0.35 + az * 0.4);
         vec3 cloud = mix(base, top, lit) * (1.0 - uCloud * 0.35);
@@ -798,6 +836,41 @@ scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffe0b0, 1.5);
 sun.position.copy(SUN_DIR).multiplyScalar(2000);
 scene.add(sun);
+/**
+ * REAL SUN SHADOWS, in one tight box that follows the truck.
+ *
+ * There were none at all — not on the rig, not under a tree, not down the dark
+ * side of a ridge at dawn. What read as shadow was the hemisphere light's
+ * ground bounce and some hand-painted lines in textures.
+ *
+ * The world streams out to kilometres, so one map over all of it would be
+ * metres per texel and useless. This is a single cascade about two hundred
+ * metres wide, re-centred on whatever is current every frame: crisp where you
+ * are looking, absent past that, and the aerial haze hides the boundary.
+ *
+ * BASIC AND SMALL ON PURPOSE. The world renders at 320 lines and is magnified
+ * with nearest-neighbour, so a soft percentage-closer edge would be filtered
+ * detail no buffer downstream can hold. Hard-edged shadow texels at 1024 land
+ * on roughly the same pitch as the world's own pixels — cheaper AND more of a
+ * piece with everything else on screen.
+ */
+const SHADOW_SPAN = 110;       // half-width of the box, metres
+sun.castShadow = true;
+sun.shadow.mapSize.set(1024, 1024);
+const shCam = sun.shadow.camera;
+shCam.left = -SHADOW_SPAN; shCam.right = SHADOW_SPAN;
+shCam.top = SHADOW_SPAN; shCam.bottom = -SHADOW_SPAN;
+shCam.near = 1; shCam.far = 1400;
+// A depth bias tuned for a 200m box at 1024: too little and every lit surface
+// stripes itself (acne), too much and contact shadows detach from their feet.
+sun.shadow.bias = -0.0012;
+sun.shadow.normalBias = 0.6;
+scene.add(sun.target);
+/** Every shadow-relevant object goes through here, so "what casts" is one list
+ *  rather than a flag repeated at a dozen construction sites. */
+const shadowy = (o: THREE.Object3D, cast: boolean, receive: boolean): void => {
+  o.castShadow = cast; o.receiveShadow = receive;
+};
 
 // ── the clock ──────────────────────────────────────────────────────
 // LIVE means the real sun over the real place at the real moment, which is the
@@ -1181,6 +1254,13 @@ function reveal(ex: number, ez: number): void {
 const envU = {
   uCloudS: { value: 0 },                       // cover, for cloud shadows
   uWind: { value: new THREE.Vector2() },       // the deck's drift, shared with the sky
+  // How far a point on the ground has to travel HORIZONTALLY to reach the deck,
+  // per metre of altitude, going toward the sun: sunDir.xz / sunDir.y. Near
+  // sunrise this runs away, so it is clamped where it is computed — a shadow
+  // cast from twenty kilometres downwind is not a shadow, it is noise.
+  uSunSkew: { value: new THREE.Vector2() },
+  uDeckY: { value: CLOUD_DECK_Y },
+  uCloudScale: { value: CLOUD_SCALE },
 };
 // (Pattern per SimonDev's "customizing materials": extend the built-ins by
 // splicing GLSL into their chunk includes rather than rewriting materials.)
@@ -1191,24 +1271,25 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWorldP;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorldP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.uniforms.uSunSkew = envU.uSunSkew;
+    sh.uniforms.uDeckY = envU.uDeckY;
+    sh.uniforms.uCloudScale = envU.uCloudScale;
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vWorldP;
         uniform float uCloudS; uniform vec2 uWind;
-        float gh21(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
-        float gvn(vec2 p){
-          vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-          return mix(mix(gh21(i), gh21(i + vec2(1.0, 0.0)), f.x),
-                     mix(gh21(i + vec2(0.0, 1.0)), gh21(i + vec2(1.0, 1.0)), f.x), f.y);
-        }
-        float gfbm(vec2 p){ float a = 0.5, s = 0.0; for (int i = 0; i < 4; i++) { s += a * gvn(p); p *= 2.07; a *= 0.5; } return s; }`)
+        uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
+        ${CLOUD_GLSL}`)
       .replace('#include <dithering_fragment>', `#include <dithering_fragment>
-      // CLOUD SHADOWS: the same kind of noise the sky draws its deck from,
-      // projected on the ground and drifting on the same wind — so shadow
-      // patches sweep across the terrain as a front comes over.
+      // CLOUD SHADOWS: not "the same kind of noise" any more — THE SAME FIELD,
+      // read at the point where a ray from here to the sun leaves the deck the
+      // sky is drawing. Same function, same phase, same coverage curve, so the
+      // dark patch crossing the road is the cloud overhead and its edge arrives
+      // exactly when that cloud's edge crosses the sun.
       if (uCloudS > 0.01) {
-        float cs = gfbm(vWorldP.xz * 0.0035 + uWind);
-        gl_FragColor.rgb *= 1.0 - uCloudS * smoothstep(0.42, 0.72, cs) * 0.5;
+        vec2 hit = vWorldP.xz + uSunSkew * max(uDeckY - vWorldP.y, 0.0);
+        float cs = clCov(clfbm(hit * uCloudScale + uWind), uCloudS);
+        gl_FragColor.rgb *= 1.0 - uCloudS * cs * 0.5;
       }`);
     if (opts.detail) {
       // World-space mottle (~30–80m blobs) breaks the flat-shaded banding of
@@ -1436,6 +1517,10 @@ function buildTerrainMesh(t: HeightTile): void {
   const old = terrainMeshes.get(key);
   if (old) { worldGroup.remove(old); old.geometry.dispose(); }
   const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? terrainMatFor(t, key) : terrainMat);
+  // Terrain both takes shadows and throws them: a ridge with the sun behind it
+  // shading the valley is most of what a low sun is FOR, and it is the one
+  // caster you cannot fake with a blob under an object.
+  shadowy(mesh, true, true);
   mesh.position.set(cxm, 0, czm);
   terrainMeshes.set(key, mesh);
   worldGroup.add(mesh);
@@ -2502,6 +2587,9 @@ function vegMesh(geo: THREE.BufferGeometry, mat: THREE.Material, cap: number): T
   m.frustumCulled = false;                  // instances span the whole field
   m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
+  // Plants cast and do not receive: a leaf card taking a shadow map on its own
+  // billboard reads as dirt, and there is nothing behind it to shade anyway.
+  shadowy(m, true, false);
   scene.add(m);
   return m;
 }
@@ -3101,6 +3189,7 @@ const herds = HERD_GEO.map((g) => {
   m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(HERD_N * 3).fill(1), 3);
   m.instanceColor.setUsage(THREE.DynamicDrawUsage);
+  shadowy(m, true, false);
   scene.add(m);
   return m;
 });
@@ -8081,6 +8170,10 @@ car.add(headSpot, headSpot.target);
 // meant it defaulted visible and leaked into the chase view at startup until
 // something called setCam. The marker is a HUD glyph now — an amber heading
 // wedge drawn only when the truck is too small to read (see drawHud).
+// The rig throws a shadow, and so does every panel, wheel and light bar hung
+// off it. Nothing on the truck RECEIVES: the body is its own little studio and
+// self-shadowing at this map resolution is stripes, not shape.
+car.traverse((o) => { if ((o as THREE.Mesh).isMesh) shadowy(o, true, false); });
 scene.add(car);
 // ── the x-ray silhouette: the rig, wherever something hides it ─────
 // The depth buffer already knows, per pixel, whether the truck is occluded —
@@ -8328,6 +8421,19 @@ function stepWeather(now: number, dt: number): void {
   waterU.uWTime.value = now / 1000;
   // Cloud shadows read the same cover and drift as the deck overhead.
   envU.uCloudS.value = cloudShadowOn ? wx.cloud : 0;
+  // WHERE THE SUN PUTS THE SHADOW. Horizontal travel per metre of altitude on
+  // the way up to the deck. Clamped hard: as the sun nears the horizon this
+  // tends to infinity, and a patch of deck twenty kilometres downwind has
+  // nothing to do with the light falling here — past that it is not a longer
+  // shadow, it is a different cloud.
+  {
+    const sy = Math.max(SUN_DIR.y, 0.12);
+    const k = clamp(1 / sy, 0, 4);
+    envU.uSunSkew.value.set(-SUN_DIR.x * k, -SUN_DIR.z * k);
+  }
+  // The deck is anchored in the world, so the dome has to be told where the
+  // camera is standing under it.
+  (skyMat.uniforms.uCamXZ as { value: THREE.Vector2 }).value.set(camera.position.x, camera.position.z);
   // ONE WIND, and it is the real one. Open-Meteo reports the direction the air
   // is coming FROM, so the deck travels toward bearing+180; the sample offset
   // runs the other way again, because shifting a noise field moves what you see
@@ -8338,8 +8444,13 @@ function stepWeather(now: number, dt: number): void {
     const t = (toDeg * Math.PI) / 180;
     const spd = (live.on ? live.windKmh : 12) * 0.0005;   // 12km/h ≈ the old fixed drift
     const wxv = -Math.sin(t) * spd, wzv = Math.cos(t) * spd;
-    (skyMat.uniforms.uWind as { value: THREE.Vector2 }).value.set(wxv, wzv);
-    envU.uWind.value.set(wxv * (now / 1000), wzv * (now / 1000));
+    // ONE OFFSET, in the deck's own units, read by both shaders. The sky used
+    // to multiply a velocity by uTime while the ground was handed a
+    // pre-multiplied displacement — the same drift by two routes, which is one
+    // route too many for two things that must never disagree.
+    const off = new THREE.Vector2(wxv * (now / 1000), wzv * (now / 1000));
+    (skyMat.uniforms.uWind as { value: THREE.Vector2 }).value.copy(off);
+    envU.uWind.value.copy(off);
     // The same wind leans the grass. Amplitude in METRES of tip travel per
     // metre of blade, so a stiff breeze lays a field over and a calm day
     // barely stirs it; the gust term rides on top of the steady lean.
@@ -13456,6 +13567,16 @@ function tick(now: number): void {
   else if (camMode === 'cab') { camera.lookAt(camAim); camera.rotateZ(rollC); }
   else if (camMode === 'drone') camera.lookAt(camAim);
   else camera.lookAt(state.x + fwdX * 28, ground + 1.4, state.z + fwdZ * 28);
+  // THE SHADOW BOX RIDES THE CURRENT VEHICLE. Fixed at the origin it would have
+  // been a two-hundred-metre patch of correct shading somewhere behind you for
+  // the rest of the drive. Aimed down the sun from high above, so the whole box
+  // is inside the near/far range whatever the terrain does under it.
+  {
+    const sx = viewX(), sz = viewZ(), sy = sampleHeight(sx, sz);
+    sun.target.position.set(sx, sy, sz);
+    sun.target.updateMatrixWorld();
+    sun.position.set(sx, sy, sz).addScaledVector(SUN_DIR, 700);
+  }
   camera.updateMatrixWorld();
   // Refresh the INVERSE now, not at render time. Everything below that
   // projects — the sun flare, the fog composite's invPV, and above all the
