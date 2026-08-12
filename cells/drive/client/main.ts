@@ -3250,13 +3250,56 @@ function refreshVeg(): void {
 // a box that follows the car and wraps, like the rain — so the world always
 // has something alive in it without simulating a planet.
 const BIRD_N = 46, BIRD_BOX = 260;
-const birdGeo = new THREE.ConeGeometry(0.5, 1.6, 3);   // a chevron in silhouette
-birdGeo.rotateX(-Math.PI / 2);
-const birdMat = new THREE.MeshLambertMaterial({ color: 0x2a2f36, flatShading: true });
-const birds = new THREE.InstancedMesh(birdGeo, birdMat, BIRD_N);
-birds.frustumCulled = false;
-birds.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-scene.add(birds);
+/**
+ * THREE BIRDS, not one. The sky had a single dark chevron repeated
+ * forty-six times, at one size, in one flock, all turning together.
+ *
+ * A bird two hundred metres up is a SILHOUETTE and nothing else, so the
+ * species are told apart by proportion rather than by detail — the same
+ * three-sided cone with its span and length moved, which costs one extra
+ * draw call each and reads instantly against a bright sky:
+ *
+ *   GULL    broad and long-winged, the one that soars
+ *   CROW    compact and stubby, the one that flaps
+ *   RAPTOR  narrow and long, the one that hangs
+ *
+ * They also fly at different heights, which does as much work as the shapes:
+ * a raptor at sixty metres and crows at twenty-two are two different skies.
+ */
+const birdShape = (span: number, len: number): THREE.BufferGeometry => {
+  const g = new THREE.ConeGeometry(span, len, 3);
+  g.rotateX(-Math.PI / 2);
+  return g;
+};
+const BIRD_GEO = [birdShape(0.62, 1.5), birdShape(0.42, 1.1), birdShape(0.5, 2.2)];
+/** Cruising height per species — the shapes alone would still read as one
+ *  flock at one altitude, which is most of what "all the same" looked like. */
+const BIRD_ALT = [34, 22, 58];
+/** Who flies where, weighted per biome like the herds: gulls and crows over
+ *  temperate country, raptors over the desert, almost no gulls inland. */
+const BIRD_MIX: Record<string, number[]> = {
+  arid: [1, 3, 6], tropical: [3, 6, 2], temperate: [5, 5, 2], boreal: [2, 7, 2], alpine: [1, 4, 6],
+};
+/** How many separate skeins share the sky. Four, because a bird flock is
+ *  smaller and more numerous than a herd. */
+const BIRD_GROUPS = 4;
+let birdSpecies: number[] = [];
+// White base, so the per-instance tint IS the colour: a crow is not a pale gull
+// with a filter over it, and one flat 0x2a2f36 for every bird in the world was
+// the reason the sky read as wallpaper.
+const birdMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+const birdMeshes = BIRD_GEO.map((g) => {
+  const m = new THREE.InstancedMesh(g, birdMat, BIRD_N);
+  m.frustumCulled = false;
+  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(BIRD_N * 3).fill(1), 3);
+  m.instanceColor.setUsage(THREE.DynamicDrawUsage);
+  scene.add(m);
+  return m;
+});
+/** The whole flock as one object, for the visibility switch that rain drives. */
+const birds = { get visible(): boolean { return birdMeshes[0].visible; },
+  set visible(v: boolean) { for (const m of birdMeshes) m.visible = v; } };
 // ── the herd: three real animals, not one box ──────────────────────
 // Each species is a pile of coloured boxes welded into ONE BufferGeometry, so
 // a whole herd of them is still a single instanced draw. Local +z is forward
@@ -3379,6 +3422,15 @@ const HERD_GROUPS = 3;
  *  before — deer, bison and horses walking in one clump, alarmed by the same
  *  truck at the same moment, which is not a thing that happens. */
 let herdSpecies: number[] = [];
+function pickFrom(table: Record<string, number[]>): number {
+  const mix = table[biome.name] ?? table.temperate;
+  let total = 0;
+  for (const w of mix) total += w;
+  let t = Math.random() * total;
+  for (let i = 0; i < mix.length; i++) { t -= mix[i]; if (t <= 0) return i; }
+  return 0;
+}
+const pickBird = (): number => pickFrom(BIRD_MIX);
 function pickSpecies(): number {
   const mix = HERD_MIX[biome.name] ?? HERD_MIX.temperate;
   let total = 0;
@@ -3389,22 +3441,36 @@ function pickSpecies(): number {
 }
 const mkPop = (n: number, box: number, air: boolean): Critter[] => {
   if (!air && !herdSpecies.length) herdSpecies = Array.from({ length: HERD_GROUPS }, pickSpecies);
+  if (air && !birdSpecies.length) birdSpecies = Array.from({ length: BIRD_GROUPS }, pickBird);
+  const groups = air ? BIRD_GROUPS : HERD_GROUPS;
   return Array.from({ length: n }, (_, i) => ({
-    grp: air ? 0 : i % HERD_GROUPS,
+    grp: i % groups,
     // Yearlings to old bulls. Squared toward the small end, because a herd is
     // mostly ordinary animals with a few big ones rather than an even spread.
-    sz: air ? 1 : 0.72 + Math.random() ** 2 * 0.62,
+    // Birds vary less than mammals — a flock is adults — but not by nothing.
+    sz: air ? 0.78 + Math.random() * 0.5 : 0.72 + Math.random() ** 2 * 0.62,
     // Each herd starts as a CLUMP rather than scattered across the box —
     // cohesion would eventually gather them, but the first thing you see on
     // arriving somewhere should already look like a herd.
-    x: (Math.random() - 0.5) * box * (air ? 1 : 0.85) + (air ? 0 : Math.sin((i % HERD_GROUPS) * 2.4) * box * 0.3),
+    x: (Math.random() - 0.5) * box * 0.85 + Math.sin((i % groups) * 2.4) * box * 0.3,
     y: air ? 30 + Math.random() * 40 : 0,
-    z: (Math.random() - 0.5) * box * (air ? 1 : 0.85) + (air ? 0 : Math.cos((i % HERD_GROUPS) * 2.4) * box * 0.3),
+    z: (Math.random() - 0.5) * box * 0.85 + Math.cos((i % groups) * 2.4) * box * 0.3,
     vx: (Math.random() - 0.5) * 6, vy: 0, vz: (Math.random() - 0.5) * 6, ph: Math.random() * 6.283,
-    sp: air ? 0 : herdSpecies[i % HERD_GROUPS],
+    sp: air ? birdSpecies[i % groups] : herdSpecies[i % groups],
     // A coat is never twice the same: ±15% brightness, a touch warm or cool.
-    tint: new THREE.Color().setHSL(0.07 + Math.random() * 0.05, 0.18 + Math.random() * 0.2, 0.44 + Math.random() * 0.16)
-      .multiplyScalar(2.1),
+    // PLUMAGE IS NOT A COAT. The mammal palette is warm mid-browns, and dressing
+    // birds in it gave the sky forty-six identical beige darts. Each species
+    // gets its own: a gull is near-white with a cool cast, a crow is almost
+    // black with a blue sheen, a raptor is warm brown — and each bird still
+    // varies within that, so a skein is not a stamp.
+    tint: air
+      ? [
+        new THREE.Color().setHSL(0.58, 0.05 + Math.random() * 0.06, 0.72 + Math.random() * 0.16),
+        new THREE.Color().setHSL(0.62, 0.10 + Math.random() * 0.12, 0.10 + Math.random() * 0.07),
+        new THREE.Color().setHSL(0.07, 0.30 + Math.random() * 0.18, 0.22 + Math.random() * 0.14),
+      ][air ? birdSpecies[i % groups] : 0]
+      : new THREE.Color().setHSL(0.07 + Math.random() * 0.05, 0.18 + Math.random() * 0.2, 0.44 + Math.random() * 0.16)
+        .multiplyScalar(2.1),
   }));
 };
 const flock = mkPop(BIRD_N, BIRD_BOX, true);
@@ -3501,7 +3567,8 @@ function stepPop(pop: Critter[], meshes: THREE.InstancedMesh[], dt: number, o: {
       herdClosest = Math.min(herdClosest, Math.hypot(c.x - state.x, c.z - state.z));
     }
     if (o.air) {
-      c.vy += (34 + Math.sin(c.ph * 0.2) * 12 - c.y) * 0.25 * dt;  // hold altitude
+      // Hold the height this species flies at, not one height for the sky.
+      c.vy += ((BIRD_ALT[c.sp] ?? 34) + Math.sin(c.ph * 0.2) * 12 - c.y) * 0.25 * dt;
       c.vy *= 0.96;
       c.y += c.vy * dt;
     } else {
@@ -3553,7 +3620,7 @@ function stepPop(pop: Critter[], meshes: THREE.InstancedMesh[], dt: number, o: {
 function stepWildlife(dt: number): void {
   // Rain grounds the birds; a storm keeps them down entirely.
   birds.visible = wx.rain < 0.5;
-  if (birds.visible) stepPop(flock, [birds], dt, { box: BIRD_BOX, air: true, speed: 11, fear: 55, sep: 7, turn: 1 });
+  if (birds.visible) stepPop(flock, birdMeshes, dt, { box: BIRD_BOX, air: true, speed: 11, fear: 55, sep: 7, turn: 1 });
   stepPop(graze, herds, dt, { box: HERD_BOX, air: false, speed: 2.4, fear: 24, sep: 6, turn: 1.6 });
 }
 
@@ -9447,7 +9514,7 @@ function stepReal(dt: number): boolean {
   cells: vegGrid.size,
   shown: Object.fromEntries(Object.entries(vegMeshes).map(([k, m]) => [k, m.count])),
   trunks: trunks.count,
-  birds: birds.count,
+  birds: { gull: birdMeshes[0].count, crow: birdMeshes[1].count, raptor: birdMeshes[2].count },
   herd: { deer: herds[0].count, bison: herds[1].count, horse: herds[2].count },
 });
 // Is a point sealed inside a building footprint? (0 = free.) A test drops the
@@ -9482,6 +9549,12 @@ function stepReal(dt: number): boolean {
   return { closest: +d.toFixed(2), clearance: HERD_CLEAR };
 };
 // Where the herd actually is, so a test can go and look at it.
+(window as unknown as { __flock?: object }).__flock = (): object =>
+  flock.map((c) => ({
+    sp: ['gull', 'crow', 'raptor'][c.sp], grp: c.grp,
+    sz: +c.sz.toFixed(2), y: Math.round(c.y),
+    tint: `#${c.tint.getHexString()}`,
+  }));
 (window as unknown as { __herd?: object }).__herd = (): object =>
   graze.map((c) => ({
     x: +c.x.toFixed(1), z: +c.z.toFixed(1), sp: ['deer', 'bison', 'horse'][c.sp],
@@ -14059,6 +14132,8 @@ function applyBiome(b: Biome): void {
   // re-roll which species are out there whenever the biome actually lands.
   herdSpecies = Array.from({ length: HERD_GROUPS }, pickSpecies);
   for (const c of graze) c.sp = herdSpecies[c.grp];
+  birdSpecies = Array.from({ length: BIRD_GROUPS }, pickBird);
+  for (const c of flock) c.sp = birdSpecies[c.grp];
   // The six sky colours are the DAYLIGHT versions of themselves; how much of
   // each survives depends on where the sun is, so the clock paints them.
   applySkyTint();
