@@ -52,7 +52,8 @@ export function createOverlays(
   const style = document.createElement('style');
   style.textContent = `
   .ov { position: fixed; z-index: 11; font-family: '${PIXEL_FONT}', ui-monospace, monospace;
-    color: ${C.text}; -webkit-user-select: none; user-select: none; }
+    color: ${C.text}; -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none; touch-action: manipulation; }
   /* The menu's scrim is translucent by design — anything ghosting through it
      reads as a defect, so the overlays stand down while the menu is up. */
   body.menu-open .ov { display: none !important; }

@@ -108,7 +108,10 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   // ── chrome ─────────────────────────────────────────────────────────
   const style = document.createElement('style');
   style.textContent = `${PIXEL_FONT_CSS}
-  #menu { position: fixed; inset: 0; z-index: 15; display: none;
+  /* touch-action manipulation keeps the scroll of .m-body and drops
+     double-tap-to-zoom, which on a list of chips is only ever an accident.
+     NO BACKTICKS IN HERE: this block is a template literal and one closes it. */
+  #menu { position: fixed; inset: 0; z-index: 15; display: none; touch-action: manipulation;
     font-family: '${PIXEL_FONT}', ui-monospace, Menlo, monospace; color: ${C.text};
     font-size: 12px; line-height: 1.5; -webkit-user-select: none; user-select: none; }
   #menu .m-scrim { position: absolute; background: rgba(6,14,17,0.92); }

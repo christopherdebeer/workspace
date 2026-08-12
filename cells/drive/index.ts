@@ -64,7 +64,28 @@ const SHELL = `<!doctype html>
   html, body { margin: 0; height: 100%; overflow: hidden; background: #05070c; color: #efe9dc;
     /* Silkscreen lands when the game module injects its @font-face; until
        then the monospace stack holds the line. */
-    font-family: Silkscreen, ui-monospace, SFMono-Regular, Menlo, monospace; }
+    font-family: Silkscreen, ui-monospace, SFMono-Regular, Menlo, monospace;
+    /* NOTHING HERE IS TEXT TO BE HAD. This is a game held in one thumb, and
+       every one of these four exists because a phone browser assumes it is
+       looking at a document.
+         user-select   a thumb resting on the stick is a long press, and a long
+                       press over a word starts a selection with a magnifier on
+                       top of the road. The menu and the overlays each carried
+                       this rule already; the canvas, the boot card and the
+                       document itself never did, which is most of the screen.
+         touch-callout the same press, on iOS, also raises the share/copy sheet.
+         tap-highlight a grey flash behind every chip you press, on a palette
+                       chosen to the pixel.
+         overscroll    drag past the end of the settings list and the whole page
+                       rubber-bands off its own background. */
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none; }
+  /* …except where text is genuinely the point. Nothing takes typing today —
+     the only input in the build is a colour swatch — but a rule that silently
+     breaks the first text field somebody adds is a trap, not a policy. */
+  input, textarea, [contenteditable] { -webkit-user-select: text; user-select: text; }
   #scene { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; }
   #boot { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
     background: #05070c; transition: opacity 0.6s ease; }
