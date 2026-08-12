@@ -11034,14 +11034,23 @@ let stick: { id: number; x0: number; y0: number; dx: number; dy: number; ax: num
 // Is the stick currently acting as a brake rather than a throttle? Drives the
 // nub's colour, so the control says which of its two jobs it is doing.
 let stickHold = false;
-let stickHoldShown = false;
-/** The nub goes red the moment the stick is braking rather than driving, so
- *  the control tells you which of its two jobs it is doing. */
-function showStickHold(on: boolean): void {
-  if (on === stickHoldShown) return;
-  stickHoldShown = on;
-  stickNub.style.background = on ? 'rgba(214,92,68,0.22)' : 'rgba(245,196,83,0.16)';
-  stickNub.style.borderColor = on ? 'rgba(214,92,68,0.92)' : 'rgba(245,196,83,0.8)';
+let stickHoldShown = 0;
+/** The nub goes red the moment the stick is braking rather than driving, and
+ *  now says HOW red: with a continuous brake the control has to show where in
+ *  its travel you are, or a trail-brake and a stop look identical. Quantised so
+ *  a held thumb is not restyling the element sixty times a second. */
+function showStickHold(on: boolean, force = 1): void {
+  const step = on ? 1 + Math.round(clamp(force, 0, 1) * 3) : 0;   // 0 = driving, 1..4 = braking
+  if (step === stickHoldShown) return;
+  stickHoldShown = step;
+  if (!step) {
+    stickNub.style.background = 'rgba(245,196,83,0.16)';
+    stickNub.style.borderColor = 'rgba(245,196,83,0.8)';
+    return;
+  }
+  const t = (step - 1) / 3;
+  stickNub.style.background = `rgba(214,92,68,${(0.14 + 0.16 * t).toFixed(2)})`;
+  stickNub.style.borderColor = `rgba(214,92,68,${(0.55 + 0.4 * t).toFixed(2)})`;
 }
 let brakeId: number | null = null;
 /** The second finger, while the drone is up: altitude. A rate control, like the
@@ -11272,12 +11281,15 @@ addEventListener('blur', () => { stick = null; brakeId = null; lift = null; panP
 // The controls as the truck last received them — so a harness can drive the
 // stick with synthetic pointers and read what the driver would actually get,
 // rather than inferring it from how the truck moved.
-let lastInput = { throttle: 0, steer: 0, brake: false, hold: false };
+let lastInput = { throttle: 0, steer: 0, brake: false, brakeF: 0, hold: false };
+/** The bright end of the brake lamps, held as a colour so the lerp per frame
+ *  does not allocate one. */
+const TAIL_HOT = new THREE.Color(0xff3a24);
 (window as unknown as { __input?: object }).__input = (): object =>
   ({ ...lastInput, stick: stick ? { ax: +stick.ax.toFixed(3), ay: +stick.ay.toFixed(3) } : null,
     speed: +state.speed.toFixed(2) });
-function input(): { throttle: number; steer: number; brake: boolean } {
-  let throttle = 0, steer = 0, stickBrake = false;
+function input(): { throttle: number; steer: number; brake: boolean; brakeF: number } {
+  let throttle = 0, steer = 0, stickBrake = false, stickBrakeF = 0;
   if (keys.has('w') || keys.has('arrowup')) throttle += 1;
   if (keys.has('s') || keys.has('arrowdown')) throttle -= 1;
   if (keys.has('a') || keys.has('arrowleft')) steer -= 1;
@@ -11317,8 +11329,17 @@ function input(): { throttle: number; steer: number; brake: boolean } {
       const want = -stick.ay;                       // +1 forward, −1 reverse
       const against = want > 0.02 ? state.speed < -STICK_STOP
         : want < -0.02 ? state.speed > STICK_STOP : false;
-      if (against) { stickBrake = true; stickHold = true; }
-      else {
+      if (against) {
+        // HOW HARD, NOT WHETHER. Every other axis of this control is a
+        // magnitude and the brake was a switch: the first millimetre past the
+        // dead zone asked for everything the tyres had, so scrubbing off a bit
+        // of speed into a bend and stopping at a junction were the same input,
+        // and easing off the gas down a hill parked the truck. Squared like the
+        // throttle it shares an axis with, so the near half of the travel is a
+        // trail-brake and only the rim is an emergency stop.
+        stickBrake = true; stickHold = true;
+        stickBrakeF = Math.max(stickBrakeF, want * want);
+      } else {
         stickHold = false;
         // Squared: precision near centre, authority at the rim.
         throttle += want * Math.abs(want);
@@ -11326,10 +11347,16 @@ function input(): { throttle: number; steer: number; brake: boolean } {
     }
   }
   if (!stick) stickHold = false;
-  showStickHold(stickHold);
+  // The second finger and the spacebar are not modulated. They are the
+  // instinctive "stop" — the gesture you make when something is coming up fast
+  // — and they mean all of it.
+  const hard = brakeId !== null || keys.has(' ');
+  const brakeF = hard ? 1 : stickBrake ? clamp(stickBrakeF, 0, 1) : 0;
+  showStickHold(stickHold, brakeF);
   lastInput = { throttle: clamp(throttle, -1, 1), steer: clamp(steer, -1, 1),
-    brake: brakeId !== null || keys.has(' ') || stickBrake, hold: stickHold };
-  return { throttle: clamp(throttle, -1, 1), steer: clamp(steer, -1, 1), brake: brakeId !== null || keys.has(' ') || stickBrake };
+    brake: hard || stickBrake, brakeF, hold: stickHold };
+  return { throttle: clamp(throttle, -1, 1), steer: clamp(steer, -1, 1),
+    brake: hard || stickBrake, brakeF };
 }
 
 // ── minimap: north-up, fog-masked, car-centred ─────────────────────
@@ -12664,13 +12691,13 @@ function tick(now: number): void {
   const dt = paused ? 0 : Math.min(0.05, raw / 1000);
   last = now;
   simT += dt; simN++;
-  const raw2 = real.on || paused ? { throttle: 0, steer: 0, brake: false } : input();
+  const raw2 = real.on || paused ? { throttle: 0, steer: 0, brake: false, brakeF: 0 } : input();
   // FLYING THE DRONE MEANS NOT DRIVING. The rig stays exactly where you left
   // it — that is the whole point of scouting ahead — so the controls are handed
   // over wholesale rather than shared.
   stepDrone(dt, drone.up ? raw2.throttle : 0, drone.up ? raw2.steer : 0);
-  const { throttle, steer, brake } = drone.up
-    ? { throttle: 0, steer: 0, brake: true }
+  const { throttle, steer, brake, brakeF } = drone.up
+    ? { throttle: 0, steer: 0, brake: true, brakeF: 1 }
     : raw2;
   // THE HANDBRAKE IS ON WHILE YOU ARE NOT IN IT. Handing the controls over is
   // not the same as parking: `brake: true` actually DEFEATS `parkHold` below
@@ -12694,7 +12721,7 @@ function tick(now: number): void {
   // is the same contact patch the cornering budget comes out of below.
   const power = rigPower();
   const thrust = real.on ? 0 : brake
-    ? -Math.sign(state.speed) * CAR.brake * 1.4 * rigGrip()
+    ? -Math.sign(state.speed) * CAR.brake * 1.4 * rigGrip() * brakeF
     : throttle >= 0 ? throttle * CAR.accel * power : throttle * CAR.brake * rigGrip();
   // Grip comes from wheels on the ground: airborne there's no drive, no
   // braking, barely any steering — and gravity along the body's pitch makes
@@ -12718,7 +12745,12 @@ function tick(now: number): void {
     // Wet ground drags and caps lower — the weather is felt through the wheels.
     const wetDrag = 1 + wx.wet * (surfKind === 'road' ? 0.35 : 0.7);
     state.speed -= state.speed * surf.drag * wetDrag * (0.1 + 0.9 * grip) * dt;
-    if (brake && grip > 0.4 && Math.abs(state.speed) < 1.2) state.speed = 0;
+    // THE LAST METRE PER SECOND. A firm brake parks the truck rather than
+    // leaving it creeping at a junction. A TRAIL brake must not: snapping to a
+    // standstill because the driver asked to shed a little speed mid-bend is
+    // the exact opposite of what that input meant, and it was the whole of what
+    // "a small motion down stops the rig" felt like.
+    if (brake && brakeF > 0.5 && grip > 0.4 && Math.abs(state.speed) < 1.2) state.speed = 0;
     if (parkHold) state.speed = 0;
     state.speed = clamp(state.speed, -CAR.maxRev, surf.max * (1.25 - wx.wet * 0.2)); // downhill may overrun the flat cap
     const SRATE = 7 * tune.steer; // full-lock in ~0.14s at STOCK
@@ -13046,7 +13078,9 @@ function tick(now: number): void {
   // 34m cones would just be glare on the map.
   // Idle lenses have to out-saturate the body they sit on — 0x8e1a12 vanished
   // against 0xc4402c paint the moment the truck was in its own shadow.
-  tailMat.color.setHex(brake ? 0xff3a24 : state.speed < -0.5 ? 0xe8ded0 : 0xa8221a);
+  // The lamps carry the pressure too — a trail-brake glows, a stop is bright.
+  if (brake) tailMat.color.setHex(0xa8221a).lerp(TAIL_HOT, 0.25 + 0.75 * brakeF);
+  else tailMat.color.setHex(state.speed < -0.5 ? 0xe8ded0 : 0xa8221a);
   // Volumetric beam: strongest where the eye is nearly in line with it.
   beamMat.uniforms.uAmp.value = camMode === 'cab' ? 1.25 : camMode === 'chase' ? 1 : 0.25;
   // HIGH BEAM AFTER DARK. One lamp spec cannot serve both: 110m of throw is
