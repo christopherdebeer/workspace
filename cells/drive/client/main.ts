@@ -7279,6 +7279,10 @@ const WATER_W: Record<string, number> = { river: 14, canal: 9, stream: 4.5 };
 const AREA_TAG = (t: Record<string, string>): boolean =>
   !!t.landuse || !!t.leisure
   || ['scrub', 'wetland', 'sand', 'bare_rock', 'wood', 'grassland', 'heath'].includes(t.natural ?? '');
+/** WHY A WAY NEVER REACHES THE CHAIN SOLVER. Counted rather than reasoned
+ *  about: the filters are cheap to read and impossible to guess between. */
+const chainDbg = { considered: 0, noHeight: 0, notDrivable: 0, chained: 0, dropped: [] as string[] };
+(window as unknown as { __chaindbg?: object }).__chaindbg = (): object => ({ ...chainDbg });
 function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
   // PRE-PASS: chain this tile's drivable ways end-to-end and solve each
   // chain's profile whole, publishing hints for the per-way builds below.
@@ -7293,7 +7297,9 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
     const consider = (el: OsmWay, fresh: boolean): void => {
       const t = el.tags ?? {};
       if (!el.geometry || !t.highway) return;
-      if (['track', 'path', 'bridleway', 'cycleway', 'footway', 'steps'].includes(t.highway)) return;
+      if (['track', 'path', 'bridleway', 'cycleway', 'footway', 'steps'].includes(t.highway)) {
+        chainDbg.notDrivable++; return;
+      }
       const id = String(el.id);
       const prev = byId.get(id);
       // `fresh` is sticky: a way this tile actually has to build stays fresh
@@ -7313,7 +7319,14 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
       if (pts.length < 2) continue;
       let ok = true;
       for (const [px, pz] of pts) if (!hasHeight(px, pz)) { ok = false; break; }
+      chainDbg.considered++;
       if (ok) mems.push({ pts, name: t.name, g: GRADE_MAX[t.highway] ?? 0.15, key: id, fresh });
+      else {
+        chainDbg.noHeight++;
+        if (chainDbg.dropped.length < 12) {
+          chainDbg.dropped.push(`${t.name ?? '(unnamed)'} [${t.highway}] ${pts.length}pts`);
+        }
+      }
     }
     const joins = (a: [number, number], b: [number, number]): boolean =>
       Math.hypot(a[0] - b[0], a[1] - b[1]) < 2;
@@ -7370,6 +7383,7 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
         juncStats.totalChainM += len;
         juncStats.maxChainM = Math.max(juncStats.maxChainM, Math.round(len));
       }
+      chainDbg.chained += chain.length;
       for (const m of chain) hintedWays.add(m.key);
     }
   }
