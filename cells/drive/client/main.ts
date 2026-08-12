@@ -3362,7 +3362,23 @@ const HERD_CLEAR = 4.8;
 // The closest any of them has come this session — a test drives at the herd
 // and asserts this never drops to the truck.
 let herdClosest = Infinity;
-interface Critter { x: number; y: number; z: number; vx: number; vy: number; vz: number; ph: number; sp: number; tint: THREE.Color }
+interface Critter {
+  x: number; y: number; z: number; vx: number; vy: number; vz: number; ph: number;
+  sp: number; tint: THREE.Color;
+  /** Which herd this animal belongs to. Cohesion and alignment are read from
+   *  its OWN herd's middle; separation still counts everybody, so two herds
+   *  share a plain without standing in each other. */
+  grp: number;
+  /** Body scale. A herd is adults and yearlings, not twenty copies. */
+  sz: number;
+}
+/** How many separate herds share the box. Three reads as a plain with animals
+ *  on it; one reads as a single confused mob, which is what it was. */
+const HERD_GROUPS = 3;
+/** One species per herd, rolled when the biome changes. A herd was a lucky dip
+ *  before — deer, bison and horses walking in one clump, alarmed by the same
+ *  truck at the same moment, which is not a thing that happens. */
+let herdSpecies: number[] = [];
 function pickSpecies(): number {
   const mix = HERD_MIX[biome.name] ?? HERD_MIX.temperate;
   let total = 0;
@@ -3371,15 +3387,26 @@ function pickSpecies(): number {
   for (let i = 0; i < mix.length; i++) { t -= mix[i]; if (t <= 0) return i; }
   return 0;
 }
-const mkPop = (n: number, box: number, air: boolean): Critter[] =>
-  Array.from({ length: n }, () => ({
-    x: (Math.random() - 0.5) * box, y: air ? 30 + Math.random() * 40 : 0, z: (Math.random() - 0.5) * box,
+const mkPop = (n: number, box: number, air: boolean): Critter[] => {
+  if (!air && !herdSpecies.length) herdSpecies = Array.from({ length: HERD_GROUPS }, pickSpecies);
+  return Array.from({ length: n }, (_, i) => ({
+    grp: air ? 0 : i % HERD_GROUPS,
+    // Yearlings to old bulls. Squared toward the small end, because a herd is
+    // mostly ordinary animals with a few big ones rather than an even spread.
+    sz: air ? 1 : 0.72 + Math.random() ** 2 * 0.62,
+    // Each herd starts as a CLUMP rather than scattered across the box —
+    // cohesion would eventually gather them, but the first thing you see on
+    // arriving somewhere should already look like a herd.
+    x: (Math.random() - 0.5) * box * (air ? 1 : 0.85) + (air ? 0 : Math.sin((i % HERD_GROUPS) * 2.4) * box * 0.3),
+    y: air ? 30 + Math.random() * 40 : 0,
+    z: (Math.random() - 0.5) * box * (air ? 1 : 0.85) + (air ? 0 : Math.cos((i % HERD_GROUPS) * 2.4) * box * 0.3),
     vx: (Math.random() - 0.5) * 6, vy: 0, vz: (Math.random() - 0.5) * 6, ph: Math.random() * 6.283,
-    sp: air ? 0 : pickSpecies(),
+    sp: air ? 0 : herdSpecies[i % HERD_GROUPS],
     // A coat is never twice the same: ±15% brightness, a touch warm or cool.
     tint: new THREE.Color().setHSL(0.07 + Math.random() * 0.05, 0.18 + Math.random() * 0.2, 0.44 + Math.random() * 0.16)
       .multiplyScalar(2.1),
   }));
+};
 const flock = mkPop(BIRD_N, BIRD_BOX, true);
 const graze = mkPop(HERD_N, HERD_BOX, false);
 const critterDummy = new THREE.Object3D();
@@ -3392,13 +3419,24 @@ function stepPop(pop: Critter[], meshes: THREE.InstancedMesh[], dt: number, o: {
   box: number; air: boolean; speed: number; fear: number; sep: number; turn: number;
 }): void {
   const cx = camera.position.x, cz = camera.position.z;
-  let mx = 0, mz = 0, mvx = 0, mvz = 0;
-  for (const c of pop) { mx += c.x; mz += c.z; mvx += c.vx; mvz += c.vz; }
-  mx /= pop.length; mz /= pop.length; mvx /= pop.length; mvz /= pop.length;
+  // A MIDDLE PER HERD, not one for the whole box. Averaging every animal on the
+  // plain gave three species one centre of gravity and pulled them into a single
+  // mob — the flock forces were doing exactly what they were told.
+  const gN: number[] = [], gx: number[] = [], gz: number[] = [], gvx: number[] = [], gvz: number[] = [];
+  for (const c of pop) {
+    const g = c.grp;
+    gN[g] = (gN[g] ?? 0) + 1;
+    gx[g] = (gx[g] ?? 0) + c.x; gz[g] = (gz[g] ?? 0) + c.z;
+    gvx[g] = (gvx[g] ?? 0) + c.vx; gvz[g] = (gvz[g] ?? 0) + c.vz;
+  }
+  for (let g = 0; g < gN.length; g++) {
+    const n = gN[g] || 1;
+    gx[g] /= n; gz[g] /= n; gvx[g] /= n; gvz[g] /= n;
+  }
   const counts = meshes.map(() => 0);
   for (const c of pop) {
-    let ax = (mx - c.x) * 0.06 + (mvx - c.vx) * 0.35;   // cohesion + alignment
-    let az = (mz - c.z) * 0.06 + (mvz - c.vz) * 0.35;
+    let ax = (gx[c.grp] - c.x) * 0.06 + (gvx[c.grp] - c.vx) * 0.35;   // cohesion + alignment
+    let az = (gz[c.grp] - c.z) * 0.06 + (gvz[c.grp] - c.vz) * 0.35;
     for (const d of pop) {                               // separation
       if (d === c) continue;
       const dx = c.x - d.x, dz = c.z - d.z;
@@ -3467,7 +3505,15 @@ function stepPop(pop: Critter[], meshes: THREE.InstancedMesh[], dt: number, o: {
       c.vy *= 0.96;
       c.y += c.vy * dt;
     } else {
-      c.y = groundAt(c.x, c.z);
+      // ON TOP OF THE ROAD, not through it. groundAt is the terrain, and a road
+      // on an embankment stands above its own terrain — so a deer crossing one
+      // walked at field level with the tarmac through its chest. It steps UP
+      // onto a deck within a stride's reach of its feet and ignores anything
+      // higher, which is the difference between crossing a road and levitating
+      // onto a viaduct.
+      const g = groundAt(c.x, c.z);
+      const deck = roadHeightAt(c.x, c.z);
+      c.y = deck !== null && deck > g - 0.4 && deck < g + 3 ? deck : g;
     }
     // Wrap around the camera so the population is always where you are.
     const h = o.box / 2;
@@ -3490,7 +3536,7 @@ function stepPop(pop: Critter[], meshes: THREE.InstancedMesh[], dt: number, o: {
       yaw,
       o.air ? Math.sin(c.ph) * 0.5 : Math.sin(c.ph * 0.85) * 0.04 * gait, // birds bank; beasts sway
     );
-    critterDummy.scale.setScalar(o.air ? 1 : 0.94 + (c.sp === 1 ? 0.06 : 0.12) * Math.sin(c.ph * 0.5) + 0.06);
+    critterDummy.scale.setScalar(c.sz * (o.air ? 1 : 0.94 + (c.sp === 1 ? 0.06 : 0.12) * Math.sin(c.ph * 0.5) + 0.06));
     critterDummy.updateMatrix();
     const mesh = meshes[c.sp] ?? meshes[0];
     const idx = counts[c.sp] ?? counts[0];
@@ -9437,7 +9483,13 @@ function stepReal(dt: number): boolean {
 };
 // Where the herd actually is, so a test can go and look at it.
 (window as unknown as { __herd?: object }).__herd = (): object =>
-  graze.map((c) => ({ x: +c.x.toFixed(1), z: +c.z.toFixed(1), sp: ['deer', 'bison', 'horse'][c.sp] }));
+  graze.map((c) => ({
+    x: +c.x.toFixed(1), z: +c.z.toFixed(1), sp: ['deer', 'bison', 'horse'][c.sp],
+    grp: c.grp, sz: +c.sz.toFixed(2),
+    // Is this animal standing on a road deck rather than on the field it
+    // crosses — the difference between walking the road and walking through it.
+    onDeck: c.y > groundAt(c.x, c.z) + 0.15,
+  }));
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z) });
 /** The nearest drivable centreline: how far OUTSIDE its kerb this point is
@@ -13174,6 +13226,16 @@ function tick(now: number): void {
     if (!walls) break;
     let hit = false;
     for (const seg of walls) {
+      // A PARAPET BELONGS TO ITS OWN DECK. Rails go into the same grid as
+      // building walls, with no note of which road they edge, so the barrier
+      // along a viaduct twelve metres up was pushing the truck about on the
+      // ground underneath it — the underpass simply could not be driven. The
+      // camera's version of this test has checked heights all along; the car's
+      // never did. Four metres of clearance separates "the rail beside me" from
+      // "the rail on the bridge over me", either way up, and only `sl` segments
+      // are treated this way: a building's ya is its ROOF, and skipping walls
+      // whose roof is high would drive you through the building.
+      if (seg.sl && seg.ya !== undefined && Math.abs(seg.ya - car.position.y) > 4) continue;
       const [cx2, cz2] = closestOnSeg(state.x, state.z, seg);
       const d = Math.hypot(state.x - cx2, state.z - cz2);
       if (d < CAR_R) {
@@ -13995,7 +14057,8 @@ function applyBiome(b: Biome): void {
   biome = b;
   // The herd is built at module load, before the spawn's biome is known — so
   // re-roll which species are out there whenever the biome actually lands.
-  for (const c of graze) c.sp = pickSpecies();
+  herdSpecies = Array.from({ length: HERD_GROUPS }, pickSpecies);
+  for (const c of graze) c.sp = herdSpecies[c.grp];
   // The six sky colours are the DAYLIGHT versions of themselves; how much of
   // each survives depends on where the sun is, so the clock paints them.
   applySkyTint();
