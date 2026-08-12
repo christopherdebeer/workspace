@@ -883,8 +883,21 @@ const shadowy = (o: THREE.Object3D, cast: boolean, receive: boolean): void => {
 // o'clock it happens to be is a world you cannot art-direct, so the dial and
 // `?t=` force a LOCAL SOLAR hour: noon is when the sun crosses the meridian
 // HERE, which is what makes "noon" mean the same thing in Bormio and Borneo.
-const TIME_MODES = ['CYCLE', 'LIVE', 'DAWN', 'NOON', 'DUSK', 'NIGHT'] as const;
-const TIME_HOUR: Record<string, number> = { DAWN: 6, NOON: 12, DUSK: 18, NIGHT: 0 };
+// Chronological, so the dial walks the day in order rather than jumping about.
+// MORNING and AFTERNOON exist because the interesting light is between the
+// presets, not at them: DAWN and DUSK put the sun ON the horizon — at some
+// latitudes and dates BELOW it — and NOON puts it overhead, which are the two
+// lightings where a landscape's own shadows are either absent or invisible.
+// Nine and fifteen are where a dune has a lit face and a dark one.
+const TIME_MODES = ['CYCLE', 'LIVE', 'DAWN', 'MORNING', 'NOON', 'AFTERNOON', 'DUSK', 'NIGHT'] as const;
+const TIME_HOUR: Record<string, number> = {
+  DAWN: 6, MORNING: 9, NOON: 12, AFTERNOON: 15, DUSK: 18, NIGHT: 0,
+};
+/** Where each old index sat before MORNING and AFTERNOON were spliced in. The
+ *  dial persists an INDEX, so inserting into the middle of the list silently
+ *  re-points every saved preference — someone who left it on DUSK would come
+ *  back to NOON. Migrated by name once, on load. */
+const TIME_MODES_V1 = ['CYCLE', 'LIVE', 'DAWN', 'NOON', 'DUSK', 'NIGHT'];
 let timeMode = 0;
 // Read here, APPLIED AFTER the dials load — see the boot sequence. A dial that
 // remembers itself in localStorage will otherwise stamp on the query parameter.
@@ -14529,11 +14542,27 @@ function applyDials(): void {
   for (const d of DIALS) d.apply(d.at);
 }
 function saveDials(): void {
-  try { localStorage.setItem('drive.dials', JSON.stringify(Object.fromEntries(DIALS.map((d) => [d.key, d.at])))); } catch { /* fine */ }
+  try {
+    // `v` rides along with the dial values so a future reordering can tell a
+    // migrated record from a stale one, the way this one had to.
+    const rec: Record<string, number> = { v: 2 };
+    for (const d of DIALS) rec[d.key] = d.at;
+    localStorage.setItem('drive.dials', JSON.stringify(rec));
+  } catch { /* fine */ }
 }
 function loadDials(): void {
   try {
     const raw = JSON.parse(localStorage.getItem('drive.dials') ?? '{}') as Record<string, number>;
+    // The TIME list grew in the middle, so a stored index from before that
+    // means a different hour now. Remap it through the old list by NAME, once,
+    // and stamp the record so it is not remapped again. Anything saved without
+    // the stamp is by definition from the old order.
+    const ver = raw['v'] ?? 1;
+    if (ver < 2 && Number.isInteger(raw['time'])) {
+      const was = TIME_MODES_V1[clamp(raw['time'], 0, TIME_MODES_V1.length - 1)];
+      const now = TIME_MODES.indexOf(was as typeof TIME_MODES[number]);
+      if (now >= 0) raw['time'] = now;
+    }
     for (const d of DIALS) if (Number.isInteger(raw[d.key])) d.at = clamp(raw[d.key], 0, d.opts.length - 1);
   } catch { /* fine */ }
 }
