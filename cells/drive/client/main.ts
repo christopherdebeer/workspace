@@ -1000,6 +1000,44 @@ function applySkyTint(): void {
 const worldGroup = new THREE.Group();
 worldGroup.name = 'world';   // so a pick can say WHERE a mesh came from
 scene.add(worldGroup);
+/**
+ * EVERYTHING IN THE WORLD GROUP, flagged as it arrives.
+ *
+ * Terrain, vegetation, critters and the rig were flagged at their construction
+ * sites. Nothing else was — so bridges, barriers, signs, buildings, walls,
+ * culverts and retaining shells neither cast a shadow nor took one. A viaduct
+ * over a valley threw nothing at midday and a building's north wall was as
+ * bright as its south.
+ *
+ * There are a dozen places that add to this group and there will be more, so
+ * the flags go on the DOOR rather than on each thing coming through it. Missing
+ * one is otherwise silent: no error, no warning, just an object that quietly
+ * does not exist as far as the sun is concerned.
+ *
+ * DRAPES RECEIVE BUT DO NOT CAST. Roads, tracks, water and the stud layers are
+ * coplanar sheets sitting a centimetre over the terrain — real geometry to the
+ * depth pass, which would have each of them shadowing the ground they are lying
+ * on. `polygonOffset` is exactly the flag that says "I am an overlay", so it is
+ * the one to read.
+ */
+{
+  const add = worldGroup.add.bind(worldGroup);
+  worldGroup.add = (...objs: THREE.Object3D[]): THREE.Group => {
+    for (const o of objs) {
+      o.traverse?.((c) => {
+        if (!(c as THREE.Mesh).isMesh) return;
+        const raw = (c as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+        const mats = Array.isArray(raw) ? raw : raw ? [raw] : [];
+        const solid = mats.length > 0 && mats.every(
+          (m) => !m.transparent && m.blending === THREE.NormalBlending && (m.opacity ?? 1) >= 0.99);
+        const drape = mats.some((m) => (m as THREE.Material & { polygonOffset?: boolean }).polygonOffset);
+        c.castShadow = solid && !drape;
+        c.receiveShadow = true;
+      });
+    }
+    return add(...objs) as THREE.Group;
+  };
+}
 
 let resizePost: (() => void) | null = null; // set by the atmosphere pipeline below
 function resize(): void {
@@ -15477,6 +15515,18 @@ function setClean(on: boolean): void {
     });
     return { casting: on.length, notCasting: off.length };
   })(),
+  // …and the world: how much of what streams in is in the depth pass at all.
+  world: (() => {
+    let cast = 0, recv = 0, mesh = 0;
+    worldGroup.traverse((o) => {
+      if (!(o as THREE.Mesh).isMesh) return;
+      mesh++; if (o.castShadow) cast++; if (o.receiveShadow) recv++;
+    });
+    return { mesh, cast, recv };
+  })(),
+  // The headlights are a real SpotLight, and whether it is in the shadow
+  // system at all is the question people actually ask about it.
+  headlightCasts: headSpot.castShadow,
 });
 (window as unknown as { __hudrects?: object }).__hudrects = (): object =>
   ({ dock: dockRect, pov: povRect, mapUp: mapUpRect, drone: droneRect });
