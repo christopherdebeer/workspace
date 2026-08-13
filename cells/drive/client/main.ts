@@ -9702,6 +9702,21 @@ function stepReal(dt: number): boolean {
     // is an animal standing on the barrier.
     out: +(roadEdge(c.x, c.z)?.out ?? 99).toFixed(2),
   }));
+/**
+ * WHAT THE PROFILE MACHINERY SAYS AT A POINT — so "the fix did not move the
+ * number" can be told apart from "the fix never fired". Four candidate fixes
+ * for the lengthwise seam moved it by exactly zero, and this is what showed why
+ * that was not four failures but one wrong assumption: the hint store is
+ * rebuilt as tiles stream, so what it holds when you ASK is not what it held
+ * when the road was built. Anything read here is evidence about now, not about
+ * then.
+ */
+(window as unknown as { __sharedAt?: object }).__sharedAt = (x: number, z: number) =>
+  ({ hint: hintAt(x, z, 2.5), hintWide: hintAt(x, z, 8),
+    road: roadHeightAt(x, z), ground: sampleHeight(x, z),
+    hintCells: solver.hints.size, chains: solver.stats.chains, pinned: solver.stats.pinned,
+    hintsNearby: [...solver.hints.values()].flat()
+      .filter((h) => Math.hypot(h[0] - x, h[1] - z) < 40).length });
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number, margin = 0.8) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z, margin) });
 /** The nearest drivable centreline: how far OUTSIDE its kerb this point is
@@ -10069,6 +10084,71 @@ function truckSpec(): Record<string, number> {
   const q = (f: number): number => (steps.length ? +steps[Math.min(steps.length - 1, Math.floor(f * steps.length))].toFixed(3) : 0);
   return { joins: steps.length, medianM: q(0.5), p95M: q(0.95),
     over10cm: steps.filter((v) => v > 0.1).length, worstM: +worst.toFixed(3), worstAt: at, worstWays };
+};
+/**
+ * TWO ROADS DRAWN ON TOP OF EACH OTHER.
+ *
+ * `__seams` and `__kerbseams` both ask about a NODE two fragments share. Neither
+ * can see the other way a carriageway goes wrong, which is two different ways
+ * running ALONGSIDE each other over the same ground — a service road tracing a
+ * lay-by a metre off the main road, a car park aisle along a viewpoint — each
+ * solving its own profile, each drawn at its own height. From the cab that is a
+ * lengthwise seam down the road, and no node is involved anywhere.
+ *
+ * Reported as: pairs of segments from DIFFERENT ways, near enough in plan that
+ * their carriageways overlap, close enough in bearing to be parallel rather
+ * than crossing, and disagreeing in height. Crossings are excluded by the
+ * bearing test and flyovers by the grade separation, so what is left is roads
+ * that are trying to occupy the same tarmac.
+ */
+(window as unknown as { __overlap?: object }).__overlap = (r = 200): object => {
+  const cells = new Set<string>();
+  const c = Math.ceil(r / GRID);
+  for (let cx = -c; cx <= c; cx++) for (let cz = -c; cz <= c; cz++) {
+    cells.add(`${Math.floor(state.x / GRID) + cx},${Math.floor(state.z / GRID) + cz}`);
+  }
+  const mid = (s: Seg): [number, number, number] =>
+    [(s.ax + s.bx) / 2, (s.az + s.bz) / 2, ((s.ya ?? 0) + (s.yb ?? 0)) / 2];
+  const dir = (s: Seg): [number, number] => {
+    const dx = s.bx - s.ax, dz = s.bz - s.az, l = Math.hypot(dx, dz) || 1;
+    return [dx / l, dz / l];
+  };
+  const rows: Array<{ at: string; dy: number; apart: number; ways: string[] }> = [];
+  const seenPair = new Set<string>();
+  for (const k of cells) {
+    const here = roadGrid.get(k) ?? [];
+    const [kx, kz] = k.split(',').map(Number);
+    const near: Seg[] = [];
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+      near.push(...(roadGrid.get(`${kx + dx},${kz + dz}`) ?? []));
+    }
+    for (const a of here) {
+      if (a.tk || a.ya === undefined) continue;
+      const [ax, az, ay] = mid(a), [adx, adz] = dir(a);
+      if (Math.hypot(ax - state.x, az - state.z) > r) continue;
+      for (const b of near) {
+        if (b === a || b.tk || b.ya === undefined) continue;
+        if (a.fd === b.fd) continue;                       // same way: not an overlap
+        const [bx, bz, by] = mid(b), [bdx, bdz] = dir(b);
+        const apart = Math.hypot(ax - bx, az - bz);
+        // Overlapping carriageways, not merely adjacent ones.
+        if (apart > (a.hw + b.hw) * 0.7) continue;
+        // Parallel, not crossing — a junction is two roads meeting at an angle
+        // and is a different question with a different answer.
+        if (Math.abs(adx * bdx + adz * bdz) < 0.85) continue;
+        const dy = Math.abs(ay - by);
+        if (dy > GRADE_SEP || dy < 0.05) continue;         // flyover / agreement
+        const af = a.fd ?? -1, bf = b.fd ?? -2;
+        const pk = af < bf ? `${af}:${bf}` : `${bf}:${af}`;
+        if (seenPair.has(pk)) continue;
+        seenPair.add(pk);
+        rows.push({ at: `${Math.round(ax)},${Math.round(az)}`, dy: +dy.toFixed(2),
+          apart: +apart.toFixed(1), ways: [`${a.nm ?? '?'} hw${a.hw}`, `${b.nm ?? '?'} hw${b.hw}`] });
+      }
+    }
+  }
+  rows.sort((x, y) => y.dy - x.dy);
+  return { pairs: rows.length, worst: rows.slice(0, 6) };
 };
 // What the tyres are doing: sideways velocity, how much of it is a slide, and
 // what the drivetrain thinks its own speed is.
