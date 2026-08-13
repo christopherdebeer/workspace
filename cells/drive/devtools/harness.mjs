@@ -120,7 +120,15 @@ export async function openDrive(opts = {}) {
     const key = join(CACHE, createHash('sha1').update(req.url() + '|' + (req.postData() ?? '')).digest('hex'));
     if (existsSync(key)) return route.fulfill({ status: 200, body: readFileSync(key), contentType: 'application/octet-stream' });
     const args = ['-s', '-f', '--max-time', '60', '--cacert', '/root/.ccr/ca-bundle.crt'];
-    if (req.postData()) args.push('--data-binary', req.postData());
+    // OVERPASS IS A POST, AND IT WANTS THE CONTENT TYPE. Dropped when this rig
+    // was assembled from the throwaway scripts, and invisible for a long while
+    // because every place under test was already in the relay cache from before.
+    // At a cold location it meant no OSM at all — and a measurement of a world
+    // with no roads in it reports zero seams and looks like good news.
+    if (req.postData()) {
+      args.push('--data-binary', req.postData(),
+        '-H', 'Content-Type: application/x-www-form-urlencoded');
+    }
     args.push(req.url());
     const body = await new Promise((res) => execFile('curl', args,
       { encoding: 'buffer', maxBuffer: 64e6 }, (e, o) => res(e ? null : o)));
