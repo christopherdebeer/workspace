@@ -1942,6 +1942,21 @@ const roadTex = canvasTex(128, 1, 1, 101, (c, s, r) => {
     c.fillRect(edge, r() * s, 1.5 + r() * 2.5, 2 + r() * 3);
   }
 });
+// The junction mouth's own surface: the same tarmac with NO lines — a host's
+// painted edge line must not run across a turning, and it lives in a
+// repeating texture that cannot break itself, so the mouth overpaints it —
+// plus the give-way bar that says the side road is joining, not crossing.
+// u wraps along the kerb; v runs from the host (0) into the side road (1).
+const mouthTex = canvasTex(128, 1, 1, 107, (c, s, r) => {
+  c.fillStyle = '#3a3f46'; c.fillRect(0, 0, s, s);
+  speckle(c, s, r, ['rgba(255,255,255,0.045)', 'rgba(0,0,0,0.12)'], 220);
+  c.fillStyle = 'rgba(20,23,28,0.3)';
+  c.fillRect(r() * (s - 30), r() * s, 12 + r() * 18, 8 + r() * 12);
+  cracks(c, s, r, 4, 'rgba(12,14,18,0.5)');
+  // The give-way bar: broken white, on the joining road's side of the kerb.
+  c.fillStyle = 'rgba(228,224,210,0.8)';
+  for (let x = 4; x < s; x += 22) c.fillRect(x, s * 0.6, 13, 4);
+});
 const pathTex = canvasTex(64, 1, 1, 102, (c, s, r) => {
   c.fillStyle = '#847d6c'; c.fillRect(0, 0, s, s);
   speckle(c, s, r, ['rgba(60,54,40,0.35)', 'rgba(255,250,235,0.12)'], 90);
@@ -2323,6 +2338,13 @@ const MAT = {
   minor: new THREE.MeshLambertMaterial({
     map: pathTex, transparent: true, opacity: 0.85, side: DS,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -8,
+  }),
+  // The junction mouth patch: above BOTH carriageways in the units ladder
+  // (road is -12), because its whole job is to overpaint their lines where
+  // they meet. Below the studs (-20), which stand on it.
+  mouth: new THREE.MeshLambertMaterial({
+    map: mouthTex, side: DS,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -14,
   }),
   // Ruts: alpha-cut, and depth-offset because it lies a few centimetres over
   // terrain it is meant to look part of.
@@ -5018,6 +5040,7 @@ const apron = {
   rlV: [] as number[], rlUV: [] as number[],
   sgV: [] as number[], sgUV: [] as number[],
   stV: [] as number[], stUV: [] as number[],
+  moV: [] as number[], moUV: [] as number[],
 };
 const spanStats = {
   piers: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0, cats: 0, posts: 0,
@@ -5032,6 +5055,8 @@ const spanStats = {
    *  A worst case on its own is a scare rather than a measurement — the useful
    *  question is whether the typical bend widens at all. */
   mitreN: 0, mitreWide: 0,
+  /** Way-ends whose drawn tarmac was cut back to the host's kerb line. */
+  cropped: 0,
   /** How many way-ends were warped into a host road's plane, and how many
    *  looked for a host and found none. "The fix did not help" and "the fix
    *  never ran" are different failures with different next steps. */
@@ -5285,6 +5310,7 @@ function flushAprons(): void {
     [apron.rlV, apron.rlUV, MAT.rail],
     [apron.sgV, apron.sgUV, MAT.sign],
     [apron.stV, apron.stUV, MAT.stud],
+    [apron.moV, apron.moUV, MAT.mouth],
   ] as const) {
     if (!v.length) continue;
     const g = new THREE.BufferGeometry();
@@ -5925,7 +5951,18 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const RAIL_AT = 2.6;    // drop past the kerb that earns a parapet
   // 2×CAR_R of push-out plus a lane to drive in. Below this a barrier would
   // protect you from the drop by wedging you against the cliff instead.
-  const RAIL_MIN_W = 2 * CAR_R + 2.4;
+  // 2.0 of slack, not 2.4: at 2.4 the gate sat at 7.2m — twenty centimetres
+  // above `unclassified`, the class that carries most of the world's
+  // cliff-edge back roads. Measured at Big Sur's Coast Road over the Bixby
+  // valley: 55 kerbs marked as a drop, zero parapets in the wall grid — every
+  // one had quietly become posts. Service roads and tracks stay below the
+  // gate, which is the wedging case the gate exists for.
+  const RAIL_MIN_W = 2 * CAR_R + 2.0;
+  // …and past THIS much fall, the wedge is the better failure. A reflector
+  // post marks an eight-metre drop; it does not argue with it. Any road wide
+  // enough to carry the truck at all gets the solid rail there.
+  const RAIL_BIG = 8;
+  const RAIL_ABS_MIN_W = 5.5;
   // Metres of straight road between roadside furniture. Was 85, which lined an
   // ordinary suburban street with hazard boards every few seconds and made the
   // whole world read as a permanent contraflow. On a straight the default is
@@ -6015,8 +6052,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           sampleHeight(ex + lx * sgn * 12, ez + lz * sgn * 12),
         );
         const drop = ky - g > RAIL_AT;
-        raw[sd][i] = width > RAIL_MIN_W && drop;
-        rawP[sd][i] = width <= RAIL_MIN_W && drop;
+        const big = ky - g > RAIL_BIG;
+        raw[sd][i] = (width > RAIL_MIN_W && drop) || (width > RAIL_ABS_MIN_W && big);
+        rawP[sd][i] = !raw[sd][i] && drop;
       }
     }
     for (let sd = 0; sd < 2; sd++) {
@@ -6248,6 +6286,11 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
    * this way has not been added to yet — the segments are pushed in the bay
    * loop below — so it can only be answering for somebody else.
    */
+  /** Where each END of this way's drawn tarmac stops short of its own node:
+   *  fractions (inner station → end station) at which the right and left kerb
+   *  edges cross the HOST's kerb line, plus the host's direction there for
+   *  the mouth patch. Null = no crop: a free end, or a continuation. */
+  const cropEnd: Array<{ sR: number; sL: number; hx: number; hz: number } | null> = [null, null];
   if (drivable && !track && n > 3) {
     // Stations to fade over, ~60m at 12m steps — but never more than the way
     // HAS. A four-station way walked off the end of `dense` and threw, which a
@@ -6273,6 +6316,48 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // refused, so a driveway still cannot drag a trunk road onto its camber.
       if (at0.hw < width / 2 - 0.4) { spanStats.warpNoHost++; spanStats.warpNotWider++; continue; }
       spanStats.warped++;
+      /**
+       * THE CROP. A T-junction's shared node sits on the HOST's centreline, so
+       * this way's ribbon used to run on across the host's carriageway to the
+       * middle — coplanar after the warp below, which is exactly what let the
+       * side road's surface, edge and wear paint themselves across the host at
+       * an angle. The drawn tarmac now stops on the host's KERB LINE: each of
+       * this way's kerb edges is searched for where it crosses out=0, and the
+       * end bay is cut there — an angled edge lying along the host's kerb.
+       *
+       * A CONTINUATION is left alone (two fragments of one road run near
+       * parallel, and cropping against your own next fragment would notch
+       * every tile boundary), and so is an end that never actually reaches
+       * inside the host's kerb.
+       */
+      if (at0.out < -0.6) {
+        const iN = end === 0 ? 1 : n - 2;
+        const ddx = dense[iN][0] - dense[i0][0], ddz = dense[iN][1] - dense[i0][1];
+        const dl = Math.hypot(ddx, ddz) || 1;
+        const align = Math.abs((ddx / dl) * at0.ux + (ddz / dl) * at0.uz);
+        if (align < 0.94) {
+          const sFor = (sgn: number): number => {
+            const [kex, kez] = kerbMitre(i0, sgn, width / 2);
+            const [kix, kiz] = kerbMitre(iN, sgn, width / 2);
+            const Px = dense[i0][0] + kex, Pz = dense[i0][1] + kez;   // the end corner
+            const Qx = dense[iN][0] + kix, Qz = dense[iN][1] + kiz;   // the inner one
+            const outAt = (s: number): number => {
+              const e = roadEdge(Qx + (Px - Qx) * s, Qz + (Pz - Qz) * s);
+              return e ? e.out : 1;
+            };
+            if (outAt(1) >= 0) return 1;        // this corner never enters the host
+            if (outAt(0) <= 0) return 0.08;     // the whole bay is inside it — keep a sliver
+            let lo = 0, hi = 1;
+            for (let it = 0; it < 9; it++) {
+              const mid = (lo + hi) / 2;
+              if (outAt(mid) > 0) lo = mid; else hi = mid;
+            }
+            return (lo + hi) / 2;
+          };
+          const sR = sFor(1), sL = sFor(-1);
+          if (sR < 1 || sL < 1) { cropEnd[end] = { sR, sL, hx: at0.ux, hz: at0.uz }; spanStats.cropped++; }
+        }
+      }
       for (let k = 0; k < WARP; k++) {
         const i = end === 0 ? k : n - 1 - k;
         const [rx, rz] = kerbMitre(i, 1, width / 2), [lx, lz] = kerbMitre(i, -1, width / 2);
@@ -6335,11 +6420,60 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const y10 = (flat ? prof[i + 1] + tilt[i + 1] : sampleHeight(x1 + brx, z1 + brz)) + lift;
     const y11 = (flat ? prof[i + 1] - tilt[i + 1] : sampleHeight(x1 + blx, z1 + blz)) + lift;
     const v0 = along / 20, v1 = (along + len) / 20;
+    // The bay's corner table: [x, y, z, u, v] per corner, A = station i,
+    // B = station i+1, R/L by kerb side. Normally exactly the mitred corners;
+    // the JUNCTION CROP rewrites the end station's pair so the tarmac's end
+    // edge lies along the host's kerb — each corner slides toward its inner
+    // neighbour by the fraction the crop solved, and its v slides with it so
+    // the texture is cut, not squashed. Everything downstream of the tarmac —
+    // fascia, batter, rail, posts — reads these corners too, so the whole
+    // section stops at the same line.
+    let AR: number[] = [x0 + arx, y00, z0 + arz, 0, v0], AL: number[] = [x0 + alx, y01, z0 + alz, 1, v0];
+    let BR: number[] = [x1 + brx, y10, z1 + brz, 0, v1], BL: number[] = [x1 + blx, y11, z1 + blz, 1, v1];
+    const lerpC = (P: number[], Q: number[], s: number): number[] =>
+      [P[0] + (Q[0] - P[0]) * s, P[1] + (Q[1] - P[1]) * s, P[2] + (Q[2] - P[2]) * s, Q[3], P[4] + (Q[4] - P[4]) * s];
+    /**
+     * THE BELLMOUTH, where a crop just cut this way on the host's kerb: a
+     * small patch of plain tarmac straddling the join, flared a little along
+     * the kerb, carrying the give-way bar. It overpaints the host's edge line
+     * through the mouth — the line lives in a repeating texture and cannot
+     * break itself — and gives the junction the one marking that says who
+     * yields. Heights from the host's own surface, so it lies in its plane.
+     */
+    const mouth = (c: { sR: number; sL: number; hx: number; hz: number }, R: number[], L: number[], inX: number, inZ: number): void => {
+      const il = Math.hypot(inX, inZ) || 1;
+      const ix = inX / il, iz = inZ / il;          // unit, into the side road
+      const f = Math.min(width * 0.45, 3.2);       // the flare along the kerb
+      const sgnD = Math.sign((R[0] - L[0]) * c.hx + (R[2] - L[2]) * c.hz) || 1;
+      const ex2 = c.hx * sgnD, ez2 = c.hz * sgnD;  // along the kerb, L→R sense
+      const co: Array<[number, number]> = [
+        [R[0] + ex2 * f - ix * 1.0, R[2] + ez2 * f - iz * 1.0],
+        [L[0] - ex2 * f - ix * 1.0, L[2] - ez2 * f - iz * 1.0],
+        [R[0] + ex2 * f * 0.4 + ix * 1.6, R[2] + ez2 * f * 0.4 + iz * 1.6],
+        [L[0] - ex2 * f * 0.4 + ix * 1.6, L[2] - ez2 * f * 0.4 + iz * 1.6],
+      ];
+      const ys = co.map(([px2, pz2]) => (roadHeightAt(px2, pz2, 2.5) ?? (R[1] + L[1]) / 2 - lift) + lift + 0.004);
+      const uw = Math.hypot(R[0] - L[0], R[2] - L[2]) / 6 + 0.3;
+      quad(apron.moV, apron.moUV,
+        [co[0][0], ys[0], co[0][1], co[1][0], ys[1], co[1][1],
+          co[2][0], ys[2], co[2][1], co[3][0], ys[3], co[3][1]],
+        [0, 0, uw, 0, 0, 1, uw, 1]);
+    };
+    if (i === 0 && cropEnd[0]) {
+      AR = lerpC(BR, AR, cropEnd[0].sR);
+      AL = lerpC(BL, AL, cropEnd[0].sL);
+      mouth(cropEnd[0], AR, AL, x1 - x0, z1 - z0);
+    }
+    if (i === n - 2 && cropEnd[1]) {
+      BR = lerpC(AR, BR, cropEnd[1].sR);
+      BL = lerpC(AL, BL, cropEnd[1].sL);
+      mouth(cropEnd[1], BR, BL, x0 - x1, z0 - z1);
+    }
     verts.push(
-      x0 + arx, y00, z0 + arz, x1 + brx, y10, z1 + brz, x0 + alx, y01, z0 + alz,
-      x1 + brx, y10, z1 + brz, x1 + blx, y11, z1 + blz, x0 + alx, y01, z0 + alz,
+      AR[0], AR[1], AR[2], BR[0], BR[1], BR[2], AL[0], AL[1], AL[2],
+      BR[0], BR[1], BR[2], BL[0], BL[1], BL[2], AL[0], AL[1], AL[2],
     );
-    uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
+    uvs.push(AR[3], AR[4], BR[3], BR[4], AL[3], AL[4], BR[3], BR[4], BL[3], BL[4], AL[3], AL[4]);
     // A TRACK TAKES THE GROUND'S OWN COLOUR. Two ruts painted a fixed brown sat
     // on the hillside as a stripe of somebody else's palette; sampled from
     // `terrainPalette` at the rut itself, they read as the ground worn through
@@ -6374,12 +6508,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // start and finish on the point their neighbours use. On the bay's own
         // normal they each stepped at every corner: the barrier opened a gap you
         // could see through on any bend worth calling a bend, and the earth and
-        // the fascia notched with it.
-        const [k0x, k0z] = kerbMitre(i, sgn, width / 2);
-        const [k1x, k1z] = kerbMitre(i + 1, sgn, width / 2);
-        const ex0 = x0 + k0x, ez0 = z0 + k0z;
-        const ex1 = x1 + k1x, ez1 = z1 + k1z;
-        const ey0 = sgn > 0 ? y00 : y01, ey1 = sgn > 0 ? y10 : y11;
+        // the fascia notched with it. Read from the CORNER TABLE, which is the
+        // mitred kerb everywhere except a cropped junction mouth — where it is
+        // the cut, and the furniture must stop with the tarmac.
+        const C0 = sgn > 0 ? AR : AL, C1 = sgn > 0 ? BR : BL;
+        const ex0 = C0[0], ez0 = C0[2];
+        const ex1 = C1[0], ez1 = C1[2];
+        const ey0 = C0[1], ey1 = C1[1];
         const g0 = Math.min(sampleHeight(ex0, ez0), sampleHeight(ex0 + ox * sgn, ez0 + oz * sgn));
         const g1 = Math.min(sampleHeight(ex1, ez1), sampleHeight(ex1 + ox * sgn, ez1 + oz * sgn));
         const b0 = deck ? ey0 - dd : Math.max(Math.min(ey0, g0) - APRON, ey0 - APRON_MAX);
@@ -6512,7 +6647,11 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           // Centre raised so the quad's LOWER edge clears the tarmac rather
           // than grazing it: bottom at 6cm, well outside anything the depth
           // buffer rounds away.
-          stud(cx, cyDeck + 0.15, cz, dx / len, dz / len, 0.15, 0.09);
+          // …and never past a cropped mouth, where the centreline's tarmac
+          // ends at the host's kerb and a stud would stand on the host.
+          const cut0 = i === 0 && cropEnd[0] ? 1 - Math.min(cropEnd[0].sR, cropEnd[0].sL) : 0;
+          const cut1 = i === n - 2 && cropEnd[1] ? Math.min(cropEnd[1].sR, cropEnd[1].sL) : 1;
+          if (t >= cut0 && t <= cut1) stud(cx, cyDeck + 0.15, cz, dx / len, dz / len, 0.15, 0.09);
         }
       }
       // ── roadside furniture ──
@@ -10491,8 +10630,8 @@ function stepReal(dt: number): boolean {
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z, margin) });
 /** The nearest drivable centreline: how far OUTSIDE its kerb this point is
  *  (negative on the carriageway), and the road's own surface height there. */
-function roadEdge(x: number, z: number): { out: number; y: number; track: boolean; hw: number } | null {
-  let best: { out: number; y: number; track: boolean; hw: number } | null = null;
+function roadEdge(x: number, z: number): { out: number; y: number; track: boolean; hw: number; ux: number; uz: number } | null {
+  let best: { out: number; y: number; track: boolean; hw: number; ux: number; uz: number } | null = null;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
     if (seg.ya === undefined || seg.yb === undefined) continue;
     const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
@@ -10500,8 +10639,12 @@ function roadEdge(x: number, z: number): { out: number; y: number; track: boolea
     const d = Math.hypot(x - (seg.ax + dx * t), z - (seg.az + dz * t));
     const out = d - seg.hw;
     // `hw` rides along because the answer to "am I on a road" is often followed
-    // by "whose, and is it more important than mine".
-    if (!best || out < best.out) best = { out, y: seg.ya + (seg.yb - seg.ya) * t, track: !!seg.tk, hw: seg.hw };
+    // by "whose, and is it more important than mine" — and the DIRECTION,
+    // because the junction crop needs to know a join from a continuation.
+    if (!best || out < best.out) {
+      const l = Math.hypot(dx, dz) || 1;
+      best = { out, y: seg.ya + (seg.yb - seg.ya) * t, track: !!seg.tk, hw: seg.hw, ux: dx / l, uz: dz / l };
+    }
   }
   return best;
 }
