@@ -61,13 +61,27 @@ export async function openDrive(opts = {}) {
   const {
     spot = 'lat=-34.09905&lon=18.37835&h=0&cam=chase',
     port = 8800 + Math.floor(Math.random() * 90),
-    src = join(CELL, 'client/main.ts'),
     tag = 'app',
     menu = true,
     settle = 0,
+    rev = '',
+    shim = '',
   } = opts;
   mkdirSync(WORK, { recursive: true });
   mkdirSync(CACHE, { recursive: true });
+
+  // MEASURE AN OLDER BUILD. Almost every question worth asking here is "is this
+  // better than what we had", and the answer needs both numbers from the same
+  // rig on the same day — a remembered figure from three changes ago is not a
+  // control. `rev` builds any revision's main.ts; `shim` is appended to it,
+  // because an older build usually lacks the very probe the measurement reads
+  // and reconstructing it there is the only way to compare like with like.
+  let src = opts.src ?? join(CELL, 'client/main.ts');
+  if (rev) {
+    src = join(WORK, `main-${rev.replace(/[^\w.-]/g, '_')}.ts`);
+    writeFileSync(src, execSync(`git show ${rev}:cells/drive/client/main.ts`,
+      { cwd: ROOT, maxBuffer: 64e6 }) + shim);
+  }
   const bundle = join(WORK, `${tag}.js`);
   execSync(`npx esbuild ${src} --bundle --format=esm --outfile=${bundle}`, { stdio: 'pipe', cwd: ROOT });
 

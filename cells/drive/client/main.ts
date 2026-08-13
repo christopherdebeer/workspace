@@ -4122,6 +4122,13 @@ const solver = new RoadSolver({
   // by their decks, not by the terrain under them. Centimetres.
   hints: [...solver.hints.values()].flat()
     .map(([hx, hz, hy]) => [Math.round(hx * 100) / 100, Math.round(hz * 100) / 100, Math.round(hy * 100) / 100]),
+  // THE SAME DECKS, BUT IN STATION ORDER — one array per chain the session
+  // solved. `hints` answers "what is the deck here", which is the welding
+  // question; only this answers "is what we built drivable", because a grade is
+  // a statement about consecutive stations and the spatial hash has no
+  // consecutive. Empty unless a capture armed the tape.
+  profiles: solver.profiles.map((p) => p.map(([hx, hz, hy]) =>
+    [Math.round(hx * 100) / 100, Math.round(hz * 100) / 100, Math.round(hy * 100) / 100])),
 });
 const juncGrid = solver.junctions;
 const juncStats = solver.stats;
@@ -7332,7 +7339,10 @@ const AREA_TAG = (t: Record<string, string>): boolean =>
  *  not a tidy reconstruction of it. Off unless a probe turns it on. */
 let wayTape: Array<{ els: OsmWay[]; halo: OsmWay[] }> | null = null;
 (window as unknown as { __tape?: object }).__tape = (on: boolean): number => {
-  if (on) { wayTape = []; return 0; }
+  // The profile tape rides with the way tape: both are armed before the world
+  // streams and both are only ever read by a capture.
+  solver.recording = on;
+  if (on) { wayTape = []; solver.profiles.length = 0; return 0; }
   const n = wayTape?.length ?? 0;
   return n;
 };
@@ -9766,6 +9776,33 @@ function truckSpec(): Record<string, number> {
   kmh: Math.round(Math.abs(state.speed) * 3.6),
   roll: +((gradeRoll * 180) / Math.PI).toFixed(1),
 });
+/**
+ * THE STEADY-STATE CORNER, for telling a spin from understeer.
+ *
+ *   SPIN        tiny radius, absurd lateral g, big slip angle — the nose whips
+ *               round while the velocity carries straight on.
+ *   UNDERSTEER  radius grows with speed, lateral g pinned near the surface's
+ *               mu, slip small — the truck runs wide, pointing where you aimed.
+ *
+ * `askG` is what the corner DEMANDS and `latG` what it got; they diverge
+ * exactly when the tyres run out of budget, which is the moment worth seeing.
+ */
+(window as unknown as { __phys?: object }).__phys = (): object => {
+  const v = state.speed, w = dbgYaw;
+  const ask = Math.abs(v * w) / GRAV;
+  return {
+    v: +v.toFixed(3), steerCur: +steerCur.toFixed(3),
+    yawWant: +w.toFixed(3), yawRate: +w.toFixed(3),
+    radius: Math.abs(w) > 1e-3 ? +Math.abs(v / w).toFixed(3) : Infinity,
+    askG: +ask.toFixed(3),
+    // What the chassis is actually pulling: the demand it kept, less whatever
+    // ran away as sideways velocity.
+    latG: +Math.max(0, ask - Math.abs(slideV) / GRAV).toFixed(3),
+    slideV: +slideV.toFixed(3), grip: +groundedF.toFixed(3),
+    slipDeg: +((Math.atan2(slideV, Math.max(Math.abs(v), 0.01)) * 180) / Math.PI).toFixed(3),
+    mu: +surfaceFor(surfaceAt(state.x, state.z), surfQ).mu.toFixed(3),
+  };
+};
 // The road corridor at a point: the raw heightfield, what the cut allows, and
 // therefore how much ground was taken out of the carriageway's airspace.
 /** THE TERRACE: how far from a carriageway, and how deep, the drawn mesh sits
@@ -13119,6 +13156,10 @@ const GRAV = 11.5;
 let wheelSpin = 0, groundedF = 1, bodyInit = false;
 let prevSurfKind: Surface = 'ground';   // last frame's ground, for the splash edge
 let steerCur = 0; // smoothed — keyboard taps ramp instead of snapping
+/** The yaw rate tick() actually applied, kept for __phys. Read from the live
+ *  assignment rather than recomputed, because a probe that re-derives the
+ *  formula stops describing the truck the moment the formula changes. */
+let dbgYaw = 0;
 let prevGround: number | null = null; // last frame's resolved ground (tunnel guard)
 let dustBudget = 0;                   // fractional particles carried between frames
 const sunScreen = new THREE.Vector3();
@@ -13204,6 +13245,7 @@ function tick(now: number): void {
       // move, a nudge at 180 — turn RATE stays sane across the whole range.
       const authority = (0.15 + 0.85 * grip) * tune.steer / (1 + Math.abs(state.speed) / 12);
       yawRate = (steerCur * CAR.steerMax * authority * state.speed) / CAR.wheelbase;
+      dbgYaw = yawRate;
       state.heading += yawRate * dt;
     }
     state.x += Math.sin(state.heading) * state.speed * dt;

@@ -90,9 +90,26 @@ export class RoadSolver {
     dropped: [] as string[],
   };
 
+  /**
+   * SOLVED PROFILES IN STATION ORDER, kept only while a capture asks for them.
+   *
+   * The hint store is spatially hashed, which is right for the question it
+   * answers — "what deck is at this point" — and destroys the one thing a
+   * drivability question needs: which station follows which. A road is
+   * drivable or not ALONG itself, and no amount of nearest-neighbour searching
+   * recovers that ordering, because two stations 12m apart may be consecutive
+   * on one road or a stacked pair of switchback legs.
+   *
+   * Off by default and never trimmed, so it must stay off in a real session:
+   * it is a tape, not a cache.
+   */
+  recording = false;
+  readonly profiles: Array<Array<[number, number, number]>> = [];
+
   constructor(private readonly env: SolveEnv) {}
 
   writeHints(dense: Array<[number, number]>, alg: number[]): void {
+    if (this.recording) this.profiles.push(dense.map((p, i) => [p[0], p[1], alg[i]]));
     if (this.hints.size > 6000) this.hints.clear();   // advisory data; rebuilt per tile
     for (let i = 0; i < dense.length; i++) {
       const k = `${Math.floor(dense[i][0] / HINT_CELL)},${Math.floor(dense[i][1] / HINT_CELL)}`;

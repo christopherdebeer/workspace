@@ -225,5 +225,39 @@ show('worst', `${worstStale.toFixed(2)}m`);
 eq('no station carries two decks the ribbon would see differently',
   worstStale <= WELD_TOL, true);
 
+// ── 8. WHAT WE BUILT MUST BE DRIVABLE ──
+// The guard on holding pins through the limiter. A pinned station is exempt
+// from ruleGrade, so in principle two pins close together could leave a wall
+// the limiter would otherwise have ruled away — and that is a statement about
+// CONSECUTIVE stations, which the spatially-hashed hint store cannot express.
+// `profiles` keeps each chain in station order for exactly this.
+//
+// The threshold is the ruling grade the solver itself imposes (gCap * 1.2) at
+// the steepest class it will chain, plus a little: this asks whether the
+// exemption left a wall, not whether the DP picked a nice line.
+console.log('\ndrivability — consecutive stations, along the road');
+const WALL = 0.30;
+if (!fix.profiles?.length) {
+  show('profiles', 'not in this capture — recapture to check drivability');
+} else {
+  show('chains recorded', fix.profiles.length);
+  let worst = 0, at = null, walls = 0, stations = 0;
+  for (const prof of fix.profiles) {
+    for (let i = 1; i < prof.length; i++) {
+      const d = Math.hypot(prof[i][0] - prof[i - 1][0], prof[i][1] - prof[i - 1][1]);
+      if (d < 0.5) continue;
+      stations++;
+      const g = Math.abs(prof[i][2] - prof[i - 1][2]) / d;
+      if (g > WALL) walls++;
+      if (g > worst) { worst = g; at = prof[i]; }
+    }
+  }
+  show('station pairs', stations);
+  show('steepest', `${(worst * 100).toFixed(1)}%`);
+  if (at) show('  at', `${at[0]}, ${at[1]}`);
+  show(`pairs over ${WALL * 100}%`, walls);
+  eq(`no consecutive pair is steeper than ${WALL * 100}%`, walls, 0);
+}
+
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);
