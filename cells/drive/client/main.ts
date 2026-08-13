@@ -2330,11 +2330,16 @@ const MAT = {
   // distance. The offset is in depth-buffer units, so it scales with the
   // precision available instead of with metres.
   water: new THREE.MeshLambertMaterial({ map: waterTex, side: DS, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }),
-  // Boulders in a rapid, and the foam that stands off them. Flat-shaded so a
-  // six-sided lump reads as rock rather than as a ball, and vertex-coloured so
-  // one draw call carries a whole reach of them.
+  // Boulders in a rapid. Flat-shaded so a six-sided lump reads as rock rather
+  // than as a ball, and vertex-coloured so one draw call carries a reach of them.
+  //
+  // THE FOAM AROUND THEM IS NOT GEOMETRY. It was, briefly: a quad standing off
+  // each rock downstream. MeshBasicMaterial ignores light, so at night a
+  // hard-edged white card was the brightest thing in a Norwegian valley and the
+  // river read as strewn with paper. Whitewater belongs in the surface shader,
+  // where it is already river-aligned, already shaded, and already keyed to the
+  // same gradient the rocks are.
   boulder: new THREE.MeshLambertMaterial({ color: 0x7d7a72, flatShading: true, vertexColors: true }),
-  froth: new THREE.MeshBasicMaterial({ color: 0xeef4f6, transparent: true, opacity: 0.72, depthWrite: false }),
   // A RIVER IS NOT A LAKE. Same look, different shader — see `riverize`.
   river: new THREE.MeshLambertMaterial({ map: waterTex, side: DS, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }),
   green: new THREE.MeshLambertMaterial({
@@ -2592,7 +2597,7 @@ function riverize(mat: THREE.Material): void {
         if (rough > 0.0) {
           float f = wn(vec2(vChan.x * 9.0, vChan.y * 1.7 - t * 2.2 * drag));
           float g2 = wn(vec2(vChan.x * 17.0, vChan.y * 3.1 - t * 3.1 * drag));
-          float foam = smoothstep(0.62, 0.95, f * 0.65 + g2 * 0.35);
+          float foam = smoothstep(0.56, 0.92, f * 0.65 + g2 * 0.35);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.94, 0.97, 0.99), foam * rough * (0.45 + 0.55 * mid));
         }
         // Glint, as on standing water: crests facing the sun catch it.
@@ -6939,7 +6944,7 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
    * more draw calls than it saved, and these are built once and never touched.
    */
   {
-    const rv: number[] = [], rc: number[] = [], fv: number[] = [];
+    const rv: number[] = [], rc: number[] = [];
     // A stable hash of a position: two rebuilds of the same river agree.
     const rnd = (x: number, z: number, k: number): number => {
       const v = Math.sin(x * 12.9898 + z * 78.233 + k * 37.719) * 43758.5453;
@@ -6977,22 +6982,6 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
             cx + Math.cos(a1) * r1, base, cz + Math.sin(a1) * r1);
           for (let q = 0; q < 3; q++) rc.push(tone, tone * 0.99, tone * 0.94);
         }
-        // THE FROTH STANDS OFF IT, and downstream. Water piles on the upstream
-        // face and tears white behind — a collar centred on the rock would look
-        // like a puddle round a post.
-        const fy = inv[i] + 0.06;
-        // DOWNSTREAM AT THIS ROCK, not at the head of the run. The first version
-        // took the tangent from the run's first two stations, so every froth
-        // trail in a valley pointed the same way however the river turned.
-        const sgn = down ? 1 : -1;
-        const dxu = (dense[i + 1][0] - dense[i - 1][0]) * sgn;
-        const dzu = (dense[i + 1][1] - dense[i - 1][1]) * sgn;
-        const dl = Math.hypot(dxu, dzu) || 1;
-        const ux = dxu / dl, uz = dzu / dl;
-        const fx = ux * r * 2.4, fz = uz * r * 2.4;      // the trail, downstream
-        const px2 = -uz * r * 1.1, pz2 = ux * r * 1.1;   // and its half-width
-        fv.push(cx + px2, fy, cz + pz2, cx - px2, fy, cz - pz2, cx + fx + px2, fy, cz + fz + pz2,
-          cx - px2, fy, cz - pz2, cx + fx - px2, fy, cz + fz - pz2, cx + fx + px2, fy, cz + fz + pz2);
       }
     }
     if (rv.length) {
@@ -7003,12 +6992,6 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
       const rm = new THREE.Mesh(g, MAT.boulder);
       rm.userData.rapid = true;
       worldGroup.add(rm);
-    }
-    if (fv.length) {
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(fv), 3));
-      g.computeVertexNormals();
-      worldGroup.add(new THREE.Mesh(g, MAT.froth));
     }
   }
   // THE BORES ARE DEFERRED, because at this moment there may be no road.
