@@ -2573,18 +2573,22 @@ function riverize(mat: THREE.Material): void {
         float a = wn(p * 1.0 - vec2(0.0, t * 0.85 * drag));
         float b = wn(p * 2.3 + vec2(0.7, -t * 1.45 * drag));
         float swell = a * 0.62 + b * 0.38;
-        diffuseColor.rgb *= 0.70 + swell * 0.72;
+        // MORE CONTRAST THAN OPEN WATER WANTS. Seen from the chase camera a
+        // river is thirty pixels wide, and a swell that reads correctly close up
+        // is invisible at that size; moving water has to be legible before it is
+        // subtle.
+        diffuseColor.rgb *= 0.58 + swell * 1.05;
         // WHITEWATER, and only where the gradient earns it. Standing water gets
         // none of this at any speed; a torrent gets streaks that stretch ALONG
         // the flow, because foam is carried rather than sprinkled.
         // Foam is the exception, not the surface. The first threshold put a
         // whole glacial valley under it.
-        float rough = smoothstep(1.7, 3.0, sp);
+        float rough = smoothstep(1.35, 2.7, sp);
         if (rough > 0.0) {
           float f = wn(vec2(vChan.x * 9.0, vChan.y * 1.7 - t * 2.2 * drag));
           float g2 = wn(vec2(vChan.x * 17.0, vChan.y * 3.1 - t * 3.1 * drag));
           float foam = smoothstep(0.62, 0.95, f * 0.65 + g2 * 0.35);
-          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.92, 0.95, 0.97), foam * rough * mid);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.94, 0.97, 0.99), foam * rough * (0.45 + 0.55 * mid));
         }
         // Glint, as on standing water: crests facing the sun catch it.
         vec2 toSun = normalize(uWSun.xz + vec2(1e-4));
@@ -6874,17 +6878,25 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
     }
   }
   // The visible water, and the bed the terrain is dug to.
+  //
+  // MITRED, like every other ribbon here. A river was a run of rectangles about
+  // each bay's own centreline, so on the outside of every meander the bays
+  // parted and left the bank notched — the same wedge the carriageway once had
+  // a gore for and the tunnel shells were mitred to close. A watercourse has no
+  // Seg.hw to keep faith with, so it takes the simpler fix: both bays use the
+  // same two points and there is nothing left to fill.
+  const off = mitreOffsets(dense, 0, n - 1, width / 2);
   const verts: number[] = [], uvs: number[] = [], flow: number[] = [];
   for (let i = 0; i < n - 1; i++) {
     const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
     const dx = x1 - x0, dz = z1 - z0;
     const len = Math.hypot(dx, dz) || 1;
-    const nx = (-dz / len) * (width / 2), nz = (dx / len) * (width / 2);
+    const [nx, nz] = off[i], [mx, mz] = off[i + 1];
     const yA = inv[i] + 0.025, yB = inv[i + 1] + 0.025;
     const v0 = vAt[i], v1 = vAt[i + 1];
     verts.push(
-      x0 + nx, yA, z0 + nz, x1 + nx, yB, z1 + nz, x0 - nx, yA, z0 - nz,
-      x1 + nx, yB, z1 + nz, x1 - nx, yB, z1 - nz, x0 - nx, yA, z0 - nz,
+      x0 + nx, yA, z0 + nz, x1 + mx, yB, z1 + mz, x0 - nx, yA, z0 - nz,
+      x1 + mx, yB, z1 + mz, x1 - mx, yB, z1 - mz, x0 - nx, yA, z0 - nz,
     );
     uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
     const sA = speed[i], sB = speed[i + 1];
