@@ -65,9 +65,10 @@ for (const [i, spot] of SPOTS.entries()) {
   }));
   console.log(`\n${i}. ${spot.name}  (${spot.was})`);
   console.log(`   centreline: ${m.cl.joins} joins, ${m.cl.disagreeing} disagreeing,`
-    + ` p95 ${m.cl.p95}m, worst ${m.cl.worst?.[0]?.step ?? 0}m`);
+    + ` p95 ${m.cl.p95}m, worst ${m.cl.worst?.[0]?.step ?? 0}m at ${m.cl.worst?.[0]?.at ?? '-'}`
+    + ` ${JSON.stringify(m.cl.worst?.[0]?.ways ?? [])} branches ${JSON.stringify(m.cl.worst?.[0]?.branches ?? [])}`);
   console.log(`   kerb:       ${m.kerb.joins} joins, over 10cm ${m.kerb.over10cm},`
-    + ` p95 ${m.kerb.p95M}m, worst ${m.kerb.worstM}m ${JSON.stringify(m.kerb.worstWays)}`);
+    + ` p95 ${m.kerb.p95M}m, worst ${m.kerb.worstM}m at ${m.kerb.worstAt} ${JSON.stringify(m.kerb.worstWays)}`);
   console.log(`   overlap:    ${m.ov.pairs} parallel pairs disagreeing in height`);
   for (const w of m.ov.worst.slice(0, 3)) {
     console.log(`               ${w.dy}m apart, ${w.apart}m aside at ${w.at} — ${JSON.stringify(w.ways)}`);

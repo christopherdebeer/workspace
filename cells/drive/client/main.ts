@@ -4810,6 +4810,10 @@ const spanStats = {
    *  A worst case on its own is a scare rather than a measurement — the useful
    *  question is whether the typical bend widens at all. */
   mitreN: 0, mitreWide: 0,
+  /** How many way-ends were warped into a host road's plane, and how many
+   *  looked for a host and found none. "The fix did not help" and "the fix
+   *  never ran" are different failures with different next steps. */
+  warped: 0, warpNoHost: 0,
   // How big the gap actually was in the quads we declined to fill, banded —
   // so "52% had no gap" can be checked rather than believed.
   noGapBand: [0, 0, 0, 0] as number[], fillQ: 0, fillM2: 0,
@@ -5990,6 +5994,52 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const scale = 2.2 * clamp(1 / m, 1, 2.4);
     return [(mx2 / m) * scale * sgn, (mz2 / m) * scale * sgn];
   };
+  /**
+   * THE JUNCTION WARP — a side road lies IN the road it joins.
+   *
+   * A minor road meeting a major one solved its own profile right up to the
+   * shared node and then left on its own plane. The heights agreed: measured at
+   * a service road joining Chapman's Peak Drive, 0.24m at the centreline and
+   * 0.29m at the kerb, which is nothing. The PLANE did not. Each road's
+   * cross-fall is measured across its OWN width in its OWN direction, so two
+   * roads meeting at an angle tilt about different axes, and the side road's
+   * carriageway lifts out of the main one along the edge they share — with its
+   * apron, the road's own thickness, standing up as a lit wedge. Photographed
+   * from the cab and reported, correctly, as road at the wrong angle rather
+   * than as a height step, which is why chasing heights never found it.
+   *
+   * Where a real junction does this with a warped surface, so does this: for
+   * the first few stations the deck is taken from the HOST road's surface at
+   * this road's own two kerbs — which fixes the height and the tilt together,
+   * because a plane through two points on the host IS the host's plane — and
+   * faded back to its own solution over the next few.
+   *
+   * Only ever DOWN the hierarchy. A road defers to a wider one and never the
+   * reverse, or a driveway would drag a trunk road onto its camber. And only at
+   * the ends, where the node is. `roadHeightAt` reads the segment grid, which
+   * this way has not been added to yet — the segments are pushed in the bay
+   * loop below — so it can only be answering for somebody else.
+   */
+  if (drivable && !track && n > 3) {
+    const WARP = 5;                    // stations to fade over, ~60m at 12m steps
+    for (const end of [0, 1]) {
+      const i0 = end === 0 ? 0 : n - 1;
+      // A wider road must actually be underfoot at the node, not merely near it.
+      const at0 = roadEdge(dense[i0][0], dense[i0][1]);
+      if (!at0 || at0.track || at0.out > 1 || at0.hw <= width / 2 + 0.4) { spanStats.warpNoHost++; continue; }
+      spanStats.warped++;
+      for (let k = 0; k < WARP; k++) {
+        const i = end === 0 ? k : n - 1 - k;
+        const [rx, rz] = kerbMitre(i, 1, width / 2), [lx, lz] = kerbMitre(i, -1, width / 2);
+        const hR = roadHeightAt(dense[i][0] + rx, dense[i][1] + rz, 0.6);
+        const hL = roadHeightAt(dense[i][0] + lx, dense[i][1] + lz, 0.6);
+        if (hR === null || hL === null) break;      // off the host: nothing to lie on
+        const w = 1 - k / WARP;
+        prof[i] += ((hR + hL) * 0.5 - prof[i]) * w;
+        tilt[i] += ((hR - hL) * 0.5 - tilt[i]) * w;
+      }
+    }
+  }
   let along = 0; // metres travelled — v wraps every 20m (the roadTex period)
   let pierRun = PIER_SPAN;  // so the first bay of a span gets one
   for (let i = 0; i < n - 1; i++) {
@@ -7487,7 +7537,18 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
   // profile whole, publishing hints for the per-way builds below. Lives in
   // `roadsolve.ts` now — see there for why.
   solver.plan(els, halo);
-  for (const el of els) {
+  // WIDEST FIRST. The junction warp asks the segment grid what road it is
+  // joining, and a road that has not been built yet is not in the grid — so a
+  // driveway that happened to arrive before Chapman's Peak Drive had nothing to
+  // defer to. On its own this changed nothing measurable and was reverted once;
+  // it is back because the warp cannot work without it, and the pair is
+  // measured together below.
+  const ordered = els.slice().sort((a, b) => {
+    const wa = (a.tags?.highway ? ROAD_W[a.tags.highway] ?? 5 : -1);
+    const wb = (b.tags?.highway ? ROAD_W[b.tags.highway] ?? 5 : -1);
+    return wb - wa;
+  });
+  for (const el of ordered) {
     // Clipped lines carry their own key; areas still dedupe on the bare id, so
     // a lake straddling two vector tiles is still drawn exactly once.
     const dk = el.ck ?? String(el.id);
@@ -9721,15 +9782,17 @@ function stepReal(dt: number): boolean {
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z, margin) });
 /** The nearest drivable centreline: how far OUTSIDE its kerb this point is
  *  (negative on the carriageway), and the road's own surface height there. */
-function roadEdge(x: number, z: number): { out: number; y: number; track: boolean } | null {
-  let best: { out: number; y: number; track: boolean } | null = null;
+function roadEdge(x: number, z: number): { out: number; y: number; track: boolean; hw: number } | null {
+  let best: { out: number; y: number; track: boolean; hw: number } | null = null;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
     if (seg.ya === undefined || seg.yb === undefined) continue;
     const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
     const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
     const d = Math.hypot(x - (seg.ax + dx * t), z - (seg.az + dz * t));
     const out = d - seg.hw;
-    if (!best || out < best.out) best = { out, y: seg.ya + (seg.yb - seg.ya) * t, track: !!seg.tk };
+    // `hw` rides along because the answer to "am I on a road" is often followed
+    // by "whose, and is it more important than mine".
+    if (!best || out < best.out) best = { out, y: seg.ya + (seg.yb - seg.ya) * t, track: !!seg.tk, hw: seg.hw };
   }
   return best;
 }
