@@ -8724,6 +8724,16 @@ function streamWorld(ex: number, ez: number): void {
     const fRing = clamp(Math.ceil(r / tileMetres(farZ)), 1, FAR_RING_MAX);
     for (let dx = -fRing; dx <= fRing; dx++)
       for (let dy = -fRing; dy <= fRing; dy++) void loadFarTile(fx + dx, fy + dy);
+    // …and the vectors to draw on it. Same trigger, same banding discipline:
+    // the chart only pays for the coarse road source once it can see past the
+    // fine ring, and only at the level its zoom band can read.
+    if (camMode === 'top') {
+      setOvLevel(ovLevelFor(r));
+      const [vx, vy] = tileAt(lat, lon, ovZ);
+      const vRing = clamp(Math.ceil(r / tileMetres(ovZ)), 1, OV_RING_MAX);
+      for (let dx = -vRing; dx <= vRing; dx++)
+        for (let dy = -vRing; dy <= vRing; dy++) void loadOvTile(vx + dx, vy + dy);
+    }
   }
 }
 
@@ -8859,6 +8869,153 @@ async function loadFarTile(x: number, y: number): Promise<void> {
  *  cuttings and outside there are not — but that is honest level of detail
  *  rather than an artefact. */
 const FAR_DROP = 12;
+
+// ── the overview vectors: the chart's coarse road source ───────────
+// The fine OSM ring stops at OSM_RING_MAX (~5.4km) because covering a 47km
+// chart at z16 is 8649 Overpass queries; past it the wide view was landform
+// with nothing ON it. This is the "coarser road source" that comment asked
+// for: the cell's `~/osm/ov1/` tiles carry the major roads, rail, the big
+// rivers, the coastline and the PLACES at z10–13, and this shell renders them
+// the way the far terrain shell renders ground — banded by zoom, swapped
+// whole, a backdrop nothing samples. Unlit and flat-coloured on purpose: at
+// these altitudes the world IS a map, and the palette says so.
+const OV_LEVELS = [13, 12, 11, 10];
+const OV_RING_MAX = 2;        // 5×5 tiles at whichever level is current
+let ovZ = OV_LEVELS[0];
+const ovTiles = new Set<string>();
+const ovMeshes = new Map<string, THREE.Mesh>();
+let ovRetired: THREE.Mesh[] = [];
+let ovInFlight = 0;
+const ovQueue: Array<() => void> = [];
+const ovGroup = new THREE.Group();
+ovGroup.name = 'overview';
+ovGroup.visible = false;
+worldGroup.add(ovGroup);
+const ovMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: DS });
+/** A place the chart can write on the land: rank 0 city … 3 hamlet, 4 peak. */
+interface OvPlace { name: string; x: number; z: number; y: number; rank: number }
+const ovPlaces = new Map<string, OvPlace>();
+const OV_RANK: Record<string, number> = { city: 0, town: 1, village: 2, hamlet: 3 };
+/** The finest overview level whose 5×5 ring still fills the view. */
+function ovLevelFor(radius: number): number {
+  for (const z of OV_LEVELS) if (radius <= tileMetres(z) * (OV_RING_MAX + 0.5)) return z;
+  return OV_LEVELS[OV_LEVELS.length - 1];
+}
+function setOvLevel(z: number): void {
+  if (z === ovZ) return;
+  ovZ = z;
+  // The outgoing level holds the frame while the new one streams, exactly as
+  // the terrain shell does — sunk a little so the incoming level wins where
+  // both exist, dropped when the new ring has landed.
+  for (const m of ovMeshes.values()) { m.position.y -= 15; ovRetired.push(m); }
+  ovMeshes.clear();
+  ovTiles.clear();
+}
+function dropRetiredOv(): void {
+  for (const m of ovRetired) { ovGroup.remove(m); m.geometry.dispose(); }
+  ovRetired = [];
+}
+// The chart's palette. Roads in the minimap's bone-and-amber so the two maps
+// agree with each other; water in the map's own blue; rail dark; the coast a
+// deeper cyan. Multipliers are ribbon width relative to the level's base.
+const OV_STYLE: Array<[(t: Record<string, string>) => boolean, [number, number, number], number]> = [
+  [(t) => t.highway === 'motorway' || t.highway === 'trunk', [0.96, 0.77, 0.33], 1.5],
+  [(t) => t.highway === 'primary', [0.91, 0.87, 0.78], 1.15],
+  [(t) => !!t.highway, [0.66, 0.63, 0.56], 0.85],
+  [(t) => !!t.railway, [0.42, 0.4, 0.36], 0.6],
+  [(t) => t.natural === 'coastline', [0.3, 0.47, 0.5], 0.9],
+  [(t) => !!t.waterway, [0.38, 0.52, 0.62], 1.1],
+];
+async function loadOvTile(x: number, y: number): Promise<void> {
+  const z = ovZ;
+  const key = `${z}/${x}/${y}`;
+  if (ovTiles.has(key)) return;
+  ovTiles.add(key);
+  if (ovInFlight >= 4) await new Promise<void>((go) => ovQueue.push(go));
+  ovInFlight++;
+  try {
+    // The vectors and the ground they lie on, together: the DEM tile at the
+    // SAME index is what drapes the lines onto the far shell's hillsides.
+    const [res, dem] = await Promise.all([
+      fetch(`${CELL_BASE}/~/osm/ov1/${z}/${x}/${y}`),
+      fetchHeights(x, y, z),
+    ]);
+    if (!res.ok) throw new Error(`ov HTTP ${res.status}`);
+    const data = (await res.json()) as { ways?: Array<{ tags: Record<string, string>; geometry: Array<[number, number]> }> };
+    if (z !== ovZ) { ovTiles.delete(key); return; }
+    buildOvTile(key, x, y, z, data.ways ?? [], dem);
+  } catch {
+    ovTiles.delete(key);      // a 503 is a cold tile filling; the next stream pass retries
+  } finally {
+    ovInFlight--;
+    ovQueue.shift()?.();
+  }
+}
+function buildOvTile(key: string, x: number, y: number, z: number,
+  ways: Array<{ tags: Record<string, string>; geometry: Array<[number, number]> }>,
+  dem: Float32Array | null): void {
+  const b = tileBounds(x, y, z);
+  // Ground height under a lat/lon, from this tile's own DEM — the same
+  // convention as the far shell (absolute − baseElev − FAR_DROP − curve),
+  // lifted enough to clear the coarse mesh's interpolation between vertices.
+  const lift = tileMetres(z) * 0.004 + 12;
+  const yAt = (la: number, lo: number, wx: number, wz: number): number => {
+    if (!dem) return -FAR_DROP + lift - curveDrop(wx, wz);
+    const u = clamp(Math.round(((lo - b.lonW) / (b.lonE - b.lonW)) * 255), 0, 255);
+    const v = clamp(Math.round(((b.latN - la) / (b.latN - b.latS)) * 255), 0, 255);
+    return dem[v * 256 + u] - baseElev - FAR_DROP - curveDrop(wx, wz) + lift;
+  };
+  const base = tileMetres(z) * 0.016;
+  const verts: number[] = [], cols: number[] = [];
+  for (const w of ways) {
+    const t = w.tags ?? {};
+    if (t.place || (t.natural === 'peak')) {
+      const name = t.name;
+      if (!name || ovPlaces.size >= 800) continue;
+      const [la, lo] = w.geometry[0];
+      const [px, pz] = toLocal(la, lo);
+      ovPlaces.set(name, { name, x: px, z: pz, y: yAt(la, lo, px, pz),
+        rank: t.place ? OV_RANK[t.place] ?? 3 : 4 });
+      continue;
+    }
+    const style = OV_STYLE.find(([match]) => match(t));
+    if (!style || w.geometry.length < 2) continue;
+    const [, col, mul] = style;
+    const hw = (base * mul) / 2;
+    for (let i = 0; i < w.geometry.length - 1; i++) {
+      const [aLa, aLo] = w.geometry[i], [bLa, bLo] = w.geometry[i + 1];
+      const [ax, az] = toLocal(aLa, aLo), [bx, bz] = toLocal(bLa, bLo);
+      const dx = bx - ax, dz = bz - az;
+      const len = Math.hypot(dx, dz) || 1;
+      const px2 = (-dz / len) * hw, pz2 = (dx / len) * hw;
+      const ay = yAt(aLa, aLo, ax, az), by = yAt(bLa, bLo, bx, bz);
+      verts.push(
+        ax + px2, ay, az + pz2, bx + px2, by, bz + pz2, ax - px2, ay, az - pz2,
+        bx + px2, by, bz + pz2, bx - px2, by, bz - pz2, ax - px2, ay, az - pz2,
+      );
+      for (let q = 0; q < 6; q++) cols.push(col[0], col[1], col[2]);
+    }
+  }
+  if (!verts.length) {
+    // An empty tile is still a LANDED tile: it has to hold its key (or every
+    // stream pass refetches the open ocean), and it still gets to say the ring
+    // is complete so the retired level can go.
+    if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
+    return;
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(cols), 3));
+  const mesh = new THREE.Mesh(geo, ovMat);
+  ovMeshes.set(key, mesh);
+  ovGroup.add(mesh);
+  if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
+}
+// What the chart's coarse layer is holding, for the tools.
+(window as unknown as { __overview?: object }).__overview = (): object => ({
+  level: ovZ, tiles: ovMeshes.size, retired: ovRetired.length,
+  places: ovPlaces.size, shown: ovGroup.visible,
+});
 
 // ── the car: monster-truck stance with per-wheel suspension ────────
 // The group's origin is the AXLE PLANE (wheel centres at rest). The body
@@ -14001,6 +14158,7 @@ let simT = 0, simN = 0;   // integrated sim seconds / frames, read by __clock()
  *  nothing else on screen says so. */
 let frameMs = 16.7;
 let streamAt = 0;
+let streamZoom = 1;   // the zoom the last stream pass served — see the zoom-is-a-move gate
 let miniAt = 0;
 // The co-driver's slow tick: the next bend on this road, refreshed well below
 // frame rate — a pace note is stable for seconds, the chain walk is not free.
@@ -14008,13 +14166,23 @@ let navBend: NavBend | null = null;
 let navAt = 0;
 let drapeAt = 0;
 let urlAt = 0, urlX = Infinity, urlZ = 0, urlH = 0;
+let urlCam: CamMode = 'chase', urlZoom = 1;
 const writeUrl = (la: number, lo: number): void => {
   const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
   try {
     // The mission id rides along, so the URL the game keeps rewriting stays a
     // resumable link: reload mid-drive and the job is still on.
     const m = mission && missionPhase !== 'done' ? `&m=${mission.id}` : '';
-    history.replaceState(null, '', `?lat=${la.toFixed(5)}&lon=${lo.toFixed(5)}&h=${deg.toFixed(0)}${camMode === 'top' ? '' : `&cam=${camMode}`}${m}`);
+    // THE VIEW IS STATE TOO. The chart used to be scrubbed from the URL, so a
+    // reload mid-survey dumped you back in the chase camera at street level —
+    // the one thing a resumable link should not do. The mode rides along now,
+    // and the chart carries its zoom as well; a drone in the air is the
+    // exception, because restoring into a drone that no longer exists would
+    // strand the camera — it resumes as the seat you would land back into.
+    const cm = camMode === 'drone' ? lastPov : camMode;
+    const zm = camMode === 'top' && Math.abs(zoomT - 1) > 0.05
+      ? `&z=${zoomT >= 30 ? zoomT.toFixed(0) : zoomT.toFixed(1)}` : '';
+    history.replaceState(null, '', `?lat=${la.toFixed(5)}&lon=${lo.toFixed(5)}&h=${deg.toFixed(0)}&cam=${cm}${zm}${m}`);
   } catch { /* fine */ }
 };
 // Surface grip: tarmac is fast, everything else asks you to slow down —
@@ -14888,7 +15056,13 @@ function tick(now: number): void {
   }
   prevSurfKind = surfKind;
   reveal(state.x, state.z);
-  if (now > streamAt) { streamAt = now + 1200; streamWorld(state.x, state.z); }
+  // A ZOOM IS A MOVE. The 1.2s cadence is right for a truck that covers 40m
+  // between ticks; a pinch that doubles the view radius in one gesture used
+  // to wait out the full tick before the first far or overview tile was even
+  // ASKED for — measured as an island of terrain adrift in the sea plane at
+  // zoom 400. A real zoom change streams on the next frame.
+  const zoomMoved = camMode === 'top' && Math.abs(zoomCur - streamZoom) > Math.max(0.5, streamZoom * 0.2);
+  if (now > streamAt || zoomMoved) { streamAt = now + 1200; streamZoom = zoomCur; streamWorld(state.x, state.z); }
   snapSpawnToDeck(now);
   // Two rigs. TOP: the chart view, tilted a touch for relief. CHASE: low and
   // behind, where speed is legible and the fog reads as a night horizon.
@@ -14897,8 +15071,10 @@ function tick(now: number): void {
     zoomCur += (zoomT - zoomCur) * Math.min(1, 8 * dt);
     // The coarse shell is a backdrop for the wide view and nothing else: shown
     // only once the frustum reaches past the fine ring, so its seam is never
-    // on screen at an angle that could reveal it.
+    // on screen at an angle that could reveal it. The overview vectors ride
+    // the same gate: below it the fine world is the better map of itself.
     farGroup.visible = zoomCur > 6;
+    ovGroup.visible = zoomCur > 6;
     // Pan is a glance around the chart — it drifts home once you drive.
     if (stick || Math.abs(state.speed) > 6 || drone.up) { const f = Math.exp(-2.5 * dt); panX *= f; panZ *= f; }
     // THE CHART IS OVER WHOEVER IS CURRENT. Flying, that is the drone: opening
@@ -14931,6 +15107,7 @@ function tick(now: number): void {
     // frame, a slightly tighter lens, and a steeper look down, which is what
     // you actually want when you are reading ground rather than flying.
     farGroup.visible = true;
+    ovGroup.visible = false;
     const dfx = Math.sin(drone.heading), dfz = -Math.cos(drone.heading);
     if (lastPov === 'cab') {
       setNear(0.3, 30000);
@@ -14943,6 +15120,7 @@ function tick(now: number): void {
     }
   } else if (camMode === 'cab') {
     farGroup.visible = false;
+    ovGroup.visible = false;
     // THE DRIVER'S SEAT. The eye is a point on the body, so it takes the body's
     // whole attitude — pitch, roll and the suspension's own heave — which is
     // what makes a cattle grid felt rather than watched. Everything else in
@@ -14975,6 +15153,7 @@ function tick(now: number): void {
     );
   } else {
     farGroup.visible = false;
+    ovGroup.visible = false;
     setNear(1);
     // Framed like the reference art: the rig in the lower third with the track
     // running to a vanishing point. On a PORTRAIT phone the 55° figure is the
@@ -15156,11 +15335,17 @@ function tick(now: number): void {
   stepOverlays();
   if (camMode !== 'top' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
   // Progress lives in the URL: reloading resumes here, not at the spawn.
+  // The VIEW counts as progress now too — switching camera or re-zooming the
+  // chart rewrites even with the truck parked, or the reload the URL promises
+  // would resume somewhere you had already left.
   if (now > urlAt) {
     urlAt = now + 3000;
     const dh = Math.abs(Math.atan2(Math.sin(state.heading - urlH), Math.cos(state.heading - urlH)));
-    if (Math.hypot(state.x - urlX, state.z - urlZ) > 8 || dh > 0.3) {
+    const viewMoved = camMode !== urlCam
+      || (camMode === 'top' && Math.abs(zoomT - urlZoom) > Math.max(0.2, urlZoom * 0.15));
+    if (Math.hypot(state.x - urlX, state.z - urlZ) > 8 || dh > 0.3 || viewMoved) {
       urlX = state.x; urlZ = state.z; urlH = state.heading;
+      urlCam = camMode; urlZoom = zoomT;
       const [la, lo] = localToLatLon(state.x, state.z);
       writeUrl(la, lo);
     }
@@ -16537,6 +16722,38 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     textEdgeP(label, x + 2 + iw, y + 2, p.rng || p.pinned ? UI.gold : p.c);
     poiRects.push({ x: x - 3, y: y - 4, w: w + 8, h: 14, name: p.name, kind: p.kind });
   }
+  // ── the chart's place names ──
+  // The wide view stopped being landform when the overview shell arrived; the
+  // NAMES are what make it a chart. Rank is the budget: cities always, towns
+  // beyond the fine ring, villages at the middle bands, hamlets and peaks
+  // only where the zoom can honour them. A coarse screen grid declutters —
+  // two names in one cell and the better-ranked one keeps it — and the whole
+  // layer is separate from the HUD's nearest-three pins, which are a cockpit
+  // instrument, not a map.
+  if (camMode === 'top' && ovGroup.visible && ovPlaces.size) {
+    const r = viewRadius();
+    const maxRank = r > 26000 ? 1 : r > 12000 ? 2 : 4;
+    const cells = new Set<string>();
+    let budget = 16;
+    const ranked = [...ovPlaces.values()].sort((a, b) => a.rank - b.rank);
+    for (const p of ranked) {
+      if (p.rank > maxRank || budget <= 0) break;
+      poiVec.set(p.x, p.y, p.z);
+      if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) continue;
+      poiVec.project(camera);
+      if (Math.abs(poiVec.x) > 0.96 || Math.abs(poiVec.y) > 0.92) continue;
+      const sx = ((poiVec.x * 0.5 + 0.5) * innerWidth) / hudS;
+      const sy = ((-poiVec.y * 0.5 + 0.5) * innerHeight) / hudS;
+      const ck = `${Math.round(sx / 46)},${Math.round(sy / 12)}`;
+      if (cells.has(ck)) continue;
+      cells.add(ck);
+      const label = fitP(p.name.toUpperCase(), Math.round(HW * 0.4));
+      const w = textPW(label);
+      const col = p.rank === 0 ? UI.gold : p.rank === 4 ? UI.dim : p.rank <= 1 ? UI.text : UI.soft;
+      textEdgeP(label, clamp(Math.round(sx - w / 2), 2, HW - w - 2), clamp(Math.round(sy), 12, HH - 20), col);
+      budget--;
+    }
+  }
   // ── the rig's own marker on the chart ──
   // The minimap's amber heading wedge, at the truck's projected position —
   // drawn ONLY once the truck falls below legibility (about seven HUD pixels
@@ -17283,6 +17500,10 @@ if (timeFromUrl >= 0) {
   const h0 = parseFloat(q.get('h') ?? '');
   if (Number.isFinite(h0)) state.heading = (h0 * Math.PI) / 180;
   { const c = q.get('cam'); if (c === 'chase' || c === 'cab' || c === 'top') setCam(c); }
+  // …and the chart's zoom, so a reload mid-survey resumes the survey. Applied
+  // to both the target and the current so the camera does not spend the first
+  // seconds flying out from street level.
+  { const z0 = parseFloat(q.get('z') ?? ''); if (Number.isFinite(z0)) zoomT = zoomCur = clamp(z0, ZOOM_MIN, ZOOM_MAX); }
   // The default spawn faces its vista — El Capitan's rim looks southeast
   // down the valley; a URL heading always wins.
   if (!Number.isFinite(h0) && !q.get('lat') && !q.get('random')) state.heading = (145 * Math.PI) / 180;

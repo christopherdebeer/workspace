@@ -379,6 +379,138 @@ async function serveCover(path: string, m: RegExpMatchArray) {
   };
 }
 
+// ── the overview tiles: the chart's coarse vector source ───────────
+// The fine tiles stop at OSM_RING_MAX because covering a 47km chart at z16 is
+// 8649 Overpass queries — "anything more honest needs a coarser road source",
+// and this is that source. One tile at z10–13 carries only what a chart at
+// that scale can draw: the major road classes, rail, the big waterways, the
+// coastline, and the PLACES — city, town, village — that turn a landform into
+// a map. No buildings, no landuse, no barriers: those are world, not chart.
+const OV_RE = /^\/~\/osm\/ov1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+// The element budget, and it is a TRIPWIRE, not a target. `out geom N` stops
+// SILENTLY at N — a dense tile would come back looking complete, get written
+// to S3 `immutable`, and serve a map with the middle of a city missing for a
+// week. At the cap the tile is refused (503, no-store) rather than stored.
+// Per zoom, because the ladder below admits more classes as tiles shrink:
+// measured, central London at z12 lands at 5174 elements with rail in — the
+// worst real tile should pass, and a truncated one must not.
+const OV_CAP: Record<number, number> = { 10: 3000, 11: 4500, 12: 6000, 13: 6000 };
+// These tiles are rare and cached forever, so they may spend upstream time a
+// fine tile cannot: the whole 30s Lambda still has to be outlived, but most
+// of it can go to honest attempts instead of three hurried ones. Measured: a
+// z10 coastal tile needs 11–18s of Overpass; the fine budget's 5s-per-mirror
+// would have refused every overview tile that matters. 15s per attempt, not
+// the whole budget in one: the commonest failure in the audit was the FIRST
+// mirror queueing the request behind its per-IP slot for the full window,
+// and a second mirror answering a query the first would have sat on.
+const OV_UPSTREAM_MS = 24000;
+const OV_ATTEMPT_MS = 15000;
+function overviewQuery(z: number, x: number, y: number): string {
+  const b = tileBounds(z, x, y);
+  const bbox = `${b.latS},${b.lonW},${b.latN},${b.lonE}`;
+  // THE CLASS LADDER IS THE BUDGET. A z10 box is ~40km on a side, and asking
+  // it for secondaries and rail is what timed out: the classes climb as the
+  // tiles shrink, and each level carries only what its scale can draw —
+  // motorways at the scale of a region, tertiaries only at the tightest band.
+  const hw = z <= 10 ? 'motorway|trunk|primary'
+    : z === 11 ? 'motorway|trunk|primary|secondary'
+    : 'motorway|trunk|primary|secondary|tertiary';
+  const rail = z >= 11 ? `way["railway"="rail"](${bbox});` : '';
+  const canal = z >= 11 ? '|canal' : '';
+  const place = z <= 10 ? 'city|town' : z === 11 ? 'city|town|village' : 'city|town|village|hamlet';
+  return `[out:json][timeout:20];(
+      way["highway"~"^(${hw})$"](${bbox});
+      ${rail}
+      way["waterway"~"^(river${canal})$"](${bbox});
+      way["natural"="coastline"](${bbox});
+      node["place"~"^(${place})$"](${bbox});
+      node["natural"="peak"]["name"](${bbox});
+    );out geom ${OV_CAP[z] ?? 6000};`;
+}
+/**
+ * Ramer–Douglas–Peucker, in metres. OSM survey geometry carries a vertex
+ * every few metres; a chart pixel at these zooms is twenty. Simplification is
+ * where the real byte savings live — the class filter decides what is in the
+ * tile, this decides what it weighs.
+ */
+export function simplifyLine(pts: Array<[number, number]>, tolM: number): Array<[number, number]> {
+  if (pts.length <= 2) return pts;
+  const lat0 = (pts[0][0] * Math.PI) / 180;
+  const mLon = 111320 * Math.cos(lat0);
+  const px = (p: [number, number]): [number, number] => [p[1] * mLon, p[0] * 111320];
+  const keep = new Uint8Array(pts.length);
+  keep[0] = keep[pts.length - 1] = 1;
+  const stack: Array<[number, number]> = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop() as [number, number];
+    const [ax, ay] = px(pts[a]), [bx, by] = px(pts[b]);
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy || 1;
+    let worst = -1, wd = tolM;
+    for (let i = a + 1; i < b; i++) {
+      const [cx, cy] = px(pts[i]);
+      const t = Math.max(0, Math.min(1, ((cx - ax) * dx + (cy - ay) * dy) / len2));
+      const d = Math.hypot(cx - (ax + dx * t), cy - (ay + dy * t));
+      if (d > wd) { wd = d; worst = i; }
+    }
+    if (worst >= 0) { keep[worst] = 1; stack.push([a, worst], [worst, b]); }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+const OV_TAGS = ['highway', 'railway', 'waterway', 'natural', 'place', 'name', 'ele'];
+/** What the chart reads and nothing else, simplified to what it can draw. */
+export function trimOverview(elements: RawWay[], z: number): Array<Record<string, unknown>> {
+  // Half a chart pixel at this zoom: 256px across a tile, in metres of ground.
+  const tol = (40075016.7 / 2 ** z) / 512;
+  const out: Array<Record<string, unknown>> = [];
+  for (const el of elements) {
+    const tags: Record<string, string> = {};
+    for (const k of OV_TAGS) if (el.tags?.[k] !== undefined) tags[k] = el.tags[k];
+    if (el.type === 'node' && el.lat !== undefined && el.lon !== undefined) {
+      out.push({ id: el.id, tags, geometry: [[+el.lat.toFixed(5), +el.lon.toFixed(5)]] });
+      continue;
+    }
+    if (!el.geometry?.length) continue;
+    const pts = el.geometry.map((g) => [g.lat, g.lon] as [number, number]);
+    out.push({ id: el.id, tags, geometry: simplifyLine(pts, tol).map(([la, lo]) => [+la.toFixed(5), +lo.toFixed(5)]) });
+  }
+  return out;
+}
+async function serveOverview(path: string, m: RegExpMatchArray) {
+  const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (z < 8 || z > 13 || x >= 2 ** z || y >= 2 ** z) {
+    return respond(400, 'application/json', JSON.stringify({ error: 'overview tile out of range' }));
+  }
+  let elements: RawWay[];
+  try {
+    elements = await askOverpass(overviewQuery(z, x, y), OV_UPSTREAM_MS, OV_ATTEMPT_MS, (x + y + z) % OVERPASS_MIRRORS.length);
+  } catch (err) {
+    return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {
+      'retry-after': '5', 'cache-control': 'no-store',
+    });
+  }
+  // The tripwire: a response AT the cap is a truncation, not an answer.
+  if (elements.length >= (OV_CAP[z] ?? 6000)) {
+    return respond(503, 'application/json', JSON.stringify({ error: 'tile too dense for the overview cap' }), {
+      'retry-after': '60', 'cache-control': 'no-store',
+    });
+  }
+  const payload = JSON.stringify({ v: 1, z, x, y, ways: trimOverview(elements, z) });
+  const gz = gzipSync(Buffer.from(payload, 'utf8'), { level: 9 });
+  try { await putTile(path, gz); } catch { /* best effort */ }
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'content-encoding': 'gzip',
+      'cache-control': 'public, max-age=604800, immutable',
+      'access-control-allow-origin': '*',
+    },
+    body: gz.toString('base64'),
+    isBase64Encoded: true,
+  };
+}
+
 /** Tile bounds on the standard web-mercator grid (the client's `tileBounds`). */
 function tileBounds(z: number, x: number, y: number) {
   const n = 2 ** z;
@@ -469,14 +601,18 @@ async function askMirror(url: string, query: string, ms: number): Promise<RawWay
  * out. The commonest failure is a 429 that returns immediately, so the rotation
  * usually costs milliseconds rather than a whole attempt window.
  */
-export async function askOverpass(query: string): Promise<RawWay[]> {
-  const deadline = Date.now() + UPSTREAM_MS;
+export async function askOverpass(query: string, budgetMs = UPSTREAM_MS, attemptMs = ATTEMPT_MS, rotate = 0): Promise<RawWay[]> {
+  const deadline = Date.now() + budgetMs;
   const tried: string[] = [];
-  for (const url of OVERPASS_MIRRORS) {
+  // `rotate` spreads which mirror is asked FIRST. The overview fill hits in
+  // bursts of a whole ring, and a burst aimed at one mirror queues behind its
+  // per-IP slots; rotated by tile, the burst lands a third on each.
+  const mirrors = OVERPASS_MIRRORS.map((_, i, a) => a[(i + rotate) % a.length]);
+  for (const url of mirrors) {
     const left = deadline - Date.now();
     if (left < 1500) break;   // not enough room to be worth the round trip
     try {
-      return await askMirror(url, query, Math.min(ATTEMPT_MS, left));
+      return await askMirror(url, query, Math.min(attemptMs, left));
     } catch (err) {
       tried.push(`${new URL(url).host} ${(err as Error).message ?? err}`);
     }
@@ -547,7 +683,11 @@ async function putTile(
 
 async function serveTile(path: string, m: RegExpMatchArray) {
   const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  if (z < 1 || z > 19 || x >= 2 ** z || y >= 2 ** z) {
+  // z14 is the floor now, not z1: the client has only ever asked at z16, and
+  // the FULL query over a z10 bbox would truncate at `out geom 2000` and store
+  // the damage for a week. Wide views ask the overview route, whose query is
+  // sized for its own zooms and which refuses to store a truncation.
+  if (z < 14 || z > 19 || x >= 2 ** z || y >= 2 ** z) {
     return respond(400, 'application/json', JSON.stringify({ error: 'tile out of range' }));
   }
   let ways: Array<Record<string, unknown>>;
@@ -594,6 +734,8 @@ export const handler = async (event: { rawPath?: string; requestContext?: { http
     if (tile) return serveTile(path, tile);
     const cover = path.match(COVER_RE);
     if (cover) return serveCover(path, cover);
+    const ov = path.match(OV_RE);
+    if (ov) return serveOverview(path, ov);
     return respond(404, 'application/json', JSON.stringify({ error: 'no such object' }), {
       'cache-control': 'no-store',
     });
