@@ -35,10 +35,32 @@ if (to) {
   await d.page.waitForTimeout(8000);
   await walkTo(d.page, tlat, tlon);
 }
+await d.page.waitForTimeout(settle);
+// STAND IN A SHELL. Tunnels and galleries here are not tagged in OSM — they are
+// found from the terrain — so their locations are not knowable until the world
+// has been built, which is why this comes AFTER the settle and not with the
+// other placement options.
+const shell = arg('shell', '');
+if (shell !== '') {
+  const spot2 = await d.page.evaluate((i) => {
+    const s = window.__shells().spots[Number(i)];
+    if (!s) return null;
+    const st = window.__drive;
+    // A few metres INSIDE the mouth, aimed at the far end: a slot between two
+    // bays only shows when you are looking along the wall it is in.
+    const dx = s[2] - s[0], dz = s[3] - s[1], l = Math.hypot(dx, dz) || 1;
+    st.x = s[0] + (dx / l) * 6; st.z = s[1] + (dz / l) * 6;
+    st.heading = Math.atan2(dx, -dz);
+    st.speed = 0;
+    return [...s, Math.round(l)];
+  }, shell);
+  console.log(spot2 ? `shell ${shell}: standing at its mouth (${spot2[0]}, ${spot2[1]}), looking ${spot2[4]}m down it`
+    : `no shell ${shell}`);
+}
 // AIM. `walkTo` arrives on the bearing it travelled, which is a straight line
 // across country and almost never the way a road runs — the first shot taken
-// with it was of a hillside. A step in a carriageway is only visible from along
-// the carriageway, so say what to look at.
+// with it was of a hillside. A step in a carriageway, or a slot in a tunnel
+// wall, is only visible from ALONG the thing, so say what to look at.
 const face = arg('face', '');
 if (face) {
   const [flat, flon] = face.split(',').map(Number);
@@ -48,7 +70,7 @@ if (face) {
     s.heading = Math.atan2(t[0] - s.x, -(t[1] - s.z));
   }, [flat, flon]);
 }
-await d.page.waitForTimeout(settle);
+await d.page.waitForTimeout(8000);   // let the move settle wherever it landed
 await d.shot(name);
 console.log(`-> ${join(WORK, `${name}.png`)}`);
 report(d.errors);

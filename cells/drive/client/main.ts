@@ -988,7 +988,18 @@ const TIME_HOUR: Record<string, number> = {
  *  re-points every saved preference — someone who left it on DUSK would come
  *  back to NOON. Migrated by name once, on load. */
 const TIME_MODES_V1 = ['CYCLE', 'LIVE', 'DAWN', 'NOON', 'DUSK', 'NIGHT'];
-let timeMode = 0;
+// ?time=NOON pins the clock from the URL, the way ?sunalt= pins the sun's
+// height. They are not the same lever and it cost a screenshot to learn it:
+// sunalt moves the sun but leaves the MODE alone, so a shot meant to show a
+// tunnel interior in daylight came back at midnight with the sun raked up
+// through the floor. Anything comparing two builds by eye needs the clock held
+// as well, or half the difference between the pictures is the time of day.
+// Overridden below by a saved dial only when the URL says nothing.
+let timeMode = (() => {
+  const v = (new URLSearchParams(location.search).get('time') ?? '').toUpperCase();
+  const i = TIME_MODES.indexOf(v as typeof TIME_MODES[number]);
+  return i < 0 ? 0 : i;
+})();
 // Read here, APPLIED AFTER the dials load — see the boot sequence. A dial that
 // remembers itself in localStorage will otherwise stamp on the query parameter.
 const timeFromUrl = TIME_MODES.indexOf(
@@ -2355,8 +2366,17 @@ const MAT = {
     // sign's numbers left the product at a few per cent of white.
     return retroreflective(m, { cone: 2, face: 1, gain: 3.4, range: 260 });
   })(),
-  // Tunnel interior: emissive so the tube reads even with no light inside.
-  tunnel: new THREE.MeshLambertMaterial({ color: 0x2a2d34, emissive: 0x0b0d12, side: DS }),
+  // Tunnel interior. The emissive is what a real tunnel's lighting does to the
+  // eye rather than what it does to a light budget: a lit bore is a dim warm
+  // grey all the way along, not a black void with pools under the lamps. Doing
+  // that with actual lights would mean a PointLight every dozen metres, and
+  // three's forward renderer recompiles every material in the frustum when the
+  // light count changes — on a phone that is a stutter at each portal, to light
+  // a surface nobody looks closely at.
+  tunnel: new THREE.MeshLambertMaterial({ color: 0x2a2d34, emissive: 0x23201c, side: DS }),
+  // The lamps themselves: sodium, and BASIC because a luminaire is a source —
+  // shading it would let it go dark exactly when it should be brightest.
+  lamp: new THREE.MeshBasicMaterial({ color: 0xffb457, side: DS, fog: false }),
   portal: new THREE.MeshLambertMaterial({ color: 0x4d4a42, side: DS }),
 } as const;
 // Green drapes conform to the terrain, so a wooded hill occludes like one —
@@ -6324,6 +6344,48 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   if (canopy && n > 2) canopyRun(dense, prof, width, lift);
   if (drivable) dirtyTerrainAround(dense);
 }
+/**
+ * ONE OFFSET PER STATION, MITRED — so neighbouring bays share their corners.
+ *
+ * Every shell in this file below the carriageway — gallery wall, gallery roof,
+ * tunnel side, tunnel ceiling, culvert bore — was built as a run of rectangles,
+ * each about its OWN bay's centreline. At a bend the outgoing bay's corner
+ * starts where the incoming bay's finished but rotated about the station, so on
+ * the outside of every turn the two part and leave a wedge of daylight. On a
+ * straight road that wedge is nothing; on Chapman's Peak, where the galleries
+ * are all on curves, it is a slot you can see the sea through from inside the
+ * tunnel.
+ *
+ * The carriageway solved this with a GORE — a filler triangle — because its
+ * drawn width has to keep matching `Seg.hw`, which is what collision and the
+ * surface lookup mean by "the road". A shell has no such promise to keep: its
+ * width is a modelling choice, so it can simply be MITRED, and mitring is the
+ * better answer because it leaves nothing to fill. Both bays use the same two
+ * points, so there is no wedge, no filler facet, and no crease.
+ *
+ * |average of two unit vectors| is cos(half the angle between them), so the
+ * mitre runs as hw/cos — capped at 2.4, or a hairpin throws a spike several
+ * times the tunnel's width.
+ */
+function mitreOffsets(dense: Array<[number, number]>, a: number, b: number, hw: number): Array<[number, number]> {
+  const bay = (i: number): [number, number] => {
+    const j = clamp(i, a, b - 1);
+    const dx = dense[j + 1][0] - dense[j][0], dz = dense[j + 1][1] - dense[j][1];
+    const l = Math.hypot(dx, dz) || 1;
+    return [-dz / l, dx / l];
+  };
+  const out: Array<[number, number]> = [];
+  for (let i = a; i <= b; i++) {
+    const [px1, pz1] = bay(i - 1), [px2, pz2] = bay(i);
+    const mx = (px1 + px2) * 0.5, mz = (pz1 + pz2) * 0.5;
+    const m = Math.hypot(mx, mz);
+    // A near-reversal has no usable bisector; fall back to the bay's own normal.
+    if (m < 0.2) { out.push([px2 * hw, pz2 * hw]); continue; }
+    const k = hw * clamp(1 / m, 1, 2.4);
+    out.push([(mx / m) * k, (mz / m) * k]);
+  }
+  return out;
+}
 // ── the gallery: a roof over open road ─────────────────────────────
 // An avalanche protector or covered way keeps the road's own grade and its
 // view: a slab overhead, a solid wall against the mountain, columns over the
@@ -6345,26 +6407,28 @@ function canopyRun(dense: Array<[number, number]>, prof: number[], width: number
     tv.push(...a, ...b, ...c, ...b, ...d, ...c);
   };
   let colAcc = 6;                // first column a few metres in, then every ~9m
+  const off = mitreOffsets(dense, 0, n - 1, hw);
   for (let i = 0; i < n - 1; i++) {
     const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
-    const dx = x1 - x0, dz = z1 - z0;
-    const len = Math.hypot(dx, dz) || 1;
-    const px2 = (-dz / len) * hw, pz2 = (dx / len) * hw;
+    const len = Math.hypot(x1 - x0, z1 - z0) || 1;
+    // The SHARED station offsets, so this bay's leading corners are the next
+    // bay's trailing ones exactly.
+    const [pax, paz] = off[i], [pbx, pbz] = off[i + 1];
     const yA = prof[i] + lift, yB = prof[i + 1] + lift;
     const rA = yA + roof, rB = yB + roof;
     // roof slab
-    quad([x0 + px2, rA, z0 + pz2], [x1 + px2, rB, z1 + pz2],
-      [x0 - px2, rA, z0 - pz2], [x1 - px2, rB, z1 - pz2]);
+    quad([x0 + pax, rA, z0 + paz], [x1 + pbx, rB, z1 + pbz],
+      [x0 - pax, rA, z0 - paz], [x1 - pbx, rB, z1 - pbz]);
     // the mountain-side wall, deck to roof — solid to the eye and the hull
-    const ux = px2 * up, uz = pz2 * up;
-    quad([x0 + ux, yA, z0 + uz], [x1 + ux, yB, z1 + uz],
-      [x0 + ux, rA, z0 + uz], [x1 + ux, rB, z1 + uz]);
-    addSeg(wallGrid, { ax: x0 + ux, az: z0 + uz, bx: x1 + ux, bz: z1 + uz, hw: 0, ya: rA, yb: rB });
+    const uax = pax * up, uaz = paz * up, ubx = pbx * up, ubz = pbz * up;
+    quad([x0 + uax, yA, z0 + uaz], [x1 + ubx, yB, z1 + ubz],
+      [x0 + uax, rA, z0 + uaz], [x1 + ubx, rB, z1 + ubz]);
+    addSeg(wallGrid, { ax: x0 + uax, az: z0 + uaz, bx: x1 + ubx, bz: z1 + ubz, hw: 0, ya: rA, yb: rB });
     // columns on the open side, thin crossed fins
     colAcc += len;
     if (colAcc >= 9) {
       colAcc = 0;
-      const cx2 = x0 - ux, cz2 = z0 - uz;
+      const cx2 = x0 - uax, cz2 = z0 - uaz;
       quad([cx2 - 0.3, yA, cz2], [cx2 + 0.3, yA, cz2], [cx2 - 0.3, rA, cz2], [cx2 + 0.3, rA, cz2]);
       quad([cx2, yA, cz2 - 0.3], [cx2, yA, cz2 + 0.3], [cx2, rA, cz2 - 0.3], [cx2, rA, cz2 + 0.3]);
     }
@@ -6374,6 +6438,7 @@ function canopyRun(dense: Array<[number, number]>, prof: number[], width: number
   geo.computeVertexNormals();
   const shell = new THREE.Mesh(geo, MAT.tunnel);
   shell.userData.tunnel = true;
+  shell.userData.shellKind = 'gallery';
   worldGroup.add(shell);
 }
 // The carved space: side walls + ceiling along a tunnel run, portal lintels at
@@ -6732,17 +6797,16 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
     tv.push(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8],
       p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
   };
+  const off = mitreOffsets(dense, a, b, W / 2);
   for (let i = a; i < b; i++) {
     const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
-    const dx = x1 - x0, dz = z1 - z0;
-    const len = Math.hypot(dx, dz) || 1;
-    culvertStats.m += len;
-    const nx = (-dz / len) * (W / 2), nz = (dx / len) * (W / 2);
+    culvertStats.m += Math.hypot(x1 - x0, z1 - z0) || 1;
+    const [ax2, az2] = off[i - a], [bx2, bz2] = off[i + 1 - a];
     const yA = inv[i], yB = inv[i + 1];
     const cA = yA + H, cB = yB + H;
-    push(x0 + nx, yA, z0 + nz, x1 + nx, yB, z1 + nz, x0 + nx, cA, z0 + nz, x1 + nx, cB, z1 + nz);
-    push(x0 - nx, yA, z0 - nz, x1 - nx, yB, z1 - nz, x0 - nx, cA, z0 - nz, x1 - nx, cB, z1 - nz);
-    push(x0 + nx, cA, z0 + nz, x1 + nx, cB, z1 + nz, x0 - nx, cA, z0 - nz, x1 - nx, cB, z1 - nz);
+    push(x0 + ax2, yA, z0 + az2, x1 + bx2, yB, z1 + bz2, x0 + ax2, cA, z0 + az2, x1 + bx2, cB, z1 + bz2);
+    push(x0 - ax2, yA, z0 - az2, x1 - bx2, yB, z1 - bz2, x0 - ax2, cA, z0 - az2, x1 - bx2, cB, z1 - bz2);
+    push(x0 + ax2, cA, z0 + az2, x1 + bx2, cB, z1 + bz2, x0 - ax2, cA, z0 - az2, x1 - bx2, cB, z1 - bz2);
     // NOTHING GOES IN THE WALL GRID. A road tunnel's walls are solid because
     // you drive BETWEEN them; a culvert is buried, and the only thing near
     // enough to hit its walls is the traffic on the road over the top. Putting
@@ -6797,26 +6861,64 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number
   const quadPush = (...p: number[]): void => {
     tv.push(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8], p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
   };
+  // Mitred, so the bore is one continuous tube through the bends rather than a
+  // string of boxes that open a slot to the daylight on the outside of each.
+  const off = mitreOffsets(dense, a, b, width / 2 + 0.6);
   for (let i = a; i < b; i++) {
     const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
-    const dx = x1 - x0, dz = z1 - z0;
-    const len = Math.hypot(dx, dz) || 1;
-    const nx = (-dz / len) * (width / 2 + 0.6), nz = (dx / len) * (width / 2 + 0.6);
+    const [ax2, az2] = off[i - a], [bx2, bz2] = off[i + 1 - a];
     const yA = prof[i] + lift, yB = prof[i + 1] + lift;
     const cA = ceil(i), cB = ceil(i + 1);
-    quadPush(x0 + nx, yA, z0 + nz, x1 + nx, yB, z1 + nz, x0 + nx, cA, z0 + nz, x1 + nx, cB, z1 + nz);
-    quadPush(x0 - nx, yA, z0 - nz, x1 - nx, yB, z1 - nz, x0 - nx, cA, z0 - nz, x1 - nx, cB, z1 - nz);
-    quadPush(x0 + nx, cA, z0 + nz, x1 + nx, cB, z1 + nz, x0 - nx, cA, z0 - nz, x1 - nx, cB, z1 - nz);
+    quadPush(x0 + ax2, yA, z0 + az2, x1 + bx2, yB, z1 + bz2, x0 + ax2, cA, z0 + az2, x1 + bx2, cB, z1 + bz2);
+    quadPush(x0 - ax2, yA, z0 - az2, x1 - bx2, yB, z1 - bz2, x0 - ax2, cA, z0 - az2, x1 - bx2, cB, z1 - bz2);
+    quadPush(x0 + ax2, cA, z0 + az2, x1 + bx2, cB, z1 + bz2, x0 - ax2, cA, z0 - az2, x1 - bx2, cB, z1 - bz2);
     const top = Math.max(cA, cB);
-    addSeg(wallGrid, { ax: x0 + nx, az: z0 + nz, bx: x1 + nx, bz: z1 + nz, hw: 0, ya: top, yb: top });
-    addSeg(wallGrid, { ax: x0 - nx, az: z0 - nz, bx: x1 - nx, bz: z1 - nz, hw: 0, ya: top, yb: top });
+    addSeg(wallGrid, { ax: x0 + ax2, az: z0 + az2, bx: x1 + bx2, bz: z1 + bz2, hw: 0, ya: top, yb: top });
+    addSeg(wallGrid, { ax: x0 - ax2, az: z0 - az2, bx: x1 - bx2, bz: z1 - bz2, hw: 0, ya: top, yb: top });
   }
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tv), 3));
   geo.computeVertexNormals();
   const tube = new THREE.Mesh(geo, MAT.tunnel);
   tube.userData.tunnel = true; // so a probe can check none of it breaches the surface
+  tube.userData.shellKind = 'tunnel';
   worldGroup.add(tube);
+  // LUMINAIRES. A bore lit only by the emissive is uniform, and uniform is the
+  // one thing a tunnel never looks like: what you actually see driving one is a
+  // receding row of lamps, and it is the RHYTHM of them going past that tells
+  // you how fast you are travelling and how far there is left to go. Drawn as
+  // flat panels just under the ceiling, one geometry for the whole tube, and
+  // spaced in metres rather than per station so the rhythm is the tunnel's and
+  // not the DEM's.
+  {
+    const lv: number[] = [];
+    let run = 9;                                  // first lamp a few metres in
+    for (let i = a; i < b; i++) {
+      const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
+      const dx = x1 - x0, dz = z1 - z0;
+      const len = Math.hypot(dx, dz) || 1;
+      run += len;
+      if (run < 18) continue;
+      run = 0;
+      const ux = dx / len, uz = dz / len;         // along
+      const px2 = -uz * 0.55, pz2 = ux * 0.55;    // across, a 1.1m panel
+      const ly = ceil(i) - 0.22;
+      const [sx, sz] = [x0 + ux * 0.9, z0 + uz * 0.9];
+      const c = [sx + px2, ly, sz + pz2], d2 = [sx - px2, ly, sz - pz2];
+      const e = [sx + px2 + ux * 1.8, ly, sz + pz2 + uz * 1.8];
+      const f = [sx - px2 + ux * 1.8, ly, sz - pz2 + uz * 1.8];
+      lv.push(...c, ...e, ...d2, ...e, ...f, ...d2);
+    }
+    if (lv.length) {
+      const lg = new THREE.BufferGeometry();
+      lg.setAttribute('position', new THREE.BufferAttribute(new Float32Array(lv), 3));
+      // NOT tagged `tunnel`: that flag feeds the probe that checks no tube
+      // geometry pokes out through the hillside, and at a mouth — where the
+      // ceiling is deliberately uncapped — a lamp would read as a breach the
+      // shell does not have.
+      worldGroup.add(new THREE.Mesh(lg, MAT.lamp));
+    }
+  }
   for (const end of [a, b]) {
     const i0 = end === a ? a : b - 1, i1 = end === a ? a + 1 : b;
     const [x0, z0] = dense[i0], [x1, z1] = dense[i1];
@@ -9767,6 +9869,71 @@ function truckSpec(): Record<string, number> {
     if (bad) breaching++;
   });
   return { meshes, breaching, worstAboveGround: worst === -Infinity ? null : +worst.toFixed(2) };
+};
+/**
+ * HOW MUCH DAYLIGHT A SHELL LEAKS, counted rather than looked at.
+ *
+ * A gap in a tunnel wall is a screenshot problem — you have to be inside, at
+ * the right bend, at the right time of day, pointing the right way — and it was
+ * reported from the cab because that is the only place it shows. But it is
+ * really a topology fact: in a continuous strip every interior edge is shared by
+ * exactly two triangles, and every gap opens a pair of edges that are shared by
+ * one. Counting BOUNDARY edges therefore finds every gap in every shell in the
+ * world at once, from anywhere, in one call.
+ *
+ * A shell has legitimate boundary too — the rim at each end, the open side of a
+ * gallery — so the number is never zero; it is the LENGTH that matters, and it
+ * is read against the same scene built the other way.
+ */
+(window as unknown as { __shells?: object }).__shells = (): object => {
+  let meshes = 0, tris = 0, boundary = 0, boundaryLen = 0, worst = 0, lamps = 0;
+  const kinds: Record<string, number> = {};
+  const spots: number[][] = [];
+  worldGroup.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    // Luminaires are not shells and must not be counted as one — but whether
+    // any were built is exactly what says the lighting path ran here at all.
+    if (m.material === MAT.lamp) { lamps++; return; }
+    if (!o.userData.tunnel) return;
+    meshes++;
+    const kind = String(o.userData.shellKind ?? 'shell');
+    kinds[kind] = (kinds[kind] ?? 0) + 1;
+    const p = m.geometry.attributes.position as THREE.BufferAttribute;
+    // BOTH ENDS, so a screenshot can look DOWN the shell rather than at it —
+    // a slot between two bays is edge-on from anywhere else and invisible. The
+    // bounding-sphere centre was tried and is wrong for the same reason a
+    // chord is not an arc: on a curved gallery it lands off the structure
+    // entirely, and the rig placed there slid down the hillside.
+    // Quantised to the centimetre: two bays that MEANT to share a corner and
+    // land a micron apart are shared, and one that leaves a slot is not.
+    const key = (i: number): string =>
+      `${Math.round(p.getX(i) * 100)},${Math.round(p.getY(i) * 100)},${Math.round(p.getZ(i) * 100)}`;
+    const edges = new Map<string, number>();
+    for (let t = 0; t + 2 < p.count; t += 3) {
+      tris++;
+      const k = [key(t), key(t + 1), key(t + 2)];
+      for (let e = 0; e < 3; e++) {
+        const a = k[e], b = k[(e + 1) % 3];
+        if (a === b) continue;                      // a degenerate sliver has no edge
+        const id = a < b ? `${a}|${b}` : `${b}|${a}`;
+        edges.set(id, (edges.get(id) ?? 0) + 1);
+      }
+    }
+    for (const [id, n] of edges) {
+      if (n !== 1) continue;
+      boundary++;
+      const [a, b] = id.split('|').map((s) => s.split(',').map(Number));
+      const len = Math.hypot(a[0] - b[0], a[1] - b[1], a[2] - b[2]) / 100;
+      boundaryLen += len;
+      worst = Math.max(worst, len);
+    }
+    const last = p.count - 1;
+    spots.push([+p.getX(0).toFixed(1), +p.getZ(0).toFixed(1),
+      +p.getX(last).toFixed(1), +p.getZ(last).toFixed(1)]);
+  });
+  return { meshes, kinds, lamps, tris, boundary,
+    boundaryLenM: +boundaryLen.toFixed(1), worstEdgeM: +worst.toFixed(2), spots };
 };
 // What the tyres are doing: sideways velocity, how much of it is a slide, and
 // what the drivetrain thinks its own speed is.
@@ -14933,6 +15100,13 @@ function loadDials(): void {
       if (now >= 0) raw['time'] = now;
     }
     for (const d of DIALS) if (Number.isInteger(raw[d.key])) d.at = clamp(raw[d.key], 0, d.opts.length - 1);
+    // …except a clock the URL asked for. ?time= is there to make a lighting
+    // comparison reproducible, and a saved dial silently overruling it makes
+    // the shot depend on which browser profile took it.
+    if (new URLSearchParams(location.search).has('time')) {
+      const d = DIALS.find((x) => x.key === 'time');
+      if (d) d.at = timeMode;
+    }
   } catch { /* fine */ }
 }
 

@@ -27,7 +27,7 @@
  * `simWait`, never on a timeout.
  */
 import { execSync, execFile } from 'node:child_process';
-import { readFileSync, existsSync, mkdirSync, writeFileSync } from 'node:fs';
+import { readFileSync, existsSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -76,14 +76,25 @@ export async function openDrive(opts = {}) {
   // control. `rev` builds any revision's main.ts; `shim` is appended to it,
   // because an older build usually lacks the very probe the measurement reads
   // and reconstructing it there is the only way to compare like with like.
+  //
+  // IT HAS TO LIVE BESIDE THE REAL ONE. main.ts imports ./menu and ./overlays
+  // by relative path and three from the repo's node_modules, so a copy bundled
+  // out of a temp directory resolves none of them. Written into client/, built,
+  // and removed again — including on failure, or a stray __rev-main.ts is left
+  // in the cell and gets deployed.
   let src = opts.src ?? join(CELL, 'client/main.ts');
+  let scratch = '';
   if (rev) {
-    src = join(WORK, `main-${rev.replace(/[^\w.-]/g, '_')}.ts`);
+    src = scratch = join(CELL, 'client/__rev-main.ts');
     writeFileSync(src, execSync(`git show ${rev}:cells/drive/client/main.ts`,
       { cwd: ROOT, maxBuffer: 64e6 }) + shim);
   }
   const bundle = join(WORK, `${tag}.js`);
-  execSync(`npx esbuild ${src} --bundle --format=esm --outfile=${bundle}`, { stdio: 'pipe', cwd: ROOT });
+  try {
+    execSync(`npx esbuild ${src} --bundle --format=esm --outfile=${bundle}`, { stdio: 'pipe', cwd: ROOT });
+  } finally {
+    if (scratch) rmSync(scratch, { force: true });
+  }
 
   const html = shell();
   const server = http.createServer((req, res) => {
