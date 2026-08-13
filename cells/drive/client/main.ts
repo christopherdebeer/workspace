@@ -2376,7 +2376,15 @@ const MAT = {
   tunnel: new THREE.MeshLambertMaterial({ color: 0x2a2d34, emissive: 0x23201c, side: DS }),
   // The lamps themselves: sodium, and BASIC because a luminaire is a source —
   // shading it would let it go dark exactly when it should be brightest.
-  lamp: new THREE.MeshBasicMaterial({ color: 0xffb457, side: DS, fog: false }),
+  //
+  // FOGGED, though, and that took a photograph from the road to see. Exempting
+  // a light from fog sounds right — a lamp is what you see furthest in murk —
+  // but this world renders at a few hundred pixels and magnifies, so an
+  // unattenuated full-brightness quad three hundred metres down a bore survives
+  // as two or three pixels of pure sodium and comes out of the magnifier as a
+  // chunky yellow slab hanging over the road. Attenuated, it does what a real
+  // lamp does at that distance: goes dim.
+  lamp: new THREE.MeshBasicMaterial({ color: 0xd8a45e, side: DS }),
   portal: new THREE.MeshLambertMaterial({ color: 0x4d4a42, side: DS }),
 } as const;
 // Green drapes conform to the terrain, so a wooded hill occludes like one —
@@ -6901,12 +6909,15 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number
       if (run < 18) continue;
       run = 0;
       const ux = dx / len, uz = dz / len;         // along
-      const px2 = -uz * 0.55, pz2 = ux * 0.55;    // across, a 1.1m panel
-      const ly = ceil(i) - 0.22;
+      const px2 = -uz * 0.4, pz2 = ux * 0.4;      // across, an 0.8m panel
+      // Recessed under the ceiling, so from far down the tube it is edge-on and
+      // nearly nothing — which is both what a real luminaire looks like from
+      // there and what stops it dominating a low-resolution frame.
+      const ly = ceil(i) - 0.18;
       const [sx, sz] = [x0 + ux * 0.9, z0 + uz * 0.9];
       const c = [sx + px2, ly, sz + pz2], d2 = [sx - px2, ly, sz - pz2];
-      const e = [sx + px2 + ux * 1.8, ly, sz + pz2 + uz * 1.8];
-      const f = [sx - px2 + ux * 1.8, ly, sz - pz2 + uz * 1.8];
+      const e = [sx + px2 + ux * 1.4, ly, sz + pz2 + uz * 1.4];
+      const f = [sx - px2 + ux * 1.4, ly, sz - pz2 + uz * 1.4];
       lv.push(...c, ...e, ...d2, ...e, ...f, ...d2);
     }
     if (lv.length) {
@@ -9887,6 +9898,7 @@ function truckSpec(): Record<string, number> {
  */
 (window as unknown as { __shells?: object }).__shells = (): object => {
   let meshes = 0, tris = 0, boundary = 0, boundaryLen = 0, worst = 0, lamps = 0;
+  let lampLo = Infinity, lampHi = -Infinity;
   const kinds: Record<string, number> = {};
   const spots: number[][] = [];
   worldGroup.traverse((o) => {
@@ -9894,7 +9906,24 @@ function truckSpec(): Record<string, number> {
     if (!m.isMesh) return;
     // Luminaires are not shells and must not be counted as one — but whether
     // any were built is exactly what says the lighting path ran here at all.
-    if (m.material === MAT.lamp) { lamps++; return; }
+    if (m.material === MAT.lamp) {
+      lamps++;
+      // HOW HIGH DO THEY ACTUALLY HANG? A luminaire is meant to be just under
+      // the ceiling; one reported at road level is a glowing panel lying in the
+      // carriageway, which is what a photograph from the road appeared to show.
+      // AGAINST THE DECK, not the surface. A lamp inside a deep bore is tens of
+      // metres below the natural heightfield by construction, so measuring it
+      // that way says nothing at all -- the first version did, read -63m, and
+      // looked exactly like the bug it was written to find.
+      const lp = m.geometry.attributes.position as THREE.BufferAttribute;
+      for (let i = 0; i < lp.count; i++) {
+        const deck = deckOver(lp.getX(i), lp.getZ(i), 4);
+        if (deck === null) continue;
+        const h = lp.getY(i) - deck;
+        lampLo = Math.min(lampLo, h); lampHi = Math.max(lampHi, h);
+      }
+      return;
+    }
     if (!o.userData.tunnel) return;
     meshes++;
     const kind = String(o.userData.shellKind ?? 'shell');
@@ -9933,6 +9962,7 @@ function truckSpec(): Record<string, number> {
       +p.getX(last).toFixed(1), +p.getZ(last).toFixed(1)]);
   });
   return { meshes, kinds, lamps, tris, boundary,
+    lampAboveGroundM: lamps ? [+lampLo.toFixed(2), +lampHi.toFixed(2)] : null,
     boundaryLenM: +boundaryLen.toFixed(1), worstEdgeM: +worst.toFixed(2), spots };
 };
 // What the tyres are doing: sideways velocity, how much of it is a slide, and
