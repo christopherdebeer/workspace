@@ -1,7 +1,7 @@
 /**
  * LOOK AT A PLACE.
  *
- *   node cells/drive/tools/shot.mjs NAME --spot='lat=..&lon=..&h=..&cam=cab' \
+ *   node cells/drive/devtools/shot.mjs NAME --spot='lat=..&lon=..&h=..&cam=cab' \
  *        [--to=lat,lon] [--settle=20000]
  *
  * Writes a PNG beside the build. The eye check that goes with a measurement —

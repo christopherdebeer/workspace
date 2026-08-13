@@ -1,9 +1,9 @@
 /**
  * CAPTURE A ROAD-SOLVER FIXTURE from a real session.
  *
- *   node cells/drive/tools/capture.mjs NAME [--heights] [--spot=lat=..&lon=..]
+ *   node cells/drive/devtools/capture.mjs NAME [--heights] [--spot=lat=..&lon=..]
  *
- * Writes `client/fixtures/NAME.json`: the world origin, the terrain tiles, and
+ * Writes `devtools/fixtures/NAME.json`: the world origin, the terrain tiles, and
  * every renderWays call in the order the tiles actually arrived. That last part
  * is the point — the tests replay real arrival order rather than a tidy
  * reconstruction of it, because the bugs being chased live in the ordering.
@@ -28,7 +28,7 @@
 import { writeFileSync, mkdirSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { openDrive, report, walkTo, CELL } from './harness.mjs';
-import { packFixture } from '../client/fixtures/load.mjs';
+import { packFixture } from './fixtures/load.mjs';
 
 const args = process.argv.slice(2);
 const name = args.find((a) => !a.startsWith('--')) ?? 'capture';
@@ -62,7 +62,7 @@ if (to) {
 }
 
 const fix = await d.page.evaluate((h) => ({ ...window.__fixture(h), calls: window.__tapeout() }), heights);
-const dir = join(CELL, 'client/fixtures');
+const dir = join(CELL, 'devtools/fixtures');
 mkdirSync(dir, { recursive: true });
 const path = join(dir, `${name}.json`);
 writeFileSync(path, JSON.stringify(packFixture(fix)));

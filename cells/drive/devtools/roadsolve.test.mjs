@@ -6,7 +6,7 @@
  * call in the order the tiles actually arrived, taped from a live session at
  * Chapman's Peak. Nothing here is a reconstruction of what streaming might do.
  *
- *   node cells/drive/client/roadsolve.test.mjs
+ *   node cells/drive/devtools/roadsolve.test.mjs
  *
  * Why this exists: the junction-height question took five rounds of driving a
  * headless browser at two frames a second, minutes per question, and answered
@@ -43,7 +43,7 @@ const ROOT = join(HERE, '../../..');
 // module under test is the one the game ships rather than a copy of it.
 const tmp = mkdtempSync(join(tmpdir(), 'roadsolve-'));
 const built = join(tmp, 'roadsolve.mjs');
-execFileSync('npx', ['esbuild', join(HERE, 'roadsolve.ts'), '--bundle', '--format=esm', `--outfile=${built}`],
+execFileSync('npx', ['esbuild', join(HERE, '../client/roadsolve.ts'), '--bundle', '--format=esm', `--outfile=${built}`],
   { cwd: ROOT, stdio: 'pipe' });
 const { RoadSolver } = await import(pathToFileURL(built).href);
 
