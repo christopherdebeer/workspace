@@ -3608,7 +3608,11 @@ function stepPop(pop: Critter[], meshes: THREE.InstancedMesh[], dt: number, o: {
       // higher, which is the difference between crossing a road and levitating
       // onto a viaduct.
       const g = groundAt(c.x, c.z);
-      const deck = roadHeightAt(c.x, c.z);
+      // A body's width inboard of the kerb, so an animal only takes the deck
+      // when it is genuinely standing on the tarmac. Photographed at Chapman's
+      // Peak: a horse on the parapet above the sea, because 0.8m of slack
+      // outside the kerb is exactly where the barrier stands.
+      const deck = roadHeightAt(c.x, c.z, -0.7);
       c.y = deck !== null && deck > g - 0.4 && deck < g + 3 ? deck : g;
     }
     // Wrap around the camera so the population is always where you are.
@@ -4245,14 +4249,23 @@ function junctionNear(x: number, z: number, reach = 22): boolean {
 }
 // The road's own elevation at (x,z) — differs from the terrain wherever the
 // profile smoothing decided a stretch is a tunnel or bridge.
-function roadHeightAt(x: number, z: number): number | null {
+/**
+ * `margin` is how far OUTSIDE the kerb still counts as being on the road. The
+ * default 0.8m is right for asking "what is the road doing here" — a query
+ * about the carriageway wants a little slack around it. It is wrong for asking
+ * "am I standing on it": a horse half a metre past the kerb of a cliff road was
+ * given the deck's height and stood on the barrier with the sea underneath it.
+ * Anything placing a body wants a NEGATIVE margin, so the answer only comes
+ * back when the whole animal is inboard of its own kerb.
+ */
+function roadHeightAt(x: number, z: number, margin = 0.8): number | null {
   let best: number | null = null, bd = Infinity;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
     if (seg.ya === undefined || seg.yb === undefined) continue;
     const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
     const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
     const d = Math.hypot(x - (seg.ax + dx * t), z - (seg.az + dz * t));
-    if (d <= seg.hw + 0.8 && d < bd) {
+    if (d <= seg.hw + margin && d < bd) {
       bd = d;
       let y = seg.ya + (seg.yb - seg.ya) * t;
       // Which SIDE of the centreline, as a signed fraction of the half-width —
@@ -7491,6 +7504,17 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
     // them on the map, and there is nothing to extrude, drape or scatter.
     if (pts.length < 2) continue;
     noteTags(tags);
+    // `highway=services` IS NOT A ROAD. It tags a service AREA — the motorway
+    // services or, at Chapman's Peak, the viewpoint car park — and its way
+    // traces the outline of that area, which here runs along the carriageway a
+    // metre or two off it for twenty-four of its thirty-three points. Drawn as
+    // a road it solved its own profile and its own cross-fall and laid a second
+    // strip of tarmac alongside the real one, at a different height and a
+    // different tilt. Photographed from the cab and reported as a misaligned
+    // deck, which is exactly what it is — just not the deck anyone suspected.
+    // The parking aisles inside it are tagged `service` and stay: those are
+    // real, drivable, and belong to the car park.
+    if (tags.highway === 'services') continue;
     if (tags.highway) {
       const w = ROAD_W[tags.highway] ?? 5;
       // THREE tiers, not two. A mountain path used to render as decoration you
@@ -9673,9 +9697,13 @@ function stepReal(dt: number): boolean {
     // Is this animal standing on a road deck rather than on the field it
     // crosses — the difference between walking the road and walking through it.
     onDeck: c.y > groundAt(c.x, c.z) + 0.15,
+    // …and how far OUTSIDE the kerb it is while doing so. Positive-and-on-deck
+    // is an animal standing on thin air beside the road, which on a cliff road
+    // is an animal standing on the barrier.
+    out: +(roadEdge(c.x, c.z)?.out ?? 99).toFixed(2),
   }));
-(window as unknown as { __probe?: object }).__probe = (x: number, z: number) =>
-  ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z) });
+(window as unknown as { __probe?: object }).__probe = (x: number, z: number, margin = 0.8) =>
+  ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z, margin) });
 /** The nearest drivable centreline: how far OUTSIDE its kerb this point is
  *  (negative on the carriageway), and the road's own surface height there. */
 function roadEdge(x: number, z: number): { out: number; y: number; track: boolean } | null {
@@ -9971,6 +9999,76 @@ function truckSpec(): Record<string, number> {
   return { which, meshes, kinds, lamps, tris, boundary,
     lampAboveGroundM: lamps ? [+lampLo.toFixed(2), +lampHi.toFixed(2)] : null,
     boundaryLenM: +boundaryLen.toFixed(1), worstEdgeM: +worst.toFixed(2), spots };
+};
+/**
+ * THE KERB STEP WHERE TWO FRAGMENTS SHARE A NODE.
+ *
+ * `__seams` compares the CENTRELINE heights two fragments claim at a shared
+ * node. That is necessary and not sufficient: the cross-fall is solved per
+ * fragment, so two of them can agree about the centreline to a centimetre and
+ * still part at the KERBS by the difference between their tilts — and the kerb
+ * is what you look at from the cab, because that is where the barrier, the
+ * fascia and the white line are.
+ *
+ * A first version of this walked the drawn vertices and paired anything from
+ * two different ways landing within a metre. Too loose by far: a side road
+ * ending in the middle of a main carriageway puts its kerb a metre from tarmac
+ * it has no reason to match, and the worst "seam" it reported was one of those.
+ * This only ever compares fragments that genuinely END at the same node, and
+ * only kerb against kerb on the same side.
+ */
+(window as unknown as { __kerbseams?: object }).__kerbseams = (r = 260): object => {
+  interface End { x: number; z: number; y: number; ca: number; tx: number; tz: number; hw: number; nm: string }
+  const seen = new Set<Seg>();
+  const ends = new Map<string, End[]>();
+  const c = Math.ceil(r / GRID);
+  for (let cx = -c; cx <= c; cx++) for (let cz = -c; cz <= c; cz++) {
+    for (const sg of roadGrid.get(`${Math.floor(state.x / GRID) + cx},${Math.floor(state.z / GRID) + cz}`) ?? []) {
+      if (seen.has(sg) || sg.tk || sg.ya === undefined || sg.yb === undefined) continue;
+      seen.add(sg);
+      const dx = sg.bx - sg.ax, dz = sg.bz - sg.az, l = Math.hypot(dx, dz) || 1;
+      const rows: End[] = [
+        { x: sg.ax, z: sg.az, y: sg.ya, ca: sg.ca ?? 0, tx: dx / l, tz: dz / l, hw: sg.hw, nm: sg.nm ?? '?' },
+        { x: sg.bx, z: sg.bz, y: sg.yb, ca: sg.cb ?? 0, tx: dx / l, tz: dz / l, hw: sg.hw, nm: sg.nm ?? '?' },
+      ];
+      for (const e of rows) {
+        if (Math.hypot(e.x - state.x, e.z - state.z) > r) continue;
+        const k = `${Math.round(e.x)},${Math.round(e.z)}`;
+        const arr = ends.get(k);
+        if (arr) arr.push(e); else ends.set(k, [e]);
+      }
+    }
+  }
+  const steps: number[] = [];
+  let worst = 0, at: string | null = null, worstWays: string[] = [];
+  for (const [k, es] of ends) {
+    if (es.length < 2) continue;
+    for (let i = 0; i < es.length; i++) for (let j = i + 1; j < es.length; j++) {
+      const a = es[i], b = es[j];
+      // Two roads crossing at levels is a flyover, not a seam.
+      if (Math.abs(a.y - b.y) > GRADE_SEP) continue;
+      // Same physical side: +normal is defined from the way's own direction, so
+      // a neighbour digitised the other way stores the same camber negated.
+      const flip = a.tx * b.tx + a.tz * b.tz < 0 ? -1 : 1;
+      // The kerb heights each fragment draws, on each side of the centreline.
+      const step = Math.max(
+        Math.abs((a.y + a.ca) - (b.y + b.ca * flip)),
+        Math.abs((a.y - a.ca) - (b.y - b.ca * flip)),
+      );
+      steps.push(step);
+      if (step > worst) {
+        worst = step; at = k;
+        // The class, via its half-width — an unnamed way is otherwise
+        // unidentifiable in a report, and "?" against a named road is exactly
+        // the case worth naming.
+        worstWays = [`${a.nm} hw${a.hw}`, `${b.nm} hw${b.hw}`];
+      }
+    }
+  }
+  steps.sort((x, y) => x - y);
+  const q = (f: number): number => (steps.length ? +steps[Math.min(steps.length - 1, Math.floor(f * steps.length))].toFixed(3) : 0);
+  return { joins: steps.length, medianM: q(0.5), p95M: q(0.95),
+    over10cm: steps.filter((v) => v > 0.1).length, worstM: +worst.toFixed(3), worstAt: at, worstWays };
 };
 // What the tyres are doing: sideways velocity, how much of it is a slide, and
 // what the drivetrain thinks its own speed is.

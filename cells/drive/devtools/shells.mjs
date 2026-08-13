@@ -12,7 +12,9 @@
  *   node cells/drive/devtools/shells.mjs --rev=HEAD~1   # before
  *   node cells/drive/devtools/shells.mjs                # after
  */
-import { openDrive, report, walkTo } from './harness.mjs';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { openDrive, report, walkTo, CELL } from './harness.mjs';
 
 const args = process.argv.slice(2);
 const arg = (k, d) => {
@@ -60,7 +62,21 @@ const SHIM = `
 };
 `;
 
-const d = await openDrive({ spot, tag: `shells${rev ? '-old' : ''}`, rev, shim: rev ? SHIM : '' });
+// The kerb-seam probe is EXTRACTED from the current main.ts rather than copied
+// here, so the older build is measured with the very same code and the shim
+// cannot drift from the probe it is standing in for. It reads only roadGrid,
+// GRID, GRADE_SEP and state, all of which long predate any of this.
+function probeSource(name) {
+  const src = readFileSync(join(CELL, 'client/main.ts'), 'utf8');
+  const head = src.indexOf(`(window as unknown as { ${name}?: object }).${name}`);
+  if (head < 0) throw new Error(`no ${name} in main.ts`);
+  const end = src.indexOf('\n};\n', head);
+  return src.slice(head, end + 4);
+}
+const d = await openDrive({
+  spot, tag: `shells${rev ? '-old' : ''}`, rev,
+  shim: rev ? SHIM + probeSource('__kerbseams') : '',
+});
 if (to) {
   const [tlat, tlon] = to.split(',').map(Number);
   await d.page.waitForTimeout(8000);
@@ -88,9 +104,21 @@ if (which === 'ribbon') {
   // A continuous strip of Q quads has exactly 2Q+2 boundary edges; a run of
   // separate pieces has more. Stating it here means the number is checked
   // rather than admired.
-  const quads = out.tris / 2, want = out.tris + 2 * out.meshes;
-  console.log(`  strips: ${quads} quads in ${out.meshes} meshes -> boundary should be ${want}, is ${out.boundary}`
-    + `${want === out.boundary ? '  (continuous)' : '  (GAPS)'}`);
+  if (out.meshes) {
+    const quads = out.tris / 2, want = out.tris + 2 * out.meshes;
+    console.log(`  strips: ${quads} quads in ${out.meshes} meshes -> boundary should be ${want}, is ${out.boundary}`
+      + `${want === out.boundary ? '  (continuous)' : '  (GAPS)'}`);
+  }
+  // Continuity WITHIN a way says nothing about the join between two of them,
+  // and a mountain road is mostly joins.
+  const seams = await d.page.evaluate(() => window.__kerbseams());
+  console.log(`  kerb seams at shared nodes: ${seams.joins} joins, median ${seams.medianM}m,`
+    + ` p95 ${seams.p95M}m, over 10cm ${seams.over10cm}, worst ${seams.worstM}m`
+    + ` at ${seams.worstAt} ${JSON.stringify(seams.worstWays)}`);
+  // …and the CENTRELINE view of the same joins, which attributes each step to a
+  // pair of ways and to the solver branch that produced each side.
+  const cl = await d.page.evaluate(() => window.__seams());
+  console.log(`  centreline seams: ${JSON.stringify(cl).slice(0, 900)}`);
 }
 report(d.errors);
 await d.close();

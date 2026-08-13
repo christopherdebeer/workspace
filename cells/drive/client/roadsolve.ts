@@ -60,8 +60,11 @@ export interface SolveEnv {
   juncPins: boolean;
 }
 
-/** Ways that are drawn but never solved as part of a chain. */
-const NOT_DRIVABLE = ['track', 'path', 'bridleway', 'cycleway', 'footway', 'steps'];
+/** Ways that are drawn but never solved as part of a chain — plus `services`,
+ *  which is not drawn at all: it tags a service AREA, and its outline runs
+ *  alongside the carriageway it belongs to. Chained as a road it solved a
+ *  profile of its own and pinned the real road to it. */
+const NOT_DRIVABLE = ['track', 'path', 'bridleway', 'cycleway', 'footway', 'steps', 'services'];
 
 const HINT_CELL = 24;
 
