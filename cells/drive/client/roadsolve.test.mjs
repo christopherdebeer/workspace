@@ -14,18 +14,27 @@
  * one reference to THREE in a hundred and forty lines. These run in
  * milliseconds.
  *
- * WHAT THE FIXTURE DOES NOT CARRY: elevation samples. The only consumer of real
- * heights is solveChain, which is injected — so these tests are exact about
- * WHICH ways reach the solver, how they chain, and where junctions are found,
- * and say nothing about the deck heights the DP settles on. That is the right
- * split for the questions being asked; a test that pretended otherwise, on a
- * smooth synthetic surface, would assert on a problem the solver never has.
+ * TWO KINDS OF ASSERTION LIVE HERE, and they are worth keeping apart.
+ *
+ * The REPLAY sections drive the extracted solver with an injected solveChain,
+ * because elevation samples are not captured. They are exact about which ways
+ * reach the solver, how they chain, and where junctions are found, and say
+ * nothing about the heights the DP settles on. A test that pretended otherwise,
+ * on a smooth synthetic surface, would assert on a problem the solver never
+ * has.
+ *
+ * The DECK sections read `fix.hints` — the profiles the real session really
+ * settled on, taped out of the live hint store. No stub is involved, so these
+ * can ask the question the replay cannot: do two roads that share an OSM node
+ * end up at the same height there. That the replay reproduces the live hint
+ * COUNT exactly is what licenses reading the two together.
  */
 import { execFileSync } from 'node:child_process';
-import { readFileSync, mkdtempSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { loadFixture } from './fixtures/load.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '../../..');
@@ -38,12 +47,14 @@ execFileSync('npx', ['esbuild', join(HERE, 'roadsolve.ts'), '--bundle', '--forma
   { cwd: ROOT, stdio: 'pipe' });
 const { RoadSolver } = await import(pathToFileURL(built).href);
 
-// Two captures. `chapmans` is a spawn AT the junction — the case reported as
-// working, and it turns out to hold almost no road at all. `chapmans-approach`
-// is a spawn 700m short of it, which is where the junctions actually are, and
-// is therefore the one that can answer whether arriving loses them.
-const FIXTURE = process.env.FIXTURE ?? 'chapmans-approach';
-const fix = JSON.parse(readFileSync(join(HERE, `fixtures/${FIXTURE}.json`), 'utf8'));
+// The captures, and why each exists. `chapmans-spawn` boots AT the reported
+// junction — the case the user reports as CORRECT. `chapmans-drivein` boots
+// 3.6km south and walks the rig in, which is the case reported as broken:
+// "if I reload the page at that location it magically isn't an issue".
+// `chapmans-approach` boots 700m short and streams without moving, which is the
+// middle case: more road than a spawn, none of the arrival.
+const FIXTURE = process.env.FIXTURE ?? 'chapmans-drivein';
+const fix = loadFixture(FIXTURE);
 
 /**
  * The world, as the fixture recorded it. Every geometric term is the real one;
@@ -134,6 +145,85 @@ const noPins = new RoadSolver(makeEnv({ juncPins: false }));
 for (const c of fix.calls) noPins.plan(c.els, c.halo);
 eq('no pins means no junctions', noPins.stats.pinned, 0);
 eq('but the chains still solve', noPins.stats.chains > 0, true);
+
+// ── 5. THE REPLAY IS FAITHFUL ──
+// Everything below reads decks the LIVE session settled on, and everything
+// above reads a stub. The one thing that licenses reading them together is
+// that the replay lands the same number of stations as the session did.
+console.log('\nfidelity — the replay must land where the session landed');
+eq('replayed hint stations match the live capture',
+  [...spawn.hints.values()].reduce((n, a) => n + a.length, 0), fix.hints.length);
+
+// ── 6. SHARED NODES MUST BE WELDED ──
+// In OSM a junction is a SHARED NODE: both ways carry the identical vertex. So
+// the question "do these roads meet at the same height" needs no tolerance and
+// no guessing — find vertices two different ways hold in common, and read what
+// the session settled on there. This is the reported bug, stated as an
+// invariant rather than as a screenshot.
+console.log('\nwelding — vertices two ways share must carry one deck');
+const { lat: oLat, lon: oLon, mLon, mLat } = fix.origin;
+const geoms = new Map();                       // way id -> longest geometry seen
+for (const c of fix.calls) for (const e of [...c.els, ...(c.halo ?? [])]) {
+  if (!e.geometry || !(e.tags ?? {}).highway) continue;
+  const k = String(e.id);
+  if (!geoms.has(k) || e.geometry.length > geoms.get(k).length) geoms.set(k, e.geometry);
+}
+// Index every vertex by its exact lat/lon; a key held by two ids is a join.
+const atNode = new Map();
+for (const [id, g] of geoms) {
+  for (const p of g) {
+    const k = `${p.lat},${p.lon}`;
+    const s = atNode.get(k) ?? atNode.set(k, new Set()).get(k);
+    s.add(id);
+  }
+}
+const shared = [...atNode].filter(([, ids]) => ids.size > 1)
+  .map(([k]) => k.split(',').map(Number));
+show('shared nodes in the capture', shared.length);
+
+// The ribbon reads its own profile with a 2.5m lookup, so that radius is the
+// one that decides what a station draws at. Two decks inside it that disagree
+// ARE the step in the carriageway.
+const LOOKUP = 2.5, WELD_TOL = 0.25;
+let solved = 0, worstNode = { spread: 0 };
+for (const [nlat, nlon] of shared) {
+  const nx = (nlon - oLon) * mLon, nz = -(nlat - oLat) * mLat;
+  const ys = fix.hints.filter(([x, z]) => Math.hypot(x - nx, z - nz) <= LOOKUP).map((h) => h[2]);
+  if (ys.length < 2) continue;                 // not chain-solved here, or solved once
+  solved++;
+  const spread = Math.max(...ys) - Math.min(...ys);
+  if (spread > worstNode.spread) worstNode = { spread, nlat, nlon, n: ys.length };
+}
+show('shared nodes with two or more decks', solved);
+show('worst disagreement at a shared node', `${worstNode.spread.toFixed(2)}m`);
+if (worstNode.spread > 0) show('  at', `${worstNode.nlat},${worstNode.nlon}`);
+eq(`no shared node disagrees by more than ${WELD_TOL}m`, worstNode.spread <= WELD_TOL, true);
+
+// ── 7. WHICH HINT THE RIBBON ACTUALLY GETS ──
+// hintAt keeps the nearest hint on a STRICT better-than, and the store appends.
+// Two hints at the identical station are therefore both at distance zero, and
+// the FIRST one inserted wins forever — a chain that re-solves publishes a
+// corrected deck the ribbon can never read. Co-located pairs are common (127 of
+// 135 in the Chapman's arrival are two roads meeting), so this only bites when
+// such a pair disagrees; assert that it does not.
+console.log('\nstale hints — a co-located pair means the older deck wins');
+const byStation = new Map();
+for (const [x, z, y] of fix.hints) {
+  const k = `${x.toFixed(1)},${z.toFixed(1)}`;
+  (byStation.get(k) ?? byStation.set(k, []).get(k)).push(y);
+}
+let pairs = 0, stale = 0, worstStale = 0;
+for (const ys of byStation.values()) {
+  if (ys.length < 2) continue;
+  pairs++;
+  const spread = Math.max(...ys) - Math.min(...ys);
+  if (spread > 0.05) { stale++; worstStale = Math.max(worstStale, spread); }
+}
+show('stations carrying more than one deck', pairs);
+show('of those, disagreeing', stale);
+show('worst', `${worstStale.toFixed(2)}m`);
+eq('no station carries two decks the ribbon would see differently',
+  worstStale <= WELD_TOL, true);
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

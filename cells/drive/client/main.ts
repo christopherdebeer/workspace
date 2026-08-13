@@ -5112,15 +5112,25 @@ function benchFlat(cs: number[]): number {
  * elevation is unknowable in this data; drivability is not negotiable, so this
  * is a law and not a cost term — every branch that can produce a profile ends
  * up here, and so does every stage that reshapes one afterwards.
+ *
+ * `held` stations are exempt, and the exemption is the whole point of the
+ * junction pins: a pinned station IS another road's deck, so moving it is
+ * un-welding the join that was just made. The ends were always exempt by
+ * construction — the forward pass starts at 1 and the backward pass stops at 1
+ * — which is why chain ANCHORS survived this and interior pins silently did
+ * not. Neighbours absorb the ramp instead, which is what the caller's comment
+ * has always claimed happens.
  */
-function ruleGrade(dense: Array<[number, number]>, y: number[], gLim: number): void {
+function ruleGrade(dense: Array<[number, number]>, y: number[], gLim: number, held?: ArrayLike<unknown>): void {
   const n = y.length;
   for (let r = 0; r < 2; r++) {
     for (let i = 1; i < n; i++) {
+      if (held?.[i] != null) continue;
       const d = Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
       y[i] = clamp(y[i], y[i - 1] - gLim * d, y[i - 1] + gLim * d);
     }
     for (let i = n - 2; i >= 1; i--) {
+      if (held?.[i] != null) continue;
       const d = Math.max(1, Math.hypot(dense[i + 1][0] - dense[i][0], dense[i + 1][1] - dense[i][1]));
       y[i] = clamp(y[i], y[i + 1] - gLim * d, y[i + 1] + gLim * d);
     }
@@ -5185,7 +5195,17 @@ function solveChain(dense: Array<[number, number]>, maxGrade: number, p0: number
   // Where chains solved in different tiles disagree about the absolute shelf,
   // someone must absorb the difference — and the DP's soft costs concentrated
   // it into one fragment as a 70% wall.
-  ruleGrade(dense, alg, gCap * 1.2);
+  //
+  // THE PINS ARE HELD THROUGH THIS. Seating them a line earlier and then
+  // letting the limiter clamp them was the whole junction-step bug: a long
+  // chain's own profile disagrees with the road it joins by more than one
+  // station's grade allowance, so the limiter dragged the pinned station back
+  // towards its neighbours and the two carriageways parted. Measured at
+  // Chapman's Peak — driving in built 22km of chain and left 5 shared nodes
+  // carrying two decks up to 0.51m apart, while spawning on the spot built
+  // 2.7km, never chain-solved the junction at all, and looked correct. That is
+  // exactly the "reload and it's magically fine" the report described.
+  ruleGrade(dense, alg, gCap * 1.2, pins);
   return alg;
 }
 // The hint store, the junction registry and the chain assembly all moved to

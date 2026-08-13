@@ -128,6 +128,41 @@ export async function openDrive(opts = {}) {
   };
 }
 
+/**
+ * ARRIVE SOMEWHERE, rather than appear there.
+ *
+ * Hops are short and each is followed by a wait, so the tile loader sees a rig
+ * that MOVED — the same sequence of streams a driver causes — instead of one
+ * that jumped. This matters because several defects in this world only exist on
+ * the arrival path: what a tile's ways are chained with, and whether they were
+ * already solved in a neighbour's halo, both depend on how you got there. A
+ * spawn fixture, however faithful, is the case that already works.
+ *
+ * Position is written straight into the state object. The bicycle model
+ * integrates from a standstill, so a written position simply stays written.
+ */
+export async function walkTo(page, lat, lon, opts = {}) {
+  const { hop = 60, dwell = 3000, log = true } = opts;
+  const target = await page.evaluate((ll) => window.__tolocal(ll[0], ll[1]), [lat, lon]);
+  for (;;) {
+    const left = await page.evaluate(({ t, hop: h }) => {
+      const s = window.__drive;
+      const dx = t[0] - s.x, dz = t[1] - s.z;
+      const dist = Math.hypot(dx, dz);
+      if (dist > 0.5) {
+        const step = Math.min(dist, h);
+        s.x += (dx / dist) * step; s.z += (dz / dist) * step;
+        s.heading = Math.atan2(dx, -dz);
+      }
+      return dist;
+    }, { t: target, hop });
+    if (log) process.stdout.write(`  ${Math.round(left)}m to go   \r`);
+    if (left < 1) break;
+    await page.waitForTimeout(dwell);
+  }
+  if (log) process.stdout.write('\n');
+}
+
 /** Print page errors and exit non-zero if any — every tool should end on this,
  *  because a measurement taken from a broken page is worse than none. */
 export function report(errors) {
