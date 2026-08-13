@@ -43,6 +43,9 @@ const SPOTS = [
   { name: 'chapmans south bend',
     q: 'lat=-34.07256&lon=18.36695&h=228&cam=cab',
     was: 'the same lengthwise seam, seen along the carriageway' },
+  { name: 'chapmans north kerb',
+    q: 'lat=-34.07532&lon=18.36433&h=212&cam=cab',
+    was: 'asked: centrelines aligned but kerbs/tilt not?' },
   { name: 'chapmans hairpin',
     q: 'lat=-34.07773&lon=18.36410&h=48&cam=cab',
     was: 'a fan of carriageway lifted out of the road ahead' },
@@ -69,6 +72,8 @@ for (const [i, spot] of SPOTS.entries()) {
     + ` ${JSON.stringify(m.cl.worst?.[0]?.ways ?? [])} branches ${JSON.stringify(m.cl.worst?.[0]?.branches ?? [])}`);
   console.log(`   kerb:       ${m.kerb.joins} joins, over 10cm ${m.kerb.over10cm},`
     + ` p95 ${m.kerb.p95M}m, worst ${m.kerb.worstM}m at ${m.kerb.worstAt} ${JSON.stringify(m.kerb.worstWays)}`);
+  console.log(`               of those, same road ${m.kerb.sameRoad} (cross-fall per fragment),`
+    + ` two roads ${m.kerb.twoRoads} (junction did not warp)`);
   console.log(`   overlap:    ${m.ov.pairs} parallel pairs disagreeing in height`);
   for (const w of m.ov.worst.slice(0, 3)) {
     console.log(`               ${w.dy}m apart, ${w.apart}m aside at ${w.at} — ${JSON.stringify(w.ways)}`);

@@ -10118,6 +10118,11 @@ function truckSpec(): Record<string, number> {
     }
   }
   const steps: number[] = [];
+  // WHOSE kerbs disagree decides what to fix. Two fragments of ONE road parting
+  // at the kerb is a cross-fall solved per fragment and never reconciled; two
+  // DIFFERENT roads parting is a junction that did not warp. They look identical
+  // from the cab and want opposite changes.
+  let sameRoad = 0, twoRoads = 0;
   let worst = 0, at: string | null = null, worstWays: string[] = [];
   for (const [k, es] of ends) {
     if (es.length < 2) continue;
@@ -10134,6 +10139,7 @@ function truckSpec(): Record<string, number> {
         Math.abs((a.y - a.ca) - (b.y - b.ca * flip)),
       );
       steps.push(step);
+      if (step > 0.1) { if (a.nm === b.nm) sameRoad++; else twoRoads++; }
       if (step > worst) {
         worst = step; at = k;
         // The class, via its half-width — an unnamed way is otherwise
@@ -10146,7 +10152,8 @@ function truckSpec(): Record<string, number> {
   steps.sort((x, y) => x - y);
   const q = (f: number): number => (steps.length ? +steps[Math.min(steps.length - 1, Math.floor(f * steps.length))].toFixed(3) : 0);
   return { joins: steps.length, medianM: q(0.5), p95M: q(0.95),
-    over10cm: steps.filter((v) => v > 0.1).length, worstM: +worst.toFixed(3), worstAt: at, worstWays };
+    over10cm: steps.filter((v) => v > 0.1).length, sameRoad, twoRoads,
+    worstM: +worst.toFixed(3), worstAt: at, worstWays };
 };
 /**
  * TWO ROADS DRAWN ON TOP OF EACH OTHER.
