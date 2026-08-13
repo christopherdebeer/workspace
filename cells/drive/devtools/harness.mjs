@@ -139,7 +139,11 @@ export async function openDrive(opts = {}) {
 
   const page = await ctx.newPage();
   const errors = [];
-  page.on('pageerror', (e) => errors.push(String(e).slice(0, 300)));
+  // WITH THE STACK. `String(e)` gives "TypeError: Cannot read properties of
+  // undefined (reading '0')" and nothing else, which names a bug without
+  // locating it — and a bundled build has one file to search.
+  page.on('pageerror', (e) => errors.push(
+    `${String(e)}\n${(e && e.stack ? String(e.stack) : '').split('\n').slice(1, 4).join('\n')}`.slice(0, 600)));
   if (opts.init) await page.addInitScript(opts.init);
   await page.goto(`http://localhost:${port}/?${spot}`, { waitUntil: 'load', timeout: 60000 });
   await page.waitForFunction(() => document.querySelector('#boot')?.classList.contains('ready'), null, { timeout: 120000 });

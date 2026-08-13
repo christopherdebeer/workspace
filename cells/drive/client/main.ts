@@ -2330,6 +2330,8 @@ const MAT = {
   // distance. The offset is in depth-buffer units, so it scales with the
   // precision available instead of with metres.
   water: new THREE.MeshLambertMaterial({ map: waterTex, side: DS, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }),
+  // A RIVER IS NOT A LAKE. Same look, different shader — see `riverize`.
+  river: new THREE.MeshLambertMaterial({ map: waterTex, side: DS, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }),
   green: new THREE.MeshLambertMaterial({
     map: greenTex, side: DS,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
@@ -2510,6 +2512,87 @@ facade(ruinMat);
 // brightens the crests, and adds a sun glint that tracks the light — enough
 // motion to look like liquid without leaving the palette.
 const waterU = { uWTime: { value: 0 } };
+/**
+ * MOVING WATER, in the channel's own frame.
+ *
+ * `waterize` drifts two noise layers along fixed WORLD vectors. For standing
+ * water that is right — a lake has no direction and the wind picks one. For a
+ * river it is wrong twice: the surface slides north-east whichever way the
+ * valley runs, and it slides at the same rate down a mountain torrent and
+ * across an estuary.
+ *
+ * A river already knows better. `waterRun` solves a monotone invert, so which
+ * end is downhill is settled, and the drop between two stations over the
+ * distance between them IS the slope. So the pattern is scrolled along the
+ * ribbon's own V axis — which the builder lays out increasing DOWNSTREAM, so
+ * there is no direction to pass in — at a rate taken from that slope, and
+ * torn into whitewater where the slope is steep enough to tear it.
+ *
+ * Two layers at different rates and slightly different scales, because water
+ * moving as one sheet reads as a conveyor belt: the shear between them is what
+ * makes it look like a fluid rather than a texture on a treadmill.
+ */
+function riverize(mat: THREE.Material): void {
+  mat.onBeforeCompile = (sh) => {
+    sh.uniforms.uWTime = waterU.uWTime;
+    sh.uniforms.uWSun = { value: LIGHT_DIR };
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>
+        attribute float aFlow;
+        varying vec3 vWPos; varying float vFlow; varying vec2 vChan;`)
+      .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+        vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
+        vFlow = aFlow;
+        // ACROSS in fractions of the width, ALONG in metres. The builder writes
+        // v as arc length over twenty, so the multiply puts the noise back on a
+        // real-world scale and a wide river does not get finer ripples than a
+        // narrow one purely because its UVs are stretched.
+        vChan = vec2(uv.x, uv.y * 20.0);`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vWPos; varying float vFlow; varying vec2 vChan;
+        uniform float uWTime; uniform vec3 uWSun;
+        float wh(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
+        float wn(vec2 p){
+          vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(wh(i), wh(i + vec2(1.0, 0.0)), f.x),
+                     mix(wh(i + vec2(0.0, 1.0)), wh(i + vec2(1.0, 1.0)), f.x), f.y);
+        }`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+      {
+        float sp = clamp(vFlow, 0.15, 3.2);
+        // Downstream is +v, so the pattern travels the other way to appear to
+        // move with the water.
+        float t = uWTime * sp;
+        // The bank drags. A river is slowest where it touches the ground and
+        // fastest mid-channel, and that difference is most of what makes moving
+        // water read as moving rather than as a sliding image.
+        float mid = 1.0 - abs(vChan.x * 2.0 - 1.0);
+        float drag = 0.35 + 0.65 * mid;
+        vec2 p = vec2(vChan.x * 5.0, vChan.y * 0.55);
+        float a = wn(p * 1.0 - vec2(0.0, t * 0.85 * drag));
+        float b = wn(p * 2.3 + vec2(0.7, -t * 1.45 * drag));
+        float swell = a * 0.62 + b * 0.38;
+        diffuseColor.rgb *= 0.70 + swell * 0.72;
+        // WHITEWATER, and only where the gradient earns it. Standing water gets
+        // none of this at any speed; a torrent gets streaks that stretch ALONG
+        // the flow, because foam is carried rather than sprinkled.
+        // Foam is the exception, not the surface. The first threshold put a
+        // whole glacial valley under it.
+        float rough = smoothstep(1.7, 3.0, sp);
+        if (rough > 0.0) {
+          float f = wn(vec2(vChan.x * 9.0, vChan.y * 1.7 - t * 2.2 * drag));
+          float g2 = wn(vec2(vChan.x * 17.0, vChan.y * 3.1 - t * 3.1 * drag));
+          float foam = smoothstep(0.62, 0.95, f * 0.65 + g2 * 0.35);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.92, 0.95, 0.97), foam * rough * mid);
+        }
+        // Glint, as on standing water: crests facing the sun catch it.
+        vec2 toSun = normalize(uWSun.xz + vec2(1e-4));
+        float face = max(dot(normalize(vWPos.xz - cameraPosition.xz + 1e-4), toSun), 0.0);
+        diffuseColor.rgb += vec3(1.0, 0.94, 0.78) * pow(smoothstep(0.74, 1.0, swell), 2.0) * face * 0.5;
+      }`);
+  };
+}
 function waterize(mat: THREE.Material): void {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uWTime = waterU.uWTime;
@@ -2552,6 +2635,7 @@ seaTex.needsUpdate = true;
 const seaMat = new THREE.MeshLambertMaterial({ map: seaTex, side: DS });
 waterize(seaMat);
 waterize(MAT.water);
+riverize(MAT.river);
 const sea = new THREE.Mesh(new THREE.PlaneGeometry(40000, 40000), seaMat);
 sea.rotation.x = -Math.PI / 2;
 sea.position.y = -1e6; // parked until boot anchors sea level
@@ -6027,7 +6111,11 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
    * loop below — so it can only be answering for somebody else.
    */
   if (drivable && !track && n > 3) {
-    const WARP = 5;                    // stations to fade over, ~60m at 12m steps
+    // Stations to fade over, ~60m at 12m steps — but never more than the way
+    // HAS. A four-station way walked off the end of `dense` and threw, which a
+    // page-error line with no stack in it reported as an anonymous TypeError
+    // somewhere in the world build.
+    const WARP = Math.min(5, n);
     for (const end of [0, 1]) {
       const i0 = end === 0 ? 0 : n - 1;
       // A wider road must actually be underfoot at the node, not merely near it.
@@ -6741,32 +6829,79 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
     const rise = inv[idx(i)] - inv[idx(i - 1)];
     if (rise > culvertStats.worstRise) culvertStats.worstRise = rise;
   }
+  /**
+   * HOW FAST THE WATER IS GOING, per station, from the invert it was just given.
+   *
+   * The shader needs one number per vertex and this is the only place that
+   * knows it: `inv` descends by construction, so the drop between two stations
+   * over the distance between them is the surface slope, and nothing else in
+   * the frame has to be trusted for it.
+   *
+   * sqrt of slope rather than slope, which is where every open-channel formula
+   * lands (Chézy, Manning) and also where the eye does: a 1% stream and a 4%
+   * stream do not differ fourfold to look at, they differ about twofold. Floored
+   * so flat water still creeps — a river that stops dead reads as a painted
+   * one — and capped so a DEM cliff does not produce a blur.
+   */
+  const speed = new Array<number>(n).fill(0.6);
+  for (let i = 0; i < n; i++) {
+    // OVER FORTY METRES, not over one station. Stations are twelve metres apart
+    // and the field is nine and a half metres a pixel, so a one-station drop is
+    // mostly raster noise: measured in Isterdalen it put the MEDIAN slope at
+    // 10.5% and 96% of the valley under whitewater, which is not a river, it is
+    // a staircase. A longer baseline asks the same question of ground the DEM
+    // can actually answer it about.
+    const j0 = Math.max(0, i - 3), j1 = Math.min(n - 1, i + 3);
+    let run = 0;
+    for (let j = j0; j < j1; j++) run += Math.hypot(dense[j + 1][0] - dense[j][0], dense[j + 1][1] - dense[j][1]);
+    const drop = Math.abs(inv[j0] - inv[j1]);
+    speed[i] = clamp(0.4 + 4.5 * Math.sqrt(drop / Math.max(run, 1)), 0.4, 3.2);
+  }
+  // ARC LENGTH FROM THE SOURCE, not from station zero. `dense` may run either
+  // way — OSM's source-to-mouth convention is broken often enough that the
+  // ground was asked instead — so v is accumulated in the DOWNHILL order and
+  // the shader can scroll one way and be right on every river.
+  const vAt = new Array<number>(n).fill(0);
+  {
+    let acc = 0;
+    for (let i = 0; i < n; i++) {
+      const j = idx(i);
+      if (i > 0) {
+        const pj = idx(i - 1);
+        acc += Math.hypot(dense[j][0] - dense[pj][0], dense[j][1] - dense[pj][1]);
+      }
+      vAt[j] = acc / 20;
+    }
+  }
   // The visible water, and the bed the terrain is dug to.
-  const verts: number[] = [], uvs: number[] = [];
-  let along = 0;
+  const verts: number[] = [], uvs: number[] = [], flow: number[] = [];
   for (let i = 0; i < n - 1; i++) {
     const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
     const dx = x1 - x0, dz = z1 - z0;
     const len = Math.hypot(dx, dz) || 1;
     const nx = (-dz / len) * (width / 2), nz = (dx / len) * (width / 2);
     const yA = inv[i] + 0.025, yB = inv[i + 1] + 0.025;
-    const v0 = along / 20, v1 = (along + len) / 20;
+    const v0 = vAt[i], v1 = vAt[i + 1];
     verts.push(
       x0 + nx, yA, z0 + nz, x1 + nx, yB, z1 + nz, x0 - nx, yA, z0 - nz,
       x1 + nx, yB, z1 + nz, x1 - nx, yB, z1 - nz, x0 - nx, yA, z0 - nz,
     );
     uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
+    const sA = speed[i], sB = speed[i + 1];
+    flow.push(sA, sB, sA, sB, sB, sA);
     addSeg(channelGrid, { ax: x0, az: z0, bx: x1, bz: z1,
       hw: width / 2, ya: inv[i] - 0.15, yb: inv[i + 1] - 0.15 });
-    along += len;
     mapSeg(x0, z0, x1, z1, Math.max(width, 8), 'rgba(96,132,158,0.75)');
   }
   if (verts.length) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
+    geo.setAttribute('aFlow', new THREE.BufferAttribute(new Float32Array(flow), 1));
     geo.computeVertexNormals();
-    worldGroup.add(new THREE.Mesh(geo, MAT.water));
+    const m = new THREE.Mesh(geo, MAT.river);
+    m.userData.river = true;
+    worldGroup.add(m);
   }
   // THE BORES ARE DEFERRED, because at this moment there may be no road.
   //
@@ -10284,6 +10419,34 @@ function truckSpec(): Record<string, number> {
   });
   rows.sort((a, b) => b.ratio - a.ratio);
   return { bays, wide: rows.length, worst: rows.slice(0, 6) };
+};
+/**
+ * WHAT THE RIVERS THINK THEY ARE DOING.
+ *
+ * The flow shader takes its speed from a per-vertex attribute the builder
+ * derives from the solved invert, so "does it look like it is moving" has an
+ * answer that is not a screenshot: read the attribute back. A river that is all
+ * one speed means the slope never reached the shader; a river whose speed does
+ * not track its gradient means the wrong end is downhill.
+ */
+(window as unknown as { __rivers?: object }).__rivers = (): object => {
+  const sp: number[] = [];
+  let meshes = 0, verts = 0;
+  worldGroup.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || !o.userData.river) return;
+    meshes++;
+    const f = m.geometry.attributes.aFlow as THREE.BufferAttribute | undefined;
+    if (!f) return;
+    verts += f.count;
+    for (let i = 0; i < f.count; i += 6) sp.push(f.getX(i));   // one per bay is plenty
+  });
+  sp.sort((a, b) => a - b);
+  const q = (t: number): number => (sp.length ? +sp[Math.min(sp.length - 1, Math.floor(t * sp.length))].toFixed(2) : 0);
+  return { meshes, verts, bays: sp.length,
+    slowest: q(0), median: q(0.5), p95: q(0.95), fastest: +(sp[sp.length - 1] ?? 0).toFixed(2),
+    // Past this the shader starts tearing the surface into foam.
+    whitewaterPct: sp.length ? +((100 * sp.filter((v) => v > 1.7).length) / sp.length).toFixed(1) : 0 };
 };
 // What the tyres are doing: sideways velocity, how much of it is a slide, and
 // what the drivetrain thinks its own speed is.
