@@ -4814,6 +4814,12 @@ const spanStats = {
    *  looked for a host and found none. "The fix did not help" and "the fix
    *  never ran" are different failures with different next steps. */
   warped: 0, warpNoHost: 0,
+  /** …and WHY it declined, because "37 ends found no host" is a number you can
+   *  stare at for an hour. noEdge: nothing in the segment grid at all, so the
+   *  host is unbuilt or there is genuinely no road. tooFarOut: a road is there
+   *  but this end is not on it. notWider: there is a host and we outrank it,
+   *  which is correct and not a miss. */
+  warpNoEdge: 0, warpTooFar: 0, warpNotWider: 0,
   // How big the gap actually was in the quads we declined to fill, banded —
   // so "52% had no gap" can be checked rather than believed.
   noGapBand: [0, 0, 0, 0] as number[], fillQ: 0, fillM2: 0,
@@ -6026,7 +6032,20 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       const i0 = end === 0 ? 0 : n - 1;
       // A wider road must actually be underfoot at the node, not merely near it.
       const at0 = roadEdge(dense[i0][0], dense[i0][1]);
-      if (!at0 || at0.track || at0.out > 1 || at0.hw <= width / 2 + 0.4) { spanStats.warpNoHost++; continue; }
+      if (!at0 || at0.track) { spanStats.warpNoHost++; spanStats.warpNoEdge++; continue; }
+      // Tried at 3m, on the theory that OSM does not always run a side road all
+      // the way to the carriageway it serves. It moved nothing — 21 warps
+      // against 20, the same kerb seams — so it stays at 1m.
+      if (at0.out > 1) { spanStats.warpNoHost++; spanStats.warpTooFar++; continue; }
+      // EQUAL COUNTS AS A HOST. The rule was "defer to a WIDER road", which is
+      // right about hierarchy and wrong about ties: two fragments of one road,
+      // or two service roads meeting, are the same width, so neither deferred
+      // and both kept their own plane. Measured at the north kerb, ties were the
+      // largest bucket of declines — 15 of 30. A tie defers to whichever is
+      // already BUILT, which is arbitrary but consistent, and consistent is the
+      // whole of what the eye wants here. Only a strictly NARROWER road is
+      // refused, so a driveway still cannot drag a trunk road onto its camber.
+      if (at0.hw < width / 2 - 0.4) { spanStats.warpNoHost++; spanStats.warpNotWider++; continue; }
       spanStats.warped++;
       for (let k = 0; k < WARP; k++) {
         const i = end === 0 ? k : n - 1 - k;
