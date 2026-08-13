@@ -2330,6 +2330,11 @@ const MAT = {
   // distance. The offset is in depth-buffer units, so it scales with the
   // precision available instead of with metres.
   water: new THREE.MeshLambertMaterial({ map: waterTex, side: DS, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }),
+  // Boulders in a rapid, and the foam that stands off them. Flat-shaded so a
+  // six-sided lump reads as rock rather than as a ball, and vertex-coloured so
+  // one draw call carries a whole reach of them.
+  boulder: new THREE.MeshLambertMaterial({ color: 0x7d7a72, flatShading: true, vertexColors: true }),
+  froth: new THREE.MeshBasicMaterial({ color: 0xeef4f6, transparent: true, opacity: 0.72, depthWrite: false }),
   // A RIVER IS NOT A LAKE. Same look, different shader — see `riverize`.
   river: new THREE.MeshLambertMaterial({ map: waterTex, side: DS, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }),
   green: new THREE.MeshLambertMaterial({
@@ -6915,6 +6920,97 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
     m.userData.river = true;
     worldGroup.add(m);
   }
+  /**
+   * RAPIDS — the rocks that make them, and the froth that stands off the rocks.
+   *
+   * A rapid is not a shading effect. What tells you a river is fast is that
+   * something SOLID is in it: the water is white because it is being broken,
+   * and the thing breaking it is a boulder. Shading alone gives you a fast
+   * carpet.
+   *
+   * Placed where the invert says the gradient is, which is the same number the
+   * flow shader reads, so the rocks and the whitewater agree by construction
+   * rather than by two thresholds being tuned to match. Deterministic from the
+   * station's own coordinates: a river is rebuilt whenever its tile streams
+   * again, and boulders that moved on every rebuild would shimmer.
+   *
+   * Merged into one geometry per run rather than instanced. A reach carries
+   * tens of rocks of eight triangles each — an InstancedMesh per run would cost
+   * more draw calls than it saved, and these are built once and never touched.
+   */
+  {
+    const rv: number[] = [], rc: number[] = [], fv: number[] = [];
+    // A stable hash of a position: two rebuilds of the same river agree.
+    const rnd = (x: number, z: number, k: number): number => {
+      const v = Math.sin(x * 12.9898 + z * 78.233 + k * 37.719) * 43758.5453;
+      return v - Math.floor(v);
+    };
+    for (let i = 1; i < n - 1; i++) {
+      const sp = speed[i];
+      if (sp < 1.35) continue;                       // below this the water is not breaking
+      const [x0, z0] = dense[i];
+      // More rock in faster water, and never more than the channel can hold.
+      const want = Math.min(3, Math.floor((sp - 1.1) * 1.6));
+      const [ox, oz] = off[i];
+      const ol = Math.hypot(ox, oz) || 1;
+      for (let k = 0; k < want; k++) {
+        if (rnd(x0, z0, k) > 0.72) continue;         // gappy, not a regiment
+        // Across the channel, kept off the very bank where it would read as
+        // scree rather than as something the river has to go around.
+        const across = (rnd(x0, z0, k + 11) * 1.5 - 0.75);
+        const cx = x0 + (ox / ol) * across * (width / 2);
+        const cz = z0 + (oz / ol) * across * (width / 2);
+        const r = 0.35 + rnd(x0, z0, k + 23) * 0.85;
+        // How far it stands proud: enough to break the surface, never a monolith.
+        const top = inv[i] + 0.025 + r * (0.35 + rnd(x0, z0, k + 31) * 0.7);
+        const base = inv[i] - 0.5;
+        const sides = 6;
+        const spin = rnd(x0, z0, k + 41) * Math.PI;
+        // A lump: one apex over a ragged ring. Flat-shaded, so this is enough.
+        const tone = 0.72 + rnd(x0, z0, k + 53) * 0.3;
+        for (let e = 0; e < sides; e++) {
+          const a0 = spin + (e / sides) * Math.PI * 2, a1 = spin + ((e + 1) / sides) * Math.PI * 2;
+          const r0 = r * (0.7 + rnd(x0 + e, z0, k + 61) * 0.6);
+          const r1 = r * (0.7 + rnd(x0 + e + 1, z0, k + 61) * 0.6);
+          rv.push(cx, top, cz,
+            cx + Math.cos(a0) * r0, base, cz + Math.sin(a0) * r0,
+            cx + Math.cos(a1) * r1, base, cz + Math.sin(a1) * r1);
+          for (let q = 0; q < 3; q++) rc.push(tone, tone * 0.99, tone * 0.94);
+        }
+        // THE FROTH STANDS OFF IT, and downstream. Water piles on the upstream
+        // face and tears white behind — a collar centred on the rock would look
+        // like a puddle round a post.
+        const fy = inv[i] + 0.06;
+        // DOWNSTREAM AT THIS ROCK, not at the head of the run. The first version
+        // took the tangent from the run's first two stations, so every froth
+        // trail in a valley pointed the same way however the river turned.
+        const sgn = down ? 1 : -1;
+        const dxu = (dense[i + 1][0] - dense[i - 1][0]) * sgn;
+        const dzu = (dense[i + 1][1] - dense[i - 1][1]) * sgn;
+        const dl = Math.hypot(dxu, dzu) || 1;
+        const ux = dxu / dl, uz = dzu / dl;
+        const fx = ux * r * 2.4, fz = uz * r * 2.4;      // the trail, downstream
+        const px2 = -uz * r * 1.1, pz2 = ux * r * 1.1;   // and its half-width
+        fv.push(cx + px2, fy, cz + pz2, cx - px2, fy, cz - pz2, cx + fx + px2, fy, cz + fz + pz2,
+          cx - px2, fy, cz - pz2, cx + fx - px2, fy, cz + fz - pz2, cx + fx + px2, fy, cz + fz + pz2);
+      }
+    }
+    if (rv.length) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(rv), 3));
+      g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(rc), 3));
+      g.computeVertexNormals();
+      const rm = new THREE.Mesh(g, MAT.boulder);
+      rm.userData.rapid = true;
+      worldGroup.add(rm);
+    }
+    if (fv.length) {
+      const g = new THREE.BufferGeometry();
+      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(fv), 3));
+      g.computeVertexNormals();
+      worldGroup.add(new THREE.Mesh(g, MAT.froth));
+    }
+  }
   // THE BORES ARE DEFERRED, because at this moment there may be no road.
   //
   // A culvert exists where the water runs under a CARRIAGEWAY, and asking
@@ -10455,7 +10551,12 @@ function truckSpec(): Record<string, number> {
   });
   sp.sort((a, b) => a - b);
   const q = (t: number): number => (sp.length ? +sp[Math.min(sp.length - 1, Math.floor(t * sp.length))].toFixed(2) : 0);
-  return { meshes, verts, bays: sp.length,
+  let rocks = 0;
+  worldGroup.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (m.isMesh && o.userData.rapid) rocks += (m.geometry.attributes.position.count / 3) / 6;
+  });
+  return { meshes, verts, bays: sp.length, rocks: Math.round(rocks),
     slowest: q(0), median: q(0.5), p95: q(0.95), fastest: +(sp[sp.length - 1] ?? 0).toFixed(2),
     // Past this the shader starts tearing the surface into foam.
     whitewaterPct: sp.length ? +((100 * sp.filter((v) => v > 1.7).length) / sp.length).toFixed(1) : 0 };
