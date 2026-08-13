@@ -1,0 +1,15 @@
+{
+  "// purpose": "THE DRIVE CELL'S OWN TYPE CHECK. tsconfig.client.json includes only platform/ui and services/**/client, so `tsc -p tsconfig.client.json` compiled NONE of this cell — every check run against it this far was vacuous, and it let through a `quad` that was a THREE.Mesh and a `cols` used a thousand lines from where it was declared. Widening the shared config surfaces 532 errors in other cells (mostly allowImportingTsExtensions), which is a separate cleanup; this checks the one cell without waiting for that.",
+  "compilerOptions": {
+    "target": "ES2020",
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "noEmit": true
+  },
+  "include": ["client"]
+}

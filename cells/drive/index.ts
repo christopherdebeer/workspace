@@ -34,8 +34,20 @@ const CSP = [
   // …plus api.open-meteo.com, which is the live sky: cloud cover, rain and the
   // wind that pushes the deck across it. No key, CORS open, and if it is
   // unreachable the synthetic weather chain simply keeps running.
-  "connect-src 'self' https://esm.sh https://overpass-api.de https://overpass.kumi.systems https://overpass.osm.jp https://overpass.private.coffee https://s3.amazonaws.com https://nominatim.openstreetmap.org https://api.open-meteo.com",
+  // …and tiles.mapterhorn.com, the ELEVATION. It was added to the client and
+  // not to this line, so every DEM request from a real browser was blocked by
+  // `default-src 'none'` while the headless harness — which relays through
+  // curl and never sees a CSP — measured it working perfectly. The client
+  // treats a thrown fetch as "this tile does not exist", so the whole source
+  // quietly disabled itself and fell back to AWS terrarium: the corrupt data
+  // Mapterhorn was brought in to replace, including the -13,029m hole at
+  // Chapman's Peak. Nothing reported it, because a silent fallback was the
+  // designed behaviour for a genuinely missing tile.
+  "connect-src 'self' https://esm.sh https://overpass-api.de https://overpass.kumi.systems https://overpass.osm.jp https://overpass.private.coffee https://s3.amazonaws.com https://nominatim.openstreetmap.org https://api.open-meteo.com https://tiles.mapterhorn.com",
   "img-src data: blob:",
+  // The menu's pixel face (Silkscreen) ships inside the bundle as data: URIs —
+  // no font host, so the page stays self-contained.
+  'font-src data:',
   'worker-src blob:',
   "base-uri 'none'",
   "form-action 'none'",
@@ -50,22 +62,31 @@ const SHELL = `<!doctype html>
 <style>
   *, *::before, *::after { box-sizing: border-box; }
   html, body { margin: 0; height: 100%; overflow: hidden; background: #05070c; color: #efe9dc;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+    /* Silkscreen lands when the game module injects its @font-face; until
+       then the monospace stack holds the line. */
+    font-family: Silkscreen, ui-monospace, SFMono-Regular, Menlo, monospace;
+    /* NOTHING HERE IS TEXT TO BE HAD. This is a game held in one thumb, and
+       every one of these four exists because a phone browser assumes it is
+       looking at a document.
+         user-select   a thumb resting on the stick is a long press, and a long
+                       press over a word starts a selection with a magnifier on
+                       top of the road. The menu and the overlays each carried
+                       this rule already; the canvas, the boot card and the
+                       document itself never did, which is most of the screen.
+         touch-callout the same press, on iOS, also raises the share/copy sheet.
+         tap-highlight a grey flash behind every chip you press, on a palette
+                       chosen to the pixel.
+         overscroll    drag past the end of the settings list and the whole page
+                       rubber-bands off its own background. */
+    -webkit-user-select: none; user-select: none;
+    -webkit-touch-callout: none;
+    -webkit-tap-highlight-color: transparent;
+    overscroll-behavior: none; }
+  /* …except where text is genuinely the point. Nothing takes typing today —
+     the only input in the build is a colour swatch — but a rule that silently
+     breaks the first text field somebody adds is a trap, not a policy. */
+  input, textarea, [contenteditable] { -webkit-user-select: text; user-select: text; }
   #scene { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; }
-  .hud { position: fixed; z-index: 10; pointer-events: none; }
-  #place { top: max(10px, env(safe-area-inset-top)); left: 12px; right: 92px; font-size: 0.78rem;
-    text-shadow: 0 1px 6px rgba(0,0,0,0.8); line-height: 1.35; }
-  #place b { font-size: 0.92rem; font-weight: 600; }
-  #place .dim { opacity: 0.6; font-size: 0.68rem; }
-  #speed { bottom: max(12px, env(safe-area-inset-bottom)); right: 14px; font-size: 1.3rem; font-weight: 700;
-    text-shadow: 0 1px 6px rgba(0,0,0,0.9); }
-  #speed small { font-size: 0.6em; opacity: 0.6; font-weight: 400; }
-  #reroll { position: fixed; z-index: 11; top: max(10px, env(safe-area-inset-top)); right: 12px;
-    background: rgba(8,12,20,0.55); color: #f5c453; border: 1px solid rgba(245,196,83,0.4);
-    border-radius: 8px; padding: 0.35rem 0.7rem; font: inherit; font-size: 0.74rem; cursor: pointer;
-    backdrop-filter: blur(6px); }
-  #hint { bottom: max(12px, env(safe-area-inset-bottom)); left: 14px; font-size: 0.66rem; opacity: 0.55;
-    text-shadow: 0 1px 4px rgba(0,0,0,0.8); }
   #boot { position: fixed; inset: 0; z-index: 20; display: grid; place-items: center;
     background: #05070c; transition: opacity 0.6s ease; }
   #boot.done { opacity: 0; pointer-events: none; }
@@ -85,10 +106,6 @@ const SHELL = `<!doctype html>
     <div class="t">drive</div>
     <div class="s" id="boot-msg">warming up…</div>
   </div></div>
-  <div class="hud" id="place"><b id="place-name">…</b><br><span class="dim" id="place-coords"></span></div>
-  <button id="reroll" title="Start over somewhere else on Earth">elsewhere ↻</button>
-  <div class="hud" id="speed">0<small> km/h</small></div>
-  <div class="hud" id="hint">WASD/arrows · space=brake · C=camera · touch: stick + 2nd finger brake</div>
   <script type="module" src="/app.js"></script>
 </body>
 </html>`;
