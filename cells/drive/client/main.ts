@@ -655,6 +655,22 @@ const terrainPalette = (elev: number, slope: number, cover?: number | null): [nu
     const t = COVER_TINT[cover];
     if (t) c = [c[0] + (t[0] - c[0]) * COVER_MIX, c[1] + (t[1] - c[1]) * COVER_MIX, c[2] + (t[2] - c[2]) * COVER_MIX];
   }
+  // THE WATERLINE WRITES ITSELF ON THE LAND. The sea had an edge only because
+  // two meshes stopped at the same place; nothing on the ground said the water
+  // ever touched it. A narrow pale band — wet sand below a half-metre of
+  // reach, the ghost of a foam line at the lapping height — is what a coast
+  // looks like from this altitude, and it costs one blend per vertex that is
+  // already this close to sea level. Skipped over proven-dry basins, where a
+  // shoreline would be drawing the flood this palette just avoided.
+  if (seaOn && !dryAt && cover !== COVER.water) {
+    const sAbs = seaSurfaceAbs();
+    const band = 1 - clamp(Math.abs(elev - sAbs - 0.2) / 0.6, 0, 1);
+    if (band > 0) {
+      c = [c[0] + (0.62 - c[0]) * 0.5 * band, c[1] + (0.6 - c[1]) * 0.5 * band, c[2] + (0.5 - c[2]) * 0.5 * band];
+      const foam = 1 - clamp(Math.abs(elev - sAbs) / 0.22, 0, 1);
+      if (foam > 0) c = [c[0] + (0.78 - c[0]) * 0.55 * foam, c[1] + (0.84 - c[1]) * 0.55 * foam, c[2] + (0.82 - c[2]) * 0.55 * foam];
+    }
+  }
   const shade = 1 - clamp(slope * 1.4, 0, 0.45);
   return [c[0] * shade, c[1] * shade, c[2] * shade];
 };
@@ -2521,7 +2537,55 @@ facade(ruinMat);
 // paint; this scrolls two noise layers against each other for the swell,
 // brightens the crests, and adds a sun glint that tracks the light — enough
 // motion to look like liquid without leaving the palette.
-const waterU = { uWTime: { value: 0 } };
+const waterU = {
+  uWTime: { value: 0 },
+  // THE ONE WIND, third reader. The sky deck and its shadows already share a
+  // single pre-multiplied drift offset (stepSun); standing water now reads the
+  // same wind as a world-space pattern offset, so a lake drifts under the
+  // clouds that are crossing it instead of on a bearing hardcoded in 2024.
+  uWDrift: { value: new THREE.Vector2(2.5, 0.8) },
+  // Live rain, for the pocking. 0 clears it.
+  uWRain: { value: 0 },
+};
+/**
+ * THE SHARED WATER CORE. Sea, lakes and rivers each carried their own copy of
+ * the same hash, the same value noise, the same glint — three shaders that had
+ * to agree drifting apart one tweak at a time. The core is now one string:
+ * noise, the standing-water swell (world frame, wind-driven), the sun glint,
+ * and the rain pocks. `waterize` and `riverize` compose it differently; they
+ * can no longer disagree about what water IS.
+ */
+const WATER_GLSL = `
+  uniform float uWTime; uniform vec3 uWSun; uniform vec2 uWDrift; uniform float uWRain;
+  float wh(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
+  float wn(vec2 p){
+    vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
+    return mix(mix(wh(i), wh(i + vec2(1.0, 0.0)), f.x),
+               mix(wh(i + vec2(0.0, 1.0)), wh(i + vec2(1.0, 1.0)), f.x), f.y);
+  }
+  // Standing water, in the world frame: two layers drifting on the live wind,
+  // the second sheared sideways off the first — the shear is what makes it
+  // read as a fluid rather than a texture on a treadmill.
+  float wStand(vec2 xz){
+    float a = wn(xz * 0.09 + uWDrift * 0.09);
+    float b = wn(xz * 0.15 - vec2(-uWDrift.y, uWDrift.x) * 0.09 - uWDrift * 0.06);
+    return a * 0.6 + b * 0.4;
+  }
+  // Glint: crests facing the sun catch it, and only on the sun's side.
+  vec3 wGlint(vec3 wpos, float swell, float lo){
+    vec2 toSun = normalize(uWSun.xz + vec2(1e-4));
+    float face = max(dot(normalize(wpos.xz - cameraPosition.xz + 1e-4), toSun), 0.0);
+    return vec3(1.0, 0.94, 0.78) * pow(smoothstep(lo, 1.0, swell), 2.0) * face;
+  }
+  // Rain pocks: sparse cells flash as drops land. A ring would be truer and
+  // invisible — this world is thirty pixels of river at a time, and a flicker
+  // that keys to the rain channel is what actually reads as rain on water.
+  float wPock(vec2 xz){
+    if (uWRain < 0.02) return 0.0;
+    float rp = wh(floor(xz * 2.6) + floor(uWTime * 8.0) * 0.617);
+    return smoothstep(0.93, 1.0, rp) * uWRain;
+  }
+`;
 /**
  * MOVING WATER, in the channel's own frame.
  *
@@ -2545,14 +2609,19 @@ const waterU = { uWTime: { value: 0 } };
 function riverize(mat: THREE.Material): void {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uWTime = waterU.uWTime;
+    sh.uniforms.uWDrift = waterU.uWDrift;
+    sh.uniforms.uWRain = waterU.uWRain;
     sh.uniforms.uWSun = { value: LIGHT_DIR };
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
-        attribute float aFlow;
-        varying vec3 vWPos; varying float vFlow; varying vec2 vChan;`)
+        attribute float aFlow; attribute float aFoam; attribute float aWide;
+        varying vec3 vWPos; varying float vFlow; varying vec2 vChan;
+        varying float vFoam; varying float vWide;`)
       .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
         vWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;
         vFlow = aFlow;
+        vFoam = aFoam;
+        vWide = aWide;
         // ACROSS in fractions of the width, ALONG in metres. The builder writes
         // v as arc length over twenty, so the multiply puts the noise back on a
         // real-world scale and a wide river does not get finer ripples than a
@@ -2561,13 +2630,8 @@ function riverize(mat: THREE.Material): void {
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vWPos; varying float vFlow; varying vec2 vChan;
-        uniform float uWTime; uniform vec3 uWSun;
-        float wh(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
-        float wn(vec2 p){
-          vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-          return mix(mix(wh(i), wh(i + vec2(1.0, 0.0)), f.x),
-                     mix(wh(i + vec2(0.0, 1.0)), wh(i + vec2(1.0, 1.0)), f.x), f.y);
-        }`)
+        varying float vFoam; varying float vWide;
+        ${WATER_GLSL}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
       {
         float sp = clamp(vFlow, 0.15, 3.2);
@@ -2583,11 +2647,26 @@ function riverize(mat: THREE.Material): void {
         float a = wn(p * 1.0 - vec2(0.0, t * 0.85 * drag));
         float b = wn(p * 2.3 + vec2(0.7, -t * 1.45 * drag));
         float swell = a * 0.62 + b * 0.38;
-        // MORE CONTRAST THAN OPEN WATER WANTS. Seen from the chase camera a
-        // river is thirty pixels wide, and a swell that reads correctly close up
-        // is invisible at that size; moving water has to be legible before it is
-        // subtle.
-        diffuseColor.rgb *= 0.58 + swell * 1.05;
+        // THE CONFLUENCE. A reach that has stopped falling IS standing water,
+        // and must look like the lake or sea it is about to join: as the speed
+        // sinks toward the floor the channel-frame pattern hands over to the
+        // same world-frame swell every other water in this world wears — same
+        // noise, same wind — so a mouth dissolves instead of butting two
+        // shaders against each other along a triangle edge.
+        float calm = 1.0 - smoothstep(0.5, 0.95, sp);
+        swell = mix(swell, wStand(vWPos.xz), calm);
+        // MORE CONTRAST THAN OPEN WATER WANTS — seen from the chase camera a
+        // river is thirty pixels wide — but only while it is actually a river:
+        // the calm handover above brings the contrast home to standing water's
+        // numbers too, or the seam would survive in the amplitude.
+        diffuseColor.rgb *= mix(0.58, 0.72, calm) + swell * mix(1.05, 0.7, calm);
+        // DEPTH, from the channel's own width. The carve is raster-limited so
+        // a wide river is not literally deeper here — but it is in the world,
+        // and the eye expects the middle of an estuary to go down where a
+        // brook stays glass over gravel. Width is the honest proxy the data
+        // actually carries.
+        float deepK = smoothstep(9.0, 26.0, vWide) * smoothstep(0.15, 0.55, mid);
+        diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(0.5, 0.72, 0.85), deepK * 0.55);
         // WHITEWATER, and only where the gradient earns it. Standing water gets
         // none of this at any speed; a torrent gets streaks that stretch ALONG
         // the flow, because foam is carried rather than sprinkled.
@@ -2600,43 +2679,79 @@ function riverize(mat: THREE.Material): void {
           float foam = smoothstep(0.56, 0.92, f * 0.65 + g2 * 0.35);
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.94, 0.97, 0.99), foam * rough * (0.45 + 0.55 * mid));
         }
-        // Glint, as on standing water: crests facing the sun catch it.
-        vec2 toSun = normalize(uWSun.xz + vec2(1e-4));
-        float face = max(dot(normalize(vWPos.xz - cameraPosition.xz + 1e-4), toSun), 0.0);
-        diffuseColor.rgb += vec3(1.0, 0.94, 0.78) * pow(smoothstep(0.74, 1.0, swell), 2.0) * face * 0.5;
+        // THE ROCKS' OWN FOAM. Gradient foam knows the reach is steep; it does
+        // not know where the boulders stand. The builder does — it placed them
+        // — and writes their wake into aFoam, decaying downstream and weighted
+        // to the boulder's side of the channel, so the white now piles where
+        // something solid is actually breaking the water rather than agreeing
+        // with the rocks only in the aggregate.
+        float ob = clamp(vFoam, 0.0, 1.8);
+        if (ob > 0.02) {
+          float fr = wn(vec2(vChan.x * 14.0, vChan.y * 2.6 - t * 2.6 * drag));
+          float rf = smoothstep(0.9 - ob * 0.5, 1.0, fr * 0.72 + ob * 0.22);
+          diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.95, 0.97, 0.99), clamp(rf, 0.0, 0.85));
+        }
+        diffuseColor.rgb += wGlint(vWPos, swell, 0.74) * 0.5;
+        diffuseColor.rgb += vec3(0.5, 0.55, 0.6) * wPock(vWPos.xz);
       }`);
   };
 }
 function waterize(mat: THREE.Material): void {
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uWTime = waterU.uWTime;
+    sh.uniforms.uWDrift = waterU.uWDrift;
+    sh.uniforms.uWRain = waterU.uWRain;
     sh.uniforms.uWSun = { value: LIGHT_DIR };
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying vec3 vWPos; uniform float uWTime; uniform vec3 uWSun;
-        float wh(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 34.23); return fract(p.x * p.y); }
-        float wn(vec2 p){
-          vec2 i = floor(p), f = fract(p); f = f * f * (3.0 - 2.0 * f);
-          return mix(mix(wh(i), wh(i + vec2(1.0, 0.0)), f.x),
-                     mix(wh(i + vec2(0.0, 1.0)), wh(i + vec2(1.0, 1.0)), f.x), f.y);
-        }`)
+        varying vec3 vWPos;
+        ${WATER_GLSL}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
       {
-        // Two layers drifting against each other: where they agree, a crest.
-        float a = wn(vWPos.xz * 0.09 + vec2(uWTime * 0.35, uWTime * 0.11));
-        float b = wn(vWPos.xz * 0.15 - vec2(uWTime * 0.21, uWTime * 0.4));
-        float swell = a * 0.6 + b * 0.4;
+        float swell = wStand(vWPos.xz);
         diffuseColor.rgb *= 0.72 + swell * 0.7;
-        // Glint: crests facing the sun catch it, and only on the sun's side.
-        vec2 toSun = normalize(uWSun.xz + vec2(1e-4));
-        float face = max(dot(normalize(vWPos.xz - cameraPosition.xz + 1e-4), toSun), 0.0);
-        diffuseColor.rgb += vec3(1.0, 0.94, 0.78) * pow(smoothstep(0.72, 1.0, swell), 2.0) * face * 0.55;
+        diffuseColor.rgb += wGlint(vWPos, swell, 0.72) * 0.55;
+        diffuseColor.rgb += vec3(0.5, 0.55, 0.6) * wPock(vWPos.xz);
       }`);
   };
 }
+
+/**
+ * THE BANK, where standing water meets the ground. A lake was a sheet butted
+ * against terrain with nothing at the join — no lap, no thinning, a hard
+ * triangle edge between two palettes. A per-vertex depth cannot fix it: the
+ * drape is a ShapeGeometry and every vertex it has IS on the outline. So the
+ * bank gets its own narrow ribbon along the ring, drape-conformed like the
+ * water it edges, breathing on the water clock — the one place the eye checks
+ * whether water is sitting IN the land or ON it.
+ */
+const shoreMat = new THREE.MeshLambertMaterial({
+  color: 0xdff0ea, transparent: true, opacity: 0.34, side: DS, depthWrite: false,
+  polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -6,
+});
+shoreMat.onBeforeCompile = (sh) => {
+  sh.uniforms.uWTime = waterU.uWTime;
+  sh.uniforms.uWDrift = waterU.uWDrift;
+  sh.uniforms.uWRain = waterU.uWRain;
+  sh.uniforms.uWSun = { value: LIGHT_DIR };
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
+    .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWPos = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', `#include <common>
+      varying vec3 vWPos;
+      ${WATER_GLSL}`)
+    .replace('#include <color_fragment>', `#include <color_fragment>
+    {
+      // The lap: the band swells and recedes against the bank, patterned in
+      // the world so neighbouring reaches of shore are never in step.
+      float lap = wn(vWPos.xz * 0.5 + vec2(uWTime * 0.22, -uWTime * 0.16));
+      diffuseColor.a *= 0.45 + 0.55 * (0.5 + 0.5 * sin(uWTime * 1.3 + lap * 6.283));
+    }`);
+};
 
 // ── the sea ────────────────────────────────────────────────────────
 // Terrarium tiles carry BATHYMETRY and OSM's open sea has no water polygon
@@ -4031,6 +4146,15 @@ function surfaceAt(x: number, z: number): Surface {
   if (track >= 0) { surfQ = track; return 'track'; }
   surfQ = Q_GROUND;
   if (waterCells.has(gkey(x, z))) return 'water';
+  // A RIVER IS WATER TOO. Only polygon lakes, WorldCover pixels and the sea
+  // ever answered here, so the truck drove through every carved watercourse
+  // reading 'ground' — no splash, no wade, no current — unless the river
+  // happened to be wide enough for the 10m cover raster to notice. The
+  // channel grid has known better all along; found by the water instrument,
+  // whose on-channel probes read a live current under a dry surface.
+  // AFTER the carriageways, same as cover: a road over a channel is a
+  // culvert's deck or a bridge, and you are on it, not in the water under it.
+  if (channelAt(x, z)) return 'water';
   // WHAT THE GROUND IS beats how high the DEM thinks it is. Off Big Sur the
   // elevation source fills the whole ocean at a flat +1.2m, so the height test
   // below called four kilometres of open Pacific dry ground and let the truck
@@ -6662,6 +6786,10 @@ const CULV_UNDER = 0.8;
 // A channel is a `Seg` — same shape, same grid helpers — carrying the bed
 // height in ya/yb rather than a deck.
 const channelGrid = new Map<string, Seg[]>();
+// Rapids boulders, for the collision pass. VEG_CELL buckets to match the veg
+// rocks' walk, but their own map: vegGrid is washed on a biome re-pick and
+// pruned by distance, and neither event rebuilds a river.
+const rapidRocks = new Map<string, Array<{ x: number; z: number; s: number; hit?: number }>>();
 const culvertStats = { ways: 0, runs: 0, rigSized: 0, m: 0, deepest: 0, uphillFixed: 0, crossings: 0,
   // Crossings with no room for a bore under the deck — the water passes at
   // grade and nothing is built, which is better than concrete in the road.
@@ -6718,6 +6846,77 @@ function channelFloorAt(x: number, z: number, ceiling: number): number | null {
   if (best === null || best >= ceiling) return null;
   if (onCarriageway(x, z, 0.6).road) return null;   // the road's plug of earth
   return best;
+}
+/**
+ * WHAT THE WATER HERE IS DOING — depth and current, for the physics.
+ *
+ * The truck used to know one fact about water: that it was in some. A ford, a
+ * lake margin, mid-river and open sea were the same three numbers, and the
+ * flow field the shader had been reading all along pushed nothing. This is the
+ * physics' one window onto all of it:
+ *
+ *   RIVERS — the nearest channel segment answers. Direction is toward the
+ *   lower invert (the same monotone solve the ribbon was built from), speed by
+ *   the same sqrt-of-slope law the shader shades with, so what shoves the
+ *   truck is exactly what the eye says should. Depth from the channel's
+ *   width: the carve is raster-limited, so class width is the honest proxy —
+ *   a stream wets the rims, a river floats the doors.
+ *
+ *   SEA — depth is real: surface minus seabed, which the terrain build
+ *   actually dropped. No current; the wind's work on the truck is not worth
+ *   modelling at this scale.
+ *
+ *   LAKES & PONDS — cover says water, nothing says how much. Half a metre:
+ *   wadeable, honest for the tarns and margins this mostly is.
+ */
+/** Is this point inside a watercourse's own water — within the channel's half
+ *  width of its centreline? Allocation-free, because `surfaceAt` asks this for
+ *  every wheel every frame and for every ring point of a vegetation pass. */
+function channelAt(x: number, z: number): Seg | null {
+  if (!channelGrid.size) return null;
+  const cx = Math.floor(x / GRID), cz = Math.floor(z / GRID);
+  for (let ax = cx - 1; ax <= cx + 1; ax++) {
+    for (let az = cz - 1; az <= cz + 1; az++) {
+      const arr = channelGrid.get(`${ax},${az}`);
+      if (!arr) continue;
+      for (const c of arr) {
+        const dx = c.bx - c.ax, dz = c.bz - c.az;
+        const t = clamp(((x - c.ax) * dx + (z - c.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+        if (Math.hypot(x - (c.ax + dx * t), z - (c.az + dz * t)) <= c.hw) return c;
+      }
+    }
+  }
+  return null;
+}
+const wiSet = new Set<Seg>();
+function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: number; speed: number } {
+  wiSet.clear();
+  channelsNear(x, z, wiSet);
+  let best: Seg | null = null, bd = Infinity;
+  for (const c of wiSet) {
+    const dx = c.bx - c.ax, dz = c.bz - c.az;
+    const t = clamp(((x - c.ax) * dx + (z - c.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    const d = Math.hypot(x - (c.ax + dx * t), z - (c.az + dz * t)) - c.hw;
+    if (d < bd) { bd = d; best = c; }
+  }
+  if (best && bd < 1.5) {
+    const dx = best.bx - best.ax, dz = best.bz - best.az;
+    const len = Math.hypot(dx, dz) || 1;
+    const drop = (best.ya as number) - (best.yb as number);   // + means it flows a→b
+    const s = Math.sign(drop) || 1;
+    return {
+      depth: clamp(0.3 + best.hw * 0.09, 0.3, 1.4),
+      fx: (dx / len) * s,
+      fz: (dz / len) * s,
+      speed: clamp(0.4 + 4.5 * Math.sqrt(Math.abs(drop) / len), 0.4, 3.2),
+    };
+  }
+  const sl = seaLevelY();
+  if (sl !== null) {
+    const d = sl - groundAt(x, z);
+    if (d > 0.05) return { depth: d, fx: 0, fz: 0, speed: 0 };
+  }
+  return { depth: 0.5, fx: 0, fz: 0, speed: 0 };
 }
 /** Dig the watercourse beds inside a tile. Runs after `carveCorridors`, and
  *  only ever lowers, so it cannot lift ground back over a road.
@@ -6896,7 +7095,83 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
   // Seg.hw to keep faith with, so it takes the simpler fix: both bays use the
   // same two points and there is nothing left to fill.
   const off = mitreOffsets(dense, 0, n - 1, width / 2);
-  const verts: number[] = [], uvs: number[] = [], flow: number[] = [];
+  // THE ROCKS COME FIRST NOW, because the water needs to know where they are:
+  // the surface shader's rock foam reads a per-vertex wake the boulders write,
+  // so their placement has to be settled before a single ribbon vertex goes up.
+  // Same hashes, same stations, same stones as before the reorder.
+  interface RapidRock { st: number; k: number; cx: number; cz: number; r: number;
+    top: number; base: number; spin: number; tone: number; across: number }
+  const rocks: RapidRock[] = [];
+  // A stable hash of a position: two rebuilds of the same river agree.
+  const rnd = (x: number, z: number, k: number): number => {
+    const v = Math.sin(x * 12.9898 + z * 78.233 + k * 37.719) * 43758.5453;
+    return v - Math.floor(v);
+  };
+  for (let i = 1; i < n - 1; i++) {
+    const sp = speed[i];
+    if (sp < 1.35) continue;                       // below this the water is not breaking
+    const [x0, z0] = dense[i];
+    // More rock in faster water, and never more than the channel can hold.
+    const want = Math.min(3, Math.floor((sp - 1.1) * 1.6));
+    const [ox, oz] = off[i];
+    const ol = Math.hypot(ox, oz) || 1;
+    for (let k = 0; k < want; k++) {
+      if (rnd(x0, z0, k) > 0.72) continue;         // gappy, not a regiment
+      // Across the channel, kept off the very bank where it would read as
+      // scree rather than as something the river has to go around.
+      const across = (rnd(x0, z0, k + 11) * 1.5 - 0.75);
+      rocks.push({
+        st: i, k, across,
+        cx: x0 + (ox / ol) * across * (width / 2),
+        cz: z0 + (oz / ol) * across * (width / 2),
+        r: 0.35 + rnd(x0, z0, k + 23) * 0.85,
+        // How far it stands proud: enough to break the surface, never a monolith.
+        top: inv[i] + 0.025 + (0.35 + rnd(x0, z0, k + 23) * 0.85) * (0.35 + rnd(x0, z0, k + 31) * 0.7),
+        base: inv[i] - 0.5,
+        spin: rnd(x0, z0, k + 41) * Math.PI,
+        tone: 0.72 + rnd(x0, z0, k + 53) * 0.3,
+      });
+    }
+  }
+  /**
+   * THE WAKE EACH ROCK WRITES. Water piles on the upstream face and tears
+   * white behind, so every boulder charges the stations downstream of it —
+   * decaying over four, one station of pile upstream — weighted toward its own
+   * side of the channel via the two bank vertices. The shader then raises foam
+   * where something solid actually stands, not merely where the reach is
+   * steep: the rocks and their whitewater now agree POINT BY POINT, not just
+   * in the aggregate.
+   *
+   * Downstream is the FLOW order, not the array order — `dense` runs whichever
+   * way OSM drew it, and `down` is the ground's answer.
+   */
+  const foamP = new Array<number>(n).fill(0), foamM = new Array<number>(n).fill(0);
+  const dstep = down ? 1 : -1;
+  for (const rk of rocks) {
+    const s = 0.55 + rk.r * 0.8;          // a big rock tears more water
+    const wP = 0.5 + rk.across / 1.5;     // its side of the channel: 0..1 toward +off
+    const wM = 1 - wP;
+    for (let d = -1; d <= 4; d++) {
+      const j = rk.st + d * dstep;
+      if (j < 0 || j >= n) continue;
+      const w = s * (d < 0 ? 0.4 : Math.exp(-d / 2.2));
+      foamP[j] += w * wP;
+      foamM[j] += w * wM;
+    }
+  }
+  // WATERFALLS. Where the invert steps hard between stations the ribbon
+  // already draws the drop — it connects the stations whatever their heights —
+  // but it drew it as calm glass. A genuine step froths the whole channel at
+  // the lip and the plunge, through the same wake attribute the rocks use.
+  for (let i = 1; i < n; i++) {
+    const j = idx(i), pj = idx(i - 1);
+    const dd = Math.hypot(dense[j][0] - dense[pj][0], dense[j][1] - dense[pj][1]) || 1;
+    if ((inv[pj] - inv[j]) / dd > 0.28) {
+      foamP[j] += 1.3; foamM[j] += 1.3;      // the plunge pool
+      foamP[pj] += 0.9; foamM[pj] += 0.9;    // the lip
+    }
+  }
+  const verts: number[] = [], uvs: number[] = [], flow: number[] = [], foamA: number[] = [], wide: number[] = [];
   for (let i = 0; i < n - 1; i++) {
     const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
     const dx = x1 - x0, dz = z1 - z0;
@@ -6911,6 +7186,12 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
     uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
     const sA = speed[i], sB = speed[i + 1];
     flow.push(sA, sB, sA, sB, sB, sA);
+    // The wake, per bank vertex, in the same winding as the uvs: u=0 is the
+    // +off side, so it takes foamP.
+    foamA.push(foamP[i], foamP[i + 1], foamM[i], foamP[i + 1], foamM[i + 1], foamM[i]);
+    // The channel's width rides every vertex — the material is shared by every
+    // river in the world, so the number cannot live in a uniform.
+    wide.push(width, width, width, width, width, width);
     addSeg(channelGrid, { ax: x0, az: z0, bx: x1, bz: z1,
       hw: width / 2, ya: inv[i] - 0.15, yb: inv[i + 1] - 0.15 });
     mapSeg(x0, z0, x1, z1, Math.max(width, 8), 'rgba(96,132,158,0.75)');
@@ -6920,6 +7201,8 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
     geo.setAttribute('aFlow', new THREE.BufferAttribute(new Float32Array(flow), 1));
+    geo.setAttribute('aFoam', new THREE.BufferAttribute(new Float32Array(foamA), 1));
+    geo.setAttribute('aWide', new THREE.BufferAttribute(new Float32Array(wide), 1));
     geo.computeVertexNormals();
     const m = new THREE.Mesh(geo, MAT.river);
     m.userData.river = true;
@@ -6943,56 +7226,38 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
    * tens of rocks of eight triangles each — an InstancedMesh per run would cost
    * more draw calls than it saved, and these are built once and never touched.
    */
-  {
+  if (rocks.length) {
     const rv: number[] = [], rc: number[] = [];
-    // A stable hash of a position: two rebuilds of the same river agree.
-    const rnd = (x: number, z: number, k: number): number => {
-      const v = Math.sin(x * 12.9898 + z * 78.233 + k * 37.719) * 43758.5453;
-      return v - Math.floor(v);
-    };
-    for (let i = 1; i < n - 1; i++) {
-      const sp = speed[i];
-      if (sp < 1.35) continue;                       // below this the water is not breaking
-      const [x0, z0] = dense[i];
-      // More rock in faster water, and never more than the channel can hold.
-      const want = Math.min(3, Math.floor((sp - 1.1) * 1.6));
-      const [ox, oz] = off[i];
-      const ol = Math.hypot(ox, oz) || 1;
-      for (let k = 0; k < want; k++) {
-        if (rnd(x0, z0, k) > 0.72) continue;         // gappy, not a regiment
-        // Across the channel, kept off the very bank where it would read as
-        // scree rather than as something the river has to go around.
-        const across = (rnd(x0, z0, k + 11) * 1.5 - 0.75);
-        const cx = x0 + (ox / ol) * across * (width / 2);
-        const cz = z0 + (oz / ol) * across * (width / 2);
-        const r = 0.35 + rnd(x0, z0, k + 23) * 0.85;
-        // How far it stands proud: enough to break the surface, never a monolith.
-        const top = inv[i] + 0.025 + r * (0.35 + rnd(x0, z0, k + 31) * 0.7);
-        const base = inv[i] - 0.5;
-        const sides = 6;
-        const spin = rnd(x0, z0, k + 41) * Math.PI;
-        // A lump: one apex over a ragged ring. Flat-shaded, so this is enough.
-        const tone = 0.72 + rnd(x0, z0, k + 53) * 0.3;
-        for (let e = 0; e < sides; e++) {
-          const a0 = spin + (e / sides) * Math.PI * 2, a1 = spin + ((e + 1) / sides) * Math.PI * 2;
-          const r0 = r * (0.7 + rnd(x0 + e, z0, k + 61) * 0.6);
-          const r1 = r * (0.7 + rnd(x0 + e + 1, z0, k + 61) * 0.6);
-          rv.push(cx, top, cz,
-            cx + Math.cos(a0) * r0, base, cz + Math.sin(a0) * r0,
-            cx + Math.cos(a1) * r1, base, cz + Math.sin(a1) * r1);
-          for (let q = 0; q < 3; q++) rc.push(tone, tone * 0.99, tone * 0.94);
-        }
+    for (const rk of rocks) {
+      const [x0, z0] = dense[rk.st];
+      const sides = 6;
+      // A lump: one apex over a ragged ring. Flat-shaded, so this is enough.
+      for (let e = 0; e < sides; e++) {
+        const a0 = rk.spin + (e / sides) * Math.PI * 2, a1 = rk.spin + ((e + 1) / sides) * Math.PI * 2;
+        const r0 = rk.r * (0.7 + rnd(x0 + e, z0, rk.k + 61) * 0.6);
+        const r1 = rk.r * (0.7 + rnd(x0 + e + 1, z0, rk.k + 61) * 0.6);
+        rv.push(rk.cx, rk.top, rk.cz,
+          rk.cx + Math.cos(a0) * r0, rk.base, rk.cz + Math.sin(a0) * r0,
+          rk.cx + Math.cos(a1) * r1, rk.base, rk.cz + Math.sin(a1) * r1);
+        for (let q = 0; q < 3; q++) rc.push(rk.tone, rk.tone * 0.99, rk.tone * 0.94);
       }
+      // …and into the collision buckets. Something SOLID is in the river, and
+      // the truck now knows it the way it knows a hillside boulder: a bite of
+      // speed, a knock, and through (the rocks pass in tick reads this grid).
+      // Its own grid, not vegGrid — a biome re-pick washes vegGrid and would
+      // have silently disarmed every rapid until its river happened to rebuild.
+      const key = `${Math.floor(rk.cx / VEG_CELL)},${Math.floor(rk.cz / VEG_CELL)}`;
+      let arr = rapidRocks.get(key);
+      if (!arr) rapidRocks.set(key, arr = []);
+      arr.push({ x: rk.cx, z: rk.cz, s: rk.r });
     }
-    if (rv.length) {
-      const g = new THREE.BufferGeometry();
-      g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(rv), 3));
-      g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(rc), 3));
-      g.computeVertexNormals();
-      const rm = new THREE.Mesh(g, MAT.boulder);
-      rm.userData.rapid = true;
-      worldGroup.add(rm);
-    }
+    const g2 = new THREE.BufferGeometry();
+    g2.setAttribute('position', new THREE.BufferAttribute(new Float32Array(rv), 3));
+    g2.setAttribute('color', new THREE.BufferAttribute(new Float32Array(rc), 3));
+    g2.computeVertexNormals();
+    const rm = new THREE.Mesh(g2, MAT.boulder);
+    rm.userData.rapid = true;
+    worldGroup.add(rm);
   }
   // THE BORES ARE DEFERRED, because at this moment there may be no road.
   //
@@ -7534,6 +7799,40 @@ function refreshDrapes(budgetMs: number): void {
   }
   drapeMs = performance.now() - t0;
 }
+/** The lap ribbon along a waterbody's ring (see shoreMat). Built as a drape —
+ *  userData.full, conformDrape, the drapes list — so it keeps faith with the
+ *  ground exactly the way the water sheet beside it does when terrain moves. */
+function shoreRibbon(ring: Array<[number, number]>): void {
+  // A coastline-scale reserve densifies to thousands of points; its shore is
+  // mostly beyond the fog and not worth twelve thousand conforming vertices.
+  if (ring.length < 3 || ring.length > 1500) return;
+  const HW = 0.8;
+  const verts: number[] = [], idxs: number[] = [];
+  let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+  for (let i = 0; i < ring.length; i++) {
+    const [ax, az] = ring[i], [bx, bz] = ring[(i + 1) % ring.length];
+    const dx = bx - ax, dz = bz - az;
+    const len = Math.hypot(dx, dz);
+    if (len < 0.01) continue;                     // the closing repeat, if any
+    const px = (-dz / len) * HW, pz = (dx / len) * HW;
+    const v0 = verts.length / 3;
+    verts.push(ax + px, 0, az + pz, ax - px, 0, az - pz, bx + px, 0, bz + pz, bx - px, 0, bz - pz);
+    idxs.push(v0, v0 + 1, v0 + 2, v0 + 1, v0 + 3, v0 + 2);
+    if (ax < x0) x0 = ax; if (ax > x1) x1 = ax;
+    if (az < z0) z0 = az; if (az > z1) z1 = az;
+  }
+  if (!verts.length) return;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  const mesh = new THREE.Mesh(geo, shoreMat);
+  mesh.userData.drape = 'area';
+  mesh.userData.lift = 0.05;
+  mesh.userData.bb = [x0 - HW, z0 - HW, x1 + HW, z1 + HW];
+  mesh.userData.full = idxs.slice();
+  conformDrape(mesh);
+  drapes.push(mesh);
+  worldGroup.add(mesh);
+}
 function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Material[], lift: number, extrude = 0, collide?: 'solid' | 'water'): void {
   if (pts.length < 3) return;
   // THE SAME GATE THE RIBBON KEEPS, for the same reason. An area is drawn
@@ -7649,6 +7948,7 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
     for (let gx = Math.floor(minx / GRID); gx <= Math.floor(maxx / GRID); gx++)
       for (let gz = Math.floor(minz / GRID); gz <= Math.floor(maxz / GRID); gz++)
         if (pointInPoly(gx * GRID + GRID / 2, gz * GRID + GRID / 2, pts)) waterCells.add(`${gx},${gz}`);
+    shoreRibbon(ring);
   }
 }
 // ── OSM tile cache (IndexedDB, LRU by timestamp) ───────────────────
@@ -9153,6 +9453,7 @@ function stepWeather(now: number, dt: number): void {
   skyMat.uniforms.uCloud.value = wx.cloud;
   skyMat.uniforms.uTime.value = now / 1000;
   waterU.uWTime.value = now / 1000;
+  waterU.uWRain.value = wx.rain;
   // Cloud shadows read the same cover and drift as the deck overhead.
   envU.uCloudS.value = cloudShadowOn ? wx.cloud : 0;
   // WHERE THE SUN PUTS THE SHADOW. Horizontal travel per metre of altitude on
@@ -9192,6 +9493,12 @@ function stepWeather(now: number, dt: number): void {
     const amp = clamp(kmh / 130, 0.02, 0.35);
     windU.uTime.value = now / 1000;
     windU.uGust.value.set(-Math.sin(t) * amp, Math.cos(t) * amp);
+    // …and drifts the water. A pre-multiplied world-space offset like the
+    // deck's — one number both shaders read, so the swell can never disagree
+    // with the clouds about which way the air is going. 12km/h lands near the
+    // old fixed drift; a storm visibly hurries the surface.
+    const wAmp = 1.5 + kmh * 0.14;
+    waterU.uWDrift.value.set(-Math.sin(t) * wAmp * (now / 1000), Math.cos(t) * wAmp * (now / 1000));
   }
   // LIGHTNING. A strike is a double flash — the leader, then the return
   // stroke a beat later — and the thunder arrives after the sound has had
@@ -10061,7 +10368,11 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
     let g = groundAt(x, z);
     const sl = seaLevelY();
     if (sl !== null) g = Math.max(g, sl - 0.45);
-    return g - WHEEL_R * 0.85 + SURFACE.water.lift;
+    // The wheel sinks BY THE WATER'S OWN DEPTH, not by a constant: a ford
+    // wets the rim, a river takes most of the tyre. The floor keeps even a
+    // puddle visibly wetting the wheel; the ceiling is the old fixed sink.
+    const sink = clamp(waterInfoAt(x, z).depth / 1.1, 0.3, 0.85);
+    return g - WHEEL_R * sink + SURFACE.water.lift;
   }
   const e = roadEdge(x, z);
   if (!e || e.out > KERB_FAIR) return gnd;
@@ -10088,6 +10399,14 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
   const q = wayQuality(tags, track);
   const p = surfaceFor(track ? 'track' : 'road', q);
   return { q: +q.toFixed(3), mu: +p.mu.toFixed(3), drag: +p.drag.toFixed(3), rough: +p.rough.toFixed(4), max: +p.max.toFixed(1) };
+};
+// Depth and current at a point — the physics' own read, so a test can ask
+// what the water is doing without driving a truck into it first.
+(window as unknown as { __waterinfo?: object }).__waterinfo = (x?: number, z?: number): object => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const wi = waterInfoAt(px, pz);
+  return { surface: surfaceAt(px, pz), depth: +wi.depth.toFixed(2), speed: +wi.speed.toFixed(2),
+    fx: +wi.fx.toFixed(2), fz: +wi.fz.toFixed(2) };
 };
 (window as unknown as { __contact?: object }).__contact = (x: number, z: number): object => {
   const sk = surfaceAt(x, z);
@@ -10522,7 +10841,7 @@ function truckSpec(): Record<string, number> {
  */
 (window as unknown as { __rivers?: object }).__rivers = (): object => {
   const sp: number[] = [];
-  let meshes = 0, verts = 0;
+  let meshes = 0, verts = 0, foamBays = 0;
   worldGroup.traverse((o) => {
     const m = o as THREE.Mesh;
     if (!m.isMesh || !o.userData.river) return;
@@ -10530,7 +10849,11 @@ function truckSpec(): Record<string, number> {
     const f = m.geometry.attributes.aFlow as THREE.BufferAttribute | undefined;
     if (!f) return;
     verts += f.count;
-    for (let i = 0; i < f.count; i += 6) sp.push(f.getX(i));   // one per bay is plenty
+    const fo = m.geometry.attributes.aFoam as THREE.BufferAttribute | undefined;
+    for (let i = 0; i < f.count; i += 6) {
+      sp.push(f.getX(i));   // one per bay is plenty
+      if (fo && fo.getX(i) > 0.25) foamBays++;   // a bay some rock's wake reaches
+    }
   });
   sp.sort((a, b) => a - b);
   const q = (t: number): number => (sp.length ? +sp[Math.min(sp.length - 1, Math.floor(t * sp.length))].toFixed(2) : 0);
@@ -10539,10 +10862,30 @@ function truckSpec(): Record<string, number> {
     const m = o as THREE.Mesh;
     if (m.isMesh && o.userData.rapid) rocks += (m.geometry.attributes.position.count / 3) / 6;
   });
-  return { meshes, verts, bays: sp.length, rocks: Math.round(rocks),
+  return { meshes, verts, bays: sp.length, foamBays, rocks: Math.round(rocks),
     slowest: q(0), median: q(0.5), p95: q(0.95), fastest: +(sp[sp.length - 1] ?? 0).toFixed(2),
     // Past this the shader starts tearing the surface into foam.
     whitewaterPct: sp.length ? +((100 * sp.filter((v) => v > 1.7).length) / sp.length).toFixed(1) : 0 };
+};
+// A few positions ON the built rivers — mid-channel, with the local flow speed
+// — so a tool can aim a probe or a camera at real water instead of hunting for
+// it blind across a 3km scan grid.
+(window as unknown as { __riverpts?: object }).__riverpts = (max = 12): number[][] => {
+  const out: number[][] = [];
+  worldGroup.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || !o.userData.river || out.length >= max) return;
+    const p = m.geometry.attributes.position as THREE.BufferAttribute;
+    const f = m.geometry.attributes.aFlow as THREE.BufferAttribute | undefined;
+    const step = Math.max(6, Math.floor(p.count / (max * 6)) * 6);
+    for (let i = 0; i + 2 < p.count && out.length < max; i += step) {
+      // The bay's two bank vertices, averaged: mid-channel at that station.
+      out.push([+((p.getX(i) + p.getX(i + 2)) / 2).toFixed(1),
+        +((p.getZ(i) + p.getZ(i + 2)) / 2).toFixed(1),
+        f ? +f.getX(i).toFixed(2) : 0]);
+    }
+  });
+  return out;
 };
 // What the tyres are doing: sideways velocity, how much of it is a slide, and
 // what the drivetrain thinks its own speed is.
@@ -13797,6 +14140,24 @@ function wayQuality(tags: Record<string, string>, track: boolean): number {
  * a ride height, and a road drawn at road lift whose tyres sat at track lift is
  * a truck hovering over its own carriageway.
  */
+/**
+ * The physics of water of a given DEPTH, the way `surfaceFor` is the physics
+ * of ground of a given quality: one continuous ladder from a ford you barely
+ * notice to a channel that owns the truck. The old single water row sits at
+ * the deep end; the shallow end is new ground — crossing a stream at a ford
+ * is now a route choice rather than a wall of drag pretending to be water.
+ */
+function wadeParams(depth: number): SurfParams {
+  const sh = clamp(depth / 1.1, 0, 1);
+  return {
+    max: 9 - 6 * sh,           // a ford at 32km/h; deep water crawls
+    drag: 1.4 + 2.4 * sh,      // the bow wave's price rises with the hull in it
+    lift: SURFACE.water.lift,  // z-order, not physics — never interpolated
+    rough: 0.05,
+    mu: 0.5 - 0.22 * sh,       // wet rock under the tread, then none at all
+    lat: 3.4 - 1.6 * sh,
+  };
+}
 function surfaceFor(kind: Surface, q: number): SurfParams {
   const base = SURFACE[kind];
   if (kind === 'water') return base;
@@ -13972,7 +14333,10 @@ function tick(now: number): void {
   stepWeather(now, dt);
   const surfKind = surfaceAt(state.x, state.z);
   const surfQual = surfQ;                       // set by the call above
-  const surf = surfaceFor(surfKind, surfQual);
+  // In water the depth is the quality, and the current is a fact the drive
+  // model below has to answer for (see the push after integration).
+  const wInfo = surfKind === 'water' ? waterInfoAt(state.x, state.z) : null;
+  const surf = wInfo ? wadeParams(wInfo.depth) : surfaceFor(surfKind, surfQual);
   if (real.on) stepReal(dt);
   // Arcade bicycle model: thrust minus drag, steering authority grows then
   // saturates with speed so the car neither pivots in place nor becomes twitchy.
@@ -14065,6 +14429,17 @@ function tick(now: number): void {
     if (Math.abs(slideV) > 0.6) state.speed *= Math.exp(-Math.min(1.4, Math.abs(slideV) * 0.16) * dt);
     const want = clamp((Math.abs(slideV) - 0.5) / 3.5, 0, 1);
     skid += (want - skid) * Math.min(1, (want > skid ? 9 : 3.5) * dt);
+  }
+  // THE CURRENT. The flow field the river shader has been reading all along
+  // now reaches the truck: downstream, by the same solved gradient the ribbon
+  // was built from, hardest where the water is deep and fast. Standing water
+  // pushes nothing — its speed is zero. Not under real drive (the position is
+  // a measurement) and not while flying the drone (the rig is a parked
+  // object, and a current that walks it off its pin would desync the return).
+  if (wInfo && wInfo.speed > 0.45 && !real.on && !parked) {
+    const push = wInfo.speed * clamp(wInfo.depth / 0.9, 0, 1) * 0.8;
+    state.x += wInfo.fx * push * dt;
+    state.z += wInfo.fz * push * dt;
   }
   // ── revs: what the engine is doing, not what the road is doing ──
   // Grounded, the two agree and the box shifts every 14m/s. Airborne there is
@@ -14181,6 +14556,20 @@ function tick(now: number): void {
         const cost = clamp(site.s * 0.28, 0.1, 0.42);   // a big boulder bites harder
         state.speed *= 1 - cost;
         rig.hull = clamp(rig.hull - site.s * 0.004 * Math.min(1, v / 12), 0, 1);
+        audio.crash(clamp((v * cost) / 4, 0.25, 0.9));
+      }
+      // The boulders standing in the rapids: same bite-and-through, their own
+      // grid (see rapidRocks). `s` here is the rock's real radius, so the
+      // reach needs no scale factor and the bite runs a shade harder — wet
+      // stone at bumper height is not a pebble in the grass.
+      for (const rock of rapidRocks.get(`${gx},${gz}`) ?? []) {
+        if (Math.hypot(rock.x - state.x, rock.z - state.z) > CAR_R + rock.s) continue;
+        if (rock.hit !== undefined && nowMs - rock.hit < 1000) continue;
+        rock.hit = nowMs;
+        const v = Math.abs(state.speed);
+        const cost = clamp(rock.s * 0.36, 0.12, 0.45);
+        state.speed *= 1 - cost;
+        rig.hull = clamp(rig.hull - rock.s * 0.005 * Math.min(1, v / 12), 0, 1);
         audio.crash(clamp((v * cost) / 4, 0.25, 0.9));
       }
     }
@@ -14485,7 +14874,17 @@ function tick(now: number): void {
     ? clamp(Math.abs(state.speed) / 22, 0.15, 1) * (0.4 + 0.6 * Math.max(0, scrape)) : 0);
   audio.water(surfKind === 'water' && groundedF > 0.2 ? clamp(Math.abs(state.speed) / 11, 0.12, 1) : 0);
   if (surfKind === 'water' && prevSurfKind !== 'water' && Math.abs(state.speed) > 3) {
-    audio.splash(clamp(Math.abs(state.speed) / 14, 0.3, 1));
+    // The slap scales with what you drove into as well as how fast: a ford
+    // barely claps, a river arrives like a door.
+    const dfac = wInfo ? clamp(0.5 + wInfo.depth / 1.4, 0.5, 1.4) : 1;
+    audio.splash(clamp((Math.abs(state.speed) / 14) * dfac, 0.3, 1));
+  }
+  // DEEP WATER COSTS. Past hull height at any real speed the wash works the
+  // bodywork the way washboard works the dampers — slowly, legibly on the
+  // gauge, and entirely avoidable by picking the ford instead. The rate is a
+  // tenth of a boulder strike per second at full speed: pressure, not a crash.
+  if (wInfo && wInfo.depth > 0.9 && Math.abs(state.speed) > 2 && dt > 0) {
+    rig.hull = clamp(rig.hull - dt * 0.0035 * Math.min(1, Math.abs(state.speed) / 8), 0, 1);
   }
   prevSurfKind = surfKind;
   reveal(state.x, state.z);
@@ -14948,6 +15347,13 @@ function applyBiome(b: Biome): void {
   // same water as a boreal one.
   const shallow = b.ramp[0][1];
   seaMat.color.setRGB(shallow[0] * 2.2, shallow[1] * 2.2, shallow[2] * 2.2);
+  // AND SO DOES EVERY OTHER WATER. Lakes and rivers stayed one global colour
+  // while the sea travelled, so a boreal tarn met a tropical sea at the coast
+  // in two unrelated palettes. Same shallows, stepped slightly darker inland:
+  // a lake sits under its banks' shade and a river carries its valley's silt,
+  // and the step keeps the three legible against each other where they meet.
+  MAT.water.color.setRGB(shallow[0] * 2.0, shallow[1] * 2.0, shallow[2] * 2.0);
+  MAT.river.color.setRGB(shallow[0] * 1.85, shallow[1] * 1.85, shallow[2] * 1.85);
   // Sward takes the biome's own foliage hue, a shade darker and duller than a
   // canopy leaf — a dry grassland and a boreal meadow are not the same green.
   grassTint.setHSL(b.vegHue[0] + 0.012, 0.34, b.vegLit[0] * 0.82 + 0.06);
