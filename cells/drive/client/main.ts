@@ -4788,7 +4788,15 @@ const spanStats = {
   piers: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0, cats: 0, posts: 0,
   // Why a kerb quad did or did not get a batter — one counter per branch, so
   // "the fill stops halfway along this road" is attributable rather than argued.
-  fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0, fillCap: 0, gores: 0,
+  fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0, fillCap: 0,
+  /** Worst mitre stretch on the carriageway, as a multiple of the nominal
+   *  half-width — how far the drawn kerb runs outside `Seg.hw` at the sharpest
+   *  corner in the world. 1 is a straight road; the mitre is capped at 2.4. */
+  mitreMax: 1,
+  /** …and how RARE that is: stations counted, and how many stretched past 1.2.
+   *  A worst case on its own is a scare rather than a measurement — the useful
+   *  question is whether the typical bend widens at all. */
+  mitreN: 0, mitreWide: 0,
   // How big the gap actually was in the quads we declined to fill, banded —
   // so "52% had no gap" can be checked rather than believed.
   noGapBand: [0, 0, 0, 0] as number[], fillQ: 0, fillM2: 0,
@@ -5969,7 +5977,6 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const scale = 2.2 * clamp(1 / m, 1, 2.4);
     return [(mx2 / m) * scale * sgn, (mz2 / m) * scale * sgn];
   };
-  let pnx = 0, pnz = 0;   // the previous bay's half-width normal, for the gore
   let along = 0; // metres travelled — v wraps every 20m (the roadTex period)
   let pierRun = PIER_SPAN;  // so the first bay of a span gets one
   for (let i = 0; i < n - 1; i++) {
@@ -5977,65 +5984,54 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const dx = x1 - x0, dz = z1 - z0;
     const len = Math.hypot(dx, dz) || 1;
     const nx = (-dz / len) * width / 2, nz = (dx / len) * width / 2;
-    // +n is the same side the cross-fall was measured on, so the tilt adds
-    // there and subtracts opposite: the deck stays one plane per bay.
-    const y00 = (flat ? prof[i] + tilt[i] : sampleHeight(x0 + nx, z0 + nz)) + lift;
-    const y01 = (flat ? prof[i] - tilt[i] : sampleHeight(x0 - nx, z0 - nz)) + lift;
-    const y10 = (flat ? prof[i + 1] + tilt[i + 1] : sampleHeight(x1 + nx, z1 + nz)) + lift;
-    const y11 = (flat ? prof[i + 1] - tilt[i + 1] : sampleHeight(x1 - nx, z1 - nz)) + lift;
+    /**
+     * ONE CROSS-SECTION PER STATION, on the mitred kerb.
+     *
+     * The carriageway used to be a rectangle about each BAY's own centreline,
+     * with the wedge between neighbours filled by a gore. That drew the right
+     * OUTLINE and the wrong SURFACE, in two ways at once. Each bay was a plane
+     * tilted about its own axis, so two bays meeting at a station agreed on
+     * their kerb heights and disagreed about everything between: two planes
+     * through the same points, folded along a crease. And the gore that filled
+     * the gap was flat at the kerb's height, so a bend was three facets — plane,
+     * wedge, plane — where a road is one surface.
+     *
+     * Building from the STATION instead makes both bays share the same two kerb
+     * points and the same tilt axis, so there is nothing to crease along and
+     * nothing left to fill. It also puts the tarmac's edge exactly where its own
+     * furniture already stands: the fascia, the parapet and the batter have been
+     * built from kerbMitre(i) to kerbMitre(i+1) all along, and the carriageway
+     * was the one part of the section still on the bay normal.
+     *
+     * The old comment's objection — that mitring widens the road past `Seg.hw`,
+     * which is what collision and the surface lookup mean by "the road" — is
+     * real but was already true: the gore reached out to this very point, so
+     * the drawn tarmac has met the mitred kerb at every station for as long as
+     * gores have existed. What changes is only the metre or so BETWEEN stations,
+     * where the edge now runs straight between two mitred points rather than
+     * dipping back to the nominal half-width. `spanStats.mitreMax` reports the
+     * worst ratio so the size of that is a number and not a worry.
+     */
+    const [arx, arz] = kerbMitre(i, 1, width / 2), [alx, alz] = kerbMitre(i, -1, width / 2);
+    const [brx, brz] = kerbMitre(i + 1, 1, width / 2), [blx, blz] = kerbMitre(i + 1, -1, width / 2);
+    {
+      const f = Math.hypot(arx, arz) / (width / 2);
+      spanStats.mitreMax = Math.max(spanStats.mitreMax, f);
+      spanStats.mitreN++;
+      if (f > 1.2) spanStats.mitreWide++;
+    }
+    // +right is the same side the cross-fall was measured on, so the tilt adds
+    // there and subtracts opposite.
+    const y00 = (flat ? prof[i] + tilt[i] : sampleHeight(x0 + arx, z0 + arz)) + lift;
+    const y01 = (flat ? prof[i] - tilt[i] : sampleHeight(x0 + alx, z0 + alz)) + lift;
+    const y10 = (flat ? prof[i + 1] + tilt[i + 1] : sampleHeight(x1 + brx, z1 + brz)) + lift;
+    const y11 = (flat ? prof[i + 1] - tilt[i + 1] : sampleHeight(x1 + blx, z1 + blz)) + lift;
     const v0 = along / 20, v1 = (along + len) / 20;
     verts.push(
-      x0 + nx, y00, z0 + nz, x1 + nx, y10, z1 + nz, x0 - nx, y01, z0 - nz,
-      x1 + nx, y10, z1 + nz, x1 - nx, y11, z1 - nz, x0 - nx, y01, z0 - nz,
+      x0 + arx, y00, z0 + arz, x1 + brx, y10, z1 + brz, x0 + alx, y01, z0 + alz,
+      x1 + brx, y10, z1 + brz, x1 + blx, y11, z1 + blz, x0 + alx, y01, z0 + alz,
     );
     uvs.push(0, v0, 0, v1, 1, v0, 0, v1, 1, v1, 1, v0);
-    // THE CORNER GORE. Each bay is a rectangle about its OWN centreline, so at a
-    // bend the outgoing bay's kerb starts where the incoming bay's kerb
-    // finished — but rotated about the station. On the inside of the turn the
-    // two overlap harmlessly; on the OUTSIDE they part, and the wedge between
-    // them is a hole in the carriageway. At Trollstigen's hairpins that wedge is
-    // most of the road.
-    //
-    // Filled with a triangle per side, apex on the centreline, spanning from
-    // the previous bay's kerb to this one's. A gore rather than a mitre on
-    // purpose: mitring moves the kerb outward by 1/cos(half the turn), which at
-    // a hairpin is a carriageway several times its own width, and `Seg.hw` — the
-    // collision and surface half-width — would no longer describe the road that
-    // is drawn. The gore adds only the missing wedge and leaves the width alone.
-    if (i > 0) {
-      const cy = (flat ? prof[i] : elev[i]) + lift;
-      for (const sg of [1, -1]) {
-        const px1 = x0 + pnx * sg, pz1 = z0 + pnz * sg;      // previous bay's kerb
-        const cx1 = x0 + nx * sg, cz1 = z0 + nz * sg;        // this bay's kerb
-        const [mkx, mkz] = kerbMitre(i, sg, width / 2);      // where the furniture stands
-        const mx1 = x0 + mkx, mz1 = z0 + mkz;
-        const ky = sg > 0 ? y00 : y01;
-        // TWO triangles, out to the mitred point and back. One triangle from
-        // kerb to kerb closes the wedge between the bays but stops short of
-        // where the parapet, the fascia and the batter now stand, which left a
-        // sliver of daylight between the tarmac and its own edge furniture. No
-        // threshold either: the first version skipped anything under 2cm, which
-        // is most of a gentle curve — a long shallow bend is a great many small
-        // wedges, and skipping each one individually still leaves the road
-        // notched the whole way round.
-        const push3 = (ax2: number, az2: number, bx2: number, bz2: number): void => {
-          if (Math.hypot(bx2 - ax2, bz2 - az2) < 0.002) return;
-          verts.push(x0, cy, z0, ax2, ky, az2, bx2, ky, bz2);
-          uvs.push(0.5, v0, sg > 0 ? 0 : 1, v0, sg > 0 ? 0 : 1, v0);
-          if (track) {
-            const [tr2, tg2, tb2] = terrainPalette(elev[i] + baseElev, 0, sampleCover(x0, z0));
-            for (let k = 0; k < 3; k++) cols.push(tr2 * 1.06, tg2 * 0.99, tb2 * 0.9);
-          } else {
-            const c2 = tint ?? [1, 1, 1];
-            for (let k = 0; k < 3; k++) cols.push(c2[0], c2[1], c2[2]);
-          }
-          spanStats.gores++;
-        };
-        push3(px1, pz1, mx1, mz1);
-        push3(mx1, mz1, cx1, cz1);
-      }
-    }
-    pnx = nx; pnz = nz;
     // A TRACK TAKES THE GROUND'S OWN COLOUR. Two ruts painted a fixed brown sat
     // on the hillside as a stripe of somebody else's palette; sampled from
     // `terrainPalette` at the rut itself, they read as the ground worn through
@@ -6290,7 +6286,15 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
   if (cols.length === verts.length) geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(cols), 3));
   geo.computeVertexNormals();
-  worldGroup.add(new THREE.Mesh(geo, mat));
+  {
+    // Tagged so the same boundary-edge count that found the slots in the tunnel
+    // shells can be pointed at the carriageway, where the question is the same
+    // one: is this a continuous surface, or a run of separate pieces that
+    // happen to be adjacent.
+    const ribbon = new THREE.Mesh(geo, mat);
+    ribbon.userData.ribbon = true;
+    worldGroup.add(ribbon);
+  }
   // A DRAPED way is registered to be re-seated whenever the terrain beneath it
   // is rebuilt. A PROFILED one is not: its deck is a solved alignment that the
   // ground is carved to meet, and re-draping it would throw that away and put
@@ -9896,7 +9900,7 @@ function truckSpec(): Record<string, number> {
  * gallery — so the number is never zero; it is the LENGTH that matters, and it
  * is read against the same scene built the other way.
  */
-(window as unknown as { __shells?: object }).__shells = (): object => {
+(window as unknown as { __shells?: object }).__shells = (which: 'tunnel' | 'ribbon' = 'tunnel'): object => {
   let meshes = 0, tris = 0, boundary = 0, boundaryLen = 0, worst = 0, lamps = 0;
   let lampLo = Infinity, lampHi = -Infinity;
   const kinds: Record<string, number> = {};
@@ -9924,7 +9928,7 @@ function truckSpec(): Record<string, number> {
       }
       return;
     }
-    if (!o.userData.tunnel) return;
+    if (!o.userData[which]) return;
     meshes++;
     const kind = String(o.userData.shellKind ?? 'shell');
     kinds[kind] = (kinds[kind] ?? 0) + 1;
@@ -9957,11 +9961,14 @@ function truckSpec(): Record<string, number> {
       boundaryLen += len;
       worst = Math.max(worst, len);
     }
+    // A handful is enough to aim a camera with; eighty is a wall of numbers.
     const last = p.count - 1;
-    spots.push([+p.getX(0).toFixed(1), +p.getZ(0).toFixed(1),
-      +p.getX(last).toFixed(1), +p.getZ(last).toFixed(1)]);
+    if (spots.length < 6) {
+      spots.push([+p.getX(0).toFixed(1), +p.getZ(0).toFixed(1),
+        +p.getX(last).toFixed(1), +p.getZ(last).toFixed(1)]);
+    }
   });
-  return { meshes, kinds, lamps, tris, boundary,
+  return { which, meshes, kinds, lamps, tris, boundary,
     lampAboveGroundM: lamps ? [+lampLo.toFixed(2), +lampHi.toFixed(2)] : null,
     boundaryLenM: +boundaryLen.toFixed(1), worstEdgeM: +worst.toFixed(2), spots };
 };

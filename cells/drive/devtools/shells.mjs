@@ -27,11 +27,11 @@ const settle = Number(arg('settle', 40000));
 // An older build has no __shells — it is the probe that made the question
 // askable. It reads nothing but worldGroup and THREE, so it grafts on cleanly.
 const SHIM = `
-(window as unknown as { __shells?: object }).__shells = (): object => {
+(window as unknown as { __shells?: object }).__shells = (which = 'tunnel'): object => {
   let meshes = 0, tris = 0, boundary = 0, boundaryLen = 0, worst = 0;
   worldGroup.traverse((o) => {
     const m = o as THREE.Mesh;
-    if (!m.isMesh || !o.userData.tunnel) return;
+    if (!m.isMesh || !o.userData[which]) return;
     meshes++;
     const p = m.geometry.attributes.position as THREE.BufferAttribute;
     const key = (i: number): string =>
@@ -67,7 +67,30 @@ if (to) {
   await walkTo(d.page, tlat, tlon);
 }
 await d.page.waitForTimeout(settle);
-const out = await d.page.evaluate(() => window.__shells());
+const which = arg('which', 'tunnel');
+const out = await d.page.evaluate((w) => window.__shells(w), which);
 console.log(rev ? `rev ${rev}` : 'working tree', JSON.stringify(out));
+// The carriageway question also wants the mitre stretch, which is the price of
+// building on the station instead of the bay.
+if (which === 'ribbon') {
+  // __span() exists on both builds, and on the old one it counts GORES — the
+  // filler facets this change exists to remove. That is the before/after pair
+  // here, because the ribbon tag itself is new and cannot be grafted onto an
+  // older build after the fact.
+  // The mitre stretch is the price of building on the station instead of the
+  // bay: how far the drawn kerb runs outside the nominal half-width at the
+  // sharpest corner in the world.
+  const st = await d.page.evaluate(() => window.__span());
+  const pct = st.mitreN ? ((100 * st.mitreWide) / st.mitreN).toFixed(1) : '?';
+  console.log(`  mitre: worst ${(st.mitreMax ?? 1).toFixed(2)}x nominal half-width,`
+    + ` ${st.mitreWide ?? '?'} of ${st.mitreN ?? '?'} stations past 1.2x (${pct}%)`);
+  console.log(`  gores ${st.gores ?? '(gone)'}`);
+  // A continuous strip of Q quads has exactly 2Q+2 boundary edges; a run of
+  // separate pieces has more. Stating it here means the number is checked
+  // rather than admired.
+  const quads = out.tris / 2, want = out.tris + 2 * out.meshes;
+  console.log(`  strips: ${quads} quads in ${out.meshes} meshes -> boundary should be ${want}, is ${out.boundary}`
+    + `${want === out.boundary ? '  (continuous)' : '  (GAPS)'}`);
+}
 report(d.errors);
 await d.close();
