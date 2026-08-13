@@ -10150,6 +10150,52 @@ function truckSpec(): Record<string, number> {
   rows.sort((x, y) => y.dy - x.dy);
   return { pairs: rows.length, worst: rows.slice(0, 6) };
 };
+/**
+ * SPIKES IN THE CARRIAGEWAY.
+ *
+ * Building each bay between two mitred STATION sections made the road one
+ * surface, and handed it a failure the old bay-rectangle-plus-gore could not
+ * have: a mitre runs as hw/cos(half the turn), so at a sharp corner the section
+ * is far wider than the road. That was always true of the gore's outer point,
+ * but the gore was a triangle AT the station and the bay either side stayed
+ * nominal. Now the whole bay interpolates between two sections, so one capped
+ * mitre spreads a fan of tarmac halfway along both its neighbours.
+ *
+ * Each bay is six vertices in a known order — right, right-next, left / right-
+ * next, left-next, left — so the SECTION at each end is a vertex pair and its
+ * length is the road's drawn width there. Reported against the median width of
+ * the same mesh, because the nominal width is per-way and not in the geometry.
+ */
+(window as unknown as { __ribbonfold?: object }).__ribbonfold = (): object => {
+  const rows: Array<{ at: string; ratio: number; widthM: number }> = [];
+  let bays = 0;
+  worldGroup.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || !o.userData.ribbon) return;
+    const p = m.geometry.attributes.position as THREE.BufferAttribute;
+    const widths: number[] = [];
+    const at: Array<[number, number]> = [];
+    for (let v = 0; v + 5 < p.count; v += 6) {
+      // vertex 0 is the right kerb at this station, vertex 2 the left.
+      const w = Math.hypot(p.getX(v) - p.getX(v + 2), p.getZ(v) - p.getZ(v + 2));
+      widths.push(w);
+      at.push([(p.getX(v) + p.getX(v + 2)) / 2, (p.getZ(v) + p.getZ(v + 2)) / 2]);
+      bays++;
+    }
+    if (widths.length < 3) return;
+    const sorted = widths.slice().sort((a, b) => a - b);
+    const med = sorted[sorted.length >> 1] || 1;
+    for (let i = 0; i < widths.length; i++) {
+      const ratio = widths[i] / med;
+      if (ratio > 1.3) {
+        rows.push({ at: `${Math.round(at[i][0])},${Math.round(at[i][1])}`,
+          ratio: +ratio.toFixed(2), widthM: +widths[i].toFixed(1) });
+      }
+    }
+  });
+  rows.sort((a, b) => b.ratio - a.ratio);
+  return { bays, wide: rows.length, worst: rows.slice(0, 6) };
+};
 // What the tyres are doing: sideways velocity, how much of it is a slide, and
 // what the drivetrain thinks its own speed is.
 (window as unknown as { __slip?: object }).__slip = (): object => ({
