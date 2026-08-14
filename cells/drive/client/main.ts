@@ -9465,7 +9465,46 @@ const ovGroup = new THREE.Group();
 ovGroup.name = 'overview';
 ovGroup.visible = false;
 worldGroup.add(ovGroup);
-const ovMat = new THREE.MeshBasicMaterial({ vertexColors: true, side: DS });
+/**
+ * THE BACKDROP HAS TO KNOW IT IS ONE.
+ *
+ * These ribbons exist to fill in beyond the fine ring, where the road network
+ * simply stops — and the layer's own comment has always said so ("below it the
+ * fine world is the better map of itself"). It was not true in the picture: the
+ * vectors drew at full strength straight over a fully-mapped fine world, so
+ * every coast and creek came in TWICE, once as real geometry and once as a
+ * coarse ribbon a few metres beside it. Photographed on the chart at Big Sur,
+ * the mint waterway lines were the loudest thing on screen.
+ *
+ * So the layer fades on the ONE measurement that says where the fine world
+ * gives out: `osmRingR`, the radius past which the tile queue stops believing
+ * in a fine tile. Nothing inside 0.8 of it (the same handover the route line
+ * already uses), full strength past 1.25. Distance is measured from the chart's
+ * own centre, so it tracks the rig and the pan rather than the world origin.
+ */
+const ovU = {
+  uOvC: { value: new THREE.Vector2() },   // chart centre, world x/z
+  uOvR: { value: new THREE.Vector2(1e9, 2e9) },  // fade start, fade end
+};
+// depthWrite off: a faded-out ribbon still RASTERIZES, and one that wrote depth
+// would punch an invisible hole in the shell behind it — the layer is a decal
+// on the backdrop, so it reads depth (the fine terrain must still hide it) and
+// never writes any.
+const ovMat = new THREE.MeshBasicMaterial({
+  vertexColors: true, side: DS, transparent: true, depthWrite: false,
+});
+ovMat.onBeforeCompile = (sh: { vertexShader: string; fragmentShader: string; uniforms: Record<string, unknown> }) => {
+  Object.assign(sh.uniforms, ovU);
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', '#include <common>\nvarying vec2 vOvW;')
+    .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+      vOvW = (modelMatrix * vec4(transformed, 1.0)).xz;`);
+  sh.fragmentShader = sh.fragmentShader
+    .replace('#include <common>', `#include <common>
+      varying vec2 vOvW; uniform vec2 uOvC; uniform vec2 uOvR;`)
+    .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+      gl_FragColor.a *= smoothstep(uOvR.x, uOvR.y, distance(vOvW, uOvC));`);
+};
 /** A place the chart can write on the land: rank 0 city … 3 hamlet, 4 peak. */
 interface OvPlace { name: string; x: number; z: number; y: number; rank: number }
 const ovPlaces = new Map<string, OvPlace>();
@@ -9492,13 +9531,18 @@ function dropRetiredOv(): void {
 // The chart's palette. Roads in the minimap's bone-and-amber so the two maps
 // agree with each other; water in the map's own blue; rail dark; the coast a
 // deeper cyan. Multipliers are ribbon width relative to the level's base.
+// Weights are the ROAD HIERARCHY, and water is not top of it. The old table
+// gave a creek 1.1 and a coastline 0.9 against a trunk road's 1.5, so on a
+// coastal chart the two loudest lines on screen were both water — and the
+// coast is already drawn, in colour, by the shell underneath. Water is the
+// thinnest, dimmest class here now: a hint of the drainage, not the subject.
 const OV_STYLE: Array<[(t: Record<string, string>) => boolean, [number, number, number], number]> = [
-  [(t) => t.highway === 'motorway' || t.highway === 'trunk', [0.96, 0.77, 0.33], 1.5],
-  [(t) => t.highway === 'primary', [0.91, 0.87, 0.78], 1.15],
-  [(t) => !!t.highway, [0.66, 0.63, 0.56], 0.85],
-  [(t) => !!t.railway, [0.42, 0.4, 0.36], 0.6],
-  [(t) => t.natural === 'coastline', [0.3, 0.47, 0.5], 0.9],
-  [(t) => !!t.waterway, [0.38, 0.52, 0.62], 1.1],
+  [(t) => t.highway === 'motorway' || t.highway === 'trunk', [0.82, 0.66, 0.31], 1.3],
+  [(t) => t.highway === 'primary', [0.74, 0.71, 0.64], 1.0],
+  [(t) => !!t.highway, [0.56, 0.54, 0.48], 0.72],
+  [(t) => !!t.railway, [0.4, 0.38, 0.35], 0.5],
+  [(t) => t.natural === 'coastline', [0.29, 0.4, 0.44], 0.5],
+  [(t) => !!t.waterway, [0.32, 0.42, 0.5], 0.5],
 ];
 async function loadOvTile(x: number, y: number): Promise<void> {
   const z = ovZ;
@@ -9532,7 +9576,17 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   // Ground height under a lat/lon, from this tile's own DEM — the same
   // convention as the far shell (absolute − baseElev − FAR_DROP − curve),
   // lifted enough to clear the coarse mesh's interpolation between vertices.
-  const lift = tileMetres(z) * 0.004 + 12;
+  // CLEAR THE COARSE MESH, DO NOT HOVER OVER IT. The far shell samples the DEM
+  // on a 64×64 lattice while these ribbons sample it at 256, so a line laid at
+  // the true height sinks into the mesh wherever the lattice cut a corner —
+  // which is what the lift is for. But it was scaled off the TILE, so it grew
+  // to 127m at z10 and the whole layer became a web hanging over the landscape,
+  // never occluded by anything, drawn across ridges and open sea alike.
+  // Measured at Big Sur: a median 12.5m of daylight under ribbons on ground the
+  // fine world had already mapped. Bounded now — enough to beat the lattice,
+  // never enough to leave the hillside, and always under FAR_DROP so the fine
+  // terrain still wins wherever it exists.
+  const lift = Math.min(FAR_DROP - 3, tileMetres(z) * 0.0012 + 1.5);
   const yAt = (la: number, lo: number, wx: number, wz: number): number => {
     if (!dem) return -FAR_DROP + lift - curveDrop(wx, wz);
     const u = clamp(Math.round(((lo - b.lonW) / (b.lonE - b.lonW)) * 255), 0, 255);
@@ -9586,10 +9640,34 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
 }
 // What the chart's coarse layer is holding, for the tools.
-(window as unknown as { __overview?: object }).__overview = (): object => ({
-  level: ovZ, tiles: ovMeshes.size, retired: ovRetired.length,
-  places: ovPlaces.size, shown: ovGroup.visible,
-});
+//
+// `float` is the one that matters: how far the drawn ribbon sits ABOVE the
+// ground the player is actually looking at. The layer is meant to be a
+// backdrop drawn on the coarse shell, so a positive float here means it is
+// a web hanging over the fine world — which is exactly how it photographs.
+(window as unknown as { __overview?: object }).__overview = (): object => {
+  const fl: number[] = [];
+  for (const m of ovMeshes.values()) {
+    const p = m.geometry.getAttribute('position');
+    for (let i = 0; i < p.count && fl.length < 600; i += 37) {
+      const x = p.getX(i), z = p.getZ(i);
+      if (!hasHeight(x, z)) continue;          // only where the FINE world exists
+      fl.push(p.getY(i) + m.position.y - sampleHeight(x, z));
+    }
+  }
+  fl.sort((a, b) => a - b);
+  return {
+    level: ovZ, tiles: ovMeshes.size, retired: ovRetired.length,
+    places: ovPlaces.size, shown: ovGroup.visible,
+    viewR: Math.round(viewRadius()), zoom: +zoomCur.toFixed(1),
+    ribbonW: +(tileMetres(ovZ) * 0.016).toFixed(1),
+    // Where the layer is allowed to start showing at all, against the fine
+    // ring it is meant to be standing in for.
+    fineR: Math.round(osmRingR), fade: [Math.round(ovU.uOvR.value.x), Math.round(ovU.uOvR.value.y)],
+    float: fl.length ? { n: fl.length, med: +fl[fl.length >> 1].toFixed(1),
+      max: +fl[fl.length - 1].toFixed(1) } : null,
+  };
+};
 
 // ── the car: monster-truck stance with per-wheel suspension ────────
 // The group's origin is the AXLE PLANE (wheel centres at rest). The body
@@ -15677,6 +15755,10 @@ function tick(now: number): void {
     // the same gate: below it the fine world is the better map of itself.
     farGroup.visible = zoomCur > 6;
     ovGroup.visible = zoomCur > 6;
+    // …and where the coarse vectors are allowed to start showing: only where
+    // the fine ring has given out. `osmRingR` is that radius, measured by the
+    // tile queue rather than guessed at.
+    ovU.uOvR.value.set(osmRingR * 0.8, osmRingR * 1.25);
     // Pan is a glance around the chart — it drifts home once you drive.
     if (stick || Math.abs(state.speed) > 6 || drone.up) { const f = Math.exp(-2.5 * dt); panX *= f; panZ *= f; }
     // THE CHART IS OVER WHOEVER IS CURRENT. Flying, that is the drone: opening
@@ -15689,6 +15771,11 @@ function tick(now: number): void {
     // The camera stands OPPOSITE whatever screen-up is meant to point at: due
     // south of the target for north-up, behind the truck along its own heading
     // for heading-up. One offset, one angle, and the tilt is untouched.
+    // Centred on the RIG, because that is what the fine ring is centred on —
+    // `streamWorld` is called with the rig's position, not the chart's. Using
+    // the panned chart centre would drag the hole in the layer around with the
+    // glance and leave the ring itself uncovered.
+    ovU.uOvC.value.set(osmCarX, osmCarZ);
     const mrot = mapRot();
     const back = dist * Math.cos(tiltRad);
     camPos.set(tvx + panX - Math.sin(mrot) * back,
@@ -16003,11 +16090,20 @@ function tick(now: number): void {
     }
     miniCam.updateProjectionMatrix();
     if (lastPov === 'cab') ghostCab(true);
+    // THE DOCK IS A POV, so it gets the POV's world. Both shells were left
+    // standing because the chart branch above had just switched them ON for
+    // its own camera, and the dock renders the SAME scene — so the preview
+    // showed the coarse backdrop and the overview vectors hanging in it,
+    // which is neither what the chase view looks like nor what the tap drops
+    // you into. Off for the blit, back on for the chart.
+    const ovWas = ovGroup.visible, farWas = farGroup.visible;
+    ovGroup.visible = false; farGroup.visible = false;
     // Through the SAME low-res target, nearest magnification, sRGB encode,
     // grade and palette dither as the world. Rendered straight to the screen it
     // was a smooth, full-colour window inside a hand-built bitmap HUD — the one
     // thing on screen that did not look like the game.
     blitPixelated(scene, miniCam, vx, vy, vw, vh);
+    ovGroup.visible = ovWas; farGroup.visible = farWas;
     if (lastPov === 'cab') ghostCab(false);
   }
   { const bay = menu.bayRect(); if (bay) renderStudio(dt, bay); }
