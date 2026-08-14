@@ -9459,6 +9459,8 @@ let ovZ = OV_LEVELS[0];
 const ovTiles = new Set<string>();
 const ovMeshes = new Map<string, THREE.Mesh>();
 let ovRetired: THREE.Mesh[] = [];
+/** Overview tiles that arrived with vectors but no heights to lay them on. */
+let ovDemless = 0;
 let ovInFlight = 0;
 const ovQueue: Array<() => void> = [];
 const ovGroup = new THREE.Group();
@@ -9587,8 +9589,23 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   // never enough to leave the hillside, and always under FAR_DROP so the fine
   // terrain still wins wherever it exists.
   const lift = Math.min(FAR_DROP - 3, tileMetres(z) * 0.0012 + 1.5);
+  // NO GROUND, NO LINES. Without heights the ribbons fell back to a FLAT plane
+  // at the origin's own elevation, which over a canyon or the open sea is the
+  // floating web all over again — measured live at Big Sur, one sample 334m
+  // over the terrain while the median sat 7m under it. The far shell already
+  // refuses to build a tile it has no heights for; this layer, whose whole job
+  // is to lie on that shell, has even less business inventing them. The key is
+  // KEPT so the tile counts as landed and the stream stops asking.
+  // …and it still has to report for duty: a demless tile is a LANDED tile, and
+  // the retired level is dropped by whoever lands last. Returning past this
+  // left the outgoing level standing under the new one whenever the last tile
+  // of a batch had no heights.
+  if (!dem) {
+    ovDemless++;
+    if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
+    return;
+  }
   const yAt = (la: number, lo: number, wx: number, wz: number): number => {
-    if (!dem) return -FAR_DROP + lift - curveDrop(wx, wz);
     const u = clamp(Math.round(((lo - b.lonW) / (b.lonE - b.lonW)) * 255), 0, 255);
     const v = clamp(Math.round(((b.latN - la) / (b.latN - b.latS)) * 255), 0, 255);
     return dem[v * 256 + u] - baseElev - FAR_DROP - curveDrop(wx, wz) + lift;
@@ -9657,7 +9674,7 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   }
   fl.sort((a, b) => a - b);
   return {
-    level: ovZ, tiles: ovMeshes.size, retired: ovRetired.length,
+    level: ovZ, tiles: ovMeshes.size, retired: ovRetired.length, demless: ovDemless,
     places: ovPlaces.size, shown: ovGroup.visible,
     viewR: Math.round(viewRadius()), zoom: +zoomCur.toFixed(1),
     ribbonW: +(tileMetres(ovZ) * 0.016).toFixed(1),
