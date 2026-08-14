@@ -9663,15 +9663,24 @@ function buildOvTile(key: string, x: number, y: number, z: number,
 // backdrop drawn on the coarse shell, so a positive float here means it is
 // a web hanging over the fine world — which is exactly how it photographs.
 (window as unknown as { __overview?: object }).__overview = (): object => {
-  const fl: number[] = [];
+  // AGAINST THE SURFACE YOU CAN SEE, not the one under the water. Measured
+  // against bare terrain this read p95 162m and called a fifth of the layer
+  // "floating" — because a coastline ribbon lies at sea level over a seabed
+  // carved 300m down, which on screen is a line sitting on the water exactly
+  // where it belongs. The seabed is not what occludes the ribbon; the sea is.
+  const fl: number[] = [], wet: number[] = [];
   for (const m of ovMeshes.values()) {
     const p = m.geometry.getAttribute('position');
-    for (let i = 0; i < p.count && fl.length < 600; i += 37) {
+    for (let i = 0; i < p.count && fl.length + wet.length < 900; i += 37) {
       const x = p.getX(i), z = p.getZ(i);
       if (!hasHeight(x, z)) continue;          // only where the FINE world exists
-      fl.push(p.getY(i) + m.position.y - sampleHeight(x, z));
+      const g = sampleHeight(x, z);
+      const overSea = seaOn && g < sea.position.y;
+      const surface = overSea ? sea.position.y : g;
+      (overSea ? wet : fl).push(p.getY(i) + m.position.y - surface);
     }
   }
+  wet.sort((a, b) => a - b);
   fl.sort((a, b) => a - b);
   return {
     level: ovZ, tiles: ovMeshes.size, retired: ovRetired.length, demless: ovDemless,
@@ -9685,6 +9694,12 @@ function buildOvTile(key: string, x: number, y: number, z: number,
       p95: +fl[Math.floor(fl.length * 0.95)].toFixed(1),
       over2: fl.filter((v) => v > 2).length,
       max: +fl[fl.length - 1].toFixed(1) } : null,
+    // …and the same reading for the ribbons lying on water, kept apart because
+    // they are a different question: not "does it hug the hill" but "does it
+    // sit on the sea".
+    afloat: wet.length ? { n: wet.length, med: +wet[wet.length >> 1].toFixed(1),
+      p95: +wet[Math.floor(wet.length * 0.95)].toFixed(1),
+      max: +wet[wet.length - 1].toFixed(1) } : null,
   };
 };
 
