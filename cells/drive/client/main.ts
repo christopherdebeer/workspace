@@ -6335,6 +6335,11 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
    *  edges cross the HOST's kerb line, plus the host's direction there for
    *  the mouth patch. Null = no crop: a free end, or a continuation. */
   const cropEnd: Array<{ sR: number; sL: number; hx: number; hz: number; skip: number } | null> = [null, null];
+  /** The HOST'S PLANE at each warped end — deck, gradient and cross-fall
+   *  fitted from the host itself — so the approach, the cut edge and the
+   *  mouth patch all answer to one surface. Null where no host, where the
+   *  host is unbuilt (pre-grid), or where the decks are grade-separated. */
+  const endPlane: Array<((x: number, z: number) => number) | null> = [null, null];
   if (drivable && !track && n > 3) {
     // Stations to fade over, ~60m at 12m steps — but never more than the way
     // HAS. A four-station way walked off the end of `dense` and threw, which a
@@ -6359,15 +6364,61 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // whole of what the eye wants here. Only a strictly NARROWER road is
       // refused, so a driveway still cannot drag a trunk road onto its camber.
       if (at0.hw < width / 2 - 0.4) { spanStats.warpNoHost++; spanStats.warpNotWider++; continue; }
+      /**
+       * THE HOST IS A PLANE LOCALLY, and a plane can be evaluated anywhere —
+       * including under stations standing well off its tarmac. The old form
+       * asked `roadHeightAt` at each station's kerbs and gave up the moment
+       * they left the host's carriageway, which at a T is after ONE station:
+       * the entire disagreement between this way's own solve and the host's
+       * surface was absorbed in a single 12m bay, and the twist dressed
+       * itself in that bay's concrete fascia — the slab photographed hanging
+       * at the Coast/Bixby mouth. Fitted from three samples on the host
+       * (deck at the node, gradient along it, cross-fall across it), the
+       * plane lets the SAME fade the warp always had actually run its full
+       * ~60m: a metre of disagreement becomes an invisible grade change.
+       */
+      const nodeX = dense[i0][0], nodeZ = dense[i0][1];
+      const hy0 = roadHeightAt(nodeX, nodeZ, 1.2);
+      if (hy0 === null) { spanStats.warped++; continue; }   // unbuilt host (pre-grid): geometry crop only
+      // A FLYOVER'S DECK MUST NOT BE PULLED DOWN. Same constant, same meaning
+      // as everywhere else: past GRADE_SEP the two roads are passing, not
+      // meeting, and the parapet across the line below is the whole point.
+      if (Math.abs(hy0 - prof[i0]) > GRADE_SEP) { spanStats.warpNoHost++; continue; }
       spanStats.warped++;
-      for (let k = 0; k < WARP; k++) {
+      const s8 = 8;
+      const cpx = -at0.uz, cpz = at0.ux;
+      const cw = Math.max(1.5, at0.hw * 0.6);
+      const hyA = roadHeightAt(nodeX + at0.ux * s8, nodeZ + at0.uz * s8, 1.2);
+      const hyB = roadHeightAt(nodeX - at0.ux * s8, nodeZ - at0.uz * s8, 1.2);
+      const hyC = roadHeightAt(nodeX + cpx * cw, nodeZ + cpz * cw, 1.2);
+      // Grades a real road can hold: the fit is three samples on a possibly
+      // curving host, and an unclamped gradient extrapolates its own fiction.
+      const gAlong = clamp(hyA !== null && hyB !== null ? (hyA - hyB) / (2 * s8)
+        : hyA !== null ? (hyA - hy0) / s8
+        : hyB !== null ? (hy0 - hyB) / s8 : 0, -0.18, 0.18);
+      const gCross = clamp(hyC !== null ? (hyC - hy0) / cw : 0, -0.18, 0.18);
+      const gx = at0.ux * gAlong + cpx * gCross;
+      const gz = at0.uz * gAlong + cpz * gCross;
+      const plane = (qx: number, qz: number): number => hy0 + (qx - nodeX) * gx + (qz - nodeZ) * gz;
+      endPlane[end] = plane;
+      // NEVER THE FAR END'S OWN STATIONS. On a short way the old break-on-null
+      // kept the fade from ever reaching the other end; the plane answers
+      // everywhere, and the first run of this warp dragged a 4-station service
+      // way's FAR node 2m onto an extrapolation — measured as a new 2.05m
+      // centreline step at Chapman's junction checkpoint. The far end is
+      // somebody else's junction or continuation; it is not this end's to move.
+      const kMax = Math.min(WARP, n - 2);
+      for (let k = 0; k < kMax; k++) {
         const i = end === 0 ? k : n - 1 - k;
         const [rx, rz] = kerbMitre(i, 1, width / 2), [lx, lz] = kerbMitre(i, -1, width / 2);
-        const hR = roadHeightAt(dense[i][0] + rx, dense[i][1] + rz, 0.6);
-        const hL = roadHeightAt(dense[i][0] + lx, dense[i][1] + lz, 0.6);
-        if (hR === null || hL === null) break;      // off the host: nothing to lie on
+        // The plane at this station's own kerbs — answered everywhere, so
+        // the FADE governs the transition, not the kerb's luck at landing on
+        // the host's tarmac. Clamped: extrapolation may EASE a station, never
+        // relocate it.
+        const hR = plane(dense[i][0] + rx, dense[i][1] + rz);
+        const hL = plane(dense[i][0] + lx, dense[i][1] + lz);
         const w = 1 - k / WARP;
-        prof[i] += ((hR + hL) * 0.5 - prof[i]) * w;
+        prof[i] += clamp((hR + hL) * 0.5 - prof[i], -GRADE_SEP, GRADE_SEP) * w;
         tilt[i] += ((hR - hL) * 0.5 - tilt[i]) * w;
       }
     }
@@ -6431,6 +6482,17 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       if (at0.track) { clog('host-is-track'); continue; }
       if (at0.out >= -0.6) { clog('not-inside-host', { out: +at0.out.toFixed(2) }); continue; }
       if (at0.hw < width / 2 - 0.4) { clog('host-narrower', { host: at0.nm }); continue; }
+      // A FLYOVER IS NOT A MOUTH. Past GRADE_SEP the two roads are passing,
+      // not meeting, and neither the cut nor the seat may apply — pulling a
+      // viaduct's edge down to the road below it is worse than any overlap.
+      // Gated only when the host is BUILT (its deck is knowable); dependency
+      // ordering makes that the common case.
+      const ownY0 = flat ? prof[i0] : elev[i0];
+      const hostY0 = roadHeightAt(ex0, ez0, 1.2);
+      if (hostY0 !== null && Math.abs(hostY0 - ownY0) > GRADE_SEP) {
+        clog('grade-separated', { out: +(hostY0 - ownY0).toFixed(2) });
+        continue;
+      }
       const iN0 = end === 0 ? 1 : n - 2;
       const ddx = dense[iN0][0] - ex0, ddz = dense[iN0][1] - ez0;
       const dl = Math.hypot(ddx, ddz) || 1;
@@ -6550,19 +6612,22 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
      * break itself — and gives the junction the one marking that says who
      * yields. Heights from the host's own surface, so it lies in its plane.
      */
-    const mouth = (c: { sR: number; sL: number; hx: number; hz: number }, R: number[], L: number[], inX: number, inZ: number): void => {
+    const mouth = (c: { sR: number; sL: number; hx: number; hz: number }, R: number[], L: number[], inX: number, inZ: number, pl?: ((x: number, z: number) => number) | null): void => {
       const il = Math.hypot(inX, inZ) || 1;
       const ix = inX / il, iz = inZ / il;          // unit, into the side road
-      const f = Math.min(width * 0.45, 3.2);       // the flare along the kerb
+      // SLIM. The geometry meets the host in one plane now, so the patch is
+      // back to being a marking — the give-way bar and a break in the host's
+      // edge line — not a smoothing device doing the approach's work.
+      const f = Math.min(width * 0.3, 2.2);        // the flare along the kerb
       const sgnD = Math.sign((R[0] - L[0]) * c.hx + (R[2] - L[2]) * c.hz) || 1;
       const ex2 = c.hx * sgnD, ez2 = c.hz * sgnD;  // along the kerb, L→R sense
       const co: Array<[number, number]> = [
-        [R[0] + ex2 * f - ix * 1.0, R[2] + ez2 * f - iz * 1.0],
-        [L[0] - ex2 * f - ix * 1.0, L[2] - ez2 * f - iz * 1.0],
-        [R[0] + ex2 * f * 0.4 + ix * 1.6, R[2] + ez2 * f * 0.4 + iz * 1.6],
-        [L[0] - ex2 * f * 0.4 + ix * 1.6, L[2] - ez2 * f * 0.4 + iz * 1.6],
+        [R[0] + ex2 * f - ix * 0.6, R[2] + ez2 * f - iz * 0.6],
+        [L[0] - ex2 * f - ix * 0.6, L[2] - ez2 * f - iz * 0.6],
+        [R[0] + ex2 * f * 0.4 + ix * 1.2, R[2] + ez2 * f * 0.4 + iz * 1.2],
+        [L[0] - ex2 * f * 0.4 + ix * 1.2, L[2] - ez2 * f * 0.4 + iz * 1.2],
       ];
-      const ys = co.map(([px2, pz2]) => (roadHeightAt(px2, pz2, 2.5) ?? (R[1] + L[1]) / 2 - lift) + lift + 0.004);
+      const ys = co.map(([px2, pz2]) => (pl ? pl(px2, pz2) : (roadHeightAt(px2, pz2, 2.5) ?? (R[1] + L[1]) / 2 - lift)) + lift + 0.004);
       const uw = Math.hypot(R[0] - L[0], R[2] - L[2]) / 6 + 0.3;
       quad(apron.moV, apron.moUV,
         [co[0][0], ys[0], co[0][1], co[1][0], ys[1], co[1][1],
@@ -6575,28 +6640,40 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const cropA = cropEnd[0] && i === cropEnd[0].skip ? cropEnd[0] : null;
     const cropB = cropEnd[1] && i === n - 2 - cropEnd[1].skip ? cropEnd[1] : null;
     const hidden = !!((cropEnd[0] && i < cropEnd[0].skip) || (cropEnd[1] && i > n - 2 - cropEnd[1].skip));
+    // A MOUTH IS NOT A VIADUCT END. The cut bay used to drag its full
+    // roadside dressing through the transition — concrete deck fascia,
+    // batter, rails — and the twisted skirt under its kerb was the pale slab
+    // photographed hanging over the Coast/Bixby mouth. The mouth bay gets a
+    // kerb lip and nothing else.
+    const mouthBay = !!(cropA || cropB);
     // THE CUT EDGE LIES ON THE HOST'S SURFACE, exactly. Its plan position is
     // the host's kerb line, so its height is the host's deck there — NOT the
     // lerp of this way's own stations, which left the corner far from the
     // node floating at its own deck height over the gore, with its batter
     // face showing as a wedge at every mouth (the report that found this).
-    const seat = (C: number[]): void => {
-      const h = roadHeightAt(C[0], C[2], 1.5);
-      if (h !== null) C[1] = h + lift;
+    const seat = (C: number[], e: 0 | 1): void => {
+      // The HOST'S PLANE where the warp fitted one — the same surface the
+      // whole approach just eased onto — the nearest built deck otherwise
+      // (tracks, unbuilt hosts). Always CLAMPED: a seat is a small correction
+      // onto a surface the approach already meets, never a drop onto
+      // whatever happens to lie below.
+      const pl = endPlane[e];
+      const target = pl ? pl(C[0], C[2]) : roadHeightAt(C[0], C[2], 1.5);
+      if (target !== null && Math.abs(target + lift - C[1]) < 2.5) C[1] = target + lift;
     };
     if (cropA) {
       AR = lerpC(BR, AR, cropA.sR);
       AL = lerpC(BL, AL, cropA.sL);
-      seat(AR); seat(AL);
+      seat(AR, 0); seat(AL, 0);
       // No mouth furniture for a dirt way: the patch is painted tarmac, and a
       // track's mouth is just the ground meeting the road it uses.
-      if (!track) mouth(cropA, AR, AL, x1 - x0, z1 - z0);
+      if (!track) mouth(cropA, AR, AL, x1 - x0, z1 - z0, endPlane[0]);
     }
     if (cropB) {
       BR = lerpC(AR, BR, cropB.sR);
       BL = lerpC(AL, BL, cropB.sL);
-      seat(BR); seat(BL);
-      if (!track) mouth(cropB, BR, BL, x0 - x1, z0 - z1);
+      seat(BR, 1); seat(BL, 1);
+      if (!track) mouth(cropB, BR, BL, x0 - x1, z0 - z1, endPlane[1]);
     }
     if (!hidden) {
       verts.push(
@@ -6632,7 +6709,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // own height left a sliver of daylight along the downhill side.
       const ox = (-dz / len) * 2.2, oz = (dx / len) * 2.2;
       const uA = along / 8, uB = (along + len) / 8;
-      const deck = deckRun[i] || deckRun[i + 1];
+      const deck = (deckRun[i] || deckRun[i + 1]) && !mouthBay;
       const dd = deckDepth(Math.max(daylight[i], daylight[i + 1]));
       const bot: number[] = [];
       const drop: number[] = [];
@@ -6663,8 +6740,8 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // question. Only asked where something stands in the way at all: the
         // answer costs a walk over the road grid, and on flat ground the fascia
         // is a kerb lip that blocks nothing.
-        const open = (railHere || Math.max(ey0 - b0, ey1 - b1) > 1.2)
-          && roadMeetsHere(x0, z0, x1, z1, width / 2, (ey0 + ey1) / 2, fid, name);
+        const open = mouthBay || ((railHere || Math.max(ey0 - b0, ey1 - b1) > 1.2)
+          && roadMeetsHere(x0, z0, x1, z1, width / 2, (ey0 + ey1) / 2, fid, name));
         if (open) juncStats.opened++;
         // Where it opens, the fascia is cut back to a kerb lip: enough to close
         // the seam between the two decks, not enough to be a wall between them.
@@ -6698,7 +6775,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // So the kerb is recorded and the shoulder is built later, against the
         // ground that actually ends up there — see flushBatter.
         if (deck) spanStats.fillDeck++;
-        if (!deck) {
+        if (!deck && !mouthBay) {
           const [maX, maZ] = mitreAt(i, sgn);
           const [mbX, mbZ] = mitreAt(i + 1, sgn);
           pendingBatter.push({
