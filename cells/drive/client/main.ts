@@ -4435,7 +4435,7 @@ const noteJunction = (x: number, z: number): void => solver.noteJunction(x, z);
  */
 function roadMeetsHere(
   ax: number, az: number, bx: number, bz: number, hw: number, y: number, fid: number, name?: string,
-): boolean {
+): { p: boolean; m: boolean } {
   const L = Math.hypot(bx - ax, bz - az);
   // Reach a little past each end, so the gap opens wide enough to drive through
   // rather than leaving a stub of rail across the mouth of the turning.
@@ -4443,6 +4443,21 @@ function roadMeetsHere(
   const x0 = ax - ex, z0 = az - ez, x1 = bx + ex, z1 = bz + ez;
   const rl = Math.hypot(x1 - x0, z1 - z0) || 1;
   const ux = (x1 - x0) / rl, uz = (z1 - z0) / rl;
+  // WHICH SIDE the turning is on. The answer used to be a bare boolean, and a
+  // car-park aisle meeting from the hillside opened the SEAWARD parapet with
+  // it — photographed from the drone as a viaduct with open sides. The kerb
+  // that opens is the kerb the other road actually reaches: +normal is the
+  // apron loop's sgn>0 side, and a hit near the centreline (a crossing)
+  // opens both.
+  const nx2 = -uz, nz2 = ux;
+  const mx2 = (x0 + x1) / 2, mz2 = (z0 + z1) / 2;
+  const out = { p: false, m: false };
+  const claim = (px2: number, pz2: number): void => {
+    const side = (px2 - mx2) * nx2 + (pz2 - mz2) * nz2;
+    if (Math.abs(side) < 1.2) { out.p = true; out.m = true; }
+    else if (side > 0) out.p = true;
+    else out.m = true;
+  };
   const seen = new Set<Seg>();
   const steps = Math.max(1, Math.ceil(rl / (GRID / 2)));
   for (let s = 0; s <= steps; s++) {
@@ -4452,8 +4467,9 @@ function roadMeetsHere(
     // centreline, so no width allowance is needed and no height test either:
     // the pin that recorded it is what made the two decks agree.
     for (const [jx, jz] of juncGrid.get(gkey(qx, qz)) ?? []) {
-      if (ptSegDist(jx, jz, x0, z0, x1, z1) < hw + 2) return true;
+      if (ptSegDist(jx, jz, x0, z0, x1, z1) < hw + 2) claim(jx, jz);
     }
+    if (out.p && out.m) return out;
     for (const seg of roadGrid.get(gkey(qx, qz)) ?? []) {
       if (seen.has(seg)) continue;
       seen.add(seg);
@@ -4465,10 +4481,18 @@ function roadMeetsHere(
       if (Math.abs(ux * ((seg.bx - seg.ax) / l) + uz * ((seg.bz - seg.az) / l)) > 0.82) continue;
       if (segSegDist(x0, z0, x1, z1, seg.ax, seg.az, seg.bx, seg.bz) - seg.hw - hw > 1.5) continue;
       if (Math.abs((seg.ya + seg.yb) / 2 + SURFACE.road.lift - y) >= GRADE_SEP) continue;
-      return true;
+      // The seg's nearest end-or-mid to our line carries the side.
+      const cands: Array<[number, number]> = [[seg.ax, seg.az], [seg.bx, seg.bz], [(seg.ax + seg.bx) / 2, (seg.az + seg.bz) / 2]];
+      let best = cands[0], bd = Infinity;
+      for (const c of cands) {
+        const d = ptSegDist(c[0], c[1], x0, z0, x1, z1);
+        if (d < bd) { bd = d; best = c; }
+      }
+      claim(best[0], best[1]);
+      if (out.p && out.m) return out;
     }
   }
-  return false;
+  return out;
 }
 /**
  * Do two or more differently-aligned roads meet within reach of this point?
@@ -5046,7 +5070,7 @@ const apron = {
   moV: [] as number[], moUV: [] as number[],
 };
 const spanStats = {
-  piers: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0, cats: 0, posts: 0,
+  piers: 0, arches: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0, cats: 0, posts: 0,
   // Why a kerb quad did or did not get a batter — one counter per branch, so
   // "the fill stops halfway along this road" is attributable rather than argued.
   fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0, fillCap: 0,
@@ -5107,7 +5131,7 @@ const pendingBatter: Batter[] = [];
  * and the third is the only one that is a bug. Bounded; read by `__edges`.
  */
 const edgeLog: Array<{ x: number; z: number; rail: boolean; batter: boolean;
-  met: boolean; clip: boolean; gap: number; reach: number }> = [];
+  met: boolean; clip: boolean; gap: number; reach: number; nm?: string }> = [];
 /** Every junction-crop decision, with its reason — "why is this mouth still
  *  overlapping" was unanswerable from a screenshot, because eligibility
  *  depends on what was BUILT when this way built, which no probe can
@@ -6165,6 +6189,36 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         [0, 0, 1, 0, 0, h, 1, h]);
     }
   };
+  // Spandrel walls between two consecutive piers, so a run of them reads as an
+  // aqueduct rather than a row of posts: a pair of thin faces just inside the
+  // pier edges whose lower edge rises to a shallow crown at mid-span and drops
+  // to the springing beside each pier. The deck's soffit closes the top and the
+  // piers close the ends, so two hanging curtains are all the arch needs.
+  const arch = (a: { x: number; z: number; top: number; bot: number },
+    b: { x: number; z: number; top: number; bot: number }, halfW: number): void => {
+    const dx = b.x - a.x, dz = b.z - a.z;
+    const gap = Math.hypot(dx, dz);
+    if (gap < 8 || gap > 45) return;
+    spanStats.arches++;
+    const vx = -dz / gap, vz = dx / gap;
+    const crownDrop = clamp(gap * 0.18, 0.7, 2.0);
+    const springDrop = clamp(gap * 0.75, 3, 10);
+    const floor = Math.min(a.bot, b.bot);
+    const topAt = (t: number): number => a.top + (b.top - a.top) * t;
+    const lowAt = (t: number): number => Math.max(floor,
+      topAt(t) - crownDrop - (springDrop - crownDrop) * Math.abs(Math.cos(Math.PI * t)));
+    const SEG = 8;
+    for (const s of [1, -1]) {
+      for (let k = 0; k < SEG; k++) {
+        const t0 = k / SEG, t1 = (k + 1) / SEG;
+        const px0 = a.x + dx * t0 + vx * halfW * s, pz0 = a.z + dz * t0 + vz * halfW * s;
+        const px1 = a.x + dx * t1 + vx * halfW * s, pz1 = a.z + dz * t1 + vz * halfW * s;
+        quad(apron.dckV, apron.dckUV,
+          [px0, topAt(t0), pz0, px1, topAt(t1), pz1, px0, lowAt(t0), pz0, px1, lowAt(t1), pz1],
+          [gap * t0 / 4, 0, gap * t1 / 4, 0, gap * t0 / 4, springDrop / 4, gap * t1 / 4, springDrop / 4]);
+      }
+    }
+  };
   // The parapet, standing on the deck's own overhang — and SOLID. A barrier you
   // can see and drive straight through is worse than no barrier: it tells you
   // the edge is protected and then isn't. It goes in the wall grid, where the
@@ -6202,14 +6256,19 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   let postRun = 0;         // …and since the last reflector post
   const rail = (
     xA: number, yA: number, zA: number, xB: number, yB: number, zB: number, u0: number, u1: number,
+    solid = true,
   ): void => {
     const L = Math.hypot(xB - xA, zB - zA);
     spanStats.railM += L;
     quad(apron.rlV, apron.rlUV,
       [xA, yA + RAIL_H, zA, xB, yB + RAIL_H, zB, xA, yA - 0.15, zA, xB, yB - 0.15, zB],
       [u0, 0, u1, 0, u0, 1, u1, 1]);
+    // `solid: false` is the narrow-deck parapet: a way slimmer than RAIL_MIN_W
+    // still gets the visual barrier a bridge always has, but no wall segment —
+    // two solid walls 4.5m apart would hold the truck like a vice, which is
+    // the exact wedging the width gate exists to prevent.
     const top = Math.max(yA, yB) + RAIL_H;
-    addSeg(wallGrid, { ax: xA, az: zA, bx: xB, bz: zB, hw: 0, ya: top, yb: top, sl: true });
+    if (solid) addSeg(wallGrid, { ax: xA, az: zA, bx: xB, bz: zB, hw: 0, ya: top, yb: top, sl: true });
     // CAT'S EYES on the parapet, spaced by world distance so the run stays even
     // through the short bays a bend is made of.
     const ux = (xB - xA) / (L || 1), uz = (zB - zA) / (L || 1);
@@ -6544,6 +6603,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   }
   let along = 0; // metres travelled — v wraps every 20m (the roadTex period)
   let pierRun = PIER_SPAN;  // so the first bay of a span gets one
+  // The last pier stood, for the arch back to it. Cleared whenever the deck
+  // run breaks, so an arch never leaps a stretch where the road is on ground.
+  let prevPier: { x: number; z: number; top: number; bot: number } | null = null;
   for (let i = 0; i < n - 1; i++) {
     const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
     const dx = x1 - x0, dz = z1 - z0;
@@ -6640,12 +6702,6 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const cropA = cropEnd[0] && i === cropEnd[0].skip ? cropEnd[0] : null;
     const cropB = cropEnd[1] && i === n - 2 - cropEnd[1].skip ? cropEnd[1] : null;
     const hidden = !!((cropEnd[0] && i < cropEnd[0].skip) || (cropEnd[1] && i > n - 2 - cropEnd[1].skip));
-    // A MOUTH IS NOT A VIADUCT END. The cut bay used to drag its full
-    // roadside dressing through the transition — concrete deck fascia,
-    // batter, rails — and the twisted skirt under its kerb was the pale slab
-    // photographed hanging over the Coast/Bixby mouth. The mouth bay gets a
-    // kerb lip and nothing else.
-    const mouthBay = !!(cropA || cropB);
     // THE CUT EDGE LIES ON THE HOST'S SURFACE, exactly. Its plan position is
     // the host's kerb line, so its height is the host's deck there — NOT the
     // lerp of this way's own stations, which left the corner far from the
@@ -6709,7 +6765,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // own height left a sliver of daylight along the downhill side.
       const ox = (-dz / len) * 2.2, oz = (dx / len) * 2.2;
       const uA = along / 8, uB = (along + len) / 8;
-      const deck = (deckRun[i] || deckRun[i + 1]) && !mouthBay;
+      const deck = deckRun[i] || deckRun[i + 1];
       const dd = deckDepth(Math.max(daylight[i], daylight[i + 1]));
       const bot: number[] = [];
       const drop: number[] = [];
@@ -6734,14 +6790,31 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // tells you, at a glance, that the edge is an edge.
         // From the dilated map above, not from this quad's own drop.
         const sd = sgn > 0 ? 0 : 1;
-        const railHere = railOn[sd][i] || railOn[sd][i + 1];
+        let railHere = railOn[sd][i] || railOn[sd][i + 1];
+        // A DECK ALWAYS SHOWS A PARAPET. The width gate keeps solid walls off
+        // narrow carriageways so the truck is never wedged between them — but
+        // it was also keeping every visual off a 4.5m bridge with thirteen
+        // metres of air below, which photographed from a drone as a deck with
+        // open sides. On a deck the parapet is emitted regardless; whether it
+        // goes in the wall grid still respects the gate.
+        const deckRail = deck && !railHere && Math.max(ey0 - g0, ey1 - g1) > RAIL_AT;
+        railHere = railHere || deckRail;
         // A WALL of cut face across a side road is the same fault as a barrier
         // across it — you cannot turn through either — so both ask the same
         // question. Only asked where something stands in the way at all: the
         // answer costs a walk over the road grid, and on flat ground the fascia
         // is a kerb lip that blocks nothing.
-        const open = mouthBay || ((railHere || Math.max(ey0 - b0, ey1 - b1) > 1.2)
-          && roadMeetsHere(x0, z0, x1, z1, width / 2, (ey0 + ey1) / 2, fid, name));
+        // PER SIDE now: the kerb that opens is the kerb the turning actually
+        // reaches. A blanket boolean opened the seaward parapet for a
+        // hillside car-park aisle, and the blanket mouth-bay exemption after
+        // it stripped a viaduct bay's fascia and rail outright — the drone
+        // photograph of a bridge with open sides. The clean-plane warp
+        // removed the twist that motivated that exemption; the ordinary
+        // junction logic, now sided, is the whole rule again.
+        const meet = (railHere || Math.max(ey0 - b0, ey1 - b1) > 1.2)
+          ? roadMeetsHere(x0, z0, x1, z1, width / 2, (ey0 + ey1) / 2, fid, name)
+          : { p: false, m: false };
+        const open = sgn > 0 ? meet.p : meet.m;
         if (open) juncStats.opened++;
         // Where it opens, the fascia is cut back to a kerb lip: enough to close
         // the seam between the two decks, not enough to be a wall between them.
@@ -6775,7 +6848,19 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // So the kerb is recorded and the shoulder is built later, against the
         // ground that actually ends up there — see flushBatter.
         if (deck) spanStats.fillDeck++;
-        if (!deck && !mouthBay) {
+        // THE LEDGER COVERS DECKS TOO. edgeLog only ever heard from bays that
+        // parked a batter, so a viaduct with open sides still read as a
+        // healthy neighbourhood in __edges — the exact blind spot the drone
+        // photograph exposed. A deck bay logs its rail state directly: railed,
+        // opened-for-a-junction, or the third outcome, which is the bug.
+        if (deck && edgeLog.length < 40000) {
+          edgeLog.push({ x: (ex0 + ex1) / 2, z: (ez0 + ez1) / 2, rail: railHere && !open,
+            // Ground at or above the kerb needs nothing — the hillward side of
+            // a deck run hard against its cutting is met, not bare.
+            batter: false, met: Math.max(ey0 - g0, ey1 - g1) < RAIL_AT, clip: open,
+            gap: +Math.max(ey0 - g0, ey1 - g1).toFixed(2), reach: 0, nm: name });
+        }
+        if (!deck) {
           const [maX, maZ] = mitreAt(i, sgn);
           const [mbX, mbZ] = mitreAt(i + 1, sgn);
           pendingBatter.push({
@@ -6808,7 +6893,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           // the parapet hangs in the air beside its own fascia.
           const rx0 = ex0 + ox * sgn * 0.04, rz0 = ez0 + oz * sgn * 0.04;
           const rx1 = ex1 + ox * sgn * 0.04, rz1 = ez1 + oz * sgn * 0.04;
-          rail(rx0, ey0, rz0, rx1, ey1, rz1, along / 2.5, (along + len) / 2.5);
+          rail(rx0, ey0, rz0, rx1, ey1, rz1, along / 2.5, (along + len) / 2.5, !deckRail);
         } else if (postOn[sd][i] && !open) {
           // The narrow-road answer: reflector posts along the edge, spaced by
           // world distance so a bend's short bays do not bunch them. They stand
@@ -6916,10 +7001,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         pierRun += len;
         if (daylight[i] > PIER_AT && pierRun >= PIER_SPAN) {
           pierRun = 0;
-          pier(x0, z0, dx, dz, (bot[0] + bot[2]) / 2 + 0.05,
-            Math.min(elevMin[i], sampleHeight(x0, z0)) - 1.2, width * 0.32);
+          const top = (bot[0] + bot[2]) / 2 + 0.05;
+          const base = Math.min(elevMin[i], sampleHeight(x0, z0)) - 1.2;
+          pier(x0, z0, dx, dz, top, base, width * 0.32);
+          const cur = { x: x0, z: z0, top, bot: base };
+          if (prevPier) arch(prevPier, cur, width * 0.3);
+          prevPier = cur;
         }
-      }
+      } else prevPier = null;
       // Close the ends, so a way that stops at a junction shows a cut face
       // rather than a hollow shell you can see straight into.
       for (const [i0, at] of [[0, i === 0], [1, i === n - 2]] as Array<[number, boolean]>) {
@@ -10004,6 +10093,7 @@ const live = {
   windKmh: 0, windDeg: 0, code: 0,
 };
 async function fetchLiveWeather(): Promise<void> {
+  if (WX_PIN) return;                     // a pinned sky asks nobody
   if (performance.now() < live.at) return;
   live.at = performance.now() + 900000;   // the upstream updates every 15 minutes
   try {
@@ -10037,7 +10127,15 @@ async function fetchLiveWeather(): Promise<void> {
   }
 }
 const WX_LIVE = { cloud: 0 };
+// ?wx=clear|haze|rain|storm pins the weather the way ?sunalt= pins the sun:
+// a geometry screenshot taken on the day Cape Town actually had rain is a
+// screenshot of the rain. Beats both the live feed and the synthetic chain.
+const WX_PIN = ((): Sky | null => {
+  const v = new URLSearchParams(location.search).get('wx');
+  return v === 'clear' || v === 'haze' || v === 'rain' || v === 'storm' ? v : null;
+})();
 function rollWeather(now: number): void {
+  if (WX_PIN) { wx.next = WX_PIN; return; }
   if (live.on) return;                    // the real sky is in charge
   if (now < wx.at) return;
   wx.at = now + (90 + Math.random() * 150) * 1000; // a front lasts 1.5–4 minutes
@@ -12846,6 +12944,11 @@ function noteTags(t: Record<string, string>): void {
     nothingAtAll: pct(bare),      // no earth, no barrier: the case that is a bug
     unmarkedGap: band(bareGap),   // …and how far the ground actually is below
     reach: band(near.map((e) => e.reach)),
+    // WHERE the bugs are, not just how many: local coords, deepest first, so
+    // the finding can be walked to instead of hunted for.
+    bare: near.filter((e) => !e.met && !e.rail && !e.clip && !e.batter)
+      .sort((p, q) => q.gap - p.gap).slice(0, 12)
+      .map((e) => ({ x: Math.round(e.x), z: Math.round(e.z), gap: e.gap, nm: e.nm ?? null })),
   };
 };
 /**
