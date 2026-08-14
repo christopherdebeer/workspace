@@ -3926,6 +3926,9 @@ const Q_ROAD = 1, Q_TRACK = 0.55, Q_GROUND = 0.2;
 const GRID = 24;
 const gkey = (x: number, z: number): string => `${Math.floor(x / GRID)},${Math.floor(z / GRID)}`;
 interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?: number; yb?: number; tk?: boolean; tn?: boolean;
+  /** Pre-grid only: the OSM way key this deckless segment belongs to, so a
+   *  way's own crop lookup can be blind to its own pre-registered body. */
+  dks?: string;
   /** The way's OSM name. Streets were deliberately excluded from the POI set
    *  ("named streets are not destinations") — but the road you are ON is not a
    *  destination, it is your position, and that is worth saying. */
@@ -5105,6 +5108,47 @@ const pendingBatter: Batter[] = [];
  */
 const edgeLog: Array<{ x: number; z: number; rail: boolean; batter: boolean;
   met: boolean; clip: boolean; gap: number; reach: number }> = [];
+/** Every junction-crop decision, with its reason — "why is this mouth still
+ *  overlapping" was unanswerable from a screenshot, because eligibility
+ *  depends on what was BUILT when this way built, which no probe can
+ *  reconstruct after the fact. Read by `__cropwhy`. */
+const cropLog: Array<{ x: number; z: number; nm?: string; end: number; why: string;
+  out?: number; align?: number; host?: string; sR?: number; sL?: number; skip?: number }> = [];
+/** A way-end that found NO host when it built — the host may simply not have
+ *  arrived yet (build order is width-first in a batch, arbitrary across
+ *  tiles, so the wider way at a T is guaranteed to build blind). The mesh is
+ *  merged and cannot be re-cut, so every later road sweeps this list and
+ *  MASKS any end now standing in its carriageway — the host paints its own
+ *  surface back over the intruder. */
+interface PendingCropEnd { x: number; z: number; ux: number; uz: number; width: number; nm?: string; fid: number }
+const pendingCropEnds: PendingCropEnd[] = [];
+/**
+ * THE PRE-GRID: every drivable way of the CURRENT batch as geometry-only
+ * segments, registered before any of them builds and cleared after the batch.
+ * The junction crop asks "whose carriageway is my end standing in", and
+ * inside one batch that answer used to depend on build order — widest-first
+ * GUARANTEES the wider way at a T builds blind and lays its mouth, studs and
+ * all, across a road that arrives two ways later (the reported Coast/Bixby
+ * fork). The crop reads geometry, never decks, so deckless segments answer
+ * it; the warp still waits for the real, built, decked grid.
+ */
+const preRoadGrid = new Map<string, Seg[]>();
+/** `roadEdge` over the pre-grid: deckless by design, blind to one way. */
+function preEdge(x: number, z: number, notKey?: string): { out: number; track: boolean; hw: number; ux: number; uz: number; nm?: string; dks?: string } | null {
+  let best: { out: number; track: boolean; hw: number; ux: number; uz: number; nm?: string; dks?: string } | null = null;
+  for (const seg of preRoadGrid.get(gkey(x, z)) ?? []) {
+    if (notKey !== undefined && seg.dks === notKey) continue;
+    const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
+    const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    const d = Math.hypot(x - (seg.ax + dx * t), z - (seg.az + dz * t));
+    const out = d - seg.hw;
+    if (!best || out < best.out) {
+      const l = Math.hypot(dx, dz) || 1;
+      best = { out, track: !!seg.tk, hw: seg.hw, ux: dx / l, uz: dz / l, nm: seg.nm, dks: seg.dks };
+    }
+  }
+  return best;
+}
 /** Two triangles into a vertex/uv pair. `ribbon` has its own local `quad`, and
  *  the only `quad` in scope out here is a THREE.Mesh — which the stub types are
  *  happy to let you call, and which would have thrown on the first shoulder. */
@@ -5530,7 +5574,7 @@ const profileHints = solver.hints;
 const hintedWays = solver.hinted;
 const writeHints = (dense: Array<[number, number]>, alg: number[]): void => solver.writeHints(dense, alg);
 const hintAt = (x: number, z: number, reach = 6): number | null => solver.hintAt(x, z, reach);
-function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number]): void {
+function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string): void {
   const fid = ++ribbonSeq;
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
   // point here has real elevation under it; if one does not, the profile would
@@ -6290,7 +6334,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
    *  fractions (inner station → end station) at which the right and left kerb
    *  edges cross the HOST's kerb line, plus the host's direction there for
    *  the mouth patch. Null = no crop: a free end, or a continuation. */
-  const cropEnd: Array<{ sR: number; sL: number; hx: number; hz: number } | null> = [null, null];
+  const cropEnd: Array<{ sR: number; sL: number; hx: number; hz: number; skip: number } | null> = [null, null];
   if (drivable && !track && n > 3) {
     // Stations to fade over, ~60m at 12m steps — but never more than the way
     // HAS. A four-station way walked off the end of `dense` and threw, which a
@@ -6316,48 +6360,6 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // refused, so a driveway still cannot drag a trunk road onto its camber.
       if (at0.hw < width / 2 - 0.4) { spanStats.warpNoHost++; spanStats.warpNotWider++; continue; }
       spanStats.warped++;
-      /**
-       * THE CROP. A T-junction's shared node sits on the HOST's centreline, so
-       * this way's ribbon used to run on across the host's carriageway to the
-       * middle — coplanar after the warp below, which is exactly what let the
-       * side road's surface, edge and wear paint themselves across the host at
-       * an angle. The drawn tarmac now stops on the host's KERB LINE: each of
-       * this way's kerb edges is searched for where it crosses out=0, and the
-       * end bay is cut there — an angled edge lying along the host's kerb.
-       *
-       * A CONTINUATION is left alone (two fragments of one road run near
-       * parallel, and cropping against your own next fragment would notch
-       * every tile boundary), and so is an end that never actually reaches
-       * inside the host's kerb.
-       */
-      if (at0.out < -0.6) {
-        const iN = end === 0 ? 1 : n - 2;
-        const ddx = dense[iN][0] - dense[i0][0], ddz = dense[iN][1] - dense[i0][1];
-        const dl = Math.hypot(ddx, ddz) || 1;
-        const align = Math.abs((ddx / dl) * at0.ux + (ddz / dl) * at0.uz);
-        if (align < 0.94) {
-          const sFor = (sgn: number): number => {
-            const [kex, kez] = kerbMitre(i0, sgn, width / 2);
-            const [kix, kiz] = kerbMitre(iN, sgn, width / 2);
-            const Px = dense[i0][0] + kex, Pz = dense[i0][1] + kez;   // the end corner
-            const Qx = dense[iN][0] + kix, Qz = dense[iN][1] + kiz;   // the inner one
-            const outAt = (s: number): number => {
-              const e = roadEdge(Qx + (Px - Qx) * s, Qz + (Pz - Qz) * s);
-              return e ? e.out : 1;
-            };
-            if (outAt(1) >= 0) return 1;        // this corner never enters the host
-            if (outAt(0) <= 0) return 0.08;     // the whole bay is inside it — keep a sliver
-            let lo = 0, hi = 1;
-            for (let it = 0; it < 9; it++) {
-              const mid = (lo + hi) / 2;
-              if (outAt(mid) > 0) lo = mid; else hi = mid;
-            }
-            return (lo + hi) / 2;
-          };
-          const sR = sFor(1), sL = sFor(-1);
-          if (sR < 1 || sL < 1) { cropEnd[end] = { sR, sL, hx: at0.ux, hz: at0.uz }; spanStats.cropped++; }
-        }
-      }
       for (let k = 0; k < WARP; k++) {
         const i = end === 0 ? k : n - 1 - k;
         const [rx, rz] = kerbMitre(i, 1, width / 2), [lx, lz] = kerbMitre(i, -1, width / 2);
@@ -6368,6 +6370,114 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         prof[i] += ((hR + hL) * 0.5 - prof[i]) * w;
         tilt[i] += ((hR - hL) * 0.5 - tilt[i]) * w;
       }
+    }
+  }
+  /**
+   * THE CROP. A junction's shared node sits on the HOST's centreline, so this
+   * way's ribbon used to run on across the host's carriageway to the middle —
+   * which is what let its surface, edge and wear paint themselves across the
+   * host at an angle. The drawn tarmac now stops on the host's KERB LINE.
+   *
+   * Decided for EVERY drivable way, tracks included — a dirt unclassified and
+   * a farm track lay their surface over a paved host exactly the way a
+   * service road does, and the first live report of a surviving overlap was a
+   * fork the old road-only guard skipped. Separate from the warp (it reads
+   * geometry, not the profile), and it LOGS every decision, because
+   * eligibility depends on what was built when this way built and no probe
+   * can reconstruct that after the fact.
+   *
+   * The continuation guard is IDENTITY FIRST, angle second: two fragments of
+   * one road share a name (or both lack one) and run on near-collinearly —
+   * cropping against your own continuation would notch every tile boundary.
+   * A DIFFERENTLY-NAMED host is a junction at almost any angle; shallow forks
+   * are exactly where the overlap is widest. Only a razor merge (past ~8°)
+   * is refused outright, because its kerb intersection runs away down the
+   * merge and a cut there helps nothing.
+   *
+   * SHALLOW FORKS need more than one bay: at 15° the inner station is still
+   * inside the host, so whole leading bays are HIDDEN (drawn by nobody — the
+   * host's surface owns that ground) and the cut lands on the first bay that
+   * actually exits the kerb.
+   */
+  if (drivable && n > 3) {
+    for (const end of [0, 1]) {
+      const i0 = end === 0 ? 0 : n - 1;
+      const [ex0, ez0] = dense[i0];
+      const clog = (why: string, extra: object = {}): void => {
+        if (cropLog.length < 4000) cropLog.push({ x: ex0, z: ez0, nm: name, end, why, ...extra });
+      };
+      // Built roads answer first (exact, decked); ways of THIS batch that
+      // have not built yet answer through the pre-grid, blind to this way's
+      // own body — which is what makes the crop independent of build order.
+      const hostEdge = (qx: number, qz: number): { out: number; track: boolean; hw: number; ux: number; uz: number; nm?: string } | null => {
+        const a = roadEdge(qx, qz);
+        const b = preEdge(qx, qz, wayKey);
+        return a && (!b || a.out <= b.out) ? a : b;
+      };
+      const at0 = hostEdge(ex0, ez0);
+      if (!at0) {
+        // No host in the built grid AND none in this batch — one may still
+        // arrive in a LATER batch (cross-tile). Park the end; a later road
+        // sweeps the list and masks what it can.
+        const iNn = end === 0 ? 1 : n - 2;
+        const dxn = dense[iNn][0] - ex0, dzn = dense[iNn][1] - ez0;
+        const ln = Math.hypot(dxn, dzn) || 1;
+        if (pendingCropEnds.length < 2000) {
+          pendingCropEnds.push({ x: ex0, z: ez0, ux: dxn / ln, uz: dzn / ln, width, nm: name, fid });
+        }
+        clog('no-host');
+        continue;
+      }
+      if (at0.track) { clog('host-is-track'); continue; }
+      if (at0.out >= -0.6) { clog('not-inside-host', { out: +at0.out.toFixed(2) }); continue; }
+      if (at0.hw < width / 2 - 0.4) { clog('host-narrower', { host: at0.nm }); continue; }
+      const iN0 = end === 0 ? 1 : n - 2;
+      const ddx = dense[iN0][0] - ex0, ddz = dense[iN0][1] - ez0;
+      const dl = Math.hypot(ddx, ddz) || 1;
+      const align = Math.abs((ddx / dl) * at0.ux + (ddz / dl) * at0.uz);
+      const sameIdentity = name !== undefined ? name === at0.nm : at0.nm === undefined;
+      if (sameIdentity && align >= 0.94) { clog('continuation', { align: +align.toFixed(3), host: at0.nm }); continue; }
+      if (align >= 0.99) { clog('too-parallel', { align: +align.toFixed(3), host: at0.nm }); continue; }
+      // How many whole bays this end buries inside the host's carriageway.
+      const insideSt = (idx: number): boolean => {
+        for (const sgn of [1, -1]) {
+          const [kx, kz] = kerbMitre(idx, sgn, width / 2);
+          const e = hostEdge(dense[idx][0] + kx, dense[idx][1] + kz);
+          if (!e || e.out > -0.2) return false;
+        }
+        return true;
+      };
+      let skip = 0;
+      const cap = Math.min(3, n - 3);
+      while (skip < cap
+        && insideSt(end === 0 ? skip : n - 1 - skip)
+        && insideSt(end === 0 ? skip + 1 : n - 2 - skip)) skip++;
+      const iE = end === 0 ? skip : n - 1 - skip;      // the cut bay's outer station
+      const iN = end === 0 ? skip + 1 : n - 2 - skip;  // …and its inner one
+      const sFor = (sgn: number): number => {
+        const [kex, kez] = kerbMitre(iE, sgn, width / 2);
+        const [kix, kiz] = kerbMitre(iN, sgn, width / 2);
+        const Px = dense[iE][0] + kex, Pz = dense[iE][1] + kez;   // the outer corner
+        const Qx = dense[iN][0] + kix, Qz = dense[iN][1] + kiz;   // the inner one
+        const outAt = (s: number): number => {
+          const e = hostEdge(Qx + (Px - Qx) * s, Qz + (Pz - Qz) * s);
+          return e ? e.out : 1;
+        };
+        if (outAt(1) >= 0) return 1;        // this corner never enters the host
+        if (outAt(0) <= 0) return 0.08;     // still inside at the walk's cap — keep a sliver
+        let lo = 0, hi = 1;
+        for (let it = 0; it < 9; it++) {
+          const mid = (lo + hi) / 2;
+          if (outAt(mid) > 0) lo = mid; else hi = mid;
+        }
+        return (lo + hi) / 2;
+      };
+      const sR = sFor(1), sL = sFor(-1);
+      if (sR < 1 || sL < 1 || skip > 0) {
+        cropEnd[end] = { sR, sL, hx: at0.ux, hz: at0.uz, skip };
+        spanStats.cropped++;
+        clog('cropped', { sR: +sR.toFixed(2), sL: +sL.toFixed(2), skip, host: at0.nm });
+      } else clog('never-enters-host', { host: at0.nm });
     }
   }
   let along = 0; // metres travelled — v wraps every 20m (the roadTex period)
@@ -6459,33 +6569,56 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           co[2][0], ys[2], co[2][1], co[3][0], ys[3], co[3][1]],
         [0, 0, uw, 0, 0, 1, uw, 1]);
     };
-    if (i === 0 && cropEnd[0]) {
-      AR = lerpC(BR, AR, cropEnd[0].sR);
-      AL = lerpC(BL, AL, cropEnd[0].sL);
-      mouth(cropEnd[0], AR, AL, x1 - x0, z1 - z0);
+    // Which bays this iteration owes to the crop: the cut bay at each end
+    // (shifted inward past any hidden bays), and the hidden bays themselves —
+    // fully inside the host's carriageway, drawn by nobody.
+    const cropA = cropEnd[0] && i === cropEnd[0].skip ? cropEnd[0] : null;
+    const cropB = cropEnd[1] && i === n - 2 - cropEnd[1].skip ? cropEnd[1] : null;
+    const hidden = !!((cropEnd[0] && i < cropEnd[0].skip) || (cropEnd[1] && i > n - 2 - cropEnd[1].skip));
+    // THE CUT EDGE LIES ON THE HOST'S SURFACE, exactly. Its plan position is
+    // the host's kerb line, so its height is the host's deck there — NOT the
+    // lerp of this way's own stations, which left the corner far from the
+    // node floating at its own deck height over the gore, with its batter
+    // face showing as a wedge at every mouth (the report that found this).
+    const seat = (C: number[]): void => {
+      const h = roadHeightAt(C[0], C[2], 1.5);
+      if (h !== null) C[1] = h + lift;
+    };
+    if (cropA) {
+      AR = lerpC(BR, AR, cropA.sR);
+      AL = lerpC(BL, AL, cropA.sL);
+      seat(AR); seat(AL);
+      // No mouth furniture for a dirt way: the patch is painted tarmac, and a
+      // track's mouth is just the ground meeting the road it uses.
+      if (!track) mouth(cropA, AR, AL, x1 - x0, z1 - z0);
     }
-    if (i === n - 2 && cropEnd[1]) {
-      BR = lerpC(AR, BR, cropEnd[1].sR);
-      BL = lerpC(AL, BL, cropEnd[1].sL);
-      mouth(cropEnd[1], BR, BL, x0 - x1, z0 - z1);
+    if (cropB) {
+      BR = lerpC(AR, BR, cropB.sR);
+      BL = lerpC(AL, BL, cropB.sL);
+      seat(BR); seat(BL);
+      if (!track) mouth(cropB, BR, BL, x0 - x1, z0 - z1);
     }
-    verts.push(
-      AR[0], AR[1], AR[2], BR[0], BR[1], BR[2], AL[0], AL[1], AL[2],
-      BR[0], BR[1], BR[2], BL[0], BL[1], BL[2], AL[0], AL[1], AL[2],
-    );
-    uvs.push(AR[3], AR[4], BR[3], BR[4], AL[3], AL[4], BR[3], BR[4], BL[3], BL[4], AL[3], AL[4]);
+    if (!hidden) {
+      verts.push(
+        AR[0], AR[1], AR[2], BR[0], BR[1], BR[2], AL[0], AL[1], AL[2],
+        BR[0], BR[1], BR[2], BL[0], BL[1], BL[2], AL[0], AL[1], AL[2],
+      );
+      uvs.push(AR[3], AR[4], BR[3], BR[4], AL[3], AL[4], BR[3], BR[4], BL[3], BL[4], AL[3], AL[4]);
+    }
     // A TRACK TAKES THE GROUND'S OWN COLOUR. Two ruts painted a fixed brown sat
     // on the hillside as a stripe of somebody else's palette; sampled from
     // `terrainPalette` at the rut itself, they read as the ground worn through
     // rather than as a decal over it — and the whole point of a track is that
     // it is the ground, just used.
-    if (track) {
-      const [tr, tg, tb] = terrainPalette(elev[i] + baseElev,
-        Math.abs((elev[Math.min(n - 1, i + 1)] - elev[i]) / Math.max(len, 1)), sampleCover(x0, z0));
-      for (let k = 0; k < 6; k++) cols.push(tr * 1.06, tg * 0.99, tb * 0.9);
-    } else {
-      const c = tint ?? [1, 1, 1];
-      for (let k = 0; k < 6; k++) cols.push(c[0], c[1], c[2]);
+    if (!hidden) {
+      if (track) {
+        const [tr, tg, tb] = terrainPalette(elev[i] + baseElev,
+          Math.abs((elev[Math.min(n - 1, i + 1)] - elev[i]) / Math.max(len, 1)), sampleCover(x0, z0));
+        for (let k = 0; k < 6; k++) cols.push(tr * 1.06, tg * 0.99, tb * 0.9);
+      } else {
+        const c = tint ?? [1, 1, 1];
+        for (let k = 0; k < 6; k++) cols.push(c[0], c[1], c[2]);
+      }
     }
     if (drivable) {
       const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name, sq, fd: fid, pb: pbranch,
@@ -6493,7 +6626,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       addSeg(roadGrid, s);
       segsOf.push(s);
     }
-    if (apronOn) {
+    if (apronOn && !hidden) {
       // Sample a whisker OUTBOARD of the kerb as well: on a side-slope the
       // ground falls away past the edge, and a face that stopped at the kerb's
       // own height left a sliver of daylight along the downhill side.
@@ -6649,9 +6782,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           // buffer rounds away.
           // …and never past a cropped mouth, where the centreline's tarmac
           // ends at the host's kerb and a stud would stand on the host.
-          const cut0 = i === 0 && cropEnd[0] ? 1 - Math.min(cropEnd[0].sR, cropEnd[0].sL) : 0;
-          const cut1 = i === n - 2 && cropEnd[1] ? Math.min(cropEnd[1].sR, cropEnd[1].sL) : 1;
-          if (t >= cut0 && t <= cut1) stud(cx, cyDeck + 0.15, cz, dx / len, dz / len, 0.15, 0.09);
+          const cut0 = cropA ? 1 - Math.min(cropA.sR, cropA.sL) : 0;
+          const cut1 = cropB ? Math.min(cropB.sR, cropB.sL) : 1;
+          if (!hidden && t >= cut0 && t <= cut1) stud(cx, cyDeck + 0.15, cz, dx / len, dz / len, 0.15, 0.09);
         }
       }
       // ── roadside furniture ──
@@ -6726,6 +6859,74 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // Tracks read as a fainter line on the chart — they are a route, not a road.
     mapSeg(x0, z0, x1, z1, drivable && !track ? Math.max(width, 14) : 9,
       track ? 'rgba(150,140,112,0.62)' : drivable ? '#a8a294' : 'rgba(150,142,120,0.4)');
+  }
+  // ── the late-host sweep ────────────────────────────────────────────
+  // This way's segments are all in the grid now, so it can answer for the
+  // ends that built before it existed: any parked end (see pendingCropEnds)
+  // standing in THIS carriageway gets a MASK — a patch of the host's own
+  // plain surface laid from its kerb crossing back over the intruding mouth,
+  // which is the one cut still available once the intruder's mesh is merged.
+  if (drivable && !track && pendingCropEnds.length) {
+    let keep = 0;
+    for (const pe of pendingCropEnds) {
+      let near = false;
+      for (let i2 = 0; i2 < n && !near; i2 += 2) {
+        if (Math.hypot(pe.x - dense[i2][0], pe.z - dense[i2][1]) < 60) near = true;
+      }
+      if (!near) { pendingCropEnds[keep++] = pe; continue; }
+      // The same eligibility the crop runs at build time — blind to the
+      // intruder's own segments, or the answer is always itself.
+      const at0 = roadEdge(pe.x, pe.z, pe.fid, pe.nm);
+      if (!at0 || at0.track || at0.out >= -0.6 || at0.hw < pe.width / 2 - 0.4) { pendingCropEnds[keep++] = pe; continue; }
+      const align = Math.abs(pe.ux * at0.ux + pe.uz * at0.uz);
+      const sameIdentity = pe.nm !== undefined ? pe.nm === at0.nm : at0.nm === undefined;
+      if ((sameIdentity && align >= 0.94) || align >= 0.99) { pendingCropEnds[keep++] = pe; continue; }
+      // The mask: from just past the intruder's node back to where each of
+      // its kerb lines crosses this carriageway's edge.
+      const pxA = -pe.uz, pzA = pe.ux;                 // across the intruder
+      const hw2 = pe.width / 2 + 0.35;
+      const crossFor = (sgn: number): number => {
+        const cx2 = pe.x + pxA * hw2 * sgn, cz2 = pe.z + pzA * hw2 * sgn;
+        const outAt = (t: number): number => {
+          const e = roadEdge(cx2 + pe.ux * t, cz2 + pe.uz * t, pe.fid, pe.nm);
+          return e ? e.out : 1;
+        };
+        if (outAt(0) >= 0) return 0;
+        let lo = 0, hi = 26;
+        if (outAt(hi) <= 0) return hi;
+        for (let it = 0; it < 9; it++) { const mid = (lo + hi) / 2; if (outAt(mid) <= 0) lo = mid; else hi = mid; }
+        return (lo + hi) / 2;
+      };
+      const tR = crossFor(1), tL = crossFor(-1);
+      const back = 1.2;
+      const corn: Array<[number, number]> = [
+        [pe.x + pxA * hw2 - pe.ux * back, pe.z + pzA * hw2 - pe.uz * back],
+        [pe.x - pxA * hw2 - pe.ux * back, pe.z - pzA * hw2 - pe.uz * back],
+        [pe.x + pxA * hw2 + pe.ux * tR, pe.z + pzA * hw2 + pe.uz * tR],
+        [pe.x - pxA * hw2 + pe.ux * tL, pe.z - pzA * hw2 + pe.uz * tL],
+      ];
+      const ys = corn.map(([qx, qz]) => {
+        // COVER THE HIGHER DECK. The intruder never warped (its host did not
+        // exist when it built), so the two surfaces can disagree by most of a
+        // metre — and a mask at the wrong height is a mask underneath the
+        // tongue it exists to hide, which is how the first version of this
+        // sweep validated its own log entry and changed nothing on screen.
+        const h = roadEdge(qx, qz, pe.fid, pe.nm);
+        const o = roadEdge(qx, qz);
+        const base = Math.max(h?.y ?? -Infinity, o?.y ?? -Infinity);
+        return (Number.isFinite(base) ? base : prof[0]) + lift + 0.03;
+      });
+      // Only the BARLESS half of the mouth texture: a give-way bar belongs at
+      // a mouth the side road still owns, not inside the host's carriageway.
+      const uw = (hw2 * 2) / 6 + 0.3;
+      quad(apron.moV, apron.moUV,
+        [corn[0][0], ys[0], corn[0][1], corn[1][0], ys[1], corn[1][1],
+          corn[2][0], ys[2], corn[2][1], corn[3][0], ys[3], corn[3][1]],
+        [0, 0, uw, 0, 0, 0.5, uw, 0.5]);
+      spanStats.cropped++;
+      if (cropLog.length < 4000) cropLog.push({ x: pe.x, z: pe.z, nm: pe.nm, end: -1, why: 'masked-late', host: at0.nm });
+    }
+    pendingCropEnds.length = keep;
   }
   if (!verts.length) return;
   const geo = new THREE.BufferGeometry();
@@ -8232,7 +8433,71 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
     const wb = (b.tags?.highway ? ROAD_W[b.tags.highway] ?? 5 : -1);
     return wb - wa;
   });
+  // The whole batch into the PRE-GRID before any way builds, so the junction
+  // crop never depends on build order within a batch (see preRoadGrid).
   for (const el of ordered) {
+    const tags = el.tags ?? {};
+    if (!el.geometry || el.geometry.length < 2 || !tags.highway) continue;
+    if (tags.highway === 'services' || tags.highway === 'steps') continue;
+    const dk = el.ck ?? String(el.id);
+    if (seenWays.has(dk)) continue;
+    const w = ROAD_W[tags.highway] ?? 5;
+    const track = ['track', 'path', 'bridleway', 'cycleway', 'footway'].includes(tags.highway);
+    const pts = el.geometry.map((g) => toLocal(g.lat, g.lon));
+    for (let i = 0; i < pts.length - 1; i++) {
+      addSeg(preRoadGrid, { ax: pts[i][0], az: pts[i][1], bx: pts[i + 1][0], bz: pts[i + 1][1],
+        hw: w / 2, tk: track || undefined, nm: tags.name, dks: dk });
+    }
+  }
+  /**
+   * JOINERS BUILD AFTER THEIR HOSTS. Width-first was a heuristic aimed at
+   * this — a wide road is usually the host — but a T where the narrower road
+   * hosts the wider one is guaranteed to build backwards, and then the warp
+   * has no decked surface to land the joiner's end on: the cut edge hangs at
+   * its own height with its fascia showing as a wedge (the reported fork —
+   * Coast Road at 7.0m hosts Bixby Creek Road at 7.5m). The pre-grid knows
+   * every end→host relation before anything builds, so the order can be the
+   * REAL dependency: host first, then joiner, cycles falling back to width.
+   */
+  const buildRank = new Map<string, number>();
+  {
+    const deps = new Map<string, Set<string>>();
+    for (const el of ordered) {
+      const tags = el.tags ?? {};
+      if (!el.geometry || el.geometry.length < 2 || !tags.highway) continue;
+      if (tags.highway === 'services' || tags.highway === 'steps') continue;
+      const dk = el.ck ?? String(el.id);
+      if (seenWays.has(dk)) continue;
+      const w = ROAD_W[tags.highway] ?? 5;
+      for (const end of [0, el.geometry.length - 1]) {
+        const [ex, ez] = toLocal(el.geometry[end].lat, el.geometry[end].lon);
+        const h = preEdge(ex, ez, dk);
+        if (h && !h.track && h.dks !== undefined && h.out < -0.6 && h.hw >= w / 2 - 0.4) {
+          let set = deps.get(dk);
+          if (!set) deps.set(dk, set = new Set());
+          set.add(h.dks);
+        }
+      }
+    }
+    const visiting = new Set<string>();
+    const depthOf = (dk: string): number => {
+      const m = buildRank.get(dk);
+      if (m !== undefined) return m;
+      if (visiting.has(dk)) return 0;          // a cycle: width order decides
+      visiting.add(dk);
+      let d = 0;
+      for (const h of deps.get(dk) ?? []) d = Math.max(d, depthOf(h) + 1);
+      visiting.delete(dk);
+      buildRank.set(dk, d);
+      return d;
+    };
+    for (const dk of deps.keys()) depthOf(dk);
+  }
+  // Stable, so width order still decides within a rank — and everything with
+  // no dependency (rank 0, which is most of the world) is untouched.
+  const byDepth = ordered.slice().sort((a, b) =>
+    (buildRank.get(a.ck ?? String(a.id)) ?? 0) - (buildRank.get(b.ck ?? String(b.id)) ?? 0));
+  for (const el of byDepth) {
     // Clipped lines carry their own key; areas still dedupe on the bare id, so
     // a lake straddling two vector tiles is still drawn exactly once.
     const dk = el.ck ?? String(el.id);
@@ -8288,7 +8553,7 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
       const wq = wayQuality(tags, track);
       ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : MAT.road,
         track || stairs ? SURFACE.track.lift : SURFACE.road.lift, !stairs, mode, track, tags.name, wq,
-        GRADE_MAX[tags.highway] ?? 0.15, canopy, roadTint(tags, wq));
+        GRADE_MAX[tags.highway] ?? 0.15, canopy, roadTint(tags, wq), dk);
       if (unbuilt !== refusedAt) { seenWays.delete(dk); continue; }
       // Steps are named and drawn but nothing drives them, so they earn no
       // checkpoints — a road you cannot survey should not sit in the log.
@@ -8318,6 +8583,10 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
     // areas; with lines in the answer it would paint a river green.
   }
   flushAprons();
+  // The pre-grid lives for exactly one batch: it exists to make build order
+  // irrelevant WITHIN the batch, and a stale copy would shadow the real,
+  // decked segments the next batch builds against.
+  preRoadGrid.clear();
 }
 
 // ── survey: invisible checkpoints along named ways ─────────────────
@@ -10630,10 +10899,14 @@ function stepReal(dt: number): boolean {
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z, margin) });
 /** The nearest drivable centreline: how far OUTSIDE its kerb this point is
  *  (negative on the carriageway), and the road's own surface height there. */
-function roadEdge(x: number, z: number): { out: number; y: number; track: boolean; hw: number; ux: number; uz: number } | null {
-  let best: { out: number; y: number; track: boolean; hw: number; ux: number; uz: number } | null = null;
+function roadEdge(x: number, z: number, notFid?: number, notNm?: string): { out: number; y: number; track: boolean; hw: number; ux: number; uz: number; nm?: string } | null {
+  let best: { out: number; y: number; track: boolean; hw: number; ux: number; uz: number; nm?: string } | null = null;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
     if (seg.ya === undefined || seg.yb === undefined) continue;
+    // Blind to ONE road, for the late-mask sweep: an intruder's end asking
+    // "whose carriageway am I standing in" must not be answered with its own.
+    if (notFid !== undefined && seg.fd === notFid) continue;
+    if (notNm !== undefined && seg.nm === notNm) continue;
     const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
     const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
     const d = Math.hypot(x - (seg.ax + dx * t), z - (seg.az + dz * t));
@@ -10643,7 +10916,7 @@ function roadEdge(x: number, z: number): { out: number; y: number; track: boolea
     // because the junction crop needs to know a join from a continuation.
     if (!best || out < best.out) {
       const l = Math.hypot(dx, dz) || 1;
-      best = { out, y: seg.ya + (seg.yb - seg.ya) * t, track: !!seg.tk, hw: seg.hw, ux: dx / l, uz: dz / l };
+      best = { out, y: seg.ya + (seg.yb - seg.ya) * t, track: !!seg.tk, hw: seg.hw, ux: dx / l, uz: dz / l, nm: seg.nm };
     }
   }
   return best;
@@ -10699,6 +10972,12 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
   const q = wayQuality(tags, track);
   const p = surfaceFor(track ? 'track' : 'road', q);
   return { q: +q.toFixed(3), mu: +p.mu.toFixed(3), drag: +p.drag.toFixed(3), rough: +p.rough.toFixed(4), max: +p.max.toFixed(1) };
+};
+// Every junction-crop decision near a point, with its reason — build-time
+// state no screenshot or rebuild can reconstruct.
+(window as unknown as { __cropwhy?: object }).__cropwhy = (x?: number, z?: number, r = 80): object[] => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  return cropLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r);
 };
 // Depth and current at a point — the physics' own read, so a test can ask
 // what the water is doing without driving a truck into it first.
