@@ -9682,6 +9682,8 @@ function buildOvTile(key: string, x: number, y: number, z: number,
     // ring it is meant to be standing in for.
     fineR: Math.round(osmRingR), fade: [Math.round(ovU.uOvR.value.x), Math.round(ovU.uOvR.value.y)],
     float: fl.length ? { n: fl.length, med: +fl[fl.length >> 1].toFixed(1),
+      p95: +fl[Math.floor(fl.length * 0.95)].toFixed(1),
+      over2: fl.filter((v) => v > 2).length,
       max: +fl[fl.length - 1].toFixed(1) } : null,
   };
 };
