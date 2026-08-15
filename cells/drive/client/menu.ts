@@ -82,6 +82,13 @@ export interface MenuCtx {
   soundTone(): Tone;
   soundTap(): void;
   hideHud(): void;
+  /** The durable copy of your progress: where it stands, and the two taps that
+   *  turn it on and off. */
+  syncLabel(): string;
+  syncNote(): string;
+  syncTone(): Tone;
+  syncOn(): boolean;
+  syncTap(): void;
   startDrive(i: number): void;
   deleteSpot(i: number): void;
   /** Geolocate (from this tap's gesture) and start a drive there. Status
@@ -596,6 +603,23 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
 
   function renderSettings(): void {
     body.appendChild(kvTable(ctx.systemRows));
+    // SIGNING IN IS OPTIONAL AND SAYS SO. A player who never touches this keeps
+    // playing exactly as before, with progress on the device — so the row leads
+    // with what it does rather than with a demand.
+    body.append(el('div', 'm-sect', 'PROGRESS'));
+    const syncNote = el('div', 'm-dimline', ctx.syncNote());
+    const sync = button('', C.soft, () => { ctx.syncTap(); refresh(); }, ICON.save);
+    updaters.push(() => {
+      const col = tone(ctx.syncTone());
+      setLab(sync, ctx.syncLabel());
+      sync.style.color = col;
+      sync.style.borderColor = col;
+      syncNote.textContent = ctx.syncNote();
+      // The note is where a failure actually reads — the button says what you
+      // can do, the line under it says what happened.
+      syncNote.style.color = ctx.syncTone() === 'bad' ? C.bad : C.dim;
+    });
+    body.append(sync, syncNote);
     dialsInto(body, ctx.dialGroups('system'));
     const snd = button('', C.soft, () => { ctx.soundTap(); refresh(); }, ICON.sound);
     updaters.push(() => {

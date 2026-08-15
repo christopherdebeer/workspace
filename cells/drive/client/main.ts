@@ -21,6 +21,12 @@ import { ICON, ICON_FONT } from './icons';
 import { RoadSolver, densifyPts } from './roadsolve';
 import { createOverlays } from './overlays';
 import { openSurvey } from './survey-store';
+import { openSync, restoreUrl } from './sync';
+
+// BEFORE ANYTHING READS THE QUERY STRING. Coming back from a sign-in, the URL
+// says `?code=…` where it used to say where the truck is, which way it faces
+// and what job is armed — and half this module reads those at import time.
+restoreUrl();
 
 // ── tuning ─────────────────────────────────────────────────────────
 const TERRAIN_Z = 14;         // terrarium tile zoom (~2.4km/cos(lat), ~9.5m/px — z13 washed out the hills roads tunnel through)
@@ -8803,6 +8809,14 @@ const survey = new Map<string, SurveyRoad>();
 /** What has been COLLECTED, as opposed to what is LOADED — see the head of
  *  `survey-store.ts` for why conflating the two silently deletes progress. */
 const surveyStore = openSurvey();
+/** …and the durable copy of it, for a player who signs in. The game never
+ *  waits on this: see the head of `sync.ts`. */
+const sync = openSync({
+  dump: (since) => surveyStore.dump(since),
+  merge: (rows) => surveyStore.merge(rows),
+  odo: () => Math.round(odo.total),
+  setOdo: (m) => { if (m > odo.total) { odo.total = m; saveOdo(); } },
+});
 /** OSM tiles whose ways have actually been rendered — NOT the same as the
  *  requested set, which is marked before the fetch even starts. */
 const osmDone = new Set<string>();
@@ -8940,6 +8954,7 @@ function stepSurvey(now: number): void {
       if (!r.claimed && surveyEligible(r) && r.got / r.cps.length > SURVEY_MAJORITY && surveyed(r)) {
         r.claimed = true; r.claimedAt = now;
         surveyStore.claim(id, r.cps.length);
+        sync.nudge();
         surveyClaim = { name: r.name, at: now, n: r.cps.length };
         audio.thud(2);
       }
@@ -12489,6 +12504,12 @@ function meshHeightAt(x: number, z: number): number | null {
       cps: roads.reduce((s, r) => s + r.cps, 0), got: roads.reduce((s, r) => s + r.got, 0) },
   };
 };
+/** Where the durable copy stands — signed in as whom, and when it last ran. */
+(window as unknown as { __sync?: object }).__sync = (): object => sync.status();
+/** The world's origin, for a probe checking that a spawn landed where the URL
+ *  said — after a sign-in return, that is the whole question. */
+(window as unknown as { __origin?: object }).__origin = (): object =>
+  ({ lat: +origin.lat.toFixed(5), lon: +origin.lon.toFixed(5) });
 /** What is actually STORED, as opposed to what is loaded — the two differ by
  *  every road whose tiles have not streamed in, which is the whole point of
  *  keeping the store separate from `survey`. */
@@ -17474,8 +17495,11 @@ function stepOdo(dt: number, now: number): void {
   odo.trip += d;
   if (now > odo.at) {
     odo.at = now + 8000;
-    try { localStorage.setItem('drive.odo', String(Math.round(odo.total))); } catch { /* fine */ }
+    saveOdo();
   }
+}
+function saveOdo(): void {
+  try { localStorage.setItem('drive.odo', String(Math.round(odo.total))); } catch { /* fine */ }
 }
 // Straight off the sheet — the parts of the rig that are not geometry.
 const SPEC_TEXT: Array<[string, string]> = [
@@ -18616,6 +18640,32 @@ const menu = createMenu({
   },
   elsewhere: () => { location.href = location.pathname + '?random=1'; },
   saveSpot: () => saveSpot(),
+  // PROGRESS, off the device. The label is the ACTION, the note is the state —
+  // and when signed out the note says what you keep either way, because that is
+  // the honest answer to "why would I sign in".
+  syncLabel: () => {
+    const s = sync.status();
+    return s.phase === 'off' ? 'SIGN IN TO KEEP PROGRESS'
+      : s.phase === 'busy' ? 'SYNCING…'
+        : `SIGNED IN${s.user ? ` AS ${s.user.toUpperCase()}` : ''} · SIGN OUT`;
+  },
+  syncNote: () => {
+    const s = sync.status();
+    if (s.phase === 'off') return 'PROGRESS STAYS ON THIS DEVICE';
+    const when = s.at ? `SYNCED ${Math.max(0, Math.round((Date.now() - s.at) / 1000))}S AGO` : '';
+    return `${s.note.toUpperCase()}${when ? ` · ${when}` : ''}`;
+  },
+  syncTone: () => {
+    const p = sync.status().phase;
+    return p === 'on' ? 'good' as const : p === 'busy' ? 'gold' as const
+      : p === 'off' ? 'soft' as const : 'bad' as const;
+  },
+  syncOn: () => sync.status().phase === 'on',
+  syncTap: () => {
+    const s = sync.status();
+    if (s.phase === 'off') void sync.signIn();
+    else if (s.phase === 'on' || s.phase === 'blocked' || s.phase === 'error') sync.signOut();
+  },
   soundLabel: () => (!audio.on ? 'SOUND OFF' : audio.state === 'running' ? 'SOUND ON' : 'SOUND TAP'),
   soundTone: () => (audio.on && audio.state === 'running' ? 'good' : 'soft'),
   soundTap: () => {
@@ -18739,6 +18789,10 @@ if (timeFromUrl >= 0) {
   // landed before `missionById` is asked. It is one small cached fetch on a
   // boot that is about to pull terrain, so it costs nothing anyone can see.
   await loadCampaign();
+  // The durable copy, for a player who signed in. NOT awaited: the whole point
+  // is that the game never waits on the network for progress, and this lands
+  // long before the first road does.
+  void sync.start();
   // The job, if this spawn carries one. Armed AFTER `origin` is set, because
   // both its waypoints are lat/lon and have to be projected into local metres.
   const mid = q.get('m');

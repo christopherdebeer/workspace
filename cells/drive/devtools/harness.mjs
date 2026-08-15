@@ -145,6 +145,11 @@ export async function openDrive(opts = {}) {
   page.on('pageerror', (e) => errors.push(
     `${String(e)}\n${(e && e.stack ? String(e.stack) : '').split('\n').slice(1, 4).join('\n')}`.slice(0, 600)));
   if (opts.init) await page.addInitScript(opts.init);
+  // Intercepts, BEFORE the first load. A test that needs to stand in for an
+  // upstream — the apex's OAuth endpoints, a `~/` route the local server 404s —
+  // cannot install them after `goto`, because by then the page has already
+  // asked. `opts.route(page)` runs with the page created and nothing loaded.
+  if (opts.route) await opts.route(page);
   await page.goto(`http://localhost:${port}/?${spot}`, { waitUntil: 'load', timeout: 60000 });
   await page.waitForFunction(() => document.querySelector('#boot')?.classList.contains('ready'), null, { timeout: 120000 });
   if (menu) await page.evaluate(() => window.__menutab(null));

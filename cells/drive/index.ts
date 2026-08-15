@@ -43,7 +43,10 @@ const CSP = [
   // Mapterhorn was brought in to replace, including the -13,029m hole at
   // Chapman's Peak. Nothing reported it, because a silent fallback was the
   // designed behaviour for a genuinely missing tile.
-  "connect-src 'self' https://esm.sh https://overpass-api.de https://overpass.kumi.systems https://overpass.osm.jp https://overpass.private.coffee https://s3.amazonaws.com https://nominatim.openstreetmap.org https://api.open-meteo.com https://tiles.mapterhorn.com",
+  // …and the apex, for the OAuth endpoints ALONE. `/state` is same-origin on
+  // this cell's own host, so signing in is the only thing that reaches off it
+  // (docs/cell-origin-isolation.md §4.5).
+  "connect-src 'self' https://parc.land https://esm.sh https://overpass-api.de https://overpass.kumi.systems https://overpass.osm.jp https://overpass.private.coffee https://s3.amazonaws.com https://nominatim.openstreetmap.org https://api.open-meteo.com https://tiles.mapterhorn.com",
   "img-src data: blob:",
   // The menu's pixel face (Silkscreen) ships inside the bundle as data: URIs —
   // no font host, so the page stays self-contained.
@@ -926,11 +929,191 @@ async function resolveGmap(raw: string): Promise<{ url?: string; error?: string 
   return { error: 'too many redirects' };
 }
 
+// ── a player's own progress ──────────────────────────────────────────
+/**
+ * THE DURABLE COPY.
+ *
+ * `/state` is the only route here that is about a person rather than about the
+ * world, and it is deliberately the smallest thing that could work.
+ *
+ * WHO IS ASKING comes from `x-cell-caller` — a dispatch-validated identity
+ * string, set in `services/cells/service.ts` from a bearer this cell never
+ * sees. There is no token here to store, rotate or leak; an anonymous visitor
+ * arrives as the literal string `anonymous` and is turned away, which is the
+ * whole of the authentication logic.
+ *
+ * WHAT IS KEPT is counts and claims, one row per road, under `PLAYER#<caller>`
+ * in the cell's own table (`services/cells/cell-template.ts` provisions it,
+ * with IAM scoped to that table's ARN alone). No crumbs — they regenerate by
+ * driving, and 20,000 of them would not fit in an item anyway.
+ *
+ * MERGING IS A UNION AND A MAX because progress is monotonic. Last-writer-wins
+ * would silently delete a second device's work; this cannot, and it needs no
+ * clock, no vector and no conflict UI. It also self-heals: if two devices push
+ * across each other, the one whose value was overwritten still holds it locally
+ * and restores it on its next sync.
+ *
+ * WHO MAY WRITE is not decided here. A POST reaches this cell only if the
+ * platform already authorised it (`cells.call` → `authorizeAccess`: the owner,
+ * or a principal the cell is shared with). Any other signed-in player gets a
+ * 403 from the tier above and keeps playing locally — the same graceful path as
+ * anonymous. That is the platform's sharing model doing the work, rather than
+ * this game inventing an access rule of its own.
+ */
+const TABLE = process.env.TABLE_NAME ?? '';
+const PROFILE = 'PROFILE';
+const ROAD = 'ROAD#';
+const STATE_CAP = 20000;       // roads mirrored, per player
+const PUSH_CAP = 4000;         // roads accepted in one push
+interface StateRow { g: number; t: number; c?: number }
+/** The corner of DynamoDB this needs, so a test can hand it a Map. */
+export interface StateTable {
+  all(pk: string): Promise<Record<string, StateRow>>;
+  put(pk: string, rows: Record<string, StateRow>): Promise<void>;
+  profile(pk: string): Promise<{ odo: number }>;
+  setProfile(pk: string, p: { odo: number }): Promise<void>;
+}
+const num = (v: unknown, cap = Number.MAX_SAFE_INTEGER): number => {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n > 0 ? Math.min(n, cap) : 0;
+};
+/** DynamoDB, hand-marshalled. Every value here is a string or a number, so the
+ *  document client is a dependency this would pay for and not use. */
+function liveTable(): StateTable {
+  // Lazily, like the S3 client: a request that never touches a player's state
+  // should not pay to load an SDK. (Unlike S3, this one IS in the repo's
+  // node_modules, so it type-checks here as well as resolving in the image.)
+  const client = async () => {
+    const m = await import('@aws-sdk/client-dynamodb');
+    return { m, db: new m.DynamoDBClient({}) };
+  };
+  const S = (v: string) => ({ S: v });
+  const N = (v: number) => ({ N: String(Math.round(v)) });
+  return {
+    async all(pk) {
+      const { m, db } = await client();
+      const out: Record<string, StateRow> = {};
+      // The SDK's own AttributeValue union, opaque to us — a paging cursor is
+      // handed straight back, never read.
+      let start: Record<string, never> | undefined;
+      // A page is 1MB and a row is tens of bytes, so this is one call for any
+      // real player — the loop is here so a very long career does not silently
+      // return a prefix of itself.
+      do {
+        const res = await db.send(new m.QueryCommand({
+          TableName: TABLE,
+          KeyConditionExpression: 'pk = :p AND begins_with(sk, :r)',
+          ExpressionAttributeValues: { ':p': S(pk), ':r': S(ROAD) },
+          ...(start ? { ExclusiveStartKey: start } : {}),
+        })) as { Items?: Array<Record<string, { S?: string; N?: string }>>;
+          LastEvaluatedKey?: Record<string, never> };
+        for (const it of res.Items ?? []) {
+          const id = (it.sk?.S ?? '').slice(ROAD.length);
+          if (!id) continue;
+          const c = num(it.c?.N);
+          out[id] = c ? { g: num(it.g?.N), t: num(it.t?.N), c } : { g: num(it.g?.N), t: num(it.t?.N) };
+          if (Object.keys(out).length >= STATE_CAP) return out;
+        }
+        start = res.LastEvaluatedKey;
+      } while (start);
+      return out;
+    },
+    async put(pk, rows) {
+      const entries = Object.entries(rows);
+      if (!entries.length) return;
+      const { m, db } = await client();
+      for (let i = 0; i < entries.length; i += 25) {
+        await db.send(new m.BatchWriteItemCommand({
+          RequestItems: {
+            [TABLE]: entries.slice(i, i + 25).map(([id, r]) => ({
+              PutRequest: { Item: {
+                pk: S(pk), sk: S(ROAD + id), g: N(r.g), t: N(r.t),
+                ...(r.c ? { c: N(r.c) } : {}),
+              } },
+            })),
+          },
+        }));
+      }
+    },
+    async profile(pk) {
+      const { m, db } = await client();
+      const res = await db.send(new m.GetItemCommand({
+        TableName: TABLE, Key: { pk: S(pk), sk: S(PROFILE) },
+      })) as { Item?: Record<string, { N?: string }> };
+      return { odo: num(res.Item?.odo?.N) };
+    },
+    async setProfile(pk, p) {
+      const { m, db } = await client();
+      await db.send(new m.PutItemCommand({
+        TableName: TABLE,
+        Item: { pk: S(pk), sk: S(PROFILE), odo: N(p.odo), seenAt: N(Date.now()) },
+      }));
+    },
+  };
+}
+
+export async function serveState(
+  method: string,
+  caller: string,
+  body: string | undefined,
+  table: StateTable = liveTable(),
+) {
+  const no = (code: number, error: string) =>
+    respond(code, 'application/json', JSON.stringify({ error }), { 'cache-control': 'no-store' });
+  if (!TABLE) return no(503, 'no table configured');
+  if (!caller || caller === 'anonymous') return no(401, 'sign in to keep progress');
+  const pk = `PLAYER#${caller}`;
+  const mine = await table.all(pk);
+  const prof = await table.profile(pk);
+
+  if (method === 'POST') {
+    let sent: { roads?: Record<string, StateRow>; odo?: unknown } = {};
+    try { sent = JSON.parse(body ?? '{}') as typeof sent; } catch { return no(400, 'unreadable'); }
+    const rows = sent.roads && typeof sent.roads === 'object' ? sent.roads : {};
+    const write: Record<string, StateRow> = {};
+    let n = 0;
+    for (const [id, row] of Object.entries(rows)) {
+      if (typeof id !== 'string' || !id || id.length > 300 || !row || typeof row !== 'object') continue;
+      if (++n > PUSH_CAP) break;
+      const g = num(row.g), t = num(row.t), c = num(row.c);
+      const had = mine[id];
+      const merged: StateRow = {
+        g: Math.max(g, had?.g ?? 0),
+        t: Math.max(t, had?.t ?? 0),
+        // Latched, and the truth about a claim is the first time it happened.
+        ...((c || had?.c) ? { c: Math.min(c || Infinity, had?.c || Infinity) } : {}),
+      };
+      if (had && had.g === merged.g && had.t === merged.t && had.c === merged.c) continue;
+      write[id] = merged;
+      mine[id] = merged;
+    }
+    await table.put(pk, write);
+    const odo = Math.max(num(sent.odo), prof.odo);
+    if (odo > prof.odo) await table.setProfile(pk, { odo });
+    return respond(200, 'application/json',
+      JSON.stringify({ user: caller, roads: mine, odo, wrote: Object.keys(write).length }),
+      { 'cache-control': 'no-store' });
+  }
+  return respond(200, 'application/json',
+    JSON.stringify({ user: caller, roads: mine, odo: prof.odo }),
+    { 'cache-control': 'no-store' });
+}
+
 export const handler = async (event: {
-  rawPath?: string; rawQueryString?: string; requestContext?: { http?: { method?: string } };
+  rawPath?: string; rawQueryString?: string; body?: string;
+  headers?: Record<string, string | undefined>;
+  requestContext?: { http?: { method?: string } };
 }) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
+  // Same-origin on the cell's own host, so `'self'` covers it and no CORS is
+  // involved. Before the read-only gate below, because this one writes.
+  if (path === '/state') {
+    if (method !== 'GET' && method !== 'POST') {
+      return respond(405, 'application/json', JSON.stringify({ error: 'GET or POST' }));
+    }
+    return serveState(method, event.headers?.['x-cell-caller'] ?? 'anonymous', event.body);
+  }
   // Deliberately OUTSIDE the `~/` namespace: that surface is cached by path,
   // and a resolver keyed on a query string has no business in a cache whose
   // key would ignore it.

@@ -291,7 +291,52 @@ const CAPE = [-33.92, 18.42], PARIS = [48.85, 2.35];
     (written[kloof]?.k ?? []).length === 2, written[kloof]);
 }
 
-// ── 10. no store at all (private mode, blocked storage) ────────────────
+// ── 10. what leaves the device, and what comes back ────────────────────
+// The durable copy mirrors CLAIMS AND COUNTS, never crumbs, and folds back in
+// by union-and-max. The watermark is wall-clock on purpose: it has to survive
+// a reload, which a monotonic clock does not.
+{
+  const st = fakeStore(), c = clock();
+  const store = openSurvey({ store: st, now: c.now, stamp: c.wall });
+  const kloof = store.roadId('Kloof Nek Road', ...CAPE);
+  for (const k of cps('kloof', 3)) store.take(kloof, k, 10);
+  const mark = c.wall();                         // everything above is now "already sent"
+  const rhodes = store.roadId('Rhodes Drive', ...CAPE);
+  store.claim(rhodes, 12);
+
+  const all = store.dump(0);
+  check('a full dump carries every road with progress',
+    Object.keys(all).length === 2, Object.keys(all));
+  check('…as counts and claims, and NOT as crumbs',
+    all[kloof].k === undefined && all[kloof].g === 3 && all[kloof].t === 10, all[kloof]);
+  check('…with the claim time on the claimed one', all[rhodes].c > 0, all[rhodes]);
+
+  const since = store.dump(mark);
+  check('a later dump carries only what changed since',
+    Object.keys(since).length === 1 && !!since[rhodes], Object.keys(since));
+
+  // …and the other device's half arrives.
+  const n = store.merge({
+    [kloof]: { g: 9, t: 10 },                             // it drove more of it
+    'Ou Kaapse Weg@-34,18': { g: 40, t: 40, c: 1700000000000 },  // and claimed one we have never seen
+    [rhodes]: { g: 1, t: 2 },                             // …and knows less about this one
+  });
+  check('a merge reports what it changed', n === 2, n);
+  check('a road driven further elsewhere goes up', store.rec.get(kloof).g === 9, store.rec.get(kloof));
+  check('…a road claimed elsewhere arrives claimed',
+    store.claimed('Ou Kaapse Weg@-34,18'), store.stats().top);
+  check('…and a device that knows less cannot pull anything down',
+    store.rec.get(rhodes).g === 12 && store.rec.get(rhodes).done > 0, store.rec.get(rhodes));
+  check('…and a road claimed elsewhere answers for its checkpoints here',
+    store.took('Ou Kaapse Weg@-34,18', 'never-collected'), null);
+
+  // A claim's TIME is latched to the first one that actually happened.
+  store.merge({ [rhodes]: { g: 12, t: 12, c: 1600000000000 } });
+  check('an earlier claim time wins', store.rec.get(rhodes).done === 1600000000000, store.rec.get(rhodes));
+  check('a merge is worth writing down', store.dirty(), store.dirty());
+}
+
+// ── 11. no store at all (private mode, blocked storage) ────────────────
 {
   const s = openSurvey({ store: null, now: clock().now, stamp: () => 1 });
   const main = s.roadId('Main Street', ...CAPE);

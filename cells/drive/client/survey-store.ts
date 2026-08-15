@@ -118,6 +118,12 @@ export interface Survey {
   claim(id: string, total: number): void;
   grew(id: string, total: number): void;
   claimed(id: string): boolean;
+  /** Counts and claims touched since `since` — what a durable copy is made of.
+   *  Never crumbs: see the head of `sync.ts`. */
+  dump(since: number): Record<string, { g: number; t: number; c?: number }>;
+  /** Fold a durable copy back in, union-and-max. Returns how many records it
+   *  actually changed. */
+  merge(rows: Record<string, { g: number; t: number; c?: number }>): number;
   tick(now: number): void;
   flush(): void;
   dirty(): boolean;
@@ -324,6 +330,39 @@ export function openSurvey(opts: {
       pending = pending || now();
     },
     claimed: (id: string): boolean => !!rec.get(id)?.done || !!legacy(id)?.done,
+    dump(since: number): Record<string, { g: number; t: number; c?: number }> {
+      const out: Record<string, { g: number; t: number; c?: number }> = {};
+      for (const [id, r] of rec) {
+        if (!r.g && !r.t && !r.done) continue;
+        // `seen` and `done` are wall-clock, which is what makes this answerable
+        // at all: the watermark has to survive a reload, and a monotonic clock
+        // does not. A record with neither is from before this was kept — send
+        // it once rather than never.
+        if (since && Math.max(r.seen, r.done) <= since) continue;
+        out[id] = r.done ? { g: r.g, t: r.t, c: r.done } : { g: r.g, t: r.t };
+      }
+      return out;
+    },
+    merge(rows: Record<string, { g: number; t: number; c?: number }>): number {
+      let changed = 0;
+      for (const [id, row] of Object.entries(rows ?? {})) {
+        if (!id || !row) continue;
+        const g = Number(row.g) || 0, t = Number(row.t) || 0, c = Number(row.c) || 0;
+        const r = recFor(id);
+        let hit = false;
+        // Union and max, in both directions — progress only ever goes up, so
+        // this is the whole of the merge and it needs no clock to be correct.
+        if (g > r.g) { r.g = g; hit = true; }
+        if (t > r.t) { r.t = t; hit = true; }
+        // A claim is latched, so the interesting question is not whether but
+        // WHEN — and the truth is the first time it happened.
+        if (c && (!r.done || c < r.done)) { r.done = c; hit = true; }
+        if (r.done) { r.got.clear(); r.g = Math.max(r.g, r.t); }
+        if (hit) { r.seen = Math.max(r.seen, c || r.seen); changed++; }
+      }
+      if (changed) pending = pending || now();
+      return changed;
+    },
     tick(t: number): void { if (pending && t - pending > SURVEY_FLUSH_MS) flush(); },
     flush,
     dirty: (): boolean => !!pending,
