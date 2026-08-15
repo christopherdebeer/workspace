@@ -12420,6 +12420,11 @@ function meshHeightAt(x: number, z: number): number | null {
 /** The other direction — a test needs to aim at a real place, not a guess. */
 (window as unknown as { __tolocal?: object }).__tolocal =
   (lat: number, lon: number): [number, number] => toLocal(lat, lon);
+/** Both directions of the Google Maps link, for the test that covers the
+ *  half-dozen shapes Google actually writes. */
+(window as unknown as { __gmap?: object }).__gmap =
+  (url: string): object | null => gmapCoords(url);
+(window as unknown as { __gmaplink?: object }).__gmaplink = (): string => gmapLinkHere();
 (window as unknown as { __feed?: object }).__feed =
   (lat: number, lon: number, head: number | null = null, spd: number | null = null, acc = 8,
     ageMs = 0): void => {
@@ -16796,6 +16801,82 @@ const startDrive = (d: Drive): void => {
   const m = d.mission ? `&m=${d.mission.id}` : '';
   location.href = `${location.pathname}?lat=${d.lat}&lon=${d.lon}&h=${d.h}&cam=chase${m}`;
 };
+// ── google maps links, both ways ───────────────────────────────────
+/**
+ * PULL A COORDINATE OUT OF A GOOGLE MAPS LINK.
+ *
+ * There is no single format — the app, the desktop site and the share sheet
+ * each write a different one — so this reads all of the shapes that carry a
+ * coordinate, in order of how much they mean:
+ *
+ *   !3d-30.58!4d27.72   the PLACE, inside the `data=` blob. Most trustworthy:
+ *                       when a link has both, this is the pin and the `@` is
+ *                       merely where the camera happened to be sitting.
+ *   ?q= / ?query= / ?destination= / ?ll= / ?center=   an explicit point, and
+ *                       `q=loc:lat,lon` is the same thing with a prefix.
+ *   /@-30.58,27.72,15z  the viewport centre, which is the whole link on a
+ *                       plain map share.
+ *
+ * A link with only a place NAME ("/maps/place/Big+Sur/") carries no coordinate
+ * and is not guessed at — the caller says so plainly instead.
+ */
+function gmapCoords(raw: string): { lat: number; lon: number } | null {
+  const ok = (la: number, lo: number): { lat: number; lon: number } | null =>
+    Number.isFinite(la) && Number.isFinite(lo) && Math.abs(la) <= 90 && Math.abs(lo) <= 180
+    // 0,0 is the Atlantic, and it is also what a half-parsed link produces.
+    && !(la === 0 && lo === 0) ? { lat: la, lon: lo } : null;
+  const pair = (s: string): { lat: number; lon: number } | null => {
+    const m = decodeURIComponent(s).match(/(-?\d+(?:\.\d+)?)[ ,]+(-?\d+(?:\.\d+)?)/);
+    return m ? ok(parseFloat(m[1]), parseFloat(m[2])) : null;
+  };
+  const d = raw.match(/!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/);
+  if (d) { const p = ok(parseFloat(d[1]), parseFloat(d[2])); if (p) return p; }
+  let u: URL | null = null;
+  try { u = new URL(raw); } catch { /* a bare "lat,lon" paste still works below */ }
+  if (u) {
+    for (const k of ['q', 'query', 'destination', 'daddr', 'll', 'center', 'sll', 'viewpoint']) {
+      const v = u.searchParams.get(k);
+      if (v) { const p = pair(v.replace(/^loc:/i, '')); if (p) return p; }
+    }
+  }
+  const at = raw.match(/@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)/);
+  if (at) { const p = ok(parseFloat(at[1]), parseFloat(at[2])); if (p) return p; }
+  // Not a link at all: someone pasted the coordinates themselves, which is a
+  // perfectly good thing to paste.
+  return u ? null : pair(raw);
+}
+/** Is this a link whose coordinate only exists on the other side of a
+ *  redirect? Those are the ones worth asking the cell to follow. */
+const gmapShort = (raw: string): boolean => /^https:\/\/(maps\.app\.goo\.gl|goo\.gl|g\.co)\//i.test(raw.trim());
+/**
+ * A link in, a drive out. The shortener hop goes through the cell because the
+ * browser is not allowed to see the redirect (no CORS on goo.gl) — see the
+ * `/gmaps` route. Everything else is parsed right here and never leaves.
+ */
+async function driveFromGmap(raw: string, say: (s: string, bad?: boolean) => void): Promise<void> {
+  const link = raw.trim();
+  if (!link) { say('PASTE A LINK FIRST', true); return; }
+  let here = gmapCoords(link);
+  if (!here && gmapShort(link)) {
+    say('FOLLOWING THE LINK…');
+    try {
+      const res = await fetch(`${CELL_BASE}/gmaps?u=${encodeURIComponent(link)}`);
+      const j = (await res.json()) as { url?: string; error?: string };
+      if (j.error) { say(j.error.toUpperCase(), true); return; }
+      here = j.url ? gmapCoords(j.url) : null;
+    } catch { say('COULD NOT REACH THE LINK', true); return; }
+  }
+  if (!here) { say('NO COORDINATES IN THAT LINK', true); return; }
+  say('FOUND — LOADING');
+  location.href = `${location.pathname}?lat=${here.lat.toFixed(5)}&lon=${here.lon.toFixed(5)}&h=0&cam=chase`;
+}
+/** …and the way back out: where the truck is standing, as a link anyone can
+ *  open in Google Maps. `?q=` because it drops a pin rather than merely
+ *  pointing a camera, which is what you mean when you send someone a place. */
+function gmapLinkHere(): string {
+  const [la, lo] = localToLatLon(state.x, state.z);
+  return `https://www.google.com/maps?q=${la.toFixed(6)},${lo.toFixed(6)}`;
+}
 /** A drive's mission, by the id the spawn URL carries — so a shared link
  *  arrives with the job already on it. */
 const missionById = (id: string): Mission | null =>
@@ -18174,6 +18255,29 @@ const menu = createMenu({
       (e) => geoFail(e, (s) => status(s, true)),
       { enableHighAccuracy: true, timeout: 20000, maximumAge: 30000 },
     );
+  },
+  openGmap: (link, status) => { void driveFromGmap(link, status); },
+  // SHARE SHEET FIRST, clipboard second, and the field the menu shows is the
+  // third answer — on a phone "send this to someone" is a share, and on a
+  // desktop it is a copy, and neither is available in every browser.
+  shareGmap: (status) => {
+    const url = gmapLinkHere();
+    const nav = navigator as Navigator & { share?: (d: { title?: string; url: string }) => Promise<void> };
+    if (nav.share) {
+      nav.share({ title: 'DAK 23 IS HERE', url })
+        .then(() => status('SHARED'))
+        // A dismissed share sheet rejects, and that is not an error.
+        .catch(() => status('THIS SPOT AS A GOOGLE MAPS LINK'));
+      return url;
+    }
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(url)
+        .then(() => status('COPIED'))
+        .catch(() => status('COPY IT FROM THE BOX', true));
+      return url;
+    }
+    status('COPY IT FROM THE BOX');
+    return url;
   },
 });
 

@@ -87,6 +87,12 @@ export interface MenuCtx {
   /** Geolocate (from this tap's gesture) and start a drive there. Status
    *  strings land back in the CURRENT row via the callback. */
   goCurrent(status: (s: string, bad?: boolean) => void): void;
+  /** Take a pasted Google Maps link (or a bare "lat, lon") and drive there. */
+  openGmap(link: string, status: (s: string, bad?: boolean) => void): void;
+  /** Hand out where the truck is standing as a Google Maps link — the share
+   *  sheet if the device has one, the clipboard otherwise. The resolved link
+   *  comes back so the caller can show it when neither is available. */
+  shareGmap(status: (s: string, bad?: boolean) => void): string;
 }
 
 export interface MenuHandle {
@@ -139,6 +145,16 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   #menu .m-foot { padding: 8px 12px 0; display: grid; gap: 5px; justify-items: start; }
   #menu .m-btn { letter-spacing: 1px; cursor: pointer; min-width: 14em;
     text-align: left; padding: 5px 10px 4px; background: rgba(8,20,23,0.78); border: 1px solid; font-size: 12px; }
+  /* The paste field. A real input, because a link is far too long to retype
+     and the clipboard read permission is not offered on every phone — so the
+     honest control is a box you can paste into. Sized and coloured like the
+     buttons it sits with; 16px on the input itself stops iOS Safari zooming
+     the whole page in the moment it takes focus. */
+  #menu .m-paste { display: grid; gap: 5px; width: 100%; max-width: 34em; }
+  #menu .m-paste input { font-family: inherit; font-size: 16px; letter-spacing: 0;
+    color: ${C.text}; background: rgba(8,20,23,0.9); border: 1px solid ${C.gold};
+    padding: 6px 8px 5px; width: 100%; box-sizing: border-box; -webkit-user-select: text; user-select: text; }
+  #menu .m-paste .note { font-size: 11px; color: ${C.dim}; letter-spacing: 1px; }
   #menu .m-cta { display: block; width: 100%; cursor: pointer; text-align: center; letter-spacing: 2px;
     font-size: 16px; font-weight: 700; padding: 9px 10px 7px; margin: 8px 0 0;
     color: ${C.good}; border: 1px solid ${C.good}; background: rgba(111,224,160,0.08); }
@@ -539,6 +555,43 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       button('SAVE THIS SPOT', C.gold, () => { ctx.saveSpot(); render(); }, ICON.save),
       button('ELSEWHERE - ANYWHERE ON EARTH', C.gold, () => ctx.elsewhere(), ICON.dice),
     );
+    // ── google maps, both directions ──
+    // The paste field is built once and only SHOWN on the tap, so the common
+    // case (browsing the list) is not a screen with a text box on it.
+    const paste = el('div', 'm-paste');
+    paste.style.display = 'none';
+    const field = el('input', '');
+    field.type = 'text';
+    field.placeholder = 'PASTE LINK, OR LAT, LON';
+    // Every autocorrect a phone offers will damage a URL.
+    field.autocapitalize = 'off'; field.autocomplete = 'off'; field.spellcheck = false;
+    const note = el('div', 'note', 'SHORT LINKS FOLLOWED FOR YOU');
+    const say = (s: string, bad?: boolean): void => { note.textContent = s; note.style.color = bad ? C.bad : C.dim; };
+    const go = (): void => ctx.openGmap(field.value, say);
+    field.addEventListener('keydown', (e) => { if ((e as KeyboardEvent).key === 'Enter') go(); });
+    // A pasted link is the whole intent — waiting for a second tap on GO is a
+    // step with nothing in it. The timeout lets the value land first.
+    field.addEventListener('paste', () => setTimeout(go, 0));
+    paste.append(field, button('GO THERE', C.good, go, ICON.here), note);
+    const open = button('FROM A GOOGLE MAPS LINK', C.gold, () => {
+      const showing = paste.style.display !== 'none';
+      paste.style.display = showing ? 'none' : 'grid';
+      if (!showing) field.focus();
+    }, ICON.map);
+    const share = button('THIS SPOT AS A GOOGLE MAPS LINK', C.gold, () => {
+      const link = ctx.shareGmap((s, bad) => {
+        const lab = share.querySelector('.lab') as HTMLElement | null;
+        if (lab) lab.textContent = s;
+        share.style.color = bad ? C.bad : C.good;
+        share.style.borderColor = bad ? C.bad : C.good;
+      });
+      // Wherever it went, show it too: a link you can see is one you can copy
+      // by hand when the share sheet and the clipboard are both unavailable.
+      paste.style.display = 'grid';
+      field.value = link;
+      field.select();
+    }, ICON.pin);
+    foot.append(open, share, paste);
   }
 
   function renderSettings(): void {

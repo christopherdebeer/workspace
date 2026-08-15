@@ -721,9 +721,67 @@ async function serveTile(path: string, m: RegExpMatchArray) {
   };
 }
 
-export const handler = async (event: { rawPath?: string; requestContext?: { http?: { method?: string } } }) => {
+// ── the Google Maps link resolver ──────────────────────────────────
+/**
+ * A link shared out of the Google Maps app is a SHORTENER —
+ * maps.app.goo.gl/NnqHXgwN6T4PJnyL7 — and the coordinates live only in what it
+ * redirects to. The browser cannot follow it: the shortener answers with no
+ * CORS header, so the fetch fails before the redirect is ever visible. So the
+ * hop happens here.
+ *
+ * This is a URL-fetching endpoint, which is the shape of an SSRF, so it is
+ * fenced on all four sides: https only, EVERY hop's host re-checked against the
+ * allowlist (not just the first — a redirect is an attacker-controlled jump),
+ * a hop cap, a timeout, and — the containment that matters most — it returns
+ * the final URL and NEVER the body. There is no way to read a response through
+ * this, only to learn where a Google link points.
+ */
+const gmapHost = (h: string): boolean =>
+  h === 'maps.app.goo.gl' || h === 'goo.gl' || h === 'g.co'
+  || /^(www\.|maps\.)?google(\.[a-z]{2,3}){1,2}$/.test(h);
+
+async function resolveGmap(raw: string): Promise<{ url?: string; error?: string }> {
+  let u: URL;
+  try { u = new URL(raw); } catch { return { error: 'not a link' }; }
+  for (let hop = 0; hop < 6; hop++) {
+    if (u.protocol !== 'https:') return { error: 'https links only' };
+    if (!gmapHost(u.hostname)) return { error: `not a google maps link (${u.hostname})` };
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);
+    let res: Response;
+    try {
+      res = await fetch(u.toString(), {
+        redirect: 'manual',
+        // Google hands a bare Node fetch a consent interstitial; a browser UA
+        // gets the ordinary 302 the phone would have followed.
+        headers: { 'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15' },
+        signal: ctl.signal,
+      });
+    } catch (e) {
+      return { error: `could not reach google (${(e as Error).name})` };
+    } finally { clearTimeout(timer); }
+    const loc = res.headers.get('location');
+    if (!loc) return { url: u.toString() };     // end of the chain — this is the real link
+    try { u = new URL(loc, u); } catch { return { error: 'bad redirect' }; }
+  }
+  return { error: 'too many redirects' };
+}
+
+export const handler = async (event: {
+  rawPath?: string; rawQueryString?: string; requestContext?: { http?: { method?: string } };
+}) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
+  // Deliberately OUTSIDE the `~/` namespace: that surface is cached by path,
+  // and a resolver keyed on a query string has no business in a cache whose
+  // key would ignore it.
+  if (path === '/gmaps') {
+    const u = new URLSearchParams(event.rawQueryString ?? '').get('u') ?? '';
+    const out = u ? await resolveGmap(u) : { error: 'no link given' };
+    return respond(out.error ? 400 : 200, 'application/json', JSON.stringify(out), {
+      'cache-control': 'no-store',
+    });
+  }
   if (method !== 'GET') return respond(405, 'application/json', JSON.stringify({ error: 'read-only' }));
   // The public namespace is a CACHED surface, so anything under `~/` that this
   // cell does not serve must say so plainly. Falling through to the SPA shell
