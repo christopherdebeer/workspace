@@ -17504,6 +17504,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // truck.
   if (menu.tab() !== null) return;
   const pad = 4;
+  /** Bottom of the compass strip in HUD pixels: `pad` + the heading digits
+   *  under the needle. Nothing else may be drawn through it. */
+  const COMPASS_B = pad + 28;
   // Filled and hollow diamonds, plotted a row at a time. At this resolution a
   // marker is about seven pixels across, so it is drawn, not stroked.
   function diamond(cx: number, cy: number, r: number): void {
@@ -17817,7 +17820,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const iw = iconCh ? 7 : 0;
     const w = textPW(label) + 4 + iw;
     const ax = clamp(Math.round(p.x / hudS), 4, HW - 4);      // the beam's foot
-    const ay = clamp(Math.round(p.y / hudS), 24, HH - 40);
+    const ayRaw = clamp(Math.round(p.y / hudS), 24, HH - 40);
     const txp = clamp(Math.round(p.tx / hudS), 4, HW - 4);    // its head, world-projected
     const typ = Math.round(p.ty / hudS);
     const near = clamp(1 - p.d / 900, 0, 1);
@@ -17830,6 +17833,13 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // thirty-metre light on a mountain two hundred kilometres away is neither
     // true nor legible — the mark and the height are the whole statement.
     const isPeak = p.kind === 'peak';
+    // BELOW THE COMPASS. The strip runs from `pad` to about 32 HUD pixels —
+    // ticks, needle and the heading digits — and a summit seen from a valley
+    // floor projects straight through it: photographed at Chamonix with the
+    // three Mont Blanc names written across the bearing. A peak that high is
+    // above the glass anyway, so its mark rests just under the instrument
+    // rather than on top of it.
+    const ay = isPeak ? Math.max(ayRaw, COMPASS_B + 4) : ayRaw;
     const beamTop = isPeak ? ay : Math.min(ay - 6, Math.max(12, typ));
     const h = ay - beamTop;
     const x = clamp(Math.round(ax - w / 2), 2, HW - w - 2);
@@ -17843,7 +17853,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // Chamonix was photographed with them. Above the mark by default, under it
     // when there is no room, and either way it stays beside the thing it names.
     const above = ay - Math.max(11, Math.round(h / 3)) - lane * 8;
-    const ly = isPeak && above < 20 ? ay + 7 + lane * 8 : Math.max(12, above);
+    const ly = isPeak && above < COMPASS_B ? ay + 7 + lane * 8 : Math.max(12, above);
     hctx.save();
     // THE checkpoint beam, in the place's own colour: the same leaning
     // column, the same alpha ramp, the same widths — one family of light.
