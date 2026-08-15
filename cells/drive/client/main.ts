@@ -8784,6 +8784,11 @@ interface Checkpoint { x: number; z: number; key: string; got: boolean; at?: num
   hid?: boolean; hidAt?: number }
 interface SurveyRoad {
   name: string;
+  /** Its identity in the store — the name plus where it is. Settled from the
+   *  first fragment to arrive and then fixed for the session: every fragment
+   *  loaded at once is within a few km of the rig, so they all answer to the
+   *  same cell neighbourhood anyway. */
+  id: string;
   cps: Checkpoint[];
   len: number;
   got: number;
@@ -8807,10 +8812,14 @@ const cpKey = (x: number, z: number): string => {
 };
 /** Lay checkpoints along one fragment of a named road. */
 function noteSurvey(name: string, pts: Array<[number, number]>, track: boolean): void {
-  const id = surveyStore.roadId(name);
+  if (!pts.length) return;
   let r = survey.get(name);
-  if (!r) survey.set(name, (r = { name, cps: [], len: 0, got: 0, track,
-    tiles: new Set(), claimed: false, claimedAt: 0 }));
+  if (!r) {
+    const [lat, lon] = localToLatLon(pts[0][0], pts[0][1]);
+    survey.set(name, (r = { name, id: surveyStore.roadId(name, lat, lon), cps: [], len: 0, got: 0,
+      track, tiles: new Set(), claimed: false, claimedAt: 0 }));
+  }
+  const id = r.id;
   // Phase at P/2 so a fragment shorter than the pitch still earns one
   // checkpoint at its middle rather than nothing at all.
   let acc = SURVEY_P / 2;
@@ -8919,7 +8928,7 @@ function stepSurvey(now: number): void {
   if (w && w.on) {
     const r = survey.get(w.name);
     if (r) {
-      const id = surveyStore.roadId(r.name);
+      const id = r.id;
       for (const c of r.cps) {
         if (c.got) continue;
         if (nearSwept(c.x, c.z) > SURVEY_CAPTURE) continue;

@@ -60,10 +60,59 @@ export const SURVEY_FLUSH_MS = 4000;
 const V1_CP = 'drive.survey.cp';
 const V1_DONE = 'drive.survey.done';
 
+/**
+ * ROAD IDENTITY.
+ *
+ * A road is `<name>@<cy>,<cx>` — its name plus the whole-degree cell it was
+ * first seen in. Bare names were the bug: claiming one Main Street claimed
+ * every Main Street that player would ever drive.
+ *
+ * The hard part is not telling two roads apart, it is NOT tearing one road in
+ * half. A road's fragments arrive with the tiles, independently and in an order
+ * set by where you spawned, so an id derived from "whichever fragment loaded
+ * first" is a different id on Tuesday and the progress splits in two — with
+ * nothing on screen to say so. Two things prevent that:
+ *
+ *   The cell is COARSE. A degree of latitude is ~111km, which is longer than
+ *   almost any named road and far shorter than the distance between two cities
+ *   that both have a Main Street.
+ *
+ *   The lookup is by NEIGHBOURHOOD, not by exact cell. A fragment joins any
+ *   existing record of the same name within one cell in each direction, so
+ *   driving in from the far end of a road that straddles a boundary finds the
+ *   record that already exists rather than minting a second one. Only the first
+ *   sighting mints, which is what makes the answer stable across sessions: the
+ *   anchor is whatever is already stored, not whatever loaded first today.
+ *
+ * The trade is deliberate and one-sided. Two same-named roads within ~111km
+ * merge into one record; a road longer than ~222km can still split. Merging
+ * over-grants a claim, splitting LOSES one — so the error goes to the side that
+ * never costs a player progress they earned.
+ */
+const CELL = 1;                       // degrees
+const CELL_SPAN = Math.round(360 / CELL);
+const cellOf = (lat: number, lon: number): [number, number] =>
+  [Math.floor(lat / CELL), Math.floor(lon / CELL)];
+/** Split `<name>@<cy>,<cx>`. A bare name — no cell — is a record from before
+ *  roads had identity, and is treated as legacy rather than as a road called
+ *  that in cell nowhere. */
+function splitId(id: string): { name: string; cell: [number, number] | null } {
+  const at = id.lastIndexOf('@');
+  if (at < 0) return { name: id, cell: null };
+  const m = /^(-?\d+),(-?\d+)$/.exec(id.slice(at + 1));
+  return m ? { name: id.slice(0, at), cell: [Number(m[1]), Number(m[2])] } : { name: id, cell: null };
+}
+/** Are two cells neighbours? Longitude wraps — 179.5°E and 179.5°W are a
+ *  degree apart, not 359. */
+const near = (a: [number, number], b: [number, number]): boolean => {
+  const dx = Math.abs(a[1] - b[1]);
+  return Math.abs(a[0] - b[0]) <= 1 && Math.min(dx, CELL_SPAN - dx) <= 1;
+};
+
 export interface Survey {
   /** Every road with progress, loaded or not. Read-only to callers. */
   rec: Map<string, SurveyRec>;
-  roadId(name: string): string;
+  roadId(name: string, lat: number, lon: number): string;
   took(id: string, key: string): boolean;
   take(id: string, key: string, total: number): void;
   claim(id: string, total: number): void;
@@ -98,11 +147,37 @@ export function openSurvey(opts: {
    *  it marks a time and the loop writes once. */
   let pending = 0;
 
+  /** Anchors by name, so `roadId` can find an existing record without walking
+   *  every road a player has ever driven. Minting adds to it immediately —
+   *  two fragments of one road in adjacent cells must agree within a session
+   *  as well as across them. */
+  const byName = new Map<string, Array<{ id: string; cell: [number, number] }>>();
+  const index = (id: string): void => {
+    const { name, cell } = splitId(id);
+    if (!cell) return;                              // legacy records anchor nowhere
+    const list = byName.get(name);
+    if (!list) byName.set(name, [{ id, cell }]);
+    else if (!list.some((k) => k.id === id)) list.push({ id, cell });
+  };
+
   const get = (k: string): string | null => { try { return store?.getItem(k) ?? null; } catch { return null; } };
   const recFor = (id: string): SurveyRec => {
     let r = rec.get(id);
-    if (!r) rec.set(id, (r = { got: new Set(), g: 0, t: 0, done: 0, seen: 0 }));
+    if (!r) { rec.set(id, (r = { got: new Set(), g: 0, t: 0, done: 0, seen: 0 })); index(id); }
     return r;
+  };
+  /**
+   * The record this road had before roads had identity.
+   *
+   * Kept read-only and answered from, never re-keyed. Re-keying would have to
+   * guess WHERE a bare name's progress was earned, and a wrong guess moves a
+   * claim from the city it belongs to onto a road the player has never seen.
+   * So old claims keep answering by name — exactly as broadly as they always
+   * did, no worse — while every new claim is anchored.
+   */
+  const legacy = (id: string): SurveyRec | undefined => {
+    const { name, cell } = splitId(id);
+    return cell ? rec.get(name) : undefined;
   };
 
   // ── load ──
@@ -151,6 +226,11 @@ export function openSurvey(opts: {
       // A road merely seen is not progress — but anything HELD is, and the
       // guard must never be the thing that decides not to write a crumb.
       if (!r.g && !r.t && !r.done && !r.got.size) continue;
+      // A pre-identity record whose crumbs have all found their anchored road,
+      // and which was never claimed, has nothing left to say. Its counts are
+      // superseded by the records that took them. Claimed ones stay forever:
+      // they are the only answer an old claim has.
+      if (!r.done && !r.got.size && !splitId(id).cell) continue;
       const row: SurveyRow = { g: r.g, t: r.t };
       if (r.done) row.c = r.done;
       else if (r.got.size) row.k = [...r.got];
@@ -171,38 +251,45 @@ export function openSurvey(opts: {
 
   return {
     rec,
-    /**
-     * ROAD IDENTITY — the one place it is decided.
-     *
-     * A bare name is wrong and known to be wrong: claiming one "Main Street"
-     * claims every Main Street a player will ever drive. The fix is the name
-     * plus something positional, and it is deliberately NOT made here yet,
-     * because the positional part has to be stable across fragments that arrive
-     * independently (`docs/drive-survey-checkpoints.md`), and because `survey`,
-     * `wayAt` and every mission's `via` key roads by bare name today. Getting it
-     * wrong silently corrupts progress, so it is its own change — made through
-     * this function, with a bridge for the ids already written.
-     */
-    roadId: (name: string): string => name,
+    /** This road, HERE — see ROAD IDENTITY at the head of the file. `lat`/`lon`
+     *  is any point on the fragment being laid; which point it is does not
+     *  matter, only which cell neighbourhood it falls in. */
+    roadId(name: string, lat: number, lon: number): string {
+      const cell = cellOf(lat, lon);
+      for (const k of byName.get(name) ?? []) if (near(k.cell, cell)) return k.id;
+      const id = `${name}@${cell[0]},${cell[1]}`;
+      index(id);
+      return id;
+    },
 
     /** Was this checkpoint collected in an earlier session? A claimed road
      *  answers for all of its checkpoints at once. */
     took(id: string, key: string): boolean {
       const r = rec.get(id);
       if (r && (r.done || r.got.has(key))) return true;
-      // A v1 crumb had no road attached. The first road to lay a checkpoint on
-      // that exact spot — ~1m — takes it, which is how the old flat set empties
-      // itself: driven roads migrate as they load, and the key goes when the
-      // last crumb finds its road.
-      if (v1.delete(key)) {
+      /** Carry a crumb into this road's record and answer yes. */
+      const adopt = (): true => {
         const r2 = recFor(id);
         r2.got.add(key);
         r2.g = Math.max(r2.g, r2.got.size);
         r2.seen = stamp();
-        v1Shed = true;
         pending = pending || now();
         return true;
+      };
+      // The record from before roads had identity. Its CLAIM answers by name
+      // and is never moved (see `legacy`), but a crumb carries its own position
+      // — the checkpoint being laid is at that exact spot — so a crumb can be
+      // moved onto the anchored record safely, and is.
+      const old = legacy(id);
+      if (old) {
+        if (old.done) return true;
+        if (old.got.delete(key)) return adopt();
       }
+      // A v1 crumb had no road attached at all. The first road to lay a
+      // checkpoint on that exact spot — ~1m — takes it, which is how the old
+      // flat set empties itself: driven roads migrate as they load, and the key
+      // goes when the last crumb finds its road.
+      if (v1.delete(key)) { v1Shed = true; return adopt(); }
       return false;
     },
     take(id: string, key: string, total: number): void {
@@ -236,7 +323,7 @@ export function openSurvey(opts: {
       if (r.done) r.g = total;
       pending = pending || now();
     },
-    claimed: (id: string): boolean => !!rec.get(id)?.done,
+    claimed: (id: string): boolean => !!rec.get(id)?.done || !!legacy(id)?.done,
     tick(t: number): void { if (pending && t - pending > SURVEY_FLUSH_MS) flush(); },
     flush,
     dirty: (): boolean => !!pending,

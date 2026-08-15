@@ -61,6 +61,9 @@ function clock(t = 1000) {
   return c;
 }
 const cps = (road, n) => Array.from({ length: n }, (_, i) => `${road}:${i}`);
+// Somewhere to be. Roads are identified by name AND place, so every test that
+// touches identity has to say where it is standing.
+const CAPE = [-33.92, 18.42], PARIS = [48.85, 2.35];
 
 // ── 1. the deletion trap ────────────────────────────────────────────────
 // Monday: the whole road loads and gets driven. Tuesday: only its first half
@@ -69,42 +72,46 @@ const cps = (road, n) => Array.from({ length: n }, (_, i) => `${road}:${i}`);
   const st = fakeStore(), c = clock();
   const mon = openSurvey({ store: st, now: c.now, stamp: c.wall });
   const all = cps('kaapse', 12);
-  for (const k of all) mon.take('Ou Kaapse Weg', k, 12);
+  for (const k of all) mon.take(mon.roadId('Ou Kaapse Weg', ...CAPE), k, 12);
   mon.flush();
 
   const tue = openSurvey({ store: st, now: c.now, stamp: c.wall });
+  const tid = tue.roadId('Ou Kaapse Weg', ...CAPE);
   // Half the road is on screen; the game asks about those checkpoints only.
   const seen = all.slice(0, 6);
-  check('the loaded half is remembered', seen.every((k) => tue.took('Ou Kaapse Weg', k)), null);
+  check('the loaded half is remembered', seen.every((k) => tue.took(tid, k)), null);
   // …and driving one of them writes.
-  tue.take('Ou Kaapse Weg', seen[0], 6);
+  tue.take(tid, seen[0], 6);
   tue.flush();
 
   const wed = openSurvey({ store: st, now: c.now, stamp: c.wall });
+  const wid = wed.roadId('Ou Kaapse Weg', ...CAPE);
   check('the half that never loaded is STILL there',
-    all.slice(6).every((k) => wed.took('Ou Kaapse Weg', k)), wed.stats().top);
+    all.slice(6).every((k) => wed.took(wid, k)), wed.stats().top);
   check('…and the count did not shrink to what one session could see',
-    wed.rec.get('Ou Kaapse Weg').g === 12, wed.rec.get('Ou Kaapse Weg'));
+    wed.rec.get(wid).g === 12, wed.rec.get(wid));
 }
 
 // ── 2. a claim is immediate, and it answers for the whole road ──────────
 {
   const st = fakeStore(), c = clock();
   const s = openSurvey({ store: st, now: c.now, stamp: c.wall });
-  for (const k of cps('chapmans', 5)) s.take("Chapman's Peak Drive", k, 9);
+  const chap = s.roadId("Chapman's Peak Drive", ...CAPE);
+  for (const k of cps('chapmans', 5)) s.take(chap, k, 9);
   const before = st.writes;
-  s.claim("Chapman's Peak Drive", 9);
+  s.claim(chap, 9);
   check('a claim writes there and then, not on a timer', st.writes === before + 1, { before, after: st.writes });
   check('…and is not still pending', !s.dirty(), s.dirty());
 
   const next = openSurvey({ store: st, now: c.now, stamp: c.wall });
-  check('a claimed road stays claimed', next.claimed("Chapman's Peak Drive"), next.stats().top);
+  const nid = next.roadId("Chapman's Peak Drive", ...CAPE);
+  check('a claimed road stays claimed', next.claimed(nid), next.stats().top);
   // Crumbs are dropped, so this is the thing that keeps the markers down and
   // stops a driven road re-pinging at you forever.
   check('…and answers for every checkpoint on it, including ones never collected',
-    cps('chapmans', 9).every((k) => next.took("Chapman's Peak Drive", k)), null);
+    cps('chapmans', 9).every((k) => next.took(nid, k)), null);
   check('…while keeping no crumbs at all', next.stats().crumbs === 0, next.stats());
-  const row = JSON.parse(st.raw.get(SURVEY_KEY)).roads["Chapman's Peak Drive"];
+  const row = JSON.parse(st.raw.get(SURVEY_KEY)).roads[chap];
   check('the written record is a count and a time, not a list',
     row.k === undefined && row.g === 9 && row.t === 9 && row.c > 0, row);
 }
@@ -116,7 +123,8 @@ const cps = (road, n) => Array.from({ length: n }, (_, i) => `${road}:${i}`);
 {
   const st = fakeStore(), c = clock();
   const s = openSurvey({ store: st, now: c.now, stamp: c.wall });
-  for (const k of cps('grind', 40)) { s.take('Long Street', k, 40); s.tick(c.now()); }
+  const long = s.roadId('Long Street', ...CAPE);
+  for (const k of cps('grind', 40)) { s.take(long, k, 40); s.tick(c.now()); }
   check('forty checkpoints in one frame cost nothing yet', st.writes === 0, st.writes);
   c.t += SURVEY_FLUSH_MS + 1;
   s.tick(c.now());
@@ -136,26 +144,29 @@ const cps = (road, n) => Array.from({ length: n }, (_, i) => `${road}:${i}`);
   });
   const c = clock();
   const s = openSurvey({ store: st, now: c.now, stamp: c.wall });
-  check('a v1 claim is still a claim', s.claimed('Rhodes Drive'), s.stats().top);
+  check('a v1 claim is still a claim', s.claimed(s.roadId('Rhodes Drive', ...CAPE)), s.stats().top);
   check('v1 crumbs are held until a road claims them', s.stats().v1 === 3, s.stats());
   // Road A loads: its two crumbs are recognised and move across.
+  const alpha = s.roadId('Alpha Road', ...CAPE), beta = s.roadId('Beta Road', ...CAPE);
   check('a v1 crumb reads as collected on the road it belongs to',
-    s.took('Alpha Road', 'a:0') && s.took('Alpha Road', 'a:1'), null);
-  check('…and a checkpoint nobody ever drove does not', !s.took('Alpha Road', 'a:9'), null);
+    s.took(alpha, 'a:0') && s.took(alpha, 'a:1'), null);
+  check('…and a checkpoint nobody ever drove does not', !s.took(alpha, 'a:9'), null);
   s.flush();
   check('the old flat list shrinks by exactly what migrated',
     JSON.parse(st.raw.get('drive.survey.cp')).length === 1, st.raw.get('drive.survey.cp'));
   check('the claimed-names key is left alone — it is the progress worth keeping',
     st.raw.get('drive.survey.done') !== null, st.raw.get('drive.survey.done'));
-  s.took('Beta Road', 'b:0');
+  s.took(beta, 'b:0');
   s.flush();
   check('…and is deleted once the last crumb finds its road',
     st.getItem('drive.survey.cp') === null, st.getItem('drive.survey.cp'));
 
   const next = openSurvey({ store: st, now: c.now, stamp: c.wall });
   check('the migrated crumbs survive on their new roads',
-    next.took('Alpha Road', 'a:0') && next.took('Beta Road', 'b:0'), next.stats().top);
-  check('…and did not leak onto a road they were never on', !next.took('Beta Road', 'a:0'), null);
+    next.took(next.roadId('Alpha Road', ...CAPE), 'a:0')
+    && next.took(next.roadId('Beta Road', ...CAPE), 'b:0'), next.stats().top);
+  check('…and did not leak onto a road they were never on',
+    !next.took(next.roadId('Beta Road', ...CAPE), 'a:0'), null);
 }
 
 // ── 5. monotonic ───────────────────────────────────────────────────────
@@ -164,16 +175,17 @@ const cps = (road, n) => Array.from({ length: n }, (_, i) => `${road}:${i}`);
 {
   const st = fakeStore(), c = clock();
   const s = openSurvey({ store: st, now: c.now, stamp: c.wall });
-  for (const k of cps('r', 8)) s.take('Rhodes Drive', k, 8);
-  s.grew('Rhodes Drive', 20);          // another fragment lands, the road is longer
-  check('a longer road raises the total', s.rec.get('Rhodes Drive').t === 20, s.rec.get('Rhodes Drive'));
-  s.grew('Rhodes Drive', 12);          // …a shorter view of it must not lower it
-  check('…and a shorter view of it does not', s.rec.get('Rhodes Drive').t === 20, s.rec.get('Rhodes Drive'));
-  s.take('Rhodes Drive', 'r:0', 3);    // a re-collect, from a session with less loaded
-  check('collecting a crumb twice is not progress', s.rec.get('Rhodes Drive').g === 8, s.rec.get('Rhodes Drive'));
-  check('…and does not shrink the total either', s.rec.get('Rhodes Drive').t === 20, s.rec.get('Rhodes Drive'));
-  s.claim('Rhodes Drive', 20);
-  s.take('Rhodes Drive', 'r:99', 20);
+  const rd = s.roadId('Rhodes Drive', ...CAPE);
+  for (const k of cps('r', 8)) s.take(rd, k, 8);
+  s.grew(rd, 20);          // another fragment lands, the road is longer
+  check('a longer road raises the total', s.rec.get(rd).t === 20, s.rec.get(rd));
+  s.grew(rd, 12);          // …a shorter view of it must not lower it
+  check('…and a shorter view of it does not', s.rec.get(rd).t === 20, s.rec.get(rd));
+  s.take(rd, 'r:0', 3);    // a re-collect, from a session with less loaded
+  check('collecting a crumb twice is not progress', s.rec.get(rd).g === 8, s.rec.get(rd));
+  check('…and does not shrink the total either', s.rec.get(rd).t === 20, s.rec.get(rd));
+  s.claim(rd, 20);
+  s.take(rd, 'r:99', 20);
   check('a claimed road takes no more crumbs', s.stats().crumbs === 0, s.stats());
 }
 
@@ -186,16 +198,18 @@ const cps = (road, n) => Array.from({ length: n }, (_, i) => `${road}:${i}`);
   const s = openSurvey({ store: st, now: c.now, stamp: c.wall });
   const per = 900, roads = Math.ceil((SURVEY_CAP + per) / per);
   for (let i = 0; i < roads; i++) {
-    for (const k of cps(`road${i}`, per)) s.take(`Road ${i}`, k, per);
+    const id = s.roadId(`Road ${i}`, ...CAPE);
+    for (const k of cps(`road${i}`, per)) s.take(id, k, per);
     c.t += 10;
   }
   const held = s.stats().crumbs;
   s.flush();
   check('the cap holds', s.stats().crumbs <= SURVEY_CAP, { before: held, after: s.stats().crumbs });
-  check('…by shedding the road gone longest untouched', s.rec.get('Road 0').got.size === 0, s.rec.get('Road 0'));
+  const oldest = s.roadId('Road 0', ...CAPE), newest = s.roadId(`Road ${roads - 1}`, ...CAPE);
+  check('…by shedding the road gone longest untouched', s.rec.get(oldest).got.size === 0, s.rec.get(oldest));
   check('…and never the one just driven',
-    s.rec.get(`Road ${roads - 1}`).got.size === per, s.rec.get(`Road ${roads - 1}`).got.size);
-  check('…while the count of the shed road survives', s.rec.get('Road 0').g === per, s.rec.get('Road 0'));
+    s.rec.get(newest).got.size === per, s.rec.get(newest).got.size);
+  check('…while the count of the shed road survives', s.rec.get(oldest).g === per, s.rec.get(oldest));
 }
 
 // ── 7. a full disk costs progress, never the drive ─────────────────────
@@ -204,17 +218,86 @@ const cps = (road, n) => Array.from({ length: n }, (_, i) => `${road}:${i}`);
   const s = openSurvey({ store: st, now: c.now, stamp: c.wall });
   st.full = true;
   let threw = null;
-  try { s.take('Main Street', 'm:0', 4); s.claim('Main Street', 4); } catch (e) { threw = String(e); }
+  const main = s.roadId('Main Street', ...CAPE);
+  try { s.take(main, 'm:0', 4); s.claim(main, 4); } catch (e) { threw = String(e); }
   check('a quota error never reaches the game loop', threw === null, threw);
-  check('…and the road still reads as claimed in this session', s.claimed('Main Street'), s.stats().top);
+  check('…and the road still reads as claimed in this session', s.claimed(main), s.stats().top);
 }
 
-// ── 8. no store at all (private mode, blocked storage) ─────────────────
+// ── 8. road identity ───────────────────────────────────────────────────
+// Two things have to be true at once, and they pull in opposite directions:
+// two roads that merely share a name are DIFFERENT roads, and one road
+// approached from either end is the SAME road. The second is the dangerous
+// one — getting it wrong tears a road's progress in half with nothing on
+// screen to say so.
+{
+  const st = fakeStore(), c = clock();
+  const s = openSurvey({ store: st, now: c.now, stamp: c.wall });
+  const cape = s.roadId('Main Street', ...CAPE);
+  const paris = s.roadId('Main Street', ...PARIS);
+  check('same name, different cities: two roads', cape !== paris, { cape, paris });
+  s.claim(cape, 6);
+  check('claiming one does not claim the other', s.claimed(cape) && !s.claimed(paris), { cape, paris });
+
+  // The road that straddles a cell boundary. Monday from the south side,
+  // Tuesday from the north — one degree apart, and it must be one road.
+  const south = s.roadId('Long Road', -33.98, 18.42);
+  const north = s.roadId('Long Road', -32.98, 18.42);
+  check('one road, approached from either side of a cell edge, is one road',
+    south === north, { south, north });
+  // …and the anchor is what is STORED, not what loaded first today.
+  for (const k of cps('long', 4)) s.take(south, k, 4);
+  s.flush();
+  const tue = openSurvey({ store: st, now: c.now, stamp: c.wall });
+  check('…including in a session that only ever sees the far end',
+    cps('long', 4).every((k) => tue.took(tue.roadId('Long Road', -32.98, 18.42), k)), tue.stats().top);
+
+  // Longitude wraps. 179.5°E and 179.5°W are a degree apart, not 359.
+  const east = s.roadId('Date Line Road', 1.0, 179.6);
+  const west = s.roadId('Date Line Road', 1.0, -179.6);
+  check('the antimeridian is not a continent', east === west, { east, west });
+}
+
+// ── 9. the roads claimed before roads had identity ─────────────────────
+// Old records are keyed by bare name. Their CLAIM cannot be placed — nothing
+// in it says where it was earned — so it is answered from and never moved: as
+// broad as it always was, no broader. Their CRUMBS carry positions, so those
+// can be placed, and are.
+{
+  const st = fakeStore({
+    [SURVEY_KEY]: JSON.stringify({ v: 2, roads: {
+      'Rhodes Drive': { g: 9, t: 9, c: 1700000000000 },
+      'Kloof Nek Road': { g: 2, t: 8, k: ['kloof:0', 'kloof:1'] },
+    } }),
+  });
+  const c = clock();
+  const s = openSurvey({ store: st, now: c.now, stamp: c.wall });
+  const rhodes = s.roadId('Rhodes Drive', ...CAPE);
+  check('an old claim still answers', s.claimed(rhodes), s.stats().top);
+  check('…and answers by name, wherever you are — the old breadth, unchanged',
+    s.claimed(s.roadId('Rhodes Drive', ...PARIS)), null);
+
+  const kloof = s.roadId('Kloof Nek Road', ...CAPE);
+  check('an old crumb is recognised', s.took(kloof, 'kloof:0'), null);
+  check('…and moves onto the anchored road', s.rec.get(kloof).got.has('kloof:0'), s.stats().top);
+  check('…leaving the old record', !s.rec.get('Kloof Nek Road').got.has('kloof:0'), null);
+  s.took(kloof, 'kloof:1');
+  s.flush();
+  const written = JSON.parse(st.raw.get(SURVEY_KEY)).roads;
+  check('a spent unclaimed old record is dropped', written['Kloof Nek Road'] === undefined, Object.keys(written));
+  check('…but the claimed one is kept forever — it is the only answer that claim has',
+    written['Rhodes Drive']?.c > 0, written['Rhodes Drive']);
+  check('…and the crumbs live under the anchored id now',
+    (written[kloof]?.k ?? []).length === 2, written[kloof]);
+}
+
+// ── 10. no store at all (private mode, blocked storage) ────────────────
 {
   const s = openSurvey({ store: null, now: clock().now, stamp: () => 1 });
-  s.take('Main Street', 'm:0', 4);
+  const main = s.roadId('Main Street', ...CAPE);
+  s.take(main, 'm:0', 4);
   s.flush();
-  check('the game plays with nowhere to save', s.took('Main Street', 'm:0'), null);
+  check('the game plays with nowhere to save', s.took(main, 'm:0'), null);
 }
 
 rmSync(tmp, { recursive: true, force: true });
