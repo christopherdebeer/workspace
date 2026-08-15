@@ -113,10 +113,24 @@ if (cmd === 'pull') {
   console.log(`✓ ${files.length} files → cells/${name}/`);
 } else if (cmd === 'push') {
   const local = [...walk(localRoot)].map((p) => relative(localRoot, p));
+  // A BIG FILE GOES UP IN PIECES. `cells.writeFile` carries the whole body in
+  // one signed request, and somewhere just past a megabyte that request starts
+  // coming back `403 The request signature we calculated does not match` —
+  // measured on @c15r/drive: 1,000,000 bytes wrote fine and 1,020,000 did not,
+  // which is how a client/main.ts that had grown to 1,031,430 bytes stopped
+  // being deployable at all. So the first chunk is a `writeFile` (which
+  // replaces whatever was there, including a half-written previous attempt)
+  // and the rest are `appendToFile`. Well under the cliff, because the signed
+  // body carries the JSON-escaped content and that is larger than the file.
+  const CHUNK = 600000;
   for (const f of local) {
     const content = readFileSync(join(localRoot, f), 'utf8');
-    await call('act', 'cells.writeFile', { owner, name, path: f, content });
-    console.log('pushed', f, `(${content.length}b)`);
+    await call('act', 'cells.writeFile', { owner, name, path: f, content: content.slice(0, CHUNK) });
+    for (let at = CHUNK; at < content.length; at += CHUNK) {
+      await call('act', 'cells.appendToFile', { owner, name, path: f, content: content.slice(at, at + CHUNK) });
+    }
+    const parts = Math.max(1, Math.ceil(content.length / CHUNK));
+    console.log('pushed', f, `(${content.length}b${parts > 1 ? ` in ${parts} parts` : ''})`);
   }
   // Kernel-SDK vendor overlay (ADR-0076): a server-side https import hangs the
   // forge bundler (ADR-0017), so cells that use shared kernel modules import
