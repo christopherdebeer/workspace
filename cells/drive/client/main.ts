@@ -13647,6 +13647,11 @@ let lift: { id: number; y0: number; dy: number } | null = null;
 // wheel zooms on desktop. Chase keeps the appear-where-the-thumb-lands stick
 // with second-finger brake.
 let panX = 0, panZ = 0, zoomT = 1, zoomCur = 1;
+/** The height of the ground the current drag took hold of — the plane the pan
+ *  resolves against. Null between gestures. */
+let panY: number | null = null;
+/** The chart camera's own floor, low-passed so a shoreline is not a step. */
+let chartY: number | null = null;
 const panPtrs = new Map<number, { x: number; y: number }>();
 // ON THE TRUCK, not in the corner. Pinned bottom-right the stick sat straight
 // on top of the tachometer and read as a lens flare rather than a control.
@@ -13714,11 +13719,32 @@ canvas.addEventListener('pointerdown', (e) => {
   try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ }
   if (camMode === 'top') {
     const h = stickHome();
-    if (!stick && Math.hypot(e.clientX - h.x, e.clientY - h.y) <= STICK_R * 1.4) {
+    // A THUMB ON THE TRUCK, not a third of the screen. This zone is INVISIBLE
+    // and it is pinned to the rig, which on a chart centred on the rig means it
+    // sat exactly where a hand reaches to drag the map: at STICK_R * 1.4 it was
+    // a 156px circle in the middle of a 390px phone, so a large share of pans
+    // silently steered the car instead and the map simply did not move. That is
+    // the "janky" — not a dropped frame, a swallowed gesture. Tightened to the
+    // truck itself, and the ring is SHOWN while it is held so a grab that lands
+    // on it explains itself instead of just failing.
+    if (!stick && Math.hypot(e.clientX - h.x, e.clientY - h.y) <= STICK_R * 0.62) {
       stick = { id: e.pointerId, x0: h.x, y0: h.y, dx: 0, dy: 0, ax: 0, ay: 0 };
+      stickBase.style.display = stickNub.style.display = 'block';
+      stickBase.style.left = stickNub.style.left = `${h.x}px`;
+      stickBase.style.top = stickNub.style.top = `${h.y}px`;
       setStickFrom(e);
     } else {
       panPtrs.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      // THE HEIGHT OF THE GROUND YOU GRABBED, once, for the whole gesture.
+      // The drag resolves against a horizontal plane, and putting that plane at
+      // the chart TARGET's height is wrong whenever the thumb is somewhere with
+      // a different floor: on the coast road at Big Sur the target stands at
+      // 1.4m and the sea 480m up the frame is 104m below it, which slid the
+      // grabbed ground ~74m out from under the finger. Taken under the finger
+      // instead it is right by construction — and sampled ONCE, so the plane
+      // cannot wobble mid-drag as the ray crosses a cliff.
+      const [gx, gz] = chartToWorld(e.clientX, e.clientY);
+      panY = groundAt(gx, gz);
     }
     return;
   }
@@ -13740,15 +13766,46 @@ canvas.addEventListener('pointermove', (e) => {
   if (!prev || camMode !== 'top') return;
   const cur = { x: e.clientX, y: e.clientY };
   if (panPtrs.size === 1) {
+    // THE GROUND UNDER THE FINGER, BEFORE AND AFTER — no metres-per-pixel
+    // guess at all. The old form scaled the drag by one constant for the whole
+    // screen, and the chart is tilted 70 degrees: a pixel near the top of the
+    // frame covers far more ground than one near the bottom, so the same drag
+    // moved the map by different amounts depending on where you grabbed it,
+    // and the ground you took hold of slid out from under your thumb. Measured
+    // at the top of the frame it slipped ~80m on a 90px drag.
+    //
+    // Both points are unprojected through the SAME camera onto the chart's own
+    // ground plane, so the answer already carries the tilt, the zoom, the
+    // screen position and the map rotation — and the rotation is no longer
+    // hand-rolled anywhere, which is what let it become a mirror in the first
+    // place. Falls back to the old estimate only where the ray cannot reach
+    // the ground (a finger dragged above the horizon).
+    const y0 = panY ?? sampleHeight(viewX() + panX, viewZ() + panZ);
+    const a = chartPlaneAt(prev.x, prev.y, y0), b = chartPlaneAt(cur.x, cur.y, y0);
+    if (a && b) {
+      panX += a[0] - b[0];
+      panZ += a[1] - b[1];
+      panPtrs.set(e.pointerId, cur);
+      return;
+    }
     // metres per screen px at the current viewing distance
     const k = (CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh) / innerHeight;
     // A DRAG IS A SCREEN GESTURE. On a turned chart the world axes are no
     // longer the screen's, so the finger's delta is put through the same
     // rotation the view is drawn with — otherwise dragging left walks the map
     // off in whatever direction north happens to be.
+    // …AND IT WAS A MIRROR, NOT A TURN. The old pair — [cos, sin; sin, -cos] —
+    // has determinant -1 at every angle, so it reflected the gesture instead of
+    // rotating it: horizontal came out right, VERTICAL CAME OUT BACKWARDS, and
+    // a diagonal drag walked off across the mirror line. Measured north-up
+    // before the fix: a finger dragged DOWN moved the chart's target SOUTH,
+    // pushing the ground under the thumb further away instead of following it.
+    // This is the proper rotation, and the test that pins it asks the only
+    // question a map drag has to answer — is the ground you grabbed still
+    // under your finger when you let go.
     const mr = mapRot(), fx = -(cur.x - prev.x) * k, fy = -(cur.y - prev.y) * k;
-    panX += fx * Math.cos(mr) + fy * Math.sin(mr);
-    panZ += fx * Math.sin(mr) - fy * Math.cos(mr);
+    panX += fx * Math.cos(mr) - fy * Math.sin(mr);
+    panZ += fx * Math.sin(mr) + fy * Math.cos(mr);
   } else if (panPtrs.size === 2) {
     const other = [...panPtrs.entries()].find(([id]) => id !== e.pointerId)?.[1];
     if (other) {
@@ -13774,10 +13831,36 @@ addEventListener('wheel', (e) => {
 // whose error goes as (d/R)² — a part in ten thousand at fifty kilometres, and
 // the terrain there has to stream in from scratch either way.
 let tapAt = 0, tapX = 0, tapY = 0, tapSeen = 0;
+/** WHERE ON THE GROUND IS THIS PIXEL — through the real camera, so a test can
+ *  ask the only question a pan has to answer: is the ground you grabbed still
+ *  under your finger when you let go. */
+(window as unknown as { __chartat?: object }).__chartat =
+  (px: number, py: number): [number, number] => chartToWorld(px, py);
+(window as unknown as { __pan?: object }).__pan = (): object =>
+  ({ x: +panX.toFixed(2), z: +panZ.toFixed(2), rot: +mapRot().toFixed(4), headingUp: mapHeadingUp });
 // endStick is bound to the canvas AND to the window, so one release runs it
 // twice with the SAME event object. Without this the second run sees a tap
 // zero milliseconds old at zero distance and teleports on a single tap.
 let lastUp: Event | null = null;
+/**
+ * Where a screen pixel lands on a HORIZONTAL plane at height `y0`, through the
+ * live camera. The cheap sibling of `chartToWorld`: that one marches the
+ * heightfield 96 samples deep to answer "which summit is under my thumb", and
+ * a drag firing it twice per pointermove would spend thousands of ground
+ * lookups a second to move a map. A plane at the chart's own ground height is
+ * exact on flat land and close enough on relief, for one division.
+ *
+ * Null when the ray cannot get there: aimed at or above the horizon, or so
+ * shallow that the intersection flies off to somewhere the drag should not go.
+ */
+function chartPlaneAt(px: number, py: number, y0: number): [number, number] | null {
+  const ray = new THREE.Vector3((px / innerWidth) * 2 - 1, -(py / innerHeight) * 2 + 1, 0.5)
+    .unproject(camera).sub(camera.position).normalize();
+  if (ray.y > -1e-3) return null;
+  const t = (y0 - camera.position.y) / ray.y;
+  if (!Number.isFinite(t) || t <= 0 || t > 1e6) return null;
+  return [camera.position.x + ray.x * t, camera.position.z + ray.z * t];
+}
 function chartToWorld(px: number, py: number): [number, number] {
   // Through the ACTUAL camera, not a metres-per-pixel guess about the screen
   // centre. The guess ignored where on the tilted chart the thumb landed and
@@ -13853,6 +13936,7 @@ const endStick = (e: PointerEvent): void => {
     }
   }
   panPtrs.delete(e.pointerId);
+  if (!panPtrs.size) panY = null;   // the next grab picks its own ground
   if (stick?.id === e.pointerId) {
     stick = null;
     updateStickHome();
@@ -16020,14 +16104,32 @@ function tick(now: number): void {
     // tile queue rather than guessed at.
     ovU.uOvR.value.set(osmRingR * 0.8, osmRingR * 1.25);
     // Pan is a glance around the chart — it drifts home once you drive.
-    if (stick || Math.abs(state.speed) > 6 || drone.up) { const f = Math.exp(-2.5 * dt); panX *= f; panZ *= f; }
+    // …but NOT while a finger is on it. The drift home is right for a glance
+    // you have finished with; applied under a live drag it pulled the map back
+    // toward the truck at 2.5/s while the thumb was still moving it, which is
+    // the other half of what "janky" was describing — above 21km/h the chart
+    // fought every pan.
+    if (!panPtrs.size && (stick || Math.abs(state.speed) > 6 || drone.up)) {
+      const f = Math.exp(-2.5 * dt); panX *= f; panZ *= f;
+    }
     // THE CHART IS OVER WHOEVER IS CURRENT. Flying, that is the drone: opening
     // the map to find the drone and being shown the parked truck instead is the
     // one thing the map must not do.
     const tvx = viewX(), tvz = viewZ();
     const dist = CAM.base * zoomCur + Math.abs(drone.up ? 0 : state.speed) * 3.6 * CAM.perKmh;
     const tiltRad = (CAM.tilt * Math.PI) / 180;
-    const tgtY = sampleHeight(tvx + panX, tvz + panZ);
+    // THE CHART'S FLOOR, LOW-PASSED. The camera rides at a fixed height above
+    // the ground under its target, which is right for keeping a mountain out
+    // of the lens — and a step function anywhere the ground steps. Panning the
+    // target off the coast road at Big Sur and out over the water drops it
+    // 106m in one drag, and the camera drops with it, sliding everything on
+    // screen along the tilt axis: measured as the ground under the thumb
+    // moving 74m during a drag that was purely sideways. The map lurching as
+    // you cross a shoreline is the "janky" from the other side. Smoothed, the
+    // floor still follows the land and never steps off it.
+    const tgtRaw = sampleHeight(tvx + panX, tvz + panZ);
+    chartY = chartY === null ? tgtRaw : chartY + (tgtRaw - chartY) * Math.min(1, 2.2 * dt);
+    const tgtY = chartY;
     // The camera stands OPPOSITE whatever screen-up is meant to point at: due
     // south of the target for north-up, behind the truck along its own heading
     // for heading-up. One offset, one angle, and the tilt is untouched.
@@ -16205,7 +16307,12 @@ function tick(now: number): void {
   // truck sliding around the camera every time you turn in.
   if (!camInit || camMode === 'cab') { camera.position.copy(camPos); camInit = true; }
   else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
-  if (camMode === 'top') camera.lookAt(viewX() + panX, sampleHeight(viewX() + panX, viewZ() + panZ), viewZ() + panZ);
+  // The SAME low-passed floor the camera stands on — aiming at the raw ground
+  // while standing on the smoothed one tilts the chart by the difference.
+  if (camMode === 'top') {
+    camera.lookAt(viewX() + panX,
+      chartY ?? sampleHeight(viewX() + panX, viewZ() + panZ), viewZ() + panZ);
+  }
   // Roll the head WITH the body, same axis and same sense: the camera's local
   // z points backward exactly as the body's does (nose is -z), so the body's
   // roll angle transfers directly. The negated form tilted the horizon the
@@ -18325,7 +18432,12 @@ function setClean(on: boolean): void {
 (window as unknown as { __hudrects?: object }).__hudrects = (): object =>
   ({ dock: dockRect, pov: povRect, mapUp: mapUpRect, drone: droneRect });
 (window as unknown as { __hudscale?: object }).__hudscale = (): number => hudS;
-(window as unknown as { __mapup?: object }).__mapup = (): string => (mapHeadingUp ? 'heading' : 'north');
+/** Reads which way the chart is turned; with an argument, SETS it — a pan test
+ *  has to run in both orientations and the toggle is otherwise a HUD tap. */
+(window as unknown as { __mapup?: object }).__mapup = (want?: 'heading' | 'north'): string => {
+  if (want !== undefined && (want === 'heading') !== mapHeadingUp) toggleMapUp();
+  return mapHeadingUp ? 'heading' : 'north';
+};
 function hudTap(cx: number, cy: number): boolean {
   if (document.body.classList.contains('clean')) return false;
   const x = cx / hudS, y = cy / hudS;
