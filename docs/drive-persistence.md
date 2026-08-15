@@ -202,34 +202,51 @@ public HTTP surface, for content that changes about as often as the code does.
    two write problems in §2 are gone: a claim writes one small record
    immediately, crumbs debounce, and a claimed road stores a count instead of
    a list.
-   **Road identity is not done.** It is now decided in one function,
-   `survey.roadId()`, which still returns the bare name — see below.
-3. **Sign-in and sync.** PKCE requesting only `cell:c15r/drive:*`; a `/state`
-   route on the cell reading `x-cell-caller`; union-and-max merge; a one-time
-   upload of existing local progress on first sign-in.
+2b. ✅ **Road identity.** `roadId()` returns `<name>@<cy>,<cx>` — the name plus
+   the whole-degree cell it was first seen in, matched by neighbourhood so a
+   road straddling a boundary stays one road. See below for the trade.
+3. ✅ **Sign-in and sync.** `client/sync.ts` + a `/state` route on the cell.
+   PKCE against the apex requesting `cell:c15r/drive:*` alone; the cell reads
+   `x-cell-caller`; union-and-max in both directions; one round trip pushes and
+   pulls together, so a fresh device's first sync IS the upload.
 
 Steps 1 and 2 are independently valuable and carry no risk to existing players.
 Step 3 is the only one that needs the identity work, and by then the data it
 syncs is already in the right shape.
 
-### Road identity, deferred deliberately
+### Road identity, as built
 
-`roadId()` returning the bare name is still the §2 bug: one claimed Main
-Street claims them all. It was separated from the storage change rather than
-bundled into it, because it is not a storage question:
+`<name>@<cy>,<cx>`, on whole degrees. The hard part was never telling two roads
+apart, it was **not tearing one road in half**: fragments arrive with the tiles
+in an order set by where you spawned, so an id derived from whichever loaded
+first is a different id tomorrow. Two things prevent that — the cell is coarse
+(~111km of latitude, longer than almost any named road), and the lookup matches
+any existing record of that name **within one cell in each direction**, so only
+a first sighting mints and the anchor is what is stored rather than what loaded
+today.
 
-- `survey`, `wayAt()` and every mission's `via` key roads by bare name, so a
-  real id means re-keying the in-memory map and the campaign format with it;
-- the positional part has to be stable across fragments that arrive
-  independently, which rules out deriving it from whichever fragment loaded
-  first;
-- and getting it wrong does not fail loudly. It orphans a player's records
-  under ids nothing looks up, which reads exactly like progress that was never
-  saved.
+The trade is one-sided on purpose: two same-named roads within ~111km merge, a
+road longer than ~222km can still split. Merging over-grants a claim, splitting
+**loses** one — so the error falls on the side that never costs a player
+progress they earned.
 
-So it wants its own change, with a bridge from the bare-name ids already
-written — and it is worth doing **before** step 3, not after, because a synced
-record is much harder to re-key than a local one.
+Records written before this are bridged by evidence. A **claim** cannot be
+placed (nothing in it says where it was earned), so it is answered from by name
+and never moved — as broad as it always was, no broader, and kept forever. A
+**crumb** carries its own position, so it is moved onto the anchored road when
+the checkpoint being laid is at that exact spot, and the spent record is
+dropped. Roads on screen are still keyed by name: `survey`, `wayAt` and every
+mission's `via` are untouched, because everything loaded at once is within a few
+km of the rig and answers to one cell anyway.
+
+### Who may write, and what that settles
+
+A POST reaches `/state` only if `cells.call` → `authorizeAccess` already
+allowed it: the cell's owner, or a principal it is shared with. Any other
+signed-in player gets a 403 from the tier above and keeps playing locally — the
+same graceful path as anonymous. That is the platform's own sharing model doing
+the work, rather than this game inventing an access rule, and it is why there is
+no authorization logic in the route at all beyond refusing `anonymous`.
 
 ## 8. Notes and non-goals
 
