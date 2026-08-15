@@ -24,6 +24,11 @@ take **zero authority** over a player's workspace (§4).
 Nine keys in `localStorage`, all in the cell's own origin
 (`c15r-drive.on.parc.land` — see §3 on why that origin matters):
 
+> Written before step 2. The two survey keys are now one `drive.survey.v2`,
+> described in §5 and in the head of `cells/drive/client/survey-store.ts`; the
+> old pair is still read, and `drive.survey.done` is deliberately never
+> rewritten. The rest of the table stands.
+
 | key | what | write cadence |
 | --- | --- | --- |
 | `drive.survey.cp` | collected checkpoints, `"lat,lon"` at 5dp | **one per checkpoint — every 250 m driven** |
@@ -186,11 +191,19 @@ public HTTP surface, for content that changes about as often as the code does.
 
 ## 7. Order of work
 
-1. **Campaigns and missions out of `main.ts`, into the public namespace.** No
+1. ✅ **Campaigns and missions out of `main.ts`, into the public namespace.** No
    identity, no writes, no new security surface. Pays down the deploy-size debt.
-2. **Fix the save shape in place** — per-road records, incremental writes, real
-   road identity — while still writing to `localStorage`. Every §2 problem dies
-   here, with no network involved and no way to lose data.
+   Served from `~/campaign/<v>`, authored as a typed module in
+   `cells/drive/campaigns/` — the cell's bundler has no JSON loader, and a
+   module gets its shape checked at build time anyway.
+2. ✅ **Fix the save shape in place** — per-road records, incremental writes —
+   while still writing to `localStorage`. `client/survey-store.ts`, with
+   `devtools/survey-store.test.mjs` and `devtools/survey-boot.test.mjs`. The
+   two write problems in §2 are gone: a claim writes one small record
+   immediately, crumbs debounce, and a claimed road stores a count instead of
+   a list.
+   **Road identity is not done.** It is now decided in one function,
+   `survey.roadId()`, which still returns the bare name — see below.
 3. **Sign-in and sync.** PKCE requesting only `cell:c15r/drive:*`; a `/state`
    route on the cell reading `x-cell-caller`; union-and-max merge; a one-time
    upload of existing local progress on first sign-in.
@@ -198,6 +211,25 @@ public HTTP surface, for content that changes about as often as the code does.
 Steps 1 and 2 are independently valuable and carry no risk to existing players.
 Step 3 is the only one that needs the identity work, and by then the data it
 syncs is already in the right shape.
+
+### Road identity, deferred deliberately
+
+`roadId()` returning the bare name is still the §2 bug: one claimed Main
+Street claims them all. It was separated from the storage change rather than
+bundled into it, because it is not a storage question:
+
+- `survey`, `wayAt()` and every mission's `via` key roads by bare name, so a
+  real id means re-keying the in-memory map and the campaign format with it;
+- the positional part has to be stable across fragments that arrive
+  independently, which rules out deriving it from whichever fragment loaded
+  first;
+- and getting it wrong does not fail loudly. It orphans a player's records
+  under ids nothing looks up, which reads exactly like progress that was never
+  saved.
+
+So it wants its own change, with a bridge from the bare-name ids already
+written — and it is worth doing **before** step 3, not after, because a synced
+record is much harder to re-key than a local one.
 
 ## 8. Notes and non-goals
 
