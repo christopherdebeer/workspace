@@ -20,6 +20,7 @@ import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
 import { RoadSolver, densifyPts } from './roadsolve';
 import { createOverlays } from './overlays';
+import { openSurvey } from './survey-store';
 
 // ── tuning ─────────────────────────────────────────────────────────
 const TERRAIN_Z = 14;         // terrarium tile zoom (~2.4km/cos(lat), ~9.5m/px — z13 washed out the hills roads tunnel through)
@@ -8794,10 +8795,9 @@ interface SurveyRoad {
   claimedAt: number;
 }
 const survey = new Map<string, SurveyRoad>();
-/** Checkpoints already collected, keyed by position so the record survives a
- *  reload and a different spawn origin. */
-const surveyGot = new Set<string>();
-const surveyClaimed = new Set<string>();
+/** What has been COLLECTED, as opposed to what is LOADED — see the head of
+ *  `survey-store.ts` for why conflating the two silently deletes progress. */
+const surveyStore = openSurvey();
 /** OSM tiles whose ways have actually been rendered — NOT the same as the
  *  requested set, which is marked before the fetch even starts. */
 const osmDone = new Set<string>();
@@ -8807,6 +8807,7 @@ const cpKey = (x: number, z: number): string => {
 };
 /** Lay checkpoints along one fragment of a named road. */
 function noteSurvey(name: string, pts: Array<[number, number]>, track: boolean): void {
+  const id = surveyStore.roadId(name);
   let r = survey.get(name);
   if (!r) survey.set(name, (r = { name, cps: [], len: 0, got: 0, track,
     tiles: new Set(), claimed: false, claimedAt: 0 }));
@@ -8835,13 +8836,14 @@ function noteSurvey(name: string, pts: Array<[number, number]>, track: boolean):
       for (const c of r.cps) if (Math.hypot(c.x - x, c.z - z) < SURVEY_DEDUP) { dup = true; break; }
       if (dup) continue;
       const key = cpKey(x, z);
-      const got = surveyGot.has(key);
+      const got = surveyStore.took(id, key);
       r.cps.push({ x, z, key, got });
       if (got) r.got++;
     }
     acc -= L - s;
   }
-  if (surveyClaimed.has(name)) r.claimed = true;
+  if (surveyStore.claimed(id)) r.claimed = true;
+  surveyStore.grew(id, r.cps.length);
 }
 /** Is the road's extent settled? The denominator grows while tiles stream —
  *  Ou Kaapse Weg reads 4352m from one ring of tiles and 10058m from two — so
@@ -8917,40 +8919,29 @@ function stepSurvey(now: number): void {
   if (w && w.on) {
     const r = survey.get(w.name);
     if (r) {
+      const id = surveyStore.roadId(r.name);
       for (const c of r.cps) {
         if (c.got) continue;
         if (nearSwept(c.x, c.z) > SURVEY_CAPTURE) continue;
         c.got = true; c.at = now; r.got++;
-        surveyGot.add(c.key);
+        surveyStore.take(id, c.key, r.cps.length);
         surveyFlash = 1;
         audio.stone();
-        saveSurvey();
       }
       if (!r.claimed && surveyEligible(r) && r.got / r.cps.length > SURVEY_MAJORITY && surveyed(r)) {
         r.claimed = true; r.claimedAt = now;
-        surveyClaimed.add(r.name);
+        surveyStore.claim(id, r.cps.length);
         surveyClaim = { name: r.name, at: now, n: r.cps.length };
         audio.thud(2);
-        saveSurvey();
       }
     }
   }
+  // A crumb is worth about 250m of driving, so a few seconds of them is the
+  // most a crash can cost. A claim writes immediately — that is the thing a
+  // player would actually grieve.
+  surveyStore.tick(now);
   if (surveyFlash > 0) surveyFlash = Math.max(0, surveyFlash - 0.04);
 }
-// Positions, not indices: a reload spawns a new origin and every local
-// coordinate shifts, but a checkpoint's latitude does not.
-const SURVEY_CAP = 20000;
-function saveSurvey(): void {
-  try {
-    const got = [...surveyGot];
-    localStorage.setItem('drive.survey.cp', JSON.stringify(got.slice(-SURVEY_CAP)));
-    localStorage.setItem('drive.survey.done', JSON.stringify([...surveyClaimed]));
-  } catch { /* a full quota costs progress, never the drive */ }
-}
-try {
-  for (const k of JSON.parse(localStorage.getItem('drive.survey.cp') ?? '[]') as string[]) surveyGot.add(k);
-  for (const k of JSON.parse(localStorage.getItem('drive.survey.done') ?? '[]') as string[]) surveyClaimed.add(k);
-} catch { /* fine */ }
 
 // NEVER render features onto terrain that hasn't arrived. Heights are
 // sampled ONCE at build time; against the flat 0-fallback, a whole street
@@ -12489,6 +12480,10 @@ function meshHeightAt(x: number, z: number): number | null {
       cps: roads.reduce((s, r) => s + r.cps, 0), got: roads.reduce((s, r) => s + r.got, 0) },
   };
 };
+/** What is actually STORED, as opposed to what is loaded — the two differ by
+ *  every road whose tiles have not streamed in, which is the whole point of
+ *  keeping the store separate from `survey`. */
+(window as unknown as { __surveyStore?: object }).__surveyStore = (): object => surveyStore.stats();
 /** Every checkpoint of a named road, for a probe that wants to drive them. */
 (window as unknown as { __cps?: object }).__cps = (name: string): object =>
   (survey.get(name)?.cps ?? []).map((c) => ({ x: +c.x.toFixed(1), z: +c.z.toFixed(1), got: c.got }));
@@ -15173,10 +15168,14 @@ for (const ev of ['pointerdown', 'touchend', 'click', 'keydown']) {
 let hidden = document.hidden;
 addEventListener('visibilitychange', () => {
   hidden = document.hidden;
-  if (hidden) { audio.hush(); return; }
+  // Backgrounding a tab is how a phone ends a session — the loop stops running,
+  // so the debounced write has to happen on the way out or the last few
+  // hundred metres are lost.
+  if (hidden) { surveyStore.flush(); audio.hush(); return; }
   last = performance.now();   // no accumulated gap to integrate through
   audio.arm();
 });
+addEventListener('pagehide', () => surveyStore.flush());   // a close that skips `hidden`
 
 // ── main loop ──────────────────────────────────────────────────────
 let last = performance.now();

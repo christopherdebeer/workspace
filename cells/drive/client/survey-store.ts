@@ -1,0 +1,254 @@
+/**
+ * WHAT A PLAYER HAS DRIVEN.
+ *
+ * The survey's memory, kept apart from the survey itself. `main.ts` holds the
+ * roads that are LOADED — geometry, checkpoints, what is on screen — and that
+ * set is a function of which vector tiles have streamed in. This holds what has
+ * been COLLECTED, which is a function of everywhere the player has ever been.
+ * Conflating the two deletes progress, and the deletion is silent:
+ *
+ *   A road spans several tiles and its fragments arrive independently. Drive
+ *   all of Ou Kaapse Weg on Monday; on Tuesday spawn at one end and only half
+ *   of it loads. Write the record out of the in-memory road and the other
+ *   half's checkpoints are gone — not stale, gone, with nothing on screen to
+ *   say so.
+ *
+ * So captures land HERE, and the road on screen reads from here. The store only
+ * ever grows: it is never reconciled against what happens to be loaded.
+ *
+ * Shape, one record per road (`docs/drive-persistence.md` §5):
+ *
+ *   { v: 2, roads: { "<roadId>": { g, t, c?, k? } } }
+ *
+ *   g  checkpoints collected, best known         t  checkpoints the road has
+ *   c  claimed at (epoch ms)                     k  the crumbs themselves
+ *
+ * `k` is kept only while a road is unclaimed, which is where the size goes: a
+ * claimed road answers for all of its checkpoints with one number. `g`/`t` are
+ * what a signed-in player would sync — counts, not crumbs — and they are
+ * monotonic, so merging two devices is a max and never a conflict.
+ */
+
+/** Just the corner of `Storage` this needs, so a test can pass a Map. */
+export interface StoreLike {
+  getItem(k: string): string | null;
+  setItem(k: string, v: string): void;
+  removeItem(k: string): void;
+}
+export interface SurveyRec {
+  /** Checkpoint keys — POSITIONS, not indices: a reload spawns a new origin and
+   *  every local coordinate shifts, but a checkpoint's latitude does not. */
+  got: Set<string>;
+  /** Best known counts. Monotonic; kept for roads not loaded this session. */
+  g: number; t: number;
+  /** When it was claimed, 0 while unclaimed. Latched — a road never un-unlocks.
+   *  `1` is the sentinel for a claim carried over from the v1 store, which
+   *  recorded the name and not the moment. */
+  done: number;
+  /** Last capture, for shedding crumbs under the cap. */
+  seen: number;
+}
+interface SurveyRow { g: number; t: number; c?: number; k?: string[] }
+
+export const SURVEY_V = 2;
+export const SURVEY_KEY = `drive.survey.v${SURVEY_V}`;
+/** Crumbs kept across every road. */
+export const SURVEY_CAP = 20000;
+/** How long a capture may sit unwritten. A crumb is 250m of driving, so a few
+ *  seconds of them is the most a crash can cost; a claim never waits. */
+export const SURVEY_FLUSH_MS = 4000;
+const V1_CP = 'drive.survey.cp';
+const V1_DONE = 'drive.survey.done';
+
+export interface Survey {
+  /** Every road with progress, loaded or not. Read-only to callers. */
+  rec: Map<string, SurveyRec>;
+  roadId(name: string): string;
+  took(id: string, key: string): boolean;
+  take(id: string, key: string, total: number): void;
+  claim(id: string, total: number): void;
+  grew(id: string, total: number): void;
+  claimed(id: string): boolean;
+  tick(now: number): void;
+  flush(): void;
+  dirty(): boolean;
+  stats(): { roads: number; claimed: number; crumbs: number; v1: number; bytes: number;
+    dirty: boolean; top: Array<{ id: string; g: number; t: number; k: number; done: number }> };
+}
+
+export function openSurvey(opts: {
+  store?: StoreLike | null;
+  /** Monotonic clock, for the write debounce. */
+  now?: () => number;
+  /** Wall clock, for claim times that outlive the session. */
+  stamp?: () => number;
+} = {}): Survey {
+  const store = opts.store === undefined
+    ? (() => { try { return localStorage; } catch { return null; } })()
+    : opts.store;
+  const now = opts.now ?? (() => performance.now());
+  const stamp = opts.stamp ?? (() => Date.now());
+
+  const rec = new Map<string, SurveyRec>();
+  /** v1 crumbs, whose road is unknown. Empties into `rec` as roads load. */
+  const v1 = new Set<string>();
+  let v1Shed = false;
+  /** `now()` of the oldest unwritten change, 0 when clean. Collecting three
+   *  checkpoints in one frame used to serialise the whole set three times; now
+   *  it marks a time and the loop writes once. */
+  let pending = 0;
+
+  const get = (k: string): string | null => { try { return store?.getItem(k) ?? null; } catch { return null; } };
+  const recFor = (id: string): SurveyRec => {
+    let r = rec.get(id);
+    if (!r) rec.set(id, (r = { got: new Set(), g: 0, t: 0, done: 0, seen: 0 }));
+    return r;
+  };
+
+  // ── load ──
+  try {
+    const raw = JSON.parse(get(SURVEY_KEY) ?? 'null') as { roads?: Record<string, SurveyRow> } | null;
+    for (const [id, row] of Object.entries(raw?.roads ?? {})) {
+      const r = recFor(id);
+      r.done = Number(row?.c) || 0;
+      r.seen = r.done;
+      r.t = Number(row?.t) || 0;
+      for (const k of row?.k ?? []) if (typeof k === 'string') r.got.add(k);
+      r.g = Math.max(Number(row?.g) || 0, r.got.size);
+    }
+  } catch { /* an unreadable store is the same as none — the drive still happens */ }
+  // v1, read every boot. `drive.survey.done` is two kilobytes of the progress a
+  // player would most regret and is never rewritten or removed: claims are a
+  // union, so re-merging it costs nothing and keeps the old build's copy intact.
+  try {
+    for (const k of JSON.parse(get(V1_CP) ?? '[]') as string[]) if (typeof k === 'string') v1.add(k);
+  } catch { /* fine */ }
+  try {
+    for (const n of JSON.parse(get(V1_DONE) ?? '[]') as string[]) {
+      if (typeof n !== 'string') continue;
+      const r = recFor(n);            // v1 ids were bare names, which is what `roadId` still returns
+      if (!r.done) { r.done = 1; r.got.clear(); }
+    }
+  } catch { /* fine */ }
+
+  function flush(): void {
+    pending = 0;
+    // The cap is a quota guard, not a rule of the game: it can only bite a
+    // player part-way through thousands of roads at once. Shed the crumbs of
+    // whichever have gone longest untouched — the COUNT survives, and the
+    // checkpoints come back by driving them.
+    let crumbs = 0;
+    for (const r of rec.values()) crumbs += r.got.size;
+    if (crumbs > SURVEY_CAP) {
+      for (const r of [...rec.values()].sort((a, b) => a.seen - b.seen)) {
+        if (crumbs <= SURVEY_CAP) break;
+        crumbs -= r.got.size;
+        r.got.clear();
+      }
+    }
+    const roads: Record<string, SurveyRow> = {};
+    for (const [id, r] of rec) {
+      // A road merely seen is not progress — but anything HELD is, and the
+      // guard must never be the thing that decides not to write a crumb.
+      if (!r.g && !r.t && !r.done && !r.got.size) continue;
+      const row: SurveyRow = { g: r.g, t: r.t };
+      if (r.done) row.c = r.done;
+      else if (r.got.size) row.k = [...r.got];
+      roads[id] = row;
+    }
+    try {
+      store?.setItem(SURVEY_KEY, JSON.stringify({ v: SURVEY_V, roads }));
+      // Only once the new store is safely down, and only when the old flat set
+      // actually shrank — rewriting 140 KB on every flush is the write this
+      // whole change exists to stop.
+      if (v1Shed) {
+        v1Shed = false;
+        if (v1.size) store?.setItem(V1_CP, JSON.stringify([...v1]));
+        else store?.removeItem(V1_CP);
+      }
+    } catch { /* a full quota costs progress, never the drive */ }
+  }
+
+  return {
+    rec,
+    /**
+     * ROAD IDENTITY — the one place it is decided.
+     *
+     * A bare name is wrong and known to be wrong: claiming one "Main Street"
+     * claims every Main Street a player will ever drive. The fix is the name
+     * plus something positional, and it is deliberately NOT made here yet,
+     * because the positional part has to be stable across fragments that arrive
+     * independently (`docs/drive-survey-checkpoints.md`), and because `survey`,
+     * `wayAt` and every mission's `via` key roads by bare name today. Getting it
+     * wrong silently corrupts progress, so it is its own change — made through
+     * this function, with a bridge for the ids already written.
+     */
+    roadId: (name: string): string => name,
+
+    /** Was this checkpoint collected in an earlier session? A claimed road
+     *  answers for all of its checkpoints at once. */
+    took(id: string, key: string): boolean {
+      const r = rec.get(id);
+      if (r && (r.done || r.got.has(key))) return true;
+      // A v1 crumb had no road attached. The first road to lay a checkpoint on
+      // that exact spot — ~1m — takes it, which is how the old flat set empties
+      // itself: driven roads migrate as they load, and the key goes when the
+      // last crumb finds its road.
+      if (v1.delete(key)) {
+        const r2 = recFor(id);
+        r2.got.add(key);
+        r2.g = Math.max(r2.g, r2.got.size);
+        r2.seen = stamp();
+        v1Shed = true;
+        pending = pending || now();
+        return true;
+      }
+      return false;
+    },
+    take(id: string, key: string, total: number): void {
+      const r = recFor(id);
+      if (r.done) return;                         // a claimed road keeps no crumbs
+      r.got.add(key);
+      r.seen = stamp();
+      r.g = Math.max(r.g, r.got.size);
+      r.t = Math.max(r.t, total);
+      pending = pending || now();
+    },
+    claim(id: string, total: number): void {
+      const r = recFor(id);
+      // A claimed road drops its crumbs. That is most of the size win and it
+      // costs nothing: `took` answers for every checkpoint on it, so the road
+      // reads DRIVEN, its markers stay down, and nothing re-pings when you
+      // drive it again.
+      r.done = stamp() || 1;
+      r.got.clear();
+      r.t = Math.max(r.t, total);
+      r.g = r.t;
+      r.seen = r.done;
+      flush();                                    // rare, and the one thing worth losing nothing of
+    },
+    /** The road turned out to be longer than the store knew — another fragment
+     *  landed. Worth remembering for a session where only half of it loads. */
+    grew(id: string, total: number): void {
+      const r = rec.get(id);
+      if (!r || total <= r.t) return;
+      r.t = total;
+      if (r.done) r.g = total;
+      pending = pending || now();
+    },
+    claimed: (id: string): boolean => !!rec.get(id)?.done,
+    tick(t: number): void { if (pending && t - pending > SURVEY_FLUSH_MS) flush(); },
+    flush,
+    dirty: (): boolean => !!pending,
+    stats() {
+      let crumbs = 0, claimed = 0;
+      for (const r of rec.values()) { crumbs += r.got.size; if (r.done) claimed++; }
+      return {
+        roads: rec.size, claimed, crumbs, v1: v1.size, dirty: !!pending,
+        bytes: (get(SURVEY_KEY) ?? '').length,
+        top: [...rec.entries()].sort((a, b) => b[1].g - a[1].g).slice(0, 8)
+          .map(([id, r]) => ({ id, g: r.g, t: r.t, k: r.got.size, done: r.done })),
+      };
+    },
+  };
+}
