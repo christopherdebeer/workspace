@@ -18,6 +18,12 @@ const FIXTURE = [
   ['Junipero Serra Peak', 36.1447, -121.4225, 1787],
   ['Cone Peak', 36.0505, -121.5085, 1571],
   ['Mount Whitney', 36.5785, -118.2923, 4421],
+  // Two invented giants due NORTH and SOUTH — out of frame while facing east,
+  // and steep enough (about 2.9deg) to outrank everything that IS in frame.
+  // They are the regression: rank-then-filter picked these plus one more from
+  // all around the rig, found none of them on the glass, and drew nothing.
+  ['North Sentinel', 36.6450, -121.9043, 1500],
+  ['South Sentinel', 36.1040, -121.9043, 1500],
 ];
 
 const d = await openDrive({ spot: 'lat=36.3745&lon=-121.9043&h=90&cam=chase&time=NOON&sunalt=45&wx=clear', tag: 'inview' });
@@ -42,6 +48,12 @@ const check = (name, cond, saw) => {
 // Facing the range (east): the near summits should be on screen.
 const facing = await shown(90);
 check('facing the range, summits are drawn', facing.length > 0, facing);
+// The point of the ordering fix: the in-frame summit is outranked by two
+// bigger ones off the sides, and must be drawn anyway.
+check('an in-frame summit is not crowded out by bigger ones off-screen',
+  facing.some((p) => /WHITNEY/.test(p.t)), facing);
+check('the off-screen giants are nowhere on the HUD',
+  !facing.some((p) => /SENTINEL/.test(p.t)), facing);
 check('…and every one of them is IN FRAME, not on the rim',
   facing.every((p) => p.edge === 0), facing);
 console.log(`        ${facing.map((p) => p.t).join(' | ')}`);

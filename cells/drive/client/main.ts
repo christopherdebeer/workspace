@@ -14619,28 +14619,28 @@ const PEAK_SHOW = 3;
 function updatePeaks(vx: number, vz: number): void {
   if (!peaks.size) return;
   const eyeY = camera.position.y;
-  const seen: Array<{ p: Peak; d: number; rise: number; app: number }> = [];
+  // THE FRUSTUM FIRST, THE RANKING SECOND — and that order is the whole
+  // lesson. Ranking first and drawing only the survivors picked the three
+  // biggest summits ANYWHERE AROUND you and then threw away any that were not
+  // in front, which on a portrait phone (about 28 degrees of horizontal field)
+  // meant the common answer was nothing at all: measured live at Big Sur and
+  // at Chamonix, both ringed by mountains, with not one marker drawn on any
+  // heading. What belongs on the glass is the biggest summits ON the glass.
+  const seen: Array<{ p: Peak; d: number; over: boolean; app: number;
+    sx: number; sy: number; wx: number; wz: number; wy: number }> = [];
   for (const p of peaks.values()) {
     const l = peakLook(p, vx, vz, eyeY);
     // Inside the fine world its own terrain is the mountain — a pin on a
     // summit you are standing on is noise, and the ridge is right there.
     if (l.d < 2500) continue;
-    seen.push({ p, ...l });
-  }
-  if (!seen.length) return;
-  seen.sort((a, b) => b.app - a.app);
-  for (let i = 0; i < Math.min(PEAK_SHOW, seen.length); i++) {
-    const { p, d, rise, app } = seen[i];
     const dx = p.x - vx, dz = p.z - vz;
-    const dc = Math.min(d, 900);                    // the pin's own stand-off
-    const wx = vx + (dx / d) * dc, wz = vz + (dz / d) * dc;
+    const dc = Math.min(l.d, 900);                   // the pin's own stand-off
+    const wx = vx + (dx / l.d) * dc, wz = vz + (dz / l.d) * dc;
     // Below the horizon: it is a bearing, not a view. Held just above the eye
     // line so the marker stays on screen, and flagged so the draw pass ghosts
     // it — the same claim an occluded POI makes.
-    const over = rise <= 0;
-    const y = eyeY + Math.max(app, 0.004) * dc;
-    const label = `${p.name.toUpperCase()} ${Math.round(p.ele)}M ${fmtDist(d)}`;
-    poiVec.set(wx, y, wz);
+    const wy = eyeY + Math.max(l.app, 0.004) * dc;
+    poiVec.set(wx, wy, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
     if (poiView.z >= -1) continue;                   // behind the camera
     poiVec.project(camera);
@@ -14653,13 +14653,24 @@ function updatePeaks(vx: number, vz: number): void {
     // simply gone. The bounds keep the whole label inside the glass rather
     // than sliding it along the rim.
     if (Math.abs(poiVec.x) > 0.92 || Math.abs(poiVec.y) > 0.94) continue;
+    seen.push({
+      p, d: l.d, over: l.rise <= 0, app: l.app,
+      sx: (poiVec.x * 0.5 + 0.5) * innerWidth,
+      sy: (-poiVec.y * 0.5 + 0.5) * innerHeight,
+      wx, wz, wy,
+    });
+  }
+  if (!seen.length) return;
+  seen.sort((a, b) => b.app - a.app);
+  for (let i = 0; i < Math.min(PEAK_SHOW, seen.length); i++) {
+    const e = seen[i];
     poiDraw.push({
-      x: (poiVec.x * 0.5 + 0.5) * innerWidth,
-      y: (-poiVec.y * 0.5 + 0.5) * innerHeight,
+      x: e.sx, y: e.sy,
       tx: 0, ty: 0,                                  // no beam: see the draw pass
-      t: label, c: POI_COLORS.peak, edge: 0, rng: false, hid: over,
-      name: p.name, kind: 'peak', pinned: false, d,
-      w: [wx, wz, y],
+      t: `${e.p.name.toUpperCase()} ${Math.round(e.p.ele)}M ${fmtDist(e.d)}`,
+      c: POI_COLORS.peak, edge: 0, rng: false, hid: e.over,
+      name: e.p.name, kind: 'peak', pinned: false, d: e.d,
+      w: [e.wx, e.wz, e.wy],
     });
   }
 }
