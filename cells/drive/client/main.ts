@@ -8536,7 +8536,7 @@ function pruneTileCache(): void {
 }
 
 // ── points of interest (named features become HUD waypoints) ───────
-interface Poi { name: string; x: number; z: number; kind: 'park' | 'water' | 'place' | 'mission' | 'repair' | 'drone' | 'rig'; pinned?: boolean }
+interface Poi { name: string; x: number; z: number; kind: 'park' | 'water' | 'place' | 'mission' | 'repair' | 'drone' | 'rig' | 'peak'; pinned?: boolean }
 const pois = new Map<string, Poi>();
 function notePoi(tags: Record<string, string>, pts: Array<[number, number]>): void {
   const name = tags.name;
@@ -9309,6 +9309,32 @@ function streamWorld(ex: number, ez: number): void {
         for (let dy = -vRing; dy <= vRing; dy++) void loadOvTile(vx + dx, vy + dy);
     }
   }
+  // ── the summits ──
+  // OUTSIDE the view gates above — a mountain is a landmark from the driver's
+  // seat, not just from the chart — but BEHIND the road network, which is the
+  // one thing the game cannot be played without.
+  //
+  // The reason is Overpass, not bandwidth. A z7 summit query over the Alps
+  // costs the upstream ~20 seconds, this ring is twenty-five of them, and the
+  // mirrors rate-limit per IP: fired at boot they would spend every slot the
+  // cell has on scenery while the road under the wheels waited behind them.
+  // So the ring only advances while the fine queue is idle, and it advances
+  // NEAREST FIRST — the summits that dominate the ranking are the near ones,
+  // and the far ring can take as long as it likes.
+  if (osmInFlight === 0 && osmQueue.length === 0 && peakInFlight < 2) {
+    const [px, py] = tileAt(lat, lon, PEAK_Z);
+    const pRing = clamp(Math.ceil(PEAK_R / tileMetres(PEAK_Z)), 1, PEAK_RING_MAX);
+    let best: [number, number, number] | null = null;
+    for (let dx = -pRing; dx <= pRing; dx++) {
+      for (let dy = -pRing; dy <= pRing; dy++) {
+        const k = `${PEAK_Z}/${px + dx}/${py + dy}`;
+        if (peakTiles.has(k)) continue;
+        const d2 = dx * dx + dy * dy;
+        if (!best || d2 < best[0]) best = [d2, px + dx, py + dy];
+      }
+    }
+    if (best) void loadPeakTile(best[1], best[2]);
+  }
 }
 
 // ── the far shell: coarse terrain for the wide view ────────────────
@@ -9655,6 +9681,82 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   ovMeshes.set(key, mesh);
   ovGroup.add(mesh);
   if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
+}
+// ── the peak layer: named summits as far landmarks ─────────────────
+/**
+ * THE ONE FEATURE YOU CAN SEE FROM A HUNDRED KILOMETRES.
+ *
+ * Everything else the world streams is local: roads within a few kilometres,
+ * landform within sixty. A mountain is not. √(2Rh) says a 1000m hill clears
+ * the horizon at 113km, Mont Blanc at 248km, Everest at 336km — so summits
+ * get their own layer at their own zoom (z7, ~250km of ground per tile) and
+ * their own reach, far outside anything else here.
+ *
+ * They are NOT put in `pois`: that map is capped at 400, keyed by name, and
+ * feeds the nearest-three destination rule and the service search. Thousands
+ * of summits would evict every garage in it. They live here and are drawn by
+ * their own pass, on their own budget, ranked by how big they LOOK rather
+ * than how close they are — which is the honest question for a landmark.
+ */
+const PEAK_Z = 7;
+const PEAK_R = 500000;        // the reach asked for: half a thousand kilometres
+const PEAK_RING_MAX = 2;      // …and the ring that pays for it — 25 tiles, no more
+interface Peak { name: string; x: number; z: number; ele: number }
+const peaks = new Map<string, Peak>();
+const peakTiles = new Set<string>();
+let peakInFlight = 0;
+const peakQueue: Array<() => void> = [];
+let peakDemless = 0;
+async function loadPeakTile(x: number, y: number): Promise<void> {
+  const key = `${PEAK_Z}/${x}/${y}`;
+  if (peakTiles.has(key)) return;
+  peakTiles.add(key);
+  // TWO AT A TIME. An Alpine tile costs Overpass the better part of half a
+  // minute, and twenty-five of them at once would be a denial of service
+  // aimed at the thing the whole world is streamed from. The near tiles are
+  // queued first (see streamWorld), so the summits that dominate the ranking
+  // land first and the far ring trickles in behind them.
+  if (peakInFlight >= 2) await new Promise<void>((go) => peakQueue.push(go));
+  peakInFlight++;
+  try {
+    const res = await fetch(`${CELL_BASE}/~/osm/peak1/${PEAK_Z}/${x}/${y}`);
+    if (!res.ok) throw new Error(`peak HTTP ${res.status}`);
+    const data = (await res.json()) as { peaks?: Array<{ n: string; la: number; lo: number; e: number }> };
+    for (const p of data.peaks ?? []) {
+      // Keyed by name AND rounded position: "Signal Hill" is a hundred
+      // different hills, and dropping all but one of them would silently
+      // delete landmarks. Same name at the same spot IS a duplicate.
+      const k = `${p.n}@${p.la.toFixed(2)},${p.lo.toFixed(2)}`;
+      if (peaks.has(k)) continue;
+      const [px, pz] = toLocal(p.la, p.lo);
+      peaks.set(k, { name: p.n, x: px, z: pz, ele: p.e });
+    }
+  } catch {
+    peakTiles.delete(key);   // a cold Alpine tile is still filling; ask again later
+    peakDemless++;
+  } finally {
+    peakInFlight--;
+    peakQueue.shift()?.();
+  }
+}
+/**
+ * HOW BIG DOES IT LOOK, and can it be seen at all.
+ *
+ * `rise` is the summit's height above the eye once the earth has been allowed
+ * to curve away underneath it — d²/2R, which is 785m at 100km and 19.6km at
+ * 500km. `app` is the angle it subtends, and that is the ranking: a 1000m
+ * hill twenty kilometres off (2.9°) is a bigger landmark than Mont Blanc at
+ * four hundred (0.5°), and the eye agrees.
+ *
+ * A NEGATIVE rise means the horizon is in front of it. It is still there, it
+ * is still worth a bearing, and it is emphatically not a view — so it is
+ * marked and the draw pass ghosts it, which is the same law the POI pins
+ * already follow for a place behind a ridge.
+ */
+function peakLook(p: Peak, vx: number, vz: number, eyeY: number): { d: number; rise: number; app: number } {
+  const d = Math.hypot(p.x - vx, p.z - vz) || 1;
+  const rise = (p.ele - baseElev) - curveDrop(p.x - vx, p.z - vz) - eyeY;
+  return { d, rise, app: rise / d };
 }
 // What the chart's coarse layer is holding, for the tools.
 //
@@ -12420,6 +12522,33 @@ function meshHeightAt(x: number, z: number): number | null {
 /** The other direction — a test needs to aim at a real place, not a guess. */
 (window as unknown as { __tolocal?: object }).__tolocal =
   (lat: number, lon: number): [number, number] => toLocal(lat, lon);
+/** THE SUMMITS: what landed, how far it reaches, and what the ranking makes
+ *  of it — the apparent angle in degrees, and whether the earth has curved in
+ *  front of each one. */
+(window as unknown as { __peaks?: object }).__peaks = (n = 8): object => {
+  const vx = viewX(), vz = viewZ(), eyeY = camera.position.y;
+  const all = [...peaks.values()].map((p) => ({ p, ...peakLook(p, vx, vz, eyeY) }));
+  all.sort((a, b) => b.app - a.app);
+  const far = all.reduce((m, e) => Math.max(m, e.d), 0);
+  return {
+    tiles: peakTiles.size, retried: peakDemless, known: peaks.size,
+    reachKm: +(far / 1000).toFixed(1),
+    ringKm: +((clamp(Math.ceil(PEAK_R / tileMetres(PEAK_Z)), 1, PEAK_RING_MAX) * tileMetres(PEAK_Z)) / 1000).toFixed(0),
+    top: all.slice(0, n).map((e) => ({
+      name: e.p.name, ele: e.p.ele, km: +(e.d / 1000).toFixed(1),
+      deg: +((Math.atan(e.app) * 180) / Math.PI).toFixed(2),
+      overHorizon: e.rise <= 0,
+    })),
+  };
+};
+/** Put a summit on the map by hand, the way `__feed` puts in a GPS fix: the
+ *  draw path — ranking, the horizon test, the mark — is testable without
+ *  waiting on twenty seconds of Overpass for a tile that may be rate-limited. */
+(window as unknown as { __peakadd?: object }).__peakadd =
+  (name: string, lat: number, lon: number, ele: number): void => {
+    const [px, pz] = toLocal(lat, lon);
+    peaks.set(`${name}@${lat.toFixed(2)},${lon.toFixed(2)}`, { name, x: px, z: pz, ele });
+  };
 /** Both directions of the Google Maps link, for the test that covers the
  *  half-dozen shapes Google actually writes. */
 (window as unknown as { __gmap?: object }).__gmap =
@@ -14246,7 +14375,9 @@ const renderPlace = (): void => { placeLine = placeLabel.toUpperCase(); };
 // Named parks/waters/buildings from the OSM stream become waypoints. This
 // only COMPUTES them; the pixel HUD draws them, so labels share the world's
 // grid and font instead of being browser text floating above it.
-const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a', mission: '#f5c453', repair: '#e2703a', drone: '#d8412f', rig: '#f5c453' };
+// Peaks in the chart's own stone-grey: they are landform, not destinations,
+// and colouring them like a fuel stop would promise something they are not.
+const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a', mission: '#f5c453', repair: '#e2703a', drone: '#d8412f', rig: '#f5c453', peak: '#b9b3a4' };
 const poiVec = new THREE.Vector3(), poiView = new THREE.Vector3(), camFwd = new THREE.Vector3();
 const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}M` : `${(m / 1000).toFixed(1)}KM`);
 // Close enough to act on. The pins used to be CULLED inside 25m, which threw
@@ -14362,7 +14493,78 @@ function updatePois(): void {
       name: p.name, kind: p.kind, pinned: !!p.pinned, d, tx: 0, ty: 0,
     });
   }
+  updatePeaks(vx, vz);
   updateCps();
+}
+/**
+ * THE SUMMITS ON THE SKYLINE.
+ *
+ * Not the nearest-three rule: peaks are ranked by APPARENT SIZE (see
+ * peakLook), because that is what decides whether a mountain is a landmark
+ * from where you are standing. Three of them, so a range does not become a
+ * wall of names.
+ *
+ * Placed at the angle they really subtend rather than on the ground: a pin
+ * for a summit two hundred kilometres away, seated on `groundAt` like an
+ * ordinary waypoint, would sit in the scrub in front of the truck. Clamped to
+ * a nearby radius the way distant POIs already are — but at that radius the
+ * height is chosen to preserve the true angle, so the marker lands where the
+ * mountain appears: near the horizon for a far one, high in the frame for the
+ * ridge you are about to climb.
+ */
+const PEAK_SHOW = 3;
+function updatePeaks(vx: number, vz: number): void {
+  if (!peaks.size) return;
+  const eyeY = camera.position.y;
+  const seen: Array<{ p: Peak; d: number; rise: number; app: number }> = [];
+  for (const p of peaks.values()) {
+    const l = peakLook(p, vx, vz, eyeY);
+    // Inside the fine world its own terrain is the mountain — a pin on a
+    // summit you are standing on is noise, and the ridge is right there.
+    if (l.d < 2500) continue;
+    seen.push({ p, ...l });
+  }
+  if (!seen.length) return;
+  seen.sort((a, b) => b.app - a.app);
+  camera.getWorldDirection(camFwd);
+  for (let i = 0; i < Math.min(PEAK_SHOW, seen.length); i++) {
+    const { p, d, rise, app } = seen[i];
+    const dx = p.x - vx, dz = p.z - vz;
+    const dc = Math.min(d, 900);                    // the pin's own stand-off
+    const wx = vx + (dx / d) * dc, wz = vz + (dz / d) * dc;
+    // Below the horizon: it is a bearing, not a view. Held just above the eye
+    // line so the marker stays on screen, and flagged so the draw pass ghosts
+    // it — the same claim an occluded POI makes.
+    const over = rise <= 0;
+    const y = eyeY + Math.max(app, 0.004) * dc;
+    const label = `${p.name.toUpperCase()} ${Math.round(p.ele)}M ${fmtDist(d)}`;
+    poiVec.set(wx, y, wz);
+    poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
+    if (poiView.z < -1) {
+      poiVec.project(camera);
+      if (Math.abs(poiVec.x) <= 0.92) {
+        poiDraw.push({
+          x: (poiVec.x * 0.5 + 0.5) * innerWidth,
+          y: clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.06, innerHeight * 0.86),
+          tx: 0, ty: 0,                              // no beam: see the draw pass
+          t: label, c: POI_COLORS.peak, edge: 0, rng: false, hid: over,
+          name: p.name, kind: 'peak', pinned: false, d,
+          w: [wx, wz, y],
+        });
+        continue;
+      }
+    }
+    // Behind you, or off the side. A summit is worth a chip only while it is
+    // one of the two biggest things around — three chips of mountain would
+    // crowd out the job pins that actually need the edge.
+    if (i > 1) continue;
+    const right = camFwd.x * dz - camFwd.z * dx > 0;
+    poiDraw.push({
+      x: 0, y: innerHeight * (0.2 + i * 0.055),
+      t: right ? `${label} >` : `< ${label}`, c: POI_COLORS.peak, edge: right ? 1 : -1,
+      rng: false, hid: false, name: p.name, kind: 'peak', pinned: false, d, tx: 0, ty: 0,
+    });
+  }
 }
 // Checkpoint markers, only when a dial has asked for them. The mechanic is
 // designed around NOT drawing these — the tally moving is the whole signal —
@@ -17187,6 +17389,20 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       hctx.fillRect(cx + w, cy + dy, 1, 1);
     }
   }
+  // A SUMMIT IS A TRIANGLE. Drawn here rather than taken from the icon face:
+  // the glyph set is a subsetted font with a fixed unicode list, and a marker
+  // this simple is better as pixels on the same grid as the diamonds it sits
+  // beside. `cy` is the BASE, so the mark stands on the point it refers to
+  // instead of straddling it.
+  function peakMark(cx: number, cy: number, r: number, solid: boolean): void {
+    for (let dy = 0; dy <= r; dy++) {
+      const w = r - dy;
+      const y = cy - dy;
+      if (solid || dy === 0) { hctx.fillRect(cx - w, y, w * 2 + 1, 1); continue; }
+      hctx.fillRect(cx - w, y, 1, 1);
+      hctx.fillRect(cx + w, y, 1, 1);
+    }
+  }
   // ── the active way, under its markers (chart only) ──
   // The road the pips belong to, drawn as a line so the chart answers "which
   // way does it RUN" and not just "where are its markers". Ink seat first,
@@ -17461,7 +17677,11 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   const inView = poiDraw.filter((p) => p.edge === 0).sort((a, b) => a.x - b.x);
   const lanes: number[] = [];        // right edge of the last label per lane
   for (const p of inView) {
-    const label = fitP(p.t, Math.round(HW * 0.5));
+    // A SUMMIT'S LABEL IS LONGER BY RIGHT. Half the HUD width clipped
+    // "JUNIPERO SERRA PEAK 1787M 50.2KM" to "…PEAK 1." — losing the height,
+    // which is the one fact the mark exists to carry. Peaks get three
+    // quarters; nothing else changes.
+    const label = fitP(p.t, Math.round(HW * (p.kind === 'peak' ? 0.74 : 0.5)));
     const iconCh = KIND_ICON[p.kind];
     const iw = iconCh ? 7 : 0;
     const w = textPW(label) + 4 + iw;
@@ -17475,7 +17695,11 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // the way up it — high enough to clear the foot, low enough that a
     // towering nearby beam is not dragging its name into the compass. Far
     // away the third collapses and a fixed hover keeps the name readable.
-    const beamTop = Math.min(ay - 6, Math.max(12, typ));
+    // A SUMMIT GETS NO BEAM. The column is a thing standing ON a place, and a
+    // thirty-metre light on a mountain two hundred kilometres away is neither
+    // true nor legible — the mark and the height are the whole statement.
+    const isPeak = p.kind === 'peak';
+    const beamTop = isPeak ? ay : Math.min(ay - 6, Math.max(12, typ));
     const h = ay - beamTop;
     const x = clamp(Math.round(ax - w / 2), 2, HW - w - 2);
     let lane = 0;
@@ -17495,11 +17719,14 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       }
     }
     // The checkpoint foot: ink seat, kind-colour diamond, bigger in range.
-    hctx.globalAlpha = (0.5 + 0.5 * near) * ghost;
+    // A peak wears its own mark — solid while it stands above the horizon,
+    // hollow once the earth has curved in front of it.
+    hctx.globalAlpha = isPeak ? (p.hid ? 0.55 : 0.95) : (0.5 + 0.5 * near) * ghost;
     hctx.fillStyle = UI.ink;
-    diamond(ax, ay, 3);
+    if (isPeak) peakMark(ax, ay, 4, true); else diamond(ax, ay, 3);
     hctx.fillStyle = p.c;
-    if (p.rng) diamond(ax, ay, 3); else diamondOutline(ax, ay, 2);
+    if (isPeak) peakMark(ax, ay - 1, 3, !p.hid);
+    else if (p.rng) diamond(ax, ay, 3); else diamondOutline(ax, ay, 2);
     // The label — its KIND leading it as a glyph where one exists. Gold when
     // in range or pinned by hand. Occlusion is the BEAM's story (dashed,
     // ghosted); the words themselves stay legible — a name you cannot read
@@ -17525,13 +17752,17 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   }
   for (const p of poiDraw) {
     if (p.edge === 0) continue;
-    const label = fitP(p.t, Math.round(HW * 0.5));
+    // The summit's mark is drawn, not a glyph — same as at its foot — and it
+    // gets the same wider label budget, for the same reason.
+    const isPeak = p.kind === 'peak';
+    const label = fitP(p.t, Math.round(HW * (isPeak ? 0.7 : 0.5)));
     const iconCh = KIND_ICON[p.kind];
-    const iw = iconCh ? 7 : 0;
+    const iw = iconCh || isPeak ? 7 : 0;
     const w = textPW(label) + 4 + iw;
     const y = clamp(Math.round(p.y / hudS), 20, HH - 30);
     const x = p.edge > 0 ? HW - w - 3 : 3;
-    if (iconCh) hudIconEdge(iconCh, x + 1, y + 1, p.c, 5);
+    if (isPeak) { hctx.fillStyle = p.c; peakMark(x + 3, y + 7, 3, true); }
+    else if (iconCh) hudIconEdge(iconCh, x + 1, y + 1, p.c, 5);
     textEdgeP(label, x + 2 + iw, y + 2, p.rng || p.pinned ? UI.gold : p.c);
     poiRects.push({ x: x - 3, y: y - 4, w: w + 8, h: 14, name: p.name, kind: p.kind });
   }

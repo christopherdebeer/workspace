@@ -511,6 +511,85 @@ async function serveOverview(path: string, m: RegExpMatchArray) {
   };
 }
 
+// ── the peak tiles: named summits, for the far landmarks ───────────
+/**
+ * SUMMITS, AT THE SCALE YOU CAN SEE THEM FROM.
+ *
+ * A mountain is the one map feature that is legible from hundreds of
+ * kilometres, so it has its own layer at its own zoom: z7, ~250km of ground
+ * per tile, which is also — not by coincidence — about the distance from
+ * which the tallest peak on Earth clears the horizon (√(2Rh): Everest 336km,
+ * Mont Blanc 248km, a 1000m hill 113km).
+ *
+ * The trap in this data is DENSITY, not size. Big Sur's whole z7 tile holds
+ * 151 named peaks with an elevation; the Mont Blanc massif's holds 7268 and
+ * takes Overpass ~18-27s. So the answer is capped at the HIGHEST few and the
+ * budget matches the overview layer's, which was tuned against the same
+ * upstream. What is stored is small either way: 150 summits is a few KB.
+ *
+ * Keeping the tallest — rather than a floor in metres — is what makes this
+ * work everywhere. A floor tuned for the Alps erases the Netherlands, whose
+ * highest ground is a 322m hill and is nonetheless the landmark there.
+ */
+const PEAK_CAP = 150;             // per tile, tallest first
+const PEAK_UPSTREAM_MS = 24000;   // the overview layer's budget, same upstream
+const PEAK_ATTEMPT_MS = 15000;
+const PEAK_RE = /^\/~\/osm\/peak1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+/** OSM `ele` is free text: "1234", "1234.5", "1234 m", "4,808", and junk.
+ *  Metres only — a value in feet is not marked as such often enough to guess,
+ *  so anything above the roof of the world is discarded rather than assumed. */
+export function parseEle(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const m = raw.replace(/,/g, '').match(/^\s*(-?\d+(?:\.\d+)?)/);
+  if (!m) return null;
+  const v = parseFloat(m[1]);
+  return Number.isFinite(v) && v > -450 && v <= 8850 ? v : null;
+}
+export function trimPeaks(elements: RawWay[]): Array<{ n: string; la: number; lo: number; e: number }> {
+  const out: Array<{ n: string; la: number; lo: number; e: number }> = [];
+  for (const el of elements) {
+    if (el.lat === undefined || el.lon === undefined) continue;
+    const name = el.tags?.name;
+    const ele = parseEle(el.tags?.ele);
+    if (!name || ele === null) continue;
+    out.push({ n: name, la: +el.lat.toFixed(5), lo: +el.lon.toFixed(5), e: Math.round(ele) });
+  }
+  out.sort((a, b) => b.e - a.e);
+  return out.slice(0, PEAK_CAP);
+}
+async function servePeaks(path: string, m: RegExpMatchArray) {
+  const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (z !== 7 || x >= 2 ** z || y >= 2 ** z) {
+    return respond(400, 'application/json', JSON.stringify({ error: 'peak tile out of range' }));
+  }
+  const b = tileBounds(z, x, y);
+  const bbox = `${b.latS},${b.lonW},${b.latN},${b.lonE}`;
+  const q = `[out:json][timeout:20];node["natural"="peak"]["name"]["ele"](${bbox});out body 20000;`;
+  let elements: RawWay[];
+  try {
+    elements = await askOverpass(q, PEAK_UPSTREAM_MS, PEAK_ATTEMPT_MS, (x + y) % OVERPASS_MIRRORS.length);
+  } catch (err) {
+    return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {
+      'retry-after': '5', 'cache-control': 'no-store',
+    });
+  }
+  const payload = JSON.stringify({ v: 1, z, x, y, peaks: trimPeaks(elements) });
+  const gz = gzipSync(Buffer.from(payload, 'utf8'), { level: 9 });
+  try { await putTile(path, gz); } catch { /* best effort */ }
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'content-encoding': 'gzip',
+      // Mountains do not move. A month, and the object is immutable anyway.
+      'cache-control': 'public, max-age=2592000, immutable',
+      'access-control-allow-origin': '*',
+    },
+    body: gz.toString('base64'),
+    isBase64Encoded: true,
+  };
+}
+
 /** Tile bounds on the standard web-mercator grid (the client's `tileBounds`). */
 function tileBounds(z: number, x: number, y: number) {
   const n = 2 ** z;
@@ -794,6 +873,8 @@ export const handler = async (event: {
     if (cover) return serveCover(path, cover);
     const ov = path.match(OV_RE);
     if (ov) return serveOverview(path, ov);
+    const pk = path.match(PEAK_RE);
+    if (pk) return servePeaks(path, pk);
     return respond(404, 'application/json', JSON.stringify({ error: 'no such object' }), {
       'cache-control': 'no-store',
     });
