@@ -137,9 +137,17 @@ const OVERPASS_MIRRORS = [
 // tiles came back `502 Error from cloudfront` at ~10.7s, because the function
 // was killed mid-fetch and never got to return its own 503. A 502 from a dead
 // Lambda is strictly worse than a 503 from a live one: no `retry-after`, no
-// `no-store`, and nothing in the logs saying which upstream failed. The cell is
-// configured at 30s (`cells.configureCell timeoutSeconds`), and this stays
-// under it so the handler always outlives its own request and can say why.
+// `no-store`, and nothing in the logs saying which upstream failed.
+//
+// THE CEILING IS ~15.5s, NOT THE 30s THIS ONCE ASSUMED. Re-measured live on
+// 2026-08-15 while building the peak layer, by walking five tiles of rising
+// cost: one answered at 15.74s and every slower one came back 502 at
+// 15.5-16.3s, wherever its own budget sat. That is a hard kill, and it means
+// any budget above about twelve seconds buys nothing except the WORSE error —
+// the function dies before it can explain itself. It also retires a
+// long-standing mystery: the overview layer's "cold fill sometimes 503s" was
+// never mirror contention, it was OV_UPSTREAM_MS (24s) sitting above a
+// ceiling nobody had measured, so the dense tiles could only ever 502.
 // …but SPEND LESS OF IT FAILING. Rotating mirrors made the failure path longer
 // (three attempts where there had been one), and a slow failure is worse than a
 // fast one: the client holds a fetch slot for the whole of it, and six held
@@ -403,8 +411,11 @@ const OV_CAP: Record<number, number> = { 10: 3000, 11: 4500, 12: 6000, 13: 6000 
 // the whole budget in one: the commonest failure in the audit was the FIRST
 // mirror queueing the request behind its per-IP slot for the full window,
 // and a second mirror answering a query the first would have sat on.
-const OV_UPSTREAM_MS = 24000;
-const OV_ATTEMPT_MS = 15000;
+// Under the measured ~15.5s kill (see the note by UPSTREAM_MS), with room for
+// the trim, the gzip and the S3 write. A dense tile that cannot be got inside
+// this is better refused with a `retry-after` than killed mid-flight.
+const OV_UPSTREAM_MS = 11000;
+const OV_ATTEMPT_MS = 10000;
 function overviewQuery(z: number, x: number, y: number): string {
   const b = tileBounds(z, x, y);
   const bbox = `${b.latS},${b.lonW},${b.latN},${b.lonE}`;
@@ -540,8 +551,14 @@ const PEAK_CAP = 120;             // per tile, tallest first
 // one, and it is exactly the mountainous ground this layer exists for.
 // z8 quarters the area: the same Alpine ground measures 7.6s and 1858
 // summits, which fits inside the budget with room to say why if it fails.
-const PEAK_UPSTREAM_MS = 20000;   // …and the budget leaves the handler 10s of its own
-const PEAK_ATTEMPT_MS = 9000;     // two honest attempts, neither able to eat it all
+// ONE HONEST ATTEMPT, not two half ones. The kill lands at ~15.5s and an
+// Alpine z8 tile needs ~7.6s of upstream, so a budget split into two 9s tries
+// spent the first on whichever mirror was unhealthy and died before the second
+// could finish. A single 10s window fits the work; a mirror that fails FAST
+// (a 429 returns instantly) still leaves room for the next one, which is
+// exactly the failure worth retrying inline.
+const PEAK_UPSTREAM_MS = 11000;
+const PEAK_ATTEMPT_MS = 10000;
 const PEAK_RE = /^\/~\/osm\/peak1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 /** OSM `ele` is free text: "1234", "1234.5", "1234 m", "4,808", and junk.
  *  Metres only — a value in feet is not marked as such often enough to guess,
@@ -575,7 +592,11 @@ async function servePeaks(path: string, m: RegExpMatchArray) {
   const q = `[out:json][timeout:20];node["natural"="peak"]["name"]["ele"](${bbox});out body 20000;`;
   let elements: RawWay[];
   try {
-    elements = await askOverpass(q, PEAK_UPSTREAM_MS, PEAK_ATTEMPT_MS, (x + y) % OVERPASS_MIRRORS.length);
+    // The mirror rotates with the CLOCK as well as the tile: a tile whose
+    // first mirror is unhealthy would otherwise ask the same broken host on
+    // every retry forever. A minute apart is a different mirror.
+    const rot = (x + y + Math.floor(Date.now() / 60000)) % OVERPASS_MIRRORS.length;
+    elements = await askOverpass(q, PEAK_UPSTREAM_MS, PEAK_ATTEMPT_MS, rot);
   } catch (err) {
     return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {
       'retry-after': '5', 'cache-control': 'no-store',
