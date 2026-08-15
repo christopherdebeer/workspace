@@ -17085,51 +17085,48 @@ let missionDismissed = false;     // the X, until you drive away and back
 let missionMin = false;           // the active job, collapsed to its chip
 
 interface Drive { name: string; sub: string; lat: number; lon: number; h: number; mission?: Mission }
-const DRIVES: Drive[] = [
-  { name: 'PARIS', sub: 'TROCADERO · THE START', lat: 48.8617, lon: 2.289, h: 135 },
-  { name: 'LAC ROSE', sub: 'SENEGAL · THE FINISH', lat: 14.839, lon: -17.235, h: 90 },
-  { name: 'GIZA', sub: 'EGYPT · THE PYRAMIDS', lat: 29.9765, lon: 31.132, h: 45 },
-  { name: 'WADI RUM', sub: 'JORDAN · VALLEY OF THE MOON', lat: 29.5765, lon: 35.42, h: 90 },
-  { name: 'SOSSUSVLEI', sub: 'NAMIBIA · THE RED DUNES', lat: -24.728, lon: 15.345, h: 90 },
-  { name: 'UYUNI', sub: 'BOLIVIA · THE SALT FLAT', lat: -20.2, lon: -67.5, h: 270 },
-  { name: 'DEATH VALLEY', sub: 'BADWATER BASIN', lat: 36.2296, lon: -116.7665, h: 0 },
-  { name: 'MONUMENT VALLEY', sub: 'UTAH · US 163', lat: 37.103, lon: -109.993, h: 200 },
-  { name: 'BIG SUR', sub: 'CALIFORNIA · HIGHWAY 1', lat: 36.3731, lon: -121.90433, h: 127 },
-  { name: 'STELVIO', sub: 'ITALY · 48 HAIRPINS', lat: 46.5285, lon: 10.4541, h: 200 },
-  { name: 'TROLLSTIGEN', sub: 'NORWAY · THE TROLL LADDER', lat: 62.4558, lon: 7.671, h: 180 },
-  { name: 'TRANSFAGARASAN', sub: 'ROMANIA · THE RIDGE ROAD', lat: 45.6017, lon: 24.6172, h: 180 },
-  { name: 'NORDSCHLEIFE', sub: 'EIFEL · THE GREEN HELL', lat: 50.3356, lon: 6.9475, h: 200 },
-  { name: 'ICEFIELDS', sub: 'ALBERTA · THE PARKWAY', lat: 52.22, lon: -117.225, h: 160 },
-  // Starts at the reserve's admin office on Ou Kaapse Weg, not on the pass
-  // itself: a drive should begin somewhere you are GIVEN a reason to go, and
-  // end at the thing worth arriving at. The old spawn (-34.079, 18.362) is now
-  // the destination.
-  {
-    name: 'CHAPMANS PEAK', sub: 'CAPE TOWN · THE RUN OUT WEST', lat: -34.08716, lon: 18.42083, h: 290,
-    mission: {
-      id: 'chapmans-run',
-      giver: { name: 'ADMIN OFFICE', lat: -34.08716, lon: 18.42083 },
-      title: 'THE RUN OUT WEST',
-      brief: 'TAKE THE PASS TO THE HEADLAND',
-      dest: { name: 'CHAPMANS PEAK', lat: -34.079, lon: 18.362 },
-      // 120, not 90: the pass passes no nearer than 104m to the headland, so a
-      // 90m radius could only be reached by leaving the road at the end.
-      within: 120,
-      // The brief says TAKE THE PASS. Without this it was a suggestion — the
-      // headland is reachable by pointing the truck at it and climbing.
-      //
-      // SIX, and a count rather than a majority, because the headland sits at
-      // the MIDDLE of the pass: 4496m of road, 18 checkpoints, closest
-      // approach to the destination at 48% along it. Driving in from either
-      // end collects 9 — exactly half, never a majority — so requiring one
-      // would have shipped a mission that cannot be completed. Six is about
-      // 1.5km of pass: enough that you have to have driven it, low enough to
-      // survive joining part way along.
-      via: { name: "Chapman's Peak Drive", atLeast: 6 },
-    },
-  },
-  { name: 'JOKULSARLON', sub: 'ICELAND · THE RING ROAD', lat: 64.048, lon: -16.18, h: 270 },
-];
+/**
+ * THE AUTHORED DESTINATIONS, FETCHED — not compiled in.
+ *
+ * This was a literal here: twenty destinations and a mission, inside a file
+ * that reached a megabyte and broke its own deploy. A destination list is data
+ * someone edits, so it lives in `campaigns/dakar.json` and arrives over the
+ * cell's public namespace (`~/campaign/<v>`), which is a CDN hit rather than a
+ * Lambda. `CAMPAIGN_V` must match the server's; those objects are immutable.
+ *
+ * LAST GOOD COPY KEPT. The list is two kilobytes and the menu is the way into
+ * the whole game, so a cold namespace or a dead connection must not empty it:
+ * a successful fetch is mirrored to localStorage and read back when the fetch
+ * fails. Only a first-ever visit that also fails arrives with no drives, and
+ * that still plays — spots, the chart and a random spawn are all local.
+ */
+const CAMPAIGN_V = 1;
+const CAMPAIGN_KEY = `drive.campaign.v${CAMPAIGN_V}`;
+let DRIVES: Drive[] = [];
+/** Everything downstream reads `DRIVES` at call time (the menu rebuilds per
+ *  open, `missionById` runs once at boot AFTER this resolves), so nothing has
+ *  to be told the list arrived. */
+async function loadCampaign(): Promise<void> {
+  const use = (raw: string): boolean => {
+    try {
+      const j = JSON.parse(raw) as { drives?: Drive[] };
+      if (!Array.isArray(j.drives) || !j.drives.length) return false;
+      DRIVES = j.drives.filter((d) => d && typeof d.lat === 'number' && typeof d.lon === 'number');
+      return DRIVES.length > 0;
+    } catch { return false; }
+  };
+  try {
+    const res = await fetch(`${CELL_BASE}/~/campaign/${CAMPAIGN_V}`);
+    if (res.ok) {
+      const raw = await res.text();
+      if (use(raw)) {
+        try { localStorage.setItem(CAMPAIGN_KEY, raw); } catch { /* full or blocked: this session is still served */ }
+        return;
+      }
+    }
+  } catch { /* offline, or the namespace is cold — fall through to the copy */ }
+  try { use(localStorage.getItem(CAMPAIGN_KEY) ?? ''); } catch { /* no copy: the list is empty this session */ }
+}
 const startDrive = (d: Drive): void => {
   const m = d.mission ? `&m=${d.mission.id}` : '';
   location.href = `${location.pathname}?lat=${d.lat}&lon=${d.lon}&h=${d.h}&cam=chase${m}`;
@@ -18729,6 +18726,11 @@ if (timeFromUrl >= 0) {
   // that would burn a fix (and a permission prompt) against a world that has
   // not finished streaming.
   real.on = q.get('real') === '1';
+  // The destinations, before anything asks for one. A shared link can carry
+  // `&m=<id>`, and the job it names lives in the campaign — so this has to have
+  // landed before `missionById` is asked. It is one small cached fetch on a
+  // boot that is about to pull terrain, so it costs nothing anyone can see.
+  await loadCampaign();
   // The job, if this spawn carries one. Armed AFTER `origin` is set, because
   // both its waypoints are lat/lon and have to be projected into local metres.
   const mid = q.get('m');

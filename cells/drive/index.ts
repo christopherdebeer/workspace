@@ -522,6 +522,50 @@ async function serveOverview(path: string, m: RegExpMatchArray) {
   };
 }
 
+// ── the campaign: authored destinations, served not compiled ───────
+/**
+ * The curated drives and their missions used to be a literal inside
+ * `client/main.ts`. That file reached a megabyte and crossed the single-write
+ * ceiling this week (see `scripts/cell-sync.mjs`), and authored content had no
+ * business being in it anyway: a destination list is data someone edits, not
+ * code someone runs.
+ *
+ * It is served from the cell's own public namespace — the same CDN-fronted
+ * prefix as the tiles — so a player's boot costs a cache hit, not a Lambda.
+ * The path carries the VERSION because those objects are immutable: bump
+ * `CAMPAIGN_V` here and in the client together with any edit to the JSON, or
+ * the old object shadows the new one forever. (The client also keeps its last
+ * good copy, so a cold namespace or a lost connection costs the list for that
+ * session and nothing else.)
+ *
+ * Deliberately NOT substrate facts: the game is isolated and reads no slice.
+ * See `docs/drive-persistence.md`.
+ */
+import CAMPAIGN from './campaigns/dakar.json';
+
+const CAMPAIGN_V = 1;
+const CAMPAIGN_RE = /^\/~\/campaign\/(\d{1,4})$/;
+function serveCampaign(path: string, m: RegExpMatchArray) {
+  if (Number(m[1]) !== CAMPAIGN_V) {
+    return respond(404, 'application/json', JSON.stringify({ error: 'no such campaign version' }), {
+      'cache-control': 'no-store',
+    });
+  }
+  const gz = gzipSync(Buffer.from(JSON.stringify(CAMPAIGN), 'utf8'), { level: 9 });
+  void putTile(path, gz).catch(() => { /* serve now, store best-effort */ });
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'content-encoding': 'gzip',
+      'cache-control': 'public, max-age=2592000, immutable',
+      'access-control-allow-origin': '*',
+    },
+    body: gz.toString('base64'),
+    isBase64Encoded: true,
+  };
+}
+
 // ── the peak tiles: named summits, for the far landmarks ───────────
 /**
  * SUMMITS, AT THE SCALE YOU CAN SEE THEM FROM.
@@ -773,7 +817,10 @@ async function putTile(
   if (!bucket) return; // no namespace configured — serve, don't store
   const key = tileKey(path);
   // Required lazily: the SDK is not in the Node 20 Lambda image by default and
-  // a cell without a public namespace should never pay to load it.
+  // a cell without a public namespace should never pay to load it. It is also
+  // not in this repo's node_modules — it exists only in the Lambda runtime —
+  // so the type checker is told to expect the miss rather than fail on it.
+  // @ts-expect-error resolved at runtime by the Lambda image, not at build
   const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3');
   await new S3Client({}).send(new PutObjectCommand({
     Bucket: bucket,
@@ -904,6 +951,8 @@ export const handler = async (event: {
     if (ov) return serveOverview(path, ov);
     const pk = path.match(PEAK_RE);
     if (pk) return servePeaks(path, pk);
+    const cp = path.match(CAMPAIGN_RE);
+    if (cp) return serveCampaign(path, cp);
     return respond(404, 'application/json', JSON.stringify({ error: 'no such object' }), {
       'cache-control': 'no-store',
     });

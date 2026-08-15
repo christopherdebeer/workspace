@@ -7,9 +7,11 @@
     "lib": ["ES2020", "DOM", "DOM.Iterable"],
     "strict": true,
     "esModuleInterop": true,
+    "resolveJsonModule": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "noEmit": true
   },
-  "include": ["client"]
+  "// include": "index.ts is the LAMBDA and was outside this for months — every `tsc -p .` run against this cell checked the client only, so the server half went unverified until a JSON import needed proving. resolveJsonModule is for campaigns/*.json, which the server serves.",
+  "include": ["client", "index.ts"]
 }
