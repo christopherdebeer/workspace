@@ -9323,10 +9323,15 @@ function streamWorld(ex: number, ez: number): void {
   // and the far ring can take as long as it likes.
   if (osmInFlight === 0 && osmQueue.length === 0 && peakInFlight < 2) {
     const [px, py] = tileAt(lat, lon, PEAK_Z);
-    const pRing = clamp(Math.ceil(PEAK_R / tileMetres(PEAK_Z)), 1, PEAK_RING_MAX);
+    const tm = tileMetres(PEAK_Z);
+    const pRing = clamp(Math.ceil(PEAK_R / tm), 1, PEAK_RING_MAX);
     let best: [number, number, number] | null = null;
     for (let dx = -pRing; dx <= pRing; dx++) {
       for (let dy = -pRing; dy <= pRing; dy++) {
+        // The NEAREST ground in that tile, so a corner tile is judged by the
+        // bit of it you could actually see rather than by its centre.
+        const near = Math.hypot(Math.max(0, Math.abs(dx) - 1), Math.max(0, Math.abs(dy) - 1)) * tm;
+        if (near > PEAK_R) continue;
         const k = `${PEAK_Z}/${px + dx}/${py + dy}`;
         if (peakTiles.has(k)) continue;
         const d2 = dx * dx + dy * dy;
@@ -9698,9 +9703,22 @@ function buildOvTile(key: string, x: number, y: number, z: number,
  * their own pass, on their own budget, ranked by how big they LOOK rather
  * than how close they are — which is the honest question for a landmark.
  */
-const PEAK_Z = 7;
-const PEAK_R = 500000;        // the reach asked for: half a thousand kilometres
-const PEAK_RING_MAX = 2;      // …and the ring that pays for it — 25 tiles, no more
+const PEAK_Z = 8;
+/**
+ * HOW FAR IS WORTH FETCHING — decided by the horizon, not by a round number.
+ *
+ * √(2Rh) is the range at which ground of height h clears the horizon: 113km
+ * for a 1000m hill, 248km for Mont Blanc, 336km for Everest. Past that the
+ * earth is in the way, and a marker for something 500km off is not a landmark
+ * you can see — it is a compass bearing to a mountain below the world's edge.
+ *
+ * So the ring reaches 350km: further than the tallest peak on Earth can be
+ * seen from, and no further. Tiles whose nearest ground lies beyond it are
+ * not asked for at all — a square ring would have spent a fifth of its
+ * queries on corners nothing could ever look at.
+ */
+const PEAK_R = 350000;
+const PEAK_RING_MAX = 3;
 interface Peak { name: string; x: number; z: number; ele: number }
 const peaks = new Map<string, Peak>();
 const peakTiles = new Set<string>();
@@ -12534,6 +12552,7 @@ function meshHeightAt(x: number, z: number): number | null {
     tiles: peakTiles.size, retried: peakDemless, known: peaks.size,
     reachKm: +(far / 1000).toFixed(1),
     ringKm: +((clamp(Math.ceil(PEAK_R / tileMetres(PEAK_Z)), 1, PEAK_RING_MAX) * tileMetres(PEAK_Z)) / 1000).toFixed(0),
+    tileKm: +(tileMetres(PEAK_Z) / 1000).toFixed(0),
     top: all.slice(0, n).map((e) => ({
       name: e.p.name, ele: e.p.ele, km: +(e.d / 1000).toFixed(1),
       deg: +((Math.atan(e.app) * 180) / Math.PI).toFixed(2),

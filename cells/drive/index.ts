@@ -531,9 +531,17 @@ async function serveOverview(path: string, m: RegExpMatchArray) {
  * work everywhere. A floor tuned for the Alps erases the Netherlands, whose
  * highest ground is a 322m hill and is nonetheless the landmark there.
  */
-const PEAK_CAP = 150;             // per tile, tallest first
-const PEAK_UPSTREAM_MS = 24000;   // the overview layer's budget, same upstream
-const PEAK_ATTEMPT_MS = 15000;
+const PEAK_CAP = 120;             // per tile, tallest first
+// MEASURED, AND THE FIRST ANSWER WAS WRONG. This began at z7 — 250km tiles,
+// one query per quarter-million km² — and the two tiles that mattered most
+// both came back 502: the Lambda is capped at 30s and the Mont Blanc massif
+// costs Overpass 18-27s of that, leaving nothing for the gzip and the S3
+// write. A 502 from a dead function is strictly worse than a 503 from a live
+// one, and it is exactly the mountainous ground this layer exists for.
+// z8 quarters the area: the same Alpine ground measures 7.6s and 1858
+// summits, which fits inside the budget with room to say why if it fails.
+const PEAK_UPSTREAM_MS = 20000;   // …and the budget leaves the handler 10s of its own
+const PEAK_ATTEMPT_MS = 9000;     // two honest attempts, neither able to eat it all
 const PEAK_RE = /^\/~\/osm\/peak1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 /** OSM `ele` is free text: "1234", "1234.5", "1234 m", "4,808", and junk.
  *  Metres only — a value in feet is not marked as such often enough to guess,
@@ -559,7 +567,7 @@ export function trimPeaks(elements: RawWay[]): Array<{ n: string; la: number; lo
 }
 async function servePeaks(path: string, m: RegExpMatchArray) {
   const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  if (z !== 7 || x >= 2 ** z || y >= 2 ** z) {
+  if (z !== 8 || x >= 2 ** z || y >= 2 ** z) {
     return respond(400, 'application/json', JSON.stringify({ error: 'peak tile out of range' }));
   }
   const b = tileBounds(z, x, y);

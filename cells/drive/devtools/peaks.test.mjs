@@ -6,7 +6,7 @@
  * `parseEle` and `trimPeaks` are the whole contract of the layer — OSM `ele`
  * is free text, and the cap is what keeps an Alpine tile from being a
  * megabyte. Those run offline. `--live` also asks the real Overpass for two
- * real tiles: Big Sur (sparse, 151 summits) and Mont Blanc (dense, 7268), the
+ * real tiles: Big Sur (sparse) and Mont Blanc (dense, 1858 at z8), the
  * two ends of the density problem this layer exists to survive.
  */
 import { execSync } from 'node:child_process';
@@ -41,7 +41,7 @@ const many = Array.from({ length: 400 }, (_, i) => ({
   type: 'node', lat: 46 + i * 1e-4, lon: 8 + i * 1e-4, tags: { name: `P${i}`, ele: String(1000 + i) },
 }));
 const trimmed = trimPeaks(many);
-check('cap applied', trimmed.length === 150, trimmed.length);
+check('cap applied', trimmed.length === 120, trimmed.length);
 check('tallest kept', trimmed[0].e === 1399, trimmed[0]);
 check('sorted descending', trimmed.every((p, i) => i === 0 || trimmed[i - 1].e >= p.e), true);
 check('nameless dropped', trimPeaks([{ type: 'node', lat: 1, lon: 1, tags: { ele: '900' } }]).length === 0, null);
@@ -51,8 +51,8 @@ check('coords rounded to 5dp', trimPeaks([{ type: 'node', lat: 46.123456789, lon
 // ── the route's own guards ──
 const call = (p) => handler({ rawPath: p, requestContext: { http: { method: 'GET' } } });
 for (const [name, path] of [
-  ['wrong zoom refused', '/~/osm/peak1/9/1/1'],
-  ['x out of range refused', '/~/osm/peak1/7/9999/1'],
+  ['wrong zoom refused', '/~/osm/peak1/7/1/1'],
+  ['x out of range refused', '/~/osm/peak1/8/99999/1'],
 ]) {
   const r = await call(path);
   check(name, r.statusCode === 400, r.statusCode);
@@ -60,14 +60,14 @@ for (const [name, path] of [
 
 // ── the two ends of the density problem ──
 if (process.argv.includes('--live')) {
-  for (const [name, x, y] of [['big sur', 20, 50], ['mont blanc', 66, 45]]) {
+  for (const [name, x, y] of [['big sur', 41, 100], ['mont blanc', 132, 91]]) {
     const t0 = Date.now();
-    const r = await call(`/~/osm/peak1/7/${x}/${y}`);
+    const r = await call(`/~/osm/peak1/8/${x}/${y}`);
     const secs = ((Date.now() - t0) / 1000).toFixed(1);
     if (r.statusCode !== 200) { console.log(`skip  ${name}: upstream said ${r.statusCode} (${secs}s)`); continue; }
     const j = JSON.parse((await import('node:zlib')).gunzipSync(Buffer.from(r.body, 'base64')).toString());
     const kb = (Buffer.from(r.body, 'base64').length / 1024).toFixed(1);
-    check(`${name}: within the cap`, j.peaks.length <= 150, j.peaks.length);
+    check(`${name}: within the cap`, j.peaks.length <= 120, j.peaks.length);
     check(`${name}: tallest first`, j.peaks.every((p, i) => i === 0 || j.peaks[i - 1].e >= p.e), true);
     console.log(`      ${name}: ${j.peaks.length} summits, ${kb}KB gz, ${secs}s, top = ${j.peaks[0]?.n} ${j.peaks[0]?.e}m`);
   }
