@@ -17836,7 +17836,14 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     let lane = 0;
     while (lane < 3 && lanes[lane] !== undefined && x < lanes[lane] + 5) lane++;
     lanes[lane] = x + w;
-    const ly = Math.max(12, ay - Math.max(11, Math.round(h / 3)) - lane * 8);
+    // A NAME HIGH IN THE FRAME HANGS BELOW ITS MARK. Summits ride at the angle
+    // they really subtend, so from a valley floor they sit at the top of the
+    // glass — and a label placed above one there lands in the compass strip,
+    // which is where the three Mont Blanc summits went the first time
+    // Chamonix was photographed with them. Above the mark by default, under it
+    // when there is no room, and either way it stays beside the thing it names.
+    const above = ay - Math.max(11, Math.round(h / 3)) - lane * 8;
+    const ly = isPeak && above < 20 ? ay + 7 + lane * 8 : Math.max(12, above);
     hctx.save();
     // THE checkpoint beam, in the place's own colour: the same leaning
     // column, the same alpha ramp, the same widths — one family of light.
