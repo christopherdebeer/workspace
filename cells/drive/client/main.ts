@@ -14629,7 +14629,6 @@ function updatePeaks(vx: number, vz: number): void {
   }
   if (!seen.length) return;
   seen.sort((a, b) => b.app - a.app);
-  camera.getWorldDirection(camFwd);
   for (let i = 0; i < Math.min(PEAK_SHOW, seen.length); i++) {
     const { p, d, rise, app } = seen[i];
     const dx = p.x - vx, dz = p.z - vz;
@@ -14643,29 +14642,24 @@ function updatePeaks(vx: number, vz: number): void {
     const label = `${p.name.toUpperCase()} ${Math.round(p.ele)}M ${fmtDist(d)}`;
     poiVec.set(wx, y, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
-    if (poiView.z < -1) {
-      poiVec.project(camera);
-      if (Math.abs(poiVec.x) <= 0.92) {
-        poiDraw.push({
-          x: (poiVec.x * 0.5 + 0.5) * innerWidth,
-          y: clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.06, innerHeight * 0.86),
-          tx: 0, ty: 0,                              // no beam: see the draw pass
-          t: label, c: POI_COLORS.peak, edge: 0, rng: false, hid: over,
-          name: p.name, kind: 'peak', pinned: false, d,
-          w: [wx, wz, y],
-        });
-        continue;
-      }
-    }
-    // Behind you, or off the side. A summit is worth a chip only while it is
-    // one of the two biggest things around — three chips of mountain would
-    // crowd out the job pins that actually need the edge.
-    if (i > 1) continue;
-    const right = camFwd.x * dz - camFwd.z * dx > 0;
+    if (poiView.z >= -1) continue;                   // behind the camera
+    poiVec.project(camera);
+    // IN FRAME, OR NOT AT ALL. A summit gets no edge chip and no clamp onto
+    // the border: unlike a destination, which is a thing you are travelling
+    // TO and wants a bearing even when it is behind you, a mountain marker is
+    // a label ON something you are looking at. Pinned to the edge it became
+    // furniture that never went away and never pointed at anything you could
+    // see — so it is drawn where it actually is, and when you turn away it is
+    // simply gone. The bounds keep the whole label inside the glass rather
+    // than sliding it along the rim.
+    if (Math.abs(poiVec.x) > 0.92 || Math.abs(poiVec.y) > 0.94) continue;
     poiDraw.push({
-      x: 0, y: innerHeight * (0.2 + i * 0.055),
-      t: right ? `${label} >` : `< ${label}`, c: POI_COLORS.peak, edge: right ? 1 : -1,
-      rng: false, hid: false, name: p.name, kind: 'peak', pinned: false, d, tx: 0, ty: 0,
+      x: (poiVec.x * 0.5 + 0.5) * innerWidth,
+      y: (-poiVec.y * 0.5 + 0.5) * innerHeight,
+      tx: 0, ty: 0,                                  // no beam: see the draw pass
+      t: label, c: POI_COLORS.peak, edge: 0, rng: false, hid: over,
+      name: p.name, kind: 'peak', pinned: false, d,
+      w: [wx, wz, y],
     });
   }
 }
@@ -17878,17 +17872,15 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   }
   for (const p of poiDraw) {
     if (p.edge === 0) continue;
-    // The summit's mark is drawn, not a glyph — same as at its foot — and it
-    // gets the same wider label budget, for the same reason.
-    const isPeak = p.kind === 'peak';
-    const label = fitP(p.t, Math.round(HW * (isPeak ? 0.7 : 0.5)));
+    // No summit reaches this loop: a peak is drawn where it is or not at all
+    // (see updatePeaks), so the edge is destinations only.
+    const label = fitP(p.t, Math.round(HW * 0.5));
     const iconCh = KIND_ICON[p.kind];
-    const iw = iconCh || isPeak ? 7 : 0;
+    const iw = iconCh ? 7 : 0;
     const w = textPW(label) + 4 + iw;
     const y = clamp(Math.round(p.y / hudS), 20, HH - 30);
     const x = p.edge > 0 ? HW - w - 3 : 3;
-    if (isPeak) { hctx.fillStyle = p.c; peakMark(x + 3, y + 7, 3, true); }
-    else if (iconCh) hudIconEdge(iconCh, x + 1, y + 1, p.c, 5);
+    if (iconCh) hudIconEdge(iconCh, x + 1, y + 1, p.c, 5);
     textEdgeP(label, x + 2 + iw, y + 2, p.rng || p.pinned ? UI.gold : p.c);
     poiRects.push({ x: x - 3, y: y - 4, w: w + 8, h: 14, name: p.name, kind: p.kind });
   }
