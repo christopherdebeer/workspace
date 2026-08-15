@@ -11,14 +11,14 @@
  * something else. A silently-wrong campaign is a menu full of the wrong
  * places.
  *
- * The DATA has to hold together on its own. It is hand-edited JSON that nobody
- * compiles: a missing `lat`, a heading in the wrong units, or a mission whose
- * id does not match the `&m=` link that carries it are all errors that appear
- * only when a player opens the menu or follows a shared link. They are cheap
- * to catch here and expensive to catch there.
+ * The DATA has to hold together on its own. The module's types catch a missing
+ * field; they cannot catch a heading of 900, a coordinate at null island, two
+ * drives with one name, or a mission whose `via` count no road could satisfy.
+ * Those appear only when a player opens the menu or follows a shared link, and
+ * they are cheap to catch here and expensive to catch there.
  */
 import { execSync } from 'node:child_process';
-import { mkdtempSync, rmSync, readFileSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { gunzipSync } from 'node:zlib';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -50,9 +50,13 @@ const old = await call('/~/campaign/2');
 check('an unknown version is refused, not substituted', old.statusCode === 404, old.statusCode);
 check('…and never cached', old.headers['cache-control'] === 'no-store', old.headers);
 
-// The served copy must be the authored file — a build that inlines a stale
-// import would pass everything above and ship last week's destinations.
-const authored = JSON.parse(readFileSync('cells/drive/campaigns/dakar.json', 'utf8'));
+// The served copy must be the AUTHORED module — a build that inlined a stale
+// import would pass everything above and ship last week's destinations. Built
+// separately from the handler so the two cannot share a mistake.
+const campOut = join(dir, 'campaign.cjs');
+execSync(`npx esbuild cells/drive/campaigns/dakar.ts --bundle --platform=node --format=cjs --outfile=${campOut}`,
+  { stdio: 'pipe', cwd: process.cwd() });
+const { CAMPAIGN: authored } = await import(campOut);
 check('served copy matches the file on disk',
   JSON.stringify(served.drives) === JSON.stringify(authored.drives), null);
 check('the file declares the version the route serves', authored.v === 1, authored.v);

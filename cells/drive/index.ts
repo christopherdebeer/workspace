@@ -538,12 +538,16 @@ async function serveOverview(path: string, m: RegExpMatchArray) {
  * good copy, so a cold namespace or a lost connection costs the list for that
  * session and nothing else.)
  *
+ * A MODULE, NOT JSON: the cell's own bundler has no JSON loader and parsed the
+ * file as JavaScript on the first deploy attempt. The shape is checked at build
+ * time now, which is the better answer anyway.
+ *
  * Deliberately NOT substrate facts: the game is isolated and reads no slice.
  * See `docs/drive-persistence.md`.
  */
-import CAMPAIGN from './campaigns/dakar.json';
+import { CAMPAIGN } from './campaigns/dakar';
 
-const CAMPAIGN_V = 1;
+const CAMPAIGN_V = CAMPAIGN.v;
 const CAMPAIGN_RE = /^\/~\/campaign\/(\d{1,4})$/;
 function serveCampaign(path: string, m: RegExpMatchArray) {
   if (Number(m[1]) !== CAMPAIGN_V) {
