@@ -14,6 +14,7 @@ import {
   handleGrantableScopes,
   scopeMeta,
   isSelfGrantableGranular,
+  cellScopesFor,
 } from '../services/auth/oauth';
 import { sha256 } from '../services/auth/store';
 import type { ServiceHttpRequest } from '../platform/runtime';
@@ -494,6 +495,52 @@ describe('OAuth device authorization grant', () => {
 });
 
 describe('per-type consent + granular elevation (ADR-0023 §B / ADR-0022)', () => {
+  // A cell scope is open-ended in owner and name, so like the per-type scopes it
+  // can never sit in `scopesSupported` — and unlike them it had NO admission rule,
+  // so a client asking for a cell scope alone was offered nothing and the consent
+  // screen disabled its own Authorize button. That is the least-privilege handoff
+  // docs/cell-origin-isolation.md §4.5 describes, so it could not actually be used:
+  // every cell sign-in had to ask for `workspace:read workspace:write` instead.
+  describe('a cell sign-in can be granted the scope that names it', () => {
+    const CELL = 'c15r-drive.on.parc.land';
+    let suffix: string | undefined;
+    beforeEach(() => {
+      suffix = process.env.CELL_DOMAIN_SUFFIX;
+      process.env.CELL_DOMAIN_SUFFIX = '.on.parc.land';
+    });
+    afterEach(() => {
+      if (suffix === undefined) delete process.env.CELL_DOMAIN_SUFFIX;
+      else process.env.CELL_DOMAIN_SUFFIX = suffix;
+    });
+
+    it('offers the cell the sign-in came from', () => {
+      expect(cellScopesFor(`https://${CELL}`)).toEqual(['cell:c15r/drive:*']);
+    });
+    // The bound that matters: derived from the redirect_uri, so a request can
+    // only ever name the cell whose page the player is standing on.
+    it('never offers a different cell', () => {
+      expect(cellScopesFor('https://c15r-lit.on.parc.land')).toEqual(['cell:c15r/lit:*']);
+      expect(cellScopesFor(`https://${CELL}`)).not.toContain('cell:someone/else:*');
+    });
+    it('offers nothing for a plain platform redirect', () => {
+      expect(cellScopesFor('https://parc.land/whatever')).toEqual([]);
+      expect(cellScopesFor(undefined)).toEqual([]);
+    });
+    // It is a CELL scope only. The ceiling also contains workspace read/write,
+    // and admitting those here would hand every cell sign-in the whole slice
+    // without anyone choosing it.
+    it('does not smuggle the workspace half of the ceiling through', () => {
+      expect(cellScopesFor(`https://${CELL}`).some((s) => s.startsWith('workspace:'))).toBe(false);
+    });
+    // …and the consent screen has to be able to say what it is, in words.
+    it('reads as an identity grant, not as a raw scope string', () => {
+      const m = scopeMeta('cell:c15r/drive:*');
+      expect(m.verb).toBe('read');
+      expect(m.title).toContain('@c15r/drive');
+      expect(m.description).toMatch(/username/i);
+    });
+  });
+
   it('isSelfGrantableGranular admits read/write type families only', () => {
     expect(isSelfGrantableGranular('write:type:note')).toBe(true);
     expect(isSelfGrantableGranular('read:type:todo')).toBe(true);
