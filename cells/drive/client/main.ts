@@ -17556,6 +17556,23 @@ function lineGo(): void {
   })(),
   legsDone: LEGS.filter((l) => marks.has('m', l.id)).length, legs: LEGS.length,
   covers: coverBuilt.size,
+  coverAt: [...coverBuilt.values()].map((g) => {
+    // Where the rim's nearest point lands on screen — the honest answer to
+    // "why can't I see the shell".
+    const dx = state.x - g.position.x, dz = state.z - g.position.z;
+    const dd = Math.hypot(dx, dz) || 1;
+    const c = COVERS.find((cv) => coverBuilt.get(cv.id) === g);
+    const r = c?.r ?? 0;
+    const rim = new THREE.Vector3(
+      g.position.x + (dx / dd) * r, g.position.y + 80, g.position.z + (dz / dd) * r);
+    const v = rim.clone().project(camera);
+    return {
+      x: Math.round(g.position.x), y: Math.round(g.position.y), z: Math.round(g.position.z),
+      d: Math.round(dd), rimD: Math.round(dd - r),
+      ndc: { x: +v.x.toFixed(2), y: +v.y.toFixed(2), z: +v.z.toFixed(3) },
+      visible: [...coverBuilt.values()].every((gg) => gg.visible),
+    };
+  }),
 });
 
 // ── the covers ─────────────────────────────────────────────────────
@@ -17565,10 +17582,14 @@ function lineGo(): void {
 // fiction and the streaming budget saying the same thing (the dense city that
 // was aborting Overpass upstream is precisely the part the shell hides).
 const coverBuilt = new Map<string, THREE.Group>();
-const coverMat = new THREE.MeshLambertMaterial({
-  color: 0x9aa5a0, flatShading: true, transparent: true, opacity: 0.96,
-});
-const coverBandMat = new THREE.MeshLambertMaterial({ color: 0x6b7672, flatShading: true });
+// DARK, like a mountain. The fog composite mixes every pixel toward haze by
+// distance and unexploredness, and the Covers stand in land nobody has driven
+// — a pale shell mixed toward pale haze simply vanished (measured: rim
+// projected on-screen at 210m, nothing drawn a player could see). Distant
+// ranges survive the same haze because they are dark silhouettes against a
+// bright sky, so the shell reads the way the landscape does: as a dark mass.
+const coverMat = new THREE.MeshLambertMaterial({ color: 0x2f3a38, flatShading: true });
+const coverBandMat = new THREE.MeshLambertMaterial({ color: 0x232c2a, flatShading: true });
 /** Is this lat/lon under a Cover? The margin keeps half-in tiles out too —
  *  a road that dives under the shell is a road the map no longer answers for. */
 function underCover(lat: number, lon: number, margin = 0.97): Cover | null {
@@ -17594,11 +17615,15 @@ function buildCovers(): void {
     g.add(dome);
     // The foot band: a wall where the shell meets the ground, so arriving at
     // it reads as arriving at a THING rather than at a big grey hill.
-    const band = new THREE.Mesh(new THREE.CylinderGeometry(c.r * 1.001, c.r * 1.003, 90, 64, 1, true), coverBandMat);
-    band.position.y = 30;
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(c.r * 1.001, c.r * 1.003, 170, 64, 1, true), coverBandMat);
+    band.position.y = 80;
     g.add(band);
     // Seated a little low so terrain relief never opens a gap under the rim.
-    g.position.set(x, groundAt(x, z) - 60, z);
+    // The centre is kilometres away, so its terrain has usually NOT streamed —
+    // groundAt there can be undefined ground. Seat on what is known: the
+    // ground HERE, which the rim (the only part you are near) stands on.
+    const gy = groundAt(state.x, state.z);
+    g.position.set(x, (Number.isFinite(gy) ? gy : 0) - 60, z);
     worldGroup.add(g);
     coverBuilt.set(c.id, g);
   }
