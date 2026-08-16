@@ -128,6 +128,30 @@ as a constraint to preserve, not an implementation detail: **if a future change
 needs `workspace:*`, the isolation has been abandoned and this document is
 wrong.**
 
+### …and the half that was missing
+
+The paragraph above was true about the ceiling and wrong about what it takes to
+reach it. `cellCeiling` acts at the **token** step — it caps what a code can be
+exchanged for. Nothing made a cell scope offerable at the **authorize** step, so
+no code could carry one in the first place: `/auth/grantable` returns the static
+`scopesSupported` (plus ADR-0023's per-type scopes), the consent SPA shows
+`requested ∩ grantable`, and a request for `cell:c15r/drive:*` alone intersected
+to nothing — *"No grantable scopes"*, with the Authorize button disabled.
+
+Drive was the first client to ask for the narrow thing, which is why nobody had
+hit it: the kernel's `DEFAULT_SCOPE` is `workspace:read workspace:write`, the
+very over-grant this section argues against, because that was the only thing
+consent would offer.
+
+Fixed in `services/auth/oauth.ts` (`cellScopesFor`), deployed. The offerable
+cell scope is derived from the same `redirect_uri` the ceiling uses — so a
+request can only ever name the cell whose page the player is standing on — and
+only the `cell:` member of the ceiling is admitted, never its `workspace:` half.
+The scope confers no authority by itself: a cell call is authorised by the
+registry (`authorizeAccess`), and the cell receives `x-cell-caller`, never the
+token. A token holding only this is an **identity token**, which is exactly what
+this section says signing into drive should cost.
+
 ## 5. The data model
 
 Progress is stored **per player, per road** — not as one blob. That single
