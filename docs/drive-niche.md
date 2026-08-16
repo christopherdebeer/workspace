@@ -1,12 +1,13 @@
 # Drive: what this game is
 
-The niche, argued from what is already built — and now settled by the owner:
-**it is both.** Rally is the *feel* (the rig, the stages, the romance of
-Paris–Dakar); the survey is the *mechanic* (the only progression in the code);
-solarpunk is the *licence* (a rebuilt world explains why the settlements on
-screen are not photographs). The first draft of this document posed rally vs
-survey as a choice. The owner's answer is that they fuse — and there is a
-figure in real rally sport where they genuinely do (§4).
+The niche, argued from what is already built. This document carries the
+*evidence* (§1), the *licence* (§2), the *aesthetic* (§3) and the *prior art*
+(§5). The narrative itself is decided and lives in **`docs/drive-narrative.md`**
+— the Ranger, the Covers, the Compact, and the hijack in which certification
+turns out to be law. An earlier draft of this file proposed "Car Zero" (the
+rally's course car); the owner rejected it, rightly: it explained the survey
+mechanic, where the Ranger premise *re-reads* it. §4 below is the short form of
+what replaced it.
 
 ## 1. What the game already is, on the evidence
 
@@ -86,71 +87,35 @@ observed landscape with one engineered thing standing in it that is slightly
 too large and entirely matter-of-fact. Drive's aqueduct viaducts over real DEM
 already produce this register by accident. It is the right one on purpose.
 
-## 4. The niche, narratively: CAR ZERO
+## 4. The niche, narratively: THE RANGER
 
-Real rallies have a car that is neither first nor racing. Before the field is
-allowed onto a stage, a **course car — "car zero"** — drives it: checks the
-route is passable, the hazards are as noted, the road book matches the road.
-The rally exists *behind* that car. It never races anything, and the whole
-event depends on it.
+The full statement is `docs/drive-narrative.md`. The short form:
 
-**The player is Car Zero.** The rally is real, and it is the fiction's engine —
-but it is always behind you.
+After the **Leaving**, the metropolitan areas are sealed under monolithic
+geodesic **Covers** and the land between them is held under a recovery
+**Compact**. The player is a **ranger** — ecologist, mechanic, surveyor,
+courier, and principally an *independent witness*: a road is not open because
+an old map draws it; someone must traverse it, wake its monitoring stations,
+and deliver an unedited journey record to the far city. The first docket is
+the dormant Paris–Dakar line. The game begins as ordinary work, and the
+narrative arrives as a **classification error**: the "empty" recovering world
+is inhabited by people who have stayed deliberately illegible, and
+certification turns out not to describe the route but to make it *legally
+available* — clearing machines, jurisdiction, settlement. You thought you were
+proving a road existed; you were deciding who had the right to the land around
+it.
 
-The frame, in full:
+Why this is the strongest use of the engine: the hijack is made out of the
+player's own verb. The DRIVEN latch — the thing the player has been doing for
+hours before the story turns — is retroactively revealed as a speech act with
+legal force. The fiction does not decorate the mechanic or even explain it; it
+re-reads it. And the Cover deletes the engine's hardest rendering problem:
+Paris never has to be built, because you may never see inside.
 
-- **The world:** a couple of generations after the transition. Settlements are
-  local, solar, comfortable, and disconnected by land. Flight is gone or
-  rationed; the sea is slow; the old roads are *rumoured* to still be there.
-  The last complete road survey predates the transition — it is, in-world, the
-  old map. (Out of world: it is OpenStreetMap. The fiction and the data source
-  are the same object.)
-- **The institution:** the rallies are being re-founded — not as races first,
-  but as the ceremony by which the long routes are reopened. A route that
-  carried a rally is a route the whole world knows is drivable again. Trade
-  follows. The event is the *proof*, the way a bridge opening is a proof.
-  Paris–Dakar is the first, because it was the most famous crossing of the
-  hardest ground.
-- **The player's job:** you drive ahead of everything, alone, certifying the
-  route leg by leg. The survey mechanic *is* the job: a stage is open when its
-  roads are DRIVEN. The rally follows you at a distance you never see — you
-  hear it on the radio, days behind, growing.
-- **Why you specifically:** the previous Car Zero's log ends mid-route. Their
-  rig is missing; their last certified stage is where your campaign starts.
-  Recovering their route — and eventually the reason the log stops — is the
-  doled-out thread the campaign reveals leg by leg.
-
-Why this frame and not another:
-
-**It fuses the three registers instead of choosing.** The rally supplies feel
-(stages, road books, liveries, the Dakar romance, a reason the rig is called a
-RALLY RIG); the survey supplies the verb (certify, which is what the mechanic
-already measures); solarpunk supplies the stakes (reconnection, not conquest —
-Death Stranding's rope, §5). Nothing has to be removed; each part carries the
-weight it is built for.
-
-**It explains every absence as a feature.** No rivals on screen — Car Zero is
-ahead of the field by definition. No clock — certification is not timed, it is
-*true or not*. No crowds — the route is not open yet; that is why you are
-here. The build's silences all become the premise.
-
-**It keeps the existing title.** PARIS – DAKAR stops being a genre reference
-and becomes the campaign's literal subject: reopening that route. Future
-campaigns name themselves: the Panamericana, Cape to Cairo, the Silk Road,
-Route 6 across Iceland's interior. Each is a real historic route, which honours
-the instrument rule — everything in this game is somewhere.
-
-**How the story is doled out — diegetically, never cutscenes:**
-
-1. **The road book.** Each leg's brief, in the clipped register the missions
-   already use ("TAKE THE PASS TO THE HEADLAND"). Route notes carry the
-   narrator's voice a line at a time.
-2. **The radio.** The rally desk, weather calls, and — rarely — the field
-   itself, arriving somewhere you certified a week ago. The Firewatch
-   mechanism: story delivered *during* traversal, never instead of it.
-3. **The predecessor's log.** Found a page at a time at places their route
-   book names: fuel stops, cols, the far end of a causeway. The Outer Wilds
-   mechanism: the log is also the map of where to go next.
+The story is doled out diegetically — the docket, other rangers' notation, the
+terminal's categories failing against what is visibly true — never by prologue
+or codex. The register: **the game is learned the way a reader learns a world
+the author refuses to explain.**
 
 ## 5. Prior art — to take from, and to be warned by
 
@@ -170,8 +135,9 @@ Three lessons transfer directly, one warning too:
 
 - **The fiction was isomorphic to the mechanic.** Deliveries knit the network;
   the network literally enables help (other players' structures appear). The
-  story and the loop are the same act. Car Zero has this property: certifying
-  the stage *is* opening the route *is* the plot advancing.
+  story and the loop are the same act. The Ranger premise has this property
+  twice over: certifying the line *is* the mechanic, and the plot's turn is a
+  re-reading of that same act.
 - **Asynchronous solidarity, zero competition.** Other players are present
   only as helpful traces — bridges, ladders, likes. If drive ever grows a
   multiplayer surface, this is the shape: the field that follows you could one
@@ -208,9 +174,9 @@ Three lessons transfer directly, one warning too:
   logistics as satisfaction. No fiction to speak of; drive can have both.
 - **Breath of the Wild** — the post-calamity pastoral and map-reveal-as-reward.
   Its towers are the ancestor of every fog-of-war loop including drive's.
-- **NieR: Automata** — surveying for an authority whose purpose unravels. If
-  the campaign's mystery ever needs teeth: *why* did the previous Car Zero stop
-  filing?
+- **NieR: Automata** — surveying for an authority whose purpose unravels — the
+  exact shape of the orphaned Compact, still cryptographically renewing itself
+  on behalf of signatories who may no longer exist.
 - **On paper:** Becky Chambers' *Monk & Robot* (the post-transition solarpunk
   register — gentle, purposeful, quietly asking what the job is for), Le Guin's
   *Always Coming Home* (a future society rendered as field notes — the survey
@@ -224,17 +190,17 @@ Three lessons transfer directly, one warning too:
 
 ## 6. What this means for the campaign
 
-**A campaign is a route, and a route is legs.** Not sixteen scattered spawns —
-an ordered spine with a direction of travel. PARIS – DAKAR: Trocadéro south,
-legs sized to a session, each leg a stage to certify. The current sixteen
+**A campaign is a line, and a line is legs.** Not sixteen scattered spawns —
+an ordered spine with a direction of travel: the P–D line, aperture to
+aperture, its seventeen witness stations the fixed points. The current sixteen
 destinations mostly survive as *bookmarks* (good places to freely drive); the
-handful on the route become stages.
+handful near the line become legs.
 
-**A stage is a survey job with a road book page.** The admission test for a
-stage stands from the first draft, sharpened: *would this stage be just as
-good in a game with fifteen hand-built tracks?* If yes, it has no business in
-the campaign. The engine's stages are the ones only the real Earth can supply —
-a real col, a real causeway, a road the old map draws and the ground disputes.
+**A leg is a survey job with a docket page.** The admission test stands,
+sharpened: *would this leg be just as good in a game with fifteen hand-built
+tracks?* If yes, it has no business on the line. The engine's legs are the
+ones only the real Earth can supply — a real col, a real causeway, a road the
+old map draws and the ground disputes.
 
 **Mission grammar, in order of need:**
 
@@ -258,25 +224,28 @@ engineering task of the campaign work, before any authoring.
 
 ## 7. What the niche rules out
 
-A niche you cannot say no with is not a niche. Under Car Zero:
+A niche you cannot say no with is not a niche. Under the Ranger:
 
-- **No rival on screen, ever.** The rally is real and always behind you. The
+- **No rival on screen, ever.** Nobody else is permitted on the line. The
   moment another car is beside you, this is a racing game and the survey is
   vestigial.
 - **No stopwatch on objectives.** Certification is true or not-yet, never fast.
-- **No invented places.** Every destination is somewhere, checkable, on Earth.
-  The route book's credibility is the game's.
-- **No collectibles that are not roads** (the predecessor's log pages live *at*
-  places the route book names — they are reasons to go somewhere real, not a
-  second currency).
-- **No hidden failure.** The instrument does not lie, including about itself.
-- **No desperation.** The transition is behind the world. Melancholy is
-  allowed; the missing Car Zero earns it. Grimdark is not.
+- **No invented places.** Every station is somewhere, checkable, on Earth. The
+  docket's credibility is the game's.
+- **No collectibles that are not the work** (other rangers' marks live *at*
+  places the line names — reasons to go somewhere real, not a second currency).
+- **No hidden failure — but institutionally wrong categories, yes.** The
+  renderer never lies; the terminal's *classifications* may. That distinction
+  is the plot (`drive-narrative.md` §10).
+- **No prologue, no codex.** Anyone on the radio already knows what a Cover is
+  and would never explain one.
+- **No desperation.** The Leaving is behind the world. Melancholy is allowed;
+  the disabled witness earns it. Grimdark is not.
 
 ## 8. Decided
 
-Rally feel · survey mechanic · solarpunk licence — fused as **Car Zero**: the
-player certifies the route, and the rally the world can see follows behind.
-The campaign work now has an order: persist missions first, then author the
-Paris–Dakar spine as stages with road-book pages, then grow the grammar
-(claim-as-objective → observation → negative result → region).
+**The Ranger** (`docs/drive-narrative.md`): certify the recovering land
+between sealed city-states, until certification is revealed as a claim upon
+it. The campaign work has an order: persist missions first, then the witness
+stations and the P–D docket, then the grammar the hijack needs
+(claim-as-objective → observation → negative result → the withholding choice).
