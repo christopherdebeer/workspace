@@ -61,11 +61,17 @@ export interface SyncStatus {
 }
 /** Rows on the wire: counts and claims, never crumbs. */
 export type SyncRows = Record<string, { g: number; t: number; c?: number }>;
+/** Latched events on the wire — missions completed, stations woken. Each is an
+ *  id and the wall-clock moment it FIRST happened; the merge is union-and-min
+ *  on both sides, so the earliest truth wins from any order. */
+export interface SyncMarks { missions: Record<string, number>; stations: Record<string, number> }
 export interface SyncPorts {
   /** Everything worth mirroring that changed since `since`. */
   dump(since: number): SyncRows;
   /** Fold the durable copy back in. Returns how many records it changed. */
   merge(rows: SyncRows): number;
+  marks(since: number): SyncMarks;
+  mergeMarks(rows: Partial<SyncMarks>): number;
   /** Total distance, the other monotonic number. */
   odo(): number;
   setOdo(m: number): void;
@@ -224,6 +230,7 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
 
   async function call(method: 'GET' | 'POST', body?: unknown): Promise<{
     user?: string; roads?: SyncRows; odo?: number; error?: string;
+    missions?: Record<string, number>; stations?: Record<string, number>;
   }> {
     const res = await fetch(`${base}/state`, {
       method,
@@ -247,10 +254,11 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
       // One round trip does both halves: everything this device has learned
       // since the last sync goes up, and the merged whole comes back — which is
       // how a second device's progress arrives.
-      const out = await call('POST', { roads: ports.dump(at), odo: ports.odo() });
+      const out = await call('POST', { roads: ports.dump(at), ...ports.marks(at), odo: ports.odo() });
       user = out.user ?? user;
       if (out.roads) roads = Object.keys(out.roads).length;
-      const changed = out.roads ? ports.merge(out.roads) : 0;
+      const changed = (out.roads ? ports.merge(out.roads) : 0)
+        + ports.mergeMarks({ missions: out.missions, stations: out.stations });
       if (typeof out.odo === 'number') ports.setOdo(out.odo);
       at = Date.now();
       local.set(K.at, String(at));

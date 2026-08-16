@@ -55,7 +55,9 @@ const d = await openDrive({
           body: req.postData() ?? null }).catch(() => null);
       return route.fulfill({ status: 200, contentType: 'application/json',
         body: JSON.stringify({ user: 'c15r', odo: 1551000,
-          roads: { [FAR]: { g: 40, t: 40, c: 1700000000000 } } }) });
+          roads: { [FAR]: { g: 40, t: 40, c: 1700000000000 } },
+          missions: { 'chapmans-run': 1700000000001 },
+          stations: { 'pd-17': 1700000000002 } }) });
     });
   },
 });
@@ -89,6 +91,11 @@ check('a road claimed on another device arrived claimed',
   store.top.some((r) => r.id === FAR && r.done > 0), store.top);
 const odo = await d.page.evaluate(() => window.__odo());
 check('…and so did the odometer', odo.total >= 1551000, odo);
+// The marks travel with the roads: a mission finished and a station woken on
+// the other device arrive here as done — the campaign's spine syncing.
+const mk = await d.page.evaluate(() => window.__marks());
+check('…and a mission and a station done elsewhere arrived latched',
+  mk.missions === 1 && mk.stations === 1, mk);
 
 console.log(bad ? `\n${bad} FAILED` : '\nall good');
 report(d.errors);

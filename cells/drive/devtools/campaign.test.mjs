@@ -37,7 +37,7 @@ const check = (name, cond, saw) => {
 const call = (p) => handler({ rawPath: p, requestContext: { http: { method: 'GET' } } });
 
 // ── the route ──
-const res = await call('/~/campaign/1');
+const res = await call('/~/campaign/2');
 check('current version served', res.statusCode === 200, res.statusCode);
 check('gzipped like every other object in the namespace',
   res.headers['content-encoding'] === 'gzip', res.headers);
@@ -46,7 +46,7 @@ check('immutable — the version IS the cache key',
 const served = JSON.parse(gunzipSync(Buffer.from(res.body, 'base64')).toString());
 check('carries the drives', Array.isArray(served.drives) && served.drives.length > 0, served.drives?.length);
 
-const old = await call('/~/campaign/2');
+const old = await call('/~/campaign/9');
 check('an unknown version is refused, not substituted', old.statusCode === 404, old.statusCode);
 check('…and never cached', old.headers['cache-control'] === 'no-store', old.headers);
 
@@ -59,7 +59,7 @@ execSync(`npx esbuild cells/drive/campaigns/dakar.ts --bundle --platform=node --
 const { CAMPAIGN: authored } = await import(campOut);
 check('served copy matches the file on disk',
   JSON.stringify(served.drives) === JSON.stringify(authored.drives), null);
-check('the file declares the version the route serves', authored.v === 1, authored.v);
+check('the file declares the version the route serves', authored.v === 2, authored.v);
 
 // ── the authored data ──
 const seen = new Set();
@@ -92,6 +92,26 @@ for (const d of served.drives) {
       m.via);
   }
 }
+
+// ── the stations ──
+// Each is a real feature renamed, so the same sanity that guards a drive
+// guards a station — and ids are what the marks store and the sync key on,
+// so they must be unique and url-safe forever.
+const stIds = new Set();
+for (const st of served.stations ?? []) {
+  const where = st.id ?? '(no id)';
+  check(`station ${where}: id is terse and url-safe`, /^[a-z0-9-]+$/.test(st.id ?? ''), st.id);
+  check(`station ${where}: named, with a place line`,
+    typeof st.name === 'string' && st.name.length > 0 && typeof st.sub === 'string' && st.sub.length > 0, st);
+  check(`station ${where}: coordinates are on Earth`,
+    Number.isFinite(st.lat) && Math.abs(st.lat) <= 90 && Number.isFinite(st.lon) && Math.abs(st.lon) <= 180
+    && !(st.lat === 0 && st.lon === 0), [st.lat, st.lon]);
+  check(`station ${where}: appears once`, !stIds.has(st.id), st.id);
+  stIds.add(st.id);
+  check(`station ${where}: carries its real-world provenance`,
+    typeof st.osm === 'string' && st.osm.length > 10, st.osm);
+}
+check('the campaign carries stations at all', (served.stations ?? []).length >= 3, served.stations?.length);
 
 rmSync(dir, { recursive: true, force: true });
 console.log(bad ? `\n${bad} FAILED` : `\nall good — ${served.drives.length} drives`);

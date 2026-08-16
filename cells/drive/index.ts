@@ -963,14 +963,21 @@ async function resolveGmap(raw: string): Promise<{ url?: string; error?: string 
 const TABLE = process.env.TABLE_NAME ?? '';
 const PROFILE = 'PROFILE';
 const ROAD = 'ROAD#';
+// The reserved prefixes from docs/drive-persistence.md §5, now in use. On the
+// wire and in the client's marks store these are the kinds 'm' and 's'.
+const MARK_SK: Record<'m' | 's', string> = { m: 'MISSION#', s: 'STATION#' };
 const STATE_CAP = 20000;       // roads mirrored, per player
 const PUSH_CAP = 4000;         // roads accepted in one push
+const MARKS_CAP = 2000;        // marks accepted in one push, per kind
 interface StateRow { g: number; t: number; c?: number }
+interface MarkRows { m: Record<string, number>; s: Record<string, number> }
+interface PlayerState { roads: Record<string, StateRow>; marks: MarkRows; odo: number }
 /** The corner of DynamoDB this needs, so a test can hand it a Map. */
 export interface StateTable {
-  all(pk: string): Promise<Record<string, StateRow>>;
-  put(pk: string, rows: Record<string, StateRow>): Promise<void>;
-  profile(pk: string): Promise<{ odo: number }>;
+  /** The whole partition in one read: roads, marks and the profile together. */
+  all(pk: string): Promise<PlayerState>;
+  putRoads(pk: string, rows: Record<string, StateRow>): Promise<void>;
+  putMarks(pk: string, kind: 'm' | 's', rows: Record<string, number>): Promise<void>;
   setProfile(pk: string, p: { odo: number }): Promise<void>;
 }
 const num = (v: unknown, cap = Number.MAX_SAFE_INTEGER): number => {
@@ -989,59 +996,64 @@ function liveTable(): StateTable {
   };
   const S = (v: string) => ({ S: v });
   const N = (v: number) => ({ N: String(Math.round(v)) });
+  // Items are built from S()/N() alone, which satisfies the SDK's
+  // AttributeValue union without pulling in the document client.
+  type Attr = { S: string } | { N: string };
+  const batchPut = async (items: Array<Record<string, Attr>>): Promise<void> => {
+    if (!items.length) return;
+    const { m, db } = await client();
+    for (let i = 0; i < items.length; i += 25) {
+      await db.send(new m.BatchWriteItemCommand({
+        RequestItems: { [TABLE]: items.slice(i, i + 25).map((Item) => ({ PutRequest: { Item } })) },
+      }));
+    }
+  };
   return {
     async all(pk) {
       const { m, db } = await client();
-      const out: Record<string, StateRow> = {};
+      const out: PlayerState = { roads: {}, marks: { m: {}, s: {} }, odo: 0 };
+      // ONE query for the whole partition — roads, marks and profile arrive
+      // together, split by sk prefix here. A page is 1MB and a row is tens of
+      // bytes, so this is one call for any real player; the loop is here so a
+      // very long career does not silently return a prefix of itself.
       // The SDK's own AttributeValue union, opaque to us — a paging cursor is
       // handed straight back, never read.
-      let start: Record<string, never> | undefined;
-      // A page is 1MB and a row is tens of bytes, so this is one call for any
-      // real player — the loop is here so a very long career does not silently
-      // return a prefix of itself.
+      let startKey: Record<string, never> | undefined;
       do {
         const res = await db.send(new m.QueryCommand({
           TableName: TABLE,
-          KeyConditionExpression: 'pk = :p AND begins_with(sk, :r)',
-          ExpressionAttributeValues: { ':p': S(pk), ':r': S(ROAD) },
-          ...(start ? { ExclusiveStartKey: start } : {}),
+          KeyConditionExpression: 'pk = :p',
+          ExpressionAttributeValues: { ':p': S(pk) },
+          ...(startKey ? { ExclusiveStartKey: startKey } : {}),
         })) as { Items?: Array<Record<string, { S?: string; N?: string }>>;
           LastEvaluatedKey?: Record<string, never> };
         for (const it of res.Items ?? []) {
-          const id = (it.sk?.S ?? '').slice(ROAD.length);
-          if (!id) continue;
-          const c = num(it.c?.N);
-          out[id] = c ? { g: num(it.g?.N), t: num(it.t?.N), c } : { g: num(it.g?.N), t: num(it.t?.N) };
-          if (Object.keys(out).length >= STATE_CAP) return out;
+          const sk = it.sk?.S ?? '';
+          if (sk === PROFILE) { out.odo = num(it.odo?.N); continue; }
+          if (sk.startsWith(ROAD)) {
+            const id = sk.slice(ROAD.length);
+            if (!id || Object.keys(out.roads).length >= STATE_CAP) continue;
+            const c = num(it.c?.N);
+            out.roads[id] = c ? { g: num(it.g?.N), t: num(it.t?.N), c } : { g: num(it.g?.N), t: num(it.t?.N) };
+            continue;
+          }
+          for (const kind of ['m', 's'] as const) {
+            if (!sk.startsWith(MARK_SK[kind])) continue;
+            const id = sk.slice(MARK_SK[kind].length);
+            const c = num(it.c?.N);
+            if (id && c) out.marks[kind][id] = c;
+          }
         }
-        start = res.LastEvaluatedKey;
-      } while (start);
+        startKey = res.LastEvaluatedKey;
+      } while (startKey);
       return out;
     },
-    async put(pk, rows) {
-      const entries = Object.entries(rows);
-      if (!entries.length) return;
-      const { m, db } = await client();
-      for (let i = 0; i < entries.length; i += 25) {
-        await db.send(new m.BatchWriteItemCommand({
-          RequestItems: {
-            [TABLE]: entries.slice(i, i + 25).map(([id, r]) => ({
-              PutRequest: { Item: {
-                pk: S(pk), sk: S(ROAD + id), g: N(r.g), t: N(r.t),
-                ...(r.c ? { c: N(r.c) } : {}),
-              } },
-            })),
-          },
-        }));
-      }
-    },
-    async profile(pk) {
-      const { m, db } = await client();
-      const res = await db.send(new m.GetItemCommand({
-        TableName: TABLE, Key: { pk: S(pk), sk: S(PROFILE) },
-      })) as { Item?: Record<string, { N?: string }> };
-      return { odo: num(res.Item?.odo?.N) };
-    },
+    putRoads: (pk, rows) => batchPut(Object.entries(rows).map(([id, r]) => ({
+      pk: S(pk), sk: S(ROAD + id), g: N(r.g), t: N(r.t), ...(r.c ? { c: N(r.c) } : {}),
+    }))),
+    putMarks: (pk, kind, rows) => batchPut(Object.entries(rows).map(([id, at]) => ({
+      pk: S(pk), sk: S(MARK_SK[kind] + id), c: N(at),
+    }))),
     async setProfile(pk, p) {
       const { m, db } = await client();
       await db.send(new m.PutItemCommand({
@@ -1064,11 +1076,17 @@ export async function serveState(
   if (!caller || caller === 'anonymous') return no(401, 'sign in to keep progress');
   const pk = `PLAYER#${caller}`;
   const mine = await table.all(pk);
-  const prof = await table.profile(pk);
 
+  let wrote = 0;
   if (method === 'POST') {
-    let sent: { roads?: Record<string, StateRow>; odo?: unknown } = {};
+    let sent: {
+      roads?: Record<string, StateRow>;
+      missions?: Record<string, unknown>;
+      stations?: Record<string, unknown>;
+      odo?: unknown;
+    } = {};
     try { sent = JSON.parse(body ?? '{}') as typeof sent; } catch { return no(400, 'unreadable'); }
+
     const rows = sent.roads && typeof sent.roads === 'object' ? sent.roads : {};
     const write: Record<string, StateRow> = {};
     let n = 0;
@@ -1076,7 +1094,7 @@ export async function serveState(
       if (typeof id !== 'string' || !id || id.length > 300 || !row || typeof row !== 'object') continue;
       if (++n > PUSH_CAP) break;
       const g = num(row.g), t = num(row.t), c = num(row.c);
-      const had = mine[id];
+      const had = mine.roads[id];
       const merged: StateRow = {
         g: Math.max(g, had?.g ?? 0),
         t: Math.max(t, had?.t ?? 0),
@@ -1085,18 +1103,44 @@ export async function serveState(
       };
       if (had && had.g === merged.g && had.t === merged.t && had.c === merged.c) continue;
       write[id] = merged;
-      mine[id] = merged;
+      mine.roads[id] = merged;
     }
-    await table.put(pk, write);
-    const odo = Math.max(num(sent.odo), prof.odo);
-    if (odo > prof.odo) await table.setProfile(pk, { odo });
-    return respond(200, 'application/json',
-      JSON.stringify({ user: caller, roads: mine, odo, wrote: Object.keys(write).length }),
-      { 'cache-control': 'no-store' });
+    await table.putRoads(pk, write);
+    wrote += Object.keys(write).length;
+
+    // Marks — a mission completed, a station woken. Same monotonic story as a
+    // road's claim, stated even more simply: the row IS the moment, and the
+    // earliest moment wins. Union-and-min converges from any order.
+    for (const [kind, field] of [['m', 'missions'], ['s', 'stations']] as const) {
+      const sentRows = sent[field] && typeof sent[field] === 'object' ? sent[field]! : {};
+      const put: Record<string, number> = {};
+      let k = 0;
+      for (const [id, at] of Object.entries(sentRows)) {
+        if (typeof id !== 'string' || !id || id.length > 200) continue;
+        if (++k > MARKS_CAP) break;
+        const t = num(at);
+        if (!t) continue;
+        const had = mine.marks[kind][id];
+        if (had && had <= t) continue;
+        put[id] = t;
+        mine.marks[kind][id] = t;
+      }
+      await table.putMarks(pk, kind, put);
+      wrote += Object.keys(put).length;
+    }
+
+    const odo = Math.max(num(sent.odo), mine.odo);
+    if (odo > mine.odo) { await table.setProfile(pk, { odo }); mine.odo = odo; }
   }
-  return respond(200, 'application/json',
-    JSON.stringify({ user: caller, roads: mine, odo: prof.odo }),
-    { 'cache-control': 'no-store' });
+
+  return respond(200, 'application/json', JSON.stringify({
+    user: caller,
+    roads: mine.roads,
+    missions: mine.marks.m,
+    stations: mine.marks.s,
+    odo: mine.odo,
+    ...(method === 'POST' ? { wrote } : {}),
+  }), { 'cache-control': 'no-store' });
 }
 
 export const handler = async (event: {

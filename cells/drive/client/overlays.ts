@@ -34,9 +34,28 @@ export interface MissionCard {
 }
 export interface ToastCard { kicker: string; head: string; body: string }
 
+/**
+ * A STATION'S TERMINAL — the one screen in the game that belongs to the world
+ * rather than to the truck. It reads like the instrument it is: a name, a
+ * status, a column of readings, and at most ONE action. Everything in `rows`
+ * is a measurement the game actually made; the terminal never decorates.
+ */
+export interface TerminalCard {
+  name: string;
+  sub: string;
+  status: string;
+  tone: Tone;
+  rows: Array<[string, string]>;
+  /** The wake action's label — absent once the station is awake. */
+  wake?: string;
+}
+
 export interface Overlays {
   mission(m: MissionCard | null): void;
   toast(t: ToastCard | null): void;
+  /** The in-range chip that opens the terminal; null when out of range. */
+  prompt(label: string | null): void;
+  terminal(t: TerminalCard | null): void;
 }
 
 export function createOverlays(
@@ -47,6 +66,9 @@ export function createOverlays(
   onExpand: () => void,
   onAbandon: () => void,
   onOk: () => void,
+  onTerminal: () => void,
+  onTerminalClose: () => void,
+  onWake: () => void,
 ): Overlays {
   const C = colors;
   const style = document.createElement('style');
@@ -85,6 +107,28 @@ export function createOverlays(
     padding: 4px 9px 3px; font: inherit; font-family: inherit; font-size: 10px;
     letter-spacing: 1px; display: none; }
   #ov-job .ico { font-family: '${ICON_FONT}'; font-weight: 900; margin-right: 0.5em; }
+  /* The terminal prompt sits low-centre, above the stick's reach — a door,
+     not a dialog. */
+  #ov-term-go { bottom: calc(env(safe-area-inset-bottom, 0px) + 168px); left: 50%;
+    transform: translateX(-50%); cursor: pointer; color: ${C.good};
+    border: 1px solid ${C.good}; background: rgba(8,20,23,0.85);
+    padding: 5px 12px 4px; font: inherit; font-family: inherit; font-size: 11px;
+    letter-spacing: 1px; display: none; }
+  #ov-term-go .ico { font-family: '${ICON_FONT}'; font-weight: 900; margin-right: 0.5em; }
+  /* The terminal itself: centred, one column, reads like the instrument it is. */
+  #ov-term { top: 50%; left: 50%; transform: translate(-50%, -52%);
+    width: min(92vw, 340px); background: rgba(6,14,16,0.94);
+    border: 1px solid ${C.edge}; padding: 10px 14px 12px; display: none; }
+  #ov-term .t-name { font-size: 18px; font-weight: 700; letter-spacing: 1px; }
+  #ov-term .t-sub { font-size: 9px; color: ${C.dim}; letter-spacing: 1px; margin-bottom: 6px; }
+  #ov-term .t-status { font-size: 11px; letter-spacing: 2px; border-top: 1px solid ${C.edge};
+    border-bottom: 1px solid ${C.edge}; padding: 5px 0 4px; margin-bottom: 6px; }
+  #ov-term .t-rows { font-size: 10px; line-height: 1.9; }
+  #ov-term .t-rows .k { color: ${C.dim}; display: inline-block; min-width: 9ch; letter-spacing: 1px; }
+  #ov-term .t-wake { margin: 10px auto 0; padding: 6px 22px 5px; cursor: pointer; display: none;
+    color: ${C.gold}; border: 1px solid ${C.gold}; background: rgba(245,196,83,0.08);
+    font: inherit; font-family: inherit; font-size: 12px; font-weight: 700;
+    letter-spacing: 2px; width: 100%; }
   `;
   document.head.appendChild(style);
 
@@ -144,7 +188,36 @@ export function createOverlays(
   t.kicker.textContent = 'SURVEYED';
   t.head.style.color = C.good;
 
-  let mKey = '', tKey = '', mReady = false;
+  // ── the terminal ──
+  const termGo = document.createElement('button');
+  termGo.id = 'ov-term-go';
+  termGo.className = 'ov ui';
+  const tgIco = document.createElement('span');
+  tgIco.className = 'ico';
+  tgIco.textContent = ICON.gps;
+  const tgLab = document.createElement('span');
+  termGo.append(tgIco, tgLab);
+  termGo.addEventListener('click', onTerminal);
+  document.body.appendChild(termGo);
+
+  const term = document.createElement('div');
+  term.id = 'ov-term';
+  term.className = 'ov ui';
+  const tName = document.createElement('div'); tName.className = 't-name';
+  const tSub = document.createElement('div'); tSub.className = 't-sub';
+  const tStatus = document.createElement('div'); tStatus.className = 't-status';
+  const tRows = document.createElement('div'); tRows.className = 't-rows';
+  const tWake = document.createElement('button'); tWake.className = 't-wake';
+  tWake.addEventListener('click', (e) => { e.stopPropagation(); onWake(); });
+  const tx2 = document.createElement('div');
+  tx2.className = 'x';
+  tx2.style.display = 'block';
+  tx2.textContent = 'X';
+  tx2.addEventListener('click', (e) => { e.stopPropagation(); onTerminalClose(); });
+  term.append(tName, tSub, tStatus, tRows, tWake, tx2);
+  document.body.appendChild(term);
+
+  let mKey = '', tKey = '', mReady = false, gKey = '', teKey = '';
   return {
     mission(mc) {
       const key = mc ? `${mc.kicker}|${mc.head}|${mc.body}|${mc.tone}|${mc.ready}|${mc.minimized}|${mc.chip}|${mc.ok}` : '';
@@ -180,6 +253,38 @@ export function createOverlays(
       t.head.textContent = tc.head;
       t.body.textContent = tc.body;
       t.root.style.display = 'block';
+    },
+    prompt(label) {
+      const key = label ?? '';
+      if (key === gKey) return;
+      gKey = key;
+      if (!label) { termGo.style.display = 'none'; return; }
+      tgLab.textContent = label;
+      termGo.style.display = 'block';
+    },
+    terminal(tc) {
+      const key = tc
+        ? `${tc.name}|${tc.status}|${tc.wake}|${tc.rows.map((r) => r.join('=')).join('|')}`
+        : '';
+      if (key === teKey) return;
+      teKey = key;
+      if (!tc) { term.style.display = 'none'; return; }
+      tName.textContent = tc.name;
+      tSub.textContent = tc.sub;
+      tStatus.textContent = tc.status;
+      tStatus.style.color = C[tc.tone];
+      term.style.borderColor = C[tc.tone];
+      tRows.replaceChildren(...tc.rows.map(([k, v]) => {
+        const row = document.createElement('div');
+        const kk = document.createElement('span');
+        kk.className = 'k';
+        kk.textContent = k;
+        row.append(kk, document.createTextNode(v));
+        return row;
+      }));
+      tWake.textContent = tc.wake ?? '';
+      tWake.style.display = tc.wake ? 'block' : 'none';
+      term.style.display = 'block';
     },
   };
 }

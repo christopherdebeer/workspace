@@ -32,6 +32,27 @@ export interface CampaignMission {
   via?: { name: string; atLeast?: number };
   viaNote?: string;
 }
+/**
+ * A STATION — the Service's fixed point on a line.
+ *
+ * In-game they are only ever "stations". Each one is an EXISTING real-world
+ * feature, found in OSM and renamed: the Service does not build in the
+ * recovering land, it adapts what is already standing — a toll plaza, a
+ * lighthouse, a reservoir works — into a self-contained survey station: solar
+ * array, satellite uplink, environment monitoring, and a terminal the ranger
+ * wakes it from. `osm` is that provenance, as prose: which real feature the
+ * author renamed. It is a record for the authors, not a lookup the game does.
+ */
+export interface CampaignStation {
+  id: string;
+  name: string;
+  sub: string;
+  lat: number;
+  lon: number;
+  /** The real OSM feature this station was built into, renamed. */
+  osm?: string;
+  note?: string;
+}
 export interface CampaignDrive {
   name: string;
   sub: string;
@@ -47,10 +68,11 @@ export interface Campaign {
   title: string;
   note: string;
   drives: CampaignDrive[];
+  stations: CampaignStation[];
 }
 
 export const CAMPAIGN: Campaign = {
-    v: 1,
+    v: 2,
     id: "dakar",
     title: "PARIS - DAKAR",
     note: "The authored destinations, served to the client from the cell's public namespace at ~/campaign/<v> rather than compiled into the bundle. Edit here, bump `v` in BOTH this file and CAMPAIGN_V (client + server), and deploy: the served object is immutable at its version, so a stale one can never shadow a new one. `note` fields carry the reasoning that used to live in code comments — a campaign is authored data, and the reason a number is what it is belongs with it.",
@@ -189,6 +211,38 @@ export const CAMPAIGN: Campaign = {
         lat: 64.048,
         lon: -16.18,
         h: 270,
+      },
+    ],
+    // The first stations. The P-D line proper is seventeen of these and wants
+    // an authoring pass with real POI research; these three prove the SYSTEM —
+    // one at each end of the line, and one on the Cape test line where every
+    // instrument in devtools/ already drives.
+    stations: [
+      {
+        id: "pd-01",
+        name: "PD-01",
+        sub: "TROCADERO · P-D LINE · KM 0",
+        lat: 48.8611,
+        lon: 2.2886,
+        osm: "The Palais de Chaillot esplanade, Paris — the campaign's Paris spawn already stands on it.",
+        note: "Kilometre zero of the line. The aperture fiction arrives later; the station is simply where the line's record begins.",
+      },
+      {
+        id: "pd-17",
+        name: "PD-17",
+        sub: "LAC ROSE · P-D LINE · TERMINUS",
+        lat: 14.8391,
+        lon: -17.2352,
+        osm: "The shore of Lac Retba (Lac Rose), Senegal — the historic Paris-Dakar finish, already the campaign's LAC ROSE drive.",
+      },
+      {
+        id: "ct-01",
+        name: "CT-01",
+        sub: "SILVERMINE · CAPE TEST LINE",
+        lat: -34.0874,
+        lon: 18.4214,
+        osm: "The Silvermine reserve admin buildings on Ou Kaapse Weg — the same real place Chapman's Run uses as its giver.",
+        note: "The development station: it sits beside the admin-office spawn every harness instrument already uses, so the whole wake loop is testable without streaming a new region.",
       },
     ],
   };

@@ -43,22 +43,31 @@ const check = (name, cond, saw) => {
   console.log(`${cond ? 'ok  ' : 'FAIL'}  ${name}${cond ? '' : `\n        saw ${JSON.stringify(saw)}`}`);
 };
 
-/** The cell's own table, as a Map keyed exactly as DynamoDB would be. */
+/** The cell's own table, as Maps keyed exactly as DynamoDB would be. */
 function fakeTable(seed = {}) {
   const rows = new Map(Object.entries(seed));      // "<pk>|<roadId>" → {g,t,c}
+  const marks = new Map();                          // "<pk>|<kind>|<id>" → at
   const prof = new Map();
   return {
-    rows, prof, writes: 0,
+    rows, marks, prof, writes: 0,
     async all(pk) {
-      const out = {};
-      for (const [k, v] of rows) if (k.startsWith(pk + '|')) out[k.slice(pk.length + 1)] = v;
+      const out = { roads: {}, marks: { m: {}, s: {} }, odo: prof.get(pk)?.odo ?? 0 };
+      for (const [k, v] of rows) if (k.startsWith(pk + '|')) out.roads[k.slice(pk.length + 1)] = v;
+      for (const [k, v] of marks) {
+        if (!k.startsWith(pk + '|')) continue;
+        const [, kind, id] = k.split('|');
+        out.marks[kind][id] = v;
+      }
       return out;
     },
-    async put(pk, r) {
+    async putRoads(pk, r) {
       this.writes += Object.keys(r).length;
       for (const [id, v] of Object.entries(r)) rows.set(`${pk}|${id}`, v);
     },
-    async profile(pk) { return prof.get(pk) ?? { odo: 0 }; },
+    async putMarks(pk, kind, r) {
+      this.writes += Object.keys(r).length;
+      for (const [id, at] of Object.entries(r)) marks.set(`${pk}|${kind}|${id}`, at);
+    },
     async setProfile(pk, p) { prof.set(pk, p); },
   };
 }
@@ -163,6 +172,44 @@ const call = async (method, caller, body, table) => {
   // everything it has never seen.
   const pull = await call('POST', 'c15r', undefined, t);
   check('an empty push is just a pull', pull.status === 200 && !!pull.body.roads, pull.status);
+}
+
+// ── marks: a mission completed, a station woken ────────────────────────
+// The row IS the moment, latched, and the EARLIEST moment wins — a second
+// device reporting the same completion later must not move it.
+{
+  const t = fakeTable();
+  const first = await call('POST', 'c15r', {
+    missions: { 'chapmans-run': 1700000000000 },
+    stations: { 'ST-01': 1700000100000, 'ST-02': 1700000200000 },
+  }, t);
+  check('missions and stations land as marks',
+    first.body.missions['chapmans-run'] === 1700000000000
+    && Object.keys(first.body.stations).length === 2, first.body);
+  check('…in their reserved rows', t.marks.has('PLAYER#c15r|m|chapmans-run')
+    && t.marks.has('PLAYER#c15r|s|ST-01'), [...t.marks.keys()]);
+
+  const later = await call('POST', 'c15r', { missions: { 'chapmans-run': 1900000000000 } }, t);
+  check('a later report of the same completion changes nothing',
+    later.body.missions['chapmans-run'] === 1700000000000 && later.body.wrote === 0, later.body);
+  const earlier = await call('POST', 'c15r', { missions: { 'chapmans-run': 1600000000000 } }, t);
+  check('…and an earlier one wins — that is when it first happened',
+    earlier.body.missions['chapmans-run'] === 1600000000000, earlier.body.missions);
+
+  const junk = await call('POST', 'c15r', {
+    stations: { '': 5, ['x'.repeat(300)]: 5, 'ST-03': 'soon', 'ST-04': -2 },
+  }, t);
+  check('junk marks cannot latch',
+    Object.keys(junk.body.stations).length === 2, junk.body.stations);
+
+  const theirs = await call('GET', 'someone-else', undefined, t);
+  check('another player sees no marks either',
+    Object.keys(theirs.body.missions).length === 0 && Object.keys(theirs.body.stations).length === 0,
+    theirs.body);
+  // …and a pull carries them, which is how a second device learns a leg is done.
+  const pull = await call('GET', 'c15r', undefined, t);
+  check('a plain GET returns the marks with the roads',
+    pull.body.missions['chapmans-run'] === 1600000000000 && !!pull.body.stations['ST-01'], pull.body);
 }
 
 // ── through the handler, the way dispatch calls it ─────────────────────

@@ -22,6 +22,7 @@ import { RoadSolver, densifyPts } from './roadsolve';
 import { createOverlays } from './overlays';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
+import { openMarks } from './marks';
 
 // BEFORE ANYTHING READS THE QUERY STRING. Coming back from a sign-in, the URL
 // says `?code=…` where it used to say where the truck is, which way it faces
@@ -8543,7 +8544,7 @@ function pruneTileCache(): void {
 }
 
 // ── points of interest (named features become HUD waypoints) ───────
-interface Poi { name: string; x: number; z: number; kind: 'park' | 'water' | 'place' | 'mission' | 'repair' | 'drone' | 'rig' | 'peak'; pinned?: boolean }
+interface Poi { name: string; x: number; z: number; kind: 'park' | 'water' | 'place' | 'mission' | 'repair' | 'drone' | 'rig' | 'peak' | 'station'; pinned?: boolean }
 const pois = new Map<string, Poi>();
 function notePoi(tags: Record<string, string>, pts: Array<[number, number]>): void {
   const name = tags.name;
@@ -8809,11 +8810,16 @@ const survey = new Map<string, SurveyRoad>();
 /** What has been COLLECTED, as opposed to what is LOADED — see the head of
  *  `survey-store.ts` for why conflating the two silently deletes progress. */
 const surveyStore = openSurvey();
-/** …and the durable copy of it, for a player who signs in. The game never
+/** Things that happened once and stay happened — missions completed, stations
+ *  woken. See the head of `marks.ts`. */
+const marks = openMarks();
+/** …and the durable copy of both, for a player who signs in. The game never
  *  waits on this: see the head of `sync.ts`. */
 const sync = openSync({
   dump: (since) => surveyStore.dump(since),
   merge: (rows) => surveyStore.merge(rows),
+  marks: (since) => { const d = marks.dump(since); return { missions: d.m ?? {}, stations: d.s ?? {} }; },
+  mergeMarks: (r) => marks.merge({ m: r.missions, s: r.stations }),
   odo: () => Math.round(odo.total),
   setOdo: (m) => { if (m > odo.total) { odo.total = m; saveOdo(); } },
 });
@@ -14505,7 +14511,7 @@ const renderPlace = (): void => { placeLine = placeLabel.toUpperCase(); };
 // grid and font instead of being browser text floating above it.
 // Peaks in the chart's own stone-grey: they are landform, not destinations,
 // and colouring them like a fuel stop would promise something they are not.
-const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a', mission: '#f5c453', repair: '#e2703a', drone: '#d8412f', rig: '#f5c453', peak: '#b9b3a4' };
+const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a', mission: '#f5c453', repair: '#e2703a', drone: '#d8412f', rig: '#f5c453', peak: '#b9b3a4', station: '#7fd4c0' };
 const poiVec = new THREE.Vector3(), poiView = new THREE.Vector3(), camFwd = new THREE.Vector3();
 const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}M` : `${(m / 1000).toFixed(1)}KM`);
 // Close enough to act on. The pins used to be CULLED inside 25m, which threw
@@ -15201,11 +15207,11 @@ addEventListener('visibilitychange', () => {
   // Backgrounding a tab is how a phone ends a session — the loop stops running,
   // so the debounced write has to happen on the way out or the last few
   // hundred metres are lost.
-  if (hidden) { surveyStore.flush(); audio.hush(); return; }
+  if (hidden) { surveyStore.flush(); marks.flush(); audio.hush(); return; }
   last = performance.now();   // no accumulated gap to integrate through
   audio.arm();
 });
-addEventListener('pagehide', () => surveyStore.flush());   // a close that skips `hidden`
+addEventListener('pagehide', () => { surveyStore.flush(); marks.flush(); });   // a close that skips `hidden`
 
 // ── main loop ──────────────────────────────────────────────────────
 let last = performance.now();
@@ -16082,6 +16088,7 @@ function tick(now: number): void {
   }
   stepMission(now);
   stepSurvey(now);
+  stepStations(now);
   // THE CAR IS EVIDENCE TOO. Dry-land proof used to come only from a ribbon
   // being built, and Badwater Road is a single OSM way — so it fired once, at
   // the spawn, and never again. Drive 8km up the valley and the anchor was
@@ -16817,7 +16824,7 @@ function hudIconEdge(ch: string, x: number, y: number, col: string, px = 8): voi
 }
 /** Which kinds carry a mark: a job, and a place that services the rig.
  *  The rest are already told apart by their beam colour. */
-const KIND_ICON: Partial<Record<Poi['kind'], string>> = { mission: ICON.flag, repair: ICON.wrench, drone: ICON.warn, rig: ICON.truck };
+const KIND_ICON: Partial<Record<Poi['kind'], string>> = { mission: ICON.flag, repair: ICON.wrench, drone: ICON.warn, rig: ICON.truck, station: ICON.gps };
 
 // ── HUD: one low-res canvas, drawn in the pixel font ───────────────
 // The DOM version could never reach the reference: system fonts are hinted
@@ -17080,6 +17087,10 @@ function stepMission(now: number): void {
       missionPhase = 'done';
       missionAt = now;
       if (missionDest) missionDest.pinned = false;
+      // A finished job is a mark: it latches, survives the reload, and syncs.
+      // The min rule means replaying a done job never moves its moment.
+      marks.set('m', mission.id);
+      sync.nudge();
       audio.thud(2);
     }
   }
@@ -17129,18 +17140,24 @@ interface Drive { name: string; sub: string; lat: number; lon: number; h: number
  * fails. Only a first-ever visit that also fails arrives with no drives, and
  * that still plays — spots, the chart and a random spawn are all local.
  */
-const CAMPAIGN_V = 1;
+const CAMPAIGN_V = 2;
 const CAMPAIGN_KEY = `drive.campaign.v${CAMPAIGN_V}`;
 let DRIVES: Drive[] = [];
+/** The Service's fixed points, from the campaign. In-game: just stations. */
+interface Station { id: string; name: string; sub: string; lat: number; lon: number }
+let STATIONS: Station[] = [];
 /** Everything downstream reads `DRIVES` at call time (the menu rebuilds per
  *  open, `missionById` runs once at boot AFTER this resolves), so nothing has
  *  to be told the list arrived. */
 async function loadCampaign(): Promise<void> {
   const use = (raw: string): boolean => {
     try {
-      const j = JSON.parse(raw) as { drives?: Drive[] };
+      const j = JSON.parse(raw) as { drives?: Drive[]; stations?: Station[] };
       if (!Array.isArray(j.drives) || !j.drives.length) return false;
       DRIVES = j.drives.filter((d) => d && typeof d.lat === 'number' && typeof d.lon === 'number');
+      STATIONS = (Array.isArray(j.stations) ? j.stations : []).filter((st) =>
+        st && typeof st.id === 'string' && st.id.length > 0
+        && typeof st.lat === 'number' && typeof st.lon === 'number');
       return DRIVES.length > 0;
     } catch { return false; }
   };
@@ -17160,6 +17177,182 @@ const startDrive = (d: Drive): void => {
   const m = d.mission ? `&m=${d.mission.id}` : '';
   location.href = `${location.pathname}?lat=${d.lat}&lon=${d.lon}&h=${d.h}&cam=chase${m}`;
 };
+
+// ── stations ───────────────────────────────────────────────────────
+// THE SERVICE'S FIXED POINTS. Each is an existing real-world feature the
+// campaign renamed (see `campaigns/dakar.ts` — the provenance travels with the
+// data), built out as a self-contained survey station: a solar array facing
+// the equator at roughly the latitude's tilt, a satellite uplink dish, an
+// environment-monitoring mast, and the terminal the ranger works it from.
+//
+// A station has exactly two states and they are honest ones: DORMANT (amber
+// beacon, breathing) and ONLINE (teal, steady). Waking one is a mark
+// (`marks.ts`): it latches, survives every reload, and syncs. The structure
+// itself is built only once the terrain under it has actually streamed —
+// nothing in this game stands on ground that has not arrived.
+interface StationSite {
+  st: Station;
+  x: number; z: number;
+  group: THREE.Group | null;
+  beacon: THREE.MeshLambertMaterial | null;
+  screen: THREE.MeshLambertMaterial | null;
+  snapAt: number;
+}
+const stationSites: StationSite[] = [];
+let stationNear: StationSite | null = null;   // in terminal range this frame
+let stationOpen: StationSite | null = null;   // the terminal on screen
+let stationWoke: { name: string; at: number } | null = null;
+const STATION_TERM_R = 26;      // walk-up range — a shade over POI_RANGE's half
+const STATION_BUILD_R = 2600;   // build inside this, once terrain exists
+const STATION_PIN_R = 30000;    // the pin (with its bearing chip) inside this
+const stnMat = {
+  pad: new THREE.MeshLambertMaterial({ color: 0x5e5d55 }),
+  steel: new THREE.MeshLambertMaterial({ color: 0x8d938e }),
+  panel: new THREE.MeshLambertMaterial({ color: 0x1b3850, side: THREE.DoubleSide }),
+  dish: new THREE.MeshLambertMaterial({ color: 0xd6d9d0, side: THREE.DoubleSide }),
+  kiosk: new THREE.MeshLambertMaterial({ color: 0x4a5450 }),
+};
+/** Called once from boot, after the campaign has landed and the world origin
+ *  is set — station locals depend on both. */
+function initStations(): void {
+  if (stationSites.length) return;
+  for (const st of STATIONS) {
+    const [x, z] = toLocal(st.lat, st.lon);
+    stationSites.push({ st, x, z, group: null, beacon: null, screen: null, snapAt: 0 });
+  }
+}
+function buildStation(site: StationSite): void {
+  const g = new THREE.Group();
+  const add = (mesh: THREE.Mesh, x: number, y: number, z: number): THREE.Mesh => {
+    mesh.position.set(x, y, z);
+    mesh.castShadow = true;
+    g.add(mesh);
+    return mesh;
+  };
+  // The pad — the one part the Service poured.
+  const pad = add(new THREE.Mesh(new THREE.BoxGeometry(7, 0.35, 7), stnMat.pad), 0, 0.17, 0);
+  pad.castShadow = false;
+  pad.receiveShadow = true;
+  // The array, facing the equator, tipped to roughly the latitude — the same
+  // arithmetic a real installer uses, so a station at 49°N visibly leans
+  // harder than one at 14°N.
+  const tilt = clamp((Math.abs(site.st.lat) * Math.PI) / 180, 0.17, 0.87);
+  const face = site.st.lat >= 0 ? 1 : -1;        // +z is south in local space
+  for (const px of [-1.5, 0.1]) {
+    const panel = add(new THREE.Mesh(new THREE.PlaneGeometry(1.5, 2.2), stnMat.panel), px, 1.05, -1.6);
+    panel.rotation.x = -Math.PI / 2 + tilt * face;
+    add(new THREE.Mesh(new THREE.BoxGeometry(0.09, 1.0, 0.09), stnMat.steel), px, 0.5, -1.6);
+  }
+  // The uplink — a dish on a stub mast, thrown well up at the sky.
+  const dp = add(new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 1.8, 6), stnMat.steel), 2.2, 0.9, -1.7);
+  void dp;
+  const dish = add(new THREE.Mesh(new THREE.ConeGeometry(0.85, 0.5, 10, 1, true), stnMat.dish), 2.2, 2.0, -1.7);
+  dish.rotation.x = -0.9;
+  // The monitoring mast, instruments as crossbars, beacon on top.
+  add(new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.1, 6.4, 6), stnMat.steel), 2.4, 3.2, 2.0);
+  add(new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.07, 0.07), stnMat.steel), 2.4, 5.2, 2.0);
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.07, 0.07), stnMat.steel), 2.4, 4.4, 2.0);
+  const beaconMat = new THREE.MeshLambertMaterial({ color: 0xf5a83a, emissive: 0xc07818, emissiveIntensity: 0.5 });
+  add(new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), beaconMat), 2.4, 6.5, 2.0);
+  // The terminal kiosk, screen facing the pad's centre.
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.35, 0.42), stnMat.kiosk), -2.4, 0.85, 1.9);
+  const screenMat = new THREE.MeshLambertMaterial({ color: 0x223330, emissive: 0x5a3c10, emissiveIntensity: 0.35 });
+  const screen = add(new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.5), screenMat), -2.4, 1.05, 1.69);
+  screen.rotation.y = Math.PI;
+  screen.castShadow = false;
+  g.position.set(site.x, groundAt(site.x, site.z), site.z);
+  worldGroup.add(g);
+  site.group = g;
+  site.beacon = beaconMat;
+  site.screen = screenMat;
+}
+function stepStations(now: number): void {
+  stationNear = null;
+  for (const site of stationSites) {
+    const d = Math.hypot(site.x - state.x, site.z - state.z);
+    // The pin: a Service point is worth a bearing chip long before it is worth
+    // geometry. Managed here so leaving the region cleans it up.
+    if (d < STATION_PIN_R) {
+      if (!pois.has(site.st.name)) {
+        pois.set(site.st.name, { name: site.st.name, x: site.x, z: site.z, kind: 'station', pinned: true });
+      }
+    } else if (pois.get(site.st.name)?.kind === 'station') {
+      pois.delete(site.st.name);
+    }
+    if (!site.group && d < STATION_BUILD_R && meshSurfaceAt(site.x, site.z) !== null) buildStation(site);
+    if (site.group) {
+      // The terrain under the pad keeps refining as tiles land; follow it on a
+      // slow clock rather than every frame.
+      if (now - site.snapAt > 2000) {
+        site.snapAt = now;
+        site.group.position.y = groundAt(site.x, site.z);
+      }
+      const woken = marks.has('s', site.st.id);
+      if (site.beacon) {
+        if (woken) {
+          site.beacon.color.setHex(0x59d6b4);
+          site.beacon.emissive.setHex(0x2fae8c);
+          site.beacon.emissiveIntensity = 0.9;
+        } else {
+          // Dormant breathes — the one moving thing on a still structure, which
+          // is what makes it read as asleep rather than dead.
+          site.beacon.emissiveIntensity = 0.3 + 0.35 * (0.5 + 0.5 * Math.sin(now / 620));
+        }
+      }
+      if (site.screen) {
+        site.screen.emissive.setHex(woken ? 0x2fae8c : 0x5a3c10);
+        site.screen.emissiveIntensity = woken ? 0.8 : 0.35;
+      }
+    }
+    if (d < STATION_TERM_R) stationNear = site;
+  }
+  // Driving off with the terminal up closes it — a screen you cannot reach is
+  // not a screen you are reading.
+  if (stationOpen && Math.hypot(stationOpen.x - state.x, stationOpen.z - state.z) > STATION_TERM_R * 1.7) {
+    stationOpen = null;
+  }
+  marks.tick(now);
+}
+function wakeStation(): void {
+  const site = stationOpen;
+  if (!site || marks.has('s', site.st.id)) return;
+  marks.set('s', site.st.id);
+  stationWoke = { name: site.st.name, at: performance.now() };
+  sync.nudge();
+  audio.thud(1);
+}
+/** The terminal's screen — a name, a status, a column of readings the game
+ *  actually measured, and at most one action. */
+function terminalCard(site: StationSite): import('./overlays').TerminalCard {
+  const wokenAt = marks.at('s', site.st.id);
+  const elev = Math.round(groundAt(site.x, site.z) + baseElev);
+  const rows: Array<[string, string]> = [
+    ['GRID', `${site.st.lat.toFixed(5)}, ${site.st.lon.toFixed(5)}`],
+    ['ELEV', `${elev} M ASL`],
+    ['SKY', `${wx.sky.toUpperCase()}${wx.rain > 0.05 ? ' · PRECIP' : ''}`],
+    wokenAt
+      ? ['UPLINK', `SATELLITE · SINCE ${new Date(wokenAt).toISOString().slice(0, 10)}`]
+      : ['UPLINK', 'DOWN · LOCAL RECORD ONLY'],
+  ];
+  return {
+    name: site.st.name,
+    sub: site.st.sub,
+    status: wokenAt ? 'ONLINE · REPORTING' : 'DORMANT',
+    tone: wokenAt ? 'good' : 'gold',
+    rows,
+    ...(wokenAt ? {} : { wake: 'WAKE STATION' }),
+  };
+}
+/** The stations as the probes see them — distance, built, woken, near. */
+(window as unknown as { __stations?: object }).__stations = (): object =>
+  stationSites.map((site) => ({
+    id: site.st.id, name: site.st.name,
+    d: Math.round(Math.hypot(site.x - state.x, site.z - state.z)),
+    built: !!site.group, woken: marks.has('s', site.st.id),
+    near: stationNear === site, open: stationOpen === site,
+  }));
+(window as unknown as { __marks?: object }).__marks = (): object =>
+  ({ missions: marks.count('m'), stations: marks.count('s'), dirty: marks.dirty() });
 // ── google maps links, both ways ───────────────────────────────────
 /**
  * PULL A COORDINATE OUT OF A GOOGLE MAPS LINK.
@@ -18430,9 +18623,13 @@ function stepOverlays(): void {
     }
   }
   overlays.mission(mc);
+  overlays.prompt(stationNear && !stationOpen ? `${stationNear.st.name} · TERMINAL` : null);
+  overlays.terminal(stationOpen ? terminalCard(stationOpen) : null);
   overlays.toast(surveyClaim && performance.now() - surveyClaim.at < 6000
     ? { kicker: 'SURVEYED', head: surveyClaim.name.toUpperCase(), body: `${surveyClaim.n} CHECKPOINTS` }
-    : null);
+    : stationWoke && performance.now() - stationWoke.at < 6000
+      ? { kicker: 'STATION', head: `${stationWoke.name} ONLINE`, body: 'UPLINK ESTABLISHED · REPORTING' }
+      : null);
 }
 let dockRect = { x: 0, y: 0, w: 0, h: 0 };
 let povRect = { x: 0, y: 0, w: 0, h: 0 };
@@ -18729,6 +18926,9 @@ const overlays = createOverlays(
   () => { missionMin = false; },
   () => finishMission(),
   () => finishMission(),
+  () => { stationOpen = stationNear; },
+  () => { stationOpen = null; },
+  () => wakeStation(),
 );
 
 // ── boot ───────────────────────────────────────────────────────────
@@ -18789,6 +18989,7 @@ if (timeFromUrl >= 0) {
   // landed before `missionById` is asked. It is one small cached fetch on a
   // boot that is about to pull terrain, so it costs nothing anyone can see.
   await loadCampaign();
+  initStations();
   // The durable copy, for a player who signed in. NOT awaited: the whole point
   // is that the game never waits on the network for progress, and this lands
   // long before the first road does.
