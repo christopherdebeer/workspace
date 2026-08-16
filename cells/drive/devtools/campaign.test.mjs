@@ -37,7 +37,7 @@ const check = (name, cond, saw) => {
 const call = (p) => handler({ rawPath: p, requestContext: { http: { method: 'GET' } } });
 
 // ── the route ──
-const res = await call('/~/campaign/2');
+const res = await call('/~/campaign/3');
 check('current version served', res.statusCode === 200, res.statusCode);
 check('gzipped like every other object in the namespace',
   res.headers['content-encoding'] === 'gzip', res.headers);
@@ -59,7 +59,7 @@ execSync(`npx esbuild cells/drive/campaigns/dakar.ts --bundle --platform=node --
 const { CAMPAIGN: authored } = await import(campOut);
 check('served copy matches the file on disk',
   JSON.stringify(served.drives) === JSON.stringify(authored.drives), null);
-check('the file declares the version the route serves', authored.v === 2, authored.v);
+check('the file declares the version the route serves', authored.v === 3, authored.v);
 
 // ── the authored data ──
 const seen = new Set();
@@ -112,6 +112,21 @@ for (const st of served.stations ?? []) {
     typeof st.osm === 'string' && st.osm.length > 10, st.osm);
 }
 check('the campaign carries stations at all', (served.stations ?? []).length >= 3, served.stations?.length);
+// The liveries: paint is the only place the factions exist, so a station
+// naming an operator that is not in the tin is a box painted with nothing.
+for (const st of served.stations ?? []) {
+  if (st.op === undefined) continue;
+  check(`station ${st.id}: its operator is in the tin`, !!served.ops?.[st.op], st.op);
+}
+for (const [k, op] of Object.entries(served.ops ?? {})) {
+  check(`op ${k}: has a mark, a name and a paint colour`,
+    typeof op.mark === 'string' && op.mark.length >= 2 && op.mark.length <= 4
+    && typeof op.name === 'string' && /^#[0-9a-f]{6}$/i.test(op.color ?? ''), op);
+  if (op.ghost) {
+    check(`op ${k}: its ghost is another operator's mark`,
+      Object.values(served.ops).some((o) => o.mark === op.ghost), op.ghost);
+  }
+}
 
 rmSync(dir, { recursive: true, force: true });
 console.log(bad ? `\n${bad} FAILED` : `\nall good — ${served.drives.length} drives`);

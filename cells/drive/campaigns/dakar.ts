@@ -38,10 +38,13 @@ export interface CampaignMission {
  * In-game they are only ever "stations". Each one is an EXISTING real-world
  * feature, found in OSM and renamed: the Service does not build in the
  * recovering land, it adapts what is already standing — a toll plaza, a
- * lighthouse, a reservoir works — into a self-contained survey station: solar
- * array, satellite uplink, environment monitoring, and a terminal the ranger
- * wakes it from. `osm` is that provenance, as prose: which real feature the
- * author renamed. It is a record for the authors, not a lookup the game does.
+ * lighthouse, a reservoir works — into a self-contained survey station. The
+ * base is a SHIPPING CONTAINER (instruments raised on its roof: solar array,
+ * uplink dish, monitoring mast), and the container's faded livery is the
+ * game's first narrative surface: the paint says who SUPPLIED the box, which
+ * is not always who runs the station now. `osm` is provenance, as prose:
+ * which real feature the author renamed — a record for the authors, not a
+ * lookup the game does.
  */
 export interface CampaignStation {
   id: string;
@@ -49,8 +52,26 @@ export interface CampaignStation {
   sub: string;
   lat: number;
   lon: number;
+  /** Which operator's livery the container carries — a key into `ops`. */
+  op?: string;
   /** The real OSM feature this station was built into, renamed. */
   osm?: string;
+  note?: string;
+}
+/**
+ * AN OPERATOR — corporate, state, or independent. Nothing in the game ever
+ * explains these; they exist as paint. `mark` is the big letters on the box,
+ * `name` the small print, `ghost` a PREVIOUS operator's mark still showing
+ * through a repaint — which is the entire faction story, told the Gibson way:
+ * through obsolete contractors' marks nobody stops to explain.
+ */
+export interface CampaignOp {
+  name: string;
+  mark: string;
+  /** Container paint, as hex. Rendered faded — everything out here is. */
+  color: string;
+  /** A previous mark ghosting through the repaint. */
+  ghost?: string;
   note?: string;
 }
 export interface CampaignDrive {
@@ -69,10 +90,11 @@ export interface Campaign {
   note: string;
   drives: CampaignDrive[];
   stations: CampaignStation[];
+  ops: Record<string, CampaignOp>;
 }
 
 export const CAMPAIGN: Campaign = {
-    v: 2,
+    v: 3,
     id: "dakar",
     title: "PARIS - DAKAR",
     note: "The authored destinations, served to the client from the cell's public namespace at ~/campaign/<v> rather than compiled into the bundle. Edit here, bump `v` in BOTH this file and CAMPAIGN_V (client + server), and deploy: the served object is immutable at its version, so a stale one can never shadow a new one. `note` fields carry the reasoning that used to live in code comments — a campaign is authored data, and the reason a number is what it is belongs with it.",
@@ -224,8 +246,9 @@ export const CAMPAIGN: Campaign = {
         sub: "TROCADERO · P-D LINE · KM 0",
         lat: 48.8611,
         lon: 2.2886,
+        op: "crc",
         osm: "The Palais de Chaillot esplanade, Paris — the campaign's Paris spawn already stands on it.",
-        note: "Kilometre zero of the line. The aperture fiction arrives later; the station is simply where the line's record begins.",
+        note: "Kilometre zero of the line. The aperture fiction arrives later; the station is simply where the line's record begins. A Compact box at km 0 — the institutional end of the line looks institutional.",
       },
       {
         id: "pd-17",
@@ -233,7 +256,9 @@ export const CAMPAIGN: Campaign = {
         sub: "LAC ROSE · P-D LINE · TERMINUS",
         lat: 14.8391,
         lon: -17.2352,
+        op: "tms",
         osm: "The shore of Lac Retba (Lac Rose), Senegal — the historic Paris-Dakar finish, already the campaign's LAC ROSE drive.",
+        note: "A corporate box at the far terminus, and nobody has repainted it. Whether TRANSMERIDIAN still exists is not a question the terminal answers.",
       },
       {
         id: "ct-01",
@@ -241,8 +266,33 @@ export const CAMPAIGN: Campaign = {
         sub: "SILVERMINE · CAPE TEST LINE",
         lat: -34.0874,
         lon: 18.4214,
+        op: "smw",
         osm: "The Silvermine reserve admin buildings on Ou Kaapse Weg — the same real place Chapman's Run uses as its giver.",
-        note: "The development station: it sits beside the admin-office spawn every harness instrument already uses, so the whole wake loop is testable without streaming a new region.",
+        note: "The development station, and the repaint: an independent watch's stencil over a corporate ghost — the whole faction story in one coat of paint.",
       },
     ],
+    // The operators exist as PAINT and nowhere else. No screen names them, no
+    // codex explains them; a player who notices that two boxes on one line
+    // wear different colours has read the story exactly as intended.
+    ops: {
+      crc: {
+        name: "CONTINENTAL RECOVERY COMPACT",
+        mark: "CRC",
+        color: "#3d5a52",
+        note: "The Compact's own service containers — the state, insofar as one remains.",
+      },
+      tms: {
+        name: "TRANSMERIDIAN SYSTEMS",
+        mark: "TMS",
+        color: "#8a4a2a",
+        note: "A pre-Leaving logistics giant. Its boxes are everywhere; the company may not be.",
+      },
+      smw: {
+        name: "SILVERMINE WATCH",
+        mark: "SMW",
+        color: "#46586c",
+        ghost: "TMS",
+        note: "Independent custodians. A repainted TRANSMERIDIAN box, the old mark still ghosting through — who supplied a station and who runs it are different questions.",
+      },
+    },
   };

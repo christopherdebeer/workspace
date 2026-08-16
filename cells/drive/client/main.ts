@@ -17140,24 +17140,28 @@ interface Drive { name: string; sub: string; lat: number; lon: number; h: number
  * fails. Only a first-ever visit that also fails arrives with no drives, and
  * that still plays — spots, the chart and a random spawn are all local.
  */
-const CAMPAIGN_V = 2;
+const CAMPAIGN_V = 3;
 const CAMPAIGN_KEY = `drive.campaign.v${CAMPAIGN_V}`;
 let DRIVES: Drive[] = [];
 /** The Service's fixed points, from the campaign. In-game: just stations. */
-interface Station { id: string; name: string; sub: string; lat: number; lon: number }
+interface Station { id: string; name: string; sub: string; lat: number; lon: number; op?: string }
+/** An operator, existing as paint and nowhere else — see campaigns/dakar.ts. */
+interface StationOp { name: string; mark: string; color: string; ghost?: string }
 let STATIONS: Station[] = [];
+let STATION_OPS: Record<string, StationOp> = {};
 /** Everything downstream reads `DRIVES` at call time (the menu rebuilds per
  *  open, `missionById` runs once at boot AFTER this resolves), so nothing has
  *  to be told the list arrived. */
 async function loadCampaign(): Promise<void> {
   const use = (raw: string): boolean => {
     try {
-      const j = JSON.parse(raw) as { drives?: Drive[]; stations?: Station[] };
+      const j = JSON.parse(raw) as { drives?: Drive[]; stations?: Station[]; ops?: Record<string, StationOp> };
       if (!Array.isArray(j.drives) || !j.drives.length) return false;
       DRIVES = j.drives.filter((d) => d && typeof d.lat === 'number' && typeof d.lon === 'number');
       STATIONS = (Array.isArray(j.stations) ? j.stations : []).filter((st) =>
         st && typeof st.id === 'string' && st.id.length > 0
         && typeof st.lat === 'number' && typeof st.lon === 'number');
+      STATION_OPS = j.ops && typeof j.ops === 'object' ? j.ops : {};
       return DRIVES.length > 0;
     } catch { return false; }
   };
@@ -17206,12 +17210,95 @@ const STATION_TERM_R = 26;      // walk-up range — a shade over POI_RANGE's ha
 const STATION_BUILD_R = 2600;   // build inside this, once terrain exists
 const STATION_PIN_R = 30000;    // the pin (with its bearing chip) inside this
 const stnMat = {
-  pad: new THREE.MeshLambertMaterial({ color: 0x5e5d55 }),
   steel: new THREE.MeshLambertMaterial({ color: 0x8d938e }),
   panel: new THREE.MeshLambertMaterial({ color: 0x1b3850, side: THREE.DoubleSide }),
   dish: new THREE.MeshLambertMaterial({ color: 0xd6d9d0, side: THREE.DoubleSide }),
-  kiosk: new THREE.MeshLambertMaterial({ color: 0x4a5450 }),
 };
+/**
+ * THE CONTAINER'S PAINT — the game's first narrative surface.
+ *
+ * A station's base is a shipping container, and its livery says who SUPPLIED
+ * the box, which is not always who runs the station now: an operator's `ghost`
+ * is a previous mark showing through the repaint. Nothing on any screen
+ * explains the operators; they exist as faded paint, and a player who notices
+ * two boxes on one line wearing different colours has read the story.
+ *
+ * Painted once per operator and cached — three stations sharing an operator
+ * share the canvas. Everything is drawn already weathered: out here there is
+ * no new paint.
+ */
+const stnLivery = new Map<string, { side: THREE.MeshLambertMaterial; end: THREE.MeshLambertMaterial; roof: THREE.MeshLambertMaterial }>();
+function stationLivery(opKey: string | undefined): { side: THREE.MeshLambertMaterial; end: THREE.MeshLambertMaterial; roof: THREE.MeshLambertMaterial } {
+  const key = opKey && STATION_OPS[opKey] ? opKey : '';
+  const got = stnLivery.get(key);
+  if (got) return got;
+  const op: StationOp = STATION_OPS[key] ?? { name: 'RECOVERY SERVICE', mark: 'RS', color: '#5a615c' };
+  const paint = (w: number, big: boolean): THREE.MeshLambertMaterial => {
+    const cv = document.createElement('canvas');
+    cv.width = w; cv.height = 128;
+    const c = cv.getContext('2d')!;
+    const r = mulberry32(key.length + w + op.mark.charCodeAt(0));
+    c.fillStyle = op.color;
+    c.fillRect(0, 0, w, 128);
+    // Corrugation: the vertical ribs ARE the container read, so they go on
+    // strongest. Shade one flank of each rib, light the other.
+    for (let x = 0; x < w; x += 10) {
+      c.fillStyle = 'rgba(0,0,0,0.20)';
+      c.fillRect(x, 0, 3, 128);
+      c.fillStyle = 'rgba(255,255,255,0.06)';
+      c.fillRect(x + 6, 0, 2, 128);
+    }
+    // The ghost first, so the repaint's mark sits over it — a previous
+    // operator showing through where the new coat went on thin.
+    c.textAlign = 'center';
+    c.textBaseline = 'middle';
+    if (big && op.ghost) {
+      c.font = `900 78px '${PIXEL_FONT}', monospace`;
+      c.fillStyle = 'rgba(0,0,0,0.16)';
+      c.fillText(op.ghost, w / 2 + 14, 70);
+    }
+    if (big) {
+      c.font = `900 64px '${PIXEL_FONT}', monospace`;
+      c.fillStyle = 'rgba(235,230,215,0.52)';
+      c.fillText(op.mark, w / 2, 58);
+      // The small print: operator name low-left, box code high-right — the
+      // grammar every real container uses, kept because it is the honest one.
+      c.textAlign = 'left';
+      c.font = `12px '${PIXEL_FONT}', monospace`;
+      c.fillStyle = 'rgba(235,230,215,0.40)';
+      c.fillText(op.name, 8, 116);
+      c.textAlign = 'right';
+      c.fillText(`${op.mark}U ${String(100000 + Math.floor(r() * 899999))} · 22G1`, w - 8, 14);
+    } else {
+      c.font = `900 44px '${PIXEL_FONT}', monospace`;
+      c.fillStyle = 'rgba(235,230,215,0.45)';
+      c.fillText(op.mark, w / 2, 62);
+    }
+    // Weather: rust blooms and rain streaks, then a thin wash of the base
+    // colour back over everything — the fade is painted, not faked with alpha.
+    for (let i = 0; i < 26; i++) {
+      c.fillStyle = `rgba(${90 + Math.floor(r() * 40)},${52 + Math.floor(r() * 20)},30,${0.10 + r() * 0.16})`;
+      const bx = r() * w, by = r() * 128, bw2 = 3 + r() * 14;
+      c.fillRect(bx, by, bw2, 2 + r() * 8);
+      if (r() < 0.4) c.fillRect(bx + bw2 * 0.3, by, 2, 10 + r() * 40);
+    }
+    c.globalAlpha = 0.16;
+    c.fillStyle = op.color;
+    c.fillRect(0, 0, w, 128);
+    c.globalAlpha = 1;
+    const t = new THREE.CanvasTexture(cv);
+    t.magFilter = THREE.NearestFilter;
+    t.minFilter = THREE.NearestMipmapNearestFilter;
+    return new THREE.MeshLambertMaterial({ map: t });
+  };
+  const made = {
+    side: paint(320, true),
+    end: paint(128, false),
+    roof: new THREE.MeshLambertMaterial({ color: new THREE.Color(op.color).multiplyScalar(0.82) }),
+  };
+  stnLivery.set(key, made);
+  return made;
+}
 /** Called once from boot, after the campaign has landed and the world origin
  *  is set — station locals depend on both. */
 function initStations(): void {
@@ -17229,37 +17316,46 @@ function buildStation(site: StationSite): void {
     g.add(mesh);
     return mesh;
   };
-  // The pad — the one part the Service poured.
-  const pad = add(new THREE.Mesh(new THREE.BoxGeometry(7, 0.35, 7), stnMat.pad), 0, 0.17, 0);
-  pad.castShadow = false;
-  pad.receiveShadow = true;
-  // The array, facing the equator, tipped to roughly the latitude — the same
-  // arithmetic a real installer uses, so a station at 49°N visibly leans
-  // harder than one at 14°N.
+  // THE BOX. A twenty-foot container (6.1 × 2.44 × 2.59) is the base — the
+  // Service ships stations, it does not build them — which raises every
+  // instrument onto the roof and gives the game its first narrative surface:
+  // the faded livery of whoever supplied the box (see `stationLivery`).
+  const livery = stationLivery(site.st.op);
+  const CW = 6.1, CH = 2.59, CD = 2.44;
+  const box = add(new THREE.Mesh(new THREE.BoxGeometry(CW, CH, CD),
+    // BoxGeometry face order: +x, -x, +y, -y, +z, -z — ends, roof, long sides.
+    [livery.end, livery.end, livery.roof, livery.roof, livery.side, livery.side]),
+    0, CH / 2, 0);
+  box.receiveShadow = true;
+  const ROOF = CH + 0.02;
+  // The array, on the roof, facing the equator and tipped to roughly the
+  // latitude — the same arithmetic a real installer uses, so a station at
+  // 49°N visibly leans harder than one at 14°N.
   const tilt = clamp((Math.abs(site.st.lat) * Math.PI) / 180, 0.17, 0.87);
   const face = site.st.lat >= 0 ? 1 : -1;        // +z is south in local space
-  for (const px of [-1.5, 0.1]) {
-    const panel = add(new THREE.Mesh(new THREE.PlaneGeometry(1.5, 2.2), stnMat.panel), px, 1.05, -1.6);
+  for (const px of [-2.1, -0.5]) {
+    const panel = add(new THREE.Mesh(new THREE.PlaneGeometry(1.4, 2.0), stnMat.panel), px, ROOF + 0.72, 0);
     panel.rotation.x = -Math.PI / 2 + tilt * face;
-    add(new THREE.Mesh(new THREE.BoxGeometry(0.09, 1.0, 0.09), stnMat.steel), px, 0.5, -1.6);
+    add(new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.7, 0.08), stnMat.steel), px, ROOF + 0.35, 0);
   }
-  // The uplink — a dish on a stub mast, thrown well up at the sky.
-  const dp = add(new THREE.Mesh(new THREE.CylinderGeometry(0.07, 0.09, 1.8, 6), stnMat.steel), 2.2, 0.9, -1.7);
-  void dp;
-  const dish = add(new THREE.Mesh(new THREE.ConeGeometry(0.85, 0.5, 10, 1, true), stnMat.dish), 2.2, 2.0, -1.7);
+  // The uplink — a dish on a stub post at the roof's far corner.
+  add(new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.08, 1.1, 6), stnMat.steel), 1.4, ROOF + 0.55, -0.7);
+  const dish = add(new THREE.Mesh(new THREE.ConeGeometry(0.8, 0.45, 10, 1, true), stnMat.dish), 1.4, ROOF + 1.25, -0.7);
   dish.rotation.x = -0.9;
-  // The monitoring mast, instruments as crossbars, beacon on top.
-  add(new THREE.Mesh(new THREE.CylinderGeometry(0.06, 0.1, 6.4, 6), stnMat.steel), 2.4, 3.2, 2.0);
-  add(new THREE.Mesh(new THREE.BoxGeometry(1.3, 0.07, 0.07), stnMat.steel), 2.4, 5.2, 2.0);
-  add(new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.07, 0.07), stnMat.steel), 2.4, 4.4, 2.0);
+  // The monitoring mast off the roof's end, crossbar instruments, beacon top.
+  add(new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.09, 4.6, 6), stnMat.steel), 2.6, ROOF + 2.3, 0.6);
+  add(new THREE.Mesh(new THREE.BoxGeometry(1.2, 0.07, 0.07), stnMat.steel), 2.6, ROOF + 3.9, 0.6);
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.8, 0.07, 0.07), stnMat.steel), 2.6, ROOF + 3.1, 0.6);
   const beaconMat = new THREE.MeshLambertMaterial({ color: 0xf5a83a, emissive: 0xc07818, emissiveIntensity: 0.5 });
-  add(new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), beaconMat), 2.4, 6.5, 2.0);
-  // The terminal kiosk, screen facing the pad's centre.
-  add(new THREE.Mesh(new THREE.BoxGeometry(0.9, 1.35, 0.42), stnMat.kiosk), -2.4, 0.85, 1.9);
+  add(new THREE.Mesh(new THREE.SphereGeometry(0.16, 8, 6), beaconMat), 2.6, ROOF + 4.62, 0.6);
+  // The terminal: a panel set into the container's long side, at standing
+  // height, with a small awning — worked from the ground, in the weather.
   const screenMat = new THREE.MeshLambertMaterial({ color: 0x223330, emissive: 0x5a3c10, emissiveIntensity: 0.35 });
-  const screen = add(new THREE.Mesh(new THREE.PlaneGeometry(0.62, 0.5), screenMat), -2.4, 1.05, 1.69);
-  screen.rotation.y = Math.PI;
+  add(new THREE.Mesh(new THREE.BoxGeometry(0.9, 0.7, 0.06), stnMat.steel), -1.8, 1.35, CD / 2 + 0.02);
+  const screen = add(new THREE.Mesh(new THREE.PlaneGeometry(0.72, 0.52), screenMat), -1.8, 1.35, CD / 2 + 0.06);
   screen.castShadow = false;
+  const awning = add(new THREE.Mesh(new THREE.BoxGeometry(1.0, 0.05, 0.5), stnMat.steel), -1.8, 1.85, CD / 2 + 0.2);
+  awning.rotation.x = 0.25;
   g.position.set(site.x, groundAt(site.x, site.z), site.z);
   worldGroup.add(g);
   site.group = g;
