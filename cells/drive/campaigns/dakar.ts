@@ -121,13 +121,14 @@ export const CAMPAIGN: Campaign = {
     title: "PARIS - DAKAR",
     start: {
       name: "PARIS SOUTH · THE APERTURE",
-      // The foot of the Paris Cover on the old N20 corridor — the D920 through
-      // Bourg-la-Reine, verified against OSM (Avenue du General Leclerc /
-      // Boulevard du Marechal Joffre run within 200m of this point). You spawn
-      // looking south, down the line; the shell stands at your back.
-      lat: 48.7785,
-      lon: 2.3125,
-      h: 187,
+      // ON the D920's western carriageway through Bourg-la-Reine — placed from
+      // the way's actual vertices, read back out of the cell's own tile cache
+      // after the first live boot (the first guess sat 70m west, in the
+      // houses, facing a wall). You spawn on the avenue looking south, down
+      // the line; the shell stands at your back, and PD-01 is beside you.
+      lat: 48.77855,
+      lon: 2.31341,
+      h: 182,
     },
     note: "The authored destinations, served to the client from the cell's public namespace at ~/campaign/<v> rather than compiled into the bundle. Edit here, bump `v` in BOTH this file and CAMPAIGN_V (client + server), and deploy: the served object is immutable at its version, so a stale one can never shadow a new one. `note` fields carry the reasoning that used to live in code comments — a campaign is authored data, and the reason a number is what it is belongs with it.",
     drives: [
@@ -276,10 +277,10 @@ export const CAMPAIGN: Campaign = {
         id: "pd-01",
         name: "PD-01",
         sub: "PARIS SOUTH · THE APERTURE · KM 0",
-        lat: 48.7782,
-        lon: 2.3119,
+        lat: 48.7784,
+        lon: 2.31318,
         op: "crc",
-        osm: "The D920 (old N20) through Bourg-la-Reine — Avenue du General Leclerc, verified in OSM. The station stands at the Cover's foot where the line leaves it.",
+        osm: "The D920 (old N20) through Bourg-la-Reine — Avenue du General Leclerc, placed against the way's own vertices from the tile cache. The station stands at the kerb of the western carriageway, at the Cover's foot where the line leaves it.",
         note: "Kilometre zero. A Compact box at the aperture — the institutional end of the line looks institutional. Moved here from Trocadero when the Cover went up: the old spot is inside the shell now, which is the point of the shell.",
       },
       {
@@ -328,7 +329,7 @@ export const CAMPAIGN: Campaign = {
     legs: [
       {
         id: "line-01",
-        giver: { name: "PD-01 · THE APERTURE", lat: 48.7782, lon: 2.3119 },
+        giver: { name: "PD-01 · THE APERTURE", lat: 48.7784, lon: 2.31318 },
         title: "THE LINE · LEG 1",
         brief: "TRAVERSE TO PD-02. WAKE THE STATION. DO NOT IMPROVE THE ROAD",
         dest: { name: "PD-02", lat: 48.4372, lon: 2.1725 },
