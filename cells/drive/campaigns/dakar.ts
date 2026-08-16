@@ -83,20 +83,52 @@ export interface CampaignDrive {
   note?: string;
   mission?: CampaignMission;
 }
+/**
+ * A COVER — one of the sealed metropolitan shells. Rendered as a single
+ * monumental object that becomes landscape when near; the game NEVER builds
+ * what is inside one (the client skips OSM under a Cover entirely, which is
+ * the fiction and a serious streaming win saying the same thing: you may
+ * never see inside).
+ */
+export interface CampaignCover {
+  id: string;
+  name: string;
+  lat: number;
+  lon: number;
+  /** Shell radius, metres. */
+  r: number;
+  note?: string;
+}
 export interface Campaign {
   v: number;
   id: string;
   title: string;
   note: string;
+  /** Where THE LINE begins — the aperture spawn, at the Cover's foot. */
+  start: { name: string; lat: number; lon: number; h: number };
   drives: CampaignDrive[];
   stations: CampaignStation[];
+  /** The line's legs, in order — standalone missions the campaign arms one at
+   *  a time. Ids are marks (`MISSION#<id>`), so a finished leg stays finished. */
+  legs: CampaignMission[];
+  covers: CampaignCover[];
   ops: Record<string, CampaignOp>;
 }
 
 export const CAMPAIGN: Campaign = {
-    v: 3,
+    v: 4,
     id: "dakar",
     title: "PARIS - DAKAR",
+    start: {
+      name: "PARIS SOUTH · THE APERTURE",
+      // The foot of the Paris Cover on the old N20 corridor — the D920 through
+      // Bourg-la-Reine, verified against OSM (Avenue du General Leclerc /
+      // Boulevard du Marechal Joffre run within 200m of this point). You spawn
+      // looking south, down the line; the shell stands at your back.
+      lat: 48.7785,
+      lon: 2.3125,
+      h: 187,
+    },
     note: "The authored destinations, served to the client from the cell's public namespace at ~/campaign/<v> rather than compiled into the bundle. Edit here, bump `v` in BOTH this file and CAMPAIGN_V (client + server), and deploy: the served object is immutable at its version, so a stale one can never shadow a new one. `note` fields carry the reasoning that used to live in code comments — a campaign is authored data, and the reason a number is what it is belongs with it.",
     drives: [
       {
@@ -243,12 +275,31 @@ export const CAMPAIGN: Campaign = {
       {
         id: "pd-01",
         name: "PD-01",
-        sub: "TROCADERO · P-D LINE · KM 0",
-        lat: 48.8611,
-        lon: 2.2886,
+        sub: "PARIS SOUTH · THE APERTURE · KM 0",
+        lat: 48.7782,
+        lon: 2.3119,
         op: "crc",
-        osm: "The Palais de Chaillot esplanade, Paris — the campaign's Paris spawn already stands on it.",
-        note: "Kilometre zero of the line. The aperture fiction arrives later; the station is simply where the line's record begins. A Compact box at km 0 — the institutional end of the line looks institutional.",
+        osm: "The D920 (old N20) through Bourg-la-Reine — Avenue du General Leclerc, verified in OSM. The station stands at the Cover's foot where the line leaves it.",
+        note: "Kilometre zero. A Compact box at the aperture — the institutional end of the line looks institutional. Moved here from Trocadero when the Cover went up: the old spot is inside the shell now, which is the point of the shell.",
+      },
+      {
+        id: "pd-02",
+        name: "PD-02",
+        sub: "ETAMPES · OLD N20 · KM 44",
+        lat: 48.4372,
+        lon: 2.1725,
+        op: "crc",
+        osm: "The N20 dual carriageway east of Etampes — the old Paris-Orleans road the line follows out of the basin.",
+        note: "The first station out. The narrative's first anomaly lives here eventually — the pruned clearing the terminal calls natural — but the paint says nothing yet.",
+      },
+      {
+        id: "pd-03",
+        name: "PD-03",
+        sub: "ORLEANS RING · KM 95",
+        lat: 47.945,
+        lon: 1.904,
+        op: "tms",
+        osm: "The D2060 tangential north of Orleans — verified through the cell's own tile cache (primary, D 2060). A corporate box on a state line, and nobody has repainted it.",
       },
       {
         id: "pd-17",
@@ -269,6 +320,46 @@ export const CAMPAIGN: Campaign = {
         op: "smw",
         osm: "The Silvermine reserve admin buildings on Ou Kaapse Weg — the same real place Chapman's Run uses as its giver.",
         note: "The development station, and the repaint: an independent watch's stencil over a corporate ghost — the whole faction story in one coat of paint.",
+      },
+    ],
+    // THE LINE'S LEGS — the campaign's missions, armed one at a time in order.
+    // The register is the docket's: terse, imperative, mundane. Nothing here
+    // explains the world.
+    legs: [
+      {
+        id: "line-01",
+        giver: { name: "PD-01 · THE APERTURE", lat: 48.7782, lon: 2.3119 },
+        title: "THE LINE · LEG 1",
+        brief: "TRAVERSE TO PD-02. WAKE THE STATION. DO NOT IMPROVE THE ROAD",
+        dest: { name: "PD-02", lat: 48.4372, lon: 2.1725 },
+        within: 260,
+        withinNote: "Generous on purpose: the station stands beside a dual carriageway, and arriving on either carriageway must count as arriving.",
+      },
+      {
+        id: "line-02",
+        giver: { name: "PD-02", lat: 48.4372, lon: 2.1725 },
+        title: "THE LINE · LEG 2",
+        brief: "TRAVERSE TO PD-03. WAKE THE STATION. RECORD WHAT YOU PASS",
+        dest: { name: "PD-03", lat: 47.945, lon: 1.904 },
+        within: 260,
+      },
+    ],
+    // THE COVERS. One monumental object each; the game never builds inside.
+    covers: [
+      {
+        id: "paris",
+        name: "PARIS COVER",
+        lat: 48.8566,
+        lon: 2.3333,
+        r: 8600,
+        note: "Sized so the shell's southern foot lands at the aperture on the D920 — and so the whole dense petite couronne sits inside it, which is the fiction and the streaming budget agreeing: the city is never fetched.",
+      },
+      {
+        id: "dakar",
+        name: "DAKAR COVER",
+        lat: 14.7167,
+        lon: -17.4677,
+        r: 5200,
       },
     ],
     // The operators exist as PAINT and nowhere else. No screen names them, no

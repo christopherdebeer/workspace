@@ -37,7 +37,7 @@ const check = (name, cond, saw) => {
 const call = (p) => handler({ rawPath: p, requestContext: { http: { method: 'GET' } } });
 
 // ── the route ──
-const res = await call('/~/campaign/3');
+const res = await call('/~/campaign/4');
 check('current version served', res.statusCode === 200, res.statusCode);
 check('gzipped like every other object in the namespace',
   res.headers['content-encoding'] === 'gzip', res.headers);
@@ -59,7 +59,7 @@ execSync(`npx esbuild cells/drive/campaigns/dakar.ts --bundle --platform=node --
 const { CAMPAIGN: authored } = await import(campOut);
 check('served copy matches the file on disk',
   JSON.stringify(served.drives) === JSON.stringify(authored.drives), null);
-check('the file declares the version the route serves', authored.v === 3, authored.v);
+check('the file declares the version the route serves', authored.v === 4, authored.v);
 
 // ── the authored data ──
 const seen = new Set();
@@ -126,6 +126,40 @@ for (const [k, op] of Object.entries(served.ops ?? {})) {
     check(`op ${k}: its ghost is another operator's mark`,
       Object.values(served.ops).some((o) => o.mark === op.ghost), op.ghost);
   }
+}
+
+// ── the line ──
+// The campaign's spine: a start, legs in order, and the covers. The legs are
+// missions, so the mission sanity above applies; here is what is new.
+check('the line has a start, at the aperture',
+  !!served.start && Number.isFinite(served.start.lat) && Number.isFinite(served.start.h), served.start);
+check('…and legs, in order, each a mission with an id the marks can latch',
+  Array.isArray(served.legs) && served.legs.length >= 2
+  && served.legs.every((l) => /^[a-z0-9-]+$/.test(l.id ?? '')), served.legs?.map((l) => l.id));
+check('leg 1 begins at the start',
+  Math.hypot((served.legs[0].giver.lat - served.start.lat), (served.legs[0].giver.lon - served.start.lon)) < 0.01,
+  { giver: served.legs[0].giver, start: served.start });
+check("each leg's giver is the previous leg's destination — a LINE, not a scatter",
+  served.legs.slice(1).every((l, i) =>
+    Math.hypot(l.giver.lat - served.legs[i].dest.lat, l.giver.lon - served.legs[i].dest.lon) < 0.01),
+  served.legs.map((l) => [l.giver.name, l.dest.name]));
+check('every leg destination is a station on the line',
+  served.legs.every((l) => served.stations.some((st) =>
+    Math.hypot(st.lat - l.dest.lat, st.lon - l.dest.lon) < 0.005)), null);
+for (const c of served.covers ?? []) {
+  check(`cover ${c.id}: on Earth with a sane radius`,
+    Number.isFinite(c.lat) && Number.isFinite(c.lon) && c.r > 1000 && c.r < 30000, c);
+}
+check('the covers exist', (served.covers ?? []).length >= 2, served.covers?.length);
+// The aperture must stand OUTSIDE its own Cover — spawning inside the shell
+// would be spawning somewhere the game refuses to build.
+{
+  const paris = (served.covers ?? []).find((c) => c.id === 'paris');
+  const dLat = (served.start.lat - paris.lat) * 111320;
+  const dLon = (served.start.lon - paris.lon) * 111320 * Math.cos(paris.lat * Math.PI / 180);
+  const d = Math.hypot(dLat, dLon);
+  check('the aperture stands at the Cover\'s foot, outside the shell',
+    d > paris.r && d < paris.r + 2500, { d: Math.round(d), r: paris.r });
 }
 
 rmSync(dir, { recursive: true, force: true });

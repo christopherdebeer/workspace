@@ -9141,6 +9141,14 @@ async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
 }
 
 async function loadOsmTile(x: number, y: number): Promise<void> {
+  // NOTHING IS BUILT UNDER A COVER. The sealed cities are the one part of the
+  // world the map does not answer for — and, not coincidentally, the part
+  // whose density was refusing upstream. The shell hides exactly what is
+  // skipped, so the fiction and the streaming budget agree to the metre.
+  {
+    const b = tileBounds(x, y, OSM_Z);
+    if (underCover((b.latN + b.latS) / 2, (b.lonW + b.lonE) / 2)) return;
+  }
   const key = `${x}/${y}`;
   if (osmLoaded.has(key)) return;
   osmLoaded.add(key);
@@ -13959,8 +13967,14 @@ const endStick = (e: PointerEvent): void => {
     // 450ms, not the 300 a desktop double-click assumes: this is a thumb on a
     // phone reaching across a map, and the cost of being generous is nothing.
     if (now - tapAt < 450 && Math.hypot(e.clientX - tapX, e.clientY - tapY) < 36) {
-      const [wx, wz] = chartToWorld(e.clientX, e.clientY);
-      teleportTo(wx, wz);
+      // ON THE LINE the chart is a chart: a ranger's position is the one thing
+      // the run is about, so the double-tap teleport stands down.
+      if (!lineOn) {
+        const [wx, wz] = chartToWorld(e.clientX, e.clientY);
+        teleportTo(wx, wz);
+      } else {
+        lineNudge = performance.now();
+      }
       tapAt = 0;
     } else {
       tapAt = now; tapX = e.clientX; tapY = e.clientY;
@@ -15207,11 +15221,11 @@ addEventListener('visibilitychange', () => {
   // Backgrounding a tab is how a phone ends a session — the loop stops running,
   // so the debounced write has to happen on the way out or the last few
   // hundred metres are lost.
-  if (hidden) { surveyStore.flush(); marks.flush(); audio.hush(); return; }
+  if (hidden) { surveyStore.flush(); marks.flush(); lineSave(); audio.hush(); return; }
   last = performance.now();   // no accumulated gap to integrate through
   audio.arm();
 });
-addEventListener('pagehide', () => { surveyStore.flush(); marks.flush(); });   // a close that skips `hidden`
+addEventListener('pagehide', () => { surveyStore.flush(); marks.flush(); lineSave(); });   // a close that skips `hidden`
 
 // ── main loop ──────────────────────────────────────────────────────
 let last = performance.now();
@@ -15246,7 +15260,8 @@ const writeUrl = (la: number, lo: number): void => {
     const cm = camMode === 'drone' ? lastPov : camMode;
     const zm = camMode === 'top' && Math.abs(zoomT - 1) > 0.05
       ? `&z=${zoomT >= 30 ? zoomT.toFixed(0) : zoomT.toFixed(1)}` : '';
-    history.replaceState(null, '', `?lat=${la.toFixed(5)}&lon=${lo.toFixed(5)}&h=${deg.toFixed(0)}&cam=${cm}${zm}${m}`);
+    const ln = lineOn ? '&line=1' : '';
+    history.replaceState(null, '', `?lat=${la.toFixed(5)}&lon=${lo.toFixed(5)}&h=${deg.toFixed(0)}&cam=${cm}${zm}${m}${ln}`);
   } catch { /* fine */ }
 };
 // Surface grip: tarmac is fast, everything else asks you to slow down —
@@ -16089,6 +16104,7 @@ function tick(now: number): void {
   stepMission(now);
   stepSurvey(now);
   stepStations(now);
+  stepLine(now);
   // THE CAR IS EVIDENCE TOO. Dry-land proof used to come only from a ribbon
   // being built, and Badwater Road is a single OSM way — so it fired once, at
   // the spawn, and never again. Drive 8km up the valley and the anchor was
@@ -17140,7 +17156,7 @@ interface Drive { name: string; sub: string; lat: number; lon: number; h: number
  * fails. Only a first-ever visit that also fails arrives with no drives, and
  * that still plays — spots, the chart and a random spawn are all local.
  */
-const CAMPAIGN_V = 3;
+const CAMPAIGN_V = 4;
 const CAMPAIGN_KEY = `drive.campaign.v${CAMPAIGN_V}`;
 let DRIVES: Drive[] = [];
 /** The Service's fixed points, from the campaign. In-game: just stations. */
@@ -17149,19 +17165,32 @@ interface Station { id: string; name: string; sub: string; lat: number; lon: num
 interface StationOp { name: string; mark: string; color: string; ghost?: string }
 let STATIONS: Station[] = [];
 let STATION_OPS: Record<string, StationOp> = {};
+/** A sealed metropolitan shell. The game never builds what is inside one. */
+interface Cover { id: string; name: string; lat: number; lon: number; r: number }
+let COVERS: Cover[] = [];
+/** The line's legs, in order. Ids are marks, so a finished leg stays finished. */
+let LEGS: Mission[] = [];
+let LINE_START: { name: string; lat: number; lon: number; h: number } | null = null;
 /** Everything downstream reads `DRIVES` at call time (the menu rebuilds per
  *  open, `missionById` runs once at boot AFTER this resolves), so nothing has
  *  to be told the list arrived. */
 async function loadCampaign(): Promise<void> {
   const use = (raw: string): boolean => {
     try {
-      const j = JSON.parse(raw) as { drives?: Drive[]; stations?: Station[]; ops?: Record<string, StationOp> };
+      const j = JSON.parse(raw) as {
+        drives?: Drive[]; stations?: Station[]; ops?: Record<string, StationOp>;
+        covers?: Cover[]; legs?: Mission[]; start?: { name: string; lat: number; lon: number; h: number };
+      };
       if (!Array.isArray(j.drives) || !j.drives.length) return false;
       DRIVES = j.drives.filter((d) => d && typeof d.lat === 'number' && typeof d.lon === 'number');
       STATIONS = (Array.isArray(j.stations) ? j.stations : []).filter((st) =>
         st && typeof st.id === 'string' && st.id.length > 0
         && typeof st.lat === 'number' && typeof st.lon === 'number');
       STATION_OPS = j.ops && typeof j.ops === 'object' ? j.ops : {};
+      COVERS = (Array.isArray(j.covers) ? j.covers : []).filter((c) =>
+        c && typeof c.lat === 'number' && typeof c.lon === 'number' && typeof c.r === 'number' && c.r > 500);
+      LEGS = (Array.isArray(j.legs) ? j.legs : []).filter((l) => l && typeof l.id === 'string');
+      LINE_START = j.start && typeof j.start.lat === 'number' && typeof j.start.lon === 'number' ? j.start : null;
       return DRIVES.length > 0;
     } catch { return false; }
   };
@@ -17407,8 +17436,11 @@ function stepStations(now: number): void {
   if (stationOpen && Math.hypot(stationOpen.x - state.x, stationOpen.z - state.z) > STATION_TERM_R * 1.7) {
     stationOpen = null;
   }
+  // A Cover you are approaching has to exist before you can see it.
+  if (now > coverCheckAt) { coverCheckAt = now + 5000; buildCovers(); }
   marks.tick(now);
 }
+let coverCheckAt = 0;
 function wakeStation(): void {
   const site = stationOpen;
   if (!site || marks.has('s', site.st.id)) return;
@@ -17449,6 +17481,128 @@ function terminalCard(site: StationSite): import('./overlays').TerminalCard {
   }));
 (window as unknown as { __marks?: object }).__marks = (): object =>
   ({ missions: marks.count('m'), stations: marks.count('s'), dirty: marks.dirty() });
+
+// ── the line ───────────────────────────────────────────────────────
+// CAMPAIGN MODE. Free drive is untouched — the whole open world stays; THE
+// LINE is a posture laid over it: you are on the Service's route, your
+// position and distance persist, the legs arm themselves in order, and the
+// travel conveniences that would break a continuous journey stand down (a
+// double tap does not teleport a ranger).
+//
+// The mode rides the URL (`&line=1`, written by writeUrl like everything
+// else), so a mid-run reload resumes on the line without ceremony. The
+// CONTINUE state lives in localStorage: where you were, how far you have
+// come, when you began. Leaving the line is just driving somewhere else —
+// any DRIVE / ELSEWHERE / link navigates without the flag, the run's
+// position is already saved, and CONTINUE brings you back to the metre.
+interface LineState { lat: number; lon: number; h: number; odo: number; begunAt: number; at: number }
+const LINE_KEY = 'drive.line.v1';
+let lineOn = false;
+let lineOdo = 0;                 // metres on the line, THIS device, cumulative
+let lineBegunAt = 0;
+let lineSaveAt = 0;
+let lineNudge = 0;               // a dead travel gesture deserves one honest line
+function lineLoad(): LineState | null {
+  try {
+    const j = JSON.parse(localStorage.getItem(LINE_KEY) ?? 'null') as LineState | null;
+    return j && Number.isFinite(j.lat) && Number.isFinite(j.lon) ? j : null;
+  } catch { return null; }
+}
+function lineSave(): void {
+  if (!lineOn) return;
+  const [la, lo] = localToLatLon(state.x, state.z);
+  const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
+  try {
+    localStorage.setItem(LINE_KEY, JSON.stringify({
+      lat: +la.toFixed(5), lon: +lo.toFixed(5), h: Math.round(deg),
+      odo: Math.round(lineOdo), begunAt: lineBegunAt || Date.now(), at: Date.now(),
+    } satisfies LineState));
+  } catch { /* a full quota costs the resume point, never the drive */ }
+}
+/** Arm the next leg the marks do not already close. The campaign is this
+ *  loop and nothing else: legs in order, done stays done. */
+function lineArm(): void {
+  if (!lineOn || mission || !LEGS.length) return;
+  const next = LEGS.find((l) => !marks.has('m', l.id));
+  if (next) armMission(next);
+}
+function stepLine(now: number): void {
+  if (!lineOn) return;
+  if (missionPhase === 'none') lineArm();
+  if (now > lineSaveAt) { lineSaveAt = now + 8000; lineSave(); }
+}
+/** Begin, or continue, from the menu. Navigation, like every drive start —
+ *  the world streams from scratch around the spawn either way. */
+function lineGo(): void {
+  const st = lineLoad();
+  if (st) {
+    location.href = `${location.pathname}?lat=${st.lat}&lon=${st.lon}&h=${st.h}&cam=chase&line=1`;
+    return;
+  }
+  if (!LINE_START) return;
+  try {
+    localStorage.setItem(LINE_KEY, JSON.stringify({
+      lat: LINE_START.lat, lon: LINE_START.lon, h: LINE_START.h,
+      odo: 0, begunAt: Date.now(), at: Date.now(),
+    } satisfies LineState));
+  } catch { /* still playable; CONTINUE just will not know the metre */ }
+  location.href = `${location.pathname}?lat=${LINE_START.lat}&lon=${LINE_START.lon}&h=${LINE_START.h}&cam=chase&line=1`;
+}
+(window as unknown as { __line?: object }).__line = (): object => ({
+  on: lineOn, odo: Math.round(lineOdo), begunAt: lineBegunAt,
+  leg: (() => {
+    const m = mission;
+    return m && LEGS.some((l) => l.id === m.id) ? { id: m.id, phase: missionPhase } : null;
+  })(),
+  legsDone: LEGS.filter((l) => marks.has('m', l.id)).length, legs: LEGS.length,
+  covers: coverBuilt.size,
+});
+
+// ── the covers ─────────────────────────────────────────────────────
+// One monumental object per sealed city: a faceted shell that reads as
+// landscape from far off and a wall from its foot. THE GAME NEVER BUILDS WHAT
+// IS INSIDE ONE — `loadOsmTile` refuses tiles under a Cover, which is the
+// fiction and the streaming budget saying the same thing (the dense city that
+// was aborting Overpass upstream is precisely the part the shell hides).
+const coverBuilt = new Map<string, THREE.Group>();
+const coverMat = new THREE.MeshLambertMaterial({
+  color: 0x9aa5a0, flatShading: true, transparent: true, opacity: 0.96,
+});
+const coverBandMat = new THREE.MeshLambertMaterial({ color: 0x6b7672, flatShading: true });
+/** Is this lat/lon under a Cover? The margin keeps half-in tiles out too —
+ *  a road that dives under the shell is a road the map no longer answers for. */
+function underCover(lat: number, lon: number, margin = 0.97): Cover | null {
+  for (const c of COVERS) {
+    const dLat = (lat - c.lat) * M_LAT;
+    const dLon = (lon - c.lon) * M_LAT * Math.cos((c.lat * Math.PI) / 180);
+    if (Math.hypot(dLat, dLon) < c.r * margin) return c;
+  }
+  return null;
+}
+function buildCovers(): void {
+  for (const c of COVERS) {
+    if (coverBuilt.has(c.id)) continue;
+    const [x, z] = toLocal(c.lat, c.lon);
+    // Only stand the shell up when it could possibly be seen — it is the
+    // biggest single object in the game and Dakar's is not Paris's business.
+    if (Math.hypot(x - state.x, z - state.z) > c.r + 28000) continue;
+    const g = new THREE.Group();
+    // A low-poly dome: the faceting IS the geodesic read at this pixel scale.
+    // Squashed — a shell over a city is a lid, not a planet.
+    const dome = new THREE.Mesh(new THREE.SphereGeometry(c.r, 40, 14, 0, Math.PI * 2, 0, Math.PI / 2), coverMat);
+    dome.scale.y = 0.42;
+    g.add(dome);
+    // The foot band: a wall where the shell meets the ground, so arriving at
+    // it reads as arriving at a THING rather than at a big grey hill.
+    const band = new THREE.Mesh(new THREE.CylinderGeometry(c.r * 1.001, c.r * 1.003, 90, 64, 1, true), coverBandMat);
+    band.position.y = 30;
+    g.add(band);
+    // Seated a little low so terrain relief never opens a gap under the rim.
+    g.position.set(x, groundAt(x, z) - 60, z);
+    worldGroup.add(g);
+    coverBuilt.set(c.id, g);
+  }
+}
 // ── google maps links, both ways ───────────────────────────────────
 /**
  * PULL A COORDINATE OUT OF A GOOGLE MAPS LINK.
@@ -17528,7 +17682,7 @@ function gmapLinkHere(): string {
 /** A drive's mission, by the id the spawn URL carries — so a shared link
  *  arrives with the job already on it. */
 const missionById = (id: string): Mission | null =>
-  DRIVES.find((d) => d.mission?.id === id)?.mission ?? null;
+  DRIVES.find((d) => d.mission?.id === id)?.mission ?? LEGS.find((l) => l.id === id) ?? null;
 // ── spots you found yourself ───────────────────────────────────────
 // The curated drives are authored links. A spot is the same shape, written by
 // the player instead: park somewhere worth coming back to and it joins the
@@ -17782,6 +17936,7 @@ function stepOdo(dt: number, now: number): void {
   const d = Math.abs(state.speed) * dt;
   odo.total += d;
   odo.trip += d;
+  if (lineOn) lineOdo += d;
   if (now > odo.at) {
     odo.at = now + 8000;
     saveOdo();
@@ -18725,7 +18880,9 @@ function stepOverlays(): void {
     ? { kicker: 'SURVEYED', head: surveyClaim.name.toUpperCase(), body: `${surveyClaim.n} CHECKPOINTS` }
     : stationWoke && performance.now() - stationWoke.at < 6000
       ? { kicker: 'STATION', head: `${stationWoke.name} ONLINE`, body: 'UPLINK ESTABLISHED · REPORTING' }
-      : null);
+      : lineNudge && performance.now() - lineNudge < 3000
+        ? { kicker: 'THE LINE', head: 'THE LINE IS DRIVEN', body: 'NO TRAVEL ON A RUN · LEAVE VIA THE MENU' }
+        : null);
 }
 let dockRect = { x: 0, y: 0, w: 0, h: 0 };
 let povRect = { x: 0, y: 0, w: 0, h: 0 };
@@ -18844,7 +19001,7 @@ const menu = createMenu({
     return [
       ['DRIVEN', `${fmtKm(odo.trip)} TRIP · ${fmtKm(odo.total)} TOTAL`],
       ['SURVEYED', `${claimed} ${claimed === 1 ? 'ROAD' : 'ROADS'} CLAIMED`],
-      ['MODE', real.on ? 'GPS DRIVE' : 'FREE DRIVE'],
+      ['MODE', lineOn ? 'THE LINE' : real.on ? 'GPS DRIVE' : 'FREE DRIVE'],
       ['WORLD', osmDown ? 'VECTORS UNAVAILABLE' : streaming ? 'STREAMING' : 'LOADED'],
     ];
   },
@@ -18933,6 +19090,38 @@ const menu = createMenu({
   },
   elsewhere: () => { location.href = location.pathname + '?random=1'; },
   saveSpot: () => saveSpot(),
+  // THE LINE, as the menu reads it. One CTA, honest rows, the legs in order.
+  line: () => {
+    const st = lineLoad();
+    const started = !!st;
+    const pd = STATIONS.filter((x) => x.id.startsWith('pd-'));
+    const woken = pd.filter((x) => marks.has('s', x.id)).length;
+    const done = LEGS.filter((l) => marks.has('m', l.id)).length;
+    const dist = lineOn ? lineOdo : st?.odo ?? 0;
+    let open = false;
+    return {
+      on: lineOn,
+      started,
+      title: 'PARIS – DAKAR',
+      cta: !started ? 'BEGIN · THE PARIS APERTURE'
+        : `CONTINUE · ${fmtKm(dist)} ON THE LINE`,
+      rows: [
+        ['ON THE LINE', fmtKm(dist)],
+        ['LEGS', LEGS.length ? `${done}/${LEGS.length}` : '—'],
+        ['STATIONS', pd.length ? `${woken}/${pd.length}` : '—'],
+        ['BEGUN', st?.begunAt ? new Date(st.begunAt).toISOString().slice(0, 10) : '—'],
+      ] as Array<[string, string]>,
+      legs: LEGS.map((l) => {
+        const isDone = marks.has('m', l.id);
+        const state = isDone ? 'DONE' as const : open ? 'AHEAD' as const : (open = true, 'OPEN' as const);
+        return { title: l.title, brief: l.brief, state };
+      }),
+      note: lineOn
+        ? 'TRAVEL IS OFF ON A RUN. STARTING ANY DRIVE LEAVES THE LINE; THE RUN KEEPS.'
+        : 'THE RUN RESUMES TO THE METRE. FREE DRIVE IS ALWAYS THERE — LEAVING COSTS NOTHING.',
+    };
+  },
+  lineGo: () => lineGo(),
   // PROGRESS, off the device. The label is the ACTION, the note is the state —
   // and when signed out the note says what you keep either way, because that is
   // the honest answer to "why would I sign in".
@@ -19086,6 +19275,14 @@ if (timeFromUrl >= 0) {
   // boot that is about to pull terrain, so it costs nothing anyone can see.
   await loadCampaign();
   initStations();
+  // THE LINE resumes off the URL like everything else about a drive.
+  if (q.get('line') === '1') {
+    lineOn = true;
+    const st = lineLoad();
+    lineOdo = st?.odo ?? 0;
+    lineBegunAt = st?.begunAt ?? Date.now();
+  }
+  buildCovers();
   // The durable copy, for a player who signed in. NOT awaited: the whole point
   // is that the game never waits on the network for progress, and this lands
   // long before the first road does.

@@ -33,8 +33,8 @@ import { ICON, ICON_FONT, loadIcons } from './icons';
 
 // Screen indices are the probe API (__menutab) and predate the redesign:
 // 0 was the DRIVE tab and is now the splash hub; the rest keep their numbers.
-export const T_DRIVE = 0, T_SURVEY = 1, T_RIG = 2, T_WORLD = 3, T_SYSTEM = 4;
-const TITLES: Record<number, string> = { [T_SURVEY]: 'SURVEYS', [T_RIG]: 'RIG', [T_WORLD]: 'DRIVES', [T_SYSTEM]: 'SETTINGS' };
+export const T_DRIVE = 0, T_SURVEY = 1, T_RIG = 2, T_WORLD = 3, T_SYSTEM = 4, T_LINE = 5;
+const TITLES: Record<number, string> = { [T_SURVEY]: 'SURVEYS', [T_RIG]: 'RIG', [T_WORLD]: 'DRIVES', [T_SYSTEM]: 'SETTINGS', [T_LINE]: 'THE LINE' };
 
 export interface Rect { x: number; y: number; w: number; h: number }
 
@@ -84,6 +84,19 @@ export interface MenuCtx {
   hideHud(): void;
   /** The durable copy of your progress: where it stands, and the two taps that
    *  turn it on and off. */
+  /** THE LINE — the campaign's whole surface, read by the T_LINE screen. */
+  line(): {
+    on: boolean;
+    started: boolean;
+    title: string;
+    /** BEGIN / CONTINUE copy for the one CTA. */
+    cta: string;
+    /** Status lines: km on the line, stations, legs. */
+    rows: Array<[string, string]>;
+    legs: Array<{ title: string; brief: string; state: 'DONE' | 'OPEN' | 'AHEAD' }>;
+    note: string;
+  };
+  lineGo(): void;
   syncLabel(): string;
   syncNote(): string;
   syncTone(): Tone;
@@ -415,6 +428,20 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       gps.style.borderColor = col;
     });
     const nav = el('div', 'm-nav');
+    // THE LINE leads the stack: the campaign is the game's spine, and the row
+    // says where you stand on it without demanding anything.
+    const lineRow = el('div', 'm-navrow');
+    const lnIco = ico(ICON.road), lnName = el('span', 'name', 'THE LINE'),
+      lnSub = el('span', 'sub', ''), lnChev = el('span', 'chev', '>');
+    lineRow.append(lnIco, lnName, lnSub, lnChev);
+    lineRow.addEventListener('click', () => setTab(T_LINE));
+    updaters.push(() => {
+      const ln = ctx.line();
+      lnSub.textContent = ln.on ? ln.rows[0]?.[1] ?? 'ON THE LINE' : ln.cta;
+      lnName.style.color = ln.on ? C.good : C.text;
+      lnChev.style.color = ln.on ? C.good : C.gold;
+    });
+    nav.appendChild(lineRow);
     for (const [t, name, sub, icon] of [
       [T_RIG, 'RIG', 'TUNE AND DRESS THE TRUCK', ICON.truck],
       [T_WORLD, 'DRIVES', 'DESTINATIONS · SPOTS · ELSEWHERE', ICON.map],
@@ -627,6 +654,43 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     foot.append(open, share, paste);
   }
 
+  function renderLine(): void {
+    const ln = ctx.line();
+    body.append(el('div', 'm-place', ln.title));
+    body.append(el('div', 'm-dimline', ln.on
+      ? 'ON THE LINE · POSITION AND DISTANCE PERSIST'
+      : ln.started ? 'OFF THE LINE · THE RUN IS SAVED WHERE YOU LEFT IT' : 'THE SERVICE HAS A DOCKET FOR YOU'));
+    const kv = kvTable(() => ctx.line().rows);
+    body.append(kv);
+    body.append(el('div', 'm-sect', 'LEGS'));
+    for (const leg of ln.legs) {
+      const row = el('div', 'm-row');
+      const name = el('span', 'name', leg.title);
+      const tally = el('span', 'sub', leg.state);
+      name.style.color = leg.state === 'DONE' ? C.good : leg.state === 'OPEN' ? C.text : C.dim;
+      tally.style.color = leg.state === 'DONE' ? C.good : leg.state === 'OPEN' ? C.gold : C.dim;
+      row.append(name, tally);
+      body.append(row);
+      const brief = el('div', 'm-dimline', leg.brief);
+      brief.style.color = leg.state === 'AHEAD' ? C.edge : C.dim;
+      body.append(brief);
+    }
+    body.append(el('div', 'm-dimline', ln.note));
+    // One CTA, pinned in the foot. On the line already: nothing to press —
+    // close the menu and drive.
+    if (!ln.on) {
+      const cta = el('button', 'm-cta');
+      cta.append(ico(ICON.road), el('span', 'lab', ln.cta));
+      cta.addEventListener('click', () => { ctx.lineGo(); });
+      foot.append(cta);
+    } else {
+      const back = el('button', 'm-cta');
+      back.append(ico(ICON.car), el('span', 'lab', 'DRIVE'));
+      back.addEventListener('click', () => close());
+      foot.append(back);
+    }
+  }
+
   function renderSettings(): void {
     body.appendChild(kvTable(ctx.systemRows));
     // SIGNING IN IS OPTIONAL AND SAYS SO. A player who never touches this keeps
@@ -665,6 +729,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       return `s|${h?.name}|${h?.tally}|${h?.state}|${ctx.surveyRoads().map((r) => r.tally).join(',')}`;
     }
     if (tab === T_WORLD) return `w|${ctx.drives().length}`;
+    if (tab === T_LINE) { const ln = ctx.line(); return `l|${ln.on}|${ln.cta}|${ln.legs.map((g) => g.state).join(',')}`; }
     return String(tab);
   }
 
@@ -677,7 +742,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     updaters = [];
     renderHead();
     ([
-      renderHome, renderSurveys, renderRig, renderDrives, renderSettings,
+      renderHome, renderSurveys, renderRig, renderDrives, renderSettings, renderLine,
     ][tab] ?? renderHome)();
     // FILL THE VALUES BEFORE THE SCREEN IS SEEN. Everything dynamic here is
     // created empty and written by an updater, and the updaters only ran on the
