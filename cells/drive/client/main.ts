@@ -18660,7 +18660,7 @@ const menu = createMenu({
     return p === 'on' ? 'good' as const : p === 'busy' ? 'gold' as const
       : p === 'off' ? 'soft' as const : 'bad' as const;
   },
-  syncOn: () => sync.status().phase === 'on',
+  syncPhase: () => sync.status().phase,
   syncTap: () => {
     const s = sync.status();
     if (s.phase === 'off') void sync.signIn();

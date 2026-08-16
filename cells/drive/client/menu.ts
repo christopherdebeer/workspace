@@ -87,7 +87,7 @@ export interface MenuCtx {
   syncLabel(): string;
   syncNote(): string;
   syncTone(): Tone;
-  syncOn(): boolean;
+  syncPhase(): 'off' | 'busy' | 'on' | 'blocked' | 'error';
   syncTap(): void;
   startDrive(i: number): void;
   deleteSpot(i: number): void;
@@ -170,7 +170,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   #menu .m-nav { margin-top: 10px; display: grid; gap: 5px; }
   #menu .m-navrow { display: flex; align-items: baseline; gap: 8px; cursor: pointer;
     border: 1px solid ${C.dim}; background: rgba(8,20,23,0.5); padding: 7px 10px 6px; }
-  #menu .m-navrow .name { font-size: 16px; color: ${C.text}; }
+  #menu .m-navrow .name { font-size: 16px; color: ${C.text}; white-space: nowrap; }
   #menu .m-navrow .sub { margin-left: auto; color: ${C.dim}; font-size: 10px; text-align: right; }
   #menu .m-navrow .chev { color: ${C.gold}; font-size: 16px; }
   #menu .m-sect { color: ${C.edge}; font-size: 10px; letter-spacing: 2px;
@@ -426,6 +426,32 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       row.addEventListener('click', () => setTab(t));
       nav.appendChild(row);
     }
+    // …and PROGRESS, in the same stack rather than shouting above it. A player
+    // who never taps it loses nothing, so it reads as one more section — but it
+    // is ON THE SPLASH, because a sign-in buried three screens down is a sign-in
+    // nobody finds until after they have driven a thousand kilometres.
+    //
+    // SIGNED OUT it is the only place that starts the redirect; SIGNED IN it
+    // reports and hands off to SETTINGS. Signing out is a destructive tap and
+    // does not belong on the screen you land on.
+    const signRow = el('div', 'm-navrow');
+    const signIco = ico(ICON.save), signName = el('span', 'name', ''),
+      signSub = el('span', 'sub', ''), signChev = el('span', 'chev', '>');
+    signRow.append(signIco, signName, signSub, signChev);
+    signRow.addEventListener('click', () => {
+      if (ctx.syncPhase() === 'off') ctx.syncTap();      // …which navigates to the apex
+      else setTab(T_SYSTEM);
+    });
+    updaters.push(() => {
+      const p = ctx.syncPhase();
+      const out = p === 'off';
+      signName.textContent = out ? 'SIGN IN' : 'PROGRESS';
+      signName.style.color = out ? C.gold : C.text;
+      signSub.textContent = out ? 'PROGRESS ON EVERY DEVICE' : ctx.syncNote();
+      signSub.style.color = ctx.syncTone() === 'bad' ? C.bad : C.dim;
+      signChev.style.color = out ? C.gold : C.edge;
+    });
+    nav.appendChild(signRow);
     // The scene IS the splash's background — no scrim, no window (the .hub
     // class kills the strips): the rig stands in the live world behind
     // everything, and the spacer holds the sections down where the chase
@@ -653,6 +679,12 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     ([
       renderHome, renderSurveys, renderRig, renderDrives, renderSettings,
     ][tab] ?? renderHome)();
+    // FILL THE VALUES BEFORE THE SCREEN IS SEEN. Everything dynamic here is
+    // created empty and written by an updater, and the updaters only ran on the
+    // 400ms tick — so every build showed blank labels for up to that long. Most
+    // visible on the splash, which is the first screen anybody ever looks at,
+    // and which now has a row that is nothing BUT its updater.
+    for (const u of updaters) u();
     structSig = sig();
     body.scrollTop = scroll;
   }
