@@ -1,233 +1,282 @@
 # Drive: what this game is
 
-Before authoring a campaign, a decision about what the campaign is *for*. This
-document argues the niche from what is already built rather than from what a
-driving game usually is — because the mechanics in this build already point
-somewhere specific, and they do not point where the title does.
+The niche, argued from what is already built — and now settled by the owner:
+**it is both.** Rally is the *feel* (the rig, the stages, the romance of
+Paris–Dakar); the survey is the *mechanic* (the only progression in the code);
+solarpunk is the *licence* (a rebuilt world explains why the settlements on
+screen are not photographs). The first draft of this document posed rally vs
+survey as a choice. The owner's answer is that they fuse — and there is a
+figure in real rally sport where they genuinely do (§4).
 
 ## 1. What the game already is, on the evidence
 
-Not the pitch. The systems that exist, and what each one implies about the
-player it expects.
+Not the pitch. The systems that exist, and what each implies about the player
+it expects.
 
 **The whole real Earth, at ground level.** OSM vectors, real elevation, real
 land cover, spawn anywhere. Nothing is authored terrain. The implication is
-sharp and unusual: *the interesting places are not the ones a designer chose*.
-Your street is in this game, and so is every road nobody would ever build by
-hand.
+sharp: *the interesting places are not the ones a designer chose.* Your street
+is in this game, and so is every road nobody would build by hand.
 
 **The survey.** Checkpoints every 250 m along each named road; drive a majority
-and the road latches as **DRIVEN** (`SURVEY_P`, `SURVEY_MAJORITY`,
-`surveyed()`). A road is only claimable once every tile touching it has actually
-rendered — you cannot claim a 10 km pass by driving its first half-kilometre.
-This is the only progression system in the build, and it measures **coverage**.
-Not time, not speed, not placement.
+and the road latches as **DRIVEN**. A road is only claimable once every tile
+touching it has actually rendered — you cannot claim a 10 km pass by driving
+its first half-kilometre. This is the only progression system in the build, and
+it measures **coverage**. Not time, not speed, not placement.
 
 **Fog of war.** Undriven world is hidden. The map is not given to you; it is
 produced by driving.
 
-**A horizon that is modelled.** Named summits are ranked by *apparent angle
-after the curvature of the Earth* — a 1787 m ridge at 50 km outranks Whitney's
-4421 m at 324 km, and anything below the horizon draws hollow. Nobody builds
-that for a racing game. That is built for a player who is asking *what am I
-looking at, and how far away is it.*
+**A horizon that is modelled.** Named summits ranked by *apparent angle after
+the curvature of the Earth*; anything below the horizon draws hollow. That is
+built for a player who asks *what am I looking at, and how far is it.*
 
-**An instrument, not a windscreen.** A deliberate pixel scale, one bitmap face,
-a compass strip, a chart that is a map and a HUD that is a cockpit — kept
-separate on purpose. Live weather off a real feed. An odometer in metres that
-survives every session.
+**An instrument, not a windscreen.** A deliberate pixel scale, a compass strip,
+a chart that is a map and a HUD that is a cockpit, kept separate on purpose.
+Live weather off a real feed. An odometer in metres that survives every session.
 
 **A rig with an expedition loadout.** 2.4 kW solar, 10 kWh LiFePO4, algae
-biodiesel, 120 L water, 1200 km range, 4×4, "OVERLAND / RALLY". That is a
-vehicle provisioned to be *away from things for a long time*.
+biodiesel, 120 L water, 1200 km range, 4×4. A vehicle provisioned to be *away
+from things for a long time*.
 
-**And no competition anywhere.** No lap, no clock, no rival, no stage time, no
-finish order. There is no code in this build that could tell you that you won.
+**And no rival on screen anywhere.** No lap, no clock, no stage time, no finish
+order. Nothing in the code could tell you that you won a race. Whatever the
+rally is in this game, it is not something you can lose to another car.
 
-## 2. The tension
+## 2. The licence: why real roads and invented towns cohere
 
-Three fictions are currently in the game at once, and they are not compatible.
+The solarpunk future is not set dressing — it resolves the build's one apparent
+contradiction. The game renders **real road geometry** under **buildings it
+invents**, and without a fiction that mismatch reads as a shortcut. With one,
+it reads as the world:
 
-| in the build | what it says | supported by mechanics? |
-| --- | --- | --- |
-| **PARIS – DAKAR** (campaign title, splash) | a rally: stages, speed, a field | **no** — nothing races, nothing is timed |
-| **SOLARPUNK RALLY RIG** (splash, spec sheet) | self-sufficient overland travel | partly — the loadout agrees, the word RALLY does not |
-| **THE SURVEY** (the actual loop) | cover ground, claim roads, fill the map | **yes** — it is the only progression there is |
+> **Roads are the old bones. Buildings are the new flesh.** The road network
+> survived the transition — cuttings, passes, bridges, the engineering is
+> durable — but what people built beside the roads has been rebuilt to a
+> different pattern since. So the *map of the roads* is old, trusted, and due
+> for verification; everything standing beside them is new and none of the
+> surveyor's business.
 
-The campaign is dressed as a rally and plays as a cartographic expedition. The
-sixteen destinations are a *greatest-hits list of famous driving roads* —
-Stelvio, Trollstigen, Nordschleife, Transfăgărășan — which is exactly what a
-driving game with no niche picks. Each is a fine place to spawn. None of them
-needs the whole Earth, the fog of war, the survey, or the horizon model. They
-would work identically in a game with fifteen hand-built tracks.
+This is exactly what the engine does: OSM's ways are treated as ground truth
+and everything else is generated. The fiction should keep matching that line —
+future work on settlements can be as stylised as it likes *beside* the road,
+and must stay honest *about* the road.
 
-**That is the diagnosis: the content does not need the engine.** Any campaign
-worth authoring has to need it.
+It also sets the tone of the apocalypse, which matters: **solarpunk is after a
+transition, not after an extinction.** Nobody on the radio is desperate. The
+world drew down, travel stopped being routine, long-distance networks went
+quiet and maps went stale — that is all the catastrophe the premise needs, and
+it is why the register can stay warm without going cosy. The landscape is still
+indifferent; the people in it are fine.
 
 ## 3. The niche, aesthetically: a field instrument
 
-The look already commits to this and should stop apologising for it.
+Unchanged from the first draft, and worth restating as rules:
 
-The pixels are not nostalgia and should never be justified as retro. They are
-**resolution** — the fidelity of a readout. Everything on screen is either the
-world or an instrument reading the world, and the game is careful about which is
-which (the chart is a map; the pins are a cockpit instrument; they do not mix).
-The summit labels carry heights. The compass carries degrees. The odometer
-counts metres. The weather is the real weather where you are.
+- The pixels are **resolution, not nostalgia** — the fidelity of a readout.
+- **Numbers are the flavour.** "4496 M · 18 CHECKPOINTS" beats any adjective
+  because it is true about a real place.
+- **Never fake a reading.** Over-horizon summits draw hollow; an unclosed
+  survey says so. One decorative lie costs the whole aesthetic.
+- **Weather and light are content, not polish** — the difference between two
+  drives down the same road, for free, from the real sky.
 
-The register to hold: **an honest instrument in an indifferent landscape.** Not
-heroic, not cosy, not retro. The world does not care that you are there, the
-truck is competent, and the display tells you the truth including when the truth
-is that the terrain has not loaded yet.
+The visual reference worth naming is **Simon Stålenhag**: ordinary, accurately
+observed landscape with one engineered thing standing in it that is slightly
+too large and entirely matter-of-fact. Drive's aqueduct viaducts over real DEM
+already produce this register by accident. It is the right one on purpose.
 
-What follows for art and copy:
+## 4. The niche, narratively: CAR ZERO
 
-- **Numbers are the flavour.** "4496 M · 18 CHECKPOINTS" is more evocative here
-  than any adjective, because the number is *true about a real place*.
-- **Never fake a reading.** A summit that is over the horizon draws hollow. A
-  road that has not finished surveying says so. The instrument's credibility is
-  the whole aesthetic; one decorative lie costs it.
-- **Weather and light are content, not polish.** They are the difference between
-  two drives down the same road, and they are free — they come from the real sky.
+Real rallies have a car that is neither first nor racing. Before the field is
+allowed onto a stage, a **course car — "car zero"** — drives it: checks the
+route is passable, the hazards are as noted, the road book matches the road.
+The rally exists *behind* that car. It never races anything, and the whole
+event depends on it.
 
-## 4. The niche, narratively: ground-truth
+**The player is Car Zero.** The rally is real, and it is the fiction's engine —
+but it is always behind you.
 
-Here is the recommendation, and the case for it.
+The frame, in full:
 
-**The player is ground-truthing the map.** The roads in this game *are*
-OpenStreetMap — the game streams them live. The fiction that costs nothing and
-explains everything is that you are out there checking whether the map is right,
-because the map is a claim someone made about a place and the only way to settle
-it is to go.
+- **The world:** a couple of generations after the transition. Settlements are
+  local, solar, comfortable, and disconnected by land. Flight is gone or
+  rationed; the sea is slow; the old roads are *rumoured* to still be there.
+  The last complete road survey predates the transition — it is, in-world, the
+  old map. (Out of world: it is OpenStreetMap. The fiction and the data source
+  are the same object.)
+- **The institution:** the rallies are being re-founded — not as races first,
+  but as the ceremony by which the long routes are reopened. A route that
+  carried a rally is a route the whole world knows is drivable again. Trade
+  follows. The event is the *proof*, the way a bridge opening is a proof.
+  Paris–Dakar is the first, because it was the most famous crossing of the
+  hardest ground.
+- **The player's job:** you drive ahead of everything, alone, certifying the
+  route leg by leg. The survey mechanic *is* the job: a stage is open when its
+  roads are DRIVEN. The rally follows you at a distance you never see — you
+  hear it on the radio, days behind, growing.
+- **Why you specifically:** the previous Car Zero's log ends mid-route. Their
+  rig is missing; their last certified stage is where your campaign starts.
+  Recovering their route — and eventually the reason the log stops — is the
+  doled-out thread the campaign reveals leg by leg.
 
-Three reasons this one and not another:
+Why this frame and not another:
 
-**It is true, so it never fights the engine.** Every rough edge in this build
-becomes fiction instead of a bug. A bridge OSM does not know about. A road whose
-fragments disagree about their height. A tunnel that renders as a cliff. A
-village square tagged as a motorway. Today those are defects in a driving
-simulator; under this frame they are *the job*. The engine's failure modes
-become its content, which is the single most valuable property a fiction can
-have.
+**It fuses the three registers instead of choosing.** The rally supplies feel
+(stages, road books, liveries, the Dakar romance, a reason the rig is called a
+RALLY RIG); the survey supplies the verb (certify, which is what the mechanic
+already measures); solarpunk supplies the stakes (reconnection, not conquest —
+Death Stranding's rope, §5). Nothing has to be removed; each part carries the
+weight it is built for.
 
-**It explains the survey exactly.** Why drive a *majority* of a road rather than
-touch it? Because you are verifying it, and a verification you did from one end
-is not a verification. Why does a road only become claimable once its
-surrounding tiles have loaded? Because you cannot certify what you have not
-seen. The mechanic that already exists gets a reason, rather than a reason being
-invented and a mechanic bolted on.
+**It explains every absence as a feature.** No rivals on screen — Car Zero is
+ahead of the field by definition. No clock — certification is not timed, it is
+*true or not*. No crowds — the route is not open yet; that is why you are
+here. The build's silences all become the premise.
 
-**It scales to the whole Earth, which is the thing nobody else has.** A rally
-needs a route; a courier needs an economy; a survey needs only somewhere nobody
-has been yet — and there is always somewhere nobody has been. It makes the
-player's own street a legitimate destination, which is the game's best trick and
-is currently unused.
+**It keeps the existing title.** PARIS – DAKAR stops being a genre reference
+and becomes the campaign's literal subject: reopening that route. Future
+campaigns name themselves: the Panamericana, Cape to Cairo, the Silk Road,
+Route 6 across Iceland's interior. Each is a real historic route, which honours
+the instrument rule — everything in this game is somewhere.
 
-The register is **quietly bureaucratic and slightly absurd**, in the good way:
-you are one rig doing an impossibly large job with perfect equanimity. Closer to
-a lighthouse keeper's log than to a race broadcast.
+**How the story is doled out — diegetically, never cutscenes:**
 
-### The alternatives, and why they lose
+1. **The road book.** Each leg's brief, in the clipped register the missions
+   already use ("TAKE THE PASS TO THE HEADLAND"). Route notes carry the
+   narrator's voice a line at a time.
+2. **The radio.** The rally desk, weather calls, and — rarely — the field
+   itself, arriving somewhere you certified a week ago. The Firewatch
+   mechanism: story delivered *during* traversal, never instead of it.
+3. **The predecessor's log.** Found a page at a time at places their route
+   book names: fuel stops, cols, the far end of a causeway. The Outer Wilds
+   mechanism: the log is also the map of where to go next.
 
-- **Keep the rally.** Needs a clock, a field, and stage times — three systems
-  that do not exist, and whose addition would make the survey vestigial. It also
-  wastes the Earth: a rally cares about a route, not a planet.
-- **Courier / haulage** (the Euro Truck lane). Needs an economy, cargo,
-  contracts, damage, and money. It is a good genre with excellent games already
-  in it, all of which have hand-built worlds precisely *because* a courier loop
-  needs authored density. Drive would compete on their turf with worse detail.
-- **Pure travelogue** (the Flight Simulator lane — no goals, just go). This is
-  the honest fallback and it is what the game is today. It is pleasant and it
-  does not need a campaign at all, which makes it the wrong answer to the
-  question being asked.
+## 5. Prior art — to take from, and to be warned by
 
-## 5. What this means for the campaign
+### Death Stranding (2019) — what it was actually about
 
-The campaign stops being a list of famous roads and becomes **a survey with a
-shape**. Concretely:
+Kojima's stated seed is Kōbō Abe's parable of the first two tools: the **stick**
+(to keep things away) and the **rope** (to hold what matters close). Games, he
+argued, had spent forty years on sticks; Death Stranding is a rope. Concretely:
+a fractured, post-catastrophe America; a courier who walks cargo between
+isolated cities and, settlement by settlement, connects them to a shared
+network. Underneath the surreal apparatus it is about **connection as labour** —
+reconnection of a fragmented polity (it is very much a post-2016 work), the
+dignity of logistics work, grief, and parenthood. The traversal itself is the
+game: terrain, load, balance, route choice — walking made mechanical.
 
-**A drive should exist because of something the engine can only do with the real
-Earth.** The test for admitting a destination: *would this be just as good in a
-game with fifteen hand-built tracks?* If yes, cut it. Stelvio's 48 hairpins are
-a beautiful road and a weak destination — hairpins are the easiest thing in the
-world to author. Badwater Basin at −86 m with the Panamint escarpment on the
-horizon is a strong one, because the elevation, the light and the sightline are
-*measured* and could not be faked as cheaply.
+Three lessons transfer directly, one warning too:
 
-**Group by survey job, not by geography.** A chapter is a claim to be settled,
-not a country. Candidate shapes the current engine already supports:
+- **The fiction was isomorphic to the mechanic.** Deliveries knit the network;
+  the network literally enables help (other players' structures appear). The
+  story and the loop are the same act. Car Zero has this property: certifying
+  the stage *is* opening the route *is* the plot advancing.
+- **Asynchronous solidarity, zero competition.** Other players are present
+  only as helpful traces — bridges, ladders, likes. If drive ever grows a
+  multiplayer surface, this is the shape: the field that follows you could one
+  day be *actual other players' claims*, seen only as roads already DRIVEN.
+- **Terrain as the antagonist** carries a whole game without combat.
+- **The warning:** Kojima buried it all under hours of cutscene. Drive's
+  delivery must stay in the road book and the radio — the game is the drive.
 
-- **the traverse** — one long named road, end to end, claimed. The survey
-  mechanic in its purest form.
-- **the contradiction** — the map says a route connects; find out whether it
-  does. Resolvable either way, and a dead end is a *result*, not a failure.
-- **the sightline** — get somewhere a named summit is visible from, and confirm
-  the height. Uses the horizon model, which nothing currently does.
-- **the extreme** — the lowest road, the highest pass, the northernmost tarmac.
-  These are facts about the real Earth, so they are checkable and they are
-  *someone's* answer to argue with.
-- **the ordinary** — survey a town's street grid to completion. Unglamorous, and
-  the one that most needs the whole planet, because the point is that it works
-  anywhere including where the player lives.
+### The rest of the field
 
-**Sixteen scattered spawns is not a campaign, it is a bookmark list.** The
-current set should mostly survive as *bookmarks* (they are good places to start
-a drive) but the campaign proper should be a smaller, ordered spine with reasons.
+- **Outer Wilds** — the truest survey game ever made: progress is *only
+  knowledge*, structured by a ship's log, run by a campfire-and-banjo space
+  program that is the most solarpunk institution in games. Its lesson is §4's
+  log mechanism, and the future mission grammar where completion is an
+  *observation* rather than an arrival.
+- **Sable** — open-world bike traversal, no combat, Moebius flats; the nearest
+  aesthetic cousin. Its critique: frictionless to the point of weightlessness,
+  and its tasks are fetch quests wearing robes. Drive's answer is physics and
+  truth — the terrain pushes back and the numbers are real.
+- **Season: A Letter to the Future** — a cyclist documents a valley before it
+  is lost; the exact elegiac register and almost the exact premise. Its
+  critique is the sharpest one for drive: **documentation had no mechanical
+  consequence** — the journal is a scrapbook the game never reads. Drive's
+  survey *latches state the world responds to*. Keep that difference sacred.
+- **Pacific Drive** — the car as maintained companion and instrument panel
+  intimacy, in a weird exclusion zone. Take the relationship with the rig;
+  note that its zone is authored, and drive's is the Earth.
+- **The Long Dark** — the quiet apocalypse and the indifferent landscape read
+  through instruments (temperature, wind). The closest register to §3.
+- **FUEL (2009)** — the cautionary tale. A 14,000 km² world derived from real
+  data, and nothing that needed it: big, empty, pointless. That is drive's
+  failure mode if the campaign is ever content that "does not need the engine."
+- **Snowrunner** — rally-feel truth: terrain difficulty as the entire opponent,
+  logistics as satisfaction. No fiction to speak of; drive can have both.
+- **Breath of the Wild** — the post-calamity pastoral and map-reveal-as-reward.
+  Its towers are the ancestor of every fog-of-war loop including drive's.
+- **NieR: Automata** — surveying for an authority whose purpose unravels. If
+  the campaign's mystery ever needs teeth: *why* did the previous Car Zero stop
+  filing?
+- **On paper:** Becky Chambers' *Monk & Robot* (the post-transition solarpunk
+  register — gentle, purposeful, quietly asking what the job is for), Le Guin's
+  *Always Coming Home* (a future society rendered as field notes — the survey
+  as literature), Miyazaki's *Nausicaä* (ecology after catastrophe without
+  despair), Stålenhag (§3).
+- **The real practice**, which is the trump card: OpenStreetMap surveying
+  itself, StreetComplete's quest loop, geocaching, and the **Degree Confluence
+  Project** — humans who travel to integer lat/lon intersections purely to
+  photograph and log them. Ground-truthing is not an invented fiction; it is an
+  existing human devotion. Drive is its game.
 
-## 6. What this means for missions
+## 6. What this means for the campaign
 
-The mission grammar today is `giver → dest`, with `within` metres and an
-optional `via: { name, atLeast }`. Chapman's Run uses all of it, and the `via`
-count is the interesting part: it is what turns "arrive at the headland" into
-"take the pass".
+**A campaign is a route, and a route is legs.** Not sixteen scattered spawns —
+an ordered spine with a direction of travel. PARIS – DAKAR: Trocadéro south,
+legs sized to a session, each leg a stage to certify. The current sixteen
+destinations mostly survive as *bookmarks* (good places to freely drive); the
+handful on the route become stages.
 
-That grammar already expresses **the traverse**, and nothing else. To carry the
-niche, it needs to be able to say a few more things — in roughly this order of
-value:
+**A stage is a survey job with a road book page.** The admission test for a
+stage stands from the first draft, sharpened: *would this stage be just as
+good in a game with fifteen hand-built tracks?* If yes, it has no business in
+the campaign. The engine's stages are the ones only the real Earth can supply —
+a real col, a real causeway, a road the old map draws and the ground disputes.
 
-1. **A claim, not a destination.** "Survey `<road>` to completion" — the
-   existing `via.atLeast` almost does this; the missing piece is a mission whose
-   objective *is* the claim, with no `dest` at all.
-2. **A verifiable fact.** "Report the elevation at the col", "confirm this
-   connects". Needs a mission that completes on an *observation* rather than a
-   position — and the game already computes elevations, headings, distances and
-   summit angles it could ask about.
-3. **A negative result.** A mission that can be honestly discharged with *no,
-   the map is wrong* is the one that makes the fiction real rather than
-   decorative. Nothing in the grammar can currently express failure-as-success.
-4. **A region rather than a point.** "Survey any six roads within this bbox" —
-   the unit that makes a town legible as a job.
+**Mission grammar, in order of need:**
 
-And one structural gap that blocks all of it: **missions do not persist.**
-`missionPhase` is a module variable, so finishing a job survives until reload
-and no further. Any campaign with a spine needs that fixed first; the sync
-built in `docs/drive-persistence.md` has the slot for it (`sk = MISSION#<id>`)
-and does not use it yet.
+1. **The claim as objective** — "certify `<road>`": a mission whose completion
+   *is* the DRIVEN latch, no `dest`. (Nearly expressible today; `via.atLeast`
+   is its prototype.)
+2. **The observation** — completion on a reading, not a position: report the
+   elevation of the col, confirm the crossing exists. The game already computes
+   everything it would ask about.
+3. **The negative result** — a mission honestly discharged with *the map is
+   wrong*. The moment the game can say that, the fiction is real. (And the
+   engine's data defects become content, not bugs.)
+4. **The region** — "certify six roads inside this box": how a town becomes a
+   job.
+
+**The structural gap is unchanged: missions do not persist.**
+`missionPhase` is a module variable; a campaign with legs needs completed legs
+to stay completed. The sync shipped in `docs/drive-persistence.md` reserved the
+slot (`sk = MISSION#<id>`) and nothing writes it yet. This is the first
+engineering task of the campaign work, before any authoring.
 
 ## 7. What the niche rules out
 
-A niche you cannot say no with is not a niche. Under this one:
+A niche you cannot say no with is not a niche. Under Car Zero:
 
-- **No lap times, no rival, no podium.** If a stopwatch would improve it, it
-  belongs in a different game.
-- **No fictional places.** Everything is somewhere, and the somewhere is real
-  and checkable. The moment one destination is invented, every other one's
-  credibility drops to its level.
-- **No collectibles that are not roads.** The unit of progress is a claimed
-  road. Scattering pickups would be a second, weaker progression competing with
-  the good one.
-- **No hidden failure.** If the terrain has not loaded, the survey says so; if
-  the road cannot be claimed yet, it says why. The instrument does not lie —
-  including about itself.
-- **No cosiness by default.** Warm where the real world happens to be warm. The
-  landscape's indifference is the register.
+- **No rival on screen, ever.** The rally is real and always behind you. The
+  moment another car is beside you, this is a racing game and the survey is
+  vestigial.
+- **No stopwatch on objectives.** Certification is true or not-yet, never fast.
+- **No invented places.** Every destination is somewhere, checkable, on Earth.
+  The route book's credibility is the game's.
+- **No collectibles that are not roads** (the predecessor's log pages live *at*
+  places the route book names — they are reasons to go somewhere real, not a
+  second currency).
+- **No hidden failure.** The instrument does not lie, including about itself.
+- **No desperation.** The transition is behind the world. Melancholy is
+  allowed; the missing Car Zero earns it. Grimdark is not.
 
-## 8. The one thing to decide
+## 8. Decided
 
-Everything above follows from §4, which is the owner's call and not a technical
-one: **is drive a survey, or is it a rally?**
-
-The build says survey; the title says rally. Whichever way it goes, the other
-should be removed rather than left to coexist — the campaign cannot be authored
-against two fictions at once, and the sixteen-famous-roads list is what
-authoring against neither produces.
+Rally feel · survey mechanic · solarpunk licence — fused as **Car Zero**: the
+player certifies the route, and the rally the world can see follows behind.
+The campaign work now has an order: persist missions first, then author the
+Paris–Dakar spine as stages with road-book pages, then grow the grammar
+(claim-as-objective → observation → negative result → region).
