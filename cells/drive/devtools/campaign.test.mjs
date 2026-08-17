@@ -37,7 +37,7 @@ const check = (name, cond, saw) => {
 const call = (p) => handler({ rawPath: p, requestContext: { http: { method: 'GET' } } });
 
 // ── the route ──
-const res = await call('/~/campaign/4');
+const res = await call('/~/campaign/5');
 check('current version served', res.statusCode === 200, res.statusCode);
 check('gzipped like every other object in the namespace',
   res.headers['content-encoding'] === 'gzip', res.headers);
@@ -59,7 +59,7 @@ execSync(`npx esbuild cells/drive/campaigns/dakar.ts --bundle --platform=node --
 const { CAMPAIGN: authored } = await import(campOut);
 check('served copy matches the file on disk',
   JSON.stringify(served.drives) === JSON.stringify(authored.drives), null);
-check('the file declares the version the route serves', authored.v === 4, authored.v);
+check('the file declares the version the route serves', authored.v === 5, authored.v);
 
 // ── the authored data ──
 const seen = new Set();

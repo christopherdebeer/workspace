@@ -17530,7 +17530,7 @@ interface Drive { name: string; sub: string; lat: number; lon: number; h: number
  * fails. Only a first-ever visit that also fails arrives with no drives, and
  * that still plays — spots, the chart and a random spawn are all local.
  */
-const CAMPAIGN_V = 4;
+const CAMPAIGN_V = 5;
 const CAMPAIGN_KEY = `drive.campaign.v${CAMPAIGN_V}`;
 let DRIVES: Drive[] = [];
 /** The Service's fixed points, from the campaign. In-game: just stations. */
