@@ -11654,7 +11654,12 @@ function stepReal(dt: number): boolean {
     .map((p) => ({ p, d: Math.hypot(p.x - state.x, p.z - state.z) }))
     .sort((a, b) => a.d - b.d);
   return {
-    drawn: poiDraw.map((p) => ({ t: p.t, edge: p.edge, rng: p.rng, hidden: p.hid, world: p.w })),
+    drawn: poiDraw.map((p) => ({ t: p.t, k: p.kind, edge: p.edge, rim: !!p.rim, rng: p.rng, hidden: p.hid,
+      world: p.w, d: Math.round(p.d), sx: Math.round(p.x), sy: Math.round(p.y) })),
+    // Who the pins are measured from, so a probe can check the one law that
+    // matters on the chart: a drawn world point stands its labelled distance
+    // from the viewer — a clamped stand-off fails this by kilometres.
+    view: [+viewX().toFixed(1), +viewZ().toFixed(1)],
     nearest: sorted.slice(0, 3).map((e) => +e.d.toFixed(1)),
     to: sorted[0] ? { x: sorted[0].p.x, z: sorted[0].p.z, name: sorted[0].p.name } : null,
     range: POI_RANGE,
@@ -14979,24 +14984,39 @@ function updatePois(): void {
   );
   camera.getWorldDirection(camFwd);
   poiDraw = [];
+  // THE COCKPIT TELLS BEARING; THE CHART TELLS POSITION. In chase and cab a
+  // pin past 900m clamps to 900m on its true bearing — everything beyond that
+  // projects to the horizon anyway, and the label carries the real distance.
+  // On the chart that clamp is a LIE about position: a top frame at z24 spans
+  // kilometres, so a pin glued 900m ahead reads as a place a kilometre away —
+  // and it RIDES with the truck. Measured on the line: PD-03 held station
+  // "900m south" across six real kilometres of driving at it. The chart
+  // projects the TRUE point, and what falls off the frame chips on the rim.
+  const top = camMode === 'top';
   for (let i = 0; i < near.length; i++) {
     const { p, d } = near[i];
     const dx = p.x - vx, dz = p.z - vz;
-    const dc = Math.min(d, 900); // beyond ~900m: pin to the horizon on its bearing
+    const dc = top ? d : Math.min(d, 900);
     const wx = vx + (dx / d) * dc, wz = vz + (dz / d) * dc;
     poiVec.set(wx, groundAt(wx, wz) + 2, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
     const rng = d < POI_RANGE;
     // Occluded by the ground, or by a building tall enough to matter. Both are
-    // "you cannot see this from here", and the label should say so.
-    const hid = sightBlockedCached(p.name, poiVec.x, poiVec.y, poiVec.z, i)
-      || wallHitAlong(camera.position.x, camera.position.z, wx, wz, camera.position.y) < 0.98;
+    // "you cannot see this from here", and the label should say so. Looking
+    // straight down neither claim exists — the chart is not a sight line —
+    // and skipping the march saves ~70 heightfield samples per pin.
+    const hid = !top && (sightBlockedCached(p.name, poiVec.x, poiVec.y, poiVec.z, i)
+      || wallHitAlong(camera.position.x, camera.position.z, wx, wz, camera.position.y) < 0.98);
     const label = `${p.name.toUpperCase()} ${fmtDist(d)}`;
     if (poiView.z < -1) {
       poiVec.project(camera);
-      if (Math.abs(poiVec.x) <= 0.92) {
+      // The chart also gates on Y: the cockpit's vertical clamp below slides
+      // an off-frame pin back into view, which is one more way of drawing a
+      // place somewhere it is not. Off the chart's frame means the rim chip.
+      if (Math.abs(poiVec.x) <= 0.92 && (!top || Math.abs(poiVec.y) <= 0.94)) {
         const sx = (poiVec.x * 0.5 + 0.5) * innerWidth;
-        const sy = clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.16, innerHeight * 0.86);
+        const sy = top ? (-poiVec.y * 0.5 + 0.5) * innerHeight
+          : clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.16, innerHeight * 0.86);
         // The beam top: a real column standing on the place, projected the
         // same way the checkpoint beams project theirs — a few pixels at
         // distance, towering as you arrive.
@@ -15017,6 +15037,35 @@ function updatePois(): void {
     // pinned yourself, and anything close enough to act on. A distant park
     // behind your head is not information, it is noise on the sightline.
     if (!p.pinned && p.kind !== 'mission' && d >= 600) continue;
+    if (top) {
+      // THE RIM CHIP. The chart's off-frame destination sits ON the border at
+      // its true bearing, so the border position itself is the pointer. The
+      // bearing is measured in SCREEN space — project the view centre and a
+      // short step toward the place through the live camera — because doing
+      // it in world space would mean re-deriving map rotation and tilt here
+      // and disagreeing with the renderer by one frame forever.
+      const step = Math.min(d, 120);
+      poiVec.set(vx, groundAt(vx, vz) + 2, vz).project(camera);
+      const ax = (poiVec.x * 0.5 + 0.5) * innerWidth, ay = (-poiVec.y * 0.5 + 0.5) * innerHeight;
+      const ex = vx + (dx / d) * step, ez = vz + (dz / d) * step;
+      poiVec.set(ex, groundAt(ex, ez) + 2, ez).project(camera);
+      let ux = (poiVec.x * 0.5 + 0.5) * innerWidth - ax;
+      let uy = (-poiVec.y * 0.5 + 0.5) * innerHeight - ay;
+      const um = Math.hypot(ux, uy) || 1; ux /= um; uy /= um;
+      // Walk from the centre to the frame rectangle, inset enough for a label.
+      const rx0 = innerWidth * 0.07, rx1 = innerWidth * 0.93;
+      const ry0 = innerHeight * 0.12, ry1 = innerHeight * 0.88;
+      const tX = ux > 0 ? (rx1 - ax) / ux : ux < 0 ? (rx0 - ax) / ux : Infinity;
+      const tY = uy > 0 ? (ry1 - ay) / uy : uy < 0 ? (ry0 - ay) / uy : Infinity;
+      const t = Math.max(0, Math.min(tX, tY));
+      poiDraw.push({
+        x: ax + ux * t, y: ay + uy * t,
+        t: label, c: POI_COLORS[p.kind], edge: ux > 0 ? 1 : -1, rim: true, rng, hid: false,
+        name: p.name, kind: p.kind, pinned: !!p.pinned, d, tx: 0, ty: 0,
+        w: [p.x, p.z, groundAt(p.x, p.z) + 2],
+      });
+      continue;
+    }
     const right = camFwd.x * dz - camFwd.z * dx > 0;
     poiDraw.push({
       x: 0, y: innerHeight * (0.34 + i * 0.055),
@@ -15026,7 +15075,12 @@ function updatePois(): void {
       name: p.name, kind: p.kind, pinned: !!p.pinned, d, tx: 0, ty: 0,
     });
   }
-  updatePeaks(vx, vz);
+  // A summit marker is a SKYLINE instrument — ranked by apparent size, seated
+  // at the angle it subtends, clamped to a 900m stand-off. Looking straight
+  // down none of those ideas exist, and running them anyway drew labels at
+  // stand-off points that ride with the truck. The chart already names peaks
+  // honestly through the ovPlaces layer, rank-gated by zoom.
+  if (!top) updatePeaks(vx, vz);
   updateCps();
 }
 /**
@@ -18486,6 +18540,9 @@ const CARD8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
 let placeLine = '';
 // POI pins, filled by updatePois and drawn in the pixel font.
 interface PoiDraw { x: number; y: number; t: string; c: string; edge: 0 | -1 | 1; rng: boolean; hid: boolean;
+  /** Chart rim chip: (x,y) is a real point on the frame border at the true
+   *  screen bearing — draw it THERE, not railed to a side. */
+  rim?: boolean;
   /** Which POI this is (the `pois` key), what it is, and how far — the draw
    *  pass scales beams by distance and the tap handler pins by name. */
   name: string; kind: Poi['kind']; pinned: boolean; d: number;
@@ -18911,10 +18968,19 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const iw = iconCh ? 7 : 0;
     const w = textPW(label) + 4 + iw;
     const y = clamp(Math.round(p.y / hudS), 20, HH - 30);
-    const x = p.edge > 0 ? HW - w - 3 : 3;
+    // A chart rim chip is drawn AT its border point — the position carries the
+    // bearing — with the marker diamond on the point and the label kept on
+    // the glass beside it. A cockpit chip rails to its side as ever.
+    const x = p.rim ? clamp(Math.round(p.x / hudS) - Math.round(w / 2), 2, HW - w - 2)
+      : p.edge > 0 ? HW - w - 3 : 3;
+    if (p.rim) {
+      const mx = clamp(Math.round(p.x / hudS), 5, HW - 5);
+      hctx.fillStyle = UI.ink; diamond(mx, y - 6, 3);
+      hctx.fillStyle = p.c; diamondOutline(mx, y - 6, 2);
+    }
     if (iconCh) hudIconEdge(iconCh, x + 1, y + 1, p.c, 5);
     textEdgeP(label, x + 2 + iw, y + 2, p.rng || p.pinned ? UI.gold : p.c);
-    poiRects.push({ x: x - 3, y: y - 4, w: w + 8, h: 14, name: p.name, kind: p.kind });
+    poiRects.push({ x: x - 3, y: y - 10, w: w + 8, h: 20, name: p.name, kind: p.kind });
   }
   // ── the chart's place names ──
   // The wide view stopped being landform when the overview shell arrived; the
