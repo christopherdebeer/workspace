@@ -8342,22 +8342,34 @@ function stepRuinLod(now: number): void {
 // even the garden/park tints are sub-pixel and go too. Terrain, roads,
 // water and the pins — the map — stay at every zoom. Chase and drone views
 // are untouched: their frustums are local by construction.
-const SHED_WORLD_Z = 24, SHED_DRAPE_Z = 40;
+const SHED_WORLD_Z = 24;
 /** Every building batch mesh, so the shed can reach them. */
 const bldBatchMeshes: THREE.Mesh[] = [];
-let shedWorld = false, shedDrapes = false;
+let shedWorld = false;
+let shedZoomRef = -1;
+/** Map generalisation for an area tint: visible while its footprint is
+ *  bigger than a couple of chart pixels (metres-per-pixel ~ the zoom).
+ *  Water always shows — a lake is the map at every scale. */
+function drapeVisible(d: THREE.Mesh, z: number): boolean {
+  if (d.userData.drape === 'water') return true;
+  const bb = d.userData.bb as [number, number, number, number] | undefined;
+  return !bb || Math.max(bb[2] - bb[0], bb[3] - bb[1]) > z * 2.5;
+}
 function stepZoomShed(): void {
   const z = camMode === 'top' ? zoomCur : 1;
-  const w = z >= SHED_WORLD_Z, dr = z >= SHED_DRAPE_Z;
+  const w = z >= SHED_WORLD_Z;
   if (w !== shedWorld) {
     shedWorld = w;
     for (const m of bldBatchMeshes) m.visible = !w;
     for (const k of Object.keys(vegMeshes) as VegKind[]) vegMeshes[k].visible = !w;
     trunks.visible = !w;
   }
-  if (dr !== shedDrapes) {
-    shedDrapes = dr;
-    for (const d of drapes) d.visible = !dr;
+  // The tints generalise by SIZE, not by class: a garden is gone by z=8, a
+  // forest holds to z~800, a lake never goes. Swept only when the zoom
+  // moves materially.
+  if (Math.abs(z - shedZoomRef) / Math.max(1, Math.min(z, shedZoomRef)) > 0.2 || shedZoomRef < 0) {
+    shedZoomRef = z;
+    for (const d of drapes) d.visible = drapeVisible(d, z);
   }
 }
 function building(pts: Array<[number, number]>, id: number, levels: number): void {
@@ -8727,7 +8739,8 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
       : Array.from({ length: posA.count }, (_, i) => i);
     conformDrape(mesh);
     drapes.push(mesh);
-    mesh.visible = !shedDrapes;   // born under the chart's shed, born hidden
+    // Born at whatever the chart can currently show — see drapeVisible.
+    mesh.visible = drapeVisible(mesh, camMode === 'top' ? zoomCur : 1);
   }
   worldGroup.add(mesh);
   mapPoly(pts, collide === 'solid' ? 'rgba(70,66,58,0.9)' : collide === 'water' ? '#1d3a55' : 'rgba(34,54,32,0.9)');
