@@ -47,12 +47,17 @@ const serveCampaign = async (page) => {
   });
 };
 
-// A run already in progress: 12.3km on the clock, saved at this very spot.
+// A run already in progress: 12.3km on the clock, saved at this very spot —
+// and a SIGNED-IN ranger, because a docket names its ranger: the stored sync
+// token is what lets the flag through. (The token is junk; the first sync
+// fails quietly and the game does not care — the gate is optimistic by
+// design, so an expired token never locks a ranger out at the roadside.)
 const d = await openDrive({
   spot: 'lat=-34.08716&lon=18.42083&h=290&cam=top&wx=clear&line=1',
   tag: 'line', settle: 9000, route: serveCampaign,
   init: `localStorage.setItem('drive.line.v1', JSON.stringify({
-    lat: -34.08716, lon: 18.42083, h: 290, odo: 12300, begunAt: 1700000000000, at: 1700000000000 }))`,
+    lat: -34.08716, lon: 18.42083, h: 290, odo: 12300, begunAt: 1700000000000, at: 1700000000000 }));
+    localStorage.setItem('drive.sync.token', 'tok_test');`,
 });
 
 // ── the mode ──
@@ -122,11 +127,16 @@ const back = await d.page.evaluate(() => ({ ln: window.__line(), url: location.s
 check('a reload stays on the line — the flag rides the URL', back.ln.on === true, back.url);
 check('…with the run\'s record intact', back.ln.odo >= 12300 && back.ln.leg?.id === 'line-01', back.ln);
 
-// ── free drive untouched ──
+// ── free drive untouched — and the gate ──
+// The SAME boot, the SAME flag, no token: signed out, `&line=1` is refused
+// and this is plain free drive. One boot proves both halves — the gate, and
+// that what the gate falls back to still travels.
 const f = await openDrive({
-  spot: 'lat=-34.08716&lon=18.42083&h=290&cam=top&wx=clear',
+  spot: 'lat=-34.08716&lon=18.42083&h=290&cam=top&wx=clear&line=1',
   tag: 'free', settle: 9000, route: serveCampaign,
 });
+check('signed out, the flag is refused — a docket names its ranger',
+  await f.page.evaluate(() => window.__line().on) === false, null);
 const fbefore = await f.page.evaluate(() => ({ x: window.__drive.x, z: window.__drive.z }));
 await dbltap(f.page);
 await f.page.waitForTimeout(800);

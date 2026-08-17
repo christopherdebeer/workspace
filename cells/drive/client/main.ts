@@ -9829,6 +9829,11 @@ async function loadPeakTile(x: number, y: number): Promise<void> {
       // delete landmarks. Same name at the same spot IS a duplicate.
       const k = `${p.n}@${p.la.toFixed(2)},${p.lo.toFixed(2)}`;
       if (peaks.has(k)) continue;
+      // A summit under a Cover is not on anyone's skyline any more — the
+      // shell is. Montmartre's marker floating against the Paris dome was a
+      // label on something you cannot see; the Cover itself is the landmark
+      // now, and updatePeaks lists it as one.
+      if (underCover(p.la, p.lo, 1)) continue;
       const [px, pz] = toLocal(p.la, p.lo);
       peaks.set(k, { name: p.n, x: px, z: pz, ele: p.e });
     }
@@ -14724,8 +14729,20 @@ function updatePois(): void {
  */
 const PEAK_SHOW = 3;
 function updatePeaks(vx: number, vz: number): void {
-  if (!peaks.size) return;
+  if (!peaks.size && !coverBuilt.size) return;
   const eyeY = camera.position.y;
+  // THE COVERS ARE THE CAMPAIGN'S PEAKS. A sealed city's shell is the biggest
+  // single thing on any horizon that holds one — it ranks, labels and draws
+  // exactly as a summit does, under its campaign name, with its apex for an
+  // elevation. Only ones that are BUILT: an unbuilt Cover is out of visual
+  // range by construction.
+  const cands: Peak[] = [...peaks.values()];
+  for (const c of COVERS) {
+    const g = coverBuilt.get(c.id);
+    if (!g) continue;
+    cands.push({ name: c.name, x: g.position.x, z: g.position.z,
+      ele: g.position.y + baseElev + c.r * 0.42 });
+  }
   // THE FRUSTUM FIRST, THE RANKING SECOND — and that order is the whole
   // lesson. Ranking first and drawing only the survivors picked the three
   // biggest summits ANYWHERE AROUND you and then threw away any that were not
@@ -14733,19 +14750,23 @@ function updatePeaks(vx: number, vz: number): void {
   // meant the common answer was nothing at all: measured live at Big Sur and
   // at Chamonix, both ringed by mountains, with not one marker drawn on any
   // heading. What belongs on the glass is the biggest summits ON the glass.
-  const seen: Array<{ p: Peak; d: number; over: boolean; app: number;
+  const seen: Array<{ p: Peak; d: number; app: number;
     sx: number; sy: number; wx: number; wz: number; wy: number }> = [];
-  for (const p of peaks.values()) {
+  for (const p of cands) {
     const l = peakLook(p, vx, vz, eyeY);
     // Inside the fine world its own terrain is the mountain — a pin on a
     // summit you are standing on is noise, and the ridge is right there.
     if (l.d < 2500) continue;
+    // BELOW THE HORIZON IS NOT A VIEW. These markers used to survive as
+    // ghosted bearings — Mount Whitney from the Big Sur coast, 330km off and
+    // 8.5km under the curve — but a label on something the earth is in front
+    // of is furniture, not information. A summit is drawn when it can be
+    // seen, which is the same law the frustum check below already applies
+    // sideways.
+    if (l.rise <= 0) continue;
     const dx = p.x - vx, dz = p.z - vz;
     const dc = Math.min(l.d, 900);                   // the pin's own stand-off
     const wx = vx + (dx / l.d) * dc, wz = vz + (dz / l.d) * dc;
-    // Below the horizon: it is a bearing, not a view. Held just above the eye
-    // line so the marker stays on screen, and flagged so the draw pass ghosts
-    // it — the same claim an occluded POI makes.
     const wy = eyeY + Math.max(l.app, 0.004) * dc;
     poiVec.set(wx, wy, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
@@ -14761,7 +14782,7 @@ function updatePeaks(vx: number, vz: number): void {
     // than sliding it along the rim.
     if (Math.abs(poiVec.x) > 0.92 || Math.abs(poiVec.y) > 0.94) continue;
     seen.push({
-      p, d: l.d, over: l.rise <= 0, app: l.app,
+      p, d: l.d, app: l.app,
       sx: (poiVec.x * 0.5 + 0.5) * innerWidth,
       sy: (-poiVec.y * 0.5 + 0.5) * innerHeight,
       wx, wz, wy,
@@ -14775,7 +14796,7 @@ function updatePeaks(vx: number, vz: number): void {
       x: e.sx, y: e.sy,
       tx: 0, ty: 0,                                  // no beam: see the draw pass
       t: `${e.p.name.toUpperCase()} ${Math.round(e.p.ele)}M ${fmtDist(e.d)}`,
-      c: POI_COLORS.peak, edge: 0, rng: false, hid: e.over,
+      c: POI_COLORS.peak, edge: 0, rng: false, hid: false,
       name: e.p.name, kind: 'peak', pinned: false, d: e.d,
       w: [e.wx, e.wz, e.wy],
     });
@@ -17596,6 +17617,10 @@ function stepLine(now: number): void {
 /** Begin, or continue, from the menu. Navigation, like every drive start —
  *  the world streams from scratch around the spawn either way. */
 function lineGo(): void {
+  // No name, no docket: the one CTA becomes the sign-in. The player comes
+  // back signed in, on the URL they left, and takes the docket with a second
+  // tap — free drive never asks for any of this.
+  if (!sync.signedIn()) { void sync.signIn(); return; }
   const st = lineLoad();
   if (st) {
     location.href = `${location.pathname}?lat=${st.lat}&lon=${st.lon}&h=${st.h}&cam=chase&line=1`;
@@ -19190,12 +19215,14 @@ const menu = createMenu({
     const woken = pd.filter((x) => marks.has('s', x.id)).length;
     const done = LEGS.filter((l) => marks.has('m', l.id)).length;
     const dist = lineOn ? lineOdo : st?.odo ?? 0;
+    const auth = sync.signedIn();
     let open = false;
     return {
       on: lineOn,
       started,
       title: 'PARIS – DAKAR',
-      cta: !started ? 'BEGIN · THE PARIS APERTURE'
+      cta: !auth ? 'SIGN IN · A DOCKET NAMES ITS RANGER'
+        : !started ? 'BEGIN · THE PARIS APERTURE'
         : `CONTINUE · ${fmtKm(dist)} ON THE LINE`,
       rows: [
         ['ON THE LINE', fmtKm(dist)],
@@ -19208,9 +19235,11 @@ const menu = createMenu({
         const state = isDone ? 'DONE' as const : open ? 'AHEAD' as const : (open = true, 'OPEN' as const);
         return { title: l.title, brief: l.brief, state };
       }),
-      note: lineOn
-        ? 'TRAVEL IS OFF ON A RUN. STARTING ANY DRIVE LEAVES THE LINE; THE RUN KEEPS.'
-        : 'THE RUN RESUMES TO THE METRE. FREE DRIVE IS ALWAYS THERE — LEAVING COSTS NOTHING.',
+      note: !auth
+        ? 'THE LINE IS A SERVICE DOCKET AND ITS RECORD FOLLOWS YOU — SIGN IN TO TAKE IT UP. FREE DRIVE NEEDS NO ACCOUNT.'
+        : lineOn
+          ? 'TRAVEL IS OFF ON A RUN. STARTING ANY DRIVE LEAVES THE LINE; THE RUN KEEPS.'
+          : 'THE RUN RESUMES TO THE METRE. FREE DRIVE IS ALWAYS THERE — LEAVING COSTS NOTHING.',
     };
   },
   lineGo: () => lineGo(),
@@ -19367,8 +19396,14 @@ if (timeFromUrl >= 0) {
   // boot that is about to pull terrain, so it costs nothing anyone can see.
   await loadCampaign();
   initStations();
-  // THE LINE resumes off the URL like everything else about a drive.
-  if (q.get('line') === '1') {
+  // THE LINE resumes off the URL like everything else about a drive — but a
+  // docket names its ranger: campaign progress is the kind a player would
+  // grieve, so the mode asks for the durable copy. Signed out, the flag is
+  // refused and this boot is plain free drive (writeUrl drops it). The check
+  // is optimistic — a stored token, or a sign-in finishing on this very load —
+  // so an expired token still boots the run and is found out on the first
+  // sync rather than locking a ranger out at the roadside.
+  if (q.get('line') === '1' && sync.signedIn()) {
     lineOn = true;
     const st = lineLoad();
     lineOdo = st?.odo ?? 0;

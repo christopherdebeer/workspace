@@ -127,6 +127,13 @@ export interface Sync {
   status(): SyncStatus;
   /** Is this load carrying an authorization code back from the apex? */
   returning(): boolean;
+  /** Signed in, as far as this boot can tell WITHOUT the network: a stored
+   *  token, or a sign-in finishing on this very load. Optimistic — a stale
+   *  token still answers true here and is found out on the first sync — which
+   *  is the right bias for anything gated on it: the gate opens, the game
+   *  plays, and the player is asked to sign in again rather than locked out
+   *  offline. */
+  signedIn(): boolean;
   signIn(): Promise<void>;
   signOut(): void;
   /** Finish a sign-in if one is in flight, then mirror once. Safe to call on
@@ -290,6 +297,7 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
   return {
     status: (): SyncStatus => ({ phase, user, at, note, roads }),
     returning: (): boolean => !!returned,
+    signedIn: (): boolean => !!token || !!returned,
     signIn,
     signOut(): void {
       token = null; user = null; at = 0;

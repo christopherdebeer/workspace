@@ -17,6 +17,15 @@ import { openDrive, report } from './harness.mjs';
 const FIXTURE = [
   ['Junipero Serra Peak', 36.1447, -121.4225, 1787],
   ['Cone Peak', 36.0505, -121.5085, 1571],
+  // The one summit that is dead ahead facing east AND above the horizon: an
+  // invented ridge 45km out. (The real Santa Lucia summits sit 30-50deg off
+  // the east axis — outside a portrait phone's ~28deg of field — so the
+  // in-frame duty falls to this one.)
+  ['East Ridge', 36.3745, -121.40, 1600],
+  // Whitney is 330km east and ~8.5km under the earth's curve from this coast.
+  // It is dead ahead too, and it used to draw as a ghosted bearing; now it is
+  // the negative control — a label on something the earth is in front of is
+  // not a view.
   ['Mount Whitney', 36.5785, -118.2923, 4421],
   // Two invented giants due NORTH and SOUTH — out of frame while facing east,
   // and steep enough (about 2.9deg) to outrank everything that IS in frame.
@@ -48,10 +57,12 @@ const check = (name, cond, saw) => {
 // Facing the range (east): the near summits should be on screen.
 const facing = await shown(90);
 check('facing the range, summits are drawn', facing.length > 0, facing);
-// The point of the ordering fix: the in-frame summit is outranked by two
+// The point of the ordering fix: the in-frame summits are outranked by two
 // bigger ones off the sides, and must be drawn anyway.
 check('an in-frame summit is not crowded out by bigger ones off-screen',
-  facing.some((p) => /WHITNEY/.test(p.t)), facing);
+  facing.some((p) => /EAST RIDGE/.test(p.t)), facing);
+check('a summit below the horizon is not drawn at all — the earth is in front of it',
+  !facing.some((p) => /WHITNEY/.test(p.t)), facing);
 check('the off-screen giants are nowhere on the HUD',
   !facing.some((p) => /SENTINEL/.test(p.t)), facing);
 check('…and every one of them is IN FRAME, not on the rim',
