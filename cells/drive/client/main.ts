@@ -3925,6 +3925,28 @@ function mapPoly(pts: Array<[number, number]>, color: string): void {
   pts.forEach(([x, z], i) => { const [px, pz] = mapPt(x, z); i ? mapCtx.lineTo(px, pz) : mapCtx.moveTo(px, pz); });
   mapCtx.closePath(); mapCtx.fill();
 }
+// ── the chart's line-mode gate ─────────────────────────────────────
+// ON THE LINE the chart shows what the survey has RECORDED, not what the
+// stream has seen: a road draws onto the map layer only once it carries at
+// least one collected checkpoint. The physical road builds regardless — it is
+// there, you can drive it — it just is not on the map, because nobody has
+// surveyed it yet. Segments of unsurveyed named roads are HELD here, keyed by
+// name (the chart spans a few kilometres, so a same-name collision on one
+// chart is the same road), and flushed the moment `stepSurvey` lands a first
+// capture — or a sync merge brings one home from another device. Unnamed ways
+// have no survey identity and stay off the campaign chart entirely; rivers,
+// water and footprints are world, not survey, and are never gated.
+const chartHeld = new Map<string, { lat: number; lon: number; segs: Array<[number, number, number, number, number, string]> }>();
+function chartFlush(name: string): void {
+  const h = chartHeld.get(name);
+  if (!h) return;
+  chartHeld.delete(name);
+  for (const [ax, az, bx, bz, w, c] of h.segs) mapSeg(ax, az, bx, bz, w, c);
+}
+/** After a sync merge: flush any held road the durable copy says is surveyed. */
+function chartRecheck(): void {
+  for (const [name, h] of [...chartHeld]) if (surveyStore.seen(name, h.lat, h.lon)) chartFlush(name);
+}
 
 // ── collision & surface grids (24m cells) ──────────────────────────
 // The three rungs of the surface ladder, as qualities. Declared here because
@@ -5628,6 +5650,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // hanging in the sky over the valley. Photographed on Cabrillo Highway at
   // Big Sur: two of them, a river and a trail, arcing over the ridge.
   for (const [px, pz] of dense) if (!hasHeight(px, pz)) { unbuilt++; return; }
+  // The campaign chart's verdict on this fragment, decided once (see
+  // chartHeld): on the line an unsurveyed road builds but does not chart.
+  let chartOn = true;
+  if (lineOn && name) {
+    const [cla, clo] = localToLatLon(dense[0][0], dense[0][1]);
+    chartOn = surveyStore.seen(name, cla, clo);
+    if (!chartOn && !chartHeld.has(name)) chartHeld.set(name, { lat: cla, lon: clo, segs: [] });
+  } else if (lineOn) chartOn = false;
   // Only carriageways get a solid edge. A track is two ruts worn into the
   // hillside — its ribbon is transparent everywhere but the ruts, so a pair of
   // earth walls would stand along it with nothing on top of them.
@@ -7031,8 +7061,12 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     }
     along += len;
     // Tracks read as a fainter line on the chart — they are a route, not a road.
-    mapSeg(x0, z0, x1, z1, drivable && !track ? Math.max(width, 14) : 9,
-      track ? 'rgba(150,140,112,0.62)' : drivable ? '#a8a294' : 'rgba(150,142,120,0.4)');
+    {
+      const cw = drivable && !track ? Math.max(width, 14) : 9;
+      const cc = track ? 'rgba(150,140,112,0.62)' : drivable ? '#a8a294' : 'rgba(150,142,120,0.4)';
+      if (chartOn) mapSeg(x0, z0, x1, z1, cw, cc);
+      else if (name) chartHeld.get(name)?.segs.push([x0, z0, x1, z1, cw, cc]);
+    }
   }
   // ── the late-host sweep ────────────────────────────────────────────
   // This way's segments are all in the grid now, so it can answer for the
@@ -8121,10 +8155,16 @@ const bPaint = (id: number): number => {
   return h % B_MATS.length;
 };
 function building(pts: Array<[number, number]>, id: number, levels: number): void {
-  const height = clamp(levels * 3.1, 3, 90);
+  // ON THE LINE, nothing out here is intact. The Covers are where the built
+  // world went — everything the domes did not take has stood empty since the
+  // Leaving, so the campaign's world ruins every building outside a shell
+  // (inside one, no tiles load at all). Towers are cut down to a gutted
+  // mid-rise first: the ruin path's ragged-bay walls were designed around
+  // low-rise stock, and a ninety-metre open shell reads as a bug, not a ruin.
+  const height = clamp(levels * 3.1, 3, lineOn ? 26 : 90);
   const r = mulberry32((id * 2654435761) >>> 0);
   r(); // first draw off a hashed seed is poorly distributed
-  if (height > 24 || r() > 0.42) {
+  if (!lineOn && (height > 24 || r() > 0.42)) {
     buildStats.intact++;
     polygon(pts, B_MATS[bPaint(id)], 0.9, height, 'solid');
     return;
@@ -8817,7 +8857,9 @@ const marks = openMarks();
  *  waits on this: see the head of `sync.ts`. */
 const sync = openSync({
   dump: (since) => surveyStore.dump(since),
-  merge: (rows) => surveyStore.merge(rows),
+  // A merge can bring home roads surveyed on another device — any the chart
+  // was holding back are released (a no-op off the line: nothing is held).
+  merge: (rows) => { const n = surveyStore.merge(rows); if (n) chartRecheck(); return n; },
   marks: (since) => { const d = marks.dump(since); return { missions: d.m ?? {}, stations: d.s ?? {} }; },
   mergeMarks: (r) => marks.merge({ m: r.missions, s: r.stations }),
   odo: () => Math.round(odo.total),
@@ -8954,6 +8996,7 @@ function stepSurvey(now: number): void {
         if (nearSwept(c.x, c.z) > SURVEY_CAPTURE) continue;
         c.got = true; c.at = now; r.got++;
         surveyStore.take(id, c.key, r.cps.length);
+        chartFlush(r.name);         // the first capture puts the road on the chart
         surveyFlash = 1;
         audio.stone();
       }
@@ -9685,6 +9728,17 @@ function buildOvTile(key: string, x: number, y: number, z: number,
     }
     const style = OV_STYLE.find(([match]) => match(t));
     if (!style || w.geometry.length < 2) continue;
+    // ON THE LINE the far chart holds the minimap's rule: a road appears once
+    // the survey has it, and not before. Rail, coastline and the waterways are
+    // terrain's infrastructure — chart, not survey — and always draw, as do
+    // the places: the names are the Service's old map, the roads are its job.
+    // Decided at tile build; a road surveyed mid-session joins this layer when
+    // its level next rebuilds, which the zoom ladder does routinely.
+    if (lineOn && t.highway) {
+      if (!t.name) continue;
+      const [sLa, sLo] = w.geometry[0];
+      if (!surveyStore.seen(t.name, sLa, sLo)) continue;
+    }
     const [, col, mul] = style;
     const hw = (base * mul) / 2;
     for (let i = 0; i < w.geometry.length - 1; i++) {
@@ -14577,12 +14631,20 @@ function sightBlockedCached(name: string, px: number, py: number, pz: number, i:
   sightCache.set(name, { at: now + i * 23, hid });
   return hid;
 }
+// ON THE LINE the HUD carries the Service's instruments and nothing else: the
+// docket's pins, the stations, your own rig and drone, and the summits (a
+// landform is a bearing, not an amenity). Parks, waters, place names, garages —
+// the old world's map of itself — stay off a ranger's glass. DISPLAY only: the
+// pois table keeps every entry, so the mechanics that read it (the rig service
+// scan wants a 'repair') work the same in both modes.
+const LINE_KINDS = new Set<Poi['kind']>(['mission', 'station', 'rig', 'drone', 'peak']);
 function updatePois(): void {
   // Pinned waypoints (a mission's giver and its destination) are NOT subject to
   // the nearest-three rule — the whole point of a destination is that it is far
   // away and stays on screen the entire way there.
   const vx = viewX(), vz = viewZ();
-  const all = [...pois.values()].map((p) => ({ p, d: Math.hypot(p.x - vx, p.z - vz) }));
+  const all = [...pois.values()].filter((p) => !lineOn || LINE_KINDS.has(p.kind))
+    .map((p) => ({ p, d: Math.hypot(p.x - vx, p.z - vz) }));
   const pinned = all.filter((e) => e.p.pinned).sort((a, b) => a.d - b.d);
   // A pinned waypoint SHADOWS its namesake from the OSM stream: the mission's
   // ADMIN OFFICE and the mapped Admin Office are the same place, and two pins
@@ -17550,6 +17612,11 @@ function lineGo(): void {
 }
 (window as unknown as { __line?: object }).__line = (): object => ({
   on: lineOn, odo: Math.round(lineOdo), begunAt: lineBegunAt,
+  // The campaign's world-state, for the tests that hold it to its word:
+  // everything ruins on the line, the HUD carries only the Service's kinds,
+  // and the chart holds back what the survey has not recorded.
+  world: { intact: buildStats.intact, ruin: buildStats.ruin,
+    chartHeld: chartHeld.size, hud: poiDraw.map((p) => p.kind) },
   leg: (() => {
     const m = mission;
     return m && LEGS.some((l) => l.id === m.id) ? { id: m.id, phase: missionPhase } : null;

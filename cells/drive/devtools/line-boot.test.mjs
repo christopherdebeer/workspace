@@ -62,6 +62,23 @@ check('…resuming the run\'s metres, not zeroing them', ln.odo === 12300, ln.od
 check('…and the first leg armed itself from the marks', ln.leg?.id === 'line-01', ln);
 check('no cover built here — Paris\'s shell is not the Cape\'s business', ln.covers === 0, ln.covers);
 
+// ── the world on the line ──
+// Outside a Cover nothing has been kept up since the Leaving: every building
+// that streams takes the ruin path. The HUD carries the Service's instruments
+// and nothing else. And the chart shows what the survey has recorded — a
+// fresh boot has recorded nothing, so every named road that streamed is HELD
+// off the map, still physically there to drive. The world streams on its own
+// clock (a cold relay cache takes minutes), so wait for the chart to actually
+// MEET a road before asking what it did with it — the settle is not the world.
+await d.page.waitForFunction(() => window.__line().world.chartHeld > 0, null, { timeout: 180000 })
+  .catch(() => null);
+const w = (await d.page.evaluate(() => window.__line())).world;
+check('every building that streamed here is a ruin', w.intact === 0, w);
+check('the HUD carries only the Service\'s kinds — and does carry them',
+  w.hud.length > 0
+  && w.hud.every((k) => ['mission', 'station', 'rig', 'drone', 'peak'].includes(k)), w.hud);
+check('the chart holds back every unsurveyed road', w.chartHeld > 0, w);
+
 // ── the refusal ──
 // The double tap is synthesized IN PAGE: the harness renders at a few fps, so
 // two protocol round-trip taps cannot reliably land inside the 450ms window a
@@ -113,10 +130,23 @@ const f = await openDrive({
 const fbefore = await f.page.evaluate(() => ({ x: window.__drive.x, z: window.__drive.z }));
 await dbltap(f.page);
 await f.page.waitForTimeout(800);
-const fafter = await f.page.evaluate(() => ({ x: window.__drive.x, z: window.__drive.z, on: window.__line().on }));
+const fafter = await f.page.evaluate(() => ({ x: window.__drive.x, z: window.__drive.z, ln: window.__line() }));
 check('off the line the same double tap still travels',
   Math.hypot(fafter.x - fbefore.x, fafter.z - fbefore.z) > 20, { fbefore, fafter });
-check('…and free drive is not on the line', fafter.on === false, fafter.on);
+check('…and free drive is not on the line', fafter.ln.on === false, fafter.ln.on);
+// The same tiles, the other posture: free drive charts every road as it
+// streams and keeps its intact stock — the campaign's world is a LENS, not a
+// migration. Wait for the same world the line boot saw: if the line boot's
+// tiles carried buildings, the free boot's will too, on their own clock.
+if (w.intact + w.ruin > 0) {
+  await f.page.waitForFunction(() =>
+    window.__line().world.intact + window.__line().world.ruin > 0, null, { timeout: 180000 })
+    .catch(() => null);
+}
+const fw = (await f.page.evaluate(() => window.__line())).world;
+check('free drive holds nothing back from the chart', fw.chartHeld === 0, fw);
+check('…and what ruined on the line was standing off it',
+  (w.ruin > 0) === (fw.intact + fw.ruin > 0), { line: w, free: fw });
 
 rmSync(dir, { recursive: true, force: true });
 console.log(bad ? `\n${bad} FAILED` : '\nall good');

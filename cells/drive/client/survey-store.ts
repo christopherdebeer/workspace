@@ -114,6 +114,11 @@ export interface Survey {
   rec: Map<string, SurveyRec>;
   roadId(name: string, lat: number, lon: number): string;
   took(id: string, key: string): boolean;
+  /** Has this road, HERE, any recorded progress at all — a checkpoint or a
+   *  claim, this session or any before it? Read-only: unlike `roadId` it never
+   *  mints an anchor, so the charts can ask about every road that streams past
+   *  without polluting the identity index. */
+  seen(name: string, lat: number, lon: number): boolean;
   take(id: string, key: string, total: number): void;
   claim(id: string, total: number): void;
   grew(id: string, total: number): void;
@@ -266,6 +271,19 @@ export function openSurvey(opts: {
       const id = `${name}@${cell[0]},${cell[1]}`;
       index(id);
       return id;
+    },
+
+    seen(name: string, lat: number, lon: number): boolean {
+      const cell = cellOf(lat, lon);
+      for (const k of byName.get(name) ?? []) {
+        if (!near(k.cell, cell)) continue;
+        const r = rec.get(k.id);
+        if (r && (r.g > 0 || r.done)) return true;
+      }
+      // The record from before roads had identity answers by bare name,
+      // exactly as broadly as its claim always did.
+      const old = rec.get(name);
+      return !!(old && (old.g > 0 || old.done));
     },
 
     /** Was this checkpoint collected in an earlier session? A claimed road
