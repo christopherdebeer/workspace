@@ -17924,10 +17924,14 @@ function stepLine(now: number): void {
   // actually mattered (ACCEPT) was the easiest to lose; measured at PD-02:
   // leg 2 sat 'offered' with no waypoint and the run read as stalled. So on
   // the line, ACTIVATING the station is the acceptance: an offered leg whose
-  // giver station is active auto-accepts the moment you are in range, and
-  // the next waypoint goes up. The first pickup keeps its ritual only until
-  // the station comes online — which is the order the opening teaches anyway.
-  if (missionPhase === 'offered' && mission && missionReady && missionGiver) {
+  // giver station is active auto-accepts — AT ANY DISTANCE, because a phase
+  // is session state and a reload mid-leg re-arms the leg as 'offered';
+  // requiring range here sent the owner 30km back down the N20 to "re-take"
+  // a job they were already driving. Active means you stood at that terminal
+  // once, and that is the acceptance. The pickup ritual belongs only to a
+  // giver still DORMANT — which is the opening at the aperture, and nothing
+  // after it.
+  if (missionPhase === 'offered' && mission && missionGiver) {
     const mid = mission.id, g = missionGiver;
     if (LEGS.some((l) => l.id === mid)) {
       const st = stationSites.find((s) =>

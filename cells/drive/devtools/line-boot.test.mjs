@@ -137,20 +137,23 @@ check('…with the run\'s record intact', back.ln.odo >= 12300 && back.ln.leg?.i
 // local wipe must happen anyway.
 const carried = await d.page.evaluate(() => window.__marks());
 check('the boot carried marks to lose', carried.missions === 1 && carried.stations === 1, carried);
-await d.page.evaluate(() => {
-  window.__menutab(4);
-  [...document.querySelectorAll('#menu button')]
-    .find((b) => /RESET THE LINE/.test(b.textContent ?? ''))
-    .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+// The menu re-renders once on the frame after a tab switch (its signature
+// catches up), rebuilding the buttons — at the harness's 2fps that rebuild
+// can land BETWEEN two protocol taps and swallow the armed state (on a
+// phone it is a 16ms flicker no thumb can beat). Settle first, then both
+// taps in ONE evaluate with an in-page pause.
+await d.page.evaluate(() => window.__menutab(4));
+await d.page.waitForTimeout(1200);
+const armed = await d.page.evaluate(async () => {
+  const find = (re) => [...document.querySelectorAll('#menu button')]
+    .find((b) => re.test(b.textContent ?? ''));
+  find(/RESET THE LINE/)?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  await new Promise((r) => setTimeout(r, 250));
+  const again = find(/TAP AGAIN TO WIPE/);
+  again?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
+  return !!again;
 });
-await d.page.waitForTimeout(300);
-check('the first tap arms instead of firing', await d.page.evaluate(() =>
-  [...document.querySelectorAll('#menu button')].some((b) => /TAP AGAIN TO WIPE/.test(b.textContent ?? ''))), null);
-await d.page.evaluate(() => {
-  [...document.querySelectorAll('#menu button')]
-    .find((b) => /TAP AGAIN TO WIPE/.test(b.textContent ?? ''))
-    .dispatchEvent(new MouseEvent('click', { bubbles: true }));
-});
+check('the first tap arms instead of firing', armed, null);
 // The wipe is checked BEFORE the reboot lands: the harness's init script
 // re-seeds localStorage on every navigation (that is what init scripts do),
 // so the post-reboot page cannot witness its own emptiness here. Durability
