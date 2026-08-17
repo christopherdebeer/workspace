@@ -18967,12 +18967,21 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const iconCh = KIND_ICON[p.kind];
     const iw = iconCh ? 7 : 0;
     const w = textPW(label) + 4 + iw;
-    const y = clamp(Math.round(p.y / hudS), 20, HH - 30);
+    let y = clamp(Math.round(p.y / hudS), 20, HH - 30);
     // A chart rim chip is drawn AT its border point — the position carries the
     // bearing — with the marker diamond on the point and the label kept on
     // the glass beside it. A cockpit chip rails to its side as ever.
     const x = p.rim ? clamp(Math.round(p.x / hudS) - Math.round(w / 2), 2, HW - w - 2)
       : p.edge > 0 ? HW - w - 3 : 3;
+    if (p.rim) {
+      // Not INTO the dock: a chip pointing off the bottom-left corner landed
+      // on the minimap square and read as part of it. Same geometry as the
+      // dock block below (pad 4, info strip 23, square ≤58) — a chip whose
+      // label would touch it rides just above instead, bearing intact.
+      const dw = Math.min(58, Math.floor(HW * 0.34));
+      const dy = HH - 4 - 23 - dw - 3;
+      if (x < 4 + dw + 4 && y > dy - 10) y = dy - 10;
+    }
     if (p.rim) {
       const mx = clamp(Math.round(p.x / hudS), 5, HW - 5);
       hctx.fillStyle = UI.ink; diamond(mx, y - 6, 3);
