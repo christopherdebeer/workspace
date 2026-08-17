@@ -11256,6 +11256,31 @@ function stepReal(dt: number): boolean {
     vegInstances: vegN, vegTris: Math.round(vegTris), veg,
   };
 };
+/** WHO OWNS THE TRIANGLES — the world's geometry budget by class, with who
+ *  is in the shadow pass. `__gpu` says what a frame costs; this says which
+ *  class of thing is charging it, which is the question a frame-rate
+ *  investigation actually asks. */
+(window as unknown as { __census?: object }).__census = (): object => {
+  const by: Record<string, { meshes: number; tris: number; cast: number }> = {};
+  const add = (k: string, tris: number, cast: boolean): void => {
+    const b = (by[k] ??= { meshes: 0, tris: 0, cast: 0 });
+    b.meshes++; b.tris += Math.round(tris); if (cast) b.cast++;
+  };
+  worldGroup.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || !m.geometry?.attributes?.position) return;
+    const tris = (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3;
+    const first = Array.isArray(m.material) ? m.material[0] : m.material;
+    const kind = first === ruinMat ? 'ruin'
+      : B_MATS.includes(first as never) ? 'building'
+      : m.userData.tunnel ? 'tunnel'
+      : (first as THREE.Material & { polygonOffset?: boolean })?.polygonOffset ? 'drape' : 'other';
+    add(kind, tris, m.castShadow);
+  });
+  let total = 0, cast = 0;
+  for (const b of Object.values(by)) { total += b.tris; cast += b.cast; }
+  return { total, casters: cast, by };
+};
 (window as unknown as { __audioState?: object }).__audioState = (): object =>
   ({ state: audio.state, on: audio.on, hidden });
 (window as unknown as { __cam?: object }).__cam = (): object =>
