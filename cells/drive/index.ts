@@ -978,6 +978,10 @@ export interface StateTable {
   all(pk: string): Promise<PlayerState>;
   putRoads(pk: string, rows: Record<string, StateRow>): Promise<void>;
   putMarks(pk: string, kind: 'm' | 's', rows: Record<string, number>): Promise<void>;
+  /** Remove rows by sort key — the campaign reset's half of the contract.
+   *  Roads and the profile are never passed here: distance and survey are a
+   *  career, not a campaign. */
+  delRows(pk: string, sks: string[]): Promise<void>;
   setProfile(pk: string, p: { odo: number }): Promise<void>;
 }
 const num = (v: unknown, cap = Number.MAX_SAFE_INTEGER): number => {
@@ -1054,6 +1058,16 @@ function liveTable(): StateTable {
     putMarks: (pk, kind, rows) => batchPut(Object.entries(rows).map(([id, at]) => ({
       pk: S(pk), sk: S(MARK_SK[kind] + id), c: N(at),
     }))),
+    async delRows(pk, sks) {
+      if (!sks.length) return;
+      const { m, db } = await client();
+      for (let i = 0; i < sks.length; i += 25) {
+        await db.send(new m.BatchWriteItemCommand({
+          RequestItems: { [TABLE]: sks.slice(i, i + 25).map((sk) => ({
+            DeleteRequest: { Key: { pk: S(pk), sk: S(sk) } } })) },
+        }));
+      }
+    },
     async setProfile(pk, p) {
       const { m, db } = await client();
       await db.send(new m.PutItemCommand({
@@ -1076,6 +1090,25 @@ export async function serveState(
   if (!caller || caller === 'anonymous') return no(401, 'sign in to keep progress');
   const pk = `PLAYER#${caller}`;
   const mine = await table.all(pk);
+
+  // THE CAMPAIGN RESET. A latched mark cannot be un-latched by the merge —
+  // that is the whole design — so restarting the line takes an explicit,
+  // destructive verb: DELETE removes every mission and station row for THIS
+  // caller and nothing else. Roads, claims and the odometer stay: the survey
+  // is a career, the line is a docket, and handing the docket back does not
+  // un-drive the roads. (Note the honest limit: a second device that still
+  // holds the marks locally will push them back on its next sync — the reset
+  // is of the durable copy and the device that asked, not of every device.)
+  let reset = 0;
+  if (method === 'DELETE') {
+    const sks: string[] = [];
+    for (const kind of ['m', 's'] as const) {
+      for (const id of Object.keys(mine.marks[kind])) sks.push(MARK_SK[kind] + id);
+    }
+    await table.delRows(pk, sks);
+    reset = sks.length;
+    mine.marks = { m: {}, s: {} };
+  }
 
   let wrote = 0;
   if (method === 'POST') {
@@ -1140,6 +1173,7 @@ export async function serveState(
     stations: mine.marks.s,
     odo: mine.odo,
     ...(method === 'POST' ? { wrote } : {}),
+    ...(method === 'DELETE' ? { reset } : {}),
   }), { 'cache-control': 'no-store' });
 }
 
@@ -1153,8 +1187,8 @@ export const handler = async (event: {
   // Same-origin on the cell's own host, so `'self'` covers it and no CORS is
   // involved. Before the read-only gate below, because this one writes.
   if (path === '/state') {
-    if (method !== 'GET' && method !== 'POST') {
-      return respond(405, 'application/json', JSON.stringify({ error: 'GET or POST' }));
+    if (method !== 'GET' && method !== 'POST' && method !== 'DELETE') {
+      return respond(405, 'application/json', JSON.stringify({ error: 'GET, POST or DELETE' }));
     }
     return serveState(method, event.headers?.['x-cell-caller'] ?? 'anonymous', event.body);
   }

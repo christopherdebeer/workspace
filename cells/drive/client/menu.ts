@@ -97,6 +97,11 @@ export interface MenuCtx {
     note: string;
   };
   lineGo(): void;
+  /** Wipe the campaign — the run, missions, station wakes — locally and
+   *  (signed in) in the durable copy. Roads and the odometer stay: the survey
+   *  is a career, not a campaign. Status strings land back in the settings
+   *  row via the callback; the game reloads off the line when it is done. */
+  lineReset(status: (s: string, bad?: boolean) => void): void;
   syncLabel(): string;
   syncNote(): string;
   syncTone(): Tone;
@@ -710,6 +715,37 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       syncNote.style.color = ctx.syncTone() === 'bad' ? C.bad : C.dim;
     });
     body.append(sync, syncNote);
+    // THE CAMPAIGN RESET. Destructive, so deliberately two-tap: the first
+    // arms, the second wipes — and the armed state stands down on its own if
+    // the second tap never comes. It hands the docket back (run, missions,
+    // station wakes, here and in the durable copy when signed in) and leaves
+    // the career alone: roads, claims and the odometer are not the
+    // campaign's to take.
+    const resetNote = el('div', 'm-dimline',
+      'HANDS THE DOCKET BACK — RUN, LEGS, STATION WAKES. ROADS AND ODOMETER KEEP.');
+    let armedAt = 0;
+    const disarm = (): void => {
+      armedAt = 0;
+      setLab(reset, 'RESET THE LINE');
+      reset.style.color = C.soft;
+      reset.style.borderColor = C.soft;
+    };
+    const reset = button('RESET THE LINE', C.soft, () => {
+      if (Date.now() - armedAt > 4000) {
+        armedAt = Date.now();
+        setLab(reset, 'TAP AGAIN TO WIPE THE RUN');
+        reset.style.color = C.bad;
+        reset.style.borderColor = C.bad;
+        setTimeout(() => { if (armedAt && Date.now() - armedAt >= 4000) disarm(); }, 4200);
+        return;
+      }
+      disarm();
+      ctx.lineReset((s, bad) => {
+        resetNote.textContent = s;
+        resetNote.style.color = bad ? C.bad : C.dim;
+      });
+    }, ICON.flag);
+    body.append(reset, resetNote);
     dialsInto(body, ctx.dialGroups('system'));
     const snd = button('', C.soft, () => { ctx.soundTap(); refresh(); }, ICON.sound);
     updaters.push(() => {

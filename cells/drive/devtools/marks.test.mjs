@@ -103,6 +103,23 @@ function clock() {
   check('a later dump carries only what changed', !since.m && !!since.s?.['ST-03'], since);
 }
 
+// ── the reset: forgetting is deliberate, immediate, and durable ────────
+{
+  const st = fakeStore(), c = clock();
+  const mk = openMarks({ store: st, now: c.now, stamp: c.wall });
+  mk.set('m', 'line-01'); mk.set('s', 'pd-01'); mk.flush();
+  const writesBefore = st.writes;
+  mk.reset();
+  check('a reset forgets every mark', mk.count('m') === 0 && mk.count('s') === 0, [mk.count('m'), mk.count('s')]);
+  check('…writes through immediately — a reset lost to a crash is worse than none',
+    st.writes > writesBefore, st.writes);
+  const back = openMarks({ store: st, now: c.now, stamp: c.wall });
+  check('…and the next boot finds a clean docket', back.count('m') === 0 && back.count('s') === 0, null);
+  // Latching still works afterwards — a reset is a restart, not a scar.
+  back.set('m', 'line-01');
+  check('the campaign can be earned again', back.has('m', 'line-01'), null);
+}
+
 // ── a full disk costs durability, never the drive ──────────────────────
 {
   const st = fakeStore(), c = clock();

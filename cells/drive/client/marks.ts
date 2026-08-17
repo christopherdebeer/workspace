@@ -44,6 +44,12 @@ export interface Marks {
   /** Fold a durable copy back in; returns how many marks changed. */
   merge(rows: MarksDump): number;
   count(kind: MarkKind): number;
+  /** Hand the docket back: forget every mark, WRITTEN THROUGH immediately —
+   *  a reset that could be lost to a crash is worse than none. The caller
+   *  owns clearing the durable copy first (see the campaign reset in
+   *  `main.ts`): latched min-merge means a surviving server row would simply
+   *  latch everything again on the next sync. */
+  reset(): void;
   tick(now: number): void;
   flush(): void;
   dirty(): boolean;
@@ -118,6 +124,7 @@ export function openMarks(opts: {
       return changed;
     },
     count: (kind) => maps[kind].size,
+    reset() { maps.m.clear(); maps.s.clear(); flush(); },
     tick(t) { if (pending && t - pending > MARKS_FLUSH_MS) flush(); },
     flush,
     dirty: () => !!pending,

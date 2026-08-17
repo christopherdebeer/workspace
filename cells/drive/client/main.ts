@@ -19253,6 +19253,43 @@ const menu = createMenu({
     };
   },
   lineGo: () => lineGo(),
+  // THE CAMPAIGN RESET, in the one order that actually resets. The durable
+  // copy goes FIRST: marks merge by min-union — that is the whole design —
+  // so a surviving server row would latch everything straight back on the
+  // next sync. Then the local stores, then a fresh boot OFF the line at the
+  // same spot: station beacons, mission cards and the armed leg all derive
+  // from the marks, and not carrying the session is the only clean unwind.
+  // Roads, claims and the odometer are untouched throughout — the survey is
+  // a career, the line is a docket, and handing the docket back does not
+  // un-drive the roads.
+  lineReset: (status) => {
+    void (async () => {
+      status('WIPING THE RUN…');
+      let note = 'CAMPAIGN RESET · THE DOCKET IS BACK ON THE PILE';
+      let bad = false;
+      if (sync.signedIn()) {
+        const ok = await sync.reset();
+        if (!ok) {
+          note = 'RESET HERE ONLY — THE SERVER COPY DID NOT CLEAR, A LATER SYNC MAY RESTORE IT';
+          bad = true;
+        }
+      }
+      // OFF the line BEFORE the wipe: the pagehide flush calls lineSave(),
+      // and a reset that navigates away while still nominally on the line
+      // would write a fresh zero-metre CONTINUE record over the one it just
+      // removed — the docket handed back and instantly picked up again.
+      lineOn = false;
+      marks.reset();
+      try { localStorage.removeItem(LINE_KEY); } catch { /* the reload still resets this boot */ }
+      lineOdo = 0;
+      lineBegunAt = 0;
+      status(note, bad);
+      const q = new URLSearchParams(location.search);
+      q.delete('line');
+      q.delete('m');    // the armed leg must not ride the URL into the fresh boot
+      setTimeout(() => { location.href = `${location.pathname}?${q.toString()}`; }, 1600);
+    })();
+  },
   // PROGRESS, off the device. The label is the ACTION, the note is the state —
   // and when signed out the note says what you keep either way, because that is
   // the honest answer to "why would I sign in".

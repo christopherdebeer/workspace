@@ -68,6 +68,13 @@ function fakeTable(seed = {}) {
       this.writes += Object.keys(r).length;
       for (const [id, at] of Object.entries(r)) marks.set(`${pk}|${kind}|${id}`, at);
     },
+    async delRows(pk, sks) {
+      this.writes += sks.length;
+      for (const sk of sks) {
+        if (sk.startsWith('MISSION#')) marks.delete(`${pk}|m|${sk.slice('MISSION#'.length)}`);
+        else if (sk.startsWith('STATION#')) marks.delete(`${pk}|s|${sk.slice('STATION#'.length)}`);
+      }
+    },
     async setProfile(pk, p) { prof.set(pk, p); },
   };
 }
@@ -210,6 +217,39 @@ const call = async (method, caller, body, table) => {
   const pull = await call('GET', 'c15r', undefined, t);
   check('a plain GET returns the marks with the roads',
     pull.body.missions['chapmans-run'] === 1600000000000 && !!pull.body.stations['ST-01'], pull.body);
+}
+
+// ── the campaign reset ─────────────────────────────────────────────────
+// A latched mark cannot be un-latched by the merge — that is the design — so
+// handing the docket back is an explicit DELETE. It takes the marks, all of
+// them, for THIS caller only, and it must not touch the career: roads,
+// claims and the odometer are not the campaign's to take.
+{
+  const t = fakeTable();
+  await call('POST', 'c15r', {
+    roads: { 'D 920@48,2': { g: 9, t: 12, c: 1600000000000 } },
+    missions: { 'line-01': 1600000000001 },
+    stations: { 'pd-01': 1600000000002, 'pd-02': 1600000000003 },
+    odo: 4200,
+  }, t);
+  await call('POST', 'someone-else', { stations: { 'pd-01': 1600000000009 } }, t);
+
+  const wiped = await call('DELETE', 'c15r', undefined, t);
+  check('DELETE wipes the caller\'s marks and says how many', wiped.status === 200 && wiped.body.reset === 3, wiped.body);
+  check('…the response already shows a clean docket',
+    Object.keys(wiped.body.missions).length === 0 && Object.keys(wiped.body.stations).length === 0, wiped.body);
+  check('…while the career survives: roads, claim and odometer',
+    wiped.body.roads['D 920@48,2']?.c === 1600000000000 && wiped.body.odo === 4200, wiped.body);
+
+  const after = await call('GET', 'c15r', undefined, t);
+  check('the wipe is real — a fresh GET finds no marks',
+    Object.keys(after.body.missions).length === 0 && Object.keys(after.body.stations).length === 0, after.body);
+  const theirs = await call('GET', 'someone-else', undefined, t);
+  check('…and another player\'s marks were not the caller\'s to take',
+    theirs.body.stations['pd-01'] === 1600000000009, theirs.body);
+
+  const anon = await call('DELETE', 'anonymous', undefined, t);
+  check('anonymous cannot reset anyone', anon.status === 401, anon.status);
 }
 
 // ── through the handler, the way dispatch calls it ─────────────────────

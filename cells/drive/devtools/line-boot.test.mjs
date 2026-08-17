@@ -57,7 +57,9 @@ const d = await openDrive({
   tag: 'line', settle: 9000, route: serveCampaign,
   init: `localStorage.setItem('drive.line.v1', JSON.stringify({
     lat: -34.08716, lon: 18.42083, h: 290, odo: 12300, begunAt: 1700000000000, at: 1700000000000 }));
-    localStorage.setItem('drive.sync.token', 'tok_test');`,
+    localStorage.setItem('drive.sync.token', 'tok_test');
+    localStorage.setItem('drive.marks.v1', JSON.stringify({
+      v: 1, m: { 'x-done-elsewhere': 1700000000000 }, s: { 'ct-01': 1700000000000 } }));`,
 });
 
 // ── the mode ──
@@ -126,6 +128,51 @@ await d.page.evaluate(() => window.__menutab(null));
 const back = await d.page.evaluate(() => ({ ln: window.__line(), url: location.search }));
 check('a reload stays on the line — the flag rides the URL', back.ln.on === true, back.url);
 check('…with the run\'s record intact', back.ln.odo >= 12300 && back.ln.leg?.id === 'line-01', back.ln);
+
+// ── the reset ──
+// Hand the docket back, from SETTINGS, with the marks this boot carried in:
+// two taps (the first only arms), then the game wipes the run and the marks
+// and reboots off the line at the same spot. The server copy is unreachable
+// here (the harness 404s /state) — that is the partial-failure path, and the
+// local wipe must happen anyway.
+const carried = await d.page.evaluate(() => window.__marks());
+check('the boot carried marks to lose', carried.missions === 1 && carried.stations === 1, carried);
+await d.page.evaluate(() => {
+  window.__menutab(4);
+  [...document.querySelectorAll('#menu button')]
+    .find((b) => /RESET THE LINE/.test(b.textContent ?? ''))
+    .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+});
+await d.page.waitForTimeout(300);
+check('the first tap arms instead of firing', await d.page.evaluate(() =>
+  [...document.querySelectorAll('#menu button')].some((b) => /TAP AGAIN TO WIPE/.test(b.textContent ?? ''))), null);
+await d.page.evaluate(() => {
+  [...document.querySelectorAll('#menu button')]
+    .find((b) => /TAP AGAIN TO WIPE/.test(b.textContent ?? ''))
+    .dispatchEvent(new MouseEvent('click', { bubbles: true }));
+});
+// The wipe is checked BEFORE the reboot lands: the harness's init script
+// re-seeds localStorage on every navigation (that is what init scripts do),
+// so the post-reboot page cannot witness its own emptiness here. Durability
+// of the wipe across a boot is marks.test's job (write-through), and the
+// reboot's own claim — off the line, no armed leg riding the URL — is
+// checked after.
+// Polled, not slept: on a saturated 2fps page the async wipe can land well
+// over a second after the click, and the observation window closes when the
+// reboot's navigation fires.
+const wipedInTime = await d.page.waitForFunction(() =>
+  window.__marks().missions === 0 && window.__marks().stations === 0
+  && localStorage.getItem('drive.line.v1') === null,
+null, { timeout: 20000, polling: 60 }).then(() => true).catch(() => false);
+check('…and the docket is handed back — no run record, no marks', wipedInTime, null);
+await d.page.waitForFunction(() =>
+  !/line=1/.test(location.search) && document.querySelector('#boot')?.classList.contains('ready'),
+null, { timeout: 200000 });
+await d.page.waitForTimeout(3000);
+await d.page.evaluate(() => window.__menutab(null));
+const clean = await d.page.evaluate(() => ({ ln: window.__line(), url: location.search }));
+check('the reset reboots off the line, with no leg riding the URL',
+  clean.ln.on === false && !new URLSearchParams(clean.url).get('m') && !clean.ln.leg, clean);
 
 // ── free drive untouched — and the gate ──
 // The SAME boot, the SAME flag, no token: signed out, `&line=1` is refused

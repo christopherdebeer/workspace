@@ -143,6 +143,11 @@ export interface Sync {
   sync(reason?: string): Promise<void>;
   /** Something worth keeping just happened. Mirrors soon, not now. */
   nudge(): void;
+  /** The campaign reset's durable half: DELETE the mirrored marks (missions
+   *  and stations — roads and the odometer stay). Resolves true only when the
+   *  server actually confirmed, so the caller can say honestly whether a
+   *  later sync might restore what was just cleared locally. */
+  reset(): Promise<boolean>;
 }
 
 export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string } = {}): Sync {
@@ -235,7 +240,7 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
     local.set(K.tok, token);
   }
 
-  async function call(method: 'GET' | 'POST', body?: unknown): Promise<{
+  async function call(method: 'GET' | 'POST' | 'DELETE', body?: unknown): Promise<{
     user?: string; roads?: SyncRows; odo?: number; error?: string;
     missions?: Record<string, number>; stations?: Record<string, number>;
   }> {
@@ -312,6 +317,17 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
       if (token) await run('syncing…');
     },
     sync: (reason = 'syncing…'): Promise<void> => run(reason),
+    async reset(): Promise<boolean> {
+      if (!token) return false;
+      try {
+        await call('DELETE');
+        return true;
+      } catch (err) {
+        const e = err as Error & { stale?: boolean };
+        if (e.stale) { token = null; user = null; local.del(K.tok); set('off', 'signed out — progress stays on this device'); }
+        return false;
+      }
+    },
     nudge(): void {
       if (!token || soon) return;
       // A claim is worth keeping, and it is also the moment a player is most
