@@ -76,7 +76,8 @@ async function boot(url) {
   await page.waitForFunction(
     () => window.__pins().drawn.some((p) => /PD-03/.test(p.t)), null, { timeout: 90000 });
   const pins = await page.evaluate(() => window.__pins());
-  const out = { pins, errors };
+  const ov = await page.evaluate(() => window.__overview());
+  const out = { pins, ov, errors };
   await page.close();
   return out;
 }
@@ -88,8 +89,12 @@ const lawHolds = (pins) => pins.drawn
 
 // ── far: the destination is a rim chip, and nothing squats at the clamp ──
 {
-  const { pins, errors } = await boot(
+  const { pins, ov, errors } = await boot(
     'https://c15r-drive.on.parc.land/?lat=48.19873&lon=2.01670&h=196&cam=top&z=24.4&line=1');
+  // The chart's ink: at survey zoom the overview layer's ring fade is fully
+  // open (negative radii = alpha 1 everywhere) — no hole around the truck.
+  check('far: the overview ink is unfaded at survey zoom',
+    ov.shown && ov.fade[0] < 0 && ov.fade[1] < 0, ov && { shown: ov.shown, fade: ov.fade });
   const pd3 = pins.drawn.find((p) => /PD-03/.test(p.t));
   check('far: PD-03 pinned with its true distance in the label',
     !!pd3 && pd3.d > 20000, pd3);
@@ -102,6 +107,9 @@ const lawHolds = (pins) => pins.drawn
     lawHolds(pins).length === 0, lawHolds(pins));
   check('far: no skyline peak markers on the chart', !pins.drawn.some((p) => p.k === 'peak'),
     pins.drawn.filter((p) => p.k === 'peak'));
+  check('far: the chip carries an outward bearing for its arrow',
+    !!pd3 && Number.isFinite(pd3.ux) && Number.isFinite(pd3.uy)
+    && Math.abs(Math.hypot(pd3.ux, pd3.uy) - 1) < 0.01, pd3 && { ux: pd3.ux, uy: pd3.uy });
   check('far: no page errors', errors.length === 0, errors);
 }
 

@@ -9872,11 +9872,17 @@ const ovU = {
   uOvR: { value: new THREE.Vector2(1e9, 2e9) },  // fade start, fade end
 };
 // depthWrite off: a faded-out ribbon still RASTERIZES, and one that wrote depth
-// would punch an invisible hole in the shell behind it — the layer is a decal
-// on the backdrop, so it reads depth (the fine terrain must still hide it) and
-// never writes any.
+// would punch an invisible hole in the shell behind it. depthTest off too, and
+// that one earned its keep the hard way: the ribbons are seated on the FAR
+// shell, a few metres under the fine world's datum, so wherever fine terrain
+// stood — or a gentle rise lay between the tilted chart camera and the line —
+// the chart's own ink vanished. Photographed on the Beauce: whole légues of
+// the layer swallowed by 10m of rolling wheat at 70° incidence, the roads
+// resurfacing only past the fine ring near Olivet. This layer draws ONLY in
+// top view, and there it is a MAP: ink reads over land, always. Hills go on
+// occluding the world; they do not get to occlude the chart of it.
 const ovMat = new THREE.MeshBasicMaterial({
-  vertexColors: true, side: DS, transparent: true, depthWrite: false,
+  vertexColors: true, side: DS, transparent: true, depthWrite: false, depthTest: false,
 });
 ovMat.onBeforeCompile = (sh: { vertexShader: string; fragmentShader: string; uniforms: Record<string, unknown> }) => {
   Object.assign(sh.uniforms, ovU);
@@ -10046,6 +10052,10 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
   geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(cols), 3));
   const mesh = new THREE.Mesh(geo, ovMat);
+  // With depth ignored, draw order is the only law — the chart's ink paints
+  // after the world's own transparents (water, rain) rather than under
+  // whichever happened to sort nearer that frame.
+  mesh.renderOrder = 40;
   ovMeshes.set(key, mesh);
   ovGroup.add(mesh);
   if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
@@ -11654,7 +11664,8 @@ function stepReal(dt: number): boolean {
     .map((p) => ({ p, d: Math.hypot(p.x - state.x, p.z - state.z) }))
     .sort((a, b) => a.d - b.d);
   return {
-    drawn: poiDraw.map((p) => ({ t: p.t, k: p.kind, edge: p.edge, rim: !!p.rim, rng: p.rng, hidden: p.hid,
+    drawn: poiDraw.map((p) => ({ t: p.t, k: p.kind, edge: p.edge, rim: !!p.rim, ux: p.ux, uy: p.uy,
+      rng: p.rng, hidden: p.hid,
       world: p.w, d: Math.round(p.d), sx: Math.round(p.x), sy: Math.round(p.y) })),
     // Who the pins are measured from, so a probe can check the one law that
     // matters on the chart: a drawn world point stands its labelled distance
@@ -15060,7 +15071,7 @@ function updatePois(): void {
       const t = Math.max(0, Math.min(tX, tY));
       poiDraw.push({
         x: ax + ux * t, y: ay + uy * t,
-        t: label, c: POI_COLORS[p.kind], edge: ux > 0 ? 1 : -1, rim: true, rng, hid: false,
+        t: label, c: POI_COLORS[p.kind], edge: ux > 0 ? 1 : -1, rim: true, ux, uy, rng, hid: false,
         name: p.name, kind: p.kind, pinned: !!p.pinned, d, tx: 0, ty: 0,
         w: [p.x, p.z, groundAt(p.x, p.z) + 2],
       });
@@ -16617,10 +16628,17 @@ function tick(now: number): void {
     // the same gate: below it the fine world is the better map of itself.
     farGroup.visible = zoomCur > 6;
     ovGroup.visible = zoomCur > 6;
-    // …and where the coarse vectors are allowed to start showing: only where
-    // the fine ring has given out. `osmRingR` is that radius, measured by the
-    // tile queue rather than guessed at.
-    ovU.uOvR.value.set(osmRingR * 0.8, osmRingR * 1.25);
+    // …and where the coarse vectors are allowed to start showing. At driving
+    // zooms, only where the fine ring has given out (`osmRingR`, measured by
+    // the tile queue) — below it the fine world is the better map of itself.
+    // But that claim is a ZOOM claim: at survey zoom the fine world's roads
+    // are sub-pixel ribbons, and holding the fade left a ring-wide hole in
+    // the chart exactly around the truck. So the ink grows inward as the
+    // chart pulls out — fade untouched at z≤9, gone by z14, blended between.
+    const inkT = clamp((zoomCur - 9) / 5, 0, 1);
+    ovU.uOvR.value.set(
+      osmRingR * 0.8 * (1 - inkT) - 2 * inkT,
+      osmRingR * 1.25 * (1 - inkT) - inkT);
     // Pan is a glance around the chart — it drifts home once you drive.
     // …but NOT while a finger is on it. The drift home is right for a glance
     // you have finished with; applied under a live drag it pulled the map back
@@ -18543,6 +18561,9 @@ interface PoiDraw { x: number; y: number; t: string; c: string; edge: 0 | -1 | 1
   /** Chart rim chip: (x,y) is a real point on the frame border at the true
    *  screen bearing — draw it THERE, not railed to a side. */
   rim?: boolean;
+  /** The chip's outward screen direction (unit) — the arrow that says
+   *  "that way", where a diamond would have said "here". */
+  ux?: number; uy?: number;
   /** Which POI this is (the `pois` key), what it is, and how far — the draw
    *  pass scales beams by distance and the tap handler pins by name. */
   name: string; kind: Poi['kind']; pinned: boolean; d: number;
@@ -18983,9 +19004,28 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       if (x < 4 + dw + 4 && y > dy - 10) y = dy - 10;
     }
     if (p.rim) {
-      const mx = clamp(Math.round(p.x / hudS), 5, HW - 5);
-      hctx.fillStyle = UI.ink; diamond(mx, y - 6, 3);
-      hctx.fillStyle = p.c; diamondOutline(mx, y - 6, 2);
+      // A diamond says HERE, and a rim chip is never here — it is a bearing.
+      // A short bold arrow along the true outward direction says THAT WAY:
+      // shaft through the chip's border point, barbs swept back from the tip.
+      // Ink pass under colour pass, the same two-coat the diamonds wear.
+      const mx = clamp(Math.round(p.x / hudS), 8, HW - 8);
+      const my2 = y - 8;
+      const vx2 = p.ux ?? 0, vy2 = p.uy ?? -1;
+      const bx1 = (-vy2 - vx2) * 0.71, by1 = (vx2 - vy2) * 0.71;   // barb, one side
+      const bx2 = (vy2 - vx2) * 0.71, by2 = (-vx2 - vy2) * 0.71;   // barb, the other
+      const tipx = mx + vx2 * 5, tipy = my2 + vy2 * 5;
+      const coat = (t: number): void => {
+        const o = t >> 1;
+        for (let s = -5; s <= 5; s++) {
+          hctx.fillRect(Math.round(mx + vx2 * s) - o, Math.round(my2 + vy2 * s) - o, t, t);
+        }
+        for (let s = 0; s <= 4; s++) {
+          hctx.fillRect(Math.round(tipx + bx1 * s) - o, Math.round(tipy + by1 * s) - o, t, t);
+          hctx.fillRect(Math.round(tipx + bx2 * s) - o, Math.round(tipy + by2 * s) - o, t, t);
+        }
+      };
+      hctx.fillStyle = UI.ink; coat(4);
+      hctx.fillStyle = p.rng || p.pinned ? UI.gold : p.c; coat(2);
     }
     if (iconCh) hudIconEdge(iconCh, x + 1, y + 1, p.c, 5);
     textEdgeP(label, x + 2 + iw, y + 2, p.rng || p.pinned ? UI.gold : p.c);
