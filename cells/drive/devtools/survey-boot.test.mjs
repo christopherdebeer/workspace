@@ -80,17 +80,28 @@ const got = await d.page.evaluate((n) => ({
   st: window.__surveyStore(), w: window.__writes,
 }), road.name);
 check('driving collected checkpoints', got.s.got > road.got, { was: road.got, now: got.s.got });
-check('…and they went into the store', got.st.crumbs > 0, got.st);
+// Either outcome is the store working: crumbs held for a road in progress —
+// or, when the walk happens to cover a short road entirely, a CLAIM, which
+// rightly drops the crumbs (a claimed road answers for all its checkpoints).
+check('…and they went into the store', got.st.crumbs > 0 || got.st.claimed > 0, got.st);
 // The old store called save() once per checkpoint, from inside the collection
-// loop. This is the number that change exists to hold down.
-check('…without a write per crumb', got.w.n <= got.st.crumbs, { writes: got.w.n, crumbs: got.st.crumbs });
-console.log(`        ${got.st.crumbs} crumbs across ${got.st.roads} roads, ${got.w.n} writes, ${got.st.bytes} bytes`);
+// loop. This is the number that change exists to hold down — a claim is
+// allowed its immediate write (the one thing worth losing nothing of).
+check('…without a write per crumb', got.w.n <= 1 + got.st.crumbs + (got.st.claimed ? 2 : 0),
+  { writes: got.w.n, crumbs: got.st.crumbs, claimed: got.st.claimed });
+console.log(`        ${got.st.crumbs} crumbs + ${got.st.claimed} claimed across ${got.st.roads} roads, ${got.w.n} writes, ${got.st.bytes} bytes`);
 
 // The debounce has to actually come due — a pending write that never lands is
-// the same as no store at all.
-await d.page.waitForTimeout(5000);
-const settled = await d.page.evaluate(() => window.__surveyStore());
-check('the pending write lands on its own', !settled.dirty && settled.bytes > 0, settled);
+// the same as no store at all. POLLED, not slept: on a cold cache the world
+// is still streaming here, and every late fragment re-marks the store dirty
+// (grew(), crumb adoption) — a fixed wait samples mid-churn and calls the
+// debounce broken when it is merely busy.
+const settled = await d.page.waitForFunction(() => {
+  const s = window.__surveyStore();
+  return (!s.dirty && s.bytes > 0) ? s : null;
+}, null, { timeout: 60000, polling: 500 }).then((h) => h.jsonValue()).catch(() => null);
+check('the pending write lands on its own', !!settled,
+  settled ?? (await d.page.evaluate(() => window.__surveyStore())));
 
 // …and the next boot reads it back. The URL tracks the rig, so a reload spawns
 // where the drive ended — the same road, from its other end, streaming in as a

@@ -1147,7 +1147,10 @@ scene.add(worldGroup);
         const solid = mats.length > 0 && mats.every(
           (m) => !m.transparent && m.blending === THREE.NormalBlending && (m.opacity ?? 1) >= 0.99);
         const drape = mats.some((m) => (m as THREE.Material & { polygonOffset?: boolean }).polygonOffset);
-        c.castShadow = solid && !drape;
+        // …and userData.noCast is the one opt-out: ground clutter (a ruin's
+        // rubble) is solid to the eye but shadows nothing anyone can see,
+        // and it is a third of the ruin triangles the shadow pass would pay.
+        c.castShadow = solid && !drape && !c.userData.noCast;
         c.receiveShadow = true;
       });
     }
@@ -2461,13 +2464,19 @@ terrainFx(MAT.green);
 // line up per building no matter what the terrain under it is doing.
 function facade(mat: THREE.Material): void {
   mat.onBeforeCompile = (sh) => {
+    // THE BASE RIDES IN AS A VERTEX ATTRIBUTE, not off the model matrix.
+    // Buildings batch per tile now (see flushBuildings), so one mesh carries
+    // hundreds of them and modelMatrix[3][1] — the old source of "this
+    // building's ground line" — is meaningless. Every batched vertex carries
+    // its own building's base in aBase instead, and re-seating shifts the
+    // attribute alongside the positions.
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vFacW; varying vec3 vFacN; varying float vFacH;')
+      .replace('#include <common>', '#include <common>\nattribute float aBase;\nvarying vec3 vFacW; varying vec3 vFacN; varying float vFacH;')
       .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
         vec4 facW = modelMatrix * vec4(transformed, 1.0);
         vFacW = facW.xyz;
         vFacN = mat3(modelMatrix) * objectNormal;
-        vFacH = facW.y - modelMatrix[3][1];`);
+        vFacH = facW.y - aBase;`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vFacW; varying vec3 vFacN; varying float vFacH;
@@ -2563,6 +2572,14 @@ const B_MATS = [
 // wall segment can rot at its own rate.
 const ruinMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: DS });
 facade(ruinMat);
+// The far side of the ruin LOD: identical weathering, FRONT faces only.
+// DoubleSide exists so a near shell shows its interior through the chewed
+// bays; past a few hundred metres the interior is sub-pixel and the doubled
+// rasterisation is pure cost (measured in R18 — ruins were 69% of the
+// world's triangles, all double-sided). stepRuinLod swaps tile batches
+// between the two as the truck moves; rubble lives on this one always.
+const ruinMatFar = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true });
+facade(ruinMatFar);
 // Water gets its own surface treatment. A static ripple texture reads as wet
 // paint; this scrolls two noise layers against each other for the swell,
 // brightens the crests, and adds a sun glint that tracks the light — enough
@@ -3576,8 +3593,25 @@ const birds = { get visible(): boolean { return birdMeshes[0].visible; },
 // Each species is a pile of coloured boxes welded into ONE BufferGeometry, so
 // a whole herd of them is still a single instanced draw. Local +z is forward
 // (that is what `yaw = atan2(vx, vz)` below implies), y=0 is the ground.
-function boxPart(w: number, h: number, d: number, x: number, y: number, z: number, col: number, rx = 0, ry = 0): THREE.BufferGeometry {
-  const g = new THREE.BoxGeometry(w, h, d).toNonIndexed();
+function boxPart(w: number, h: number, d: number, x: number, y: number, z: number, col: number, rx = 0, ry = 0, noBottom = false): THREE.BufferGeometry {
+  let g: THREE.BufferGeometry = new THREE.BoxGeometry(w, h, d).toNonIndexed();
+  if (noBottom) {
+    // The -y face is vertices 18..23 (px, nx, py, ny, pz, nz — six each). A
+    // wall bay or a rubble slab stands ON something: its underside is two of
+    // its twelve triangles that nothing can ever see, and a banlieue of
+    // ruins pays for tens of thousands of them.
+    const cut = (att: THREE.BufferAttribute, size: number): THREE.BufferAttribute => {
+      const a = att.array as Float32Array;
+      const out = new Float32Array(30 * size);
+      out.set(a.subarray(0, 18 * size), 0);
+      out.set(a.subarray(24 * size), 18 * size);
+      return new THREE.BufferAttribute(out, size);
+    };
+    const g2 = new THREE.BufferGeometry();
+    g2.setAttribute('position', cut(g.attributes.position as THREE.BufferAttribute, 3));
+    g2.setAttribute('normal', cut(g.attributes.normal as THREE.BufferAttribute, 3));
+    g = g2;
+  }
   if (rx) g.rotateX(rx);
   if (ry) g.rotateY(ry);
   g.translate(x, y, z);
@@ -8082,7 +8116,12 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number
  * poor proxy for a footprint's true minimum, but this is a DELTA between two
  * readings of the same quantity, and the cheap measure is the consistent one.
  */
-interface Seated { mesh: THREE.Object3D; pts: Array<[number, number]>; ref: number }
+interface Seated { mesh: THREE.Object3D; pts: Array<[number, number]>; ref: number;
+  /** A building living inside a tile batch re-seats by shifting ITS OWN
+   *  vertex ranges (and its aBase, which is the facade's ground line) —
+   *  moving the mesh would move the whole tile. */
+  att?: { pos: THREE.BufferAttribute; base: THREE.BufferAttribute;
+    ranges: Array<{ start: number; count: number }> } }
 const seated: Seated[] = [];
 const ringLow = (pts: Array<[number, number]>): number => {
   let lo = Infinity;
@@ -8106,7 +8145,18 @@ function reseatBuildings(t: HeightTile): void {
     if (!Number.isFinite(now)) continue;
     const dy = now - b.ref;
     if (Math.abs(dy) < 0.05) continue;
-    b.mesh.position.y += dy;
+    if (b.att) {
+      const { pos, base, ranges } = b.att;
+      for (const r of ranges) {
+        for (let i = r.start; i < r.start + r.count; i++) {
+          pos.setY(i, pos.getY(i) + dy);
+          base.setX(i, base.getX(i) + dy);
+        }
+      }
+      pos.needsUpdate = true;
+      base.needsUpdate = true;
+      (b.mesh as THREE.Mesh).geometry.boundingSphere = null;
+    } else b.mesh.position.y += dy;
     b.ref = now;
   }
 }
@@ -8154,6 +8204,129 @@ const bPaint = (id: number): number => {
   h = (h ^ (h >>> 13)) >>> 0;
   return h % B_MATS.length;
 };
+// ── the building batch: one mesh per class per tile ────────────────
+// Measured at the aperture (R18): one mesh PER BUILDING put 10.7k objects in
+// the scene and ~1,400 draw calls in the frame — per-object culling, matrix
+// work, and a call in the main pass AND the shadow pass for every house in
+// the banlieue. Ways render synchronously per tile (renderWays), so
+// buildings collect here and flush as three meshes a tile: ruin walls
+// (cast shadows, DoubleSide near — see stepRuinLod), rubble (never casts,
+// front faces only — ground clutter shadows nothing anyone can see), and
+// the intact stock as ONE mesh with material groups (12 paints × roof/wall).
+// The facade shader reads each building's ground line from the aBase vertex
+// attribute (see facade()), and re-seating shifts a building's own vertex
+// ranges inside the batch (see reseatBuildings).
+interface BldPiece { geo: THREE.BufferGeometry; base: number; pts: Array<[number, number]> }
+let bldBatch: { walls: BldPiece[]; rubble: BldPiece[]; intact: Map<number, BldPiece[]> } | null = null;
+const openBldBatch = (): NonNullable<typeof bldBatch> =>
+  (bldBatch ??= { walls: [], rubble: [], intact: new Map() });
+const B_MATS_FLAT: THREE.Material[] = B_MATS.flat();
+/** Ruin-wall batches by tile centroid, for the near/far side swap. */
+const ruinTiles: Array<{ mesh: THREE.Mesh; x: number; z: number }> = [];
+function flushBuildings(): void {
+  const b = bldBatch;
+  bldBatch = null;
+  if (!b) return;
+  type Seats = Array<{ pts: Array<[number, number]>; ranges: Array<{ start: number; count: number }> }>;
+  const finish = (geo: THREE.BufferGeometry, mat: THREE.Material | THREE.Material[],
+    seats: Seats, opts: { noCast?: boolean; ruinLod?: boolean } = {}): void => {
+    const mesh = new THREE.Mesh(geo, mat);
+    if (opts.noCast) mesh.userData.noCast = true;
+    worldGroup.add(mesh);
+    const pos = geo.attributes.position as THREE.BufferAttribute;
+    const base = geo.attributes.aBase as THREE.BufferAttribute;
+    for (const s of seats) {
+      if (seated.length > 4000) seated.splice(0, 1000);
+      seated.push({ mesh, pts: s.pts, ref: ringLow(s.pts), att: { pos, base, ranges: s.ranges } });
+    }
+    if (opts.ruinLod) {
+      let cx = 0, cz = 0;
+      for (const s of seats) { cx += s.pts[0][0]; cz += s.pts[0][1]; }
+      if (seats.length) ruinTiles.push({ mesh, x: cx / seats.length, z: cz / seats.length });
+      if (ruinTiles.length > 400) ruinTiles.splice(0, 100);
+    }
+  };
+  const packRuin = (pieces: BldPiece[], rubble: boolean): void => {
+    if (!pieces.length) return;
+    let total = 0;
+    for (const p of pieces) total += p.geo.attributes.position.count;
+    const pos = new Float32Array(total * 3), nor = new Float32Array(total * 3),
+      col = new Float32Array(total * 3), aB = new Float32Array(total);
+    const seats: Seats = [];
+    let o = 0;
+    for (const p of pieces) {
+      const n = p.geo.attributes.position.count;
+      pos.set(p.geo.attributes.position.array as Float32Array, o * 3);
+      nor.set(p.geo.attributes.normal.array as Float32Array, o * 3);
+      col.set(p.geo.attributes.color.array as Float32Array, o * 3);
+      aB.fill(p.base, o, o + n);
+      seats.push({ pts: p.pts, ranges: [{ start: o, count: n }] });
+      o += n;
+      p.geo.dispose();
+    }
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+    geo.setAttribute('aBase', new THREE.BufferAttribute(aB, 1));
+    finish(geo, rubble ? ruinMatFar : ruinMat, seats, { noCast: rubble, ruinLod: !rubble });
+  };
+  packRuin(b.walls, false);
+  packRuin(b.rubble, true);
+  // The intact stock: caps then walls per paint, so the whole tile is one
+  // mesh and at most 24 draw calls instead of two per building.
+  let total = 0;
+  for (const arr of b.intact.values()) for (const p of arr) total += p.geo.attributes.position.count;
+  if (total) {
+    const pos = new Float32Array(total * 3), nor = new Float32Array(total * 3),
+      uv = new Float32Array(total * 2), aB = new Float32Array(total);
+    const geo = new THREE.BufferGeometry();
+    const seatsBy = new Map<BldPiece, Array<{ start: number; count: number }>>();
+    let o = 0;
+    const copyRange = (p: BldPiece, start: number, count: number): void => {
+      pos.set((p.geo.attributes.position.array as Float32Array).subarray(start * 3, (start + count) * 3), o * 3);
+      nor.set((p.geo.attributes.normal.array as Float32Array).subarray(start * 3, (start + count) * 3), o * 3);
+      const u = p.geo.attributes.uv?.array as Float32Array | undefined;
+      if (u) uv.set(u.subarray(start * 2, (start + count) * 2), o * 2);
+      aB.fill(p.base, o, o + count);
+      const list = seatsBy.get(p) ?? [];
+      list.push({ start: o, count });
+      seatsBy.set(p, list);
+      o += count;
+    };
+    for (const [paint, arr] of [...b.intact.entries()].sort((x, y) => x[0] - y[0])) {
+      for (const half of [0, 1]) {                    // ExtrudeGeometry: 0 caps, 1 sides
+        const at = o;
+        for (const p of arr) {
+          const groups = p.geo.groups?.length ? p.geo.groups
+            : [{ start: 0, count: p.geo.attributes.position.count, materialIndex: 1 }];
+          for (const g of groups) if ((g.materialIndex ?? 0) === half) copyRange(p, g.start, g.count);
+        }
+        if (o > at) geo.addGroup(at, o - at, paint * 2 + half);
+      }
+      for (const p of arr) p.geo.dispose();
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
+    geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+    geo.setAttribute('aBase', new THREE.BufferAttribute(aB, 1));
+    finish(geo, B_MATS_FLAT, [...seatsBy.entries()].map(([p, ranges]) => ({ pts: p.pts, ranges })));
+  }
+}
+/** Near ruins show their interiors (DoubleSide); far ones have no visible
+ *  interior and pay double rasterisation for nothing. Swapped per tile
+ *  batch, on a slow clock — the boundary is beyond the detail ring and the
+ *  materials are visually identical from outside. */
+const RUIN_NEAR = 700;
+let ruinLodAt = 0;
+function stepRuinLod(now: number): void {
+  if (now < ruinLodAt) return;
+  ruinLodAt = now + 900;
+  for (const t of ruinTiles) {
+    const want = Math.hypot(t.x - state.x, t.z - state.z) < RUIN_NEAR ? ruinMat : ruinMatFar;
+    if (t.mesh.material !== want) t.mesh.material = want;
+  }
+}
 function building(pts: Array<[number, number]>, id: number, levels: number): void {
   // ON THE LINE, nothing out here is intact. The Covers are where the built
   // world went — everything the domes did not take has stood empty since the
@@ -8164,9 +8337,17 @@ function building(pts: Array<[number, number]>, id: number, levels: number): voi
   const height = clamp(levels * 3.1, 3, lineOn ? 26 : 90);
   const r = mulberry32((id * 2654435761) >>> 0);
   r(); // first draw off a hashed seed is poorly distributed
+  // Intact buildings hand their extrusion to the tile batch instead of
+  // standing up a mesh each — see flushBuildings for why.
+  const intactSink = (paint: number) => (geo: THREE.BufferGeometry, base: number): void => {
+    const batch = openBldBatch();
+    const arr = batch.intact.get(paint) ?? [];
+    arr.push({ geo, base, pts });
+    batch.intact.set(paint, arr);
+  };
   if (!lineOn && (height > 24 || r() > 0.42)) {
     buildStats.intact++;
-    polygon(pts, B_MATS[bPaint(id)], 0.9, height, 'solid');
+    polygon(pts, B_MATS[bPaint(id)], 0.9, height, 'solid', intactSink(bPaint(id)));
     return;
   }
   let minH = Infinity, cx = 0, cz = 0;
@@ -8182,7 +8363,7 @@ function building(pts: Array<[number, number]>, id: number, levels: number): voi
   cx /= pts.length; cz /= pts.length;
   const foot = minH - 0.6;                       // bury the base on the uphill side
   const standing = Math.max(2.4, height * (0.5 + r() * 0.35));
-  const parts: THREE.BufferGeometry[] = [];
+  const parts: THREE.BufferGeometry[] = [];   // the walls — these cast shadows
   let tallest = 0;
   for (let i = 0; i < pts.length; i++) {
     const [ax, az] = pts[i], [bx, bz] = pts[(i + 1) % pts.length];
@@ -8207,17 +8388,20 @@ function building(pts: Array<[number, number]>, id: number, levels: number): voi
       parts.push(boxPart(
         w, top, (len / bays) * 1.04,
         ax + (bx - ax) * t, top / 2, az + (bz - az) * t,
-        new THREE.Color(0x9a8f7c).multiplyScalar(shade).getHex(), 0, ang,
+        new THREE.Color(0x9a8f7c).multiplyScalar(shade).getHex(), 0, ang, true,
       ));
     }
   }
-  if (!parts.length) { buildStats.intact++; polygon(pts, B_MATS[bPaint(id)], 0.9, height, 'solid'); return; }
+  if (!parts.length) { buildStats.intact++; polygon(pts, B_MATS[bPaint(id)], 0.9, height, 'solid', intactSink(bPaint(id))); return; }
   buildStats.ruin++;
   if (buildStats.ruins.length < 400) buildStats.ruins.push([cx, cz]);
   // Rubble where the roof landed, and scrub that moved in after it. The normal
   // vegetation pass refuses to plant within 5m of a wall, which is exactly
-  // where a reclaimed ruin needs plants — so a ruin grows its own.
-  for (let i = 0; i < 14; i++) {
+  // where a reclaimed ruin needs plants — so a ruin grows its own. Six pieces,
+  // not fourteen: measured (R18), the clutter was a third of a banlieue's
+  // ruin triangles and the read is carried by the first few pieces.
+  const rubble: THREE.BufferGeometry[] = [];     // never casts, never DoubleSide
+  for (let i = 0; i < 6; i++) {
     const a = r() * Math.PI * 2, rad = Math.sqrt(r());
     const px = cx + Math.cos(a) * rad * (maxx - minx) * 0.42;
     const pz = cz + Math.sin(a) * rad * (maxz - minz) * 0.42;
@@ -8225,18 +8409,25 @@ function building(pts: Array<[number, number]>, id: number, levels: number): voi
     const gy = groundAt(px, pz) - foot;          // same local frame as the walls
     if (r() < 0.45) {
       const s = 0.5 + r() * 1.3;                 // slab of fallen roof
-      parts.push(boxPart(s, 0.3 + r() * 0.4, s * (0.6 + r()), px, gy + 0.2, pz,
-        new THREE.Color(0x8e8474).multiplyScalar(0.45 + r() * 0.3).getHex(), 0, r() * 3));
+      rubble.push(boxPart(s, 0.3 + r() * 0.4, s * (0.6 + r()), px, gy + 0.2, pz,
+        new THREE.Color(0x8e8474).multiplyScalar(0.45 + r() * 0.3).getHex(), 0, r() * 3, true));
     } else {
       const s = 0.9 + r() * 1.8, h = 1.1 + r() * 2.6;
-      parts.push(boxPart(s, h, s, px, gy + h / 2, pz,
-        new THREE.Color().setHSL(biome.vegHue[0] + r() * biome.vegHue[1], 0.34 + r() * 0.2, 0.15 + r() * 0.1).getHex(), 0, r() * 3));
+      rubble.push(boxPart(s, h, s, px, gy + h / 2, pz,
+        new THREE.Color().setHSL(biome.vegHue[0] + r() * biome.vegHue[1], 0.34 + r() * 0.2, 0.15 + r() * 0.1).getHex(), 0, r() * 3, true));
     }
   }
-  const shell = new THREE.Mesh(mergeParts(parts), ruinMat);
-  shell.position.y = foot;                       // the base the façade shader reads
-  worldGroup.add(shell);
-  noteSeated(shell, pts);
+  // Into the tile batch, baked at world height with the foot as the facade's
+  // ground line — see flushBuildings.
+  const batch = openBldBatch();
+  const wallsGeo = mergeParts(parts);
+  wallsGeo.translate(0, foot, 0);
+  batch.walls.push({ geo: wallsGeo, base: foot, pts });
+  if (rubble.length) {
+    const rubbleGeo = mergeParts(rubble);
+    rubbleGeo.translate(0, foot, 0);
+    batch.rubble.push({ geo: rubbleGeo, base: foot, pts });
+  }
   mapPoly(pts, 'rgba(70,66,58,0.9)');
   claimSolid(pts, foot + tallest, true);
 }
@@ -8387,7 +8578,11 @@ function shoreRibbon(ring: Array<[number, number]>): void {
   drapes.push(mesh);
   worldGroup.add(mesh);
 }
-function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Material[], lift: number, extrude = 0, collide?: 'solid' | 'water'): void {
+function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Material[], lift: number, extrude = 0, collide?: 'solid' | 'water',
+  /** A batch sink: when set (buildings only), the extrusion is handed over
+   *  baked at world height instead of standing up its own mesh — the batch
+   *  owes it an aBase and a seat range at flush (see flushBuildings). */
+  sink?: (geo: THREE.BufferGeometry, base: number) => void): void {
   if (pts.length < 3) return;
   // THE SAME GATE THE RIBBON KEEPS, for the same reason. An area is drawn
   // exactly once, so draping it against a heightfield that has not streamed in
@@ -8446,6 +8641,16 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
     : new THREE.ShapeGeometry(shape);
   geo.rotateX(Math.PI / 2); // shape XY → world XZ (y down after rotate; extrude goes up via scale)
   if (extrude > 0) geo.scale(1, -1, 1);
+  if (sink && extrude > 0) {
+    // Everything a mesh would have owed the world, without the mesh: the
+    // collision walls and the chart mark are below (they never cared about
+    // meshes), and the geometry goes to the tile batch at world height.
+    geo.translate(0, base, 0);
+    sink(geo, base);
+    mapPoly(pts, 'rgba(70,66,58,0.9)');
+    claimSolid(pts, base + depth);
+    return;
+  }
   const mesh = new THREE.Mesh(geo, mat);
   if (extrude > 0) {
     // Sunk to its plinth, worked out above: the roof stays level, the downhill
@@ -9115,6 +9320,8 @@ async function renderGated(x: number, y: number, ways: OsmWay[]): Promise<void> 
   );
   for (const r of rings) if (r) for (const el of r) if ((el.tags ?? {}).highway) halo.push(el);
   renderWays(out, halo);
+  // The tile's buildings, standing up together — see flushBuildings.
+  flushBuildings();
 }
 
 // "No roads yet" must read as LOADING, not a broken world.
@@ -11271,8 +11478,8 @@ function stepReal(dt: number): boolean {
     if (!m.isMesh || !m.geometry?.attributes?.position) return;
     const tris = (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3;
     const first = Array.isArray(m.material) ? m.material[0] : m.material;
-    const kind = first === ruinMat ? 'ruin'
-      : B_MATS.includes(first as never) ? 'building'
+    const kind = first === ruinMat || first === ruinMatFar ? 'ruin'
+      : B_MATS_FLAT.includes(first as THREE.Material) ? 'building'
       : m.userData.tunnel ? 'tunnel'
       : (first as THREE.Material & { polygonOffset?: boolean })?.polygonOffset ? 'drape' : 'other';
     add(kind, tris, m.castShadow);
@@ -16223,6 +16430,7 @@ function tick(now: number): void {
   stepSurvey(now);
   stepStations(now);
   stepLine(now);
+  stepRuinLod(now);
   // THE CAR IS EVIDENCE TOO. Dry-land proof used to come only from a ribbon
   // being built, and Badwater Road is a single OSM way — so it fired once, at
   // the spawn, and never again. Drive 8km up the valley and the anchor was
