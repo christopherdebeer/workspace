@@ -722,7 +722,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     // the career alone: roads, claims and the odometer are not the
     // campaign's to take.
     const resetNote = el('div', 'm-dimline',
-      'HANDS THE DOCKET BACK — RUN, LEGS, STATION WAKES. ROADS AND ODOMETER KEEP.');
+      'HANDS THE DOCKET BACK — RUN, LEGS, STATION ACTIVATIONS. ROADS AND ODOMETER KEEP.');
     let armedAt = 0;
     const disarm = (): void => {
       armedAt = 0;

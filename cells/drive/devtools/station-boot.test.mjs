@@ -94,11 +94,13 @@ const term = await d.page.evaluate(() => ({
   status: document.querySelector('#ov-term .t-status')?.textContent,
   rows: document.querySelector('#ov-term .t-rows')?.textContent,
   wake: document.querySelector('#ov-term .t-wake')?.style.display,
+  label: document.querySelector('#ov-term .t-wake')?.textContent,
 }));
 check('the terminal opens', term.shown, term);
 check('…reading DORMANT, with real readings on it',
   /DORMANT/.test(term.status ?? '') && /GRID/.test(term.rows ?? '') && /M ASL/.test(term.rows ?? ''), term);
-check('…and offers exactly one action', term.wake === 'block', term);
+check('…and offers exactly one action, and it says ACTIVATE',
+  term.wake === 'block' && /ACTIVATE STATION/.test(term.label ?? ''), term);
 
 // ── the wake ──
 await d.page.evaluate(() => document.querySelector('#ov-term .t-wake').dispatchEvent(new MouseEvent('click', { bubbles: true })));

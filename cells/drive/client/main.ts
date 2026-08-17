@@ -17842,7 +17842,7 @@ function terminalCard(site: StationSite): import('./overlays').TerminalCard {
     status: wokenAt ? 'ONLINE · REPORTING' : 'DORMANT',
     tone: wokenAt ? 'good' : 'gold',
     rows,
-    ...(wokenAt ? {} : { wake: 'WAKE STATION' }),
+    ...(wokenAt ? {} : { wake: 'ACTIVATE STATION' }),
   };
 }
 /** The stations as the probes see them — distance, built, woken, near. */
@@ -17903,6 +17903,23 @@ function lineArm(): void {
 function stepLine(now: number): void {
   if (!lineOn) return;
   if (missionPhase === 'none') lineArm();
+  // THE DOCKET CONTINUES BY ITSELF. Mid-line, a leg's giver is the station
+  // you just finished a leg AT — arriving, the ARRIVED card, the terminal
+  // and the next leg's offer all land on the same spot, and the one tap that
+  // actually mattered (ACCEPT) was the easiest to lose; measured at PD-02:
+  // leg 2 sat 'offered' with no waypoint and the run read as stalled. So on
+  // the line, ACTIVATING the station is the acceptance: an offered leg whose
+  // giver station is active auto-accepts the moment you are in range, and
+  // the next waypoint goes up. The first pickup keeps its ritual only until
+  // the station comes online — which is the order the opening teaches anyway.
+  if (missionPhase === 'offered' && mission && missionReady && missionGiver) {
+    const mid = mission.id, g = missionGiver;
+    if (LEGS.some((l) => l.id === mid)) {
+      const st = stationSites.find((s) =>
+        marks.has('s', s.st.id) && Math.hypot(s.x - g.x, s.z - g.z) < 400);
+      if (st) acceptMission(now);
+    }
+  }
   if (now > lineSaveAt) { lineSaveAt = now + 8000; lineSave(); }
 }
 /** Begin, or continue, from the menu. Navigation, like every drive start —
