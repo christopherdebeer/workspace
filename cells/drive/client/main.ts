@@ -9802,7 +9802,13 @@ const PEAK_Z = 8;
  */
 const PEAK_R = 350000;
 const PEAK_RING_MAX = 3;
-interface Peak { name: string; x: number; z: number; ele: number }
+interface Peak { name: string; x: number; z: number; ele: number;
+  /** A campaign Cover posing as a summit (see updatePeaks): its radius, which
+   *  is what makes its label and distance honest — the marker sits on the
+   *  dome's visible mass rather than its apex (which from anywhere near the
+   *  foot is straight up and out of frame), and the distance reads to the
+   *  RIM, because the wall in front of you is the thing, not its centre. */
+  r?: number }
 const peaks = new Map<string, Peak>();
 const peakTiles = new Set<string>();
 let peakInFlight = 0;
@@ -14741,7 +14747,7 @@ function updatePeaks(vx: number, vz: number): void {
     const g = coverBuilt.get(c.id);
     if (!g) continue;
     cands.push({ name: c.name, x: g.position.x, z: g.position.z,
-      ele: g.position.y + baseElev + c.r * 0.42 });
+      ele: g.position.y + baseElev + c.r * 0.42, r: c.r });
   }
   // THE FRUSTUM FIRST, THE RANKING SECOND — and that order is the whole
   // lesson. Ranking first and drawing only the survivors picked the three
@@ -14767,7 +14773,11 @@ function updatePeaks(vx: number, vz: number): void {
     const dx = p.x - vx, dz = p.z - vz;
     const dc = Math.min(l.d, 900);                   // the pin's own stand-off
     const wx = vx + (dx / l.d) * dc, wz = vz + (dz / l.d) * dc;
-    const wy = eyeY + Math.max(l.app, 0.004) * dc;
+    // A Cover's apex from anywhere near its foot is 20-odd degrees up — out
+    // of frame in chase pitch, so an apex-true marker never drew exactly
+    // where the shell dominates the view. Its label sits lower, ON the dome's
+    // mass (anywhere on the thing is honest); a summit keeps its true angle.
+    const wy = eyeY + (p.r ? Math.min(l.app, 0.16) : Math.max(l.app, 0.004)) * dc;
     poiVec.set(wx, wy, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
     if (poiView.z >= -1) continue;                   // behind the camera
@@ -14795,7 +14805,7 @@ function updatePeaks(vx: number, vz: number): void {
     poiDraw.push({
       x: e.sx, y: e.sy,
       tx: 0, ty: 0,                                  // no beam: see the draw pass
-      t: `${e.p.name.toUpperCase()} ${Math.round(e.p.ele)}M ${fmtDist(e.d)}`,
+      t: `${e.p.name.toUpperCase()} ${Math.round(e.p.ele)}M ${fmtDist(Math.max(0, e.d - (e.p.r ?? 0)))}`,
       c: POI_COLORS.peak, edge: 0, rng: false, hid: false,
       name: e.p.name, kind: 'peak', pinned: false, d: e.d,
       w: [e.wx, e.wz, e.wy],
