@@ -9120,6 +9120,25 @@ const sync = openSync({
 /** OSM tiles whose ways have actually been rendered — NOT the same as the
  *  requested set, which is marked before the fetch even starts. */
 const osmDone = new Set<string>();
+// ── the tile pipeline's books ──────────────────────────────────────
+// Every stage a vector tile passes through used to be invisible from the
+// outside: a tile could land, refuse half its ways for want of terrain,
+// re-queue, and refuse again — and the debug tint said only "landed". The
+// books record what each render pass actually did, per tile, so a hole in
+// the world can be asked about (the field query below) instead of stared
+// at: how many ways arrived, how many the build refused, how many times
+// the tile has retried, and where the data came from.
+interface TileStat { at: number; src: 'cache' | 'cell' | 'mirror';
+  ways: number; refused: number; retries: number; state: 'done' | 'retry' | 'error' }
+const tileStats = new Map<string, TileStat>();
+function noteTileRender(key: string, src: TileStat['src'], ways: number, refused: number): void {
+  const prev = tileStats.get(key);
+  tileStats.set(key, {
+    at: performance.now(), src, ways, refused,
+    retries: (prev?.retries ?? 0) + (prev && prev.state === 'retry' ? 1 : 0),
+    state: refused > 0 ? 'retry' : 'done',
+  });
+}
 const cpKey = (x: number, z: number): string => {
   const [lat, lon] = localToLatLon(x, z);
   return `${lat.toFixed(5)},${lon.toFixed(5)}`;   // ~1m — a checkpoint's identity is its place
@@ -9453,6 +9472,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
   if (cached) {
     const before = unbuilt;
     await renderGated(x, y, cached);
+    noteTileRender(key, 'cache', cached.length, unbuilt - before);
     if (unbuilt !== before) setTimeout(() => osmLoaded.delete(key), 3000);
     else osmDone.add(key);
     return;
@@ -9466,9 +9486,11 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
   }
   osmInFlight++;
   osmActive.add(key);
+  let src: TileStat['src'] = 'cell';
   try {
     let ways = await proxyTile(x, y);
     if (!ways) {
+      src = 'mirror';
       // The proxy could not answer. Go straight to the mirrors, exactly as
       // before this cell had a namespace.
       const b = tileBounds(x, y, OSM_Z);
@@ -9495,6 +9517,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     writeTileCache(x, y, ways);
     const before = unbuilt;
     await renderGated(x, y, ways);
+    noteTileRender(key, src, ways.length, unbuilt - before);
     // A tile that refused any ribbon for want of terrain is NOT done. Let it
     // be requested again once the elevation it needed has landed, or the road
     // is simply missing for the rest of the session.
@@ -9503,6 +9526,9 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
   } catch {
     if (++osmFails >= 2) osmDown = true;
     osmFailedAt.set(key, performance.now());
+    const prev = tileStats.get(key);
+    tileStats.set(key, { at: performance.now(), src, ways: prev?.ways ?? 0,
+      refused: prev?.refused ?? 0, retries: prev?.retries ?? 0, state: 'error' });
     setTimeout(() => osmLoaded.delete(key), 8000); /* backoff, then a later pass retries */
   }
   finally {
@@ -14312,12 +14338,19 @@ const endStick = (e: PointerEvent): void => {
     // phone reaching across a map, and the cost of being generous is nothing.
     if (now - tapAt < 450 && Math.hypot(e.clientX - tapX, e.clientY - tapY) < 36) {
       // ON THE LINE the chart is a chart: a ranger's position is the one thing
-      // the run is about, so the double-tap teleport stands down.
+      // the run is about, so the double-tap teleport stands down — and the
+      // gesture becomes the FIELD QUERY instead (see fieldQuery): the books
+      // for the tapped spot on screen, the full record on the clipboard. The
+      // clipboard write must happen HERE, inside the gesture, or the
+      // permission model refuses it.
       if (!lineOn) {
         const [wx, wz] = chartToWorld(e.clientX, e.clientY);
         teleportTo(wx, wz);
       } else {
+        const [wx, wz] = chartToWorld(e.clientX, e.clientY);
+        lastField = fieldQuery(wx, wz);
         lineNudge = performance.now();
+        try { void navigator.clipboard?.writeText(lastField.json); } catch { /* the toast still answers */ }
       }
       tapAt = 0;
     } else {
@@ -17876,6 +17909,60 @@ let lineOdo = 0;                 // metres on the line, THIS device, cumulative
 let lineBegunAt = 0;
 let lineSaveAt = 0;
 let lineNudge = 0;               // a dead travel gesture deserves one honest line
+// ── the field query ────────────────────────────────────────────────
+// ON THE LINE a double tap is not travel — but it is now a QUESTION. The
+// ranger's kit answers with what the pipeline's books hold for the tapped
+// spot (see tileStats): which tile, what state, how many ways arrived and
+// how many the build refused, whether the ground under it exists, what the
+// network is doing, and what roads the collision grid actually holds
+// nearby. The toast reads like Service equipment because it is; the FULL
+// record goes to the clipboard, which is how a hole in the world travels
+// from a phone to a debugger without a screenshot of a vibe.
+interface FieldRecord { head: string; body: string; json: string }
+let lastField: FieldRecord | null = null;
+function fieldQuery(ex: number, ez: number): FieldRecord {
+  const [lat, lon] = localToLatLon(ex, ez);
+  const [tx, ty] = tileAt(lat, lon, OSM_Z);
+  const key = `${tx}/${ty}`;
+  const st = tileStats.get(key);
+  const state = st?.state ?? (osmDone.has(key) ? 'done' : osmLoaded.has(key) ? 'pending' : 'unasked');
+  let segs = 0;
+  const names = new Set<string>();
+  const cgx = Math.floor(ex / GRID), cgz = Math.floor(ez / GRID);
+  for (let dx = -2; dx <= 2; dx++) {
+    for (let dz = -2; dz <= 2; dz++) {
+      for (const s of roadGrid.get(`${cgx + dx},${cgz + dz}`) ?? []) {
+        segs++;
+        if (s.nm) names.add(s.nm);
+      }
+    }
+  }
+  const elev = hasHeight(ex, ez);
+  const ageS = st ? Math.round((performance.now() - st.at) / 1000) : null;
+  const json = JSON.stringify({
+    at: [+lat.toFixed(5), +lon.toFixed(5)], tile: `${OSM_Z}/${tx}/${ty}`, state,
+    src: st?.src ?? null, ways: st?.ways ?? null, refused: st?.refused ?? null,
+    retries: st?.retries ?? 0, ageS, elev,
+    inFlight: osmInFlight, queued: osmQueue.length, proxyOk: tileProxyOk, upstreamDown: osmDown,
+    segsNear: segs, roadsNear: [...names].slice(0, 8), chartHeld: chartHeld.size,
+  });
+  return {
+    head: `T${OSM_Z} ${tx}·${ty} · ${state.toUpperCase()}${st ? ` · ${st.src.toUpperCase()}` : ''}${ageS !== null ? ` · ${ageS}S` : ''}`,
+    body: [
+      `${lat.toFixed(5)} ${lon.toFixed(5)}`,
+      st ? `WAYS ${st.ways - st.refused}/${st.ways} R${st.retries}` : 'NO RENDER RECORD',
+      `ELEV ${elev ? 'OK' : 'VOID'}`,
+      `NET ${osmInFlight}/${osmQueue.length}${tileProxyOk ? '' : ' PROXY LOST'}${osmDown ? ' UPSTREAM DOWN' : ''}`,
+      segs ? `GRID ${segs} SEG${names.size ? ` · ${[...names][0].toUpperCase()}` : ''}` : 'GRID EMPTY',
+      'RECORD COPIED',
+    ].join(' · '),
+    json,
+  };
+}
+(window as unknown as { __field?: object }).__field = (la?: number, lo?: number): object => {
+  const [ex, ez] = la !== undefined && lo !== undefined ? toLocal(la, lo) : [state.x, state.z];
+  return JSON.parse(fieldQuery(ex, ez).json) as object;
+};
 function lineLoad(): LineState | null {
   try {
     const j = JSON.parse(localStorage.getItem(LINE_KEY) ?? 'null') as LineState | null;
@@ -19324,8 +19411,13 @@ function stepOverlays(): void {
     ? { kicker: 'SURVEYED', head: surveyClaim.name.toUpperCase(), body: `${surveyClaim.n} CHECKPOINTS` }
     : stationWoke && performance.now() - stationWoke.at < 6000
       ? { kicker: 'STATION', head: `${stationWoke.name} ONLINE`, body: 'UPLINK ESTABLISHED · REPORTING' }
-      : lineNudge && performance.now() - lineNudge < 3000
-        ? { kicker: 'THE LINE', head: 'THE LINE IS DRIVEN', body: 'NO TRAVEL ON A RUN · LEAVE VIA THE MENU' }
+      : lineNudge && performance.now() - lineNudge < 8000
+        ? (lastField
+          // The toast renders head and body only (its kicker is fixed at
+          // birth), so the refusal's one honest line leads the body and the
+          // books follow it.
+          ? { kicker: 'FIELD QUERY', head: lastField.head, body: `THE LINE IS DRIVEN · ${lastField.body}` }
+          : { kicker: 'THE LINE', head: 'THE LINE IS DRIVEN', body: 'NO TRAVEL ON A RUN · LEAVE VIA THE MENU' })
         : null);
 }
 let dockRect = { x: 0, y: 0, w: 0, h: 0 };

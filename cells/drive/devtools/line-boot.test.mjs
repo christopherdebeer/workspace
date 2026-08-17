@@ -105,6 +105,13 @@ check('a double tap does not teleport a ranger',
   Math.hypot(after.x - before.x, after.z - before.z) < 8, { before, after });
 check('…and the refusal says so, once',
   await d.page.evaluate(() => /THE LINE IS DRIVEN/.test(document.querySelector('#ov-toast')?.textContent ?? '')), null);
+// …and the refusal is a FIELD QUERY now: the tapped spot's pipeline books,
+// on screen (the full record goes to the clipboard, which a headless page
+// cannot read back — the toast carrying real state is the assertion).
+check('…and it answers with the field books',
+  await d.page.evaluate(() => /ELEV (OK|VOID)/.test(document.querySelector('#ov-toast')?.textContent ?? '')
+    && /T16 \d+·\d+/.test(document.querySelector('#ov-toast')?.textContent ?? '')),
+  await d.page.evaluate(() => document.querySelector('#ov-toast')?.textContent));
 
 // ── the menu ──
 const hub = await d.page.evaluate(() => {
