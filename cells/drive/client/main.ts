@@ -8233,6 +8233,11 @@ function flushBuildings(): void {
     const mesh = new THREE.Mesh(geo, mat);
     if (opts.noCast) mesh.userData.noCast = true;
     worldGroup.add(mesh);
+    // Under the chart's shed (see stepZoomShed) a batch born at altitude is
+    // born hidden — the shed only flips visibility on TRANSITIONS.
+    mesh.visible = !shedWorld;
+    if (bldBatchMeshes.length > 600) bldBatchMeshes.splice(0, 150);
+    bldBatchMeshes.push(mesh);
     const pos = geo.attributes.position as THREE.BufferAttribute;
     const base = geo.attributes.aBase as THREE.BufferAttribute;
     for (const s of seats) {
@@ -8325,6 +8330,34 @@ function stepRuinLod(now: number): void {
   for (const t of ruinTiles) {
     const want = Math.hypot(t.x - state.x, t.z - state.z) < RUIN_NEAR ? ruinMat : ruinMatFar;
     if (t.mesh.material !== want) t.mesh.material = want;
+  }
+}
+// ── the chart sheds what it cannot show ────────────────────────────
+// The top view's frustum grows with the square of the zoom, and at survey
+// zooms it holds the ENTIRE streamed world: measured live at the aperture,
+// z=30 cost 1,875 draw calls and z=1600 cost 3,364 / 2.7M triangles for a
+// frame where a building is a fraction of a pixel. So the chart sheds by
+// scale, the way any map does: past SHED_WORLD_Z (metres-per-pixel where a
+// house stops being legible) buildings and vegetation go; past SHED_DRAPE_Z
+// even the garden/park tints are sub-pixel and go too. Terrain, roads,
+// water and the pins — the map — stay at every zoom. Chase and drone views
+// are untouched: their frustums are local by construction.
+const SHED_WORLD_Z = 24, SHED_DRAPE_Z = 40;
+/** Every building batch mesh, so the shed can reach them. */
+const bldBatchMeshes: THREE.Mesh[] = [];
+let shedWorld = false, shedDrapes = false;
+function stepZoomShed(): void {
+  const z = camMode === 'top' ? zoomCur : 1;
+  const w = z >= SHED_WORLD_Z, dr = z >= SHED_DRAPE_Z;
+  if (w !== shedWorld) {
+    shedWorld = w;
+    for (const m of bldBatchMeshes) m.visible = !w;
+    for (const k of Object.keys(vegMeshes) as VegKind[]) vegMeshes[k].visible = !w;
+    trunks.visible = !w;
+  }
+  if (dr !== shedDrapes) {
+    shedDrapes = dr;
+    for (const d of drapes) d.visible = !dr;
   }
 }
 function building(pts: Array<[number, number]>, id: number, levels: number): void {
@@ -8694,6 +8727,7 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
       : Array.from({ length: posA.count }, (_, i) => i);
     conformDrape(mesh);
     drapes.push(mesh);
+    mesh.visible = !shedDrapes;   // born under the chart's shed, born hidden
   }
   worldGroup.add(mesh);
   mapPoly(pts, collide === 'solid' ? 'rgba(70,66,58,0.9)' : collide === 'water' ? '#1d3a55' : 'rgba(34,54,32,0.9)');
@@ -16431,6 +16465,7 @@ function tick(now: number): void {
   stepStations(now);
   stepLine(now);
   stepRuinLod(now);
+  stepZoomShed();
   // THE CAR IS EVIDENCE TOO. Dry-land proof used to come only from a ribbon
   // being built, and Badwater Road is a single OSM way — so it fired once, at
   // the spawn, and never again. Drive 8km up the valley and the anchor was
