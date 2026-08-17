@@ -17897,6 +17897,21 @@ function lineSave(): void {
  *  loop and nothing else: legs in order, done stays done. */
 function lineArm(): void {
   if (!lineOn || mission || !LEGS.length) return;
+  // RECONCILE BEFORE ARMING: a leg whose destination station is already
+  // ACTIVE is already done. Activation takes standing at the terminal, and
+  // on the line travel is driving — so the traverse provably happened,
+  // whether or not the accept tap ever did. Found the hard way: the owner
+  // drove Paris→Etampes with leg 1 still 'offered' (the accept lost under
+  // the aperture's cards), activated both stations, and a reload re-armed
+  // leg 1 with its giver 44km behind them — the docket wedged on a tap.
+  // Latching from the station mark makes the run's truth the stations'.
+  for (const l of LEGS) {
+    if (marks.has('m', l.id)) continue;
+    const dst = stationSites.find((s) =>
+      Math.abs(s.st.lat - l.dest.lat) < 0.004 && Math.abs(s.st.lon - l.dest.lon) < 0.006);
+    if (dst && marks.has('s', dst.st.id)) { marks.set('m', l.id); sync.nudge(); continue; }
+    break;                       // the first genuinely open leg ends the sweep
+  }
   const next = LEGS.find((l) => !marks.has('m', l.id));
   if (next) armMission(next);
 }
