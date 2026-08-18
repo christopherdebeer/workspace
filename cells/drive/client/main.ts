@@ -13408,8 +13408,10 @@ function noteTags(t: Record<string, string>): void {
     tracktype: top(tagTally.tracktype), highway: top(tagTally.highway) };
 };
 /** What the sky is actually being told to be, so "it does not go dark" is a
- *  number. `dayF` 0 means the palette should be fully NIGHT_SKY. */
-(window as unknown as { __sky?: object }).__sky = (): object => {
+ *  number. `dayF` 0 means the palette should be fully NIGHT_SKY. Named apart
+ *  from `__sky` — this one silently SHADOWED the case-file probe for months,
+ *  and the collision surfaced as `__sky().time === undefined` in a suite. */
+(window as unknown as { __skypal?: object }).__skypal = (): object => {
   const u = skyMat.uniforms as Record<string, { value: THREE.Vector3 }>;
   const v = (k: string): number[] => [+u[k].value.x.toFixed(3), +u[k].value.y.toFixed(3), +u[k].value.z.toFixed(3)];
   return { dayF: +dayF.toFixed(3), sunAltDeg: +((sunAlt * 180) / Math.PI).toFixed(1),
@@ -15113,19 +15115,31 @@ function updatePois(): void {
       // OFF THE INSTRUMENTS, wherever they are. The first collision taught a
       // chip about the dock; the next would have been the speedometer, then
       // the conditions column, one lesson at a time. hudSafeRects is the
-      // whole inventory at once: the chip walks INWARD along its own bearing
-      // until label and arrow stand on open glass — the bearing survives,
-      // only the stand-off from the border grows. Done HERE, not at draw
-      // time, so the probe's sx/sy are the position the player actually sees.
-      let cxq = (ax + ux * t) / hudS, cyq = (ay + uy * t) / hudS;
+      // whole inventory at once. Three ways off an instrument: SLIDE ALONG
+      // THE RIM either way — a bottom-left chip steps right past the dock and
+      // keeps the map-edge convention — or walk inward along the bearing as
+      // the last resort for a fully-occupied corner (weighted so the rim wins
+      // anything close). Done HERE, not at draw time, so the probe's sx/sy
+      // are the position the player actually sees.
       const labW = textPW(fitP(label, Math.round(HW * 0.5))) + 4 + (KIND_ICON[p.kind] ? 7 : 0);
       const safe = hudSafeRects();
-      for (let s2 = 0; s2 < 26; s2++) {
-        const rx2 = clamp(Math.round(cxq) - (labW >> 1), 2, HW - labW - 2);
-        const hit = safe.some((r2) =>
-          rx2 - 3 < r2[0] + r2[2] && rx2 + labW + 5 > r2[0] && cyq - 18 < r2[1] + r2[3] && cyq + 10 > r2[1]);
-        if (!hit) break;
-        cxq -= ux * 4; cyq -= uy * 4;
+      const openAt = (qx: number, qy: number): boolean => {
+        const rx2 = clamp(Math.round(qx) - (labW >> 1), 2, HW - labW - 2);
+        return !safe.some((r2) =>
+          rx2 - 3 < r2[0] + r2[2] && rx2 + labW + 5 > r2[0] && qy - 18 < r2[1] + r2[3] && qy + 10 > r2[1]);
+      };
+      const bx0 = (ax + ux * t) / hudS, by0 = (ay + uy * t) / hudS;
+      let cxq = bx0, cyq = by0, bestCost = Infinity;
+      for (const [wx2, wy2, toll] of [[-uy, ux, 0], [uy, -ux, 0], [-ux, -uy, 8]]) {
+        let qx = bx0, qy = by0;
+        for (let s2 = 0; s2 <= 26; s2++) {
+          if (openAt(qx, qy)) {
+            if (s2 + toll < bestCost) { bestCost = s2 + toll; cxq = qx; cyq = qy; }
+            break;
+          }
+          qx = clamp(qx + wx2 * 4, 8, HW - 8);
+          qy = clamp(qy + wy2 * 4, 20, HH - 30);
+        }
       }
       poiDraw.push({
         x: cxq * hudS, y: cyq * hudS,
