@@ -1839,12 +1839,16 @@ const osmFailedAt = new Map<string, number>();
 /** Where tiles are wanted (the car thrown forward along its heading), and how
  *  far from the CAR a tile may sit before the queue gives up on it. */
 let osmFocusX = 0, osmFocusZ = 0, osmCarX = 0, osmCarZ = 0, osmRingR = Infinity;
+/** Tiles a FIELD QUERY tap asked for by hand. The ring gate below drops any
+ *  queued tile the truck has left behind — right for the stream, wrong for an
+ *  explicit ask: a ranger pointing at a spot on the chart is the ring. */
+const osmPinned = new Set<string>();
 function osmRelease(): void {
   let best = -1, bestD = Infinity;
   for (let i = 0; i < osmQueue.length; i++) {
     const w = osmQueue[i];
     const [wx, wz] = tileCentreLocal(w.x, w.y);
-    if (Math.hypot(wx - osmCarX, wz - osmCarZ) > osmRingR) {
+    if (!osmPinned.has(`${w.x}/${w.y}`) && Math.hypot(wx - osmCarX, wz - osmCarZ) > osmRingR) {
       osmQueue.splice(i, 1); i--;
       w.go(false);            // left the ring — forget it, a later pass can ask again
       continue;
@@ -5691,7 +5695,12 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     const [cla, clo] = localToLatLon(dense[0][0], dense[0][1]);
     chartOn = surveyStore.seen(name, cla, clo);
     if (!chartOn && !chartHeld.has(name)) chartHeld.set(name, { lat: cla, lon: clo, segs: [] });
-  } else if (lineOn) chartOn = false;
+  }
+  // An UNNAMED way charts as it is. The survey economy is a NAMED-roads game —
+  // checkpoints, claims, the docket all key on a name — so an unnamed farm
+  // track can never be surveyed and was therefore held off the chart forever.
+  // A hairline that cannot ever be earned is not stakes, it is a hole in the
+  // map (measured: a field query on one read 9 segments, all invisible).
   // Only carriageways get a solid edge. A track is two ruts worn into the
   // hillside — its ribbon is transparent everywhere but the ruts, so a pair of
   // earth walls would stand along it with nothing on top of them.
@@ -9132,6 +9141,7 @@ interface TileStat { at: number; src: 'cache' | 'cell' | 'mirror';
   ways: number; refused: number; retries: number; state: 'done' | 'retry' | 'error' }
 const tileStats = new Map<string, TileStat>();
 function noteTileRender(key: string, src: TileStat['src'], ways: number, refused: number): void {
+  osmPinned.delete(key);   // a hand-asked tile that has answered is just a tile
   const prev = tileStats.get(key);
   tileStats.set(key, {
     at: performance.now(), src, ways, refused,
@@ -9645,8 +9655,16 @@ function streamWorld(ex: number, ez: number): void {
   // Beyond the fine layer's reach, a COARSE shell so the land does not simply
   // stop. Only fetched once the view is wide enough to see past the fine ring.
   if (r > tileMetres(TERRAIN_Z) * 1.5) {
+    // THE CHART STREAMS WHERE YOU LOOK. The fine rings above serve the TRUCK —
+    // that is gameplay. The far shell and the overview vectors serve the VIEW,
+    // and a panned chart is looking somewhere else: before this, panning past
+    // the streamed disc showed bare backdrop that never filled until you drove
+    // there. The stream pass refires every ~1.2s, so a pan starts filling on
+    // the next tick.
+    const [cLat, cLon] = camMode === 'top' && (panX !== 0 || panZ !== 0)
+      ? localToLatLon(ex + panX, ez + panZ) : [lat, lon];
     setFarLevel(farLevelFor(r));
-    const [fx, fy] = tileAt(lat, lon, farZ);
+    const [fx, fy] = tileAt(cLat, cLon, farZ);
     const fRing = clamp(Math.ceil(r / tileMetres(farZ)), 1, FAR_RING_MAX);
     for (let dx = -fRing; dx <= fRing; dx++)
       for (let dy = -fRing; dy <= fRing; dy++) void loadFarTile(fx + dx, fy + dy);
@@ -9655,7 +9673,7 @@ function streamWorld(ex: number, ez: number): void {
     // fine ring, and only at the level its zoom band can read.
     if (camMode === 'top') {
       setOvLevel(ovLevelFor(r));
-      const [vx, vy] = tileAt(lat, lon, ovZ);
+      const [vx, vy] = tileAt(cLat, cLon, ovZ);
       const vRing = clamp(Math.ceil(r / tileMetres(ovZ)), 1, OV_RING_MAX);
       for (let dx = -vRing; dx <= vRing; dx++)
         for (let dy = -vRing; dy <= vRing; dy++) void loadOvTile(vx + dx, vy + dy);
@@ -11671,6 +11689,10 @@ function stepReal(dt: number): boolean {
     // matters on the chart: a drawn world point stands its labelled distance
     // from the viewer — a clamped stand-off fails this by kilometres.
     view: [+viewX().toFixed(1), +viewZ().toFixed(1)],
+    // The instruments' reserved ground (HUD px), so a probe can assert that a
+    // placed chip stands on open glass.
+    safe: hudSafeRects(),
+    hudS,
     nearest: sorted.slice(0, 3).map((e) => +e.d.toFixed(1)),
     to: sorted[0] ? { x: sorted[0].p.x, z: sorted[0].p.z, name: sorted[0].p.name } : null,
     range: POI_RANGE,
@@ -14367,6 +14389,15 @@ const endStick = (e: PointerEvent): void => {
         lastField = fieldQuery(wx, wz);
         lineNudge = performance.now();
         try { void navigator.clipboard?.writeText(lastField.json); } catch { /* the toast still answers */ }
+        // A DELIBERATE TAP IS AN ASK. A tile the stream never reached — or one
+        // sitting out an error backoff — gets requested on the spot, pinned so
+        // the ring gate cannot drop it for being far from the truck. The query
+        // stays pure for the harness (__field probes never poke); the gesture
+        // is what carries the intent.
+        if (lastField.state === 'unasked' || lastField.state === 'error') {
+          osmPinned.add(`${lastField.tx}/${lastField.ty}`);
+          void loadOsmTile(lastField.tx, lastField.ty);
+        }
       }
       tapAt = 0;
     } else {
@@ -15009,14 +15040,22 @@ function updatePois(): void {
     const dx = p.x - vx, dz = p.z - vz;
     const dc = top ? d : Math.min(d, 900);
     const wx = vx + (dx / d) * dc, wz = vz + (dz / d) * dc;
-    poiVec.set(wx, groundAt(wx, wz) + 2, wz);
+    // A COCKPIT PIN PAST THE CLAMP RIDES THE HORIZON. The stand-off point's
+    // GROUND is not the horizon: seated there, a pin for a place 20km out
+    // drew at whatever the dirt 900m ahead was doing — below the skyline on
+    // any downslope, which reads as "this is nearby ground", the one thing a
+    // distant place is not. A point at eye height projects onto the horizon
+    // line at any distance, so that is where a far pin stands.
+    const farPin = !top && d > 900;
+    poiVec.set(wx, farPin ? camera.position.y - 0.5 : groundAt(wx, wz) + 2, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
     const rng = d < POI_RANGE;
     // Occluded by the ground, or by a building tall enough to matter. Both are
     // "you cannot see this from here", and the label should say so. Looking
     // straight down neither claim exists — the chart is not a sight line —
-    // and skipping the march saves ~70 heightfield samples per pin.
-    const hid = !top && (sightBlockedCached(p.name, poiVec.x, poiVec.y, poiVec.z, i)
+    // and a horizon-riding far pin is a bearing, not a view, so it never
+    // ghosts either. Skipping the march saves ~70 heightfield samples a pin.
+    const hid = !top && !farPin && (sightBlockedCached(p.name, poiVec.x, poiVec.y, poiVec.z, i)
       || wallHitAlong(camera.position.x, camera.position.z, wx, wz, camera.position.y) < 0.98);
     const label = `${p.name.toUpperCase()} ${fmtDist(d)}`;
     if (poiView.z < -1) {
@@ -15030,12 +15069,14 @@ function updatePois(): void {
           : clamp((-poiVec.y * 0.5 + 0.5) * innerHeight, innerHeight * 0.16, innerHeight * 0.86);
         // The beam top: a real column standing on the place, projected the
         // same way the checkpoint beams project theirs — a few pixels at
-        // distance, towering as you arrive.
-        poiVec.set(wx, groundAt(wx, wz) + POI_BEAM_H, wz).project(camera);
+        // distance, towering as you arrive. A horizon-riding far pin gets no
+        // column: a beam is a thing standing ON ground, and its ground is
+        // over the curve.
+        if (!farPin) poiVec.set(wx, groundAt(wx, wz) + POI_BEAM_H, wz).project(camera);
         poiDraw.push({
           x: sx, y: sy,
-          tx: (poiVec.x * 0.5 + 0.5) * innerWidth,
-          ty: (-poiVec.y * 0.5 + 0.5) * innerHeight,
+          tx: farPin ? sx : (poiVec.x * 0.5 + 0.5) * innerWidth,
+          ty: farPin ? sy : (-poiVec.y * 0.5 + 0.5) * innerHeight,
           t: label, c: POI_COLORS[p.kind], edge: 0, rng, hid,
           name: p.name, kind: p.kind, pinned: !!p.pinned, d,
           w: [wx, wz, groundAt(wx, wz) + 2],
@@ -15069,8 +15110,25 @@ function updatePois(): void {
       const tX = ux > 0 ? (rx1 - ax) / ux : ux < 0 ? (rx0 - ax) / ux : Infinity;
       const tY = uy > 0 ? (ry1 - ay) / uy : uy < 0 ? (ry0 - ay) / uy : Infinity;
       const t = Math.max(0, Math.min(tX, tY));
+      // OFF THE INSTRUMENTS, wherever they are. The first collision taught a
+      // chip about the dock; the next would have been the speedometer, then
+      // the conditions column, one lesson at a time. hudSafeRects is the
+      // whole inventory at once: the chip walks INWARD along its own bearing
+      // until label and arrow stand on open glass — the bearing survives,
+      // only the stand-off from the border grows. Done HERE, not at draw
+      // time, so the probe's sx/sy are the position the player actually sees.
+      let cxq = (ax + ux * t) / hudS, cyq = (ay + uy * t) / hudS;
+      const labW = textPW(fitP(label, Math.round(HW * 0.5))) + 4 + (KIND_ICON[p.kind] ? 7 : 0);
+      const safe = hudSafeRects();
+      for (let s2 = 0; s2 < 26; s2++) {
+        const rx2 = clamp(Math.round(cxq) - (labW >> 1), 2, HW - labW - 2);
+        const hit = safe.some((r2) =>
+          rx2 - 3 < r2[0] + r2[2] && rx2 + labW + 5 > r2[0] && cyq - 18 < r2[1] + r2[3] && cyq + 10 > r2[1]);
+        if (!hit) break;
+        cxq -= ux * 4; cyq -= uy * 4;
+      }
       poiDraw.push({
-        x: ax + ux * t, y: ay + uy * t,
+        x: cxq * hudS, y: cyq * hudS,
         t: label, c: POI_COLORS[p.kind], edge: ux > 0 ? 1 : -1, rim: true, ux, uy, rng, hid: false,
         name: p.name, kind: p.kind, pinned: !!p.pinned, d, tx: 0, ty: 0,
         w: [p.x, p.z, groundAt(p.x, p.z) + 2],
@@ -17990,14 +18048,22 @@ let lineNudge = 0;               // a dead travel gesture deserves one honest li
 // nearby. The toast reads like Service equipment because it is; the FULL
 // record goes to the clipboard, which is how a hole in the world travels
 // from a phone to a debugger without a screenshot of a vibe.
-interface FieldRecord { head: string; body: string; json: string }
+interface FieldRecord { head: string; body: string; json: string;
+  /** The asked tile and its state, so the tap handler can act on the answer
+   *  — an 'unasked' tile under a deliberate tap becomes an ASKED one. */
+  tx: number; ty: number; state: string }
 let lastField: FieldRecord | null = null;
+/** A tile's pipeline state, by the same book the field query reads. */
+function tileStateOf(kx: number, ky: number): string {
+  const k = `${kx}/${ky}`;
+  return tileStats.get(k)?.state ?? (osmDone.has(k) ? 'done' : osmLoaded.has(k) ? 'pending' : 'unasked');
+}
 function fieldQuery(ex: number, ez: number): FieldRecord {
   const [lat, lon] = localToLatLon(ex, ez);
   const [tx, ty] = tileAt(lat, lon, OSM_Z);
   const key = `${tx}/${ty}`;
   const st = tileStats.get(key);
-  const state = st?.state ?? (osmDone.has(key) ? 'done' : osmLoaded.has(key) ? 'pending' : 'unasked');
+  const state = tileStateOf(tx, ty);
   let segs = 0;
   const names = new Set<string>();
   const cgx = Math.floor(ex / GRID), cgz = Math.floor(ez / GRID);
@@ -18017,6 +18083,11 @@ function fieldQuery(ex: number, ez: number): FieldRecord {
     retries: st?.retries ?? 0, ageS, elev,
     inFlight: osmInFlight, queued: osmQueue.length, proxyOk: tileProxyOk, upstreamDown: osmDown,
     segsNear: segs, roadsNear: [...names].slice(0, 8), chartHeld: chartHeld.size,
+    // The four neighbours' states — a gap usually straddles a tile edge, and
+    // a record that only speaks for the tapped tile sent one hunt to the
+    // wrong quarry already.
+    nbrs: { n: tileStateOf(tx, ty - 1), s: tileStateOf(tx, ty + 1),
+      e: tileStateOf(tx + 1, ty), w: tileStateOf(tx - 1, ty) },
   });
   return {
     head: `T${OSM_Z} ${tx}·${ty} · ${state.toUpperCase()}${st ? ` · ${st.src.toUpperCase()}` : ''}${ageS !== null ? ` · ${ageS}S` : ''}`,
@@ -18026,9 +18097,9 @@ function fieldQuery(ex: number, ez: number): FieldRecord {
       `ELEV ${elev ? 'OK' : 'VOID'}`,
       `NET ${osmInFlight}/${osmQueue.length}${tileProxyOk ? '' : ' PROXY LOST'}${osmDown ? ' UPSTREAM DOWN' : ''}`,
       segs ? `GRID ${segs} SEG${names.size ? ` · ${[...names][0].toUpperCase()}` : ''}` : 'GRID EMPTY',
-      'RECORD COPIED',
+      state === 'unasked' || state === 'error' ? 'RECORD COPIED · TILE REQUESTED' : 'RECORD COPIED',
     ].join(' · '),
-    json,
+    json, tx, ty, state,
   };
 }
 (window as unknown as { __field?: object }).__field = (la?: number, lo?: number): object => {
@@ -18577,6 +18648,31 @@ const poiRects: Array<{ x: number; y: number; w: number; h: number; name: string
 let poiDraw: PoiDraw[] = [];
 let streaming = false;
 
+/**
+ * THE GLASS'S RESERVED GROUND — every rect an instrument owns, in HUD px.
+ *
+ * One inventory, kept next to the drawing it describes, so anything that
+ * PLACES itself (the chart's rim chips today) can stay clear of everything at
+ * once instead of learning about the dock, then the speedometer, then the
+ * conditions column, one collision at a time. Slightly generous on purpose:
+ * a chip standing a few pixels further into open glass costs nothing, a chip
+ * on top of the battery bar costs both readings. The rects mirror the layout
+ * arithmetic in drawHud below — the dock block and the dial block own the
+ * real numbers; these follow them.
+ */
+function hudSafeRects(): Array<[number, number, number, number]> {
+  const mw = Math.min(58, Math.floor(HW * 0.34));   // the dock square (see drawHud)
+  const my = HH - 4 - 23 - mw - 3;
+  return [
+    [0, 0, HW, 34 + (camMode === 'top' && tileDbg ? 22 : 0)],  // compass strip (+ tile debug header)
+    [0, 34, 68, 22],                                 // the waypoint distance chip, top left
+    [HW - 52, 34, 52, 22],                           // MENU
+    [0, my - 62, 36, 62],                            // the conditions column, stacked over the dock
+    [0, my - 2, mw + 36, HH - my + 2],               // dock, its chips, the info lines under it
+    [HW - 80, HH - 132, 80, 132],                    // dial, LEDs, RIG rows, trip
+    [0, HH - 30, Math.round(HW * 0.72), 30],         // the place line and coordinates
+  ];
+}
 function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   hctx.clearRect(0, 0, HW, HH);
   // While the DOM menu is up the HUD stands down entirely. Its scrim used to
@@ -18906,7 +19002,13 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const txp = clamp(Math.round(p.tx / hudS), 4, HW - 4);    // its head, world-projected
     const typ = Math.round(p.ty / hudS);
     const near = clamp(1 - p.d / 900, 0, 1);
-    const ghost = p.hid ? 0.3 : 1;
+    // DISTANCE READS AS FADE in the cockpit: a pin riding the horizon for a
+    // place 20km out dims toward a rumour, where full ink claimed it was a
+    // thing you could drive to before the next bend. The chart never dims —
+    // map ink is not a sight line.
+    const farDim = camMode !== 'top' && p.d > 900
+      ? clamp(1 - (p.d - 900) / 30000, 0.5, 1) : 1;
+    const ghost = (p.hid ? 0.3 : 1) * farDim;
     // The column runs its FULL projected height; the label sits a third of
     // the way up it — high enough to clear the foot, low enough that a
     // towering nearby beam is not dragging its name into the compass. Far
@@ -18961,7 +19063,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // in range or pinned by hand. Occlusion is the BEAM's story (dashed,
     // ghosted); the words themselves stay legible — a name you cannot read
     // is not a rumour, it is clutter.
-    hctx.globalAlpha = p.hid ? 0.9 : 1;
+    hctx.globalAlpha = (p.hid ? 0.9 : 1) * (0.55 + 0.45 * farDim);
     if (iconCh) hudIconEdge(iconCh, x + 1, ly - 1, p.c, 5);
     textEdgeP(label, x + 2 + iw, ly, p.rng || p.pinned ? UI.gold : p.hid ? UI.soft : UI.text);
     if (p.rng) {
@@ -18988,27 +19090,19 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const iconCh = KIND_ICON[p.kind];
     const iw = iconCh ? 7 : 0;
     const w = textPW(label) + 4 + iw;
-    let y = clamp(Math.round(p.y / hudS), 20, HH - 30);
-    // A chart rim chip is drawn AT its border point — the position carries the
-    // bearing — with the marker diamond on the point and the label kept on
-    // the glass beside it. A cockpit chip rails to its side as ever.
-    const x = p.rim ? clamp(Math.round(p.x / hudS) - Math.round(w / 2), 2, HW - w - 2)
+    const y = clamp(Math.round(p.y / hudS), 20, HH - 30);
+    // A chart rim chip is drawn AT its point — placed and instrument-dodged in
+    // updatePois, so the probe and the paint agree. A cockpit chip rails to
+    // its side as ever.
+    const cxp = clamp(Math.round(p.x / hudS), 8, HW - 8);
+    const x = p.rim ? clamp(cxp - (w >> 1), 2, HW - w - 2)
       : p.edge > 0 ? HW - w - 3 : 3;
-    if (p.rim) {
-      // Not INTO the dock: a chip pointing off the bottom-left corner landed
-      // on the minimap square and read as part of it. Same geometry as the
-      // dock block below (pad 4, info strip 23, square ≤58) — a chip whose
-      // label would touch it rides just above instead, bearing intact.
-      const dw = Math.min(58, Math.floor(HW * 0.34));
-      const dy = HH - 4 - 23 - dw - 3;
-      if (x < 4 + dw + 4 && y > dy - 10) y = dy - 10;
-    }
     if (p.rim) {
       // A diamond says HERE, and a rim chip is never here — it is a bearing.
       // A short bold arrow along the true outward direction says THAT WAY:
       // shaft through the chip's border point, barbs swept back from the tip.
       // Ink pass under colour pass, the same two-coat the diamonds wear.
-      const mx = clamp(Math.round(p.x / hudS), 8, HW - 8);
+      const mx = cxp;
       const my2 = y - 8;
       const vx2 = p.ux ?? 0, vy2 = p.uy ?? -1;
       const bx1 = (-vy2 - vx2) * 0.71, by1 = (vx2 - vy2) * 0.71;   // barb, one side
@@ -19923,6 +20017,18 @@ if (customPaint) bodyMat?.color.set(customPaint);
 if (timeFromUrl >= 0) {
   const d = DIALS.find((x) => x.key === 'time');
   if (d) { d.at = timeFromUrl; d.apply(timeFromUrl); }
+}
+// THE LINE RUNS ON WORLD TIME. A clock dial saved during free driving — NOON,
+// held for a screenshot weeks ago — would pin the ranger's whole docket in
+// amber forever. On the line the day CYCLES, unless the URL pinned a clock
+// (?time / ?t), because probes and screenshots need a held sun more than the
+// fiction needs a moving one. The dial stays live for this session; it is the
+// stale saved value that loses, not the ranger's hand.
+if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
+  && new URLSearchParams(location.search).get('line') === '1') {
+  const d = DIALS.find((x) => x.key === 'time');
+  const i = TIME_MODES.indexOf('CYCLE');
+  if (d && i >= 0) { d.at = i; d.apply(i); }
 }
 (async () => {
   // The HUD face, before the first frame — fillText with an unloaded FontFace

@@ -62,6 +62,8 @@ const seed = `
   localStorage.setItem('drive.marks.v1', JSON.stringify({ v: 1,
     m: { 'line-01': 1755400000100 },
     s: { 'pd-01': 1755400000000, 'pd-02': 1755400000001 } }));
+  // A clock dial saved during free driving — the line must override it to CYCLE.
+  localStorage.setItem('drive.dials', JSON.stringify({ time: 3 }));
 `;
 
 /** Boot a page at a URL, wait for the PD-03 pin, return the pins probe. */
@@ -77,7 +79,8 @@ async function boot(url) {
     () => window.__pins().drawn.some((p) => /PD-03/.test(p.t)), null, { timeout: 90000 });
   const pins = await page.evaluate(() => window.__pins());
   const ov = await page.evaluate(() => window.__overview());
-  const out = { pins, ov, errors };
+  const sky = await page.evaluate(() => window.__sky());
+  const out = { pins, ov, sky, errors };
   await page.close();
   return out;
 }
@@ -89,8 +92,10 @@ const lawHolds = (pins) => pins.drawn
 
 // ── far: the destination is a rim chip, and nothing squats at the clamp ──
 {
-  const { pins, ov, errors } = await boot(
+  const { pins, ov, sky, errors } = await boot(
     'https://c15r-drive.on.parc.land/?lat=48.19873&lon=2.01670&h=196&cam=top&z=24.4&line=1');
+  // The line runs on world time: the seeded NOON dial must lose to CYCLE.
+  check('far: a saved clock dial loses to CYCLE on the line', sky.time === 'CYCLE', sky.time);
   // The chart's ink: at survey zoom the overview layer's ring fade is fully
   // open (negative radii = alpha 1 everywhere) — no hole around the truck.
   check('far: the overview ink is unfaded at survey zoom',
@@ -110,6 +115,13 @@ const lawHolds = (pins) => pins.drawn
   check('far: the chip carries an outward bearing for its arrow',
     !!pd3 && Number.isFinite(pd3.ux) && Number.isFinite(pd3.uy)
     && Math.abs(Math.hypot(pd3.ux, pd3.uy) - 1) < 0.01, pd3 && { ux: pd3.ux, uy: pd3.uy });
+  // The instruments' reserved ground: the chip's anchor point must stand on
+  // open glass, not on the dock, the dial, or the conditions column.
+  check('far: the chip stands clear of every instrument',
+    !!pd3 && !pins.safe.some(([sx, sy, sw, sh]) => {
+      const cx = pd3.sx / pins.hudS, cy = pd3.sy / pins.hudS;
+      return cx > sx - 2 && cx < sx + sw + 2 && cy > sy - 2 && cy < sy + sh + 2;
+    }), pd3 && { at: [Math.round(pd3.sx / pins.hudS), Math.round(pd3.sy / pins.hudS)], safe: pins.safe });
   check('far: no page errors', errors.length === 0, errors);
 }
 
