@@ -3412,8 +3412,13 @@ function grainFx(mat: THREE.Material, tag: string, amp: number, scale: number): 
       // of the surface; grain added afterwards is a property of the screen.
       .replace('#include <color_fragment>', `#include <color_fragment>
         if (uGrainAmp > 0.001 && vGrainFade > 0.001) {
-          float gN = grNoise(vGrainP * uGrainScale) * 0.68
-                   + grNoise(vGrainP * uGrainScale * 2.9) * 0.32;
+          // THREE OCTAVES. The coarse one is the patch (lichen, a clump of
+          // canopy), the middle breaks the patch, and the fine one is what
+          // actually fights the flat facet — without it the shading is smooth
+          // across a face and the eye still reads a plane.
+          float gN = grNoise(vGrainP * uGrainScale) * 0.5
+                   + grNoise(vGrainP * uGrainScale * 2.7) * 0.32
+                   + grNoise(vGrainP * uGrainScale * 6.4) * 0.18;
           diffuseColor.rgb *= 1.0 + (gN - 0.5) * uGrainAmp * vGrainFade;
         }`);
   };
@@ -3437,9 +3442,18 @@ terrainFx(stoneMat);
 // one palette step is 0.07 sRGB — and 3x still read as foliage clumping rather
 // than as noise at 6x magnification, so the headroom is real. 2x is shipped
 // and __grain(mul) moves it live for anyone who wants to argue.
-grainFx(stoneMat, 'grain-stone', 0.6, 0.5);
-grainFx(leafMat, 'grain-leaf', 0.44, 0.32);
-grainFx(woodMat, 'grain-wood', 0.48, 0.85);
+// SIZED TO THE OBJECT, NOT TO THE LANDSCAPE. The first pass reasoned about
+// "blobs a metre or two across" as if the grain were painting country — but a
+// rock is about a metre, so at scale 0.5 the whole stone sat inside ONE noise
+// cell and got a flat tint shift instead of texture. That is why it read as
+// subtle: most things were too small to contain their own pattern. Cells now
+// run several to an object (a rock gets ~0.4m cells, a crown ~0.8m), the
+// amplitude goes to the top of the measured ladder, and a third octave breaks
+// up the facets themselves — which is the job: counteracting the flat planes
+// the low-poly forms are made of.
+grainFx(stoneMat, 'grain-stone', 0.95, 2.6);
+grainFx(leafMat, 'grain-leaf', 0.7, 1.25);
+grainFx(woodMat, 'grain-wood', 0.7, 2.0);
 // ── wind, in the vertex shader ─────────────────────────────────────
 // Never from JavaScript. Animating instance matrices would mean rewriting and
 // re-uploading a 7000-entry matrix buffer every frame; the GPU can lean the
@@ -12533,6 +12547,57 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
 };
 // Depth and current at a point — the physics' own read, so a test can ask
 // what the water is doing without driving a truck into it first.
+/**
+ * WHY THIS GROUND IS WHAT IT IS.
+ *
+ * surfaceAt has five ways to answer 'water' and they come from five different
+ * subsystems — an OSM polygon, a carved channel, the cover raster, the sea
+ * datum, or a road deck overriding all of them. When the truck says it is
+ * wading and the screen shows a dry field, the only useful question is WHICH
+ * of those spoke, and until now the answer took a bisect. Each input is
+ * reported beside the verdict, so a spot the owner reports can be diagnosed
+ * from one paste.
+ */
+(window as unknown as { __why?: object }).__why = (x?: number, z?: number): object => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const sl = seaLevelY();
+  const h = sampleHeight(px, pz);
+  const ch = channelAt(px, pz);
+  const cv = sampleCover(px, pz);
+  let road = -1, track = -1;
+  for (const seg of roadGrid.get(gkey(px, pz)) ?? []) {
+    const [cx2, cz2] = closestOnSeg(px, pz, seg);
+    if (Math.hypot(px - cx2, pz - cz2) > seg.hw + 0.8) continue;
+    if (seg.tk) track = Math.max(track, seg.sq ?? Q_TRACK); else road = Math.max(road, seg.sq ?? Q_ROAD);
+  }
+  const why = road >= 0 ? 'road' : track >= 0 ? 'track'
+    : waterCells.has(gkey(px, pz)) ? 'polygon (waterCells)'
+    : ch ? 'channel (carved watercourse)'
+    : cv === COVER.water ? 'cover raster'
+    : sl !== null && h < sl - 0.7 ? 'sea datum' : 'ground';
+  return {
+    verdict: surfaceAt(px, pz), why,
+    cell: gkey(px, pz),
+    inWaterCells: waterCells.has(gkey(px, pz)), waterCellsN: waterCells.size,
+    channel: !!ch, cover: cv, coverIsWater: cv === COVER.water,
+    height: +h.toFixed(2), seaLevelLocal: sl === null ? null : +sl.toFixed(2),
+    // What is DRAWN here: the nearest water surface the renderer actually has.
+    drapes: drapes.length,
+    drapeY: (() => {
+      let best: number | null = null;
+      for (const d of drapes) {
+        d.geometry.computeBoundingBox();
+        const bb = d.geometry.boundingBox!;
+        const wx = px - d.position.x, wz = pz - d.position.z;
+        if (wx < bb.min.x || wx > bb.max.x || wz < bb.min.z || wz > bb.max.z) continue;
+        const y = d.position.y + (bb.min.y + bb.max.y) / 2;
+        if (best === null || y > best) best = +y.toFixed(2);
+      }
+      return best;
+    })(),
+    groundY: +groundAt(px, pz).toFixed(2),
+  };
+};
 (window as unknown as { __waterinfo?: object }).__waterinfo = (x?: number, z?: number): object => {
   const px = x ?? state.x, pz = z ?? state.z;
   const wi = waterInfoAt(px, pz);
