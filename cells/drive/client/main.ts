@@ -9089,6 +9089,41 @@ function conformDrape(mesh: THREE.Mesh): boolean {
   const lift = mesh.userData.lift as number;
   const full = mesh.userData.full as number[];
   let moved = false;
+  // WATER IS LEVEL, AND WATER IS NEVER DROPPED.
+  //
+  // Conforming exists for TINTS — a park, a forest, a landuse patch — which
+  // are properties of ground and must lie on it, and whose triangles are
+  // discarded when they cannot. Water is neither: a lake surface is flat by
+  // definition, and a river polygon triangulates into long slivers spanning
+  // its own valley, so every one of them failed the lie-flat test and was
+  // thrown away. The result was water that the MAP drew (mapPoly runs
+  // regardless) and the PHYSICS waded in (waterCells likewise) and the
+  // renderer showed nothing of — reported from the seat near the Théols as
+  // ground that registers as water without being visible, and the one place
+  // in this world where three subsystems disagreed about the same fact.
+  //
+  // So a water drape takes a single level — the lower quartile of the ground
+  // its own outline stands on, which is the bank line — and keeps every
+  // triangle. Where the land is higher than that level it simply hides the
+  // sheet, which is what a shore IS.
+  if (mesh.userData.drape === 'water') {
+    const hs: number[] = [];
+    for (let i = 0; i < pos.count; i++) hs.push(groundAt(pos.getX(i), pos.getZ(i)));
+    hs.sort((a, b) => a - b);
+    const level = hs[Math.floor(hs.length * 0.25)] + lift;
+    for (let i = 0; i < pos.count; i++) {
+      if (!moved && Math.abs(level - pos.getY(i)) > 0.01) moved = true;
+      pos.setY(i, level);
+    }
+    pos.needsUpdate = true;
+    mesh.userData.level = level;
+    if (moved || (geo.index?.count ?? -1) !== full.length) {
+      geo.setIndex(full.slice());
+      geo.computeVertexNormals();
+      return true;
+    }
+    return false;
+  }
   for (let i = 0; i < pos.count; i++) {
     const y = groundAt(pos.getX(i), pos.getZ(i)) + lift;
     if (!moved && Math.abs(y - pos.getY(i)) > 0.01) moved = true;
@@ -12583,17 +12618,20 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
     height: +h.toFixed(2), seaLevelLocal: sl === null ? null : +sl.toFixed(2),
     // What is DRAWN here: the nearest water surface the renderer actually has.
     drapes: drapes.length,
-    drapeY: (() => {
-      let best: number | null = null;
+    // WATER drapes only, and with their triangle counts: 'nothing is drawn
+    // here', 'it is drawn under the hill' and 'its triangles were dropped'
+    // are three different faults and used to arrive as one shrug.
+    water: (() => {
+      const hit: Array<{ y: number; tris: number; kept: number }> = [];
       for (const d of drapes) {
-        d.geometry.computeBoundingBox();
-        const bb = d.geometry.boundingBox!;
-        const wx = px - d.position.x, wz = pz - d.position.z;
-        if (wx < bb.min.x || wx > bb.max.x || wz < bb.min.z || wz > bb.max.z) continue;
-        const y = d.position.y + (bb.min.y + bb.max.y) / 2;
-        if (best === null || y > best) best = +y.toFixed(2);
+        if (d.userData.drape !== 'water') continue;
+        const bb = d.userData.bb as [number, number, number, number] | undefined;
+        if (!bb || px < bb[0] || px > bb[2] || pz < bb[1] || pz > bb[3]) continue;
+        hit.push({ y: +((d.userData.level as number) ?? d.position.y).toFixed(2),
+          tris: ((d.userData.full as number[]).length / 3) | 0,
+          kept: ((d.geometry.index?.count ?? 0) / 3) | 0 });
       }
-      return best;
+      return hit;
     })(),
     groundY: +groundAt(px, pz).toFixed(2),
   };
