@@ -10942,10 +10942,39 @@ const ovMat = new THREE.MeshBasicMaterial({
  * fog can lift the moment a checkpoint lands.
  */
 const ovInkU = { uInkOn: { value: 1 } };
+/**
+ * A CHART LINE IS A PIXEL WIDE, NOT A HUNDRED METRES WIDE.
+ *
+ * These ribbons were built at a width in METRES, scaled off the level's tile
+ * size — so their width on screen was whatever the zoom happened to make of
+ * it. Owner, with two screenshots: too bold at close zoom, too faint at far.
+ * Measured against them: a minor road at the regional view is 311m of geometry
+ * against ~1000 m/px, which is a THIRD of a pixel and reads as a dotted ghost;
+ * the same class pulled in is fourteen pixels of yellow band across the road
+ * it is meant to be annotating. A map's line weight is a statement about
+ * IMPORTANCE, and importance does not change when you pinch.
+ *
+ * So the geometry is a centreline plus a unit normal (aOff, carrying the
+ * class's relative weight), and the width arrives as one uniform in metres,
+ * recomputed each frame from the chart camera: OV_PX art pixels wide, whatever
+ * the zoom. No rebuild, no per-class uniform, no CPU work per way.
+ */
+const ovWU = { uOvW: { value: 40 } };
+/** Base ribbon width in the pixels the world is actually RENDERED at (PIX_H
+ *  lines, magnified after). The class multipliers run 0.5–1.3 around it, so
+ *  the thinnest chart line still lands a pixel wide and a motorway reads as
+ *  the trunk it is. */
+const OV_PX = 2.0;
 ovMat.onBeforeCompile = (sh: { vertexShader: string; fragmentShader: string; uniforms: Record<string, unknown> }) => {
-  Object.assign(sh.uniforms, ovU, ovInkU);
+  Object.assign(sh.uniforms, ovU, ovInkU, ovWU);
   sh.vertexShader = sh.vertexShader
-    .replace('#include <common>', '#include <common>\nvarying vec2 vOvW;\nattribute float aInk;\nvarying float vInk;')
+    .replace('#include <common>', `#include <common>
+      varying vec2 vOvW; attribute float aInk; varying float vInk;
+      attribute vec2 aOff; uniform float uOvW;`)
+    // BEFORE project_vertex, which is what consumes `transformed`. The ribbon
+    // has no width in the buffer at all — it is a centreline until here.
+    .replace('#include <begin_vertex>', `#include <begin_vertex>
+      transformed.xz += aOff * uOvW;`)
     .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
       vOvW = (modelMatrix * vec4(transformed, 1.0)).xz;
       vInk = aInk;`);
@@ -11111,8 +11140,7 @@ function buildOvTile(key: string, x: number, y: number, z: number,
     const v = clamp(Math.round(((b.latN - la) / (b.latN - b.latS)) * 255), 0, 255);
     return dem[v * 256 + u] - baseElev - FAR_DROP - curveDrop(wx, wz) + lift;
   };
-  const base = tileMetres(z) * 0.016;
-  const verts: number[] = [], cols: number[] = [];
+  const verts: number[] = [], cols: number[] = [], offs: number[] = [];
   const inkRuns: Array<{ name: string; la: number; lo: number; from: number; to: number; lit: boolean }> = [];
   for (const w of ways) {
     const t = w.tags ?? {};
@@ -11139,7 +11167,7 @@ function buildOvTile(key: string, x: number, y: number, z: number,
     const lit = !gated || chartGrants(t.name ?? '', sLa, sLo);
     const from = verts.length / 3;
     const [, col, mul] = style;
-    const hw = (base * mul) / 2;
+    const hw = mul / 2;                 // RELATIVE half-width; the metres arrive as uOvW
     for (let i = 0; i < w.geometry.length - 1; i++) {
       const [aLa, aLo] = w.geometry[i], [bLa, bLo] = w.geometry[i + 1];
       const [ax, az] = toLocal(aLa, aLo), [bx, bz] = toLocal(bLa, bLo);
@@ -11147,10 +11175,13 @@ function buildOvTile(key: string, x: number, y: number, z: number,
       const len = Math.hypot(dx, dz) || 1;
       const px2 = (-dz / len) * hw, pz2 = (dx / len) * hw;
       const ay = yAt(aLa, aLo, ax, az), by = yAt(bLa, bLo, bx, bz);
-      verts.push(
-        ax + px2, ay, az + pz2, bx + px2, by, bz + pz2, ax - px2, ay, az - pz2,
-        bx + px2, by, bz + pz2, bx - px2, by, bz - pz2, ax - px2, ay, az - pz2,
-      );
+      // Six vertices on the CENTRELINE, six normals that push them apart in
+      // the vertex shader. Same triangle count, same ink ranges, and a width
+      // that is a decision about the camera rather than about the tile.
+      verts.push(ax, ay, az, bx, by, bz, ax, ay, az,
+        bx, by, bz, bx, by, bz, ax, ay, az);
+      offs.push(px2, pz2, px2, pz2, -px2, -pz2,
+        px2, pz2, -px2, -pz2, -px2, -pz2);
       for (let q = 0; q < 6; q++) cols.push(col[0], col[1], col[2]);
     }
     if (gated) inkRuns.push({ name: t.name ?? '', la: sLa, lo: sLo, from, to: verts.length / 3, lit });
@@ -11165,12 +11196,18 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
   geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(cols), 3));
+  geo.setAttribute('aOff', new THREE.BufferAttribute(new Float32Array(offs), 2));
   // Everything is lit unless a run says otherwise — rail, water and coastline
   // never enter inkRuns at all, so they are simply on.
   const ink = new Float32Array(verts.length / 3).fill(1);
   for (const r of inkRuns) if (!r.lit) ink.fill(0, r.from, r.to);
   geo.setAttribute('aInk', new THREE.BufferAttribute(ink, 1));
   const mesh = new THREE.Mesh(geo, ovMat);
+  // The bounding sphere is the CENTRELINE's, and at a regional zoom the ribbon
+  // is a kilometre wider than that — a tile whose roads all sit just off the
+  // frustum would be culled while its ink was still on screen. Twenty-five
+  // meshes is not a culling budget worth defending.
+  mesh.frustumCulled = false;
   // With depth ignored, draw order is the only law — the chart's ink paints
   // after the world's own transparents (water, rain) rather than under
   // whichever happened to sort nearer that frame.
@@ -11310,7 +11347,9 @@ function peakLook(p: Peak, vx: number, vz: number, eyeY: number): { d: number; r
     level: ovZ, tiles: ovMeshes.size, retired: ovRetired.length, demless: ovDemless,
     places: ovPlaces.size, shown: ovGroup.visible,
     viewR: Math.round(viewRadius()), zoom: +zoomCur.toFixed(1),
-    ribbonW: +(tileMetres(ovZ) * 0.016).toFixed(1),
+    // The ribbon in BOTH currencies: the metres it happens to occupy right
+    // now, and the art pixels it is meant to hold at every zoom.
+    ribbonW: +ovWU.uOvW.value.toFixed(1), ribbonPx: OV_PX, pixH: pixSize.y,
     // Where the layer is allowed to start showing at all, against the fine
     // ring it is meant to be standing in for.
     fineR: Math.round(osmRingR), fade: [Math.round(ovU.uOvR.value.x), Math.round(ovU.uOvR.value.y)],
@@ -18270,6 +18309,13 @@ function tick(now: number): void {
     const tvx = viewX(), tvz = viewZ();
     const dist = CAM.base * zoomCur + Math.abs(drone.up ? 0 : state.speed) * 3.6 * CAM.perKmh;
     const tiltRad = (CAM.tilt * Math.PI) / 180;
+    // THE CHART'S LINE WEIGHT, in metres, so that it is OV_PX pixels. The
+    // camera orbits at `dist` and the world renders into pixSize.y lines, so
+    // one art pixel is that much ground — and a ribbon is a fixed number of
+    // them at every zoom on the ladder. Floored at a metre so a driving-zoom
+    // chart cannot collapse the layer to nothing between frames.
+    ovWU.uOvW.value = Math.max(1,
+      (OV_PX * 2 * dist * Math.tan((camera.fov * Math.PI) / 360)) / pixSize.y);
     // THE CHART'S FLOOR, LOW-PASSED. The camera rides at a fixed height above
     // the ground under its target, which is right for keeping a mountain out
     // of the lens — and a step function anywhere the ground steps. Panning the
