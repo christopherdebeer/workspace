@@ -4589,7 +4589,25 @@ interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?:
   ca?: number; cb?: number }
 const wallGrid = new Map<string, Seg[]>();   // building edges — solid
 const roadGrid = new Map<string, Seg[]>();   // drivable centrelines + half-width
-const waterCells = new Set<string>();        // coarse water mask
+const waterCells = new Set<string>();        // coarse water mask — the fast reject
+/**
+ * …AND THE POLYGONS THEMSELVES, per cell, because the mask alone is 24 metres
+ * of resolution and a river is ten metres wide.
+ *
+ * The mask marks a whole GRID cell wet if the cell's CENTRE falls inside a
+ * water polygon, so the truck could stand seventeen metres from the bank, on a
+ * ploughed field, and read as wading — with no water drawn anywhere near it,
+ * because the water really was over there. Reported from the seat beside the
+ * Théols and diagnosed with __why: verdict water, cover farmland, and not one
+ * water surface overlapping the wheels.
+ *
+ * The polygon is kept (by reference — a lake spanning forty cells is stored
+ * forty times as a pointer, not forty times as geometry) so the surface query
+ * can ask the same shape the RENDERER was handed. Cheap because the mask still
+ * rejects first: the precise test only runs where the coarse one already said
+ * yes.
+ */
+const waterPolys = new Map<string, Array<Array<[number, number]>>>();
 function addSeg(grid: Map<string, Seg[]>, seg: Seg): void {
   const m = seg.hw + 8; // insert with margin so a single-cell query suffices
   const x0 = Math.floor((Math.min(seg.ax, seg.bx) - m) / GRID), x1 = Math.floor((Math.max(seg.ax, seg.bx) + m) / GRID);
@@ -4791,7 +4809,16 @@ function surfaceAt(x: number, z: number): Surface {
   if (road >= 0) { surfQ = road; return 'road'; }
   if (track >= 0) { surfQ = track; return 'track'; }
   surfQ = Q_GROUND;
-  if (waterCells.has(gkey(x, z))) return 'water';
+  {
+    // The mask says "a water polygon is somewhere in this cell"; the polygons
+    // say whether it is under YOU. Both, in that order.
+    const k = gkey(x, z);
+    if (waterCells.has(k)) {
+      const polys = waterPolys.get(k);
+      if (!polys) return 'water';                       // pre-upgrade cells: trust the mask
+      for (const poly of polys) if (pointInPoly(x, z, poly)) return 'water';
+    }
+  }
   // A RIVER IS WATER TOO. Only polygon lakes, WorldCover pixels and the sea
   // ever answered here, so the truck drove through every carved watercourse
   // reading 'ground' — no splash, no wade, no current — unless the river
@@ -9350,9 +9377,22 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
   } else if (collide === 'water') {
     let minx = Infinity, minz = Infinity, maxx = -Infinity, maxz = -Infinity;
     for (const [x, z] of pts) { minx = Math.min(minx, x); minz = Math.min(minz, z); maxx = Math.max(maxx, x); maxz = Math.max(maxz, z); }
-    for (let gx = Math.floor(minx / GRID); gx <= Math.floor(maxx / GRID); gx++)
-      for (let gz = Math.floor(minz / GRID); gz <= Math.floor(maxz / GRID); gz++)
-        if (pointInPoly(gx * GRID + GRID / 2, gz * GRID + GRID / 2, pts)) waterCells.add(`${gx},${gz}`);
+    for (let gx = Math.floor(minx / GRID); gx <= Math.floor(maxx / GRID); gx++) {
+      for (let gz = Math.floor(minz / GRID); gz <= Math.floor(maxz / GRID); gz++) {
+        // EVERY cell the polygon's box touches is registered, not just the ones
+        // whose centre it covers: a river narrower than a cell would otherwise
+        // register no cell at all in some places and a whole one in others.
+        // The centre test decided membership before; now it only decides
+        // whether the coarse mask can answer alone.
+        const k = `${gx},${gz}`;
+        const cx3 = gx * GRID, cz3 = gz * GRID;
+        if (cx3 > maxx || cx3 + GRID < minx || cz3 > maxz || cz3 + GRID < minz) continue;
+        waterCells.add(k);
+        let arr = waterPolys.get(k);
+        if (!arr) waterPolys.set(k, (arr = []));
+        arr.push(pts);
+      }
+    }
     shoreRibbon(ring);
   }
 }
@@ -12606,7 +12646,7 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
     if (seg.tk) track = Math.max(track, seg.sq ?? Q_TRACK); else road = Math.max(road, seg.sq ?? Q_ROAD);
   }
   const why = road >= 0 ? 'road' : track >= 0 ? 'track'
-    : waterCells.has(gkey(px, pz)) ? 'polygon (waterCells)'
+    : (waterPolys.get(gkey(px, pz)) ?? []).some((poly) => pointInPoly(px, pz, poly)) ? 'polygon (inside it)'
     : ch ? 'channel (carved watercourse)'
     : cv === COVER.water ? 'cover raster'
     : sl !== null && h < sl - 0.7 ? 'sea datum' : 'ground';
@@ -12614,6 +12654,10 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
     verdict: surfaceAt(px, pz), why,
     cell: gkey(px, pz),
     inWaterCells: waterCells.has(gkey(px, pz)), waterCellsN: waterCells.size,
+    // The coarse mask against the precise shape: a cell that is wet while the
+    // polygons say dry is the 24m-grid error this pair exists to expose.
+    inWaterPoly: (waterPolys.get(gkey(px, pz)) ?? []).some((poly) => pointInPoly(px, pz, poly)),
+    polysHere: (waterPolys.get(gkey(px, pz)) ?? []).length,
     channel: !!ch, cover: cv, coverIsWater: cv === COVER.water,
     height: +h.toFixed(2), seaLevelLocal: sl === null ? null : +sl.toFixed(2),
     // What is DRAWN here: the nearest water surface the renderer actually has.
