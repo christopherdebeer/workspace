@@ -13588,6 +13588,19 @@ function farHeightAt(wx: number, wz: number): number | null {
       name: e.p.name, ele: e.p.ele, km: +(e.d / 1000).toFixed(1),
       deg: +((Math.atan(e.app) * 180) / Math.PI).toFixed(2),
       overHorizon: e.rise <= 0,
+      // DOES THE BACKDROP ACTUALLY HOLD THIS MOUNTAIN? The label is drawn from
+      // the peak layer, which knows summits the terrain shell may not have
+      // streamed or may have smoothed away — and a name over empty sky is the
+      // exact complaint this answers. `shell` is the drawn surface under the
+      // summit's own point in the same local frame as `local`; `miss` is how
+      // much mountain is missing, which is FAR_DROP plus whatever the coarse
+      // sampling shaved off the top.
+      local: Math.round(e.p.ele - baseElev),
+      shell: farHeightAt(e.p.x, e.p.z),
+      miss: (() => {
+        const h = farHeightAt(e.p.x, e.p.z);
+        return h === null ? null : Math.round((e.p.ele - baseElev) - h);
+      })(),
     })),
   };
 };
