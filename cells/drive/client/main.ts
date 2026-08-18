@@ -12755,7 +12755,10 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
  * the three numbers that turn "I have driven that road and it is not on my
  * map" into a question with an answer.
  */
-(window as unknown as { __chartfog?: object }).__chartfog = (): object => {
+(window as unknown as { __chartfog?: object }).__chartfog = (showAll?: boolean): object => {
+  // …and a kill switch for the gate itself, so "is that road missing or just
+  // unearned?" is one call rather than a rebuild.
+  if (showAll !== undefined) ovInkU.uInkOn.value = showAll ? 0 : 1;
   let lit = 0, dark = 0;
   for (const m of ovMeshes.values()) {
     const a = m.geometry.getAttribute('aInk') as THREE.BufferAttribute | undefined;
@@ -12764,7 +12767,8 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
   }
   const st = surveyStore.stats();
   return {
-    lineOn, ovMeshes: ovMeshes.size, litVerts: lit, darkVerts: dark,
+    lineOn, gateOn: ovInkU.uInkOn.value > 0.5,
+    ovMeshes: ovMeshes.size, litVerts: lit, darkVerts: dark,
     darkRuns: ovDark.length,
     store: { roads: st.roads, claimed: st.claimed, crumbs: st.crumbs, bytes: st.bytes },
     loaded: survey.size,
