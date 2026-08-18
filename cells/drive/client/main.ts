@@ -9982,12 +9982,16 @@ const tileMetres = (z: number): number =>
  * every camera so that opening the chart does not retire and refetch the whole
  * shell — the level is a property of the world, not of which way you look.
  */
-// 34km, not 46: the level the ring lands on is chosen by whether it COVERS
-// this distance, so asking for more sky drops a rung and pays for the extra
-// reach in summit height. At 34km a 5x5 ring of z11 still covers the horizon
-// at every latitude the line crosses, and mountains keep their tops. Past it
-// the composite's haze has taken the landform anyway.
-const SIGHT_M = 34000;
+// THIS NUMBER PICKS THE LEVEL, NOT THE REACH — and the two come apart in a way
+// that is worth stating, because asking for more sky here gets you LESS world.
+// The level is the finest whose 5x5 ring covers this distance; the ring then
+// fills to its full two tiles whatever the number was. So the reach is always
+// 2 x tileMetres(level), and a bigger ask only ever drops a rung and pays for
+// the extra sky in summit height. Tiles also shrink with cos(latitude): at 34km
+// the z11 ring covers 33.99km at Zermatt's latitude and lost by a hair, which
+// is how this was found. 24km keeps z11 out to about 61 degrees — the whole of
+// the line, and then some — while the ring still reaches 34-41km on the ground.
+const SIGHT_M = 24000;
 function viewRadius(): number {
   if (camMode !== 'top') return 900;
   const dist = CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh;
