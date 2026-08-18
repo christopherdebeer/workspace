@@ -1999,6 +1999,34 @@ const osmFailedAt = new Map<string, number>();
 /** Where tiles are wanted (the car thrown forward along its heading), and how
  *  far from the CAR a tile may sit before the queue gives up on it. */
 let osmFocusX = 0, osmFocusZ = 0, osmCarX = 0, osmCarZ = 0, osmRingR = Infinity;
+/**
+ * THE WEDGE — what the queue is actually for.
+ *
+ * Tiles were ranked by plain distance from a point thrown forward along the
+ * heading, which is isotropic about that point: a tile five hundred metres
+ * SIDEWAYS outranked one six hundred metres straight ahead, and at speed the
+ * road you are about to be on lost every race to the fields either side of
+ * you. A disc is the wrong shape for something moving.
+ *
+ * So the cost is measured in the CAR's frame and stretched by how fast it is
+ * going: forward metres are divided (they matter more the faster you go, so
+ * they must cost less), lateral metres are multiplied (a field you will pass
+ * in three seconds is worth less than a junction a kilometre ahead), and
+ * everything behind is multiplied hardest — it is the first thing dropped
+ * when the queue is over budget, because you have already driven it.
+ *
+ * At rest the three factors collapse to nearly one and the shape is a disc
+ * again, which is right: parked, you might set off in any direction.
+ */
+let osmFwdX = 0, osmFwdZ = -1;
+let osmWFwd = 1, osmWLat = 1, osmWBack = 1.6, osmCoreR = 0;
+/** Distance in wedge-metres: how much this tile's position is really costing. */
+function wedgeCost(wx: number, wz: number): number {
+  const dx = wx - osmCarX, dz = wz - osmCarZ;
+  const f = dx * osmFwdX + dz * osmFwdZ;          // ahead (negative: behind)
+  const l = dx * -osmFwdZ + dz * osmFwdX;         // to the side
+  return Math.hypot(f >= 0 ? f / osmWFwd : -f * osmWBack, l * osmWLat);
+}
 /** Tiles a FIELD QUERY tap asked for by hand. The ring gate below drops any
  *  queued tile the truck has left behind — right for the stream, wrong for an
  *  explicit ask: a ranger pointing at a spot on the chart is the ring. */
@@ -2008,12 +2036,17 @@ function osmRelease(): void {
   for (let i = 0; i < osmQueue.length; i++) {
     const w = osmQueue[i];
     const [wx, wz] = tileCentreLocal(w.x, w.y);
-    if (!osmPinned.has(`${w.x}/${w.y}`) && Math.hypot(wx - osmCarX, wz - osmCarZ) > osmRingR) {
+    // THE CORE DISC IS NEVER DROPPED, whatever the wedge thinks of it: the
+    // ground under and beside the wheels is not a prediction, it is where the
+    // truck IS, and a wedge that starves it would trade a pothole you are in
+    // for a junction you might reach.
+    const raw = Math.hypot(wx - osmCarX, wz - osmCarZ);
+    if (!osmPinned.has(`${w.x}/${w.y}`) && raw > osmCoreR && wedgeCost(wx, wz) > osmRingR) {
       osmQueue.splice(i, 1); i--;
-      w.go(false);            // left the ring — forget it, a later pass can ask again
+      w.go(false);            // out of the wedge — a later pass can ask again
       continue;
     }
-    const d = Math.hypot(wx - osmFocusX, wz - osmFocusZ);
+    const d = wedgeCost(wx, wz);
     if (d < bestD) { bestD = d; best = i; }
   }
   if (best >= 0 && osmInFlight < OSM_GATE) osmQueue.splice(best, 1)[0].go(true);
@@ -10299,16 +10332,32 @@ function streamWorld(ex: number, ez: number): void {
   // is added AHEAD only — a lozenge, not a bigger circle, so the cost is a
   // handful of tiles rather than the square of the radius.
   const tm = tileMetres(OSM_Z);
-  const look = Math.min(oRing * tm, Math.abs(state.speed) * 14);   // ~14s of travel
   osmCarX = ex; osmCarZ = ez;
-  osmFocusX = ex + Math.sin(state.heading) * look;
-  osmFocusZ = ez - Math.cos(state.heading) * look;
-  const ext = oRing + 1;
-  osmRingR = (ext + 0.75) * tm;   // past this the queue stops believing in a tile
+  // The wedge's shape, from the speed it is being driven at. 28 m/s (~100km/h)
+  // is where it is fully drawn out; the factors are deliberately strong,
+  // because the failure being fixed is a queue that spent its slots on
+  // country already crossed.
+  const vf = clamp(Math.abs(state.speed) / 28, 0, 1);
+  osmFwdX = Math.sin(state.heading); osmFwdZ = -Math.cos(state.heading);
+  osmWFwd = 1 + 3.2 * vf;     // a kilometre ahead costs ~240m at speed
+  osmWLat = 1 + 1.5 * vf;     // a kilometre beside costs 2.5km
+  osmWBack = 1.6 + 3.0 * vf;  // a kilometre behind costs 4.6km — dropped first
+  // Kept for the probe and for anything that still wants a single point: where
+  // the truck will be in about fourteen seconds.
+  const look = Math.min(oRing * tm, Math.abs(state.speed) * 14);
+  osmFocusX = ex + osmFwdX * look;
+  osmFocusZ = ez + osmFwdZ * look;
+  // The ask set grows FORWARD with speed and not sideways: extra rings are
+  // admitted by the wedge, so at 100km/h the box reaches three rings out and
+  // only the ones down the road survive the test.
+  const ahead = Math.round(2 * vf);
+  const ext = oRing + 1 + ahead;
+  osmCoreR = (oRing + 0.75) * tm;              // the disc that is never dropped
+  osmRingR = (oRing + 1.75) * tm;              // the wedge's budget, in wedge-metres
   for (let dx = -ext; dx <= ext; dx++) for (let dy = -ext; dy <= ext; dy++) {
     if (Math.max(Math.abs(dx), Math.abs(dy)) <= oRing) { void loadOsmTile(ox + dx, oy + dy); continue; }
     const [cx, cz] = tileCentreLocal(ox + dx, oy + dy);
-    if (Math.hypot(cx - osmFocusX, cz - osmFocusZ) <= oRing * tm) void loadOsmTile(ox + dx, oy + dy);
+    if (wedgeCost(cx, cz) <= osmRingR) void loadOsmTile(ox + dx, oy + dy);
   }
   // Beyond the fine layer's reach, a COARSE shell so the land does not simply
   // stop. Only fetched once the view is wide enough to see past the fine ring.
@@ -12622,6 +12671,41 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
 };
 // Depth and current at a point — the physics' own read, so a test can ask
 // what the water is doing without driving a truck into it first.
+/**
+ * THE QUEUE'S OWN SHAPE — what it is asking for, in what order, and why.
+ *
+ * The wedge is three numbers and a heading, and every complaint about
+ * streaming ("the road ahead arrives late", "it fetched the field I just
+ * passed") is really a claim about those. Reported with the queue ITSELF
+ * ranked the way the gate ranks it, so the next tile to run is the first row,
+ * and each row carries its raw metres beside its wedge-metres — the gap
+ * between the two IS the bias.
+ */
+(window as unknown as { __queue?: object }).__queue = (): object => {
+  const rows = osmQueue.map((w) => {
+    const [wx, wz] = tileCentreLocal(w.x, w.y);
+    const dx = wx - osmCarX, dz = wz - osmCarZ;
+    return {
+      t: `${w.x}/${w.y}`,
+      fwd: Math.round(dx * osmFwdX + dz * osmFwdZ),
+      lat: Math.round(dx * -osmFwdZ + dz * osmFwdX),
+      raw: Math.round(Math.hypot(dx, dz)),
+      cost: Math.round(wedgeCost(wx, wz)),
+    };
+  }).sort((a, b) => a.cost - b.cost);
+  return {
+    kmh: Math.round(Math.abs(state.speed) * 3.6),
+    wedge: { fwd: +osmWFwd.toFixed(2), lat: +osmWLat.toFixed(2), back: +osmWBack.toFixed(2) },
+    budget: Math.round(osmRingR), core: Math.round(osmCoreR),
+    inFlight: osmInFlight, queued: osmQueue.length, gate: OSM_GATE,
+    next: rows.slice(0, 8),
+    // The shape as a number: how far the wedge reaches straight ahead against
+    // how far it reaches straight out to the side, at this speed.
+    reachFwd: Math.round(osmRingR * osmWFwd),
+    reachLat: Math.round(osmRingR / osmWLat),
+    reachBack: Math.round(osmRingR / osmWBack),
+  };
+};
 /**
  * WHY THIS GROUND IS WHAT IT IS.
  *
