@@ -1321,7 +1321,15 @@ const mblurMat = new THREE.ShaderMaterial({
     uniform vec2 uPix; uniform float uAmt; uniform float uMaxPx;
     varying vec2 vUv;
     void main(){
-      vec3 here = texture2D(sceneTex, vUv).rgb;
+      vec4 c0 = texture2D(sceneTex, vUv);
+      // ALPHA 0 MEANS "NOT THE WORLD". The rig is the one thing the camera is
+      // bolted to: in chase it is tracked, in the cab it is welded, so its true
+      // screen velocity is very nearly zero and a static-world reprojection is
+      // exactly wrong for it — it hands the truck the ground's own rush, and in
+      // a corner the whole yaw. Left in, it softened the silhouette that does
+      // all the work at this pixel scale and smeared the x-ray screen-door into
+      // teal bands, which is the ghost corridor's charge sheet over again.
+      if (c0.a < 0.25) { gl_FragColor = vec4(c0.rgb, 1.0); return; }
       float z = texture2D(depthTex, vUv).r;
       vec4 far = invPV * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
       vec3 dir = normalize(far.xyz / far.w - camPos);
@@ -1335,22 +1343,32 @@ const mblurMat = new THREE.ShaderMaterial({
       }
       vec4 pc = prevVP * vec4(wp, 1.0);
       // Behind last frame's camera: it was not on screen to travel from.
-      if (pc.w <= 0.0) { gl_FragColor = vec4(here, 1.0); return; }
+      if (pc.w <= 0.0) { gl_FragColor = vec4(c0.rgb, 1.0); return; }
       vec2 prevUv = (pc.xy / pc.w) * 0.5 + 0.5;
       vec2 vel = (vUv - prevUv) * uAmt;
       float len = length(vel * uPix);
       if (len > uMaxPx) vel *= uMaxPx / len;
       // Under a texel of travel there is nothing to integrate, and sampling it
       // anyway only softens a pixel that has earned the right to stay hard.
-      if (len < 0.9) { gl_FragColor = vec4(here, 1.0); return; }
+      if (len < 0.9) { gl_FragColor = vec4(c0.rgb, 1.0); return; }
       // A box, walked BACKWARDS along the travel: the shutter closed at this
       // instant, so the trail belongs behind the pixel, not around it. An even
       // weight is what an open shutter actually does.
-      vec3 acc = here;
+      //
+      // A tap that lands on the rig is dropped rather than averaged in. It is
+      // not part of this pixel's history — the truck was never here — and
+      // taking it anyway drags the paint out across the road behind it. The
+      // alpha comes out of a fetch that was already being made, so the whole
+      // exclusion costs one step() per tap and nothing on the wire.
+      vec3 acc = c0.rgb;
+      float wsum = 1.0;
       for (int i = 1; i < TAPS; i++) {
-        acc += texture2D(sceneTex, vUv - vel * (float(i) / float(TAPS - 1))).rgb;
+        vec4 t = texture2D(sceneTex, vUv - vel * (float(i) / float(TAPS - 1)));
+        float w = step(0.25, t.a);
+        acc += t.rgb * w;
+        wsum += w;
       }
-      gl_FragColor = vec4(acc / float(TAPS), 1.0);
+      gl_FragColor = vec4(acc / wsum, 1.0);
     }`,
 });
 // Last frame's view-projection, and where the camera stood when it was taken.
@@ -10796,6 +10814,44 @@ xray.visible = false;
   });
 }
 scene.add(xray);
+// ── the rig marks itself out of the shutter ────────────────────────
+// THE MASK RIDES IN rtScene's ALPHA, which nothing downstream reads: the blur,
+// the bright pass and the composite all take .rgb, and the sky and every world
+// surface already leave it at 1. So one spliced line is the whole mechanism —
+// no stencil, no second pass, no extra texture, and no extra fetch in the
+// shutter because it was sampling RGBA anyway.
+//
+// Additive parts are skipped for the same reason the x-ray skips them: the
+// headlight cones are light rather than sheet metal, they do not carry a
+// silhouette to protect, and blending would not leave a clean zero there.
+function noBlur(mat: THREE.Material): void {
+  if (mat.blending === THREE.AdditiveBlending) return;
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = (sh, r) => {
+    prev?.call(mat, sh, r);
+    sh.fragmentShader = sh.fragmentShader.replace('#include <dithering_fragment>',
+      '#include <dithering_fragment>\n\tgl_FragColor.a = 0.0;');
+  };
+  // r160 keys the program cache on onBeforeCompile.toString(), and every
+  // material through here now has the SAME hook source — which is how the sign
+  // and the stud already came to share one compiled program elsewhere in this
+  // file. A per-material key costs ten programs and avoids inheriting that.
+  const key = `noblur:${mat.uuid}`;
+  mat.customProgramCacheKey = () => key;
+  mat.needsUpdate = true;
+}
+{
+  const marked = new Set<THREE.Material>();
+  for (const root of [car, xray]) {
+    root.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (!m.isMesh) return;
+      for (const mat of Array.isArray(m.material) ? m.material : [m.material]) {
+        if (mat && !marked.has(mat)) { marked.add(mat); noBlur(mat); }
+      }
+    });
+  }
+}
 // ── the studio ─────────────────────────────────────────────────────
 // The menu's VEHICLE panel needs the truck on a clean backdrop, not wherever
 // it happens to be parked at dusk in the rain. Rather than clone it — four
