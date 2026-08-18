@@ -9783,7 +9783,7 @@ const sync = openSync({
   dump: (since) => surveyStore.dump(since),
   // A merge can bring home roads surveyed on another device — any the chart
   // was holding back are released (a no-op off the line: nothing is held).
-  merge: (rows) => surveyStore.merge(rows),
+  merge: (rows) => { const n = surveyStore.merge(rows); if (n) ovInkDirty = true; return n; },
   marks: (since) => { const d = marks.dump(since); return { missions: d.m ?? {}, stations: d.s ?? {} }; },
   mergeMarks: (r) => marks.merge({ m: r.missions, s: r.stations }),
   odo: () => Math.round(odo.total),
@@ -9940,6 +9940,7 @@ function stepSurvey(now: number): void {
         if (nearSwept(c.x, c.z) > SURVEY_CAPTURE) continue;
         c.got = true; c.at = now; r.got++;
         surveyStore.take(id, c.key, r.cps.length);
+        ovInkDirty = true;      // this road may now be on the ranger's own map
         surveyFlash = 1;
         audio.stone();
       }
@@ -10663,18 +10664,87 @@ const ovU = {
 const ovMat = new THREE.MeshBasicMaterial({
   vertexColors: true, side: DS, transparent: true, depthWrite: false, depthTest: false,
 });
+/**
+ * THE CHART'S FOG OF WAR, AND WHY IT IS A FLAG RATHER THAN A FILTER.
+ *
+ * On the line a road appears once the survey has it. That verdict used to be
+ * taken while the tile was being BUILT, and a built tile is geometry: a road
+ * you drove ten minutes ago stayed off the chart until the zoom ladder
+ * happened to rebuild its level, which on a long straight leg is never. The
+ * ranger's own map lagged the ranger.
+ *
+ * So every way is built, and each carries a per-vertex flag the fragment
+ * shader honours. Lighting a road afterwards is then a write into a Float32
+ * range — the same trick the building batches use to re-seat a tile — and the
+ * fog can lift the moment a checkpoint lands.
+ */
+const ovInkU = { uInkOn: { value: 1 } };
 ovMat.onBeforeCompile = (sh: { vertexShader: string; fragmentShader: string; uniforms: Record<string, unknown> }) => {
-  Object.assign(sh.uniforms, ovU);
+  Object.assign(sh.uniforms, ovU, ovInkU);
   sh.vertexShader = sh.vertexShader
-    .replace('#include <common>', '#include <common>\nvarying vec2 vOvW;')
+    .replace('#include <common>', '#include <common>\nvarying vec2 vOvW;\nattribute float aInk;\nvarying float vInk;')
     .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
-      vOvW = (modelMatrix * vec4(transformed, 1.0)).xz;`);
+      vOvW = (modelMatrix * vec4(transformed, 1.0)).xz;
+      vInk = aInk;`);
   sh.fragmentShader = sh.fragmentShader
     .replace('#include <common>', `#include <common>
-      varying vec2 vOvW; uniform vec2 uOvC; uniform vec2 uOvR;`)
+      varying vec2 vOvW; uniform vec2 uOvC; uniform vec2 uOvR;
+      varying float vInk; uniform float uInkOn;`)
     .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+      // UNSURVEYED IS ABSENT, not faint: a ghost road is a road you would
+      // steer by, and the whole point of the gate is that the Service has not
+      // been told about this one yet.
+      if (uInkOn > 0.5 && vInk < 0.5) discard;
       gl_FragColor.a *= smoothstep(uOvR.x, uOvR.y, distance(vOvW, uOvC));`);
 };
+/** Ways built but not yet lit, with the vertex range each owns. Entries leave
+ *  the list the moment they light — the walk is over what is still dark. */
+interface OvDark { mesh: THREE.Mesh; name: string; la: number; lo: number; from: number; to: number }
+let ovDark: OvDark[] = [];
+let ovInkAt = 0, ovInkDirty = false;
+/**
+ * WHAT LIGHTS A ROAD. Off the line, everything. On it: anything the survey has
+ * ANY capture of (a whole road is not the price of a line on a map), and
+ * anything standing in the docket's own corridor — the Service issued the
+ * route, so it can hardly pretend not to know where it goes.
+ */
+function chartGrants(name: string, la: number, lo: number): boolean {
+  if (!lineOn) return true;
+  if (name && surveyStore.seen(name, la, lo)) return true;
+  return nearDocket(la, lo);
+}
+/** Within reach of the campaign's own spine: a leg's straight run, or one of
+ *  its stations. Coarse on purpose — this is a corridor, not a route. */
+function nearDocket(la: number, lo: number): boolean {
+  const mLat = 111320, mLon = 111320 * Math.cos((la * Math.PI) / 180);
+  for (const st of STATIONS) {
+    if (Math.hypot((st.lat - la) * mLat, (st.lon - lo) * mLon) < 4000) return true;
+  }
+  for (const l of LEGS) {
+    const ax = l.giver.lon * mLon, az = l.giver.lat * mLat;
+    const bx = l.dest.lon * mLon, bz = l.dest.lat * mLat;
+    const px = lo * mLon, pz = la * mLat;
+    const dx = bx - ax, dz = bz - az;
+    const t = clamp(((px - ax) * dx + (pz - az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    if (Math.hypot(px - (ax + dx * t), pz - (az + dz * t)) < 2500) return true;
+  }
+  return false;
+}
+/** Walk what is still dark and light whatever has since been earned. */
+function ovInkRefresh(): void {
+  if (!ovDark.length) return;
+  const keep: OvDark[] = [];
+  const touched = new Set<THREE.Mesh>();
+  for (const d of ovDark) {
+    if (!d.mesh.parent) continue;                       // its level was retired
+    if (!chartGrants(d.name, d.la, d.lo)) { keep.push(d); continue; }
+    const a = d.mesh.geometry.getAttribute('aInk') as THREE.BufferAttribute;
+    for (let i = d.from; i < d.to; i++) a.setX(i, 1);
+    touched.add(d.mesh);
+  }
+  for (const m of touched) (m.geometry.getAttribute('aInk') as THREE.BufferAttribute).needsUpdate = true;
+  ovDark = keep;
+}
 /** A place the chart can write on the land: rank 0 city … 3 hamlet, 4 peak. */
 interface OvPlace { name: string; x: number; z: number; y: number; rank: number }
 const ovPlaces = new Map<string, OvPlace>();
@@ -10780,6 +10850,7 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   };
   const base = tileMetres(z) * 0.016;
   const verts: number[] = [], cols: number[] = [];
+  const inkRuns: Array<{ name: string; la: number; lo: number; from: number; to: number; lit: boolean }> = [];
   for (const w of ways) {
     const t = w.tags ?? {};
     if (t.place || (t.natural === 'peak')) {
@@ -10794,16 +10865,16 @@ function buildOvTile(key: string, x: number, y: number, z: number,
     const style = OV_STYLE.find(([match]) => match(t));
     if (!style || w.geometry.length < 2) continue;
     // ON THE LINE the far chart holds the minimap's rule: a road appears once
-    // the survey has it, and not before. Rail, coastline and the waterways are
-    // terrain's infrastructure — chart, not survey — and always draw, as do
-    // the places: the names are the Service's old map, the roads are its job.
-    // Decided at tile build; a road surveyed mid-session joins this layer when
-    // its level next rebuilds, which the zoom ladder does routinely.
-    if (lineOn && t.highway) {
-      if (!t.name) continue;
-      const [sLa, sLo] = w.geometry[0];
-      if (!surveyStore.seen(t.name, sLa, sLo)) continue;
-    }
+    // the survey has ANY of it, or the docket runs through it. Rail, coastline
+    // and the waterways are terrain's infrastructure — chart, not survey — and
+    // always draw, as do the places: the names are the Service's old map, the
+    // roads are its job. The verdict is NOT baked here any more: the way is
+    // built either way and its vertices carry a flag, so a road earned mid-leg
+    // lights without waiting for its level to rebuild (see ovInkRefresh).
+    const [sLa, sLo] = w.geometry[0];
+    const gated = lineOn && !!t.highway;
+    const lit = !gated || chartGrants(t.name ?? '', sLa, sLo);
+    const from = verts.length / 3;
     const [, col, mul] = style;
     const hw = (base * mul) / 2;
     for (let i = 0; i < w.geometry.length - 1; i++) {
@@ -10819,6 +10890,7 @@ function buildOvTile(key: string, x: number, y: number, z: number,
       );
       for (let q = 0; q < 6; q++) cols.push(col[0], col[1], col[2]);
     }
+    if (gated) inkRuns.push({ name: t.name ?? '', la: sLa, lo: sLo, from, to: verts.length / 3, lit });
   }
   if (!verts.length) {
     // An empty tile is still a LANDED tile: it has to hold its key (or every
@@ -10830,11 +10902,17 @@ function buildOvTile(key: string, x: number, y: number, z: number,
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
   geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(cols), 3));
+  // Everything is lit unless a run says otherwise — rail, water and coastline
+  // never enter inkRuns at all, so they are simply on.
+  const ink = new Float32Array(verts.length / 3).fill(1);
+  for (const r of inkRuns) if (!r.lit) ink.fill(0, r.from, r.to);
+  geo.setAttribute('aInk', new THREE.BufferAttribute(ink, 1));
   const mesh = new THREE.Mesh(geo, ovMat);
   // With depth ignored, draw order is the only law — the chart's ink paints
   // after the world's own transparents (water, rain) rather than under
   // whichever happened to sort nearer that frame.
   mesh.renderOrder = 40;
+  for (const r of inkRuns) if (!r.lit) ovDark.push({ mesh, name: r.name, la: r.la, lo: r.lo, from: r.from, to: r.to });
   ovMeshes.set(key, mesh);
   ovGroup.add(mesh);
   if (ovInFlight === 1 && ovQueue.length === 0) dropRetiredOv();
@@ -12671,6 +12749,27 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
 };
 // Depth and current at a point — the physics' own read, so a test can ask
 // what the water is doing without driving a truck into it first.
+/**
+ * THE CHART'S FOG, AS A COUNT. How many ways the overview is holding back,
+ * how many it has lit, and what the store the gate reads actually knows —
+ * the three numbers that turn "I have driven that road and it is not on my
+ * map" into a question with an answer.
+ */
+(window as unknown as { __chartfog?: object }).__chartfog = (): object => {
+  let lit = 0, dark = 0;
+  for (const m of ovMeshes.values()) {
+    const a = m.geometry.getAttribute('aInk') as THREE.BufferAttribute | undefined;
+    if (!a) continue;
+    for (let i = 0; i < a.count; i++) (a.getX(i) > 0.5 ? lit++ : dark++);
+  }
+  const st = surveyStore.stats();
+  return {
+    lineOn, ovMeshes: ovMeshes.size, litVerts: lit, darkVerts: dark,
+    darkRuns: ovDark.length,
+    store: { roads: st.roads, claimed: st.claimed, crumbs: st.crumbs, bytes: st.bytes },
+    loaded: survey.size,
+  };
+};
 /**
  * THE QUEUE'S OWN SHAPE — what it is asking for, in what order, and why.
  *
@@ -18173,6 +18272,10 @@ function tick(now: number): void {
   // The drapes re-settle onto whatever the ground has become since they were
   // baked — slower than the eye, faster than a drive across a valley.
   if (!paused && now > drapeAt) { drapeAt = now + 200; refreshDrapes(3); }
+  // The chart's fog lifts on its own clock: a capture sets the flag, this
+  // walks what is still dark. Cheap (the list only ever shrinks) and never
+  // urgent — a road earned this second can appear on the map next second.
+  if (ovInkDirty && now > ovInkAt) { ovInkAt = now + 900; ovInkDirty = false; ovInkRefresh(); }
   if (now > navAt) {
     navAt = now + 600;
     navBend = paused || camMode === 'top' ? null : nextBend(state.x, state.z, state.heading);
@@ -20982,6 +21085,14 @@ function hudTap(cx: number, cy: number): boolean {
   addEventListener('keydown', (e) => { if (e.key.toLowerCase() === 'h') setClean(!clean()); });
 }
 
+/** The loaded roads by id — what the store cannot know (length on the ground,
+ *  a checkpoint count fresher than the banked one) for the few roads whose
+ *  geometry happens to be streamed in right now. */
+function surveyLoaded(): Map<string, SurveyRoad> {
+  const live = new Map<string, SurveyRoad>();
+  for (const r of survey.values()) if (surveyEligible(r)) live.set(r.id, r);
+  return live;
+}
 // ── the menu ───────────────────────────────────────────────────────
 // DOM, not canvas — layout and the open/closed state live in `client/menu.ts`;
 // this context is everything it may read or do. The rule for what goes in it:
@@ -21028,25 +21139,57 @@ const menu = createMenu({
       tone: here.r.claimed ? 'good' : here.ready ? 'gold' : 'dim',
     };
   },
+  // ── the survey tab reads the DURABLE STORE ──────────────────────
+  //
+  // It read `survey`, which is the roads whose GEOMETRY is currently streamed
+  // in — a disc a kilometre or two wide around the truck. So a ranger two
+  // thousand kilometres down the line opened the tab and saw a handful of
+  // lanes, because everything else had scrolled out of memory hours ago. The
+  // record was never lost; the panel was looking at the wrong object, which
+  // is the exact conflation survey-store.ts opens by warning about ("main.ts
+  // holds the roads that are LOADED … this holds what has been COLLECTED").
+  //
+  // The store is the spine now, and a loaded road only lends what the store
+  // cannot know: its length on the ground, and a checkpoint count fresher than
+  // the one that was banked.
   surveyTotals: () => {
-    const roads = [...survey.values()].filter(surveyEligible);
-    return {
-      roads: roads.length,
-      got: roads.reduce((n, r) => n + r.got, 0),
-      total: roads.reduce((n, r) => n + r.cps.length, 0),
-    };
+    const live = surveyLoaded();
+    const rows = Object.entries(surveyStore.dump(0));
+    let got = 0, total = 0;
+    for (const [id, d] of rows) {
+      const r = live.get(id);
+      got += Math.max(d.g, r?.got ?? 0);
+      total += Math.max(d.t, d.g, r?.cps.length ?? 0);
+    }
+    return { roads: rows.length, got, total };
   },
-  surveyRoads: () => [...survey.values()].filter(surveyEligible).sort((a, b) => b.len - a.len).slice(0, 80)
-    .map((r) => {
-      const frac = r.got / r.cps.length;
+  surveyRoads: () => {
+    const live = surveyLoaded();
+    return Object.entries(surveyStore.dump(0)).map(([id, d]) => {
+      // The id is `name@cy,cx` (see roadId); anything else is a pre-identity
+      // record, whose id IS the bare name.
+      const at = id.lastIndexOf('@');
+      const nm = at > 0 && /^-?\d+,-?\d+$/.test(id.slice(at + 1)) ? id.slice(0, at) : id;
+      const r = live.get(id);
+      const got = Math.max(d.g, r?.got ?? 0);
+      const total = Math.max(d.t, d.g, r?.cps.length ?? 0) || 1;
+      const frac = clamp(got / total, 0, 1);
       return {
-        name: r.name.toUpperCase(),
-        km: r.len >= 1000 ? `${(r.len / 1000).toFixed(1)}K` : `${Math.round(r.len)}M`,
+        name: nm.toUpperCase(),
+        // A road you are nowhere near has no length here — the store banks
+        // counts, not geometry — and an em dash is the honest answer.
+        km: r ? (r.len >= 1000 ? `${(r.len / 1000).toFixed(1)}K` : `${Math.round(r.len)}M`) : '—',
         frac,
-        tally: `${r.got}/${r.cps.length}`,
-        tone: r.claimed ? 'good' as const : frac > SURVEY_MAJORITY ? 'gold' as const : 'soft' as const,
+        tally: `${got}/${total}`,
+        tone: d.c || r?.claimed ? 'good' as const : frac > SURVEY_MAJORITY ? 'gold' as const : 'soft' as const,
+        got,
       };
-    }),
+    })
+      // Most surveyed first: with the whole run in the list, length would rank
+      // a motorway you crossed once above the lane you walked end to end.
+      .sort((a, b) => b.got - a.got || a.name.localeCompare(b.name))
+      .slice(0, 80);
+  },
   drives: () => allDrives().map((d, i) => ({ name: d.name, sub: d.sub, mine: i < spots.length })),
   views: () => VIEWS.map((v) => v.id),
   vehView: () => vehView,
