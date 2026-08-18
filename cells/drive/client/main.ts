@@ -10167,7 +10167,16 @@ function streamWorld(ex: number, ez: number): void {
 const FAR_LEVELS = [13, 11, 9, 7];
 let farZ = FAR_LEVELS[0];
 const FAR_RING_MAX = 2;       // 5×5 coarse tiles at whichever level is current
-const FAR_SEG = 64;           // 25 tiles ≈ 106k verts — still a rounding error next to the fine ring
+// METRES PER VERTEX, not segments, is what decides whether a massif has a
+// summit or a smooth shoulder. Tile ground-width shrinks with cos(latitude),
+// so the level the ring lands on drops a rung away from the equator (measured:
+// 46km of sight picks z9 at Mesa and at Zermatt alike), and at z9 a 64-segment
+// mesh spends one vertex per kilometre — enough to place a mountain, not
+// enough to keep its top. 128 samples the coarse DEM at about its own
+// resolution; 9 tiles of it is ~148k verts, which is still small beside the
+// fine ring, and it is nine draw calls rather than the twenty-five a finer
+// level would have cost for LESS reach.
+const FAR_SEG = 128;
 /** The coarsest level whose 5x5 ring still reaches `radius`. */
 function farLevelFor(radius: number): number {
   for (const z of FAR_LEVELS) if (radius <= tileMetres(z) * (FAR_RING_MAX + 0.5)) return z;
@@ -12026,6 +12035,14 @@ function stepReal(dt: number): boolean {
   ua: navigator.userAgent,
 });
 (window as unknown as { __drive?: object; __surfaceAt?: (x: number, z: number) => string }).__drive = state;
+/** Move the truck by metres, through the real teleport path — the only way a
+ *  harness can get far enough from the world origin to test the far shell's
+ *  curve compensation, which is a function of exactly that distance. */
+(window as unknown as { __jump?: object }).__jump = (dx: number, dz: number): object => {
+  teleportTo(state.x + dx, state.z + dz);
+  return { x: Math.round(state.x), z: Math.round(state.z),
+    fromOrigin: Math.round(Math.hypot(state.x, state.z)) };
+};
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
 (window as unknown as { __coverAt?: (x: number, z: number) => number | null }).__coverAt = sampleCover;
 /** Camera mode and the double-tap state behind it — so a test can see WHY a
@@ -13489,14 +13506,23 @@ function meshHeightAt(x: number, z: number): number | null {
     // THE SEAM, as a number: the fine ring's own height beside the shell's,
     // sampled just outside where the fine world gives out. A cliff here is
     // the curve compensation failing, and it fails by kilometres driven.
+    // Sampled where BOTH layers exist — inside the fine ring — or the answer
+    // is the shell measured against itself, which is zero however wrong the
+    // curve is. Negative is the shell sitting below the fine world, which is
+    // what FAR_DROP asks for; anything past about -40 is the curve drifting.
     seam: (() => {
-      const a = 6200, dirs: number[] = [];
-      for (const [dx, dz] of [[a, 0], [-a, 0], [0, a], [0, -a]] as Array<[number, number]>) {
-        const wx = viewX() + dx, wz = viewZ() + dz;
-        const hit = farHeightAt(wx, wz);
-        if (hit !== null) dirs.push(+(hit - (hasHeight(wx, wz) ? sampleHeight(wx, wz) : hit)).toFixed(1));
+      const dirs: number[] = [];
+      for (const a of [1500, 3200, 4600]) {
+        for (const [dx, dz] of [[a, 0], [-a, 0], [0, a], [0, -a]] as Array<[number, number]>) {
+          const wx = viewX() + dx, wz = viewZ() + dz;
+          if (!hasHeight(wx, wz)) continue;
+          const hit = farHeightAt(wx, wz);
+          if (hit !== null) dirs.push(+(hit - sampleHeight(wx, wz)).toFixed(1));
+        }
       }
-      return dirs;
+      return dirs.length
+        ? { n: dirs.length, min: Math.min(...dirs), max: Math.max(...dirs) }
+        : { n: 0, min: 0, max: 0 };
     })(),
     tilt: +(Math.hypot(viewX(), viewZ()) / EARTH_R).toFixed(5),
     fromOrigin: Math.round(Math.hypot(viewX(), viewZ())) });
