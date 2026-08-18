@@ -9963,6 +9963,26 @@ const tileMetres = (z: number): number =>
 /** Half the ground the camera can see — the radius streaming has to serve.
  *  Derived from the rig, not guessed: distance × tan(half-fov) with the tilt
  *  folded in, which is what the frustum actually lands on. */
+/**
+ * HOW FAR THE BACKDROP MUST REACH — which is not the question `viewRadius`
+ * answers. That one is the DETAIL budget: how far out it is worth building
+ * roads, cover and fine terrain, and in a driving view it says 900m by
+ * construction, because that is all the truck can interact with.
+ *
+ * The EYE does not stop at 900m. From the seat a 1500m massif forty
+ * kilometres away is a thing you can see, and the peak markers have been
+ * naming exactly those mountains all along — while the far shell was never
+ * even ASKED for outside the chart, so the labels hung in an empty sky with
+ * no geology under them. Reported from the seat in Arizona, with Superstition
+ * Peak named at 30.6km over blank air.
+ *
+ * 46km is chosen against the shell's own geometry: z11 tiles in a 5x5 ring
+ * reach 49km, and past about fifty the aerial perspective has taken the
+ * landform anyway (the composite's haze is 1 - exp(-t/1400)). Held the SAME in
+ * every camera so that opening the chart does not retire and refetch the whole
+ * shell — the level is a property of the world, not of which way you look.
+ */
+const SIGHT_M = 46000;
 function viewRadius(): number {
   if (camMode !== 'top') return 900;
   const dist = CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh;
@@ -10058,7 +10078,11 @@ function streamWorld(ex: number, ez: number): void {
   }
   // Beyond the fine layer's reach, a COARSE shell so the land does not simply
   // stop. Only fetched once the view is wide enough to see past the fine ring.
-  if (r > tileMetres(TERRAIN_Z) * 1.5) {
+  // The backdrop is streamed for the EYE (see SIGHT_M); the overview vectors
+  // below stay on the chart's own budget, since they are a map layer and only
+  // the chart draws them.
+  const sight = Math.max(r, SIGHT_M);
+  if (sight > tileMetres(TERRAIN_Z) * 1.5) {
     // THE CHART STREAMS WHERE YOU LOOK. The fine rings above serve the TRUCK —
     // that is gameplay. The far shell and the overview vectors serve the VIEW,
     // and a panned chart is looking somewhere else: before this, panning past
@@ -10067,9 +10091,9 @@ function streamWorld(ex: number, ez: number): void {
     // the next tick.
     const [cLat, cLon] = camMode === 'top' && (panX !== 0 || panZ !== 0)
       ? localToLatLon(ex + panX, ez + panZ) : [lat, lon];
-    setFarLevel(farLevelFor(r));
+    setFarLevel(farLevelFor(sight));
     const [fx, fy] = tileAt(cLat, cLon, farZ);
-    const fRing = clamp(Math.ceil(r / tileMetres(farZ)), 1, FAR_RING_MAX);
+    const fRing = clamp(Math.ceil(sight / tileMetres(farZ)), 1, FAR_RING_MAX);
     for (let dx = -fRing; dx <= fRing; dx++)
       for (let dy = -fRing; dy <= fRing; dy++) void loadFarTile(fx + dx, fy + dy);
     // …and the vectors to draw on it. Same trigger, same banding discipline:
@@ -10176,6 +10200,33 @@ function dropRetiredFar(): void {
 // has to agree with it.
 const EARTH_R = 6371000;
 const curveDrop = (dx: number, dz: number): number => (dx * dx + dz * dz) / (2 * EARTH_R);
+/**
+ * …AND THE CURVE IS MEASURED FROM WHERE YOU ARE STANDING.
+ *
+ * The shell bakes its drop from the world ORIGIN, which is geometrically
+ * correct against the tangent plane at the spawn — and disagrees with the
+ * FINE world, which is built dead flat at every distance. Standing at the
+ * spawn the two agree. Thirty kilometres down the road they do not: the shell
+ * is 70m low, the fine ring ends in a cliff, and 70m of it is real geometry
+ * doing exactly what it was told.
+ *
+ * Rebaking every mesh as the truck moves is not affordable. It is also not
+ * necessary, because the difference between the two drops is LINEAR in
+ * position — (2·p·c − |c|²)/2R for a viewer at c — and a linear ramp over a
+ * rigid body is a tilt plus a lift. So the shell is tilted by |c|/R about the
+ * horizontal axis across the direction of travel and dropped by |c|²/2R,
+ * which is the same statement as "the world tips as you go over the curve".
+ * Exact to first order, two numbers a frame, and it keeps the horizon level
+ * under the truck wherever the truck has got to.
+ */
+const farAxis = new THREE.Vector3();
+function alignFarShell(): void {
+  const cx = viewX(), cz = viewZ();
+  const d = Math.hypot(cx, cz);
+  if (d < 1) { farGroup.rotation.set(0, 0, 0); farGroup.position.y = 0; return; }
+  farGroup.setRotationFromAxisAngle(farAxis.set(-cz / d, 0, cx / d), d / EARTH_R);
+  farGroup.position.y = -(d * d) / (2 * EARTH_R);
+}
 const farTiles = new Set<string>();
 const farMeshes = new Map<string, THREE.Mesh>();
 const farGroup = new THREE.Group();
@@ -13433,7 +13484,33 @@ function meshHeightAt(x: number, z: number): number | null {
  *  corners onto the car's ground plane. The honest answer to "how far out can
  *  I see", which no constant in this file states directly. */
 (window as unknown as { __far?: object }).__far = (): object =>
-  ({ tiles: farMeshes.size, shown: farGroup.visible, radius: Math.round(viewRadius()), farPlane: camera.far });
+  ({ tiles: farMeshes.size, shown: farGroup.visible, radius: Math.round(viewRadius()),
+    sight: SIGHT_M, level: farZ, farPlane: camera.far,
+    // THE SEAM, as a number: the fine ring's own height beside the shell's,
+    // sampled just outside where the fine world gives out. A cliff here is
+    // the curve compensation failing, and it fails by kilometres driven.
+    seam: (() => {
+      const a = 6200, dirs: number[] = [];
+      for (const [dx, dz] of [[a, 0], [-a, 0], [0, a], [0, -a]] as Array<[number, number]>) {
+        const wx = viewX() + dx, wz = viewZ() + dz;
+        const hit = farHeightAt(wx, wz);
+        if (hit !== null) dirs.push(+(hit - (hasHeight(wx, wz) ? sampleHeight(wx, wz) : hit)).toFixed(1));
+      }
+      return dirs;
+    })(),
+    tilt: +(Math.hypot(viewX(), viewZ()) / EARTH_R).toFixed(5),
+    fromOrigin: Math.round(Math.hypot(viewX(), viewZ())) });
+/** The shell's surface under a world point, through its live transform — so a
+ *  probe measures what is DRAWN, not what was baked. */
+const farRay = new THREE.Raycaster();
+const farDown = new THREE.Vector3(0, -1, 0);
+function farHeightAt(wx: number, wz: number): number | null {
+  if (!farMeshes.size) return null;
+  farGroup.updateMatrixWorld(true);
+  farRay.set(new THREE.Vector3(wx, 9000, wz), farDown);
+  const hits = farRay.intersectObjects([...farMeshes.values()], false);
+  return hits.length ? +(9000 - hits[0].distance).toFixed(1) : null;
+}
 (window as unknown as { __viewSpan?: object }).__viewSpan = (): object => {
   const y0 = groundAt(state.x, state.z);
   const hit = (nx: number, ny: number): [number, number] | null => {
@@ -17404,7 +17481,12 @@ function tick(now: number): void {
       camAim.set(drone.x + dfx * 26, drone.y - 7, drone.z + dfz * 26);
     }
   } else if (camMode === 'cab') {
-    farGroup.visible = false;
+    // THE BACKDROP STANDS IN EVERY VIEW NOW. It was chart-and-drone only, on
+    // the reasoning that its seam is never revealed from altitude — but the
+    // seam is a 12m lip at the fine ring's edge, which is 6km out, and 12m at
+    // 6km is a tenth of a degree: under one pixel at this render scale, and
+    // under the haze besides. What the old rule actually cost was the horizon.
+    farGroup.visible = true;
     ovGroup.visible = false;
     // THE DRIVER'S SEAT. The eye is a point on the body, so it takes the body's
     // whole attitude — pitch, roll and the suspension's own heave — which is
@@ -17413,7 +17495,7 @@ function tick(now: number): void {
     // has to clear the dashboard, and the aim point rides the same rotation
     // rather than a fixed world offset, or the truck would appear to steer
     // separately from the view through its own screen.
-    setNear(0.12);
+    setNear(0.12, 62000);
     const cs = Math.cos(pitchC), sn = Math.sin(pitchC);
     // The car's own basis: forward is -z in model space, and the group is
     // rotated (pitchC, -heading, rollC) in YXZ order.
@@ -17437,9 +17519,12 @@ function tick(now: number): void {
       camPos.z + fwdZ * (40 * cs + 2.4 * sn),
     );
   } else {
-    farGroup.visible = false;
+    farGroup.visible = true;
     ovGroup.visible = false;
-    setNear(1);
+    // FAR ENOUGH TO HOLD A MOUNTAIN. 30km clipped the shell mid-range, which
+    // would have drawn a horizon that ENDS — worse than none. One bit of depth
+    // precision buys the skyline; the near plane is untouched.
+    setNear(1, 62000);
     // Framed like the reference art: the rig in the lower third with the track
     // running to a vanishing point. On a PORTRAIT phone the 55° figure is the
     // VERTICAL fov, so the horizontal one is only ~30° — at 12.5m the truck ate
@@ -17651,6 +17736,8 @@ function tick(now: number): void {
   // Whatever view is up: the frame follows the truck even while the dock shows
   // the POV preview, so the map is whole the moment the chart comes back.
   mapRecentre();
+  // The backdrop rides the curve under whoever is current (see alignFarShell).
+  alignFarShell();
   if (camMode !== 'top' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
   // Progress lives in the URL: reloading resumes here, not at the spawn.
   // The VIEW counts as progress now too — switching camera or re-zooming the
