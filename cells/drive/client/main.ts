@@ -16391,6 +16391,9 @@ let navAt = 0;
 let drapeAt = 0;
 let urlAt = 0, urlX = Infinity, urlZ = 0, urlH = 0;
 let urlCam: CamMode = 'chase', urlZoom = 1;
+/** The query keys the DRIVE owns and rewrites. Everything else in the bar
+ *  belongs to whoever put it there. */
+const URL_OWNED = new Set(['lat', 'lon', 'h', 'cam', 'z', 'm', 'line']);
 const writeUrl = (la: number, lo: number): void => {
   const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
   try {
@@ -16407,7 +16410,19 @@ const writeUrl = (la: number, lo: number): void => {
     const zm = camMode === 'top' && Math.abs(zoomT - 1) > 0.05
       ? `&z=${zoomT >= 30 ? zoomT.toFixed(0) : zoomT.toFixed(1)}` : '';
     const ln = lineOn ? '&line=1' : '';
-    history.replaceState(null, '', `?lat=${la.toFixed(5)}&lon=${lo.toFixed(5)}&h=${deg.toFixed(0)}&cam=${cm}${zm}${m}${ln}`);
+    // AND KEEP WHAT THE DRIVE DOES NOT OWN. This line rebuilds the query from
+    // scratch, which silently deleted every parameter it did not itself write:
+    // ?biome, ?t, ?sunalt, ?mblur, the debug flags — the whole art-direction
+    // and instrumentation surface — survived about a second and then the world
+    // went back to whatever it would have been anyway. Found while measuring
+    // the species mixes: a boot pinned to ARID reported temperate ten seconds
+    // later, with the URL rewritten behind it and the cover latch, which is
+    // supposed to yield to art direction, never seeing the flag it yields to.
+    let keep = '';
+    for (const [k, v] of new URLSearchParams(location.search)) {
+      if (!URL_OWNED.has(k)) keep += `&${k}=${encodeURIComponent(v)}`;
+    }
+    history.replaceState(null, '', `?lat=${la.toFixed(5)}&lon=${lo.toFixed(5)}&h=${deg.toFixed(0)}&cam=${cm}${zm}${m}${ln}${keep}`);
   } catch { /* fine */ }
 };
 // Surface grip: tarmac is fast, everything else asks you to slow down —
