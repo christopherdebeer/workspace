@@ -9982,7 +9982,12 @@ const tileMetres = (z: number): number =>
  * every camera so that opening the chart does not retire and refetch the whole
  * shell — the level is a property of the world, not of which way you look.
  */
-const SIGHT_M = 46000;
+// 34km, not 46: the level the ring lands on is chosen by whether it COVERS
+// this distance, so asking for more sky drops a rung and pays for the extra
+// reach in summit height. At 34km a 5x5 ring of z11 still covers the horizon
+// at every latitude the line crosses, and mountains keep their tops. Past it
+// the composite's haze has taken the landform anyway.
+const SIGHT_M = 34000;
 function viewRadius(): number {
   if (camMode !== 'top') return 900;
   const dist = CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh;
@@ -10176,7 +10181,20 @@ const FAR_RING_MAX = 2;       // 5×5 coarse tiles at whichever level is current
 // resolution; 9 tiles of it is ~148k verts, which is still small beside the
 // fine ring, and it is nine draw calls rather than the twenty-five a finer
 // level would have cost for LESS reach.
-const FAR_SEG = 128;
+/**
+ * METRES PER VERTEX IS THE DIAL, not segment count. A tile's ground width
+ * changes with both the level and cos(latitude), so a fixed segment count
+ * spends wildly different resolution in different places — measured at z9 it
+ * was 508m a vertex, and the shell handed back mountains 130 to 500m short of
+ * their real summits: the Matterhorn arrived as its own shoulder.
+ *
+ * ~250m a vertex is the budget, because that is about where the coarse DEM's
+ * own resolution sits and where a summit stops being smoothed off. Squaring it
+ * against the ring size keeps the shell near 200k triangles whichever level is
+ * current — FEWER than the old fixed 128 spent at z9, for twice the fidelity,
+ * because the level below covers the same sky with smaller tiles.
+ */
+const farSeg = (z: number): number => clamp(Math.round(tileMetres(z) / 250 / 8) * 8, 32, 128);
 /** The coarsest level whose 5x5 ring still reaches `radius`. */
 function farLevelFor(radius: number): number {
   for (const z of FAR_LEVELS) if (radius <= tileMetres(z) * (FAR_RING_MAX + 0.5)) return z;
@@ -10265,7 +10283,8 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   const [wx1, wz1] = toLocal(b.latS, b.lonE);
   const xs = Math.min(wx0, wx1), zs = Math.min(wz0, wz1);
   const w = Math.abs(wx1 - wx0), h = Math.abs(wz1 - wz0);
-  const geo = new THREE.PlaneGeometry(w, h, FAR_SEG, FAR_SEG);
+  const seg = farSeg(z);
+  const geo = new THREE.PlaneGeometry(w, h, seg, seg);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const colors = new Float32Array(pos.count * 3);
