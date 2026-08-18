@@ -1210,6 +1210,16 @@ rtScene.samples = 0; // MSAA would soften exactly the edges we want hard
 rtScene.depthTexture = new THREE.DepthTexture(2, 2);
 const rtA = mkRT(false), rtB = mkRT(false);
 const rtC = mkRT(false), rtD = mkRT(false); // bright-pass ping-pong for bloom
+// THE SHUTTER'S OWN TARGET. Full pixel-grid size and NEAREST like rtScene,
+// not half like the blur pair: this is not a soft copy of the frame, it IS
+// the frame, and everything downstream reads it in rtScene's place.
+const rtM = mkRT(false, true);
+// Seconds the shutter stays open, per dial step. A camera measures this as an
+// ANGLE — the fraction of the frame the blade is out of the way — so 180° at
+// 60fps is 1/120s. Naming it that way costs nothing and means the dial says
+// something true about how long the picture took.
+const MBLUR_SHUTTER = [0, 1 / 240, 1 / 120, 1 / 60];
+let mblurShutter = 0;
 resizePost = () => {
   const h = Math.min(PIX_H, Math.round(innerHeight));
   const w = Math.max(2, Math.round((innerWidth / innerHeight) * h));
@@ -1218,9 +1228,18 @@ resizePost = () => {
   rtB.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
   rtC.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
   rtD.setSize(Math.max(2, w >> 1), Math.max(2, h >> 1));
+  rtM.setSize(w, Math.max(2, h));
   pixSize.set(w, Math.max(2, h));
 };
 resizePost();
+// EVERYTHING AFTER THE SCENE PASS, from whatever is already sitting in
+// rtScene. Lifted out of the frame loop for one reason: a probe can then run
+// it TWICE on a single scene render with only the shutter changed, and two
+// pictures of a world this busy are otherwise never comparable. Driving the
+// same corner twice and photographing both moved more pixels than the effect
+// under test did — the dust, the wildlife, the suspension and the tiles still
+// arriving all differ, and the honest measurement said so.
+let composite: (amt: number) => void;
 const quadCam = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
 const quadScene = new THREE.Scene();
 const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
@@ -1258,6 +1277,101 @@ const brightMat = new THREE.ShaderMaterial({
       gl_FragColor = vec4(c * smoothstep(uCut, uCut + 0.35, b), 1.0);
     }`,
 });
+// ── the shutter ────────────────────────────────────────────────────
+// A frame is an instant; a photograph is an interval. Everything needed to
+// tell the difference is already in this pipeline: the depth buffer says
+// where each pixel IS in the world, and last frame's view-projection says
+// where that same world point WAS on screen. The difference between the two
+// screen positions is how far that pixel travelled while the shutter was
+// open — no velocity buffer, no second scene pass, no per-object motion.
+//
+// THE WORLD IS STATIC AND THE CAMERA IS WHAT MOVES, which is what makes the
+// cheap version the correct one here. Terrain, roads and buildings never move;
+// grass and water move only inside their own shaders, so no CPU knows where a
+// blade is anyway; the truck is nearly still relative to a chase camera bolted
+// to it. Reprojecting the camera alone is therefore right for very nearly
+// every pixel, and wrong in the one place nobody looks — a bird.
+//
+// AT THE PIXEL GRID, AND BEFORE EVERYTHING. The taps land on whole texels of
+// a NEAREST buffer, so a streak comes out as a row of discrete echoes rather
+// than a smooth ramp, and the composite's palette step then flattens those
+// echoes into bands. That is the difference between motion blur and a comet
+// trail drawn in the same palette as the rest of the picture. Run after the
+// composite instead and it would smear the ordered dither and the scanlines,
+// which are the two things on this screen that must never move.
+const mblurMat = new THREE.ShaderMaterial({
+  uniforms: {
+    sceneTex: { value: null },
+    depthTex: { value: rtScene.depthTexture },
+    invPV: { value: new THREE.Matrix4() },
+    prevVP: { value: new THREE.Matrix4() },
+    camPos: { value: new THREE.Vector3() },
+    uPix: { value: pixSize },
+    uAmt: { value: 0 },
+    // A ceiling in TEXELS, because the failure this guards against is a
+    // picture-space one: a violent yaw or a camera still catching up after a
+    // teleport can ask for a streak longer than the thing it is streaking.
+    uMaxPx: { value: 20 },
+  },
+  vertexShader: QUAD_VS,
+  fragmentShader: `
+    #define TAPS 6
+    uniform sampler2D sceneTex; uniform sampler2D depthTex;
+    uniform mat4 invPV; uniform mat4 prevVP; uniform vec3 camPos;
+    uniform vec2 uPix; uniform float uAmt; uniform float uMaxPx;
+    varying vec2 vUv;
+    void main(){
+      vec3 here = texture2D(sceneTex, vUv).rgb;
+      float z = texture2D(depthTex, vUv).r;
+      vec4 far = invPV * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
+      vec3 dir = normalize(far.xyz / far.w - camPos);
+      // The sky dome writes no depth, so it has no surface point to reproject.
+      // Give it one 60km out: far enough that a metre of travel means nothing
+      // and only the camera's ROTATION reaches it, which is how a sky behaves.
+      vec3 wp = camPos + dir * 60000.0;
+      if (z < 0.99995) {
+        vec4 w4 = invPV * vec4(vUv * 2.0 - 1.0, z * 2.0 - 1.0, 1.0);
+        wp = w4.xyz / w4.w;
+      }
+      vec4 pc = prevVP * vec4(wp, 1.0);
+      // Behind last frame's camera: it was not on screen to travel from.
+      if (pc.w <= 0.0) { gl_FragColor = vec4(here, 1.0); return; }
+      vec2 prevUv = (pc.xy / pc.w) * 0.5 + 0.5;
+      vec2 vel = (vUv - prevUv) * uAmt;
+      float len = length(vel * uPix);
+      if (len > uMaxPx) vel *= uMaxPx / len;
+      // Under a texel of travel there is nothing to integrate, and sampling it
+      // anyway only softens a pixel that has earned the right to stay hard.
+      if (len < 0.9) { gl_FragColor = vec4(here, 1.0); return; }
+      // A box, walked BACKWARDS along the travel: the shutter closed at this
+      // instant, so the trail belongs behind the pixel, not around it. An even
+      // weight is what an open shutter actually does.
+      vec3 acc = here;
+      for (int i = 1; i < TAPS; i++) {
+        acc += texture2D(sceneTex, vUv - vel * (float(i) / float(TAPS - 1))).rgb;
+      }
+      gl_FragColor = vec4(acc / float(TAPS), 1.0);
+    }`,
+});
+// Last frame's view-projection, and where the camera stood when it was taken.
+// The first frame-to-frame render state in this file, which is why it is kept
+// here beside the pass that needs it rather than anywhere more convenient.
+const mblurVP = new THREE.Matrix4();
+const mblurPrevVP = new THREE.Matrix4();
+// What the LAST composite actually reprojected against. By the time a frame
+// has returned, mblurPrevVP has already been advanced to this frame's own
+// matrix — so anything re-running the chain from outside the loop reprojects
+// the picture against itself and gets a perfect zero. It did, and the first
+// set of pictures this tool produced were byte-identical pairs.
+const mblurUsedVP = new THREE.Matrix4();
+const mblurPrevCam = new THREE.Vector3();
+let mblurAmt = 0;
+let mblurPrimed = false;
+// Reported, not rendered: how far the camera actually moved and turned since
+// the last frame. A streak you can only judge by eye is a streak you cannot
+// argue about, and the yaw is the term that dominates in a corner.
+let mblurStepM = 0, mblurStepYaw = 0, mblurPrevYaw = 0, mblurDt = 0;
+const camYaw = (): number => Math.atan2(-camera.matrixWorld.elements[8], -camera.matrixWorld.elements[10]);
 const compMat = new THREE.ShaderMaterial({
   uniforms: {
     sceneTex: { value: null },
@@ -1395,6 +1509,34 @@ const compMat = new THREE.ShaderMaterial({
       gl_FragColor = vec4(clamp(enc, 0.0, 1.0), 1.0);
     }`,
 });
+composite = (amt: number): void => {
+  // The shutter runs FIRST, so everything after it — the depth-of-field blur,
+  // the bright pass, the haze, the grade and the palette step — is working on
+  // one already-exposed frame rather than on an instant.
+  let srcTex = rtScene.texture;
+  if (amt > 0 && mblurPrimed) {
+    mblurMat.uniforms.sceneTex.value = rtScene.texture;
+    mblurMat.uniforms.invPV.value.copy(compMat.uniforms.invPV.value as THREE.Matrix4);
+    mblurMat.uniforms.prevVP.value.copy(mblurPrevVP);
+    mblurMat.uniforms.camPos.value.copy(camera.position);
+    mblurMat.uniforms.uAmt.value = amt;
+    runPass(mblurMat, rtM);
+    srcTex = rtM.texture;
+  }
+  blurMat.uniforms.src.value = srcTex; blurMat.uniforms.dirPx.value.set(1 / rtA.width, 0); runPass(blurMat, rtA);
+  blurMat.uniforms.src.value = rtA.texture; blurMat.uniforms.dirPx.value.set(0, 1 / rtA.height); runPass(blurMat, rtB);
+  blurMat.uniforms.src.value = rtB.texture; blurMat.uniforms.dirPx.value.set(2 / rtA.width, 0); runPass(blurMat, rtA);
+  blurMat.uniforms.src.value = rtA.texture; blurMat.uniforms.dirPx.value.set(0, 2 / rtA.height); runPass(blurMat, rtB);
+  // Bright-pass, then two blur rounds of its own — bloom must not reuse the
+  // depth-of-field blur, which is built from the WHOLE image.
+  brightMat.uniforms.src.value = srcTex; runPass(brightMat, rtC);
+  blurMat.uniforms.src.value = rtC.texture; blurMat.uniforms.dirPx.value.set(1.5 / rtC.width, 0); runPass(blurMat, rtD);
+  blurMat.uniforms.src.value = rtD.texture; blurMat.uniforms.dirPx.value.set(0, 1.5 / rtC.height); runPass(blurMat, rtC);
+  compMat.uniforms.sceneTex.value = srcTex;
+  compMat.uniforms.softTex.value = rtB.texture;
+  compMat.uniforms.bloomTex.value = rtC.texture;
+  runPass(compMat, null);
+};
 let lastRevealX = Infinity, lastRevealZ = Infinity;
 // One soft punch at a world point.
 function revealStamp(ex: number, ez: number): void {
@@ -17042,6 +17184,31 @@ function tick(now: number): void {
     ? clamp(1 - Math.max(Math.abs(sunScreen.x), Math.abs(sunScreen.y)) * 0.55, 0, 1) * (1 - wx.cloud * 0.85)
     : 0;
   compMat.uniforms.invPV.value.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse).invert();
+  // THE SHUTTER, decided here because this is where the camera is finally
+  // settled. The projection is snapshotted along with the view: setNear
+  // rebuilds it inside every camera branch above, so a view matrix kept
+  // without its projection would reproject through a lens that has moved.
+  mblurVP.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse);
+  // SCALED BY A TIME, NOT BY A FRAME. Blur is velocity x shutter; the
+  // displacement the reprojection measures is velocity x dt. The ratio turns
+  // one into the other, and that is what makes a 30fps phone, a 60fps desktop
+  // and a headless capture at three frames a second all show the SAME streak
+  // — the picture stops being a report on the frame rate.
+  mblurAmt = 0;
+  if (mblurShutter > 0 && !paused && dt > 0.0005 && camMode !== 'top') {
+    // NOT IN THE CHART. Up there the camera is an instrument being panned
+    // over a map, and an instrument that smears while you read it is a
+    // broken instrument, not a fast one.
+    //
+    // A teleport, a spawn, or the camera still closing on the truck after one
+    // is not motion, and integrating it paints the entire screen. Measured in
+    // METRES because it is a fact about the camera, not about the picture.
+    if (camera.position.distanceTo(mblurPrevCam) < 40) mblurAmt = mblurShutter / dt;
+  }
+  mblurDt = dt;
+  mblurStepM = camera.position.distanceTo(mblurPrevCam);
+  mblurStepYaw = Math.abs(Math.atan2(Math.sin(camYaw() - mblurPrevYaw), Math.cos(camYaw() - mblurPrevYaw)));
+  mblurPrevYaw = camYaw();
   // The drapes re-settle onto whatever the ground has become since they were
   // baked — slower than the eye, faster than a drive across a valley.
   if (!paused && now > drapeAt) { drapeAt = now + 200; refreshDrapes(3); }
@@ -17078,19 +17245,12 @@ function tick(now: number): void {
   // scene → target, two separable blur rounds at half res, composite to canvas
   renderer.setRenderTarget(rtScene);
   renderer.render(scene, camera);
-  blurMat.uniforms.src.value = rtScene.texture; blurMat.uniforms.dirPx.value.set(1 / rtA.width, 0); runPass(blurMat, rtA);
-  blurMat.uniforms.src.value = rtA.texture; blurMat.uniforms.dirPx.value.set(0, 1 / rtA.height); runPass(blurMat, rtB);
-  blurMat.uniforms.src.value = rtB.texture; blurMat.uniforms.dirPx.value.set(2 / rtA.width, 0); runPass(blurMat, rtA);
-  blurMat.uniforms.src.value = rtA.texture; blurMat.uniforms.dirPx.value.set(0, 2 / rtA.height); runPass(blurMat, rtB);
-  // Bright-pass, then two blur rounds of its own — bloom must not reuse the
-  // depth-of-field blur, which is built from the WHOLE image.
-  brightMat.uniforms.src.value = rtScene.texture; runPass(brightMat, rtC);
-  blurMat.uniforms.src.value = rtC.texture; blurMat.uniforms.dirPx.value.set(1.5 / rtC.width, 0); runPass(blurMat, rtD);
-  blurMat.uniforms.src.value = rtD.texture; blurMat.uniforms.dirPx.value.set(0, 1.5 / rtC.height); runPass(blurMat, rtC);
-  compMat.uniforms.sceneTex.value = rtScene.texture;
-  compMat.uniforms.softTex.value = rtB.texture;
-  compMat.uniforms.bloomTex.value = rtC.texture;
-  runPass(compMat, null);
+  composite(mblurAmt);
+  // Kept every frame, blur or none: the jump guard above compares against it,
+  // and a prev-camera that only updates while the effect is on would call the
+  // first frame after switching it back on a teleport.
+  mblurUsedVP.copy(mblurPrevVP);
+  mblurPrevVP.copy(mblurVP); mblurPrevCam.copy(camera.position); mblurPrimed = true;
   if (camMode === 'top') {
     // The dock previews the POV a tap will DROP BACK INTO — only while
     // charting; on the road the dock is the minimap now. Scissored raw scene
@@ -18530,6 +18690,13 @@ const DIAL_GROUPS: DialGroup[] = [
       dial('scan', 'SCANLINES', ['OFF', 'LOW', 'HIGH'], 1, (i) => { cu.uScan.value = [0, 0.06, 0.14][i]; }),
       dial('bloom', 'BLOOM', ['OFF', 'LOW', 'MED', 'HIGH'], 2, (i) => { cu.uBloom.value = [0, 0.4, 0.75, 1.2][i]; }),
       dial('flare', 'LENS FLARE', ['OFF', 'ON'], 1, (i) => { cu.uFlare.value = i; }),
+      // IN SHUTTER ANGLES, which is the unit a camera keeps this number in:
+      // the fraction of the frame the blade is out of the way. 180 is the film
+      // default and reads here as 1/120s of travel. OFF by default — it is the
+      // newest thing in the chain, it is the first frame-to-frame state in the
+      // file, and a phone that cannot spare the pass should not be paying for
+      // it before anyone has decided it belongs.
+      dial('mblur', 'MOTION BLUR', ['OFF', '90', '180', '360'], 0, (i) => { mblurShutter = MBLUR_SHUTTER[i]; }),
     ],
   },
   {
@@ -19719,6 +19886,53 @@ function setClean(on: boolean): void {
  *  screenshot cannot tell you that. */
 /** Is the sun actually casting, and from where — the two questions behind both
  *  "no terrain shadows" and "the headlights crawl at night". */
+// THE SHUTTER, from a harness. Two builds are a weak comparison when the world
+// under them streamed twice; one session that toggles the dial between shots is
+// the same ground, the same sun and the same weather, differing in one number.
+(window as unknown as { __mblur?: object }).__mblur = (i: number): void => {
+  const d = DIALS.find((x) => x.key === 'mblur');
+  if (d) { d.at = clamp(Math.round(i), 0, d.opts.length - 1); d.apply(d.at); }
+};
+// ONE SCENE RENDER, TWO EXPOSURES. rtScene and the previous view-projection
+// are both still resident when a frame returns, so the post chain can simply
+// be run again with a different shutter and the canvas read back between the
+// two. The pictures then differ by the dial and by NOTHING else — no dust that
+// moved on, no tile that arrived, no suspension that had settled further.
+// This exists because the obvious method did not survive its own control:
+// driving the same corner twice and photographing both moved 30% of the
+// pixels, against 20% for the effect it was supposed to be measuring.
+// Note the canvas carries the WORLD only — the HUD is a separate DOM canvas —
+// which is the half anyone judging this needs to see.
+(window as unknown as { __mbpair?: object }).__mbpair = (step: number): object => {
+  const amt = mblurDt > 0.0005 ? MBLUR_SHUTTER[clamp(Math.round(step), 0, 3)] / mblurDt : 0;
+  // Reproject against the matrix the LIVE frame used, not against the one that
+  // has already been advanced past it.
+  const keep = new THREE.Matrix4().copy(mblurPrevVP);
+  mblurPrevVP.copy(mblurUsedVP);
+  composite(0);
+  const off = renderer.domElement.toDataURL('image/png');
+  composite(amt);
+  const on = renderer.domElement.toDataURL('image/png');
+  mblurPrevVP.copy(keep);
+  composite(mblurAmt);   // leave the screen showing what the dial actually says
+  return { off, on, amt: +amt.toFixed(4), step, primed: mblurPrimed };
+};
+(window as unknown as { __mbdbg?: object }).__mbdbg = (): object => ({
+  step: DIALS.find((x) => x.key === 'mblur')?.at ?? 0,
+  shutterMs: +(mblurShutter * 1000).toFixed(2),
+  amt: +mblurAmt.toFixed(3),          // shutter/dt — how much of a frame step is exposed
+  dtMs: +(frameMs).toFixed(1),
+  // What the camera did in the last frame, which is what the reprojection
+  // measures. The yaw term is the one that reaches the whole picture.
+  stepM: +mblurStepM.toFixed(3),
+  stepYawDeg: +((mblurStepYaw * 180) / Math.PI).toFixed(2),
+  // The same motion expressed as the exposure actually integrates it.
+  expM: +(mblurStepM * mblurAmt).toFixed(3),
+  expYawDeg: +(((mblurStepYaw * mblurAmt) * 180) / Math.PI).toFixed(2),
+  kmh: Math.round(Math.abs(state.speed) * 3.6),
+  cam: camMode,
+  pix: [pixSize.x, pixSize.y],
+});
 (window as unknown as { __setdark?: object }).__setdark = (i: number): void => setShadowDark(i);
 (window as unknown as { __shadowdbg?: object }).__shadowdbg = (): object => ({
   enabled: renderer.shadowMap.enabled, casting: sun.castShadow,
@@ -20104,6 +20318,15 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   const d = DIALS.find((x) => x.key === 'time');
   const i = TIME_MODES.indexOf('CYCLE');
   if (d && i >= 0) { d.at = i; d.apply(i); }
+}
+// `?mblur=0..3` pins the shutter for a capture, the way `?sunalt=` pins the
+// sun. Two shots of the same road are not comparable if one of them also
+// changed a render dial, and until now the render dials were the one set of
+// conditions a screenshot could not state.
+{
+  const q = new URLSearchParams(location.search).get('mblur');
+  const d = q === null ? null : DIALS.find((x) => x.key === 'mblur');
+  if (d) { d.at = clamp(Math.round(Number(q)) || 0, 0, d.opts.length - 1); d.apply(d.at); }
 }
 (async () => {
   // The HUD face, before the first frame — fillText with an unloaded FontFace
