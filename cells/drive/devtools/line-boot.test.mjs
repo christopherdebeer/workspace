@@ -210,6 +210,14 @@ if (w.intact + w.ruin > 0) {
     window.__line().world.intact + window.__line().world.ruin > 0, null, { timeout: 180000 })
     .catch(() => null);
 }
+// POLLED, not sampled. The double tap above TRAVELS — the truck lands
+// somewhere the world has never streamed, and the ways it charts arrive on the
+// network's clock, not on this file's. Sampling here read the instant after a
+// teleport and called a working chart empty; measured, the ink is there about
+// ten seconds later. A timeout is still a finding, it is just no longer a
+// finding about how fast the tiles came back.
+await f.page.waitForFunction(() => window.__line().world.mapKnown > 0
+  && window.__minimap().ink > 0, null, { timeout: 180000 }).catch(() => null);
 const fw = (await f.page.evaluate(() => window.__line())).world;
 check('free drive strokes the same known ways', fw.mapKnown > 0, fw);
 // The frame that follows the truck: a forced re-anchor must REPLAY its ink,

@@ -44,13 +44,18 @@ check('roads loaded and were surveyed', !!road?.name && road.cps >= 2, road);
 console.log(`        ${road?.name}: ${road?.len}m, ${road?.got}/${road?.cps} collected`);
 
 // `__cps` is in route order, so start from whichever end is nearest and walk
-// along it rather than across it.
+// along it rather than across it — and walk the WHOLE way from there, not a
+// fixed six. A spawn puts the rig near a road, not on one, and slicing from
+// the nearest index gave ONE checkpoint whenever the nearest happened to be
+// the last: the test then walked a road it had already reached the end of and
+// called a working capture broken. Measured at Chapman's Peak, where the rig
+// spawns 1.8km from the first checkpoint.
 const run = await d.page.evaluate((n) => {
   const cps = window.__cps(n);
   const s = window.__drive;
   let at = 0, best = Infinity;
   cps.forEach((c, i) => { const dd = Math.hypot(c.x - s.x, c.z - s.z); if (dd < best) { best = dd; at = i; } });
-  return cps.slice(at, at + 6);
+  return (at > cps.length / 2 ? cps.slice(0, at + 1).reverse() : cps.slice(at)).slice(0, 8);
 }, road.name);
 console.log(`        walking ${run.length} checkpoints`);
 // Local coordinates, straight into the state object — `walkTo` speaks lat/lon
@@ -58,7 +63,9 @@ console.log(`        walking ${run.length} checkpoints`);
 // the 60m the sweep test reads as a respawn, so this is driving as far as the
 // survey is concerned.
 for (const c of run) {
-  for (let i = 0; i < 40; i++) {
+  // Enough hops to cross the gap between the spawn and the road: 40 of them is
+  // a kilometre, and the first checkpoint can be nearly two.
+  for (let i = 0; i < 100; i++) {
     const left = await d.page.evaluate((t) => {
       const s = window.__drive;
       const dx = t.x - s.x, dz = t.z - s.z, dist = Math.hypot(dx, dz);
