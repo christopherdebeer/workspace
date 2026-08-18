@@ -3431,9 +3431,15 @@ terrainFx(stoneMat);
 // Stone takes the most, and gets the coarsest cells: lichen and weathering
 // read as patches on a boulder, not as a fine speckle. Leaves are clumps of
 // canopy; wood is grain along a trunk.
-grainFx(stoneMat, 'grain-stone', 0.3, 0.5);
-grainFx(leafMat, 'grain-leaf', 0.22, 0.32);
-grainFx(woodMat, 'grain-wood', 0.24, 0.85);
+// AMPLITUDE SET BY LADDER, not by taste: the same jungle frame shot at 1x,
+// 2x and 3x and diffed against flat moved 10%, 17% and 24% of its pixels past
+// the quantiser. 1x was mostly eaten — which is the predicted failure, since
+// one palette step is 0.07 sRGB — and 3x still read as foliage clumping rather
+// than as noise at 6x magnification, so the headroom is real. 2x is shipped
+// and __grain(mul) moves it live for anyone who wants to argue.
+grainFx(stoneMat, 'grain-stone', 0.6, 0.5);
+grainFx(leafMat, 'grain-leaf', 0.44, 0.32);
+grainFx(woodMat, 'grain-wood', 0.48, 0.85);
 // ── wind, in the vertex shader ─────────────────────────────────────
 // Never from JavaScript. Animating instance matrices would mean rewriting and
 // re-uploading a 7000-entry matrix buffer every frame; the GPU can lean the
