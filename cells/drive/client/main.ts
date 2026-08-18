@@ -13549,6 +13549,14 @@ function meshHeightAt(x: number, z: number): number | null {
     })(),
     tilt: +(Math.hypot(viewX(), viewZ()) / EARTH_R).toFixed(5),
     fromOrigin: Math.round(Math.hypot(viewX(), viewZ())) });
+/** Show or hide the backdrop by hand — the A/B a screenshot argument needs,
+ *  since "is that ridge the shell or the fine world?" is otherwise a matter of
+ *  opinion about a grey shape. Returns to the camera's own rule on next frame
+ *  for every mode that sets it, so this is a within-frame comparison. */
+(window as unknown as { __farshow?: object }).__farshow = (on: boolean): boolean => {
+  farGroup.visible = on;
+  return farGroup.visible;
+};
 /** The shell's surface under a world point, through its live transform — so a
  *  probe measures what is DRAWN, not what was baked. */
 const farRay = new THREE.Raycaster();
