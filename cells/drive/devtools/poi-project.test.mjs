@@ -105,8 +105,13 @@ const lawHolds = (pins) => pins.drawn
     !!pd3 && pd3.d > 20000, pd3);
   check('far: a destination off the frame is a RIM CHIP, not a mid-frame pin',
     !!pd3 && pd3.rim && pd3.edge !== 0, pd3);
-  check('far: the chip sits ON the border band, not floating mid-frame',
-    !!pd3 && (pd3.sx < 390 * 0.12 || pd3.sx > 390 * 0.88 || pd3.sy < 844 * 0.17 || pd3.sy > 844 * 0.83),
+  // Not a fixed border band: the instrument dodge may displace a chip off the
+  // rim when a corner is fully walled (the bottom-left is, by dock + place
+  // line + dial). What must hold is that it stays in frame, never mid-centre
+  // where it could read as a map position near the truck.
+  check('far: the chip stands off-centre, inside the frame',
+    !!pd3 && pd3.sx > 8 && pd3.sx < 382 && pd3.sy > 30 && pd3.sy < 826
+    && Math.hypot(pd3.sx - 195, pd3.sy - 422) > 120,
     pd3 && { sx: pd3.sx, sy: pd3.sy });
   check('far: every drawn world point stands its labelled distance (no 900m clamp)',
     lawHolds(pins).length === 0, lawHolds(pins));
