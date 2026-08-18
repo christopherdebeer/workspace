@@ -3304,12 +3304,136 @@ function vegMesh(geo: THREE.BufferGeometry, mat: THREE.Material, cap: number): T
   scene.add(m);
   return m;
 }
-// White base colours: every plant's hue arrives through instanceColor.
-const leafMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
-const woodMat = new THREE.MeshLambertMaterial({ color: 0x4a3826, flatShading: true });
-const stoneMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
+/**
+ * TONE BAKED INTO THE ARCHETYPE — the cheapest texture in the file.
+ *
+ * Every kind is ONE shared geometry uploaded once, so an extra colour
+ * attribute costs nothing per instance and nothing per frame; three multiplies
+ * it with instanceColor, so the per-clump tint still lands on top. What it
+ * buys is INTERNAL structure: a boulder whose faces differ instead of reading
+ * as one lump, a crown darker where the light does not reach, a trunk that
+ * goes to shadow at its foot.
+ *
+ * Per FACE where the geometry is non-indexed (the icosahedra and the merged
+ * cactus): every triangle its own tone, which is what makes stone look
+ * faceted. Per VERTEX where it is indexed (the cones and cylinders), which
+ * gradients across a facet instead — softer, and it keeps the vertex sharing,
+ * because converting to non-indexed to win crisper facets would multiply the
+ * vertex count of the single most instanced geometry in the world.
+ */
+function faceTone(geo: THREE.BufferGeometry, spread = 0.2, foot = 0.22): THREE.BufferGeometry {
+  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
+  const n = pos.count;
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox!;
+  const y0 = bb.min.y, span = Math.max(1e-3, bb.max.y - y0);
+  const indexed = !!geo.index;
+  const col = new Float32Array(n * 3);
+  for (let i = 0; i < n; i++) {
+    const key = indexed
+      ? (Math.round(pos.getX(i) * 64) * 73856093)
+        ^ (Math.round(pos.getY(i) * 64) * 19349663) ^ (Math.round(pos.getZ(i) * 64) * 83492791)
+      : Math.imul(Math.floor(i / 3) + 1, 2654435761);
+    let x = Math.imul(key ^ (key >>> 15), 2246822507);
+    x = (x ^ (x >>> 13)) >>> 0;
+    const t = x / 4294967296;
+    // Facet tone, then the foot in shadow: an ambient-occlusion the geometry
+    // is too coarse to earn honestly and the eye reads instantly.
+    const up = (pos.getY(i) - y0) / span;
+    const v = (1 + (t - 0.5) * spread) * (1 - foot * (1 - up) * (1 - up));
+    col[i * 3] = v; col[i * 3 + 1] = v; col[i * 3 + 2] = v;
+  }
+  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return geo;
+}
+/**
+ * …AND GRAIN, IN THE FRAGMENT SHADER, WHICH IS ALSO NEARLY FREE HERE.
+ *
+ * The world renders at 148x320 — forty-seven thousand pixels, fewer than a
+ * thumbnail — and is magnified with nearest-neighbour afterwards. That inverts
+ * the usual advice: per-fragment work is the cheap resource in this engine and
+ * per-vertex, per-draw work is the scarce one. So mottle is procedural and
+ * per-pixel rather than a texture: no atlas, no memory, no bandwidth, no UVs,
+ * and it scales with the object instead of aliasing like a bitmap.
+ *
+ * COARSE ON PURPOSE. The composite quantises to 14 levels, so one palette step
+ * is about 0.07 in sRGB and anything subtler than that is eaten by the
+ * quantiser or smeared into the dither — measured in the shutter round, where
+ * a six-tap average of flat-banded colour moved the picture by 0.23/255. Blobs
+ * a metre or two across at a tenth of the base tone survive; fine grain does
+ * not, and would shimmer at range besides. Which is why it fades with
+ * distance: at 200m a bush is three pixels tall and its texture is noise.
+ */
+const GRAIN_GLSL = `
+  float grHash(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
+  float grNoise(vec3 p){
+    vec3 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(mix(grHash(i), grHash(i + vec3(1.0, 0.0, 0.0)), f.x),
+          mix(grHash(i + vec3(0.0, 1.0, 0.0)), grHash(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+      mix(mix(grHash(i + vec3(0.0, 0.0, 1.0)), grHash(i + vec3(1.0, 0.0, 1.0)), f.x),
+          mix(grHash(i + vec3(0.0, 1.0, 1.0)), grHash(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z);
+  }`;
+/** Live handles, so the grain can be turned off for an A/B without a rebuild —
+ *  each carrying the amplitude it was authored with, so the dial scales the
+ *  set without having to know which material is which. */
+const grainU: Array<{ tag: string; base: number; u: { uGrainAmp: { value: number } } }> = [];
+function grainFx(mat: THREE.Material, tag: string, amp: number, scale: number): void {
+  const prev = mat.onBeforeCompile;
+  const u = { uGrainAmp: { value: amp }, uGrainScale: { value: scale },
+    uGrainNear: { value: 70 }, uGrainFar: { value: 240 } };
+  grainU.push({ tag, base: amp, u });
+  mat.onBeforeCompile = (sh, renderer) => {
+    prev?.call(mat, sh, renderer);
+    Object.assign(sh.uniforms, u);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vGrainP; varying float vGrainFade;
+        uniform float uGrainNear; uniform float uGrainFar;`)
+      // AFTER project_vertex, where mvPosition exists and the instance matrix
+      // has been applied — the world position this needs is the INSTANCE's,
+      // or every rock on the continent wears the same blotches.
+      .replace('#include <project_vertex>', `#include <project_vertex>
+        {
+          vec4 gWP = vec4(position, 1.0);
+          #ifdef USE_INSTANCING
+            gWP = instanceMatrix * gWP;
+          #endif
+          vGrainP = (modelMatrix * gWP).xyz;
+          vGrainFade = 1.0 - smoothstep(uGrainNear, uGrainFar, -mvPosition.z);
+        }`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vGrainP; varying float vGrainFade;
+        uniform float uGrainAmp; uniform float uGrainScale;
+        ${GRAIN_GLSL}`)
+      // On diffuseColor, BEFORE the lighting: grain that is lit is a property
+      // of the surface; grain added afterwards is a property of the screen.
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        if (uGrainAmp > 0.001 && vGrainFade > 0.001) {
+          float gN = grNoise(vGrainP * uGrainScale) * 0.68
+                   + grNoise(vGrainP * uGrainScale * 2.9) * 0.32;
+          diffuseColor.rgb *= 1.0 + (gN - 0.5) * uGrainAmp * vGrainFade;
+        }`);
+  };
+  // Materials that inject different source MUST NOT share a compiled program;
+  // three's cache keys on parameters, not on onBeforeCompile.
+  mat.customProgramCacheKey = () => tag;
+}
+// White base colours: every plant's hue arrives through instanceColor, and the
+// baked tone rides underneath it (three multiplies the two).
+const leafMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true });
+const woodMat = new THREE.MeshLambertMaterial({ color: 0x4a3826, flatShading: true, vertexColors: true });
+const stoneMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true });
 terrainFx(leafMat);
 terrainFx(stoneMat);
+// Stone takes the most, and gets the coarsest cells: lichen and weathering
+// read as patches on a boulder, not as a fine speckle. Leaves are clumps of
+// canopy; wood is grain along a trunk.
+grainFx(stoneMat, 'grain-stone', 0.3, 0.5);
+grainFx(leafMat, 'grain-leaf', 0.22, 0.32);
+grainFx(woodMat, 'grain-wood', 0.24, 0.85);
 // ── wind, in the vertex shader ─────────────────────────────────────
 // Never from JavaScript. Animating instance matrices would mean rewriting and
 // re-uploading a 7000-entry matrix buffer every frame; the GPU can lean the
@@ -3330,24 +3454,30 @@ grassMat.onBeforeCompile = (sh) => {
 };
 terrainFx(grassMat);
 const vegMeshes: Record<VegKind, THREE.InstancedMesh> = {
-  broadleaf: vegMesh(broadleaf(), leafMat, VEG_CAP.broadleaf),
-  conifer: vegMesh(conifer(), leafMat, VEG_CAP.conifer),
-  palm: vegMesh(palm(), leafMat, VEG_CAP.palm),
-  snag: vegMesh(snag(), woodMat, VEG_CAP.snag),
-  bush: vegMesh(bushGeo(), leafMat, VEG_CAP.bush),
-  rock: vegMesh(rockGeo(), stoneMat, VEG_CAP.rock),
+  // faceTone on every geometry these three materials draw — vertexColors is on
+  // now, and a material asking for a `color` attribute a geometry does not
+  // carry reads it as black.
+  broadleaf: vegMesh(faceTone(broadleaf()), leafMat, VEG_CAP.broadleaf),
+  conifer: vegMesh(faceTone(conifer(), 0.16, 0.3), leafMat, VEG_CAP.conifer),
+  palm: vegMesh(faceTone(palm(), 0.22, 0.1), leafMat, VEG_CAP.palm),
+  snag: vegMesh(faceTone(snag(), 0.14, 0.34), woodMat, VEG_CAP.snag),
+  bush: vegMesh(faceTone(bushGeo(), 0.24, 0.28), leafMat, VEG_CAP.bush),
+  // Stone gets the widest facet spread and the deepest foot — it is the kind
+  // you drive up to, and the one whose old flat lump the eye kept naming.
+  rock: vegMesh(faceTone(rockGeo(), 0.34, 0.3), stoneMat, VEG_CAP.rock),
   grass: vegMesh(grassGeo(), grassMat, VEG_CAP.grass),
-  acacia: vegMesh(acaciaGeo(), leafMat, VEG_CAP.acacia),
-  cactus: vegMesh(cactusGeo(), leafMat, VEG_CAP.cactus),
+  acacia: vegMesh(faceTone(acaciaGeo(), 0.18, 0.12), leafMat, VEG_CAP.acacia),
+  cactus: vegMesh(faceTone(cactusGeo(), 0.2, 0.22), leafMat, VEG_CAP.cactus),
   // The fern takes the SWARD's material, so the understorey leans in the same
   // wind as the grass around it — two layers of one ground cover, not a stiff
   // plastic frond standing in a moving field.
   fern: vegMesh(fernGeo(), grassMat, VEG_CAP.fern),
-  log: vegMesh(logGeo(), woodMat, VEG_CAP.log),
-  spire: vegMesh(spireGeo(), stoneMat, VEG_CAP.spire),
+  log: vegMesh(faceTone(logGeo(), 0.18, 0.2), woodMat, VEG_CAP.log),
+  spire: vegMesh(faceTone(spireGeo(), 0.32, 0.26), stoneMat, VEG_CAP.spire),
 };
 const trunkGeo2 = new THREE.CylinderGeometry(0.14, 0.2, 1, 5);
 trunkGeo2.translate(0, 0.5, 0);
+faceTone(trunkGeo2, 0.16, 0.36);
 const trunks = vegMesh(trunkGeo2, woodMat, 3600);
 // Kinds that stand on a drawn trunk. A cactus is its own column, a fern has
 // none, and a fallen log is all trunk already.
@@ -13549,6 +13679,13 @@ function meshHeightAt(x: number, z: number): number | null {
     })(),
     tilt: +(Math.hypot(viewX(), viewZ()) / EARTH_R).toFixed(5),
     fromOrigin: Math.round(Math.hypot(viewX(), viewZ())) });
+/** The grain, as one dial across every material that wears it — an A/B needs
+ *  to turn the thing OFF, and rebuilding to do it loses the world underneath.
+ *  Call with no argument to read the current amplitudes back. */
+(window as unknown as { __grain?: object }).__grain = (mul?: number): object => {
+  if (mul !== undefined) for (const g of grainU) g.u.uGrainAmp.value = g.base * mul;
+  return Object.fromEntries(grainU.map((g) => [g.tag, +g.u.uGrainAmp.value.toFixed(3)]));
+};
 /** Show or hide the backdrop by hand — the A/B a screenshot argument needs,
  *  since "is that ridge the shell or the fine world?" is otherwise a matter of
  *  opinion about a grey shape. Returns to the camera's own rule on next frame
