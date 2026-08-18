@@ -3942,48 +3942,76 @@ function stepWildlife(dt: number): void {
 // Streamed features draw themselves here as they register; the minimap
 // composites this under the fog mask, so the map only shows what the fog has
 // ceded — the chart fills in as you explore.
+//
+// THE FRAME FOLLOWS THE TRUCK. The layer used to be nailed to the session's
+// spawn, and a run on the line drives clean off its 12km: the minimap's source
+// window slid off the canvas edge, and out-of-bounds drawImage source rects
+// are CLAMPED-AND-STRETCHED (measured on device as the map slowly smearing,
+// then a black square once the window left the canvas entirely). The layer now
+// re-anchors on the truck whenever it strays a quarter-span, and because a
+// raster cannot be un-drawn, every feature is kept as a tiny display record
+// and REPLAYED into the fresh frame — near features survive the move, far ones
+// age out with the list.
 const MAP_PX = 1024;
 const mapLayer = document.createElement('canvas');
 mapLayer.width = mapLayer.height = MAP_PX;
 const mapCtx = mapLayer.getContext('2d')!;
 mapCtx.fillStyle = '#141b14';
 mapCtx.fillRect(0, 0, MAP_PX, MAP_PX);
-const mapPt = (x: number, z: number): [number, number] => [((x + FOG_SPAN / 2) / FOG_SPAN) * MAP_PX, ((z + FOG_SPAN / 2) / FOG_SPAN) * MAP_PX];
+let mapAnchorX = 0, mapAnchorZ = 0;
+const mapPt = (x: number, z: number): [number, number] =>
+  [((x - mapAnchorX + FOG_SPAN / 2) / FOG_SPAN) * MAP_PX, ((z - mapAnchorZ + FOG_SPAN / 2) / FOG_SPAN) * MAP_PX];
 const M_PER_PX = FOG_SPAN / MAP_PX;
-function mapSeg(ax: number, az: number, bx: number, bz: number, width: number, color: string): void {
-  const [x0, z0] = mapPt(ax, az), [x1, z1] = mapPt(bx, bz);
-  mapCtx.strokeStyle = color;
-  mapCtx.lineWidth = Math.max(1, width / M_PER_PX);
+type MapFeat = { s: 1; ax: number; az: number; bx: number; bz: number; w: number; c: string }
+  | { s: 0; pts: Array<[number, number]>; c: string };
+const mapFeats: MapFeat[] = [];
+const MAP_FEATS_CAP = 80000;
+/** Ways the stream has stroked onto the minimap — the probe for "the
+ *  instrument shows what is KNOWN", which the suites assert in both postures. */
+let mapKnown = 0;
+/** One stroke per way: a way refused for terrain is rebuilt on retry, and its
+ *  chart line must not thicken with every attempt. */
+const mapStroked = new Set<string>();
+function paintSeg(f: { ax: number; az: number; bx: number; bz: number; w: number; c: string }): void {
+  const [x0, z0] = mapPt(f.ax, f.az), [x1, z1] = mapPt(f.bx, f.bz);
+  mapCtx.strokeStyle = f.c;
+  mapCtx.lineWidth = Math.max(1, f.w / M_PER_PX);
   mapCtx.lineCap = 'round';
   mapCtx.beginPath(); mapCtx.moveTo(x0, z0); mapCtx.lineTo(x1, z1); mapCtx.stroke();
 }
-function mapPoly(pts: Array<[number, number]>, color: string): void {
-  mapCtx.fillStyle = color;
+function paintPoly(f: { pts: Array<[number, number]>; c: string }): void {
+  mapCtx.fillStyle = f.c;
   mapCtx.beginPath();
-  pts.forEach(([x, z], i) => { const [px, pz] = mapPt(x, z); i ? mapCtx.lineTo(px, pz) : mapCtx.moveTo(px, pz); });
+  f.pts.forEach(([x, z], i) => { const [px, pz] = mapPt(x, z); i ? mapCtx.lineTo(px, pz) : mapCtx.moveTo(px, pz); });
   mapCtx.closePath(); mapCtx.fill();
 }
-// ── the chart's line-mode gate ─────────────────────────────────────
-// ON THE LINE the chart shows what the survey has RECORDED, not what the
-// stream has seen: a road draws onto the map layer only once it carries at
-// least one collected checkpoint. The physical road builds regardless — it is
-// there, you can drive it — it just is not on the map, because nobody has
-// surveyed it yet. Segments of unsurveyed named roads are HELD here, keyed by
-// name (the chart spans a few kilometres, so a same-name collision on one
-// chart is the same road), and flushed the moment `stepSurvey` lands a first
-// capture — or a sync merge brings one home from another device. Unnamed ways
-// have no survey identity and stay off the campaign chart entirely; rivers,
-// water and footprints are world, not survey, and are never gated.
-const chartHeld = new Map<string, { lat: number; lon: number; segs: Array<[number, number, number, number, number, string]> }>();
-function chartFlush(name: string): void {
-  const h = chartHeld.get(name);
-  if (!h) return;
-  chartHeld.delete(name);
-  for (const [ax, az, bx, bz, w, c] of h.segs) mapSeg(ax, az, bx, bz, w, c);
+function mapSeg(ax: number, az: number, bx: number, bz: number, width: number, color: string): void {
+  const f = { s: 1 as const, ax, az, bx, bz, w: width, c: color };
+  if (mapFeats.length < MAP_FEATS_CAP) mapFeats.push(f);
+  paintSeg(f);
 }
-/** After a sync merge: flush any held road the durable copy says is surveyed. */
-function chartRecheck(): void {
-  for (const [name, h] of [...chartHeld]) if (surveyStore.seen(name, h.lat, h.lon)) chartFlush(name);
+function mapPoly(pts: Array<[number, number]>, color: string): void {
+  const f = { s: 0 as const, pts, c: color };
+  if (mapFeats.length < MAP_FEATS_CAP) mapFeats.push(f);
+  paintPoly(f);
+}
+function mapRecentre(): void {
+  const vx = viewX(), vz = viewZ();
+  if (Math.abs(vx - mapAnchorX) < FOG_SPAN * 0.25 && Math.abs(vz - mapAnchorZ) < FOG_SPAN * 0.25) return;
+  mapAnchorX = vx; mapAnchorZ = vz;
+  mapCtx.fillStyle = '#141b14';
+  mapCtx.fillRect(0, 0, MAP_PX, MAP_PX);
+  // Prune to the new frame's reach and replay. Whole-frame replay, never a
+  // self-blit: repeated blits resample and the smear compounds — the very
+  // disease this exists to cure.
+  let keep = 0;
+  for (const f of mapFeats) {
+    const fx = f.s ? f.ax : f.pts[0][0], fz = f.s ? f.az : f.pts[0][1];
+    if (Math.abs(fx - vx) > FOG_SPAN * 0.75 || Math.abs(fz - vz) > FOG_SPAN * 0.75) continue;
+    mapFeats[keep++] = f;
+    if (f.s) paintSeg(f); else paintPoly(f);
+  }
+  mapFeats.length = keep;
 }
 
 // ── collision & surface grids (24m cells) ──────────────────────────
@@ -5687,20 +5715,27 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // at the world origin's elevation and the way came out as a dead-flat band
   // hanging in the sky over the valley. Photographed on Cabrillo Highway at
   // Big Sur: two of them, a river and a trail, arcing over the ridge.
-  for (const [px, pz] of dense) if (!hasHeight(px, pz)) { unbuilt++; return; }
-  // The campaign chart's verdict on this fragment, decided once (see
-  // chartHeld): on the line an unsurveyed road builds but does not chart.
-  let chartOn = true;
-  if (lineOn && name) {
-    const [cla, clo] = localToLatLon(dense[0][0], dense[0][1]);
-    chartOn = surveyStore.seen(name, cla, clo);
-    if (!chartOn && !chartHeld.has(name)) chartHeld.set(name, { lat: cla, lon: clo, segs: [] });
+  // THE MINIMAP TAKES THE DATA, NOT THE BUILD. Stroked before the terrain
+  // refusal below, once per way: a way the stream KNOWS is a way the local
+  // instrument shows, whether or not the world has ground to build it on yet —
+  // a bend you are about to meet beats a build queue. And no survey gate here,
+  // in either posture: the minimap is a driving aid; the ranger's EARNED map
+  // on the line is the big chart's overview ink, which keeps its gate. (Owner
+  // call, retiring R15's minimap half — the chartHeld machinery went with it.)
+  {
+    const mk = wayKey ?? `${name ?? ''}:${Math.round(pts[0][0])},${Math.round(pts[0][1])},${pts.length}`;
+    if (!mapStroked.has(mk)) {
+      if (mapStroked.size > 60000) mapStroked.clear();
+      mapStroked.add(mk);
+      mapKnown++;
+      const cw = drivable && !track ? Math.max(width, 14) : 9;
+      const cc = track ? 'rgba(150,140,112,0.62)' : drivable ? '#a8a294' : 'rgba(150,142,120,0.4)';
+      for (let i2 = 0; i2 < dense.length - 1; i2++) {
+        mapSeg(dense[i2][0], dense[i2][1], dense[i2 + 1][0], dense[i2 + 1][1], cw, cc);
+      }
+    }
   }
-  // An UNNAMED way charts as it is. The survey economy is a NAMED-roads game —
-  // checkpoints, claims, the docket all key on a name — so an unnamed farm
-  // track can never be surveyed and was therefore held off the chart forever.
-  // A hairline that cannot ever be earned is not stakes, it is a hole in the
-  // map (measured: a field query on one read 9 segments, all invisible).
+  for (const [px, pz] of dense) if (!hasHeight(px, pz)) { unbuilt++; return; }
   // Only carriageways get a solid edge. A track is two ruts worn into the
   // hillside — its ribbon is transparent everywhere but the ruts, so a pair of
   // earth walls would stand along it with nothing on top of them.
@@ -7103,13 +7138,8 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       }
     }
     along += len;
-    // Tracks read as a fainter line on the chart — they are a route, not a road.
-    {
-      const cw = drivable && !track ? Math.max(width, 14) : 9;
-      const cc = track ? 'rgba(150,140,112,0.62)' : drivable ? '#a8a294' : 'rgba(150,142,120,0.4)';
-      if (chartOn) mapSeg(x0, z0, x1, z1, cw, cc);
-      else if (name) chartHeld.get(name)?.segs.push([x0, z0, x1, z1, cw, cc]);
-    }
+    // (The chart stroke happens up front now, from the data — see the head of
+    // this function. The build loop is geometry only.)
   }
   // ── the late-host sweep ────────────────────────────────────────────
   // This way's segments are all in the grid now, so it can answer for the
@@ -9120,7 +9150,7 @@ const sync = openSync({
   dump: (since) => surveyStore.dump(since),
   // A merge can bring home roads surveyed on another device — any the chart
   // was holding back are released (a no-op off the line: nothing is held).
-  merge: (rows) => { const n = surveyStore.merge(rows); if (n) chartRecheck(); return n; },
+  merge: (rows) => surveyStore.merge(rows),
   marks: (since) => { const d = marks.dump(since); return { missions: d.m ?? {}, stations: d.s ?? {} }; },
   mergeMarks: (r) => marks.merge({ m: r.missions, s: r.stations }),
   odo: () => Math.round(odo.total),
@@ -9277,7 +9307,6 @@ function stepSurvey(now: number): void {
         if (nearSwept(c.x, c.z) > SURVEY_CAPTURE) continue;
         c.got = true; c.at = now; r.got++;
         surveyStore.take(id, c.key, r.cps.length);
-        chartFlush(r.name);         // the first capture puts the road on the chart
         surveyFlash = 1;
         audio.stone();
       }
@@ -14570,11 +14599,22 @@ function drawMinimap(): void {
   // mirroring about world z, and inside the turned frame that is still the
   // axis the source rect was picked along.
   // With the fog dialled off the chart is a chart, not a scratchcard.
+  // The fog canvas kept the SPAWN anchor when the map layer learned to follow
+  // the truck (the reveal system is spawn-limited by construction), so its
+  // source rect is computed on its own transform — and skipped once the window
+  // leaves the canvas, where an out-of-bounds blit would stretch, which is the
+  // exact disease the re-anchor cures on the base layer.
   if ((compMat.uniforms.uFow as { value: number }).value > 0) {
-    miniCtx.save();
-    miniCtx.scale(1, -1);
-    miniCtx.drawImage(fogCanvas, sx, FOG_PX - sz - spanPx, spanPx, spanPx, -D / 2, -D / 2, D, D);
-    miniCtx.restore();
+    const fpp = FOG_SPAN / FOG_PX;
+    const fSpan = (MINI_SPAN / fpp) * K;
+    const fsx = ((viewX() + FOG_SPAN / 2) / FOG_SPAN) * FOG_PX - fSpan / 2;
+    const fsz = ((viewZ() + FOG_SPAN / 2) / FOG_SPAN) * FOG_PX - fSpan / 2;
+    if (fsx >= 0 && fsz >= 0 && fsx + fSpan <= FOG_PX && fsz + fSpan <= FOG_PX) {
+      miniCtx.save();
+      miniCtx.scale(1, -1);
+      miniCtx.drawImage(fogCanvas, fsx, FOG_PX - fsz - fSpan, fSpan, fSpan, -D / 2, -D / 2, D, D);
+      miniCtx.restore();
+    }
   }
   miniCtx.restore();
   // The car: an amber wedge, always centre. Heading-up it points straight up by
@@ -14599,6 +14639,24 @@ function drawMinimap(): void {
   miniCtx.fillText('N', S / 2 - Math.sin(rot) * nr, S / 2 - Math.cos(rot) * nr);
   miniCtx.textBaseline = 'alphabetic';
 }
+// The minimap layer's books — and, with `force`, a harness-only invalidation:
+// a test cannot drive the 3km that trips a real re-anchor, but it still has to
+// prove a re-anchored frame REPLAYS its ink rather than starting blank, which
+// is the whole cure for the stretch-then-black disease. Ink is counted off the
+// map layer itself (strided), not the composited mini, so the answer does not
+// wait on the next 250ms redraw tick.
+(window as unknown as { __minimap?: object }).__minimap = (force?: boolean): object => {
+  if (force) { mapAnchorX += FOG_SPAN; mapRecentre(); }
+  let ink = 0;
+  try {
+    const px = mapCtx.getImageData(0, 0, MAP_PX, MAP_PX).data;
+    for (let i = 0; i < px.length; i += 132) {
+      if (px[i] > 40 || px[i + 1] > 44 || px[i + 2] > 40) ink++;
+    }
+  } catch { /* a tainted canvas answers 0 */ }
+  return { anchor: [Math.round(mapAnchorX), Math.round(mapAnchorZ)],
+    feats: mapFeats.length, known: mapKnown, ink };
+};
 
 // ── camera modes: top-down chart → low chase → the driver's seat ───
 // Three rigs, cycled by the same control. CAB is the one that costs nothing
@@ -16997,6 +17055,9 @@ function tick(now: number): void {
   updatePois(); // every frame — throttled pins juddered against the camera
   drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF);
   stepOverlays();
+  // Whatever view is up: the frame follows the truck even while the dock shows
+  // the POV preview, so the map is whole the moment the chart comes back.
+  mapRecentre();
   if (camMode !== 'top' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
   // Progress lives in the URL: reloading resumes here, not at the spawn.
   // The VIEW counts as progress now too — switching camera or re-zooming the
@@ -18096,7 +18157,7 @@ function fieldQuery(ex: number, ez: number): FieldRecord {
     src: st?.src ?? null, ways: st?.ways ?? null, refused: st?.refused ?? null,
     retries: st?.retries ?? 0, ageS, elev,
     inFlight: osmInFlight, queued: osmQueue.length, proxyOk: tileProxyOk, upstreamDown: osmDown,
-    segsNear: segs, roadsNear: [...names].slice(0, 8), chartHeld: chartHeld.size,
+    segsNear: segs, roadsNear: [...names].slice(0, 8), mapKnown,
     // The four neighbours' states — a gap usually straddles a tile edge, and
     // a record that only speaks for the tapped tile sent one hunt to the
     // wrong quarry already.
@@ -18212,7 +18273,7 @@ function lineGo(): void {
   // everything ruins on the line, the HUD carries only the Service's kinds,
   // and the chart holds back what the survey has not recorded.
   world: { intact: buildStats.intact, ruin: buildStats.ruin,
-    chartHeld: chartHeld.size, hud: poiDraw.map((p) => p.kind) },
+    mapKnown, hud: poiDraw.map((p) => p.kind) },
   leg: (() => {
     const m = mission;
     return m && LEGS.some((l) => l.id === m.id) ? { id: m.id, phase: missionPhase } : null;

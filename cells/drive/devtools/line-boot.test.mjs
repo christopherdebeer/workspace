@@ -72,19 +72,19 @@ check('no cover built here — Paris\'s shell is not the Cape\'s business', ln.c
 // ── the world on the line ──
 // Outside a Cover nothing has been kept up since the Leaving: every building
 // that streams takes the ruin path. The HUD carries the Service's instruments
-// and nothing else. And the chart shows what the survey has recorded — a
-// fresh boot has recorded nothing, so every named road that streamed is HELD
-// off the map, still physically there to drive. The world streams on its own
-// clock (a cold relay cache takes minutes), so wait for the chart to actually
-// MEET a road before asking what it did with it — the settle is not the world.
-await d.page.waitForFunction(() => window.__line().world.chartHeld > 0, null, { timeout: 180000 })
+// and nothing else. And the MINIMAP is a driving instrument, not the earned
+// map: it strokes every way the stream KNOWS, survey or not, in both postures
+// (the survey gate lives on the big chart's overview ink). The world streams
+// on its own clock (a cold relay cache takes minutes), so wait for it to
+// actually MEET a road before asking — the settle is not the world.
+await d.page.waitForFunction(() => window.__line().world.mapKnown > 0, null, { timeout: 180000 })
   .catch(() => null);
 const w = (await d.page.evaluate(() => window.__line())).world;
 check('every building that streamed here is a ruin', w.intact === 0, w);
 check('the HUD carries only the Service\'s kinds — and does carry them',
   w.hud.length > 0
   && w.hud.every((k) => ['mission', 'station', 'rig', 'drone', 'peak'].includes(k)), w.hud);
-check('the chart holds back every unsurveyed road', w.chartHeld > 0, w);
+check('the minimap strokes every way the stream knows, unsurveyed included', w.mapKnown > 0, w);
 
 // ── the refusal ──
 // The double tap is synthesized IN PAGE: the harness renders at a few fps, so
@@ -211,7 +211,14 @@ if (w.intact + w.ruin > 0) {
     .catch(() => null);
 }
 const fw = (await f.page.evaluate(() => window.__line())).world;
-check('free drive holds nothing back from the chart', fw.chartHeld === 0, fw);
+check('free drive strokes the same known ways', fw.mapKnown > 0, fw);
+// The frame that follows the truck: a forced re-anchor must REPLAY its ink,
+// not start blank — the regression that mattered was the layer smearing and
+// going black once a drive left the spawn's 12km window.
+const mm1 = await f.page.evaluate(() => window.__minimap());
+check('the minimap layer carries ink', mm1.ink > 0 && mm1.feats > 0, mm1);
+const mm2 = await f.page.evaluate(() => window.__minimap(true));
+check('a re-anchored frame replays its ink', mm2.ink > 0 && mm2.feats > 0, mm2);
 check('…and what ruined on the line was standing off it',
   (w.ruin > 0) === (fw.intact + fw.ruin > 0), { line: w, free: fw });
 
