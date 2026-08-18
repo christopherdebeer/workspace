@@ -13553,8 +13553,14 @@ function meshHeightAt(x: number, z: number): number | null {
  *  since "is that ridge the shell or the fine world?" is otherwise a matter of
  *  opinion about a grey shape. Returns to the camera's own rule on next frame
  *  for every mode that sets it, so this is a within-frame comparison. */
-(window as unknown as { __farshow?: object }).__farshow = (on: boolean): boolean => {
-  farGroup.visible = on;
+let farForce: boolean | null = null;
+(window as unknown as { __farshow?: object }).__farshow = (on: boolean | null): boolean => {
+  // STICKY, or it is not a toggle at all: every camera branch sets this
+  // group's visibility once a frame, so a bare assignment is undone before the
+  // next screenshot lands — which produced a perfectly clean A/B of the shell
+  // against itself, diff 0.05%, and nearly cost an afternoon.
+  farForce = on;
+  if (on !== null) farGroup.visible = on;
   return farGroup.visible;
 };
 /** The shell's surface under a world point, through its live transform — so a
@@ -17806,8 +17812,10 @@ function tick(now: number): void {
   // Whatever view is up: the frame follows the truck even while the dock shows
   // the POV preview, so the map is whole the moment the chart comes back.
   mapRecentre();
-  // The backdrop rides the curve under whoever is current (see alignFarShell).
+  // The backdrop rides the curve under whoever is current (see alignFarShell),
+  // and answers a probe's override last, after every camera rule has had its say.
   alignFarShell();
+  if (farForce !== null) farGroup.visible = farForce;
   if (camMode !== 'top' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
   // Progress lives in the URL: reloading resumes here, not at the spawn.
   // The VIEW counts as progress now too — switching camera or re-zooming the
