@@ -3081,8 +3081,17 @@ function seaLevelY(): number | null {
 // sites nearest the truck. Plants far behind are recycled to dress the ground
 // ahead, so density is constant however far you drive, and the site list can
 // hold tens of thousands for the cost of the numbers.
-type VegKind = 'broadleaf' | 'conifer' | 'palm' | 'snag' | 'bush' | 'rock' | 'grass';
+type VegKind = 'broadleaf' | 'conifer' | 'palm' | 'snag' | 'bush' | 'rock' | 'grass'
+  | 'acacia' | 'cactus' | 'fern' | 'log' | 'spire';
 interface VegSite { x: number; z: number; k: VegKind; s: number; rot: number; h: number; c: THREE.Color;
+  /** NON-UNIFORM SCALE, and the cheapest diversity in the file: one rock mesh
+   *  stretched flat is a slab, squeezed tall is a standing stone, squashed is
+   *  a pebble — no extra geometry, no extra draw call, no extra memory beyond
+   *  two numbers. `sy` is the vertical stretch, `sw` the width on one axis. */
+  sy?: number; sw?: number;
+  /** Lean, radians. Nothing in a landscape sits perfectly plumb: boulders
+   *  settle, snags lean out of the wind, a fallen log lies across a slope. */
+  tl?: number;
   /** Last time the truck struck this (rocks) — one hit, not a machine gun. */
   hit?: number }
 const VEG_CELL = 220;                       // spatial bucket, metres
@@ -3127,7 +3136,89 @@ function rockGeo(): THREE.BufferGeometry {
   g.translate(0, 0.35, 0);
   return g;
 }
-const VEG_CAP: Record<VegKind, number> = { broadleaf: 1600, conifer: 1400, palm: 600, snag: 450, bush: 2600, rock: 900, grass: 26000 };
+/** Non-indexed concat — enough to build one plant out of several primitives
+ *  without pulling in BufferGeometryUtils for four call sites. Flat shading
+ *  wants non-indexed anyway, which is what everything here already is. */
+function mergeGeos(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
+  const pos: number[] = [];
+  for (const g of list) {
+    const a = g.index ? g.toNonIndexed() : g;
+    const p = a.getAttribute('position') as THREE.BufferAttribute;
+    for (let i = 0; i < p.count * 3; i++) pos.push((p.array as ArrayLike<number>)[i]);
+  }
+  const out = new THREE.BufferGeometry();
+  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  out.computeVertexNormals();
+  return out;
+}
+/** THE UMBRELLA. Flat on top, tapering underneath — the one silhouette that
+ *  says dry savanna from a kilometre away, and the shape a cone makes when
+ *  you stand it on its point. */
+function acaciaGeo(): THREE.BufferGeometry {
+  const g = new THREE.ConeGeometry(1.7, 0.95, 7);
+  g.rotateX(Math.PI);
+  g.scale(1, 1, 0.88);
+  g.translate(0, 1.5, 0);
+  return g;
+}
+/** A COLUMN WITH ARMS. The desert's vertical, and the only plant here whose
+ *  reading depends on the arms being at different heights — symmetry makes it
+ *  a candelabra, which is a different (and sillier) plant. */
+function cactusGeo(): THREE.BufferGeometry {
+  const parts: THREE.BufferGeometry[] = [];
+  const trunk = new THREE.CylinderGeometry(0.24, 0.3, 2.4, 7);
+  trunk.translate(0, 1.2, 0);
+  parts.push(trunk);
+  for (const [dx, h, base] of [[0.42, 1.05, 1.15], [-0.38, 0.72, 1.55]] as Array<[number, number, number]>) {
+    const arm = new THREE.CylinderGeometry(0.16, 0.19, h, 6);
+    arm.translate(dx, base + h / 2, 0);
+    parts.push(arm);
+    const elbow = new THREE.CylinderGeometry(0.15, 0.15, Math.abs(dx), 6);
+    elbow.rotateZ(Math.PI / 2);
+    elbow.translate(dx / 2, base, 0);
+    parts.push(elbow);
+  }
+  return mergeGeos(parts);
+}
+/** THE UNDERSTOREY. Fronds radiating from a crown, knee high — what a wet
+ *  forest floor and a tropical verge are actually made of, and the layer
+ *  between the sward and the bushes that was simply missing. */
+function fernGeo(): THREE.BufferGeometry {
+  const v: number[] = [];
+  for (let b = 0; b < 5; b++) {
+    const a = (b / 5) * Math.PI * 2 + 0.4;
+    const dx = Math.cos(a), dz = Math.sin(a);
+    const w = 0.13, len = 0.62 + (b % 2) * 0.22, rise = 0.42;
+    v.push(dz * w, 0.06, -dx * w, -dz * w, 0.06, dx * w, dx * len, rise, dz * len);
+  }
+  const g = new THREE.BufferGeometry();
+  g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+  g.computeVertexNormals();
+  return g;
+}
+/** DEADFALL. A trunk lying where it came down — the horizontal in a world of
+ *  verticals, which is most of why it reads. Off-centre in its own cell so a
+ *  clump of them does not look stacked. */
+function logGeo(): THREE.BufferGeometry {
+  const g = new THREE.CylinderGeometry(0.26, 0.34, 2.8, 6);
+  g.rotateZ(Math.PI / 2);
+  g.translate(0.2, 0.3, 0);
+  return g;
+}
+/** THE SHARD. Where rock comes through as a tooth rather than a lump: five
+ *  sides, hard edges, taller than it is wide. Alpine and bare ground. */
+function spireGeo(): THREE.BufferGeometry {
+  const g = new THREE.ConeGeometry(0.52, 2.1, 5);
+  g.scale(1, 1, 0.72);
+  g.translate(0, 1.0, 0);
+  return g;
+}
+const VEG_CAP: Record<VegKind, number> = { broadleaf: 1600, conifer: 1400, palm: 600, snag: 450,
+  bush: 2600, rock: 900, grass: 26000,
+  // The new archetypes are BIOME-LOCAL — a cactus field and a fern floor are
+  // never the same drive — so their caps are what one landscape needs, not
+  // what every landscape might. An empty kind costs an instanced draw of zero.
+  acacia: 700, cactus: 500, fern: 1800, log: 500, spire: 700 };
 // ── grass ──────────────────────────────────────────────────────────
 // Sward was the one cover class the world could not draw. WorldCover calls it
 // grass, the palette painted it green, and then nothing grew there: the
@@ -3185,7 +3276,11 @@ let grassScale = 1;
 /** Per-kind draw distance. Grass is ankle height: at 50m it is a pixel of
  *  noise the terrain colour already provides, so drawing it there is pure
  *  cost. Everything else keeps the old full-field range. */
-const VEG_SIGHT: Partial<Record<VegKind, number>> = { grass: GRASS_SIGHT };
+const VEG_SIGHT: Partial<Record<VegKind, number>> = { grass: GRASS_SIGHT,
+  // A frond and a fallen log are ankle-and-knee work: past a couple of hundred
+  // metres they are a pixel of noise the ground colour already supplies, so
+  // the instances are better spent on the things that break the skyline.
+  fern: 190, log: 330 };
 /** A stable 0..1 from a lattice slot. Same slot, same tuft, forever — which is
  *  what lets grass be regenerated every second instead of remembered. */
 function hash2(a: number, b: number): number {
@@ -3242,20 +3337,68 @@ const vegMeshes: Record<VegKind, THREE.InstancedMesh> = {
   bush: vegMesh(bushGeo(), leafMat, VEG_CAP.bush),
   rock: vegMesh(rockGeo(), stoneMat, VEG_CAP.rock),
   grass: vegMesh(grassGeo(), grassMat, VEG_CAP.grass),
+  acacia: vegMesh(acaciaGeo(), leafMat, VEG_CAP.acacia),
+  cactus: vegMesh(cactusGeo(), leafMat, VEG_CAP.cactus),
+  // The fern takes the SWARD's material, so the understorey leans in the same
+  // wind as the grass around it — two layers of one ground cover, not a stiff
+  // plastic frond standing in a moving field.
+  fern: vegMesh(fernGeo(), grassMat, VEG_CAP.fern),
+  log: vegMesh(logGeo(), woodMat, VEG_CAP.log),
+  spire: vegMesh(spireGeo(), stoneMat, VEG_CAP.spire),
 };
 const trunkGeo2 = new THREE.CylinderGeometry(0.14, 0.2, 1, 5);
 trunkGeo2.translate(0, 0.5, 0);
 const trunks = vegMesh(trunkGeo2, woodMat, 3600);
-const TRUNKED: VegKind[] = ['broadleaf', 'conifer', 'palm'];
+// Kinds that stand on a drawn trunk. A cactus is its own column, a fern has
+// none, and a fallen log is all trunk already.
+const TRUNKED: VegKind[] = ['broadleaf', 'conifer', 'palm', 'acacia'];
+/** Size band per kind: [floor, span] of the uniform scale. Split out of
+ *  pushSite's old two-way big/small guess, because a fern and a boulder and a
+ *  standing stone are three different questions. */
+const VEG_SIZE: Record<VegKind, [number, number]> = {
+  broadleaf: [1.4, 2.2], conifer: [1.4, 2.2], palm: [1.5, 1.7], snag: [1.2, 1.8],
+  bush: [0.6, 0.9], rock: [0.55, 0.95], grass: [1, 0],
+  acacia: [1.5, 1.9], cactus: [0.85, 1.5], fern: [0.55, 0.6], log: [0.9, 1.5], spire: [0.75, 1.3],
+};
 
 // What grows where. Weights per biome, so a palm never appears in Tromsø and
 // the desert gets snags and rock instead of canopy.
 const VEG_MIX: Record<string, Array<[VegKind, number]>> = {
-  arid: [['bush', 5], ['rock', 4], ['snag', 2], ['palm', 1], ['broadleaf', 1]],
-  tropical: [['broadleaf', 5], ['palm', 4], ['bush', 4], ['rock', 1]],
-  temperate: [['broadleaf', 5], ['conifer', 3], ['bush', 4], ['rock', 1], ['snag', 1]],
-  boreal: [['conifer', 7], ['bush', 3], ['rock', 2], ['snag', 2]],
-  alpine: [['conifer', 4], ['rock', 6], ['bush', 2], ['snag', 2]],
+  arid: [['bush', 5], ['rock', 4], ['cactus', 3], ['acacia', 3], ['snag', 2], ['spire', 2], ['palm', 1]],
+  tropical: [['broadleaf', 5], ['palm', 4], ['bush', 3], ['fern', 4], ['acacia', 1], ['log', 1], ['rock', 1]],
+  temperate: [['broadleaf', 5], ['conifer', 3], ['bush', 4], ['fern', 2], ['rock', 1], ['snag', 1], ['log', 1]],
+  boreal: [['conifer', 7], ['bush', 3], ['rock', 2], ['snag', 2], ['log', 2], ['fern', 1]],
+  alpine: [['conifer', 4], ['rock', 5], ['spire', 3], ['bush', 2], ['snag', 2], ['log', 1]],
+};
+/**
+ * WHAT THE GROUND IS MADE OF.
+ *
+ * Rock was one colour with a little jitter — hue 0.09, barely saturated,
+ * always the same mid-brown-grey — so every boulder on Earth was the same
+ * boulder. Real stone is granite grey, chalk white, sandstone red, basalt
+ * nearly black, ochre, greenstone, and WHICH of those it is barely varies
+ * within a place: geology is a fact about a PLACE, not about a pebble. So a
+ * family is drawn once per clump and every stone in that clump shares it,
+ * varying only inside the family. That coherence is what makes it read as
+ * country rather than confetti.
+ *
+ * [hue, hueSpan, sat, satSpan, lit, litSpan]
+ */
+const STONE: Array<[number, number, number, number, number, number]> = [
+  [0.075, 0.02, 0.02, 0.05, 0.30, 0.15],   // granite    — grey, the world's default
+  [0.11, 0.02, 0.06, 0.07, 0.55, 0.14],    // limestone  — pale, chalky, catches the sun
+  [0.035, 0.025, 0.30, 0.16, 0.28, 0.13],  // sandstone  — the red country
+  [0.60, 0.08, 0.03, 0.05, 0.11, 0.07],    // basalt     — near black, cold cast
+  [0.09, 0.02, 0.34, 0.16, 0.40, 0.11],    // ochre      — iron-stained
+  [0.29, 0.07, 0.07, 0.07, 0.24, 0.11],    // greenstone — slate and serpentine
+];
+/** Which stone a landscape is likely to be standing on. */
+const STONE_MIX: Record<string, number[]> = {
+  arid: [2, 3, 6, 1, 5, 0],
+  tropical: [2, 1, 1, 4, 2, 2],
+  temperate: [4, 3, 1, 1, 1, 2],
+  boreal: [5, 1, 0, 3, 1, 2],
+  alpine: [6, 3, 1, 2, 0, 3],
 };
 // Thickets per VEG_CELL by land-cover class. The point of the spread is that
 // the ground now differs from itself: a forest cell and the ploughed field
@@ -3282,7 +3425,7 @@ function coverKind(cover: number | null, r: () => number): VegKind {
     const mix = VEG_MIX[biome.name] ?? VEG_MIX.temperate;
     // Drop bushes and rocks: this pixel says CANOPY, so pick a tree from the
     // biome's mix and only fall back to the general roll if it has none.
-    const trees = mix.filter(([k]) => k === 'broadleaf' || k === 'conifer' || k === 'palm');
+    const trees = mix.filter(([k]) => k === 'broadleaf' || k === 'conifer' || k === 'palm' || k === 'acacia');
     if (trees.length) {
       let total = 0;
       for (const [, w] of trees) total += w;
@@ -3294,6 +3437,12 @@ function coverKind(cover: number | null, r: () => number): VegKind {
   if (cover === COVER.shrub || cover === COVER.grass || cover === COVER.crop) {
     return r() < 0.82 ? 'bush' : pickKind(r);
   }
+  // WET GROUND GROWS THE UNDERSTOREY. Fern and bush where a swamp used to
+  // deposit whatever the biome roll said, which in a boreal marsh was pines.
+  if (cover === COVER.wetland) return r() < 0.5 ? 'fern' : r() < 0.8 ? 'bush' : pickKind(r);
+  // BARE AND FROZEN GROUND IS GEOLOGY. Nothing else is standing up out there,
+  // and a shard reads as country where a lone shrub reads as a mistake.
+  if (cover === COVER.bare || cover === COVER.snow) return r() < 0.62 ? 'rock' : 'spire';
   return pickKind(r);
 }
 function pickKind(r: () => number): VegKind {
@@ -3311,38 +3460,97 @@ function pickKind(r: () => number): VegKind {
 // grid of lone trees. Members land in whichever bucket they fall in, so a
 // clump straddling a cell boundary still works.
 const vegTint = new THREE.Color();
-function pushSite(x: number, z: number, kind: VegKind, r: () => number): void {
+/** What a STAND has in common: one shifted green and one bedrock, so a wood
+ *  is a wood and a scree slope is one mountain's worth of rock. */
+interface VegTone { h: number; s: number; l: number; stone: number }
+function makeTone(r: () => number): VegTone {
+  const mix = STONE_MIX[biome.name] ?? STONE_MIX.temperate;
+  let total = 0;
+  for (const w of mix) total += w;
+  let t = r() * total, stone = 0;
+  for (let i = 0; i < mix.length; i++) { t -= mix[i]; if (t <= 0) { stone = i; break; } }
+  return { h: (r() - 0.5) * 0.055, s: (r() - 0.5) * 0.26, l: (r() - 0.5) * 0.17, stone };
+}
+const STONY: VegKind[] = ['rock', 'spire'];
+const DEADWOOD: VegKind[] = ['snag', 'log'];
+function pushSite(x: number, z: number, kind: VegKind, r: () => number, tone?: VegTone): void {
   if (surfaceAt(x, z) !== 'ground') return;         // not on tarmac or water
   for (const seg of wallGrid.get(gkey(x, z)) ?? []) {
     const [cx2, cz2] = closestOnSeg(x, z, seg);
     if (Math.hypot(x - cx2, z - cz2) < 5) return;   // nor inside a building
   }
-  const big = kind === 'bush' || kind === 'rock';
-  vegTint.setHSL(
-    kind === 'rock' ? 0.09 + r() * 0.04 : biome.vegHue[0] + r() * biome.vegHue[1],
-    kind === 'rock' ? 0.05 + r() * 0.06 : 0.32 + r() * 0.25,
-    kind === 'rock' ? 0.22 + r() * 0.14 : biome.vegLit[0] + r() * biome.vegLit[1],
-  );
+  const tn = tone ?? makeTone(r);
+  if (STONY.includes(kind)) {
+    const [hu, hv, sa, sv, li, lv] = STONE[tn.stone];
+    vegTint.setHSL(hu + r() * hv, clamp(sa + r() * sv, 0, 1),
+      clamp(li + r() * lv + tn.l * 0.35, 0.04, 0.86));
+  } else if (DEADWOOD.includes(kind)) {
+    // Dead wood is not a dark leaf. It bleaches: a snag that went last winter
+    // is still brown, one that has stood a decade is bone.
+    vegTint.setHSL(0.075 + r() * 0.035, 0.04 + r() * 0.18, 0.17 + r() * 0.3);
+  } else if (kind === 'cactus') {
+    vegTint.setHSL(0.28 + r() * 0.06, 0.22 + r() * 0.2, 0.26 + r() * 0.16);
+  } else {
+    // LIVING GREEN, and not all of it green. The biome band gives the region
+    // its character, the stand's tone shifts the whole clump together, and
+    // then one plant in fourteen breaks rank — a crown gone to autumn, a
+    // dead-standing individual, or the silver-blue of an olive or a spruce.
+    // Those outliers are most of what makes a hillside look observed.
+    const odd = r();
+    if (odd < 0.045) vegTint.setHSL(0.055 + r() * 0.07, 0.4 + r() * 0.25, 0.34 + r() * 0.16);
+    else if (odd < 0.085) vegTint.setHSL(0.36 + r() * 0.09, 0.07 + r() * 0.13, 0.44 + r() * 0.16);
+    else vegTint.setHSL(
+      biome.vegHue[0] + r() * biome.vegHue[1] + tn.h,
+      clamp(0.3 + r() * 0.3 + tn.s * 0.5, 0.05, 0.95),
+      clamp(biome.vegLit[0] + r() * biome.vegLit[1] + tn.l * 0.5, 0.05, 0.88),
+    );
+  }
+  const [s0, span] = VEG_SIZE[kind];
+  let sc = s0 + r() * span;
+  // THE ERRATIC. One stone in twenty-five is far bigger than its neighbours —
+  // a boulder the last ice age left, a tor the hill wore down to. A landscape
+  // of uniformly-sized rocks reads as gravel at any scale; one outsized block
+  // gives the eye something to judge the rest against, and gives the truck
+  // something it genuinely must drive around.
+  if (STONY.includes(kind) && r() < 0.04) sc *= 1.9 + r() * 1.9;
   const site: VegSite = {
     x, z, k: kind,
-    s: big ? 0.6 + r() * 0.9 : 1.4 + r() * 2.2,
+    s: sc,
     rot: r() * Math.PI * 2,
     h: TRUNKED.includes(kind) ? 1.1 + r() * 2.2 : 0,
     c: vegTint.clone(),
   };
+  // The shape lottery. A slab, a dome, a standing stone and a pebble are one
+  // mesh and two numbers apart; a slender fir and a spreading oak likewise.
+  if (kind === 'rock') {
+    site.sy = 0.4 + r() * 1.35; site.sw = 0.72 + r() * 0.95; site.tl = (r() - 0.5) * 0.5;
+  } else if (kind === 'spire') {
+    site.sy = 1.0 + r() * 1.5; site.sw = 0.7 + r() * 0.5; site.tl = (r() - 0.5) * 0.34;
+  } else if (kind === 'log') {
+    site.tl = (r() - 0.5) * 0.3;
+  } else if (kind === 'bush' || kind === 'fern') {
+    site.sy = 0.7 + r() * 0.7; site.sw = 0.8 + r() * 0.6;
+  } else if (site.h > 0 || kind === 'snag') {
+    // Crowns: slender or spreading, and never the same tree twice.
+    site.sy = 0.82 + r() * 0.55; site.sw = 0.85 + r() * 0.4;
+    if (kind !== 'palm') site.tl = (r() - 0.5) * 0.12;
+  }
   const key = vegKey(x, z);
   let cell = vegGrid.get(key);
   if (!cell) vegGrid.set(key, (cell = []));
   cell.push(site);
 }
 function plantClump(cx: number, cz: number, rad: number, count: number, dominant: VegKind, r: () => number): void {
+  // ONE TONE FOR THE STAND: the same shifted green over this wood, the same
+  // bedrock under this scree. Rolled per clump, not per plant.
+  const tone = makeTone(r);
   for (let i = 0; i < count; i++) {
     // sqrt-biased radius packs members toward the middle and thins the edge,
     // so a clump has a core and a fringe rather than a hard disc.
     const t = Math.pow(r(), 0.62) * rad;
     const a = r() * Math.PI * 2;
     // One member in six is a different species — mixed stands, not monoculture.
-    pushSite(cx + Math.cos(a) * t, cz + Math.sin(a) * t, r() < 0.83 ? dominant : pickKind(r), r);
+    pushSite(cx + Math.cos(a) * t, cz + Math.sin(a) * t, r() < 0.83 ? dominant : pickKind(r), r, tone);
   }
 }
 // Where clumps WANT to be: a low-frequency field, so woodland gathers into
@@ -3450,9 +3658,13 @@ function seedCell(gx: number, gz: number): void {
   // a salt pan is the kind of detail that reads as a bug.
   const strays = Math.round(r() * 3);
   const stony = cover === COVER.bare || cover === COVER.snow || cover === COVER.built;
+  const tone = makeTone(r);
   for (let i = 0; i < strays; i++) {
-    pushSite(gx * VEG_CELL + r() * VEG_CELL, gz * VEG_CELL + r() * VEG_CELL,
-      stony || r() < 0.5 ? 'rock' : 'snag', r);
+    const roll = r();
+    const k: VegKind = stony
+      ? (roll < 0.72 ? 'rock' : 'spire')
+      : roll < 0.4 ? 'rock' : roll < 0.68 ? 'snag' : roll < 0.9 ? 'log' : 'spire';
+    pushSite(gx * VEG_CELL + r() * VEG_CELL, gz * VEG_CELL + r() * VEG_CELL, k, r, tone);
   }
 }
 
@@ -3591,7 +3803,8 @@ let vegAt = 0, swardAt = 0;
 let vegMs = 0;
 function refreshVeg(): void {
   const t0 = performance.now();
-  const counts: Record<string, number> = { broadleaf: 0, conifer: 0, palm: 0, snag: 0, bush: 0, rock: 0, grass: 0 };
+  const counts: Record<string, number> = { broadleaf: 0, conifer: 0, palm: 0, snag: 0, bush: 0, rock: 0, grass: 0,
+    acacia: 0, cactus: 0, fern: 0, log: 0, spire: 0 };
   let trunkN = 0;
   const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
   const reach = Math.ceil(VEG_RANGE / VEG_CELL);
@@ -3639,8 +3852,8 @@ function refreshVeg(): void {
         if (i >= VEG_CAP[v.k] * vegScale) continue;
         const y = groundAt(v.x, v.z);
         vegDummy.position.set(v.x, y + v.h, v.z);
-        vegDummy.rotation.set(0, v.rot, 0);
-        vegDummy.scale.setScalar(v.s);
+        vegDummy.rotation.set(v.tl ?? 0, v.rot, 0);
+        vegDummy.scale.set(v.s * (v.sw ?? 1), v.s * (v.sy ?? 1), v.s);
         vegDummy.updateMatrix();
         mesh.setMatrixAt(i, vegDummy.matrix);
         // The same dissolve the sward does, at the scatter's own horizon: the
@@ -3668,7 +3881,9 @@ function refreshVeg(): void {
         if (v.h > 0 && trunkN < 3600) {
           vegDummy.position.set(v.x, y, v.z);
           vegDummy.rotation.set(0, 0, 0);
-          vegDummy.scale.set(v.s * 0.42, v.h + v.s * 0.3, v.s * 0.42);
+          // The trunk wears its crown's width, or a spreading acacia stands on
+          // a sapling's stem and a slender fir on a fencepost.
+          vegDummy.scale.set(v.s * 0.42 * (v.sw ?? 1), v.h + v.s * 0.3, v.s * 0.42 * (v.sw ?? 1));
           vegDummy.updateMatrix();
           trunks.setMatrixAt(trunkN++, vegDummy.matrix);
         }
@@ -11791,6 +12006,45 @@ function stepReal(dt: number): boolean {
     vegInstances: vegN, vegTris: Math.round(vegTris), veg,
   };
 };
+/**
+ * WHAT IS GROWING, AND HOW DIFFERENT IT IS FROM ITSELF.
+ *
+ * Diversity is a claim, and the claim can be measured: how many archetypes are
+ * standing, how wide the size band actually runs (non-uniform scale means the
+ * drawn footprint, not the stored scalar), and how many distinct colours are
+ * on the ground — quantised to a coarse grid so near-identical greens do not
+ * flatter the count. A landscape that reads as monotonous scores low here even
+ * when the site list is long, which is exactly the failure this measures.
+ */
+(window as unknown as { __flora?: object }).__flora = (radius = 400): object => {
+  const kinds: Record<string, number> = {};
+  const hues = new Set<string>(), stones = new Set<string>();
+  let n = 0, sMin = Infinity, sMax = 0, wildest = 0;
+  const c = new THREE.Color();
+  const cx = Math.floor(viewX() / VEG_CELL), cz = Math.floor(viewZ() / VEG_CELL);
+  const reach = Math.ceil(radius / VEG_CELL);
+  for (let gx = cx - reach; gx <= cx + reach; gx++) {
+    for (let gz = cz - reach; gz <= cz + reach; gz++) {
+      for (const v of vegGrid.get(`${gx},${gz}`) ?? []) {
+        if (Math.hypot(v.x - viewX(), v.z - viewZ()) > radius) continue;
+        n++;
+        kinds[v.k] = (kinds[v.k] ?? 0) + 1;
+        const tall = v.s * (v.sy ?? 1), wide = v.s * (v.sw ?? 1);
+        sMin = Math.min(sMin, tall); sMax = Math.max(sMax, tall);
+        wildest = Math.max(wildest, Math.max(tall, wide) / Math.max(0.01, Math.min(tall, wide)));
+        c.copy(v.c);
+        const hsl = { h: 0, s: 0, l: 0 };
+        c.getHSL(hsl);
+        const key = `${Math.round(hsl.h * 24)}/${Math.round(hsl.s * 8)}/${Math.round(hsl.l * 10)}`;
+        (STONY.includes(v.k) ? stones : hues).add(key);
+      }
+    }
+  }
+  return { n, kinds: Object.keys(kinds).length, by: kinds,
+    size: [+(sMin === Infinity ? 0 : sMin).toFixed(2), +sMax.toFixed(2)],
+    aspectMax: +wildest.toFixed(2),
+    leafTones: hues.size, stoneTones: stones.size, biome: biome.name };
+};
 /** WHO OWNS THE TRIANGLES — the world's geometry budget by class, with who
  *  is in the shadow pass. `__gpu` says what a frame costs; this says which
  *  class of thing is charging it, which is the question a frame-rate
@@ -15925,28 +16179,122 @@ const audio = (() => {
       src.start(t); src.stop(t + 0.3);
     },
     // ── the rig meeting the world ──────────────────────────────────
-    /** A real hit: a deep body thump under a brighter clatter of panels.
-     *  Cooldown, because the scrape channel owns the continuous part. */
+    /**
+     * THE RIG MEETING THE WORLD, AND LOSING SOMETHING TO IT.
+     *
+     * A collision is not an impact, it is an EVENT WITH A SHAPE: the strike,
+     * the shell ringing under it, metal giving way, the grinding as momentum
+     * drags the damage along, and the bits coming to rest. The old one had the
+     * first two only, over inside 300ms, with a bright 1.5k clatter on top —
+     * which from the seat read as a large stone thrown against the door rather
+     * than the rig folding around something. Reported that way, and right.
+     *
+     * Five layers, and what separates a knock from a wreck is mostly HOW LONG
+     * the world keeps making noise about it, so force lengthens the event as
+     * well as loudening it: half a second for a scrape, a second and a half
+     * for a real one.
+     */
     crash(force: number): void {
       if (!ctx || !master || ctx.state !== 'running' || !on) return;
       const now = performance.now();
-      if (now - crashAt < 400 || force < 0.2) return;
+      // A light knock may repeat quickly; a heavy one holds the floor, or a
+      // tumble down a bank arrives as mush instead of a sequence of hits.
+      if (now - crashAt < 260 + force * 340 || force < 0.2) return;
       crashAt = now;
-      const t = ctx.currentTime;
-      const thump = ctx.createBufferSource(); thump.buffer = noiseBuf; thump.loop = true;
-      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 150 + force * 170;
-      const g1 = ctx.createGain();
-      g1.gain.setValueAtTime(Math.min(0.6, 0.25 + force * 0.4), t);
-      g1.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
-      thump.connect(lp); lp.connect(g1); g1.connect(master);
-      thump.start(t); thump.stop(t + 0.32);
-      const clat = ctx.createBufferSource(); clat.buffer = noiseBuf; clat.loop = true;
-      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 1500; bp.Q.value = 1.4;
-      const g2 = ctx.createGain();
-      g2.gain.setValueAtTime(force * 0.3, t + 0.01);
-      g2.gain.exponentialRampToValueAtTime(0.0001, t + 0.2);
-      clat.connect(bp); bp.connect(g2); g2.connect(master);
-      clat.start(t); clat.stop(t + 0.22);
+      const ac = ctx, mas = master;          // narrowed once, for the closures
+      const f = clamp(force, 0, 1);
+      const t = ac.currentTime;
+      const dur = 0.5 + f * 0.95;
+      /** A noise voice, detuned per hit — the same wreck twice is a sample. */
+      const noise = (rate = 1): AudioBufferSourceNode => {
+        const s2 = ac.createBufferSource();
+        s2.buffer = noiseBuf; s2.loop = true;
+        s2.playbackRate.value = rate * (0.82 + Math.random() * 0.36);
+        return s2;
+      };
+      // 1 · THE STRIKE. Broadband, gone in a blink. On its own this IS the old
+      // sound; here it is only the leading edge of one.
+      {
+        const src = noise();
+        const lp = ac.createBiquadFilter(); lp.type = 'lowpass';
+        lp.frequency.value = 2600 + f * 1800;
+        const g = ac.createGain();
+        g.gain.setValueAtTime(0.28 + f * 0.34, t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
+        src.connect(lp); lp.connect(g); g.connect(mas);
+        src.start(t); src.stop(t + 0.07);
+      }
+      // 2 · THE SHELL. A body is a steel box and a box has MODES: two low
+      // resonances rung by the strike, decaying across most of the event.
+      // This is the weight the old lowpass thump was gesturing at.
+      for (const [hz, q, amp, len] of [
+        [58 + Math.random() * 16, 9, 0.42, 0.55], [132 + Math.random() * 30, 7, 0.26, 0.4],
+      ] as Array<[number, number, number, number]>) {
+        const src = noise();
+        const bp = ac.createBiquadFilter(); bp.type = 'bandpass';
+        bp.frequency.value = hz; bp.Q.value = q;
+        const g = ac.createGain();
+        g.gain.setValueAtTime(Math.min(0.6, amp * (0.4 + f)), t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + len + f * 0.5);
+        src.connect(bp); bp.connect(g); g.connect(mas);
+        src.start(t); src.stop(t + len + f * 0.55);
+      }
+      // 3 · THE BUCKLE. Metal yielding is PITCH THAT FALLS: the panel gives,
+      // and what was ringing at one frequency is suddenly ringing lower. A
+      // light knock buckles nothing, so this layer only shows up under load.
+      if (f > 0.32) {
+        const osc = ac.createOscillator(); osc.type = 'sawtooth';
+        const f0 = 150 + Math.random() * 90;
+        osc.frequency.setValueAtTime(f0, t + 0.01);
+        osc.frequency.exponentialRampToValueAtTime(f0 * 0.34, t + 0.1 + f * 0.22);
+        const lp = ac.createBiquadFilter(); lp.type = 'lowpass';
+        lp.frequency.value = 520; lp.Q.value = 3;
+        const g = ac.createGain();
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(0.05 + f * 0.13, t + 0.03);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18 + f * 0.3);
+        osc.connect(lp); lp.connect(g); g.connect(mas);
+        osc.start(t); osc.stop(t + 0.22 + f * 0.32);
+      }
+      // 4 · THE GRAUNCH. Momentum drags the damage along whatever it hit, and
+      // that is a GRITTY, IRREGULAR band — chopped into grains on purpose,
+      // because a smooth envelope over the same noise is just wind. The steps
+      // are the whole character of the layer.
+      {
+        const src = noise(1.3);
+        const bp = ac.createBiquadFilter(); bp.type = 'bandpass';
+        bp.frequency.setValueAtTime(1500 + Math.random() * 700, t);
+        bp.frequency.exponentialRampToValueAtTime(420, t + dur);
+        bp.Q.value = 1.1;
+        const g = ac.createGain();
+        const peak = 0.06 + f * 0.2;
+        g.gain.setValueAtTime(0.0001, t);
+        const steps = Math.round(dur / 0.045);
+        for (let i2 = 1; i2 < steps; i2++) {
+          const st = t + i2 * 0.045;
+          const fade = 1 - i2 / steps;
+          g.gain.setValueAtTime(Math.max(0.0002, peak * fade * (0.25 + Math.random())), st);
+        }
+        g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.05);
+        src.connect(bp); bp.connect(g); g.connect(mas);
+        src.start(t + 0.02); src.stop(t + dur + 0.08);
+      }
+      // 5 · THE SETTLING. Trim, grit and panels finding their rest — scattered
+      // ticks across the tail, thinning as it goes. The reason a wreck sounds
+      // finished rather than cut off.
+      const bits = Math.round(2 + f * 6);
+      for (let i2 = 0; i2 < bits; i2++) {
+        const at = t + 0.12 + Math.random() * dur;
+        const src = noise();
+        const bp = ac.createBiquadFilter(); bp.type = 'bandpass';
+        bp.frequency.value = 700 + Math.random() * 1900; bp.Q.value = 5 + Math.random() * 7;
+        const g = ac.createGain();
+        const late = clamp(1 - (at - t) / (dur + 0.1), 0.15, 1);
+        g.gain.setValueAtTime((0.03 + Math.random() * 0.05) * (0.4 + f) * late, at);
+        g.gain.exponentialRampToValueAtTime(0.0001, at + 0.05 + Math.random() * 0.07);
+        src.connect(bp); bp.connect(g); g.connect(mas);
+        src.start(at); src.stop(at + 0.14);
+      }
     },
     /** The chassis working — a short low groan for hits that flex the
      *  suspension without bottoming it. */
@@ -16593,14 +16941,21 @@ function tick(now: number): void {
     const zs = lz < 6 ? [cz0 - 1, cz0] : lz > VEG_CELL - 6 ? [cz0, cz0 + 1] : [cz0];
     for (const gx of xs) for (const gz of zs) {
       for (const site of vegGrid.get(`${gx},${gz}`) ?? []) {
-        if (site.k !== 'rock') continue;
-        if (Math.hypot(site.x - state.x, site.z - state.z) > CAR_R + site.s * 0.85) continue;
+        if (site.k !== 'rock' && site.k !== 'spire') continue;
+        // THE SHAPE IS THE HAZARD, now that stones have shapes. Reach is the
+        // widest horizontal half-span, and the bite is what STANDS UP: a
+        // tabular slab is something you ride over with a bang, a standing
+        // stone or an erratic is something that stops the truck. Sizing both
+        // off the uniform scale alone would have a pancake hitting like a tor.
+        const wide = site.s * Math.max(1, site.sw ?? 1);
+        const tall = site.s * (site.sy ?? 1);
+        if (Math.hypot(site.x - state.x, site.z - state.z) > CAR_R + wide * 0.85) continue;
         if (site.hit !== undefined && nowMs - site.hit < 1000) continue;
         site.hit = nowMs;
         const v = Math.abs(state.speed);
-        const cost = clamp(site.s * 0.28, 0.1, 0.42);   // a big boulder bites harder
+        const cost = clamp(tall * 0.3, 0.06, 0.5);
         state.speed *= 1 - cost;
-        rig.hull = clamp(rig.hull - site.s * 0.004 * Math.min(1, v / 12), 0, 1);
+        rig.hull = clamp(rig.hull - tall * 0.004 * Math.min(1, v / 12), 0, 1);
         audio.crash(clamp((v * cost) / 4, 0.25, 0.9));
       }
       // The boulders standing in the rapids: same bite-and-through, their own
