@@ -505,6 +505,50 @@ function sampleHeight(ex: number, ez: number): number {
   }
   return 0;
 }
+/**
+ * DOES THE COVER RASTER'S WATER STAND UP TO THE TERRAIN?
+ *
+ * WorldCover is a 10m classification served here at ~38m a pixel, and it is
+ * georegistered well but not perfectly. Where its water lands a pixel off — on
+ * the bank above a river, on the cliff beside a bay — the truck read 'water'
+ * and waded up a hillside, because a raster class was allowed to be the whole
+ * argument. It should never have been: the two datasets know different things
+ * and the DEM knows this one. WATER LIES FLAT AND IT LIES LOW. A pixel that
+ * calls itself water while the ground under it falls away, or while it stands
+ * proud of everything around it, is a registration error and gets vetoed.
+ *
+ * The veto only ever REMOVES water — it never invents any — so the worst it
+ * can cost is a pond the DEM is too coarse to see, and what it buys is that
+ * no slope in the world is wet any more. Rivers are untouched: the channel
+ * grid answers before this does, and it carries its own carved bed.
+ *
+ * Memoised on a 20m lattice because the answer is a property of the ground,
+ * not of the frame, and `surfaceAt` asks it four times a tick for the wheels.
+ */
+const COVER_PX_M = 38;          // one cover pixel on the ground at COVER_Z
+const WATER_TILT = 0.09;        // 9% — steeper than any lake, gentler than a bank
+const coverWaterMemo = new Map<string, boolean>();
+function coverWater(ex: number, ez: number): boolean {
+  if (sampleCover(ex, ez) !== COVER.water) return false;
+  // Cover routinely arrives before elevation. With no ground to argue from,
+  // the raster keeps the last word it always had — refusing here would blank
+  // the sea on approach, which is the worse failure by far.
+  if (!hasHeight(ex, ez)) return true;
+  const k = `${Math.round(ex / 20)},${Math.round(ez / 20)}`;
+  const memo = coverWaterMemo.get(k);
+  if (memo !== undefined) return memo;
+  const r = COVER_PX_M / 2;
+  const c = sampleHeight(ex, ez);
+  const e = sampleHeight(ex + r, ez), w = sampleHeight(ex - r, ez);
+  const s = sampleHeight(ex, ez + r), n = sampleHeight(ex, ez - r);
+  const tilt = Math.hypot(e - w, s - n) / (2 * r);
+  // …and low: a surface standing above its own neighbourhood is a bank the
+  // classifier smeared, not a pond. A metre of tolerance covers DEM noise.
+  const holds = tilt < WATER_TILT && c < Math.min(e, w, s, n) + 1.2;
+  if (coverWaterMemo.size > 40000) coverWaterMemo.clear();
+  coverWaterMemo.set(k, holds);
+  return holds;
+}
 // ── biomes: one palette per world, not one world ───────────────────
 // The reference art gets its character from tight per-scene palettes — canyon
 // purple-gold, jungle grey-green, desert teal-sand. A biome drives the sky,
@@ -4866,7 +4910,8 @@ function surfaceAt(x: number, z: number): Surface {
   // below called four kilometres of open Pacific dry ground and let the truck
   // drive out onto it. WorldCover knows the difference at 10m, and a road laid
   // over water is a bridge, which is why this sits AFTER the carriageways.
-  if (sampleCover(x, z) === COVER.water) return 'water';
+  // …and the raster only speaks where the terrain will back it (coverWater).
+  if (coverWater(x, z)) return 'water';
   const sl = seaLevelY();
   return sl !== null && sampleHeight(x, z) < sl - 0.7 ? 'water' : 'ground';
 }
@@ -5974,7 +6019,7 @@ function flushBatter(t: HeightTile): void {
       // longer reach did exactly that to the Silvermine outflow, filling the
       // channel the road bridges. Where the cover says water the bank ends and
       // whatever is holding the road up stays visible, which is the truth.
-      if (sampleCover(qx0, qz0) === COVER.water || sampleCover(qx1, qz1) === COVER.water) {
+      if (coverWater(qx0, qz0) || coverWater(qx1, qz1)) {
         wet = true; break;
       }
       const g0 = groundAt(qx0, qz0), g1 = groundAt(qx1, qz1);
@@ -9429,6 +9474,224 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
     shoreRibbon(ring);
   }
 }
+// ── water nobody mapped: bodies synthesised from the cover raster ──
+/**
+ * THE OTHER HALF OF THE BARGAIN. The terrain veto above lets the DEM overrule
+ * the cover raster; this lets the cover raster ASK the DEM for a body nobody
+ * drew. A pond on a farm track, a gravel-pit lake, a reservoir in a country
+ * OSM has barely been mapped in — WorldCover sees all of them at 10m, and the
+ * truck used to wade through a surface that had no mesh, no shore and no mark
+ * on the chart, because only OSM was ever allowed to declare a lake.
+ *
+ * So: where the raster says water, the terrain agrees it is flat and low, and
+ * nothing better already claims the ground (no OSM polygon, no carved
+ * channel), flood-fill the patch, trace its outline, and hand it to the same
+ * `polygon(..., 'water')` path an OSM lake takes. It then gets everything a
+ * mapped lake gets and by exactly the same code — the drape that levels it to
+ * the DEM's lower quartile, the shore ribbon, the collision registration that
+ * makes the physics agree with the picture, and the mark on the chart.
+ *
+ * WHAT EACH DATASET CONTRIBUTES, kept honest: cover says WHERE, terrain says
+ * HOW HIGH and vetoes the edges, OSM says WHOSE — and OSM always wins, because
+ * a hand-drawn shoreline beats a 38m pixel every time. This only ever fills
+ * silence.
+ */
+const SYNTH_CELL = 24;      // world metres a lattice cell spans (the collision grid's own step)
+const SYNTH_R = 2200;       // only near the truck — the chart and the wheels both stop caring
+const SYNTH_MIN = 4;        // cells; under ~2300m² it is raster speckle, not a pond
+const SYNTH_MAX = 2600;     // cells; over ~1.5km² it is the sea, which has its own plane
+const SYNTH_CAP = 160;      // bodies held at once, farthest evicted
+const synthSeen = new Set<string>();
+interface SynthBody { meshes: THREE.Object3D[]; ring: Array<[number, number]>; x: number; z: number }
+const synthBodies: SynthBody[] = [];
+let synthCursor = 0, synthAt = 0, synthMade = 0, synthDropped = 0;
+/** Does something with better data already own this ground? */
+function waterClaimed(x: number, z: number): boolean {
+  const k = gkey(x, z);
+  if (waterCells.has(k)) {
+    const polys = waterPolys.get(k);
+    if (!polys) return true;
+    for (const poly of polys) if (pointInPoly(x, z, poly)) return true;
+  }
+  return !!channelAt(x, z);
+}
+/** Walk the lattice near the truck for one unclaimed water patch and build it.
+ *  One body per visit: each is a mesh, and a frame that stands up forty of
+ *  them is a hitch nobody asked for. */
+function synthWaterStep(budgetMs = 2.5): void {
+  const t0 = performance.now();
+  const half = Math.floor(SYNTH_R / SYNTH_CELL);
+  const span = half * 2 + 1, total = span * span;
+  const gx0 = Math.floor(state.x / SYNTH_CELL) - half;
+  const gz0 = Math.floor(state.z / SYNTH_CELL) - half;
+  for (let done = 0; done < total; done++) {
+    if ((done & 127) === 0 && performance.now() - t0 > budgetMs) { synthCursor = (synthCursor + done) % total; return; }
+    const i = (synthCursor + done) % total;
+    const gx = gx0 + (i % span), gz = gz0 + Math.floor(i / span);
+    const k = `${gx},${gz}`;
+    if (synthSeen.has(k)) continue;
+    const wx = (gx + 0.5) * SYNTH_CELL, wz = (gz + 0.5) * SYNTH_CELL;
+    const cv = sampleCover(wx, wz);
+    // UNDECIDED IS NOT DRY. Cover streams in behind the truck, and marking a
+    // cell seen before its tile arrived would blank a lake for the session.
+    if (cv === null || !hasHeight(wx, wz)) continue;
+    if (cv !== COVER.water) { synthSeen.add(k); continue; }
+    synthCursor = (i + 1) % total;
+    synthBuild(gx, gz);
+    return;
+  }
+  synthCursor = 0;
+}
+/** Flood-fill from one wet cell, and draw what comes back if it earns it. */
+function synthBuild(gx0: number, gz0: number): void {
+  const set = new Set<string>();
+  const cells: Array<[number, number]> = [];
+  const stack: Array<[number, number]> = [[gx0, gz0]];
+  set.add(`${gx0},${gz0}`);
+  let claimed = 0;
+  while (stack.length) {
+    const [gx, gz] = stack.pop() as [number, number];
+    cells.push([gx, gz]);
+    if (cells.length > SYNTH_MAX) {
+      // The sea, an estuary, a floodplain in flood — too big to be a body this
+      // pass has any business inventing, and the sea plane draws it anyway.
+      for (const k of set) synthSeen.add(k);
+      synthDropped++;
+      return;
+    }
+    if (waterClaimed((gx + 0.5) * SYNTH_CELL, (gz + 0.5) * SYNTH_CELL)) claimed++;
+    for (let d = 0; d < 4; d++) {
+      const nx = gx + (d === 0 ? 1 : d === 1 ? -1 : 0), nz = gz + (d === 2 ? 1 : d === 3 ? -1 : 0);
+      const nk = `${nx},${nz}`;
+      if (set.has(nk)) continue;
+      const px = (nx + 0.5) * SYNTH_CELL, pz = (nz + 0.5) * SYNTH_CELL;
+      if (!hasHeight(px, pz) || !coverWater(px, pz)) continue;
+      set.add(nk);
+      stack.push([nx, nz]);
+    }
+  }
+  for (const k of set) synthSeen.add(k);
+  if (cells.length < SYNTH_MIN) { synthDropped++; return; }
+  // A third of it already drawn by better data means this is the ragged fringe
+  // of a mapped lake, not a lake of its own. Leave it to OSM.
+  if (claimed > cells.length * 0.34) { synthDropped++; return; }
+  // The sea already has a plane, and a body sitting at the sea datum IS the
+  // sea — building over it would double-draw the whole coast.
+  const hs = cells.map(([gx, gz]) => sampleHeight((gx + 0.5) * SYNTH_CELL, (gz + 0.5) * SYNTH_CELL)).sort((a, b) => a - b);
+  const lvl = hs[hs.length >> 1];
+  const sl = seaLevelY();
+  if (sl !== null && Math.abs(lvl - sl) < 2.5) { synthDropped++; return; }
+  const ring = synthRing(set);
+  if (!ring) { synthDropped++; return; }
+  let cx = 0, cz = 0;
+  for (const [x, z] of ring) { cx += x; cz += z; }
+  cx /= ring.length; cz /= ring.length;
+  // Old bodies make room before new ones are stood up, so the cap is a ceiling
+  // on what is IN the world rather than on what may ever be found.
+  while (synthBodies.length >= SYNTH_CAP) {
+    let worst = 0, wd = -1;
+    for (let i = 0; i < synthBodies.length; i++) {
+      const d = Math.hypot(synthBodies[i].x - state.x, synthBodies[i].z - state.z);
+      if (d > wd) { wd = d; worst = i; }
+    }
+    synthEvict(worst);
+  }
+  const before = worldGroup.children.length;
+  polygon(ring, MAT.water, 0.025, 0, 'water');
+  const born = worldGroup.children.slice(before);
+  if (!born.length) return;               // polygon refused it (terrain not ready)
+  synthBodies.push({ meshes: born, ring, x: cx, z: cz });
+  synthMade++;
+}
+/** Give a body back: its meshes, its collision claim, and the scan memo over
+ *  its own cells, so driving back to it builds it again rather than leaving a
+ *  hole where a lake used to be. */
+function synthEvict(i: number): void {
+  const b = synthBodies[i];
+  synthBodies.splice(i, 1);
+  for (const m of b.meshes) {
+    worldGroup.remove(m);
+    const mesh = m as THREE.Mesh;
+    if (mesh.geometry) mesh.geometry.dispose();
+    const at = drapes.indexOf(mesh);
+    if (at >= 0) drapes.splice(at, 1);
+  }
+  // Its polygon is registered by REFERENCE in every cell its box touched.
+  for (const [k, arr] of waterPolys) {
+    const at = arr.indexOf(b.ring);
+    if (at < 0) continue;
+    arr.splice(at, 1);
+    if (!arr.length) { waterPolys.delete(k); waterCells.delete(k); }
+  }
+  for (const [x, z] of b.ring) {
+    const gx = Math.floor(x / SYNTH_CELL), gz = Math.floor(z / SYNTH_CELL);
+    for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) synthSeen.delete(`${gx + dx},${gz + dz}`);
+  }
+}
+/**
+ * THE OUTLINE OF A SET OF SQUARES. Every cell edge whose neighbour is missing
+ * is a piece of the shore; wound consistently they chain corner to corner into
+ * a loop. The staircase that comes back is then relaxed once (Chaikin) so a
+ * 24m lattice does not read as a swimming pool — the corners are cut, not
+ * moved, so the water never leaves the pixels that declared it.
+ *
+ * The LONGEST loop only: an island inside a lake would need a hole in the
+ * triangulation, and at this resolution an island small enough to appear is
+ * small enough to drown without anyone noticing. A patch pinched to a point
+ * (two cells meeting corner to corner) traces as two loops rather than one for
+ * the same reason, and the smaller lobe goes undrawn — the honest failure for
+ * a shape the lattice cannot hold, and it will be found again from the other
+ * side once the truck is nearer to it.
+ */
+function synthRing(set: Set<string>): Array<[number, number]> | null {
+  const next = new Map<string, string>();
+  const edge = (ax: number, az: number, bx: number, bz: number): void => {
+    next.set(`${ax},${az}`, `${bx},${bz}`);
+  };
+  for (const k of set) {
+    const [gx, gz] = k.split(',').map(Number);
+    if (!set.has(`${gx},${gz - 1}`)) edge(gx, gz, gx + 1, gz);
+    if (!set.has(`${gx + 1},${gz}`)) edge(gx + 1, gz, gx + 1, gz + 1);
+    if (!set.has(`${gx},${gz + 1}`)) edge(gx + 1, gz + 1, gx, gz + 1);
+    if (!set.has(`${gx - 1},${gz}`)) edge(gx, gz + 1, gx, gz);
+  }
+  if (!next.size) return null;
+  let best: Array<[number, number]> | null = null;
+  const walked = new Set<string>();
+  for (const start of next.keys()) {
+    if (walked.has(start)) continue;
+    const loop: Array<[number, number]> = [];
+    let at = start;
+    for (let guard = 0; guard < next.size + 2; guard++) {
+      if (walked.has(at)) break;
+      walked.add(at);
+      const [ix, iz] = at.split(',').map(Number);
+      loop.push([ix * SYNTH_CELL, iz * SYNTH_CELL]);
+      const to = next.get(at);
+      if (to === undefined) break;
+      at = to;
+      if (at === start) break;
+    }
+    if (loop.length >= 4 && (!best || loop.length > best.length)) best = loop;
+  }
+  if (!best || best.length < 4 || best.length > 1200) return null;
+  // Drop the points that say nothing: three in a line is two too many, and the
+  // densify inside `polygon` will put back whatever the drape needs.
+  const lean: Array<[number, number]> = [];
+  for (let i = 0; i < best.length; i++) {
+    const a = best[(i + best.length - 1) % best.length], b = best[i], c = best[(i + 1) % best.length];
+    if (Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) < 1e-6) continue;
+    lean.push(b);
+  }
+  if (lean.length < 4) return null;
+  const soft: Array<[number, number]> = [];
+  for (let i = 0; i < lean.length; i++) {
+    const a = lean[i], b = lean[(i + 1) % lean.length];
+    soft.push([a[0] * 0.75 + b[0] * 0.25, a[1] * 0.75 + b[1] * 0.25]);
+    soft.push([a[0] * 0.25 + b[0] * 0.75, a[1] * 0.25 + b[1] * 0.75]);
+  }
+  return soft;
+}
 // ── OSM tile cache (IndexedDB, LRU by timestamp) ───────────────────
 // Overpass is a shared public instance with moods; a tile you have seen once
 // should never depend on it again. localStorage was the wrong pot: this cell
@@ -12820,6 +13083,20 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
  * reported beside the verdict, so a spot the owner reports can be diagnosed
  * from one paste.
  */
+/**
+ * WHAT THE COVER RASTER BUILT that OSM never drew — the count, the nearest
+ * one, and how much of the near lattice has been decided. "There is water on
+ * my wheels and nothing on the screen" and "the pass has not reached here
+ * yet" are different answers and this is what tells them apart.
+ */
+(window as unknown as { __synth?: object }).__synth = (): object => ({
+  bodies: synthBodies.length, made: synthMade, dropped: synthDropped,
+  seen: synthSeen.size, cursor: synthCursor, cap: SYNTH_CAP,
+  near: synthBodies
+    .map((b) => ({ d: Math.round(Math.hypot(b.x - state.x, b.z - state.z)),
+      at: [+b.x.toFixed(0), +b.z.toFixed(0)], ring: b.ring.length }))
+    .sort((a, b) => a.d - b.d).slice(0, 6),
+});
 (window as unknown as { __why?: object }).__why = (x?: number, z?: number): object => {
   const px = x ?? state.x, pz = z ?? state.z;
   const sl = seaLevelY();
@@ -12835,7 +13112,7 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
   const why = road >= 0 ? 'road' : track >= 0 ? 'track'
     : (waterPolys.get(gkey(px, pz)) ?? []).some((poly) => pointInPoly(px, pz, poly)) ? 'polygon (inside it)'
     : ch ? 'channel (carved watercourse)'
-    : cv === COVER.water ? 'cover raster'
+    : coverWater(px, pz) ? 'cover raster (terrain agrees)'
     : sl !== null && h < sl - 0.7 ? 'sea datum' : 'ground';
   return {
     verdict: surfaceAt(px, pz), why,
@@ -12844,8 +13121,19 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
     // The coarse mask against the precise shape: a cell that is wet while the
     // polygons say dry is the 24m-grid error this pair exists to expose.
     inWaterPoly: (waterPolys.get(gkey(px, pz)) ?? []).some((poly) => pointInPoly(px, pz, poly)),
+    // …and WHOSE polygon it is: OSM drew it, or the cover raster asked for it.
+    synth: synthBodies.some((b) => pointInPoly(px, pz, b.ring)),
     polysHere: (waterPolys.get(gkey(px, pz)) ?? []).length,
     channel: !!ch, cover: cv, coverIsWater: cv === COVER.water,
+    // The veto, shown as its two parts: a raster that says water while the
+    // ground falls away is the misregistration this rejects, and the numbers
+    // say by how much rather than leaving it a verdict to be argued with.
+    coverWaterHolds: coverWater(px, pz),
+    terrainTilt: (() => {
+      const r = COVER_PX_M / 2;
+      return +(Math.hypot(sampleHeight(px + r, pz) - sampleHeight(px - r, pz),
+        sampleHeight(px, pz + r) - sampleHeight(px, pz - r)) / (2 * r)).toFixed(3);
+    })(), tiltLimit: WATER_TILT,
     height: +h.toFixed(2), seaLevelLocal: sl === null ? null : +sl.toFixed(2),
     // What is DRAWN here: the nearest water surface the renderer actually has.
     drapes: drapes.length,
@@ -18276,6 +18564,10 @@ function tick(now: number): void {
   // The drapes re-settle onto whatever the ground has become since they were
   // baked — slower than the eye, faster than a drive across a valley.
   if (!paused && now > drapeAt) { drapeAt = now + 200; refreshDrapes(3); }
+  // …and the cover raster gets its turn to declare a lake OSM never drew.
+  // Slower than the drapes on purpose: each visit can stand up a mesh, and
+  // there is no hurry about a pond you are not in yet.
+  if (!paused && now > synthAt) { synthAt = now + 450; synthWaterStep(2.5); }
   // The chart's fog lifts on its own clock: a capture sets the flag, this
   // walks what is still dark. Cheap (the list only ever shrinks) and never
   // urgent — a road earned this second can appear on the map next second.
