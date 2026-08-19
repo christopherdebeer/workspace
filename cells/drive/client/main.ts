@@ -843,6 +843,18 @@ const skyMat = new THREE.ShaderMaterial({
     uSunDisc: { value: new THREE.Vector3() },
     uBelow: { value: new THREE.Vector3() },
     uCloud: { value: 0 }, uTime: { value: 0 },
+    // HOW LOW THE SUN IS, as its own number. The warm side of the sky used to
+    // be a fixed azimuthal blend, so noon and sunset warmed the same amount in
+    // the same width — which is why dusk read as "daylight, dimmer" rather
+    // than as dusk. Everything the low sun does is scaled by this.
+    uLow: { value: 0 },
+    // The ember the warm side reddens toward. Longer path through the
+    // atmosphere loses the blue first; this is where it ends up.
+    uDusk: { value: new THREE.Vector3(0.86, 0.32, 0.12) },
+    // 1 in the dark. Stars and the moon ride it, so they arrive as the light
+    // goes rather than snapping on at some hour.
+    uNight: { value: 0 },
+    moonDir: { value: new THREE.Vector3(0, -1, 0) },
     uCamXZ: { value: new THREE.Vector2() },
     uDeckY: { value: CLOUD_DECK_Y }, uCloudScale: { value: CLOUD_SCALE },
     // The deck drifts on the REAL wind: direction and speed from the live
@@ -853,6 +865,7 @@ const skyMat = new THREE.ShaderMaterial({
   fragmentShader: `
     uniform vec3 sunDir; uniform vec3 uZenith; uniform vec3 uHorizon;
     uniform vec3 uSunDisc; uniform vec3 uBelow; uniform float uCloud; uniform float uTime;
+    uniform float uLow; uniform vec3 uDusk; uniform float uNight; uniform vec3 moonDir;
     uniform vec2 uWind; uniform vec2 uCamXZ; uniform float uDeckY; uniform float uCloudScale;
     varying vec3 vDir;
     // Value-noise fBm. Clouds are GENERATED, not photographed: a skybox set
@@ -862,9 +875,30 @@ const skyMat = new THREE.ShaderMaterial({
     ${CLOUD_GLSL}
     void main(){
       vec3 d = normalize(vDir);
-      float az = pow(max(dot(normalize(vec3(d.x, 0.0, d.z)), normalize(vec3(sunDir.x, 0.0, sunDir.z))), 0.0), 3.0);
-      vec3 hor = mix(uHorizon, uSunDisc * 0.86, az);   // horizon warming toward the sun
+      vec2 dh = normalize(vec2(d.x, d.z) + vec2(1e-6));
+      vec2 sh = normalize(vec2(sunDir.x, sunDir.z) + vec2(1e-6));
+      float toward = dot(dh, sh);                      // -1 away from the sun … 1 toward it
+      // THE WARM SIDE WIDENS AND REDDENS AS THE SUN SINKS. A tight lobe at
+      // noon (which is barely visible, and right) opens across half the sky at
+      // dusk and loses its blue on the way.
+      float az = pow(max(toward, 0.0), mix(6.0, 1.5, uLow));
+      vec3 warm = mix(uSunDisc * 0.86, uDusk, uLow * 0.85);
+      vec3 hor = mix(uHorizon, warm, az * mix(0.30, 1.0, uLow));
       vec3 col = mix(hor, uZenith, pow(clamp(d.y, 0.0, 1.0), 0.42));
+      // THE BELT ALONG THE WHOLE EDGE. A low sun lights the air over the far
+      // horizon in every direction, brightest on its own side — the band that
+      // makes a sunset read as a sunset from a camera pointing anywhere.
+      float belt = exp(-max(d.y, 0.0) * mix(30.0, 6.0, uLow)) * uLow;
+      col = mix(col, warm, clamp(belt * (0.22 + 0.55 * max(toward, 0.0)), 0.0, 0.85));
+      // …AND THE EARTH'S OWN SHADOW OPPOSITE IT. The dark blue-grey wedge
+      // rising out of the anti-solar horizon with a pink belt standing on it
+      // is the half of dusk that happens BEHIND you, and it is most of why a
+      // real sunset looks nothing like a dimmer switch.
+      float anti = max(-toward, 0.0);
+      float venus = exp(-abs(d.y - 0.05) * 24.0) * uLow * anti;
+      col = mix(col, mix(uDusk, vec3(0.62, 0.44, 0.52), 0.55), clamp(venus * 0.45, 0.0, 0.6));
+      float shade = exp(-max(d.y, 0.0) * 70.0) * uLow * anti;
+      col = mix(col, uZenith * 0.55, clamp(shade * 0.6, 0.0, 0.7));
       float sd = max(dot(d, sunDir), 0.0);
       // A BIG disc, the way pixel-art skies draw it — ~7° across with a broad
       // halo, not the 1° pinprick physical accuracy would give you.
@@ -890,6 +924,49 @@ const skyMat = new THREE.ShaderMaterial({
         // Fade the deck out at the horizon so it never cuts a hard line.
         cov *= smoothstep(0.015, 0.16, d.y);
         col = mix(col, cloud, clamp(cov, 0.0, 1.0) * 0.95);
+      }
+      // ── the night sky ──
+      if (uNight > 0.02 && d.y > 0.0) {
+        // STARS from a hash lattice on the DIRECTION, so they hold still while
+        // you drive — one candidate per cell and nearly all of them empty.
+        // Faded out near the horizon (where the air is thick and the land
+        // glows) and by whatever the cloud deck is covering.
+        vec3 sp = d * 110.0;
+        vec3 cel = floor(sp);
+        float hs = clh21(cel.xy + cel.z * 37.13);
+        if (hs > 0.955) {
+          vec3 jit = vec3(clh21(cel.xy + cel.z * 11.7), clh21(cel.yz + cel.x * 23.9), clh21(cel.zx + cel.y * 41.3));
+          float dd = distance(sp, cel + jit);
+          float mag = (hs - 0.955) / 0.045;
+          float tw = 0.78 + 0.22 * sin(uTime * (1.3 + mag * 3.4) + hs * 71.0);
+          float lit = smoothstep(0.45, 0.02, dd) * (0.35 + 0.65 * mag) * tw;
+          col += vec3(0.82, 0.86, 1.0) * lit * uNight
+            * smoothstep(0.02, 0.22, d.y) * (1.0 - clamp(uCloud, 0.0, 1.0) * 0.9);
+        }
+        // THE MOON, with a real terminator. Its direction is the sun's own
+        // solar-angle solver run at a time offset by the phase, so it stands
+        // opposite the sun when it is full and beside it when it is new — and
+        // then the lit limb simply FACES the sun, which is the whole geometry
+        // of a phase and needs no extra number to say it.
+        if (moonDir.y > -0.08) {
+          float md = dot(d, moonDir);
+          float disc = smoothstep(0.99845, 0.99885, md);
+          if (disc > 0.0) {
+            vec3 rel = normalize(d - moonDir * md);
+            vec3 mu = normalize(sunDir - moonDir * dot(sunDir, moonDir));
+            vec3 mv = normalize(cross(moonDir, mu));
+            float r = sqrt(max(0.0, 1.0 - md * md)) / 0.0557;   // 0..1 across the disc
+            float u2 = dot(rel, mu) * r, v2 = dot(rel, mv) * r;
+            // The terminator is an ELLIPSE whose width is the sun-moon angle.
+            float k = dot(sunDir, moonDir);
+            float lim = k * sqrt(max(0.0, 1.0 - v2 * v2));
+            float lit = smoothstep(lim - 0.09, lim + 0.09, u2);
+            vec3 face = mix(vec3(0.10, 0.11, 0.15), vec3(0.92, 0.92, 0.86), lit);
+            col = mix(col, face, disc * uNight * (1.0 - clamp(uCloud, 0.0, 1.0) * 0.85));
+          }
+          // A soft halo, so the moon sits IN the air rather than on it.
+          col += vec3(0.30, 0.34, 0.45) * pow(max(md, 0.0), 200.0) * 0.35 * uNight;
+        }
       }
       col = mix(uBelow, col, smoothstep(-0.06, 0.02, d.y));
       gl_FragColor = vec4(col, 1.0);
@@ -1093,11 +1170,25 @@ function worldNow(): Date {
     + utcH * 3600000);
 }
 // Night sky, for the colours the biome only supplies in daylight versions.
+/** How much of a twilight the sky is in: 1 with the sun on the horizon, 0 by
+ *  nine degrees under it and by twelve over. Everything the low sun does to
+ *  the sky is scaled by this. */
+let skyTwi = 0;
+/** The colour a sun goes when its light has crossed enough air to lose the
+ *  blue. Nothing in a biome palette can hold this, because it is not a
+ *  property of the place — it is a property of the angle. */
+const SUN_EMBER: Rgb = [1.0, 0.40, 0.14];
+/** What the BLOOM dial asked for. The weather scales this; nothing replaces it. */
+let bloomDial = 0.75;
 const NIGHT_SKY: { zenith: Rgb; horizon: Rgb; disc: Rgb; below: Rgb } = {
   zenith: [0.016, 0.025, 0.056], horizon: [0.062, 0.074, 0.118],
   disc: [0.20, 0.23, 0.31],       // a cold glow, never a second sun
   below: [0.020, 0.023, 0.036],
 };
+/** The synodic month and a known new moon (2000-01-06 18:14 UTC), which is all
+ *  the ephemeris a phase needs. */
+const MOON_MONTH = 29.530588853 * 86400000;
+const MOON_EPOCH = Date.UTC(2000, 0, 6, 18, 14);
 /** 0 in the dark, 1 in open daylight, smooth across civil twilight. Everything
  *  that used to be a fixed brightness is scaled by this. */
 let dayF = 1;
@@ -1140,6 +1231,29 @@ function stepSun(): void {
   const low = clamp(1 - degs / 12, 0, 1);
   const warm = new THREE.Color(biome.sun).lerp(new THREE.Color(0xff7a2e), low * 0.75);
   sun.color.copy(dayF > 0.02 ? warm : new THREE.Color(0x9fb4d8));   // moonlight is cold
+  // WHAT THE LOW SUN DOES, as one number the sky shader can scale everything
+  // by. Ramped from twelve degrees rather than from the horizon, because the
+  // warm side of the sky starts opening well before the sun touches it.
+  // TWILIGHT IS A BAND, NOT A HALF-SPACE. The first cut reused the sun-colour
+  // ramp, which is 1 for every altitude at or below the horizon — so at forty
+  // degrees under, in the dead middle of the night, the sky still wore a full
+  // sunset: a pink Belt of Venus over a black sea. It has to fall away on BOTH
+  // sides, and it is gone by civil twilight's own limit.
+  skyTwi = low * clamp((degs + 9) / 9, 0, 1);
+  const skyU = skyMat.uniforms as Record<string, { value: number }>;
+  skyU.uLow.value = skyTwi;
+  skyU.uNight.value = 1 - dayF;
+  // THE MOON RUNS THE SAME SOLVER AS THE SUN, at a time offset by its phase.
+  // A full moon stands opposite the sun and rises as it sets; a new moon
+  // travels beside it. Offsetting the CLOCK gets both for nothing — the
+  // diurnal arc, the rise time and the elongation — where a hand-placed
+  // anti-solar disc gets only the first and is wrong for three weeks in four.
+  const nowMs = worldNow().getTime();
+  const phase = (((nowMs - MOON_EPOCH) / MOON_MONTH) % 1 + 1) % 1;   // 0 new, 0.5 full
+  const m = solarAngles(origin.lat, origin.lon, new Date(nowMs + phase * 86400000));
+  const mc = Math.cos(m.alt);
+  (skyMat.uniforms.moonDir as { value: THREE.Vector3 }).value
+    .set(mc * Math.sin(m.az), Math.sin(m.alt), -mc * Math.cos(m.az));
   applySkyTint();
 }
 /** The biome's daylight palette, faded toward night by the sun's altitude. */
@@ -1151,6 +1265,16 @@ function applySkyTint(): void {
   u.uZenith.value.copy(mix(NIGHT_SKY.zenith, b.zenith));
   u.uHorizon.value.copy(mix(NIGHT_SKY.horizon, b.horizon));
   u.uSunDisc.value.copy(mix(NIGHT_SKY.disc, b.sunDisc));
+  // AND THE SUN ITSELF REDDENS. The sky's warm side was being reddened while
+  // the disc that lights it stayed the same near-white it is at noon — so
+  // staring west at a sunset gave a white hole with an orange sky around it,
+  // which is the one arrangement a real sunset never produces. It dims a
+  // little too: a sun you can look at is not a sun at full brightness.
+  if (skyTwi > 0.001) {
+    u.uSunDisc.value
+      .lerp(new THREE.Vector3(SUN_EMBER[0], SUN_EMBER[1], SUN_EMBER[2]), skyTwi * 0.72)
+      .multiplyScalar(1 - skyTwi * 0.24);
+  }
   u.uBelow.value.copy(mix(NIGHT_SKY.below, b.below));
   const c = compMat.uniforms as Record<string, { value: THREE.Vector3 }>;
   c.uHazeBase.value.copy(mix(NIGHT_SKY.zenith, b.hazeBase));
@@ -3560,10 +3684,23 @@ function grainFx(mat: THREE.Material, tag: string, amp: number, scale: number): 
           // canopy), the middle breaks the patch, and the fine one is what
           // actually fights the flat facet — without it the shading is smooth
           // across a face and the eye still reads a plane.
-          float gN = grNoise(vGrainP * uGrainScale) * 0.5
-                   + grNoise(vGrainP * uGrainScale * 2.7) * 0.32
-                   + grNoise(vGrainP * uGrainScale * 6.4) * 0.18;
-          diffuseColor.rgb *= 1.0 + (gN - 0.5) * uGrainAmp * vGrainFade;
+          // WEIGHTED TOWARD THE FINE END. The first cut put half its energy in
+          // the coarsest octave, which tints a whole rock and does nothing to
+          // the flat facet it is standing on. The finest octave is held at
+          // roughly one art pixel at conversational range — past that it is
+          // shimmer, not texture, and this world magnifies every pixel it has.
+          float gN = grNoise(vGrainP * uGrainScale) * 0.40
+                   + grNoise(vGrainP * uGrainScale * 2.9) * 0.34
+                   + grNoise(vGrainP * uGrainScale * 6.7) * 0.26;
+          // CONTRAST IS NOT AMPLITUDE. Value noise piles up near its middle, so
+          // most of a surface sat within one palette step of flat however hard
+          // the amplitude was pushed. A gamma under one drags the mid values
+          // out toward the ends — the same total swing, far more of it landing
+          // on the far side of the quantiser, which is the only place texture
+          // can be seen at fourteen levels.
+          float gD = gN - 0.5;
+          gD = sign(gD) * pow(abs(gD) * 2.0, 0.72) * 0.5;
+          diffuseColor.rgb *= 1.0 + gD * uGrainAmp * vGrainFade;
         }`);
   };
   // Materials that inject different source MUST NOT share a compiled program;
@@ -3595,9 +3732,14 @@ terrainFx(stoneMat);
 // amplitude goes to the top of the measured ladder, and a third octave breaks
 // up the facets themselves — which is the job: counteracting the flat planes
 // the low-poly forms are made of.
-grainFx(stoneMat, 'grain-stone', 0.95, 2.6);
-grainFx(leafMat, 'grain-leaf', 0.7, 1.25);
-grainFx(woodMat, 'grain-wood', 0.7, 2.0);
+// FINER AND HARDER, on the owner's read that it was still too smooth. Three
+// levers moved together rather than one pushed further: the cells shrink (a
+// rock's blotches are now hand-sized rather than head-sized), the octave
+// weights shift toward the fine end, and the contrast curve above drags the
+// middle out past the quantiser. __grain(mul) still scales the whole set live.
+grainFx(stoneMat, 'grain-stone', 1.25, 3.4);
+grainFx(leafMat, 'grain-leaf', 0.95, 1.9);
+grainFx(woodMat, 'grain-wood', 0.95, 2.6);
 // ── wind, in the vertex shader ─────────────────────────────────────
 // Never from JavaScript. Animating instance matrices would mean rewriting and
 // re-uploading a 7000-entry matrix buffer every frame; the GPU can lean the
@@ -3617,6 +3759,11 @@ grassMat.onBeforeCompile = (sh) => {
       transformed.xz += uGust * s;`);
 };
 terrainFx(grassMat);
+// THE SWARD HAD NO GRAIN AT ALL, which is why a field read as a flat green
+// carpet with objects on it while every rock and crown beside it had texture.
+// Fine cells: a tuft is a third of a metre, so anything coarser tints whole
+// patches of field instead of separating the blades.
+grainFx(grassMat, 'grain-sward', 0.85, 3.6);
 const vegMeshes: Record<VegKind, THREE.InstancedMesh> = {
   // faceTone on every geometry these three materials draw — vertexColors is on
   // now, and a material asking for a `color` attribute a geometry does not
@@ -4211,7 +4358,11 @@ function refreshVeg(): void {
 // Two populations, both boids-lite and both aware of the truck. They live in
 // a box that follows the car and wraps, like the rain — so the world always
 // has something alive in it without simulating a planet.
-const BIRD_N = 46, BIRD_BOX = 260;
+// A BOX BIGGER THAN SIGHT. At 260m the wrap edge stood 130m from the camera —
+// inside the range where a bird is several pixels and plainly there. Doubling
+// it moves every arrival and departure out to where a skein is a mark on the
+// sky, and the in-view rule in stepPop keeps the ones that matter.
+const BIRD_N = 52, BIRD_BOX = 820;
 /**
  * THREE BIRDS, not one. The sky had a single dark chevron repeated
  * forty-six times, at one size, in one flock, all turning together.
@@ -4364,7 +4515,11 @@ const HERD_GEO = [deerGeo, bisonGeo, horseGeo];
 const HERD_MIX: Record<string, number[]> = {
   arid: [3, 1, 5], tropical: [7, 0, 2], temperate: [5, 3, 3], boreal: [6, 4, 1], alpine: [5, 3, 3],
 };
-const HERD_N = 26, HERD_BOX = 240;
+// Same reasoning as BIRD_BOX: the old 240 wrapped animals at 120m, which is
+// the middle distance a herd is most legible at. Density falls, and that is
+// honest — three clumps on half a kilometre of plain is what a plain looks
+// like, where three clumps in a 240m square is a paddock.
+const HERD_N = 30, HERD_BOX = 560;
 // White base: the product of the vertex colour and the per-instance tint IS
 // the final colour, so the material must not scale either of them.
 const herdMat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, flatShading: true });
@@ -4454,6 +4609,7 @@ const mkPop = (n: number, box: number, air: boolean): Critter[] => {
 };
 const flock = mkPop(BIRD_N, BIRD_BOX, true);
 const graze = mkPop(HERD_N, HERD_BOX, false);
+const critterFwd = new THREE.Vector3();
 const critterDummy = new THREE.Object3D();
 // Yaw FIRST, then pitch about the animal's own axis — with the default XYZ
 // order a galloping bob would pitch about the world x and shear the herd.
@@ -4464,6 +4620,11 @@ function stepPop(pop: Critter[], meshes: THREE.InstancedMesh[], dt: number, o: {
   box: number; air: boolean; speed: number; fear: number; sep: number; turn: number;
 }): void {
   const cx = camera.position.x, cz = camera.position.z;
+  // Where the camera is looking, flattened — the wrap rule below needs it once
+  // per pass, not once per animal.
+  camera.getWorldDirection(critterFwd);
+  const cfl = Math.hypot(critterFwd.x, critterFwd.z) || 1;
+  const camFX = critterFwd.x / cfl, camFZ = critterFwd.z / cfl;
   // A MIDDLE PER HERD, not one for the whole box. Averaging every animal on the
   // plain gave three species one centre of gravity and pulled them into a single
   // mob — the flock forces were doing exactly what they were told.
@@ -4565,15 +4726,56 @@ function stepPop(pop: Critter[], meshes: THREE.InstancedMesh[], dt: number, o: {
       const deck = roadHeightAt(c.x, c.z, -0.7);
       c.y = deck !== null && deck > g - 0.4 && deck < g + 3 ? deck : g;
     }
-    // Wrap around the camera so the population is always where you are.
+    // ── the torus, and the rule it was missing ──
+    //
+    // The population lives in a box that follows the camera, wrapping anything
+    // that falls out the back round to the front. That is what keeps animals
+    // wherever you are, and it had exactly one thing wrong with it: it wrapped
+    // WHATEVER WAS THERE, including the deer you were watching. Drive past the
+    // midpoint of a 240m box and a herd 120m ahead is teleported 120m behind
+    // you — reported from the seat as animals disappearing arbitrarily, and as
+    // the same herd popping into view a moment later, which is the same event
+    // seen from the other end.
+    //
+    // NOTHING IS MOVED WHILE IT IS ON THE GLASS, and nothing is moved INTO
+    // frame either. Both ends of the teleport have to be somewhere you are not
+    // looking, or it is a pop however far away it happens.
     const h = o.box / 2;
-    if (c.x - cx > h) c.x -= o.box; else if (cx - c.x > h) c.x += o.box;
-    if (c.z - cz > h) c.z -= o.box; else if (cz - c.z > h) c.z += o.box;
+    const inView = (px: number, pz: number): boolean => {
+      const dx = px - cx, dz = pz - cz;
+      const dd = Math.hypot(dx, dz);
+      if (dd < 45) return true;                       // beside you counts as seen
+      if (dd > o.box * 1.6) return false;             // past sight: move it freely
+      // A GENEROUS cone — about 57 degrees against a portrait phone's 28 — so
+      // an animal near the edge of frame is safe too, and so is one that would
+      // enter frame on the next flick of the wheel.
+      return (dx * camFX + dz * camFZ) / dd > 0.55;
+    };
+    if (!inView(c.x, c.z)) {
+      let nx = c.x, nz = c.z;
+      if (c.x - cx > h) nx -= o.box; else if (cx - c.x > h) nx += o.box;
+      if (c.z - cz > h) nz -= o.box; else if (cz - c.z > h) nz += o.box;
+      // …and if the far side of the box is in front of you, leave it where it
+      // is. It simply falls further behind, which costs nothing but a little
+      // density astern and is invisible; arriving in the middle of the frame
+      // is not invisible at all.
+      if ((nx !== c.x || nz !== c.z) && !inView(nx, nz)) { c.x = nx; c.z = nz; }
+      else if (Math.hypot(c.x - cx, c.z - cz) > o.box * 1.6) { c.x = nx; c.z = nz; }
+    }
     // NOTHING GRAZES ON THE SEA. The herd wraps around the camera, so on a
     // coast half of it lands on open water. It keeps simulating out there —
     // the flock forces will walk it back ashore within seconds — but it is not
     // drawn, because a deer standing on the Pacific is worse than no deer.
-    if (!o.air && surfaceAt(c.x, c.z) === 'water') continue;
+    if (!o.air && surfaceAt(c.x, c.z) === 'water') {
+      // …and it should be WALKING BACK, not waiting for the flock force to
+      // notice. A bigger box puts far more of a coastal herd over water than
+      // the old 240m one did, so the undrawn animals need a reason to leave:
+      // a steady pull toward the camera, which is on a road and therefore on
+      // land. Gentle enough that it never overrides the flee.
+      const bx = cx - c.x, bz = cz - c.z, bd = Math.hypot(bx, bz) || 1;
+      c.vx += (bx / bd) * 3.5 * dt; c.vz += (bz / bd) * 3.5 * dt;
+      continue;
+    }
     const yaw = Math.atan2(c.vx, c.vz);
     // GAIT. Four legs welded to the body can't stride, so the animal rides its
     // own stride instead: a bob and a pitch on the same phase, scaled by how
@@ -12233,7 +12435,21 @@ function stepWeather(now: number, dt: number): void {
   // this adds ~0.06, still clear of the 0.62 bright-pass cut.
   const lift = 0.075 * dayF * (1 - wx.cloud * 0.3);
   for (const w of bldSkylit) w.emissive.copy(w.color).multiplyScalar(lift);
-  compMat.uniforms.uBloom.value = (0.75 - wx.cloud * 0.35) * (0.45 + 0.55 * dayF);
+  // THE DIAL IS THE BASE; THE WEATHER ONLY MODULATES IT.
+  //
+  // This line used to ASSIGN the bloom, every frame, from the weather and the
+  // clock — so the BLOOM dial in the settings deck was overwritten about
+  // sixteen milliseconds after the player moved it and did nothing at all.
+  // Reported from the seat as the dial not applying to retroreflective signs
+  // and cat's eyes, which is exactly where it would be noticed: they are the
+  // only things in a night frame bright enough to reach the bright-pass cut.
+  //
+  // And the clock term was backwards for them. `0.45 + 0.55 * dayF` put bloom
+  // at its WEAKEST at night — halving the glow on the studs, the sign faces
+  // and the headlamps, which is the one hour of the day when a retroreflector
+  // is the whole picture. It is gone; a cloud deck still dulls the glow,
+  // because a storm genuinely does.
+  compMat.uniforms.uBloom.value = bloomDial * (1 - wx.cloud * 0.3);
   skyMat.uniforms.uCloud.value = wx.cloud;
   skyMat.uniforms.uTime.value = now / 1000;
   waterU.uWTime.value = now / 1000;
@@ -14247,6 +14463,11 @@ function truckSpec(): Record<string, number> {
  * layer account for?" without a PNG decoder anywhere in this repo. Written for
  * the far shell: turning it off changed 42% of the frame in a Norwegian
  * valley, and that number is the whole bug report.
+ *
+ * IT READS THE SCENE PASS, so it is BLIND TO THE POST CHAIN — bloom, the
+ * haze, the lens flare, the palette quantiser and the scanlines all land after
+ * it. Measuring the bloom dial with this reports no change however wide the
+ * dial is swung; take a screenshot and diff that instead.
  *
  * RGB, NOT LUMINANCE, and it cost a wrong answer to learn it. The first cut
  * returned one weighted-luminance byte per sample, which agreed with a PNG
@@ -20472,7 +20693,12 @@ const DIAL_GROUPS: DialGroup[] = [
       }),
       dial('pal', 'PALETTE', ['8', '14', '24', 'OFF'], 1, (i) => { cu.uLevels.value = [8, 14, 24, 255][i]; }),
       dial('scan', 'SCANLINES', ['OFF', 'LOW', 'HIGH'], 1, (i) => { cu.uScan.value = [0, 0.06, 0.14][i]; }),
-      dial('bloom', 'BLOOM', ['OFF', 'LOW', 'MED', 'HIGH'], 2, (i) => { cu.uBloom.value = [0, 0.4, 0.75, 1.2][i]; }),
+      // Into `bloomDial`, not straight into the uniform: the weather step
+      // rewrites uBloom every frame and would eat the setting.
+      dial('bloom', 'BLOOM', ['OFF', 'LOW', 'MED', 'HIGH'], 2, (i) => {
+        bloomDial = [0, 0.4, 0.75, 1.2][i];
+        cu.uBloom.value = bloomDial;
+      }),
       dial('flare', 'LENS FLARE', ['OFF', 'ON'], 1, (i) => { cu.uFlare.value = i; }),
       // IN SHUTTER ANGLES, which is the unit a camera keeps this number in:
       // the fraction of the frame the blade is out of the way. 180 is the film
@@ -21680,6 +21906,21 @@ function setClean(on: boolean): void {
 // THE SHUTTER, from a harness. Two builds are a weak comparison when the world
 // under them streamed twice; one session that toggles the dial between shots is
 // the same ground, the same sun and the same weather, differing in one number.
+/**
+ * ANY DIAL, FROM A HARNESS. Two builds are a weak comparison when the world
+ * under them streamed twice; one session that moves the dial between shots is
+ * the same ground, the same sun and the same weather differing in one number.
+ * Called with no index it reports what the dials are set to — which is how a
+ * setting that is being overwritten every frame gets caught, since the dial
+ * and the uniform it drives then disagree.
+ */
+(window as unknown as { __dial?: object }).__dial = (key?: string, i?: number): object => {
+  if (key !== undefined && i !== undefined) {
+    const d = DIALS.find((x) => x.key === key);
+    if (d) { d.at = clamp(Math.round(i), 0, d.opts.length - 1); d.apply(d.at); }
+  }
+  return Object.fromEntries(DIALS.map((d) => [d.key, d.opts[d.at]]));
+};
 (window as unknown as { __mblur?: object }).__mblur = (i: number): void => {
   const d = DIALS.find((x) => x.key === 'mblur');
   if (d) { d.at = clamp(Math.round(i), 0, d.opts.length - 1); d.apply(d.at); }
