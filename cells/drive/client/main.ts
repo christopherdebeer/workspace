@@ -1684,10 +1684,32 @@ const compMat = new THREE.ShaderMaterial({
       // one texel per step. This is the difference between authored pixel art
       // and a merely pixelated render: flat bands of colour, gradients broken
       // up by a visible weave rather than a smooth ramp.
-      // Partial-amplitude dither: full strength turned every flat surface into
-      // a visible checkerboard once magnified. 0.6 keeps the weave in
-      // gradients while flat areas stay flat.
-      float d = (bayer4(floor(vUv * uPix)) - 0.5) * 0.6;
+      // ** FULL STEP AMPLITUDE, AND IT HAS TO BE. ** This carried 0.6 for a
+      // long time, on the reasoning that full strength checkerboarded flat
+      // surfaces. It does not, and the reduction was not a compromise but a
+      // BIAS: an ordered dither only reproduces the input's mean if its
+      // threshold sweeps the whole step. At 0.6 a value nine-tenths of the way
+      // to the next level can never reach it, so every shallow gradient is
+      // pulled to the nearest level and comes out as FLAT PLATEAUS WITH A STEP
+      // BETWEEN THEM. Reported three times as a two-tone mountain, "one deep
+      // and one insipid", wavering as the camera moves — and it survived a
+      // palette fix and a lighting fix because it was never in the scene pass
+      // at all. __scenegrab of the hillside is one clean tone; the band is
+      // manufactured here.
+      //
+      // What actually makes the band is the aerial haze. Across a hillside
+      // from 500m to 5km, dimF moves ~0.18 and the colour with it by ~0.02
+      // sRGB — a THIRD of one of the fourteen steps. So the ramp crosses
+      // exactly ONE level boundary, which is precisely two tones with a moving
+      // edge. Nothing is wrong with the haze; it is a smooth ramp being
+      // rounded instead of dithered.
+      //
+      // And the checkerboard the 0.6 was meant to prevent is not prevented by
+      // it: a flat surface sitting mid-step flips half its cells at ANY
+      // amplitude. What full amplitude changes is the surfaces in the outer
+      // fifth of a step, which go from perfectly flat to one or two cells in
+      // sixteen — the weave this renderer wants, not a checkerboard.
+      float d = bayer4(floor(vUv * uPix)) - 0.5;
       enc = floor(enc * uLevels + d + 0.5) / uLevels;
       // Scanlines on the PIXEL grid (every other buffer row), so they scale
       // with the art instead of shimmering against the display's real pixels.
@@ -12409,7 +12431,12 @@ const vehCopyMat = new THREE.ShaderMaterial({
       float l = dot(enc, vec3(0.299, 0.587, 0.114));
       enc = clamp(mix(vec3(l), enc, 1.35), 0.0, 1.0);
       enc = clamp((enc - 0.5) * 1.18 + 0.47, 0.0, 1.0);
-      float d = (bayer4(floor(vUv * uPix)) - 0.5) * 0.6;
+      // FULL STEP, for the reason the composite gives at length: an ordered
+      // dither below full amplitude is biased, not gentle. This pass exists to
+      // end on the same grade and palette as the world, so it has to end on
+      // the same dither too — the truck in the bay is lit by one lamp against
+      // a plain backdrop, which is nothing BUT shallow ramps.
+      float d = bayer4(floor(vUv * uPix)) - 0.5;
       enc = floor(enc * uLevels + d + 0.5) / uLevels;
       gl_FragColor = vec4(enc, 1.0);
     }`,
