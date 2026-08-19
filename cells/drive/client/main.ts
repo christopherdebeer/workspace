@@ -11490,6 +11490,64 @@ function peakLook(p: Peak, vx: number, vz: number, eyeY: number): { d: number; r
   const rise = (p.ele - baseElev) - curveDrop(p.x - vx, p.z - vz) - eyeY;
   return { d, rise, app: rise / d };
 }
+/**
+ * IS THERE A HILL IN THE WAY?
+ *
+ * A summit cleared for drawing had passed two tests: it stands above the
+ * EARTH'S curve, and it falls inside the frustum. Neither of them knows about
+ * the mountain between you and it. Reported from the seat in Romsdalen, at the
+ * bottom of a valley whose walls rise a kilometre within half of one: MELEN
+ * 768M at 50.5KM, SJURVARDEN at 54.1KM and RAUDTUA at 50.1KM, all written on
+ * a hillside that is very obviously the only thing in front of the camera.
+ *
+ * So the sight line is walked. Samples are spaced logarithmically from 150m
+ * out, because a blocker is nearly always NEAR — the wall of the valley you
+ * are in, the ridge across it — and because that is where this world actually
+ * holds ground it can answer with.
+ *
+ * FINE TERRAIN ONLY, and deliberately. The coarse shell would extend the reach
+ * to tens of kilometres, but it samples the DEM every 250m and CHORDS over
+ * every valley between — so it stands above the true ground exactly where a
+ * distant peak would be seen through a gap, and would hide summits that are
+ * plainly in view. Missing a blocker beyond the fine ring leaves a label on a
+ * peak you cannot quite see; inventing one removes a peak you can. The first
+ * is a smaller lie, so the test only ever speaks where it has real ground.
+ */
+const PEAK_CLEAR = 15;            // metres of daylight the sight line must keep
+/** Where the march starts. Inside this the "terrain" is the verge, the cut
+ *  face and the batter beside the wheels — a metre of kerb is not a mountain,
+ *  and a camera sitting low in a cutting would otherwise be blind. */
+const PEAK_NEAR = 250;
+const peakBlockMemo = new Map<string, boolean>();
+let peakMemoX = NaN, peakMemoZ = NaN;
+function peakBlocked(p: Peak, vx: number, vz: number, eyeY: number, rise: number, d: number): boolean {
+  // The answer is a property of WHERE YOU STAND, so it survives until you have
+  // moved far enough for a ridge line to have changed.
+  if (!(Math.abs(vx - peakMemoX) < 40 && Math.abs(vz - peakMemoZ) < 40)) {
+    peakMemoX = vx; peakMemoZ = vz;
+    peakBlockMemo.clear();
+  }
+  const memo = peakBlockMemo.get(p.name);
+  if (memo !== undefined) return memo;
+  const reach = Math.min(d * 0.9, 4200);
+  let hit = false;
+  if (reach > PEAK_NEAR) {
+    for (let i = 1; i <= 12 && !hit; i++) {
+      const sd = PEAK_NEAR * Math.pow(reach / PEAK_NEAR, i / 12);
+      const f = sd / d;
+      const sx = vx + (p.x - vx) * f, sz = vz + (p.z - vz) * f;
+      if (!hasHeight(sx, sz)) continue;
+      // groundAt, NOT sampleHeight: the raw heightfield still holds the
+      // hillside that was CARVED AWAY for the road, so from inside a cutting
+      // every summit is behind a hill that is not there any more. The carved
+      // mesh is what the player is looking at, and it is what gets to occlude.
+      const ground = groundAt(sx, sz) - curveDrop(sx - vx, sz - vz);
+      if (ground > eyeY + rise * f + PEAK_CLEAR) hit = true;
+    }
+  }
+  peakBlockMemo.set(p.name, hit);
+  return hit;
+}
 // What the chart's coarse layer is holding, for the tools.
 //
 // `float` is the one that matters: how far the drawn ribbon sits ABOVE the
@@ -14712,6 +14770,10 @@ function farHeightAt(wx: number, wz: number): number | null {
   const far = all.reduce((m, e) => Math.max(m, e.d), 0);
   return {
     tiles: peakTiles.size, retried: peakDemless, known: peaks.size,
+    // The names ACTUALLY on the glass this frame, which is the claim a reader
+    // of the HUD is making — not the ranking this probe recomputes.
+    drawn: poiDraw.filter((q) => q.kind === 'peak').map((q) => q.name),
+    markLift: PEAK_MARK_LIFT,
     reachKm: +(far / 1000).toFixed(1),
     ringKm: +((clamp(Math.ceil(PEAK_R / tileMetres(PEAK_Z)), 1, PEAK_RING_MAX) * tileMetres(PEAK_Z)) / 1000).toFixed(0),
     tileKm: +(tileMetres(PEAK_Z) / 1000).toFixed(0),
@@ -14719,6 +14781,10 @@ function farHeightAt(wx: number, wz: number): number | null {
       name: e.p.name, ele: e.p.ele, km: +(e.d / 1000).toFixed(1),
       deg: +((Math.atan(e.app) * 180) / Math.PI).toFixed(2),
       overHorizon: e.rise <= 0,
+      // …and whether there is a HILL in the way, which the curve test cannot
+      // see. A summit reported blocked while its label is on the glass is the
+      // fault this pair exists to expose.
+      blocked: peakBlocked(e.p, vx, vz, eyeY, e.rise, e.d),
       // DOES THE BACKDROP ACTUALLY HOLD THIS MOUNTAIN? The label is drawn from
       // the peak layer, which knows summits the terrain shell may not have
       // streamed or may have smoothed away — and a name over empty sky is the
@@ -16940,6 +17006,10 @@ function updatePois(): void {
  * ridge you are about to climb.
  */
 const PEAK_SHOW = 3;
+/** HUD pixels the summit triangle floats above the apex it points at. Four is
+ *  the mark's own height, so this clears it completely without letting it
+ *  drift far enough to read as a label for the sky above the mountain. */
+const PEAK_MARK_LIFT = 5;
 function updatePeaks(vx: number, vz: number): void {
   if (!peaks.size && !coverBuilt.size) return;
   const eyeY = camera.position.y;
@@ -17006,8 +17076,17 @@ function updatePeaks(vx: number, vz: number): void {
   }
   if (!seen.length) return;
   seen.sort((a, b) => b.app - a.app);
-  for (let i = 0; i < Math.min(PEAK_SHOW, seen.length); i++) {
+  // THE RIDGE TEST LAST, on the ranked survivors only. It costs a dozen
+  // heightfield samples per peak and there can be hundreds of candidates
+  // within reach — but only a handful ever clear the frustum, and only the
+  // first few of those are ever drawn. Walking DOWN the ranking rather than
+  // filtering it means a blocked summit yields its slot to the next one
+  // behind it instead of leaving a gap on the glass.
+  let drawn = 0;
+  for (let i = 0; i < seen.length && drawn < PEAK_SHOW; i++) {
     const e = seen[i];
+    if (peakBlocked(e.p, vx, vz, eyeY, e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) - eyeY, e.d)) continue;
+    drawn++;
     poiDraw.push({
       x: e.sx, y: e.sy,
       tx: 0, ty: 0,                                  // no beam: see the draw pass
@@ -20970,7 +21049,14 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // three Mont Blanc names written across the bearing. A peak that high is
     // above the glass anyway, so its mark rests just under the instrument
     // rather than on top of it.
-    const ay = isPeak ? Math.max(ayRaw, COMPASS_B + 4) : ayRaw;
+    // A MARK ON THE THING HIDES THE THING. The summit glyph is a filled
+    // triangle with its BASE on the projected apex, so at fifty kilometres —
+    // where the whole mountain is a dozen pixels of ridge line — the mark was
+    // sitting squarely on top of the only pixels it exists to point at.
+    // Reported from Romsdalen. It now floats a few pixels clear and points
+    // down at the summit, which is what a marker is for.
+    const ay = isPeak ? Math.max(ayRaw, COMPASS_B + 4 + PEAK_MARK_LIFT) : ayRaw;
+    const my = isPeak ? ay - PEAK_MARK_LIFT : ay;
     const beamTop = isPeak ? ay : Math.min(ay - 6, Math.max(12, typ));
     const h = ay - beamTop;
     const x = clamp(Math.round(ax - w / 2), 2, HW - w - 2);
@@ -20983,7 +21069,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // which is where the three Mont Blanc summits went the first time
     // Chamonix was photographed with them. Above the mark by default, under it
     // when there is no room, and either way it stays beside the thing it names.
-    const above = ay - Math.max(11, Math.round(h / 3)) - lane * 8;
+    const above = (isPeak ? my : ay) - Math.max(11, Math.round(h / 3)) - lane * 8;
     const ly = isPeak && above < COMPASS_B ? ay + 7 + lane * 8 : Math.max(12, above);
     hctx.save();
     // THE checkpoint beam, in the place's own colour: the same leaning
@@ -21002,9 +21088,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // hollow once the earth has curved in front of it.
     hctx.globalAlpha = isPeak ? (p.hid ? 0.55 : 0.95) : (0.5 + 0.5 * near) * ghost;
     hctx.fillStyle = UI.ink;
-    if (isPeak) peakMark(ax, ay, 4, true); else diamond(ax, ay, 3);
+    if (isPeak) peakMark(ax, my, 4, true); else diamond(ax, ay, 3);
     hctx.fillStyle = p.c;
-    if (isPeak) peakMark(ax, ay - 1, 3, !p.hid);
+    if (isPeak) peakMark(ax, my - 1, 3, !p.hid);
     else if (p.rng) diamond(ax, ay, 3); else diamondOutline(ax, ay, 2);
     // The label — its KIND leading it as a glyph where one exists. Gold when
     // in range or pinned by hand. Occlusion is the BEAM's story (dashed,
