@@ -38,9 +38,17 @@ async function share(page, layer) {
   const b = await page.evaluate(() => window.__scenegrab(4));
   await page.evaluate((l) => window.__hide(l, false), layer);
   await page.waitForTimeout(600);
+  // PER CHANNEL. A luminance comparison agreed with a PNG diff on the shell and
+  // then missed the fine terrain by seven times, because what it reveals at
+  // Isterdalen is the fjord — a different colour at the same brightness.
   let moved = 0;
-  for (let i = 0; i < a.px.length; i++) if (Math.abs(a.px[i] - b.px[i]) > 8) moved++;
-  return moved / a.px.length;
+  for (let i = 0; i < a.n; i++) {
+    const d0 = Math.abs(a.px[i * 3] - b.px[i * 3]);
+    const d1 = Math.abs(a.px[i * 3 + 1] - b.px[i * 3 + 1]);
+    const d2 = Math.abs(a.px[i * 3 + 2] - b.px[i * 3 + 2]);
+    if (Math.max(d0, d1, d2) > 8) moved++;
+  }
+  return moved / a.n;
 }
 
 const errors = [];

@@ -14185,10 +14185,18 @@ function truckSpec(): Record<string, number> {
  *  paint colour actually has before it starts to glow. */
 /**
  * THE FRAME, SMALL ENOUGH TO COMPARE. One readback, downsampled to a grid of
- * 0..255 luminance — which is all an A/B needs to answer "how much of the
- * picture did that layer account for?" without a PNG decoder anywhere in this
- * repo. Written for the far shell: turning it off changed 42% of the frame in
- * a Norwegian valley, and that number is the whole bug report.
+ * RGB triples — all an A/B needs to answer "how much of the picture did that
+ * layer account for?" without a PNG decoder anywhere in this repo. Written for
+ * the far shell: turning it off changed 42% of the frame in a Norwegian
+ * valley, and that number is the whole bug report.
+ *
+ * RGB, NOT LUMINANCE, and it cost a wrong answer to learn it. The first cut
+ * returned one weighted-luminance byte per sample, which agreed with a PNG
+ * diff on the far shell (3.3% vs 3.4%) and on the drapes — and then reported
+ * 1.6% for the fine terrain where the truth was 11.2%. Hiding the terrain at
+ * Isterdalen reveals the FJORD behind it: a green hillside and blue water at
+ * very nearly the same brightness. An instrument for "what is covering the
+ * world" must not be blind to one thing replacing another of the same weight.
  */
 (window as unknown as { __scenegrab?: object }).__scenegrab = (step = 4): object => {
   const w = rtScene.width, h = rtScene.height;
@@ -14203,19 +14211,17 @@ function truckSpec(): Record<string, number> {
     return (sg ? -1 : 1) * 2 ** (e - 15) * (1 + f / 1024);
   };
   const gw = Math.floor(w / step), gh = Math.floor(h / step);
-  const out = new Array<number>(gw * gh);
+  const out = new Array<number>(gw * gh * 3);
   for (let gy = 0; gy < gh; gy++) {
     for (let gx = 0; gx < gw; gx++) {
       const i = (gy * step) * w + gx * step;
-      let lum = 0;
       for (let c = 0; c < 3; c++) {
         const v = half ? h2f(arr[i * 4 + c]) : arr[i * 4 + c] / 255;
-        lum += (c === 1 ? 0.6 : 0.2) * (Number.isFinite(v) ? clamp(v, 0, 1) : 0);
+        out[(gy * gw + gx) * 3 + c] = Math.round((Number.isFinite(v) ? clamp(v, 0, 1) : 0) * 255);
       }
-      out[gy * gw + gx] = Math.round(lum * 255);
     }
   }
-  return { w: gw, h: gh, step, px: out };
+  return { w: gw, h: gh, step, n: gw * gh, px: out };
 };
 (window as unknown as { __scenehist?: object }).__scenehist = (): object => {
   const w = rtScene.width, h = rtScene.height;
