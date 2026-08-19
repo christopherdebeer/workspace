@@ -458,11 +458,61 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
     // covers — staggered by the rebuild throttle, so it costs a few frames
     // spread over seconds rather than a hitch.
     coverDirtiedTerrain(Math.min(wx0, wx1), Math.min(wz0, wz1), Math.abs(wx1 - wx0), Math.abs(wz1 - wz0));
+    // …and the shell, which bakes its colour ONCE and would otherwise keep
+    // whatever it guessed before this tile existed.
+    coverDirtiedFar(remeasureCoverMode(),
+      Math.min(wx0, wx1), Math.min(wz0, wz1), Math.abs(wx1 - wx0), Math.abs(wz1 - wz0));
   } catch {
     // Let a later pass ask again — a cover miss is a softer failure than a road
     // one (everything downstream has a fallback), so it just retries slowly.
     setTimeout(() => coverAsked.delete(key), 20000);
   }
+}
+/**
+ * THE COMMONEST CLASS AMONG THE TILES THAT HAVE LOADED, water excluded.
+ *
+ * What the far shell wears where the raster does not reach — and it does not
+ * reach far. A cover tile is ~8km across and the block is 7x7 of them; a far
+ * shell tile at z11 is 17km across and the shell sees 24km. Measured at Senqu
+ * with the shell's own instrument: 24 of 25 shell tiles baked with NO cover
+ * under them at all, mean coverage 0.09, and unchanged after a full re-bake —
+ * so it was never a race, the raster simply is not there.
+ *
+ * That is the two-tone hillside, and this time from the right side of it: the
+ * near world and the one shell tile under the truck wear the ramp pulled 55%
+ * toward the land-cover tint, and everything past about eight kilometres wears
+ * the biome ramp alone. Warm in front, cool behind, with an edge that slides
+ * as the block re-centres. Handing the shell sampleCover (R40) only ever took
+ * effect on the tile the truck was standing in.
+ *
+ * Growing the block helps and is done below, but it cannot win: at 62°N a
+ * cover tile is 4.6km and three rings reach 14 of the 24 kilometres. So the
+ * fallback is not "no tint", it is THE AVERAGE OF WHAT THE RASTER DOES SAY.
+ * Distant ground then carries the same cast as near ground and there is no
+ * edge to see — which is the honest answer anyway, since at fifteen kilometres
+ * a 38m raster is telling you about the region, not about the hillside.
+ *
+ * Water is excluded because it is a different KIND of answer: a coast would
+ * otherwise paint every inland mountain behind it the colour of the sea.
+ */
+let coverMode: number | null = null;
+function remeasureCoverMode(): boolean {
+  const hist = new Map<number, number>();
+  for (const t of coverTiles.values()) {
+    // A sparse walk with a prime stride, not a census: 256x256 per tile times
+    // forty-nine tiles is three million samples for a number that only has to
+    // be roughly right.
+    for (let i = 0; i < t.data.length; i += 313) {
+      const v = t.data[i];
+      if (!v || v === 80) continue;
+      hist.set(v, (hist.get(v) ?? 0) + 1);
+    }
+  }
+  let best: number | null = null, n = 0;
+  for (const [c, k] of hist) if (k > n) { n = k; best = c; }
+  const moved = best !== coverMode;
+  coverMode = best;
+  return moved;
 }
 /** The land-cover class at a world point, or `null` where nothing has loaded.
  *  NEAREST, never interpolated: halfway between forest (10) and shrub (20) is
@@ -11042,10 +11092,18 @@ function streamWorld(ex: number, ez: number): void {
   // paints the ground and plants the vegetation, so it has to reach as far as
   // you can see, and at ~1–5KB a tile covering 9.8km that costs nothing.
   {
-    const cRing = clamp(Math.ceil(r / tileMetres(COVER_Z)), 1, 3);
+    // SIZED BY WHAT THE SHELL CAN SEE, not by the camera's own ground disc.
+    // That disc is 900m from the cab, which rounded this to a single ring —
+    // one cover tile — while the shell was painting hillsides out to 24km off
+    // a raster that stopped at eight. Nearest-first, because forty-nine
+    // requests leaving at once is the thundering herd the far loader already
+    // learned about, and the near ones are the ones the ground pass wants.
+    const cRing = clamp(Math.ceil(Math.max(r, SIGHT_M) / tileMetres(COVER_Z)), 1, 3);
     const [cx0, cy0] = tileAt(lat, lon, COVER_Z);
-    for (let dx = -cRing; dx <= cRing; dx++)
-      for (let dy = -cRing; dy <= cRing; dy++) void loadCoverTile(cx0 + dx, cy0 + dy);
+    for (let d = 0; d <= cRing; d++)
+      for (let dx = -d; dx <= d; dx++)
+        for (let dy = -d; dy <= d; dy++)
+          if (Math.max(Math.abs(dx), Math.abs(dy)) === d) void loadCoverTile(cx0 + dx, cy0 + dy);
     // Cover also knows which ground is water, and water is the only honest
     // witness to where sea level sits in THIS DEM's datum. Kept OUTSIDE the
     // biome latch on purpose: the biome is happy to settle on the first decent
@@ -11288,6 +11346,38 @@ function alignFarShell(): void {
 }
 const farTiles = new Set<string>();
 const farMeshes = new Map<string, THREE.Mesh>();
+/** Per far tile, the fraction of its vertices that had a cover class at bake,
+ *  and the mean colour it baked. The second is the one that matters: if two
+ *  shell tiles over the same kind of country disagree about their average
+ *  tone, the player sees a join. */
+const farCoverHit = new Map<string, number>();
+const farTint = new Map<string, [number, number, number]>();
+/**
+ * A cover tile landed. Throw away any shell tile whose colour it invalidates,
+ * so the streamer fetches and re-bakes it.
+ *
+ * Blind tiles only, unless the MODE MOVED — a tile that already had the raster
+ * under it is not improved by a neighbour arriving, and re-baking the whole
+ * shell forty-nine times over a boot is a lot of geometry for nothing. The DEM
+ * fetch behind the rebuild is an HTTP cache hit.
+ */
+function coverDirtiedFar(modeMoved: boolean, x: number, z: number, w: number, h: number): void {
+  for (const [key, hit] of [...farCoverHit]) {
+    if (hit > 0.98) continue;
+    const mesh = farMeshes.get(key);
+    if (!mesh) continue;
+    if (!modeMoved) {
+      const b = mesh.geometry.boundingBox ?? (mesh.geometry.computeBoundingBox(), mesh.geometry.boundingBox);
+      if (!b) continue;
+      const x0 = b.min.x + mesh.position.x, x1 = b.max.x + mesh.position.x;
+      const z0 = b.min.z + mesh.position.z, z1 = b.max.z + mesh.position.z;
+      if (x1 < x || x0 > x + w || z1 < z || z0 > z + h) continue;
+    }
+    farGroup.remove(mesh); mesh.geometry.dispose();
+    farMeshes.delete(key); farTiles.delete(key);
+    farCoverHit.delete(key); farTint.delete(key);
+  }
+}
 const farGroup = new THREE.Group();
 farGroup.name = 'far';
 farGroup.visible = false;
@@ -11316,6 +11406,7 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   const xs = Math.min(wx0, wx1), zs = Math.min(wz0, wz1);
   const w = Math.abs(wx1 - wx0), h = Math.abs(wz1 - wz0);
   const seg = farSeg(z);
+  let hit = 0, tr = 0, tg = 0, tb = 0;
   const geo = new THREE.PlaneGeometry(w, h, seg, seg);
   geo.rotateX(-Math.PI / 2);
   const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -11349,10 +11440,17 @@ async function loadFarTile(x: number, y: number): Promise<void> {
     // escarpment at Senqu, where the shell stands up to 38m ABOVE the fine
     // ground and paints over it. Cover is null out past the loaded raster,
     // which is exactly the old behaviour, so the far horizon is unchanged.
-    const [r, g, bb] = terrainPalette(raw, Math.hypot(du, dv) / Math.max(cell, 1),
-      sampleCover(xs + w / 2 + pos.getX(i), zs + h / 2 + pos.getZ(i)));
+    const cv = sampleCover(xs + w / 2 + pos.getX(i), zs + h / 2 + pos.getZ(i));
+    if (cv !== null) hit++;
+    // …and where the raster does not reach, the average of what it does say
+    // rather than nothing at all. See coverMode.
+    const [r, g, bb] = terrainPalette(raw, Math.hypot(du, dv) / Math.max(cell, 1), cv ?? coverMode);
     colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
+    tr += r; tg += g; tb += bb;
   }
+  // WHAT THIS TILE KNEW WHEN IT WAS BAKED, and what it came out looking like.
+  farCoverHit.set(key, hit / Math.max(1, pos.count));
+  farTint.set(key, [tr / pos.count, tg / pos.count, tb / pos.count]);
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
   const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? farMatFor(data, w, key) : farMat);
@@ -15047,9 +15145,38 @@ function meshHeightAt(x: number, z: number): number | null {
 /** How much GROUND the camera actually covers, by unprojecting the screen
  *  corners onto the car's ground plane. The honest answer to "how far out can
  *  I see", which no constant in this file states directly. */
+/** Drop the shell and fetch it again, so it re-bakes against whatever the
+ *  world knows NOW. The instrument for "is this tile's colour stale?". */
+(window as unknown as { __farrebake?: object }).__farrebake = (): object => {
+  const n = farMeshes.size;
+  for (const m of farMeshes.values()) { farGroup.remove(m); m.geometry.dispose(); }
+  farMeshes.clear(); farTiles.clear(); farCoverHit.clear();
+  return { dropped: n };
+};
 (window as unknown as { __far?: object }).__far = (): object =>
   ({ tiles: farMeshes.size, shown: farGroup.visible, radius: Math.round(viewRadius()),
     sight: SIGHT_M, level: farZ, farPlane: camera.far,
+    // How much land-cover each shell tile had when it was baked. A shell tile
+    // is coloured once and never revisited, so anything below 1 here is a tile
+    // wearing a palette the fine world would not agree with.
+    cover: (() => {
+      const v = [...farCoverHit.values()];
+      if (!v.length) return null;
+      return { n: v.length, min: +Math.min(...v).toFixed(2), blind: v.filter((k) => k < 0.5).length,
+        mean: +(v.reduce((a, b) => a + b, 0) / v.length).toFixed(2), mode: coverMode };
+    })(),
+    // THE NUMBER THAT MATTERS. Whether the shell READ the raster is a means;
+    // whether its tiles agree about the colour of the country is the end. The
+    // widest per-channel gap between any two shell tiles' mean colour.
+    tint: (() => {
+      const v = [...farTint.values()];
+      if (v.length < 2) return null;
+      let spread = 0;
+      for (let c = 0; c < 3; c++) {
+        spread = Math.max(spread, Math.max(...v.map((t) => t[c])) - Math.min(...v.map((t) => t[c])));
+      }
+      return { n: v.length, spread: +spread.toFixed(3) };
+    })(),
     // THE SEAM, as a number: the fine ring's own height beside the shell's,
     // sampled just outside where the fine world gives out. A cliff here is
     // the curve compensation failing, and it fails by kilometres driven.
