@@ -14232,6 +14232,16 @@ function truckSpec(): Record<string, number> {
     slideV: +slideV.toFixed(3), grip: +groundedF.toFixed(3),
     slipDeg: +((Math.atan2(slideV, Math.max(Math.abs(v), 0.01)) * 180) / Math.PI).toFixed(3),
     mu: +surfaceFor(surfaceAt(state.x, state.z), surfQ).mu.toFixed(3),
+    // WHICH MODEL IS DRIVING, and what the tyres are standing on. `yawWant`
+    // and `yawRate` were the same variable under the arcade model because it
+    // had no notion of a corner the tyres refuse to take; under the tyre model
+    // they are genuinely different numbers and the gap between them IS the
+    // understeer.
+    mode: TRACTION_MODES[tractionMode],
+    muF: +axleMu[0].toFixed(3), muR: +axleMu[1].toFixed(3),
+    wheelMu: wheelMu.map((m) => +m.toFixed(2)),
+    rackYaw: +((steerCur * CAR.steerMax * v) / CAR.wheelbase).toFixed(3),
+    slipL: +wheelSlipL.toFixed(3), slipAngDeg: +((slipAng * 180) / Math.PI).toFixed(2),
   };
 };
 // The road corridor at a point: the raw heightfield, what the cut allows, and
@@ -16446,7 +16456,23 @@ const TAIL_HOT = new THREE.Color(0xff3a24);
 (window as unknown as { __input?: object }).__input = (): object =>
   ({ ...lastInput, stick: stick ? { ax: +stick.ax.toFixed(3), ay: +stick.ay.toFixed(3) } : null,
     speed: +state.speed.toFixed(2) });
+/**
+ * A HAND THAT DOES NOT SHAKE. Measuring a chassis means holding one exact lock
+ * at one exact speed and reading the steady state back; a keyboard gives you
+ * full lock or nothing, and a synthesised pointer gives you whatever the gate
+ * maps that pixel to. This is the input, overridden — the same numbers `input`
+ * would have returned, supplied by a tool instead of a thumb.
+ *
+ * Cleared with __hold(null). Nothing in the game sets it.
+ */
+let inputHold: { throttle: number; steer: number; brake: boolean; brakeF: number } | null = null;
+(window as unknown as { __hold?: object }).__hold = (steer?: number | null, throttle = 0, brakeF = 0): object => {
+  inputHold = steer === null || steer === undefined ? null
+    : { steer: clamp(steer, -1, 1), throttle: clamp(throttle, -1, 1), brake: brakeF > 0.01, brakeF: clamp(brakeF, 0, 1) };
+  return inputHold ?? { held: false };
+};
 function input(): { throttle: number; steer: number; brake: boolean; brakeF: number } {
+  if (inputHold) return inputHold;
   let throttle = 0, steer = 0, stickBrake = false, stickBrakeF = 0;
   if (keys.has('w') || keys.has('arrowup')) throttle += 1;
   if (keys.has('s') || keys.has('arrowdown')) throttle -= 1;
@@ -17641,7 +17667,17 @@ const audio = (() => {
       return on;
     },
     // Called every frame; all parameters glide so nothing zippers.
-    update(speed: number, throttle: number, surf: Surface, grounded: number, rainAmt = 0, rev = 0, gear = 0, slip = 0): void {
+    /**
+     * `q` is the ground's own QUALITY, 0 a sand piste and 1 new asphalt, and it
+     * is what lets a surface sound like itself. The three-tier road/track/
+     * ground split was audible but coarse: cobbles sounded like an autobahn
+     * and a grade-5 forestry track like a graded gravel road, because the tier
+     * is all the mixer was told. `spin` is the wheels asking for more than the
+     * ground will give — the sound of traction being lost rather than of a
+     * surface being crossed.
+     */
+    update(speed: number, throttle: number, surf: Surface, grounded: number, rainAmt = 0, rev = 0, gear = 0, slip = 0,
+      q = 1, spin = 0): void {
       if (!ctx || !master || ctx.state !== 'running') return;
       const t = ctx.currentTime, v = Math.abs(speed);
       // Revs come from the DRIVETRAIN, not from road speed — the two part
@@ -17660,7 +17696,11 @@ const audio = (() => {
       // Rubber that has stopped rolling. Loud on tarmac, largely lost under the
       // gravel off it — and silent below a walking pace, where a slide is a
       // slither, not a skid.
-      const bite = surf === 'road' ? 1 : surf === 'track' ? 0.45 : 0.18;
+      // A SEALED SURFACE SQUEALS; LOOSE GROUND JUST HISSES. Rubber has to be
+      // gripping something hard to sing, so the bite follows the quality
+      // rather than the tier — cobbles and a broken lane are half a squeal,
+      // sand is none at all.
+      const bite = surf === 'road' || surf === 'track' ? Math.pow(clamp(q, 0, 1), 1.6) : 0.12;
       const sf = 1250 + Math.min(v * 14, 620) + slip * 260;
       squealFilt.frequency.setTargetAtTime(sf, t, 0.08);
       squealOsc.frequency.setTargetAtTime(sf, t, 0.08);
@@ -17668,7 +17708,12 @@ const audio = (() => {
       // Tarmac hisses high and thin; loose ground growls low and loud. A graded
       // track sits between the two — you can hear which tier you are on.
       const road = surf === 'road';
-      const hard = road ? 1 : surf === 'track' ? 0.55 : 0;
+      // HOW HARD THE GROUND IS, continuously. This is the number the ear reads
+      // as "what am I driving on" before the handling has said anything: a
+      // high thin hiss on new tarmac, sliding down to a low growl as the
+      // surface coarsens, and gone altogether on open ground.
+      const hard = surf === 'water' ? 0 : surf === 'road' || surf === 'track'
+        ? clamp(q, 0, 1) : 0.08;
       roarFilt.frequency.setTargetAtTime(320 + hard * 830, t, 0.12);
       roarGain.gain.setTargetAtTime(Math.min(v / 34, 1) * (0.26 - hard * 0.16) * grounded, t, 0.1);
       // Rain rides the wind channel: same filtered noise, opened up and lifted.
@@ -17676,13 +17721,18 @@ const audio = (() => {
       windGain.gain.setTargetAtTime(Math.min((v * v) / 2600, 0.9) * 0.13 + rainAmt * 0.16, t, 0.15);
       // Gravel: absent on tarmac, dominant off it. Rate (playbackRate) AND
       // level rise with speed, so the crunch density tracks the wheels.
-      const loose = road ? 0 : surf === 'water' ? 0.12 : surf === 'track' ? 0.45 : 1;
+      // …and the grit is its complement, plus whatever the wheels are throwing
+      // up because they have stopped hooking up. A spinning wheel on gravel is
+      // the loudest thing the truck does.
+      const loose = surf === 'water' ? 0.12
+        : clamp(1 - Math.pow(clamp(q, 0, 1), 1.25), 0, 1) * (surf === 'ground' ? 1 : 0.92);
       gritSrc.playbackRate.setTargetAtTime(0.55 + Math.min(v / 26, 1.35), t, 0.12);
       gritFilt.frequency.setTargetAtTime(surf === 'water' ? 700 : 900 + Math.min(v * 26, 1400), t, 0.15);
       // Off the tarmac the grit IS the feedback — it is how a surface change
       // announces itself before the handling does — and at 0.3 it sat under the
       // engine at every speed that mattered.
-      gritGain.gain.setTargetAtTime(Math.min(v / 12, 1) * 0.46 * loose * grounded, t, 0.09);
+      gritGain.gain.setTargetAtTime(
+        (Math.min(v / 12, 1) * 0.46 * loose + spin * 0.3 * (0.25 + 0.75 * loose)) * grounded, t, 0.09);
     },
     // Thunder: a low rumble whose attack softens and whose tail lengthens with
     // distance — a near strike cracks, a far one rolls.
@@ -17989,15 +18039,21 @@ const SURFACE = {
   // road it is drawn on — but at 0.6/0.5/0.25 the stack was CURB HEIGHT, and
   // every road became a platform to climb onto. Compressed to real kerb scale;
   // the ordering that keeps green under water under track under road survives.
-  road: { max: 50, drag: 0.28, lift: 0.04, rough: 0.015, mu: 1.05, lat: 6.5 },
+  // `roll` is rolling resistance in m/s² — the price of the surface deforming
+  // under the tyre, which is most of why a field is slow and almost none of
+  // why a motorway is. It replaces the linear drag ONLY under the tyre model
+  // (see stepTraction): the shipped arcade path keeps `drag` exactly as it was,
+  // because its top speeds, its overtakes and the campaign's pacing are all
+  // tuned against it.
+  road: { max: 50, drag: 0.28, lift: 0.04, rough: 0.015, mu: 1.05, lat: 6.5, roll: 0.15 },
   // The middle tier: a graded dirt track. Equilibrium speed is accel/drag, so
   // 0.36 sits it between tarmac's 57m/s and open ground's 32 — quick enough
   // that finding a track is a relief, rough enough that it is not a road.
-  track: { max: 40, drag: 0.36, lift: 0.03, rough: 0.07, mu: 0.8, lat: 5 },
-  ground: { max: 32, drag: 0.5, lift: 0.10, rough: 0.16, mu: 0.6, lat: 3.2 }, // monster truck: off-road is its element
-  water: { max: 3.5, drag: 3.5, lift: 0.12, rough: 0.05, mu: 0.3, lat: 2 },
+  track: { max: 40, drag: 0.36, lift: 0.03, rough: 0.07, mu: 0.8, lat: 5, roll: 0.45 },
+  ground: { max: 32, drag: 0.5, lift: 0.10, rough: 0.16, mu: 0.6, lat: 3.2, roll: 0.95 }, // monster truck: off-road is its element
+  water: { max: 3.5, drag: 3.5, lift: 0.12, rough: 0.05, mu: 0.3, lat: 2, roll: 2.4 },
 } as const;
-type SurfParams = { max: number; drag: number; lift: number; rough: number; mu: number; lat: number };
+type SurfParams = { max: number; drag: number; lift: number; rough: number; mu: number; lat: number; roll: number };
 // ── what the road is actually made of ──────────────────────────────
 // `highway=*` says what a way is FOR. It says nothing about what it is MADE OF,
 // and OSM has been telling us all along: `surface`, `smoothness` and
@@ -18111,7 +18167,41 @@ function wadeParams(depth: number): SurfParams {
     rough: 0.05,
     mu: 0.5 - 0.22 * sh,       // wet rock under the tread, then none at all
     lat: 3.4 - 1.6 * sh,
+    roll: 1.6 + 3.4 * sh,      // wading is nearly all rolling resistance
   };
+}
+/**
+ * WHAT THE CONTACT PATCH CAN ACTUALLY HOLD, as a function of what the ground
+ * is made of.
+ *
+ * `surfaceFor` interpolates between three authored tiers, and its `mu` came
+ * out of the same ladder — which meant the whole world's friction lived
+ * between 0.60 and 1.05. A sand piste, a ploughed field, wet clay and a
+ * grade-1 gravel road were all within a few per cent of each other, and OSM's
+ * `surface` tag — which is the one fact that says what you are driving on —
+ * was spent almost entirely on drag and paint.
+ *
+ * Friction is its own axis now, and a steep one: 0.38 on sand against 1.05 on
+ * asphalt is a factor of nearly three, which is the difference between a bend
+ * you take at 90 and the same bend at 55. The exponent bends the curve so the
+ * paved end stays tightly packed (asphalt, concrete and chipseal SHOULD feel
+ * alike) while the loose end spreads out, where the interesting driving is.
+ *
+ * OPEN GROUND IS NOT A QUALITY. Untagged terrain has no material to read, and
+ * feeding it Q_GROUND (a drag number) would put a grass field below wet mud.
+ * It gets a flat, sensible figure instead: a field is loose but it is not ice.
+ */
+const MU_LO = 0.25, MU_HI = 1.05, MU_GROUND = 0.55;
+function muFor(kind: Surface, q: number, wet: number): number {
+  const dry = kind === 'water' ? SURFACE.water.mu
+    : kind === 'ground' ? MU_GROUND
+      : MU_LO + (MU_HI - MU_LO) * Math.pow(clamp(q, 0, 1), 1.3);
+  // A SEALED SURFACE LOSES MORE TO RAIN THAN A LOOSE ONE. Water on asphalt is
+  // a film between two hard faces; water on gravel is damp gravel, and a wet
+  // dirt road is often better than a dusty one. The old flat 28% off
+  // everything had rain punishing the desert piste hardest, which is backwards.
+  const sealed = clamp((q - 0.5) / 0.4, 0, 1);
+  return dry * (1 - wet * (0.12 + 0.26 * sealed));
 }
 function surfaceFor(kind: Surface, q: number): SurfParams {
   const base = SURFACE[kind];
@@ -18124,6 +18214,7 @@ function surfaceFor(kind: Surface, q: number): SurfParams {
     max: A.max + (B.max - A.max) * f, drag: A.drag + (B.drag - A.drag) * f,
     rough: A.rough + (B.rough - A.rough) * f, mu: A.mu + (B.mu - A.mu) * f,
     lat: A.lat + (B.lat - A.lat) * f, lift: base.lift,
+    roll: A.roll + (B.roll - A.roll) * f,
   };
 }
 // Deterministic washboard: bumps live in the WORLD (wavelengths ~2–4m), so
@@ -18146,6 +18237,160 @@ function roughNoise(x: number, z: number): number {
 // ringing at its own natural frequency instead of following the ground. That
 // ring is what reads as the truck bouncing down a hill.
 const SUSP = { k: 55, d: 8.5, ka: 40, da: 12.6, travel: 0.26, droop: 0.34 };
+// ── traction: what the tyres are allowed to decide ─────────────────
+/**
+ * THE MODEL THIS GAME SHIPPED WITH NEVER LET THE TYRES DECIDE ANYTHING.
+ *
+ * Position integrated along the HEADING, and the heading integrated a yaw rate
+ * taken straight from the steering rack with no grip term in it — so the path
+ * curvature was whatever the rack said, whatever the ground was. The friction
+ * budget was computed honestly and then spent on a small sideways velocity
+ * that was scrubbed away with a 0.2s time constant. Measured: 2.25g of corner
+ * on a 0.60 surface, 4.03g on tarmac, 4.14g of braking on anything, and a
+ * corner radius of 6–16m at every speed from 15 to 140km/h. A helicopter.
+ *
+ * So the tyres get the wheel. A two-axle bicycle model in the BODY frame:
+ * each axle has a load, a friction coefficient taken from the ground its own
+ * wheels are standing on, and a slip angle; lateral force saturates with slip;
+ * yaw comes from the difference between the two axles rather than from the
+ * rack. Exceeding the front's grip means the truck FAILS TO ROTATE, which is
+ * understeer and is the thing that was missing entirely. Exceeding the rear's
+ * means it rotates too much, which is the other thing.
+ *
+ * WHAT THIS BUYS, in the owner's words — feeling the difference between
+ * surfaces: the front and rear read their OWN ground, so leaving a road with
+ * the rear still on tarmac is a different event from arriving on one; load
+ * transfers under the brakes, so trail-braking rotates the truck and lifting
+ * mid-bend does too; and the longitudinal cap comes out of the same circle,
+ * so braking on sand takes three times the distance it does on asphalt.
+ *
+ * ARCADE IS STILL THERE. The old path is kept whole behind the dial, because
+ * a model that is more truthful is not automatically the better game, and the
+ * only way to know is to be able to switch between them on the same bend.
+ */
+const TRACTION_MODES = ['ARCADE', 'LOOSE', 'REAL'] as const;
+/** 0 arcade (the shipped model), 1 the tyre model with a forgiving budget,
+ *  2 the tyre model at its own numbers. */
+let tractionMode = 1;
+/** Grip multiplier per mode — LOOSE is the same physics with more of it. */
+const TRACTION_GRIP = [1, 1.3, 1];
+/** Half the wheelbase: the model's CoG sits between the axles. */
+const AXLE_A = CAR.wheelbase / 2;
+/** Yaw inertia over m·a². 1 is a dumbbell with all its mass on the axles; a
+ *  truck carries a load high and long, and this is what stops it snapping
+ *  round the moment the rear lets go. */
+const IZZ_K = 1.7;
+/** Slip angle at which a tyre has given everything it has, near enough:
+ *  tanh(9·α) is 0.9 by about nine degrees, which is a real tyre's shape. */
+const TYRE_K = 9;
+/** Yaw rate, kept between frames now — the old model recomputed it from the
+ *  rack every frame and never had to remember it. */
+let yawR = 0;
+/** Each axle's friction, from the ground its OWN wheels are standing on.
+ *  Written by the suspension pass (which already samples all four) and read by
+ *  the drive step one frame later, which is the honest cost of not reordering
+ *  a step that works. */
+const axleMu = [0.9, 0.9];
+/** Each wheel's own friction, in the WHEELS order [FL, FR, RL, RR]. */
+const wheelMu = [0.9, 0.9, 0.9, 0.9];
+/** How much more than the tyres can hold the throttle is asking for: 0 hooked
+ *  up, 1 spinning freely. Drives the sound and the spray, not the physics. */
+let wheelSlipL = 0;
+/** The slip angle the body is actually running, in radians — what a driver
+ *  feels through the seat and what the tyres are singing about. */
+let slipAng = 0;
+/** The longitudinal TYRE force last frame, for load transfer. Not the total
+ *  acceleration: see the note where it is used. */
+let lastFx = 0;
+/**
+ * One traction step. Everything is per unit mass, so a "force" here is an
+ * acceleration in m/s² and the numbers can be read against g directly.
+ */
+function stepTraction(dt: number, surf: SurfParams, grip: number, thrust: number,
+  wetF: number, gradeP: number, gradeR: number): void {
+  const gDial = TRACTION_GRIP[tractionMode] * rigGrip() * tune.grip;
+  // Static 50/50, then LOAD TRANSFER. Braking loads the nose and unloads the
+  // tail — which is why a truck rotates into a bend on the brakes and pushes
+  // wide on the throttle, and neither of those existed before.
+  // FROM THE TYRE FORCE, NOT FROM THE TOTAL ACCELERATION. The first cut fed
+  // `ax` in, which carries this game's arcade drag — 0.78g of it while merely
+  // COASTING at 100km/h, because equilibrium speed here is accel/drag and the
+  // drag is doing all the work. That put nine tenths of the load on the nose
+  // of a truck nobody was braking, left the rear with a tenth of its grip, and
+  // spun it off the road at full lock. Aerodynamic drag does not stand the
+  // truck on its nose; the brakes do.
+  const xfer = clamp((lastFx * 0.34) / GRAV, -0.32, 0.32);
+  const nF = clamp(0.5 - xfer, 0.14, 0.86), nR = clamp(0.5 + xfer, 0.14, 0.86);
+  const muF = axleMu[0] * gDial, muR = axleMu[1] * gDial;
+  const capF = muF * nF * GRAV * grip, capR = muR * nR * GRAV * grip;
+  // Two sub-steps at a phone's frame time. The tyre curve is stiff near zero
+  // slip and a 50ms Euler step through it rings; halving it costs four adds.
+  const n = dt > 0.026 ? 2 : 1, h = dt / n;
+  for (let i = 0; i < n; i++) {
+    const u = state.speed, v = slideV;
+    const su = u < 0 ? -1 : 1;
+    // A FLOOR UNDER THE DIVISOR. Slip angle is a ratio and goes to nonsense at
+    // walking pace; below the floor the blend at the bottom takes over anyway.
+    const uf = Math.max(Math.abs(u), 1.5);
+    const delta = steerCur * CAR.steerMax;
+    const af = Math.atan((v + AXLE_A * yawR) / uf) - delta * su;
+    const ar = Math.atan((v - AXLE_A * yawR) / uf);
+    const fyF = -capF * Math.tanh(TYRE_K * af);
+    const fyR = -capR * Math.tanh(TYRE_K * ar);
+    // THE CIRCLE, PER AXLE. Whatever the tyre is spending sideways it cannot
+    // also spend fore-and-aft — so braking into a corner is shorter than
+    // braking in a straight line, exactly as it is on a road.
+    const longF = Math.sqrt(Math.max(0, capF * capF - fyF * fyF));
+    const longR = Math.sqrt(Math.max(0, capR * capR - fyR * fyR));
+    const longCap = longF + longR;
+    const fx = clamp(thrust, -longCap, longCap);
+    wheelSlipL = clamp((Math.abs(thrust) - longCap) / Math.max(longCap, 0.6), 0, 1);
+    // Body-frame accelerations. The v·r and u·r terms are the frame turning
+    // under the velocity — leave them out and a steady corner slowly winds
+    // itself up into a spiral.
+    // DRAG THAT DOES NOT DROWN THE TYRES. The arcade path sheds speed as
+    // `v · drag`, which is 0.85g of retardation at 60km/h on open ground —
+    // more braking than the contact patch itself can supply, from merely
+    // lifting off. Under a model where the tyres are supposed to be the
+    // argument, that masks the whole thing the surfaces were given friction
+    // for. Split honestly instead: rolling resistance, which is roughly
+    // constant and is most of what makes a field slow, plus aerodynamic drag,
+    // which goes as v² — and the aero coefficient is DERIVED from the
+    // surface's own top speed, so every equilibrium in the game lands where it
+    // always did while the middle of the range stops behaving like treacle.
+    const aero = Math.max(0, CAR.accel - surf.roll) / (surf.max * surf.max);
+    const resist = (surf.roll * (0.4 + 0.6 * wetF) + aero * u * u) * (0.1 + 0.9 * grip);
+    const ax = fx + v * yawR - GRAV * Math.sin(gradeP) * grip - Math.sign(u) * resist;
+    const ay = fyF + fyR - u * yawR - GRAV * Math.sin(gradeR) * grip;
+    const izz = IZZ_K * AXLE_A * AXLE_A;
+    const dr = (AXLE_A * fyF - AXLE_A * fyR) / izz;
+    state.speed += ax * h;
+    slideV += ay * h;
+    yawR += dr * h;
+    lastFx = fx;
+    // AT A CRAWL THE TYRES STOP BEING THE ARGUMENT. Slip angles are undefined
+    // at rest and a car park manoeuvre is geometry, not friction, so the yaw
+    // blends to the kinematic answer as the speed falls away and the sideways
+    // velocity is simply put down.
+    // THE TOTAL SPEED, not the forward component. Reading `state.speed` alone
+    // meant a truck sliding sideways at twenty metres a second — whose forward
+    // component is near zero, because it is pointing across its own travel —
+    // counted as stationary, and had 98% of its lateral velocity deleted every
+    // sub-step. Measured: 70km/h to walking pace in 0.7s, which looked like
+    // enormous grip and was actually the crawl blend eating the slide.
+    const blend = clamp((Math.hypot(state.speed, slideV) - 1.0) / 2.5, 0, 1);
+    if (blend < 1) {
+      const kin = (state.speed * Math.tan(delta)) / CAR.wheelbase;
+      yawR = yawR * blend + kin * (1 - blend);
+      slideV *= 0.02 + 0.98 * blend;
+    }
+    state.heading += yawR * h;
+    state.x += Math.sin(state.heading) * state.speed * h + Math.cos(state.heading) * slideV * h;
+    state.z -= Math.cos(state.heading) * state.speed * h - Math.sin(state.heading) * slideV * h;
+  }
+  slipAng = Math.atan2(Math.abs(slideV), Math.max(Math.abs(state.speed), 0.4));
+  dbgYaw = yawR;
+}
 let bodyY = 0, vBodyY = 0, pitchC = 0, vPitch = 0, rollC = 0, vRoll = 0;
 // The TERRAIN's grade under the wheels — what gravity actually pulls against —
 // and the lateral creep it produces. Written by the suspension pass, read by
@@ -18315,7 +18560,20 @@ function tick(now: number): void {
   const parkHold = !real.on && !brake && Math.abs(throttle) < 0.02
     && Math.abs(state.speed) < 0.45 && Math.abs(slideV) < 0.6
     && Math.abs(Math.sin(gradePitch)) < 0.5 && Math.abs(Math.sin(gradeRoll)) < 0.5;
-  if (!real.on && !parked) {
+  // THE STEERING RACK IS SHARED. Both models take the same input through the
+  // same first-order lag; what they disagree about is what the front wheels
+  // can DO with it.
+  const SRATE0 = 7 * tune.steer;
+  if (!real.on && !parked && tractionMode > 0) {
+    steerCur += clamp(steer - steerCur, -SRATE0 * dt, SRATE0 * dt);
+    const wetDrag0 = 1 + wx.wet * (surfKind === 'road' ? 0.35 : 0.7);
+    stepTraction(dt, surf, grip, thrust, wetDrag0, gradePitch, gradeRoll);
+    if (brake && brakeF > 0.5 && grip > 0.4 && Math.abs(state.speed) < 1.2) { state.speed = 0; slideV = 0; }
+    if (parkHold) { state.speed = 0; slideV = 0; yawR = 0; }
+    state.speed = clamp(state.speed, -CAR.maxRev, surf.max * (1.25 - wx.wet * 0.2));
+    const want0 = clamp((Math.abs(slideV) - 0.5) / 3.5, 0, 1);
+    skid += (want0 - skid) * Math.min(1, (want0 > skid ? 9 : 3.5) * dt);
+  } else if (!real.on && !parked) {
     state.speed += thrust * grip * dt;
     // Gravity acts on the GROUND's grade, not on the sprung body's pitch. pitchC
     // is damped by the suspension, carries a throttle-squat fudge, and is clamped
@@ -18341,6 +18599,7 @@ function tick(now: number): void {
       const authority = (0.15 + 0.85 * grip) * tune.steer / (1 + Math.abs(state.speed) / 12);
       yawRate = (steerCur * CAR.steerMax * authority * state.speed) / CAR.wheelbase;
       dbgYaw = yawRate;
+      yawR = yawRate;      // so the tyre model can be switched into mid-corner
       state.heading += yawRate * dt;
     }
     state.x += Math.sin(state.heading) * state.speed * dt;
@@ -18354,7 +18613,7 @@ function tick(now: number): void {
   // whatever the throttle or the brakes have already claimed. What the tyres
   // cannot supply, the truck keeps as sideways velocity — it runs wide, and on
   // gravel it keeps running until the scrub bleeds it off. That is the drift.
-  if (!real.on) {
+  if (!real.on && tractionMode === 0) {
     const sH = Math.sin(state.heading), cH = Math.cos(state.heading);
     // Tread and compound both act here, on the one thing a tyre actually is:
     // how much acceleration the contact patch can supply before it lets go.
@@ -18550,11 +18809,21 @@ function tick(now: number): void {
   const wheelWorld: Array<[number, number]> = [];
   const wheelSurf: Surface[] = [];
   let rawSum = 0;
+  let wI = 0;
+  // `wx` is the WEATHER everywhere else in this file and the WHEEL's offset
+  // inside this loop, so the rain has to be read before the shadow falls.
+  const wetNow = wx.wet;
   for (const [wx, wz] of WHEELS) {
     const wxw = state.x + wx * cosH - wz * sinH;
     const wzw = state.z + wx * sinH + wz * cosH;
     const sk = surfaceAt(wxw, wzw);
     const sw = surfaceFor(sk, surfQ);   // this wheel's own surface, its own tags
+    // …AND ITS OWN FRICTION. Four wheels have been sampling four surfaces here
+    // for the roughness and the spray all along, while the drive model read a
+    // single point under the middle of the truck. Leaving a road with the rear
+    // still on tarmac, or dropping two wheels onto a gravel verge mid-bend,
+    // was a thing the physics could not know. Now it is the whole feel of it.
+    wheelMu[wI] = muFor(sk, surfQ, wetNow);
     wheelWorld.push([wxw, wzw]);
     wheelSurf.push(sk);
     // ONE continuous field, lift already folded in — see tyreHeight. The kerb
@@ -18564,7 +18833,14 @@ function tick(now: number): void {
     rawSum += g;
     smooth.push(g);
     contacts.push(g + roughNoise(wxw, wzw) * sw.rough);
+    wI++;
   }
+  // WHEELS is [FL, FR, RL, RR] — negative z is forward, which is why the first
+  // two are the pair that steers. An axle takes the WORSE of its two wheels:
+  // one wheel on gravel is a compromised axle, not an averagely-gripping one,
+  // and it is what makes crossing a verge diagonally feel like something.
+  axleMu[0] = Math.min(wheelMu[0], wheelMu[1]) * 0.65 + ((wheelMu[0] + wheelMu[1]) / 2) * 0.35;
+  axleMu[1] = Math.min(wheelMu[2], wheelMu[3]) * 0.65 + ((wheelMu[2] + wheelMu[3]) / 2) * 0.35;
   prevGround = rawSum / 4;
   const [cFL, cFR, cRL, cRR] = smooth;
   const ground = (cFL + cFR + cRL + cRR) / 4;
@@ -18833,7 +19109,8 @@ function tick(now: number): void {
   }
   if (now > vegAt) { vegAt = now + 900; refreshVeg(); }
   else if (now > swardAt) { swardAt = now + 700; refreshSward(); }
-  audio.update(state.speed, throttle, surfKind, groundedF, wx.rain, engRev, engGear, skid);
+  audio.update(state.speed, throttle, surfKind, groundedF, wx.rain, engRev, engGear, skid,
+    surfKind === 'water' ? 0 : surfQ, wheelSlipL);
   // The rig against the world: bodywork on a wall while moving, the hull's
   // wash through water, and the slap of arriving in it with any speed on.
   audio.scrape(scrape >= 0 && Math.abs(state.speed) > 1.5
@@ -20695,6 +20972,12 @@ const DIAL_GROUPS: DialGroup[] = [
       dial('scan', 'SCANLINES', ['OFF', 'LOW', 'HIGH'], 1, (i) => { cu.uScan.value = [0, 0.06, 0.14][i]; }),
       // Into `bloomDial`, not straight into the uniform: the weather step
       // rewrites uBloom every frame and would eat the setting.
+      // THE ONE THAT CHANGES WHAT DRIVING IS. ARCADE is the model this game
+      // shipped with, kept whole: the rack decides the corner and the ground
+      // barely matters. LOOSE and REAL are the tyre model, differing only in
+      // how much grip it is given — so the RATIOS between surfaces, which is
+      // the thing worth feeling, are the same in both.
+      dial('trac', 'TRACTION', ['ARCADE', 'LOOSE', 'REAL'], 1, (i) => { tractionMode = i; }),
       dial('bloom', 'BLOOM', ['OFF', 'LOW', 'MED', 'HIGH'], 2, (i) => {
         bloomDial = [0, 0.4, 0.75, 1.2][i];
         cu.uBloom.value = bloomDial;
