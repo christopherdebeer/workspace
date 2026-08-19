@@ -1619,6 +1619,8 @@ const compMat = new THREE.ShaderMaterial({
     span: { value: FOG_SPAN },
     sunXZ: { value: new THREE.Vector2(LIGHT_DIR.x, LIGHT_DIR.z).normalize() },
     uPix: { value: pixSize }, // the low-res grid, for dithering
+    uHazeDbg: { value: 0 },
+    uHazeWarm: { value: 0.4 },
     uHazeBase: { value: new THREE.Vector3() },
     uHazeSun: { value: new THREE.Vector3() },
     bloomTex: { value: null },
@@ -1639,18 +1641,32 @@ const compMat = new THREE.ShaderMaterial({
     uniform float uFlash; uniform vec2 uSunUv; uniform float uSunVis;
     uniform sampler2D mask; uniform mat4 invPV; uniform vec3 camPos; uniform float span;
     uniform vec2 sunXZ; uniform vec2 uPix; uniform vec3 uHazeBase; uniform vec3 uHazeSun; varying vec2 vUv;
+    // A DEBUG SWITCH ON EACH HALF OF THE HAZE, because "it only happens in the
+    // cab and it moves when I look around" says the cause is in VIEW SPACE,
+    // and the haze is the only thing here that is. 1 kills the view-angle
+    // term, 2 kills the haze outright, 3 kills the sun lobe. See __haze.
+    uniform float uHazeDbg; uniform float uHazeWarm;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
     // Ordered (Bayer) dither, computed without array indexing so it compiles
     // on GLSL ES 1.0. Recursive 2x2 → 4x4.
     float bayer2(vec2 a){ a = floor(a); return fract(a.x * 0.5 + a.y * a.y * 0.75); }
     float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
-    vec3 hazeAt(vec3 d){
+    // The warm argument is HOW MUCH OF THE SUNWARD LOBE THIS CALLER WANTS. The sky wants
+    // all of it — that warm side is the sunset, and it was built on purpose.
+    // Ground aerial perspective wants much less, and the reason is a measured
+    // one: hazeSun is roughly twice the brightness of hazeBase AND the other
+    // side of neutral in hue (a temperate biome runs base [0.20,0.24,0.20],
+    // green-grey, against sun [0.42,0.40,0.22], warm yellow). Mixed into
+    // distant ground at up to 30% that does not read as distance, it reads as
+    // a DIFFERENT MATERIAL — the far hillside brown, the near one olive.
+    vec3 hazeAt(vec3 d, float warm){
       // Sun-warming only for rays that travel HORIZONTALLY through air. A
       // near-vertical ray has a near-zero xz to normalize — noise blew up
       // into a starburst at the nadir and painted half the chart brown.
       float horiz = clamp(length(d.xz) * 1.6, 0.0, 1.0);
       vec2 dir2 = d.xz / max(length(d.xz), 1e-4);
-      float w = pow(max(dot(dir2, sunXZ), 0.0), 3.0) * horiz * horiz;
+      float w = pow(max(dot(dir2, sunXZ), 0.0), 3.0) * horiz * horiz * warm;
+      if (uHazeDbg > 2.5) w = 0.0;
       return mix(uHazeBase, uHazeSun, w); // the biome's haze, warming toward the sun
     }
     void main(){
@@ -1664,7 +1680,7 @@ const compMat = new THREE.ShaderMaterial({
         // Nothing drawn here (the sky dome writes no depth): crisp sky with a
         // soft luminous band hugging the horizon.
         float band = exp(-abs(dir.y) * 26.0);
-        col = mix(sharp, mix(soft, hazeAt(dir), 0.5), band * 0.5);
+        col = mix(sharp, mix(soft, hazeAt(dir, 1.0), 0.5), band * 0.5);
       } else {
         // Fog by the pixel's TRUE surface point: distance sets how much it
         // blurs and dims (aerial perspective); the fog-of-war mask at that
@@ -1689,13 +1705,14 @@ const compMat = new THREE.ShaderMaterial({
         // survey view straight down stays legible at any zoom, the horizon
         // keeps its haze. (Fog-of-war hiding is m-driven and unaffected.)
         float vFac = clamp(1.4 - abs(dir.y) * 1.3, 0.15, 1.0);
-        float deep = (1.0 - exp(-t / 1400.0)) * vFac;
+        if (uHazeDbg > 0.5 && uHazeDbg < 1.5) vFac = 1.0;
+        float deep = (1.0 - exp(-t / 1400.0)) * vFac * step(uHazeDbg, 1.5);
         float blurF = clamp(m * (0.1 + 0.9 * near) + deep * 0.3, 0.0, 1.0);
         // Never fully opaque: the unexplored world stays a SUGGESTION behind
         // the haze — you can make out a coastline or a ridge to steer toward.
         float dimF = min(m * mix(0.10, 0.86, near) + (1.0 - m) * deep * 0.3, 0.86);
         col = mix(sharp, soft, blurF);
-        col = mix(col, hazeAt(dir), dimF);
+        col = mix(col, hazeAt(dir, uHazeWarm), dimF);
       }
       // Never hand a negative (or NaN) to pow(): one bad fragment upstream
       // must not be able to punch a black hole through the finished frame.
@@ -15152,6 +15169,15 @@ function meshHeightAt(x: number, z: number): number | null {
   for (const m of farMeshes.values()) { farGroup.remove(m); m.geometry.dispose(); }
   farMeshes.clear(); farTiles.clear(); farCoverHit.clear();
   return { dropped: n };
+};
+/** How much of the sunward haze lobe reaches the GROUND (the sky keeps all of
+ *  it). The dial this was tuned on. */
+(window as unknown as { __hazewarm?: object }).__hazewarm = (k = 0.4): void => {
+  (compMat.uniforms.uHazeWarm as { value: number }).value = k;
+};
+/** 0 normal · 1 no view-angle term · 2 no haze at all · 3 no sun lobe. */
+(window as unknown as { __haze?: object }).__haze = (m = 0): void => {
+  (compMat.uniforms.uHazeDbg as { value: number }).value = m;
 };
 (window as unknown as { __far?: object }).__far = (): object =>
   ({ tiles: farMeshes.size, shown: farGroup.visible, radius: Math.round(viewRadius()),
