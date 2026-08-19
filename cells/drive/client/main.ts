@@ -1768,6 +1768,76 @@ const terrainMat = new THREE.MeshLambertMaterial({
   normalScale: new THREE.Vector2(0.32, 0.32), // relief, not crumpled foil
 });
 terrainFx(terrainMat, { detail: true });
+/**
+ * THE COARSE SHELL MUST NEVER BE THE THING YOU ARE LOOKING AT.
+ *
+ * The far shell exists to fill the horizon past the fine ring, and it was kept
+ * out of the fine world's way by sinking it FAR_DROP metres. Twelve metres is
+ * plenty in rolling country and nothing at all in a fjord: the shell samples
+ * the DEM every ~250m, so across a Norwegian valley a kilometre wide and eight
+ * hundred deep its triangles CHORD STRAIGHT OVER the gorge and sit hundreds of
+ * metres above the road at the bottom of it. Reported from the seat at
+ * Isterdalen — "I see the road during boot only to be obscured by a sheet" —
+ * and measured with __hide('far'): the shell was painting 42% of the frame,
+ * and under it was the road, the verges and the valley.
+ *
+ * Sinking it further cannot fix this; the error is the size of the local
+ * relief, and a drop that clears a fjord would bury a hill. So the shell is
+ * CLIPPED to the ground the fine world has not covered — a radial discard
+ * against the radius inside which every fine terrain tile has actually landed.
+ * That is the standard way two levels of detail share a frame, and it can
+ * never open a hole onto the sky, because the radius is measured from what is
+ * loaded rather than from what was asked for.
+ */
+const farRing = { uFineC: { value: new THREE.Vector2() }, uFineR: { value: 0 } };
+const farMat = new THREE.MeshLambertMaterial({
+  vertexColors: true,
+  normalMap: terrainMat.normalMap,
+  normalScale: new THREE.Vector2(0.32, 0.32),
+});
+terrainFx(farMat, { detail: true });
+{
+  const base = farMat.onBeforeCompile;
+  farMat.onBeforeCompile = function (sh, renderer) {
+    base.call(this, sh, renderer);
+    Object.assign(sh.uniforms, farRing);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nuniform vec2 uFineC; uniform float uFineR;')
+      // Early: nothing else in the fragment is worth computing for a pixel the
+      // fine world is already drawing.
+      .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
+        if (uFineR > 0.0 && distance(vWorldP.xz, uFineC) < uFineR) discard;`);
+  };
+  // A DISTINCT CACHE KEY, or three hands this shader's program to the fine
+  // terrain and every hillside in the world disappears inside the ring.
+  farMat.customProgramCacheKey = () => 'terrain-far-clip';
+}
+/** How far out the FINE terrain is complete, from the truck. Conservative by
+ *  construction: rings are counted only while every tile in them has a mesh,
+ *  and the guaranteed radius from anywhere inside the centre tile is one ring
+ *  less than the last complete one. */
+let fineRingR = 0, fineRingAt = 0;
+function stepFineRing(now: number): void {
+  farRing.uFineC.value.set(state.x, state.z);
+  if (now < fineRingAt) return;
+  fineRingAt = now + 400;
+  const [la, lo] = localToLatLon(state.x, state.z);
+  const [tx, ty] = tileAt(la, lo, TERRAIN_Z);
+  let full = 0;
+  for (let k = 0; k <= TERRAIN_RING; k++) {
+    let all = true;
+    for (let dx = -k; dx <= k && all; dx++) {
+      for (let dy = -k; dy <= k && all; dy++) {
+        if (Math.max(Math.abs(dx), Math.abs(dy)) !== k) continue;
+        if (!terrainMeshes.has(`${tx + dx}/${ty + dy}`)) all = false;
+      }
+    }
+    if (!all) break;
+    full = k + 1;
+  }
+  fineRingR = Math.max(0, full - 1) * tileMetres(TERRAIN_Z);
+  farRing.uFineR.value = fineRingR;
+}
 // ── the hill's OWN normals ─────────────────────────────────────────
 // The light was reading the terrain at a coarser resolution than the paint was.
 // Lighting normals come from computeVertexNormals() over the built mesh, which
@@ -1915,7 +1985,16 @@ function buildTerrainMesh(t: HeightTile): void {
     const v = clamp(Math.round(((ez - t.zs) / t.h) * 255), 0, 255);
     const du = t.data[v * 256 + Math.min(255, u + 1)] - t.data[v * 256 + u];
     const dv = t.data[Math.min(255, v + 1) * 256 + u] - t.data[v * 256 + u];
-    const [r, g, bb] = terrainPalette(elevAbs, Math.hypot(du, dv) / Math.max(cell, 1), sampleCover(ex, ez));
+    let [r, g, bb] = terrainPalette(elevAbs, Math.hypot(du, dv) / Math.max(cell, 1), sampleCover(ex, ez));
+    // …and then whoever actually drew this ground. The 38m raster says what is
+    // growing across a landscape; an OSM area says where a particular wood
+    // STOPS, which is the thing the raster cannot resolve. Applied after it,
+    // and only part of the way, for the same reason the raster is: the ramp is
+    // where the art direction lives.
+    const at2 = areaTintAt(ex, ez);
+    if (at2) {
+      r += (at2[0] - r) * AREA_MIX; g += (at2[1] - g) * AREA_MIX; bb += (at2[2] - bb) * AREA_MIX;
+    }
     colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -2439,15 +2518,6 @@ const waterTex = canvasTex(128, 1 / 26, 1 / 26, 103, (c, s, r) => {
     c.stroke();
   }
 });
-const greenTex = canvasTex(128, 1 / 20, 1 / 20, 104, (c, s, r) => {
-  c.fillStyle = '#1c3320'; c.fillRect(0, 0, s, s);
-  speckle(c, s, r, ['rgba(10,24,12,0.5)', 'rgba(58,96,52,0.28)'], 240, 2.6);
-  speckle(c, s, r, ['rgba(88,120,58,0.3)', 'rgba(70,104,48,0.25)'], 70, 1.2); // grass blades catching light
-  for (let i = 0; i < 8; i++) { // sparse wildflowers
-    c.fillStyle = i % 2 ? 'rgba(214,196,120,0.5)' : 'rgba(196,150,170,0.4)';
-    c.fillRect(r() * s, r() * s, 1.5, 1.5);
-  }
-});
 const roofTex = canvasTex(128, 1 / 10, 1 / 10, 105, (c, s, r) => {
   c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
   speckle(c, s, r, ['rgba(0,0,0,0.10)', 'rgba(0,0,0,0.05)'], 300);
@@ -2632,10 +2702,8 @@ const MAT = {
   boulder: new THREE.MeshLambertMaterial({ color: 0x7d7a72, flatShading: true, vertexColors: true }),
   // A RIVER IS NOT A LAKE. Same look, different shader — see `riverize`.
   river: new THREE.MeshLambertMaterial({ map: waterTex, side: DS, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }),
-  green: new THREE.MeshLambertMaterial({
-    map: greenTex, side: DS,
-    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -2,
-  }),
+  // (There was a `green` here, for landuse drapes. There are no landuse drapes
+  // any more — an area paints the terrain instead; see noteArea.)
   // The road's own thickness. FrontSide would be right if the winding were
   // reliable; it isn't (see DS above), and a one-sided apron flickers out
   // whenever the camera crosses the road.
@@ -2692,7 +2760,6 @@ const MAT = {
 // Green drapes conform to the terrain, so a wooded hill occludes like one —
 // and the tunnel shell is the carved hill itself, so it ghosts too (the car
 // inside stays visible through the screen-door).
-terrainFx(MAT.green);
 // NOT the tunnel shell: dithering holes in a dark interior against the sky
 // reads as a ragged black cut-out, not as transparency. A buried tube needs
 // no ghosting anyway — the hillside above it is already doing the work.
@@ -9800,6 +9867,111 @@ const WATER_W: Record<string, number> = { river: 14, canal: 9, stream: 4.5 };
 const AREA_TAG = (t: Record<string, string>): boolean =>
   !!t.landuse || !!t.leisure
   || ['scrub', 'wetland', 'sand', 'bare_rock', 'wood', 'grassland', 'heath'].includes(t.natural ?? '');
+// ── the ground's own coat: OSM areas PAINTED, not draped ───────────
+/**
+ * A FOREST IS A COLOUR THE GROUND IS, NOT A SHEET OVER IT.
+ *
+ * Every landuse/leisure/natural area used to become a flat draped mesh at a
+ * 1.5cm lift. Reported from the seat at Chapman's Peak and Big Sur: the sheets
+ * obscure the terrain, worst where a road is in cutting, and in general they
+ * do not agree with the ground's own fidelity. All three are the same fact.
+ * A drape is triangulated from an OSM ring — kilometre-long edges that chord
+ * over everything between their corners — and it is conformed against
+ * `groundAt`, so it follows the DEM while the terrain under it has been CARVED
+ * for the road. The sheet stays where the hillside used to be, and the cutting
+ * it is hiding is precisely the part of the world the carve exists to show.
+ * Measured in the top view at Noordhoek: the whole frame one flat green.
+ *
+ * So an area no longer draws anything. It is registered as a patch, and the
+ * terrain's own colour pass asks whose ground it is standing on. That gets the
+ * fidelity for free — the paint is on the carved mesh, so it cannot float, it
+ * cannot z-fight, it cannot hide a cutting, and it costs no draw call, no
+ * triangle, and nothing at all in the drape refresh. The chart mark stays (a
+ * map should say where the forest is) and so does the vegetation scatter,
+ * which is what actually reads as a wood from the seat.
+ *
+ * THE EDGE IS THE PRICE. Terrain vertices are ~16m apart, so a painted
+ * boundary is quantised to that, where a drape's edge was exact. Against a
+ * 148x320 render with a 14-step palette and a dither, a 16m edge is close to
+ * what the quantiser was going to do anyway — and an exact edge in the wrong
+ * place is not worth more than a soft edge in the right one.
+ */
+const AREA_CELL = 192;              // metres per registration cell — a forest is not a kerb
+const AREA_MIX = 0.5;               // how far the ramp is pulled, after the raster's own tint
+const AREA_CAP = 3000;              // patches held; past this the paint stops asking
+interface AreaPatch {
+  pts: Array<[number, number]>; tint: Rgb;
+  x0: number; z0: number; x1: number; z1: number;
+}
+const areaGrid = new Map<string, AreaPatch[]>();
+let areaPatches = 0;
+/**
+ * What an area says the ground IS. Keyed off the same tags the scatter reads,
+ * because the two are answering the same question — and deliberately SILENT
+ * for the designations. `leisure=nature_reserve` and `landuse=military` are
+ * lines on a map drawn by a legislature: they run for kilometres over forest,
+ * rock, beach and water alike, and painting them one colour is how a coastal
+ * reserve came to be a single flat green at Big Sur. A boundary is not a
+ * cover, and the ground underneath already knows what it is.
+ */
+const AREA_TINT: Record<string, Rgb> = {
+  forest: [0.15, 0.25, 0.14], wood: [0.15, 0.25, 0.14],
+  scrub: [0.30, 0.31, 0.18], heath: [0.31, 0.30, 0.19],
+  grass: [0.34, 0.40, 0.20], meadow: [0.35, 0.41, 0.21], grassland: [0.34, 0.40, 0.20],
+  village_green: [0.34, 0.41, 0.21], park: [0.31, 0.39, 0.21], garden: [0.31, 0.39, 0.21],
+  recreation_ground: [0.33, 0.40, 0.22], pitch: [0.33, 0.42, 0.23], golf_course: [0.33, 0.42, 0.22],
+  common: [0.34, 0.40, 0.20], farmland: [0.45, 0.40, 0.18], farm: [0.45, 0.40, 0.18],
+  allotments: [0.42, 0.39, 0.20], orchard: [0.32, 0.36, 0.19], vineyard: [0.33, 0.35, 0.19],
+  wetland: [0.24, 0.30, 0.22], sand: [0.62, 0.56, 0.40], beach: [0.62, 0.56, 0.40],
+  bare_rock: [0.42, 0.40, 0.36], quarry: [0.44, 0.41, 0.36], brownfield: [0.40, 0.38, 0.33],
+  cemetery: [0.30, 0.34, 0.24], residential: [0.36, 0.35, 0.33], industrial: [0.37, 0.36, 0.34],
+  commercial: [0.37, 0.36, 0.34], retail: [0.37, 0.36, 0.34], railway: [0.35, 0.34, 0.32],
+  greenfield: [0.38, 0.40, 0.24], construction: [0.42, 0.40, 0.35],
+};
+/** The tint an area's tags ask for, or null where the tags are a designation
+ *  rather than a cover. */
+function areaTintFor(t: Record<string, string>): Rgb | null {
+  return AREA_TINT[t.landuse ?? ''] ?? AREA_TINT[t.natural ?? ''] ?? AREA_TINT[t.leisure ?? ''] ?? null;
+}
+/** Register an area's ground. No mesh, no heights needed, no build order to
+ *  get wrong: a tile built before this arrives is simply marked dirty and
+ *  repaints, and one built after reads the patch on its way past. */
+function noteArea(pts: Array<[number, number]>, tags: Record<string, string>): void {
+  mapPoly(pts, 'rgba(34,54,32,0.9)');          // the chart still says where it is
+  const tint = areaTintFor(tags);
+  if (!tint || pts.length < 3 || areaPatches >= AREA_CAP) return;
+  let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+  for (const [x, z] of pts) {
+    if (x < x0) x0 = x; if (x > x1) x1 = x;
+    if (z < z0) z0 = z; if (z > z1) z1 = z;
+  }
+  const patch: AreaPatch = { pts, tint, x0, z0, x1, z1 };
+  areaPatches++;
+  for (let cx = Math.floor(x0 / AREA_CELL); cx <= Math.floor(x1 / AREA_CELL); cx++) {
+    for (let cz = Math.floor(z0 / AREA_CELL); cz <= Math.floor(z1 / AREA_CELL); cz++) {
+      const k = `${cx},${cz}`;
+      let arr = areaGrid.get(k);
+      if (!arr) areaGrid.set(k, (arr = []));
+      arr.push(patch);
+    }
+  }
+  dirtyTerrainAround(pts);
+}
+/**
+ * Whose ground is this? The LAST patch to claim the point wins, which is the
+ * arrival order — a pitch inside a park, a wood inside a farm, and the finer
+ * thing is nearly always the one that streamed later because it is smaller.
+ */
+function areaTintAt(x: number, z: number): Rgb | null {
+  const arr = areaGrid.get(`${Math.floor(x / AREA_CELL)},${Math.floor(z / AREA_CELL)}`);
+  if (!arr) return null;
+  let hit: Rgb | null = null;
+  for (const p of arr) {
+    if (x < p.x0 || x > p.x1 || z < p.z0 || z > p.z1) continue;   // the box, before the ring
+    if (pointInPoly(x, z, p.pts)) hit = p.tint;
+  }
+  return hit;
+}
 /** Every call to renderWays, in order, while capture is armed — the tests
  *  replay this sequence, so what they exercise is the real arrival order and
  *  not a tidy reconstruction of it. Off unless a probe turns it on. */
@@ -9975,7 +10147,8 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
     } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
       polygon(pts, MAT.water, 0.025, 0, 'water');
     } else if (AREA_TAG(tags)) {
-      polygon(pts, MAT.green, 0.015);
+      // NOT A MESH — see noteArea. The ground wears it; the scatter stands on it.
+      noteArea(pts, tags);
       scatterVeg(pts, el.id, tags);
     }
     // Anything else — a coastline, a cliff edge, an unrecognised line — is
@@ -10856,7 +11029,7 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, terrainMat);
+  const mesh = new THREE.Mesh(geo, farMat);
   mesh.position.set(xs + w / 2, 0, zs + h / 2);
   farMeshes.set(key, mesh);
   farGroup.add(mesh);
@@ -13128,6 +13301,79 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
  * my wheels and nothing on the screen" and "the pass has not reached here
  * yet" are different answers and this is what tells them apart.
  */
+/**
+ * SOMETHING IS COVERING THE WORLD — WHICH LAYER IS IT?
+ *
+ * "I see the road during boot and then a sheet covers it" is a complaint about
+ * draw order and geometry, and it has half a dozen suspects that all look
+ * identical from the seat: a water drape levelled wrong, a synthesised body
+ * that flooded a valley, the coarse far shell arriving over the fine world,
+ * the sea plane at a bad datum, the sward, the terrain itself. Guessing costs
+ * a deploy per guess. Turning one off costs a call.
+ *
+ *   __hide('synth')      hide it        __hide('synth', false)  bring it back
+ *   __hide()             what is hidden right now
+ *
+ * STICKY, and applied immediately before the scene pass: every camera branch
+ * rewrites `visible` on the far and overview groups each frame, so a bare
+ * assignment from a probe survives about sixteen milliseconds.
+ */
+const hideSet = new Set<string>();
+function applyHidden(): void {
+  if (!hideSet.size) return;
+  if (hideSet.has('drape')) for (const d of drapes) d.visible = false;
+  if (hideSet.has('synth')) for (const b of synthBodies) for (const m of b.meshes) m.visible = false;
+  if (hideSet.has('far')) farGroup.visible = false;
+  if (hideSet.has('ov')) ovGroup.visible = false;
+  if (hideSet.has('sea')) sea.visible = false;
+  if (hideSet.has('veg')) {
+    for (const k of Object.keys(vegMeshes) as VegKind[]) vegMeshes[k].visible = false;
+    trunks.visible = false;
+  }
+  if (hideSet.has('terrain')) for (const m of terrainMeshes.values()) m.visible = false;
+}
+(window as unknown as { __hide?: object }).__hide = (layer?: string, off = true): object => {
+  if (layer !== undefined) {
+    if (off) hideSet.add(layer); else hideSet.delete(layer);
+    // Turning one back ON has to undo the assignment, not merely stop making
+    // it — nothing else in the frame will set these back to true.
+    if (!off) {
+      if (layer === 'drape') for (const d of drapes) d.visible = drapeVisible(d, camMode === 'top' ? zoomCur : 1);
+      if (layer === 'synth') for (const b of synthBodies) for (const m of b.meshes) m.visible = true;
+      if (layer === 'sea') sea.visible = true;
+      if (layer === 'veg') {
+        for (const k of Object.keys(vegMeshes) as VegKind[]) vegMeshes[k].visible = true;
+        trunks.visible = true;
+      }
+      if (layer === 'terrain') for (const m of terrainMeshes.values()) m.visible = true;
+    }
+  }
+  return { hidden: [...hideSet],
+    layers: ['drape', 'synth', 'far', 'ov', 'sea', 'veg', 'terrain'],
+    counts: { drapes: drapes.length, synth: synthBodies.length, terrain: terrainMeshes.size } };
+};
+/**
+ * WHAT THE GROUND IS WEARING, and who said so — the paint that replaced the
+ * landuse drapes. `under` is the answer at a point: the tint the terrain's own
+ * colour pass would apply there, and nothing if no area claims it.
+ */
+(window as unknown as { __areas?: object }).__areas = (x?: number, z?: number): object => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const cell = areaGrid.get(`${Math.floor(px / AREA_CELL)},${Math.floor(pz / AREA_CELL)}`) ?? [];
+  return {
+    patches: areaPatches, cells: areaGrid.size, cap: AREA_CAP, mix: AREA_MIX,
+    here: cell.length,
+    under: areaTintAt(px, pz)?.map((v) => +v.toFixed(3)) ?? null,
+    // Drapes are now WATER and shore ribbons only — a landuse sheet in this
+    // list is the regression this probe exists to catch.
+    drapes: drapes.length,
+    drapeKinds: drapes.reduce((acc: Record<string, number>, m) => {
+      const k = String(m.userData.drape ?? '?');
+      acc[k] = (acc[k] ?? 0) + 1;
+      return acc;
+    }, {}),
+  };
+};
 (window as unknown as { __synth?: object }).__synth = (): object => ({
   bodies: synthBodies.length, made: synthMade, dropped: synthDropped,
   seen: synthSeen.size, cursor: synthCursor, cap: SYNTH_CAP,
@@ -13937,6 +14183,40 @@ function truckSpec(): Record<string, number> {
  *  stops being a guess. Reports the max, the fraction over the bloom cut, and
  *  where the bulk of the image sits — which is what says how much headroom a
  *  paint colour actually has before it starts to glow. */
+/**
+ * THE FRAME, SMALL ENOUGH TO COMPARE. One readback, downsampled to a grid of
+ * 0..255 luminance — which is all an A/B needs to answer "how much of the
+ * picture did that layer account for?" without a PNG decoder anywhere in this
+ * repo. Written for the far shell: turning it off changed 42% of the frame in
+ * a Norwegian valley, and that number is the whole bug report.
+ */
+(window as unknown as { __scenegrab?: object }).__scenegrab = (step = 4): object => {
+  const w = rtScene.width, h = rtScene.height;
+  const half = rtType === THREE.HalfFloatType;
+  const buf: ArrayBufferView = half ? new Uint16Array(w * h * 4) : new Uint8Array(w * h * 4);
+  renderer.readRenderTargetPixels(rtScene, 0, 0, w, h, buf);
+  const arr = buf as unknown as { [k: number]: number };
+  const h2f = (u: number): number => {
+    const sg = (u & 0x8000) >> 15, e = (u & 0x7c00) >> 10, f = u & 0x03ff;
+    if (e === 0) return (sg ? -1 : 1) * 2 ** -14 * (f / 1024);
+    if (e === 31) return f ? 1 : 0;
+    return (sg ? -1 : 1) * 2 ** (e - 15) * (1 + f / 1024);
+  };
+  const gw = Math.floor(w / step), gh = Math.floor(h / step);
+  const out = new Array<number>(gw * gh);
+  for (let gy = 0; gy < gh; gy++) {
+    for (let gx = 0; gx < gw; gx++) {
+      const i = (gy * step) * w + gx * step;
+      let lum = 0;
+      for (let c = 0; c < 3; c++) {
+        const v = half ? h2f(arr[i * 4 + c]) : arr[i * 4 + c] / 255;
+        lum += (c === 1 ? 0.6 : 0.2) * (Number.isFinite(v) ? clamp(v, 0, 1) : 0);
+      }
+      out[gy * gw + gx] = Math.round(lum * 255);
+    }
+  }
+  return { w: gw, h: gh, step, px: out };
+};
 (window as unknown as { __scenehist?: object }).__scenehist = (): object => {
   const w = rtScene.width, h = rtScene.height;
   const half = rtType === THREE.HalfFloatType;
@@ -14345,6 +14625,10 @@ function meshHeightAt(x: number, z: number): number | null {
         : { n: 0, min: 0, max: 0 };
     })(),
     tilt: +(Math.hypot(viewX(), viewZ()) / EARTH_R).toFixed(5),
+    // The hole the shell is clipped to, and the tile ring it was measured
+    // from. A seam that is POSITIVE inside this radius is the shell standing
+    // over the fine world — the fault the clip exists to make impossible.
+    fineR: Math.round(fineRingR), tileM: Math.round(tileMetres(TERRAIN_Z)),
     fromOrigin: Math.round(Math.hypot(viewX(), viewZ())) });
 /** The grain, as one dial across every material that wears it — an A/B needs
  *  to turn the thing OFF, and rebuilding to do it loses the world underneath.
@@ -18652,6 +18936,11 @@ function tick(now: number): void {
       writeUrl(la, lo);
     }
   }
+  // The coarse shell's hole, before anything draws: it is a fact about which
+  // fine tiles have landed, and it has to be true in EVERY camera mode — the
+  // fault it fixes was reported from the cab.
+  stepFineRing(now);
+  applyHidden();
   // scene → target, two separable blur rounds at half res, composite to canvas
   renderer.setRenderTarget(rtScene);
   renderer.render(scene, camera);
