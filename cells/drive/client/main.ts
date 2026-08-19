@@ -12631,8 +12631,19 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
       // and let the puff grow modestly instead of doubling.
       // Water droplets stay small — a wading truck displaces water, it does
       // not throw a plume.
-      float sz = mix(4.6 + aSeed * 5.2, 3.5 + aSeed * 4.5, aKind);
-      gl_PointSize = min(sz * (1.5 - aLife * 0.5) * (175.0 / max(-mv.z, 1.0)), 34.0);
+      // A PUFF IS BORN AT THE TYRE AND DIES IN THE TRAIL. It used to be born
+      // at full size and grow by half — so the trail was a row of same-sized
+      // blobs and the moment of being thrown up had no shape to it. Dust
+      // BILLOWS: it leaves the contact patch as a tight dense knot and expands
+      // six-fold as it dissipates, which is the whole silhouette of a plume.
+      //
+      // A DROPLET IS NOT A PUFF, and this is where the two part company. Water
+      // does not expand — a droplet stays a droplet — so a splash disperses by
+      // its particles flying APART, not by each one billowing. It gets a much
+      // flatter curve and does its spreading through velocity.
+      float grow = mix(0.30 + 1.55 * (1.0 - aLife), 0.55 + 0.60 * (1.0 - aLife), aKind);
+      float sz = mix(5.4 + aSeed * 6.0, 3.8 + aSeed * 4.6, aKind);
+      gl_PointSize = min(sz * grow * (175.0 / max(-mv.z, 1.0)), 34.0);
       gl_Position = projectionMatrix * mv;
     }`,
   fragmentShader: `
@@ -12647,7 +12658,14 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
       // Dust thins on the SQUARE of its life: the trailing end of the plume is
       // the part hanging in front of the camera, so it has to be nearly gone by
       // the time the truck has driven out from under it.
-      float a = mix(soft * vLife * vLife * 0.2, smoothstep(0.25, 0.12, r) * vLife * 0.5, vKind);
+      // INK IS CONSERVED AS IT SPREADS. A puff a sixth of its final width has
+      // its material packed into a thirty-sixth of the area, so it reads DENSE
+      // at the wheel and thins as it opens — which is what dissipating looks
+      // like. The old life-squared curve was tuned to keep a full-size puff off
+      // the chase camera; the size curve does that job now, so the fade can be
+      // gentler and the newborn knot can actually be seen.
+      float a = mix(soft * pow(vLife, 1.35) * 0.34,
+                    smoothstep(0.25, 0.12, r) * pow(vLife, 0.85) * 0.55, vKind);
       gl_FragColor = vec4(col, a);
     }`,
 }));
@@ -12656,7 +12674,12 @@ dustPoints.renderOrder = 30;
 scene.add(dustPoints);
 function emitDust(x: number, y: number, z: number, vx: number, vz: number, water = false): void {
   const i = dustHead = (dustHead + 1) % DUST_N;
-  const spread = water ? 1.6 : 0.8;
+  // AT THE CONTACT PATCH, not around it. Being born scattered across a metre
+  // and a half of ground is why the trail started wide: the dispersal has to be
+  // something the particle DOES over its life, or there is nothing to watch.
+  // What spreads them now is the velocity jitter below and, for water, the
+  // sideways throw of the wake.
+  const spread = water ? 0.28 : 0.2;
   dustPos[i * 3] = x + (Math.random() - 0.5) * spread;
   dustPos[i * 3 + 1] = y + (water ? 0.05 : 0.15);
   dustPos[i * 3 + 2] = z + (Math.random() - 0.5) * spread;
