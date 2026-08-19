@@ -18270,10 +18270,23 @@ const SUSP = { k: 55, d: 8.5, ka: 40, da: 12.6, travel: 0.26, droop: 0.34 };
  */
 const TRACTION_MODES = ['ARCADE', 'LOOSE', 'REAL'] as const;
 /** 0 arcade (the shipped model), 1 the tyre model with a forgiving budget,
- *  2 the tyre model at its own numbers. */
-let tractionMode = 1;
+ *  2 the tyre model at its own numbers. ARCADE by default — see the dial. */
+let tractionMode = 0;
 /** Grip multiplier per mode — LOOSE is the same physics with more of it. */
 const TRACTION_GRIP = [1, 1.3, 1];
+/**
+ * A SEPARATE ALLOWANCE FOR DRIVE FORCE, and LOOSE is where the honesty is
+ * deliberately spent.
+ *
+ * Capping acceleration at the friction circle is correct and it is also most
+ * of what makes the tyre model feel slow away from a corner: the engine asks
+ * for 1.63g and open ground can only put down 0.55, so every exit from every
+ * bend is a wait. REAL keeps that. LOOSE lets the drive force overrun the
+ * circle — a traction-control fudge, and named as one — so it launches like
+ * the arcade truck while it still CORNERS on what the ground can hold, which
+ * is the half of the model worth having in a survey game.
+ */
+const TRACTION_LONG = [1, 1.55, 1];
 /** Half the wheelbase: the model's CoG sits between the axles. */
 const AXLE_A = CAR.wheelbase / 2;
 /** Yaw inertia over m·a². 1 is a dumbbell with all its mass on the axles; a
@@ -18342,9 +18355,14 @@ function stepTraction(dt: number, surf: SurfParams, grip: number, thrust: number
     // braking in a straight line, exactly as it is on a road.
     const longF = Math.sqrt(Math.max(0, capF * capF - fyF * fyF));
     const longR = Math.sqrt(Math.max(0, capR * capR - fyR * fyR));
-    const longCap = longF + longR;
+    // The circle is what the tyre CAN hold; the allowance is what this mode
+    // lets the driveline ask of it. They are the same number in REAL.
+    const longCap = (longF + longR) * TRACTION_LONG[tractionMode];
     const fx = clamp(thrust, -longCap, longCap);
-    wheelSlipL = clamp((Math.abs(thrust) - longCap) / Math.max(longCap, 0.6), 0, 1);
+    // Wheelspin is measured against the HONEST circle, so the fudge buys pace
+    // without also making the tyres sound like they have found grip they
+    // do not have.
+    wheelSlipL = clamp((Math.abs(thrust) - (longF + longR)) / Math.max(longF + longR, 0.6), 0, 1);
     // Body-frame accelerations. The v·r and u·r terms are the frame turning
     // under the velocity — leave them out and a steady corner slowly winds
     // itself up into a spiral.
@@ -18358,7 +18376,16 @@ function stepTraction(dt: number, surf: SurfParams, grip: number, thrust: number
     // which goes as v² — and the aero coefficient is DERIVED from the
     // surface's own top speed, so every equilibrium in the game lands where it
     // always did while the middle of the range stops behaving like treacle.
-    const aero = Math.max(0, CAR.accel - surf.roll) / (surf.max * surf.max);
+    // DERIVED FROM WHAT THE TYRES CAN DELIVER, not from what the engine asks
+    // for. The first cut solved the aero coefficient so that CAR.accel — 1.63g
+    // of engine — balanced it at the surface's top speed. But this model caps
+    // drive force at the friction circle, so on open ground the truck can only
+    // ever put 0.55g down: the balance point moved to where 0.55g meets the
+    // drag, and the top speed collapsed from 115km/h to 62. Reported from the
+    // seat as the new models being painfully slow, and most of that was this
+    // rather than the cornering.
+    const pull = Math.min(CAR.accel, (muF * nF + muR * nR) * GRAV * TRACTION_LONG[tractionMode]);
+    const aero = Math.max(0.0005, pull - surf.roll) / (surf.max * surf.max);
     const resist = (surf.roll * (0.4 + 0.6 * wetF) + aero * u * u) * (0.1 + 0.9 * grip);
     const ax = fx + v * yawR - GRAV * Math.sin(gradeP) * grip - Math.sign(u) * resist;
     const ay = fyF + fyR - u * yawR - GRAV * Math.sin(gradeR) * grip;
@@ -20977,7 +21004,12 @@ const DIAL_GROUPS: DialGroup[] = [
       // barely matters. LOOSE and REAL are the tyre model, differing only in
       // how much grip it is given — so the RATIOS between surfaces, which is
       // the thing worth feeling, are the same in both.
-      dial('trac', 'TRACTION', ['ARCADE', 'LOOSE', 'REAL'], 1, (i) => { tractionMode = i; }),
+      // DEFAULTS TO ARCADE, on the owner's verdict after driving all three:
+      // the tyre model is slower over a real leg — some of that was a bug in
+      // the drag derivation above, and the rest is a bend you can no longer
+      // take at 110 — and a survey campaign is a lot of legs. The truthful
+      // model is a choice, not the house style.
+      dial('trac', 'TRACTION', ['ARCADE', 'LOOSE', 'REAL'], 0, (i) => { tractionMode = i; }),
       dial('bloom', 'BLOOM', ['OFF', 'LOW', 'MED', 'HIGH'], 2, (i) => {
         bloomDial = [0, 0.4, 0.75, 1.2][i];
         cu.uBloom.value = bloomDial;

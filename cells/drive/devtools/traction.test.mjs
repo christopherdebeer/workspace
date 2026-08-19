@@ -81,21 +81,30 @@ async function bend(mode, lock) {
     window.__drive.speed = 70 / 3.6; window.__drive.heading = 0;
     window.__hold(o.lock, 0, 0);
   }, { mode, lock, at: START });
-  // THE STEADY STATE, not the peak. Turn-in is a transient — the yaw rate is
-  // still building while the entry speed is still there — and |v·r| during it
-  // overstates the corner for both models. What is being compared is what the
-  // truck SETTLES at, which is the number a driver holds through a bend.
-  let peak = 0, last = null;
-  for (let i = 0; i < 6; i++) {
+  // THE PATH THE TRUCK ACTUALLY TRACED, from three sampled positions — not
+  // |v·r|, which is the YAW radius and overstates the corner whenever the body
+  // is slipping, because the velocity is then not perpendicular to it. Fitting
+  // a circle through three points is the measurement a driver makes with a
+  // stopwatch and a tape, and no part of the model can flatter it.
+  const path = [];
+  let last = null;
+  for (let i = 0; i < 7; i++) {
     await d.simWait(0.12);
-    const p = await d.page.evaluate(() => window.__phys());
-    const g = (Math.abs(Math.hypot(p.v, p.slideV) * p.yawRate)) / 9.81;
-    if (g > peak) peak = g;
-    last = { ...p, g };
+    const p = await d.page.evaluate(() => ({ ...window.__phys(), x: window.__drive.x, z: window.__drive.z }));
+    path.push([p.x, p.z]);
+    last = p;
   }
   await d.page.evaluate(() => window.__hold(null));
   await d.simWait(0.4);
-  return { peak, ...last };
+  // The last three, so the turn-in transient is behind us.
+  const [a2, b2, c2] = path.slice(-3);
+  const d01 = Math.hypot(b2[0] - a2[0], b2[1] - a2[1]);
+  const d12 = Math.hypot(c2[0] - b2[0], c2[1] - b2[1]);
+  const d02 = Math.hypot(c2[0] - a2[0], c2[1] - a2[1]);
+  const cross = Math.abs((b2[0] - a2[0]) * (c2[1] - a2[1]) - (b2[1] - a2[1]) * (c2[0] - a2[0]));
+  const R = cross > 1e-6 ? (d01 * d12 * d02) / (2 * cross) : Infinity;
+  const v = Math.hypot(last.v, last.slideV);
+  return { ...last, R, g: R > 0 && Number.isFinite(R) ? (v * v) / (R * 9.81) : 0 };
 }
 
 const realLow = await bend(2, 0.3);
@@ -105,8 +114,9 @@ check('REAL: the truck refuses a corner it has no grip for',
 check('REAL: tripling the lock does not multiply the corner',
   realHigh.g < realLow.g * 1.6, { low: +realLow.g.toFixed(2), high: +realHigh.g.toFixed(2) });
 check('REAL: the corner stays inside what the ground can hold',
-  realHigh.g < realHigh.muF * 1.3, { held: +realHigh.g.toFixed(2), mu: realHigh.muF });
-console.log(`        REAL  lock 0.3 -> ${realLow.g.toFixed(2)}g · lock 1.0 -> ${realHigh.g.toFixed(2)}g (rack ${realHigh.rackYaw}, got ${realHigh.yawRate})`);
+  realHigh.g < realHigh.muF * 1.15,
+  { held: +realHigh.g.toFixed(2), mu: realHigh.muF, radius: Math.round(realHigh.R) });
+console.log(`        REAL  lock 0.3 -> ${realLow.g.toFixed(2)}g r=${Math.round(realLow.R)}m · lock 1.0 -> ${realHigh.g.toFixed(2)}g r=${Math.round(realHigh.R)}m (rack ${realHigh.rackYaw}, got ${realHigh.yawRate})`);
 
 // WHO DECIDES THE CORNER, as one ratio: what the truck actually yawed over
 // what the steering rack asked for. Surface-independent, speed-independent,
