@@ -1913,7 +1913,16 @@ terrainFx(terrainMat, { detail: true });
  * never open a hole onto the sky, because the radius is measured from what is
  * loaded rather than from what was asked for.
  */
-const farRing = { uFineC: { value: new THREE.Vector2() }, uFineR: { value: 0 } };
+const farRing = {
+  uFineC: { value: new THREE.Vector2() }, uFineR: { value: 0 },
+  // THE LOADED BLOCK, as x0/z0/x1/z1. The circle inscribed in it left an
+  // annulus at the corners where BOTH layers drew — and in that annulus the
+  // coarse shell, which chords across every valley it spans, wins the depth
+  // test wherever it happens to stand above the fine ground. That is the
+  // wavering: which of the two paints a given pixel changes as the camera
+  // moves. Fine terrain is a grid of squares, so the clip is a rectangle.
+  uFineBox: { value: new THREE.Vector4(0, 0, 0, 0) },
+};
 const farMat = new THREE.MeshLambertMaterial({
   vertexColors: true,
   normalMap: terrainMat.normalMap,
@@ -1926,11 +1935,13 @@ terrainFx(farMat, { detail: true });
     base.call(this, sh, renderer);
     Object.assign(sh.uniforms, farRing);
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nuniform vec2 uFineC; uniform float uFineR;')
+      .replace('#include <common>', '#include <common>\nuniform vec2 uFineC; uniform float uFineR;\nuniform vec4 uFineBox;')
       // Early: nothing else in the fragment is worth computing for a pixel the
       // fine world is already drawing.
       .replace('#include <clipping_planes_fragment>', `#include <clipping_planes_fragment>
-        if (uFineR > 0.0 && distance(vWorldP.xz, uFineC) < uFineR) discard;`);
+        if (uFineBox.z > uFineBox.x
+            && vWorldP.x > uFineBox.x && vWorldP.x < uFineBox.z
+            && vWorldP.z > uFineBox.y && vWorldP.z < uFineBox.w) discard;`);
   };
   // A DISTINCT CACHE KEY, or three hands this shader's program to the fine
   // terrain and every hillside in the world disappears inside the ring.
@@ -1961,6 +1972,23 @@ function stepFineRing(now: number): void {
   }
   fineRingR = Math.max(0, full - 1) * tileMetres(TERRAIN_Z);
   farRing.uFineR.value = fineRingR;
+  // …and the block those complete rings actually occupy, read off the tiles
+  // themselves rather than derived from a tile size, so it can never claim
+  // ground the fine world has not built.
+  const r0 = Math.max(0, full - 1);
+  let bx0 = Infinity, bz0 = Infinity, bx1 = -Infinity, bz1 = -Infinity;
+  for (let dx = -r0; dx <= r0; dx++) {
+    for (let dy = -r0; dy <= r0; dy++) {
+      const ht = heightTiles.get(`${tx + dx}/${ty + dy}`);
+      if (!ht) continue;
+      if (ht.xs < bx0) bx0 = ht.xs;
+      if (ht.zs < bz0) bz0 = ht.zs;
+      if (ht.xs + ht.w > bx1) bx1 = ht.xs + ht.w;
+      if (ht.zs + ht.h > bz1) bz1 = ht.zs + ht.h;
+    }
+  }
+  if (Number.isFinite(bx0)) farRing.uFineBox.value.set(bx0, bz0, bx1, bz1);
+  else farRing.uFineBox.value.set(0, 0, 0, 0);
 }
 // ── the hill's OWN normals ─────────────────────────────────────────
 // The light was reading the terrain at a coarser resolution than the paint was.
@@ -11226,7 +11254,16 @@ async function loadFarTile(x: number, y: number): Promise<void> {
       - curveDrop(xs + w / 2 + pos.getX(i), zs + h / 2 + pos.getZ(i)));
     const du = data[v * 256 + Math.min(255, u + 1)] - raw;
     const dv = data[Math.min(255, v + 1) * 256 + u] - raw;
-    const [r, g, bb] = terrainPalette(raw, Math.hypot(du, dv) / Math.max(cell, 1));
+    // THE SAME PALETTE AS THE FINE WORLD. This called terrainPalette with no
+    // COVER argument, so the shell wore the biome ramp alone while the fine
+    // terrain wore the ramp pulled 55% toward the land-cover tint — two
+    // different colours for one hillside, and where the two layers overlap it
+    // reads as a pale insipid band lying across a deep one. Reported from an
+    // escarpment at Senqu, where the shell stands up to 38m ABOVE the fine
+    // ground and paints over it. Cover is null out past the loaded raster,
+    // which is exactly the old behaviour, so the far horizon is unchanged.
+    const [r, g, bb] = terrainPalette(raw, Math.hypot(du, dv) / Math.max(cell, 1),
+      sampleCover(xs + w / 2 + pos.getX(i), zs + h / 2 + pos.getZ(i)));
     colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
@@ -14947,6 +14984,8 @@ function meshHeightAt(x: number, z: number): number | null {
     // from. A seam that is POSITIVE inside this radius is the shell standing
     // over the fine world — the fault the clip exists to make impossible.
     fineR: Math.round(fineRingR), tileM: Math.round(tileMetres(TERRAIN_Z)),
+    fineBox: [farRing.uFineBox.value.x, farRing.uFineBox.value.y,
+      farRing.uFineBox.value.z, farRing.uFineBox.value.w].map(Math.round),
     fromOrigin: Math.round(Math.hypot(viewX(), viewZ())) });
 /** The grain, as one dial across every material that wears it — an A/B needs
  *  to turn the thing OFF, and rebuilding to do it loses the world underneath.
