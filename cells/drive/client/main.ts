@@ -1929,9 +1929,10 @@ const farMat = new THREE.MeshLambertMaterial({
   normalScale: new THREE.Vector2(0.32, 0.32),
 });
 terrainFx(farMat, { detail: true });
-{
-  const base = farMat.onBeforeCompile;
-  farMat.onBeforeCompile = function (sh, renderer) {
+/** The fine-world clip, injected into whichever far material is being built. */
+function farClip(mat: THREE.MeshLambertMaterial): void {
+  const base = mat.onBeforeCompile;
+  mat.onBeforeCompile = function (sh, renderer) {
     base.call(this, sh, renderer);
     Object.assign(sh.uniforms, farRing);
     sh.fragmentShader = sh.fragmentShader
@@ -1945,7 +1946,60 @@ terrainFx(farMat, { detail: true });
   };
   // A DISTINCT CACHE KEY, or three hands this shader's program to the fine
   // terrain and every hillside in the world disappears inside the ring.
-  farMat.customProgramCacheKey = () => 'terrain-far-clip';
+  mat.customProgramCacheKey = () => 'terrain-far-clip';
+}
+farClip(farMat);
+/**
+ * THE FAR/FINE DIFFERENCE SHOULD BE MESH DETAIL AND NOTHING ELSE.
+ *
+ * It was three things. Resolution, which is the honest one. The palette, which
+ * was fixed by handing the shell the cover raster its neighbour reads. And
+ * LIGHTING, which is this — and which survived both of those, because albedo
+ * is only half of what a surface looks like.
+ *
+ * The fine terrain is lit by an OBJECT-SPACE normal map built from its own
+ * heightfield: the real DEM gradient, at the raster's resolution, replacing the
+ * geometry normal entirely — so a hillside is shaded by its true slope no
+ * matter how coarse the mesh under it is. The far shell was lit by tiled
+ * procedural value noise repeating every ~34m in TANGENT space, over vertex
+ * normals averaged across 250m triangles. Same albedo, two different lighting
+ * models, and a band where they meet — reported from the escarpment at Senqu
+ * as one deep tone against one insipid one, still there after the palette was
+ * aligned, which is exactly what an albedo-only fix would leave behind.
+ *
+ * The shell gets the same treatment now, from its own heightfield. The mesh is
+ * still coarse — the SILHOUETTE is still a 250m ladder, and that is the level
+ * of detail doing its job — but the shading across it is the DEM's, so the two
+ * layers are lit by one law and differ only in outline.
+ */
+const farMats = new Map<string, THREE.MeshLambertMaterial>();
+function farMatFor(data: Float32Array, w: number, key: string): THREE.MeshLambertMaterial {
+  const old = farMats.get(key);
+  if (old) { old.normalMap?.dispose(); old.dispose(); }
+  // A quarter-megabyte of texture per tile, and the ring is 25 of them; a level
+  // swap orphans a whole ring at once. Same eviction the fine tiles keep.
+  if (farMats.size > 30) {
+    for (const k of [...farMats.keys()].slice(0, 10)) {
+      if (k === key) continue;
+      const m2 = farMats.get(k) as THREE.MeshLambertMaterial;
+      const mesh = farMeshes.get(k);
+      if (mesh && mesh.material === m2) mesh.material = farMat;
+      // A retired shell is still ON SCREEN — it is what holds the frame while
+      // the new level streams — so its material is not ours to free yet.
+      if (farRetired.some((r) => r.material === m2)) continue;
+      m2.normalMap?.dispose(); m2.dispose();
+      farMats.delete(k);
+    }
+  }
+  const m = new THREE.MeshLambertMaterial({
+    vertexColors: true,
+    normalMap: terrainNormalTex({ w, data }),
+  });
+  m.normalMapType = THREE.ObjectSpaceNormalMap;
+  terrainFx(m, { detail: true });
+  farClip(m);
+  farMats.set(key, m);
+  return m;
 }
 /** How far out the FINE terrain is complete, from the truck. Conservative by
  *  construction: rings are counted only while every tile in them has a mesh,
@@ -1989,7 +2043,18 @@ function stepFineRing(now: number): void {
   }
   if (Number.isFinite(bx0)) farRing.uFineBox.value.set(bx0, bz0, bx1, bz1);
   else farRing.uFineBox.value.set(0, 0, 0, 0);
+  if (farClipOff) { farRing.uFineR.value = 0; farRing.uFineBox.value.set(0, 0, 0, 0); }
 }
+// THE ONLY WAY TO ASK THE TWO LAYERS TO PAINT THE SAME HILLSIDE. They never
+// overlap in play — that is the whole point of the clip — so "do far and fine
+// agree?" cannot be answered by looking at a normal frame, where the honest
+// difference in distance is mixed into every comparison across the seam. Lift
+// the clip and hide the fine terrain and the shell stands exactly where the
+// fine world stood, at the same range, under the same sun. Then it is a
+// straight subtraction. See __faralign.
+let farClipOff = false;
+(window as unknown as { __farclip?: (off?: boolean) => void }).__farclip =
+  (off = true): void => { farClipOff = off; fineRingAt = 0; };
 // ── the hill's OWN normals ─────────────────────────────────────────
 // The light was reading the terrain at a coarser resolution than the paint was.
 // Lighting normals come from computeVertexNormals() over the built mesh, which
@@ -2018,7 +2083,7 @@ const NRM_SCALE = Number(new URLSearchParams(location.search).get('nscale') ?? 0
 // about X, so uv.y grows toward world -Z. A DataTexture does not flip, so v=0
 // is buffer row 0 — which therefore sits at MAX z, while the tile's own data
 // row 0 sits at MIN z. The rows are stored reversed for exactly that reason.
-function terrainNormalTex(t: HeightTile): THREE.DataTexture {
+function terrainNormalTex(t: { w: number; data: Float32Array }): THREE.DataTexture {
   const W = 256;
   const mpp = t.w / W;
   const buf = new Uint8Array(W * W * 4);
@@ -11268,7 +11333,7 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
-  const mesh = new THREE.Mesh(geo, farMat);
+  const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? farMatFor(data, w, key) : farMat);
   mesh.position.set(xs + w / 2, 0, zs + h / 2);
   farMeshes.set(key, mesh);
   farGroup.add(mesh);
