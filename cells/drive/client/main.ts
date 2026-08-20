@@ -11081,7 +11081,15 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     const prev = tileStats.get(key);
     tileStats.set(key, { at: performance.now(), src, ways: prev?.ways ?? 0,
       refused: prev?.refused ?? 0, retries: prev?.retries ?? 0, state: 'error' });
-    setTimeout(() => osmLoaded.delete(key), 8000); /* backoff, then a later pass retries */
+    // A FAILED TILE AHEAD IS WORTH ASKING AGAIN SOONER THAN ONE BEHIND.
+    // A flat eight seconds treated the junction you are about to reach and the
+    // field you left a kilometre back as the same problem — and with 13 fails
+    // on screen that is most of a pass spent re-asking for country already
+    // crossed. Scaled by the same wedge everything else is sorted by, so the
+    // road ahead comes back in a couple of seconds and the tail waits.
+    const [fx, fz] = tileCentreLocal(x, y);
+    setTimeout(() => osmLoaded.delete(key),
+      clamp(2000 + wedgeCost(fx, fz) * 6, 2000, 20000));
   }
   finally {
     osmInFlight--;
@@ -11227,9 +11235,16 @@ function streamWorld(ex: number, ez: number): void {
   // country already crossed.
   const vf = clamp(Math.abs(state.speed) / 28, 0, 1);
   osmFwdX = Math.sin(state.heading); osmFwdZ = -Math.cos(state.heading);
-  osmWFwd = 1 + 3.2 * vf;     // a kilometre ahead costs ~240m at speed
-  osmWLat = 1 + 1.5 * vf;     // a kilometre beside costs 2.5km
-  osmWBack = 1.6 + 3.0 * vf;  // a kilometre behind costs 4.6km — dropped first
+  // THE FLOOR MATTERS AS MUCH AS THE SLOPE. These began at 1 / 1 / 1.6, which
+  // means that stopped or crawling the wedge was not a wedge at all: forward
+  // and SIDEWAYS cost exactly the same, so a junction you are about to drive
+  // through queued behind a field you will never look at. Every one of these
+  // now starts biased and sharpens from there.
+  osmWFwd = 1.6 + 4.4 * vf;    // a kilometre ahead costs 625m stopped, 165m at speed
+  osmWLat = 1.35 + 1.9 * vf;   // …beside, 1.35km stopped and 3.25km at speed
+  osmWBack = 2.6 + 4.4 * vf;   // …behind, 2.6km stopped and 7km at speed
+  // Forward against sideways is the ratio that decides what a pass actually
+  // buys: it was 1:1 parked and 5:1 at speed. It is 2.2:1 and 19.5:1 now.
   // Kept for the probe and for anything that still wants a single point: where
   // the truck will be in about fourteen seconds.
   const look = Math.min(oRing * tm, Math.abs(state.speed) * 14);
@@ -11242,11 +11257,27 @@ function streamWorld(ex: number, ez: number): void {
   const ext = oRing + 1 + ahead;
   osmCoreR = (oRing + 0.75) * tm;              // the disc that is never dropped
   osmRingR = (oRing + 1.75) * tm;              // the wedge's budget, in wedge-metres
+  // ASKED IN WEDGE ORDER, AND THIS IS THE HALF THAT WAS MISSING.
+  //
+  // The wedge only ever governed the QUEUE — and a tile reaches the queue only
+  // when the gate is already full. Under the gate, loadOsmTile fetches on the
+  // spot, so the first six tiles of every pass were dispatched in the order
+  // this loop happened to visit them: raster order, starting from a CORNER of
+  // the box. Six slots is the whole of the concurrency, so in practice the
+  // most valuable requests in flight were chosen by a for-loop's arithmetic
+  // and the wedge only got to sort the leftovers.
+  //
+  // Collect, sort by what the tile is worth, then ask. Same tiles, same count,
+  // and now the ones down the road go first whether or not the gate is busy.
+  const want: Array<{ x: number; y: number; c: number }> = [];
   for (let dx = -ext; dx <= ext; dx++) for (let dy = -ext; dy <= ext; dy++) {
-    if (Math.max(Math.abs(dx), Math.abs(dy)) <= oRing) { void loadOsmTile(ox + dx, oy + dy); continue; }
     const [cx, cz] = tileCentreLocal(ox + dx, oy + dy);
-    if (wedgeCost(cx, cz) <= osmRingR) void loadOsmTile(ox + dx, oy + dy);
+    const c = wedgeCost(cx, cz);
+    const core = Math.max(Math.abs(dx), Math.abs(dy)) <= oRing;
+    if (core || c <= osmRingR) want.push({ x: ox + dx, y: oy + dy, c: core ? c - 1e6 : c });
   }
+  want.sort((a, b) => a.c - b.c);
+  for (const w of want) void loadOsmTile(w.x, w.y);
   // Beyond the fine layer's reach, a COARSE shell so the land does not simply
   // stop. Only fetched once the view is wide enough to see past the fine ring.
   // The backdrop is streamed for the EYE (see SIGHT_M); the overview vectors
@@ -22260,12 +22291,17 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       if (i <= oN * 2) dSeg(dCor[j][i], dCor[j][i + 1]);
       if (j <= oN * 2) dSeg(dCor[j][i], dCor[j + 1][i]);
     }
-    // Serving rank under the SAME metric the gate uses: nearest to the focus.
+    // SERVING RANK UNDER THE METRIC THE GATE ACTUALLY USES — which for a long
+    // time this did not do. It ranked by plain distance to the focus point
+    // while osmRelease serves by wedgeCost from the CAR, so the numbers on the
+    // chart were not the order tiles would be fetched in. Reading them as
+    // priority is what "it is only mildly biasing forward" was measured
+    // against, and the display was the part that was wrong about it.
     const dRank = new Map<string, number>();
     osmQueue
       .map((w) => {
         const [wx, wz] = tileCentreLocal(w.x, w.y);
-        return { k: `${w.x}/${w.y}`, d: Math.hypot(wx - osmFocusX, wz - osmFocusZ) };
+        return { k: `${w.x}/${w.y}`, d: wedgeCost(wx, wz) };
       })
       .sort((a, b) => a.d - b.d)
       .forEach((q, i) => dRank.set(q.k, i + 1));
