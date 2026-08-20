@@ -86,8 +86,16 @@ console.log(`      ${stopped.steps} steps, ${stopped.secs}s, ${stopped.bytes} by
 await page.evaluate(() => { window.__driveMe = false; window.__hold(0, 0, 1); });
 await page.waitForTimeout(6000);
 const playing = await page.evaluate(() => window.__play());
-check('the tape played back', playing.ok === true, playing);
+check('the tape armed for playback', playing.ok === true, playing);
 check('and it is the build that recorded it', playing.sameBuild === true, playing);
+// Armed is not rolling: the tape waits for the ground under its START to be
+// finished, which is fresh streaming because the recording drove away from it.
+for (let i = 0; i < 60; i++) {
+  if (await page.evaluate(() => window.__tape().playing)) break;
+  await page.waitForTimeout(3000);
+}
+const rolling = await page.evaluate(() => window.__tape());
+check('and it started rolling', rolling.playing === true, rolling.why ?? rolling);
 
 await page.evaluate((w) => { eval(w); }, WATCH);
 await settle();

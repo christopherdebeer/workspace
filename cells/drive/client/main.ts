@@ -10268,7 +10268,9 @@ function pruneTileCache(): void {
 }
 
 // ── points of interest (named features become HUD waypoints) ───────
-interface Poi { name: string; x: number; z: number; kind: 'park' | 'water' | 'place' | 'mission' | 'repair' | 'drone' | 'rig' | 'peak' | 'station'; pinned?: boolean }
+interface Poi { name: string; x: number; z: number;
+  kind: 'park' | 'water' | 'place' | 'mission' | 'repair' | 'drone' | 'rig' | 'peak' | 'station' | 'survey';
+  pinned?: boolean }
 const pois = new Map<string, Poi>();
 function notePoi(tags: Record<string, string>, pts: Array<[number, number]>): void {
   const name = tags.name;
@@ -13553,21 +13555,28 @@ function stepReal(dt: number): boolean {
   if (tapeRec.on) return { ok: false, why: 'still recording' };
   const t = await tapeLoad(id);
   if (!t) return { ok: false, why: 'no tape' };
-  if (!worldQuiet()) return { ok: false, why: 'world still building' };
-  // Back to where the driver was standing when they pressed record. Without
-  // this the tape would be replayed from wherever the truck happens to be, and
-  // the first checkpoint would haul it across the veld.
+  // BACK TO THE START FIRST, THEN WAIT FOR THAT GROUND — in that order.
+  //
+  // The first cut asked whether the world was quiet before teleporting, which
+  // is a question about the wrong place: by the end of a recording the truck
+  // is a couple of hundred metres away, and the block around WHERE IT ENDED
+  // has nothing to do with the block the tape starts in. It refused every
+  // playback of a drive that had gone anywhere, which is every drive.
   tapeRestore(t.keys, 0);
+  streamWorld(state.x, state.z);
   tapePlay.tape = t; tapePlay.i = 0; tapePlay.drift = 0; tapePlay.worst = 0;
-  tapePlay.on = true;
-  return { ok: true, steps: t.head.steps, secs: t.head.secs,
+  // ARMED, not running. The tape rolls on the first frame the ground under the
+  // start is finished, so a replay never opens by driving over tiles that are
+  // still arriving — the one condition the recording itself was held to.
+  tapePlay.armed = true; tapePlay.on = false;
+  return { ok: true, armed: true, steps: t.head.steps, secs: t.head.secs,
     sameBuild: t.head.build === TAPE_BUILD };
 };
-function tapeEnd(): void { tapePlay.on = false; }
+function tapeEnd(): void { tapePlay.on = false; tapePlay.armed = false; }
 /** What the tape is doing, and how hard the checkpoints are having to work. */
 (window as unknown as { __tape?: object }).__tape = (): object => ({
   recording: tapeRec.on, steps: tapeRec.steps.length / 4, secs: +tapeRec.t.toFixed(2),
-  playing: tapePlay.on, at: tapePlay.i, of: tapePlay.tape?.head.steps ?? 0,
+  playing: tapePlay.on, armed: tapePlay.armed, at: tapePlay.i, of: tapePlay.tape?.head.steps ?? 0,
   drift: +tapePlay.drift.toFixed(3), worstDrift: +tapePlay.worst.toFixed(3),
   sameBuild: tapePlay.tape ? tapePlay.tape.head.build === TAPE_BUILD : null,
   // The breakdown, not just the verdict: a gate that says only "no" costs a
@@ -16837,6 +16846,30 @@ function chartToWorld(px: number, py: number): [number, number] {
     state.z + panZ + (py - innerHeight / 2) * k / Math.max(0.2, cz),
   ];
 }
+/**
+ * A FIX: THE RANGER'S OWN MARK ON THE GROUND.
+ *
+ * The double tap used to teleport on the spot, which is a lot of authority for
+ * a gesture a thumb can make by accident on a map it is also panning. It drops
+ * a FIX instead — a surveyed position, which is what the word means in
+ * navigation — and TAPPING THE FIX is what travels. Two deliberate acts
+ * instead of one ambiguous one, and in between you are left holding something
+ * useful: a mark you can see from the seat, drive toward, and keep.
+ *
+ * Six of them, oldest dropped. A chart is a working document and an unbounded
+ * pile of waypoints is how it stops being one.
+ */
+const FIX_MAX = 6;
+let fixN = 0;
+function dropFix(x: number, z: number): Poi {
+  const mine = [...pois.values()].filter((p) => p.kind === 'survey');
+  while (mine.length >= FIX_MAX) { const old = mine.shift(); if (old) pois.delete(old.name); }
+  const name = `FIX ${++fixN}`;
+  const p: Poi = { name, x, z, kind: 'survey', pinned: true };
+  pois.set(name, p);
+  audio.stone();
+  return p;
+}
 function teleportTo(x: number, z: number): void {
   state.x = x;
   state.z = z;
@@ -16849,8 +16882,19 @@ function teleportTo(x: number, z: number): void {
   streamWorld(x, z);
   audio.stone();
 }
+/**
+ * WHERE THE DOUBLE TAP IS ALLOWED TO LIVE.
+ *
+ * On the chart, anywhere: the whole screen is map. From the SEAT the lower
+ * band belongs to the driving controls — the stick lives there and a tap that
+ * begins a steer must never also be read as a mark — so a fix can only be
+ * dropped in the upper half, which is where the windscreen is anyway. `stick`
+ * being null already rules out an active drag; this rules out the near-misses.
+ */
+const tapCanMark = (e: PointerEvent): boolean =>
+  camMode === 'top' || (!stick && e.clientY < innerHeight * 0.5);
 const endStick = (e: PointerEvent): void => {
-  if (camMode === 'top' && !stick && e.type === 'pointerup' && e !== lastUp) {
+  if (tapCanMark(e) && !stick && e.type === 'pointerup' && e !== lastUp) {
     lastUp = e;
     tapSeen++;
     const now = performance.now();
@@ -16864,8 +16908,11 @@ const endStick = (e: PointerEvent): void => {
       // clipboard write must happen HERE, inside the gesture, or the
       // permission model refuses it.
       if (!lineOn) {
+        // OFF THE LINE THE GESTURE MARKS, IT DOES NOT MOVE. See dropFix: the
+        // travel is the SECOND act, a tap on the fix itself, so the map can be
+        // panned and prodded without the truck jumping across the veld.
         const [wx, wz] = chartToWorld(e.clientX, e.clientY);
-        teleportTo(wx, wz);
+        dropFix(wx, wz);
       } else {
         const [wx, wz] = chartToWorld(e.clientX, e.clientY);
         lastField = fieldQuery(wx, wz);
@@ -17476,13 +17523,19 @@ const renderPlace = (): void => { placeLine = placeLabel.toUpperCase(); };
 // grid and font instead of being browser text floating above it.
 // Peaks in the chart's own stone-grey: they are landform, not destinations,
 // and colouring them like a fuel stop would promise something they are not.
-const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a', mission: '#f5c453', repair: '#e2703a', drone: '#d8412f', rig: '#f5c453', peak: '#b9b3a4', station: '#7fd4c0' };
+const POI_COLORS: Record<Poi['kind'], string> = { park: '#7fae6a', water: '#6aa3d8', place: '#d8b46a', mission: '#f5c453', repair: '#e2703a', drone: '#d8412f', rig: '#f5c453', peak: '#b9b3a4', station: '#7fd4c0',
+  // A FIX is the ranger's own mark, so it wears the instrument colour rather
+  // than a place's — it is kit, not geography.
+  survey: '#8fe0ff' };
 const poiVec = new THREE.Vector3(), poiView = new THREE.Vector3(), camFwd = new THREE.Vector3();
 const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}M` : `${(m / 1000).toFixed(1)}KM`);
 // Close enough to act on. The pins used to be CULLED inside 25m, which threw
 // away exactly the moment they matter — you arrive at a place and it vanishes.
 // They now stay all the way in and switch to an in-range presentation instead.
 const POI_RANGE = 55;
+/** The kinds that are worth walking up to. Everything absent from this set is
+ *  scenery — drawn, labelled, navigated by, and never in the way of a tap. */
+const POI_LIVE = new Set<Poi['kind']>(['station', 'repair']);
 const POI_BEAM_H = 30;     // metres of light column — a shade over the checkpoints' 26
 /**
  * Is the ground in the way? Marches the sight line from the camera to the
@@ -19041,7 +19094,7 @@ interface TapeHead {
 }
 interface Tape { head: TapeHead; steps: Uint8Array; keys: Float32Array }
 const tapeRec = { on: false, steps: [] as number[], keys: [] as number[], t: 0 };
-const tapePlay = { on: false, i: 0, tape: null as Tape | null, drift: 0, worst: 0 };
+const tapePlay = { on: false, armed: false, i: 0, tape: null as Tape | null, drift: 0, worst: 0 };
 /** Quantised to the byte, and the ranges are the ones the sim actually uses:
  *  dt is capped at 50ms upstream, steer is ±1, throttle is -1..1, brake 0..1. */
 const q8 = (v: number, lo: number, hi: number): number =>
@@ -19238,6 +19291,7 @@ function tick(now: number): void {
   // A REPLAY TAKES ITS TIMESTEP FROM THE TAPE, not from this machine. The truck
   // integrates differently at 30fps and at 120, so a tape that replayed at the
   // local frame rate would be playing a different drive.
+  if (tapePlay.armed && worldQuiet()) { tapePlay.armed = false; tapePlay.on = true; }
   const played = tapePlay.on ? tapeRead() : null;
   if (tapePlay.on && !played) tapeEnd();
   const dt = played ? played.dt : paused ? 0 : (FIX_DT || Math.min(0.05, raw / 1000));
@@ -21923,7 +21977,7 @@ interface PoiDraw { x: number; y: number; t: string; c: string; edge: 0 | -1 | 1
   /** Where the pin actually is, so a probe can check the sight line itself. */
   w?: [number, number, number] }
 /** Tap targets over the drawn pins (HUD px) — generous, a label is small. */
-const poiRects: Array<{ x: number; y: number; w: number; h: number; name: string; kind: Poi['kind'] }> = [];
+const poiRects: Array<{ x: number; y: number; w: number; h: number; name: string; kind: Poi['kind']; rng: boolean }> = [];
 let poiDraw: PoiDraw[] = [];
 let streaming = false;
 
@@ -22366,7 +22420,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // The whole assembly — label AND beam — is the tap target, padded out:
     // a pin is a thing you point at with a thumb, not a 4px word.
     const rx = Math.min(x - 5, ax - 7);
-    poiRects.push({ x: rx, y: ly - 6, w: Math.max(x + w + 5, ax + 7) - rx, h: ay - ly + 12, name: p.name, kind: p.kind });
+    poiRects.push({ x: rx, y: ly - 6, w: Math.max(x + w + 5, ax + 7) - rx, h: ay - ly + 12, name: p.name, kind: p.kind, rng: p.rng });
   }
   for (const p of poiDraw) {
     if (p.edge === 0) continue;
@@ -22409,7 +22463,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     }
     if (iconCh) hudIconEdge(iconCh, x + 1, y + 1, p.c, 5);
     textEdgeP(label, x + 2 + iw, y + 2, p.rng || p.pinned ? UI.gold : p.c);
-    poiRects.push({ x: x - 3, y: y - 10, w: w + 8, h: 20, name: p.name, kind: p.kind });
+    poiRects.push({ x: x - 3, y: y - 10, w: w + 8, h: 20, name: p.name, kind: p.kind, rng: p.rng });
   }
   // ── the chart's place names ──
   // The wide view stopped being landform when the overview shell arrived; the
@@ -23026,6 +23080,15 @@ function setClean(on: boolean): void {
 (window as unknown as { __hudscale?: object }).__hudscale = (): number => hudS;
 /** Reads which way the chart is turned; with an argument, SETS it — a pan test
  *  has to run in both orientations and the toggle is otherwise a HUD tap. */
+/** The live tap targets, in CANVAS pixels, so a test can aim a real pointer at
+ *  a pin instead of trusting a probe to stand in for one. `live` is what the
+ *  new rule says: whether this rect will actually consume a tap. */
+(window as unknown as { __poirects?: object }).__poirects = (): object =>
+  poiRects.map((r) => ({
+    name: r.name, kind: r.kind, rng: r.rng,
+    live: r.kind === 'survey' || (r.rng && POI_LIVE.has(r.kind)),
+    cx: Math.round((r.x + r.w / 2) * hudS), cy: Math.round((r.y + r.h / 2) * hudS),
+  }));
 (window as unknown as { __mapup?: object }).__mapup = (want?: 'heading' | 'north'): string => {
   if (want !== undefined && (want === 'heading') !== mapHeadingUp) toggleMapUp();
   return mapHeadingUp ? 'heading' : 'north';
@@ -23042,12 +23105,31 @@ function hudTap(cx: number, cy: number): boolean {
   if (inside(mapUpRect, 2)) { toggleMapUp(); return true; }
   if (inside(povRect, 2)) { togglePov(); return true; }
   if (inside(dockRect, 0)) { toggleCam(); return true; }
-  // A tap on a pin PINS it — the place stays on screen past the
-  // nearest-three rule until tapped again. Mission pins belong to the job
-  // and are not yours to unpin; nor is a downed drone, which is a thing you
-  // have to go and collect rather than a bookmark you chose.
+  // WHAT MAY EAT A TAP.
+  //
+  // Every pin used to. A hillside label, a river, a village forty kilometres
+  // off — all of them swallowed the gesture to toggle a bookmark nobody asked
+  // for, which is most of the screen on a busy chart made of things that
+  // cannot be acted on. Reported from the seat, and it is a real cost: a tap
+  // that lands on scenery should reach the map underneath it.
+  //
+  // So capture is EARNED, two ways. A FIX is the ranger's own mark and is
+  // always live — tapping it is what travels, which is the whole point of
+  // dropping it. Everything else has to be a thing you could act on AND close
+  // enough to act on it: inside POI_RANGE, where the pin has already changed
+  // its own presentation to say so. Scenery falls through at any distance.
   for (const r of poiRects) {
-    if (!inside(r, 2) || r.kind === 'mission' || r.kind === 'drone' || r.kind === 'rig') continue;
+    if (!inside(r, 2)) continue;
+    if (r.kind === 'survey') {
+      const fix = pois.get(r.name);
+      // THE THIRD TAP. Double tap marked it; this moves the truck to it.
+      if (fix) { teleportTo(fix.x, fix.z); pois.delete(fix.name); }
+      return true;
+    }
+    // A mission pin belongs to the job and is not yours to unpin; nor is a
+    // downed drone, which is a thing to go and collect rather than a bookmark.
+    if (r.kind === 'mission' || r.kind === 'drone' || r.kind === 'rig') continue;
+    if (!r.rng || !POI_LIVE.has(r.kind)) continue;
     const poi = pois.get(r.name);
     if (poi) { poi.pinned = !poi.pinned; audio.stone(); }
     return true;

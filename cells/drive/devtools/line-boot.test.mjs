@@ -198,8 +198,27 @@ const fbefore = await f.page.evaluate(() => ({ x: window.__drive.x, z: window.__
 await dbltap(f.page);
 await f.page.waitForTimeout(800);
 const fafter = await f.page.evaluate(() => ({ x: window.__drive.x, z: window.__drive.z, ln: window.__line() }));
-check('off the line the same double tap still travels',
-  Math.hypot(fafter.x - fbefore.x, fafter.z - fbefore.z) > 20, { fbefore, fafter });
+// OFF THE LINE THE GESTURE MARKS, IT NO LONGER MOVES. A double tap is
+// something a thumb can make by accident on a map it is also panning, and it
+// used to carry the truck across the veld on its own. It drops a FIX; the
+// travel is the second, deliberate act — see below.
+const marks = await f.page.evaluate(() => window.__poiList().filter((p) => p.kind === 'survey'));
+check('off the line the double tap MARKS rather than travels',
+  marks.length === 1 && Math.hypot(fafter.x - fbefore.x, fafter.z - fbefore.z) < 5,
+  { marks: marks.length, moved: +Math.hypot(fafter.x - fbefore.x, fafter.z - fbefore.z).toFixed(1) });
+// …and the mark is what travels. A REAL pointer at the pin's own rect, so this
+// exercises the tap rule rather than a probe standing in for it.
+const rect = (await f.page.evaluate(() => window.__poirects()))
+  .find((r) => r.kind === 'survey');
+check('the fix drew a tap target', !!rect, rect ?? null);
+if (rect) {
+  await f.page.mouse.click(rect.cx, rect.cy);
+  await f.page.waitForTimeout(900);
+  const ftravel = await f.page.evaluate(() => ({ x: window.__drive.x, z: window.__drive.z }));
+  check('and a tap on the fix is what travels',
+    Math.hypot(ftravel.x - fbefore.x, ftravel.z - fbefore.z) > 20,
+    { fbefore, ftravel });
+}
 check('…and free drive is not on the line', fafter.ln.on === false, fafter.ln.on);
 // The same tiles, the other posture: free drive charts every road as it
 // streams and keeps its intact stock — the campaign's world is a LENS, not a
