@@ -793,7 +793,18 @@ scene.background = new THREE.Color(0x05070c);
 const camera = new THREE.PerspectiveCamera(55, 1, 1, 30000);
 // The near plane moves with the chart camera; only rebuild the projection when
 // it actually changes, since every uniform derived from it follows.
-let nearLock = 0;   // test handle: force a near plane to measure the difference
+/**
+ * ?near=<metres> — force the near plane, to judge depth precision by eye.
+ *
+ * The cab runs near 0.12 against a far of 62000: a range of half a MILLION to
+ * one. Depth resolution goes as d²·ε/near, so at 200m that is about 2cm and at
+ * 500m about 12cm, while a road drape sits a few centimetres over its terrain.
+ * That is the arithmetic behind swimming overlays at range, and raising `near`
+ * is the one lever that moves it (lowering `far` barely does). 0.12 is there to
+ * clear the dashboard, so how far it can rise is a question for the eye rather
+ * than the algebra — hence a URL parameter rather than a guess.
+ */
+let nearLock = Math.max(0, Number(new URLSearchParams(location.search).get('near') ?? 0) || 0);
 function setNear(n: number, far = 30000): void {
   if (nearLock) n = nearLock;
   if (Math.abs(camera.near - n) < n * 0.02 && camera.far === far) return;
@@ -13573,6 +13584,30 @@ function stepReal(dt: number): boolean {
     sameBuild: t.head.build === TAPE_BUILD };
 };
 function tapeEnd(): void { tapePlay.on = false; tapePlay.armed = false; }
+/**
+ * THE RECORDER, AS THE DECK SEES IT. One shape for the status line and the
+ * buttons, so the menu never has to know what a checkpoint is.
+ */
+function tapeDeck(): { ring: number; settled: boolean; playing: boolean; armed: boolean;
+  at: number; of: number; drift: number; kept: number; kb: number } {
+  return {
+    ring: +tapeRec.t.toFixed(0),
+    // The whole ring has to be over settled ground, not merely the last frame.
+    settled: tapeRec.settled >= tapeRec.steps.length / 4,
+    playing: tapePlay.on, armed: tapePlay.armed,
+    at: tapePlay.i, of: tapePlay.tape?.head.steps ?? 0,
+    drift: +tapePlay.worst.toFixed(2), kept: tapeKept,
+    kb: Math.round((tapeRec.steps.length + tapeRec.keys.length * 4) / 1024),
+  };
+}
+let tapeKept = 0;
+/** Bank the ring. Returns a line the deck can show without interpreting it. */
+function tapeKeep(): string {
+  const t = tapeStop();
+  if (!t) return 'NOTHING TO KEEP';
+  tapeKept++;
+  return `KEPT ${Math.round(t.head.secs)}S · ${Math.round((t.steps.byteLength + t.keys.byteLength) / 1024)}KB`;
+}
 /** What the tape is doing, and how hard the checkpoints are having to work. */
 (window as unknown as { __tape?: object }).__tape = (): object => ({
   recording: tapeRec.on, steps: tapeRec.steps.length / 4, secs: +tapeRec.t.toFixed(2),
@@ -19147,7 +19182,26 @@ interface TapeHead {
   hdg: number; t: string; wx: string; steps: number; secs: number;
 }
 interface Tape { head: TapeHead; steps: Uint8Array; keys: Float32Array }
-const tapeRec = { on: false, steps: [] as number[], keys: [] as number[], t: 0 };
+/**
+ * THE RING IS ALWAYS TURNING.
+ *
+ * A recorder you have to arm is a recorder you never armed: the interesting
+ * moment — the truck on its roof, the road that vanished, the hillside that
+ * banded — is always already past by the time you know it was interesting.
+ * Every report in this project has arrived that way. So the tape runs from
+ * boot and the button is KEEP, not RECORD.
+ *
+ * Two minutes at sixty frames is 7200 steps: 29KB of input and 10KB of
+ * checkpoints, which is nothing to hold and nothing to bank. Trimmed in whole
+ * CHECKPOINT BLOCKS so keys[0] always describes steps[0] — a ring that trimmed
+ * by single steps would leave every checkpoint pointing one place to the left.
+ */
+const TAPE_RING = 7200;
+const tapeRec = { on: false, steps: [] as number[], keys: [] as number[], t: 0,
+  /** Steps since the world last had something still arriving. A tape whose
+   *  window includes those is a tape of a drive over changing ground, and KEEP
+   *  says so rather than banking it silently. */
+  settled: 0 };
 const tapePlay = { on: false, armed: false, i: 0, tape: null as Tape | null, drift: 0, worst: 0 };
 /** Quantised to the byte, and the ranges are the ones the sim actually uses:
  *  dt is capped at 50ms upstream, steer is ±1, throttle is -1..1, brake 0..1. */
@@ -19244,6 +19298,20 @@ async function tapeSave(t: Tape): Promise<string> {
   db.close();
   return id;
 }
+/** How many runs are already banked — the deck shows it and nothing else needs
+ *  the list until you ask to play one. */
+async function tapeCount(): Promise<number> {
+  try {
+    const db = await tapeDb();
+    const n = await new Promise<number>((go, no) => {
+      const q = db.transaction('runs', 'readonly').objectStore('runs').count();
+      q.onsuccess = () => go(q.result);
+      q.onerror = () => no(q.error);
+    });
+    db.close();
+    return n;
+  } catch { return 0; }
+}
 async function tapeLoad(id?: string): Promise<Tape | null> {
   const db = await tapeDb();
   const all = await new Promise<Array<Tape & { id: string }>>((go, no) => {
@@ -19258,25 +19326,33 @@ async function tapeLoad(id?: string): Promise<Tape | null> {
   const row = id ? all.find((r) => r.id === id) : all.sort((a, b) => a.head.at - b.head.at).pop();
   return row ? { head: row.head, steps: row.steps, keys: row.keys } : null;
 }
-/** Start a tape here. Refuses on a world that is still arriving — see above. */
+/** Throw the ring away and start it here — an explicit run, rather than
+ *  whatever the last two minutes happen to hold. */
 function tapeStart(): { ok: boolean; why?: string } {
   if (tapePlay.on) return { ok: false, why: 'replaying' };
   if (!worldQuiet()) return { ok: false, why: 'world still building' };
-  const [lat, lon] = localToLatLon(state.x, state.z);
-  tapeRec.steps.length = 0; tapeRec.keys.length = 0; tapeRec.t = 0;
+  tapeRec.steps.length = 0; tapeRec.keys.length = 0; tapeRec.t = 0; tapeRec.settled = 0;
   tapeRec.keys.push(...tapeSnap());
   tapeRec.on = true;
-  tapeHead = { v: TAPE_V, build: TAPE_BUILD, at: Date.now(), lat, lon,
-    hdg: (state.heading * 180) / Math.PI, t: TIME_MODES[timeMode], wx: wx.sky,
-    steps: 0, secs: 0 };
   return { ok: true };
 }
 let tapeHead: TapeHead | null = null;
+/**
+ * BANK WHAT THE RING HOLDS.
+ *
+ * The header is built HERE and not at the start, because with a ring there is
+ * no start to build it at — the oldest step in the buffer is wherever the
+ * trimming left it, so the tape's origin is keys[0] and its place is wherever
+ * keys[0] says the truck was.
+ */
 function tapeStop(): Tape | null {
-  if (!tapeRec.on || !tapeHead) return null;
+  const n = tapeRec.steps.length / 4;
+  if (n < TAPE_KEY_EVERY || tapeRec.keys.length < TAPE_KEY_N) return null;
   tapeRec.on = false;
-  tapeHead.steps = tapeRec.steps.length / 4;
-  tapeHead.secs = +tapeRec.t.toFixed(2);
+  const [lat, lon] = localToLatLon(tapeRec.keys[0], tapeRec.keys[1]);
+  tapeHead = { v: TAPE_V, build: TAPE_BUILD, at: Date.now(), lat, lon,
+    hdg: (tapeRec.keys[2] * 180) / Math.PI, t: TIME_MODES[timeMode], wx: wx.sky,
+    steps: n, secs: +tapeRec.t.toFixed(2) };
   const tape: Tape = {
     head: tapeHead,
     steps: new Uint8Array(tapeRec.steps),
@@ -19287,11 +19363,19 @@ function tapeStop(): Tape | null {
 }
 /** One step onto the tape: what the frame took, and what the hands did. */
 function tapeWrite(dt: number, inp: { throttle: number; steer: number; brakeF: number }): void {
+  if (!tapeRec.keys.length) tapeRec.keys.push(...tapeSnap());
   const n = tapeRec.steps.length / 4;
   tapeRec.steps.push(q8(dt, 0, 0.05), q8(inp.steer, -1, 1),
     q8(inp.throttle, -1, 1), q8(inp.brakeF, 0, 1));
   tapeRec.t += dt;
   if ((n + 1) % TAPE_KEY_EVERY === 0) tapeRec.keys.push(...tapeSnap());
+  tapeRec.settled = worldQuiet() ? tapeRec.settled + 1 : 0;
+  // Trim a whole block at a time, steps and the checkpoint that owns them, so
+  // the two arrays never drift out of step with each other.
+  while (tapeRec.steps.length / 4 > TAPE_RING) {
+    tapeRec.steps.splice(0, TAPE_KEY_EVERY * 4);
+    if (tapeRec.keys.length > TAPE_KEY_N) tapeRec.keys.splice(0, TAPE_KEY_N);
+  }
 }
 /** …and one step off it. Returns null past the end, which stops the replay. */
 function tapeRead(): { dt: number; throttle: number; steer: number; brake: boolean; brakeF: number } | null {
@@ -19354,9 +19438,10 @@ function tick(now: number): void {
   const raw2 = played
     ? { throttle: played.throttle, steer: played.steer, brake: played.brake, brakeF: played.brakeF }
     : real.on || paused ? { throttle: 0, steer: 0, brake: false, brakeF: 0 } : input();
-  // …and a recording takes what the hands just did, before anything downstream
-  // has a chance to reinterpret it.
-  if (tapeRec.on && !paused) tapeWrite(dt, raw2);
+  // …and the RING takes what the hands just did, before anything downstream has
+  // a chance to reinterpret it. Always, unless a tape is already driving —
+  // recording the replay would be recording our own echo.
+  if (!played && !paused && dt > 0) tapeWrite(dt, raw2);
   // FLYING THE DRONE MEANS NOT DRIVING. The rig stays exactly where you left
   // it — that is the whole point of scouting ahead — so the controls are handed
   // over wholesale rather than shared.
@@ -23473,6 +23558,10 @@ const menu = createMenu({
     if (!blocked) audio.toggle();
   },
   hideHud: () => setClean(true),
+  tape: () => tapeDeck(),
+  tapeKeep: () => tapeKeep(),
+  tapePlay: () => { void (window as unknown as { __play: () => Promise<object> }).__play(); },
+  tapeStopPlay: () => tapeEnd(),
   startDrive: (i) => { const d = allDrives()[i]; if (d) startDrive(d); },
   deleteSpot: (i) => { spots.splice(i, 1); saveSpots(); audio.stone(); },
   // CURRENT: a destination, not a mode. One fix from this tap's gesture, then

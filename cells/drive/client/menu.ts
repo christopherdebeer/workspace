@@ -82,6 +82,14 @@ export interface MenuCtx {
   soundTone(): Tone;
   soundTap(): void;
   hideHud(): void;
+  /** THE RECORDER. A ring that is always turning, so the button is KEEP rather
+   *  than RECORD — see the note on TAPE_RING. The deck shows what it holds and
+   *  never has to know what a checkpoint is. */
+  tape(): { ring: number; settled: boolean; playing: boolean; armed: boolean;
+    at: number; of: number; drift: number; kept: number; kb: number };
+  tapeKeep(): string;
+  tapePlay(): void;
+  tapeStopPlay(): void;
   /** The durable copy of your progress: where it stands, and the two taps that
    *  turn it on and off. */
   /** THE LINE — the campaign's whole surface, read by the T_LINE screen. */
@@ -746,6 +754,33 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       });
     }, ICON.flag);
     body.append(reset, resetNote);
+    // ── the recorder ──
+    // A DEV INSTRUMENT FIRST. It sits under the dials rather than in the deck
+    // because nothing here is wanted mid-corner: you notice something, you
+    // stop, you keep the last two minutes and play them back.
+    const tapeNote = el('div', 'm-dimline', '');
+    const keep = button('KEEP LAST RUN', C.soft, () => {
+      tapeNote.textContent = ctx.tapeKeep();
+      refresh();
+    }, ICON.save);
+    const play = button('PLAY LAST RUN', C.soft, () => {
+      const t = ctx.tape();
+      if (t.playing || t.armed) { ctx.tapeStopPlay(); } else { ctx.tapePlay(); close(); }
+      refresh();
+    }, ICON.gps);
+    updaters.push(() => {
+      const t = ctx.tape();
+      const mm = Math.floor(t.ring / 60), ss = String(Math.round(t.ring % 60)).padStart(2, '0');
+      // The status says what it HOLDS and whether it is worth keeping, which is
+      // the one thing a tape of moving ground cannot tell you afterwards.
+      tapeNote.textContent = t.playing
+        ? `PLAYING ${t.at}/${t.of} · DRIFT ${t.drift}M`
+        : `RING ${mm}:${ss} · ${t.kb}KB${t.settled ? '' : ' · GROUND STILL ARRIVING'}`;
+      tapeNote.style.color = t.settled || t.playing ? C.dim : C.bad;
+      setLab(play, t.playing || t.armed ? 'STOP PLAYBACK' : 'PLAY LAST RUN');
+      setLab(keep, t.kept ? `KEEP LAST RUN (${t.kept})` : 'KEEP LAST RUN');
+    });
+    body.append(keep, play, tapeNote);
     dialsInto(body, ctx.dialGroups('system'));
     const snd = button('', C.soft, () => { ctx.soundTap(); refresh(); }, ICON.sound);
     updaters.push(() => {
