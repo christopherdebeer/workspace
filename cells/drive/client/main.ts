@@ -1033,6 +1033,49 @@ const sun = new THREE.DirectionalLight(0xffe0b0, 1.5);
 sun.position.copy(SUN_DIR).multiplyScalar(2000);
 scene.add(sun);
 /**
+ * THE MOON WAS A DISC AND NOT A LAMP.
+ *
+ * R39 gave the night a moon with the right arc, the right rise time and the
+ * right phase — and it lit nothing. The sky knew where it was; the ground did
+ * not. Reported from the chart at half past midnight: the map is black, and
+ * the only things on it are the route and the rivers, because those carry
+ * their own colour. You cannot navigate by a map you cannot see.
+ *
+ * It runs off the SAME direction and phase the sky disc uses, so the light and
+ * the thing casting it can never disagree — the shadows fall away from the
+ * moon you can actually see, and a new moon lights nothing because a new moon
+ * IS nothing. No shadow map: a second one costs a whole depth pass to gain a
+ * softness this palette cannot resolve.
+ */
+const moon = new THREE.DirectionalLight(0xb9c9e8, 0);
+scene.add(moon);
+scene.add(moon.target);
+/** In the WORLD: shape, not illumination. The headlights stay the thing you
+ *  drive by — that was the point of making night dark in the first place. */
+const MOON_I = 0.20;
+/**
+ * ON THE CHART: legibility, and unapologetically so.
+ *
+ * A chart is an instrument being read, not a photograph being admired, and
+ * this one is already drawn by its own rules — the ink gate, the fog, the
+ * ribbon widths in pixels. Reading the land by moonlight at a scale where one
+ * pixel is twenty metres is a thing a map may do and a windscreen may not.
+ * The floor is starlight: on a new moon, or with the moon down, the chart
+ * still has to show you the ground.
+ */
+const MOON_CHART = 5.0, CHART_STARS = 0.76;
+/**
+ * …AND WHERE THE LIGHT COMES FROM WHEN THERE IS NO MOON TO USE.
+ *
+ * The floor cannot be aimed at a moon below the horizon: a directional light
+ * from underneath lights the far side of every hill and reads as an inverted
+ * landscape, valleys for ridges. So when the moon is down the chart falls back
+ * to the cartographer's convention — high and over your left shoulder — which
+ * is what a shaded-relief map has used for two centuries, and for the same
+ * reason: it is the direction that makes a hill look like a hill.
+ */
+const CHART_SHADE = new THREE.Vector3(-0.45, 0.82, -0.35).normalize();
+/**
  * REAL SUN SHADOWS, in one tight box that follows the truck.
  *
  * There were none at all — not on the rig, not under a tree, not down the dark
@@ -1242,6 +1285,8 @@ const MOON_EPOCH = Date.UTC(2000, 0, 6, 18, 14);
 /** 0 in the dark, 1 in open daylight, smooth across civil twilight. Everything
  *  that used to be a fixed brightness is scaled by this. */
 let dayF = 1;
+/** 0 new, 0.5 full — set with the moon's direction, read by its light. */
+let moonPhase = 0;
 let sunAlt = 0.35, sunAz = 0.5;
 const sunSetV = new THREE.Vector3();
 function stepSun(): void {
@@ -1299,7 +1344,8 @@ function stepSun(): void {
   // diurnal arc, the rise time and the elongation — where a hand-placed
   // anti-solar disc gets only the first and is wrong for three weeks in four.
   const nowMs = worldNow().getTime();
-  const phase = (((nowMs - MOON_EPOCH) / MOON_MONTH) % 1 + 1) % 1;   // 0 new, 0.5 full
+  moonPhase = (((nowMs - MOON_EPOCH) / MOON_MONTH) % 1 + 1) % 1;    // 0 new, 0.5 full
+  const phase = moonPhase;
   const m = solarAngles(origin.lat, origin.lon, new Date(nowMs + phase * 86400000));
   const mc = Math.cos(m.alt);
   (skyMat.uniforms.moonDir as { value: THREE.Vector3 }).value
@@ -12720,6 +12766,17 @@ function stepWeather(now: number, dt: number): void {
   // are the thing you drive by.
   sun.intensity = biome.sunI * (1 - wx.cloud * 0.72) * (0.05 + 0.95 * dayF);
   hemi.intensity = biome.hemiI * (1 + wx.cloud * 0.35) * (0.17 + 0.83 * dayF);
+  // …AND THE MOON, off the sky's own direction and phase. Illuminated fraction
+  // is (1 − cos 2πp)/2 — nothing at new, everything at full — with a sliver
+  // kept for earthshine so a thin crescent is not the same as no moon at all.
+  // Chart only: amplified, with a starlight floor under it, because a map that
+  // goes blank on a new moon has stopped being a map. See MOON_CHART.
+  const mDir = (skyMat.uniforms.moonDir as { value: THREE.Vector3 }).value;
+  const chart = camMode === 'top';
+  const lunar = clamp(mDir.y, 0, 1) * (0.12 + 0.88 * (0.5 - 0.5 * Math.cos(2 * Math.PI * moonPhase)));
+  moon.position.copy(lunar > 0.02 || !chart ? mDir : CHART_SHADE).multiplyScalar(1800);
+  moon.intensity = (1 - dayF) * (1 - wx.cloud * 0.75)
+    * (chart ? MOON_I * MOON_CHART * (CHART_STARS + (1 - CHART_STARS) * lunar) : MOON_I * lunar);
   // SKYLIGHT ON THE WALLS. A HemisphereLight hands a VERTICAL face the flat
   // 50/50 sky-ground blend — about 0.22 of incident here — so a wall turned
   // away from the sun rendered at 0.22 x albedo = 0.13 linear, DARKER than the
