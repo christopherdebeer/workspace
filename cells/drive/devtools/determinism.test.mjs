@@ -38,6 +38,20 @@
  * discrete event, a wheel finding something. In that regime approximate
  * determinism is worth nothing; it has to be exact or it is noise.
  *
+ * …AND THEN THIS TEST PROVED IT BY CONSTRUCTION, WHICH IS THE GOOD NEWS.
+ *
+ * The harness serves every https request from a SHA1 disk cache, so both runs
+ * here get a byte-identical world delivered in near-identical order — the one
+ * variable the live measurement could not hold still. Divergence falls by two
+ * orders of magnitude: 0.14m to 0.001m at one second, 0.28m to 0.05m at four.
+ * Hold the world fixed and the sim very nearly IS deterministic.
+ *
+ * That matters because it is also the shape of the feature. A recording
+ * replayed ON THE SAME DEVICE finds its tiles already cached, which is the
+ * warm case measured here and not the cold two-page case — so the honest
+ * expectation for on-device replay is centimetres, not metres, and the
+ * checkpoints are there to catch the tail rather than to do the work.
+ *
  * SO THE DESIGN IS A TAPE THAT IS CORRECTED, NOT A TAPE THAT IS TRUSTED —
  * inputs replayed against periodic state checkpoints, the way netcode
  * reconciles a prediction. Which makes the load-bearing question not "does it
@@ -117,10 +131,11 @@ const half = gapAt(25);
 check(`half a second of tape coasts within a wheel's width (${half?.toFixed(3)}m)`,
   half !== null && half < 0.30, { at: '0.5s', gap: +(half ?? -1).toFixed(3) });
 
-// …AND THE THING THIS TEST EXISTS TO REMEMBER: it does NOT get better on its
-// own. If a later change makes the world reproducible, this number goes to
-// zero and the checkpoints become free. Until then, nobody should build a
-// replay that trusts the tape past one window.
+// …AND THE NUMBER TO WATCH. Against the harness's cached world this is
+// centimetres; against a live cold stream the same course drifts 136m. The gap
+// between those two IS the world's non-determinism, so if this number ever
+// climbs, the world has started arriving differently — which is the same bug
+// class that let a far-shell tile bake its palette before its cover landed.
 const late = gapAt(STEPS - 5);
 console.log(`\n      for the record: ${(STEPS * 0.02).toFixed(1)}s of untouched tape drifts ${late?.toFixed(2)}m`);
 
