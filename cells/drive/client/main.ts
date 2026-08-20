@@ -11754,6 +11754,56 @@ function buildOvTile(key: string, x: number, y: number, z: number,
     const v = clamp(Math.round(((b.latN - la) / (b.latN - b.latS)) * 255), 0, 255);
     return dem[v * 256 + u] - baseElev - FAR_DROP - curveDrop(wx, wz) + lift;
   };
+  /**
+   * EVERY TILE DRAWS ITS OWN PIECE OF A WAY, AND NOBODY ELSE'S.
+   *
+   * The route hands back a way's FULL geometry in every tile it touches, so a
+   * 30km river crossing four-kilometre tiles arrives whole, eight times over.
+   * Drawn as-is that is eight copies of one river — and they do not land on
+   * top of each other, because yAt reads THIS TILE's heightfield and CLAMPS
+   * out-of-tile vertices to its border pixel. Each copy therefore sits at a
+   * different, wrong altitude (measured: median 2m of float, p95 297m, max
+   * 318m), and the chart camera is a tilted perspective, so altitude is
+   * PARALLAX. One river, four parallel ghosts marching across the valley.
+   * Reported as "quadruple way rendering", and the tile data has exactly one
+   * river in it.
+   *
+   * Clipping to the tile is the standard answer and it fixes both halves at
+   * once: no way is built twice, and no vertex is ever outside the heightfield
+   * being asked about it. The margin is a sliver of overlap so neighbouring
+   * pieces meet under their own ribbon width instead of showing a seam.
+   */
+  const mLa = (b.latN - b.latS) * 0.02, mLo = (b.lonE - b.lonW) * 0.02;
+  const inBox = (la: number, lo: number): boolean =>
+    la <= b.latN + mLa && la >= b.latS - mLa && lo >= b.lonW - mLo && lo <= b.lonE + mLo;
+  function clipToTile(g: Array<[number, number]>): Array<Array<[number, number]>> {
+    const out: Array<Array<[number, number]>> = [];
+    let run: Array<[number, number]> = [];
+    // The crossing point, so a piece reaches the border rather than stopping
+    // at the last vertex that happened to be inside it.
+    const cut = (p: [number, number], q: [number, number]): [number, number] => {
+      let lo0 = 0, hi = 1;
+      for (let k = 0; k < 12; k++) {
+        const t = (lo0 + hi) / 2;
+        const m: [number, number] = [p[0] + (q[0] - p[0]) * t, p[1] + (q[1] - p[1]) * t];
+        if (inBox(m[0], m[1])) lo0 = t; else hi = t;
+      }
+      return [p[0] + (q[0] - p[0]) * lo0, p[1] + (q[1] - p[1]) * lo0];
+    };
+    for (let i = 0; i < g.length; i++) {
+      const here = inBox(g[i][0], g[i][1]);
+      if (here) {
+        if (!run.length && i > 0) run.push(cut(g[i], g[i - 1]));
+        run.push(g[i]);
+      } else if (run.length) {
+        run.push(cut(g[i - 1], g[i]));
+        if (run.length > 1) out.push(run);
+        run = [];
+      }
+    }
+    if (run.length > 1) out.push(run);
+    return out;
+  }
   const verts: number[] = [], cols: number[] = [], offs: number[] = [];
   const inkRuns: Array<{ name: string; la: number; lo: number; from: number; to: number; lit: boolean }> = [];
   for (const w of ways) {
@@ -11782,8 +11832,11 @@ function buildOvTile(key: string, x: number, y: number, z: number,
     const from = verts.length / 3;
     const [, col, mul] = style;
     const hw = mul / 2;                 // RELATIVE half-width; the metres arrive as uOvW
-    for (let i = 0; i < w.geometry.length - 1; i++) {
-      const [aLa, aLo] = w.geometry[i], [bLa, bLo] = w.geometry[i + 1];
+    // Its own piece only. The ink run still covers everything this way
+    // contributed, so a road lighting mid-leg lights all of it at once.
+    for (const piece of clipToTile(w.geometry)) {
+    for (let i = 0; i < piece.length - 1; i++) {
+      const [aLa, aLo] = piece[i], [bLa, bLo] = piece[i + 1];
       const [ax, az] = toLocal(aLa, aLo), [bx, bz] = toLocal(bLa, bLo);
       const dx = bx - ax, dz = bz - az;
       const len = Math.hypot(dx, dz) || 1;
@@ -11798,6 +11851,8 @@ function buildOvTile(key: string, x: number, y: number, z: number,
         px2, pz2, -px2, -pz2, -px2, -pz2);
       for (let q = 0; q < 6; q++) cols.push(col[0], col[1], col[2]);
     }
+    }
+    if (verts.length / 3 === from) continue;   // nothing of this way is ours
     if (gated) inkRuns.push({ name: t.name ?? '', la: sLa, lo: sLo, from, to: verts.length / 3, lit });
   }
   if (!verts.length) {
