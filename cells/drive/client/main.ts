@@ -13541,6 +13541,37 @@ function stepReal(dt: number): boolean {
   ua: navigator.userAgent,
 });
 (window as unknown as { __drive?: object; __surfaceAt?: (x: number, z: number) => string }).__drive = state;
+/** Start/stop a recording. Returns why it refused, if it did. */
+(window as unknown as { __rec?: object }).__rec = (on = true): object => {
+  if (on) return tapeStart();
+  const t = tapeStop();
+  return t ? { ok: true, steps: t.head.steps, secs: t.head.secs,
+    bytes: t.steps.byteLength + t.keys.byteLength } : { ok: false, why: 'not recording' };
+};
+/** Play the last recording (or a named one) back through the simulation. */
+(window as unknown as { __play?: object }).__play = async (id?: string): Promise<object> => {
+  if (tapeRec.on) return { ok: false, why: 'still recording' };
+  const t = await tapeLoad(id);
+  if (!t) return { ok: false, why: 'no tape' };
+  if (!worldQuiet()) return { ok: false, why: 'world still building' };
+  // Back to where the driver was standing when they pressed record. Without
+  // this the tape would be replayed from wherever the truck happens to be, and
+  // the first checkpoint would haul it across the veld.
+  tapeRestore(t.keys, 0);
+  tapePlay.tape = t; tapePlay.i = 0; tapePlay.drift = 0; tapePlay.worst = 0;
+  tapePlay.on = true;
+  return { ok: true, steps: t.head.steps, secs: t.head.secs,
+    sameBuild: t.head.build === TAPE_BUILD };
+};
+function tapeEnd(): void { tapePlay.on = false; }
+/** What the tape is doing, and how hard the checkpoints are having to work. */
+(window as unknown as { __tape?: object }).__tape = (): object => ({
+  recording: tapeRec.on, steps: tapeRec.steps.length / 4, secs: +tapeRec.t.toFixed(2),
+  playing: tapePlay.on, at: tapePlay.i, of: tapePlay.tape?.head.steps ?? 0,
+  drift: +tapePlay.drift.toFixed(3), worstDrift: +tapePlay.worst.toFixed(3),
+  sameBuild: tapePlay.tape ? tapePlay.tape.head.build === TAPE_BUILD : null,
+  quiet: worldQuiet(),
+});
 /** Move the truck by metres, through the real teleport path — the only way a
  *  harness can get far enough from the world origin to test the far shell's
  *  curve compensation, which is a function of exactly that distance. */
@@ -18949,6 +18980,197 @@ let dbgYaw = 0;
 let prevGround: number | null = null; // last frame's resolved ground (tunnel guard)
 let dustBudget = 0;                   // fractional particles carried between frames
 const sunScreen = new THREE.Vector3();
+// ── the tape: a drive recorded, and played back ────────────────────
+/**
+ * A RUN IS A LIST OF WHAT THE DRIVER DID, PLUS A LEASH.
+ *
+ * The obvious design is an input tape: store what the hands did each step and
+ * feed it back. Measured before building any of it, that does not work here —
+ * two identical drives from one spawn, weather and clock pinned, inputs keyed
+ * to step index so the schedule cannot drift, both taking exactly 1100 steps,
+ * finish 136 METRES apart. See determinism.test.mjs for the whole trail.
+ *
+ * It is not the physics. At one second, driving dead straight on identical
+ * throttle, the two runs are already at different SPEEDS — which straight-line
+ * motion under identical inputs can only do if the GROUND is different. Two
+ * page loads do not put the same ground under the wheels: tiles land in a
+ * different order and corridors carve at a different moment. Serve the same
+ * world from a cache and the same measurement falls to a MILLIMETRE at one
+ * second; the world is the whole of it.
+ *
+ * So the tape is not trusted, it is CORRECTED — inputs replayed against state
+ * checkpoints, the way netcode reconciles a prediction against the server. The
+ * simulation does the driving, so the truck leans and slides and throws dust
+ * as it did; the checkpoints only stop the error compounding. Between them the
+ * run is alive; at them it is true.
+ *
+ * V1 IS DELIBERATELY FAT. Four bytes a step, no varint, no run-length, and dt
+ * recorded rather than fixed — about a megabyte an hour, which is nothing for
+ * IndexedDB on a phone and buys a format simple enough to be obviously right.
+ * Recording dt also removes the timestep as a variable, which is worth more
+ * than the byte it costs: the truck integrates differently at 30fps and at
+ * 120, so a tape that did not carry it would replay a different drive on a
+ * different day.
+ */
+const TAPE_V = 1;
+/**
+ * WHICH BUILD MADE THIS TAPE.
+ *
+ * An input tape is only meaningful against the code that produced it: change
+ * the tyre model and the same steering traces a different line. There is no
+ * build stamp in this client, so the deployed script's own URL stands in — it
+ * carries the cell version, changes on every deploy, and costs nothing. A tape
+ * whose build does not match today's can still be PLAYED, because the
+ * checkpoints alone describe the drive; it just is not a re-simulation any
+ * more, and __tapes() says so rather than pretending.
+ */
+const TAPE_BUILD = (document.currentScript as HTMLScriptElement | null)?.src
+  ?? (location.origin + location.pathname);
+/** Steps between checkpoints. Half a second: measured drift inside a window is
+ *  a millimetre against a cached world and 0.14m against a cold one, so a
+ *  correction lands as a nudge rather than as a jump either way. */
+const TAPE_KEY_EVERY = 30;
+/** x, z, heading, speed, slideV, yawR, steerCur, bodyY, pitchC, rollC — the
+ *  ten numbers that ARE the truck. Anything else re-derives from them. */
+const TAPE_KEY_N = 10;
+interface TapeHead {
+  v: number; build: string; at: number; lat: number; lon: number;
+  hdg: number; t: string; wx: string; steps: number; secs: number;
+}
+interface Tape { head: TapeHead; steps: Uint8Array; keys: Float32Array }
+const tapeRec = { on: false, steps: [] as number[], keys: [] as number[], t: 0 };
+const tapePlay = { on: false, i: 0, tape: null as Tape | null, drift: 0, worst: 0 };
+/** Quantised to the byte, and the ranges are the ones the sim actually uses:
+ *  dt is capped at 50ms upstream, steer is ±1, throttle is -1..1, brake 0..1. */
+const q8 = (v: number, lo: number, hi: number): number =>
+  clamp(Math.round(((v - lo) / (hi - lo)) * 255), 0, 255);
+const d8 = (b: number, lo: number, hi: number): number => lo + (b / 255) * (hi - lo);
+function tapeSnap(): number[] {
+  return [state.x, state.z, state.heading, state.speed, slideV, yawR,
+    steerCur, bodyY, pitchC, rollC];
+}
+function tapeRestore(k: Float32Array, at: number): void {
+  state.x = k[at]; state.z = k[at + 1]; state.heading = k[at + 2]; state.speed = k[at + 3];
+  slideV = k[at + 4]; yawR = k[at + 5]; steerCur = k[at + 6];
+  bodyY = k[at + 7]; pitchC = k[at + 8]; rollC = k[at + 9];
+}
+/**
+ * IS THE WORLD FINISHED BUILDING?
+ *
+ * A tape started while tiles are still landing records a drive over ground
+ * that was changing underneath it, and no replay can reproduce that. This is
+ * the gate: roads all fetched, terrain all rebuilt, the sea datum settled and
+ * the biome decided. Cheap enough to poll, and it is the honest answer to "why
+ * did my recording not line up" — it was never eligible to.
+ */
+function worldQuiet(): boolean {
+  return osmQueue.length === 0 && osmInFlight === 0
+    && terrainDirty.size === 0 && seaDatumSteady >= 3 && biomeSettled;
+}
+/**
+ * WHERE A RUN LIVES. IndexedDB, and local only for now.
+ *
+ * Not localStorage: a megabyte an hour would fill its quota inside a short
+ * drive, and it stores strings, so every tape would pay base64's third on top.
+ * IndexedDB takes the typed arrays as they are.
+ */
+const TAPE_DB = 'drive-tapes';
+function tapeDb(): Promise<IDBDatabase> {
+  return new Promise((go, no) => {
+    const q = indexedDB.open(TAPE_DB, 1);
+    q.onupgradeneeded = () => { q.result.createObjectStore('runs', { keyPath: 'id' }); };
+    q.onsuccess = () => go(q.result);
+    q.onerror = () => no(q.error);
+  });
+}
+async function tapeSave(t: Tape): Promise<string> {
+  const id = `run-${t.head.at}`;
+  const db = await tapeDb();
+  await new Promise<void>((go, no) => {
+    const tx = db.transaction('runs', 'readwrite');
+    tx.objectStore('runs').put({ id, head: t.head, steps: t.steps, keys: t.keys });
+    tx.oncomplete = () => go();
+    tx.onerror = () => no(tx.error);
+  });
+  db.close();
+  return id;
+}
+async function tapeLoad(id?: string): Promise<Tape | null> {
+  const db = await tapeDb();
+  const all = await new Promise<Array<Tape & { id: string }>>((go, no) => {
+    const q = db.transaction('runs', 'readonly').objectStore('runs').getAll();
+    q.onsuccess = () => go(q.result as Array<Tape & { id: string }>);
+    q.onerror = () => no(q.error);
+  });
+  db.close();
+  if (!all.length) return null;
+  // No id given means the LAST one, which is what "play that back" means when
+  // you have just finished driving it.
+  const row = id ? all.find((r) => r.id === id) : all.sort((a, b) => a.head.at - b.head.at).pop();
+  return row ? { head: row.head, steps: row.steps, keys: row.keys } : null;
+}
+/** Start a tape here. Refuses on a world that is still arriving — see above. */
+function tapeStart(): { ok: boolean; why?: string } {
+  if (tapePlay.on) return { ok: false, why: 'replaying' };
+  if (!worldQuiet()) return { ok: false, why: 'world still building' };
+  const [lat, lon] = localToLatLon(state.x, state.z);
+  tapeRec.steps.length = 0; tapeRec.keys.length = 0; tapeRec.t = 0;
+  tapeRec.keys.push(...tapeSnap());
+  tapeRec.on = true;
+  tapeHead = { v: TAPE_V, build: TAPE_BUILD, at: Date.now(), lat, lon,
+    hdg: (state.heading * 180) / Math.PI, t: TIME_MODES[timeMode], wx: wx.sky,
+    steps: 0, secs: 0 };
+  return { ok: true };
+}
+let tapeHead: TapeHead | null = null;
+function tapeStop(): Tape | null {
+  if (!tapeRec.on || !tapeHead) return null;
+  tapeRec.on = false;
+  tapeHead.steps = tapeRec.steps.length / 4;
+  tapeHead.secs = +tapeRec.t.toFixed(2);
+  const tape: Tape = {
+    head: tapeHead,
+    steps: new Uint8Array(tapeRec.steps),
+    keys: new Float32Array(tapeRec.keys),
+  };
+  void tapeSave(tape);
+  return tape;
+}
+/** One step onto the tape: what the frame took, and what the hands did. */
+function tapeWrite(dt: number, inp: { throttle: number; steer: number; brakeF: number }): void {
+  const n = tapeRec.steps.length / 4;
+  tapeRec.steps.push(q8(dt, 0, 0.05), q8(inp.steer, -1, 1),
+    q8(inp.throttle, -1, 1), q8(inp.brakeF, 0, 1));
+  tapeRec.t += dt;
+  if ((n + 1) % TAPE_KEY_EVERY === 0) tapeRec.keys.push(...tapeSnap());
+}
+/** …and one step off it. Returns null past the end, which stops the replay. */
+function tapeRead(): { dt: number; throttle: number; steer: number; brake: boolean; brakeF: number } | null {
+  const t = tapePlay.tape;
+  if (!t || tapePlay.i * 4 >= t.steps.length) return null;
+  const o = tapePlay.i * 4;
+  const brakeF = d8(t.steps[o + 3], 0, 1);
+  return { dt: d8(t.steps[o], 0, 0.05), steer: d8(t.steps[o + 1], -1, 1),
+    throttle: d8(t.steps[o + 2], -1, 1), brake: brakeF > 0.5, brakeF };
+}
+/**
+ * THE CORRECTION, and it is a MEASUREMENT before it is a fix.
+ *
+ * drift is how far the replay had wandered when the checkpoint came due —
+ * the number that says whether the tape is being believed or carried. Snapped
+ * rather than blended in V1: at half a second the error is millimetres on a
+ * warm world, so there is nothing to smooth, and a blend would hide exactly
+ * the drift this is here to report.
+ */
+function tapeCorrect(): void {
+  const t = tapePlay.tape;
+  if (!t || tapePlay.i === 0 || tapePlay.i % TAPE_KEY_EVERY !== 0) return;
+  const at = (tapePlay.i / TAPE_KEY_EVERY) * TAPE_KEY_N;
+  if (at + TAPE_KEY_N > t.keys.length) return;
+  tapePlay.drift = Math.hypot(state.x - t.keys[at], state.z - t.keys[at + 1]);
+  if (tapePlay.drift > tapePlay.worst) tapePlay.worst = tapePlay.drift;
+  tapeRestore(t.keys, at);
+}
 function tick(now: number): void {
   // PAUSED WHILE THE MENU IS UP, and the "when appropriate" is real drive: the
   // car outside is still moving whatever this screen is doing, so freezing the
@@ -18971,10 +19193,20 @@ function tick(now: number): void {
   // collapses, the timestep is the whole story and the accumulator is worth
   // building; if it does not, something else is loose and the surgery would
   // have been wasted.
-  const dt = paused ? 0 : (FIX_DT || Math.min(0.05, raw / 1000));
+  // A REPLAY TAKES ITS TIMESTEP FROM THE TAPE, not from this machine. The truck
+  // integrates differently at 30fps and at 120, so a tape that replayed at the
+  // local frame rate would be playing a different drive.
+  const played = tapePlay.on ? tapeRead() : null;
+  if (tapePlay.on && !played) tapeEnd();
+  const dt = played ? played.dt : paused ? 0 : (FIX_DT || Math.min(0.05, raw / 1000));
   last = now;
   simT += dt; simN++;
-  const raw2 = real.on || paused ? { throttle: 0, steer: 0, brake: false, brakeF: 0 } : input();
+  const raw2 = played
+    ? { throttle: played.throttle, steer: played.steer, brake: played.brake, brakeF: played.brakeF }
+    : real.on || paused ? { throttle: 0, steer: 0, brake: false, brakeF: 0 } : input();
+  // …and a recording takes what the hands just did, before anything downstream
+  // has a chance to reinterpret it.
+  if (tapeRec.on && !paused) tapeWrite(dt, raw2);
   // FLYING THE DRONE MEANS NOT DRIVING. The rig stays exactly where you left
   // it — that is the whole point of scouting ahead — so the controls are handed
   // over wholesale rather than shared.
@@ -19256,6 +19488,10 @@ function tick(now: number): void {
       }
     }
   }
+  // THE CHECKPOINT LANDS AFTER THE STEP THAT EARNED IT, and before the body is
+  // laid on the terrain — so a corrected position gets its suspension resolved
+  // this frame rather than showing one frame of the truck in the old attitude.
+  if (played) { tapePlay.i++; tapeCorrect(); }
   // ── suspension: the truck LIES on the terrain via 4 wheel contacts ──
   const sinH = Math.sin(state.heading), cosH = Math.cos(state.heading);
   const contacts: number[] = [];
