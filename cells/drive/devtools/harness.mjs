@@ -144,6 +144,30 @@ export async function openDrive(opts = {}) {
   // locating it — and a bundled build has one file to search.
   page.on('pageerror', (e) => errors.push(
     `${String(e)}\n${(e && e.stack ? String(e.stack) : '').split('\n').slice(1, 4).join('\n')}`.slice(0, 600)));
+  /**
+   * A SHADER THAT WILL NOT COMPILE IS NOT A PAGE ERROR, and that is exactly why
+   * it needs watching here.
+   *
+   * three catches the failure, logs it to the CONSOLE and carries on; the page
+   * throws nothing, the render loop keeps running, and every probe in the suite
+   * answers cheerfully about geometry, attributes and materials that are never
+   * drawn. Measured the hard way: a slip layer whose fragment shader used
+   * `patch` — a reserved word in GLSL ES 3.00 — failed the whole carriageway
+   * program to link, so no road was drawn at all, and four separate probes
+   * reported the feature present and correct. It took a screenshot with the
+   * effect forced to solid red, showing no red, to find it.
+   *
+   * One line in the console names it immediately. Folded into the same errors
+   * array every tool already reports, so no test has to opt in.
+   */
+  page.on('console', (m) => {
+    const t = m.text();
+    if (!/Shader Error|not compiled|VALIDATE_STATUS|INVALID_OPERATION: useProgram/i.test(t)) return;
+    // Only the first of each distinct failure: a broken program re-reports on
+    // every frame, and two hundred identical lines hide the one that matters.
+    const key = (t.match(/ERROR: \d+:\d+: .*/) ?? [t.slice(0, 120)])[0];
+    if (!errors.some((e) => e.includes(key))) errors.push(`GLSL: ${key}`);
+  });
   if (opts.init) await page.addInitScript(opts.init);
   // Intercepts, BEFORE the first load. A test that needs to stand in for an
   // upstream — the apex's OAuth endpoints, a `~/` route the local server 404s —

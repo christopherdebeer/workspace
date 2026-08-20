@@ -3034,13 +3034,103 @@ function retroreflective(mat: THREE.Material, p: RRParams = { cone: 7, face: 3, 
   mat.needsUpdate = true;
   return mat;
 }
+/**
+ * THE SLIP SHADER. Two octaves of world-locked hash against the vertex's own
+ * slip strength — where the grit wins, the tarmac is replaced by the hillside's
+ * colour outright rather than blended toward it.
+ *
+ * OUTRIGHT, because the frame is quantised to fourteen levels: a smooth mix
+ * lands between levels and the quantiser rounds a whole region to one side of
+ * the boundary, which is a BAND, not a gradient — the same fault the far shell
+ * had. A binary decision at a density that ramps is what a 14-level palette can
+ * actually render, and it is what the dither in the composite is doing already.
+ *
+ * The coarse octave clumps the fine one so it reads as slides rather than as
+ * static, and both are floor()ed in world metres so the pattern belongs to the
+ * ground. Nothing here reads gl_FragCoord, on purpose.
+ */
+const SLIP_CHUNK = `
+  float slipHash(vec2 p) {
+    return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453123);
+  }
+  float slipGrit(vec2 w) {
+    // 30cm grit inside 3.5m patches: the patch decides whether there is a
+    // slide here at all, the grit decides which pixels of it are covered.
+    // clump, NOT patch: patch is a RESERVED WORD in GLSL ES 3.00 (it is a
+    // tessellation qualifier), and naming a local that failed the whole
+    // carriageway program to link — silently, because a shader error is a
+    // console message and not a page error. See the harness's shader watch.
+    float fine = slipHash(floor(w * 3.3));
+    float clump = slipHash(floor(w * 0.29) + 41.7);
+    return fine * 0.55 + clump * 0.45;
+  }`;
+/** What three actually handed slipify, recorded at compile time. A replace()
+ *  that misses its chunk fails SILENTLY — the source comes back unchanged, the
+ *  varying goes unused, the attribute is optimised out, and everything
+ *  downstream reports success while nothing renders. */
+const slipDbg: Record<string, boolean | number> = {};
+function slipify<T extends THREE.Material>(mat: T): T {
+  mat.onBeforeCompile = (sh) => {
+    slipDbg.ran = true;
+    slipDbg.vCommon = sh.vertexShader.includes('#include <common>');
+    slipDbg.vBegin = sh.vertexShader.includes('#include <begin_vertex>');
+    slipDbg.fCommon = sh.fragmentShader.includes('#include <common>');
+    slipDbg.fColor = sh.fragmentShader.includes('#include <color_fragment>');
+    slipDbg.fMap = sh.fragmentShader.includes('#include <map_fragment>');
+    slipDbg.fDither = sh.fragmentShader.includes('#include <dithering_fragment>');
+    slipDbg.fLen = sh.fragmentShader.length;
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>
+        attribute float aSlip; attribute vec3 aDirt;
+        varying float vSlip; varying vec3 vDirt; varying vec2 vSlipXZ;`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>
+        vSlip = aSlip; vDirt = aDirt;
+        // OBJECT SPACE, not modelMatrix * transformed. A ribbon's vertices are
+        // already absolute world metres at build time, and object space cannot
+        // be moved out from under the pattern by a group transform — a world
+        // rebase would otherwise reshuffle every slip on the map at once.
+        vSlipXZ = transformed.xz;`);
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying float vSlip; varying vec3 vDirt; varying vec2 vSlipXZ;
+        ${SLIP_CHUNK}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        // The tail is what sells it: a slide has a ragged toe rather than an
+        // edge, so the coverage is pushed a little past its own strength and
+        // the grit function's own distribution does the fraying.
+        // SWEPT DOWN THE MIDDLE. A slip painted evenly kerb to kerb reads as an
+        // unpaved road, not as a road with dirt on it — measured at Wadi Rum,
+        // 84% of deck vertices carrying it and the crown as brown as the edges.
+        // Traffic keeps a lane clean and pushes the loose stuff to the sides,
+        // so the coverage is weighted by distance from the centreline. The
+        // ribbon's own u already runs 0 at one kerb to 1 at the other, so this
+        // costs nothing and needs no attribute: it is the same number the
+        // tarmac's lane markings are drawn from.
+        // vMapUv, NOT vUv: three splits a varying per map channel since r152
+        // (this is 0.185) and the bare vUv no longer exists in the fragment.
+        // Named in one run by the harness's shader watch, which is the entire
+        // reason that watch is there.
+        // 0.5, between the two states that were measured: at 1.0 the falloff is
+        // linear and leaves the kerb band too thin to read at range, at 0.8 the
+        // whole effect fell to 1.3% of a road crop. This keeps the crown clean
+        // and lets the dirt reach a couple of metres in from each edge.
+        float edge = pow(abs(vMapUv.x - 0.5) * 2.0, 0.5);
+        if (vSlip > 0.004 && slipGrit(vSlipXZ) < vSlip * edge * 1.25 - 0.04) {
+          // Not flat dirt: the tarmac's own light and wear still modulate it,
+          // so a slip over a worn patch is worn and one in shadow is dark.
+          diffuseColor.rgb = vDirt * (0.72 + 0.5 * dot(diffuseColor.rgb, vec3(0.33)));
+        }`);
+  };
+  mat.needsUpdate = true;
+  return mat;
+}
 const MAT = {
   // The carriageway sits a few CENTIMETRES over ground that has been cut to
   // receive it, so it needs the same treatment water and the ruts already had:
   // depth-buffer bias rather than metres. It carries the strongest offset of
   // the drapes because it must win over every one of them where they overlap —
   // a road through a park, over a river, across a track.
-  road: new THREE.MeshLambertMaterial({
+  road: slipify(new THREE.MeshLambertMaterial({
     map: roadTex, side: DS, vertexColors: true,
     // ORDERED BY UNITS, NOT BY FACTOR. `polygonOffsetFactor` multiplies the
     // polygon's own depth SLOPE, and a road seen down its own length is the
@@ -3053,7 +3143,7 @@ const MAT = {
     // is a constant in depth-buffer increments, with just enough factor left to
     // do the job factor exists for.
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -12,
-  }),
+  })),
   minor: new THREE.MeshLambertMaterial({
     map: pathTex, transparent: true, opacity: 0.85, side: DS,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -8,
@@ -3077,11 +3167,11 @@ const MAT = {
   // smear rather than a line — the resolution to paint it INTO the ground does
   // not exist, and the honest alternative is to make the overlay behave like
   // ground rather than like paint.
-  track: new THREE.MeshLambertMaterial({
+  track: slipify(new THREE.MeshLambertMaterial({
     map: trackTex, transparent: true, opacity: 0.68, side: DS, depthWrite: false,
     vertexColors: true,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -6,
-  }),
+  })),
   // polygonOffset as well as the lift: water and terrain are two nearly
   // coincident surfaces, and a constant lift alone cannot win at every camera
   // distance. The offset is in depth-buffer units, so it scales with the
@@ -6058,6 +6148,31 @@ const CUT_RELIEF = new URLSearchParams(location.search).get('relief') !== '0';
  * the wash alone and let the ground kiss the tarmac.
  */
 const RELIEF_MIN = 0.06;
+/**
+ * ── THE SLIP: erosion as PAINT, now that it is no longer geometry ──
+ *
+ * Getting the ground out from under the tarmac took the ragged look with it,
+ * and the ragged look was the good half: "I do quite like the 'erosion' feel
+ * but the swimming is just wrong". The swimming came from two nearly coplanar
+ * surfaces trading places; the LOOK came from the crossing curve between them
+ * being irregular. Only the first of those needed geometry.
+ *
+ * So the second is repainted. Where a road is cut into a hillside the face
+ * above it sheds — that is what a cut face does — and the material lands on
+ * the carriageway and thins away from the kerb. The strength of it is read off
+ * the excavation that is already computed for the batter: how far the natural
+ * ground at this kerb stands ABOVE the deck. A viaduct has no hillside and
+ * gets nothing; a shelf road through rock gets a lot; the loose surfaces get
+ * more than the engineered ones.
+ *
+ * ANCHORED IN THE WORLD, NOT ON THE SCREEN, and that is the whole design
+ * constraint rather than a detail. An ordered dither keyed to gl_FragCoord is
+ * the obvious way to break an edge on a 14-level palette, and it would crawl
+ * across the tarmac as the camera moved — which is precisely the complaint
+ * this is trying to answer. The grit is hashed from quantised world XZ, so it
+ * is stuck to the road: drive past it and it holds still, exactly like dirt.
+ */
+const SLIP_K = Math.max(0, Number(new URLSearchParams(location.search).get('slip') ?? 1) || 0);
 function roadFloorHard(x: number, z: number, wash = CUT_WASH): number | null {
   cutSet.clear();
   stripsNear(x, z, 2, cutSet);
@@ -7463,6 +7578,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // Per-vertex tint: what the way is made of, or for a track the colour of the
   // ground it is worn into. See `roadTint`.
   const cols: number[] = [];
+  // Per-vertex slip strength, and the colour of what slipped. See SLIP_K.
+  const slips: number[] = [];
+  const dirts: number[] = [];
   // The road's THICKNESS. Two side faces hanging off the kerbs, closing the
   // gap between the carriageway and whatever the terrain mesh actually does
   // underneath it. Earth where the road is cut into the ground, concrete where
@@ -8210,6 +8328,65 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         const c = tint ?? [1, 1, 1];
         for (let k = 0; k < 6; k++) cols.push(c[0], c[1], c[2]);
       }
+      // ── how much has come down on this bay, corner by corner ──
+      //
+      // Read at the KERB and applied to the kerb's own corners, so the slip is
+      // strongest where the face is and thins across the carriageway on its
+      // own — the vertex interpolation does the fade, no falloff term needed.
+      // The whisker outboard is the batter's trick: on a side-slope the ground
+      // at the kerb line is already half the road's, and the hillside proper
+      // starts a couple of metres out.
+      // OUTBOARD ONLY, AND NOT THE BATTER'S `min`. The batter takes the lower
+      // of the kerb and a whisker beyond it because it is hunting daylight —
+      // the sliver of sky under a fascia that stopped too high — so the
+      // SHALLOWER reading is the safe one there. A slip is the opposite
+      // question: it wants the FACE, the ground that stands over the road and
+      // can come down onto it, and `min` systematically answers with whichever
+      // side is falling away. Read at 3.5m, past the shoulder the carve
+      // flattened, where a cut face has actually started to climb.
+      const ox2 = (-dz / len) * 3.5, oz2 = (dx / len) * 3.5;
+      // TWO QUESTIONS, NOT ONE, and the first one is the one that matters.
+      //
+      // Keyed on the cut face alone this asked "is there a hillside above this
+      // kerb", which is true of a minority of any road and put the paint out at
+      // the vanishing point where a metre of it covers a pixel. Measured: 1.3%
+      // of a road crop moved at Noordhoek and 4.8% at Wadi Rum, and nearly all
+      // of the second was a camel walking through the frame.
+      //
+      // The look being brought back was never about cuttings. It was the ground
+      // MEETING the tarmac — the old carve let the hillside surface right at the
+      // kerb line, and the ragged boundary where it broke through is what read
+      // as erosion. So SPILL asks whether the ground is at grade with the deck
+      // here, which is true of most of any road at its edges, and MASS asks how
+      // much is standing above to come down, which is what separates a dusty
+      // verge from a slide.
+      const at = (C: number[], dx2: number, dz2: number): number =>
+        sampleHeight(C[0] + dx2, C[2] + dz2) - C[1];
+      // The loose surfaces shed and the engineered ones are held: `sq` is the
+      // way's own surface quality, already parsed off its tags.
+      const shed = (track ? 1.25 : 0.85) * (1.35 - 0.7 * (sq ?? (track ? 0.35 : 0.8)));
+      const slipOf = (C: number[], sgn: number): number => {
+        // At the kerb: below -10cm the ground has fallen away and nothing can
+        // spill; by +20cm it is level with the tarmac and fully does.
+        const spill = clamp((at(C, 0, 0) + 0.10) / 0.30, 0, 1);
+        if (spill <= 0) return 0;
+        // Behind it: a face rising past 20cm within three and a half metres,
+        // saturating at 2.6m so a forty-metre rock cut is not simply redder
+        // than a four-metre one.
+        const mass = clamp((at(C, ox2 * sgn, oz2 * sgn) - 0.2) / 2.4, 0, 1);
+        return spill * (0.34 + 0.66 * mass) * shed * SLIP_K;
+      };
+      const sAR = slipOf(AR, 1), sAL = slipOf(AL, -1);
+      const sBR = slipOf(BR, 1), sBL = slipOf(BL, -1);
+      // Same corner order the two triangles were pushed in.
+      slips.push(sAR, sBR, sAL, sBR, sBL, sAL);
+      // WHAT COLOUR THE DIRT IS: the ground's own, at this bay, from the same
+      // palette the hillside beside it is painted with. One lookup per bay —
+      // what a track already pays — because a slip is one slide of one
+      // hillside and does not need to change hue across four metres.
+      const [dr, dg, db] = terrainPalette(elev[i] + baseElev,
+        Math.abs((elev[Math.min(n - 1, i + 1)] - elev[i]) / Math.max(len, 1)), sampleCover(x0, z0));
+      for (let k = 0; k < 6; k++) dirts.push(dr, dg, db);
     }
     if (drivable) {
       const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name, sq, fd: fid, pb: pbranch,
@@ -8556,6 +8733,10 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
   if (cols.length === verts.length) geo.setAttribute('color', new THREE.BufferAttribute(new Float32Array(cols), 3));
+  if (slips.length * 3 === verts.length) {
+    geo.setAttribute('aSlip', new THREE.BufferAttribute(new Float32Array(slips), 1));
+    geo.setAttribute('aDirt', new THREE.BufferAttribute(new Float32Array(dirts), 3));
+  }
   geo.computeVertexNormals();
   {
     // Tagged so the same boundary-edge count that found the slots in the tunnel
@@ -14528,6 +14709,15 @@ function applyHidden(): void {
     trunks.visible = false;
   }
   if (hideSet.has('terrain')) for (const m of terrainMeshes.values()) m.visible = false;
+  // LIVESTOCK. Added for the slip test, which compares two loads of one spot
+  // pixel by pixel: a camel walking across the Wadi Rum road moved 1.9% of the
+  // road crop on its own, against an effect worth 3%, so the noise floor was
+  // within a factor of two of the signal and moved between runs. Anything
+  // wandering has to be able to stand down before a frame is a measurement.
+  if (hideSet.has('critters')) {
+    for (const m of herds) m.visible = false;
+    birds.visible = false;
+  }
 }
 (window as unknown as { __hide?: object }).__hide = (layer?: string, off = true): object => {
   if (layer !== undefined) {
@@ -14543,6 +14733,7 @@ function applyHidden(): void {
         trunks.visible = true;
       }
       if (layer === 'terrain') for (const m of terrainMeshes.values()) m.visible = true;
+      if (layer === 'critters') { for (const m of herds) m.visible = true; birds.visible = true; }
     }
   }
   return { hidden: [...hideSet],
@@ -14718,6 +14909,126 @@ function truckSpec(): Record<string, number> {
   return { roadSegs: road, trackSegs: track, sample };
 };
 (window as unknown as { __susp?: object }).__susp = (): object => dbgSusp;
+/**
+ * PUT THE TRUCK ON THE ROAD. Nearest drivable centreline within `r`, snapped to
+ * through the ordinary teleport.
+ *
+ * A spawn coordinate is a wish, not a position: whether it lands on tarmac
+ * depends on how the way was clipped and which tile arrived first, and the
+ * Chapman's Peak corniche lands beside its road often enough to make any
+ * road-dependent measurement there a coin flip. Tests that need to be ON a
+ * road should say so rather than hope — and the alternative, a longer wait,
+ * makes a flake slower without making it rarer.
+ */
+(window as unknown as { __toroad?: object }).__toroad = (r = 80): object => {
+  let best: Seg | null = null, bd = Infinity, bx = 0, bz = 0;
+  const cells = Math.ceil(r / GRID);
+  for (let cx = -cells; cx <= cells; cx++) for (let cz = -cells; cz <= cells; cz++) {
+    for (const sg of roadGrid.get(`${Math.floor(state.x / GRID) + cx},${Math.floor(state.z / GRID) + cz}`) ?? []) {
+      if (sg.ya === undefined) continue;               // not a deck: a wall
+      const [px, pz] = closestOnSeg(state.x, state.z, sg);
+      const d = Math.hypot(state.x - px, state.z - pz);
+      if (d < bd) { bd = d; best = sg; bx = px; bz = pz; }
+    }
+  }
+  if (!best || bd > r) return { ok: false, found: !!best, dist: Math.round(bd) };
+  teleportTo(bx, bz);
+  // Point down the way, so a walk forward from here has road ahead of it.
+  state.heading = Math.atan2(best.bx - best.ax, -(best.bz - best.az));
+  return { ok: true, moved: Math.round(bd), name: best.nm ?? null,
+    at: [Math.round(bx), Math.round(bz)] };
+};
+/**
+ * THE SLIP LAYER, as data: how much of the built carriageway is carrying it and
+ * how hard. Read off the attribute every ribbon actually uploaded, so it
+ * measures what is on the GPU and not what the builder meant to put there.
+ */
+(window as unknown as { __slipcoat?: object }).__slipcoat = (r = 400): object => {
+  let n = 0, painted = 0, sum = 0, max = 0, meshes = 0, missing = 0;
+  const hist = new Array(10).fill(0);
+  const vals: number[] = [];
+  worldGroup.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || !m.userData.ribbon) return;
+    const a = m.geometry.getAttribute('aSlip') as THREE.BufferAttribute | undefined;
+    const p = m.geometry.getAttribute('position') as THREE.BufferAttribute;
+    if (!a) { missing++; return; }
+    meshes++;
+    for (let i = 0; i < a.count; i++) {
+      if (Math.hypot(p.getX(i) - state.x, p.getZ(i) - state.z) > r) continue;
+      const v = a.getX(i);
+      n++; sum += v; if (v > 0.004) painted++;
+      if (v > max) max = v;
+      hist[Math.min(9, Math.floor(v * 10))]++;
+      if (v > 0.004) vals.push(v);
+    }
+  });
+  // IS ANY OF THIS EVEN ON SCREEN? A slip layer that renders nothing and a slip
+  // layer that renders nothing VISIBLE are different bugs, and the attribute
+  // counts above cannot tell them apart.
+  const near2: Array<Record<string, unknown>> = [];
+  worldGroup.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || !m.userData.ribbon || near2.length >= 4) return;
+    m.geometry.computeBoundingSphere();
+    const c = m.geometry.boundingSphere;
+    if (!c || Math.hypot(c.center.x - state.x, c.center.z - state.z) - c.radius > 90) return;
+    let vis = m.visible;
+    for (let q: THREE.Object3D | null = m.parent; q; q = q.parent) vis = vis && q.visible;
+    near2.push({
+      dist: Math.round(Math.hypot(c.center.x - state.x, c.center.z - state.z)),
+      visible: vis, frustumCulled: m.frustumCulled,
+      isRoadMat: (m.material as THREE.Material).uuid === MAT.road.uuid,
+      isTrackMat: (m.material as THREE.Material).uuid === MAT.track.uuid,
+      matType: (m.material as THREE.Material).type,
+      hasSlip: !!m.geometry.getAttribute('aSlip'),
+    });
+  });
+  return {
+    onScreen: near2, groupVisible: worldGroup.visible,
+    k: SLIP_K, meshes, noAttr: missing, verts: n,
+    painted, frac: n ? +(painted / n).toFixed(3) : 0,
+    mean: n ? +(sum / n).toFixed(3) : 0, max: +max.toFixed(3),
+    hist, distinct: [...new Set(vals.map((v) => +v.toFixed(3)))].sort((p2, q) => p2 - q).slice(0, 12),
+  };
+};
+/** The fragment source three actually compiled for the carriageway — so a
+ *  claim about what the slip is keyed to can be checked against the shader
+ *  rather than against the intention. */
+(window as unknown as { __slipsrc?: object }).__slipsrc = (): object => {
+  // SNAPSHOT FIRST. The synthetic call below runs the very hook whose record
+  // this is reading, so taking the copy afterwards reports the probe's own
+  // 43-character stub instead of the shader three compiled — which is exactly
+  // what it did, and it looked like a missing chunk.
+  const compiled = { ...slipDbg };
+  const sh = {
+    vertexShader: '#include <common>\n#include <begin_vertex>',
+    fragmentShader: '#include <common>\n#include <color_fragment>',
+  };
+  (MAT.road.onBeforeCompile as unknown as (s: typeof sh) => void)(sh);
+  // …AND WHAT THE GPU GOT. The above only proves the replace strings matched a
+  // synthetic input; this asks the compiled programs whether `aSlip` is an
+  // ACTIVE ATTRIBUTE, which it can only be if three compiled the injected
+  // vertex shader and the geometry bound it.
+  const progs: Array<{ key: string; attrs: string[] }> = [];
+  for (const pr of (renderer.info.programs ?? []) as Array<{
+    cacheKey: string; getAttributes: () => Record<string, unknown> }>) {
+    const attrs = Object.keys(pr.getAttributes());
+    if (attrs.includes('aSlip') || /slipGrit/.test(pr.cacheKey)) {
+      progs.push({ key: pr.cacheKey.slice(0, 60), attrs: attrs.filter((a) => a.startsWith('a')) });
+    }
+  }
+  return {
+    vertex: sh.vertexShader.includes('aSlip'), fragment: sh.fragmentShader.includes('slipGrit'),
+    // Run against a bare stub, so three's own chunks are not in the way: any
+    // gl_FragCoord here is MINE, and a slip keyed to the screen would crawl
+    // over the tarmac exactly like the fault this feature answers.
+    injectedWorld: sh.fragmentShader.includes('vSlipXZ'),
+    injectedScreen: /gl_FragCoord/.test(sh.fragmentShader) || /gl_FragCoord/.test(sh.vertexShader),
+    programs: (renderer.info.programs ?? []).length, withSlip: progs.length,
+    compiled,
+  };
+};
 // The two surfaces the verge argument is about: what the mesh does, and what
 // the world would have done if no road had ever been drawn there.
 (window as unknown as { __meshAt?: object }).__meshAt = (x: number, z: number): number | null => meshSurfaceAt(x, z);

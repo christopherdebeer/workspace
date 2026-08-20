@@ -73,6 +73,13 @@ const measure = async (spot, relief) => {
   for (let i = 0; i < 20; i++) {
     r = await d.page.evaluate(() => window.__zfight());
     if (r.onRoad && r.samples > 0) break;
+    // A SPAWN COORDINATE IS A WISH. Whether it lands on tarmac depends on how
+    // the way was clipped and which tile arrived first, and the Chapman's Peak
+    // corniche lands beside its road often enough to make this a coin flip —
+    // it failed here once with the truck 0/33 on-road while the control run
+    // measured 33. Waiting longer makes a flake slower, not rarer, so after a
+    // few passes it asks to be put on the road instead.
+    if (i === 4) await d.page.evaluate(() => window.__toroad());
     await d.page.waitForTimeout(3000);
   }
   errors.push(...d.errors);
