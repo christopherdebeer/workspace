@@ -12721,6 +12721,9 @@ const WX_LIVE = { cloud: 0 };
 // ?wx=clear|haze|rain|storm pins the weather the way ?sunalt= pins the sun:
 // a geometry screenshot taken on the day Cape Town actually had rain is a
 // screenshot of the rain. Beats both the live feed and the synthetic chain.
+/** ?fixdt=<seconds> — see the note at its use in the tick. 0 is off. */
+const FIX_DT = Math.max(0, Math.min(0.05,
+  Number(new URLSearchParams(location.search).get('fixdt') ?? 0) || 0));
 const WX_PIN = ((): Sky | null => {
   const v = new URLSearchParams(location.search).get('wx');
   return v === 'clear' || v === 'haze' || v === 'rain' || v === 'storm' ? v : null;
@@ -18956,7 +18959,19 @@ function tick(now: number): void {
   const paused = (menu.tab() !== null || hidden) && !real.on;
   const raw = now - last;
   if (raw > 0 && raw < 2000) frameMs += (raw - frameMs) * 0.1;
-  const dt = paused ? 0 : Math.min(0.05, raw / 1000);
+  // A FIXED STEP, ON A FLAG, TO SETTLE WHAT THE DRIFT IS MADE OF.
+  //
+  // Two identical drives — same spawn, pinned weather and clock, steering a
+  // pure function of distance travelled — end 22m apart over 250m. The suspect
+  // is this line: dt is whatever the frame happened to take, so yaw integrates
+  // over different slices and the same steering traces a different curve. That
+  // is a diagnosis, not a measurement, and rebuilding 450 lines of interleaved
+  // tick into a fixed-step accumulator is too much surgery to do on a
+  // suspicion. Pinning dt costs one line and answers it: if the drift
+  // collapses, the timestep is the whole story and the accumulator is worth
+  // building; if it does not, something else is loose and the surgery would
+  // have been wasted.
+  const dt = paused ? 0 : (FIX_DT || Math.min(0.05, raw / 1000));
   last = now;
   simT += dt; simN++;
   const raw2 = real.on || paused ? { throttle: 0, steer: 0, brake: false, brakeF: 0 } : input();
