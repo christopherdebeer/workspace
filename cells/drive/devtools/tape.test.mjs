@@ -67,8 +67,8 @@ for (let i = 0; i < 40; i++) {
   if (await page.evaluate(() => window.__tape().quiet)) break;
   await page.waitForTimeout(3000);
 }
-check('the world went quiet, so a tape is eligible',
-  await page.evaluate(() => window.__tape().quiet), await page.evaluate(() => window.__tape()));
+const q = await page.evaluate(() => window.__tape());
+check('the world went quiet, so a tape is eligible', q.quiet === true, q.why ?? q);
 
 const started = await page.evaluate(() => window.__rec(true));
 check('recording started', started.ok === true, started);

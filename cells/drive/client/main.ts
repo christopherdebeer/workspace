@@ -13570,7 +13570,9 @@ function tapeEnd(): void { tapePlay.on = false; }
   playing: tapePlay.on, at: tapePlay.i, of: tapePlay.tape?.head.steps ?? 0,
   drift: +tapePlay.drift.toFixed(3), worstDrift: +tapePlay.worst.toFixed(3),
   sameBuild: tapePlay.tape ? tapePlay.tape.head.build === TAPE_BUILD : null,
-  quiet: worldQuiet(),
+  // The breakdown, not just the verdict: a gate that says only "no" costs a
+  // whole test run to interrogate.
+  quiet: worldQuiet(), why: worldQuietWhy(),
 });
 /** Move the truck by metres, through the real teleport path — the only way a
  *  harness can get far enough from the world origin to test the far shell's
@@ -19063,9 +19065,28 @@ function tapeRestore(k: Float32Array, at: number): void {
  * the biome decided. Cheap enough to poll, and it is the honest answer to "why
  * did my recording not line up" — it was never eligible to.
  */
+function worldQuietWhy(): { roads: boolean; terrain: boolean; sea: boolean } {
+  return {
+    // Roads carve corridors into the terrain, so a road still in flight is
+    // ground still moving.
+    roads: osmQueue.length === 0 && osmInFlight === 0,
+    terrain: terrainDirty.size === 0,
+    // ONLY WHERE THERE IS A SEA TO SETTLE. seaDatumSteady counts passes that
+    // AGREE, and measureSeaDatum returns before it can ever touch that counter
+    // unless it has both wet and dry samples — so inland, where there is no
+    // water at all, it is zero forever. The first cut of this gate required it
+    // and therefore never opened: recording refused for two solid minutes at
+    // Senqu, which is 93% grass and 0% water. An assertion has to be checkable
+    // before it is worth making.
+    sea: seaDatum === null || seaDatumSteady >= 3,
+  };
+}
+/** …and the biome is deliberately NOT in the gate. It decides palette and haze
+ *  colour, which no wheel can feel; waiting for it would hold a recording on a
+ *  question the physics never asks. */
 function worldQuiet(): boolean {
-  return osmQueue.length === 0 && osmInFlight === 0
-    && terrainDirty.size === 0 && seaDatumSteady >= 3 && biomeSettled;
+  const w = worldQuietWhy();
+  return w.roads && w.terrain && w.sea;
 }
 /**
  * WHERE A RUN LIVES. IndexedDB, and local only for now.
