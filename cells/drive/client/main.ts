@@ -16768,6 +16768,10 @@ addEventListener('wheel', (e) => {
 // wherever it is, and the local projection is an equirectangular tangent plane
 // whose error goes as (d/R)² — a part in ten thousand at fifty kilometres, and
 // the terrain there has to stream in from scratch either way.
+/** How far out a mark may be dropped from the seat. Bounds the ground march so
+ *  its 96 samples stay fine enough to catch a ridge, and bounds how far a tap
+ *  at the sky can fling a fix when no ground answers at all. */
+const FIX_REACH = 12000;
 let tapAt = 0, tapX = 0, tapY = 0, tapSeen = 0;
 /** WHERE ON THE GROUND IS THIS PIXEL — through the real camera, so a test can
  *  ask the only question a pan has to answer: is the ground you grabbed still
@@ -16817,7 +16821,18 @@ function chartToWorld(px: number, py: number): [number, number] {
     // Far enough to pass under anything on screen — the chart centre's own
     // ground minus the deepest relief a valley wall can hide (El Capitan's
     // rim-to-floor is ~900m; 1500 leaves margin without costing resolution).
-    const tFar = (groundAt(state.x + panX, state.z + panZ) - 1500 - camY) / ray.y;
+    //
+    // …BUT THE MARCH BELONGS TO THE CAMERA THAT IS LOOKING. This was written
+    // for the chart, where the camera hangs hundreds of metres up and every
+    // ray dives steeply. From the SEAT the camera is a metre and a half off
+    // the ground, so a tap near the horizon leaves ray.y around -0.01 and the
+    // same expression asks for a march a HUNDRED AND FIFTY KILOMETRES long —
+    // sampled 96 times, which is one sample every 1.5km, stepping clean over
+    // every hill between here and there. Capped to the reach a mark is worth
+    // placing at, which keeps the 96 samples fine enough to catch a ridge.
+    let tFar = (groundAt(state.x + panX, state.z + panZ) - 1500 - camY) / ray.y;
+    if (!Number.isFinite(tFar) || tFar <= 0) tFar = FIX_REACH;
+    if (camMode !== 'top') tFar = Math.min(tFar, FIX_REACH);
     let tPrev = 0;
     for (let i = 1; i <= 96; i++) {
       const t = (tFar * i) / 96;
@@ -16837,8 +16852,33 @@ function chartToWorld(px: number, py: number): [number, number] {
     // silhouette, the void past a rim). Land at the far plane's foot.
     return [camera.position.x + ray.x * tFar, camera.position.z + ray.z * tFar];
   }
-  // A tap above the horizon has no ground under it. Keep the old flat-chart
-  // approximation as the fallback so the gesture still does something sane.
+  // A TAP ABOVE THE HORIZON STILL HAS A BEARING, and from the seat the bearing
+  // is the whole of what the thumb meant.
+  //
+  // The chart approximation below maps screen offsets straight onto world X
+  // and Z, which is only true looking down a map — from the seat it ignores
+  // the heading entirely, so a tap high on the screen went to world -Z
+  // whichever way the truck was pointing. Reported as "I double tap in the
+  // distance and the pin lands about 100m behind and left of me", which is
+  // exactly what that arithmetic produces at a driving zoom.
+  //
+  // So the ray is TILTED DOWN to a shallow descent and marched along its own
+  // bearing: four metres of drop per kilometre finds the first ground that
+  // rises into it, which is the ridge you were looking over. Only if even
+  // that finds nothing does the mark go out at arm's length on the bearing
+  // alone — direction being the part still worth honouring when range is not.
+  if (camMode !== 'top') {
+    const h = Math.hypot(ray.x, ray.z) || 1;
+    const bx = ray.x / h, bz = ray.z / h;
+    const camY2 = camera.position.y;
+    for (let i = 1; i <= 96; i++) {
+      const t = (FIX_REACH * i) / 96;
+      if (camY2 - t * 0.004 <= groundAt(camera.position.x + bx * t, camera.position.z + bz * t)) {
+        return [camera.position.x + bx * t, camera.position.z + bz * t];
+      }
+    }
+    return [camera.position.x + bx * FIX_REACH, camera.position.z + bz * FIX_REACH];
+  }
   const k = (CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh) / innerHeight;
   const cz = Math.cos((CAM.tilt * Math.PI) / 180);
   return [
@@ -23080,6 +23120,13 @@ function setClean(on: boolean): void {
 (window as unknown as { __hudscale?: object }).__hudscale = (): number => hudS;
 /** Reads which way the chart is turned; with an argument, SETS it — a pan test
  *  has to run in both orientations and the toggle is otherwise a HUD tap. */
+/** Where the newest mark actually landed — the one number the placement bug
+ *  was about, in world metres rather than in a label. */
+(window as unknown as { __fixat?: object }).__fixat = (): object | null => {
+  const mine = [...pois.values()].filter((p) => p.kind === 'survey');
+  const p = mine[mine.length - 1];
+  return p ? { name: p.name, x: +p.x.toFixed(1), z: +p.z.toFixed(1) } : null;
+};
 /** The live tap targets, in CANVAS pixels, so a test can aim a real pointer at
  *  a pin instead of trusting a probe to stand in for one. `live` is what the
  *  new rule says: whether this rect will actually consume a tap. */
