@@ -11005,7 +11005,7 @@ Object.assign(osmStatus.style, {
 } as Partial<CSSStyleDeclaration>);
 document.body.appendChild(osmStatus);
 let osmPending = 0;
-const osmNote = (d: number): void => { osmPending += d; streaming = osmPending > 0; };
+const osmNote = (d: number): void => { osmPending += d; };
 // Overpass is a busy public service that 504s under load, and when it does the
 // HUD used to sit on "STREAMING" forever with no way to tell a quiet corner of
 // the map from an outage. Two failures in a row is an outage; any success
@@ -11226,6 +11226,100 @@ const CORRIDOR_MAX = 12;
  *  Each hop is one grid-cell lookup, so this is cheap in a way the reach is
  *  not, and it runs at most once every 1.2s. */
 const CORRIDOR_HOPS = 800;
+/** The last pass's ask, in priority order, each tagged AHEAD or not. */
+let osmAsk: Array<{ k: string; ahead: boolean }> = [];
+/** How long a failed tile is presumed to be waiting on its backoff rather than
+ *  simply forgotten — the longest the failure path ever schedules. Past this a
+ *  tile has been re-asked (or dropped by the ring) and is no longer a failure
+ *  anyone is waiting on. ** NOTHING IS EVER PERMANENTLY GIVEN UP: ** every
+ *  failure clears its key on a timer and the next stream pass asks again. The
+ *  one route that IS abandoned for good is the cell's tile proxy after a clean
+ *  failure (tileProxyOk), and that shows as MIRROR. */
+const RETRY_WINDOW = 20000;
+/**
+ * WHAT THE WORLD IS DOING, AND WHERE.
+ *
+ * "STREAMING" and "NO WORLD DATA" were the whole vocabulary, and neither is an
+ * answer to the question a driver is actually asking. A truck waiting on the
+ * ground under its own wheels and a truck filling in a field behind it said the
+ * same word; an outage and a single tile on its backoff said the same word.
+ * Reported from the seat as exactly that: "the current tile? all tiles? tiles
+ * ahead? retrying? given up?".
+ *
+ * The pass already knows all of it — osmAsk is what it decided the world needs
+ * and in what order — so this is bookkeeping that existed and was thrown away
+ * one frame later. Four questions, answered separately:
+ *   HERE     is the tile under the wheels in? (you are driving on invented
+ *            ground if it is not, and that is the one worth slowing down for)
+ *   AHEAD    how many of the tiles the pass ranked forward are still coming?
+ *   AROUND   …and how many are mere periphery, which you will never notice?
+ *   RETRY    how many of those failed and are sitting on a backoff?
+ * Plus the ROUTE, because the proxy retiring is invisible and permanent.
+ *
+ * Cached for 200ms: the HUD asks every frame and the answer cannot change
+ * faster than a fetch completes.
+ */
+interface WorldWord { rank: number; hud: string; vectors: string; world: string }
+let worldWordAt = -1e9;
+let worldWord: WorldWord = { rank: 0, hud: '', vectors: 'LOADED', world: 'LOADED' };
+function worldStatus(): WorldWord {
+  const now = performance.now();
+  if (now - worldWordAt < 200) return worldWord;
+  worldWordAt = now;
+  const [la, lo] = localToLatLon(state.x, state.z);
+  const [hx, hy] = tileAt(la, lo, OSM_Z);
+  const here = `${hx}/${hy}`;
+  const hereDone = osmDone.has(here);
+  const hf = osmFailedAt.get(here);
+  const hereRetry = hf !== undefined && now - hf < RETRY_WINDOW;
+  let ahead = 0, aheadRetry = 0, around = 0, retry = 0;
+  for (const a of osmAsk) {
+    if (osmDone.has(a.k)) continue;
+    const f = osmFailedAt.get(a.k);
+    const failing = f !== undefined && now - f < RETRY_WINDOW;
+    if (failing) retry++;
+    if (a.ahead) { ahead++; if (failing) aheadRetry++; } else around++;
+  }
+  // The proxy is retired for the SESSION once it fails cleanly, and the client
+  // then talks to the Overpass mirrors directly. That is a real and permanent
+  // change in where the world comes from and it had no way of being seen.
+  const route = tileProxyOk ? '' : ' · MIRROR';
+  // ASKS THE PASS DOES NOT KNOW ABOUT. osmAsk is the STREAM's ask; a field
+  // query pins tiles by hand and the campaign warms a corridor, and those are
+  // real work in flight that the box around the truck has no row for. Counted
+  // as periphery, which is what they are from the driver's seat.
+  const loose = Math.max(0, osmPending - ahead - around);
+  const rank = osmDown ? 5 : !hereDone ? 4 : aheadRetry ? 3 : ahead ? 2
+    : around || loose ? 1 : 0;
+  // "NO WORLD DATA" MEANT "TWO FETCHES IN A ROW THREW", which is not what it
+  // says. Nothing here is ever permanently given up — every failure clears its
+  // key on a backoff and the next pass asks again — so a red line implying the
+  // world is gone was overstating a wobble. It is kept for the ONE case that
+  // earns it: nothing has ever arrived, so there is genuinely no world to
+  // drive on. Everything else is failing-and-retrying, and says so.
+  const hud = rank === 5 ? (osmDone.size === 0 ? 'NO WORLD DATA' : 'RETRYING WORLD DATA')
+    : rank === 4 ? (hereRetry ? 'RETRYING HERE' : 'STREAMING HERE')
+    : rank === 3 ? `RETRYING AHEAD ${aheadRetry}`
+    : rank === 2 ? `STREAMING AHEAD ${ahead}`
+    : rank === 1 ? `STREAMING ${around + loose}` : '';
+  const bits: string[] = [];
+  if (!hereDone) bits.push(hereRetry ? 'HERE RETRY' : 'HERE PENDING');
+  if (ahead) bits.push(`${ahead} AHEAD`);
+  if (around + loose) bits.push(`${around + loose} AROUND`);
+  if (retry) bits.push(`${retry} RETRY`);
+  worldWord = {
+    rank, hud,
+    vectors: osmDown
+      ? `${osmDone.size ? `${osmDone.size} TILES · ` : 'NONE · '}${osmFails} FAILS · RETRYING${route}`
+      : bits.length ? bits.join(' · ') + route
+      : `LOADED · ${osmDone.size} TILES${route}`,
+    world: osmDown ? (osmDone.size === 0 ? 'VECTORS UNAVAILABLE' : 'VECTORS RETRYING')
+      : !hereDone ? (hereRetry ? 'RETRYING HERE' : 'STREAMING HERE')
+      : ahead || around || loose ? `STREAMING · ${ahead + around + loose} TILES`
+      : 'LOADED',
+  };
+  return worldWord;
+}
 function streamWorld(ex: number, ez: number): void {
   const [lat, lon] = localToLatLon(ex, ez);
   const r = viewRadius();
@@ -11399,6 +11493,19 @@ function streamWorld(ex: number, ez: number): void {
     want.push({ x: +key.slice(0, sl), y: +key.slice(sl + 1), c: along - 5e5 });
   }
   want.sort((a, b) => a.c - b.c);
+  // KEPT, BECAUSE "STREAMING" IS NOT AN ANSWER. This is the pass's own idea of
+  // what the world needs and in what order — the only place that knowledge
+  // exists — and the HUD had none of it, so a truck waiting on the ground under
+  // its own wheels and one filling in a field it will never look at said the
+  // same word. AHEAD is the corridor if there is one and the forward half of
+  // the wedge if there is not, which is the distinction a driver can act on:
+  // slow down, or carry on.
+  osmAsk = want.map((w) => {
+    const [cx, cz] = tileCentreLocal(w.x, w.y);
+    const k = `${w.x}/${w.y}`;
+    return { k, ahead: osmCorridor.has(k)
+      || (cx - ex) * osmFwdX + (cz - ez) * osmFwdZ > -tm * 0.5 };
+  });
   for (const w of want) void loadOsmTile(w.x, w.y);
   // Beyond the fine layer's reach, a COARSE shell so the land does not simply
   // stop. Only fetched once the view is wide enough to see past the fine ring.
@@ -14145,6 +14252,22 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
  * and each row carries its raw metres beside its wedge-metres — the gap
  * between the two IS the bias.
  */
+/** What the HUD is saying about the world, and the counts behind it. The word
+ *  and the numbers come from ONE call, so a test cannot check a status the HUD
+ *  is not showing. */
+(window as unknown as { __world?: object }).__world = (): object => {
+  const w = worldStatus();
+  const [la, lo] = localToLatLon(state.x, state.z);
+  const [hx, hy] = tileAt(la, lo, OSM_Z);
+  return {
+    ...w,
+    here: `${hx}/${hy}`, hereDone: osmDone.has(`${hx}/${hy}`),
+    ask: osmAsk.length, aheadAsked: osmAsk.filter((a) => a.ahead).length,
+    down: osmDown, fails: osmFails, proxy: tileProxyOk,
+    pending: osmPending, inFlight: osmInFlight, queued: osmQueue.length,
+    done: osmDone.size, failedKeys: osmFailedAt.size,
+  };
+};
 /** The carriageway walk itself, so a claim about the corridor can be checked
  *  against the ROAD and not only against the tiles it produced. */
 (window as unknown as { __wayahead?: object }).__wayahead = (m?: number): object => {
@@ -22308,7 +22431,6 @@ interface PoiDraw { x: number; y: number; t: string; c: string; edge: 0 | -1 | 1
 /** Tap targets over the drawn pins (HUD px) — generous, a label is small. */
 const poiRects: Array<{ x: number; y: number; w: number; h: number; name: string; kind: Poi['kind']; rng: boolean }> = [];
 let poiDraw: PoiDraw[] = [];
-let streaming = false;
 
 /**
  * THE GLASS'S RESERVED GROUND — every rect an instrument owns, in HUD px.
@@ -23050,18 +23172,28 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // and off the tarmac it says which road you left. Streaming/outage takes
     // the line when there is nothing to report, since both mean the same thing:
     // the world does not know where you are yet.
-    if (osmDown) textEdgeS('NO WORLD DATA', pad + 1, infoY + 9, UI.bad);
+    // THE SEVERE STATES TAKE THE LINE FROM THE ROAD NAME; the rest only fill
+    // it when there is no name to show. An outage, missing ground under the
+    // wheels, or a road ahead that is FAILING rather than merely coming, each
+    // beat knowing you are on the B3202 — and in the first two there is no name
+    // to lose anyway. The cut sits at rank 3 on purpose: "the road ahead is
+    // still arriving" is the ordinary condition of driving and does not deserve
+    // to displace anything; "the road ahead errored and is on a backoff" is a
+    // reason to lift off, and the panel is too far away to be read at speed.
+    const ws = worldStatus();
+    if (ws.rank >= 3) textEdgeS(ws.hud, pad + 1, infoY + 9, ws.rank === 5 ? UI.bad : UI.gold);
     else {
       const w = wayAt(state.x, state.z);
       const line = w ? (w.on ? w.name.toUpperCase() : `NEAR ${w.name.toUpperCase()}`)
-        : streaming ? 'STREAMING' : '';
+        : ws.hud;
       // The survey tally rides on the way line and takes its room first, so the
       // road name is what gets clipped. A count you cannot read is worse than a
       // name you can only half read.
       const s = surveyHere();
       const tally = s ? (s.r.claimed ? 'DRIVEN' : `${s.r.got}/${s.r.cps.length}`) : '';
       const tw = tally ? textSW(tally) + 4 : 0;
-      if (line) textEdgeS(fitS(line, Math.round(HW * 0.6) - tw), pad + 1, infoY + 9, w?.on ? UI.soft : UI.dim);
+      if (line) textEdgeS(fitS(line, Math.round(HW * 0.6) - tw), pad + 1, infoY + 9,
+        w?.on ? UI.soft : UI.dim);
       if (s && line) {
         // Dim while the extent is still settling — the denominator is not yet
         // trustworthy and the HUD should not pretend otherwise.
@@ -23526,7 +23658,7 @@ const menu = createMenu({
       ['DRIVEN', `${fmtKm(odo.trip)} TRIP · ${fmtKm(odo.total)} TOTAL`],
       ['SURVEYED', `${claimed} ${claimed === 1 ? 'ROAD' : 'ROADS'} CLAIMED`],
       ['MODE', lineOn ? 'THE LINE' : real.on ? 'GPS DRIVE' : 'FREE DRIVE'],
-      ['WORLD', osmDown ? 'VECTORS UNAVAILABLE' : streaming ? 'STREAMING' : 'LOADED'],
+      ['WORLD', worldStatus().world],
     ];
   },
   worldRows: () => [
@@ -23534,7 +23666,7 @@ const menu = createMenu({
     ['BIOME', `${biome.name.toUpperCase()} · ${WX[wx.sky].label}${wx.wet > 0.05 ? ' WET' : ''}`],
     ['HEADING', `${Math.round((((state.heading * 180) / Math.PI) % 360 + 360) % 360)} DEG · ${Math.round(Math.abs(state.speed) * 3.6)} KM/H`],
     ['DRIVEN', `${fmtKm(odo.trip)} TRIP · ${fmtKm(odo.total)} TOTAL`],
-    ['VECTORS', osmDown ? 'UNAVAILABLE - RETRYING' : streaming ? 'STREAMING' : 'LOADED'],
+    ['VECTORS', worldStatus().vectors],
   ],
   systemRows: () => [
     ['SOUND', audio.on ? (audio.state === 'running' ? 'ON' : 'NEEDS TAP') : 'OFF'],
