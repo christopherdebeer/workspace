@@ -794,15 +794,26 @@ const camera = new THREE.PerspectiveCamera(55, 1, 1, 30000);
 // The near plane moves with the chart camera; only rebuild the projection when
 // it actually changes, since every uniform derived from it follows.
 /**
- * ?near=<metres> — force the near plane, to judge depth precision by eye.
+ * ?near=<metres> — force the near plane. MEASURED AND DEAD; kept as the record.
  *
- * The cab runs near 0.12 against a far of 62000: a range of half a MILLION to
- * one. Depth resolution goes as d²·ε/near, so at 200m that is about 2cm and at
- * 500m about 12cm, while a road drape sits a few centimetres over its terrain.
- * That is the arithmetic behind swimming overlays at range, and raising `near`
- * is the one lever that moves it (lowering `far` barely does). 0.12 is there to
- * clear the dashboard, so how far it can rise is a question for the eye rather
- * than the algebra — hence a URL parameter rather than a guess.
+ * Shipped on this reasoning: the cab runs near 0.12 against a far of 62000, a
+ * range of half a MILLION to one; depth resolution goes as d²·ε/near, so at
+ * 200m that is about 2cm while a road drape sits a few centimetres over its
+ * terrain; therefore the swimming overlays in the cab are depth fighting and
+ * raising `near` is the lever. Every step of that is sound except the premise,
+ * and the premise was never checked.
+ *
+ * IT IS 24-BIT DEPTH, NOT THE 16 THE ARITHMETIC QUIETLY ASSUMED. Read off the
+ * framebuffer (see __zfight): one LSB at 20m is 0.2mm against a designed
+ * road-over-ground budget of 80mm — a margin of four hundred to one. At 0.12,
+ * 0.4, 1.0 and 4.0 alike the count of samples close enough to fight is ZERO,
+ * and the reporter saw no difference on device because there is none to see.
+ *
+ * What was actually there was the ground standing THROUGH the tarmac by up to
+ * 0.25m in the first dozen metres — geometry, which no projection parameter
+ * can help. See CUT_RELIEF. Left in place because a lever that has been priced
+ * is worth more than one that has been removed: it stops the next person
+ * deriving this theory again from the same true-looking algebra.
  */
 let nearLock = Math.max(0, Number(new URLSearchParams(location.search).get('near') ?? 0) || 0);
 function setNear(n: number, far = 30000): void {
@@ -6027,7 +6038,27 @@ const cutSet = new Set<Seg>();
 // 48.6%. Still a knob (`?wash=0`) — this is a judgement about looks, and looks
 // change when anything else on the verge does.
 const CUT_WASH = Number(new URLSearchParams(location.search).get('wash') ?? 0.1);
-function roadFloorHard(x: number, z: number): number | null {
+/** The relief pass, switchable, so its cost and its benefit can both be
+ *  measured against the behaviour it replaces rather than argued about. */
+const CUT_RELIEF = new URLSearchParams(location.search).get('relief') !== '0';
+/**
+ * HOW BURIED IS BURIED ENOUGH TO DIG FOR.
+ *
+ * Relief buys a clear deck with excavation, and the wash's own tuning note
+ * already contains the rule for when that trade is worth making: "0.10 takes
+ * two thirds of the trench for pokes that are centimetres, WHICH DO NOT READ
+ * AT ALL; 0.25's are decimetres, WHICH DO." Firing relief at every residual
+ * ignores that and pays the trench everywhere. Measured with no threshold:
+ * Noordhoek's worst poke is 0.036m — invisible — and clearing it cost the
+ * verge 0.05m→0.22m median and 0.47m→1.15m at p95, which is the excavated
+ * bench the wash exists to prevent. Wadi Rum's worst is 0.253m, which is a
+ * hillside standing through the tarmac four metres in front of the cab.
+ *
+ * So the threshold is the criterion, written as a number: below this, leave
+ * the wash alone and let the ground kiss the tarmac.
+ */
+const RELIEF_MIN = 0.06;
+function roadFloorHard(x: number, z: number, wash = CUT_WASH): number | null {
   cutSet.clear();
   stripsNear(x, z, 2, cutSet);
   let best: number | null = null;
@@ -6039,7 +6070,7 @@ function roadFloorHard(x: number, z: number): number | null {
     // with the country stepping up away from it. A gentle rise lets the ground
     // beyond the shoulder keep its own height while the corners that actually
     // hold the carriageway still come all the way down.
-    const y = f.y + Math.max(0, f.out) * CUT_WASH;
+    const y = f.y + Math.max(0, f.out) * wash;
     if (best === null || y < best) best = y;
   }
   return best === null ? null : best - CUT_CLEAR;
@@ -6131,7 +6162,11 @@ const CPROBE = /[?&]cprobe=1/.test(location.search);
 // s = [px, pz, tgt, meshBefore, field, offsetIndex]; v = [x, z, yBefore, yAfter]
 interface CarveLog { s: number[][]; v: number[][] }
 const carveLog = new Map<string, CarveLog>();
+/** Rolling carve cost, so the relief pass's price is a number and not a shrug:
+ *  [tiles carved, total ms, tiles that needed relief]. */
+const carveCost = { tiles: 0, ms: 0, relieved: 0 };
 function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): void {
+  const t0 = performance.now();
   const cell = t.w / SEG;
   const tris = cellTriangles(geo, SEG);
   const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -6166,7 +6201,7 @@ function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): 
   const lim = new Float32Array(pos.count);
   const limDone = new Uint8Array(pos.count);
   const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
-  const limOf = (v: number): number => {
+  const limBase = (v: number): number => {
     if (!limDone[v]) {
       limDone[v] = 1;
       const c = roadFloorHard(pos.getX(v) + cxm, pos.getZ(v) + czm);
@@ -6174,7 +6209,49 @@ function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): 
     }
     return lim[v];
   };
+  // ── THE WASH YIELDS TO THE ROAD ────────────────────────────────────
+  //
+  // CUT_WASH lets the floor climb away from the kerb so a road is not a flat
+  // 21m shelf, and it was tuned at Noordhoek with the cost written down and
+  // accepted: "terrain through the tarmac 13.5%, p95 0.09m — pokes that are
+  // centimetres, which do not read at all". That reasoning is sound on gentle
+  // ground and fails completely on steep, and the failure is arithmetic rather
+  // than bad luck. The wash's cap on a corner is its LEVER ARM times 0.1, the
+  // lever arm is set by the mesh cell (~21m, fixed) and not by the terrain, and
+  // the drop a corner needs is set by the RELIEF. Flat country needs almost no
+  // drop so the cap never binds; a road cut into a hillside needs a metre and
+  // the cap forbids 0.9 of it. Measured on the Wadi Rum road the report came
+  // from: 19 of 36 samples with ground through the tarmac by 8–24cm, and all
+  // three corners of every offending triangle sitting exactly on their limit.
+  // The carve was not undershooting. It was caged.
+  //
+  // So the wash stops being a floor and becomes a PREFERENCE. The normal
+  // passes respect it; if they finish with the deck still buried, a relief
+  // pass re-runs with the wash removed — the bare deck floor, which is what
+  // this limit was before the wash existed. Only vertices that would otherwise
+  // bury a road move, so ground that never needed the excavation never gets
+  // it, and Noordhoek's verge is untouched.
+  const lim2 = new Float32Array(pos.count);
+  const lim2Done = new Uint8Array(pos.count);
+  let relief = false;
+  const limOf = (v: number): number => {
+    const base = limBase(v);
+    if (!relief) return base;
+    if (!lim2Done[v]) {
+      lim2Done[v] = 1;
+      const c = roadFloorHard(pos.getX(v) + cxm, pos.getZ(v) + czm, 0);
+      // NEVER ABOVE THE BASE LIMIT. limOf is used through Math.max, so a limit
+      // that came out higher than the vertex would RAISE ground — and `base`
+      // already carries the "no deeper than natural" rule that keeps a sea bed
+      // a sea bed.
+      lim2[v] = c === null ? base : Math.min(base, c);
+    }
+    return lim2[v];
+  };
   let recPass = 0, recOff = 0;
+  /** Did the last pass leave a deck buried? The relief pass is only worth its
+   *  cost where it has something to do, which on gentle ground is nowhere. */
+  let buried = false;
   const log: CarveLog | null = CPROBE ? { s: [], v: [] } : null;
   if (log) carveLog.set(`${t.tx}/${t.ty}`, log);
   const enforce = (px: number, pz: number, tgt: number): void => {
@@ -6200,7 +6277,7 @@ function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): 
       // whole point.
       if (log && recPass === 0) log.s.push([px, pz, tgt, cur, sampleHeight(px, pz), recOff]);
       const over = cur - tgt;
-      if (over <= 0) return;
+      if (over <= (relief ? RELIEF_MIN : 0)) return;
       // WHICH CORNER PAYS. Any set of drops with Σ wᵢ·dropᵢ = over satisfies the
       // constraint exactly; the family dropᵢ = over·wᵢᵏ / Σwᵢᵏ⁺¹ does so for
       // every k, and k picks how the bill is split. k=1 is least squares — the
@@ -6221,9 +6298,41 @@ function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): 
       // cannot dig a pit — it just stops the hole reaching the grass.
       const norm = w1 * w1 * w1 + w2 * w2 * w2 + w3 * w3 * w3;
       if (norm < 1e-9) return;
+      if (relief) {
+        // GREEDY, NEAREST CORNER FIRST — not the w² share.
+        //
+        // Relief lifts the wash cap, and spreading the bill by w² then let
+        // every corner of the triangle take some of it uncapped: measured at
+        // Noordhoek, the ground beside the road went from 0.05m under natural
+        // to 0.25m (p95 0.47m to 1.19m), which is the excavated bench the wash
+        // was introduced to kill. The share rule is right for the normal pass,
+        // where the cap bounds the damage; with the cap gone it is the damage.
+        //
+        // So relief bills the corner with the LARGEST weight — the one under
+        // the carriageway, where tarmac and apron cover the hole — until it is
+        // exhausted, and only then spills outward. Σwᵢ·dropᵢ = over still holds
+        // exactly whenever the capacity is there; what changes is that a corner
+        // out in the grass is paid last instead of first.
+        let rem = over;
+        const ord: Array<[number, number]> = [[a, w1], [b, w2], [c, w3]];
+        ord.sort((p, q) => q[1] - p[1]);
+        for (const [v, w] of ord) {
+          if (rem <= 1e-6 || w <= 1e-6) break;
+          const can = Math.min(rem / w, pos.getY(v) - limOf(v));
+          if (can > 0) { pos.setY(v, pos.getY(v) - can); rem -= can * w; }
+        }
+        return;
+      }
       pos.setY(a, Math.max(limOf(a), pos.getY(a) - (over * w1 * w1) / norm));
       pos.setY(b, Math.max(limOf(b), pos.getY(b) - (over * w2 * w2) / norm));
       pos.setY(c, Math.max(limOf(c), pos.getY(c) - (over * w3 * w3) / norm));
+      // DID IT ACTUALLY LAND? The drops are clamped by limOf, so a caged corner
+      // silently pays less than its share and the deck stays buried. Asking the
+      // residual is exact and costs three lookups — the alternative, treating
+      // "some sample was over at the start of the last pass" as the signal,
+      // fires on every road that merely needed two passes.
+      if (recPass === 2
+        && w1 * pos.getY(a) + w2 * pos.getY(b) + w3 * pos.getY(c) - tgt > RELIEF_MIN) buried = true;
       return;
     }
   };
@@ -6232,7 +6341,13 @@ function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): 
   // cannot take its share of a correction — so the remainder has to find its
   // way onto the corners that still can, which takes another sweep.
   const y0 = CPROBE ? Float32Array.from({ length: pos.count }, (_, i) => pos.getY(i)) : null;
-  for (let pass = 0; pass < 3; pass++) {
+  // Three normal passes, then — only where they were not enough — two more
+  // with the wash lifted. Five in the worst case and three in the common one.
+  for (let pass = 0; pass < 5; pass++) {
+    if (pass === 3) {
+      if (!buried || !CUT_RELIEF) break;
+      relief = true;
+    }
     recPass = pass;
     for (const s of near) {
       const len = Math.hypot(s.bx - s.ax, s.bz - s.az);
@@ -6260,6 +6375,9 @@ function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): 
       }
     }
   }
+  carveCost.tiles++;
+  carveCost.ms += performance.now() - t0;
+  if (relief) carveCost.relieved++;
 }
 /**
  * THE RENDERED SURFACE, read analytically from the triangles it was built from.
@@ -6270,6 +6388,39 @@ function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): 
  * every terrain mesh in the world, which is fine for a probe and hopeless on a
  * path the sward walks thousands of times a pass.
  */
+/** The three corners of the terrain triangle under a point, in world coords —
+ *  the same lattice walk meshSurfaceAt does, stopping one step earlier. Probe
+ *  only: a proud vertex is a claim about a TRIANGLE, and answering it with an
+ *  interpolated height cannot say which corner is at fault or why. */
+function meshTriAt(x: number, z: number): Array<{ x: number; y: number; z: number }> | null {
+  const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
+  const key = `${tx}/${ty}`;
+  const mesh = terrainMeshes.get(key);
+  const t = heightTiles.get(key);
+  if (!mesh || !t) return null;
+  const geo = mesh.geometry;
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const SEG = Math.round(Math.sqrt(pos.count)) - 1;
+  if (SEG < 1) return null;
+  const cell = t.w / SEG;
+  const fx = (x - t.xs) / cell, fz = (z - t.zs) / cell;
+  if (fx < 0 || fz < 0 || fx >= SEG || fz >= SEG) return null;
+  const tris = cellTriangles(geo, SEG);
+  const k = (Math.floor(fz) * SEG + Math.floor(fx)) * 6;
+  const ox = t.xs + t.w / 2, oz = t.zs + t.h / 2;
+  for (let h = 0; h < 2; h++) {
+    const a = tris[k + h * 3], b = tris[k + h * 3 + 1], c = tris[k + h * 3 + 2];
+    if (a < 0) continue;
+    const P = [a, b, c].map((v) => ({ x: pos.getX(v) + ox, y: pos.getY(v), z: pos.getZ(v) + oz }));
+    const d = (P[1].z - P[2].z) * (P[0].x - P[2].x) + (P[2].x - P[1].x) * (P[0].z - P[2].z);
+    if (Math.abs(d) < 1e-9) continue;
+    const w1 = ((P[1].z - P[2].z) * (x - P[2].x) + (P[2].x - P[1].x) * (z - P[2].z)) / d;
+    const w2 = ((P[2].z - P[0].z) * (x - P[2].x) + (P[0].x - P[2].x) * (z - P[2].z)) / d;
+    if (w1 < -1e-6 || w2 < -1e-6 || 1 - w1 - w2 < -1e-6) continue;
+    return P;
+  }
+  return null;
+}
 function meshSurfaceAt(x: number, z: number): number | null {
   const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
   const key = `${tx}/${ty}`;
@@ -14567,6 +14718,229 @@ function truckSpec(): Record<string, number> {
   return { roadSegs: road, trackSegs: track, sample };
 };
 (window as unknown as { __susp?: object }).__susp = (): object => dbgSusp;
+// The two surfaces the verge argument is about: what the mesh does, and what
+// the world would have done if no road had ever been drawn there.
+(window as unknown as { __meshAt?: object }).__meshAt = (x: number, z: number): number | null => meshSurfaceAt(x, z);
+(window as unknown as { __natAt?: object }).__natAt = (x: number, z: number): number => sampleHeight(x, z);
+/**
+ * WHERE A PROUD VERTEX CAME FROM. Given a point on the road, the terrain
+ * triangle under it: each corner's height, the deepest the carve was ALLOWED
+ * to take it (roadFloorHard − and a corner over the carriageway is limited by
+ * the deck it is serving, which on a graded road is higher than the deck at
+ * the sample), and what the constraint wanted. If the corners are sitting on
+ * their limits, the carve did not undershoot — it was forbidden.
+ */
+(window as unknown as { __carveat?: object }).__carveat = (ahead = 6, side = 0): object => {
+  const fwdX = Math.sin(state.heading), fwdZ = -Math.cos(state.heading);
+  const x = state.x + fwdX * ahead + Math.cos(state.heading) * side;
+  const z = state.z + fwdZ * ahead + Math.sin(state.heading) * side;
+  cutSet.clear();
+  stripsNear(x, z, 2, cutSet);
+  let deck: number | null = null, tk = false;
+  for (const sg of cutSet) {
+    const fl = stripFloor(sg, x, z);
+    if (fl.out > 0.2) continue;
+    const y = fl.y + (sg.tk ? SURFACE.track.lift : SURFACE.road.lift);
+    if (deck === null || y < deck) { deck = y; tk = !!sg.tk; }
+  }
+  const tri = meshTriAt(x, z);
+  return {
+    at: [Math.round(x), Math.round(z)], ahead, side, track: tk,
+    deckDrawn: deck === null ? null : +deck.toFixed(3),
+    ground: (() => { const g = meshSurfaceAt(x, z); return g === null ? null : +g.toFixed(3); })(),
+    target: (() => { const c = roadCeiling(x, z); return c === null ? null : +c.toFixed(3); })(),
+    natural: +sampleHeight(x, z).toFixed(3),
+    corners: tri === null ? null : tri.map((c) => ({
+      out: +Math.hypot(c.x - x, c.z - z).toFixed(1),
+      y: +c.y.toFixed(3),
+      floor: (() => { const l = roadFloorHard(c.x, c.z); return l === null ? null : +l.toFixed(3); })(),
+      // A corner IS on its limit when the carve could take it no lower. That
+      // is the difference between "the carve is wrong" and "the carve is
+      // caged", and they want completely different fixes.
+      onLimit: (() => {
+        const l = roadFloorHard(c.x, c.z);
+        return l !== null && c.y - l < 0.005;
+      })(),
+    })),
+  };
+};
+/**
+ * WHY THE ROAD AND THE GROUND ARE FIGHTING — the arithmetic, not the vibe.
+ *
+ * Reported from the seat as swimming overlays in the cab, and the near plane
+ * (?near=) was shipped as the lever on the theory that depth precision goes as
+ * d²·ε/near. That theory is testable and had not been tested. There are two
+ * candidate faults and they want opposite fixes:
+ *
+ *   FIGHT        the deck and the carved ground are closer together than the
+ *                depth buffer can tell apart, so which one wins is decided by
+ *                rounding and CHANGES AS THE CAMERA MOVES. This is the one the
+ *                near plane can help, and it is the one that swims.
+ *   THROUGH      the ground is genuinely ABOVE the deck — the carve pulls
+ *                triangle corners down to kerb level on a ~21m mesh cell while
+ *                a 7m road follows its own profile, so between corners the
+ *                hillside can cross the tarmac. Stable in world space, immune
+ *                to every projection parameter, and looks like erosion.
+ *
+ * So this samples the road under and ahead of the truck, reports the vertical
+ * gap at each point against BOTH the designed budget (CUT_CLEAR) and the depth
+ * buffer's actual resolution at that range, and counts the two faults
+ * separately. The depth attachment's real bit depth is read off the
+ * framebuffer rather than assumed, because the scene renders into rtScene and
+ * a render target's depth is whatever three chose, not whatever the canvas got.
+ */
+(window as unknown as { __zfight?: object }).__zfight = (): object => {
+  const gl = renderer.getContext() as WebGL2RenderingContext;
+  const prev = renderer.getRenderTarget();
+  renderer.setRenderTarget(rtScene);
+  let bits = 0;
+  try {
+    bits = gl.getFramebufferAttachmentParameter(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT,
+      gl.FRAMEBUFFER_ATTACHMENT_DEPTH_SIZE) as number;
+  } catch { bits = 0; }
+  renderer.setRenderTarget(prev);
+  const n = camera.near, f = camera.far;
+  /** Metres of eye-space separation one depth LSB buys at range d. Exact, from
+   *  the window-z the projection actually writes, not the d²ε/n approximation. */
+  const lsb = (d: number): number => {
+    const steps = 2 ** (bits || 24);
+    const zw = (dd: number): number => 0.5 + 0.5 * ((f + n) / (f - n) + (2 * f * n) / ((n - f) * dd));
+    // Invert one step of window z around d.
+    const target = zw(d) + 1 / steps;
+    const t = (target - 0.5) * 2 - (f + n) / (f - n);
+    return Math.abs((2 * f * n) / ((n - f) * t) - d);
+  };
+  const eye = camera.position;
+  const rows: Array<Record<string, number | string>> = [];
+  let fight = 0, through = 0, seen = 0;
+  // SAMPLED ALONG THE CARRIAGEWAY, not along the bonnet. A ray down the heading
+  // finds tarmac only where the truck happens to be pointing straight down a
+  // straight road, and at two of three test spots it found none at all — a
+  // measurement that reports "0 through of 0 samples" and reads as a pass.
+  const road = wayAhead(state.x, state.z, state.heading, 140, 60, false);
+  const fwdX = Math.sin(state.heading), fwdZ = -Math.cos(state.heading);
+  const rgtX = Math.cos(state.heading), rgtZ = Math.sin(state.heading);
+  /** Where the road is `ahead` metres along it, or the bonnet ray off-road. */
+  const along = (m: number): [number, number] => {
+    if (road) {
+      let run = 0;
+      for (let i = 1; i < road.pts.length; i++) {
+        const [x0, z0] = road.pts[i - 1], [x1, z1] = road.pts[i];
+        const len = Math.hypot(x1 - x0, z1 - z0);
+        if (run + len >= m) {
+          const f = (m - run) / (len || 1);
+          return [x0 + (x1 - x0) * f, z0 + (z1 - z0) * f];
+        }
+        run += len;
+      }
+    }
+    return [state.x + fwdX * m, state.z + fwdZ * m];
+  };
+  for (const ahead of [2, 4, 6, 9, 12, 16, 22, 30, 40, 55, 75, 100]) {
+    const [px0, pz0] = along(ahead);
+    // Across the carriageway at the local road bearing, so the offsets stay on
+    // the tarmac through a bend instead of walking off the outside of it.
+    const [px1, pz1] = along(ahead + 1);
+    const bx = px1 - px0, bz = pz1 - pz0;
+    const bl = Math.hypot(bx, bz) || 1;
+    for (const side of [-2.5, 0, 2.5]) {
+      const x = px0 + (-bz / bl) * side;
+      const z = pz0 + (bx / bl) * side;
+      cutSet.clear();
+      stripsNear(x, z, 2, cutSet);
+      let deck: number | null = null;
+      for (const sg of cutSet) {
+        const fl = stripFloor(sg, x, z);
+        if (fl.out > 0.2) continue;             // off the carriageway: no deck here
+        // THE SURFACE THAT IS DRAWN, NOT THE PROFILE IT IS BUILT FROM. A seg
+        // carries `ya`/`yb` as the bare profile and the ribbon is emitted at
+        // profile + lift (4cm on a road, 3cm on a track), while the carve aims
+        // the ground at profile − CUT_CLEAR. Measuring the profile understates
+        // the daylight by the whole lift, which on an 8cm budget is half of it.
+        const y = fl.y + (sg.tk ? SURFACE.track.lift : SURFACE.road.lift);
+        if (deck === null || y < deck) deck = y;
+      }
+      const ground = meshSurfaceAt(x, z);
+      if (deck === null || ground === null) continue;
+      const d = Math.hypot(x - eye.x, z - eye.z, deck - eye.y);
+      const gap = deck - ground;              // + = ground correctly below tarmac
+      const res = lsb(d);
+      seen++;
+      if (gap < 0) through++;
+      else if (gap < res) fight++;
+      if (side === 0) rows.push({
+        ahead, range: +d.toFixed(1), gap: +gap.toFixed(4),
+        lsbM: +res.toFixed(4), lsbs: +(gap / res).toFixed(1),
+        verdict: gap < 0 ? 'THROUGH' : gap < res ? 'FIGHT' : 'clear',
+      });
+    }
+  }
+  // THE VERGE — what relief is paid for with, measured where the argument is.
+  //
+  // Taken from the ROAD's centreline and not from the truck's, at fixed
+  // offsets, so it is the same construction at every spot. A verge metric
+  // sampled off the bonnet reported fourteen METRES of excavation on the
+  // Chapman's Peak corniche, because half its points were over the sea and it
+  // was comparing a cliff against a raster, not a verge against its road.
+  // …AND SPLIT BY WHICH SIDE OF THE ROAD IT IS. A road cut into a hillside has
+  // a deep excavation on its UPHILL side by construction — that is what a
+  // cutting is, and measuring it as damage would condemn every mountain road
+  // ever built. The failure mode the wash exists to prevent is the other one:
+  // ground dug out on the side where nature was already BELOW the tarmac, which
+  // buys nothing and reads as a bench. So they are counted apart, and the
+  // threshold that matters is on the downhill half.
+  const verge: number[] = [], vUp: number[] = [], vDown: number[] = [];
+  for (let m = 4; m <= 120; m += 4) {
+    const [px0, pz0] = along(m);
+    const [px1, pz1] = along(m + 1);
+    const bx = px1 - px0, bz = pz1 - pz0;
+    const bl = Math.hypot(bx, bz) || 1;
+    for (const side of [-7, 7, -11, 11]) {
+      const x = px0 + (-bz / bl) * side, z = pz0 + (bx / bl) * side;
+      // Only where there IS a road to be the verge of. Off the end of the walk
+      // the offsets are just countryside.
+      if (roadFloorHard(x, z) === null) continue;
+      const g = meshSurfaceAt(x, z);
+      if (g === null) continue;
+      // Not the sea bed, which buildTerrainMesh drops SEA_BED below the
+      // waterline for the shader and the raster knows nothing about.
+      if (seaOn && g + baseElev < seaSurfaceAbs() + 0.5) continue;
+      // AND THIS NUMBER IS ONLY MEANINGFUL WHERE THE RASTER CAN DESCRIBE THE
+      // LANDFORM. It reads 46m of "excavation" on the Chapman's Peak corniche,
+      // and that is not excavation: the road is a ledge cut in a cliff and the
+      // DEM cell is 30m across, so the raster's idea of the ground beside it is
+      // an average of the cliff FACE. Sound at Noordhoek and Wadi Rum, junk on
+      // a corniche — quote the THROUGH count there instead, which needs no
+      // raster at all.
+      const dug = sampleHeight(x, z) - g;
+      verge.push(dug);
+      const deck = roadFloorHard(px0, pz0, 0);
+      (deck !== null && sampleHeight(x, z) > deck ? vUp : vDown).push(dug);
+    }
+  }
+  const stat = (arr: number[]): { n: number; median: number | null; p95: number | null } => {
+    arr.sort((p, q) => p - q);
+    const pick = (f: number): number | null =>
+      arr.length ? +arr[Math.min(arr.length - 1, Math.floor(arr.length * f))].toFixed(3) : null;
+    return { n: arr.length, median: pick(0.5), p95: pick(0.95) };
+  };
+  return {
+    verge: stat(verge), vergeUp: stat(vUp), vergeDown: stat(vDown),
+    carve: { tiles: carveCost.tiles, relieved: carveCost.relieved,
+      msPerTile: +(carveCost.ms / Math.max(1, carveCost.tiles)).toFixed(1) },
+    // A ZERO-SAMPLE RESULT MUST NOT READ AS A PASS. "0 through of 0" is what
+    // this printed at two of three spots before the sampling followed the road,
+    // and it looked exactly like a clean bill.
+    onRoad: road !== null, roadM: road === null ? 0 : Math.round(
+      road.pts.reduce((m, p, i) => i ? m + Math.hypot(p[0] - road.pts[i - 1][0], p[1] - road.pts[i - 1][1]) : 0, 0)),
+    near: n, far: f, lock: nearLock, depthBits: bits,
+    depthType: rtScene.depthTexture?.type ?? null,
+    budget: CUT_CLEAR, samples: seen, fight, through,
+    // The whole point of the lever, priced: what raising near would buy at 20m.
+    lsbAt20m: +lsb(20).toFixed(4),
+    rows,
+  };
+};
 (window as unknown as { __near?: object }).__near = (n?: number): object => {
   nearLock = n ?? 0;
   return { near: camera.near, lock: nearLock };
