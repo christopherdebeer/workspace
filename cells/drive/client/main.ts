@@ -2517,6 +2517,28 @@ function wedgeCost(wx: number, wz: number): number {
  *  queued tile the truck has left behind — right for the stream, wrong for an
  *  explicit ask: a ranger pointing at a spot on the chart is the ring. */
 const osmPinned = new Set<string>();
+/**
+ * THE CORRIDOR — the tiles the road you are ON runs through, ahead of you.
+ *
+ * The wedge is the right shape for something moving and the wrong shape for
+ * something FOLLOWING. It is drawn about the instantaneous heading, so on a
+ * road that bends the ground you are about to cross drifts out of it: at speed
+ * a lateral metre costs 3.25 and a forward one 0.17, a ratio of nineteen, and
+ * a right-hander two kilometres up is a lateral kilometre. The tiles the
+ * wedge deprioritises hardest are exactly the ones the next corner needs.
+ *
+ * So the streamer walks the carriageway (see wayAhead), collects the tiles it
+ * passes through, and keeps them: served near the head of every ask, and never
+ * dropped by the ring gate below. Keyed tile → METRES ALONG THE ROAD, so the
+ * corridor is served in the order it will be driven rather than by how it
+ * happens to sit in the wedge.
+ *
+ * It is a THIN set on purpose — the tiles the centreline actually crosses, no
+ * dilation. The box around the truck already covers the near field densely;
+ * what the corridor buys is REACH down the road, and paying for a three-tile-
+ * wide ribbon would spend that reach on verges.
+ */
+const osmCorridor = new Map<string, number>();
 function osmRelease(): void {
   let best = -1, bestD = Infinity;
   for (let i = 0; i < osmQueue.length; i++) {
@@ -2527,7 +2549,8 @@ function osmRelease(): void {
     // truck IS, and a wedge that starves it would trade a pothole you are in
     // for a junction you might reach.
     const raw = Math.hypot(wx - osmCarX, wz - osmCarZ);
-    if (!osmPinned.has(`${w.x}/${w.y}`) && raw > osmCoreR && wedgeCost(wx, wz) > osmRingR) {
+    const wk = `${w.x}/${w.y}`;
+    if (!osmPinned.has(wk) && !osmCorridor.has(wk) && raw > osmCoreR && wedgeCost(wx, wz) > osmRingR) {
       osmQueue.splice(i, 1); i--;
       w.go(false);            // out of the wedge — a later pass can ask again
       continue;
@@ -5468,18 +5491,42 @@ interface NavBend { dist: number; ang: number; left: boolean }
 const NAV_REACH = 350;              // how far ahead the co-driver reads
 const NAV_WIN = 30;                 // metres a "corner" is allowed to span
 const NAV_MIN = (22 * Math.PI) / 180; // below this it is a kink, not a call
-function nextBend(x: number, z: number, heading: number): NavBend | null {
+/**
+ * THE ROAD AHEAD, AS A POLYLINE — the walk itself, with no opinion about what
+ * it is for.
+ *
+ * Written for the co-driver and then wanted by the tile streamer, which is a
+ * better use of it than the one it was built for: a heading wedge points where
+ * the truck is aimed THIS INSTANT, and a road bends away from that, so the
+ * tiles around the next corner are precisely the ones a wedge ranks lowest.
+ * Following the carriageway asks for the ground you are going to drive on
+ * rather than the ground you are momentarily pointing at.
+ *
+ * `namedOnly` is the co-driver's rule: a pace note needs an identity to chain
+ * through junctions by, and it declines to invent one. The streamer does not
+ * care what the road is called — an unnamed piste is still the thing under the
+ * wheels — so it chains by width instead, and leans on the straightest-
+ * continuation test (which is what actually stops a crossroads hijacking the
+ * chain) to keep it honest.
+ */
+function wayAhead(
+  x: number, z: number, heading: number,
+  reach: number, maxHops: number, namedOnly: boolean,
+): { pts: Array<[number, number]>; name?: string } | null {
   // The seg under the car — same test wayAt runs, but keeping the seg.
   let cur: Seg | null = null, bd = Infinity;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
-    if (!seg.nm) continue;
+    if (namedOnly && !seg.nm) continue;
     const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
     const t = clamp(((x - seg.ax) * dx + (z - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
     const d = Math.hypot(x - (seg.ax + dx * t), z - (seg.az + dz * t));
     if (d < bd && d <= seg.hw + 2) { bd = d; cur = seg; }
   }
   if (!cur) return null;
-  const name = cur.nm;
+  const name = cur.nm, hw = cur.hw;
+  /** What counts as "the same road" at a junction. */
+  const same = (s2: Seg): boolean =>
+    (name ? s2.nm === name : !s2.nm && Math.abs(s2.hw - hw) < 1.5);
   // Travel direction: whichever way along the seg the heading points.
   const hx = Math.sin(heading), hz = -Math.cos(heading);
   const fwd = (cur.bx - cur.ax) * hx + (cur.bz - cur.az) * hz >= 0;
@@ -5502,10 +5549,10 @@ function nextBend(x: number, z: number, heading: number): NavBend | null {
   else { dirX = hx; dirZ = hz; }
   const used = new Set<Seg>([cur]);
   let total = leg;
-  for (let hop = 0; hop < 80 && total < NAV_REACH + NAV_WIN; hop++) {
+  for (let hop = 0; hop < maxHops && total < reach; hop++) {
     let nxt: Seg | null = null, fromA = false, best = 0.1;
     for (const seg of roadGrid.get(gkey(ex, ez)) ?? []) {
-      if (seg.nm !== name || used.has(seg)) continue;
+      if (used.has(seg) || !same(seg)) continue;
       for (const a of [true, false]) {
         const jx = a ? seg.ax : seg.bx, jz = a ? seg.az : seg.bz;
         if (Math.hypot(jx - ex, jz - ez) > 1.5) continue;
@@ -5524,6 +5571,12 @@ function nextBend(x: number, z: number, heading: number): NavBend | null {
     total += l; ex = px; ez = pz;
     pts.push([ex, ez]);
   }
+  return { pts, name };
+}
+function nextBend(x: number, z: number, heading: number): NavBend | null {
+  const road = wayAhead(x, z, heading, NAV_REACH + NAV_WIN, 80, true);
+  if (!road) return null;
+  const pts = road.pts;
   if (pts.length < 3) return null;
   // Signed turn at each interior vertex, and the distance to it.
   const turns: Array<{ d: number; a: number }> = [];
@@ -11161,6 +11214,18 @@ const TERRAIN_RING_MAX = 3;
 // network is a disc around the car by construction, and the wide view is
 // landform. Anything more honest than this needs a coarser road source.
 const OSM_RING_MAX = 4;
+/** How far down the carriageway the streamer reads, and how many tiles that
+ *  is allowed to cost. 4.2km is ~50s at motorway speed and ~5 minutes at a
+ *  piste crawl — comfortably ahead of the wheels either way. */
+const CORRIDOR_M = 4200;
+const CORRIDOR_MAX = 12;
+/** The hop cap, and it is the one that actually binds. Road grid segments are
+ *  ribbon STATIONS, about ten metres each — the co-driver's eighty hops cover
+ *  its 380m reach comfortably, and the same eighty would stop a corridor dead
+ *  at 800m of a 4.2km ask. Measured on Noordhoek Road: 135 vertices for 1375m.
+ *  Each hop is one grid-cell lookup, so this is cheap in a way the reach is
+ *  not, and it runs at most once every 1.2s. */
+const CORRIDOR_HOPS = 800;
 function streamWorld(ex: number, ez: number): void {
   const [lat, lon] = localToLatLon(ex, ez);
   const r = viewRadius();
@@ -11269,12 +11334,69 @@ function streamWorld(ex: number, ez: number): void {
   //
   // Collect, sort by what the tile is worth, then ask. Same tiles, same count,
   // and now the ones down the road go first whether or not the gate is busy.
+  //
+  // …AND THEN THE ROAD OUTRANKS THE WEDGE. See osmCorridor: walk the
+  // carriageway under the wheels forward a few kilometres and take the tiles
+  // it crosses. A bend is where a heading wedge is most wrong and a corridor
+  // is most right, which is also where a driver most needs the ground to have
+  // arrived — you cannot see round it, so you find out what is there by
+  // getting there.
+  osmCorridor.clear();
+  {
+    const road = wayAhead(ex, ez, state.heading, CORRIDOR_M, CORRIDOR_HOPS, false);
+    let run = 0;
+    if (road) {
+      walk: for (let i = 1; i < road.pts.length; i++) {
+        const [x0, z0] = road.pts[i - 1], [x1, z1] = road.pts[i];
+        const len = Math.hypot(x1 - x0, z1 - z0);
+        // Stepped at well under a tile's width so no crossed tile is stepped
+        // over — a 600m tile and a 2km straight is otherwise two samples.
+        const n = Math.max(1, Math.ceil(len / 150));
+        for (let k = 1; k <= n; k++) {
+          const f = k / n;
+          const [pla, plo] = localToLatLon(x0 + (x1 - x0) * f, z0 + (z1 - z0) * f);
+          const [kx, ky] = tileAt(pla, plo, OSM_Z);
+          const key = `${kx}/${ky}`;
+          if (osmCorridor.has(key)) continue;
+          // A HARD CEILING, because the corridor is exempt from the ring gate
+          // and an exemption without a bound is how a queue starves. Twelve
+          // tiles is ~7km of road even single-file, well past the reach.
+          //
+          // (The walk itself is bounded by something softer and more useful:
+          // it can only follow segments that are IN the road grid, so a fresh
+          // spawn reaches as far as the loaded tiles do — measured 1.9km of a
+          // 4.2km ask on Noordhoek Road. It is a ratchet. The corridor pulls
+          // in the tiles at its own far end, those tiles extend the grid, and
+          // the next pass 1.2s later walks further. A tile is 600m and a pass
+          // is 1.2s, so it outruns any speed the truck can hold.)
+          if (osmCorridor.size >= CORRIDOR_MAX) break walk;
+          osmCorridor.set(key, run + len * f);
+        }
+        run += len;
+      }
+    }
+  }
   const want: Array<{ x: number; y: number; c: number }> = [];
+  const asked = new Set<string>();
   for (let dx = -ext; dx <= ext; dx++) for (let dy = -ext; dy <= ext; dy++) {
+    const key = `${ox + dx}/${oy + dy}`;
     const [cx, cz] = tileCentreLocal(ox + dx, oy + dy);
     const c = wedgeCost(cx, cz);
     const core = Math.max(Math.abs(dx), Math.abs(dy)) <= oRing;
-    if (core || c <= osmRingR) want.push({ x: ox + dx, y: oy + dy, c: core ? c - 1e6 : c });
+    const along = osmCorridor.get(key);
+    // Three bands, and they never interleave: the core disc under the wheels,
+    // then the road ahead IN THE ORDER IT WILL BE DRIVEN, then the wedge.
+    if (core || along !== undefined || c <= osmRingR) {
+      asked.add(key);
+      want.push({ x: ox + dx, y: oy + dy, c: core ? c - 1e6 : along !== undefined ? along - 5e5 : c });
+    }
+  }
+  // The road leaves the box, which is the entire point of following it: the
+  // box is ~3km on a side and a corridor reaches past that down a straight.
+  for (const [key, along] of osmCorridor) {
+    if (asked.has(key)) continue;
+    const sl = key.indexOf('/');
+    want.push({ x: +key.slice(0, sl), y: +key.slice(sl + 1), c: along - 5e5 });
   }
   want.sort((a, b) => a.c - b.c);
   for (const w of want) void loadOsmTile(w.x, w.y);
@@ -14023,23 +14145,60 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
  * and each row carries its raw metres beside its wedge-metres — the gap
  * between the two IS the bias.
  */
+/** The carriageway walk itself, so a claim about the corridor can be checked
+ *  against the ROAD and not only against the tiles it produced. */
+(window as unknown as { __wayahead?: object }).__wayahead = (m?: number): object => {
+  const road = wayAhead(state.x, state.z, state.heading, m ?? CORRIDOR_M, CORRIDOR_HOPS, false);
+  if (!road) return { on: false };
+  let run = 0;
+  for (let i = 1; i < road.pts.length; i++)
+    run += Math.hypot(road.pts[i][0] - road.pts[i - 1][0], road.pts[i][1] - road.pts[i - 1][1]);
+  return {
+    on: true, name: road.name ?? null, pts: road.pts.length, metres: Math.round(run),
+    // Bearing from the truck to the far end, against the truck's own heading:
+    // the angle between them is exactly what a wedge cannot see.
+    bend: Math.round(((Math.atan2(
+      road.pts[road.pts.length - 1][0] - state.x,
+      -(road.pts[road.pts.length - 1][1] - state.z),
+    ) - state.heading + Math.PI * 3) % (Math.PI * 2) - Math.PI) * 180 / Math.PI),
+    poly: road.pts.map(([px, pz]) => [Math.round(px), Math.round(pz)]),
+  };
+};
 (window as unknown as { __queue?: object }).__queue = (): object => {
   const rows = osmQueue.map((w) => {
     const [wx, wz] = tileCentreLocal(w.x, w.y);
     const dx = wx - osmCarX, dz = wz - osmCarZ;
+    const along = osmCorridor.get(`${w.x}/${w.y}`);
     return {
       t: `${w.x}/${w.y}`,
       fwd: Math.round(dx * osmFwdX + dz * osmFwdZ),
       lat: Math.round(dx * -osmFwdZ + dz * osmFwdX),
       raw: Math.round(Math.hypot(dx, dz)),
       cost: Math.round(wedgeCost(wx, wz)),
+      // Metres along the carriageway, where the tile is on it. Reported
+      // because a corridor tile is served — and kept — on THIS and not on the
+      // cost beside it, and an overlay that showed only the cost would be
+      // lying about the order the same way the pre-wedge one did.
+      ...(along === undefined ? {} : { road: Math.round(along) }),
     };
-  }).sort((a, b) => a.cost - b.cost);
+  }).sort((a, b) => (a.road ?? 5e5 + a.cost) - (b.road ?? 5e5 + b.cost));
   return {
     kmh: Math.round(Math.abs(state.speed) * 3.6),
     wedge: { fwd: +osmWFwd.toFixed(2), lat: +osmWLat.toFixed(2), back: +osmWBack.toFixed(2) },
     budget: Math.round(osmRingR), core: Math.round(osmCoreR),
     inFlight: osmInFlight, queued: osmQueue.length, gate: OSM_GATE,
+    // THE CORRIDOR, WITH ITS RECEIPTS. Each tile's metres along the road (the
+    // order it is served in), its wedge cost against the budget beside it —
+    // the gap between those two is what following the road actually bought —
+    // and whether the pipeline has in fact asked for it.
+    corridor: [...osmCorridor.entries()].sort((a, b) => a[1] - b[1]).map(([k, m]) => {
+      const sl = k.indexOf('/');
+      const [wx, wz] = tileCentreLocal(+k.slice(0, sl), +k.slice(sl + 1));
+      return {
+        t: k, along: Math.round(m), cost: Math.round(wedgeCost(wx, wz)),
+        state: tileStateOf(+k.slice(0, sl), +k.slice(sl + 1)),
+      };
+    }),
     next: rows.slice(0, 8),
     // The shape as a number: how far the wedge reaches straight ahead against
     // how far it reaches straight out to the side, at this speed.
