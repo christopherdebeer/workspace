@@ -34,16 +34,22 @@ const check = (name, cond, saw) => {
   console.log(`${cond ? 'ok  ' : 'FAIL'}  ${name}${cond ? '' : `\n        saw ${JSON.stringify(saw)}`}`);
 };
 
-/** A double tap at a screen point, through real pointer events. */
-async function dbl(page, x, y) {
-  for (let i = 0; i < 2; i++) {
-    await page.mouse.move(x, y);
-    await page.mouse.down();
-    await page.mouse.up();
-    await page.waitForTimeout(90);
-  }
-  await page.waitForTimeout(700);
-}
+/**
+ * A double tap at a screen point.
+ *
+ * Synthetic PointerEvents on the canvas, exactly as line-boot's dbltap does —
+ * NOT playwright's page.mouse. The mouse path produced no gesture at all here:
+ * this canvas is built for thumbs (pointerType 'touch', its own capture) and
+ * the proven dispatch is the one already in the suite. Two DIFFERENT pointer
+ * ids, because two taps are two fingers as far as the stick is concerned.
+ */
+const dbl = (page, x, y) => page.evaluate(({ x, y }) => {
+  const cv = document.querySelector('#scene');
+  const ev = (type, id) => new PointerEvent(type, {
+    pointerId: id, clientX: x, clientY: y, bubbles: true, isPrimary: true, pointerType: 'touch' });
+  cv.dispatchEvent(ev('pointerdown', 7)); cv.dispatchEvent(ev('pointerup', 7));
+  cv.dispatchEvent(ev('pointerdown', 8)); cv.dispatchEvent(ev('pointerup', 8));
+}, { x, y });
 
 const errors = [];
 // Four headings, because a bug that maps the screen onto world -Z is invisible
@@ -58,8 +64,12 @@ for (const h of [0, 90, 180, 270]) {
   // Upper middle of the screen: the distance, out of the windscreen, and the
   // half of the frame where a tap is allowed to mark from the seat.
   await dbl(d.page, 195, 250);
+  await d.page.waitForTimeout(700);
   const fixes = await d.page.evaluate(() => window.__poiList().filter((p) => p.kind === 'survey'));
-  check(`h=${h}: the double tap dropped a mark`, fixes.length === 1, fixes);
+  // __cam() counts every tap the gesture path ACCEPTED, so a failure here says
+  // whether the double tap was rejected at the door or misplaced after it.
+  const cam = await d.page.evaluate(() => window.__cam());
+  check(`h=${h}: the double tap dropped a mark`, fixes.length === 1, { fixes, cam });
   if (fixes.length === 1) {
     const at = await d.page.evaluate(() => window.__fixat());
     // NEGATIVE Z IS FORWARD in this world, so the forward vector is
