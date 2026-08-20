@@ -19068,8 +19068,29 @@ function tapeRestore(k: Float32Array, at: number): void {
 function worldQuietWhy(): { roads: boolean; terrain: boolean; sea: boolean } {
   return {
     // Roads carve corridors into the terrain, so a road still in flight is
-    // ground still moving.
-    roads: osmQueue.length === 0 && osmInFlight === 0,
+    // ground still moving — but the QUEUE is the wrong way to ask.
+    //
+    // It is designed never to empty. Tiles outside the heading wedge are
+    // dropped from it, and dropping FORGETS they were asked for so a later
+    // pass can ask again; streamWorld then re-asks for the whole ring on the
+    // next frame. So the fringe churns forever by construction, and a gate
+    // waiting on an empty queue waits for something the streamer promises not
+    // to deliver. Measured: two minutes parked at Senqu with roads:false and
+    // terrain and sea both long since true.
+    //
+    // The question the physics actually asks is narrower — is the ground I am
+    // about to drive over finished? — so this is the 3x3 block of OSM tiles
+    // around the truck, about 1.8km at z16, all present in osmDone. Those sit
+    // inside the core disc that is never dropped, so unlike the queue this is
+    // a condition that can actually come true.
+    roads: (() => {
+      const [la, lo] = localToLatLon(state.x, state.z);
+      const [tx, ty] = tileAt(la, lo, OSM_Z);
+      for (let dx = -1; dx <= 1; dx++) {
+        for (let dy = -1; dy <= 1; dy++) if (!osmDone.has(`${tx + dx}/${ty + dy}`)) return false;
+      }
+      return true;
+    })(),
     terrain: terrainDirty.size === 0,
     // ONLY WHERE THERE IS A SEA TO SETTLE. seaDatumSteady counts passes that
     // AGREE, and measureSeaDatum returns before it can ever touch that counter
