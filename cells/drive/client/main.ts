@@ -16931,10 +16931,24 @@ function teleportTo(x: number, z: number): void {
  * dropped in the upper half, which is where the windscreen is anyway. `stick`
  * being null already rules out an active drag; this rules out the near-misses.
  */
-const tapCanMark = (e: PointerEvent): boolean =>
-  camMode === 'top' || (!stick && e.clientY < innerHeight * 0.5);
+const tapCanMark = (e: PointerEvent): boolean => {
+  // On the chart the whole screen is map, and a live stick means the thumb is
+  // steering rather than pointing.
+  if (camMode === 'top') return !stick;
+  // FROM THE SEAT THERE IS ALWAYS A STICK. A pointerdown anywhere in POV makes
+  // one — the control is placed wherever the thumb lands, which is the whole
+  // screen — so "no stick" is a condition that can never hold here, and the
+  // first cut of this gesture silently never fired even once. What actually
+  // separates a TAP from a STEER is that the thumb did not TRAVEL: an
+  // untouched stick is still sitting on its own origin.
+  if (!stick || stick.id !== e.pointerId) return false;
+  if (Math.hypot(e.clientX - stick.x0, e.clientY - stick.y0) > 12) return false;
+  // …and the lower band belongs to the driving controls whatever it reads as,
+  // so a mark can only be dropped through the windscreen.
+  return e.clientY < innerHeight * 0.5;
+};
 const endStick = (e: PointerEvent): void => {
-  if (tapCanMark(e) && !stick && e.type === 'pointerup' && e !== lastUp) {
+  if (tapCanMark(e) && e.type === 'pointerup' && e !== lastUp) {
     lastUp = e;
     tapSeen++;
     const now = performance.now();
