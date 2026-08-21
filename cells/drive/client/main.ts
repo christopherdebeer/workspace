@@ -1952,7 +1952,19 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
   // own valley. Front faces, and let the bias do the job the trick was standing
   // in for.
   mat.shadowSide = THREE.FrontSide;
-  mat.onBeforeCompile = (sh) => {
+  // CHAIN, DO NOT CLOBBER. onBeforeCompile is one slot and three helpers in
+  // this file want it — the wind, this, and grainFx. grainFx already captures
+  // the previous hook and calls it; this one assigned straight over the top,
+  // so whether an effect reached the GPU depended on the ORDER the helpers
+  // happened to be called in, with no error and no missing symbol.
+  //
+  // It cost the grass its wind. grassMat sets the gust injection and then calls
+  // terrainFx on the next line, so the blades have been standing dead still —
+  // which is most of why a field reads as spikes rather than as grass, and it
+  // was invisible because a discarded hook leaves nothing behind to find.
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = function (sh, renderer) {
+    prev?.call(mat, sh, renderer);
     sh.uniforms.uCloudS = envU.uCloudS;
     sh.uniforms.uWind = envU.uWind;
     sh.vertexShader = sh.vertexShader
@@ -2423,6 +2435,11 @@ function dirtyTerrainAround(pts: Array<[number, number]>): void {
 // frame while a city streams in around you.
 let terrainAt = 0;
 let terrainMs = 0;
+/** How many terrain meshes have been REBUILT, ever. The count of tiles does not
+ *  move when a tile is rebuilt in place, and a rebuild is exactly when the
+ *  ground changes shape — carveCorridors cuts the hillside to receive a road,
+ *  so a road arriving moves the ground by up to a metre where it lands. */
+let terrainBuilds = 0;
 function flushTerrain(now: number): void {
   if (now - terrainAt < 200) return;
   for (const key of terrainDirty) {
@@ -2433,6 +2450,7 @@ function flushTerrain(now: number): void {
       const t0 = performance.now();
       buildTerrainMesh(t);
       // The ground under this tile just moved; anything standing on it follows.
+      terrainBuilds++;
       reseatBuildings(t);
       redrape(t);
       flushBatter(t);
@@ -4507,9 +4525,350 @@ function swardGround(x: number, z: number): number {
   const c = swardCorner(gx, gz + 1), d = swardCorner(gx + 1, gz + 1);
   return (a * (1 - tx) + b * tx) * (1 - tz) + (c * (1 - tx) + d * tx) * tz;
 }
+/**
+ * ══ THE GPU SWARD ══════════════════════════════════════════════════
+ *
+ * Reported from the seat: even LUSH is "sparse and spikey", and the field
+ * wants far more blades over a far wider radius. Measured, LUSH is 10,311
+ * tufts over a 224m reach — about a fifth of a tuft per square metre, which is
+ * a meadow described rather than drawn.
+ *
+ * THE CPU CANNOT GET THERE AT ANY DENSITY. refreshSward spends ~17ms building
+ * 6,609 instance matrices, which is 2.6µs a tuft; three hundred thousand of
+ * them would be three quarters of a second a pass. So moving placement to the
+ * vertex shader is not an optimisation of the old approach, it is the only
+ * road to the thing being asked for — the same conclusion every one of the
+ * linked articles reached, for the same reason.
+ *
+ * WHAT MOVES AND WHAT STAYS. Every per-tuft decision the CPU used to make —
+ * where the blade stands, which way it faces, how big it is, whether it exists
+ * at all, and what colour it fades to — is now hashed in the vertex shader
+ * from the blade's own WORLD CELL. The CPU keeps only what a shader cannot
+ * ask: the shape of the ground, what grows there, and where the tarmac is.
+ * Those go into a small field texture that is rebuilt when the truck leaves
+ * the middle of it rather than every pass.
+ *
+ * HASHED FROM THE WORLD CELL, NOT FROM THE INSTANCE ID, and that is the whole
+ * trick. Key a blade to its instance id and the field slides with the camera —
+ * blades swim, which is the one artefact this world has spent a week removing.
+ * Each instance owns a slot in a lattice whose origin is SNAPPED to a multiple
+ * of the step, so a slot's world position is fixed; drive far enough and a slot
+ * wraps to the other side of the truck and rehashes into a different blade in a
+ * different place, which reads as new grass arriving rather than old grass
+ * moving.
+ *
+ * NO SHADOWS, deliberately. A 26cm blade's shadow is sub-pixel at almost any
+ * range on a 148×320 target, and casting doubles the vertex count — which at
+ * these numbers is the only cost that matters. It also sidesteps the trap that
+ * the shadow pass uses its own depth material: without a matching injection
+ * every blade would cast from the world origin, silently.
+ */
+const SWARD_F = 96;            // field texels across
+const SWARD_FM = 8;            // metres per texel — 768m of field
+const SWARD_FW = SWARD_F * SWARD_FM;
+// Road/water mask texels. 256 was 3m each, and with linear filtering either
+// side of a kerb that is a six-metre ramp on top of the stroke's own width —
+// measured, a 9.5m carriageway blocked grass across about eighteen metres and
+// left every verge in the suburb bald. At 512 the ramp is a metre and a half.
+const SWARD_MASKN = 512;
+/** Rebuild the field once the truck is this far off its centre. The field is
+ *  768m wide, so this is generous: at 25m/s it is a pass every two seconds
+ *  against the old sward's every seven hundred milliseconds. */
+const SWARD_REBUILD = 48;
+/**
+ * HOW MUCH LUSHER THAN THE OLD FIELD, as one number.
+ *
+ * GRASS_M2 is in tufts per square metre and its values — 0.85 for open grass,
+ * 0.35 for unknown — are the density the CPU sward could AFFORD, not the
+ * density a meadow has. Ported straight across they reproduce exactly the look
+ * being complained about: measured at Noordhoek the near band came out at 0.45
+ * tufts/m², which at this pixel scale is invisible against green ground.
+ *
+ * The class values are kept because their RATIOS are real — bare ground grows
+ * nothing, a built block grows a twelfth of what open grass does — and the
+ * whole table is multiplied instead. Free to do: a slot the dither drops costs
+ * three vertices and no fragments, so density is now paid for in vertex work
+ * on a 47,360-pixel target rather than in CPU matrices.
+ */
+const SWARD_LUSH = 14;
+const swardField = new THREE.DataTexture(
+  new Float32Array(SWARD_F * SWARD_F * 4), SWARD_F, SWARD_F, THREE.RGBAFormat, THREE.FloatType);
+swardField.minFilter = swardField.magFilter = THREE.LinearFilter;
+const swardColT = new THREE.DataTexture(
+  new Uint8Array(SWARD_F * SWARD_F * 4), SWARD_F, SWARD_F, THREE.RGBAFormat, THREE.UnsignedByteType);
+swardColT.minFilter = swardColT.magFilter = THREE.LinearFilter;
+/** The mask is RASTERISED, not sampled. Asking surfaceAt per texel would be
+ *  65k road-grid walks; stroking the road segments as fat lines into a canvas
+ *  is a few hundred draws and is exact at the kerb, which is where it matters —
+ *  grass growing through the carriageway is the one failure anyone would see. */
+const swardMaskCv = document.createElement('canvas');
+swardMaskCv.width = swardMaskCv.height = SWARD_MASKN;
+const swardMaskCtx = swardMaskCv.getContext('2d') as CanvasRenderingContext2D;
+const swardMaskT = new THREE.CanvasTexture(swardMaskCv);
+swardMaskT.minFilter = swardMaskT.magFilter = THREE.LinearFilter;
+// flipY OFF, to match the DataTextures it is sampled beside. three flips a
+// CanvasTexture by default and does not flip a DataTexture, so with one UV for
+// both the mask lands MIRRORED IN Z — which puts the road's bald stripe on the
+// wrong side of the truck and grows grass straight up through the carriageway.
+// It looks exactly like "the mask does not work", and the mask was fine.
+swardMaskT.flipY = false;
+let swardFX = NaN, swardFZ = NaN;     // field origin (world XZ of texel 0)
+let swardFieldMs = 0;
+/**
+ * THE WORLD ARRIVES AFTER THE FIELD DOES.
+ *
+ * Rebuilding only when the truck leaves the middle of the field is right for
+ * driving and wrong for standing still: the first build happens on the first
+ * frame, when no OSM tile has landed and no terrain has been carved, so the
+ * road mask is EMPTY and the height is the raw guess. Park at a spawn and it
+ * stays that way forever — measured, paintedFrac 0.0000 with the truck sitting
+ * on a road, and grass growing straight up through the carriageway.
+ *
+ * So the field also watches the world's own size. One integer, rate-limited;
+ * once the streaming settles it stops rebuilding on its own.
+ */
+let swardRoadSeen = -1, swardGroundSeen = -1, swardFieldAt = 0, swardMaskMs = 0;
+/** Roads: the mask's clock. */
+const swardRoadRev = (): number => osmDone.size;
+/** Ground shape: the heights' clock — rebuilds, not tiles. See flushTerrain. */
+const swardGroundRev = (): number => terrainBuilds;
+const swardU = {
+  uField: { value: swardField }, uSwardCol: { value: swardColT }, uSwardMask: { value: swardMaskT },
+  uFieldOrg: { value: new THREE.Vector2() }, uFieldW: { value: SWARD_FW },
+  uSwardEye: { value: new THREE.Vector3() },
+  uSwardTint: { value: new THREE.Color(1, 1, 1) },
+  /** 0 normal · 1 ignore the road mask · 2 ignore the density dither · 3 both.
+   *  A blade that does not appear has three candidate causes and they want
+   *  different fixes; this separates them in one run instead of three. */
+  uSwardDbg: { value: 0 },
+};
+/**
+ * THE HEIGHTS AND THE MASK CHANGE ON DIFFERENT EVENTS, so they are rebuilt on
+ * different events.
+ *
+ * The height and cover pass is 9,216 groundAt calls — 30–100ms — and it is the
+ * whole cost of the field. The mask is a few hundred canvas strokes and is
+ * free. Doing both whenever the world grew paid the expensive one every time
+ * an OSM tile landed, which while streaming is constantly.
+ *
+ * BUT A ROAD ARRIVING DOES MOVE THE GROUND, and the first version of this split
+ * said it did not. carveCorridors cuts the hillside to receive a carriageway —
+ * that is the whole reason the ground beside a road sits below the ground
+ * behind it — so an OSM tile landing dirties terrain, terrain rebuilds, and
+ * every height within a cell of that road changes by up to a metre. A field
+ * that kept its old heights would stand its grass on the hillside the road was
+ * cut out of.
+ *
+ * So the trigger is the terrain REBUILD COUNT, not the tile count: the tile
+ * count does not move when a tile is rebuilt in place, which is precisely the
+ * event that matters. Heights follow rebuilds; the mask follows roads.
+ */
+function refreshSwardField(full = true): void {
+  const t0 = performance.now();
+  if (full) {
+    const cx = Math.round(state.x / SWARD_FM) * SWARD_FM, cz = Math.round(state.z / SWARD_FM) * SWARD_FM;
+    swardFX = cx - SWARD_FW / 2; swardFZ = cz - SWARD_FW / 2;
+    swardU.uFieldOrg.value.set(swardFX, swardFZ);
+  }
+  const F = swardField.image.data as Float32Array;
+  const C = swardColT.image.data as Uint8Array;
+  if (full) for (let j = 0; j < SWARD_F; j++) {
+    for (let i = 0; i < SWARD_F; i++) {
+      const wx = swardFX + (i + 0.5) * SWARD_FM, wz = swardFZ + (j + 0.5) * SWARD_FM;
+      const k = (j * SWARD_F + i) * 4;
+      const h = groundAt(wx, wz);
+      const cv = sampleCover(wx, wz);
+      F[k] = h;
+      F[k + 1] = cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3);
+      const slope = Math.abs(groundAt(wx + SWARD_FM, wz) - h) / SWARD_FM;
+      const [pr, pg, pb] = terrainPalette(h + baseElev, slope, cv);
+      C[k] = Math.round(clamp(pr, 0, 1) * 255);
+      C[k + 1] = Math.round(clamp(pg, 0, 1) * 255);
+      C[k + 2] = Math.round(clamp(pb, 0, 1) * 255);
+      C[k + 3] = 255;
+    }
+  }
+  if (full) { swardField.needsUpdate = true; swardColT.needsUpdate = true; }
+  // ── the mask ──
+  const px = SWARD_MASKN / SWARD_FW;                 // texels per metre
+  swardMaskCtx.fillStyle = '#000';
+  swardMaskCtx.fillRect(0, 0, SWARD_MASKN, SWARD_MASKN);
+  swardMaskCtx.strokeStyle = '#fff';
+  swardMaskCtx.lineCap = 'round';
+  const seen = new Set<Seg>();
+  const c0 = Math.floor(swardFX / GRID), c1 = Math.ceil((swardFX + SWARD_FW) / GRID);
+  const d0 = Math.floor(swardFZ / GRID), d1 = Math.ceil((swardFZ + SWARD_FW) / GRID);
+  for (let gx = c0; gx <= c1; gx++) for (let gz = d0; gz <= d1; gz++) {
+    for (const sg of roadGrid.get(`${gx},${gz}`) ?? []) {
+      if (seen.has(sg)) continue;
+      seen.add(sg);
+      // The drawn carriageway and very little else. The shoulder margin was
+      // 1.2m, which sounds modest and is doubled (both sides) and then widened
+      // again by the mask's own filtering — the verge is the one place grass
+      // most needs to be, and it was the one place it could not grow.
+      swardMaskCtx.lineWidth = Math.max(1, (sg.hw + 0.35) * 2 * px);
+      swardMaskCtx.beginPath();
+      swardMaskCtx.moveTo((sg.ax - swardFX) * px, (sg.az - swardFZ) * px);
+      swardMaskCtx.lineTo((sg.bx - swardFX) * px, (sg.bz - swardFZ) * px);
+      swardMaskCtx.stroke();
+    }
+  }
+  swardMaskT.needsUpdate = true;
+  swardRoadSeen = swardRoadRev();
+  if (full) swardGroundSeen = swardGroundRev();
+  swardFieldAt = performance.now();
+  if (full) swardFieldMs = performance.now() - t0;
+  else swardMaskMs = performance.now() - t0;
+}
+/** One band of the sward: a lattice of `side²` slots at `step` metres. */
+interface SwardBand { mesh: THREE.Mesh; side: number; step: number; reach: number;
+  uBase: { value: THREE.Vector2 }; uStep: { value: number }; uSide: { value: number };
+  uReach: { value: number }; uDens: { value: number } }
+const SWARD_GLSL = `
+  float swHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }`;
+function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLambertMaterial {
+  const m = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, side: THREE.DoubleSide });
+  m.onBeforeCompile = (sh) => {
+    // Shared field uniforms by reference, band uniforms per material. Three
+    // keeps a uniform VALUE list per material even when two materials share a
+    // compiled program, so three bands with identical shader source and
+    // different steps cost one program and three uniform sets.
+    Object.assign(sh.uniforms, swardU, windU, bandU);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', `#include <common>
+        attribute float aId;
+        uniform sampler2D uField; uniform sampler2D uSwardCol; uniform sampler2D uSwardMask;
+        uniform vec2 uFieldOrg; uniform float uFieldW;
+        uniform vec2 uBase; uniform float uStep; uniform float uSide;
+        uniform float uReach; uniform float uDens;
+        uniform vec3 uSwardEye; uniform vec3 uSwardTint; uniform float uSwardDbg;
+        uniform float uTime; uniform vec2 uGust;
+        varying vec3 vSward;
+        ${SWARD_GLSL}`)
+      .replace('#include <begin_vertex>', `
+        // THE SLOT'S OWN CELL, snapped so it is a fixed place in the world and
+        // not a place relative to the truck.
+        float sIx = mod(aId, uSide), sIz = floor(aId / uSide);
+        vec2 sCell = uBase + (vec2(sIx, sIz) - uSide * 0.5) * uStep;
+        float sH1 = swHash(sCell + 0.13);
+        float sH2 = swHash(sCell * 1.7 + 5.1);
+        float sH3 = swHash(sCell * 2.9 + 11.7);
+        vec2 sP = sCell + (vec2(sH2, sH3) - 0.5) * uStep * 0.9;
+        vec2 sUv = (sP - uFieldOrg) / uFieldW;
+        vec4 sF = texture2D(uField, sUv);
+        float sBlocked = texture2D(uSwardMask, sUv).r;
+        float sD = length(sP - uSwardEye.xz);
+        float sFade = 1.0 - sD / uReach;
+        // The SAME dither the CPU sward used: whole tufts dropped on a hash,
+        // never shrunk, so what remains is full size at this pixel scale.
+        float sKeep = sF.g * uStep * uStep * uDens * (0.22 + 0.78 * sFade * sFade);
+        bool sMaskOk = sBlocked < 0.5 || uSwardDbg == 1.0 || uSwardDbg == 3.0;
+        bool sDithOk = sH1 < sKeep || uSwardDbg == 2.0 || uSwardDbg == 3.0;
+        bool sLive = sDithOk && sMaskOk && sD < uReach
+          && sUv.x > 0.002 && sUv.x < 0.998 && sUv.y > 0.002 && sUv.y < 0.998;
+        float sT = clamp(sD / uReach, 0.0, 1.0);
+        float sAng = sH2 * 6.28318;
+        float sCa = cos(sAng), sSa = sin(sAng);
+        // SHORTER THAN THE OLD TUFT. At 0.7–2.3x of a 26cm blade the sward was
+        // knee-high, which is what a sparse field needs to read at all — every
+        // blade had to count. With fourteen times the count the height can come
+        // back down to grass, and the distance growth stays so a far tuft still
+        // covers its pixel.
+        vec3 sLp = position * (0.55 + sH1 * 0.95) * (1.0 + sT * 0.9);
+        sLp.xz = vec2(sCa * sLp.x - sSa * sLp.z, sSa * sLp.x + sCa * sLp.z);
+        // Wind, from the blade's WORLD position so a gust crosses the field as
+        // one front rather than every tuft nodding on its own clock.
+        sLp.xz += uGust * (sLp.y * (0.55 + 0.45 * sin(uTime * 1.9 + sP.x * 0.31 + sP.y * 0.23)));
+        // A dead slot collapses to a point: zero area, so it costs its vertices
+        // and not one fragment. Cheaper than a branch around the whole shader.
+        vec3 transformed = sLive ? vec3(sP.x, sF.r, sP.y) + sLp : vec3(sP.x, sF.r, sP.y);
+        // Colour: the biome green near, the ground's own colour far, so the
+        // field dissolves into the terrain instead of stopping at a line.
+        float sMix = pow(clamp((sT - 0.45) / 0.55, 0.0, 1.0), 2.0) * 0.85;
+        vSward = mix(uSwardTint, texture2D(uSwardCol, sUv).rgb, sMix);`)
+      // The blade is placed in WORLD metres, and the mesh sits at the origin
+      // with an identity matrix, so object space already is world space.
+      .replace('#include <project_vertex>', '#include <project_vertex>');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vSward;')
+      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= vSward;');
+  };
+  return m;
+}
+/**
+ * Bands: dense and near, then wider and thinner. Each is one draw call and its
+ * whole cost is VERTICES, so the slot counts are the dial that matters.
+ *
+ * 224² + 192² + 160² is 113,280 slots against the old sward's 10,311 tufts at
+ * LUSH — but a slot is not a blade: the density dither still drops most of
+ * them, and what it drops costs three vertices and no fragments. The reach is
+ * (side × step) / 2, so 50m, 144m and 368m: the near band is eleven times
+ * denser than the old inner lattice and the far one reaches past where the old
+ * field stopped entirely.
+ */
+const SWARD_BANDS: Array<[number, number]> = [[0.45, 224], [1.5, 192], [4.6, 160]];
+const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side], bi) => {
+  const geo = new THREE.InstancedBufferGeometry();
+  const src = grassGeo();
+  geo.setAttribute('position', src.getAttribute('position'));
+  geo.setAttribute('normal', src.getAttribute('normal'));
+  // aId RATHER THAN gl_InstanceID: the id is wanted in the vertex shader and
+  // an attribute works whatever GLSL version three settles on, at 4 bytes a
+  // slot. It also gives InstancedBufferGeometry something to count.
+  const ids = new Float32Array(side * side);
+  for (let i = 0; i < ids.length; i++) ids[i] = i;
+  geo.setAttribute('aId', new THREE.InstancedBufferAttribute(ids, 1));
+  geo.instanceCount = side * side;
+  const band: SwardBand = { mesh: null as unknown as THREE.Mesh, side, step, reach: (side * step) / 2,
+    uBase: { value: new THREE.Vector2() }, uStep: { value: step },
+    uSide: { value: side }, uReach: { value: (side * step) / 2 }, uDens: { value: 1 } };
+  const mat = swardMaterial({ uBase: band.uBase, uStep: band.uStep, uSide: band.uSide,
+    uReach: band.uReach, uDens: band.uDens } as unknown as Record<string, { value: unknown }>);
+  terrainFx(mat);
+  grainFx(mat, `grain-sward${bi}`, 0.85, 3.6);
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.frustumCulled = false;      // the lattice spans the whole field
+  mesh.castShadow = false;         // see the header: sub-pixel, and it doubles the vertices
+  mesh.receiveShadow = false;
+  mesh.visible = false;            // until the field has been built once
+  scene.add(mesh);
+  band.mesh = mesh;
+  return band;
+});
+/** GPU sward on? `?sward=cpu` goes back to the old lattice. */
+let swardGpu = new URLSearchParams(location.search).get('sward') !== 'cpu';
+/** Per-frame: the lattice origins, the eye, the tint, the density. All uniform
+ *  writes — there is no per-blade work left on this side of the wire. */
+function swardFrame(): void {
+  if (!swardGpu) return;
+  const now2 = performance.now();
+  const moved = Number.isNaN(swardFX)
+    || Math.hypot(state.x - (swardFX + SWARD_FW / 2), state.z - (swardFZ + SWARD_FW / 2)) > SWARD_REBUILD;
+  if (moved) {
+    refreshSwardField(true);
+    for (const b of swardBands) b.mesh.visible = true;
+  } else if (swardGroundSeen !== swardGroundRev() && now2 - swardFieldAt > 2000) {
+    // Terrain was rebuilt — a road was cut into it, or the DEM landed — so the
+    // heights this field is standing its grass on are stale. Full pass.
+    refreshSwardField(true);
+  } else if (swardRoadSeen !== swardRoadRev() && now2 - swardFieldAt > 1200) {
+    // Roads arrived with no rebuild behind them yet: redraw the mask so nothing
+    // grows through the new carriageway, and leave the heights alone.
+    refreshSwardField(false);
+  }
+  swardU.uSwardEye.value.set(state.x, 0, state.z);
+  swardU.uSwardTint.value.copy(grassTint);
+  for (const b of swardBands) {
+    // SNAPPED to the step, so a slot's world position never moves under it.
+    b.uBase.value.set(Math.round(state.x / b.step) * b.step, Math.round(state.z / b.step) * b.step);
+    b.uDens.value = vegScale * grassScale * SWARD_LUSH;
+    b.mesh.visible = grassScale > 0 && vegScale > 0;
+  }
+}
 function refreshSward(): void {
   const t0 = performance.now();
   swardCache.clear();
+  if (swardGpu) { vegMeshes.grass.count = 0; swardMs = 0; return; }
   const cap = Math.floor(VEG_CAP.grass * vegScale * grassScale);
   const gm = vegMeshes.grass;
   let n = 0;
@@ -14910,6 +15269,109 @@ function truckSpec(): Record<string, number> {
 };
 (window as unknown as { __susp?: object }).__susp = (): object => dbgSusp;
 /**
+ * WHICH SHADER INJECTIONS ACTUALLY SURVIVED.
+ *
+ * `onBeforeCompile` is ONE SLOT per material and this file has three helpers
+ * that want it — the wind, terrainFx and grainFx. grainFx chains (it captures
+ * the previous hook and calls it); terrainFx assigns straight over the top. So
+ * whether an effect reaches the GPU depends on the ORDER the helpers were
+ * called in, silently, with no error and no missing symbol to trip over.
+ *
+ * Run each material's hook on a bare stub and report which markers come out.
+ */
+/** THE SWARD, AS NUMBERS: slots offered, field cost, reach. What the dither
+ *  actually keeps is a GPU-side decision and cannot be counted from here — the
+ *  honest measure of that is the screen. */
+(window as unknown as { __sward?: object }).__sward = (gpu?: boolean, rebuild?: boolean): object => {
+  // The field rebuilds on 48m of travel or on the world growing, so a test that
+  // teleports and asks immediately gets the field from where it WAS. Forcing it
+  // is the honest way to measure the field at a place rather than waiting out a
+  // trigger that has no reason to fire.
+  if (rebuild) refreshSwardField();
+  if (gpu !== undefined) {
+    swardGpu = gpu;
+    for (const b of swardBands) b.mesh.visible = gpu;
+    if (!gpu) { swardFX = NaN; refreshSward(); }
+  }
+  return {
+    gpu: swardGpu,
+    bands: swardBands.map((b) => ({ step: b.step, side: b.side,
+      slots: b.side * b.side, reach: Math.round(b.reach), dens: +b.uDens.value.toFixed(2),
+      visible: b.mesh.visible })),
+    slots: swardBands.reduce((a, b) => a + b.side * b.side, 0),
+    verts: swardBands.reduce((a, b) => a + b.side * b.side * 9, 0),
+    fieldMs: +swardFieldMs.toFixed(1), maskMs: +swardMaskMs.toFixed(1),
+    fieldW: SWARD_FW, rebuildAt: SWARD_REBUILD,
+    cpuTufts: vegMeshes.grass.count, cpuMs: +swardMs.toFixed(1),
+    field: (() => {
+      const F = swardField.image.data as Float32Array;
+      let rate0 = 0, rateSum = 0, hMin = Infinity, hMax = -Infinity;
+      for (let i = 0; i < SWARD_F * SWARD_F; i++) {
+        const r = F[i * 4 + 1], h = F[i * 4];
+        if (r <= 0) rate0++;
+        rateSum += r;
+        if (h < hMin) hMin = h;
+        if (h > hMax) hMax = h;
+      }
+      const n = SWARD_F * SWARD_F;
+      return { texels: n, rateZero: rate0, rateMean: +(rateSum / n).toFixed(3),
+        hMin: +hMin.toFixed(1), hMax: +hMax.toFixed(1),
+        // What the shader would compute for the near band right here.
+        keepHere: +(F[((SWARD_F / 2) * SWARD_F + SWARD_F / 2) * 4 + 1]
+          * 0.45 * 0.45 * vegScale * grassScale).toFixed(4) };
+    })(),
+    // Does the GPU support filtering a float texture at all? Without this
+    // extension a FloatType texture with LinearFilter is INCOMPLETE and every
+    // sample returns zero — which reads as "the field is empty" and would send
+    // anyone hunting the field builder instead of the texture format.
+    floatLinear: !!renderer.extensions.get('OES_texture_float_linear'),
+  };
+};
+/** The mask, as the CPU drew it and as a point query — so "the mask is wrong"
+ *  and "the mask is sampled wrong" stop being the same sentence. */
+(window as unknown as { __swarddbg?: object }).__swarddbg = (m: number): object => {
+  swardU.uSwardDbg.value = m;
+  return { mode: m };
+};
+(window as unknown as { __swardmask?: object }).__swardmask = (): object => {
+  const px = SWARD_MASKN / SWARD_FW;
+  const at = (x: number, z: number): number => {
+    const ix = Math.floor((x - swardFX) * px), iz = Math.floor((z - swardFZ) * px);
+    if (ix < 0 || iz < 0 || ix >= SWARD_MASKN || iz >= SWARD_MASKN) return -1;
+    return swardMaskCtx.getImageData(ix, iz, 1, 1).data[0];
+  };
+  let painted = 0;
+  const all = swardMaskCtx.getImageData(0, 0, SWARD_MASKN, SWARD_MASKN).data;
+  for (let i = 0; i < all.length; i += 4) if (all[i] > 128) painted++;
+  return {
+    origin: [Math.round(swardFX), Math.round(swardFZ)], w: SWARD_FW, n: SWARD_MASKN,
+    truck: [Math.round(state.x), Math.round(state.z)],
+    atTruck: at(state.x, state.z),
+    at20Left: at(state.x - 20, state.z), at20Right: at(state.x + 20, state.z),
+    paintedFrac: +(painted / (SWARD_MASKN * SWARD_MASKN)).toFixed(4),
+    png: swardMaskCv.toDataURL('image/png'),
+  };
+};
+(window as unknown as { __fxchain?: object }).__fxchain = (): object => {
+  const out: Record<string, string[]> = {};
+  const mats: Record<string, THREE.Material> = {
+    grass: grassMat, leaf: leafMat, stone: stoneMat, terrain: terrainMat, far: farMat };
+  for (const [name, m] of Object.entries(mats)) {
+    const sh = {
+      uniforms: {} as Record<string, unknown>,
+      vertexShader: '#include <common>\n#include <begin_vertex>\n#include <worldpos_vertex>\n#include <project_vertex>',
+      fragmentShader: '#include <common>\n#include <color_fragment>\n#include <dithering_fragment>',
+    };
+    (m.onBeforeCompile as unknown as (s: typeof sh) => void)?.(sh);
+    const has: string[] = [];
+    if (/uGust/.test(sh.vertexShader)) has.push('wind');
+    if (/vWorldP/.test(sh.vertexShader)) has.push('terrainFx');
+    if (/vGrainP/.test(sh.vertexShader)) has.push('grain');
+    out[name] = has;
+  }
+  return out;
+};
+/**
  * PUT THE TRUCK ON THE ROAD. Nearest drivable centreline within `r`, snapped to
  * through the ordinary teleport.
  *
@@ -21038,7 +21500,10 @@ function tick(now: number): void {
     noteDryLand(state.x, state.z, groundAt(state.x, state.z));
   }
   if (now > vegAt) { vegAt = now + 900; refreshVeg(); }
-  else if (now > swardAt) { swardAt = now + 700; refreshSward(); }
+  else if (now > swardAt) { swardAt = now + 700; if (!swardGpu) refreshSward(); }
+  // The GPU sward is uniform writes and a field rebuild only when the truck
+  // leaves the middle of it, so it runs every frame rather than on a slow tick.
+  swardFrame();
   audio.update(state.speed, throttle, surfKind, groundedF, wx.rain, engRev, engGear, skid,
     surfKind === 'water' ? 0 : surfQ, wheelSlipL);
   // The rig against the world: bodywork on a wall while moving, the hull's
