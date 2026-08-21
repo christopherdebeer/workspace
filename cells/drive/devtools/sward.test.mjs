@@ -135,5 +135,36 @@ check('…nor most of the map (the verge is where grass lives)',
   onRoad.paintedFrac < 0.25, onRoad);
 report(r.errors);
 await r.close();
+
+// ── WATER, MINUS THE EDGE AND THE SHALLOWS ──
+//
+// Three separate things call themselves water here and the mask has to see all
+// of them. The cover raster zeroes grass on class 80 and is 38m of resolution,
+// so a ten-metre river registers in NO texel. An OSM lake is a POLYGON in
+// waterPolys. And a river built by waterway() registers NEITHER — measured at a
+// French river bank, six water cells in the whole world and none in the field —
+// because a watercourse is a ribbon whose only registration is a CHANNEL, the
+// same Seg shape the road grid uses, which is what surfaceAt has been reading
+// all along.
+const w = await openDrive({
+  spot: 'lat=47.06552&lon=2.03928&h=90&cam=cab&wx=clear&t=NOON', tag: 'sward-water', settle: 55000 });
+await w.page.evaluate(() => window.__hide('critters'));
+await w.page.waitForTimeout(6000);
+await w.page.evaluate(() => window.__sward(undefined, true));
+const wm = await w.page.evaluate(() => { const m = window.__swardmask(); delete m.png; return m; });
+console.log(`      river bank: ${wm.channels} channels + ${wm.waterPolys} polygons + ${wm.roadSegs} road segs`
+  + ` -> ${(wm.paintedFrac * 100).toFixed(1)}% masked`);
+check('the field found watercourses to mask at all',
+  wm.channels > 0 || wm.waterPolys > 0, wm);
+// THE LOAD-BEARING ONE. Roads alone painted 0.5% here; water takes it past 5%,
+// so this cannot pass on the road mask by itself.
+check(`water is masked, not just tarmac (${(wm.paintedFrac * 100).toFixed(1)}%)`,
+  wm.paintedFrac > 0.03, wm);
+// …AND NOT EVERYTHING. A margin left unmasked is the whole point of the ask —
+// reeds and rough grass stand IN the shallows, and a body masked to its own
+// outline reads as shaved.
+check('…and the mask has not swallowed the countryside', wm.paintedFrac < 0.35, wm);
+report(w.errors);
+await w.close();
 console.log(bad ? `\n${bad} FAILED` : '\nall good — a field, not a scatter');
 if (bad) process.exitCode = 1;

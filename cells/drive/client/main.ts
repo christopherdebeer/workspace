@@ -4617,6 +4617,9 @@ const SWARD_FW = SWARD_F * SWARD_FM;
 // measured, a 9.5m carriageway blocked grass across about eighteen metres and
 // left every verge in the suburb bald. At 512 the ramp is a metre and a half.
 const SWARD_MASKN = 512;
+/** How far inside a water body the mask stops, so reeds and rough grass can
+ *  stand in the margin. A body masked to its own outline reads as shaved. */
+const SWARD_SHALLOW = 2.5;
 /** Rebuild the field once the truck is this far off its centre. The field is
  *  768m wide, so this is generous: at 25m/s it is a pass every two seconds
  *  against the old sward's every seven hundred milliseconds. */
@@ -4750,7 +4753,13 @@ function swardRows(from: number, to: number): void {
       // beneath it now has instead of into 38m blocks.
       const cv = sampleCover(wx, wz);
       swardScratchF[k] = h;
-      swardScratchF[k + 1] = cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3);
+      // THE SEA IS A PLANE, NOT A POLYGON, so no ring in waterPolys covers it
+      // and the mask cannot see it. Ground under the waterline grows nothing —
+      // and the same SWARD_SHALLOW margin applies, so a beach keeps its
+      // marram right down to the tide line.
+      swardScratchF[k + 1] = seaOn && h + baseElev < seaSurfaceAbs() - SWARD_SHALLOW
+        ? 0
+        : cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3);
       const slope = Math.abs(groundAt(wx + SWARD_FM, wz) - h) / SWARD_FM;
       const [pr, pg, pb] = terrainPalette(h + baseElev, slope, coverPaint(wx, wz));
       swardScratchC[k] = Math.round(clamp(pr, 0, 1) * 255);
@@ -4794,11 +4803,86 @@ function refreshSwardField(full = true): void {
   const px = SWARD_MASKN / SWARD_FW;                 // texels per metre
   swardMaskCtx.fillStyle = '#000';
   swardMaskCtx.fillRect(0, 0, SWARD_MASKN, SWARD_MASKN);
+  swardMaskCtx.fillStyle = '#fff';
   swardMaskCtx.strokeStyle = '#fff';
   swardMaskCtx.lineCap = 'round';
   const seen = new Set<Seg>();
   const c0 = Math.floor(swardFX / GRID), c1 = Math.ceil((swardFX + SWARD_FW) / GRID);
   const d0 = Math.floor(swardFZ / GRID), d1 = Math.ceil((swardFZ + SWARD_FW) / GRID);
+  // ── WATER FIRST, AND THE ROADS OVER THE TOP OF IT ──
+  //
+  // Order, not taste. The rim erosion below paints BLACK, and a bridge deck
+  // crosses the very rim it erodes — done after the roads it would rub the
+  // mask off the one place a road most needs it, and grass would grow up
+  // through a carriageway suspended over a river.
+  //
+  // The cover raster already zeroes grass on class 80, and it is 38m of
+  // resolution: a ten-metre river registers in NO texel, and a pond smaller
+  // than the field's own 8m sampling falls between the samples. The polygons
+  // are the only thing that knows where the water actually is.
+  const wseen = new Set<Array<[number, number]>>();
+  for (let gx = c0; gx <= c1; gx++) for (let gz = d0; gz <= d1; gz++) {
+    for (const poly of waterPolys.get(`${gx},${gz}`) ?? []) {
+      // BY REFERENCE: a lake spanning forty cells is stored forty times as a
+      // pointer, and filling it forty times would cost forty times as much for
+      // the same pixels.
+      if (wseen.has(poly) || poly.length < 3) continue;
+      wseen.add(poly);
+      swardMaskCtx.beginPath();
+      swardMaskCtx.moveTo((poly[0][0] - swardFX) * px, (poly[0][1] - swardFZ) * px);
+      for (let i = 1; i < poly.length; i++) {
+        swardMaskCtx.lineTo((poly[i][0] - swardFX) * px, (poly[i][1] - swardFZ) * px);
+      }
+      swardMaskCtx.closePath();
+      swardMaskCtx.fill();
+    }
+  }
+  // ── MINUS THE EDGE AND THE SHALLOWS ──
+  //
+  // Asked for from the seat, and it is what a waterline looks like: reeds and
+  // rough grass stand IN the margin, so a body masked to its own outline reads
+  // as a shaved edge. Stroking the same rings BLACK at twice the margin erodes
+  // the mask inward by exactly that much — the outer half of the stroke lands
+  // on ground that was never masked and costs nothing.
+  swardMaskCtx.strokeStyle = '#000';
+  swardMaskCtx.lineJoin = 'round';
+  swardMaskCtx.lineWidth = Math.max(1, SWARD_SHALLOW * 2 * px);
+  for (const poly of wseen) {
+    swardMaskCtx.beginPath();
+    swardMaskCtx.moveTo((poly[0][0] - swardFX) * px, (poly[0][1] - swardFZ) * px);
+    for (let i = 1; i < poly.length; i++) {
+      swardMaskCtx.lineTo((poly[i][0] - swardFX) * px, (poly[i][1] - swardFZ) * px);
+    }
+    swardMaskCtx.closePath();
+    swardMaskCtx.stroke();
+  }
+  // ── AND A RIVER IS NOT A POLYGON EITHER ──
+  //
+  // waterway() builds a watercourse as a RIBBON and registers no ring, so
+  // nothing above can see it: measured at a French river bank, six water cells
+  // in the whole world and none of them in the field. What a river does
+  // register is a CHANNEL — a Seg carrying its bed height, in a grid the same
+  // shape as the road grid — which is what surfaceAt has been reading all
+  // along. So it strokes exactly like a road, narrowed by the same margin.
+  //
+  // NARROWED, AND SOMETIMES OUT OF EXISTENCE: a brook two metres wide is ALL
+  // shallows, and grass standing across it is what a brook in a meadow looks
+  // like. Only a watercourse wider than the margin masks anything.
+  swardMaskCtx.strokeStyle = '#fff';
+  const cseen = new Set<Seg>();
+  for (let gx = c0; gx <= c1; gx++) for (let gz = d0; gz <= d1; gz++) {
+    for (const ch of channelGrid.get(`${gx},${gz}`) ?? []) {
+      if (cseen.has(ch)) continue;
+      cseen.add(ch);
+      const w = (ch.hw - SWARD_SHALLOW) * 2;
+      if (w <= 0.2) continue;
+      swardMaskCtx.lineWidth = Math.max(1, w * px);
+      swardMaskCtx.beginPath();
+      swardMaskCtx.moveTo((ch.ax - swardFX) * px, (ch.az - swardFZ) * px);
+      swardMaskCtx.lineTo((ch.bx - swardFX) * px, (ch.bz - swardFZ) * px);
+      swardMaskCtx.stroke();
+    }
+  }
   for (let gx = c0; gx <= c1; gx++) for (let gz = d0; gz <= d1; gz++) {
     for (const sg of roadGrid.get(`${gx},${gz}`) ?? []) {
       if (seen.has(sg)) continue;
@@ -15585,7 +15669,21 @@ function truckSpec(): Record<string, number> {
   let painted = 0;
   const all = swardMaskCtx.getImageData(0, 0, SWARD_MASKN, SWARD_MASKN).data;
   for (let i = 0; i < all.length; i += 4) if (all[i] > 128) painted++;
+  // WHAT THE SCAN ACTUALLY FOUND. "The mask is empty" has three causes — no
+  // roads, no water polygons, or a rasteriser that did not run — and they are
+  // not the same bug.
+  let roads = 0, polys = 0, chans = 0;
+  const seenP = new Set<unknown>(), seenC = new Set<unknown>();
+  const g0 = Math.floor(swardFX / GRID), g1 = Math.ceil((swardFX + SWARD_FW) / GRID);
+  const h0 = Math.floor(swardFZ / GRID), h1 = Math.ceil((swardFZ + SWARD_FW) / GRID);
+  for (let gx = g0; gx <= g1; gx++) for (let gz = h0; gz <= h1; gz++) {
+    roads += (roadGrid.get(`${gx},${gz}`) ?? []).length;
+    for (const q of waterPolys.get(`${gx},${gz}`) ?? []) if (!seenP.has(q)) { seenP.add(q); polys++; }
+    for (const q of channelGrid.get(`${gx},${gz}`) ?? []) if (!seenC.has(q)) { seenC.add(q); chans++; }
+  }
   return {
+    roadSegs: roads, waterPolys: polys, channels: chans,
+    waterPolysAll: waterPolys.size, waterCells: waterCells.size, channelCells: channelGrid.size,
     origin: [Math.round(swardFX), Math.round(swardFZ)], w: SWARD_FW, n: SWARD_MASKN,
     truck: [Math.round(state.x), Math.round(state.z)],
     atTruck: at(state.x, state.z),
