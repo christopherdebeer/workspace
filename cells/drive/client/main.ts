@@ -4761,9 +4761,9 @@ function swardRows(from: number, to: number): void {
   }
 }
 /** Begin a height sweep for wherever the truck is now. */
-function swardStart(): void {
-  swardPendX = Math.round(state.x / SWARD_FM) * SWARD_FM - SWARD_FW / 2;
-  swardPendZ = Math.round(state.z / SWARD_FM) * SWARD_FM - SWARD_FW / 2;
+function swardStart(cx = state.x, cz = state.z): void {
+  swardPendX = Math.round(cx / SWARD_FM) * SWARD_FM - SWARD_FW / 2;
+  swardPendZ = Math.round(cz / SWARD_FM) * SWARD_FM - SWARD_FW / 2;
   swardRow = 0;
   swardFieldMs = 0;
 }
@@ -5038,43 +5038,72 @@ const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side, blend], bi) => {
 let swardGpu = new URLSearchParams(location.search).get('sward') !== 'cpu';
 /** Per-frame: the lattice origins, the eye, the tint, the density. All uniform
  *  writes — there is no per-blade work left on this side of the wire. */
+/**
+ * ── THE CHART IS NOT ONE DISTANCE ──
+ *
+ * The first cut stood the sward down for the whole top-down view, on the
+ * reasoning that a chart is a map read from hundreds of metres up where a 40cm
+ * blade is nowhere near a pixel. True at the zooms a chart is usually read at,
+ * and FALSE at the bottom of the range: reported from the seat as "can't see
+ * grass in top down view when zoomed close", and quite right — zoomed in the
+ * camera is lower than the chase view and the grass is the ground.
+ *
+ * So the gate is the VIEW SCALE, which is the thing the reasoning was actually
+ * about, rather than the camera mode, which was standing in for it. viewRadius
+ * is a half-extent in metres over 320 lines, so metres-per-pixel is roughly
+ * viewRadius/160; a blade around half a metre covers a pixel at about 80m of
+ * radius and is worth drawing to perhaps 220.
+ *
+ * AND IT FADES RATHER THAN SWITCHES, for free: dropping uDens makes the dither
+ * thin the field out, and since a blade near the threshold now SHRINKS instead
+ * of blinking (see sAlive) the whole layer sinks into the ground as you zoom
+ * out. Past the threshold the meshes are hidden outright so a chart at reading
+ * zoom pays nothing at all.
+ */
+const SWARD_CHART_R = 220;
 function swardFrame(): void {
   if (!swardGpu) return;
-  // ── NOT FROM THE CHART ──
-  //
-  // The top-down view sits hundreds of metres up looking at a map; a 40cm blade
-  // is nowhere near a pixel and 112,640 slots of vertex work buy exactly
-  // nothing. The far shell and the overview layer already swap on camMode for
-  // the same reason — this is the third tenant of that rule, and the one with
-  // the largest bill.
+  let chartFade = 1;
   if (camMode === 'top') {
-    for (const b of swardBands) b.mesh.visible = false;
-    return;
+    chartFade = clamp((SWARD_CHART_R - viewRadius()) / (SWARD_CHART_R * 0.45), 0, 1);
+    if (chartFade <= 0) {
+      for (const b of swardBands) b.mesh.visible = false;
+      return;
+    }
   }
+  // ── AND IT GROWS WHERE YOU ARE LOOKING ──
+  //
+  // A panned chart is looking somewhere else, and the lattice is centred on the
+  // truck: without this, zooming in on a field two hundred metres away shows
+  // bare ground while the grass sits politely around a truck that is off the
+  // edge of the screen. The far shell and the overview vectors already stream
+  // to the chart's centre for exactly this reason.
+  const fx = camMode === 'top' ? state.x + panX : state.x;
+  const fz = camMode === 'top' ? state.z + panZ : state.z;
   const now2 = performance.now();
   // A sweep already under way finishes before another is considered.
   if (swardRow >= 0) { swardStep(); return; }
   const moved = Number.isNaN(swardFX)
-    || Math.hypot(state.x - (swardFX + SWARD_FW / 2), state.z - (swardFZ + SWARD_FW / 2)) > SWARD_REBUILD;
+    || Math.hypot(fx - (swardFX + SWARD_FW / 2), fz - (swardFZ + SWARD_FW / 2)) > SWARD_REBUILD;
   if (moved) {
-    swardStart();
+    swardStart(fx, fz);
     swardStep();
   } else if (swardGroundSeen !== swardGroundRev() && now2 - swardFieldAt > 2000) {
     // Terrain was rebuilt — a road was cut into it, or the DEM landed — so the
     // heights this field is standing its grass on are stale. Sweep again.
-    swardStart();
+    swardStart(fx, fz);
     swardStep();
   } else if (swardRoadSeen !== swardRoadRev() && now2 - swardFieldAt > 1200) {
     // Roads arrived with no rebuild behind them yet: redraw the mask so nothing
     // grows through the new carriageway, and leave the heights alone.
     refreshSwardField(false);
   }
-  swardU.uSwardEye.value.set(state.x, 0, state.z);
+  swardU.uSwardEye.value.set(fx, 0, fz);
   swardU.uSwardTint.value.copy(grassTint);
   for (const b of swardBands) {
     // SNAPPED to the step, so a slot's world position never moves under it.
-    b.uBase.value.set(Math.round(state.x / b.step) * b.step, Math.round(state.z / b.step) * b.step);
-    b.uDens.value = vegScale * grassScale * SWARD_LUSH;
+    b.uBase.value.set(Math.round(fx / b.step) * b.step, Math.round(fz / b.step) * b.step);
+    b.uDens.value = vegScale * grassScale * SWARD_LUSH * chartFade;
     b.mesh.visible = grassScale > 0 && vegScale > 0 && !Number.isNaN(swardFX);
   }
 }
