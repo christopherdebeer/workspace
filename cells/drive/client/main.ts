@@ -1240,7 +1240,7 @@ if (SHADOW_FADE) {
     const rim = 'max( abs( vDirectionalShadowCoord[ i ].x / vDirectionalShadowCoord[ i ].w - 0.5 ),'
       + ' abs( vDirectionalShadowCoord[ i ].y / vDirectionalShadowCoord[ i ].w - 0.5 ) ) * 2.0';
     THREE.ShaderChunk.shadowmask_pars_fragment = c.replace(line,
-      `shadow *= receiveShadow ? mix( 1.0, ${m[1]}, 1.0 - smoothstep( 0.78, 0.99, ${rim} ) ) : 1.0;`);
+      `shadow *= receiveShadow ? mix( 1.0, ${m[1]}, 1.0 - smoothstep( 0.90, 0.995, ${rim} ) ) : 1.0;`);
     shadowFadePatched = true;
   } else {
     const i = c.indexOf('directionalShadowMap[');
@@ -1256,6 +1256,46 @@ function setShadowDark(i: number): void {
     const raw = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
     for (const m of Array.isArray(raw) ? raw : raw ? [raw] : []) m.needsUpdate = true;
   });
+}
+/**
+ * ── AND THE PATCH THAT MATTERS IS THE OTHER ONE ──
+ *
+ * getShadowMask() is NOT how a lit material takes its shadow. Lambert, Phong
+ * and Standard sample per light inside lights_fragment_begin — the mask
+ * function is for MeshBasicMaterial and the shadow-only materials. So both
+ * chunk patches above reach the ground plane under a sprite and nothing that
+ * the sun is actually shading.
+ *
+ * Same two effects, applied where the terrain will see them: the darkness dial
+ * and the box-edge fade fold into ONE mix, because both lerp from "lit" toward
+ * "what the shadow map says" and the product of their weights is exactly the
+ * combination. Expressions only — this is inside an unrolled loop too.
+ */
+let shadowLitPatched = false;
+let shadowLitSaw = '';
+{
+  const c = THREE.ShaderChunk.lights_fragment_begin;
+  const line = /directLight\.color \*= \( directLight\.visible && receiveShadow \) \? (getShadow\( directionalShadowMap\[ i \][^;]*?\)) : 1\.0;/;
+  const m = c.match(line);
+  if (m) {
+    const rim = SHADOW_FADE
+      ? '1.0 - smoothstep( 0.90, 0.995, max( abs( vDirectionalShadowCoord[ i ].x /'
+        + ' vDirectionalShadowCoord[ i ].w - 0.5 ), abs( vDirectionalShadowCoord[ i ].y /'
+        + ' vDirectionalShadowCoord[ i ].w - 0.5 ) ) * 2.0 )'
+      : '1.0';
+    THREE.ShaderChunk.lights_fragment_begin = c.replace(line,
+      'directLight.color *= ( directLight.visible && receiveShadow )'
+      + ` ? mix( 1.0, ${m[1]}, ( ${rim} ) * SHADOW_DARKNESS ) : 1.0;`);
+    shadowLitPatched = true;
+    // DEFINED BEFORE ANY MATERIAL COMPILES. The dial rewrites this later, but a
+    // shader built before the first dial callback would reference an undeclared
+    // symbol and fail to link — and a link failure here is every lit surface in
+    // the game, silently, on the console.
+    THREE.ShaderChunk.common = `#define SHADOW_DARKNESS 1.000\n${SHADOW_COMMON}`;
+  } else {
+    const i = c.indexOf('directionalShadowMap[');
+    shadowLitSaw = i < 0 ? c.slice(0, 160) : c.slice(Math.max(0, i - 80), i + 200);
+  }
 }
 const shadowsWanted = new URLSearchParams(location.search).get('shadows') !== '0';
 sun.castShadow = shadowsWanted;
@@ -1375,10 +1415,20 @@ const castIfSolid = (o: THREE.Object3D): void => {
 // latitudes and dates BELOW it — and NOON puts it overhead, which are the two
 // lightings where a landscape's own shadows are either absent or invisible.
 // Nine and fifteen are where a dune has a lit face and a dark one.
-const SUN_ALT_FORCE = (() => {
+let SUN_ALT_FORCE: number | null = (() => {
   const v = new URLSearchParams(location.search).get('sunalt');
   return v === null || v === '' || !Number.isFinite(Number(v)) ? null : clamp(Number(v), -20, 89);
 })();
+/**
+ * ?sunalt AS A LIVE DIAL. A sun height that can only be set in a URL costs a
+ * page load per reading, and anything that sweeps the sky — the terrain march
+ * below, the haze, the moon — wants a dozen readings of the SAME world with
+ * the SAME ground under the wheels. Two loads of one spot are not that.
+ */
+(window as unknown as { __sunalt?: object }).__sunalt = (deg?: number | null): object => {
+  if (deg !== undefined) SUN_ALT_FORCE = deg === null ? null : clamp(Number(deg), -20, 89);
+  return { forced: SUN_ALT_FORCE };
+};
 const TIME_MODES = ['CYCLE', 'LIVE', 'DAWN', 'MORNING', 'NOON', 'AFTERNOON', 'DUSK', 'NIGHT'] as const;
 const TIME_HOUR: Record<string, number> = {
   DAWN: 6, MORNING: 9, NOON: 12, AFTERNOON: 15, DUSK: 18, NIGHT: 0,
@@ -2080,7 +2130,184 @@ const envU = {
   uSunSkew: { value: new THREE.Vector2() },
   uDeckY: { value: CLOUD_DECK_Y },
   uCloudScale: { value: CLOUD_SCALE },
+  // ── THE HILL SHADES ITS OWN VALLEY ──
+  uSunM: { value: null as unknown as THREE.DataTexture },
+  uSunMOrg: { value: new THREE.Vector2() },
+  uSunMW: { value: 1 },
+  uSunMOn: { value: 0 },
+  uSunL: { value: new THREE.Vector3(0, 1, 0) },
 };
+/**
+ * ── A SHADOW MAP CANNOT SHADE A VALLEY, AND THIS IS WHY ──
+ *
+ * Reported from the seat at Yosemite, with the spot: "no clear shadows being
+ * cast", across times of day. Measured there with the sward stood down and the
+ * sun's box at MED, as the share of the frame that changes when shadows are
+ * switched off:
+ *
+ *     DAWN 0.01%  MORNING 0.01%  NOON 0.01%  AFTERNOON 0.01%  DUSK 19%
+ *
+ * That is not a bug in the shadow map. It is the shadow map working exactly as
+ * specified on a landscape it cannot describe. The sun casts through ONE box
+ * 220m across; the thing that shades Yosemite Valley is a wall of granite a
+ * kilometre away and nine hundred metres up. It is outside the box laterally,
+ * and it is outside it in DEPTH too — the light sits 700m from the box centre
+ * with a 1400m range, so a caster nine hundred metres above the floor is
+ * BEHIND the light's own near plane. Only at dusk, when shadows grow long
+ * enough that their first two hundred metres land near the truck, does any of
+ * it register.
+ *
+ * Widening the box is the obvious answer and it is the wrong one: 3km at 2048
+ * is 1.5m per texel, so the crisp shadow under a wheel — the thing the box was
+ * cut small FOR — goes. A second cascade is the textbook answer and it does not
+ * work here either: three samples shadows PER LIGHT, inside the light's own
+ * contribution, so a second directional light can only darken its own share of
+ * the illumination. At zero intensity it darkens nothing.
+ *
+ * So the landscape gets a different mechanism entirely, and one this renderer
+ * is unusually well suited to: MARCH THE HEIGHTFIELD. Terrain is a height
+ * function, we already have it on the CPU, and asking "is there ground between
+ * this point and the sun" is a walk along one ray. It costs FRAGMENTS, and this
+ * world renders 47,360 of them — the one resource it has to spare — while
+ * costing no second depth pass, no cascade plumbing, and no resolution
+ * anywhere. It reaches kilometres because a texel is 48m rather than because a
+ * map is enormous.
+ *
+ * The two compose: the box keeps its crisp near-field shadows from things a
+ * heightfield does not know about (the rig, a tree, a building), and the march
+ * supplies the ridge that darkens the valley. Neither can do the other's job.
+ */
+const SUNM_N = 128;              // texels a side
+const SUNM_M = 48;               // metres a texel — 6.1km of country
+const SUNM_W = SUNM_N * SUNM_M;
+const SUNM_ROWS = 16;            // rows per frame while sweeping
+const SUNM_MOVE = 1200;          // rebuild once the truck is this far off centre
+const SUNM_STEPS = 20;           // ray samples — see the march
+const sunmData = new Float32Array(SUNM_N * SUNM_N * 4);
+const sunmScratch = new Float32Array(SUNM_N * SUNM_N * 4);
+const sunmTex = new THREE.DataTexture(sunmData, SUNM_N, SUNM_N, THREE.RGBAFormat, THREE.FloatType);
+sunmTex.minFilter = sunmTex.magFilter = THREE.LinearFilter;
+sunmTex.wrapS = sunmTex.wrapT = THREE.ClampToEdgeWrapping;
+sunmTex.needsUpdate = true;
+envU.uSunM.value = sunmTex;
+envU.uSunMW.value = SUNM_W;
+let sunmX = 0, sunmZ = 0;        // origin of the LIVE texture
+let sunmPendX = 0, sunmPendZ = 0;
+let sunmRow = -1;
+let sunmMs = 0, sunmBuilds = 0;
+/** Has a sweep ever finished? Separate from the SWITCH below, because "no
+ *  field yet" and "the field is turned off" want different answers from the
+ *  probe and only one of them is a fault. */
+let sunmReady = false;
+/** The march follows the SHADOWS dial: turning shadows off has to turn off all
+ *  of them, or the one control a slow device has does half a job. */
+let sunmOn = true;
+/** Begin a sweep for wherever the truck is now, snapped to the texel grid so
+ *  the field is a fixed patch of the world rather than one that slides. */
+function sunmStart(cx: number, cz: number): void {
+  sunmPendX = Math.round(cx / SUNM_M) * SUNM_M - SUNM_W / 2;
+  sunmPendZ = Math.round(cz / SUNM_M) * SUNM_M - SUNM_W / 2;
+  sunmRow = 0;
+  sunmMs = 0;
+}
+/** Advance a started sweep; swaps the scratch in when the last row lands.
+ *  sampleHeight and NOT groundAt: at 48m a texel a road cutting is invisible,
+ *  and groundAt walks the road grid, which is the cost that broke line-boot
+ *  when the sward asked for it. */
+function sunmStep(sync = false): void {
+  if (sunmRow < 0) return;
+  const t0 = performance.now();
+  const to = sync ? SUNM_N : Math.min(SUNM_N, sunmRow + SUNM_ROWS);
+  for (let j = sunmRow; j < to; j++) {
+    for (let i = 0; i < SUNM_N; i++) {
+      const wx = sunmPendX + (i + 0.5) * SUNM_M, wz = sunmPendZ + (j + 0.5) * SUNM_M;
+      sunmScratch[(j * SUNM_N + i) * 4] = sampleHeight(wx, wz);
+    }
+  }
+  sunmRow = to;
+  sunmMs += performance.now() - t0;
+  if (sunmRow < SUNM_N) return;
+  sunmData.set(sunmScratch);
+  sunmTex.needsUpdate = true;
+  sunmX = sunmPendX; sunmZ = sunmPendZ;
+  envU.uSunMOrg.value.set(sunmX, sunmZ);
+  sunmReady = true;
+  sunmRow = -1;
+  sunmBuilds++;
+}
+/** Per frame: keep the field under the truck and hand the shader the sun. */
+function sunmFrame(): void {
+  if (sunmRow >= 0) { sunmStep(); return; }
+  const cx = viewX(), cz = viewZ();
+  if (Math.abs(cx - (sunmX + SUNM_W / 2)) > SUNM_MOVE
+    || Math.abs(cz - (sunmZ + SUNM_W / 2)) > SUNM_MOVE
+    || !sunmReady) {
+    sunmStart(cx, cz);
+    sunmStep();
+  }
+  envU.uSunL.value.copy(LIGHT_DIR);
+  envU.uSunMOn.value = sunmReady && sunmOn && renderer.shadowMap.enabled ? 1 : 0;
+}
+/**
+ * The march itself. Geometric steps — 20m out to about three and a half
+ * kilometres in twenty samples — because the shadow of a ridge is a coarse
+ * thing at range and a fine thing underfoot, and a uniform step would have to
+ * be the fine one everywhere.
+ *
+ * THE BIAS GROWS WITH DISTANCE, and it has to. The heightfield is a 48m
+ * approximation of a mesh built at 9.5m, so on any slope the two disagree by
+ * metres — and a point compared against its own smoothed self shadows itself,
+ * which is acne at landscape scale: whole hillsides going dark. A floor plus a
+ * term in the step distance covers both the sampling error and the fact that a
+ * long ray is a worse estimate than a short one.
+ *
+ * Outside the field the answer is LIT, not dark. A ray that leaves the texture
+ * has run out of evidence, and a hard "shadow" at the field's rim would be the
+ * exact artefact this whole round is about.
+ */
+const SUNM_GLSL = `
+  uniform sampler2D uSunM; uniform vec2 uSunMOrg; uniform float uSunMW;
+  uniform float uSunMOn; uniform vec3 uSunL;
+  float sunMarch(vec3 wp) {
+    if (uSunMOn < 0.5 || uSunL.y < 0.03) return 1.0;
+    vec3 L = normalize(uSunL);
+    vec2 d = L.xz;
+    float lh = length(d);
+    // A SUN DIRECTLY OVERHEAD SHADES NOTHING, and the ray degenerates there:
+    // the horizontal step goes to zero, so every sample lands in the texel the
+    // fragment is standing in and the march would compare a point against
+    // itself forever.
+    if (lh < 0.02) return 1.0;
+    d /= lh;
+    float rise = L.y / lh;
+    // ── MARCHED AGAINST THE FIELD, FROM THE FIELD ──
+    //
+    // The first cut started the ray at the MESH height and measured 24% of the
+    // frame in shade with the sun five degrees off vertical, where the true
+    // answer is nearly nothing. That is acne, at landscape scale: the field is
+    // a 48m smoothing of a mesh built at 9.5m, the two disagree by metres on
+    // any slope, and a point compared against a smoothed version of itself
+    // shadows itself. Referring both ends of the test to the FIELD makes it
+    // self-consistent, and leaves the bias covering only the field's own steps.
+    vec2 uv0 = (wp.xz - uSunMOrg) / uSunMW;
+    float y0 = texture2D(uSunM, uv0).r;
+    // STEPPED IN GROUND DISTANCE, not along the ray, for the same reason: with
+    // a high sun a ray-length step is almost all rise and barely leaves the
+    // texel it started in. In ground metres the first sample is always more
+    // than a texel away, whatever the sun is doing.
+    float h = 60.0, hi = 0.0;
+    for (int i = 0; i < ${SUNM_STEPS}; i++) {
+      vec2 uv = (wp.xz + d * h - uSunMOrg) / uSunMW;
+      if (uv.x < 0.001 || uv.x > 0.999 || uv.y < 0.001 || uv.y > 0.999) break;
+      float g = texture2D(uSunM, uv).r;
+      hi = max(hi, (g - (12.0 + h * 0.012)) - (y0 + h * rise));
+      h *= 1.15;
+    }
+    // A soft ramp rather than a test: the field is coarse, so how far the
+    // ground stands above the ray is the only handle on how sure the answer is,
+    // and a hard cut on a 48m sample is a staircase across a hillside.
+    return 1.0 - smoothstep(0.0, 26.0, hi);
+  }`;
 // (Pattern per SimonDev's "customizing materials": extend the built-ins by
 // splicing GLSL into their chunk includes rather than rewriting materials.)
 function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
@@ -2113,12 +2340,28 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
     sh.uniforms.uSunSkew = envU.uSunSkew;
     sh.uniforms.uDeckY = envU.uDeckY;
     sh.uniforms.uCloudScale = envU.uCloudScale;
+    sh.uniforms.uSunM = envU.uSunM;
+    sh.uniforms.uSunMOrg = envU.uSunMOrg;
+    sh.uniforms.uSunMW = envU.uSunMW;
+    sh.uniforms.uSunMOn = envU.uSunMOn;
+    sh.uniforms.uSunL = envU.uSunL;
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vWorldP;
         uniform float uCloudS; uniform vec2 uWind;
         uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
-        ${CLOUD_GLSL}`)
+        ${CLOUD_GLSL}
+        ${SUNM_GLSL}`)
+      // ── ON THE DIRECT TERM ONLY ──
+      //
+      // After lights_fragment_begin, reflectedLight.directDiffuse holds what
+      // the sun contributed and nothing else: the hemisphere fill and the
+      // ground bounce are in the indirect terms, untouched. That is the
+      // difference between a hillside in shade and a hillside someone turned
+      // the brightness down on — shaded ground is still lit by the sky, and if
+      // this multiplied the finished colour it would take the sky away too.
+      .replace('#include <lights_fragment_begin>', `#include <lights_fragment_begin>
+        reflectedLight.directDiffuse *= sunMarch(vWorldP);`)
       .replace('#include <dithering_fragment>', `#include <dithering_fragment>
       // CLOUD SHADOWS: not "the same kind of noise" any more — THE SAME FIELD,
       // read at the point where a ray from here to the sun leaves the deck the
@@ -3405,6 +3648,47 @@ const MAT = {
   lamp: new THREE.MeshBasicMaterial({ color: 0xd8a45e, side: DS }),
   portal: new THREE.MeshLambertMaterial({ color: 0x4d4a42, side: DS }),
 } as const;
+/**
+ * THE MARCH, FOR EVERYTHING THAT IS NOT TERRAIN. terrainFx already carries it
+ * to the ground, the far shell, the grass and the sward; a carriageway lit
+ * like noon inside a valley that is in shade is the seam that would give the
+ * whole effect away, and the road is the one surface you are always looking at.
+ *
+ * A no-op on any material without a lighting stage — MeshBasic has no
+ * lights_fragment_begin to anchor to, so the replace finds nothing and the
+ * shader is untouched. That is the intent, not an accident: an unlit material
+ * has no direct term to take away.
+ */
+function sunMarchFx(mat: THREE.Material): void {
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = function (sh, renderer) {
+    prev?.call(mat, sh, renderer);
+    if (!sh.fragmentShader.includes('#include <lights_fragment_begin>')) return;
+    // terrainFx carries its own copy; defining sunMarch twice is a link error
+    // that takes the whole material with it.
+    if (sh.fragmentShader.includes('float sunMarch(')) return;
+    sh.uniforms.uSunM = envU.uSunM;
+    sh.uniforms.uSunMOrg = envU.uSunMOrg;
+    sh.uniforms.uSunMW = envU.uSunMW;
+    sh.uniforms.uSunMOn = envU.uSunMOn;
+    sh.uniforms.uSunL = envU.uSunL;
+    sh.vertexShader = sh.vertexShader.includes('vSunMP')
+      ? sh.vertexShader
+      : sh.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vSunMP;')
+        .replace('#include <worldpos_vertex>',
+          '#include <worldpos_vertex>\nvSunMP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying vec3 vSunMP;
+        ${SUNM_GLSL}`)
+      .replace('#include <lights_fragment_begin>', `#include <lights_fragment_begin>
+        reflectedLight.directDiffuse *= sunMarch(vSunMP);`);
+  };
+}
+for (const m of Object.values(MAT)) {
+  if (m && typeof m === 'object' && 'onBeforeCompile' in m) sunMarchFx(m as THREE.Material);
+}
 // Green drapes conform to the terrain, so a wooded hill occludes like one —
 // and the tunnel shell is the carved hill itself, so it ghosts too (the car
 // inside stays visible through the screen-door).
@@ -17110,8 +17394,21 @@ function meshHeightAt(x: number, z: number): number | null {
  * only honest way to compare: two loads of one spot do not put the same ground
  * under the wheels.
  */
-(window as unknown as { __shadowbox?: object }).__shadowbox = (o?: { snap?: boolean }): object => {
+/** Every height in the march field, for the probe's min/max. Sampled rather
+ *  than walked whole: 16k floats through Math.min.apply blows the argument
+ *  limit, and the shape of the country is a stride away. */
+function heightsOf(): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < SUNM_N * SUNM_N; i += 7) out.push(sunmData[i * 4]);
+  return out;
+}
+(window as unknown as { __shadowbox?: object }).__shadowbox =
+  (o?: { snap?: boolean; march?: boolean }): object => {
   if (o && typeof o.snap === 'boolean') SHADOW_SNAP = o.snap;
+  // The march as a switch, so one page load can render the same frame with and
+  // without it. Two loads of one spot do not put the same ground under the
+  // wheels, and this is a claim about a difference.
+  if (o && typeof o.march === 'boolean') sunmOn = o.march;
   const map = sun.shadow.mapSize.x;
   return {
     on: renderer.shadowMap.enabled && sun.castShadow,
@@ -17125,6 +17422,18 @@ function meshHeightAt(x: number, z: number): number | null {
     // Zero when the snap is on, and the distance to the grid when it is off.
     phase: +shadowPhase.toFixed(4),
     fade: shadowFadePatched, dark: shadowMaskPatched, fadeSaw: shadowFadeSaw,
+    lit: shadowLitPatched, litSaw: shadowLitSaw,
+    // THE OTHER MECHANISM, and the one that actually shades a valley: the
+    // heightfield the terrain shader marches toward the sun.
+    march: {
+      on: envU.uSunMOn.value === 1, want: sunmOn, ready: sunmReady,
+      n: SUNM_N, m: SUNM_M, span: SUNM_W,
+      steps: SUNM_STEPS, builds: sunmBuilds, ms: +sunmMs.toFixed(1),
+      org: [sunmX, sunmZ], sweeping: sunmRow >= 0,
+      // What the field actually holds, so "there are no shadows" and "the
+      // field is empty" stop being the same sentence.
+      hMin: +Math.min(...heightsOf()).toFixed(1), hMax: +Math.max(...heightsOf()).toFixed(1),
+    },
     sun: [+SUN_DIR.x.toFixed(3), +SUN_DIR.y.toFixed(3), +SUN_DIR.z.toFixed(3)],
     near: sun.shadow.camera.near, far: sun.shadow.camera.far,
   };
@@ -22129,6 +22438,9 @@ function tick(now: number): void {
   // The GPU sward is uniform writes and a field rebuild only when the truck
   // leaves the middle of it, so it runs every frame rather than on a slow tick.
   swardFrame();
+  // Same shape and for the same reason: a sliced CPU sweep the shader reads,
+  // rebuilt when the truck leaves the middle of it rather than on a tick.
+  sunmFrame();
   audio.update(state.speed, throttle, surfKind, groundedF, wx.rain, engRev, engGear, skid,
     surfKind === 'water' ? 0 : surfQ, wheelSlipL);
   // The rig against the world: bodywork on a wall while moving, the hull's

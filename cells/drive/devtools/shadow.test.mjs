@@ -34,7 +34,7 @@
  *   - the box's own numbers, so the crop is written down rather than argued
  *     about: how far the shadows reach against how far the camera sees.
  */
-import { openDrive, report } from './harness.mjs';
+import { openDrive, report, layerVsGround } from './harness.mjs';
 
 let bad = 0;
 const check = (name, cond, saw) => {
@@ -97,5 +97,91 @@ check('no shader failed to compile', d.errors.filter((e) => e.startsWith('GLSL:'
   d.errors.filter((e) => e.startsWith('GLSL:')));
 report(d.errors);
 await d.close();
-console.log(bad ? `\n${bad} FAILED` : '\nall good — the box holds still and its edge is not a line');
+
+// ── (2) THE THING THE BOX CANNOT DO: A HILL SHADING ITS OWN VALLEY ──
+//
+// Reported from the seat with the spot — Yosemite, the Pohono Trail on the
+// south rim — and "no clear shadows being cast, across times of day". Measured
+// there before any of this, as the share of the frame that changes when the
+// sun's shadows are switched off:
+//
+//     DAWN 0.01%  MORNING 0.01%  NOON 0.01%  AFTERNOON 0.01%  DUSK 19%
+//
+// The shadow map was working exactly as specified on a landscape it cannot
+// describe: the thing that shades that valley is a wall of granite a kilometre
+// away and nine hundred metres up, outside a 220m box both laterally and in
+// depth. Only at dusk do shadows grow long enough for their first two hundred
+// metres to land near the truck.
+//
+// So the landscape is marched against a coarse heightfield instead, and the
+// assertion that matters is not "there are shadows" — a bug produces those in
+// quantity — but that the answer MOVES WITH THE SUN. A high sun casts almost
+// nothing; a low one casts across the country. The first cut failed exactly
+// this: it painted 24% of the frame with the sun five degrees off vertical,
+// which is acne at landscape scale, and it read 22-24% at every hour of the
+// day. An effect that does not vary with the light is not a shadow.
+const y = await openDrive({
+  spot: 'lat=37.70753&lon=-119.68158&h=62&cam=chase&wx=clear&time=NOON', tag: 'shadow-march', settle: 55000 });
+await y.page.evaluate(() => { window.__hide('critters'); window.__hide('sward'); });
+await y.page.evaluate(() => { window.__dial('shq', 2); window.__dial('sdark', 3); });
+await y.page.waitForTimeout(14000);
+const m0 = (await y.page.evaluate(() => window.__shadowbox())).march;
+console.log(`      march field ${m0.n}x${m0.n} at ${m0.m}m = ${m0.span}m of country`
+  + ` · ${m0.steps} steps · ${m0.ms}ms a sweep · ground ${m0.hMin}..${m0.hMax}m`);
+check('the march field is built and switched on', m0.on === true && m0.ready === true, m0);
+check('and it holds real country rather than a flat guess', m0.hMax - m0.hMin > 200, m0);
+
+// SAME PAGE, SAME GROUND. __sunalt moves the sun without a reload, because two
+// loads of one spot do not put the same world under the wheels and this is a
+// comparison between sun heights, not between worlds.
+const frame = async () => { await y.page.waitForTimeout(900); return y.page.screenshot(); };
+// ── THE NOISE FLOOR FIRST, AND IT IS NOT A FORMALITY ──
+//
+// This suite spent a round chasing numbers that swung between 0.1% and 24% for
+// the same settings, because a spot the local harness cannot stream keeps
+// arriving between frames and every screenshot differs for reasons that have
+// nothing to do with the sun. Two frames with NOTHING changed between them say
+// how much of any reading below is the world settling.
+// Read three times and keep the LAST. A world that is still arriving only ever
+// gets quieter, so the first pair measures the tail of the boot rather than the
+// floor — 13.6% on one run against 1.8% the pair after it, and the test failed
+// itself on the difference.
+const fs = [];
+for (let i = 0; i < 3; i++) fs.push(layerVsGround(await frame(), await frame(), 140, 620, 12).cover);
+const floor = fs[fs.length - 1];
+console.log(`      noise floor between two identical frames: ${fs.map((v) => (v * 100).toFixed(2) + '%').join(' -> ')}`);
+check(`the world went still enough to measure against (${(floor * 100).toFixed(2)}%)`,
+  floor < 0.04, fs);
+const paints = async (deg) => {
+  await y.page.evaluate((v) => window.__sunalt(v), deg);
+  // LONGER THAN IT LOOKS LIKE IT NEEDS. At 1.4s the sun had not caught up and
+  // the "overhead" frame was still the previous sun's — which read as the
+  // march being blind to elevation, and was the harness being asked too soon.
+  await y.page.waitForTimeout(1600);
+  const on = await frame();
+  await y.page.evaluate(() => window.__shadowbox({ march: false }));
+  const off = await frame();
+  await y.page.evaluate(() => window.__shadowbox({ march: true }));
+  await y.page.waitForTimeout(500);
+  return layerVsGround(on, off, 140, 620, 12).cover;
+};
+const high = await paints(85);
+const low = await paints(8);
+console.log(`      march paints ${(high * 100).toFixed(2)}% of the view with the sun at 85 degrees,`
+  + ` ${(low * 100).toFixed(2)}% at 8`);
+// THE ACNE CHECK. Five degrees off vertical, nothing on this earth is in
+// terrain shadow but a cliff face, and the first cut said a quarter of the
+// frame was.
+check(`a sun overhead shades almost nothing (${(high * 100).toFixed(2)}%)`,
+  high < 0.06, { high, floor });
+// …AND IT IS NOT SIMPLY SWITCHED OFF. A march that always returns "lit" would
+// pass the check above and be worthless.
+check(`a low sun shades the country (${(low * 100).toFixed(2)}%)`,
+  low > 0.05 && low > floor * 4, { low, floor });
+check('…and does more of it than a high one', low > high * 2, { low, high });
+check('no shader failed to compile in the march', y.errors.filter((e) => e.startsWith('GLSL:')).length === 0,
+  y.errors.filter((e) => e.startsWith('GLSL:')));
+report(y.errors);
+await y.close();
+console.log(bad ? `\n${bad} FAILED` : '\nall good — the box holds still, and the hill shades its own valley');
 if (bad) process.exitCode = 1;
