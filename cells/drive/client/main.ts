@@ -4620,6 +4620,10 @@ const SWARD_MASKN = 512;
 /** How far inside a water body the mask stops, so reeds and rough grass can
  *  stand in the margin. A body masked to its own outline reads as shaved. */
 const SWARD_SHALLOW = 2.5;
+/** The density falloff with range, and the radius inside which it does not
+ *  apply. See the band table: >2 is what buys the handover margin. */
+const SWARD_FALL = 2.2;
+const SWARD_NEAR = 22;
 /** Rebuild the field once the truck is this far off its centre. The field is
  *  768m wide, so this is generous: at 25m/s it is a pass every two seconds
  *  against the old sward's every seven hundred milliseconds. */
@@ -4693,6 +4697,7 @@ const swardU = {
   /** Where the headlight roll-off starts. Above daylight's own highlights, so
    *  only a lamp a few metres away ever reaches it. */
   uSwardKnee: { value: 0.72 },
+  uSwardFall: { value: SWARD_FALL }, uSwardNear: { value: SWARD_NEAR },
   /** The outermost band's reach: the ONE curve every band thins along, so the
    *  fade cannot have a seam where two bands meet. */
   uGReach: { value: 368 },
@@ -4929,6 +4934,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         uniform float uReach; uniform float uDens; uniform vec4 uBlend;
         uniform float uGReach;
         uniform vec3 uSwardEye; uniform vec3 uSwardTint; uniform float uSwardDbg;
+        uniform float uSwardFall; uniform float uSwardNear;
         uniform float uTime; uniform vec2 uGust;
         varying vec3 vSward;
         ${SWARD_GLSL}`)
@@ -4961,8 +4967,13 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // tuning. The thinning with range is then a single global curve, shared
         // by every band, so it cannot have a seam in it either.
         float sW = smoothstep(uBlend.x, uBlend.y, sD) * (1.0 - smoothstep(uBlend.z, uBlend.w, sD));
-        float sG = 1.0 - sD / uGReach;
-        float sKeep = sF.g * uStep * uStep * uDens * sW * (0.22 + 0.78 * sG * sG);
+        // THE TARGET IS A DENSITY, AND IT FALLS. Ground area per pixel grows
+        // as the square of range, so a ground density falling at about that
+        // rate holds SCREEN density steady — and it is what keeps every band
+        // under its own one-tuft-per-cell ceiling, which is what the three
+        // rings were. See SWARD_FALL.
+        float sG = pow(uSwardNear / max(sD, uSwardNear), uSwardFall);
+        float sKeep = sF.g * uStep * uStep * uDens * sW * sG;
         // ── BLADES THIN OUT, THEY DO NOT BLINK OUT ──
         //
         // Reported from the seat: blades visibly jump around at walking pace
@@ -4997,7 +5008,12 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // narrower the range of heights that could exist at all. One hash
         // cannot be a coin flip and a measurement at the same time.
         float sSize = swHash(sCell * 4.3 + 61.7);
-        vec3 sLp = position * (0.45 + sSize * 1.30) * (1.0 + sT * 0.9) * sAlive;
+        // AND THEY GROW HARDER THAN THEY DID. With the ground density falling
+        // as the square of range, coverage would fall with it unless the blades
+        // take some of it back — a blade at two hundred metres drawn four times
+        // the size subtends what a near one does, which is the whole reason an
+        // eye accepts a thinner field out there.
+        vec3 sLp = position * (0.45 + sSize * 1.30) * (1.0 + 3.2 * pow(sT, 0.75)) * sAlive;
         sLp.xz = vec2(sCa * sLp.x - sSa * sLp.z, sSa * sLp.x + sCa * sLp.z);
         // Wind, from the blade's WORLD position so a gust crosses the field as
         // one front rather than every tuft nodding on its own clock.
@@ -5083,10 +5099,38 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
 // step, lattice side, and the handover window (in0,in1,out0,out1) in metres.
 // Adjacent bands share their edges exactly, which is what makes the weights
 // sum to one and the density continuous across a handover.
+/**
+ * ── A LATTICE HAS A CEILING, AND THE PARTITION DID NOT KNOW ABOUT IT ──
+ *
+ * Reported from the seat with a picture: "I can see the 3 rings of sward."
+ * Which is damning, because the previous round made the band weights sum to one
+ * so that density would be continuous BY CONSTRUCTION. The arithmetic was right
+ * and beside the point.
+ *
+ * A band of step s can place at most ONE tuft per cell, so it can never exceed
+ * 1/s² per square metre whatever its keep says. Measured against a target of
+ * 4.9/m²: the near band's keep came out 0.99 and delivered it, the middle
+ * band's keep was ELEVEN and delivered 0.44, the far band's was ONE HUNDRED AND
+ * FOUR and delivered 0.047. Two order-of-magnitude cliffs, in exactly the three
+ * rings the photograph shows. ** A PROBABILITY CLAMPED AT 1 FAILS SILENTLY: **
+ * it does not warn, it just stops counting.
+ *
+ * So the target has to FALL with range until each band can deliver it, and the
+ * honest falloff is perceptual rather than arbitrary. Ground area per pixel
+ * grows as d², so a density going as 1/d² holds SCREEN density constant —
+ * which is what an eye judges — and happens to be the shape that fits under
+ * the ceilings. Slightly steeper than square (SWARD_FALL) buys handover margin.
+ *
+ * And the handovers must sit where the target has fallen BELOW the incoming
+ * band's ceiling, or the new band saturates the moment it takes over and the
+ * cliff simply moves. That is what sets the reaches: 72m needs 0.36/m² against
+ * the middle band's 0.44 ceiling, 195m needs 0.040 against the far band's
+ * 0.047. 210k slots against 113k — the price of not having rings.
+ */
 const SWARD_BANDS: Array<[number, number, [number, number, number, number]]> = [
-  [0.45, 224, [-1, 0, 34, 48]],
-  [1.5, 192, [34, 48, 104, 138]],
-  [4.6, 160, [104, 138, 300, 366]],
+  [0.45, 320, [-1, 0, 56, 72]],
+  [1.5, 260, [56, 72, 160, 195]],
+  [4.6, 200, [160, 195, 400, 452]],
 ];
 const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side, blend], bi) => {
   const geo = new THREE.InstancedBufferGeometry();
@@ -15623,7 +15667,13 @@ function truckSpec(): Record<string, number> {
     gpu: swardGpu,
     bands: swardBands.map((b) => ({ step: b.step, side: b.side,
       slots: b.side * b.side, reach: Math.round(b.reach), dens: +b.uDens.value.toFixed(2),
-      visible: b.mesh.visible })),
+      visible: b.mesh.visible,
+      // The handover window and the band's CEILING, so the delivered density
+      // profile can be reconstructed outside the shader — including the clamp
+      // that made three rings out of a partition that summed to one.
+      blend: [b.uBlend.value.x, b.uBlend.value.y, b.uBlend.value.z, b.uBlend.value.w],
+      ceiling: +(1 / (b.step * b.step)).toFixed(4) })),
+    fall: SWARD_FALL, near: SWARD_NEAR, lush: SWARD_LUSH,
     slots: swardBands.reduce((a, b) => a + b.side * b.side, 0),
     verts: swardBands.reduce((a, b) => a + b.side * b.side * 9, 0),
     fieldMs: +swardFieldMs.toFixed(1), maskMs: +swardMaskMs.toFixed(1),

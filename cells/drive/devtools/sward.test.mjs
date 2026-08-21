@@ -136,6 +136,59 @@ check('…nor most of the map (the verge is where grass lives)',
 report(r.errors);
 await r.close();
 
+// ── (5) NO RINGS: THE DELIVERED DENSITY PROFILE, AS ARITHMETIC ──
+//
+// Reported from the seat with a photograph: "I can see the 3 rings of sward."
+// Damning, because the round before had made the band weights sum to one so
+// density would be continuous BY CONSTRUCTION — and the construction was right
+// and beside the point. A band of step s places at most ONE tuft per cell, so
+// it can never exceed 1/s² per square metre whatever its keep says. Measured
+// against a 4.9/m² target the keeps came out 0.99, ELEVEN and ONE HUNDRED AND
+// FOUR, delivering 4.9, 0.44 and 0.047 — two order-of-magnitude cliffs, in
+// exactly three rings. A PROBABILITY CLAMPED AT 1 FAILS SILENTLY: it does not
+// warn, it just stops counting.
+//
+// So this reconstructs what each band actually DELIVERS, ceiling included, and
+// walks the range looking for a step. No rendering: the fault was arithmetic
+// and a picture is what failed to catch it last time. Had this existed, the
+// three rings would have been a red line rather than a photograph.
+{
+  const b = gpu.bands;
+  const target = (d) => 0.35 * gpu.lush * (gpu.near / Math.max(d, gpu.near)) ** gpu.fall;
+  const smooth = (a, z, x) => {
+    const t = Math.min(1, Math.max(0, (x - a) / (z - a || 1e-9)));
+    return t * t * (3 - 2 * t);
+  };
+  const density = (d) => b.reduce((sum, k) => {
+    const w = smooth(k.blend[0], k.blend[1], d) * (1 - smooth(k.blend[2], k.blend[3], d));
+    // keep is a PROBABILITY: what the band is asked for, clamped at one.
+    const keep = Math.min(1, target(d) * k.step * k.step * w);
+    return sum + keep / (k.step * k.step);
+  }, 0);
+  const ds = [];
+  for (let d = 6; d < 400; d *= 1.06) ds.push(d);
+  let worst = 1, worstAt = 0;
+  for (let i = 1; i < ds.length; i++) {
+    const a = density(ds[i - 1]), z = density(ds[i]);
+    const r = Math.max(a, z) / Math.max(1e-9, Math.min(a, z));
+    if (r > worst) { worst = r; worstAt = ds[i]; }
+  }
+  for (const d of [10, 30, 60, 72, 120, 195, 300, 380]) {
+    console.log(`      ${String(Math.round(d)).padStart(3)}m · target ${target(d).toFixed(3)}`
+      + ` · delivered ${density(d).toFixed(3)} tufts/m2`);
+  }
+  // 6% of range per step, so a smooth 1/d^2.2 curve moves ~13% between samples.
+  // A cliff is anything much past that; the rings were 11x and 104x.
+  check(`density has no cliff across the bands (worst step ${worst.toFixed(2)}x at ${Math.round(worstAt)}m)`,
+    worst < 1.35, { worst: +worst.toFixed(2), at: Math.round(worstAt) });
+  // …AND EVERY BAND CAN ACTUALLY DELIVER WHAT IT IS ASKED FOR at the point it
+  // takes over alone, which is the specific thing that was false.
+  const over = b.filter((k) => target(k.blend[1]) > k.ceiling)
+    .map((k) => ({ step: k.step, needs: +target(k.blend[1]).toFixed(3), ceiling: k.ceiling }));
+  check('…because no band is asked past its own one-tuft-per-cell ceiling',
+    over.length === 0, over);
+}
+
 // ── WATER, MINUS THE EDGE AND THE SHALLOWS ──
 //
 // Three separate things call themselves water here and the mask has to see all
