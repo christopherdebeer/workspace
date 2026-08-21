@@ -72,12 +72,38 @@ check('the GPU sward is what runs by default', gpu.gpu === true, gpu);
 check('float textures can be filtered on this device', gpu.floatLinear === true, gpu);
 
 // (2) THE FIELD, AND THE MASK UNDER THE TRUCK.
+//
+// FORCED, NOT WAITED FOR — the same rule the carriageway block further down
+// already follows. The mask is redrawn when the road grid changes, and the
+// grid fills some seconds after the tiles land: read it on a timer and the
+// probe's live scan of the grid can find ninety segments while the canvas
+// still holds the draw from before they were solved. That is the SCHEDULE,
+// not the rasteriser, and this check is about the rasteriser.
+await page.evaluate(() => window.__sward(undefined, true));
+await page.waitForTimeout(1200);
 const mask = await page.evaluate(() => { const m = window.__swardmask(); delete m.png; return m; });
 console.log(`      field rate mean ${gpu.field.rateMean}, ${gpu.field.rateZero}/${gpu.field.texels} bare`
   + ` · height ${gpu.field.hMin}..${gpu.field.hMax}m · mask painted ${(mask.paintedFrac * 100).toFixed(1)}%`);
 check('the field carries real ground, not the spawn guess',
   gpu.field.hMax - gpu.field.hMin > 5 && gpu.field.rateMean > 0, gpu.field);
-check('and the road mask has been drawn at all', mask.paintedFrac > 0.001, mask);
+// ── ONLY IF THERE WAS ANYTHING TO DRAW ──
+//
+// This asserted a painted mask at the HIGHLAND GRASSLAND spawn — a spot chosen
+// two rounds ago precisely because there is no tarmac within eighty metres of
+// it. It passed for a long while because some track usually landed somewhere
+// in the 768m field, and failed the day one did not, which makes it a test of
+// whether Overpass answered rather than of whether the rasteriser ran. The
+// carriageway and the water each have their own spot further down; this one
+// checks the mask against what the field actually contains, and says so when
+// the answer is "nothing", rather than passing silently on an empty world.
+const toDraw = mask.roadSegs + mask.channels + mask.waterPolys;
+if (toDraw === 0) {
+  console.log('      nothing to mask here: no road segments, channels or water polygons in the field'
+    + ` (the world knows of ${mask.waterPolysAll} water polygons elsewhere) — check skipped, not passed`);
+} else {
+  check(`the mask is drawn where there is something to draw (${toDraw} features)`,
+    mask.paintedFrac > 0.001, mask);
+}
 
 // (3) DENSER, MEASURED AGAINST THE THING IT REPLACES.
 await page.evaluate(() => window.__sward(false));

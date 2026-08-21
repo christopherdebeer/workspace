@@ -5066,8 +5066,28 @@ let swardFieldMs = 0;
  * once the streaming settles it stops rebuilding on its own.
  */
 let swardRoadSeen = -1, swardGroundSeen = -1, swardFieldAt = 0, swardMaskMs = 0;
-/** Roads: the mask's clock. */
-const swardRoadRev = (): number => osmDone.size;
+/**
+ * Roads: the mask's clock — AND IT HAS TO TICK ON THE GEOMETRY, NOT THE FETCH.
+ *
+ * This was osmDone.size, the count of finished tile asks, and that is a proxy
+ * for the wrong event. A tile is DONE when its vectors arrive; its ways become
+ * carriageway some time later, when the solver chains them and registers the
+ * segments. Draw the mask in between and it is drawn against an empty road
+ * grid — and because no further tile completes at a parked truck, the count
+ * never moves again and the mask is never redrawn.
+ *
+ * Caught by a test that stopped asking "is the mask painted" and started asking
+ * "is the mask painted where there is something to paint": ninety road segments
+ * and a hundred and twenty-nine channels inside the field, and a mask at zero.
+ * The same fault the field-revision trigger was added to fix, one layer down —
+ * the first version watched the tiles instead of the ground, this one watched
+ * the fetches instead of the roads.
+ *
+ * The road grid's own size is the honest clock: it changes exactly when there
+ * is new carriageway to draw. Water polygons carry their own, because a lake
+ * arrives on the same path and masks the same way.
+ */
+const swardRoadRev = (): number => osmDone.size + roadGrid.size + waterPolys.size;
 /** Ground shape: the heights' clock — rebuilds, not tiles. See flushTerrain. */
 const swardGroundRev = (): number => terrainBuilds;
 const swardU = {
