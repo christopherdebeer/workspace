@@ -1196,6 +1196,57 @@ let shadowMaskPatched = false;
     shadowMaskPatched = true;
   }
 }
+/**
+ * ── THE BOX HAS AN EDGE, AND THE EDGE WAS A CROP LINE ──
+ *
+ * Reported from the seat as shadows "sliding in and out of a mask", and it is
+ * exactly that: one cascade 220m across, riding the truck, ending on a hard
+ * boundary. Everything outside is lit as though the sun could see it, so a
+ * cliff's shadow SWITCHES ON when the box reaches it. The header above says
+ * "absent past that, and the aerial haze hides the boundary" — the haze does
+ * not, because the boundary is not at a distance, it is at a RADIUS around
+ * you, and it moves at driving speed across ground that is standing still.
+ *
+ * The standard answer, and the one a cascade shadow map uses at every level:
+ * fade the mask out before the edge rather than clipping it. A shadow that
+ * dissolves over the last fifth of the box arrives and leaves gradually, and
+ * an eye reads that as depth rather than as a boundary.
+ *
+ * INSIDE THE UNROLLED LOOP, AND WITH NO BRACES. three's loop unroller matches
+ * the body with a non-greedy [\s\S]+? up to the first close brace, so a
+ * nested block in here silently truncates the loop and the shader stops
+ * compiling. Everything is expressions.
+ */
+const SHADOW_FADE = new URLSearchParams(location.search).get('shfade') !== '0';
+let shadowFadePatched = false;
+/** What the chunk ACTUALLY said, when the patch could not find its anchor. A
+ *  failed replace is silent and looks exactly like a feature that does not
+ *  work, so the probe gets to read the line it was aiming at. */
+let shadowFadeSaw = '';
+if (SHADOW_FADE) {
+  const c = THREE.ShaderChunk.shadowmask_pars_fragment;
+  // BY SHAPE, NOT BY SPELLING. The first cut matched the whole getShadow call
+  // as a literal taken from the r160 source, and the running three is not r160
+  // — it carries a shadowIntensity argument this cell's import pin does not
+  // predict, so the replace found nothing and reported a working feature that
+  // had never been compiled in. Match the STATEMENT and keep whatever
+  // arguments the version of the day happens to pass.
+  const line = /shadow \*= receiveShadow \? (getShadow\( directionalShadowMap\[ i \][^;]*?\)) : 1\.0;/;
+  const m = c.match(line);
+  if (m) {
+    // How far a fragment sits from the middle of the box, as 0 at the centre
+    // and 1 at the rim, taken off the shadow coordinate the sampler already
+    // has. Chebyshev rather than radial because the box IS a square.
+    const rim = 'max( abs( vDirectionalShadowCoord[ i ].x / vDirectionalShadowCoord[ i ].w - 0.5 ),'
+      + ' abs( vDirectionalShadowCoord[ i ].y / vDirectionalShadowCoord[ i ].w - 0.5 ) ) * 2.0';
+    THREE.ShaderChunk.shadowmask_pars_fragment = c.replace(line,
+      `shadow *= receiveShadow ? mix( 1.0, ${m[1]}, 1.0 - smoothstep( 0.78, 0.99, ${rim} ) ) : 1.0;`);
+    shadowFadePatched = true;
+  } else {
+    const i = c.indexOf('directionalShadowMap[');
+    shadowFadeSaw = i < 0 ? c.slice(0, 160) : c.slice(Math.max(0, i - 40), i + 220);
+  }
+}
 function setShadowDark(i: number): void {
   if (!shadowMaskPatched) return;                 // upstream chunk changed shape
   const k = SHADOW_DARK[clamp(i, 0, SHADOW_DARK.length - 1)];
@@ -1237,6 +1288,56 @@ shCam.near = 1; shCam.far = 1400;
 sun.shadow.bias = -0.0008;
 sun.shadow.normalBias = 0.25;
 scene.add(sun.target);
+/**
+ * ── A SHADOW MAP THAT SLIDES UNDER THE WORLD IS A SHADOW MAP THAT CRAWLS ──
+ *
+ * The box is re-centred on the truck every frame at whatever position the
+ * physics produced, so its texel grid moves CONTINUOUSLY across ground that is
+ * not moving. At MED that grid is 0.21m per texel: drive at 25m/s and every
+ * shadow edge in the world is re-quantised onto a different lattice a hundred
+ * times a second. Each edge steps back and forth by a texel, in no particular
+ * order, and the whole scene appears to boil. Reported from the seat as
+ * swimming, and it is the oldest artefact in shadow mapping.
+ *
+ * The fix is equally old: move the box in WHOLE TEXELS. Project the centre
+ * onto the light's own two lateral axes, round each to a multiple of the texel
+ * size, and put it back. The box still follows you — it just arrives one texel
+ * at a time, so a shadow edge that has not moved in the world does not move on
+ * the map either.
+ *
+ * THE BASIS HAS TO BE THE ONE three ACTUALLY USES or the rounding is to the
+ * wrong grid and buys nothing: Matrix4.lookAt takes z = eye − target (which is
+ * SUN_DIR), x = up x z, y = z x x, with the degenerate nudge for a sun at the
+ * zenith copied from the same function.
+ *
+ * The height matters too, and that is why this snaps in three dimensions
+ * rather than two: the centre's y comes from sampleHeight under the truck, so
+ * it wobbles with every metre of ground — and with the sun anywhere but
+ * straight overhead, a vertical wobble is a LATERAL move on the shadow map.
+ */
+let SHADOW_SNAP = new URLSearchParams(location.search).get('shsnap') !== '0';
+const shadowAt = new THREE.Vector3();
+const shX = new THREE.Vector3(), shY = new THREE.Vector3(), shZ = new THREE.Vector3();
+let shadowPhase = 0;
+function snapShadowCentre(c: THREE.Vector3): void {
+  shZ.copy(SUN_DIR).normalize();
+  shX.set(0, 1, 0).cross(shZ);
+  if (shX.lengthSq() < 1e-8) { shZ.z += 0.0001; shZ.normalize(); shX.set(0, 1, 0).cross(shZ); }
+  shX.normalize();
+  shY.copy(shZ).cross(shX);
+  const t = (2 * shadowSpan) / sun.shadow.mapSize.x;
+  const ax = c.dot(shX), ay = c.dot(shY);
+  const dx = Math.round(ax / t) * t - ax, dy = Math.round(ay / t) * t - ay;
+  if (SHADOW_SNAP) c.addScaledVector(shX, dx).addScaledVector(shY, dy);
+  // MEASURED AFTER, NOT BEFORE. How far the centre that will actually be USED
+  // sits from the texel grid, in texels: uniform in [0, 0.7] while the snap is
+  // off and identically zero while it is on. Reporting the pre-snap residual
+  // instead would have been a restatement of the input — and was, for one run.
+  // Recomputed rather than assumed, so a basis that does not match the one
+  // three builds shows up here instead of silently buying nothing.
+  const bx = c.dot(shX), by = c.dot(shY);
+  shadowPhase = Math.hypot(bx / t - Math.round(bx / t), by / t - Math.round(by / t));
+}
 /** Every shadow-relevant object goes through here, so "what casts" is one list
  *  rather than a flag repeated at a dozen construction sites. */
 const shadowy = (o: THREE.Object3D, cast: boolean, receive: boolean): void => {
@@ -16998,6 +17099,36 @@ function meshHeightAt(x: number, z: number): number | null {
 });
 /** Which palette the world settled on, and whether real cover chose it or the
  *  latitude guess is still standing in. */
+/**
+ * THE SUN'S SHADOW BOX, as numbers — because "shadows slide in and out of a
+ * crop" and "shadows crawl" are two different faults with two different fixes
+ * and the same description from the seat. This reports the SIZE of the box
+ * (which is the crop), its metres per texel and the SUB-TEXEL PHASE of its
+ * centre (which is the crawl), and whether either patch actually took.
+ *
+ * `snap` toggles at runtime so one page load can render both, which is the
+ * only honest way to compare: two loads of one spot do not put the same ground
+ * under the wheels.
+ */
+(window as unknown as { __shadowbox?: object }).__shadowbox = (o?: { snap?: boolean }): object => {
+  if (o && typeof o.snap === 'boolean') SHADOW_SNAP = o.snap;
+  const map = sun.shadow.mapSize.x;
+  return {
+    on: renderer.shadowMap.enabled && sun.castShadow,
+    span: shadowSpan, box: shadowSpan * 2, map,
+    mPerTexel: +((2 * shadowSpan) / map).toFixed(4),
+    // THE REACH IS THE COMPLAINT. A cab sees 900m; the box is this wide.
+    reach: shadowSpan, viewRadius: Math.round(viewRadius()),
+    centre: [+shadowAt.x.toFixed(2), +shadowAt.y.toFixed(2), +shadowAt.z.toFixed(2)],
+    truck: [+state.x.toFixed(2), +state.z.toFixed(2)],
+    snap: SHADOW_SNAP,
+    // Zero when the snap is on, and the distance to the grid when it is off.
+    phase: +shadowPhase.toFixed(4),
+    fade: shadowFadePatched, dark: shadowMaskPatched, fadeSaw: shadowFadeSaw,
+    sun: [+SUN_DIR.x.toFixed(3), +SUN_DIR.y.toFixed(3), +SUN_DIR.z.toFixed(3)],
+    near: sun.shadow.camera.near, far: sun.shadow.camera.far,
+  };
+};
 (window as unknown as { __biome?: object }).__biome = (): object =>
   ({ name: biome.name, fromCover: biomeSettled });
 /** What the world is actually made of around the car, straight off WorldCover.
@@ -22306,10 +22437,12 @@ function tick(now: number): void {
     // daylight anyway: a beam is invisible against a lit road.
     headSpot.castShadow = headShadowOn && renderer.shadowMap.enabled && !up;
     if (up) {
-      const sx = viewX(), sz = viewZ(), sy = sampleHeight(sx, sz);
-      sun.target.position.set(sx, sy, sz);
+      shadowAt.set(viewX(), 0, viewZ());
+      shadowAt.y = sampleHeight(shadowAt.x, shadowAt.z);
+      snapShadowCentre(shadowAt);
+      sun.target.position.copy(shadowAt);
       sun.target.updateMatrixWorld();
-      sun.position.set(sx, sy, sz).addScaledVector(SUN_DIR, 700);
+      sun.position.copy(shadowAt).addScaledVector(SUN_DIR, 700);
     }
   }
   camera.updateMatrixWorld();
