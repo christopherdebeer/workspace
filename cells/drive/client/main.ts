@@ -3887,7 +3887,11 @@ function grassGeo(): THREE.BufferGeometry {
   for (let b = 0; b < 3; b++) {
     const a = (b / 3) * Math.PI * 2 + 0.7;
     const dx = Math.cos(a), dz = Math.sin(a);
-    const w = 0.05, h = 0.26 + (b % 2) * 0.12, lean = 0.1;
+    // THINNER AND LONGER, reported from the seat. 0.05 wide against 0.26 tall
+    // is a spike; grass is a ribbon. The width came down by nearly half and the
+    // height went up by half again, which also gives the blade something to
+    // bend — a stub cannot lean convincingly however good the wind term is.
+    const w = 0.028, h = 0.40 + (b % 2) * 0.22, lean = 0.14;
     // A base edge across the blade, tapering to a tip that leans outward.
     v.push(dz * w, 0, -dx * w, -dz * w, 0, dx * w, dx * lean, h, dz * lean);
   }
@@ -4641,6 +4645,12 @@ const swardU = {
    *  A blade that does not appear has three candidate causes and they want
    *  different fixes; this separates them in one run instead of three. */
   uSwardDbg: { value: 0 },
+  /** Where the headlight roll-off starts. Above daylight's own highlights, so
+   *  only a lamp a few metres away ever reaches it. */
+  uSwardKnee: { value: 0.72 },
+  /** The outermost band's reach: the ONE curve every band thins along, so the
+   *  fade cannot have a seam where two bands meet. */
+  uGReach: { value: 368 },
 };
 /**
  * THE HEIGHTS AND THE MASK CHANGE ON DIFFERENT EVENTS, so they are rebuilt on
@@ -4723,7 +4733,10 @@ function refreshSwardField(full = true): void {
 /** One band of the sward: a lattice of `side²` slots at `step` metres. */
 interface SwardBand { mesh: THREE.Mesh; side: number; step: number; reach: number;
   uBase: { value: THREE.Vector2 }; uStep: { value: number }; uSide: { value: number };
-  uReach: { value: number }; uDens: { value: number } }
+  uReach: { value: number }; uDens: { value: number };
+  /** Where this band takes over from the one inside it, and hands on to the one
+   *  outside: (in0,in1,out0,out1) metres. See the partition note in the shader. */
+  uBlend: { value: THREE.Vector4 } }
 const SWARD_GLSL = `
   float swHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }`;
 function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLambertMaterial {
@@ -4740,7 +4753,8 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         uniform sampler2D uField; uniform sampler2D uSwardCol; uniform sampler2D uSwardMask;
         uniform vec2 uFieldOrg; uniform float uFieldW;
         uniform vec2 uBase; uniform float uStep; uniform float uSide;
-        uniform float uReach; uniform float uDens;
+        uniform float uReach; uniform float uDens; uniform vec4 uBlend;
+        uniform float uGReach;
         uniform vec3 uSwardEye; uniform vec3 uSwardTint; uniform float uSwardDbg;
         uniform float uTime; uniform vec2 uGust;
         varying vec3 vSward;
@@ -4758,40 +4772,110 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         vec4 sF = texture2D(uField, sUv);
         float sBlocked = texture2D(uSwardMask, sUv).r;
         float sD = length(sP - uSwardEye.xz);
-        float sFade = 1.0 - sD / uReach;
-        // The SAME dither the CPU sward used: whole tufts dropped on a hash,
-        // never shrunk, so what remains is full size at this pixel scale.
-        float sKeep = sF.g * uStep * uStep * uDens * (0.22 + 0.78 * sFade * sFade);
+        // ── A PARTITION OF UNITY, WHICH IS WHY THERE IS NO LONGER A BAND EDGE ──
+        //
+        // Reported from the seat as "a stark band ahead of the car, mid grass,
+        // too much of a step change". Each band used to fade over its OWN reach
+        // and stop dead at it, and the next band picked up with a different
+        // step — so the blades-per-square-metre jumped at every handover and
+        // drew a ring on the ground.
+        //
+        // Density in blades/m² is keep/step², so if a band's keep carries a
+        // factor of step² the band's own spacing cancels out and what is left
+        // is rate x density x weight. Give adjacent bands weights that sum to
+        // one across the handover — smoothstep up against the same smoothstep
+        // down — and the total is continuous by construction rather than by
+        // tuning. The thinning with range is then a single global curve, shared
+        // by every band, so it cannot have a seam in it either.
+        float sW = smoothstep(uBlend.x, uBlend.y, sD) * (1.0 - smoothstep(uBlend.z, uBlend.w, sD));
+        float sG = 1.0 - sD / uGReach;
+        float sKeep = sF.g * uStep * uStep * uDens * sW * (0.22 + 0.78 * sG * sG);
         bool sMaskOk = sBlocked < 0.5 || uSwardDbg == 1.0 || uSwardDbg == 3.0;
         bool sDithOk = sH1 < sKeep || uSwardDbg == 2.0 || uSwardDbg == 3.0;
-        bool sLive = sDithOk && sMaskOk && sD < uReach
+        bool sLive = sDithOk && sMaskOk && sD < uGReach
           && sUv.x > 0.002 && sUv.x < 0.998 && sUv.y > 0.002 && sUv.y < 0.998;
-        float sT = clamp(sD / uReach, 0.0, 1.0);
+        float sT = clamp(sD / uGReach, 0.0, 1.0);
         float sAng = sH2 * 6.28318;
         float sCa = cos(sAng), sSa = sin(sAng);
-        // SHORTER THAN THE OLD TUFT. At 0.7–2.3x of a 26cm blade the sward was
-        // knee-high, which is what a sparse field needs to read at all — every
-        // blade had to count. With fourteen times the count the height can come
-        // back down to grass, and the distance growth stays so a far tuft still
-        // covers its pixel.
-        vec3 sLp = position * (0.55 + sH1 * 0.95) * (1.0 + sT * 0.9);
+        // ── SIZE NEEDS ITS OWN HASH ──
+        //
+        // Reported as "length of grasses seems too uniform", and it was, for a
+        // reason that is not a matter of taste: sH1 was deciding BOTH whether a
+        // blade exists (sH1 < sKeep) and how big it is. Every survivor of that
+        // test has a small sH1 by construction, so the field was a biased
+        // sample of the size distribution — and the tighter the density, the
+        // narrower the range of heights that could exist at all. One hash
+        // cannot be a coin flip and a measurement at the same time.
+        float sSize = swHash(sCell * 4.3 + 61.7);
+        vec3 sLp = position * (0.45 + sSize * 1.30) * (1.0 + sT * 0.9);
         sLp.xz = vec2(sCa * sLp.x - sSa * sLp.z, sSa * sLp.x + sCa * sLp.z);
         // Wind, from the blade's WORLD position so a gust crosses the field as
         // one front rather than every tuft nodding on its own clock.
-        sLp.xz += uGust * (sLp.y * (0.55 + 0.45 * sin(uTime * 1.9 + sP.x * 0.31 + sP.y * 0.23)));
+        // ── THE GUST TRAVELS THE WAY THE WIND IS GOING ──
+        //
+        // uGust is direction times amplitude, so the LEAN was already correct.
+        // The travelling wave on top of it was not: its phase ran along a fixed
+        // (0.31, 0.23) axis whatever the weather said, so gust fronts always
+        // crossed the field the same way and a southerly looked exactly like a
+        // westerly. Phase along the wind's own bearing instead, and the fronts
+        // sweep downwind. Guarded, because a dead calm has no bearing at all.
+        float sGm = length(uGust);
+        vec2 sGd = sGm > 1e-4 ? uGust / sGm : vec2(0.0, 1.0);
+        float sPhase = dot(sP, sGd) * 0.42;
+        sLp.xz += uGust * (sLp.y * (0.55 + 0.45 * sin(uTime * 1.9 + sPhase)));
         // A dead slot collapses to a point: zero area, so it costs its vertices
         // and not one fragment. Cheaper than a branch around the whole shader.
         vec3 transformed = sLive ? vec3(sP.x, sF.r, sP.y) + sLp : vec3(sP.x, sF.r, sP.y);
-        // Colour: the biome green near, the ground's own colour far, so the
-        // field dissolves into the terrain instead of stopping at a line.
+        // ── COLOUR: PER BLADE, AND FROM THE GROUND IT STANDS IN ──
+        //
+        // Reported as "colour is consistent, should vary with biome and cover",
+        // and it was a flat wash of one green: the biome tint near, the terrain
+        // palette only mixed in as the field faded out. Two things wrong with
+        // that. A meadow is not one colour — it is a hundred greens and straws
+        // — and the ground's own colour, which is where biome and cover already
+        // live, was contributing NOTHING until a blade was most of a kilometre
+        // away.
+        //
+        // So every blade takes a hashed shift in brightness and in warmth, and
+        // a real share of the local palette at ALL ranges. uSwardCol is the
+        // terrain palette sampled per 8m block, which already carries the
+        // biome, the elevation band, the grade and the cover class — a crop
+        // field, a wetland and a shrub slope are three different colours in it
+        // before the grass says anything.
+        vec3 sGround = texture2D(uSwardCol, sUv).rgb;
+        float sV = swHash(sCell * 5.3 + 71.0);
+        float sWarm = swHash(sCell * 6.7 + 13.9);
+        vec3 sBase = uSwardTint * (0.78 + 0.44 * sV)
+          * vec3(0.93 + 0.16 * sWarm, 1.0, 0.86 + 0.20 * (1.0 - sWarm));
         float sMix = pow(clamp((sT - 0.45) / 0.55, 0.0, 1.0), 2.0) * 0.85;
-        vSward = mix(uSwardTint, texture2D(uSwardCol, sUv).rgb, sMix);`)
+        vSward = mix(mix(sBase, sGround, 0.30), sGround, sMix);`)
       // The blade is placed in WORLD metres, and the mesh sits at the origin
       // with an identity matrix, so object space already is world space.
       .replace('#include <project_vertex>', '#include <project_vertex>');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vSward;')
-      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= vSward;');
+      .replace('#include <common>', '#include <common>\nvarying vec3 vSward;\nuniform float uSwardKnee;')
+      .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= vSward;')
+      // ── THE HEADLIGHTS STOP BLOWING THE FIELD OUT ──
+      //
+      // Reported as "too bright in headlights". A blade stands upright a few
+      // metres from a spotlight, so it takes the beam nearly square on and a
+      // Lambert term with no ceiling returns whatever the intensity says —
+      // which at that range is far past white. The verge went to a wall of
+      // glare while the road beside it, lit by the same lamp at a grazing
+      // angle, stayed readable.
+      //
+      // A soft knee rather than a clamp: below the knee nothing moves, so
+      // daylight and moonlight are untouched, and above it the response rolls
+      // off instead of clipping — a clamp would flatten every blade in the
+      // beam to one colour, which trades glare for a cardboard cutout.
+      .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+        {
+          float sL = max(max(gl_FragColor.r, gl_FragColor.g), gl_FragColor.b);
+          if (sL > uSwardKnee) {
+            float over = sL - uSwardKnee;
+            gl_FragColor.rgb *= (uSwardKnee + over / (1.0 + over * 2.6)) / sL;
+          }
+        }`);
   };
   return m;
 }
@@ -4806,8 +4890,15 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
  * denser than the old inner lattice and the far one reaches past where the old
  * field stopped entirely.
  */
-const SWARD_BANDS: Array<[number, number]> = [[0.45, 224], [1.5, 192], [4.6, 160]];
-const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side], bi) => {
+// step, lattice side, and the handover window (in0,in1,out0,out1) in metres.
+// Adjacent bands share their edges exactly, which is what makes the weights
+// sum to one and the density continuous across a handover.
+const SWARD_BANDS: Array<[number, number, [number, number, number, number]]> = [
+  [0.45, 224, [-1, 0, 34, 48]],
+  [1.5, 192, [34, 48, 104, 138]],
+  [4.6, 160, [104, 138, 300, 366]],
+];
+const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side, blend], bi) => {
   const geo = new THREE.InstancedBufferGeometry();
   const src = grassGeo();
   geo.setAttribute('position', src.getAttribute('position'));
@@ -4821,9 +4912,11 @@ const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side], bi) => {
   geo.instanceCount = side * side;
   const band: SwardBand = { mesh: null as unknown as THREE.Mesh, side, step, reach: (side * step) / 2,
     uBase: { value: new THREE.Vector2() }, uStep: { value: step },
-    uSide: { value: side }, uReach: { value: (side * step) / 2 }, uDens: { value: 1 } };
+    uSide: { value: side }, uReach: { value: (side * step) / 2 }, uDens: { value: 1 },
+    uBlend: { value: new THREE.Vector4(...blend) } };
   const mat = swardMaterial({ uBase: band.uBase, uStep: band.uStep, uSide: band.uSide,
-    uReach: band.uReach, uDens: band.uDens } as unknown as Record<string, { value: unknown }>);
+    uReach: band.uReach, uDens: band.uDens,
+    uBlend: band.uBlend } as unknown as Record<string, { value: unknown }>);
   terrainFx(mat);
   grainFx(mat, `grain-sward${bi}`, 0.85, 3.6);
   const mesh = new THREE.Mesh(geo, mat);
