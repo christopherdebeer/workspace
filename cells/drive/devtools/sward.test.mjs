@@ -187,6 +187,21 @@ await r.close();
     .map((k) => ({ step: k.step, needs: +target(k.blend[1]).toFixed(3), ceiling: k.ceiling }));
   check('…because no band is asked past its own one-tuft-per-cell ceiling',
     over.length === 0, over);
+
+  // ── AND EVERY FADE FINISHES BEFORE THE HARD EDGES ──
+  //
+  // The third ring in the report was not a density step at all. uGReach — the
+  // global "past here, nothing" cut — was left at 368m by a retune that pushed
+  // the outer band's fade to 400-452, so blades were cut by a hard circle a
+  // full fade-width before they ever started fading. The field texture's own
+  // half-width is a second such edge. Neither is visible to a density profile,
+  // which is why the profile passed while the ground had a ring on it.
+  const edges = b.map((k) => ({ step: k.step, fadeEnds: k.blend[3], reach: k.reach }))
+    .filter((k) => k.fadeEnds > gpu.gReach || k.fadeEnds > gpu.fieldHalf || k.fadeEnds > k.reach);
+  console.log(`      hard edges: cut at ${gpu.gReach}m, field half-width ${gpu.fieldHalf}m`
+    + ` · outermost fade ends ${Math.max(...b.map((k) => k.blend[3]))}m`);
+  check('every fade finishes inside the global cut, the field and its own lattice',
+    edges.length === 0, edges);
 }
 
 // ── WATER, MINUS THE EDGE AND THE SHALLOWS ──

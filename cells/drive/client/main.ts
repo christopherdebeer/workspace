@@ -4698,9 +4698,14 @@ const swardU = {
    *  only a lamp a few metres away ever reaches it. */
   uSwardKnee: { value: 0.72 },
   uSwardFall: { value: SWARD_FALL }, uSwardNear: { value: SWARD_NEAR },
+  /** How much of the GROUND's own colour a blade wears at close range. The
+   *  single number for "grass contrasts too much with the terrain". */
+  uSwardMatch: { value: 0.62 },
   /** The outermost band's reach: the ONE curve every band thins along, so the
    *  fade cannot have a seam where two bands meet. */
-  uGReach: { value: 368 },
+  // The outermost fade's END, not a band's reach: everything past this is
+  // cut hard, so it has to sit beyond the last fade rather than inside it.
+  uGReach: { value: 360 },
 };
 /**
  * THE HEIGHTS AND THE MASK CHANGE ON DIFFERENT EVENTS, so they are rebuilt on
@@ -4934,7 +4939,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         uniform float uReach; uniform float uDens; uniform vec4 uBlend;
         uniform float uGReach;
         uniform vec3 uSwardEye; uniform vec3 uSwardTint; uniform float uSwardDbg;
-        uniform float uSwardFall; uniform float uSwardNear;
+        uniform float uSwardFall; uniform float uSwardNear; uniform float uSwardMatch;
         uniform float uTime; uniform vec2 uGust;
         varying vec3 vSward;
         ${SWARD_GLSL}`)
@@ -5051,10 +5056,25 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         vec3 sGround = texture2D(uSwardCol, sUv).rgb;
         float sV = swHash(sCell * 5.3 + 71.0);
         float sWarm = swHash(sCell * 6.7 + 13.9);
-        vec3 sBase = uSwardTint * (0.78 + 0.44 * sV)
-          * vec3(0.93 + 0.16 * sWarm, 1.0, 0.86 + 0.20 * (1.0 - sWarm));
-        float sMix = pow(clamp((sT - 0.45) / 0.55, 0.0, 1.0), 2.0) * 0.85;
-        vSward = mix(mix(sBase, sGround, 0.30), sGround, sMix);`)
+        // ── THE BLADE WEARS THE GROUND'S COLOUR, AND VARIES AROUND IT ──
+        //
+        // Reported from the seat, and it is the better diagnosis: the bands are
+        // visible because the grass CONTRASTS with the terrain. A density
+        // gradient between two similar colours reads as a fade; the same
+        // gradient between dark specks and pale ground reads as an EDGE, and no
+        // amount of smoothing the density will fix a boundary the eye is
+        // finding in the contrast instead.
+        //
+        // So the ground's own palette is most of the answer at every range
+        // (uSwardMatch), not a third of it and only far away, and the per-blade
+        // variation now multiplies the RESULT rather than the biome tint — a
+        // blade varies in brightness and warmth AROUND the colour of the dirt
+        // it stands in, instead of being a different colour that fades toward
+        // it. Density then changes the TEXTURE and not the hue.
+        float sMix = pow(clamp((sT - 0.12) / 0.88, 0.0, 1.0), 1.4);
+        vec3 sMixed = mix(mix(uSwardTint, sGround, uSwardMatch), sGround, sMix);
+        vSward = sMixed * (0.82 + 0.36 * sV)
+          * vec3(0.96 + 0.08 * sWarm, 1.0, 0.92 + 0.12 * (1.0 - sWarm));`)
       // The blade is placed in WORLD metres, and the mesh sits at the origin
       // with an identity matrix, so object space already is world space.
       .replace('#include <project_vertex>', '#include <project_vertex>');
@@ -5130,7 +5150,12 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
 const SWARD_BANDS: Array<[number, number, [number, number, number, number]]> = [
   [0.45, 320, [-1, 0, 56, 72]],
   [1.5, 260, [56, 72, 160, 195]],
-  [4.6, 200, [160, 195, 400, 452]],
+  // Fade-out ENDS INSIDE the field and inside uGReach. It did not: the reach
+  // was 460m against a 384m field and a 368m uGReach, so the outermost "ring"
+  // was a hard circular cutoff that no fade ever got near. A constant left
+  // behind by a retune, and invisible to a density profile that never asked
+  // where the field stops.
+  [4.6, 156, [160, 195, 300, 356]],
 ];
 const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side, blend], bi) => {
   const geo = new THREE.InstancedBufferGeometry();
@@ -15674,6 +15699,12 @@ function truckSpec(): Record<string, number> {
       blend: [b.uBlend.value.x, b.uBlend.value.y, b.uBlend.value.z, b.uBlend.value.w],
       ceiling: +(1 / (b.step * b.step)).toFixed(4) })),
     fall: SWARD_FALL, near: SWARD_NEAR, lush: SWARD_LUSH,
+    // The two HARD limits every fade has to finish inside: the global cut, and
+    // the field texture's own half-width. A fade that ends outside either is a
+    // circular edge on the ground, and nothing about the density profile can
+    // see it — which is exactly how one shipped.
+    gReach: swardU.uGReach.value, fieldHalf: SWARD_FW / 2,
+    match: swardU.uSwardMatch.value,
     slots: swardBands.reduce((a, b) => a + b.side * b.side, 0),
     verts: swardBands.reduce((a, b) => a + b.side * b.side * 9, 0),
     fieldMs: +swardFieldMs.toFixed(1), maskMs: +swardMaskMs.toFixed(1),
