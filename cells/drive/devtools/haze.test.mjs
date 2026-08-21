@@ -1,7 +1,11 @@
 /**
- * ONE HILLSIDE IS ONE MATERIAL — against the live cell, because the biome (and
- * so the haze colours) is chosen from land cover, and there is no cover route
- * on the local harness. Run locally the same fault measures 3.5 instead of 17.
+ * ONE HILLSIDE IS ONE MATERIAL — written against the live cell, because the
+ * biome (and so the haze colours) is chosen from land cover, and the local
+ * harness had no cover route: run locally the same fault measured 3.5 instead
+ * of 17. THE HARNESS SERVES ~/cover/v1 NOW, out of the cell's own handler, so
+ * that reason has expired — this could move local. Left live until someone
+ * takes both readings on the same day, because the figures above were taken
+ * with the biome guessed from latitude and are not a control for anything.
  *
  *   node cells/drive/devtools/haze.test.mjs
  *

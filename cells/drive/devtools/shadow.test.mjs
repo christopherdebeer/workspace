@@ -122,7 +122,14 @@ await d.close();
 // day. An effect that does not vary with the light is not a shadow.
 const y = await openDrive({
   spot: 'lat=37.70753&lon=-119.68158&h=62&cam=chase&wx=clear&time=NOON', tag: 'shadow-march', settle: 55000 });
-await y.page.evaluate(() => { window.__hide('critters'); window.__hide('sward'); });
+// VEGETATION TOO, and it is not tidiness. The harness serves land cover now,
+// so this spot is 88% FOREST instead of the bare fallback it used to render,
+// and refreshVeg reshuffles its instances on a 900ms tick — which showed up as
+// a noise floor ALTERNATING 11.9% / 1.0% / 11.6% between identical frames.
+// A floor that oscillates is a moving object, not a settling world.
+await y.page.evaluate(() => {
+  window.__hide('critters'); window.__hide('sward'); window.__hide('veg');
+});
 await y.page.evaluate(() => { window.__dial('shq', 2); window.__dial('sdark', 3); });
 await y.page.waitForTimeout(14000);
 const m0 = (await y.page.evaluate(() => window.__shadowbox())).march;
@@ -146,24 +153,44 @@ const frame = async () => { await y.page.waitForTimeout(900); return y.page.scre
 // gets quieter, so the first pair measures the tail of the boot rather than the
 // floor — 13.6% on one run against 1.8% the pair after it, and the test failed
 // itself on the difference.
+// READ UNTIL IT IS QUIET, not a fixed three times. Terrain tiles keep landing
+// at a cold spot long after boot, and one arriving between two frames repaints
+// a tenth of them — measured as a floor that went 1.8% / 11.8% / 0.5%, so a
+// fixed count passes or fails on where the spike happens to fall. Wait for a
+// quiet pair instead, and say so if one never comes.
 const fs = [];
-for (let i = 0; i < 3; i++) fs.push(layerVsGround(await frame(), await frame(), 140, 620, 12).cover);
-const floor = fs[fs.length - 1];
+let floor = 1;
+for (let i = 0; i < 6 && floor >= 0.04; i++) {
+  floor = layerVsGround(await frame(), await frame(), 140, 620, 12).cover;
+  fs.push(floor);
+}
 console.log(`      noise floor between two identical frames: ${fs.map((v) => (v * 100).toFixed(2) + '%').join(' -> ')}`);
 check(`the world went still enough to measure against (${(floor * 100).toFixed(2)}%)`,
   floor < 0.04, fs);
+// EACH READING GETS ITS OWN FLOOR, and is retaken if the world moved during
+// it. One floor at the top is not enough: tiles keep landing, and a reading
+// taken across one arriving measured 11.6% with the sun overhead — the same
+// magnitude as the spike, and indistinguishable from the acne this is here to
+// catch. Quiet pair first, then the measurement, then trust it.
 const paints = async (deg) => {
   await y.page.evaluate((v) => window.__sunalt(v), deg);
   // LONGER THAN IT LOOKS LIKE IT NEEDS. At 1.4s the sun had not caught up and
   // the "overhead" frame was still the previous sun's — which read as the
   // march being blind to elevation, and was the harness being asked too soon.
   await y.page.waitForTimeout(1600);
-  const on = await frame();
-  await y.page.evaluate(() => window.__shadowbox({ march: false }));
-  const off = await frame();
-  await y.page.evaluate(() => window.__shadowbox({ march: true }));
-  await y.page.waitForTimeout(500);
-  return layerVsGround(on, off, 140, 620, 12).cover;
+  let cover = null, quiet = 1;
+  for (let i = 0; i < 4 && cover === null; i++) {
+    quiet = layerVsGround(await frame(), await frame(), 140, 620, 12).cover;
+    if (quiet >= 0.04) continue;
+    const on = await frame();
+    await y.page.evaluate(() => window.__shadowbox({ march: false }));
+    const off = await frame();
+    await y.page.evaluate(() => window.__shadowbox({ march: true }));
+    await y.page.waitForTimeout(500);
+    cover = layerVsGround(on, off, 140, 620, 12).cover;
+  }
+  if (cover === null) throw new Error(`the world never went still at sunalt ${deg} (last ${quiet})`);
+  return cover;
 };
 const high = await paints(85);
 const low = await paints(8);

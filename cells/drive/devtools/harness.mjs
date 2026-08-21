@@ -98,10 +98,59 @@ export async function openDrive(opts = {}) {
   }
 
   const html = shell();
+  // ── THE CELL'S OWN ROUTES, SERVED BY THE CELL'S OWN HANDLER ──
+  //
+  // "no cover loading in harness" was not a network problem and not a
+  // client one: this server answered exactly two paths and 404'd everything
+  // else, and land cover has no fallback. The OSM vectors survived because the
+  // client drops to the Overpass mirrors when the proxy fails, and those go out
+  // through the https relay above — cover only ever comes from ~/cover/v1,
+  // which is COMPUTE: the cell range-reads the ESA WorldCover COGs from S3,
+  // decodes the TIFF and renders a PNG. No route, no cover, and every local
+  // frame has been rendered on the latitude guess instead of the real ground.
+  // It cost a round: a shadow measurement at Yosemite came back on a white
+  // fallback palette and could not be compared with a device screenshot.
+  //
+  // The handler is a plain function of {rawPath} returning {statusCode, body}
+  // and imports nothing but node built-ins, so it runs here as-is. Measured at
+  // 2.0s for a cold z12 tile over Yosemite, and cached on disk after that.
+  //
+  // ONLY ~/cover, DELIBERATELY. Routing ~/osm through the handler as well would
+  // move the Overpass call SERVER-side, where the relay's disk cache cannot see
+  // it — trading a cached mirror hit for a fresh 15s upstream budget on every
+  // run. The vectors already work; this fixes the thing that does not.
+  const cellCache = join(CACHE, 'cell');
+  mkdirSync(cellCache, { recursive: true });
+  let cellHandler = opts.cover === false ? null : undefined;
+  const cellRoute = async (p) => {
+    if (cellHandler === undefined) {
+      try {
+        const out = join(WORK, 'cell-index.mjs');
+        execSync(`npx esbuild ${join(CELL, 'index.ts')} --bundle --platform=node --format=esm`
+          + ` --packages=external --outfile=${out}`, { stdio: 'pipe', cwd: ROOT });
+        cellHandler = (await import(`${out}?t=${Date.now()}`)).handler;
+      } catch { cellHandler = null; }
+    }
+    if (!cellHandler) return null;
+    const key = join(cellCache, createHash('sha1').update(p).digest('hex'));
+    if (existsSync(key)) return { body: readFileSync(key), type: 'image/png' };
+    const r = await cellHandler({ rawPath: p, requestContext: { http: { method: 'GET' } } });
+    if (r.statusCode !== 200) return null;
+    const body = r.isBase64Encoded ? Buffer.from(r.body, 'base64') : Buffer.from(String(r.body));
+    try { writeFileSync(key, body); } catch { /* best effort */ }
+    return { body, type: r.headers?.['content-type'] ?? 'application/octet-stream' };
+  };
   const server = http.createServer((req, res) => {
     const p = req.url.split('?')[0];
     if (p === '/app.js') { res.writeHead(200, { 'content-type': 'application/javascript' }); res.end(readFileSync(bundle)); }
     else if (p === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(html); }
+    else if (p.startsWith('/~/cover/v1/')) {
+      cellRoute(p).then((out) => {
+        if (!out) { res.writeHead(404); res.end('{}'); return; }
+        res.writeHead(200, { 'content-type': out.type });
+        res.end(out.body);
+      }).catch(() => { res.writeHead(503); res.end('{}'); });
+    }
     else { res.writeHead(404); res.end('{}'); }
   });
   await new Promise((r) => server.listen(port, r));
