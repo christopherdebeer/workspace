@@ -42,7 +42,7 @@
  *     the game stood dead still, which is most of why a field read as spikes.
  *     Nothing about that is visible in a stack trace, so it is asserted here.
  */
-import { openDrive, report } from './harness.mjs';
+import { openDrive, report, layerVsGround } from './harness.mjs';
 
 let bad = 0;
 const check = (name, cond, saw) => {
@@ -105,6 +105,63 @@ console.log(`      shader chain: ${Object.entries(fx).map(([k, v]) => `${k}=${v.
 check('the grass kept its wind through terrainFx and grainFx',
   fx.grass.includes('wind') && fx.grass.includes('terrainFx') && fx.grass.includes('grain'), fx);
 
+// ── (4b) A BLADE IS LIT LIKE THE GROUND IT STANDS IN ──
+//
+// Reported three times from the seat, in three different words: too bright in
+// headlights, then bands that read as edges, then "grass still doesn't match
+// terrain, seems far darker". Twice the palette was blamed and twice it was
+// retuned, and neither could have worked: with the sward's albedo forced to
+// the EXACT ground texel each blade stands on, blade pixels still measured
+// 0.48-0.62 of the luminance of the ground beside them.
+//
+// The fault was the normal, and DoubleSide. A blade is a vertical card whose
+// own normal is horizontal, and three flips the normal on a back face — right
+// for a closed solid, wrong for a card. Bent toward UP in the vertex shader,
+// the flip sent half the field's normals to DOWN, where the hemisphere light
+// hands out the ground bounce and the sun hands out nothing. The bend had to
+// move to the FRAGMENT shader, after the flip.
+//
+// So this renders the same view twice, with the sward and with `__hide`, and
+// divides. It is the measurement that settled the argument, and it is the only
+// form of this check that could not have been satisfied by another palette.
+await page.evaluate(() => window.__sward(true));
+await page.waitForTimeout(4000);
+await page.evaluate(() => window.__sward(undefined, true));
+await page.waitForTimeout(1500);
+{
+  const rows = [320, 560];
+  // ALBEDO OUT OF THE WAY FIRST: match 1 and no per-blade jitter, so a blade
+  // wears exactly the colour of the ground under it and the only thing left
+  // that can differ is the light.
+  await page.evaluate(() => window.__swardset({ uSwardMatch: 1, uSwardVary: 0 }));
+  await page.waitForTimeout(500);
+  const flat = await page.screenshot();
+  const dials = await page.evaluate(() => window.__swardset({ uSwardMatch: 0.78, uSwardVary: 1 }));
+  await page.waitForTimeout(500);
+  const live = await page.screenshot();
+  await page.evaluate(() => window.__hide('sward'));
+  await page.waitForTimeout(500);
+  const bare = await page.screenshot();
+  await page.evaluate(() => window.__hide('sward', false));
+  const lit = layerVsGround(flat, bare, rows[0], rows[1]);
+  const asIs = layerVsGround(live, bare, rows[0], rows[1]);
+  console.log(`      blade vs ground over rows ${rows[0]}-${rows[1]}:`
+    + ` matched albedo ${lit.ratio.toFixed(2)}x (${lit.layer.toFixed(0)} vs ${lit.ground.toFixed(0)}),`
+    + ` shipping palette ${asIs.ratio.toFixed(2)}x · ${(asIs.cover * 100).toFixed(0)}% of the slice is blade`);
+  check('the sward paints enough of the frame for the comparison to mean anything',
+    lit.cover > 0.05 && asIs.cover > 0.05, { flat: lit.cover, live: asIs.cover });
+  // THE LOAD-BEARING ONE. Same albedo, same light, same frame: anything much
+  // under one is the normal being wrong, and 0.5 is the specific bug.
+  check(`a blade wearing the ground's own colour is lit like the ground (${lit.ratio.toFixed(2)}x)`,
+    lit.ratio > 0.82, lit);
+  // …and the palette on top of it does not undo the fix.
+  check(`and the shipping palette stays close to it (${asIs.ratio.toFixed(2)}x)`,
+    asIs.ratio > 0.72, { ...asIs, match: dials.uSwardMatch });
+  // A blade must not be BRIGHTER than the ground either — that was the
+  // headlight blow-out, and flat shading's camera-facing normal caused it.
+  check('…without going the other way into glare', lit.ratio < 1.15, lit);
+}
+
 report(d.errors);
 await d.close();
 
@@ -165,8 +222,15 @@ await r.close();
     const keep = Math.min(1, target(d) * k.step * k.step * w);
     return sum + keep / (k.step * k.step);
   }, 0);
+  // WALKED TO WHERE THE FIELD IS MEANT TO END, not past it. Beyond the outer
+  // fade's start the density is deliberately going to zero, and a RATIO is the
+  // wrong statistic there — it is scale-free, so any absolute change against a
+  // near-zero value is an enormous ratio and the test reported a 24,000x
+  // "cliff" for the field correctly ceasing to exist. The tail gets its own
+  // check below, in absolute terms, which is what an eye uses.
+  const tail = Math.min(...b.map((k) => k.blend[2]));
   const ds = [];
-  for (let d = 6; d < 400; d *= 1.06) ds.push(d);
+  for (let d = 6; d < Math.max(...b.map((k) => k.blend[2])); d *= 1.06) ds.push(d);
   let worst = 1, worstAt = 0;
   for (let i = 1; i < ds.length; i++) {
     const a = density(ds[i - 1]), z = density(ds[i]);
@@ -202,6 +266,21 @@ await r.close();
     + ` · outermost fade ends ${Math.max(...b.map((k) => k.blend[3]))}m`);
   check('every fade finishes inside the global cut, the field and its own lattice',
     edges.length === 0, edges);
+
+  // ── AND THE FIELD ENDS WHERE THERE IS NOTHING LEFT TO END ──
+  //
+  // The outer fade going to zero is not a cliff, but only because by the time
+  // it starts there is almost no grass there to lose. That is a real property
+  // and it is worth asserting in ABSOLUTE terms rather than as a ratio: if the
+  // reach were ever pulled in without the falloff being steepened to match, the
+  // field would stop while still visibly dense, and every ratio check above
+  // would still pass.
+  const atTail = density(Math.max(...b.map((k) => k.blend[2])) * 0.99);
+  const atHome = density(gpu.near);
+  console.log(`      the tail: ${atTail.toFixed(4)} tufts/m2 where the last fade starts,`
+    + ` against ${atHome.toFixed(2)} close in — ${(100 * atTail / atHome).toFixed(2)}%`);
+  check(`the field is already all but gone before it ends (${(100 * atTail / atHome).toFixed(2)}%)`,
+    atTail < atHome * 0.02, { atTail, atHome });
 }
 
 // ── WATER, MINUS THE EDGE AND THE SHALLOWS ──

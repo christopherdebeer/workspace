@@ -32,6 +32,7 @@ import { createHash } from 'node:crypto';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
+import zlib from 'node:zlib';
 import { chromium } from 'playwright';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -234,4 +235,79 @@ export async function walkTo(page, lat, lon, opts = {}) {
 export function report(errors) {
   console.log(`pageerrors: ${errors.length}`, errors.slice(0, 3));
   if (errors.length) process.exitCode = 1;
+}
+
+/**
+ * A SCREENSHOT AS NUMBERS.
+ *
+ * "The grass is darker than the ground" is a claim about a DIFFERENCE between
+ * two things in the same frame, and for three rounds it was argued from the
+ * eye: the palette was blamed twice and retuned twice while the actual fault
+ * — a normal that DoubleSide was flipping to face DOWN on half the field —
+ * sat underneath, immune to any colour anyone chose.
+ *
+ * What settled it was rendering the same view twice, once with the layer and
+ * once with `__hide`, and dividing. That needs pixels, and playwright hands
+ * back a PNG, so this is the decoder: enough of the spec for what the renderer
+ * emits (8-bit, non-interlaced), and no dependency.
+ */
+export function decodePng(buf) {
+  if (buf.readUInt32BE(0) !== 0x89504e47) throw new Error('not a PNG');
+  let i = 8, idat = [], w = 0, h = 0, ct = 0, bd = 0;
+  while (i < buf.length) {
+    const len = buf.readUInt32BE(i), type = buf.toString('ascii', i + 4, i + 8);
+    const body = buf.subarray(i + 8, i + 8 + len);
+    if (type === 'IHDR') { w = body.readUInt32BE(0); h = body.readUInt32BE(4); bd = body[8]; ct = body[9]; }
+    else if (type === 'IDAT') idat.push(body);
+    else if (type === 'IEND') break;
+    i += 12 + len;
+  }
+  if (bd !== 8) throw new Error(`unsupported bit depth ${bd}`);
+  const ch = { 0: 1, 2: 3, 4: 2, 6: 4 }[ct];
+  const raw = zlibSync(Buffer.concat(idat));
+  const stride = w * ch, out = Buffer.alloc(h * stride);
+  let p = 0, prev = Buffer.alloc(stride);
+  for (let y = 0; y < h; y++) {
+    const f = raw[p++];
+    const line = Buffer.from(raw.subarray(p, p + stride)); p += stride;
+    for (let x = 0; x < stride; x++) {
+      const a = x >= ch ? line[x - ch] : 0, b = prev[x], c = x >= ch ? prev[x - ch] : 0;
+      if (f === 1) line[x] = (line[x] + a) & 255;
+      else if (f === 2) line[x] = (line[x] + b) & 255;
+      else if (f === 3) line[x] = (line[x] + ((a + b) >> 1)) & 255;
+      else if (f === 4) {
+        const pp = a + b - c, pa = Math.abs(pp - a), pb = Math.abs(pp - b), pc = Math.abs(pp - c);
+        line[x] = (line[x] + (pa <= pb && pa <= pc ? a : pb <= pc ? b : c)) & 255;
+      }
+    }
+    line.copy(out, y * stride); prev = line;
+  }
+  return { w, h, ch, px: out };
+}
+function zlibSync(b) { return zlib.inflateSync(b); }
+
+/**
+ * Over a horizontal slice of two frames of the same view — one with a layer,
+ * one without — split the pixels into those the layer PAINTED and those it did
+ * not, and give the mean luminance of each. The ratio is the answer to "is
+ * this layer lit like the ground it stands on".
+ */
+export function layerVsGround(withPng, withoutPng, y0, y1, thresh = 18) {
+  const A = decodePng(withPng), B = decodePng(withoutPng);
+  if (A.w !== B.w || A.h !== B.h) throw new Error('frames differ in size');
+  const lum = (r, g, b) => 0.299 * r + 0.587 * g + 0.114 * b;
+  let cov = 0, tot = 0, ls = 0, gs = 0, gn = 0;
+  for (let y = Math.max(0, y0); y < Math.min(A.h, y1); y++) {
+    for (let x = 0; x < A.w; x++) {
+      const o = y * A.w * A.ch + x * A.ch;
+      const d = Math.abs(A.px[o] - B.px[o]) + Math.abs(A.px[o + 1] - B.px[o + 1])
+        + Math.abs(A.px[o + 2] - B.px[o + 2]);
+      tot++;
+      if (d > thresh) { cov++; ls += lum(A.px[o], A.px[o + 1], A.px[o + 2]); }
+      else { gs += lum(B.px[o], B.px[o + 1], B.px[o + 2]); gn++; }
+    }
+  }
+  return { cover: cov / Math.max(1, tot), painted: cov,
+    layer: cov ? ls / cov : 0, ground: gn ? gs / gn : 0,
+    ratio: cov && gn ? (ls / cov) / (gs / gn) : 0 };
 }

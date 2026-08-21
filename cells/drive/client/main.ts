@@ -4699,8 +4699,22 @@ const swardU = {
   uSwardKnee: { value: 0.72 },
   uSwardFall: { value: SWARD_FALL }, uSwardNear: { value: SWARD_NEAR },
   /** How much of the GROUND's own colour a blade wears at close range. The
-   *  single number for "grass contrasts too much with the terrain". */
-  uSwardMatch: { value: 0.62 },
+   *  single number for "grass contrasts too much with the terrain".
+   *
+   *  0.62 was set by eye while the LIGHTING fault below was still in — blades
+   *  were rendering at half the ground's luminance whatever colour they were
+   *  given, so no value of this could have worked and the eye was compensating
+   *  for the wrong thing. With the normal fixed, matched albedo now measures
+   *  0.87-0.97 of the ground; this carries the rest of the way. */
+  uSwardMatch: { value: 0.78 },
+  /** Per-blade brightness and warmth jitter. A dial rather than a constant so
+   *  a measurement can turn the variation off and compare a blade against the
+   *  ground texel it stands on with nothing in between. */
+  uSwardVary: { value: 1 },
+  /** How much of the blade's OWN normal survives the bend to vertical. 0 is a
+   *  card lit exactly as the ground under it, 1 is a little wall. See the note
+   *  at the injection site. */
+  uSwardUp: { value: 0.25 },
   /** The outermost band's reach: the ONE curve every band thins along, so the
    *  fade cannot have a seam where two bands meet. */
   // The outermost fade's END, not a band's reach: everything past this is
@@ -4923,7 +4937,10 @@ interface SwardBand { mesh: THREE.Mesh; side: number; step: number; reach: numbe
 const SWARD_GLSL = `
   float swHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }`;
 function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLambertMaterial {
-  const m = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, side: THREE.DoubleSide });
+  // flatShading OFF, deliberately, and it is the whole of the fix below: with
+  // FLAT_SHADED three takes the normal from screen-space derivatives in the
+  // FRAGMENT shader and the vertex normal is never consulted at all.
+  const m = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: false, side: THREE.DoubleSide });
   m.onBeforeCompile = (sh) => {
     // Shared field uniforms by reference, band uniforms per material. Three
     // keeps a uniform VALUE list per material even when two materials share a
@@ -4940,12 +4957,41 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         uniform float uGReach;
         uniform vec3 uSwardEye; uniform vec3 uSwardTint; uniform float uSwardDbg;
         uniform float uSwardFall; uniform float uSwardNear; uniform float uSwardMatch;
+        uniform float uSwardVary; uniform float uSwardUp;
         uniform float uTime; uniform vec2 uGust;
         varying vec3 vSward;
         ${SWARD_GLSL}`)
+      // ── A BLADE IS LIT LIKE THE GROUND IT STANDS IN ──
+      //
+      // Reported: "grass still doesn't match terrain (outside of headlights),
+      // seems far darker." Measured, at the Senqu spot with the sward's albedo
+      // forced to the exact ground texel it stands on: blade pixels came back
+      // at 0.48 to 0.62 of the luminance of the ground beside them. So it was
+      // never the palette. It is the NORMAL, and the reason is DoubleSide.
+      //
+      // A blade is a vertical card, so its own normal is horizontal, and half
+      // the field faces away from any given camera. three flips the normal for
+      // a back face — which is right for a closed solid and wrong for a card:
+      // the flip means a blade's shading depends on which way its winding
+      // happens to point, and with the normal bent toward UP the flip sends it
+      // to DOWN, where the hemisphere light hands it the ground bounce and the
+      // sun hands it nothing.
+      //
+      // Bending the normal up in the VERTEX shader therefore made it worse:
+      // measured 0.45 against the ground at bend-to-vertical, 0.80 at the raw
+      // blade normal. The bend has to happen AFTER the flip, which means in
+      // the fragment shader — and the up vector has to arrive in VIEW space,
+      // which is what the varying is for.
+      //
+      // What is left of the blade's own normal is now the flipped one, so it
+      // always leans toward the viewer instead of randomly away: a little
+      // shape, none of the coin toss.
+      .replace('#include <common>', `#include <common>
+        varying vec3 vSwardUpV;`)
       .replace('#include <begin_vertex>', `
         // THE SLOT'S OWN CELL, snapped so it is a fixed place in the world and
         // not a place relative to the truck.
+        vSwardUpV = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
         float sIx = mod(aId, uSide), sIz = floor(aId / uSide);
         vec2 sCell = uBase + (vec2(sIx, sIz) - uSide * 0.5) * uStep;
         float sH1 = swHash(sCell + 0.13);
@@ -5073,13 +5119,19 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // it. Density then changes the TEXTURE and not the hue.
         float sMix = pow(clamp((sT - 0.12) / 0.88, 0.0, 1.0), 1.4);
         vec3 sMixed = mix(mix(uSwardTint, sGround, uSwardMatch), sGround, sMix);
-        vSward = sMixed * (0.82 + 0.36 * sV)
-          * vec3(0.96 + 0.08 * sWarm, 1.0, 0.92 + 0.12 * (1.0 - sWarm));`)
+        vSward = mix(vec3(1.0), (0.82 + 0.36 * sV)
+          * vec3(0.96 + 0.08 * sWarm, 1.0, 0.92 + 0.12 * (1.0 - sWarm)), uSwardVary) * sMixed;`)
       // The blade is placed in WORLD metres, and the mesh sits at the origin
       // with an identity matrix, so object space already is world space.
       .replace('#include <project_vertex>', '#include <project_vertex>');
     sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', '#include <common>\nvarying vec3 vSward;\nuniform float uSwardKnee;')
+      .replace('#include <common>', '#include <common>\nvarying vec3 vSward;\nvarying vec3 vSwardUpV;\n'
+        + 'uniform float uSwardKnee;\nuniform float uSwardUp;')
+      // AFTER normal_fragment_begin, which is where the DoubleSide flip lives.
+      // See the note in the vertex half: done before it, the bend to vertical
+      // is inverted on every back-facing blade in the field.
+      .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+        normal = normalize(mix(vSwardUpV, normal, uSwardUp));`)
       .replace('#include <color_fragment>', '#include <color_fragment>\ndiffuseColor.rgb *= vSward;')
       // ── THE HEADLIGHTS STOP BLOWING THE FIELD OUT ──
       //
@@ -15463,6 +15515,11 @@ function applyHidden(): void {
     trunks.visible = false;
   }
   if (hideSet.has('terrain')) for (const m of terrainMeshes.values()) m.visible = false;
+  // THE SWARD, so a frame can be taken twice — with grass and without — and
+  // the two compared pixel for pixel. "Grass is darker than the ground" is a
+  // claim about a difference, and a difference needs both halves measured in
+  // the same light; guessing from one frame is how the last two rounds went.
+  if (hideSet.has('sward')) for (const b of swardBands) b.mesh.visible = false;
   // LIVESTOCK. Added for the slip test, which compares two loads of one spot
   // pixel by pixel: a camel walking across the Wadi Rum road moved 1.9% of the
   // road crop on its own, against an effect worth 3%, so the noise floor was
@@ -15488,10 +15545,11 @@ function applyHidden(): void {
       }
       if (layer === 'terrain') for (const m of terrainMeshes.values()) m.visible = true;
       if (layer === 'critters') { for (const m of herds) m.visible = true; birds.visible = true; }
+      if (layer === 'sward') for (const b of swardBands) b.mesh.visible = true;
     }
   }
   return { hidden: [...hideSet],
-    layers: ['drape', 'synth', 'far', 'ov', 'sea', 'veg', 'terrain'],
+    layers: ['drape', 'synth', 'far', 'ov', 'sea', 'veg', 'terrain', 'critters', 'sward'],
     counts: { drapes: drapes.length, synth: synthBodies.length, terrain: terrainMeshes.size } };
 };
 /**
@@ -15736,6 +15794,21 @@ function truckSpec(): Record<string, number> {
 };
 /** The mask, as the CPU drew it and as a point query — so "the mask is wrong"
  *  and "the mask is sampled wrong" stop being the same sentence. */
+/**
+ * THE SWARD'S DIALS, LIVE — because "the grass is darker than the ground" is a
+ * claim about a difference and there are four candidates for it: the albedo
+ * mix, the per-blade jitter, the headlight knee, and the lighting itself. Set
+ * them one at a time against a hidden-sward control and the frame says which.
+ */
+(window as unknown as { __swardset?: object }).__swardset = (o: Record<string, number>): object => {
+  for (const [k, v] of Object.entries(o)) {
+    const u = (swardU as unknown as Record<string, { value: number }>)[k];
+    if (u && typeof v === 'number') u.value = v;
+  }
+  return Object.fromEntries(Object.entries(swardU)
+    .filter(([, u]) => typeof (u as { value: unknown }).value === 'number')
+    .map(([k, u]) => [k, (u as { value: number }).value]));
+};
 (window as unknown as { __swarddbg?: object }).__swarddbg = (m: number): object => {
   swardU.uSwardDbg.value = m;
   return { mode: m };
