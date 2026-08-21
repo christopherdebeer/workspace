@@ -421,6 +421,9 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
 // vector tile.
 const COVER_Z = 12;   // ~9.8km per tile; the source pyramid has a level at 37m/px
 // The WorldCover legend, as the values actually stored in the pixel.
+/** Metres per cover texel: the tile is 256 texels of ~9.8km at this latitude,
+ *  which is the 38m grid every class boundary in the world falls on. */
+const COVER_PX = 38;
 const COVER = { tree: 10, shrub: 20, grass: 30, crop: 40, built: 50, bare: 60,
   snow: 70, water: 80, wetland: 90, mangrove: 95, moss: 100 } as const;
 const COVER_NAME: Record<number, string> = {
@@ -528,6 +531,42 @@ function sampleCover(ex: number, ez: number): number | null {
     return v || null;   // 0 is "no class here" (open ocean), not a class
   }
   return null;
+}
+/**
+ * THE SAME RASTER, DITHERED — FOR PAINT ONLY.
+ *
+ * WorldCover is one class per ~38m texel and sampleCover reads it nearest
+ * neighbour, so every class boundary in the world is a straight line on a 38m
+ * grid. On a hillside painted from that lookup it reads as exactly what it is:
+ * blocks. Reported from the seat as "painted cover on terrain is very blocky".
+ *
+ * The fix is not to smooth the boundary — a class is not a number and there is
+ * no halfway between forest and scrub — but to make WHERE it falls a per-point
+ * decision instead of a per-texel one. Jitter the sample by up to half a texel
+ * on a hash of the position and the straight edge becomes a ragged one at the
+ * resolution of whatever is asking, which on terrain is a ~9.5m vertex and on
+ * the sward is a blade.
+ *
+ * A SEPARATE FUNCTION, AND THAT IS THE POINT. sampleCover decides whether the
+ * truck is in water, what the wheels grip, where the biome settles and where
+ * grass may grow at all; those are rulings and must be the same answer twice.
+ * This one only decides what colour to paint, so it is free to be ragged, and
+ * keeping them apart is what stops a prettier shoreline becoming a truck that
+ * disagrees with itself about whether it is swimming.
+ *
+ * WATER IS EXEMPT for that reason: a dithered coastline would paint blue on
+ * ground the height pass did not cut and dry ground inside a cut lake, and the
+ * waterline is the one boundary in this world that several subsystems have
+ * already agreed on.
+ */
+function coverPaint(ex: number, ez: number): number | null {
+  const truth = sampleCover(ex, ez);
+  if (truth === null || truth === COVER.water) return truth;
+  const h1 = hash2(Math.round(ex * 0.37), Math.round(ez * 0.37));
+  const h2 = hash2(Math.round(ez * 0.41) + 7717, Math.round(ex * 0.43));
+  const j = COVER_PX * 0.55;
+  const alt = sampleCover(ex + (h1 - 0.5) * j, ez + (h2 - 0.5) * j);
+  return alt === null || alt === COVER.water ? truth : alt;
 }
 /** Is there any elevation data under this point at all? sampleHeight answers
  *  0 where there is none — "spawn level" — which is a fiction anything built
@@ -2371,7 +2410,10 @@ function buildTerrainMesh(t: HeightTile): void {
     const v = clamp(Math.round(((ez - t.zs) / t.h) * 255), 0, 255);
     const du = t.data[v * 256 + Math.min(255, u + 1)] - t.data[v * 256 + u];
     const dv = t.data[Math.min(255, v + 1) * 256 + u] - t.data[v * 256 + u];
-    let [r, g, bb] = terrainPalette(elevAbs, Math.hypot(du, dv) / Math.max(cell, 1), sampleCover(ex, ez));
+    // coverPaint, not sampleCover: this is the one consumer that only decides a
+    // COLOUR, so it takes the dithered read and the 38m block edges dissolve
+    // into a ragged boundary at vertex resolution. See coverPaint.
+    let [r, g, bb] = terrainPalette(elevAbs, Math.hypot(du, dv) / Math.max(cell, 1), coverPaint(ex, ez));
     // …and then whoever actually drew this ground. The 38m raster says what is
     // growing across a landscape; an OSM area says where a particular wood
     // STOPS, which is the thing the raster cannot resolve. Applied after it,
@@ -4673,32 +4715,81 @@ const swardU = {
  * count does not move when a tile is rebuilt in place, which is precisely the
  * event that matters. Heights follow rebuilds; the mask follows roads.
  */
-function refreshSwardField(full = true): void {
-  const t0 = performance.now();
-  if (full) {
-    const cx = Math.round(state.x / SWARD_FM) * SWARD_FM, cz = Math.round(state.z / SWARD_FM) * SWARD_FM;
-    swardFX = cx - SWARD_FW / 2; swardFZ = cz - SWARD_FW / 2;
-    swardU.uFieldOrg.value.set(swardFX, swardFZ);
-  }
-  const F = swardField.image.data as Float32Array;
-  const C = swardColT.image.data as Uint8Array;
-  if (full) for (let j = 0; j < SWARD_F; j++) {
+/**
+ * ── THE HEIGHT PASS IS SPREAD OVER FRAMES, because its cost is not bounded ──
+ *
+ * 9,216 groundAt calls sounds like a fixed price and is not: groundAt reads the
+ * carved mesh when there is one and falls back to sampleHeight plus roadCeiling
+ * when the tile is dirty, and roadCeiling WALKS THE ROAD GRID. In open country
+ * that fallback is rare and cheap. In a city, mid-stream, with every tile
+ * dirty and a thousand ways in reach, it is neither — measured at 49ms in a
+ * Cape Town suburb and unbounded above that.
+ *
+ * A spike that scales with how built-up the ground is, landing every time
+ * terrain rebuilds, is the wrong shape for a frame budget however small its
+ * average. So the sweep runs a slice of rows per frame into a SCRATCH buffer
+ * and swaps when it is finished: the live field stays valid throughout (it is
+ * 768m wide and only 48m out of date at worst), and the per-frame cost is
+ * bounded by the slice rather than by the neighbourhood.
+ */
+const SWARD_ROWS = 8;
+const swardScratchF = new Float32Array(SWARD_F * SWARD_F * 4);
+const swardScratchC = new Uint8Array(SWARD_F * SWARD_F * 4);
+let swardRow = -1;                    // -1 idle, else the next row to fill
+let swardPendX = 0, swardPendZ = 0;   // origin the scratch is being built for
+function swardRows(from: number, to: number): void {
+  for (let j = from; j < to; j++) {
     for (let i = 0; i < SWARD_F; i++) {
-      const wx = swardFX + (i + 0.5) * SWARD_FM, wz = swardFZ + (j + 0.5) * SWARD_FM;
+      const wx = swardPendX + (i + 0.5) * SWARD_FM, wz = swardPendZ + (j + 0.5) * SWARD_FM;
       const k = (j * SWARD_F + i) * 4;
       const h = groundAt(wx, wz);
+      // THE RATE IS A RULING, THE COLOUR IS PAINT. Whether grass grows here at
+      // all comes off the true class — a salt pan and open water must stay bare
+      // — while the colour it fades toward takes the dithered read, so the
+      // sward's far field dissolves into the same ragged boundaries the ground
+      // beneath it now has instead of into 38m blocks.
       const cv = sampleCover(wx, wz);
-      F[k] = h;
-      F[k + 1] = cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3);
+      swardScratchF[k] = h;
+      swardScratchF[k + 1] = cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3);
       const slope = Math.abs(groundAt(wx + SWARD_FM, wz) - h) / SWARD_FM;
-      const [pr, pg, pb] = terrainPalette(h + baseElev, slope, cv);
-      C[k] = Math.round(clamp(pr, 0, 1) * 255);
-      C[k + 1] = Math.round(clamp(pg, 0, 1) * 255);
-      C[k + 2] = Math.round(clamp(pb, 0, 1) * 255);
-      C[k + 3] = 255;
+      const [pr, pg, pb] = terrainPalette(h + baseElev, slope, coverPaint(wx, wz));
+      swardScratchC[k] = Math.round(clamp(pr, 0, 1) * 255);
+      swardScratchC[k + 1] = Math.round(clamp(pg, 0, 1) * 255);
+      swardScratchC[k + 2] = Math.round(clamp(pb, 0, 1) * 255);
+      swardScratchC[k + 3] = 255;
     }
   }
-  if (full) { swardField.needsUpdate = true; swardColT.needsUpdate = true; }
+}
+/** Begin a height sweep for wherever the truck is now. */
+function swardStart(): void {
+  swardPendX = Math.round(state.x / SWARD_FM) * SWARD_FM - SWARD_FW / 2;
+  swardPendZ = Math.round(state.z / SWARD_FM) * SWARD_FM - SWARD_FW / 2;
+  swardRow = 0;
+  swardFieldMs = 0;
+}
+/** Advance a started sweep; swaps the scratch in when the last row lands. */
+function swardStep(sync = false): void {
+  if (swardRow < 0) return;
+  const t0 = performance.now();
+  const to = sync ? SWARD_F : Math.min(SWARD_F, swardRow + SWARD_ROWS);
+  swardRows(swardRow, to);
+  swardRow = to;
+  swardFieldMs += performance.now() - t0;
+  if (swardRow < SWARD_F) return;
+  (swardField.image.data as Float32Array).set(swardScratchF);
+  (swardColT.image.data as Uint8Array).set(swardScratchC);
+  swardField.needsUpdate = true;
+  swardColT.needsUpdate = true;
+  swardFX = swardPendX; swardFZ = swardPendZ;
+  swardU.uFieldOrg.value.set(swardFX, swardFZ);
+  swardRow = -1;
+  swardGroundSeen = swardGroundRev();
+  refreshSwardField(false);           // the mask belongs to the new origin
+  for (const b of swardBands) b.mesh.visible = true;
+}
+function refreshSwardField(full = true): void {
+  const t0 = performance.now();
+  if (full) { swardStart(); swardStep(true); return; }
   // ── the mask ──
   const px = SWARD_MASKN / SWARD_FW;                 // texels per metre
   swardMaskCtx.fillStyle = '#000';
@@ -4725,10 +4816,8 @@ function refreshSwardField(full = true): void {
   }
   swardMaskT.needsUpdate = true;
   swardRoadSeen = swardRoadRev();
-  if (full) swardGroundSeen = swardGroundRev();
   swardFieldAt = performance.now();
-  if (full) swardFieldMs = performance.now() - t0;
-  else swardMaskMs = performance.now() - t0;
+  swardMaskMs = performance.now() - t0;
 }
 /** One band of the sward: a lattice of `side²` slots at `step` metres. */
 interface SwardBand { mesh: THREE.Mesh; side: number; step: number; reach: number;
@@ -4790,9 +4879,26 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         float sW = smoothstep(uBlend.x, uBlend.y, sD) * (1.0 - smoothstep(uBlend.z, uBlend.w, sD));
         float sG = 1.0 - sD / uGReach;
         float sKeep = sF.g * uStep * uStep * uDens * sW * (0.22 + 0.78 * sG * sG);
+        // ── BLADES THIN OUT, THEY DO NOT BLINK OUT ──
+        //
+        // Reported from the seat: blades visibly jump around at walking pace
+        // and turn to fizz at speed. Not pixel snapping — the dither threshold
+        // is DISTANCE-DEPENDENT. sKeep carries the range curve and the band
+        // handover weight, so every metre driven moves it, and a blade whose
+        // hash sits near the line crosses it and vanishes. Thousands of them
+        // crossing at once, in both directions, is the fizz exactly.
+        //
+        // A hard test cannot be made stable while its threshold moves, so the
+        // test stops being hard: a blade near the line SHRINKS. It sinks into
+        // the ground over the last stretch of its existence and grows back out
+        // when the truck turns around. The density is unchanged in expectation
+        // — half a blade at the boundary averages what a coin flip averaged —
+        // and nothing pops, because nothing has an edge to fall off.
+        float sFadeW = max(0.015, sKeep * 0.45);
+        float sAlive = 1.0 - smoothstep(sKeep - sFadeW, sKeep, sH1);
+        if (uSwardDbg == 2.0 || uSwardDbg == 3.0) sAlive = 1.0;
         bool sMaskOk = sBlocked < 0.5 || uSwardDbg == 1.0 || uSwardDbg == 3.0;
-        bool sDithOk = sH1 < sKeep || uSwardDbg == 2.0 || uSwardDbg == 3.0;
-        bool sLive = sDithOk && sMaskOk && sD < uGReach
+        bool sLive = sAlive > 0.01 && sMaskOk && sD < uGReach
           && sUv.x > 0.002 && sUv.x < 0.998 && sUv.y > 0.002 && sUv.y < 0.998;
         float sT = clamp(sD / uGReach, 0.0, 1.0);
         float sAng = sH2 * 6.28318;
@@ -4807,7 +4913,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // narrower the range of heights that could exist at all. One hash
         // cannot be a coin flip and a measurement at the same time.
         float sSize = swHash(sCell * 4.3 + 61.7);
-        vec3 sLp = position * (0.45 + sSize * 1.30) * (1.0 + sT * 0.9);
+        vec3 sLp = position * (0.45 + sSize * 1.30) * (1.0 + sT * 0.9) * sAlive;
         sLp.xz = vec2(sCa * sLp.x - sSa * sLp.z, sSa * sLp.x + sCa * sLp.z);
         // Wind, from the blade's WORLD position so a gust crosses the field as
         // one front rather than every tuft nodding on its own clock.
@@ -4934,16 +5040,30 @@ let swardGpu = new URLSearchParams(location.search).get('sward') !== 'cpu';
  *  writes — there is no per-blade work left on this side of the wire. */
 function swardFrame(): void {
   if (!swardGpu) return;
+  // ── NOT FROM THE CHART ──
+  //
+  // The top-down view sits hundreds of metres up looking at a map; a 40cm blade
+  // is nowhere near a pixel and 112,640 slots of vertex work buy exactly
+  // nothing. The far shell and the overview layer already swap on camMode for
+  // the same reason — this is the third tenant of that rule, and the one with
+  // the largest bill.
+  if (camMode === 'top') {
+    for (const b of swardBands) b.mesh.visible = false;
+    return;
+  }
   const now2 = performance.now();
+  // A sweep already under way finishes before another is considered.
+  if (swardRow >= 0) { swardStep(); return; }
   const moved = Number.isNaN(swardFX)
     || Math.hypot(state.x - (swardFX + SWARD_FW / 2), state.z - (swardFZ + SWARD_FW / 2)) > SWARD_REBUILD;
   if (moved) {
-    refreshSwardField(true);
-    for (const b of swardBands) b.mesh.visible = true;
+    swardStart();
+    swardStep();
   } else if (swardGroundSeen !== swardGroundRev() && now2 - swardFieldAt > 2000) {
     // Terrain was rebuilt — a road was cut into it, or the DEM landed — so the
-    // heights this field is standing its grass on are stale. Full pass.
-    refreshSwardField(true);
+    // heights this field is standing its grass on are stale. Sweep again.
+    swardStart();
+    swardStep();
   } else if (swardRoadSeen !== swardRoadRev() && now2 - swardFieldAt > 1200) {
     // Roads arrived with no rebuild behind them yet: redraw the mask so nothing
     // grows through the new carriageway, and leave the heights alone.
@@ -4955,7 +5075,7 @@ function swardFrame(): void {
     // SNAPPED to the step, so a slot's world position never moves under it.
     b.uBase.value.set(Math.round(state.x / b.step) * b.step, Math.round(state.z / b.step) * b.step);
     b.uDens.value = vegScale * grassScale * SWARD_LUSH;
-    b.mesh.visible = grassScale > 0 && vegScale > 0;
+    b.mesh.visible = grassScale > 0 && vegScale > 0 && !Number.isNaN(swardFX);
   }
 }
 function refreshSward(): void {
@@ -23498,8 +23618,12 @@ const DIAL_GROUPS: DialGroup[] = [
       // difference between a field and a golf course, and it is also the
       // difference between a phone holding 60fps and not. Five steps, and the
       // top two are deliberately past what I would ship as a default.
+      // A WIDER BAND AT BOTH ENDS, asked for from the seat. LOW is half what it
+      // was and LUSH is double, which the sward can now spend because density
+      // costs vertices on a 47,360-pixel target rather than CPU matrices — a
+      // slot the dither drops is three vertices and no fragments at all.
       dial('grass', 'GRASS', ['OFF', 'LOW', 'MEDIUM', 'HIGH', 'LUSH'], 2, (i) => {
-        grassScale = [0, 0.45, 1, 1.9, 3.2][i];
+        grassScale = [0, 0.22, 1, 2.6, 6.4][i];
       }),
       // TERRAIN detail, and what it really buys is ROADS. A finer mesh means a
       // smaller cell, a smaller cell means the road cut reaches less far, and
