@@ -1884,6 +1884,22 @@ const compMat = new THREE.ShaderMaterial({
     uPix: { value: pixSize }, // the low-res grid, for dithering
     uHazeDbg: { value: 0 },
     uHazeWarm: { value: 0.4 },
+    // ── HOW THICK THE AIR IS, as two numbers a dial can move ──
+    //
+    // The e-fold and the strength, split out of the shader because they were
+    // the two constants everything about the far field turned on and neither
+    // could be judged without a deploy. 1400m is short for clear air — it is
+    // why the aerial ramp collapses into a few rows seen from a cab, where the
+    // whole distance from here to the horizon is squeezed under the skyline —
+    // and whether that reads as atmosphere or as a wall is a matter for the
+    // seat, not for me.
+    //
+    // GROUND ONLY. The sky's own horizon gradient is a sunset, built on
+    // purpose, and it keeps the full lobe whatever this says. Turning the haze
+    // off should take the milk off the mountains, not the colour out of the
+    // evening.
+    uHazeE: { value: 1400 },
+    uHazeAmt: { value: 0.3 },
     uHazeBase: { value: new THREE.Vector3() },
     uHazeSun: { value: new THREE.Vector3() },
     bloomTex: { value: null },
@@ -1909,6 +1925,7 @@ const compMat = new THREE.ShaderMaterial({
     // and the haze is the only thing here that is. 1 kills the view-angle
     // term, 2 kills the haze outright, 3 kills the sun lobe. See __haze.
     uniform float uHazeDbg; uniform float uHazeWarm;
+    uniform float uHazeE; uniform float uHazeAmt;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
     // Ordered (Bayer) dither, computed without array indexing so it compiles
     // on GLSL ES 1.0. Recursive 2x2 → 4x4.
@@ -1969,11 +1986,11 @@ const compMat = new THREE.ShaderMaterial({
         // keeps its haze. (Fog-of-war hiding is m-driven and unaffected.)
         float vFac = clamp(1.4 - abs(dir.y) * 1.3, 0.15, 1.0);
         if (uHazeDbg > 0.5 && uHazeDbg < 1.5) vFac = 1.0;
-        float deep = (1.0 - exp(-t / 1400.0)) * vFac * step(uHazeDbg, 1.5);
+        float deep = (1.0 - exp(-t / uHazeE)) * vFac * step(uHazeDbg, 1.5);
         float blurF = clamp(m * (0.1 + 0.9 * near) + deep * 0.3, 0.0, 1.0);
         // Never fully opaque: the unexplored world stays a SUGGESTION behind
         // the haze — you can make out a coastline or a ridge to steer toward.
-        float dimF = min(m * mix(0.10, 0.86, near) + (1.0 - m) * deep * 0.3, 0.86);
+        float dimF = min(m * mix(0.10, 0.86, near) + (1.0 - m) * deep * uHazeAmt, 0.86);
         col = mix(sharp, soft, blurF);
         col = mix(col, hazeAt(dir, uHazeWarm), dimF);
       }
@@ -17818,6 +17835,12 @@ function heightsOf(): number[] {
   (compMat.uniforms.uHazeWarm as { value: number }).value = k;
 };
 /** 0 normal · 1 no view-angle term · 2 no haze at all · 3 no sun lobe. */
+/** The air, as the dial sees it — so a screenshot argument can quote numbers
+ *  rather than a preset name, and a test can assert the dial reached them. */
+(window as unknown as { __hazeair?: object }).__hazeair = (): object => {
+  const u = compMat.uniforms as Record<string, { value: number }>;
+  return { efold: u.uHazeE.value, amt: u.uHazeAmt.value, warm: u.uHazeWarm.value, dbg: u.uHazeDbg.value };
+};
 (window as unknown as { __haze?: object }).__haze = (m = 0): void => {
   (compMat.uniforms.uHazeDbg as { value: number }).value = m;
 };
@@ -24378,6 +24401,30 @@ const DIAL_GROUPS: DialGroup[] = [
         cu.uBloom.value = bloomDial;
       }),
       dial('flare', 'LENS FLARE', ['OFF', 'ON'], 1, (i) => { cu.uFlare.value = i; }),
+      // ── HAZE: HOW MUCH AIR IS BETWEEN YOU AND THE HILL ──
+      //
+      // Asked for from the seat, and it has been wanted for several rounds:
+      // the aerial perspective is the single largest thing separating a
+      // fifteen-kilometre view that reads as distance from one that reads as
+      // milk, and 1400m of e-fold has been a constant nobody could judge
+      // without a deploy per guess.
+      //
+      // TWO NUMBERS MOVE TOGETHER because they are one physical quantity. The
+      // e-fold is how far light travels before the air has taken most of it;
+      // the amount is how much of the haze colour the air can contribute at
+      // saturation. Thin air is a long e-fold AND a lighter touch; thick air
+      // is the reverse. Moving one alone gives a world that is either clear up
+      // close and milky far off, or the other way about — neither of which is
+      // weather.
+      //
+      // MED IS EXACTLY WHAT SHIPPED, so the default changes nothing. LOW is
+      // the long-range clear air the horizon note has been asking for.
+      // GROUND ONLY: the sky keeps its sunset at every setting, and the fog of
+      // war is m-driven and untouched — this is the atmosphere, not the veil.
+      dial('haze', 'HAZE', ['OFF', 'LOW', 'MED', 'HIGH'], 2, (i) => {
+        cu.uHazeE.value = [1400, 3000, 1400, 800][i];
+        cu.uHazeAmt.value = [0, 0.26, 0.3, 0.38][i];
+      }),
       // IN SHUTTER ANGLES, which is the unit a camera keeps this number in:
       // the fraction of the frame the blade is out of the way. 180 is the film
       // default and reads here as 1/120s of travel. OFF by default — it is the
