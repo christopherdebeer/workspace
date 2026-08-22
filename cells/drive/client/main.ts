@@ -1987,7 +1987,14 @@ const compMat = new THREE.ShaderMaterial({
         float vFac = clamp(1.4 - abs(dir.y) * 1.3, 0.15, 1.0);
         if (uHazeDbg > 0.5 && uHazeDbg < 1.5) vFac = 1.0;
         float deep = (1.0 - exp(-t / uHazeE)) * vFac * step(uHazeDbg, 1.5);
-        float blurF = clamp(m * (0.1 + 0.9 * near) + deep * 0.3, 0.0, 1.0);
+        // THE BLUR IS PART OF THE AIR, so it answers to the same dial. It did
+        // not: the dim term took uHazeAmt and this kept a hardcoded 0.3, so
+        // HAZE OFF removed the milk and left the far field just as SOFT — a
+        // world that is clear and out of focus at the same time, which is
+        // neither of the two things anyone was asking for. The coefficient was
+        // already 0.3 on both sides and MED sets uHazeAmt to 0.3, so at the
+        // default this is the same expression it always was.
+        float blurF = clamp(m * (0.1 + 0.9 * near) + deep * uHazeAmt, 0.0, 1.0);
         // Never fully opaque: the unexplored world stays a SUGGESTION behind
         // the haze — you can make out a coastline or a ridge to steer toward.
         float dimF = min(m * mix(0.10, 0.86, near) + (1.0 - m) * deep * uHazeAmt, 0.86);
