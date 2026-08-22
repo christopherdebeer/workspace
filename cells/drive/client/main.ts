@@ -24366,6 +24366,9 @@ function liveLandmarks(): LandmarkLive[] {
  * the DEM streams in, the same way every height in this world does.
  */
 function landmarkPadEle(lm: LandmarkLive): number {
+  // The authored elevation wins outright when the record carries one — see
+  // the ele field in landmarks.ts for the two ways the ring below went wrong.
+  if (lm.def.ele !== undefined) return lm.def.ele - baseElev;
   const pad = lm.def.pad ?? lm.def.base * 1.1;
   const ring: number[] = [];
   for (let k = 0; k < 8; k++) {
@@ -24379,6 +24382,15 @@ function landmarkPadEle(lm: LandmarkLive): number {
  *  to use, or null to leave the DEM's answer alone. Called from the tile
  *  height pass, so it must stay a couple of comparisons in the common case. */
 function landmarkFlatten(ex: number, ez: number): number | null {
+  // ACCUMULATED ACROSS PADS, not first-match. At Giza the pads had to widen
+  // until they overlap — the DEM smears each pyramid into a mound half again
+  // wider than the monument, and a pad that stopped at the monument left a
+  // twenty-metre dune RING around every pyramid: measured by the probe as rim
+  // samples standing 20m above the pad, and seen from the seat as each
+  // pyramid rising out of its own crater. Overlapping pads whose elevations
+  // differ by metres would put a scarp along the first-match boundary; a
+  // weighted average is continuous everywhere by construction.
+  let wSum = 0, eSum = 0, wMax = 0;
   for (const lm of liveLandmarks()) {
     const pad = lm.def.pad ?? lm.def.base * 1.1;
     const dx = ex - lm.x, dz = ez - lm.z;
@@ -24386,12 +24398,14 @@ function landmarkFlatten(ex: number, ez: number): number | null {
     const d = Math.hypot(dx, dz);
     if (d > pad * 1.4) continue;
     if (lm.padEle === null) lm.padEle = landmarkPadEle(lm);
-    if (d <= pad) return lm.padEle;
-    const w = 1 - (d - pad) / (pad * 0.4);   // smooth skirt out to 1.4 pads
+    const w = d <= pad ? 1 : 1 - (d - pad) / (pad * 0.4);   // smooth skirt to 1.4 pads
     const ww = w * w * (3 - 2 * w);
-    return lm.padEle * ww + sampleHeight(ex, ez) * (1 - ww);
+    wSum += ww; eSum += ww * lm.padEle;
+    if (ww > wMax) wMax = ww;
   }
-  return null;
+  if (wSum <= 0) return null;
+  const padE = eSum / wSum;
+  return wMax >= 1 ? padE : padE * wMax + sampleHeight(ex, ez) * (1 - wMax);
 }
 /** Is this LOCAL point inside a landmark's pad? The building path asks. */
 function inLandmarkPad(ex: number, ez: number): boolean {
@@ -24445,6 +24459,25 @@ function buildLandmarks(): void {
     landmarkBuilt.set(lm.def.id, g);
   }
 }
+/** The landmark store as data: what is authored, what stood up, and on what
+ *  ground — because "the pyramid is missing" has four causes (not built, built
+ *  at the wrong height, buried in the residual mound, wrong coordinates) and
+ *  a screenshot cannot tell them apart. */
+(window as unknown as { __landmarks?: object }).__landmarks = (): object =>
+  liveLandmarks().map((lm) => ({
+    id: lm.def.id, built: landmarkBuilt.has(lm.def.id),
+    dist: Math.round(Math.hypot(lm.x - state.x, lm.z - state.z)),
+    x: Math.round(lm.x), z: Math.round(lm.z),
+    padEle: lm.padEle === null ? null : +lm.padEle.toFixed(1),
+    apex: lm.padEle === null ? null : +(lm.padEle + lm.def.h).toFixed(1),
+    // The ground the DEM still stands OUTSIDE the pad, at 1.6 pads out on
+    // four sides — the residual mound this entry's flatten did not reach.
+    rim: (() => {
+      const pad = (lm.def.pad ?? lm.def.base * 1.1) * 1.6;
+      return [[pad, 0], [-pad, 0], [0, pad], [0, -pad]]
+        .map(([dx, dz]) => +sampleHeight(lm.x + dx, lm.z + dz).toFixed(1));
+    })(),
+  }));
 function buildCovers(): void {
   for (const c of COVERS) {
     if (coverBuilt.has(c.id)) continue;

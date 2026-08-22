@@ -36,6 +36,15 @@ export interface Landmark {
   rot?: number;
   /** Flatten-and-clear radius, metres. Defaults to base * 1.1. */
   pad?: number;
+  /**
+   * Surveyed base elevation, metres above sea level. Optional but preferred:
+   * without it the pad's height is the median of a ring of DEM samples
+   * outside the pad, and at Giza that ring proved fragile twice in one round
+   * — close in it lands on the monument's own smeared mound, far out it falls
+   * off the plateau edge toward the Nile. These are surveyed monuments; the
+   * number is in the literature, and an authored store is the place for it.
+   */
+  ele?: number;
   /** Albedo. Weathered core limestone unless the stone says otherwise. */
   col?: number;
 }
@@ -44,10 +53,16 @@ export const LANDMARKS: Landmark[] = [
   // Giza: the trio, surveyed sides and heights, all three aligned to true
   // north within a twentieth of a degree — the rot field exists for the rest
   // of the world, not for these.
+  // Pads far wider than the monuments, because the pad's job is to erase the
+  // DEM's SMEAR of the monument, and a 139m pyramid smears into a mound half
+  // again its width. At 250m the flatten stopped inside the smear and every
+  // pyramid stood in a crater of its own leftover dune, rim 20m above pad.
+  // The pads overlap; landmarkFlatten blends them, so the plateau between the
+  // monuments becomes one continuous authored surface — which it also is.
   { id: 'giza-khufu', name: 'GREAT PYRAMID', lat: 29.97925, lon: 31.13422,
-    kind: 'pyramid', base: 230, h: 139, pad: 250 },
+    kind: 'pyramid', base: 230, h: 139, pad: 400, ele: 60 },
   { id: 'giza-khafre', name: 'PYRAMID OF KHAFRE', lat: 29.97603, lon: 31.13080,
-    kind: 'pyramid', base: 215, h: 136, pad: 235 },
+    kind: 'pyramid', base: 215, h: 136, pad: 380, ele: 70 },
   { id: 'giza-menkaure', name: 'PYRAMID OF MENKAURE', lat: 29.97245, lon: 31.12817,
-    kind: 'pyramid', base: 103, h: 65, pad: 125 },
+    kind: 'pyramid', base: 103, h: 65, pad: 240, ele: 69 },
 ];
