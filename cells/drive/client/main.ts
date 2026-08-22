@@ -24512,12 +24512,50 @@ function inLandmarkPad(ex: number, ez: number): boolean {
   return false;
 }
 const landmarkBuilt = new Map<string, THREE.Group>();
-// Weathered core limestone. The casing is long gone; what stands is stepped
-// ochre stone, darker than the sand it rises from.
-const landmarkMat = new THREE.MeshLambertMaterial({ color: 0x9a8a68, flatShading: true });
-terrainFx(landmarkMat);
-sunMarchFx(landmarkMat);
-grainFx(landmarkMat, 'grain-landmark', 0.5, 0.05);
+/**
+ * ── DO LANDMARKS GET THEIR OWN TEXTURES? YES — PROCEDURAL, IN THE SHADER ──
+ *
+ * Asked from the seat. The house rule stands (no image assets, everything
+ * generated), and the thing a monument's surface actually has that a hillside
+ * does not is MASONRY: horizontal courses. One world-Y stripe injection gives
+ * a pyramid its courses at conversational range and costs nothing at
+ * distance, where the stripes close up below a pixel and vanish on their own
+ * — a mip chain by geometry. Everything else the stone needs it already gets
+ * from the shared stack: grainFx for the mottle, flat shading for the faces,
+ * terrainFx for cloud shadows, sunMarchFx so a pyramid stands in the same
+ * light as the hill behind it.
+ *
+ * Not every kind is masonry: the Eiffel spire and the obelisk's polished
+ * faces take no courses, so the material factory takes a spacing of zero.
+ */
+function courseFx(mat: THREE.Material, spacing: number, amp = 0.07): void {
+  if (spacing <= 0) return;
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = function (sh, renderer) {
+    prev?.call(mat, sh, renderer);
+    sh.vertexShader = sh.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying float vCourseY;')
+      .replace('#include <worldpos_vertex>',
+        '#include <worldpos_vertex>\nvCourseY = (modelMatrix * vec4(transformed, 1.0)).y;');
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>\nvarying float vCourseY;`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        diffuseColor.rgb *= 1.0 - ${amp.toFixed(3)} * step(fract(vCourseY / ${spacing.toFixed(2)}), 0.16);`);
+  };
+}
+const landmarkMats = new Map<string, THREE.MeshLambertMaterial>();
+function landmarkMatFor(col: number, courses: number): THREE.MeshLambertMaterial {
+  const key = `${col}/${courses}`;
+  const got = landmarkMats.get(key);
+  if (got) return got;
+  const m = new THREE.MeshLambertMaterial({ color: col, flatShading: true });
+  courseFx(m, courses);
+  terrainFx(m);
+  sunMarchFx(m);
+  grainFx(m, `grain-lm-${key}`, 0.5, 0.05);
+  landmarkMats.set(key, m);
+  return m;
+}
 let lmBuildsSeen = -1;
 function buildLandmarks(): void {
   // A terrain rebuild means better DEM under the ring samples: forget the pad
@@ -24535,19 +24573,98 @@ function buildLandmarks(): void {
       continue;
     }
     if (Math.hypot(lm.x - state.x, lm.z - state.z) > 20000) continue;
+    // Under a campaign Cover the city is sealed and the dome is the monument.
+    if (underCover(lm.def.lat, lm.def.lon, 1.05)) continue;
     if (lm.padEle === null) lm.padEle = landmarkPadEle(lm);
     const g = new THREE.Group();
-    if (lm.def.kind === 'pyramid') {
+    const { base, h, kind } = lm.def;
+    const rot = lm.def.rot ?? 0;
+    const add = (mesh: THREE.Mesh): void => { shadowy(mesh, true, true); g.add(mesh); };
+    if (kind === 'pyramid') {
       // A four-sided cone IS a square pyramid; the circumradius of a square of
       // side s is s/sqrt(2). Rotated so the EDGES face the cardinals, which is
       // how every pyramid on earth is set, and flat-shaded so the four faces
-      // read as four planes of stone at this pixel scale.
-      const r = lm.def.base / Math.SQRT2;
-      const m = new THREE.Mesh(new THREE.ConeGeometry(r, lm.def.h, 4, 1), landmarkMat);
-      m.rotation.y = Math.PI / 4 + (lm.def.rot ?? 0);
-      m.position.y = lm.def.h / 2;
-      shadowy(m, true, true);
-      g.add(m);
+      // read as four planes of stone at this pixel scale. Courses at 2.8m —
+      // coarser than the real ~0.7m masonry, deliberately: at true spacing the
+      // stripes alias into shimmer two hundred metres out.
+      const m = new THREE.Mesh(new THREE.ConeGeometry(base / Math.SQRT2, h, 4, 1),
+        landmarkMatFor(lm.def.col ?? 0x9a8a68, 2.8));
+      m.rotation.y = Math.PI / 4 + rot;
+      m.position.y = h / 2;
+      add(m);
+    } else if (kind === 'step-pyramid') {
+      // Stacked mastabas, which is literally what Djoser is. Tier heights are
+      // equal; widths walk down linearly to a flat top the width of a tier.
+      const n = lm.def.steps ?? 5;
+      const mat = landmarkMatFor(lm.def.col ?? 0x9a8a68, 2.4);
+      for (let i = 0; i < n; i++) {
+        const w = base * (1 - i / (n + 0.4));
+        const t = new THREE.Mesh(new THREE.BoxGeometry(w, h / n, w), mat);
+        t.rotation.y = rot;
+        t.position.y = (i + 0.5) * (h / n);
+        add(t);
+      }
+    } else if (kind === 'obelisk') {
+      // A tapered square shaft and its pyramidion. Polished faces: no courses.
+      const mat = landmarkMatFor(lm.def.col ?? 0xd8d4c8, 0);
+      const shaft = new THREE.Mesh(
+        new THREE.CylinderGeometry((base * 0.62) / Math.SQRT2, base / Math.SQRT2, h * 0.88, 4, 1), mat);
+      shaft.rotation.y = Math.PI / 4 + rot;
+      shaft.position.y = (h * 0.88) / 2;
+      add(shaft);
+      const cap = new THREE.Mesh(
+        new THREE.ConeGeometry((base * 0.62) / Math.SQRT2, h * 0.12, 4, 1), mat);
+      cap.rotation.y = Math.PI / 4 + rot;
+      cap.position.y = h * 0.88 + (h * 0.12) / 2;
+      add(cap);
+    } else if (kind === 'spire') {
+      // Three tapered tiers and two platform slabs: the silhouette of a great
+      // iron tower at a scale where the lattice itself is sub-pixel. The
+      // curve of the legs is carried by the taper RATIOS, not by geometry.
+      const mat = landmarkMatFor(lm.def.col ?? 0x4a3f36, 0);
+      const tiers: Array<[number, number, number]> = [
+        [base, base * 0.44, h * 0.185],           // ground to first platform
+        [base * 0.44, base * 0.24, h * 0.185],    // first to second
+        [base * 0.24, base * 0.035, h * 0.63],    // the long spire
+      ];
+      let y = 0;
+      for (const [b0, b1, th] of tiers) {
+        const t = new THREE.Mesh(
+          new THREE.CylinderGeometry(b1 / Math.SQRT2, b0 / Math.SQRT2, th, 4, 1), mat);
+        t.rotation.y = Math.PI / 4 + rot;
+        t.position.y = y + th / 2;
+        add(t);
+        y += th;
+        if (y < h * 0.9) {
+          const p = new THREE.Mesh(new THREE.BoxGeometry(b1 * 1.25, 3.2, b1 * 1.25), mat);
+          p.rotation.y = rot;
+          p.position.y = y;
+          add(p);
+        }
+      }
+    } else if (kind === 'ring') {
+      // Uprights on a circle, lintels across the arc that still carries them.
+      // base is the OUTER DIAMETER; h is a sarsen. The ruined south-west arc
+      // is left open, which is the monument's actual state and also what
+      // stops it reading as a water tank from the road.
+      const mat = landmarkMatFor(lm.def.col ?? 0x8a8578, 0);
+      const n = 17, r = base / 2 - 1;
+      for (let i = 0; i < n; i++) {
+        const a2 = (i / n) * Math.PI * 2 + rot;
+        if (i >= 11 && i % 2 === 0) continue;    // the fallen stones
+        const u = new THREE.Mesh(new THREE.BoxGeometry(2.1, h, 1.1), mat);
+        u.position.set(Math.cos(a2) * r, h / 2, Math.sin(a2) * r);
+        u.rotation.y = -a2 + Math.PI / 2;
+        add(u);
+      }
+      for (let i = 0; i < 6; i++) {
+        const a0 = (i / n) * Math.PI * 2 + rot, a1 = ((i + 1) / n) * Math.PI * 2 + rot;
+        const mx = (Math.cos(a0) + Math.cos(a1)) * 0.5 * r, mz = (Math.sin(a0) + Math.sin(a1)) * 0.5 * r;
+        const li = new THREE.Mesh(new THREE.BoxGeometry(2 * r * Math.sin(Math.PI / n) + 1.4, 0.9, 1.2), mat);
+        li.position.set(mx, h + 0.45, mz);
+        li.rotation.y = -(a0 + a1) / 2 + Math.PI / 2;
+        add(li);
+      }
     }
     g.position.set(lm.x, lm.padEle, lm.z);
     worldGroup.add(g);
