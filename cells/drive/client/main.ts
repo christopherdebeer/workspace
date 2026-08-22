@@ -15575,8 +15575,15 @@ function tapeKeep(): string {
 };
 (window as unknown as { __audioState?: object }).__audioState = (): object =>
   ({ state: audio.state, on: audio.on, hidden });
-(window as unknown as { __cam?: object }).__cam = (): object =>
-  ({ mode: camMode, stick: !!stick, zoom: +zoomCur.toFixed(1), tapAt: Math.round(tapAt), taps: tapSeen });
+/** The seat, and a way to CHANGE it. Read-only was enough while every question
+ *  was about one camera; "why does this look different from the cab" is a
+ *  question about two, and two page loads of one spot do not put the same
+ *  world, the same clock or the same weather under them. */
+(window as unknown as { __cam?: object }).__cam = (m?: string): object => {
+  if (m === 'cab' || m === 'chase' || m === 'drone' || m === 'top') setCam(m);
+  return { mode: camMode, stick: !!stick, zoom: +zoomCur.toFixed(1),
+    tapAt: Math.round(tapAt), taps: tapSeen };
+};
 /** WHAT IS UNDER THAT PIXEL. Screen point in NDC (-1..1), and every mesh the
  *  ray passes through, nearest first — the only honest way to name a thing you
  *  can see but cannot find in the data. */
@@ -24424,6 +24431,28 @@ const DIAL_GROUPS: DialGroup[] = [
       dial('haze', 'HAZE', ['OFF', 'LOW', 'MED', 'HIGH'], 2, (i) => {
         cu.uHazeE.value = [1400, 3000, 1400, 800][i];
         cu.uHazeAmt.value = [0, 0.26, 0.3, 0.38][i];
+      }),
+      // ── THE SUNWARD LOBE, ON GROUND, ON ITS OWN DIAL ──
+      //
+      // Ringed from the seat in the cab: a warm band of country immediately
+      // under the skyline, browner and paler than the hillside below it, and
+      // absent from the chase view of the same place.
+      //
+      // It is the haze warming toward the sun. hazeSun is about twice the
+      // brightness of hazeBase AND the other side of neutral in hue — a
+      // temperate biome runs base [0.20,0.24,0.20] green-grey against sun
+      // [0.42,0.40,0.22] warm yellow — so where the lobe reaches distant
+      // ground it does not read as depth, it reads as a DIFFERENT MATERIAL.
+      // R44 cut it to 0.4 for exactly that reason and left the number in the
+      // source; this puts it where it can be judged from the seat.
+      //
+      // SEPARATE FROM HAZE, because they answer different complaints. HAZE is
+      // how much air; this is what colour the air goes where you are looking
+      // into the sun. Turning this off leaves the aerial ramp intact and takes
+      // only the warm cast off it — and the SKY keeps the full lobe either
+      // way, because that warm side IS the sunset.
+      dial('hzsun', 'HAZE SUN', ['OFF', 'LOW', 'MED', 'HIGH'], 2, (i) => {
+        cu.uHazeWarm.value = [0, 0.2, 0.4, 0.7][i];
       }),
       // IN SHUTTER ANGLES, which is the unit a camera keeps this number in:
       // the fraction of the frame the blade is out of the way. 180 is the film
