@@ -17853,7 +17853,13 @@ function heightsOf(): number[] {
  *  rather than a preset name, and a test can assert the dial reached them. */
 (window as unknown as { __hazeair?: object }).__hazeair = (): object => {
   const u = compMat.uniforms as Record<string, { value: number }>;
-  return { efold: u.uHazeE.value, amt: u.uHazeAmt.value, warm: u.uHazeWarm.value, dbg: u.uHazeDbg.value };
+  // …and the FLARE's inputs, because they live in the same composite and the
+  // phantom-sun bug could only be settled by reading them: in the cab the
+  // idle bob moves every edge in the frame between two screenshots, so a
+  // pixel A/B measures the suspension, not the effect.
+  const su = (compMat.uniforms.uSunUv as { value: THREE.Vector2 }).value;
+  return { efold: u.uHazeE.value, amt: u.uHazeAmt.value, warm: u.uHazeWarm.value, dbg: u.uHazeDbg.value,
+    sunVis: +(u.uSunVis.value as number).toFixed(3), sunUv: [+su.x.toFixed(3), +su.y.toFixed(3)] };
 };
 (window as unknown as { __haze?: object }).__haze = (m = 0): void => {
   (compMat.uniforms.uHazeDbg as { value: number }).value = m;
@@ -21611,6 +21617,7 @@ let dbgYaw = 0;
 let prevGround: number | null = null; // last frame's resolved ground (tunnel guard)
 let dustBudget = 0;                   // fractional particles carried between frames
 const sunScreen = new THREE.Vector3();
+const sunFwd = new THREE.Vector3();
 // ── the tape: a drive recorded, and played back ────────────────────
 /**
  * A RUN IS A LIST OF WHAT THE DRIVER DID, PLUS A LEASH.
@@ -22869,8 +22876,27 @@ function tick(now: number): void {
   compMat.uniforms.camPos.value.copy(camera.position);
   // Where the sun sits on screen, for the flare. Occlusion is left to the
   // shader (one depth fetch); here we only ask whether it is in frame at all.
+  //
+  // ── AND "IN FRAME" MUST FIRST MEAN "IN FRONT" ──
+  //
+  // Ringed from the seat as a horizontal luminous stripe across a cliff face,
+  // surviving every haze and cloud dial because it was never atmosphere: it
+  // was the LENS FLARE, painted from a sun 137 degrees BEHIND the camera.
+  // Vector3.project on a point behind the eye goes through the perspective
+  // divide with w NEGATIVE, so the whole thing mirrors: x and y flip back
+  // into range and z comes out below 1, which is precisely the three checks
+  // "onScreen" made. The depth fetch at the phantom position then lands on
+  // sky, the occlusion test passes, and three ghost discs plus the streak are
+  // drawn over whatever country happens to stand there — brightest at dawn
+  // and dusk, when the flare is strongest and the sun is most often at your
+  // back on an eastbound road.
+  //
+  // The sign of the FACING is the fact the projection loses, so ask for it
+  // directly before believing anything project() says.
+  camera.getWorldDirection(sunFwd);
   sunScreen.copy(SUN_DIR).multiplyScalar(9000).add(camera.position).project(camera);
-  const onScreen = sunScreen.z < 1 && Math.abs(sunScreen.x) < 1.5 && Math.abs(sunScreen.y) < 1.5;
+  const onScreen = sunFwd.dot(SUN_DIR) > 0.02
+    && sunScreen.z < 1 && Math.abs(sunScreen.x) < 1.5 && Math.abs(sunScreen.y) < 1.5;
   compMat.uniforms.uSunUv.value.set(sunScreen.x * 0.5 + 0.5, sunScreen.y * 0.5 + 0.5);
   compMat.uniforms.uSunVis.value = onScreen
     ? clamp(1 - Math.max(Math.abs(sunScreen.x), Math.abs(sunScreen.y)) * 0.55, 0, 1) * (1 - wx.cloud * 0.85)
