@@ -578,7 +578,11 @@ function hasHeight(ex: number, ez: number): boolean {
   }
   return false;
 }
-function sampleHeight(ex: number, ez: number): number {
+/**
+ * The DEM as delivered, before anything authored has an opinion. Almost
+ * nothing should call this: the wrapper below is the world's height.
+ */
+function sampleHeightRaw(ex: number, ez: number): number {
   for (const t of heightTiles.values()) {
     if (ex < t.xs || ez < t.zs || ex >= t.xs + t.w || ez >= t.zs + t.h) continue;
     // GLOBAL pixel grid: sample i is centred at xs + (i+0.5)·w/256 and the
@@ -595,6 +599,33 @@ function sampleHeight(ex: number, ez: number): number {
   }
   return 0;
 }
+/**
+ * ── THE HEIGHT OF THE WORLD, AND THERE IS ONLY ONE ──
+ *
+ * The landmark pads first flattened the terrain MESH and nothing else, and
+ * the owner caught it from the driver's seat inside a day: "driving over what
+ * appears to be flat ground, our physics now believes something different
+ * from what we see." Exactly right — the wheels, the grass field, the sun
+ * march and every fallback path read sampleHeight, which still carried the
+ * DEM's mound, so the truck climbed an invisible dune across ground the eye
+ * saw flat. A world where the picture and the physics disagree about the
+ * floor is worse than either being wrong alone.
+ *
+ * So the flatten lives HERE, in the one function every consumer reads — the
+ * mesh is built from it, so the pixels and the wheels can no longer diverge.
+ * The bbox gate keeps the landmark test out of the fast path: everywhere on
+ * earth that is not within a pad-and-a-half of an authored monument pays two
+ * comparisons.
+ */
+function sampleHeight(ex: number, ez: number): number {
+  const raw = sampleHeightRaw(ex, ez);
+  if (lmBox === null
+    || ex < lmBox[0] || ex > lmBox[2] || ez < lmBox[1] || ez > lmBox[3]) return raw;
+  return landmarkFlatten(ex, ez, raw);
+}
+/** Bounding box of every landmark pad (with skirt), in local metres — set by
+ *  liveLandmarks, null until the store has been armed for this origin. */
+let lmBox: [number, number, number, number] | null = null;
 /**
  * DOES THE COVER RASTER'S WATER STAND UP TO THE TERRAIN?
  *
@@ -953,6 +984,14 @@ const skyMat = new THREE.ShaderMaterial({
     uZenith: { value: new THREE.Vector3() },
     uHorizon: { value: new THREE.Vector3() },
     uSunDisc: { value: new THREE.Vector3() },
+    // ── REAL ANGULAR SIZES, FROM THE REAL EPHEMERIS ──
+    // cos of the disc edge and of a soft outer edge, plus sin for the moon's
+    // own-disc coordinates. Set per frame from the date: the moon swings
+    // 0.49-0.56 degrees across its anomalistic month and the sun 0.52-0.54
+    // across the year, so the sizes are computed, not authored.
+    uSunCos1: { value: 0.99999 }, uSunCos0: { value: 0.99998 },
+    uMoonCos1: { value: 0.99999 }, uMoonCos0: { value: 0.99998 },
+    uMoonSin: { value: 0.005 },
     uBelow: { value: new THREE.Vector3() },
     uCloud: { value: 0 }, uTime: { value: 0 },
     // HOW LOW THE SUN IS, as its own number. The warm side of the sky used to
@@ -977,6 +1016,8 @@ const skyMat = new THREE.ShaderMaterial({
   fragmentShader: `
     uniform vec3 sunDir; uniform vec3 uZenith; uniform vec3 uHorizon;
     uniform vec3 uSunDisc; uniform vec3 uBelow; uniform float uCloud; uniform float uTime;
+    uniform float uSunCos1; uniform float uSunCos0;
+    uniform float uMoonCos1; uniform float uMoonCos0; uniform float uMoonSin;
     uniform float uLow; uniform vec3 uDusk; uniform float uNight; uniform vec3 moonDir;
     uniform vec2 uWind; uniform vec2 uCamXZ; uniform float uDeckY; uniform float uCloudScale;
     varying vec3 vDir;
@@ -1012,10 +1053,20 @@ const skyMat = new THREE.ShaderMaterial({
       float shade = exp(-max(d.y, 0.0) * 70.0) * uLow * anti;
       col = mix(col, uZenith * 0.55, clamp(shade * 0.6, 0.0, 0.7));
       float sd = max(dot(d, sunDir), 0.0);
-      // A BIG disc, the way pixel-art skies draw it — ~7° across with a broad
-      // halo, not the 1° pinprick physical accuracy would give you.
-      col += uSunDisc * smoothstep(0.9915, 0.9945, sd) * 1.5;
-      col += uSunDisc * (pow(sd, 60.0) * 0.5 + pow(sd, 8.0) * 0.22);
+      // THE REAL SUN, at its real half-degree — asked for from the seat after
+      // years of the pixel-art convention (~7 degrees with a halo). At this
+      // render scale half a degree is two or three pixels, which is exactly
+      // what the eye gets: a point too bright to look at, carried by its own
+      // glare. The aureole stays (that part IS what a sky does to a bright
+      // disc); the disc itself stops being a plate.
+      col += uSunDisc * smoothstep(uSunCos0, uSunCos1, sd) * 2.2;
+      // The aureole is what SETS the sun's apparent size once the disc is
+      // honest: at pow 260 (an e-fold near five degrees) plus bloom it still
+      // saturated to a ten-degree white ball and the shrunken disc inside was
+      // invisible. pow 2600 holds the glare inside about a degree; the pow-8
+      // term stays as the broad warm sky around the sun, at a weight the
+      // quantiser reads as sky and not as sun.
+      col += uSunDisc * (pow(sd, 2600.0) * 0.8 + pow(sd, 8.0) * 0.16);
       // ── cloud deck ──
       if (d.y > 0.015 && uCloud > 0.01) {
         // WHERE THE VIEW RAY MEETS THE DECK, in world metres. The dome still
@@ -1062,12 +1113,12 @@ const skyMat = new THREE.ShaderMaterial({
         // of a phase and needs no extra number to say it.
         if (moonDir.y > -0.08) {
           float md = dot(d, moonDir);
-          float disc = smoothstep(0.99845, 0.99885, md);
+          float disc = smoothstep(uMoonCos0, uMoonCos1, md);
           if (disc > 0.0) {
             vec3 rel = normalize(d - moonDir * md);
             vec3 mu = normalize(sunDir - moonDir * dot(sunDir, moonDir));
             vec3 mv = normalize(cross(moonDir, mu));
-            float r = sqrt(max(0.0, 1.0 - md * md)) / 0.0557;   // 0..1 across the disc
+            float r = sqrt(max(0.0, 1.0 - md * md)) / uMoonSin;   // 0..1 across the disc
             float u2 = dot(rel, mu) * r, v2 = dot(rel, mv) * r;
             // The terminator is an ELLIPSE whose width is the sun-moon angle.
             float k = dot(sunDir, moonDir);
@@ -2865,10 +2916,6 @@ function buildTerrainMesh(t: HeightTile): void {
       const seaLocal = seaSurfaceAbs() - baseElev;
       if (elev <= seaLocal + 2) elev = Math.min(elev, seaLocal - SEA_BED);
     }
-    // A landmark's pad flattens the DEM's smoothed guess so the authored
-    // geometry can stand on the ground it was surveyed on. See landmarks.ts.
-    const lmE = landmarkFlatten(ex, ez);
-    if (lmE !== null) elev = lmE;
     pos.setY(i, elev);
   }
   carveCorridors(t, geo, SEG);
@@ -14725,6 +14772,26 @@ function stepWeather(now: number, dt: number): void {
   // Chart only: amplified, with a starlight floor under it, because a map that
   // goes blank on a new moon has stopped being a map. See MOON_CHART.
   const mDir = (skyMat.uniforms.moonDir as { value: THREE.Vector3 }).value;
+  // The DISCS' ANGULAR SIZES, from the date. Two principal terms are the whole
+  // ephemeris needed: the Earth's orbital anomaly moves the sun between 0.524
+  // and 0.542 degrees across the year, and the moon's anomalistic month moves
+  // it between 0.49 and 0.56 — a real supermoon rises a seventh wider than an
+  // apogee moon, and now does so here on the same date it does outside.
+  {
+    const dJ = (worldNow().getTime() - Date.UTC(2000, 0, 1, 12)) / 86400000;
+    const gSun = ((357.529 + 0.98560028 * dJ) * Math.PI) / 180;
+    const rAU = 1.00014 - 0.01671 * Math.cos(gSun);
+    const sunR = (0.26667 * Math.PI) / 180 / rAU;                    // angular RADIUS
+    const mAnom = ((134.963 + 13.064993 * dJ) * Math.PI) / 180;
+    const moonKm = 385001 - 20905 * Math.cos(mAnom);
+    const moonR = Math.asin(1737.4 / moonKm);
+    const u = skyMat.uniforms as Record<string, { value: number }>;
+    u.uSunCos1.value = Math.cos(sunR);
+    u.uSunCos0.value = Math.cos(sunR * 1.45);       // soft limb, sub-pixel here
+    u.uMoonCos1.value = Math.cos(moonR);
+    u.uMoonCos0.value = Math.cos(moonR * 1.35);
+    u.uMoonSin.value = Math.sin(moonR);
+  }
   const chart = camMode === 'top';
   const lunar = clamp(mDir.y, 0, 1) * (0.12 + 0.88 * (0.5 - 0.5 * Math.cos(2 * Math.PI * moonPhase)));
   moon.position.copy(lunar > 0.02 || !chart ? mDir : CHART_SHADE).multiplyScalar(1800);
@@ -17536,6 +17603,11 @@ function meshHeightAt(x: number, z: number): number | null {
   utc: worldNow().toISOString(),
   sunAltDeg: +((sunAlt * 180) / Math.PI).toFixed(1),
   sunAzDeg: +((((sunAz * 180) / Math.PI) % 360 + 360) % 360).toFixed(0),
+  // The moon too, off the uniform the sky actually draws from — a probe that
+  // derived it from the sun's would repeat the guess it exists to replace.
+  moonAltDeg: +((Math.asin(clamp((skyMat.uniforms.moonDir as { value: THREE.Vector3 }).value.y, -1, 1)) * 180) / Math.PI).toFixed(1),
+  moonAzDeg: +(((Math.atan2((skyMat.uniforms.moonDir as { value: THREE.Vector3 }).value.x,
+    -(skyMat.uniforms.moonDir as { value: THREE.Vector3 }).value.z) * 180) / Math.PI % 360 + 360) % 360).toFixed(0),
   dayF: +dayF.toFixed(3),
   night: sunAlt < 0,
   live: live.on,
@@ -24355,6 +24427,13 @@ function liveLandmarks(): LandmarkLive[] {
       const [x, z] = toLocal(def.lat, def.lon);
       return { def, x, z, padEle: null };
     });
+    let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+    for (const lm of landmarksLive) {
+      const r = (lm.def.pad ?? lm.def.base * 1.1) * 2.05;
+      x0 = Math.min(x0, lm.x - r); z0 = Math.min(z0, lm.z - r);
+      x1 = Math.max(x1, lm.x + r); z1 = Math.max(z1, lm.z + r);
+    }
+    lmBox = [x0, z0, x1, z1];
   }
   return landmarksLive;
 }
@@ -24373,7 +24452,7 @@ function landmarkPadEle(lm: LandmarkLive): number {
   const ring: number[] = [];
   for (let k = 0; k < 8; k++) {
     const a = (k / 8) * Math.PI * 2;
-    ring.push(sampleHeight(lm.x + Math.cos(a) * pad * 1.3, lm.z + Math.sin(a) * pad * 1.3));
+    ring.push(sampleHeightRaw(lm.x + Math.cos(a) * pad * 1.3, lm.z + Math.sin(a) * pad * 1.3));
   }
   ring.sort((p, q) => p - q);
   return (ring[3] + ring[4]) / 2;
@@ -24381,7 +24460,7 @@ function landmarkPadEle(lm: LandmarkLive): number {
 /** Flatten a tile vertex that lands on a landmark pad. Returns the elevation
  *  to use, or null to leave the DEM's answer alone. Called from the tile
  *  height pass, so it must stay a couple of comparisons in the common case. */
-function landmarkFlatten(ex: number, ez: number): number | null {
+function landmarkFlatten(ex: number, ez: number, raw: number): number {
   // ACCUMULATED ACROSS PADS, not first-match. At Giza the pads had to widen
   // until they overlap — the DEM smears each pyramid into a mound half again
   // wider than the monument, and a pad that stopped at the monument left a
@@ -24390,22 +24469,38 @@ function landmarkFlatten(ex: number, ez: number): number | null {
   // pyramid rising out of its own crater. Overlapping pads whose elevations
   // differ by metres would put a scarp along the first-match boundary; a
   // weighted average is continuous everywhere by construction.
+  // ── A SMALL EXACT CORE, A LONG SKIRT THAT ONLY EVER LOWERS ──
+  //
+  // Three wrong shapes preceded this one, each caught by measurement: pads
+  // that stopped at the monument left a twenty-metre dune RING (the DEM
+  // smears a pyramid into a mound half again its width); pads widened to eat
+  // the ring overlapped at FULL weight, and two full pads with different
+  // surveyed elevations average — Khafre's east base edge hovered five
+  // metres over the blend, because ground between two monuments ten metres
+  // apart in height must SLOPE and a wide flat pad says it cannot.
+  //
+  // So: the PAD is exactly the authored elevation, no wider than the apron.
+  // The SKIRT runs to two pads and takes min(raw, blend) — the mound is
+  // always ABOVE the true plateau, so clamping down erases it while real low
+  // ground (the plateau's own edge falling toward the Nile) passes through.
+  // The average is weighted CUBED so a monument's own pad dominates near it.
   let wSum = 0, eSum = 0, wMax = 0;
-  for (const lm of liveLandmarks()) {
+  for (const lm of landmarksLive) {
     const pad = lm.def.pad ?? lm.def.base * 1.1;
     const dx = ex - lm.x, dz = ez - lm.z;
-    if (Math.abs(dx) > pad * 1.5 || Math.abs(dz) > pad * 1.5) continue;
+    if (Math.abs(dx) > pad * 2 || Math.abs(dz) > pad * 2) continue;
     const d = Math.hypot(dx, dz);
-    if (d > pad * 1.4) continue;
+    if (d > pad * 2) continue;
     if (lm.padEle === null) lm.padEle = landmarkPadEle(lm);
-    const w = d <= pad ? 1 : 1 - (d - pad) / (pad * 0.4);   // smooth skirt to 1.4 pads
-    const ww = w * w * (3 - 2 * w);
-    wSum += ww; eSum += ww * lm.padEle;
-    if (ww > wMax) wMax = ww;
+    const w = d <= pad ? 1 : 1 - (d - pad) / pad;           // skirt to 2.0 pads
+    wSum += w * w * w; eSum += w * w * w * lm.padEle;
+    const sk = w * w * (3 - 2 * w);
+    if (sk > wMax) wMax = sk;
   }
-  if (wSum <= 0) return null;
+  if (wSum <= 0) return raw;
   const padE = eSum / wSum;
-  return wMax >= 1 ? padE : padE * wMax + sampleHeight(ex, ez) * (1 - wMax);
+  if (wMax >= 1) return padE;
+  return Math.min(raw, padE * wMax + raw * (1 - wMax));
 }
 /** Is this LOCAL point inside a landmark's pad? The building path asks. */
 function inLandmarkPad(ex: number, ez: number): boolean {
@@ -24463,6 +24558,16 @@ function buildLandmarks(): void {
  *  ground — because "the pyramid is missing" has four causes (not built, built
  *  at the wrong height, buried in the residual mound, wrong coordinates) and
  *  a screenshot cannot tell them apart. */
+/** The flatten, shown its work at one point: every term of the decision. */
+(window as unknown as { __lmdbg?: object }).__lmdbg = (x: number, z: number): object => ({
+  box: lmBox, raw: +sampleHeightRaw(x, z).toFixed(2), out: +sampleHeight(x, z).toFixed(2),
+  terms: liveLandmarks().map((lm) => {
+    const pad = lm.def.pad ?? lm.def.base * 1.1;
+    const d = Math.hypot(x - lm.x, z - lm.z);
+    return { id: lm.def.id, pad, d: +d.toFixed(1),
+      w: d <= pad ? 1 : +Math.max(0, 1 - (d - pad) / pad).toFixed(3) };
+  }),
+});
 (window as unknown as { __landmarks?: object }).__landmarks = (): object =>
   liveLandmarks().map((lm) => ({
     id: lm.def.id, built: landmarkBuilt.has(lm.def.id),
@@ -24475,7 +24580,7 @@ function buildLandmarks(): void {
     rim: (() => {
       const pad = (lm.def.pad ?? lm.def.base * 1.1) * 1.6;
       return [[pad, 0], [-pad, 0], [0, pad], [0, -pad]]
-        .map(([dx, dz]) => +sampleHeight(lm.x + dx, lm.z + dz).toFixed(1));
+        .map(([dx, dz]) => +sampleHeightRaw(lm.x + dx, lm.z + dz).toFixed(1));
     })(),
   }));
 function buildCovers(): void {
@@ -26575,6 +26680,12 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   ]);
   const spawn = await findSpawn();
   origin = { lat: spawn.lat, lon: spawn.lon, mLon: M_LAT * Math.cos((spawn.lat * Math.PI) / 180) };
+  // ARM THE LANDMARK STORE NOW, before the first tile builds. It arms lazily
+  // on a five-second tick otherwise, and every tile built in that window
+  // carried the raw DEM — measured at Giza as the truck's own tile keeping
+  // the mound while the pyramid's tile, rebuilt later, stood on the pad: two
+  // ages of ground in one world, split along a tile edge.
+  liveLandmarks();
   // The bench must span the terrain mesh's cell diagonal — the farthest any
   // triangle corner can sit from a road passing through it. Tile ground width
   // shrinks with cos(latitude), so this is a per-world number, not a constant.

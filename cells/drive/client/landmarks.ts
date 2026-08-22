@@ -53,16 +53,13 @@ export const LANDMARKS: Landmark[] = [
   // Giza: the trio, surveyed sides and heights, all three aligned to true
   // north within a twentieth of a degree — the rot field exists for the rest
   // of the world, not for these.
-  // Pads far wider than the monuments, because the pad's job is to erase the
-  // DEM's SMEAR of the monument, and a 139m pyramid smears into a mound half
-  // again its width. At 250m the flatten stopped inside the smear and every
-  // pyramid stood in a crater of its own leftover dune, rim 20m above pad.
-  // The pads overlap; landmarkFlatten blends them, so the plateau between the
-  // monuments becomes one continuous authored surface — which it also is.
+  // The pad is the EXACT apron — landmarkFlatten runs a skirt out to two pads
+  // that clamps the DEM's mound smear down without filling real low ground,
+  // so the pad itself stays as tight as the monument's footprint allows.
   { id: 'giza-khufu', name: 'GREAT PYRAMID', lat: 29.97925, lon: 31.13422,
-    kind: 'pyramid', base: 230, h: 139, pad: 400, ele: 60 },
+    kind: 'pyramid', base: 230, h: 139, pad: 200, ele: 60 },
   { id: 'giza-khafre', name: 'PYRAMID OF KHAFRE', lat: 29.97603, lon: 31.13080,
-    kind: 'pyramid', base: 215, h: 136, pad: 380, ele: 70 },
+    kind: 'pyramid', base: 215, h: 136, pad: 190, ele: 70 },
   { id: 'giza-menkaure', name: 'PYRAMID OF MENKAURE', lat: 29.97245, lon: 31.12817,
-    kind: 'pyramid', base: 103, h: 65, pad: 240, ele: 69 },
+    kind: 'pyramid', base: 103, h: 65, pad: 120, ele: 69 },
 ];
