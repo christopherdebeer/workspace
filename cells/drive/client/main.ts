@@ -23,6 +23,7 @@ import { createOverlays } from './overlays';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
+import { LANDMARKS, type Landmark } from './landmarks';
 
 // BEFORE ANYTHING READS THE QUERY STRING. Coming back from a sign-in, the URL
 // says `?code=…` where it used to say where the truck is, which way it faces
@@ -1461,18 +1462,34 @@ const timeFromUrl = TIME_MODES.indexOf(
   ((new URLSearchParams(location.search).get('t') ?? '').toUpperCase()) as typeof TIME_MODES[number]);
 if (timeFromUrl >= 0) timeMode = timeFromUrl;
 const cycleT0 = Date.now();
-function worldNow(): Date {
+/**
+ * THE CLOCK CAN BE HELD. A local solar hour scrubbed in by the HUD clock (see
+ * drawHud): while set it overrides whatever the TIME dial says, because a
+ * thumb on the clock is the most direct statement of intent this world gets
+ * about its own light. Cleared by tapping the clock again.
+ */
+let clockHeld: number | null = null;
+/** The LOCAL SOLAR HOUR the world is living in right now — the one number the
+ *  sun, the sky and the HUD clock must all agree on, so it is computed once
+ *  and read three times rather than derived three ways. */
+function solarHour(): number {
+  if (clockHeld !== null) return clockHeld;
   const mode = TIME_MODES[timeMode];
-  if (mode === 'LIVE') return new Date();
-  const now = new Date();
+  // LIVE is the real sun at the real moment: real UTC plus the longitude.
+  if (mode === 'LIVE') return ((Date.now() % 86400000) / 3600000 + origin.lon / 15 + 24) % 24;
   // CYCLE (the default): every session opens JUST BEFORE DAWN and runs the
   // whole day in about an hour of driving — 24x, from 05:12 solar. LIVE
   // (the real sun at the real moment) is one dial click away; arriving at
   // 01:00 to a pitch-dark world was the point of the exercise and also the
   // reason nobody could see it.
-  const h = mode === 'CYCLE'
+  return mode === 'CYCLE'
     ? (5.2 + ((Date.now() - cycleT0) / 3600000) * 24) % 24
     : TIME_HOUR[mode];
+}
+function worldNow(): Date {
+  if (TIME_MODES[timeMode] === 'LIVE' && clockHeld === null) return new Date();
+  const now = new Date();
+  const h = solarHour();
   // Local solar hour → UTC. Longitude is the whole of the conversion: the sun
   // is over the meridian at local solar noon by definition.
   const utcH = h - origin.lon / 15;
@@ -2848,6 +2865,10 @@ function buildTerrainMesh(t: HeightTile): void {
       const seaLocal = seaSurfaceAbs() - baseElev;
       if (elev <= seaLocal + 2) elev = Math.min(elev, seaLocal - SEA_BED);
     }
+    // A landmark's pad flattens the DEM's smoothed guess so the authored
+    // geometry can stand on the ground it was surveyed on. See landmarks.ts.
+    const lmE = landmarkFlatten(ex, ez);
+    if (lmE !== null) elev = lmE;
     pos.setY(i, elev);
   }
   carveCorridors(t, geo, SEG);
@@ -11252,6 +11273,13 @@ function stepZoomShed(): void {
   }
 }
 function building(pts: Array<[number, number]>, id: number, levels: number): void {
+  // Inside a landmark pad the authored geometry is the building. OSM's own
+  // polygon for a pyramid extrudes into a flat-roofed prism through ours.
+  {
+    let cx0 = 0, cz0 = 0;
+    for (const [x, z] of pts) { cx0 += x; cz0 += z; }
+    if (pts.length && inLandmarkPad(cx0 / pts.length, cz0 / pts.length)) return;
+  }
   // ON THE LINE, nothing out here is intact. The Covers are where the built
   // world went — everything the domes did not take has stood empty since the
   // Leaving, so the campaign's world ruins every building outside a shell
@@ -19228,6 +19256,7 @@ const setStickFrom = (e: PointerEvent): void => {
 };
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (clockDown(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (hudTap(e.clientX, e.clientY)) return; // an instrument swallowed it
   // Capture: without it, a finger lifted over interactive chrome (the reroll
   // button) never fires pointerup HERE — the brake finger leaked and stayed
@@ -19276,6 +19305,7 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 });
 canvas.addEventListener('pointermove', (e) => {
+  if (clockMove(e)) return;
   if (stick?.id === e.pointerId) { setStickFrom(e); return; }
   if (lift?.id === e.pointerId) { lift.dy = e.clientY - lift.y0; return; }
   const prev = panPtrs.get(e.pointerId);
@@ -19549,6 +19579,7 @@ const tapCanMark = (e: PointerEvent): boolean => {
   return e.clientY < innerHeight * 0.5;
 };
 const endStick = (e: PointerEvent): void => {
+  if (e.type === 'pointerup' && clockUp(e)) return;
   if (tapCanMark(e) && e.type === 'pointerup' && e !== lastUp) {
     lastUp = e;
     tapSeen++;
@@ -24025,7 +24056,7 @@ function stepStations(now: number): void {
     stationOpen = null;
   }
   // A Cover you are approaching has to exist before you can see it.
-  if (now > coverCheckAt) { coverCheckAt = now + 5000; buildCovers(); }
+  if (now > coverCheckAt) { coverCheckAt = now + 5000; buildCovers(); buildLandmarks(); }
   marks.tick(now);
 }
 let coverCheckAt = 0;
@@ -24299,6 +24330,120 @@ function underCover(lat: number, lon: number, margin = 0.97): Cover | null {
     if (Math.hypot(dLat, dLon) < c.r * margin) return c;
   }
   return null;
+}
+// ── landmarks: authored geometry for the places the data cannot draw ──
+// See landmarks.ts for why this store exists. The pieces here are the three
+// integrations the store needs from the world: a pad that flattens the DEM's
+// smoothed guess (applied in the tile height pass), a guard that stands OSM
+// buildings down inside the pad (double rendering), and the parametric build.
+interface LandmarkLive { def: Landmark; x: number; z: number; padEle: number | null }
+/**
+ * Local coordinates are a function of the ORIGIN, and the origin is not set
+ * until the spawn resolves — a list built at module load would place every
+ * landmark relative to (0,0) in the Atlantic. Built on first use instead, and
+ * rebuilt whenever the origin has moved (a teleport re-bases the world).
+ */
+let landmarksLive: LandmarkLive[] = [];
+let landmarksOrigin = '';
+function liveLandmarks(): LandmarkLive[] {
+  const key = `${origin.lat},${origin.lon}`;
+  if (key !== landmarksOrigin) {
+    landmarksOrigin = key;
+    for (const g of landmarkBuilt.values()) worldGroup.remove(g);
+    landmarkBuilt.clear();
+    landmarksLive = LANDMARKS.map((def) => {
+      const [x, z] = toLocal(def.lat, def.lon);
+      return { def, x, z, padEle: null };
+    });
+  }
+  return landmarksLive;
+}
+/**
+ * The pad's elevation: the MEDIAN of a ring of samples just outside it. Not
+ * the centre — at Giza the DEM's centre sample is the TOP of the smoothed
+ * mound, some ninety metres above the plateau the pyramid actually stands on.
+ * Sampled lazily and re-sampled on every terrain rebuild, so it sharpens as
+ * the DEM streams in, the same way every height in this world does.
+ */
+function landmarkPadEle(lm: LandmarkLive): number {
+  const pad = lm.def.pad ?? lm.def.base * 1.1;
+  const ring: number[] = [];
+  for (let k = 0; k < 8; k++) {
+    const a = (k / 8) * Math.PI * 2;
+    ring.push(sampleHeight(lm.x + Math.cos(a) * pad * 1.3, lm.z + Math.sin(a) * pad * 1.3));
+  }
+  ring.sort((p, q) => p - q);
+  return (ring[3] + ring[4]) / 2;
+}
+/** Flatten a tile vertex that lands on a landmark pad. Returns the elevation
+ *  to use, or null to leave the DEM's answer alone. Called from the tile
+ *  height pass, so it must stay a couple of comparisons in the common case. */
+function landmarkFlatten(ex: number, ez: number): number | null {
+  for (const lm of liveLandmarks()) {
+    const pad = lm.def.pad ?? lm.def.base * 1.1;
+    const dx = ex - lm.x, dz = ez - lm.z;
+    if (Math.abs(dx) > pad * 1.5 || Math.abs(dz) > pad * 1.5) continue;
+    const d = Math.hypot(dx, dz);
+    if (d > pad * 1.4) continue;
+    if (lm.padEle === null) lm.padEle = landmarkPadEle(lm);
+    if (d <= pad) return lm.padEle;
+    const w = 1 - (d - pad) / (pad * 0.4);   // smooth skirt out to 1.4 pads
+    const ww = w * w * (3 - 2 * w);
+    return lm.padEle * ww + sampleHeight(ex, ez) * (1 - ww);
+  }
+  return null;
+}
+/** Is this LOCAL point inside a landmark's pad? The building path asks. */
+function inLandmarkPad(ex: number, ez: number): boolean {
+  for (const lm of liveLandmarks()) {
+    const pad = lm.def.pad ?? lm.def.base * 1.1;
+    if (Math.abs(ex - lm.x) < pad && Math.abs(ez - lm.z) < pad
+      && Math.hypot(ex - lm.x, ez - lm.z) < pad) return true;
+  }
+  return false;
+}
+const landmarkBuilt = new Map<string, THREE.Group>();
+// Weathered core limestone. The casing is long gone; what stands is stepped
+// ochre stone, darker than the sand it rises from.
+const landmarkMat = new THREE.MeshLambertMaterial({ color: 0x9a8a68, flatShading: true });
+terrainFx(landmarkMat);
+sunMarchFx(landmarkMat);
+grainFx(landmarkMat, 'grain-landmark', 0.5, 0.05);
+let lmBuildsSeen = -1;
+function buildLandmarks(): void {
+  // A terrain rebuild means better DEM under the ring samples: forget the pad
+  // elevations so the next flatten and the standing meshes take the new
+  // ground, the same clock the sward's field follows.
+  if (terrainBuilds !== lmBuildsSeen) {
+    lmBuildsSeen = terrainBuilds;
+    for (const lm of liveLandmarks()) lm.padEle = null;
+  }
+  for (const lm of liveLandmarks()) {
+    if (landmarkBuilt.has(lm.def.id)) {
+      const g0 = landmarkBuilt.get(lm.def.id) as THREE.Group;
+      if (lm.padEle === null) lm.padEle = landmarkPadEle(lm);
+      g0.position.y = lm.padEle;
+      continue;
+    }
+    if (Math.hypot(lm.x - state.x, lm.z - state.z) > 20000) continue;
+    if (lm.padEle === null) lm.padEle = landmarkPadEle(lm);
+    const g = new THREE.Group();
+    if (lm.def.kind === 'pyramid') {
+      // A four-sided cone IS a square pyramid; the circumradius of a square of
+      // side s is s/sqrt(2). Rotated so the EDGES face the cardinals, which is
+      // how every pyramid on earth is set, and flat-shaded so the four faces
+      // read as four planes of stone at this pixel scale.
+      const r = lm.def.base / Math.SQRT2;
+      const m = new THREE.Mesh(new THREE.ConeGeometry(r, lm.def.h, 4, 1), landmarkMat);
+      m.rotation.y = Math.PI / 4 + (lm.def.rot ?? 0);
+      m.position.y = lm.def.h / 2;
+      shadowy(m, true, true);
+      g.add(m);
+    }
+    g.position.set(lm.x, lm.padEle, lm.z);
+    worldGroup.add(g);
+    landmarkBuilt.set(lm.def.id, g);
+  }
 }
 function buildCovers(): void {
   for (const c of COVERS) {
@@ -24789,6 +24934,7 @@ function hudSafeRects(): Array<[number, number, number, number]> {
   return [
     [0, 0, HW, 34 + (camMode === 'top' && tileDbg ? 22 : 0)],  // compass strip (+ tile debug header)
     [0, 34, 68, 22],                                 // the waypoint distance chip, top left
+    [0, 56, 34, 12],                                 // the clock (free drive)
     [HW - 52, 34, 52, 22],                           // MENU
     [0, my - 62, 36, 62],                            // the conditions column, stacked over the dock
     [0, my - 2, mw + 36, HH - my + 2],               // dock, its chips, the info lines under it
@@ -24808,6 +24954,23 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   /** Bottom of the compass strip in HUD pixels: `pad` + the heading digits
    *  under the needle. Nothing else may be drawn through it. */
   const COMPASS_B = pad + 28;
+  // ── the clock, under the compass and clear of the waypoint chip ──
+  // Local solar time, because that is the clock the sun runs on here. Gold
+  // while HELD (tapped, or scrubbed by a drag), soft while it runs. See the
+  // clock block above hudTap for the gesture contract. Free drive only.
+  if (!lineOn) {
+    const sh = solarHour();
+    const hhmm = `${String(Math.floor(sh)).padStart(2, '0')}:${String(Math.floor((sh % 1) * 60)).padStart(2, '0')}`;
+    const cy2 = COMPASS_B + 26;
+    textSmall(hctx, hhmm, pad + 1, cy2, clockHeld !== null ? UI.gold : UI.soft);
+    // The affordance: a pair of pips either side while held, so a scrubbed
+    // clock explains that it is an instrument and not just a reading.
+    if (clockHeld !== null) {
+      textSmall(hctx, '<', pad - 3 + 1, cy2, UI.dim);
+      textSmall(hctx, '>', pad + 1 + textSW(hhmm) + 2, cy2, UI.dim);
+    }
+    clockRect = { x: pad, y: cy2 - 2, w: textSW(hhmm) + 4, h: 9 };
+  } else clockRect.w = 0;
   // Filled and hollow diamonds, plotted a row at a time. At this resolution a
   // marker is about seven pixels across, so it is drawn, not stroked.
   function diamond(cx: number, cy: number, r: number): void {
@@ -25905,6 +26068,45 @@ function setClean(on: boolean): void {
   if (want !== undefined && (want === 'heading') !== mapHeadingUp) toggleMapUp();
   return mapHeadingUp ? 'heading' : 'north';
 };
+/**
+ * ── THE HUD CLOCK ──
+ *
+ * Asked from the seat: show the world's local time under the compass in free
+ * drive, tap to hold, drag to seek. The number shown is LOCAL SOLAR time —
+ * the clock the sun actually runs on here — not the civil timezone, which
+ * this world has never had an opinion about.
+ *
+ * DRAG SCRUBS THE SUN. A horizontal drag on the clock moves the held hour,
+ * full screen width being half a day, and the sky follows live — dawn to dusk
+ * under one thumb, which makes it the fastest lighting instrument in the
+ * game. A TAP TOGGLES: held → released back to whatever the TIME dial says;
+ * running → held where it is. Held state shows in gold.
+ *
+ * NOT ON THE LINE. A run's clock is part of the run.
+ */
+let clockRect = { x: 0, y: 0, w: 0, h: 0 };
+let clockDrag: { id: number; x0: number; h0: number; wasHeld: boolean; moved: boolean } | null = null;
+function clockDown(e: PointerEvent): boolean {
+  if (lineOn || menu.tab() !== null || clockRect.w === 0) return false;
+  const x = e.clientX / hudS, y = e.clientY / hudS;
+  if (x < clockRect.x - 4 || x > clockRect.x + clockRect.w + 8
+    || y < clockRect.y - 5 || y > clockRect.y + clockRect.h + 6) return false;
+  clockDrag = { id: e.pointerId, x0: e.clientX, h0: solarHour(), wasHeld: clockHeld !== null, moved: false };
+  return true;
+}
+function clockMove(e: PointerEvent): boolean {
+  if (clockDrag?.id !== e.pointerId) return false;
+  const dx = e.clientX - clockDrag.x0;
+  if (Math.abs(dx) > 9) clockDrag.moved = true;
+  if (clockDrag.moved) clockHeld = ((clockDrag.h0 + (dx / innerWidth) * 12) % 24 + 24) % 24;
+  return true;
+}
+function clockUp(e: PointerEvent): boolean {
+  if (clockDrag?.id !== e.pointerId) return false;
+  if (!clockDrag.moved) clockHeld = clockDrag.wasHeld ? null : clockDrag.h0;
+  clockDrag = null;
+  return true;
+}
 function hudTap(cx: number, cy: number): boolean {
   if (document.body.classList.contains('clean')) return false;
   const x = cx / hudS, y = cy / hudS;
