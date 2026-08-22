@@ -1793,6 +1793,7 @@ const mblurMat = new THREE.ShaderMaterial({
     // picture-space one: a violent yaw or a camera still catching up after a
     // teleport can ask for a streak longer than the thing it is streaking.
     uMaxPx: { value: 20 },
+    uSkyD: { value: 45000 },
   },
   vertexShader: QUAD_VS,
   fragmentShader: `
@@ -1800,6 +1801,7 @@ const mblurMat = new THREE.ShaderMaterial({
     uniform sampler2D sceneTex; uniform sampler2D depthTex;
     uniform mat4 invPV; uniform mat4 prevVP; uniform vec3 camPos;
     uniform vec2 uPix; uniform float uAmt; uniform float uMaxPx;
+    uniform float uSkyD;
     varying vec2 vUv;
     void main(){
       vec4 c0 = texture2D(sceneTex, vUv);
@@ -1817,11 +1819,12 @@ const mblurMat = new THREE.ShaderMaterial({
       // The sky dome writes no depth, so it has no surface point to reproject.
       // Give it one 60km out: far enough that a metre of travel means nothing
       // and only the camera's ROTATION reaches it, which is how a sky behaves.
-      vec3 wp = camPos + dir * 60000.0;
-      if (z < 0.99995) {
-        vec4 w4 = invPV * vec4(vUv * 2.0 - 1.0, z * 2.0 - 1.0, 1.0);
-        wp = w4.xyz / w4.w;
-      }
+      // "Is this sky" in METRES against uSkyD, same rule as the composite:
+      // the depth-constant form of this test moved with the camera's near
+      // plane, and in the cab called everything past 2.3km sky.
+      vec4 w4 = invPV * vec4(vUv * 2.0 - 1.0, z * 2.0 - 1.0, 1.0);
+      vec3 wp = w4.xyz / w4.w;
+      if (distance(wp, camPos) >= uSkyD) wp = camPos + dir * 60000.0;
       vec4 pc = prevVP * vec4(wp, 1.0);
       // Behind last frame's camera: it was not on screen to travel from.
       if (pc.w <= 0.0) { gl_FragColor = vec4(c0.rgb, 1.0); return; }
@@ -1900,6 +1903,28 @@ const compMat = new THREE.ShaderMaterial({
     // evening.
     uHazeE: { value: 1400 },
     uHazeAmt: { value: 0.3 },
+    /**
+     * ── WHERE THE SKY BEGINS, IN METRES, NOT IN DEPTH ──
+     *
+     * Three effects here used to decide "this pixel is sky" by comparing raw
+     * depth against a constant (0.99995 for the horizon band and the blur
+     * reprojection, 0.99985 for the flare's occlusion). Depth is non-linear
+     * in the NEAR plane, so the distance those constants named depended on
+     * which camera was asking: chase (near 1) put it at ~15km, past all
+     * terrain, and the CAB (near 0.12) put it at 2.3 KILOMETRES — every
+     * valley wall beyond that was classified as sky and wore the sky's own
+     * horizon band, which the seat reported (correctly) as a flat horizontal
+     * cloud lying across the mountains, cab only, immune to every haze dial.
+     *
+     * The test is now a DISTANCE against this uniform, taken from the world
+     * point the shader already reconstructs. Metres are what the question is
+     * about, and a compare at 45km needs no heroics six ULPs from 1.0 —
+     * which is where the corrected threshold would have had to sit had it
+     * stayed in depth. Set per frame from the live camera: past the far
+     * shell's sight on the road cameras, and scaled with the frustum in the
+     * chart so a camera 200km up does not call the whole planet sky.
+     */
+    uSkyD: { value: 45000 },
     uHazeBase: { value: new THREE.Vector3() },
     uHazeSun: { value: new THREE.Vector3() },
     bloomTex: { value: null },
@@ -1925,7 +1950,7 @@ const compMat = new THREE.ShaderMaterial({
     // and the haze is the only thing here that is. 1 kills the view-angle
     // term, 2 kills the haze outright, 3 kills the sun lobe. See __haze.
     uniform float uHazeDbg; uniform float uHazeWarm;
-    uniform float uHazeE; uniform float uHazeAmt;
+    uniform float uHazeE; uniform float uHazeAmt; uniform float uSkyD;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
     // Ordered (Bayer) dither, computed without array indexing so it compiles
     // on GLSL ES 1.0. Recursive 2x2 → 4x4.
@@ -1955,8 +1980,16 @@ const compMat = new THREE.ShaderMaterial({
       float z = texture2D(depthTex, vUv).r;
       vec4 far = invPV * vec4(vUv * 2.0 - 1.0, 1.0, 1.0);
       vec3 dir = normalize(far.xyz / far.w - camPos);
+      // The pixel's OWN surface point, reconstructed unconditionally: the sky
+      // test below and the ground branch both want it, and it is what turns
+      // "is this depth near 1.0" into "is this thing further than the world".
+      // A cleared depth of exactly 1.0 lands on the far plane, which is past
+      // uSkyD by construction.
+      vec4 wp4 = invPV * vec4(vUv * 2.0 - 1.0, z * 2.0 - 1.0, 1.0);
+      vec3 wp = wp4.xyz / wp4.w;
+      float t = distance(wp, camPos);
       vec3 col;
-      if (z >= 0.99995) {
+      if (t >= uSkyD) {
         // Nothing drawn here (the sky dome writes no depth): crisp sky with a
         // soft luminous band hugging the horizon.
         float band = exp(-abs(dir.y) * 26.0);
@@ -1965,9 +1998,6 @@ const compMat = new THREE.ShaderMaterial({
         // Fog by the pixel's TRUE surface point: distance sets how much it
         // blurs and dims (aerial perspective); the fog-of-war mask at that
         // point sets how much is hidden. Buildings fog as whole objects.
-        vec4 wp4 = invPV * vec4(vUv * 2.0 - 1.0, z * 2.0 - 1.0, 1.0);
-        vec3 wp = wp4.xyz / wp4.w;
-        float t = distance(wp, camPos);
         vec2 uv = (wp.xz + span * 0.5) / span;
         float m = (uv.x < 0.0 || uv.x > 1.0 || uv.y < 0.0 || uv.y > 1.0) ? 1.0 : texture2D(mask, uv).a / 0.985;
         // uFow 0 hands the whole world over as explored, leaving only aerial
@@ -2013,7 +2043,14 @@ const compMat = new THREE.ShaderMaterial({
       // into flat rings rather than a modern lens sim.
       // Occluded by terrain or a building? Then there is no flare — one depth
       // fetch at the sun's own screen position settles it.
-      float sunVis = uSunVis * step(0.99985, texture2D(depthTex, clamp(uSunUv, 0.0, 1.0)).r);
+      // Occlusion by the same metres-based rule as the sky test: a ridge is
+      // whatever stands NEARER than the sky begins. The old 0.99985 depth
+      // constant meant a cab ridge beyond ~1.5km did not count as a ridge and
+      // the flare shone straight through it.
+      vec2 sUv = clamp(uSunUv, 0.0, 1.0);
+      float zSun = texture2D(depthTex, sUv).r;
+      vec4 sw4 = invPV * vec4(sUv * 2.0 - 1.0, zSun * 2.0 - 1.0, 1.0);
+      float sunVis = uSunVis * step(uSkyD, distance(sw4.xyz / sw4.w, camPos));
       if (sunVis > 0.001) {
         vec2 axis = vec2(0.5) - uSunUv;
         float f = 0.0;
@@ -2081,6 +2118,7 @@ composite = (amt: number): void => {
     mblurMat.uniforms.invPV.value.copy(compMat.uniforms.invPV.value as THREE.Matrix4);
     mblurMat.uniforms.prevVP.value.copy(mblurPrevVP);
     mblurMat.uniforms.camPos.value.copy(camera.position);
+    mblurMat.uniforms.uSkyD.value = (compMat.uniforms.uSkyD as { value: number }).value;
     mblurMat.uniforms.uAmt.value = amt;
     runPass(mblurMat, rtM);
     srcTex = rtM.texture;
@@ -2211,7 +2249,15 @@ const SUNM_M = 48;               // metres a texel — 6.1km of country
 const SUNM_W = SUNM_N * SUNM_M;
 const SUNM_ROWS = 16;            // rows per frame while sweeping
 const SUNM_MOVE = 1200;          // rebuild once the truck is this far off centre
-const SUNM_STEPS = 20;           // ray samples — see the march
+/**
+ * Ray samples and their geometric ratio. THE PRODUCT IS THE REACH, and it is
+ * the number to check, not assume: the first cut shipped 20 steps at 1.15
+ * from 60m, wrote "kilometres" in the log, and actually reached 60·1.15^19 =
+ * 853 METRES — so the kilometre-scale wall that shades a valley could never
+ * cast, and the seat correctly reported no terrain shadows to be seen. 24 at
+ * 1.18 reaches 60·1.18^23 ≈ 2.7km, most of the field's own half-width.
+ */
+const SUNM_STEPS = 24;
 const sunmData = new Float32Array(SUNM_N * SUNM_N * 4);
 const sunmScratch = new Float32Array(SUNM_N * SUNM_N * 4);
 const sunmTex = new THREE.DataTexture(sunmData, SUNM_N, SUNM_N, THREE.RGBAFormat, THREE.FloatType);
@@ -2278,10 +2324,11 @@ function sunmFrame(): void {
   envU.uSunMOn.value = sunmReady && sunmOn && renderer.shadowMap.enabled ? 1 : 0;
 }
 /**
- * The march itself. Geometric steps — 20m out to about three and a half
- * kilometres in twenty samples — because the shadow of a ridge is a coarse
- * thing at range and a fine thing underfoot, and a uniform step would have to
- * be the fine one everywhere.
+ * The march itself. Geometric steps, because the shadow of a ridge is a
+ * coarse thing at range and a fine thing underfoot, and a uniform step would
+ * have to be the fine one everywhere. The reach is the step count times the
+ * ratio — see SUNM_STEPS for the time that product was asserted and not
+ * checked.
  *
  * THE BIAS GROWS WITH DISTANCE, and it has to. The heightfield is a 48m
  * approximation of a mesh built at 9.5m, so on any slope the two disagree by
@@ -2329,8 +2376,8 @@ const SUNM_GLSL = `
       vec2 uv = (wp.xz + d * h - uSunMOrg) / uSunMW;
       if (uv.x < 0.001 || uv.x > 0.999 || uv.y < 0.001 || uv.y > 0.999) break;
       float g = texture2D(uSunM, uv).r;
-      hi = max(hi, (g - (12.0 + h * 0.012)) - (y0 + h * rise));
-      h *= 1.15;
+      hi = max(hi, (g - (9.0 + h * 0.012)) - (y0 + h * rise));
+      h *= 1.18;
     }
     // ── A SHADOW IS NOT A HOLE, AND ITS EDGE IS NOT A LINE ──
     //
@@ -2360,7 +2407,10 @@ const SUNM_GLSL = `
     // for a renderer whose only fill is a hemisphere term: real shade keeps a
     // sky gradient across a slope, this one does not, so shaded ground has to
     // keep a share of its sun or it keeps no shape at all.
-    float vis = 1.0 - smoothstep(0.0, 55.0, hi);
+    // 34m of ramp: 26 drew the terminator as a contour at dusk, 55 spread it
+    // so wide no edge survived to read as a shadow at all. An eye finds a
+    // shadow by its edge.
+    float vis = 1.0 - smoothstep(0.0, 34.0, hi);
     float shade = mix(0.35, 1.0, vis);
     return mix(1.0, shade, SHADOW_DARKNESS);
   }`;
@@ -19340,6 +19390,29 @@ function chartToWorld(px: number, py: number): [number, number] {
   // exactly the frame the thumb was aiming at.
   const ray = new THREE.Vector3((px / innerWidth) * 2 - 1, -(py / innerHeight) * 2 + 1, 0.5)
     .unproject(camera).sub(camera.position).normalize();
+  // ── THE MESH FIRST, THE MARCH AS THE FALLBACK ──
+  //
+  // Asked from the seat: "is this casting a ray and finding the exact terrain
+  // point it intersects first?" It was not. The march below samples groundAt
+  // 96 times along the ray — 125 metres apart at full reach — and bisects the
+  // first crossing it FINDS, which is not always the first crossing there IS:
+  // a ridge thinner than a step gets stepped clean over and the mark lands on
+  // the slope behind it, one valley off the pixel under the thumb.
+  //
+  // The thing the thumb aimed at is a triangle of the rendered mesh, so the
+  // honest answer is to intersect the ray with the mesh. Raycaster culls by
+  // bounding sphere before it walks triangles, so of the ~25 loaded tiles
+  // only the few along the ray pay, and a double tap is a rare event — this
+  // is the one place in the file where a brute-force triangle walk is the
+  // right price for being exactly right. The march stays for what the mesh
+  // cannot answer: chart taps beyond the fine ring, and ground that has not
+  // built yet.
+  {
+    const rc = new THREE.Raycaster(camera.position, ray, 0.5,
+      camMode === 'top' ? 200000 : FIX_REACH);
+    const hit = rc.intersectObjects([...terrainMeshes.values()], false)[0];
+    if (hit) return [hit.point.x, hit.point.z];
+  }
   if (ray.y < -1e-3) {
     // March the ray onto the heightfield and bisect the first crossing. Not
     // an iterated plane intersection: that converges to whichever crossing
@@ -22898,6 +22971,14 @@ function tick(now: number): void {
   const onScreen = sunFwd.dot(SUN_DIR) > 0.02
     && sunScreen.z < 1 && Math.abs(sunScreen.x) < 1.5 && Math.abs(sunScreen.y) < 1.5;
   compMat.uniforms.uSunUv.value.set(sunScreen.x * 0.5 + 0.5, sunScreen.y * 0.5 + 0.5);
+  // Where the sky begins, in metres: 90% of the live far plane. A cleared
+  // depth reconstructs to exactly the far plane, and no drawn surface sits
+  // past 90% of it on any camera — road cameras carry a 62km frustum over a
+  // 24km shell, the drone 30km, and the chart scales its far with altitude,
+  // which is why this is a fraction rather than a constant. A constant in
+  // METRES here would repeat the original sin one unit over: right for the
+  // camera it was tuned on, wrong for the chart 200km up.
+  compMat.uniforms.uSkyD.value = camera.far * 0.9;
   compMat.uniforms.uSunVis.value = onScreen
     ? clamp(1 - Math.max(Math.abs(sunScreen.x), Math.abs(sunScreen.y)) * 0.55, 0, 1) * (1 - wx.cloud * 0.85)
     : 0;
