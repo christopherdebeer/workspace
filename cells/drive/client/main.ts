@@ -1247,9 +1247,11 @@ if (SHADOW_FADE) {
     shadowFadeSaw = i < 0 ? c.slice(0, 160) : c.slice(Math.max(0, i - 40), i + 220);
   }
 }
+let shadowDarkK = 1;
 function setShadowDark(i: number): void {
   if (!shadowMaskPatched) return;                 // upstream chunk changed shape
   const k = SHADOW_DARK[clamp(i, 0, SHADOW_DARK.length - 1)];
+  shadowDarkK = k;
   THREE.ShaderChunk.common = `#define SHADOW_DARKNESS ${k.toFixed(3)}\n${SHADOW_COMMON}`;
   // Every program that already exists was built with the old number in it.
   scene.traverse((o) => {
@@ -1287,16 +1289,19 @@ let shadowLitSaw = '';
       'directLight.color *= ( directLight.visible && receiveShadow )'
       + ` ? mix( 1.0, ${m[1]}, ( ${rim} ) * SHADOW_DARKNESS ) : 1.0;`);
     shadowLitPatched = true;
-    // DEFINED BEFORE ANY MATERIAL COMPILES. The dial rewrites this later, but a
-    // shader built before the first dial callback would reference an undeclared
-    // symbol and fail to link — and a link failure here is every lit surface in
-    // the game, silently, on the console.
-    THREE.ShaderChunk.common = `#define SHADOW_DARKNESS 1.000\n${SHADOW_COMMON}`;
   } else {
     const i = c.indexOf('directionalShadowMap[');
     shadowLitSaw = i < 0 ? c.slice(0, 160) : c.slice(Math.max(0, i - 80), i + 200);
   }
 }
+// DEFINED BEFORE ANY MATERIAL COMPILES, and OUTSIDE the patch that uses it.
+// The dial rewrites this later; a shader built before the first dial callback
+// would reference an undeclared symbol and fail to link, which is every lit
+// surface in the game going black on a console message. It sits out here
+// rather than inside the branch above because the terrain sun march reads the
+// same symbol, and a patch that failed to find its anchor would otherwise take
+// the march down with it.
+THREE.ShaderChunk.common = `#define SHADOW_DARKNESS 1.000\n${SHADOW_COMMON}`;
 const shadowsWanted = new URLSearchParams(location.search).get('shadows') !== '0';
 sun.castShadow = shadowsWanted;
 /** Re-cut the sun's box. The map has to be DISPOSED by hand when its size
@@ -2303,10 +2308,37 @@ const SUNM_GLSL = `
       hi = max(hi, (g - (12.0 + h * 0.012)) - (y0 + h * rise));
       h *= 1.15;
     }
-    // A soft ramp rather than a test: the field is coarse, so how far the
-    // ground stands above the ray is the only handle on how sure the answer is,
-    // and a hard cut on a 48m sample is a staircase across a hillside.
-    return 1.0 - smoothstep(0.0, 26.0, hi);
+    // ── A SHADOW IS NOT A HOLE, AND ITS EDGE IS NOT A LINE ──
+    //
+    // Ringed from the seat at dusk: a matte patch on the valley floor with no
+    // relief in it, and the river VANISHED — visible with the march off, gone
+    // with it on. Both come from the same two decisions, and both were wrong.
+    //
+    // The ramp was 26 metres of occluder height. Across a hillside two
+    // kilometres out that is a handful of pixels, so the terminator drew as a
+    // hard contour — which is what the A/B against march-off showed: two bright
+    // lines, one on the skyline and one along the valley floor. Fifty-five now,
+    // because the field is a 48m sample and an edge drawn to the metre on a
+    // guess that coarse is precision the data does not have.
+    //
+    // And full occlusion took directDiffuse to ZERO, which is not shade, it is
+    // an absence. With only the hemisphere term left, every surface in the
+    // shadow is lit identically whatever way it faces: the normal map stops
+    // mattering, the slopes stop reading, and a river turns into more of the
+    // same flat wash. So the march goes through the SAME darkness the shadow
+    // map does — one dial for both, which is also the first time SHADOWS
+    // DARKNESS has meant anything for the terrain — and at the default MID a
+    // shaded hillside keeps 30% of its sun and therefore keeps its shape.
+    // A FLOOR OF ITS OWN, not just the dial's. The dial defaults to a value
+    // that may well be 1.0, and at 1.0 "go through the darkness dial" is the
+    // same hole it replaced — measured, by re-shooting the same dusk frame and
+    // finding the river still missing. The floor is the honest compensation
+    // for a renderer whose only fill is a hemisphere term: real shade keeps a
+    // sky gradient across a slope, this one does not, so shaded ground has to
+    // keep a share of its sun or it keeps no shape at all.
+    float vis = 1.0 - smoothstep(0.0, 55.0, hi);
+    float shade = mix(0.35, 1.0, vis);
+    return mix(1.0, shade, SHADOW_DARKNESS);
   }`;
 // (Pattern per SimonDev's "customizing materials": extend the built-ins by
 // splicing GLSL into their chunk includes rather than rewriting materials.)
@@ -17442,6 +17474,10 @@ function heightsOf(): number[] {
     // Zero when the snap is on, and the distance to the grid when it is off.
     phase: +shadowPhase.toFixed(4),
     fade: shadowFadePatched, dark: shadowMaskPatched, fadeSaw: shadowFadeSaw,
+    // WHAT THE DEFINE ACTUALLY SAYS. The march reads the same symbol, so "the
+    // shade went to a hole" and "the dial is at full" are the same sentence and
+    // want telling apart.
+    darkK: shadowDarkK,
     lit: shadowLitPatched, litSaw: shadowLitSaw,
     // THE OTHER MECHANISM, and the one that actually shades a valley: the
     // heightfield the terrain shader marches toward the sun.
