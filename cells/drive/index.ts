@@ -120,7 +120,7 @@ const SHELL = `<!doctype html>
 // written — otherwise every ocean tile is a permanent miss and therefore a
 // permanent invocation — and (2) a failure must never be written, or one bad
 // minute upstream becomes our bad week.
-const TILE_RE = /^\/~\/osm\/v2\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+const TILE_RE = /^\/~\/osm\/v[23]\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 const COVER_RE = /^\/~\/cover\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // THREE upstreams, not one. Measured on a 12km corridor through Death Valley:
 // 7 of 25 cold tiles came back 503 at 9–12.5s because the single upstream was
@@ -692,12 +692,16 @@ function overpassQuery(z: number, x: number, y: number): string {
   // a LINE with no polygon at all, so anything short of a major river simply
   // did not exist.
   //
-  // Deliberately NOT here: barriers (walls, fences, hedges) and the wider
-  // man_made set. They are the most numerous objects in a city by a distance,
-  // the sim already grows its own guard rails, and we have just spent real
-  // effort making tiles arrive in time. Measured at Bormio, the additions below
-  // cost +20% bytes and +39% elements, which is a fair price; barriers were
-  // several times that on their own.
+  // Deliberately NOT here: barriers (walls, fences, hedges). They are the most
+  // numerous objects in a city by a distance, the sim already grows its own
+  // guard rails, and we have just spent real effort making tiles arrive in
+  // time. Measured at Bormio, the v2 additions cost +20% bytes and +39%
+  // elements, which is a fair price; barriers were several times that on their
+  // own. The v3 additions (R55) are the SINGULAR things instead — a town has
+  // one water tower, not four thousand fence segments: named man_made
+  // verticals, aeroways, historic sites, wind turbines, dams. Historic and
+  // dam/weir are fetched AHEAD of a renderer for them, because a fetch is a
+  // week of cache and a tile version, and a renderer is an evening.
   return `[out:json][timeout:15];(
       way["highway"](${bbox});
       way["building"](${bbox});
@@ -710,6 +714,11 @@ function overpassQuery(z: number, x: number, y: number): string {
       nwr["shop"~"^(car_repair|car|car_parts|tyres)$"](${bbox});
       node["tourism"~"^(viewpoint|camp_site|picnic_site)$"](${bbox});
       node["natural"="peak"](${bbox});
+      nwr["man_made"~"^(water_tower|silo|chimney|storage_tank|lighthouse|windmill|tower|communications_tower|obelisk|pier|breakwater)$"](${bbox});
+      way["aeroway"~"^(runway|taxiway|apron)$"](${bbox});
+      nwr["historic"~"^(castle|fort|monument|memorial|ruins|archaeological_site|city_gate|citywalls|aqueduct)$"](${bbox});
+      nwr["power"="generator"]["generator:source"="wind"](${bbox});
+      way["waterway"~"^(dam|weir)$"](${bbox});
     );out geom 2000;`;
 }
 

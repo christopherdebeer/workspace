@@ -11168,6 +11168,40 @@ let bldBatch: { walls: BldPiece[]; rubble: BldPiece[]; intact: Map<number, BldPi
 const openBldBatch = (): NonNullable<typeof bldBatch> =>
   (bldBatch ??= { walls: [], rubble: [], intact: new Map() });
 const B_MATS_FLAT: THREE.Material[] = B_MATS.flat();
+/**
+ * ── PAINTS BEYOND THE TWELVE ──
+ *
+ * The batch indexes materials as paint*2+half into this flat array, which
+ * means a new colour does not need a new code path — it needs a new PAIR.
+ * Typologies (a barn's oxide red, a warehouse's grey steel) and the mapped
+ * building:colour both register here, cached by hex so a street of matched
+ * houses shares one pair. Capped: a city of novel colours degrades to the
+ * hashed limewash palette rather than growing the material array without
+ * bound, because 24 + a few dozen groups is a batch and hundreds is not.
+ */
+const extraPaint = new Map<number, number>();
+function registerPaint(col: number): number | null {
+  const got = extraPaint.get(col);
+  if (got !== undefined) return got;
+  if (extraPaint.size >= 36) return null;
+  const side = new THREE.Color(col);
+  const wall = new THREE.MeshLambertMaterial({ color: side, map: wallTexes[col % wallTexes.length], side: DS });
+  facade(wall);
+  bldSkylit.push(wall);
+  const roof = new THREE.MeshLambertMaterial({ color: side.clone().multiplyScalar(0.78), map: roofTex, side: DS });
+  const paint = B_MATS_FLAT.length / 2;
+  B_MATS_FLAT.push(roof, wall);
+  extraPaint.set(col, paint);
+  return paint;
+}
+/** The typology palette: what a building IS, worn as its colour. Only kinds
+ *  whose real-world stock has a colour of its own get an entry — the rest
+ *  keep the hashed limewash, which is what a street mostly is. */
+const TYPO_COL: Record<string, number> = {
+  barn: 0x8a4a3a, farm_auxiliary: 0x8a5a42, stable: 0x8a5a42, cowshed: 0x8a5a42,
+  industrial: 0x9aa0a4, warehouse: 0x97a09e, hangar: 0x9aa39f,
+  greenhouse: 0xcfe0d8, church: 0xe8e2d2, chapel: 0xe8e2d2, cathedral: 0xded6c4, mosque: 0xefe8da,
+};
 /** Ruin-wall batches by tile centroid, for the near/far side swap. */
 const ruinTiles: Array<{ mesh: THREE.Mesh; x: number; z: number }> = [];
 function flushBuildings(): void {
@@ -11319,7 +11353,124 @@ function stepZoomShed(): void {
     for (const d of drapes) d.visible = drapeVisible(d, z);
   }
 }
-function building(pts: Array<[number, number]>, id: number, levels: number): void {
+/**
+ * ── WHAT A FOOTPRINT'S TAGS BUY (R55) ──
+ *
+ * OSM footprints carry a vocabulary this renderer fetched, cached and then
+ * discarded at KEEP_TAGS. Restored, a building is parametrised by:
+ *   height / building:height   the truth, when a surveyor bothered
+ *   building:levels            the estimate (already used)
+ *   roof:shape (+roof:levels)  gable/hip/pyramid/skillion — the single
+ *                              biggest visual differentiator of a town
+ *   building= typology         a barn is oxide red, a warehouse grey steel,
+ *                              a church grows a tower, ruins go to the ruin
+ *                              renderer that already exists
+ *   building:colour            honest paint, on the 2-5% that carry it
+ */
+function parseMetres(v: string | undefined): number | null {
+  if (!v) return null;
+  const n = parseFloat(v);
+  return Number.isFinite(n) && n > 0 && n < 600 ? n : null;
+}
+/**
+ * A pitched roof over a footprint, built in world coordinates with its eave
+ * at `top` (the extrusion's roof plane). Everything comes off the footprint's
+ * oriented box — the longest edge sets the ridge line — because a pitched
+ * roof IS a statement that the plan is a box; anything too far from one
+ * (courtyard blocks, L-plans, long malls) keeps its flat cap instead, which
+ * is also what those wear in life. Groups: materialIndex 0 for the roof
+ * planes (roof paint), 1 for the vertical gable/skillion walls (wall paint),
+ * matching the ExtrudeGeometry caps/sides convention flushBuildings splits on.
+ */
+function roofGeo(pts: Array<[number, number]>, shape: string, top: number,
+  ridgeH?: number): THREE.BufferGeometry | null {
+  if (pts.length < 3 || pts.length > 8) return null;
+  // The oriented box, axed along the longest edge.
+  let bi = 0, bl = -1;
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, z1] = pts[i], [x2, z2] = pts[(i + 1) % pts.length];
+    const l = (x2 - x1) ** 2 + (z2 - z1) ** 2;
+    if (l > bl) { bl = l; bi = i; }
+  }
+  const [ex1, ez1] = pts[bi], [ex2, ez2] = pts[(bi + 1) % pts.length];
+  const el = Math.hypot(ex2 - ex1, ez2 - ez1);
+  if (el < 1e-3) return null;
+  const ux = (ex2 - ex1) / el, uz = (ez2 - ez1) / el;  // along the ridge
+  const vx = -uz, vz = ux;                             // across it
+  let u0 = Infinity, u1 = -Infinity, v0 = Infinity, v1 = -Infinity;
+  for (const [x, z] of pts) {
+    const u = x * ux + z * uz, v = x * vx + z * vz;
+    if (u < u0) u0 = u; if (u > u1) u1 = u;
+    if (v < v0) v0 = v; if (v > v1) v1 = v;
+  }
+  // Rectangularity: ring area against box area. Below the bar, a box-cut
+  // roof floats over the footprint's notches and reads as a wrong building.
+  let area2 = 0;
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, z1] = pts[i], [x2, z2] = pts[(i + 1) % pts.length];
+    area2 += x1 * z2 - x2 * z1;
+  }
+  const du = u1 - u0, dv = v1 - v0;
+  if (Math.abs(area2) / 2 < du * dv * 0.72) return null;
+  if (du < 2.2 || dv < 2.2 || du * dv > 1400) return null;   // houses, not malls
+  const h = ridgeH ?? clamp(Math.min(du, dv) * 0.45, 1.6, 6);
+  // A small eave overhang: hides the OBB-vs-ring mismatch and is what real
+  // pitched roofs do anyway.
+  u0 -= 0.45; u1 += 0.45; v0 -= 0.45; v1 += 0.45;
+  const P = (u: number, v: number, y: number): [number, number, number] =>
+    [u * ux + v * vx, y, u * uz + v * vz];
+  const roof: number[] = [], wall: number[] = [];
+  const uvR: number[] = [], uvW: number[] = [];
+  const tri = (into: number[], uvInto: number[],
+    a: [number, number, number], b: [number, number, number], c: [number, number, number]): void => {
+    into.push(...a, ...b, ...c);
+    // Roof uv in world metres off the ground plan (a slope compresses a
+    // little; at these pitches nobody can tell) — walls get along-wall/height.
+    if (into === roof) for (const q of [a, b, c]) uvInto.push(q[0], q[2]);
+    else for (const q of [a, b, c]) uvInto.push(q[0] * ux + q[2] * uz + q[0] * vx + q[2] * vz, q[1]);
+  };
+  const quad = (into: number[], uvInto: number[],
+    a: [number, number, number], b: [number, number, number], c: [number, number, number], d: [number, number, number]): void => {
+    tri(into, uvInto, a, b, c); tri(into, uvInto, a, c, d);
+  };
+  const vm = (v0 + v1) / 2, um = (u0 + u1) / 2;
+  if (shape === 'gabled') {
+    quad(roof, uvR, P(u0, v0, top), P(u1, v0, top), P(u1, vm, top + h), P(u0, vm, top + h));
+    quad(roof, uvR, P(u0, vm, top + h), P(u1, vm, top + h), P(u1, v1, top), P(u0, v1, top));
+    tri(wall, uvW, P(u0, v0, top), P(u0, v1, top), P(u0, vm, top + h));
+    tri(wall, uvW, P(u1, v0, top), P(u1, v1, top), P(u1, vm, top + h));
+  } else if (shape === 'hipped') {
+    const ins = Math.min(dv / 2, du / 2 - 0.1);          // 45-degree hips
+    const r0 = u0 + ins, r1 = u1 - ins;
+    quad(roof, uvR, P(u0, v0, top), P(u1, v0, top), P(r1, vm, top + h), P(r0, vm, top + h));
+    quad(roof, uvR, P(r0, vm, top + h), P(r1, vm, top + h), P(u1, v1, top), P(u0, v1, top));
+    tri(roof, uvR, P(u0, v0, top), P(r0, vm, top + h), P(u0, v1, top));
+    tri(roof, uvR, P(u1, v0, top), P(u1, v1, top), P(r1, vm, top + h));
+  } else if (shape === 'pyramidal') {
+    const apex = P(um, vm, top + h);
+    tri(roof, uvR, P(u0, v0, top), P(u1, v0, top), apex);
+    tri(roof, uvR, P(u1, v0, top), P(u1, v1, top), apex);
+    tri(roof, uvR, P(u1, v1, top), P(u0, v1, top), apex);
+    tri(roof, uvR, P(u0, v1, top), P(u0, v0, top), apex);
+  } else if (shape === 'skillion') {
+    quad(roof, uvR, P(u0, v0, top + h), P(u1, v0, top + h), P(u1, v1, top), P(u0, v1, top));
+    tri(wall, uvW, P(u0, v0, top), P(u0, v1, top), P(u0, v0, top + h));
+    tri(wall, uvW, P(u1, v0, top), P(u1, v1, top), P(u1, v0, top + h));
+    quad(wall, uvW, P(u0, v0, top), P(u1, v0, top), P(u1, v0, top + h), P(u0, v0, top + h));
+  } else return null;
+  const pos = new Float32Array(roof.length + wall.length);
+  pos.set(roof, 0); pos.set(wall, roof.length);
+  const uv = new Float32Array(uvR.length + uvW.length);
+  uv.set(uvR, 0); uv.set(uvW, uvR.length);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  geo.addGroup(0, roof.length / 3, 0);
+  if (wall.length) geo.addGroup(roof.length / 3, wall.length / 3, 1);
+  geo.computeVertexNormals();
+  return geo;
+}
+function building(pts: Array<[number, number]>, id: number, tags: Record<string, string>): void {
   // Inside a landmark pad the authored geometry is the building. OSM's own
   // polygon for a pyramid extrudes into a flat-roofed prism through ours.
   {
@@ -11327,26 +11478,73 @@ function building(pts: Array<[number, number]>, id: number, levels: number): voi
     for (const [x, z] of pts) { cx0 += x; cz0 += z; }
     if (pts.length && inLandmarkPad(cx0 / pts.length, cz0 / pts.length)) return;
   }
+  const kind = tags.building ?? 'yes';
+  const levels = parseFloat(tags['building:levels'] ?? '') || 2;
   // ON THE LINE, nothing out here is intact. The Covers are where the built
   // world went — everything the domes did not take has stood empty since the
   // Leaving, so the campaign's world ruins every building outside a shell
   // (inside one, no tiles load at all). Towers are cut down to a gutted
   // mid-rise first: the ruin path's ragged-bay walls were designed around
   // low-rise stock, and a ninety-metre open shell reads as a bug, not a ruin.
-  const height = clamp(levels * 3.1, 3, lineOn ? 26 : 90);
+  const surveyed = parseMetres(tags.height) ?? parseMetres(tags['building:height']);
+  const height = clamp(surveyed ?? levels * 3.1, 3, lineOn ? 26 : 90);
   const r = mulberry32((id * 2654435761) >>> 0);
   r(); // first draw off a hashed seed is poorly distributed
+  // WHAT OSM SAYS FELL DOWN STAYS DOWN. Giza's home town maps 94% of its
+  // stock as building=ruins, and an intact limewash box over a mapped ruin is
+  // the data being overruled by a default.
+  const forceRuin = kind === 'ruins' || kind === 'collapsed' || kind === 'construction';
   // Intact buildings hand their extrusion to the tile batch instead of
   // standing up a mesh each — see flushBuildings for why.
-  const intactSink = (paint: number) => (geo: THREE.BufferGeometry, base: number): void => {
-    const batch = openBldBatch();
-    const arr = batch.intact.get(paint) ?? [];
-    arr.push({ geo, base, pts });
-    batch.intact.set(paint, arr);
-  };
-  if (!lineOn && (height > 24 || r() > 0.42)) {
+  const intactSink = (paint: number, roof?: string) =>
+    (geo: THREE.BufferGeometry, base: number, top: number): void => {
+      const batch = openBldBatch();
+      const arr = batch.intact.get(paint) ?? [];
+      arr.push({ geo, base, pts });
+      if (roof) {
+        const rg = roofGeo(pts, roof, top,
+          clamp(parseFloat(tags['roof:levels'] ?? '') * 2.6 || 0, 0, 9) || undefined);
+        if (rg) arr.push({ geo: rg, base, pts });
+      }
+      batch.intact.set(paint, arr);
+    };
+  // The paint: mapped colour first, then what the building IS, then the hash.
+  const mapped = (() => {
+    const c = tags['building:colour'];
+    if (!c || !/^(#[0-9a-fA-F]{3,8}|[a-z]+)$/.test(c)) return null;
+    try { return registerPaint(new THREE.Color(c.toLowerCase()).getHex()); } catch { return null; }
+  })();
+  const paint = mapped ?? (TYPO_COL[kind] !== undefined ? registerPaint(TYPO_COL[kind]) : null) ?? bPaint(id);
+  // The roof. Explicit shape wins; a small house-shaped thing defaults to a
+  // gable, which is what most of the world's housing stock wears whether or
+  // not anyone typed it in.
+  const roofShape = (() => {
+    const rs = tags['roof:shape'];
+    if (rs === 'gabled' || rs === 'hipped' || rs === 'pyramidal' || rs === 'skillion') return rs;
+    if (rs) return undefined;                     // flat, dome, … — extrusion as-is
+    return /^(house|residential|detached|semidetached_house|bungalow|farm|barn|terrace|hut|cabin)$/.test(kind)
+      ? 'gabled' : undefined;
+  })();
+  if (!lineOn && !forceRuin && (height > 24 || r() > 0.42 || TYPO_COL[kind] !== undefined || mapped !== null)) {
     buildStats.intact++;
-    polygon(pts, B_MATS[bPaint(id)], 0.9, height, 'solid', intactSink(bPaint(id)));
+    polygon(pts, B_MATS[0], 0.9, height, 'solid', intactSink(paint, roofShape));
+    // A house of worship grows its tower: a square campanile off the ring's
+    // first corner, batched like any other footprint, wearing a pyramid.
+    if ((kind === 'church' || kind === 'cathedral' || kind === 'chapel'
+      || tags.amenity === 'place_of_worship') && !tags.religion?.startsWith('musl')) {
+      const [tx, tz] = pts[0];
+      const tw = 3.2;
+      const sq: Array<[number, number]> = [[tx - tw, tz - tw], [tx + tw, tz - tw], [tx + tw, tz + tw], [tx - tw, tz + tw]];
+      polygon(sq, B_MATS[0], 0.9, clamp(height * 2 + 4, 12, 34), 'solid',
+        (geo, base, top) => {
+          const batch = openBldBatch();
+          const arr = batch.intact.get(paint) ?? [];
+          arr.push({ geo, base, pts: sq });
+          const rg = roofGeo(sq, 'pyramidal', top, 4.5);
+          if (rg) arr.push({ geo: rg, base, pts: sq });
+          batch.intact.set(paint, arr);
+        });
+    }
     return;
   }
   let minH = Infinity, cx = 0, cz = 0;
@@ -11616,7 +11814,7 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
   /** A batch sink: when set (buildings only), the extrusion is handed over
    *  baked at world height instead of standing up its own mesh — the batch
    *  owes it an aBase and a seat range at flush (see flushBuildings). */
-  sink?: (geo: THREE.BufferGeometry, base: number) => void): void {
+  sink?: (geo: THREE.BufferGeometry, base: number, top: number) => void): void {
   if (pts.length < 3) return;
   // THE SAME GATE THE RIBBON KEEPS, for the same reason. An area is drawn
   // exactly once, so draping it against a heightfield that has not streamed in
@@ -11680,7 +11878,7 @@ function polygon(pts: Array<[number, number]>, mat: THREE.Material | THREE.Mater
     // collision walls and the chart mark are below (they never cared about
     // meshes), and the geometry goes to the tile batch at world height.
     geo.translate(0, base, 0);
-    sink(geo, base);
+    sink(geo, base, base + depth);
     mapPoly(pts, 'rgba(70,66,58,0.9)');
     claimSolid(pts, base + depth);
     return;
@@ -11995,6 +12193,13 @@ interface OsmWay {
 // amenity/shop feed repair POIs; surface/smoothness/tracktype feed wayQuality.
 // The S3 tiles keep EVERY tag — this list is only the client cache's diet.
 const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse', 'leisure', 'tunnel', 'bridge', 'layer', 'name', 'amenity', 'shop', 'surface', 'smoothness', 'tracktype',
+  // The building vocabulary (R55). Measured in this game's own tiles before
+  // believing the wiki: roof:shape on 45% of Freiburg's stock, typed
+  // building= values on 40%, honest colours on 2-5%. All of it was being
+  // fetched, cached, and then thrown away on THIS line.
+  'height', 'building:height', 'roof:shape', 'roof:levels', 'roof:colour',
+  'building:colour', 'building:material', 'religion', 'denomination',
+  'man_made', 'power', 'generator:source', 'historic', 'aeroway', 'content',
   // Structure evidence the profile solver can use: covered/avalanche galleries
   // keep the road's own grade under a canopy, and the rest are weak-but-real
   // signals (cut side, fill, mapped grade, clearance) held for when the
@@ -12204,11 +12409,127 @@ let wayTape: Array<{ els: OsmWay[]; halo: OsmWay[] }> | null = null;
   const n = wayTape?.length ?? 0;
   return n;
 };
+/** Harness injection: feed synthetic elements straight into the way renderer.
+ *  What Overpass answers at a cold spot is weather; what the renderer does
+ *  with a known element is the thing under test. */
+(window as unknown as { __renderways?: object }).__renderways = (els: OsmWay[]): void => renderWays(els);
 (window as unknown as { __tapeout?: object }).__tapeout = (): object =>
   (wayTape ?? []).map((c) => ({
     els: c.els.map((e) => ({ id: e.id, tags: e.tags, geometry: e.geometry })),
     halo: c.halo.map((e) => ({ id: e.id, tags: e.tags, geometry: e.geometry })),
   }));
+/**
+ * ── MAN_MADE VERTICALS (R55) ──
+ *
+ * The tall singular things a town is recognised by — water towers, silos,
+ * chimneys, lighthouses, wind turbines — are in OSM as man_made/power nodes
+ * and footprints the query never fetched and the renderer never drew. Each is
+ * a few primitives parametrised by its footprint (radius) and surveyed height
+ * where a mapper left one. They are often ALSO tagged building=yes, which is
+ * why this claims its element BEFORE the box path; a node claims before the
+ * point gate too, since a node is most of how these are mapped.
+ */
+const MM_KIND = new Set(['water_tower', 'silo', 'chimney', 'storage_tank', 'lighthouse',
+  'windmill', 'tower', 'communications_tower', 'obelisk']);
+let mmCount = 0;
+function mmThing(pts: Array<[number, number]>, id: number, tags: Record<string, string>): boolean {
+  const mm = tags.man_made && MM_KIND.has(tags.man_made) ? tags.man_made
+    : tags.power === 'generator' && /wind/.test(tags['generator:source'] ?? '') ? 'wind_turbine'
+    : null;
+  if (!mm) return false;
+  if (mmCount >= 240) return true;      // claimed but capped: better absent than a box
+  let cx = 0, cz = 0;
+  for (const [x, z] of pts) { cx += x; cz += z; }
+  cx /= pts.length; cz /= pts.length;
+  if (!hasHeight(cx, cz)) { unbuilt++; return true; }
+  // Radius from the footprint when there is one; the defaults are the kind's.
+  let r = 0;
+  if (pts.length >= 3) {
+    for (const [x, z] of pts) r += Math.hypot(x - cx, z - cz);
+    r = clamp((r / pts.length) * 0.92, 1.2, 22);
+  }
+  const hTag = parseMetres(tags.height);
+  const rng = mulberry32((id * 2654435761) >>> 0);
+  rng();
+  const g = new THREE.Group();
+  const add = (geo: THREE.BufferGeometry, col: number, y: number, courses = 0): void => {
+    const m = new THREE.Mesh(geo, landmarkMatFor(col, courses));
+    m.position.y = y;
+    shadowy(m, true, true);
+    g.add(m);
+  };
+  let solidR = r, topH = 0;
+  if (mm === 'water_tower') {
+    const h = hTag ?? 24; const tank = Math.max(r || 4.6, 3.4);
+    add(new THREE.CylinderGeometry(tank * 0.32, tank * 0.4, h * 0.72, 8), 0x8f979b, h * 0.36);
+    add(new THREE.CylinderGeometry(tank, tank * 0.82, h * 0.3, 10), 0x9aa7ad, h * 0.87);
+    solidR = tank * 0.45; topH = h;
+  } else if (mm === 'silo') {
+    const h = hTag ?? 16; const sr = Math.max(r || 3.4, 2.2);
+    add(new THREE.CylinderGeometry(sr, sr, h, 10), 0xb8bcc0, h / 2, 2.2);
+    add(new THREE.SphereGeometry(sr, 10, 5, 0, Math.PI * 2, 0, Math.PI / 2), 0xa9adb2, h);
+    solidR = sr; topH = h;
+  } else if (mm === 'chimney') {
+    const h = hTag ?? 36; const cr = Math.max(r || 2.4, 1.6);
+    add(new THREE.CylinderGeometry(cr * 0.62, cr, h, 8), 0x8a6a5a, h / 2, 2.8);
+    solidR = cr; topH = h;
+  } else if (mm === 'storage_tank') {
+    const h = hTag ?? Math.max(6, Math.min(14, (r || 8) * 1.1)); const sr = Math.max(r || 8, 3);
+    add(new THREE.CylinderGeometry(sr, sr, h, 12), 0xcfd4d6, h / 2, 2.4);
+    solidR = sr; topH = h;
+  } else if (mm === 'lighthouse') {
+    const h = hTag ?? 22; const lr = Math.max(r || 3.4, 2.4);
+    add(new THREE.CylinderGeometry(lr * 0.68, lr, h, 8), 0xe8e4da, h / 2, 2.2);
+    add(new THREE.CylinderGeometry(lr * 0.5, lr * 0.55, 2.6, 8), 0x3a3f45, h + 1.3);
+    add(new THREE.ConeGeometry(lr * 0.6, 1.8, 8), 0xb03a2e, h + 3.5);
+    solidR = lr; topH = h + 4;
+  } else if (mm === 'windmill') {
+    const h = hTag ?? 14; const wr = Math.max(r || 4, 2.8);
+    add(new THREE.CylinderGeometry(wr * 0.62, wr, h, 8), 0xd8d2c4, h / 2, 2.4);
+    add(new THREE.ConeGeometry(wr * 0.72, wr * 0.9, 8), 0x6a5644, h + wr * 0.45);
+    solidR = wr; topH = h;
+  } else if (mm === 'tower' || mm === 'communications_tower') {
+    const h = hTag ?? (mm === 'tower' ? 26 : 58); const tr = Math.max(r || 2.6, 1.6);
+    add(new THREE.CylinderGeometry(tr * 0.5, tr, h, 8), 0x9a9d9f, h / 2, 3.0);
+    if (mm === 'communications_tower') add(new THREE.CylinderGeometry(0.5, 0.5, h * 0.24, 6), 0xc4c8cb, h * 1.1);
+    solidR = tr; topH = h;
+  } else if (mm === 'obelisk') {
+    const h = hTag ?? 14; const or_ = Math.max(r || 1.8, 1.2);
+    add(new THREE.CylinderGeometry(or_ * 0.4, or_, h, 4), 0xd8d4c8, h / 2);
+    add(new THREE.ConeGeometry(or_ * 0.42, or_ * 0.9, 4), 0xd8d4c8, h + or_ * 0.44);
+    solidR = or_; topH = h;
+  } else {   // wind_turbine
+    const h = hTag ?? 62; const bl = h * 0.44;
+    add(new THREE.CylinderGeometry(1.1, 2.2, h, 8), 0xe8eaec, h / 2);
+    add(new THREE.BoxGeometry(3.6, 2.4, 2.4), 0xdfe2e4, h);
+    const phase = rng() * Math.PI * 2;
+    for (let i = 0; i < 3; i++) {
+      const blade = new THREE.Mesh(new THREE.BoxGeometry(0.5, bl, 0.16), landmarkMatFor(0xf2f4f5, 0));
+      const a = phase + (i * Math.PI * 2) / 3;
+      blade.position.set(Math.sin(a) * bl * 0.5, h + Math.cos(a) * bl * 0.5, 1.5);
+      blade.rotation.z = -a;
+      shadowy(blade, true, true);
+      g.add(blade);
+    }
+    solidR = 2.2; topH = h;
+  }
+  g.position.set(cx, groundAt(cx, cz), cz);
+  g.rotation.y = rng() * Math.PI * 2;
+  worldGroup.add(g);
+  g.visible = !shedWorld;
+  bldBatchMeshes.push(g as unknown as THREE.Mesh);
+  // An octagon of the thing's own radius: the ring the seat watches and the
+  // ring the truck cannot drive through.
+  const ring: Array<[number, number]> = [];
+  for (let i = 0; i < 8; i++) {
+    const a = (i / 8) * Math.PI * 2;
+    ring.push([cx + Math.cos(a) * solidR, cz + Math.sin(a) * solidR]);
+  }
+  noteSeated(g, ring);
+  if (solidR >= 1.4) claimSolid(ring, g.position.y + topH);
+  mmCount++;
+  return true;
+}
 function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
   wayTape?.push({ els, halo });
   // PRE-PASS: chain this tile's drivable ways end-to-end and solve each chain's
@@ -12305,6 +12626,10 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
     // A POINT is a place, not a shape. Fuel stations, garages, viewpoints and
     // summits arrive as single-node geometries; notePoi above has already put
     // them on the map, and there is nothing to extrude, drape or scatter.
+    // ...except a man_made vertical, which is MOSTLY mapped as a node — and
+    // when it is a footprint it is usually also building=yes, so it claims
+    // its element before the point gate and before the box path both.
+    if (mmThing(pts, el.id, tags)) continue;
     if (pts.length < 2) continue;
     noteTags(tags);
     // `highway=services` IS NOT A ROAD. It tags a service AREA — the motorway
@@ -12362,8 +12687,17 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
       // Rails read as a narrow dark line across the country and a thing you
       // bump over at a crossing. Not drivable — nobody drives a railway.
       ribbon(pts, 3.4, MAT.minor, 0.035, false, 'none', false, tags.name);
+    } else if (tags.aeroway === 'runway' || tags.aeroway === 'taxiway') {
+      // A runway is the widest ribbon in the vocabulary and perfectly
+      // drivable — which is the whole point of fetching it.
+      ribbon(pts, tags.aeroway === 'runway' ? 42 : 12, MAT.road, SURFACE.road.lift,
+        true, 'none', false, tags.name, 0.97, 0.04);
+    } else if (tags.aeroway === 'apron') {
+      // The stand: a tarmac drape, drawn with the junction-mouth material
+      // because that is already \"plain tarmac, above the carriageway\".
+      polygon(pts, MAT.mouth, 0.03);
     } else if (tags.building) {
-      building(pts, el.id, parseFloat(tags['building:levels'] ?? '') || 2);
+      building(pts, el.id, tags);
     } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
       polygon(pts, MAT.water, 0.025, 0, 'water');
     } else if (AREA_TAG(tags)) {
@@ -12764,7 +13098,7 @@ async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
   const ctl = new AbortController();
   const bail = setTimeout(() => ctl.abort(), TILE_WAIT_MS);
   try {
-    const res = await fetch(`${CELL_BASE}/~/osm/v2/${OSM_Z}/${x}/${y}`, { signal: ctl.signal });
+    const res = await fetch(`${CELL_BASE}/~/osm/v3/${OSM_Z}/${x}/${y}`, { signal: ctl.signal });
     // 503 is the cell telling us Overpass just failed IT — a real answer, and a
     // reason to retry this tile later, not to abandon the proxy.
     if (res.status === 503) throw new Error('fill failed');
@@ -12836,9 +13170,17 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
         way["waterway"~"riverbank|river|stream|canal"](${bbox});
         way["landuse"~"forest|meadow|grass|recreation_ground"](${bbox});
         way["leisure"~"park|pitch|garden"](${bbox});
+        way["aeroway"~"^(runway|taxiway|apron)$"](${bbox});
+        nwr["man_made"~"^(water_tower|silo|chimney|storage_tank|lighthouse|windmill|tower|communications_tower|obelisk)$"](${bbox});
+        nwr["power"="generator"]["generator:source"="wind"](${bbox});
       );out geom 2000;`;
       const r = await overpass(q);
-      ways = ((r.elements ?? []) as Array<OsmWay & { type?: string }>).filter((e) => e.type === 'way' && e.geometry);
+      // Ways keep their geometry; a NODE (how most man_made verticals are
+      // mapped) carries lat/lon directly and is widened to a one-point
+      // geometry, the same shape the cell's trim emits.
+      ways = ((r.elements ?? []) as Array<OsmWay & { type?: string; lat?: number; lon?: number }>)
+        .filter((e) => (e.type === 'way' && e.geometry) || (e.type === 'node' && e.lat !== undefined))
+        .map((e) => e.geometry ? e : { ...e, geometry: [{ lat: e.lat as number, lon: e.lon as number }] });
     }
     osmFails = 0;
     osmDown = false;
@@ -15811,7 +16153,7 @@ function tapeKeep(): string {
 // car into the middle of every building it can find and asserts this stays 0.
 (window as unknown as { __inside?: object }).__inside = (x?: number, z?: number): boolean =>
   (plotGrid.get(gkey(x ?? state.x, z ?? state.z)) ?? []).some((pts) => pointInPoly(x ?? state.x, z ?? state.z, pts));
-(window as unknown as { __built?: object }).__built = (): object => ({ ...buildStats });
+(window as unknown as { __built?: object }).__built = (): object => ({ ...buildStats, mm: mmCount });
 (window as unknown as { __plots?: object }).__plots = (): object =>
   [...new Set([...plotGrid.values()].flat())].map((pts) => {
     let cx = 0, cz = 0;
@@ -17474,7 +17816,7 @@ function truckSpec(): Record<string, number> {
   const px = Math.round((nx * 0.5 + 0.5) * (w - 1));
   const py = Math.round((ny * 0.5 + 0.5) * (h - 1));   // RT origin is bottom-left
   const half = rtType === THREE.HalfFloatType;
-  const buf: ArrayBufferView = half ? new Uint16Array(4) : new Uint8Array(4);
+  const buf = half ? new Uint16Array(4) : new Uint8Array(4);
   renderer.readRenderTargetPixels(rtScene, px, py, 1, 1, buf);
   const h2f = (u: number): number => {
     const s = (u & 0x8000) >> 15, e = (u & 0x7c00) >> 10, f = u & 0x03ff;
@@ -17516,7 +17858,7 @@ function truckSpec(): Record<string, number> {
 (window as unknown as { __scenegrab?: object }).__scenegrab = (step = 4): object => {
   const w = rtScene.width, h = rtScene.height;
   const half = rtType === THREE.HalfFloatType;
-  const buf: ArrayBufferView = half ? new Uint16Array(w * h * 4) : new Uint8Array(w * h * 4);
+  const buf = half ? new Uint16Array(w * h * 4) : new Uint8Array(w * h * 4);
   renderer.readRenderTargetPixels(rtScene, 0, 0, w, h, buf);
   const arr = buf as unknown as { [k: number]: number };
   const h2f = (u: number): number => {
@@ -17541,7 +17883,7 @@ function truckSpec(): Record<string, number> {
 (window as unknown as { __scenehist?: object }).__scenehist = (): object => {
   const w = rtScene.width, h = rtScene.height;
   const half = rtType === THREE.HalfFloatType;
-  const buf: ArrayBufferView = half ? new Uint16Array(w * h * 4) : new Uint8Array(w * h * 4);
+  const buf = half ? new Uint16Array(w * h * 4) : new Uint8Array(w * h * 4);
   renderer.readRenderTargetPixels(rtScene, 0, 0, w, h, buf);
   const h2f = (u: number): number => {
     const s = (u & 0x8000) >> 15, e = (u & 0x7c00) >> 10, f = u & 0x03ff;
