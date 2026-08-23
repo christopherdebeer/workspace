@@ -232,8 +232,21 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   #menu .m-hubshade { position: absolute; top: -1px; left: -1px; right: -1px; height: 34%;
     background: linear-gradient(rgba(4,10,11,0.85), rgba(4,10,11,0)); display: none; pointer-events: none; }
   #menu.hub .m-hubshade { display: block; }
+  /* The hub floats over the LIVE SCENE, which can be any country at any hour
+     — a soft drop shadow loses to a bright sky and the dim teal loses to
+     everything (reported from the seat). So: ACCENT AND WHITE ONLY up here,
+     and every word wears a real 1px pixel stroke — eight hard offsets in the
+     panel ink — plus one soft drop for ground. */
   #menu.hub .m-title, #menu.hub .m-sub, #menu.hub .m-place, #menu.hub .m-dimline,
-  #menu.hub table.m-kv { text-shadow: 0 1px 3px rgba(4,10,11,0.95), 0 0 6px rgba(4,10,11,0.7); }
+  #menu.hub table.m-kv { text-shadow:
+    -1px 0 0 rgba(4,10,11,0.98), 1px 0 0 rgba(4,10,11,0.98),
+    0 -1px 0 rgba(4,10,11,0.98), 0 1px 0 rgba(4,10,11,0.98),
+    -1px -1px 0 rgba(4,10,11,0.98), 1px 1px 0 rgba(4,10,11,0.98),
+    -1px 1px 0 rgba(4,10,11,0.98), 1px -1px 0 rgba(4,10,11,0.98),
+    0 2px 6px rgba(4,10,11,0.85); }
+  #menu.hub .m-sub, #menu.hub .m-dimline, #menu.hub table.m-kv td { color: ${C.text}; }
+  #menu.hub table.m-kv td:first-child { color: ${C.gold}; }
+  #menu .m-title .at { color: ${C.text}; }
   #menu.hub .m-navrow { background: rgba(8,20,23,0.74); }
   #menu.hub .m-cta { background: rgba(8,20,23,0.74); }
   #menu.hub .m-cta:first-child { background: rgba(24,52,40,0.8); }
@@ -280,7 +293,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
 
   // ── header (rebuilt per screen: hub shows the rally plate, pages a back) ──
   const head = el('div', 'm-head');
-  const subT = el('div', 'm-sub', 'SOLARPUNK RALLY RIG');
+  const subT = el('div', 'm-sub', 'SOLAR PUNK OPEN WORLD DRIVING SIM');
   const body = el('div', 'm-body');
   const foot = el('div', 'm-foot');
   panel.append(head, subT, el('div', 'm-rule'), body, foot);
@@ -291,7 +304,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     x.addEventListener('click', () => close());
     if (tab === T_DRIVE || tab === null) {
       const t = el('div', 'm-title');
-      t.append('PARIS ', el('span', 'arrow', '→'), ' DAKAR');
+      t.append(el('span', 'at', '@c15r/'), 'drive');
       head.append(t, x);
       subT.style.display = 'block';
     } else {

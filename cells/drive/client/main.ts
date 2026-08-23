@@ -25551,22 +25551,22 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   /** Bottom of the compass strip in HUD pixels: `pad` + the heading digits
    *  under the needle. Nothing else may be drawn through it. */
   const COMPASS_B = pad + 28;
-  // ── the clock, under the compass and clear of the waypoint chip ──
-  // Local solar time, because that is the clock the sun runs on here. Gold
-  // while HELD (tapped, or scrubbed by a drag), soft while it runs. See the
-  // clock block above hudTap for the gesture contract. Free drive only.
+  // ── the clock, ON THE HEADING ROW — same baseline, same face, same gold,
+  // left-aligned where the heading sits centred (asked from the seat: "same
+  // row vertically and style as heading below compass, just aligned left").
+  // See the clock block above hudTap for the gesture contract. Free drive only.
   if (!lineOn) {
     const sh = solarHour();
     const hhmm = `${String(Math.floor(sh)).padStart(2, '0')}:${String(Math.floor((sh % 1) * 60)).padStart(2, '0')}`;
-    const cy2 = COMPASS_B + 26;
-    textSmall(hctx, hhmm, pad + 1, cy2, clockHeld !== null ? UI.gold : UI.soft);
-    // The affordance: a pair of pips either side while held, so a scrubbed
-    // clock explains that it is an instrument and not just a reading.
+    const cy2 = pad + 21;
+    textEdgeS(hhmm, pad + 1, cy2, UI.gold);
+    // The affordance: a pair of pips either side while a drag holds the sun,
+    // so a scrubbed clock explains that it is an instrument and not a reading.
     if (clockHeld !== null) {
-      textSmall(hctx, '<', pad - 3 + 1, cy2, UI.dim);
-      textSmall(hctx, '>', pad + 1 + textSW(hhmm) + 2, cy2, UI.dim);
+      textSmall(hctx, '<', pad - 3 + 1, cy2 + 1, UI.dim);
+      textSmall(hctx, '>', pad + 1 + textSW(hhmm) + 3, cy2 + 1, UI.dim);
     }
-    clockRect = { x: pad, y: cy2 - 2, w: textSW(hhmm) + 4, h: 9 };
+    clockRect = { x: pad, y: cy2 - 2, w: textSW(hhmm) + 4, h: 10 };
   } else clockRect.w = 0;
   // Filled and hollow diamonds, plotted a row at a time. At this resolution a
   // marker is about seven pixels across, so it is drawn, not stroked.
@@ -26676,8 +26676,8 @@ function setClean(on: boolean): void {
  * DRAG SCRUBS THE SUN. A horizontal drag on the clock moves the held hour,
  * full screen width being half a day, and the sky follows live — dawn to dusk
  * under one thumb, which makes it the fastest lighting instrument in the
- * game. A TAP TOGGLES: held → released back to whatever the TIME dial says;
- * running → held where it is. Held state shows in gold.
+ * game. A TAP CYCLES THE TIME DIAL — CYCLE, LIVE, DAWN … NIGHT, the exact
+ * list SETTINGS carries — flashing the new mode and releasing any held hour.
  *
  * NOT ON THE LINE. A run's clock is part of the run.
  */
@@ -26700,7 +26700,20 @@ function clockMove(e: PointerEvent): boolean {
 }
 function clockUp(e: PointerEvent): boolean {
   if (clockDrag?.id !== e.pointerId) return false;
-  if (!clockDrag.moved) clockHeld = clockDrag.wasHeld ? null : clockDrag.h0;
+  // A TAP CYCLES THE TIME DIAL — the same hardcoded settings the SETTINGS
+  // screen offers, so the clock and the dial can never say different things.
+  // A drag still scrubs the sun; releasing a scrub keeps the held hour, and
+  // the next tap steps onward from the dial's own list (clearing the hold).
+  if (!clockDrag.moved) {
+    const d = DIALS.find((x) => x.key === 'time');
+    if (d) {
+      d.at = (d.at + 1) % d.opts.length;
+      d.apply(d.at);
+      saveDials();
+      clockHeld = null;
+      hudFlash(`TIME ${d.opts[d.at]}`);
+    }
+  }
   clockDrag = null;
   return true;
 }
