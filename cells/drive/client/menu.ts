@@ -50,6 +50,13 @@ export interface MenuCtx {
   // ── live readouts ──
   place(): string;
   situation(): string;
+  /** Any interaction with the menu — the splash's idle clock resets on it,
+   *  and a running attract tape stands down. Optional: older ctx builds. */
+  splashPoke?(): void;
+  /** The player's own spot, banked when the attract reel carried them away —
+   *  null once spent (or never set). */
+  attractRet?(): string | null;
+  attractRetGo?(): void;
   driveStats(): Array<[string, string]>;
   worldRows(): Array<[string, string]>;
   systemRows(): Array<[string, string]>;
@@ -283,6 +290,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     panel.appendChild(c);
   }
   document.body.appendChild(root);
+  root.addEventListener('pointerdown', () => { try { ctx.splashPoke?.(); } catch { /* optional */ } });
 
   const el = <K extends keyof HTMLElementTagNameMap>(tag: K, cls: string, txt = ''): HTMLElementTagNameMap[K] => {
     const e = document.createElement(tag);
@@ -505,6 +513,14 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       signChev.style.color = out ? C.gold : C.edge;
     });
     nav.appendChild(signRow);
+    // The way home: the attract reel carried this session somewhere else, and
+    // the ticket back sits in the stack until it is spent. Hidden otherwise.
+    const retRow = el('div', 'm-navrow');
+    retRow.append(ico(ICON.gps), el('span', 'name', 'RETURN'),
+      el('span', 'sub', 'BACK TO WHERE YOU WERE'), el('span', 'chev', '>'));
+    retRow.addEventListener('click', () => ctx.attractRetGo?.());
+    nav.appendChild(retRow);
+    updaters.push(() => { retRow.style.display = ctx.attractRet?.() ? 'flex' : 'none'; });
     // The scene IS the splash's background — no scrim, no window (the .hub
     // class kills the strips): the rig stands in the live world behind
     // everything, and the spacer holds the sections down where the chase

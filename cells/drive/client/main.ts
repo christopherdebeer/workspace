@@ -24,6 +24,7 @@ import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
 import { LANDMARKS, type Landmark } from './landmarks';
+import { ATTRACT_TAPES, type AttractTape } from './tapes';
 
 // BEFORE ANYTHING READS THE QUERY STRING. Coming back from a sign-in, the URL
 // says `?code=…` where it used to say where the truck is, which way it faces
@@ -1520,6 +1521,21 @@ const cycleT0 = Date.now();
  * about its own light. Cleared by tapping the clock again.
  */
 let clockHeld: number | null = null;
+/**
+ * THE SPLASH LEANS INTO GOLDEN LIGHT. While the hub is open the displayed
+ * hour eases toward the nearer golden hour — the world behind the menu is the
+ * game's one unrepeatable splash art, and it deserves its best light. A
+ * presentation-only lean: it rides ON TOP of whatever the TIME dial says,
+ * eases back out when the menu closes, and stands down entirely for a
+ * scrubbed clock (the player holding the sun somewhere IS the instrument).
+ */
+let splashGold = 0;                 // 0 = the dial's truth, 1 = full golden
+const splashOrbit = { on: false, a: 0 };
+const splashCamV = new THREE.Vector3();
+let splashGoldH: number | null = null;   // which golden hour this open chose
+const GOLDEN_AM = 6.9, GOLDEN_PM = 17.2; // solar hours where the light is low and warm
+/** Shortest signed distance a→b around the 24h face. */
+const hourDelta = (a: number, b: number): number => ((b - a + 36) % 24) - 12;
 /** The LOCAL SOLAR HOUR the world is living in right now — the one number the
  *  sun, the sky and the HUD clock must all agree on, so it is computed once
  *  and read three times rather than derived three ways. */
@@ -1527,15 +1543,21 @@ function solarHour(): number {
   if (clockHeld !== null) return clockHeld;
   const mode = TIME_MODES[timeMode];
   // LIVE is the real sun at the real moment: real UTC plus the longitude.
-  if (mode === 'LIVE') return ((Date.now() % 86400000) / 3600000 + origin.lon / 15 + 24) % 24;
-  // CYCLE (the default): every session opens JUST BEFORE DAWN and runs the
-  // whole day in about an hour of driving — 24x, from 05:12 solar. LIVE
-  // (the real sun at the real moment) is one dial click away; arriving at
-  // 01:00 to a pitch-dark world was the point of the exercise and also the
-  // reason nobody could see it.
-  return mode === 'CYCLE'
-    ? (5.2 + ((Date.now() - cycleT0) / 3600000) * 24) % 24
-    : TIME_HOUR[mode];
+  const base = mode === 'LIVE' ? ((Date.now() % 86400000) / 3600000 + origin.lon / 15 + 24) % 24
+    // CYCLE (the default): every session opens JUST BEFORE DAWN and runs the
+    // whole day in about an hour of driving — 24x, from 05:12 solar. LIVE
+    // (the real sun at the real moment) is one dial click away; arriving at
+    // 01:00 to a pitch-dark world was the point of the exercise and also the
+    // reason nobody could see it.
+    : mode === 'CYCLE'
+      ? (5.2 + ((Date.now() - cycleT0) / 3600000) * 24) % 24
+      : TIME_HOUR[mode];
+  if (splashGold < 0.003) { splashGoldH = null; return base; }
+  // Chosen ONCE per approach, from whichever golden hour is nearer — and kept,
+  // so the target cannot flip mid-ease and swing the sun across the sky.
+  splashGoldH ??= Math.abs(hourDelta(base, GOLDEN_AM)) <= Math.abs(hourDelta(base, GOLDEN_PM))
+    ? GOLDEN_AM : GOLDEN_PM;
+  return (base + hourDelta(base, splashGoldH) * splashGold + 24) % 24;
 }
 function worldNow(): Date {
   if (TIME_MODES[timeMode] === 'LIVE' && clockHeld === null) return new Date();
@@ -15947,6 +15969,116 @@ function tapeDeck(): { ring: number; settled: boolean; playing: boolean; armed: 
   };
 }
 let tapeKept = 0;
+/**
+ * ── THE ATTRACT REEL ──
+ *
+ * Idle on the hub long enough and the splash starts showing you drives: each
+ * authored tape is a real recording, re-simulated live under the menu while
+ * the orbit camera circles the moving rig. A cycle TRAVELS — the world origin
+ * is fixed at boot, so a tape on another continent is reached the way DRIVES
+ * reaches it, by reload with the tape's coordinates and `?attract=<i>` riding
+ * along. The player's own spot rides in sessionStorage and the hub grows a
+ * RETURN row until it is spent.
+ *
+ * Any touch on the menu stands the tape down — the truck parks wherever the
+ * reel had it, which is a real place you are welcome to drive out of.
+ */
+const ATTRACT_IDLE_MS = 12000;
+const ATTRACT_RET_KEY = 'drive.attract.ret';
+const attract = { on: false, i: 0, idleAt: 0, doneAt: 0 };
+const b64ToBytes = (s: string): Uint8Array => {
+  const bin = atob(s);
+  const out = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+  return out;
+};
+const bytesToB64 = (b: Uint8Array): string => {
+  let s = '';
+  for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
+  return btoa(s);
+};
+/** The `?attract=` this boot arrived with, captured before anything rewrites
+ *  the query (writeUrl owns it within seconds). */
+const attractBootI = ((): number | null => {
+  try {
+    const v = new URLSearchParams(location.search).get('attract');
+    return v !== null && ATTRACT_TAPES[Number(v)] ? Number(v) : null;
+  } catch { return null; }
+})();
+/** Decode a reel entry into a playable tape, RE-SEATED IN THIS BOOT'S FRAME:
+ *  tape checkpoints are local coordinates relative to the origin of the boot
+ *  that recorded them, so every x/z is shifted by where the tape's own anchor
+ *  lands under today's origin. Small (this boot spawned at the tape's lat/lon)
+ *  but not zero, and a checkpoint correction with a stale frame would teleport
+ *  the truck sideways by exactly that error every half second. */
+function attractDecode(t: AttractTape): Tape {
+  const keys = new Float32Array(b64ToBytes(t.keys).buffer.slice(0));
+  const [ax, az] = toLocal(t.head.lat, t.head.lon);
+  const dx = ax - keys[0], dz = az - keys[1];
+  for (let i = 0; i < keys.length; i += TAPE_KEY_N) { keys[i] += dx; keys[i + 1] += dz; }
+  return { head: { ...t.head }, steps: b64ToBytes(t.steps), keys };
+}
+function attractArm(i: number): void {
+  const t = ATTRACT_TAPES[i];
+  if (!t) return;
+  const tape = attractDecode(t);
+  tapeRestore(tape.keys, 0);
+  streamWorld(state.x, state.z);
+  tapePlay.tape = tape; tapePlay.i = 0; tapePlay.drift = 0; tapePlay.worst = 0;
+  tapePlay.armed = true; tapePlay.on = false;
+  attract.on = true; attract.i = i; attract.doneAt = 0;
+}
+function attractGo(i: number): void {
+  const t = ATTRACT_TAPES[i];
+  if (!t) return;
+  location.href = `${location.pathname}?lat=${t.lat}&lon=${t.lon}&h=${t.h}&cam=chase&attract=${i}`;
+}
+function attractStop(): void {
+  if (!attract.on) return;
+  attract.on = false;
+  tapeEnd();
+  state.speed = 0; slideV = 0; yawR = 0;   // park where the reel had it
+}
+function stepAttract(now: number): void {
+  const hub = menu.tab() === T_DRIVE && !lineOn && !real.on && camMode !== 'top';
+  if (!hub) {
+    attract.idleAt = now;
+    // Leaving the hub mid-reel means the player chose THIS place — the truck
+    // parks and the world is theirs. RETURN stays on the hub until spent.
+    attractStop();
+    return;
+  }
+  if (attract.on) {
+    if (!tapePlay.on && !tapePlay.armed) {
+      // The tape ran out. Hold the last shot a beat, then the next postcard.
+      if (!attract.doneAt) attract.doneAt = now;
+      else if (now - attract.doneAt > 2600 && ATTRACT_TAPES.length) {
+        attractGo((attract.i + 1) % ATTRACT_TAPES.length);
+      }
+    }
+    return;
+  }
+  if (!ATTRACT_TAPES.length || tapePlay.on || tapePlay.armed || tapeRec.on) { attract.idleAt = now; return; }
+  if (now - attract.idleAt > ATTRACT_IDLE_MS) {
+    try { if (!sessionStorage.getItem(ATTRACT_RET_KEY)) sessionStorage.setItem(ATTRACT_RET_KEY, location.href); } catch { /* fine */ }
+    if (attractBootI !== null) attractGo((attractBootI + 1) % ATTRACT_TAPES.length);
+    else attractGo(0);
+  }
+}
+/** Export a banked tape in the reel's own shape — the authoring bridge.
+ *  Drive, KEEP, call this, paste the result into client/tapes.ts. */
+(window as unknown as { __tapeexport?: object }).__tapeexport = async (id?: string): Promise<object> => {
+  const t = await tapeLoad(id);
+  if (!t) return { ok: false, why: 'no kept tape' };
+  return {
+    ok: true,
+    entry: {
+      id: `tape-${t.head.at}`, name: 'NAME ME', lat: +t.head.lat.toFixed(5), lon: +t.head.lon.toFixed(5),
+      h: Math.round(((t.head.hdg % 360) + 360) % 360),
+      head: t.head, steps: bytesToB64(t.steps), keys: bytesToB64(new Uint8Array(t.keys.buffer.slice(0))),
+    },
+  };
+};
 /** Bank the ring. Returns a line the deck can show without interpreting it. */
 function tapeKeep(): string {
   const t = tapeStop();
@@ -16363,6 +16495,12 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
 };
 /** The carriageway walk itself, so a claim about the corridor can be checked
  *  against the ROAD and not only against the tiles it produced. */
+/** The carriageway ahead as POINTS — what an autopilot (the tape-authoring
+ *  harness) steers along. __wayahead summarises; this hands over the line. */
+(window as unknown as { __wayline?: object }).__wayline = (m?: number): object => {
+  const road = wayAhead(state.x, state.z, state.heading, m ?? 80, CORRIDOR_HOPS, false);
+  return road ? { on: true, pts: road.pts } : { on: false };
+};
 (window as unknown as { __wayahead?: object }).__wayahead = (m?: number): object => {
   const road = wayAhead(state.x, state.z, state.heading, m ?? CORRIDOR_M, CORRIDOR_HOPS, false);
   if (!road) return { on: false };
@@ -22447,6 +22585,16 @@ function tick(now: number): void {
   const dt = played ? played.dt : paused ? 0 : (FIX_DT || Math.min(0.05, raw / 1000));
   last = now;
   simT += dt; simN++;
+  // The splash's own clock: WALL time, because the sim's dt is zero exactly
+  // when the menu is up — which is the only time the splash exists.
+  const wallDt = clamp(raw / 1000, 0, 0.06);
+  {
+    const wantGold = menu.tab() === T_DRIVE && !lineOn && !real.on
+      && camMode !== 'top' && clockHeld === null;
+    splashGold += ((wantGold ? 1 : 0) - splashGold) * Math.min(1, 0.9 * wallDt / 0.6);
+    if (splashGold < 0.003) splashGold = 0;
+  }
+  stepAttract(now);
   const raw2 = played
     ? { throttle: played.throttle, steer: played.steer, brake: played.brake, brakeF: played.brakeF }
     : real.on || paused ? { throttle: 0, steer: 0, brake: false, brakeF: 0 } : input();
@@ -23344,6 +23492,25 @@ function tick(now: number): void {
   else if (camMode === 'cab') { camera.lookAt(camAim); camera.rotateZ(rollC); }
   else if (camMode === 'drone') camera.lookAt(camAim);
   else camera.lookAt(state.x + fwdX * 28, ground + 1.4, state.z + fwdZ * 28);
+  // ── THE SPLASH ORBIT ──
+  // While the hub is open the camera leaves the chase rig and walks a slow
+  // circle around the rig — the menu is chrome over a shot, so every boot is
+  // treated like one. Seeded from wherever the chase camera stood so entry is
+  // a drift, not a cut; the truck sits LOW in frame because the aim point is
+  // above its roof; the exit is the chase rig's own lerp easing back in.
+  if (menu.tab() === T_DRIVE && camMode !== 'top' && !drone.up && !real.on) {
+    if (!splashOrbit.on) {
+      splashOrbit.on = true;
+      splashOrbit.a = Math.atan2(camera.position.x - state.x, camera.position.z - state.z);
+    }
+    splashOrbit.a += wallDt * ((Math.PI * 2) / 55);
+    const or2 = 8.8;
+    const ox = state.x + Math.sin(splashOrbit.a) * or2;
+    const oz = state.z + Math.cos(splashOrbit.a) * or2;
+    splashCamV.set(ox, Math.max(groundAt(ox, oz) + 2.1, bodyY + 2.6), oz);
+    camera.position.lerp(splashCamV, 1 - Math.exp(-2.0 * wallDt));
+    camera.lookAt(state.x, bodyY + 2.05, state.z);
+  } else splashOrbit.on = false;
   // THE SHADOW BOX RIDES THE CURRENT VEHICLE. Fixed at the origin it would have
   // been a two-hundred-metre patch of correct shading somewhere behind you for
   // the rest of the drive. Aimed down the sun from high above, so the whole box
@@ -26799,9 +26966,24 @@ function surveyLoaded(): Map<string, SurveyRoad> {
 const menu = createMenu({
   colors: { edge: UI.edge, dim: UI.dim, text: UI.text, soft: UI.soft, gold: UI.gold, hot: UI.hot, good: UI.good, bad: UI.bad },
   place: () => (placeLine && placeLine !== '…' ? placeLine : 'LOCATING').toUpperCase(),
+  splashPoke: () => {
+    attract.idleAt = performance.now();
+    attractStop();
+  },
+  attractRet: () => { try { return sessionStorage.getItem(ATTRACT_RET_KEY); } catch { return null; } },
+  attractRetGo: () => {
+    try {
+      const ret = sessionStorage.getItem(ATTRACT_RET_KEY);
+      if (!ret) return;
+      sessionStorage.removeItem(ATTRACT_RET_KEY);
+      location.href = ret;
+    } catch { /* fine */ }
+  },
   situation: () => {
     const [la, lo] = localToLatLon(state.x, state.z);
-    return `${biome.name.toUpperCase()} · ${WX[wx.sky].label} · ${la.toFixed(3)} ${lo.toFixed(3)}`;
+    const sh = solarHour();
+    const hhmm = `${String(Math.floor(sh)).padStart(2, '0')}:${String(Math.floor((sh % 1) * 60)).padStart(2, '0')}`;
+    return `${biome.name.toUpperCase()} · ${WX[wx.sky].label} · ${hhmm} SOLAR · ${la.toFixed(3)} ${lo.toFixed(3)}`;
   },
   driveStats: () => {
     const claimed = [...survey.values()].filter((r) => r.claimed).length;
@@ -27261,5 +27443,8 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   // instrument is the one wrong answer.
   if (real.on) bootRealDrive();
   else menu.open(T_DRIVE);
+  // An attract arrival: the reel's tape arms now and rolls the moment the
+  // ground under its first checkpoint is finished streaming.
+  if (attractBootI !== null && !real.on && !lineOn) attractArm(attractBootI);
   requestAnimationFrame((t) => { last = t; requestAnimationFrame(tick); });
 })();
