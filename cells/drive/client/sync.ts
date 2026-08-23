@@ -41,6 +41,7 @@ const APEX = 'https://parc.land';
 const CELL_DOMAIN = 'on.parc.land';
 const K = {
   tok: 'drive.sync.token',
+  ref: 'drive.sync.refresh',
   client: 'drive.sync.client',
   pkce: 'drive.sync.pkce',
   state: 'drive.sync.state',
@@ -234,21 +235,84 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
         client_id: local.get(K.client),
       }),
     });
-    const j = (await res.json()) as { access_token?: string; error?: string; error_description?: string };
+    const j = (await res.json()) as {
+      access_token?: string; refresh_token?: string; error?: string; error_description?: string;
+    };
     if (!j.access_token) throw new Error(j.error_description ?? j.error ?? 'sign-in refused');
     token = j.access_token;
     local.set(K.tok, token);
+    // THE REFRESH TOKEN IS THE SIGN-IN. The access token lives about an hour;
+    // the refresh credential carries the grant the player actually chose (30
+    // days by default). This line used to be missing, and its absence WAS the
+    // \"I keep getting signed out\" report: the first sync after the hour got a
+    // 401 and the session was wiped, refresh token thrown away unspent.
+    if (j.refresh_token) local.set(K.ref, j.refresh_token); else local.del(K.ref);
+  }
+
+  /** Everything a signed-out state means, in one place — so no failure path
+   *  can half-forget a session (wipe the access token, strand the refresh). */
+  function dropSession(): void {
+    token = null; user = null;
+    local.del(K.tok); local.del(K.ref);
+  }
+
+  /**
+   * Re-mint the access token from the stored refresh credential.
+   * SINGLE-FLIGHT: a burst of syncs that all 401 at once must share one round
+   * trip, not race the token endpoint. Three honest outcomes:
+   *   'ok'   — refreshed, `token` is fresh, retry the call.
+   *   'dead' — the SERVER rejected the refresh token (HTTP 400/401,
+   *            invalid_grant): the session is over, sign out.
+   *   'soft' — the attempt could not be judged (offline, a 429/5xx at the
+   *            token endpoint): KEEP the session and let the caller's normal
+   *            error/backoff path retry later. A transient wobble at the auth
+   *            service must never cost a 30-day grant.
+   */
+  let refreshing: Promise<'ok' | 'dead' | 'soft'> | null = null;
+  function refreshTok(): Promise<'ok' | 'dead' | 'soft'> {
+    refreshing ??= (async (): Promise<'ok' | 'dead' | 'soft'> => {
+      const rt = local.get(K.ref);
+      if (!rt) return 'dead';                  // nothing to refresh with
+      let res: Response;
+      try {
+        res = await fetch(`${apex}/oauth/token`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ grant_type: 'refresh_token', refresh_token: rt, client_id: local.get(K.client) }),
+        });
+      } catch { return 'soft'; }
+      const j = (await res.json().catch(() => ({}))) as { access_token?: string; refresh_token?: string };
+      if (!j.access_token) return res.status === 400 || res.status === 401 ? 'dead' : 'soft';
+      token = j.access_token;
+      local.set(K.tok, token);
+      // The refresh credential is STABLE server-side (ADR-0080), but store
+      // whatever came back so a future rotation change costs nothing here.
+      if (j.refresh_token) local.set(K.ref, j.refresh_token);
+      return 'ok';
+    })().finally(() => { refreshing = null; });
+    return refreshing;
   }
 
   async function call(method: 'GET' | 'POST' | 'DELETE', body?: unknown): Promise<{
     user?: string; roads?: SyncRows; odo?: number; error?: string;
     missions?: Record<string, number>; stations?: Record<string, number>;
   }> {
-    const res = await fetch(`${base}/state`, {
+    const hit = (): Promise<Response> => fetch(`${base}/state`, {
       method,
       headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
       ...(body === undefined ? {} : { body: JSON.stringify(body) }),
     });
+    let res = await hit();
+    // A 401 is the access token AGING OUT an hour after the last mint, not the
+    // player signing out — refresh and retry once before believing otherwise.
+    // Only a refresh the SERVER rejects (or a 401 that survives a fresh token,
+    // which means the grant itself no longer covers this) ends the session;
+    // an unjudgeable attempt stays signed in and rides the normal backoff.
+    if (res.status === 401) {
+      const r = await refreshTok();
+      if (r === 'soft') throw new Error('token refresh unavailable — will retry');
+      if (r === 'ok') res = await hit();
+    }
     const j = (await res.json().catch(() => ({}))) as { user?: string; roads?: SyncRows; odo?: number; error?: string };
     if (res.status === 401) { throw Object.assign(new Error(j.error ?? 'signed out'), { stale: true }); }
     // A signed-in player who is not the cell's owner and holds no grant cannot
@@ -281,7 +345,7 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
         // The token expired or was revoked. Forget it rather than retry with
         // it — the game keeps playing, the player signs in again when they
         // feel like it.
-        token = null; user = null; local.del(K.tok);
+        dropSession();
         set('off', 'signed out — progress stays on this device');
       } else if (e.blocked) {
         set('blocked', e.message);
@@ -305,8 +369,9 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
     signedIn: (): boolean => !!token || !!returned,
     signIn,
     signOut(): void {
-      token = null; user = null; at = 0;
-      local.del(K.tok); local.del(K.at);
+      dropSession();
+      at = 0;
+      local.del(K.at);
       set('off', 'progress stays on this device');
     },
     async start(): Promise<void> {
@@ -324,7 +389,7 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
         return true;
       } catch (err) {
         const e = err as Error & { stale?: boolean };
-        if (e.stale) { token = null; user = null; local.del(K.tok); set('off', 'signed out — progress stays on this device'); }
+        if (e.stale) { dropSession(); set('off', 'signed out — progress stays on this device'); }
         return false;
       }
     },
