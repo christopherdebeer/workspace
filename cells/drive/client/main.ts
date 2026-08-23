@@ -15923,8 +15923,8 @@ function stepReal(dt: number): boolean {
 });
 (window as unknown as { __drive?: object; __surfaceAt?: (x: number, z: number) => string }).__drive = state;
 /** Start/stop a recording. Returns why it refused, if it did. */
-(window as unknown as { __rec?: object }).__rec = (on = true): object => {
-  if (on) return tapeStart();
+(window as unknown as { __rec?: object }).__rec = (on = true, force = false): object => {
+  if (on) return tapeStart(force);
   const t = tapeStop();
   return t ? { ok: true, steps: t.head.steps, secs: t.head.secs,
     bytes: t.steps.byteLength + t.keys.byteLength } : { ok: false, why: 'not recording' };
@@ -22478,9 +22478,13 @@ async function tapeLoad(id?: string): Promise<Tape | null> {
 }
 /** Throw the ring away and start it here — an explicit run, rather than
  *  whatever the last two minutes happen to hold. */
-function tapeStart(): { ok: boolean; why?: string } {
+function tapeStart(force = false): { ok: boolean; why?: string } {
   if (tapePlay.on) return { ok: false, why: 'replaying' };
-  if (!worldQuiet()) return { ok: false, why: 'world still building' };
+  // `force` is the AUTHORING rig's override (harness autopilot, attract-reel
+  // recording): the quiet gate protects re-simulation fidelity, and a reel
+  // replay leans on its half-second checkpoints anyway. Nothing in the game
+  // itself forces.
+  if (!force && !worldQuiet()) return { ok: false, why: 'world still building' };
   tapeRec.steps.length = 0; tapeRec.keys.length = 0; tapeRec.t = 0; tapeRec.settled = 0;
   tapeRec.keys.push(...tapeSnap());
   tapeRec.on = true;
