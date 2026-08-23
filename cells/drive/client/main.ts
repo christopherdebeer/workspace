@@ -12436,7 +12436,7 @@ function mmThing(pts: Array<[number, number]>, id: number, tags: Record<string, 
   const mm = tags.man_made && MM_KIND.has(tags.man_made) ? tags.man_made
     : tags.power === 'generator' && /wind/.test(tags['generator:source'] ?? '') ? 'wind_turbine'
     : null;
-  if (!mm) return false;
+  if (!mm || !pts.length) return false;
   if (mmCount >= 240) return true;      // claimed but capped: better absent than a box
   let cx = 0, cz = 0;
   for (const [x, z] of pts) { cx += x; cz += z; }
