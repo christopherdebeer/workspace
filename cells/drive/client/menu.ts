@@ -745,7 +745,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
           paste.style.display = 'grid';
           field.value = t.url;
           field.select();
-          say('THE RUN AS A PUBLIC URL — COPY TO SHARE');
+          say('THE RUN’S LINK — OPENS THE GAME AT THE RUN, WITH PLAY');
         });
         row.append(ico(ICON.gps, C.dim), name, sub, link);
         row.addEventListener('click', () => ctx.openGmap(`${t.lat}, ${t.lon}`, say));

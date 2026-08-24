@@ -16231,6 +16231,7 @@ function attractHoldShow(shot: string | null): void {
  */
 let worldEpoch = 0;
 let hopping = false;
+let tickN = 0;
 async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: string } = {}): Promise<void> {
   if (hopping) throw new Error('already hopping');
   hopping = true;
@@ -16316,6 +16317,96 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     void placeName(lat, lon).then((n) => { if (n && ep === worldEpoch) { placeLabel = n; renderPlace(); } });
   } finally { hopping = false; }
 }
+/**
+ * ── A SHARED RUN AS A FRONT DOOR (R63) ──
+ * A banked run's share link opens THE GAME at the run's own spot: ?run=
+ * <user>/<id> fetches the wire blob, spawns at its head, and stands a card
+ * over the hub — the run's length and date, a PLAY that arms the replay
+ * (rolling the moment the world under it is quiet), and an X that leaves the
+ * world to the visitor. The raw blob URL still exists; this is the one a
+ * player would actually send.
+ */
+const runBoot = ((): { user: string; id: string } | null => {
+  try {
+    const m = (new URLSearchParams(location.search).get('run') ?? '')
+      .match(/^([a-z0-9_.-]{1,40})\/(\d{10,16})$/);
+    return m ? { user: m[1], id: m[2] } : null;
+  } catch { return null; }
+})();
+async function runFetch(): Promise<{ head: TapeHead; steps: string; keys: string } | null> {
+  if (!runBoot) return null;
+  try {
+    const r = await fetch(`/~/tape/v1/${runBoot.user}/${runBoot.id}`);
+    if (!r.ok) return null;
+    let w: { head?: TapeHead; steps?: string; keys?: string } | null = null;
+    try { w = await r.clone().json(); } catch {
+      // The edge normally declares the gzip; a route that hands the raw
+      // bytes through still decodes here.
+      const ds = new Response(r.body?.pipeThrough(new DecompressionStream('gzip')));
+      w = await ds.json().catch(() => null);
+    }
+    if (w?.head && typeof w.head.lat === 'number' && typeof w.steps === 'string' && typeof w.keys === 'string') {
+      return w as { head: TapeHead; steps: string; keys: string };
+    }
+  } catch { /* the link still opens the game */ }
+  return null;
+}
+function runCard(w: { head: TapeHead; steps: string; keys: string }): void {
+  const d = new Date(w.head.at);
+  const when = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} `
+    + `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+  const card = document.createElement('div');
+  card.className = 'ui';
+  card.style.cssText = 'position:fixed;left:50%;bottom:11%;transform:translateX(-50%);z-index:16;'
+    + `font-family:'${PIXEL_FONT}',ui-monospace,monospace;font-size:12px;letter-spacing:0.08em;`
+    + 'background:rgba(6,14,17,0.94);border:1px solid #f5c453;color:#e8e2d0;'
+    + 'padding:10px 14px;display:grid;gap:8px;text-align:center;min-width:220px;'
+    + 'transition:opacity 0.6s ease;';
+  const title = document.createElement('div');
+  title.textContent = `A BANKED RUN · ${Math.round(w.head.secs)}S · ${when}`;
+  title.style.color = '#f5c453';
+  const note = document.createElement('div');
+  note.textContent = 'THE WORLD IS STREAMING IN';
+  note.style.cssText = 'opacity:0.7;font-size:10px;';
+  const btn = document.createElement('button');
+  btn.textContent = 'PLAY THE RUN';
+  btn.style.cssText = 'font:inherit;background:none;border:1px solid #6fe0c0;color:#6fe0c0;'
+    + 'padding:7px 12px;cursor:pointer;letter-spacing:0.12em;';
+  const x = document.createElement('div');
+  x.textContent = 'X';
+  x.style.cssText = 'position:absolute;top:2px;right:7px;opacity:0.6;cursor:pointer;padding:4px;';
+  const drop = (): void => { card.style.opacity = '0'; setTimeout(() => card.remove(), 700); };
+  x.addEventListener('click', drop);
+  btn.addEventListener('click', () => {
+    const tape = attractDecode(w);
+    const prior = tapeApplyHead(tape.head);
+    tapeRestore(tape.keys, 0);
+    streamWorld(state.x, state.z);
+    tapePlay.tape = tape; tapePlay.i = 0; tapePlay.drift = 0; tapePlay.worst = 0;
+    tapePlay.armed = true; tapePlay.on = false;
+    menu.close();
+    btn.style.display = 'none';
+    note.textContent = 'WAITING FOR THE GROUND…';
+    let rolled = false;
+    const iv = setInterval(() => {
+      if (tapePlay.on) { rolled = true; note.textContent = 'ROLLING'; }
+      if (rolled && !tapePlay.on && !tapePlay.armed) {
+        clearInterval(iv);
+        tapeRestoreDials(prior);
+        note.textContent = 'RUN ENDED — THE WORLD IS YOURS';
+        setTimeout(drop, 3500);
+      }
+    }, 400);
+  });
+  card.append(x, title, note, btn);
+  document.body.appendChild(card);
+  // The button means something once the ground can hold the truck; before
+  // that the card says so instead of pretending.
+  const gate = setInterval(() => {
+    if (!card.isConnected) { clearInterval(gate); return; }
+    if (worldQuiet()) { note.textContent = 'READY'; clearInterval(gate); }
+  }, 800);
+}
 /** Travel, the player's version: in place when the MODE allows it, and the
  *  URL is REPLACED — shareable always, history-polluting never. A mode flip
  *  (into or out of THE LINE, a GPS drive) still reboots, through
@@ -16324,6 +16415,10 @@ function travelTo(lat: number, lon: number, h: number, url: string,
   opts: { line?: boolean; mission?: string } = {}): void {
   attractStop();   // travel is a takeover; a rolling reel must not re-fire into it
   if (real.on || (opts.line ?? false) !== lineOn) { location.replace(url); return; }
+  // The tap must be SEEN to land (owner-caught: a hop behind the DRIVES tab's
+  // full scrim read as a hang). The hub is where arriving looks like arriving:
+  // the splash orbit, the place line, the world streaming in behind the menu.
+  menu.open(T_DRIVE);
   void worldHop(lat, lon, h, { mission: opts.mission })
     .then(() => { history.replaceState(null, '', url); })
     .catch(() => { location.replace(url); });
@@ -16334,7 +16429,7 @@ function travelTo(lat: number, lon: number, h: number, url: string,
  *  lands under today's origin. Small (this boot spawned at the tape's lat/lon)
  *  but not zero, and a checkpoint correction with a stale frame would teleport
  *  the truck sideways by exactly that error every half second. */
-function attractDecode(t: AttractTape): Tape {
+function attractDecode(t: { head: TapeHead; steps: string; keys: string }): Tape {
   const keys = new Float32Array(b64ToBytes(t.keys).buffer.slice(0));
   const [ax, az] = toLocal(t.head.lat, t.head.lon);
   const dx = ax - keys[0], dz = az - keys[1];
@@ -16451,15 +16546,22 @@ async function tapeBankLast(): Promise<string> {
   // it now, so the run just banked is on the DRIVES screen by the time the
   // player looks for it.
   void sync.sync('fetching the shelf…');
-  return `BANKED ${r.kept ?? ''}/24 · ${location.origin}${r.url ?? ''}`;
+  // The line shows the SHARE link — the game's own front door for the run —
+  // not the raw wire blob.
+  const user = sync.status().user;
+  const share = user ? `${location.origin}${location.pathname}?run=${user}/${w.head.at}`
+    : `${location.origin}${r.url ?? ''}`;
+  return `BANKED ${r.kept ?? ''}/24 · ${share}`;
 }
-/** The banked-run shelf for the menu: server truth from the last sync, with
- *  each run's public URL rebuilt the way the bank route builds it. */
+/** The banked-run shelf for the menu: server truth from the last sync. The
+ *  share URL is the GAME's own front door for the run (?run=), which boots at
+ *  the run's spot and offers PLAY — not the raw wire blob (owner-caught: a
+ *  link that opens JSON is not a link you send anyone). */
 function tapeShelfRows(): Array<{ id: string; at: number; secs: number; lat: number; lon: number; url: string }> {
   const user = sync.status().user;
   if (!user) return [];
   return sync.tapes().map((t) => ({ id: t.id, at: t.at, secs: t.secs, lat: t.lat, lon: t.lon,
-    url: `${location.origin}/~/tape/v1/${user}/${t.id}` }));
+    url: `${location.origin}${location.pathname}?run=${user}/${t.id}` }));
 }
 (window as unknown as { __tapebank?: object }).__tapebank = tapeBankLast;
 /** Export a banked tape in the reel's own shape — the authoring bridge.
@@ -18860,6 +18962,10 @@ function heightsOf(): number[] {
  *  a menu tap. Resolves when the anchor is set and streaming has begun. */
 (window as unknown as { __hop?: object }).__hop = (lat: number, lon: number, h = 0): Promise<string> =>
   worldHop(lat, lon, h).then(() => 'ok', (e: Error) => `refused: ${e.message}`);
+/** LIVENESS, not last-frame leftovers: renderer.info repeats the final frame's
+ *  numbers forever after the loop dies, which is exactly how a dead loop
+ *  passed a 'draw calls live' check. This counts ticks — read it twice. */
+(window as unknown as { __ticks?: object }).__ticks = (): number => tickN;
 (window as unknown as { __origin?: object }).__origin = (): object =>
   ({ lat: +origin.lat.toFixed(5), lon: +origin.lon.toFixed(5) });
 /** What is actually STORED, as opposed to what is loaded — the two differ by
@@ -22152,11 +22258,17 @@ let urlAt = 0, urlX = Infinity, urlZ = 0, urlH = 0;
 let urlCam: CamMode = 'chase', urlZoom = 1;
 /** The query keys the DRIVE owns and rewrites. Everything else in the bar
  *  belongs to whoever put it there. */
-const URL_OWNED = new Set(['lat', 'lon', 'h', 'cam', 'z', 'm', 'line']);
+// `run` is owned-and-never-written: a shared run's link spawns AT the run,
+// so leaving ?run= in a rewritten URL would make every later reload fight
+// the player's own position with the run's head.
+const URL_OWNED = new Set(['lat', 'lon', 'h', 'cam', 'z', 'm', 'line', 'run']);
 const writeUrl = (la: number, lo: number): void => {
   // The URL is the PLAYER'S resumable state; a reel driving the truck through
-  // a postcard must not write the postcard over it.
-  if (attract.on) return;
+  // a postcard must not write the postcard over it. `hopping` and the flagged
+  // hop close the FIRST-CYCLE window: attract.on only goes up at attractArm,
+  // AFTER the hop, and with the tick alive through a hop the frame-loop write
+  // fired the moment the origin moved (caught by the e2e's href sweep).
+  if (attract.on || hopping || attractGoI !== null) return;
   const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
   try {
     // The mission id rides along, so the URL the game keeps rewriting stays a
@@ -24198,9 +24310,13 @@ function tick(now: number): void {
   // truck or the pan does — which is every frame, not just on resize.
   if (camMode === 'top' && !stick) updateStickHome();
   // An attract hop leaves from HERE, after the frame is on the glass — the
-  // capture reads the picture this very task presented. No next frame: the
-  // page is about to reload.
-  if (attractGoI !== null) { attractGoNow(); return; }
+  // capture reads the picture this very task presented. THE LOOP KEEPS
+  // RUNNING: the hop is in-process now, and this `return`ing without
+  // scheduling the next frame (correct when a reload followed synchronously)
+  // froze the entire game on the first idle cycle — dead renderer, dead
+  // streamer, and every later tap reading as a hang (owner-caught, live).
+  if (attractGoI !== null) attractGoNow();
+  tickN++;
   requestAnimationFrame(tick);
 }
 // The menu's vehicle bay. The truck is BORROWED out of the world into the
@@ -27831,6 +27947,10 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   // A reel boot spawns at the TAPE'S spot while the address bar keeps the
   // player's — the whole point of the sessionStorage intent above.
   if (attractBoot) { spawn.lat = attractBoot.lat; spawn.lon = attractBoot.lon; }
+  // A shared run's link boots AT the run: the wire is fetched before the
+  // origin is chosen so the spawn IS its head.
+  const runWire = await runFetch();
+  if (runWire) { spawn.lat = runWire.head.lat; spawn.lon = runWire.head.lon; }
   origin = { lat: spawn.lat, lon: spawn.lon, mLon: M_LAT * Math.cos((spawn.lat * Math.PI) / 180) };
   // ARM THE LANDMARK STORE NOW, before the first tile builds. It arms lazily
   // on a five-second tick otherwise, and every tile built in that window
@@ -27950,5 +28070,7 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   // A held shot with no reel to dissolve into (a line or GPS boot took
   // precedence) would pin a stale picture over a live game.
   if (!attract.on) attractHoldDrop();
+  // A shared run's card, over the hub, once the world exists to stream it.
+  if (runWire && !real.on && !lineOn && !attract.on) runCard(runWire);
   requestAnimationFrame((t) => { last = t; requestAnimationFrame(tick); });
 })();
