@@ -2970,10 +2970,15 @@ function buildTerrainMesh(t: HeightTile): void {
   const old = terrainMeshes.get(key);
   if (old) { worldGroup.remove(old); old.geometry.dispose(); }
   const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? terrainMatFor(t, key) : terrainMat);
-  // Terrain both takes shadows and throws them: a ridge with the sun behind it
-  // shading the valley is most of what a low sun is FOR, and it is the one
-  // caster you cannot fake with a blob under an object.
-  shadowy(mesh, true, true);
+  // Terrain RECEIVES shadows and no longer throws them into the map. The old
+  // rationale — "a ridge shading the valley is most of what a low sun is FOR"
+  // — is served better by the sun march now (R54): field-to-field to 2.7km,
+  // where the shadow box's texels went blocky past a few hundred metres. What
+  // the map is FOR is objects: buildings, vegetation and the truck landing
+  // their shadows on this ground, and they all still cast. The saving is the
+  // whole terrain re-transformed into the shadow pass every frame — 819k
+  // triangles at COARSE, 3.3M at FINEST, 78-94% of the pass.
+  shadowy(mesh, false, true);
   mesh.position.set(cxm, 0, czm);
   terrainMeshes.set(key, mesh);
   worldGroup.add(mesh);
