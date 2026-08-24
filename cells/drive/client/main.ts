@@ -8573,12 +8573,12 @@ const hintAt = (x: number, z: number, reach = 6): number | null => solver.hintAt
  * shape flushBuildings proved. Off outside a batch: a ribbon built outside
  * renderWays still stands its own mesh.
  */
-let ribBatch: Map<string, { mat: THREE.Material; geos: THREE.BufferGeometry[] }> | null = null;
+let ribBatch: Map<string, { mat: THREE.Material; geos: THREE.BufferGeometry[]; lift: number | null }> | null = null;
 function flushRibbons(): void {
   const b = ribBatch;
   ribBatch = null;
   if (!b) return;
-  for (const { mat, geos } of b.values()) {
+  for (const { mat, geos, lift } of b.values()) {
     if (!geos.length) continue;
     const names = Object.keys(geos[0].attributes);
     const out = new THREE.BufferGeometry();
@@ -8599,6 +8599,20 @@ function flushRibbons(): void {
     const mesh = new THREE.Mesh(out, mat);
     mesh.userData.ribbon = true;
     worldGroup.add(mesh);
+    // A DRAPED batch registers ONCE for re-seating, in place of the entries
+    // its pieces would each have made: redrape and __drape both walk vertices
+    // with their own bounds checks, so a merged geometry re-seats exactly as
+    // its pieces did — one entry, one union box, the same writes.
+    if (lift !== null) {
+      const pos = out.attributes.position as THREE.BufferAttribute;
+      let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
+      for (let i = 0; i < pos.count; i++) {
+        const x = pos.getX(i), z = pos.getZ(i);
+        if (x < x0) x0 = x; if (x > x1) x1 = x;
+        if (z < z0) z0 = z; if (z > z1) z1 = z;
+      }
+      drapedWays.push({ geo: out, lift, x0, z0, x1, z1 });
+    }
   }
 }
 function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string): void {
@@ -10188,11 +10202,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     geo.setAttribute('aDirt', new THREE.BufferAttribute(new Float32Array(dirts), 3));
   }
   geo.computeVertexNormals();
-  if (flat && ribBatch) {
-    // A profiled deck inside a tile batch: merged at flushRibbons, one draw
-    // call per material per tile instead of one per way fragment.
-    const key = `${mat.uuid}|${Object.keys(geo.attributes).sort().join(',')}`;
-    const e = ribBatch.get(key) ?? { mat, geos: [] };
+  if (ribBatch) {
+    // Any deck inside a tile batch: merged at flushRibbons, one draw call per
+    // material per tile instead of one per way fragment. Draped decks group
+    // by their lift too, and the flush registers the MERGED geometry with
+    // drapedWays in place of the per-piece entry below.
+    const key = `${mat.uuid}|${Object.keys(geo.attributes).sort().join(',')}|${flat ? 'p' : `d${lift}`}`;
+    const e = ribBatch.get(key) ?? { mat, geos: [], lift: flat ? null : lift };
     e.geos.push(geo);
     ribBatch.set(key, e);
   } else {
@@ -10208,7 +10224,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // is rebuilt. A PROFILED one is not: its deck is a solved alignment that the
   // ground is carved to meet, and re-draping it would throw that away and put
   // the road back on the hillside the profile exists to cut through.
-  if (!flat) {
+  if (!flat && !ribBatch) {
     let x0 = Infinity, z0 = Infinity, x1 = -Infinity, z1 = -Infinity;
     for (let i = 0; i < verts.length; i += 3) {
       if (verts[i] < x0) x0 = verts[i];
