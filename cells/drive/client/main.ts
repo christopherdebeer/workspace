@@ -16132,6 +16132,7 @@ const bytesToB64 = (b: Uint8Array): string => {
  * what a URL is for.
  */
 const ATTRACT_GO_KEY = 'drive.attract.go';
+const ATTRACT_SHOT_KEY = 'drive.attract.shot';
 const attractBoot = ((): { i: number; lat: number; lon: number; h: number } | null => {
   try {
     const raw = sessionStorage.getItem(ATTRACT_GO_KEY);
@@ -16141,6 +16142,43 @@ const attractBoot = ((): { i: number; lat: number; lon: number; h: number } | nu
     return ATTRACT_TAPES[v.i] ? v : null;
   } catch { return null; }
 })();
+// THE HELD FRAME. The cycle still travels by reload — the world origin is
+// fixed at boot, and nothing in this module can yet tear a continent down in
+// place — but the reload does not have to LOOK like one. The departing page
+// banks its last composited frame (a 148x320 JPEG, ~15KB) beside the go
+// intent; the arriving page pins it over the world until the tape actually
+// rolls, so a cycle reads as the shot holding and then dissolving into the
+// next postcard instead of a cut to black with a boot card in it.
+const attractShot = ((): string | null => {
+  try {
+    const s = sessionStorage.getItem(ATTRACT_SHOT_KEY);
+    sessionStorage.removeItem(ATTRACT_SHOT_KEY);
+    return attractBoot && s && s.startsWith('data:image/') ? s : null;
+  } catch { return null; }
+})();
+// z 12: over the HUD (11), under the hub chrome (15) and the boot card's text
+// (20 — its opaque ground goes clear so the held shot shows through it).
+let attractHold: HTMLElement | null = null;
+if (attractShot) {
+  attractHold = document.createElement('div');
+  attractHold.id = 'attshot';
+  attractHold.style.cssText = 'position:fixed;inset:0;z-index:12;pointer-events:none;'
+    + 'background:#05070c;background-size:100% 100%;image-rendering:pixelated;'
+    + 'transition:opacity 0.8s ease;';
+  attractHold.style.backgroundImage = `url(${attractShot})`;
+  document.body.appendChild(attractHold);
+  const bootEl = document.getElementById('boot');
+  if (bootEl) bootEl.style.background = 'transparent';
+}
+function attractHoldDrop(): void {
+  const h = attractHold;
+  if (!h) return;
+  attractHold = null;
+  const bootEl = document.getElementById('boot');
+  if (bootEl) bootEl.style.background = '';
+  h.style.opacity = '0';
+  setTimeout(() => h.remove(), 900);
+}
 /** Decode a reel entry into a playable tape, RE-SEATED IN THIS BOOT'S FRAME:
  *  tape checkpoints are local coordinates relative to the origin of the boot
  *  that recorded them, so every x/z is shifted by where the tape's own anchor
@@ -16172,14 +16210,28 @@ function attractArm(i: number): void {
   car.visible = false;
   attract.showAt = performance.now() + 25000;
 }
+/** Deferred to the END of the frame: the canvas only holds a readable picture
+ *  in the task that presented it, so the hop is flagged here and performed by
+ *  the tick's tail, where the frame just rendered can be banked as the held
+ *  shot. (Without preserveDrawingBuffer the buffer is undefined by the next
+ *  task — reading it here would capture noise, or black.) */
+let attractGoI: number | null = null;
 function attractGo(i: number): void {
+  if (ATTRACT_TAPES[i]) attractGoI = i;
+}
+function attractGoNow(): void {
+  const i = attractGoI as number;
+  attractGoI = null;
   const t = ATTRACT_TAPES[i];
   if (!t) return;
   try { sessionStorage.setItem(ATTRACT_GO_KEY, JSON.stringify({ i, lat: t.lat, lon: t.lon, h: t.h })); } catch { return; }
+  try { sessionStorage.setItem(ATTRACT_SHOT_KEY, canvas.toDataURL('image/jpeg', 0.72)); } catch { /* the hop just cuts */ }
   location.reload();
 }
 function attractStop(): void {
   car.visible = true;
+  attractHoldDrop();
+  attractGoI = null;
   if (!attract.on) return;
   attract.on = false;
   tapeRestoreDials(attract.dials);
@@ -16197,7 +16249,7 @@ function stepAttract(now: number): void {
     return;
   }
   if (attract.on) {
-    if (!car.visible && (tapePlay.on || now > attract.showAt)) car.visible = true;
+    if (tapePlay.on || now > attract.showAt) { car.visible = true; attractHoldDrop(); }
     if (!tapePlay.on && !tapePlay.armed) {
       // The tape ran out. Hold the last shot a beat, then the next postcard.
       if (!attract.doneAt) attract.doneAt = now;
@@ -16227,7 +16279,19 @@ async function tapeBankLast(): Promise<string> {
   if (!w) return 'NOTHING KEPT TO BANK';
   const r = await sync.bank(w);
   if (!r.ok) return r.why ?? 'BANK FAILED';
+  // The shelf the menu lists comes back on the next sync round trip — ask for
+  // it now, so the run just banked is on the DRIVES screen by the time the
+  // player looks for it.
+  void sync.sync('fetching the shelf…');
   return `BANKED ${r.kept ?? ''}/24 · ${location.origin}${r.url ?? ''}`;
+}
+/** The banked-run shelf for the menu: server truth from the last sync, with
+ *  each run's public URL rebuilt the way the bank route builds it. */
+function tapeShelfRows(): Array<{ id: string; at: number; secs: number; lat: number; lon: number; url: string }> {
+  const user = sync.status().user;
+  if (!user) return [];
+  return sync.tapes().map((t) => ({ id: t.id, at: t.at, secs: t.secs, lat: t.lat, lon: t.lon,
+    url: `${location.origin}/~/tape/v1/${user}/${t.id}` }));
 }
 (window as unknown as { __tapebank?: object }).__tapebank = tapeBankLast;
 /** Export a banked tape in the reel's own shape — the authoring bridge.
@@ -23961,6 +24025,10 @@ function tick(now: number): void {
   // The stick rides the truck in the chart view, so its home moves whenever the
   // truck or the pan does — which is every frame, not just on resize.
   if (camMode === 'top' && !stick) updateStickHome();
+  // An attract hop leaves from HERE, after the frame is on the glass — the
+  // capture reads the picture this very task presented. No next frame: the
+  // page is about to reload.
+  if (attractGoI !== null) { attractGoNow(); return; }
   requestAnimationFrame(tick);
 }
 // The menu's vehicle bay. The truck is BORROWED out of the world into the
@@ -27199,6 +27267,7 @@ const menu = createMenu({
   colors: { edge: UI.edge, dim: UI.dim, text: UI.text, soft: UI.soft, gold: UI.gold, hot: UI.hot, good: UI.good, bad: UI.bad },
   place: () => (placeLine && placeLine !== '…' ? placeLine : 'LOCATING').toUpperCase(),
   tapeBank: tapeBankLast,
+  tapeShelf: tapeShelfRows,
   splashPoke: () => {
     attract.idleAt = performance.now();
     attractStop();
@@ -27685,5 +27754,8 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   // An attract arrival: the reel's tape arms now and rolls the moment the
   // ground under its first checkpoint is finished streaming.
   if (attractBoot && !real.on && !lineOn) attractArm(attractBoot.i);
+  // A held shot with no reel to dissolve into (a line or GPS boot took
+  // precedence) would pin a stale picture over a live game.
+  if (!attract.on) attractHoldDrop();
   requestAnimationFrame((t) => { last = t; requestAnimationFrame(tick); });
 })();

@@ -151,6 +151,12 @@ export interface Sync {
   reset(): Promise<boolean>;
   /** Bank a kept tape durably (and shareably — the URL is public). */
   bank(tape: unknown): Promise<{ ok: boolean; url?: string; kept?: number; why?: string }>;
+  /** The shelf of banked runs, as of the last sync. Empty until one lands. */
+  tapes(): TapeShelfRow[];
+}
+
+export interface TapeShelfRow {
+  id: string; at: number; secs: number; steps: number; lat: number; lon: number;
 }
 
 export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string } = {}): Sync {
@@ -174,6 +180,7 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
   let phase: SyncStatus['phase'] = token ? 'busy' : 'off';
   let note = token ? 'signed in' : 'progress stays on this device';
   let roads = 0;
+  let shelf: TapeShelfRow[] = [];
   let at = Number(local.get(K.at)) || 0;
   let inFlight: Promise<void> | null = null;
   let soon: ReturnType<typeof setTimeout> | null = null;
@@ -298,6 +305,7 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
   async function call(method: 'GET' | 'POST' | 'DELETE', body?: unknown): Promise<{
     user?: string; roads?: SyncRows; odo?: number; error?: string;
     missions?: Record<string, number>; stations?: Record<string, number>;
+    tapes?: TapeShelfRow[];
   }> {
     const hit = (): Promise<Response> => fetch(`${base}/state`, {
       method,
@@ -338,6 +346,9 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
       const changed = (out.roads ? ports.merge(out.roads) : 0)
         + ports.mergeMarks({ missions: out.missions, stations: out.stations });
       if (typeof out.odo === 'number') ports.setOdo(out.odo);
+      // The banked-run shelf rides the same round trip. Kept whole — it is the
+      // server's truth, not a merge.
+      if (Array.isArray(out.tapes)) shelf = out.tapes;
       at = Date.now();
       local.set(K.at, String(at));
       set('on', changed ? `${roads} roads · ${changed} restored` : `${roads} roads`);
@@ -384,6 +395,7 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
       if (token) await run('syncing…');
     },
     sync: (reason = 'syncing…'): Promise<void> => run(reason),
+    tapes: (): TapeShelfRow[] => shelf,
     async bank(tape: unknown): Promise<{ ok: boolean; url?: string; kept?: number; why?: string }> {
       if (!token) return { ok: false, why: 'SIGN IN TO BANK A TAPE' };
       const hit = (): Promise<Response> => fetch(`${base}/tape`, {

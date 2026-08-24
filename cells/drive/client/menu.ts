@@ -55,6 +55,8 @@ export interface MenuCtx {
   splashPoke?(): void;
   /** Bank the last kept recording durably; resolves to the deck's status line. */
   tapeBank?(): Promise<string>;
+  /** The banked-run shelf, newest first — server truth from the last sync. */
+  tapeShelf?(): Array<{ id: string; at: number; secs: number; lat: number; lon: number; url: string }>;
   /** The player's own spot, banked when the attract reel carried them away —
    *  null once spent (or never set). */
   attractRet?(): string | null;
@@ -721,6 +723,35 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       field.select();
     }, ICON.pin);
     foot.append(open, share, paste);
+    // ── banked runs ──
+    // The shelf lives HERE, on the primary screen, because a banked drive is a
+    // place as much as a recording. A tap drives its spot; the link glyph puts
+    // the run's public URL in the paste field, selected, ready to share or to
+    // hand to the reel. (BANK KEPT RUN itself stays in SETTINGS with the
+    // recorder it banks from.)
+    const shelf = ctx.tapeShelf?.() ?? [];
+    if (shelf.length) {
+      body.appendChild(el('div', 'm-sect', 'BANKED RUNS'));
+      for (const t of shelf) {
+        const row = el('div', 'm-row hit');
+        const d = new Date(t.at);
+        const mm = String(d.getMonth() + 1).padStart(2, '0'), dd = String(d.getDate()).padStart(2, '0');
+        const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+        const name = el('span', 'name', `${mm}-${dd} ${hhmm}`);
+        const sub = el('span', 'sub', `${Math.round(t.secs)}S · ${t.lat.toFixed(2)} ${t.lon.toFixed(2)}`);
+        const link = el('span', 'del', '⧉');
+        link.addEventListener('click', (e) => {
+          e.stopPropagation();
+          paste.style.display = 'grid';
+          field.value = t.url;
+          field.select();
+          say('THE RUN AS A PUBLIC URL — COPY TO SHARE');
+        });
+        row.append(ico(ICON.gps, C.dim), name, sub, link);
+        row.addEventListener('click', () => ctx.openGmap(`${t.lat}, ${t.lon}`, say));
+        body.appendChild(row);
+      }
+    }
   }
 
   function renderLine(): void {
@@ -819,11 +850,16 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       tapeNote.textContent = ctx.tapeKeep();
       refresh();
     }, ICON.save);
-    // BANK: the kept run, made durable and shareable. The note carries the
-    // public URL back, which IS the sharing mechanism.
+    // BANK: the kept run, made durable and shareable. Its OWN note line: the
+    // recorder's status updater rewrites tapeNote every tick, so the BANKED
+    // line (with the public URL in it) survived less than a second there —
+    // which read as the bank not working at all (owner-caught).
+    const bankNote = el('div', 'm-dimline', '');
+    bankNote.style.display = 'none';
     const bank = button('BANK KEPT RUN', C.soft, () => {
-      tapeNote.textContent = 'BANKING…';
-      void ctx.tapeBank?.().then((s) => { tapeNote.textContent = s; });
+      bankNote.style.display = '';
+      bankNote.textContent = 'BANKING…';
+      void ctx.tapeBank?.().then((s) => { bankNote.textContent = s; });
     }, ICON.gps);
     const play = button('PLAY LAST RUN', C.soft, () => {
       const t = ctx.tape();
@@ -842,7 +878,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       setLab(play, t.playing || t.armed ? 'STOP PLAYBACK' : 'PLAY LAST RUN');
       setLab(keep, t.kept ? `KEEP LAST RUN (${t.kept})` : 'KEEP LAST RUN');
     });
-    body.append(keep, bank, play, tapeNote);
+    body.append(keep, bank, play, tapeNote, bankNote);
     dialsInto(body, ctx.dialGroups('system'));
     const snd = button('', C.soft, () => { ctx.soundTap(); refresh(); }, ICON.sound);
     updaters.push(() => {
