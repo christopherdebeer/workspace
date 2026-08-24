@@ -1532,6 +1532,27 @@ let clockHeld: number | null = null;
 let splashGold = 0;                 // 0 = the dial's truth, 1 = full golden
 const splashOrbit = { on: false, a: 0, p: new THREE.Vector3(), blend: 0, y: 0 };
 const splashCamV = new THREE.Vector3();
+let splashOrbitR = 11.5;            // radius, owned by the SPLASH ORBIT dial
+// THE HUB'S CLEAR BAND. The menu is chrome over the shot, so the shot should
+// centre the rig in the part of the screen the chrome leaves open: between the
+// header's rule and the nav tiles. Measured from the live DOM (layout shifts
+// with viewport and tab), cached for a second because getBoundingClientRect
+// forces layout. The fallback matches a phone hub; the clamp keeps a weird
+// layout (nav collapsed, rule missing) from aiming at the sky or the bonnet.
+const hubBand = { t: 0.34, at: 0 };
+const hubBandFrac = (now: number): number => {
+  if (now - hubBand.at > 1000) {
+    hubBand.at = now;
+    const rule = document.querySelector('#menu .m-rule');
+    const nav = document.querySelector('#menu .m-nav');
+    if (rule && nav) {
+      const top = rule.getBoundingClientRect().bottom;
+      const bot = nav.getBoundingClientRect().top;
+      if (bot > top + 40) hubBand.t = clamp((top + bot) / 2 / innerHeight, 0.18, 0.48);
+    }
+  }
+  return hubBand.t;
+};
 let splashGoldH: number | null = null;   // which golden hour this open chose
 const GOLDEN_AM = 6.9, GOLDEN_PM = 17.2; // solar hours where the light is low and warm
 /** Shortest signed distance a→b around the 24h face. */
@@ -16099,12 +16120,25 @@ const bytesToB64 = (b: Uint8Array): string => {
   for (let i = 0; i < b.length; i += 0x8000) s += String.fromCharCode(...b.subarray(i, i + 0x8000));
   return btoa(s);
 };
-/** The `?attract=` this boot arrived with, captured before anything rewrites
- *  the query (writeUrl owns it within seconds). */
-const attractBootI = ((): number | null => {
+/**
+ * THE REEL NEVER TOUCHES THE PLAYER'S URL (owner-caught: a cycle was
+ * rewriting the address bar and reloading over their state). Attract intent
+ * rides in sessionStorage: the cycle still travels by reload — the world
+ * origin is fixed at boot, and an in-frame continental hop breaks both
+ * Float32 render precision and the equirect metre scale — but the address
+ * bar stays the PLAYER'S state the whole way through: the boot spawns from
+ * the stored intent, writeUrl stands down while the reel owns the truck, and
+ * a mid-attract refresh lands the player back at their own spot, which is
+ * what a URL is for.
+ */
+const ATTRACT_GO_KEY = 'drive.attract.go';
+const attractBoot = ((): { i: number; lat: number; lon: number; h: number } | null => {
   try {
-    const v = new URLSearchParams(location.search).get('attract');
-    return v !== null && ATTRACT_TAPES[Number(v)] ? Number(v) : null;
+    const raw = sessionStorage.getItem(ATTRACT_GO_KEY);
+    if (!raw) return null;
+    sessionStorage.removeItem(ATTRACT_GO_KEY);
+    const v = JSON.parse(raw) as { i: number; lat: number; lon: number; h: number };
+    return ATTRACT_TAPES[v.i] ? v : null;
   } catch { return null; }
 })();
 /** Decode a reel entry into a playable tape, RE-SEATED IN THIS BOOT'S FRAME:
@@ -16141,7 +16175,8 @@ function attractArm(i: number): void {
 function attractGo(i: number): void {
   const t = ATTRACT_TAPES[i];
   if (!t) return;
-  location.href = `${location.pathname}?lat=${t.lat}&lon=${t.lon}&h=${t.h}&cam=chase&attract=${i}`;
+  try { sessionStorage.setItem(ATTRACT_GO_KEY, JSON.stringify({ i, lat: t.lat, lon: t.lon, h: t.h })); } catch { return; }
+  location.reload();
 }
 function attractStop(): void {
   car.visible = true;
@@ -16175,8 +16210,7 @@ function stepAttract(now: number): void {
   if (!ATTRACT_TAPES.length || tapePlay.on || tapePlay.armed || tapeRec.on) { attract.idleAt = now; return; }
   if (now - attract.idleAt > ATTRACT_IDLE_MS) {
     try { if (!sessionStorage.getItem(ATTRACT_RET_KEY)) sessionStorage.setItem(ATTRACT_RET_KEY, location.href); } catch { /* fine */ }
-    if (attractBootI !== null) attractGo((attractBootI + 1) % ATTRACT_TAPES.length);
-    else attractGo(0);
+    attractGo(attractBoot ? (attractBoot.i + 1) % ATTRACT_TAPES.length : 0);
   }
 }
 /** The last KEPT tape in the wire shape the bank takes. */
@@ -21884,6 +21918,9 @@ let urlCam: CamMode = 'chase', urlZoom = 1;
  *  belongs to whoever put it there. */
 const URL_OWNED = new Set(['lat', 'lon', 'h', 'cam', 'z', 'm', 'line']);
 const writeUrl = (la: number, lo: number): void => {
+  // The URL is the PLAYER'S resumable state; a reel driving the truck through
+  // a postcard must not write the postcard over it.
+  if (attract.on) return;
   const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
   try {
     // The mission id rides along, so the URL the game keeps rewriting stays a
@@ -23676,7 +23713,7 @@ function tick(now: number): void {
     // camera and truck together, which the frame cannot see. Only the entry
     // blends (1.4s from wherever the chase camera stood), and only the
     // HEIGHT is low-passed, because groundAt steps at cell edges.
-    const or2 = 8.8;
+    const or2 = splashOrbitR;
     const ox = state.x + Math.sin(splashOrbit.a) * or2;
     const oz = state.z + Math.cos(splashOrbit.a) * or2;
     const wantY = Math.max(groundAt(ox, oz) + 2.1, bodyY + 2.6);
@@ -23690,7 +23727,16 @@ function tick(now: number): void {
       camera.position.copy(splashCamV);
       splashOrbit.p.copy(splashCamV);
     }
-    camera.lookAt(state.x, bodyY + 2.05, state.z);
+    // AIM FOR THE CLEAR BAND, not the viewport centre — the hub's header and
+    // nav tiles own the top and bottom of the screen, so centring the rig on
+    // the full frame parks it behind the tiles. The look-at point lands at
+    // screen centre by construction; dropping it below the cab by the world
+    // height of (centre − band centre) at the camera's distance lifts the rig
+    // up into the open strip between the chrome.
+    const aimY = bodyY + 1.2;
+    const dCam = Math.hypot(or2, splashOrbit.y - aimY);
+    const lift = (0.5 - hubBandFrac(now)) * 2 * dCam * Math.tan((camera.fov * Math.PI) / 360);
+    camera.lookAt(state.x, aimY - lift, state.z);
   } else splashOrbit.on = false;
   // THE SHADOW BOX RIDES THE CURRENT VEHICLE. Fixed at the origin it would have
   // been a two-hundred-metre patch of correct shading somewhere behind you for
@@ -25751,6 +25797,11 @@ const DIAL_GROUPS: DialGroup[] = [
         cabFov = [60, 68, 76, 84][i];
         if (camMode === 'cab') { camera.fov = cabFov; camera.updateProjectionMatrix(); }
       }, true),
+      // How far the menu's slow circle stands from the rig. MID is the shipped
+      // default — NEAR is the old framing, close enough that a canopy or a cut
+      // bank can crowd the shot; FAR reads as an establishing shot.
+      dial('orbit', 'SPLASH ORBIT', ['NEAR', 'MID', 'FAR'], 1,
+        (i) => { splashOrbitR = [8.5, 11.5, 15][i]; }, true),
     ],
   },
   // The SETUP a driver would actually change between stages, and unlike the
@@ -27515,6 +27566,9 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
     new Promise((r) => setTimeout(r, 2000)),
   ]);
   const spawn = await findSpawn();
+  // A reel boot spawns at the TAPE'S spot while the address bar keeps the
+  // player's — the whole point of the sessionStorage intent above.
+  if (attractBoot) { spawn.lat = attractBoot.lat; spawn.lon = attractBoot.lon; }
   origin = { lat: spawn.lat, lon: spawn.lon, mLon: M_LAT * Math.cos((spawn.lat * Math.PI) / 180) };
   // ARM THE LANDMARK STORE NOW, before the first tile builds. It arms lazily
   // on a five-second tick otherwise, and every tile built in that window
@@ -27572,7 +27626,10 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   // both its waypoints are lat/lon and have to be projected into local metres.
   const mid = q.get('m');
   if (mid) { const m = missionById(mid); if (m) armMission(m); }
-  writeUrl(spawn.lat, spawn.lon);
+  // NOT on a reel boot: this write runs before attractArm raises the gate, and
+  // it was the last leak — the postcard's spawn went over the player's URL in
+  // the first second of every cycle hop.
+  if (!attractBoot) writeUrl(spawn.lat, spawn.lon);
   void placeName(spawn.lat, spawn.lon).then((n) => { if (n) { placeLabel = n; renderPlace(); } });
   bootMsg('reading the terrain…');
   // Anchor elevation: the spawn tile loads first so heights are relative to it.
@@ -27627,6 +27684,6 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   else menu.open(T_DRIVE);
   // An attract arrival: the reel's tape arms now and rolls the moment the
   // ground under its first checkpoint is finished streaming.
-  if (attractBootI !== null && !real.on && !lineOn) attractArm(attractBootI);
+  if (attractBoot && !real.on && !lineOn) attractArm(attractBoot.i);
   requestAnimationFrame((t) => { last = t; requestAnimationFrame(tick); });
 })();
