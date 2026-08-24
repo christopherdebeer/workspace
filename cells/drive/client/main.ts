@@ -16263,11 +16263,19 @@ function tapeKeep(): string {
     if (!m.isMesh || !m.geometry?.attributes?.position) return;
     const tris = (m.geometry.index ? m.geometry.index.count : m.geometry.attributes.position.count) / 3;
     const first = Array.isArray(m.material) ? m.material[0] : m.material;
+    // 'other' was 905k triangles with no name on it — split it by the
+    // collections a frame-rate investigation actually asks about.
+    let far = false;
+    for (let q: THREE.Object3D | null = m.parent; q; q = q.parent) if (q === farGroup) { far = true; break; }
     const kind = first === ruinMat || first === ruinMatFar ? 'ruin'
       : B_MATS_FLAT.includes(first as THREE.Material) ? 'building'
       : m.userData.tunnel ? 'tunnel'
       : (first as THREE.Material & { polygonOffset?: boolean })?.polygonOffset
-        ? `drape:${matName(first as THREE.Material)}` : 'other';
+        ? `drape:${matName(first as THREE.Material)}`
+      : far ? 'far-shell'
+      : [...terrainMeshes.values()].includes(m) ? 'terrain'
+      : (Object.values(vegMeshes) as THREE.Object3D[]).includes(m) || m === trunks ? 'veg'
+      : 'other';
     add(kind, tris, m.castShadow);
   });
   let total = 0, cast = 0;
