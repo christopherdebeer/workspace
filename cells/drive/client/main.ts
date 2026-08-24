@@ -16115,7 +16115,11 @@ function tapeRestoreDials(prior: Record<string, number>): void {
     if (d && d.at !== at) { d.at = at; d.apply(at); }
   }
 }
-const ATTRACT_IDLE_MS = 12000;
+// A LOT longer than the original 12s/2.6s (owner-asked): the hub sits half a
+// minute before the reel presumes, and a finished drive holds its country for
+// twenty seconds of orbit — the dwell doubling as the priming window.
+const ATTRACT_IDLE_MS = 30000;
+const ATTRACT_DWELL_MS = 20000;
 const ATTRACT_RET_KEY = 'drive.attract.ret';
 const attract = { on: false, i: 0, idleAt: 0, doneAt: 0, showAt: 0, dials: {} as Record<string, number> };
 const b64ToBytes = (s: string): Uint8Array => {
@@ -16457,10 +16461,8 @@ function attractDecode(t: { head: TapeHead; steps: string; keys: string }): Tape
   for (let i = 0; i < keys.length; i += TAPE_KEY_N) { keys[i] += dx; keys[i + 1] += dz; }
   return { head: { ...t.head }, steps: b64ToBytes(t.steps), keys };
 }
-function attractArm(i: number): void {
-  const t = ATTRACT_TAPES[i];
-  if (!t) return;
-  const tape = attractDecode(t);
+function attractArmTape(w: { head: TapeHead; steps: string; keys: string }, i: number): void {
+  const tape = attractDecode(w);
   tapeRestore(tape.keys, 0);
   streamWorld(state.x, state.z);
   tapePlay.tape = tape; tapePlay.i = 0; tapePlay.drift = 0; tapePlay.worst = 0;
@@ -16475,6 +16477,85 @@ function attractArm(i: number): void {
   car.visible = false;
   attract.showAt = performance.now() + 25000;
 }
+/** The authored-index arm, kept for the boot/fallback-reload path. */
+function attractArm(i: number): void {
+  const t = ATTRACT_TAPES[i];
+  if (t) attractArmTape(t, i);
+}
+/**
+ * ── THE REEL'S PROGRAMME (R66) ──
+ * The reel shows THE PLAYER'S OWN BANKED RUNS when there are any — the
+ * authored tapes in client/tapes.ts are placeholders for a cold account, not
+ * the show. A banked entry carries only its index row until it is needed;
+ * the WIRE (head/steps/keys) is fetched from the edge during PRIMING and
+ * cached by id for the session.
+ */
+type ReelTape =
+  | { src: 'authored'; lat: number; lon: number; h: number; t: AttractTape }
+  | { src: 'banked'; lat: number; lon: number; h: number; user: string; id: string };
+const reelWire = new Map<string, { head: TapeHead; steps: string; keys: string } | null>();
+let reelNow: ReelTape[] = [];
+let reelAt = 0;
+function reelList(): ReelTape[] {
+  const user = sync.status().user;
+  const shelf = user !== null ? sync.tapes() : [];
+  if (user !== null && shelf.length) {
+    return shelf.slice(0, 8).map((t) => (
+      { src: 'banked' as const, lat: t.lat, lon: t.lon, h: 0, user, id: t.id }));
+  }
+  return ATTRACT_TAPES.map((t) => ({ src: 'authored' as const, lat: t.lat, lon: t.lon, h: t.h, t }));
+}
+/** The programme for THIS sitting — snapshotted so a mid-reel sync cannot
+ *  reshuffle the indices under a running cycle. */
+function reelSnap(now: number): ReelTape[] {
+  if (!reelNow.length || now - reelAt > 60000) { reelNow = reelList(); reelAt = now; }
+  return reelNow;
+}
+async function reelWireFor(e: ReelTape): Promise<{ head: TapeHead; steps: string; keys: string } | null> {
+  if (e.src === 'authored') return e.t;
+  if (!reelWire.has(e.id)) reelWire.set(e.id, await runFetchWire(e.user, e.id));
+  return reelWire.get(e.id) ?? null;
+}
+/**
+ * PRIMING: warm the NEXT postcard while the current shot still holds, so the
+ * hop lands on ground the caches already know. The wire (for a banked run),
+ * a 3x3 of OSM tiles into IndexedDB (which survives the hop's sweep), a 3x3
+ * of DEM tiles and the cover tile into the HTTP cache. Proxy-only for OSM —
+ * a background courtesy must not hammer the public mirrors — two jobs at a
+ * time, every failure swallowed: priming is a head start, never a promise.
+ */
+let primeKey = '';
+async function attractPrime(e: ReelTape | undefined): Promise<void> {
+  if (!e) return;
+  const key = e.src === 'banked' ? e.id : `${e.lat},${e.lon}`;
+  if (primeKey === key) return;
+  primeKey = key;
+  try {
+    const w = await reelWireFor(e);
+    const lat = w?.head.lat ?? e.lat, lon = w?.head.lon ?? e.lon;
+    const [tx, ty] = tileAt(lat, lon, TERRAIN_Z);
+    const [ox, oy] = tileAt(lat, lon, OSM_Z);
+    const jobs: Array<() => Promise<unknown>> = [];
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
+      jobs.push(() => fetchHeights(tx + dx, ty + dy));
+      jobs.push(async () => {
+        if (await readTileCache(ox + dx, oy + dy)) return;
+        const ways = await proxyTile(ox + dx, oy + dy);
+        if (ways) writeTileCache(ox + dx, oy + dy, ways);
+      });
+    }
+    const [cx2, cy2] = tileAt(lat, lon, COVER_Z);
+    jobs.push(() => fetch(`${CELL_BASE}/~/cover/v1/${COVER_Z}/${cx2}/${cy2}`).catch(() => null));
+    const lane = async (): Promise<void> => {
+      for (;;) {
+        const j = jobs.shift();
+        if (!j) return;
+        await j().catch(() => null);
+      }
+    };
+    await Promise.all([lane(), lane()]);
+  } catch { /* a courtesy */ }
+}
 /** Deferred to the END of the frame: the canvas only holds a readable picture
  *  in the task that presented it, so the hop is flagged here and performed by
  *  the tick's tail, where the frame just rendered can be banked as the held
@@ -16482,13 +16563,13 @@ function attractArm(i: number): void {
  *  task — reading it here would capture noise, or black.) */
 let attractGoI: number | null = null;
 function attractGo(i: number): void {
-  if (ATTRACT_TAPES[i]) attractGoI = i;
+  if (reelNow[i]) attractGoI = i;
 }
 function attractGoNow(): void {
   const i = attractGoI as number;
   attractGoI = null;
-  const t = ATTRACT_TAPES[i];
-  if (!t) return;
+  const e = reelNow[i];
+  if (!e) return;
   // The parting shot bridges the hop either way — held over the in-place
   // rebuild, or banked across the reload if the hop has to fall back.
   let shot: string | null = null;
@@ -16496,12 +16577,18 @@ function attractGoNow(): void {
   attractHoldShow(shot);
   void (async () => {
     try {
-      await worldHop(t.lat, t.lon, t.h);
-      attractArm(i);
+      // Primed cycles find the wire already cached; a cold one fetches here.
+      const w = await reelWireFor(e);
+      if (!w) { attractHoldDrop(); return; }   // a dead blob skips its slot
+      await worldHop(w.head.lat, w.head.lon, w.head.hdg);
+      attractArmTape(w, i);
     } catch {
-      // The in-place road failed under this cycle; travel the old way.
+      // The in-place road failed under this cycle; travel the old way —
+      // which only the authored tapes can, since a fresh boot re-arms from
+      // ATTRACT_TAPES. A banked entry just stands down until the next idle.
+      if (e.src !== 'authored') { attractHoldDrop(); return; }
       try {
-        sessionStorage.setItem(ATTRACT_GO_KEY, JSON.stringify({ i, lat: t.lat, lon: t.lon, h: t.h }));
+        sessionStorage.setItem(ATTRACT_GO_KEY, JSON.stringify({ i, lat: e.lat, lon: e.lon, h: e.h }));
         if (shot) sessionStorage.setItem(ATTRACT_SHOT_KEY, shot);
         location.reload();
       } catch { attractHoldDrop(); }
@@ -16535,18 +16622,29 @@ function stepAttract(now: number): void {
   if (attract.on) {
     if (tapePlay.on || now > attract.showAt) { car.visible = true; attractHoldDrop(); }
     if (!tapePlay.on && !tapePlay.armed) {
-      // The tape ran out. Hold the last shot a beat, then the next postcard.
+      // The tape ran out. THE DWELL IS THE SHOW (owner-asked: "wait a lot
+      // longer before cycling") — the orbit keeps circling the parked rig in
+      // the finished country for a good while, and the pause is when the
+      // NEXT postcard is primed, so the eventual hop lands on warm caches.
       if (!attract.doneAt) attract.doneAt = now;
-      else if (now - attract.doneAt > 2600 && ATTRACT_TAPES.length) {
-        attractGo((attract.i + 1) % ATTRACT_TAPES.length);
+      else if (reelNow.length) {
+        const next = (attract.i + 1) % reelNow.length;
+        if (now - attract.doneAt > ATTRACT_DWELL_MS * 0.25) void attractPrime(reelNow[next]);
+        if (now - attract.doneAt > ATTRACT_DWELL_MS) attractGo(next);
       }
     }
     return;
   }
-  if (!ATTRACT_TAPES.length || tapePlay.on || tapePlay.armed || tapeRec.on) { attract.idleAt = now; return; }
+  if (tapePlay.on || tapePlay.armed || tapeRec.on) { attract.idleAt = now; return; }
+  const list = reelSnap(now);
+  if (!list.length) { attract.idleAt = now; return; }
+  const first = attractBoot ? (attractBoot.i + 1) % list.length : 0;
+  // Prime the opening postcard while the idle clock is still running, so the
+  // first hop is as soft as the later ones.
+  if (now - attract.idleAt > ATTRACT_IDLE_MS - 12000) void attractPrime(list[first]);
   if (now - attract.idleAt > ATTRACT_IDLE_MS) {
     try { if (!sessionStorage.getItem(ATTRACT_RET_KEY)) sessionStorage.setItem(ATTRACT_RET_KEY, location.href); } catch { /* fine */ }
-    attractGo(attractBoot ? (attractBoot.i + 1) % ATTRACT_TAPES.length : 0);
+    attractGo(first);
   }
 }
 /** The last KEPT tape in the wire shape the bank takes. */
