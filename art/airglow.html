@@ -1,0 +1,547 @@
+<title>Airglow</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #04060c;
+    overflow: hidden;
+  }
+  #sky {
+    position: fixed; inset: 0;
+    width: 100vw; height: 100dvh;
+    display: block;
+    background: #04060c;
+  }
+  #hint {
+    position: fixed;
+    left: 0; right: 0; bottom: 5vh;
+    text-align: center;
+    font: 400 11px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: rgba(196, 216, 226, 0.42);
+    pointer-events: none;
+    transition: opacity 2.4s ease;
+  }
+  #hint.gone { opacity: 0; }
+</style>
+<canvas id="sky" aria-label="Airglow — a seamless loop of auroral curtains whose light is the harmonic spectrum of the drone you hear."></canvas>
+<div id="hint">touch once for sound</div>
+<script>
+'use strict';
+/* ============================================================
+   AIRGLOW
+   A seamless loop. Nothing to press, nothing to steer.
+
+   THE SKY IS THE SPECTRUM. A drone of sixteen harmonics stands
+   over a low fundamental. Each harmonic owns a band of the sky:
+   when a partial swells, that band of rays brightens, and when it
+   sinks the light drains out of it. What you are watching is the
+   sound's own spectrum, hung across the sky as curtains — the
+   image is computed from the synthesis model itself, not from a
+   meter, so the two are the same arithmetic and cannot drift.
+
+   IT LOOPS EXACTLY. Every modulation in the piece — each
+   harmonic's swell, each fold's drift, each star's twinkle — is a
+   periodic function completing a whole number of cycles in the
+   forty-eight second period. Even the beating between detuned
+   oscillators is tuned to a whole number of beats per loop. At the
+   end of the loop the light and the sound are, to the sample, where
+   they began.
+
+   THE DETAIL. Curtains are drawn per pixel: a sharp lower border
+   with a rim of blue-white, the auroral green above it, and the
+   long crimson decay of the upper atmosphere. Filaments come from
+   three ray frequencies laid over one another, folds from slow
+   broad bands, and one surge crosses the whole sky each loop.
+   Stars sit behind it all, dimmed toward the horizon by the air
+   they are seen through, and the ground is ordered-dithered so the
+   gradients hold without banding.
+   ============================================================ */
+
+const canvas = document.getElementById('sky');
+const g2 = canvas.getContext('2d', { alpha: false });
+const hintEl = document.getElementById('hint');
+
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const LOOP = 48;                       // seconds — the whole piece
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* a fixed stream: the piece is the same every time it is opened */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const rng = mulberry32(0x5EED17);
+const rnd = (a, b) => a + rng() * (b - a);
+
+
+/* ---------------- the drone ----------------
+   Sixteen partials of a harmonic series on C2. Each carries a
+   whole number of swells per loop, so the spectrum returns to
+   itself exactly. */
+
+const F0 = 65.41;
+const RATIOS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 24];
+const N = RATIOS.length;
+
+const PARTIALS = RATIOS.map((r, i) => ({
+  ratio: r,
+  base: 1 / Math.pow(r, 1.05),                 // the natural rolloff of the series
+  cycles: [1, 2, 3, 1, 2, 4, 3, 2, 5, 3, 4, 6, 5, 7, 6, 8][i],  // swells per loop
+  phase: rnd(0, 1),
+  shape: 1.2 + (i % 4) * 0.45,                 // how peaked each swell is
+  beats: i < 7 ? [0, 3, 5, 2, 7, 4, 6][i] : 0, // whole beats per loop against its twin
+}));
+
+const amps = new Float32Array(N);      // what the ear gets: with the natural rolloff
+const visAmps = new Float32Array(N);   // what the eye gets: each partial's own swell
+
+/* the piece's one long breath, plus a half-speed counter-swell */
+function breath(phase) {
+  return 0.42 + 0.44 * (0.5 - 0.5 * Math.cos(TAU * phase))
+              + 0.14 * (0.5 - 0.5 * Math.cos(TAU * 2 * phase + 1.1));
+}
+
+function harmonicAmps(phase, out) {
+  const br = breath(phase);
+  let sum = 0;
+  for (let i = 0; i < N; i++) {
+    const p = PARTIALS[i];
+    const s = 0.5 - 0.5 * Math.cos(TAU * (p.cycles * phase + p.phase));
+    const swell = Math.pow(s, p.shape) * br;
+    // The ear wants the series' natural rolloff — a sixteenth harmonic as loud
+    // as the fundamental would shriek. The eye wants the opposite: without
+    // normalising, the low harmonics would simply hold one side of the sky
+    // brighter forever and you would be watching the rolloff instead of the
+    // music. So the sky shows each partial's own swell, at equal weight.
+    out[i] = p.base * swell;
+    visAmps[i] = swell;
+    sum += out[i];
+  }
+  return sum;
+}
+
+/* ---------------- audio ---------------- */
+
+let ac = null, master = null, voices = [], windGain = null, windFilter = null, started = false;
+
+function initAudio() {
+  if (ac) return;
+  try { ac = new (window.AudioContext || window.webkitAudioContext)(); }
+  catch (e) { return; }
+
+  const comp = ac.createDynamicsCompressor();
+  comp.threshold.value = -24; comp.knee.value = 22;
+  comp.ratio.value = 4; comp.attack.value = 0.02; comp.release.value = 0.5;
+  comp.connect(ac.destination);
+
+  master = ac.createGain();
+  master.gain.setValueAtTime(0.0001, ac.currentTime);
+  master.gain.exponentialRampToValueAtTime(0.5, ac.currentTime + 9);   // the sky comes up slowly
+  master.connect(comp);
+
+  // a gentle air on the top end so the shimmer never turns to glass
+  const tone = ac.createBiquadFilter();
+  tone.type = 'highshelf'; tone.frequency.value = 2600; tone.gain.value = -5;
+  tone.connect(master);
+
+  const space = ac.createDelay(4);
+  space.delayTime.value = 0.63;
+  const fb = ac.createGain(); fb.gain.value = 0.5;
+  const damp = ac.createBiquadFilter(); damp.type = 'lowpass'; damp.frequency.value = 1500;
+  const wet = ac.createGain(); wet.gain.value = 0.3;
+  space.connect(damp); damp.connect(fb); fb.connect(space); space.connect(wet); wet.connect(master);
+
+  voices = PARTIALS.map((p) => {
+    const g = ac.createGain();
+    g.gain.value = 0.0001;
+    g.connect(tone); g.connect(space);
+    const oscs = [];
+    const o = ac.createOscillator();
+    o.type = 'sine';
+    o.frequency.value = F0 * p.ratio;
+    o.connect(g); o.start();
+    oscs.push(o);
+    if (p.beats > 0) {
+      // its twin, detuned by a whole number of beats per loop, so even the
+      // interference between them is periodic with the piece
+      const o2 = ac.createOscillator();
+      o2.type = 'sine';
+      o2.frequency.value = F0 * p.ratio + p.beats / LOOP;
+      const g2b = ac.createGain(); g2b.gain.value = 0.6;
+      o2.connect(g2b); g2b.connect(g); o2.start();
+      oscs.push(o2);
+    }
+    return { gain: g, oscs };
+  });
+
+  // the wind: noise whose buffer divides the loop, so it repeats with it
+  const seg = LOOP / 8;
+  const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * seg), ac.sampleRate);
+  const d = buf.getChannelData(0);
+  let v = 0;
+  for (let i = 0; i < d.length; i++) {
+    v = v * 0.86 + (Math.random() * 2 - 1) * 0.14;      // a soft, dark noise
+    d[i] = v;
+  }
+  // taper the seam so the eight repeats do not click
+  const fade = Math.floor(ac.sampleRate * 0.05);
+  for (let i = 0; i < fade; i++) {
+    const k = i / fade;
+    d[i] *= k;
+    d[d.length - 1 - i] *= k;
+  }
+  const src = ac.createBufferSource();
+  src.buffer = buf; src.loop = true;
+  windFilter = ac.createBiquadFilter();
+  windFilter.type = 'bandpass'; windFilter.frequency.value = 700; windFilter.Q.value = 0.8;
+  windGain = ac.createGain(); windGain.gain.value = 0.0001;
+  src.connect(windFilter); windFilter.connect(windGain);
+  windGain.connect(master); windGain.connect(space);
+  src.start();
+
+  started = true;
+}
+
+function updateAudio(phase) {
+  if (!ac || ac.state !== 'running') return;
+  const t = ac.currentTime;
+  for (let i = 0; i < N; i++) {
+    voices[i].gain.gain.setTargetAtTime(amps[i] * 0.16, t, 0.09);
+  }
+  // the surge, heard: a slow sweep of the wind band, once per loop
+  const s = 0.5 - 0.5 * Math.cos(TAU * phase);
+  windFilter.frequency.setTargetAtTime(320 + s * 1500, t, 0.2);
+  windGain.gain.setTargetAtTime(0.012 + s * 0.03, t, 0.2);
+}
+
+/* browsers will not let sound begin unasked; this is the only thing
+   the piece ever wants from you, and only once */
+function tryStart() {
+  initAudio();
+  if (!ac) return;
+  ac.resume().then(() => {
+    if (ac.state === 'running') hintEl.classList.add('gone');
+  }).catch(() => {});
+}
+['pointerdown', 'keydown', 'touchstart', 'wheel'].forEach(ev =>
+  window.addEventListener(ev, tryStart, { passive: true }));
+setTimeout(() => { tryStart(); }, 300);
+if (!matchMedia('(pointer: coarse)').matches) hintEl.textContent = 'click once for sound';
+
+/* ---------------- canvas ---------------- */
+
+let W = 0, H = 0, DPR = 1;
+let AW = 0, AH = 0, aur = null, aurCtx = null, aurImg = null, aurData = null, acc = null;
+let bgCanvas = null, stars = [];
+let horizonY = 0;
+
+function resize() {
+  W = window.innerWidth; H = window.innerHeight;
+  // a dense phone can ask for a backing store several times larger than any
+  // of this needs; past a point the extra pixels buy nothing but frame time
+  DPR = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(2400000 / Math.max(1, W * H)));
+  DPR = Math.max(1, DPR);
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  g2.setTransform(DPR, 0, 0, DPR, 0, 0);
+
+  // the curtains are computed per pixel at half resolution, then lifted —
+  // the upscale is the last, softest blur in the chain
+  // budget the curtain buffer by total pixels, not by width — a tall phone
+  // screen would otherwise cost twice what a wide desktop one does
+  const VSQUASH = 0.62;                       // the vertical profile is smooth
+  const BUDGET = 145000;
+  const byBudget = Math.sqrt(BUDGET / (VSQUASH * H / W));
+  AW = clamp(Math.round(Math.min(W * 0.52, byBudget)), 260, 640);
+  AH = Math.max(110, Math.round(AW * H / W * VSQUASH));
+  aur = document.createElement('canvas');
+  aur.width = AW; aur.height = AH;
+  aurCtx = aur.getContext('2d');
+  aurImg = aurCtx.createImageData(AW, AH);
+  aurData = aurImg.data;
+  acc = new Float32Array(AW * AH * 3);
+
+  horizonY = AH * 0.93;
+  buildBackground();
+  buildStars();
+}
+
+/* the ground beneath the light: a night gradient, ordered-dithered so the
+   long ramps hold without a single band */
+const BAYER = [
+  0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26,
+  12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22,
+  3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25,
+  15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21,
+];
+
+function buildBackground() {
+  bgCanvas = document.createElement('canvas');
+  bgCanvas.width = Math.round(W * DPR);
+  bgCanvas.height = Math.round(H * DPR);
+  const b = bgCanvas.getContext('2d');
+  const bw = bgCanvas.width, bh = bgCanvas.height;
+  const img = b.createImageData(bw, bh);
+  const d = img.data;
+  for (let y = 0; y < bh; y++) {
+    const v = y / bh;
+    // deep space above, a colder haze at the horizon, and the faint green
+    // airglow layer that the atmosphere carries even without an aurora
+    const glow = Math.exp(-Math.pow((v - 0.965) / 0.16, 2));
+    const hazeR = 4 + v * 5 + glow * 5;
+    const hazeG = 6 + v * 8 + glow * 13;
+    const hazeB = 13 + v * 9 + glow * 11;
+    for (let x = 0; x < bw; x++) {
+      const dth = (BAYER[(y & 7) * 8 + (x & 7)] / 64 - 0.5) * 1.6;
+      const o = (y * bw + x) << 2;
+      d[o] = hazeR + dth;
+      d[o + 1] = hazeG + dth;
+      d[o + 2] = hazeB + dth;
+      d[o + 3] = 255;
+    }
+  }
+  b.putImageData(img, 0, 0);
+}
+
+function buildStars() {
+  stars = [];
+  const n = clamp(Math.round((W * H) / 3000), 90, 460);
+  const sr = mulberry32(0xA17C0);
+  for (let i = 0; i < n; i++) {
+    const x = sr() * W;
+    const y = Math.pow(sr(), 0.75) * H * 0.97;
+    const mag = Math.pow(sr(), 2.6);
+    stars.push({
+      x, y,
+      r: 0.4 + mag * 1.25,
+      b: 0.16 + mag * 0.82,
+      warm: sr(),
+      cyc: 1 + ((sr() * 5) | 0),          // whole twinkles per loop
+      ph: sr(),
+    });
+  }
+}
+
+/* ---------------- the curtains ---------------- */
+
+const CURTAINS = [
+  { gain: 0.95, h: 0.30, span: 0.50, band: [0, 6],  drift: 1, flip: 0, hue: [1.00, 1.00, 1.00] },
+  { gain: 0.72, h: 0.42, span: 0.40, band: [4, 11], drift: -1, flip: 1, hue: [0.86, 1.00, 1.06] },
+  { gain: 0.55, h: 0.55, span: 0.30, band: [8, 15], drift: 2, flip: 0, hue: [1.10, 0.94, 1.02] },
+  { gain: 0.34, h: 0.22, span: 0.62, band: [2, 14], drift: -2, flip: 1, hue: [0.92, 0.98, 1.14] },
+].map((c, i) => {
+  const r = mulberry32(0xC0FFEE + i * 977);
+  const rr = (a, b) => a + r() * (b - a);
+  return Object.assign(c, {
+    // folds: broad slow bands, the curtain turning toward and away
+    fold: [
+      { n: rr(1.2, 2.4), m: c.drift, p: r() },
+      { n: rr(2.8, 4.6), m: -c.drift, p: r() },
+    ],
+    // rays: three filament frequencies laid over one another
+    rays: [
+      { n: rr(26, 44), m: c.drift, p: r(), a: 0.34 },
+      { n: rr(70, 110), m: c.drift * 2, p: r(), a: 0.26 },
+      { n: rr(150, 230), m: -c.drift, p: r(), a: 0.16 },
+    ],
+    // the lower border, undulating
+    edge: [
+      { n: rr(0.7, 1.5), m: c.drift, p: r(), a: rr(0.035, 0.07) },
+      { n: rr(2.1, 3.4), m: -c.drift, p: r(), a: rr(0.014, 0.03) },
+      { n: rr(5.0, 8.0), m: c.drift * 2, p: r(), a: rr(0.005, 0.012) },
+    ],
+    surgePh: r(),
+  });
+});
+
+/* the vertical profile, premultiplied into colour: a sharp lower border with
+   a blue-white rim, auroral green above it, and the long crimson decay */
+const LUTN = 640, QMIN = -0.18, QMAX = 1.35;
+const QSCALE = LUTN / (QMAX - QMIN);
+const lutR = new Float32Array(LUTN + 1), lutG = new Float32Array(LUTN + 1), lutB = new Float32Array(LUTN + 1);
+(function buildLut() {
+  const smooth = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
+  for (let i = 0; i < LUTN; i++) {
+    const q = QMIN + i / QSCALE;
+    let I;
+    if (q < 0) I = Math.exp(q * 26);                       // the border is a knife edge
+    else I = Math.exp(-q * 1.95) * (0.3 + 0.7 * smooth(0, 0.05, q));
+    const rimT = smooth(0.10, 0.015, q);                   // blue-white nitrogen at the base
+    const topT = smooth(0.34, 1.05, q);                    // crimson oxygen far above
+    let r = 96, g = 231, b = 172;                          // 557.7nm, the green line
+    r += (150 - r) * rimT; g += (245 - g) * rimT; b += (238 - b) * rimT;
+    r += (226 - r) * topT; g += (74 - g) * topT; b += (128 - b) * topT;
+    const K = 0.88;                                        // the peaks reach real light; the falloff keeps the rest faint
+    lutR[i] = r * I * K; lutG[i] = g * I * K; lutB[i] = b * I * K;
+  }
+})();
+
+const colBase = new Float32Array(2048);
+const colSpan = new Float32Array(2048);
+const colAmp = new Float32Array(2048);
+
+function drawCurtains(phase) {
+  acc.fill(0);
+  aurData.fill(0);
+  const rayDamp = reduceMotion ? 0.55 : 1;
+
+  for (let ci = 0; ci < CURTAINS.length; ci++) {
+    const c = CURTAINS[ci];
+    const [b0, b1] = c.band;
+    const bandN = b1 - b0;
+
+    // the surge: one bright fold crossing the whole sky each loop
+    const surgeX = ((phase + c.surgePh) % 1) * 1.4 - 0.2;
+
+    for (let x = 0; x < AW; x++) {
+      const u = x / AW;
+
+      let edge = 0;
+      for (let k = 0; k < c.edge.length; k++) {
+        const e = c.edge[k];
+        edge += e.a * Math.sin(TAU * (e.n * u + e.m * phase + e.p));
+      }
+
+      let fold = 1;
+      for (let k = 0; k < c.fold.length; k++) {
+        const f = c.fold[k];
+        fold *= 0.62 + 0.38 * Math.sin(TAU * (f.n * u + f.m * phase + f.p));
+      }
+      fold = fold > 0 ? fold * Math.sqrt(fold) : 0;
+
+      let ray = 1;
+      for (let k = 0; k < c.rays.length; k++) {
+        const r = c.rays[k];
+        ray *= 1 - r.a * rayDamp * (0.5 - 0.5 * Math.cos(TAU * (r.n * u + r.m * phase + r.p)));
+      }
+
+      // this column's harmonic: the spectrum, laid across the sky
+      const hf = b0 + (c.flip ? 1 - u : u) * bandN;
+      const hi = hf | 0;
+      const ht = hf - hi;
+      const a0 = visAmps[Math.min(N - 1, hi)], a1 = visAmps[Math.min(N - 1, hi + 1)];
+      const harm = a0 + (a1 - a0) * ht;
+
+      const surge = 1 + 1.15 * Math.exp(-Math.pow((u - surgeX) / 0.075, 2));
+
+      colBase[x] = horizonY - AH * (c.h + edge);
+      colSpan[x] = AH * c.span * (0.82 + 0.3 * fold);
+      colAmp[x] = c.gain * fold * ray * surge * (0.14 + harm * 1.05);
+    }
+
+    const hr = c.hue[0], hg = c.hue[1], hb = c.hue[2];
+    const stride = AW * 3;
+    for (let x = 0; x < AW; x++) {
+      const a = colAmp[x];
+      if (a < 0.005) continue;
+      const by = colBase[x], sp = colSpan[x];
+      const inv = 1 / sp;
+      let yTop = by - sp * 1.3; if (yTop < 0) yTop = 0;
+      let yBot = by + sp * 0.09; if (yBot > AH - 1) yBot = AH - 1;
+      yTop = yTop | 0;
+      if (yBot < yTop) continue;
+      const ar = a * hr, ag = a * hg, ab = a * hb;
+      // the profile index walks down by a fixed step per row rather than
+      // being recomputed, and the column ends the moment it falls off the LUT
+      const dstep = -inv * QSCALE;
+      let lf = ((by - yTop) * inv - QMIN) * QSCALE;
+      let o = yTop * stride + x * 3;
+      for (let y = yTop; y <= yBot; y++, lf += dstep, o += stride) {
+        const li = lf | 0;
+        if (li < 0) break;
+        if (li >= LUTN) continue;
+        // sub-row interpolation: the border then sits wherever the curve puts
+        // it, not on the nearest row of the buffer
+        const fr = lf - li;
+        acc[o] += (lutR[li] + (lutR[li + 1] - lutR[li]) * fr) * ar;
+        acc[o + 1] += (lutG[li] + (lutG[li + 1] - lutG[li]) * fr) * ag;
+        acc[o + 2] += (lutB[li] + (lutB[li + 1] - lutB[li]) * fr) * ab;
+      }
+    }
+  }
+
+  // one pass out to eight bits, ordered-dithered so the faintest tails —
+  // the ones that live below a single level — resolve as light, not as bands
+  const n = AW * AH;
+  for (let i = 0, j = 0, o = 0; i < n; i++, j += 3, o += 4) {
+    const dth = BAYER[(((i / AW) | 0) & 7) * 8 + ((i % AW) & 7)] * 0.0156 - 0.5;
+    const r = acc[j] + dth, g = acc[j + 1] + dth, b = acc[j + 2] + dth;
+    const m = r > g ? (r > b ? r : b) : (g > b ? g : b);
+    if (m <= 0.5) { aurData[o + 3] = 0; continue; }
+    // carry the light in the alpha channel and normalise the colour against
+    // it, so a plain source-over draw lands the same light an additive blend
+    // would over a sky this dark — at a fraction of the compositing cost
+    const a = m > 255 ? 255 : m;
+    const k = 255 / a;
+    aurData[o] = r * k;
+    aurData[o + 1] = g * k;
+    aurData[o + 2] = b * k;
+    aurData[o + 3] = a;
+  }
+  aurCtx.putImageData(aurImg, 0, 0);
+}
+
+/* ---------------- frame ---------------- */
+
+function drawStars(phase) {
+  for (let i = 0; i < stars.length; i++) {
+    const s = stars[i];
+    const tw = 0.78 + 0.22 * Math.sin(TAU * (s.cyc * phase + s.ph));
+    // the air thickens toward the horizon and takes the faint ones first
+    const ext = 0.25 + 0.75 * Math.pow(1 - s.y / H, 0.55);
+    const a = s.b * tw * ext;
+    if (a < 0.02) continue;
+    g2.fillStyle = s.warm > 0.72
+      ? `rgba(255, 238, 214, ${a})`
+      : s.warm > 0.34 ? `rgba(226, 238, 255, ${a})` : `rgba(196, 222, 255, ${a})`;
+    if (s.r < 0.85) {
+      // the faint majority are a pixel of light and cost nothing to say so
+      g2.fillRect(s.x, s.y, s.r * 2, s.r * 2);
+    } else {
+      g2.beginPath();
+      g2.arc(s.x, s.y, s.r, 0, TAU);
+      g2.fill();
+    }
+  }
+}
+
+let t0 = performance.now();
+let raf = 0;
+
+function frame(now) {
+  const phase = (((now - t0) / 1000) % LOOP) / LOOP;
+
+  harmonicAmps(phase, amps);
+  updateAudio(phase);
+
+  g2.globalCompositeOperation = 'source-over';
+  g2.drawImage(bgCanvas, 0, 0, W, H);
+  drawStars(phase);
+
+  drawCurtains(phase);
+  g2.imageSmoothingEnabled = true;
+  g2.drawImage(aur, 0, 0, W, H);
+
+  raf = requestAnimationFrame(frame);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    cancelAnimationFrame(raf);
+    if (ac && ac.state === 'running') ac.suspend();
+  } else {
+    raf = requestAnimationFrame(frame);
+    if (ac && started) ac.resume();
+  }
+});
+
+window.addEventListener('resize', resize);
+resize();
+raf = requestAnimationFrame(frame);
+</script>
