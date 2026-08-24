@@ -16184,6 +16184,12 @@ function tapeKeep(): string {
     const b = (by[k] ??= { meshes: 0, tris: 0, cast: 0 });
     b.meshes++; b.tris += Math.round(tris); if (cast) b.cast++;
   };
+  // Which NAMED material a drape mesh wears — the draw-call bill is per
+  // material, and "drape" alone hides who is actually charging it.
+  const matName = (mm: THREE.Material): string => {
+    for (const [k, v] of Object.entries(MAT)) if (v === mm) return `MAT.${k}`;
+    return mm.name || mm.type;
+  };
   worldGroup.traverse((o) => {
     const m = o as THREE.Mesh;
     if (!m.isMesh || !m.geometry?.attributes?.position) return;
@@ -16192,7 +16198,8 @@ function tapeKeep(): string {
     const kind = first === ruinMat || first === ruinMatFar ? 'ruin'
       : B_MATS_FLAT.includes(first as THREE.Material) ? 'building'
       : m.userData.tunnel ? 'tunnel'
-      : (first as THREE.Material & { polygonOffset?: boolean })?.polygonOffset ? 'drape' : 'other';
+      : (first as THREE.Material & { polygonOffset?: boolean })?.polygonOffset
+        ? `drape:${matName(first as THREE.Material)}` : 'other';
     add(kind, tris, m.castShadow);
   });
   let total = 0, cast = 0;
