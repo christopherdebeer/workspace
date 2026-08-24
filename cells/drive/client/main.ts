@@ -24644,15 +24644,38 @@ const UI = {
   ink: '#0a1417', edge: '#57c9b0', dim: '#3d6f66', text: '#d6efe7', soft: '#7fa39c',
   gold: '#f2c14e', hot: '#e2703a', good: '#6fe0a0', bad: '#d94f4f',
 };
-let hudS = 3;            // world pixels per HUD pixel
-let HW = 2, HH = 2;      // HUD buffer size
+let hudS = 3;            // CSS pixels per HUD pixel
+let HW = 2, HH = 2;      // HUD buffer size, in HUD pixels
+/**
+ * THE HUD'S GRID IS ITS OWN, AND NOW ITS DETAIL IS TOO. The world commits to
+ * 148x320 and magnifies; the HUD has always drawn on a separate full-screen
+ * canvas — but at ONE backing pixel per HUD pixel, so the 5x7 glyph at scale
+ * 1 was the hard floor and any attempt at smaller text fought the raster
+ * (owner-caught). The backing store now carries hudDpr (2 wherever the screen
+ * itself has the pixels; 1 on a DPR-1 display, where finer detail physically
+ * does not exist), with the context transform holding everything in the same
+ * HUD units — identical layout, and half-step scales rasterize hard.
+ *
+ * AND THE GRID SNAPS TO THE DEVICE: hudS is chosen so one backing pixel is a
+ * WHOLE number of device pixels. A non-integer magnification is uneven pixel
+ * columns — some glyph strokes two device pixels, some three — which reads as
+ * exactly the shimmer small text was blamed for.
+ */
+let hudDpr = 1;
+const HUD_SIZES = [0.67, 1, 1.33];   // FINE · STOCK · LARGE, of the stock grid
+let hudSize = 1;                      // multiplier, owned by the HUD SIZE dial
 function hudResize(): void {
-  // Two screen pixels per HUD pixel on a phone: chunky enough to read as
-  // 8-bit, fine enough that a place name and the instruments coexist.
-  hudS = innerWidth < 760 ? 2 : 3;
+  const dpr = Math.max(1, Math.round(devicePixelRatio || 1));
+  hudDpr = dpr >= 2 ? 2 : 1;
+  // Two CSS pixels per HUD pixel on a phone, three on a desktop — the stock
+  // look — scaled by the dial, then snapped to whole device pixels.
+  const target = (innerWidth < 760 ? 2 : 3) * hudSize;
+  const n = Math.max(1, Math.round((target * dpr) / hudDpr));   // device px per backing px
+  hudS = (n * hudDpr) / dpr;
   HW = Math.max(80, Math.round(innerWidth / hudS));
   HH = Math.max(80, Math.round(innerHeight / hudS));
-  hud.width = HW; hud.height = HH;
+  hud.width = HW * hudDpr; hud.height = HH * hudDpr;
+  hctx.setTransform(hudDpr, 0, 0, hudDpr, 0, 0);
   hctx.imageSmoothingEnabled = false;
 }
 addEventListener('resize', hudResize);
@@ -26137,6 +26160,13 @@ const DIAL_GROUPS: DialGroup[] = [
       // each tile wearing its state, plus fine-terrain and far-shell counts.
       // A diagnostic, not a game surface — but streaming bugs only show
       // themselves where streaming lives, which is the top-down view.
+      // The HUD's own grid, decoupled from the world's 148x320: FINE is a
+      // third smaller with full hard-pixel crispness (the backing store
+      // carries 2x detail wherever the screen has it — see hudResize).
+      dial('huds', 'HUD SIZE', ['FINE', 'STOCK', 'LARGE'], 1, (i) => {
+        hudSize = HUD_SIZES[i];
+        hudResize();
+      }),
       dial('tdbg', 'TILE DEBUG', ['OFF', 'ON'], 0, (i) => { tileDbg = i === 1; }),
     ],
   },

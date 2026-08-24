@@ -240,9 +240,10 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   /* The hub: the live scene is the background, so the scrim stands down and
      every floating word carries its own ink. */
   #menu.hub .m-scrim { display: none !important; }
-  #menu .m-hubshade { position: absolute; top: -1px; left: -1px; right: -1px; height: 34%;
-    background: linear-gradient(rgba(4,10,11,0.85), rgba(4,10,11,0)); display: none; pointer-events: none; }
-  #menu.hub .m-hubshade { display: block; }
+  /* The hub's top shade is GONE (owner-caught: it muddied both the words and
+     the world; the pixel strokes below already carry the ink). The class stays
+     as a no-op so an old cached shell can't render an unstyled div. */
+  #menu .m-hubshade { display: none; pointer-events: none; }
   /* The hub floats over the LIVE SCENE, which can be any country at any hour
      — a soft drop shadow loses to a bright sky and the dim teal loses to
      everything (reported from the seat). So: ACCENT AND WHITE ONLY up here,
@@ -299,11 +300,6 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   });
   const panel = document.createElement('div');
   panel.className = 'm-panel';
-  // Painted FIRST so everything else stacks over it: the hub's top shade,
-  // holding the header and stats legible against a bright sky.
-  const hubShade = document.createElement('div');
-  hubShade.className = 'm-hubshade';
-  panel.appendChild(hubShade);
   root.appendChild(panel);
   // Gold corner brackets, the reference's chrome vocabulary.
   for (const [v, h] of [['top', 'left'], ['top', 'right'], ['bottom', 'left'], ['bottom', 'right']]) {
