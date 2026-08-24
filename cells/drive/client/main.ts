@@ -7191,6 +7191,21 @@ const solver = new RoadSolver({
 });
 (window as unknown as { __chaindbg?: object }).__chaindbg = (): object => ({ ...solver.stats });
 /**
+ * WHERE THE TRUCK SITS AGAINST ITS OWN GROUND — the reading that names a bad
+ * spawn. A rig on a hillside reads gap ~0; a rig at the bottom of a phantom
+ * carve reads metres NEGATIVE, and the hint beside it says why (a deck
+ * elevation the current world never wrote). Reported together because the
+ * fault is the RELATIONSHIP: neither number is alarming alone.
+ */
+(window as unknown as { __seat?: object }).__seat = (): object => {
+  const g = groundAt(state.x, state.z);
+  return {
+    bodyY: +bodyY.toFixed(2), ground: +g.toFixed(2), gap: +(bodyY - g).toFixed(2),
+    hint: hintAt(state.x, state.z, 6), hints: solver.hints.size, juncs: solver.junctions.size,
+    sweeps: solver.sweeps, swept: { ...solver.lastSwept },
+  };
+};
+/**
  * EVERYTHING THE SOLVER NEEDS, AS JSON. Captured once from a real session and
  * replayed in Node, so a question about chaining or junctions costs
  * milliseconds instead of a headless browser at two frames a second.
@@ -16276,6 +16291,22 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     roadGrid.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear();
     channelGrid.clear(); rapidRocks.clear(); chanSet.clear(); wiSet.clear();
     builtRuns.clear(); synthSeen.clear();
+    // THE SOLVER SPEAKS IN LOCAL METRES TOO. Its deck hints and junctions are
+    // spatially keyed, so the last postcard's road left an elevation under
+    // local (0,0) — exactly where the next one spawns. See RoadSolver.reset.
+    solver.reset();
+    // Seated footprints hold local ground lines and mesh refs whose geometry
+    // this sweep just disposed; the road-line cache and any half-open ribbon
+    // batch are the same story in miniature.
+    seated.length = 0;
+    // swardCache memoises groundAt by LOCAL grid key and is otherwise only
+    // emptied inside refreshSward; sightCache holds per-name occlusion
+    // verdicts. Neither is expensive to rebuild and both would answer for the
+    // wrong continent until something happened to evict them.
+    swardCache.clear(); sightCache.clear();
+    roadSegs = []; roadLineWorld = []; roadLineKey = ''; roadLineAt = -1e9;
+    ribBatch = null;
+    carveCost.tiles = 0; carveCost.ms = 0; carveCost.relieved = 0;
     pois.clear(); areaGrid.clear(); survey.clear();
     vegGrid.clear(); vegSeeded.clear(); vegDeferredAt.clear();
     drapedWays.length = 0;

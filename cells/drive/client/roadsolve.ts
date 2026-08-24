@@ -111,6 +111,41 @@ export class RoadSolver {
 
   constructor(private readonly env: SolveEnv) {}
 
+  /**
+   * THE SOLVER SPEAKS IN LOCAL METRES, SO A WORLD HOP MUST EMPTY IT.
+   *
+   * `hints` is keyed by a spatial cell of LOCAL x/z and carries a settled deck
+   * ELEVATION; `junctions` likewise holds local positions. Both survive a
+   * world rebase unless emptied — and because every world seats the truck at
+   * local (0,0), the hints the last postcard left under its own wheels sit
+   * exactly where the next one spawns. hintAt then hands the new road the OLD
+   * world's deck height, the carve digs the hillside down to meet a deck that
+   * is not there, and the truck arrives at the bottom of a phantom trench
+   * (owner-caught, live). Advisory data with a hard spatial meaning is the
+   * most dangerous thing to carry across a rebase precisely because nothing
+   * about it looks like a coordinate.
+   */
+  /** How many times a world hop has emptied this solver, and what the last
+   *  sweep discarded — a hop's awaits let the NEW world start writing hints
+   *  before the caller resumes, so "is it empty now" is an unobservable
+   *  instant and cannot be the assertion. What the sweep THREW AWAY can. */
+  sweeps = 0;
+  readonly lastSwept = { hints: 0, juncs: 0 };
+
+  reset(): void {
+    this.sweeps++;
+    this.lastSwept.hints = this.hints.size;
+    this.lastSwept.juncs = this.junctions.size;
+    this.hints.clear();
+    this.hinted.clear();
+    this.junctions.clear();
+    this.profiles.length = 0;
+    const st = this.stats;
+    st.pinned = 0; st.chains = 0; st.maxChainM = 0; st.totalChainM = 0;
+    st.considered = 0; st.noHeight = 0; st.notDrivable = 0; st.chained = 0;
+    st.opened = 0; st.dropped.length = 0;
+  }
+
   writeHints(dense: Array<[number, number]>, alg: number[]): void {
     if (this.recording) this.profiles.push(dense.map((p, i) => [p[0], p[1], alg[i]]));
     if (this.hints.size > 6000) this.hints.clear();   // advisory data; rebuilt per tile
