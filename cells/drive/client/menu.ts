@@ -57,6 +57,8 @@ export interface MenuCtx {
   tapeBank?(): Promise<string>;
   /** The banked-run shelf, newest first — server truth from the last sync. */
   tapeShelf?(): Array<{ id: string; at: number; secs: number; lat: number; lon: number; url: string }>;
+  /** A shelf row's tap: hop to the run and roll it — play mode. */
+  runPlay?(id: string): void;
   /** The player's own spot, banked when the attract reel carried them away —
    *  null once spent (or never set). */
   attractRet?(): string | null;
@@ -744,7 +746,12 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
           say('THE RUN’S LINK — OPENS THE GAME AT THE RUN, WITH PLAY');
         });
         row.append(ico(ICON.gps, C.dim), name, sub, link);
-        row.addEventListener('click', () => ctx.openGmap(`${t.lat}, ${t.lon}`, say));
+        // Tapping a RUN means PLAY IT (owner-asked) — the hop and the rolling
+        // card, not merely a drive to its coordinates.
+        row.addEventListener('click', () => {
+          if (ctx.runPlay) ctx.runPlay(t.id);
+          else ctx.openGmap(`${t.lat}, ${t.lon}`, say);
+        });
         body.appendChild(row);
       }
     }

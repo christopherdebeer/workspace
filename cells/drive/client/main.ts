@@ -16333,10 +16333,9 @@ const runBoot = ((): { user: string; id: string } | null => {
     return m ? { user: m[1], id: m[2] } : null;
   } catch { return null; }
 })();
-async function runFetch(): Promise<{ head: TapeHead; steps: string; keys: string } | null> {
-  if (!runBoot) return null;
+async function runFetchWire(user: string, id: string): Promise<{ head: TapeHead; steps: string; keys: string } | null> {
   try {
-    const r = await fetch(`/~/tape/v1/${runBoot.user}/${runBoot.id}`);
+    const r = await fetch(`/~/tape/v1/${user}/${id}`);
     if (!r.ok) return null;
     let w: { head?: TapeHead; steps?: string; keys?: string } | null = null;
     try { w = await r.clone().json(); } catch {
@@ -16351,7 +16350,25 @@ async function runFetch(): Promise<{ head: TapeHead; steps: string; keys: string
   } catch { /* the link still opens the game */ }
   return null;
 }
-function runCard(w: { head: TapeHead; steps: string; keys: string }): void {
+const runFetch = (): Promise<{ head: TapeHead; steps: string; keys: string } | null> =>
+  runBoot ? runFetchWire(runBoot.user, runBoot.id) : Promise.resolve(null);
+/** A shelf row's tap: INTO PLAY MODE (owner-asked) — hop to the run's head
+ *  and roll it the way its ?run= link would, PLAY already pressed. */
+async function runOpenPlay(id: string): Promise<void> {
+  const user = sync.status().user;
+  if (!user) return;
+  const url = `${location.pathname}?run=${user}/${id}`;
+  if (real.on || lineOn || hopping) { location.replace(url); return; }
+  attractStop();
+  menu.open(T_DRIVE);
+  const w = await runFetchWire(user, id);
+  if (!w) return;
+  try {
+    await worldHop(w.head.lat, w.head.lon, w.head.hdg);
+    runCard(w, true);
+  } catch { location.replace(url); }
+}
+function runCard(w: { head: TapeHead; steps: string; keys: string }, auto = false): void {
   const d = new Date(w.head.at);
   const when = `${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')} `
     + `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
@@ -16377,7 +16394,7 @@ function runCard(w: { head: TapeHead; steps: string; keys: string }): void {
   x.style.cssText = 'position:absolute;top:2px;right:7px;opacity:0.6;cursor:pointer;padding:4px;';
   const drop = (): void => { card.style.opacity = '0'; setTimeout(() => card.remove(), 700); };
   x.addEventListener('click', drop);
-  btn.addEventListener('click', () => {
+  const go = (): void => {
     const tape = attractDecode(w);
     const prior = tapeApplyHead(tape.head);
     tapeRestore(tape.keys, 0);
@@ -16397,9 +16414,13 @@ function runCard(w: { head: TapeHead; steps: string; keys: string }): void {
         setTimeout(drop, 3500);
       }
     }, 400);
-  });
+  };
+  btn.addEventListener('click', go);
   card.append(x, title, note, btn);
   document.body.appendChild(card);
+  // A shelf tap already MEANT play — the card arrives with the button
+  // pressed and reports the wait instead of asking again.
+  if (auto) { go(); return; }
   // The button means something once the ground can hold the truck; before
   // that the card says so instead of pretending.
   const gate = setInterval(() => {
@@ -24049,6 +24070,10 @@ function tick(now: number): void {
       splashOrbit.p.copy(camera.position);
       splashOrbit.blend = 0;
       splashOrbit.y = camera.position.y;
+      // The orbit LOOKS AT the truck. A cab boot has the shell ghosted for
+      // the seat's own sake — a shot of a missing rig must not inherit that
+      // (owner-caught). Restored when the orbit stands down.
+      if (camMode === 'cab') ghostCab(false);
     }
     splashOrbit.a += wallDt * ((Math.PI * 2) / 55);
     // THE ORBIT IS RIGID AROUND THE TRUCK. Easing the POSITION was the fight:
@@ -24085,7 +24110,10 @@ function tick(now: number): void {
     const dCam = Math.hypot(or2, splashOrbit.y - aimY);
     const lift = (0.5 - hubBandFrac(now)) * 2 * dCam * Math.tan((camera.fov * Math.PI) / 360);
     camera.lookAt(state.x, aimY - lift, state.z);
-  } else splashOrbit.on = false;
+  } else {
+    if (splashOrbit.on && camMode === 'cab') ghostCab(true);
+    splashOrbit.on = false;
+  }
   // THE SHADOW BOX RIDES THE CURRENT VEHICLE. Fixed at the origin it would have
   // been a two-hundred-metre patch of correct shading somewhere behind you for
   // the rest of the drive. Aimed down the sun from high above, so the whole box
@@ -24662,16 +24690,23 @@ let HW = 2, HH = 2;      // HUD buffer size, in HUD pixels
  * exactly the shimmer small text was blamed for.
  */
 let hudDpr = 1;
-const HUD_SIZES = [0.67, 1, 1.33];   // FINE · STOCK · LARGE, of the stock grid
-let hudSize = 1;                      // multiplier, owned by the HUD SIZE dial
+// FINE · TRIM · STOCK · LARGE, of the stock grid. TRIM is the default — the
+// seat's verdict was that FINE is legible and STOCK is a step too chunky, and
+// the true size sits between them. On a DPR-3 phone the four are 4 · 5 · 6 ·
+// 8 device pixels per HUD pixel.
+const HUD_SIZES = [0.67, 0.84, 1, 1.33];
+let hudSize = HUD_SIZES[1];           // multiplier, owned by the HUD SIZE dial
 function hudResize(): void {
   const dpr = Math.max(1, Math.round(devicePixelRatio || 1));
   hudDpr = dpr >= 2 ? 2 : 1;
   // Two CSS pixels per HUD pixel on a phone, three on a desktop — the stock
-  // look — scaled by the dial, then snapped to whole device pixels.
+  // look — scaled by the dial, then snapped so a HUD PIXEL is a whole number
+  // of device pixels (whole-unit drawing stays crisp even when the backing
+  // pixel is fractional-device; half-step detail additionally wants an even
+  // count, which STOCK and FINE both give).
   const target = (innerWidth < 760 ? 2 : 3) * hudSize;
-  const n = Math.max(1, Math.round((target * dpr) / hudDpr));   // device px per backing px
-  hudS = (n * hudDpr) / dpr;
+  const n = Math.max(hudDpr, Math.round(target * dpr));   // device px per HUD px
+  hudS = n / dpr;
   HW = Math.max(80, Math.round(innerWidth / hudS));
   HH = Math.max(80, Math.round(innerHeight / hudS));
   hud.width = HW * hudDpr; hud.height = HH * hudDpr;
@@ -26160,10 +26195,10 @@ const DIAL_GROUPS: DialGroup[] = [
       // each tile wearing its state, plus fine-terrain and far-shell counts.
       // A diagnostic, not a game surface — but streaming bugs only show
       // themselves where streaming lives, which is the top-down view.
-      // The HUD's own grid, decoupled from the world's 148x320: FINE is a
-      // third smaller with full hard-pixel crispness (the backing store
-      // carries 2x detail wherever the screen has it — see hudResize).
-      dial('huds', 'HUD SIZE', ['FINE', 'STOCK', 'LARGE'], 1, (i) => {
+      // The HUD's own grid, decoupled from the world's 148x320: smaller steps
+      // keep full hard-pixel crispness (the backing store carries 2x detail
+      // wherever the screen has it — see hudResize). TRIM is the default.
+      dial('huds', 'HUD SIZE', ['FINE', 'TRIM', 'STOCK', 'LARGE'], 1, (i) => {
         hudSize = HUD_SIZES[i];
         hudResize();
       }),
@@ -27591,6 +27626,7 @@ const menu = createMenu({
   place: () => (placeLine && placeLine !== '…' ? placeLine : 'LOCATING').toUpperCase(),
   tapeBank: tapeBankLast,
   tapeShelf: tapeShelfRows,
+  runPlay: (id: string) => { void runOpenPlay(id); },
   splashPoke: () => {
     attract.idleAt = performance.now();
     attractStop();
