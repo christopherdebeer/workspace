@@ -149,6 +149,8 @@ export interface Sync {
    *  server actually confirmed, so the caller can say honestly whether a
    *  later sync might restore what was just cleared locally. */
   reset(): Promise<boolean>;
+  /** Bank a kept tape durably (and shareably — the URL is public). */
+  bank(tape: unknown): Promise<{ ok: boolean; url?: string; kept?: number; why?: string }>;
 }
 
 export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string } = {}): Sync {
@@ -382,6 +384,29 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
       if (token) await run('syncing…');
     },
     sync: (reason = 'syncing…'): Promise<void> => run(reason),
+    async bank(tape: unknown): Promise<{ ok: boolean; url?: string; kept?: number; why?: string }> {
+      if (!token) return { ok: false, why: 'SIGN IN TO BANK A TAPE' };
+      const hit = (): Promise<Response> => fetch(`${base}/tape`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', authorization: `Bearer ${token}` },
+        body: JSON.stringify(tape),
+      });
+      try {
+        let res = await hit();
+        // The same courtesy /state gets: an aged access token refreshes once
+        // before anyone is told they are signed out.
+        if (res.status === 401) {
+          const r = await refreshTok();
+          if (r === 'ok') res = await hit();
+          else return { ok: false, why: r === 'dead' ? 'SIGNED OUT — SIGN IN AGAIN' : 'SYNC UNREACHABLE — TRY AGAIN' };
+        }
+        const j = (await res.json().catch(() => ({}))) as { ok?: boolean; url?: string; kept?: number; error?: string };
+        if (!res.ok || !j.ok) return { ok: false, why: (j.error ?? `bank failed (${res.status})`).toUpperCase() };
+        return { ok: true, url: j.url, kept: j.kept };
+      } catch {
+        return { ok: false, why: 'OFFLINE — THE TAPE STAYS ON THIS DEVICE' };
+      }
+    },
     async reset(): Promise<boolean> {
       if (!token) return false;
       try {

@@ -980,7 +980,13 @@ const PUSH_CAP = 4000;         // roads accepted in one push
 const MARKS_CAP = 2000;        // marks accepted in one push, per kind
 interface StateRow { g: number; t: number; c?: number }
 interface MarkRows { m: Record<string, number>; s: Record<string, number> }
-interface PlayerState { roads: Record<string, StateRow>; marks: MarkRows; odo: number }
+interface PlayerState { roads: Record<string, StateRow>; marks: MarkRows; odo: number;
+  tapes: TapeMeta[] }
+/** A banked tape's INDEX row — the blob itself lives in the public namespace
+ *  (~/tape/v1/<user>/<id>), edge-served like any tile. Tens of bytes, which is
+ *  the state table's whole design. */
+export interface TapeMeta { id: string; at: number; secs: number; steps: number; lat: number; lon: number }
+const TAPE_SK = 'TAPE#';
 /** The corner of DynamoDB this needs, so a test can hand it a Map. */
 export interface StateTable {
   /** The whole partition in one read: roads, marks and the profile together. */
@@ -992,6 +998,7 @@ export interface StateTable {
    *  career, not a campaign. */
   delRows(pk: string, sks: string[]): Promise<void>;
   setProfile(pk: string, p: { odo: number }): Promise<void>;
+  putTape(pk: string, meta: TapeMeta): Promise<void>;
 }
 const num = (v: unknown, cap = Number.MAX_SAFE_INTEGER): number => {
   const n = Math.round(Number(v));
@@ -1024,7 +1031,7 @@ function liveTable(): StateTable {
   return {
     async all(pk) {
       const { m, db } = await client();
-      const out: PlayerState = { roads: {}, marks: { m: {}, s: {} }, odo: 0 };
+      const out: PlayerState = { roads: {}, marks: { m: {}, s: {} }, odo: 0, tapes: [] };
       // ONE query for the whole partition — roads, marks and profile arrive
       // together, split by sk prefix here. A page is 1MB and a row is tens of
       // bytes, so this is one call for any real player; the loop is here so a
@@ -1048,6 +1055,13 @@ function liveTable(): StateTable {
             if (!id || Object.keys(out.roads).length >= STATE_CAP) continue;
             const c = num(it.c?.N);
             out.roads[id] = c ? { g: num(it.g?.N), t: num(it.t?.N), c } : { g: num(it.g?.N), t: num(it.t?.N) };
+            continue;
+          }
+          if (sk.startsWith(TAPE_SK)) {
+            const id = sk.slice(TAPE_SK.length);
+            if (id && out.tapes.length < 64) out.tapes.push({ id, at: num(it.c?.N),
+              secs: num(it.g?.N), steps: num(it.t?.N),
+              lat: Number(it.la?.N ?? 0), lon: Number(it.lo?.N ?? 0) });
             continue;
           }
           for (const kind of ['m', 's'] as const) {
@@ -1076,6 +1090,13 @@ function liveTable(): StateTable {
             DeleteRequest: { Key: { pk: S(pk), sk: S(sk) } } })) },
         }));
       }
+    },
+    async putTape(pk, meta) {
+      // Reuses the batch writer's item shape: g/t/c are the table's own three
+      // numeric columns (secs/steps/banked-at here), lat/lon ride as extras.
+      await batchPut([{ pk: S(pk), sk: S(TAPE_SK + meta.id),
+        g: N(meta.secs), t: N(meta.steps), c: N(meta.at),
+        la: { N: String(meta.lat) }, lo: { N: String(meta.lon) } }]);
     },
     async setProfile(pk, p) {
       const { m, db } = await client();
@@ -1181,9 +1202,61 @@ export async function serveState(
     missions: mine.marks.m,
     stations: mine.marks.s,
     odo: mine.odo,
+    tapes: (mine.tapes ?? []).sort((a, b) => b.at - a.at),
     ...(method === 'POST' ? { wrote } : {}),
     ...(method === 'DELETE' ? { reset } : {}),
   }), { 'cache-control': 'no-store' });
+}
+
+/**
+ * ── THE TAPE BANK (R59) ──
+ *
+ * A kept recording, made durable and SHAREABLE: the blob goes to the public
+ * namespace (edge-served, immutable — a drive is not a secret and a URL to
+ * one is a postcard), the index goes to the caller's own state partition.
+ * Pruned oldest-first past the shelf cap, so a device that banks freely
+ * cannot grow a bill. The blob of a pruned tape is left in the namespace —
+ * an orphan object is cheaper than a delete path, and a shared URL keeps
+ * working, which is what sharing means.
+ */
+const TAPE_SHELF = 24;
+const TAPE_BODY_CAP = 200_000;
+const TAPE_BLOB_RE = /^\/~\/tape\/v1\/([a-z0-9_.-]{1,40})\/(\d{10,16})$/;
+export async function serveTape(
+  caller: string,
+  body: string | undefined,
+  table: StateTable = liveTable(),
+  put: typeof putTile = putTile,
+) {
+  const no = (code: number, error: string) =>
+    respond(code, 'application/json', JSON.stringify({ error }), { 'cache-control': 'no-store' });
+  if (!TABLE) return no(503, 'no table configured');
+  if (!caller || caller === 'anonymous') return no(401, 'sign in to bank a tape');
+  if (!body || body.length > TAPE_BODY_CAP) return no(400, body ? 'tape too large' : 'no tape');
+  let tape: { head?: { v?: number; at?: number; secs?: number; steps?: number; lat?: number; lon?: number };
+    steps?: string; keys?: string } = {};
+  try { tape = JSON.parse(body) as typeof tape; } catch { return no(400, 'unreadable'); }
+  const h = tape.head;
+  if (!h || typeof tape.steps !== 'string' || typeof tape.keys !== 'string'
+    || !Number.isFinite(h.at) || !Number.isFinite(h.secs) || (h.secs as number) <= 0
+    || (h.secs as number) > 300) return no(400, 'not a tape');
+  const user = caller.toLowerCase().replace(/[^a-z0-9_.-]/g, '').slice(0, 40);
+  if (!user) return no(400, 'unusable caller');
+  const id = String(Math.round(h.at as number));
+  const path = `/~/tape/v1/${user}/${id}`;
+  await put(path, gzipSync(Buffer.from(body, 'utf8'), { level: 9 }));
+  const pk = `PLAYER#${caller}`;
+  await table.putTape(pk, { id, at: Math.round(h.at as number),
+    secs: Math.round(h.secs as number), steps: Math.round(h.steps ?? 0),
+    lat: +(h.lat ?? 0).toFixed(5), lon: +(h.lon ?? 0).toFixed(5) });
+  // The shelf holds TAPE_SHELF; beyond it the OLDEST index rows go. Read after
+  // write so the row just banked counts itself.
+  const shelf = ((await table.all(pk)).tapes ?? []).sort((a, b) => b.at - a.at);
+  if (shelf.length > TAPE_SHELF) {
+    await table.delRows(pk, shelf.slice(TAPE_SHELF).map((t) => TAPE_SK + t.id));
+  }
+  return respond(200, 'application/json', JSON.stringify({ ok: true, id, url: path, kept: Math.min(shelf.length, TAPE_SHELF) }),
+    { 'cache-control': 'no-store' });
 }
 
 export const handler = async (event: {
@@ -1201,6 +1274,10 @@ export const handler = async (event: {
     }
     return serveState(method, event.headers?.['x-cell-caller'] ?? 'anonymous', event.body);
   }
+  if (path === '/tape') {
+    if (method !== 'POST') return respond(405, 'application/json', JSON.stringify({ error: 'POST' }));
+    return serveTape(event.headers?.['x-cell-caller'] ?? 'anonymous', event.body);
+  }
   // Deliberately OUTSIDE the `~/` namespace: that surface is cached by path,
   // and a resolver keyed on a query string has no business in a cache whose
   // key would ignore it.
@@ -1217,6 +1294,11 @@ export const handler = async (event: {
   // put a day-long copy of the whole page in the CDN under a tile-shaped key —
   // observed on the first live probe, before any tile existed.
   if (path.startsWith('/~/')) {
+    if (TAPE_BLOB_RE.test(path)) {
+      return respond(404, 'application/json', JSON.stringify({ error: 'no such tape' }), {
+        'cache-control': 'no-store',
+      });
+    }
     const tile = path.match(TILE_RE);
     if (tile) return serveTile(path, tile);
     const cover = path.match(COVER_RE);

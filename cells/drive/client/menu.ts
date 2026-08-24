@@ -53,6 +53,8 @@ export interface MenuCtx {
   /** Any interaction with the menu — the splash's idle clock resets on it,
    *  and a running attract tape stands down. Optional: older ctx builds. */
   splashPoke?(): void;
+  /** Bank the last kept recording durably; resolves to the deck's status line. */
+  tapeBank?(): Promise<string>;
   /** The player's own spot, banked when the attract reel carried them away —
    *  null once spent (or never set). */
   attractRet?(): string | null;
@@ -817,6 +819,12 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       tapeNote.textContent = ctx.tapeKeep();
       refresh();
     }, ICON.save);
+    // BANK: the kept run, made durable and shareable. The note carries the
+    // public URL back, which IS the sharing mechanism.
+    const bank = button('BANK KEPT RUN', C.soft, () => {
+      tapeNote.textContent = 'BANKING…';
+      void ctx.tapeBank?.().then((s) => { tapeNote.textContent = s; });
+    }, ICON.gps);
     const play = button('PLAY LAST RUN', C.soft, () => {
       const t = ctx.tape();
       if (t.playing || t.armed) { ctx.tapeStopPlay(); } else { ctx.tapePlay(); close(); }
@@ -834,7 +842,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       setLab(play, t.playing || t.armed ? 'STOP PLAYBACK' : 'PLAY LAST RUN');
       setLab(keep, t.kept ? `KEEP LAST RUN (${t.kept})` : 'KEEP LAST RUN');
     });
-    body.append(keep, play, tapeNote);
+    body.append(keep, bank, play, tapeNote);
     dialsInto(body, ctx.dialGroups('system'));
     const snd = button('', C.soft, () => { ctx.soundTap(); refresh(); }, ICON.sound);
     updaters.push(() => {

@@ -16016,6 +16016,7 @@ function stepReal(dt: number): boolean {
   // playback of a drive that had gone anywhere, which is every drive.
   tapeRestore(t.keys, 0);
   streamWorld(state.x, state.z);
+  tapeApplyHead(t.head);
   tapePlay.tape = t; tapePlay.i = 0; tapePlay.drift = 0; tapePlay.worst = 0;
   // ARMED, not running. The tape rolls on the first frame the ground under the
   // start is finished, so a replay never opens by driving over tiles that are
@@ -16056,9 +16057,37 @@ let tapeKept = 0;
  * Any touch on the menu stands the tape down — the truck parks wherever the
  * reel had it, which is a real place you are welcome to drive out of.
  */
+/** The dial keys a tape's physics actually depend on — what replay applies.
+ *  Render keys stay the viewer's: how a drive LOOKS is taste, how it GRIPS
+ *  and what ground stands under it are the recording's. Weather rides along
+ *  because WET is grip. Applied WITHOUT saveDials — a tape must never
+ *  overwrite the player's own saved preferences. */
+const TAPE_PHYS_KEYS = ['trac', 'tseg'] as const;
+function tapeApplyHead(head: TapeHead): Record<string, number> {
+  const prior: Record<string, number> = {};
+  for (const k of TAPE_PHYS_KEYS) {
+    const at = head.dials?.[k];
+    const d = DIALS.find((x) => x.key === k);
+    if (d && at !== undefined && Number.isFinite(at)) {
+      prior[k] = d.at;
+      const want = clamp(Math.round(at), 0, d.opts.length - 1);
+      if (want !== d.at) { d.at = want; d.apply(want); }
+    }
+  }
+  if (head.wx === 'clear' || head.wx === 'haze' || head.wx === 'rain' || head.wx === 'storm') {
+    wx.next = head.wx as Sky;
+  }
+  return prior;
+}
+function tapeRestoreDials(prior: Record<string, number>): void {
+  for (const [k, at] of Object.entries(prior)) {
+    const d = DIALS.find((x) => x.key === k);
+    if (d && d.at !== at) { d.at = at; d.apply(at); }
+  }
+}
 const ATTRACT_IDLE_MS = 12000;
 const ATTRACT_RET_KEY = 'drive.attract.ret';
-const attract = { on: false, i: 0, idleAt: 0, doneAt: 0, showAt: 0 };
+const attract = { on: false, i: 0, idleAt: 0, doneAt: 0, showAt: 0, dials: {} as Record<string, number> };
 const b64ToBytes = (s: string): Uint8Array => {
   const bin = atob(s);
   const out = new Uint8Array(bin.length);
@@ -16100,6 +16129,7 @@ function attractArm(i: number): void {
   tapePlay.tape = tape; tapePlay.i = 0; tapePlay.drift = 0; tapePlay.worst = 0;
   tapePlay.armed = true; tapePlay.on = false;
   attract.on = true; attract.i = i; attract.doneAt = 0;
+  attract.dials = tapeApplyHead(tape.head);
   // THE RIG WAITS FOR ITS GROUND. A reel boot streams the tape spot from
   // nothing, and the first seconds put the truck on chorded DEM with no road
   // under it — in full view of the orbit. Hidden until the tape actually
@@ -16117,6 +16147,8 @@ function attractStop(): void {
   car.visible = true;
   if (!attract.on) return;
   attract.on = false;
+  tapeRestoreDials(attract.dials);
+  attract.dials = {};
   tapeEnd();
   state.speed = 0; slideV = 0; yawR = 0;   // park where the reel had it
 }
@@ -16147,6 +16179,23 @@ function stepAttract(now: number): void {
     else attractGo(0);
   }
 }
+/** The last KEPT tape in the wire shape the bank takes. */
+async function tapeWire(id?: string): Promise<{ head: TapeHead; steps: string; keys: string } | null> {
+  const t = await tapeLoad(id);
+  if (!t) return null;
+  return { head: t.head, steps: bytesToB64(t.steps),
+    keys: bytesToB64(new Uint8Array(t.keys.buffer.slice(0))) };
+}
+/** Bank the last KEPT tape durably. Returns the deck's status line — and the
+ *  tape's public URL when it lands, because a banked drive is a shareable one. */
+async function tapeBankLast(): Promise<string> {
+  const w = await tapeWire();
+  if (!w) return 'NOTHING KEPT TO BANK';
+  const r = await sync.bank(w);
+  if (!r.ok) return r.why ?? 'BANK FAILED';
+  return `BANKED ${r.kept ?? ''}/24 · ${location.origin}${r.url ?? ''}`;
+}
+(window as unknown as { __tapebank?: object }).__tapebank = tapeBankLast;
 /** Export a banked tape in the reel's own shape — the authoring bridge.
  *  Drive, KEEP, call this, paste the result into client/tapes.ts. */
 (window as unknown as { __tapeexport?: object }).__tapeexport = async (id?: string): Promise<object> => {
@@ -22403,7 +22452,14 @@ const sunFwd = new THREE.Vector3();
  * 120, so a tape that did not carry it would replay a different drive on a
  * different day.
  */
-const TAPE_V = 1;
+/** v2: the head carries a DIALS SNAPSHOT. An input tape only reproduces under
+ *  the settings that integrated it — TRACTION swaps the whole vehicle model
+ *  and TERRAIN moves the carve depth the wheels ride on (owner-caught: "don't
+ *  recordings need to know the rig/world/render settings?"). ALL dial values
+ *  are stamped (28 numbers, nothing); replay applies only the PHYSICS set and
+ *  leaves render taste to the viewer. v1 tapes replay with the viewer's own.
+ */
+const TAPE_V = 2;
 /**
  * WHICH BUILD MADE THIS TAPE.
  *
@@ -22427,6 +22483,7 @@ const TAPE_KEY_N = 10;
 interface TapeHead {
   v: number; build: string; at: number; lat: number; lon: number;
   hdg: number; t: string; wx: string; steps: number; secs: number;
+  dials?: Record<string, number>;
 }
 interface Tape { head: TapeHead; steps: Uint8Array; keys: Float32Array }
 /**
@@ -22603,7 +22660,8 @@ function tapeStop(): Tape | null {
   const [lat, lon] = localToLatLon(tapeRec.keys[0], tapeRec.keys[1]);
   tapeHead = { v: TAPE_V, build: TAPE_BUILD, at: Date.now(), lat, lon,
     hdg: (tapeRec.keys[2] * 180) / Math.PI, t: TIME_MODES[timeMode], wx: wx.sky,
-    steps: n, secs: +tapeRec.t.toFixed(2) };
+    steps: n, secs: +tapeRec.t.toFixed(2),
+    dials: Object.fromEntries(DIALS.map((d) => [d.key, d.at])) };
   const tape: Tape = {
     head: tapeHead,
     steps: new Uint8Array(tapeRec.steps),
@@ -27089,6 +27147,7 @@ function surveyLoaded(): Map<string, SurveyRoad> {
 const menu = createMenu({
   colors: { edge: UI.edge, dim: UI.dim, text: UI.text, soft: UI.soft, gold: UI.gold, hot: UI.hot, good: UI.good, bad: UI.bad },
   place: () => (placeLine && placeLine !== '…' ? placeLine : 'LOCATING').toUpperCase(),
+  tapeBank: tapeBankLast,
   splashPoke: () => {
     attract.idleAt = performance.now();
     attractStop();
