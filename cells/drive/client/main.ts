@@ -3078,8 +3078,11 @@ function loadTerrainTile(x: number, y: number): Promise<void> {
 }
 async function loadTerrainTileInner(x: number, y: number): Promise<void> {
   const key = `${x}/${y}`;
+  const ep = worldEpoch;
   const data = await fetchHeights(x, y);
-  if (!data) return;
+  // The world moved under this fetch (a hop): its local frame is gone, and a
+  // tile built now would bake the OLD origin's metres into the NEW world.
+  if (ep !== worldEpoch || !data) return;
   const b = tileBounds(x, y, TERRAIN_Z);
   const [wx0, wz0] = toLocal(b.latN, b.lonW);
   const [wx1, wz1] = toLocal(b.latS, b.lonE);
@@ -13131,6 +13134,7 @@ function clipToBounds(
   return runs.filter((r) => r.length > 1);
 }
 async function renderGated(x: number, y: number, ways: OsmWay[]): Promise<void> {
+  const ep0 = worldEpoch;
   const b = tileBounds(x, y, OSM_Z);
   const [txA, tyA] = tileAt(b.latN, b.lonW, TERRAIN_Z);
   const [txB, tyB] = tileAt(b.latS, b.lonE, TERRAIN_Z);
@@ -13164,6 +13168,9 @@ async function renderGated(x: number, y: number, ways: OsmWay[]): Promise<void> 
       .map(([dx, dy]) => readTileCache(x + dx, y + dy)),
   );
   for (const r of rings) if (r) for (const el of r) if ((el.tags ?? {}).highway) halo.push(el);
+  // A hop happened while this tile waited on terrain or the halo reads: its
+  // ways belong to a world that no longer exists here.
+  if (ep0 !== worldEpoch) return;
   renderWays(out, halo);
   // The tile's buildings, standing up together — see flushBuildings.
   flushBuildings();
@@ -13503,6 +13510,8 @@ function worldStatus(): WorldWord {
   return worldWord;
 }
 function streamWorld(ex: number, ez: number): void {
+  // Mid-hop the streamer stands down: the stores it fills are being emptied.
+  if (hopping) return;
   const [lat, lon] = localToLatLon(ex, ez);
   const r = viewRadius();
   const [tx, ty] = tileAt(lat, lon, TERRAIN_Z);
@@ -15802,8 +15811,8 @@ function startRealDrive(): void {
       // at boot and everything local — fog, chart, float precision — is baked
       // around it, so ARRIVING somewhere is cheaper and safer than moving the
       // world under a running session.
-      location.href = `${location.pathname}?lat=${p.coords.latitude.toFixed(5)}`
-        + `&lon=${p.coords.longitude.toFixed(5)}&h=${Math.round(h)}&cam=cab&real=1`;
+      location.replace(`${location.pathname}?lat=${p.coords.latitude.toFixed(5)}`
+        + `&lon=${p.coords.longitude.toFixed(5)}&h=${Math.round(h)}&cam=cab&real=1`);
     },
     (e) => geoFail(e, (s) => { real.err = s; }),
     { enableHighAccuracy: true, timeout: 20000, maximumAge: 0 },
@@ -15999,8 +16008,8 @@ function stepReal(dt: number): boolean {
   // mount, so it waits for you to stop. Survey progress is keyed by position
   // in localStorage and survives it.
   if (real.drift > 5000 && Math.abs(state.speed) < 2) {
-    location.href = `${location.pathname}?lat=${f.lat.toFixed(5)}&lon=${f.lon.toFixed(5)}`
-      + `&h=${Math.round(((state.heading * 180) / Math.PI + 360) % 360)}&cam=${camMode}&real=1`;
+    location.replace(`${location.pathname}?lat=${f.lat.toFixed(5)}&lon=${f.lon.toFixed(5)}`
+      + `&h=${Math.round(((state.heading * 180) / Math.PI + 360) % 360)}&cam=${camMode}&real=1`);
   }
   return true;
 }
@@ -16179,6 +16188,146 @@ function attractHoldDrop(): void {
   h.style.opacity = '0';
   setTimeout(() => h.remove(), 900);
 }
+function attractHoldShow(shot: string | null): void {
+  if (!shot) return;
+  if (!attractHold) {
+    attractHold = document.createElement('div');
+    attractHold.id = 'attshot';
+    attractHold.style.cssText = 'position:fixed;inset:0;z-index:12;pointer-events:none;'
+      + 'background:#05070c;background-size:100% 100%;image-rendering:pixelated;'
+      + 'transition:opacity 0.8s ease;';
+    document.body.appendChild(attractHold);
+  }
+  attractHold.style.backgroundImage = `url(${shot})`;
+  attractHold.style.opacity = '1';
+}
+/**
+ * ── THE ORIGIN MOVES (R62) ──
+ *
+ * Travel WITHOUT a page load. The world origin is still fixed between hops —
+ * every metre of geometry is local to it, and a continental distance breaks
+ * both Float32 precision and the equirect metre scale — but the origin is a
+ * variable, and everything DERIVED from it can be torn down and rebuilt in
+ * place. That is what this does: sweep the built world, forget every piece of
+ * bookkeeping that speaks in local metres or gates what has streamed, re-seat
+ * the origin, and run the same anchor sequence the boot runs. The page, the
+ * menu, the GL context, the audio grant and the session all survive.
+ *
+ * WHAT IS DELIBERATELY KEPT: dials, sync/session, sound, the recorder's KEPT
+ * tapes (IndexedDB), the odometer/claims (keyed by road NAME, not metres),
+ * the campaign docket (lineOdo/legs — not world-local), materials (shared,
+ * never disposed), and the tile caches at the fetch layer (HTTP/disk), which
+ * make the re-stream warm.
+ *
+ * WHAT MUST GO: anything holding LOCAL COORDINATES (heightTiles bake local
+ * bounds at load; grids, drapes, features, sites), and anything that GATES
+ * streaming (osmLoaded/terrainReady) — a stale gate is invisible: the world
+ * simply never arrives.
+ *
+ * THE EPOCH kills the async stragglers: a tile fetch that was in flight when
+ * the hop happened would otherwise land its geometry under the NEW origin —
+ * an old continent's roads projected into the new one. Every builder captures
+ * the epoch before its awaits and stands down if the world moved under it.
+ */
+let worldEpoch = 0;
+let hopping = false;
+async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: string } = {}): Promise<void> {
+  if (hopping) throw new Error('already hopping');
+  hopping = true;
+  worldEpoch++;
+  try {
+    // The reel and the recorder stand down; the ring is a drive over ground
+    // that is about to stop existing.
+    tapeEnd();
+    tapeRec.on = false; tapeRec.steps.length = 0; tapeRec.keys.length = 0; tapeRec.t = 0;
+    // Waiters in the tile gate are released as "dropped", the same answer they
+    // get when the car outruns them.
+    for (const q of osmQueue.splice(0)) q.go(false);
+    // ── the sweep ── everything built lives under worldGroup (that is the
+    // group's contract); the two shells keep their group nodes and lose their
+    // tiles through their own retire paths. Geometries are disposed; materials
+    // are SHARED and never touched.
+    dropRetiredFar(); dropRetiredOv();
+    for (const m of farMeshes.values()) { farGroup.remove(m); m.geometry.dispose(); }
+    farMeshes.clear(); farTiles.clear(); farCoverHit.clear(); farTint.clear();
+    for (const m of ovMeshes.values()) { ovGroup.remove(m); m.geometry.dispose(); }
+    ovMeshes.clear(); ovTiles.clear(); ovPlaces.clear();
+    for (const child of [...worldGroup.children]) {
+      if (child === farGroup || child === ovGroup) continue;
+      worldGroup.remove(child);
+      child.traverse((o) => { const g = (o as THREE.Mesh).geometry; if (g) g.dispose(); });
+    }
+    droneMesh = null;
+    // ── the bookkeeping ── local-coordinate stores and streaming gates.
+    heightTiles.clear(); terrainReady.clear(); terrainMeshes.clear(); terrainDirty.clear();
+    coverTiles.clear(); coverAsked.clear(); coverWaterMemo.clear();
+    cutCells.clear(); cutSet.clear(); carveLog.clear(); cellTriCache.clear();
+    preRoadGrid.clear(); crumbDefer.clear();
+    osmLoaded.clear(); osmActive.clear(); osmFailedAt.clear(); osmPinned.clear();
+    osmCorridor.clear(); osmDone.clear(); seenWays.clear();
+    tileStats.clear(); surveyedCache.clear();
+    unbuilt = 0; osmFails = 0; osmDown = false;
+    mapFeats.length = 0; mapStroked.clear();
+    roadGrid.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear();
+    channelGrid.clear(); rapidRocks.clear(); chanSet.clear(); wiSet.clear();
+    builtRuns.clear(); synthSeen.clear();
+    pois.clear(); areaGrid.clear(); survey.clear();
+    vegGrid.clear(); vegSeeded.clear(); vegDeferredAt.clear();
+    drapedWays.length = 0;
+    peaks.clear(); peakTiles.clear(); peakBlockMemo.clear();
+    coverBuilt.clear();
+    stationSites.length = 0;
+    mission = null; missionPhase = 'none'; missionGiver = null; missionDest = null;
+    // Fog back to unknown country — the trail was local metres too.
+    fogCtx.fillStyle = 'rgba(4,6,11,0.985)';
+    fogCtx.fillRect(0, 0, FOG_PX, FOG_PX);
+    fogTex.needsUpdate = true;
+    lastRevealX = Infinity; lastRevealZ = Infinity;
+    // ── the origin moves ──
+    origin = { lat, lon, mLon: M_LAT * Math.cos((lat * Math.PI) / 180) };
+    state.x = 0; state.z = 0; state.heading = (h * Math.PI) / 180;
+    state.speed = 0; slideV = 0; yawR = 0;
+    // ── the boot's anchor sequence, verbatim in spirit ──
+    const ep = worldEpoch;
+    const [tx, ty] = tileAt(lat, lon, TERRAIN_Z);
+    const anchor = await fetchHeights(tx, ty);
+    if (ep !== worldEpoch) return;   // a second hop overtook this one
+    if (anchor) {
+      const b = tileBounds(tx, ty, TERRAIN_Z);
+      const u = clamp(Math.round(((lon - b.lonW) / (b.lonE - b.lonW)) * 255), 0, 255);
+      const v = clamp(Math.round(((b.latN - lat) / (b.latN - b.latS)) * 255), 0, 255);
+      baseElev = anchor[v * 256 + u];
+    }
+    seaOn = true;
+    if (baseElev >= -2) { dryAt = null; sea.position.y = seaSurfaceAbs() - baseElev; }
+    else { dryAt = [0, 0]; sea.position.y = -60; }
+    applyBiome(pickBiome(lat, baseElev));
+    biomeSettled = false;   // the new country's cover gets its own say, once
+    initStations();
+    buildCovers();
+    if (opts.mission) { const m = missionById(opts.mission); if (m) armMission(m); }
+    await loadTerrainTile(tx, ty);
+    if (ep !== worldEpoch) return;
+    // The streamer's own guard watches `hopping` — drop it before the first
+    // pass or the pass is a no-op and the world arrives a tick late.
+    hopping = false;
+    streamWorld(0, 0);
+    reveal(0, 0);
+    void placeName(lat, lon).then((n) => { if (n && ep === worldEpoch) { placeLabel = n; renderPlace(); } });
+  } finally { hopping = false; }
+}
+/** Travel, the player's version: in place when the MODE allows it, and the
+ *  URL is REPLACED — shareable always, history-polluting never. A mode flip
+ *  (into or out of THE LINE, a GPS drive) still reboots, through
+ *  location.replace for the same history reason. */
+function travelTo(lat: number, lon: number, h: number, url: string,
+  opts: { line?: boolean; mission?: string } = {}): void {
+  attractStop();   // travel is a takeover; a rolling reel must not re-fire into it
+  if (real.on || (opts.line ?? false) !== lineOn) { location.replace(url); return; }
+  void worldHop(lat, lon, h, { mission: opts.mission })
+    .then(() => { history.replaceState(null, '', url); })
+    .catch(() => { location.replace(url); });
+}
 /** Decode a reel entry into a playable tape, RE-SEATED IN THIS BOOT'S FRAME:
  *  tape checkpoints are local coordinates relative to the origin of the boot
  *  that recorded them, so every x/z is shifted by where the tape's own anchor
@@ -16224,9 +16373,24 @@ function attractGoNow(): void {
   attractGoI = null;
   const t = ATTRACT_TAPES[i];
   if (!t) return;
-  try { sessionStorage.setItem(ATTRACT_GO_KEY, JSON.stringify({ i, lat: t.lat, lon: t.lon, h: t.h })); } catch { return; }
-  try { sessionStorage.setItem(ATTRACT_SHOT_KEY, canvas.toDataURL('image/jpeg', 0.72)); } catch { /* the hop just cuts */ }
-  location.reload();
+  // The parting shot bridges the hop either way — held over the in-place
+  // rebuild, or banked across the reload if the hop has to fall back.
+  let shot: string | null = null;
+  try { shot = canvas.toDataURL('image/jpeg', 0.72); } catch { /* the cut is just a cut */ }
+  attractHoldShow(shot);
+  void (async () => {
+    try {
+      await worldHop(t.lat, t.lon, t.h);
+      attractArm(i);
+    } catch {
+      // The in-place road failed under this cycle; travel the old way.
+      try {
+        sessionStorage.setItem(ATTRACT_GO_KEY, JSON.stringify({ i, lat: t.lat, lon: t.lon, h: t.h }));
+        if (shot) sessionStorage.setItem(ATTRACT_SHOT_KEY, shot);
+        location.reload();
+      } catch { attractHoldDrop(); }
+    }
+  })();
 }
 function attractStop(): void {
   car.visible = true;
@@ -16240,6 +16404,10 @@ function attractStop(): void {
   state.speed = 0; slideV = 0; yawR = 0;   // park where the reel had it
 }
 function stepAttract(now: number): void {
+  // Mid-hop (or with a hop already flagged) the reel holds its breath: the
+  // idle timer must not fire a second hop into the first, and a cleared
+  // tapePlay mid-teardown must not read as "the tape ran out, next postcard".
+  if (hopping || attractGoI !== null) { attract.idleAt = now; return; }
   const hub = menu.tab() === T_DRIVE && !lineOn && !real.on && camMode !== 'top';
   if (!hub) {
     attract.idleAt = now;
@@ -18688,6 +18856,10 @@ function heightsOf(): number[] {
 (window as unknown as { __sync?: object }).__sync = (): object => sync.status();
 /** The world's origin, for a probe checking that a spawn landed where the URL
  *  said — after a sign-in return, that is the whole question. */
+/** Travel in place, the player's path — for the harness to exercise without
+ *  a menu tap. Resolves when the anchor is set and streaming has begun. */
+(window as unknown as { __hop?: object }).__hop = (lat: number, lon: number, h = 0): Promise<string> =>
+  worldHop(lat, lon, h).then(() => 'ok', (e: Error) => `refused: ${e.message}`);
 (window as unknown as { __origin?: object }).__origin = (): object =>
   ({ lat: +origin.lat.toFixed(5), lon: +origin.lon.toFixed(5) });
 /** What is actually STORED, as opposed to what is loaded — the two differ by
@@ -24703,7 +24875,8 @@ async function loadCampaign(): Promise<void> {
 }
 const startDrive = (d: Drive): void => {
   const m = d.mission ? `&m=${d.mission.id}` : '';
-  location.href = `${location.pathname}?lat=${d.lat}&lon=${d.lon}&h=${d.h}&cam=chase${m}`;
+  travelTo(d.lat, d.lon, d.h, `${location.pathname}?lat=${d.lat}&lon=${d.lon}&h=${d.h}&cam=chase${m}`,
+    { mission: d.mission?.id });
 };
 
 // ── stations ───────────────────────────────────────────────────────
@@ -25138,7 +25311,8 @@ function lineGo(): void {
   if (!sync.signedIn()) { void sync.signIn(); return; }
   const st = lineLoad();
   if (st) {
-    location.href = `${location.pathname}?lat=${st.lat}&lon=${st.lon}&h=${st.h}&cam=chase&line=1`;
+    travelTo(st.lat, st.lon, st.h,
+      `${location.pathname}?lat=${st.lat}&lon=${st.lon}&h=${st.h}&cam=chase&line=1`, { line: true });
     return;
   }
   if (!LINE_START) return;
@@ -25148,7 +25322,9 @@ function lineGo(): void {
       odo: 0, begunAt: Date.now(), at: Date.now(),
     } satisfies LineState));
   } catch { /* still playable; CONTINUE just will not know the metre */ }
-  location.href = `${location.pathname}?lat=${LINE_START.lat}&lon=${LINE_START.lon}&h=${LINE_START.h}&cam=chase&line=1`;
+  travelTo(LINE_START.lat, LINE_START.lon, LINE_START.h,
+    `${location.pathname}?lat=${LINE_START.lat}&lon=${LINE_START.lon}&h=${LINE_START.h}&cam=chase&line=1`,
+    { line: true });
 }
 (window as unknown as { __line?: object }).__line = (): object => ({
   on: lineOn, odo: Math.round(lineOdo), begunAt: lineBegunAt,
@@ -25599,7 +25775,8 @@ async function driveFromGmap(raw: string, say: (s: string, bad?: boolean) => voi
   }
   if (!here) { say('NO COORDINATES IN THAT LINK', true); return; }
   say('FOUND — LOADING');
-  location.href = `${location.pathname}?lat=${here.lat.toFixed(5)}&lon=${here.lon.toFixed(5)}&h=0&cam=chase`;
+  travelTo(here.lat, here.lon, 0,
+    `${location.pathname}?lat=${here.lat.toFixed(5)}&lon=${here.lon.toFixed(5)}&h=0&cam=chase`);
 }
 /** …and the way back out: where the truck is standing, as a link anyone can
  *  open in Google Maps. `?q=` because it drops a pin rather than merely
@@ -27278,7 +27455,20 @@ const menu = createMenu({
       const ret = sessionStorage.getItem(ATTRACT_RET_KEY);
       if (!ret) return;
       sessionStorage.removeItem(ATTRACT_RET_KEY);
-      location.href = ret;
+      // Home is a HOP now, not a navigation — and when the hop cannot run
+      // (mid-hop, a GPS drive, the line) the reload REPLACES the entry:
+      // travel never leaves a history trail to back-button through.
+      const q = new URL(ret, location.href).searchParams;
+      const la = parseFloat(q.get('lat') ?? ''), lo = parseFloat(q.get('lon') ?? '');
+      const hh = parseFloat(q.get('h') ?? '0');
+      if (Number.isFinite(la) && Number.isFinite(lo) && !real.on && !lineOn && !hopping) {
+        attractStop();
+        void worldHop(la, lo, Number.isFinite(hh) ? hh : 0, { mission: q.get('m') ?? undefined })
+          .then(() => { history.replaceState(null, '', ret); })
+          .catch(() => { location.replace(ret); });
+        return;
+      }
+      location.replace(ret);
     } catch { /* fine */ }
   },
   situation: () => {
@@ -27408,10 +27598,12 @@ const menu = createMenu({
   setPaint: (hex) => setCustomPaint(hex),
   drive: () => audio.arm(),
   realToggle: () => {
-    if (real.on) { location.href = location.pathname; return; }  // back to the menu, model driving
+    if (real.on) { location.replace(location.pathname); return; }  // back to the menu, model driving
     startRealDrive();
   },
-  elsewhere: () => { location.href = location.pathname + '?random=1'; },
+  // A random spawn is decided at BOOT (findSpawn owns the dice), so ELSEWHERE
+  // keeps the reboot — through replace(), never a history entry.
+  elsewhere: () => { location.replace(location.pathname + '?random=1'); },
   saveSpot: () => saveSpot(),
   // THE LINE, as the menu reads it. One CTA, honest rows, the legs in order.
   line: () => {
@@ -27483,7 +27675,7 @@ const menu = createMenu({
       const q = new URLSearchParams(location.search);
       q.delete('line');
       q.delete('m');    // the armed leg must not ride the URL into the fresh boot
-      setTimeout(() => { location.href = `${location.pathname}?${q.toString()}`; }, 1600);
+      setTimeout(() => { location.replace(`${location.pathname}?${q.toString()}`); }, 1600);
     })();
   },
   // PROGRESS, off the device. The label is the ACTION, the note is the state —
@@ -27536,8 +27728,9 @@ const menu = createMenu({
       (p) => {
         status('FOUND — LOADING');
         const h = Number.isFinite(p.coords.heading as number) ? Math.round(p.coords.heading as number) : 0;
-        location.href = `${location.pathname}?lat=${p.coords.latitude.toFixed(5)}`
-          + `&lon=${p.coords.longitude.toFixed(5)}&h=${h}&cam=chase`;
+        travelTo(p.coords.latitude, p.coords.longitude, h,
+          `${location.pathname}?lat=${p.coords.latitude.toFixed(5)}`
+          + `&lon=${p.coords.longitude.toFixed(5)}&h=${h}&cam=chase`);
       },
       (e) => geoFail(e, (s) => status(s, true)),
       { enableHighAccuracy: true, timeout: 20000, maximumAge: 30000 },
