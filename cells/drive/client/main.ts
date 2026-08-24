@@ -8558,6 +8558,49 @@ const profileHints = solver.hints;
 const hintedWays = solver.hinted;
 const writeHints = (dense: Array<[number, number]>, alg: number[]): void => solver.writeHints(dense, alg);
 const hintAt = (x: number, z: number, reach = 6): number | null => solver.hintAt(x, z, reach);
+/**
+ * ── RIBBON DECKS BATCH PER TILE (R57) ──
+ *
+ * Measured at Freiburg: 594 MAT.road meshes carrying 6,548 triangles —
+ * ELEVEN triangles per draw call, the frame's worst ratio, and every one of
+ * them main-thread JS→driver overhead. A PROFILED deck (mode !== 'none') is
+ * the batchable kind by construction: its alignment is solved once and the
+ * ground is carved to meet it, so it never re-seats — unlike a DRAPED way,
+ * which registers with drapedWays for rewriting and keeps its own mesh.
+ *
+ * Grouped by material AND attribute signature (colour and slip coats are
+ * optional per deck), merged at the end of each renderWays batch — the same
+ * shape flushBuildings proved. Off outside a batch: a ribbon built outside
+ * renderWays still stands its own mesh.
+ */
+let ribBatch: Map<string, { mat: THREE.Material; geos: THREE.BufferGeometry[] }> | null = null;
+function flushRibbons(): void {
+  const b = ribBatch;
+  ribBatch = null;
+  if (!b) return;
+  for (const { mat, geos } of b.values()) {
+    if (!geos.length) continue;
+    const names = Object.keys(geos[0].attributes);
+    const out = new THREE.BufferGeometry();
+    for (const name of names) {
+      const itemSize = (geos[0].attributes[name] as THREE.BufferAttribute).itemSize;
+      let total = 0;
+      for (const g of geos) total += g.attributes[name].count;
+      const arr = new Float32Array(total * itemSize);
+      let o = 0;
+      for (const g of geos) {
+        const a = g.attributes[name] as THREE.BufferAttribute;
+        arr.set(a.array as Float32Array, o);
+        o += a.count * itemSize;
+      }
+      out.setAttribute(name, new THREE.BufferAttribute(arr, itemSize));
+    }
+    for (const g of geos) g.dispose();
+    const mesh = new THREE.Mesh(out, mat);
+    mesh.userData.ribbon = true;
+    worldGroup.add(mesh);
+  }
+}
 function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string): void {
   const fid = ++ribbonSeq;
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
@@ -10145,7 +10188,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     geo.setAttribute('aDirt', new THREE.BufferAttribute(new Float32Array(dirts), 3));
   }
   geo.computeVertexNormals();
-  {
+  if (flat && ribBatch) {
+    // A profiled deck inside a tile batch: merged at flushRibbons, one draw
+    // call per material per tile instead of one per way fragment.
+    const key = `${mat.uuid}|${Object.keys(geo.attributes).sort().join(',')}`;
+    const e = ribBatch.get(key) ?? { mat, geos: [] };
+    e.geos.push(geo);
+    ribBatch.set(key, e);
+  } else {
     // Tagged so the same boundary-edge count that found the slots in the tunnel
     // shells can be pointed at the carriageway, where the question is the same
     // one: is this a continuous surface, or a run of separate pieces that
@@ -12554,6 +12604,7 @@ function mmThing(pts: Array<[number, number]>, id: number, tags: Record<string, 
 }
 function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
   wayTape?.push({ els, halo });
+  ribBatch = new Map();
   // PRE-PASS: chain this tile's drivable ways end-to-end and solve each chain's
   // profile whole, publishing hints for the per-way builds below. Lives in
   // `roadsolve.ts` now — see there for why.
@@ -12733,6 +12784,7 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
     // areas; with lines in the answer it would paint a river green.
   }
   flushAprons();
+  flushRibbons();
   // The pre-grid lives for exactly one batch: it exists to make build order
   // irrelevant WITHIN the batch, and a stale copy would shadow the real,
   // decked segments the next batch builds against.
