@@ -245,7 +245,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
      and every word wears a real 1px pixel stroke — eight hard offsets in the
      panel ink — plus one soft drop for ground. */
   #menu.hub .m-title, #menu.hub .m-sub, #menu.hub .m-place, #menu.hub .m-dimline,
-  #menu.hub table.m-kv { text-shadow:
+  #menu.hub .m-statline, #menu.hub table.m-kv { text-shadow:
     -1px 0 0 rgba(4,10,11,0.98), 1px 0 0 rgba(4,10,11,0.98),
     0 -1px 0 rgba(4,10,11,0.98), 0 1px 0 rgba(4,10,11,0.98),
     -1px -1px 0 rgba(4,10,11,0.98), 1px 1px 0 rgba(4,10,11,0.98),
@@ -257,6 +257,28 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   #menu.hub .m-navrow { background: rgba(8,20,23,0.74); }
   #menu.hub .m-cta { background: rgba(8,20,23,0.74); }
   #menu.hub .m-cta:first-child { background: rgba(24,52,40,0.8); }
+  /* THE HUB'S NAV IS TILES, NOT ROWS. Seven full-width rows with taglines
+     filled a phone screen and buried the one thing no other game has — the
+     live world behind the menu. A tile carries the icon and the name; the
+     taglines belong to the pages themselves. RETURN keeps a full-width row:
+     it is a ticket, not a section. */
+  #menu.hub .m-nav { display: grid; grid-template-columns: repeat(3, 1fr); gap: 5px; }
+  #menu.hub .m-navrow { flex-direction: column; align-items: center; justify-content: center;
+    gap: 3px; padding: 9px 2px 7px; text-align: center; }
+  #menu.hub .m-navrow .sub, #menu.hub .m-navrow .chev { display: none; }
+  #menu.hub .m-navrow .name { font-size: 11px; letter-spacing: 0.5px; white-space: normal; }
+  #menu.hub .m-navrow .ico { font-size: 17px; align-self: center; }
+  #menu.hub .m-navrow.ret { grid-column: 1 / -1; flex-direction: row; padding: 6px 10px;
+    justify-content: flex-start; text-align: left; }
+  #menu.hub .m-navrow.ret .sub, #menu.hub .m-navrow.ret .chev { display: inline; }
+  #menu.hub .m-navrow.ret .sub { margin-left: auto; }
+  /* Wider viewports can afford six across — the tiles become a single rank. */
+  @media (min-width: 700px) { #menu.hub .m-nav { grid-template-columns: repeat(6, 1fr); } }
+  /* GPS DRIVE is the second thought, and dresses like one. */
+  #menu.hub .m-cta.alt { font-size: 10px; padding: 4px 10px 3px; min-width: 0; }
+  /* The hub's stats are ONE line of facts, not a ledger. */
+  #menu.hub .m-statline { color: ${C.text}; font-size: 10px; margin: 2px 0 4px;
+    letter-spacing: 0.5px; }
   #menu .m-bay .cap { position: absolute; top: 3px; left: 5px; color: ${C.dim}; font-size: 10px; }
   #menu .m-bay .tag { position: absolute; bottom: 3px; left: 5px; color: ${C.gold}; font-size: 10px; }
   `;
@@ -447,7 +469,10 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     const situation = el('div', 'm-dimline', ctx.situation());
     bindText(place, ctx.place);
     bindText(situation, ctx.situation);
-    const kv = kvTable(ctx.driveStats);
+    // One line of facts. The four-row ledger was a screen's worth of chrome
+    // on a phone; the VALUES carry everything the labels were saying.
+    const kv = el('div', 'm-statline');
+    bindText(kv, () => ctx.driveStats().map(([, v]) => v).join(' · '));
     const cta = el('button', 'm-cta');
     cta.append(ico(ICON.car), el('span', 'lab', 'DRIVE'));
     cta.addEventListener('click', () => { ctx.drive(); close(); });
@@ -515,7 +540,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     nav.appendChild(signRow);
     // The way home: the attract reel carried this session somewhere else, and
     // the ticket back sits in the stack until it is spent. Hidden otherwise.
-    const retRow = el('div', 'm-navrow');
+    const retRow = el('div', 'm-navrow ret');
     retRow.append(ico(ICON.gps), el('span', 'name', 'RETURN'),
       el('span', 'sub', 'BACK TO WHERE YOU WERE'), el('span', 'chev', '>'));
     retRow.addEventListener('click', () => ctx.attractRetGo?.());

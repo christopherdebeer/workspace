@@ -1530,7 +1530,7 @@ let clockHeld: number | null = null;
  * scrubbed clock (the player holding the sun somewhere IS the instrument).
  */
 let splashGold = 0;                 // 0 = the dial's truth, 1 = full golden
-const splashOrbit = { on: false, a: 0 };
+const splashOrbit = { on: false, a: 0, p: new THREE.Vector3() };
 const splashCamV = new THREE.Vector3();
 let splashGoldH: number | null = null;   // which golden hour this open chose
 const GOLDEN_AM = 6.9, GOLDEN_PM = 17.2; // solar hours where the light is low and warm
@@ -16058,7 +16058,7 @@ let tapeKept = 0;
  */
 const ATTRACT_IDLE_MS = 12000;
 const ATTRACT_RET_KEY = 'drive.attract.ret';
-const attract = { on: false, i: 0, idleAt: 0, doneAt: 0 };
+const attract = { on: false, i: 0, idleAt: 0, doneAt: 0, showAt: 0 };
 const b64ToBytes = (s: string): Uint8Array => {
   const bin = atob(s);
   const out = new Uint8Array(bin.length);
@@ -16100,6 +16100,13 @@ function attractArm(i: number): void {
   tapePlay.tape = tape; tapePlay.i = 0; tapePlay.drift = 0; tapePlay.worst = 0;
   tapePlay.armed = true; tapePlay.on = false;
   attract.on = true; attract.i = i; attract.doneAt = 0;
+  // THE RIG WAITS FOR ITS GROUND. A reel boot streams the tape spot from
+  // nothing, and the first seconds put the truck on chorded DEM with no road
+  // under it — in full view of the orbit. Hidden until the tape actually
+  // rolls (the same worldQuiet gate), with a deadline so a refusing tile
+  // shows a floating rig rather than none at all.
+  car.visible = false;
+  attract.showAt = performance.now() + 25000;
 }
 function attractGo(i: number): void {
   const t = ATTRACT_TAPES[i];
@@ -16107,6 +16114,7 @@ function attractGo(i: number): void {
   location.href = `${location.pathname}?lat=${t.lat}&lon=${t.lon}&h=${t.h}&cam=chase&attract=${i}`;
 }
 function attractStop(): void {
+  car.visible = true;
   if (!attract.on) return;
   attract.on = false;
   tapeEnd();
@@ -16122,6 +16130,7 @@ function stepAttract(now: number): void {
     return;
   }
   if (attract.on) {
+    if (!car.visible && (tapePlay.on || now > attract.showAt)) car.visible = true;
     if (!tapePlay.on && !tapePlay.armed) {
       // The tape ran out. Hold the last shot a beat, then the next postcard.
       if (!attract.doneAt) attract.doneAt = now;
@@ -23594,13 +23603,21 @@ function tick(now: number): void {
     if (!splashOrbit.on) {
       splashOrbit.on = true;
       splashOrbit.a = Math.atan2(camera.position.x - state.x, camera.position.z - state.z);
+      splashOrbit.p.copy(camera.position);
     }
     splashOrbit.a += wallDt * ((Math.PI * 2) / 55);
     const or2 = 8.8;
     const ox = state.x + Math.sin(splashOrbit.a) * or2;
     const oz = state.z + Math.cos(splashOrbit.a) * or2;
     splashCamV.set(ox, Math.max(groundAt(ox, oz) + 2.1, bodyY + 2.6), oz);
-    camera.position.lerp(splashCamV, 1 - Math.exp(-2.0 * wallDt));
+    // The orbit keeps ITS OWN eased position and writes the camera outright.
+    // The first cut lerped the camera after the chase rig had already lerped
+    // it, and the chase pull is the stronger of the two — parked, the orbit
+    // barely won; with the attract reel DRIVING, it collapsed into a sloppy
+    // chase (reported from the seat). Two easings tugging one camera is not
+    // a shot; one easing owning it is.
+    splashOrbit.p.lerp(splashCamV, 1 - Math.exp(-2.4 * wallDt));
+    camera.position.copy(splashOrbit.p);
     camera.lookAt(state.x, bodyY + 2.05, state.z);
   } else splashOrbit.on = false;
   // THE SHADOW BOX RIDES THE CURRENT VEHICLE. Fixed at the origin it would have
