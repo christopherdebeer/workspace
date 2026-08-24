@@ -21,37 +21,39 @@
     -webkit-tap-highlight-color: transparent;
   }
 </style>
-<canvas id="web" aria-label="Strung — an elastic choir. Songs travel the filaments as visible waves. Drop beads on the web, stretch the membranes, tilt gravity."></canvas>
+<canvas id="web" aria-label="Strung — an elastic choir. Songs travel the filaments as visible waves. Drop beads on the web, stretch the membranes, tilt gravity. Seeded: the URL hash replays this exact performance."></canvas>
 <script>
 'use strict';
 /* ============================================================
-   STRUNG
-   An elastic choir, played and bred.
+   STRUNG — second movement
+   An elastic choir, played, bred, and now composed.
 
-   BODIES ARE SPRINGS. Every creature is a mass-spring membrane —
-   a hub and an elastic ring solved by dynamic relaxation — whose
-   rest lengths breathe with its real note envelopes. Grab the
-   membrane and stretch it: the strain bends a tone; let go and it
-   snaps back singing.
+   BODIES ARE SPRINGS. Membranes of hub + Verlet ring, breathing
+   with their real note envelopes. Stretch one and the strain bends
+   a tone; let go and it snaps back singing.
 
-   SOUND IS MATERIAL. Neighbors are joined by sagging elastic
-   filaments. A song is a transverse wave you can watch travel the
-   filament; hearing is the wave's arrival, which visibly plucks
-   the receiver — and may be answered. Songs go only where the web
-   goes.
+   SOUND IS MATERIAL. Sagging filaments carry songs as visible
+   transverse waves; hearing is arrival. Beads dropped on the web
+   pluck each filament at a pitch set by its true length.
 
-   THE WEB IS AN INSTRUMENT. Tap open space and a bead falls under
-   gravity, bouncing from filament to filament, plucking each at a
-   pitch set by its true length. Pinch scales gravity; a two-finger
-   twist re-hangs the whole web in a new direction (on phones the
-   device's own tilt does the same).
+   HARMONY. The choir sings natural minor over a progression that
+   advances every bar on the shared pulse; notes on the downbeat
+   snap to the chord, bass voices land its root, and the filaments
+   themselves are tuned to chord tones — the web voice-leads. An
+   intensity arc swells and rests the music over minutes; every
+   sixteen bars the key modulates under a golden cascade, and a
+   Shepard–Risset bank breathes beneath it all, endlessly rising,
+   surging in the last bar before every key change.
 
-   THE CHOIR EVOLVES. Heritable voices, rhythms, tempers; touch is
-   food; the well-attended reproduce with mutation; a sync gene
-   leans a tended web toward ensemble; the tonal center modulates
-   and a cascade crosses the whole web in the new key. The dead
-   detach, fall out of the web, and leave their root in a low
-   fading drone.
+   GLITCH. On a seeded schedule the piece tears: the master routes
+   through a 5-bit crush behind a sixteenth-note gate, dust-clicks
+   land on the grid, songs come out as raw sawtooth, and the frame
+   itself rips sideways in strips. Death is the biggest glitch.
+
+   SEEDED. All simulation randomness flows from one seed, read
+   from (and written to) the URL hash — same seed, same viewport,
+   untouched: the same performance, note for note. Touch is
+   intervention; it branches the timeline.
    ============================================================ */
 
 const canvas = document.getElementById('web');
@@ -60,9 +62,29 @@ const g2 = canvas.getContext('2d', { alpha: false });
 const BG = { r: 5, g: 6, b: 11 };
 const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
 const TAU = Math.PI * 2;
-const rand = (a, b) => a + Math.random() * (b - a);
 const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
-const pick = (arr) => arr[Math.floor(Math.random() * arr.length)];
+
+/* ---------------- seed: the score of this performance ---------------- */
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const hashMatch = (location.hash || '').match(/s=([0-9a-z]+)/i);
+const SEED = hashMatch ? (parseInt(hashMatch[1], 36) >>> 0) : ((Date.now() % 2176782336) >>> 0);
+if (!hashMatch) { try { history.replaceState(null, '', '#s=' + SEED.toString(36)); } catch (e) {} }
+
+const simR = mulberry32(SEED);                    // drives the simulation — the score
+const auxR = mulberry32((SEED ^ 0x9E3779B9) >>> 0); // cosmetic + audio grain — never forks the sim
+
+const srand = (a, b) => a + simR() * (b - a);
+const spick = (arr) => arr[(simR() * arr.length) | 0];
+const vrand = (a, b) => a + auxR() * (b - a);
+const vpick = (arr) => arr[(auxR() * arr.length) | 0];
 
 let W = 0, H = 0, DPR = 1, minDim = 1;
 
@@ -78,29 +100,57 @@ function resize() {
   g2.fillRect(0, 0, W, H);
 }
 
-/* ---------------- music ---------------- */
+/* ---------------- harmony ---------------- */
 
-const SCALE = [0, 2, 4, 7, 9];
-const ROOT = 130.81;
-const PULSE = 60 / 72 / 2;
+const SCALE = [0, 2, 3, 5, 7, 8, 10];      // natural minor
+const ROOT = 130.81;                        // C3
+const PULSE = 60 / 72 / 2;                  // eighths at 72 bpm
+const BAR = PULSE * 8;
+const PROG = [0, 5, 2, 6];                  // i · VI · III · VII (scale-degree roots)
+const MOVE_BARS = 16;                       // bars per movement (then the key turns)
 const CENTERS = [0, 5, -2, 7];
-const MODULATE_EVERY = 55;
 let centerIdx = 0;
-let nextModulation = 30;
+let lastBar = -1;
 
-function degreeHz(deg, octaveOff) {
-  const oct = Math.floor(deg / SCALE.length);
-  const semi = SCALE[((deg % SCALE.length) + SCALE.length) % SCALE.length] + 12 * oct;
+function barNow() { return Math.floor(simT / BAR); }
+function chordRoot() { return PROG[barNow() % PROG.length]; }
+function isChordTone(sd) {
+  const r = chordRoot();
+  const pc = ((sd % 7) + 7) % 7;
+  return pc === r % 7 || pc === (r + 2) % 7 || pc === (r + 4) % 7;
+}
+function snapToChord(sd) {
+  for (let off = 0; off <= 3; off++) {
+    if (isChordTone(sd + off)) return sd + off;
+    if (isChordTone(sd - off)) return sd - off;
+  }
+  return sd;
+}
+
+function scaleHz(sd, octaveOff) {
+  const oct = Math.floor(sd / 7);
+  const semi = SCALE[((sd % 7) + 7) % 7] + 12 * oct;
   return ROOT * Math.pow(2, (CENTERS[centerIdx] + semi) / 12 + (octaveOff || 0));
 }
 
-/* the pitch of a filament comes from its true length,
-   snapped to the nearest tone of the current center */
+/* a sung degree: on the downbeat it obeys the chord; bass lands the root */
+function noteHz(sd, register, tSing) {
+  const inBar = (tSing % BAR) / PULSE;
+  const strong = inBar < 1 || c_abs(inBar - 4) < 0.5;   // beats 1 and 3
+  let d = sd;
+  if (strong && register < 0) d = chordRoot();          // bass takes the root
+  else if (strong) d = snapToChord(sd);
+  return scaleHz(d, register);
+}
+const c_abs = Math.abs;
+
+/* filaments are tuned strings: length → pitch, snapped to the chord */
 function ropeHz(lenPx) {
   const raw = 160 + 70000 / Math.max(90, lenPx);
   let best = raw, err = Infinity;
   for (let d = 0; d <= 14; d++) {
-    const f = degreeHz(d, 0);
+    if (!isChordTone(d)) continue;
+    const f = scaleHz(d, 0);
     if (Math.abs(f - raw) < err) { err = Math.abs(f - raw); best = f; }
   }
   return best;
@@ -111,11 +161,17 @@ function quantize(t, sync) {
   return t + (q - t) * sync;
 }
 
+/* the long breath of the piece: swell and rest over ~3.5 minutes */
+function intensity() {
+  return 0.575 + 0.425 * Math.sin(TAU * simT / 210 - Math.PI / 2);
+}
+
 /* ---------------- audio ---------------- */
 
-let ac = null, master = null, sendIn = null, analyser = null, analyserBins = null, noiseBuf = null;
-let bed = null, ghostBus = null;
+let ac = null, master = null, dry = null, sendIn = null, analyser = null, analyserBins = null, noiseBuf = null;
+let bed = null, ghostBus = null, crush = null, crushGain = null, gateGain = null;
 let ghosts = [];
+let shepard = null;
 
 function initAudio() {
   if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
@@ -128,9 +184,21 @@ function initAudio() {
   comp.ratio.value = 7; comp.attack.value = 0.004; comp.release.value = 0.35;
   comp.connect(ac.destination);
 
-  master = ac.createGain();
-  master.gain.value = 0.6;
-  master.connect(comp);
+  // master splits: dry path, and a bitcrushed gated path for the tears
+  master = ac.createGain(); master.gain.value = 1;
+  dry = ac.createGain(); dry.gain.value = 0.6;
+  master.connect(dry); dry.connect(comp);
+
+  crush = ac.createWaveShaper();
+  const steps = 22, curve = new Float32Array(512);
+  for (let i = 0; i < 512; i++) {
+    const x = (i / 511) * 2 - 1;
+    curve[i] = Math.round(x * steps) / steps;
+  }
+  crush.curve = curve;
+  gateGain = ac.createGain(); gateGain.gain.value = 1;
+  crushGain = ac.createGain(); crushGain.gain.value = 0.0001;
+  master.connect(crush); crush.connect(gateGain); gateGain.connect(crushGain); crushGain.connect(comp);
 
   analyser = ac.createAnalyser();
   analyser.fftSize = 256;
@@ -173,6 +241,38 @@ function initAudio() {
   ghostBus.gain.value = 1;
   ghostFilter.connect(ghostBus); ghostBus.connect(master); ghostBus.connect(sendIn);
   ghostBus._in = ghostFilter;
+
+  // the Shepard–Risset stair: six octaves, endlessly rising
+  const shepFilter = ac.createBiquadFilter();
+  shepFilter.type = 'lowpass'; shepFilter.frequency.value = 1400;
+  const shepBus = ac.createGain(); shepBus.gain.value = 1;
+  shepFilter.connect(shepBus); shepBus.connect(master); shepBus.connect(sendIn);
+  shepard = {
+    pos: 0,
+    voices: Array.from({ length: 6 }, () => {
+      const o = ac.createOscillator(); o.type = 'sine';
+      const g = ac.createGain(); g.gain.value = 0.0001;
+      o.connect(g); g.connect(shepFilter);
+      o.start();
+      return { osc: o, gain: g };
+    }),
+  };
+}
+
+function updateShepard(dts) {
+  if (!shepard || !ac) return;
+  const bar = barNow() % MOVE_BARS;
+  const riser = bar === MOVE_BARS - 1 ? 0.4 : 0;      // the last bar climbs hard
+  shepard.pos = (shepard.pos + (0.035 + riser) * dts) % 6;
+  const t = ac.currentTime;
+  const level = 0.011 * (0.4 + intensity() * 0.6) * (riser ? 2.2 : 1);
+  for (let i = 0; i < 6; i++) {
+    const p = (i + shepard.pos) % 6;
+    const f = 30 * Math.pow(2, p);
+    const w = Math.exp(-Math.pow(p - 3, 2) / 2.0);
+    shepard.voices[i].osc.frequency.setTargetAtTime(f, t, 0.06);
+    shepard.voices[i].gain.gain.setTargetAtTime(level * w, t, 0.08);
+  }
 }
 
 function addGhostTone(freq) {
@@ -200,22 +300,32 @@ function retuneBed() {
   for (const b of bed) b.osc.frequency.setTargetAtTime(base * b.ratio, ac.currentTime, 2.2);
 }
 
-/* one note at a raw frequency, in a genome voice */
-function playFreq(v, freq, vel, brightMul) {
+/* one note at a raw frequency; inside a glitch window it comes out torn */
+function playFreqRaw(v, freq, vel, brightMul, raw) {
   if (!ac) return;
   const t = ac.currentTime;
   const bright = clamp(v.bright * (brightMul || 1), 0.05, 1.5);
-  const dur = v.attack + v.decay;
+  const dur = raw ? Math.min(0.5, v.attack + v.decay * 0.3) : v.attack + v.decay;
 
   const car = ac.createOscillator();
   const env = ac.createGain();
   env.gain.setValueAtTime(0.0001, t);
-  env.gain.exponentialRampToValueAtTime(Math.max(0.002, vel), t + Math.max(0.005, v.attack));
+  env.gain.exponentialRampToValueAtTime(Math.max(0.002, vel * (raw ? 0.8 : 1)), t + Math.max(0.005, v.attack));
   env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-  car.connect(env); env.connect(master); env.connect(sendIn);
 
+  if (raw) {
+    // the crushed voice: sawtooth straight into the shaper
+    car.type = 'sawtooth'; car.frequency.value = freq;
+    const ws = ac.createWaveShaper(); ws.curve = crush.curve;
+    car.connect(ws); ws.connect(env); env.connect(master); env.connect(sendIn);
+    car.start(t); car.stop(t + dur + 0.1);
+    return;
+  }
+
+  env.connect(master); env.connect(sendIn);
   if (v.type === 0 || v.type === 3) {
     car.type = 'sine'; car.frequency.value = freq;
+    car.connect(env);
     const mod = ac.createOscillator();
     mod.frequency.value = freq * (v.type === 0 ? 3.501 : 2.0);
     const mg = ac.createGain();
@@ -225,7 +335,8 @@ function playFreq(v, freq, vel, brightMul) {
     mod.start(t); mod.stop(t + dur + 0.1);
   } else if (v.type === 1) {
     car.type = 'sine'; car.frequency.value = freq;
-    const vib = ac.createOscillator(); vib.frequency.value = rand(4.5, 6.5);
+    car.connect(env);
+    const vib = ac.createOscillator(); vib.frequency.value = vrand(4.5, 6.5);
     const va = ac.createGain(); va.gain.value = freq * 0.008;
     vib.connect(va); va.connect(car.frequency);
     vib.start(t); vib.stop(t + dur + 0.1);
@@ -234,18 +345,14 @@ function playFreq(v, freq, vel, brightMul) {
     const lp = ac.createBiquadFilter(); lp.type = 'lowpass';
     lp.frequency.setValueAtTime(freq * (2 + 6 * bright), t);
     lp.frequency.exponentialRampToValueAtTime(freq * 1.2, t + dur * 0.6);
-    car.disconnect(); car.connect(lp); lp.connect(env);
+    car.connect(lp); lp.connect(env);
   }
   car.start(t); car.stop(t + dur + 0.1);
 }
 
-function playVoice(v, deg, vel, brightMul, octaveOff) {
-  playFreq(v, degreeHz(deg, octaveOff || 0), vel, brightMul);
-}
-
 const STRING_VOICE = { type: 2, attack: 0.004, decay: 1.3, bright: 0.6 };
 function stringPluck(lenPx, vel) {
-  playFreq(STRING_VOICE, ropeHz(lenPx), clamp(vel, 0.02, 0.16), 1);
+  playFreqRaw(STRING_VOICE, ropeHz(lenPx), clamp(vel, 0.02, 0.16), 1, glitchActive);
 }
 
 function glissDown(freq, dur, vel) {
@@ -275,6 +382,37 @@ function bassSwell() {
   o.start(t); o.stop(t + 6.2);
 }
 
+/* a dust click: a few milliseconds of raw noise on the grid */
+function click(vel) {
+  if (!ac || !noiseBuf) return;
+  const t = ac.currentTime;
+  const src = ac.createBufferSource(); src.buffer = noiseBuf;
+  src.playbackRate.value = vrand(0.8, 1.6);
+  const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 2800;
+  const env = ac.createGain();
+  env.gain.setValueAtTime(vel, t);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + 0.012);
+  src.connect(hp); hp.connect(env); env.connect(comp_or_master());
+  src.start(t); src.stop(t + 0.03);
+}
+function comp_or_master() { return master; }
+
+/* the wound: a crushed burst when something dies */
+function rawBurst(freq) {
+  if (!ac) return;
+  const t = ac.currentTime;
+  const o = ac.createOscillator(); o.type = 'sawtooth';
+  o.frequency.setValueAtTime(freq, t);
+  o.frequency.exponentialRampToValueAtTime(Math.max(28, freq * 0.2), t + 0.35);
+  const ws = ac.createWaveShaper(); ws.curve = crush.curve;
+  const env = ac.createGain();
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(0.09, t + 0.02);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + 0.4);
+  o.connect(ws); ws.connect(env); env.connect(master);
+  o.start(t); o.stop(t + 0.45);
+}
+
 /* the strain of a stretched membrane, one voice per pointer */
 function makeStrainVoice() {
   if (!ac) return null;
@@ -285,71 +423,121 @@ function makeStrainVoice() {
   return { osc: o, gain: g };
 }
 
+/* ---------------- glitch scheduler (seeded — part of the score) ---------------- */
+
+let glitchActive = false;
+let glitchUntil = 0;
+let nextGlitch = 8;
+
+function updateGlitch(dts) {
+  if (!glitchActive && simT >= nextGlitch) {
+    glitchActive = true;
+    glitchUntil = simT + srand(0.25, 0.8);
+    nextGlitch = simT + srand(7, 16);
+    if (ac) {
+      // gate the crushed bus on sixteenths for the window
+      const t = ac.currentTime;
+      dry.gain.setTargetAtTime(0.34, t, 0.02);
+      crushGain.gain.setTargetAtTime(0.5, t, 0.02);
+      const dur = glitchUntil - simT;
+      const g16 = PULSE / 2;
+      for (let k = 0; k * g16 < dur; k++) {
+        gateGain.gain.setValueAtTime(k % 2 ? 0.05 : 1, t + k * g16);
+      }
+    }
+  }
+  if (glitchActive && simT >= glitchUntil) {
+    glitchActive = false;
+    if (ac) {
+      const t = ac.currentTime;
+      dry.gain.setTargetAtTime(0.6, t, 0.05);
+      crushGain.gain.setTargetAtTime(0.0001, t, 0.05);
+      gateGain.gain.cancelScheduledValues(t);
+      gateGain.gain.setValueAtTime(1, t);
+    }
+  }
+}
+
+function glitchNow(dur) {
+  nextGlitch = Math.min(nextGlitch, simT);      // trip the scheduler
+  glitchUntil = simT + dur;
+}
+
+/* dust on the grid: seeded, denser inside the tears */
+let last16 = -1;
+function updateClicks() {
+  const s16 = Math.floor(simT / (PULSE / 2));
+  if (s16 !== last16) {
+    last16 = s16;
+    const p = glitchActive ? 0.55 : 0.05 * intensity();
+    if (simR() < p) click(glitchActive ? 0.05 : 0.025);
+  }
+}
+
 /* ---------------- genome ---------------- */
 
 const SOCIAL = { ECHO: 0, SHY: 1, FERTILE: 2, SHIFT: 3, BURST: 4 };
 const REGISTERS = [-1, 0, 0, 1];
 
 function randomGenome(seedIdx) {
-  const motifLen = pick([1, 1, 2, 2, 3]);
-  const base = Math.floor(rand(2, 12));
+  const motifLen = spick([1, 1, 2, 2, 3]);
+  const base = Math.floor(srand(2, 12));
   const motif = [base];
-  for (let i = 1; i < motifLen; i++) motif.push(clamp(base + pick([-2, -1, 1, 2, 3]), 0, 14));
-  const register = seedIdx !== undefined ? REGISTERS[seedIdx % 4] : pick(REGISTERS);
+  for (let i = 1; i < motifLen; i++) motif.push(clamp(base + spick([-2, -1, 1, 2, 3]), 0, 14));
+  const register = seedIdx !== undefined ? REGISTERS[seedIdx % 4] : spick(REGISTERS);
   return {
     voice: {
-      type: seedIdx !== undefined ? seedIdx % 4 : Math.floor(rand(0, 4)),
-      attack: rand(0.006, 0.15),
-      decay: rand(0.7, 3.2) * (register < 0 ? 1.6 : register > 0 ? 0.7 : 1),
-      bright: rand(0.15, 0.9),
+      type: seedIdx !== undefined ? seedIdx % 4 : Math.floor(srand(0, 4)),
+      attack: srand(0.006, 0.15),
+      decay: srand(0.7, 3.2) * (register < 0 ? 1.6 : register > 0 ? 0.7 : 1),
+      bright: srand(0.15, 0.9),
     },
     register,
     motif,
-    gap: rand(0.13, 0.4),
-    period: pick([2.5, 3.5, 5, 7, 9]) * rand(0.85, 1.15) * (register < 0 ? 1.5 : 1),
-    sync: rand(0.05, 0.4),
-    listen: rand(0.2, 0.85),
-    answerDelay: rand(0.15, 0.7),
-    social: Math.floor(rand(0, 5)),
-    hue: seedIdx !== undefined ? (seedIdx * 47) % 360 : rand(0, 360),
-    nodes: Math.floor(rand(9, 14)),
-    stiffness: rand(0.35, 0.8),          // how firmly the membrane holds its shape
-    r: rand(0.028, 0.05),
+    gap: srand(0.13, 0.4),
+    period: spick([2.5, 3.5, 5, 7, 9]) * srand(0.85, 1.15) * (register < 0 ? 1.5 : 1),
+    sync: srand(0.05, 0.4),
+    listen: srand(0.2, 0.85),
+    answerDelay: srand(0.15, 0.7),
+    social: Math.floor(srand(0, 5)),
+    hue: seedIdx !== undefined ? (seedIdx * 47) % 360 : srand(0, 360),
+    nodes: Math.floor(srand(9, 14)),
+    stiffness: srand(0.35, 0.8),
+    r: srand(0.028, 0.05),
   };
 }
 
 function mutate(g) {
   const m = JSON.parse(JSON.stringify(g));
-  m.voice.attack = clamp(m.voice.attack * rand(0.7, 1.4), 0.004, 0.25);
-  m.voice.decay = clamp(m.voice.decay * rand(0.75, 1.3), 0.4, 4.5);
-  m.voice.bright = clamp(m.voice.bright + rand(-0.18, 0.18), 0.05, 1.0);
-  if (Math.random() < 0.12) m.voice.type = Math.floor(rand(0, 4));
-  if (Math.random() < 0.1) m.register = pick(REGISTERS);
-  m.motif = m.motif.map(d => clamp(d + pick([0, 0, 0, -1, 1]), 0, 14));
-  if (Math.random() < 0.18 && m.motif.length < 4) m.motif.push(clamp(m.motif[0] + pick([-2, 2, 3]), 0, 14));
-  else if (Math.random() < 0.1 && m.motif.length > 1) m.motif.pop();
-  m.gap = clamp(m.gap * rand(0.8, 1.25), 0.09, 0.55);
-  m.period = clamp(m.period * rand(0.8, 1.25), 1.6, 14);
-  m.sync = clamp(m.sync + rand(-0.12, 0.15), 0, 0.95);
-  m.listen = clamp(m.listen + rand(-0.15, 0.15), 0.05, 0.95);
-  m.answerDelay = clamp(m.answerDelay * rand(0.8, 1.25), 0.1, 1.2);
-  if (Math.random() < 0.15) m.social = Math.floor(rand(0, 5));
-  m.hue = (m.hue + rand(-24, 24) + 360) % 360;
-  m.nodes = clamp(m.nodes + pick([0, 0, 0, -1, 1]), 8, 15);
-  m.stiffness = clamp(m.stiffness + rand(-0.1, 0.1), 0.25, 0.9);
-  m.r = clamp(m.r * rand(0.85, 1.18), 0.02, 0.065);
+  m.voice.attack = clamp(m.voice.attack * srand(0.7, 1.4), 0.004, 0.25);
+  m.voice.decay = clamp(m.voice.decay * srand(0.75, 1.3), 0.4, 4.5);
+  m.voice.bright = clamp(m.voice.bright + srand(-0.18, 0.18), 0.05, 1.0);
+  if (simR() < 0.12) m.voice.type = Math.floor(srand(0, 4));
+  if (simR() < 0.1) m.register = spick(REGISTERS);
+  m.motif = m.motif.map(d => clamp(d + spick([0, 0, 0, -1, 1]), 0, 14));
+  if (simR() < 0.18 && m.motif.length < 4) m.motif.push(clamp(m.motif[0] + spick([-2, 2, 3]), 0, 14));
+  else if (simR() < 0.1 && m.motif.length > 1) m.motif.pop();
+  m.gap = clamp(m.gap * srand(0.8, 1.25), 0.09, 0.55);
+  m.period = clamp(m.period * srand(0.8, 1.25), 1.6, 14);
+  m.sync = clamp(m.sync + srand(-0.12, 0.15), 0, 0.95);
+  m.listen = clamp(m.listen + srand(-0.15, 0.15), 0.05, 0.95);
+  m.answerDelay = clamp(m.answerDelay * srand(0.8, 1.25), 0.1, 1.2);
+  if (simR() < 0.15) m.social = Math.floor(srand(0, 5));
+  m.hue = (m.hue + srand(-24, 24) + 360) % 360;
+  m.nodes = clamp(m.nodes + spick([0, 0, 0, -1, 1]), 8, 15);
+  m.stiffness = clamp(m.stiffness + srand(-0.1, 0.1), 0.25, 0.9);
+  m.r = clamp(m.r * srand(0.85, 1.18), 0.02, 0.065);
   return m;
 }
 
-/* ---------------- physics: gravity ---------------- */
+/* ---------------- gravity ---------------- */
 
-let gravMag = 130;                  // px/s² — pinch scales it
-let gravAngle = Math.PI / 2;        // straight down — twist rotates it
+let gravMag = 130;
+let gravAngle = Math.PI / 2;
 let tiltActive = false;
 
 window.addEventListener('deviceorientation', (e) => {
   if (e.beta === null || e.gamma === null) return;
-  // phone tilt re-hangs the web; only direction, pinch keeps magnitude
   const gx = Math.sin(e.gamma * Math.PI / 180);
   const gy = Math.sin(e.beta * Math.PI / 180);
   const m = Math.hypot(gx, gy);
@@ -359,7 +547,7 @@ window.addEventListener('deviceorientation', (e) => {
 function gravX() { return Math.cos(gravAngle) * gravMag; }
 function gravY() { return Math.sin(gravAngle) * gravMag; }
 
-/* ---------------- creatures: elastic membranes ---------------- */
+/* ---------------- creatures ---------------- */
 
 const POP_MAX = 11, POP_MIN = 4;
 let creatures = [];
@@ -383,18 +571,17 @@ function makeCreature(genome, x, y, parentId) {
     x, y, vx: 0, vy: 0,
     R,
     ring,
-    energy: rand(0.8, 1.1),
+    energy: srand(0.8, 1.1),
     parentId: parentId || 0,
-    nextSing: simT + rand(0.5, genome.period),
+    nextSing: simT + srand(0.5, genome.period),
     pendingSing: 0,
     lastSing: -10,
     notes: [],
     envNow: 0,
     feedFlash: 0,
     dying: 0,
-    falling: false,
-    wanderA: rand(0, TAU),
-    phase: rand(0, TAU),               // bleuje offset: idle ripple staggered per creature
+    wanderA: srand(0, TAU),
+    phase: srand(0, TAU),
   };
 }
 
@@ -402,8 +589,8 @@ function seedPopulation() {
   creatures = [];
   const n = 7;
   for (let i = 0; i < n; i++) {
-    const a = (i / n) * TAU + rand(-0.25, 0.25);
-    const d = rand(0.16, 0.34) * minDim;
+    const a = (i / n) * TAU + srand(-0.25, 0.25);
+    const d = srand(0.16, 0.34) * minDim;
     creatures.push(makeCreature(randomGenome(i),
       W / 2 + Math.cos(a) * d, H / 2 + Math.sin(a) * d, 0));
   }
@@ -423,10 +610,10 @@ function envOf(c) {
   return Math.min(1.4, e);
 }
 
-/* ---------------- ropes: the filaments ---------------- */
+/* ---------------- ropes ---------------- */
 
-let ropes = [];       // {a, b, nodes:[], segRest, len, hue}
-let packets = [];     // {rope, s, dir, speed, amp, hue, hops, srcId, golden}
+let ropes = [];
+let packets = [];
 
 function ropeLength(rp) {
   let L = 0;
@@ -474,14 +661,12 @@ function checkConnections() {
   }
 }
 
-/* attach point: the ring node of c facing the far end */
 function attachIndex(c, tx, ty) {
   const a = Math.atan2(ty - c.y, tx - c.x);
   const n = c.ring.length;
   return ((Math.round(a / TAU * n) % n) + n) % n;
 }
 
-/* send a song down every filament of c */
 function launchPackets(c, amp, hops, golden) {
   for (const rp of ropes) {
     if (rp.a !== c && rp.b !== c) continue;
@@ -491,11 +676,8 @@ function launchPackets(c, amp, hops, golden) {
       s: fromA ? 0 : 1,
       dir: fromA ? 1 : -1,
       speed: 300 / Math.max(80, rp.len),
-      amp: amp,
-      hue: golden ? 45 : c.g.hue,
-      hops: hops,
-      srcId: c.id,
-      golden: !!golden,
+      amp, hue: golden ? 45 : c.g.hue,
+      hops, srcId: c.id, golden: !!golden,
     });
   }
 }
@@ -506,16 +688,21 @@ function sing(c, opts) {
   opts = opts || {};
   const v = c.g.voice;
   const motif = opts.motif || c.g.motif;
+  const I = intensity();
   const vel = (opts.vel || 0.14) * clamp(0.4 + c.energy * 0.6, 0.3, 1)
-            * (c.g.register < 0 ? 0.85 : 1);
+            * (c.g.register < 0 ? 0.85 : 1)
+            * (0.55 + I * 0.55);
   c.lastSing = simT;
   c.energy = Math.max(0, c.energy - 0.02);
+  const tSing = simT;
+  const raw = glitchActive;
 
   for (let i = 0; i < motif.length; i++) {
     const delay = i * c.g.gap;
+    const freq = noteHz(motif[i], c.g.register, tSing + delay);
     setTimeout(() => {
       if (c.dying) return;
-      playVoice(v, motif[i], vel * (i === 0 ? 1 : 0.75), opts.bright || 1, c.g.register);
+      playFreqRaw(v, freq, vel * (i === 0 ? 1 : 0.75), opts.bright || 1, raw);
     }, delay * 1000);
     c.notes.push({
       t0: simT + delay, attack: v.attack, decay: v.decay,
@@ -531,7 +718,7 @@ function modulate() {
   bassSwell();
   const alive = creatures.filter(c => !c.dying);
   if (alive.length) {
-    const root = pick(alive);
+    const root = spick(alive);
     sing(root, { vel: 0.16, golden: true, hops: 0 });
   }
   tideT = 0;
@@ -550,18 +737,18 @@ function interact(c, px, py) {
     const d = Math.hypot(c.x - px, c.y - py) + 0.001;
     c.vx += ((c.x - px) / d) * 3.4;
     c.vy += ((c.y - py) / d) * 3.4;
-    glissDown(degreeHz(c.g.motif[0], c.g.register), 0.7, 0.09);
+    glissDown(scaleHz(c.g.motif[0], c.g.register), 0.7, 0.09);
     c.notes.push({ t0: simT, attack: 0.02, decay: 0.7, amp: 0.7 });
   } else if (s === SOCIAL.FERTILE) {
     if (c.energy > 1.0 && creatures.length < POP_MAX) reproduce(c);
     else sing(c, { vel: 0.16 });
   } else if (s === SOCIAL.SHIFT) {
-    const shift = pick([-2, -1, 1, 2]);
+    const shift = spick([-2, -1, 1, 2]);
     c.g.motif = c.g.motif.map(d => clamp(d + shift, 0, 14));
     c.g.hue = (c.g.hue + shift * 14 + 360) % 360;
     sing(c, { vel: 0.18 });
   } else {
-    const m = [c.g.motif[0], clamp(c.g.motif[0] + 3, 0, 14), clamp(c.g.motif[0] + 5, 0, 14)];
+    const m = [c.g.motif[0], clamp(c.g.motif[0] + 2, 0, 14), clamp(c.g.motif[0] + 4, 0, 14)];
     const keptGap = c.g.gap;
     c.g.gap = 0.07;
     sing(c, { motif: m, vel: 0.18, bright: 1.3 });
@@ -570,7 +757,7 @@ function interact(c, px, py) {
 }
 
 function reproduce(c) {
-  const a = rand(0, TAU);
+  const a = srand(0, TAU);
   const child = makeCreature(mutate(c.g),
     c.x + Math.cos(a) * c.R * 2.4, c.y + Math.sin(a) * c.R * 2.4, c.id);
   child.energy = 0.7;
@@ -580,28 +767,28 @@ function reproduce(c) {
   const base = child.g.motif[0];
   const keptGap = child.g.gap;
   child.g.gap = 0.11;
-  sing(child, { motif: [clamp(base - 2, 0, 14), base, clamp(base + 3, 0, 14)], vel: 0.15 });
+  sing(child, { motif: [clamp(base - 2, 0, 14), base, clamp(base + 2, 0, 14)], vel: 0.15 });
   child.g.gap = keptGap;
 }
 
 function die(c) {
   if (c.dying) return;
   c.dying = 1;
-  c.falling = true;
-  // the web lets go of the dead at once
   packets = packets.filter(p => p.rope.a !== c && p.rope.b !== c);
   ropes = ropes.filter(r => r.a !== c && r.b !== c);
-  glissDown(degreeHz(c.g.motif[0], c.g.register) * 0.5, 1.4, 0.07);
-  addGhostTone(degreeHz(c.g.motif[0], c.g.register));
+  glissDown(scaleHz(c.g.motif[0], c.g.register) * 0.5, 1.4, 0.07);
+  rawBurst(scaleHz(c.g.motif[0], c.g.register));
+  addGhostTone(scaleHz(c.g.motif[0], c.g.register));
+  glitchNow(0.45);
 }
 
-/* ---------------- beads: rain on the instrument ---------------- */
+/* ---------------- beads ---------------- */
 
 let beads = [];
 
 function dropBead(x, y) {
   if (beads.length >= 8) beads.shift();
-  beads.push({ x, y, vx: 0, vy: 0, bounces: 0, lastRope: null, cool: 0 });
+  beads.push({ x, y, vx: 0, vy: 0, bounces: 0, cool: 0 });
 }
 
 function updateBeads(dts) {
@@ -614,7 +801,6 @@ function updateBeads(dts) {
     b.y += b.vy * dts;
     b.cool = Math.max(0, b.cool - dts);
 
-    // collide with filaments: reflect, pluck, inject a wave
     if (b.cool <= 0) {
       outer:
       for (const rp of ropes) {
@@ -644,9 +830,9 @@ function updateBeads(dts) {
               stringPluck(len, 0.03 + speed * 0.00022);
               const s = (k - 1 + t) / (rp.nodes.length - 1);
               const amp = clamp(5 + speed * 0.03, 5, 22);
-              packets.push({ rope: rp, s, dir: 1, speed: 300 / Math.max(80, rp.len), amp, hue: 175, hops: 2, srcId: -1 });
-              packets.push({ rope: rp, s, dir: -1, speed: 300 / Math.max(80, rp.len), amp, hue: 175, hops: 2, srcId: -1 });
-              // the impact also shakes the rope physically
+              const sp = 300 / Math.max(80, rp.len);
+              packets.push({ rope: rp, s, dir: 1, speed: sp, amp, hue: 175, hops: 2, srcId: -1 });
+              packets.push({ rope: rp, s, dir: -1, speed: sp, amp, hue: 175, hops: 2, srcId: -1 });
               for (let q = Math.max(1, k - 2); q < Math.min(rp.nodes.length, k + 2); q++) {
                 rp.nodes[q].x += nx * -3; rp.nodes[q].y += ny * -3;
               }
@@ -769,7 +955,6 @@ function releasePointer(e, cancelled) {
   const wasDrag = p.path > 14;
 
   if (p.grabRing && wasDrag) {
-    // a stretched membrane snaps back singing
     const c = p.grabRing.c;
     if (!c.dying) {
       const n = c.ring[p.grabRing.k];
@@ -780,7 +965,6 @@ function releasePointer(e, cancelled) {
       }
     }
   } else if (p.grabRope && wasDrag) {
-    // a drawn filament releases: pluck at its true pitch, waves both ways
     const rp = p.grabRope.rp;
     if (ropes.includes(rp)) {
       const len = ropeLength(rp);
@@ -819,16 +1003,18 @@ function checkLongPress(now) {
   }
 }
 
-/* ---------------- simulation ---------------- */
+/* ---------------- simulation (fixed 60 Hz — the score is exact) ---------------- */
 
-function updateCreatures(dt, dts) {
+const SIM_DT = 1 / 60;
+
+function updateCreatures(dts) {
   for (const c of creatures) c.envNow = envOf(c);
+  const I = intensity();
 
   for (let i = creatures.length - 1; i >= 0; i--) {
     const c = creatures[i];
 
     if (c.dying) {
-      // the dead fall out of the web
       c.vy += gravY() * dts * 2.2;
       c.vx += gravX() * dts * 2.2;
       c.x += c.vx * dts; c.y += c.vy * dts;
@@ -845,16 +1031,16 @@ function updateCreatures(dt, dts) {
       c.pendingSing = 0;
       sing(c, { vel: 0.12, hops: c.hopsIn || 0, golden: c.goldenNext });
       c.goldenNext = false;
-      c.nextSing = quantize(simT + c.g.period * rand(0.7, 1.1), c.g.sync);
+      c.nextSing = quantize(simT + c.g.period * srand(0.7, 1.1), c.g.sync);
     } else if (simT >= c.nextSing) {
-      sing(c, { vel: 0.12 });
-      c.nextSing = quantize(simT + c.g.period * rand(0.8, 1.25), c.g.sync);
+      // the intensity arc gates the choir: rests are part of the music
+      if (simR() < 0.15 + I * 0.85) sing(c, { vel: 0.12 });
+      c.nextSing = quantize(simT + c.g.period * srand(0.8, 1.25), c.g.sync);
     }
 
     if (c.energy > 1.7 && creatures.length < POP_MAX) reproduce(c);
 
-    // drift: wander, slow gyre, basin
-    c.wanderA += rand(-0.4, 0.4) * dts;
+    c.wanderA += srand(-0.4, 0.4) * dts;
     const wsp = reduceMotion ? 1.5 : 4;
     c.vx += Math.cos(c.wanderA) * wsp * dts;
     c.vy += Math.sin(c.wanderA) * wsp * dts;
@@ -879,26 +1065,24 @@ function updateCreatures(dt, dts) {
         c.vx += (ddx / d) * push; c.vy += (ddy / d) * push;
       }
     }
-    c.vx *= Math.pow(0.93, dt); c.vy *= Math.pow(0.93, dt);
+    c.vx *= 0.93; c.vy *= 0.93;
     const vm = Math.hypot(c.vx, c.vy);
     if (vm > 2.8) { c.vx = c.vx / vm * 2.8; c.vy = c.vy / vm * 2.8; }
-    c.x += c.vx * dt; c.y += c.vy * dt;
+    c.x += c.vx; c.y += c.vy;
   }
 
   if (creatures.filter(c => !c.dying).length < POP_MIN) {
     const alive = creatures.filter(c => !c.dying);
-    const parent = alive.length ? pick(alive) : null;
+    const parent = alive.length ? spick(alive) : null;
     const genome = parent ? mutate(parent.g) : randomGenome();
     creatures.push(makeCreature(genome,
-      rand(0.25, 0.75) * W, rand(0.25, 0.75) * H, parent ? parent.id : 0));
+      srand(0.25, 0.75) * W, srand(0.25, 0.75) * H, parent ? parent.id : 0));
   }
 }
 
-/* dynamic relaxation: membranes + filaments */
 function relax(dts) {
   const gx = gravX() * dts * dts * 6, gy = gravY() * dts * dts * 6;
 
-  // membranes: Verlet on ring nodes around the moving hub
   for (const c of creatures) {
     const n = c.ring.length;
     const env = c.envNow;
@@ -910,8 +1094,6 @@ function relax(dts) {
       nd.x += vx + c.vx * 0.5;
       nd.y += vy + c.vy * 0.5;
     }
-    // constraints: spokes + ring edges; rests breathe with the envelope
-    // and carry a slow staggered ripple around the ring
     const stiff = c.g.stiffness;
     const edgeRest0 = 2 * Math.sin(Math.PI / n);
     for (let iter = 0; iter < 3; iter++) {
@@ -937,7 +1119,6 @@ function relax(dts) {
     }
   }
 
-  // filaments: Verlet chains with gravity, pinned to facing ring nodes
   for (const rp of ropes) {
     const nds = rp.nodes;
     for (let k = 1; k < nds.length - 1; k++) {
@@ -962,20 +1143,18 @@ function relax(dts) {
         const w0 = (k === 1) ? 0.15 : 1;
         const w1 = (k === nds.length - 1) ? 0.15 : 1;
         const tw = w0 + w1;
-        p0.x += dx * diff * (w0 / tw) * 2 * 0.5;
-        p0.y += dy * diff * (w0 / tw) * 2 * 0.5;
-        p1.x -= dx * diff * (w1 / tw) * 2 * 0.5;
-        p1.y -= dy * diff * (w1 / tw) * 2 * 0.5;
+        p0.x += dx * diff * (w0 / tw);
+        p0.y += dy * diff * (w0 / tw);
+        p1.x -= dx * diff * (w1 / tw);
+        p1.y -= dy * diff * (w1 / tw);
       }
     }
-    // the web tugs its anchors
     rp.a.vx += (nds[0].x - an.x) * 0.05; rp.a.vy += (nds[0].y - an.y) * 0.05;
     rp.b.vx += (nds[nds.length - 1].x - bn.x) * 0.05; rp.b.vy += (nds[nds.length - 1].y - bn.y) * 0.05;
     an.x = nds[0].x; an.y = nds[0].y;
     bn.x = nds[nds.length - 1].x; bn.y = nds[nds.length - 1].y;
   }
 
-  // grabbed nodes follow the hand
   for (const p of pointers.values()) {
     if (p.isPinch) continue;
     if (p.grabRing && p.path > 8) {
@@ -999,14 +1178,13 @@ function relax(dts) {
   }
 }
 
-/* the sound of stretching: a bend tone that follows strain */
 function updateStrain(p, c, node) {
   if (!ac) return;
   const strain = Math.hypot(node.x - c.x, node.y - c.y) / c.R;
   if (strain > 1.18) {
     if (!p.strain) p.strain = makeStrainVoice();
     if (p.strain) {
-      const f = degreeHz(c.g.motif[0], c.g.register) * Math.pow(strain, 0.55);
+      const f = scaleHz(c.g.motif[0], c.g.register) * Math.pow(strain, 0.55);
       p.strain.osc.frequency.setTargetAtTime(f, ac.currentTime, 0.04);
       p.strain.gain.gain.setTargetAtTime(clamp((strain - 1.18) * 0.05, 0, 0.035), ac.currentTime, 0.06);
     }
@@ -1015,20 +1193,18 @@ function updateStrain(p, c, node) {
   }
 }
 
-/* wave packets travel their filaments; arrival is hearing */
 function updatePackets(dts) {
   for (let i = packets.length - 1; i >= 0; i--) {
     const pk = packets[i];
     if (!ropes.includes(pk.rope)) { packets.splice(i, 1); continue; }
     pk.s += pk.dir * pk.speed * dts * (reduceMotion ? 0.6 : 1);
-    pk.amp *= Math.pow(0.995, dts * 60);
+    pk.amp *= 0.995;
 
     if (pk.s <= 0 || pk.s >= 1) {
       const rp = pk.rope;
       const receiver = pk.s >= 1 ? rp.b : rp.a;
       packets.splice(i, 1);
       if (receiver.dying || receiver.id === pk.srcId) continue;
-      // the arrival visibly plucks the membrane
       const ai = attachIndex(receiver, pk.s >= 1 ? rp.a.x : rp.b.x, pk.s >= 1 ? rp.a.y : rp.b.y);
       const n = receiver.ring[ai];
       const ddx = n.x - receiver.x, ddy = n.y - receiver.y;
@@ -1040,7 +1216,7 @@ function updatePackets(dts) {
       if (pk.hops < 3
           && simT - receiver.lastSing > 1.1
           && !receiver.pendingSing
-          && Math.random() < receiver.g.listen * (pk.golden ? 0.95 : 0.75)) {
+          && simR() < receiver.g.listen * (pk.golden ? 0.95 : 0.75)) {
         receiver.pendingSing = quantize(simT + receiver.g.answerDelay, receiver.g.sync);
         receiver.hopsIn = pk.hops + 1;
         if (pk.golden) receiver.goldenNext = true;
@@ -1062,7 +1238,6 @@ function readAmp() {
 }
 
 function drawPass(alpha) {
-  // filaments: thin, pale, sagging
   g2.lineWidth = 1;
   for (const rp of ropes) {
     g2.strokeStyle = `hsla(225, 25%, 78%, ${0.22 * alpha})`;
@@ -1072,7 +1247,6 @@ function drawPass(alpha) {
     g2.stroke();
   }
 
-  // wave packets: a bright pulse displacing the filament sideways
   for (const pk of packets) {
     const rp = pk.rope;
     const N = rp.nodes.length - 1;
@@ -1098,13 +1272,11 @@ function drawPass(alpha) {
     g2.stroke();
   }
 
-  // beads
   for (const b of beads) {
     g2.fillStyle = `hsla(175, 70%, 85%, ${0.9 * alpha})`;
     g2.beginPath(); g2.arc(b.x, b.y, 2.4, 0, TAU); g2.fill();
   }
 
-  // membranes
   for (const c of creatures) {
     const env = c.envNow;
     const fade = c.dying ? 0.45 : 1;
@@ -1133,6 +1305,22 @@ function drawPass(alpha) {
   }
 }
 
+/* the frame tears sideways during a glitch window */
+function drawGlitch() {
+  const strips = 3 + (vrand(0, 3) | 0);
+  for (let i = 0; i < strips; i++) {
+    const h = vrand(6, 40);
+    const sy = vrand(0, Math.max(1, H - h));
+    const dx = vrand(-30, 30);
+    g2.drawImage(canvas,
+      0, sy * DPR, W * DPR, h * DPR,
+      dx, sy, W, h);
+  }
+  g2.fillStyle = `hsla(${vpick([305, 175, 45])}, 90%, 60%, 0.05)`;
+  const by = vrand(0, H - 20);
+  g2.fillRect(0, by, W, vrand(3, 18));
+}
+
 function render() {
   g2.globalCompositeOperation = 'source-over';
   g2.fillStyle = `rgba(${BG.r},${BG.g},${BG.b},0.4)`;
@@ -1142,7 +1330,6 @@ function render() {
   g2.lineCap = 'round';
   g2.lineJoin = 'round';
 
-  // modulation tide: one crisp golden hairline crossing the frame
   if (tideT >= 0) {
     tideT += 0.012;
     if (tideT > 1.2) tideT = -1;
@@ -1162,7 +1349,6 @@ function render() {
 
   drawPass(1);
 
-  // grabbed-node marker: the one crosshair the instrument allows itself
   for (const p of pointers.values()) {
     if (p.isPinch) continue;
     const g = p.grabRing || p.grabRope;
@@ -1172,37 +1358,53 @@ function render() {
       g2.beginPath(); g2.arc(p.x, p.y, 7, 0, TAU); g2.stroke();
     }
   }
+
+  g2.globalCompositeOperation = 'source-over';
+  if (glitchActive) drawGlitch();
+  else if (auxR() < 0.02) {
+    // a faint constant rawness: the occasional one-line slip
+    const sy = vrand(0, H - 3);
+    g2.drawImage(canvas, 0, sy * DPR, W * DPR, 2 * DPR, vrand(-4, 4), sy, W, 2);
+  }
 }
 
-/* ---------------- main loop ---------------- */
+/* ---------------- main loop: fixed-step sim, free-running render ---------------- */
 
 let last = performance.now();
+let acc = 0;
 let raf = 0;
 
-function step(now) {
-  const dt = clamp((now - last) / 16.667, 0.2, 3);
-  const dts = dt * 0.016667;
-  last = now;
-  simT += dts;
+function simStep() {
+  simT += SIM_DT;
 
-  if (simT >= nextModulation) {
-    nextModulation = simT + MODULATE_EVERY;
-    modulate();
+  const bar = barNow();
+  if (bar !== lastBar) {
+    if (lastBar >= 0 && bar % MOVE_BARS === 0) modulate();
+    lastBar = bar;
   }
+
+  updateGlitch(SIM_DT);
+  updateClicks();
+  updateCreatures(SIM_DT);
+  const sub = reduceMotion ? 1 : 2;
+  for (let s = 0; s < sub; s++) relax(SIM_DT / sub);
+  updatePackets(SIM_DT);
+  updateBeads(SIM_DT);
+
   if (simT >= nextConnCheck) {
     nextConnCheck = simT + 0.6;
     checkConnections();
   }
+}
+
+function step(now) {
+  acc += Math.min((now - last) / 1000, 0.1);
+  last = now;
+  let n = 0;
+  while (acc >= SIM_DT && n < 4) { simStep(); acc -= SIM_DT; n++; }
 
   checkLongPress(now);
-  updateCreatures(dt, dts);
-
-  // substep the physics for stability + a touch of motion blur
-  const sub = reduceMotion ? 1 : 2;
-  for (let s = 0; s < sub; s++) relax(dts / sub);
-
-  updatePackets(dts);
-  updateBeads(dts);
+  updateShepard(SIM_DT * Math.max(1, n));
   readAmp();
   render();
 
@@ -1212,6 +1414,7 @@ function step(now) {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     cancelAnimationFrame(raf);
+    acc = 0;
     if (ac && ac.state === 'running') ac.suspend();
   } else {
     last = performance.now();
