@@ -1530,7 +1530,7 @@ let clockHeld: number | null = null;
  * scrubbed clock (the player holding the sun somewhere IS the instrument).
  */
 let splashGold = 0;                 // 0 = the dial's truth, 1 = full golden
-const splashOrbit = { on: false, a: 0, p: new THREE.Vector3() };
+const splashOrbit = { on: false, a: 0, p: new THREE.Vector3(), blend: 0, y: 0 };
 const splashCamV = new THREE.Vector3();
 let splashGoldH: number | null = null;   // which golden hour this open chose
 const GOLDEN_AM = 6.9, GOLDEN_PM = 17.2; // solar hours where the light is low and warm
@@ -23604,20 +23604,34 @@ function tick(now: number): void {
       splashOrbit.on = true;
       splashOrbit.a = Math.atan2(camera.position.x - state.x, camera.position.z - state.z);
       splashOrbit.p.copy(camera.position);
+      splashOrbit.blend = 0;
+      splashOrbit.y = camera.position.y;
     }
     splashOrbit.a += wallDt * ((Math.PI * 2) / 55);
+    // THE ORBIT IS RIGID AROUND THE TRUCK. Easing the POSITION was the fight:
+    // with the reel driving, an eased camera lags a moving centre by v/k
+    // metres, and that lag direction ROTATES as the azimuth sweeps — the
+    // truck swung around the frame and read as the chase rig pulling
+    // (reported twice from the seat). Position derives EXACTLY from the
+    // truck each frame — the sweep is smooth because the azimuth is, the
+    // framing is locked because the offset is, and a checkpoint snap moves
+    // camera and truck together, which the frame cannot see. Only the entry
+    // blends (1.4s from wherever the chase camera stood), and only the
+    // HEIGHT is low-passed, because groundAt steps at cell edges.
     const or2 = 8.8;
     const ox = state.x + Math.sin(splashOrbit.a) * or2;
     const oz = state.z + Math.cos(splashOrbit.a) * or2;
-    splashCamV.set(ox, Math.max(groundAt(ox, oz) + 2.1, bodyY + 2.6), oz);
-    // The orbit keeps ITS OWN eased position and writes the camera outright.
-    // The first cut lerped the camera after the chase rig had already lerped
-    // it, and the chase pull is the stronger of the two — parked, the orbit
-    // barely won; with the attract reel DRIVING, it collapsed into a sloppy
-    // chase (reported from the seat). Two easings tugging one camera is not
-    // a shot; one easing owning it is.
-    splashOrbit.p.lerp(splashCamV, 1 - Math.exp(-2.4 * wallDt));
-    camera.position.copy(splashOrbit.p);
+    const wantY = Math.max(groundAt(ox, oz) + 2.1, bodyY + 2.6);
+    splashOrbit.y += (wantY - splashOrbit.y) * Math.min(1, 3.0 * wallDt);
+    splashCamV.set(ox, splashOrbit.y, oz);
+    splashOrbit.blend = Math.min(1, splashOrbit.blend + wallDt / 1.4);
+    if (splashOrbit.blend < 1) {
+      splashOrbit.p.lerp(splashCamV, splashOrbit.blend * splashOrbit.blend);
+      camera.position.copy(splashOrbit.p);
+    } else {
+      camera.position.copy(splashCamV);
+      splashOrbit.p.copy(splashCamV);
+    }
     camera.lookAt(state.x, bodyY + 2.05, state.z);
   } else splashOrbit.on = false;
   // THE SHADOW BOX RIDES THE CURRENT VEHICLE. Fixed at the origin it would have
