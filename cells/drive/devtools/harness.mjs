@@ -144,6 +144,14 @@ export async function openDrive(opts = {}) {
     const p = req.url.split('?')[0];
     if (p === '/app.js') { res.writeHead(200, { 'content-type': 'application/javascript' }); res.end(readFileSync(bundle)); }
     else if (p === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(html); }
+    // A BANKED RUN'S BLOB, so ?run= can be exercised at all: the cell's tape
+    // route is DynamoDB + the edge store, neither of which exists here, and
+    // without it a run link 404s and silently falls back to the plain hub —
+    // which is exactly the behaviour under test.
+    else if (p.startsWith('/~/tape/v1/') && opts.tape) {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(readFileSync(opts.tape));
+    }
     else if (p.startsWith('/~/cover/v1/')) {
       cellRoute(p).then((out) => {
         if (!out) { res.writeHead(404); res.end('{}'); return; }

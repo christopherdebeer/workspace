@@ -55,6 +55,8 @@ export interface MenuCtx {
   splashPoke?(): void;
   /** Bank the last kept recording durably; resolves to the deck's status line. */
   tapeBank?(): Promise<string>;
+  /** Cut the always-turning ring so the run has a fixed, known start. */
+  tapeClear?(): string;
   /** The banked-run shelf, newest first — server truth from the last sync. */
   tapeShelf?(): Array<{ id: string; at: number; secs: number; lat: number; lon: number; url: string }>;
   /** A shelf row's tap: hop to the run and roll it — play mode. */
@@ -853,6 +855,14 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       tapeNote.textContent = ctx.tapeKeep();
       refresh();
     }, ICON.save);
+    // CUT: the ring is always turning, so a run KEPT off it starts wherever
+    // the trimming left it. This says "start here" — the deck's RING clock
+    // drops to 0:00 and the next KEEP holds exactly what you drove after it.
+    const cut = button('CUT RING - START HERE', C.soft, () => {
+      bankNote.style.display = '';
+      bankNote.textContent = ctx.tapeClear?.() ?? '';
+      refresh();
+    }, ICON.flag);
     // BANK: the kept run, made durable and shareable. Its OWN note line: the
     // recorder's status updater rewrites tapeNote every tick, so the BANKED
     // line (with the public URL in it) survived less than a second there —
@@ -881,7 +891,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       setLab(play, t.playing || t.armed ? 'STOP PLAYBACK' : 'PLAY LAST RUN');
       setLab(keep, t.kept ? `KEEP LAST RUN (${t.kept})` : 'KEEP LAST RUN');
     });
-    body.append(keep, bank, play, tapeNote, bankNote);
+    body.append(cut, keep, bank, play, tapeNote, bankNote);
     dialsInto(body, ctx.dialGroups('system'));
     const snd = button('', C.soft, () => { ctx.soundTap(); refresh(); }, ICON.sound);
     updaters.push(() => {

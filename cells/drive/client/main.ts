@@ -16728,6 +16728,27 @@ function tapeShelfRows(): Array<{ id: string; at: number; secs: number; lat: num
     },
   };
 };
+/**
+ * CUT THE RING AND START IT HERE.
+ *
+ * The ring is always turning, so a KEPT run begins wherever the trimming
+ * happened to leave it — fine for "the last two minutes", useless for a run
+ * you mean to author, share or race against, which wants a FIXED, KNOWN start
+ * (owner-asked). This throws the buffer away and re-anchors keys[0] to the
+ * truck as it stands, so the very next step is step one. It does not touch a
+ * tape already KEPT: those live in IndexedDB and are what BANK reads.
+ */
+function tapeClear(): string {
+  if (tapePlay.on || tapePlay.armed) return 'NOT WHILE A TAPE IS PLAYING';
+  tapeRec.steps.length = 0;
+  tapeRec.keys.length = 0;
+  tapeRec.t = 0;
+  tapeRec.settled = 0;
+  tapeRec.keys.push(...tapeSnap());
+  return worldQuiet() ? 'RING CUT — THE RUN STARTS HERE'
+    : 'RING CUT — GROUND STILL ARRIVING, SO THE START MAY MOVE';
+}
+(window as unknown as { __recclear?: object }).__recclear = tapeClear;
 /** Bank the ring. Returns a line the deck can show without interpreting it. */
 function tapeKeep(): string {
   const t = tapeStop();
@@ -27754,6 +27775,7 @@ const menu = createMenu({
   colors: { edge: UI.edge, dim: UI.dim, text: UI.text, soft: UI.soft, gold: UI.gold, hot: UI.hot, good: UI.good, bad: UI.bad },
   place: () => (placeLine && placeLine !== '…' ? placeLine : 'LOCATING').toUpperCase(),
   tapeBank: tapeBankLast,
+  tapeClear,
   tapeShelf: tapeShelfRows,
   runPlay: (id: string) => { void runOpenPlay(id); },
   splashPoke: () => {
@@ -28257,8 +28279,12 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   // is one tap. The exception is a GPS-drive re-anchor reload, which happens
   // mid-drive on a windscreen mount: popping a menu over a moving car's
   // instrument is the one wrong answer.
+  // A SHARED RUN OWNS ITS OWN ARRIVAL (owner-asked): ?run= opens on the world
+  // with nothing but the card — loading, then PLAY. Stacking the hub over it
+  // buries the one control the link exists for behind the menu it came to
+  // skip. The HUD's MENU button is still there once the card is dismissed.
   if (real.on) bootRealDrive();
-  else menu.open(T_DRIVE);
+  else if (!runWire) menu.open(T_DRIVE);
   // An attract arrival: the reel's tape arms now and rolls the moment the
   // ground under its first checkpoint is finished streaming.
   if (attractBoot && !real.on && !lineOn) attractArm(attractBoot.i);
