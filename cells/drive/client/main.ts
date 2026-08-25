@@ -19346,6 +19346,7 @@ function heightsOf(): number[] {
     // `ring` is what actually matters — the buffer turning. `explicit` is the
     // old run flag, kept in the probe only so a regression here is legible.
     ring: tapeRec.keys.length >= TAPE_KEY_N * 3, explicit: tapeRec.on, line: lineOn,
+    held: rewindPaused,
     // THE STREAK, so a test can ask whether a rewind actually looks like one
     // rather than trusting a screenshot to say so.
     blur: +mblurAmt.toFixed(2), blurCapPx: (mblurMat.uniforms.uMaxPx as { value: number }).value,
@@ -23663,7 +23664,11 @@ function tick(now: number): void {
   // world still RENDERS while paused — the menu is a scrim over a live scene,
   // not a black screen — but nothing integrates, so you can open it mid-corner
   // and come back to the same corner.
-  const paused = (menu.tab() !== null || hidden) && !real.on;
+  // …and the transport's own hold. A tap on the rewind handle stops the world
+  // where it stands; REAL drive is exempt for the same reason the menu is —
+  // the road outside does not pause, and a clock that lies about that is worse
+  // than no clock.
+  const paused = ((menu.tab() !== null || hidden) || rewindPaused) && !real.on;
   const raw = now - last;
   if (raw > 0 && raw < 2000) frameMs += (raw - frameMs) * 0.1;
   // A FIXED STEP, ON A FLAG, TO SETTLE WHAT THE DRIFT IS MADE OF.
@@ -24583,7 +24588,13 @@ function tick(now: number): void {
   // The cab is WELDED to the body — no smoothing at all. A lerped eye lags the
   // shell it is supposed to be inside, and at 25/s that reads as the whole
   // truck sliding around the camera every time you turn in.
-  if (!camInit || camMode === 'cab') { camera.position.copy(camPos); camInit = true; }
+  // A SCRUB SNAPS, because a scrub has no dt to ease over. The follow is
+  // `1 - exp(-k * dt)` and a scrub freezes dt at zero, so the factor is
+  // exactly zero and the camera CANNOT move: reported from the seat as the rig
+  // receding backwards out of a stationary shot. Rigid while scrubbing is also
+  // the right picture — the truck holds its place in frame and the world runs
+  // backwards past it, which is what the blur is drawing.
+  if (!camInit || camMode === 'cab' || rewind.at !== null) { camera.position.copy(camPos); camInit = true; }
   else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
   // The SAME low-passed floor the camera stands on — aiming at the raw ground
   // while standing on the smoothed one tilts the chart by the difference.
@@ -27328,10 +27339,16 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const ry = pad + 34;
     const held = rewind.at !== null;
     rewindRect = { x: pad, y: ry, w: 15, h: 9 };
-    hctx.fillStyle = held ? UI.gold : UI.dim;
-    // The grip: three stacked bars, which reads as a pull-tab at this size
-    // where an arrow glyph reads as noise.
-    for (let i = 0; i < 3; i++) hctx.fillRect(pad + 1, ry + 1 + i * 3, 13, 1);
+    hctx.fillStyle = held || rewindPaused ? UI.gold : UI.dim;
+    // WHAT THE BUTTON DOES NEXT, which is the only honest thing for a
+    // transport control to draw. Running: three stacked bars, a pull-tab that
+    // reads at this size where an arrow glyph reads as noise. Held: a play
+    // triangle, because the tap that follows is what starts it again.
+    if (rewindPaused && !held) {
+      for (let i = 0; i < 7; i++) hctx.fillRect(pad + 4 + i, ry + 1 + Math.floor(i / 2), 1, 7 - i);
+    } else {
+      for (let i = 0; i < 3; i++) hctx.fillRect(pad + 1, ry + 1 + i * 3, 13, 1);
+    }
     if (held) {
       const have = Math.max(1, rewindHave());
       const track = 46;
@@ -28482,32 +28499,59 @@ let clockRect = { x: 0, y: 0, w: 0, h: 0 };
  * was, cleanly, and the ring stays coherent through it.
  */
 let rewindRect = { x: 0, y: 0, w: 0, h: 0 };
-let rewindDrag: { id: number; y0: number } | null = null;
+/** The transport's hold — a tap stops the world where it stands. Kept beside
+ *  the handle rather than with the other pause sources because it is the only
+ *  one the PLAYER asks for; the rest are the menu and a hidden tab. */
+let rewindPaused = false;
+let rewindDrag: { id: number; y0: number; moved: boolean } | null = null;
 /** Pixels of drag per checkpoint. A checkpoint is half a second, and the whole
  *  two-minute ring is 240 of them — at 2px each that is 480px of travel, about
  *  a phone screen and a bit, which makes a short correction a short pull. */
 const REWIND_PX = 2;
+/** How far the finger must travel before it is a SCRUB and not a TAP. Below
+ *  this the gesture stays a tap, and no scrub is begun at all — grabbing the
+ *  handle must not seat the truck on a checkpoint before you have asked it to. */
+const REWIND_SLOP = 6;
 function rewindDown(e: PointerEvent): boolean {
   if (!rewindReady() || rewindRect.w === 0) return false;
   const x = e.clientX / hudS, y = e.clientY / hudS;
   if (x < rewindRect.x - 5 || x > rewindRect.x + rewindRect.w + 8
     || y < rewindRect.y - 5 || y > rewindRect.y + rewindRect.h + 6) return false;
-  rewindDrag = { id: e.pointerId, y0: e.clientY };
-  rewindBegin();
+  // NOTHING HAPPENS YET. Which gesture this is is not known until the finger
+  // either moves or lifts, and beginning a scrub here would make every
+  // play/pause tap a one-frame rewind.
+  rewindDrag = { id: e.pointerId, y0: e.clientY, moved: false };
   return true;
 }
 function rewindMove(e: PointerEvent): boolean {
   if (rewindDrag?.id !== e.pointerId) return false;
   const dy = (e.clientY - rewindDrag.y0) / hudS;
-  rewindShow(Math.max(0, dy / REWIND_PX));
+  if (!rewindDrag.moved) {
+    if (Math.abs(dy) < REWIND_SLOP) return true;
+    rewindDrag.moved = true;
+    rewindBegin();
+  }
+  rewindShow(Math.max(0, (dy - REWIND_SLOP) / REWIND_PX));
   return true;
 }
 function rewindUp(e: PointerEvent): boolean {
   if (rewindDrag?.id !== e.pointerId) return false;
+  const drag = rewindDrag;
   rewindDrag = null;
+  // A TAP IS THE TRANSPORT. Stop the world where it stands, or let it go
+  // again — the same button, because a tape deck's is.
+  if (!drag.moved) {
+    rewindPaused = !rewindPaused;
+    audio.stone();
+    hudFlash(rewindPaused ? 'HOLD' : 'RUNNING');
+    return true;
+  }
   // Back at the top is a cancel, not a zero-second rewind — there is nothing
   // to truncate and the truck goes back exactly where it was.
   if ((rewind.at ?? 0) < 1) rewindCancel(); else rewindCommit();
+  // A scrub that landed somewhere leaves the world HELD there, so you can look
+  // at what you rewound to before committing to driving out of it. Tap to go.
+  if (!rewindPaused) { rewindPaused = true; hudFlash('HOLD'); }
   return true;
 }
 let clockDrag: { id: number; x0: number; h0: number; wasHeld: boolean; moved: boolean } | null = null;
