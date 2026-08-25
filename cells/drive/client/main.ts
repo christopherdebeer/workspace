@@ -814,7 +814,25 @@ const terrainPalette = (elev: number, slope: number, cover?: number | null): [nu
   // as sea shallows, and every screenshot of it looked like a flood. Where
   // this world has already proved it has dry land below sea level, skip
   // straight to the land colours.
-  const start = dryAt ? 1 : 0;
+  //
+  // …AND THE OTHER HALF OF THE SAME FAULT: the band keys on HEIGHT ALONE, so
+  // any ground that reads as sea level is painted as seabed whether or not
+  // there is a drop of water anywhere near it. Reported from the seat as
+  // PARIS IS FLOODED, and it is: the aperture sits at 61m, the cover raster
+  // says 63% urban and 0% water for three kilometres around, and the moment a
+  // DEM tile is missing or wrong the ground under it reads as 0m and the
+  // whole tile goes cyan. `dryAt` cannot catch this — it only arms once the
+  // world has PROVED dry land below sea level, which never happens in a city
+  // sixty metres up.
+  //
+  // So the band now wants corroboration, from a raster this function is
+  // already being handed. If the cover says built, forest, crops — anything
+  // but water — then this is not a seabed however low the DEM claims it is.
+  // Unknown cover keeps the old behaviour: absence of evidence is not
+  // evidence of dry land, and a genuine coast still has water under its
+  // shallows.
+  const knownDry = cover !== null && cover !== undefined && cover !== COVER.water;
+  const start = (dryAt || knownDry) ? 1 : 0;
   for (let i = start; i < biome.ramp.length; i++) {
     const [max, col] = biome.ramp[i];
     if (elev <= max || i === biome.ramp.length - 1) { c = col; break; }
@@ -26570,8 +26588,8 @@ const coverBuilt = new Map<string, THREE.Group>();
 // unexplored land simply vanished; and the shell is METAL now, which is dark
 // body plus what it catches rather than a light body of its own. Cold
 // gunmetal, and the petrol sheen in coverFx is where the colour comes from.
-const coverMat = new THREE.MeshLambertMaterial({ color: 0x232a2e, flatShading: true });
-const coverBandMat = new THREE.MeshLambertMaterial({ color: 0x1a2023, flatShading: true });
+const coverMat = new THREE.MeshLambertMaterial({ color: 0x151a1d, flatShading: true });
+const coverBandMat = new THREE.MeshLambertMaterial({ color: 0x0f1315, flatShading: true });
 /**
  * THE SHELL'S SURFACE — the difference between a made thing and a grey hill.
  *
@@ -26904,9 +26922,9 @@ function coverFx(mat: THREE.MeshLambertMaterial, band = false): void {
           '  cc = mix(cc, cc * 0.86, seam);',
           '  cc *= seamAO;',
           '  float sky = (0.92 + 0.08 * h2) * (1.0 - 0.85 * seam) * (1.0 - 0.30 * stain);',
-          '  cc += vec3(0.050, 0.058, 0.056) * sky;',
-          '  cc += vec3(0.085, 0.092, 0.098) * bevel * (0.35 + 0.65 * h2) * 0.5;',
-          '  cc += vec3(0.10, 0.13, 0.14) * fres * 0.50 * (1.0 - 0.7 * seam);',
+          '  cc += vec3(0.030, 0.035, 0.036) * sky;',
+          '  cc += vec3(0.060, 0.066, 0.070) * bevel * (0.35 + 0.65 * h2) * 0.45;',
+          '  cc += vec3(0.075, 0.095, 0.105) * fres * 0.40 * (1.0 - 0.7 * seam);',
           // ── THE TEMPER SKIN ──
           //
           // Thin-film interference, which is what a petrol sheen physically
@@ -26927,8 +26945,16 @@ function coverFx(mat: THREE.MeshLambertMaterial, band = false): void {
           // LOUDEST AT GRAZING INCIDENCE, and additive, so it lives on the
           // dark body itself and crawls across the shell as you drive past
           // rather than sitting on it like paint.
-          '  float grazeF = pow(1.0 - NdV, 2.2);',
-          '  cc += irid * grazeF * temper * 0.22 * seamAO * (1.0 - seam);',
+          // ── A HIGHLIGHT, NOT A WASH ──
+          //
+          // At 2.2 the grazing term still covers most of a curved shell, so
+          // the sheen sat over the whole thing and read as the shell's COLOUR
+          // rather than as light moving across it. 5.0 pulls it into a narrow
+          // band near the silhouette and along whichever facets happen to be
+          // turned away — so it travels as the camera passes, which is what a
+          // sheen does, and the body underneath stays dark.
+          '  float grazeF = pow(1.0 - NdV, 5.0);',
+          '  cc += irid * grazeF * temper * 0.16 * seamAO * (1.0 - seam);',
           // Deeper panels sit deeper between their neighbours.
           '  cc *= 1.0 - pDepth * 0.020;',
           '  gl_FragColor.rgb = cc;',
