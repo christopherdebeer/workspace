@@ -19343,7 +19343,9 @@ function heightsOf(): number[] {
     maxSecs: +rewindSecs(rewindHave()).toFixed(1),
     at: rewind.at, secs: +rewind.secs.toFixed(1),
     steps: tapeRec.steps.length / 4, keys: tapeRec.keys.length / TAPE_KEY_N,
-    recording: tapeRec.on, line: lineOn,
+    // `ring` is what actually matters — the buffer turning. `explicit` is the
+    // old run flag, kept in the probe only so a regression here is legible.
+    ring: tapeRec.keys.length >= TAPE_KEY_N * 3, explicit: tapeRec.on, line: lineOn,
     // THE STREAK, so a test can ask whether a rewind actually looks like one
     // rather than trusting a screenshot to say so.
     blur: +mblurAmt.toFixed(2), blurCapPx: (mblurMat.uniforms.uMaxPx as { value: number }).value,
@@ -23576,7 +23578,17 @@ const rewindSecs = (n: number): number => (n * TAPE_KEY_EVERY) / 60;
 /** Can the handle be grabbed at all — the same gate the whole feature lives
  *  behind, asked in one place so the HUD and the pointer cannot disagree. */
 function rewindReady(): boolean {
-  return !tapePlay.on && !tapePlay.armed && tapeRec.on
+  // NOT `tapeRec.on`. That flag means "an explicit run was STARTED" — it is
+  // what __rec and the authoring rig set, and it is false for every player who
+  // has never opened the recorder. The RING is a different thing and is always
+  // turning: tapeWrite runs unconditionally in the tick, which is the whole
+  // point of "the button is KEEP, not RECORD".
+  //
+  // Gating on it meant the handle could never appear in normal play, and the
+  // test did not catch that because the test called __rec first — validating a
+  // path no player takes. The honest question is whether the ring HAS anything
+  // to go back to, which rewindHave() already answers.
+  return !tapePlay.on && !tapePlay.armed
     && menu.tab() === null && rewindHave() >= 2;
 }
 /** Seat the truck on checkpoint `k` counted BACK from the newest. */

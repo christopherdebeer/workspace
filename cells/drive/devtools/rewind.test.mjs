@@ -34,16 +34,17 @@ const d = await openDrive({
 const page = d.page;
 const rw = (cmd, back) => page.evaluate(([c, b]) => window.__rewind(c, b), [cmd ?? null, back ?? 0]);
 
-// ── the ring has to be turning before any of this means anything ──
-// The recorder gates on worldQuiet(); `force` is the authoring override the
-// harness is entitled to, and it is what __rec exposes.
-await page.evaluate(() => window.__rec(true, true));
+// ── NOTHING IS STARTED HERE, and that is the point ──
+// The first cut of this file called __rec(true, true) to "get the ring
+// turning" — and thereby tested a path no player takes. tapeRec.on means an
+// explicit run was started; the RING turns unconditionally in the tick. The
+// handle was gated on the former and could never appear in normal play, and
+// this test passed anyway because it had set the flag itself.
+//
+// So: a plain boot, no probes, and the handle has to show up on its own.
 let r = await rw();
-if (!r.recording) {
-  console.log('\nSKIPPED, NOT PASSED: the ring never started, so there is no undo to reach for.',
-    JSON.stringify(r));
-  report(d.errors); await d.close(); process.exit(2);
-}
+check('the ring turns without anyone starting it', r.ring === true, r);
+check('…and no explicit run was started', r.explicit === false, r);
 
 // MOVE, so there is a past to go back to. Position is written straight into
 // the state object — the same thing walkTo does — and the ring snapshots
@@ -60,6 +61,10 @@ await page.waitForTimeout(600);
 r = await rw();
 check('the ring is holding checkpoints to go back to', r.have >= 4, r);
 check('…and says how far back that reaches', r.maxSecs > 1.5, r);
+// THE CLAIM THAT ACTUALLY FAILED IN THE FIELD: the handle has to be THERE.
+// Everything below drives the scrub through the probe, which would keep
+// passing with the handle invisible — as it did.
+check('THE HANDLE IS AVAILABLE, on a plain boot with nothing armed', r.ready === true, r);
 
 // ── the scrub ────────────────────────────────────────────────────
 const before = (await rw()).car;
@@ -126,12 +131,11 @@ const dl = await openDrive({
     lat: -34.08716, lon: 18.42083, h: 290, odo: 100, begunAt: 1700000000000, at: 1700000000000 }));
     localStorage.setItem('drive.sync.token', 'tok_test');`,
 });
-await dl.page.evaluate(() => window.__rec(true, true));
 // Long enough for the ring to hold the two checkpoints the handle needs.
 await dl.page.waitForTimeout(4000);
 const online = await dl.page.evaluate(() => window.__rewind());
 check('the boot really is on the line', online.line === true, online);
-check('…the ring is turning there', online.recording === true, online);
+check('…the ring is turning there', online.ring === true, online);
 check('THE HANDLE IS AVAILABLE ON A RUN', online.ready === true, online);
 report(dl.errors);
 await dl.close();
