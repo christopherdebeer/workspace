@@ -26565,8 +26565,13 @@ const coverBuilt = new Map<string, THREE.Group>();
 // projected on-screen at 210m, nothing drawn a player could see). Distant
 // ranges survive the same haze because they are dark silhouettes against a
 // bright sky, so the shell reads the way the landscape does: as a dark mass.
-const coverMat = new THREE.MeshLambertMaterial({ color: 0x2f3a38, flatShading: true });
-const coverBandMat = new THREE.MeshLambertMaterial({ color: 0x232c2a, flatShading: true });
+// DARKER THAN IT LOOKS IT SHOULD BE, twice over. The fog composite mixes
+// every pixel toward haze by distance and unexploredness, so a pale shell in
+// unexplored land simply vanished; and the shell is METAL now, which is dark
+// body plus what it catches rather than a light body of its own. Cold
+// gunmetal, and the petrol sheen in coverFx is where the colour comes from.
+const coverMat = new THREE.MeshLambertMaterial({ color: 0x232a2e, flatShading: true });
+const coverBandMat = new THREE.MeshLambertMaterial({ color: 0x1a2023, flatShading: true });
 /**
  * THE SHELL'S SURFACE — the difference between a made thing and a grey hill.
  *
@@ -26867,9 +26872,24 @@ function coverFx(mat: THREE.MeshLambertMaterial, band = false): void {
           '  float bevel = smoothstep(ew * 1.7, ew * 0.8, pEdge);',
           '  float seam = smoothstep(ew * 0.5, ew * 0.2, pEdge);',
           '  float seamAO = 1.0 - smoothstep(ew * 1.6, ew * 0.3, pEdge) * 0.40;',
+          // ── THE FACET'S OWN VIEW ANGLE ──
+          //
+          // Against the PANEL, not the dome. The sheen below is an angle
+          // effect, so taking it off the smooth surface would give the whole
+          // shell one sweep instead of every facet catching the light at its
+          // own moment — which is the entire look.
+          //
+          // Object normal to view through the normal matrix columns, then view
+          // to world through viewMatrix's own columns: its upper 3x3 is a
+          // rotation, so the transpose IS the inverse, and summing the columns
+          // weighted by the vector is that transpose. No mat4 inverse, and
+          // both uniforms are ones the fragment stage actually has.
+          '  vec3 fnV = normalize(pFn.x * vCovNX + pFn.y * vCovNY + pFn.z * vCovNZ);',
+          '  vec3 fnW = normalize(fnV.x * viewMatrix[0].xyz + fnV.y * viewMatrix[1].xyz',
+          '                     + fnV.z * viewMatrix[2].xyz);',
           '  vec3 V = normalize(cameraPosition - vCovW);',
-          '  vec3 N = normalize(vCovNX * cd.x + vCovNY * cd.y + vCovNZ * cd.z);',
-          '  float fres = pow(1.0 - clamp(abs(dot(normalize(vCovW - cameraPosition), normalize(vCovW))), 0.0, 1.0), 3.0);',
+          '  float NdV = max(dot(fnW, V), 0.0);',
+          '  float fres = pow(1.0 - NdV, 3.0);',
           '  vec3 cc = gl_FragColor.rgb;',
           // ── STRUCTURE HAS TO ADD, NOT ONLY SCALE ──
           //
@@ -26887,6 +26907,28 @@ function coverFx(mat: THREE.MeshLambertMaterial, band = false): void {
           '  cc += vec3(0.050, 0.058, 0.056) * sky;',
           '  cc += vec3(0.085, 0.092, 0.098) * bevel * (0.35 + 0.65 * h2) * 0.5;',
           '  cc += vec3(0.10, 0.13, 0.14) * fres * 0.50 * (1.0 - 0.7 * seam);',
+          // ── THE TEMPER SKIN ──
+          //
+          // Thin-film interference, which is what a petrol sheen physically
+          // is: the optical path through an oxide layer, in cycles, sampled at
+          // three slightly different wavelengths. The film thickness varies
+          // panel to panel and thickens with grime and with subdivision depth,
+          // so the colours sweep in heat-treat bands rather than washing the
+          // whole shell one hue.
+          '  float film = 1.2 + h3 * 2.6 + grime * 0.9 + pDepth * 0.23;',
+          '  float opd = film * (0.42 + 0.58 * NdV);',
+          '  vec3 irid = 0.5 + 0.5 * cos(6.2831853 * (opd * vec3(1.0, 1.21, 1.47)',
+          '                                         + vec3(0.0, 0.12, 0.24)));',
+          '  irid = mix(vec3(dot(irid, vec3(0.299, 0.587, 0.114))), irid, 0.85);',
+          // The film survives where the surface is still sound; rain scours it
+          // off, which is why the streaks stay charcoal while the panels
+          // between them hold their colour.
+          '  float temper = (0.55 + 0.45 * h2) * (1.0 - stain * 0.75);',
+          // LOUDEST AT GRAZING INCIDENCE, and additive, so it lives on the
+          // dark body itself and crawls across the shell as you drive past
+          // rather than sitting on it like paint.
+          '  float grazeF = pow(1.0 - NdV, 2.2);',
+          '  cc += irid * grazeF * temper * 0.22 * seamAO * (1.0 - seam);',
           // Deeper panels sit deeper between their neighbours.
           '  cc *= 1.0 - pDepth * 0.020;',
           '  gl_FragColor.rgb = cc;',
