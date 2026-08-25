@@ -3567,6 +3567,29 @@ const wallTexes = [7101, 7102].map((seed) => canvasTex(128, 1 / 9, 1 / 9, seed, 
 // face orientation mixed — lighting both sides costs little at this scene size
 // and makes every surface reliably visible from the top-down camera.
 const DS = THREE.DoubleSide;
+/**
+ * …EXCEPT THE FLAT DRAPED RIBBONS, WHOSE WINDING IS NOT MIXED AT ALL.
+ *
+ * That claim above had been load-bearing and unmeasured since it was written,
+ * and it is the only thing that stood between here and culling the road
+ * undersides that read as BLACK from below. Measured with __ribbonwind at the
+ * Cape: 498 ribbon faces, 498 of them pointing up, none pointing down. The
+ * mixed-orientation problem is real for the rotate+mirror extrusions — rails,
+ * signs, wheel arches — and simply is not true of the ribbons it was applied
+ * to along with them.
+ *
+ * The black is not a bug in the geometry, which is why it survived: DoubleSide
+ * flips the shading normal toward the VIEWER, so an underside's normal points
+ * away from the sun, Lambert clamps the diffuse to zero, and near-black is the
+ * correct output of what was asked for. Culling asks a better question —
+ * whether the face should be drawn at all — and the answer for the underside
+ * of a road is no.
+ *
+ * FLAT DRAPES ONLY. verge, deck, rail, sign and the water surfaces keep DS
+ * until someone measures them the same way; deck especially, because the
+ * underside of an overpass is a thing you are meant to be able to see.
+ */
+const FS = THREE.FrontSide;
 // The headlight the signs answer to. Updated once a frame from the car; the
 // signs read it in the fragment shader, so a whole roadside of them costs one
 // uniform write rather than a per-object light calculation.
@@ -3760,7 +3783,7 @@ const MAT = {
   // the drapes because it must win over every one of them where they overlap —
   // a road through a park, over a river, across a track.
   road: slipify(new THREE.MeshLambertMaterial({
-    map: roadTex, side: DS, vertexColors: true,
+    map: roadTex, side: FS, vertexColors: true,
     // ORDERED BY UNITS, NOT BY FACTOR. `polygonOffsetFactor` multiplies the
     // polygon's own depth SLOPE, and a road seen down its own length is the
     // most slope-heavy surface in the scene — so far up the tarmac a factor of
@@ -3774,14 +3797,14 @@ const MAT = {
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -12,
   })),
   minor: new THREE.MeshLambertMaterial({
-    map: pathTex, transparent: true, opacity: 0.85, side: DS,
+    map: pathTex, transparent: true, opacity: 0.85, side: FS,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -8,
   }),
   // The junction mouth patch: above BOTH carriageways in the units ladder
   // (road is -12), because its whole job is to overpaint their lines where
   // they meet. Below the studs (-20), which stand on it.
   mouth: new THREE.MeshLambertMaterial({
-    map: mouthTex, side: DS,
+    map: mouthTex, side: FS,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -14,
   }),
   // Ruts: alpha-cut, and depth-offset because it lies a few centimetres over
@@ -3797,7 +3820,7 @@ const MAT = {
   // not exist, and the honest alternative is to make the overlay behave like
   // ground rather than like paint.
   track: slipify(new THREE.MeshLambertMaterial({
-    map: trackTex, transparent: true, opacity: 0.68, side: DS, depthWrite: false,
+    map: trackTex, transparent: true, opacity: 0.68, side: FS, depthWrite: false,
     vertexColors: true,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -6,
   })),
