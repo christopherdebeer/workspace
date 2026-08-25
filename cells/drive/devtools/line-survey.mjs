@@ -22,6 +22,8 @@
  *   node cells/drive/devtools/line-survey.mjs 47.945,1.904 47.250,2.060
  *        [--band KM] [--miss-ms N] [--host URL]
  */
+import { routeLine } from './line-route.mjs';
+
 const args = process.argv.slice(2);
 const flag = (n, d) => { const i = args.indexOf(`--${n}`); return i < 0 ? d : args[i + 1]; };
 const pts = args.filter((a) => /^-?\d+(\.\d+)?,-?\d+(\.\d+)?$/.test(a));
@@ -53,43 +55,85 @@ const tileCentre = (tx, ty) => {
   const k = Math.PI - (2 * Math.PI * (ty + 0.5)) / n;
   return [(180 / Math.PI) * Math.atan(0.5 * (Math.exp(k) - Math.exp(-k))), lo];
 };
-/** Metres off the A->B line, and how far along it (0..1). */
-const offLine = (la, lo) => {
-  const kx = Math.cos(aLat * rad);
-  const x = (lo - aLon) * kx, y = la - aLat;
-  const bx = (bLon - aLon) * kx, by = bLat - aLat;
-  const t = Math.max(0, Math.min(1, (x * bx + y * by) / (bx * bx + by * by || 1e-9)));
-  return { off: hav(la, lo, aLat + (bLat - aLat) * t, aLon + (bLon - aLon) * t), t };
+/**
+ * THE SPINE IS THE ROUTE, NOT THE CHORD.
+ *
+ * Every number this tool reports is relative to the line: how far along a leg
+ * a feature sits, how far off the road it is, and which tiles the corridor
+ * even covers. Measured against a straight line between two stations, all
+ * three are wrong — the old N20 runs 18% longer than the chord and wanders
+ * kilometres off it, so a chord-band misses the road for stretches at a time
+ * and calls things "off the line" that are sitting on it.
+ *
+ * So the corridor is the ROUTED polyline (line-route.mjs), and "off" is the
+ * perpendicular distance to it. The chord survives only as a fallback for when
+ * the road network cannot be assembled.
+ */
+let spine = null;          // [[lat, lon], …] — the routed line
+let cum = [];              // cumulative metres at each vertex
+let legM = 0;
+const buildSpine = (pts) => {
+  spine = pts;
+  cum = [0];
+  for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + hav(pts[i - 1][0], pts[i - 1][1], pts[i][0], pts[i][1]));
+  legM = cum[cum.length - 1];
+};
+/** Nearest point on the spine: metres off it, and metres along it. */
+const onSpine = (la, lo) => {
+  let bestOff = Infinity, bestAlong = 0;
+  const kx = Math.cos(la * rad);
+  for (let i = 1; i < spine.length; i++) {
+    const [la1, lo1] = spine[i - 1], [la2, lo2] = spine[i];
+    const ax = (lo1 - lo) * kx, ay = la1 - la;
+    const bx = (lo2 - lo1) * kx, by = la2 - la1;
+    const den = bx * bx + by * by;
+    const t = den ? Math.max(0, Math.min(1, -(ax * bx + ay * by) / den)) : 0;
+    const py = la1 + (la2 - la1) * t, px = lo1 + (lo2 - lo1) * t;
+    const d = hav(la, lo, py, px);
+    if (d < bestOff) { bestOff = d; bestAlong = cum[i - 1] + t * (cum[i] - cum[i - 1]); }
+  }
+  return { off: bestOff, along: bestAlong };
 };
 
-// THE TILES, CHOSEN EXACTLY: walk the grid over the leg's box and keep those
-// whose centre falls inside the band. (The first cut stepped along the line
-// throwing a 5x5 of offsets at each step — it asked for the same tile dozens
-// of times and still missed corners.)
-const legM = hav(aLat, aLon, bLat, bLon);
+try {
+  const r = await routeLine(aLat, aLon, bLat, bLon, (m) => console.error(m));
+  buildSpine(r.line);
+  console.error(`spine: routed ${(legM / 1000).toFixed(1)} km over ${spine.length} vertices `
+    + `(chord ${(r.chord / 1000).toFixed(1)} km) · carried by ${r.roads.filter(([, m]) => m > 400).length} named roads`);
+  console.error('via: ' + r.roads.filter(([, m]) => m > 900).slice(0, 6).map(([n, m]) => `${n} ${(m / 1000).toFixed(1)}km`).join(' · '));
+} catch (err) {
+  console.error(`route unavailable (${err.message})`);
+  console.error('FALLING BACK TO THE CHORD — distances along and off the line are');
+  console.error('approximations until the road network can be assembled.');
+  buildSpine([[aLat, aLon], [bLat, bLon]]);
+}
+
+// THE TILES THE CORRIDOR COVERS: every tile whose centre lies within the band
+// of the SPINE. Walking the route's own bounding box keeps this exact without
+// enumerating a continent.
 const want = new Map();
 {
+  let laMin = 90, laMax = -90, loMin = 180, loMax = -180;
+  for (const [la, lo] of spine) {
+    laMin = Math.min(laMin, la); laMax = Math.max(laMax, la);
+    loMin = Math.min(loMin, lo); loMax = Math.max(loMax, lo);
+  }
   const padLa = BAND / 111320 + 0.01;
-  const padLo = padLa / Math.cos(((aLat + bLat) / 2) * rad);
-  const c1 = tileOf(Math.max(aLat, bLat) + padLa, Math.min(aLon, bLon) - padLo);
-  const c2 = tileOf(Math.min(aLat, bLat) - padLa, Math.max(aLon, bLon) + padLo);
+  const padLo = padLa / Math.cos(((laMin + laMax) / 2) * rad);
+  const c1 = tileOf(laMax + padLa, loMin - padLo);
+  const c2 = tileOf(laMin - padLa, loMax + padLo);
   for (let tx = Math.min(c1[0], c2[0]); tx <= Math.max(c1[0], c2[0]); tx++) {
     for (let ty = Math.min(c1[1], c2[1]); ty <= Math.max(c1[1], c2[1]); ty++) {
       const [la, lo] = tileCentre(tx, ty);
-      const { off, t } = offLine(la, lo);
-      if (off <= BAND + 450 && t > 0 && t < 1) want.set(`${tx}/${ty}`, [tx, ty]);
+      if (onSpine(la, lo).off <= BAND + 450) want.set(`${tx}/${ty}`, [tx, ty]);
     }
   }
 }
-// WALK THE CORRIDOR IN ORDER, station to station. Enumerating the grid gives
-// tx-major order — a north-south strip down the far edge of the bounding box,
-// which on a diagonal leg is entirely off the road. The first cut did exactly
-// that, met sixty cold tiles before reaching the line, and reported "the
-// upstream is down" about a corridor that was serving fine.
-const tiles = [...want.entries()]
-  .map(([k, v]) => { const [la, lo] = tileCentre(v[0], v[1]); return { k, v, t: offLine(la, lo).t }; })
-  .sort((a, b) => a.t - b.t).map((r) => r.v);
-console.error(`corridor ${(legM / 1000).toFixed(1)} km · band ±${BAND / 1000} km · ${tiles.length} z${Z} tiles`);
+const tiles = [...want.values()]
+  .map((v) => { const [la, lo] = tileCentre(v[0], v[1]); return { v, a: onSpine(la, lo).along }; })
+  .sort((x, y) => x.a - y.a).map((r) => r.v);
+console.log('(candidates stream below as they are found; a sorted list follows at the end)\n');
+console.error(`corridor ${(legM / 1000).toFixed(1)} km along the line · band ±${BAND / 1000} km · ${tiles.length} z${Z} tiles`);
 console.error(`through ${HOST}/~/osm/v3/${Z}/… — a miss fetches upstream AND banks it`);
 
 // THE VOCABULARY a ranger would record. Deliberately not "tourist attraction":
@@ -151,9 +195,18 @@ const lane = async () => {
         if (typeof la !== 'number' || typeof lo !== 'number') continue;
         const key = String(e.id ?? `${la},${lo}`);
         if (found.has(key)) continue;
-        const { off, t: along } = offLine(la, lo);
-        found.set(key, { cat, name: t.name ?? '(unnamed)', lat: +la.toFixed(5), lon: +lo.toFixed(5),
-          km: +((along * legM) / 1000).toFixed(1), off: Math.round(off) });
+        const { off, along } = onSpine(la, lo);
+        const row = { cat, name: t.name ?? '(unnamed)', lat: +la.toFixed(5), lon: +lo.toFixed(5),
+          km: +(along / 1000).toFixed(1), off: Math.round(off) };
+        found.set(key, row);
+        // EMITTED THE MOMENT IT IS FOUND, not at the end. This tool runs for
+        // many minutes against an upstream that refuses half of it, and the
+        // first version held everything in memory until the final print — so
+        // an interrupted run (or a stray signal, which is how it actually
+        // happened) threw away three hundred verified candidates. A survey
+        // that loses its findings when it stops early is not a survey.
+        console.log(`  ${String(row.km).padStart(5)} ${String(row.off).padStart(5)}m   ${row.cat.padEnd(24)} ${String(row.name).slice(0, 30)}`);
+        console.log(`        ${row.lat},${row.lon}`);
       }
     } catch { refused++; miss(); }
     if (++done % 50 === 0) console.error(`  … ${done}/${tiles.length} · served ${ok} · refused ${refused} · found ${found.size}`);
@@ -171,7 +224,7 @@ if (dead) {
 }
 const rows = [...found.values()].filter((r) => r.km > 0.4 && r.km < legM / 1000 - 0.4)
   .sort((x, y) => x.km - y.km);
-console.log(`\n${rows.length} candidates along ${(legM / 1000).toFixed(1)} km\n`);
+console.log(`\n\n=== ${rows.length} CANDIDATES IN ORDER ALONG THE LINE (${(legM / 1000).toFixed(1)} km) ===\n`);
 console.log('    KM    OFF   CATEGORY                  NAME');
 for (const r of rows) {
   console.log(`  ${String(r.km).padStart(5)} ${String(r.off).padStart(5)}m   ${r.cat.padEnd(24)} ${String(r.name).slice(0, 30)}`);
