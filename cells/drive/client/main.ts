@@ -24077,6 +24077,50 @@ function tick(now: number): void {
     }
     if (!hit) break;
   }
+  // ── THE SHELL IS SOLID ──
+  //
+  // It was scenery: eight and a half kilometres of sealed city that a truck
+  // drove straight through. Reported from the seat, and it undoes the whole
+  // object — a Cover you can pass through is not a wall around a city, it is
+  // a painting of one.
+  //
+  // NOT a wall segment, and that is why it was missing. Every other barrier in
+  // the world is a line in `wallGrid`, and a circle 17km across cannot be one
+  // without thousands of chords in thousands of cells. It does not need to be:
+  // the shell is a CIRCLE, so the test is one distance and the push-out is one
+  // normal — exact at every point on the rim, and cheaper than the segment
+  // lookup it replaces.
+  //
+  // Seated from coverBuilt rather than the campaign, so it uses the same local
+  // coordinates the dome is drawn at and re-bases with it on a teleport. A
+  // cover too far to have been built is also far too far to touch.
+  if (!real.on) {
+    for (const [id, g] of coverBuilt) {
+      const c = COVERS.find((cv) => cv.id === id);
+      if (!c) continue;
+      const dx = state.x - g.position.x, dz = state.z - g.position.z;
+      const d = Math.hypot(dx, dz) || 1e-4;
+      const want = c.r + CAR_R;
+      if (d >= want) continue;
+      const nx = dx / d, nz = dz / d;          // outward from the centre
+      state.x = g.position.x + nx * want;
+      state.z = g.position.z + nz * want;
+      // How square the hit was: the component of travel that went INTO the
+      // shell, exactly as a guard rail is charged. Driving along the rim is
+      // free, driving at it is not.
+      const vx = Math.sin(state.heading) * state.speed + Math.cos(state.heading) * slideV;
+      const vz = Math.cos(state.heading) * state.speed - Math.sin(state.heading) * slideV;
+      const into = -(vx * nx + vz * nz);       // >0 when moving inward
+      if (into > 0) {
+        const sq = clamp(into / Math.max(1, Math.abs(state.speed)), 0, 1);
+        if (sq > scrape) scrape = sq;
+        // A dead stop rather than a bounce: it is a kilometre of engineering
+        // and the truck is not going to move it.
+        state.speed *= 1 - 0.85 * sq;
+        slideV *= 1 - 0.85 * sq;
+      }
+    }
+  }
   if (scrape >= 0) {
     const was = Math.abs(state.speed);
     state.speed *= Math.exp(-5 * scrape * dt);
@@ -26599,9 +26643,27 @@ function coverFx(mat: THREE.MeshLambertMaterial): void {
         '  vec3 N = normalize(vCovN);',
         '  float fres = pow(1.0 - clamp(dot(V, N), 0.0, 1.0), 3.0);',
         '  vec3 cc = gl_FragColor.rgb;',
+        // ── STRUCTURE HAS TO ADD, NOT SCALE ──
+        //
+        // Every term here was multiplicative, and the shell is very nearly
+        // black: 0.70 x 0 is 0, so the panels, the tone and the weathering all
+        // resolved to nothing and the dome stayed a void. Photographed from the
+        // aperture at dusk — a black mass filling the frame with no seam in it
+        // anywhere. The cache key made the shader RUN; it still had nothing to
+        // show, because a dark Lambert facing away from the sun has no light
+        // for a multiplier to act on.
+        //
+        // So the panels are lit by the SKY rather than by the sun. A smooth
+        // shell at dusk catches ambient off the whole dome of the sky, and it
+        // catches it differently where it is seamed, tilted or streaked — an
+        // additive term, floored above zero, which is what makes the structure
+        // survive on the night side. The sun-facing side still gets the
+        // multiplicative shading underneath, so it is not flat by day.
+        '  float sky = (0.55 + 0.45 * tone) * (1.0 - 0.80 * seam) * (1.0 - 0.45 * wet);',
         '  cc *= 0.93 + 0.14 * tone;',
         '  cc = mix(cc, cc * 0.70, seam);',
         '  cc = mix(cc, cc * 0.78, wet);',
+        '  cc += vec3(0.052, 0.060, 0.058) * sky;',
         '  cc += vec3(0.10, 0.13, 0.14) * fres * 0.55;',
         '  gl_FragColor.rgb = cc;',
         '}',
