@@ -209,16 +209,16 @@ vec3 shade(vec2 frag2) {
   fn = normalize(fn + tiltAx * (h1 - 0.5) * 0.030 + t1 * (h2 - 0.5) * 0.030);
 
   float rough = 0.30 + h2 * 0.40;
-  vec3 tint = mix(vec3(0.150, 0.155, 0.170),                 // gunmetal
-                  mix(vec3(0.165, 0.145, 0.125),             // browned steel
-                      vec3(0.125, 0.145, 0.165), step(0.5, h3)), // blued steel
-                  0.38);
+  vec3 tint = mix(vec3(0.140, 0.146, 0.162),                 // gunmetal
+                  mix(vec3(0.120, 0.122, 0.130),             // smoke steel
+                      vec3(0.115, 0.135, 0.158), step(0.5, h3)), // blued steel
+                  0.35);
   float glass = step(0.955, h1);                             // the odd dark pane
   tint = mix(tint, vec3(0.030, 0.034, 0.040), glass);
   rough = mix(rough, 0.10, glass);
   // some panels are far gone: heavily oxidized, nearly matte
   float corroded = smoothstep(0.78, 0.92, h3);
-  tint = mix(tint, vec3(0.085, 0.070, 0.058), corroded);
+  tint = mix(tint, vec3(0.058, 0.060, 0.066), corroded);
   rough = mix(rough, 0.85, corroded);
 
   // brushed grain: fine streaks along the panel, bending the normal a touch
@@ -233,11 +233,11 @@ vec3 shade(vec2 frag2) {
   // rain has run down this thing for years
   float streak = n2(vec2((dObj.x * 8.0 + dObj.z * 13.0) * 16.0, dObj.y * 2.2 + h1));
   float stain = smoothstep(0.58, 0.82, streak * (0.55 + 0.45 * grime));
-  tint = mix(tint, vec3(0.062, 0.048, 0.040), stain * 0.5);     // a cold rust wash, not brass
+  tint = mix(tint, vec3(0.042, 0.044, 0.050), stain * 0.5);     // the stains run charcoal, not rust
   rough = min(rough + stain * 0.25, 0.95);
   // patina blooms where the streaks pool
   float bloom = smoothstep(0.6, 0.85, n2(pl * 6.0 + h3 * 70.0)) * stain;
-  tint = mix(tint, vec3(0.055, 0.085, 0.075), bloom * 0.5);     // verdigris
+  tint = mix(tint, vec3(0.048, 0.066, 0.062), bloom * 0.35);    // the faintest cold bloom
 
   // ------- edges: a bevel that catches light, then the dark seam
   float ew = 0.045;
@@ -265,12 +265,24 @@ vec3 shade(vec2 frag2) {
 
   vec3 refl = reflect(rd, fn);
   vec3 e = env(refl);
+
+  // ------- the temper skin
+  // optical path 2·n·d·cosθ, in cycles; thickness varies panel to panel and
+  // drifts across each facet, so the interference sweeps in heat-treat bands
+  float film = 1.2 + h3 * 2.6 + grime * 0.9 + P.depth * 0.23;
+  float opd = film * (0.42 + 0.58 * NdV);
+  vec3 irid = 0.5 + 0.5 * cos(TAU * (opd * vec3(1.0, 1.21, 1.47) + vec3(0.0, 0.12, 0.24)));
+  irid = mix(vec3(dot(irid, vec3(0.299, 0.587, 0.114))), irid, 0.85);
+  // the film survives where the surface is still smooth; wear scours it off
+  float temper = (0.55 + 0.45 * h2) * smoothstep(0.92, 0.3, rough) * (1.0 - stain * 0.7) * (1.0 - glass);
+  vec3 filmTint = mix(vec3(1.0), irid * 1.5, temper);
+  e *= filmTint;
   // rougher panels see a blurrier world: fake it by pulling toward the mean
   e = mix(e, vec3(0.055, 0.060, 0.070), smoothstep(0.05, 0.55, rough) * 0.85);
 
   vec3 col = vec3(0.0);
   col += tint * e * fres * 2.0;                        // the little of the world it still holds
-  col += tint * vec3(1.0, 0.88, 0.70) * spec * NdL * 2.6 * (1.0 - stain * 0.7);   // the sun, struck where the wear allows
+  col += tint * vec3(1.0, 0.9, 0.76) * filmTint * spec * NdL * 2.6 * (1.0 - stain * 0.7);   // the sun, struck through the film
   col += tint * (NdL * 0.22 + 0.020);                  // worn metal is half matte
   float fill = max(dot(fn, normalize(vec3(-0.5, 0.25, -0.6))), 0.0);
   col += tint * vec3(0.36, 0.44, 0.60) * fill * 0.045; // the sky answers from the far side
@@ -280,6 +292,11 @@ vec3 shade(vec2 frag2) {
 
   // deeper panels sit deeper in shadow between their neighbours
   col *= 1.0 - P.depth * 0.022;
+
+  // the film speaks loudest at grazing incidence: a petrol sheen that lives
+  // on the dark body itself, crawling as the sphere turns
+  float grazeF = pow(1.0 - NdV, 2.2);
+  col += irid * grazeF * temper * 0.30 * seamAO * (1.0 - seam);
 
   // ------- the sphere sits in air
   float rimF = pow(1.0 - max(dot(n, V), 0.0), 3.0);
