@@ -1,0 +1,858 @@
+<title>Tessera</title>
+<style>
+  html, body {
+    margin: 0;
+    padding: 0;
+    height: 100%;
+    background: #08070d;
+    overflow: hidden;
+  }
+  #lattice {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100dvh;
+    display: block;
+    background: #08070d;
+    touch-action: none;
+    cursor: crosshair;
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+</style>
+<canvas id="lattice" aria-label="Tessera — a self-similar lattice of finite state automata that reads itself as music. Tap and paint cells, hold to rewrite a rule, pinch to change the depth it runs at, twist to rotate the rule."></canvas>
+<script>
+'use strict';
+/* ============================================================
+   TESSERA
+   A lattice of finite state automata on a self-similar grid.
+
+   THE GRID. A repeating field of root tiles, each recursively
+   quartered by a seeded hash — so the mosaic is fractal: the same
+   subdivision law at every scale, never a uniform checkerboard.
+   Detail grows where the music happens: a tile that fires often
+   earns finer children, and forgets them when it falls quiet.
+
+   THE AUTOMATON. Every leaf is a finite state machine: four
+   states, and a transition table indexed by its own state and by
+   how many of its four neighbours are lit. Neighbours are found
+   by position, so a large tile and its small neighbours speak
+   across scales. Four species run four different tables, and a
+   species spreads into any neighbour it outshines — the rules
+   themselves compete for the plane.
+
+   THE MUSIC. The lattice ticks on the eighth-note. A cell that
+   wakes strikes a note: its depth is its octave, its coordinates
+   its scale degree, its species its timbre — so one rule playing
+   at four depths is the same melody in four octaves. Notes on the
+   beat snap to a chord that turns every bar; a Shepard bank rises
+   under it all and surges before each key change.
+
+   YOUR HAND. Tap or paint to wake cells. Hold one to rewrite its
+   species' transition table — a new law, spreading from where you
+   touched. Pinch to change the depth the automaton runs at (the
+   whole piece transposes). Twist to rotate every rule at once.
+
+   SEEDED. One seed drives the simulation, read from and written
+   to the URL hash. Same seed, same window, untouched: the same
+   performance, tick for tick.
+   ============================================================ */
+
+const canvas = document.getElementById('lattice');
+const g2 = canvas.getContext('2d', { alpha: false });
+
+const BG = { r: 8, g: 7, b: 13 };
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+
+/* ---------------- seed ---------------- */
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const hashMatch = (location.hash || '').match(/s=([0-9a-z]+)/i);
+const SEED = hashMatch ? (parseInt(hashMatch[1], 36) >>> 0) : ((Date.now() % 2176782336) >>> 0);
+if (!hashMatch) { try { history.replaceState(null, '', '#s=' + SEED.toString(36)); } catch (e) {} }
+
+const simR = mulberry32(SEED);
+const auxR = mulberry32((SEED ^ 0x9E3779B9) >>> 0);
+const srand = (a, b) => a + simR() * (b - a);
+const vrand = (a, b) => a + auxR() * (b - a);
+const vpick = (arr) => arr[(auxR() * arr.length) | 0];
+
+/* a stable spatial hash — the fractal law of the grid */
+function h3(a, b, c) {
+  let x = (Math.imul(a, 374761393) + Math.imul(b, 668265263) + Math.imul(c, 2246822519) + SEED) >>> 0;
+  x = Math.imul(x ^ (x >>> 13), 1274126177) >>> 0;
+  return ((x ^ (x >>> 16)) >>> 0) / 4294967296;
+}
+
+/* ---------------- geometry ---------------- */
+
+let W = 0, H = 0, DPR = 1, minDim = 1;
+let RN = 6, RM = 6, rootPx0 = 120, originX = 0, originY = 0;
+
+const MAXD = 5;
+const MIN_PX = 14;
+const SUB_BASE = [0.58, 0.44, 0.32, 0.2, 0.1, 0];
+
+let zoomTouch = 0;                 // the hand's contribution to zoom
+function zoomNow() {
+  const drift = reduceMotion ? 0 : 0.45 * (1 + Math.sin(simT / 97));
+  return clamp(1 + drift + zoomTouch, 0.75, 6);
+}
+function rootPx() { return rootPx0 * zoomNow(); }
+function cellPx(d) { return rootPx() / (1 << d); }
+
+function resize() {
+  DPR = Math.min(window.devicePixelRatio || 1, 2);
+  W = window.innerWidth;
+  H = window.innerHeight;
+  minDim = Math.min(W, H);
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  g2.setTransform(DPR, 0, 0, DPR, 0, 0);
+  rootPx0 = Math.max(74, minDim / 3.4);
+  RN = Math.ceil(W / rootPx0) + 2;
+  RM = Math.ceil(H / rootPx0) + 2;
+  g2.fillStyle = `rgb(${BG.r},${BG.g},${BG.b})`;
+  g2.fillRect(0, 0, W, H);
+}
+
+/* screen placement: the root grid stays centred as it breathes */
+function layout() {
+  const p = rootPx();
+  originX = W / 2 - (RN * p) / 2;
+  originY = H / 2 - (RM * p) / 2;
+}
+
+/* ---------------- harmony ---------------- */
+
+const SCALE = [0, 2, 3, 5, 7, 8, 10];       // natural minor
+const ROOT = 130.81;
+const PULSE = 60 / 72 / 2;                   // eighth at 72bpm — one tick
+const BAR = PULSE * 8;
+const PROG = [0, 5, 2, 6];                   // i · VI · III · VII
+const MOVE_BARS = 16;
+const CENTERS = [0, 5, -2, 7];
+let centerIdx = 0;
+let lastBar = -1;
+
+function barNow() { return Math.floor(simT / BAR); }
+function chordRoot() { return PROG[barNow() % PROG.length]; }
+function isChordTone(sd) {
+  const r = chordRoot(), pc = ((sd % 7) + 7) % 7;
+  return pc === r % 7 || pc === (r + 2) % 7 || pc === (r + 4) % 7;
+}
+function snapToChord(sd) {
+  for (let off = 0; off <= 3; off++) {
+    if (isChordTone(sd + off)) return sd + off;
+    if (isChordTone(sd - off)) return sd - off;
+  }
+  return sd;
+}
+function scaleHz(sd, octaveOff) {
+  const oct = Math.floor(sd / 7);
+  const semi = SCALE[((sd % 7) + 7) % 7] + 12 * oct;
+  return ROOT * Math.pow(2, (CENTERS[centerIdx] + semi) / 12 + (octaveOff || 0));
+}
+function intensity() {
+  return 0.575 + 0.425 * Math.sin(TAU * simT / 210 - Math.PI / 2);
+}
+
+/* ---------------- audio ---------------- */
+
+let ac = null, master = null, dry = null, sendIn = null, analyser = null, analyserBins = null, noiseBuf = null;
+let bed = null, crush = null, crushGain = null, gateGain = null, shepard = null;
+
+function initAudio() {
+  if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+  try { ac = new (window.AudioContext || window.webkitAudioContext)(); }
+  catch (e) { return; }
+  if (ac.state === 'suspended') ac.resume();
+
+  const comp = ac.createDynamicsCompressor();
+  comp.threshold.value = -23; comp.knee.value = 20;
+  comp.ratio.value = 8; comp.attack.value = 0.004; comp.release.value = 0.3;
+  comp.connect(ac.destination);
+
+  master = ac.createGain(); master.gain.value = 1;
+  dry = ac.createGain(); dry.gain.value = 0.6;
+  master.connect(dry); dry.connect(comp);
+
+  crush = ac.createWaveShaper();
+  const steps = 22, curve = new Float32Array(512);
+  for (let i = 0; i < 512; i++) {
+    const x = (i / 511) * 2 - 1;
+    curve[i] = Math.round(x * steps) / steps;
+  }
+  crush.curve = curve;
+  gateGain = ac.createGain(); gateGain.gain.value = 1;
+  crushGain = ac.createGain(); crushGain.gain.value = 0.0001;
+  master.connect(crush); crush.connect(gateGain); gateGain.connect(crushGain); crushGain.connect(comp);
+
+  analyser = ac.createAnalyser();
+  analyser.fftSize = 256; analyser.smoothingTimeConstant = 0.85;
+  master.connect(analyser);
+  analyserBins = new Uint8Array(analyser.frequencyBinCount);
+
+  sendIn = ac.createGain(); sendIn.gain.value = 1;
+  const delay = ac.createDelay(2.5); delay.delayTime.value = PULSE * 1.5;
+  const fb = ac.createGain(); fb.gain.value = 0.4;
+  const damp = ac.createBiquadFilter(); damp.type = 'lowpass'; damp.frequency.value = 1900;
+  const wet = ac.createGain(); wet.gain.value = 0.34;
+  sendIn.connect(delay); delay.connect(damp); damp.connect(fb); fb.connect(delay);
+  delay.connect(wet); wet.connect(master);
+
+  noiseBuf = ac.createBuffer(1, ac.sampleRate, ac.sampleRate);
+  const d = noiseBuf.getChannelData(0);
+  for (let i = 0; i < d.length; i++) d[i] = Math.random() * 2 - 1;
+
+  const bedFilter = ac.createBiquadFilter();
+  bedFilter.type = 'lowpass'; bedFilter.frequency.value = 360;
+  const bedGain = ac.createGain();
+  bedGain.gain.setValueAtTime(0.0001, ac.currentTime);
+  bedGain.gain.exponentialRampToValueAtTime(0.042, ac.currentTime + 6);
+  bedFilter.connect(bedGain); bedGain.connect(master); bedGain.connect(sendIn);
+  bed = [{ ratio: 0.5, gain: 0.6 }, { ratio: 0.75, gain: 0.32 }].map(v => {
+    const o = ac.createOscillator(); o.type = 'sine';
+    o.frequency.value = ROOT * Math.pow(2, CENTERS[centerIdx] / 12) * v.ratio;
+    const g = ac.createGain(); g.gain.value = v.gain;
+    o.connect(g); g.connect(bedFilter); o.start();
+    return { osc: o, ratio: v.ratio };
+  });
+
+  const shepFilter = ac.createBiquadFilter();
+  shepFilter.type = 'lowpass'; shepFilter.frequency.value = 1500;
+  const shepBus = ac.createGain(); shepBus.gain.value = 1;
+  shepFilter.connect(shepBus); shepBus.connect(master); shepBus.connect(sendIn);
+  shepard = {
+    pos: 0,
+    voices: Array.from({ length: 6 }, () => {
+      const o = ac.createOscillator(); o.type = 'sine';
+      const g = ac.createGain(); g.gain.value = 0.0001;
+      o.connect(g); g.connect(shepFilter); o.start();
+      return { osc: o, gain: g };
+    }),
+  };
+}
+
+function updateShepard(dts) {
+  if (!shepard || !ac) return;
+  const bar = barNow() % MOVE_BARS;
+  const riser = bar === MOVE_BARS - 1 ? 0.4 : 0;
+  shepard.pos = (shepard.pos + (0.035 + riser) * dts) % 6;
+  const t = ac.currentTime;
+  const level = 0.011 * (0.4 + intensity() * 0.6) * (riser ? 2.2 : 1);
+  for (let i = 0; i < 6; i++) {
+    const p = (i + shepard.pos) % 6;
+    shepard.voices[i].osc.frequency.setTargetAtTime(30 * Math.pow(2, p), t, 0.06);
+    shepard.voices[i].gain.gain.setTargetAtTime(level * Math.exp(-Math.pow(p - 3, 2) / 2), t, 0.08);
+  }
+}
+
+function retuneBed() {
+  if (!bed) return;
+  const base = ROOT * Math.pow(2, CENTERS[centerIdx] / 12);
+  for (const b of bed) b.osc.frequency.setTargetAtTime(base * b.ratio, ac.currentTime, 2.2);
+}
+
+/* four timbres, one per species */
+const VOICES = [
+  { type: 0, attack: 0.004, decay: 1.5, bright: 0.75 },   // bell
+  { type: 1, attack: 0.06,  decay: 2.4, bright: 0.3  },   // breath
+  { type: 2, attack: 0.003, decay: 0.9, bright: 0.6  },   // pluck
+  { type: 3, attack: 0.02,  decay: 1.8, bright: 0.5  },   // horn
+];
+
+function playFreqRaw(v, freq, vel, raw) {
+  if (!ac) return;
+  const t = ac.currentTime;
+  const dur = raw ? Math.min(0.45, v.attack + v.decay * 0.3) : v.attack + v.decay;
+  const car = ac.createOscillator();
+  const env = ac.createGain();
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(Math.max(0.002, vel), t + Math.max(0.004, v.attack));
+  env.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+
+  if (raw) {
+    car.type = 'sawtooth'; car.frequency.value = freq;
+    const ws = ac.createWaveShaper(); ws.curve = crush.curve;
+    car.connect(ws); ws.connect(env); env.connect(master); env.connect(sendIn);
+    car.start(t); car.stop(t + dur + 0.1);
+    return;
+  }
+  env.connect(master); env.connect(sendIn);
+  if (v.type === 0 || v.type === 3) {
+    car.type = 'sine'; car.frequency.value = freq; car.connect(env);
+    const mod = ac.createOscillator();
+    mod.frequency.value = freq * (v.type === 0 ? 3.501 : 2.0);
+    const mg = ac.createGain();
+    mg.gain.setValueAtTime(freq * (0.3 + 1.9 * v.bright), t);
+    mg.gain.exponentialRampToValueAtTime(freq * 0.02, t + dur * 0.75);
+    mod.connect(mg); mg.connect(car.frequency);
+    mod.start(t); mod.stop(t + dur + 0.1);
+  } else if (v.type === 1) {
+    car.type = 'sine'; car.frequency.value = freq; car.connect(env);
+    const vib = ac.createOscillator(); vib.frequency.value = vrand(4.5, 6.5);
+    const va = ac.createGain(); va.gain.value = freq * 0.007;
+    vib.connect(va); va.connect(car.frequency);
+    vib.start(t); vib.stop(t + dur + 0.1);
+  } else {
+    car.type = 'triangle'; car.frequency.value = freq;
+    const lp = ac.createBiquadFilter(); lp.type = 'lowpass';
+    lp.frequency.setValueAtTime(freq * (2 + 6 * v.bright), t);
+    lp.frequency.exponentialRampToValueAtTime(freq * 1.2, t + dur * 0.6);
+    car.connect(lp); lp.connect(env);
+  }
+  car.start(t); car.stop(t + dur + 0.1);
+}
+
+function click(vel) {
+  if (!ac || !noiseBuf) return;
+  const t = ac.currentTime;
+  const src = ac.createBufferSource(); src.buffer = noiseBuf;
+  src.playbackRate.value = vrand(0.8, 1.6);
+  const hp = ac.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 2900;
+  const env = ac.createGain();
+  env.gain.setValueAtTime(vel, t);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + 0.012);
+  src.connect(hp); hp.connect(env); env.connect(master);
+  src.start(t); src.stop(t + 0.03);
+}
+
+function bassSwell() {
+  if (!ac) return;
+  const t = ac.currentTime;
+  const o = ac.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(ROOT * Math.pow(2, CENTERS[centerIdx] / 12) * 0.25, t);
+  const env = ac.createGain();
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(0.2, t + 1.2);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + 6);
+  o.connect(env); env.connect(master); env.connect(sendIn);
+  o.start(t); o.stop(t + 6.2);
+}
+
+/* the sound of a rule being rewritten: a crushed sweep */
+function rewriteSound() {
+  if (!ac) return;
+  const t = ac.currentTime;
+  const o = ac.createOscillator(); o.type = 'square';
+  o.frequency.setValueAtTime(90, t);
+  o.frequency.exponentialRampToValueAtTime(1400, t + 0.22);
+  o.frequency.exponentialRampToValueAtTime(160, t + 0.5);
+  const ws = ac.createWaveShaper(); ws.curve = crush.curve;
+  const env = ac.createGain();
+  env.gain.setValueAtTime(0.0001, t);
+  env.gain.exponentialRampToValueAtTime(0.07, t + 0.02);
+  env.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
+  o.connect(ws); ws.connect(env); env.connect(master); env.connect(sendIn);
+  o.start(t); o.stop(t + 0.55);
+}
+
+/* ---------------- glitch ---------------- */
+
+let glitchActive = false, glitchUntil = 0, nextGlitch = 9;
+
+function updateGlitch() {
+  if (!glitchActive && simT >= nextGlitch) {
+    glitchActive = true;
+    glitchUntil = simT + srand(0.25, 0.8);
+    nextGlitch = simT + srand(7, 16);
+    if (ac) {
+      const t = ac.currentTime;
+      dry.gain.setTargetAtTime(0.34, t, 0.02);
+      crushGain.gain.setTargetAtTime(0.5, t, 0.02);
+      const dur = glitchUntil - simT, g16 = PULSE / 2;
+      for (let k = 0; k * g16 < dur; k++) gateGain.gain.setValueAtTime(k % 2 ? 0.05 : 1, t + k * g16);
+    }
+  }
+  if (glitchActive && simT >= glitchUntil) {
+    glitchActive = false;
+    if (ac) {
+      const t = ac.currentTime;
+      dry.gain.setTargetAtTime(0.6, t, 0.05);
+      crushGain.gain.setTargetAtTime(0.0001, t, 0.05);
+      gateGain.gain.cancelScheduledValues(t);
+      gateGain.gain.setValueAtTime(1, t);
+    }
+  }
+}
+function glitchNow(dur) {
+  nextGlitch = Math.min(nextGlitch, simT);
+  glitchUntil = Math.max(glitchUntil, simT + dur);
+}
+
+/* ---------------- the automata ---------------- */
+
+const K = 6;                    // 0 at rest · K-1 excited · the rest refractory, cooling
+const SPECIES = 4;
+const HUES = [26, 188, 276, 108];
+/* the four hues do not weigh the same to the eye — green shouts where violet
+   whispers — so each carries a lightness trim that evens them out */
+const HUE_TRIM = [-1, -5, 7, -9];
+let tables = [];                // tables[sp] = Uint8Array(K*5)
+let ruleRot = 0;                // twist: rotate every rule's neighbour index
+
+function makeTable() {
+  /* A cell wakes only on a birth count, strikes at full brightness, then
+     steps down through its states — so the lattice reads as strikes and
+     decays rather than a boiling field. Isolation and crowding both kill.
+     Every entry still lives in the table; mutation rewrites any of them. */
+  const t = new Uint8Array(K * 5);
+  const threshold = simR() < 0.78 ? 1 : 2;         // how many excited neighbours it takes
+  for (let k = 0; k < 5; k++) {
+    t[0 * 5 + k] = k >= threshold && simR() < 0.92 ? K - 1 : 0;
+  }
+  t[0 * 5 + 0] = 0;                                 // nothing wakes on its own
+  for (let s = 1; s < K; s++) {
+    t[s * 5 + 4] = 0;                               // overwhelmed: out
+    for (let k = 0; k <= 3; k++) {
+      // never s itself: an entry that holds would freeze every cell of this
+      // species in that state forever
+      t[s * 5 + k] = (s === K - 1 || simR() < 0.93) ? s - 1
+                                                   : Math.min(K - 1, s + 1);
+    }
+  }
+  return t;
+}
+
+function seedTables() {
+  tables = [];
+  for (let i = 0; i < SPECIES; i++) tables.push(makeTable());
+}
+function mutateTable(sp) {
+  const t = tables[sp];
+  const n = 2 + ((simR() * 3) | 0);
+  for (let i = 0; i < n; i++) {
+    const st = (simR() * K) | 0, k = 1 + ((simR() * 4) | 0);
+    t[st * 5 + k] = st === 0 ? (simR() < 0.55 ? K - 1 : 0) : st - 1;
+  }
+  // the skeleton is inviolable: something must be born, and no one survives alone
+  let anyBirth = false;
+  for (let k = 1; k <= 4; k++) if (t[k]) anyBirth = true;
+  if (!anyBirth) t[1] = K - 1;
+  t[0] = 0;
+  for (let st = 1; st < K; st++) {
+    t[st * 5 + 4] = 0;
+    for (let k = 0; k <= 3; k++) if (t[st * 5 + k] >= st) t[st * 5 + k] = st - 1;
+  }
+}
+
+/* cells live in a sparse map keyed by depth and index */
+const cells = new Map();
+function cellAt(d, ix, iy) {
+  const key = d * 16777216 + iy * 4096 + ix;
+  let c = cells.get(key);
+  if (!c) {
+    const r = h3(d + 71, ix, iy);
+    c = {
+      d, ix, iy, key,
+      s: r < 0.05 ? K - 1 : (r < 0.13 ? 1 + ((r * 700) % (K - 2) | 0) : 0),
+      ns: 0,
+      sp: (h3(d + 17, ix * 3 + 1, iy * 5 + 2) * SPECIES) | 0,
+      fire: -99, flash: 0, born: simT,
+    };
+    cells.set(key, c);
+  }
+  return c;
+}
+
+/* activity per root tile — where the music has been, detail follows */
+let activity = new Float32Array(4096);
+function actIndex(rx, ry) { return ((ry & 63) * 64 + (rx & 63)); }
+function activityAt(d, ix, iy) {
+  return activity[actIndex(ix >> d, iy >> d)];
+}
+function bumpActivity(d, ix, iy, amt) {
+  const i = actIndex(ix >> d, iy >> d);
+  activity[i] = Math.min(1, activity[i] + amt);
+}
+
+function subdivided(d, ix, iy) {
+  if (d >= MAXD) return false;
+  return h3(d + 1, ix, iy) < SUB_BASE[d] + activityAt(d, ix, iy) * 0.2;
+}
+
+let leaves = [];
+function collectLeaves() {
+  leaves.length = 0;
+  const p = rootPx();
+  for (let ry = 0; ry < RM; ry++) {
+    const y = originY + ry * p;
+    if (y + p < -4 || y > H + 4) continue;
+    for (let rx = 0; rx < RN; rx++) {
+      const x = originX + rx * p;
+      if (x + p < -4 || x > W + 4) continue;
+      descend(0, rx, ry);
+    }
+  }
+}
+function descend(d, ix, iy) {
+  if (leaves.length > 1800) return;
+  if (d < MAXD && cellPx(d + 1) >= MIN_PX && subdivided(d, ix, iy)) {
+    for (let j = 0; j < 2; j++) for (let i = 0; i < 2; i++) descend(d + 1, ix * 2 + i, iy * 2 + j);
+  } else {
+    leaves.push(cellAt(d, ix, iy));
+  }
+}
+
+/* neighbours by position: a big tile and its small neighbours meet */
+function leafAtGrid(gx, gy) {
+  let ix = Math.floor(gx), iy = Math.floor(gy);
+  if (ix < 0 || iy < 0 || ix >= RN || iy >= RM) return null;
+  let d = 0, fx = gx - ix, fy = gy - iy;
+  while (d < MAXD && cellPx(d + 1) >= MIN_PX && subdivided(d, ix, iy)) {
+    const i = fx < 0.5 ? 0 : 1, j = fy < 0.5 ? 0 : 1;
+    ix = ix * 2 + i; iy = iy * 2 + j; d++;
+    fx = fx * 2 - i; fy = fy * 2 - j;
+  }
+  return cellAt(d, ix, iy);
+}
+function neighboursOf(c, out) {
+  const sz = 1 / (1 << c.d);
+  const gx = (c.ix + 0.5) * sz, gy = (c.iy + 0.5) * sz;
+  const e = sz * 0.62;
+  out[0] = leafAtGrid(gx - e, gy);
+  out[1] = leafAtGrid(gx + e, gy);
+  out[2] = leafAtGrid(gx, gy - e);
+  out[3] = leafAtGrid(gx, gy + e);
+  return out;
+}
+
+/* ---------------- the tick ---------------- */
+
+const _nb = [null, null, null, null];
+let tickIndex = -1;
+let fired = [];
+
+function tick() {
+  collectLeaves();
+  const I = intensity();
+  const ignite = (0.6 + I * 2.4) / Math.max(24, leaves.length);
+
+  // 1. read
+  for (let i = 0; i < leaves.length; i++) {
+    const c = leaves[i];
+    neighboursOf(c, _nb);
+    let k = 0, adopt = -1;
+    for (let n = 0; n < 4; n++) {
+      const o = _nb[n];
+      if (!o) continue;
+      // only a fully excited neighbour can wake a cell: the states below it
+      // are refractory, still lit but no longer contagious. That single rule
+      // is what makes fronts travel instead of the whole plane boiling.
+      if (o.s === K - 1) k++;
+      if (o.s > 0 && o.sp !== c.sp && o.s > c.s) adopt = o.sp;
+    }
+    const kk = (k + ruleRot) % 5;
+    c.ns = tables[c.sp][c.s * 5 + kk];
+    // the plane is never dead: rest occasionally ignites on its own, and the
+    // rate breathes with the long arc — sparse in the quiet passages, restless
+    // in the swells. Every target pattern in the piece starts as one of these.
+    if (c.s === 0 && c.ns === 0 && simR() < ignite) c.ns = K - 1;
+    // a stronger neighbour's law creeps in
+    if (adopt >= 0 && simR() < 0.035) c.nsp = adopt; else c.nsp = c.sp;
+  }
+
+  // 2. write, and collect what woke
+  fired.length = 0;
+  for (let i = 0; i < leaves.length; i++) {
+    const c = leaves[i];
+    const was = c.s;
+    c.s = c.ns; c.sp = c.nsp;
+    if (c.s > 0 && was === 0) {
+      c.fire = simT;
+      c.flash = 1;
+      fired.push(c);
+      bumpActivity(c.d, c.ix, c.iy, 0.022 * c.s);
+    } else if (c.s > was) {
+      c.flash = Math.max(c.flash, 0.5);
+    }
+  }
+
+  // 3. sound: the loudest few, biggest first — the lattice mixes itself
+  if (fired.length > 1) fired.sort((a, b) => (a.d - b.d) || (b.s - a.s));
+  const budget = Math.round(2 + I * 5);
+  const raw = glitchActive;
+  const strong = (simT % BAR) < PULSE * 0.5 || Math.abs((simT % BAR) - BAR / 2) < PULSE * 0.5;
+  const stride = Math.max(1, Math.floor(fired.length / Math.max(1, budget)));
+  for (let i = 0, n = 0; i < fired.length && n < budget; i++) {
+    // the two largest anchor the register; the rest are sampled across depths
+    if (n >= 2 && (i % stride) !== 0) continue;
+    n++;
+    const c = fired[i];
+    let deg = ((c.ix * 3 + c.iy * 5) % 7 + 7) % 7;
+    if (strong) deg = snapToChord(deg);
+    const oct = c.d - 2;
+    const vel = (0.035 + c.s * 0.022) * (0.5 + I * 0.6);
+    playFreqRaw(VOICES[c.sp], scaleHz(deg, oct), vel, raw);
+  }
+  if (fired.length > budget && simR() < 0.5) click(glitchActive ? 0.045 : 0.02);
+
+  // activity fades; the grid forgets its detail
+  for (let i = 0; i < activity.length; i++) if (activity[i] > 0) activity[i] *= 0.985;
+
+  if (cells.size > 60000) cells.clear();
+}
+
+/* ---------------- gestures ---------------- */
+
+const pointers = new Map();
+let pinchStart = null;
+
+function screenToGrid(x, y) {
+  const p = rootPx();
+  return { gx: (x - originX) / p, gy: (y - originY) / p };
+}
+function cellAtScreen(x, y) {
+  const { gx, gy } = screenToGrid(x, y);
+  return leafAtGrid(gx, gy);
+}
+
+function strike(c, loud) {
+  if (!c) return;
+  c.s = K - 1;
+  c.fire = simT; c.flash = 1;
+  bumpActivity(c.d, c.ix, c.iy, loud ? 0.3 : 0.14);
+  let deg = ((c.ix * 3 + c.iy * 5) % 7 + 7) % 7;
+  deg = snapToChord(deg);
+  playFreqRaw(VOICES[c.sp], scaleHz(deg, c.d - 2), loud ? 0.11 : 0.07, glitchActive);
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  initAudio();
+  const p = {
+    x: e.clientX, y: e.clientY, t0: performance.now(),
+    path: 0, longFired: false, isPinch: false, lastPaint: 0, painted: false,
+  };
+  pointers.set(e.pointerId, p);
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    a.isPinch = b.isPinch = true;
+    pinchStart = {
+      dist: Math.hypot(a.x - b.x, a.y - b.y),
+      ang: Math.atan2(b.y - a.y, b.x - a.x),
+      zoom: zoomTouch, rot: ruleRot,
+    };
+  }
+}, { passive: false });
+
+canvas.addEventListener('pointermove', (e) => {
+  const p = pointers.get(e.pointerId);
+  if (!p) return;
+  e.preventDefault();
+  p.path += Math.hypot(e.clientX - p.x, e.clientY - p.y);
+  p.x = e.clientX; p.y = e.clientY;
+
+  if (pinchStart && pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    const dist = Math.hypot(a.x - b.x, a.y - b.y);
+    const ang = Math.atan2(b.y - a.y, b.x - a.x);
+    zoomTouch = clamp(pinchStart.zoom + (dist / Math.max(1, pinchStart.dist) - 1) * 2.6, -0.6, 4.2);
+    let dAng = ang - pinchStart.ang;
+    if (dAng > Math.PI) dAng -= TAU; if (dAng < -Math.PI) dAng += TAU;
+    ruleRot = ((pinchStart.rot + Math.round(dAng / 0.7)) % 5 + 5) % 5;
+    return;
+  }
+
+  // painting: wake the lattice under the hand
+  if (!p.isPinch && p.path > 10) {
+    const now = performance.now();
+    if (now - p.lastPaint > 45) {
+      p.lastPaint = now;
+      p.painted = true;
+      strike(cellAtScreen(p.x, p.y), false);
+    }
+  }
+}, { passive: false });
+
+function releasePointer(e, cancelled) {
+  const p = pointers.get(e.pointerId);
+  if (!p) return;
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinchStart = null;
+  if (cancelled || p.isPinch || p.longFired || p.painted) return;
+  if (performance.now() - p.t0 < 300 && p.path < 12) strike(cellAtScreen(p.x, p.y), true);
+}
+
+canvas.addEventListener('pointerup', (e) => { e.preventDefault(); releasePointer(e, false); }, { passive: false });
+canvas.addEventListener('pointercancel', (e) => releasePointer(e, true));
+canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+
+function checkLongPress(now) {
+  for (const p of pointers.values()) {
+    if (!p.longFired && !p.isPinch && !p.painted && p.path < 12 && now - p.t0 > 620) {
+      p.longFired = true;
+      const c = cellAtScreen(p.x, p.y);
+      if (!c) continue;
+      // rewrite this species' law, from where the hand rests
+      mutateTable(c.sp);
+      rewriteSound();
+      glitchNow(0.5);
+      strike(c, true);
+      bumpActivity(c.d, c.ix, c.iy, 0.55);
+      rewriteFlash = { sp: c.sp, t: simT };
+    }
+  }
+}
+let rewriteFlash = null;
+
+/* ---------------- render ---------------- */
+
+let audioAmp = 0;
+function readAmp() {
+  if (!analyser) return;
+  analyser.getByteFrequencyData(analyserBins);
+  let sum = 0;
+  for (let i = 0; i < analyserBins.length; i++) sum += analyserBins[i];
+  audioAmp = audioAmp * 0.88 + (sum / analyserBins.length / 255) * 0.12;
+}
+
+function render() {
+  g2.globalCompositeOperation = 'source-over';
+  g2.fillStyle = `rgb(${BG.r},${BG.g},${BG.b})`;
+  g2.fillRect(0, 0, W, H);
+
+  const p = rootPx();
+  const tickPhase = (simT % PULSE) / PULSE;
+
+  for (let i = 0; i < leaves.length; i++) {
+    const c = leaves[i];
+    const sz = p / (1 << c.d);
+    const x = originX + (c.ix / (1 << c.d)) * p;
+    const y = originY + (c.iy / (1 << c.d)) * p;
+    if (x + sz < 0 || x > W || y + sz < 0 || y > H) continue;
+
+    // bleuje offset: the tick's light sweeps the lattice diagonally
+    const stagger = (((c.ix + c.iy) % 8) / 8) * 0.55;
+    const age = (simT - c.fire) / PULSE - stagger;
+    const flash = age > 0 && age < 1.6 ? Math.exp(-age * 2.2) : 0;
+
+    const hue = HUES[c.sp];
+    const gut = sz > 30 ? 2 : sz > 16 ? 1 : 0.6;
+    const w = sz - gut * 2;
+    if (w <= 0) continue;
+
+    // The mark is the state: a cell strikes at full size and shrinks as it
+    // cools, so the machine's countdown is the drawing itself, and no tile —
+    // however large — ever becomes a flat slab of colour.
+    const t01 = c.s / (K - 1);
+    const excited = c.s === K - 1;
+
+    if (sz > 7) {
+      g2.strokeStyle = `hsla(${hue}, 22%, 46%, ${0.07 + t01 * 0.13})`;
+      g2.lineWidth = 1;
+      g2.strokeRect(x + gut + 0.5, y + gut + 0.5, w - 1, w - 1);
+    }
+
+    if (c.s > 0) {
+      // a large tile is a slow bass voice: its mark stays bounded and dim
+      // inside its frame, so scale reads as weight rather than as area
+      const big = clamp(sz / (p * 0.6), 0, 1);
+      const m = w * (0.16 + 0.84 * t01 * t01) * (1 - 0.52 * big);
+      const off = (w - m) / 2;
+      const trim = HUE_TRIM[c.sp];
+      const L = (excited ? (54 - big * 15) + flash * 18
+                         : (15 + t01 * t01 * 30) * (1 - big * 0.3)) + trim * (0.4 + t01 * 0.6);
+      const S = excited ? 60 - big * 12 : 30 + t01 * 22;
+      g2.fillStyle = `hsl(${hue}, ${S}%, ${L}%)`;
+      g2.fillRect(x + gut + off, y + gut + off, m, m);
+      if (excited && sz > 22) {
+        g2.strokeStyle = `hsla(${hue}, 40%, 88%, ${0.35 + flash * 0.45})`;
+        g2.lineWidth = 1;
+        g2.strokeRect(x + gut + off - 1.5, y + gut + off - 1.5, m + 3, m + 3);
+      }
+    }
+  }
+
+  // the beat, drawn as one hairline of light crossing the field
+  const beatY = tickPhase * H;
+  g2.fillStyle = `hsla(45, 90%, 70%, ${0.05 + audioAmp * 0.08})`;
+  g2.fillRect(0, beatY - 1, W, 2);
+
+  // a rule was rewritten: its species pulses across the whole plane
+  if (rewriteFlash && simT - rewriteFlash.t < 0.6) {
+    const a = 1 - (simT - rewriteFlash.t) / 0.6;
+    g2.fillStyle = `hsla(${HUES[rewriteFlash.sp]}, 80%, 60%, ${a * 0.10})`;
+    g2.fillRect(0, 0, W, H);
+  }
+
+  if (glitchActive) drawGlitch(p);
+}
+
+/* the lattice tears along its own rows */
+function drawGlitch(p) {
+  const rows = 2 + (vrand(0, 3) | 0);
+  for (let i = 0; i < rows; i++) {
+    const h = p / (1 << ((vrand(0, 3) | 0)));
+    const sy = vrand(0, Math.max(1, H - h));
+    const dx = Math.round(vrand(-2.5, 2.5)) * (p / 4);
+    g2.drawImage(canvas, 0, sy * DPR, W * DPR, h * DPR, dx, sy, W, h);
+  }
+  g2.globalCompositeOperation = 'lighter';
+  g2.fillStyle = `hsla(${vpick([305, 175, 45])}, 90%, 60%, 0.05)`;
+  g2.fillRect(0, vrand(0, H - 20), W, vrand(3, 22));
+  g2.globalCompositeOperation = 'source-over';
+}
+
+/* ---------------- main loop ---------------- */
+
+const SIM_DT = 1 / 60;
+let simT = 0, last = performance.now(), acc = 0, raf = 0;
+
+function simStep() {
+  simT += SIM_DT;
+  const bar = barNow();
+  if (bar !== lastBar) {
+    if (lastBar >= 0 && bar % MOVE_BARS === 0) {
+      centerIdx = (centerIdx + 1) % CENTERS.length;
+      retuneBed(); bassSwell();
+    }
+    lastBar = bar;
+  }
+  updateGlitch();
+  layout();
+  const ti = Math.floor(simT / PULSE);
+  if (ti !== tickIndex) { tickIndex = ti; tick(); }
+}
+
+function step(now) {
+  acc += Math.min((now - last) / 1000, 0.1);
+  last = now;
+  let n = 0;
+  while (acc >= SIM_DT && n < 4) { simStep(); acc -= SIM_DT; n++; }
+  checkLongPress(now);
+  updateShepard(SIM_DT * Math.max(1, n));
+  readAmp();
+  render();
+  raf = requestAnimationFrame(step);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    cancelAnimationFrame(raf); acc = 0;
+    if (ac && ac.state === 'running') ac.suspend();
+  } else {
+    last = performance.now();
+    raf = requestAnimationFrame(step);
+    if (ac && ac.state === 'suspended') ac.resume();
+  }
+});
+
+window.addEventListener('resize', () => { resize(); layout(); });
+resize();
+layout();
+seedTables();
+collectLeaves();
+raf = requestAnimationFrame(step);
+</script>

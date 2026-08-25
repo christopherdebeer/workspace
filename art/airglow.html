@@ -1,0 +1,533 @@
+<title>Airglow</title>
+<style>
+  html, body {
+    margin: 0; padding: 0; height: 100%;
+    background: #04060c;
+    overflow: hidden;
+  }
+  #sky {
+    position: fixed; inset: 0;
+    width: 100vw; height: 100dvh;
+    display: block;
+    background: #04060c;
+  }
+  #hint {
+    position: fixed;
+    left: 0; right: 0; bottom: 5vh;
+    text-align: center;
+    font: 400 11px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: rgba(196, 216, 226, 0.42);
+    pointer-events: none;
+    transition: opacity 2.4s ease;
+  }
+  #hint.gone { opacity: 0; }
+</style>
+<canvas id="sky" aria-label="Airglow — a seamless loop of auroral curtains whose light is the harmonic spectrum of the drone you hear."></canvas>
+<div id="hint">touch once for sound</div>
+<script>
+'use strict';
+/* ============================================================
+   AIRGLOW
+   A seamless loop. Nothing to press, nothing to steer.
+
+   THE SKY IS THE SPECTRUM. A drone of sixteen harmonics stands
+   over a low fundamental. Each harmonic owns a band of the sky:
+   when a partial swells, that band of rays brightens, and when it
+   sinks the light drains out of it. What you are watching is the
+   sound's own spectrum, hung across the sky as curtains — the
+   image is computed from the synthesis model itself, not from a
+   meter, so the two are the same arithmetic and cannot drift.
+
+   IT LOOPS EXACTLY. Every modulation in the piece — each
+   harmonic's swell, each fold's drift, each star's twinkle — is a
+   periodic function completing a whole number of cycles in the
+   forty-eight second period. Even the beating between detuned
+   oscillators is tuned to a whole number of beats per loop. At the
+   end of the loop the light and the sound are, to the sample, where
+   they began.
+
+   THE DETAIL. Curtains are drawn per pixel: a sharp lower border
+   with a rim of blue-white, the auroral green above it, and the
+   long crimson decay of the upper atmosphere. Filaments come from
+   three ray frequencies laid over one another, folds from slow
+   broad bands, and one surge crosses the whole sky each loop.
+   Stars sit behind it all, dimmed toward the horizon by the air
+   they are seen through, and the ground is ordered-dithered so the
+   gradients hold without banding.
+   ============================================================ */
+
+const canvas = document.getElementById('sky');
+const hintEl = document.getElementById('hint');
+
+const TAU = Math.PI * 2;
+const clamp = (v, a, b) => Math.max(a, Math.min(b, v));
+const LOOP = 48;                       // seconds — the whole piece
+const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+/* a fixed stream: the piece is the same every time it is opened */
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+const rng = mulberry32(0x5EED17);
+const rnd = (a, b) => a + rng() * (b - a);
+
+
+/* ---------------- the drone ----------------
+   Sixteen partials of a harmonic series on C2. Each carries a
+   whole number of swells per loop, so the spectrum returns to
+   itself exactly. */
+
+const F0 = 65.41;
+const RATIOS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 14, 16, 18, 20, 24];
+const N = RATIOS.length;
+
+const PARTIALS = RATIOS.map((r, i) => ({
+  ratio: r,
+  base: 1 / Math.pow(r, 1.05),                 // the natural rolloff of the series
+  cycles: [1, 2, 3, 1, 2, 4, 3, 2, 5, 3, 4, 6, 5, 7, 6, 8][i],  // swells per loop
+  phase: rnd(0, 1),
+  shape: 1.2 + (i % 4) * 0.45,                 // how peaked each swell is
+  beats: i < 7 ? [0, 3, 5, 2, 7, 4, 6][i] : 0, // whole beats per loop against its twin
+}));
+
+const amps = new Float32Array(N);      // what the ear gets: with the natural rolloff
+const visAmps = new Float32Array(N);   // what the eye gets: each partial's own swell
+
+/* the piece's one long breath, plus a half-speed counter-swell */
+function breath(phase) {
+  return 0.42 + 0.44 * (0.5 - 0.5 * Math.cos(TAU * phase))
+              + 0.14 * (0.5 - 0.5 * Math.cos(TAU * 2 * phase + 1.1));
+}
+
+function harmonicAmps(phase, out) {
+  const br = breath(phase);
+  let sum = 0;
+  for (let i = 0; i < N; i++) {
+    const p = PARTIALS[i];
+    const s = 0.5 - 0.5 * Math.cos(TAU * (p.cycles * phase + p.phase));
+    const swell = Math.pow(s, p.shape) * br;
+    // The ear wants the series' natural rolloff — a sixteenth harmonic as loud
+    // as the fundamental would shriek. The eye wants the opposite: without
+    // normalising, the low harmonics would simply hold one side of the sky
+    // brighter forever and you would be watching the rolloff instead of the
+    // music. So the sky shows each partial's own swell, at equal weight.
+    out[i] = p.base * swell;
+    visAmps[i] = swell;
+    sum += out[i];
+  }
+  return sum;
+}
+
+/* ---------------- audio ---------------- */
+
+let ac = null, master = null, voices = [], windGain = null, windFilter = null, started = false;
+
+function initAudio() {
+  if (ac) return;
+  try { ac = new (window.AudioContext || window.webkitAudioContext)(); }
+  catch (e) { return; }
+
+  const comp = ac.createDynamicsCompressor();
+  comp.threshold.value = -24; comp.knee.value = 22;
+  comp.ratio.value = 4; comp.attack.value = 0.02; comp.release.value = 0.5;
+  comp.connect(ac.destination);
+
+  master = ac.createGain();
+  master.gain.setValueAtTime(0.0001, ac.currentTime);
+  master.gain.exponentialRampToValueAtTime(0.5, ac.currentTime + 9);   // the sky comes up slowly
+  master.connect(comp);
+
+  // a gentle air on the top end so the shimmer never turns to glass
+  const tone = ac.createBiquadFilter();
+  tone.type = 'highshelf'; tone.frequency.value = 2600; tone.gain.value = -5;
+  tone.connect(master);
+
+  const space = ac.createDelay(4);
+  space.delayTime.value = 0.63;
+  const fb = ac.createGain(); fb.gain.value = 0.5;
+  const damp = ac.createBiquadFilter(); damp.type = 'lowpass'; damp.frequency.value = 1500;
+  const wet = ac.createGain(); wet.gain.value = 0.3;
+  space.connect(damp); damp.connect(fb); fb.connect(space); space.connect(wet); wet.connect(master);
+
+  voices = PARTIALS.map((p) => {
+    const g = ac.createGain();
+    g.gain.value = 0.0001;
+    g.connect(tone); g.connect(space);
+    const oscs = [];
+    const o = ac.createOscillator();
+    o.type = 'sine';
+    o.frequency.value = F0 * p.ratio;
+    o.connect(g); o.start();
+    oscs.push(o);
+    if (p.beats > 0) {
+      // its twin, detuned by a whole number of beats per loop, so even the
+      // interference between them is periodic with the piece
+      const o2 = ac.createOscillator();
+      o2.type = 'sine';
+      o2.frequency.value = F0 * p.ratio + p.beats / LOOP;
+      const g2b = ac.createGain(); g2b.gain.value = 0.6;
+      o2.connect(g2b); g2b.connect(g); o2.start();
+      oscs.push(o2);
+    }
+    return { gain: g, oscs };
+  });
+
+  // the wind: noise whose buffer divides the loop, so it repeats with it
+  const seg = LOOP / 8;
+  const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * seg), ac.sampleRate);
+  const d = buf.getChannelData(0);
+  let v = 0;
+  for (let i = 0; i < d.length; i++) {
+    v = v * 0.86 + (Math.random() * 2 - 1) * 0.14;      // a soft, dark noise
+    d[i] = v;
+  }
+  // taper the seam so the eight repeats do not click
+  const fade = Math.floor(ac.sampleRate * 0.05);
+  for (let i = 0; i < fade; i++) {
+    const k = i / fade;
+    d[i] *= k;
+    d[d.length - 1 - i] *= k;
+  }
+  const src = ac.createBufferSource();
+  src.buffer = buf; src.loop = true;
+  windFilter = ac.createBiquadFilter();
+  windFilter.type = 'bandpass'; windFilter.frequency.value = 700; windFilter.Q.value = 0.8;
+  windGain = ac.createGain(); windGain.gain.value = 0.0001;
+  src.connect(windFilter); windFilter.connect(windGain);
+  windGain.connect(master); windGain.connect(space);
+  src.start();
+
+  started = true;
+}
+
+function updateAudio(phase) {
+  if (!ac || ac.state !== 'running') return;
+  const t = ac.currentTime;
+  for (let i = 0; i < N; i++) {
+    voices[i].gain.gain.setTargetAtTime(amps[i] * 0.16, t, 0.09);
+  }
+  // the surge, heard: a slow sweep of the wind band, once per loop
+  const s = 0.5 - 0.5 * Math.cos(TAU * phase);
+  windFilter.frequency.setTargetAtTime(320 + s * 1500, t, 0.2);
+  windGain.gain.setTargetAtTime(0.012 + s * 0.03, t, 0.2);
+}
+
+/* browsers will not let sound begin unasked; this is the only thing
+   the piece ever wants from you, and only once */
+function tryStart() {
+  initAudio();
+  if (!ac) return;
+  ac.resume().then(() => {
+    if (ac.state === 'running') hintEl.classList.add('gone');
+  }).catch(() => {});
+}
+['pointerdown', 'keydown', 'touchstart', 'wheel'].forEach(ev =>
+  window.addEventListener(ev, tryStart, { passive: true }));
+setTimeout(() => { tryStart(); }, 300);
+if (!matchMedia('(pointer: coarse)').matches) hintEl.textContent = 'click once for sound';
+
+/* ---------------- the sky, on the GPU ----------------
+   A CPU canvas compositing columns will always carry a vector edge
+   somewhere. This is one fragment shader over a fullscreen triangle:
+   the sky is computed per pixel from domain-warped fractal noise, lit
+   in floating point, filmically tonemapped, bloomed and grained. Every
+   time-dependence enters as a point on a circle of radius one, so the
+   forty-eight second loop is exact by construction. */
+
+let gl = null, prog = null, uni = {}, quality = 1;
+
+const VERT = `#version 300 es
+void main() {
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const FRAG = `#version 300 es
+precision highp float;
+uniform vec2 uRes;
+uniform vec2 uT;          // cos/sin of the loop phase: time as a circle
+uniform float uPhase;
+uniform float uAmps[16];
+out vec4 frag;
+
+#define TAU 6.28318530718
+
+float hash13(vec3 p) {
+  p = fract(p * 0.1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y) * p.z);
+}
+float hash12(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float n3(vec3 p) {
+  vec3 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = mix(mix(hash13(i), hash13(i + vec3(1, 0, 0)), f.x),
+                mix(hash13(i + vec3(0, 1, 0)), hash13(i + vec3(1, 1, 0)), f.x), f.y);
+  float b = mix(mix(hash13(i + vec3(0, 0, 1)), hash13(i + vec3(1, 0, 1)), f.x),
+                mix(hash13(i + vec3(0, 1, 1)), hash13(i + vec3(1, 1, 1)), f.x), f.y);
+  return mix(a, b, f.z);
+}
+float fbm(vec3 p) {
+  float s = 0.0, a = 0.5, n = 0.0;
+  for (int i = 0; i < 4; i++) {
+    s += a * n3(p); n += a; a *= 0.55;
+    p = p * 2.13 + vec3(17.3, 9.1, 3.7);
+  }
+  return s / n;
+}
+float ridge(vec3 p) {
+  float s = 0.0, a = 0.5, n = 0.0;
+  for (int i = 0; i < 3; i++) {
+    float v = 1.0 - abs(n3(p) * 2.0 - 1.0);
+    s += a * v * v; n += a; a *= 0.52;
+    p = p * 2.19 + vec3(7.7, 3.3, 11.1);
+  }
+  return s / n;
+}
+
+/* four palettes the sky has actually worn; m picks along them */
+vec3 palette(float m, float rimT, float topT) {
+  vec3 rim, core, top;
+  if (m < 0.3333) {
+    float t = m / 0.3333;
+    rim  = mix(vec3(0.66, 0.91, 1.00), vec3(0.84, 0.73, 1.00), t);
+    core = mix(vec3(0.30, 0.98, 0.55), vec3(0.44, 0.97, 0.60), t);
+    top  = mix(vec3(0.81, 0.26, 0.41), vec3(0.94, 0.42, 0.24), t);
+  } else if (m < 0.6666) {
+    float t = (m - 0.3333) / 0.3333;
+    rim  = mix(vec3(0.84, 0.73, 1.00), vec3(1.00, 0.57, 0.73), t);
+    core = mix(vec3(0.52, 0.93, 0.66), vec3(0.41, 0.89, 0.54), t);
+    top  = mix(vec3(0.94, 0.42, 0.24), vec3(0.70, 0.36, 0.88), t);
+  } else {
+    float t = (m - 0.6666) / 0.3334;
+    rim  = mix(vec3(1.00, 0.57, 0.73), vec3(0.57, 0.81, 1.00), t);
+    core = mix(vec3(0.41, 0.89, 0.54), vec3(0.28, 0.85, 0.75), t);
+    top  = mix(vec3(0.70, 0.36, 0.88), vec3(0.45, 0.48, 1.00), t);
+  }
+  vec3 c = core;
+  c = mix(c, rim, rimT);
+  c = mix(c, top, topT);
+  return c;
+}
+
+float harmonicAt(float hf) {
+  float hc = clamp(hf, 0.0, 15.0);
+  int i0 = int(hc);
+  int i1 = min(15, i0 + 1);
+  return mix(uAmps[i0], uAmps[i1], fract(hc));
+}
+
+/* one curtain: a sheet of emission with a warped border, sheared rays,
+   and its stretch of the harmonic spectrum */
+vec3 curtain(vec2 uv, float seed, float hBase, float span, float gain,
+             float shear, float tilt, float rayF, float b0, float bN,
+             float flip, float cx, float cw) {
+  // the whole sheet drifts through the noise on a circle: exact loop
+  vec3 tc = vec3(uT * (0.6 + seed * 0.13), seed * 19.7);
+
+  // domain warp first: nothing downstream may see a straight coordinate
+  float wx = fbm(vec3(uv * 1.5, seed * 7.1) + tc) - 0.5;
+  float wy = fbm(vec3(uv * 1.5 + 4.7, seed * 3.3) + tc) - 0.5;
+  vec2 p = uv + vec2(wx, wy) * 0.22;
+
+  float border = hBase + tilt * (p.x - 0.5)
+    + (fbm(vec3(p.x * 1.9, seed * 13.0, 2.0) + tc * 1.2) - 0.5) * 0.24
+    + (fbm(vec3(p.x * 6.5, seed * 29.0, 5.0) + tc * 1.6) - 0.5) * 0.05;
+
+  float q = (uv.y - border) / span;
+  if (q < -0.18 || q > 2.2) return vec3(0.0);
+
+  // emission profile: knife under the border, long decay above
+  float e = q < 0.0
+    ? exp(q * 10.0)
+    : exp(-q * 1.2) * (0.32 + 0.68 * smoothstep(0.0, 0.05, q));
+
+  // rays, read from a sheared and warped column
+  float lean = shear * pow(clamp(q, 0.0, 1.4), 1.45)
+             * (0.7 + 0.6 * fbm(vec3(q * 2.0, seed * 5.0, 8.0) + tc));
+  float xs = p.x - lean;
+  float rays = pow(ridge(vec3(xs * rayF, uv.y * rayF * 0.12 + seed * 3.0, 12.0) + tc * 1.4), 2.0) * 1.25;
+  float fine = 0.6 + 0.4 * ridge(vec3(xs * rayF * 2.7, seed * 11.0, 15.0) + tc * 1.8);
+
+  // density: streamers with ends, inside this curtain's stretch of sky
+  float dn = fbm(vec3(p.x * 2.3, seed * 17.0, 21.0) + tc * 0.8);
+  float dens = smoothstep(0.34, 0.62, dn);
+  float env = clamp(1.0 - abs(uv.x - (cx + uT.y * 0.04)) / (cw * 0.5), 0.0, 1.0);
+  dens *= sqrt(env * env * (3.0 - 2.0 * env));
+  if (dens < 0.003) return vec3(0.0);
+
+  // the spectrum, hung across this band of sky
+  float u2 = mix(uv.x, 1.0 - uv.x, flip);
+  float harm = harmonicAt(b0 + u2 * bN);
+
+  // colour: height mixes rim/core/top; a slow field walks the palettes
+  float m = fbm(vec3(p.x * 1.05, seed * 23.0, 27.0) + tc * 0.5);
+  float rimT = smoothstep(0.14, 0.02, q) * 0.5;
+  float topT = smoothstep(0.28, 1.05, q);
+  vec3 col = palette(clamp(m * 1.5 - 0.22, 0.0, 1.0), rimT, topT);
+
+  float I = e * (0.20 + rays * 1.10) * fine * dens * (0.10 + harm * 1.35) * gain;
+  // a soft halo of the same sheet, no rays: the glow a camera lens adds
+  float halo = exp(-abs(q - 0.18) * 2.2) * smoothstep(2.2, 1.2, q)
+             * dens * (0.05 + harm * 0.35) * gain * 0.16;
+  return col * I + col * halo;
+}
+
+vec3 aces(vec3 x) {
+  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  float aspect = uRes.x / uRes.y;
+  vec2 sp = vec2(uv.x * aspect, uv.y);   // square space for the noise
+
+  // ------- the night behind everything
+  float up = uv.y;
+  vec3 sky = mix(vec3(0.028, 0.040, 0.078), vec3(0.010, 0.013, 0.030), smoothstep(0.0, 0.8, up));
+  sky += vec3(0.012, 0.030, 0.024) * exp(-pow((up - 0.10) / 0.22, 2.0));   // airglow at the horizon
+
+  // ------- stars: a hashed grid, twinkling in whole cycles per loop
+  vec2 sg = gl_FragCoord.xy / (uRes.y * 0.02);
+  vec2 cell = floor(sg);
+  float sh = hash12(cell);
+  if (sh > 0.912) {
+    vec2 sc = vec2(hash12(cell + 7.0), hash12(cell + 13.0));
+    float d = length(fract(sg) - sc);
+    float mag = pow(hash12(cell + 29.0), 2.2);
+    float cyc = floor(hash12(cell + 41.0) * 5.0) + 1.0;
+    float tw = 0.75 + 0.25 * sin(TAU * (cyc * uPhase + hash12(cell + 53.0)));
+    float ext = 0.25 + 0.75 * pow(up, 0.5);
+    float s = exp(-d * d * (900.0 - mag * 620.0)) * (0.25 + mag) * tw * ext;
+    sky += vec3(0.9, 0.95, 1.0) * s * 0.8;
+  }
+
+  // ------- the aurora
+  vec2 auv = vec2(sp.x / aspect, uv.y);
+  vec3 A = vec3(0.0);
+  A += curtain(auv, 1.0, 0.34, 0.42, 1.30, 0.30, 0.13, 26.0, 0.0, 6.0, 0.0, 0.17, 0.62);
+  A += curtain(auv, 2.0, 0.46, 0.36, 1.05, -0.42, -0.17, 38.0, 3.0, 7.0, 1.0, 0.55, 0.52);
+  A += curtain(auv, 3.0, 0.36, 0.40, 0.92, 0.52, 0.07, 52.0, 6.0, 7.0, 0.0, 0.83, 0.60);
+  A += curtain(auv, 4.0, 0.52, 0.32, 0.72, -0.22, -0.05, 70.0, 9.0, 6.0, 1.0, 0.36, 0.70);
+
+  // the aurora also lights the air beneath it, faintly
+  sky += A * 0.9;
+  sky += vec3(A.g * 0.5 + A.r * 0.3) * vec3(0.10, 0.16, 0.15) * 0.35;
+
+  // ------- the ground: a ridgeline in silhouette, nearly black
+  float ridgeY = 0.085 + 0.05 * fbm(vec3(sp.x * 2.2, 3.0, 40.0))
+               + 0.02 * fbm(vec3(sp.x * 8.0, 5.0, 44.0));
+  float land = smoothstep(ridgeY + 0.004, ridgeY - 0.004, uv.y);
+  vec3 ground = vec3(0.010, 0.013, 0.020) + A * 0.05;   // snow remembers a little of the light
+  sky = mix(sky, ground, land);
+  // and a breath of haze where sky meets land
+  sky += vec3(0.02, 0.03, 0.04) * exp(-abs(uv.y - ridgeY) * 30.0) * (1.0 - land) * 0.5;
+
+  // ------- the camera: filmic curve, vignette, grain
+  sky *= 1.0 - 0.32 * pow(length(uv - vec2(0.5, 0.45)), 2.2);
+  vec3 col = aces(sky * 1.35);
+  col = pow(col, vec3(1.0 / 1.12));
+  float grain = (hash12(gl_FragCoord.xy + uT * 173.0) - 0.5) * 0.028;
+  col += grain * (0.35 + 0.65 * col.g);
+
+  frag = vec4(col, 1.0);
+}`;
+
+let W = 0, H = 0, DPR = 1;
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    throw new Error(gl.getShaderInfoLog(s));
+  }
+  return s;
+}
+
+function initGL() {
+  gl = canvas.getContext('webgl2', { antialias: false, alpha: false,
+    powerPreference: 'low-power', preserveDrawingBuffer: true });
+  if (!gl) return false;
+  prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    throw new Error(gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+  for (const name of ['uRes', 'uT', 'uPhase', 'uAmps']) {
+    uni[name] = gl.getUniformLocation(prog, name);
+  }
+  return true;
+}
+
+function resize() {
+  W = window.innerWidth; H = window.innerHeight;
+  DPR = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(2600000 / Math.max(1, W * H)));
+  DPR = Math.max(1, DPR) * quality;
+  canvas.width = Math.round(W * DPR);
+  canvas.height = Math.round(H * DPR);
+  if (gl) gl.viewport(0, 0, canvas.width, canvas.height);
+}
+
+function draw(phase) {
+  harmonicAmps(phase, amps);
+  gl.uniform2f(uni.uRes, canvas.width, canvas.height);
+  gl.uniform2f(uni.uT, Math.cos(TAU * phase), Math.sin(TAU * phase));
+  gl.uniform1f(uni.uPhase, phase);
+  gl.uniform1fv(uni.uAmps, visAmps);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+let t0 = performance.now();
+let raf = 0;
+let frameCount = 0, fpsT0 = 0;
+
+function frame(now) {
+  // reduced motion slows the clock; the loop period simply stretches
+  const secs = (now - t0) / 1000 * (reduceMotion ? 0.4 : 1);
+  const phase = (secs % LOOP) / LOOP;
+  draw(phase);
+  updateAudio(phase);
+
+  // if a weak GPU cannot hold the frame, spend fewer pixels, not detail
+  frameCount++;
+  if (now - fpsT0 > 4000 && quality > 0.55) {
+    const fps = frameCount / ((now - fpsT0) / 1000);
+    if (fpsT0 > 0 && fps < 38) { quality *= 0.8; resize(); }
+    fpsT0 = now; frameCount = 0;
+  }
+  raf = requestAnimationFrame(frame);
+}
+
+document.addEventListener('visibilitychange', () => {
+  if (document.hidden) {
+    cancelAnimationFrame(raf);
+    if (ac && ac.state === 'running') ac.suspend();
+  } else {
+    raf = requestAnimationFrame(frame);
+    if (ac && started) ac.resume();
+  }
+});
+
+window.addEventListener('resize', resize);
+if (initGL()) {
+  resize();
+  raf = requestAnimationFrame(frame);
+} else {
+  hintEl.textContent = 'this sky needs webgl2';
+}
+</script>
