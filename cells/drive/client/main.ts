@@ -26603,36 +26603,86 @@ const coverBandMat = new THREE.MeshLambertMaterial({ color: 0x232c2a, flatShadin
  * the same reason terrainFx is shaped this way. CHAIN, do not clobber.
  */
 /**
+ * THE SHELL'S SURFACE — the difference between a made thing and a grey hill.
+ *
+ * Ported from art/geodesica.html on the procedural-animation branch, which
+ * solves this properly and which three rounds of my own guessing had been
+ * circling. What that piece gets right, and this now takes:
+ *
+ *   A TRUE GEODESIC LATTICE. Triangular panels on an OCTAHEDRAL subdivision:
+ *   the direction is folded into one octant, normalised to barycentric, and
+ *   the cell walked at increasing N. Every panel is a real triangle between
+ *   three points on the sphere. My cube-chart Worley was an approximation of
+ *   this and looked like one — round cells, dried mud.
+ *
+ *   FRACTAL BY HASH, CUT BY PIXEL. Each panel decides for ITSELF whether it
+ *   splits into four, and the recursion stops where the next level would be
+ *   finer than this pixel can resolve. That is the answer to "true and
+ *   detailed close up AND at a distance" — not three fixed octaves chosen for
+ *   one viewing distance, which is what I had. Big panels stay big; some of
+ *   them are made of smaller ones; and you only ever pay for the levels you
+ *   can actually see.
+ *
+ *   REAL FACET NORMALS. `panelAt` returns the plane normal of the triangle,
+ *   and it is fed to three's OWN lighting at normal_fragment_begin — so the
+ *   sun, the shadow map and the fog all act on a shell made of flat panels
+ *   rather than on a smooth dome with a pattern painted on it. This is the
+ *   part that makes it a surface. Every previous attempt shaded AFTER the
+ *   lighting and could only ever tint it.
+ *
+ * On top of the lattice: a per-panel mis-set (no real panel sits true), a
+ * brushed grain along the facet, weather at two scales, rain streaks pooling
+ * down the flanks, and a bevel-and-seam at the panel border.
+ *
+ * Written as onBeforeCompile on a Lambert rather than a ShaderMaterial from
+ * scratch, so the sun, the cloud shadows and the shadow map keep working —
+ * the same reason terrainFx is shaped this way. CHAIN, do not clobber.
+ *
  * @param band  The FOOT is not the dome. It is a vertical wall where the
- *   shell meets the ground, and giving it the dome's own cell pattern was
- *   wrong twice over: `normalize(position)` on a cylinder is almost entirely
- *   horizontal, so the cube chart smeared the panels into vertical streaks;
- *   and a wall is not built like a roof anyway. It gets ribs and courses.
+ *   shell meets the ground, and giving it the dome's lattice was wrong twice:
+ *   the panel maths reads a direction, which on a cylinder is almost entirely
+ *   horizontal, so the cells smeared into vertical streaks; and a wall is not
+ *   built like a roof anyway. It gets ribs and courses.
  */
 function coverFx(mat: THREE.MeshLambertMaterial, band = false): void {
   const prev = mat.onBeforeCompile;
   mat.onBeforeCompile = function (sh, renderer) {
     prev?.call(mat, sh, renderer);
     sh.vertexShader = sh.vertexShader
-      // `modelMatrix` IS A VERTEX UNIFORM. Three's fragment prefix declares
-      // viewMatrix and cameraPosition and nothing else, so reaching for it in
-      // the fragment shader compiles to "undeclared identifier" and the whole
-      // program goes invalid — one bad shell material and the frame stops.
-      // The world-space shell direction is computed here and carried across.
-      .replace('#include <common>',
-        '#include <common>\nvarying vec3 vCovO;\nvarying vec3 vCovW;\nvarying vec3 vCovN;')
+      // `modelMatrix` and `normalMatrix` ARE VERTEX UNIFORMS. Three's fragment
+      // prefix declares viewMatrix and cameraPosition and nothing else, so
+      // reaching for either in the fragment shader compiles to "undeclared
+      // identifier" and the whole program goes invalid — one bad shell
+      // material and the frame stops. Both are folded here and carried across.
+      //
+      // The normal matrix goes over as its three COLUMNS, unnormalised, so a
+      // facet normal computed in object space can be taken into view space
+      // exactly — including the dome's 0.42 y-squash, which a normalised
+      // basis would silently throw away.
+      .replace('#include <common>', [
+        '#include <common>',
+        'varying vec3 vCovO;',
+        'varying vec3 vCovW;',
+        'varying vec3 vCovNX;',
+        'varying vec3 vCovNY;',
+        'varying vec3 vCovNZ;',
+      ].join('\n'))
       .replace('#include <begin_vertex>', [
         '#include <begin_vertex>',
         'vCovO = position;',
         'vCovW = (modelMatrix * vec4(position, 1.0)).xyz;',
-        'vCovN = normalize((modelMatrix * vec4(normalize(position), 0.0)).xyz);',
+        'vCovNX = normalMatrix * vec3(1.0, 0.0, 0.0);',
+        'vCovNY = normalMatrix * vec3(0.0, 1.0, 0.0);',
+        'vCovNZ = normalMatrix * vec3(0.0, 0.0, 1.0);',
       ].join('\n'));
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', [
         '#include <common>',
         'varying vec3 vCovO;',
         'varying vec3 vCovW;',
-        'varying vec3 vCovN;',
+        'varying vec3 vCovNX;',
+        'varying vec3 vCovNY;',
+        'varying vec3 vCovNZ;',
         // Hoskins, not fract(sin(...)) — the same reason the sward's hash was
         // changed: sin loses its fraction on large inputs and the "random"
         // comes back correlated, which on a lattice is a pattern.
@@ -26641,50 +26691,130 @@ function coverFx(mat: THREE.MeshLambertMaterial, band = false): void {
         '  p3 += dot(p3, p3.yzx + 33.33);',
         '  return fract((p3.x + p3.y) * p3.z);',
         '}',
-        'vec2 covH2(vec2 p){',
-        '  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));',
-        '  p3 += dot(p3, p3.yzx + 33.33);',
-        '  return fract((p3.xx + p3.yz) * p3.zy);',
+        'float covH3(vec3 p){',
+        '  p = fract(p * 0.1031);',
+        '  p += dot(p, p.zyx + 31.32);',
+        '  return fract((p.x + p.y) * p.z);',
         '}',
-        // ── THE PANEL LATTICE ──
+        'float covN2(vec2 p){',
+        '  vec2 i = floor(p), f = fract(p);',
+        '  f = f * f * (3.0 - 2.0 * f);',
+        '  return mix(mix(covH1(i), covH1(i + vec2(1, 0)), f.x),',
+        '             mix(covH1(i + vec2(0, 1)), covH1(i + vec2(1, 1)), f.x), f.y);',
+        '}',
+        // A lattice vertex, as a point on the unit sphere: barycentric in the
+        // octant, normalised back out to the surface.
+        'vec3 covLatV(vec2 ij, float invN, vec3 sgn){',
+        '  vec2 xy = ij * invN;',
+        '  vec3 b = vec3(xy, max(1.0 - xy.x - xy.y, 0.0));',
+        '  return normalize(b) * sgn;',
+        '}',
+        // ── THE PANEL AT A DIRECTION ──
         //
-        // Worley over a square chart, jittered only a little so the cells sit
-        // near-hexagonal rather than blobby: a shell is assembled, not grown.
-        // Returns (nearest, second nearest, cell id) — the GAP between the two
-        // is the seam, and it is a true edge distance, so the seam has even
-        // width everywhere instead of thinning where cells are large.
-        'vec3 covCells(vec2 p){',
-        '  vec2 ip = floor(p), fp = p - ip;',
-        '  float f1 = 9.0, f2 = 9.0; vec2 id = vec2(0.0);',
-        '  for (int j = -1; j <= 1; j++) {',
-        '    for (int i = -1; i <= 1; i++) {',
-        '      vec2 g = vec2(float(i), float(j));',
-        '      vec2 o = covH2(ip + g);',
-        // LOW JITTER. At 0.72 the cells came out round and organic and the
-        // shell read as dried mud; a built panel is close to regular. This is
-        // near-hexagonal with just enough irregularity not to look stamped.
-        '      vec2 c = g + 0.5 + (o - 0.5) * 0.34;',
-        '      float d = dot(c - fp, c - fp);',
-        '      if (d < f1) { f2 = f1; f1 = d; id = ip + g; }',
-        '      else if (d < f2) { f2 = d; }',
-        '    }',
+        // Fold into an octant, walk down the subdivision while the hash says
+        // this panel splits AND the next level is still bigger than a pixel,
+        // then build the triangle actually landed on. Returns its plane normal
+        // in `fnOut`, the distance to its border in `edgeOut` (cell units),
+        // its stable id in `idOut`, and how deep it went in `depthOut`.
+        'vec3 covPanel(vec3 d, float pixB, out float edgeOut, out float idOut,',
+        '              out float depthOut, out vec3 t1Out){',
+        '  vec3 sgn = vec3(d.x < 0.0 ? -1.0 : 1.0, d.y < 0.0 ? -1.0 : 1.0, d.z < 0.0 ? -1.0 : 1.0);',
+        '  vec3 a = abs(d);',
+        '  vec3 b = a / max(a.x + a.y + a.z, 1e-6);',
+        '  float oct = sgn.x + sgn.y * 2.0 + sgn.z * 4.0;',
+        '  float N = 6.0;',
+        '  float depth = 0.0;',
+        '  for (int l = 0; l < 6; l++) {',
+        '    vec2 UV = b.xy * N;',
+        '    vec2 cell = floor(UV);',
+        '    vec2 f = UV - cell;',
+        '    float up = step(1.0, f.x + f.y);',
+        '    float id = covH3(vec3(cell + oct * 37.0, float(l) * 2.0 + up));',
+        // The cut: stop when the CHILDREN would be finer than this pixel.
+        // Without it a distant shell recurses to noise and aliases; with it
+        // the cost falls off with range on its own.
+        '    bool tooSmall = (0.5 / N) < pixB * 3.0;',
+        // Fewer panels split as you go down, so the structure is a hierarchy
+        // rather than uniform noise at whatever depth the pixel allows.
+        '    float pSplit = l == 0 ? 0.80 : (l == 1 ? 0.58 : (l == 2 ? 0.46 : 0.38));',
+        '    if (tooSmall || id > pSplit || l == 5) break;',
+        '    N *= 2.0;',
+        '    depth += 1.0;',
         '  }',
-        '  return vec3(sqrt(f1), sqrt(f2), covH1(id + 0.37));',
+        '  vec2 UV = b.xy * N;',
+        '  vec2 cell = floor(UV);',
+        '  vec2 f = UV - cell;',
+        '  float up = step(1.0, f.x + f.y);',
+        '  float invN = 1.0 / N;',
+        '  vec3 v0, v1, v2;',
+        '  if (up < 0.5) {',
+        '    v0 = covLatV(cell, invN, sgn);',
+        '    v1 = covLatV(cell + vec2(1, 0), invN, sgn);',
+        '    v2 = covLatV(cell + vec2(0, 1), invN, sgn);',
+        '  } else {',
+        '    v0 = covLatV(cell + vec2(1, 1), invN, sgn);',
+        '    v1 = covLatV(cell + vec2(0, 1), invN, sgn);',
+        '    v2 = covLatV(cell + vec2(1, 0), invN, sgn);',
+        '  }',
+        '  vec3 fn = normalize(cross(v1 - v0, v2 - v0));',
+        '  if (dot(fn, d) < 0.0) fn = -fn;',
+        '  t1Out = normalize(v1 - v0);',
+        '  edgeOut = up < 0.5 ? min(min(f.x, f.y), 1.0 - f.x - f.y)',
+        '                     : min(min(1.0 - f.x, 1.0 - f.y), f.x + f.y - 1.0);',
+        '  idOut = covH3(vec3(cell + oct * 53.0, N + up));',
+        '  depthOut = depth;',
+        '  return fn;',
         '}',
-      ].join('\n'))
+      ].join('\n'));
+    if (!band) {
+      // ── THE FACET IS THE NORMAL THREE LIGHTS ──
+      //
+      // Injected BEFORE the lighting rather than after it, which is the whole
+      // difference between a surface and a tint. Every earlier attempt at this
+      // shell modified gl_FragColor at the end of the shader, so it could
+      // colour the panels but never let the sun find them; the seams were
+      // painted lines on a smooth dome. Here the flat triangle's own plane
+      // normal replaces the interpolated one, and three's Lambert, the shadow
+      // map and the cloud shading all act on it for free.
+      sh.fragmentShader = sh.fragmentShader
+        .replace('#include <normal_fragment_begin>', [
+          '#include <normal_fragment_begin>',
+          '{',
+          '  vec3 cdN = normalize(vCovO);',
+          // How much barycentric space this pixel covers, measured rather than
+          // estimated: fwidth on the fold is exactly the LOD the cut wants,
+          // and it stays right under any camera or zoom.
+          '  vec3 aN = abs(cdN);',
+          '  vec3 bN = aN / max(aN.x + aN.y + aN.z, 1e-6);',
+          '  float pixB = max(max(fwidth(bN.x), fwidth(bN.y)), 1e-7);',
+          '  float eN, iN, dpN; vec3 t1N;',
+          '  vec3 fnO = covPanel(cdN, pixB, eN, iN, dpN, t1N);',
+          // A hair off true, per panel — no real panel is set perfectly, and
+          // this is most of what stops a geodesic reading as a wireframe.
+          '  vec3 axN = normalize(cross(fnO, t1N));',
+          '  fnO = normalize(fnO + axN * (iN - 0.5) * 0.028',
+          '                      + t1N * (fract(iN * 61.7) - 0.5) * 0.028);',
+          // …and a brushed grain along the facet, which bends it a touch more.
+          '  vec2 plN = vec2(dot(cdN, t1N), dot(cdN, cross(fnO, t1N)));',
+          '  float brushN = covN2(plN * vec2(380.0, 24.0) + iN * 100.0) - 0.5;',
+          '  fnO = normalize(fnO + t1N * brushN * 0.018);',
+          // Object space to view space through the normal matrix columns.
+          '  vec3 fnV = normalize(fnO.x * vCovNX + fnO.y * vCovNY + fnO.z * vCovNZ);',
+          '  normal = fnV;',
+          '}',
+        ].join('\n'));
+    }
+    sh.fragmentShader = sh.fragmentShader
       .replace('#include <dithering_fragment>', [
         '#include <dithering_fragment>',
         '{',
-        // Direction on the shell, radius-independent — so Dakar gets the same
-        // panel COUNT rather than the same panel metres, which is the right
-        // way round for a thing built to fit a city.
         '  vec3 cd = normalize(vCovO);',
         '  float cph = acos(clamp(cd.y, -1.0, 1.0));',
         '  float cDistB = distance(vCovW, cameraPosition);',
         ...(band ? [
           // ── THE FOOT IS A WALL ──
           //
-          // Ribs and courses, which is how you hold a wall of this height up,
+          // Ribs and courses, which is how a wall of this height stands up,
           // and nothing like the roof above it. Angular rather than metric
           // because the shader has no radius: on Paris's shell this puts a rib
           // about every fourteen metres.
@@ -26710,125 +26840,57 @@ function coverFx(mat: THREE.MeshLambertMaterial, band = false): void {
           '  gl_FragColor.rgb = cc;',
           '}',
         ] : [
-        // ── A CUBE CHART, SO THERE IS NO POLE ──
-        //
-        // The dominant axis picks one of six faces and the other two
-        // components give a square chart on it. Panels stay the same size from
-        // the apex to the rim, and nothing lines up with an axis of the world.
-        // The lat/long grid this replaces did the opposite of both.
-        '  vec3 ad = abs(cd);',
-        '  vec2 cuv; float cface;',
-        '  if (ad.x >= ad.y && ad.x >= ad.z) { cface = cd.x > 0.0 ? 0.0 : 1.0; cuv = cd.zy / ad.x; }',
-        '  else if (ad.y >= ad.z) { cface = cd.y > 0.0 ? 2.0 : 3.0; cuv = cd.xz / ad.y; }',
-        '  else { cface = cd.z > 0.0 ? 4.0 : 5.0; cuv = cd.xy / ad.z; }',
-        // A cube face stretches toward its corners; this pulls it back most of
-        // the way to equal-area, so a corner panel is not twice a middle one.
-        '  cuv *= 1.34 - 0.34 * cuv * cuv;',
-        // ── FRACTAL, BECAUSE ONE FREQUENCY CANNOT SERVE BOTH ENDS ──
-        //
-        // A single Worley scale is wrong at every distance except the one it
-        // was tuned for. At 150m panels the shell read as CRACKED MUD from
-        // seventy metres away — one cell filling the screen, its seam a black
-        // river — and the same cells go sub-pixel and vanish at four
-        // kilometres. Photographed at both.
-        //
-        // Three octaves, which is what a real structure has: bays, panels,
-        // and the plates a panel is made of. The coarse two always run; the
-        // fine one is only worth its taps up close, and fading it out with
-        // range is also what stops it aliasing into a shimmer when its cells
-        // fall below a pixel.
-        '  float cDist = distance(vCovW, cameraPosition);',
-        // BAYS — the shell's structural divisions, ~600m. Faint and wide.
-        '  vec3 cA = covCells(cuv * 12.0 + cface * 23.7);',
-        '  float seamA = 1.0 - smoothstep(0.020, 0.075, cA.y - cA.x);',
-        // PANELS — the main read, ~70m. This is the scale the eye counts.
-        '  vec3 cB = covCells(cuv * 96.0 + cface * 7.13);',
-        '  float sgap = cB.y - cB.x;',
-        '  float seamB = 1.0 - smoothstep(0.020, 0.085, sgap);',
-        // PLATES — ~17m, the close-up grain. Skipped beyond a kilometre,
-        // where it is smaller than a pixel and costs nine taps to alias.
-        '  float seamC = 0.0;',
-        '  if (cDist < 1100.0) {',
-        '    vec3 cC = covCells(cuv * 380.0 + cface * 3.31);',
-        '    seamC = (1.0 - smoothstep(0.030, 0.120, cC.y - cC.x))',
-        '          * (1.0 - smoothstep(450.0, 1100.0, cDist));',
-        '  }',
-        // The bays are the deepest joint, the plates the shallowest — a
-        // hierarchy, not three coats of the same paint.
-        '  float seam = max(max(seamA * 0.85, seamB), seamC * 0.5);',
-        '  float tone = cB.z * 0.72 + cA.z * 0.28;',
-        // Down the flanks, not over the top.
-        '  float low = smoothstep(0.30, 1.0, cph / 1.5707963);',
-        // Streaks run DOWN, so they are hashed on the horizontal angle only —
-        // the one place the old lat/long parameterisation was the right tool.
-        '  float cth = atan(cd.z, cd.x);',
-        '  float streak = covH1(vec2(floor(cth * 320.0), 7.0));',
-        '  float wet = low * smoothstep(0.66, 0.95, streak);',
-        // …AND DIRT POOLS IN THE SEAMS. A finer grain, gated to the seam
-        // neighbourhood, which is where water sits on any panelled structure.
-        '  float grime = covH1(cuv * 420.0 + cface * 11.0);',
-        '  float dirt = (1.0 - smoothstep(0.03, 0.14, sgap)) * smoothstep(0.35, 0.9, grime);',
-        // ── SURFACE, NOT JUST PATTERN ──
-        //
-        // The panels were flat FILLS with lines between them, which is a
-        // drawing of panels rather than a surface made of them. Two things
-        // fix that and neither needs a texture asset.
-        //
-        // GRAIN: a fine hash, so a panel has tooth. Faded out with range
-        // because below a pixel it is noise, not material.
-        '  float tooth = covH1(cuv * 2600.0 + cface * 5.0);',
-        '  float grainAmt = (1.0 - smoothstep(300.0, 1400.0, cDistB)) * 0.055;',
-        // BEVEL: the screen-space gradient of the seam field, lit from up-left.
-        // A panel edge that is brighter on one side and darker on the other
-        // reads as RAISED, and that is the whole difference between a painted
-        // line and a joint you could put a finger in. Screen-space is a cheat
-        // and an honest one at this pixel scale — it costs two derivatives.
-        '  vec2 sGrad = vec2(dFdx(sgap), dFdy(sgap));',
-        '  float sGL = length(sGrad);',
-        '  float bevel = sGL > 1e-6',
-        '    ? dot(sGrad / sGL, vec2(-0.55, -0.84)) * (1.0 - smoothstep(0.0, 0.16, sgap))',
-        '    : 0.0;',
-        '  vec3 V = normalize(cameraPosition - vCovW);',
-        '  vec3 N = normalize(vCovN);',
-        '  float fres = pow(1.0 - clamp(dot(V, N), 0.0, 1.0), 3.0);',
-        '  vec3 cc = gl_FragColor.rgb;',
-        '  cc *= 1.0 + (tooth - 0.5) * grainAmt * 2.0;',
-        // ── STRUCTURE HAS TO ADD, NOT SCALE ──
-        //
-        // Every term here was multiplicative, and the shell is very nearly
-        // black: 0.70 x 0 is 0, so the panels, the tone and the weathering all
-        // resolved to nothing and the dome stayed a void. Photographed from the
-        // aperture at dusk — a black mass filling the frame with no seam in it
-        // anywhere. The cache key made the shader RUN; it still had nothing to
-        // show, because a dark Lambert facing away from the sun has no light
-        // for a multiplier to act on.
-        //
-        // So the panels are lit by the SKY rather than by the sun. A smooth
-        // shell at dusk catches ambient off the whole dome of the sky, and it
-        // catches it differently where it is seamed, tilted or streaked — an
-        // additive term, floored above zero, which is what makes the structure
-        // survive on the night side. The sun-facing side still gets the
-        // multiplicative shading underneath, so it is not flat by day.
-        // A HAIR, NOT A FACET. 0.45 of swing per panel was the mirror ball.
-        '  float sky = (0.94 + 0.06 * tone) * (1.0 - 0.85 * seam)',
-        '            * (1.0 - 0.35 * wet) * (1.0 - 0.45 * dirt);',
-        '  cc *= 0.97 + 0.06 * tone;',
-        // A JOINT, NOT A CHASM. 0.72 made every seam a black line wide enough
-        // to read as a crack in the surface rather than a gap between panels.
-        '  cc = mix(cc, cc * 0.86, seam);',
-        '  cc = mix(cc, cc * 0.84, wet);',
-        '  cc = mix(cc, cc * 0.80, dirt);',
-        '  cc += vec3(0.052, 0.060, 0.058) * sky;',
-        // The sheen catches the SEAMS too — a recessed joint does not return
-        // the sky the way the panel around it does, and that difference is
-        // most of what says "panelled" on a silhouette.
-        '  cc += vec3(0.10, 0.13, 0.14) * fres * 0.55 * (1.0 - 0.7 * seam);',
-        // The bevel rides on TOP of the sky term, so a joint catches the light
-        // on its lit lip and loses it on the other — additive, so it survives
-        // on the dark side exactly as the panels do.
-        '  cc += vec3(0.055, 0.062, 0.060) * bevel * 0.9;',
-        '  gl_FragColor.rgb = cc;',
-        '}',
+          // The lattice again, for the SKIN this time. Recomputed rather than
+          // carried from the normal pass: a varying would have to be
+          // interpolated across the facet, and the whole point is that these
+          // quantities are flat over it.
+          '  vec3 aS = abs(cd);',
+          '  vec3 bS = aS / max(aS.x + aS.y + aS.z, 1e-6);',
+          '  float pixS = max(max(fwidth(bS.x), fwidth(bS.y)), 1e-7);',
+          '  float pEdge, pId, pDepth; vec3 pT1;',
+          '  vec3 pFn = covPanel(cd, pixS, pEdge, pId, pDepth, pT1);',
+          '  float h1 = pId;',
+          '  float h2 = fract(pId * 61.7);',
+          '  float h3 = fract(pId * 271.3);',
+          '  vec2 pl = vec2(dot(cd, pT1), dot(cd, cross(pFn, pT1)));',
+          // Weather at two scales, then the rain that has run down it for
+          // years, then the bloom where those streaks pool.
+          '  float grime = covN2(pl * 12.0 + h2 * 40.0) * 0.6 + covN2(pl * 44.0 + h1 * 90.0) * 0.4;',
+          '  float low = smoothstep(0.30, 1.0, cph / 1.5707963);',
+          '  float streak = covN2(vec2((cd.x * 8.0 + cd.z * 13.0) * 16.0, cd.y * 2.2 + h1));',
+          '  float stain = low * smoothstep(0.56, 0.82, streak * (0.55 + 0.45 * grime));',
+          // ── BEVEL AND SEAM ──
+          // The chamfer wears bright — it is where the oxide rubs off — and
+          // the seam behind it is the gap. Both in CELL units, so they hold
+          // their proportion at every subdivision depth.
+          '  float ew = 0.055;',
+          '  float bevel = smoothstep(ew * 1.7, ew * 0.8, pEdge);',
+          '  float seam = smoothstep(ew * 0.5, ew * 0.2, pEdge);',
+          '  float seamAO = 1.0 - smoothstep(ew * 1.6, ew * 0.3, pEdge) * 0.40;',
+          '  vec3 V = normalize(cameraPosition - vCovW);',
+          '  vec3 N = normalize(vCovNX * cd.x + vCovNY * cd.y + vCovNZ * cd.z);',
+          '  float fres = pow(1.0 - clamp(abs(dot(normalize(vCovW - cameraPosition), normalize(vCovW))), 0.0, 1.0), 3.0);',
+          '  vec3 cc = gl_FragColor.rgb;',
+          // ── STRUCTURE HAS TO ADD, NOT ONLY SCALE ──
+          //
+          // The lit term is very nearly black on the side away from the sun,
+          // and a multiplier on black is black — which is how an entire
+          // earlier version of this shell came out as a void. The sky term is
+          // additive and floored, so the panels survive the night side; the
+          // multiplicative shading rides underneath for the lit one.
+          '  cc *= 0.90 + 0.10 * h1;',
+          '  cc *= 0.72 + 0.28 * grime;',
+          '  cc = mix(cc, cc * 0.62, stain * 0.5);',
+          '  cc = mix(cc, cc * 0.86, seam);',
+          '  cc *= seamAO;',
+          '  float sky = (0.92 + 0.08 * h2) * (1.0 - 0.85 * seam) * (1.0 - 0.30 * stain);',
+          '  cc += vec3(0.050, 0.058, 0.056) * sky;',
+          '  cc += vec3(0.085, 0.092, 0.098) * bevel * (0.35 + 0.65 * h2) * 0.5;',
+          '  cc += vec3(0.10, 0.13, 0.14) * fres * 0.50 * (1.0 - 0.7 * seam);',
+          // Deeper panels sit deeper between their neighbours.
+          '  cc *= 1.0 - pDepth * 0.020;',
+          '  gl_FragColor.rgb = cc;',
+          '}',
         ]),
       ].join('\n'));
   };
@@ -26838,12 +26900,12 @@ function coverFx(mat: THREE.MeshLambertMaterial, band = false): void {
   // another is an onBeforeCompile gets handed that other material's compiled
   // program — and the injection silently does nothing. Both covers are plain
   // flat-shaded Lamberts, which this scene is full of, so that is exactly what
-  // happened: the panels, the weathering and the rim sheen were written,
-  // compiled against nothing, and the shell stayed two flat colours.
+  // happened the first time: the panels were written, compiled against
+  // nothing, and the shell stayed two flat colours.
   //
-  // Reported from the seat as "I didn't see any impact". This file already
-  // knew the rule — farClip, the grain and the vehicle copies all set one.
-  mat.customProgramCacheKey = () => 'cover-shell';
+  // The two materials need DIFFERENT keys as well, or the wall gets the roof's
+  // program for the same reason.
+  mat.customProgramCacheKey = () => (band ? 'cover-foot' : 'cover-shell');
   mat.needsUpdate = true;
 }
 coverFx(coverMat);
