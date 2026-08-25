@@ -19328,6 +19328,29 @@ function heightsOf(): number[] {
  * back to lat/lon and asked whether it stands under a Cover. A leak here is
  * the map answering for ground the game refuses to render.
  */
+/** THE UNDO THE RING WAS ALWAYS HOLDING: how far back it reaches, where the
+ *  handle is, and — for a test that must not fake a drag — the three steps of
+ *  the gesture, so the scrub can be driven without a pointer. */
+(window as unknown as { __rewind?: object }).__rewind = (
+  cmd?: 'begin' | 'show' | 'commit' | 'cancel', back = 0,
+): object => {
+  if (cmd === 'begin') rewindBegin();
+  else if (cmd === 'show') rewindShow(back);
+  else if (cmd === 'commit') rewindCommit();
+  else if (cmd === 'cancel') rewindCancel();
+  return {
+    ready: rewindReady(), have: rewindHave(),
+    maxSecs: +rewindSecs(rewindHave()).toFixed(1),
+    at: rewind.at, secs: +rewind.secs.toFixed(1),
+    steps: tapeRec.steps.length / 4, keys: tapeRec.keys.length / TAPE_KEY_N,
+    recording: tapeRec.on, line: lineOn,
+    // THE STREAK, so a test can ask whether a rewind actually looks like one
+    // rather than trusting a screenshot to say so.
+    blur: +mblurAmt.toFixed(2), blurCapPx: (mblurMat.uniforms.uMaxPx as { value: number }).value,
+    camStepM: +mblurStepM.toFixed(1),
+    car: [Math.round(state.x), Math.round(state.z)],
+  };
+};
 (window as unknown as { __ovinside?: object }).__ovinside = (): object => {
   let places = 0, wayPts = 0, total = 0, totalPts = 0;
   for (const p of ovPlaces.values()) {
@@ -20737,6 +20760,7 @@ const setStickFrom = (e: PointerEvent): void => {
 };
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (rewindDown(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (clockDown(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (hudTap(e.clientX, e.clientY)) return; // an instrument swallowed it
   // Capture: without it, a finger lifted over interactive chrome (the reroll
@@ -20786,6 +20810,7 @@ canvas.addEventListener('pointerdown', (e) => {
   }
 });
 canvas.addEventListener('pointermove', (e) => {
+  if (rewindMove(e)) return;
   if (clockMove(e)) return;
   if (stick?.id === e.pointerId) { setStickFrom(e); return; }
   if (lift?.id === e.pointerId) { lift.dy = e.clientY - lift.y0; return; }
@@ -21060,6 +21085,7 @@ const tapCanMark = (e: PointerEvent): boolean => {
   return e.clientY < innerHeight * 0.5;
 };
 const endStick = (e: PointerEvent): void => {
+  if (e.type === 'pointerup' && rewindUp(e)) return;
   if (e.type === 'pointerup' && clockUp(e)) return;
   if (tapCanMark(e) && e.type === 'pointerup' && e !== lastUp) {
     lastUp = e;
@@ -23502,6 +23528,95 @@ function tapeWrite(dt: number, inp: { throttle: number; steer: number; brakeF: n
     if (tapeRec.keys.length > TAPE_KEY_N) tapeRec.keys.splice(0, TAPE_KEY_N);
   }
 }
+/**
+ * ── REWIND ────────────────────────────────────────────────────────
+ *
+ * The ring is already a two-minute undo and nothing could reach it.
+ *
+ * `tapeRec.keys` holds a checkpoint every half second, and a checkpoint is the
+ * ten numbers that ARE the truck — `tapeRestore` puts them all back. So going
+ * back in time needs no new recording, no new storage and no simulation: pick
+ * an earlier checkpoint and seat the truck on it.
+ *
+ * WHAT IT IS NOT. It does not replay: the world is not re-simulated forward
+ * from the past, and the seconds you scrub past are DISCARDED, not re-driven.
+ * Rewinding to twelve seconds ago means the last twelve seconds did not
+ * happen — the ring is truncated there and recording carries on from that
+ * point, so a KEEP afterwards banks one coherent drive rather than a drive
+ * with a fold in it.
+ *
+ * WHAT IT DOES NOT UNDO, deliberately. The odometer keeps its metres (the
+ * wheels turned), survey checkpoints stay collected, and the fog stays lifted.
+ * Undoing those would make rewind a way to un-earn things, which is a
+ * different and much larger decision than "put the truck back on the road".
+ *
+ * ON THE LINE TOO, for now. There is an argument that a run is a claim about a
+ * drive that happened and a rewind is a claim that part of it did not — the
+ * same argument that keeps the clock's scrub out of campaign mode. It is not
+ * being made yet: the mechanic is worth having under the hands before it is
+ * worth ruling out of anywhere, and the ring truncates cleanly either way, so
+ * a rewound run banks as one coherent drive rather than one with a fold in it.
+ * If it turns out to cheapen a leg, this is the one gate to close.
+ */
+const rewind = {
+  /** The checkpoint being previewed, as an index into keys/TAPE_KEY_N. Null
+   *  when the handle is not held. */
+  at: null as number | null,
+  /** Where the truck stood when the drag began, so a cancelled scrub is a
+   *  no-op rather than an approximate return. */
+  home: null as Float32Array | null,
+  secs: 0,
+};
+/** How many half-second checkpoints the ring is currently holding. */
+const rewindHave = (): number => Math.max(0, Math.floor(tapeRec.keys.length / TAPE_KEY_N) - 1);
+/** …and how far back that reaches, in seconds of real driving. The ring is
+ *  trimmed by wall-clock frames, so this is checkpoints x their period rather
+ *  than a stored duration. */
+const rewindSecs = (n: number): number => (n * TAPE_KEY_EVERY) / 60;
+/** Can the handle be grabbed at all — the same gate the whole feature lives
+ *  behind, asked in one place so the HUD and the pointer cannot disagree. */
+function rewindReady(): boolean {
+  return !tapePlay.on && !tapePlay.armed && tapeRec.on
+    && menu.tab() === null && rewindHave() >= 2;
+}
+/** Seat the truck on checkpoint `k` counted BACK from the newest. */
+function rewindShow(back: number): void {
+  const have = rewindHave();
+  const n = clamp(Math.round(back), 0, have);
+  const idx = (Math.floor(tapeRec.keys.length / TAPE_KEY_N) - 1 - n) * TAPE_KEY_N;
+  if (idx < 0) return;
+  rewind.at = n;
+  rewind.secs = rewindSecs(n);
+  tapeRestore(new Float32Array(tapeRec.keys.slice(idx, idx + TAPE_KEY_N)), 0);
+  // The body settles from its own state next frame; zeroing the carried
+  // velocity here would make every rewind land dead, which is wrong when you
+  // are putting the truck back mid-corner.
+}
+function rewindBegin(): void {
+  rewind.home = new Float32Array(tapeSnap());
+  rewind.at = 0;
+  rewind.secs = 0;
+}
+/** Take it. The scrubbed-past seconds stop having happened. */
+function rewindCommit(): void {
+  const n = rewind.at ?? 0;
+  if (n > 0) {
+    // Truncate in whole CHECKPOINT BLOCKS, the same discipline the ring's own
+    // trimming keeps, so keys[i] never stops describing steps[i].
+    const keep = Math.floor(tapeRec.keys.length / TAPE_KEY_N) - n;
+    tapeRec.keys.length = keep * TAPE_KEY_N;
+    tapeRec.steps.length = Math.min(tapeRec.steps.length, (keep - 1) * TAPE_KEY_EVERY * 4);
+    tapeRec.t = Math.max(0, tapeRec.t - rewindSecs(n));
+    audio.thud(1);
+    hudFlash(`REWOUND ${rewindSecs(n).toFixed(0)}S`);
+  }
+  rewind.at = null; rewind.home = null; rewind.secs = 0;
+}
+/** Put it back exactly as it was — a scrub that changed its mind costs nothing. */
+function rewindCancel(): void {
+  if (rewind.home) tapeRestore(rewind.home, 0);
+  rewind.at = null; rewind.home = null; rewind.secs = 0;
+}
 /** …and one step off it. Returns null past the end, which stops the replay. */
 function tapeRead(): { dt: number; throttle: number; steer: number; brake: boolean; brakeF: number } | null {
   const t = tapePlay.tape;
@@ -23557,7 +23672,12 @@ function tick(now: number): void {
   if (tapePlay.armed && worldQuiet()) { tapePlay.armed = false; tapePlay.on = true; }
   const played = tapePlay.on ? tapeRead() : null;
   if (tapePlay.on && !played) tapeEnd();
-  const dt = played ? played.dt : paused ? 0 : (FIX_DT || Math.min(0.05, raw / 1000));
+  // A SCRUB IS A PAUSE. While the handle is held the truck is being SEATED on
+  // old checkpoints, one a frame; integrating forward from each of them would
+  // have the physics fighting the scrub and would write those frames onto the
+  // very ring being scrubbed. Same zero-dt path the menu already uses.
+  const scrubbing = rewind.at !== null;
+  const dt = played ? played.dt : (paused || scrubbing) ? 0 : (FIX_DT || Math.min(0.05, raw / 1000));
   last = now;
   simT += dt; simN++;
   // The splash's own clock: WALL time, because the sim's dt is zero exactly
@@ -23572,11 +23692,11 @@ function tick(now: number): void {
   stepAttract(now);
   const raw2 = played
     ? { throttle: played.throttle, steer: played.steer, brake: played.brake, brakeF: played.brakeF }
-    : real.on || paused ? { throttle: 0, steer: 0, brake: false, brakeF: 0 } : input();
+    : real.on || paused || scrubbing ? { throttle: 0, steer: 0, brake: false, brakeF: 0 } : input();
   // …and the RING takes what the hands just did, before anything downstream has
   // a chance to reinterpret it. Always, unless a tape is already driving —
   // recording the replay would be recording our own echo.
-  if (!played && !paused && dt > 0) tapeWrite(dt, raw2);
+  if (!played && !paused && !scrubbing && dt > 0) tapeWrite(dt, raw2);
   // FLYING THE DRONE MEANS NOT DRIVING. The rig stays exactly where you left
   // it — that is the whole point of scouting ahead — so the controls are handed
   // over wholesale rather than shared.
@@ -24619,7 +24739,32 @@ function tick(now: number): void {
   // and a headless capture at three frames a second all show the SAME streak
   // — the picture stops being a report on the frame rate.
   mblurAmt = 0;
-  if (mblurShutter > 0 && !paused && dt > 0.0005 && camMode !== 'top') {
+  // ── A SCRUB IS THE ONE TIME A TELEPORT *IS* THE MOTION ──
+  //
+  // Rewinding was, by construction, the least blurred thing in the game: the
+  // shutter is off unless a dial says otherwise, dt is zero while scrubbing
+  // (a scrub is a pause), and a camera that moves more than forty metres in a
+  // frame is explicitly disqualified as "not motion". All three guards are
+  // right for DRIVING and all three are wrong here — the jump between two
+  // checkpoints is precisely the thing that should streak.
+  //
+  // So the scrub drives the pass directly, off the camera's own displacement
+  // rather than off a shutter time, and it does not ask the dial: this is a
+  // UI effect saying WHICH WAY TIME IS GOING, not a camera being simulated.
+  // Drag fast and the world tears; hold still on a checkpoint and it settles
+  // to a clean frame, which is what makes the still readable.
+  //
+  // The rig is already excluded from the pass (alpha < 0.25 returns
+  // unblurred), so the truck stays sharp while the world runs backwards past
+  // it — which is the whole picture this is for.
+  const scrubStepM = camera.position.distanceTo(mblurPrevCam);
+  if (rewind.at !== null && mblurPrimed && camMode !== 'top') {
+    // Six metres of camera travel is a full-strength streak. Floor at 0.5 so
+    // a slow drag still reads as motion rather than as a slideshow; the
+    // ceiling is deliberately past 1.0 — uMaxPx below is what actually bounds
+    // it, and this is the term that makes it dramatic.
+    mblurAmt = clamp(scrubStepM / 6, 0.5, 3.2);
+  } else if (mblurShutter > 0 && !paused && dt > 0.0005 && camMode !== 'top') {
     // NOT IN THE CHART. Up there the camera is an instrument being panned
     // over a map, and an instrument that smears while you read it is a
     // broken instrument, not a fast one.
@@ -24629,8 +24774,13 @@ function tick(now: number): void {
     // METRES because it is a fact about the camera, not about the picture.
     if (camera.position.distanceTo(mblurPrevCam) < 40) mblurAmt = mblurShutter / dt;
   }
+  // …AND THE CEILING LIFTS WITH IT. 20 texels is tuned for a violent yaw at
+  // speed, where a longer streak would be longer than the thing it streaks.
+  // A rewind is allowed to look like a rewind: at 148x320 this is about a
+  // third of the frame, and the cap is still what stops it becoming mush.
+  (mblurMat.uniforms.uMaxPx as { value: number }).value = rewind.at !== null ? 48 : 20;
   mblurDt = dt;
-  mblurStepM = camera.position.distanceTo(mblurPrevCam);
+  mblurStepM = scrubStepM;
   mblurStepYaw = Math.abs(Math.atan2(Math.sin(camYaw() - mblurPrevYaw), Math.cos(camYaw() - mblurPrevYaw)));
   mblurPrevYaw = camYaw();
   // The drapes re-settle onto whatever the ground has become since they were
@@ -27151,6 +27301,36 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     }
     clockRect = { x: pad, y: cy2 - 2, w: textSW(hhmm) + 4, h: 10 };
   } else clockRect.w = 0;
+  // ── the rewind handle, under the clock ──
+  //
+  // A TAB, not a slider. The ring is a two-minute undo that nothing could
+  // reach; this is the reach. It only appears when there is something to go
+  // back TO — the gate is rewindReady(), asked once so the handle and the
+  // pointer cannot disagree about whether it exists — and dragging DOWN from
+  // it pulls the truck backwards through its own last two minutes.
+  //
+  // Held, the tab grows a track: the filled part is how far back you are, and
+  // the number is the seconds it costs. Released, those seconds stop having
+  // happened.
+  if (rewindReady() || rewind.at !== null) {
+    const ry = pad + 34;
+    const held = rewind.at !== null;
+    rewindRect = { x: pad, y: ry, w: 15, h: 9 };
+    hctx.fillStyle = held ? UI.gold : UI.dim;
+    // The grip: three stacked bars, which reads as a pull-tab at this size
+    // where an arrow glyph reads as noise.
+    for (let i = 0; i < 3; i++) hctx.fillRect(pad + 1, ry + 1 + i * 3, 13, 1);
+    if (held) {
+      const have = Math.max(1, rewindHave());
+      const track = 46;
+      const fill = Math.round(((rewind.at ?? 0) / have) * track);
+      hctx.fillStyle = UI.dim;
+      hctx.fillRect(pad + 6, ry + 10, 1, track);
+      hctx.fillStyle = UI.gold;
+      hctx.fillRect(pad + 5, ry + 10, 3, Math.max(1, fill));
+      textSmall(hctx, `-${rewind.secs.toFixed(0)}S`, pad + 11, ry + 10 + fill - 2, UI.gold);
+    }
+  } else rewindRect.w = 0;
   // Filled and hollow diamonds, plotted a row at a time. At this resolution a
   // marker is about seven pixels across, so it is drawn, not stroked.
   function diamond(cx: number, cy: number, r: number): void {
@@ -28273,6 +28453,51 @@ function setClean(on: boolean): void {
  * NOT ON THE LINE. A run's clock is part of the run.
  */
 let clockRect = { x: 0, y: 0, w: 0, h: 0 };
+/**
+ * THE REWIND HANDLE'S GESTURE CONTRACT.
+ *
+ * Drag DOWN to go back — the direction a tape spools, and the direction that
+ * cannot be confused with the clock's sideways scrub sitting directly above
+ * it. Release to take it; drag back to the top and release to change your
+ * mind, which costs nothing (the truck is restored exactly, not approximately).
+ *
+ * A TAP DOES NOTHING. This is destructive — it discards seconds of driving —
+ * and a control that eats your last corner on a mis-tap is a control you stop
+ * trusting. It wants the deliberate gesture or nothing.
+ *
+ * AVAILABLE ON THE LINE as well as in free drive — see rewindReady. The clock
+ * is not, but the clock changes what a run LOOKED like; this changes what it
+ * was, cleanly, and the ring stays coherent through it.
+ */
+let rewindRect = { x: 0, y: 0, w: 0, h: 0 };
+let rewindDrag: { id: number; y0: number } | null = null;
+/** Pixels of drag per checkpoint. A checkpoint is half a second, and the whole
+ *  two-minute ring is 240 of them — at 2px each that is 480px of travel, about
+ *  a phone screen and a bit, which makes a short correction a short pull. */
+const REWIND_PX = 2;
+function rewindDown(e: PointerEvent): boolean {
+  if (!rewindReady() || rewindRect.w === 0) return false;
+  const x = e.clientX / hudS, y = e.clientY / hudS;
+  if (x < rewindRect.x - 5 || x > rewindRect.x + rewindRect.w + 8
+    || y < rewindRect.y - 5 || y > rewindRect.y + rewindRect.h + 6) return false;
+  rewindDrag = { id: e.pointerId, y0: e.clientY };
+  rewindBegin();
+  return true;
+}
+function rewindMove(e: PointerEvent): boolean {
+  if (rewindDrag?.id !== e.pointerId) return false;
+  const dy = (e.clientY - rewindDrag.y0) / hudS;
+  rewindShow(Math.max(0, dy / REWIND_PX));
+  return true;
+}
+function rewindUp(e: PointerEvent): boolean {
+  if (rewindDrag?.id !== e.pointerId) return false;
+  rewindDrag = null;
+  // Back at the top is a cancel, not a zero-second rewind — there is nothing
+  // to truncate and the truck goes back exactly where it was.
+  if ((rewind.at ?? 0) < 1) rewindCancel(); else rewindCommit();
+  return true;
+}
 let clockDrag: { id: number; x0: number; h0: number; wasHeld: boolean; moved: boolean } | null = null;
 function clockDown(e: PointerEvent): boolean {
   if (lineOn || menu.tab() !== null || clockRect.w === 0) return false;
