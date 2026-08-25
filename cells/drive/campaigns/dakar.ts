@@ -146,7 +146,7 @@ export interface Campaign {
 }
 
 export const CAMPAIGN: Campaign = {
-    v: 7,
+    v: 8,
     id: "dakar",
     title: "PARIS - DAKAR",
     start: {
@@ -595,7 +595,12 @@ export const CAMPAIGN: Campaign = {
     covers: [
       {
         id: "paris",
-        name: "PARIS COVER",
+        // THE LABEL THE PLAYER SEES, and "Cover" is not it — that is the
+        // word this codebase uses for the object, not a word the Service
+        // would put on a horizon marker. What a ranger sees from forty
+        // kilometres out is the city, sealed: naming it anything more is lore
+        // the game has not earned and does not need.
+        name: "PARIS",
         lat: 48.8566,
         lon: 2.3333,
         r: 8600,
@@ -603,7 +608,7 @@ export const CAMPAIGN: Campaign = {
       },
       {
         id: "dakar",
-        name: "DAKAR COVER",
+        name: "DAKAR",
         lat: 14.7167,
         lon: -17.4677,
         r: 5200,

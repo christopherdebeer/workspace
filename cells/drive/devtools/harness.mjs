@@ -159,6 +159,22 @@ export async function openDrive(opts = {}) {
     // locally would spend a fresh 15s Overpass budget per tile; the deployed
     // route already holds them on S3 as immutable objects (measured under a
     // second), so the honest local stand-in is to read that.
+    // THE OVERVIEW TILES, for the same reason and with the same caveat as the
+    // summits below: the client has an Overpass fallback for the FINE tiles
+    // and none for these, so a local 404 does not degrade the chart layer, it
+    // deletes it — every harness run has been asking the overview questions of
+    // an empty map. Proxied to the deployed cell, where the corridor is
+    // already banked, rather than run through the handler locally (which would
+    // spend a fresh upstream budget per tile; see the note by cellRoute).
+    else if (p.startsWith('/~/osm/ov1/')) {
+      fetch(`https://c15r-drive.on.parc.land${p}`)
+        .then(async (r) => {
+          if (!r.ok) { res.writeHead(r.status); res.end('{}'); return; }
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(Buffer.from(await r.arrayBuffer()));
+        })
+        .catch(() => { res.writeHead(503); res.end('{}'); });
+    }
     else if (p.startsWith('/~/osm/peak1/')) {
       fetch(`https://c15r-drive.on.parc.land${p}`)
         .then(async (r) => {

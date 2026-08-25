@@ -14401,6 +14401,15 @@ function buildOvTile(key: string, x: number, y: number, z: number,
       const name = t.name;
       if (!name || ovPlaces.size >= 800) continue;
       const [la, lo] = w.geometry[0];
+      // NOTHING UNDER A COVER IS ON THE MAP. The shell is sealed and the game
+      // never builds what is inside it, so a chart that still writes the
+      // arrondissements across the dome is answering for ground it has
+      // deliberately refused to render. The fine tiles have been gated on this
+      // since the Cover was built and the summits since the peak layer was;
+      // the overview layer never was, so the one place the fiction was most
+      // visible — the chart, zoomed out, with the shell filling it — was the
+      // one place it leaked.
+      if (underCover(la, lo, 1)) continue;
       const [px, pz] = toLocal(la, lo);
       ovPlaces.set(name, { name, x: px, z: pz, y: yAt(la, lo, px, pz),
         rank: t.place ? OV_RANK[t.place] ?? 3 : 4 });
@@ -14426,6 +14435,12 @@ function buildOvTile(key: string, x: number, y: number, z: number,
     for (const piece of clipToTile(w.geometry)) {
     for (let i = 0; i < piece.length - 1; i++) {
       const [aLa, aLo] = piece[i], [bLa, bLo] = piece[i + 1];
+      // …AND THE WAYS THEMSELVES STOP AT THE RIM. Tested per SEGMENT rather
+      // than per way, which is what makes a motorway running into the city
+      // end at the shell instead of vanishing along its whole length: the
+      // segments outside are drawn, the ones under the dome are not, and the
+      // clip lands where the fiction says it should.
+      if (underCover(aLa, aLo, 1) || underCover(bLa, bLo, 1)) continue;
       const [ax, az] = toLocal(aLa, aLo), [bx, bz] = toLocal(bLa, bLo);
       const dx = bx - ax, dz = bz - az;
       const len = Math.hypot(dx, dz) || 1;
@@ -19305,6 +19320,34 @@ function heightsOf(): number[] {
   return menu.tab();
 };
 (window as unknown as { __setcam?: object }).__setcam = (m: CamMode): void => setCam(m);
+/**
+ * WHAT THE CHART IS DRAWING INSIDE A SHELL, which should be nothing.
+ *
+ * Measured off the BUILT geometry rather than off the ingest, because the
+ * claim is about what is on the glass: every overview vertex is converted
+ * back to lat/lon and asked whether it stands under a Cover. A leak here is
+ * the map answering for ground the game refuses to render.
+ */
+(window as unknown as { __ovinside?: object }).__ovinside = (): object => {
+  let places = 0, wayPts = 0, total = 0, totalPts = 0;
+  for (const p of ovPlaces.values()) {
+    total++;
+    const [la, lo] = localToLatLon(p.x, p.z);
+    if (underCover(la, lo, 1)) places++;
+  }
+  for (const m of ovMeshes.values()) {
+    const a = m.geometry.getAttribute('position') as THREE.BufferAttribute | undefined;
+    if (!a) continue;
+    // Every eighth vertex: a way is six per segment and this is a leak test,
+    // not a census — a shell full of motorway would show in any sample.
+    for (let i = 0; i < a.count; i += 8) {
+      totalPts++;
+      const [la, lo] = localToLatLon(a.getX(i), a.getZ(i));
+      if (underCover(la, lo, 1)) wayPts++;
+    }
+  }
+  return { places, wayPts, total, totalPts, meshes: ovMeshes.size, shells: coverBuilt.size };
+};
 (window as unknown as { __zoom?: object }).__zoom = (z: number): void => { zoomT = clamp(z, ZOOM_MIN, ZOOM_MAX); };
 /** How much GROUND the camera actually covers, by unprojecting the screen
  *  corners onto the car's ground plane. The honest answer to "how far out can
@@ -25395,7 +25438,10 @@ function buildObs(m: Mission | null): void {
 /** The pin's name, which is the orbital claim and its distance marker — the
  *  ground truth is deliberately NOT in it. You are told what the survey says
  *  is there, and you go and look. */
-const obsPin = (o: LegObs): string => `${o.satName} · KM ${o.km.toFixed(0)}`;
+const obsPin = (o: LegObs): string =>
+  // One decimal under ten kilometres: rounding put the first observation on
+  // leg 1 — which stands at km 0.5 — under a marker reading KM 1.
+  `${o.satName} · KM ${o.km < 10 ? o.km.toFixed(1) : o.km.toFixed(0)}`;
 /** Passing one records it. Automatic on purpose — the ranger's instruments are
  *  always running, and a reading you had to stop and ask for would be a reading
  *  the player could decline to take, which is a different mechanic (see the
@@ -25621,7 +25667,7 @@ interface Drive { name: string; sub: string; lat: number; lon: number; h: number
  * fails. Only a first-ever visit that also fails arrives with no drives, and
  * that still plays — spots, the chart and a random spawn are all local.
  */
-const CAMPAIGN_V = 7;
+const CAMPAIGN_V = 8;
 const CAMPAIGN_KEY = `drive.campaign.v${CAMPAIGN_V}`;
 let DRIVES: Drive[] = [];
 /** The Service's fixed points, from the campaign. In-game: just stations. */
@@ -26171,6 +26217,94 @@ const coverBuilt = new Map<string, THREE.Group>();
 // bright sky, so the shell reads the way the landscape does: as a dark mass.
 const coverMat = new THREE.MeshLambertMaterial({ color: 0x2f3a38, flatShading: true });
 const coverBandMat = new THREE.MeshLambertMaterial({ color: 0x232c2a, flatShading: true });
+/**
+ * THE SHELL'S SURFACE — the difference between a made thing and a grey hill.
+ *
+ * It was two solid colours, so the biggest object in the game read as a
+ * landform: a dark dome, correctly dark (the fog composite eats anything pale
+ * at that distance), and completely mute about what it is. Nothing on it said
+ * MANUFACTURED.
+ *
+ * Four procedural terms say it, and all four are free at a 148x320 render
+ * target where fragments are the cheap axis:
+ *
+ *   PANELS. A lat/long grid of seams over the dome's own direction, so a
+ *   panel is about three hundred metres on Paris's shell. This is the term
+ *   that does the work: a regular grid at any distance is not geology.
+ *
+ *   PANEL TONE. Each panel a hash-width off its neighbours, because a shell
+ *   this size was not poured in one go and does not weather in one either.
+ *
+ *   WEATHERING. Streaks running down the flanks, absent at the apex and
+ *   strongest at the foot, which is where eight years of rain would put them.
+ *
+ *   RIM SHEEN. A fresnel term along the silhouette. A mountain's edge goes
+ *   dark against the sky; a smooth built surface catches it, and this is what
+ *   the eye reads as "surface" rather than "mass" at four kilometres.
+ *
+ * Written as onBeforeCompile on a Lambert rather than a ShaderMaterial from
+ * scratch, so the sun, the cloud shadows and the shadow map keep working —
+ * the same reason terrainFx is shaped this way. CHAIN, do not clobber.
+ */
+function coverFx(mat: THREE.MeshLambertMaterial): void {
+  const prev = mat.onBeforeCompile;
+  mat.onBeforeCompile = function (sh, renderer) {
+    prev?.call(mat, sh, renderer);
+    sh.vertexShader = sh.vertexShader
+      // `modelMatrix` IS A VERTEX UNIFORM. Three's fragment prefix declares
+      // viewMatrix and cameraPosition and nothing else, so reaching for it in
+      // the fragment shader compiles to "undeclared identifier" and the whole
+      // program goes invalid — one bad shell material and the frame stops.
+      // The world-space shell direction is computed here and carried across.
+      .replace('#include <common>',
+        '#include <common>\nvarying vec3 vCovO;\nvarying vec3 vCovW;\nvarying vec3 vCovN;')
+      .replace('#include <begin_vertex>', [
+        '#include <begin_vertex>',
+        'vCovO = position;',
+        'vCovW = (modelMatrix * vec4(position, 1.0)).xyz;',
+        'vCovN = normalize((modelMatrix * vec4(normalize(position), 0.0)).xyz);',
+      ].join('\n'));
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', [
+        '#include <common>',
+        'varying vec3 vCovO;',
+        'varying vec3 vCovW;',
+        'varying vec3 vCovN;',
+        'float covHash(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453); }',
+      ].join('\n'))
+      .replace('#include <dithering_fragment>', [
+        '#include <dithering_fragment>',
+        '{',
+        // Direction on the shell, radius-independent — so Dakar gets the same
+        // panel COUNT rather than the same panel metres, which is the right
+        // way round for a thing built to fit a city.
+        '  vec3 cd = normalize(vCovO);',
+        '  float cth = atan(cd.z, cd.x);',
+        '  float cph = acos(clamp(cd.y, -1.0, 1.0));',
+        '  vec2 pc = vec2(cth / 6.2831853 * 150.0, cph / 1.5707963 * 34.0);',
+        '  vec2 pg = abs(fract(pc) - 0.5);',
+        '  float seam = smoothstep(0.45, 0.5, max(pg.x, pg.y));',
+        '  float tone = covHash(floor(pc));',
+        // Down the flanks, not over the top.
+        '  float low = smoothstep(0.30, 1.0, cph / 1.5707963);',
+        '  float streak = covHash(vec2(floor(cth * 240.0), 7.0));',
+        '  float wet = low * smoothstep(0.68, 0.95, streak);',
+        '  vec3 V = normalize(cameraPosition - vCovW);',
+        '  vec3 N = normalize(vCovN);',
+        '  float fres = pow(1.0 - clamp(dot(V, N), 0.0, 1.0), 3.0);',
+        '  vec3 cc = gl_FragColor.rgb;',
+        '  cc *= 0.93 + 0.14 * tone;',
+        '  cc = mix(cc, cc * 0.70, seam);',
+        '  cc = mix(cc, cc * 0.78, wet);',
+        '  cc += vec3(0.10, 0.13, 0.14) * fres * 0.55;',
+        '  gl_FragColor.rgb = cc;',
+        '}',
+      ].join('\n'));
+  };
+  mat.needsUpdate = true;
+}
+coverFx(coverMat);
+coverFx(coverBandMat);
 /** Is this lat/lon under a Cover? The margin keeps half-in tiles out too —
  *  a road that dives under the shell is a road the map no longer answers for. */
 function underCover(lat: number, lon: number, margin = 0.97): Cover | null {
