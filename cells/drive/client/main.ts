@@ -26922,9 +26922,9 @@ function coverFx(mat: THREE.MeshLambertMaterial, band = false): void {
           '  cc = mix(cc, cc * 0.86, seam);',
           '  cc *= seamAO;',
           '  float sky = (0.92 + 0.08 * h2) * (1.0 - 0.85 * seam) * (1.0 - 0.30 * stain);',
-          '  cc += vec3(0.030, 0.035, 0.036) * sky;',
-          '  cc += vec3(0.060, 0.066, 0.070) * bevel * (0.35 + 0.65 * h2) * 0.45;',
-          '  cc += vec3(0.075, 0.095, 0.105) * fres * 0.40 * (1.0 - 0.7 * seam);',
+          '  cc += vec3(0.017, 0.020, 0.021) * sky;',
+          '  cc += vec3(0.034, 0.038, 0.040) * bevel * (0.35 + 0.65 * h2) * 0.40;',
+          '  cc += vec3(0.050, 0.062, 0.070) * fres * 0.28 * (1.0 - 0.7 * seam);',
           // ── THE TEMPER SKIN ──
           //
           // Thin-film interference, which is what a petrol sheen physically
@@ -26937,7 +26937,11 @@ function coverFx(mat: THREE.MeshLambertMaterial, band = false): void {
           '  float opd = film * (0.42 + 0.58 * NdV);',
           '  vec3 irid = 0.5 + 0.5 * cos(6.2831853 * (opd * vec3(1.0, 1.21, 1.47)',
           '                                         + vec3(0.0, 0.12, 0.24)));',
-          '  irid = mix(vec3(dot(irid, vec3(0.299, 0.587, 0.114))), irid, 0.85);',
+          // HALF DESATURATED. A full-strength interference sweep is a rainbow,
+          // and a rainbow on an eight-kilometre wall is a bauble. Pulled most
+          // of the way to its own luminance so what is left is a TINT — the
+          // petrol on a puddle, not the puddle.
+          '  irid = mix(vec3(dot(irid, vec3(0.299, 0.587, 0.114))), irid, 0.50);',
           // The film survives where the surface is still sound; rain scours it
           // off, which is why the streaks stay charcoal while the panels
           // between them hold their colour.
@@ -26953,8 +26957,12 @@ function coverFx(mat: THREE.MeshLambertMaterial, band = false): void {
           // band near the silhouette and along whichever facets happen to be
           // turned away — so it travels as the camera passes, which is what a
           // sheen does, and the body underneath stays dark.
-          '  float grazeF = pow(1.0 - NdV, 5.0);',
-          '  cc += irid * grazeF * temper * 0.16 * seamAO * (1.0 - seam);',
+          // Photographed at Dakar at sunrise and still washing the whole dome:
+          // on a shell this size even a fifth power leaves a wide annulus of
+          // grazing angles, and 0.16 against a body of 0.05 is not a highlight
+          // on the metal, it IS the metal. Eight, and a third of the strength.
+          '  float grazeF = pow(1.0 - NdV, 8.0);',
+          '  cc += irid * grazeF * temper * 0.055 * seamAO * (1.0 - seam);',
           // Deeper panels sit deeper between their neighbours.
           '  cc *= 1.0 - pDepth * 0.020;',
           '  gl_FragColor.rgb = cc;',
