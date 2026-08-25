@@ -152,6 +152,22 @@ export async function openDrive(opts = {}) {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(readFileSync(opts.tape));
     }
+    // SUMMIT TILES, PROXIED TO THE DEPLOYED CELL. Unlike the vectors there is
+    // no Overpass fallback in the client for these, so a 404 here is not a
+    // degraded test — it is the whole layer missing, and it hid the fact that
+    // the ring's gate never opened. Running them through the cell handler
+    // locally would spend a fresh 15s Overpass budget per tile; the deployed
+    // route already holds them on S3 as immutable objects (measured under a
+    // second), so the honest local stand-in is to read that.
+    else if (p.startsWith('/~/osm/peak1/')) {
+      fetch(`https://c15r-drive.on.parc.land${p}`)
+        .then(async (r) => {
+          if (!r.ok) { res.writeHead(r.status); res.end('{}'); return; }
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(Buffer.from(await r.arrayBuffer()));
+        })
+        .catch(() => { res.writeHead(503); res.end('{}'); });
+    }
     else if (p.startsWith('/~/cover/v1/')) {
       cellRoute(p).then((out) => {
         if (!out) { res.writeHead(404); res.end('{}'); return; }

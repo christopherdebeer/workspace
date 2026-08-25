@@ -13756,17 +13756,42 @@ function streamWorld(ex: number, ez: number): void {
   // So the ring only advances while the fine queue is idle, and it advances
   // NEAREST FIRST — the summits that dominate the ranking are the near ones,
   // and the far ring can take as long as it likes.
-  if (osmInFlight === 0 && osmQueue.length === 0 && peakInFlight < 2) {
+  // …AND THE GATE HAS TWO TIERS, because one was strictly too strict.
+  //
+  // MEASURED, and the first rule delivered nothing. `osmInFlight` sits pinned
+  // at OSM_GATE for as long as ANYTHING is outstanding, and the ahead-cone
+  // refills it as the view moves — so "the fine queue is completely idle" is a
+  // state a live session essentially never reaches. Parked at Uyuni with the
+  // ring quietly draining, ninety-five seconds produced zero summit tiles;
+  // parked at Étampes, where tiles fail and retry, it produced one, ever.
+  // The layer was not being wasteful. It was not running.
+  //
+  // The intent behind the old rule was right — scenery must never delay the
+  // road — but the test for it was the whole cone rather than the road. So:
+  // the NEAR ring goes out as soon as the tile UNDER THE WHEELS has landed,
+  // which is the thing the game cannot be played without; everything beyond
+  // it still waits for a genuinely quiet queue. Two at a time either way, and
+  // most of these are S3 hits on an immutable object rather than Overpass.
+  const [hx, hy] = tileAt(lat, lon, OSM_Z);
+  const roadHere = osmDone.has(`${hx}/${hy}`);
+  const quiet = osmInFlight === 0 && osmQueue.length === 0;
+  if ((quiet || roadHere) && peakInFlight < 2) {
     const [px, py] = tileAt(lat, lon, PEAK_Z);
     const tm = tileMetres(PEAK_Z);
     const pRing = clamp(Math.ceil(PEAK_R / tm), 1, PEAK_RING_MAX);
+    const reach = peakReach();
     let best: [number, number, number] | null = null;
     for (let dx = -pRing; dx <= pRing; dx++) {
       for (let dy = -pRing; dy <= pRing; dy++) {
         // The NEAREST ground in that tile, so a corner tile is judged by the
         // bit of it you could actually see rather than by its centre.
         const near = Math.hypot(Math.max(0, Math.abs(dx) - 1), Math.max(0, Math.abs(dy) - 1)) * tm;
-        if (near > PEAK_R) continue;
+        const outer = Math.abs(dx) > 1 || Math.abs(dy) > 1;
+        // The 3×3 is unconditional on REACH — the reach is derived from what
+        // the ring reports, and with nothing fetched there is nothing to
+        // derive from. Beyond it, both rules apply: within the horizon, and
+        // only while the fine layer is actually quiet.
+        if (outer && (near > reach || !quiet)) continue;
         const k = `${PEAK_Z}/${px + dx}/${py + dy}`;
         if (peakTiles.has(k)) continue;
         const d2 = dx * dx + dy * dy;
@@ -14443,6 +14468,30 @@ const PEAK_Z = 8;
  */
 const PEAK_R = 350000;
 const PEAK_RING_MAX = 3;
+/**
+ * …AND HOW FAR IS WORTH FETCHING *HERE*, which is a different question.
+ *
+ * 350km is the ceiling for the tallest mountain on Earth. Applied flat it is
+ * mostly a lie: at 48°N the outer ring's nearest ground is 209km out, and
+ * d²/2R says nothing under 3444m clears the horizon at that range. Driving
+ * the Île-de-France, where the high ground is a 200m ridge, that ring was
+ * forty tiles of Overpass spent on summits the curve of the earth guarantees
+ * are invisible — which is exactly the waste worth cutting.
+ *
+ * So the reach is derived from what the ring has ALREADY found. The inner
+ * 3×3 is unconditional (something has to report first); past that, a tile is
+ * only asked for if the tallest summit yet seen — times a headroom factor,
+ * because the land beyond may well rise — could still be seen from here.
+ *
+ * Flat country settles at nine tiles. The Alps keep all forty-nine, because
+ * there the ring is answering a real horizon rather than a round number.
+ */
+const PEAK_RISE = 3;              // the ground ahead may be this much taller
+const PEAK_FLOOR = 300;           // …and never assume less than a low ridge
+function peakReach(): number {
+  const h = Math.max(PEAK_FLOOR, peakTallest * PEAK_RISE);
+  return Math.min(PEAK_R, Math.sqrt(2 * 6371000 * h));
+}
 interface Peak { name: string; x: number; z: number; ele: number;
   /** A campaign Cover posing as a summit (see updatePeaks): its radius, which
    *  is what makes its label and distance honest — the marker sits on the
@@ -14452,13 +14501,64 @@ interface Peak { name: string; x: number; z: number; ele: number;
   r?: number }
 const peaks = new Map<string, Peak>();
 const peakTiles = new Set<string>();
+/**
+ * THE SUMMITS THEMSELVES, in lat/lon, NOT swept by a world hop.
+ *
+ * `peaks` holds local metres and must be rebuilt at every new origin; the
+ * PAYLOAD behind it is global and immutable ("mountains do not move"), so
+ * throwing it away on a hop made the attract reel re-ask for — and re-parse —
+ * up to forty-nine tiles every twenty-second cycle, for postcards it had
+ * already fetched. Keyed by tile, so a return to a place is free.
+ */
+const peakData = new Map<string, Array<{ n: string; la: number; lo: number; e: number }>>();
+/** The tallest summit any tile has yet reported, which is what decides how
+ *  far the ring is worth pushing (see peakRingWanted). */
+let peakTallest = 0;
 let peakInFlight = 0;
 const peakQueue: Array<() => void> = [];
 let peakDemless = 0;
+/**
+ * WHEN A SUMMIT TILE MAY BE ASKED FOR AGAIN.
+ *
+ * A failed tile used to be dropped straight back out of `peakTiles`, which
+ * means the very next stream pass picks it as nearest-first and asks again —
+ * four times a second, for ever. That was invisible only because the gate
+ * above never let the ring out; opening the gate turned it into a retry storm
+ * aimed at our own cell. A 503 IS worth retrying (a cold tile is filling
+ * upstream) but not immediately; a 4xx never is — the tile is out of range or
+ * the route is not there, and no amount of asking changes either.
+ */
+const peakFail = new Map<string, number>();
+const PEAK_RETRY_MS = 45000;
+/** Seat one tile's worth of summits at the CURRENT origin. */
+function seatPeaks(rows: Array<{ n: string; la: number; lo: number; e: number }>): void {
+  for (const p of rows) {
+    // Keyed by name AND rounded position: "Signal Hill" is a hundred
+    // different hills, and dropping all but one of them would silently
+    // delete landmarks. Same name at the same spot IS a duplicate.
+    const k = `${p.n}@${p.la.toFixed(2)},${p.lo.toFixed(2)}`;
+    if (peaks.has(k)) continue;
+    // A summit under a Cover is not on anyone's skyline any more — the
+    // shell is. Montmartre's marker floating against the Paris dome was a
+    // label on something you cannot see; the Cover itself is the landmark
+    // now, and updatePeaks lists it as one.
+    if (underCover(p.la, p.lo, 1)) continue;
+    const [px, pz] = toLocal(p.la, p.lo);
+    peaks.set(k, { name: p.n, x: px, z: pz, ele: p.e });
+  }
+}
 async function loadPeakTile(x: number, y: number): Promise<void> {
   const key = `${PEAK_Z}/${x}/${y}`;
   if (peakTiles.has(key)) return;
+  const cold = peakFail.get(key);
+  if (cold !== undefined && (cold === Infinity || performance.now() - cold < PEAK_RETRY_MS)) return;
   peakTiles.add(key);
+  const held = peakData.get(key);
+  if (held) {                              // fetched in a previous world
+    if (held.length) peakTallest = Math.max(peakTallest, held[0].e);
+    seatPeaks(held);
+    return;
+  }
   // TWO AT A TIME. An Alpine tile costs Overpass the better part of half a
   // minute, and twenty-five of them at once would be a denial of service
   // aimed at the thing the whole world is streamed from. The near tiles are
@@ -14470,22 +14570,22 @@ async function loadPeakTile(x: number, y: number): Promise<void> {
     const res = await fetch(`${CELL_BASE}/~/osm/peak1/${PEAK_Z}/${x}/${y}`);
     if (!res.ok) throw new Error(`peak HTTP ${res.status}`);
     const data = (await res.json()) as { peaks?: Array<{ n: string; la: number; lo: number; e: number }> };
-    for (const p of data.peaks ?? []) {
-      // Keyed by name AND rounded position: "Signal Hill" is a hundred
-      // different hills, and dropping all but one of them would silently
-      // delete landmarks. Same name at the same spot IS a duplicate.
-      const k = `${p.n}@${p.la.toFixed(2)},${p.lo.toFixed(2)}`;
-      if (peaks.has(k)) continue;
-      // A summit under a Cover is not on anyone's skyline any more — the
-      // shell is. Montmartre's marker floating against the Paris dome was a
-      // label on something you cannot see; the Cover itself is the landmark
-      // now, and updatePeaks lists it as one.
-      if (underCover(p.la, p.lo, 1)) continue;
-      const [px, pz] = toLocal(p.la, p.lo);
-      peaks.set(k, { name: p.n, x: px, z: pz, ele: p.e });
-    }
-  } catch {
+    const rows = data.peaks ?? [];
+    peakData.set(key, rows);
+    // A tile is at most 120 summits; this is a few hundred KB at the cap, and
+    // a reel that never stops travelling would otherwise grow it for ever.
+    // Insertion order is eviction order — the oldest country goes first.
+    while (peakData.size > 400) peakData.delete(peakData.keys().next().value as string);
+    // The payload arrives tallest-first, so the ceiling is the head of it.
+    if (rows.length) peakTallest = Math.max(peakTallest, rows[0].e);
+    peakFail.delete(key);
+    seatPeaks(rows);
+  } catch (err) {
     peakTiles.delete(key);   // a cold Alpine tile is still filling; ask again later
+    // …but LATER, and never at all if the answer was "no". `Infinity` is the
+    // permanent mark: a 4xx says this tile is not coming, whatever we do.
+    const hard = /HTTP 4\d\d/.test(String((err as Error).message ?? err));
+    peakFail.set(key, hard ? Infinity : performance.now());
     peakDemless++;
   } finally {
     peakInFlight--;
@@ -16310,7 +16410,14 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     pois.clear(); areaGrid.clear(); survey.clear();
     vegGrid.clear(); vegSeeded.clear(); vegDeferredAt.clear();
     drapedWays.length = 0;
-    peaks.clear(); peakTiles.clear(); peakBlockMemo.clear();
+    // NOT peakData: the summits themselves are global and immutable, and only
+    // their LOCAL seats are stale. The ceiling does reset — the Alps must not
+    // authorise a three-hundred-kilometre ring over the Paris basin.
+    peaks.clear(); peakTiles.clear(); peakBlockMemo.clear(); peakTallest = 0;
+    // The soft refusals were about a moment upstream, not about the tile, and
+    // a new world is a new moment. The permanent ones (Infinity) are about the
+    // tile itself and stay.
+    for (const [k, t] of peakFail) if (t !== Infinity) peakFail.delete(k);
     coverBuilt.clear();
     stationSites.length = 0;
     mission = null; missionPhase = 'none'; missionGiver = null; missionDest = null;
@@ -19316,6 +19423,9 @@ function farHeightAt(wx: number, wz: number): number | null {
   const far = all.reduce((m, e) => Math.max(m, e.d), 0);
   return {
     tiles: peakTiles.size, retried: peakDemless, known: peaks.size,
+    held: peakData.size, tallest: peakTallest,
+    cold: peakFail.size, refused: [...peakFail.values()].filter((t) => t === Infinity).length,
+    reachWantKm: +(peakReach() / 1000).toFixed(0),
     // The names ACTUALLY on the glass this frame, which is the claim a reader
     // of the HUD is making — not the ranking this probe recomputes.
     drawn: poiDraw.filter((q) => q.kind === 'peak').map((q) => q.name),
@@ -19354,6 +19464,10 @@ function farHeightAt(wx: number, wz: number): number | null {
   (name: string, lat: number, lon: number, ele: number): void => {
     const [px, pz] = toLocal(lat, lon);
     peaks.set(`${name}@${lat.toFixed(2)},${lon.toFixed(2)}`, { name, x: px, z: pz, ele });
+    // A hand-placed summit is still a summit the ring has heard about, so it
+    // moves the ceiling exactly as a fetched tile would — which is what makes
+    // the adaptive reach testable without waiting on a cold Alpine tile.
+    peakTallest = Math.max(peakTallest, ele);
   };
 /** Both directions of the Google Maps link, for the test that covers the
  *  half-dozen shapes Google actually writes. */
