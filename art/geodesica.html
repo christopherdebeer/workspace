@@ -5,9 +5,22 @@
     position: fixed; inset: 0;
     width: 100vw; height: 100dvh;
     display: block; background: #05060a;
+    touch-action: none; cursor: pointer;
+    user-select: none; -webkit-user-select: none;
+    -webkit-tap-highlight-color: transparent;
   }
+  #hint {
+    position: fixed; left: 0; right: 0; bottom: 5vh;
+    text-align: center;
+    font: 400 11px/1.6 ui-sans-serif, system-ui, sans-serif;
+    letter-spacing: 0.22em; text-transform: uppercase;
+    color: rgba(196, 208, 222, 0.4);
+    pointer-events: none; transition: opacity 2s ease;
+  }
+  #hint.gone { opacity: 0; }
 </style>
-<canvas id="orb" aria-label="Geodesica — a sphere of infinite fractal geodesic panels, turning slowly."></canvas>
+<canvas id="orb" aria-label="Geodesica — a steel sphere of fractal geodesic panels. Strike the panels: they ring like a handpan, remember the pattern, and let it fade."></canvas>
+<div id="hint">strike the panels</div>
 <script>
 'use strict';
 /* ============================================================
@@ -45,6 +58,9 @@ const FRAG = `#version 300 es
 precision highp float;
 uniform vec2 uRes;
 uniform float uPhase;
+uniform vec4 uStrikes[24];   // xyz: strike direction in the lattice frame · w: strength
+uniform float uAges[24];
+uniform int uNStrikes;
 out vec4 frag;
 
 #define TAU 6.28318530718
@@ -298,6 +314,21 @@ vec3 shade(vec2 frag2) {
   float grazeF = pow(1.0 - NdV, 2.2);
   col += irid * grazeF * temper * 0.30 * seamAO * (1.0 - seam);
 
+  // ------- struck metal remembers: a glow at the strike, and a ring of
+  // light travelling the surface at a fixed angular speed
+  vec3 rung = vec3(0.0);
+  for (int i = 0; i < 24; i++) {
+    if (i >= uNStrikes) break;
+    float ang = acos(clamp(dot(dObj, uStrikes[i].xyz), -1.0, 1.0));
+    float age = uAges[i];
+    float ringR = age * 1.7;
+    float ring = exp(-pow((ang - ringR) / 0.09, 2.0)) * exp(-age * 1.9);
+    float core = exp(-pow(ang / 0.15, 2.0)) * exp(-age * 2.6);
+    rung += (irid * 0.55 + vec3(0.72, 0.80, 0.92) * 0.45)
+          * (core * 1.1 + ring * 0.5) * uStrikes[i].w;
+  }
+  col += rung * seamAO * (1.0 - seam * 0.6);
+
   // ------- the sphere sits in air
   float rimF = pow(1.0 - max(dot(n, V), 0.0), 3.0);
   col += vec3(0.10, 0.13, 0.18) * rimF * 0.18;
@@ -342,6 +373,9 @@ function initGL() {
   gl.useProgram(prog);
   uni.uRes = gl.getUniformLocation(prog, 'uRes');
   uni.uPhase = gl.getUniformLocation(prog, 'uPhase');
+  uni.uStrikes = gl.getUniformLocation(prog, 'uStrikes');
+  uni.uAges = gl.getUniformLocation(prog, 'uAges');
+  uni.uNStrikes = gl.getUniformLocation(prog, 'uNStrikes');
   return true;
 }
 
@@ -354,10 +388,194 @@ function resize() {
   if (gl) gl.viewport(0, 0, canvas.width, canvas.height);
 }
 
-function draw(phase) {
+const MAXS = 24;
+const strikeVec = new Float32Array(MAXS * 4);
+const strikeAge = new Float32Array(MAXS);
+
+function draw(phase, nowMs) {
+  const now = nowMs === undefined ? performance.now() : nowMs;
+  let n = 0;
+  for (let i = flashes.length - 1; i >= 0 && n < MAXS; i--) {
+    const f = flashes[i];
+    const age = (now - f.t0) / 1000;
+    if (age > 3.2) continue;
+    strikeVec[n * 4] = f.dir[0];
+    strikeVec[n * 4 + 1] = f.dir[1];
+    strikeVec[n * 4 + 2] = f.dir[2];
+    strikeVec[n * 4 + 3] = f.strength;
+    strikeAge[n] = age;
+    n++;
+  }
   gl.uniform2f(uni.uRes, canvas.width, canvas.height);
   gl.uniform1f(uni.uPhase, phase);
+  gl.uniform4fv(uni.uStrikes, strikeVec);
+  gl.uniform1fv(uni.uAges, strikeAge);
+  gl.uniform1i(uni.uNStrikes, n);
   gl.drawArrays(gl.TRIANGLES, 0, 3);
+}
+
+/* ============================================================
+   THE INSTRUMENT
+   A steelpan is a tuned metal shell struck on panel regions, and
+   so is this. In the sphere's own frame: the top cap is the low
+   ding, eight notes of D Kurd ring the equator by azimuth, the
+   bottom cap is the deep gu. The note map turns with the metal.
+
+   Panels remember. Every strike is written into a six-second
+   memory loop and replayed in place, a fifth quieter each pass,
+   until it fades — unless you keep feeding the pattern.
+   ============================================================ */
+
+const hintEl = document.getElementById('hint');
+const P_LOOP = 6.0;                    // seconds of memory
+const ECHO_DECAY = 0.78;
+
+const DING = 146.83;                                       // D3
+const RING = [220.0, 261.63, 329.63, 392.0, 440.0, 349.23, 293.66, 233.08];
+const GU = 73.42;                                          // D2
+
+let ac = null, master = null, sendIn = null;
+
+function initAudio() {
+  if (ac) { if (ac.state === 'suspended') ac.resume(); return; }
+  try { ac = new (window.AudioContext || window.webkitAudioContext)(); }
+  catch (e) { return; }
+  if (ac.state === 'suspended') ac.resume();
+  const comp = ac.createDynamicsCompressor();
+  comp.threshold.value = -20; comp.knee.value = 18;
+  comp.ratio.value = 5; comp.attack.value = 0.003; comp.release.value = 0.3;
+  comp.connect(ac.destination);
+  master = ac.createGain();
+  master.gain.value = 0.7;
+  master.connect(comp);
+  // the room the pan rings in
+  sendIn = ac.createGain(); sendIn.gain.value = 1;
+  const delay = ac.createDelay(2.0); delay.delayTime.value = 0.31;
+  const fb = ac.createGain(); fb.gain.value = 0.36;
+  const damp = ac.createBiquadFilter(); damp.type = 'lowpass'; damp.frequency.value = 2400;
+  const wet = ac.createGain(); wet.gain.value = 0.24;
+  sendIn.connect(delay); delay.connect(damp); damp.connect(fb); fb.connect(delay);
+  delay.connect(wet); wet.connect(master);
+}
+
+/* one handpan strike: the tuned partials the maker hammered in —
+   fundamental, octave, compound fifth — a detuned twin for the slow
+   wah, a knuckle thump, and a breath of shimmer at contact */
+function strikeNote(freq, vel, pan) {
+  if (!ac) return;   // a suspended context still accepts the schedule and speaks on resume
+  const t = ac.currentTime;
+  const out = ac.createGain(); out.gain.value = 1;
+  const pn = ac.createStereoPanner ? ac.createStereoPanner() : null;
+  if (pn) { pn.pan.value = pan; out.connect(pn); pn.connect(master); pn.connect(sendIn); }
+  else { out.connect(master); out.connect(sendIn); }
+
+  const tau = 3.2 * Math.sqrt(150 / freq);
+  const parts = [
+    { r: 1.0, g: 1.0, d: tau },
+    { r: 2.0, g: 0.5, d: tau * 0.55 },
+    { r: 3.008, g: 0.24, d: tau * 0.34 },
+    { r: 4.94, g: 0.08, d: tau * 0.2 },
+  ];
+  for (const pt of parts) {
+    const o = ac.createOscillator(); o.type = 'sine';
+    o.frequency.value = freq * pt.r;
+    const g = ac.createGain();
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vel * pt.g * 0.22, t + 0.006);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + pt.d);
+    o.connect(g); g.connect(out);
+    o.start(t); o.stop(t + pt.d + 0.1);
+  }
+  // the twin, a hair sharp: the beating is the handpan's breath
+  const o2 = ac.createOscillator(); o2.type = 'sine';
+  o2.frequency.value = freq + 1.3;
+  const g2 = ac.createGain();
+  g2.gain.setValueAtTime(0.0001, t);
+  g2.gain.exponentialRampToValueAtTime(vel * 0.09, t + 0.008);
+  g2.gain.exponentialRampToValueAtTime(0.0001, t + tau * 0.8);
+  o2.connect(g2); g2.connect(out);
+  o2.start(t); o2.stop(t + tau);
+  // knuckle
+  const th = ac.createOscillator(); th.type = 'sine';
+  th.frequency.setValueAtTime(95, t);
+  th.frequency.exponentialRampToValueAtTime(55, t + 0.06);
+  const tg = ac.createGain();
+  tg.gain.setValueAtTime(vel * 0.16, t);
+  tg.gain.exponentialRampToValueAtTime(0.0001, t + 0.07);
+  th.connect(tg); tg.connect(out);
+  th.start(t); th.stop(t + 0.09);
+}
+
+/* where on the pan was that? the note lives in the sphere's own frame */
+function noteFor(dObj) {
+  const lat = Math.asin(Math.max(-1, Math.min(1, dObj[1])));
+  if (lat > 0.95) return GU * 2;                 // the ding, top centre
+  if (lat < -0.95) return GU;                    // the gu, underneath
+  const az = Math.atan2(dObj[2], dObj[0]);
+  const idx = ((Math.floor((az / TAU + 0.5) * 8) % 8) + 8) % 8;
+  const oct = lat > 0.35 ? 1 : (lat < -0.35 ? 0.5 : 1);
+  return RING[idx] * (lat < -0.35 ? 0.5 : 1) * (lat > 0.55 ? 2 : 1);
+}
+
+/* the memory of the metal */
+let memories = [];   // {dir, freq, pan, strength, nextFire}
+let flashes = [];    // {dir, strength, t0} — what the shader lights up
+
+function rotationOf(nowMs) {
+  const secs = (nowMs - t0) / 1000 * (reduceMotion ? 0.35 : 1);
+  return (secs % LOOP) / LOOP;
+}
+
+/* screen tap -> direction in the lattice frame, or null if the sky */
+function pickDir(px, py, nowMs) {
+  const ux = (px - W / 2) / H;
+  const uy = -(py - H / 2) / H;
+  const rd = [ux, uy, -1.62];
+  const rl = Math.hypot(rd[0], rd[1], rd[2]);
+  rd[0] /= rl; rd[1] /= rl; rd[2] /= rl;
+  const ro = [0, 0.12, 3.1];
+  const b = ro[0] * rd[0] + ro[1] * rd[1] + ro[2] * rd[2];
+  const c = ro[0] * ro[0] + ro[1] * ro[1] + ro[2] * ro[2] - 1;
+  const disc = b * b - c;
+  if (disc < 0) return null;
+  const tHit = -b - Math.sqrt(disc);
+  if (tHit < 0) return null;
+  const n = [ro[0] + rd[0] * tHit, ro[1] + rd[1] * tHit, ro[2] + rd[2] * tHit];
+  // world -> lattice: transpose of R = (Ry * Rt): apply Ry^T then Rt^T
+  const yaw = TAU * rotationOf(nowMs);
+  const cy = Math.cos(yaw), sy = Math.sin(yaw);
+  const v1 = [cy * n[0] - sy * n[2], n[1], sy * n[0] + cy * n[2]];
+  const tl = 0.41, ct = Math.cos(tl), st = Math.sin(tl);
+  return [v1[0], ct * v1[1] - st * v1[2], st * v1[1] + ct * v1[2]];
+}
+
+canvas.addEventListener('pointerdown', (e) => {
+  e.preventDefault();
+  initAudio();
+  const now = performance.now();
+  const dir = pickDir(e.clientX, e.clientY, now);
+  if (!dir) return;
+  hintEl.classList.add('gone');
+  const freq = noteFor(dir);
+  const pan = Math.max(-0.8, Math.min(0.8, (e.clientX - W / 2) / (W / 2)));
+  strikeNote(freq, 1.0, pan);
+  flashes.push({ dir, strength: 1.0, t0: now });
+  memories.push({ dir, freq, pan, strength: ECHO_DECAY, nextFire: now + P_LOOP * 1000 });
+  if (memories.length > 64) memories.shift();
+}, { passive: false });
+
+function updateMemories(now) {
+  for (let i = memories.length - 1; i >= 0; i--) {
+    const m = memories[i];
+    while (now >= m.nextFire) {
+      strikeNote(m.freq, m.strength, m.pan);
+      flashes.push({ dir: m.dir, strength: m.strength, t0: m.nextFire });
+      m.nextFire += P_LOOP * 1000;
+      m.strength *= ECHO_DECAY;
+    }
+    if (m.strength < 0.06) memories.splice(i, 1);
+  }
+  if (flashes.length > 96) flashes = flashes.slice(-64);
 }
 
 let t0 = performance.now();
@@ -365,8 +583,8 @@ let raf = 0;
 let frameCount = 0, fpsT0 = 0;
 
 function frame(now) {
-  const secs = (now - t0) / 1000 * (reduceMotion ? 0.35 : 1);
-  draw((secs % LOOP) / LOOP);
+  updateMemories(now);
+  draw(rotationOf(now), now);
 
   frameCount++;
   if (now - fpsT0 > 4000 && quality > 0.5) {
@@ -378,8 +596,13 @@ function frame(now) {
 }
 
 document.addEventListener('visibilitychange', () => {
-  if (document.hidden) cancelAnimationFrame(raf);
-  else raf = requestAnimationFrame(frame);
+  if (document.hidden) {
+    cancelAnimationFrame(raf);
+    if (ac && ac.state === 'running') ac.suspend();
+  } else {
+    raf = requestAnimationFrame(frame);
+    if (ac && ac.state === 'suspended') ac.resume();
+  }
 });
 
 window.addEventListener('resize', resize);
