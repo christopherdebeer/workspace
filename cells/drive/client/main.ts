@@ -7110,10 +7110,18 @@ function wayAhead(
   }
   return { pts, name };
 }
-function nextBend(x: number, z: number, heading: number): NavBend | null {
-  const road = wayAhead(x, z, heading, NAV_REACH + NAV_WIN, 80, true);
-  if (!road) return null;
-  const pts = road.pts;
+/**
+ * THE CALL, READ OFF A POLYLINE — which polyline is the caller's business.
+ *
+ * Split out because there are now two answers to "the road ahead". `wayAhead`
+ * chains the way under the wheels, which is the honest reading when you are
+ * simply driving. On a LEG the honest reading is the leg's own course: the
+ * line is the route the docket sent you along, and a co-driver who calls the
+ * bends of whatever road you happen to be sitting on is calling the wrong
+ * road every time the route turns off one. Same window, same threshold, same
+ * sign convention — only the source of the vertices differs.
+ */
+function bendIn(pts: Array<[number, number]>): NavBend | null {
   if (pts.length < 3) return null;
   // Signed turn at each interior vertex, and the distance to it.
   const turns: Array<{ d: number; a: number }> = [];
@@ -7133,6 +7141,16 @@ function nextBend(x: number, z: number, heading: number): NavBend | null {
     if (Math.abs(sum) >= NAV_MIN) return { dist: turns[i].d, ang: sum, left: sum < 0 };
   }
   return null;
+}
+function nextBend(x: number, z: number, heading: number): NavBend | null {
+  // THE LINE FIRST. A leg is a course, not a destination, and while you are on
+  // it the course is what the co-driver reads. Off the corridor — or with no
+  // leg running — it falls back to the road under the wheels, which is the
+  // right answer for free driving and the only possible one there.
+  const onLine = routeAhead(x, z, NAV_REACH + NAV_WIN);
+  if (onLine) return bendIn(onLine);
+  const road = wayAhead(x, z, heading, NAV_REACH + NAV_WIN, 80, true);
+  return road ? bendIn(road.pts) : null;
 }
 /** Proper 2D segment crossing — endpoints touching does not count. */
 function segsCross(
@@ -13080,6 +13098,12 @@ function stepSurvey(now: number): void {
   // A crumb is worth about 250m of driving, so a few seconds of them is the
   // most a crash can cost. A claim writes immediately — that is the thing a
   // player would actually grieve.
+  // THE LINE'S OWN CHECKPOINTS, on the same swept segment. They are not a
+  // road's — they belong to the leg — so they run outside the `wayAt` gate
+  // above: passing a course point on the far carriageway, or on the service
+  // road beside the old N20, is still driving the line.
+  buildRoute(mission);
+  stepRoute(now, prev);
   surveyStore.tick(now);
   if (surveyFlash > 0) surveyFlash = Math.max(0, surveyFlash - 0.04);
 }
@@ -14045,6 +14069,9 @@ const FAR_DROP = 12;
 // these altitudes the world IS a map, and the palette says so.
 const OV_LEVELS = [13, 12, 11, 10];
 const OV_RING_MAX = 2;        // 5×5 tiles at whichever level is current
+/** How long the CHART waits, which is not how long the CELL takes. See the
+ *  note in loadOvTile: an abandoned request still banks its tile. */
+const OV_WAIT_MS = 11000;
 let ovZ = OV_LEVELS[0];
 const ovTiles = new Set<string>();
 const ovMeshes = new Map<string, THREE.Mesh>();
@@ -14247,11 +14274,20 @@ async function loadOvTile(x: number, y: number): Promise<void> {
   ovTiles.add(key);
   if (ovInFlight >= 4) await new Promise<void>((go) => ovQueue.push(go));
   ovInFlight++;
+  // GIVE UP BEFORE THE CELL DOES, and let it finish anyway. The overview
+  // budget upstream is most of a minute now — a dense z12 box genuinely needs
+  // it — but a chart tile is not worth holding one of four slots for that
+  // long, and it does not have to be: `putTile` runs server-side whether or
+  // not anyone is still listening, so an abandoned request still BANKS its
+  // tile. The next stream pass finds it warm. This is the fine layer's own
+  // rule (see TILE_WAIT_MS), which the overview never had — it simply waited.
+  const ctl = new AbortController();
+  const bail = setTimeout(() => ctl.abort(), OV_WAIT_MS);
   try {
     // The vectors and the ground they lie on, together: the DEM tile at the
     // SAME index is what drapes the lines onto the far shell's hillsides.
     const [res, dem] = await Promise.all([
-      fetch(`${CELL_BASE}/~/osm/ov1/${z}/${x}/${y}`),
+      fetch(`${CELL_BASE}/~/osm/ov1/${z}/${x}/${y}`, { signal: ctl.signal }),
       fetchHeights(x, y, z),
     ]);
     if (!res.ok) throw new Error(`ov HTTP ${res.status}`);
@@ -14261,6 +14297,7 @@ async function loadOvTile(x: number, y: number): Promise<void> {
   } catch {
     ovTiles.delete(key);      // a 503 is a cold tile filling; the next stream pass retries
   } finally {
+    clearTimeout(bail);
     ovInFlight--;
     ovQueue.shift()?.();
   }
@@ -16413,6 +16450,11 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // NOT peakData: the summits themselves are global and immutable, and only
     // their LOCAL seats are stale. The ceiling does reset — the Alps must not
     // authorise a three-hundred-kilometre ring over the Paris basin.
+    // The course is local metres like everything else here. Blanking the key
+    // rather than the arrays is what forces buildRoute to re-project it at the
+    // new origin on the next tick — the campaign data behind it never moved.
+    routeFor = ''; routeAt = '';
+    routeXZ = []; routeCum = []; routeCps = []; routeGot = 0;
     peaks.clear(); peakTiles.clear(); peakBlockMemo.clear(); peakTallest = 0;
     // The soft refusals were about a moment upstream, not about the tile, and
     // a new world is a new moment. The permanent ones (Infinity) are about the
@@ -19409,6 +19451,36 @@ function farHeightAt(wx: number, wz: number): number | null {
   headingDeg: Math.round(((state.heading * 180) / Math.PI + 360) % 360),
   kmh: +(state.speed * 3.6).toFixed(1),
 });
+/** THE COURSE, AS THE GAME HAS IT: the leg's route under the wheels, how far
+ *  along it you are, how much of it you have actually driven, and what the
+ *  co-driver is reading — the road you are on, or the route you were sent
+ *  down. NOT `__line`, which is campaign MODE (on/off, which leg, the run). */
+/** A point `d` metres along the course, in local metres — so a test can WALK
+ *  the line instead of teleporting onto its checkpoints and grading its own
+ *  homework. */
+(window as unknown as { __coursePt?: object }).__coursePt =
+  (d: number): [number, number] | null => routePointAt(d);
+(window as unknown as { __course?: object }).__course = (): object => {
+  const at = routeSeek(state.x, state.z);
+  const ahead = routeAhead(state.x, state.z, NAV_REACH + NAV_WIN);
+  return {
+    leg: routeFor || null,
+    phase: missionPhase,
+    vertices: routeXZ.length,
+    km: routeCum.length ? +(routeCum[routeCum.length - 1] / 1000).toFixed(1) : 0,
+    cps: routeCps.length, got: routeGot,
+    need: mission ? viaProgress(mission)?.need ?? null : null,
+    met: mission ? viaProgress(mission)?.met ?? null : null,
+    offM: at ? Math.round(at.off) : null,
+    alongKm: at ? +(at.along / 1000).toFixed(2) : null,
+    onCourse: !!ahead,
+    // WHICH SOURCE THE CALL CAME FROM, which is the whole point of the change:
+    // "route" means the co-driver is reading the leg, "way" means it fell back
+    // to the road under the wheels, "none" means it has nothing to say.
+    navFrom: ahead ? 'route' : (wayAhead(state.x, state.z, state.heading, NAV_REACH + NAV_WIN, 80, true) ? 'way' : 'none'),
+    bend: nextBend(state.x, state.z, state.heading),
+  };
+};
 (window as unknown as { __toll?: object }).__toll = (x: number, z: number): [number, number] => localToLatLon(x, z);
 /** The other direction — a test needs to aim at a real place, not a guess. */
 (window as unknown as { __tolocal?: object }).__tolocal =
@@ -21922,7 +21994,7 @@ interface RoadLineSeg { ax: number; ay: number; az: number; bx: number; by: numb
 let roadLineWorld: RoadLineSeg[] = [];
 let roadLineKey = ''; let roadLineAt = -1e9;
 function refreshRoadLine(via: string | undefined, cur: string | undefined, now: number): void {
-  const key = `${via ?? ''}|${cur ?? ''}`;
+  const key = `${via ?? ''}|${cur ?? ''}|${routeFor}|${routeXZ.length}`;
   if (key === roadLineKey && now - roadLineAt < 1000) return;
   roadLineKey = key; roadLineAt = now;
   roadLineWorld = [];
@@ -21943,12 +22015,21 @@ function refreshRoadLine(via: string | undefined, cur: string | undefined, now: 
       if (roadLineWorld.length >= 800) return;
     }
   }
-  // The via road usually lies BEYOND the loaded OSM ring — roads stream as a
-  // disc around the car, and the job is by construction somewhere else. Its
-  // survey checkpoints are route-ordered though, so past the ring's edge the
-  // gold line falls back to chords between them: coarser than real geometry,
-  // but it shows the whole run, and it hands over to the exact centreline as
-  // you drive into range.
+  // THE COURSE, WHOLE. Everything above is the road that has STREAMED — a disc
+  // around the truck — and a leg is by construction mostly outside it. The
+  // course is authored data and needs nothing to have loaded, so the line runs
+  // to the horizon and past it from the moment the leg starts. Drawn after the
+  // streamed geometry so it reads on top of it where both exist.
+  if (routeXZ.length >= 2 && mission && missionPhase === 'active') {
+    for (let i = 1; i < routeXZ.length && roadLineWorld.length < 900; i++) {
+      const [ax, az] = routeXZ[i - 1], [bx, bz] = routeXZ[i];
+      roadLineWorld.push({
+        ax, ay: groundAt(ax, az) + 1.2, az,
+        bx, by: groundAt(bx, bz) + 1.2, bz,
+        mx: (ax + bx) / 2, mz: (az + bz) / 2, job: true,
+      });
+    }
+  }
   if (via) {
     const r = survey.get(via);
     if (r) {
@@ -22051,7 +22132,19 @@ function updateCps(): void {
   // THE JOB'S ROUTE, always lit — the CHECKPOINTS dial styles free driving,
   // but a route you accepted is navigation, not decoration: every marker on
   // the via road stands as a numbered gold beam for the whole drive.
-  const viaName = mission && missionPhase === 'active' ? mission.via?.name : undefined;
+  const onLeg = !!mission && missionPhase === 'active';
+  const viaName = onLeg ? mission?.via?.name : undefined;
+  // THE COURSE'S OWN, FIRST. These are the leg — numbered along the line, so
+  // the beam ahead of you says how far through it you are — and they stand
+  // whether or not the road carrying them has streamed.
+  if (onLeg && routeCps.length) {
+    let i = 0;
+    for (const c of routeCps) {
+      i++;
+      if (cpDraw.length >= cap) break;
+      push(c, true, i);
+    }
+  }
   if (viaName) {
     const r = survey.get(viaName);
     if (r) {
@@ -25149,6 +25242,180 @@ interface Mission {
    *  joining it near the headland would drive the pass honestly and still be
    *  refused. A count states what the job actually asks for. */
   via?: { name: string; atLeast?: number };
+  /** THE COURSE — the leg's actual route along real ways, not the chord and
+   *  not one road's name. See the LINE'S COURSE block below for what reads it.
+   *  Absent on a job that is genuinely just "get there"; present on every leg
+   *  of the line, where the route IS the work. */
+  route?: LegRoute;
+}
+/**
+ * ── THE LINE'S COURSE ─────────────────────────────────────────────
+ *
+ * A leg used to be two points and a radius, and everything downstream could
+ * therefore only say "it is that way": a bearing to the far end, which is the
+ * instruction *drive at it* — the exact opposite of a line. The co-driver read
+ * the road under the wheels, so it called the bends of whatever street the
+ * truck happened to be sitting on, including the ones the route turns off.
+ * Checkpoints came from `via.name`, one road out of the twenty-two that carry
+ * leg 1, and no leg actually set it.
+ *
+ * So the course is DATA now, routed offline along real ways by
+ * devtools/line-legs.mjs and carried in the campaign: an ordered polyline in
+ * lat/lon, simplified to 25m (the width of the carriageway — below that the
+ * course cannot be told from the road it describes). Leg 1 is 55 vertices and
+ * a kilobyte.
+ *
+ * Three things read it, and they are the three the docket actually promises:
+ * the co-driver calls ITS bends, the chart draws IT, and driving the leg means
+ * collecting checkpoints laid along IT rather than reaching the end of it.
+ */
+interface LegRoute {
+  km: number;
+  /** [lat, lon], in order, giver to destination. */
+  pts: Array<[number, number]>;
+  /** The named roads that carry it, in order of share — the docket's `via`. */
+  vias?: Array<{ name: string; km: number }>;
+}
+/** 900m between course checkpoints: leg 1 is 46km, so about fifty of them —
+ *  close enough that no junction between two is a coin toss, far enough that
+ *  the chart is a route and not a bead necklace. The survey's own 250m pitch
+ *  is for CLAIMING a road, where the road is the subject; here the subject is
+ *  a hundred kilometres of line. */
+const ROUTE_P = 900;
+/** How far off course still counts as being on it. Wide on purpose: a dual
+ *  carriageway's other side, a service road beside the old N20, and a bypass
+ *  round a village the route threads are all still driving the line. Past it
+ *  the co-driver stops pretending and reads the road you are actually on. */
+const ROUTE_CORRIDOR = 150;
+/** …and how near one has to pass to count it. Larger than the survey's 12m
+ *  because a course checkpoint is not ON a particular carriageway — it is a
+ *  point on the line, and either carriageway passes it. */
+const ROUTE_CAPTURE = 45;
+/** Driving the line means driving MOST of it. Not all: the course is a routed
+ *  suggestion over an eight-year-old extract, and a single closed bridge must
+ *  not make a leg unfinishable. */
+const ROUTE_MAJORITY = 0.6;
+let routeFor = '';                          // mission id the course was built for
+let routeAt = '';                           // …and the world origin it was projected at
+let routeXZ: Array<[number, number]> = [];  // the course in LOCAL metres
+let routeCum: number[] = [];                // metres along the course at each vertex
+let routeCps: Checkpoint[] = [];
+let routeGot = 0;
+/** Project the active leg's course into the world under our feet. Re-run when
+ *  the leg changes OR the origin does — a hop rebases every local metre in the
+ *  game, and a course still in the old frame would draw across the sea. */
+function buildRoute(m: Mission | null): void {
+  const id = m?.route && m.route.pts.length >= 2 ? m.id : '';
+  const at = `${origin.lat.toFixed(4)},${origin.lon.toFixed(4)}`;
+  if (id === routeFor && at === routeAt) return;
+  routeFor = id; routeAt = at;
+  routeXZ = []; routeCum = []; routeCps = []; routeGot = 0;
+  if (!id || !m?.route) return;
+  for (const [la, lo] of m.route.pts) routeXZ.push(toLocal(la, lo));
+  let run = 0;
+  routeCum.push(0);
+  for (let i = 1; i < routeXZ.length; i++) {
+    run += Math.hypot(routeXZ[i][0] - routeXZ[i - 1][0], routeXZ[i][1] - routeXZ[i - 1][1]);
+    routeCum.push(run);
+  }
+  // Checkpoints by ARC LENGTH along the course, phased at half a pitch so the
+  // first sits inside the first stretch rather than on the giver's doorstep.
+  for (let d = ROUTE_P / 2; d < run; d += ROUTE_P) {
+    const p = routePointAt(d);
+    if (!p) continue;
+    const c: Checkpoint = { x: p[0], z: p[1], key: cpKey(p[0], p[1]), got: false };
+    // Already driven, on this device or another: the store is keyed by place,
+    // so a course checkpoint re-seats across a hop and across a session.
+    if (surveyStore.took(routeRoadId(m), c.key)) { c.got = true; routeGot++; }
+    routeCps.push(c);
+  }
+}
+/** The course's identity in the survey store — the LEG, not a road name. */
+const routeRoadId = (m: Mission): string => `line:${m.id}`;
+/** A point `d` metres along the course. */
+function routePointAt(d: number): [number, number] | null {
+  if (routeXZ.length < 2) return null;
+  let i = 1;
+  while (i < routeCum.length && routeCum[i] < d) i++;
+  if (i >= routeCum.length) return routeXZ[routeXZ.length - 1];
+  const seg = routeCum[i] - routeCum[i - 1] || 1;
+  const t = (d - routeCum[i - 1]) / seg;
+  return [routeXZ[i - 1][0] + (routeXZ[i][0] - routeXZ[i - 1][0]) * t,
+    routeXZ[i - 1][1] + (routeXZ[i][1] - routeXZ[i - 1][1]) * t];
+}
+/** WHERE ON THE LINE YOU ARE: the nearest point of the course, how far off it
+ *  you are, and how far along. Fifty-odd segments, so a full scan is cheaper
+ *  than any structure that would avoid one. */
+function routeSeek(x: number, z: number): { i: number; t: number; off: number; along: number } | null {
+  if (routeXZ.length < 2) return null;
+  let best = Infinity, bi = 0, bt = 0;
+  for (let i = 1; i < routeXZ.length; i++) {
+    const [ax, az] = routeXZ[i - 1], [bx, bz] = routeXZ[i];
+    const dx = bx - ax, dz = bz - az;
+    const t = clamp(((x - ax) * dx + (z - az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    const d = Math.hypot(x - (ax + dx * t), z - (az + dz * t));
+    if (d < best) { best = d; bi = i; bt = t; }
+  }
+  return { i: bi, t: bt, off: best,
+    along: routeCum[bi - 1] + (routeCum[bi] - routeCum[bi - 1]) * bt };
+}
+/** The course ahead as a polyline, starting from where you actually are on it
+ *  — or null if there is no leg running, or you have left the corridor. The
+ *  first vertex is the PROJECTION, not the truck: the angle between "where I
+ *  am in the lane" and "where the road goes" is invented corner, and it moves
+ *  every time you drift (the same trap `wayAhead` documents). */
+function routeAhead(x: number, z: number, reach: number): Array<[number, number]> | null {
+  if (!routeXZ.length || !mission || missionPhase !== 'active') return null;
+  const at = routeSeek(x, z);
+  if (!at || at.off > ROUTE_CORRIDOR) return null;
+  const start = routePointAt(at.along);
+  if (!start) return null;
+  const pts: Array<[number, number]> = [start];
+  // AT LEAST THREE POINTS, however far away the third one is.
+  //
+  // The course is simplified to 25m, which on a straight stretch of the old
+  // N20 means one vertex every couple of kilometres — nothing to simplify, so
+  // nothing kept. Gathering only what fell inside the 380m window therefore
+  // returned two points on exactly the roads the line spends most of its
+  // length on, `bendIn` refused them, and the co-driver quietly handed back to
+  // whatever street was under the wheels. The call would flip between the line
+  // and the road according to how straight the line happened to be.
+  //
+  // Three points is what a turn is made of. Reaching past the window to find
+  // the third one costs nothing — `bendIn` stops at NAV_REACH on its own, so a
+  // vertex two kilometres out is read as "no bend near you", which is both the
+  // right answer and the one a straight road deserves.
+  for (let i = at.i; i < routeXZ.length; i++) {
+    pts.push(routeXZ[i]);
+    if (pts.length >= 3 && routeCum[i] - at.along > reach) break;
+  }
+  return pts.length >= 3 ? pts : null;
+}
+/** Course checkpoints, swept the way the survey's are — capture must mean the
+ *  same thing at four frames a second as at sixty. */
+function stepRoute(now: number, prev: [number, number] | null): void {
+  if (!routeCps.length || !mission || missionPhase !== 'active') return;
+  const id = routeRoadId(mission);
+  for (const c of routeCps) {
+    if (c.got) continue;
+    let d: number;
+    if (prev) {
+      const dx = state.x - prev[0], dz = state.z - prev[1];
+      const t = clamp(((c.x - prev[0]) * dx + (c.z - prev[1]) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+      d = Math.hypot(c.x - (prev[0] + dx * t), c.z - (prev[1] + dz * t));
+    } else d = Math.hypot(c.x - state.x, c.z - state.z);
+    if (d > ROUTE_CAPTURE) continue;
+    c.got = true; c.at = now; routeGot++;
+    surveyStore.take(id, c.key, routeCps.length);
+    surveyFlash = 1;
+    audio.stone();
+  }
+}
+/** Has the line been DRIVEN, as opposed to its far end reached. */
+function routeDriven(m: Mission): boolean {
+  if (!m.route || !routeCps.length) return true;   // no course authored: arriving is the whole test
+  const need = m.via?.atLeast ?? Math.ceil(routeCps.length * ROUTE_MAJORITY);
+  return routeGot >= Math.min(need, routeCps.length);
 }
 type MissionPhase = 'none' | 'offered' | 'active' | 'done';
 let mission: Mission | null = null;
@@ -25176,6 +25443,16 @@ function armMission(m: Mission): void {
  *  it. Applying the gate would leave a mission uncompletable on a stretch the
  *  player had honestly driven. */
 function viaProgress(m: Mission): { got: number; need: number; met: boolean } | null {
+  // THE COURSE ANSWERS FIRST, because on a leg it is the thing that was asked
+  // for. `via.name` claims ONE road; leg 1 is carried by twenty-two, and the
+  // question "did you drive the line" cannot be put to any one of them. When a
+  // course is authored its checkpoints are the progress, and everything that
+  // reads this — the completion test, and the HUD's "at the station but
+  // short" — speaks about the line instead of about a street.
+  if (m.route && routeFor === m.id && routeCps.length) {
+    const need = Math.max(1, m.via?.atLeast ?? Math.ceil(routeCps.length * ROUTE_MAJORITY));
+    return { got: routeGot, need, met: routeGot >= Math.min(need, routeCps.length) };
+  }
   if (!m.via) return null;
   const r = survey.get(m.via.name);
   const n = r?.cps.length ?? 0;
@@ -25261,7 +25538,7 @@ interface Drive { name: string; sub: string; lat: number; lon: number; h: number
  * fails. Only a first-ever visit that also fails arrives with no drives, and
  * that still plays — spots, the chart and a random spawn are all local.
  */
-const CAMPAIGN_V = 5;
+const CAMPAIGN_V = 6;
 const CAMPAIGN_KEY = `drive.campaign.v${CAMPAIGN_V}`;
 let DRIVES: Drive[] = [];
 /** The Service's fixed points, from the campaign. In-game: just stations. */

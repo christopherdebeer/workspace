@@ -142,15 +142,25 @@ const OVERPASS_MIRRORS = [
 // Lambda is strictly worse than a 503 from a live one: no `retry-after`, no
 // `no-store`, and nothing in the logs saying which upstream failed.
 //
-// THE CEILING IS ~15.5s, NOT THE 30s THIS ONCE ASSUMED. Re-measured live on
-// 2026-08-15 while building the peak layer, by walking five tiles of rising
-// cost: one answered at 15.74s and every slower one came back 502 at
-// 15.5-16.3s, wherever its own budget sat. That is a hard kill, and it means
-// any budget above about twelve seconds buys nothing except the WORSE error —
-// the function dies before it can explain itself. It also retires a
-// long-standing mystery: the overview layer's "cold fill sometimes 503s" was
-// never mirror contention, it was OV_UPSTREAM_MS (24s) sitting above a
-// ceiling nobody had measured, so the dense tiles could only ever 502.
+// THE CEILING WAS ~15.5s, AND IT WAS OURS TO MOVE. Measured live on
+// 2026-08-15 by walking five tiles of rising cost: one answered at 15.74s and
+// every slower one came back 502 at 15.5-16.3s, wherever its own budget sat.
+// That retired a long-standing mystery — the overview layer's "cold fill
+// sometimes 503s" was never mirror contention, it was OV_UPSTREAM_MS sitting
+// above a ceiling nobody had measured — and then it was treated as a fact of
+// nature for a fortnight. It was not. It was this cell's own Lambda timeout,
+// and `cells.configureCell` takes 10-300 seconds.
+//
+// It is 50s now. The next ceiling up is CloudFront's 60s origin read, which
+// is NOT ours, so 50 leaves the margin on the right side of the line.
+//
+// What that buys is the tiles that could never answer at all. A dense z12 box
+// wants 11-18s of Overpass and had a 10s window; legs 2 to 5 of the line each
+// had between four and twenty tiles that were not unlucky but simply too big
+// for the budget, and three re-runs moved leg 5 from four cold tiles to four.
+// The alternative — asking for LESS on the retry, dropping tertiary and then
+// secondary — was drafted and thrown away: it degrades the tile everywhere to
+// work around a number we control.
 // …but SPEND LESS OF IT FAILING. Rotating mirrors made the failure path longer
 // (three attempts where there had been one), and a slow failure is worse than a
 // fast one: the client holds a fetch slot for the whole of it, and six held
@@ -407,33 +417,33 @@ const OV_RE = /^\/~\/osm\/ov1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // worst real tile should pass, and a truncated one must not.
 const OV_CAP: Record<number, number> = { 10: 3000, 11: 4500, 12: 6000, 13: 6000 };
 // These tiles are rare and cached forever, so they may spend upstream time a
-// fine tile cannot: the whole 30s Lambda still has to be outlived, but most
-// of it can go to honest attempts instead of three hurried ones. Measured: a
-// z10 coastal tile needs 11–18s of Overpass; the fine budget's 5s-per-mirror
-// would have refused every overview tile that matters. 15s per attempt, not
-// the whole budget in one: the commonest failure in the audit was the FIRST
-// mirror queueing the request behind its per-IP slot for the full window,
-// and a second mirror answering a query the first would have sat on.
-// Under the measured ~15.5s kill (see the note by UPSTREAM_MS), with room for
-// the trim, the gzip and the S3 write. A dense tile that cannot be got inside
-// this is better refused with a `retry-after` than killed mid-flight.
-const OV_UPSTREAM_MS = 11000;
-// A DEAD FIRST MIRROR EATS THIS WHOLE BUDGET, and that is the lesser evil.
-// At 10000 against an 11000 ceiling, askOverpass's `left < 1500` guard breaks
-// the loop after one attempt, so a tile whose rotation starts on a sick mirror
-// gets no second chance WITHIN the request. Halving it to 5000 to buy that
-// second chance was tried on 2026-08-25 and was strictly worse: a dense z12
-// tile near a metropolis needs 11-18s of Overpass, so every one of them began
-// failing with "operation was aborted" — including the Paris aperture's own
-// tile. The retry that matters is the NEXT REQUEST, which the clock in the
-// rotation below now sends to a different mirror. Measured across that fix:
-// the Paris-Etampes corridor went from 24 of 50 overview tiles to 46.
+// fine tile cannot. Measured: a z10 coastal tile needs 11-18s of Overpass, and
+// the densest z12 boxes on the line want more — the fine budget's 5s-per-mirror
+// would have refused every overview tile that matters.
 //
-// The tiles still refusing are refusing everywhere: too dense to answer inside
-// the ~15.5s Lambda ceiling at all. Fixing THOSE means asking for less (drop
-// tertiary, then secondary, on a retry and store the thinner tile) rather than
-// asking for longer — there is no longer available.
-const OV_ATTEMPT_MS = 10000;
+// Sized under the 50s Lambda (see the note by OVERPASS_MIRRORS), leaving six
+// seconds for the trim, the gzip and the S3 write. A tile that cannot be got
+// inside this is better refused with a `retry-after` than killed mid-flight.
+const OV_UPSTREAM_MS = 44000;
+// PATIENCE FOR THE SLOW CASE, MIRRORS FOR THE FAST ONE — which is what this
+// number has to buy at once, and why it is most of the budget rather than a
+// third of it.
+//
+// A dense z12 tile near a metropolis needs 11-18s of Overpass. Halving the
+// window to 5000 to guarantee three attempts was tried on 2026-08-25 and was
+// strictly worse: every one of those tiles began failing with "operation was
+// aborted", the Paris aperture's own included. The tiles worth the most are
+// exactly the ones a hurried window cannot get.
+//
+// Two full attempts do not fit in the upstream budget, and they do not need
+// to. The commonest failure — a 429, a mirror at its per-IP limit — returns
+// INSTANTLY, so a first mirror that is merely busy still leaves room for the
+// other two. What this window protects is the other case: a mirror that is
+// genuinely working on a big query, which used to be aborted at ten seconds
+// and is now allowed to finish. The Overpass-side `timeout:25` gives up just
+// before we do, so a box that is truly too big returns a clean error rather
+// than a blind abort.
+const OV_ATTEMPT_MS = 26000;
 function overviewQuery(z: number, x: number, y: number): string {
   const b = tileBounds(z, x, y);
   const bbox = `${b.latS},${b.lonW},${b.latN},${b.lonE}`;
@@ -447,7 +457,7 @@ function overviewQuery(z: number, x: number, y: number): string {
   const rail = z >= 11 ? `way["railway"="rail"](${bbox});` : '';
   const canal = z >= 11 ? '|canal' : '';
   const place = z <= 10 ? 'city|town' : z === 11 ? 'city|town|village' : 'city|town|village|hamlet';
-  return `[out:json][timeout:20];(
+  return `[out:json][timeout:25];(
       way["highway"~"^(${hw})$"](${bbox});
       ${rail}
       way["waterway"~"^(river${canal})$"](${bbox});
@@ -623,14 +633,18 @@ const PEAK_CAP = 120;             // per tile, tallest first
 // one, and it is exactly the mountainous ground this layer exists for.
 // z8 quarters the area: the same Alpine ground measures 7.6s and 1858
 // summits, which fits inside the budget with room to say why if it fails.
-// ONE HONEST ATTEMPT, not two half ones. The kill lands at ~15.5s and an
-// Alpine z8 tile needs ~7.6s of upstream, so a budget split into two 9s tries
-// spent the first on whichever mirror was unhealthy and died before the second
-// could finish. A single 10s window fits the work; a mirror that fails FAST
-// (a 429 returns instantly) still leaves room for the next one, which is
-// exactly the failure worth retrying inline.
-const PEAK_UPSTREAM_MS = 11000;
-const PEAK_ATTEMPT_MS = 10000;
+// ONE HONEST ATTEMPT, not two half ones — the same rule as the overview's,
+// for the same reason. An Alpine z8 tile needs ~7.6s of upstream and a budget
+// split into two short tries spent the first on whichever mirror was unhealthy
+// and died before the second could finish. A window wide enough for the work,
+// and a mirror that fails FAST (a 429 returns instantly) still leaves room for
+// the next one — which is exactly the failure worth retrying inline.
+//
+// Widened with the rest when the Lambda ceiling went to 50s: z8 tiles over
+// dense ranges are the ones this layer exists for, and they were the ones the
+// old window could not get.
+const PEAK_UPSTREAM_MS = 44000;
+const PEAK_ATTEMPT_MS = 26000;
 const PEAK_RE = /^\/~\/osm\/peak1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 /** OSM `ele` is free text: "1234", "1234.5", "1234 m", "4,808", and junk.
  *  Metres only — a value in feet is not marked as such often enough to guess,
@@ -661,7 +675,7 @@ async function servePeaks(path: string, m: RegExpMatchArray) {
   }
   const b = tileBounds(z, x, y);
   const bbox = `${b.latS},${b.lonW},${b.latN},${b.lonE}`;
-  const q = `[out:json][timeout:20];node["natural"="peak"]["name"]["ele"](${bbox});out body 20000;`;
+  const q = `[out:json][timeout:25];node["natural"="peak"]["name"]["ele"](${bbox});out body 20000;`;
   let elements: RawWay[];
   try {
     // The mirror rotates with the CLOCK as well as the tile: a tile whose

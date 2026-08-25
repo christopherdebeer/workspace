@@ -31,6 +31,15 @@ export interface CampaignMission {
   withinNote?: string;
   via?: { name: string; atLeast?: number };
   viaNote?: string;
+  /** THE COURSE — routed along real ways by devtools/line-legs.mjs, not drawn
+   *  by hand and not a chord. `pts` is [lat, lon] in order, simplified to 25m;
+   *  `vias` are the named roads that carry it, in order of share, which is
+   *  what a docket means by "via". Regenerate with:
+   *      node cells/drive/devtools/line-legs.mjs line-0N
+   *  A leg without one still plays — the co-driver falls back to the road
+   *  under the wheels and arriving is the whole test — it just is not a line. */
+  route?: { km: number; chordKm: number; pts: Array<[number, number]>;
+    vias: Array<{ name: string; km: number }>; note?: string };
 }
 /**
  * A STATION — the Service's fixed point on a line.
@@ -116,7 +125,7 @@ export interface Campaign {
 }
 
 export const CAMPAIGN: Campaign = {
-    v: 5,
+    v: 6,
     id: "dakar",
     title: "PARIS - DAKAR",
     start: {
@@ -364,6 +373,86 @@ export const CAMPAIGN: Campaign = {
         brief: "TRAVERSE TO PD-02. ACTIVATE THE STATION. DO NOT IMPROVE THE ROAD",
         dest: { name: "PD-02", lat: 48.4372, lon: 2.1725 },
         within: 260,
+        route: {
+          km: 46.5,
+          chordKm: 39.3,
+          note: "Routed over the cell's own overview tiles at z12, weighted to prefer the old road and price the autoroute out (a motorway edge costs 6x its length, primary 1.0). 46.5km against a 39.3km chord \u2014 18% longer, which is the point: the old N20 wanders, and the line follows the road, not the chord.",
+          vias: [
+            { name: "Route Nationale de Paris \u00e0 Toulouse", km: 17.3 },
+            { name: "Route Nationale 20", km: 3.1 },
+            { name: "Avenue de la Division Leclerc", km: 2.7 },
+            { name: "Route de Corbeil", km: 2.2 },
+            { name: "Avenue du Mar\u00e9chal Leclerc", km: 2.2 },
+            { name: "Avenue de Paris", km: 1.7 },
+            { name: "Route d'Orl\u00e9ans", km: 1.7 },
+            { name: "Avenue Robert Benoist", km: 1.4 },
+            { name: "Route de Longpont", km: 1.3 },
+            { name: "Route de Longjumeau", km: 1.3 },
+            { name: "Grande Rue", km: 1.2 },
+            { name: "Rue du Perray", km: 1.2 },
+            { name: "Avenue Aristide Briand", km: 1.1 },
+            { name: "Rue du Pr\u00e9sident Fran\u00e7ois Mitterrand", km: 1 },
+            { name: "Route de Chasse", km: 1 },
+            { name: "Rue de Corbeil", km: 0.8 },
+          ],
+          pts: [
+            [48.77855, 2.31341],
+            [48.77598, 2.31386],
+            [48.75203, 2.30461],
+            [48.73278, 2.30089],
+            [48.72628, 2.30036],
+            [48.71439, 2.29807],
+            [48.69977, 2.29619],
+            [48.69522, 2.29448],
+            [48.69352, 2.2932],
+            [48.69267, 2.29623],
+            [48.68259, 2.311],
+            [48.67275, 2.32807],
+            [48.67177, 2.33115],
+            [48.66985, 2.3328],
+            [48.66625, 2.33291],
+            [48.66597, 2.33112],
+            [48.66629, 2.32695],
+            [48.66709, 2.32559],
+            [48.66628, 2.3245],
+            [48.66625, 2.32278],
+            [48.66479, 2.32109],
+            [48.66099, 2.32071],
+            [48.65861, 2.31943],
+            [48.65687, 2.3179],
+            [48.6543, 2.31332],
+            [48.65975, 2.30623],
+            [48.66424, 2.29522],
+            [48.66435, 2.29405],
+            [48.66037, 2.29304],
+            [48.6576, 2.29139],
+            [48.6576, 2.289],
+            [48.65947, 2.28261],
+            [48.66042, 2.27614],
+            [48.63762, 2.26733],
+            [48.6302, 2.26334],
+            [48.62391, 2.2612],
+            [48.59572, 2.2436],
+            [48.59242, 2.24063],
+            [48.58868, 2.23572],
+            [48.58631, 2.23421],
+            [48.5843, 2.23395],
+            [48.57405, 2.23551],
+            [48.57141, 2.2345],
+            [48.53898, 2.20987],
+            [48.50513, 2.20042],
+            [48.49796, 2.20144],
+            [48.48317, 2.19318],
+            [48.47952, 2.19193],
+            [48.47452, 2.1887],
+            [48.46528, 2.18165],
+            [48.45305, 2.17417],
+            [48.45068, 2.17421],
+            [48.4451, 2.17597],
+            [48.44288, 2.17549],
+            [48.43841, 2.17195],
+          ],
+        },
         withinNote: "Generous on purpose: the station stands beside a dual carriageway, and arriving on either carriageway must count as arriving.",
       },
       {
