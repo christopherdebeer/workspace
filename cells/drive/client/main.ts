@@ -19331,6 +19331,36 @@ function heightsOf(): number[] {
 /** THE UNDO THE RING WAS ALWAYS HOLDING: how far back it reaches, where the
  *  handle is, and — for a test that must not fake a drag — the three steps of
  *  the gesture, so the scrub can be driven without a pointer. */
+/**
+ * IS RIBBON WINDING ACTUALLY MIXED?
+ *
+ * The road materials are all DoubleSide on the stated grounds that "ribbon
+ * winding and the rotate+mirror extrusion leave face orientation mixed" — and
+ * that claim is the only thing standing between here and backface culling,
+ * which is what would stop an underside being drawn at all. It has never been
+ * measured. This measures it: every ribbon batch's normals, counted by which
+ * way they point.
+ *
+ * A road lies flat, so a consistently-wound ribbon gives normals at +Y and a
+ * mixed one gives a real share at -Y. `down` is the answer.
+ */
+(window as unknown as { __ribbonwind?: object }).__ribbonwind = (): object => {
+  let up = 0, down = 0, side = 0, meshes = 0;
+  worldGroup.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh || !m.userData.ribbon) return;
+    const n = m.geometry.getAttribute('normal') as THREE.BufferAttribute | undefined;
+    if (!n) return;
+    meshes++;
+    for (let i = 0; i < n.count; i += 3) {
+      const y = n.getY(i);
+      if (y > 0.35) up++; else if (y < -0.35) down++; else side++;
+    }
+  });
+  const tot = up + down + side;
+  return { meshes, up, down, side, total: tot,
+    downPct: tot ? +((down / tot) * 100).toFixed(2) : 0 };
+};
 (window as unknown as { __rewind?: object }).__rewind = (
   cmd?: 'begin' | 'show' | 'commit' | 'cancel', back = 0,
 ): object => {
@@ -22154,6 +22184,11 @@ function projectRoadLine(): void {
 // that bends, so from any given spot most of them are behind you or round the
 // next headland. A beam stands 26m tall and reads from well over a kilometre.
 const CP_SIGHT = 1400;     // how far a marker carries
+/** …and how far a JOB's marker carries, which is further because it is
+ *  navigation rather than decoration — but not unbounded. Four kilometres is
+ *  past the horizon haze at this scene scale, so the ones beyond it were
+ *  costing a terrain sample each to draw a pixel nobody could see. */
+const CP_JOB_SIGHT = 4000;
 const CP_BEAM_H = 26;      // metres of light column in BEAM mode
 const cpCull = { vis: 0, total: 0, taken: 0, far: 0, behind: 0, offscreen: 0, drawn: 0 };
 function updateCps(): void {
@@ -22178,6 +22213,23 @@ function updateCps(): void {
     // still dims them (the banding in the draw pass floors, not zeroes), it
     // just no longer erases them.
     if (!job && camMode !== 'top' && d > CP_SIGHT) { cpCull.far++; return; }
+    // …AND A JOB'S OWN CEILING, because a COURSE is not a via road.
+    //
+    // This exemption was written when a job's markers came from `via.name` —
+    // one road, a handful of them, and showing the far end was the point. A
+    // course is 52 checkpoints over 46.5km, and every one of them was reaching
+    // groundAt() and two projections EVERY FRAME, forty kilometres away, with
+    // no cull in front of it. That is the FPS the seat noticed the moment legs
+    // started carrying routes: before this, no leg set `via`, so routeCps was
+    // always empty and this loop never ran at all.
+    //
+    // The chart still shows the whole line — that is what a chart is for. In
+    // POV a beam forty kilometres out is not a thing you can see, and the draw
+    // pass already floors distant ones to nearly nothing.
+    if (job && camMode !== 'top' && d > CP_JOB_SIGHT) { cpCull.far++; return; }
+    // ORDER MATTERS HERE. groundAt is a terrain sample and the projections are
+    // matrix work; both sit BEHIND the distance tests on purpose, so a culled
+    // marker costs a hypot and nothing else.
     const g = groundAt(c.x, c.z);
     poiVec.set(c.x, g + 1.2, c.z);
     if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) { cpCull.behind++; return; }
@@ -26474,6 +26526,18 @@ function coverFx(mat: THREE.MeshLambertMaterial): void {
         '}',
       ].join('\n'));
   };
+  // THREE CACHES PROGRAMS BY MATERIAL PARAMETERS, NOT BY THIS HOOK.
+  //
+  // Without a cache key of its own, a material whose only difference from
+  // another is an onBeforeCompile gets handed that other material's compiled
+  // program — and the injection silently does nothing. Both covers are plain
+  // flat-shaded Lamberts, which this scene is full of, so that is exactly what
+  // happened: the panels, the weathering and the rim sheen were written,
+  // compiled against nothing, and the shell stayed two flat colours.
+  //
+  // Reported from the seat as "I didn't see any impact". This file already
+  // knew the rule — farClip, the grain and the vehicle copies all set one.
+  mat.customProgramCacheKey = () => 'cover-shell';
   mat.needsUpdate = true;
 }
 coverFx(coverMat);
