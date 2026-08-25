@@ -153,6 +153,75 @@ character asking questions everyone in the world should already know.
 That is enough. The player already knows something is wrong, but not yet what
 kind of wrong.
 
+## 6b. What the ranger is
+
+Owner-decided 2026-08-25, and the point of it is that **it is never
+established**. The game has consistently framed the player as ranger, operator,
+surveyor — a role, a function, a set of permissions — and has never once said
+what is performing that role.
+
+Nothing on screen resolves whether the player is:
+
+- a person in the cab;
+- a machine intelligence driving itself;
+- either of those operated remotely from inside a Cover, with the rig as the
+  only thing actually out here;
+- or one iteration among an unknown number, in a process nobody in the fiction
+  calls a simulation.
+
+**This is not a twist and must never be revealed.** It is a vacancy, and the
+value is that everything already built reads correctly under every reading. The
+Service's register never addresses a person — work orders, station labels and
+countersigns address a ROLE, which is exactly how institutions write to
+machines and to people alike. "The journey itself is the cargo" is a sentence
+about a courier or about a payload. An attestation is signed by an authority,
+not by a self. The rig's own instruments report on the rig, never on a driver;
+there is no body in the cab to render and there never was.
+
+It also gives the orphaned Compact (§4) a second floor to fall through. If
+nobody knows whether the offworld signatories are alive, and nobody establishes
+what the ranger is, then the question "does this agreement still bind anyone?"
+loses its last stable term: *anyone*.
+
+Rules that keep the vacancy honest:
+
+- **No hint counts as evidence.** No glimpsed reflection, no heartbeat, no
+  latency artefact offered as a clue. A clue implies an answer.
+- **Both readings must survive every line of copy.** If a station terminal
+  would say something to a person that it would not say to a process, it is the
+  wrong line.
+- **The player is never asked.** No dialogue option, no character creation, no
+  name entry.
+
+### The ghost runs
+
+The one mechanic this vacancy earns is already three-quarters built. A banked
+tape carries inputs plus state at 2Hz and the dials it was cut under (R59); the
+open note has said for some time that ghost rigs need "a second body to drive
+and NO format change".
+
+Under §6b a ghost stops being a leaderboard feature and becomes the fiction's
+only visible symptom. A translucent rig running the road ahead of you, on a
+line you have not driven yet, is — and the game must never say which —
+
+- an echo of a previous instance, leaking where it should not;
+- a concurrent run happening now, elsewhere, in something that is not quite
+  elsewhere;
+- or a branch: the same route taken differently, by the same thing.
+
+What makes it work rather than decorate: the tapes are **real recordings of
+real drives**, the player's own or another ranger's, replayed under the
+recorded conditions. The uncanny part is not authored. It is simply true that
+someone drove this before, and the record survived, and nothing in the Service's
+vocabulary distinguishes "someone else" from "you, earlier".
+
+Build order, when it is taken up: a ghost is a second rig body driven by
+`tapeRead()` — no format change, no server change. What needs deciding is
+**scarcity** (a ghost every few legs, not every drive), **provenance** (the
+docket may say a tape was banked; it must never say by what), and whether a
+ghost can be *met* — a run that stops where you stop is a much louder statement
+than one that passes.
+
 ## 7. Lexicon and register
 
 The words the game uses, consistently, without ever defining them on screen:
@@ -225,6 +294,11 @@ true in code:
    genuinely new system the narrative demands. Leg 1 does not need it; the
    campaign's turn does.
 
+6. **Ghost runs** (§6b). Last, and deliberately: a ghost is a second rig body
+   driven by `tapeRead()` — no format change and no server change — but it only
+   *means* anything once the docket surface exists to be quiet about where the
+   tape came from. Scarcity is the design problem, not the rendering.
+
 ## 10. What it retires and rules out
 
 Retired:
@@ -245,6 +319,9 @@ sharpening them:
   must, eventually, and quietly.
 - **No fictional places.** The line is real, the stations sit at real
   coordinates, the clearing at kilometre fifty-three is a real clearing.
+- **No resolution of what the ranger is** (§6b). Not as a reveal, not as a
+  hint, not as an easter egg. Every line of copy must read correctly whether a
+  person or a process is reading it.
 - **No lying instruments — but institutionally wrong ones, yes.** The terminal
   saying CLEARING: NATURAL about pruned trees is not the renderer lying; it is
   the *category* failing. The screen stays honest about what it shows and
