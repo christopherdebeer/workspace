@@ -59,7 +59,6 @@
    ============================================================ */
 
 const canvas = document.getElementById('sky');
-const g2 = canvas.getContext('2d', { alpha: false });
 const hintEl = document.getElementById('hint');
 
 const TAU = Math.PI * 2;
@@ -234,416 +233,283 @@ function tryStart() {
 setTimeout(() => { tryStart(); }, 300);
 if (!matchMedia('(pointer: coarse)').matches) hintEl.textContent = 'click once for sound';
 
-/* ---------------- noise ----------------
-   Sines gave straight, evenly spaced, parallel filaments — the tell of a
-   procedural sky. Atmospheric structure is fractal, so this is value noise
-   in three dimensions, and every field that must loop is sampled along a
-   circle through the third and fourth arguments: travelling a closed path
-   through the noise returns exactly where it began. */
+/* ---------------- the sky, on the GPU ----------------
+   A CPU canvas compositing columns will always carry a vector edge
+   somewhere. This is one fragment shader over a fullscreen triangle:
+   the sky is computed per pixel from domain-warped fractal noise, lit
+   in floating point, filmically tonemapped, bloomed and grained. Every
+   time-dependence enters as a point on a circle of radius one, so the
+   forty-eight second loop is exact by construction. */
 
-function hash3(i, j, k) {
-  let h = Math.imul(i, 374761393) ^ Math.imul(j, 668265263) ^ Math.imul(k, 2147483647);
-  h = Math.imul(h ^ (h >>> 13), 1274126177);
-  return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
-}
-function vnoise(x, y, z) {
-  const xi = Math.floor(x), yi = Math.floor(y), zi = Math.floor(z);
-  let fx = x - xi, fy = y - yi, fz = z - zi;
-  fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy); fz = fz * fz * (3 - 2 * fz);
-  const c000 = hash3(xi, yi, zi), c100 = hash3(xi + 1, yi, zi);
-  const c010 = hash3(xi, yi + 1, zi), c110 = hash3(xi + 1, yi + 1, zi);
-  const c001 = hash3(xi, yi, zi + 1), c101 = hash3(xi + 1, yi, zi + 1);
-  const c011 = hash3(xi, yi + 1, zi + 1), c111 = hash3(xi + 1, yi + 1, zi + 1);
-  const x00 = c000 + (c100 - c000) * fx, x10 = c010 + (c110 - c010) * fx;
-  const x01 = c001 + (c101 - c001) * fx, x11 = c011 + (c111 - c011) * fx;
-  const y0 = x00 + (x10 - x00) * fy, y1 = x01 + (x11 - x01) * fy;
-  return y0 + (y1 - y0) * fz;
-}
+let gl = null, prog = null, uni = {}, quality = 1;
 
-/* a field over one spatial axis that closes exactly over the loop: the two
-   circular coordinates carry the phase, the third carries position */
-function loopFbm(u, phase, seed, oct, gain) {
-  const a = Math.cos(TAU * phase), b = Math.sin(TAU * phase);
-  let sum = 0, amp = 1, norm = 0, f = 1;
-  for (let o = 0; o < oct; o++) {
-    sum += amp * vnoise(a * 1.7 * f + seed * 13.7, b * 1.7 * f + seed * 7.3, u * f);
-    norm += amp; amp *= gain; f *= 2.03;
+const VERT = `#version 300 es
+void main() {
+  vec2 p = vec2((gl_VertexID << 1) & 2, gl_VertexID & 2);
+  gl_Position = vec4(p * 2.0 - 1.0, 0.0, 1.0);
+}`;
+
+const FRAG = `#version 300 es
+precision highp float;
+uniform vec2 uRes;
+uniform vec2 uT;          // cos/sin of the loop phase: time as a circle
+uniform float uPhase;
+uniform float uAmps[16];
+out vec4 frag;
+
+#define TAU 6.28318530718
+
+float hash13(vec3 p) {
+  p = fract(p * 0.1031);
+  p += dot(p, p.zyx + 31.32);
+  return fract((p.x + p.y) * p.z);
+}
+float hash12(vec2 p) {
+  vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+  p3 += dot(p3, p3.yzx + 33.33);
+  return fract((p3.x + p3.y) * p3.z);
+}
+float n3(vec3 p) {
+  vec3 i = floor(p), f = fract(p);
+  f = f * f * (3.0 - 2.0 * f);
+  float a = mix(mix(hash13(i), hash13(i + vec3(1, 0, 0)), f.x),
+                mix(hash13(i + vec3(0, 1, 0)), hash13(i + vec3(1, 1, 0)), f.x), f.y);
+  float b = mix(mix(hash13(i + vec3(0, 0, 1)), hash13(i + vec3(1, 0, 1)), f.x),
+                mix(hash13(i + vec3(0, 1, 1)), hash13(i + vec3(1, 1, 1)), f.x), f.y);
+  return mix(a, b, f.z);
+}
+float fbm(vec3 p) {
+  float s = 0.0, a = 0.5, n = 0.0;
+  for (int i = 0; i < 4; i++) {
+    s += a * n3(p); n += a; a *= 0.55;
+    p = p * 2.13 + vec3(17.3, 9.1, 3.7);
   }
-  return sum / norm;
+  return s / n;
 }
-
-/* ridged noise is what makes filaments: the folded absolute value leaves
-   thin bright creases where plain noise leaves soft blobs */
-function loopRidge(u, phase, seed, oct) {
-  const a = Math.cos(TAU * phase), b = Math.sin(TAU * phase);
-  let sum = 0, amp = 1, norm = 0, f = 1;
-  for (let o = 0; o < oct; o++) {
-    const n = vnoise(a * 1.3 * f + seed * 21.1, b * 1.3 * f + seed * 5.9, u * f);
-    const r = 1 - Math.abs(n * 2 - 1);
-    sum += amp * r * r; norm += amp; amp *= 0.55; f *= 2.11;
+float ridge(vec3 p) {
+  float s = 0.0, a = 0.5, n = 0.0;
+  for (int i = 0; i < 3; i++) {
+    float v = 1.0 - abs(n3(p) * 2.0 - 1.0);
+    s += a * v * v; n += a; a *= 0.52;
+    p = p * 2.19 + vec3(7.7, 3.3, 11.1);
   }
-  return sum / norm;
+  return s / n;
 }
 
-/* ---------------- canvas ---------------- */
+/* four palettes the sky has actually worn; m picks along them */
+vec3 palette(float m, float rimT, float topT) {
+  vec3 rim, core, top;
+  if (m < 0.3333) {
+    float t = m / 0.3333;
+    rim  = mix(vec3(0.66, 0.91, 1.00), vec3(0.84, 0.73, 1.00), t);
+    core = mix(vec3(0.30, 0.98, 0.55), vec3(0.44, 0.97, 0.60), t);
+    top  = mix(vec3(0.81, 0.26, 0.41), vec3(0.94, 0.42, 0.24), t);
+  } else if (m < 0.6666) {
+    float t = (m - 0.3333) / 0.3333;
+    rim  = mix(vec3(0.84, 0.73, 1.00), vec3(1.00, 0.57, 0.73), t);
+    core = mix(vec3(0.52, 0.93, 0.66), vec3(0.41, 0.89, 0.54), t);
+    top  = mix(vec3(0.94, 0.42, 0.24), vec3(0.70, 0.36, 0.88), t);
+  } else {
+    float t = (m - 0.6666) / 0.3334;
+    rim  = mix(vec3(1.00, 0.57, 0.73), vec3(0.57, 0.81, 1.00), t);
+    core = mix(vec3(0.41, 0.89, 0.54), vec3(0.28, 0.85, 0.75), t);
+    top  = mix(vec3(0.70, 0.36, 0.88), vec3(0.45, 0.48, 1.00), t);
+  }
+  vec3 c = core;
+  c = mix(c, rim, rimT);
+  c = mix(c, top, topT);
+  return c;
+}
+
+float harmonicAt(float hf) {
+  float hc = clamp(hf, 0.0, 15.0);
+  int i0 = int(hc);
+  int i1 = min(15, i0 + 1);
+  return mix(uAmps[i0], uAmps[i1], fract(hc));
+}
+
+/* one curtain: a sheet of emission with a warped border, sheared rays,
+   and its stretch of the harmonic spectrum */
+vec3 curtain(vec2 uv, float seed, float hBase, float span, float gain,
+             float shear, float tilt, float rayF, float b0, float bN,
+             float flip, float cx, float cw) {
+  // the whole sheet drifts through the noise on a circle: exact loop
+  vec3 tc = vec3(uT * (0.6 + seed * 0.13), seed * 19.7);
+
+  // domain warp first: nothing downstream may see a straight coordinate
+  float wx = fbm(vec3(uv * 1.5, seed * 7.1) + tc) - 0.5;
+  float wy = fbm(vec3(uv * 1.5 + 4.7, seed * 3.3) + tc) - 0.5;
+  vec2 p = uv + vec2(wx, wy) * 0.22;
+
+  float border = hBase + tilt * (p.x - 0.5)
+    + (fbm(vec3(p.x * 1.9, seed * 13.0, 2.0) + tc * 1.2) - 0.5) * 0.24
+    + (fbm(vec3(p.x * 6.5, seed * 29.0, 5.0) + tc * 1.6) - 0.5) * 0.05;
+
+  float q = (uv.y - border) / span;
+  if (q < -0.18 || q > 2.2) return vec3(0.0);
+
+  // emission profile: knife under the border, long decay above
+  float e = q < 0.0
+    ? exp(q * 10.0)
+    : exp(-q * 1.2) * (0.32 + 0.68 * smoothstep(0.0, 0.05, q));
+
+  // rays, read from a sheared and warped column
+  float lean = shear * pow(clamp(q, 0.0, 1.4), 1.45)
+             * (0.7 + 0.6 * fbm(vec3(q * 2.0, seed * 5.0, 8.0) + tc));
+  float xs = p.x - lean;
+  float rays = pow(ridge(vec3(xs * rayF, uv.y * rayF * 0.12 + seed * 3.0, 12.0) + tc * 1.4), 2.0) * 1.25;
+  float fine = 0.6 + 0.4 * ridge(vec3(xs * rayF * 2.7, seed * 11.0, 15.0) + tc * 1.8);
+
+  // density: streamers with ends, inside this curtain's stretch of sky
+  float dn = fbm(vec3(p.x * 2.3, seed * 17.0, 21.0) + tc * 0.8);
+  float dens = smoothstep(0.34, 0.62, dn);
+  float env = clamp(1.0 - abs(uv.x - (cx + uT.y * 0.04)) / (cw * 0.5), 0.0, 1.0);
+  dens *= sqrt(env * env * (3.0 - 2.0 * env));
+  if (dens < 0.003) return vec3(0.0);
+
+  // the spectrum, hung across this band of sky
+  float u2 = mix(uv.x, 1.0 - uv.x, flip);
+  float harm = harmonicAt(b0 + u2 * bN);
+
+  // colour: height mixes rim/core/top; a slow field walks the palettes
+  float m = fbm(vec3(p.x * 1.05, seed * 23.0, 27.0) + tc * 0.5);
+  float rimT = smoothstep(0.14, 0.02, q) * 0.5;
+  float topT = smoothstep(0.28, 1.05, q);
+  vec3 col = palette(clamp(m * 1.5 - 0.22, 0.0, 1.0), rimT, topT);
+
+  float I = e * (0.20 + rays * 1.10) * fine * dens * (0.10 + harm * 1.35) * gain;
+  // a soft halo of the same sheet, no rays: the glow a camera lens adds
+  float halo = exp(-abs(q - 0.18) * 2.2) * smoothstep(2.2, 1.2, q)
+             * dens * (0.05 + harm * 0.35) * gain * 0.16;
+  return col * I + col * halo;
+}
+
+vec3 aces(vec3 x) {
+  return clamp((x * (2.51 * x + 0.03)) / (x * (2.43 * x + 0.59) + 0.14), 0.0, 1.0);
+}
+
+void main() {
+  vec2 uv = gl_FragCoord.xy / uRes;
+  float aspect = uRes.x / uRes.y;
+  vec2 sp = vec2(uv.x * aspect, uv.y);   // square space for the noise
+
+  // ------- the night behind everything
+  float up = uv.y;
+  vec3 sky = mix(vec3(0.028, 0.040, 0.078), vec3(0.010, 0.013, 0.030), smoothstep(0.0, 0.8, up));
+  sky += vec3(0.012, 0.030, 0.024) * exp(-pow((up - 0.10) / 0.22, 2.0));   // airglow at the horizon
+
+  // ------- stars: a hashed grid, twinkling in whole cycles per loop
+  vec2 sg = gl_FragCoord.xy / (uRes.y * 0.02);
+  vec2 cell = floor(sg);
+  float sh = hash12(cell);
+  if (sh > 0.912) {
+    vec2 sc = vec2(hash12(cell + 7.0), hash12(cell + 13.0));
+    float d = length(fract(sg) - sc);
+    float mag = pow(hash12(cell + 29.0), 2.2);
+    float cyc = floor(hash12(cell + 41.0) * 5.0) + 1.0;
+    float tw = 0.75 + 0.25 * sin(TAU * (cyc * uPhase + hash12(cell + 53.0)));
+    float ext = 0.25 + 0.75 * pow(up, 0.5);
+    float s = exp(-d * d * (900.0 - mag * 620.0)) * (0.25 + mag) * tw * ext;
+    sky += vec3(0.9, 0.95, 1.0) * s * 0.8;
+  }
+
+  // ------- the aurora
+  vec2 auv = vec2(sp.x / aspect, uv.y);
+  vec3 A = vec3(0.0);
+  A += curtain(auv, 1.0, 0.34, 0.42, 1.30, 0.30, 0.13, 26.0, 0.0, 6.0, 0.0, 0.17, 0.62);
+  A += curtain(auv, 2.0, 0.46, 0.36, 1.05, -0.42, -0.17, 38.0, 3.0, 7.0, 1.0, 0.55, 0.52);
+  A += curtain(auv, 3.0, 0.36, 0.40, 0.92, 0.52, 0.07, 52.0, 6.0, 7.0, 0.0, 0.83, 0.60);
+  A += curtain(auv, 4.0, 0.52, 0.32, 0.72, -0.22, -0.05, 70.0, 9.0, 6.0, 1.0, 0.36, 0.70);
+
+  // the aurora also lights the air beneath it, faintly
+  sky += A * 0.9;
+  sky += vec3(A.g * 0.5 + A.r * 0.3) * vec3(0.10, 0.16, 0.15) * 0.35;
+
+  // ------- the ground: a ridgeline in silhouette, nearly black
+  float ridgeY = 0.085 + 0.05 * fbm(vec3(sp.x * 2.2, 3.0, 40.0))
+               + 0.02 * fbm(vec3(sp.x * 8.0, 5.0, 44.0));
+  float land = smoothstep(ridgeY + 0.004, ridgeY - 0.004, uv.y);
+  vec3 ground = vec3(0.010, 0.013, 0.020) + A * 0.05;   // snow remembers a little of the light
+  sky = mix(sky, ground, land);
+  // and a breath of haze where sky meets land
+  sky += vec3(0.02, 0.03, 0.04) * exp(-abs(uv.y - ridgeY) * 30.0) * (1.0 - land) * 0.5;
+
+  // ------- the camera: filmic curve, vignette, grain
+  sky *= 1.0 - 0.32 * pow(length(uv - vec2(0.5, 0.45)), 2.2);
+  vec3 col = aces(sky * 1.35);
+  col = pow(col, vec3(1.0 / 1.12));
+  float grain = (hash12(gl_FragCoord.xy + uT * 173.0) - 0.5) * 0.028;
+  col += grain * (0.35 + 0.65 * col.g);
+
+  frag = vec4(col, 1.0);
+}`;
 
 let W = 0, H = 0, DPR = 1;
-let AW = 0, AH = 0, aur = null, aurCtx = null, aurImg = null, aurData = null, acc = null;
-let bgCanvas = null, stars = [];
-let cloudCanvas = null, cloudW = 0, cloudH = 0;
-let horizonY = 0;
+
+function compile(type, src) {
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if (!gl.getShaderParameter(s, gl.COMPILE_STATUS)) {
+    throw new Error(gl.getShaderInfoLog(s));
+  }
+  return s;
+}
+
+function initGL() {
+  gl = canvas.getContext('webgl2', { antialias: false, alpha: false,
+    powerPreference: 'low-power', preserveDrawingBuffer: true });
+  if (!gl) return false;
+  prog = gl.createProgram();
+  gl.attachShader(prog, compile(gl.VERTEX_SHADER, VERT));
+  gl.attachShader(prog, compile(gl.FRAGMENT_SHADER, FRAG));
+  gl.linkProgram(prog);
+  if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) {
+    throw new Error(gl.getProgramInfoLog(prog));
+  }
+  gl.useProgram(prog);
+  for (const name of ['uRes', 'uT', 'uPhase', 'uAmps']) {
+    uni[name] = gl.getUniformLocation(prog, name);
+  }
+  return true;
+}
 
 function resize() {
   W = window.innerWidth; H = window.innerHeight;
-  DPR = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(2400000 / Math.max(1, W * H)));
-  DPR = Math.max(1, DPR);
+  DPR = Math.min(window.devicePixelRatio || 1, 2, Math.sqrt(2600000 / Math.max(1, W * H)));
+  DPR = Math.max(1, DPR) * quality;
   canvas.width = Math.round(W * DPR);
   canvas.height = Math.round(H * DPR);
-  g2.setTransform(DPR, 0, 0, DPR, 0, 0);
-
-  const VSQUASH = 0.62;
-  const BUDGET = 150000;
-  const byBudget = Math.sqrt(BUDGET / (VSQUASH * H / W));
-  AW = clamp(Math.round(Math.min(W * 0.54, byBudget)), 260, 660);
-  AH = Math.max(110, Math.round(AW * H / W * VSQUASH));
-  aur = document.createElement('canvas');
-  aur.width = AW; aur.height = AH;
-  aurCtx = aur.getContext('2d');
-  aurImg = aurCtx.createImageData(AW, AH);
-  aurData = aurImg.data;
-  acc = new Float32Array(AW * AH * 3);
-  allocColumns();
-
-  horizonY = AH * 0.86;
-  buildBackground();
-  buildStars();
-  buildClouds();
+  if (gl) gl.viewport(0, 0, canvas.width, canvas.height);
 }
 
-const BAYER = [
-  0, 32, 8, 40, 2, 34, 10, 42, 48, 16, 56, 24, 50, 18, 58, 26,
-  12, 44, 4, 36, 14, 46, 6, 38, 60, 28, 52, 20, 62, 30, 54, 22,
-  3, 35, 11, 43, 1, 33, 9, 41, 51, 19, 59, 27, 49, 17, 57, 25,
-  15, 47, 7, 39, 13, 45, 5, 37, 63, 31, 55, 23, 61, 29, 53, 21,
-];
-
-function buildBackground() {
-  bgCanvas = document.createElement('canvas');
-  bgCanvas.width = Math.round(W * DPR);
-  bgCanvas.height = Math.round(H * DPR);
-  const b = bgCanvas.getContext('2d');
-  const bw = bgCanvas.width, bh = bgCanvas.height;
-  const img = b.createImageData(bw, bh);
-  const d = img.data;
-  for (let y = 0; y < bh; y++) {
-    const v = y / bh;
-    const glow = Math.exp(-Math.pow((v - 0.93) / 0.19, 2));
-    const hazeR = 4 + v * 6 + glow * 7;
-    const hazeG = 6 + v * 9 + glow * 14;
-    const hazeB = 13 + v * 11 + glow * 13;
-    for (let x = 0; x < bw; x++) {
-      const dth = (BAYER[(y & 7) * 8 + (x & 7)] / 64 - 0.5) * 1.6;
-      const o = (y * bw + x) << 2;
-      d[o] = hazeR + dth; d[o + 1] = hazeG + dth; d[o + 2] = hazeB + dth; d[o + 3] = 255;
-    }
-  }
-  b.putImageData(img, 0, 0);
-}
-
-function buildStars() {
-  stars = [];
-  const n = clamp(Math.round((W * H) / 3000), 90, 460);
-  const sr = mulberry32(0xA17C0);
-  for (let i = 0; i < n; i++) {
-    const x = sr() * W;
-    const y = Math.pow(sr(), 0.75) * H * 0.9;
-    const mag = Math.pow(sr(), 2.6);
-    stars.push({ x, y, r: 0.4 + mag * 1.25, b: 0.16 + mag * 0.82,
-                 warm: sr(), cyc: 1 + ((sr() * 5) | 0), ph: sr() });
-  }
-}
-
-/* ---------------- the cloud bank ----------------
-   Drawn once into a strip that tiles horizontally, then scrolled by exactly
-   one strip width over the loop: depth and a horizon for nothing per frame. */
-
-function buildClouds() {
-  cloudW = AW * 2;
-  cloudH = Math.max(34, Math.round(AH * 0.24));
-  cloudCanvas = document.createElement('canvas');
-  cloudCanvas.width = cloudW; cloudCanvas.height = cloudH;
-  const c = cloudCanvas.getContext('2d');
-  const img = c.createImageData(cloudW, cloudH);
-  const d = img.data;
-  const P = 16;                                  // lattice period: the strip tiles
-  const tile = (x, y, f) => {
-    const xf = x * f, yf = y * f;
-    const xi = Math.floor(xf), yi = Math.floor(yf);
-    let fx = xf - xi, fy = yf - yi;
-    fx = fx * fx * (3 - 2 * fx); fy = fy * fy * (3 - 2 * fy);
-    const per = Math.max(1, Math.round(P * f));
-    const wrap = (v) => ((v % per) + per) % per;
-    const c00 = hash3(wrap(xi), yi, 7), c10 = hash3(wrap(xi + 1), yi, 7);
-    const c01 = hash3(wrap(xi), yi + 1, 7), c11 = hash3(wrap(xi + 1), yi + 1, 7);
-    const a = c00 + (c10 - c00) * fx, b = c01 + (c11 - c01) * fx;
-    return a + (b - a) * fy;
-  };
-  for (let y = 0; y < cloudH; y++) {
-    const v = y / cloudH;
-    for (let x = 0; x < cloudW; x++) {
-      const u = x / cloudW * P;
-      let n = 0, amp = 1, norm = 0, f = 1;
-      for (let o = 0; o < 5; o++) {
-        n += amp * tile(u, v * 3.4, f); norm += amp; amp *= 0.52; f *= 2;
-      }
-      n /= norm;
-      // the bank thins upward into ragged tops and closes solid at the base
-      const cover = clamp((n - (0.52 - v * 0.72)) * (3.4 + v * 4), 0, 1);
-      const sc = cover * cover * (3 - 2 * cover);
-      const floor = clamp((v - 0.42) / 0.30, 0, 1);
-      const a = Math.max(sc, floor * floor * (3 - 2 * floor));
-      const o = (y * cloudW + x) << 2;
-      if (a < 0.004) { d[o + 3] = 0; continue; }
-      // barely lit: the mass is there to give the eye a floor, not to be weather
-      const lift = (1 - v) * (1 - v) * 9 * sc;
-      d[o] = 3 + lift * 0.5;
-      d[o + 1] = 5 + lift * 0.7;
-      d[o + 2] = 9 + lift;
-      d[o + 3] = a * 255;
-    }
-  }
-  c.putImageData(img, 0, 0);
-}
-
-/* ---------------- the curtains ---------------- */
-
-const CURTAINS = [
-  // Separated horizontally as well as by altitude: four curtains that each
-  // span the whole frame at four heights stack into neat bright and dark
-  // bands, which is the one thing a real sky never does.
-  { gain: 1.30, h: 0.27, span: 0.62, band: [0, 6],  flip: 0, seed: 1, shear: 0.30, rayF: 34,
-    cx: 0.17, cw: 0.62, tilt: 0.13 },
-  { gain: 1.05, h: 0.41, span: 0.52, band: [3, 10], flip: 1, seed: 2, shear: -0.42, rayF: 50,
-    cx: 0.55, cw: 0.52, tilt: -0.17 },
-  { gain: 0.92, h: 0.30, span: 0.58, band: [6, 13], flip: 0, seed: 3, shear: 0.52, rayF: 72,
-    cx: 0.83, cw: 0.60, tilt: 0.07 },
-  { gain: 0.70, h: 0.53, span: 0.44, band: [9, 15], flip: 1, seed: 4, shear: -0.22, rayF: 96,
-    cx: 0.36, cw: 0.70, tilt: -0.05 },
-];
-
-/* Colour is two-dimensional now: height above the border, and which real
-   auroral palette this stretch of sky is showing. The mix is not decoration
-   — the ratio of the red line to the green depends on how energetic the
-   particles are, and it genuinely varies along a curtain. */
-const LUTQ = 512, MIXN = 8;
-const QMIN = -0.16, QMAX = 1.35;
-const QSCALE = LUTQ / (QMAX - QMIN);
-const lut = new Float32Array(MIXN * (LUTQ + 1) * 3);
-(function buildLut() {
-  const smooth = (e0, e1, x) => { const t = clamp((x - e0) / (e1 - e0), 0, 1); return t * t * (3 - 2 * t); };
-  // four palettes, every one of them a sky that has actually been photographed
-  const P = [
-    { rim: [168, 232, 255], core: [86, 236, 150], top: [206, 66, 104] },   // classic green, crimson crown
-    { rim: [214, 186, 255], core: [132, 238, 168], top: [240, 108, 62] },  // deep red aurora, warmed by the air it is seen through
-    { rim: [255, 146, 186], core: [104, 228, 138], top: [178, 92, 224] },  // pink lower border
-    { rim: [146, 206, 255], core: [72, 218, 192], top: [116, 122, 255] },  // blue-violet nitrogen
-  ];
-  const mixCol = (t) => {
-    const s = t * (P.length - 1);
-    const i = Math.min(P.length - 2, s | 0), f = s - i;
-    const A = P[i], B = P[i + 1];
-    const l = (a, b) => [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f, a[2] + (b[2] - a[2]) * f];
-    return { rim: l(A.rim, B.rim), core: l(A.core, B.core), top: l(A.top, B.top) };
-  };
-  for (let m = 0; m < MIXN; m++) {
-    const pal = mixCol(m / (MIXN - 1));
-    const base = m * (LUTQ + 1) * 3;
-    for (let i = 0; i <= LUTQ; i++) {
-      const q = QMIN + i / QSCALE;
-      let I;
-      if (q < 0) I = Math.exp(q * 9);
-      else I = Math.exp(-q * 1.15) * (0.32 + 0.68 * smooth(0, 0.05, q))
-             * (1 + 0.14 * Math.exp(-Math.pow((q - 0.04) / 0.07, 2)));
-      const rimT = smooth(0.14, 0.02, q) * 0.62;
-      const topT = smooth(0.30, 1.05, q);
-      let r = pal.core[0], g = pal.core[1], b = pal.core[2];
-      r += (pal.rim[0] - r) * rimT; g += (pal.rim[1] - g) * rimT; b += (pal.rim[2] - b) * rimT;
-      r += (pal.top[0] - r) * topT; g += (pal.top[1] - g) * topT; b += (pal.top[2] - b) * topT;
-      const K = 1.55;
-      const o = base + i * 3;
-      lut[o] = r * I * K; lut[o + 1] = g * I * K; lut[o + 2] = b * I * K;
-    }
-  }
-})();
-
-let colBase, colInv, colAmp, colMixOff;
-function allocColumns() {
-  colBase = new Float32Array(AW); colInv = new Float32Array(AW);
-  colAmp = new Float32Array(AW); colMixOff = new Int32Array(AW);
-}
-
-const COARSE = 8;
-const cB = new Float32Array(256), cS = new Float32Array(256), cM = new Float32Array(256), cD = new Float32Array(256);
-
-function drawCurtains(phase) {
-  acc.fill(0);
-  aurData.fill(0);
-  const rayDamp = reduceMotion ? 0.6 : 1;
-  // one slow sway for the whole sky, so the lean breathes over the loop
-  const swayNow = Math.sin(TAU * phase) * 0.5 + Math.sin(TAU * 2 * phase + 1.7) * 0.3;
-
-  for (let ci = 0; ci < CURTAINS.length; ci++) {
-    const c = CURTAINS[ci];
-    const [b0, b1] = c.band;
-    const bandN = b1 - b0;
-
-    // the slow fields — where the border sits, how tall, which palette, how
-    // dense — need only a coarse sampling; the filaments carry the detail
-    const nC = Math.ceil(AW / COARSE) + 2;
-    for (let i = 0; i < nC; i++) {
-      const u = (i * COARSE) / AW;
-      cB[i] = loopFbm(u * 2.1 + 11, phase, c.seed, 4, 0.5);
-      cS[i] = loopFbm(u * 1.6 + 31, phase, c.seed + 0.5, 3, 0.55);
-      cM[i] = loopFbm(u * 1.15 + 61, phase, c.seed + 1.5, 3, 0.6);
-      cD[i] = loopFbm(u * 2.8 + 91, phase, c.seed + 2.5, 4, 0.55);
-    }
-
-    let minTop = AH, maxBot = 0;
-    for (let x = 0; x < AW; x++) {
-      const u = x / AW;
-      const fi = x / COARSE, i0 = fi | 0, ft = fi - i0;
-      const bN = cB[i0] + (cB[i0 + 1] - cB[i0]) * ft;
-      const sN = cS[i0] + (cS[i0 + 1] - cS[i0]) * ft;
-      const mN = cM[i0] + (cM[i0 + 1] - cM[i0]) * ft;
-      const dN = cD[i0] + (cD[i0 + 1] - cD[i0]) * ft;
-
-      // filaments: ridged noise, sharpened, over a broad density envelope
-      const ray = Math.pow(loopRidge(u * c.rayF, phase, c.seed + 5, 3), 1.5 * rayDamp + 0.4);
-      const fine = 0.55 + 0.45 * loopRidge(u * c.rayF * 3.1, phase, c.seed + 9, 2);
-      // a real aurora is streamers with ends and gaps, not one band reaching
-      // wall to wall — so the density has to actually arrive at nothing
-      const dRaw = clamp((dN - 0.34) / 0.32, 0, 1);
-      let dens = dRaw * dRaw * (3 - 2 * dRaw);
-      // each curtain owns a stretch of sky and fades out at both ends; the
-      // stretches overlap, so the sky reads as several streamers at different
-      // distances rather than one band or one lonely ribbon
-      const env = clamp(1 - Math.abs(u - (c.cx + swayNow * 0.05)) / (c.cw * 0.5), 0, 1);
-      dens *= Math.sqrt(env * env * (3 - 2 * env));
-
-      const hf = b0 + (c.flip ? 1 - u : u) * bandN;
-      const hi = hf | 0, ht = hf - hi;
-      const a0 = visAmps[Math.min(N - 1, hi)], a1 = visAmps[Math.min(N - 1, hi + 1)];
-      const harm = a0 + (a1 - a0) * ht;
-
-      // a border that wanders, at two scales — a straight one is the surest
-      // sign that a sky was drawn rather than photographed
-      // tilted, so the sky is not a stack of horizontal bands
-      const by = horizonY - AH * (c.h + c.tilt * (u - 0.5) + (bN - 0.5) * 0.34
-                 + (loopFbm(u * 7.5 + 3, phase, c.seed + 7, 2, 0.5) - 0.5) * 0.07);
-      const sp = AH * c.span * (0.6 + sN * 0.85);
-      colBase[x] = by;
-      colInv[x] = 1 / sp;
-      colAmp[x] = c.gain * dens * (0.18 + ray * 1.05) * fine * (0.10 + harm * 1.2);
-      colMixOff[x] = (clamp(mN * 1.25 - 0.12, 0, 0.999) * MIXN | 0) * (LUTQ + 1) * 3;
-
-      const t = by - sp * 1.3; if (t < minTop) minTop = t;
-      const b = by + sp * 0.09; if (b > maxBot) maxBot = b;
-    }
-
-    // wind shear: rays lean and curve as they rise, which is most of what
-    // separates a real curtain from a picket fence
-    const y0 = Math.max(0, minTop | 0), y1 = Math.min(AH - 1, Math.ceil(maxBot));
-    const stride = AW * 3;
-    for (let y = y0; y <= y1; y++) {
-      // the shear of this row, in columns, computed once for the whole row
-      const rowQ = clamp((colBase[AW >> 1] - y) * colInv[AW >> 1], 0, 1.4);
-      // smooth in y and gently bounded: a fast-changing shear shifts the
-      // filament pattern several columns between adjacent rows, which the eye
-      // reads as a horizontal tear rather than as lean
-      const t = rowQ / 1.4;
-      const sh = c.shear * AW * 0.055 * (t * t * (3 - 2 * t)) * (1 + swayNow * 0.35);
-      let o = y * stride;
-      for (let x = 0; x < AW; x++, o += 3) {
-        const q = (colBase[x] - y) * colInv[x];
-        if (q < QMIN || q > QMAX) continue;
-        // the filament pattern is read from a sheared column, while the
-        // border itself stays where the sky put it
-        const sx = x - sh;
-        const si = sx | 0;
-        if (si < 0 || si >= AW - 1) continue;
-        const sf = sx - si;
-        const a = colAmp[si] + (colAmp[si + 1] - colAmp[si]) * sf;
-        if (a < 0.006) continue;
-        const lf = (q - QMIN) * QSCALE;
-        const li = lf | 0, fr = lf - li;
-        const p = colMixOff[si] + li * 3;
-        acc[o] += (lut[p] + (lut[p + 3] - lut[p]) * fr) * a;
-        acc[o + 1] += (lut[p + 1] + (lut[p + 4] - lut[p + 1]) * fr) * a;
-        acc[o + 2] += (lut[p + 2] + (lut[p + 5] - lut[p + 2]) * fr) * a;
-      }
-    }
-  }
-
-  // out to eight bits: dithered so the faintest tails resolve as light rather
-  // than as bands, and the brightest cores bleach toward white the way a real
-  // exposure does when the green line saturates the sensor
-  const n = AW * AH;
-  for (let i = 0, j = 0, o = 0; i < n; i++, j += 3, o += 4) {
-    const dth = BAYER[(((i / AW) | 0) & 7) * 8 + ((i % AW) & 7)] * 0.0156 - 0.5;
-    let r = acc[j] + dth, g = acc[j + 1] + dth, b = acc[j + 2] + dth;
-    let m = r > g ? (r > b ? r : b) : (g > b ? g : b);
-    if (m <= 0.5) { aurData[o + 3] = 0; continue; }
-    if (m > 150) {
-      const bl = clamp((m - 150) / 105, 0, 1) * 0.75;
-      r += (m - r) * bl; g += (m - g) * bl; b += (m - b) * bl;
-    }
-    const a = m > 255 ? 255 : m;
-    const k = 255 / a;
-    aurData[o] = r * k; aurData[o + 1] = g * k; aurData[o + 2] = b * k; aurData[o + 3] = a;
-  }
-  aurCtx.putImageData(aurImg, 0, 0);
-}
-
-/* ---------------- frame ---------------- */
-
-function drawStars(phase) {
-  for (let i = 0; i < stars.length; i++) {
-    const s = stars[i];
-    const tw = 0.78 + 0.22 * Math.sin(TAU * (s.cyc * phase + s.ph));
-    const ext = 0.25 + 0.75 * Math.pow(1 - s.y / H, 0.55);
-    const a = s.b * tw * ext;
-    if (a < 0.02) continue;
-    g2.fillStyle = s.warm > 0.72 ? `rgba(255, 238, 214, ${a})`
-      : s.warm > 0.34 ? `rgba(226, 238, 255, ${a})` : `rgba(196, 222, 255, ${a})`;
-    if (s.r < 0.85) g2.fillRect(s.x, s.y, s.r * 2, s.r * 2);
-    else { g2.beginPath(); g2.arc(s.x, s.y, s.r, 0, TAU); g2.fill(); }
-  }
+function draw(phase) {
+  harmonicAmps(phase, amps);
+  gl.uniform2f(uni.uRes, canvas.width, canvas.height);
+  gl.uniform2f(uni.uT, Math.cos(TAU * phase), Math.sin(TAU * phase));
+  gl.uniform1f(uni.uPhase, phase);
+  gl.uniform1fv(uni.uAmps, visAmps);
+  gl.drawArrays(gl.TRIANGLES, 0, 3);
 }
 
 let t0 = performance.now();
 let raf = 0;
+let frameCount = 0, fpsT0 = 0;
 
 function frame(now) {
-  const phase = (((now - t0) / 1000) % LOOP) / LOOP;
-
-  harmonicAmps(phase, amps);
+  // reduced motion slows the clock; the loop period simply stretches
+  const secs = (now - t0) / 1000 * (reduceMotion ? 0.4 : 1);
+  const phase = (secs % LOOP) / LOOP;
+  draw(phase);
   updateAudio(phase);
 
-  g2.globalCompositeOperation = 'source-over';
-  g2.drawImage(bgCanvas, 0, 0, W, H);
-  drawStars(phase);
-
-  drawCurtains(phase);
-  g2.imageSmoothingEnabled = true;
-  g2.drawImage(aur, 0, 0, W, H);
-
-  // the bank in front, scrolling exactly one strip per loop
-  const cw = W * (cloudW / AW);
-  const ch = H * (cloudH / AH);
-  const off = -phase * cw;
-  g2.drawImage(cloudCanvas, off, H - ch, cw, ch);
-  g2.drawImage(cloudCanvas, off + cw, H - ch, cw, ch);
-
+  // if a weak GPU cannot hold the frame, spend fewer pixels, not detail
+  frameCount++;
+  if (now - fpsT0 > 4000 && quality > 0.55) {
+    const fps = frameCount / ((now - fpsT0) / 1000);
+    if (fpsT0 > 0 && fps < 38) { quality *= 0.8; resize(); }
+    fpsT0 = now; frameCount = 0;
+  }
   raf = requestAnimationFrame(frame);
 }
 
@@ -658,6 +524,10 @@ document.addEventListener('visibilitychange', () => {
 });
 
 window.addEventListener('resize', resize);
-resize();
-raf = requestAnimationFrame(frame);
+if (initGL()) {
+  resize();
+  raf = requestAnimationFrame(frame);
+} else {
+  hintEl.textContent = 'this sky needs webgl2';
+}
 </script>
