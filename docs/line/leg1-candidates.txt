@@ -1,0 +1,577 @@
+# Leg 1 corridor survey — PD-01 (Paris aperture) to PD-02 (Étampes)
+
+Run: `node cells/drive/devtools/line-survey.mjs 48.7784,2.31318 48.4372,2.1725 --band 2.5`
+Served 451 of 1424 z16 tiles (the rest cold, upstream refusing) — PARTIAL, re-run to fill.
+Every coordinate below is a real OSM feature read through the cell's own tile route.
+
+
+282 candidates along 39.3 km
+
+    KM    OFF   CATEGORY                  NAME
+    0.5   139m   historic=memorial        Borne du Serment de Koufra
+        48.7738,2.31326
+    0.5  1480m   power=substation         SX Boulogne
+        48.77733,2.2918
+    0.6  1352m   man_made=chimney         (unnamed)
+        48.7768,2.2934
+    0.6  1354m   power=substation         (unnamed)
+        48.77024,2.32896
+    0.7   797m   historic=castle          Château de Sceaux
+        48.77419,2.30018
+    0.7   643m   historic=memorial        Philippe V
+        48.7742,2.30235
+    0.8  1852m   power=substation         (unnamed)
+        48.76721,2.33476
+    0.8   641m   man_made=chimney         (unnamed)
+        48.76959,2.31861
+    0.9   437m   power=substation         FX PUGET
+        48.77153,2.30416
+      1  1403m   power=substation         (unnamed)
+        48.76627,2.32802
+    1.1  1736m   historic=memorial        (unnamed)
+        48.77314,2.28647
+    1.1  1847m   power=substation         POUILLE
+        48.77337,2.28499
+    1.2   765m   power=substation         (unnamed)
+        48.76609,2.31892
+    1.2  1079m   power=substation         (unnamed)
+        48.76517,2.32298
+    1.2   548m   power=substation         Toulouse-Lautrec
+        48.76695,2.31621
+    1.3  2195m   power=substation         Gingko
+        48.77244,2.27968
+    1.3  2125m   power=substation         (unnamed)
+        48.77251,2.28071
+    1.3  2375m   power=substation         (unnamed)
+        48.77265,2.27723
+    1.3  2625m   man_made=pipeline        Ru d'Aulnay
+        48.77295,2.27381
+    1.4  2696m   man_made=pipeline        Ru d'Aulnay
+        48.77282,2.27275
+    1.4  2698m   man_made=pipeline        Ru d'Aulnay
+        48.77276,2.27271
+    1.5  1803m   power=substation         (unnamed)
+        48.77001,2.28423
+    1.6   478m   power=substation         (unnamed)
+        48.76339,2.31375
+    1.7  1733m   power=substation         (unnamed)
+        48.75983,2.33002
+    1.7   895m   historic=memorial        (unnamed)
+        48.76111,2.3187
+    1.8   898m   historic=memorial        (unnamed)
+        48.76108,2.31874
+    1.8   899m   historic=memorial        (unnamed)
+        48.76107,2.31875
+    1.8   894m   historic=memorial        (unnamed)
+        48.76109,2.31869
+    1.8   967m   historic=memorial        (unnamed)
+        48.76011,2.31931
+    1.8   963m   historic=memorial        (unnamed)
+        48.76014,2.31926
+    1.8   978m   historic=memorial        Honneur et Reconnaissance 2ème
+        48.7601,2.31946
+    1.9  1930m   historic=memorial        (unnamed)
+        48.75763,2.3319
+      2  1495m   power=substation         (unnamed)
+        48.7571,2.32553
+      2  2903m   power=substation         (unnamed)
+        48.75425,2.34425
+      2   484m   power=substation         (unnamed)
+        48.76229,2.29969
+    2.1  2505m   power=substation         (unnamed)
+        48.76575,2.27255
+    2.2   728m   power=substation         (unnamed)
+        48.75755,2.31488
+    2.2  2524m   historic=memorial        Aux Héros de Verdun
+        48.76515,2.27203
+    2.2  2499m   power=substation         CN Olympe
+        48.76499,2.27233
+    2.2  1910m   power=substation         (unnamed)
+        48.76343,2.28001
+    2.3  1010m   power=substation         (unnamed)
+        48.75649,2.31842
+    2.3   510m   power=substation         (unnamed)
+        48.75719,2.31164
+    2.3  1788m   historic=memorial        (unnamed)
+        48.7625,2.28135
+    2.3  1726m   historic=memorial        Honneur aux Combattants d’Afri
+        48.76262,2.28227
+    2.5   175m   power=substation         Georges
+        48.75745,2.30207
+    2.5  2875m   power=substation         (unnamed)
+        48.75001,2.34211
+    2.5  1792m   power=substation         (unnamed)
+        48.76117,2.28074
+    2.5  1320m   power=substation         (unnamed)
+        48.75942,2.2867
+    2.6  2764m   power=substation         (unnamed)
+        48.74952,2.34035
+    2.7  1005m   historic=memorial        (unnamed)
+        48.75766,2.29042
+    2.7   132m   historic=memorial        Khatchkar
+        48.75507,2.3017
+    2.8   670m   power=substation         CLOS JOLI
+        48.75545,2.29424
+    2.9   310m   power=substation         (unnamed)
+        48.75288,2.30703
+    2.9   995m   waterway=weir            (unnamed)
+        48.7507,2.31582
+      3   491m   historic=memorial        (unnamed)
+        48.75337,2.29592
+    3.2   227m   historic=memorial        Monument au Général Leclerc
+        48.75025,2.30479
+    3.2   215m   historic=memorial        Borne du Serment de Koufra
+        48.74985,2.30445
+    3.3   917m   power=substation         ANTONY
+        48.74801,2.31361
+    3.5   986m   power=substation         (unnamed)
+        48.75017,2.2876
+    3.6   487m   historic=castle          Château Sarran
+        48.74811,2.29382
+    3.8    78m   power=substation         AN PROVENCE
+        48.74568,2.29859
+    3.9   996m   historic=memorial        Tombeau de François Molé
+        48.747,2.28615
+    3.9   328m   power=substation         (unnamed)
+        48.7449,2.29474
+    4.2    81m   power=substation         (unnamed)
+        48.74184,2.29925
+    4.2   742m   power=substation         AN PEJEAUD 94
+        48.74342,2.28828
+    4.2   745m   power=substation         AN PAJEAUD 96
+        48.74341,2.28822
+    4.2  2255m   power=substation         CLAVECIN
+        48.74768,2.26864
+    4.2   290m   power=substation         (unnamed)
+        48.74141,2.30203
+    4.2  1276m   power=substation         (unnamed)
+        48.74511,2.28142
+    4.2  1210m   power=substation         (unnamed)
+        48.74507,2.28233
+    4.3  2463m   historic=memorial        (unnamed)
+        48.74731,2.26555
+    4.3  2597m   power=substation         Église
+        48.74746,2.26372
+    4.4   835m   power=substation         Schweitzer
+        48.74235,2.28651
+    4.4   589m   power=substation         (unnamed)
+        48.73877,2.30516
+    4.4    68m   power=substation         (unnamed)
+        48.74081,2.29672
+    4.5   129m   power=substation         (unnamed)
+        48.73952,2.29533
+    4.5  2910m   power=substation         VR Poulinat
+        48.74602,2.2587
+    4.5   547m   power=substation         (unnamed)
+        48.73785,2.30418
+    4.6   262m   power=substation         (unnamed)
+        48.73876,2.29313
+    4.7   396m   power=substation         (unnamed)
+        48.73823,2.29102
+    4.7   969m   power=substation         AN Pave de Wissous
+        48.73518,2.30905
+    4.7   811m   power=substation         (unnamed)
+        48.73986,2.28583
+    4.7   755m   power=substation         (unnamed)
+        48.73564,2.30623
+    4.7   330m   power=substation         MY Saussaye
+        48.73651,2.30057
+    4.8   577m   power=substation         (unnamed)
+        48.73579,2.30377
+    4.8  1236m   power=substation         (unnamed)
+        48.73999,2.27987
+    4.8   122m   man_made=reservoir_covered Station de Pompage de Massy-An
+        48.73691,2.29434
+    4.9   575m   power=substation         (unnamed)
+        48.73763,2.28824
+    4.9  2767m   power=substation         (unnamed)
+        48.74248,2.25927
+    4.9  2620m   power=substation         (unnamed)
+        48.74203,2.26116
+      5  1361m   power=substation         AN Quito
+        48.73173,2.31317
+      5   325m   power=substation         (unnamed)
+        48.73543,2.29088
+      5   511m   power=substation         (unnamed)
+        48.73623,2.28857
+      5   382m   power=substation         Route de Chartres
+        48.73589,2.29026
+    5.1  1440m   power=substation         (unnamed)
+        48.73114,2.31404
+    5.1  1271m   power=substation         (unnamed)
+        48.73153,2.31182
+    5.2   403m   power=substation         (unnamed)
+        48.73381,2.2891
+    5.3   100m   power=substation         (unnamed)
+        48.73281,2.29297
+    5.3   532m   power=substation         (unnamed)
+        48.73329,2.28707
+    5.4   630m   power=substation         (unnamed)
+        48.73315,2.28562
+    5.4  1218m   historic=memorial        (unnamed)
+        48.7343,2.27779
+    5.5  1028m   man_made=silo            (unnamed)
+        48.72805,2.30695
+    5.6   400m   historic=memorial        Jardin des Décorations
+        48.73075,2.28788
+    5.7   737m   man_made=windmill        (unnamed)
+        48.72736,2.30255
+    5.7   853m   power=substation         (unnamed)
+        48.73112,2.28163
+    5.7  1102m   historic=memorial        Nicolas Appert
+        48.73141,2.27824
+    5.7   668m   power=substation         (unnamed)
+        48.7308,2.28411
+    5.8   342m   power=substation         (unnamed)
+        48.72893,2.28795
+    5.9  1418m   historic=memorial        (unnamed)
+        48.73041,2.27336
+    5.9  1531m   historic=memorial        (unnamed)
+        48.73063,2.27186
+      6   648m   power=substation         MY Australie
+        48.72794,2.28322
+      6  1371m   power=substation         WS Montavas DP3
+        48.72284,2.30964
+    6.1  1330m   power=substation         WS Concorde XXAB
+        48.72264,2.30897
+    6.1  2787m   power=substation         CET
+        48.7318,2.25458
+    6.2  1323m   historic=memorial        A tous les Français
+        48.72754,2.27352
+    6.2  2765m   power=substation         MY CLOS DE VILLAINE
+        48.73119,2.25465
+    6.2   750m   historic=memorial        Borne du Serment de Koufra
+        48.7263,2.28111
+    6.2   771m   historic=memorial        24 Août 1944 Libération de Mas
+        48.72635,2.28083
+    6.3   308m   power=substation         Poste Numéro 32
+        48.72434,2.28655
+    6.4   527m   power=substation         (unnamed)
+        48.72442,2.28348
+    6.4   340m   power=substation         MY La Bonde
+        48.72352,2.28575
+    6.5  1349m   man_made=storage_tank    (unnamed)
+        48.71865,2.30761
+    6.5   449m   power=substation         (unnamed)
+        48.72272,2.28387
+    6.6    98m   power=substation         (unnamed)
+        48.72122,2.28823
+    6.6  1522m   power=substation         Ukraine
+        48.72491,2.26962
+    6.6  1529m   power=substation         Ukraine
+        48.72499,2.26956
+    6.7   245m   power=substation         (unnamed)
+        48.72105,2.28607
+    6.8   685m   power=substation         (unnamed)
+        48.72061,2.27967
+    6.8  2196m   historic=memorial        (unnamed)
+        48.72462,2.25999
+    6.8  1732m   power=substation         (unnamed)
+        48.71538,2.31167
+    7.5   849m   power=substation         CY EUROPEEN
+        48.71112,2.29743
+    7.5  2018m   power=substation         (unnamed)
+        48.70826,2.31276
+    7.6  1178m   power=substation         (unnamed)
+        48.70985,2.30155
+    7.6   945m   power=substation         (unnamed)
+        48.71023,2.29842
+    7.7  1193m   power=substation         (unnamed)
+        48.70878,2.30132
+    7.8  2274m   historic=castle          Porte Cochère de Bel Abord
+        48.70527,2.31514
+    7.9    98m   landuse=quarry           (unnamed)
+        48.70994,2.28635
+    7.9   928m   power=substation         BOUYGUES
+        48.70732,2.29698
+      8   934m   power=substation         (unnamed)
+        48.70652,2.29674
+      8  2363m   historic=memorial        Monument aux morts 1914-18
+        48.70327,2.31557
+    8.2  2166m   historic=castle          Hôtel de Ville
+        48.70242,2.31244
+    8.3  1091m   power=substation         Cantonniers
+        48.70927,2.26927
+    8.3  1244m   power=substation         (unnamed)
+        48.7031,2.2997
+    8.3  1045m   power=substation         La Hutte
+        48.70403,2.29727
+    8.3  1031m   power=substation         LG Victor Hugo 2
+        48.70401,2.29707
+    8.3   941m   power=substation         (unnamed)
+        48.70441,2.29596
+    8.5   869m   power=substation         (unnamed)
+        48.70225,2.29406
+    8.5   994m   power=substation         (unnamed)
+        48.70234,2.29585
+    8.6   429m   power=substation         (unnamed)
+        48.70283,2.28808
+    8.6   300m   power=substation         JAURES
+        48.70264,2.28619
+    8.6  1019m   power=substation         (unnamed)
+        48.70156,2.29589
+    8.7   741m   power=substation         (unnamed)
+        48.70081,2.29166
+    8.7   802m   power=substation         (unnamed)
+        48.70482,2.27152
+    8.8   952m   power=substation         (unnamed)
+        48.69997,2.29429
+    8.8   806m   power=substation         Pivoine
+        48.70016,2.2923
+    8.9   934m   power=substation         (unnamed)
+        48.69902,2.29364
+    8.9   796m   power=substation         (unnamed)
+        48.70334,2.27099
+    8.9   756m   power=substation         (unnamed)
+        48.70269,2.27128
+    8.9   576m   power=substation         (unnamed)
+        48.7001,2.28903
+    8.9  1321m   power=substation         (unnamed)
+        48.69785,2.29861
+      9  1335m   power=substation         (unnamed)
+        48.69675,2.29837
+      9  1031m   historic=memorial        (unnamed)
+        48.69768,2.29446
+    9.1  1937m   power=substation         (unnamed)
+        48.69476,2.30605
+    9.1  1406m   power=substation         (unnamed)
+        48.69579,2.29897
+    9.1   829m   historic=memorial        Fin de la Guerre d'Algérie
+        48.69747,2.29152
+    9.1   704m   power=substation         M DE GAILLARD
+        48.69746,2.28975
+    9.2  1502m   power=substation         (unnamed)
+        48.69478,2.29991
+    9.2  1105m   historic=memorial        V.I. Lenine
+        48.69571,2.29469
+    9.2   834m   power=substation         (unnamed)
+        48.69694,2.29138
+    9.3  1025m   power=substation         (unnamed)
+        48.69564,2.29353
+    9.3   707m   power=substation         (unnamed)
+        48.69577,2.28909
+    9.4   747m   power=substation         (unnamed)
+        48.69513,2.2894
+    9.4  1681m   power=substation         LG OLYMPIADES
+        48.69276,2.30161
+    9.4  1486m   power=substation         SOHIER
+        48.69317,2.29903
+    9.5  1099m   power=substation         (unnamed)
+        48.69313,2.29354
+    9.5   885m   power=substation         Diligence
+        48.69432,2.29101
+    9.5   673m   power=substation         (unnamed)
+        48.69413,2.28793
+    9.6  1712m   power=substation         (unnamed)
+        48.69144,2.3015
+    9.6  1587m   historic=castle          Château de Villebon-sur-Yvette
+        48.69911,2.25808
+    9.6   368m   power=substation         Bonemine
+        48.69437,2.28373
+    9.7   876m   historic=memorial        (unnamed)
+        48.69209,2.28996
+    9.7   873m   historic=memorial        (unnamed)
+        48.69236,2.29002
+    9.7  2184m   power=substation         (unnamed)
+        48.6889,2.30711
+    9.8   273m   power=substation         (unnamed)
+        48.69387,2.27448
+    9.8  1018m   power=substation         (unnamed)
+        48.69067,2.29139
+    9.9  1578m   historic=memorial        (unnamed)
+        48.68845,2.29837
+    9.9  1663m   power=substation         (unnamed)
+        48.68846,2.29958
+     10  1372m   historic=memorial        (unnamed)
+        48.68882,2.29562
+     10  2403m   power=substation         (unnamed)
+        48.68637,2.30916
+     10  2443m   power=substation         (unnamed)
+        48.6977,2.24542
+   10.1   521m   historic=memorial        (unnamed)
+        48.6921,2.27024
+   10.2   830m   historic=memorial        Appel du 18 Juin
+        48.68811,2.28767
+   10.2   822m   historic=memorial        General Leclerc
+        48.68775,2.28741
+   10.2   813m   historic=memorial        Borne du Serment de Koufra
+        48.68773,2.28728
+   10.3   208m   power=substation         (unnamed)
+        48.68876,2.27916
+   10.3  1324m   power=substation         (unnamed)
+        48.68575,2.29367
+   10.3  1087m   power=substation         (unnamed)
+        48.68606,2.29046
+   10.4    13m   power=substation         (unnamed)
+        48.68787,2.27567
+   10.4  1412m   power=substation         (unnamed)
+        48.68458,2.29443
+   10.4  2537m   power=substation         (unnamed)
+        48.6825,2.30945
+   10.6  2457m   power=substation         (unnamed)
+        48.6803,2.30742
+   10.6  2165m   power=substation         (unnamed)
+        48.68123,2.30368
+   11.3  1522m   historic=memorial        Monument Lacoste
+        48.6766,2.29269
+   11.4  1288m   power=substation         Portaubrun
+        48.67636,2.28929
+   11.6  1494m   historic=memorial        (unnamed)
+        48.67402,2.29123
+   11.7  1495m   power=substation         (unnamed)
+        48.67326,2.29094
+   11.8   497m   power=substation         (unnamed)
+        48.67506,2.27758
+   11.8  1729m   historic=castle          Château de Balainvilliers
+        48.67229,2.29384
+   11.8  1439m   power=substation         (unnamed)
+        48.67278,2.28995
+     12   476m   power=substation         (unnamed)
+        48.67317,2.27651
+   12.2    18m   power=substation         Creusiere
+        48.67251,2.26977
+   12.3   672m   power=substation         (unnamed)
+        48.66972,2.27785
+   12.6  2927m   power=substation         (unnamed)
+        48.6621,2.30654
+   12.7  1226m   power=substation         (unnamed)
+        48.66543,2.28391
+     13  2143m   power=substation         (unnamed)
+        48.66041,2.29477
+     13   396m   power=substation         (unnamed)
+        48.66467,2.27188
+   13.1  2712m   historic=memorial        (unnamed)
+        48.65837,2.30196
+   13.3   453m   power=substation         (unnamed)
+        48.66205,2.2716
+   13.4   260m   power=substation         (unnamed)
+        48.66155,2.26866
+   13.5   367m   power=substation         (unnamed)
+        48.66066,2.26982
+   13.7    36m   historic=memorial        (unnamed)
+        48.65987,2.26482
+   14.2  1437m   man_made=water_tower     (unnamed)
+        48.65871,2.24355
+   15.1   258m   power=substation         (unnamed)
+        48.64639,2.26239
+   15.3  1026m   historic=memorial        (unnamed)
+        48.64356,2.27205
+   15.4    98m   power=substation         Lardon
+        48.6444,2.25931
+   15.5   904m   power=substation         (unnamed)
+        48.64156,2.26951
+   15.5  1186m   power=substation         (unnamed)
+        48.64085,2.27319
+   15.7  2540m   historic=castle          Ehpad Korian
+        48.63641,2.29047
+   15.8  1433m   power=substation         Fonceaux
+        48.64444,2.23774
+   15.8   869m   historic=memorial        Stèle du maréchal Leclerc
+        48.63961,2.26822
+     16   791m   power=substation         (unnamed)
+        48.63778,2.26636
+   16.1   604m   power=substation         (unnamed)
+        48.63758,2.26364
+   16.2   687m   power=substation         (unnamed)
+        48.63661,2.26441
+   16.2  1285m   historic=castle          Château de Montlhéry
+        48.63503,2.2722
+   16.2  1312m   historic=ruins           (unnamed)
+        48.63515,2.27262
+   16.2  1280m   historic=ruins           (unnamed)
+        48.63504,2.27213
+   16.2  1313m   historic=ruins           (unnamed)
+        48.63513,2.27263
+   16.2  1291m   historic=ruins           (unnamed)
+        48.63517,2.27234
+   16.2  1339m   historic=ruins           Chapelle Saint-Louis
+        48.63507,2.27297
+   16.2  1284m   historic=ruins           (unnamed)
+        48.63493,2.27214
+   16.2  1320m   historic=ruins           (unnamed)
+        48.63503,2.27269
+   16.3  1167m   power=substation         (unnamed)
+        48.63432,2.27023
+   16.4  1020m   power=substation         (unnamed)
+        48.63346,2.2678
+   16.5   939m   historic=memorial        Le Relais De Poste
+        48.63295,2.26646
+   16.6  1308m   power=substation         (unnamed)
+        48.63149,2.27105
+   16.6   628m   historic=ruins           Glacière de Bellejamé
+        48.63548,2.24539
+   16.6   693m   power=substation         Bellejames
+        48.63574,2.24458
+   16.7  1083m   power=substation         (unnamed)
+        48.63642,2.23936
+   17.3   721m   man_made=reservoir_covered (unnamed)
+        48.62978,2.24173
+   17.3   840m   power=substation         (unnamed)
+        48.63021,2.24023
+   17.4   758m   man_made=reservoir_covered (unnamed)
+        48.62955,2.24112
+   17.6    31m   man_made=water_tower     (unnamed)
+        48.62561,2.25062
+   17.7   621m   power=substation         (unnamed)
+        48.62347,2.25807
+   17.7  1288m   historic=memorial        (unnamed)
+        48.62179,2.26677
+     18   100m   historic=memorial        (unnamed)
+        48.62278,2.24761
+     18  1386m   historic=memorial        50 ans de l'armistice
+        48.6192,2.26709
+   18.2   711m   power=substation         (unnamed)
+        48.61897,2.25748
+   18.5  1103m   man_made=water_tower     (unnamed)
+        48.62005,2.23234
+   20.1  2198m   power=substation         Fontanus
+        48.59847,2.26998
+   20.9   607m   historic=memorial        Borne du Serment de Koufra
+        48.59567,2.2464
+     21   578m   historic=memorial        (unnamed)
+        48.59476,2.24561
+   21.7   806m   power=substation         (unnamed)
+        48.58841,2.24621
+   21.8   887m   historic=castle          (unnamed)
+        48.59159,2.22366
+   21.9  1100m   power=substation         (unnamed)
+        48.59103,2.22042
+   22.1  1083m   power=substation         (unnamed)
+        48.58953,2.22004
+   22.1   377m   power=substation         (unnamed)
+        48.58592,2.23913
+   22.5   850m   power=substation         (unnamed)
+        48.58154,2.24399
+   22.6   984m   power=substation         (unnamed)
+        48.58002,2.24525
+   22.6   679m   man_made=water_tower     (unnamed)
+        48.58094,2.24133
+   22.9   227m   power=substation         (unnamed)
+        48.5804,2.22835
+     23   214m   power=substation         (unnamed)
+        48.57908,2.22798
+     23   431m   power=substation         (unnamed)
+        48.57957,2.22512
+   23.1    68m   power=substation         (unnamed)
+        48.57846,2.22978
+     26   999m   power=substation         (unnamed)
+        48.55553,2.20721
+   26.3  1165m   power=substation         (unnamed)
+        48.55305,2.20386
+   30.2   870m   power=substation         (unnamed)
+        48.51462,2.21667
+   32.7   205m   power=substation         (unnamed)
+        48.49446,2.19899
+   32.9   356m   power=substation         (unnamed)
+        48.49182,2.20003
+     33  1239m   power=substation         (unnamed)
+        48.4948,2.17882
+   33.3  1092m   power=substation         (unnamed)
+        48.49241,2.1799
+   38.2  1298m   power=substation         (unnamed)
+        48.45008,2.15957
+   38.7   434m   historic=memorial        (unnamed)
+        48.44188,2.18053
+
+A candidate is a COORDINATE THAT EXISTS — never a story.
+The author picks from these and writes the two columns by hand.
