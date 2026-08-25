@@ -26653,7 +26653,10 @@ function coverFx(mat: THREE.MeshLambertMaterial): void {
         '    for (int i = -1; i <= 1; i++) {',
         '      vec2 g = vec2(float(i), float(j));',
         '      vec2 o = covH2(ip + g);',
-        '      vec2 c = g + 0.5 + (o - 0.5) * 0.72;',
+        // LOW JITTER. At 0.72 the cells came out round and organic and the
+        // shell read as dried mud; a built panel is close to regular. This is
+        // near-hexagonal with just enough irregularity not to look stamped.
+        '      vec2 c = g + 0.5 + (o - 0.5) * 0.34;',
         '      float d = dot(c - fp, c - fp);',
         '      if (d < f1) { f2 = f1; f1 = d; id = ip + g; }',
         '      else if (d < f2) { f2 = d; }',
@@ -26684,13 +26687,39 @@ function coverFx(mat: THREE.MeshLambertMaterial): void {
         // A cube face stretches toward its corners; this pulls it back most of
         // the way to equal-area, so a corner panel is not twice a middle one.
         '  cuv *= 1.34 - 0.34 * cuv * cuv;',
-        // FINER THAN BEFORE. 44 puts a panel around 150m on Paris\'s shell,
-        // against the ~300m of the first cut.
-        '  vec3 cel = covCells(cuv * 44.0 + cface * 23.7);',
-        // A TRUE EDGE DISTANCE, so the seam is the same width everywhere.
-        '  float sgap = cel.y - cel.x;',
-        '  float seam = 1.0 - smoothstep(0.012, 0.055, sgap);',
-        '  float tone = cel.z;',
+        // ── FRACTAL, BECAUSE ONE FREQUENCY CANNOT SERVE BOTH ENDS ──
+        //
+        // A single Worley scale is wrong at every distance except the one it
+        // was tuned for. At 150m panels the shell read as CRACKED MUD from
+        // seventy metres away — one cell filling the screen, its seam a black
+        // river — and the same cells go sub-pixel and vanish at four
+        // kilometres. Photographed at both.
+        //
+        // Three octaves, which is what a real structure has: bays, panels,
+        // and the plates a panel is made of. The coarse two always run; the
+        // fine one is only worth its taps up close, and fading it out with
+        // range is also what stops it aliasing into a shimmer when its cells
+        // fall below a pixel.
+        '  float cDist = distance(vCovW, cameraPosition);',
+        // BAYS — the shell's structural divisions, ~600m. Faint and wide.
+        '  vec3 cA = covCells(cuv * 12.0 + cface * 23.7);',
+        '  float seamA = 1.0 - smoothstep(0.020, 0.075, cA.y - cA.x);',
+        // PANELS — the main read, ~70m. This is the scale the eye counts.
+        '  vec3 cB = covCells(cuv * 96.0 + cface * 7.13);',
+        '  float sgap = cB.y - cB.x;',
+        '  float seamB = 1.0 - smoothstep(0.020, 0.085, sgap);',
+        // PLATES — ~17m, the close-up grain. Skipped beyond a kilometre,
+        // where it is smaller than a pixel and costs nine taps to alias.
+        '  float seamC = 0.0;',
+        '  if (cDist < 1100.0) {',
+        '    vec3 cC = covCells(cuv * 380.0 + cface * 3.31);',
+        '    seamC = (1.0 - smoothstep(0.030, 0.120, cC.y - cC.x))',
+        '          * (1.0 - smoothstep(450.0, 1100.0, cDist));',
+        '  }',
+        // The bays are the deepest joint, the plates the shallowest — a
+        // hierarchy, not three coats of the same paint.
+        '  float seam = max(max(seamA * 0.85, seamB), seamC * 0.5);',
+        '  float tone = cB.z * 0.72 + cA.z * 0.28;',
         // Down the flanks, not over the top.
         '  float low = smoothstep(0.30, 1.0, cph / 1.5707963);',
         // Streaks run DOWN, so they are hashed on the horizontal angle only —
@@ -26700,8 +26729,8 @@ function coverFx(mat: THREE.MeshLambertMaterial): void {
         '  float wet = low * smoothstep(0.66, 0.95, streak);',
         // …AND DIRT POOLS IN THE SEAMS. A finer grain, gated to the seam
         // neighbourhood, which is where water sits on any panelled structure.
-        '  float grime = covH1(cuv * 190.0 + cface * 11.0);',
-        '  float dirt = (1.0 - smoothstep(0.02, 0.10, sgap)) * smoothstep(0.35, 0.9, grime);',
+        '  float grime = covH1(cuv * 420.0 + cface * 11.0);',
+        '  float dirt = (1.0 - smoothstep(0.03, 0.14, sgap)) * smoothstep(0.35, 0.9, grime);',
         '  vec3 V = normalize(cameraPosition - vCovW);',
         '  vec3 N = normalize(vCovN);',
         '  float fres = pow(1.0 - clamp(dot(V, N), 0.0, 1.0), 3.0);',
@@ -26726,7 +26755,9 @@ function coverFx(mat: THREE.MeshLambertMaterial): void {
         '  float sky = (0.94 + 0.06 * tone) * (1.0 - 0.85 * seam)',
         '            * (1.0 - 0.35 * wet) * (1.0 - 0.45 * dirt);',
         '  cc *= 0.97 + 0.06 * tone;',
-        '  cc = mix(cc, cc * 0.72, seam);',
+        // A JOINT, NOT A CHASM. 0.72 made every seam a black line wide enough
+        // to read as a crack in the surface rather than a gap between panels.
+        '  cc = mix(cc, cc * 0.86, seam);',
         '  cc = mix(cc, cc * 0.84, wet);',
         '  cc = mix(cc, cc * 0.80, dirt);',
         '  cc += vec3(0.052, 0.060, 0.058) * sky;',
