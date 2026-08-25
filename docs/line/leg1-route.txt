@@ -1,0 +1,25 @@
+# Leg 1 route — PD-01 (Paris aperture) to PD-02 (Étampes)
+# node cells/drive/devtools/line-route.mjs 48.7784,2.31318 48.4372,2.1725
+route graph: 50 overview tiles at z12
+  tiles served 50, refused 0 · 37239 nodes, 85254 edges
+  anchored 24 m from A and 141 m from B
+
+route 46.5 km along the ways
+chord 39.3 km — the route is 18% longer, which is the point
+314 vertices
+
+THE ROADS THAT CARRY IT — the docket's `via`, in order of share:
+    17.3 km  Route Nationale de Paris à Toulouse
+     3.1 km  Route Nationale 20
+     2.7 km  Avenue de la Division Leclerc
+     2.2 km  Route de Corbeil
+     2.2 km  Avenue du Maréchal Leclerc
+     1.7 km  Avenue de Paris
+     1.7 km  Route d'Orléans
+     1.4 km  Avenue Robert Benoist
+     1.3 km  Route de Longpont
+     1.3 km  Route de Longjumeau
+     1.2 km  Grande Rue
+     1.2 km  Rue du Perray
+     1.1 km  Avenue Aristide Briand
+     1.0 km  Rue du Président François Mitterrand

@@ -36,11 +36,19 @@ const tileOf = (la, lo, z) => {
 /** THE PRICE OF EACH CLASS, as a multiple of its own length. The autoroute is
  *  not forbidden — it is simply not the line, and costs like it. */
 const COST = {
-  motorway: 6, motorway_link: 6, trunk: 4.5, trunk_link: 4.5,
-  primary: 1.35, primary_link: 1.35,
-  secondary: 1, secondary_link: 1,
-  tertiary: 1.12, tertiary_link: 1.12,
-  unclassified: 1.5, residential: 2.2,
+  // THE MOTORWAY IS PRICED OUT; THE OLD TRUNK ROAD IS NOT. First cut charged
+  // primary 1.35 against secondary 1.0 on the theory that "B roads" means
+  // secondary — and sent the Paris leg 68% long, out east via Corbeil. The old
+  // N20 IS classified primary (it is a former route nationale), so penalising
+  // primary pushes the route off the very line it is meant to follow. Primary
+  // and secondary are near-equal now; what stays expensive is the autoroute a
+  // ranger would never certify, and the residential streets a through-route
+  // has no business threading.
+  motorway: 6, motorway_link: 6, trunk: 1.15, trunk_link: 1.15,
+  primary: 1, primary_link: 1,
+  secondary: 1.04, secondary_link: 1.04,
+  tertiary: 1.3, tertiary_link: 1.3,
+  unclassified: 2.1, residential: 3.4,
 };
 const SNAP = 1e-4;   // ~11 m. The overview clips each way to its own tile, so
                      // vertices either side of a tile edge never coincide

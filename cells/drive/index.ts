@@ -418,6 +418,21 @@ const OV_CAP: Record<number, number> = { 10: 3000, 11: 4500, 12: 6000, 13: 6000 
 // the trim, the gzip and the S3 write. A dense tile that cannot be got inside
 // this is better refused with a `retry-after` than killed mid-flight.
 const OV_UPSTREAM_MS = 11000;
+// A DEAD FIRST MIRROR EATS THIS WHOLE BUDGET, and that is the lesser evil.
+// At 10000 against an 11000 ceiling, askOverpass's `left < 1500` guard breaks
+// the loop after one attempt, so a tile whose rotation starts on a sick mirror
+// gets no second chance WITHIN the request. Halving it to 5000 to buy that
+// second chance was tried on 2026-08-25 and was strictly worse: a dense z12
+// tile near a metropolis needs 11-18s of Overpass, so every one of them began
+// failing with "operation was aborted" — including the Paris aperture's own
+// tile. The retry that matters is the NEXT REQUEST, which the clock in the
+// rotation below now sends to a different mirror. Measured across that fix:
+// the Paris-Etampes corridor went from 24 of 50 overview tiles to 46.
+//
+// The tiles still refusing are refusing everywhere: too dense to answer inside
+// the ~15.5s Lambda ceiling at all. Fixing THOSE means asking for less (drop
+// tertiary, then secondary, on a retry and store the thinner tile) rather than
+// asking for longer — there is no longer available.
 const OV_ATTEMPT_MS = 10000;
 function overviewQuery(z: number, x: number, y: number): string {
   const b = tileBounds(z, x, y);
@@ -497,7 +512,13 @@ async function serveOverview(path: string, m: RegExpMatchArray) {
   }
   let elements: RawWay[];
   try {
-    elements = await askOverpass(overviewQuery(z, x, y), OV_UPSTREAM_MS, OV_ATTEMPT_MS, (x + y + z) % OVERPASS_MIRRORS.length);
+    // …AND THE ROTATION CARRIES A CLOCK, exactly as serveTile's does. Keyed to
+    // the tile alone, a tile is bound to the same first mirror for ever: if
+    // that mirror is down the tile is a permanent 503, and no amount of
+    // retrying moves it. With the minute in the key, the next attempt starts
+    // somewhere else and the tile fills on its own.
+    const rot = (x + y + z + Math.floor(Date.now() / 60000)) % OVERPASS_MIRRORS.length;
+    elements = await askOverpass(overviewQuery(z, x, y), OV_UPSTREAM_MS, OV_ATTEMPT_MS, rot);
   } catch (err) {
     return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {
       'retry-after': '5', 'cache-control': 'no-store',
