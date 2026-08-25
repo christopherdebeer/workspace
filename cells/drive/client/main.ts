@@ -336,6 +336,11 @@ async function decodeTerrarium(res: Response, px: number): Promise<Float32Array>
 const MAPTERHORN = !/[?&]dem=aws/.test(location.search);
 const mthMissing = new Set<string>();
 const demSource = { mth: 0, aws: 0, none: 0,
+  /** Tiles that arrived off the planet — patched if a few pixels, refused if
+   *  many. The counter is the point: a spiking world should be able to SAY it
+   *  is being fed nonsense rather than leaving you to guess from the shape of
+   *  the hills. */
+  bad: 0,
   // Requests that never left the browser — a CSP block, a DNS failure, an
   // offline device. NOT the same as a 404, and the difference matters: a 404
   // means step up the pyramid, a throw means the source is unreachable and
@@ -411,6 +416,46 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
   // statement about the ground, so it has to be in ground units.
   const lat = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 0.5)) / 2 ** z))) * 180) / Math.PI;
   const mpp = (40075016.686 * Math.cos((lat * Math.PI) / 180)) / (2 ** z * 256);
+  // ── A TILE OFF THE PLANET IS NOT A TILE ──
+  //
+  // repairDem is a SHAPE argument — it finds blobs that stand too tall for
+  // their footprint — and it deliberately stands down when it would rewrite
+  // more than a fifth of the tile, on the reasoning that a rule rewriting
+  // that much is more likely misfiring than right. Sound for the corruption
+  // it was written against (a few hundred stray pixels), and exactly
+  // backwards for the catastrophic case: THE WORSE THE TILE, THE LESS LIKELY
+  // IT IS TO BE TOUCHED. A tile that is mostly garbage sails through
+  // unrepaired and is built into terrain, which is what a field of spikes is.
+  //
+  // So there is an absolute test in front of it now, and it needs no shape
+  // heuristic to make its case: Earth's land runs from about -430m at the
+  // Dead Sea to 8849m at the summit. Anything outside that is not a reading.
+  // The AWS mosaic is documented above as serving -13,029m, so this is not
+  // hypothetical — it is the failure that source is known for.
+  //
+  // A few bad pixels are patched to the tile's own ground and handed on to
+  // repairDem. A tile with MANY is REFUSED — returning null leaves the ground
+  // unbuilt and the streamer asks again, which is strictly better than
+  // building a mountain range out of a decode error. Terrain that has not
+  // arrived is a gap you can see; terrain built from nonsense is a gap you
+  // drive into.
+  let bad = 0;
+  for (let i = 0; i < out.length; i++) {
+    const v = out[i];
+    if (!Number.isFinite(v) || v < -500 || v > 9000) bad++;
+  }
+  if (bad > out.length * 0.02) { demSource.bad++; return null; }
+  if (bad) {
+    // Their own ground, not zero: a patch at sea level in a mountain valley is
+    // its own crater.
+    const ok = Array.from(out).filter((v) => Number.isFinite(v) && v >= -500 && v <= 9000).sort((a, b) => a - b);
+    const ground = ok.length ? ok[Math.floor(ok.length * 0.2)] : 0;
+    for (let i = 0; i < out.length; i++) {
+      const v = out[i];
+      if (!Number.isFinite(v) || v < -500 || v > 9000) out[i] = ground;
+    }
+    demSource.bad++;
+  }
   return repairDem(out, mpp);
 }
 // ── land cover: what is actually growing here ──────────────────────
