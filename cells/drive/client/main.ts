@@ -5588,7 +5588,24 @@ interface SwardBand { mesh: THREE.Mesh; side: number; step: number; reach: numbe
    *  outside: (in0,in1,out0,out1) metres. See the partition note in the shader. */
   uBlend: { value: THREE.Vector4 } }
 const SWARD_GLSL = `
-  float swHash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }`;
+  // ── NOT fract(sin(...)), AND NOT ON WORLD METRES ──
+  //
+  // The sin hash is fine near the origin and falls apart away from it: sin's
+  // argument is dot(p, k) with p in WORLD METRES, so a few kilometres out the
+  // float has no bits left for the fractional part and neighbouring cells
+  // return correlated values. Correlated jitter on a regular lattice is a
+  // PATTERN — the moiré reported from the seat — and it is worst exactly where
+  // the player spends their time, because the origin moves with the spawn but
+  // the coordinates do not stay small.
+  //
+  // Hoskins' hash instead: no trig, well distributed, and cheap. Fed the cell
+  // INDEX rather than the metre position (see sIdx below), so its input is
+  // small integers and stays that way however far the drive goes.
+  float swHash(vec2 p) {
+    vec3 p3 = fract(vec3(p.xyx) * 0.1031);
+    p3 += dot(p3, p3.yzx + 33.33);
+    return fract((p3.x + p3.y) * p3.z);
+  }`;
 function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLambertMaterial {
   // flatShading OFF, deliberately, and it is the whole of the fix below: with
   // FLAT_SHADED three takes the normal from screen-space derivatives in the
@@ -5646,11 +5663,29 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // not a place relative to the truck.
         vSwardUpV = normalize((viewMatrix * vec4(0.0, 1.0, 0.0, 0.0)).xyz);
         float sIx = mod(aId, uSide), sIz = floor(aId / uSide);
-        vec2 sCell = uBase + (vec2(sIx, sIz) - uSide * 0.5) * uStep;
-        float sH1 = swHash(sCell + 0.13);
-        float sH2 = swHash(sCell * 1.7 + 5.1);
-        float sH3 = swHash(sCell * 2.9 + 11.7);
-        vec2 sP = sCell + (vec2(sH2, sH3) - 0.5) * uStep * 0.9;
+        // ── A STAGGERED LATTICE, JITTERED PAST ITS OWN CELL ──
+        //
+        // Two things made the field read as a grid. The rows were SQUARE and
+        // axis-aligned, so the lattice lined up with the pixel grid and beat
+        // against it; and the jitter was clamped to 0.9 of a step, which keeps
+        // every blade inside its own cell and holds the density at exactly one
+        // per cell — perfectly, visibly uniform.
+        //
+        // Odd rows now shift by half a step, which is a triangular lattice and
+        // has no axis to align with. The jitter runs past the cell edge so
+        // neighbours interleave: the count per cell is still one, but WHERE
+        // they land no longer partitions the ground into squares.
+        float sStag = mod(sIz, 2.0) * 0.5;
+        vec2 sIdx = vec2(sIx + sStag, sIz);
+        vec2 sCell = uBase + (sIdx - uSide * 0.5) * uStep;
+        // Hashed on the INDEX, not the metres — see swHash. The base cell is
+        // folded in so a slot rehashes when the lattice wraps, which is what
+        // makes new grass arrive rather than old grass slide.
+        vec2 sKey = sIdx + floor(uBase / uStep);
+        float sH1 = swHash(sKey + 0.13);
+        float sH2 = swHash(sKey * 1.7 + 5.1);
+        float sH3 = swHash(sKey * 2.9 + 11.7);
+        vec2 sP = sCell + (vec2(sH2, sH3) - 0.5) * uStep * 1.35;
         vec2 sUv = (sP - uFieldOrg) / uFieldW;
         vec4 sF = texture2D(uField, sUv);
         float sBlocked = texture2D(uSwardMask, sUv).r;
@@ -22435,12 +22470,31 @@ const audio = (() => {
     waSrc.connect(waterFilt); waterFilt.connect(waterGain); waterGain.connect(master); waSrc.start();
   };
   const arm = (): void => {
-    // iOS mutes Web Audio with the RINGER SWITCH unless the page declares a
-    // playback session (16.4+). Without this the graph runs perfectly and you
-    // hear nothing — which is exactly how it failed on the phone.
+    // ── MUTED MEANS NO CONTEXT AT ALL ──
+    //
+    // Building the graph and turning the master gain to zero is not silence,
+    // it is silence WITH THE AUDIO HARDWARE HELD. On a phone that is enough to
+    // duck or stop whatever the player was listening to — reported from the
+    // seat as the game stealing audio with the dial off, which is exactly what
+    // it did. There is nothing to arm when the answer is no sound: `toggle`
+    // calls arm() on the way back up, so the graph is built the moment it is
+    // actually wanted.
+    if (!on) return;
+    // ── AND WHEN IT IS WANTED, IT SHARES ──
+    //
+    // 'playback' is the category that says "I am the thing you are listening
+    // to", and iOS honours it by interrupting everyone else. That was chosen
+    // to beat the RINGER SWITCH, which silences Web Audio otherwise — a real
+    // problem, fixed at the cost of killing the player's podcast.
+    //
+    // 'ambient' is the other side of that trade and the right one for a game:
+    // it MIXES, so music keeps playing underneath. The cost is honest and
+    // worth stating — with the ringer switch off, the game is silent, which is
+    // how every other game on the phone behaves and what a player flicking
+    // that switch is asking for.
     try {
       const ns = (navigator as unknown as { audioSession?: { type: string } }).audioSession;
-      if (ns) ns.type = 'playback';
+      if (ns) ns.type = 'ambient';
     } catch { /* not supported — silent switch still applies */ }
     if (!ctx) build();
     if (!ctx) return;
@@ -22467,6 +22521,10 @@ const audio = (() => {
       try { localStorage.setItem('drive.mute', on ? '0' : '1'); } catch { /* fine */ }
       if (on) arm();
       if (master && ctx) master.gain.setTargetAtTime(on ? 0.55 : 0, ctx.currentTime, 0.05);
+      // MUTING GIVES THE HARDWARE BACK. A suspended context releases the audio
+      // session, so turning the dial off mid-drive stops ducking whatever else
+      // is playing rather than merely going quiet over the top of it.
+      if (!on) { try { void ctx?.suspend(); } catch { /* fine */ } }
       return on;
     },
     // Called every frame; all parameters glide so nothing zippers.
@@ -27432,9 +27490,14 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // reads at this size where an arrow glyph reads as noise. Held: a play
     // triangle, because the tap that follows is what starts it again.
     if (rewindPaused && !held) {
+      // PLAY: a triangle, drawn as columns so it stays crisp at this size.
       for (let i = 0; i < 7; i++) hctx.fillRect(pad + 4 + i, ry + 1 + Math.floor(i / 2), 1, 7 - i);
     } else {
-      for (let i = 0; i < 3; i++) hctx.fillRect(pad + 1, ry + 1 + i * 3, 13, 1);
+      // PAUSE: two bars. The tab draws WHAT THE TAP WILL DO, so at rest — the
+      // world running — it offers the stop. It was three horizontal bars,
+      // which is a grab-handle and says nothing about the transport.
+      hctx.fillRect(pad + 4, ry + 1, 2, 7);
+      hctx.fillRect(pad + 9, ry + 1, 2, 7);
     }
     if (held) {
       const have = Math.max(1, rewindHave());
