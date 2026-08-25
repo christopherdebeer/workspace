@@ -26578,15 +26578,21 @@ const coverBandMat = new THREE.MeshLambertMaterial({ color: 0x232c2a, flatShadin
  * Four procedural terms say it, and all four are free at a 148x320 render
  * target where fragments are the cheap axis:
  *
- *   PANELS. A lat/long grid of seams over the dome's own direction, so a
- *   panel is about three hundred metres on Paris's shell. This is the term
- *   that does the work: a regular grid at any distance is not geology.
+ *   PANELS, GEODESIC. Cells laid out on a CUBE-CHART of the direction — the
+ *   dominant axis picks one of six faces and the other two give a square
+ *   chart — with a low-jitter Worley lattice inside each. That is near-hex,
+ *   near-uniform, and has no poles. The first cut used a lat/long grid, which
+ *   converges to slivers at the apex and lines up with the axes; combined
+ *   with the tone below it read, exactly and fairly, as a DISCO BALL.
  *
- *   PANEL TONE. Each panel a hash-width off its neighbours, because a shell
- *   this size was not poured in one go and does not weather in one either.
+ *   PANEL TONE, QUIETLY. Each panel a hair off its neighbours. This was the
+ *   other half of the mirror-ball: a 45% swing per facet is not a shell that
+ *   weathered unevenly, it is a set of mirrors. Six percent.
  *
- *   WEATHERING. Streaks running down the flanks, absent at the apex and
- *   strongest at the foot, which is where eight years of rain would put them.
+ *   WEAR, IN TWO GRAINS. Streaks running down the flanks — absent at the
+ *   apex, strongest at the foot, which is where eight years of rain put them —
+ *   and a finer blotching that pools ALONG THE SEAMS, because a seam is where
+ *   water sits and dirt collects on any real panelled structure.
  *
  *   RIM SHEEN. A fresnel term along the silhouette. A mountain's edge goes
  *   dark against the sky; a smooth built surface catches it, and this is what
@@ -26620,7 +26626,41 @@ function coverFx(mat: THREE.MeshLambertMaterial): void {
         'varying vec3 vCovO;',
         'varying vec3 vCovW;',
         'varying vec3 vCovN;',
-        'float covHash(vec2 p){ return fract(sin(dot(p, vec2(41.3, 289.1))) * 43758.5453); }',
+        // Hoskins, not fract(sin(...)) — the same reason the sward's hash was
+        // changed: sin loses its fraction on large inputs and the "random"
+        // comes back correlated, which on a lattice is a pattern.
+        'float covH1(vec2 p){',
+        '  vec3 p3 = fract(vec3(p.xyx) * 0.1031);',
+        '  p3 += dot(p3, p3.yzx + 33.33);',
+        '  return fract((p3.x + p3.y) * p3.z);',
+        '}',
+        'vec2 covH2(vec2 p){',
+        '  vec3 p3 = fract(vec3(p.xyx) * vec3(0.1031, 0.1030, 0.0973));',
+        '  p3 += dot(p3, p3.yzx + 33.33);',
+        '  return fract((p3.xx + p3.yz) * p3.zy);',
+        '}',
+        // ── THE PANEL LATTICE ──
+        //
+        // Worley over a square chart, jittered only a little so the cells sit
+        // near-hexagonal rather than blobby: a shell is assembled, not grown.
+        // Returns (nearest, second nearest, cell id) — the GAP between the two
+        // is the seam, and it is a true edge distance, so the seam has even
+        // width everywhere instead of thinning where cells are large.
+        'vec3 covCells(vec2 p){',
+        '  vec2 ip = floor(p), fp = p - ip;',
+        '  float f1 = 9.0, f2 = 9.0; vec2 id = vec2(0.0);',
+        '  for (int j = -1; j <= 1; j++) {',
+        '    for (int i = -1; i <= 1; i++) {',
+        '      vec2 g = vec2(float(i), float(j));',
+        '      vec2 o = covH2(ip + g);',
+        '      vec2 c = g + 0.5 + (o - 0.5) * 0.72;',
+        '      float d = dot(c - fp, c - fp);',
+        '      if (d < f1) { f2 = f1; f1 = d; id = ip + g; }',
+        '      else if (d < f2) { f2 = d; }',
+        '    }',
+        '  }',
+        '  return vec3(sqrt(f1), sqrt(f2), covH1(id + 0.37));',
+        '}',
       ].join('\n'))
       .replace('#include <dithering_fragment>', [
         '#include <dithering_fragment>',
@@ -26629,16 +26669,39 @@ function coverFx(mat: THREE.MeshLambertMaterial): void {
         // panel COUNT rather than the same panel metres, which is the right
         // way round for a thing built to fit a city.
         '  vec3 cd = normalize(vCovO);',
-        '  float cth = atan(cd.z, cd.x);',
         '  float cph = acos(clamp(cd.y, -1.0, 1.0));',
-        '  vec2 pc = vec2(cth / 6.2831853 * 150.0, cph / 1.5707963 * 34.0);',
-        '  vec2 pg = abs(fract(pc) - 0.5);',
-        '  float seam = smoothstep(0.45, 0.5, max(pg.x, pg.y));',
-        '  float tone = covHash(floor(pc));',
+        // ── A CUBE CHART, SO THERE IS NO POLE ──
+        //
+        // The dominant axis picks one of six faces and the other two
+        // components give a square chart on it. Panels stay the same size from
+        // the apex to the rim, and nothing lines up with an axis of the world.
+        // The lat/long grid this replaces did the opposite of both.
+        '  vec3 ad = abs(cd);',
+        '  vec2 cuv; float cface;',
+        '  if (ad.x >= ad.y && ad.x >= ad.z) { cface = cd.x > 0.0 ? 0.0 : 1.0; cuv = cd.zy / ad.x; }',
+        '  else if (ad.y >= ad.z) { cface = cd.y > 0.0 ? 2.0 : 3.0; cuv = cd.xz / ad.y; }',
+        '  else { cface = cd.z > 0.0 ? 4.0 : 5.0; cuv = cd.xy / ad.z; }',
+        // A cube face stretches toward its corners; this pulls it back most of
+        // the way to equal-area, so a corner panel is not twice a middle one.
+        '  cuv *= 1.34 - 0.34 * cuv * cuv;',
+        // FINER THAN BEFORE. 44 puts a panel around 150m on Paris\'s shell,
+        // against the ~300m of the first cut.
+        '  vec3 cel = covCells(cuv * 44.0 + cface * 23.7);',
+        // A TRUE EDGE DISTANCE, so the seam is the same width everywhere.
+        '  float sgap = cel.y - cel.x;',
+        '  float seam = 1.0 - smoothstep(0.012, 0.055, sgap);',
+        '  float tone = cel.z;',
         // Down the flanks, not over the top.
         '  float low = smoothstep(0.30, 1.0, cph / 1.5707963);',
-        '  float streak = covHash(vec2(floor(cth * 240.0), 7.0));',
-        '  float wet = low * smoothstep(0.68, 0.95, streak);',
+        // Streaks run DOWN, so they are hashed on the horizontal angle only —
+        // the one place the old lat/long parameterisation was the right tool.
+        '  float cth = atan(cd.z, cd.x);',
+        '  float streak = covH1(vec2(floor(cth * 320.0), 7.0));',
+        '  float wet = low * smoothstep(0.66, 0.95, streak);',
+        // …AND DIRT POOLS IN THE SEAMS. A finer grain, gated to the seam
+        // neighbourhood, which is where water sits on any panelled structure.
+        '  float grime = covH1(cuv * 190.0 + cface * 11.0);',
+        '  float dirt = (1.0 - smoothstep(0.02, 0.10, sgap)) * smoothstep(0.35, 0.9, grime);',
         '  vec3 V = normalize(cameraPosition - vCovW);',
         '  vec3 N = normalize(vCovN);',
         '  float fres = pow(1.0 - clamp(dot(V, N), 0.0, 1.0), 3.0);',
@@ -26659,12 +26722,18 @@ function coverFx(mat: THREE.MeshLambertMaterial): void {
         // additive term, floored above zero, which is what makes the structure
         // survive on the night side. The sun-facing side still gets the
         // multiplicative shading underneath, so it is not flat by day.
-        '  float sky = (0.55 + 0.45 * tone) * (1.0 - 0.80 * seam) * (1.0 - 0.45 * wet);',
-        '  cc *= 0.93 + 0.14 * tone;',
-        '  cc = mix(cc, cc * 0.70, seam);',
-        '  cc = mix(cc, cc * 0.78, wet);',
+        // A HAIR, NOT A FACET. 0.45 of swing per panel was the mirror ball.
+        '  float sky = (0.94 + 0.06 * tone) * (1.0 - 0.85 * seam)',
+        '            * (1.0 - 0.35 * wet) * (1.0 - 0.45 * dirt);',
+        '  cc *= 0.97 + 0.06 * tone;',
+        '  cc = mix(cc, cc * 0.72, seam);',
+        '  cc = mix(cc, cc * 0.84, wet);',
+        '  cc = mix(cc, cc * 0.80, dirt);',
         '  cc += vec3(0.052, 0.060, 0.058) * sky;',
-        '  cc += vec3(0.10, 0.13, 0.14) * fres * 0.55;',
+        // The sheen catches the SEAMS too — a recessed joint does not return
+        // the sky the way the panel around it does, and that difference is
+        // most of what says "panelled" on a silhouette.
+        '  cc += vec3(0.10, 0.13, 0.14) * fres * 0.55 * (1.0 - 0.7 * seam);',
         '  gl_FragColor.rgb = cc;',
         '}',
       ].join('\n'));
