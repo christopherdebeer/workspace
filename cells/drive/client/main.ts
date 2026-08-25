@@ -26602,7 +26602,14 @@ const coverBandMat = new THREE.MeshLambertMaterial({ color: 0x232c2a, flatShadin
  * scratch, so the sun, the cloud shadows and the shadow map keep working —
  * the same reason terrainFx is shaped this way. CHAIN, do not clobber.
  */
-function coverFx(mat: THREE.MeshLambertMaterial): void {
+/**
+ * @param band  The FOOT is not the dome. It is a vertical wall where the
+ *   shell meets the ground, and giving it the dome's own cell pattern was
+ *   wrong twice over: `normalize(position)` on a cylinder is almost entirely
+ *   horizontal, so the cube chart smeared the panels into vertical streaks;
+ *   and a wall is not built like a roof anyway. It gets ribs and courses.
+ */
+function coverFx(mat: THREE.MeshLambertMaterial, band = false): void {
   const prev = mat.onBeforeCompile;
   mat.onBeforeCompile = function (sh, renderer) {
     prev?.call(mat, sh, renderer);
@@ -26673,6 +26680,36 @@ function coverFx(mat: THREE.MeshLambertMaterial): void {
         // way round for a thing built to fit a city.
         '  vec3 cd = normalize(vCovO);',
         '  float cph = acos(clamp(cd.y, -1.0, 1.0));',
+        '  float cDistB = distance(vCovW, cameraPosition);',
+        ...(band ? [
+          // ── THE FOOT IS A WALL ──
+          //
+          // Ribs and courses, which is how you hold a wall of this height up,
+          // and nothing like the roof above it. Angular rather than metric
+          // because the shader has no radius: on Paris's shell this puts a rib
+          // about every fourteen metres.
+          '  float bAng = atan(vCovO.z, vCovO.x) / 6.2831853;',
+          '  float bRib = bAng * 3800.0;',
+          '  float bCourse = vCovO.y / 5.5;',
+          '  float rib = 1.0 - smoothstep(0.06, 0.20, abs(fract(bRib) - 0.5));',
+          // Every eighth rib stands proud — a buttress, so the wall has a
+          // rhythm rather than a corduroy.
+          '  float bBut = 1.0 - smoothstep(0.10, 0.30, abs(fract(bRib / 8.0) - 0.5));',
+          '  float course = 1.0 - smoothstep(0.10, 0.30, abs(fract(bCourse) - 0.5));',
+          // Wet at the bottom, always. Ground water wicks up a wall and this
+          // is the single most recognisable thing about a big concrete foot.
+          '  float bLow = 1.0 - smoothstep(-70.0, 10.0, vCovO.y);',
+          '  float bGrime = covH1(vec2(bRib * 0.7, bCourse * 1.3));',
+          '  vec3 cc = gl_FragColor.rgb;',
+          '  cc *= 0.90 + 0.13 * covH1(vec2(floor(bRib), floor(bCourse)));',
+          '  cc = mix(cc, cc * 0.74, course * 0.8);',
+          '  cc = mix(cc, cc * 0.82, rib);',
+          '  cc = mix(cc, cc * 1.12, bBut * 0.5);',
+          '  cc = mix(cc, cc * 0.70, bLow * (0.45 + 0.4 * bGrime));',
+          '  cc += vec3(0.040, 0.046, 0.045) * (1.0 - 0.6 * course) * (1.0 - 0.5 * rib);',
+          '  gl_FragColor.rgb = cc;',
+          '}',
+        ] : [
         // ── A CUBE CHART, SO THERE IS NO POLE ──
         //
         // The dominant axis picks one of six faces and the other two
@@ -26731,10 +26768,31 @@ function coverFx(mat: THREE.MeshLambertMaterial): void {
         // neighbourhood, which is where water sits on any panelled structure.
         '  float grime = covH1(cuv * 420.0 + cface * 11.0);',
         '  float dirt = (1.0 - smoothstep(0.03, 0.14, sgap)) * smoothstep(0.35, 0.9, grime);',
+        // ── SURFACE, NOT JUST PATTERN ──
+        //
+        // The panels were flat FILLS with lines between them, which is a
+        // drawing of panels rather than a surface made of them. Two things
+        // fix that and neither needs a texture asset.
+        //
+        // GRAIN: a fine hash, so a panel has tooth. Faded out with range
+        // because below a pixel it is noise, not material.
+        '  float tooth = covH1(cuv * 2600.0 + cface * 5.0);',
+        '  float grainAmt = (1.0 - smoothstep(300.0, 1400.0, cDistB)) * 0.055;',
+        // BEVEL: the screen-space gradient of the seam field, lit from up-left.
+        // A panel edge that is brighter on one side and darker on the other
+        // reads as RAISED, and that is the whole difference between a painted
+        // line and a joint you could put a finger in. Screen-space is a cheat
+        // and an honest one at this pixel scale — it costs two derivatives.
+        '  vec2 sGrad = vec2(dFdx(sgap), dFdy(sgap));',
+        '  float sGL = length(sGrad);',
+        '  float bevel = sGL > 1e-6',
+        '    ? dot(sGrad / sGL, vec2(-0.55, -0.84)) * (1.0 - smoothstep(0.0, 0.16, sgap))',
+        '    : 0.0;',
         '  vec3 V = normalize(cameraPosition - vCovW);',
         '  vec3 N = normalize(vCovN);',
         '  float fres = pow(1.0 - clamp(dot(V, N), 0.0, 1.0), 3.0);',
         '  vec3 cc = gl_FragColor.rgb;',
+        '  cc *= 1.0 + (tooth - 0.5) * grainAmt * 2.0;',
         // ── STRUCTURE HAS TO ADD, NOT SCALE ──
         //
         // Every term here was multiplicative, and the shell is very nearly
@@ -26765,8 +26823,13 @@ function coverFx(mat: THREE.MeshLambertMaterial): void {
         // the sky the way the panel around it does, and that difference is
         // most of what says "panelled" on a silhouette.
         '  cc += vec3(0.10, 0.13, 0.14) * fres * 0.55 * (1.0 - 0.7 * seam);',
+        // The bevel rides on TOP of the sky term, so a joint catches the light
+        // on its lit lip and loses it on the other — additive, so it survives
+        // on the dark side exactly as the panels do.
+        '  cc += vec3(0.055, 0.062, 0.060) * bevel * 0.9;',
         '  gl_FragColor.rgb = cc;',
         '}',
+        ]),
       ].join('\n'));
   };
   // THREE CACHES PROGRAMS BY MATERIAL PARAMETERS, NOT BY THIS HOOK.
@@ -26784,7 +26847,7 @@ function coverFx(mat: THREE.MeshLambertMaterial): void {
   mat.needsUpdate = true;
 }
 coverFx(coverMat);
-coverFx(coverBandMat);
+coverFx(coverBandMat, true);
 /** Is this lat/lon under a Cover? The margin keeps half-in tiles out too —
  *  a road that dives under the shell is a road the map no longer answers for. */
 function underCover(lat: number, lon: number, margin = 0.97): Cover | null {
@@ -27104,11 +27167,35 @@ function buildCovers(): void {
     // Squashed — a shell over a city is a lid, not a planet.
     const dome = new THREE.Mesh(new THREE.SphereGeometry(c.r, 40, 14, 0, Math.PI * 2, 0, Math.PI / 2), coverMat);
     dome.scale.y = 0.42;
+    // ── SHADOWS: RECEIVES, DOES NOT CAST ──
+    //
+    // Neither was set, which meant neither happened. Receiving is free and
+    // right: at the aperture you stand at the foot of the thing, and a shell
+    // that ignores the shadow map is a shell nothing can fall across.
+    //
+    // CASTING is refused, and it is the dome specifically that has to refuse.
+    // The shadow camera is fitted to a few hundred metres around the truck,
+    // which is what buys usable depth precision at this scene scale; a mesh
+    // 8.6km across and 3.6km tall either falls outside that frustum entirely
+    // (drawn for nothing) or, if the frustum is grown to hold it, destroys the
+    // precision that every other shadow in the world depends on. A dome this
+    // size wants a cascade, and one does not exist here.
+    //
+    // The FOOT is a different question and gets a different answer below.
+    dome.castShadow = false;
+    dome.receiveShadow = true;
     g.add(dome);
     // The foot band: a wall where the shell meets the ground, so arriving at
     // it reads as arriving at a THING rather than at a big grey hill.
     const band = new THREE.Mesh(new THREE.CylinderGeometry(c.r * 1.001, c.r * 1.003, 170, 64, 1, true), coverBandMat);
     band.position.y = 80;
+    // …AND THE FOOT DOES CAST. It is 170m of wall standing where the player
+    // actually is — inside the shadow frustum, at the aperture, for the whole
+    // opening of the campaign. A wall that tall throws a long shadow across
+    // the ground at either end of the day, and that shadow is most of what
+    // makes standing next to it feel like standing next to something.
+    band.castShadow = true;
+    band.receiveShadow = true;
     g.add(band);
     // Seated a little low so terrain relief never opens a gap under the rim.
     // The centre is kilometres away, so its terrain has usually NOT streamed —
