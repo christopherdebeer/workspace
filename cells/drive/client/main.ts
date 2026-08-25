@@ -445,6 +445,39 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
     if (!Number.isFinite(v) || v < -500 || v > 9000) bad++;
   }
   if (bad > out.length * 0.02) { demSource.bad++; return null; }
+  // ── …AND THE RANGE TEST IS THE EASY HALF ──
+  //
+  // A terrarium height is R*256 + G + B/256 - 32768, so a byte that lands in
+  // the wrong channel moves the ground by 256 METRES and stays comfortably
+  // inside the range of a real planet. That is a spike the test above cannot
+  // see, and it is the size of the ones being reported.
+  //
+  // What gives it away is not its height but its NEIGHBOURS. Real ground is
+  // continuous at 10-30m sampling: even a sea cliff climbs a few tens of
+  // metres between adjacent posts, and the pixels that do are a contiguous
+  // line, never scattered. A post standing a hundred metres off the four
+  // around it is not a landform, it is a bad byte.
+  //
+  // Deliberately NOT a repair, and deliberately without repairDem's
+  // stand-down: this only decides whether the tile is TRUSTWORTHY, so the
+  // more of it is wrong the more certain the answer gets, which is the right
+  // way round for the case that has been getting through.
+  const W = 256;
+  const spikeTh = Math.max(80, 12 * mpp);
+  let spikes = 0;
+  for (let yy = 1; yy < W - 1; yy++) {
+    for (let xx = 1; xx < W - 1; xx++) {
+      const i = yy * W + xx;
+      const n = (out[i - 1] + out[i + 1] + out[i - W] + out[i + W]) * 0.25;
+      if (Math.abs(out[i] - n) > spikeTh) spikes++;
+    }
+  }
+  if (spikes > out.length * 0.03) {
+    demSource.bad++;
+    demFixes.push({ t: `refused ${((spikes / out.length) * 100).toFixed(1)}% spiked`, n: spikes });
+    if (demFixes.length > 40) demFixes.shift();
+    return null;
+  }
   if (bad) {
     // Their own ground, not zero: a patch at sea level in a mountain valley is
     // its own crater.
