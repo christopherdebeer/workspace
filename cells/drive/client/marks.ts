@@ -22,7 +22,15 @@
 
 import type { StoreLike } from './survey-store';
 
-export type MarkKind = 'm' | 's';           // mission done · station woken
+// mission done · station woken · observation recorded
+//
+// 'o' IS LOCAL FOR NOW. The sync bridge speaks `missions` and `stations` by
+// name and the server's /state reserves a row per kind, so an observation
+// latches and survives a reload on THIS device but does not yet travel to
+// another. That is a deliberate seam, not an oversight: the recording
+// mechanic is worth playing before its wire format is fixed in a table.
+export type MarkKind = 'm' | 's' | 'o';
+const MARK_KINDS: MarkKind[] = ['m', 's', 'o'];
 const MARKS_V = 1;
 const MARKS_KEY = `drive.marks.v${MARKS_V}`;
 /** How long a mark may sit unwritten. Marks are rare (a job finished, a
@@ -30,7 +38,8 @@ const MARKS_KEY = `drive.marks.v${MARKS_V}`;
  *  problem — but the flush still debounces so a burst costs one write. */
 const MARKS_FLUSH_MS = 1500;
 
-export interface MarksDump { m?: Record<string, number>; s?: Record<string, number> }
+export interface MarksDump { m?: Record<string, number>; s?: Record<string, number>;
+  o?: Record<string, number> }
 export interface Marks {
   /** When it happened, 0 if it has not. */
   at(kind: MarkKind, id: string): number;
@@ -66,14 +75,15 @@ export function openMarks(opts: {
   const now = opts.now ?? (() => performance.now());
   const stamp = opts.stamp ?? (() => Date.now());
 
-  const maps: Record<MarkKind, Map<string, number>> = { m: new Map(), s: new Map() };
+  const maps: Record<MarkKind, Map<string, number>> = { m: new Map(), s: new Map(), o: new Map() };
   /** `now()` of the oldest unwritten change, 0 when clean. */
   let pending = 0;
 
   try {
     const raw = JSON.parse(store?.getItem(MARKS_KEY) ?? 'null') as
-      { m?: Record<string, unknown>; s?: Record<string, unknown> } | null;
-    for (const kind of ['m', 's'] as MarkKind[]) {
+      { m?: Record<string, unknown>; s?: Record<string, unknown>;
+        o?: Record<string, unknown> } | null;
+    for (const kind of MARK_KINDS) {
       for (const [id, at] of Object.entries(raw?.[kind] ?? {})) {
         const t = Number(at);
         if (id && Number.isFinite(t) && t > 0) maps[kind].set(id, t);
@@ -88,6 +98,7 @@ export function openMarks(opts: {
         v: MARKS_V,
         m: Object.fromEntries(maps.m),
         s: Object.fromEntries(maps.s),
+        o: Object.fromEntries(maps.o),
       }));
     } catch { /* a full quota costs the mark's durability, never the drive */ }
   }
@@ -107,7 +118,7 @@ export function openMarks(opts: {
     set(kind, id, at) { put(kind, id, at ?? stamp()); },
     dump(since) {
       const out: MarksDump = {};
-      for (const kind of ['m', 's'] as MarkKind[]) {
+      for (const kind of MARK_KINDS) {
         const rows: Record<string, number> = {};
         for (const [id, t] of maps[kind]) if (!since || t > since) rows[id] = t;
         if (Object.keys(rows).length) out[kind] = rows;
@@ -116,7 +127,7 @@ export function openMarks(opts: {
     },
     merge(rows) {
       let changed = 0;
-      for (const kind of ['m', 's'] as MarkKind[]) {
+      for (const kind of MARK_KINDS) {
         for (const [id, at] of Object.entries(rows?.[kind] ?? {})) {
           if (typeof id === 'string' && put(kind, id, Number(at))) changed++;
         }
@@ -124,7 +135,7 @@ export function openMarks(opts: {
       return changed;
     },
     count: (kind) => maps[kind].size,
-    reset() { maps.m.clear(); maps.s.clear(); flush(); },
+    reset() { for (const k of MARK_KINDS) maps[k].clear(); flush(); },
     tick(t) { if (pending && t - pending > MARKS_FLUSH_MS) flush(); },
     flush,
     dirty: () => !!pending,

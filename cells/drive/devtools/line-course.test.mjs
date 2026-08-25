@@ -131,6 +131,49 @@ const walked = await course();
 check('DRIVING THE LINE COLLECTS THE LINE', walked.got >= 4, walked);
 check('…and it is not yet finished on four of fifty', walked.met === false, walked);
 
+// ── 5. the orbital layer's disagreements ─────────────────────────
+// An observation is a real mismatch between the WorldCover raster the ground
+// is painted from and what OSM says is standing there. It must be ON the leg,
+// it must record by DRIVING PAST rather than by asking, and it must latch.
+const seeded = await course();
+check('the leg carries observations', seeded.obs >= 3, seeded.obs);
+// NOT "none recorded yet" — the walk above already drove the first four
+// kilometres of the line and one of these sits at km 0.5, so it is recorded
+// and should be. `c` is the reading taken before any of that happened, which
+// is where the claim about a fresh leg belongs.
+check('…none of them recorded before the leg was driven', c.obsGot === 0, c.obsGot);
+check('…and driving the opening stretch recorded the one on it',
+  seeded.obsGot >= 1, { walked: 'km 0-4.1', got: seeded.obsGot });
+check('…each names a sky claim and a ground truth that differ',
+  seeded.obsNext.length > 0 && seeded.obsNext.every((o) => o.sky && o.ground && o.kind), seeded.obsNext);
+
+// ARRIVING is the claim here, not the driving. The checkpoints above already
+// proved the swept walk, and an observation's range test is plain distance —
+// so walking thirty kilometres of course to reach one would be six hundred
+// respawns to exercise a Math.hypot, which is what made this file take twenty
+// minutes and never finish. Put the truck on the course AT its kilometre
+// instead, which is the state a player who drove there would be in.
+const target = await page.evaluate(() => {
+  const o = window.__course().obsNext[0];
+  return o ? { id: o.id, km: o.km } : null;
+});
+check('there is one ahead on the leg', !!target, target);
+if (target) {
+  const landed = await page.evaluate((km) => {
+    const p = window.__coursePt(km * 1000);
+    if (!p) return null;
+    window.__place(p[0], p[1]);
+    return p;
+  }, target.km);
+  check('the course can put us at its kilometre', !!landed, landed);
+  await page.waitForTimeout(1500);
+  const rec = await course();
+  check('ARRIVING AT ONE RECORDS IT', rec.obsGot >= 1,
+    { want: target, got: rec.obsGot, left: rec.obsNext.slice(0, 2) });
+  check('…and it latches in the marks', await page.evaluate(() => window.__marks().obs > 0),
+    await page.evaluate(() => window.__marks()));
+}
+
 console.log('course:', JSON.stringify(c));
 console.log('after walking:', JSON.stringify(walked));
 console.log(bad ? `\n${bad} FAILED` : '\nall good');
