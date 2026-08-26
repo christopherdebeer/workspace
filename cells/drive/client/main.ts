@@ -27435,12 +27435,22 @@ function buildCovers(): void {
     // it reads as arriving at a THING rather than at a big grey hill.
     const band = new THREE.Mesh(new THREE.CylinderGeometry(c.r * 1.001, c.r * 1.003, 170, 64, 1, true), coverBandMat);
     band.position.y = 80;
-    // …AND THE FOOT DOES CAST. It is 170m of wall standing where the player
-    // actually is — inside the shadow frustum, at the aperture, for the whole
-    // opening of the campaign. A wall that tall throws a long shadow across
-    // the ground at either end of the day, and that shadow is most of what
-    // makes standing next to it feel like standing next to something.
-    band.castShadow = true;
+    // …AND THE FOOT DOES NOT CAST EITHER, for now.
+    //
+    // It was turned on with a good story — 170m of wall standing where the
+    // player actually is, throwing a long shadow at either end of the day —
+    // and with a caveat written in the same breath: a cylinder 54km around
+    // entering the shadow pass is a lot to ask of a map fitted to a few
+    // hundred metres. That caveat was never tested, and it is the only change
+    // in this run of work that went out on reasoning alone with nothing
+    // measured behind it. Combing the session for what could be making the
+    // world misbehave, this is what stood out: not because it explains the
+    // symptom, but because it is the one thing I cannot say it DOESN'T.
+    //
+    // Off until there is a shadow-map budget measured for it. The wall is a
+    // silhouette either way; what it costs to prove is a frame time nobody has
+    // taken.
+    band.castShadow = false;
     band.receiveShadow = true;
     g.add(band);
     // Seated a little low so terrain relief never opens a gap under the rim.
