@@ -1143,6 +1143,93 @@ function liveTable(): StateTable {
   };
 }
 
+/**
+ * ── THE PROBE CHANNEL ──────────────────────────────────────────────
+ *
+ * A way to ask a QUESTION OF A RUNNING TAB, and the reason it exists is four
+ * hours of a fault that could not be reproduced anywhere it could be
+ * inspected. The test rig is headless Chromium on Linux; the player is Safari
+ * on a phone. Every bug that lives in the gap between those two — a shader
+ * that will not compile, a decoder that colour-manages, a GPU that rounds
+ * differently — is invisible to every test in this repo and obvious in one
+ * screenshot. Screenshots are a slow way to ask a precise question.
+ *
+ * So: the tab polls for expressions, evaluates them, and posts the answers
+ * back. Four routes, one partition, no sockets.
+ *
+ *   POST /~/probe/ask?k=KEY    {js}      → {id}
+ *   GET  /~/probe/next?k=KEY             → {id, js} | {}      (the tab polls)
+ *   POST /~/probe/answer?k=KEY {id, v}   → {ok}               (the tab replies)
+ *   GET  /~/probe/get?k=KEY&id=ID        → {v} | {pending}
+ *
+ * IT IS AN EVAL ENDPOINT, so it is off unless asked for twice: the tab only
+ * polls when the URL carries `?probe=KEY`, and every route demands the same
+ * KEY. No key, no channel — and the key is chosen by whoever opens the tab,
+ * not baked in here. A stale queue expires on its own so a forgotten tab
+ * cannot be woken by yesterday's question.
+ */
+const PROBE_PK = 'PROBE#';
+const PROBE_TTL = 10 * 60 * 1000;
+function probeKeyOf(q: URLSearchParams): string {
+  const k = (q.get('k') ?? '').trim();
+  return /^[A-Za-z0-9_-]{6,64}$/.test(k) ? k : '';
+}
+async function serveProbe(path: string, method: string, q: URLSearchParams, body: string | undefined) {
+  const j = (code: number, o: unknown) => respond(code, 'application/json', JSON.stringify(o),
+    { 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
+  if (!TABLE) return j(503, { error: 'no table configured' });
+  const key = probeKeyOf(q);
+  if (!key) return j(400, { error: 'probe key must be 6-64 of [A-Za-z0-9_-]' });
+  const pk = PROBE_PK + key;
+  const m = await import('@aws-sdk/client-dynamodb');
+  const db = new m.DynamoDBClient({});
+  const S = (v: string) => ({ S: v });
+  const N = (v: number) => ({ N: String(Math.round(v)) });
+  const rows = async () => {
+    const res = await db.send(new m.QueryCommand({
+      TableName: TABLE, KeyConditionExpression: 'pk = :p',
+      ExpressionAttributeValues: { ':p': S(pk) },
+    })) as { Items?: Array<Record<string, { S?: string; N?: string }>> };
+    return (res.Items ?? []).filter((it) => Number(it.at?.N ?? 0) > Date.now() - PROBE_TTL);
+  };
+  if (path === '/~/probe/ask' && method === 'POST') {
+    let js = '';
+    try { js = String((JSON.parse(body ?? '{}') as { js?: unknown }).js ?? ''); } catch { /* below */ }
+    if (!js || js.length > 8000) return j(400, { error: 'js required, under 8000 chars' });
+    const id = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
+    await db.send(new m.PutItemCommand({ TableName: TABLE,
+      Item: { pk: S(pk), sk: S(`q#${id}`), js: S(js), at: N(Date.now()) } }));
+    return j(200, { id });
+  }
+  if (path === '/~/probe/next') {
+    const qs = (await rows()).filter((it) => (it.sk?.S ?? '').startsWith('q#'))
+      .sort((a, b) => Number(a.at?.N ?? 0) - Number(b.at?.N ?? 0));
+    const first = qs[0];
+    if (!first) return j(200, {});
+    const sk = first.sk?.S ?? '';
+    // Taken, so a second tab cannot answer the same question twice.
+    await db.send(new m.DeleteItemCommand({ TableName: TABLE, Key: { pk: S(pk), sk: S(sk) } }));
+    return j(200, { id: sk.slice(2), js: first.js?.S ?? '' });
+  }
+  if (path === '/~/probe/answer' && method === 'POST') {
+    let id = '', v = '';
+    try {
+      const o = JSON.parse(body ?? '{}') as { id?: unknown; v?: unknown };
+      id = String(o.id ?? ''); v = typeof o.v === 'string' ? o.v : JSON.stringify(o.v ?? null);
+    } catch { /* below */ }
+    if (!id) return j(400, { error: 'id required' });
+    await db.send(new m.PutItemCommand({ TableName: TABLE,
+      Item: { pk: S(pk), sk: S(`a#${id}`), v: S(v.slice(0, 380000)), at: N(Date.now()) } }));
+    return j(200, { ok: true });
+  }
+  if (path === '/~/probe/get') {
+    const id = (q.get('id') ?? '').slice(0, 64);
+    const hit = (await rows()).find((it) => (it.sk?.S ?? '') === `a#${id}`);
+    return hit ? j(200, { v: hit.v?.S ?? '' }) : j(200, { pending: true });
+  }
+  return j(404, { error: 'no such probe route' });
+}
+
 export async function serveState(
   method: string,
   caller: string,
@@ -1301,6 +1388,12 @@ export const handler = async (event: {
 }) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
+  // THE PROBE CHANNEL, first, because two of its four routes write and it must
+  // answer before any read-only gate below. See serveProbe: off unless the URL
+  // carries a key, and the tab only polls when it was opened with the same one.
+  if (path.startsWith('/~/probe/')) {
+    return serveProbe(path, method, new URLSearchParams(event.rawQueryString ?? ''), event.body);
+  }
   // Same-origin on the cell's own host, so `'self'` covers it and no CORS is
   // involved. Before the read-only gate below, because this one writes.
   if (path === '/state') {

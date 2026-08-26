@@ -29847,3 +29847,64 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   if (runWire && !real.on && !lineOn && !attract.on) runCard(runWire);
   requestAnimationFrame((t) => { last = t; requestAnimationFrame(tick); });
 })();
+
+// ── THE PROBE CHANNEL, TAB SIDE ────────────────────────────────────
+//
+// Answers questions asked of THIS tab. See serveProbe in index.ts for why it
+// exists: the whole test rig is headless Chromium on Linux and the player is
+// Safari on a phone, so every fault that lives in the gap between them is
+// invisible where it can be inspected and obvious where it cannot. A
+// screenshot is a slow way to ask a precise question; this is a fast one.
+//
+// OFF UNLESS ASKED FOR. It polls only when the URL carries `?probe=KEY`, and
+// the key it polls with is the one in the URL — so a tab that was not opened
+// for this has no channel at all, and nobody without the key can reach a tab
+// that was. The key is chosen by whoever opens the tab.
+//
+// The evaluated text runs as an expression first and as a statement body if
+// that fails, so both `__sea()` and `let x = 1; x + 1` work. Whatever comes
+// back is JSON if it can be and its own toString if it cannot — an Error
+// included, because "it threw, and this is what it said" is an answer.
+{
+  const probeKey = (new URLSearchParams(location.search).get('probe') ?? '').trim();
+  if (/^[A-Za-z0-9_-]{6,64}$/.test(probeKey)) {
+    const base = `${CELL_BASE}/~/probe`;
+    const say = (v: unknown): string => {
+      try { return JSON.stringify(v) ?? String(v); } catch { return String(v); }
+    };
+    const run = (js: string): string => {
+      try {
+        // eslint-disable-next-line no-new-func
+        try { return say((new Function(`return (${js})`))()); } catch { /* statement form */ }
+        // eslint-disable-next-line no-new-func
+        return say((new Function(js))());
+      } catch (e) {
+        return say({ error: String((e as Error)?.message ?? e), stack: String((e as Error)?.stack ?? '').slice(0, 900) });
+      }
+    };
+    let stop = false;
+    const beat = async (): Promise<void> => {
+      if (stop) return;
+      try {
+        const r = await fetch(`${base}/next?k=${encodeURIComponent(probeKey)}`, { cache: 'no-store' });
+        const j = await r.json() as { id?: string; js?: string };
+        if (j.id && j.js) {
+          // Awaited, so a probe may return a promise — a fetch, a decode, a
+          // frame's wait — and still answer with what it resolved to.
+          let v = run(j.js);
+          try { const p = JSON.parse(v) as unknown;
+            if (p && typeof (p as { then?: unknown }).then === 'function') v = say(await p);
+          } catch { /* not a promise, and not JSON — either way it is the answer */ }
+          await fetch(`${base}/answer?k=${encodeURIComponent(probeKey)}`, {
+            method: 'POST', headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ id: j.id, v }),
+          });
+        }
+      } catch { /* offline, or the cell is redeploying — just ask again */ }
+      setTimeout(() => { void beat(); }, 1500);
+    };
+    void beat();
+    (window as unknown as { __probestop?: () => void }).__probestop = () => { stop = true; };
+    console.log(`[probe] listening as ${probeKey}`);
+  }
+}
