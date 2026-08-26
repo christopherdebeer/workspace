@@ -1994,7 +1994,13 @@ const quadScene = new THREE.Scene();
 const quad = new THREE.Mesh(new THREE.PlaneGeometry(2, 2));
 quad.frustumCulled = false;
 quadScene.add(quad);
+/** Full-screen passes since the last frame boundary, and the last completed
+ *  frame's total. On a tile-based mobile GPU each pass carries a fixed cost to
+ *  begin and end regardless of its size, so this is the number that matters
+ *  when the frame is slow with nothing in it. */
+const passCount = { now: 0, last: 0 };
 const runPass = (mat: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | null): void => {
+  passCount.now++;
   quad.material = mat;
   renderer.setRenderTarget(target);
   renderer.render(quadScene, quadCam);
@@ -2397,13 +2403,30 @@ composite = (amt: number): void => {
   blurMat.uniforms.src.value = rtA.texture; blurMat.uniforms.dirPx.value.set(0, 2 / rtA.height); runPass(blurMat, rtB);
   // Bright-pass, then two blur rounds of its own — bloom must not reuse the
   // depth-of-field blur, which is built from the WHOLE image.
-  brightMat.uniforms.src.value = srcTex; runPass(brightMat, rtC);
-  blurMat.uniforms.src.value = rtC.texture; blurMat.uniforms.dirPx.value.set(1.5 / rtC.width, 0); runPass(blurMat, rtD);
-  blurMat.uniforms.src.value = rtD.texture; blurMat.uniforms.dirPx.value.set(0, 1.5 / rtC.height); runPass(blurMat, rtC);
+  //
+  // SKIPPED ENTIRELY WHEN THERE IS NO BLOOM. The dial set `uBloom` to zero and
+  // left these three passes running, so a player who turned bloom OFF paid for
+  // it in full and got nothing: the composite multiplied the result by zero.
+  //
+  // Passes are not free on a phone, and not in proportion to their pixels. A
+  // tile-based GPU pays a fixed load/store to begin and end each one, which is
+  // why this frame costs what it does with the world hidden — measured: hiding
+  // 82% of the draw calls and 85% of the triangles moved the median frame by
+  // 0ms. The count of passes is the thing, not what is in them.
+  //
+  // rtC keeps whatever it last held; the composite reads it and multiplies by
+  // a zero uBloom, so a stale texture is arithmetically invisible.
+  if (bloomDial > 0) {
+    brightMat.uniforms.src.value = srcTex; runPass(brightMat, rtC);
+    blurMat.uniforms.src.value = rtC.texture; blurMat.uniforms.dirPx.value.set(1.5 / rtC.width, 0); runPass(blurMat, rtD);
+    blurMat.uniforms.src.value = rtD.texture; blurMat.uniforms.dirPx.value.set(0, 1.5 / rtC.height); runPass(blurMat, rtC);
+  }
   compMat.uniforms.sceneTex.value = srcTex;
   compMat.uniforms.softTex.value = rtB.texture;
   compMat.uniforms.bloomTex.value = rtC.texture;
   runPass(compMat, null);
+  passCount.last = passCount.now;
+  passCount.now = 0;
 };
 let lastRevealX = Infinity, lastRevealZ = Infinity;
 // One soft punch at a world point.
@@ -20949,6 +20972,12 @@ function noteTags(t: Record<string, string>): void {
  * drawn mesh through `meshSurfaceAt` and got nothing at all — that samples the
  * TERRAIN mesh, and the deck's cross-width heights exist nowhere else.
  */
+/** How many full-screen passes the last frame ran, and what is on. */
+(window as unknown as { __passes?: object }).__passes = (): object => ({
+  lastFrame: passCount.last,
+  bloom: bloomDial,
+  mblurAmt: +mblurAmt.toFixed(3),
+});
 (window as unknown as { __roll?: object }).__roll = (): object => {
   const n = Math.min(rollAt, rollLog.length);
   if (!n) return { n: 0 };
