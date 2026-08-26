@@ -235,9 +235,29 @@ const DEM_RISE = 80;     // metres clear of the ground before a blob is even con
 const DEM_SLOPE = 1.7;   // ~60°, the steepest slope a real landform sustains
 const DEM_RATIO = 0.6;   // how much narrower than that it must be to be called a lie
 const DEM_DWARF = 3;     // and how far it must tower over everything else around
-/** Repaired-pixel counts, newest last — so a probe can ask what the DEM cost. */
-const demFixes: Array<{ t: string; n: number }> = [];
-function repairDem(e: Float32Array, mpp: number): Float32Array {
+/**
+ * Repaired-pixel counts, newest last — so a probe can ask what the DEM cost.
+ *
+ * WITH THE TILE, because a count on its own cannot be chased. Asked during a
+ * spike hunt, this said `tilesRepaired: 2, pixels: 421` — one tile with 413
+ * bad pixels in it — and there was no way to find out WHICH tile, or from
+ * which source, so the one piece of hard evidence that the elevation data was
+ * ever wrong could not be followed up. The three tiles sampled by hand were
+ * all clean; the two that were not stayed anonymous.
+ */
+const demFixes: Array<{ t: string; n: number; tile?: string }> = [];
+/**
+ * The last tile fetchHeights finished with, as `z/x/y src`. Written ONCE, at
+ * the end, from a local — never accumulated. The first cut of this was a
+ * module global that fetchHeights set on entry and appended its source to
+ * after the await, which read fine in one tab and came out as
+ * `11/1127/1230 mth mth mth mth …` the moment tiles streamed concurrently:
+ * every in-flight call was appending to whichever tile happened to be current.
+ * A repair would have been filed against the WRONG tile, which is worse than
+ * filing it against none.
+ */
+let demLast = '';
+function repairDem(e: Float32Array, mpp: number, where: string): Float32Array {
   const W = 256;
   const s = Float32Array.from(e).sort();
   const at = (f: number): number => s[Math.min(s.length - 1, Math.floor(s.length * f))];
@@ -296,8 +316,10 @@ function repairDem(e: Float32Array, mpp: number): Float32Array {
     flag.set(next);
   }
   for (let i = 0; i < e.length; i++) if (flag[i]) out[i] = ground;
-  demFixes.push({ t: `${flagged}px`, n: flagged });
-  if (demFixes.length > 40) demFixes.shift();
+  if (flagged) {
+    demFixes.push({ t: `${flagged}px`, n: flagged, tile: where });
+    if (demFixes.length > 40) demFixes.shift();
+  }
   return out;
 }
 /** Decode any terrarium-encoded PNG/WebP into a square Float32Array. Both
@@ -427,6 +449,9 @@ async function fetchMapterhorn(x: number, y: number, z: number): Promise<Float32
   return null;
 }
 async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promise<Float32Array | null> {
+  // LOCAL, not a field: several of these run at once (see demLast above).
+  const tile = `${z}/${x}/${y}`;
+  let src = 'mth';
   let out: Float32Array | null = null;
   if (MAPTERHORN) out = await fetchMapterhorn(x, y, z);
   if (out) demSource.mth++;
@@ -435,7 +460,7 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
       const res = await fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`);
       if (!res.ok) { demSource.none++; return null; }
       out = await decodeTerrarium(res, 256);
-      demSource.aws++;
+      demSource.aws++; src = 'aws';
     } catch { demSource.none++; return null; }
   }
   // Metres per pixel at THIS tile's latitude — the footprint test is a
@@ -500,7 +525,8 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
   }
   if (spikes > out.length * 0.03) {
     demSource.bad++;
-    demFixes.push({ t: `refused ${((spikes / out.length) * 100).toFixed(1)}% spiked`, n: spikes });
+    demFixes.push({ t: `refused ${((spikes / out.length) * 100).toFixed(1)}% spiked`,
+      n: spikes, tile: `${tile} ${src}` });
     if (demFixes.length > 40) demFixes.shift();
     return null;
   }
@@ -515,7 +541,8 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
     }
     demSource.bad++;
   }
-  return repairDem(out, mpp);
+  demLast = `${tile} ${src}`;
+  return repairDem(out, mpp, demLast);
 }
 // ── land cover: what is actually growing here ──────────────────────
 // ESA WorldCover, 10m, global, through this cell's namespace (the bucket has no
@@ -19245,7 +19272,12 @@ function heightsOf(): number[] {
 (window as unknown as { __dem?: object }).__dem = (): object => ({
   tilesRepaired: demFixes.length,
   pixels: demFixes.reduce((a, f) => a + f.n, 0),
-  per: demFixes.map((f) => f.n),
+  per: demFixes.map((f) => ({ tile: f.tile ?? '?', what: f.t })),
+  // The last tile fetchHeights looked at. Repairs are rare and cannot be
+  // summoned on demand, so this is what makes the naming above testable at
+  // all: if this is a real `z/x/y src` string then so is what a repair records,
+  // because it is the same variable read at the same time.
+  at: demLast,
 });
 (window as unknown as { __tstats?: object }).__tstats = (): object => ({
   heightTiles: heightTiles.size, meshes: terrainMeshes.size, dirty: terrainDirty.size,
