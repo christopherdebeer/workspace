@@ -302,12 +302,38 @@ function repairDem(e: Float32Array, mpp: number): Float32Array {
 }
 /** Decode any terrarium-encoded PNG/WebP into a square Float32Array. Both
  *  sources use the same RGB packing, so one decoder serves both. */
+/**
+ * ── THE BYTES ARE DATA, SO NOBODY MAY COLOUR-MANAGE THEM ──
+ *
+ * `createImageBitmap` decodes a PICTURE by default: the browser is entitled to
+ * convert the image's colour profile to the destination's, and Safari does.
+ * That is correct for a photograph and catastrophic here, because in these two
+ * PNGs the RGB bytes are not a colour — they are a NUMBER. A profile transform
+ * rewrites them, so elevation packed as R*256 + G + B/256 comes back shifted,
+ * and land-cover class indices come back as different classes.
+ *
+ * This is the whole shape of the terrain fault reported from the seat: spikes
+ * that survived BOTH dem sources (the transform is downstream of the fetch, so
+ * changing the source changes nothing), heights shifted wholesale so the sea
+ * sat at the wrong level, a picture that varied slightly between loads, and —
+ * the tell — no reproduction whatsoever in headless Chromium on Linux, which
+ * has no display profile to convert to. Two independent sources cannot corrupt
+ * identically; a shared decoder can.
+ *
+ * `colorSpaceConversion: 'none'` is the contract that says these bytes are to
+ * be handed over untouched, and `premultiplyAlpha: 'none'` stops the other
+ * lossy path in for an image that carries alpha. Both are ignored by browsers
+ * that do not know them, which is the correct behaviour for a browser that was
+ * not going to convert anyway.
+ */
+const RAW_BITMAP: ImageBitmapOptions = { colorSpaceConversion: 'none', premultiplyAlpha: 'none' };
 async function decodeTerrarium(res: Response, px: number): Promise<Float32Array> {
-  const bmp = await createImageBitmap(await res.blob());
+  const bmp = await createImageBitmap(await res.blob(), RAW_BITMAP);
   const cv = typeof OffscreenCanvas !== 'undefined'
     ? new OffscreenCanvas(px, px)
     : Object.assign(document.createElement('canvas'), { width: px, height: px });
-  const cx = (cv as OffscreenCanvas).getContext('2d') as OffscreenCanvasRenderingContext2D;
+  const cx = (cv as OffscreenCanvas).getContext('2d',
+    { willReadFrequently: true, colorSpace: 'srgb' }) as OffscreenCanvasRenderingContext2D;
   cx.drawImage(bmp, 0, 0, px, px);
   const d = cx.getImageData(0, 0, px, px).data;
   const out = new Float32Array(px * px);
@@ -520,11 +546,15 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
   try {
     const res = await fetch(`${CELL_BASE}/~/cover/v1/${COVER_Z}/${x}/${y}`);
     if (!res.ok) throw new Error(`cover ${res.status}`);
-    const bmp = await createImageBitmap(await res.blob());
+    // Same contract as the elevation decoder, and for the same reason: this
+    // pixel is a CLASS INDEX, not a grey. A colour-managed decode turns urban
+    // into water and cropland into snow, silently — see RAW_BITMAP.
+    const bmp = await createImageBitmap(await res.blob(), RAW_BITMAP);
     const cv = typeof OffscreenCanvas !== 'undefined'
       ? new OffscreenCanvas(256, 256)
       : Object.assign(document.createElement('canvas'), { width: 256, height: 256 });
-    const cx = (cv as OffscreenCanvas).getContext('2d') as OffscreenCanvasRenderingContext2D;
+    const cx = (cv as OffscreenCanvas).getContext('2d',
+      { willReadFrequently: true, colorSpace: 'srgb' }) as OffscreenCanvasRenderingContext2D;
     cx.drawImage(bmp, 0, 0);
     const d = cx.getImageData(0, 0, 256, 256).data;
     const data = new Uint8Array(256 * 256);
