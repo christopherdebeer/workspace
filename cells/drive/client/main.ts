@@ -29848,6 +29848,63 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   requestAnimationFrame((t) => { last = t; requestAnimationFrame(tick); });
 })();
 
+/**
+ * DOES THIS BROWSER REWRITE THE BYTES?
+ *
+ * Decodes one real elevation tile twice — once the way a picture is decoded,
+ * once with colorSpaceConversion 'none' — and reports both. In these PNGs the
+ * RGB bytes are a NUMBER (R*256 + G + B/256 - 32768), so a colour-managed
+ * decode does not shift the picture slightly, it moves the ground: one step in
+ * R is 256 METRES, and G is the fine component, so a smooth profile curve
+ * across it lands as scattered spikes of plausible height. Which is what a
+ * field of them looks like.
+ *
+ * Kept as a permanent probe rather than a page, because the question is what
+ * THIS tab does on THIS device, and that is not answerable anywhere it could
+ * be inspected — headless Chromium on Linux has no display profile to convert
+ * to and will always say the two are identical.
+ */
+(window as unknown as { __demcheck?: object }).__demcheck = async (
+  lat = -34.0915, lon = 18.4299, z = 14,
+): Promise<object> => {
+  const n = 2 ** z;
+  const x = Math.floor(((lon + 180) / 360) * n);
+  const la = (lat * Math.PI) / 180;
+  const y = Math.floor(((1 - Math.log(Math.tan(la) + 1 / Math.cos(la)) / Math.PI) / 2) * n);
+  const url = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
+  const blob = await (await fetch(url, { cache: 'reload' })).blob();
+  const read = async (opts?: ImageBitmapOptions): Promise<{ mn: number; mx: number; spikes: number; px: string }> => {
+    const bmp = await createImageBitmap(blob, opts);
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 256;
+    const cx = cv.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
+    cx.drawImage(bmp, 0, 0, 256, 256);
+    const d = cx.getImageData(0, 0, 256, 256).data;
+    const h = new Float32Array(65536);
+    let mn = 1e9, mx = -1e9;
+    for (let i = 0; i < 65536; i++) {
+      const v = d[i * 4] * 256 + d[i * 4 + 1] + d[i * 4 + 2] / 256 - 32768;
+      h[i] = v; if (v < mn) mn = v; if (v > mx) mx = v;
+    }
+    let spikes = 0;
+    for (let yy = 1; yy < 255; yy++) {
+      for (let xx = 1; xx < 255; xx++) {
+        const i = yy * 256 + xx;
+        const nb = (h[i - 1] + h[i + 1] + h[i - 256] + h[i + 256]) * 0.25;
+        if (Math.abs(h[i] - nb) > 80) spikes++;
+      }
+    }
+    return { mn: +mn.toFixed(1), mx: +mx.toFixed(1), spikes,
+      px: [0, 1, 2].map((k) => `${d[k * 4]},${d[k * 4 + 1]},${d[k * 4 + 2]}`).join(' ') };
+  };
+  const managed = await read(undefined);
+  const raw = await read({ colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
+  return { tile: `${z}/${x}/${y}`, managed, raw,
+    // Node decodes this tile to 93.0..513.5 with zero spikes — measured with
+    // no browser in the path at all. That is the truth to compare against.
+    truthInNode: { mn: 93, mx: 513.5, spikes: 0 },
+    identical: JSON.stringify(managed) === JSON.stringify(raw) };
+};
 // ── THE PROBE CHANNEL, TAB SIDE ────────────────────────────────────
 //
 // Answers questions asked of THIS tab. See serveProbe in index.ts for why it
@@ -29889,9 +29946,34 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
     // is, which is a smaller surface than eval and the whole of what it was
     // being used for.
     const step = /^([A-Za-z_$][\w$]*)(\((.*)\))?$/;
+    // SPLIT AT DEPTH ZERO, not on every dot. A naive `split('.')` shreds
+    // `__demcheck(-33.93,18.42,14)` into three fragments that are not paths —
+    // and that is most of the probes worth asking, because most of what is
+    // worth asking about is somewhere on a map. Only a dot outside parens,
+    // brackets and quotes separates one path segment from the next.
+    const segs = (expr: string): string[] => {
+      const out: string[] = [];
+      let buf = ''; let depth = 0; let q = '';
+      for (let i = 0; i < expr.length; i++) {
+        const c = expr[i];
+        if (q) {
+          buf += c;
+          if (c === '\\') buf += expr[++i] ?? '';
+          else if (c === q) q = '';
+          continue;
+        }
+        if (c === '"' || c === "'") { q = c; buf += c; continue; }
+        if (c === '(' || c === '[') { depth++; buf += c; continue; }
+        if (c === ')' || c === ']') { depth--; buf += c; continue; }
+        if (c === '.' && depth === 0) { out.push(buf); buf = ''; continue; }
+        buf += c;
+      }
+      out.push(buf);
+      return out;
+    };
     const walk = (expr: string): unknown => {
       let cur: unknown = window;
-      for (const raw of expr.split('.')) {
+      for (const raw of segs(expr)) {
         const seg = raw.trim();
         if (!seg) continue;
         const m = step.exec(seg);
@@ -29909,8 +29991,13 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
       }
       return cur;
     };
-    const run = (js: string): string => {
-      try { return say(walk(js.trim())); } catch (e) {
+    const run = async (js: string): Promise<string> => {
+      try {
+        // AWAITED, so a probe may fetch. Without this a promise stringifies
+        // to `{}` and the interesting half of the diagnostics — anything that
+        // has to go and look at something — answers with nothing.
+        return say(await walk(js.trim()));
+      } catch (e) {
         return say({ error: String((e as Error)?.message ?? e),
           stack: String((e as Error)?.stack ?? '').slice(0, 600) });
       }
@@ -29924,10 +30011,7 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
         if (j.id && j.js) {
           // Awaited, so a probe may return a promise — a fetch, a decode, a
           // frame's wait — and still answer with what it resolved to.
-          let v = run(j.js);
-          try { const p = JSON.parse(v) as unknown;
-            if (p && typeof (p as { then?: unknown }).then === 'function') v = say(await p);
-          } catch { /* not a promise, and not JSON — either way it is the answer */ }
+          const v = await run(j.js);
           // A GET, IN PARTS. The platform gates non-GET on a cell, so the
           // POST reply failed silently and the queue drained into nothing —
           // measured, and invisible, because the 401 lands in a catch that
@@ -29946,6 +30030,10 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
     };
     void beat();
     (window as unknown as { __probestop?: () => void }).__probestop = () => { stop = true; };
+    // The resolver, reachable without the round trip — so a test can assert
+    // what a probe path MEANS rather than only that a request came back.
+    (window as unknown as { __probepath?: (e: string) => string[] }).__probepath = segs;
+    (window as unknown as { __probeask?: (js: string) => Promise<string> }).__probeask = run;
     console.log(`[probe] listening as ${probeKey}`);
   }
 }
