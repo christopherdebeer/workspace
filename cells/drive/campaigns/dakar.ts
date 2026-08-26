@@ -146,7 +146,7 @@ export interface Campaign {
 }
 
 export const CAMPAIGN: Campaign = {
-    v: 8,
+    v: 9,
     id: "dakar",
     title: "PARIS - DAKAR",
     start: {
@@ -296,6 +296,154 @@ export const CAMPAIGN: Campaign = {
         lat: 64.048,
         lon: -16.18,
         h: 270,
+      },
+      // ── THE ROAD BENCH, DRIVABLE ──
+      //
+      // Every one of these is a fixture from devtools/roadbench: road
+      // ARCHETYPE against data FAILURE MODE, chosen so the contrasts are
+      // controlled rather than merely scenic. A benchmark of beautiful roads
+      // is confounded — one that solves badly in Norway and well in
+      // Switzerland differs in everything at once, so the comparison cannot
+      // say why.
+      //
+      // They are here, in the menu, because a regression you can DRIVE to is
+      // worth more than one you can only plot, and because they are good
+      // drives on their own terms.
+      //
+      // PAIRED ON PURPOSE, and the pairs are the point. Belp against Furka
+      // against the Axenstrasse is ordinary / open mountain / cliff-and-gallery
+      // under one national survey. New River Gorge's bridge and Fayette
+      // Station below it connect the same two sides by opposite engineering.
+      // Hardknott and Cheddar Gorge have comparable relief and completely
+      // different longitudinal profiles. The Afsluitdijk and the Atlantic Road
+      // are near-matched morphology under different source regimes.
+      {
+        name: "BELP",
+        sub: "SWITZERLAND · THE VALLEY CONTROL",
+        lat: 46.888,
+        lon: 7.527,
+        h: 100,
+        note: "Ordinary low-gradient valley road between Belp and Rubigen. The CONTROL of the Swiss trio: whatever a solver does here it should do perfectly, and a fault visible at Belp is a fault that has nothing to do with mountains.",
+      },
+      {
+        name: "FURKA",
+        sub: "SWITZERLAND · THE OPEN PASS",
+        lat: 46.5723,
+        lon: 8.4152,
+        h: 70,
+        note: "Sustained grade and open hairpins with the hillside visible on both sides — the case where the bench is real and findable, so the lateral search should earn its keep outright.",
+      },
+      {
+        name: "AXENSTRASSE",
+        sub: "SWITZERLAND · THE CLIFF ROAD",
+        lat: 46.97,
+        lon: 8.613,
+        h: 165,
+        note: "Cliff road along the Urnersee with galleries, tunnels and viaducts in quick succession, and deep water hard against the carriageway. The compound case: bench, structure and a flat surface the search must not mistake for one, all within a kilometre.",
+      },
+      {
+        name: "FLEVOLAND",
+        sub: "NETHERLANDS · THE STRAIGHT",
+        lat: 52.34173,
+        lon: 5.47234,
+        h: 46,
+        note: "On the Bosruiterweg, a straight at-grade polder road — the design named an N305 segment, but what the fixture needs is the ARCHETYPE (dead flat, dead straight, every elevation that matters under a metre) and this is a confirmed one. Coordinates read off the way's own geometry. Reclaimed polder: dead flat, dead straight, and every elevation that matters is under a metre. Tests whether small real differences survive a pipeline built for mountains.",
+      },
+      {
+        name: "AFSLUITDIJK",
+        sub: "NETHERLANDS · THE DIKE",
+        lat: 52.95046,
+        lon: 5.07337,
+        h: 49,
+        note: "ON THE DIKE, not in Den Oever. The first guess sat in the village at the landward end, where OSM has residential streets and footways and no dike at all — read off the A7's own way geometry instead. Road on a dike across open water, running into the Stevinsluizen structures. A causeway is not a bridge and the sea is not a bench — the two mistakes this fixture exists to catch.",
+      },
+      {
+        name: "KLEINPOLDERPLEIN",
+        sub: "NETHERLANDS · THE STACK",
+        lat: 51.93488,
+        lon: 4.44947,
+        h: 75,
+        note: "On the A20 through the interchange itself. Coordinates read off the motorway way rather than guessed at the junction's centre, which landed on cycleways beside it. Stacked interchange in Rotterdam. Roads that cross in plan and not in elevation, over ground with no relief to disambiguate them: the grade-separation question with every other cue removed.",
+      },
+      {
+        name: "HARDKNOTT",
+        sub: "ENGLAND · THE STEEP ONE",
+        lat: 54.39975,
+        lon: -3.21521,
+        h: 97,
+        note: "ON THE PASS ROAD. The first guess was 570m off, in terrain OSM knows only as footpaths — a spawn there would have put the truck on a fell with no road in reach. Read off the Hardknott Pass way. The steepest road in England and almost entirely terrain-following. Paired with Cheddar deliberately: terrain slope alone does not decide road grade, and these two prove it from opposite ends.",
+      },
+      {
+        name: "CHEDDAR GORGE",
+        sub: "ENGLAND · THE RESTRAINED PROFILE",
+        lat: 51.2817,
+        lon: -2.765,
+        h: 250,
+        note: "Extreme lateral relief and a comparatively gentle longitudinal profile — the road holds its line while the walls do not. A solver that reads grade off the hillside fails here and nowhere near Hardknott.",
+      },
+      {
+        name: "NEW FOREST",
+        sub: "ENGLAND · UNDER THE CANOPY",
+        lat: 50.873,
+        lon: -1.575,
+        h: 250,
+        note: "Ordinary A-road under heavy canopy. Matched against an open road of the same class, this isolates one question: does vegetation make the solver invent vertical structure that is not there?",
+      },
+      {
+        name: "ATLANTIC ROAD",
+        sub: "NORWAY · THE CAUSEWAYS",
+        lat: 63.01675,
+        lon: 7.35431,
+        h: 74,
+        note: "The first guess had NO ROADS within 300m — open sea. Read off Fv64's own geometry at the Storseisundet crossing. Low-relief causeways and a string of short bridge decks, north of SRTM's limit. Morphologically close to the Afsluitdijk under a completely different source regime, which is what makes the pair worth having.",
+      },
+      {
+        name: "NEW RIVER GORGE",
+        sub: "WEST VIRGINIA · THE BRIDGE",
+        lat: 38.07099,
+        lon: -81.07845,
+        h: 57,
+        note: "On US 19 itself, from the way's geometry; the guess was near enough (50m) but landed among park service roads rather than the trunk across the bridge. US 19 straight across the gorge on one span. Its pair is the old road below: the same landscape, the same two sides, opposite engineering — the cleanest bridge contrast there is.",
+      },
+      {
+        name: "FAYETTE STATION",
+        sub: "WEST VIRGINIA · THE OLD WAY",
+        lat: 38.0668,
+        lon: -81.0817,
+        h: 200,
+        note: "The winding descent into the gorge and across the river beneath the bridge. What the terrain-following answer looks like when a bridge is the alternative.",
+      },
+      {
+        name: "MILLAU",
+        sub: "FRANCE · THE VIADUCT",
+        lat: 44.07995,
+        lon: 3.02234,
+        h: 174,
+        note: "On the A75 deck, from the motorway way's own geometry. The A75 across the Tarn on the tallest deck in the world. A held-out bridge test: the runtime input is SRTM-derived, so this is not a downsample of the survey it would be scored against.",
+      },
+      {
+        name: "TARN VALLEY",
+        sub: "FRANCE · UNDER THE VIADUCT",
+        lat: 44.11367,
+        lon: 3.0827,
+        h: 13,
+        note: "On the D809 where it climbs out of the Tarn. The first guess sat in Millau town among residential streets rather than on the valley route. The old valley route down into Millau, under the deck. Millau's pair, and the same question the New River Gorge asks in a different country.",
+      },
+      {
+        name: "REST AND BE THANKFUL",
+        sub: "SCOTLAND · THE UNSTABLE SLOPE",
+        lat: 56.22285,
+        lon: -4.84578,
+        h: 320,
+        note: "ON THE A83. The first guess was a kilometre off with a single footpath in reach — read off the trunk road's own geometry. Two roads on one failing hillside at different heights — the A83 and the Old Military Road below it. Parallel alignments a few tens of metres apart vertically is the case most likely to make two profiles collapse into one.",
+      },
+      {
+        name: "SH6 WEST COAST",
+        sub: "NEW ZEALAND · THE COMPOUND CASE",
+        lat: -43.38924,
+        lon: 170.18179,
+        h: 176,
+        note: "On SH 6 itself rather than in Franz Josef village, from the way's geometry. Canopy, river crossings, landslide terrain and engineered benches in the same few kilometres. A challenge fixture rather than a clean contrast: kept because it is the one that finds things nothing else does.",
       },
     ],
     // The first stations. The P-D line proper is seventeen of these and wants
