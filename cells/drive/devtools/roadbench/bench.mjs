@@ -29,8 +29,12 @@ export function runVariant({ fixture, sample, name, dx = 0, dz = 0, weights }) {
   const cand = pts.map((_, i) => latCands(pts, i, sample));
   const got = solveChain(pts, cand, fixture.maxGrade, null, null, undefined, weights);
   const offsets = chosenOffsets(cand, got);
+  // The ground the road is DRAWN over, from the same degraded input the
+  // solver saw — so "is the road standing on air" is asked of the world the
+  // game actually built, not of a reference the game never had.
+  const ground = pts.map(([x, z]) => sample(x, z));
   const s = scoreProfile({
-    pts, got, truth: fixture.truthOnLine,
+    pts, got, truth: fixture.truthOnLine, ground,
     grades: fixture.grades, bridgeMask: fixture.bridgeMask,
   });
   const comp = (dx || dz) ? scoreCompensation({ pts, offsets, dx, dz }) : null;

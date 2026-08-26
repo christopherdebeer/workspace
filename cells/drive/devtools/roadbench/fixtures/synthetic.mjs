@@ -163,4 +163,42 @@ export function canopyRoad({ n = 110, step = 12 } = {}) {
   };
 }
 
-export const ALL = { shelf, shelfOffset, causeway, canopy: canopyRoad };
+/**
+ * ROLLING GROUND, WITH THE ROAD ON IT. No misregistration, no resolution loss
+ * — the only question is what the profile does with dips and crests it could
+ * simply follow.
+ *
+ * This is the fixture that prices the curvature term. Smoothing a profile is
+ * bought by SPANNING the undulations rather than following them, and a road
+ * that spans its dips stands proud of them: "the roads look raised" is the
+ * direct, visible cost of the same weight that stops them heaving. Truth here
+ * is the ground itself, because a minor road over gentle rolling country is
+ * built on the ground — there is no cutting to find and nothing to bridge.
+ */
+export function rolling({ n = 140, step = 12, amp = 2.2, wave = 46 } = {}) {
+  const drawn = line(n, step);
+  // SHORT WAVELENGTH ON PURPOSE. A first cut undulated 3.2m over 150m — a 2%
+  // grade the DP simply follows, so nothing was ever asked and every curvature
+  // weight scored an identical zero. What prices smoothing is ground whose own
+  // grade CHANGES fast: at 46m the road crests and dips inside four stations,
+  // which is where following the ground and holding a vertical curve are
+  // genuinely different roads.
+  const h = (s) => 80 + Math.sin(s / wave) * amp + Math.sin(s / (wave * 0.41)) * amp * 0.55;
+  const truthOnLine = drawn.map((_, i) => h(i * step));
+  const reference = (x, z) => h(Math.max(0, Math.min((n - 1) * step, x))) + Math.abs(z) * 0.03;
+  return {
+    id: 'rolling',
+    name: 'minor road following gentle rolling ground',
+    truthGrade: 'A (analytic)',
+    attribution: 'synthetic',
+    drawn,
+    truthOnLine,
+    stations: n,
+    maxGrade: 0.10,
+    grades: drawn.map(() => 'A'),
+    box: { x0: -400, z0: -900, span: 2800 },
+    reference,
+  };
+}
+
+export const ALL = { shelf, shelfOffset, causeway, canopy: canopyRoad, rolling };

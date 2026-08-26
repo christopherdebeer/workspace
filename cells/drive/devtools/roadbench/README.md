@@ -84,6 +84,28 @@ under a shape metric, however steep it is.
 
 ## What it found straight away
 
+**The candidate spacing was coarser than the feature it searched for.** The
+bench offsets were every 15m; a carriageway bench is 7-10m across, so it fell
+BETWEEN samples. Varying only the width of the cut, with the ground
+misregistered by 15m:
+
+| bench width | height error |
+|---|---|
+| 9m | 2.69m |
+| 14m | 2.05m |
+| 20m | 1.28m |
+| 30m | 0.00m |
+
+Zero at 30m — exactly twice the spacing, the width at which a sample is
+guaranteed to land on the bench. No cost term can reach a feature the sampling
+never sees, and an afternoon of weight-tuning against it found nothing because
+there was nothing there to find. Offsets are now finer near the road and coarse
+further out, and the DP bands lateral movement to two candidates per station,
+which forbids only what the costs already made expensive and pays for the extra
+candidates: 232ms unbanded on a 22km chain, 68ms banded.
+
+## The first findings, before that fix
+
 Against the shipped weights (`lat: 16, curve: 400`):
 
 | variant | abs p50 | shape p50 | recovered |

@@ -47,13 +47,53 @@
  * — curvature is a property of three stations, not two.
  */
 
-/** Metres either side of the centreline to look for the bench. */
-export const BENCH_OFFS = [-45, -30, -15, 0, 15, 30, 45];
+/**
+ * Metres either side of the centreline to look for the bench.
+ *
+ * FINER NEAR THE ROAD, COARSE FURTHER OUT — and that is not a taste. These
+ * were spaced every 15m, which is wider than the thing they are searching
+ * for: a carriageway bench is 7-10m across, so it fell BETWEEN samples and
+ * the search could only find it by luck.
+ *
+ * Measured on the bench, a shelf road with the ground misregistered by 15m,
+ * varying only the width of the cut:
+ *
+ *     bench 9m -> 2.69m of height error
+ *     bench 14m -> 2.05m
+ *     bench 20m -> 1.28m
+ *     bench 30m -> 0.00m
+ *
+ * Zero at 30m, which is exactly TWICE the old spacing — the width at which a
+ * sample is guaranteed to land on the bench. No cost term can reach a feature
+ * the sampling never sees, and a session of weight-tuning against it found
+ * nothing because there was nothing there to find.
+ *
+ * Close in is where the road actually is, so that is where the resolution
+ * goes; far out is only there to catch a badly misregistered bench, where
+ * landing within a few metres of it is enough.
+ */
+export const BENCH_OFFS = [-45, -30, -20, -12, -6, 0, 6, 12, 20, 30, 45];
 export const BENCH_K = BENCH_OFFS.length;
 export const BENCH_C = BENCH_K >> 1;
 /** The spacing the lateral penalty is expressed in, so its weight reads as
  *  "cost per candidate step" rather than per metre. */
 const BENCH_STEP = 15;
+/**
+ * How many candidates the bench may cross in one station.
+ *
+ * A BAND, not an optimisation for its own sake: the bench is a strip of ground
+ * a road was cut into, and it cannot teleport from one side of the corridor to
+ * the other between two stations twelve metres apart. Forbidding what the cost
+ * terms already make expensive costs nothing in quality and takes the
+ * relaxation from K^3 to K*(2B+1)^2 — with eleven candidates, 275 instead of
+ * 1331.
+ *
+ * That matters because this runs inside the tile build. Measured on the
+ * longest chain there is (Chapman's Peak, 22km, 1800 stations): 232ms
+ * unbanded, which is precisely the class of stall the build budget was added
+ * to remove, and it happens BEFORE the build loop's yields.
+ */
+const BENCH_BAND = 2;
 
 const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
@@ -68,8 +108,12 @@ export interface ProfileWeights {
   grade: number;
   /** A junction pin or a chain anchor — near enough to a law. */
   pin: number;
-  /** Moving the bench sideways between stations, per candidate step squared. */
+  /** Moving the bench sideways between stations, per candidate step squared.
+   *  Small: a sustained move is how misregistration is compensated. */
   lat: number;
+  /** CHANGING the rate of that movement — the bench's own curvature. This is
+   *  what separates a deliberate shift from a jitter. */
+  latCurve: number;
   /** Change of grade between consecutive spans, squared. The vertical curve. */
   curve: number;
 }
@@ -98,7 +142,24 @@ export const WEIGHTS: ProfileWeights = {
   //
   // So: a third off the worst grade change AND half the lateral travel,
   // rather than a large win in one and a regression in the other.
-  lat: 16,
+  // ── CHARGE FOR JITTER, NOT FOR MOVEMENT ──
+  //
+  // A single weight on |Δoffset| cannot tell a useful lateral move from a
+  // wasteful one, so setting it high enough to stop the bench flip-flopping
+  // also stops it compensating for misregistration. The bench measured
+  // exactly that: at lat 16 the recovered fraction of a lateral shift was 0.00
+  // at 5m, 15m and 22m — the bench sat on the centreline and ate the error,
+  // 2.7m of it at 15m of shift, which then shows up as a road standing proud
+  // of the ground beneath it.
+  //
+  // The fix is the same one the vertical profile got. Charge the SECOND
+  // difference: a sustained shift to one side costs one transition and then
+  // nothing, a steady drift across the road costs nothing at all, and
+  // alternation costs on every station. The DP state already carries three
+  // consecutive stations for the vertical curve, so the bench's own curvature
+  // is available at no extra cost.
+  lat: 2.5,
+  latCurve: 26,
   curve: 400,
 };
 
@@ -133,7 +194,12 @@ export function benchFlat(cs: number[]): number {
   let bk = -1, bg = Infinity;
   for (let k = 1; k < BENCH_K - 1; k++) {
     if (cs[k] < lo + 8) continue;
-    const g = Math.abs(cs[k + 1] - cs[k - 1]) + Math.abs(BENCH_OFFS[k]) * 0.06;
+    // A SLOPE, not a height difference. With the candidates evenly spaced the
+    // two were interchangeable; they are not once the spacing varies, and
+    // comparing a 12m span against a 30m one would call the coarse end of the
+    // fan flat purely because its neighbours are further apart.
+    const span = Math.max(1, BENCH_OFFS[k + 1] - BENCH_OFFS[k - 1]);
+    const g = Math.abs(cs[k + 1] - cs[k - 1]) / span + Math.abs(BENCH_OFFS[k]) * 0.004;
     if (g < bg) { bg = g; bk = k; }
   }
   return bk < 0 ? med : cs[bk];
@@ -223,6 +289,12 @@ export function solveChain(
     const dk = (BENCH_OFFS[k] - BENCH_OFFS[j]) / BENCH_STEP;
     return dk * dk * W.lat;
   };
+  /** The bench's own curvature: how much its sideways RATE changed. Zero for a
+   *  straight walk across the road, large for a flip-flop. */
+  const latKink = (j: number, k: number, m: number): number => {
+    const d = (BENCH_OFFS[m] - 2 * BENCH_OFFS[k] + BENCH_OFFS[j]) / BENCH_STEP;
+    return d * d * W.latCurve;
+  };
   /** Grade of the span into station i, arriving on k from j. */
   const grade = (i: number, j: number, k: number): number =>
     (cand[i][k] - cand[i - 1][j]) / span(i);
@@ -239,7 +311,10 @@ export function solveChain(
   let cost = new Float64Array(BENCH_K * BENCH_K).fill(INF);
   for (let j = 0; j < BENCH_K; j++) {
     for (let k = 0; k < BENCH_K; k++) {
-      cost[k * BENCH_K + j] = stat(0, j) + stat(1, k) + lateral(j, k) + steep(1, j, k);
+      // Out of band at the seed as well: a chain that may not cross the
+      // corridor mid-way must not be allowed to start having done so.
+      cost[k * BENCH_K + j] = Math.abs(k - j) > BENCH_BAND ? INF
+        : stat(0, j) + stat(1, k) + lateral(j, k) + steep(1, j, k);
     }
   }
   // back[i][k * K + j] = the candidate station i−2 took. Int8 is ample at K=7.
@@ -248,11 +323,13 @@ export function solveChain(
     const next = new Float64Array(BENCH_K * BENCH_K).fill(INF);
     const bk = new Int8Array(BENCH_K * BENCH_K).fill(-1);
     for (let k = 0; k < BENCH_K; k++) {           // station i−1
-      for (let m = 0; m < BENCH_K; m++) {         // station i
+      const mLo = Math.max(0, k - BENCH_BAND), mHi = Math.min(BENCH_K - 1, k + BENCH_BAND);
+      for (let m = mLo; m <= mHi; m++) {          // station i
         const arrive = stat(i, m) + lateral(k, m) + steep(i, k, m);
         const gNew = grade(i, k, m);
         let best = INF, bestJ = -1;
-        for (let j = 0; j < BENCH_K; j++) {       // station i−2
+        const jLo = Math.max(0, k - BENCH_BAND), jHi = Math.min(BENCH_K - 1, k + BENCH_BAND);
+        for (let j = jLo; j <= jHi; j++) {        // station i−2
           const c0 = cost[k * BENCH_K + j];
           if (c0 >= INF) continue;
           // THE VERTICAL CURVE. Without this term every grade inside the class
@@ -260,7 +337,7 @@ export function solveChain(
           // between +gCap and −gCap station by station and the DP has no
           // reason to prefer a ramp.
           const dg = gNew - grade(i - 1, j, k);
-          const c = c0 + arrive + dg * dg * W.curve;
+          const c = c0 + arrive + dg * dg * W.curve + latKink(j, k, m);
           if (c < best) { best = c; bestJ = j; }
         }
         next[m * BENCH_K + k] = best;

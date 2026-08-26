@@ -96,7 +96,7 @@ export function datumOffset(got, want, mask) {
  * a tunnel or a bridge whose interior nobody can honestly measure without
  * either dropping the fixture or inventing truth for it.
  */
-export function scoreProfile({ pts, got, truth, grades, bridgeMask }) {
+export function scoreProfile({ pts, got, truth, grades, bridgeMask, ground }) {
   const use = got.map((_, i) => {
     const g = grades ? grades[i] : 'A';
     return SCORED.has(g) && Number.isFinite(got[i]) && Number.isFinite(truth[i]);
@@ -124,9 +124,29 @@ export function scoreProfile({ pts, got, truth, grades, bridgeMask }) {
     kErr.push(Math.abs(a.kink[i] - b.kink[i]));
   }
 
+  // CUT AND FILL, against the ground the road is drawn over. A smoother
+  // profile is bought by spanning the dips, and a road that spans its dips
+  // stands proud of them — reported here because "the roads look raised" is
+  // otherwise a matter of impression, and because it is the direct cost of the
+  // curvature term. Positive is fill (deck above ground), negative is cut.
+  const fill = [];
+  if (ground) {
+    for (let i = 0; i < got.length; i++) {
+      if (!use[i] || !Number.isFinite(ground[i])) continue;
+      fill.push(got[i] - dz - ground[i]);
+    }
+  }
+  const above = fill.filter((v) => v > 0);
+
   return {
     n,
     unscored: got.length - n,
+    fillM: fill.length ? {
+      p50: pct(fill, 0.5), p90: pct(fill, 0.9), max: pct(fill, 1),
+      // How much of the road is standing on air rather than sitting in ground.
+      aboveFrac: +(above.length / fill.length).toFixed(3),
+      meanAbove: above.length ? +mean(above).toFixed(2) : 0,
+    } : null,
     // Reported only after the offset is stated, never instead of shape.
     datumOffsetM: +dz.toFixed(3),
     absM: { p50: pct(absErr, 0.5), p90: pct(absErr, 0.9), max: pct(absErr, 1) },
@@ -202,8 +222,9 @@ export function row(name, s, comp) {
   const f = (v) => (v === null || v === undefined ? '   -  ' : String(v.toFixed ? v.toFixed(2) : v).padStart(6));
   return `${name.padEnd(26)} n=${String(s.n).padStart(4)}`
     + ` abs p50 ${f(s.absM?.p50)}`
-    + ` shape p50 ${f(s.shapeM?.p50)} p90 ${f(s.shapeM?.p90)}`
-    + ` | grade p90 ${f(s.gradeErr?.p90)} | kink p90 ${f(s.kinkErr?.p90)}`
+    + ` shape p50 ${f(s.shapeM?.p50)}`
+    + ` | fill p90 ${f(s.fillM?.p90)} up ${f(s.fillM?.aboveFrac)}`
+    + ` | kink p90 ${f(s.ownKink?.p90)}`
     + (comp ? ` | shift want ${f(comp.wantM)} got ${f(comp.gotM)}`
       + ` recov ${comp.recovered === null ? '  -  ' : f(comp.recovered)}` : '');
 }
