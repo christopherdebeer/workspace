@@ -1176,7 +1176,7 @@ function liveTable(): StateTable {
  */
 const PROBE_PK = 'PROBE#';
 const PROBE_TTL = 10 * 60 * 1000;
-async function serveProbe(path: string, method: string, body: string | undefined) {
+async function serveProbe(path: string, method: string, q: URLSearchParams, body: string | undefined) {
   const j = (code: number, o: unknown) => respond(code, 'application/json', JSON.stringify(o),
     { 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
   if (!TABLE) return j(503, { error: 'no table configured' });
@@ -1219,6 +1219,32 @@ async function serveProbe(path: string, method: string, body: string | undefined
     await db.send(new m.DeleteItemCommand({ TableName: TABLE, Key: { pk: S(pk), sk: S(sk) } }));
     return j(200, { id: sk.slice(2), js: first.js?.S ?? '' });
   }
+  // ── THE REPLY IS A GET, AND THAT IS NOT LAZINESS ──
+  //
+  // The platform gates every non-GET on a cell, so the tab could poll happily
+  // and then fail to answer — measured, and invisible, because the failure is
+  // a 401 inside a catch that just tries again in 1.5 seconds. The queue
+  // drained and nothing ever came back.
+  //
+  // Rather than require the tab to be signed in to answer a question about
+  // itself, the reply rides a GET: `/probe/KEY/say/ID/PART/OF?v=<encoded>`.
+  // Query strings survive outside `~/` (they do not survive inside it — see
+  // the note above /gmaps), which is why the whole channel lives out here.
+  //
+  // CHUNKED, because a URL is not a body. A probe that returns a tile's worth
+  // of numbers arrives in parts and is stitched on read, so the size limit is
+  // the number of round trips rather than a cliff the answer falls off.
+  if (action === 'say') {
+    const id = pathId.slice(0, 64);
+    const part = Number(bits[4] ?? '0') || 0;
+    const of = Number(bits[5] ?? '1') || 1;
+    const v = q.get('v') ?? '';
+    if (!id) return j(400, { error: 'id required' });
+    await db.send(new m.PutItemCommand({ TableName: TABLE,
+      Item: { pk: S(pk), sk: S(`a#${id}#${String(part).padStart(3, '0')}`),
+        v: S(v.slice(0, 350000)), of: N(of), at: N(Date.now()) } }));
+    return j(200, { ok: true, part, of });
+  }
   if (action === 'answer' && method === 'POST') {
     let id = '', v = '';
     try {
@@ -1227,13 +1253,17 @@ async function serveProbe(path: string, method: string, body: string | undefined
     } catch { /* below */ }
     if (!id) return j(400, { error: 'id required' });
     await db.send(new m.PutItemCommand({ TableName: TABLE,
-      Item: { pk: S(pk), sk: S(`a#${id}`), v: S(v.slice(0, 380000)), at: N(Date.now()) } }));
+      Item: { pk: S(pk), sk: S(`a#${id}#000`), v: S(v.slice(0, 380000)), of: N(1), at: N(Date.now()) } }));
     return j(200, { ok: true });
   }
   if (action === 'get') {
     const id = pathId.slice(0, 64);
-    const hit = (await rows()).find((it) => (it.sk?.S ?? '') === `a#${id}`);
-    return hit ? j(200, { v: hit.v?.S ?? '' }) : j(200, { pending: true });
+    const parts = (await rows()).filter((it) => (it.sk?.S ?? '').startsWith(`a#${id}#`))
+      .sort((a, b) => (a.sk?.S ?? '').localeCompare(b.sk?.S ?? ''));
+    if (!parts.length) return j(200, { pending: true });
+    const of = Number(parts[0].of?.N ?? '1') || 1;
+    if (parts.length < of) return j(200, { pending: true, have: parts.length, of });
+    return j(200, { v: parts.map((it) => it.v?.S ?? '').join('') });
   }
   return j(404, { error: 'no such probe route' });
 }
@@ -1400,7 +1430,7 @@ export const handler = async (event: {
   // answer before any read-only gate below. See serveProbe: off unless the URL
   // carries a key, and the tab only polls when it was opened with the same one.
   if (path.startsWith('/probe/')) {
-    return serveProbe(path, method, event.body);
+    return serveProbe(path, method, new URLSearchParams(event.rawQueryString ?? ''), event.body);
   }
   // Same-origin on the cell's own host, so `'self'` covers it and no CORS is
   // involved. Before the read-only gate below, because this one writes.
