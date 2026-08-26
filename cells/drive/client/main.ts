@@ -23021,6 +23021,9 @@ let simT = 0, simN = 0;   // integrated sim seconds / frames, read by __clock()
  *  exactly the thing worth seeing — the world runs slower than the clock and
  *  nothing else on screen says so. */
 let frameMs = 16.7;
+/** Raw frame durations, newest overwriting oldest. See the write site. */
+const frameRing = new Float32Array(240);
+let frameAt = 0;
 let streamAt = 0;
 let streamZoom = 1;   // the zoom the last stream pass served — see the zoom-is-a-move gate
 let miniAt = 0;
@@ -23997,6 +24000,12 @@ function tick(now: number): void {
   const paused = ((menu.tab() !== null || hidden) || rewindPaused) && !real.on;
   const raw = now - last;
   if (raw > 0 && raw < 2000) frameMs += (raw - frameMs) * 0.1;
+  // RAW SAMPLES, not the smoothed value. `frameMs` is a 0.1 lerp, which is the
+  // right thing to drive motion blur with and the wrong thing to diagnose a
+  // stutter from: it buries the spikes, and a stutter IS the spikes. Kept as a
+  // ring so the cost is fixed and the window is the last few seconds — which
+  // is the window a player is complaining about.
+  if (raw > 0 && raw < 2000) { frameRing[frameAt++ % frameRing.length] = raw; }
   // A FIXED STEP, ON A FLAG, TO SETTLE WHAT THE DRIFT IS MADE OF.
   //
   // Two identical drives — same spawn, pinned weather and clock, steering a
@@ -30039,6 +30048,124 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   const aws = await probe(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`, 256);
   return { tile: `${z}/${x}/${y}`, using: { ...demSource }, mth, aws };
 };
+/**
+ * WHAT THE FRAMES ACTUALLY DID, spikes included.
+ *
+ * `frameMs` is a 0.1 lerp — right for driving motion blur, wrong for
+ * diagnosing a stutter, because it buries exactly the outliers that ARE the
+ * stutter. This reports the distribution over the last few seconds: a run at a
+ * steady 38 and a run averaging 38 because every ninth frame takes 120ms are
+ * the same number and completely different bugs, and only one of them is felt
+ * as "severe degradation".
+ */
+(window as unknown as { __frames?: object }).__frames = (): object => {
+  const n = Math.min(frameAt, frameRing.length);
+  if (!n) return { n: 0 };
+  const v = Array.from(frameRing.slice(0, n)).sort((a, b) => a - b);
+  const at = (f: number): number => +v[Math.min(n - 1, Math.floor(n * f))].toFixed(1);
+  const mean = v.reduce((a, b) => a + b, 0) / n;
+  // A frame is "long" if it blew a 60Hz budget outright. The COUNT of those is
+  // what a passenger feels; the mean is what a benchmark reports.
+  const long = v.filter((x) => x > 33).length;
+  return { n, fps: Math.round(1000 / mean), meanMs: +mean.toFixed(1),
+    p50: at(0.5), p90: at(0.9), p99: at(0.99), worstMs: +v[n - 1].toFixed(1),
+    over33: long, over33pc: +((long / n) * 100).toFixed(1) };
+};
+/**
+ * WHAT IS IN THE SCENE, BY KIND — the census a leak shows up in.
+ *
+ * Degradation that ACCRUES is usually not one expensive thing; it is a count
+ * that only ever goes up. Draw calls and triangles say how bad the frame is,
+ * and this says which pile grew to make it so.
+ */
+(window as unknown as { __census?: object }).__census = (): object => {
+  const kind: Record<string, number> = {};
+  const tris: Record<string, number> = {};
+  let meshes = 0, objs = 0, visible = 0;
+  scene.traverse((o) => {
+    objs++;
+    const mesh = o as THREE.Mesh & { isMesh?: boolean; isInstancedMesh?: boolean; count?: number };
+    if (!mesh.isMesh) return;
+    meshes++;
+    if (o.visible) visible++;
+    // The name a mesh was given is the only handle the game has on what it is;
+    // strip the per-tile suffix so `road 12/34` and `road 12/35` pile up
+    // together instead of reporting one of each.
+    const k = (o.name || 'unnamed').replace(/[\s/]-?\d+.*$/, '') || 'unnamed';
+    kind[k] = (kind[k] ?? 0) + 1;
+    const pos = (mesh.geometry as THREE.BufferGeometry | undefined)?.getAttribute?.('position');
+    const idx = (mesh.geometry as THREE.BufferGeometry | undefined)?.index;
+    const t = ((idx?.count ?? pos?.count ?? 0) / 3) * (mesh.isInstancedMesh ? (mesh.count ?? 1) : 1);
+    tris[k] = Math.round((tris[k] ?? 0) + t);
+  });
+  const top = Object.entries(tris).sort((a, b) => b[1] - a[1]).slice(0, 12);
+  return { objs, meshes, visible,
+    geometries: renderer.info.memory.geometries, textures: renderer.info.memory.textures,
+    programs: renderer.info.programs?.length ?? 0,
+    worldChildren: worldGroup.children.length,
+    byTris: Object.fromEntries(top),
+    byCount: Object.fromEntries(top.map(([k]) => [k, kind[k]])),
+  };
+};
+/**
+ * SPEAK TO WHOEVER IS DRIVING.
+ *
+ * The channel could ask this tab anything and tell it nothing, so a paired
+ * session meant the driver reading chat on the device they were driving on.
+ * A line on the glass costs them nothing and needs no hands.
+ *
+ * A DOM overlay rather than the HUD canvas, deliberately: drawHud stands down
+ * entirely while the menu is up, and "you cannot see my messages while you are
+ * in the menu" is a trap worth not building.
+ */
+let toastEl: HTMLDivElement | null = null;
+let toastT = 0;
+(window as unknown as { __toast?: object }).__toast = (text: string, secs = 8): string => {
+  if (!toastEl) {
+    toastEl = document.createElement('div');
+    const st = toastEl.style;
+    st.position = 'fixed';
+    st.left = '50%';
+    st.transform = 'translateX(-50%)';
+    // Below the notch and above the thumb: the middle of the glass is where
+    // the road is.
+    st.top = 'calc(env(safe-area-inset-top, 0px) + 54px)';
+    st.zIndex = '9999';
+    st.pointerEvents = 'none';
+    st.maxWidth = 'min(92vw, 640px)';
+    st.padding = '8px 12px';
+    st.borderRadius = '6px';
+    st.background = 'rgba(4,10,11,0.82)';
+    st.border = '1px solid rgba(190,220,225,0.28)';
+    st.color = '#dfeaec';
+    st.font = '13px ui-monospace, Menlo, monospace';
+    st.lineHeight = '1.35';
+    st.whiteSpace = 'pre-wrap';
+    st.textAlign = 'center';
+    document.body.appendChild(toastEl);
+  }
+  toastEl.textContent = text;
+  toastEl.style.display = text ? 'block' : 'none';
+  clearTimeout(toastT);
+  if (text && secs > 0) {
+    toastT = setTimeout(() => { if (toastEl) toastEl.style.display = 'none'; },
+      secs * 1000) as unknown as number;
+  }
+  return text;
+};
+/**
+ * THE HANDLES A HOT-LOADED MODULE NEEDS.
+ *
+ * A module fetched over the wire runs in its own scope and can only reach
+ * `window`, so without this it could ask nothing that the bundle had not
+ * already thought to expose — which is the whole limitation the hot loader
+ * exists to remove. These are the same live objects the game is drawing with,
+ * not copies.
+ */
+(window as unknown as { __ctx?: object }).__ctx = {
+  THREE, renderer, scene, camera, worldGroup, state,
+  get frames() { return Array.from(frameRing.slice(0, Math.min(frameAt, frameRing.length))); },
+};
 // ── THE PROBE CHANNEL, TAB SIDE ────────────────────────────────────
 //
 // Answers questions asked of THIS tab. See serveProbe in index.ts for why it
@@ -30135,6 +30262,37 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
         return say({ error: String((e as Error)?.message ?? e),
           stack: String((e as Error)?.stack ?? '').slice(0, 600) });
       }
+    };
+    /**
+     * A NEW PROBE WITHOUT A DEPLOY OR A RELOAD.
+     *
+     * Until now every question had to already exist in the bundle, so learning
+     * anything unanticipated cost a deploy and a reload — and on a phone that
+     * throws away the session that was showing the fault. Chasing a frame rate
+     * that degrades over time, that is the whole difficulty: the state worth
+     * measuring is the state a reload destroys.
+     *
+     * The page forbids eval, so this is NOT eval. `script-src 'self'` permits
+     * a module from this origin, and the probe routes are this origin and
+     * outside `~/` — so the cell can hold a module, and the tab can import it.
+     * Whatever it exports lands on `window` (via __ctx for the live objects)
+     * and is then reachable as an ordinary probe path.
+     *
+     * The version goes in the URL because a browser will happily reuse a
+     * module it has already imported, and a stale module is indistinguishable
+     * from a probe that did not work.
+     */
+    (window as unknown as { __load?: object }).__load = async (v?: number): Promise<object> => {
+      const url = `${base}/mod.js?v=${v ?? Date.now()}`;
+      const mod = await import(/* webpackIgnore: true */ /* @vite-ignore */ url) as
+        Record<string, unknown>;
+      const names = Object.keys(mod);
+      // A default export is CALLED, so a module can just do its work and hand
+      // back the answer in one round trip rather than registering a name and
+      // waiting to be asked for it.
+      let ret: unknown = null;
+      if (typeof mod.default === 'function') ret = await (mod.default as () => unknown)();
+      return { url, exports: names, ret };
     };
     let stop = false;
     let busy = false;

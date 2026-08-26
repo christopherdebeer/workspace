@@ -22,7 +22,12 @@ const respond = (statusCode: number, contentType: string, body: string, extra: R
   body,
 });
 
-const CSP = [
+// Exported so a test can serve the page under the POLICY THE PHONE GETS. The
+// harness sends no CSP of its own, which means anything the real page forbids
+// — eval, a script from an unlisted host — works perfectly in every test and
+// fails only where it cannot be inspected. A test that cares opts in by
+// passing this to openDrive; nothing else changes behaviour.
+export const CSP = [
   "default-src 'none'",
   // The game module (served here) + three.js from esm.sh.
   "script-src 'self' https://esm.sh",
@@ -1208,6 +1213,45 @@ async function serveProbe(path: string, method: string, q: URLSearchParams, body
     await db.send(new m.PutItemCommand({ TableName: TABLE,
       Item: { pk: S(pk), sk: S(`q#${id}`), js: S(js), at: N(Date.now()) } }));
     return j(200, { id });
+  }
+  // ── A NEW PROBE WITHOUT A DEPLOY ──
+  //
+  // Every question so far had to already exist in the bundle, so learning
+  // anything the bundle did not anticipate cost a deploy and a reload — and on
+  // a phone that means losing the session that was showing the fault. During a
+  // frame-rate hunt that is the whole game: the interesting state is exactly
+  // the state you are trying not to disturb.
+  //
+  // The page forbids eval (`script-src 'self' https://esm.sh`, no
+  // unsafe-eval), so a probe cannot be a string of code the tab runs. But
+  // 'self' permits a MODULE, and these routes are same-origin and outside `~/`
+  // — uncached, query strings intact. So: POST the source here, and the tab
+  // imports it. No eval, no CSP hole, no redeploy, no reload.
+  //
+  // Kept out of the TTL sweep that `rows()` applies: a module is the tooling,
+  // not a question, and it has to outlive the ten minutes a question gets.
+  if (action === 'mod' && method === 'POST') {
+    let js = '';
+    try { js = String((JSON.parse(body ?? '{}') as { js?: unknown }).js ?? ''); } catch { /* below */ }
+    if (!js) return j(400, { error: 'js required' });
+    if (js.length > 360000) return j(400, { error: 'module too large (360k)' });
+    const v = Date.now();
+    await db.send(new m.PutItemCommand({ TableName: TABLE,
+      Item: { pk: S(pk), sk: S('mod'), js: S(js), at: N(v) } }));
+    return j(200, { v, bytes: js.length });
+  }
+  if (action === 'mod.js') {
+    const got = await db.send(new m.GetItemCommand({ TableName: TABLE,
+      Key: { pk: S(pk), sk: S('mod') } })) as { Item?: Record<string, { S?: string }> };
+    const js = got.Item?.js?.S;
+    if (!js) {
+      return respond(404, 'application/javascript', '// no module posted for this key\n',
+        { 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
+    }
+    // no-store AND a caller-supplied ?v= — belt and braces, because a stale
+    // module is indistinguishable from a probe that did not work.
+    return respond(200, 'application/javascript', js,
+      { 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
   }
   if (action === 'next') {
     const qs = (await rows()).filter((it) => (it.sk?.S ?? '').startsWith('q#'))

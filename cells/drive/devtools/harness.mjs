@@ -143,7 +143,19 @@ export async function openDrive(opts = {}) {
   const server = http.createServer((req, res) => {
     const p = req.url.split('?')[0];
     if (p === '/app.js') { res.writeHead(200, { 'content-type': 'application/javascript' }); res.end(readFileSync(bundle)); }
-    else if (p === '/') { res.writeHead(200, { 'content-type': 'text/html' }); res.end(html); }
+    else if (p === '/') {
+      // OPT-IN, and off by default. The real page ships a Content-Security
+      // Policy and this server never has, so anything the policy forbids —
+      // eval, a script from an unlisted host, a module imported from the wrong
+      // origin — passes every test here and fails only on the device, where it
+      // cannot be inspected. A test that cares about that passes the cell's own
+      // CSP in (see its export in index.ts); everything else is unaffected,
+      // because some tools legitimately eval into the page.
+      const head = { 'content-type': 'text/html' };
+      if (opts.csp) head['content-security-policy'] = opts.csp;
+      res.writeHead(200, head);
+      res.end(html);
+    }
     // A BANKED RUN'S BLOB, so ?run= can be exercised at all: the cell's tape
     // route is DynamoDB + the edge store, neither of which exists here, and
     // without it a run link 404s and silently falls back to the plain hub —
