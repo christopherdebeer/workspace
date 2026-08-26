@@ -29868,7 +29868,9 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
 {
   const probeKey = (new URLSearchParams(location.search).get('probe') ?? '').trim();
   if (/^[A-Za-z0-9_-]{6,64}$/.test(probeKey)) {
-    const base = `${CELL_BASE}/~/probe`;
+    // Outside the `~/` namespace on purpose — that surface is cached by path
+    // and would serve one tab's answer to another. See serveProbe.
+    const base = `${CELL_BASE}/probe/${encodeURIComponent(probeKey)}`;
     const say = (v: unknown): string => {
       try { return JSON.stringify(v) ?? String(v); } catch { return String(v); }
     };
@@ -29882,11 +29884,20 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
         return say({ error: String((e as Error)?.message ?? e), stack: String((e as Error)?.stack ?? '').slice(0, 900) });
       }
     };
+    // THE ANSWER IS A POST, AND A POST NEEDS A NAME. The platform gates every
+    // non-GET on the cell, which is why polling works unauthenticated and
+    // replying does not. The tab already holds a bearer for the state sync —
+    // the same one THE LINE is gated behind — so the reply rides on that. A
+    // signed-out tab can still be asked questions; it just cannot answer, and
+    // says so here rather than failing silently every 1.5 seconds.
+    let tok = '';
+    try { tok = localStorage.getItem('drive.sync.token') ?? ''; } catch { /* fine */ }
+    if (!tok) console.warn('[probe] no sync token — this tab can be polled but cannot reply. Sign in.');
     let stop = false;
     const beat = async (): Promise<void> => {
       if (stop) return;
       try {
-        const r = await fetch(`${base}/next?k=${encodeURIComponent(probeKey)}`, { cache: 'no-store' });
+        const r = await fetch(`${base}/next`, { cache: 'no-store' });
         const j = await r.json() as { id?: string; js?: string };
         if (j.id && j.js) {
           // Awaited, so a probe may return a promise — a fetch, a decode, a
@@ -29895,8 +29906,11 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
           try { const p = JSON.parse(v) as unknown;
             if (p && typeof (p as { then?: unknown }).then === 'function') v = say(await p);
           } catch { /* not a promise, and not JSON — either way it is the answer */ }
-          await fetch(`${base}/answer?k=${encodeURIComponent(probeKey)}`, {
-            method: 'POST', headers: { 'content-type': 'application/json' },
+          await fetch(`${base}/answer`, {
+            method: 'POST',
+            headers: tok
+              ? { 'content-type': 'application/json', authorization: `Bearer ${tok}` }
+              : { 'content-type': 'application/json' },
             body: JSON.stringify({ id: j.id, v }),
           });
         }

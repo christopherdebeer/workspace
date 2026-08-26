@@ -1157,10 +1157,16 @@ function liveTable(): StateTable {
  * So: the tab polls for expressions, evaluates them, and posts the answers
  * back. Four routes, one partition, no sockets.
  *
- *   POST /~/probe/ask?k=KEY    {js}      → {id}
- *   GET  /~/probe/next?k=KEY             → {id, js} | {}      (the tab polls)
- *   POST /~/probe/answer?k=KEY {id, v}   → {ok}               (the tab replies)
- *   GET  /~/probe/get?k=KEY&id=ID        → {v} | {pending}
+ *   POST /probe/KEY/ask     {js}      → {id}
+ *   GET  /probe/KEY/next              → {id, js} | {}      (the tab polls)
+ *   POST /probe/KEY/answer  {id, v}   → {ok}               (the tab replies)
+ *   GET  /probe/KEY/get/ID            → {v} | {pending}
+ *
+ * THE KEY IS IN THE PATH, NOT A QUERY STRING, and that is not a style choice.
+ * Everything under `~/` is a CACHED surface keyed by path alone — the note
+ * above /gmaps says so, and it is why that route lives outside the namespace
+ * too. A probe keyed on `?k=` would have its key ignored by the cache and
+ * dropped before it arrived, which is exactly what the first cut did.
  *
  * IT IS AN EVAL ENDPOINT, so it is off unless asked for twice: the tab only
  * polls when the URL carries `?probe=KEY`, and every route demands the same
@@ -1170,16 +1176,18 @@ function liveTable(): StateTable {
  */
 const PROBE_PK = 'PROBE#';
 const PROBE_TTL = 10 * 60 * 1000;
-function probeKeyOf(q: URLSearchParams): string {
-  const k = (q.get('k') ?? '').trim();
-  return /^[A-Za-z0-9_-]{6,64}$/.test(k) ? k : '';
-}
-async function serveProbe(path: string, method: string, q: URLSearchParams, body: string | undefined) {
+async function serveProbe(path: string, method: string, body: string | undefined) {
   const j = (code: number, o: unknown) => respond(code, 'application/json', JSON.stringify(o),
     { 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
   if (!TABLE) return j(503, { error: 'no table configured' });
-  const key = probeKeyOf(q);
-  if (!key) return j(400, { error: 'probe key must be 6-64 of [A-Za-z0-9_-]' });
+  // /probe/<key>/<action>[/<id>]
+  const bits = path.split('/').filter(Boolean);          // ['probe', key, action, id?]
+  const key = bits[1] ?? '';
+  const action = bits[2] ?? '';
+  const pathId = bits[3] ?? '';
+  if (!/^[A-Za-z0-9_-]{6,64}$/.test(key)) {
+    return j(400, { error: 'probe key must be 6-64 of [A-Za-z0-9_-]' });
+  }
   const pk = PROBE_PK + key;
   const m = await import('@aws-sdk/client-dynamodb');
   const db = new m.DynamoDBClient({});
@@ -1192,7 +1200,7 @@ async function serveProbe(path: string, method: string, q: URLSearchParams, body
     })) as { Items?: Array<Record<string, { S?: string; N?: string }>> };
     return (res.Items ?? []).filter((it) => Number(it.at?.N ?? 0) > Date.now() - PROBE_TTL);
   };
-  if (path === '/~/probe/ask' && method === 'POST') {
+  if (action === 'ask' && method === 'POST') {
     let js = '';
     try { js = String((JSON.parse(body ?? '{}') as { js?: unknown }).js ?? ''); } catch { /* below */ }
     if (!js || js.length > 8000) return j(400, { error: 'js required, under 8000 chars' });
@@ -1201,7 +1209,7 @@ async function serveProbe(path: string, method: string, q: URLSearchParams, body
       Item: { pk: S(pk), sk: S(`q#${id}`), js: S(js), at: N(Date.now()) } }));
     return j(200, { id });
   }
-  if (path === '/~/probe/next') {
+  if (action === 'next') {
     const qs = (await rows()).filter((it) => (it.sk?.S ?? '').startsWith('q#'))
       .sort((a, b) => Number(a.at?.N ?? 0) - Number(b.at?.N ?? 0));
     const first = qs[0];
@@ -1211,7 +1219,7 @@ async function serveProbe(path: string, method: string, q: URLSearchParams, body
     await db.send(new m.DeleteItemCommand({ TableName: TABLE, Key: { pk: S(pk), sk: S(sk) } }));
     return j(200, { id: sk.slice(2), js: first.js?.S ?? '' });
   }
-  if (path === '/~/probe/answer' && method === 'POST') {
+  if (action === 'answer' && method === 'POST') {
     let id = '', v = '';
     try {
       const o = JSON.parse(body ?? '{}') as { id?: unknown; v?: unknown };
@@ -1222,8 +1230,8 @@ async function serveProbe(path: string, method: string, q: URLSearchParams, body
       Item: { pk: S(pk), sk: S(`a#${id}`), v: S(v.slice(0, 380000)), at: N(Date.now()) } }));
     return j(200, { ok: true });
   }
-  if (path === '/~/probe/get') {
-    const id = (q.get('id') ?? '').slice(0, 64);
+  if (action === 'get') {
+    const id = pathId.slice(0, 64);
     const hit = (await rows()).find((it) => (it.sk?.S ?? '') === `a#${id}`);
     return hit ? j(200, { v: hit.v?.S ?? '' }) : j(200, { pending: true });
   }
@@ -1391,8 +1399,8 @@ export const handler = async (event: {
   // THE PROBE CHANNEL, first, because two of its four routes write and it must
   // answer before any read-only gate below. See serveProbe: off unless the URL
   // carries a key, and the tab only polls when it was opened with the same one.
-  if (path.startsWith('/~/probe/')) {
-    return serveProbe(path, method, new URLSearchParams(event.rawQueryString ?? ''), event.body);
+  if (path.startsWith('/probe/')) {
+    return serveProbe(path, method, event.body);
   }
   // Same-origin on the cell's own host, so `'self'` covers it and no CORS is
   // involved. Before the read-only gate below, because this one writes.
