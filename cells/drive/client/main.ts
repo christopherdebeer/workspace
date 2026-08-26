@@ -3200,6 +3200,12 @@ function dirtyTerrainAround(pts: Array<[number, number]>): void {
 // frame while a city streams in around you.
 let terrainAt = 0;
 let terrainMs = 0;
+/** Deck cross-slope, newest overwriting oldest — see the ribbon builder. The
+ *  roll is designed now (a camber plus superelevation), and the whole point of
+ *  recording it is that a regression to terrain-derived tilt is a number, not
+ *  an impression. */
+const rollLog = new Float32Array(4000);
+let rollAt = 0;
 /** How many terrain meshes have been REBUILT, ever. The count of tiles does not
  *  move when a tile is rebuilt in place, and a rebuild is exactly when the
  *  ground changes shape — carveCorridors cuts the hillside to receive a road,
@@ -9140,11 +9146,40 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // fades out exactly where it should: a road lying on the ground hugs it
   // completely, an embankment half-commits, and a bridge or a tagged viaduct
   // keeps its dead-flat deck and its clear span.
+  // Declared above the deck tilt because the designed superelevation reads
+  // them: the roll comes from how hard the road TURNS, not from the hillside.
+  /** Heading change at dense point `i`, in radians — how hard the road turns. */
+  const bendAt = (i: number): number => {
+    if (i <= 0 || i >= n - 1) return 0;
+    const ax2 = dense[i][0] - dense[i - 1][0], az2 = dense[i][1] - dense[i - 1][1];
+    const bx2 = dense[i + 1][0] - dense[i][0], bz2 = dense[i + 1][1] - dense[i][1];
+    const la = Math.hypot(ax2, az2) || 1, lb = Math.hypot(bx2, bz2) || 1;
+    return Math.acos(clamp((ax2 * bx2 + az2 * bz2) / (la * lb), -1, 1));
+  };
+  /** WHICH WAY it turns: the cross product's sign. The inside of the bend is
+   *  the `+n` side when this is positive, so the outside — where the sign goes,
+   *  and where your lights sweep as you turn in — is the negation. */
+  const bendSign = (i: number): number => {
+    if (i <= 0 || i >= n - 1) return 0;
+    const ax2 = dense[i][0] - dense[i - 1][0], az2 = dense[i][1] - dense[i - 1][1];
+    const bx2 = dense[i + 1][0] - dense[i][0], bz2 = dense[i + 1][1] - dense[i][1];
+    return ax2 * bz2 - az2 * bx2;
+  };
+
   const tilt = new Array<number>(n).fill(0);
   if (flat) {
     const HUG_LO = 0.35;      // daylight below this and the deck is simply on the ground
     const HUG_HI = 1.9;       // above this it is a structure and holds its line
+    // A backstop only, now that the roll is designed rather than sampled: the
+    // designed terms cannot reach it (SUPER_MAX on the widest carriageway is
+    // well inside it), and it is kept so a freak `width` cannot produce a wall.
     const MAX_FALL = 0.85;    // metres of half-width drop — a cambered road, not a wall
+    const CROSSFALL = 0.025;  // 2.5% — the standard camber that sheds water
+    const SUPER_MAX = 0.06;   // …and the ceiling on banking, near real practice
+    const SUPER_K = 20;
+    // Curvature (rad/m) to superelevation. 1/500m radius earns 4%, 1/250 hits
+    // the ceiling — gentle enough that an ordinary sweeping bend is not a
+    // wall of death and firm enough to be felt through a hairpin.
     // Each KERB is solved for directly, rather than deriving a centreline and a
     // tilt and hoping the two land on the ground. Deriving them was the version
     // that failed: "never raise the deck" and "put each kerb on its own ground"
@@ -9191,9 +9226,37 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // still fades the whole thing to zero over any drop worth bridging, which
       // is precisely the coastal case.
       const seat = prof[i] + (Math.min(prof[i], (tR + tL) * 0.5) - prof[i]) * hug;
-      // A carriageway is not a sheet thrown over a boulder: cap the cross-fall
-      // so the deck stays something that could have been built.
-      const half = clamp((tR - tL) * 0.5 * hug, -MAX_FALL, MAX_FALL);
+      // ── THE DECK'S ROLL IS DESIGNED, NOT SAMPLED ──
+      //
+      // This used to be `(tR - tL) * 0.5 * hug`, capped at MAX_FALL: the
+      // carriageway simply took the tilt of the hillside under it. At the cap
+      // that is 1.7m edge to edge, about 23% across a 7.5m road, and even well
+      // short of the cap it means the deck rolls with every wobble in a
+      // heightfield sampled at 9.5m/px. Roads are not built that way. A
+      // carriageway is a designed surface: a small constant crossfall to shed
+      // water, and superelevation on a bend, banked INTO the turn — and the
+      // hillside's job is the cut and the fill either side of it, which the
+      // apron and the batter already do.
+      //
+      // The centreline still SEATS on its ground (above), so the road keeps
+      // sitting where the terrain says. Only the roll stops being terrain's to
+      // decide.
+      const dTheta = bendAt(i);
+      const ds = Math.max(1, Math.hypot(
+        dense[Math.min(n - 1, i + 1)][0] - dense[Math.max(0, i - 1)][0],
+        dense[Math.min(n - 1, i + 1)][1] - dense[Math.max(0, i - 1)][1]) * 0.5);
+      // Curvature to superelevation. Saturates at SUPER_MAX, which is roughly
+      // where real practice stops (7% is a common ceiling; anything more and a
+      // stopped vehicle starts to slide).
+      const e = clamp((dTheta / ds) * SUPER_K, 0, SUPER_MAX);
+      // Banked into the bend: bendSign > 0 puts the inside on the +n side, and
+      // the inside of a banked curve is the LOW edge.
+      const bank = -Math.sign(bendSign(i)) * e;
+      // On a superelevated curve the whole width takes the bank, so the
+      // drainage crossfall fades out as the bank comes in rather than adding
+      // to it and leaving a kink where the bend starts.
+      const drain = CROSSFALL * (1 - clamp(e / CROSSFALL, 0, 1));
+      const half = clamp((bank + drain) * (width / 2), -MAX_FALL, MAX_FALL);
       edgeR[i] = seat + half;
       edgeL[i] = seat - half;
     }
@@ -9206,6 +9269,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         edgeR[i] = (a[i - 1] + a[i] * 2 + a[i + 1]) * 0.25;
         edgeL[i] = (b[i - 1] + b[i] * 2 + b[i + 1]) * 0.25;
       }
+    }
+    // WHAT THE DECK ACTUALLY ROLLS, recorded after the smoothing that finalises
+    // the two kerbs and before anything downstream reads them. The ribbon is
+    // built straight from these two arrays, so this is the deck plane itself.
+    for (let i = 0; i < n; i++) {
+      if (!Number.isFinite(edgeR[i]) || !Number.isFinite(edgeL[i])) continue;
+      rollLog[rollAt++ % rollLog.length] = Math.abs(edgeR[i] - edgeL[i]) / Math.max(1, width);
     }
     // Nothing ends up higher than the road the profile described — but the
     // thing held to that promise is the CENTRELINE, not each kerb. Capping the
@@ -9307,23 +9377,6 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // and every reload, which is what makes them landmarks rather than litter.
   const signRng = mulberry32(Math.abs(Math.round(dense[0][0] * 31 + dense[0][1] * 17)) + n);
   let signRun = SIGN_EVERY;   // so a way can post one early rather than never
-  /** Heading change at dense point `i`, in radians — how hard the road turns. */
-  const bendAt = (i: number): number => {
-    if (i <= 0 || i >= n - 1) return 0;
-    const ax2 = dense[i][0] - dense[i - 1][0], az2 = dense[i][1] - dense[i - 1][1];
-    const bx2 = dense[i + 1][0] - dense[i][0], bz2 = dense[i + 1][1] - dense[i][1];
-    const la = Math.hypot(ax2, az2) || 1, lb = Math.hypot(bx2, bz2) || 1;
-    return Math.acos(clamp((ax2 * bx2 + az2 * bz2) / (la * lb), -1, 1));
-  };
-  /** WHICH WAY it turns: the cross product's sign. The inside of the bend is
-   *  the `+n` side when this is positive, so the outside — where the sign goes,
-   *  and where your lights sweep as you turn in — is the negation. */
-  const bendSign = (i: number): number => {
-    if (i <= 0 || i >= n - 1) return 0;
-    const ax2 = dense[i][0] - dense[i - 1][0], az2 = dense[i][1] - dense[i - 1][1];
-    const bx2 = dense[i + 1][0] - dense[i][0], bz2 = dense[i + 1][1] - dense[i][1];
-    return ax2 * bz2 - az2 * bx2;
-  };
   // SMOOTHED along the way, and shared by both kerbs. Deciding per quad and per
   // side made adjacent quads flip between a 4m curtain of soil and a 1.35m
   // concrete lip, so the road's underside broke into floating blocks.
@@ -20882,6 +20935,30 @@ function noteTags(t: Record<string, string>): void {
   ({ pins: juncPins, ...juncStats,
     meanChainM: juncStats.chains ? Math.round(juncStats.totalChainM / juncStats.chains) : 0,
     points: juncGrid.size });
+/**
+ * HOW HARD THE CARRIAGEWAY ROLLS.
+ *
+ * The deck tilt used to be the difference between the terrain under the two
+ * kerbs, capped at 0.85m of half-width drop — 1.7m edge to edge, about 23%
+ * across a 7.5m road, and rolling with every wobble in a heightfield sampled
+ * at 9.5m/px. A road is a built surface: a small crossfall to shed water and
+ * superelevation on a bend.
+ *
+ * Read from the two kerb arrays the ribbon is built from, recorded after the
+ * smoothing that finalises them. A first cut of this tried to measure the
+ * drawn mesh through `meshSurfaceAt` and got nothing at all — that samples the
+ * TERRAIN mesh, and the deck's cross-width heights exist nowhere else.
+ */
+(window as unknown as { __roll?: object }).__roll = (): object => {
+  const n = Math.min(rollAt, rollLog.length);
+  if (!n) return { n: 0 };
+  const v = Array.from(rollLog.slice(0, n)).sort((a, b) => a - b);
+  const at = (f: number): number => +(v[Math.min(n - 1, Math.floor(n * f))] * 100).toFixed(2);
+  return { n, pc50: at(0.5), pc90: at(0.9), pc99: at(0.99),
+    worstPc: +(v[n - 1] * 100).toFixed(2),
+    over10pc: v.filter((x) => x > 0.10).length,
+    over15pc: v.filter((x) => x > 0.15).length };
+};
 (window as unknown as { __decks?: object }).__decks = (r = 70): object => {
   const by = new Map<string, { n: number; dlo: number; dhi: number; glo: number; ghi: number; drop: number; out: number[] }>();
   const seen = new Set<Seg>();
