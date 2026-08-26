@@ -12797,7 +12797,8 @@ let wayTape: Array<{ els: OsmWay[]; halo: OsmWay[] }> | null = null;
 /** Harness injection: feed synthetic elements straight into the way renderer.
  *  What Overpass answers at a cold spot is weather; what the renderer does
  *  with a known element is the thing under test. */
-(window as unknown as { __renderways?: object }).__renderways = (els: OsmWay[]): void => renderWays(els);
+(window as unknown as { __renderways?: object }).__renderways =
+  (els: OsmWay[]): Promise<void> => renderWays(els);
 (window as unknown as { __tapeout?: object }).__tapeout = (): object =>
   (wayTape ?? []).map((c) => ({
     els: c.els.map((e) => ({ id: e.id, tags: e.tags, geometry: e.geometry })),
@@ -12915,7 +12916,68 @@ function mmThing(pts: Array<[number, number]>, id: number, tags: Record<string, 
   mmCount++;
   return true;
 }
-function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
+/**
+ * HOW LONG A BUILD MAY HOLD THE FRAME.
+ *
+ * Measured on a phone: the big stalls were 160-320ms, and the split said
+ * inRender 5-16ms — so the draw was never the problem. The cost was this
+ * build, running to completion inside whatever frame it landed in, adding
+ * 8-15 objects at a time. Nothing anywhere bounded it.
+ *
+ * Six milliseconds is about a third of a 60Hz frame: enough that a tile still
+ * arrives quickly, small enough that the frame it lands in survives.
+ */
+const BUILD_MS = 6;
+let buildUntil = 0;
+/**
+ * YIELD TO THE EVENT LOOP, NOT TO THE NEXT FRAME.
+ *
+ * The first cut waited on requestAnimationFrame, which couples the build's
+ * speed to the frame rate it is trying to protect — and backwards: when the
+ * frame rate falls the slices get further apart, so the build takes longer,
+ * so the world arrives later, on exactly the device that was already
+ * struggling. Measured in the harness at well under 1fps: a tile never
+ * finished and the car sat on a road with no segments under it.
+ *
+ * A message-channel task yields to the browser — rendering, input and the
+ * streaming callbacks all get their turn — and comes back on the next tick
+ * rather than the next frame, so a build progresses at the same rate whatever
+ * the frame rate is doing. setTimeout is the fallback and is clamped to ~4ms,
+ * which is survivable but slower.
+ */
+const yieldTask: () => Promise<void> = (() => {
+  if (typeof MessageChannel !== 'function') {
+    return () => new Promise<void>((r) => { setTimeout(r, 0); });
+  }
+  const ch = new MessageChannel();
+  let waiting: Array<() => void> = [];
+  ch.port1.onmessage = () => { const w = waiting; waiting = []; for (const r of w) r(); };
+  return () => new Promise<void>((r) => { waiting.push(r); ch.port2.postMessage(0); });
+})();
+/** Counted so a test can assert the build ACTUALLY slices. The benefit — a
+ *  frame that survives a tile — cannot be measured in a harness that renders
+ *  at under 1fps in software; that the work is being handed back can. */
+const buildCost = { yields: 0, slices: 0, longestMs: 0 };
+/** Hand the thread back if this build has had its slice. */
+async function buildBreath(): Promise<void> {
+  const now = performance.now();
+  if (now < buildUntil) return;
+  const held = now - (buildUntil - BUILD_MS);
+  if (held > buildCost.longestMs) buildCost.longestMs = +held.toFixed(1);
+  buildCost.yields++;
+  await yieldTask();
+  buildUntil = performance.now() + BUILD_MS;
+}
+/**
+ * ONE TILE BUILDS AT A TIME, and that is now load-bearing rather than
+ * incidental. renderWays opens a module-level ribbon batch and closes it at
+ * the end; while it was synchronous nothing could interleave, but a build that
+ * yields can be re-entered, and the second call's `ribBatch = new Map()` would
+ * throw away everything the first had gathered. The pre-grid and the junction
+ * warp have the same shape. So the yields go inside, and the calls queue.
+ */
+let buildChain: Promise<void> = Promise.resolve();
+async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
   wayTape?.push({ els, halo });
   ribBatch = new Map();
   // PRE-PASS: chain this tile's drivable ways end-to-end and solve each chain's
@@ -12997,7 +13059,14 @@ function renderWays(els: OsmWay[], halo: OsmWay[] = []): void {
   // no dependency (rank 0, which is most of the world) is untouched.
   const byDepth = ordered.slice().sort((a, b) =>
     (buildRank.get(a.ck ?? String(a.id)) ?? 0) - (buildRank.get(b.ck ?? String(b.id)) ?? 0));
+  const ep = worldEpoch;
+  buildUntil = performance.now() + BUILD_MS;
   for (const el of byDepth) {
+    await buildBreath();
+    // A hop can happen between two ways now that there is a between. These
+    // ways are local metres for a world that no longer exists; the ribbon
+    // batch was cleared by the sweep, so there is nothing to flush either.
+    if (ep !== worldEpoch) return;
     // Clipped lines carry their own key; areas still dedupe on the bare id, so
     // a lake straddling two vector tiles is still drawn exactly once.
     const dk = el.ck ?? String(el.id);
@@ -13447,9 +13516,17 @@ async function renderGated(x: number, y: number, ways: OsmWay[]): Promise<void> 
   // A hop happened while this tile waited on terrain or the halo reads: its
   // ways belong to a world that no longer exists here.
   if (ep0 !== worldEpoch) return;
-  renderWays(out, halo);
-  // The tile's buildings, standing up together — see flushBuildings.
-  flushBuildings();
+  // QUEUED, not called: see buildChain. The build yields to the frame now, so
+  // two tiles arriving together would otherwise interleave and share one
+  // ribbon batch between them.
+  buildChain = buildChain.then(async () => {
+    if (ep0 !== worldEpoch) return;
+    await renderWays(out, halo);
+    if (ep0 !== worldEpoch) return;
+    // The tile's buildings, standing up together — see flushBuildings.
+    flushBuildings();
+  }).catch(() => { /* one tile's failure must not stop the queue */ });
+  await buildChain;
 }
 
 // "No roads yet" must read as LOADING, not a broken world.
@@ -17203,6 +17280,7 @@ function tapeKeep(): string {
   return {
     calls: r.calls, tris: r.triangles, progs: renderer.info.programs?.length ?? 0,
     vegMs: +vegMs.toFixed(1), swardMs: +swardMs.toFixed(1), terrainMs: +terrainMs.toFixed(1), seg: terrainSeg, cutL: +cutL.toFixed(1),
+    build: { ...buildCost },
     vegInstances: vegN, vegTris: Math.round(vegTris), veg,
   };
 };

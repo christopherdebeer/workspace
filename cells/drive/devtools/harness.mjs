@@ -178,6 +178,31 @@ export async function openDrive(opts = {}) {
     // an empty map. Proxied to the deployed cell, where the corridor is
     // already banked, rather than run through the handler locally (which would
     // spend a fresh upstream budget per tile; see the note by cellRoute).
+    // THE FINE VECTOR TILES, from the same place the PHONE gets them.
+    //
+    // The note by cellRoute says routing these through the handler locally
+    // would move the Overpass call server-side and spend a fresh upstream
+    // budget per tile. True — but the conclusion drawn from it, to serve them
+    // from nowhere and let the client fall back to the Overpass mirrors, means
+    // every harness run depends on a busy public service that the player's
+    // session does not: the phone reads this route, off S3, and only falls back
+    // if the cell itself is unreachable. Measured the day the mirrors went dark
+    // from this network: the deployed route answered a tile in 0.47s while
+    // every local test failed with `upstreamDown: true` and no roads at all.
+    //
+    // So proxy it, exactly as the overview and summit tiles below already are,
+    // and for the same reason: read what is banked rather than re-earning it.
+    // The client's mirror fallback still exists and is still what a bad deploy
+    // degrades to; it just stops being the harness's PRIMARY source.
+    else if (p.startsWith('/~/osm/v3/') && opts.osm !== false) {
+      fetch(`https://c15r-drive.on.parc.land${p}`)
+        .then(async (r) => {
+          if (!r.ok) { res.writeHead(r.status); res.end('{}'); return; }
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(Buffer.from(await r.arrayBuffer()));
+        })
+        .catch(() => { res.writeHead(503); res.end('{}'); });
+    }
     else if (p.startsWith('/~/osm/ov1/')) {
       fetch(`https://c15r-drive.on.parc.land${p}`)
         .then(async (r) => {
