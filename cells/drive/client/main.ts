@@ -30353,6 +30353,24 @@ let toastT = 0;
     // Outside the `~/` namespace on purpose — that surface is cached by path
     // and would serve one tab's answer to another. See serveProbe.
     const base = `${CELL_BASE}/probe/${encodeURIComponent(probeKey)}`;
+    /**
+     * WHICH TAB ANSWERED.
+     *
+     * Two tabs on one key both poll, and whichever gets to /next first takes
+     * the question — so a probe loaded into one can be answered by the other,
+     * and a series of readings can silently interleave two DEVICES. That
+     * happened: a phone and a desktop browser shared a key for most of a
+     * performance hunt, and the uptime looked like a tab repeatedly crashing
+     * when it was really the two of them taking turns. Several comparisons
+     * had to be thrown away.
+     *
+     * A tag on every answer makes that visible instead of invisible. The
+     * engine word is enough to tell the devices apart without shipping a
+     * whole user-agent string through a URL.
+     */
+    const tabId = `${/CriOS|Chrome/.test(navigator.userAgent) ? 'chrome'
+      : /Safari/.test(navigator.userAgent) ? 'safari' : 'other'}-${
+      Math.random().toString(36).slice(2, 6)}`;
     const say = (v: unknown): string => {
       try { return JSON.stringify(v) ?? String(v); } catch { return String(v); }
     };
@@ -30486,7 +30504,7 @@ let toastT = 0;
           const CH = 1400;
           const parts = Math.max(1, Math.ceil(v.length / CH));
           for (let i = 0; i < parts; i++) {
-            await fetch(`${base}/say/${j.id}/${i}/${parts}?v=${
+            await fetch(`${base}/say/${j.id}/${i}/${parts}?tab=${tabId}&v=${
               encodeURIComponent(v.slice(i * CH, (i + 1) * CH))}`, { cache: 'no-store' });
           }
         }
@@ -30509,6 +30527,8 @@ let toastT = 0;
     // what a probe path MEANS rather than only that a request came back.
     (window as unknown as { __probepath?: (e: string) => string[] }).__probepath = segs;
     (window as unknown as { __probeask?: (js: string) => Promise<string> }).__probeask = run;
-    console.log(`[probe] listening as ${probeKey}`);
+    (window as unknown as { __who?: object }).__who = (): object =>
+      ({ tab: tabId, ua: navigator.userAgent, upMs: Math.round(performance.now()) });
+    console.log(`[probe] listening as ${probeKey} (${tabId})`);
   }
 }

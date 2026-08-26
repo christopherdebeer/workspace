@@ -1283,10 +1283,18 @@ async function serveProbe(path: string, method: string, q: URLSearchParams, body
     const part = Number(bits[4] ?? '0') || 0;
     const of = Number(bits[5] ?? '1') || 1;
     const v = q.get('v') ?? '';
+    // WHICH TAB. Two tabs on one key both poll and whichever reaches /next
+    // first takes the question, so a reading can come from a different device
+    // than the one before it. That is not hypothetical: a phone and a desktop
+    // browser shared a key through most of a performance hunt, and the
+    // apparent uptime resets read as a crashing tab when it was the two of
+    // them taking turns.
+    const tab = (q.get('tab') ?? '').slice(0, 32);
     if (!id) return j(400, { error: 'id required' });
     await db.send(new m.PutItemCommand({ TableName: TABLE,
       Item: { pk: S(pk), sk: S(`a#${id}#${String(part).padStart(3, '0')}`),
-        v: S(v.slice(0, 350000)), of: N(of), at: N(Date.now()) } }));
+        v: S(v.slice(0, 350000)), of: N(of), at: N(Date.now()),
+        ...(tab ? { tab: S(tab) } : {}) } }));
     return j(200, { ok: true, part, of });
   }
   if (action === 'answer' && method === 'POST') {
@@ -1307,7 +1315,10 @@ async function serveProbe(path: string, method: string, q: URLSearchParams, body
     if (!parts.length) return j(200, { pending: true });
     const of = Number(parts[0].of?.N ?? '1') || 1;
     if (parts.length < of) return j(200, { pending: true, have: parts.length, of });
-    return j(200, { v: parts.map((it) => it.v?.S ?? '').join('') });
+    // The tab that answered rides back with the answer, so a reading always
+    // names its source — see the note in `say`.
+    const tab = parts[0].tab?.S;
+    return j(200, { v: parts.map((it) => it.v?.S ?? '').join(''), ...(tab ? { tab } : {}) });
   }
   return j(404, { error: 'no such probe route' });
 }
