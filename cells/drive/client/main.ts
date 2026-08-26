@@ -19,6 +19,10 @@ import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
 import { RoadSolver, densifyPts } from './roadsolve';
+import {
+  BENCH_OFFS, BENCH_K, BENCH_C, benchFlat, ruleGrade, latCands,
+  solveChain as solveProfile,
+} from './roadprofile';
 import { createOverlays } from './overlays';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
@@ -8753,139 +8757,22 @@ function deckAnchorAt(x: number, z: number): number | null {
 // ±3 real DEM samples: misregistration on the worst cliffs exceeds two
 // pixels, and ±24m left the true bench just out of reach — measured at
 // Chapman's km 7.5, where the road sits 60m below a plateau-locked line.
-const BENCH_OFFS = [-45, -30, -15, 0, 15, 30, 45];
-const BENCH_K = BENCH_OFFS.length;
-const BENCH_C = BENCH_K >> 1;
+// The bench DP, the grade limiter and the lateral candidates all moved to
+// `roadprofile.ts` — the same move `roadsolve.ts` made, for the same reason:
+// it is arithmetic over arrays that needed a WebGL context only because of
+// where it was sitting. SolveEnv had already flagged it as "numerically
+// delicate and worth moving on its own, later, with its own tests".
+//
+// Only this shim stays, because the candidates are the one part that samples
+// terrain and `sampleHeight` lives here.
 function latCandsFor(dense: Array<[number, number]>, i: number): number[] {
-  const n = dense.length;
-  const [x, z] = dense[i];
-  const [ax2, az2] = dense[Math.max(0, i - 1)], [bx2, bz2] = dense[Math.min(n - 1, i + 1)];
-  const tx = bx2 - ax2, tz = bz2 - az2, tl = Math.hypot(tx, tz) || 1;
-  const px2 = -tz / tl, pz2 = tx / tl;
-  return BENCH_OFFS.map((o) => sampleHeight(x + px2 * o, z + pz2 * o));
+  return latCands(dense, i, sampleHeight);
 }
-function benchFlat(cs: number[]): number {
-  // The flattest candidate that is NOT the water: on a coast road the
-  // flattest thing in reach is the OCEAN, and an unbanded search walked the
-  // road seventy metres down into it. Anything within 8m of the section's
-  // minimum is treated as the sea/lowest slope and excluded; where that
-  // excludes everything (ordinary flat ground) the spread is tiny and the
-  // answer is the median anyway.
-  const lo = Math.min(...cs);
-  const sorted = cs.slice().sort((a, b) => a - b);
-  const med = sorted[BENCH_K >> 1];
-  let bk = -1, bg = Infinity;
-  for (let k = 1; k < BENCH_K - 1; k++) {
-    if (cs[k] < lo + 8) continue;
-    const g = Math.abs(cs[k + 1] - cs[k - 1]) + Math.abs(BENCH_OFFS[k]) * 0.06;
-    if (g < bg) { bg = g; bk = k; }
-  }
-  return bk < 0 ? med : cs[bk];
-}
-/**
- * THE RULING GRADE, imposed on a finished profile in place.
- *
- * Forward then back, twice: any span steeper than the limit is redistributed
- * as the longest possible ramp at just over the class grade, rather than left
- * as a wall for one station to absorb. Absolute truth about a shelf road's
- * elevation is unknowable in this data; drivability is not negotiable, so this
- * is a law and not a cost term — every branch that can produce a profile ends
- * up here, and so does every stage that reshapes one afterwards.
- *
- * `held` stations are exempt, and the exemption is the whole point of the
- * junction pins: a pinned station IS another road's deck, so moving it is
- * un-welding the join that was just made. The ends were always exempt by
- * construction — the forward pass starts at 1 and the backward pass stops at 1
- * — which is why chain ANCHORS survived this and interior pins silently did
- * not. Neighbours absorb the ramp instead, which is what the caller's comment
- * has always claimed happens.
- */
-function ruleGrade(dense: Array<[number, number]>, y: number[], gLim: number, held?: ArrayLike<unknown>): void {
-  const n = y.length;
-  for (let r = 0; r < 2; r++) {
-    for (let i = 1; i < n; i++) {
-      if (held?.[i] != null) continue;
-      const d = Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
-      y[i] = clamp(y[i], y[i - 1] - gLim * d, y[i - 1] + gLim * d);
-    }
-    for (let i = n - 2; i >= 1; i--) {
-      if (held?.[i] != null) continue;
-      const d = Math.max(1, Math.hypot(dense[i + 1][0] - dense[i][0], dense[i + 1][1] - dense[i][1]));
-      y[i] = clamp(y[i], y[i + 1] - gLim * d, y[i + 1] + gLim * d);
-    }
-  }
-}
-/**
- * `pins[i]`, where present, is a height this station must hold — the deck an
- * ALREADY SOLVED road carries at the very same point. Junctions are the one
- * place where two roads have to agree, and OSM's own topology says where they
- * are: two ways that meet share a node, and two ways that cross without one
- * are grade separated. So a pin is simply "another road's solved deck lies
- * within a whisker of this station", and the fact that it does is the evidence
- * that you can turn there.
- */
-function solveChain(dense: Array<[number, number]>, maxGrade: number, p0: number | null, p1: number | null,
-  pins?: Array<number | null>): number[] {
-  const n = dense.length;
+function solveChain(dense: Array<[number, number]>, maxGrade: number, p0: number | null,
+  p1: number | null, pins?: Array<number | null>): number[] {
   const cand: number[][] = [];
-  for (let i = 0; i < n; i++) cand.push(latCandsFor(dense, i));
-  const gCap = maxGrade > 0 ? maxGrade : 0.15;
-  const W_OFF = 0.35, W_G = 30, W_PIN = 120, INF = 1e9;
-  const free = cand.map((cs) => clamp(Math.abs(cs[BENCH_K - 1] - cs[0]) / 18, 0, 1));
-  const flat = cand.map(benchFlat);
-  let prevC: number[] = cand[0].map((e, k) =>
-    Math.abs(BENCH_OFFS[k]) * W_OFF * (1 - 0.75 * free[0])
-    + Math.abs(e - flat[0]) * 0.5 * free[0]
-    + (p0 === null ? 0 : Math.abs(e - p0) * W_PIN)
-    + (pins?.[0] == null ? 0 : Math.abs(e - (pins[0] as number)) * W_PIN));
-  const from: Int8Array[] = [];
-  for (let i = 1; i < n; i++) {
-    const d = Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
-    const cur = new Array<number>(BENCH_K).fill(INF);
-    const bk = new Int8Array(BENCH_K);
-    for (let k = 0; k < BENCH_K; k++) {
-      const stat = Math.abs(BENCH_OFFS[k]) * W_OFF * (1 - 0.75 * free[i])
-        + Math.abs(cand[i][k] - flat[i]) * 0.5 * free[i]
-        + (i === n - 1 && p1 !== null ? Math.abs(cand[i][k] - p1) * W_PIN : 0)
-        + (pins?.[i] == null ? 0 : Math.abs(cand[i][k] - (pins[i] as number)) * W_PIN);
-      for (let j = 0; j < BENCH_K; j++) {
-        if (prevC[j] >= INF) continue;
-        const excess = Math.max(0, Math.abs(cand[i][k] - cand[i - 1][j]) - gCap * d);
-        const c = prevC[j] + stat + (excess * excess * W_G) / d;
-        if (c < cur[k]) { cur[k] = c; bk[k] = j; }
-      }
-    }
-    from.push(bk);
-    prevC = cur;
-  }
-  let endK = 0;
-  for (let k = 1; k < BENCH_K; k++) if (prevC[k] < prevC[endK]) endK = k;
-  const pick = new Array<number>(n).fill(endK);
-  for (let i = n - 1; i >= 1; i--) pick[i - 1] = from[i - 1][pick[i]];
-  const alg = cand.map((cs, i) => cs[pick[i]]);
-  if (p0 !== null && Math.abs(alg[0] - p0) < 4) alg[0] = p0;
-  if (p1 !== null && Math.abs(alg[n - 1] - p1) < 4) alg[n - 1] = p1;
-  // A junction pin is not a preference. The lateral candidates are DEM samples
-  // and none of them need land on the neighbour's deck, so the pinned stations
-  // are seated exactly and the slope limiter below ramps the rest of the chain
-  // to meet them — which is what makes the two ribbons one surface where they
-  // touch instead of two terraces with a wall between.
-  if (pins) for (let i = 0; i < n; i++) if (pins[i] != null) alg[i] = pins[i] as number;
-  // Where chains solved in different tiles disagree about the absolute shelf,
-  // someone must absorb the difference — and the DP's soft costs concentrated
-  // it into one fragment as a 70% wall.
-  //
-  // THE PINS ARE HELD THROUGH THIS. Seating them a line earlier and then
-  // letting the limiter clamp them was the whole junction-step bug: a long
-  // chain's own profile disagrees with the road it joins by more than one
-  // station's grade allowance, so the limiter dragged the pinned station back
-  // towards its neighbours and the two carriageways parted. Measured at
-  // Chapman's Peak — driving in built 22km of chain and left 5 shared nodes
-  // carrying two decks up to 0.51m apart, while spawning on the spot built
-  // 2.7km, never chain-solved the junction at all, and looked correct. That is
-  // exactly the "reload and it's magically fine" the report described.
-  ruleGrade(dense, alg, gCap * 1.2, pins);
-  return alg;
+  for (let i = 0; i < dense.length; i++) cand.push(latCandsFor(dense, i));
+  return solveProfile(dense, cand, maxGrade, p0, p1, pins);
 }
 // The hint store, the junction registry and the chain assembly all moved to
 // `roadsolve.ts` — they never needed a renderer, and having them in here meant
