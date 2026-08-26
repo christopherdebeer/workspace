@@ -12540,13 +12540,37 @@ const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterwa
   // vertical alignment learns to consume them.
   'covered', 'cutting', 'embankment', 'incline', 'maxheight'];
 let osmDb: IDBDatabase | null = null;
+let osmDbHow = 'pending';
+/**
+ * A BEST-EFFORT CACHE MUST NOT BE ABLE TO STOP THE WORLD.
+ *
+ * This promise gates readTileCache, which gates loadOsmTile — so if it never
+ * settles, every tile is marked `osmLoaded` and then parks forever on the
+ * await, and nothing ever asks again. Measured on a phone at the Paris
+ * aperture: every tile `pending`, inFlight 0, queued 0, retries 0, proxy
+ * healthy, and the cell serving that exact tile in half a second. No roads, no
+ * buildings, no error, and no way to tell from inside the game.
+ *
+ * `indexedDB.open` has a THIRD outcome besides success and error — `blocked`,
+ * when another tab holds the database — and it had no handler. Safari can also
+ * simply never call back. So: settle on blocked, and settle on a timer no
+ * matter what. `osmDb` stays null and every read answers "not cached", which
+ * is honest and is what the callers were already written for. If a slow open
+ * lands later it still adopts the handle, so the cache comes back by itself.
+ */
 const osmDbReady: Promise<void> = new Promise((resolve) => {
+  const t = setTimeout(() => { osmDbHow = 'timeout'; resolve(); }, 3000);
+  const fin = (how: string): void => {
+    if (osmDbHow === 'pending') osmDbHow = how;
+    clearTimeout(t); resolve();
+  };
   try {
     const req = indexedDB.open('drive-cache', 1);
     req.onupgradeneeded = () => { req.result.createObjectStore('osm').createIndex('ts', 'ts'); };
-    req.onsuccess = () => { osmDb = req.result; resolve(); };
-    req.onerror = () => resolve();
-  } catch { resolve(); }
+    req.onsuccess = () => { osmDb = req.result; fin('open'); };
+    req.onerror = () => fin('error');
+    req.onblocked = () => fin('blocked');
+  } catch { fin('throw'); }
 });
 // Free the shared origin quota from the failed localStorage era.
 try { for (const k of Object.keys(localStorage)) if (k.startsWith('drive.osm.')) localStorage.removeItem(k); } catch { /* fine */ }
@@ -23687,11 +23711,16 @@ function worldQuiet(): boolean {
  */
 const TAPE_DB = 'drive-tapes';
 function tapeDb(): Promise<IDBDatabase> {
+  // Same three-outcome trap as the tile cache above: `blocked` had no handler
+  // and nothing bounded the wait, so a held database hung every caller — here
+  // that is the bank list and the save, which simply never come back.
   return new Promise((go, no) => {
+    const t = setTimeout(() => no(new Error('indexeddb open timed out')), 3000);
     const q = indexedDB.open(TAPE_DB, 1);
     q.onupgradeneeded = () => { q.result.createObjectStore('runs', { keyPath: 'id' }); };
-    q.onsuccess = () => go(q.result);
-    q.onerror = () => no(q.error);
+    q.onsuccess = () => { clearTimeout(t); go(q.result); };
+    q.onerror = () => { clearTimeout(t); no(q.error); };
+    q.onblocked = () => { clearTimeout(t); no(new Error('indexeddb blocked')); };
   });
 }
 async function tapeSave(t: Tape): Promise<string> {
@@ -29864,6 +29893,34 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
  * be inspected — headless Chromium on Linux has no display profile to convert
  * to and will always say the two are identical.
  */
+/**
+ * DID THE CACHE OPEN, AND HOW.
+ *
+ * The tile cache is best-effort, so nothing in the game ever reported on it —
+ * which is precisely why an open that never settled could stop the world
+ * without leaving a mark. This says how it settled, whether a read answers at
+ * all, and how long one takes, so "the world is not streaming" can be told
+ * apart from "the cache is cold" without guessing.
+ */
+(window as unknown as { __idb?: object }).__idb = async (): Promise<object> => {
+  const race = async <T>(p: Promise<T>, ms: number): Promise<T | 'HUNG'> =>
+    Promise.race([p, new Promise<'HUNG'>((r) => { setTimeout(() => r('HUNG'), ms); })]);
+  const t0 = performance.now();
+  const ready = await race(osmDbReady.then(() => 'settled' as const), 4000);
+  const readyMs = Math.round(performance.now() - t0);
+  const t1 = performance.now();
+  const read = await race(readTileCache(33190, 22568).then((w) => (w ? `${w.length} ways` : 'not cached')), 4000);
+  const readMs = Math.round(performance.now() - t1);
+  let dbs: string[] = [];
+  try {
+    dbs = ((await (indexedDB as unknown as { databases?: () => Promise<Array<{ name?: string }>> })
+      .databases?.()) ?? []).map((d) => d.name ?? '?');
+  } catch (e) { dbs = [`(${String((e as Error)?.message ?? e)})`]; }
+  let tape = 'n/a';
+  try { tape = await race(tapeDb().then(() => 'open'), 4000) as string; }
+  catch (e) { tape = `err: ${String((e as Error)?.message ?? e)}`; }
+  return { how: osmDbHow, handle: !!osmDb, ready, readyMs, read, readMs, dbs, tape };
+};
 (window as unknown as { __demcheck?: object }).__demcheck = async (
   lat = -34.0915, lon = 18.4299, z = 14,
 ): Promise<object> => {
