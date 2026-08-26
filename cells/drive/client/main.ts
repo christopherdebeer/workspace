@@ -23715,7 +23715,13 @@ function tapeDb(): Promise<IDBDatabase> {
   // and nothing bounded the wait, so a held database hung every caller — here
   // that is the bank list and the save, which simply never come back.
   return new Promise((go, no) => {
-    const t = setTimeout(() => no(new Error('indexeddb open timed out')), 3000);
+    // GENEROUS, because unlike the tile cache there is no graceful degradation
+    // here — a timeout is a failed save or an empty bank list. Measured in the
+    // harness under a streaming load: the main thread janks hard enough that a
+    // 3s budget expired on an open that was perfectly healthy. The failure this
+    // guards is `blocked`, which has its own handler and answers at once; the
+    // timer is only a backstop for a callback that never comes at all.
+    const t = setTimeout(() => no(new Error('indexeddb open timed out')), 15000);
     const q = indexedDB.open(TAPE_DB, 1);
     q.onupgradeneeded = () => { q.result.createObjectStore('runs', { keyPath: 'id' }); };
     q.onsuccess = () => { clearTimeout(t); go(q.result); };
@@ -30099,8 +30105,17 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
       }
     };
     let stop = false;
+    let busy = false;
+    let timer = 0;
     const beat = async (): Promise<void> => {
-      if (stop) return;
+      // ONE LOOP, however many things ask for a beat. The wake-on-visible hook
+      // below calls this while a timer is already pending, and without these
+      // two guards each return to the foreground would leave another loop
+      // running alongside the last — doubling the poll rate every time the
+      // phone is unlocked.
+      if (stop || busy) return;
+      busy = true;
+      clearTimeout(timer);
       try {
         const r = await fetch(`${base}/next`, { cache: 'no-store' });
         const j = await r.json() as { id?: string; js?: string };
@@ -30122,9 +30137,19 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
           }
         }
       } catch { /* offline, or the cell is redeploying — just ask again */ }
-      setTimeout(() => { void beat(); }, 1500);
+      busy = false;
+      timer = setTimeout(() => { void beat(); }, 1500) as unknown as number;
     };
     void beat();
+    // WAKE ON RETURN. iOS freezes a backgrounded tab's timers, so the poll
+    // stops the moment the phone is locked or the app is switched, and on the
+    // way back it waits out whatever remained of a stale interval before
+    // asking again. During paired debugging that reads as "the tab is dead"
+    // and costs a reload. A pending beat is cheap; ask the moment we are
+    // visible again.
+    document.addEventListener('visibilitychange', () => {
+      if (!stop && document.visibilityState === 'visible') void beat();
+    });
     (window as unknown as { __probestop?: () => void }).__probestop = () => { stop = true; };
     // The resolver, reachable without the round trip — so a test can assert
     // what a probe path MEANS rather than only that a request came back.
