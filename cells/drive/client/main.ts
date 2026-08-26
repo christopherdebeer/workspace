@@ -8431,10 +8431,74 @@ function quadInto(V: number[], U: number[], p: number[], uv: number[]): void {
 interface Draped { geo: THREE.BufferGeometry; lift: number;
   x0: number; z0: number; x1: number; z1: number }
 const drapedWays: Draped[] = [];
+/**
+ * WHERE THE DRAPES ARE, so a rebuild does not have to ask all of them.
+ *
+ * redrape and reseatBuildings both walked their ENTIRE list on every terrain
+ * rebuild, rejecting almost all of it on a bounding-box test. That is O(all the
+ * world you have ever driven through) to re-seat one tile, and drapedWays is
+ * only emptied by a world hop — so the cost of a rebuild grew with the length
+ * of the session and never came down.
+ *
+ * Measured on a phone across one drive: terrainMs 20ms, then 46ms, then 134ms,
+ * tracking the object count 1279 -> 1953 -> 2500+. flushTerrain rebuilds at
+ * most one tile per 200ms, so at 134ms that is two thirds of wall-clock spent
+ * inside a single synchronous call. It is the accrual the whole session has
+ * been chasing, and it is why flying the drone over the same ground is smooth:
+ * a parked rig moves no tiles, so nothing rebuilds.
+ *
+ * A flat grid is enough. The lists are still the truth; this only says which
+ * entries are worth asking about.
+ */
+const DRAPE_CELL = 512;
+const drapeGrid = new Map<string, Draped[]>();
+const seatGrid = new Map<string, Seated[]>();
+const cellKey = (x: number, z: number): string =>
+  `${Math.floor(x / DRAPE_CELL)}/${Math.floor(z / DRAPE_CELL)}`;
+/** Every cell a box touches, as keys. */
+function boxCells(x0: number, z0: number, x1: number, z1: number): string[] {
+  const out: string[] = [];
+  const cx0 = Math.floor(x0 / DRAPE_CELL), cx1 = Math.floor(x1 / DRAPE_CELL);
+  const cz0 = Math.floor(z0 / DRAPE_CELL), cz1 = Math.floor(z1 / DRAPE_CELL);
+  // A way whose box is absurd (a bad projection, a way spanning the world)
+  // would otherwise index into millions of cells and cost more than the scan
+  // it replaces. Past a sane span, leave it out of the index and let the
+  // fallback list carry it.
+  if ((cx1 - cx0 + 1) * (cz1 - cz0 + 1) > 4096) return out;
+  for (let cx = cx0; cx <= cx1; cx++) for (let cz = cz0; cz <= cz1; cz++) out.push(`${cx}/${cz}`);
+  return out;
+}
+/** Drapes too large to index; scanned every time, and there should be ~none. */
+const drapeWide: Draped[] = [];
+/** What the last rebuild ASKED versus what exists. The point of the index is
+ *  that the first stops growing while the second does not, so both are needed
+ *  to say whether it is working. */
+const terrainScan = { drapes: 0, ofDrapes: 0, seats: 0, ofSeats: 0 };
+function indexDrape(d: Draped): void {
+  const cells = boxCells(d.x0, d.z0, d.x1, d.z1);
+  if (!cells.length) { drapeWide.push(d); return; }
+  for (const k of cells) {
+    let a = drapeGrid.get(k);
+    if (!a) drapeGrid.set(k, a = []);
+    a.push(d);
+  }
+}
+/** The drapes and footprints that could touch this tile — no more. */
+function nearCells<T>(grid: Map<string, T[]>, t: HeightTile): Set<T> {
+  const out = new Set<T>();
+  for (const k of boxCells(t.xs, t.zs, t.xs + t.w, t.zs + t.h)) {
+    const a = grid.get(k);
+    if (a) for (const e of a) out.add(e);
+  }
+  return out;
+}
 /** Re-seat every draped vertex that falls inside a tile just rebuilt. */
 function redrape(t: HeightTile): void {
   const tx1 = t.xs + t.w, tz1 = t.zs + t.h;
-  for (const d of drapedWays) {
+  const near = nearCells(drapeGrid, t);
+  for (const w of drapeWide) near.add(w);
+  terrainScan.drapes = near.size; terrainScan.ofDrapes = drapedWays.length;
+  for (const d of near) {
     if (d.x1 < t.xs || d.x0 > tx1 || d.z1 < t.zs || d.z0 > tz1) continue;
     const pos = d.geo.attributes.position as THREE.BufferAttribute;
     let touched = false;
@@ -8884,7 +8948,7 @@ function flushRibbons(): void {
         if (x < x0) x0 = x; if (x > x1) x1 = x;
         if (z < z0) z0 = z; if (z > z1) z1 = z;
       }
-      drapedWays.push({ geo: out, lift, x0, z0, x1, z1 });
+      { const d = { geo: out, lift, x0, z0, x1, z1 }; drapedWays.push(d); indexDrape(d); }
     }
   }
 }
@@ -10505,7 +10569,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       if (verts[i + 2] < z0) z0 = verts[i + 2];
       if (verts[i + 2] > z1) z1 = verts[i + 2];
     }
-    drapedWays.push({ geo, lift, x0, z0, x1, z1 });
+    { const d = { geo, lift, x0, z0, x1, z1 }; drapedWays.push(d); indexDrape(d); }
   }
   // A drivable road below sea level is proof the land here is dry — the
   // evidence that keeps the sea plane out of Badwater and a polder alike.
@@ -11436,16 +11500,37 @@ const ringLow = (pts: Array<[number, number]>): number => {
   for (const [x, z] of pts) lo = Math.min(lo, groundAt(x, z));
   return lo;
 };
+/** Rebuilt from `seated` after the cap trims it — the grid holds references
+ *  and a splice would otherwise leave it pointing at footprints that are gone. */
+function reindexSeated(): void {
+  seatGrid.clear();
+  for (const b of seated) {
+    const k = cellKey(b.pts[0][0], b.pts[0][1]);
+    let a = seatGrid.get(k);
+    if (!a) seatGrid.set(k, a = []);
+    a.push(b);
+  }
+}
+function indexSeated(b: Seated): void {
+  const k = cellKey(b.pts[0][0], b.pts[0][1]);
+  let a = seatGrid.get(k);
+  if (!a) seatGrid.set(k, a = []);
+  a.push(b);
+}
 function noteSeated(mesh: THREE.Object3D, pts: Array<[number, number]>): void {
-  if (seated.length > 4000) seated.splice(0, 1000);
-  seated.push({ mesh, pts, ref: ringLow(pts) });
+  if (seated.length > 4000) { seated.splice(0, 1000); reindexSeated(); }
+  const b = { mesh, pts, ref: ringLow(pts) };
+  seated.push(b);
+  indexSeated(b);
 }
 /** Re-seat the buildings standing on a tile that has just been rebuilt. Bounded
  *  to what is near enough to be looked at: a 2.4km terrain tile can hold a
  *  city's worth of footprints, and the far ones will be re-seated by the next
  *  rebuild that happens while they are close. */
 function reseatBuildings(t: HeightTile): void {
-  for (const b of seated) {
+  const near = nearCells(seatGrid, t);
+  terrainScan.seats = near.size; terrainScan.ofSeats = seated.length;
+  for (const b of near) {
     const [x, z] = b.pts[0];
     if (x < t.xs || z < t.zs || x > t.xs + t.w || z > t.zs + t.h) continue;
     if (Math.hypot(x - state.x, z - state.z) > 700) continue;
@@ -11583,8 +11668,9 @@ function flushBuildings(): void {
     const pos = geo.attributes.position as THREE.BufferAttribute;
     const base = geo.attributes.aBase as THREE.BufferAttribute;
     for (const s of seats) {
-      if (seated.length > 4000) seated.splice(0, 1000);
-      seated.push({ mesh, pts: s.pts, ref: ringLow(s.pts), att: { pos, base, ranges: s.ranges } });
+      if (seated.length > 4000) { seated.splice(0, 1000); reindexSeated(); }
+      { const b = { mesh, pts: s.pts, ref: ringLow(s.pts), att: { pos, base, ranges: s.ranges } };
+        seated.push(b); indexSeated(b); }
     }
     if (opts.ruinLod) {
       let cx = 0, cz = 0;
@@ -16775,7 +16861,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     carveCost.tiles = 0; carveCost.ms = 0; carveCost.relieved = 0;
     pois.clear(); areaGrid.clear(); survey.clear();
     vegGrid.clear(); vegSeeded.clear(); vegDeferredAt.clear();
-    drapedWays.length = 0;
+    drapedWays.length = 0; drapeGrid.clear(); drapeWide.length = 0; seatGrid.clear();
     // NOT peakData: the summits themselves are global and immutable, and only
     // their LOCAL seats are stale. The ceiling does reset — the Alps must not
     // authorise a three-hundred-kilometre ring over the Paris basin.
@@ -17280,7 +17366,7 @@ function tapeKeep(): string {
   return {
     calls: r.calls, tris: r.triangles, progs: renderer.info.programs?.length ?? 0,
     vegMs: +vegMs.toFixed(1), swardMs: +swardMs.toFixed(1), terrainMs: +terrainMs.toFixed(1), seg: terrainSeg, cutL: +cutL.toFixed(1),
-    build: { ...buildCost },
+    build: { ...buildCost }, scan: { ...terrainScan },
     vegInstances: vegN, vegTris: Math.round(vegTris), veg,
   };
 };
