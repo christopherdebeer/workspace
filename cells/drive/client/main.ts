@@ -29867,43 +29867,82 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
 (window as unknown as { __demcheck?: object }).__demcheck = async (
   lat = -34.0915, lon = 18.4299, z = 14,
 ): Promise<object> => {
+  // BOTH SOURCES, DECODED BOTH WAYS, ON THE DEVICE THAT IS ACTUALLY PLAYING.
+  //
+  // The first cut of this probe only read the AWS PNG, and came back
+  // `identical: true` — the colour-managed and raw decodes agreed to the byte.
+  // That looked like an answer until __demsrc() said `mth: 51, aws: 0`: the
+  // session was not reading AWS at all. Mapterhorn serves WEBP at 512, a
+  // different container through a different decoder, and that is the pipe the
+  // heights the wheels are riding on came out of.
+  //
+  // ALPHA IS REPORTED because it is the sharpest suspect left. Terrarium packs
+  // elevation into RGB and expects alpha to be a constant 255; if a tile
+  // carries anything else and the decode premultiplies, every channel is
+  // scaled by a number that has nothing to do with height, and R is the 256m
+  // digit. `premultiplyAlpha: 'none'` is exactly the guard for that, so
+  // whether it can bite here is a fact worth having rather than assuming.
   const n = 2 ** z;
   const x = Math.floor(((lon + 180) / 360) * n);
   const la = (lat * Math.PI) / 180;
   const y = Math.floor(((1 - Math.log(Math.tan(la) + 1 / Math.cos(la)) / Math.PI) / 2) * n);
-  const url = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
-  const blob = await (await fetch(url, { cache: 'reload' })).blob();
-  const read = async (opts?: ImageBitmapOptions): Promise<{ mn: number; mx: number; spikes: number; px: string }> => {
+
+  const read = async (blob: Blob, W: number, opts?: ImageBitmapOptions): Promise<object> => {
     const bmp = await createImageBitmap(blob, opts);
     const cv = document.createElement('canvas');
-    cv.width = cv.height = 256;
-    const cx = cv.getContext('2d', { willReadFrequently: true }) as CanvasRenderingContext2D;
-    cx.drawImage(bmp, 0, 0, 256, 256);
-    const d = cx.getImageData(0, 0, 256, 256).data;
-    const h = new Float32Array(65536);
-    let mn = 1e9, mx = -1e9;
-    for (let i = 0; i < 65536; i++) {
+    cv.width = cv.height = W;
+    const cx = cv.getContext('2d', { willReadFrequently: true, colorSpace: 'srgb' }) as CanvasRenderingContext2D;
+    cx.drawImage(bmp, 0, 0, W, W);
+    const d = cx.getImageData(0, 0, W, W).data;
+    const N = W * W;
+    const h = new Float32Array(N);
+    let mn = 1e9, mx = -1e9, aMin = 255, aMax = 0;
+    for (let i = 0; i < N; i++) {
       const v = d[i * 4] * 256 + d[i * 4 + 1] + d[i * 4 + 2] / 256 - 32768;
       h[i] = v; if (v < mn) mn = v; if (v > mx) mx = v;
+      const a = d[i * 4 + 3]; if (a < aMin) aMin = a; if (a > aMax) aMax = a;
     }
-    let spikes = 0;
-    for (let yy = 1; yy < 255; yy++) {
-      for (let xx = 1; xx < 255; xx++) {
-        const i = yy * 256 + xx;
-        const nb = (h[i - 1] + h[i + 1] + h[i - 256] + h[i + 256]) * 0.25;
-        if (Math.abs(h[i] - nb) > 80) spikes++;
+    // A spike is a pixel that disagrees with all four of its neighbours. Real
+    // ground does that at a cliff edge and almost nowhere else; byte garbage
+    // does it everywhere. `worst` separates "a few cliffs" from "corrupt".
+    let spikes = 0, worst = 0;
+    for (let yy = 1; yy < W - 1; yy++) {
+      for (let xx = 1; xx < W - 1; xx++) {
+        const i = yy * W + xx;
+        const nb = (h[i - 1] + h[i + 1] + h[i - W] + h[i + W]) * 0.25;
+        const dv = Math.abs(h[i] - nb);
+        if (dv > worst) worst = dv;
+        if (dv > 80) spikes++;
       }
     }
-    return { mn: +mn.toFixed(1), mx: +mx.toFixed(1), spikes,
-      px: [0, 1, 2].map((k) => `${d[k * 4]},${d[k * 4 + 1]},${d[k * 4 + 2]}`).join(' ') };
+    return { mn: +mn.toFixed(1), mx: +mx.toFixed(1), spikes, worst: +worst.toFixed(1),
+      aMin, aMax,
+      px: [0, 1, 2].map((k) => `${d[k * 4]},${d[k * 4 + 1]},${d[k * 4 + 2]},${d[k * 4 + 3]}`).join(' ') };
   };
-  const managed = await read(undefined);
-  const raw = await read({ colorSpaceConversion: 'none', premultiplyAlpha: 'none' });
-  return { tile: `${z}/${x}/${y}`, managed, raw,
-    // Node decodes this tile to 93.0..513.5 with zero spikes — measured with
-    // no browser in the path at all. That is the truth to compare against.
-    truthInNode: { mn: 93, mx: 513.5, spikes: 0 },
-    identical: JSON.stringify(managed) === JSON.stringify(raw) };
+
+  const RAW: ImageBitmapOptions = { colorSpaceConversion: 'none', premultiplyAlpha: 'none' };
+  const probe = async (url: string, W: number): Promise<object> => {
+    try {
+      const res = await fetch(url, { cache: 'reload' });
+      if (!res.ok) return { url, status: res.status };
+      const blob = await res.blob();
+      const managed = await read(blob, W, undefined);
+      const raw = await read(blob, W, RAW);
+      return { url, bytes: blob.size, type: blob.type, managed, raw,
+        identical: JSON.stringify(managed) === JSON.stringify(raw) };
+    } catch (e) { return { url, error: String((e as Error)?.message ?? e) }; }
+  };
+
+  // Mapterhorn walks UP the pyramid when a tile is absent, so ask for the
+  // level the game would actually have landed on rather than only the one
+  // that was requested.
+  let mth: object = { note: 'nothing on the pyramid' };
+  for (let up = 0; up <= z - 6; up++) {
+    const r = await probe(`https://tiles.mapterhorn.com/${z - up}/${x >> up}/${y >> up}.webp`, 512);
+    if (!(r as { status?: number }).status) { mth = r; break; }
+  }
+  const aws = await probe(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`, 256);
+  return { tile: `${z}/${x}/${y}`, using: { ...demSource }, mth, aws };
 };
 // ── THE PROBE CHANNEL, TAB SIDE ────────────────────────────────────
 //
