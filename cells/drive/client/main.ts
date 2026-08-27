@@ -11809,7 +11809,30 @@ function flushBuildings(): void {
     // Under the chart's shed (see stepZoomShed) a batch born at altitude is
     // born hidden — the shed only flips visibility on TRANSITIONS.
     mesh.visible = !shedWorld;
-    if (bldBatchMeshes.length > 600) bldBatchMeshes.splice(0, 150);
+    // A BLIND FIFO SPLICE FORGOT MESHES IT HAD NOT RETIRED.
+    //
+    // `bldBatchMeshes.splice(0, 150)` dropped the oldest batches from the array
+    // while leaving them children of `worldGroup` — still drawn, still casting,
+    // and now unreachable. `stepZoomShed` only flips visibility on a
+    // TRANSITION, so those forgotten batches stayed VISIBLE at survey zoom:
+    // precisely the 3,364-draw-call blowout the shed exists to prevent, caused
+    // by the cap that was supposed to be protecting us.
+    //
+    // Retiring the mesh here instead would be worse. A building's collision
+    // lives in `wallGrid`/`plotGrid` and its footprints in `seated`, and this
+    // function knows how to unwind none of them — so disposing the geometry
+    // buys an INVISIBLE SOLID BLOCK in the middle of the road. Bounding this
+    // honestly is tile ownership and eviction, not a cap.
+    //
+    // So prune only what is genuinely gone — the same `!parent` self-heal that
+    // `drapes` already uses — and keep everything live reachable. The shed then
+    // pays one boolean per batch on a zoom transition, which is not a cost
+    // worth trading a correctness bug for.
+    if (bldBatchMeshes.length > 600) {
+      for (let i = bldBatchMeshes.length - 1; i >= 0; i--) {
+        if (!bldBatchMeshes[i].parent) bldBatchMeshes.splice(i, 1);
+      }
+    }
     bldBatchMeshes.push(mesh);
     const pos = geo.attributes.position as THREE.BufferAttribute;
     const base = geo.attributes.aBase as THREE.BufferAttribute;
@@ -11822,7 +11845,16 @@ function flushBuildings(): void {
       let cx = 0, cz = 0;
       for (const s of seats) { cx += s.pts[0][0]; cz += s.pts[0][1]; }
       if (seats.length) ruinTiles.push({ mesh, x: cx / seats.length, z: cz / seats.length });
-      if (ruinTiles.length > 400) ruinTiles.splice(0, 100);
+      // Same fault as the batch cap above, same fix: a forgotten ruin batch kept
+      // whichever material it last held FOREVER, so a DoubleSide interior that
+      // aged out of this array went on paying double rasterisation at every
+      // distance. stepRuinLod runs on a 900ms clock, so a longer array is a few
+      // thousand hypots a second — cheaper than the bug.
+      if (ruinTiles.length > 400) {
+        for (let i = ruinTiles.length - 1; i >= 0; i--) {
+          if (!ruinTiles[i].mesh.parent) ruinTiles.splice(i, 1);
+        }
+      }
     }
   };
   const packRuin = (pieces: BldPiece[], rubble: boolean): void => {
