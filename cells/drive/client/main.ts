@@ -715,31 +715,62 @@ function coverPaint(ex: number, ez: number): number | null {
  *  0 where there is none — "spawn level" — which is a fiction anything built
  *  against will be wrong by the depth of whatever basin it is crossing. */
 function hasHeight(ex: number, ez: number): boolean {
-  for (const t of heightTiles.values()) {
-    if (ex >= t.xs && ez >= t.zs && ex < t.xs + t.w && ez < t.zs + t.h) return true;
+  return heightTileAt(ex, ez) !== undefined;
+}
+/**
+ * THE TILE UNDER A POINT, WITHOUT ASKING EVERY TILE.
+ *
+ * `hasHeight` and `sampleHeightRaw` both walked `heightTiles.values()` until one
+ * contained the point. That is a linear scan of the whole loaded world on the
+ * hottest path in this file — the wheels, the grass field, the sun march, every
+ * terrain vertex and every road station read it — and because fine tiles are
+ * never evicted short of a world hop, THE COST GREW FOR THE LENGTH OF THE
+ * DRIVE. Twenty-five tiles at spawn is a scan worth ignoring; four hundred an
+ * hour later is the same question asked sixteen times over, for ever.
+ *
+ * It never needed a search. Every entry is keyed `tx/ty` and its bounds come
+ * from `tileBounds(tx, ty, TERRAIN_Z)` projected through `toLocal` — both
+ * monotonic — so the containing tile is arithmetic: put the point back into
+ * lat/lon and ask `tileAt`, exactly as `dirtyTerrainAround` already does.
+ *
+ * The neighbour sweep is for float slop on a tile border and nothing else; it
+ * is bounded at nine Map lookups. That bound is the point on OPEN WATER, where
+ * the honest answer is "no tile at all": the old code paid a full walk over
+ * everything loaded to discover that, on every sample.
+ */
+function heightTileAt(ex: number, ez: number): HeightTile | undefined {
+  const inside = (t: HeightTile | undefined): HeightTile | undefined =>
+    t && ex >= t.xs && ez >= t.zs && ex < t.xs + t.w && ez < t.zs + t.h ? t : undefined;
+  const [tx, ty] = tileAt(origin.lat - ez / M_LAT, origin.lon + ex / origin.mLon, TERRAIN_Z);
+  const hit = inside(heightTiles.get(`${tx}/${ty}`));
+  if (hit) return hit;
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dy = -1; dy <= 1; dy++) {
+      if (!dx && !dy) continue;
+      const n = inside(heightTiles.get(`${tx + dx}/${ty + dy}`));
+      if (n) return n;
+    }
   }
-  return false;
+  return undefined;
 }
 /**
  * The DEM as delivered, before anything authored has an opinion. Almost
  * nothing should call this: the wrapper below is the world's height.
  */
 function sampleHeightRaw(ex: number, ez: number): number {
-  for (const t of heightTiles.values()) {
-    if (ex < t.xs || ez < t.zs || ex >= t.xs + t.w || ez >= t.zs + t.h) continue;
-    // GLOBAL pixel grid: sample i is centred at xs + (i+0.5)·w/256 and the
-    // bilinear neighbourhood crosses into adjacent tiles. The old per-tile
-    // 0..255 stretch pinned two DIFFERENT global samples to the same border
-    // line (this tile's 255, the neighbour's 0) and clamped instead of
-    // crossing — a visible crack along every tile edge.
-    const u = ((ex - t.xs) / t.w) * 256 - 0.5, v = ((ez - t.zs) / t.h) * 256 - 0.5;
-    const x0 = Math.floor(u), z0 = Math.floor(v), fx = u - x0, fz = v - z0;
-    const base = texel(t.tx, t.ty, clamp(x0, 0, 255), clamp(z0, 0, 255)) ?? 0;
-    const g = (px: number, pz: number): number => texel(t.tx, t.ty, px, pz) ?? base;
-    return (g(x0, z0) * (1 - fx) + g(x0 + 1, z0) * fx) * (1 - fz)
-      + (g(x0, z0 + 1) * (1 - fx) + g(x0 + 1, z0 + 1) * fx) * fz - baseElev;
-  }
-  return 0;
+  const t = heightTileAt(ex, ez);
+  if (!t) return 0;
+  // GLOBAL pixel grid: sample i is centred at xs + (i+0.5)·w/256 and the
+  // bilinear neighbourhood crosses into adjacent tiles. The old per-tile
+  // 0..255 stretch pinned two DIFFERENT global samples to the same border
+  // line (this tile's 255, the neighbour's 0) and clamped instead of
+  // crossing — a visible crack along every tile edge.
+  const u = ((ex - t.xs) / t.w) * 256 - 0.5, v = ((ez - t.zs) / t.h) * 256 - 0.5;
+  const x0 = Math.floor(u), z0 = Math.floor(v), fx = u - x0, fz = v - z0;
+  const base = texel(t.tx, t.ty, clamp(x0, 0, 255), clamp(z0, 0, 255)) ?? 0;
+  const g = (px: number, pz: number): number => texel(t.tx, t.ty, px, pz) ?? base;
+  return (g(x0, z0) * (1 - fx) + g(x0 + 1, z0) * fx) * (1 - fz)
+    + (g(x0, z0 + 1) * (1 - fx) + g(x0 + 1, z0 + 1) * fx) * fz - baseElev;
 }
 /**
  * ── THE HEIGHT OF THE WORLD, AND THERE IS ONLY ONE ──
