@@ -116,8 +116,13 @@ function sim(course, ground, opts = {}) {
     // A course may be a FUNCTION of sim time, so a fixture can make the road
     // arrive part way through — which is what a cold tile filling in looks
     // like from the driver's seat, and the case the hold exists for.
-    const now = typeof course === 'function' ? course(n * dt) : course;
-    const out = A.autoDrive(rig, now, ground, mem, dt, { endsHere: !!opts.endsHere, width: opts.width }, T);
+    // …AND OF THE RIG, because one course in the game is rebuilt from the truck's
+    // own position every frame: the regain line back onto the carriageway. A
+    // fixed array cannot express that, and testing it as one measures an orbit
+    // around a target that never moves — a property of the fixture, not the code.
+    const now = typeof course === 'function' ? course(n * dt, rig) : course;
+    const out = A.autoDrive(rig, now, ground, mem, dt,
+      { endsHere: !!opts.endsHere, width: opts.width, regain: !!opts.regain }, T);
     log.push({ t: n * dt, x: rig.x, z: rig.z, v: rig.speed, ...out });
     if (opts.pinned) continue;                       // a truck against a wall
     const thrust = out.brake
@@ -478,6 +483,59 @@ console.log('\n── when it goes wrong ──');
   const nearEnd = log.find((e) => A.pathLength(path) - A.seekPath(path, e.x, e.z).along < 25);
   check('the edge of the streamed road is not a reason to stop',
     !!nearEnd && nearEnd.v > 8, nearEnd ? +nearEnd.v.toFixed(2) : null);
+}
+
+// ── REGAIN: the way back onto the road ─────────────────────────────
+//
+// Driving off the carriageway used to be a DEAD END. With no course the
+// controller holds and brakes, which is right while a tile is arriving and wrong
+// for ever afterwards: measured in the game, the truck ran wide onto ground and
+// sat with the brakes on and `waited` climbing past sixty-five seconds, twenty
+// metres from the road.
+//
+// The adapter now hands over a two-point line from the truck to the nearest
+// carriageway and flags it `regain`. That makes the recovery a COURSE, so the
+// steering, the stuck detector and the reverse all apply to it unchanged — and
+// the only thing the controller has to add is that it must be CRAWLED, because
+// this is ground nothing has been solved for.
+{
+  // The deck is behind and to the right — a ~114° turn from a standstill, which
+  // is the awkward case. The line is REBUILT FROM THE RIG every frame, exactly as
+  // autoCourse does it, because that is the contract the controller is given.
+  const DECK = [16, 7];
+  const dist = (e) => Math.hypot(e.x - DECK[0], e.z - DECK[1]);
+  // THE WHOLE LOOP, not just the controller: autoCourse rebuilds this line from
+  // the rig every frame AND STOPS OFFERING IT once the truck is on the deck
+  // (`deck.d <= 3`), where the hold takes over and brakes. Testing the line
+  // without the bail measures a truck coasting through its own target — which is
+  // what happened: 12.2m past it, because `idle` lifts off without braking.
+  const line = (_t, rig) => (dist(rig) <= 3 ? null : [[rig.x, rig.z], DECK]);
+  const log = sim(line, flat(SURF.ground.mu), { secs: 25, regain: true, surf: SURF.ground });
+  const closest = Math.min(...log.map(dist));
+  const settled = dist(log[log.length - 1]);
+  const driving = log.filter((e) => e.mode === 'recover');
+
+  check('a regain line is crawled, never driven',
+    driving.every((e) => e.want <= 5.001), +Math.max(...driving.map((e) => e.want)).toFixed(2));
+  check('…and it says it is recovering, not running',
+    driving.length > 50 && driving.every((e) => e.limit === 'recover'),
+    [...new Set(log.map((e) => `${e.mode}/${e.limit}`))].join(','));
+  check('…and it reaches the carriageway', closest < 3.01, +closest.toFixed(2));
+  // AND STAYS THERE. Arriving once and driving on is the failure this nearly
+  // shipped with, and "closest approach" alone cannot tell an arrival from a
+  // fly-by: a target that cannot move produces a stable orbit through it.
+  check('…and holds there instead of circling it', settled < 4, +settled.toFixed(2));
+  check('…with the brakes on, so a slope cannot take it back off',
+    log[log.length - 1].brake === true, log[log.length - 1].mode);
+
+  // THE CONTRAST, or the cap proves nothing: the same geometry unflagged is
+  // allowed to get on with it, so the crawl is the flag's doing and not the
+  // shortness of the line.
+  const fast = sim(line, flat(SURF.ground.mu), { secs: 25 });
+  const vFast = Math.max(...fast.map((e) => e.v));
+  const vCrawl = Math.max(...log.map((e) => e.v));
+  check('…and the same line unflagged is NOT crawled', vFast > vCrawl + 2,
+    { flagged: +vCrawl.toFixed(2), plain: +vFast.toFixed(2) });
 }
 
 console.log(bad ? `\n${bad} FAILED` : '\nall good');

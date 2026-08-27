@@ -18845,17 +18845,9 @@ function truckSpec(): Record<string, number> {
  * makes a flake slower without making it rarer.
  */
 (window as unknown as { __toroad?: object }).__toroad = (r = 80): object => {
-  let best: Seg | null = null, bd = Infinity, bx = 0, bz = 0;
-  const cells = Math.ceil(r / GRID);
-  for (let cx = -cells; cx <= cells; cx++) for (let cz = -cells; cz <= cells; cz++) {
-    for (const sg of roadGrid.get(`${Math.floor(state.x / GRID) + cx},${Math.floor(state.z / GRID) + cz}`) ?? []) {
-      if (sg.ya === undefined) continue;               // not a deck: a wall
-      const [px, pz] = closestOnSeg(state.x, state.z, sg);
-      const d = Math.hypot(state.x - px, state.z - pz);
-      if (d < bd) { bd = d; best = sg; bx = px; bz = pz; }
-    }
-  }
-  if (!best || bd > r) return { ok: false, found: !!best, dist: Math.round(bd) };
+  const hit = nearestDeck(state.x, state.z, r);
+  if (!hit) return { ok: false, found: false, dist: null };
+  const { seg: best, x: bx, z: bz, d: bd } = hit;
   teleportTo(bx, bz);
   // Point down the way, so a walk forward from here has road ahead of it.
   state.heading = Math.atan2(best.bx - best.ax, -(best.bz - best.az));
@@ -22453,16 +22445,59 @@ function gripAhead(x: number, z: number): number {
   return surfaceFor('ground', Q_GROUND).mu;
 }
 const autoGround: AutoGround = { height: groundAt, grip: gripAhead };
+/**
+ * The nearest point of built CARRIAGEWAY to a place, within a radius.
+ *
+ * Walls share `roadGrid` with decks and are told apart by `ya` — a wall has no
+ * deck height. Shared with __toroad rather than written twice: they are the same
+ * question, and two answers to it would drift.
+ */
+function nearestDeck(x: number, z: number, r: number):
+{ seg: Seg; x: number; z: number; d: number } | null {
+  let best: Seg | null = null, bd = Infinity, bx = 0, bz = 0;
+  const cells = Math.ceil(r / GRID);
+  for (let cx = -cells; cx <= cells; cx++) for (let cz = -cells; cz <= cells; cz++) {
+    for (const sg of roadGrid.get(`${Math.floor(x / GRID) + cx},${Math.floor(z / GRID) + cz}`) ?? []) {
+      if (sg.ya === undefined) continue;               // not a deck: a wall
+      const [px, pz] = closestOnSeg(x, z, sg);
+      const d = Math.hypot(x - px, z - pz);
+      if (d < bd) { bd = d; best = sg; bx = px; bz = pz; }
+    }
+  }
+  return best && bd <= r ? { seg: best, x: bx, z: bz, d: bd } : null;
+}
+/**
+ * IS ANYTHING STILL COMING? A hold is only honest while it is.
+ *
+ * Two of the three reasons the truck can be standing on ground with no course
+ * look identical from inside the controller, and only one of them is worth
+ * waiting out. This separates them: the tile under the wheels not being in
+ * `osmDone`, or work outstanding in the gate, means the road may yet appear and
+ * holding is the right answer. Nothing outstanding means it will not.
+ */
+function osmArriving(): boolean {
+  if (osmInFlight > 0 || osmQueue.length > 0) return true;
+  const [la, lo] = localToLatLon(state.x, state.z);
+  const [hx, hy] = tileAt(la, lo, OSM_Z);
+  return !osmDone.has(`${hx}/${hy}`);
+}
+/** How far off the road is still worth crawling back to. At the recovery crawl
+ *  (5m/s) 90m is about twenty seconds — long enough to be worth doing, short
+ *  enough that it is a recovery rather than a cross-country expedition the
+ *  player never asked for. Beyond it there is nothing honest to do but hold. */
+const AUTO_REGAIN_R = 90;
 /** The course to follow, and whether its last vertex is a destination or just
  *  the end of what has streamed — the plan brakes for one and not the other. */
-function autoCourse(): { pts: Array<[number, number]>; endsHere: boolean; src: string; width: number } | null {
+interface AutoPlan { pts: Array<[number, number]> | null; endsHere: boolean; src: string;
+  width: number; regain: boolean }
+function autoCourse(): AutoPlan {
   const r = routeAhead(state.x, state.z, AUTO_REACH);
   if (r && r.length >= 2) {
     const tail = routeXZ[routeXZ.length - 1];
     const end = r[r.length - 1];
     // A leg's course does not carry a width, so the rally line gets a modest
     // one — enough to apex, never enough to leave a lane the course had.
-    return { pts: r, src: 'leg', width: 1.8,
+    return { pts: r, src: 'leg', width: 1.8, regain: false,
       endsHere: !!tail && end[0] === tail[0] && end[1] === tail[1] };
   }
   const w = wayAhead(state.x, state.z, state.heading, AUTO_REACH, AUTO_HOPS, false);
@@ -22471,9 +22506,61 @@ function autoCourse(): { pts: Array<[number, number]>; endsHere: boolean; src: s
   // for nothing, and the next frame's chain reaches further anyway.
   // Width: the carriageway's half minus the truck's own half and a margin —
   // what the racing line may actually spend.
-  return w && w.pts.length >= 2
-    ? { pts: w.pts, endsHere: false, src: w.name ?? 'road', width: Math.max(0, (w.hw ?? 0) - 1.5) }
-    : null;
+  if (w && w.pts.length >= 2) {
+    return { pts: w.pts, endsHere: false, src: w.name ?? 'road', regain: false,
+      width: Math.max(0, (w.hw ?? 0) - 1.5) };
+  }
+  // ── NO ROAD UNDER THE WHEELS, AND WHAT TO DO ABOUT IT ──
+  //
+  // This used to be a single `null`, which the controller reads as "hold, brake,
+  // wait for the world". That is right for exactly one of the three ways of
+  // getting here and a DEAD END for the other two: measured on Noordhoek Road,
+  // the truck drove 140m, ran wide onto ground, and then sat with the brakes on
+  // and `waited` climbing past sixty-five seconds. Nothing was coming. The road
+  // was twenty metres away. It would have held there for ever.
+  //
+  // Waiting is only honest while something is actually arriving, or when there
+  // is nowhere near enough to go:
+  //
+  //   ARRIVING   the tile is not in osmDone, or the gate has work outstanding.
+  //              Hold — this is the case the hold was written for.
+  //   REGAIN     nothing coming, but there is built carriageway within crawl
+  //              range. Drive to it, at a crawl, on a two-point course: the
+  //              recovery is then a COURSE, so the speed plan, the steering, the
+  //              stuck detector and the reverse all apply to it unchanged.
+  //   NOWHERE    nothing coming and nothing to crawl to. Hold, and say so —
+  //              this is the only remaining honest wait.
+  if (osmArriving()) return { pts: null, endsHere: false, src: 'arriving', width: 0, regain: false };
+  const deck = nearestDeck(state.x, state.z, AUTO_REGAIN_R);
+  // Already ON a deck and still no chain: crawling three metres would not fix
+  // whatever refused to chain, and a two-point course of near-zero length is a
+  // curvature reading of nothing that the speed plan then divides by.
+  if (!deck || deck.d <= 3) {
+    return { pts: null, endsHere: false, src: deck ? 'unchained' : 'nowhere', width: 0, regain: false };
+  }
+  // `endsHere` STAYS FALSE, and it is worth saying why, because the opposite is
+  // the obvious guess: a regain line ends at a place the truck must reach, which
+  // sounds exactly like a destination.
+  //
+  // It is not, because THIS LINE IS REBUILT EVERY FRAME from wherever the truck
+  // now is. Its first vertex is the truck, so the cross-track error and the
+  // distance-along are both always ~0, and its whole length is the distance still
+  // to run. Traced against the arcade model on a 17m recovery:
+  //
+  //   endsHere false   converges to ~1.3m of the deck and settles there
+  //   endsHere true    stops dead 7.8m short, every time
+  //
+  // The `true` case fails on a detail of the plan's own sampling: the end-of-path
+  // limit fires when `start + d >= total - step`, and once the line is shorter
+  // than one 8m step that is true at d = 0 — the first sample the walk takes. It
+  // commands a full stop from wherever it happens to be standing.
+  //
+  // (A STATIC line does orbit with `false` — measured, a stable limit cycle
+  // around the endpoint. That is a property of a fixture that cannot move its
+  // target, not of this code, and it is why the test for this drives a course
+  // recomputed from the rig rather than a fixed array.)
+  return { pts: [[state.x, state.z], [deck.x, deck.z]], endsHere: false,
+    src: 'regain', width: 0, regain: true };
 }
 /** True while a hand is on the controls. */
 const autoHandsOn = (): boolean => stick !== null || brakeId !== null || lift !== null
@@ -22508,12 +22595,12 @@ function stepAuto(dt: number, off: boolean): void {
   auto.px = state.x; auto.pz = state.z;
   if (!auto.on || off || dt <= 0) { auto.out = null; return; }
   const c = autoCourse();
-  auto.pts = c?.pts.length ?? 0;
-  auto.src = c?.src ?? 'none';
+  auto.pts = c.pts?.length ?? 0;
+  auto.src = c.src;
   auto.out = autoDrive(
     { x: state.x, z: state.z, heading: state.heading, speed: state.speed },
-    c?.pts ?? null, autoGround, auto.mem, Math.min(dt, 0.1),
-    { endsHere: c?.endsHere, width: c?.width });
+    c.pts, autoGround, auto.mem, Math.min(dt, 0.1),
+    { endsHere: c.endsHere, width: c.width, regain: c.regain });
   const o = auto.out;
   lastInput = { throttle: o.throttle, steer: o.steer, brake: o.brake, brakeF: o.brakeF, hold: false };
 }
@@ -29345,10 +29432,18 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // is the ordinary condition of driving into new ground. Gold while it
       // holds for the world, soft while it drives, red only when the tick is
       // not reaching the controller at all.
+      // A HOLD NOW SAYS WHICH HOLD IT IS. "WAIT FOR ROAD" covered three states
+      // that want three different reactions from whoever is watching: a tile on
+      // its way (wait), no road within reach (you are lost, drive), and a road
+      // right there that would not chain (a bug worth a probe). Reading the same
+      // four words for all three is how a dead end went unnoticed for a session.
       textSmall(hctx, !a ? 'NO TICK'
-        : a.mode === 'wait' ? 'WAIT FOR ROAD'
+        : a.mode === 'wait'
+          ? (auto.src === 'nowhere' ? 'NO ROAD IN REACH'
+            : auto.src === 'unchained' ? 'ROAD WILL NOT CHAIN' : 'WAIT FOR ROAD')
           : `${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`,
-      pad + 26 + w + 4, ay + 1, !a ? UI.bad : a.mode === 'wait' ? UI.gold : UI.soft);
+      pad + 26 + w + 4, ay + 1,
+      !a || auto.src === 'unchained' ? UI.bad : a.mode === 'wait' ? UI.gold : UI.soft);
     }
   } else autoRect.w = 0;
   // ── WPT: the waypoint chip ──

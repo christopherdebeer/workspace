@@ -269,6 +269,17 @@ export interface AutoOpts {
    *  ~0.4m the controller stops tracking the centreline and drives the RACING
    *  line inside that corridor instead. */
   width?: number;
+  /**
+   * This course is a RECOVERY LINE to the nearest carriageway, not a road to
+   * drive: the truck is off the network and this is the way back on.
+   *
+   * It is crawled, and it is reported as a recovery, because both of those are
+   * true and neither is inferable from the geometry — a two-point line across
+   * open ground is indistinguishable from a very short straight road. Racing it
+   * would be absurd; racing it at the surface's cornering limit across ground the
+   * solver never profiled would be worse.
+   */
+  regain?: boolean;
 }
 
 /**
@@ -462,6 +473,11 @@ export function autoDrive(
   // Positive steer is RIGHT. Sitting right of the line (off > 0) asks for left.
   let steer = clamp(T.steerK * err - T.offK * seek.off - T.steerD * mem.yaw, -1, 1);
   if (lost) { want = Math.min(want, 5); limit = 'recover'; }
+  // A REGAIN LINE IS CRAWLED, at the same pace as the off-corridor recovery and
+  // for the same reason: this is ground nothing has been solved for, and arriving
+  // at the carriageway slowly is the whole point — the chain has to be picked up,
+  // not crossed at speed.
+  if (opts.regain) { want = Math.min(want, 5); limit = 'recover'; }
 
   // ── throttle and brake, never both ──
   // Lifting off through a bend is not politeness, it is the lateral budget:
@@ -491,5 +507,5 @@ export function autoDrive(
 
   return { steer, throttle, brake: brakeF > 0.01, brakeF,
     want, off: seek.off, err, look: tgt,
-    limit, mode: lost ? 'recover' : 'run' };
+    limit, mode: lost || opts.regain ? 'recover' : 'run' };
 }
