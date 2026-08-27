@@ -29464,25 +29464,18 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // is the ordinary condition of driving into new ground. Gold while it
       // holds for the world, soft while it drives, red only when the tick is
       // not reaching the controller at all.
-<<<<<<< HEAD
-      // A HOLD NOW SAYS WHICH HOLD IT IS. "WAIT FOR ROAD" covered three states
+// A HOLD NOW SAYS WHICH HOLD IT IS. "WAIT FOR ROAD" covered three states
       // that want three different reactions from whoever is watching: a tile on
       // its way (wait), no road within reach (you are lost, drive), and a road
       // right there that would not chain (a bug worth a probe). Reading the same
       // four words for all three is how a dead end went unnoticed for a session.
-      textSmall(hctx, !a ? 'NO TICK'
+      textEdgeS(!a ? 'NO TICK'
         : a.mode === 'wait'
           ? (auto.src === 'nowhere' ? 'NO ROAD IN REACH'
             : auto.src === 'unchained' ? 'ROAD WILL NOT CHAIN' : 'WAIT FOR ROAD')
           : `${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`,
-      pad + 26 + w + 4, ay + 1,
+      CHIP_X + 26 + w + 4, ay + 1,
       !a || auto.src === 'unchained' ? UI.bad : a.mode === 'wait' ? UI.gold : UI.soft);
-=======
-      textEdgeS(!a ? 'NO TICK'
-        : a.mode === 'wait' ? 'WAIT FOR ROAD'
-          : `${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`,
-      CHIP_X + 26 + w + 4, ay + 1, !a ? UI.bad : a.mode === 'wait' ? UI.gold : UI.soft);
->>>>>>> 2551b8b (hud: the chip rail, the ink, and a truncation that ends on a word)
     }
   } else autoRect.w = 0;
   // ── WPT: the waypoint chip ──
