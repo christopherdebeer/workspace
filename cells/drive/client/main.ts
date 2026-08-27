@@ -26747,7 +26747,11 @@ const textW = (s: string, sc = 1): number => s.length * (FW + 1) * sc;
 /** Hard-truncate to fit a pixel width — no ellipsis glyph in a 5x7 font. */
 const fit = (s: string, maxPx: number): string => {
   const n = Math.max(1, Math.floor(maxPx / (FW + 1)));
-  return s.length <= n ? s : `${s.slice(0, n - 1)}.`;
+  // NEVER END ON A SEPARATOR. "CITY OF CAPE TOWN, WESTERN CAPE" cut right
+  // after its comma shipped as "CITY OF CAPE TOWN, ." — the most prominent
+  // text on the glass wearing a dangling joiner, caught by the HUD audit's
+  // screenshots. The ellipsis dot lands on a word or not at all.
+  return s.length <= n ? s : `${s.slice(0, n - 1).replace(/[\s,.·\-]+$/, '')}.`;
 };
 // ── the POI voice: the MICRO face, half the size of everything else ──
 // A label standing IN the world should whisper next to the instruments that
@@ -26836,7 +26840,9 @@ function fitP(s: string, maxPx: number): string {
   if (measureM(s) <= maxPx) return s;
   let n = Math.min(s.length - 1, Math.max(1, Math.floor(maxPx / 3)));
   while (n > 1 && measureM(`${s.slice(0, n)}.`) > maxPx) n--;
-  return `${s.slice(0, n)}.`;
+  // Same separator rule as `fit`: a truncation that lands after a comma or a
+  // space must back off to the word, or the cut reads as data corruption.
+  return `${s.slice(0, n).replace(/[\s,.·\-]+$/, '')}.`;
 }
 function text(c: CanvasRenderingContext2D, s: string, x: number, y: number, col: string, sc = 1): void {
   c.fillStyle = col;
@@ -26936,6 +26942,20 @@ let hudDpr = 1;
 // 8 device pixels per HUD pixel.
 const HUD_SIZES = [0.67, 0.84, 1, 1.33];
 let hudSize = HUD_SIZES[1];           // multiplier, owned by the HUD SIZE dial
+/**
+ * ── THE LEFT RAIL ──
+ *
+ * One declared grid for the stacked chips under the compass — rewind, AUTO,
+ * WPT — instead of each row hand-placing itself relative to the last (the
+ * audit's finding 6: WPT used to move down when AUTO existed, and every new
+ * chip re-derived the arithmetic). Fixed rows: a control keeps its place
+ * whether its neighbours exist or not, which is also what a thumb learns.
+ * One slop for every row, replacing the ±2/±5/±6 spread finding 5 counted.
+ */
+const CHIP_X = 4;
+const CHIP_Y0 = 38;
+const CHIP_H = 12;
+const CHIP_SLOP = 8;
 function hudResize(): void {
   const dpr = Math.max(1, Math.round(devicePixelRatio || 1));
   hudDpr = dpr >= 2 ? 2 : 1;
@@ -26945,6 +26965,11 @@ function hudResize(): void {
   // pixel is fractional-device; half-step detail additionally wants an even
   // count, which STOCK and FINE both give).
   const target = (innerWidth < 760 ? 2 : 3) * hudSize;
+  // The DOM task chip sits BELOW the rail, and the rail lives in HUD px while
+  // the chip lives in CSS px — so the boundary is exported here, where the
+  // scale is settled. Before this the chip sat at a fixed 46px and lay
+  // straight across the clock and the rail rows (the audit's overlap note).
+  document.body.style.setProperty('--rail-b', `${(CHIP_Y0 + CHIP_H * 3 + 4) * hudS}px`);
   const n = Math.max(hudDpr, Math.round(target * dpr));   // device px per HUD px
   hudS = n / dpr;
   HW = Math.max(80, Math.round(innerWidth / hudS));
@@ -29332,8 +29357,7 @@ function hudSafeRects(): Array<[number, number, number, number]> {
   const my = HH - 4 - 23 - mw - 3;
   return [
     [0, 0, HW, 34 + (camMode === 'top' && tileDbg ? 22 : 0)],  // compass strip (+ tile debug header)
-    [0, 34, 68, 22],                                 // the waypoint distance chip, top left
-    [0, 56, 34, 12],                                 // the clock (free drive)
+    [0, 34, 78, CHIP_H * 3 + 6],                     // the chip rail: rewind, AUTO, WPT
     [HW - 52, 34, 52, 22],                           // MENU
     [0, my - 62, 36, 62],                            // the conditions column, stacked over the dock
     [0, my - 2, mw + 36, HH - my + 2],               // dock, its chips, the info lines under it
@@ -29382,33 +29406,41 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // the number is the seconds it costs. Released, those seconds stop having
   // happened.
   if (rewindReady() || rewind.at !== null) {
-    const ry = pad + 34;
+    const ry = CHIP_Y0;                       // rail row 0
     const held = rewind.at !== null;
-    rewindRect = { x: pad, y: ry, w: 15, h: 9 };
-    hctx.fillStyle = held || rewindPaused ? UI.gold : UI.dim;
+    rewindRect = { x: CHIP_X, y: ry, w: 15, h: 9 };
+    const col = held || rewindPaused ? UI.gold : UI.dim;
+    // EVERY GLYPH ON THE RAIL WEARS THE INK EDGE. These were bare fills, the
+    // one part of the glass without the outline the rest of the HUD survives
+    // bright ground by — over sunlit grass the tab simply vanished (the
+    // audit's finding 2). Ink pass first, inflated a pixel, then the colour.
+    const edged = (x: number, y: number, w: number, h: number): void => {
+      hctx.fillStyle = UI.ink; hctx.fillRect(x - 1, y - 1, w + 2, h + 2);
+    };
     // WHAT THE BUTTON DOES NEXT, which is the only honest thing for a
-    // transport control to draw. Running: three stacked bars, a pull-tab that
-    // reads at this size where an arrow glyph reads as noise. Held: a play
+    // transport control to draw. Running: two bars (the stop); held: a play
     // triangle, because the tap that follows is what starts it again.
     if (rewindPaused && !held) {
-      // PLAY: a triangle, drawn as columns so it stays crisp at this size.
-      for (let i = 0; i < 7; i++) hctx.fillRect(pad + 4 + i, ry + 1 + Math.floor(i / 2), 1, 7 - i);
+      for (let i = 0; i < 7; i++) edged(CHIP_X + 4 + i, ry + 1 + Math.floor(i / 2), 1, 7 - i);
+      hctx.fillStyle = col;
+      for (let i = 0; i < 7; i++) hctx.fillRect(CHIP_X + 4 + i, ry + 1 + Math.floor(i / 2), 1, 7 - i);
     } else {
-      // PAUSE: two bars. The tab draws WHAT THE TAP WILL DO, so at rest — the
-      // world running — it offers the stop. It was three horizontal bars,
-      // which is a grab-handle and says nothing about the transport.
-      hctx.fillRect(pad + 4, ry + 1, 2, 7);
-      hctx.fillRect(pad + 9, ry + 1, 2, 7);
+      edged(CHIP_X + 4, ry + 1, 2, 7);
+      edged(CHIP_X + 9, ry + 1, 2, 7);
+      hctx.fillStyle = col;
+      hctx.fillRect(CHIP_X + 4, ry + 1, 2, 7);
+      hctx.fillRect(CHIP_X + 9, ry + 1, 2, 7);
     }
     if (held) {
       const have = Math.max(1, rewindHave());
       const track = 46;
       const fill = Math.round(((rewind.at ?? 0) / have) * track);
+      edged(CHIP_X + 5, ry + 10, 3, track);
       hctx.fillStyle = UI.dim;
-      hctx.fillRect(pad + 6, ry + 10, 1, track);
+      hctx.fillRect(CHIP_X + 6, ry + 10, 1, track);
       hctx.fillStyle = UI.gold;
-      hctx.fillRect(pad + 5, ry + 10, 3, Math.max(1, fill));
-      textSmall(hctx, `-${rewind.secs.toFixed(0)}S`, pad + 11, ry + 10 + fill - 2, UI.gold);
+      hctx.fillRect(CHIP_X + 5, ry + 10, 3, Math.max(1, fill));
+      textEdgeS(`-${rewind.secs.toFixed(0)}S`, CHIP_X + 11, ry + 10 + fill - 2, UI.gold);
     }
   } else rewindRect.w = 0;
   // ── the autopilot tab, on the rewind row ──
@@ -29422,16 +29454,17 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // km/h — because the one question you have while a truck drives itself is
   // whether it has seen the corner. `RUN CURVE 54` says it has.
   if (autoTab) {
-    const ay = pad + 34;
+    const ay = CHIP_Y0 + CHIP_H;              // rail row 1
     const w = textSW('AUTO');
-    autoRect = { x: pad + 26, y: ay, w, h: 9 };
-    textSmall(hctx, 'AUTO', pad + 26, ay + 1, auto.on ? UI.gold : UI.dim);
+    autoRect = { x: CHIP_X + 26, y: ay, w, h: 9 };
+    textEdgeS('AUTO', CHIP_X + 26, ay + 1, auto.on ? UI.gold : UI.dim);
     if (auto.on) {
       const a = auto.out;
       // WAITING IS NOT AN ERROR, and must not be painted as one — a cold tile
       // is the ordinary condition of driving into new ground. Gold while it
       // holds for the world, soft while it drives, red only when the tick is
       // not reaching the controller at all.
+<<<<<<< HEAD
       // A HOLD NOW SAYS WHICH HOLD IT IS. "WAIT FOR ROAD" covered three states
       // that want three different reactions from whoever is watching: a tile on
       // its way (wait), no road within reach (you are lost, drive), and a road
@@ -29444,6 +29477,12 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
           : `${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`,
       pad + 26 + w + 4, ay + 1,
       !a || auto.src === 'unchained' ? UI.bad : a.mode === 'wait' ? UI.gold : UI.soft);
+=======
+      textEdgeS(!a ? 'NO TICK'
+        : a.mode === 'wait' ? 'WAIT FOR ROAD'
+          : `${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`,
+      CHIP_X + 26 + w + 4, ay + 1, !a ? UI.bad : a.mode === 'wait' ? UI.gold : UI.soft);
+>>>>>>> 2551b8b (hud: the chip rail, the ink, and a truncation that ends on a word)
     }
   } else autoRect.w = 0;
   // ── WPT: the waypoint chip ──
@@ -29453,11 +29492,13 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // when it does not, so the two never overlap — a control you cannot hit
   // because another one is drawn over it is not a control.
   {
-    const py = pad + 34 + (autoTab ? 11 : 0);
+    // Rail row 2 — FIXED, whether or not the AUTO row exists. A control that
+    // keeps its place is a control a thumb can learn.
+    const py = CHIP_Y0 + CHIP_H * 2;
     const ww = textSW('WPT');
-    poiRect = { x: pad + 26, y: py, w: ww, h: 9 };
-    textSmall(hctx, 'WPT', pad + 26, py + 1, poiVis === 0 ? UI.dim : UI.gold);
-    textSmall(hctx, POI_MODES[poiVis], pad + 26 + ww + 4, py + 1,
+    poiRect = { x: CHIP_X + 26, y: py, w: ww, h: 9 };
+    textEdgeS('WPT', CHIP_X + 26, py + 1, poiVis === 0 ? UI.dim : UI.gold);
+    textEdgeS(POI_MODES[poiVis], CHIP_X + 26 + ww + 4, py + 1,
       poiVis === 0 ? UI.dim : UI.soft);
   }
   // Filled and hollow diamonds, plotted a row at a time. At this resolution a
@@ -30023,15 +30064,22 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   }
   // The MENU button is DOM now (client/overlays.ts) — it opens a DOM menu,
   // and a canvas chip that existed to be a hit target was the wrong tool.
-  if (performance.now() < flashUntil && flashMsg) {
-    const w3 = textW(flashMsg) + 10;
-    textEdge(flashMsg, Math.round((HW - w3) / 2) + 5, Math.round(HH * 0.26) + 3, UI.gold);
-  }
-  if (wx.warn && performance.now() < wx.warn) {
-    const t2 = 'STORM APPROACHING';
-    const w2 = textW(t2) + 10;
-    const x2 = Math.round((HW - w2) / 2);
-    textEdge(t2, x2 + 5, Math.round(HH * 0.32) + 3, UI.bad);
+  // ── THE MESSAGE RAIL ── one vertical for the transient voices, priority
+  // ordered: a warning outranks a confirmation, and a confirmation that
+  // arrives during one steps down a row instead of landing on a second,
+  // unrelated height. Two channels used to own two verticals (26% and 32%)
+  // with the DOM card and toast on two more — the audit's finding 8.
+  {
+    const railY = Math.round(HH * 0.26) + 3;
+    let row = 0;
+    if (wx.warn && performance.now() < wx.warn) {
+      const t2 = 'STORM APPROACHING';
+      textEdge(t2, Math.round((HW - textW(t2) - 10) / 2) + 5, railY, UI.bad);
+      row++;
+    }
+    if (performance.now() < flashUntil && flashMsg) {
+      textEdge(flashMsg, Math.round((HW - textW(flashMsg) - 10) / 2) + 5, railY + row * 13, UI.gold);
+    }
   }
   // ── the co-driver: the next bend, DRAWN before it arrives ──
   // The arrow is the call; the words are the footnote. Severity is the
@@ -30200,15 +30248,10 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       const [la, lo] = localToLatLon(state.x, state.z);
       const g = `${la.toFixed(4)} ${lo.toFixed(4)}`;
       textEdgeS(g, pad + 1, infoY + 16, UI.dim);
-      // AND WHO IS DRIVING. The autopilot is a development tool and rides on
-      // the reference row with the coordinate rather than taking a line of its
-      // own — but it says so, in gold, because a truck driving itself with no
-      // tell is indistinguishable from one that has stopped responding.
-      if (auto.on) {
-        const a = auto.out;
-        textEdgeS(a ? `AUTO ${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`
-          : 'AUTO — NO COURSE', pad + 1 + textSW(g) + 5, infoY + 16, UI.gold);
-      }
+      // The AUTO tell used to ride this row too — it predates the rail tab,
+      // which now carries the full status where the control is. Two voices
+      // saying AUTO in two corners was clutter, and this one interleaved
+      // with the low-FPS warning that anchors on the same line.
       // Under real drive the coordinate stops being a reference and becomes a
       // reading off an instrument, so it says how much to trust it: the fix
       // accuracy, and how long since one arrived. A stale fix looks exactly
@@ -30656,8 +30699,8 @@ let poiRect = { x: 0, y: 0, w: 0, h: 0 };
 function poiDown(e: PointerEvent): boolean {
   if (poiRect.w === 0 || menu.tab() !== null) return false;
   const x = e.clientX / hudS, y = e.clientY / hudS;
-  if (x < poiRect.x - 6 || x > poiRect.x + poiRect.w + 6
-    || y < poiRect.y - 6 || y > poiRect.y + poiRect.h + 6) return false;
+  if (x < poiRect.x - CHIP_SLOP || x > poiRect.x + poiRect.w + CHIP_SLOP
+    || y < poiRect.y - CHIP_H / 2 || y > poiRect.y + poiRect.h + CHIP_H / 2) return false;
   const d = DIALS.find((q) => q.key === 'poi');
   if (d) { d.at = (d.at + 1) % d.opts.length; d.apply(d.at); saveDials(); }
   audio.stone();
@@ -30676,8 +30719,8 @@ function poiDown(e: PointerEvent): boolean {
 function autoDown(e: PointerEvent): boolean {
   if (!autoTab || autoRect.w === 0 || menu.tab() !== null) return false;
   const x = e.clientX / hudS, y = e.clientY / hudS;
-  if (x < autoRect.x - 6 || x > autoRect.x + autoRect.w + 6
-    || y < autoRect.y - 6 || y > autoRect.y + autoRect.h + 6) return false;
+  if (x < autoRect.x - CHIP_SLOP || x > autoRect.x + autoRect.w + CHIP_SLOP
+    || y < autoRect.y - CHIP_H / 2 || y > autoRect.y + autoRect.h + CHIP_H / 2) return false;
   auto.on = !auto.on;
   auto.out = null;
   // The yaw estimate is differentiated from the heading, so arming has to
@@ -30704,8 +30747,8 @@ const REWIND_SLOP = 6;
 function rewindDown(e: PointerEvent): boolean {
   if (!rewindReady() || rewindRect.w === 0) return false;
   const x = e.clientX / hudS, y = e.clientY / hudS;
-  if (x < rewindRect.x - 5 || x > rewindRect.x + rewindRect.w + 8
-    || y < rewindRect.y - 5 || y > rewindRect.y + rewindRect.h + 6) return false;
+  if (x < rewindRect.x - CHIP_SLOP || x > rewindRect.x + rewindRect.w + CHIP_SLOP
+    || y < rewindRect.y - CHIP_H / 2 || y > rewindRect.y + rewindRect.h + CHIP_H / 2) return false;
   // NOTHING HAPPENS YET. Which gesture this is is not known until the finger
   // either moves or lifts, and beginning a scrub here would make every
   // play/pause tap a one-frame rewind.

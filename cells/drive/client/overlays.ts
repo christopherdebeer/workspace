@@ -105,7 +105,11 @@ export function createOverlays(
     pointer-events: auto; color: ${C.good}; border: 1px solid ${C.good};
     background: rgba(111,224,160,0.08); font: inherit; font-family: inherit;
     font-size: 12px; font-weight: 700; letter-spacing: 2px; }
-  #ov-task { top: calc(env(safe-area-inset-top, 0px) + 46px); left: 10px; cursor: pointer;
+  /* BELOW the canvas rail, not on top of it: --rail-b is exported from
+     hudResize in CSS pixels (the rail lives in HUD px, this chip in CSS px,
+     and only that function knows the scale). At a fixed 46px this chip lay
+     straight across the clock and the rewind handle. */
+  #ov-task { top: calc(env(safe-area-inset-top, 0px) + var(--rail-b, 160px)); left: 10px; cursor: pointer;
     color: ${C.gold}; border: 1px solid ${C.gold}; background: rgba(8,20,23,0.78);
     padding: 4px 9px 3px; font: inherit; font-family: inherit; font-size: 10px;
     letter-spacing: 1px; display: none; }
