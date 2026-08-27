@@ -5952,6 +5952,8 @@ function refreshSwardField(full = true): void {
 /** One band of the sward: a lattice of `side²` slots at `step` metres. */
 interface SwardBand { mesh: THREE.Mesh; side: number; step: number; reach: number;
   uBase: { value: THREE.Vector2 }; uStep: { value: number }; uSide: { value: number };
+  /** The base cell as an EXACT INTEGER index. See the note by sBaseI. */
+  uBaseI: { value: THREE.Vector2 };
   uReach: { value: number }; uDens: { value: number };
   /** Where this band takes over from the one inside it, and hands on to the one
    *  outside: (in0,in1,out0,out1) metres. See the partition note in the shader. */
@@ -5991,7 +5993,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         attribute float aId;
         uniform sampler2D uField; uniform sampler2D uSwardCol; uniform sampler2D uSwardMask;
         uniform vec2 uFieldOrg; uniform float uFieldW;
-        uniform vec2 uBase; uniform float uStep; uniform float uSide;
+        uniform vec2 uBase; uniform vec2 uBaseI; uniform float uStep; uniform float uSide;
         uniform float uReach; uniform float uDens; uniform vec4 uBlend;
         uniform float uGReach;
         uniform vec3 uSwardEye; uniform vec3 uSwardTint; uniform float uSwardDbg;
@@ -6044,13 +6046,42 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // has no axis to align with. The jitter runs past the cell edge so
         // neighbours interleave: the count per cell is still one, but WHERE
         // they land no longer partitions the ground into squares.
-        float sStag = mod(sIz, 2.0) * 0.5;
-        vec2 sIdx = vec2(sIx + sStag, sIz);
-        vec2 sCell = uBase + (sIdx - uSide * 0.5) * uStep;
-        // Hashed on the INDEX, not the metres — see swHash. The base cell is
-        // folded in so a slot rehashes when the lattice wraps, which is what
-        // makes new grass arrive rather than old grass slide.
-        vec2 sKey = sIdx + floor(uBase / uStep);
+        // ── THE WORLD CELL FIRST, AND EVERYTHING FROM IT ──
+        //
+        // Reported from the seat as tufts jumping around under slight movement,
+        // and it was two faults wearing one symptom.
+        //
+        // NO BACKTICKS BELOW: this block is a template literal and one closes it.
+        //
+        // ONE: the stagger was taken from sIz, the instance's row in the
+        // LATTICE. The lattice re-snaps every time the focus crosses a step
+        // (0.45m in the near band), and a snap slides every instance one row
+        // along — so every world row's parity FLIPPED, every odd row jumped
+        // half a step sideways, and because the stagger also fed the hash key,
+        // every blade in the field re-rolled its jitter, height and colour.
+        // Replayed on the CPU: on a single one-step advance, 1600 of 1600
+        // sampled blades moved, worst case 0.95m in the near band and 9.7m in
+        // the far one. Not a slide — a reshuffle, several times a second at
+        // walking pace.
+        //
+        // TWO: the base index was recovered as floor(uBase / uStep), a float
+        // divided by a float. uBase is built as round(f/step)*step, so the
+        // quotient is a whole number in exact arithmetic and NOT in floating
+        // point: at step 4.6, uBase 101.2 gives 21.999999… and floors to 21.
+        // The key then flickered between two values on its own, with no
+        // movement at all. It is an integer we already had exactly on the CPU,
+        // so it now arrives as one (uBaseI) instead of being reconstructed.
+        //
+        // Everything below is now a pure function of the integer world cell, so
+        // a slot's appearance belongs to the GROUND rather than to the slot. A
+        // blade that wraps still becomes new grass — it inherits the cell it
+        // arrives at — which was the original intent here.
+        // sCellI, not sW: sW is already the band's blend WEIGHT further down, and
+        // shadowing it cost the whole carriageway program its link once before.
+        vec2 sCellI = uBaseI + vec2(sIx, sIz) - uSide * 0.5;   // integer world cell
+        float sStag = mod(sCellI.y, 2.0) * 0.5;                // parity of the WORLD row
+        vec2 sCell = (sCellI + vec2(sStag, 0.0)) * uStep;
+        vec2 sKey = sCellI + vec2(sStag, 0.0);
         float sH1 = swHash(sKey + 0.13);
         float sH2 = swHash(sKey * 1.7 + 5.1);
         float sH3 = swHash(sKey * 2.9 + 11.7);
@@ -6279,10 +6310,12 @@ const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side, blend], bi) => {
   geo.setAttribute('aId', new THREE.InstancedBufferAttribute(ids, 1));
   geo.instanceCount = side * side;
   const band: SwardBand = { mesh: null as unknown as THREE.Mesh, side, step, reach: (side * step) / 2,
-    uBase: { value: new THREE.Vector2() }, uStep: { value: step },
+    uBase: { value: new THREE.Vector2() }, uBaseI: { value: new THREE.Vector2() },
+    uStep: { value: step },
     uSide: { value: side }, uReach: { value: (side * step) / 2 }, uDens: { value: 1 },
     uBlend: { value: new THREE.Vector4(...blend) } };
-  const mat = swardMaterial({ uBase: band.uBase, uStep: band.uStep, uSide: band.uSide,
+  const mat = swardMaterial({ uBase: band.uBase, uBaseI: band.uBaseI,
+    uStep: band.uStep, uSide: band.uSide,
     uReach: band.uReach, uDens: band.uDens,
     uBlend: band.uBlend } as unknown as Record<string, { value: unknown }>);
   terrainFx(mat);
@@ -6364,7 +6397,13 @@ function swardFrame(): void {
   swardU.uSwardTint.value.copy(grassTint);
   for (const b of swardBands) {
     // SNAPPED to the step, so a slot's world position never moves under it.
-    b.uBase.value.set(Math.round(fx / b.step) * b.step, Math.round(fz / b.step) * b.step);
+    // The base cell, as an index and as metres. The INDEX is the authority: the
+    // shader derives the world cell, the row parity and every hash from it, and
+    // recovering it there with `floor(uBase / uStep)` is not exact (see the note
+    // by sBaseI). Rounded once, here, where it is a whole number by definition.
+    const bix = Math.round(fx / b.step), biz = Math.round(fz / b.step);
+    b.uBaseI.value.set(bix, biz);
+    b.uBase.value.set(bix * b.step, biz * b.step);
     b.uDens.value = vegScale * grassScale * SWARD_LUSH * chartFade;
     b.mesh.visible = grassScale > 0 && vegScale > 0 && !Number.isNaN(swardFX);
   }
