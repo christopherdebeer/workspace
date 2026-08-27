@@ -13,9 +13,14 @@
  *
  * So this boots the real cell, on a real road, and lets it drive.
  *
- * THE CLOCK IS SIM TIME. Headless renders this world at two to four frames a
- * second and dt is capped at 50ms, so wall time is not distance — every wait
- * here is on integrated seconds.
+ * THE CLOCK IS SIM TIME, AND IT IS SLOW. Headless renders this world at two
+ * to four frames a second and dt is capped at 50ms, so wall time is not
+ * distance — every wait here is on integrated seconds. MEASURED on this rig:
+ * about 0.15 sim seconds per SIX wall seconds, and five metres of road in
+ * fifty. A first cut asked for twenty-five sim seconds and ninety metres, and
+ * timed out at ten wall minutes having proved nothing; every other tool in
+ * this folder asks for between 0.12 and 1.5. Three seconds is enough to see
+ * the truck accelerate off the mark under its own control, which is the claim.
  */
 import { openDrive, report } from './harness.mjs';
 
@@ -47,6 +52,29 @@ for (let i = 0; i < 20; i++) {
 }
 check('there is a road under the truck to drive', !!road?.way?.on, road);
 
+// ── ON DEVICE: the dial and the tab ──
+// The probe is how a tool arms it; the TAB is how a person does, on a phone,
+// on the road, with no console. Those are different code paths and the tab's
+// is the one nobody would notice was broken.
+const dials = await d.page.evaluate(() => window.__dial('auto', 1));
+check('the AUTOPILOT dial offers the tab', dials.auto === 'HUD TAB', dials.auto);
+// Tapped through the canvas at the tab's own HUD rect, scaled the way every
+// other pointer in this game is — not by calling the handler, which would
+// prove the handler and not the hit box.
+const tapAuto = () => d.page.evaluate(() => {
+  const r = window.__autorect();
+  const send = (type) => window.__hudcanvas().dispatchEvent(new PointerEvent(type, {
+    pointerId: 91, pointerType: 'touch', button: 0, bubbles: true,
+    clientX: (r.x + r.w / 2) * r.s, clientY: (r.y + r.h / 2) * r.s,
+  }));
+  send('pointerdown'); send('pointerup');
+  return window.__auto();
+});
+const tapped = await tapAuto();
+check('a tap on the tab engages it', tapped.on === true, tapped);
+const off = await tapAuto();
+check('…and the same tap hands it back', off.on === false, off);
+
 const on = await d.page.evaluate(() => window.__auto(true));
 check('it arms', on.on === true, on);
 // The course comes from `wayAhead`, which chains the way under the wheels —
@@ -62,15 +90,24 @@ check('…and finds a course on the road it is standing on',
   armed.pts >= 2 && armed.src !== 'none', armed);
 
 const before = await d.page.evaluate(() => ({ ...window.__odo(), ...window.__way() }));
-await d.simWait(25);
+// Sampled rather than waited-then-read, because the interesting evidence is a
+// TRANSITION — `limit` leaving 'cap' the moment a real bend enters the plan
+// window is what says the curvature term is reading streamed geometry and not
+// a constant. A single reading at the end cannot show it.
+const seen = new Set();
+for (let i = 0; i < 8; i++) {
+  await d.simWait(0.4);
+  seen.add(await d.page.evaluate(() => window.__auto().limit));
+}
 const after = await d.page.evaluate(() => ({
   ...window.__odo(), ...window.__way(), auto: window.__auto(), input: window.__input(),
 }));
 
-// THE ONE THAT MATTERS: it moved. Everything else here is a refinement of a
-// truck that is at least driving.
+// THE ONE THAT MATTERS: it moved, under its own throttle. Everything else
+// here is a refinement of a truck that is at least driving.
 const ran = after.total - before.total;
-check('it drives', ran > 90, { metres: Math.round(ran) });
+check('it drives', ran > 12, { metres: Math.round(ran) });
+check('…and got up to speed doing it', after.input.speed > 6, after.input.speed);
 check('…on the throttle, not coasting off a hill',
   Math.abs(after.input.throttle) > 0.01 || after.input.brakeF > 0.01, after.input);
 check('…and is still following a course when it gets there',
@@ -79,11 +116,14 @@ check('…and is still following a course when it gets there',
 // through a field, into the sea. The way line says which.
 check('…and is on a road at the end of it, not in a field',
   after.way?.on === true, after.way);
-// A plan with a REASON. `limit: 'none'` means it never found a course; 'cap'
-// on a coast road for forty-five seconds would mean the curvature term never
-// engaged, which is the whole speed plan not working.
-check('…having planned for something real', after.auto.limit !== 'none'
-  && typeof after.auto.want === 'number' && after.auto.want > 0, after.auto);
+// A plan with a REASON, and one that CHANGED. `limit: 'none'` would mean it
+// never found a course at all; 'cap' and nothing else, on a road that bends,
+// would mean the curvature term never engaged — the whole speed plan inert
+// while the truck merely happened to be pointing the right way.
+check('…having planned for something real', !seen.has('none') && seen.size >= 1
+  && typeof after.auto.want === 'number' && after.auto.want > 0, [...seen]);
+check('…and the ground actually bound the plan at some point',
+  seen.has('curve') || seen.has('grip') || seen.has('end'), [...seen]);
 
 // THE THUMB WINS. The one moment you most want the wheel is the moment it is
 // going somewhere you did not intend, so a key is enough to end it.

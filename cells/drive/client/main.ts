@@ -21191,6 +21191,7 @@ const setStickFrom = (e: PointerEvent): void => {
 };
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (autoDown(e)) return;
   if (rewindDown(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (clockDown(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (hudTap(e.clientX, e.clientY)) return; // an instrument swallowed it
@@ -27959,6 +27960,9 @@ let wildlifeOn = true;
 let cloudShadowOn = true;
 // 0 hidden · 1 ping the take only · 2 ghost the ones still out there · 3 beam
 let cpVis = 0;
+/** Whether the autopilot's HUD tab is offered — see the AUTOPILOT dial. The
+ *  probe (`__auto`) works either way; this is only about the on-device reach. */
+let autoTab = false;
 // The streaming machinery drawn over the chart — see the TILE DEBUG dial.
 let tileDbg = false;
 const wearU = { value: 1 };  // shared by every bodywork material
@@ -28123,6 +28127,18 @@ const DIAL_GROUPS: DialGroup[] = [
       // exist because "invisible" is a claim about feel that can only be
       // settled by driving the alternatives.
       dial('cpv', 'CHECKPOINTS', ['HIDDEN', 'PING', 'GHOST', 'BEAM'], 0, (i) => { cpVis = i; }),
+      // THE AUTOPILOT'S TAB, and the dial exists so the tab does not have to
+      // be in everybody's HUD. This is a development instrument — it is how a
+      // road-solver change gets driven at all sixteen benchmark fixtures
+      // without sixteen afternoons — and a self-driving button sitting beside
+      // the rewind handle in a driving game is not a default anyone asked for.
+      // Turned on here, it appears; turned off, it disengages as well as
+      // vanishing, because a hidden control that is still driving is worse
+      // than either.
+      dial('auto', 'AUTOPILOT', ['OFF', 'HUD TAB'], 0, (i) => {
+        autoTab = i > 0;
+        if (!autoTab) { auto.on = false; auto.out = null; }
+      }),
       // The streaming layer made visible on the chart: the vector-tile grid,
       // each tile wearing its state, plus fine-terrain and far-shell counts.
       // A diagnostic, not a game surface — but streaming bugs only show
@@ -28366,6 +28382,27 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       textSmall(hctx, `-${rewind.secs.toFixed(0)}S`, pad + 11, ry + 10 + fill - 2, UI.gold);
     }
   } else rewindRect.w = 0;
+  // ── the autopilot tab, on the rewind row ──
+  //
+  // BESIDE the handle rather than under it: the rewind grab box reaches six
+  // pixels past its own bottom edge and grows a 46px scrub track while held,
+  // and a control you cannot hit because another one is being dragged over it
+  // is not a control. This row is otherwise empty.
+  //
+  // Engaged, it reads out what it is DOING — the mode and the planned speed in
+  // km/h — because the one question you have while a truck drives itself is
+  // whether it has seen the corner. `RUN CURVE 54` says it has.
+  if (autoTab) {
+    const ay = pad + 34;
+    const w = textSW('AUTO');
+    autoRect = { x: pad + 26, y: ay, w, h: 9 };
+    textSmall(hctx, 'AUTO', pad + 26, ay + 1, auto.on ? UI.gold : UI.dim);
+    if (auto.on) {
+      const a = auto.out;
+      textSmall(hctx, a ? `${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`
+        : 'NO COURSE', pad + 26 + w + 4, ay + 1, a ? UI.soft : UI.bad);
+    }
+  } else autoRect.w = 0;
   // Filled and hollow diamonds, plotted a row at a time. At this resolution a
   // marker is about seven pixels across, so it is drawn, not stroked.
   function diamond(cx: number, cy: number, r: number): void {
@@ -29382,6 +29419,16 @@ function setClean(on: boolean): void {
   }
   return Object.fromEntries(DIALS.map((d) => [d.key, d.opts[d.at]]));
 };
+/**
+ * WHERE THE AUTOPILOT TAB IS, in HUD pixels, plus the scale that turns those
+ * into client ones — so a test can tap the tab the way a thumb does rather
+ * than calling `autoDown` directly. Calling the handler proves the handler; it
+ * cannot prove the hit box, and a control drawn where nothing can reach it is
+ * the failure worth catching.
+ */
+(window as unknown as { __autorect?: object }).__autorect = (): object =>
+  ({ ...autoRect, s: hudS });
+(window as unknown as { __hudcanvas?: object }).__hudcanvas = (): HTMLCanvasElement => canvas;
 (window as unknown as { __mblur?: object }).__mblur = (i: number): void => {
   const d = DIALS.find((x) => x.key === 'mblur');
   if (d) { d.at = clamp(Math.round(i), 0, d.opts.length - 1); d.apply(d.at); }
@@ -29514,6 +29561,31 @@ let clockRect = { x: 0, y: 0, w: 0, h: 0 };
  * was, cleanly, and the ring stays coherent through it.
  */
 let rewindRect = { x: 0, y: 0, w: 0, h: 0 };
+let autoRect = { x: 0, y: 0, w: 0, h: 0 };
+/**
+ * ONE TAP, BOTH WAYS — no drag, no hold, no confirm.
+ *
+ * Taking the wheel back must never be the slower gesture than giving it away,
+ * and the moment you want it back is the moment the truck is going somewhere
+ * you did not intend. Touching the stick already stands it down (see
+ * `autoHandsOn`); this is the deliberate version of the same thing, and it is
+ * the same single tap that armed it.
+ */
+function autoDown(e: PointerEvent): boolean {
+  if (!autoTab || autoRect.w === 0 || menu.tab() !== null) return false;
+  const x = e.clientX / hudS, y = e.clientY / hudS;
+  if (x < autoRect.x - 6 || x > autoRect.x + autoRect.w + 6
+    || y < autoRect.y - 6 || y > autoRect.y + autoRect.h + 6) return false;
+  auto.on = !auto.on;
+  auto.out = null;
+  // The yaw estimate is differentiated from the heading, so arming has to
+  // start from where the truck IS — otherwise the first frame reads the whole
+  // heading as one frame's rotation and the damping holds opposite lock.
+  if (auto.on) { auto.mem = autoMem(); auto.mem.lastHeading = state.heading; }
+  audio.stone();
+  hudFlash(auto.on ? 'AUTOPILOT' : 'YOU HAVE IT');
+  return true;
+}
 /** The transport's hold — a tap stops the world where it stands. Kept beside
  *  the handle rather than with the other pause sources because it is the only
  *  one the PLAYER asks for; the rest are the menu and a hidden tab. */
