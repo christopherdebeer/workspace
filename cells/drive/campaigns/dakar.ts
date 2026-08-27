@@ -146,7 +146,7 @@ export interface Campaign {
 }
 
 export const CAMPAIGN: Campaign = {
-    v: 9,
+    v: 10,
     id: "dakar",
     title: "PARIS - DAKAR",
     start: {
@@ -324,6 +324,27 @@ export const CAMPAIGN: Campaign = {
         lon: 7.527,
         h: 100,
         note: "Ordinary low-gradient valley road between Belp and Rubigen. The CONTROL of the Swiss trio: whatever a solver does here it should do perfectly, and a fault visible at Belp is a fault that has nothing to do with mountains.",
+        mission: {
+          id: "bench-belp",
+          giver: {
+            name: "BELP",
+            lat: 46.888,
+            lon: 7.527,
+          },
+          title: "THE VALLEY CONTROL",
+          brief: "DRIVE VIEHWEIDSTRASSE END TO END",
+          dest: {
+            name: "VIEHWEIDSTRASSE",
+            lat: 46.89042,
+            lon: 7.51221,
+          },
+          within: 140,
+          via: {
+            name: "Viehweidstrasse",
+            atLeast: 3,
+          },
+          viaNote: "Viehweidstrasse carries 100% of the 1.2km this job asks for, so a via can name it. 3 is about half the survey's checkpoints over that run — enough that you have driven it, low enough to survive joining part way along.",
+        },
       },
       {
         name: "FURKA",
@@ -332,6 +353,27 @@ export const CAMPAIGN: Campaign = {
         lon: 8.4152,
         h: 70,
         note: "Sustained grade and open hairpins with the hillside visible on both sides — the case where the bench is real and findable, so the lateral search should earn its keep outright.",
+        mission: {
+          id: "bench-furka",
+          giver: {
+            name: "FURKA",
+            lat: 46.5723,
+            lon: 8.4152,
+          },
+          title: "THE OPEN PASS",
+          brief: "DRIVE FURKASTRASSE END TO END",
+          dest: {
+            name: "FURKASTRASSE",
+            lat: 46.58795,
+            lon: 8.43261,
+          },
+          within: 140,
+          via: {
+            name: "Furkastrasse",
+            atLeast: 5,
+          },
+          viaNote: "Furkastrasse carries 100% of the 2.6km this job asks for, so a via can name it. 5 is about half the survey's checkpoints over that run — enough that you have driven it, low enough to survive joining part way along.",
+        },
       },
       {
         name: "AXENSTRASSE",
@@ -340,6 +382,27 @@ export const CAMPAIGN: Campaign = {
         lon: 8.613,
         h: 165,
         note: "Cliff road along the Urnersee with galleries, tunnels and viaducts in quick succession, and deep water hard against the carriageway. The compound case: bench, structure and a flat surface the search must not mistake for one, all within a kilometre.",
+        mission: {
+          id: "bench-axenstrasse",
+          giver: {
+            name: "AXENSTRASSE",
+            lat: 46.97,
+            lon: 8.613,
+          },
+          title: "THE CLIFF ROAD",
+          brief: "DRIVE AXENSTRASSE END TO END",
+          dest: {
+            name: "AXENSTRASSE",
+            lat: 46.98377,
+            lon: 8.61224,
+          },
+          within: 140,
+          via: {
+            name: "Axenstrasse",
+            atLeast: 3,
+          },
+          viaNote: "Axenstrasse carries 100% of the 1.6km this job asks for, so a via can name it. 3 is about half the survey's checkpoints over that run — enough that you have driven it, low enough to survive joining part way along.",
+        },
       },
       {
         name: "FLEVOLAND",
@@ -348,6 +411,27 @@ export const CAMPAIGN: Campaign = {
         lon: 5.47234,
         h: 46,
         note: "On the Bosruiterweg, a straight at-grade polder road — the design named an N305 segment, but what the fixture needs is the ARCHETYPE (dead flat, dead straight, every elevation that matters under a metre) and this is a confirmed one. Coordinates read off the way's own geometry. Reclaimed polder: dead flat, dead straight, and every elevation that matters is under a metre. Tests whether small real differences survive a pipeline built for mountains.",
+        mission: {
+          id: "bench-flevoland",
+          giver: {
+            name: "FLEVOLAND",
+            lat: 52.34173,
+            lon: 5.47234,
+          },
+          title: "THE STRAIGHT",
+          brief: "DRIVE BOSRUITERWEG END TO END",
+          dest: {
+            name: "BOSRUITERWEG",
+            lat: 52.32948,
+            lon: 5.44611,
+          },
+          within: 140,
+          via: {
+            name: "Bosruiterweg",
+            atLeast: 5,
+          },
+          viaNote: "Bosruiterweg carries 100% of the 2.3km this job asks for, so a via can name it. 5 is about half the survey's checkpoints over that run — enough that you have driven it, low enough to survive joining part way along.",
+        },
       },
       {
         name: "AFSLUITDIJK",
@@ -356,6 +440,27 @@ export const CAMPAIGN: Campaign = {
         lon: 5.07337,
         h: 49,
         note: "ON THE DIKE, not in Den Oever. The first guess sat in the village at the landward end, where OSM has residential streets and footways and no dike at all — read off the A7's own way geometry instead. Road on a dike across open water, running into the Stevinsluizen structures. A causeway is not a bridge and the sea is not a bench — the two mistakes this fixture exists to catch.",
+        mission: {
+          id: "bench-afsluitdijk",
+          giver: {
+            name: "AFSLUITDIJK",
+            lat: 52.95046,
+            lon: 5.07337,
+          },
+          title: "THE DIKE",
+          brief: "DRIVE AFSLUITDIJK END TO END",
+          dest: {
+            name: "AFSLUITDIJK",
+            lat: 52.96292,
+            lon: 5.09704,
+          },
+          within: 140,
+          via: {
+            name: "Afsluitdijk",
+            atLeast: 4,
+          },
+          viaNote: "Afsluitdijk carries 100% of the 2.1km this job asks for, so a via can name it. 4 is about half the survey's checkpoints over that run — enough that you have driven it, low enough to survive joining part way along.",
+        },
       },
       {
         name: "KLEINPOLDERPLEIN",
@@ -364,6 +469,23 @@ export const CAMPAIGN: Campaign = {
         lon: 4.44947,
         h: 75,
         note: "On the A20 through the interchange itself. Coordinates read off the motorway way rather than guessed at the junction's centre, which landed on cycleways beside it. Stacked interchange in Rotterdam. Roads that cross in plan and not in elevation, over ground with no relief to disambiguate them: the grade-separation question with every other cue removed.",
+        mission: {
+          id: "bench-kleinpolderplein",
+          giver: {
+            name: "KLEINPOLDERPLEIN",
+            lat: 51.93488,
+            lon: 4.44947,
+          },
+          title: "THE STACK",
+          brief: "CROSS TO THE FAR SIDE",
+          dest: {
+            name: "KLEINPOLDERPLEIN FAR END",
+            lat: 51.93064,
+            lon: 4.43717,
+          },
+          within: 140,
+          viaNote: "NO VIA. A20 carries no name tag at all over the 1.0km this job asks for — only a ref, and via matches the way's NAME. Dest-only is not a lesser job here: this is the way through, so reaching the far end IS having driven it.",
+        },
       },
       {
         name: "HARDKNOTT",
@@ -372,6 +494,27 @@ export const CAMPAIGN: Campaign = {
         lon: -3.21521,
         h: 97,
         note: "ON THE PASS ROAD. The first guess was 570m off, in terrain OSM knows only as footpaths — a spawn there would have put the truck on a fell with no road in reach. Read off the Hardknott Pass way. The steepest road in England and almost entirely terrain-following. Paired with Cheddar deliberately: terrain slope alone does not decide road grade, and these two prove it from opposite ends.",
+        mission: {
+          id: "bench-hardknott",
+          giver: {
+            name: "HARDKNOTT",
+            lat: 54.39975,
+            lon: -3.21521,
+          },
+          title: "THE STEEP ONE",
+          brief: "DRIVE HARDKNOTT PASS END TO END",
+          dest: {
+            name: "HARDKNOTT PASS",
+            lat: 54.40424,
+            lon: -3.17467,
+          },
+          within: 140,
+          via: {
+            name: "Hardknott Pass",
+            atLeast: 6,
+          },
+          viaNote: "Hardknott Pass carries 100% of the 3.0km this job asks for, so a via can name it. 6 is about half the survey's checkpoints over that run — enough that you have driven it, low enough to survive joining part way along.",
+        },
       },
       {
         name: "CHEDDAR GORGE",
@@ -380,6 +523,27 @@ export const CAMPAIGN: Campaign = {
         lon: -2.765,
         h: 250,
         note: "Extreme lateral relief and a comparatively gentle longitudinal profile — the road holds its line while the walls do not. A solver that reads grade off the hillside fails here and nowhere near Hardknott.",
+        mission: {
+          id: "bench-cheddar-gorge",
+          giver: {
+            name: "CHEDDAR GORGE",
+            lat: 51.2817,
+            lon: -2.765,
+          },
+          title: "THE RESTRAINED PROFILE",
+          brief: "DRIVE CLIFF ROAD END TO END",
+          dest: {
+            name: "CLIFF ROAD",
+            lat: 51.28819,
+            lon: -2.7442,
+          },
+          within: 140,
+          via: {
+            name: "Cliff Road",
+            atLeast: 4,
+          },
+          viaNote: "Cliff Road carries 100% of the 2.0km this job asks for, so a via can name it. 4 is about half the survey's checkpoints over that run — enough that you have driven it, low enough to survive joining part way along.",
+        },
       },
       {
         name: "NEW FOREST",
@@ -388,6 +552,27 @@ export const CAMPAIGN: Campaign = {
         lon: -1.575,
         h: 250,
         note: "Ordinary A-road under heavy canopy. Matched against an open road of the same class, this isolates one question: does vegetation make the solver invent vertical structure that is not there?",
+        mission: {
+          id: "bench-new-forest",
+          giver: {
+            name: "NEW FOREST",
+            lat: 50.873,
+            lon: -1.575,
+          },
+          title: "UNDER THE CANOPY",
+          brief: "DRIVE SOUTHAMPTON ROAD END TO END",
+          dest: {
+            name: "SOUTHAMPTON ROAD",
+            lat: 50.87773,
+            lon: -1.55879,
+          },
+          within: 140,
+          via: {
+            name: "Southampton Road",
+            atLeast: 3,
+          },
+          viaNote: "Southampton Road carries 78% of the 1.3km this job asks for, so a via can name it. 3 is about half the survey's checkpoints over that run — enough that you have driven it, low enough to survive joining part way along.",
+        },
       },
       {
         name: "ATLANTIC ROAD",
@@ -396,6 +581,27 @@ export const CAMPAIGN: Campaign = {
         lon: 7.35431,
         h: 74,
         note: "The first guess had NO ROADS within 300m — open sea. Read off Fv64's own geometry at the Storseisundet crossing. Low-relief causeways and a string of short bridge decks, north of SRTM's limit. Morphologically close to the Afsluitdijk under a completely different source regime, which is what makes the pair worth having.",
+        mission: {
+          id: "bench-atlantic-road",
+          giver: {
+            name: "ATLANTIC ROAD",
+            lat: 63.01675,
+            lon: 7.35431,
+          },
+          title: "THE CAUSEWAYS",
+          brief: "DRIVE ATLANTERHAVSVEGEN END TO END",
+          dest: {
+            name: "ATLANTERHAVSVEGEN",
+            lat: 63.00934,
+            lon: 7.30744,
+          },
+          within: 140,
+          via: {
+            name: "Atlanterhavsvegen",
+            atLeast: 4,
+          },
+          viaNote: "Atlanterhavsvegen carries 84% of the 2.6km this job asks for, so a via can name it. 4 is about half the survey's checkpoints over that run — enough that you have driven it, low enough to survive joining part way along.",
+        },
       },
       {
         name: "NEW RIVER GORGE",
@@ -404,6 +610,27 @@ export const CAMPAIGN: Campaign = {
         lon: -81.07845,
         h: 57,
         note: "On US 19 itself, from the way's geometry; the guess was near enough (50m) but landed among park service roads rather than the trunk across the bridge. US 19 straight across the gorge on one span. Its pair is the old road below: the same landscape, the same two sides, opposite engineering — the cleanest bridge contrast there is.",
+        mission: {
+          id: "bench-new-river-gorge",
+          giver: {
+            name: "NEW RIVER GORGE",
+            lat: 38.07099,
+            lon: -81.07845,
+          },
+          title: "THE BRIDGE",
+          brief: "DRIVE NEW RIVER GORGE BRIDGE END TO END",
+          dest: {
+            name: "NEW RIVER GORGE BRIDGE",
+            lat: 38.0664,
+            lon: -81.08736,
+          },
+          within: 140,
+          via: {
+            name: "New River Gorge Bridge",
+            atLeast: 3,
+          },
+          viaNote: "New River Gorge Bridge carries 100% of the 0.9km this job asks for, so a via can name it. 3 is about half the survey's checkpoints over that run — enough that you have driven it, low enough to survive joining part way along.",
+        },
       },
       {
         name: "FAYETTE STATION",
@@ -412,22 +639,81 @@ export const CAMPAIGN: Campaign = {
         lon: -81.0817,
         h: 200,
         note: "The winding descent into the gorge and across the river beneath the bridge. What the terrain-following answer looks like when a bridge is the alternative.",
+        mission: {
+          id: "bench-fayette-station",
+          giver: {
+            name: "FAYETTE STATION",
+            lat: 38.0668,
+            lon: -81.0817,
+          },
+          title: "THE OLD WAY",
+          brief: "DRIVE FAYETTE STATION ROAD END TO END",
+          dest: {
+            name: "FAYETTE STATION ROAD",
+            lat: 38.07344,
+            lon: -81.09585,
+          },
+          within: 140,
+          via: {
+            name: "Fayette Station Road",
+            atLeast: 8,
+          },
+          viaNote: "Fayette Station Road carries 100% of the 4.0km this job asks for, so a via can name it. 8 is about half the survey's checkpoints over that run — enough that you have driven it, low enough to survive joining part way along.",
+        },
       },
       {
         name: "MILLAU",
         sub: "FRANCE · THE VIADUCT",
-        lat: 44.07995,
-        lon: 3.02234,
+        lat: 44.09085,
+        lon: 3.02112,
         h: 174,
-        note: "On the A75 deck, from the motorway way's own geometry. The A75 across the Tarn on the tallest deck in the world. A held-out bridge test: the runtime input is SRTM-derived, so this is not a downsample of the survey it would be scored against.",
+        note: "At the NORTH abutment of the A75 deck, facing south down it — moved there from mid-span, where the whole deck was behind you as much as ahead and a job could only ask for half of it. The A75 across the Tarn on the tallest deck in the world. A held-out bridge test: the runtime input is SRTM-derived, so this is not a downsample of the survey it would be scored against.",
+        mission: {
+          id: "bench-millau",
+          giver: {
+            name: "MILLAU",
+            lat: 44.09085,
+            lon: 3.02112,
+          },
+          title: "THE VIADUCT",
+          brief: "DRIVE VIADUC DE MILLAU END TO END",
+          dest: {
+            name: "VIADUC DE MILLAU",
+            lat: 44.06896,
+            lon: 3.02452,
+          },
+          within: 140,
+          via: {
+            name: "Viaduc de Millau",
+            atLeast: 5,
+          },
+          viaNote: "Viaduc de Millau carries 100% of the 2.5km this job asks for, so a via can name it. 5 is about half the survey's checkpoints over that run — enough that you have driven it, low enough to survive joining part way along.",
+        },
       },
       {
         name: "TARN VALLEY",
         sub: "FRANCE · UNDER THE VIADUCT",
-        lat: 44.11367,
-        lon: 3.0827,
-        h: 13,
+        lat: 44.13051,
+        lon: 3.09811,
+        h: 189,
         note: "On the D809 where it climbs out of the Tarn. The first guess sat in Millau town among residential streets rather than on the valley route. The old valley route down into Millau, under the deck. Millau's pair, and the same question the New River Gorge asks in a different country.",
+        mission: {
+          id: "bench-tarn-valley",
+          giver: {
+            name: "TARN VALLEY",
+            lat: 44.13051,
+            lon: 3.09811,
+          },
+          title: "UNDER THE VIADUCT",
+          brief: "CROSS TO THE FAR SIDE",
+          dest: {
+            name: "TARN VALLEY FAR END",
+            lat: 44.11619,
+            lon: 3.08475,
+          },
+          within: 140,
+          viaNote: "NO VIA. The only name on D 809 over the 2.1km this job asks for is \"Avenue Édouard-Alfred Martel\", and it covers 22% of it — so a via naming it would ask for that fraction and let the rest of the drive go uncounted. Dest-only is not a lesser job here: this is the way through, so reaching the far end IS having driven it.",
+        },
       },
       {
         name: "REST AND BE THANKFUL",
@@ -436,6 +722,27 @@ export const CAMPAIGN: Campaign = {
         lon: -4.84578,
         h: 320,
         note: "ON THE A83. The first guess was a kilometre off with a single footpath in reach — read off the trunk road's own geometry. Two roads on one failing hillside at different heights — the A83 and the Old Military Road below it. Parallel alignments a few tens of metres apart vertically is the case most likely to make two profiles collapse into one.",
+        mission: {
+          id: "bench-rest-and-be-thankful",
+          giver: {
+            name: "REST AND BE THANKFUL",
+            lat: 56.22285,
+            lon: -4.84578,
+          },
+          title: "THE UNSTABLE SLOPE",
+          brief: "DRIVE REST AND BE THANKFUL END TO END",
+          dest: {
+            name: "REST AND BE THANKFUL",
+            lat: 56.24564,
+            lon: -4.84754,
+          },
+          within: 140,
+          via: {
+            name: "Rest And Be Thankful",
+            atLeast: 6,
+          },
+          viaNote: "Rest And Be Thankful carries 100% of the 3.2km this job asks for, so a via can name it. 6 is about half the survey's checkpoints over that run — enough that you have driven it, low enough to survive joining part way along.",
+        },
       },
       {
         name: "SH6 WEST COAST",
@@ -444,6 +751,27 @@ export const CAMPAIGN: Campaign = {
         lon: 170.18179,
         h: 176,
         note: "On SH 6 itself rather than in Franz Josef village, from the way's geometry. Canopy, river crossings, landslide terrain and engineered benches in the same few kilometres. A challenge fixture rather than a clean contrast: kept because it is the one that finds things nothing else does.",
+        mission: {
+          id: "bench-sh6-west-coast",
+          giver: {
+            name: "SH6 WEST COAST",
+            lat: -43.38924,
+            lon: 170.18179,
+          },
+          title: "THE COMPOUND CASE",
+          brief: "DRIVE FOX GLACIER HIGHWAY END TO END",
+          dest: {
+            name: "FOX GLACIER HIGHWAY",
+            lat: -43.38402,
+            lon: 170.16517,
+          },
+          within: 140,
+          via: {
+            name: "Fox Glacier Highway",
+            atLeast: 4,
+          },
+          viaNote: "Fox Glacier Highway carries 74% of the 2.4km this job asks for, so a via can name it. 4 is about half the survey's checkpoints over that run — enough that you have driven it, low enough to survive joining part way along.",
+        },
       },
     ],
     // The first stations. The P-D line proper is seventeen of these and wants

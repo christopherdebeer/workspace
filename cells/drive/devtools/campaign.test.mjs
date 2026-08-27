@@ -35,6 +35,14 @@ const check = (name, cond, saw) => {
   console.log(`${cond ? 'ok  ' : 'FAIL'}  ${name}${cond ? '' : `\n        saw ${JSON.stringify(saw)}`}`);
 };
 const call = (p) => handler({ rawPath: p, requestContext: { http: { method: 'GET' } } });
+/** Metres between two lat/lon pairs. Used by the drive checks and the course
+ *  checks alike, so it lives above both. */
+const hav = (a, b, c, d) => {
+  const R = 6371000, r = Math.PI / 180;
+  const s = Math.sin(((c - a) * r) / 2) ** 2
+    + Math.cos(a * r) * Math.cos(c * r) * Math.sin(((d - b) * r) / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+};
 
 // THE AUTHORED MODULE FIRST, so the route can be asked for the version the
 // file actually declares. Hardcoding it here meant every campaign bump broke
@@ -89,6 +97,17 @@ for (const d of served.drives) {
       !!pt && typeof pt.name === 'string' && Number.isFinite(pt.lat) && Number.isFinite(pt.lon), pt);
   }
   check(`${where}: arrival radius is sane`, Number.isFinite(m.within) && m.within > 0 && m.within < 5000, m.within);
+  // A JOB HAS TO CROSS GROUND, and it has to start where you land. Both of
+  // these are silent when wrong: a giver away from the spawn is a job you
+  // cannot pick up, and a destination on top of the giver completes itself
+  // the instant you arrive. The bench drives are authored from traced way
+  // geometry (devtools/bench-missions.mjs), and the failure mode there is a
+  // trace that collapses — which reads as a perfectly well-formed mission.
+  const walkUp = hav(d.lat, d.lon, m.giver.lat, m.giver.lon);
+  check(`${where}: the giver stands where you land`, walkUp < 500, Math.round(walkUp));
+  const reach = hav(m.giver.lat, m.giver.lon, m.dest.lat, m.dest.lon);
+  check(`${where}: the destination is a drive away, and further than the arrival radius`,
+    reach > Math.max(300, m.within * 2) && reach < 60000, Math.round(reach));
   // The route the job insists on: a count, and it must be reachable. `atLeast`
   // higher than the checkpoints a road actually has is a job nobody can finish.
   if (m.via) {
@@ -143,12 +162,6 @@ for (const [k, op] of Object.entries(served.ops ?? {})) {
 // looks exactly like a course and is not one; that is what the length check
 // catches. The endpoints matter as much: a polyline that does not START at the
 // giver is a line to somewhere, and the game would draw it confidently.
-const hav = (a, b, c, d) => {
-  const R = 6371000, r = Math.PI / 180;
-  const s = Math.sin(((c - a) * r) / 2) ** 2
-    + Math.cos(a * r) * Math.cos(c * r) * Math.sin(((d - b) * r) / 2) ** 2;
-  return 2 * R * Math.asin(Math.sqrt(s));
-};
 let courses = 0;
 for (const l of served.legs ?? []) {
   if (!l.route) continue;
