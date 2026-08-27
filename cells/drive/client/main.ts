@@ -16393,27 +16393,86 @@ function stepRain(dt: number): void {
 // A world-space particle pool (no per-frame allocation). Emitted at the rear
 // contacts when the wheels are on loose ground, drifting up and back before
 // settling — the visual proof that the surface under you changed.
-const DUST_N = 220;
+// ── MANY SMALL, NOT FEW HUGE ────────────────────────────────────────
+//
+// Photographed at 119km/h across a dune: 47 live particles rendering as about
+// FIVE overlapping balls filling the bottom third of the frame. The pool was
+// being spent on a handful of enormous sprites instead of a plume.
+//
+// The arithmetic says why. The scene target is ~320p (148x320 on a phone), and
+// the point size was capped at 34px — one puff over a tenth of the frame WIDE,
+// then nearest-upscaled 5.6x to the display. That cap was itself a retreat from
+// a puff measured at ~290px, and the launch velocity was zeroed in the same
+// round because ejecting backwards "drove it straight into the chase camera".
+// Both were the right instinct on the wrong lever: the answer to "the dust fills
+// my screen" is MORE, SMALLER, SHORTER-LIVED particles, not fewer bigger ones.
+// Area goes as the square of the radius, so a third of the size at three times
+// the count is a third of the fill — this is cheaper than what it replaces.
+const DUST_N = 640;
 const dustPos = new Float32Array(DUST_N * 3);
 const dustVel = new Float32Array(DUST_N * 3);
 const dustLife = new Float32Array(DUST_N);   // 1 → 0
 const dustSeed = new Float32Array(DUST_N);   // size jitter
-const dustKind = new Float32Array(DUST_N);  // 0 = dust, 1 = water
+/** 0 = dust (a volume: soft, billows, hangs) · 1 = water droplet (bright, hard,
+ *  ballistic) · 2 = grit (a stone: small, dark, ballistic, no billow). */
+const dustKind = new Float32Array(DUST_N);
+/** World velocity, kept per particle so the sprite can be STRETCHED along its
+ *  own screen-space travel. The shutter cannot do this for us: it reprojects the
+ *  depth buffer through last frame's camera, so it blurs by CAMERA motion and a
+ *  droplet crossing the frame at 12m/s is invisible to it. At the frame rates
+ *  this game actually sees on a phone, a streak is the difference between fast
+ *  water and a still row of dots. */
+const dustVelA = new Float32Array(DUST_N * 3);
+/** The colour of the ground this particle came off. Dust used to be one
+ *  hardcoded khaki everywhere on Earth — right over a Wadi Rum dune by luck,
+ *  wrong on red laterite, grey gravel, a salt pan or wet loam. Sampled through
+ *  terrainPalette, which is the function the terrain MESH is painted with, so
+ *  the plume matches the ground as drawn rather than as guessed — including
+ *  where the cover raster has not arrived and the palette falls back. */
+const dustCol = new Float32Array(DUST_N * 3);
 let dustHead = 0;
 const dustGeo = new THREE.BufferGeometry();
 dustGeo.setAttribute('position', new THREE.BufferAttribute(dustPos, 3));
 dustGeo.setAttribute('aLife', new THREE.BufferAttribute(dustLife, 1));
 dustGeo.setAttribute('aSeed', new THREE.BufferAttribute(dustSeed, 1));
 dustGeo.setAttribute('aKind', new THREE.BufferAttribute(dustKind, 1));
+dustGeo.setAttribute('aVel', new THREE.BufferAttribute(dustVelA, 3));
+dustGeo.setAttribute('aCol', new THREE.BufferAttribute(dustCol, 3));
+/**
+ * HOW HARD-EDGED A PARTICLE IS, ON ONE DIAL.
+ *
+ * 0 is a smooth falloff, 1 is a few flat tone steps with a tight rim. It exists
+ * because the answer is a matter of taste AND because the post chain has an
+ * opinion: the composite quantises to 14 levels and Bayer-dithers at DISPLAY
+ * resolution with continuous UVs, so a smooth alpha ramp gets banded whatever we
+ * do. Stepping it deliberately makes the quantiser agree with the sprite instead
+ * of fighting it.
+ *
+ * WATER IS ALWAYS HARDER THAN DUST, at every setting. Dust is the only one of
+ * the three that is genuinely a volume; a droplet and a stone have surfaces. So
+ * this dial slides the whole family and the per-kind bias in the shader keeps
+ * their relative character — it cannot be turned up far enough to make dust look
+ * like gravel.
+ */
+let partHard = 0.35;
+/** A global size multiplier, for sweeping the thing hardest to get right by
+ *  argument. Probe-only (`__dust`), not a dial: it is a tuning knob, not a
+ *  setting anyone should be asked about. */
+let dustSizeK = 1;
 const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
   transparent: true,
   depthWrite: false,
-  uniforms: { uColor: { value: new THREE.Color(0x9a8f76) }, uWater: { value: new THREE.Color(0xcfe6f2) } },
+  uniforms: { uColor: { value: new THREE.Color(0x9a8f76) }, uWater: { value: new THREE.Color(0xcfe6f2) },
+    uSunDir: { value: SUN_DIR }, uPix: { value: pixSize },
+    uHard: { value: 0.35 }, uSizeK: { value: 1 } },
   vertexShader: `
     attribute float aLife; attribute float aSeed; attribute float aKind;
-    varying float vLife; varying float vKind;
+    attribute vec3 aVel; attribute vec3 aCol;
+    uniform vec3 uSunDir; uniform vec2 uPix; uniform float uSizeK;
+    varying float vLife; varying float vKind; varying vec3 vCol;
+    varying vec2 vDir; varying float vStretch; varying float vScatter;
     void main(){
-      vLife = aLife; vKind = aKind;
+      vLife = aLife; vKind = aKind; vCol = aCol;
       vec4 mv = modelViewMatrix * vec4(position, 1.0);
       // Billowing, but CAPPED. The 1/distance term is unbounded, and the oldest
       // puffs — which were also the biggest — end up nearest the chase camera:
@@ -16432,20 +16491,106 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
       // does not expand — a droplet stays a droplet — so a splash disperses by
       // its particles flying APART, not by each one billowing. It gets a much
       // flatter curve and does its spreading through velocity.
-      float grow = mix(0.30 + 1.55 * (1.0 - aLife), 0.55 + 0.60 * (1.0 - aLife), aKind);
-      float sz = mix(5.4 + aSeed * 6.0, 3.8 + aSeed * 4.6, aKind);
-      gl_PointSize = min(sz * grow * (175.0 / max(-mv.z, 1.0)), 34.0);
+      // Kind weights, so the three species share one shader without branching.
+      float isWater = step(0.5, aKind) * (1.0 - step(1.5, aKind));
+      float isGrit = step(1.5, aKind);
+      float isDust = 1.0 - isWater - isGrit;
+      // DUST BILLOWS; A DROPLET AND A STONE DO NOT. Dust leaves the contact
+      // patch as a tight knot and opens out as it dies — that expansion IS the
+      // silhouette of a plume. Water disperses by its particles flying apart,
+      // and a stone is a stone.
+      float grow = isDust * (0.45 + 1.70 * (1.0 - aLife))
+                 + isWater * (0.75 + 0.35 * (1.0 - aLife))
+                 + isGrit * 1.0;
+      // Base sizes are a THIRD of what they were — see the note by DUST_N.
+      // Grit is a STONE, and a stone at ten metres is a couple of pixels. At
+      // 0.8+seed it photographed as grey boulders drifting behind the truck —
+      // individually legible, which is exactly wrong: grit reads as a SHOWER or
+      // it reads as debris. Halved here and emitted three times as often.
+      float sz = (isDust * (1.7 + aSeed * 2.1)
+                + isWater * (1.2 + aSeed * 1.5)
+                + isGrit * (0.40 + aSeed * 0.45)) * uSizeK;
+      float px = sz * grow * (175.0 / max(-mv.z, 1.0));
       gl_Position = projectionMatrix * mv;
+      // ── THE STREAK, IN SCREEN SPACE ──
+      // Where this particle will be a frame from now, projected — the direction
+      // and length of that gap is the streak. Done here rather than on the CPU
+      // because it needs the projection anyway, and it costs one extra transform.
+      vec4 clip2 = projectionMatrix * (modelViewMatrix * vec4(position + aVel * 0.016, 1.0));
+      vec2 s1 = gl_Position.xy / max(gl_Position.w, 0.0001);
+      vec2 s2 = clip2.xy / max(clip2.w, 0.0001);
+      // Into pixels of the render target — which IS the low-res scene target, the
+      // same grid gl_PointSize is measured in. NDC spans 2.0, hence the half.
+      vec2 dpx = (s2 - s1) * 0.5 * uPix;
+      float dl = length(dpx);
+      // gl_PointCoord's y runs DOWN and NDC's runs up, so the direction has to be
+      // flipped to live in the same frame as the fragment's coordinates.
+      vDir = dl > 0.001 ? normalize(vec2(dpx.x, -dpx.y)) : vec2(1.0, 0.0);
+      // Dust hangs in the air and has no streak worth drawing; the two ballistic
+      // species do. Capped, or a fast droplet becomes a wire across the frame.
+      vStretch = min((isWater + isGrit) * dl / max(px, 0.5), 3.5);
+      px *= 1.0 + vStretch;
+      // Caps per species, in low-res pixels. Dust is allowed to be the big one
+      // and is still a third of the old ceiling.
+      gl_PointSize = min(px, isDust * 11.0 + isWater * 7.0 + isGrit * 3.0);
+      // ── BACKLIT DUST ──
+      // Forward scattering is the dominant optical behaviour of airborne dust and
+      // the whole reason a rally plume glows: looking THROUGH it toward the sun,
+      // it is far brighter than the ambient would suggest. The sun sits beyond the
+      // particle exactly when the eye-to-particle ray points along uSunDir.
+      vec3 eyeToP = normalize((modelMatrix * vec4(position, 1.0)).xyz - cameraPosition);
+      vScatter = isDust * pow(max(dot(eyeToP, uSunDir), 0.0), 8.0);
     }`,
   fragmentShader: `
-    uniform vec3 uColor; uniform vec3 uWater; varying float vLife; varying float vKind;
+    uniform vec3 uColor; uniform vec3 uWater; uniform float uHard;
+    varying float vLife; varying float vKind; varying vec3 vCol;
+    varying vec2 vDir; varying float vStretch; varying float vScatter;
     void main(){
-      vec2 d = gl_PointCoord - 0.5;
-      float r = dot(d, d);
-      if (r > 0.25) discard;                       // round puff
-      float soft = smoothstep(0.25, 0.02, r);
-      // Water throws bright, hard-edged droplets; dry ground throws soft dust.
-      vec3 col = mix(uColor, uWater, vKind);
+      float isWater = step(0.5, vKind) * (1.0 - step(1.5, vKind));
+      float isGrit = step(1.5, vKind);
+      float isDust = 1.0 - isWater - isGrit;
+      // The sprite square is axis-aligned and cannot be rotated, so rotate the
+      // COORDINATES into the streak's frame instead and read an ellipse out of
+      // them: long along vDir, thin across, and a circle when vStretch is 0.
+      vec2 p = gl_PointCoord - 0.5;
+      vec2 q = vec2(dot(p, vDir), dot(p, vec2(-vDir.y, vDir.x)));
+      float r = 2.0 * length(vec2(q.x, q.y * (1.0 + vStretch)));
+      if (r > 1.0) discard;
+      // ── SOFT FOR DUST, STEPPED FOR WATER, ON ONE DIAL ──
+      // The rim first: how much of the radius the falloff is allowed to occupy.
+      float edge = isDust * mix(0.85, 0.40, uHard)
+                 + isWater * mix(0.40, 0.07, uHard)
+                 + isGrit * mix(0.35, 0.06, uHard);
+      float soft = smoothstep(1.0, 1.0 - edge, r);
+      // Then the tone steps. Dust starts genuinely smooth and only ever reaches a
+      // few broad steps; water starts stepped and gets crisper. This is the bias
+      // that stops the dial ever making dust look like gravel.
+      float steps = isDust * mix(0.0, 4.0, uHard)
+                  + isWater * mix(3.0, 6.0, uHard)
+                  + isGrit * mix(2.0, 4.0, uHard);
+      // GATED AT TWO, and that gate is the whole difference between stepped and
+      // BROKEN. At the default dial the dust term came out at 1.05, and
+      // quantising an alpha ramp to ONE level is not a tone step — it is a
+      // threshold, so every puff became a flat hard-edged blob. Photographed as
+      // grey hexagons trailing the truck. Below two levels there is nothing to
+      // step and the smooth ramp is the honest answer.
+      if (steps >= 1.5) soft = floor(soft * steps + 0.5) / steps;
+      // THE GROUND'S OWN COLOUR for anything torn off it, and a stone is darker
+      // than the dust that hangs over it. Water keeps its own tint: a droplet is
+      // not the colour of the riverbed.
+      vec3 earth = mix(uColor, vCol, step(0.001, dot(vCol, vec3(1.0))));
+      // BACKLIT, BUT NOT A LIGHT SOURCE. The scatter term was ADDED as a scalar
+      // at 1.7, which on an eastward dawn run — camera pointed straight into a
+      // low sun, so the lobe reads ~1 — drove the near puffs past 1.0 and
+      // straight through the 0.62 bright cut. Photographed as a pure white core
+      // at each rear wheel, blooming: a smoke machine, not dust.
+      //
+      // So it MULTIPLIES the ground colour (backlit dust is brighter dust, not
+      // whiter dust) and the result is capped below the bloom threshold. Airborne
+      // soil does not glow, and this is the line that guarantees it cannot.
+      vec3 col = isDust * min(earth * (1.0 + 0.85 * vScatter), vec3(0.58))
+               + isGrit * earth * 0.62
+               + isWater * uWater;
       // Dust thins on the SQUARE of its life: the trailing end of the plume is
       // the part hanging in front of the camera, so it has to be nearly gone by
       // the time the truck has driven out from under it.
@@ -16455,56 +16600,120 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
       // like. The old life-squared curve was tuned to keep a full-size puff off
       // the chase camera; the size curve does that job now, so the fade can be
       // gentler and the newborn knot can actually be seen.
-      float a = mix(soft * pow(vLife, 1.35) * 0.34,
-                    smoothstep(0.25, 0.12, r) * pow(vLife, 0.85) * 0.55, vKind);
+      //
+      // AND THE BLOOM THRESHOLD IS A CHOICE, not an accident. The bright pass
+      // cuts at 0.62 of the max channel, so where a species lands relative to
+      // that decides whether it glows: dust is kept UNDER it (airborne soil is
+      // not a light source, and a blooming plume is instantly a smoke machine),
+      // while a lit droplet is pushed over so water sparkles for free.
+      float a = isDust * soft * pow(vLife, 1.25) * 0.30
+              + isWater * soft * pow(vLife, 0.80) * 0.62
+              + isGrit * soft * pow(vLife, 0.55) * 0.62;
       gl_FragColor = vec4(col, a);
     }`,
 }));
 dustPoints.frustumCulled = false;
 dustPoints.renderOrder = 30;
 scene.add(dustPoints);
-function emitDust(x: number, y: number, z: number, vx: number, vz: number, water = false): void {
+/**
+ * The colour of the ground here, memoised on a 3m cell.
+ *
+ * Four wheels a metre and a half apart, several particles a frame, all asking
+ * about effectively the same patch — and the honest answer costs a height
+ * sample, a slope, and a `coverPaint` (which is itself two hashes and a raster
+ * read). One cell of memory collapses all of that to one call per patch.
+ */
+const groundTintMemo = { x: 1e9, z: 1e9, c: [0.55, 0.5, 0.42] as [number, number, number] };
+function groundTint(x: number, z: number): [number, number, number] {
+  if (Math.abs(x - groundTintMemo.x) < 3 && Math.abs(z - groundTintMemo.z) < 3) return groundTintMemo.c;
+  const h = sampleHeight(x, z);
+  const slope = Math.abs(sampleHeight(x + 3, z) - h) / 3;
+  groundTintMemo.x = x; groundTintMemo.z = z;
+  groundTintMemo.c = terrainPalette(h + baseElev, slope, coverPaint(x, z));
+  return groundTintMemo.c;
+}
+/** kind: 0 dust · 1 water · 2 grit. Velocity is stored as well as applied,
+ *  because the sprite is stretched along it in the shader. */
+function spawnPart(kind: number, x: number, y: number, z: number,
+  vx: number, vy: number, vz: number, col: [number, number, number] | null): void {
   const i = dustHead = (dustHead + 1) % DUST_N;
-  // AT THE CONTACT PATCH, not around it. Being born scattered across a metre
-  // and a half of ground is why the trail started wide: the dispersal has to be
-  // something the particle DOES over its life, or there is nothing to watch.
-  // What spreads them now is the velocity jitter below and, for water, the
-  // sideways throw of the wake.
-  const spread = water ? 0.28 : 0.2;
-  dustPos[i * 3] = x + (Math.random() - 0.5) * spread;
-  dustPos[i * 3 + 1] = y + (water ? 0.05 : 0.15);
-  dustPos[i * 3 + 2] = z + (Math.random() - 0.5) * spread;
-  // A splash is thrown OUT and up hard, then falls back; dust drifts — and
-  // BOTH ride the wind that is already leaning the grass and driving the
-  // deck. The one weather vector this world has finally reaches the air the
-  // particles float in.
-  dustVel[i * 3] = vx + wxWind.x * (water ? 0.15 : 0.4) + (Math.random() - 0.5) * (water ? 5.5 : 2.2);
-  dustVel[i * 3 + 1] = water ? 2.2 + Math.random() * 2.6 : 0.7 + Math.random() * 1.1;
-  dustVel[i * 3 + 2] = vz + wxWind.z * (water ? 0.15 : 0.4) + (Math.random() - 0.5) * (water ? 5.5 : 2.2);
+  dustPos[i * 3] = x; dustPos[i * 3 + 1] = y; dustPos[i * 3 + 2] = z;
+  dustVel[i * 3] = vx; dustVel[i * 3 + 1] = vy; dustVel[i * 3 + 2] = vz;
+  dustVelA[i * 3] = vx; dustVelA[i * 3 + 1] = vy; dustVelA[i * 3 + 2] = vz;
+  if (col) { dustCol[i * 3] = col[0]; dustCol[i * 3 + 1] = col[1]; dustCol[i * 3 + 2] = col[2]; }
+  else { dustCol[i * 3] = 0; dustCol[i * 3 + 1] = 0; dustCol[i * 3 + 2] = 0; }
   dustLife[i] = 1;
   dustSeed[i] = Math.random();
-  dustKind[i] = water ? 1 : 0;
+  dustKind[i] = kind;
+}
+/**
+ * THROWN OFF THE CONTACT PATCH, ALONG THE SLIP.
+ *
+ * `vx`/`vz` are the tangential throw the caller has already worked out from the
+ * wheel; the jitter here is the cone around it. Both species ride the wind that
+ * is already leaning the grass and driving the deck.
+ */
+function emitDust(x: number, y: number, z: number, vx: number, vz: number, water = false): void {
+  const spread = water ? 0.28 : 0.22;
+  const jx = (Math.random() - 0.5) * (water ? 5.5 : 2.6);
+  const jz = (Math.random() - 0.5) * (water ? 5.5 : 2.6);
+  spawnPart(water ? 1 : 0,
+    x + (Math.random() - 0.5) * spread,
+    y + (water ? 0.05 : 0.15),
+    z + (Math.random() - 0.5) * spread,
+    vx + wxWind.x * (water ? 0.15 : 0.4) + jx,
+    water ? 2.2 + Math.random() * 2.6 : 0.7 + Math.random() * 1.1,
+    vz + wxWind.z * (water ? 0.15 : 0.4) + jz,
+    water ? null : groundTint(x, z));
+}
+/**
+ * A STONE, NOT A PUFF — and the sound for it was already here.
+ *
+ * `audio.stone()` has been pinging off the plume all along with nothing to see.
+ * Grit is what a tyre actually flings on loose ground: ballistic, ignoring the
+ * air, dark against the dust it travels through, and gone in a third of a
+ * second. It is the cue that says the surface is COARSE, which no amount of
+ * tuning the dust cloud can express.
+ */
+function emitGrit(x: number, y: number, z: number, vx: number, vz: number): void {
+  spawnPart(2, x, y + 0.1, z,
+    vx * 1.6 + (Math.random() - 0.5) * 4.5,
+    2.4 + Math.random() * 3.6,
+    vz * 1.6 + (Math.random() - 0.5) * 4.5,
+    groundTint(x, z));
 }
 function stepDust(dt: number): void {
   let any = false;
   for (let i = 0; i < DUST_N; i++) {
     if (dustLife[i] <= 0) continue;
     any = true;
-    dustLife[i] = Math.max(0, dustLife[i] - dt * (dustKind[i] > 0.5 ? 1.8 : 0.9));
-    const wet = dustKind[i] > 0.5;
-    const k = Math.exp((wet ? -0.7 : -1.8) * dt); // droplets carry; dust settles
-    dustVel[i * 3] *= k;
-    dustVel[i * 3 + 2] *= k;
-    dustVel[i * 3 + 1] = dustVel[i * 3 + 1] * k - (wet ? 9.0 : 0.9) * dt;
+    const k = dustKind[i];
+    const wet = k > 0.5 && k < 1.5;
+    const grit = k > 1.5;
+    // Grit is over almost at once, water shortly after, dust hangs.
+    dustLife[i] = Math.max(0, dustLife[i] - dt * (grit ? 3.2 : wet ? 1.8 : 1.05));
+    // AIR RESISTANCE IS A PROPERTY OF THE PARTICLE. A stone does not care about
+    // the air, a droplet carries, and dust is basically suspended in it.
+    const drag = Math.exp((grit ? -0.05 : wet ? -0.7 : -1.8) * dt);
+    const grav = grit ? 9.81 : wet ? 9.0 : 0.9;
+    dustVel[i * 3] *= drag;
+    dustVel[i * 3 + 2] *= drag;
+    dustVel[i * 3 + 1] = dustVel[i * 3 + 1] * drag - grav * dt;
     dustPos[i * 3] += dustVel[i * 3] * dt;
     dustPos[i * 3 + 1] += dustVel[i * 3 + 1] * dt;
     dustPos[i * 3 + 2] += dustVel[i * 3 + 2] * dt;
+    // The stretch reads the CURRENT velocity, so it has to be republished.
+    dustVelA[i * 3] = dustVel[i * 3];
+    dustVelA[i * 3 + 1] = dustVel[i * 3 + 1];
+    dustVelA[i * 3 + 2] = dustVel[i * 3 + 2];
   }
+  const u = dustPoints.material as THREE.ShaderMaterial;
+  (u.uniforms.uHard as { value: number }).value = partHard;
+  (u.uniforms.uSizeK as { value: number }).value = dustSizeK;
   if (any) {
-    (dustGeo.attributes.position as THREE.BufferAttribute).needsUpdate = true;
-    (dustGeo.attributes.aLife as THREE.BufferAttribute).needsUpdate = true;
-    (dustGeo.attributes.aSeed as THREE.BufferAttribute).needsUpdate = true;
-    (dustGeo.attributes.aKind as THREE.BufferAttribute).needsUpdate = true;
+    for (const a of ['position', 'aLife', 'aSeed', 'aKind', 'aVel', 'aCol']) {
+      (dustGeo.attributes[a] as THREE.BufferAttribute).needsUpdate = true;
+    }
   }
 }
 
@@ -25436,8 +25645,12 @@ function tick(now: number): void {
     // A sliding tyre tears up far more than a rolling one.
     // Wet ground raises no dust — but a soaked ROAD throws spray, and the
     // budget has to carry it or the puddles stay silent at speed.
-    dustBudget += v * dt * (anyWater ? 2.2
-      : 1.15 * (1 - wx.wet * 0.9) + (wx.wet > 0.45 ? 1.2 * wx.wet : 0)) * (1 + skid * 1.7);
+    // RATE FOLLOWS SIZE. The particles are a third of their old width, so three
+    // times as many are needed to read as the same plume — and that is the trade
+    // the whole change rests on, because area goes as the square of the radius:
+    // triple the count at a third the size is a THIRD of the fill.
+    dustBudget += v * dt * (anyWater ? 3.4
+      : 4.0 * (1 - wx.wet * 0.9) + (wx.wet > 0.45 ? 2.2 * wx.wet : 0)) * (1 + skid * 1.7);
     while (dustBudget >= 1) {
       dustBudget -= 1;
       // WATER throws from the FRONT wheels — that is where a bow wave comes
@@ -25453,10 +25666,31 @@ function tick(now: number): void {
       const pud = wheelSurf[i] === 'road' && wx.wet > 0.45 ? puddleAt(wxw, wzw, wx.wet) : 0;
       if (wheelSurf[i] === 'road' && skid < 0.3 && pud < 0.35) continue;
       const wet = wheelSurf[i] === 'water' || pud >= 0.35;
-      // Barely any launch velocity: dust is LEFT BEHIND, not thrown backward.
-      // Pushing it back down the heading drove it straight into the chase
-      // camera and greyed out the whole view.
-      emitDust(wxw, contacts[i], wzw, -sinH * v * 0.05, cosH * v * 0.05, wet);
+      // ── EJECTED, NOT LEFT BEHIND ──
+      //
+      // This used to launch at 5% of road speed, because a real backward throw
+      // "drove it straight into the chase camera and greyed out the whole view".
+      // That was true of a 34-pixel puff; at a third the size and a shorter life
+      // it is no longer, and zero launch velocity is why the plume sat as a ball
+      // under the truck instead of trailing from the wheels.
+      //
+      // A tyre throws material TANGENTIALLY — backwards along its own travel —
+      // and a SLIDING tyre throws it sideways as well, which is the whole reason
+      // a drift looks like a drift. `slideV` is the lateral velocity the chassis
+      // is actually carrying, so the arc comes from the physics rather than from
+      // a guess about it.
+      const back = -0.16 * v * (1 + skid * 1.6);
+      const lat = -slideV * 0.55;
+      const ejX = sinH * back + cosH * lat;
+      const ejZ = -cosH * back + sinH * lat;
+      emitDust(wxw, contacts[i], wzw, ejX, ejZ, wet);
+      // Grit rides the same throw, harder and without the air. Rate follows how
+      // COARSE the ground is (a low-quality surface is a loose one) and how hard
+      // the tyre is working, so tarmac throws none and a gravel slide throws a
+      // shower. The ping that already existed now has something to look at.
+      if (!wet && wheelSurf[i] !== 'road' && Math.random() < 0.32 + skid * 0.9) {
+        emitGrit(wxw, contacts[i], wzw, ejX, ejZ);
+      }
       if (wet) {
         // The WAKE: a pair of droplets thrown sideways from the hull, so the
         // truck leaves a widening V behind it rather than a plume.
@@ -28626,6 +28860,12 @@ const DIAL_GROUPS: DialGroup[] = [
       // file, and a phone that cannot spare the pass should not be paying for
       // it before anyone has decided it belongs.
       dial('mblur', 'MOTION BLUR', ['OFF', '90', '180', '360'], 0, (i) => { mblurShutter = MBLUR_SHUTTER[i]; }),
+      // Where the dust and the spray sit between a volume and a sprite. SOFT is
+      // an honest airborne plume; HARD is a few flat tone steps that agree with
+      // the palette quantiser instead of being banded by it. Water and grit keep
+      // their harder bias at every setting — see partHard.
+      dial('grit', 'PARTICLES', ['SOFT', 'MED', 'CRISP', 'HARD'], 1,
+        (i) => { partHard = [0.0, 0.35, 0.7, 1.0][i]; }),
     ],
   },
   {
@@ -30005,6 +30245,25 @@ function setClean(on: boolean): void {
 (window as unknown as { __autorect?: object }).__autorect = (): object =>
   ({ ...autoRect, s: hudS });
 (window as unknown as { __hudcanvas?: object }).__hudcanvas = (): HTMLCanvasElement => canvas;
+/**
+ * THE PARTICLE TUNING KNOBS, live.
+ *
+ * Size and hardness are the two numbers hardest to settle by argument and
+ * easiest to settle by looking, and on a phone a reload costs the very session
+ * that was showing the problem. Called with no arguments it reports, so a sweep
+ * can read back what it set. `hard` mirrors the PARTICLES dial; `size` has no
+ * dial on purpose — it is a tuning knob, not a setting to ask a player about.
+ */
+(window as unknown as { __dust?: object }).__dust = (size?: number, hard?: number): object => {
+  if (size !== undefined && Number.isFinite(size)) dustSizeK = clamp(size, 0.1, 6);
+  if (hard !== undefined && Number.isFinite(hard)) partHard = clamp(hard, 0, 1);
+  let dust = 0, water = 0, grit = 0;
+  for (let i = 0; i < DUST_N; i++) {
+    if (dustLife[i] <= 0) continue;
+    if (dustKind[i] > 1.5) grit++; else if (dustKind[i] > 0.5) water++; else dust++;
+  }
+  return { size: dustSizeK, hard: partHard, pool: DUST_N, alive: { dust, water, grit } };
+};
 (window as unknown as { __mblur?: object }).__mblur = (i: number): void => {
   const d = DIALS.find((x) => x.key === 'mblur');
   if (d) { d.at = clamp(Math.round(i), 0, d.opts.length - 1); d.apply(d.at); }
