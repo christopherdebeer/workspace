@@ -2251,6 +2251,13 @@ const compMat = new THREE.ShaderMaterial({
     uBloom: { value: 0.75 },
     uScan: { value: 0.06 },
     uLevels: { value: 14 },
+    /** Ordered-dither amplitude. 1 is the shipped truth (see the FULL STEP
+     *  note at its use) — below it the dither is biased, and the dial exists
+     *  so that claim can be DRIVEN rather than believed. */
+    uDither: { value: 1 },
+    /** 0 colour, 1 greyscale — applied after the grade, before the quantise,
+     *  so MONO at two levels is a dithered 1-bit newspaper of the same frame. */
+    uMono: { value: 0 },
     uFow: { value: 0 },
     uFlare: { value: 1 },
   },
@@ -2259,6 +2266,7 @@ const compMat = new THREE.ShaderMaterial({
     uniform sampler2D sceneTex; uniform sampler2D softTex; uniform sampler2D depthTex;
     uniform sampler2D bloomTex; uniform float uBloom; uniform float uScan;
     uniform float uLevels; uniform float uFow; uniform float uFlare;
+    uniform float uDither; uniform float uMono;
     uniform float uFlash; uniform vec2 uSunUv; uniform float uSunVis;
     uniform sampler2D mask; uniform mat4 invPV; uniform vec3 camPos; uniform float span;
     uniform vec2 sunXZ; uniform vec2 uPix; uniform vec3 uHazeBase; uniform vec3 uHazeSun; varying vec2 vUv;
@@ -2455,7 +2463,11 @@ const compMat = new THREE.ShaderMaterial({
       // amplitude. What full amplitude changes is the surfaces in the outer
       // fifth of a step, which go from perfectly flat to one or two cells in
       // sixteen — the weave this renderer wants, not a checkerboard.
-      float d = bayer4(floor(vUv * uPix)) - 0.5;
+      // INK: the graded frame's own luma, taken here so every treatment
+      // upstream — haze, fog, bloom, flash — lands in the grey exactly as it
+      // lands in the colour. At PALETTE 2 this is the 1-bit look.
+      enc = mix(enc, vec3(dot(enc, vec3(0.299, 0.587, 0.114))), uMono);
+      float d = (bayer4(floor(vUv * uPix)) - 0.5) * uDither;
       enc = floor(enc * uLevels + d + 0.5) / uLevels;
       // Scanlines on the PIXEL grid (every other buffer row), so they scale
       // with the art instead of shimmering against the display's real pixels.
@@ -15883,6 +15895,8 @@ const vehCopyMat = new THREE.ShaderMaterial({
     src: { value: null as THREE.Texture | null },
     uPix: { value: new THREE.Vector2(2, 2) },
     uLevels: { value: 14 },
+    uDither: { value: 1 },
+    uMono: { value: 0 },
   },
   vertexShader: QUAD_VS,
   // The target is LINEAR, like the scene pass — so this has to do the encode,
@@ -15890,6 +15904,7 @@ const vehCopyMat = new THREE.ShaderMaterial({
   // near-black and in smoother, flatter colour than everything around it.
   fragmentShader: `
     uniform sampler2D src; uniform vec2 uPix; uniform float uLevels; varying vec2 vUv;
+    uniform float uDither; uniform float uMono;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
     float bayer2(vec2 a){ a = floor(a); return fract(a.x * 0.5 + a.y * a.y * 0.75); }
     float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
@@ -15903,7 +15918,8 @@ const vehCopyMat = new THREE.ShaderMaterial({
       // end on the same grade and palette as the world, so it has to end on
       // the same dither too — the truck in the bay is lit by one lamp against
       // a plain backdrop, which is nothing BUT shallow ramps.
-      float d = bayer4(floor(vUv * uPix)) - 0.5;
+      enc = mix(enc, vec3(dot(enc, vec3(0.299, 0.587, 0.114))), uMono);
+      float d = (bayer4(floor(vUv * uPix)) - 0.5) * uDither;
       enc = floor(enc * uLevels + d + 0.5) / uLevels;
       gl_FragColor = vec4(enc, 1.0);
     }`,
@@ -26396,6 +26412,11 @@ function blitPixelated(
   rtVeh.setSize(rw, rh);
   vehCopyMat.uniforms.uPix.value.set(rw, rh);
   vehCopyMat.uniforms.uLevels.value = (compMat.uniforms.uLevels as { value: number }).value;
+  // The whole treatment, not just the level count — a colour truck in a
+  // monochrome world is a leak from another program, which is the exact
+  // failure this pass exists to prevent.
+  vehCopyMat.uniforms.uDither.value = (compMat.uniforms.uDither as { value: number }).value;
+  vehCopyMat.uniforms.uMono.value = (compMat.uniforms.uMono as { value: number }).value;
   renderer.setRenderTarget(rtVeh);
   renderer.setClearColor(clear, 1);
   renderer.clear(true, true, false);
@@ -28787,7 +28808,17 @@ const DIAL_GROUPS: DialGroup[] = [
         PIX_H = [240, 320, 480, 4096][i];
         resizePost();
       }),
-      dial('pal', 'PALETTE', ['8', '14', '24', 'OFF'], 1, (i) => { cu.uLevels.value = [8, 14, 24, 255][i]; }),
+      // Extended to the EXTREMES on request: 2 is a real setting, not a
+      // stunt — with INK on MONO it is the dithered 1-bit newspaper, and with
+      // colour it is an eight-colour poster. 14 stays the default and the
+      // shipped look.
+      dial('pal', 'PALETTE', ['2', '4', '8', '14', '24', 'OFF'], 3,
+        (i) => { cu.uLevels.value = [2, 4, 8, 14, 24, 255][i]; }),
+      // The FULL-step note at the quantiser argues OFF and HALF are biased —
+      // shallow gradients plateau instead of weaving. The dial exists so that
+      // claim can be checked from the seat rather than taken on faith.
+      dial('dith', 'DITHER', ['OFF', 'HALF', 'FULL'], 2, (i) => { cu.uDither.value = [0, 0.5, 1][i]; }),
+      dial('ink', 'INK', ['COLOUR', 'MONO'], 0, (i) => { cu.uMono.value = i; }),
       dial('scan', 'SCANLINES', ['OFF', 'LOW', 'HIGH'], 1, (i) => { cu.uScan.value = [0, 0.06, 0.14][i]; }),
       // Into `bloomDial`, not straight into the uniform: the weather step
       // rewrites uBloom every frame and would eat the setting.
