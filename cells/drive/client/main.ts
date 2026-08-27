@@ -19386,6 +19386,10 @@ function truckSpec(): Record<string, number> {
     // ran away as sideways velocity.
     latG: +Math.max(0, ask - Math.abs(slideV) / GRAV).toFixed(3),
     slideV: +slideV.toFixed(3), grip: +groundedF.toFixed(3),
+    // How many times the chassis loop has been caught holding a NaN. Nonzero is
+    // not "handled": it means the fault is still happening and its origin is
+    // still unknown. See breakNanLatch.
+    nanBreaks,
     slipDeg: +((Math.atan2(slideV, Math.max(Math.abs(v), 0.01)) * 180) / Math.PI).toFixed(3),
     mu: +surfaceFor(surfaceAt(state.x, state.z), surfQ).mu.toFixed(3),
     // WHICH MODEL IS DRIVING, and what the tyres are standing on. `yawWant`
@@ -24218,6 +24222,61 @@ let bodyY = 0, vBodyY = 0, pitchC = 0, vPitch = 0, rollC = 0, vRoll = 0;
 // and the lateral creep it produces. Written by the suspension pass, read by
 // the next frame's drive step; one frame of lag at 60fps is nothing.
 let gradePitch = 0, gradeRoll = 0, slideV = 0;
+/**
+ * ── THE CIRCUIT BREAKER ────────────────────────────────────────────
+ *
+ * ONE NaN ENDS THE SESSION, and it does so silently. Seen three times from the
+ * seat and from a probe: the truck's position, speed and grip all read NaN
+ * together while the heading stayed perfectly finite, and nothing ever came
+ * back — no error, no visible break, just a rig that would not move and a world
+ * that would not stream.
+ *
+ * It ends the session because the chassis is a CLOSED LOOP with no finite check
+ * anywhere in it:
+ *
+ *   bodyY → groundedF → grip → state.speed → terrainVy → bodyY
+ *
+ * and the contacts that feed it are sampled at state.x/z, which speed writes.
+ * So a single NaN anywhere goes everywhere within one frame.
+ *
+ * TWO PROPERTIES OF NaN MAKE IT PERMANENT. `clamp` is max(a, min(b, v)), which
+ * returns NaN for a NaN input, so none of the dozens of clamps in this path
+ * sanitise anything. And every comparison against NaN is FALSE — including
+ * `Math.abs(tY - bodyY) > 6`, which is the one guard written to recover a body
+ * left somewhere impossible. The recovery gate cannot see the worst case it
+ * would ever be asked to fix.
+ *
+ * This is CONTAINMENT, not a cure: it does not say where the first NaN came
+ * from, and the count is exposed on __phys so the question stays visible rather
+ * than being quietly papered over. What it buys is that the fault costs a frame
+ * instead of a drive.
+ */
+let nanBreaks = 0;
+const lastSane = { x: 0, z: 0, heading: 0 };
+function breakNanLatch(): void {
+  const badState = !Number.isFinite(state.x) || !Number.isFinite(state.z)
+    || !Number.isFinite(state.speed) || !Number.isFinite(state.heading)
+    || !Number.isFinite(slideV) || !Number.isFinite(yawR);
+  const badBody = !Number.isFinite(bodyY) || !Number.isFinite(vBodyY)
+    || !Number.isFinite(pitchC) || !Number.isFinite(vPitch)
+    || !Number.isFinite(rollC) || !Number.isFinite(vRoll);
+  if (!badState && !badBody) {
+    // Last frame that was whole, kept so a break has somewhere to land that is
+    // not the world origin — which on this map is a different continent.
+    lastSane.x = state.x; lastSane.z = state.z; lastSane.heading = state.heading;
+    return;
+  }
+  nanBreaks++;
+  if (badState) {
+    state.x = lastSane.x; state.z = lastSane.z; state.heading = lastSane.heading;
+    state.speed = 0; slideV = 0; yawR = 0;
+  }
+  // Hand the sprung body back to `bodyInit`, which is the path that already
+  // knows how to seat it on the four contacts — rather than inventing a second
+  // seeding rule here that could disagree with it.
+  bodyY = 0; vBodyY = 0; pitchC = 0; vPitch = 0; rollC = 0; vRoll = 0;
+  bodyInit = false;
+}
 let prevGradePitch = 0;   // last frame's terrain grade, for the feed-forward above
 // How hard the tyres are currently being asked to work beyond what they have
 // (0 = planted, 1 = fully away). Drives the squeal, the dust, and the HUD.
@@ -24746,6 +24805,10 @@ function tick(now: number): void {
   // the road outside does not pause, and a clock that lies about that is worse
   // than no clock.
   const paused = ((menu.tab() !== null || hidden) || rewindPaused) && !real.on;
+  // BEFORE ANYTHING INTEGRATES. The chassis loop has no finite check inside it
+  // and NaN survives every clamp on the way round, so the only place a break can
+  // be made is ahead of the loop. See breakNanLatch.
+  breakNanLatch();
   const raw = now - last;
   if (raw > 0 && raw < 2000) frameMs += (raw - frameMs) * 0.1;
   // RAW SAMPLES, not the smoothed value. `frameMs` is a 0.1 lerp, which is the
