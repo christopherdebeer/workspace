@@ -29,10 +29,11 @@ import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
 import { LANDMARKS, type Landmark } from './landmarks';
 import { ATTRACT_TAPES, type AttractTape } from './tapes';
+import { autoDrive, autoMem, AUTO, type AutoOut, type Ground as AutoGround } from './autopilot';
 
 // BEFORE ANYTHING READS THE QUERY STRING. Coming back from a sign-in, the URL
 // says `?code=…` where it used to say where the truck is, which way it faces
-// and what job is armed — and half this module reads those at import time.
+// and what task is armed — and half this module reads those at import time.
 restoreUrl();
 
 // ── tuning ─────────────────────────────────────────────────────────
@@ -19635,7 +19636,7 @@ function heightsOf(): number[] {
 };
 /** Every hazard board placed so far, so a probe can stand in front of one. */
 (window as unknown as { __signs?: object }).__signs = (): object => spanStats.signAt;
-// The job: phase, both waypoints, and how far is left.
+// The task: phase, both waypoints, and how far is left.
 (window as unknown as { __mission?: object }).__mission = (): object => ({
   id: mission?.id ?? null, phase: missionPhase, ready: missionReady,
   giver: missionGiver ? { pinned: !!missionGiver.pinned, d: +Math.hypot(missionGiver.x - state.x, missionGiver.z - state.z).toFixed(1) } : null,
@@ -20085,7 +20086,7 @@ function farHeightAt(wx: number, wz: number): number | null {
   return tileDbg;
 };
 (window as unknown as { __roadline?: object }).__roadline = (): object =>
-  ({ n: roadSegs.length, job: roadSegs.filter((s) => s.job).length,
+  ({ n: roadSegs.length, task: roadSegs.filter((s) => s.task).length,
     segs: roadSegs.slice(0, 4).map((s) => [Math.round(s.x1), Math.round(s.y1), Math.round(s.x2), Math.round(s.y2), Math.round(s.d)]) });
 /** A named road's drivable centrelines, so a test can traverse the ROAD rather
  *  than teleport onto the checkpoints and grade its own homework. */
@@ -21598,6 +21599,14 @@ let inputHold: { throttle: number; steer: number; brake: boolean; brakeF: number
 };
 function input(): { throttle: number; steer: number; brake: boolean; brakeF: number } {
   if (inputHold) return inputHold;
+  // …then the autopilot, which is a hand on the controls and nothing more.
+  // AFTER `inputHold` on purpose: that is a measuring tool holding one exact
+  // lock, and a controller quietly overriding it would silently invalidate
+  // every chassis number taken with it.
+  if (auto.on && auto.out) {
+    const o = auto.out;
+    return { throttle: o.throttle, steer: o.steer, brake: o.brake, brakeF: o.brakeF };
+  }
   let throttle = 0, steer = 0, stickBrake = false, stickBrakeF = 0;
   if (keys.has('w') || keys.has('arrowup')) throttle += 1;
   if (keys.has('s') || keys.has('arrowdown')) throttle -= 1;
@@ -21669,6 +21678,110 @@ function input(): { throttle: number; steer: number; brake: boolean; brakeF: num
   return { throttle: clamp(throttle, -1, 1), steer: clamp(steer, -1, 1),
     brake: hard || stickBrake, brakeF };
 }
+
+// ── autopilot: a driver made of arithmetic ─────────────────────────
+//
+// A DEVELOPMENT TOOL, and the reason it exists is the road solver. A change to
+// the profile DP moves the deck under every road in the world, and the only
+// honest way to know whether it moved for the better is to drive one — which
+// is a person, a phone and an afternoon per fixture. Sixteen benchmark drives
+// is sixteen afternoons. This drives them instead.
+//
+// The controller itself is `autopilot.ts` and is pure: it takes a course, two
+// ground samplers and its own memory, and hands back the same {steer,
+// throttle, brake} a thumb would. Everything here is the adapter — where the
+// course comes from, and what the world answers.
+//
+// WHAT IT FOLLOWS. A leg's authored course when one is running, because that
+// is a real route to a real destination. Otherwise `wayAhead`, which chains
+// the road under the wheels through junctions the way the co-driver and the
+// tile streamer already do. That second case is not a lesser one for the job
+// this was built for: the road under test IS the road under the wheels, and
+// pointing the truck down it and letting go is exactly the experiment.
+//
+// It does NOT route. There is no path-finder here and it will not turn off the
+// road it is on to reach a mission's destination — at a fork it takes the
+// straightest continuation of the same way, which is what `wayAhead` means by
+// "ahead". Told to drive Hardknott it drives Hardknott; told to get to a town
+// nine junctions away it will not.
+const AUTO_REACH = 420;   // metres of road to chain ahead
+const AUTO_HOPS = 80;     // …and how many OSM fragments that is allowed to take
+const auto = { on: false, out: null as AutoOut | null, mem: autoMem(), pts: 0, src: 'none' };
+/**
+ * THE GRIP AT A POINT AHEAD — deliberately not `surfaceAt`.
+ *
+ * `surfaceAt` sets the module-level `surfQ` on its way past (its own comment
+ * warns about exactly this), and the plan samples up to forty points down the
+ * road every frame. Using it would leave the truck standing on the grip of
+ * somewhere three hundred metres away.
+ *
+ * The water test is the cheap MASK only. The polygon, channel and cover tests
+ * behind it are for deciding whether the truck is wading; for a speed plan
+ * "there is water somewhere in this 24m cell" is the right level of caution
+ * and costs one lookup.
+ */
+function gripAhead(x: number, z: number): number {
+  let road = -1, track = -1;
+  for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
+    const [cx, cz] = closestOnSeg(x, z, seg);
+    if (Math.hypot(x - cx, z - cz) > seg.hw + 0.8) continue;
+    if (seg.tk) track = Math.max(track, seg.sq ?? Q_TRACK);
+    else road = Math.max(road, seg.sq ?? Q_ROAD);
+  }
+  if (road >= 0) return surfaceFor('road', road).mu;
+  if (track >= 0) return surfaceFor('track', track).mu;
+  if (waterCells.has(gkey(x, z))) return SURFACE.water.mu;
+  return surfaceFor('ground', Q_GROUND).mu;
+}
+const autoGround: AutoGround = { height: groundAt, grip: gripAhead };
+/** The course to follow, and whether its last vertex is a destination or just
+ *  the end of what has streamed — the plan brakes for one and not the other. */
+function autoCourse(): { pts: Array<[number, number]>; endsHere: boolean; src: string } | null {
+  const r = routeAhead(state.x, state.z, AUTO_REACH);
+  if (r && r.length >= 2) {
+    const tail = routeXZ[routeXZ.length - 1];
+    const end = r[r.length - 1];
+    return { pts: r, src: 'leg',
+      endsHere: !!tail && end[0] === tail[0] && end[1] === tail[1] };
+  }
+  const w = wayAhead(state.x, state.z, state.heading, AUTO_REACH, AUTO_HOPS, false);
+  // The road simply running out of streamed geometry is not a destination, so
+  // `endsHere` stays false — braking for the edge of the data would be braking
+  // for nothing, and the next frame's chain reaches further anyway.
+  return w && w.pts.length >= 2 ? { pts: w.pts, endsHere: false, src: w.name ?? 'road' } : null;
+}
+/** True while a hand is on the controls. */
+const autoHandsOn = (): boolean => stick !== null || brakeId !== null || lift !== null
+  || ['w', 's', 'a', 'd', ' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright']
+    .some((k) => keys.has(k));
+function stepAuto(dt: number, off: boolean): void {
+  // THE THUMB WINS. A tool that keeps driving while you are trying to take
+  // over is not a tool, and the one time you most want to grab the wheel is
+  // the one time it is going somewhere you did not intend.
+  if (auto.on && autoHandsOn()) { auto.on = false; auto.out = null; return; }
+  if (!auto.on || off || dt <= 0) { auto.out = null; return; }
+  const c = autoCourse();
+  auto.pts = c?.pts.length ?? 0;
+  auto.src = c?.src ?? 'none';
+  auto.out = autoDrive(
+    { x: state.x, z: state.z, heading: state.heading, speed: state.speed },
+    c?.pts ?? null, autoGround, auto.mem, Math.min(dt, 0.1), { endsHere: c?.endsHere });
+  const o = auto.out;
+  lastInput = { throttle: o.throttle, steer: o.steer, brake: o.brake, brakeF: o.brakeF, hold: false };
+}
+(window as unknown as { __auto?: object }).__auto = (on?: boolean): object => {
+  if (on !== undefined) {
+    auto.on = !!on;
+    auto.out = null;
+    if (auto.on) { auto.mem = autoMem(); auto.mem.lastHeading = state.heading; }
+  }
+  const o = auto.out;
+  return { on: auto.on, src: auto.src, pts: auto.pts, tune: AUTO,
+    ...(o ? { mode: o.mode, limit: o.limit, want: +o.want.toFixed(2),
+      v: +state.speed.toFixed(2), off: +o.off.toFixed(2), err: +o.err.toFixed(3),
+      steer: +o.steer.toFixed(3), throttle: +o.throttle.toFixed(3), brakeF: +o.brakeF.toFixed(3) }
+      : {}) };
+};
 
 // ── minimap: north-up, fog-masked, car-centred ─────────────────────
 // 1500m across a corner dock was an atlas, not an instrument: at that span
@@ -22291,7 +22404,7 @@ function updatePois(): void {
       }
     }
     // Off-screen: an edge chip on the side the waypoint actually lies — but
-    // only for places that have EARNED the reminder: the job's pins, ones you
+    // only for places that have EARNED the reminder: the task's pins, ones you
     // pinned yourself, and anything close enough to act on. A distant park
     // behind your head is not information, it is noise on the sightline.
     if (!p.pinned && p.kind !== 'mission' && d >= 600) continue;
@@ -22483,12 +22596,12 @@ function updatePeaks(vx: number, vz: number): void {
 // but "invisible feels right" is a claim you can only test by driving the
 // version that isn't.
 interface CpDraw { x: number; y: number; tx: number; ty: number; got: boolean; age: number; d: number; hid: boolean;
-  /** The job's route markers: forced beams, gold, numbered along the road. */
-  job?: boolean; n?: number }
+  /** The task's route markers: forced beams, gold, numbered along the road. */
+  task?: boolean; n?: number }
 let cpDraw: CpDraw[] = [];
 /** One screen-space stretch of the active way on the chart — the line the
  *  pips are pearls on. Built only in top mode. */
-interface RoadSeg { x1: number; y1: number; x2: number; y2: number; job: boolean; d: number }
+interface RoadSeg { x1: number; y1: number; x2: number; y2: number; task: boolean; d: number }
 let roadSegs: RoadSeg[] = [];
 // The line is drawn from the way's REAL centreline geometry, not by joining
 // checkpoints: the survey lays checkpoints fragment by fragment in tile-load
@@ -22499,7 +22612,7 @@ let roadSegs: RoadSeg[] = [];
 // frame, because a cached projection slides against the scene the moment the
 // camera pans.
 interface RoadLineSeg { ax: number; ay: number; az: number; bx: number; by: number; bz: number;
-  mx: number; mz: number; job: boolean }
+  mx: number; mz: number; task: boolean }
 let roadLineWorld: RoadLineSeg[] = [];
 let roadLineKey = ''; let roadLineAt = -1e9;
 function refreshRoadLine(via: string | undefined, cur: string | undefined, now: number): void {
@@ -22519,7 +22632,7 @@ function refreshRoadLine(via: string | undefined, cur: string | undefined, now: 
       roadLineWorld.push({
         ax: s.ax, ay: (s.ya ?? groundAt(s.ax, s.az)) + 1.2, az: s.az,
         bx: s.bx, by: (s.yb ?? groundAt(s.bx, s.bz)) + 1.2, bz: s.bz,
-        mx: (s.ax + s.bx) / 2, mz: (s.az + s.bz) / 2, job: s.nm === via,
+        mx: (s.ax + s.bx) / 2, mz: (s.az + s.bz) / 2, task: s.nm === via,
       });
       if (roadLineWorld.length >= 800) return;
     }
@@ -22535,7 +22648,7 @@ function refreshRoadLine(via: string | undefined, cur: string | undefined, now: 
       roadLineWorld.push({
         ax, ay: groundAt(ax, az) + 1.2, az,
         bx, by: groundAt(bx, bz) + 1.2, bz,
-        mx: (ax + bx) / 2, mz: (az + bz) / 2, job: true,
+        mx: (ax + bx) / 2, mz: (az + bz) / 2, task: true,
       });
     }
   }
@@ -22551,7 +22664,7 @@ function refreshRoadLine(via: string | undefined, cur: string | undefined, now: 
             roadLineWorld.push({
               ax: pc.x, ay: groundAt(pc.x, pc.z) + 1.2, az: pc.z,
               bx: c.x, by: groundAt(c.x, c.z) + 1.2, bz: c.z,
-              mx: (pc.x + c.x) / 2, mz: (pc.z + c.z) / 2, job: true,
+              mx: (pc.x + c.x) / 2, mz: (pc.z + c.z) / 2, task: true,
             });
           }
         }
@@ -22573,7 +22686,7 @@ function projectRoadLine(): void {
     roadSegs.push({
       x1, y1,
       x2: (poiVec.x * 0.5 + 0.5) * innerWidth, y2: (-poiVec.y * 0.5 + 0.5) * innerHeight,
-      job: s.job, d: Math.hypot(s.mx - state.x, s.mz - state.z),
+      task: s.task, d: Math.hypot(s.mx - state.x, s.mz - state.z),
     });
   }
 }
@@ -22581,11 +22694,11 @@ function projectRoadLine(): void {
 // that bends, so from any given spot most of them are behind you or round the
 // next headland. A beam stands 26m tall and reads from well over a kilometre.
 const CP_SIGHT = 1400;     // how far a marker carries
-/** …and how far a JOB's marker carries, which is further because it is
+/** …and how far a TASK's marker carries, which is further because it is
  *  navigation rather than decoration — but not unbounded. Four kilometres is
  *  past the horizon haze at this scene scale, so the ones beyond it were
  *  costing a terrain sample each to draw a pixel nobody could see. */
-const CP_JOB_SIGHT = 4000;
+const CP_TASK_SIGHT = 4000;
 const CP_BEAM_H = 26;      // metres of light column in BEAM mode
 const cpCull = { vis: 0, total: 0, taken: 0, far: 0, behind: 0, offscreen: 0, drawn: 0 };
 function updateCps(): void {
@@ -22594,25 +22707,25 @@ function updateCps(): void {
   cpCull.total = cpCull.taken = cpCull.far = cpCull.behind = cpCull.offscreen = cpCull.drawn = 0;
   const now = performance.now();
   const cap = camMode === 'top' ? 400 : 80;
-  const push = (c: Checkpoint, job: boolean, n: number): void => {
+  const push = (c: Checkpoint, task: boolean, n: number): void => {
     cpCull.total++;
     const age = c.at ? now - c.at : Infinity;
     // PING shows ONLY what you just took, and nothing else, ever. The other
-    // modes — and the job's route — add the ones still out there.
-    if ((!job && cpVis === 1) ? age > 1400 : c.got && age > 1400) { cpCull.taken++; return; }
+    // modes — and the task's route — add the ones still out there.
+    if ((!task && cpVis === 1) ? age > 1400 : c.got && age > 1400) { cpCull.taken++; return; }
     // Measured from whoever is CURRENT — this is a VISIBILITY test, not a
     // claim: flying out and having every marker vanish because the parked truck
     // is now far from them is the opposite of scouting. Claiming a checkpoint
     // still needs the rig, and lives elsewhere.
     const d = Math.hypot(c.x - viewX(), c.z - viewZ());
-    // The chart shows the WHOLE way, and so does a JOB: its route is the one
+    // The chart shows the WHOLE way, and so does a TASK: its route is the one
     // set of markers whose far end is exactly what you need to see. Distance
     // still dims them (the banding in the draw pass floors, not zeroes), it
     // just no longer erases them.
-    if (!job && camMode !== 'top' && d > CP_SIGHT) { cpCull.far++; return; }
-    // …AND A JOB'S OWN CEILING, because a COURSE is not a via road.
+    if (!task && camMode !== 'top' && d > CP_SIGHT) { cpCull.far++; return; }
+    // …AND A TASK'S OWN CEILING, because a COURSE is not a via road.
     //
-    // This exemption was written when a job's markers came from `via.name` —
+    // This exemption was written when a task's markers came from `via.name` —
     // one road, a handful of them, and showing the far end was the point. A
     // course is 52 checkpoints over 46.5km, and every one of them was reaching
     // groundAt() and two projections EVERY FRAME, forty kilometres away, with
@@ -22623,7 +22736,7 @@ function updateCps(): void {
     // The chart still shows the whole line — that is what a chart is for. In
     // POV a beam forty kilometres out is not a thing you can see, and the draw
     // pass already floors distant ones to nearly nothing.
-    if (job && camMode !== 'top' && d > CP_JOB_SIGHT) { cpCull.far++; return; }
+    if (task && camMode !== 'top' && d > CP_TASK_SIGHT) { cpCull.far++; return; }
     // ORDER MATTERS HERE. groundAt is a terrain sample and the projections are
     // matrix work; both sit BEHIND the distance tests on purpose, so a culled
     // marker costs a hypot and nothing else.
@@ -22657,10 +22770,10 @@ function updateCps(): void {
       tx: (poiVec.x * 0.5 + 0.5) * innerWidth,
       ty: (-poiVec.y * 0.5 + 0.5) * innerHeight,
       got: c.got, age, d, hid: camMode !== 'top' && !!c.hid,
-      job, n,
+      task, n,
     });
   };
-  // THE JOB'S ROUTE, always lit — the CHECKPOINTS dial styles free driving,
+  // THE TASK'S ROUTE, always lit — the CHECKPOINTS dial styles free driving,
   // but a route you accepted is navigation, not decoration: every marker on
   // the via road stands as a numbered gold beam for the whole drive.
   const onLeg = !!mission && missionPhase === 'active';
@@ -23207,7 +23320,7 @@ const writeUrl = (la: number, lo: number): void => {
   const deg = (((state.heading * 180) / Math.PI) % 360 + 360) % 360;
   try {
     // The mission id rides along, so the URL the game keeps rewriting stays a
-    // resumable link: reload mid-drive and the job is still on.
+    // resumable link: reload mid-drive and the task is still on.
     const m = mission && missionPhase !== 'done' ? `&m=${mission.id}` : '';
     // THE VIEW IS STATE TOO. The chart used to be scrubbed from the URL, so a
     // reload mid-survey dumped you back in the chase camera at street level —
@@ -24199,6 +24312,11 @@ function tick(now: number): void {
     if (splashGold < 0.003) splashGold = 0;
   }
   stepAttract(now);
+  // The autopilot decides BEFORE the frame's input is read, because that is
+  // what it is: this frame's controls. Handed the same reasons to stand down
+  // that the manual path has — a replay is already driving, real drive has no
+  // throttle to give it, and the drone has the controls.
+  stepAuto(dt, !!played || real.on || paused || scrubbing || drone.up);
   const raw2 = played
     ? { throttle: played.throttle, steer: played.steer, brake: played.brake, brakeF: played.brakeF }
     : real.on || paused || scrubbing ? { throttle: 0, steer: 0, brake: false, brakeF: 0 } : input();
@@ -25768,7 +25886,7 @@ function hudIconEdge(ch: string, x: number, y: number, col: string, px = 8): voi
   }
   hudIcon(ch, x, y, col, px);
 }
-/** Which kinds carry a mark: a job, and a place that services the rig.
+/** Which kinds carry a mark: a task, and a place that services the rig.
  *  The rest are already told apart by their beam colour. */
 const KIND_ICON: Partial<Record<Poi['kind'], string>> = { mission: ICON.flag, repair: ICON.wrench, drone: ICON.warn, rig: ICON.truck, station: ICON.gps };
 
@@ -25999,14 +26117,14 @@ interface Mission {
    *
    *  `atLeast` is a COUNT, not a fraction, and defaults to a majority. A
    *  majority is the right rule for claiming a road, where the whole road is
-   *  the subject. It is the wrong rule for a job, where the road is only the
+   *  the subject. It is the wrong rule for a task, where the road is only the
    *  route: Chapman's Peak Drive measures 15km of switchbacks and a player
    *  joining it near the headland would drive the pass honestly and still be
-   *  refused. A count states what the job actually asks for. */
+   *  refused. A count states what the task actually asks for. */
   via?: { name: string; atLeast?: number };
   /** THE COURSE — the leg's actual route along real ways, not the chord and
    *  not one road's name. See the LINE'S COURSE block below for what reads it.
-   *  Absent on a job that is genuinely just "get there"; present on every leg
+   *  Absent on a task that is genuinely just "get there"; present on every leg
    *  of the line, where the route IS the work. */
   route?: LegRoute;
   /** The orbital layer's disagreements along this leg — see WHAT THE ORBITAL
@@ -26140,7 +26258,7 @@ function buildObs(m: Mission | null): void {
     // A pin, so it is a place on the chart and a marker on the glass like
     // everything else the Service cares about. Named by what the SKY claimed:
     // that is the only thing anyone knows about it before arriving, and the
-    // whole job is to go and see whether it holds.
+    // whole task is to go and see whether it holds.
     pois.set(obsPin(site), { name: obsPin(site), x, z, kind: 'obs', pinned: false });
   }
 }
@@ -26270,13 +26388,13 @@ function armMission(m: Mission): void {
   missionGiver = { name: m.giver.name, x: gx, z: gz, kind: 'mission', pinned: true };
   missionDest = { name: m.dest.name, x: dx, z: dz, kind: 'mission', pinned: true };
   // The giver is pinned from the start; the destination only appears once the
-  // job is taken. A mission you have not accepted should not be telling you
+  // task is taken. A mission you have not accepted should not be telling you
   // where to go.
   pois.set(missionGiver.name, missionGiver);
 }
 /** Progress along a mission's required way — null when it asks for none. The
  *  survey gate is deliberately NOT applied here. Claiming a road permanently
- *  demands its full extent be known; a job only demands you took it, and by
+ *  demands its full extent be known; a task only demands you took it, and by
  *  the time you reach the far end you have streamed the whole road by driving
  *  it. Applying the gate would leave a mission uncompletable on a stretch the
  *  player had honestly driven. */
@@ -26323,8 +26441,8 @@ function stepMission(now: number): void {
       missionPhase = 'done';
       missionAt = now;
       if (missionDest) missionDest.pinned = false;
-      // A finished job is a mark: it latches, survives the reload, and syncs.
-      // The min rule means replaying a done job never moves its moment.
+      // A finished task is a mark: it latches, survives the reload, and syncs.
+      // The min rule means replaying a done task never moves its moment.
       marks.set('m', mission.id);
       sync.nudge();
       audio.thud(2);
@@ -26343,10 +26461,10 @@ function acceptMission(now: number): void {
   if (missionGiver) missionGiver.pinned = false;
   audio.stone();
 }
-/** Put the job down — completed (OK) or walked away from (ABANDON), the
- *  bookkeeping is the same: both pins released and DELETED, so nothing about
- *  the finished job stays sticky on the HUD. The OSM stream re-grows the
- *  places' plain namesake POIs on its own. */
+/** Put the task down — finished (OK) or SET ASIDE, the bookkeeping is the
+ *  same: both pins released and DELETED, so nothing about the task stays
+ *  sticky on the HUD. The OSM stream re-grows the places' plain namesake POIs
+ *  on its own. */
 function finishMission(): void {
   if (!mission || missionPhase === 'none') return;
   if (missionGiver) { missionGiver.pinned = false; pois.delete(missionGiver.name); }
@@ -26358,7 +26476,7 @@ function finishMission(): void {
 let missionReady = false;         // in range of the giver, not yet accepted
 let missionNear = false;          // close enough that the offer card speaks
 let missionDismissed = false;     // the X, until you drive away and back
-let missionMin = false;           // the active job, collapsed to its chip
+let missionMin = false;           // the active task, collapsed to its chip
 
 interface Drive { name: string; sub: string; lat: number; lon: number; h: number; mission?: Mission }
 /**
@@ -26841,7 +26959,7 @@ function stepLine(now: number): void {
   // giver station is active auto-accepts — AT ANY DISTANCE, because a phase
   // is session state and a reload mid-leg re-arms the leg as 'offered';
   // requiring range here sent the owner 30km back down the N20 to "re-take"
-  // a job they were already driving. Active means you stood at that terminal
+  // a task they were already driving. Active means you stood at that terminal
   // once, and that is the acceptance. The pickup ritual belongs only to a
   // giver still DORMANT — which is the opening at the aperture, and nothing
   // after it.
@@ -27774,7 +27892,7 @@ function gmapLinkHere(): string {
   return `https://www.google.com/maps?q=${la.toFixed(6)},${lo.toFixed(6)}`;
 }
 /** A drive's mission, by the id the spawn URL carries — so a shared link
- *  arrives with the job already on it. */
+ *  arrives with the task already on it. */
 const missionById = (id: string): Mission | null =>
   DRIVES.find((d) => d.mission?.id === id)?.mission ?? LEGS.find((l) => l.id === id) ?? null;
 // ── spots you found yourself ───────────────────────────────────────
@@ -28283,7 +28401,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // way does it RUN" and not just "where are its markers". Ink seat first,
   // colour on top — and stepped fillRects rather than a stroked path, because
   // a 1px diagonal stroke antialiases into grey smear on this canvas. Gold is
-  // the job's via; teal is the road under the wheels. Distance from the car
+  // the task's via; teal is the road under the wheels. Distance from the car
   // dims it in the same four bands as the pips riding on it.
   if (camMode === 'top' && roadSegs.length) {
     for (let pass = 0; pass < 2; pass++) {
@@ -28292,10 +28410,10 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         if (Math.max(x1, x2) < -4 || Math.min(x1, x2) > HW + 4
           || Math.max(y1, y2) < -4 || Math.min(y1, y2) > HH + 4) continue;
         const near = Math.round(clamp(1 - s.d / CP_SIGHT, 0, 1) * 3) / 3;
-        hctx.fillStyle = pass === 0 ? UI.ink : s.job ? UI.gold : UI.edge;
+        hctx.fillStyle = pass === 0 ? UI.ink : s.task ? UI.gold : UI.edge;
         // A floor high enough to trace the WHOLE road across the chart — this
         // line is orientation, and orientation two valleys over is the point.
-        hctx.globalAlpha = pass === 0 ? 0.7 : (s.job ? 0.6 : 0.5) + 0.35 * near;
+        hctx.globalAlpha = pass === 0 ? 0.7 : (s.task ? 0.6 : 0.5) + 0.35 * near;
         const n = Math.max(1, Math.round(Math.hypot(x2 - x1, y2 - y1) / 2));
         for (let i = 0; i <= n; i++) {
           const x = Math.round(x1 + ((x2 - x1) * i) / n);
@@ -28492,13 +28610,13 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       hctx.globalAlpha = 0.35 + 0.65 * near;
       hctx.fillStyle = UI.ink;
       diamond(x, y, 3);
-      hctx.fillStyle = c.job || cpVis === 3 ? UI.gold : UI.edge;
+      hctx.fillStyle = c.task || cpVis === 3 ? UI.gold : UI.edge;
       diamondOutline(x, y, 2);
-      if (c.job && c.n) textEdgeP(String(c.n), x + 5, y - 6, UI.gold);
+      if (c.task && c.n) textEdgeP(String(c.n), x + 5, y - 6, UI.gold);
       hctx.restore();
       continue;
     }
-    if (cpVis === 3 || c.job) {
+    if (cpVis === 3 || c.task) {
       // BEAM: a column of light standing on the checkpoint. Drawn as stacked
       // pixels rather than a stroked line because a 1px diagonal line
       // antialiases into a grey smear at this resolution, and everything else
@@ -28506,8 +28624,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       const ty = ty0, tx = c.tx / hudS;
       const h = y - ty;
       if (h > 1) {
-        // The job's route burns GOLD; the dial's beams keep the survey teal.
-        hctx.fillStyle = c.job ? UI.gold : UI.edge;
+        // The task's route burns GOLD; the dial's beams keep the survey teal.
+        hctx.fillStyle = c.task ? UI.gold : UI.edge;
         for (let i = 0; i <= h; i++) {
           const t = i / h;                       // 0 at the foot, 1 at the top
           hctx.globalAlpha = (0.85 - t * 0.72) * (0.35 + 0.65 * near) * ghost;
@@ -28522,7 +28640,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       diamond(x, y, 3);
       // Its place in the run, beside the foot — the number is the answer to
       // "which one is next", dimming and ghosting with its beam.
-      if (c.job && c.n && !c.got) {
+      if (c.task && c.n && !c.got) {
         hctx.globalAlpha = (0.45 + 0.55 * near) * ghost;
         textEdgeP(String(c.n), x + 5, y - 7, UI.gold);
       }
@@ -28988,6 +29106,15 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       const [la, lo] = localToLatLon(state.x, state.z);
       const g = `${la.toFixed(4)} ${lo.toFixed(4)}`;
       textEdgeS(g, pad + 1, infoY + 16, UI.dim);
+      // AND WHO IS DRIVING. The autopilot is a development tool and rides on
+      // the reference row with the coordinate rather than taking a line of its
+      // own — but it says so, in gold, because a truck driving itself with no
+      // tell is indistinguishable from one that has stopped responding.
+      if (auto.on) {
+        const a = auto.out;
+        textEdgeS(a ? `AUTO ${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`
+          : 'AUTO — NO COURSE', pad + 1 + textSW(g) + 5, infoY + 16, UI.gold);
+      }
       // Under real drive the coordinate stops being a reference and becomes a
       // reading off an instrument, so it says how much to trust it: the fix
       // accuracy, and how long since one arrived. A stale fix looks exactly
@@ -29149,10 +29276,10 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // instruments, and they were the last text on this canvas that wanted real
   // layout.
 }
-/** The job and the claim, as DOM state — pushed every frame, diffed there. */
+/** The task and the claim, as DOM state — pushed every frame, diffed there. */
 function stepOverlays(): void {
   let mc: import('./overlays').MissionCard | null = null;
-  // ARRIVED holds the screen until its OK — a finished job is put down by
+  // ARRIVED holds the screen until its OK — a finished task is put down by
   // hand, not by a timer that may fire while the phone is on the mount.
   const live = mission && missionPhase !== 'none';
   if (mission && live) {
@@ -29160,7 +29287,7 @@ function stepOverlays(): void {
       mc = missionNear && !missionDismissed ? {
         kicker: mission.giver.name.toUpperCase(),
         head: mission.title,
-        body: missionReady ? 'TAP TO ACCEPT' : 'PULL UP TO TAKE THE JOB',
+        body: missionReady ? 'TAP TO ACCEPT' : 'PULL UP TO TAKE THE TASK',
         tone: missionReady ? 'good' : 'dim',
         ready: missionReady,
         dismissable: true,
@@ -29173,7 +29300,7 @@ function stepOverlays(): void {
       // with nothing happening would look like a broken mission.
       const atButShort = v && d < mission.within && !v.met;
       mc = {
-        kicker: 'ON THE JOB',
+        kicker: 'ON TASK',
         head: mission.title,
         body: atButShort
           ? `TAKE ${(mission.via?.name ?? '').toUpperCase()} · ${v.got}/${v.need}`
@@ -29182,8 +29309,8 @@ function stepOverlays(): void {
             : `${mission.brief} · ${fmtDist(d)}`,
         tone: atButShort ? 'hot' : 'gold',
         ready: false,
-        dismissable: true,          // the X collapses an active job to its chip
-        abandonable: true,
+        dismissable: true,          // the X collapses an active task to its chip
+        canSetAside: true,
         minimized: missionMin,
         chip: v ? `${fmtDist(d)} · ${v.got}/${v.need}` : fmtDist(d),
       };
@@ -29510,7 +29637,7 @@ function hudTap(cx: number, cy: number): boolean {
       if (fix) { teleportTo(fix.x, fix.z); pois.delete(fix.name); }
       return true;
     }
-    // A mission pin belongs to the job and is not yours to unpin; nor is a
+    // A mission pin belongs to the task and is not yours to unpin; nor is a
     // downed drone, which is a thing to go and collect rather than a bookmark.
     if (r.kind === 'mission' || r.kind === 'drone' || r.kind === 'rig') continue;
     if (!r.rng || !POI_LIVE.has(r.kind)) continue;
@@ -29879,13 +30006,13 @@ const menu = createMenu({
   },
 });
 
-// The DOM half of the HUD: the MENU button, the job card, the claim toast.
+// The DOM half of the HUD: the MENU button, the task card, the claim toast.
 const overlays = createOverlays(
   { edge: UI.edge, dim: UI.dim, text: UI.text, soft: UI.soft, gold: UI.gold, hot: UI.hot, good: UI.good, bad: UI.bad },
   () => menu.open(),
   () => acceptMission(performance.now()),
   // One X, two meanings: an OFFER is put away until you come back; an
-  // ACTIVE job just folds down to its chip.
+  // ACTIVE task just folds down to its chip.
   () => { if (missionPhase === 'active') missionMin = true; else missionDismissed = true; },
   () => { missionMin = false; },
   () => finishMission(),
@@ -29983,7 +30110,7 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   // not finished streaming.
   real.on = q.get('real') === '1';
   // The destinations, before anything asks for one. A shared link can carry
-  // `&m=<id>`, and the job it names lives in the campaign — so this has to have
+  // `&m=<id>`, and the task it names lives in the campaign — so this has to have
   // landed before `missionById` is asked. It is one small cached fetch on a
   // boot that is about to pull terrain, so it costs nothing anyone can see.
   await loadCampaign();
@@ -30006,7 +30133,7 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   // is that the game never waits on the network for progress, and this lands
   // long before the first road does.
   void sync.start();
-  // The job, if this spawn carries one. Armed AFTER `origin` is set, because
+  // The task, if this spawn carries one. Armed AFTER `origin` is set, because
   // both its waypoints are lat/lon and have to be projected into local metres.
   const mid = q.get('m');
   if (mid) { const m = missionById(mid); if (m) armMission(m); }

@@ -1,6 +1,6 @@
 /**
  * DOM overlays for the two HUD surfaces that were never instruments: the
- * mission card ("the job, as a modal" — it asks something of you, has a tap
+ * mission card ("the task, as a modal" — it asks something of you, has a tap
  * target, and deserves real text layout) and the survey-claim toast; plus
  * the MENU button, whose whole purpose is to open a DOM menu. Everything
  * else on the HUD stays canvas — these are the pieces that behave like UI,
@@ -20,16 +20,19 @@ export interface MissionCard {
   head: string;
   body: string;
   tone: Tone;
-  /** True when a tap accepts the job — the only time the card body takes taps. */
+  /** True when a tap accepts the task — the only time the card body takes taps. */
   ready: boolean;
-  /** Offers can be put away; on an ACTIVE job the same X collapses to the chip. */
+  /** Offers can be put away; on an ACTIVE task the same X collapses to the chip. */
   dismissable?: boolean;
-  /** An active job can be walked away from — rendered as its own small act. */
-  abandonable?: boolean;
+  /** An active task can be put back down — rendered as its own small act.
+   *  SET ASIDE, not ABANDON: nothing is lost by stopping, the task is still
+   *  there to take again at the giver, and a word that says otherwise makes
+   *  a routine decision feel like a failure. */
+  canSetAside?: boolean;
   /** Collapsed: the card stands down and this label rides the top-left chip. */
   minimized?: boolean;
   chip?: string;
-  /** ARRIVED asks for an explicit OK — a finished job is yours to put down. */
+  /** ARRIVED asks for an explicit OK — a finished task is yours to put down. */
   ok?: boolean;
 }
 export interface ToastCard { kicker: string; head: string; body: string }
@@ -64,7 +67,7 @@ export function createOverlays(
   onAccept: () => void,
   onDismiss: () => void,
   onExpand: () => void,
-  onAbandon: () => void,
+  onSetAside: () => void,
   onOk: () => void,
   onTerminal: () => void,
   onTerminalClose: () => void,
@@ -96,17 +99,17 @@ export function createOverlays(
   .ov .x { position: absolute; top: -1px; right: -1px; padding: 3px 7px 2px; cursor: pointer;
     color: ${C.soft}; border: 1px solid ${C.dim}; background: rgba(8,20,23,0.9);
     font-size: 10px; line-height: 1; display: none; pointer-events: auto; }
-  .ov .abandon { margin-top: 3px; font-size: 10px; color: ${C.dim}; cursor: pointer;
+  .ov .aside { margin-top: 3px; font-size: 10px; color: ${C.dim}; cursor: pointer;
     display: none; pointer-events: auto; text-decoration: underline; text-underline-offset: 2px; }
   .ov .ok { margin: 5px auto 1px; padding: 4px 26px 3px; cursor: pointer; display: none;
     pointer-events: auto; color: ${C.good}; border: 1px solid ${C.good};
     background: rgba(111,224,160,0.08); font: inherit; font-family: inherit;
     font-size: 12px; font-weight: 700; letter-spacing: 2px; }
-  #ov-job { top: calc(env(safe-area-inset-top, 0px) + 46px); left: 10px; cursor: pointer;
+  #ov-task { top: calc(env(safe-area-inset-top, 0px) + 46px); left: 10px; cursor: pointer;
     color: ${C.gold}; border: 1px solid ${C.gold}; background: rgba(8,20,23,0.78);
     padding: 4px 9px 3px; font: inherit; font-family: inherit; font-size: 10px;
     letter-spacing: 1px; display: none; }
-  #ov-job .ico { font-family: '${ICON_FONT}'; font-weight: 900; margin-right: 0.5em; }
+  #ov-task .ico { font-family: '${ICON_FONT}'; font-weight: 900; margin-right: 0.5em; }
   /* The terminal prompt sits low-centre, above the stick's reach — a door,
      not a dialog. */
   #ov-term-go { bottom: calc(env(safe-area-inset-bottom, 0px) + 168px); left: 50%;
@@ -163,19 +166,19 @@ export function createOverlays(
   mx.addEventListener('click', (e) => { e.stopPropagation(); onDismiss(); });
   m.root.appendChild(mx);
   const mab = document.createElement('div');
-  mab.className = 'abandon';
-  mab.textContent = 'ABANDON JOB';
-  mab.addEventListener('click', (e) => { e.stopPropagation(); onAbandon(); });
+  mab.className = 'aside';
+  mab.textContent = 'SET ASIDE';
+  mab.addEventListener('click', (e) => { e.stopPropagation(); onSetAside(); });
   m.root.appendChild(mab);
   const mok = document.createElement('button');
   mok.className = 'ok';
   mok.textContent = 'OK';
   mok.addEventListener('click', (e) => { e.stopPropagation(); onOk(); });
   m.root.appendChild(mok);
-  // The chip the active job collapses to — the job's whole state at a glance,
-  // parked top-left where it stops competing with the road.
+  // The chip the active task collapses to — the task's whole state at a
+  // glance, parked top-left where it stops competing with the road.
   const chip = document.createElement('button');
-  chip.id = 'ov-job';
+  chip.id = 'ov-task';
   chip.className = 'ov ui';
   const chipIco = document.createElement('span');
   chipIco.className = 'ico';
@@ -241,7 +244,7 @@ export function createOverlays(
       m.root.style.cursor = mc.ready ? 'pointer' : 'default';
       m.root.style.pointerEvents = mc.ready ? 'auto' : 'none';
       mx.style.display = mc.dismissable ? 'block' : 'none';
-      mab.style.display = mc.abandonable ? 'block' : 'none';
+      mab.style.display = mc.canSetAside ? 'block' : 'none';
       mok.style.display = mc.ok ? 'block' : 'none';
       m.root.style.display = 'block';
     },

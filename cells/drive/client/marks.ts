@@ -33,7 +33,7 @@ export type MarkKind = 'm' | 's' | 'o';
 const MARK_KINDS: MarkKind[] = ['m', 's', 'o'];
 const MARKS_V = 1;
 const MARKS_KEY = `drive.marks.v${MARKS_V}`;
-/** How long a mark may sit unwritten. Marks are rare (a job finished, a
+/** How long a mark may sit unwritten. Marks are rare (a task finished, a
  *  station woken) so unlike the survey's crumbs there is no write-budget
  *  problem — but the flush still debounces so a burst costs one write. */
 const MARKS_FLUSH_MS = 1500;
