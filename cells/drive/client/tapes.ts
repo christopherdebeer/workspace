@@ -19,6 +19,9 @@ export interface AttractTape {
   head: {
     v: number; build: string; at: number; lat: number; lon: number;
     hdg: number; t: string; wx: string; steps: number; secs: number;
+    /** Weather as numbers — cover, rain, wet — so a replay drives the surface
+     *  it was recorded on. Absent on tapes cut before the field existed. */
+    wxc?: number; wxr?: number; wxw?: number;
   };
   /** Uint8Array of 4-byte steps (dt, steer, throttle, brake), base64. */
   steps: string;

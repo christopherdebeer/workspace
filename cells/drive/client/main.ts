@@ -30,6 +30,7 @@ import { openMarks } from './marks';
 import { LANDMARKS, type Landmark } from './landmarks';
 import { ATTRACT_TAPES, type AttractTape } from './tapes';
 import { autoDrive, autoMem, AUTO, type AutoOut, type Ground as AutoGround } from './autopilot';
+import { mkField, buildField, recenter as wxRecenter, wxAt, puddleAt, seedWet, WXF_N, WXF_SPAN } from './weatherfield';
 
 // BEFORE ANYTHING READS THE QUERY STRING. Coming back from a sign-in, the URL
 // says `?code=…` where it used to say where the truck is, which way it faces
@@ -1178,6 +1179,7 @@ const skyMat = new THREE.ShaderMaterial({
     uniform float uSunCos1; uniform float uSunCos0;
     uniform float uMoonCos1; uniform float uMoonCos0; uniform float uMoonSin;
     uniform float uLow; uniform vec3 uDusk; uniform float uNight; uniform vec3 moonDir;
+    uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
     uniform vec2 uWind; uniform vec2 uCamXZ; uniform float uDeckY; uniform float uCloudScale;
     varying vec3 vDir;
     // Value-noise fBm. Clouds are GENERATED, not photographed: a skybox set
@@ -1227,16 +1229,24 @@ const skyMat = new THREE.ShaderMaterial({
       // quantiser reads as sky and not as sun.
       col += uSunDisc * (pow(sd, 2600.0) * 0.8 + pow(sd, 8.0) * 0.16);
       // ── cloud deck ──
-      if (d.y > 0.015 && uCloud > 0.01) {
+      if (d.y > 0.015) {
         // WHERE THE VIEW RAY MEETS THE DECK, in world metres. The dome still
         // rides the camera, but the deck no longer does: it is a plane at a
         // real altitude over real ground, which is what lets the terrain ask
         // about the same patch of it. Stretches toward the horizon exactly as
         // a deck does, and now parallaxes as you drive under it.
-        vec2 p = (uCamXZ + d.xz * (uDeckY / max(d.y, 0.05))) * uCloudScale + uWind;
+        vec2 wpd = uCamXZ + d.xz * (uDeckY / max(d.y, 0.05));
+        // COVERAGE IS LOCAL NOW: the weather field, read at that same patch —
+        // so a front is a WALL of cloud out one window and open sky out the
+        // other, and its edge crosses the deck as it crosses the ground. The
+        // gate moved off uCloud for the same reason: a clear region under an
+        // arriving front is exactly where the local cover disagrees with the
+        // regional mean.
+        float covL = texture2D(uWxTex, (wpd - uWxMin) * uWxInv).r;
+        if (covL > 0.01) {
+        vec2 p = wpd * uCloudScale + uWind;
         float n = clfbm(p);
-        // Coverage opens up as the front arrives; a storm nearly fills the sky.
-        float cov = clCov(n, uCloud);
+        float cov = clCov(n, covL);
         // Fake lighting: sample again a step toward the sun — where the deck
         // thins in that direction the edge is lit, where it thickens it is base.
         float lit = clamp((n - clfbm(p + normalize(sunDir.xz + vec2(0.001)) * 0.35)) * 3.2 + 0.5, 0.0, 1.0);
@@ -1246,6 +1256,7 @@ const skyMat = new THREE.ShaderMaterial({
         // Fade the deck out at the horizon so it never cuts a hard line.
         cov *= smoothstep(0.015, 0.16, d.y);
         col = mix(col, cloud, clamp(cov, 0.0, 1.0) * 0.95);
+        }
       }
       // ── the night sky ──
       if (uNight > 0.02 && d.y > 0.0) {
@@ -2249,6 +2260,30 @@ const compMat = new THREE.ShaderMaterial({
       if (uHazeDbg > 2.5) w = 0.0;
       return mix(uHazeBase, uHazeSun, w); // the biome's haze, warming toward the sun
     }
+    // ── WEATHER FOG: air with a position ──
+    //
+    // The haze above is a function of DISTANCE — it says how far away things
+    // are and nothing about where the air is thick. This is the other thing:
+    // density sampled from the weather field at points along the actual ray,
+    // so a bank is somewhere, has an edge, and can be entered and left.
+    //
+    // Three terms share the density:
+    //   SLAB   the field's fog channel, but only below uFogTop — the mist
+    //          ceiling the field derives from the terrain. Valleys fill; the
+    //          pass climbs out over the top of it.
+    //   CLOUD  heavy local cover becomes something you are INSIDE near the
+    //          deck's own altitude — the cloud you drive into on a high road
+    //          is the cloud the dome is drawing.
+    //   VEIL   distant rain reads as a grey curtain long before its drops
+    //          could — the same channel the particle box pours from.
+    uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
+    uniform float uFogTop; uniform float uFogAmt; uniform vec3 uFogC; uniform float uFogDeck;
+    float wxFogD(vec3 pw){
+      vec4 wxs = texture2D(uWxTex, (pw.xz - uWxMin) * uWxInv);
+      float slab = wxs.b * smoothstep(uFogTop, uFogTop - 55.0, pw.y);
+      float cbase = smoothstep(0.55, 0.85, wxs.r) * smoothstep(uFogDeck - 180.0, uFogDeck, pw.y);
+      return slab + cbase * 0.85 + wxs.g * 0.20;
+    }
     void main(){
       vec3 sharp = texture2D(sceneTex, vUv).rgb;
       vec3 soft = texture2D(softTex, vUv).rgb;
@@ -2305,6 +2340,20 @@ const compMat = new THREE.ShaderMaterial({
         float dimF = min(m * mix(0.10, 0.86, near) + (1.0 - m) * deep * uHazeAmt, 0.86);
         col = mix(sharp, soft, blurF);
         col = mix(col, hazeAt(dir, uHazeWarm), dimF);
+      }
+      // The fog, applied to sky and ground alike — being inside a bank hides
+      // the horizon exactly as it hides the road. The ray is capped at 2.2km:
+      // past that any density that matters has already saturated, and the
+      // samples stay near the camera, where the fog you are in actually is.
+      // BEFORE the bloom on purpose: a lamp blooming into fog is the one
+      // glow this game's nights are built around.
+      if (uFogAmt > 0.001) {
+        float tf = min(t, 2200.0);
+        float fd = (wxFogD(camPos + dir * (tf * 0.2))
+          + wxFogD(camPos + dir * (tf * 0.55))
+          + wxFogD(camPos + dir * (tf * 0.9))) / 3.0;
+        float fogF = (1.0 - exp(-tf * fd * 0.0075)) * uFogAmt;
+        col = mix(col, uFogC, min(fogF, 0.965));
       }
       // Never hand a negative (or NaN) to pow(): one bad fragment upstream
       // must not be able to punch a black hole through the finished frame.
@@ -2732,6 +2781,9 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
     prev?.call(mat, sh, renderer);
     sh.uniforms.uCloudS = envU.uCloudS;
     sh.uniforms.uWind = envU.uWind;
+    sh.uniforms.uWxTex = wxU.uWxTex;
+    sh.uniforms.uWxMin = wxU.uWxMin;
+    sh.uniforms.uWxInv = wxU.uWxInv;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWorldP;')
       .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorldP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
@@ -2748,6 +2800,7 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
         varying vec3 vWorldP;
         uniform float uCloudS; uniform vec2 uWind;
         uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
+        uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
         ${CLOUD_GLSL}
         ${SUNM_GLSL}`)
       // ── ON THE DIRECT TERM ONLY ──
@@ -2766,10 +2819,14 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
       // sky is drawing. Same function, same phase, same coverage curve, so the
       // dark patch crossing the road is the cloud overhead and its edge arrives
       // exactly when that cloud's edge crosses the sun.
-      if (uCloudS > 0.01) {
+      if (uCloudS > 0.005) {
         vec2 hit = vWorldP.xz + uSunSkew * max(uDeckY - vWorldP.y, 0.0);
-        float cs = clCov(clfbm(hit * uCloudScale + uWind), uCloudS);
-        gl_FragColor.rgb *= 1.0 - uCloudS * cs * 0.5;
+        // LOCAL cover at the hit, from the same field the dome reads — the
+        // dark ground under the arriving front is the front, not the mean.
+        // uCloudS keeps only its dial job: a gate, opened by any cover at all.
+        float covL = texture2D(uWxTex, (hit - uWxMin) * uWxInv).r;
+        float cs = clCov(clfbm(hit * uCloudScale + uWind), covL);
+        gl_FragColor.rgb *= 1.0 - min(covL * 1.4, 1.0) * cs * 0.5;
       }`);
     if (opts.detail) {
       // World-space mottle (~30–80m blobs) breaks the flat-shaded banding of
@@ -3911,6 +3968,12 @@ const slipDbg: Record<string, boolean | number> = {};
 function slipify<T extends THREE.Material>(mat: T): T {
   mat.onBeforeCompile = (sh) => {
     slipDbg.ran = true;
+    // The weather field's uniforms ride in here too: the carriageway is where
+    // the wet channel becomes something you can SEE — darkened tarmac and
+    // standing water — rather than only something the tyres report.
+    Object.assign(sh.uniforms, { uWxTex: wxU.uWxTex, uWxMin: wxU.uWxMin, uWxInv: wxU.uWxInv,
+      uPudOn: wxU.uPudOn, uPudSky: wxU.uPudSky, uPudGnd: wxU.uPudGnd, uPudSun: wxU.uPudSun,
+      uSunW: wxU.uSunW, uCamW: wxU.uCamW, uWxT: wxU.uWxT });
     slipDbg.vCommon = sh.vertexShader.includes('#include <common>');
     slipDbg.vBegin = sh.vertexShader.includes('#include <begin_vertex>');
     slipDbg.fCommon = sh.fragmentShader.includes('#include <common>');
@@ -3921,9 +3984,9 @@ function slipify<T extends THREE.Material>(mat: T): T {
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
         attribute float aSlip; attribute vec3 aDirt;
-        varying float vSlip; varying vec3 vDirt; varying vec2 vSlipXZ;`)
+        varying float vSlip; varying vec3 vDirt; varying vec2 vSlipXZ; varying float vWy;`)
       .replace('#include <begin_vertex>', `#include <begin_vertex>
-        vSlip = aSlip; vDirt = aDirt;
+        vSlip = aSlip; vDirt = aDirt; vWy = transformed.y;
         // OBJECT SPACE, not modelMatrix * transformed. A ribbon's vertices are
         // already absolute world metres at build time, and object space cannot
         // be moved out from under the pattern by a group transform — a world
@@ -3931,7 +3994,17 @@ function slipify<T extends THREE.Material>(mat: T): T {
         vSlipXZ = transformed.xz;`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying float vSlip; varying vec3 vDirt; varying vec2 vSlipXZ;
+        varying float vSlip; varying vec3 vDirt; varying vec2 vSlipXZ; varying float vWy;
+        uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
+        uniform float uPudOn; uniform vec3 uPudSky; uniform vec3 uPudGnd; uniform float uPudSun;
+        uniform vec3 uSunW; uniform vec3 uCamW; uniform float uWxT;
+        float pdh(vec2 p){ p = fract(p * vec2(233.34, 851.73)); p += dot(p, p + 23.45); return fract(p.x * p.y); }
+        float pdn(vec2 p){
+          vec2 i = floor(p), f = fract(p);
+          f = f * f * (3.0 - 2.0 * f);
+          return mix(mix(pdh(i), pdh(i + vec2(1.0, 0.0)), f.x),
+                     mix(pdh(i + vec2(0.0, 1.0)), pdh(i + vec2(1.0, 1.0)), f.x), f.y);
+        }
         ${SLIP_CHUNK}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
         // The tail is what sells it: a slide has a ragged toe rather than an
@@ -3958,6 +4031,40 @@ function slipify<T extends THREE.Material>(mat: T): T {
           // Not flat dirt: the tarmac's own light and wear still modulate it,
           // so a slip over a worn patch is worn and one in shadow is dark.
           diffuseColor.rgb = vDirt * (0.72 + 0.5 * dot(diffuseColor.rgb, vec3(0.33)));
+        }
+        // ── THE ROAD, WET — the weather field's wet channel, worn visibly ──
+        //
+        // Wet tarmac darkens; standing water collects where the crossfall
+        // sends it. The kerb bias is the camber made visible: vMapUv.x is the
+        // ribbon's own cross-road coordinate (0 at one kerb, 1 at the other,
+        // the same number the slip band and the lane paint are drawn from),
+        // so pools grow from the edges in — a crown stays proud until the
+        // ground is truly soaked. Two noise octaves: pools a few metres
+        // across, grouped in runs a few tens of metres long, so a stretch of
+        // road reads as "the wet stretch" rather than as speckle.
+        float wxPud = 0.0;
+        vec4 wxs = texture2D(uWxTex, (vSlipXZ - uWxMin) * uWxInv);
+        if (wxs.a > 0.03) {
+          diffuseColor.rgb *= 1.0 - wxs.a * 0.30;
+          float kerb = pow(abs(vMapUv.x - 0.5) * 2.0, 1.4);
+          float pn = pdn(vSlipXZ * 0.22) * 0.8 + pdn(vSlipXZ * 0.045) * 0.2;
+          wxPud = smoothstep(0.0, 0.09, pn + kerb * 0.30 - (1.18 - wxs.a * 0.45)) * uPudOn;
+        }`)
+      .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+        // The puddle is a MIRROR, not a paint: applied after lighting, it
+        // replaces the lit tarmac with what the water would show — ground
+        // colour at a steep look-down, sky at a graze (the poor man's
+        // fresnel), the sun as a hard glint on the reflected ray, and the
+        // rain's own pocks flickering while it falls. This is most of why a
+        // wet road at dusk reads as wet from half a kilometre out.
+        if (wxPud > 0.004) {
+          vec3 vd = normalize(vec3(vSlipXZ.x, vWy, vSlipXZ.y) - uCamW);
+          float fr = 0.28 + 0.72 * pow(1.0 - max(-vd.y, 0.0), 2.0);
+          vec3 refl = mix(uPudGnd, uPudSky, fr);
+          float glint = pow(max(dot(reflect(vd, vec3(0.0, 1.0, 0.0)), uSunW), 0.0), 90.0) * uPudSun;
+          float pk = step(0.93, pdh(floor(vSlipXZ * 2.6) + floor(uWxT * 8.0) * 0.617)) * wxs.g;
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, refl, wxPud * 0.85);
+          gl_FragColor.rgb += (glint * 1.8 + pk * 0.22) * wxPud;
         }`);
   };
   mat.needsUpdate = true;
@@ -6848,7 +6955,7 @@ function stepPop(pop: Critter[], meshes: THREE.InstancedMesh[], dt: number, o: {
 }
 function stepWildlife(dt: number): void {
   // Rain grounds the birds; a storm keeps them down entirely.
-  birds.visible = wx.rain < 0.5;
+  birds.visible = wxL.rain < 0.5;   // the rain where the birds are
   if (birds.visible) stepPop(flock, birdMeshes, dt, { box: BIRD_BOX, air: true, speed: 11, fear: 55, sep: 7, turn: 1 });
   stepPop(graze, herds, dt, { box: HERD_BOX, air: false, speed: 2.4, fear: 24, sep: 6, turn: 1.6 });
 }
@@ -15667,6 +15774,49 @@ const WX: Record<Sky, { cloud: number; rain: number; label: string }> = {
   storm: { cloud: 0.95, rain: 1, label: 'STORM' },
 };
 const wx = { sky: 'clear' as Sky, next: 'clear' as Sky, cloud: 0, rain: 0, wet: 0, at: 0, warn: 0, flash: 0, bolt: 0 };
+// ── THE WEATHER FIELD: the sky, given a position ───────────────────
+// The scalars above are REGIONAL means. The field (client/weatherfield.ts)
+// spreads them over a 12km grid that drifts on the real wind and remembers
+// where it rained — so there is a front to drive into, a shower to drive out
+// of, and a wet road exactly where the rain fell. One set of bytes goes three
+// ways: this DataTexture for the shaders (deck, shadows, fog, wet tarmac), a
+// bilinear CPU sample at the truck for physics and audio, and the tests.
+const wxField = mkField(-WXF_SPAN / 2, -WXF_SPAN / 2);
+const wxTex = new THREE.DataTexture(wxField.data, WXF_N, WXF_N, THREE.RGBAFormat, THREE.UnsignedByteType);
+wxTex.magFilter = THREE.LinearFilter;
+wxTex.minFilter = THREE.LinearFilter;
+wxTex.needsUpdate = true;
+const wxU = {
+  uWxTex: { value: wxTex },
+  uWxMin: { value: new THREE.Vector2(wxField.ox, wxField.oz) },
+  uWxInv: { value: 1 / WXF_SPAN },
+  /** Absolute Y of the mist ceiling; −1e9 stands the slab down. */
+  uFogTop: { value: -1e9 },
+  /** The WEATHER FX dial's master gate over fog and puddles. */
+  uFogAmt: { value: 1 },
+  uFogC: { value: new THREE.Vector3(0.6, 0.63, 0.66) },
+  /** Where the cloud base begins to be something you are inside. */
+  uFogDeck: { value: CLOUD_DECK_Y - 120 },
+  uPudOn: { value: 1 },
+  uPudSky: { value: new THREE.Vector3(0.5, 0.6, 0.7) },
+  uPudGnd: { value: new THREE.Vector3(0.1, 0.12, 0.13) },
+  uPudSun: { value: 0 },
+  uSunW: { value: new THREE.Vector3(0, 1, 0) },
+  uCamW: { value: new THREE.Vector3() },
+  uWxT: { value: 0 },
+};
+// The dome and the composite were built long before this existed; their GLSL
+// declares these and the values arrive here, at module scope, before the
+// first frame ever compiles a shader.
+Object.assign(skyMat.uniforms, { uWxTex: wxU.uWxTex, uWxMin: wxU.uWxMin, uWxInv: wxU.uWxInv });
+Object.assign(compMat.uniforms, { uWxTex: wxU.uWxTex, uWxMin: wxU.uWxMin, uWxInv: wxU.uWxInv,
+  uFogTop: wxU.uFogTop, uFogAmt: wxU.uFogAmt, uFogC: wxU.uFogC, uFogDeck: wxU.uFogDeck });
+const wxL = { cover: 0, rain: 0, fog: 0, wet: 0 };   // sampled at the truck
+const wxCam = { rain: 0, fog: 0 };                    // …and at the camera
+let wxBuiltAt = -1e9;
+let wxFogT = 0;
+const wxWind = { x: 0, z: 0, kmh: 12 };               // m/s toward, world axes
+let wxWarnFor = '';
 // ── the weather that is actually happening ─────────────────────────
 // The chain below invents a front every couple of minutes out of a six-entry
 // table. It is a decent toy and it stays — as the OFFLINE fallback, and because
@@ -15723,6 +15873,16 @@ const WX_PIN = ((): Sky | null => {
   const v = new URLSearchParams(location.search).get('wx');
   return v === 'clear' || v === 'haze' || v === 'rain' || v === 'storm' ? v : null;
 })();
+/** ?fog=0..1 pins the regional mist the way ?wx pins the sky, and ?wet=0..1
+ *  floods the ground — a puddle screenshot must not wait out a storm. */
+const WX_FOG = ((): number | null => {
+  const v = new URLSearchParams(location.search).get('fog');
+  return v === null ? null : clamp(Number(v) || 0, 0, 1);
+})();
+const WX_WET = ((): number | null => {
+  const v = new URLSearchParams(location.search).get('wet');
+  return v === null ? null : clamp(Number(v) || 0, 0, 1);
+})();
 function rollWeather(now: number): void {
   if (WX_PIN) { wx.next = WX_PIN; return; }
   if (live.on) return;                    // the real sky is in charge
@@ -15736,20 +15896,90 @@ function rollWeather(now: number): void {
     : b === 'alpine' ? ['clear', 'haze', 'clear', 'storm', 'haze', 'rain']
     : ['clear', 'haze', 'clear', 'rain', 'haze', 'storm'];
   wx.next = table[Math.floor(Math.random() * table.length)];
-  wx.warn = wx.next === 'storm' && wx.sky !== 'storm' ? now + 12000 : 0;
 }
 function stepWeather(now: number, dt: number): void {
   rollWeather(now);
   void fetchLiveWeather();
   const t = WX[wx.next];
   const k = Math.min(1, dt * 0.12);                 // fronts arrive slowly
-  // Live cover is a measurement and beats the sky state's nominal figure: an
-  // overcast dry day and a rainy one are the same word and a different picture.
-  wx.cloud += ((live.on ? WX_LIVE.cloud : t.cloud) - wx.cloud) * k;
-  wx.rain += (t.rain - wx.rain) * k;
+  // A PIN IS A FIXTURE, NOT A FORECAST. ?wx=storm eased in from clear on the
+  // same eight-second clock a real front takes, so a harness that booted,
+  // settled and asked found cover 0.09 and a sky still calling itself CLEAR —
+  // sixteen seconds of a fixture that had not arrived yet. Pinned, the
+  // regional scalars snap; the FIELD still varies them over the ground.
+  if (WX_PIN) {
+    wx.cloud = t.cloud;
+    wx.rain = t.rain;
+  } else {
+    // Live cover is a measurement and beats the sky state's nominal figure: an
+    // overcast dry day and a rainy one are the same word and a different picture.
+    wx.cloud += ((live.on ? WX_LIVE.cloud : t.cloud) - wx.cloud) * k;
+    wx.rain += (t.rain - wx.rain) * k;
+  }
   wx.sky = wx.cloud > 0.85 ? 'storm' : wx.rain > 0.15 ? 'rain' : wx.cloud > 0.25 ? 'haze' : 'clear';
-  // Ground stays wet after the rain stops, and dries out slowly.
-  wx.wet = clamp(wx.wet + (wx.rain > 0.1 ? dt * 0.09 : -dt * 0.02), 0, 1);
+  // THE WARNING WORKS ON REAL WEATHER NOW. It used to be set inside the
+  // synthetic roll, which stands down whenever the live feed is up — so the
+  // one storm that was actually coming was the one that arrived unannounced.
+  // wx.next is the target under every driver, so the watch lives here.
+  if (wx.next === 'storm' && wx.sky !== 'storm') {
+    if (wxWarnFor !== 'storm') { wx.warn = now + 12000; wxWarnFor = 'storm'; }
+  } else if (wx.next !== 'storm') wxWarnFor = '';
+  // ── the field: spread the regional sky over the ground ──
+  {
+    const toDeg = (live.on ? live.windDeg : 250) + 180;   // FROM → toward
+    const tw = (toDeg * Math.PI) / 180;
+    wxWind.kmh = live.on ? live.windKmh : 12;
+    const ms = wxWind.kmh / 3.6;
+    // Compass bearing to world axes: +x east, −z north.
+    wxWind.x = Math.sin(tw) * ms;
+    wxWind.z = -Math.cos(tw) * ms;
+    // The regional MIST term — the one weather number the upstream feed does
+    // not carry, modelled from what it does: mist wants a quiet, damp, cooling
+    // sky. Night and dawn under thin cover, calm air, ground still wet from
+    // rain that has stopped; a storm brings its own murk. The biome scales it
+    // — the desert almost never fogs, the tropics haze daily.
+    const calm = 1 - clamp(wxWind.kmh / 30, 0, 1);
+    const mistB = biome.name === 'arid' ? 0.25 : biome.name === 'tropical' ? 1.15 : 1;
+    wxFogT = WX_FOG !== null ? WX_FOG
+      : clamp(((1 - dayF) * 0.5 * (1 - wx.cloud * 0.4) * calm
+        + wxField.wetMean * 0.6 * (1 - wx.rain)
+        + wx.rain * wx.cloud * 0.3) * mistB, 0, 1);
+    const stale = now - wxBuiltAt;
+    const moved = wxRecenter(wxField, state.x, state.z);
+    if (moved || stale > 1800) {
+      buildField(wxField, {
+        t: now / 1000, windX: wxWind.x, windZ: wxWind.z,
+        cover: wx.cloud, rain: wx.rain, fog: wxFogT,
+        dt: clamp(stale / 1000, 0, 30), dayF,
+      }, sampleHeight);
+      if (WX_WET !== null) seedWet(wxField, WX_WET);
+      wxTex.needsUpdate = true;
+      wxU.uWxMin.value.set(wxField.ox, wxField.oz);
+      wxU.uFogTop.value = wxFogT > 0.01 ? wxField.fogTop : -1e9;
+      wxBuiltAt = now;
+    }
+    const l = wxAt(wxField, state.x, state.z);
+    wxL.cover = l.cover; wxL.rain = l.rain; wxL.fog = l.fog; wxL.wet = l.wet;
+    const c = wxAt(wxField, camera.position.x, camera.position.z);
+    wxCam.rain = c.rain; wxCam.fog = c.fog;
+    // The wheels stand on the ground UNDER THEM: the global wet is now simply
+    // the field read at the truck, so grip, drag and the WET bar all follow
+    // the rain you actually drove through.
+    wx.wet = wxL.wet;
+    // Puddle and fog support, per frame — cheap vector copies.
+    wxU.uSunW.value.copy(SUN_DIR);
+    wxU.uCamW.value.copy(camera.position);
+    wxU.uWxT.value = now / 1000;
+    wxU.uPudSun.value = clamp(SUN_DIR.y * 3, 0, 1) * (1 - wx.cloud * 0.8);
+    const z0 = skyMat.uniforms.uZenith.value as THREE.Vector3;
+    const h0 = skyMat.uniforms.uHorizon.value as THREE.Vector3;
+    // A puddle reflects the sky it lies under; mist is LIT by it. Both take
+    // last frame's palette, which at these rates of change is this frame's.
+    wxU.uPudSky.value.copy(h0).lerp(z0, 0.35);
+    wxU.uPudGnd.value.copy(z0).multiplyScalar(0.35);
+    wxU.uFogC.value.set(
+      h0.x * 0.55 + 0.30 * dayF, h0.y * 0.55 + 0.32 * dayF, h0.z * 0.55 + 0.34 * dayF);
+  }
   // Everything that was a fixed brightness is now scaled by where the sun is.
   // The night floor is not zero: a pitch-black world is not atmospheric, it is
   // unplayable, so moonlight keeps about a tenth of the key and the hemisphere
@@ -15922,7 +16152,9 @@ function stepWeather(now: number, dt: number): void {
 
 // Rain lives in a box that FOLLOWS the camera and wraps, so a few hundred
 // streaks look like weather everywhere instead of a patch you drive out of.
-const RAIN_N = 900, RAIN_BOX = 46;
+// 1300, from 900, now that a drizzle DRAWS fewer of them — the pool is sized
+// for the downpour and the drawRange is sized for the weather.
+const RAIN_N = 1300, RAIN_BOX = 46;
 const rainPos = new Float32Array(RAIN_N * 3);
 for (let i = 0; i < RAIN_N; i++) {
   rainPos[i * 3] = (Math.random() - 0.5) * RAIN_BOX;
@@ -15933,7 +16165,14 @@ const rainGeo = new THREE.BufferGeometry();
 rainGeo.setAttribute('position', new THREE.BufferAttribute(rainPos, 3));
 const rainMat = new THREE.ShaderMaterial({
   transparent: true, depthWrite: false,
-  uniforms: { uAmt: { value: 0 } },
+  uniforms: { uAmt: { value: 0 },
+    /** The streak's SCREEN direction — the world slant (wind + fall) pushed
+     *  through the camera each frame, so the rain leans the way the grass
+     *  and the cloud deck already lean. */
+    uDir2: { value: new THREE.Vector2(0, 1) },
+    /** Lit by the hour, not hardcoded: the same pale blue was reading at
+     *  midnight and noon alike, which is how rain looks pasted on. */
+    uCol: { value: new THREE.Vector3(0.72, 0.82, 0.92) } },
   vertexShader: `
     uniform float uAmt; varying float vA;
     void main(){
@@ -15944,25 +16183,47 @@ const rainMat = new THREE.ShaderMaterial({
     }`,
   fragmentShader: `
     varying float vA;
+    uniform vec2 uDir2; uniform vec3 uCol;
     void main(){
-      // A streak, not a dot: squash the sprite vertically.
-      vec2 d = (gl_PointCoord - 0.5) * vec2(4.0, 1.0);
+      // A streak, not a dot — squashed across, long along, and the long axis
+      // is the slant the wind gives the fall.
+      vec2 c = gl_PointCoord - 0.5;
+      vec2 d = vec2(dot(c, vec2(uDir2.y, -uDir2.x)), dot(c, uDir2)) * vec2(4.0, 1.0);
       if (dot(d, d) > 0.25) discard;
-      gl_FragColor = vec4(0.72, 0.82, 0.92, vA * 0.5);
+      gl_FragColor = vec4(uCol, vA * 0.5);
     }`,
 });
 const rain = new THREE.Points(rainGeo, rainMat);
 rain.frustumCulled = false;
 scene.add(rain);
+const rainSlant = new THREE.Vector3();
 function stepRain(dt: number): void {
-  rainMat.uniforms.uAmt.value = wx.rain;
-  rain.visible = wx.rain > 0.02;
+  // THE RAIN WHERE THE CAMERA IS. The box follows the camera, so the field is
+  // read there too — drive out from under the shower and the streaks thin
+  // and stop, while the veil of it stays visible behind you in the fog term.
+  const amt = wxCam.rain;
+  rainMat.uniforms.uAmt.value = amt;
+  rain.visible = amt > 0.02;
   if (!rain.visible) return;
+  // A drizzle is FEWER drops, not fainter ones — density is the number the
+  // eye actually reads. The pool is sized for the storm; the range for now.
+  rainGeo.setDrawRange(0, Math.max(60, Math.floor(RAIN_N * clamp(amt * 1.4, 0, 1))));
+  const day = 0.22 + 0.78 * dayF;
+  (rainMat.uniforms.uCol.value as THREE.Vector3).set(0.72 * day, 0.82 * day, 0.92 * day);
+  // World slant → screen slant, through this frame's camera. gl_PointCoord's
+  // y runs DOWN, so the projected y flips.
+  rainSlant.set(wxWind.x * 0.55, -(14 + amt * 12), wxWind.z * 0.55)
+    .normalize().transformDirection(camera.matrixWorldInverse);
+  const sl = Math.hypot(rainSlant.x, rainSlant.y);
+  const d2 = rainMat.uniforms.uDir2.value as THREE.Vector2;
+  if (sl > 0.05) d2.set(rainSlant.x / sl, -rainSlant.y / sl); else d2.set(0, 1);
   const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
-  const fall = (14 + wx.rain * 12) * dt;
+  const fall = (14 + amt * 12) * dt;
+  // …and the drops themselves travel on the wind they fell through.
+  const wdx = wxWind.x * 0.55 * dt, wdz = wxWind.z * 0.55 * dt;
   for (let i = 0; i < RAIN_N; i++) {
     let y = rainPos[i * 3 + 1] - fall;
-    let x = rainPos[i * 3], z = rainPos[i * 3 + 2];
+    let x = rainPos[i * 3] + wdx, z = rainPos[i * 3 + 2] + wdz;
     // Wrap relative to the camera in all three axes.
     if (y < cy - RAIN_BOX * 0.35) { y += RAIN_BOX; x = cx + (Math.random() - 0.5) * RAIN_BOX; z = cz + (Math.random() - 0.5) * RAIN_BOX; }
     if (x - cx > RAIN_BOX / 2) x -= RAIN_BOX; else if (cx - x > RAIN_BOX / 2) x += RAIN_BOX;
@@ -16057,10 +16318,13 @@ function emitDust(x: number, y: number, z: number, vx: number, vz: number, water
   dustPos[i * 3] = x + (Math.random() - 0.5) * spread;
   dustPos[i * 3 + 1] = y + (water ? 0.05 : 0.15);
   dustPos[i * 3 + 2] = z + (Math.random() - 0.5) * spread;
-  // A splash is thrown OUT and up hard, then falls back; dust drifts.
-  dustVel[i * 3] = vx + (Math.random() - 0.5) * (water ? 5.5 : 2.2);
+  // A splash is thrown OUT and up hard, then falls back; dust drifts — and
+  // BOTH ride the wind that is already leaning the grass and driving the
+  // deck. The one weather vector this world has finally reaches the air the
+  // particles float in.
+  dustVel[i * 3] = vx + wxWind.x * (water ? 0.15 : 0.4) + (Math.random() - 0.5) * (water ? 5.5 : 2.2);
   dustVel[i * 3 + 1] = water ? 2.2 + Math.random() * 2.6 : 0.7 + Math.random() * 1.1;
-  dustVel[i * 3 + 2] = vz + (Math.random() - 0.5) * (water ? 5.5 : 2.2);
+  dustVel[i * 3 + 2] = vz + wxWind.z * (water ? 0.15 : 0.4) + (Math.random() - 0.5) * (water ? 5.5 : 2.2);
   dustLife[i] = 1;
   dustSeed[i] = Math.random();
   dustKind[i] = water ? 1 : 0;
@@ -16638,6 +16902,14 @@ function tapeApplyHead(head: TapeHead): Record<string, number> {
   if (head.wx === 'clear' || head.wx === 'haze' || head.wx === 'rain' || head.wx === 'storm') {
     wx.next = head.wx as Sky;
   }
+  // THE SURFACE THE RUN WAS DRIVEN ON. Where the head carries numbers, snap
+  // the regional state to them and flood the wet memory — grip, drag and the
+  // speed cap all hang off `wet`, and a replay on the wrong surface is a
+  // different drive wearing the same inputs. The blend then continues from
+  // here rather than from whatever today's sky happened to be doing.
+  if (Number.isFinite(head.wxc)) wx.cloud = clamp(head.wxc as number, 0, 1);
+  if (Number.isFinite(head.wxr)) wx.rain = clamp(head.wxr as number, 0, 1);
+  if (Number.isFinite(head.wxw)) seedWet(wxField, clamp(head.wxw as number, 0, 1));
   return prior;
 }
 function tapeRestoreDials(prior: Record<string, number>): void {
@@ -19307,6 +19579,17 @@ function meshHeightAt(x: number, z: number): number | null {
   live: live.on,
   tempC: live.tempC, windKmh: live.windKmh, windDeg: live.windDeg, wmo: live.code,
   sky: wx.sky, cloud: +wx.cloud.toFixed(2), rain: +wx.rain.toFixed(2),
+});
+/** The field, as the truck and the camera see it — the instrument the whole
+ *  overhaul is tuned through. `regional` is what the driver asked for;
+ *  `local` is what this square of world actually got. */
+(window as unknown as { __wx?: object }).__wx = (): object => ({
+  regional: { cover: +wx.cloud.toFixed(2), rain: +wx.rain.toFixed(2), fog: +wxFogT.toFixed(2), sky: wx.sky },
+  local: { cover: +wxL.cover.toFixed(2), rain: +wxL.rain.toFixed(2), fog: +wxL.fog.toFixed(2), wet: +wxL.wet.toFixed(2) },
+  cam: { rain: +wxCam.rain.toFixed(2), fog: +wxCam.fog.toFixed(2) },
+  fogTop: Math.round(wxField.fogTop), wetMean: +wxField.wetMean.toFixed(3),
+  grid: { ox: wxField.ox, oz: wxField.oz },
+  wind: { x: +wxWind.x.toFixed(2), z: +wxWind.z.toFixed(2), kmh: Math.round(wxWind.kmh) },
 });
 /** Which palette the world settled on, and whether real cover chose it or the
  *  latitude guess is still standing in. */
@@ -23790,7 +24073,9 @@ const tune = { steer: 1, susp: 1, grip: 1, tyreWear: 1 };
 function stepRig(dt: number, v: number, q: number, sunUp: number): void {
   if (dt <= 0) return;
   // Solar: the array only makes power with the sun up and the sky open.
-  rig.solarKw = SOLAR_KW * clamp(sunUp, 0, 1) * (1 - wx.cloud * 0.65);
+  // The array reads the sky OVER THE TRUCK — drive out from under the front
+  // and the panels wake before the horizon clears.
+  rig.solarKw = SOLAR_KW * clamp(sunUp, 0, 1) * (1 - wxL.cover * 0.65);
   // Draw: a standing load plus a square law on speed. Tuned so a full pack
   // runs about three hours flat out, and daylight cruising roughly breaks
   // even — which is the whole point of a solar overlander.
@@ -23919,6 +24204,11 @@ interface TapeHead {
   v: number; build: string; at: number; lat: number; lon: number;
   hdg: number; t: string; wx: string; steps: number; secs: number;
   dials?: Record<string, number>;
+  /** The weather as NUMBERS — cover, rain, ground wetness. The word above
+   *  cannot drive physics: `wet` feeds grip, drag and the speed cap, so a
+   *  run banked in a downpour used to replay on whatever surface the sky
+   *  happened to be serving. Optional: old banked tapes simply predate it. */
+  wxc?: number; wxr?: number; wxw?: number;
 }
 interface Tape { head: TapeHead; steps: Uint8Array; keys: Float32Array }
 /**
@@ -24106,6 +24396,7 @@ function tapeStop(): Tape | null {
   const [lat, lon] = localToLatLon(tapeRec.keys[0], tapeRec.keys[1]);
   tapeHead = { v: TAPE_V, build: TAPE_BUILD, at: Date.now(), lat, lon,
     hdg: (tapeRec.keys[2] * 180) / Math.PI, t: TIME_MODES[timeMode], wx: wx.sky,
+    wxc: +wx.cloud.toFixed(2), wxr: +wx.rain.toFixed(2), wxw: +wx.wet.toFixed(2),
     steps: n, secs: +tapeRec.t.toFixed(2),
     dials: Object.fromEntries(DIALS.map((d) => [d.key, d.at])) };
   const tape: Tape = {
@@ -24684,6 +24975,13 @@ function tick(now: number): void {
     // still on tarmac, or dropping two wheels onto a gravel verge mid-bend,
     // was a thing the physics could not know. Now it is the whole feel of it.
     wheelMu[wI] = muFor(sk, surfQ, wetNow);
+    // STANDING WATER IS ITS OWN SURFACE. Where the shader pools a puddle the
+    // wheel finds one too — same pattern, CPU side — and a film the tread has
+    // to cut through costs a slice of whatever grip the wet had left.
+    if (sk === 'road' && wetNow > 0.45) {
+      const pd = puddleAt(wxw, wzw, wetNow);
+      if (pd > 0.3) wheelMu[wI] *= 1 - pd * 0.16;
+    }
     wheelWorld.push([wxw, wzw]);
     wheelSurf.push(sk);
     // ONE continuous field, lift already folded in — see tyreHeight. The kerb
@@ -24882,18 +25180,25 @@ function tick(now: number): void {
     const anyWater = wheelSurf.some((k) => k === 'water');
     // Wet ground raises no dust — but water itself throws plenty.
     // A sliding tyre tears up far more than a rolling one.
-    dustBudget += v * dt * (anyWater ? 2.2 : 1.15 * (1 - wx.wet * 0.9)) * (1 + skid * 1.7);
+    // Wet ground raises no dust — but a soaked ROAD throws spray, and the
+    // budget has to carry it or the puddles stay silent at speed.
+    dustBudget += v * dt * (anyWater ? 2.2
+      : 1.15 * (1 - wx.wet * 0.9) + (wx.wet > 0.45 ? 1.2 * wx.wet : 0)) * (1 + skid * 1.7);
     while (dustBudget >= 1) {
       dustBudget -= 1;
       // WATER throws from the FRONT wheels — that is where a bow wave comes
       // from; dry ground throws from the rears, where the drive is.
       const water = wheelSurf[0] === 'water' || wheelSurf[2] === 'water';
       const i = water ? Math.floor(Math.random() * 2) : 2 + Math.floor(Math.random() * 2);
-      // Tarmac raises nothing — unless the tyres are sliding across it, which
-      // raises smoke.
-      if (wheelSurf[i] === 'road' && skid < 0.3) continue;
+      // Tarmac raises nothing — unless the tyres are sliding across it
+      // (smoke), or STANDING WATER is on it: a puddle taken at speed throws a
+      // tail of spray, which is the cheapest honest proof the water is there.
+      // Same pattern the shader pools, CPU side, so the spray rises where the
+      // water is seen.
       const [wxw, wzw] = wheelWorld[i];
-      const wet = wheelSurf[i] === 'water';
+      const pud = wheelSurf[i] === 'road' && wx.wet > 0.45 ? puddleAt(wxw, wzw, wx.wet) : 0;
+      if (wheelSurf[i] === 'road' && skid < 0.3 && pud < 0.35) continue;
+      const wet = wheelSurf[i] === 'water' || pud >= 0.35;
       // Barely any launch velocity: dust is LEFT BEHIND, not thrown backward.
       // Pushing it back down the heading drove it straight into the chase
       // camera and greyed out the whole view.
@@ -24975,7 +25280,7 @@ function tick(now: number): void {
   // Same shape and for the same reason: a sliced CPU sweep the shader reads,
   // rebuilt when the truck leaves the middle of it rather than on a tick.
   sunmFrame();
-  audio.update(state.speed, throttle, surfKind, groundedF, wx.rain, engRev, engGear, skid,
+  audio.update(state.speed, throttle, surfKind, groundedF, wxL.rain, engRev, engGear, skid,
     surfKind === 'water' ? 0 : surfQ, wheelSlipL);
   // The rig against the world: bodywork on a wall while moving, the hull's
   // wash through water, and the slap of arriving in it with any speed on.
@@ -28108,6 +28413,13 @@ const DIAL_GROUPS: DialGroup[] = [
         for (const h of herds) h.visible = wildlifeOn;
       }),
       dial('cloud', 'CLOUD SHADOW', ['OFF', 'ON'], 1, (i) => { cloudShadowOn = i === 1; }),
+      // The overhaul's kill switch: fog and puddles are shader arithmetic, not
+      // passes, but a phone that is struggling deserves one dial that takes
+      // the whole treatment off rather than four that each take a piece.
+      dial('wxfx', 'WEATHER FX', ['FULL', 'OFF'], 0, (i) => {
+        wxU.uFogAmt.value = i === 0 ? 1 : 0;
+        wxU.uPudOn.value = i === 0 ? 1 : 0;
+      }),
       // One extra scene pass, so the right setting is a property of the phone
       // rather than of the scene. MED is the shipped default; LOW is the one to
       // reach for when the frame counter in the corner goes gold.
@@ -29313,6 +29625,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         wx.sky === 'storm' ? UI.bad : UI.dim);
       const windKmh = live.on ? live.windKmh : 12;
       erow('WIND', cells(clamp(windKmh / 60, 0, 1)), windKmh > 38 ? UI.gold : UI.soft);
+      // Fog earns a row only when you are in some — a permanent zero bar is
+      // furniture, and this column is already five rows deep.
+      if (wxL.fog > 0.12) erow('FOG', cells(wxL.fog), UI.soft);
     }
   }
   // The mission card and the survey-claim toast are DOM now (client/
