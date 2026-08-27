@@ -82,16 +82,34 @@ export function createOverlays(
   /* The menu's scrim is translucent by design — anything ghosting through it
      reads as a defect, so the overlays stand down while the menu is up. */
   body.menu-open .ov { display: none !important; }
+  /* THE BRACKET IS THE AFFORDANCE MARK — the canvas panel idiom (dim rule,
+     accent corner ticks) carried onto the DOM buttons, so "press me" reads
+     the same in both technologies (the audit's finding 3). The gradients ARE
+     the ticks; --bk is each control's accent colour. Elements wearing this
+     class declare background-color, never the background shorthand — the
+     shorthand would reset these images. */
+  .bkt { background-repeat: no-repeat;
+    background-image:
+      linear-gradient(var(--bk), var(--bk)), linear-gradient(var(--bk), var(--bk)),
+      linear-gradient(var(--bk), var(--bk)), linear-gradient(var(--bk), var(--bk)),
+      linear-gradient(var(--bk), var(--bk)), linear-gradient(var(--bk), var(--bk)),
+      linear-gradient(var(--bk), var(--bk)), linear-gradient(var(--bk), var(--bk));
+    background-size: 8px 2px, 2px 8px, 8px 2px, 2px 8px, 8px 2px, 2px 8px, 8px 2px, 2px 8px;
+    background-position: 0 0, 0 0, 100% 0, 100% 0, 0 100%, 0 100%, 100% 100%, 100% 100%; }
   #ov-menu { top: calc(env(safe-area-inset-top, 0px) + 46px); right: 10px;
-    cursor: pointer; color: ${C.edge}; border: 1px solid ${C.edge};
-    background: rgba(8,20,23,0.78); padding: 4px 10px 3px; font: inherit;
+    cursor: pointer; color: ${C.edge}; border: 1px solid ${C.dim}; --bk: ${C.edge};
+    background-color: rgba(8,20,23,0.78); padding: 4px 10px 3px; font: inherit;
     font-family: inherit; font-size: 12px; letter-spacing: 1px; }
-  #ov-mission, #ov-toast { top: calc(env(safe-area-inset-top, 0px) + 88px);
+  /* ON the message rail: --msg-y is exported from hudResize (main.ts) as the
+     row under the canvas rail's transient text, in CSS px. The card and toast
+     used to hold two more fixed verticals (88/168px) of their own — four
+     heights for one voice channel, the audit's finding 8. */
+  #ov-mission, #ov-toast { top: calc(env(safe-area-inset-top, 0px) + var(--msg-y, 88px));
     left: 50%; transform: translateX(-50%); width: max-content;
     max-width: min(92vw, 400px); background: rgba(8,20,23,0.85);
     border: 1px solid; padding: 6px 12px 6px; text-align: center; display: none; }
-  #ov-toast { top: calc(env(safe-area-inset-top, 0px) + 168px); border-color: ${C.good};
-    pointer-events: none; }
+  #ov-toast { top: calc(env(safe-area-inset-top, 0px) + var(--msg-y, 88px) + 76px);
+    border-color: ${C.good}; pointer-events: none; }
   .ov .kicker { font-size: 10px; color: ${C.dim}; letter-spacing: 1px; }
   .ov .head { font-size: 16px; font-weight: 700; margin: 1px 0;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -102,15 +120,16 @@ export function createOverlays(
   .ov .aside { margin-top: 3px; font-size: 10px; color: ${C.dim}; cursor: pointer;
     display: none; pointer-events: auto; text-decoration: underline; text-underline-offset: 2px; }
   .ov .ok { margin: 5px auto 1px; padding: 4px 26px 3px; cursor: pointer; display: none;
-    pointer-events: auto; color: ${C.good}; border: 1px solid ${C.good};
-    background: rgba(111,224,160,0.08); font: inherit; font-family: inherit;
+    pointer-events: auto; color: ${C.good}; border: 1px solid ${C.dim}; --bk: ${C.good};
+    background-color: rgba(111,224,160,0.08); font: inherit; font-family: inherit;
     font-size: 12px; font-weight: 700; letter-spacing: 2px; }
   /* BELOW the canvas rail, not on top of it: --rail-b is exported from
      hudResize in CSS pixels (the rail lives in HUD px, this chip in CSS px,
      and only that function knows the scale). At a fixed 46px this chip lay
      straight across the clock and the rewind handle. */
   #ov-task { top: calc(env(safe-area-inset-top, 0px) + var(--rail-b, 160px)); left: 10px; cursor: pointer;
-    color: ${C.gold}; border: 1px solid ${C.gold}; background: rgba(8,20,23,0.78);
+    color: ${C.gold}; border: 1px solid ${C.dim}; --bk: ${C.gold};
+    background-color: rgba(8,20,23,0.78);
     padding: 4px 9px 3px; font: inherit; font-family: inherit; font-size: 10px;
     letter-spacing: 1px; display: none; }
   #ov-task .ico { font-family: '${ICON_FONT}'; font-weight: 900; margin-right: 0.5em; }
@@ -118,7 +137,7 @@ export function createOverlays(
      not a dialog. */
   #ov-term-go { bottom: calc(env(safe-area-inset-bottom, 0px) + 168px); left: 50%;
     transform: translateX(-50%); cursor: pointer; color: ${C.good};
-    border: 1px solid ${C.good}; background: rgba(8,20,23,0.85);
+    border: 1px solid ${C.dim}; --bk: ${C.good}; background-color: rgba(8,20,23,0.85);
     padding: 5px 12px 4px; font: inherit; font-family: inherit; font-size: 11px;
     letter-spacing: 1px; display: none; }
   #ov-term-go .ico { font-family: '${ICON_FONT}'; font-weight: 900; margin-right: 0.5em; }
@@ -141,7 +160,7 @@ export function createOverlays(
 
   const menuBtn = document.createElement('button');
   menuBtn.id = 'ov-menu';
-  menuBtn.className = 'ov ui';
+  menuBtn.className = 'ov ui bkt';
   menuBtn.textContent = 'MENU';
   menuBtn.addEventListener('click', onMenu);
   document.body.appendChild(menuBtn);
@@ -175,7 +194,7 @@ export function createOverlays(
   mab.addEventListener('click', (e) => { e.stopPropagation(); onSetAside(); });
   m.root.appendChild(mab);
   const mok = document.createElement('button');
-  mok.className = 'ok';
+  mok.className = 'ok bkt';
   mok.textContent = 'OK';
   mok.addEventListener('click', (e) => { e.stopPropagation(); onOk(); });
   m.root.appendChild(mok);
@@ -183,7 +202,7 @@ export function createOverlays(
   // glance, parked top-left where it stops competing with the road.
   const chip = document.createElement('button');
   chip.id = 'ov-task';
-  chip.className = 'ov ui';
+  chip.className = 'ov ui bkt';
   const chipIco = document.createElement('span');
   chipIco.className = 'ico';
   chipIco.textContent = ICON.flag;
@@ -198,7 +217,7 @@ export function createOverlays(
   // ── the terminal ──
   const termGo = document.createElement('button');
   termGo.id = 'ov-term-go';
-  termGo.className = 'ov ui';
+  termGo.className = 'ov ui bkt';
   const tgIco = document.createElement('span');
   tgIco.className = 'ico';
   tgIco.textContent = ICON.gps;

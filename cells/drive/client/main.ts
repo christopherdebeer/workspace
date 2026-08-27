@@ -26965,15 +26965,19 @@ function hudResize(): void {
   // pixel is fractional-device; half-step detail additionally wants an even
   // count, which STOCK and FINE both give).
   const target = (innerWidth < 760 ? 2 : 3) * hudSize;
-  // The DOM task chip sits BELOW the rail, and the rail lives in HUD px while
-  // the chip lives in CSS px — so the boundary is exported here, where the
-  // scale is settled. Before this the chip sat at a fixed 46px and lay
-  // straight across the clock and the rail rows (the audit's overlap note).
-  document.body.style.setProperty('--rail-b', `${(CHIP_Y0 + CHIP_H * 3 + 4) * hudS}px`);
   const n = Math.max(hudDpr, Math.round(target * dpr));   // device px per HUD px
   hudS = n / dpr;
   HW = Math.max(80, Math.round(innerWidth / hudS));
   HH = Math.max(80, Math.round(innerHeight / hudS));
+  // The DOM overlays sit ON the canvas grid, but the rail lives in HUD px
+  // while they live in CSS px — so the boundaries are exported here, where the
+  // scale is settled (and AFTER it is settled: --rail-b used to read the
+  // previous resize's hudS). --rail-b is the bottom of the chip rail, for the
+  // task chip; --msg-y is the row under the canvas message rail, for the
+  // mission card and toast — one vertical for every transient voice instead
+  // of the fixed 88/168px the audit's finding 8 counted.
+  document.body.style.setProperty('--rail-b', `${(CHIP_Y0 + CHIP_H * 3 + 4) * hudS}px`);
+  document.body.style.setProperty('--msg-y', `${Math.round((Math.round(HH * 0.26) + 31) * hudS)}px`);
   hud.width = HW * hudDpr; hud.height = HH * hudDpr;
   hctx.setTransform(hudDpr, 0, 0, hudDpr, 0, 0);
   hctx.imageSmoothingEnabled = false;
@@ -27005,6 +27009,21 @@ function frame(x: number, y: number, w: number, h: number, edge = UI.edge): void
     hctx.fillRect(cx + (dx < 0 ? -3 : 0), cy, 4, 1);
     hctx.fillRect(cx, cy + (dy < 0 ? -3 : 0), 1, 4);
   }
+}
+// A TAPPABLE WEARS BRACKETS. The corner idiom from `panel`, shrunk to a bare
+// mark: four ticks around the hit box, no fill and no rule, ink under colour
+// like every other glyph on the rail — so "this is a control" reads the same
+// on the canvas as it does on the DOM buttons (the audit's finding 3: rail
+// chips looked like labels and screen-edge affordances went undiscovered).
+function corners(x: number, y: number, w: number, h: number, col: string): void {
+  const arms: Array<[number, number, number, number]> = [];
+  for (const [cx, cy, dx, dy] of [[x, y, 1, 1], [x + w - 1, y, -1, 1], [x, y + h - 1, 1, -1], [x + w - 1, y + h - 1, -1, -1]] as const) {
+    arms.push([cx + (dx < 0 ? -3 : 0), cy, 4, 1], [cx, cy + (dy < 0 ? -3 : 0), 1, 4]);
+  }
+  hctx.fillStyle = UI.ink;
+  for (const [ax, ay, aw, ah] of arms) hctx.fillRect(ax - 1, ay - 1, aw + 2, ah + 2);
+  hctx.fillStyle = col;
+  for (const [ax, ay, aw, ah] of arms) hctx.fillRect(ax, ay, aw, ah);
 }
 // Legibility WITHOUT a box: a one-pixel dark outline around the glyphs. Boxes
 // are reserved for real instruments (things you read a value off, or press);
@@ -29410,6 +29429,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const held = rewind.at !== null;
     rewindRect = { x: CHIP_X, y: ry, w: 15, h: 9 };
     const col = held || rewindPaused ? UI.gold : UI.dim;
+    corners(CHIP_X - 2, ry - 1, 19, 11, col);
     // EVERY GLYPH ON THE RAIL WEARS THE INK EDGE. These were bare fills, the
     // one part of the glass without the outline the rest of the HUD survives
     // bright ground by — over sunlit grass the tab simply vanished (the
@@ -29457,6 +29477,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const ay = CHIP_Y0 + CHIP_H;              // rail row 1
     const w = textSW('AUTO');
     autoRect = { x: CHIP_X + 26, y: ay, w, h: 9 };
+    corners(CHIP_X + 24, ay - 1, w + 4, 11, auto.on ? UI.gold : UI.dim);
     textEdgeS('AUTO', CHIP_X + 26, ay + 1, auto.on ? UI.gold : UI.dim);
     if (auto.on) {
       const a = auto.out;
@@ -29490,6 +29511,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const py = CHIP_Y0 + CHIP_H * 2;
     const ww = textSW('WPT');
     poiRect = { x: CHIP_X + 26, y: py, w: ww, h: 9 };
+    corners(CHIP_X + 24, py - 1, ww + 4, 11, poiVis === 0 ? UI.dim : UI.gold);
     textEdgeS('WPT', CHIP_X + 26, py + 1, poiVis === 0 ? UI.dim : UI.gold);
     textEdgeS(POI_MODES[poiVis], CHIP_X + 26 + ww + 4, py + 1,
       poiVis === 0 ? UI.dim : UI.soft);
