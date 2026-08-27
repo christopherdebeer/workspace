@@ -7515,7 +7515,7 @@ const NAV_MIN = (22 * Math.PI) / 180; // below this it is a kink, not a call
 function wayAhead(
   x: number, z: number, heading: number,
   reach: number, maxHops: number, namedOnly: boolean,
-): { pts: Array<[number, number]>; name?: string } | null {
+): { pts: Array<[number, number]>; name?: string; hw?: number } | null {
   // The seg under the car — same test wayAt runs, but keeping the seg.
   let cur: Seg | null = null, bd = Infinity;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
@@ -7574,7 +7574,10 @@ function wayAhead(
     total += l; ex = px; ez = pz;
     pts.push([ex, ez]);
   }
-  return { pts, name };
+  // …and the half-width, which the autopilot spends: the racing line is
+  // exactly the road's width minus the truck's, and only this function knows
+  // the road's.
+  return { pts, name, hw };
 }
 /**
  * THE CALL, READ OFF A POLYLINE — which polyline is the caller's business.
@@ -15957,6 +15960,7 @@ const wxU = {
 Object.assign(skyMat.uniforms, { uWxTex: wxU.uWxTex, uWxMin: wxU.uWxMin, uWxInv: wxU.uWxInv });
 Object.assign(compMat.uniforms, { uWxTex: wxU.uWxTex, uWxMin: wxU.uWxMin, uWxInv: wxU.uWxInv,
   uFogTop: wxU.uFogTop, uFogAmt: wxU.uFogAmt, uFogC: wxU.uFogC, uFogDeck: wxU.uFogDeck });
+let wxFxOn = true;   // the WEATHER FX dial, held here so the fog gate can read it
 const wxL = { cover: 0, rain: 0, fog: 0, wet: 0 };   // sampled at the truck
 const wxCam = { rain: 0, fog: 0 };                    // …and at the camera
 let wxBuiltAt = -1e9;
@@ -16113,6 +16117,12 @@ function stepWeather(now: number, dt: number): void {
     // the rain you actually drove through.
     wx.wet = wxL.wet;
     // Puddle and fog support, per frame — cheap vector copies.
+    // THE CHART IS AN INSTRUMENT, NOT A VIEW. Fog on the road cameras is the
+    // weather; fog over the survey map is damage — you open the chart to see
+    // where you are, and a mist that blanks it strands you in exactly the
+    // conditions a chart exists for. The world keeps its fog; the instrument
+    // declines it.
+    wxU.uFogAmt.value = wxFxOn && camMode !== 'top' ? 1 : 0;
     wxU.uSunW.value.copy(SUN_DIR);
     wxU.uCamW.value.copy(camera.position);
     wxU.uWxT.value = now / 1000;
@@ -22040,8 +22050,10 @@ function input(): { throttle: number; steer: number; brake: boolean; brakeF: num
   // …then the autopilot, which is a hand on the controls and nothing more.
   // AFTER `inputHold` on purpose: that is a measuring tool holding one exact
   // lock, and a controller quietly overriding it would silently invalidate
-  // every chassis number taken with it.
-  if (auto.on && auto.out) {
+  // every chassis number taken with it. NOT while the drone is up: there the
+  // thumb is FLYING, this function's answer goes to the drone, and the truck
+  // takes the autopilot's outputs directly in the tick.
+  if (auto.on && !drone.up && auto.out) {
     const o = auto.out;
     return { throttle: o.throttle, steer: o.steer, brake: o.brake, brakeF: o.brakeF };
   }
@@ -22144,7 +22156,8 @@ function input(): { throttle: number; steer: number; brake: boolean; brakeF: num
 // nine junctions away it will not.
 const AUTO_REACH = 420;   // metres of road to chain ahead
 const AUTO_HOPS = 80;     // …and how many OSM fragments that is allowed to take
-const auto = { on: false, out: null as AutoOut | null, mem: autoMem(), pts: 0, src: 'none' };
+const auto = { on: false, out: null as AutoOut | null, mem: autoMem(), pts: 0, src: 'none',
+  px: 0, pz: 0 };
 /**
  * THE GRIP AT A POINT AHEAD — deliberately not `surfaceAt`.
  *
@@ -22174,19 +22187,25 @@ function gripAhead(x: number, z: number): number {
 const autoGround: AutoGround = { height: groundAt, grip: gripAhead };
 /** The course to follow, and whether its last vertex is a destination or just
  *  the end of what has streamed — the plan brakes for one and not the other. */
-function autoCourse(): { pts: Array<[number, number]>; endsHere: boolean; src: string } | null {
+function autoCourse(): { pts: Array<[number, number]>; endsHere: boolean; src: string; width: number } | null {
   const r = routeAhead(state.x, state.z, AUTO_REACH);
   if (r && r.length >= 2) {
     const tail = routeXZ[routeXZ.length - 1];
     const end = r[r.length - 1];
-    return { pts: r, src: 'leg',
+    // A leg's course does not carry a width, so the rally line gets a modest
+    // one — enough to apex, never enough to leave a lane the course had.
+    return { pts: r, src: 'leg', width: 1.8,
       endsHere: !!tail && end[0] === tail[0] && end[1] === tail[1] };
   }
   const w = wayAhead(state.x, state.z, state.heading, AUTO_REACH, AUTO_HOPS, false);
   // The road simply running out of streamed geometry is not a destination, so
   // `endsHere` stays false — braking for the edge of the data would be braking
   // for nothing, and the next frame's chain reaches further anyway.
-  return w && w.pts.length >= 2 ? { pts: w.pts, endsHere: false, src: w.name ?? 'road' } : null;
+  // Width: the carriageway's half minus the truck's own half and a margin —
+  // what the racing line may actually spend.
+  return w && w.pts.length >= 2
+    ? { pts: w.pts, endsHere: false, src: w.name ?? 'road', width: Math.max(0, (w.hw ?? 0) - 1.5) }
+    : null;
 }
 /** True while a hand is on the controls. */
 const autoHandsOn = (): boolean => stick !== null || brakeId !== null || lift !== null
@@ -22195,15 +22214,27 @@ const autoHandsOn = (): boolean => stick !== null || brakeId !== null || lift !=
 function stepAuto(dt: number, off: boolean): void {
   // THE THUMB WINS. A tool that keeps driving while you are trying to take
   // over is not a tool, and the one time you most want to grab the wheel is
-  // the one time it is going somewhere you did not intend.
-  if (auto.on && autoHandsOn()) { auto.on = false; auto.out = null; return; }
+  // the one time it is going somewhere you did not intend. UNLESS the drone
+  // is up — then the thumb is flying, and the whole point of the pairing is
+  // that the truck drives on underneath.
+  if (auto.on && !drone.up && autoHandsOn()) { auto.on = false; auto.out = null; return; }
+  // THE DRONE RIDES THE TRUCK'S FRAME while both are live: it keeps its
+  // relative offset to a rig that is going somewhere, so the subject cannot
+  // simply drive out from under its own camera. The thumb still flies freely
+  // — what it adjusts is the offset.
+  if (auto.on && drone.up && dt > 0) {
+    drone.x += state.x - auto.px;
+    drone.z += state.z - auto.pz;
+  }
+  auto.px = state.x; auto.pz = state.z;
   if (!auto.on || off || dt <= 0) { auto.out = null; return; }
   const c = autoCourse();
   auto.pts = c?.pts.length ?? 0;
   auto.src = c?.src ?? 'none';
   auto.out = autoDrive(
     { x: state.x, z: state.z, heading: state.heading, speed: state.speed },
-    c?.pts ?? null, autoGround, auto.mem, Math.min(dt, 0.1), { endsHere: c?.endsHere });
+    c?.pts ?? null, autoGround, auto.mem, Math.min(dt, 0.1),
+    { endsHere: c?.endsHere, width: c?.width });
   const o = auto.out;
   lastInput = { throttle: o.throttle, steer: o.steer, brake: o.brake, brakeF: o.brakeF, hold: false };
 }
@@ -24763,7 +24794,7 @@ function tick(now: number): void {
   // what it is: this frame's controls. Handed the same reasons to stand down
   // that the manual path has — a replay is already driving, real drive has no
   // throttle to give it, and the drone has the controls.
-  stepAuto(dt, !!played || real.on || paused || scrubbing || drone.up);
+  stepAuto(dt, !!played || real.on || paused || scrubbing);
   const raw2 = played
     ? { throttle: played.throttle, steer: played.steer, brake: played.brake, brakeF: played.brakeF }
     : real.on || paused || scrubbing ? { throttle: 0, steer: 0, brake: false, brakeF: 0 } : input();
@@ -24775,8 +24806,14 @@ function tick(now: number): void {
   // it — that is the whole point of scouting ahead — so the controls are handed
   // over wholesale rather than shared.
   stepDrone(dt, drone.up ? raw2.throttle : 0, drone.up ? raw2.steer : 0);
+  // FLYING USED TO MEAN NOT DRIVING — the controls hand over wholesale and
+  // the rig parks. With the autopilot holding the wheel the rule inverts:
+  // thumb flies the drone, arithmetic drives the truck, and the drone view
+  // becomes the interactive orbit of a rig that is going somewhere.
   const { throttle, steer, brake, brakeF } = drone.up
-    ? { throttle: 0, steer: 0, brake: true, brakeF: 1 }
+    ? (auto.on && auto.out
+      ? { throttle: auto.out.throttle, steer: auto.out.steer, brake: auto.out.brake, brakeF: auto.out.brakeF }
+      : { throttle: 0, steer: 0, brake: true, brakeF: 1 })
     : raw2;
   // THE HANDBRAKE IS ON WHILE YOU ARE NOT IN IT. Handing the controls over is
   // not the same as parking: `brake: true` actually DEFEATS `parkHold` below
@@ -24784,7 +24821,7 @@ function tick(now: number): void {
   // left on a hillside slid away from the pin that was marking it. Flying, the
   // model is not integrated at all — the truck is a parked object, not a body
   // in equilibrium.
-  const parked = drone.up;
+  const parked = drone.up && !auto.on;
   if (parked) { state.speed = 0; slideV = 0; }
   stepSun();
   stepWeather(now, dt);
@@ -28571,7 +28608,7 @@ const DIAL_GROUPS: DialGroup[] = [
       // passes, but a phone that is struggling deserves one dial that takes
       // the whole treatment off rather than four that each take a piece.
       dial('wxfx', 'WEATHER FX', ['FULL', 'OFF'], 0, (i) => {
-        wxU.uFogAmt.value = i === 0 ? 1 : 0;
+        wxFxOn = i === 0;
         wxU.uPudOn.value = i === 0 ? 1 : 0;
       }),
       // One extra scene pass, so the right setting is a property of the phone

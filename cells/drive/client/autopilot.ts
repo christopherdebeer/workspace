@@ -106,13 +106,22 @@ export interface AutoTune {
 }
 
 export const AUTO: AutoTune = {
-  lookT: 1.15, lookMin: 14, lookMax: 70,
+  // Long eyes for real speed: at 44m/s the old 70m ceiling was a second and a
+  // half of travel — reaction, not planning.
+  lookT: 1.25, lookMin: 14, lookMax: 110,
   steerK: 1.5, steerD: 0.55, offK: 0.03,
-  latMargin: 0.55,
-  brakeA: 4.2,
-  planMin: 60, planMax: 300,
+  latMargin: 0.6,
+  // 6.5, from 4.2 — still barely a sixth of what the arcade brake actually
+  // delivers (CAR.brake·1.4 ≈ 36m/s²). The first tune planned every descent
+  // as if the truck had drum brakes and a full trailer; the ceiling below
+  // was unreachable because the envelope never released it.
+  brakeA: 6.5,
+  planMin: 60, planMax: 460,
   step: 8,
-  vMax: 26, vMin: 2.5,
+  // 44m/s — 158km/h — against a road equilibrium of ~57. The tyres, the
+  // corners and the length of the streamed road are the governors now, which
+  // is what a top speed is supposed to be.
+  vMax: 44, vMin: 2.5,
   accelK: 0.32, brakeK: 0.42,
   corridor: 16,
   stuckV: 0.55, stuckS: 1.4, revS: 1.6,
@@ -255,6 +264,70 @@ export interface AutoOpts {
    *  False when it merely ran out of streamed road, where braking for the end
    *  of the data would be braking for nothing. */
   endsHere?: boolean;
+  /** Metres of lateral room either side of the given line that still count as
+   *  carriageway — half-width minus the truck's own half plus a margin. Above
+   *  ~0.4m the controller stops tracking the centreline and drives the RACING
+   *  line inside that corridor instead. */
+  width?: number;
+}
+
+/**
+ * THE RALLY LINE — out, in, out, as an objective rather than as opinion.
+ *
+ * The course arrives as the road's CENTRELINE, and pure pursuit faithfully
+ * drives down the middle of every corner — the slowest line through it. What
+ * a rally driver buys with the road's width is CURVATURE: enter wide, clip
+ * the apex, run wide again, and the corner's effective radius grows.
+ *
+ * The objective matters, and the first cut proved it by being wrong: pulling
+ * every point toward its neighbours' midpoint is a TAUT STRING — the shortest
+ * path in the corridor — and the shortest path hugs the inside of the bend,
+ * an inward-offset arc whose radius is SMALLER. Measured: the "raced" corner
+ * came out sharper than the centreline it replaced. Shortest is not
+ * flattest. The right objective is minimum curvature energy — descend on the
+ * FOURTH difference — because redistributing bend is what pushes the entry
+ * outward to buy the apex its radius. Out-in-out is not programmed anywhere
+ * below; it is what the minimiser does with a corridor.
+ *
+ * Clamped radially to the corridor around the original line each pass, ends
+ * anchored (a destination is a place the truck must actually reach), and
+ * RE-RESAMPLED before anyone measures it: relaxation bunches points, and
+ * Menger curvature on uneven spacing inflates — the plan would brake for
+ * phantom corners of the smoother's own making.
+ */
+export function raceLine(path: Course, maxOff: number, passes = 160, step = 8): Course {
+  if (path.length < 5 || maxOff < 0.05) return path;
+  const out: Course = path.map((p) => [p[0], p[1]]);
+  const n = out.length;
+  const m2 = maxOff * maxOff;
+  // Descent rate: the biharmonic operator's stability bound on a unit lattice
+  // is ~1/16 of the step; 0.05 converges in the pass budget without ringing.
+  const L = 0.05;
+  // Only the END POINTS are pinned. The first cut also froze their
+  // neighbours, and the smoothed interior met the pinned tail in a KINK that
+  // out-measured the corner it had just flattened — the sharpest point of the
+  // "racing line" was the reconnection. Ghost points (index-clamped) let the
+  // penultimate points relax; lateral freedom at the ends is free, because an
+  // end is a place to arrive at, not a lane to arrive in.
+  const at = (j: number): [number, number] => out[j < 0 ? 0 : j >= n ? n - 1 : j];
+  for (let pass = 0; pass < passes; pass++) {
+    for (let i = 1; i < n - 1; i++) {
+      // −∇ of Σ|p″|²: the fourth difference, taken from the evolving line.
+      let gx = at(i - 2)[0] - 4 * at(i - 1)[0] + 6 * at(i)[0] - 4 * at(i + 1)[0] + at(i + 2)[0];
+      let gz = at(i - 2)[1] - 4 * at(i - 1)[1] + 6 * at(i)[1] - 4 * at(i + 1)[1] + at(i + 2)[1];
+      let nx = out[i][0] - gx * L;
+      let nz = out[i][1] - gz * L;
+      const dx = nx - path[i][0], dz = nz - path[i][1];
+      const d2 = dx * dx + dz * dz;
+      if (d2 > m2) {
+        const k = maxOff / Math.sqrt(d2);
+        nx = path[i][0] + dx * k;
+        nz = path[i][1] + dz * k;
+      }
+      out[i][0] = nx; out[i][1] = nz;
+    }
+  }
+  return resample(out, step);
 }
 
 /**
@@ -315,8 +388,10 @@ export function autoDrive(
     return { ...idle, mode: 'wait', limit: 'none', brake: true, brakeF: bf };
   }
 
-  const path = resample(course, T.step);
-  if (path.length < 2) return idle;
+  const centre = resample(course, T.step);
+  if (centre.length < 2) return idle;
+  // Given room, drive the rally line inside it rather than the centreline.
+  const path = opts.width && opts.width > 0.4 ? raceLine(centre, opts.width, 36, T.step) : centre;
   const seek = seekPath(path, rig.x, rig.z);
   const total = pathLength(path);
   const v = Math.max(0, rig.speed);
