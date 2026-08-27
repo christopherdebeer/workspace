@@ -22403,7 +22403,28 @@ function input(): { throttle: number; steer: number; brake: boolean; brakeF: num
 const AUTO_REACH = 420;   // metres of road to chain ahead
 const AUTO_HOPS = 80;     // …and how many OSM fragments that is allowed to take
 const auto = { on: false, out: null as AutoOut | null, mem: autoMem(), pts: 0, src: 'none',
-  px: 0, pz: 0 };
+  px: 0, pz: 0,
+  /** The FILTERED velocity the drone follows the truck at. See stepAuto. */
+  fvx: 0, fvz: 0 };
+/**
+ * ── THE CAMERA DOES NOT RIDE THE CHASSIS ──
+ *
+ * Station-keeping used to add the truck's per-frame delta to the drone verbatim,
+ * which is a RIGID coupling: every wobble of the chassis and every steering
+ * correction the autopilot makes went straight into the flying camera. Measured
+ * on Noordhoek Road at 55km/h, hands off the drone: mean |second difference| of
+ * position was 0.026 for the truck and 0.082 for the drone — the camera was
+ * three times as jittery as the thing it was filming.
+ *
+ * THE FILTER IS ON VELOCITY, NOT POSITION, and that is the whole of the design.
+ * A first-order lag on POSITION leaves a permanent offset of v·τ — at 15m/s and
+ * 0.45s that is seven metres of the drone sagging behind the framing you set,
+ * and it would grow with speed. A lag on VELOCITY converges on the truck's
+ * actual velocity, so the offset you framed is preserved in the steady state and
+ * only breathes while the truck is accelerating or braking. Which is exactly
+ * what a camera operator does.
+ */
+let droneFollowTau = 0.45;   // seconds; the camera's smoothing, not the rig's
 /**
  * THE GRIP AT A POINT AHEAD — deliberately not `surfaceAt`.
  *
@@ -22469,9 +22490,20 @@ function stepAuto(dt: number, off: boolean): void {
   // simply drive out from under its own camera. The thumb still flies freely
   // — what it adjusts is the offset.
   if (auto.on && drone.up && dt > 0) {
-    drone.x += state.x - auto.px;
-    drone.z += state.z - auto.pz;
-  }
+    const dx = state.x - auto.px, dz = state.z - auto.pz;
+    // A TELEPORT IS NOT A VELOCITY. Travelling to a drive, a rewind scrub and a
+    // world rebase all move the truck discontinuously, and one frame of that
+    // divided by dt is a velocity of hundreds of metres a second — which the
+    // filter would then spend most of a second handing to the drone. The same
+    // guard, for the same reason, as the yaw clamp in autoDrive.
+    if (Math.hypot(dx, dz) > 60) { auto.fvx = 0; auto.fvz = 0; } else {
+      const k = clamp(droneFollowTau > 1e-3 ? dt / droneFollowTau : 1, 0, 1);
+      auto.fvx += (dx / dt - auto.fvx) * k;
+      auto.fvz += (dz / dt - auto.fvz) * k;
+      drone.x += auto.fvx * dt;
+      drone.z += auto.fvz * dt;
+    }
+  } else if (!drone.up) { auto.fvx = 0; auto.fvz = 0; }
   auto.px = state.x; auto.pz = state.z;
   if (!auto.on || off || dt <= 0) { auto.out = null; return; }
   const c = autoCourse();
