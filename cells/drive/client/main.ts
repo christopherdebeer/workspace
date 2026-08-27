@@ -21103,10 +21103,27 @@ function noteTags(t: Record<string, string>): void {
     rigSpeed: +state.speed.toFixed(3), rigAt: [+state.x.toFixed(2), +state.z.toFixed(2)],
     range: Math.round(drone.batt * DRONE.LIFE * DRONE.SPEED),
     batt: +drone.batt.toFixed(3), cam: camMode,
-    y: +drone.y.toFixed(1), agl: +(drone.y - groundAt(drone.x, drone.z)).toFixed(1),
+    // MILLIMETRES, NOT DECIMETRES, and the reason is a measurement this probe
+    // ruined. Asked how much of the truck's jitter reaches the flying camera,
+    // it answered 0.1m-quantised positions — and the second difference of a
+    // series quantised at 0.1 is ~0.05 whatever the series is doing. That is
+    // the whole of the "jitter" it reported: the ruler, not the thing.
+    y: +drone.y.toFixed(4), agl: +(drone.y - groundAt(drone.x, drone.z)).toFixed(3),
     cmdAlt: +drone.alt.toFixed(1),
-    x: +drone.x.toFixed(1), z: +drone.z.toFixed(1),
+    x: +drone.x.toFixed(4), z: +drone.z.toFixed(4),
     fromRig: +Math.hypot(drone.x - state.x, drone.z - state.z).toFixed(1) });
+/**
+ * THE FOLLOW SMOOTHING, live — so the before and the after are the same drive.
+ *
+ * Two builds are a weak comparison when the road under them streamed twice; one
+ * session that moves the number between measurements differs in the number and
+ * nothing else. 0 is the old rigid coupling exactly (k = 1, the whole delta
+ * every frame), which is what makes this an honest A/B rather than two runs.
+ */
+(window as unknown as { __dronefollow?: object }).__dronefollow = (tau?: number): object => {
+  if (tau !== undefined && Number.isFinite(tau)) droneFollowTau = clamp(tau, 0, 3);
+  return { tau: droneFollowTau, fv: [+auto.fvx.toFixed(3), +auto.fvz.toFixed(3)] };
+};
 (window as unknown as { __droneGo?: object }).__droneGo = (): void => droneToggle();
 (window as unknown as { __pov?: object }).__pov = (): void => togglePov();
 (window as unknown as { __setcam?: object }).__setcam = (m: CamMode): void => setCam(m);
