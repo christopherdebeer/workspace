@@ -22874,6 +22874,14 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
     if (droneMesh) { droneMesh.position.set(drone.x, drone.y, drone.z); droneMesh.visible = true; }
     return;
   }
+  // THE RIG MOVES NOW, AND ITS PIN HAS TO KNOW. This marker was written once, at
+  // launch, which was exactly right while flying meant the truck was parked: a
+  // stationary subject needs its position stated once. The autopilot pairing let
+  // the truck drive out from under the drone and nobody moved the pin, so it went
+  // on advertising the LAUNCH POINT for the rest of the flight — reported from
+  // the seat as the rig POI going stale, and it was pointing at open ground.
+  const rigPin = pois.get(RIG_POI);
+  if (rigPin) { rigPin.x = state.x; rigPin.z = state.z; }
   drone.batt = Math.max(0, drone.batt - dt / DRONE.LIFE);
   if (drone.batt <= 0) { drone.falling = true; hudFlash('BATTERY FLAT'); return; }
   let thr = throttle, str = steer;
