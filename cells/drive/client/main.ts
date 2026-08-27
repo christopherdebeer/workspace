@@ -21885,6 +21885,7 @@ const setStickFrom = (e: PointerEvent): void => {
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
   if (autoDown(e)) return;
+  if (poiDown(e)) return;
   if (rewindDown(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (clockDown(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
   if (hudTap(e.clientX, e.clientY)) return; // an instrument swallowed it
@@ -23028,6 +23029,39 @@ const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}M` 
 // away exactly the moment they matter — you arrive at a place and it vanishes.
 // They now stay all the way in and switch to an in-range presentation instead.
 const POI_RANGE = 55;
+/**
+ * ── HOW MUCH IS ON THE GLASS, AND TWO DOORS TO IT ──
+ *
+ *   OFF     nothing. The world, and the road, and nothing written over them.
+ *   PINNED  only the things you have been TOLD to go to — a mission's giver and
+ *           destination, the parked rig, a downed drone. No scenery.
+ *   NEAR    those plus the three nearest mapped places. The old behaviour, and
+ *           still the default.
+ *   ALL     the same rule with a wider net, for reading unfamiliar ground.
+ *
+ * TWO DOORS, ONE SETTING. The dial is where a preference lives and how it
+ * persists; the HUD chip is how you get at it with a thumb while flying, which
+ * is exactly when the pins are in the way and the menu is the wrong place to be.
+ * The chip therefore MOVES THE DIAL rather than shadowing it with a second
+ * variable — a display setting with two sources of truth is a display setting
+ * that disagrees with itself.
+ */
+const POI_MODES = ['OFF', 'PINNED', 'NEAR', 'ALL'] as const;
+let poiVis = 2;
+/**
+ * A PIN THIS CLOSE HAS NO JOB LEFT.
+ *
+ * Pinning exists to defeat the nearest-three rule, and the reason is stated at
+ * DRONE_POI: "the whole point of it is that it is somewhere else and you have to
+ * go there." Once you are on top of the thing, that reason has expired — the rig
+ * is a truck filling the frame, and an edge chip pointing at it is noise laid
+ * over the very object it describes. Reported from the air, of the rig pin.
+ *
+ * Pinned only. An ordinary mapped place inside this radius is the one you are
+ * arriving at, and POI_RANGE above exists to keep it and change its
+ * presentation — that behaviour is deliberate and stays.
+ */
+const POI_PIN_NEAR = 60;
 /** The kinds that are worth walking up to. Everything absent from this set is
  *  scenery — drawn, labelled, navigated by, and never in the way of a tap. */
 const POI_LIVE = new Set<Poi['kind']>(['station', 'repair']);
@@ -23088,16 +23122,25 @@ function updatePois(): void {
   // the nearest-three rule — the whole point of a destination is that it is far
   // away and stays on screen the entire way there.
   const vx = viewX(), vz = viewZ();
+  // OFF is off — and it has to clear the list rather than skip the rebuild, or
+  // the last frame's pins stay painted and tappable for ever.
+  if (poiVis === 0) { poiDraw = []; return; }
   const all = [...pois.values()].filter((p) => !lineOn || LINE_KINDS.has(p.kind))
     .map((p) => ({ p, d: Math.hypot(p.x - vx, p.z - vz) }));
-  const pinned = all.filter((e) => e.p.pinned).sort((a, b) => a.d - b.d);
+  // See POI_PIN_NEAR: a pin you are standing on is describing something already
+  // filling the frame.
+  const pinned = all.filter((e) => e.p.pinned && e.d > POI_PIN_NEAR).sort((a, b) => a.d - b.d);
   // A pinned waypoint SHADOWS its namesake from the OSM stream: the mission's
   // ADMIN OFFICE and the mapped Admin Office are the same place, and two pins
   // 10m apart reading the same name is a defect, not information.
   const shadowed = new Set(pinned.map((e) => e.p.name.toUpperCase()));
+  // PINNED shows nothing but the docket; ALL casts the same net wider. The
+  // pinned entries always come first and always survive — that is what pinned
+  // means — so the mode only ever changes how much SCENERY rides along.
+  const cap = poiVis === 1 ? 0 : poiVis === 3 ? 8 : 3;
   const near = pinned.concat(
     all.filter((e) => !e.p.pinned && e.d < 3000 && !shadowed.has(e.p.name.toUpperCase()))
-      .sort((a, b) => a.d - b.d).slice(0, 3 - Math.min(2, pinned.length)),
+      .sort((a, b) => a.d - b.d).slice(0, Math.max(0, cap - Math.min(2, pinned.length))),
   );
   camera.getWorldDirection(camFwd);
   poiDraw = [];
@@ -29022,6 +29065,10 @@ const DIAL_GROUPS: DialGroup[] = [
       // exist because "invisible" is a claim about feel that can only be
       // settled by driving the alternatives.
       dial('cpv', 'CHECKPOINTS', ['HIDDEN', 'PING', 'GHOST', 'BEAM'], 0, (i) => { cpVis = i; }),
+      // See POI_MODES. Sits beside CHECKPOINTS because they are the same
+      // question asked about the other half of what is written on the glass, and
+      // the WPT chip in the HUD is a thumb-sized shortcut to this exact dial.
+      dial('poi', 'WAYPOINTS', [...POI_MODES], 2, (i) => { poiVis = i; }),
       // THE AUTOPILOT'S TAB, and the dial exists so the tab does not have to
       // be in everybody's HUD. This is a development instrument — it is how a
       // road-solver change gets driven at all sixteen benchmark fixtures
@@ -29304,6 +29351,20 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       pad + 26 + w + 4, ay + 1, !a ? UI.bad : a.mode === 'wait' ? UI.gold : UI.soft);
     }
   } else autoRect.w = 0;
+  // ── WPT: the waypoint chip ──
+  // A display control worth reaching with a thumb, because the moment the pins
+  // are in the way is the moment you are flying and the menu is three taps and a
+  // scrim away. It stacks UNDER the AUTO row when that row exists and takes it
+  // when it does not, so the two never overlap — a control you cannot hit
+  // because another one is drawn over it is not a control.
+  {
+    const py = pad + 34 + (autoTab ? 11 : 0);
+    const ww = textSW('WPT');
+    poiRect = { x: pad + 26, y: py, w: ww, h: 9 };
+    textSmall(hctx, 'WPT', pad + 26, py + 1, poiVis === 0 ? UI.dim : UI.gold);
+    textSmall(hctx, POI_MODES[poiVis], pad + 26 + ww + 4, py + 1,
+      poiVis === 0 ? UI.dim : UI.soft);
+  }
   // Filled and hollow diamonds, plotted a row at a time. At this resolution a
   // marker is about seven pixels across, so it is drawn, not stroked.
   function diamond(cx: number, cy: number, r: number): void {
@@ -30485,6 +30546,29 @@ let clockRect = { x: 0, y: 0, w: 0, h: 0 };
  */
 let rewindRect = { x: 0, y: 0, w: 0, h: 0 };
 let autoRect = { x: 0, y: 0, w: 0, h: 0 };
+let poiRect = { x: 0, y: 0, w: 0, h: 0 };
+/**
+ * THE WPT CHIP CYCLES THE DIAL, and cycling is right here where a toggle is not:
+ * there are four states and the useful ones are the middle two, so a two-way
+ * switch would strand you in the menu to reach PINNED — the state you actually
+ * want while flying.
+ *
+ * It writes the DIAL and saves it, rather than keeping a second variable of its
+ * own. A display setting with two sources of truth is a display setting that
+ * disagrees with itself, and the menu would then show one thing while the glass
+ * showed another.
+ */
+function poiDown(e: PointerEvent): boolean {
+  if (poiRect.w === 0 || menu.tab() !== null) return false;
+  const x = e.clientX / hudS, y = e.clientY / hudS;
+  if (x < poiRect.x - 6 || x > poiRect.x + poiRect.w + 6
+    || y < poiRect.y - 6 || y > poiRect.y + poiRect.h + 6) return false;
+  const d = DIALS.find((q) => q.key === 'poi');
+  if (d) { d.at = (d.at + 1) % d.opts.length; d.apply(d.at); saveDials(); }
+  audio.stone();
+  hudFlash(`WAYPOINTS ${POI_MODES[poiVis]}`);
+  return true;
+}
 /**
  * ONE TAP, BOTH WAYS — no drag, no hold, no confirm.
  *
