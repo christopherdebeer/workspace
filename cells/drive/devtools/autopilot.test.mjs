@@ -113,7 +113,11 @@ function sim(course, ground, opts = {}) {
   const log = [];
   const steps = Math.round((opts.secs ?? 60) / dt);
   for (let n = 0; n < steps; n++) {
-    const out = A.autoDrive(rig, course, ground, mem, dt, { endsHere: !!opts.endsHere }, T);
+    // A course may be a FUNCTION of sim time, so a fixture can make the road
+    // arrive part way through — which is what a cold tile filling in looks
+    // like from the driver's seat, and the case the hold exists for.
+    const now = typeof course === 'function' ? course(n * dt) : course;
+    const out = A.autoDrive(rig, now, ground, mem, dt, { endsHere: !!opts.endsHere }, T);
     log.push({ t: n * dt, x: rig.x, z: rig.z, v: rig.speed, ...out });
     if (opts.pinned) continue;                       // a truck against a wall
     const thrust = out.brake
@@ -199,8 +203,13 @@ console.log('\n── holding a line ──');
   const settled = onCourse(c, log).filter((e) => e.t > 4);
   const worst = Math.max(...settled.map((e) => offOf(c, e)));
   check('a straight is held to under a metre', settled.length > 0 && worst < 1.0, +worst.toFixed(3));
-  const vEnd = log[log.length - 1].v;
-  check('…at the ceiling it was told to hold', near(vEnd, A.AUTO.vMax, 1.5), +vEnd.toFixed(2));
+  // The TOP speed, not the last one. Read at the end it comes back low, and
+  // correctly so: the plan will not go faster than it could stop within the
+  // course it has, so approaching the last vertex it eases off. That is its
+  // own assertion below; here the question is only whether it ever gets up to
+  // what it was told it could do.
+  const vTop = Math.max(...log.map((e) => e.v));
+  check('…at the ceiling it was told to hold', near(vTop, A.AUTO.vMax, 1.5), +vTop.toFixed(2));
 }
 {
   // Twelve metres off, pointing straight down the course — the geometry that
@@ -299,6 +308,55 @@ console.log('\n── the speed plan ──');
     { road: +vR.toFixed(2), dirt: +vD.toFixed(2) });
   check('…by about the ratio of the square roots of grip',
     vD <= limD * 1.15, { dirt: +vD.toFixed(2), lim: +limD.toFixed(2) });
+}
+
+console.log('\n── when the world is not ready ──');
+{
+  // TWENTY-FIVE METRES OF KNOWN ROAD is what a cold tile looks like from the
+  // driver's seat: the way exists, the chain reaches as far as the geometry
+  // that has streamed, and no further. Going faster than you could stop in it
+  // is driving on ground nothing has been solved for.
+  const c = straight(25, 5);
+  const log = sim(c, flat(), { secs: 20 });
+  const on = onCourse(c, log, 4);
+  const worst = on.length ? Math.max(...on.map((e) => e.v)) : Infinity;
+  const lim = Math.sqrt(2 * A.AUTO.brakeA * SURF.road.mu * 25);
+  check('it does not outdrive the course it has been given',
+    worst <= lim * 1.2, { top: +worst.toFixed(2), lim: +lim.toFixed(2) });
+  // …and the same run must NOT have been a crawl: the floor keeps it moving,
+  // because a truck that stops is a truck that stops asking for the next tile.
+  check('…but keeps moving, so the streamer keeps being asked',
+    worst > A.AUTO.vMin, +worst.toFixed(2));
+}
+{
+  // NO COURSE AT ALL — the tile has not arrived, or it has and the ribbon is
+  // still being built. Coasting through that at speed is the whole failure.
+  const log = sim(null, flat(), { secs: 12, v0: 22 });
+  check('with no course it holds rather than coasting',
+    log[0].mode === 'wait' && log[0].brake === true, log[0]);
+  const stopped = log.find((e) => Math.abs(e.v) < 0.5);
+  check('…and actually comes to a stop', !!stopped && stopped.t < 8,
+    stopped ? +stopped.t.toFixed(1) : null);
+  // ON A GRADE is the half that matters: a truck that merely lifted off rolls
+  // away from the very tile it is waiting for.
+  const hill = sim(null, slope(-0.12), { secs: 14, v0: 4 });
+  const late = hill[hill.length - 1];
+  check('…and holds on a slope instead of rolling away',
+    Math.abs(late.v) < 1.0 && late.brake === true, +late.v.toFixed(2));
+}
+{
+  // AND THEN GOES. The road arrives at six seconds; nothing re-arms it, and
+  // nothing should have to — a hold that needs a second tap is a hold that
+  // will be found switched off at the bottom of the pass.
+  const c = straight(900);
+  const log = sim((t) => (t < 6 ? null : c), flat(), { secs: 30 });
+  const held = log.find((e) => e.t > 1 && e.t < 5.5);
+  check('a course that arrives is picked up without re-arming',
+    held?.mode === 'wait', held?.mode);
+  const went = log.find((e) => e.t > 6 && e.mode === 'run');
+  check('…within a second of it arriving', !!went && went.t < 7, went ? +went.t.toFixed(2) : null);
+  const end = log[log.length - 1];
+  check('…and gets on with the drive', end.v > 15, +end.v.toFixed(2));
 }
 
 console.log('\n── when it goes wrong ──');

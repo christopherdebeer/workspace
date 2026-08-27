@@ -127,9 +127,14 @@ export interface AutoMem {
   lastHeading: number;
   yaw: number;
   lastSteer: number;
+  /** Seconds spent holding for a course that has not arrived. Reported, not
+   *  acted on — a run that spent half its time waiting for tiles is a
+   *  measurement of the streamer, and worth being able to see. */
+  waited: number;
 }
 export const autoMem = (): AutoMem => ({
   stuck: 0, reverse: 0, revSteer: 0, lastHeading: 0, yaw: 0, lastSteer: 0,
+  waited: 0,
 });
 
 export interface AutoOut {
@@ -141,8 +146,8 @@ export interface AutoOut {
   err: number;
   look: [number, number] | null;
   /** Which limit bound the plan: the tightest one wins and it is named. */
-  limit: 'curve' | 'grip' | 'cap' | 'end' | 'recover' | 'none';
-  mode: 'run' | 'recover' | 'reverse' | 'idle';
+  limit: 'curve' | 'grip' | 'cap' | 'end' | 'short' | 'recover' | 'none';
+  mode: 'run' | 'recover' | 'reverse' | 'wait' | 'idle';
 }
 
 const clamp = (v: number, a: number, b: number): number => (v < a ? a : v > b ? b : v);
@@ -290,7 +295,25 @@ export function autoDrive(
     return { ...idle, steer: mem.revSteer, throttle: -0.6, mode: 'reverse',
       limit: 'recover', want: 0 };
   }
-  if (!course || course.length < 2) return idle;
+  // ── NO COURSE YET: HOLD, and then go when there is one ──
+  //
+  // The tile has not arrived, or it has and the ribbon is still being built.
+  // Coasting through that is the wrong answer twice: at speed the truck runs
+  // on into ground nothing has been solved for, and stopped on a slope it
+  // rolls away from the very tile it is waiting for. So it brakes, holds, and
+  // resumes by itself the moment a course appears — no arming, no re-tap.
+  //
+  // A HOLD IS NOT A FAILURE and does not read as one: `wait` is its own mode,
+  // and the time spent in it is counted, because a drive that spends half its
+  // life here is telling you about the streamer rather than about the road.
+  if (!course || course.length < 2) {
+    mem.waited += dt;
+    const v0 = Math.abs(rig.speed);
+    // Firm enough to stop promptly, not so hard it locks and slides — and it
+    // keeps holding once stopped, which is the half that matters on a grade.
+    const bf = v0 > 0.4 ? 0.85 : 1;
+    return { ...idle, mode: 'wait', limit: 'none', brake: true, brakeF: bf };
+  }
 
   const path = resample(course, T.step);
   if (path.length < 2) return idle;
@@ -323,8 +346,20 @@ export function autoDrive(
     const vGrip = T.vMax * clamp(mu / 1.05, 0.35, 1);
     let cap = Math.min(vCurve, vGrip, T.vMax);
     let why: AutoOut['limit'] = cap === vCurve ? 'curve' : cap === vGrip ? 'grip' : 'cap';
-    // …and the end of the course, when the course really does end.
-    if (opts.endsHere && start + d >= total - T.step) { cap = 0; why = 'end'; }
+    // …AND THE END OF WHAT IS KNOWN, which is a limit even when the road
+    // continues. A course from `wayAhead` reaches as far as the chained
+    // geometry does, and while streaming lags that can be forty metres. Going
+    // faster than you could stop within it is driving on ground nothing has
+    // been solved for — the same mistake as coasting through a hold, made at
+    // speed. The constraint is simply "be able to stop by the last vertex",
+    // which costs nothing at all when the chain is healthy: from 420m the
+    // envelope releases 61m/s, well over the ceiling.
+    //
+    // `endsHere` is the stronger version of the same point — a DESTINATION,
+    // where the truck is meant to come to rest rather than merely be able to.
+    // It differs only in the floor: a road that continues is crawled on, so
+    // the streamer keeps being asked for the next tile; a destination is not.
+    if (start + d >= total - T.step) { cap = 0; why = opts.endsHere ? 'end' : 'short'; }
     cap = Math.max(cap, why === 'end' ? 0 : T.vMin);
     // Can we still shed to it? Deceleration on a slope is the flat figure plus
     // g·grade, and grade is negative downhill — so a descent brings the whole
@@ -334,6 +369,7 @@ export function autoDrive(
     if (allow < want) { want = allow; limit = why; }
   }
   want = Math.max(want, opts.endsHere ? 0 : T.vMin);
+  if (mem.waited > 0 && want > T.vMin) mem.waited = 0;   // moving again
 
   // ── steering ──
   // OFF THE CORRIDOR, THE LOOKAHEAD IS A LIE. On a hairpin the point 40m along

@@ -21778,6 +21778,7 @@ function stepAuto(dt: number, off: boolean): void {
   }
   const o = auto.out;
   return { on: auto.on, src: auto.src, pts: auto.pts, tune: AUTO,
+    waited: +auto.mem.waited.toFixed(2),
     ...(o ? { mode: o.mode, limit: o.limit, want: +o.want.toFixed(2),
       v: +state.speed.toFixed(2), off: +o.off.toFixed(2), err: +o.err.toFixed(3),
       steer: +o.steer.toFixed(3), throttle: +o.throttle.toFixed(3), brakeF: +o.brakeF.toFixed(3) }
@@ -28399,8 +28400,14 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     textSmall(hctx, 'AUTO', pad + 26, ay + 1, auto.on ? UI.gold : UI.dim);
     if (auto.on) {
       const a = auto.out;
-      textSmall(hctx, a ? `${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`
-        : 'NO COURSE', pad + 26 + w + 4, ay + 1, a ? UI.soft : UI.bad);
+      // WAITING IS NOT AN ERROR, and must not be painted as one — a cold tile
+      // is the ordinary condition of driving into new ground. Gold while it
+      // holds for the world, soft while it drives, red only when the tick is
+      // not reaching the controller at all.
+      textSmall(hctx, !a ? 'NO TICK'
+        : a.mode === 'wait' ? 'WAIT FOR ROAD'
+          : `${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`,
+      pad + 26 + w + 4, ay + 1, !a ? UI.bad : a.mode === 'wait' ? UI.gold : UI.soft);
     }
   } else autoRect.w = 0;
   // Filled and hollow diamonds, plotted a row at a time. At this resolution a
