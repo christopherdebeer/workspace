@@ -3158,9 +3158,51 @@ function terrainNormalTex(t: { w: number; data: Float32Array }): THREE.DataTextu
  *  Retired with the mesh it belonged to — a DataTexture per tile is 256KB, and
  *  the streamer rebuilds tiles constantly. */
 const terrainMats = new Map<string, THREE.MeshLambertMaterial>();
+/**
+ * THE NORMAL MAP OUTLIVES THE REBUILD THAT ASKED FOR IT.
+ *
+ * `t.data` is filled once, when the tile is decoded, and nothing mutates it
+ * afterwards — the carve edits `geo.attributes.position`, never the
+ * heightfield. So the Sobel above is a PURE FUNCTION OF THE TILE, and every
+ * rebuild was recomputing a byte-for-byte identical quarter-megabyte and
+ * re-uploading it to the GPU.
+ *
+ * That is not a rounding error. `dirtyTerrainAround` marks up to nine tiles for
+ * one run of road, `flushTerrain` does one of them per 200ms, and each was
+ * paying a 256x256 Sobel (65k texels, six array reads and a hypot each) plus a
+ * fresh 256KB upload for a texture it already had. Nine rebuilds, nine
+ * identical answers, ~1.8s of stutter per road arrival.
+ *
+ * This map OWNS the textures; a material only borrows one. That is why
+ * terrainMatFor below no longer disposes `normalMap` when it replaces or evicts
+ * a material — doing so would tear the texture out from under every other
+ * rebuild of the same tile.
+ */
+const terrainNormals = new Map<string, THREE.DataTexture>();
+function terrainNormalFor(t: HeightTile, key: string): THREE.DataTexture {
+  const had = terrainNormals.get(key);
+  if (had) return had;
+  const tex = terrainNormalTex(t);
+  terrainNormals.set(key, tex);
+  // Bounded for the same reason the materials are, and kept LOOSER than them:
+  // a texture whose material has already been evicted is exactly the one worth
+  // keeping, because it is what makes that tile's next rebuild free.
+  if (terrainNormals.size > 96) {
+    for (const k of [...terrainNormals.keys()]) {
+      if (terrainNormals.size <= 64) break;
+      if (k === key) continue;
+      const t2 = terrainNormals.get(k);
+      // Never pull one out from under a material that is still pointing at it.
+      if (!t2 || terrainMats.get(k)?.normalMap === t2) continue;
+      t2.dispose();
+      terrainNormals.delete(k);
+    }
+  }
+  return tex;
+}
 function terrainMatFor(t: HeightTile, key: string): THREE.MeshLambertMaterial {
   const old = terrainMats.get(key);
-  if (old) { old.normalMap?.dispose(); old.dispose(); }
+  if (old) old.dispose();
   // A quarter-megabyte of texture per tile, and nothing prunes the tile maps —
   // drive far enough and that is real memory. Oldest first, never the one being
   // built; the tile keeps the shared material until its own rebuild comes round.
@@ -3170,13 +3212,15 @@ function terrainMatFor(t: HeightTile, key: string): THREE.MeshLambertMaterial {
       const m = terrainMats.get(k) as THREE.MeshLambertMaterial;
       const mesh = terrainMeshes.get(k);
       if (mesh && mesh.material === m) mesh.material = terrainMat;
-      m.normalMap?.dispose(); m.dispose();
+      // The normal map is NOT disposed here — terrainNormals owns it, and it is
+      // what makes this tile's next rebuild free. It has its own cap.
+      m.dispose();
       terrainMats.delete(k);
     }
   }
   const m = new THREE.MeshLambertMaterial({
     vertexColors: true,
-    normalMap: terrainNormalTex(t),
+    normalMap: terrainNormalFor(t, key),
   });
   // Set after construction: three's Lambert PARAMETERS type omits
   // `normalMapType` even though the material carries it and the shader honours
@@ -17099,6 +17143,14 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     droneMesh = null;
     // ── the bookkeeping ── local-coordinate stores and streaming gates.
     heightTiles.clear(); terrainReady.clear(); terrainMeshes.clear(); terrainDirty.clear();
+    // The per-tile material and its normal map. Both are capped, so neither was
+    // an unbounded leak, and the keys are GLOBAL tile coordinates so a hop can
+    // never collide with them — but a continent away is the one moment we know
+    // for certain this ground is not coming back, and holding 96 quarter-meg
+    // textures for it is 24MB of nothing.
+    for (const m of terrainMats.values()) m.dispose();
+    for (const t of terrainNormals.values()) t.dispose();
+    terrainMats.clear(); terrainNormals.clear();
     coverTiles.clear(); coverAsked.clear(); coverWaterMemo.clear();
     cutCells.clear(); cutSet.clear(); carveLog.clear(); cellTriCache.clear();
     preRoadGrid.clear(); crumbDefer.clear();
