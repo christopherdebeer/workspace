@@ -232,21 +232,62 @@ export async function openDrive(opts = {}) {
   });
   await new Promise((r) => server.listen(port, r));
 
+  // ── HEADLESS IS A SOFTWARE RASTERISER, AND THAT IS A MEASUREMENT TRAP ──
+  //
+  // The default here is `headless_shell`, whose WebGL is SwiftShader: every
+  // vertex and every fragment is executed on the CPU. It is the right default —
+  // it runs anywhere, needs no display, and is what every correctness tool in
+  // this folder wants. But it means a number from this rig is not this
+  // machine's GPU and is certainly not a phone's: vertex-heavy work (the sward's
+  // 1.75M vertices) is punished out of all proportion, while the fragment cost
+  // of a full-resolution post chain barely registers.
+  //
+  // `headed: true` launches the real Chromium against the real driver — Metal on
+  // this Mac — which is the only way anything in here can speak about frame
+  // TIME rather than frame CORRECTNESS. It needs a display, so it is opt-in.
+  //
+  // `dpr` matters for the same reason and is easy to miss: the post chain's last
+  // pass renders to the DEFAULT FRAMEBUFFER, which is scaled by device pixel
+  // ratio, while the scene target is pinned near 320p. At the harness default of
+  // 1 that penalty is invisible; a phone runs at 2 or 3, where it is four to
+  // nine times the fragments. Measuring the composite at dpr 1 measures the one
+  // configuration no player has.
   const browser = await chromium.launch({
+    headless: !opts.headed,
     executablePath: existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined,
     proxy: process.env.HTTPS_PROXY ? { server: process.env.HTTPS_PROXY, bypass: 'localhost,127.0.0.1' } : undefined,
     args: ['--no-sandbox', '--disable-dev-shm-usage',
       // Post-quantum key agreement makes the relayed TLS handshakes fail.
-      '--disable-features=UseMLKEM,PostQuantumKeyAgreement,PostQuantumKyber,EncryptedClientHello'],
+      '--disable-features=UseMLKEM,PostQuantumKeyAgreement,PostQuantumKyber,EncryptedClientHello',
+      // ── VSYNC HIDES EVERY ANSWER ON A FAST GPU ──
+      //
+      // Headed on an M4 Pro at 390x844, every configuration this rig can set
+      // measured 8.33ms — grass OFF and grass LUSH, 240P and FULL, bloom on and
+      // bloom off, all of them, to two decimal places. That is not a result: it
+      // is the ProMotion panel's 120Hz refresh, and rAF deltas were reporting
+      // the DISPLAY rather than the work. A saturated measurement reads exactly
+      // like a free feature, which is the most expensive way to be wrong here.
+      //
+      // Unthrottled, a frame takes as long as it takes and a dial move shows up.
+      // Strictly for timing runs: it spins the GPU flat out, so it is opt-in and
+      // never on for a correctness tool.
+      ...(opts.novsync ? ['--disable-gpu-vsync', '--disable-frame-rate-limit'] : [])],
   });
   const ctx = await browser.newContext({
     viewport: opts.viewport ?? { width: 390, height: 844 }, hasTouch: true, ignoreHTTPSErrors: true,
+    ...(opts.dpr ? { deviceScaleFactor: opts.dpr } : {}),
   });
   await ctx.route(/^https:\/\//, async (route) => {
     const req = route.request();
     const key = join(CACHE, createHash('sha1').update(req.url() + '|' + (req.postData() ?? '')).digest('hex'));
     if (existsSync(key)) return route.fulfill({ status: 200, body: readFileSync(key), contentType: 'application/octet-stream' });
-    const args = ['-s', '-f', '--max-time', '60', '--cacert', '/root/.ccr/ca-bundle.crt'];
+    // The agent box's CA bundle, WHERE THERE IS ONE. On a workstation there is
+    // not, and passing a --cacert that does not exist fails curl before it
+    // opens a socket — so every relayed request 502s, which reads as "the whole
+    // internet is down" rather than "this flag is wrong". Off the agent box,
+    // curl's own system trust store is the right answer anyway.
+    const args = ['-s', '-f', '--max-time', '60'];
+    if (existsSync('/root/.ccr/ca-bundle.crt')) args.push('--cacert', '/root/.ccr/ca-bundle.crt');
     // OVERPASS IS A POST, AND IT WANTS THE CONTENT TYPE. Dropped when this rig
     // was assembled from the throwaway scripts, and invisible for a long while
     // because every place under test was already in the relay cache from before.
