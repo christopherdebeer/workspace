@@ -20775,9 +20775,15 @@ function farHeightAt(wx: number, wz: number): number | null {
     bend: nextBend(state.x, state.z, state.heading),
   };
 };
-/** The luma map, for tests: the background brightness under a HUD point. */
-(window as unknown as { __luma?: object }).__luma = (hx: number, hy: number): number =>
-  +hudBgLuma(hx, hy).toFixed(3);
+/** The luma map, for tests: brightness AND decoded scene distance (m) under
+ *  a HUD point — the two answers the readback carries. */
+(window as unknown as { __luma?: object }).__luma = (hx: number, hy: number): object => {
+  const gx = clamp(Math.floor((hx / HW) * LUMA_W), 0, LUMA_W - 1);
+  const gy = clamp(Math.floor((1 - hy / HH) * LUMA_H), 0, LUMA_H - 1);
+  const i = (gy * LUMA_W + gx) * 4;
+  return { l: +(lumaPx[i] / 255).toFixed(3),
+    m: Math.round(((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar) };
+};
 (window as unknown as { __toll?: object }).__toll = (x: number, z: number): [number, number] => localToLatLon(x, z);
 /** The other direction — a test needs to aim at a real place, not a guess. */
 (window as unknown as { __tolocal?: object }).__tolocal =
