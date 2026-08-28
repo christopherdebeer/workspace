@@ -27402,6 +27402,16 @@ function textPoi(c: CanvasRenderingContext2D, s: string, x: number, y: number, c
     cx += gl.w + 1;
   }
 }
+/** Blend two #rrggbb colours (t=0 gives a, t=1 gives b) — the scalar ink the
+ *  luma-adaptive lines use. A threshold flips; a blend drifts. */
+function mixHex(a: string, b: string, t: number): string {
+  const pa = parseInt(a.slice(1), 16), pb = parseInt(b.slice(1), 16);
+  const ch = (sh: number): number => {
+    const va = (pa >> sh) & 255, vb = (pb >> sh) & 255;
+    return Math.round(va + (vb - va) * t);
+  };
+  return `rgb(${ch(16)},${ch(8)},${ch(0)})`;
+}
 function textEdgeP(s: string, x: number, y: number, col: string): void {
   for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
     textPoi(hctx, s, x + dx, y + dy, 'rgba(4,10,11,0.85)');
@@ -27502,6 +27512,10 @@ const UI = {
   // moment the row has something to say it takes its warning colour instead.
   faint: '#25443f',
 };
+/** Per-gauge recent history for the range whisker: decaying min/max
+ *  envelopes plus an EWMA mean and mean-deviation. Display state, not sim
+ *  state — frame-rate-flavoured decay is fine for a glyph about "lately". */
+const gaugeHist = new Map<string, { lo: number; hi: number; m: number; dv: number }>();
 let hudS = 3;            // CSS pixels per HUD pixel
 let HW = 2, HH = 2;      // HUD buffer size, in HUD pixels
 /**
@@ -30016,9 +30030,9 @@ function hudSafeRects(): Array<[number, number, number, number]> {
     [0, 0, HW, 34 + (camMode === 'top' && tileDbg ? 22 : 0)],  // compass strip + the justified top row
     [0, 32, 74, 18],                                 // the task chip, under the top row
     [HW - 56, 18, 56, 18],                           // MENU, on the heading row
-    [0, my - 146, 32, 146],                          // the ENV ladder stack, up the left edge
+    [0, my - 180, 22, 180],                          // the ENV gauge stack, up the left edge
     [0, my - 2, mw + 70, HH - my + 2],               // dock, the control matrix, the info lines
-    [HW - 32, HH - 186, 32, 116],                    // the RIG ladder stack, up the right edge
+    [HW - 24, HH - 212, 24, 140],                    // the RIG gauge stack, up the right edge
     [HW - 80, HH - 72, 80, 72],                      // dial, its radial lamps, trip
     [0, HH - 30, Math.round(HW * 0.72), 30],         // the place line and coordinates
   ];
@@ -30450,12 +30464,14 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     hctx.fillStyle = p.c;
     if (isPeak) {
       hctx.fillRect(ax - 1, my - 1, 2, 2);
-      // THE LINE IS THE ONLY THING THAT FLIPS. The point wears its own ink
-      // seat and the label its own halo — each already survives both grounds —
-      // but a hairline has no second colour to save it, so the luma map picks
-      // ink over bright sky and the place's light over dark ground.
-      const bright = (hudBgLuma(ax, Math.round((my + ly) / 2)) + hudBgLuma(ax, my)) / 2 > 0.56;
-      hctx.fillStyle = bright ? 'rgba(9,20,17,0.8)' : p.c;
+      // THE LINE IS THE ONLY THING THAT ADAPTS — and it adapts as a SCALAR,
+      // not a switch. The point wears its own ink seat and the label its own
+      // halo, but a hairline has no second colour to save it, so the luma map
+      // slides it between the place's light and ink as the ground behind it
+      // brightens. A binary flip flickered at its own threshold whenever the
+      // sky sat near it; a blend cannot flicker, it can only drift.
+      const lum = (hudBgLuma(ax, Math.round((my + ly) / 2)) + hudBgLuma(ax, my)) / 2;
+      hctx.fillStyle = mixHex(p.c, UI.ink, clamp((lum - 0.38) / 0.3, 0, 1));
       // Dashed while the summit is behind a ridge (the story the beam's
       // dashes used to carry). BOTH ENDS ARE VERTICAL: the line drops from
       // the label and rises from the point, with one horizontal jog mid-span
@@ -31040,72 +31056,84 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       lamp2('SOL', cx - Math.round(textSW('SOL') / 2), rig.solarKw > rig.drawKw, UI.gold);
       lamp2('SVC', cx + DR - textSW('SVC'), rig.svc, UI.edge);
     }
-    // ── RIG: vertical ladders on the outer-right edge (Glass spec §5.7) ──
-    // BATT · TYRE · HULL · SUSP as one rigid group, anchored 4g above the
-    // dial (rig.bottom = tach.top - 4g) — the horizontal bars became the
-    // same ladder construction the ENV column uses, mirrored to the right
-    // inset. BATT keeps healthy green; the others are aqua until a warning
-    // threshold promotes them; the label goes faint while its row is only
-    // confirming that nothing is wrong.
+    // ── ENV & RIG share ONE GAUGE, from the isolated study: a cap cell, a
+    // stack of cells hollow above the level and filled below it, a side
+    // triangle AT the level on the outer edge, and beside the stack a small
+    // box-and-whisker carrying the recent range — the whisker is the min/max
+    // envelope of the last while, the box is the mean ± its deviation, the
+    // midline the mean. The level says NOW; the whisker says LATELY — which
+    // is the difference between a gust and a windy day.
+    const GN = 6, GPITCH = 4, GSLOT = 34;
+    const gauge = (x: number, y: number, frac: number, col0: string, quiet: boolean,
+      side: 1 | -1, id: string, label: string): void => {
+      const col = quiet ? UI.dim : col0;
+      textEdgeS(label, side === 1 ? x : x - textSW(label) + 5, y, quiet ? UI.faint : col0);
+      const cxg = side === 1 ? x + 4 : x - 10;
+      const capY = y + 7;
+      hctx.fillStyle = col;
+      hctx.fillRect(cxg, capY, 5, 2);
+      const top = capY + 4, span = GN * GPITCH - 1;
+      const lvl = clamp(frac, 0, 1);
+      for (let i = 0; i < GN; i++) {
+        const cy2 = top + i * GPITCH;
+        if ((GN - i - 0.5) / GN <= lvl) hctx.fillRect(cxg, cy2, 5, 3);
+        else {
+          hctx.fillRect(cxg, cy2, 5, 1); hctx.fillRect(cxg, cy2 + 2, 5, 1);
+          hctx.fillRect(cxg, cy2, 1, 3); hctx.fillRect(cxg + 4, cy2, 1, 3);
+        }
+      }
+      const yOf = (v: number): number => top + Math.round((1 - clamp(v, 0, 1)) * (span - 1));
+      // The triangle sits on the OUTER edge and points into the ladder.
+      const lyv = yOf(lvl);
+      const tx = side === 1 ? cxg - 4 : cxg + 6;
+      for (let c = 0; c < 3; c++) {
+        const cc = side === 1 ? c : 2 - c;
+        hctx.fillRect(tx + cc, lyv - (2 - c), 1, 5 - 2 * c);
+      }
+      // The range, INSIDE the stack's shoulder: envelopes decay toward now,
+      // the box breathes with the deviation.
+      let h2 = gaugeHist.get(id);
+      if (!h2) { h2 = { lo: lvl, hi: lvl, m: lvl, dv: 0 }; gaugeHist.set(id, h2); }
+      h2.hi = Math.max(lvl, h2.hi - 0.0007); h2.lo = Math.min(lvl, h2.lo + 0.0007);
+      h2.m += (lvl - h2.m) * 0.012; h2.dv += (Math.abs(lvl - h2.m) - h2.dv) * 0.012;
+      const wx2 = side === 1 ? cxg + 9 : cxg - 7;
+      const yHi = yOf(h2.hi), yLo = yOf(h2.lo);
+      hctx.fillStyle = col;
+      hctx.fillRect(wx2 - 2, yHi, 5, 1);
+      hctx.fillRect(wx2 - 2, yLo, 5, 1);
+      hctx.fillRect(wx2, yHi, 1, Math.max(1, yLo - yHi + 1));
+      const yB0 = yOf(h2.m + h2.dv), yB1 = Math.max(yOf(h2.m - h2.dv), yOf(h2.m + h2.dv) + 2);
+      hctx.fillRect(wx2 - 2, yB0, 5, 1); hctx.fillRect(wx2 - 2, yB1, 5, 1);
+      hctx.fillRect(wx2 - 2, yB0, 1, yB1 - yB0 + 1); hctx.fillRect(wx2 + 2, yB0, 1, yB1 - yB0 + 1);
+      hctx.fillRect(wx2 - 2, yOf(h2.m), 5, 1);
+    };
+    // ── RIG, outer-right (Glass spec §5.7): the same gauge mirrored, one
+    // rigid group anchored 4g above the dial. BATT keeps healthy green.
     {
-      const SLOT = 27, SPINE = 16;
       const stackB = cy - DR - 9;
-      const lx = R - 5;
-      const rladder = (i: number, label: string, frac: number, col: string, quiet: boolean): void => {
-        const y2 = stackB - (4 - i) * SLOT + 4;
-        textEdgeS(label, R - textSW(label), y2, quiet ? UI.faint : col);
-        const sy = y2 + 8;
-        hctx.fillStyle = quiet ? UI.faint : UI.dim;
-        hctx.fillRect(lx + 2, sy, 1, SPINE);
-        for (let t = 0; t <= SPINE; t += 4) hctx.fillRect(lx + 1, sy + t, 3, 1);
-        const mk = sy + SPINE - 1 - Math.round(clamp(frac, 0, 1) * (SPINE - 1));
-        hctx.fillStyle = UI.ink; hctx.fillRect(lx - 1, mk - 1, 7, 4);
-        hctx.fillStyle = quiet ? UI.dim : col; hctx.fillRect(lx, mk, 5, 2);
-      };
-      rladder(0, 'BATT', rig.batt, rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good, false);
-      rladder(1, 'TYRE', rig.tyre, rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft, rig.tyre >= 0.6);
-      rladder(2, 'HULL', rig.hull, rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft, rig.hull >= 0.75);
-      rladder(3, 'SUSP', rig.susp, rig.susp < 0.3 ? UI.bad : rig.susp < 0.6 ? UI.gold : UI.soft, rig.susp >= 0.6);
+      const slotY = (i: number): number => stackB - (4 - i) * GSLOT + 4;
+      gauge(R, slotY(0), rig.batt, rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good, false, -1, 'batt', 'BATT');
+      gauge(R, slotY(1), rig.tyre, rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft, rig.tyre >= 0.6, -1, 'tyre', 'TYRE');
+      gauge(R, slotY(2), rig.hull, rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft, rig.hull >= 0.75, -1, 'hull', 'HULL');
+      gauge(R, slotY(3), rig.susp, rig.susp < 0.3 ? UI.bad : rig.susp < 0.6 ? UI.gold : UI.soft, rig.susp >= 0.6, -1, 'susp', 'SUSP');
     }
 
-    // ── ENV: vertical ladders on the outer-left edge (Glass spec §5.3) ──
-    // Label over a calibrated spine with a marker at the level — the
-    // horizontal bars became ladders and the column moved to the viewport
-    // edge, anchored 4g above the map. Five FIXED slots top to bottom
-    // (WET · SURF · SKY · WIND · FOG); a row with nothing to say leaves its
-    // slot empty rather than reflowing the stack (spec: missing content must
-    // not move neighbours).
+    // ── ENV, outer-left (Glass spec §5.3): five FIXED slots, absent rows
+    // leave their slot empty rather than reflowing the stack. ──
     {
-      const L = pad;
-      const SLOT = 27, SPINE = 16;
       const stackB = my - 8;               // env.bottom = map.top - 4g
-      const ladder = (i: number, label: string, frac: number, col: string, quiet = false): void => {
-        const y = stackB - (5 - i) * SLOT + 4;
-        textEdgeS(label, L, y, quiet ? UI.faint : col);
-        const sy = y + 8;
-        hctx.fillStyle = quiet ? UI.faint : UI.dim;
-        hctx.fillRect(L + 2, sy, 1, SPINE);
-        for (let t = 0; t <= SPINE; t += 4) hctx.fillRect(L + 1, sy + t, 3, 1);
-        const mk = sy + SPINE - 1 - Math.round(clamp(frac, 0, 1) * (SPINE - 1));
-        hctx.fillStyle = UI.ink; hctx.fillRect(L - 1, mk - 1, 7, 4);
-        hctx.fillStyle = quiet ? UI.dim : col; hctx.fillRect(L, mk, 5, 2);
-      };
-      // Spec order, top to bottom: sky matters first (WIND, then the sky
-      // itself), then the ground (surface, wet), fog last — the mock's
-      // WIND · CLEAR · ROUGH reading with our two extra rows slotted in.
+      const slotY = (i: number): number => stackB - (5 - i) * GSLOT + 4;
       const windKmh = live.on ? live.windKmh : 12;
-      ladder(0, 'WIND', clamp(windKmh / 60, 0, 1), windKmh > 38 ? UI.gold : UI.soft,
-        windKmh <= 38);
+      gauge(2, slotY(0), clamp(windKmh / 60, 0, 1), windKmh > 38 ? UI.gold : UI.soft,
+        windKmh <= 38, 1, 'wind', 'WIND');
       const w = WX[wx.sky];
-      ladder(1, w.label, wx.cloud, wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft,
-        wx.sky !== 'storm' && wx.rain <= 0.1);
-      // Named from the SURFACE QUALITY, not the OSM class — the three words
-      // are the three rungs of the ladder the physics is standing on.
+      gauge(2, slotY(1), wx.cloud, wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft,
+        wx.sky !== 'storm' && wx.rain <= 0.1, 1, 'sky', w.label);
       const sname = surf === 'water' ? 'WATER' : sq >= 0.8 ? 'ROAD' : sq >= 0.45 ? 'TRACK' : 'ROUGH';
       const scol = sname === 'ROAD' ? UI.good : sname === 'TRACK' ? UI.edge : UI.hot;
-      ladder(2, sname, grip, scol);
-      if (wx.wet > 0.02) ladder(3, 'WET', wx.wet, wx.wet > 0.5 ? UI.bad : UI.edge, wx.wet <= 0.5);
-      if (wxL.fog > 0.12) ladder(4, 'FOG', wxL.fog, UI.soft);
+      gauge(2, slotY(2), grip, scol, false, 1, 'surf', sname);
+      if (wx.wet > 0.02) gauge(2, slotY(3), wx.wet, wx.wet > 0.5 ? UI.bad : UI.edge, wx.wet <= 0.5, 1, 'wet', 'WET');
+      if (wxL.fog > 0.12) gauge(2, slotY(4), wxL.fog, UI.soft, false, 1, 'fog', 'FOG');
     }
   }
   // The mission card and the survey-claim toast are DOM now (client/
