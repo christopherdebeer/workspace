@@ -98,7 +98,7 @@ console.log('');
 console.log('  case                 step  shutter    amt    frame   camStep   camYaw    exposed    expYaw   km/h');
 for (const r of rows) {
   console.log(`  ${r.name.padEnd(18)} ${String(r.step).padStart(4)}`
-    + ` ${(r.shutterMs + 'ms').padStart(8)} ${r.amt.toFixed(3).padStart(6)}`
+    + ` ${(r.shutterDeg + '°').padStart(8)} ${r.amt.toFixed(3).padStart(6)}`
     + ` ${(r.dtMs.toFixed(0) + 'ms').padStart(7)} ${(r.stepM.toFixed(2) + 'm').padStart(9)}`
     + ` ${(r.stepYawDeg.toFixed(2) + '°').padStart(8)} ${(r.expM.toFixed(3) + 'm').padStart(10)}`
     + ` ${(r.expYawDeg.toFixed(3) + '°').padStart(9)} ${String(r.kmh).padStart(6)}`);

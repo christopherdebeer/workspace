@@ -2010,8 +2010,15 @@ const rtM = mkRT(false, true);
 // ANGLE — the fraction of the frame the blade is out of the way — so 180° at
 // 60fps is 1/120s. Naming it that way costs nothing and means the dial says
 // something true about how long the picture took.
-const MBLUR_SHUTTER = [0, 1 / 240, 1 / 120, 1 / 60];
-let mblurShutter = 0;
+// Shutter ANGLE as a fraction of the frame: 90°=0.25, 180°=0.5, 360°=1 (the
+// shutter open for the whole frame), then two impossible-on-film stops for
+// style. This replaced an absolute-seconds table (1/240..1/60) calibrated to
+// a 60fps frame: on a 30fps phone those times exposed only half the frame
+// step, so the dial's "180" behaved like a 90° shutter exactly where the
+// effect was wanted most. An angle is what a film camera holds constant per
+// frame, and it is what keeps the LOOK constant across frame rates.
+const MBLUR_FRAC = [0, 0.25, 0.5, 1, 1.5, 2];
+let mblurFrac = 0;
 resizePost = () => {
   const h = Math.min(PIX_H, Math.round(innerHeight));
   const w = Math.max(2, Math.round((innerWidth / innerHeight) * h));
@@ -2189,7 +2196,7 @@ let mblurPrimed = false;
 // Reported, not rendered: how far the camera actually moved and turned since
 // the last frame. A streak you can only judge by eye is a streak you cannot
 // argue about, and the yaw is the term that dominates in a corner.
-let mblurStepM = 0, mblurStepYaw = 0, mblurPrevYaw = 0, mblurDt = 0;
+let mblurStepM = 0, mblurStepYaw = 0, mblurPrevYaw = 0;
 const camYaw = (): number => Math.atan2(-camera.matrixWorld.elements[8], -camera.matrixWorld.elements[10]);
 const compMat = new THREE.ShaderMaterial({
   uniforms: {
@@ -22759,6 +22766,8 @@ let camInit = false;
 // How much of the chase stand-off the terrain currently allows (1 = all of
 // it). Smoothed asymmetrically in the chase branch; reset on mode change.
 let chasePull = 1;
+/** The speed-widened part of the chase fov, degrees over the 55° base. */
+let fovKick = 0;
 // How far into the tunnel rig the chase camera currently is: 1 under a roof,
 // rising ahead of a portal so the eye is already at mouth height on entry.
 let tunnelBlend = 0;
@@ -23052,6 +23061,7 @@ function setCam(m: CamMode): void {
   if (m !== 'top' && m !== 'drone') lastPov = m;
   camInit = false;                  // snap to the new rig, then resume smoothing
   chasePull = 1;                    // and forget any terrain pull-in from last time
+  fovKick = 0;                      // the lens starts at base in a fresh seat
   tunnelBlend = 0;
   panX = panZ = 0;                  // pan is a glance, not a state to carry over
   // From the driver's seat you are INSIDE the shell, so the near plane has to
@@ -24547,9 +24557,10 @@ function stepTraction(dt: number, surf: SurfParams, grip: number, thrust: number
   const nF = clamp(0.5 - xfer, 0.14, 0.86), nR = clamp(0.5 + xfer, 0.14, 0.86);
   const muF = axleMu[0] * gDial, muR = axleMu[1] * gDial;
   const capF = muF * nF * GRAV * grip, capR = muR * nR * GRAV * grip;
-  // Two sub-steps at a phone's frame time. The tyre curve is stiff near zero
-  // slip and a 50ms Euler step through it rings; halving it costs four adds.
-  const n = dt > 0.026 ? 2 : 1, h = dt / n;
+  // Sub-steps of ~25ms. The tyre curve is stiff near zero slip and a 50ms
+  // Euler step through it rings; the tick's clamp now allows up to 100ms, so
+  // the count scales with the step instead of assuming one halving is enough.
+  const n = Math.max(1, Math.ceil(dt / 0.025)), h = dt / n;
   for (let i = 0; i < n; i++) {
     const u = state.speed, v = slideV;
     const su = u < 0 ? -1 : 1;
@@ -25252,7 +25263,15 @@ function tick(now: number): void {
   // have the physics fighting the scrub and would write those frames onto the
   // very ring being scrubbed. Same zero-dt path the menu already uses.
   const scrubbing = rewind.at !== null;
-  const dt = played ? played.dt : (paused || scrubbing) ? 0 : (FIX_DT || Math.min(0.05, raw / 1000));
+  // THE CLAMP IS A TIME-DILATION DIAL, and 50ms set it too low: below 20fps
+  // each frame integrated less sim time than wall time passed, so the whole
+  // world — and the truck — ran in slow motion while the speedo kept telling
+  // the truth in sim seconds. Measured in the harness: sim rate 0.021 at
+  // 0.5fps, exactly the 0.05×fps the clamp predicts. 100ms keeps real time
+  // down to 10fps — the band phones actually dip into — and the two stiff
+  // integrators (tyres, springs) substep internally so the bigger step stays
+  // stable. Below 10fps dilation still guards against tab-stall teleports.
+  const dt = played ? played.dt : (paused || scrubbing) ? 0 : (FIX_DT || Math.min(0.1, raw / 1000));
   last = now;
   simT += dt; simN++;
   // The splash's own clock: WALL time, because the sim's dt is zero exactly
@@ -25722,9 +25741,15 @@ function tick(now: number): void {
   // is what a tired damper actually does — the truck starts to float and keep
   // moving after the bump has finished, and the wheels spend longer light.
   const sK = tune.susp, sD = rigDamp();
+  // THE SPRINGS SUBSTEP. The tick's clamp allows 100ms now, and k=55 under a
+  // stiff dial with worn dampers puts explicit Euler's stability edge right
+  // about there — halving the step keeps the margin the 50ms clamp used to
+  // provide for free. Targets are per-frame facts and stay outside the loop.
+  const sn = dt > 0.055 ? 2 : 1, sh = dt / sn;
+  for (let si = 0; si < sn; si++) {
   let aY = SUSP.k * sK * (tY - bodyY) - SUSP.d * sD * (vBodyY - terrainVy);
   if (aY < -9.81) aY = -9.81; // falling is gravity's job — crests launch
-  vBodyY += aY * dt; bodyY += vBodyY * dt;
+  vBodyY += aY * sh; bodyY += vBodyY * sh;
   if (bodyY < tY - SUSP.travel) {
     bodyY = tY - SUSP.travel;
     // A BUMP STOP IS NOT A TRAMPOLINE. Bouncing off it at any closing speed
@@ -25737,6 +25762,7 @@ function tick(now: number): void {
     // compression that doesn't bottom out groans instead of thumping.
     else if (vBodyY < -1.3) audio.creak(clamp(-vBodyY / 3, 0.25, 0.85));
     else if (vBodyY < 0) vBodyY = 0;
+  }
   }
   // THE DESCENT BUG, PITCH EDITION — the exact twin of the heave fix above,
   // which was never applied to attitude. A spring chasing the grade has to
@@ -25757,9 +25783,13 @@ function tick(now: number): void {
   // terrainVy: reference the world's motion, do not fight it.
   const gradeRate = dt > 0 ? clamp((gradePitch - prevGradePitch) / dt, -6, 6) : 0;
   prevGradePitch = gradePitch;
-  vPitch += (SUSP.ka * sK * (tPitch - pitchC) - SUSP.da * sD * (vPitch - gradeRate)) * dt;
-  pitchC += vPitch * dt;
-  vRoll += (SUSP.ka * sK * (tRoll - rollC) - SUSP.da * sD * vRoll) * dt; rollC += vRoll * dt;
+  // Attitude springs are the same stiffness class as the heave spring — same
+  // substep, same reason.
+  for (let si = 0; si < sn; si++) {
+    vPitch += (SUSP.ka * sK * (tPitch - pitchC) - SUSP.da * sD * (vPitch - gradeRate)) * sh;
+    pitchC += vPitch * sh;
+    vRoll += (SUSP.ka * sK * (tRoll - rollC) - SUSP.da * sD * vRoll) * sh; rollC += vRoll * sh;
+  }
   // Articulation: wheels chase their own contact while the sprung body lags.
   groundedF = 0;
   for (let i = 0; i < 4; i++) {
@@ -26148,7 +26178,23 @@ function tick(now: number): void {
     // landscape, and sit high enough to look over its own dust.
     // Distances came down with the truck: on the spec-sheet body (2.15m wide
     // against the old 3.08m) the previous stand-off left it a speck.
-    const back = 13 + (chaseH - 1) * 5 + Math.abs(state.speed) * 0.26;
+    //
+    // THE LENS TELLS THE SPEED NOW, NOT THE STAND-OFF. The camera used to back
+    // away as the rig sped up (+0.26m per m/s) with the fov pinned — which
+    // LOWERS the angular flow of everything near the eye, the strongest speed
+    // signal there is, and read from the seat as "the game feels slow". The
+    // retreat is gone; instead the 55° vertical fov (only ~30° horizontal on a
+    // portrait phone — a telephoto) widens toward 63° as the rig approaches
+    // its top speed, smoothed so a lifted throttle doesn't pump the lens.
+    {
+      const kickWant = 8 * Math.pow(clamp(Math.abs(state.speed) / 50, 0, 1), 1.5);
+      fovKick += (kickWant - fovKick) * (1 - Math.exp(-2.5 * dt));
+      if (camMode === 'chase' && Math.abs(55 + fovKick - camera.fov) > 0.02) {
+        camera.fov = 55 + fovKick;
+        camera.updateProjectionMatrix();
+      }
+    }
+    const back = 13 + (chaseH - 1) * 5;
     // UNDER A ROOF? Inside a tunnel groundAt answers with the HILL — tn segs
     // are exempt from the corridor cut on purpose — so every "stay above the
     // ground" rule below would catapult the camera onto the hilltop to stare
@@ -26408,11 +26454,15 @@ function tick(now: number): void {
   // rebuilds it inside every camera branch above, so a view matrix kept
   // without its projection would reproject through a lens that has moved.
   mblurVP.copy(camera.projectionMatrix).multiply(camera.matrixWorldInverse);
-  // SCALED BY A TIME, NOT BY A FRAME. Blur is velocity x shutter; the
-  // displacement the reprojection measures is velocity x dt. The ratio turns
-  // one into the other, and that is what makes a 30fps phone, a 60fps desktop
-  // and a headless capture at three frames a second all show the SAME streak
-  // — the picture stops being a report on the frame rate.
+  // SCALED BY AN ANGLE, NOT BY A TIME. This used to divide an absolute
+  // shutter time by dt so every frame rate showed the same world-time streak —
+  // principled, and wrong for the eye: as fps falls the frame STEP grows while
+  // the streak stays fixed, so the blur-to-judder ratio collapses and a 30fps
+  // phone reads "blur barely does anything" on the very hardware that needs it
+  // covering the judder. A film camera holds the shutter ANGLE per frame —
+  // 180° exposes half of every frame step whatever the rate — and that is the
+  // number the dial holds now. amt IS the fraction of the measured
+  // frame-to-frame displacement the exposure integrates.
   mblurAmt = 0;
   // ── A SCRUB IS THE ONE TIME A TELEPORT *IS* THE MOTION ──
   //
@@ -26439,7 +26489,7 @@ function tick(now: number): void {
     // ceiling is deliberately past 1.0 — uMaxPx below is what actually bounds
     // it, and this is the term that makes it dramatic.
     mblurAmt = clamp(scrubStepM / 6, 0.5, 3.2);
-  } else if (mblurShutter > 0 && !paused && dt > 0.0005 && camMode !== 'top') {
+  } else if (mblurFrac > 0 && !paused && dt > 0.0005 && camMode !== 'top') {
     // NOT IN THE CHART. Up there the camera is an instrument being panned
     // over a map, and an instrument that smears while you read it is a
     // broken instrument, not a fast one.
@@ -26447,14 +26497,17 @@ function tick(now: number): void {
     // A teleport, a spawn, or the camera still closing on the truck after one
     // is not motion, and integrating it paints the entire screen. Measured in
     // METRES because it is a fact about the camera, not about the picture.
-    if (camera.position.distanceTo(mblurPrevCam) < 40) mblurAmt = mblurShutter / dt;
+    if (camera.position.distanceTo(mblurPrevCam) < 40) mblurAmt = mblurFrac;
   }
   // …AND THE CEILING LIFTS WITH IT. 20 texels is tuned for a violent yaw at
-  // speed, where a longer streak would be longer than the thing it streaks.
-  // A rewind is allowed to look like a rewind: at 148x320 this is about a
-  // third of the frame, and the cap is still what stops it becoming mush.
-  (mblurMat.uniforms.uMaxPx as { value: number }).value = rewind.at !== null ? 48 : 20;
-  mblurDt = dt;
+  // speed, where a longer streak would be longer than the thing it streaks —
+  // but it also silently flattened the dial: past ~180° the extra exposure
+  // went straight into the cap. The ceiling now rises with the angle, so the
+  // 360°+ stops are visibly longer, and a rewind is still allowed to look
+  // like a rewind: at 148x320 that is about a third of the frame, and the cap
+  // is still what stops it becoming mush.
+  (mblurMat.uniforms.uMaxPx as { value: number }).value =
+    rewind.at !== null ? 48 : 20 + 14 * clamp(mblurAmt - 0.5, 0, 1);
   mblurStepM = scrubStepM;
   mblurStepYaw = Math.abs(Math.atan2(Math.sin(camYaw() - mblurPrevYaw), Math.cos(camYaw() - mblurPrevYaw)));
   mblurPrevYaw = camYaw();
@@ -29116,12 +29169,14 @@ const DIAL_GROUPS: DialGroup[] = [
         cu.uHazeWarm.value = [0, 0.2, 0.4, 0.7][i];
       }),
       // IN SHUTTER ANGLES, which is the unit a camera keeps this number in:
-      // the fraction of the frame the blade is out of the way. 180 is the film
-      // default and reads here as 1/120s of travel. OFF by default — it is the
-      // newest thing in the chain, it is the first frame-to-frame state in the
-      // file, and a phone that cannot spare the pass should not be paying for
-      // it before anyone has decided it belongs.
-      dial('mblur', 'MOTION BLUR', ['OFF', '90', '180', '360'], 0, (i) => { mblurShutter = MBLUR_SHUTTER[i]; }),
+      // the fraction of each frame the blade is out of the way — 180° exposes
+      // half of every frame step, whatever the frame rate (see MBLUR_FRAC for
+      // why it is truly an angle now, not a 60fps-calibrated time). 180 is the
+      // film default and the default here; 360 holds the shutter open for the
+      // whole frame; 540 and 720 are impossible on film and exist for the
+      // arcade long-exposure look. The pass earned its keep — the earlier OFF
+      // default was caution about a chain it had just joined.
+      dial('mblur', 'MOTION BLUR', ['OFF', '90', '180', '360', '540', '720'], 2, (i) => { mblurFrac = MBLUR_FRAC[i]; }),
       // Where the dust and the spray sit between a volume and a sprite. SOFT is
       // an honest airborne plume; HARD is a few flat tone steps that agree with
       // the palette quantiser instead of being banded by it. Water and grit keep
@@ -30603,7 +30658,7 @@ function setClean(on: boolean): void {
 // Note the canvas carries the WORLD only — the HUD is a separate DOM canvas —
 // which is the half anyone judging this needs to see.
 (window as unknown as { __mbpair?: object }).__mbpair = (step: number): object => {
-  const amt = mblurDt > 0.0005 ? MBLUR_SHUTTER[clamp(Math.round(step), 0, 3)] / mblurDt : 0;
+  const amt = MBLUR_FRAC[clamp(Math.round(step), 0, MBLUR_FRAC.length - 1)];
   // Reproject against the matrix the LIVE frame used, not against the one that
   // has already been advanced past it.
   const keep = new THREE.Matrix4().copy(mblurPrevVP);
@@ -30618,8 +30673,8 @@ function setClean(on: boolean): void {
 };
 (window as unknown as { __mbdbg?: object }).__mbdbg = (): object => ({
   step: DIALS.find((x) => x.key === 'mblur')?.at ?? 0,
-  shutterMs: +(mblurShutter * 1000).toFixed(2),
-  amt: +mblurAmt.toFixed(3),          // shutter/dt — how much of a frame step is exposed
+  shutterDeg: Math.round(mblurFrac * 360),
+  amt: +mblurAmt.toFixed(3),          // deg/360 — how much of a frame step is exposed
   dtMs: +(frameMs).toFixed(1),
   // What the camera did in the last frame, which is what the reprojection
   // measures. The yaw term is the one that reaches the whole picture.
