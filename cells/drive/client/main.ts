@@ -26382,16 +26382,24 @@ function tick(now: number): void {
   vBodyY += aY * sh; bodyY += vBodyY * sh;
   if (bodyY < tY - SUSP.travel) {
     bodyY = tY - SUSP.travel;
-    // A BUMP STOP IS NOT A TRAMPOLINE. Bouncing off it at any closing speed
-    // turned a sustained grade — where the travel limit is simply held, not
-    // struck — into a repeating bounce, because the stop was being touched
-    // every frame. Restitution now needs a real impact behind it; below that
-    // the body just rests on the stop.
-    if (vBodyY < -2.5) { audio.thud(Math.min(3, -vBodyY / 3)); vBodyY *= -0.25; }
+    // A BUMP STOP IS NOT A TRAMPOLINE — and it lives in the GROUND'S frame,
+    // like the damper above it. The impact test used the world-frame vBodyY,
+    // but on a descent a body correctly FOLLOWING the slope already falls at
+    // terrainVy (-7 to -10 on a 30° alpine grade), so the ordinary following
+    // rate read as a hard impact: restitution kicked the body up relative to
+    // the hill, the wheels drooped to zero grip, the 1g fall cap made it lag
+    // the falling ground, and it caught up into the next strike — a 2-second
+    // slam-bounce cycle the whole way down (measured at Stelvio: 35% of
+    // descending frames airborne, vBodyY reversing -9 to +0.5 on a touch
+    // that closed at 1.3 relative). Impact, restitution, groan and rest are
+    // all judged and applied against the ground's own rate now; on the flat
+    // terrainVy is 0 and nothing changes.
+    const rel = vBodyY - terrainVy;
+    if (rel < -2.5) { audio.thud(Math.min(3, -rel / 3)); vBodyY = terrainVy - rel * 0.25; }
     // Under the bump stops' threshold the chassis still WORKS — a hard
     // compression that doesn't bottom out groans instead of thumping.
-    else if (vBodyY < -1.3) audio.creak(clamp(-vBodyY / 3, 0.25, 0.85));
-    else if (vBodyY < 0) vBodyY = 0;
+    else if (rel < -1.3) audio.creak(clamp(-rel / 3, 0.25, 0.85));
+    else if (rel < 0) vBodyY = terrainVy;
   }
   }
   // THE DESCENT BUG, PITCH EDITION — the exact twin of the heave fix above,
