@@ -2121,11 +2121,20 @@ function depthVisible(px3: number, py3: number, pz3: number): boolean {
   if (Math.abs(depVec.x) > 1 || Math.abs(depVec.y) > 1) return true;
   const gx = clamp(Math.floor((depVec.x * 0.5 + 0.5) * LUMA_W), 0, LUMA_W - 1);
   const gy = clamp(Math.floor((depVec.y * 0.5 + 0.5) * LUMA_H), 0, LUMA_H - 1);
+  // A COLUMN OF CELLS, NOT A POINT. The analytic curve and the renderer's
+  // disagree by a few cells at long range (measured at Bears Ears: the apex
+  // projected two degrees under its own rendered summit and sampled the
+  // grass at 159m), and a distant mesa is a one-texel sliver this grid
+  // cannot be trusted to point-sample. Looking UP a few cells can only find
+  // FARTHER things, so it rescues a summit shy of its own render without
+  // un-hiding anything a real wall covers — a wall fills the whole column.
   let far2 = 0;
-  for (const [ox, oy] of [[0, 0], [-1, 0], [1, 0], [0, 1]] as const) {
-    const cxq = clamp(gx + ox, 0, LUMA_W - 1), cyq = clamp(gy + oy, 0, LUMA_H - 1);
-    const i = (cyq * LUMA_W + cxq) * 4;
-    far2 = Math.max(far2, ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar);
+  for (let oy = 0; oy <= 3; oy++) {
+    for (let ox = -1; ox <= 1; ox++) {
+      const cxq = clamp(gx + ox, 0, LUMA_W - 1), cyq = clamp(gy + oy, 0, LUMA_H - 1);
+      const i = (cyq * LUMA_W + cxq) * 4;
+      far2 = Math.max(far2, ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar);
+    }
   }
   // THE BACKDROP IS NOT AN OCCLUDER. The sky dome and cloud deck are real
   // meshes with real depth, and with the far shell unstreamed they are what
@@ -20789,10 +20798,12 @@ function farHeightAt(wx: number, wz: number): number | null {
   const gx = clamp(Math.floor((depVec.x * 0.5 + 0.5) * LUMA_W), 0, LUMA_W - 1);
   const gy = clamp(Math.floor((depVec.y * 0.5 + 0.5) * LUMA_H), 0, LUMA_H - 1);
   let far2 = 0;
-  for (const [ox, oy] of [[0, 0], [-1, 0], [1, 0], [0, 1]] as const) {
-    const cxq = clamp(gx + ox, 0, LUMA_W - 1), cyq = clamp(gy + oy, 0, LUMA_H - 1);
-    const i = (cyq * LUMA_W + cxq) * 4;
-    far2 = Math.max(far2, ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar);
+  for (let oy = 0; oy <= 3; oy++) {
+    for (let ox = -1; ox <= 1; ox++) {
+      const cxq = clamp(gx + ox, 0, LUMA_W - 1), cyq = clamp(gy + oy, 0, LUMA_H - 1);
+      const i = (cyq * LUMA_W + cxq) * 4;
+      far2 = Math.max(far2, ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar);
+    }
   }
   return { primed: lumaPrimed, y: Math.round(py3), dCam: Math.round(dCam),
     ndc: [+depVec.x.toFixed(3), +depVec.y.toFixed(3), +depVec.z.toFixed(3)],
