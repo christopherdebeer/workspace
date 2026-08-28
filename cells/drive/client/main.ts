@@ -2160,6 +2160,28 @@ function depthVisible(px3: number, py3: number, pz3: number): boolean {
   }
   return false;
 }
+// ── X-RAY: the debug eyes, drivable ────────────────────────────────
+// 1 = DEPTH: the 40x88 map the HUD's occlusion verdicts actually read,
+// painted under the live instruments so a wrong pin can be argued with on
+// the spot. 2 = WIRE: the world stripped to its meshes — the geometry the
+// truck is actually colliding with, not the paint over it.
+let xrayMode = 0;
+let xrayWireOn = false, xrayWireAt = 0;
+function xrayWire(now: number): void {
+  const want = xrayMode === 2;
+  if (!want && !xrayWireOn) return;
+  // While on, sweep again every couple of seconds — streamed-in tiles arrive
+  // with their materials solid and need catching.
+  if (want && xrayWireOn && now - xrayWireAt < 2000) return;
+  xrayWireAt = now; xrayWireOn = want;
+  worldGroup.traverse((o) => {
+    const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+    if (!m) return;
+    for (const mm of Array.isArray(m) ? m : [m]) {
+      if ('wireframe' in mm) (mm as THREE.MeshBasicMaterial).wireframe = want;
+    }
+  });
+}
 /** Background luminance under a HUD-pixel point, 0..1. GL rows run bottom-up,
  *  so the vertical index flips. */
 function hudBgLuma(hx: number, hy: number): number {
@@ -24339,6 +24361,12 @@ function updateCps(): void {
 // tire roar coloured by the surface underneath, wind that rises with speed,
 // and impacts when the suspension bottoms out. One noise buffer, a handful of
 // nodes, no assets — and it must be armed by a gesture (iOS autoplay policy).
+/** What the truck HIT, material and all — kept regardless of whether the
+ *  audio context is armed, because the harness verifies with this list what
+ *  an ear cannot: that a rail clangs, a rock crunches, a façade crashes. */
+type ImpactKind = 'shell' | 'metal' | 'stone';
+const impactLog: Array<{ t: number; kind: ImpactKind; force: number }> = [];
+(window as unknown as { __impacts?: object }).__impacts = (): object => impactLog.slice(-25);
 const audio = (() => {
   let ctx: AudioContext | null = null;
   let master: GainNode | null = null;
@@ -24616,7 +24644,13 @@ const audio = (() => {
      * well as loudening it: half a second for a scrape, a second and a half
      * for a real one.
      */
-    crash(force: number): void {
+    crash(force: number, kind: ImpactKind = 'shell'): void {
+      // The ledger first, the loudspeaker second — a muted or headless run
+      // still records what the physics charged.
+      if (force >= 0.2) {
+        impactLog.push({ t: Math.round(performance.now()), kind, force: +clamp(force, 0, 1).toFixed(2) });
+        if (impactLog.length > 60) impactLog.shift();
+      }
       if (!ctx || !master || ctx.state !== 'running' || !on) return;
       const now = performance.now();
       // A light knock may repeat quickly; a heavy one holds the floor, or a
@@ -24646,12 +24680,17 @@ const audio = (() => {
         src.connect(lp); lp.connect(g); g.connect(mas);
         src.start(t); src.stop(t + 0.07);
       }
-      // 2 · THE SHELL. A body is a steel box and a box has MODES: two low
-      // resonances rung by the strike, decaying across most of the event.
-      // This is the weight the old lowpass thump was gesturing at.
-      for (const [hz, q, amp, len] of [
-        [58 + Math.random() * 16, 9, 0.42, 0.55], [132 + Math.random() * 30, 7, 0.26, 0.4],
-      ] as Array<[number, number, number, number]>) {
+      // 2 · THE BODY OF THE SOUND — and the MATERIAL lives here. A steel box
+      // has two low modes rung by the strike; a guard RAIL rings bright and
+      // long, a tuning fork bolted to posts; MASONRY has no modes at all,
+      // only one dead thump — stone does not sing about being hit.
+      const modes: Array<[number, number, number, number]> = kind === 'metal'
+        ? [[330 + Math.random() * 140, 15, 0.28, 0.6], [880 + Math.random() * 320, 13, 0.2, 0.7],
+          [1650 + Math.random() * 500, 11, 0.1, 0.55]]
+        : kind === 'stone'
+          ? [[64 + Math.random() * 18, 3, 0.5, 0.3]]
+          : [[58 + Math.random() * 16, 9, 0.42, 0.55], [132 + Math.random() * 30, 7, 0.26, 0.4]];
+      for (const [hz, q, amp, len] of modes) {
         const src = noise();
         const bp = ac.createBiquadFilter(); bp.type = 'bandpass';
         bp.frequency.value = hz; bp.Q.value = q;
@@ -24663,10 +24702,11 @@ const audio = (() => {
       }
       // 3 · THE BUCKLE. Metal yielding is PITCH THAT FALLS: the panel gives,
       // and what was ringing at one frequency is suddenly ringing lower. A
-      // light knock buckles nothing, so this layer only shows up under load.
-      if (f > 0.32) {
+      // light knock buckles nothing, so this layer only shows up under load —
+      // and STONE never buckles: masonry breaks or holds, it does not fold.
+      if (f > 0.32 && kind !== 'stone') {
         const osc = ac.createOscillator(); osc.type = 'sawtooth';
-        const f0 = 150 + Math.random() * 90;
+        const f0 = (kind === 'metal' ? 310 : 150) + Math.random() * 90;
         osc.frequency.setValueAtTime(f0, t + 0.01);
         osc.frequency.exponentialRampToValueAtTime(f0 * 0.34, t + 0.1 + f * 0.22);
         const lp = ac.createBiquadFilter(); lp.type = 'lowpass';
@@ -24683,10 +24723,11 @@ const audio = (() => {
       // because a smooth envelope over the same noise is just wind. The steps
       // are the whole character of the layer.
       {
-        const src = noise(1.3);
+        const src = noise(kind === 'stone' ? 0.9 : 1.3);
         const bp = ac.createBiquadFilter(); bp.type = 'bandpass';
-        bp.frequency.setValueAtTime(1500 + Math.random() * 700, t);
-        bp.frequency.exponentialRampToValueAtTime(420, t + dur);
+        // Metal grinds bright, rubble grinds LOW — dragged gravel, not paint.
+        bp.frequency.setValueAtTime((kind === 'metal' ? 2100 : kind === 'stone' ? 800 : 1500) + Math.random() * 700, t);
+        bp.frequency.exponentialRampToValueAtTime(kind === 'stone' ? 240 : 420, t + dur);
         bp.Q.value = 1.1;
         const g = ac.createGain();
         const peak = 0.06 + f * 0.2;
@@ -24704,12 +24745,15 @@ const audio = (() => {
       // 5 · THE SETTLING. Trim, grit and panels finding their rest — scattered
       // ticks across the tail, thinning as it goes. The reason a wreck sounds
       // finished rather than cut off.
-      const bits = Math.round(2 + f * 6);
+      // Stone settles as RUBBLE — more pieces, heavier, duller — where a car
+      // sheds a few bright bits of trim.
+      const bits = Math.round((kind === 'stone' ? 4 : 2) + f * (kind === 'stone' ? 9 : 6));
       for (let i2 = 0; i2 < bits; i2++) {
         const at = t + 0.12 + Math.random() * dur;
         const src = noise();
         const bp = ac.createBiquadFilter(); bp.type = 'bandpass';
-        bp.frequency.value = 700 + Math.random() * 1900; bp.Q.value = 5 + Math.random() * 7;
+        bp.frequency.value = (kind === 'stone' ? 420 : 700) + Math.random() * (kind === 'stone' ? 1100 : 1900);
+        bp.Q.value = (kind === 'stone' ? 3 : 5) + Math.random() * 7;
         const g = ac.createGain();
         const late = clamp(1 - (at - t) / (dur + 0.1), 0.15, 1);
         g.gain.setValueAtTime((0.03 + Math.random() * 0.05) * (0.4 + f) * late, at);
@@ -24752,11 +24796,14 @@ const audio = (() => {
     },
     /** Continuous channels, set every frame from tick like everything in
      *  update(): 0 releases them. */
-    scrape(level: number): void {
+    /** `bright` is the MATERIAL under the bodywork: 0.35 is concrete and
+     *  masonry, 1 is a steel rail — the same drag reads as a grind on one
+     *  and a screech on the other. */
+    scrape(level: number, bright = 0.35): void {
       if (!ctx || !scrapeGain) return;
       const t = ctx.currentTime;
       scrapeGain.gain.setTargetAtTime(level * 0.22, t, 0.05);
-      scrapeFilt.frequency.setTargetAtTime(520 + level * 720, t, 0.08);
+      scrapeFilt.frequency.setTargetAtTime(340 + bright * 640 + level * 620, t, 0.08);
     },
     water(level: number): void {
       if (!ctx || !waterGain) return;
@@ -25411,12 +25458,13 @@ function rigLanding(sev: number): void {
  *  wrote the truck off. Billing the impulse gets both ends right for free: a
  *  graze along a barrier sheds almost no speed and costs almost nothing, while
  *  driving into a façade sheds all of it at once and hurts. */
-function rigImpact(lost: number): void {
+function rigImpact(lost: number, kind: ImpactKind = 'shell'): void {
   if (lost <= 0.15) return;
   rig.hull = clamp(rig.hull - lost * 0.006, 0, 1);
   // The hit you HEAR: a frame that cost real speed is a crash (the crash's
-  // own cooldown keeps a long scrape from machine-gunning).
-  audio.crash(clamp(lost / 5, 0, 1));
+  // own cooldown keeps a long scrape from machine-gunning), and it sounds
+  // like what was hit — a rail clangs, a façade crashes.
+  audio.crash(clamp(lost / 5, 0, 1), kind);
 }
 // The drivetrain's own state, separate from road speed — which is the point:
 // with the wheels off the ground they are no longer the same number.
@@ -26105,6 +26153,7 @@ function tick(now: number): void {
   // How square the hit was, worst case over everything touched this frame: 0 is
   // a graze straight along the barrier, 1 is driving into it head-on.
   let scrape = -1;
+  let scrapeMetal = false;      // what the bodywork is against: rail or masonry
   const nowMs = performance.now();
   for (let pass = 0; pass < 2 && !real.on; pass++) {
     const walls = wallGrid.get(gkey(state.x, state.z));
@@ -26137,7 +26186,7 @@ function tick(now: number): void {
           const v = Math.abs(state.speed);
           state.speed *= 0.76;
           rig.hull = clamp(rig.hull - 0.006 * Math.min(1, v / 12), 0, 1);
-          audio.crash(clamp(v / 14, 0.25, 0.9));
+          audio.crash(clamp(v / 14, 0.25, 0.9), 'stone');
           continue;
         }
         const push = (CAR_R - d) / (d || 1e-4);
@@ -26157,7 +26206,7 @@ function tick(now: number): void {
           const along = Math.abs((Math.sin(state.heading) * sx + -Math.cos(state.heading) * sz) / sl);
           sq = clamp(1 - along, 0, 1);
         }
-        if (sq > scrape) scrape = sq;
+        if (sq > scrape) { scrape = sq; scrapeMetal = !!seg.sl; }
       }
     }
     if (!hit) break;
@@ -26198,7 +26247,7 @@ function tick(now: number): void {
       const into = -(vx * nx + vz * nz);       // >0 when moving inward
       if (into > 0) {
         const sq = clamp(into / Math.max(1, Math.abs(state.speed)), 0, 1);
-        if (sq > scrape) scrape = sq;
+        if (sq > scrape) { scrape = sq; scrapeMetal = false; }
         // A dead stop rather than a bounce: it is a kilometre of engineering
         // and the truck is not going to move it.
         state.speed *= 1 - 0.85 * sq;
@@ -26209,7 +26258,7 @@ function tick(now: number): void {
   if (scrape >= 0) {
     const was = Math.abs(state.speed);
     state.speed *= Math.exp(-5 * scrape * dt);
-    rigImpact(was - Math.abs(state.speed));
+    rigImpact(was - Math.abs(state.speed), scrapeMetal ? 'metal' : 'shell');
   }
   // ── rocks: collideable, never blocking ──
   // A boulder is not scenery you clip through and not a wall that traps you:
@@ -26239,7 +26288,7 @@ function tick(now: number): void {
         const cost = clamp(tall * 0.3, 0.06, 0.5);
         state.speed *= 1 - cost;
         rig.hull = clamp(rig.hull - tall * 0.004 * Math.min(1, v / 12), 0, 1);
-        audio.crash(clamp((v * cost) / 4, 0.25, 0.9));
+        audio.crash(clamp((v * cost) / 4, 0.25, 0.9), 'stone');
       }
       // The boulders standing in the rapids: same bite-and-through, their own
       // grid (see rapidRocks). `s` here is the rock's real radius, so the
@@ -26253,7 +26302,7 @@ function tick(now: number): void {
         const cost = clamp(rock.s * 0.36, 0.12, 0.45);
         state.speed *= 1 - cost;
         rig.hull = clamp(rig.hull - rock.s * 0.005 * Math.min(1, v / 12), 0, 1);
-        audio.crash(clamp((v * cost) / 4, 0.25, 0.9));
+        audio.crash(clamp((v * cost) / 4, 0.25, 0.9), 'stone');
       }
     }
   }
@@ -26646,7 +26695,8 @@ function tick(now: number): void {
   // The rig against the world: bodywork on a wall while moving, the hull's
   // wash through water, and the slap of arriving in it with any speed on.
   audio.scrape(scrape >= 0 && Math.abs(state.speed) > 1.5
-    ? clamp(Math.abs(state.speed) / 22, 0.15, 1) * (0.4 + 0.6 * Math.max(0, scrape)) : 0);
+    ? clamp(Math.abs(state.speed) / 22, 0.15, 1) * (0.4 + 0.6 * Math.max(0, scrape)) : 0,
+  scrapeMetal ? 1 : 0.35);
   audio.water(surfKind === 'water' && groundedF > 0.2 ? clamp(Math.abs(state.speed) / 11, 0.12, 1) : 0);
   if (surfKind === 'water' && prevSurfKind !== 'water' && Math.abs(state.speed) > 3) {
     // The slap scales with what you drove into as well as how fast: a ford
@@ -27199,6 +27249,7 @@ function tick(now: number): void {
   // world: a second frame of trailing on top of the stale-inverse one.
   updatePois(); // every frame — throttled pins juddered against the camera
   stepLuma(now);          // refresh what the glass is being written over
+  xrayWire(now);          // keep the wireframe sweep over streamed-in tiles
   drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF);
   stepOverlays();
   // Whatever view is up: the frame follows the truck even while the dock shows
@@ -27649,6 +27700,34 @@ Object.assign(hud.style, {
 hud.classList.add('ui');
 document.body.appendChild(hud);
 const hctx = hud.getContext('2d')!;
+// The X-RAY DEPTH view: the luma map, decoded and painted edge to edge under
+// the instruments. Sky is blue (it decodes as the far plane — the dome writes
+// no depth), terrain is grey by log distance. Same rendering as the
+// depth-map-shot fixture, so a phone screenshot and a harness capture argue
+// from the same picture.
+let xrayCv: HTMLCanvasElement | null = null;
+let xrayImg: ImageData | null = null;
+function drawLumaMap(): void {
+  if (!xrayCv) { xrayCv = document.createElement('canvas'); xrayCv.width = LUMA_W; xrayCv.height = LUMA_H; }
+  const c2 = xrayCv.getContext('2d')!;
+  if (!xrayImg) xrayImg = c2.createImageData(LUMA_W, LUMA_H);
+  const px = xrayImg.data;
+  for (let gy = 0; gy < LUMA_H; gy++) {
+    for (let gx = 0; gx < LUMA_W; gx++) {
+      const i = (gy * LUMA_W + gx) * 4;
+      const m = ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar;
+      const o = ((LUMA_H - 1 - gy) * LUMA_W + gx) * 4;   // buffer is bottom-up
+      if (m >= lumaFar * 0.95) { px[o] = 20; px[o + 1] = 34; px[o + 2] = 66; }
+      else {
+        const v = Math.round(30 + (Math.log(1 + m) / Math.log(1 + lumaFar)) * 225);
+        px[o] = v; px[o + 1] = v; px[o + 2] = v;
+      }
+      px[o + 3] = 255;
+    }
+  }
+  c2.putImageData(xrayImg, 0, 0);
+  hctx.drawImage(xrayCv, 0, 0, HW, HH);
+}
 // The reference's limited palette.
 // Retinted to the Glass spec's targets (§4): text is BONE (warm paper, not
 // blue-white), edge is the spec's aqua, dim its aquaDim, and the amber /
@@ -29869,6 +29948,13 @@ const DIAL_GROUPS: DialGroup[] = [
         cu.uBloom.value = bloomDial;
       }),
       dial('flare', 'LENS FLARE', ['OFF', 'ON'], 1, (i) => { cu.uFlare.value = i; }),
+      // ── X-RAY: the debug eyes, from the seat ──
+      // DEPTH paints the 40x88 map the HUD's occlusion verdicts read — sky
+      // blue, terrain grey by log distance — under the live pins, so a wrong
+      // verdict can be argued with on the spot. WIRE strips the streamed
+      // world to its triangles: the geometry the truck actually collides
+      // with, not the paint over it.
+      dial('xray', 'X-RAY', ['OFF', 'DEPTH', 'WIRE'], 0, (i) => { xrayMode = i; }),
       // ── HAZE: HOW MUCH AIR IS BETWEEN YOU AND THE HILL ──
       //
       // Asked for from the seat, and it has been wanted for several rounds:
@@ -30198,6 +30284,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // any instrument left drawn here would show through that hole on top of the
   // truck.
   if (menu.tab() !== null) return;
+  if (xrayMode === 1 && lumaPrimed) drawLumaMap();
   const pad = 4;
   /** Bottom of the compass strip in HUD pixels: `pad` + the heading digits
    *  under the needle. Nothing else may be drawn through it. */
