@@ -30346,8 +30346,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // sitting squarely on top of the only pixels it exists to point at.
     // Reported from Romsdalen. It now floats a few pixels clear and points
     // down at the summit, which is what a marker is for.
-    const ay = isPeak ? Math.max(ayRaw, COMPASS_B + 4 + PEAK_MARK_LIFT) : ayRaw;
-    const my = isPeak ? ay - PEAK_MARK_LIFT : ay;
+    const ay = isPeak ? Math.max(ayRaw, COMPASS_B + 6) : ayRaw;
+    const my = ay;
     const beamTop = isPeak ? ay : Math.min(ay - 6, Math.max(12, typ));
     const h = ay - beamTop;
     const x = clamp(Math.round(ax - w / 2), 2, HW - w - 2);
@@ -30375,13 +30375,36 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       }
     }
     // The checkpoint foot: ink seat, kind-colour diamond, bigger in range.
-    // A peak wears its own mark — solid while it stands above the horizon,
-    // hollow once the earth has curved in front of it.
+    // A PEAK IS A POINT AND A LEADER now (Glass spec §5.2): a two-pixel mark
+    // ON the summit, a one-pixel line to its own label, no triangle — the
+    // old glyph floated clear of the apex precisely because it covered the
+    // pixels it pointed at, and a point this small covers nothing.
     hctx.globalAlpha = isPeak ? (p.hid ? 0.55 : 0.95) : (0.5 + 0.5 * near) * ghost;
     hctx.fillStyle = UI.ink;
-    if (isPeak) peakMark(ax, my, 4, true); else diamond(ax, ay, 3);
+    if (isPeak) hctx.fillRect(ax - 2, my - 2, 4, 4); else diamond(ax, ay, 3);
     hctx.fillStyle = p.c;
-    if (isPeak) peakMark(ax, my - 1, 3, !p.hid);
+    if (isPeak) {
+      hctx.fillRect(ax - 1, my - 1, 2, 2);
+      // The leader runs vertically to the label's row, dashed while the
+      // summit is behind a ridge (the story the beam's dashes used to carry),
+      // with one restrained elbow when the label had to shift to stay on
+      // screen. Every line ends at its own point — labels may stack, leaders
+      // stay traceable.
+      const below = ly > my;                    // label under the point?
+      const lyE = below ? ly - 3 : ly + 7;
+      const yA = Math.min(my + (below ? 3 : -3), lyE), yB = Math.max(my + (below ? 3 : -3), lyE);
+      for (let yy = yA; yy <= yB; yy++) {
+        if (p.hid && (yy & 2)) continue;
+        hctx.fillRect(ax, yy, 1, 1);
+      }
+      const lcx = Math.round(x + w / 2);
+      if (Math.abs(lcx - ax) > 3) {
+        for (let xx = Math.min(lcx, ax); xx <= Math.max(lcx, ax); xx++) {
+          if (p.hid && (xx & 2)) continue;
+          hctx.fillRect(xx, lyE, 1, 1);
+        }
+      }
+    }
     else if (p.rng) diamond(ax, ay, 3); else diamondOutline(ax, ay, 2);
     // The label — its KIND leading it as a glyph where one exists. Gold when
     // in range or pinned by hand. Occlusion is the BEAM's story (dashed,
@@ -30877,13 +30900,15 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const DR = 26;
     const cx = R - DR, cy = HH - pad - DR - 9;
     {
-      // The bezel, as the reference draws it: fine minor ticks the whole way
-      // round, a longer major every quarter-turn octant — the ring exists
-      // even where the sweep is dark.
-      for (let i = 0; i < 48; i++) {
-        const a = (i / 48) * Math.PI * 2;
-        const major = i % 6 === 0;
-        hctx.fillStyle = major ? 'rgba(87,201,176,0.4)' : 'rgba(87,201,176,0.16)';
+      // AN OPEN ARC, NOT A RING (Glass spec §5.8). The bezel used to run the
+      // whole way round; the instrument is now a 240° arc of sparse ticks
+      // with its gap seated at the bottom, where the unit text and the gear
+      // live — no enclosing circle, no disc, no panel.
+      const A0 = (150 / 180) * Math.PI, SWEEP = (240 / 180) * Math.PI;
+      for (let i = 0; i <= 40; i++) {
+        const a = A0 + (i / 40) * SWEEP;
+        const major = i % 5 === 0;
+        hctx.fillStyle = major ? 'rgba(114,189,178,0.45)' : 'rgba(114,189,178,0.16)';
         for (let r = DR; r <= DR + (major ? 1 : 0); r++) {
           hctx.fillRect(Math.round(cx + Math.cos(a) * r), Math.round(cy + Math.sin(a) * r), 1, 1);
         }
@@ -30892,7 +30917,6 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // the flare band the audio screams through, so the geometry and the
       // sound redline together.
       const SEGS = 18;
-      const A0 = 0.75 * Math.PI, SWEEP = 1.5 * Math.PI;
       const frac = clamp(engRev / 1.2, 0, 1);
       const lit = Math.round(frac * SEGS);
       for (let i = 0; i < SEGS; i++) {
