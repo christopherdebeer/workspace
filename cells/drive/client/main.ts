@@ -15369,7 +15369,14 @@ function peakBlocked(p: Peak, vx: number, vz: number, eyeY: number, rise: number
   }
   const memo = peakBlockMemo.get(p.name);
   if (memo !== undefined) return memo;
-  const reach = Math.min(d * 0.9, 4200);
+  // 0.72, NOT 0.9: the last stretch of the ray is the mountain's own flank,
+  // and marching it let a summit block ITSELF — the DEM smears a spire below
+  // its OSM elevation, so the rim of the very mesa it stands on rose over the
+  // interpolated sight line and the label died. Photographed from the seat at
+  // Monument Valley: The Setting Hen in the middle of the frame, unnamed. A
+  // real blocker — the wall of the valley you are in — is near by nature and
+  // still well inside the shortened march.
+  const reach = Math.min(d * 0.72, 4200);
   let hit = false;
   if (reach > PEAK_NEAR) {
     for (let i = 1; i <= 12 && !hit; i++) {
@@ -20701,6 +20708,7 @@ function farHeightAt(wx: number, wz: number): number | null {
     // The names ACTUALLY on the glass this frame, which is the claim a reader
     // of the HUD is making — not the ranking this probe recomputes.
     drawn: poiDraw.filter((q) => q.kind === 'peak').map((q) => q.name),
+    gates: peakGates,
     markLift: PEAK_MARK_LIFT,
     reachKm: +(far / 1000).toFixed(1),
     ringKm: +((clamp(Math.ceil(PEAK_R / tileMetres(PEAK_Z)), 1, PEAK_RING_MAX) * tileMetres(PEAK_Z)) / 1000).toFixed(0),
@@ -23812,6 +23820,8 @@ function updatePois(): void {
  * ridge you are about to climb.
  */
 const PEAK_SHOW = 3;
+/** Why each summit did or did not reach the glass this frame — see __peaks. */
+let peakGates = { cands: 0, near: 0, sunk: 0, behind: 0, frame: 0, blocked: 0, drawn: 0 };
 /** HUD pixels the summit triangle floats above the apex it points at. Four is
  *  the mark's own height, so this clears it completely without letting it
  *  drift far enough to read as a label for the sky above the mountain. */
@@ -23840,18 +23850,23 @@ function updatePeaks(vx: number, vz: number): void {
   // heading. What belongs on the glass is the biggest summits ON the glass.
   const seen: Array<{ p: Peak; d: number; app: number;
     sx: number; sy: number; wx: number; wz: number; wy: number }> = [];
+  peakGates = { cands: cands.length, near: 0, sunk: 0, behind: 0, frame: 0, blocked: 0, drawn: 0 };
   for (const p of cands) {
     const l = peakLook(p, vx, vz, eyeY);
     // Inside the fine world its own terrain is the mountain — a pin on a
     // summit you are standing on is noise, and the ridge is right there.
-    if (l.d < 2500) continue;
+    // 1.5km, down from 2.5: Monument Valley's buttes stand a couple of
+    // kilometres off the road and filled half the frame with no name on
+    // them, while Bears Ears at 68km carried three labels (photographed
+    // from the seat). Near and huge is exactly when a name is wanted.
+    if (l.d < 1500) { peakGates.near++; continue; }
     // BELOW THE HORIZON IS NOT A VIEW. These markers used to survive as
     // ghosted bearings — Mount Whitney from the Big Sur coast, 330km off and
     // 8.5km under the curve — but a label on something the earth is in front
     // of is furniture, not information. A summit is drawn when it can be
     // seen, which is the same law the frustum check below already applies
     // sideways.
-    if (l.rise <= 0) continue;
+    if (l.rise <= 0) { peakGates.sunk++; continue; }
     const dx = p.x - vx, dz = p.z - vz;
     const dc = Math.min(l.d, 900);                   // the pin's own stand-off
     const wx = vx + (dx / l.d) * dc, wz = vz + (dz / l.d) * dc;
@@ -23862,7 +23877,7 @@ function updatePeaks(vx: number, vz: number): void {
     const wy = eyeY + (p.r ? Math.min(l.app, 0.16) : Math.max(l.app, 0.004)) * dc;
     poiVec.set(wx, wy, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
-    if (poiView.z >= -1) continue;                   // behind the camera
+    if (poiView.z >= -1) { peakGates.behind++; continue; }   // behind the camera
     poiVec.project(camera);
     // IN FRAME, OR NOT AT ALL. A summit gets no edge chip and no clamp onto
     // the border: unlike a destination, which is a thing you are travelling
@@ -23872,7 +23887,7 @@ function updatePeaks(vx: number, vz: number): void {
     // see — so it is drawn where it actually is, and when you turn away it is
     // simply gone. The bounds keep the whole label inside the glass rather
     // than sliding it along the rim.
-    if (Math.abs(poiVec.x) > 0.92 || Math.abs(poiVec.y) > 0.94) continue;
+    if (Math.abs(poiVec.x) > 0.92 || Math.abs(poiVec.y) > 0.94) { peakGates.frame++; continue; }
     seen.push({
       p, d: l.d, app: l.app,
       sx: (poiVec.x * 0.5 + 0.5) * innerWidth,
@@ -23891,8 +23906,9 @@ function updatePeaks(vx: number, vz: number): void {
   let drawn = 0;
   for (let i = 0; i < seen.length && drawn < PEAK_SHOW; i++) {
     const e = seen[i];
-    if (peakBlocked(e.p, vx, vz, eyeY, e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) - eyeY, e.d)) continue;
+    if (peakBlocked(e.p, vx, vz, eyeY, e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) - eyeY, e.d)) { peakGates.blocked++; continue; }
     drawn++;
+    peakGates.drawn++;
     poiDraw.push({
       x: e.sx, y: e.sy,
       tx: 0, ty: 0,                                  // no beam: see the draw pass
@@ -30360,7 +30376,13 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // which is where the three Mont Blanc summits went the first time
     // Chamonix was photographed with them. Above the mark by default, under it
     // when there is no room, and either way it stays beside the thing it names.
-    const above = (isPeak ? my : ay) - Math.max(11, Math.round(h / 3)) - lane * 8;
+    // A SUMMIT'S NAME LIVES IN THE SKY, NOT ON THE RIDGE. The old lift put
+    // the label 11px over the point, which at chase pitch is exactly the
+    // horizon line — three names and the skyline all fighting for the same
+    // four rows (photographed at Bears Ears). Peaks lift well into the sky
+    // band and stack there; the leader spans the gap, which is what it is for.
+    const above = isPeak ? my - 24 - lane * 9
+      : ay - Math.max(11, Math.round(h / 3)) - lane * 8;
     const ly = isPeak && above < COMPASS_B ? ay + 7 + lane * 8 : Math.max(12, above);
     hctx.save();
     // THE checkpoint beam, in the place's own colour: the same leaning
