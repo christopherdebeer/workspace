@@ -3,7 +3,7 @@
 import { join } from 'node:path';
 import { openDrive, report, WORK } from './harness.mjs';
 
-const d = await openDrive({ spot: 'lat=37.70564&lon=-119.67737&h=64&cam=chase&sunalt=55&wx=clear', tag: 'peak' });
+const d = await openDrive({ spot: 'lat=37.0491&lon=-110.0978&h=14&cam=chase&sunalt=55&wx=clear', tag: 'peak' });
 await d.page.waitForTimeout(35000);      // let peak tiles + far shell stream
 const peaks = await d.page.evaluate(() => window.__peaks ? window.__peaks() : null);
 console.log('peaks probe:', JSON.stringify(peaks)?.slice(0, 400));

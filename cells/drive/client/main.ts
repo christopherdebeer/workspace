@@ -23778,10 +23778,10 @@ function updatePois(): void {
     // straight down neither claim exists — the chart is not a sight line —
     // and a horizon-riding far pin is a bearing, not a view, so it never
     // ghosts either. Skipping the march saves ~70 heightfield samples a pin.
-    const hid = !top && !farPin && ((lumaPrimed
+    const hid = !top && (lumaPrimed
       ? !depthVisible(poiVec.x, poiVec.y, poiVec.z)
-      : sightBlockedCached(p.name, poiVec.x, poiVec.y, poiVec.z, i))
-      || wallHitAlong(camera.position.x, camera.position.z, wx, wz, camera.position.y) < 0.98);
+      : (!farPin && (sightBlockedCached(p.name, poiVec.x, poiVec.y, poiVec.z, i)
+        || wallHitAlong(camera.position.x, camera.position.z, wx, wz, camera.position.y) < 0.98)));
     const label = `${p.name.toUpperCase()} ${fmtDist(d)}`;
     if (poiView.z < -1) {
       poiVec.project(camera);
@@ -30448,6 +30448,20 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // peak or not — bumps UP a row until it clears everything already down.
   const placed: Array<{ x0: number; x1: number; y: number }> = [];
   const peakLbls: Array<{ label: string; x: number; ly: number; col: string; a: number }> = [];
+  // THE RIM GOES DOWN FIRST — on the books, not on the glass. Edge chips rail
+  // at fixed rows and draw after everything, so they never dodge anyone;
+  // seeding their rects here means every in-view label (a peak's above all)
+  // climbs clear of them instead of landing underneath (observed from the
+  // seat: a summit's name through a rim chip).
+  for (const p of poiDraw) {
+    if (p.edge === 0) continue;
+    const elab = fitP(p.t, Math.round(HW * 0.5));
+    const ew = textPW(elab) + 4 + (KIND_ICON[p.kind] ? 7 : 0);
+    const ey = clamp(Math.round(p.y / hudS), 20, HH - 30);
+    const ecx = clamp(Math.round(p.x / hudS), 8, HW - 8);
+    const ex = p.rim ? clamp(ecx - (ew >> 1), 2, HW - ew - 2) : p.edge > 0 ? HW - ew - 3 : 3;
+    placed.push({ x0: ex, x1: ex + ew, y: ey + 2 });
+  }
   for (const p of inView) {
     // A SUMMIT'S LABEL IS LONGER BY RIGHT. Half the HUD width clipped
     // "JUNIPERO SERRA PEAK 1787M 50.2KM" to "…PEAK 1." — losing the height,
@@ -30577,7 +30591,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       peakLbls.push({ label, x: x + 2 + iw, ly, col: p.hid ? UI.soft : UI.text,
         a: (p.hid ? 0.9 : 1) * (0.55 + 0.45 * farDim) });
     } else {
-      hctx.globalAlpha = (p.hid ? 0.9 : 1) * (0.55 + 0.45 * farDim);
+      hctx.globalAlpha = (p.hid ? 0.45 : 1) * (0.55 + 0.45 * farDim);
       if (iconCh) hudIconEdge(iconCh, x + 1, ly - 1, p.c, 5);
       textEdgeP(label, x + 2 + iw, ly, p.rng || p.pinned ? UI.gold : p.hid ? UI.soft : UI.text);
     }
