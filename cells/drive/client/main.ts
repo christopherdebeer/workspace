@@ -26943,17 +26943,15 @@ let hudDpr = 1;
 const HUD_SIZES = [0.67, 0.84, 1, 1.33];
 let hudSize = HUD_SIZES[1];           // multiplier, owned by the HUD SIZE dial
 /**
- * ── THE LEFT RAIL ──
+ * ── THE TRANSPORT ROW ──
  *
- * One declared grid for the stacked chips under the compass — rewind, AUTO,
- * WPT — instead of each row hand-placing itself relative to the last (the
- * audit's finding 6: WPT used to move down when AUTO existed, and every new
- * chip re-derived the arithmetic). Fixed rows: a control keeps its place
- * whether its neighbours exist or not, which is also what a thumb learns.
- * One slop for every row, replacing the ±2/±5/±6 spread finding 5 counted.
+ * Rewind, AUTO and WPT sit in ONE row at the bottom middle — above the place
+ * line, in the gap between the dock cluster and the odometer — inside the
+ * thumb's arc instead of a reach across the wheel (the layout study's verdict
+ * on the old top-left stack). Statuses ride one micro row above their chips.
+ * One shared slop for every chip, replacing the ±2/±5/±6 spread the audit's
+ * finding 5 counted; CHIP_H doubles as the vertical hit reach.
  */
-const CHIP_X = 4;
-const CHIP_Y0 = 38;
 const CHIP_H = 12;
 const CHIP_SLOP = 8;
 function hudResize(): void {
@@ -26969,14 +26967,16 @@ function hudResize(): void {
   hudS = n / dpr;
   HW = Math.max(80, Math.round(innerWidth / hudS));
   HH = Math.max(80, Math.round(innerHeight / hudS));
-  // The DOM overlays sit ON the canvas grid, but the rail lives in HUD px
+  // The DOM overlays sit ON the canvas grid, but the glass lives in HUD px
   // while they live in CSS px — so the boundaries are exported here, where the
   // scale is settled (and AFTER it is settled: --rail-b used to read the
-  // previous resize's hudS). --rail-b is the bottom of the chip rail, for the
-  // task chip; --msg-y is the row under the canvas message rail, for the
-  // mission card and toast — one vertical for every transient voice instead
-  // of the fixed 88/168px the audit's finding 8 counted.
-  document.body.style.setProperty('--rail-b', `${(CHIP_Y0 + CHIP_H * 3 + 4) * hudS}px`);
+  // previous resize's hudS). --top-y aligns the DOM MENU chip on the heading
+  // row (clock left, heading centre, MENU right — one justified row under the
+  // compass; at a fixed 46px MENU drifted off that row whenever hudS wasn't
+  // 2). --rail-b is where the task chip starts, just under that row; --msg-y
+  // is the row under the canvas message rail, for the mission card and toast.
+  document.body.style.setProperty('--top-y', `${Math.round(27.5 * hudS - 11)}px`);
+  document.body.style.setProperty('--rail-b', `${34 * hudS}px`);
   document.body.style.setProperty('--msg-y', `${Math.round((Math.round(HH * 0.26) + 31) * hudS)}px`);
   hud.width = HW * hudDpr; hud.height = HH * hudDpr;
   hctx.setTransform(hudDpr, 0, 0, hudDpr, 0, 0);
@@ -29375,13 +29375,14 @@ function hudSafeRects(): Array<[number, number, number, number]> {
   const mw = Math.min(58, Math.floor(HW * 0.34));   // the dock square (see drawHud)
   const my = HH - 4 - 23 - mw - 3;
   return [
-    [0, 0, HW, 34 + (camMode === 'top' && tileDbg ? 22 : 0)],  // compass strip (+ tile debug header)
-    [0, 34, 78, CHIP_H * 3 + 6],                     // the chip rail: rewind, AUTO, WPT
-    [HW - 52, 34, 52, 22],                           // MENU
+    [0, 0, HW, 34 + (camMode === 'top' && tileDbg ? 22 : 0)],  // compass strip + the justified top row
+    [0, 32, 74, 18],                                 // the task chip, under the top row
+    [HW - 56, 18, 56, 18],                           // MENU, on the heading row
     [0, my - 62, 36, 62],                            // the conditions column, stacked over the dock
     [0, my - 2, mw + 36, HH - my + 2],               // dock, its chips, the info lines under it
     [HW - 80, HH - 132, 80, 132],                    // dial, LEDs, RIG rows, trip
     [0, HH - 30, Math.round(HW * 0.72), 30],         // the place line and coordinates
+    [mw + 22, HH - 52, Math.max(0, HW - 56 - (mw + 22)), 22],  // the transport row + its status line
   ];
 }
 function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
@@ -29413,108 +29414,127 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     }
     clockRect = { x: pad, y: cy2 - 2, w: textSW(hhmm) + 4, h: 10 };
   } else clockRect.w = 0;
-  // ── the rewind handle, under the clock ──
+  // ── THE TRANSPORT ROW — rewind · AUTO · WPT, bottom middle ──
   //
-  // A TAB, not a slider. The ring is a two-minute undo that nothing could
-  // reach; this is the reach. It only appears when there is something to go
-  // back TO — the gate is rewindReady(), asked once so the handle and the
-  // pointer cannot disagree about whether it exists — and dragging DOWN from
-  // it pulls the truck backwards through its own last two minutes.
-  //
-  // Held, the tab grows a track: the filled part is how far back you are, and
-  // the number is the seconds it costs. Released, those seconds stop having
-  // happened.
-  if (rewindReady() || rewind.at !== null) {
-    const ry = CHIP_Y0;                       // rail row 0
-    const held = rewind.at !== null;
-    rewindRect = { x: CHIP_X, y: ry, w: 15, h: 9 };
-    const col = held || rewindPaused ? UI.gold : UI.dim;
-    corners(CHIP_X - 2, ry - 1, 19, 11, col);
-    // EVERY GLYPH ON THE RAIL WEARS THE INK EDGE. These were bare fills, the
-    // one part of the glass without the outline the rest of the HUD survives
-    // bright ground by — over sunlit grass the tab simply vanished (the
-    // audit's finding 2). Ink pass first, inflated a pixel, then the colour.
-    const edged = (x: number, y: number, w: number, h: number): void => {
-      hctx.fillStyle = UI.ink; hctx.fillRect(x - 1, y - 1, w + 2, h + 2);
-    };
-    // WHAT THE BUTTON DOES NEXT, which is the only honest thing for a
-    // transport control to draw. Running: two bars (the stop); held: a play
-    // triangle, because the tap that follows is what starts it again.
-    if (rewindPaused && !held) {
-      for (let i = 0; i < 7; i++) edged(CHIP_X + 4 + i, ry + 1 + Math.floor(i / 2), 1, 7 - i);
-      hctx.fillStyle = col;
-      for (let i = 0; i < 7; i++) hctx.fillRect(CHIP_X + 4 + i, ry + 1 + Math.floor(i / 2), 1, 7 - i);
-    } else {
-      edged(CHIP_X + 4, ry + 1, 2, 7);
-      edged(CHIP_X + 9, ry + 1, 2, 7);
-      hctx.fillStyle = col;
-      hctx.fillRect(CHIP_X + 4, ry + 1, 2, 7);
-      hctx.fillRect(CHIP_X + 9, ry + 1, 2, 7);
-    }
-    if (held) {
-      const have = Math.max(1, rewindHave());
-      const track = 46;
-      const fill = Math.round(((rewind.at ?? 0) / have) * track);
-      edged(CHIP_X + 5, ry + 10, 3, track);
-      hctx.fillStyle = UI.dim;
-      hctx.fillRect(CHIP_X + 6, ry + 10, 1, track);
-      hctx.fillStyle = UI.gold;
-      hctx.fillRect(CHIP_X + 5, ry + 10, 3, Math.max(1, fill));
-      textEdgeS(`-${rewind.secs.toFixed(0)}S`, CHIP_X + 11, ry + 10 + fill - 2, UI.gold);
-    }
-  } else rewindRect.w = 0;
-  // ── the autopilot tab, on the rewind row ──
-  //
-  // BESIDE the handle rather than under it: the rewind grab box reaches six
-  // pixels past its own bottom edge and grows a 46px scrub track while held,
-  // and a control you cannot hit because another one is being dragged over it
-  // is not a control. This row is otherwise empty.
-  //
-  // Engaged, it reads out what it is DOING — the mode and the planned speed in
-  // km/h — because the one question you have while a truck drives itself is
-  // whether it has seen the corner. `RUN CURVE 54` says it has.
-  if (autoTab) {
-    const ay = CHIP_Y0 + CHIP_H;              // rail row 1
-    const w = textSW('AUTO');
-    autoRect = { x: CHIP_X + 26, y: ay, w, h: 9 };
-    corners(CHIP_X + 24, ay - 1, w + 4, 11, auto.on ? UI.gold : UI.dim);
-    textEdgeS('AUTO', CHIP_X + 26, ay + 1, auto.on ? UI.gold : UI.dim);
-    if (auto.on) {
-      const a = auto.out;
-      // WAITING IS NOT AN ERROR, and must not be painted as one — a cold tile
-      // is the ordinary condition of driving into new ground. Gold while it
-      // holds for the world, soft while it drives, red only when the tick is
-      // not reaching the controller at all.
-// A HOLD NOW SAYS WHICH HOLD IT IS. "WAIT FOR ROAD" covered three states
-      // that want three different reactions from whoever is watching: a tile on
-      // its way (wait), no road within reach (you are lost, drive), and a road
-      // right there that would not chain (a bug worth a probe). Reading the same
-      // four words for all three is how a dead end went unnoticed for a session.
-      textEdgeS(!a ? 'NO TICK'
-        : a.mode === 'wait'
-          ? (auto.src === 'nowhere' ? 'NO ROAD IN REACH'
-            : auto.src === 'unchained' ? 'ROAD WILL NOT CHAIN' : 'WAIT FOR ROAD')
-          : `${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`,
-      CHIP_X + 26 + w + 4, ay + 1,
-      !a || auto.src === 'unchained' ? UI.bad : a.mode === 'wait' ? UI.gold : UI.soft);
-    }
-  } else autoRect.w = 0;
-  // ── WPT: the waypoint chip ──
-  // A display control worth reaching with a thumb, because the moment the pins
-  // are in the way is the moment you are flying and the menu is three taps and a
-  // scrim away. It stacks UNDER the AUTO row when that row exists and takes it
-  // when it does not, so the two never overlap — a control you cannot hit
-  // because another one is drawn over it is not a control.
+  // One horizontal row above the place line, in the gap between the dock
+  // cluster and the odometer: inside the thumb's arc, where the old top-left
+  // stack was a reach across the wheel. Chips keep fixed order and fixed
+  // slots; statuses ride one micro row above so the row itself never changes
+  // width when the autopilot starts talking.
   {
-    // Rail row 2 — FIXED, whether or not the AUTO row exists. A control that
-    // keeps its place is a control a thumb can learn.
-    const py = CHIP_Y0 + CHIP_H * 2;
-    const ww = textSW('WPT');
-    poiRect = { x: CHIP_X + 26, y: py, w: ww, h: 9 };
-    corners(CHIP_X + 24, py - 1, ww + 4, 11, poiVis === 0 ? UI.dim : UI.gold);
-    textEdgeS('WPT', CHIP_X + 26, py + 1, poiVis === 0 ? UI.dim : UI.gold);
-    textEdgeS(POI_MODES[poiVis], CHIP_X + 26 + ww + 4, py + 1,
-      poiVis === 0 ? UI.dim : UI.soft);
+    const rowMw = Math.min(58, Math.floor(HW * 0.34));
+    const rowY = HH - 41;                     // chips end 11 above the place line
+    const rowL = rowMw + 27;                  // clear of the dock and its lamps
+    const rowR = HW - 58;                     // clear of the dial's shoulder
+    const statY = rowY - 9;                   // the status row above the chips
+    const autoW = textSW('AUTO'), wptW = textSW('WPT');
+    const total = 15 + 4 + autoW + 4 + wptW;
+    const x0 = Math.max(64, rowL + Math.floor((rowR - rowL - total) / 2));
+    const rx = x0, ax = x0 + 15 + 4, px = ax + autoW + 4;
+    // ── the rewind handle ──
+    //
+    // A TAB, not a slider. The ring is a two-minute undo that nothing could
+    // reach; this is the reach. It only appears when there is something to go
+    // back TO — the gate is rewindReady(), asked once so the handle and the
+    // pointer cannot disagree about whether it exists — and dragging UP from
+    // it (away from the screen edge it now sits against) pulls the truck
+    // backwards through its own last two minutes.
+    //
+    // Held, the tab grows a track upward: the filled part is how far back you
+    // are, and the number is the seconds it costs. Released, those seconds
+    // stop having happened.
+    if (rewindReady() || rewind.at !== null) {
+      const held = rewind.at !== null;
+      rewindRect = { x: rx, y: rowY, w: 15, h: 9 };
+      const col = held || rewindPaused ? UI.gold : UI.dim;
+      corners(rx - 2, rowY - 1, 19, 11, col);
+      // EVERY GLYPH ON THE ROW WEARS THE INK EDGE. These were bare fills, the
+      // one part of the glass without the outline the rest of the HUD survives
+      // bright ground by — over sunlit grass the tab simply vanished (the
+      // audit's finding 2). Ink pass first, inflated a pixel, then the colour.
+      const edged = (x: number, y: number, w: number, h: number): void => {
+        hctx.fillStyle = UI.ink; hctx.fillRect(x - 1, y - 1, w + 2, h + 2);
+      };
+      // WHAT THE BUTTON DOES NEXT, which is the only honest thing for a
+      // transport control to draw. Running: two bars (the stop); held: a play
+      // triangle, because the tap that follows is what starts it again.
+      if (rewindPaused && !held) {
+        for (let i = 0; i < 7; i++) edged(rx + 4 + i, rowY + 1 + Math.floor(i / 2), 1, 7 - i);
+        hctx.fillStyle = col;
+        for (let i = 0; i < 7; i++) hctx.fillRect(rx + 4 + i, rowY + 1 + Math.floor(i / 2), 1, 7 - i);
+      } else {
+        edged(rx + 4, rowY + 1, 2, 7);
+        edged(rx + 9, rowY + 1, 2, 7);
+        hctx.fillStyle = col;
+        hctx.fillRect(rx + 4, rowY + 1, 2, 7);
+        hctx.fillRect(rx + 9, rowY + 1, 2, 7);
+      }
+      if (held) {
+        const have = Math.max(1, rewindHave());
+        const track = 46;
+        const fill = Math.round(((rewind.at ?? 0) / have) * track);
+        edged(rx + 5, rowY - 3 - track, 3, track);
+        hctx.fillStyle = UI.dim;
+        hctx.fillRect(rx + 6, rowY - 3 - track, 1, track);
+        // The fill grows UP from the tab, the way the finger went.
+        hctx.fillStyle = UI.gold;
+        hctx.fillRect(rx + 5, rowY - 3 - fill, 3, Math.max(1, fill));
+        textEdgeS(`-${rewind.secs.toFixed(0)}S`, rx + 11, rowY - 3 - fill, UI.gold);
+      }
+    } else rewindRect.w = 0;
+    // ── the autopilot tab ──
+    //
+    // Engaged, it reads out what it is DOING — the mode and the planned speed
+    // in km/h, on the status row — because the one question you have while a
+    // truck drives itself is whether it has seen the corner. `RUN CURVE 54`
+    // says it has.
+    if (autoTab) {
+      autoRect = { x: ax, y: rowY, w: autoW, h: 9 };
+      corners(ax - 2, rowY - 1, autoW + 4, 11, auto.on ? UI.gold : UI.dim);
+      textEdgeS('AUTO', ax, rowY + 1, auto.on ? UI.gold : UI.dim);
+    } else autoRect.w = 0;
+    // ── WPT: the waypoint chip ──
+    // A display control worth reaching with a thumb, because the moment the
+    // pins are in the way is the moment you are flying and the menu is three
+    // taps and a scrim away. Its slot is FIXED whether or not AUTO exists.
+    {
+      poiRect = { x: px, y: rowY, w: wptW, h: 9 };
+      corners(px - 2, rowY - 1, wptW + 4, 11, poiVis === 0 ? UI.dim : UI.gold);
+      textEdgeS('WPT', px, rowY + 1, poiVis === 0 ? UI.dim : UI.gold);
+    }
+    // ── the status row ──
+    // WAITING IS NOT AN ERROR, and must not be painted as one — a cold tile
+    // is the ordinary condition of driving into new ground. Gold while it
+    // holds for the world, soft while it drives, red only when the tick is
+    // not reaching the controller at all. A HOLD SAYS WHICH HOLD IT IS: a
+    // tile on its way (wait), no road within reach (you are lost, drive), or
+    // a road right there that would not chain (a bug worth a probe).
+    // A wide warning takes the whole row and the WPT mode yields for the
+    // frame — a warning outranks a mode label.
+    {
+      const wptTxt = POI_MODES[poiVis];
+      const ww2 = textSW(wptTxt);
+      const wptTx = Math.min(rowR - ww2, px + Math.round((wptW - ww2) / 2));
+      let wptYields = false;
+      if (autoTab && auto.on) {
+        const a = auto.out;
+        const autoTxt = !a ? 'NO TICK'
+          : a.mode === 'wait'
+            ? (auto.src === 'nowhere' ? 'NO ROAD IN REACH'
+              : auto.src === 'unchained' ? 'ROAD WILL NOT CHAIN' : 'WAIT FOR ROAD')
+            : `${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`;
+        const aw2 = textSW(autoTxt);
+        let ax2 = ax + Math.round((autoW - aw2) / 2);
+        if (ax2 + aw2 > wptTx - 4) ax2 = wptTx - 4 - aw2;
+        if (ax2 < rowL - 8) {
+          ax2 = Math.max(64, rowL + Math.round((rowR - rowL - aw2) / 2));
+          wptYields = true;
+        }
+        textEdgeS(autoTxt, ax2, statY,
+          !a || auto.src === 'unchained' ? UI.bad : a.mode === 'wait' ? UI.gold : UI.soft);
+      }
+      if (!wptYields) textEdgeS(wptTxt, wptTx, statY, poiVis === 0 ? UI.dim : UI.soft);
+    }
   }
   // Filled and hollow diamonds, plotted a row at a time. At this resolution a
   // marker is about seven pixels across, so it is drawn, not stroked.
@@ -30364,9 +30384,11 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     }
     // ── the LEDs, beside the dial ──
     // Momentary truths, out of the table: always present, ink when dark.
+    // The stack rides high on the dial's shoulder — at centre height it stood
+    // exactly where the transport row (rewind · AUTO · WPT) now lives.
     {
       const lx = cx - DR - 6;
-      let ly = cy - 8;
+      let ly = cy - 32;
       const led = (label: string, on: boolean, col: string): void => {
         textEdgeS(label, lx - textSW(label), ly, on ? col : 'rgba(87,201,176,0.28)');
         ly += 8;
@@ -30684,14 +30706,14 @@ let clockRect = { x: 0, y: 0, w: 0, h: 0 };
 /**
  * THE REWIND HANDLE'S GESTURE CONTRACT.
  *
- * Drag DOWN to go back — the direction a tape spools, and the direction that
- * cannot be confused with the clock's sideways scrub sitting directly above
- * it. Release to take it; drag back to the top and release to change your
- * mind, which costs nothing (the truck is restored exactly, not approximately).
+ * Drag UP to go back — away from the screen edge the transport row sits
+ * against, which is the only direction with room, and the direction the
+ * track visibly grows. Release to take it; drag back to the tab and release
+ * to change your mind, which costs nothing (the truck is restored exactly,
+ * not approximately).
  *
- * A TAP DOES NOTHING. This is destructive — it discards seconds of driving —
- * and a control that eats your last corner on a mis-tap is a control you stop
- * trusting. It wants the deliberate gesture or nothing.
+ * A TAP is the transport hold, not a rewind — rewinding is destructive (it
+ * discards seconds of driving) and wants the deliberate gesture or nothing.
  *
  * AVAILABLE ON THE LINE as well as in free drive — see rewindReady. The clock
  * is not, but the clock changes what a run LOOKED like; this changes what it
@@ -30772,7 +30794,8 @@ function rewindDown(e: PointerEvent): boolean {
 }
 function rewindMove(e: PointerEvent): boolean {
   if (rewindDrag?.id !== e.pointerId) return false;
-  const dy = (e.clientY - rewindDrag.y0) / hudS;
+  // Upward drag scrubs — y0 minus clientY, since the tab sits at the bottom.
+  const dy = (rewindDrag.y0 - e.clientY) / hudS;
   if (!rewindDrag.moved) {
     if (Math.abs(dy) < REWIND_SLOP) return true;
     rewindDrag.moved = true;

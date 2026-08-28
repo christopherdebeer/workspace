@@ -96,7 +96,11 @@ export function createOverlays(
       linear-gradient(var(--bk), var(--bk)), linear-gradient(var(--bk), var(--bk));
     background-size: 8px 2px, 2px 8px, 8px 2px, 2px 8px, 8px 2px, 2px 8px, 8px 2px, 2px 8px;
     background-position: 0 0, 0 0, 100% 0, 100% 0, 0 100%, 0 100%, 100% 100%, 100% 100%; }
-  #ov-menu { top: calc(env(safe-area-inset-top, 0px) + 46px); right: 10px;
+  /* ON the heading row: --top-y is exported from hudResize (main.ts) so the
+     chip's text sits on the same baseline as the clock and the heading digits
+     at any HUD scale — one justified row under the compass. At a fixed 46px
+     it only lined up when hudS happened to be 2. */
+  #ov-menu { top: calc(env(safe-area-inset-top, 0px) + var(--top-y, 44px)); right: 10px;
     cursor: pointer; color: ${C.edge}; border: 1px solid ${C.dim}; --bk: ${C.edge};
     background-color: rgba(8,20,23,0.78); padding: 4px 10px 3px; font: inherit;
     font-family: inherit; font-size: 12px; letter-spacing: 1px; }
