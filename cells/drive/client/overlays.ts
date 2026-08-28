@@ -13,7 +13,7 @@
 import { PIXEL_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
 
-type Tone = 'edge' | 'dim' | 'text' | 'soft' | 'gold' | 'hot' | 'good' | 'bad';
+type Tone = 'ink' | 'edge' | 'dim' | 'text' | 'soft' | 'gold' | 'hot' | 'good' | 'bad';
 
 export interface MissionCard {
   kicker: string;
@@ -100,10 +100,13 @@ export function createOverlays(
      chip's text sits on the same baseline as the clock and the heading digits
      at any HUD scale — one justified row under the compass. At a fixed 46px
      it only lined up when hudS happened to be 2. */
+  /* Corner marks only (Glass spec §5.5): an action is text plus detached
+     corners — no fill, no border. The top row gets no background strip. */
   #ov-menu { top: calc(env(safe-area-inset-top, 0px) + var(--top-y, 44px)); right: 10px;
-    cursor: pointer; color: ${C.edge}; border: 1px solid ${C.dim}; --bk: ${C.edge};
-    background-color: rgba(8,20,23,0.78); padding: 4px 10px 3px; font: inherit;
-    font-family: inherit; font-size: 12px; letter-spacing: 1px; }
+    cursor: pointer; color: ${C.edge}; border: 1px solid transparent; --bk: ${C.edge};
+    background-color: transparent; padding: 4px 10px 3px; font: inherit;
+    font-family: inherit; font-size: 12px; letter-spacing: 1px;
+    text-shadow: 1px 0 ${C.ink}, -1px 0 ${C.ink}, 0 1px ${C.ink}, 0 -1px ${C.ink}; }
   /* ON the message rail: --msg-y is exported from hudResize (main.ts) as the
      row under the canvas rail's transient text, in CSS px. The card and toast
      used to hold two more fixed verticals (88/168px) of their own — four

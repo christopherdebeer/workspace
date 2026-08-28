@@ -27429,9 +27429,14 @@ hud.classList.add('ui');
 document.body.appendChild(hud);
 const hctx = hud.getContext('2d')!;
 // The reference's limited palette.
+// Retinted to the Glass spec's targets (§4): text is BONE (warm paper, not
+// blue-white), edge is the spec's aqua, dim its aquaDim, and the amber /
+// orange / green trio matches the instrument roles the spec names — amber
+// active/attention, orange adverse surface, green healthy energy. `bad` stays:
+// the spec carries no fault red and the game needs one.
 const UI = {
-  ink: '#0a1417', edge: '#57c9b0', dim: '#3d6f66', text: '#d6efe7', soft: '#7fa39c',
-  gold: '#f2c14e', hot: '#e2703a', good: '#6fe0a0', bad: '#d94f4f',
+  ink: '#091411', edge: '#72bdb2', dim: '#477d78', text: '#e5e3c7', soft: '#9dc3ba',
+  gold: '#f2b83f', hot: '#e8783e', good: '#61e88e', bad: '#d94f4f',
   // A RUNG BELOW `dim`, for a caption that is only there to be found. The gauge
   // corners are persistent and mostly nominal, and a label at `dim` beside a
   // healthy bar spends as much ink saying "TYRE" as the bar spends saying the
@@ -29953,11 +29958,11 @@ function hudSafeRects(): Array<[number, number, number, number]> {
     [0, 0, HW, 34 + (camMode === 'top' && tileDbg ? 22 : 0)],  // compass strip + the justified top row
     [0, 32, 74, 18],                                 // the task chip, under the top row
     [HW - 56, 18, 56, 18],                           // MENU, on the heading row
-    [0, my - 62, 36, 62],                            // the conditions column, stacked over the dock
-    [0, my - 2, mw + 36, HH - my + 2],               // dock, its chips, the info lines under it
-    [HW - 80, HH - 132, 80, 132],                    // dial, LEDs, RIG rows, trip
+    [0, my - 146, 32, 146],                          // the ENV ladder stack, up the left edge
+    [0, my - 2, mw + 70, HH - my + 2],               // dock, the control matrix, the info lines
+    [HW - 32, HH - 186, 32, 116],                    // the RIG ladder stack, up the right edge
+    [HW - 80, HH - 72, 80, 72],                      // dial, its radial lamps, trip
     [0, HH - 30, Math.round(HW * 0.72), 30],         // the place line and coordinates
-    [mw + 22, HH - 52, Math.max(0, HW - 56 - (mw + 22)), 22],  // the transport row + its status line
   ];
 }
 function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
@@ -29989,119 +29994,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     }
     clockRect = { x: pad, y: cy2 - 2, w: textSW(hhmm) + 4, h: 10 };
   } else clockRect.w = 0;
-  // ── THE TRANSPORT ROW — rewind · AUTO · WPT, bottom middle ──
-  //
-  // One horizontal row above the place line, in the gap between the dock
-  // cluster and the odometer: inside the thumb's arc, where the old top-left
-  // stack was a reach across the wheel. Chips keep fixed order and fixed
-  // slots; statuses ride one micro row above so the row itself never changes
-  // width when the autopilot starts talking.
-  {
-    const rowMw = Math.min(58, Math.floor(HW * 0.34));
-    const rowY = HH - 41;                     // chips end 11 above the place line
-    const rowL = rowMw + 27;                  // clear of the dock and its lamps
-    const rowR = HW - 58;                     // clear of the dial's shoulder
-    const statY = rowY - 9;                   // the status row above the chips
-    const autoW = textSW('AUTO'), wptW = textSW('WPT');
-    const total = 15 + 4 + autoW + 4 + wptW;
-    const x0 = Math.max(64, rowL + Math.floor((rowR - rowL - total) / 2));
-    const rx = x0, ax = x0 + 15 + 4, px = ax + autoW + 4;
-    // ── the rewind handle ──
-    //
-    // A TAB, not a slider. The ring is a two-minute undo that nothing could
-    // reach; this is the reach. It only appears when there is something to go
-    // back TO — the gate is rewindReady(), asked once so the handle and the
-    // pointer cannot disagree about whether it exists — and dragging UP from
-    // it (away from the screen edge it now sits against) pulls the truck
-    // backwards through its own last two minutes.
-    //
-    // Held, the tab grows a track upward: the filled part is how far back you
-    // are, and the number is the seconds it costs. Released, those seconds
-    // stop having happened.
-    if (rewindReady() || rewind.at !== null) {
-      const held = rewind.at !== null;
-      rewindRect = { x: rx, y: rowY, w: 15, h: 9 };
-      const col = held || rewindPaused ? UI.gold : UI.dim;
-      corners(rx - 2, rowY - 1, 19, 11, col);
-      // EVERY GLYPH ON THE ROW WEARS THE INK EDGE. These were bare fills, the
-      // one part of the glass without the outline the rest of the HUD survives
-      // bright ground by — over sunlit grass the tab simply vanished (the
-      // audit's finding 2). Ink pass first, inflated a pixel, then the colour.
-      const edged = (x: number, y: number, w: number, h: number): void => {
-        hctx.fillStyle = UI.ink; hctx.fillRect(x - 1, y - 1, w + 2, h + 2);
-      };
-      // WHAT THE BUTTON DOES NEXT, which is the only honest thing for a
-      // transport control to draw. Running: two bars (the stop); held: a play
-      // triangle, because the tap that follows is what starts it again.
-      if (rewindPaused && !held) {
-        for (let i = 0; i < 7; i++) edged(rx + 4 + i, rowY + 1 + Math.floor(i / 2), 1, 7 - i);
-        hctx.fillStyle = col;
-        for (let i = 0; i < 7; i++) hctx.fillRect(rx + 4 + i, rowY + 1 + Math.floor(i / 2), 1, 7 - i);
-      } else {
-        edged(rx + 4, rowY + 1, 2, 7);
-        edged(rx + 9, rowY + 1, 2, 7);
-        hctx.fillStyle = col;
-        hctx.fillRect(rx + 4, rowY + 1, 2, 7);
-        hctx.fillRect(rx + 9, rowY + 1, 2, 7);
-      }
-      if (held) {
-        const have = Math.max(1, rewindHave());
-        const track = 46;
-        const fill = Math.round(((rewind.at ?? 0) / have) * track);
-        edged(rx + 5, rowY - 3 - track, 3, track);
-        hctx.fillStyle = UI.dim;
-        hctx.fillRect(rx + 6, rowY - 3 - track, 1, track);
-        // The fill grows UP from the tab, the way the finger went.
-        hctx.fillStyle = UI.gold;
-        hctx.fillRect(rx + 5, rowY - 3 - fill, 3, Math.max(1, fill));
-        textEdgeS(`-${rewind.secs.toFixed(0)}S`, rx + 11, rowY - 3 - fill, UI.gold);
-      }
-    } else rewindRect.w = 0;
-    // ── the autopilot tab ──
-    //
-    // Engaged, it reads out what it is DOING — the mode and the planned speed
-    // in km/h, on the status row — because the one question you have while a
-    // truck drives itself is whether it has seen the corner. `RUN CURVE 54`
-    // says it has.
-    if (autoTab) {
-      autoRect = { x: ax, y: rowY, w: autoW, h: 9 };
-      corners(ax - 2, rowY - 1, autoW + 4, 11, auto.on ? UI.gold : UI.dim);
-      textEdgeS('AUTO', ax, rowY + 1, auto.on ? UI.gold : UI.dim);
-    } else autoRect.w = 0;
-    // ── WPT: the waypoint chip ──
-    // A display control worth reaching with a thumb, because the moment the
-    // pins are in the way is the moment you are flying and the menu is three
-    // taps and a scrim away. Its slot is FIXED whether or not AUTO exists.
-    {
-      poiRect = { x: px, y: rowY, w: wptW, h: 9 };
-      corners(px - 2, rowY - 1, wptW + 4, 11, poiVis === 0 ? UI.dim : UI.gold);
-      textEdgeS('WPT', px, rowY + 1, poiVis === 0 ? UI.dim : UI.gold);
-    }
-    // ── the status row ──
-    //
-    // ONE ROW, ONE VOICE. This row carried two unrelated captions four pixels
-    // apart — what the autopilot was doing, and which waypoint mode the chip
-    // beside it was in — and they read as one sentence: `RUN CURVE 32 NEAR`,
-    // which is not a fact about anything. The yielding dance between them was
-    // trying to fix a collision that should not have existed.
-    //
-    // So the row is the autopilot's, and only for what it is ROUTINELY doing:
-    // the mode, what is limiting it, and the planned speed. `RUN CURVE 32` is
-    // the answer to the one question you have while a truck drives itself —
-    // whether it has seen the corner.
-    //
-    // Everything EXCEPTIONAL it might say goes to the message rail instead (see
-    // `railAuto` below), because a hold is news and news belongs where the other
-    // voices are. And the waypoint mode is now spoken once, when you change it,
-    // rather than stated forever — a chip that is lit already says it is on.
-    if (autoTab && auto.on && auto.out && auto.out.mode !== 'wait') {
-      const a = auto.out;
-      const autoTxt = `${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`;
-      const aw2 = textSW(autoTxt);
-      const ax2 = Math.max(rowL, Math.min(rowR - aw2, ax + Math.round((autoW - aw2) / 2)));
-      textEdgeS(autoTxt, ax2, statY, UI.soft);
-    }
-  }
+  // The transport actions (rewind · AUTO · WPT) live in the CONTROL MATRIX
+  // beside the dock now (Glass spec §5.5) — drawn with the dock so the grid
+  // and the map share one geometry. See the matrix block below.
   // Filled and hollow diamonds, plotted a row at a time. At this resolution a
   // marker is about seven pixels across, so it is drawn, not stroked.
   function diamond(cx: number, cy: number, r: number): void {
@@ -30764,68 +30659,112 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   }
   dockRect = { x: mx, y: my, w: mw, h: mw };
   {
-    // ── THE DASH LIGHTS ──
-    // Three cells beside the dock, read bottom-up: the seat you drive from, the
-    // way the chart is pointed, and the drone. They were word chips, and words
-    // in a stack that size are a paragraph in the corner of a windscreen; a lamp
-    // is read without being looked at, which is the whole of what a dash light
-    // is for.
-    //
-    // A LAMP SHOWS STATE, NOT THE ACTION. The chips said what a tap would DO
-    // (CAB when you were in chase), which is the right idea for a button and
-    // the wrong one for an indicator: nothing else lit on this screen means
-    // "press me to stop". Lit is the thing being true — you are in the cab, the
-    // chart is turning with you — and dim is the alternative, present but off.
-    const CELL = 15, GAP = 3;
-    const cellX = mx + mw + 4;
-    const lamp = (y: number, glyph: string, col: string, lit: boolean): void => {
-      panel(cellX, y, CELL, CELL, lit ? col : UI.dim);
-      hudIconEdge(glyph, cellX + 4, y + 3, lit ? col : UI.dim, 8);
+    // ── THE CONTROL MATRIX (Glass spec §5.5) ──
+    // Six actions in one declared 3×2 grid beside the map, corner marks only:
+    // top row is the VIEW row (drone · chart-up · seat), bottom row the DRIVE
+    // row (AUTO · pause/rewind · WPT). The lamp column and the transport row
+    // merged here — same members, one geometry, and the bottom edge of the
+    // bottom row sits on the map's own bottom within a pixel. Cells hold
+    // their slots whether or not their action is available (spec: stable
+    // instruments; a missing control must not move its neighbours).
+    const CW = 18, CH = 13, CG = 2;
+    const gx = mx + mw + 4;
+    const rowB = my + mw - CH;               // bottom row bottom == map.bottom
+    const rowT = rowB - CH - CG;
+    const col = (i: number): number => gx + i * (CW + CG);
+    const lampCell = (x: number, y: number, glyph: string, c: string, lit: boolean): void => {
+      corners(x + 2, y + 1, CW - 4, CH - 2, lit ? c : UI.dim);
+      hudIconEdge(glyph, x + 5, y + 3, lit ? c : UI.dim, 8);
     };
-    // BOTTOM: the seat. Lit in the cab, where the A-pillars and the headlights
-    // are; dim in chase, watching from outside.
-    povRect = { x: cellX, y: my + mw - CELL, w: CELL, h: CELL };
-    lamp(povRect.y, ICON.car, UI.edge, lastPov === 'cab');
-    // MIDDLE: which way the chart is up. Lit means it turns with you.
-    mapUpRect = { x: cellX, y: povRect.y - CELL - GAP, w: CELL, h: CELL };
-    lamp(mapUpRect.y, ICON.map, UI.edge, mapHeadingUp);
-    // TOP: the drone, keeping the colour it always carried — gold in the air,
-    // green once it is coming home on its own, red when it is down or further
-    // out than the charge can bring it back from.
+    // TOP ROW — lamps: lit is the state being true, dim is present-but-off.
     const home = Math.hypot(drone.x - state.x, drone.z - state.z);
-    // RED WHEN IT CANNOT GET HOME. The charge left buys a fixed distance, so
-    // the honest warning is not "battery low" but "further than you can
-    // return" — with a fifth in hand for the turn and the wind you flew out on.
     const range = drone.batt * DRONE.LIFE * DRONE.SPEED;
     const marooned = drone.up && home > range * 0.8;
     const dCol = drone.downed || marooned ? UI.bad
       : drone.up ? (drone.recall ? UI.good : UI.gold) : UI.edge;
-    droneRect = { x: cellX, y: mapUpRect.y - CELL - GAP, w: CELL, h: CELL };
-    lamp(droneRect.y, ICON.gps, dCol, drone.up || drone.downed);
-    const dw = CELL;
-    // A battery strip under the chip while it is airborne, because the number
-    // that matters is how far you can still get, and it is only legible as a
-    // bar you can read without looking away from where you are flying.
-    //
-    // …AND WHILE IT FILLS. The pack takes minutes off the rig's own now instead
-    // of being handed back full, so "not yet" is a state you can be in — and a
-    // wait with no gauge on it is indistinguishable from a broken control. Gold
-    // while charging, so filling never reads the same as draining.
+    droneRect = { x: col(0), y: rowT, w: CW, h: CH };
+    lampCell(col(0), rowT, ICON.gps, dCol, drone.up || drone.downed);
+    mapUpRect = { x: col(1), y: rowT, w: CW, h: CH };
+    lampCell(col(1), rowT, ICON.map, UI.edge, mapHeadingUp);
+    povRect = { x: col(2), y: rowT, w: CW, h: CH };
+    lampCell(col(2), rowT, ICON.car, UI.edge, lastPov === 'cab');
+    // The drone's satellites live INSIDE its own cell: charge as a sliver
+    // under the glyph (the audit's finding 10), height above the grid while
+    // there is something to fly.
     const charging = rig.droneKw > 0;
     if (drone.up || drone.downed || charging) {
-      const bw = Math.max(dw, 26);
-      const by = droneRect.y - 5;
       hctx.fillStyle = UI.dim;
-      hctx.fillRect(droneRect.x, by, bw, 3);
+      hctx.fillRect(col(0) + 3, rowT + CH - 2, CW - 6, 2);
       hctx.fillStyle = charging ? UI.gold : drone.batt < 0.3 ? UI.bad : UI.good;
-      hctx.fillRect(droneRect.x, by, Math.round(bw * drone.batt), 3);
+      hctx.fillRect(col(0) + 3, rowT + CH - 2, Math.round((CW - 6) * drone.batt), 2);
     }
-    // HEIGHT, because a control you cannot read is a control you cannot use.
-    // The second finger moves this number and nothing else on screen would say
-    // so. Above the bar, and only while there is something to fly.
-    if (drone.up) {
-      const agl = `${Math.round(drone.y - groundAt(drone.x, drone.z))}M`;
-      textEdgeS(agl, droneRect.x, droneRect.y - 13, drone.recall ? UI.good : UI.gold);
+    const aglTxt = drone.up ? `${Math.round(drone.y - groundAt(drone.x, drone.z))}M` : '';
+    if (aglTxt) textEdgeS(aglTxt, col(0), rowT - 8, drone.recall ? UI.good : UI.gold);
+    // BOTTOM ROW — the drive actions.
+    // AUTO: gold engaged, dim armed-and-idle, faint when the dial has not
+    // offered the tab (the cell keeps its slot either way).
+    if (autoTab) {
+      autoRect = { x: col(0), y: rowB, w: CW, h: CH };
+      corners(col(0), rowB, CW, CH, auto.on ? UI.gold : UI.dim);
+      textEdgeS('AUTO', col(0) + 1, rowB + 4, auto.on ? UI.gold : UI.dim);
+    } else {
+      autoRect.w = 0;
+      corners(col(0), rowB, CW, CH, UI.faint);
+      textEdgeS('AUTO', col(0) + 1, rowB + 4, UI.faint);
+    }
+    // PAUSE — the transport. A tap holds the world; a drag UP from it scrubs
+    // the last two minutes when the ring has anything to give (the rewind
+    // handle folded into this cell; see rewindDown).
+    {
+      const held = rewind.at !== null;
+      rewindRect = { x: col(1), y: rowB, w: CW, h: CH };
+      const rcol = held || rewindPaused ? UI.gold : UI.dim;
+      corners(col(1), rowB, CW, CH, rcol);
+      const edged = (x: number, y: number, w2: number, h2: number): void => {
+        hctx.fillStyle = UI.ink; hctx.fillRect(x - 1, y - 1, w2 + 2, h2 + 2);
+      };
+      const px2 = col(1) + 6, py2 = rowB + 3;
+      if (rewindPaused && !held) {
+        for (let i = 0; i < 6; i++) edged(px2 + i, py2 + Math.floor(i / 2), 1, 6 - i);
+        hctx.fillStyle = rcol;
+        for (let i = 0; i < 6; i++) hctx.fillRect(px2 + i, py2 + Math.floor(i / 2), 1, 6 - i);
+      } else {
+        edged(px2, py2, 2, 7); edged(px2 + 4, py2, 2, 7);
+        hctx.fillStyle = rcol;
+        hctx.fillRect(px2, py2, 2, 7); hctx.fillRect(px2 + 4, py2, 2, 7);
+      }
+      if (held) {
+        const have = Math.max(1, rewindHave());
+        const track = 46;
+        const fill = Math.round(((rewind.at ?? 0) / have) * track);
+        const tx = col(1) + 8;
+        edged(tx, rowT - 5 - track, 3, track);
+        hctx.fillStyle = UI.dim;
+        hctx.fillRect(tx + 1, rowT - 5 - track, 1, track);
+        hctx.fillStyle = UI.gold;
+        hctx.fillRect(tx, rowT - 5 - fill, 3, Math.max(1, fill));
+        textEdgeS(`-${rewind.secs.toFixed(0)}S`, tx + 6, rowT - 5 - fill, UI.gold);
+      }
+    }
+    // WPT: amber when the pins are on, in any mode — the mode itself is
+    // announced by the flash when it cycles (spec drops the persistent mode
+    // label; amber is reserved for active navigation).
+    poiRect = { x: col(2), y: rowB, w: CW, h: CH };
+    corners(col(2), rowB, CW, CH, poiVis === 0 ? UI.dim : UI.gold);
+    textEdgeS('WPT', col(2) + 3, rowB + 4, poiVis === 0 ? UI.dim : UI.gold);
+    // ── the status line, above the grid ──
+    // The one question you have while the truck drives itself is whether it
+    // has seen the corner; the answer rides one micro row above the matrix.
+    if (autoTab && auto.on) {
+      const a = auto.out;
+      const autoTxt = !a ? 'NO TICK'
+        : a.mode === 'wait'
+          ? (auto.src === 'nowhere' ? 'NO ROAD IN REACH'
+            : auto.src === 'unchained' ? 'ROAD WILL NOT CHAIN' : 'WAIT FOR ROAD')
+          : `${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`;
+      const sx = aglTxt ? col(0) + textSW(aglTxt) + 6 : gx;
+      textEdgeS(fitS(autoTxt, HW - 58 - sx), sx, rowT - 8,
+        !a || auto.src === 'unchained' ? UI.bad : a.mode === 'wait' ? UI.gold : UI.soft);
     }
   }
   // ── where you are, and whether the world is still arriving ──
@@ -30873,7 +30812,10 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     {
       const [la, lo] = localToLatLon(state.x, state.z);
       const g = `${la.toFixed(4)} ${lo.toFixed(4)}`;
-      textEdgeS(g, pad + 1, infoY + 16, UI.dim);
+      // ONE METADATA BASELINE (spec §5.10): the coordinate, the FPS and the
+      // trip readout share an exact bottom line — coords left, FPS centred,
+      // trip right — instead of the stagger the audit's mockups inherited.
+      textEdgeS(g, pad + 1, infoY + 17, UI.dim);
       // The AUTO tell used to ride this row too — it predates the rail tab,
       // which now carries the full status where the control is. Two voices
       // saying AUTO in two corners was clutter, and this one interleaved
@@ -30889,7 +30831,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
           : age > 12 ? `FIX ${age.toFixed(0)}S OLD`
           : `±${Math.round(f.acc)}M`;
         const col = !f || age > 12 ? UI.bad : f.acc > 25 ? UI.gold : UI.good;
-        textEdgeS(s, pad + 1 + textSW(g) + 5, infoY + 16, col);
+        textEdgeS(s, pad + 1 + textSW(g) + 5, infoY + 17, col);
         // Whether the phone's own instruments are filling the second between
         // fixes. On a windscreen mount this is the difference between a smooth
         // drive and a stuttering one, and it fails SILENTLY — a refused motion
@@ -30898,7 +30840,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         // GYRO is turning the truck; IMU is that plus trimming its speed.
         const tag = !imu.on ? '' : accelLive() ? 'IMU' : gyroLive() ? 'GYRO' : '';
         if (tag) {
-          textEdgeS(tag, pad + 1 + textSW(g) + 5 + textSW(s) + 5, infoY + 16,
+          textEdgeS(tag, pad + 1 + textSW(g) + 5 + textSW(s) + 5, infoY + 17,
             tag === 'IMU' ? UI.good : UI.soft);
         }
       }
@@ -30911,7 +30853,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // to the wall clock and the world quietly runs in slow motion.
       const fps = Math.round(1000 / Math.max(frameMs, 1));
       const fs = `${fps}FPS`;
-      textEdgeS(fs, Math.round(HW * 0.66) - textSW(fs), infoY + 16,
+      // Centred on the metadata baseline (spec §5.10), clear of the location
+      // block on the left and the trip readout on the right.
+      textEdgeS(fs, Math.round((HW - textSW(fs)) / 2), infoY + 17,
         fps < 25 ? UI.bad : fps < 40 ? UI.gold : UI.dim);
     }
   }
@@ -30973,89 +30917,84 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       const o = `${fmtKm(odo.trip)} · ${fmtKm(odo.total)}`;
       textEdgeS(o, R - textSW(o), HH - pad - 6, UI.dim);
     }
-    // ── the LEDs, beside the dial ──
-    // Momentary truths, out of the table: always present, ink when dark.
-    // The stack rides high on the dial's shoulder — at centre height it stood
-    // exactly where the transport row (rewind · AUTO · WPT) now lives.
+    // ── the LEDs, radial members of the dial (Glass spec §5.9) ──
+    // The separate stack is gone; SLIP, SOL and SVC sit on the dial's lower
+    // arc as lamps — position fixed, only intensity and colour change.
     {
-      const lx = cx - DR - 6;
-      let ly = cy - 32;
-      const led = (label: string, on: boolean, col: string): void => {
-        textEdgeS(label, lx - textSW(label), ly, on ? col : 'rgba(87,201,176,0.28)');
-        ly += 8;
+      const ly2 = cy + DR - 7;
+      const lamp2 = (label: string, x: number, on: boolean, c: string): void => {
+        textEdgeS(label, x, ly2, on ? c : 'rgba(114,189,178,0.28)');
       };
-      led(skid > 0.55 ? 'SLIP!' : 'SLIP', skid > 0.06, skid > 0.55 ? UI.bad : UI.gold);
-      led('SOL', rig.solarKw > rig.drawKw, UI.gold);
-      led('SVC', rig.svc, UI.edge);
+      lamp2(skid > 0.55 ? 'SLIP!' : 'SLIP', cx - DR, skid > 0.06, skid > 0.55 ? UI.bad : UI.gold);
+      lamp2('SOL', cx - Math.round(textSW('SOL') / 2), rig.solarKw > rig.drawKw, UI.gold);
+      lamp2('SVC', cx + DR - textSW('SVC'), rig.svc, UI.edge);
     }
-    // ── the table: label over bar, right-aligned, no numbers ──
-    let y = cy - DR - 14;
-    // THE LABEL EARNS ITS INK. Every row here is persistent and almost always
-    // nominal, so a caption at `dim` beside a full bar spends as much of the
-    // glass saying "TYPE" as the bar spends saying the tyre is fine — four rows
-    // of that is a paragraph of good news. The caption goes faint while the row
-    // is healthy and takes the row's own warning colour the moment it is not, so
-    // the corner is quiet by default and the thing that is wrong is the thing
-    // that is lit. The BAR never changes: it is the reading.
-    const row = (label: string, lit: number, col: string, ok = false): void => {
-      textEdgeS(label, R - textSW(label), y, ok ? UI.faint : col);
-      meter(R - BARW, y + 6, CELLS, lit, col, 2, 3, 1);
-      y -= 12;
-    };
-    // RIG, right column: the stocks the world spends, beside the instrument
-    // they are read against.
-    row('SUSP', cells(rig.susp), rig.susp < 0.3 ? UI.bad : rig.susp < 0.6 ? UI.gold : UI.soft,
-      rig.susp >= 0.6);
-    row('HULL', cells(rig.hull), rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft,
-      rig.hull >= 0.75);
-    row('TYRE', cells(rig.tyre), rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft,
-      rig.tyre >= 0.6);
-    row('BATT', cells(rig.batt), rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good,
-      rig.batt >= 0.35);
-
-    // ── ENV, the LEFT column: what the world is doing ──
-    // The two groups answer different questions and were stacked in one corner
-    // reading as one table. ENV is about the world, and the left column is
-    // already where the world is described — the place, the way, the
-    // coordinate — so it belongs on that side, mirrored: label over bar, both
-    // aligned LEFT to the same edge the place name uses.
+    // ── RIG: vertical ladders on the outer-right edge (Glass spec §5.7) ──
+    // BATT · TYRE · HULL · SUSP as one rigid group, anchored 4g above the
+    // dial (rig.bottom = tach.top - 4g) — the horizontal bars became the
+    // same ladder construction the ENV column uses, mirrored to the right
+    // inset. BATT keeps healthy green; the others are aqua until a warning
+    // threshold promotes them; the label goes faint while its row is only
+    // confirming that nothing is wrong.
     {
-      const L = pad + 1;
-      let ey = my - 13;                // stacked upward, clear of the chart/POV dock
-      // Same rule as the rig table: faint while the row is only confirming that
-      // nothing is happening, lit when it is telling you something.
-      const erow = (label: string, lit: number, col: string, ok = false): void => {
-        meter(L, ey + 6, CELLS, lit, col, 2, 3, 1);
-        textEdgeS(label, L, ey, ok ? UI.faint : col);
-        ey -= 12;
+      const SLOT = 27, SPINE = 16;
+      const stackB = cy - DR - 9;
+      const lx = R - 5;
+      const rladder = (i: number, label: string, frac: number, col: string, quiet: boolean): void => {
+        const y2 = stackB - (4 - i) * SLOT + 4;
+        textEdgeS(label, R - textSW(label), y2, quiet ? UI.faint : col);
+        const sy = y2 + 8;
+        hctx.fillStyle = quiet ? UI.faint : UI.dim;
+        hctx.fillRect(lx + 2, sy, 1, SPINE);
+        for (let t = 0; t <= SPINE; t += 4) hctx.fillRect(lx + 1, sy + t, 3, 1);
+        const mk = sy + SPINE - 1 - Math.round(clamp(frac, 0, 1) * (SPINE - 1));
+        hctx.fillStyle = UI.ink; hctx.fillRect(lx - 1, mk - 1, 7, 4);
+        hctx.fillStyle = quiet ? UI.dim : col; hctx.fillRect(lx, mk, 5, 2);
       };
-      // WET earns a row only when there is some, for the same reason FOG does —
-      // a permanent empty bar labelled WET on a dry road is furniture, and this
-      // column was five rows deep saying almost nothing.
-      if (wx.wet > 0.02) erow('WET', cells(wx.wet), wx.wet > 0.5 ? UI.bad : UI.edge, wx.wet <= 0.5);
-      // Named from the SURFACE QUALITY, not the OSM class. A residential street
-      // tagged surface=sand is not a road to drive like one, and the panel that
-      // tells you what is under the wheels should say so — the three words are
-      // the three rungs of the same ladder the physics is standing on.
+      rladder(0, 'BATT', rig.batt, rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good, false);
+      rladder(1, 'TYRE', rig.tyre, rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft, rig.tyre >= 0.6);
+      rladder(2, 'HULL', rig.hull, rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft, rig.hull >= 0.75);
+      rladder(3, 'SUSP', rig.susp, rig.susp < 0.3 ? UI.bad : rig.susp < 0.6 ? UI.gold : UI.soft, rig.susp >= 0.6);
+    }
+
+    // ── ENV: vertical ladders on the outer-left edge (Glass spec §5.3) ──
+    // Label over a calibrated spine with a marker at the level — the
+    // horizontal bars became ladders and the column moved to the viewport
+    // edge, anchored 4g above the map. Five FIXED slots top to bottom
+    // (WET · SURF · SKY · WIND · FOG); a row with nothing to say leaves its
+    // slot empty rather than reflowing the stack (spec: missing content must
+    // not move neighbours).
+    {
+      const L = pad;
+      const SLOT = 27, SPINE = 16;
+      const stackB = my - 8;               // env.bottom = map.top - 4g
+      const ladder = (i: number, label: string, frac: number, col: string, quiet = false): void => {
+        const y = stackB - (5 - i) * SLOT + 4;
+        textEdgeS(label, L, y, quiet ? UI.faint : col);
+        const sy = y + 8;
+        hctx.fillStyle = quiet ? UI.faint : UI.dim;
+        hctx.fillRect(L + 2, sy, 1, SPINE);
+        for (let t = 0; t <= SPINE; t += 4) hctx.fillRect(L + 1, sy + t, 3, 1);
+        const mk = sy + SPINE - 1 - Math.round(clamp(frac, 0, 1) * (SPINE - 1));
+        hctx.fillStyle = UI.ink; hctx.fillRect(L - 1, mk - 1, 7, 4);
+        hctx.fillStyle = quiet ? UI.dim : col; hctx.fillRect(L, mk, 5, 2);
+      };
+      // Spec order, top to bottom: sky matters first (WIND, then the sky
+      // itself), then the ground (surface, wet), fog last — the mock's
+      // WIND · CLEAR · ROUGH reading with our two extra rows slotted in.
+      const windKmh = live.on ? live.windKmh : 12;
+      ladder(0, 'WIND', clamp(windKmh / 60, 0, 1), windKmh > 38 ? UI.gold : UI.soft,
+        windKmh <= 38);
+      const w = WX[wx.sky];
+      ladder(1, w.label, wx.cloud, wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft,
+        wx.sky !== 'storm' && wx.rain <= 0.1);
+      // Named from the SURFACE QUALITY, not the OSM class — the three words
+      // are the three rungs of the ladder the physics is standing on.
       const sname = surf === 'water' ? 'WATER' : sq >= 0.8 ? 'ROAD' : sq >= 0.45 ? 'TRACK' : 'ROUGH';
       const scol = sname === 'ROAD' ? UI.good : sname === 'TRACK' ? UI.edge : UI.hot;
-      // The surface name is never merely nominal — what is under the wheels is
-      // the single most useful thing this column says — so it keeps its colour.
-      erow(sname, cells(grip), scol);
-      // WEATHER and WIND read like everything else in this column: a label
-      // over a bar. The word says what the sky is doing, the bar says how
-      // much of it (cover), and the wind bar is the same wind that leans the
-      // grass and pushes the cloud deck. The ENV/RIG captions are gone — the
-      // columns' sides of the screen say which is which.
-      const w = WX[wx.sky];
-      erow(w.label, cells(wx.cloud), wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft,
-        wx.sky !== 'storm' && wx.rain <= 0.1);
-      const windKmh = live.on ? live.windKmh : 12;
-      erow('WIND', cells(clamp(windKmh / 60, 0, 1)), windKmh > 38 ? UI.gold : UI.soft,
-        windKmh <= 38);
-      // Fog earns a row only when you are in some — a permanent zero bar is
-      // furniture, and this column is already five rows deep.
-      if (wxL.fog > 0.12) erow('FOG', cells(wxL.fog), UI.soft);
+      ladder(2, sname, grip, scol);
+      if (wx.wet > 0.02) ladder(3, 'WET', wx.wet, wx.wet > 0.5 ? UI.bad : UI.edge, wx.wet <= 0.5);
+      if (wxL.fog > 0.12) ladder(4, 'FOG', wxL.fog, UI.soft);
     }
   }
   // The mission card and the survey-claim toast are DOM now (client/
@@ -31392,7 +31331,9 @@ const REWIND_PX = 2;
  *  handle must not seat the truck on a checkpoint before you have asked it to. */
 const REWIND_SLOP = 6;
 function rewindDown(e: PointerEvent): boolean {
-  if (!rewindReady() || rewindRect.w === 0) return false;
+  // The PAUSE cell answers taps even with an empty ring — the transport hold
+  // is always available; only the SCRUB needs history (gated in rewindMove).
+  if (rewindRect.w === 0) return false;
   const x = e.clientX / hudS, y = e.clientY / hudS;
   if (x < rewindRect.x - CHIP_SLOP || x > rewindRect.x + rewindRect.w + CHIP_SLOP
     || y < rewindRect.y - CHIP_H / 2 || y > rewindRect.y + rewindRect.h + CHIP_H / 2) return false;
@@ -31873,7 +31814,7 @@ const menu = createMenu({
 
 // The DOM half of the HUD: the MENU button, the task card, the claim toast.
 const overlays = createOverlays(
-  { edge: UI.edge, dim: UI.dim, text: UI.text, soft: UI.soft, gold: UI.gold, hot: UI.hot, good: UI.good, bad: UI.bad },
+  { ink: UI.ink, edge: UI.edge, dim: UI.dim, text: UI.text, soft: UI.soft, gold: UI.gold, hot: UI.hot, good: UI.good, bad: UI.bad },
   () => menu.open(),
   () => acceptMission(performance.now()),
   // One X, two meanings: an OFFER is put away until you come back; an
