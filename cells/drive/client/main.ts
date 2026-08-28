@@ -2127,6 +2127,12 @@ function depthVisible(px3: number, py3: number, pz3: number): boolean {
     const i = (cyq * LUMA_W + cxq) * 4;
     far2 = Math.max(far2, ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar);
   }
+  // THE BACKDROP IS NOT AN OCCLUDER. The sky dome and cloud deck are real
+  // meshes with real depth, and with the far shell unstreamed they are what
+  // the ray hits at the horizon — which had them "occluding" Bears Ears at
+  // 68km (photographed: ten summits blocked, zero drawn, world data cold).
+  // Anything half the far plane out is scenery, not terrain in the way.
+  if (far2 > lumaFar * 0.5) return true;
   return far2 + Math.max(140, dCam * 0.2) >= dCam;
 }
 /** Background luminance under a HUD-pixel point, 0..1. GL rows run bottom-up,
