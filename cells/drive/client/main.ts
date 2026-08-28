@@ -27408,15 +27408,6 @@ function textEdgeP(s: string, x: number, y: number, col: string): void {
   }
   textPoi(hctx, s, x, y, col);
 }
-/** The ADAPTIVE pin face: over bright ground the whole treatment flips —
- *  ink glyphs in a bone halo instead of light glyphs in an ink one. The
- *  luma map (hudBgLuma) decides; this is what it exists for. */
-function textEdgePL(s: string, x: number, y: number, col: string, bright: boolean): void {
-  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
-    textPoi(hctx, s, x + dx, y + dy, bright ? 'rgba(229,227,199,0.85)' : 'rgba(4,10,11,0.85)');
-  }
-  textPoi(hctx, s, x, y, bright ? UI.ink : col);
-}
 const textPW = measureM;
 function fitP(s: string, maxPx: number): string {
   if (measureM(s) <= maxPx) return s;
@@ -30372,6 +30363,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   poiRects.length = 0;
   const inView = poiDraw.filter((p) => p.edge === 0).sort((a, b) => a.x - b.x);
   const lanes: number[] = [];        // right edge of the last label per lane
+  const peakLbls: Array<{ label: string; x: number; ly: number; col: string; a: number }> = [];
   for (const p of inView) {
     // A SUMMIT'S LABEL IS LONGER BY RIGHT. Half the HUD width clipped
     // "JUNIPERO SERRA PEAK 1787M 50.2KM" to "…PEAK 1." — losing the height,
@@ -30419,7 +30411,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const h = ay - beamTop;
     const x = clamp(Math.round(ax - w / 2), 2, HW - w - 2);
     let lane = 0;
-    while (lane < 3 && lanes[lane] !== undefined && x < lanes[lane] + 5) lane++;
+    while (lane < 3 && lanes[lane] !== undefined && x < lanes[lane] + 8) lane++;
     lanes[lane] = x + w;
     // A NAME HIGH IN THE FRAME HANGS BELOW ITS MARK. Summits ride at the angle
     // they really subtend, so from a valley floor they sit at the top of the
@@ -30432,9 +30424,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // horizon line — three names and the skyline all fighting for the same
     // four rows (photographed at Bears Ears). Peaks lift well into the sky
     // band and stack there; the leader spans the gap, which is what it is for.
-    const above = isPeak ? my - 24 - lane * 9
+    const above = isPeak ? my - 26 - lane * 11
       : ay - Math.max(11, Math.round(h / 3)) - lane * 8;
-    const ly = isPeak && above < COMPASS_B ? ay + 7 + lane * 8 : Math.max(12, above);
+    const ly = isPeak && above < COMPASS_B ? ay + 7 + lane * 11 : Math.max(12, above);
     hctx.save();
     // THE checkpoint beam, in the place's own colour: the same leaning
     // column, the same alpha ramp, the same widths — one family of light.
@@ -30452,35 +30444,38 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // ON the summit, a one-pixel line to its own label, no triangle — the
     // old glyph floated clear of the apex precisely because it covered the
     // pixels it pointed at, and a point this small covers nothing.
-    // THE FLIP: the luma map says whether this annotation sits over bright
-    // sky/ground or dark — the line, the point and the face all swap together
-    // (a dark leader on a noon sky, a light one against a dusk ridge).
-    const bright = isPeak
-      && (hudBgLuma(ax, my) + hudBgLuma(Math.round(x + w / 2), ly)) / 2 > 0.56;
     hctx.globalAlpha = isPeak ? (p.hid ? 0.55 : 0.95) : (0.5 + 0.5 * near) * ghost;
-    hctx.fillStyle = bright ? 'rgba(229,227,199,0.85)' : UI.ink;
+    hctx.fillStyle = UI.ink;
     if (isPeak) hctx.fillRect(ax - 2, my - 2, 4, 4); else diamond(ax, ay, 3);
-    hctx.fillStyle = bright ? UI.ink : p.c;
+    hctx.fillStyle = p.c;
     if (isPeak) {
       hctx.fillRect(ax - 1, my - 1, 2, 2);
-      // The leader runs vertically to the label's row, dashed while the
-      // summit is behind a ridge (the story the beam's dashes used to carry),
-      // with one restrained elbow when the label had to shift to stay on
-      // screen. Every line ends at its own point — labels may stack, leaders
-      // stay traceable.
+      // THE LINE IS THE ONLY THING THAT FLIPS. The point wears its own ink
+      // seat and the label its own halo — each already survives both grounds —
+      // but a hairline has no second colour to save it, so the luma map picks
+      // ink over bright sky and the place's light over dark ground.
+      const bright = (hudBgLuma(ax, Math.round((my + ly) / 2)) + hudBgLuma(ax, my)) / 2 > 0.56;
+      hctx.fillStyle = bright ? 'rgba(9,20,17,0.8)' : p.c;
+      // Dashed while the summit is behind a ridge (the story the beam's
+      // dashes used to carry). BOTH ENDS ARE VERTICAL: the line drops from
+      // the label and rises from the point, with one horizontal jog mid-span
+      // when the label had to shift sideways — a line arriving at a label
+      // broadside reads as an underline, not a leader.
       const below = ly > my;                    // label under the point?
-      const lyE = below ? ly - 3 : ly + 7;
-      const yA = Math.min(my + (below ? 3 : -3), lyE), yB = Math.max(my + (below ? 3 : -3), lyE);
-      for (let yy = yA; yy <= yB; yy++) {
-        if (p.hid && (yy & 2)) continue;
-        hctx.fillRect(ax, yy, 1, 1);
-      }
+      const lyE = below ? ly - 3 : ly + 7;      // where the label's drop ends
+      const pA = my + (below ? 3 : -3);         // where the point's rise starts
       const lcx = Math.round(x + w / 2);
-      if (Math.abs(lcx - ax) > 3) {
-        for (let xx = Math.min(lcx, ax); xx <= Math.max(lcx, ax); xx++) {
-          if (p.hid && (xx & 2)) continue;
-          hctx.fillRect(xx, lyE, 1, 1);
-        }
+      const dash = (xx: number, yy: number): void => {
+        if (p.hid && ((xx + yy) & 2)) return;
+        hctx.fillRect(xx, yy, 1, 1);
+      };
+      if (Math.abs(lcx - ax) <= 3) {
+        for (let yy = Math.min(pA, lyE); yy <= Math.max(pA, lyE); yy++) dash(ax, yy);
+      } else {
+        const yMid = Math.round((pA + lyE) / 2);
+        for (let yy = Math.min(pA, yMid); yy <= Math.max(pA, yMid); yy++) dash(ax, yy);
+        for (let xx = Math.min(ax, lcx); xx <= Math.max(ax, lcx); xx++) dash(xx, yMid);
+        for (let yy = Math.min(yMid, lyE); yy <= Math.max(yMid, lyE); yy++) dash(lcx, yy);
       }
     }
     else if (p.rng) diamond(ax, ay, 3); else diamondOutline(ax, ay, 2);
@@ -30488,10 +30483,17 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // in range or pinned by hand. Occlusion is the BEAM's story (dashed,
     // ghosted); the words themselves stay legible — a name you cannot read
     // is not a rumour, it is clutter.
-    hctx.globalAlpha = (p.hid ? 0.9 : 1) * (0.55 + 0.45 * farDim);
-    if (iconCh) hudIconEdge(iconCh, x + 1, ly - 1, p.c, 5);
-    if (isPeak) textEdgePL(label, x + 2 + iw, ly, p.hid ? UI.soft : UI.text, bright);
-    else textEdgeP(label, x + 2 + iw, ly, p.rng || p.pinned ? UI.gold : p.hid ? UI.soft : UI.text);
+    // A SUMMIT'S LABEL WAITS FOR THE LINES. Labels draw in a second pass so
+    // a later peak's leader can never cross an earlier peak's name — lines
+    // under words, always.
+    if (isPeak) {
+      peakLbls.push({ label, x: x + 2 + iw, ly, col: p.hid ? UI.soft : UI.text,
+        a: (p.hid ? 0.9 : 1) * (0.55 + 0.45 * farDim) });
+    } else {
+      hctx.globalAlpha = (p.hid ? 0.9 : 1) * (0.55 + 0.45 * farDim);
+      if (iconCh) hudIconEdge(iconCh, x + 1, ly - 1, p.c, 5);
+      textEdgeP(label, x + 2 + iw, ly, p.rng || p.pinned ? UI.gold : p.hid ? UI.soft : UI.text);
+    }
     if (p.rng) {
       // IN RANGE: brackets around the label — a place you have arrived AT.
       hctx.fillStyle = UI.gold;
@@ -30508,6 +30510,12 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const rx = Math.min(x - 5, ax - 7);
     poiRects.push({ x: rx, y: ly - 6, w: Math.max(x + w + 5, ax + 7) - rx, h: ay - ly + 12, name: p.name, kind: p.kind, rng: p.rng });
   }
+  // The lines are all down; now the words go on top of them.
+  for (const q of peakLbls) {
+    hctx.globalAlpha = q.a;
+    textEdgeP(q.label, q.x, q.ly, q.col);
+  }
+  hctx.globalAlpha = 1;
   for (const p of poiDraw) {
     if (p.edge === 0) continue;
     // No summit reaches this loop: a peak is drawn where it is or not at all
