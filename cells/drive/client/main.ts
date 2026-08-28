@@ -20775,6 +20775,30 @@ function farHeightAt(wx: number, wz: number): number | null {
     bend: nextBend(state.x, state.z, state.heading),
   };
 };
+/** The depth eye, dissected for one summit: where its apex projects, what
+ *  the map reads there, and the verdict — for chasing a wrong answer to the
+ *  exact term that gave it. */
+(window as unknown as { __dvis?: object }).__dvis = (name: string): object | null => {
+  const pk = [...peaks.values()].find((q) => q.name === name);
+  if (!pk) return null;
+  const vx = viewX(), vz = viewZ();
+  const py3 = pk.ele - baseElev - curveDrop(pk.x - vx, pk.z - vz) + 6;
+  depVec.set(pk.x, py3, pk.z);
+  const dCam = depVec.distanceTo(camera.position);
+  depVec.project(camera);
+  const gx = clamp(Math.floor((depVec.x * 0.5 + 0.5) * LUMA_W), 0, LUMA_W - 1);
+  const gy = clamp(Math.floor((depVec.y * 0.5 + 0.5) * LUMA_H), 0, LUMA_H - 1);
+  let far2 = 0;
+  for (const [ox, oy] of [[0, 0], [-1, 0], [1, 0], [0, 1]] as const) {
+    const cxq = clamp(gx + ox, 0, LUMA_W - 1), cyq = clamp(gy + oy, 0, LUMA_H - 1);
+    const i = (cyq * LUMA_W + cxq) * 4;
+    far2 = Math.max(far2, ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar);
+  }
+  return { primed: lumaPrimed, y: Math.round(py3), dCam: Math.round(dCam),
+    ndc: [+depVec.x.toFixed(3), +depVec.y.toFixed(3), +depVec.z.toFixed(3)],
+    gx, gy, far2: Math.round(far2),
+    vis: depthVisible(pk.x, py3, pk.z) };
+};
 /** The luma map, for tests: brightness AND decoded scene distance (m) under
  *  a HUD point — the two answers the readback carries. */
 (window as unknown as { __luma?: object }).__luma = (hx: number, hy: number): object => {

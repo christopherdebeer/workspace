@@ -13,6 +13,9 @@ const strip = await d.page.evaluate(() => {
   return out;
 });
 console.log('depth strip (centre column):', JSON.stringify(strip));
+const dv = await d.page.evaluate(() => ({
+  east: window.__dvis('Bears Ears East'), toe: window.__dvis('The Toe') }));
+console.log('dvis:', JSON.stringify(dv));
 await d.shot('peaks-285');
 console.log(`-> ${join(WORK, 'peaks-285.png')}`);
 // The Bears Ears bearing from the first photograph.
