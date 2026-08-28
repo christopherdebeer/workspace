@@ -2121,28 +2121,41 @@ function depthVisible(px3: number, py3: number, pz3: number): boolean {
   if (Math.abs(depVec.x) > 1 || Math.abs(depVec.y) > 1) return true;
   const gx = clamp(Math.floor((depVec.x * 0.5 + 0.5) * LUMA_W), 0, LUMA_W - 1);
   const gy = clamp(Math.floor((depVec.y * 0.5 + 0.5) * LUMA_H), 0, LUMA_H - 1);
-  // A COLUMN OF CELLS, NOT A POINT. The analytic curve and the renderer's
-  // disagree by a few cells at long range (measured at Bears Ears: the apex
-  // projected two degrees under its own rendered summit and sampled the
-  // grass at 159m), and a distant mesa is a one-texel sliver this grid
-  // cannot be trusted to point-sample. Looking UP a few cells can only find
-  // FARTHER things, so it rescues a summit shy of its own render without
-  // un-hiding anything a real wall covers — a wall fills the whole column.
+  // TWO READS, TWO AUTHORITIES. Photographed at Stelvio (heading 206 up the
+  // Val Müstair flank): summits at 7-18km stood ON the glass while a hillside
+  // at 700m filled their cells, because the old verdict had two pardons a
+  // valley hands out constantly — "blocker beyond half the far plane is
+  // backdrop" (a real rendered ridge at 35km tripped it) and a slack of
+  // dCam*0.2 (a ridge at 80% of the summit's own distance forgave it). Both
+  // are gone. The NEAR read — the point and one row up, three wide, enough
+  // for one row of projection jitter — is authoritative: sky there (the dome
+  // writes no depth, so sky decodes as the far plane; clouds live in the
+  // dome's shader and write none either) means the summit renders against
+  // sky; terrain there is measured against dCam with only a face-thickness
+  // allowance. The UPWARD RESCUE — rows 2-3, sky only — exists for one
+  // measured reason: the analytic earth-curve and the renderer's disagree by
+  // whole grid rows at long range (Bears Ears, 68km: apex two rows under its
+  // own rendered summit, sampling grass at 159m). That mismatch grows with
+  // distance, so the rescue is gated to dCam beyond 25km — at Stelvio's
+  // 7-18km an apex two rows under a silhouette is BEHIND that hillside, and
+  // gets to stay hidden.
+  const SKY = lumaFar * 0.9;
+  const cellM = (cxq: number, cyq: number): number => {
+    const i = (clamp(cyq, 0, LUMA_H - 1) * LUMA_W + clamp(cxq, 0, LUMA_W - 1)) * 4;
+    return ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar;
+  };
   let far2 = 0;
-  for (let oy = 0; oy <= 3; oy++) {
-    for (let ox = -1; ox <= 1; ox++) {
-      const cxq = clamp(gx + ox, 0, LUMA_W - 1), cyq = clamp(gy + oy, 0, LUMA_H - 1);
-      const i = (cyq * LUMA_W + cxq) * 4;
-      far2 = Math.max(far2, ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar);
+  for (let oy = 0; oy <= 1; oy++) {
+    for (let ox = -1; ox <= 1; ox++) far2 = Math.max(far2, cellM(gx + ox, gy + oy));
+  }
+  if (far2 >= SKY) return true;
+  if (far2 + Math.max(140, dCam * 0.08) >= dCam) return true;
+  if (dCam > 25000) {
+    for (let oy = 2; oy <= 3; oy++) {
+      for (let ox = -1; ox <= 1; ox++) if (cellM(gx + ox, gy + oy) >= SKY) return true;
     }
   }
-  // THE BACKDROP IS NOT AN OCCLUDER. The sky dome and cloud deck are real
-  // meshes with real depth, and with the far shell unstreamed they are what
-  // the ray hits at the horizon — which had them "occluding" Bears Ears at
-  // 68km (photographed: ten summits blocked, zero drawn, world data cold).
-  // Anything half the far plane out is scenery, not terrain in the way.
-  if (far2 > lumaFar * 0.5) return true;
-  return far2 + Math.max(140, dCam * 0.2) >= dCam;
+  return false;
 }
 /** Background luminance under a HUD-pixel point, 0..1. GL rows run bottom-up,
  *  so the vertical index flips. */
@@ -20797,17 +20810,21 @@ function farHeightAt(wx: number, wz: number): number | null {
   depVec.project(camera);
   const gx = clamp(Math.floor((depVec.x * 0.5 + 0.5) * LUMA_W), 0, LUMA_W - 1);
   const gy = clamp(Math.floor((depVec.y * 0.5 + 0.5) * LUMA_H), 0, LUMA_H - 1);
-  let far2 = 0;
-  for (let oy = 0; oy <= 3; oy++) {
-    for (let ox = -1; ox <= 1; ox++) {
-      const cxq = clamp(gx + ox, 0, LUMA_W - 1), cyq = clamp(gy + oy, 0, LUMA_H - 1);
-      const i = (cyq * LUMA_W + cxq) * 4;
-      far2 = Math.max(far2, ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar);
-    }
+  const cellM = (cxq: number, cyq: number): number => {
+    const i = (clamp(cyq, 0, LUMA_H - 1) * LUMA_W + clamp(cxq, 0, LUMA_W - 1)) * 4;
+    return ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar;
+  };
+  let far2 = 0, riseSky = 0;
+  for (let oy = 0; oy <= 1; oy++) {
+    for (let ox = -1; ox <= 1; ox++) far2 = Math.max(far2, cellM(gx + ox, gy + oy));
+  }
+  for (let oy = 2; oy <= 3; oy++) {
+    for (let ox = -1; ox <= 1; ox++) riseSky = Math.max(riseSky, cellM(gx + ox, gy + oy));
   }
   return { primed: lumaPrimed, y: Math.round(py3), dCam: Math.round(dCam),
     ndc: [+depVec.x.toFixed(3), +depVec.y.toFixed(3), +depVec.z.toFixed(3)],
-    gx, gy, far2: Math.round(far2),
+    gx, gy, far2: Math.round(far2), riseSky: Math.round(riseSky),
+    off: Math.abs(depVec.x) > 1 || Math.abs(depVec.y) > 1,
     vis: depthVisible(pk.x, py3, pk.z) };
 };
 /** The luma map, for tests: brightness AND decoded scene distance (m) under

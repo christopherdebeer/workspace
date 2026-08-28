@@ -11,7 +11,7 @@ import { openDrive, report, WORK } from './harness.mjs';
 
 const spot = process.argv[2] || 'lat=46.55410&lon=10.44287&h=206&cam=chase&sunalt=45&wx=clear';
 const d = await openDrive({ spot, tag: 'depthmap' });
-await d.page.waitForTimeout(35000);
+await d.page.waitForTimeout(55000);      // alpine spot: let the shell finish streaming
 
 await d.shot('depth-scene');
 console.log(`-> ${join(WORK, 'depth-scene.png')}`);
@@ -36,15 +36,12 @@ for (const [name, v] of Object.entries(dv)) {
   if (!v) continue;
   const { gx, gy, dCam } = v;
   const exact = at(gx, gy);
-  let colMax = 0;
-  for (let oy = 0; oy <= 3; oy++) for (let ox = -1; ox <= 1; ox++) {
-    const cx = Math.min(W - 1, Math.max(0, gx + ox)), cy = Math.min(H - 1, Math.max(0, gy + oy));
-    colMax = Math.max(colMax, at(cx, cy));
-  }
-  const guard = colMax > far * 0.5;
-  const slack = colMax + Math.max(140, dCam * 0.2) >= dCam;
-  console.log(`${name.padEnd(22)} d=${(dCam / 1000).toFixed(1)}km g=(${gx},${gy}) ` +
-    `exact=${exact}m colMax=${colMax}m guard(>${Math.round(far * 0.5)})=${guard} slack=${slack} vis=${v.vis}`);
+  const skyAt = far * 0.9;
+  const nearSky = v.far2 >= skyAt;
+  const face = v.far2 + Math.max(140, dCam * 0.08) >= dCam;
+  const rescue = dCam > 25000 && v.riseSky >= skyAt;
+  console.log(`${name.padEnd(22)} d=${(dCam / 1000).toFixed(1)}km g=(${gx},${gy})${v.off ? ' OFF' : ''} ` +
+    `exact=${exact}m near=${v.far2}m riseSky=${v.riseSky}m sky=${nearSky} face=${face} rescue=${rescue} vis=${v.vis}`);
 }
 
 // ── the map itself, upscaled, pins on top ──
