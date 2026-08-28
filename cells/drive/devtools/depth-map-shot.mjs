@@ -16,6 +16,28 @@ await d.page.waitForTimeout(55000);      // alpine spot: let the shell finish st
 await d.shot('depth-scene');
 console.log(`-> ${join(WORK, 'depth-scene.png')}`);
 
+// SECOND LOOK, AIMED: turn the truck at the tallest known summit so the
+// range is IN FRAME — the parked heading may face none of it. The camera
+// only answers after a rendered frame, so aim by feedback: read the
+// summit's ndc.x, nudge the heading, wait, read again.
+const target = await d.page.evaluate(() => window.__peaks(1).top[0]?.name ?? null);
+if (target) {
+  for (let i = 0; i < 8; i++) {
+    const v = await d.page.evaluate((n) => window.__dvis(n), target);
+    if (!v) break;
+    const off = v.ndc[2] > 1 || v.ndc[2] < 0 ? 2 : v.ndc[0];   // behind: big step
+    if (Math.abs(off) < 0.3) break;
+    await d.page.evaluate((step) => {
+      window.__drive.heading = (window.__drive.heading + step + Math.PI * 2) % (Math.PI * 2);
+    }, Math.sign(off) * Math.min(Math.abs(off) * 0.26, 0.6));
+    await d.page.waitForTimeout(1500);
+  }
+  await d.page.waitForTimeout(5000);           // camera settles + luma refreshes
+  console.log(`aimed at: ${target}`);
+}
+await d.shot('depth-scene-aimed');
+console.log(`-> ${join(WORK, 'depth-scene-aimed.png')}`);
+
 const data = await d.page.evaluate(() => {
   const dump = window.__lumadump();
   const pk = window.__peaks(20);

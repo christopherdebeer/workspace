@@ -2151,7 +2151,10 @@ function depthVisible(px3: number, py3: number, pz3: number): boolean {
   if (far2 >= SKY) return true;
   if (far2 + Math.max(140, dCam * 0.08) >= dCam) return true;
   if (dCam > 25000) {
-    for (let oy = 2; oy <= 3; oy++) {
+    // The mismatch grows with range — measured 3-4 rows at 68km (the apex's
+    // row jitters frame to frame, so the band must cover the worst of it).
+    const top = Math.min(5, 1 + Math.round(dCam / 15000));
+    for (let oy = 2; oy <= top; oy++) {
       for (let ox = -1; ox <= 1; ox++) if (cellM(gx + ox, gy + oy) >= SKY) return true;
     }
   }
