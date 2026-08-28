@@ -27386,6 +27386,12 @@ const hctx = hud.getContext('2d')!;
 const UI = {
   ink: '#0a1417', edge: '#57c9b0', dim: '#3d6f66', text: '#d6efe7', soft: '#7fa39c',
   gold: '#f2c14e', hot: '#e2703a', good: '#6fe0a0', bad: '#d94f4f',
+  // A RUNG BELOW `dim`, for a caption that is only there to be found. The gauge
+  // corners are persistent and mostly nominal, and a label at `dim` beside a
+  // healthy bar spends as much ink saying "TYRE" as the bar spends saying the
+  // tyre is fine. Faint keeps the row findable and stops it competing; the
+  // moment the row has something to say it takes its warning colour instead.
+  faint: '#25443f',
 };
 let hudS = 3;            // CSS pixels per HUD pixel
 let HW = 2, HH = 2;      // HUD buffer size, in HUD pixels
@@ -29974,37 +29980,28 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       textEdgeS('WPT', px, rowY + 1, poiVis === 0 ? UI.dim : UI.gold);
     }
     // ── the status row ──
-    // WAITING IS NOT AN ERROR, and must not be painted as one — a cold tile
-    // is the ordinary condition of driving into new ground. Gold while it
-    // holds for the world, soft while it drives, red only when the tick is
-    // not reaching the controller at all. A HOLD SAYS WHICH HOLD IT IS: a
-    // tile on its way (wait), no road within reach (you are lost, drive), or
-    // a road right there that would not chain (a bug worth a probe).
-    // A wide warning takes the whole row and the WPT mode yields for the
-    // frame — a warning outranks a mode label.
-    {
-      const wptTxt = POI_MODES[poiVis];
-      const ww2 = textSW(wptTxt);
-      const wptTx = Math.min(rowR - ww2, px + Math.round((wptW - ww2) / 2));
-      let wptYields = false;
-      if (autoTab && auto.on) {
-        const a = auto.out;
-        const autoTxt = !a ? 'NO TICK'
-          : a.mode === 'wait'
-            ? (auto.src === 'nowhere' ? 'NO ROAD IN REACH'
-              : auto.src === 'unchained' ? 'ROAD WILL NOT CHAIN' : 'WAIT FOR ROAD')
-            : `${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`;
-        const aw2 = textSW(autoTxt);
-        let ax2 = ax + Math.round((autoW - aw2) / 2);
-        if (ax2 + aw2 > wptTx - 4) ax2 = wptTx - 4 - aw2;
-        if (ax2 < rowL - 8) {
-          ax2 = Math.max(64, rowL + Math.round((rowR - rowL - aw2) / 2));
-          wptYields = true;
-        }
-        textEdgeS(autoTxt, ax2, statY,
-          !a || auto.src === 'unchained' ? UI.bad : a.mode === 'wait' ? UI.gold : UI.soft);
-      }
-      if (!wptYields) textEdgeS(wptTxt, wptTx, statY, poiVis === 0 ? UI.dim : UI.soft);
+    //
+    // ONE ROW, ONE VOICE. This row carried two unrelated captions four pixels
+    // apart — what the autopilot was doing, and which waypoint mode the chip
+    // beside it was in — and they read as one sentence: `RUN CURVE 32 NEAR`,
+    // which is not a fact about anything. The yielding dance between them was
+    // trying to fix a collision that should not have existed.
+    //
+    // So the row is the autopilot's, and only for what it is ROUTINELY doing:
+    // the mode, what is limiting it, and the planned speed. `RUN CURVE 32` is
+    // the answer to the one question you have while a truck drives itself —
+    // whether it has seen the corner.
+    //
+    // Everything EXCEPTIONAL it might say goes to the message rail instead (see
+    // `railAuto` below), because a hold is news and news belongs where the other
+    // voices are. And the waypoint mode is now spoken once, when you change it,
+    // rather than stated forever — a chip that is lit already says it is on.
+    if (autoTab && auto.on && auto.out && auto.out.mode !== 'wait') {
+      const a = auto.out;
+      const autoTxt = `${a.mode.toUpperCase()} ${a.limit.toUpperCase()} ${Math.round(a.want * 3.6)}`;
+      const aw2 = textSW(autoTxt);
+      const ax2 = Math.max(rowL, Math.min(rowR - aw2, ax + Math.round((autoW - aw2) / 2)));
+      textEdgeS(autoTxt, ax2, statY, UI.soft);
     }
   }
   // Filled and hollow diamonds, plotted a row at a time. At this resolution a
@@ -30578,14 +30575,33 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   {
     const railY = Math.round(HH * 0.26) + 3;
     let row = 0;
-    if (wx.warn && performance.now() < wx.warn) {
-      const t2 = 'STORM APPROACHING';
-      textEdge(t2, Math.round((HW - textW(t2) - 10) / 2) + 5, railY, UI.bad);
+    const say = (t: string, col: string): void => {
+      textEdge(t, Math.round((HW - textW(t) - 10) / 2) + 5, railY + row * 13, col);
       row++;
+    };
+    if (wx.warn && performance.now() < wx.warn) say('STORM APPROACHING', UI.bad);
+    // THE AUTOPILOT'S EXCEPTIONS, and only those. A truck that is driving itself
+    // says so quietly on its own status row; a truck that has STOPPED driving
+    // itself has to say why, in words, where the other voices are — the status
+    // row is four pixels of small type beside a chip, which is the wrong weight
+    // for "I am not going to move".
+    //
+    // WAITING IS NOT AN ERROR and must not be painted as one: a cold tile is the
+    // ordinary condition of driving into new ground, so a hold for the world is
+    // gold and only a controller that is not being ticked at all is red. And a
+    // hold says WHICH hold it is — a tile on its way, no road within reach (you
+    // are lost; drive), or a road right there that would not chain (a bug worth
+    // a probe).
+    if (autoTab && auto.on) {
+      const a = auto.out;
+      if (!a) say('AUTOPILOT NOT TICKING', UI.bad);
+      else if (a.mode === 'wait') {
+        say(auto.src === 'nowhere' ? 'NO ROAD IN REACH'
+          : auto.src === 'unchained' ? 'ROAD WILL NOT CHAIN' : 'WAITING FOR ROAD',
+        auto.src === 'unchained' ? UI.bad : UI.gold);
+      }
     }
-    if (performance.now() < flashUntil && flashMsg) {
-      textEdge(flashMsg, Math.round((HW - textW(flashMsg) - 10) / 2) + 5, railY + row * 13, UI.gold);
-    }
+    if (performance.now() < flashUntil && flashMsg) say(flashMsg, UI.gold);
   }
   // ── the co-driver: the next bend, DRAWN before it arrives ──
   // The arrow is the call; the words are the footnote. Severity is the
@@ -30876,17 +30892,28 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     }
     // ── the table: label over bar, right-aligned, no numbers ──
     let y = cy - DR - 14;
-    const row = (label: string, lit: number, col: string, labelCol = UI.dim): void => {
-      textEdgeS(label, R - textSW(label), y, labelCol);
+    // THE LABEL EARNS ITS INK. Every row here is persistent and almost always
+    // nominal, so a caption at `dim` beside a full bar spends as much of the
+    // glass saying "TYPE" as the bar spends saying the tyre is fine — four rows
+    // of that is a paragraph of good news. The caption goes faint while the row
+    // is healthy and takes the row's own warning colour the moment it is not, so
+    // the corner is quiet by default and the thing that is wrong is the thing
+    // that is lit. The BAR never changes: it is the reading.
+    const row = (label: string, lit: number, col: string, ok = false): void => {
+      textEdgeS(label, R - textSW(label), y, ok ? UI.faint : col);
       meter(R - BARW, y + 6, CELLS, lit, col, 2, 3, 1);
       y -= 12;
     };
     // RIG, right column: the stocks the world spends, beside the instrument
     // they are read against.
-    row('SUSP', cells(rig.susp), rig.susp < 0.3 ? UI.bad : rig.susp < 0.6 ? UI.gold : UI.soft);
-    row('HULL', cells(rig.hull), rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft);
-    row('TYRE', cells(rig.tyre), rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft);
-    row('BATT', cells(rig.batt), rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good);
+    row('SUSP', cells(rig.susp), rig.susp < 0.3 ? UI.bad : rig.susp < 0.6 ? UI.gold : UI.soft,
+      rig.susp >= 0.6);
+    row('HULL', cells(rig.hull), rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft,
+      rig.hull >= 0.75);
+    row('TYRE', cells(rig.tyre), rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft,
+      rig.tyre >= 0.6);
+    row('BATT', cells(rig.batt), rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good,
+      rig.batt >= 0.35);
 
     // ── ENV, the LEFT column: what the world is doing ──
     // The two groups answer different questions and were stacked in one corner
@@ -30897,19 +30924,26 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     {
       const L = pad + 1;
       let ey = my - 13;                // stacked upward, clear of the chart/POV dock
-      const erow = (label: string, lit: number, col: string, labelCol = UI.dim): void => {
+      // Same rule as the rig table: faint while the row is only confirming that
+      // nothing is happening, lit when it is telling you something.
+      const erow = (label: string, lit: number, col: string, ok = false): void => {
         meter(L, ey + 6, CELLS, lit, col, 2, 3, 1);
-        textEdgeS(label, L, ey, labelCol);
+        textEdgeS(label, L, ey, ok ? UI.faint : col);
         ey -= 12;
       };
-      erow('WET', cells(wx.wet), wx.wet > 0.5 ? UI.bad : UI.edge);
+      // WET earns a row only when there is some, for the same reason FOG does —
+      // a permanent empty bar labelled WET on a dry road is furniture, and this
+      // column was five rows deep saying almost nothing.
+      if (wx.wet > 0.02) erow('WET', cells(wx.wet), wx.wet > 0.5 ? UI.bad : UI.edge, wx.wet <= 0.5);
       // Named from the SURFACE QUALITY, not the OSM class. A residential street
       // tagged surface=sand is not a road to drive like one, and the panel that
       // tells you what is under the wheels should say so — the three words are
       // the three rungs of the same ladder the physics is standing on.
       const sname = surf === 'water' ? 'WATER' : sq >= 0.8 ? 'ROAD' : sq >= 0.45 ? 'TRACK' : 'ROUGH';
       const scol = sname === 'ROAD' ? UI.good : sname === 'TRACK' ? UI.edge : UI.hot;
-      erow(sname, cells(grip), scol, scol);
+      // The surface name is never merely nominal — what is under the wheels is
+      // the single most useful thing this column says — so it keeps its colour.
+      erow(sname, cells(grip), scol);
       // WEATHER and WIND read like everything else in this column: a label
       // over a bar. The word says what the sky is doing, the bar says how
       // much of it (cover), and the wind bar is the same wind that leans the
@@ -30917,9 +30951,10 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // columns' sides of the screen say which is which.
       const w = WX[wx.sky];
       erow(w.label, cells(wx.cloud), wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft,
-        wx.sky === 'storm' ? UI.bad : UI.dim);
+        wx.sky !== 'storm' && wx.rain <= 0.1);
       const windKmh = live.on ? live.windKmh : 12;
-      erow('WIND', cells(clamp(windKmh / 60, 0, 1)), windKmh > 38 ? UI.gold : UI.soft);
+      erow('WIND', cells(clamp(windKmh / 60, 0, 1)), windKmh > 38 ? UI.gold : UI.soft,
+        windKmh <= 38);
       // Fog earns a row only when you are in some — a permanent zero bar is
       // furniture, and this column is already five rows deep.
       if (wxL.fog > 0.12) erow('FOG', cells(wxL.fog), UI.soft);
