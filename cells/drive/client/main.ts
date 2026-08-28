@@ -26443,7 +26443,9 @@ function tick(now: number): void {
   dbgSusp = { bodyY: +bodyY.toFixed(2), tY: +tY.toFixed(2), ground: +ground.toFixed(2),
     defs: wheelPivots.map((p) => +p.position.y.toFixed(3)),
     contacts: contacts.map((c) => +c.toFixed(2)),
-    pitch: +((pitchC * 180) / Math.PI).toFixed(1), grounded: groundedF };
+    pitch: +((pitchC * 180) / Math.PI).toFixed(1), grounded: groundedF,
+    vBodyY: +vBodyY.toFixed(2), terrainVy: +terrainVy.toFixed(2),
+    gradeDeg: +((gradePitch * 180) / Math.PI).toFixed(1), dt: +dt.toFixed(3) };
   // With no load the wheels follow the ENGINE, not the road — so they blur up
   // over a jump and are still spinning when the truck lands.
   wheelSpin += ((groundedF > 0.06 ? state.speed : engRev * 26 * (throttle < -0.02 ? -1 : 1)) / WHEEL_R) * dt;
