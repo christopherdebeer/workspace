@@ -53,9 +53,11 @@ const census = (png) => {
   // manufactured in-between grey. What resampling cannot fake is where the
   // MASS sits: a genuine two-level frame is carried by a handful of modes
   // however many blends fringe them.
-  const top4 = [...greyHist.values()].sort((a, b) => b - a).slice(0, 4)
-    .reduce((a, b) => a + b, 0) / Math.max(1, greyTotal);
-  return { n: seen.size, coloredF: colored / total, greyTop4: top4 };
+  const ranked = [...greyHist.values()].sort((a, b) => b - a);
+  const top4 = ranked.slice(0, 4).reduce((a, b) => a + b, 0) / Math.max(1, greyTotal);
+  // Top-2 for the true 1-bit dial: two tones plus the scaler's blend fringe.
+  const top2 = ranked.slice(0, 2).reduce((a, b) => a + b, 0) / Math.max(1, greyTotal);
+  return { n: seen.size, coloredF: colored / total, greyTop4: top4, greyTop2: top2 };
 };
 
 const d = await openDrive({
@@ -71,11 +73,13 @@ check('the three dials exist and sit at the shipped defaults',
 const shot = async () => { await d.page.waitForTimeout(1200); return census(decodePng(await d.page.screenshot())); };
 
 const at14 = await shot();
-await d.page.evaluate(() => window.__dial('pal', 1));            // 4 steps
+await d.page.evaluate(() => window.__dial('pal', 2));            // 4 steps
 const at4 = await shot();
-await d.page.evaluate(() => { window.__dial('pal', 0); window.__dial('ink', 1); });  // 2 + MONO
+await d.page.evaluate(() => { window.__dial('pal', 1); window.__dial('ink', 1); });  // 2 steps + MONO: 3 greys
+const at3tone = await shot();
+await d.page.evaluate(() => window.__dial('pal', 0));            // 1 step + MONO: TRUE 1-bit
 const at1bit = await shot();
-await d.page.evaluate(() => { window.__dial('pal', 3); window.__dial('ink', 0); });  // back
+await d.page.evaluate(() => { window.__dial('pal', 4); window.__dial('ink', 0); });  // back
 
 check('the shipped 14-step frame is a real scene, not a test card',
   at14.n >= 25, at14);
@@ -87,8 +91,14 @@ check('the shipped 14-step frame is a real scene, not a test card',
 // itself collapses, and that contrast is decisive on every run.
 check('coarsening 14 → 4 steps collapses the colour count',
   at4.n < at14.n * 0.65, { at14: at14.n, at4: at4.n });
-check('PALETTE 2 + INK MONO: four grey tones carry the frame',
-  at1bit.greyTop4 >= 0.55, { top4: +at1bit.greyTop4.toFixed(3) });
+check('PALETTE 2 + INK MONO: a few grey tones carry the frame (2 steps = 3 tones + weave)',
+  at3tone.greyTop4 >= 0.55, { top4: +at3tone.greyTop4.toFixed(3) });
+// THE TRUE 1-BIT CLAIM: one step, two tones. Mode-mass again, tighter — a
+// genuine black-and-white frame puts its weight on TWO greys, and everything
+// else is the screenshot scaler blending texel edges.
+check('PALETTE 1 + INK MONO: TWO tones carry the frame — true black and white',
+  at1bit.greyTop2 >= 0.6 && at1bit.greyTop2 > at3tone.greyTop2 - 0.05,
+  { top2: +at1bit.greyTop2.toFixed(3), threeToneTop2: +at3tone.greyTop2.toFixed(3) });
 check('…and colour all but vanishes from the frame — a stray label at most',
   at1bit.coloredF < 0.03, +at1bit.coloredF.toFixed(4));
 check('…while the colour frame genuinely had colour to lose',

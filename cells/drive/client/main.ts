@@ -2263,8 +2263,20 @@ const compMat = new THREE.ShaderMaterial({
      *  so that claim can be DRIVEN rather than believed. */
     uDither: { value: 1 },
     /** 0 colour, 1 greyscale — applied after the grade, before the quantise,
-     *  so MONO at two levels is a dithered 1-bit newspaper of the same frame. */
+     *  so MONO at one step is a dithered 1-bit newspaper of the same frame. */
     uMono: { value: 0 },
+    /** Which threshold pattern the dither reads: 0 bayer4 · 1 bayer8 ·
+     *  2 bayer2 (checker) · 3 hash grain · 4 line etch. */
+    uDPat: { value: 0 },
+    /** The quantiser's rounding constant — 0.5 is round-to-nearest; lower
+     *  floods ink, higher lifts to paper. THE threshold, on the 1-bit looks. */
+    uBias: { value: 0.5 },
+    /** Pre-quantise contrast about mid-grey. Coarse palettes want more of it:
+     *  a crushed midtone is what makes two tones read as a picture. */
+    uCon: { value: 1 },
+    /** Phosphor tint, multiplied onto the QUANTISED tone in mono inks only —
+     *  pre-quantise it would split the channels and break the 1-bit promise. */
+    uTint: { value: new THREE.Vector3(1, 1, 1) },
     uFow: { value: 0 },
     uFlare: { value: 1 },
   },
@@ -2274,6 +2286,7 @@ const compMat = new THREE.ShaderMaterial({
     uniform sampler2D bloomTex; uniform float uBloom; uniform float uScan;
     uniform float uLevels; uniform float uFow; uniform float uFlare;
     uniform float uDither; uniform float uMono;
+    uniform float uDPat; uniform float uBias; uniform float uCon; uniform vec3 uTint;
     uniform float uFlash; uniform vec2 uSunUv; uniform float uSunVis;
     uniform sampler2D mask; uniform mat4 invPV; uniform vec3 camPos; uniform float span;
     uniform vec2 sunXZ; uniform vec2 uPix; uniform vec3 uHazeBase; uniform vec3 uHazeSun; varying vec2 vUv;
@@ -2288,6 +2301,7 @@ const compMat = new THREE.ShaderMaterial({
     // on GLSL ES 1.0. Recursive 2x2 → 4x4.
     float bayer2(vec2 a){ a = floor(a); return fract(a.x * 0.5 + a.y * a.y * 0.75); }
     float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+    float bayer8(vec2 a){ return bayer4(0.5 * a) * 0.25 + bayer2(a); }
     // The warm argument is HOW MUCH OF THE SUNWARD LOBE THIS CALLER WANTS. The sky wants
     // all of it — that warm side is the sunset, and it was built on purpose.
     // Ground aerial perspective wants much less, and the reason is a measured
@@ -2474,8 +2488,22 @@ const compMat = new THREE.ShaderMaterial({
       // upstream — haze, fog, bloom, flash — lands in the grey exactly as it
       // lands in the colour. At PALETTE 2 this is the 1-bit look.
       enc = mix(enc, vec3(dot(enc, vec3(0.299, 0.587, 0.114))), uMono);
-      float d = (bayer4(floor(vUv * uPix)) - 0.5) * uDither;
-      enc = floor(enc * uLevels + d + 0.5) / uLevels;
+      // Contrast about mid-grey BEFORE the quantiser — at one or two steps the
+      // midtones have to pick a side, and this is the dial that makes them.
+      enc = (enc - 0.5) * uCon + 0.5;
+      vec2 dp = floor(vUv * uPix);
+      float pat = uDPat < 0.5 ? bayer4(dp)
+        : uDPat < 1.5 ? bayer8(dp)
+        : uDPat < 2.5 ? bayer2(dp)
+        : uDPat < 3.5 ? fract(sin(dot(dp, vec2(12.9898, 78.233))) * 43758.5453)
+        : fract(dp.y * 0.25);
+      float d = (pat - 0.5) * uDither;
+      // uBias is the rounding constant — 0.5 rounds to nearest; the THRESHOLD
+      // dial moves it, which on the 1-bit looks is the ink point itself.
+      enc = clamp(floor(enc * uLevels + d + uBias) / uLevels, 0.0, 1.0);
+      // Phosphor tint AFTER the quantise: tinting first would quantise the
+      // channels apart and break the exact-N-tone promise the dial makes.
+      enc *= mix(vec3(1.0), uTint, uMono);
       // Scanlines on the PIXEL grid (every other buffer row), so they scale
       // with the art instead of shimmering against the display's real pixels.
       enc *= 1.0 - uScan * mod(floor(vUv.y * uPix.y), 2.0);
@@ -15904,6 +15932,10 @@ const vehCopyMat = new THREE.ShaderMaterial({
     uLevels: { value: 14 },
     uDither: { value: 1 },
     uMono: { value: 0 },
+    uDPat: { value: 0 },
+    uBias: { value: 0.5 },
+    uCon: { value: 1 },
+    uTint: { value: new THREE.Vector3(1, 1, 1) },
   },
   vertexShader: QUAD_VS,
   // The target is LINEAR, like the scene pass — so this has to do the encode,
@@ -15912,9 +15944,11 @@ const vehCopyMat = new THREE.ShaderMaterial({
   fragmentShader: `
     uniform sampler2D src; uniform vec2 uPix; uniform float uLevels; varying vec2 vUv;
     uniform float uDither; uniform float uMono;
+    uniform float uDPat; uniform float uBias; uniform float uCon; uniform vec3 uTint;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
     float bayer2(vec2 a){ a = floor(a); return fract(a.x * 0.5 + a.y * a.y * 0.75); }
     float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+    float bayer8(vec2 a){ return bayer4(0.5 * a) * 0.25 + bayer2(a); }
     void main(){
       vec3 enc = srgb(max(texture2D(src, vUv).rgb, 0.0));
       float l = dot(enc, vec3(0.299, 0.587, 0.114));
@@ -15926,8 +15960,16 @@ const vehCopyMat = new THREE.ShaderMaterial({
       // the same dither too — the truck in the bay is lit by one lamp against
       // a plain backdrop, which is nothing BUT shallow ramps.
       enc = mix(enc, vec3(dot(enc, vec3(0.299, 0.587, 0.114))), uMono);
-      float d = (bayer4(floor(vUv * uPix)) - 0.5) * uDither;
-      enc = floor(enc * uLevels + d + 0.5) / uLevels;
+      enc = (enc - 0.5) * uCon + 0.5;
+      vec2 dp = floor(vUv * uPix);
+      float pat = uDPat < 0.5 ? bayer4(dp)
+        : uDPat < 1.5 ? bayer8(dp)
+        : uDPat < 2.5 ? bayer2(dp)
+        : uDPat < 3.5 ? fract(sin(dot(dp, vec2(12.9898, 78.233))) * 43758.5453)
+        : fract(dp.y * 0.25);
+      float d = (pat - 0.5) * uDither;
+      enc = clamp(floor(enc * uLevels + d + uBias) / uLevels, 0.0, 1.0);
+      enc *= mix(vec3(1.0), uTint, uMono);
       gl_FragColor = vec4(enc, 1.0);
     }`,
   depthTest: false,
@@ -27073,6 +27115,10 @@ function blitPixelated(
   // failure this pass exists to prevent.
   vehCopyMat.uniforms.uDither.value = (compMat.uniforms.uDither as { value: number }).value;
   vehCopyMat.uniforms.uMono.value = (compMat.uniforms.uMono as { value: number }).value;
+  vehCopyMat.uniforms.uDPat.value = (compMat.uniforms.uDPat as { value: number }).value;
+  vehCopyMat.uniforms.uBias.value = (compMat.uniforms.uBias as { value: number }).value;
+  vehCopyMat.uniforms.uCon.value = (compMat.uniforms.uCon as { value: number }).value;
+  (vehCopyMat.uniforms.uTint.value as THREE.Vector3).copy(compMat.uniforms.uTint.value as THREE.Vector3);
   renderer.setRenderTarget(rtVeh);
   renderer.setClearColor(clear, 1);
   renderer.clear(true, true, false);
@@ -29471,10 +29517,30 @@ function saveSpot(): void {
 // dial CYCLES rather than sliding: a stepped list reads at 3x5 pixels, a slider
 // does not, and there is nothing here whose value is worth more resolution than
 // four named steps.
-interface Dial { key: string; label: string; opts: string[]; apply: (i: number) => void; at: number; bar?: boolean }
+interface Dial { key: string; label: string; opts: string[]; apply: (i: number) => void; at: number; bar?: boolean; manual?: boolean }
 interface DialGroup { title: string; dials: Dial[] }
-const dial = (key: string, label: string, opts: string[], def: number, apply: (i: number) => void, bar = false): Dial =>
-  ({ key, label, opts, apply, at: def, bar });
+// `manual` marks a dial that acts only under a hand — applyDials skips it at
+// boot. The PRESET dial needs this: its apply stamps OTHER dials, and a boot
+// replay of a remembered preset would overwrite the very dials it once set.
+const dial = (key: string, label: string, opts: string[], def: number, apply: (i: number) => void, bar = false, manual = false): Dial =>
+  ({ key, label, opts, apply, at: def, bar, manual });
+/** The preset table: dial key → option LABEL, resolved at stamp time so a
+ *  list that grows later cannot silently re-point an old preset. */
+const LOOKS: Array<Array<[string, string]>> = [
+  [],                                                     // — does nothing
+  [['pal', '14'], ['dith', 'FULL'], ['dpat', 'BAYER4'], ['thr', '0'], ['con', 'STOCK'], ['ink', 'COLOUR'], ['scan', 'LOW']],
+  [['pal', '1'], ['dith', 'FULL'], ['dpat', 'GRAIN'], ['thr', '0'], ['con', 'HARD'], ['ink', 'MONO'], ['scan', 'OFF']],
+  [['pal', '1'], ['dith', 'FULL'], ['dpat', 'BAYER4'], ['thr', '-1'], ['con', 'CRUSH'], ['ink', 'MONO'], ['scan', 'OFF']],
+  [['pal', '2'], ['dith', 'FULL'], ['dpat', 'LINES'], ['thr', '0'], ['con', 'HARD'], ['ink', 'MONO'], ['scan', 'OFF']],
+  [['pal', '4'], ['dith', 'FULL'], ['dpat', 'BAYER4'], ['thr', '0'], ['con', 'STOCK'], ['ink', 'GREEN'], ['scan', 'HIGH']],
+];
+function applyLook(i: number): void {
+  for (const [key, label] of LOOKS[clamp(i, 0, LOOKS.length - 1)] ?? []) {
+    const d = DIALS.find((x) => x.key === key);
+    const j = d ? d.opts.indexOf(label) : -1;
+    if (d && j >= 0) { d.at = j; d.apply(j); }
+  }
+}
 const cu = compMat.uniforms as Record<string, { value: number }>;
 let vegScale = 1;         // multiplies every VEG_CAP
 let wildlifeOn = true;
@@ -29514,17 +29580,46 @@ const DIAL_GROUPS: DialGroup[] = [
         PIX_H = [240, 320, 480, 4096][i];
         resizePost();
       }),
-      // Extended to the EXTREMES on request: 2 is a real setting, not a
-      // stunt — with INK on MONO it is the dithered 1-bit newspaper, and with
-      // colour it is an eight-colour poster. 14 stays the default and the
-      // shipped look.
-      dial('pal', 'PALETTE', ['2', '4', '8', '14', '24', 'OFF'], 3,
-        (i) => { cu.uLevels.value = [2, 4, 8, 14, 24, 255][i]; }),
+      // THE NUMBER IS STEPS, AND N STEPS MAKE N+1 TONES — floor(c*N+0.5)/N
+      // lands on 0..N inclusive. So '2' is genuinely THREE greys in MONO
+      // (black, mid, white — asked about from the seat, and correct), and the
+      // true 1-bit is '1': one step, two tones, nothing between. In COLOUR,
+      // '1' is the eight RGB corners — the poster look. 14 stays the default.
+      dial('pal', 'PALETTE', ['1', '2', '4', '8', '14', '24', 'OFF'], 4,
+        (i) => { cu.uLevels.value = [1, 2, 4, 8, 14, 24, 255][i]; }),
       // The FULL-step note at the quantiser argues OFF and HALF are biased —
-      // shallow gradients plateau instead of weaving. The dial exists so that
-      // claim can be checked from the seat rather than taken on faith.
-      dial('dith', 'DITHER', ['OFF', 'HALF', 'FULL'], 2, (i) => { cu.uDither.value = [0, 0.5, 1][i]; }),
-      dial('ink', 'INK', ['COLOUR', 'MONO'], 0, (i) => { cu.uMono.value = i; }),
+      // shallow gradients plateau instead of weaving. HEAVY overdrives the
+      // pattern across 1.6 steps: grainier, and at coarse palettes it buys
+      // back tonal range the step count gave up.
+      dial('dith', 'DITHER', ['OFF', 'HALF', 'FULL', 'HEAVY'], 2, (i) => { cu.uDither.value = [0, 0.5, 1, 1.6][i]; }),
+      // WHAT SHAPE THE GREY IS MADE OF. BAYER4 is the shipped weave; BAYER8
+      // trades pattern visibility for more apparent tones; CHECK is the chunky
+      // 2x2; GRAIN is a static hash — newsprint; LINES thresholds by row —
+      // the etching. The pattern is the whole character of a 1-bit frame.
+      dial('dpat', 'PATTERN', ['BAYER4', 'BAYER8', 'CHECK', 'GRAIN', 'LINES'], 0,
+        (i) => { cu.uDPat.value = i; }),
+      // The quantiser's rounding constant. On the 1-bit looks this IS the ink
+      // point: minus floods shadows to black, plus lifts midtones to paper.
+      dial('thr', 'THRESHOLD', ['-2', '-1', '0', '+1', '+2'], 2,
+        (i) => { cu.uBias.value = [0.26, 0.38, 0.5, 0.62, 0.74][i]; }),
+      // Pre-quantise gain about mid-grey. Two tones need the midtones to pick
+      // a side; CRUSH is the photocopier that has given up on grey entirely.
+      dial('con', 'CONTRAST', ['SOFT', 'STOCK', 'HARD', 'CRUSH'], 1,
+        (i) => { cu.uCon.value = [0.8, 1, 1.35, 1.9][i]; }),
+      // GREEN and AMBER are MONO through a phosphor — the tint multiplies the
+      // QUANTISED tone (tinting first would split the channels and break the
+      // exact-tone-count promise the palette dial makes).
+      dial('ink', 'INK', ['COLOUR', 'MONO', 'GREEN', 'AMBER'], 0, (i) => {
+        cu.uMono.value = i === 0 ? 0 : 1;
+        const t = [[1, 1, 1], [1, 1, 1], [0.55, 0.95, 0.5], [1, 0.72, 0.28]][i];
+        (compMat.uniforms.uTint.value as THREE.Vector3).set(t[0], t[1], t[2]);
+      }),
+      // A PRESET IS A HAND ON SEVERAL DIALS, not a state of its own: it stamps
+      // the rack and stays where you left it as a label of what was stamped.
+      // MANUAL — applyDials skips it at boot, or a remembered preset would
+      // overwrite the very dials it set the moment you tuned one by hand.
+      dial('look', 'PRESET', ['—', 'STOCK', 'PRINT', 'XEROX', 'ETCH', 'TERM'], 0,
+        (i) => { applyLook(i); }, false, true),
       dial('scan', 'SCANLINES', ['OFF', 'LOW', 'HIGH'], 1, (i) => { cu.uScan.value = [0, 0.06, 0.14][i]; }),
       // Into `bloomDial`, not straight into the uniform: the weather step
       // rewrites uBloom every frame and would eat the setting.
@@ -29753,13 +29848,13 @@ const DIAL_GROUPS: DialGroup[] = [
 ];
 const DIALS: Dial[] = DIAL_GROUPS.flatMap((g) => g.dials);
 function applyDials(): void {
-  for (const d of DIALS) d.apply(d.at);
+  for (const d of DIALS) if (!d.manual) d.apply(d.at);
 }
 function saveDials(): void {
   try {
     // `v` rides along with the dial values so a future reordering can tell a
     // migrated record from a stale one, the way this one had to.
-    const rec: Record<string, number> = { v: 2 };
+    const rec: Record<string, number> = { v: 3 };
     for (const d of DIALS) rec[d.key] = d.at;
     localStorage.setItem('drive.dials', JSON.stringify(rec));
   } catch { /* fine */ }
@@ -29777,6 +29872,9 @@ function loadDials(): void {
       const now = TIME_MODES.indexOf(was as typeof TIME_MODES[number]);
       if (now >= 0) raw['time'] = now;
     }
+    // v3: PALETTE grew '1' (true 1-bit) at the FRONT, so every stored index
+    // names the step one coarser than the player chose. Shift once.
+    if (ver < 3 && Number.isInteger(raw['pal'])) raw['pal'] = raw['pal'] + 1;
     for (const d of DIALS) if (Number.isInteger(raw[d.key])) d.at = clamp(raw[d.key], 0, d.opts.length - 1);
     // …except a clock the URL asked for. ?time= is there to make a lighting
     // comparison reproducible, and a saved dial silently overruling it makes
