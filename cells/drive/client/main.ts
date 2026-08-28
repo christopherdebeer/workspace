@@ -23876,8 +23876,12 @@ function updatePois(): void {
     poiDraw.push({
       x: 0, y: innerHeight * (0.34 + i * 0.055),
       // An edge chip is a BEARING, never a view — it points off-screen by
-      // definition — so it is never ghosted.
-      t: right ? `${label} >` : `< ${label}`, c: POI_COLORS[p.kind], edge: right ? 1 : -1, rng, hid: false,
+      // definition — so it is never ghosted. And only a PINNED place earns
+      // its name on the rim: everything else reduces to its kind's colour
+      // and symbol plus the caret, or a busy stretch of road stacks the rim
+      // with a paragraph of places you did not ask about.
+      t: p.pinned ? (right ? `${label} >` : `< ${label}`) : (right ? '>' : '<'),
+      c: POI_COLORS[p.kind], edge: right ? 1 : -1, rng, hid: false,
       name: p.name, kind: p.kind, pinned: !!p.pinned, d, tx: 0, ty: 0,
     });
   }
@@ -23908,6 +23912,12 @@ function updatePois(): void {
 const PEAK_SHOW = 3;
 /** Why each summit did or did not reach the glass this frame — see __peaks. */
 let peakGates = { cands: 0, near: 0, sunk: 0, behind: 0, frame: 0, blocked: 0, drawn: 0 };
+/** A summit must HOLD its verdict before the glass believes it — 350ms to
+ *  appear, 900ms to go — and its screen point is smoothed, so a bobbing
+ *  camera and a 120ms depth cadence cannot make a name blink or shiver.
+ *  Coming back is cheaper than arriving: a label that just left was probably
+ *  real. */
+const peakSeen = new Map<string, { on: boolean; raw: boolean; rawAt: number; sx: number; sy: number }>();
 /** HUD pixels the summit triangle floats above the apex it points at. Four is
  *  the mark's own height, so this clears it completely without letting it
  *  drift far enough to read as a label for the sky above the mountain. */
@@ -23996,11 +24006,17 @@ function updatePeaks(vx: number, vz: number): void {
     const hidden = lumaPrimed
       ? !depthVisible(e.p.x, e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) + 6, e.p.z)
       : peakBlocked(e.p, vx, vz, eyeY, e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) - eyeY, e.d);
-    if (hidden) { peakGates.blocked++; continue; }
+    const nowMs = performance.now();
+    let st = peakSeen.get(e.p.name);
+    if (!st) { st = { on: !hidden, raw: !hidden, rawAt: nowMs, sx: e.sx, sy: e.sy }; peakSeen.set(e.p.name, st); }
+    if (st.raw !== !hidden) { st.raw = !hidden; st.rawAt = nowMs; }
+    if (st.on !== st.raw && nowMs - st.rawAt > (st.raw ? 350 : 900)) st.on = st.raw;
+    st.sx += (e.sx - st.sx) * 0.25; st.sy += (e.sy - st.sy) * 0.25;
+    if (!st.on) { peakGates.blocked++; continue; }
     drawn++;
     peakGates.drawn++;
     poiDraw.push({
-      x: e.sx, y: e.sy,
+      x: st.sx, y: st.sy,
       tx: 0, ty: 0,                                  // no beam: see the draw pass
       t: `${e.p.name.toUpperCase()} ${Math.round(e.p.ele)}M ${fmtDist(Math.max(0, e.d - (e.p.r ?? 0)))}`,
       c: POI_COLORS.peak, edge: 0, rng: false, hid: false,
@@ -31154,31 +31170,31 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // they mean.
       let h2 = gaugeHist.get(id);
       if (!h2) { h2 = { lo: lvl, hi: lvl, m: lvl, dv: 0 }; gaugeHist.set(id, h2); }
-      let cHi: number, cLo: number, cT: number, cB: number, cMid: number;
+      let cT: number, cB: number, cMid: number;
       if (pred !== undefined) {
         // PREDICTIVE: smooth the forecast so the candle drifts rather than
-        // twitches; wick spans now → ahead, box brackets the forecast.
+        // twitches; the box brackets now → ahead, the midline is the ahead.
         h2.m += (clamp(pred, 0, 1) - h2.m) * 0.05;
         cMid = h2.m;
-        cHi = Math.max(lvl, cMid); cLo = Math.min(lvl, cMid);
-        cT = cMid + 0.05; cB = cMid - 0.05;
+        cT = Math.max(lvl, cMid); cB = Math.min(lvl, cMid);
       } else {
-        // HISTORIC, session-scoped: the envelopes never decay — the whisker
-        // is where this stat has BEEN since the world booted.
+        // HISTORIC, session-scoped: the box is where this stat has BEEN since
+        // the world booted — the envelopes never decay — with the long mean
+        // as its midline.
         h2.hi = Math.max(lvl, h2.hi); h2.lo = Math.min(lvl, h2.lo);
-        h2.m += (lvl - h2.m) * 0.004; h2.dv += (Math.abs(lvl - h2.m) - h2.dv) * 0.004;
-        cMid = h2.m; cHi = h2.hi; cLo = h2.lo;
-        cT = cMid + h2.dv; cB = cMid - h2.dv;
+        h2.m += (lvl - h2.m) * 0.004;
+        cMid = h2.m; cT = h2.hi; cB = h2.lo;
       }
+      // THE WICK IS THE FULL SCALE, cap to cap — top and bottom of the gauge,
+      // always — so the box reads as a position ON a range, and the candle
+      // never collapses to a crate when the band is tight.
       const wx2 = side === 1 ? 13 : HW - 14;
-      const yT0 = yOf(cT), yB0 = Math.max(yOf(cB), yT0 + 3);
-      // WICKS ARE NOT OPTIONAL: the line always clears the box by at least
-      // two rows before its cap — a candle without wicks is just a crate.
-      const yHi = Math.min(yOf(cHi), yT0 - 2), yLo = Math.max(yOf(cLo), yB0 + 2);
+      const yTop = yOf(1), yBot = yOf(0);
       hctx.fillStyle = col;
-      hctx.fillRect(wx2 - 1, yHi, 3, 1);
-      hctx.fillRect(wx2 - 1, yLo, 3, 1);
-      hctx.fillRect(wx2, yHi, 1, yLo - yHi + 1);
+      hctx.fillRect(wx2 - 1, yTop, 3, 1);
+      hctx.fillRect(wx2 - 1, yBot, 3, 1);
+      hctx.fillRect(wx2, yTop, 1, yBot - yTop + 1);
+      const yT0 = yOf(cT), yB0 = Math.max(yOf(cB), yT0 + 3);
       hctx.fillRect(wx2 - 2, yT0, 5, 1); hctx.fillRect(wx2 - 2, yB0, 5, 1);
       hctx.fillRect(wx2 - 2, yT0, 1, yB0 - yT0 + 1); hctx.fillRect(wx2 + 2, yT0, 1, yB0 - yT0 + 1);
       hctx.fillRect(wx2 - 2, clamp(yOf(cMid), yT0 + 1, yB0 - 1), 5, 1);
