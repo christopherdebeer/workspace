@@ -20819,6 +20819,17 @@ function farHeightAt(wx: number, wz: number): number | null {
   return { l: +(lumaPx[i] / 255).toFixed(3),
     m: Math.round(((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar) };
 };
+/** The WHOLE depth map, for a diagnostic image: decoded metres per cell in
+ *  buffer order (row 0 is the BOTTOM of the screen — GL readback), plus the
+ *  far plane so sky (uFar decode) is tellable from ground. */
+(window as unknown as { __lumadump?: object }).__lumadump = (): object => {
+  const m: number[] = [], l: number[] = [];
+  for (let i = 0; i < LUMA_W * LUMA_H; i++) {
+    m.push(Math.round(((lumaPx[i * 4 + 1] * 256 + lumaPx[i * 4 + 2]) / 65535) * lumaFar));
+    l.push(+(lumaPx[i * 4] / 255).toFixed(3));
+  }
+  return { W: LUMA_W, H: LUMA_H, far: Math.round(lumaFar), primed: lumaPrimed, m, l };
+};
 (window as unknown as { __toll?: object }).__toll = (x: number, z: number): [number, number] => localToLatLon(x, z);
 /** The other direction — a test needs to aim at a real place, not a guess. */
 (window as unknown as { __tolocal?: object }).__tolocal =
