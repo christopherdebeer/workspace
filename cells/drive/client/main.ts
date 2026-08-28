@@ -17453,7 +17453,12 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
       worldGroup.remove(child);
       child.traverse((o) => { const g = (o as THREE.Mesh).geometry; if (g) g.dispose(); });
     }
+    // …and everything that pointed INTO it. The parts the ceremony poses are
+    // held in their own arrays, and a hop that dropped the group while keeping
+    // the hinges would pose four orphans on the next launch.
     droneMesh = null;
+    droneArms = []; droneArmAxis = []; droneBlades = []; droneDiscs = [];
+    droneDiscMat = null;
     // ── the bookkeeping ── local-coordinate stores and streaming gates.
     heightTiles.clear(); terrainReady.clear(); terrainMeshes.clear(); terrainDirty.clear();
     // The per-tile material and its normal map. Both are capped, so neither was
@@ -18090,6 +18095,9 @@ function tapeKeep(): string {
 (window as unknown as { __cam?: object }).__cam = (m?: string): object => {
   if (m === 'cab' || m === 'chase' || m === 'drone' || m === 'top') setCam(m);
   return { mode: camMode, stick: !!stick, zoom: +zoomCur.toFixed(1),
+    // The lens, because a flight between rigs interpolates it and a pop there
+    // is the one part of a crossing you cannot see in a position trace.
+    fov: +camera.fov.toFixed(2), fly: +camFly.t.toFixed(3),
     tapAt: Math.round(tapAt), taps: tapSeen };
 };
 /** WHAT IS UNDER THAT PIXEL. Screen point in NDC (-1..1), and every mesh the
@@ -21113,6 +21121,12 @@ function noteTags(t: Record<string, string>): void {
     // The nose, so a probe can say WHICH WAY it flew and not merely how far —
     // the difference between "the stick did nothing" and "the stick worked".
     heading: +drone.heading.toFixed(4),
+    // The ceremony, so a launch and a landing can be watched from outside the
+    // frame: where the sequence is up to, and the pose it is holding.
+    launch: +drone.launch.toFixed(3), stow: +drone.stow.toFixed(3),
+    spool: +drone.spool.toFixed(3), fold: +drone.fold.toFixed(3),
+    pitch: +drone.pitch.toFixed(3), roll: +drone.roll.toFixed(3),
+    fly: +camFly.t.toFixed(3),
     fromRig: +Math.hypot(drone.x - state.x, drone.z - state.z).toFixed(1) });
 /**
  * THE FOLLOW SMOOTHING, live — so the before and the after are the same drive.
@@ -22782,6 +22796,20 @@ let cabFov = 68;   // driver's-seat field of view
 const camPos = new THREE.Vector3();
 const camAim = new THREE.Vector3();
 let camInit = false;
+/**
+ * A CAMERA FLIGHT BETWEEN TWO RIGS, and the drone's launch and landing are the
+ * only things that get one.
+ *
+ * Every other change of view is a cut on purpose: a chart glance has to be
+ * instant or it is not a glance, and a change of seat has to be honest about
+ * where you are now sitting. Changing VEHICLE is different — it is an event, it
+ * takes about a second in the world, and cutting through it throws the event
+ * away. So this holds where the lens was and what it was looking at, and the
+ * follow below crosses to the new rig on an eased curve.
+ */
+const camFly = { t: 0, dur: 0, fov: 55, fov1: 55, p: new THREE.Vector3(), aim: new THREE.Vector3() };
+const camFlyAim = new THREE.Vector3();
+const camFlyTmp = new THREE.Vector3();
 // How much of the chase stand-off the terrain currently allows (1 = all of
 // it). Smoothed asymmetrically in the chase branch; reset on mode change.
 let chasePull = 1;
@@ -22878,37 +22906,101 @@ const DRONE = {
   FALL: 24,           // how fast it comes down once the battery is gone
   LO: 4, HI: 240,     // how low and how high you may command it
   LIFT_PX: 90,        // pixels of drag for full climb rate
+  // ── the ceremony ──
+  // A LAUNCH IS A SEQUENCE, not a state change, and it is worth about a second
+  // and a quarter: unfold, spin up, lift. Every number here is a beat of it, and
+  // the whole thing is abandoned the instant a thumb touches the stick — a
+  // ceremony you cannot skip stops being ceremony and becomes a wait.
+  UNFOLD: 0.42,       // seconds the arms take to swing out
+  SPOOL: 0.46,        // …and the rotors to come up to speed after them
+  LIFT: 0.4,          // …and to break contact with the rack
+  STOW: 1.15,         // spin-down and fold, once it is back on the truck
+  FOLD: 1.32,         // radians the spars hinge up when stowed
+  PAD: 2.12,          // where it sits on the roof rack, over the body origin
+  FLARE: 9,           // metres out from the pad that the descent starts easing
+  WASH: 11,           // …and the height below which the downwash reaches ground
+  FLY: 0.9,           // seconds the camera takes to fly between seat and drone
 };
 const drone = {
   up: false,          // in the air and under your control
   x: 0, z: 0, y: 0,   // where it is
   heading: 0,
+  pitch: 0, roll: 0,  // the airframe's attitude — it leans where it is going
   batt: 1,            // 1 full, 0 flat
   downed: false,      // on the ground somewhere, waiting to be collected
   dx: 0, dz: 0,       // …there
   falling: false,
   recall: false,      // flying itself home, hands off
   alt: 42,            // COMMANDED height over the ground, not a fixed one
+  // ── the ceremony's own state ──
+  spool: 0,           // 0 stopped, 1 rotors at flying speed
+  fold: 0,            // 0 spars stowed against the shell, 1 fully out
+  rotor: 0,           // accumulated blade angle, radians
+  launch: 0,          // seconds left of the liftoff sequence
+  stow: 0,            // seconds left of the fold-down, mesh up but drone not
 };
 let droneMesh: THREE.Object3D | null = null;
-/** A body and four rotor discs. Small, dark, and legible from above, which is
- *  the only angle you ever see it from while flying it. */
+// THE PARTS THAT MOVE, held so the ceremony can move them. An airframe that
+// unfolds and spins up is the whole of a deploy worth watching, and none of it
+// is expressible on a rigid group of meshes.
+let droneArms: THREE.Group[] = [];          // one hinge per spar — the fold
+let droneArmAxis: THREE.Vector3[] = [];     // …and the axis it hinges about
+let droneBlades: THREE.Group[] = [];        // two crossed slabs per rotor — the spin
+let droneDiscs: THREE.Mesh[] = [];          // the blur that replaces them at speed
+let droneDiscMat: THREE.MeshLambertMaterial | null = null;
+/** A body, four folding arms and four rotors. Small, dark, and legible from
+ *  above, which is the only angle you ever see it from while flying it. */
 function droneModel(): THREE.Object3D {
   const g = new THREE.Group();
+  // Yaw first, then the pitch and roll that a climb, a dive or a landing flare
+  // put on the airframe — same order and same reason as the truck's own group.
+  g.rotation.order = 'YXZ';
+  droneArms = []; droneArmAxis = []; droneBlades = []; droneDiscs = [];
   const body = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.34, 1.1),
     new THREE.MeshLambertMaterial({ color: 0x2b2f33 }));
   g.add(body);
   const armMat = new THREE.MeshLambertMaterial({ color: 0x51585e });
-  const rotMat = new THREE.MeshLambertMaterial({ color: 0x8d959b, transparent: true, opacity: 0.55 });
+  // A DISC CANNOT BE SEEN TO SPIN. It is rotationally symmetric, so turning it
+  // is arithmetic nobody watches — the rotors used to be discs alone and the
+  // spool-up would have been invisible. Blades read while they are slow, the
+  // disc fades in as they get fast, and the handover between the two IS the
+  // spin-up: exactly the way a real rotor stops being blades and becomes a blur.
+  droneDiscMat = new THREE.MeshLambertMaterial({ color: 0x8d959b, transparent: true, opacity: 0 });
+  const bladeMat = new THREE.MeshLambertMaterial({ color: 0x70787f });
+  const discGeo = new THREE.CircleGeometry(0.62, 12);
+  discGeo.rotateX(-Math.PI / 2);            // in the GEOMETRY, so the mesh's own y is free to spin
+  const bladeGeo = new THREE.BoxGeometry(1.2, 0.03, 0.09);
+  const armGeo = new THREE.BoxGeometry(1.5, 0.12, 0.16);
   for (const [sx, sz] of [[1, 1], [1, -1], [-1, 1], [-1, -1]] as Array<[number, number]>) {
-    const arm = new THREE.Mesh(new THREE.BoxGeometry(1.5, 0.12, 0.16), armMat);
-    arm.position.set(sx * 0.55, 0, sz * 0.55);
+    // The hinge sits where the spar meets the shell; arm and rotor keep the
+    // world positions they always had, expressed relative to it.
+    const hinge = new THREE.Group();
+    hinge.position.set(sx * 0.3, 0.02, sz * 0.3);
+    g.add(hinge);
+    droneArms.push(hinge);
+    // Rotating about the horizontal perpendicular to the spar swings the tip up
+    // and in, which is how a folding quad stows. Precomputed per arm — the fold
+    // is set from a quaternion each frame rather than accumulated, so it can be
+    // driven straight from a 0..1 state without drifting.
+    droneArmAxis.push(new THREE.Vector3(-sz, 0, sx).normalize());
+    const arm = new THREE.Mesh(armGeo, armMat);
+    arm.position.set(sx * 0.25, 0, sz * 0.25);
     arm.rotation.y = sx * sz > 0 ? Math.PI / 4 : -Math.PI / 4;
-    g.add(arm);
-    const rot = new THREE.Mesh(new THREE.CircleGeometry(0.62, 12), rotMat);
-    rot.rotateX(-Math.PI / 2);
-    rot.position.set(sx * 1.0, 0.14, sz * 1.0);
-    g.add(rot);
+    hinge.add(arm);
+    const hub = new THREE.Group();
+    hub.position.set(sx * 0.7, 0.14, sz * 0.7);
+    hinge.add(hub);
+    const blades = new THREE.Group();
+    for (const a of [0, Math.PI / 2]) {
+      const b = new THREE.Mesh(bladeGeo, bladeMat);
+      b.rotation.y = a;
+      blades.add(b);
+    }
+    hub.add(blades);
+    droneBlades.push(blades);
+    const disc = new THREE.Mesh(discGeo, droneDiscMat);
+    hub.add(disc);
+    droneDiscs.push(disc);
   }
   // A red belly light, so a downed drone is findable at night.
   const lamp = new THREE.Mesh(new THREE.SphereGeometry(0.16, 6, 5),
@@ -22916,6 +23008,23 @@ function droneModel(): THREE.Object3D {
   lamp.position.y = -0.24;
   g.add(lamp);
   return g;
+}
+/** Pose the airframe from the ceremony's own state: how far the arms are open,
+ *  how fast the rotors are turning, and where the blades happen to be. */
+function dronePose(): void {
+  const fold = drone.fold, spool = drone.spool;
+  for (let i = 0; i < droneArms.length; i++) {
+    droneArms[i].quaternion.setFromAxisAngle(droneArmAxis[i], (1 - fold) * DRONE.FOLD);
+  }
+  for (let i = 0; i < droneBlades.length; i++) {
+    // Counter-rotating pairs, as a quad must be, and it shows on the diagonal.
+    droneBlades[i].rotation.y = drone.rotor * (i === 0 || i === 3 ? 1 : -1);
+    // The blades shrink out of the way as the blur takes over — two solid slabs
+    // still legible under a disc at full opacity read as a fault, not a rotor.
+    droneBlades[i].scale.setScalar(1 - 0.35 * spool);
+    droneDiscs[i].scale.setScalar(0.72 + 0.28 * spool);
+  }
+  if (droneDiscMat) droneDiscMat.opacity = 0.62 * spool * spool;
 }
 /** Launch, or bring it home. Refuses when the battery is flat and the drone is
  *  lying in a field somewhere — that is what "recoverable with the vehicle"
@@ -22930,7 +23039,16 @@ function droneToggle(): void {
     // battery, at its own speed, so the constraint is intact: recall from too
     // far out simply runs the charge to nothing partway home, and it comes down
     // there. The distance is the cost; the autopilot is only steering.
-    if (Math.hypot(drone.x - state.x, drone.z - state.z) <= DRONE.DOCK) { droneDock(); return; }
+    // IN RANGE IS A LANDING, NOT A VANISHING. This used to dock on the spot —
+    // the aircraft simply stopped existing and the camera cut back to the seat.
+    // It now hands the last stretch to the same recall that flies it home from
+    // a kilometre out, which already tapers its height with the distance to run;
+    // the flare and the touchdown at the end of that are what you watch.
+    if (Math.hypot(drone.x - state.x, drone.z - state.z) <= DRONE.DOCK) {
+      drone.recall = true;
+      hudFlash('LANDING');
+      return;
+    }
     drone.recall = !drone.recall;
     hudFlash(drone.recall ? 'RECALLING' : 'MANUAL');
     return;
@@ -22940,28 +23058,103 @@ function droneToggle(): void {
   drone.falling = false;
   drone.recall = false;
   pois.set(RIG_POI, { name: RIG_POI, x: state.x, z: state.z, kind: 'rig', pinned: true });
+  // IT STARTS ON THE RACK, folded, with the rotors stopped. It used to appear
+  // six metres over the truck already flying, which is the one bit of the whole
+  // system that had no physical account of itself: there was no launch, only a
+  // drone that had always been in the air. `stepDrone`'s launch branch runs the
+  // sequence from here — spars out, rotors up, and off the roof.
   drone.x = state.x; drone.z = state.z;
-  drone.y = groundAt(state.x, state.z) + 6;
+  drone.y = bodyY + DRONE.PAD;
   drone.alt = DRONE.ALT;
   drone.heading = state.heading;
+  drone.pitch = 0; drone.roll = 0;
+  drone.spool = 0; drone.fold = 0; drone.stow = 0;
+  drone.launch = DRONE.UNFOLD + DRONE.SPOOL + DRONE.LIFT;
   if (!droneMesh) { droneMesh = droneModel(); worldGroup.add(droneMesh); }
   droneMesh.visible = true;
-  setCam('drone');
+  // Posed and placed HERE, not on the first step: the camera flight below starts
+  // this frame, and a folded aircraft that spends one frame at the last flight's
+  // position is a flicker in the establishing shot.
+  droneMesh.position.set(drone.x, drone.y, drone.z);
+  droneMesh.rotation.set(0, -drone.heading, 0);
+  dronePose();
+  camFlyTo('drone');
   hudFlash('DRONE UP');
 }
-/** Home, docked, recharging. */
+/**
+ * DOWN ON THE RACK, and the controls go back to the truck at once.
+ *
+ * The fold-down that follows is PURELY VISUAL — `up` is already false, so the
+ * thumb is driving again while the rotors are still spinning down. A ceremony
+ * that held the controls for its own sake would be a wait dressed as a flourish.
+ */
 function droneDock(): void {
   drone.up = false; drone.falling = false; drone.downed = false; drone.batt = 1;
   drone.recall = false;
+  drone.heading = state.heading;      // however it arrived, it stows square
+  drone.pitch = 0; drone.roll = 0;
+  drone.stow = DRONE.STOW;
   pois.delete(DRONE_POI);
   pois.delete(RIG_POI);
-  if (droneMesh) droneMesh.visible = false;
-  setCam(lastPov);
+  camFlyTo(lastPov);
   hudFlash('DRONE DOCKED');
+}
+/**
+ * ROTOR DOWNWASH, which is how you know the thing has any thrust at all.
+ *
+ * A rotor column hits the ground and runs SIDEWAYS — that outward run is the
+ * ring, and it is the difference between a drone that is hovering over a place
+ * and a drone that has been composited on top of one. Reuses the tyre plume's
+ * own species and its ground tint, so a launch off gravel throws pale gravel
+ * dust and a hover over the shallows throws water.
+ */
+let washAcc = 0;
+function emitWash(dt: number, str: number): void {
+  const g = groundAt(drone.x, drone.z);
+  const agl = drone.y - g;
+  // Nothing to lift from height: the column has spread out to nothing by then.
+  if (agl > DRONE.WASH || str <= 0.02) { washAcc = 0; return; }
+  const near = 1 - agl / DRONE.WASH;
+  const water = surfaceAt(drone.x, drone.z) === 'water';
+  washAcc += dt * 90 * str * near * near;
+  const n = Math.floor(washAcc);
+  washAcc -= n;
+  const tint = water ? null : groundTint(drone.x, drone.z);
+  for (let i = 0; i < n; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = 0.8 + Math.random() * 2.4;
+    const sp = (4.5 + Math.random() * 7.5) * str * near;
+    spawnPart(water ? 1 : 0,
+      drone.x + Math.sin(a) * r, g + 0.12, drone.z + Math.cos(a) * r,
+      Math.sin(a) * sp + wxWind.x * 0.4,
+      0.4 + Math.random() * 1.3,
+      Math.cos(a) * sp + wxWind.z * 0.4,
+      tint);
+  }
 }
 /** Integrate the drone: your input flies it, the battery drains, and when it
  *  is gone the thing comes down wherever it happens to be. */
 function stepDrone(dt: number, throttle: number, steer: number): void {
+  // THE TAIL OF A LANDING. Not up, not down — sitting on the rack with its
+  // rotors running out and its arms coming in, riding a truck that is already
+  // being driven again. Purely a picture; nothing here touches control.
+  if (drone.stow > 0) {
+    drone.stow = Math.max(0, drone.stow - dt);
+    const p = 1 - drone.stow / DRONE.STOW;
+    drone.spool = Math.max(0, 1 - p * 2.1);        // runs down first…
+    drone.fold = Math.max(0, 1 - Math.max(0, p - 0.42) / 0.58);  // …then the spars come in
+    drone.rotor += dt * 26 * drone.spool;
+    drone.x = state.x; drone.z = state.z; drone.heading = state.heading;
+    drone.y = bodyY + DRONE.PAD;
+    emitWash(dt, drone.spool * 0.5);
+    dronePose();
+    if (droneMesh) {
+      droneMesh.position.set(drone.x, drone.y, drone.z);
+      droneMesh.rotation.set(0, -drone.heading, 0);
+      droneMesh.visible = drone.stow > 0 && lastPov !== 'cab';
+    }
+    return;
+  }
   if (!drone.up && !drone.downed) return;
   if (drone.downed) {
     // Collected by driving to it. The rig is the only recovery vehicle.
@@ -22975,19 +23168,41 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
   }
   if (drone.falling) {
     drone.y -= DRONE.FALL * dt;
+    // DEAD ROTORS WINDMILL. The battery is flat, so nothing is driving them —
+    // they run down through the fall and the airframe drops a wing, which is
+    // what makes this read as a failure rather than a descent.
+    drone.spool = Math.max(0, drone.spool - dt * 0.75);
+    drone.rotor += dt * 20 * drone.spool;
+    drone.pitch += (0.34 - drone.pitch) * Math.min(1, dt * 1.6);
+    drone.roll += (0.46 - drone.roll) * Math.min(1, dt * 1.2);
+    emitWash(dt, drone.spool * 0.6);
     const g = groundAt(drone.x, drone.z);
     if (drone.y <= g + 0.4) {
       drone.y = g + 0.4;
       drone.falling = false; drone.up = false;
       drone.downed = true; drone.dx = drone.x; drone.dz = drone.z;
+      // IT HITS THE GROUND. A puff of whatever it landed in, thrown wide and
+      // low, so the moment has a sound's worth of picture to go with it.
+      const water = surfaceAt(drone.x, drone.z) === 'water';
+      const tint = water ? null : groundTint(drone.x, drone.z);
+      for (let i = 0; i < 22; i++) {
+        const a = Math.random() * Math.PI * 2, sp = 2.5 + Math.random() * 6;
+        spawnPart(water ? 1 : 0, drone.x, g + 0.15, drone.z,
+          Math.sin(a) * sp, 1.2 + Math.random() * 2.4, Math.cos(a) * sp, tint);
+      }
       pois.set(DRONE_POI, { name: DRONE_POI, x: drone.x, z: drone.z, kind: 'drone', pinned: true });
       pois.delete(RIG_POI);
-      setCam(lastPov);
+      camFlyTo(lastPov);
       hudFlash('DRONE DOWN');
     }
+    dronePose();
     // Falling and downed it is always drawn, whatever the view preference —
     // it is the thing you are looking for.
-    if (droneMesh) { droneMesh.position.set(drone.x, drone.y, drone.z); droneMesh.visible = true; }
+    if (droneMesh) {
+      droneMesh.position.set(drone.x, drone.y, drone.z);
+      droneMesh.rotation.set(drone.pitch, -drone.heading, drone.roll);
+      droneMesh.visible = true;
+    }
     return;
   }
   // THE RIG MOVES NOW, AND ITS PIN HAS TO KNOW. This marker was written once, at
@@ -23000,7 +23215,50 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
   if (rigPin) { rigPin.x = state.x; rigPin.z = state.z; }
   drone.batt = Math.max(0, drone.batt - dt / DRONE.LIFE);
   if (drone.batt <= 0) { drone.falling = true; hudFlash('BATTERY FLAT'); return; }
+  // ── THE LAUNCH ──
+  // Three beats off the roof rack: the spars swing out, the rotors come up to
+  // speed, and it breaks contact. Bolted to the truck for all of it — the rack
+  // is where it is standing, and under the autopilot that rack is doing 60 —
+  // so a launch on the move is a launch FROM A MOVING VEHICLE and looks like it.
+  if (drone.launch > 0) {
+    // A THUMB ENDS IT. The sequence is a second and a bit of watching, which is
+    // a gift the first time and an obstacle the twentieth; touching the stick
+    // says you are not watching, and control is yours on that frame.
+    if (Math.abs(throttle) > 0.2 || Math.abs(steer) > 0.2) {
+      drone.launch = 0;
+    } else {
+      drone.launch = Math.max(0, drone.launch - dt);
+      const el = DRONE.UNFOLD + DRONE.SPOOL + DRONE.LIFT - drone.launch;
+      drone.fold = clamp(el / DRONE.UNFOLD, 0, 1);
+      drone.spool = clamp((el - DRONE.UNFOLD) / DRONE.SPOOL, 0, 1);
+      const lp = clamp((el - DRONE.UNFOLD - DRONE.SPOOL) / DRONE.LIFT, 0, 1);
+      drone.rotor += dt * (2 + 24 * drone.spool);
+      drone.x = state.x; drone.z = state.z; drone.heading = state.heading;
+      // Squared, so it unsticks from the rack rather than jumping off it, and it
+      // is already climbing at handover — the commanded-altitude integrator
+      // below picks the rise up mid-air instead of starting it.
+      drone.y = bodyY + DRONE.PAD + lp * lp * 7;
+      // It sits level and noses over as it goes, the way a quad has to in order
+      // to go anywhere at all.
+      drone.pitch = -0.16 * lp;
+      drone.roll = 0;
+      emitWash(dt, drone.spool);
+      dronePose();
+      if (droneMesh) {
+        droneMesh.position.set(drone.x, drone.y, drone.z);
+        droneMesh.rotation.set(drone.pitch, -drone.heading, drone.roll);
+        droneMesh.visible = lastPov !== 'cab';
+      }
+      return;
+    }
+  }
+  // Airborne and yours: the spars are out, and the rotors answer the throttle —
+  // a machine at a hover is quieter than one going somewhere.
+  drone.fold = Math.min(1, drone.fold + dt / DRONE.UNFOLD);
   let thr = throttle, str = steer;
+  // Set by the recall once it is over the rack: the height below flies to the
+  // PAD rather than to a commanded altitude, and eases as it closes on it.
+  let landing = false;
   if (drone.recall) {
     // Touching the controls takes it back — an autopilot you cannot override is
     // a worse control than no autopilot.
@@ -23021,7 +23279,24 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
       const d2 = Math.hypot(drone.x - state.x, drone.z - state.z);
       if (d2 <= DRONE.DOCK) {
         thr = clamp(d2 / DRONE.DOCK, 0.05, 1);
-        if (drone.y - groundAt(drone.x, drone.z) <= DRONE.LO + 2.5) { droneDock(); return; }
+        // THE LAST FEW METRES ARE FLOWN ONTO THE PAD, not thrown at it. Yaw and
+        // thrust cannot close a gap this small — a heading-seeking aircraft with
+        // a 1.5 rad/s yaw rate ORBITS a target it is nearly on top of, and the
+        // truck it is chasing may be doing sixty besides. So inside the last
+        // few metres the aircraft slides onto the rack directly and squares up
+        // with it, which is what a docking cradle would be doing for it.
+        landing = true;
+        if (d2 < 4.5) {
+          thr = 0;
+          const k = Math.min(1, dt * 2.6);
+          drone.x += (state.x - drone.x) * k;
+          drone.z += (state.z - drone.z) * k;
+          str = 0;
+          drone.heading += Math.atan2(Math.sin(state.heading - drone.heading),
+            Math.cos(state.heading - drone.heading)) * k;
+        }
+        // Down on the rack: within a third of a metre of the pad and over it.
+        if (drone.y - (bodyY + DRONE.PAD) <= 0.3 && d2 < 2.2) { droneDock(); return; }
       }
     }
   }
@@ -23044,11 +23319,37 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
   // 30m out at a hundred metres, five at twenty, and it touches down.
   const home = Math.hypot(drone.x - state.x, drone.z - state.z);
   const cmd = drone.recall ? Math.min(drone.alt, Math.max(DRONE.LO, home * 0.3)) : drone.alt;
-  const want = groundAt(drone.x, drone.z) + cmd;
-  drone.y += clamp(want - drone.y, -DRONE.CLIMB * dt, DRONE.CLIMB * dt);
+  if (landing) {
+    // THE FLARE. A constant descent rate onto a fixed pad arrives at full speed
+    // and stops dead, which is a collision that happens to end in the right
+    // place. Tapering with the height still to lose spends the last stretch
+    // slowly — it settles, and the touchdown is the end of a movement rather
+    // than the interruption of one.
+    const pad = bodyY + DRONE.PAD;
+    const gap = drone.y - pad;
+    const rate = DRONE.CLIMB * clamp(gap / DRONE.FLARE, 0.05, 1);
+    drone.y += clamp(pad - drone.y, -rate * dt, rate * dt);
+  } else {
+    const want = groundAt(drone.x, drone.z) + cmd;
+    drone.y += clamp(want - drone.y, -DRONE.CLIMB * dt, DRONE.CLIMB * dt);
+  }
+  // THE AIRFRAME LEANS WHERE IT IS GOING. A quad has no other way to go
+  // anywhere: thrust is perpendicular to the disc, so travel IS tilt, and a
+  // level aircraft crossing the ground at thirty metres a second reads as a
+  // prop rather than a machine. The rotors wind up with the throttle too — a
+  // hover is a quieter thing than a dash, and the disc says so.
+  const lean = Math.min(1, dt * 5.5);
+  drone.pitch += (-0.3 * thr - drone.pitch) * lean;
+  drone.roll += (0.34 * str - drone.roll) * lean;
+  drone.spool += (clamp(0.66 + 0.34 * Math.abs(thr), 0, 1) - drone.spool) * Math.min(1, dt * 4);
+  drone.rotor += dt * (2 + 24 * drone.spool);
+  // Ground effect: the wash only exists near something to lift, and on the way
+  // down onto the rack it is the cue that the landing is nearly over.
+  emitWash(dt, drone.spool);
+  dronePose();
   if (droneMesh) {
     droneMesh.position.set(drone.x, drone.y, drone.z);
-    droneMesh.rotation.y = -drone.heading;
+    droneMesh.rotation.set(drone.pitch, -drone.heading, drone.roll);
     // A NOSE CAMERA DOES NOT SEE ITS OWN AIRFRAME. The FPV eye sits at the
     // drone's own position, so the body and its belly lamp filled the top of
     // the frame — the same problem the cab view solves by ghosting the shell,
@@ -23090,6 +23391,26 @@ function setCam(m: CamMode): void {
   ghostCab(camMode === 'cab');
   updateStickHome();
   updateDock();
+}
+/** Change rig the way the drone changes it: over `DRONE.FLY` seconds, from
+ *  wherever the lens actually is and whatever it is actually pointing at —
+ *  derived from the camera rather than from the rig it was nominally on, so a
+ *  flight begun mid-lerp or mid-flight still starts from the truth. */
+function camFlyTo(m: CamMode): void {
+  camFly.p.copy(camera.position);
+  camera.getWorldDirection(camFlyTmp);
+  camFly.aim.copy(camera.position).addScaledVector(camFlyTmp, 30);
+  camFly.fov = camera.fov;
+  // THE SHELL KEEPS THE STATE IT HAD until the flight lands. Ghosted is right
+  // from inside the cab and wrong from outside it, and for the next second the
+  // camera is in neither place — so whichever it was, it stays, and `setCam`'s
+  // own call is undone here rather than being taught about flights.
+  const wasGhost = camMode === 'cab';
+  setCam(m);
+  ghostCab(wasGhost);
+  camFly.fov1 = camera.fov;
+  camFly.t = camFly.dur = DRONE.FLY;
+  camInit = true;                  // …so the follow does not snap out from under it
 }
 /** The DOCK's toggle: the chart, or back to whichever POV you drive in.
  *  Two controls now instead of one three-way cycle — the old C-cycle made
@@ -26311,22 +26632,50 @@ function tick(now: number): void {
   // receding backwards out of a stationary shot. Rigid while scrubbing is also
   // the right picture — the truck holds its place in frame and the world runs
   // backwards past it, which is what the blur is drawing.
-  if (!camInit || camMode === 'cab' || rewind.at !== null) { camera.position.copy(camPos); camInit = true; }
-  else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
-  // The SAME low-passed floor the camera stands on — aiming at the raw ground
-  // while standing on the smoothed one tilts the chart by the difference.
+  // A FLIGHT OVERRIDES BOTH, and only the drone's launch and its docking ask for
+  // one. See camFlyTo: the eye crosses from the old rig to the new one on an
+  // eased curve instead of cutting, and everything the seat change did instantly
+  // — the lens, the ghosted shell — arrives with it.
+  let camFlyS = 1;
+  if (camFly.t > 0) {
+    camFly.t = Math.max(0, camFly.t - dt);
+    const u = camFly.dur > 0 ? 1 - camFly.t / camFly.dur : 1;
+    camFlyS = u * u * (3 - 2 * u);
+    camera.position.lerpVectors(camFly.p, camPos, camFlyS);
+    camera.fov = camFly.fov + (camFly.fov1 - camFly.fov) * camFlyS;
+    camera.updateProjectionMatrix();
+    if (camFly.t === 0) {
+      // ARRIVED: take up the seat's own rules, which were held off for the
+      // crossing (a shell ghosted for the cab is wrong from outside it, and
+      // solid is wrong from inside — during the flight you are neither).
+      camInit = true;
+      ghostCab(camMode === 'cab');
+    }
+  } else if (!camInit || camMode === 'cab' || rewind.at !== null) {
+    camera.position.copy(camPos); camInit = true;
+  } else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
+  // WHAT THIS RIG LOOKS AT, as a point, so a flight can interpolate the aim as
+  // well as the eye. Whipping the lens onto the new subject while the body
+  // drifts across is the cut all over again, in the axis you notice most.
   if (camMode === 'top') {
-    camera.lookAt(viewX() + panX,
+    // The SAME low-passed floor the camera stands on — aiming at the raw ground
+    // while standing on the smoothed one tilts the chart by the difference.
+    camFlyAim.set(viewX() + panX,
       chartY ?? sampleHeight(viewX() + panX, viewZ() + panZ), viewZ() + panZ);
+  } else if (camMode === 'cab' || camMode === 'drone') camFlyAim.copy(camAim);
+  else camFlyAim.set(state.x + fwdX * 28, ground + 1.4, state.z + fwdZ * 28);
+  if (camFly.t > 0) {
+    camFlyTmp.copy(camFlyAim);
+    camFlyAim.lerpVectors(camFly.aim, camFlyTmp, camFlyS);
   }
+  camera.lookAt(camFlyAim);
   // Roll the head WITH the body, same axis and same sense: the camera's local
   // z points backward exactly as the body's does (nose is -z), so the body's
   // roll angle transfers directly. The negated form tilted the horizon the
   // wrong way on every cross-slope — double the apparent lean instead of the
-  // seat carrying you through it.
-  else if (camMode === 'cab') { camera.lookAt(camAim); camera.rotateZ(rollC); }
-  else if (camMode === 'drone') camera.lookAt(camAim);
-  else camera.lookAt(state.x + fwdX * 28, ground + 1.4, state.z + fwdZ * 28);
+  // seat carrying you through it. Faded in over a flight INTO the seat, because
+  // full body roll on the first frame of the crossing is its own little cut.
+  if (camMode === 'cab') camera.rotateZ(rollC * camFlyS);
   // ── THE SPLASH ORBIT ──
   // While the hub is open the camera leaves the chase rig and walks a slow
   // circle around the rig — the menu is chrome over a shot, so every boot is
