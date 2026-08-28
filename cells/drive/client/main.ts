@@ -30143,7 +30143,7 @@ function hudSafeRects(): Array<[number, number, number, number]> {
     [0, 32, 74, 18],                                 // the task chip, under the top row
     [HW - 56, 18, 56, 18],                           // MENU, on the heading row
     [0, my - 200, 17, 200],                          // the ENV gauge stack, seated on the map
-    [0, my - 2, mw + 70, HH - my + 2],               // dock, the control matrix, the info lines
+    [0, my - 2, mw + 84, HH - my + 2],               // dock, the control matrix, the info lines
     [HW - 17, HH - 236, 17, 164],                    // the RIG gauge stack, up the right edge
     [HW - 80, HH - 72, 80, 72],                      // dial, its radial lamps, trip
     [0, HH - 30, Math.round(HW * 0.72), 30],         // the place line and coordinates
@@ -30925,14 +30925,23 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // bottom row sits on the map's own bottom within a pixel. Cells hold
     // their slots whether or not their action is available (spec: stable
     // instruments; a missing control must not move its neighbours).
-    const CW = 18, CH = 13, CG = 2;
+    // The grid owns the whole strait between the map and the dial's arc
+    // (whose leftmost ink is HW-56): cells grow to fill it, floored at the
+    // old 18 so a narrow screen degrades to what it had, capped so a wide
+    // phone doesn't get comedy buttons. Taller cells give the glyph head
+    // room and the drone charge its own band under the icon; ONE gap
+    // everywhere — the top row's lamps used to be drawn inset 2px inside
+    // their own cells, so no two neighbours were the same distance apart.
     const gx = mx + mw + 4;
+    const CG = 3, CH = 17;
+    const CW = Math.max(18, Math.min(23, Math.floor((HW - 58 - gx - 2 * CG) / 3)));
     const rowB = my + mw - CH;               // bottom row bottom == map.bottom
     const rowT = rowB - CH - CG;
     const col = (i: number): number => gx + i * (CW + CG);
+    const cCol = (t: string): number => Math.round((CW - textSW(t)) / 2);
     const lampCell = (x: number, y: number, glyph: string, c: string, lit: boolean): void => {
-      corners(x + 2, y + 1, CW - 4, CH - 2, lit ? c : UI.dim);
-      hudIconEdge(glyph, x + 5, y + 3, lit ? c : UI.dim, 8);
+      corners(x, y, CW, CH, lit ? c : UI.dim);
+      hudIconEdge(glyph, x + ((CW - 8) >> 1), y + 3, lit ? c : UI.dim, 8);
     };
     // TOP ROW — lamps: lit is the state being true, dim is present-but-off.
     const home = Math.hypot(drone.x - state.x, drone.z - state.z);
@@ -30952,9 +30961,9 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const charging = rig.droneKw > 0;
     if (drone.up || drone.downed || charging) {
       hctx.fillStyle = UI.dim;
-      hctx.fillRect(col(0) + 3, rowT + CH - 2, CW - 6, 2);
+      hctx.fillRect(col(0) + 3, rowT + CH - 4, CW - 6, 2);
       hctx.fillStyle = charging ? UI.gold : drone.batt < 0.3 ? UI.bad : UI.good;
-      hctx.fillRect(col(0) + 3, rowT + CH - 2, Math.round((CW - 6) * drone.batt), 2);
+      hctx.fillRect(col(0) + 3, rowT + CH - 4, Math.round((CW - 6) * drone.batt), 2);
     }
     const aglTxt = drone.up ? `${Math.round(drone.y - groundAt(drone.x, drone.z))}M` : '';
     if (aglTxt) textEdgeS(aglTxt, col(0), rowT - 8, drone.recall ? UI.good : UI.gold);
@@ -30964,11 +30973,11 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     if (autoTab) {
       autoRect = { x: col(0), y: rowB, w: CW, h: CH };
       corners(col(0), rowB, CW, CH, auto.on ? UI.gold : UI.dim);
-      textEdgeS('AUTO', col(0) + 1, rowB + 4, auto.on ? UI.gold : UI.dim);
+      textEdgeS('AUTO', col(0) + cCol('AUTO'), rowB + 6, auto.on ? UI.gold : UI.dim);
     } else {
       autoRect.w = 0;
       corners(col(0), rowB, CW, CH, UI.faint);
-      textEdgeS('AUTO', col(0) + 1, rowB + 4, UI.faint);
+      textEdgeS('AUTO', col(0) + cCol('AUTO'), rowB + 6, UI.faint);
     }
     // PAUSE — the transport. A tap holds the world; a drag UP from it scrubs
     // the last two minutes when the ring has anything to give (the rewind
@@ -30981,7 +30990,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       const edged = (x: number, y: number, w2: number, h2: number): void => {
         hctx.fillStyle = UI.ink; hctx.fillRect(x - 1, y - 1, w2 + 2, h2 + 2);
       };
-      const px2 = col(1) + 6, py2 = rowB + 3;
+      const px2 = col(1) + ((CW - 6) >> 1), py2 = rowB + ((CH - 7) >> 1);
       if (rewindPaused && !held) {
         for (let i = 0; i < 6; i++) edged(px2 + i, py2 + Math.floor(i / 2), 1, 6 - i);
         hctx.fillStyle = rcol;
@@ -30995,7 +31004,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         const have = Math.max(1, rewindHave());
         const track = 46;
         const fill = Math.round(((rewind.at ?? 0) / have) * track);
-        const tx = col(1) + 8;
+        const tx = col(1) + ((CW - 3) >> 1);
         edged(tx, rowT - 5 - track, 3, track);
         hctx.fillStyle = UI.dim;
         hctx.fillRect(tx + 1, rowT - 5 - track, 1, track);
@@ -31009,7 +31018,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // label; amber is reserved for active navigation).
     poiRect = { x: col(2), y: rowB, w: CW, h: CH };
     corners(col(2), rowB, CW, CH, poiVis === 0 ? UI.dim : UI.gold);
-    textEdgeS('WPT', col(2) + 3, rowB + 4, poiVis === 0 ? UI.dim : UI.gold);
+    textEdgeS('WPT', col(2) + cCol('WPT'), rowB + 6, poiVis === 0 ? UI.dim : UI.gold);
     // ── the status line, above the grid ──
     // The one question you have while the truck drives itself is whether it
     // has seen the corner; the answer rides one micro row above the matrix.
