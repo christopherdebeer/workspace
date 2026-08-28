@@ -2055,6 +2055,43 @@ const runPass = (mat: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | nu
   renderer.setRenderTarget(target);
   renderer.render(quadScene, quadCam);
 };
+// ── THE LUMA MAP: what the glass is being written over ──
+// A 40×88 downsample of the scene, read back to the CPU every 120ms, so the
+// HUD can ask "is it bright under this label?" and flip between a dark line
+// over bright ground and a light line over dark — the adaptive-ink answer to
+// the audit's finding 2 that a fixed outline can never give. One frame stale
+// by construction, which is invisible at the rate the world's tones change;
+// the readback is 14KB on a throttle, which is noise.
+const LUMA_W = 40, LUMA_H = 88;
+const lumaRT = new THREE.WebGLRenderTarget(LUMA_W, LUMA_H, { depthBuffer: false });
+const lumaMat = new THREE.ShaderMaterial({
+  uniforms: { src: { value: null as THREE.Texture | null } },
+  vertexShader: QUAD_VS,
+  fragmentShader: `
+    uniform sampler2D src; varying vec2 vUv;
+    vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
+    void main(){ gl_FragColor = vec4(srgb(max(texture2D(src, vUv).rgb, 0.0)), 1.0); }`,
+  depthTest: false,
+  depthWrite: false,
+});
+const lumaPx = new Uint8Array(LUMA_W * LUMA_H * 4);
+let lumaNext = 0;
+function stepLuma(now: number): void {
+  if (now < lumaNext) return;
+  lumaNext = now + 120;
+  lumaMat.uniforms.src.value = rtScene.texture;
+  runPass(lumaMat, lumaRT);
+  renderer.readRenderTargetPixels(lumaRT, 0, 0, LUMA_W, LUMA_H, lumaPx);
+  renderer.setRenderTarget(null);
+}
+/** Background luminance under a HUD-pixel point, 0..1. GL rows run bottom-up,
+ *  so the vertical index flips. */
+function hudBgLuma(hx: number, hy: number): number {
+  const gx = clamp(Math.floor((hx / HW) * LUMA_W), 0, LUMA_W - 1);
+  const gy = clamp(Math.floor((1 - hy / HH) * LUMA_H), 0, LUMA_H - 1);
+  const i = (gy * LUMA_W + gx) * 4;
+  return (0.299 * lumaPx[i] + 0.587 * lumaPx[i + 1] + 0.114 * lumaPx[i + 2]) / 255;
+}
 const blurMat = new THREE.ShaderMaterial({
   uniforms: { src: { value: null }, dirPx: { value: new THREE.Vector2() } },
   vertexShader: QUAD_VS,
@@ -20688,6 +20725,9 @@ function farHeightAt(wx: number, wz: number): number | null {
     bend: nextBend(state.x, state.z, state.heading),
   };
 };
+/** The luma map, for tests: the background brightness under a HUD point. */
+(window as unknown as { __luma?: object }).__luma = (hx: number, hy: number): number =>
+  +hudBgLuma(hx, hy).toFixed(3);
 (window as unknown as { __toll?: object }).__toll = (x: number, z: number): [number, number] => localToLatLon(x, z);
 /** The other direction — a test needs to aim at a real place, not a guess. */
 (window as unknown as { __tolocal?: object }).__tolocal =
@@ -23853,13 +23893,14 @@ function updatePeaks(vx: number, vz: number): void {
   peakGates = { cands: cands.length, near: 0, sunk: 0, behind: 0, frame: 0, blocked: 0, drawn: 0 };
   for (const p of cands) {
     const l = peakLook(p, vx, vz, eyeY);
-    // Inside the fine world its own terrain is the mountain — a pin on a
-    // summit you are standing on is noise, and the ridge is right there.
-    // 1.5km, down from 2.5: Monument Valley's buttes stand a couple of
-    // kilometres off the road and filled half the frame with no name on
-    // them, while Bears Ears at 68km carried three labels (photographed
-    // from the seat). Near and huge is exactly when a name is wanted.
-    if (l.d < 1500) { peakGates.near++; continue; }
+    // IN VIEW IS THE LAW, NOT DISTANCE. This gate has come down twice on the
+    // same evidence — 2.5km hid Monument Valley's buttes, then 1.5km hid
+    // Eagle Rock from the road at its foot (both photographed from the
+    // seat). Near and huge is exactly when a name is wanted; the only true
+    // "too close" is standing on the thing, and the rise test already culls
+    // that (your eye is above the apex). 250m keeps a label from sitting on
+    // the bonnet, nothing more.
+    if (l.d < 250) { peakGates.near++; continue; }
     // BELOW THE HORIZON IS NOT A VIEW. These markers used to survive as
     // ghosted bearings — Mount Whitney from the Big Sur coast, 330km off and
     // 8.5km under the curve — but a label on something the earth is in front
@@ -27004,6 +27045,7 @@ function tick(now: number): void {
   // the HUD drew the PREVIOUS frame's projections on top of this frame's
   // world: a second frame of trailing on top of the stale-inverse one.
   updatePois(); // every frame — throttled pins juddered against the camera
+  stepLuma(now);          // refresh what the glass is being written over
   drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF);
   stepOverlays();
   // Whatever view is up: the frame follows the truck even while the dock shows
@@ -27365,6 +27407,15 @@ function textEdgeP(s: string, x: number, y: number, col: string): void {
     textPoi(hctx, s, x + dx, y + dy, 'rgba(4,10,11,0.85)');
   }
   textPoi(hctx, s, x, y, col);
+}
+/** The ADAPTIVE pin face: over bright ground the whole treatment flips —
+ *  ink glyphs in a bone halo instead of light glyphs in an ink one. The
+ *  luma map (hudBgLuma) decides; this is what it exists for. */
+function textEdgePL(s: string, x: number, y: number, col: string, bright: boolean): void {
+  for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) {
+    textPoi(hctx, s, x + dx, y + dy, bright ? 'rgba(229,227,199,0.85)' : 'rgba(4,10,11,0.85)');
+  }
+  textPoi(hctx, s, x, y, bright ? UI.ink : col);
 }
 const textPW = measureM;
 function fitP(s: string, maxPx: number): string {
@@ -30401,10 +30452,15 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // ON the summit, a one-pixel line to its own label, no triangle — the
     // old glyph floated clear of the apex precisely because it covered the
     // pixels it pointed at, and a point this small covers nothing.
+    // THE FLIP: the luma map says whether this annotation sits over bright
+    // sky/ground or dark — the line, the point and the face all swap together
+    // (a dark leader on a noon sky, a light one against a dusk ridge).
+    const bright = isPeak
+      && (hudBgLuma(ax, my) + hudBgLuma(Math.round(x + w / 2), ly)) / 2 > 0.56;
     hctx.globalAlpha = isPeak ? (p.hid ? 0.55 : 0.95) : (0.5 + 0.5 * near) * ghost;
-    hctx.fillStyle = UI.ink;
+    hctx.fillStyle = bright ? 'rgba(229,227,199,0.85)' : UI.ink;
     if (isPeak) hctx.fillRect(ax - 2, my - 2, 4, 4); else diamond(ax, ay, 3);
-    hctx.fillStyle = p.c;
+    hctx.fillStyle = bright ? UI.ink : p.c;
     if (isPeak) {
       hctx.fillRect(ax - 1, my - 1, 2, 2);
       // The leader runs vertically to the label's row, dashed while the
@@ -30434,7 +30490,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // is not a rumour, it is clutter.
     hctx.globalAlpha = (p.hid ? 0.9 : 1) * (0.55 + 0.45 * farDim);
     if (iconCh) hudIconEdge(iconCh, x + 1, ly - 1, p.c, 5);
-    textEdgeP(label, x + 2 + iw, ly, p.rng || p.pinned ? UI.gold : p.hid ? UI.soft : UI.text);
+    if (isPeak) textEdgePL(label, x + 2 + iw, ly, p.hid ? UI.soft : UI.text, bright);
+    else textEdgeP(label, x + 2 + iw, ly, p.rng || p.pinned ? UI.gold : p.hid ? UI.soft : UI.text);
     if (p.rng) {
       // IN RANGE: brackets around the label — a place you have arrived AT.
       hctx.fillStyle = UI.gold;

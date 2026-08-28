@@ -3,16 +3,16 @@
 import { join } from 'node:path';
 import { openDrive, report, WORK } from './harness.mjs';
 
-const d = await openDrive({ spot: 'lat=37.0491&lon=-110.0978&h=285&cam=chase&sunalt=25&wx=clear', tag: 'peak' });
+const d = await openDrive({ spot: 'lat=37.05531&lon=-110.14352&h=89&cam=chase&sunalt=55&wx=clear', tag: 'peak' });
 await d.page.waitForTimeout(35000);      // let peak tiles + far shell stream
 const peaks = await d.page.evaluate(() => window.__peaks ? window.__peaks() : null);
 console.log('peaks probe:', JSON.stringify(peaks)?.slice(0, 400));
 await d.shot('peaks-285');
 console.log(`-> ${join(WORK, 'peaks-285.png')}`);
 // The Bears Ears bearing from the first photograph.
-await d.page.evaluate(() => { window.__drive.heading = (14 * Math.PI) / 180; });
+await d.page.evaluate(() => { window.__drive.heading = (285 * Math.PI) / 180; });
 await d.page.waitForTimeout(9000);
-await d.shot('peaks-014');
-console.log(`-> ${join(WORK, 'peaks-014.png')}`);
+await d.shot('peaks-285b');
+console.log(`-> ${join(WORK, 'peaks-285b.png')}`);
 report(d.errors);
 await d.close();
