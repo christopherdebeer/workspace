@@ -2065,32 +2065,76 @@ const runPass = (mat: THREE.ShaderMaterial, target: THREE.WebGLRenderTarget | nu
 const LUMA_W = 40, LUMA_H = 88;
 const lumaRT = new THREE.WebGLRenderTarget(LUMA_W, LUMA_H, { depthBuffer: false });
 const lumaMat = new THREE.ShaderMaterial({
-  uniforms: { src: { value: null as THREE.Texture | null } },
+  uniforms: {
+    src: { value: null as THREE.Texture | null },
+    uDep: { value: null as THREE.Texture | null },
+    uNear: { value: 1 }, uFar: { value: 62000 },
+  },
   vertexShader: QUAD_VS,
+  // R is the luma; G/B are a 16-bit linearised distance from the scene's own
+  // depth buffer — so the same readback answers "how bright is it here" AND
+  // "how far is the thing actually drawn here". The second is a ray cast
+  // against the RENDERED world (carved roads, far shell, buildings included),
+  // which no heightfield march can honestly claim.
   fragmentShader: `
-    uniform sampler2D src; varying vec2 vUv;
+    uniform sampler2D src; uniform sampler2D uDep;
+    uniform float uNear; uniform float uFar; varying vec2 vUv;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
-    void main(){ gl_FragColor = vec4(srgb(max(texture2D(src, vUv).rgb, 0.0)), 1.0); }`,
+    void main(){
+      vec3 c = srgb(max(texture2D(src, vUv).rgb, 0.0));
+      float dz = texture2D(uDep, vUv).x;
+      float vz = (uNear * uFar) / ((uFar - uNear) * dz - uFar);
+      float e = floor(clamp(-vz / uFar, 0.0, 1.0) * 65535.0 + 0.5);
+      gl_FragColor = vec4(dot(c, vec3(0.299, 0.587, 0.114)),
+        floor(e / 256.0) / 255.0, mod(e, 256.0) / 255.0, 1.0);
+    }`,
   depthTest: false,
   depthWrite: false,
 });
 const lumaPx = new Uint8Array(LUMA_W * LUMA_H * 4);
-let lumaNext = 0;
+let lumaNext = 0, lumaFar = 62000, lumaPrimed = false;
 function stepLuma(now: number): void {
   if (now < lumaNext) return;
   lumaNext = now + 120;
   lumaMat.uniforms.src.value = rtScene.texture;
+  lumaMat.uniforms.uDep.value = rtScene.depthTexture;
+  (lumaMat.uniforms.uNear as { value: number }).value = camera.near;
+  (lumaMat.uniforms.uFar as { value: number }).value = camera.far;
   runPass(lumaMat, lumaRT);
   renderer.readRenderTargetPixels(lumaRT, 0, 0, LUMA_W, LUMA_H, lumaPx);
   renderer.setRenderTarget(null);
+  lumaFar = camera.far;
+  lumaPrimed = true;
+}
+const depVec = new THREE.Vector3();
+/** Is a world point in front of everything the frame actually DREW? A ray
+ *  cast answered by the depth buffer at the luma map's resolution — coarse,
+ *  so the verdict is permissive: the most distant of four neighbouring cells
+ *  wins, plus a fifth of the distance in tolerance. One sensor for every
+ *  POI kind; peaks skip when hidden, destinations ghost — same eye, each
+ *  keeping its own doctrine. */
+function depthVisible(px3: number, py3: number, pz3: number): boolean {
+  if (!lumaPrimed) return true;
+  depVec.set(px3, py3, pz3);
+  const dCam = depVec.distanceTo(camera.position);
+  depVec.project(camera);
+  if (Math.abs(depVec.x) > 1 || Math.abs(depVec.y) > 1) return true;
+  const gx = clamp(Math.floor((depVec.x * 0.5 + 0.5) * LUMA_W), 0, LUMA_W - 1);
+  const gy = clamp(Math.floor((depVec.y * 0.5 + 0.5) * LUMA_H), 0, LUMA_H - 1);
+  let far2 = 0;
+  for (const [ox, oy] of [[0, 0], [-1, 0], [1, 0], [0, 1]] as const) {
+    const cxq = clamp(gx + ox, 0, LUMA_W - 1), cyq = clamp(gy + oy, 0, LUMA_H - 1);
+    const i = (cyq * LUMA_W + cxq) * 4;
+    far2 = Math.max(far2, ((lumaPx[i + 1] * 256 + lumaPx[i + 2]) / 65535) * lumaFar);
+  }
+  return far2 + Math.max(140, dCam * 0.2) >= dCam;
 }
 /** Background luminance under a HUD-pixel point, 0..1. GL rows run bottom-up,
  *  so the vertical index flips. */
 function hudBgLuma(hx: number, hy: number): number {
   const gx = clamp(Math.floor((hx / HW) * LUMA_W), 0, LUMA_W - 1);
   const gy = clamp(Math.floor((1 - hy / HH) * LUMA_H), 0, LUMA_H - 1);
-  const i = (gy * LUMA_W + gx) * 4;
-  return (0.299 * lumaPx[i] + 0.587 * lumaPx[i + 1] + 0.114 * lumaPx[i + 2]) / 255;
+  return lumaPx[(gy * LUMA_W + gx) * 4] / 255;
 }
 const blurMat = new THREE.ShaderMaterial({
   uniforms: { src: { value: null }, dirPx: { value: new THREE.Vector2() } },
@@ -23734,7 +23778,9 @@ function updatePois(): void {
     // straight down neither claim exists — the chart is not a sight line —
     // and a horizon-riding far pin is a bearing, not a view, so it never
     // ghosts either. Skipping the march saves ~70 heightfield samples a pin.
-    const hid = !top && !farPin && (sightBlockedCached(p.name, poiVec.x, poiVec.y, poiVec.z, i)
+    const hid = !top && !farPin && ((lumaPrimed
+      ? !depthVisible(poiVec.x, poiVec.y, poiVec.z)
+      : sightBlockedCached(p.name, poiVec.x, poiVec.y, poiVec.z, i))
       || wallHitAlong(camera.position.x, camera.position.z, wx, wz, camera.position.y) < 0.98);
     const label = `${p.name.toUpperCase()} ${fmtDist(d)}`;
     if (poiView.z < -1) {
@@ -23947,7 +23993,10 @@ function updatePeaks(vx: number, vz: number): void {
   let drawn = 0;
   for (let i = 0; i < seen.length && drawn < PEAK_SHOW; i++) {
     const e = seen[i];
-    if (peakBlocked(e.p, vx, vz, eyeY, e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) - eyeY, e.d)) { peakGates.blocked++; continue; }
+    const hidden = lumaPrimed
+      ? !depthVisible(e.p.x, e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) + 6, e.p.z)
+      : peakBlocked(e.p, vx, vz, eyeY, e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) - eyeY, e.d);
+    if (hidden) { peakGates.blocked++; continue; }
     drawn++;
     peakGates.drawn++;
     poiDraw.push({
@@ -30030,9 +30079,9 @@ function hudSafeRects(): Array<[number, number, number, number]> {
     [0, 0, HW, 34 + (camMode === 'top' && tileDbg ? 22 : 0)],  // compass strip + the justified top row
     [0, 32, 74, 18],                                 // the task chip, under the top row
     [HW - 56, 18, 56, 18],                           // MENU, on the heading row
-    [0, my - 180, 22, 180],                          // the ENV gauge stack, up the left edge
+    [0, my - 200, 17, 200],                          // the ENV gauge stack, seated on the map
     [0, my - 2, mw + 70, HH - my + 2],               // dock, the control matrix, the info lines
-    [HW - 24, HH - 212, 24, 140],                    // the RIG gauge stack, up the right edge
+    [HW - 17, HH - 236, 17, 164],                    // the RIG gauge stack, up the right edge
     [HW - 80, HH - 72, 80, 72],                      // dial, its radial lamps, trip
     [0, HH - 30, Math.round(HW * 0.72), 30],         // the place line and coordinates
   ];
@@ -30376,7 +30425,12 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   //    Occlusion keeps its meaning: a place you cannot see is a dashed rumour.
   poiRects.length = 0;
   const inView = poiDraw.filter((p) => p.edge === 0).sort((a, b) => a.x - b.x);
-  const lanes: number[] = [];        // right edge of the last label per lane
+  // ONE COLLISION RULE FOR EVERY LABEL. The lanes assumed everyone stacked
+  // from the same baseline; peaks stack in the sky band and destinations by
+  // their beams, so two lane-0 labels could still land on each other
+  // (observed from the seat). Placed rectangles are the truth: every label —
+  // peak or not — bumps UP a row until it clears everything already down.
+  const placed: Array<{ x0: number; x1: number; y: number }> = [];
   const peakLbls: Array<{ label: string; x: number; ly: number; col: string; a: number }> = [];
   for (const p of inView) {
     // A SUMMIT'S LABEL IS LONGER BY RIGHT. Half the HUD width clipped
@@ -30424,23 +30478,24 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const beamTop = isPeak ? ay : Math.min(ay - 6, Math.max(12, typ));
     const h = ay - beamTop;
     const x = clamp(Math.round(ax - w / 2), 2, HW - w - 2);
-    let lane = 0;
-    while (lane < 3 && lanes[lane] !== undefined && x < lanes[lane] + 8) lane++;
-    lanes[lane] = x + w;
     // A NAME HIGH IN THE FRAME HANGS BELOW ITS MARK. Summits ride at the angle
     // they really subtend, so from a valley floor they sit at the top of the
     // glass — and a label placed above one there lands in the compass strip,
     // which is where the three Mont Blanc summits went the first time
     // Chamonix was photographed with them. Above the mark by default, under it
     // when there is no room, and either way it stays beside the thing it names.
-    // A SUMMIT'S NAME LIVES IN THE SKY, NOT ON THE RIDGE. The old lift put
-    // the label 11px over the point, which at chase pitch is exactly the
-    // horizon line — three names and the skyline all fighting for the same
-    // four rows (photographed at Bears Ears). Peaks lift well into the sky
-    // band and stack there; the leader spans the gap, which is what it is for.
-    const above = isPeak ? my - 26 - lane * 11
-      : ay - Math.max(11, Math.round(h / 3)) - lane * 8;
-    const ly = isPeak && above < COMPASS_B ? ay + 7 + lane * 11 : Math.max(12, above);
+    // A SUMMIT'S NAME LIVES IN THE SKY, NOT ON THE RIDGE — and every label,
+    // summit or destination, climbs by the same rule until it clears what is
+    // already placed.
+    let ly = isPeak ? my - 26 : ay - Math.max(11, Math.round(h / 3));
+    ly = Math.max(COMPASS_B + 2, Math.max(12, ly));
+    for (let guard = 0; guard < 5; guard++) {
+      const clash = placed.some((r) => Math.abs(r.y - ly) < 9 && x < r.x1 + 6 && x + w > r.x0 - 6);
+      if (!clash) break;
+      ly -= 9;
+      if (ly < COMPASS_B + 2) { ly = COMPASS_B + 2; break; }
+    }
+    placed.push({ x0: x, x1: x + w, y: ly });
     hctx.save();
     // THE checkpoint beam, in the place's own colour: the same leaning
     // column, the same alpha ramp, the same widths — one family of light.
@@ -31057,18 +31112,25 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       lamp2('SVC', cx + DR - textSW('SVC'), rig.svc, UI.edge);
     }
     // ── ENV & RIG share ONE GAUGE, from the isolated study: a cap cell, a
-    // stack of cells hollow above the level and filled below it, a side
-    // triangle AT the level on the outer edge, and beside the stack a small
-    // box-and-whisker carrying the recent range — the whisker is the min/max
-    // envelope of the last while, the box is the mean ± its deviation, the
-    // midline the mean. The level says NOW; the whisker says LATELY — which
-    // is the difference between a gust and a windy day.
-    const GN = 6, GPITCH = 4, GSLOT = 34;
-    const gauge = (x: number, y: number, frac: number, col0: string, quiet: boolean,
-      side: 1 | -1, id: string, label: string): void => {
+    // stack of cells hollow above the level and filled below it, a triangle
+    // notch AT the level flush against the screen edge, and a candle beside
+    // the stack. The gauge answers NOW; the candle answers a second question,
+    // and the two columns answer DIFFERENT ones: the ENV candles are
+    // PREDICTIVE — wick from here to where the value is heading (the weather
+    // field sampled 500m down the heading, the surface sampled up the road,
+    // the wind's own trend extrapolated) — while the RIG candles are the
+    // SESSION'S HISTORY: the whisker is the whole drive's range, the box the
+    // long mean and its breathing. Weather is a thing you drive INTO; the
+    // rig is a thing you have DONE things to.
+    const GN = 6, GPITCH = 4, GSLOT = 38;
+    const gauge = (y: number, frac: number, col0: string, quiet: boolean,
+      side: 1 | -1, id: string, label: string, pred?: number): void => {
       const col = quiet ? UI.dim : col0;
-      textEdgeS(label, side === 1 ? x : x - textSW(label) + 5, y, quiet ? UI.faint : col0);
-      const cxg = side === 1 ? x + 4 : x - 10;
+      // Text and notch sit ON the edge: labels left-align to it on the left
+      // stack, right-align on the right, and the triangle's flat back is the
+      // screen border itself.
+      textEdgeS(label, side === 1 ? 1 : HW - 1 - textSW(label), y, quiet ? UI.faint : col0);
+      const cxg = side === 1 ? 5 : HW - 10;
       const capY = y + 7;
       hctx.fillStyle = col;
       hctx.fillRect(cxg, capY, 5, 2);
@@ -31083,57 +31145,90 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         }
       }
       const yOf = (v: number): number => top + Math.round((1 - clamp(v, 0, 1)) * (span - 1));
-      // The triangle sits on the OUTER edge and points into the ladder.
       const lyv = yOf(lvl);
-      const tx = side === 1 ? cxg - 4 : cxg + 6;
+      const tx = side === 1 ? 1 : HW - 2;
       for (let c = 0; c < 3; c++) {
-        const cc = side === 1 ? c : 2 - c;
-        hctx.fillRect(tx + cc, lyv - (2 - c), 1, 5 - 2 * c);
+        hctx.fillRect(tx + side * c, lyv - (2 - c), 1, 5 - 2 * c);
       }
-      // The range, INSIDE the stack's shoulder: envelopes decay toward now,
-      // the box breathes with the deviation.
+      // The candle. Envelopes/means live per gauge id; the mode decides what
+      // they mean.
       let h2 = gaugeHist.get(id);
       if (!h2) { h2 = { lo: lvl, hi: lvl, m: lvl, dv: 0 }; gaugeHist.set(id, h2); }
-      h2.hi = Math.max(lvl, h2.hi - 0.0007); h2.lo = Math.min(lvl, h2.lo + 0.0007);
-      h2.m += (lvl - h2.m) * 0.012; h2.dv += (Math.abs(lvl - h2.m) - h2.dv) * 0.012;
-      const wx2 = side === 1 ? cxg + 9 : cxg - 7;
-      const yHi = yOf(h2.hi), yLo = yOf(h2.lo);
+      let cHi: number, cLo: number, cT: number, cB: number, cMid: number;
+      if (pred !== undefined) {
+        // PREDICTIVE: smooth the forecast so the candle drifts rather than
+        // twitches; wick spans now → ahead, box brackets the forecast.
+        h2.m += (clamp(pred, 0, 1) - h2.m) * 0.05;
+        cMid = h2.m;
+        cHi = Math.max(lvl, cMid); cLo = Math.min(lvl, cMid);
+        cT = cMid + 0.05; cB = cMid - 0.05;
+      } else {
+        // HISTORIC, session-scoped: the envelopes never decay — the whisker
+        // is where this stat has BEEN since the world booted.
+        h2.hi = Math.max(lvl, h2.hi); h2.lo = Math.min(lvl, h2.lo);
+        h2.m += (lvl - h2.m) * 0.004; h2.dv += (Math.abs(lvl - h2.m) - h2.dv) * 0.004;
+        cMid = h2.m; cHi = h2.hi; cLo = h2.lo;
+        cT = cMid + h2.dv; cB = cMid - h2.dv;
+      }
+      const wx2 = side === 1 ? 13 : HW - 14;
+      const yT0 = yOf(cT), yB0 = Math.max(yOf(cB), yT0 + 3);
+      // WICKS ARE NOT OPTIONAL: the line always clears the box by at least
+      // two rows before its cap — a candle without wicks is just a crate.
+      const yHi = Math.min(yOf(cHi), yT0 - 2), yLo = Math.max(yOf(cLo), yB0 + 2);
       hctx.fillStyle = col;
-      hctx.fillRect(wx2 - 2, yHi, 5, 1);
-      hctx.fillRect(wx2 - 2, yLo, 5, 1);
-      hctx.fillRect(wx2, yHi, 1, Math.max(1, yLo - yHi + 1));
-      const yB0 = yOf(h2.m + h2.dv), yB1 = Math.max(yOf(h2.m - h2.dv), yOf(h2.m + h2.dv) + 2);
-      hctx.fillRect(wx2 - 2, yB0, 5, 1); hctx.fillRect(wx2 - 2, yB1, 5, 1);
-      hctx.fillRect(wx2 - 2, yB0, 1, yB1 - yB0 + 1); hctx.fillRect(wx2 + 2, yB0, 1, yB1 - yB0 + 1);
-      hctx.fillRect(wx2 - 2, yOf(h2.m), 5, 1);
+      hctx.fillRect(wx2 - 1, yHi, 3, 1);
+      hctx.fillRect(wx2 - 1, yLo, 3, 1);
+      hctx.fillRect(wx2, yHi, 1, yLo - yHi + 1);
+      hctx.fillRect(wx2 - 2, yT0, 5, 1); hctx.fillRect(wx2 - 2, yB0, 5, 1);
+      hctx.fillRect(wx2 - 2, yT0, 1, yB0 - yT0 + 1); hctx.fillRect(wx2 + 2, yT0, 1, yB0 - yT0 + 1);
+      hctx.fillRect(wx2 - 2, clamp(yOf(cMid), yT0 + 1, yB0 - 1), 5, 1);
     };
     // ── RIG, outer-right (Glass spec §5.7): the same gauge mirrored, one
-    // rigid group anchored 4g above the dial. BATT keeps healthy green.
+    // rigid group anchored above the dial, candles carrying the session.
     {
       const stackB = cy - DR - 9;
-      const slotY = (i: number): number => stackB - (4 - i) * GSLOT + 4;
-      gauge(R, slotY(0), rig.batt, rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good, false, -1, 'batt', 'BATT');
-      gauge(R, slotY(1), rig.tyre, rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft, rig.tyre >= 0.6, -1, 'tyre', 'TYRE');
-      gauge(R, slotY(2), rig.hull, rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft, rig.hull >= 0.75, -1, 'hull', 'HULL');
-      gauge(R, slotY(3), rig.susp, rig.susp < 0.3 ? UI.bad : rig.susp < 0.6 ? UI.gold : UI.soft, rig.susp >= 0.6, -1, 'susp', 'SUSP');
+      const slotY = (i: number): number => stackB - (4 - i) * GSLOT + 6;
+      gauge(slotY(0), rig.batt, rig.batt < 0.15 ? UI.bad : rig.batt < 0.35 ? UI.gold : UI.good, false, -1, 'batt', 'BATT');
+      gauge(slotY(1), rig.tyre, rig.tyre < 0.3 ? UI.bad : rig.tyre < 0.6 ? UI.gold : UI.soft, rig.tyre >= 0.6, -1, 'tyre', 'TYRE');
+      gauge(slotY(2), rig.hull, rig.hull < 0.4 ? UI.bad : rig.hull < 0.75 ? UI.gold : UI.soft, rig.hull >= 0.75, -1, 'hull', 'HULL');
+      gauge(slotY(3), rig.susp, rig.susp < 0.3 ? UI.bad : rig.susp < 0.6 ? UI.gold : UI.soft, rig.susp >= 0.6, -1, 'susp', 'SUSP');
     }
 
-    // ── ENV, outer-left (Glass spec §5.3): five FIXED slots, absent rows
-    // leave their slot empty rather than reflowing the stack. ──
+    // ── ENV, outer-left (Glass spec §5.3): the stack SEATS ON THE MAP — the
+    // bottom row is always 3g above the dock, present rows packing downward,
+    // so an absent WET/FOG never leaves a hole between the group and its
+    // anchor (photographed: an 80px gap where two empty slots used to be).
+    // Candles here are FORECASTS — see the gauge's own note.
     {
-      const stackB = my - 8;               // env.bottom = map.top - 4g
-      const slotY = (i: number): number => stackB - (5 - i) * GSLOT + 4;
+      const ahx = state.x + Math.sin(state.heading) * 500;
+      const ahz = state.z - Math.cos(state.heading) * 500;
+      const wa = wxAt(wxField, ahx, ahz);
       const windKmh = live.on ? live.windKmh : 12;
-      gauge(2, slotY(0), clamp(windKmh / 60, 0, 1), windKmh > 38 ? UI.gold : UI.soft,
-        windKmh <= 38, 1, 'wind', 'WIND');
+      const wlvl = clamp(windKmh / 60, 0, 1);
+      const wh = gaugeHist.get('wind');
+      const rows: Array<[string, string, number, string, boolean, number]> = [];
+      // Wind has no field to sample ahead, so its forecast is its own trend,
+      // leaned on twice as hard as the smoothing that measured it.
+      rows.push(['wind', 'WIND', wlvl, windKmh > 38 ? UI.gold : UI.soft, windKmh <= 38,
+        clamp(wlvl + (wh ? (wlvl - wh.m) * 2 : 0), 0, 1)]);
       const w = WX[wx.sky];
-      gauge(2, slotY(1), wx.cloud, wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft,
-        wx.sky !== 'storm' && wx.rain <= 0.1, 1, 'sky', w.label);
+      rows.push(['sky', w.label, wx.cloud,
+        wx.sky === 'storm' ? UI.bad : wx.rain > 0.1 ? UI.edge : UI.soft,
+        wx.sky !== 'storm' && wx.rain <= 0.1, wa.cover]);
       const sname = surf === 'water' ? 'WATER' : sq >= 0.8 ? 'ROAD' : sq >= 0.45 ? 'TRACK' : 'ROUGH';
       const scol = sname === 'ROAD' ? UI.good : sname === 'TRACK' ? UI.edge : UI.hot;
-      gauge(2, slotY(2), grip, scol, false, 1, 'surf', sname);
-      if (wx.wet > 0.02) gauge(2, slotY(3), wx.wet, wx.wet > 0.5 ? UI.bad : UI.edge, wx.wet <= 0.5, 1, 'wet', 'WET');
-      if (wxL.fog > 0.12) gauge(2, slotY(4), wxL.fog, UI.soft, false, 1, 'fog', 'FOG');
+      // The surface forecast is the ground 250m up the heading — the argument
+      // the wheels are about to be standing on.
+      surfaceAt(state.x + Math.sin(state.heading) * 250, state.z - Math.cos(state.heading) * 250);
+      rows.push(['surf', sname, grip, scol, false, clamp(surfQ, 0, 1)]);
+      if (wx.wet > 0.02 || wa.wet > 0.06) {
+        rows.push(['wet', 'WET', wx.wet, wx.wet > 0.5 ? UI.bad : UI.edge, wx.wet <= 0.5, wa.wet]);
+      }
+      if (wxL.fog > 0.12 || wa.fog > 0.2) rows.push(['fog', 'FOG', wxL.fog, UI.soft, false, wa.fog]);
+      const stackB = my - 6;
+      rows.forEach((r, i) => {
+        gauge(stackB - (rows.length - i) * GSLOT + 6, r[2], r[3], r[4], 1, r[0], r[1], r[5]);
+      });
     }
   }
   // The mission card and the survey-claim toast are DOM now (client/
