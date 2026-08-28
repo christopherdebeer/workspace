@@ -62,6 +62,6 @@ console.log(`dial km/h      ${dial.toFixed(1)}`);
 console.log(`sim  km/h      ${((dist / sim) * 3.6).toFixed(1)}   (${dist.toFixed(0)}m / ${sim.toFixed(1)} sim s)`);
 console.log(`wall km/h      ${((dist / wall) * 3.6).toFixed(1)}   (${dist.toFixed(0)}m / ${wall.toFixed(1)} wall s)`);
 console.log(`sim rate       ${(sim / wall).toFixed(3)}  (sim seconds per wall second)`);
-console.log(`predicted      ${Math.min(1, 0.05 * fps).toFixed(3)}  (dt clamp 0.05 * fps, capped at 1)`);
+console.log(`predicted      ${Math.min(1, 0.1 * fps).toFixed(3)}  (dt clamp 0.1 * fps, capped at 1)`);
 report(d.errors);
 await d.close();
