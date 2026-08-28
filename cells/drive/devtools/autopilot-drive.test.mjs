@@ -94,10 +94,20 @@ const before = await d.page.evaluate(() => ({ ...window.__odo(), ...window.__way
 // TRANSITION — `limit` leaving 'cap' the moment a real bend enters the plan
 // window is what says the curvature term is reading streamed geometry and not
 // a constant. A single reading at the end cannot show it.
+// Speed and throttle are taken as PEAKS over the window, not read at the end:
+// the course's last vertex is a stop-by point, and once the tick clamp let
+// the sim cover real ground during the test's wall-clocked stretches, the
+// final instant landed in the braking-for-the-end phase — 2.4m/s, throttle
+// zero, both honest and both failing checks that meant "it got up to speed
+// under its own throttle at SOME point", which is what a peak actually says.
 const seen = new Set();
+let vPeak = 0, pedalPeak = 0;
 for (let i = 0; i < 8; i++) {
   await d.simWait(0.4);
-  seen.add(await d.page.evaluate(() => window.__auto().limit));
+  const s = await d.page.evaluate(() => ({ limit: window.__auto().limit, inp: window.__input() }));
+  seen.add(s.limit);
+  vPeak = Math.max(vPeak, s.inp.speed);
+  pedalPeak = Math.max(pedalPeak, Math.abs(s.inp.throttle) + s.inp.brakeF);
 }
 const after = await d.page.evaluate(() => ({
   ...window.__odo(), ...window.__way(), auto: window.__auto(), input: window.__input(),
@@ -107,9 +117,8 @@ const after = await d.page.evaluate(() => ({
 // here is a refinement of a truck that is at least driving.
 const ran = after.total - before.total;
 check('it drives', ran > 12, { metres: Math.round(ran) });
-check('…and got up to speed doing it', after.input.speed > 6, after.input.speed);
-check('…on the throttle, not coasting off a hill',
-  Math.abs(after.input.throttle) > 0.01 || after.input.brakeF > 0.01, after.input);
+check('…and got up to speed doing it', vPeak > 6, +vPeak.toFixed(2));
+check('…on the throttle, not coasting off a hill', pedalPeak > 0.01, +pedalPeak.toFixed(3));
 check('…and is still following a course when it gets there',
   after.auto.on === true && after.auto.pts >= 2, after.auto);
 // Off the carriageway is the failure that looks like success: it kept moving,
