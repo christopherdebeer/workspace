@@ -21110,6 +21110,9 @@ function noteTags(t: Record<string, string>): void {
     y: +drone.y.toFixed(4), agl: +(drone.y - groundAt(drone.x, drone.z)).toFixed(3),
     cmdAlt: +drone.alt.toFixed(1),
     x: +drone.x.toFixed(4), z: +drone.z.toFixed(4),
+    // The nose, so a probe can say WHICH WAY it flew and not merely how far —
+    // the difference between "the stick did nothing" and "the stick worked".
+    heading: +drone.heading.toFixed(4),
     fromRig: +Math.hypot(drone.x - state.x, drone.z - state.z).toFixed(1) });
 /**
  * THE FOLLOW SMOOTHING, live — so the before and the after are the same drive.
@@ -22309,6 +22312,12 @@ function input(): { throttle: number; steer: number; brake: boolean; brakeF: num
   if (keys.has('a') || keys.has('arrowleft')) steer -= 1;
   if (keys.has('d') || keys.has('arrowright')) steer += 1;
   if (stick) {
+    // WHOSE MACHINE IS THIS STICK HOLDING? Everything below shapes the thumb
+    // for a TRUCK — a heading to steer against, a direction of travel to fight,
+    // a gearbox that has to be talked through the brake. Flying, this answer
+    // goes to the drone instead (see the handover in `tick`), and the truck's
+    // heading and speed are facts about a vehicle the thumb is not touching.
+    const flying = drone.up;
     const mag = Math.min(1, Math.hypot(stick.dx, stick.dy));
     if (camMode === 'top' && mag > 0.02) {
       // The chart view is always north-up, so the stick is DIRECTIONAL there:
@@ -22318,8 +22327,9 @@ function input(): { throttle: number; steer: number; brake: boolean; brakeF: num
       // Push where you want to go ON SCREEN — so the bearing is read in the
       // chart's own frame and turned back into a world one.
       const want = mapRot() + Math.atan2(stick.dx, -stick.dy);
-      const diff = Math.atan2(Math.sin(want - state.heading), Math.cos(want - state.heading));
-      if (Math.abs(diff) > 2.7 && Math.abs(state.speed) > 0.5) {
+      const head = flying ? drone.heading : state.heading;
+      const diff = Math.atan2(Math.sin(want - head), Math.cos(want - head));
+      if (!flying && Math.abs(diff) > 2.7 && Math.abs(state.speed) > 0.5) {
         stickBrake = true; // pulling straight against travel = brake
       } else {
         steer += clamp(diff / 0.5, -1, 1);
@@ -22343,7 +22353,16 @@ function input(): { throttle: number; steer: number; brake: boolean; brakeF: num
       // is what every automatic does, it is what the hands expect, and it means
       // the one control can do all three without a gear selector.
       const want = -stick.ay;                       // +1 forward, −1 reverse
-      const against = want > 0.02 ? state.speed < -STICK_STOP
+      // A DRONE HAS NO GEARBOX TO BE TALKED THROUGH. The rule below asks
+      // whether the requested travel opposes the travel already happening, and
+      // it asked `state.speed` — the TRUCK's. Flying while the autopilot drives,
+      // the truck is doing 60, so every pull back on the stick was read as
+      // "you want to stop" and became a brake the drone cannot use: forward,
+      // left and right flew, and backward did nothing at all. Parked (the
+      // original pairing) speed was zero, `against` was false, and reverse
+      // worked — which is why this only ever showed up under the autopilot.
+      const against = flying ? false
+        : want > 0.02 ? state.speed < -STICK_STOP
         : want < -0.02 ? state.speed > STICK_STOP : false;
       if (against) {
         // HOW HARD, NOT WHETHER. Every other axis of this control is a
