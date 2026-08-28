@@ -18312,6 +18312,7 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
  *  rather than the one the eye reports. */
 (window as unknown as { __rig?: object }).__rig = (): object => ({
   batt: +rig.batt.toFixed(3), solarKw: +rig.solarKw.toFixed(2), drawKw: +rig.drawKw.toFixed(2),
+  droneKw: +rig.droneKw.toFixed(2), droneBatt: +drone.batt.toFixed(3),
   tyre: +rig.tyre.toFixed(4), hull: +rig.hull.toFixed(4), susp: +rig.susp.toFixed(4),
   accel: +rig.accel.toFixed(2), svc: rig.svc,
 });
@@ -22920,6 +22921,21 @@ const DRONE = {
   FLARE: 9,           // metres out from the pad that the descent starts easing
   WASH: 11,           // …and the height below which the downwash reaches ground
   FLY: 0.9,           // seconds the camera takes to fly between seat and drone
+  // ── and where the charge comes from ──
+  // ONE SOURCE, TWO STORES. The drone used to come back from a flight with a
+  // full pack for nothing, which made the battery a rule rather than a resource:
+  // the flight was rationed and the flying was free. The pack is now filled from
+  // the rig's own, on the rack, at a stated rate — so a sortie is spent out of
+  // the same 10kWh the truck drives on, and the array pays it back.
+  //
+  // Two stores rather than one pool because the honest numbers refuse to
+  // reconcile: a 10kWh truck pack would fly this thing for hours, and folding
+  // them into one would quietly delete the endurance limit and the whole
+  // recover-it-from-a-field consequence with it. A flight pack charged off the
+  // house battery is also simply what an overlander with a drone actually has.
+  KWH: 0.9,           // the flight pack, kWh — 9% of the rig's, per sortie
+  CHG: 4.1,           // kW the rig pushes into it while it sits on the rack
+  RSV: 0.15,          // …and the rig charge it will not draw the truck below
 };
 const drone = {
   up: false,          // in the air and under your control
@@ -22939,6 +22955,10 @@ const drone = {
   launch: 0,          // seconds left of the liftoff sequence
   stow: 0,            // seconds left of the fold-down, mesh up but drone not
 };
+/** ON THE RACK, where the charger can reach it. Not flying, not falling, and
+ *  not lying in a field somewhere — a drone you have to go and collect is not
+ *  plugged into anything, which is the whole cost of running it flat. */
+const droneHome = (): boolean => !drone.up && !drone.downed && !drone.falling;
 let droneMesh: THREE.Object3D | null = null;
 // THE PARTS THAT MOVE, held so the ceremony can move them. An airframe that
 // unfolds and spins up is the whole of a deploy worth watching, and none of it
@@ -23053,7 +23073,14 @@ function droneToggle(): void {
     hudFlash(drone.recall ? 'RECALLING' : 'MANUAL');
     return;
   }
-  if (drone.batt < 0.05) { hudFlash('DRONE BATTERY FLAT'); return; }
+  // NOT READY, and there are two different reasons for that now. A charging pack
+  // is a wait with an end you can see; a rig below its reserve is a wait with no
+  // end until the sun comes up, and the refusal has to say which it is.
+  if (drone.batt < 0.05) {
+    hudFlash(rig.batt <= DRONE.RSV ? 'RIG PACK TOO LOW TO CHARGE DRONE'
+      : `DRONE PACK CHARGING — ${Math.round(drone.batt * 100)}%`);
+    return;
+  }
   drone.up = true;
   drone.falling = false;
   drone.recall = false;
@@ -23089,7 +23116,10 @@ function droneToggle(): void {
  * that held the controls for its own sake would be a wait dressed as a flourish.
  */
 function droneDock(): void {
-  drone.up = false; drone.falling = false; drone.downed = false; drone.batt = 1;
+  // NOTE what is NOT here: the pack. Docking used to hand back a full charge,
+  // which made the battery a rule about one flight rather than a resource with a
+  // price. It charges off the rig now, at the rig's expense, over minutes.
+  drone.up = false; drone.falling = false; drone.downed = false;
   drone.recall = false;
   drone.heading = state.heading;      // however it arrived, it stows square
   drone.pitch = 0; drone.roll = 0;
@@ -23159,10 +23189,14 @@ function stepDrone(dt: number, throttle: number, steer: number): void {
   if (drone.downed) {
     // Collected by driving to it. The rig is the only recovery vehicle.
     if (Math.hypot(drone.dx - state.x, drone.dz - state.z) < 9) {
-      drone.downed = false; drone.batt = 1;
+      // Recovered FLAT, which is how you found it. Driving out to a dead drone
+      // used to hand it back fully charged, so the punishment for running it out
+      // was the drive and nothing else; now the drive is how you get the thing
+      // back and the charger is how it becomes useful again.
+      drone.downed = false;
       pois.delete(DRONE_POI);
       if (droneMesh) droneMesh.visible = false;
-      hudFlash('DRONE RECOVERED');
+      hudFlash('DRONE RECOVERED — CHARGING');
     }
     return;
   }
@@ -25054,7 +25088,8 @@ let rigPrevV = 0, rigPrevGrounded = 1;
 const rig = {
   batt: 1,        // state of charge, 0..1
   solarKw: 0,     // what the array is making right now
-  drawKw: 0,      // what the drive is taking
+  drawKw: 0,      // what the drive is taking — the drone's charger included
+  droneKw: 0,     // …and how much of that is the drone's charger
   tyre: 1,        // tread left
   hull: 1,        // bodywork
   susp: 1,        // dampers and bushes — a STOCK, spent by landings and washboard
@@ -25087,6 +25122,19 @@ function stepRig(dt: number, v: number, q: number, sunUp: number): void {
   // runs about three hours flat out, and daylight cruising roughly breaks
   // even — which is the whole point of a solar overlander.
   rig.drawKw = 0.3 + (v / 28) ** 2 * 2.7;
+  // THE DRONE CHARGES OFF THIS PACK, on the rack, and it shows on this gauge as
+  // a draw like any other. It will not take the truck below its reserve: being
+  // unable to drive because a toy was charging is the one outcome that has no
+  // way out of it, and the same reasoning already floors `rigPower`.
+  rig.droneKw = 0;
+  if (droneHome() && drone.batt < 1 && rig.batt > DRONE.RSV) {
+    // Never more than the room left, or a long frame overfills the pack and the
+    // rig pays for charge that was never stored.
+    const room = ((1 - drone.batt) * DRONE.KWH * 3600) / dt;
+    rig.droneKw = Math.min(DRONE.CHG, room);
+    rig.drawKw += rig.droneKw;
+    drone.batt = clamp(drone.batt + (rig.droneKw * (dt / 3600)) / DRONE.KWH, 0, 1);
+  }
   rig.batt = clamp(rig.batt + ((rig.solarKw - rig.drawKw) * (dt / 3600)) / BATT_KWH, 0, 1);
   // Tread goes to slip first and abrasion second; rock and gravel eat it far
   // faster than tarmac.
@@ -30644,12 +30692,18 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     // A battery strip under the chip while it is airborne, because the number
     // that matters is how far you can still get, and it is only legible as a
     // bar you can read without looking away from where you are flying.
-    if (drone.up || drone.downed) {
+    //
+    // …AND WHILE IT FILLS. The pack takes minutes off the rig's own now instead
+    // of being handed back full, so "not yet" is a state you can be in — and a
+    // wait with no gauge on it is indistinguishable from a broken control. Gold
+    // while charging, so filling never reads the same as draining.
+    const charging = rig.droneKw > 0;
+    if (drone.up || drone.downed || charging) {
       const bw = Math.max(dw, 26);
       const by = droneRect.y - 5;
       hctx.fillStyle = UI.dim;
       hctx.fillRect(droneRect.x, by, bw, 3);
-      hctx.fillStyle = drone.batt < 0.3 ? UI.bad : UI.good;
+      hctx.fillStyle = charging ? UI.gold : drone.batt < 0.3 ? UI.bad : UI.good;
       hctx.fillRect(droneRect.x, by, Math.round(bw * drone.batt), 3);
     }
     // HEIGHT, because a control you cannot read is a control you cannot use.
