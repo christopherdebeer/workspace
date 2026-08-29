@@ -62,7 +62,13 @@ export const CLIM_HOMES: Array<Array<[number, number, number]>> = [
   [[0.88, 0.80, 1.0]],  // tropical  — hot, wet
   [[0.55, 0.55, 1.0]],  // temperate — mild, middling
   [[0.28, 0.50, 1.0]],  // boreal    — cold, middling
-  [[0.20, 0.40, 1.0]],  // alpine    — cold, and mostly a matter of height
+  // Amplitude 0.75, and deliberately: alpine's identity comes from being ABOVE
+  // THE TREES, which applyTreeline supplies at up to 3.2x. Its home in the
+  // temperature/moisture plane is a placeholder — the note on applyTreeline
+  // says as much — and at full amplitude that placeholder was winning cold dry
+  // LOWLANDS off the new cold-desert home, which is the one thing alpine
+  // should never be. Weak here, decisive where the trees stop.
+  [[0.20, 0.40, 0.75]], // alpine    — cold, and mostly a matter of height
 ];
 /** The primary home of each archetype, kept for anything that wants one
  *  representative point rather than the set. */
@@ -147,16 +153,36 @@ const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > 
 
 /** Cover samples per corner: 5×5 at 400m, so ~1.6km — matched to CLIM_G, so a
  *  corner characterises the cell it stands for rather than one spot inside. */
+/** Classes that only occur where there is water to spare. */
+const WET_SIGNS = new Set([10, 40, 80, 90, 95]);   // tree, crop, water, wetland, mangrove
+/** Classes that occur where there is not. */
+const DRY_SIGNS = new Set([20, 60]);               // shrub, bare
+
 export function moistureAt(env: ClimateEnv, x: number, z: number): number {
-  let sum = 0, n = 0;
+  let sum = 0, n = 0, wet = 0, dry = 0;
   for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) {
     const cv = env.coverAt(x + i * 400, z + j * 400);
     if (cv === null) continue;
     const m = MOIST_OF[cv];
     if (m === undefined) continue;          // built and snow abstain
     sum += m; n++;
+    if (WET_SIGNS.has(cv)) wet++;
+    else if (DRY_SIGNS.has(cv)) dry++;
   }
-  return n ? sum / n : 0.5;                 // no evidence: assume unremarkable
+  if (!n) return 0.5;                       // no evidence: assume unremarkable
+  const mean = sum / n;
+  // ── ARIDITY FROM ABSENCE ──
+  //
+  // The mean alone reads steppe and wet meadow identically, because both are
+  // mostly grass and grass is one number. What actually separates them is what
+  // is NOT there: over 1.6km of temperate grassland you cross a hedgerow, a
+  // pond, a copse. Over 1.6km of the Great Basin you cross none of those, and
+  // that absence is evidence the average throws away — measured there at 0.43,
+  // wet enough that the cold-desert archetype could not win however correct it
+  // was. Wet signs count triple, because ONE pond in twenty-five samples is
+  // enough to say this is not a desert.
+  const aridity = Math.max(0, Math.min(1, dry / n - (wet / n) * 3));
+  return mean * (1 - 0.55 * aridity);
 }
 
 /**

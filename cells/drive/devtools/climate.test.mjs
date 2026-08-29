@@ -30,7 +30,7 @@ execFileSync('npx', ['esbuild', join(HERE, '../client/climate.ts'), '--bundle', 
   `--outfile=${built}`], { cwd: join(HERE, '../../..'), stdio: 'pipe' });
 const {
   BIOME_ORDER, ALPINE, CLIM_G, CLIM_CACHE_MAX, ClimateField, climCompute,
-  climPick, climPickRow, corners, seaTempAt, treelineAt,
+  climPick, climPickRow, corners, moistureAt, seaTempAt, treelineAt,
   AltBand, ALT_BAND_NAMES, altBandAt, krummholz, swardLift, aspectLift, ASPECT_LIFT,
 } = await import(pathToFileURL(built).href);
 
@@ -105,6 +105,35 @@ const mkEnv = (cover, lat, elev) => ({
     hotWet.domIdx !== hotDry.domIdx, [hotWet.domIdx, hotDry.domIdx]);
   const cold = climCompute(mkEnv(10, 62, 200), 0, 0, 0);
   ok('cold forest reads boreal', BIOME_ORDER[cold.domIdx] === 'boreal', cold.w);
+
+  // ── ARIDITY FROM ABSENCE ──
+  //
+  // Steppe and wet meadow are both mostly grass, and grass is one number, so
+  // the plain mean read them identically. What separates them is what is NOT
+  // there: over 1.6km of temperate grassland you cross a hedgerow, a pond, a
+  // copse; over 1.6km of the Great Basin you cross none. Measured live there
+  // at 0.43 — wet enough that the cold-desert archetype could not win however
+  // correct it was.
+  const patchEnv = (classes) => ({
+    coverAt: (x, z) => classes[(Math.abs(Math.round(x / 400)) * 5 + Math.abs(Math.round(z / 400))) % classes.length],
+    latAbsAt: () => 40, groundAt: () => 1500,
+  });
+  const steppe = moistureAt(patchEnv([20]), 0, 0);          // shrub, nothing else
+  const meadow = moistureAt(patchEnv([30, 30, 30, 30, 10]), 0, 0);  // grass with a copse
+  ok(`bare steppe reads dry (${steppe.toFixed(3)}) where grass-with-a-copse does not (${meadow.toFixed(3)})`,
+    steppe < 0.2 && meadow > 0.4, { steppe, meadow });
+  // ONE pond is enough to say this is not a desert — wet signs count triple.
+  const shrubWithPond = moistureAt(patchEnv([20, 20, 20, 20, 20, 20, 20, 80]), 0, 0);
+  ok(`…and one water body in eight lifts shrubland out of it (${shrubWithPond.toFixed(3)})`,
+    shrubWithPond > steppe * 1.5, { steppe, shrubWithPond });
+  // The whole point: a cold shrub steppe now reaches the cold-desert home.
+  const coldSteppe = climCompute(patchEnv([20]), 0, 0, 0);
+  ok(`a cold shrub steppe reads arid (${BIOME_ORDER[coldSteppe.domIdx]}, ${coldSteppe.tempC.toFixed(1)}C, moisture ${coldSteppe.moisture.toFixed(2)})`,
+    BIOME_ORDER[coldSteppe.domIdx] === 'arid', { w: coldSteppe.w, m: coldSteppe.moisture });
+  // …and the same ground with trees and water in it does not.
+  const coldWood = climCompute(patchEnv([10, 30, 10, 80, 30]), 0, 0, 0);
+  ok(`the same latitude and height with woods and water does not (${BIOME_ORDER[coldWood.domIdx]})`,
+    BIOME_ORDER[coldWood.domIdx] !== 'arid', { w: coldWood.w, m: coldWood.moisture });
 
   // ── COLD DESERTS EXIST ──
   //

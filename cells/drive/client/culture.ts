@@ -241,7 +241,7 @@ export const BUILD_CULTURES: BuildCulture[] = [
     wall: [0x8f5a48, 0x9c6552, 0x7d4d3e, 0xa87360, 0x86584a, 0x6f4438],
     roof: [0x5a4a44, 0x64534c, 0x4e3f3a],
     wallTex: 'brick', roofTex: 'slate', pitch: 0.58,
-    affinity: [0.05, 0.3, 1.0, 0.6, 0.25],
+    affinity: [0.05, 0.3, 1.0, 0.35, 0.12],
   },
 ];
 
