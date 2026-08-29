@@ -9240,6 +9240,34 @@ function deckAnchorAt(x: number, z: number): number | null {
   }
   return best;
 }
+/** The CAMBER an already built neighbour holds at (x,z), in THIS fragment's
+ *  frame, if a collinear fragment ends there — the cross-fall companion to
+ *  deckAnchorAt above (audit finding 4: the end weld was centreline-only, so
+ *  two fragments agreeing about the middle to a centimetre still parted at
+ *  the KERBS by the difference in their solved cross-falls). Stored camber is
+ *  signed by the neighbour's own direction, so a neighbour digitised the
+ *  other way hands its value over negated; and a neighbour meeting at an
+ *  angle keeps its camber to itself — past ~45° its cross-fall points
+ *  somewhere this fragment has no kerb, and junction ends are the warp's
+ *  business, not this weld's. */
+function tiltAnchorAt(x: number, z: number, tx: number, tz: number): number | null {
+  const tl = Math.hypot(tx, tz) || 1;
+  let best: number | null = null, bd = 2.2;
+  for (const dx of [0, -GRID, GRID]) for (const dz of [0, -GRID, GRID]) {
+    for (const s of roadGrid.get(gkey(x + dx, z + dz)) ?? []) {
+      if (s.ya === undefined || s.yb === undefined || s.tk || s.ca === undefined || s.cb === undefined) continue;
+      const sdx = s.bx - s.ax, sdz = s.bz - s.az, sl = Math.hypot(sdx, sdz) || 1;
+      const cos = (sdx * tx + sdz * tz) / (sl * tl);
+      if (Math.abs(cos) < 0.7) continue;
+      const flip = cos < 0 ? -1 : 1;
+      const da = Math.hypot(s.ax - x, s.az - z);
+      if (da < bd) { bd = da; best = s.ca * flip; }
+      const db = Math.hypot(s.bx - x, s.bz - z);
+      if (db < bd) { bd = db; best = s.cb * flip; }
+    }
+  }
+  return best;
+}
 
 // ── the whole-way profile solver ───────────────────────────────────
 // OSM chops a road at every structure change and tile edge; fragments
@@ -9867,15 +9895,33 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // length allows — which is the same principle the limiter itself follows.
     const d0 = p0 === null || !endWeld ? 0 : p0 - prof[0];
     const d1 = p1 === null || !endWeld ? 0 : p1 - prof[n - 1];
-    if (d0 !== 0 || d1 !== 0) {
+    // AND THE TILT WITH IT. The centreline weld above closes the middle; the
+    // cross-fall was still each fragment's own, and the audit measured half-
+    // metre kerb steps over zero-centimetre centreline steps on one Bixby
+    // service road because of exactly that. Same cure, same shape: take the
+    // collinear neighbour's camber at the shared node, spread the residual
+    // linearly by arc length.
+    let e0 = 0, e1 = 0;
+    if (endWeld && n > 1) {
+      const t0 = tiltAnchorAt(dense[0][0], dense[0][1],
+        dense[1][0] - dense[0][0], dense[1][1] - dense[0][1]);
+      const t1 = tiltAnchorAt(dense[n - 1][0], dense[n - 1][1],
+        dense[n - 1][0] - dense[n - 2][0], dense[n - 1][1] - dense[n - 2][1]);
+      if (t0 !== null) e0 = t0 - tilt[0];
+      if (t1 !== null) e1 = t1 - tilt[n - 1];
+    }
+    if (d0 !== 0 || d1 !== 0 || e0 !== 0 || e1 !== 0) {
       const arc = new Array<number>(n).fill(0);
       for (let i = 1; i < n; i++) {
         arc[i] = arc[i - 1] + Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
       }
       const total = arc[n - 1] || 1;
       for (let i = 0; i < n; i++) {
-        const dy = d0 + (d1 - d0) * (arc[i] / total);
-        prof[i] += dy; edgeR[i] += dy; edgeL[i] += dy;
+        const f = arc[i] / total;
+        const dy = d0 + (d1 - d0) * f;
+        const dt = e0 + (e1 - e0) * f;
+        prof[i] += dy; tilt[i] += dt;
+        edgeR[i] += dy + dt; edgeL[i] += dy - dt;
       }
     }
   }
