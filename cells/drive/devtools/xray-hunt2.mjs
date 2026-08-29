@@ -23,7 +23,8 @@ const grid = await d.page.evaluate(() => {
   return out;
 });
 for (const q of grid) {
-  const h = q.hits.map((x) => `${x.n}${x.p ? '<' + x.p : ''}@${x.d}m/${x.m}`).join(' | ');
+  const h = q.hits.slice(0, 3).map((x) =>
+    `${x.parent || '?'}@${x.dist}m span${x.span} high${x.high} ${JSON.stringify(x.mats?.[0] ?? {}).slice(0, 60)}`).join(' | ');
   console.log(`(${q.nx},${q.ny}) ${h || 'sky'}`);
 }
 report(d.errors);
