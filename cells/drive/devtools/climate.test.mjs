@@ -49,11 +49,23 @@ const near = (a, b, tol) => Math.abs(a - b) <= tol;
     ok(`treeline at ${name} (${lat}°) is ${Math.round(got)}m against a real ~${real}m`,
       near(got, real, tol), { got, real });
   }
-  // The known miss, asserted AS a miss so nobody "fixes" the curve by
-  // accident: continental interiors run high, and that residual is the
-  // moisture term this curve does not take.
-  ok('…and under-reads the continental Rockies, which is the moisture axis knocking',
-    treelineAt(40) < 3000, { got: treelineAt(40), real: 3500 });
+  // ── THE MISS THAT HAS NOW BEEN PAID ──
+  //
+  // This used to assert the failure: the curve under-read continental
+  // interiors by some 800m and the comment blamed "the moisture term this
+  // curve does not take". It takes one now, so the assertion is inverted —
+  // the Rockies are a DRY interior, and dryness raises the line.
+  const rockiesWet = treelineAt(40, 0.75);
+  const rockiesDry = treelineAt(40, 0.10);
+  ok(`a dry interior carries its treeline higher than a wet coast at 40° (${Math.round(rockiesWet)}m -> ${Math.round(rockiesDry)}m)`,
+    rockiesDry > rockiesWet + 500, { rockiesWet, rockiesDry });
+  ok(`…which closes most of the Rockies gap (${Math.round(rockiesDry)}m against a real ~3500m)`,
+    rockiesDry > 3100, { got: rockiesDry, real: 3500 });
+  // …WITHOUT moving the places the curve was already right about. A caller
+  // that does not know the moisture gets exactly the old curve.
+  ok('and an unspecified moisture reproduces the original curve exactly',
+    treelineAt(46) === treelineAt(46, 0.5) && Math.abs(treelineAt(46) - 2307) < 1,
+    { plain: treelineAt(46), explicit: treelineAt(46, 0.5) });
   ok('treeline reaches zero and never goes negative', treelineAt(89) === 0, treelineAt(89));
 }
 {
@@ -93,6 +105,29 @@ const mkEnv = (cover, lat, elev) => ({
     hotWet.domIdx !== hotDry.domIdx, [hotWet.domIdx, hotDry.domIdx]);
   const cold = climCompute(mkEnv(10, 62, 200), 0, 0, 0);
   ok('cold forest reads boreal', BIOME_ORDER[cold.domIdx] === 'boreal', cold.w);
+
+  // ── COLD DESERTS EXIST ──
+  //
+  // With one hot home for arid, dryness was a property of hot places and the
+  // Great Basin, the Gobi and the Patagonian steppe were all unreachable: at
+  // their temperature the hot home's Gaussian has fallen to 0.06, so the field
+  // answered boreal or alpine however bare the ground was.
+  const coldDry = climCompute(mkEnv(60, 40, 1200), 0, 0, 0);   // bare, 40°, 1200m
+  ok(`cold and dry reads arid too, not boreal (${BIOME_ORDER[coldDry.domIdx]}, ${coldDry.tempC.toFixed(1)}C)`,
+    BIOME_ORDER[coldDry.domIdx] === 'arid', { w: coldDry.w, tempC: coldDry.tempC });
+  ok('…and it is a different point in the field from a hot desert, not a copy',
+    Math.abs(coldDry.tempC - hotDry.tempC) > 10, { cold: coldDry.tempC, hot: hotDry.tempC });
+  // The regression that matters: a WET cold place must stay boreal. The cold
+  // home has to win on dryness alone and never on temperature.
+  const coldWet = climCompute(mkEnv(10, 40, 1200), 0, 0, 0);
+  ok(`a wet place at the same temperature is still boreal or temperate (${BIOME_ORDER[coldWet.domIdx]})`,
+    BIOME_ORDER[coldWet.domIdx] !== 'arid', coldWet.w);
+  ok('…and the arid weight there is negligible',
+    coldWet.w[0] < 0.05, { arid: coldWet.w[0] });
+  // …and a high alpine slope must not be talked into arid by bare rock.
+  const scree = climCompute(mkEnv(60, 46, 2900), 0, 0, 0);
+  ok(`bare rock high above the treeline still reads alpine (${BIOME_ORDER[scree.domIdx]})`,
+    BIOME_ORDER[scree.domIdx] === 'alpine', { w: scree.w, treeline: scree.treeline });
   for (const c of [hotWet, hotDry, cold]) {
     ok('weights sum to one', near(c.w.reduce((a, b) => a + b, 0), 1, 1e-9), c.w);
   }

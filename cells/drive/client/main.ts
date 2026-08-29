@@ -17,8 +17,8 @@
 import * as THREE from 'three';
 import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, altBandAt, aspectLift, climPick, climPickRow,
   krummholz, swardLift, treelineAt, type ClimateSample } from './climate';
-import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, buildLookAt, paintFor, roadLookAt, seedAt,
-  snowLoad, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
+import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, bedrockAt, buildLookAt, paintFor, roadLookAt,
+  seedAt, snowLoad, stoneWalls, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
@@ -1039,12 +1039,26 @@ const cultEnv = { latLonAt: (x: number, z: number) => localToLatLon(x, z) };
  *  and the cache turns that into one call. Keyed on the QUANTISED lat/lon
  *  cell, so it survives a rebase along with everything else. */
 const lookCache = new Map<string, BuildLook>();
+const stoneCol = new THREE.Color();
 function buildLook(x: number, z: number): BuildLook {
   const c = climateAt(x, z);
   const key = `${Math.round(x / 160)},${Math.round(z / 160)},${c.domIdx}`;
   let got = lookCache.get(key);
   if (got === undefined) {
     got = buildLookAt(cultEnv, x, z, c.w, c.elevAbs);
+    // ── A STONE VILLAGE IS BUILT OF THE HILL BEHIND IT ──
+    //
+    // Every other culture ships its own palette, because render, brick and
+    // timber are MADE and their colour is a choice. Stone is not made; it is
+    // quarried from whatever is under the field, which the world already knows
+    // and had no way to say. So this one culture throws away its generic greys
+    // and takes the district's rock family instead — the same answer the
+    // boulders on the hillside now come from, so the two agree.
+    if (got.culture.wallTex === 'stone') {
+      const fam = STONE[bedrockAt(cultEnv, x, z, STONE_MIX_ROWS, c.w)];
+      const set = seedAt(cultEnv, x, z, 'settlement');
+      got = { ...got, palette: stoneWalls(fam, set).map(([h, sa, li]) => stoneCol.setHSL(h, sa, li).getHex()) };
+    }
     if (lookCache.size > 4000) lookCache.clear();
     lookCache.set(key, got);
   }
@@ -5889,6 +5903,11 @@ const STONE_MIX: Record<string, number[]> = {
   boreal: [5, 1, 0, 3, 1, 2],
   alpine: [6, 3, 1, 2, 0, 3],
 };
+/** The same table as rows in BIOME_ORDER, which is the shape `bedrockAt`
+ *  wants. Derived rather than re-typed: two hand-maintained copies of one
+ *  table is a divergence waiting to happen. */
+const STONE_MIX_ROWS: number[][] = BIOME_ORDER.map((n) => STONE_MIX[n] ?? []);
+
 /**
  * WHAT BLOOMS WHERE. The sward's colour so far has been the ground's own —
  * biome and cover, faithfully — with no life of its own on top. Five
@@ -6086,15 +6105,16 @@ function makeTone(r: () => number, x: number, z: number): VegTone {
   // by the climate here means a granite country shading into limestone does
   // so gradually, which is what the ground actually does.
   const cl = climateAt(x, z);
-  const mix: number[] = new Array(STONE.length).fill(0);
-  let total = 0;
-  for (let bi = 0; bi < BIOME_ORDER.length; bi++) {
-    const row = STONE_MIX[BIOME_ORDER[bi]];
-    if (!row) continue;
-    for (let i = 0; i < row.length; i++) { mix[i] += row[i] * cl.w[bi]; total += row[i] * cl.w[bi]; }
-  }
-  let t = r() * total, stone = 0;
-  for (let i = 0; i < mix.length; i++) { t -= mix[i]; if (t <= 0) { stone = i; break; } }
+  // ── THE FAMILY IS THE DISTRICT'S, NOT THIS CLUMP'S ──
+  //
+  // This used to be `r() * total` — a free roll per clump, so one scree slope
+  // was granite and the next one along was sandstone for no reason the ground
+  // could give, and nothing outside the rock renderer could ever know which.
+  // Bedrock changes over kilometres. On the district scope it is one answer
+  // for a landscape, which is what lets the cutting the road was blasted
+  // through and the walls of the village below it be the same rock as the
+  // hill. The clump still varies WITHIN the family, through the spans below.
+  const stone = bedrockAt(cultEnv, x, z, STONE_MIX_ROWS, cl.w);
   return { h: (r() - 0.5) * 0.055, s: (r() - 0.5) * 0.26, l: (r() - 0.5) * 0.17, stone };
 }
 const STONY: VegKind[] = ['rock', 'spire'];
@@ -20131,7 +20151,10 @@ function truckSpec(): Record<string, number> {
 (window as unknown as { __culture?: object }).__culture = (r = 0, bearing = 90, steps = 8): object => {
   const at = (x: number, z: number): Record<string, unknown> => {
     const c = climateAt(x, z, groundAt(x, z) + baseElev);
-    const look = buildLookAt(cultEnv, x, z, c.w, c.elevAbs);
+    // buildLook, not buildLookAt: the stone override lives in the adapter, and
+    // a probe that skipped it would report generic greys for a village that
+    // renders in local sandstone.
+    const look = buildLook(x, z);
     const road = roadLookAt(cultEnv, x, z, c.w);
     return {
       culture: look.culture.key, wallTex: look.culture.wallTex, roofTex: look.culture.roofTex,
@@ -20141,6 +20164,8 @@ function truckSpec(): Record<string, number> {
       // How far into its own settlement this point is, 0 on a boundary. A
       // consumer that wants to soften a transition reads this.
       edge: +look.edge.toFixed(2),
+      bedrock: ['granite', 'limestone', 'sandstone', 'basalt', 'ochre', 'greenstone'][
+        bedrockAt(cultEnv, x, z, STONE_MIX_ROWS, c.w)],
       road: road.key, centre: `#${road.centre.toString(16).padStart(6, '0')}`,
       edgeLine: road.edge, wear: road.wear,
       dom: c.dom.name,

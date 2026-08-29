@@ -462,3 +462,62 @@ export function roadLookAt(env: CultureEnv, x: number, z: number, w: number[]): 
   // really is a bit different — but road markings do not.
   return pickCulture(ROAD_CULTURES, sharpen(w), unit(reg.seed));
 }
+
+// ── SUBSTRATE: THE VILLAGE IS BUILT OF THE HILL BEHIND IT ──────────
+//
+// The rock family already existed, but it was rolled per CLUMP off a free
+// random: coherent within one scree slope and independent of the next, and
+// invisible to everything that was not a rock. So a stone village could sit on
+// red sandstone country wearing generic grey, which is the same category of
+// miss as the twelve creams — a fact the world already knows, not carried to
+// the things that should show it.
+//
+// Bedrock belongs on the DISTRICT scope, not the stand: geology changes over
+// kilometres, not over the width of a field. Putting it there means the rocks
+// on a hillside, the cutting the road was blasted through, and the walls of
+// the village below it all come from the same answer.
+
+/** Which rock family this district stands on. `mixRows` is one row of family
+ *  weights per archetype, in BIOME_ORDER, and `w` the climate weights — so a
+ *  granite country shading into limestone shades gradually, as ground does. */
+export function bedrockAt(env: CultureEnv, x: number, z: number, mixRows: number[][], w: number[]): number {
+  const [lat, lon] = env.latLonAt(x, z);
+  const [ex, ez] = absMetres(lat, lon);
+  const cell = cellAt(ex, ez, SCOPE.district, SALT.district);
+  const n = mixRows[0]?.length ?? 0;
+  const mix = new Array<number>(n).fill(0);
+  let total = 0;
+  for (let bi = 0; bi < mixRows.length && bi < w.length; bi++) {
+    for (let i = 0; i < n; i++) { const v = mixRows[bi][i] * w[bi]; mix[i] += v; total += v; }
+  }
+  if (total <= 0) return 0;
+  let t = unit(cell.seed) * total;
+  for (let i = 0; i < n; i++) { t -= mix[i]; if (t <= 0) return i; }
+  return n - 1;
+}
+
+/**
+ * Three wall tones out of one rock family, for a settlement that builds in
+ * local stone. `family` is [hue, hueSpan, sat, satSpan, lit, litSpan] — the
+ * same six numbers the rock table already carries.
+ *
+ * Walls are NOT the rock verbatim. Dressed and coursed stone reads lighter and
+ * less saturated than the same rock in a cliff face: it is cut, it is dry, and
+ * it has a century of weathering on it. Taking the family straight gave black
+ * basalt villages that disappeared into their own shadows.
+ */
+export function stoneWalls(family: number[], seed: number): Array<[number, number, number]> {
+  const [hu, hv, sa, sv, li, lv] = family;
+  const out: Array<[number, number, number]> = [];
+  for (let i = 0; i < 3; i++) {
+    const a = unitN(seed, 20 + i), b = unitN(seed, 30 + i), c = unitN(seed, 40 + i);
+    out.push([
+      hu + a * hv,
+      Math.max(0, Math.min(1, (sa + b * sv) * 0.6)),
+      // Lifted toward 0.62 and never allowed below 0.3: a wall has to read as
+      // a wall at dusk, and the basalt family bottoms out at 0.11.
+      Math.max(0.3, Math.min(0.86, (li + c * lv) * 0.55 + 0.34)),
+    ]);
+  }
+  return out;
+}

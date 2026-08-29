@@ -33,7 +33,7 @@ execFileSync('npx', ['esbuild', join(HERE, '../client/culture.ts'), '--bundle', 
   `--outfile=${built}`], { cwd: join(HERE, '../../..'), stdio: 'pipe' });
 const {
   SCOPE, hash3, unit, unitN, absMetres, cellAt, seedAt,
-  BUILD_CULTURES, ROAD_CULTURES, pickCulture, sharpen, snowLoad, roofSnowBias, buildLookAt, paintFor, roadLookAt,
+  BUILD_CULTURES, ROAD_CULTURES, pickCulture, sharpen, snowLoad, roofSnowBias, buildLookAt, paintFor, roadLookAt, bedrockAt, stoneWalls,
 } = await import(pathToFileURL(built).href);
 
 let bad = 0;
@@ -373,6 +373,79 @@ const envAt = (lat0, lon0) => ({
   ok(`at 2100m ${highShed}/${N} temperate regions roof in slate or shingle, against ${lowShed}/${N} at 200m`,
     highShed > lowShed * 1.12,
     { lowShed, highShed, snowLow: +snowLoad(w, 200).toFixed(2), snowHigh: +snowLoad(w, 2100).toFixed(2) });
+}
+
+// ── 9d. SUBSTRATE: THE HILL THE VILLAGE IS BUILT OF ───────────────
+// The rock family existed but was rolled per clump off a free random, so it
+// was coherent within one scree slope, independent of the next, and invisible
+// to anything that was not a rock.
+{
+  const env = envAt(45, 6);
+  // The live table's shape: six families, one row of weights per archetype.
+  const MIX = [
+    [2, 3, 6, 1, 5, 0],   // arid
+    [2, 1, 1, 4, 2, 2],   // tropical
+    [4, 3, 1, 1, 1, 2],   // temperate
+    [5, 1, 0, 3, 1, 2],   // boreal
+    [6, 3, 1, 2, 0, 3],   // alpine
+  ];
+  const w = [0, 0, 1, 0, 0];
+  const b0 = bedrockAt(env, 0, 0, MIX, w);
+  ok('bedrock is a real family index', Number.isInteger(b0) && b0 >= 0 && b0 < 6, { b0 });
+  // Coherent over a district, because geology changes over kilometres.
+  //
+  // MEASURED AS A MODE, NOT AGAINST THE ORIGIN. Comparing every sample to the
+  // value at (0,0) read 1/12 here — not because the field is incoherent but
+  // because the origin happened to sit in the neighbouring district, so twelve
+  // samples agreed with each other and disagreed with the yardstick. That is
+  // the second time in this file a single reference point on a boundary has
+  // faked a failure; the fix is the same one, which is to stop using one.
+  const walk = [];
+  for (let d = 0; d < 1200; d += 100) walk.push(bedrockAt(env, d, d * 0.4, MIX, w));
+  const tally = {};
+  for (const v of walk) tally[v] = (tally[v] ?? 0) + 1;
+  const mode = Math.max(...Object.values(tally));
+  ok(`…and holds across a 1.2km walk (${mode}/${walk.length} share one family)`,
+    mode / walk.length > 0.75, { walk, tally });
+  // …but not across a continent.
+  const far = new Set();
+  for (let d = 0; d < 400000; d += 9000) far.add(bedrockAt(env, d, 0, MIX, w));
+  ok(`…while a 400km drive crosses ${far.size} families`, far.size >= 4, { families: [...far] });
+  // Climate still steers it: arid country is sandstone-and-basalt weighted,
+  // temperate is granite-weighted, and the split must show.
+  const share = (ww) => {
+    const c = {};
+    for (let d = 0; d < 300000; d += 700) { const b = bedrockAt(env, d, d * 0.7, MIX, ww); c[b] = (c[b] ?? 0) + 1; }
+    return c;
+  };
+  const aridShare = share([1, 0, 0, 0, 0]), tempShare = share([0, 0, 1, 0, 0]);
+  const frac = (c, i) => (c[i] ?? 0) / Object.values(c).reduce((a, b) => a + b, 0);
+  ok(`arid country is sandstone(2) more than temperate is (${(frac(aridShare, 2) * 100).toFixed(0)}% vs ${(frac(tempShare, 2) * 100).toFixed(0)}%)`,
+    frac(aridShare, 2) > frac(tempShare, 2) * 2, { arid: frac(aridShare, 2), temp: frac(tempShare, 2) });
+  ok(`…and temperate is granite(0) more than arid is (${(frac(tempShare, 0) * 100).toFixed(0)}% vs ${(frac(aridShare, 0) * 100).toFixed(0)}%)`,
+    frac(tempShare, 0) > frac(aridShare, 0), { temp: frac(tempShare, 0), arid: frac(aridShare, 0) });
+
+  // Walls out of that rock. The failure guarded here is a basalt village that
+  // disappears into its own shadow: the family bottoms out at lightness 0.11,
+  // which is a colour no wall has ever been.
+  const basalt = [0.60, 0.08, 0.03, 0.05, 0.11, 0.07];
+  const limestone = [0.11, 0.02, 0.06, 0.07, 0.55, 0.14];
+  for (const [nm, fam] of [['basalt', basalt], ['limestone', limestone]]) {
+    const walls = stoneWalls(fam, 12345);
+    ok(`${nm} gives three distinct wall tones`,
+      walls.length === 3 && new Set(walls.map((v) => v.join())).size === 3, walls);
+    ok(`…none of them too dark to read as a wall (min L ${Math.min(...walls.map((v) => v[2])).toFixed(2)})`,
+      walls.every((v) => v[2] >= 0.3), walls.map((v) => +v[2].toFixed(2)));
+    ok(`…and all of them still in the ${nm} hue`,
+      walls.every((v) => v[0] >= fam[0] - 0.001 && v[0] <= fam[0] + fam[1] + 0.001),
+      walls.map((v) => +v[0].toFixed(3)));
+  }
+  ok('a dark rock still makes paler walls than a pale one does',
+    Math.max(...stoneWalls(basalt, 7).map((v) => v[2])) < Math.min(...stoneWalls(limestone, 7).map((v) => v[2])),
+    { basalt: stoneWalls(basalt, 7).map((v) => +v[2].toFixed(2)),
+      limestone: stoneWalls(limestone, 7).map((v) => +v[2].toFixed(2)) });
+  ok('and the same seed always gives the same walls',
+    stoneWalls(basalt, 99).join() === stoneWalls(basalt, 99).join(), null);
 }
 
 // ── 10. SNOW LOAD STEEPENS ROOFS ──────────────────────────────────

@@ -36,16 +36,38 @@ export const CLIM_G = 2048;
  *  far shell — or it is not a cap but a thrash. See `corners()`. */
 export const CLIM_CACHE_MAX = 20000;
 
-/** Where each archetype sits in (normalised temperature, moisture). Arid and
- *  tropical share a temperature and are told apart by water alone, which is
- *  why moisture is weighted as heavily as heat. */
-export const CLIM_HOME: Array<[number, number]> = [
-  [0.85, 0.12],   // arid       — hot, dry
-  [0.88, 0.80],   // tropical   — hot, wet
-  [0.55, 0.55],   // temperate  — mild, middling
-  [0.28, 0.50],   // boreal     — cold, middling
-  [0.20, 0.40],   // alpine     — cold, and mostly a matter of height
+/**
+ * Where each archetype sits in (normalised temperature, moisture, amplitude).
+ * Arid and tropical share a temperature and are told apart by water alone,
+ * which is why moisture is weighted as heavily as heat.
+ *
+ * ── WHY ARID HAS TWO HOMES ──
+ *
+ * It had one, at hot-and-dry, which quietly asserted that dryness is a
+ * property of hot places. It is not. The Great Basin, the Gobi, the Patagonian
+ * steppe and the Colorado Plateau are all deserts that freeze, and with a
+ * single hot home NONE of them could be expressed at any moisture: at a
+ * normalised temperature of 0.36 the hot home's own Gaussian has already
+ * fallen to 0.06, so the field had to answer boreal or alpine however dry the
+ * ground was. A whole class of real landscape was unreachable.
+ *
+ * So an archetype may claim several homes and takes the BEST of them. The
+ * amplitude on the cold-arid home is 0.9 rather than 1.0 because cold desert
+ * is genuinely rarer than the temperate and boreal it now competes with, and
+ * it should win where it is right without winning ties.
+ */
+export const CLIM_HOMES: Array<Array<[number, number, number]>> = [
+  [[0.85, 0.12, 1.0],   // arid      — hot, dry
+   [0.40, 0.08, 0.9]],  //           — …and cold, dry: steppe and cold desert
+  [[0.88, 0.80, 1.0]],  // tropical  — hot, wet
+  [[0.55, 0.55, 1.0]],  // temperate — mild, middling
+  [[0.28, 0.50, 1.0]],  // boreal    — cold, middling
+  [[0.20, 0.40, 1.0]],  // alpine    — cold, and mostly a matter of height
 ];
+/** The primary home of each archetype, kept for anything that wants one
+ *  representative point rather than the set. */
+export const CLIM_HOME: Array<[number, number]> =
+  CLIM_HOMES.map((h) => [h[0][0], h[0][1]] as [number, number]);
 /** How much water each land-cover class implies. `built` and `snow` are absent
  *  DELIBERATELY and abstain from the average: a car park says nothing about
  *  rainfall, and frozen is not dry. */
@@ -70,7 +92,21 @@ export const MOIST_OF: Record<number, number> = {
  * is honest rather than a bug: it is the moisture axis, from which this curve
  * does not yet take a term.
  */
-export const treelineAt = (latAbs: number): number => Math.max(0, 4000 - 0.8 * latAbs * latAbs);
+export const treelineAt = (latAbs: number, moisture = 0.5): number => {
+  // THE MOISTURE TERM THE COMMENT ABOVE HAS BEEN PROMISING. A dry continental
+  // interior carries its treeline far higher than a maritime one at the same
+  // latitude — the Rockies at 40° run some 800m above the pure-latitude curve,
+  // and that residual has been sitting in this file as an acknowledged miss.
+  // Dryness raises the line because what stops trees up there is desiccating
+  // wind and a short growing season, not cold alone; a wet oceanic slope at
+  // the same height is cloud forest to well below its theoretical limit.
+  //
+  // 1400m across the full moisture range, referenced to the middling 0.5 the
+  // old curve implicitly assumed — so a caller that does not know the moisture
+  // gets exactly the curve that was there before.
+  const dry = (0.5 - moisture) * 1400;
+  return Math.max(0, 4000 - 0.8 * latAbs * latAbs + dry);
+};
 
 /** Sea-level mean temperature, as a quadratic in latitude: 27°C at the
  *  equator, 13 at 45°, 2.5 at 60°, below freezing past 63. Far closer to the
@@ -160,14 +196,21 @@ export function climCompute(env: ClimateEnv, x: number, z: number, stamp: number
   try { elevAbs = env.groundAt(x, z); } catch { /* terrain not up yet */ }
   const tempC = seaTempAt(latAbs) - LAPSE * Math.max(0, elevAbs);
   const moisture = moistureAt(env, x, z);
-  const treeline = treelineAt(latAbs);
+  const treeline = treelineAt(latAbs, moisture);
   const tempN = clamp((tempC + 10) / 40, 0, 1);
   const w: number[] = [];
   let total = 0;
-  for (let i = 0; i < CLIM_HOME.length; i++) {
-    const dt = tempN - CLIM_HOME[i][0], dm = moisture - CLIM_HOME[i][1];
-    const v = Math.exp(-(dt * dt * 12 + dm * dm * 10));
-    w.push(v); total += v;
+  for (let i = 0; i < CLIM_HOMES.length; i++) {
+    // BEST of the archetype's homes, not the sum: two homes are two distinct
+    // ways of being that archetype, and a point between them is not more
+    // arid than a point sitting on either one.
+    let best = 0;
+    for (const [ht, hm, amp] of CLIM_HOMES[i]) {
+      const dt = tempN - ht, dm = moisture - hm;
+      const v = amp * Math.exp(-(dt * dt * 12 + dm * dm * 10));
+      if (v > best) best = v;
+    }
+    w.push(best); total += best;
   }
   for (let i = 0; i < w.length; i++) w[i] /= total;
   const c: ClimateSample = {
