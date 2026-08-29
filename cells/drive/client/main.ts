@@ -2197,6 +2197,13 @@ function xrayWire(now: number): void {
   scene.traverse((o) => {
     for (let p: THREE.Object3D | null = o; p; p = p.parent) if (keep.has(p)) return;
     if (!(o as THREE.Mesh).isMesh) return;
+    // VEGETATION STAYS SOLID. Its billboarded card kinds cut their leaf
+    // shape in the fragment shader — no alphaTest flag to test for — and
+    // wireframing them painted the raw quads as black boxes over Val
+    // Müstair twice (hunt3, both rounds: standing veg down deleted every
+    // box). Solid plants over a wireframed world still read; black cards
+    // do not.
+    if (o.name === 'veg') return;
     const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
     if (!m) return;
     for (const mm of Array.isArray(m) ? m : [m]) {
