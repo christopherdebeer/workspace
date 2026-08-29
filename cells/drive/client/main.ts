@@ -17,6 +17,8 @@
 import * as THREE from 'three';
 import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, altBandAt, aspectLift, climPick, climPickRow,
   krummholz, swardLift, treelineAt, type ClimateSample } from './climate';
+import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, buildLookAt, paintFor, roadLookAt, seedAt,
+  snowLoad, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
@@ -1023,6 +1025,31 @@ const climEnv = {
   groundAt: (x: number, z: number) => groundAt(x, z) + baseElev,
 };
 const climField = new ClimateField(climEnv);
+/** ── THE CULTURE SEAM ──
+ *
+ * Same shape as climEnv above, and for the same reason: the field itself is
+ * arithmetic and lives in `culture.ts` where it can be tested in half a
+ * second. This is only the seam — and the one thing it supplies is lat/lon,
+ * because world x,z REBASE and a paint keyed to them would repaint the world
+ * every time the attract cycle re-origined it. */
+const cultEnv = { latLonAt: (x: number, z: number) => localToLatLon(x, z) };
+/** One settlement serves a whole village, so the look is cached per 320m cell
+ *  rather than recomputed per building. Measured at 1.6us a call, so this is
+ *  not urgent arithmetic — but a tile is up to a couple of thousand buildings
+ *  and the cache turns that into one call. Keyed on the QUANTISED lat/lon
+ *  cell, so it survives a rebase along with everything else. */
+const lookCache = new Map<string, BuildLook>();
+function buildLook(x: number, z: number): BuildLook {
+  const c = climateAt(x, z);
+  const key = `${Math.round(x / 160)},${Math.round(z / 160)},${c.domIdx}`;
+  let got = lookCache.get(key);
+  if (got === undefined) {
+    got = buildLookAt(cultEnv, x, z, c.w, c.elevAbs);
+    if (lookCache.size > 4000) lookCache.clear();
+    lookCache.set(key, got);
+  }
+  return got;
+}
 /** Elevation as the PLANTS experience it: true height plus what the slope's
  *  aspect is worth. A pole-facing face behaves like ground 150m higher, so
  *  everything keyed to height — treeline, band, krummholz, sward — reacts to
@@ -3976,6 +4003,50 @@ const roadTex = canvasTex(128, 1, 1, 101, (c, s, r) => {
     c.fillRect(edge, r() * s, 1.5 + r() * 2.5, 2 + r() * 3);
   }
 });
+/**
+ * ── M5 ON THE ROAD: THE SAME CARRIAGEWAY IN FOUR CONVENTIONS ──
+ *
+ * `roadTex` above is one texture, so every road on the planet wore white lines
+ * on dark bitumen. Markings are the single strongest "where am I" cue the game
+ * has — a yellow centre line reads as North America before a building is in
+ * shot, and sun-bleached paint on pale chip seal reads as somewhere hot and
+ * broke — and none of it was expressible.
+ *
+ * One texture per road culture, drawn once at load, exactly as the wall and
+ * roof families are. The batching is untouched: `ribBatch` already keys on
+ * MATERIAL, and a region is 96km against a tile's few hundred metres, so a
+ * tile contains one culture and therefore still merges into one mesh.
+ */
+const cssOf = (hex: number, a = 1): string =>
+  `rgba(${(hex >> 16) & 255},${(hex >> 8) & 255},${hex & 255},${a})`;
+const ROAD_TEX = new Map(ROAD_CULTURES.map((rc) => [rc.key, canvasTex(128, 1, 1, 101, (c, s, r) => {
+  c.fillStyle = cssOf(rc.surface); c.fillRect(0, 0, s, s);
+  speckle(c, s, r, ['rgba(255,255,255,0.045)', 'rgba(0,0,0,0.12)'], 260);
+  // Wear buys patches and cracks. A chip-seal road at 0.85 gets roughly three
+  // times the repair history of fresh European bitumen at 0.3, which is what
+  // makes the two read as different ages of road rather than two tints.
+  for (let i = 0; i < Math.round(2 + rc.wear * 6); i++) {
+    c.fillStyle = 'rgba(20,23,28,0.35)';
+    c.fillRect(10 + r() * (s - 40), r() * s, 14 + r() * 22, 8 + r() * 14);
+  }
+  cracks(c, s, r, Math.round(4 + rc.wear * 9), 'rgba(12,14,18,0.5)');
+  // Paint fades with wear — the one place the two axes have to interact, or a
+  // ruined road still carries crisp new lines and looks freshly re-marked.
+  const paintA = 0.75 - rc.wear * 0.45;
+  if (rc.edge) {
+    c.fillStyle = cssOf(rc.edgeCol, paintA * 0.75);
+    c.fillRect(5, 0, 3, s); c.fillRect(s - 8, 0, 3, s);
+  }
+  c.fillStyle = cssOf(rc.centre, paintA);
+  c.fillRect(s / 2 - 2, 0, 4, Math.round(s * 0.4));
+  // The verge losing to the green. More of it where nothing is maintained.
+  for (let i = 0; i < Math.round(16 + rc.wear * 20); i++) {
+    const edge = r() < 0.5 ? 2 + r() * 8 : s - 2 - r() * 8;
+    c.fillStyle = i % 2 ? 'rgba(64,96,44,0.5)' : 'rgba(40,66,32,0.55)';
+    c.fillRect(edge, r() * s, 1.5 + r() * 2.5, 2 + r() * 3);
+  }
+})]));
+
 // The junction mouth's own surface: the same tarmac with NO lines — a host's
 // painted edge line must not run across a turning, and it lives in a
 // repeating texture that cannot break itself, so the mouth overpaints it —
@@ -4240,6 +4311,155 @@ const wallTexes = [7101, 7102].map((seed) => canvasTex(128, 1 / 9, 1 / 9, seed, 
   cracks(c, s, r, 5, 'rgba(20,16,10,0.35)');
   moss(c, s, r, 7, ['rgba(64,96,44,0.5)', 'rgba(42,70,32,0.45)', 'rgba(96,128,60,0.35)']);
 }));
+// ── M5: THE MATERIAL FAMILIES ─────────────────────────────────────
+//
+// The two textures above — one roof, two walls — were the whole vocabulary of
+// the built world, so every building on the planet was rendered concrete under
+// panel-seam felt however much its PAINT varied. That is why the twelve creams
+// read as twelve creams rather than as places: colour without material is a
+// tint, and the eye reads material first.
+//
+// These are drawn once at load into a canvas and cached forever, which is the
+// route `grainFx` and `wallTexes` already established. The cost is paid once
+// and shared by every instance in the world, so a family costs a texture, not
+// a draw call. White base throughout — the culture's paint tints it, exactly
+// as the limewash pair already worked.
+const WALL_TEX: Record<WallTex, THREE.Texture> = {
+  // Lime render: near-flat, the detail carried by wear rather than by units.
+  render: wallTexes[0],
+  // Ashlar. COURSES, not a grid: real stonework breaks its vertical joints
+  // between courses, and a texture that does not is instantly a wallpaper.
+  stone: canvasTex(128, 1 / 9, 1 / 9, 3301, (c, s, r) => {
+    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
+    const rows = 7, h = s / rows;
+    for (let i = 0; i < rows; i++) {
+      const y = i * h;
+      // Each course offset by its own amount, so no two courses line up.
+      let x = -r() * 40;
+      while (x < s) {
+        const w = 16 + r() * 26;
+        c.fillStyle = `rgba(0,0,0,${(0.03 + r() * 0.07).toFixed(3)})`;
+        c.fillRect(x + 1, y + 1, w - 2, h - 2);
+        x += w;
+      }
+      c.strokeStyle = 'rgba(0,0,0,0.13)'; c.lineWidth = 1;
+      c.beginPath(); c.moveTo(0, y); c.lineTo(s, y); c.stroke();
+    }
+    speckle(c, s, r, ['rgba(0,0,0,0.05)', 'rgba(255,255,255,0.05)'], 200);
+    moss(c, s, r, 4, ['rgba(64,96,44,0.35)', 'rgba(42,70,32,0.3)']);
+  }),
+  // Stretcher bond: half-lap every course, which is the pattern the eye
+  // actually recognises as brick from thirty metres.
+  brick: canvasTex(128, 1 / 6, 1 / 6, 3302, (c, s, r) => {
+    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
+    const rows = 16, h = s / rows, bw = s / 4;
+    for (let i = 0; i < rows; i++) {
+      const y = i * h, off = (i % 2) * (bw / 2);
+      for (let j = -1; j < 5; j++) {
+        c.fillStyle = `rgba(0,0,0,${(0.02 + r() * 0.06).toFixed(3)})`;
+        c.fillRect(j * bw + off + 1, y + 1, bw - 2, h - 2);
+      }
+    }
+    c.strokeStyle = 'rgba(255,255,255,0.10)'; c.lineWidth = 1;
+    for (let i = 0; i <= rows; i++) { c.beginPath(); c.moveTo(0, i * h); c.lineTo(s, i * h); c.stroke(); }
+    speckle(c, s, r, ['rgba(0,0,0,0.06)'], 160);
+  }),
+  // Vertical board-and-batten. The battens are the read; the boards between
+  // them only need to vary slightly in tone.
+  timber: canvasTex(128, 1 / 7, 1 / 7, 3303, (c, s, r) => {
+    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
+    for (let x = 0; x < s; x += 11) {
+      c.fillStyle = `rgba(0,0,0,${(0.02 + r() * 0.08).toFixed(3)})`;
+      c.fillRect(x, 0, 10, s);
+      c.fillStyle = 'rgba(0,0,0,0.16)'; c.fillRect(x + 9, 0, 2, s);      // batten shadow
+      c.fillStyle = 'rgba(255,255,255,0.10)'; c.fillRect(x + 11, 0, 1, s); // its lit edge
+    }
+    // Grain, along the board rather than across it.
+    c.strokeStyle = 'rgba(0,0,0,0.07)'; c.lineWidth = 1;
+    for (let i = 0; i < 26; i++) {
+      const x = r() * s; c.beginPath(); c.moveTo(x, r() * s * 0.4); c.lineTo(x + (r() - 0.5) * 3, s); c.stroke();
+    }
+  }),
+  // Earth: no units at all. Hand-shaped, so what varies is the SURFACE —
+  // broad soft undulation, and the darker line where a wall has been patched.
+  adobe: canvasTex(128, 1 / 8, 1 / 8, 3304, (c, s, r) => {
+    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
+    for (let i = 0; i < 40; i++) {
+      c.fillStyle = `rgba(0,0,0,${(0.015 + r() * 0.035).toFixed(3)})`;
+      c.beginPath(); c.ellipse(r() * s, r() * s, 8 + r() * 22, 6 + r() * 16, r() * 3.14, 0, 6.2832); c.fill();
+    }
+    speckle(c, s, r, ['rgba(0,0,0,0.05)', 'rgba(255,255,255,0.06)'], 260, 1.2);
+    cracks(c, s, r, 3, 'rgba(60,44,24,0.18)');
+  }),
+};
+const ROOF_TEX: Record<RoofTex, THREE.Texture> = {
+  // Pantile: overlapping S-curves in rows. The alternating light/dark down
+  // each row is the barrel, and it is the whole read at distance.
+  pantile: canvasTex(128, 1 / 7, 1 / 7, 3401, (c, s, r) => {
+    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
+    const rows = 9, h = s / rows, tw = 14;
+    for (let i = 0; i < rows; i++) {
+      const y = i * h, off = (i % 2) * (tw / 2);
+      for (let x = -tw; x < s + tw; x += tw) {
+        c.fillStyle = 'rgba(0,0,0,0.13)'; c.fillRect(x + off, y, tw / 2, h);
+        c.fillStyle = `rgba(255,255,255,${(0.05 + r() * 0.06).toFixed(3)})`;
+        c.fillRect(x + off + tw / 2, y, tw / 2, h);
+      }
+      c.fillStyle = 'rgba(0,0,0,0.20)'; c.fillRect(0, y, s, 2);  // the course shadow
+    }
+    moss(c, s, r, 5, ['rgba(64,96,44,0.35)', 'rgba(96,128,60,0.25)']);
+  }),
+  // Slate: small units, broken bond, and a little tonal variation per slate
+  // because a slate roof is never one grey.
+  slate: canvasTex(128, 1 / 8, 1 / 8, 3402, (c, s, r) => {
+    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
+    const rows = 13, h = s / rows, w = 18;
+    for (let i = 0; i < rows; i++) {
+      const y = i * h, off = (i % 2) * (w / 2);
+      for (let x = -w; x < s + w; x += w) {
+        c.fillStyle = `rgba(0,0,0,${(0.02 + r() * 0.10).toFixed(3)})`;
+        c.fillRect(x + off, y, w - 1, h - 1);
+      }
+      c.fillStyle = 'rgba(0,0,0,0.16)'; c.fillRect(0, y + h - 1, s, 1);
+    }
+    speckle(c, s, r, ['rgba(255,255,255,0.06)'], 120, 1.2);
+  }),
+  // Shingle: same bond, softer edges, warmer wear — and it splits rather than
+  // cracking, so the marks run with the grain.
+  shingle: canvasTex(128, 1 / 8, 1 / 8, 3403, (c, s, r) => {
+    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
+    const rows = 11, h = s / rows, w = 15;
+    for (let i = 0; i < rows; i++) {
+      const y = i * h, off = (i % 2) * (w / 2);
+      for (let x = -w; x < s + w; x += w) {
+        c.fillStyle = `rgba(0,0,0,${(0.03 + r() * 0.09).toFixed(3)})`;
+        c.fillRect(x + off, y, w - 1, h - 1);
+        if (r() > 0.7) { c.fillStyle = 'rgba(0,0,0,0.10)'; c.fillRect(x + off + 3 + r() * 8, y, 1, h - 1); }
+      }
+      c.fillStyle = 'rgba(0,0,0,0.14)'; c.fillRect(0, y + h - 1, s, 1);
+    }
+    moss(c, s, r, 6, ['rgba(64,96,44,0.4)', 'rgba(42,70,32,0.35)']);
+  }),
+  // Corrugated iron: vertical ribs, hard specular banding, and rust where the
+  // fixings are. The one roof that is brighter in strips than overall.
+  corrugated: canvasTex(128, 1 / 6, 1 / 6, 3404, (c, s, r) => {
+    c.fillStyle = '#ffffff'; c.fillRect(0, 0, s, s);
+    for (let x = 0; x < s; x += 8) {
+      c.fillStyle = 'rgba(0,0,0,0.16)'; c.fillRect(x, 0, 3, s);
+      c.fillStyle = 'rgba(255,255,255,0.12)'; c.fillRect(x + 4, 0, 2, s);
+    }
+    c.fillStyle = 'rgba(0,0,0,0.10)';
+    for (let y = 22; y < s; y += 44) c.fillRect(0, y, s, 2);        // sheet laps
+    for (let i = 0; i < 26; i++) {                                   // rust at the fixings
+      c.fillStyle = `rgba(122,68,32,${(0.15 + r() * 0.3).toFixed(2)})`;
+      c.fillRect(r() * s, r() * s, 1 + r() * 3, 1 + r() * 3);
+    }
+  }),
+  // Flat: felt and gravel, with the ponding and the patch lines that go with
+  // it. Keeps the old panel-seam roof, which is exactly what this is.
+  flat: roofTex,
+};
+
 // DoubleSide throughout: ribbon winding and the rotate+mirror extrusion leave
 // face orientation mixed — lighting both sides costs little at this scene size
 // and makes every surface reliably visible from the top-down camera.
@@ -4809,6 +5029,36 @@ const waterU = {
   // Live rain, for the pocking. 0 clears it.
   uWRain: { value: 0 },
 };
+
+/** ── ONE ROAD MATERIAL PER CULTURE ──
+ *
+ * Cloned from MAT.road rather than constructed alongside it, so every one of
+ * them keeps the polygon-offset stack, the slip hook and the vertex-colour
+ * setup that took a measurement each to get right — a second hand-written
+ * literal would drift from that one the first time either was touched.
+ * Only the map differs. */
+const ROAD_MATS = new Map<string, THREE.Material>(ROAD_CULTURES.map((rc) => {
+  const m2 = MAT.road.clone() as THREE.MeshLambertMaterial;
+  m2.map = ROAD_TEX.get(rc.key) ?? (MAT.road as THREE.MeshLambertMaterial).map;
+  m2.needsUpdate = true;
+  return [rc.key, m2 as THREE.Material];
+}));
+/** Which carriageway this stretch of road is surfaced and marked as. Cached on
+ *  a 2km cell: a region is 96km, so this answers the same thing for a long
+ *  drive, and the cache exists only so that a tile of two hundred ways does
+ *  not re-derive it two hundred times. */
+const roadMatCache = new Map<string, THREE.Material>();
+function roadMatAt(x: number, z: number): THREE.Material {
+  const key = `${Math.round(x / 2000)},${Math.round(z / 2000)}`;
+  let got = roadMatCache.get(key);
+  if (got === undefined) {
+    const rc = roadLookAt(cultEnv, x, z, climateAt(x, z).w);
+    got = ROAD_MATS.get(rc.key) ?? MAT.road;
+    if (roadMatCache.size > 3000) roadMatCache.clear();
+    roadMatCache.set(key, got);
+  }
+  return got;
+}
 /**
  * THE SHARED WATER CORE. Sea, lakes and rivers each carried their own copy of
  * the same hash, the same value noise, the same glint — three shaders that had
@@ -12720,6 +12970,42 @@ function registerPaint(col: number): number | null {
   extraPaint.set(col, paint);
   return paint;
 }
+/**
+ * ── A CULTURE'S PAINT: A WALL, A ROOF, AND THE MATERIALS THEY ARE MADE OF ──
+ *
+ * `registerPaint` above takes a colour and gives it the ONE wall texture and
+ * the ONE roof texture the world had. A culture needs four things to differ —
+ * wall colour, roof colour, wall material, roof material — so this is its own
+ * registry rather than a fourth argument bolted onto that one.
+ *
+ * The cap is 128 pairs against registerPaint's 36, and it can afford to be,
+ * because the thing that cost money was never the material count: it was
+ * DRAW GROUPS PER TILE. Twelve hashed creams put up to twelve groups in every
+ * tile in the world. A settlement commits to three paints, so a village is
+ * three groups however many buildings it has — this is cheaper than what it
+ * replaces, not more expensive, and the cap only exists so that crossing a
+ * hundred settlements in one session cannot grow the array without bound.
+ */
+const culturePaint = new Map<string, number>();
+function registerCulturePaint(wallCol: number, roofCol: number, wt: WallTex, rt: RoofTex): number | null {
+  const key = `${wallCol}:${roofCol}:${wt}:${rt}`;
+  const got = culturePaint.get(key);
+  if (got !== undefined) return got;
+  if (culturePaint.size >= 128) return null;
+  const wall = new THREE.MeshLambertMaterial({ color: new THREE.Color(wallCol), map: WALL_TEX[wt], side: DS });
+  facade(wall);
+  bldSkylit.push(wall);
+  // The roof keeps the 0.78 the limewash pair established: a roof is tile or
+  // felt, it goes square-on to a high sun, and it has no business being the
+  // brighter of the two surfaces.
+  const roof = new THREE.MeshLambertMaterial({
+    color: new THREE.Color(roofCol).multiplyScalar(0.78), map: ROOF_TEX[rt], side: DS });
+  const paint = B_MATS_FLAT.length / 2;
+  B_MATS_FLAT.push(roof, wall);
+  culturePaint.set(key, paint);
+  return paint;
+}
+
 /** The typology palette: what a building IS, worn as its colour. Only kinds
  *  whose real-world stock has a colour of its own get an entry — the rest
  *  keep the hashed limewash, which is what a street mostly is. */
@@ -13032,10 +13318,13 @@ function roofGeo(pts: Array<[number, number]>, shape: string, top: number,
 function building(pts: Array<[number, number]>, id: number, tags: Record<string, string>): void {
   // Inside a landmark pad the authored geometry is the building. OSM's own
   // polygon for a pyramid extrudes into a flat-roofed prism through ours.
+  let ctrX = 0, ctrZ = 0;
   {
     let cx0 = 0, cz0 = 0;
     for (const [x, z] of pts) { cx0 += x; cz0 += z; }
-    if (pts.length && inLandmarkPad(cx0 / pts.length, cz0 / pts.length)) return;
+    ctrX = pts.length ? cx0 / pts.length : 0;
+    ctrZ = pts.length ? cz0 / pts.length : 0;
+    if (pts.length && inLandmarkPad(ctrX, ctrZ)) return;
   }
   const kind = tags.building ?? 'yes';
   const levels = parseFloat(tags['building:levels'] ?? '') || 2;
@@ -13073,7 +13362,26 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     if (!c || !/^(#[0-9a-fA-F]{3,8}|[a-z]+)$/.test(c)) return null;
     try { return registerPaint(new THREE.Color(c.toLowerCase()).getHex()); } catch { return null; }
   })();
-  const paint = mapped ?? (TYPO_COL[kind] !== undefined ? registerPaint(TYPO_COL[kind]) : null) ?? bPaint(id);
+  // ── WHAT THIS BUILDING IS PAINTED, AND WHAT IT IS MADE OF ──
+  //
+  // The order is: a colour the surveyor actually recorded, then what the
+  // building IS (a barn is oxide red wherever it stands), then — and this is
+  // the change — WHERE IT IS. `bPaint(id)` used to answer that last question
+  // with a hash of the OSM id over twelve near-white creams, which gave a
+  // street twelve unrelated colours and every street on the planet the same
+  // twelve. Now the settlement picks three paints out of its region's
+  // tradition and the building takes one of those by POSITION, so a village
+  // agrees with itself and the next valley does not.
+  //
+  // The fallback to bPaint is not decoration: registerCulturePaint returns
+  // null once the material array is full, and a null paint index would put
+  // `new Mesh(geo, undefined)` back in the scene — the unlit white slab that
+  // cost half the world's buildings once already.
+  const look = buildLook(ctrX, ctrZ);
+  const cultural = registerCulturePaint(
+    paintFor(cultEnv, look, ctrX, ctrZ), look.roofCol, look.culture.wallTex, look.culture.roofTex);
+  const paint = mapped ?? (TYPO_COL[kind] !== undefined ? registerPaint(TYPO_COL[kind]) : null)
+    ?? cultural ?? bPaint(id);
   // The roof. Explicit shape wins; a small house-shaped thing defaults to a
   // gable, which is what most of the world's housing stock wears whether or
   // not anyone typed it in.
@@ -13148,7 +13456,17 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
       ));
     }
   }
-  if (!parts.length) { buildStats.intact++; polygon(pts, B_MATS[bPaint(id)], 0.9, height, 'solid', intactSink(bPaint(id))); return; }
+  if (!parts.length) {
+    // A building whose walls all came out too short to ruin falls back to
+    // intact — and takes the SAME `paint` the main path decided. It used to
+    // call bPaint(id) here, which quietly ignored both the surveyed colour and
+    // the typology that the line above had just worked out, so a barn that
+    // failed to ruin came out limewash instead of oxide red.
+    buildStats.intact++;
+    polygon(pts, B_MATS_FLAT.slice(paint * 2, paint * 2 + 2) as [THREE.Material, THREE.Material],
+      0.9, height, 'solid', intactSink(paint));
+    return;
+  }
   buildStats.ruin++;
   if (buildStats.ruins.length < 400) buildStats.ruins.push([cx, cz]);
   // Rubble where the roof landed, and scrub that moved in after it. The normal
@@ -14322,7 +14640,12 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
         : tags.bridge && tags.bridge !== 'no' ? 'bridge'
         : 'auto';
       const wq = wayQuality(tags, track);
-      ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : MAT.road,
+      // The carriageway wears its REGION's convention — yellow centre line or
+      // white, edge lines or none, fresh bitumen or bleached chip seal. Picked
+      // at the way's first point, which keeps one way on one material even
+      // where it happens to straddle a regional boundary; a road that changed
+      // surface mid-span would read as a rendering fault, not as a border.
+      ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : roadMatAt(pts[0][0], pts[0][1]),
         track || stairs ? SURFACE.track.lift : SURFACE.road.lift, !stairs, mode, track, tags.name, wq,
         GRADE_MAX[tags.highway] ?? 0.15, canopy, roadTint(tags, wq), dk);
       if (unbuilt !== refusedAt) { seenWays.delete(dk); continue; }
@@ -14343,7 +14666,7 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
     } else if (tags.aeroway === 'runway' || tags.aeroway === 'taxiway') {
       // A runway is the widest ribbon in the vocabulary and perfectly
       // drivable — which is the whole point of fetching it.
-      ribbon(pts, tags.aeroway === 'runway' ? 42 : 12, MAT.road, SURFACE.road.lift,
+      ribbon(pts, tags.aeroway === 'runway' ? 42 : 12, roadMatAt(pts[0][0], pts[0][1]), SURFACE.road.lift,
         true, 'none', false, tags.name, 0.97, 0.04);
     } else if (tags.aeroway === 'apron') {
       // The stand: a tarmac drape, drawn with the junction-mouth material
@@ -19791,6 +20114,57 @@ function truckSpec(): Record<string, number> {
   }
   return out;
 };
+/**
+ * ── THE CULTURE PROBE ──
+ *
+ * The rule from the diversity plan: every new field gets a probe before it
+ * gets a feature. This one has to answer three questions that a screenshot
+ * cannot, because they are about AGREEMENT rather than about appearance:
+ *
+ *   Does a settlement agree with itself?  → `palette` is the same three hexes
+ *                                            all the way across a village.
+ *   Do regions actually change?           → walk a transect and watch
+ *                                            `culture` and `road` turn over.
+ *   Is it keyed to place, not to id?      → the same coordinates always give
+ *                                            the same answer, on any reload.
+ */
+(window as unknown as { __culture?: object }).__culture = (r = 0, bearing = 90, steps = 8): object => {
+  const at = (x: number, z: number): Record<string, unknown> => {
+    const c = climateAt(x, z, groundAt(x, z) + baseElev);
+    const look = buildLookAt(cultEnv, x, z, c.w, c.elevAbs);
+    const road = roadLookAt(cultEnv, x, z, c.w);
+    return {
+      culture: look.culture.key, wallTex: look.culture.wallTex, roofTex: look.culture.roofTex,
+      palette: look.palette.map((h) => `#${h.toString(16).padStart(6, '0')}`),
+      roof: `#${look.roofCol.toString(16).padStart(6, '0')}`,
+      pitch: +look.pitch.toFixed(2), snow: +snowLoad(c.w, c.elevAbs).toFixed(2),
+      // How far into its own settlement this point is, 0 on a boundary. A
+      // consumer that wants to soften a transition reads this.
+      edge: +look.edge.toFixed(2),
+      road: road.key, centre: `#${road.centre.toString(16).padStart(6, '0')}`,
+      edgeLine: road.edge, wear: road.wear,
+      dom: c.dom.name,
+    };
+  };
+  const out: Record<string, unknown> = {
+    here: at(state.x, state.z),
+    scopes: SCOPE,
+    // What the world has actually had to build, against the caps. A run that
+    // pins either of these is a run whose variety has quietly stopped.
+    paints: culturePaint.size, paintCap: 128, matsFlat: B_MATS_FLAT.length,
+    looksCached: lookCache.size, roadMats: ROAD_MATS.size,
+  };
+  if (r > 0) {
+    const dx = Math.sin(bearing * Math.PI / 180), dz = -Math.cos(bearing * Math.PI / 180);
+    const span: Array<Record<string, unknown>> = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = (i / steps) * r;
+      span.push({ m: Math.round(t), ...at(state.x + dx * t, state.z + dz * t) });
+    }
+    out.span = span;
+  }
+  return out;
+};
 /** siteKindAt's own histogram — the vegetation side of the same habitat
  *  question, over many rolls of the seeded RNG per point so a probabilistic
  *  pick (coverKind falls through with its own weights) shows its spread
@@ -19890,7 +20264,10 @@ function truckSpec(): Record<string, number> {
     near2.push({
       dist: Math.round(Math.hypot(c.center.x - state.x, c.center.z - state.z)),
       visible: vis, frustumCulled: m.frustumCulled,
-      isRoadMat: (m.material as THREE.Material).uuid === MAT.road.uuid,
+      // Any of the cultural carriageways counts: the uuid test predates them
+      // and would have called a chip-seal road "not the road material".
+      isRoadMat: (m.material as THREE.Material).uuid === MAT.road.uuid
+        || [...ROAD_MATS.values()].some((rm) => rm.uuid === (m.material as THREE.Material).uuid),
       isTrackMat: (m.material as THREE.Material).uuid === MAT.track.uuid,
       matType: (m.material as THREE.Material).type,
       hasSlip: !!m.geometry.getAttribute('aSlip'),
