@@ -22,6 +22,9 @@ await d.page.evaluate(() => { window.__hold(0, 0, 1); });   // brake to a stop, 
 await d.simWait(9);
 const parked = await d.page.evaluate(() => ({ eng: window.__engine(), kmh: window.__real().kmh, amb: window.__amb() }));
 console.log('parked:', JSON.stringify(parked));
+await d.simWait(6);                          // past the 5s idle window
+const off = await d.page.evaluate(() => ({ eng: window.__engine(), amb: window.__amb() }));
+console.log('off:', JSON.stringify(off));
 await d.page.evaluate(() => { window.__hold(null); });
 report(d.errors);
 await d.close();
