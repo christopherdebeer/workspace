@@ -24647,7 +24647,13 @@ const audio = (() => {
       // THE LAMP AND THE EAR MUST AGREE: the HUD calls SLIP from 0.06 and
       // the 0.55 curve opens the voice there rather than at a committed
       // slide.
-      const bite = surf === 'road' || surf === 'track' ? Math.pow(clamp(q, 0, 1), 1.6) : 0.12;
+      // …with a FLOOR under the sealed tiers. slip-sig caught the real
+      // silencer at last: q read 0.2 ON THE ROAD at Chapman's (worst-wheel
+      // sampling off the verge, thin surface data — either way), and
+      // 0.2^1.6 throttled a healthy skid signal to nothing. A worn road
+      // still screeches — only genuinely loose ground gets to not sing.
+      const bite = surf === 'road' ? Math.max(Math.pow(clamp(q, 0, 1), 1.6), 0.55)
+        : surf === 'track' ? Math.max(Math.pow(clamp(q, 0, 1), 1.6), 0.25) : 0.12;
       const sq2 = Math.pow(clamp(Math.max(slip, spin * 0.85), 0, 1), 0.55);
       const sqT = sq2 * bite * grounded * Math.min((v + spin * 9) / 8, 1) * 0.6;
       // THE SIDECHAIN. Measured at Chapman's Peak (mix-audit): scrape peaked
