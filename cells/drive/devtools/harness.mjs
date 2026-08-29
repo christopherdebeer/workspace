@@ -343,7 +343,25 @@ export async function openDrive(opts = {}) {
   // asked. `opts.route(page)` runs with the page created and nothing loaded.
   if (opts.route) await opts.route(page);
   await page.goto(`http://localhost:${port}/?${spot}`, { waitUntil: 'load', timeout: 60000 });
-  await page.waitForFunction(() => document.querySelector('#boot')?.classList.contains('ready'), null, { timeout: 120000 });
+  // ── A FAILED BOOT MUST SAY WHY ──
+  //
+  // This used to be a bare waitForFunction, so a world that threw during
+  // module init cost 120 seconds and then reported `TimeoutError` with an
+  // empty log — while the page error that actually explained it sat in
+  // `errors`, unreachable, because the throw happens before openDrive returns.
+  // Measured against one afternoon: three wrong hypotheses and an hour, for a
+  // fault the collected error names outright. The wait is the same; what comes
+  // out of it when it fails is not.
+  try {
+    await page.waitForFunction(() => document.querySelector('#boot')?.classList.contains('ready'),
+      null, { timeout: opts.bootTimeout ?? 120000 });
+  } catch (e) {
+    const why = errors.length ? `\n  ${errors.slice(0, 6).join('\n  ')}` : ' no page errors captured —'
+      + ' the module loaded but never signalled ready, which is a HANG rather than a throw:'
+      + ' look for unbounded work on the build path.';
+    await browser.close(); server.close();
+    throw new Error(`world never booted [${tag}] after ${(opts.bootTimeout ?? 120000) / 1000}s:${why}`);
+  }
   if (menu) await page.evaluate(() => window.__menutab(null));
   if (settle) await page.waitForTimeout(settle);
 

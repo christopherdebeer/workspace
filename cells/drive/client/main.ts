@@ -1102,7 +1102,15 @@ function moistureAt(x: number, z: number): number {
 }
 function climCompute(x: number, z: number): Climate {
   const latAbs = Math.abs(localToLatLon(x, z)[0]);
-  const elevAbs = groundAt(x, z) + baseElev;
+  // THE GROUND MAY NOT EXIST YET. This is asked during module load — the
+  // critter populations roll their species before the terrain subsystem is
+  // up — and `groundAt` reaches through roadCeiling into structures that are
+  // still undefined at that point. Chasing each early caller is whack-a-mole;
+  // tolerating an absent heightfield here fixes all of them at once, and
+  // costs nothing afterwards because a corner computed without evidence
+  // carries hadCover:false and is recomputed the moment cover lands.
+  let elevAbs = baseElev;
+  try { elevAbs = groundAt(x, z) + baseElev; } catch { /* terrain not up yet */ }
   // Sea-level mean temperature falls off as a quadratic in latitude — 27°C at
   // the equator, 13 at 45°, 2.5 at 60°, below freezing past 63 — then the
   // standard atmospheric lapse takes it down with height.
@@ -7662,8 +7670,15 @@ let herdSpecies: number[] = [];
  *  flock are spawned around the truck, so the truck's own climate is the
  *  right place to ask — and on a boreal/temperate margin the plain now
  *  genuinely carries some of both rather than all of whichever label won. */
-function pickFrom(table: Record<string, number[]>): number {
-  const cl = climateAt(state.x, state.z);
+function pickFrom(table: Record<string, number[]>, atX?: number, atZ?: number): number {
+  // POSITION IS PASSED IN, NEVER READ FROM `state` HERE. The bird and herd
+  // populations are constructed at module load — ten thousand lines before
+  // `state` exists — so reaching for the truck inside this function threw
+  // during init and the world never signalled ready. The spawn origin is the
+  // right default anyway: at construction time the truck is at 0,0, which is
+  // exactly the climate these first animals should be drawn from. The re-roll
+  // that follows a real move passes the truck's actual position.
+  const cl = climateAt(atX ?? 0, atZ ?? 0);
   const n = (table.temperate ?? []).length;
   const acc: number[] = new Array(n).fill(0);
   let total = 0;
@@ -7677,8 +7692,8 @@ function pickFrom(table: Record<string, number[]>): number {
   for (let i = 0; i < n; i++) { t -= acc[i]; if (t <= 0) return i; }
   return 0;
 }
-const pickBird = (): number => pickFrom(BIRD_MIX);
-const pickSpecies = (): number => pickFrom(HERD_MIX);
+const pickBird = (atX?: number, atZ?: number): number => pickFrom(BIRD_MIX, atX, atZ);
+const pickSpecies = (atX?: number, atZ?: number): number => pickFrom(HERD_MIX, atX, atZ);
 const mkPop = (n: number, box: number, air: boolean): Critter[] => {
   if (!air && !herdSpecies.length) herdSpecies = Array.from({ length: HERD_GROUPS }, pickSpecies);
   if (air && !birdSpecies.length) birdSpecies = Array.from({ length: BIRD_GROUPS }, pickBird);
@@ -28828,9 +28843,9 @@ function applyBiome(b: Biome): void {
   biome = b;
   // The herd is built at module load, before the spawn's biome is known — so
   // re-roll which species are out there whenever the biome actually lands.
-  herdSpecies = Array.from({ length: HERD_GROUPS }, pickSpecies);
+  herdSpecies = Array.from({ length: HERD_GROUPS }, () => pickSpecies(state.x, state.z));
   for (const c of graze) c.sp = herdSpecies[c.grp];
-  birdSpecies = Array.from({ length: BIRD_GROUPS }, pickBird);
+  birdSpecies = Array.from({ length: BIRD_GROUPS }, () => pickBird(state.x, state.z));
   for (const c of flock) c.sp = birdSpecies[c.grp];
   // The six sky colours are the DAYLIGHT versions of themselves; how much of
   // each survives depends on where the sun is, so the clock paints them.
