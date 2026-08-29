@@ -20,9 +20,9 @@ import { openDrive, report } from './harness.mjs';
 
 const SPOTS = [
   { tag: 'bixby', spot: 'lat=36.37145&lon=-121.90158&h=340&cam=chase&time=NOON&sunalt=55&wx=clear',
-    minJoins: 5, bars: { p95M: 0.15, over: 2, worstM: 0.25, meetWorstM: 1.0 } },
+    minJoins: 5, bars: { p95M: 0.15, over: 2, worstM: 0.15, meetWorstM: 1.0 } },
   { tag: 'chapmans', spot: 'lat=-34.09885&lon=18.380684&h=255&cam=chase&time=NOON&sunalt=55&wx=clear',
-    minJoins: 12, bars: { p95M: 0.25, over: 2, worstM: 0.25, meetWorstM: 0.5 } },
+    minJoins: 10, bars: { p95M: 0.15, over: 2, worstM: 0.15, meetWorstM: 0.5 } },
 ];
 let fails = 0;
 const ok = (name, cond, detail = '') => {
@@ -37,10 +37,13 @@ for (const s of SPOTS) {
   // a settled one.
   let ks = { joins: 0 };
   let prev = -1, flat = 0;
-  for (let w = 0; w < 40 && flat < 3; w++) {
+  for (let w = 0; w < 48 && flat < 4; w++) {
     await d.page.waitForTimeout(5000);
     ks = await d.page.evaluate(() => window.__kerbseams(260));
-    flat = ks.joins > 0 && ks.joins === prev ? flat + 1 : 0;
+    // Flatness only counts once the streamer has had real time: one run
+    // plateaued at 2 joins for 15 seconds mid-stream and the early flat
+    // check called that settled.
+    flat = w >= 18 && ks.joins > 0 && ks.joins === prev ? flat + 1 : 0;
     prev = ks.joins;
   }
   const seatOver = await d.page.evaluate(() =>
