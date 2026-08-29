@@ -3766,6 +3766,10 @@ let rollAt = 0;
  *  ground changes shape — carveCorridors cuts the hillside to receive a road,
  *  so a road arriving moves the ground by up to a metre where it lands. */
 let terrainBuilds = 0;
+/** How long a kerb may wait for a tile rebuild that may never come. Generous:
+ *  the ordinary path is a carve marking the tile dirty within a frame or two,
+ *  and sweeping early would build the bank against a half-loaded hillside. */
+const BATTER_STRAND_MS = 6000;
 function flushTerrain(now: number): void {
   if (now - terrainAt < 200) return;
   for (const key of terrainDirty) {
@@ -3784,6 +3788,13 @@ function flushTerrain(now: number): void {
       terrainMs = performance.now() - t0;
       return;
     }
+  }
+  // Nothing dirty. This is exactly when a stranded kerb can be picked up
+  // without competing with a rebuild for the frame — the quiet path is the
+  // right place for it, and it costs nothing when the queue is empty.
+  if (pendingBatter.length) {
+    terrainAt = now;
+    flushBatter(null, performance.now() - BATTER_STRAND_MS);
   }
 }
 function loadTerrainTile(x: number, y: number): Promise<void> {
@@ -9540,6 +9551,9 @@ const spanStats = {
   // Why a kerb quad did or did not get a batter — one counter per branch, so
   // "the fill stops halfway along this road" is attributable rather than argued.
   fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0, fillCap: 0,
+  /** Kerbs the stranded sweep rescued: parked against a tile that was
+   *  already settled and would never have rebuilt to collect them. */
+  fillStranded: 0,
   /** Worst mitre stretch on the carriageway, as a multiple of the nominal
    *  half-width — how far the drawn kerb runs outside `Seg.hw` at the sharpest
    *  corner in the world. 1 is a straight road; the mitre is capped at 2.4. */
@@ -9585,6 +9599,11 @@ interface Batter { ax: number; az: number; bx: number; bz: number;
    *  point and the earth closes. Capped, or a hairpin would throw a spike. */
   nxA: number; nzA: number; nxB: number; nzB: number;
   y0: number; y1: number; uA: number; uB: number;
+  /** When this kerb was parked. A batter waits for its terrain tile to REBUILD,
+   *  which is right — the carve has to run first — but a tile that was already
+   *  settled before the road arrived may never rebuild, and then the wait never
+   *  ends. See the stranded sweep in flushTerrain. */
+  at?: number;
   /** Nothing adjoins this end — the run starts or stops here, so the earth
    *  needs a face rather than an open edge. */
   capA: boolean; capB: boolean;
@@ -9642,10 +9661,14 @@ function preEdge(x: number, z: number, notKey?: string): { out: number; track: b
 /** Two triangles into a vertex/uv pair. `ribbon` has its own local `quad`, and
  *  the only `quad` in scope out here is a THREE.Mesh — which the stub types are
  *  happy to let you call, and which would have thrown on the first shoulder. */
-function quadInto(V: number[], U: number[], p: number[], uv: number[]): void {
+function quadInto(V: number[], U: number[], p: number[], uv: number[], S?: number[], sm?: number[]): void {
   V.push(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8],
     p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
   U.push(uv[0], uv[1], uv[2], uv[3], uv[4], uv[5], uv[2], uv[3], uv[6], uv[7], uv[4], uv[5]);
+  // The seat mask, if the caller keeps one, in the SAME six-vertex order the
+  // two triangles above are emitted in. Getting this order wrong re-seats the
+  // kerb and welds the toe, which is the failure inverted rather than fixed.
+  if (S && sm) S.push(sm[0], sm[1], sm[2], sm[1], sm[3], sm[2]);
 }
 /**
  * DRAPED WAYS FOLLOW THE GROUND THEY ARE DRAWN ON.
@@ -9662,7 +9685,19 @@ function quadInto(V: number[], U: number[], p: number[], uv: number[]): void {
  * batter uses and for the same reason: at build time the ground is a lie.
  */
 interface Draped { geo: THREE.BufferGeometry; lift: number;
-  x0: number; z0: number; x1: number; z1: number }
+  x0: number; z0: number; x1: number; z1: number;
+  /** ── WHEN ONLY PART OF A MESH FOLLOWS THE GROUND ──
+   *
+   * A drape is a surface lying ON the terrain, so every vertex of it moves when
+   * the terrain does. A BATTER is not: its inboard edge is welded to the kerb
+   * at deck height and must not move an inch, while its outboard edge is
+   * seated on the ground and must. Re-seating one wholesale would fold the
+   * bank flat onto the hillside.
+   *
+   * So a mesh may carry a mask, one byte per vertex, saying which of its
+   * vertices were seated on ground at build time. Absent, everything follows,
+   * which is what every existing drape wants. */
+  seat?: Uint8Array }
 const drapedWays: Draped[] = [];
 /**
  * WHERE THE DRAPES ARE, so a rebuild does not have to ask all of them.
@@ -9736,6 +9771,7 @@ function redrape(t: HeightTile): void {
     const pos = d.geo.attributes.position as THREE.BufferAttribute;
     let touched = false;
     for (let i = 0; i < pos.count; i++) {
+      if (d.seat !== undefined && d.seat[i] !== 1) continue;   // welded, not seated
       const x = pos.getX(i), z = pos.getZ(i);
       if (x < t.xs || z < t.zs || x >= tx1 || z >= tz1) continue;
       pos.setY(i, groundAt(x, z) + d.lift);
@@ -9750,9 +9786,10 @@ function redrape(t: HeightTile): void {
 }
 /** Build the shoulders for every parked kerb inside this tile, against the
  *  ground as it now stands, and retire them. */
-function flushBatter(t: HeightTile): void {
+function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
   if (!vergeFill || !pendingBatter.length) return;
-  const V: number[] = [], U: number[] = [];
+  const V: number[] = [], U: number[] = [], S: number[] = [];
+  let bx0 = Infinity, bz0 = Infinity, bx1 = -Infinity, bz1 = -Infinity;
   const BATT = 0.6;                      // metres of drop per metre out
   // AN EMBANKMENT IS ALLOWED TO BE AN EMBANKMENT. This used to stop at 5m —
   // 3m of drop — and anything steeper than that was declared "the road stands
@@ -9786,11 +9823,26 @@ function flushBatter(t: HeightTile): void {
   for (let i = 0; i < pendingBatter.length; i++) {
     const b = pendingBatter[i];
     const mx = (b.ax + b.bx) / 2, mz = (b.az + b.bz) / 2;
-    if (mx < t.xs || mz < t.zs || mx > t.xs + t.w || mz > t.zs + t.h) {
+    const mine = t !== null && mx >= t.xs && mz >= t.zs && mx <= t.xs + t.w && mz <= t.zs + t.h;
+    // ── OR IT HAS WAITED LONG ENOUGH, AND THE GROUND IS THERE ──
+    //
+    // The tile test alone strands a whole class of kerb. A batter waits for its
+    // terrain tile to REBUILD, because at parking time the carve has not yet
+    // dug the corridor and the ground is a lie. But a tile that was already
+    // settled when the road arrived is never marked dirty by anything, so its
+    // kerbs wait for a rebuild that is not coming — bare fascia, forever, and
+    // no counter anywhere going up. `heightTileAt` is the guard that keeps this
+    // honest: swept early, against ground that has not loaded, it would seat
+    // the bank on the flat 0-fallback and hang it in the sky.
+    const stranded = !mine && sweepBefore > 0 && (b.at ?? 0) < sweepBefore
+      && heightTileAt(mx, mz) !== undefined;
+    if (!mine && !stranded) {
       pendingBatter[kept++] = b;         // not this tile — keep waiting
       continue;
     }
-    const pts: Array<[number, number, number]> = [];
+    if (stranded) spanStats.fillStranded++;
+    // [distance out, left height, right height, left seated?, right seated?]
+    const pts: Array<[number, number, number, number, number]> = [];
     // NEVER OVER ANOTHER ROAD — but a junction is a reason to STOP SHORT, not a
     // reason to draw nothing. This used to `break` out of the whole loop the
     // moment a step landed on somebody else's tarmac, and at a junction the
@@ -9831,7 +9883,10 @@ function flushBatter(t: HeightTile): void {
         spanStats.fillNoGap++; met = true; break;
       }
       const c0 = b.y0 - d * BATT, c1 = b.y1 - d * BATT;
-      pts.push([d, Math.min(b.y0, Math.max(g0, c0)), Math.min(b.y1, Math.max(g1, c1))]);
+      const p0 = Math.min(b.y0, Math.max(g0, c0)), p1 = Math.min(b.y1, Math.max(g1, c1));
+      // Seated where the GROUND is what chose the height — that is the vertex
+      // a later carve moves out from under, and the only one that may follow.
+      pts.push([d, p0, p1, p0 === g0 ? 1 : 0, p1 === g1 ? 1 : 0]);
       if (g0 >= c0 && g1 >= c1) { met = true; break; }   // met the ground
       if (clipped) break;                // ran out of room, not out of slope
     }
@@ -9865,9 +9920,9 @@ function flushBatter(t: HeightTile): void {
       const ex = end ? b.bx : b.ax, ez = end ? b.bz : b.az;
       const nx2 = end ? b.nxB : b.nxA, nz2 = end ? b.nzB : b.nzA;
       const ky = end ? b.y1 : b.y0;
-      let ppx = 0, ppy = ky;
+      let ppx = 0, ppy = ky, pps = 0;
       for (const p of pts) {
-        const d = p[0], y = end ? p[2] : p[1];
+        const d = p[0], y = end ? p[2] : p[1], sd = end ? p[4] : p[3];
         const fa = ppx / 2.2, fb = d / 2.2;
         // A quad with its inboard edge collapsed onto the kerb point: the fan
         // triangle, expressed in the one emitter this file has.
@@ -9876,21 +9931,23 @@ function flushBatter(t: HeightTile): void {
           ex, ky, ez,
           ex + nx2 * fa, ppy, ez + nz2 * fa,
           ex + nx2 * fb, y, ez + nz2 * fb,
-        ], [b.uA, 0, b.uA, 0, b.uA, ppx / 4, b.uA, d / 4]);
-        ppx = d; ppy = y;
+        ], [b.uA, 0, b.uA, 0, b.uA, ppx / 4, b.uA, d / 4], S, [0, 0, pps, sd]);
+        ppx = d; ppy = y; pps = sd;
       }
       spanStats.fillCap++;
     }
-    let px = 0, py0 = b.y0, py1 = b.y1;
-    for (const [d, y0, y1] of pts) {
+    let px = 0, py0 = b.y0, py1 = b.y1, ps0 = 0, ps1 = 0;
+    for (const [d, y0, y1, s0, s1] of pts) {
       const fa = px / 2.2, fb = d / 2.2;
       quadInto(V, U, [
         b.ax + b.nxA * fa, py0, b.az + b.nzA * fa,
         b.bx + b.nxB * fa, py1, b.bz + b.nzB * fa,
         b.ax + b.nxA * fb, y0, b.az + b.nzA * fb,
         b.bx + b.nxB * fb, y1, b.bz + b.nzB * fb,
-      ], [b.uA, px / 4, b.uB, px / 4, b.uA, d / 4, b.uB, d / 4]);
-      px = d; py0 = y0; py1 = y1;
+      ], [b.uA, px / 4, b.uB, px / 4, b.uA, d / 4, b.uB, d / 4], S, [ps0, ps1, s0, s1]);
+      px = d; py0 = y0; py1 = y1; ps0 = s0; ps1 = s1;
+      bx0 = Math.min(bx0, b.ax, b.bx); bx1 = Math.max(bx1, b.ax, b.bx);
+      bz0 = Math.min(bz0, b.az, b.bz); bz1 = Math.max(bz1, b.az, b.bz);
     }
   }
   pendingBatter.length = kept;
@@ -9900,6 +9957,22 @@ function flushBatter(t: HeightTile): void {
   g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(U), 2));
   g.computeVertexNormals();
   worldGroup.add(new THREE.Mesh(g, MAT.verge));
+  // ── AND IT RE-SEATS FROM NOW ON ──
+  //
+  // A batter was a static mesh built against the ground as it stood at that
+  // moment, and the ground does not hold still: the corridor carve digs a
+  // neighbouring road's cutting after the fact and the terrain slides out from
+  // under the bank's outer edge, leaving the hairline crack the audit found
+  // along it. Registered here with a seat mask so the toe follows and the kerb
+  // does not — the outer edge, and nothing else, as the finding asks.
+  //
+  // REACH, not the kerb extent, for the bounds: the toe stands up to sixteen
+  // metres outboard of the kerb line, and a box drawn round the kerbs alone
+  // would exclude the very vertices that need re-seating.
+  const seat = new Uint8Array(S);
+  const d2: Draped = { geo: g, lift: 0, seat,
+    x0: bx0 - REACH, z0: bz0 - REACH, x1: bx1 + REACH, z1: bz1 + REACH };
+  drapedWays.push(d2); indexDrape(d2);
 }
 function flushAprons(): void {
   for (const [v, u, m] of [
@@ -11642,6 +11715,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           const [maX, maZ] = mitreAt(i, sgn);
           const [mbX, mbZ] = mitreAt(i + 1, sgn);
           pendingBatter.push({
+            at: performance.now(),
             ax: ex0, az: ez0, bx: ex1, bz: ez1,
             nxA: maX, nzA: maZ, nxB: mbX, nzB: mbZ,
             y0: ey0, y1: ey1, uA, uB, fid, nm: name,
@@ -11849,30 +11923,51 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       };
       const tR = crossFor(1), tL = crossFor(-1);
       const back = 1.2;
-      const corn: Array<[number, number]> = [
-        [pe.x + pxA * hw2 - pe.ux * back, pe.z + pzA * hw2 - pe.uz * back],
-        [pe.x - pxA * hw2 - pe.ux * back, pe.z - pzA * hw2 - pe.uz * back],
-        [pe.x + pxA * hw2 + pe.ux * tR, pe.z + pzA * hw2 + pe.uz * tR],
-        [pe.x - pxA * hw2 + pe.ux * tL, pe.z - pzA * hw2 + pe.uz * tL],
-      ];
-      const ys = corn.map(([qx, qz]) => {
-        // COVER THE HIGHER DECK. The intruder never warped (its host did not
-        // exist when it built), so the two surfaces can disagree by most of a
-        // metre — and a mask at the wrong height is a mask underneath the
-        // tongue it exists to hide, which is how the first version of this
-        // sweep validated its own log entry and changed nothing on screen.
+      /** COVER THE HIGHER DECK. The intruder never warped — its host did not
+       *  exist when it built — so the two surfaces can disagree by most of a
+       *  metre, and a mask at the wrong height is a mask UNDERNEATH the tongue
+       *  it exists to hide. That is how the first version of this sweep
+       *  validated its own log entry and changed nothing on screen. */
+      const yAt = (qx: number, qz: number): number => {
         const h = roadEdge(qx, qz, pe.fid, pe.nm);
         const o = roadEdge(qx, qz);
         const base = Math.max(h?.y ?? -Infinity, o?.y ?? -Infinity);
         return (Number.isFinite(base) ? base : prof[0]) + lift + 0.03;
-      });
-      // Only the BARLESS half of the mouth texture: a give-way bar belongs at
-      // a mouth the side road still owns, not inside the host's carriageway.
-      const uw = (hw2 * 2) / 6 + 0.3;
-      quad(apron.moV, apron.moUV,
-        [corn[0][0], ys[0], corn[0][1], corn[1][0], ys[1], corn[1][1],
-          corn[2][0], ys[2], corn[2][1], corn[3][0], ys[3], corn[3][1]],
-        [0, 0, uw, 0, 0, 0.5, uw, 0.5]);
+      };
+      // ── THE MASK FOLLOWS THE HOST, INSTEAD OF SPANNING IT ──
+      //
+      // This was ONE quad: four corners, four height samples, and a flat sheet
+      // between them. A carriageway is cambered across and vertical-curved
+      // along, so over a mask that can run 27m up a bend the flat sheet cuts
+      // through the crown in the middle and lifts off the deck at the ends —
+      // the float and the z-fight the audit found. Stepping it every 2m and
+      // sampling the deck at each rung costs a dozen quads at a junction and
+      // makes the patch a surface rather than a lid.
+      //
+      // The two sides run to DIFFERENT distances (tR against tL — the kerb
+      // lines cross the host's edge at different points on a skew junction),
+      // so each rail is parameterised on its own length and the rungs join
+      // equal fractions, which keeps the strip untwisted.
+      const SEG = 2;
+      const rungs = Math.max(1, Math.ceil((Math.max(tR, tL) + back) / SEG));
+      const uw = (hw2 * 2) / 6 + 0.3;     // the BARLESS half of the mouth
+      let prevR: [number, number, number] | null = null, prevL: [number, number, number] | null = null;
+      for (let k = 0; k <= rungs; k++) {
+        const f = k / rungs;
+        const dR = -back + (tR + back) * f, dL = -back + (tL + back) * f;
+        const rx = pe.x + pxA * hw2 + pe.ux * dR, rz = pe.z + pzA * hw2 + pe.uz * dR;
+        const lx = pe.x - pxA * hw2 + pe.ux * dL, lz = pe.z - pzA * hw2 + pe.uz * dL;
+        const R: [number, number, number] = [rx, yAt(rx, rz), rz];
+        const L: [number, number, number] = [lx, yAt(lx, lz), lz];
+        if (prevR && prevL) {
+          quad(apron.moV, apron.moUV,
+            [prevR[0], prevR[1], prevR[2], prevL[0], prevL[1], prevL[2],
+              R[0], R[1], R[2], L[0], L[1], L[2]],
+            [0, ((k - 1) / rungs) * 0.5, uw, ((k - 1) / rungs) * 0.5,
+              0, (k / rungs) * 0.5, uw, (k / rungs) * 0.5]);
+        }
+        prevR = R; prevL = L;
+      }
       spanStats.cropped++;
       if (cropLog.length < 4000) cropLog.push({ x: pe.x, z: pe.z, nm: pe.nm, end: -1, why: 'masked-late', host: at0.nm });
     }
@@ -22887,6 +22982,12 @@ function noteTags(t: Record<string, string>): void {
     nothingAtAll: pct(bare),      // no earth, no barrier: the case that is a bug
     unmarkedGap: band(bareGap),   // …and how far the ground actually is below
     reach: band(near.map((e) => e.reach)),
+    // The two coverage repairs, reported so they can be MEASURED rather than
+    // assumed: kerbs the stranded sweep rescued from a tile that was never
+    // going to rebuild, and how many batter meshes are now following the
+    // ground instead of standing where it used to be.
+    stranded: spanStats.fillStranded,
+    reseating: drapedWays.filter((d) => d.seat !== undefined).length,
     // WHERE the bugs are, not just how many: local coords, deepest first, so
     // the finding can be walked to instead of hunted for.
     bare: near.filter((e) => !e.met && !e.rail && !e.clip && !e.batter)
