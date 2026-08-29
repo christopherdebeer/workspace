@@ -599,6 +599,8 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
       xs: Math.min(wx0, wx1), zs: Math.min(wz0, wz1),
       w: Math.abs(wx1 - wx0), h: Math.abs(wz1 - wz0), data,
     });
+    // New evidence: every climate corner that had none gets one more chance.
+    climStamp++;
     // Terrain built before this arrived was coloured from a guess and, more
     // importantly, has no seabed under its water. Rebuild what this tile
     // covers — staggered by the rebuild throttle, so it costs a few frames
@@ -1051,7 +1053,20 @@ interface Climate {
   /** Metres. See treelineAt. */
   treeline: number;
   elevAbs: number;
+  /** Did cover actually answer here? An entry that had evidence is final; one
+   *  that did not is provisional and re-computed when new cover lands. */
+  hadCover: boolean;
+  /** The cover generation this was computed against. See climStamp. */
+  stamp: number;
 }
+/** Bumped whenever a cover tile lands. A climate corner computed before the
+ *  raster reached it is a guess, and guesses have to be revisited — but they
+ *  must still be CACHED while they stand, which is the whole lesson of the
+ *  first cut of this: refusing to cache an evidence-free corner turned the far
+ *  shell, which lies beyond the loaded raster by construction, into sixty-five
+ *  thousand vertices each recomputing four corners at twenty-five cover
+ *  samples apiece. The world stopped booting. Cache always; expire on news. */
+let climStamp = 0;
 const CLIM_G = 256;              // metres between sampled corners
 const climCache = new Map<number, Climate>();
 /** Cover samples per corner: a 5×5 grid at 150m, so ~600m of neighbourhood.
@@ -1097,32 +1112,28 @@ function climCompute(x: number, z: number): Climate {
   total += boost * (total / CLIM_HOME.length);
   let dom = 0;
   for (let i = 0; i < w.length; i++) { w[i] /= total; if (w[i] > w[dom]) dom = i; }
-  return { w, dom: BIOME_LIST[dom], tempC, moisture, treeline, elevAbs };
+  return { w, dom: BIOME_LIST[dom], tempC, moisture, treeline, elevAbs,
+    hadCover: sampleCover(x, z) !== null, stamp: climStamp };
 }
 function climCorner(gx: number, gz: number): Climate {
   const k = gx * 65536 + gz;
-  let c = climCache.get(k);
-  if (c) return c;
-  const x = gx * CLIM_G, z = gz * CLIM_G;
-  c = climCompute(x, z);
-  // DO NOT FREEZE A GUESS. Cover and DEM arrive over the wire seconds after
-  // the ground they describe is first asked about, and a corner cached before
-  // either landed keeps a temperate-at-sea-level answer forever — the same
-  // trap `vegDeferredAt` was written for, where a razor-edged rectangle of
-  // wrong density the size of a cover tile survived the data that would have
-  // fixed it. Only a corner that had real evidence gets kept.
-  if (sampleCover(x, z) !== null) {
-    if (climCache.size > 6000) climCache.clear();
-    climCache.set(k, c);
-  }
-  return c;
+  const c = climCache.get(k);
+  // A corner that HAD cover is settled. One that did not is kept — it must be,
+  // or the far shell recomputes it per vertex — but only until the next cover
+  // tile lands, at which point it is asked again, once.
+  if (c && (c.hadCover || c.stamp === climStamp)) return c;
+  const fresh = climCompute(gx * CLIM_G, gz * CLIM_G);
+  if (climCache.size > 6000) climCache.clear();
+  climCache.set(k, fresh);
+  return fresh;
 }
 /** Shared scratch — `climateAt` returns THIS OBJECT, so read what you need and
  *  do not retain it across another call. The same convention `groundTintMemo`
  *  and `swardCol` already use, for the same reason: this is called per terrain
  *  vertex and per sward texel, and an allocation there is a garbage collection
  *  in the middle of a build. */
-const climScratch: Climate = { w: [0, 0, 0, 0, 0], dom: BIOMES.temperate, tempC: 12, moisture: 0.5, treeline: 2000, elevAbs: 0 };
+const climScratch: Climate = { w: [0, 0, 0, 0, 0], dom: BIOMES.temperate, tempC: 12, moisture: 0.5,
+  treeline: 2000, elevAbs: 0, hadCover: false, stamp: 0 };
 /**
  * The climate at a point, BILINEARLY INTERPOLATED between cached corners.
  *
