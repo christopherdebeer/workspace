@@ -24655,12 +24655,17 @@ const audio = (() => {
      *  much as the truck lets them be. `gusty` shifts the rustle's colour;
      *  birds are PHRASES, not a loop: a few whistled notes, spaced by how
      *  alive the spot is. */
-    ambience(rustle: number, river: number, birds: number, gusty: number): void {
+    ambience(rustle: number, river: number, birds: number, gusty: number, froth = 0): void {
       if (!ctx || !master || !rustleGain || ctx.state !== 'running') return;
       const t = ctx.currentTime;
       rustleGain.gain.setTargetAtTime(rustle * 0.14, t, 0.5);
       rustleFilt.frequency.setTargetAtTime(1300 + gusty * 900, t, 0.8);
-      riverGain.gain.setTargetAtTime(river * 0.2, t, 0.6);
+      // `froth` is the water's CHARACTER, from the same probes that found
+      // it: 0 is still water lapping low and wide, 1 is rapids — brighter,
+      // narrower, and a shade louder for the same nearness.
+      riverGain.gain.setTargetAtTime(river * (0.16 + froth * 0.12), t, 0.6);
+      riverFilt.frequency.setTargetAtTime(340 + froth * 520, t, 0.9);
+      riverFilt.Q.setTargetAtTime(0.8 - froth * 0.3, t, 0.9);
       if (on && birds > 0.03) {
         const nowP = performance.now();
         if (nowP > birdAt) {
@@ -25629,7 +25634,7 @@ let engineCrankUntil = 0, engineStillS = 0;
 // numbers the mixer was handed.
 let dbgAmb: Record<string, unknown> = {};
 (window as unknown as { __amb?: object }).__amb = (): object => dbgAmb;
-let ambSampledAt = 0, ambRiverL = 0, ambVegL = 0;
+let ambSampledAt = 0, ambRiverL = 0, ambVegL = 0, ambFrothL = 0;
 let dbgSusp: object = {};
 // A shade over 9.81. Real gravity left long climbs feeling weightless once the
 // truck has 16m/s^2 of thrust to spend against it; this gives a hill enough
@@ -26915,13 +26920,26 @@ function tick(now: number): void {
   // — it was always there; the idle was on top of it.
   if (nowMs - ambSampledAt > 500) {
     ambSampledAt = nowMs;
-    let wet = 0;
+    // THE RULE (the owner's): the bed plays what is ACTUALLY THERE, never a
+    // biome guess. Each water probe brings back depth AND current, so the
+    // one ring tells three truths — still water (a lake, the sea) laps low
+    // and wide, a river runs mid, and fast water over the rapids' own
+    // boulder grid froths bright. Birds and rustle already answer to this
+    // cell's real foliage the same way.
+    let wet = 0, flow = 0;
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2;
-      if (waterInfoAt(state.x + Math.sin(a) * 24, state.z + Math.cos(a) * 24).depth > 0.06) wet++;
+      const wi = waterInfoAt(state.x + Math.sin(a) * 24, state.z + Math.cos(a) * 24);
+      if (wi.depth > 0.06) { wet++; flow = Math.max(flow, wi.speed); }
     }
     ambRiverL = clamp(wet / 3 + (surfKind === 'water' ? 0.4 : 0), 0, 1);
-    const sites = vegGrid.get(`${Math.floor(state.x / VEG_CELL)},${Math.floor(state.z / VEG_CELL)}`) ?? [];
+    const cxA = Math.floor(state.x / VEG_CELL), czA = Math.floor(state.z / VEG_CELL);
+    let rap = 0;
+    for (let ox = -1; ox <= 1; ox++) {
+      for (let oz = -1; oz <= 1; oz++) rap += (rapidRocks.get(`${cxA + ox},${czA + oz}`) ?? []).length;
+    }
+    ambFrothL = wet > 0 || surfKind === 'water' ? clamp(flow / 2.2 + rap / 6, 0, 1) : 0;
+    const sites = vegGrid.get(`${cxA},${czA}`) ?? [];
     let fol = 0;
     for (const s of sites) if (s.k !== 'rock' && s.k !== 'spire') fol++;
     ambVegL = clamp(fol / 12, 0, 1);
@@ -26933,9 +26951,9 @@ function tick(now: number): void {
     river: +(ambRiverL * (0.35 + 0.65 * bed)).toFixed(3),
     birds: +((sunAlt > 0.06 ? 1 : 0) * (1 - wxL.rain) * ambVegL * bed).toFixed(3),
     wind: +windAmb.toFixed(2), veg: +ambVegL.toFixed(2), riverRaw: +ambRiverL.toFixed(2),
-    engine: engineSt, brush: +brushAmt.toFixed(2),
+    froth: +ambFrothL.toFixed(2), engine: engineSt, brush: +brushAmt.toFixed(2),
   };
-  audio.ambience(dbgAmb.rustle as number, dbgAmb.river as number, dbgAmb.birds as number, windAmb);
+  audio.ambience(dbgAmb.rustle as number, dbgAmb.river as number, dbgAmb.birds as number, windAmb, ambFrothL);
   audio.update(state.speed, throttle, surfKind, groundedF, wxL.rain, engRev, engGear, skid,
     surfKind === 'water' ? 0 : surfQ, wheelSlipL, windAmb,
     engineSt === 'on' ? 1 : engineSt === 'crank' ? 0.35 : 0);
