@@ -15,6 +15,10 @@ const SPOTS = {
   // Where the reported "blocky patches" screenshot was taken — daylight here
   // rather than the reported night shot, so patch SHAPE reads clearly.
   bigsur: 'lat=36.2935&lon=-121.8470&h=158&cam=chase&wx=clear&t=NOON&sunalt=55',
+  // DOWN IN THE GRASS, where a flower is big enough on screen to show whether
+  // it has a stem and a head or is just a coloured blade. The shape question
+  // cannot be settled from a hillside away.
+  close: 'lat=36.2884&lon=-121.8272&h=99&cam=cab&wx=clear&t=NOON&sunalt=55',
 };
 const which = process.argv[2] ?? 'meadow';
 const d = await openDrive({ spot: SPOTS[which] ?? SPOTS.meadow, tag: `flower-${which}`, settle: 45000 });

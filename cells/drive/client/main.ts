@@ -5163,6 +5163,14 @@ const VEG_CAP: Record<VegKind, number> = { broadleaf: 1600, conifer: 1400, palm:
 // better match for the art.
 function grassGeo(): THREE.BufferGeometry {
   const v: number[] = [];
+  // WHICH OF THE THREE CARDS a vertex belongs to. Grass never reads it; the
+  // GPU sward's FLOWER branch does, and cannot do its job without it. A
+  // flower is not a differently-coloured tuft, it is a STEM WITH A HEAD ON
+  // IT — so card 0 becomes the stem and cards 1 and 2 are lifted to its top
+  // and splayed into petals. Deriving that from position alone is not
+  // possible: the three cards differ only by a rotation the shader cannot
+  // invert, so the index travels with the vertex.
+  const blade: number[] = [];
   for (let b = 0; b < 3; b++) {
     const a = (b / 3) * Math.PI * 2 + 0.7;
     const dx = Math.cos(a), dz = Math.sin(a);
@@ -5173,9 +5181,11 @@ function grassGeo(): THREE.BufferGeometry {
     const w = 0.028, h = 0.40 + (b % 2) * 0.22, lean = 0.14;
     // A base edge across the blade, tapering to a tip that leans outward.
     v.push(dz * w, 0, -dx * w, -dz * w, 0, dx * w, dx * lean, h, dz * lean);
+    blade.push(b, b, b);
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
+  g.setAttribute('aBlade', new THREE.Float32BufferAttribute(blade, 1));
   g.computeVertexNormals();
   return g;
 }
@@ -6376,6 +6386,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', `#include <common>
         attribute float aId;
+        attribute float aBlade;
         uniform sampler2D uField; uniform sampler2D uSwardCol; uniform sampler2D uSwardMask;
         uniform vec2 uFieldOrg; uniform float uFieldW;
         uniform vec2 uBase; uniform vec2 uBaseI; uniform float uStep; uniform float uSide;
@@ -6505,7 +6516,10 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         float sClumpN = swNoise(sCell / 34.0);
         float sClumpChance = smoothstep(sFlowerRate * 1.4, sFlowerRate * 0.3, sClumpN);
         float sH4 = swHash(sKey * 3.3 + 47.1);
-        bool sIsFlower = sH4 < sClumpChance * 0.5;
+        // A THIRD OF A FLOWERING PATCH, not half of it. At 0.5 the reported
+        // hillside came up a solid wash of colour; a meadow in bloom is still
+        // mostly grass, with the flowers standing up THROUGH it.
+        bool sIsFlower = sH4 < sClumpChance * 0.3;
         // ONE SPECIES PER PATCH, not per blade — a drift of buttercups reads
         // as a drift because every blade in it agrees on the flower, and the
         // patch-scale key (same cell swNoise reads) is what makes neighbouring
@@ -6569,23 +6583,45 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // narrower the range of heights that could exist at all. One hash
         // cannot be a coin flip and a measurement at the same time.
         float sSize = swHash(sCell * 4.3 + 61.7);
-        // ── THE GEOMETRY ITSELF IS PROCEDURAL, NOT JUST THE COLOUR ──
+        // ── A FLOWER IS A STEM WITH A HEAD, NOT A COLOURED BLADE ──
         //
-        // A flower was a recoloured blade at first — same card, different
-        // paint — and it showed: from the cab a fleck of colour on a spike is
-        // still a spike. grassGeo's base vertices sit at y=0 and its tip at
-        // y=h, so the tip is the one thing every blade shares and the one
-        // thing worth deforming. And it deforms BY SPECIES, not by one fixed
-        // amount: three of them meeting at a shared base can flare wide and
-        // squash short into a daisy-like fleck, or barely flare at all into a
-        // taller spike — the same shared card giving two different silhouettes
-        // depending on which flower is standing there. Grass blades never
-        // touch this branch, so the shape cost is paid only where a flower
-        // actually stands.
+        // Twice reported and twice under-fixed. First a flower was a blade in
+        // a different colour; then its tip was flared and its colour ramped
+        // up the blade — and from the cab both still read as GRASS, because
+        // the silhouette never changed. A blade is 0.028 wide against 0.4
+        // tall; flaring that by two and a half still leaves a needle, and a
+        // colour ramp along a needle is a needle with a gradient on it.
+        //
+        // So the three cards stop being three blades and become a PLANT.
+        // Card 0 is the stem: narrowed, raised, and left green. Cards 1 and 2
+        // are lifted clear of the ground to the top of that stem and splayed
+        // outward into stubby petals — a head about six times the stem's
+        // width and a tenth of a metre across, carried at stem height. Two
+        // petals 120 degrees apart give a lobed blob from any bearing, which
+        // at this pixel scale is exactly what a flower head is. The geometry
+        // is the same nine vertices either way: nothing is added, the cards
+        // are simply put somewhere else when a flower is standing there.
         vec3 sPosL = position;
-        if (sIsFlower && sPosL.y > 0.01) {
-          vec2 sBloomShape = sSpecies < 0.5 ? vec2(2.6, 0.62) : sSpecies < 1.5 ? vec2(1.9, 0.8) : vec2(1.4, 1.0);
-          sPosL.x *= sBloomShape.x; sPosL.z *= sBloomShape.x; sPosL.y *= sBloomShape.y;
+        if (sIsFlower) {
+          float sTip = step(0.01, position.y);
+          if (aBlade < 0.5) {
+            // THE STEM. Thin, and taller than the tuft around it so the head
+            // clears the grass instead of hiding in it.
+            sPosL.x *= 0.5; sPosL.z *= 0.5; sPosL.y *= 1.5;
+          } else {
+            // THE HEAD. Base edge splayed wide, tip pulled in and lifted, the
+            // whole triangle carried up to the stem's top — so it reads as a
+            // bloom sitting on the stem rather than a blade leaving the
+            // ground. Species picks how wide and how tall the head sits: a
+            // low broad daisy, a rounder middle, a tight upright spike.
+            // Y IS PINNED UNDER THE STEM'S OWN TOP (card 0 is 0.40 tall and
+            // raised 1.5x, so 0.60), not chosen freely — a head sitting above
+            // the height its stem reaches is a bloom hovering in mid-air.
+            vec2 sHead = sSpecies < 0.5 ? vec2(2.9, 0.50) : sSpecies < 1.5 ? vec2(2.2, 0.53) : vec2(1.6, 0.56);
+            sPosL.x = position.x * (sTip > 0.5 ? 0.5 : sHead.x);
+            sPosL.z = position.z * (sTip > 0.5 ? 0.5 : sHead.x);
+            sPosL.y = sHead.y + sTip * 0.09;
+          }
         }
         // AND THEY GROW HARDER THAN THEY DID. With the ground density falling
         // as the square of range, coverage would fall with it unless the blades
@@ -6649,27 +6685,32 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         vec3 sMixed = mix(mix(uSwardTint, sGround, uSwardMatch), sGround, sMix);
         vSward = mix(vec3(1.0), (0.82 + 0.36 * sV)
           * vec3(0.96 + 0.08 * sWarm, 1.0, 0.92 + 0.12 * (1.0 - sWarm)), uSwardVary) * sMixed;
-        // FLOWER COLOUR. sIsFlower, sCtx and sSpecies were decided up at sD,
-        // ahead of sLp, because the geometry needed them too — see the bloom
-        // flare above. Here they only pick the paint, and only the TIP wears
-        // it: a real flower is mostly green — stem and leaf — with the colour
-        // arriving at the top, not a blade dyed end to end. position.y is 0
-        // at every base corner and h at the tip (see grassGeo), so weighting
-        // by it and leaving vSward a VARYING does the gradient for free — the
-        // rasteriser interpolates green-at-base to bloom-at-tip across each
-        // triangle, no extra vertices, no extra pass.
+        // FLOWER COLOUR, AND ONLY ON THE HEAD. sIsFlower, sCtx and sSpecies
+        // were decided up at sD because the geometry above needed them too.
+        //
+        // The paint follows the plant: the STEM (card 0) stays green — a
+        // little greener and cooler than the dry sward around it, the way a
+        // living stalk stands out among cured grass — and the HEAD (cards 1
+        // and 2, now up at the top) takes the species colour outright. That
+        // split is why this reads as a flower at last: an earlier version
+        // ramped the colour up each blade, which the rasteriser dutifully
+        // interpolated into grass with a gradient on it. Per-card and flat is
+        // the whole point.
         if (sIsFlower) {
-          vec3 sFlow = sCtx > 3.5
-            ? (sSpecies < 0.5 ? uFlowRuin0 : sSpecies < 1.5 ? uFlowRuin1 : uFlowRuin2)
-            : sCtx > 2.5
-              ? (sSpecies < 0.5 ? uFlowCliff0 : sSpecies < 1.5 ? uFlowCliff1 : uFlowCliff2)
-              : sCtx > 1.5
-                ? (sSpecies < 0.5 ? uFlowWater0 : sSpecies < 1.5 ? uFlowWater1 : uFlowWater2)
-                : sCtx > 0.5
-                  ? (sSpecies < 0.5 ? uFlowWood0 : sSpecies < 1.5 ? uFlowWood1 : uFlowWood2)
-                  : (sSpecies < 0.5 ? uFlowOpen0 : sSpecies < 1.5 ? uFlowOpen1 : uFlowOpen2);
-          float sTipW = step(0.01, position.y);
-          vSward = mix(vSward, sFlow * (0.85 + 0.3 * sV), sTipW * 0.88);
+          if (aBlade < 0.5) {
+            vSward *= vec3(0.80, 1.06, 0.74);
+          } else {
+            vec3 sFlow = sCtx > 3.5
+              ? (sSpecies < 0.5 ? uFlowRuin0 : sSpecies < 1.5 ? uFlowRuin1 : uFlowRuin2)
+              : sCtx > 2.5
+                ? (sSpecies < 0.5 ? uFlowCliff0 : sSpecies < 1.5 ? uFlowCliff1 : uFlowCliff2)
+                : sCtx > 1.5
+                  ? (sSpecies < 0.5 ? uFlowWater0 : sSpecies < 1.5 ? uFlowWater1 : uFlowWater2)
+                  : sCtx > 0.5
+                    ? (sSpecies < 0.5 ? uFlowWood0 : sSpecies < 1.5 ? uFlowWood1 : uFlowWood2)
+                    : (sSpecies < 0.5 ? uFlowOpen0 : sSpecies < 1.5 ? uFlowOpen1 : uFlowOpen2);
+            vSward = sFlow * (0.85 + 0.3 * sV);
+          }
         }`)
       // The blade is placed in WORLD metres, and the mesh sits at the origin
       // with an identity matrix, so object space already is world space.
@@ -6764,6 +6805,9 @@ const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side, blend], bi) => {
   const src = grassGeo();
   geo.setAttribute('position', src.getAttribute('position'));
   geo.setAttribute('normal', src.getAttribute('normal'));
+  // Which card each vertex belongs to — the flower branch builds a stem and a
+  // head out of them. See grassGeo.
+  geo.setAttribute('aBlade', src.getAttribute('aBlade'));
   // aId RATHER THAN gl_InstanceID: the id is wanted in the vertex shader and
   // an attribute works whatever GLSL version three settles on, at 4 bytes a
   // slot. It also gives InstancedBufferGeometry something to count.
