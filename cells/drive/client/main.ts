@@ -2196,6 +2196,21 @@ function xrayWire(now: number): void {
 (window as unknown as { __sceneList?: object }).__sceneList = (): object =>
   scene.children.map((o) => ({ n: o.name || o.type, vis: o.visible,
     kids: (o as THREE.Group).children?.length ?? 0 }));
+/** Name what is DRAWN at a screen point: a ray through the camera, the
+ *  first hits back with names — for chasing a wrong pixel to its object.
+ *  nx/ny are NDC (-1..1, y up). */
+const pickRay = new THREE.Raycaster();
+(window as unknown as { __pick?: object }).__pick = (nx: number, ny: number): object => {
+  pickRay.setFromCamera(new THREE.Vector2(nx, ny), camera);
+  pickRay.params.Points = { threshold: 4 };
+  const hits = pickRay.intersectObjects(scene.children, true);
+  return hits.slice(0, 3).map((h) => ({
+    n: h.object.name || h.object.type,
+    p: h.object.parent?.name || h.object.parent?.type || '',
+    d: Math.round(h.distance),
+    m: (h.object as THREE.Mesh).material ? ((h.object as THREE.Mesh).material as THREE.Material).type : '',
+  }));
+};
 (window as unknown as { __matShow?: object }).__matShow = (name: string, on: boolean): number => {
   let n = 0;
   scene.traverse((o) => {
