@@ -24364,7 +24364,7 @@ function updateCps(): void {
 /** What the truck HIT, material and all — kept regardless of whether the
  *  audio context is armed, because the harness verifies with this list what
  *  an ear cannot: that a rail clangs, a rock crunches, a façade crashes. */
-type ImpactKind = 'shell' | 'metal' | 'stone';
+type ImpactKind = 'shell' | 'metal' | 'stone' | 'wood';
 const impactLog: Array<{ t: number; kind: ImpactKind; force: number }> = [];
 (window as unknown as { __impacts?: object }).__impacts = (): object => impactLog.slice(-25);
 const audio = (() => {
@@ -24378,6 +24378,7 @@ const audio = (() => {
   let waterGain: GainNode, waterFilt: BiquadFilterNode;
   let rustleGain: GainNode, rustleFilt: BiquadFilterNode;
   let riverGain: GainNode, riverFilt: BiquadFilterNode;
+  let brushGain: GainNode, brushFilt: BiquadFilterNode;
   let crashAt = 0, creakAt = 0;   // one-shot cooldowns — a scrape is not a drum roll
   let birdAt = 0;                 // next phrase, spaced by how alive the spot is
   let noiseBuf: AudioBuffer;
@@ -24477,6 +24478,14 @@ const audio = (() => {
     riverFilt.frequency.value = 470; riverFilt.Q.value = 0.8;
     riverGain = ctx.createGain(); riverGain.gain.value = 0;
     rvSrc.connect(riverFilt); riverFilt.connect(riverGain); riverGain.connect(master); rvSrc.start();
+    // Brush: FOLIAGE ON THE BODYWORK — higher and thinner than the rustle
+    // bed, because these leaves are against the panels, not across the
+    // valley. Gain rides contact + speed like the scrape it is cousin to.
+    const brSrc = ctx.createBufferSource(); brSrc.buffer = noiseBuf; brSrc.loop = true;
+    brushFilt = ctx.createBiquadFilter(); brushFilt.type = 'bandpass';
+    brushFilt.frequency.value = 2400; brushFilt.Q.value = 0.7;
+    brushGain = ctx.createGain(); brushGain.gain.value = 0;
+    brSrc.connect(brushFilt); brushFilt.connect(brushGain); brushGain.connect(master); brSrc.start();
   };
   const arm = (): void => {
     // ── MUTED MEANS NO CONTEXT AT ALL ──
@@ -24892,6 +24901,43 @@ const audio = (() => {
     },
     /** Continuous channels, set every frame from tick like everything in
      *  update(): 0 releases them. */
+    /** Foliage against the panels, continuous like scrape — 0 releases it. */
+    brush(level: number): void {
+      if (!ctx || !brushGain) return;
+      const t = ctx.currentTime;
+      brushGain.gain.setTargetAtTime(Math.min(level, 1) * 0.17, t, 0.07);
+      brushFilt.frequency.setTargetAtTime(2000 + Math.min(level, 1) * 900, t, 0.1);
+    },
+    /** One stem giving way. Woody is a TRUNK — a knock with a snap on top,
+     *  the sound of the bull bar finding the one hard thing in the hedge;
+     *  leafy is a whip of twigs dragged over the roof. */
+    whip(force: number, woody: boolean): void {
+      if (force >= 0.2 && woody) {
+        impactLog.push({ t: Math.round(performance.now()), kind: 'wood', force: +clamp(force, 0, 1).toFixed(2) });
+        if (impactLog.length > 60) impactLog.shift();
+      }
+      if (!ctx || !master || ctx.state !== 'running' || !on) return;
+      const t = ctx.currentTime;
+      const f = clamp(force, 0, 1);
+      if (woody) {
+        const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+        const bp = ctx.createBiquadFilter(); bp.type = 'bandpass';
+        bp.frequency.value = 150 + Math.random() * 70; bp.Q.value = 5;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.12 + f * 0.22, t);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
+        src.connect(bp); bp.connect(g); g.connect(master);
+        src.start(t); src.stop(t + 0.2);
+      }
+      const snap = ctx.createBufferSource(); snap.buffer = noiseBuf; snap.loop = true;
+      const hp = ctx.createBiquadFilter(); hp.type = 'highpass';
+      hp.frequency.value = woody ? 1300 : 1700;
+      const g2 = ctx.createGain();
+      g2.gain.setValueAtTime((woody ? 0.1 : 0.05) + f * 0.1, t);
+      g2.gain.exponentialRampToValueAtTime(0.0001, t + (woody ? 0.06 : 0.13));
+      snap.connect(hp); hp.connect(g2); g2.connect(master);
+      snap.start(t); snap.stop(t + 0.16);
+    },
     /** `bright` is the MATERIAL under the bodywork: 0.35 is concrete and
      *  masonry, 1 is a steel rail — the same drag reads as a grind on one
      *  and a screech on the other. */
@@ -26294,6 +26340,7 @@ function tick(now: number): void {
   // a graze straight along the barrier, 1 is driving into it head-on.
   let scrape = -1;
   let scrapeMetal = false;      // what the bodywork is against: rail or masonry
+  let brushAmt = 0;             // foliage on the bodywork this frame, from the veg walk
   const nowMs = performance.now();
   for (let pass = 0; pass < 2 && !real.on; pass++) {
     const walls = wallGrid.get(gkey(state.x, state.z));
@@ -26413,7 +26460,36 @@ function tick(now: number): void {
     const zs = lz < 6 ? [cz0 - 1, cz0] : lz > VEG_CELL - 6 ? [cz0, cz0 + 1] : [cz0];
     for (const gx of xs) for (const gz of zs) {
       for (const site of vegGrid.get(`${gx},${gz}`) ?? []) {
-        if (site.k !== 'rock' && site.k !== 'spire') continue;
+        if (site.k !== 'rock' && site.k !== 'spire') {
+          // ── VEGETATION IS NOT A WALL, AND NOT NOTHING ── driving into a
+          // stand costs DRAG, not an impact: crowns and bushes brush the
+          // panels (accumulated here, spent as friction and a leaf hiss
+          // below), twigs whip the roof now and then, and the one hard
+          // thing in the hedge — a TRUNK — knocks: a bite of speed, a
+          // scratch, a wooden knock, and you are past it. Nothing pushes
+          // back; logs stay ground clutter the suspension already reads.
+          if (site.k !== 'log') {
+            const wideV = site.s * Math.max(1, site.sw ?? 1);
+            const dV = Math.hypot(site.x - state.x, site.z - state.z);
+            const trunked = (site.h ?? 0) > 0 || site.k === 'snag';
+            if (trunked && dV < CAR_R + 0.45 * site.s) {
+              if (site.hit === undefined || nowMs - site.hit > 900) {
+                site.hit = nowMs;
+                const v = Math.abs(state.speed);
+                state.speed *= 0.86;
+                rig.hull = clamp(rig.hull - 0.002 * Math.min(1, v / 12), 0, 1);
+                audio.whip(clamp(v / 12, 0.2, 1), true);
+              }
+            } else if (dV < CAR_R + wideV * 0.8) {
+              brushAmt += site.k === 'bush' || site.k === 'fern' ? 0.5 : 0.3;
+              if ((site.hit === undefined || nowMs - site.hit > 700) && Math.random() < 0.35) {
+                site.hit = nowMs;
+                audio.whip(clamp(Math.abs(state.speed) / 16, 0.1, 0.7), false);
+              }
+            }
+          }
+          continue;
+        }
         // THE SHAPE IS THE HAZARD, now that stones have shapes. Reach is the
         // widest horizontal half-span, and the bite is what STANDS UP: a
         // tabular slab is something you ride over with a bang, a standing
@@ -26446,6 +26522,9 @@ function tick(now: number): void {
       }
     }
   }
+  // Foliage DRAG, not collision: the stand costs speed smoothly and never
+  // pushes back — capped so even a thicket is a slog, not a wall.
+  if (brushAmt > 0) state.speed *= Math.exp(-0.5 * Math.min(brushAmt, 2) * dt);
   // THE CHECKPOINT LANDS AFTER THE STEP THAT EARNED IT, and before the body is
   // laid on the terrain — so a corrected position gets its suspension resolved
   // this frame rather than showing one frame of the truck in the old attitude.
@@ -26854,7 +26933,7 @@ function tick(now: number): void {
     river: +(ambRiverL * (0.35 + 0.65 * bed)).toFixed(3),
     birds: +((sunAlt > 0.06 ? 1 : 0) * (1 - wxL.rain) * ambVegL * bed).toFixed(3),
     wind: +windAmb.toFixed(2), veg: +ambVegL.toFixed(2), riverRaw: +ambRiverL.toFixed(2),
-    engine: engineSt,
+    engine: engineSt, brush: +brushAmt.toFixed(2),
   };
   audio.ambience(dbgAmb.rustle as number, dbgAmb.river as number, dbgAmb.birds as number, windAmb);
   audio.update(state.speed, throttle, surfKind, groundedF, wxL.rain, engRev, engGear, skid,
@@ -26865,6 +26944,7 @@ function tick(now: number): void {
   audio.scrape(scrape >= 0 && Math.abs(state.speed) > 1.5
     ? clamp(Math.abs(state.speed) / 22, 0.15, 1) * (0.4 + 0.6 * Math.max(0, scrape)) : 0,
   scrapeMetal ? 1 : 0.35);
+  audio.brush(clamp(brushAmt, 0, 1.6) * clamp(Math.abs(state.speed) / 9, 0.15, 1));
   audio.water(surfKind === 'water' && groundedF > 0.2 ? clamp(Math.abs(state.speed) / 11, 0.12, 1) : 0);
   if (surfKind === 'water' && prevSurfKind !== 'water' && Math.abs(state.speed) > 3) {
     // The slap scales with what you drove into as well as how fast: a ford
