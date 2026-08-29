@@ -16565,9 +16565,16 @@ const rainMat = new THREE.ShaderMaterial({
   vertexShader: `
     uniform float uAmt; varying float vA;
     void main(){
-      vA = uAmt;
       vec4 mv = modelViewMatrix * vec4(position, 1.0);
-      gl_PointSize = max(1.0, 2.5 * (40.0 / max(-mv.z, 1.0)));
+      // A DROP AT THE LENS IS NOT A DROP ON THE GLASS. The size ran 1/z with
+      // z clamped at one metre, so anything falling past the camera bloomed
+      // to a ~100px sprite — which a storm's light and a coarse palette
+      // dithered into big black squares jittering about the screen
+      // (photographed at Val Müstair; the pick grid named the rain box).
+      // Capped hard, and drops inside two metres fade out instead of
+      // arriving on the sensor.
+      vA = uAmt * clamp((-mv.z - 0.6) / 1.6, 0.0, 1.0);
+      gl_PointSize = max(1.0, min(2.5 * (40.0 / max(-mv.z, 1.0)), 18.0));
       gl_Position = projectionMatrix * mv;
     }`,
   fragmentShader: `
