@@ -5506,6 +5506,76 @@ const STONE_MIX: Record<string, number[]> = {
   boreal: [5, 1, 0, 3, 1, 2],
   alpine: [6, 3, 1, 2, 0, 3],
 };
+/**
+ * WHAT BLOOMS WHERE. The sward's colour so far has been the ground's own —
+ * biome and cover, faithfully — with no life of its own on top. Five
+ * habitats within a biome grow different flowers for the same reason five
+ * habitats grow different trees: [open meadow, woodland floor, water's edge,
+ * cliff/scree, among ruins]. Index order matches SwardCtx below and the
+ * shader's own branch on it.
+ *
+ * One colour per habitat, not a species list — the sward draws a fleck of
+ * hue at this pixel scale, not a bloom anyone could name from the cab. The
+ * habitat is what the eye is actually meant to read: gold at a mountain
+ * tarn, magenta over a fallen wall, violet under the pines.
+ */
+const FLOWER_PAL: Record<string, [number, number, number][]> = {
+  temperate: [[0.80, 0.70, 0.12], [0.42, 0.38, 0.75], [0.45, 0.62, 0.85], [0.85, 0.45, 0.55], [0.78, 0.30, 0.55]],
+  arid: [[0.85, 0.55, 0.15], [0.90, 0.85, 0.65], [0.85, 0.35, 0.45], [0.75, 0.15, 0.15], [0.70, 0.25, 0.20]],
+  tropical: [[0.85, 0.25, 0.45], [0.85, 0.30, 0.10], [0.55, 0.45, 0.80], [0.80, 0.70, 0.85], [0.80, 0.15, 0.55]],
+  boreal: [[0.65, 0.35, 0.55], [0.85, 0.80, 0.82], [0.80, 0.70, 0.75], [0.75, 0.40, 0.50], [0.60, 0.30, 0.60]],
+  alpine: [[0.35, 0.45, 0.75], [0.55, 0.50, 0.78], [0.85, 0.75, 0.20], [0.88, 0.86, 0.80], [0.85, 0.60, 0.20]],
+};
+/** SwardCtx: which habitat a sward field texel stands in — open/woodland/
+ *  water/cliff/ruin, in FLOWER_PAL's index order. Priority when more than one
+ *  applies (a ruin under trees, a cliff at a shoreline): structure first —
+ *  it is the rarest and the one worth noticing — then water, then slope,
+ *  then canopy, with open meadow the default everything else falls to. */
+const SwardCtx = { Open: 0, Wood: 1, Water: 2, Cliff: 3, Ruin: 4 } as const;
+type SwardCtx = typeof SwardCtx[keyof typeof SwardCtx];
+const SWARD_STRUCT_R = 14;    // metres to a wall/ruin that still reads as "at it"
+const SWARD_WATER_R = 9;      // metres beyond a channel's edge that is still "at the water"
+const SWARD_CLIFF_SLOPE = 0.5;  // rise/run past which the ground reads as scree, not turf
+/** Is there a building or ruin wall standing near (x,z)? Rails excluded — a
+ *  guard rail runs beside every cliff road in the world and would make
+ *  "near a structure" mean "near a road" instead. */
+function nearStructure(x: number, z: number, r: number): boolean {
+  const c = Math.ceil(r / GRID);
+  const cx = Math.floor(x / GRID), cz = Math.floor(z / GRID);
+  for (let ax = cx - c; ax <= cx + c; ax++) for (let az = cz - c; az <= cz + c; az++) {
+    for (const w of wallGrid.get(`${ax},${az}`) ?? []) {
+      if (w.sl) continue;
+      if (Math.hypot(x - w.ax, z - w.az) <= r || Math.hypot(x - w.bx, z - w.bz) <= r) return true;
+    }
+  }
+  return false;
+}
+/** Is (x,z) within `r` of a watercourse's edge — inside it counts too, since
+ *  nothing draws there anyway. Closest point on the segment, the same
+ *  projection channelAt uses, because a long straight reach makes the
+ *  endpoints a bad stand-in for "near this river". */
+function nearWaterway(x: number, z: number, r: number): boolean {
+  if (!channelGrid.size) return false;
+  const cx = Math.floor(x / GRID), cz = Math.floor(z / GRID);
+  for (let ax = cx - 1; ax <= cx + 1; ax++) for (let az = cz - 1; az <= cz + 1; az++) {
+    for (const c of channelGrid.get(`${ax},${az}`) ?? []) {
+      const dx = c.bx - c.ax, dz = c.bz - c.az;
+      const t = clamp(((x - c.ax) * dx + (z - c.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+      if (Math.hypot(x - (c.ax + dx * t), z - (c.az + dz * t)) - c.hw <= r) return true;
+    }
+  }
+  return false;
+}
+/** Which habitat this sward texel stands in — see SwardCtx. `cv` and `slope`
+ *  are already in hand at the sward's own call site; the structure and
+ *  waterway checks are the only new cost, and both are bounded grid scans. */
+function swardCtxAt(x: number, z: number, cv: number | null, slope: number): SwardCtx {
+  if (nearStructure(x, z, SWARD_STRUCT_R)) return SwardCtx.Ruin;
+  if (cv === COVER.wetland || cv === COVER.mangrove || nearWaterway(x, z, SWARD_WATER_R)) return SwardCtx.Water;
+  if (slope > SWARD_CLIFF_SLOPE) return SwardCtx.Cliff;
+  if (cv === COVER.tree) return SwardCtx.Wood;
+  return SwardCtx.Open;
+}
 // Thickets per VEG_CELL by land-cover class. The point of the spread is that
 // the ground now differs from itself: a forest cell and the ploughed field
 // beside it are 18 and 1, where before both took the biome's single number.
@@ -5978,6 +6048,13 @@ const swardU = {
   // The outermost fade's END, not a band's reach: everything past this is
   // cut hard, so it has to sit beyond the last fade rather than inside it.
   uGReach: { value: 360 },
+  // FLOWER COLOUR, one per SwardCtx entry, refreshed from FLOWER_PAL whenever
+  // the biome is read (see swardFrame) — five named uniforms rather than an
+  // array uniform, since nothing else in this shader uses one and a fifth
+  // named field costs nothing a lookup table would not.
+  uFlowOpen: { value: new THREE.Color() }, uFlowWood: { value: new THREE.Color() },
+  uFlowWater: { value: new THREE.Color() }, uFlowCliff: { value: new THREE.Color() },
+  uFlowRuin: { value: new THREE.Color() },
 };
 /**
  * THE HEIGHTS AND THE MASK CHANGE ON DIFFERENT EVENTS, so they are rebuilt on
@@ -6047,7 +6124,11 @@ function swardRows(from: number, to: number): void {
       swardScratchC[k] = Math.round(clamp(pr, 0, 1) * 255);
       swardScratchC[k + 1] = Math.round(clamp(pg, 0, 1) * 255);
       swardScratchC[k + 2] = Math.round(clamp(pb, 0, 1) * 255);
-      swardScratchC[k + 3] = 255;
+      // THE COLOUR TEXTURE'S ALPHA WAS ALWAYS 255 — a spare byte, riding along
+      // on a texture the shader already samples for ground colour. It carries
+      // the habitat class instead (see SwardCtx): a blade reads it back to
+      // decide whether it stands in flower and what colour to bloom.
+      swardScratchC[k + 3] = swardCtxAt(wx, wz, cv, slope);
     }
   }
 }
@@ -6236,6 +6317,8 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         uniform float uSwardFall; uniform float uSwardNear; uniform float uSwardMatch;
         uniform float uSwardVary; uniform float uSwardUp;
         uniform float uTime; uniform vec2 uGust;
+        uniform vec3 uFlowOpen; uniform vec3 uFlowWood; uniform vec3 uFlowWater;
+        uniform vec3 uFlowCliff; uniform vec3 uFlowRuin;
         varying vec3 vSward;
         ${SWARD_GLSL}`)
       // ── A BLADE IS LIT LIKE THE GROUND IT STANDS IN ──
@@ -6444,7 +6527,27 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         float sMix = pow(clamp((sT - 0.12) / 0.88, 0.0, 1.0), 1.4);
         vec3 sMixed = mix(mix(uSwardTint, sGround, uSwardMatch), sGround, sMix);
         vSward = mix(vec3(1.0), (0.82 + 0.36 * sV)
-          * vec3(0.96 + 0.08 * sWarm, 1.0, 0.92 + 0.12 * (1.0 - sWarm)), uSwardVary) * sMixed;`)
+          * vec3(0.96 + 0.08 * sWarm, 1.0, 0.92 + 0.12 * (1.0 - sWarm)), uSwardVary) * sMixed;
+        // ── FLOWERS: RARE, CLUMPED, AND WHAT GROWS DEPENDS ON WHERE "HERE" IS ──
+        //
+        // The habitat this texel stands in — open meadow, wood, water's edge,
+        // scree, or a ruin's rubble — rode along in uSwardCol's spare alpha
+        // channel (see SwardCtx / swardCtxAt on the CPU side). A CLUMP hash at
+        // a coarser cell than any one blade decides whether this patch of
+        // ground is flowering at all, so a stand of flowers reads as a stand
+        // and not a sprinkle of confetti; a blade's OWN hash then decides
+        // whether it is one of the flowers within a flowering clump, so the
+        // stand still has texture rather than being a solid tile of colour.
+        float sCtx = floor(texture2D(uSwardCol, sUv).a * 255.0 + 0.5);
+        float sFlowerRate = sCtx > 3.5 ? 0.14 : sCtx > 2.5 ? 0.05 : sCtx > 1.5 ? 0.10 : sCtx > 0.5 ? 0.035 : 0.06;
+        vec2 sClumpKey = floor(sCell / 20.0);
+        float sClumpRoll = swHash(sClumpKey * 3.7 + 91.3);
+        float sH4 = swHash(sKey * 3.3 + 47.1);
+        if (sClumpRoll < sFlowerRate && sH4 < 0.4) {
+          vec3 sFlow = sCtx > 3.5 ? uFlowRuin : sCtx > 2.5 ? uFlowCliff
+            : sCtx > 1.5 ? uFlowWater : sCtx > 0.5 ? uFlowWood : uFlowOpen;
+          vSward = mix(vSward, sFlow * (0.85 + 0.3 * sV), 0.82);
+        }`)
       // The blade is placed in WORLD metres, and the mesh sits at the origin
       // with an identity matrix, so object space already is world space.
       .replace('#include <project_vertex>', '#include <project_vertex>');
@@ -6632,6 +6735,14 @@ function swardFrame(): void {
   }
   swardU.uSwardEye.value.set(fx, 0, fz);
   swardU.uSwardTint.value.copy(grassTint);
+  // The biome barely changes and this is five Color.set() calls — cheap
+  // enough to just do every frame rather than hook a change event for it.
+  const fp = FLOWER_PAL[biome.name] ?? FLOWER_PAL.temperate;
+  swardU.uFlowOpen.value.setRGB(...fp[SwardCtx.Open]);
+  swardU.uFlowWood.value.setRGB(...fp[SwardCtx.Wood]);
+  swardU.uFlowWater.value.setRGB(...fp[SwardCtx.Water]);
+  swardU.uFlowCliff.value.setRGB(...fp[SwardCtx.Cliff]);
+  swardU.uFlowRuin.value.setRGB(...fp[SwardCtx.Ruin]);
   for (const b of swardBands) {
     // SNAPPED to the step, so a slot's world position never moves under it.
     // The base cell, as an index and as metres. The INDEX is the authority: the
@@ -19273,6 +19384,24 @@ function truckSpec(): Record<string, number> {
     paintedFrac: +(painted / (SWARD_MASKN * SWARD_MASKN)).toFixed(4),
     png: swardMaskCv.toDataURL('image/png'),
   };
+};
+/** WHAT HABITAT THE SWARD THINKS IS UNDERFOOT, and how much of each within
+ *  `r` — the flower diversity's own probe. Walks swardCtxAt fresh at a grid
+ *  of world points rather than reading back the field texture, so it checks
+ *  the classifier itself and not whether a rebuild happens to be current. */
+(window as unknown as { __swardctx?: object }).__swardctx = (r = 200, step = 16): object => {
+  const names = ['open', 'wood', 'water', 'cliff', 'ruin'];
+  const counts = [0, 0, 0, 0, 0];
+  let n = 0;
+  for (let dx = -r; dx <= r; dx += step) for (let dz = -r; dz <= r; dz += step) {
+    const x = state.x + dx, z = state.z + dz;
+    const cv = sampleCover(x, z);
+    const h = groundAt(x, z);
+    const slope = Math.abs(groundAt(x + SWARD_FM, z) - h) / SWARD_FM;
+    counts[swardCtxAt(x, z, cv, slope)]++;
+    n++;
+  }
+  return { n, counts: Object.fromEntries(names.map((nm, i) => [nm, counts[i]])) };
 };
 (window as unknown as { __fxchain?: object }).__fxchain = (): object => {
   const out: Record<string, string[]> = {};
