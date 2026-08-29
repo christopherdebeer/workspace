@@ -19742,6 +19742,34 @@ function truckSpec(): Record<string, number> {
  * This only ever compares fragments that genuinely END at the same node, and
  * only kerb against kerb on the same side.
  */
+/** The raw end rows near one node — the post-mortem companion to __kerbseams.
+ *  The net names an offending node; this says WHAT ends there: each fragment's
+ *  centreline height, camber, tangent, class and name, so a bad step decomposes
+ *  into "the centrelines part" vs "the cambers part" vs "the anchor was refused
+ *  as off-axis" without guessing. */
+(window as unknown as { __joinAt?: object }).__joinAt = (jx: number, jz: number, r = 3): object[] => {
+  const rows: object[] = [];
+  const seen = new Set<Seg>();
+  const c = Math.ceil((r + GRID) / GRID);
+  for (let cx = -c; cx <= c; cx++) for (let cz = -c; cz <= c; cz++) {
+    for (const sg of roadGrid.get(`${Math.floor(jx / GRID) + cx},${Math.floor(jz / GRID) + cz}`) ?? []) {
+      if (seen.has(sg)) continue;
+      seen.add(sg);
+      const dx = sg.bx - sg.ax, dz = sg.bz - sg.az, l = Math.hypot(dx, dz) || 1;
+      for (const [ex, ez, ey, eca, which] of [
+        [sg.ax, sg.az, sg.ya, sg.ca, 'a'], [sg.bx, sg.bz, sg.yb, sg.cb, 'b'],
+      ] as Array<[number, number, number | undefined, number | undefined, string]>) {
+        if (Math.hypot(ex - jx, ez - jz) > r) continue;
+        rows.push({ which, x: +ex.toFixed(2), z: +ez.toFixed(2),
+          y: ey === undefined ? null : +ey.toFixed(3),
+          ca: eca === undefined ? null : +eca.toFixed(3),
+          tx: +(dx / l).toFixed(2), tz: +(dz / l).toFixed(2),
+          hw: sg.hw, tk: !!sg.tk, nm: sg.nm ?? '?' });
+      }
+    }
+  }
+  return rows;
+};
 (window as unknown as { __kerbseams?: object }).__kerbseams = (r = 260): object => {
   interface End { x: number; z: number; y: number; ca: number; tx: number; tz: number; hw: number; nm: string }
   const seen = new Set<Seg>();
