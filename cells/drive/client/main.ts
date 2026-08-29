@@ -19672,6 +19672,9 @@ function truckSpec(): Record<string, number> {
   // from the cab and want opposite changes.
   let sameRoad = 0, twoRoads = 0;
   let worst = 0, at: string | null = null, worstWays: string[] = [];
+  // Every offending pair, for the net's post-mortems — the summary alone
+  // cannot say WHICH joins tripped a bar.
+  const bad: Array<{ m: number; at: string; ways: string[]; same: boolean }> = [];
   for (const [k, es] of ends) {
     if (es.length < 2) continue;
     for (let i = 0; i < es.length; i++) for (let j = i + 1; j < es.length; j++) {
@@ -19687,7 +19690,12 @@ function truckSpec(): Record<string, number> {
         Math.abs((a.y - a.ca) - (b.y - b.ca * flip)),
       );
       steps.push(step);
-      if (step > 0.1) { if (a.nm === b.nm) sameRoad++; else twoRoads++; }
+      if (step > 0.1) {
+        if (a.nm === b.nm) sameRoad++; else twoRoads++;
+        if (bad.length < 60) {
+          bad.push({ m: +step.toFixed(3), at: k, ways: [`${a.nm} hw${a.hw}`, `${b.nm} hw${b.hw}`], same: a.nm === b.nm });
+        }
+      }
       if (step > worst) {
         worst = step; at = k;
         // The class, via its half-width — an unnamed way is otherwise
@@ -19699,9 +19707,10 @@ function truckSpec(): Record<string, number> {
   }
   steps.sort((x, y) => x - y);
   const q = (f: number): number => (steps.length ? +steps[Math.min(steps.length - 1, Math.floor(f * steps.length))].toFixed(3) : 0);
+  bad.sort((x, y) => y.m - x.m);
   return { joins: steps.length, medianM: q(0.5), p95M: q(0.95),
     over10cm: steps.filter((v) => v > 0.1).length, sameRoad, twoRoads,
-    worstM: +worst.toFixed(3), worstAt: at, worstWays };
+    worstM: +worst.toFixed(3), worstAt: at, worstWays, bad };
 };
 /**
  * TWO ROADS DRAWN ON TOP OF EACH OTHER.
