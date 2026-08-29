@@ -18,8 +18,8 @@ await d.simWait(4);
 const driving = await d.page.evaluate(() => ({ eng: window.__engine(), kmh: window.__real().kmh, amb: window.__amb() }));
 console.log('driving:', JSON.stringify(driving));
 
-await d.page.evaluate(() => { window.__hold(0, 0); });   // parked, hands off
-await d.simWait(7);
+await d.page.evaluate(() => { window.__hold(0, 0, 1); });   // brake to a stop, hold it
+await d.simWait(9);
 const parked = await d.page.evaluate(() => ({ eng: window.__engine(), kmh: window.__real().kmh, amb: window.__amb() }));
 console.log('parked:', JSON.stringify(parked));
 await d.page.evaluate(() => { window.__hold(null); });
