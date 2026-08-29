@@ -11,15 +11,27 @@
  */
 import { openDrive, report } from './harness.mjs';
 
-const SPOT = 'lat=36.37145&lon=-121.90158&h=340&cam=chase&time=NOON&sunalt=55&wx=clear';
-const d = await openDrive({ spot: SPOT, tag: 'join-pm' });
+// `node join-postmortem.mjs [bixby|chapmans] [x,z ...]` — extra args are
+// nodes to dump beyond the run's own offenders.
+const SPOTS = {
+  bixby: 'lat=36.37145&lon=-121.90158&h=340&cam=chase&time=NOON&sunalt=55&wx=clear',
+  chapmans: 'lat=-34.09885&lon=18.380684&h=255&cam=chase&time=NOON&sunalt=55&wx=clear',
+};
+const which = process.argv[2] ?? 'bixby';
+const extra = process.argv.slice(3).map((s) => s.split(',').map(Number));
+const d = await openDrive({ spot: SPOTS[which], tag: 'join-pm' });
+// Poll until the join count stops growing — the honest counts are too small
+// for an absolute floor, and what matters is that streaming has settled.
 let ks = { joins: 0 };
-for (let w = 0; w < 40 && ks.joins < 300; w++) {
+let prev = -1, flat = 0;
+for (let w = 0; w < 40 && flat < 3; w++) {
   await d.page.waitForTimeout(5000);
   ks = await d.page.evaluate(() => window.__kerbseams(260));
+  flat = ks.joins === prev ? flat + 1 : 0;
+  prev = ks.joins;
 }
 console.log('joins:', ks.joins, 'worst:', ks.worstM, 'at:', ks.worstAt);
-const NODES = [[-88, -109], ...ks.bad
+const NODES = [...extra, ...ks.bad
   .map((b) => b.at)
   .filter((v, i, a) => a.indexOf(v) === i)
   .slice(0, 4)
