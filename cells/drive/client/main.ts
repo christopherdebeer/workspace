@@ -9480,10 +9480,19 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     pbranch = 1;
     const idxs: number[] = [];
     for (let i = 0; i < n; i++) if (hintEl[i] !== null) idxs.push(i);
+    // BETWEEN hints, INTERPOLATE. The nearest-index snap made a staircase of
+    // hint plateaux wherever coverage was patchy but above the 80% gate, and
+    // ruleGrade then turned each riser into a ramp at 1.2x the class limit
+    // (audit finding 9). A station between two hinted neighbours now rides
+    // the line between them; before the first or past the last it holds the
+    // end hint, as the snap already did.
     alg = dense.map((_, i) => {
-      let bj = idxs[0];
-      for (const j of idxs) if (Math.abs(i - j) < Math.abs(i - bj)) bj = j;
-      return hintEl[bj] as number;
+      let lo = -1, hi = -1;
+      for (const j of idxs) { if (j <= i) lo = j; if (j >= i) { hi = j; break; } }
+      if (lo < 0) return hintEl[hi] as number;
+      if (hi < 0 || hi === lo) return hintEl[lo] as number;
+      const t = (i - lo) / (hi - lo);
+      return (hintEl[lo] as number) + ((hintEl[hi] as number) - (hintEl[lo] as number)) * t;
     });
     if (p0 !== null && Math.abs(alg[0] - p0) < 4) alg[0] = p0;
     if (p1 !== null && Math.abs(alg[n - 1] - p1) < 4) alg[n - 1] = p1;
@@ -10055,12 +10064,15 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     }
     spanStats.cats++;
   };
-  let catsRun = 0;         // metres of barrier since the last stud
+  // PER KERB, not per way: one shared counter was satisfied by the SUM of
+  // both sides' lengths, so studs and posts came out at half density and
+  // alternated sides irregularly (audit finding 10).
+  const catsRun = [0, 0];  // metres of barrier since the last stud, per side
   let centreRun = 0;       // …and along the carriageway since the last centre stud
-  let postRun = 0;         // …and since the last reflector post
+  const postRun = [0, 0];  // …and since the last reflector post, per side
   const rail = (
     xA: number, yA: number, zA: number, xB: number, yB: number, zB: number, u0: number, u1: number,
-    solid = true,
+    solid = true, sd = 0,
   ): void => {
     const L = Math.hypot(xB - xA, zB - zA);
     spanStats.railM += L;
@@ -10076,12 +10088,12 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // CAT'S EYES on the parapet, spaced by world distance so the run stays even
     // through the short bays a bend is made of.
     const ux = (xB - xA) / (L || 1), uz = (zB - zA) / (L || 1);
-    for (let s = CATS_EVERY - catsRun; s < L; s += CATS_EVERY) {
+    for (let s = CATS_EVERY - catsRun[sd]; s < L; s += CATS_EVERY) {
       const t = s / (L || 1);
       stud(xA + (xB - xA) * t, yA + (yB - yA) * t + RAIL_H - 0.24,
         zA + (zB - zA) * t, ux, uz, 0.12, 0.09);
     }
-    catsRun = (catsRun + L) % CATS_EVERY;
+    catsRun[sd] = (catsRun[sd] + L) % CATS_EVERY;
   };
   /**
    * A hazard board on a post, facing back down the road at whoever is coming.
@@ -10519,7 +10531,19 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // whatever happens to lie below.
       const pl = endPlane[e];
       const target = pl ? pl(C[0], C[2]) : roadHeightAt(C[0], C[2], 1.5);
-      if (target !== null && Math.abs(target + lift - C[1]) < 2.5) C[1] = target + lift;
+      if (target === null) return;
+      const gap = target + lift - C[1];
+      if (Math.abs(gap) < 2.5) { C[1] = target + lift; return; }
+      // PAST THE BUDGET, MOVE THE BUDGET'S WORTH, AND SAY SO. The old bail
+      // kept the corner at its own height silently — reproducing the exact
+      // floating-corner fault the comment above records as fixed, at
+      // precisely the joins that disagree most (audit finding 8). Spending
+      // the full 2.5m toward the host closes most of most gaps, and the log
+      // makes the rest countable instead of invisible.
+      C[1] += Math.sign(gap) * 2.5;
+      if (cropLog.length < 4000) {
+        cropLog.push({ x: Math.round(C[0]), z: Math.round(C[2]), nm: name, end: e, why: `seat-over-budget:${gap.toFixed(1)}m` });
+      }
     };
     if (cropA) {
       AR = lerpC(BR, AR, cropA.sR);
@@ -10756,15 +10780,15 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           // the parapet hangs in the air beside its own fascia.
           const rx0 = ex0 + ox * sgn * 0.04, rz0 = ez0 + oz * sgn * 0.04;
           const rx1 = ex1 + ox * sgn * 0.04, rz1 = ez1 + oz * sgn * 0.04;
-          rail(rx0, ey0, rz0, rx1, ey1, rz1, along / 2.5, (along + len) / 2.5, !deckRail);
+          rail(rx0, ey0, rz0, rx1, ey1, rz1, along / 2.5, (along + len) / 2.5, !deckRail, sd);
         } else if (postOn[sd][i] && !open) {
           // The narrow-road answer: reflector posts along the edge, spaced by
           // world distance so a bend's short bays do not bunch them. They stand
           // ON the verge and carry no collision — the point is to show you the
           // edge, not to be the thing that stops you.
-          postRun += len;
-          if (postRun >= POST_EVERY) {
-            postRun = 0;
+          postRun[sd] += len;
+          if (postRun[sd] >= POST_EVERY) {
+            postRun[sd] = 0;
             const t = 0.5;
             const sx = ex0 + (ex1 - ex0) * t + ox * sgn * 0.28;
             const sz = ez0 + (ez1 - ez0) * t + oz * sgn * 0.28;
@@ -10855,9 +10879,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // Close the beam underneath. A pair of fascias with nothing between
         // them is a curtain, and from below — which is exactly where you see a
         // viaduct from — it read as a black void with no bottom.
+        // FROM THE CORNER TABLE, like the fascias it closes. On the bay
+        // normal the soffit was narrower than the mitred fascias by
+        // hw·(1/cos(θ/2)−1) on every bend — daylight under the deck edge —
+        // and at a cropped bay it overshot the cut (audit finding 2).
         quad(apron.dckV, apron.dckUV,
-          [x0 + nx, bot[0], z0 + nz, x1 + nx, bot[1], z1 + nz,
-            x0 - nx, bot[2], z0 - nz, x1 - nx, bot[3], z1 - nz],
+          [AR[0], bot[0], AR[2], BR[0], bot[1], BR[2],
+            AL[0], bot[2], AL[2], BL[0], bot[3], BL[2]],
           [0, uA, 0, uB, width / 4, uA, width / 4, uB]);
         // And hold it up. Otherwise the road is simply hanging there, which is
         // what a thirty-metre span over a lake looked like.
@@ -10874,14 +10902,17 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       } else prevPier = null;
       // Close the ends, so a way that stops at a junction shows a cut face
       // rather than a hollow shell you can see straight into.
+      // FROM THE CORNER TABLE too: the cap used the bay normal and its own
+      // pre-crop heights, so at a mitred or cropped end it stood proud of
+      // the tarmac it was capping (audit finding 2). The table's corners
+      // carry both the mitre and whatever the junction crop rewrote.
       for (const [i0, at] of [[0, i === 0], [1, i === n - 2]] as Array<[number, boolean]>) {
         if (!at) continue;
-        const px = i0 ? x1 : x0, pz = i0 ? z1 : z0;
-        const yL = i0 ? y10 : y00, yR = i0 ? y11 : y01;
-        const gL = sampleHeight(px + nx, pz + nz), gR = sampleHeight(px - nx, pz - nz);
-        const bL = deck ? yL - dd : Math.max(Math.min(yL, gL) - APRON, yL - APRON_MAX);
-        const bR = deck ? yR - dd : Math.max(Math.min(yR, gR) - APRON, yR - APRON_MAX);
-        face(px + nx, yL, pz + nz, px - nx, yR, pz - nz, bL, bR, 0, width / 8, deck);
+        const CR = i0 ? BR : AR, CL = i0 ? BL : AL;
+        const gL = sampleHeight(CR[0], CR[2]), gR = sampleHeight(CL[0], CL[2]);
+        const bL = deck ? CR[1] - dd : Math.max(Math.min(CR[1], gL) - APRON, CR[1] - APRON_MAX);
+        const bR = deck ? CL[1] - dd : Math.max(Math.min(CL[1], gR) - APRON, CL[1] - APRON_MAX);
+        face(CR[0], CR[1], CR[2], CL[0], CL[1], CL[2], bL, bR, 0, width / 8, deck);
       }
     }
     along += len;
