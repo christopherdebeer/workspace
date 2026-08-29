@@ -24641,6 +24641,22 @@ const audio = (() => {
       q = 1, spin = 0, ambWind = 0, engF = 1): void {
       if (!ctx || !master || ctx.state !== 'running') return;
       const t = ctx.currentTime, v = Math.abs(speed);
+      // THE EVENT LEVELS FIRST, because the whole bed answers to them.
+      // A SEALED SURFACE SQUEALS; LOOSE GROUND JUST HISSES — the bite
+      // follows the quality rather than the tier. A SKID IS BOTH AXES, and
+      // THE LAMP AND THE EAR MUST AGREE: the HUD calls SLIP from 0.06 and
+      // the 0.55 curve opens the voice there rather than at a committed
+      // slide.
+      const bite = surf === 'road' || surf === 'track' ? Math.pow(clamp(q, 0, 1), 1.6) : 0.12;
+      const sq2 = Math.pow(clamp(Math.max(slip, spin * 0.85), 0, 1), 0.55);
+      const sqT = sq2 * bite * grounded * Math.min((v + spin * 9) / 8, 1) * 0.6;
+      // THE SIDECHAIN. Measured at Chapman's Peak (mix-audit): scrape peaked
+      // at 0.08 and squeal at 0.03 against an engine at 0.34 and grit at
+      // 0.40 — no per-channel raise wins against that bed, which is why two
+      // rounds of raises changed nothing from the seat. When rubber or
+      // bodywork speaks, the steady bed steps back; every real mix works
+      // this way.
+      const duck = 1 - 0.55 * clamp((sqT + scrapeLast * 1.2) * 2.2, 0, 1);
       // Revs come from the DRIVETRAIN, not from road speed — the two part
       // company the moment the wheels leave the ground, and the flare over a
       // jump is the whole reason for the distinction.
@@ -24656,37 +24672,12 @@ const audio = (() => {
         (0.1 + Math.abs(throttle) * 0.16 * (0.45 + 0.55 * grounded)
           + (1 - grounded) * rev * 0.1 + Math.min(v / 60, 0.1)) * engF * duck, t, 0.09,
       );
-      // Rubber that has stopped rolling. Loud on tarmac, largely lost under the
-      // gravel off it — and silent below a walking pace, where a slide is a
-      // slither, not a skid.
-      // A SEALED SURFACE SQUEALS; LOOSE GROUND JUST HISSES. Rubber has to be
-      // gripping something hard to sing, so the bite follows the quality
-      // rather than the tier — cobbles and a broken lane are half a squeal,
-      // sand is none at all.
-      const bite = surf === 'road' || surf === 'track' ? Math.pow(clamp(q, 0, 1), 1.6) : 0.12;
-      // A SKID IS BOTH AXES (asked from the seat: wheelspin on tarmac was
-      // nearly silent — `spin` only fed the gravel channel, which sealed
-      // ground zeroes out — and the lateral voice waited for a committed
-      // slide). Spin squeals on tarmac like slip does; the 0.7 curve opens
-      // the voice at the EDGE of grip; and the speed factor counts spin as
-      // wheel speed, so a standstill burnout sings instead of muting.
-      // 0.55 and 0.45: THE LAMP AND THE EAR MUST AGREE. The HUD calls SLIP
-      // from skid 0.06, and at the old curve and gain the voice was not
-      // audible until ~0.4 — reported from the seat as a lit lamp over a
-      // silent tyre. The curve now opens where the lamp does.
-      const sq2 = Math.pow(clamp(Math.max(slip, spin * 0.85), 0, 1), 0.55);
+      // Rubber that has stopped rolling — the levels were derived up top;
+      // here it just sings at its pitch.
       const sf = 1250 + Math.min(v * 14, 620) + sq2 * 260;
       squealFilt.frequency.setTargetAtTime(sf, t, 0.08);
       squealOsc.frequency.setTargetAtTime(sf, t, 0.08);
-      const sqT = sq2 * bite * grounded * Math.min((v + spin * 9) / 8, 1) * 0.6;
       squealGain.gain.setTargetAtTime(sqT, t, 0.06);
-      // THE SIDECHAIN. Measured at Chapman's Peak (mix-audit): scrape peaked
-      // at 0.08 and squeal at 0.03 against an engine at 0.34 and grit at
-      // 0.40 — no per-channel raise wins against that bed, which is why two
-      // rounds of raises changed nothing from the seat. When rubber or
-      // bodywork speaks, the steady bed steps back; every real mix works
-      // this way.
-      const duck = 1 - 0.55 * clamp((sqT + scrapeLast * 1.2) * 2.2, 0, 1);
       // Tarmac hisses high and thin; loose ground growls low and loud. A graded
       // track sits between the two — you can hear which tier you are on.
       const road = surf === 'road';
