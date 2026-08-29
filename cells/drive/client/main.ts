@@ -9273,6 +9273,28 @@ function tiltAnchorAt(x: number, z: number, tx: number, tz: number): number | nu
   }
   return best;
 }
+/** The DIRECTION a built neighbour holds at (x,z), oriented along (tx,tz) —
+ *  the missing bay for a terminal mitre (audit finding 5). Looser than the
+ *  camber anchor's gate: a terminal mitre wants the continuation even
+ *  mid-bend, and only a genuine crossing (~60°+ off) is refused. */
+function dirAnchorAt(x: number, z: number, tx: number, tz: number): [number, number] | null {
+  const tl = Math.hypot(tx, tz) || 1;
+  let best: [number, number] | null = null, bd = 2.2;
+  for (const dx of [0, -GRID, GRID]) for (const dz of [0, -GRID, GRID]) {
+    for (const s of roadGrid.get(gkey(x + dx, z + dz)) ?? []) {
+      if (s.ya === undefined || s.yb === undefined || s.tk) continue;
+      const sdx = s.bx - s.ax, sdz = s.bz - s.az, sl = Math.hypot(sdx, sdz) || 1;
+      const cos = (sdx * tx + sdz * tz) / (sl * tl);
+      if (Math.abs(cos) < 0.5) continue;
+      const sign = cos < 0 ? -1 : 1;
+      const da = Math.hypot(s.ax - x, s.az - z);
+      if (da < bd) { bd = da; best = [(sdx / sl) * sign, (sdz / sl) * sign]; }
+      const db = Math.hypot(s.bx - x, s.bz - z);
+      if (db < bd) { bd = db; best = [(sdx / sl) * sign, (sdz / sl) * sign]; }
+    }
+  }
+  return best;
+}
 
 // ── the whole-way profile solver ───────────────────────────────────
 // OSM chops a road at every structure change and tile edge; fragments
@@ -10247,8 +10269,30 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     spanStats.signs++;
     if (spanStats.signAt.length < 400) spanStats.signAt.push({ x: px, z: pz, fx, fz, kind });
   };
-  /** The outward normal of the bay starting at station j, as a unit vector. */
+  /** The bay a built NEIGHBOUR contributes past this fragment's end (audit
+   *  finding 5). Inside the fragment every kerb point is mitred on the
+   *  bisector of the two bays meeting there; at the ENDS there was no second
+   *  bay and the mitre quietly degraded to the bay normal — while the
+   *  neighbour continuing this road mitred ITS shared end on its own bay.
+   *  On a bend the two kerb lines parted laterally by the angle between the
+   *  fragments: a notch in every kerb, fascia and barrier at a fragment
+   *  boundary, invisible to the height probes. The neighbour's tangent,
+   *  oriented along this fragment's travel, is the missing bay. */
+  const nbrBay = (end: 0 | 1): [number, number] | null => {
+    if (n < 2) return null;
+    const [ex, ez] = end === 0 ? dense[0] : dense[n - 1];
+    const ddx = end === 0 ? dense[1][0] - dense[0][0] : dense[n - 1][0] - dense[n - 2][0];
+    const ddz = end === 0 ? dense[1][1] - dense[0][1] : dense[n - 1][1] - dense[n - 2][1];
+    const t = dirAnchorAt(ex, ez, ddx, ddz);
+    return t ? [-t[1], t[0]] : null;
+  };
+  const nbrBay0 = nbrBay(0), nbrBay1 = nbrBay(1);
+  /** The outward normal of the bay starting at station j, as a unit vector.
+   *  Out-of-range stations are the terminal case: the neighbour's bay when
+   *  one is built, else the clamp that stood here before. */
   const bayN = (j: number): [number, number] => {
+    if (j < 0 && nbrBay0) return nbrBay0;
+    if (j > n - 2 && nbrBay1) return nbrBay1;
     const k = clamp(j, 0, n - 2);
     const ax2 = dense[k][0], az2 = dense[k][1];
     const bx2 = dense[k + 1][0], bz2 = dense[k + 1][1];
