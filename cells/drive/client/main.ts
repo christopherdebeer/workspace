@@ -25730,6 +25730,8 @@ let engineCrankUntil = 0, engineStillS = 0;
 // numbers the mixer was handed.
 let dbgAmb: Record<string, unknown> = {};
 (window as unknown as { __amb?: object }).__amb = (): object => dbgAmb;
+let dbgSlip: Record<string, unknown> = {};
+(window as unknown as { __slip?: object }).__slip = (): object => dbgSlip;
 let ambSampledAt = 0, ambRiverL = 0, ambVegL = 0, ambFrothL = 0;
 let brushPeak = 0;   // session max — a one-frame brush must not hide from the probe
 let wallTouchAt = -1e9, dragKnockAt = 0;   // wall contact edge + the drag's knock pacing
@@ -27075,6 +27077,11 @@ function tick(now: number): void {
     brushPeak: +(brushPeak = Math.max(brushPeak, brushAmt)).toFixed(2),
   };
   audio.ambience(dbgAmb.rustle as number, dbgAmb.river as number, dbgAmb.birds as number, windAmb, ambFrothL);
+  // The squeal's raw inputs, photographed at the same instant the mixer
+  // reads them — chasing "SLIP lit, tyre silent" needs the SIGNAL, not
+  // another guess at the gain.
+  dbgSlip = { skid: +skid.toFixed(3), slideV: +slideV.toFixed(2), spinL: +wheelSlipL.toFixed(3),
+    surf: surfKind, q: +surfQ.toFixed(2), kmh: +(state.speed * 3.6).toFixed(0) };
   audio.update(state.speed, throttle, surfKind, groundedF, wxL.rain, engRev, engGear, skid,
     surfKind === 'water' ? 0 : surfQ, wheelSlipL, windAmb,
     engineSt === 'on' ? 1 : engineSt === 'crank' ? 0.35 : 0);
