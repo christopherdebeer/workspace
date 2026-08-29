@@ -1043,8 +1043,14 @@ const MOIST_OF: Record<number, number> = {
  *  moisture axis, which this curve does not yet take a term from. */
 const treelineAt = (latAbs: number): number => Math.max(0, 4000 - 0.8 * latAbs * latAbs);
 interface Climate {
-  /** Weights over BIOME_ORDER, summing to one. */
+  /** Weights over BIOME_ORDER, summing to one — the alpine boost applied at
+   *  whatever elevation the reader supplied. This is what consumers use. */
   w: number[];
+  /** The same weights BEFORE the treeline boost: the pure temperature and
+   *  moisture assignment. Kept because altitude varies far faster than
+   *  climate does, so the boost has to be re-applied per point rather than
+   *  interpolated off a 2km lattice — see climateAt. */
+  w0: number[];
   /** The heaviest archetype — for the dome, the light, and anything else that
    *  is one object and must therefore have one answer. */
   dom: Biome;
@@ -1125,20 +1131,38 @@ function climCompute(x: number, z: number): Climate {
     const v = Math.exp(-(dt * dt * 12 + dm * dm * 10));
     w.push(v); total += v;
   }
-  // ALPINE IS A HEIGHT, NOT A TEMPERATURE. It sits close enough to boreal in
-  // the temperature/moisture plane that the soft assignment above can never
-  // separate them; what actually distinguishes it is being ABOVE THE TREES.
-  // So it takes its weight from the treeline directly, which is also what
-  // retires `elevAbs > 1500` — a rule that called the Ethiopian highlands
-  // alpine and the Norwegian fjells forest.
-  const above = clamp((elevAbs - (treeline - 500)) / 700, 0, 1);
-  const boost = above * above * (3 - 2 * above) * 3.2;
-  w[4] += boost * (total / CLIM_HOME.length);
-  total += boost * (total / CLIM_HOME.length);
-  let dom = 0;
-  for (let i = 0; i < w.length; i++) { w[i] /= total; if (w[i] > w[dom]) dom = i; }
-  return { w, dom: BIOME_LIST[dom], tempC, moisture, treeline, elevAbs,
+  for (let i = 0; i < w.length; i++) w[i] /= total;
+  // The treeline boost is NOT applied here — see climateAt. A corner speaks
+  // for four square kilometres, and altitude changes across a hundred metres
+  // of mountain road.
+  const c: Climate = { w: w.slice(), w0: w, dom: BIOME_LIST[0], tempC, moisture, treeline, elevAbs,
     hadCover: sampleCover(x, z) !== null, stamp: climStamp };
+  applyTreeline(c, elevAbs);
+  return c;
+}
+/**
+ * ALPINE IS A HEIGHT, NOT A TEMPERATURE. It sits close enough to boreal in the
+ * temperature/moisture plane that the soft assignment can never separate them;
+ * what distinguishes it is being ABOVE THE TREES. Taking its weight from the
+ * treeline directly is what retires `elevAbs > 1500` — a rule that called the
+ * Ethiopian highlands alpine and the Norwegian fjells forest.
+ *
+ * Applied PER POINT rather than baked into the lattice, because a climate
+ * corner speaks for four square kilometres while altitude changes over a
+ * hundred metres of mountain road. Measured before this split: a 2km transect
+ * up the Stelvio reported one elevation and one treeline margin from end to
+ * end, which would have made the whole altitude axis invisible from the seat.
+ */
+function applyTreeline(c: Climate, elevAbs: number): void {
+  c.elevAbs = elevAbs;
+  const above = clamp((elevAbs - (c.treeline - 500)) / 700, 0, 1);
+  const boost = above * above * (3 - 2 * above) * 3.2;
+  let total = 0, dom = 0;
+  for (let i = 0; i < 5; i++) { c.w[i] = c.w0[i]; total += c.w0[i]; }
+  c.w[4] += boost * (total / 5);
+  total += boost * (total / 5);
+  for (let i = 0; i < 5; i++) { c.w[i] /= total; if (c.w[i] > c.w[dom]) dom = i; }
+  c.dom = BIOME_LIST[dom];
 }
 function climCorner(gx: number, gz: number): Climate {
   const k = gx * 65536 + gz;
@@ -1160,8 +1184,8 @@ function climCorner(gx: number, gz: number): Climate {
  *  and `swardCol` already use, for the same reason: this is called per terrain
  *  vertex and per sward texel, and an allocation there is a garbage collection
  *  in the middle of a build. */
-const climScratch: Climate = { w: [0, 0, 0, 0, 0], dom: BIOMES.temperate, tempC: 12, moisture: 0.5,
-  treeline: 2000, elevAbs: 0, hadCover: false, stamp: 0 };
+const climScratch: Climate = { w: [0, 0, 0, 0, 0], w0: [0, 0, 0, 0, 0], dom: BIOMES.temperate,
+  tempC: 12, moisture: 0.5, treeline: 2000, elevAbs: 0, hadCover: false, stamp: 0 };
 /**
  * The climate at a point, BILINEARLY INTERPOLATED between cached corners.
  *
@@ -1171,15 +1195,16 @@ const climScratch: Climate = { w: [0, 0, 0, 0, 0], dom: BIOMES.temperate, tempC:
  * when they thresholded a per-cell hash instead of a continuous field. A
  * climate that steps is worse than a climate that is slightly wrong.
  */
-function climateAt(x: number, z: number): Climate {
+function climateAt(x: number, z: number, elevAbs?: number): Climate {
   // ART DIRECTION WINS, and collapses the field to one archetype — otherwise
   // `?biome=arid` would still blend a green valley through the middle of it.
   if (biomeForced) {
-    climScratch.w.fill(0);
+    climScratch.w.fill(0); climScratch.w0.fill(0);
     climScratch.w[BIOME_LIST.indexOf(biomeForced)] = 1;
+    climScratch.w0[BIOME_LIST.indexOf(biomeForced)] = 1;
     climScratch.dom = biomeForced;
-    climScratch.elevAbs = groundAt(x, z) + baseElev;
     climScratch.treeline = treelineAt(Math.abs(localToLatLon(x, z)[0]));
+    climScratch.elevAbs = elevAbs ?? climScratch.elevAbs;
     return climScratch;
   }
   const fx = x / CLIM_G, fz = z / CLIM_G;
@@ -1189,16 +1214,18 @@ function climateAt(x: number, z: number): Climate {
   const c = climCorner(gx, gz + 1), d = climCorner(gx + 1, gz + 1);
   const mix = (p: number, q: number, r: number, s: number): number =>
     (p * (1 - tx) + q * tx) * (1 - tz) + (r * (1 - tx) + s * tx) * tz;
-  let dom = 0;
-  for (let i = 0; i < 5; i++) {
-    climScratch.w[i] = mix(a.w[i], b.w[i], c.w[i], d.w[i]);
-    if (climScratch.w[i] > climScratch.w[dom]) dom = i;
-  }
-  climScratch.dom = BIOME_LIST[dom];
+  for (let i = 0; i < 5; i++) climScratch.w0[i] = mix(a.w0[i], b.w0[i], c.w0[i], d.w0[i]);
   climScratch.tempC = mix(a.tempC, b.tempC, c.tempC, d.tempC);
   climScratch.moisture = mix(a.moisture, b.moisture, c.moisture, d.moisture);
   climScratch.treeline = mix(a.treeline, b.treeline, c.treeline, d.treeline);
-  climScratch.elevAbs = mix(a.elevAbs, b.elevAbs, c.elevAbs, d.elevAbs);
+  // THE ELEVATION IS THE CALLER'S IF IT HAS ONE. terrainPalette is handed the
+  // true height of the very vertex it is colouring; using the lattice's
+  // average instead would throw away the one term that varies fast enough to
+  // matter. Only a caller with no height of its own falls back to the corners.
+  const elev = elevAbs ?? mix(a.elevAbs, b.elevAbs, c.elevAbs, d.elevAbs);
+  // Lapse the blended sea-level-ish temperature to the real height.
+  climScratch.tempC += (mix(a.elevAbs, b.elevAbs, c.elevAbs, d.elevAbs) - elev) * 0.0065;
+  applyTreeline(climScratch, elev);
   return climScratch;
 }
 /** Pick from a per-archetype weight table by CLIMATE rather than by the one
@@ -1253,7 +1280,7 @@ const terrainPalette = (elev: number, slope: number, cover?: number | null,
   // than five separate scans. Without a position — a caller I have missed, or
   // one that genuinely has none — it falls back to the settled `biome`, which
   // is exactly the old behaviour.
-  const cl = px !== undefined && pz !== undefined ? climateAt(px, pz) : null;
+  const cl = px !== undefined && pz !== undefined ? climateAt(px, pz, elev) : null;
   const ramp = biome.ramp;
   let c: Rgb = ramp[ramp.length - 1][1];
   // THE SHALLOWS BAND IS ABOUT WATER, NOT ABOUT ALTITUDE. Every ramp opens
@@ -19920,7 +19947,9 @@ function truckSpec(): Record<string, number> {
  */
 (window as unknown as { __climate?: object }).__climate = (r = 0, bearing = 90, steps = 8): object => {
   const at = (x: number, z: number): Record<string, unknown> => {
-    const c = climateAt(x, z);
+    // The true height here, not the lattice's average — the same thing
+    // terrainPalette passes, so the probe reports what the world renders.
+    const c = climateAt(x, z, groundAt(x, z) + baseElev);
     return {
       w: Object.fromEntries(BIOME_ORDER.map((n, i) => [n, +c.w[i].toFixed(3)])),
       dom: c.dom.name, tempC: +c.tempC.toFixed(1), moisture: +c.moisture.toFixed(2),
