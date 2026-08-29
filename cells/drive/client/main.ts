@@ -24582,10 +24582,18 @@ const audio = (() => {
       // rather than the tier — cobbles and a broken lane are half a squeal,
       // sand is none at all.
       const bite = surf === 'road' || surf === 'track' ? Math.pow(clamp(q, 0, 1), 1.6) : 0.12;
-      const sf = 1250 + Math.min(v * 14, 620) + slip * 260;
+      // A SKID IS BOTH AXES (asked from the seat: wheelspin on tarmac was
+      // nearly silent — `spin` only fed the gravel channel, which sealed
+      // ground zeroes out — and the lateral voice waited for a committed
+      // slide). Spin squeals on tarmac like slip does; the 0.7 curve opens
+      // the voice at the EDGE of grip; and the speed factor counts spin as
+      // wheel speed, so a standstill burnout sings instead of muting.
+      const sq2 = Math.pow(clamp(Math.max(slip, spin * 0.85), 0, 1), 0.7);
+      const sf = 1250 + Math.min(v * 14, 620) + sq2 * 260;
       squealFilt.frequency.setTargetAtTime(sf, t, 0.08);
       squealOsc.frequency.setTargetAtTime(sf, t, 0.08);
-      squealGain.gain.setTargetAtTime(slip * bite * grounded * Math.min(v / 7, 1) * 0.19, t, 0.06);
+      squealGain.gain.setTargetAtTime(
+        sq2 * bite * grounded * Math.min((v + spin * 9) / 8, 1) * 0.3, t, 0.06);
       // Tarmac hisses high and thin; loose ground growls low and loud. A graded
       // track sits between the two — you can hear which tier you are on.
       const road = surf === 'road';
@@ -26299,6 +26307,10 @@ function tick(now: number): void {
     if (Math.abs(slideV) > 0.6) state.speed *= Math.exp(-Math.min(1.4, Math.abs(slideV) * 0.16) * dt);
     const want = clamp((Math.abs(slideV) - 0.5) / 3.5, 0, 1);
     skid += (want - skid) * Math.min(1, (want > skid ? 9 : 3.5) * dt);
+    // ARCADE has no slip model, but a burnout still needs a voice: demand
+    // over a low-speed envelope reads as spin FOR THE MIXER ONLY — the
+    // trajectory stays the rack's, exactly as the dial promises.
+    wheelSlipL = clamp(Math.abs(throttle) * clamp(1 - Math.abs(state.speed) / 9, 0, 1) - 0.55, 0, 0.5) * 2;
   }
   // THE CURRENT. The flow field the river shader has been reading all along
   // now reaches the truck: downstream, by the same solved gradient the ribbon
