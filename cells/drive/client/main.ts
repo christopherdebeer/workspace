@@ -1067,15 +1067,32 @@ interface Climate {
  *  thousand vertices each recomputing four corners at twenty-five cover
  *  samples apiece. The world stopped booting. Cache always; expire on news. */
 let climStamp = 0;
-const CLIM_G = 256;              // metres between sampled corners
+/**
+ * METRES BETWEEN SAMPLED CORNERS — and the first cut had this at 256, which
+ * did not merely cost too much, it stopped the world booting.
+ *
+ * Climate varies over TENS OF KILOMETRES. Sampling it every 256m oversamples
+ * a slow field by two orders of magnitude, and the bill arrives where the
+ * world is largest: the far shell is 256x256 vertices over roughly a hundred
+ * kilometres, which wants ~150,000 corners against a cache capped at 6,000.
+ * It thrashed — clear, recompute twenty-five cover samples, clear again —
+ * and presented as a 120-second boot timeout with no page error, because a
+ * hot loop looks like nothing at all from outside.
+ *
+ * At 2km a hundred-kilometre shell needs some 2,500 corners, computed once.
+ * Nothing is lost: bilinear interpolation across a 2km lattice is smoother
+ * than the thing it samples.
+ */
+const CLIM_G = 2048;
 const climCache = new Map<number, Climate>();
-/** Cover samples per corner: a 5×5 grid at 150m, so ~600m of neighbourhood.
- *  Paid once per corner and then cached, which is why it can afford to be a
- *  grid rather than a single read. */
+/** Cover samples per corner: a 5×5 grid at 400m, so ~1.6km of neighbourhood —
+ *  matched to CLIM_G, so a corner characterises the cell it stands for rather
+ *  than one spot inside it. Paid once per corner and then cached, which is why
+ *  it can afford to be a grid rather than a single read. */
 function moistureAt(x: number, z: number): number {
   let sum = 0, n = 0;
   for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) {
-    const cv = sampleCover(x + i * 150, z + j * 150);
+    const cv = sampleCover(x + i * 400, z + j * 400);
     if (cv === null) continue;
     const m = MOIST_OF[cv];
     if (m === undefined) continue;      // built and snow abstain
@@ -1123,7 +1140,10 @@ function climCorner(gx: number, gz: number): Climate {
   // tile lands, at which point it is asked again, once.
   if (c && (c.hadCover || c.stamp === climStamp)) return c;
   const fresh = climCompute(gx * CLIM_G, gz * CLIM_G);
-  if (climCache.size > 6000) climCache.clear();
+  // Generous: at CLIM_G the working set for a far shell is thousands, not
+  // tens of thousands, and a cap BELOW the working set is not a cap — it is a
+  // thrash, which is exactly how the 256m version hung the boot.
+  if (climCache.size > 20000) climCache.clear();
   climCache.set(k, fresh);
   return fresh;
 }
