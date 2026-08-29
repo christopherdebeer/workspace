@@ -13,7 +13,7 @@ let maxBrush = 0, minKmh = 1e9, maxKmh = 0;
 for (let i = 0; i < 10; i++) {
   await d.simWait(1.6);
   const s = await d.page.evaluate(() => ({ amb: window.__amb(), kmh: window.__real().kmh }));
-  maxBrush = Math.max(maxBrush, s.amb.brush ?? 0);
+  maxBrush = Math.max(maxBrush, s.amb.brushPeak ?? s.amb.brush ?? 0);
   minKmh = Math.min(minKmh, s.kmh); maxKmh = Math.max(maxKmh, s.kmh);
 }
 const impacts = await d.page.evaluate(() => window.__impacts());

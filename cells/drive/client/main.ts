@@ -25635,6 +25635,7 @@ let engineCrankUntil = 0, engineStillS = 0;
 let dbgAmb: Record<string, unknown> = {};
 (window as unknown as { __amb?: object }).__amb = (): object => dbgAmb;
 let ambSampledAt = 0, ambRiverL = 0, ambVegL = 0, ambFrothL = 0;
+let brushPeak = 0;   // session max — a one-frame brush must not hide from the probe
 let dbgSusp: object = {};
 // A shade over 9.81. Real gravity left long climbs feeling weightless once the
 // truck has 16m/s^2 of thrust to spend against it; this gives a hill enough
@@ -26952,6 +26953,7 @@ function tick(now: number): void {
     birds: +((sunAlt > 0.06 ? 1 : 0) * (1 - wxL.rain) * ambVegL * bed).toFixed(3),
     wind: +windAmb.toFixed(2), veg: +ambVegL.toFixed(2), riverRaw: +ambRiverL.toFixed(2),
     froth: +ambFrothL.toFixed(2), engine: engineSt, brush: +brushAmt.toFixed(2),
+    brushPeak: +(brushPeak = Math.max(brushPeak, brushAmt)).toFixed(2),
   };
   audio.ambience(dbgAmb.rustle as number, dbgAmb.river as number, dbgAmb.birds as number, windAmb, ambFrothL);
   audio.update(state.speed, throttle, surfKind, groundedF, wxL.rain, engRev, engGear, skid,
