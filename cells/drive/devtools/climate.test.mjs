@@ -31,6 +31,7 @@ execFileSync('npx', ['esbuild', join(HERE, '../client/climate.ts'), '--bundle', 
 const {
   BIOME_ORDER, ALPINE, CLIM_G, CLIM_CACHE_MAX, ClimateField, climCompute,
   climPick, climPickRow, corners, seaTempAt, treelineAt,
+  AltBand, ALT_BAND_NAMES, altBandAt, krummholz, swardLift, aspectLift, ASPECT_LIFT,
 } = await import(pathToFileURL(built).href);
 
 let bad = 0;
@@ -163,6 +164,85 @@ const mkEnv = (cover, lat, elev) => ({
   const fauna = { temperate: [5, 5, 2], arid: [1, 3, 6] };
   ok('row tables pick by weight too', climPickRow(fauna, [1, 0, 0, 0, 0], 0.95) === 2,
     climPickRow(fauna, [1, 0, 0, 0, 0], 0.95));
+}
+
+// ── ALTITUDE BANDS ────────────────────────────────────────────────
+{
+  const tl = treelineAt(46);   // ~2307m, the Alps
+  const at = (d) => ALT_BAND_NAMES[altBandAt(tl + d, tl)];
+  ok('deep below the trees is montane', at(-1200) === 'montane', at(-1200));
+  ok('just under the treeline is the thinning upper forest', at(-100) === 'treeline', at(-100));
+  ok('just above it is krummholz', at(100) === 'krummholz', at(100));
+  ok('higher still is alpine meadow', at(400) === 'meadow', at(400));
+  ok('then scree', at(900) === 'scree', at(900));
+  ok('then snow', at(1500) === 'snow', at(1500));
+  // THE BANDS FOLLOW THE TREELINE, which is the whole point — the same
+  // relative height is a different band at a different latitude only because
+  // the treeline moved, never because a hard metre value was baked in.
+  const arctic = treelineAt(68);
+  ok(`the same band sequence holds at 68° where the treeline is ${Math.round(arctic)}m`,
+    ALT_BAND_NAMES[altBandAt(arctic + 100, arctic)] === 'krummholz',
+    ALT_BAND_NAMES[altBandAt(arctic + 100, arctic)]);
+  ok('…and that is a far lower absolute height than the Alps krummholz',
+    arctic + 100 < tl, { arctic: arctic + 100, alps: tl + 100 });
+}
+{
+  // Krummholz is a CONTINUOUS collapse — a hard line of full trees stopping
+  // dead is the most obvious tell of a synthetic mountain.
+  const tl = 2300;
+  ok('trees are full height in the forest', krummholz(tl - 800, tl) === 1);
+  ok('nothing woody stands above the krummholz band', krummholz(tl + 400, tl) === 0);
+  const mid = krummholz(tl + 100, tl);
+  ok(`stunted in between (${mid.toFixed(2)} of full height)`, mid > 0 && mid < 0.3, mid);
+  let worst = 0, prev = krummholz(tl - 900, tl);
+  for (let d = -900; d <= 400; d += 10) {
+    const v = krummholz(tl + d, tl);
+    worst = Math.max(worst, Math.abs(v - prev)); prev = v;
+  }
+  ok(`and it never steps (worst ${worst.toFixed(3)} per 10m)`, worst < 0.03, worst);
+  ok('the sward gets its best season in the meadow', swardLift(tl + 200, tl) > 1.2);
+  ok('…and stops entirely under permanent snow', swardLift(tl + 1100, tl) === 0);
+}
+
+// ── ASPECT AS EFFECTIVE ELEVATION ─────────────────────────────────
+{
+  // North is -z. A slope descending north FACES north: shaded in the northern
+  // hemisphere, so it should read as higher, colder ground.
+  const slope = (dzPerM) => ({ coverAt: () => 30, latAbsAt: () => 46,
+    groundAt: (x, z) => 1000 + z * dzPerM });
+  // h = 1000 + z*k, so a POSITIVE k means height rises with z and the ground
+  // descends toward -z, which is north: the shaded face. Getting this backwards
+  // is exactly the kind of thing the test is for.
+  const northFacing = aspectLift(slope(0.6), 0, 0, 46);    // descends toward -z (north)
+  const southFacing = aspectLift(slope(-0.6), 0, 0, 46);   // descends toward +z (south)
+  ok(`a pole-facing slope reads as higher ground (+${northFacing.toFixed(0)}m)`,
+    northFacing > 50, northFacing);
+  ok(`a sun-facing one reads as lower (${southFacing.toFixed(0)}m)`,
+    southFacing < -50, southFacing);
+  ok('the two are opposite and equal', near(northFacing, -southFacing, 1e-6),
+    { northFacing, southFacing });
+  ok('neither exceeds the declared lift', Math.abs(northFacing) <= ASPECT_LIFT + 1e-9, northFacing);
+  // FLAT GROUND HAS NO ASPECT — otherwise noise in a plain becomes a climate.
+  ok('a plain has no aspect at all', aspectLift(slope(0.001), 0, 0, 46) === 0,
+    aspectLift(slope(0.001), 0, 0, 46));
+  // AND IT FLIPS BELOW THE EQUATOR: the shaded face in Patagonia points south.
+  const south = aspectLift(slope(0.6), 0, 0, -46);
+  ok('below the equator the shaded face is the other one',
+    Math.sign(south) === -Math.sign(northFacing), { north: northFacing, south });
+  // A missing heightfield must not throw — this is asked during init.
+  ok('an absent heightfield yields no lift rather than an exception',
+    aspectLift({ coverAt: () => null, latAbsAt: () => 46,
+      groundAt: () => { throw new Error('no terrain'); } }, 0, 0, 46) === 0);
+}
+{
+  // THE PAYOFF, end to end: two facing hillsides at the SAME altitude land in
+  // different bands, which is the thing that was impossible before.
+  const tl = treelineAt(46);
+  const h = tl - 120;                      // just inside the upper forest
+  const shaded = altBandAt(h + ASPECT_LIFT, tl);
+  const sunny = altBandAt(h - ASPECT_LIFT, tl);
+  ok(`facing hillsides at one height read ${ALT_BAND_NAMES[sunny]} and ${ALT_BAND_NAMES[shaded]}`,
+    shaded !== sunny, { sunny: ALT_BAND_NAMES[sunny], shaded: ALT_BAND_NAMES[shaded] });
 }
 
 console.log(bad ? `\n${bad} FAILED` : '\nall good — the field varies, and it varies smoothly');

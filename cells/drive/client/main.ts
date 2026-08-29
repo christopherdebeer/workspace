@@ -15,8 +15,8 @@
  * backend.
  */
 import * as THREE from 'three';
-import { BIOME_ORDER, ClimateField, climPick, climPickRow,
-  treelineAt, type ClimateSample } from './climate';
+import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, altBandAt, aspectLift, climPick, climPickRow,
+  krummholz, swardLift, treelineAt, type ClimateSample } from './climate';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
@@ -1017,11 +1017,21 @@ for (const b of BIOME_LIST) {
  *  at the head of that file for what leaving it in here cost. This is only the
  *  seam: the samplers it needs, and the mapping from its archetype INDEX back
  *  to the Biome record the sky and the light still read. */
-const climField = new ClimateField({
-  coverAt: (x, z) => sampleCover(x, z),
-  latAbsAt: (x, z) => Math.abs(localToLatLon(x, z)[0]),
-  groundAt: (x, z) => groundAt(x, z) + baseElev,
-});
+const climEnv = {
+  coverAt: (x: number, z: number) => sampleCover(x, z),
+  latAbsAt: (x: number, z: number) => Math.abs(localToLatLon(x, z)[0]),
+  groundAt: (x: number, z: number) => groundAt(x, z) + baseElev,
+};
+const climField = new ClimateField(climEnv);
+/** Elevation as the PLANTS experience it: true height plus what the slope's
+ *  aspect is worth. A pole-facing face behaves like ground 150m higher, so
+ *  everything keyed to height — treeline, band, krummholz, sward — reacts to
+ *  aspect without knowing aspect exists. Costs two extra height samples, so it
+ *  is used on the per-SITE and per-TEXEL paths and never per terrain vertex. */
+function elevEffAt(x: number, z: number): number {
+  const lat = localToLatLon(x, z)[0];
+  return groundAt(x, z) + baseElev + aspectLift(climEnv, x, z, lat);
+}
 type Climate = ClimateSample & { dom: Biome };
 const climOut = { dom: BIOMES.temperate } as { dom: Biome };
 function climateAt(x: number, z: number, elevAbs?: number): Climate {
@@ -5795,6 +5805,15 @@ function pickKind(r: () => number, x: number, z: number): VegKind {
 function siteKindAt(x: number, z: number, cover: number | null, r: () => number): VegKind {
   const h = groundAt(x, z);
   const slope = Math.abs(groundAt(x + SWARD_FM, z) - h) / SWARD_FM;
+  // ALTITUDE FIRST, ABOVE THE TREES. A cover raster at 38m says "forest" on a
+  // pixel whose upper half is scree, and below the treeline that is a fine
+  // guess — above it, it is the difference between a mountain and a hillside
+  // with a lawn on it. Aspect rides in through elevEffAt, so the shaded side
+  // of a col stops growing trees before the sunny side does.
+  const band = altBandAt(elevEffAt(x, z), climateAt(x, z).treeline);
+  if (band >= AltBand.Scree) return r() < 0.68 ? 'rock' : 'spire';
+  if (band === AltBand.Meadow) return r() < 0.5 ? 'rock' : r() < 0.8 ? 'bush' : 'spire';
+  if (band === AltBand.Krummholz) return r() < 0.62 ? 'conifer' : r() < 0.85 ? 'bush' : 'rock';
   switch (swardCtxAt(x, z, cover, slope)) {
     case SwardCtx.Ruin: return r() < 0.75 ? 'bush' : coverKind(cover, r, x, z);
     case SwardCtx.Water: return r() < 0.55 ? 'fern' : coverKind(cover, r, x, z);
@@ -5876,6 +5895,14 @@ function pushSite(x: number, z: number, kind: VegKind, r: () => number, tone?: V
   }
   const [s0, span] = VEG_SIZE[kind];
   let sc = s0 + r() * span;
+  // KRUMMHOLZ. A spruce at the treeline is the same spruce, a century of wind
+  // shorter — a deformation of what is already there rather than a new
+  // archetype, which is the cheapest honest way to draw the band and the same
+  // move the sward's flowers make with their shared card.
+  if (TRUNKED.includes(kind)) {
+    const k = krummholz(elevEffAt(x, z), climateAt(x, z).treeline);
+    if (k < 1) sc *= Math.max(0.18, k);
+  }
   // THE ERRATIC. One stone in twenty-five is far bigger than its neighbours —
   // a boulder the last ice age left, a tor the hill wore down to. A landscape
   // of uniformly-sized rocks reads as gravel at any scale; one outsized block
@@ -6317,9 +6344,16 @@ function swardRows(from: number, to: number): void {
       // and the mask cannot see it. Ground under the waterline grows nothing —
       // and the same SWARD_SHALLOW margin applies, so a beach keeps its
       // marram right down to the tide line.
+      // ALTITUDE MULTIPLIES WHAT COVER ASKED FOR. Grass thins in deep forest
+      // shade, has its best year in the alpine meadow just above the trees,
+      // and stops on scree and snow — and because the height it reads is the
+      // ASPECT-ADJUSTED one, the shaded wall of a valley goes bare while the
+      // sunny side opposite is still meadow.
+      const eEff = elevEffAt(wx, wz);
+      const lift = swardLift(eEff, climateAt(wx, wz, eEff).treeline);
       swardScratchF[k + 1] = seaOn && h + baseElev < seaSurfaceAbs() - SWARD_SHALLOW
         ? 0
-        : cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3);
+        : (cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3)) * lift;
       const slope = Math.abs(groundAt(wx + SWARD_FM, wz) - h) / SWARD_FM;
       const [pr, pg, pb] = terrainPalette(h + baseElev, slope, coverPaint(wx, wz), wx, wz);
       swardScratchC[k] = Math.round(clamp(pr, 0, 1) * 255);
@@ -19738,6 +19772,11 @@ function truckSpec(): Record<string, number> {
       dom: c.dom.name, tempC: +c.tempC.toFixed(1), moisture: +c.moisture.toFixed(2),
       treeline: Math.round(c.treeline), elevAbs: Math.round(c.elevAbs),
       aboveTreeline: +(c.elevAbs - c.treeline).toFixed(0),
+      // What the PLANTS see: true height plus what the aspect is worth, and
+      // the band that follows from it.
+      elevEff: Math.round(elevEffAt(x, z)),
+      aspect: Math.round(elevEffAt(x, z) - (groundAt(x, z) + baseElev)),
+      band: ALT_BAND_NAMES[altBandAt(elevEffAt(x, z), c.treeline)],
     };
   };
   const out: Record<string, unknown> = { here: at(state.x, state.z), settledBiome: biome.name, cached: climField.size };

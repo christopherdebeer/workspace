@@ -288,3 +288,107 @@ export function climPickRow(table: Record<string, number[]>, w: number[], roll: 
   for (let k = 0; k < n; k++) { t -= acc[k]; if (t <= 0) return k; }
   return 0;
 }
+
+// ── ALTITUDE: THE ONE AXIS THAT PRODUCES AN ORDERED SEQUENCE ───────
+//
+// Most of what varies across ground varies simultaneously — climate, moisture,
+// substrate are all just true at once. Altitude is the exception: it produces
+// bands in a fixed order, each a different thing to draw rather than a thinner
+// version of the last, which is what makes it worth naming precisely and the
+// easiest to check against places we can drive to.
+
+export const AltBand = {
+  /** Closed forest. The default everywhere below the trees. */
+  Montane: 0,
+  /** The upper forest, thinning — trees still win but are losing. */
+  Treeline: 1,
+  /** Stunted, wind-flagged conifer. The same archetype at a third the size:
+   *  a deformation, not a new asset. */
+  Krummholz: 2,
+  /** Alpine meadow — no trunked plant stands, and the sward gets its best
+   *  season of the year. */
+  Meadow: 3,
+  /** Rock and shard only. */
+  Scree: 4,
+  /** Nothing grows. */
+  Snow: 5,
+} as const;
+export type AltBand = typeof AltBand[keyof typeof AltBand];
+export const ALT_BAND_NAMES = ['montane', 'treeline', 'krummholz', 'meadow', 'scree', 'snow'];
+
+/** Band edges as metres RELATIVE TO THE TREELINE, so they follow it from the
+ *  tropics to the Arctic instead of being absolute heights that are only ever
+ *  right at one latitude — which is the mistake `elevAbs > 1500` was. */
+export const ALT_EDGES = [-400, 0, 250, 700, 1200];
+
+export function altBandAt(elevEff: number, treeline: number): AltBand {
+  const d = elevEff - treeline;
+  for (let i = 0; i < ALT_EDGES.length; i++) if (d < ALT_EDGES[i]) return i as AltBand;
+  return AltBand.Snow;
+}
+
+/**
+ * HOW TALL A TRUNKED PLANT MANAGES TO BE, 1 down in the forest and 0 where
+ * nothing woody stands. The middle is the point: krummholz is not a different
+ * species, it is a spruce that has spent a century being sheared by wind, and
+ * a shared-mesh deformation says that far better than a new archetype would.
+ * Smooth, because a hard line of full-height trees stopping dead is the single
+ * most obvious tell of a synthetic mountain.
+ */
+export function krummholz(elevEff: number, treeline: number): number {
+  const d = elevEff - treeline;
+  if (d <= -400) return 1;
+  if (d >= 250) return 0;
+  // 1 → 0.28 across the treeline band, then 0.28 → 0 through the krummholz.
+  if (d <= 0) return 1 - 0.72 * ((d + 400) / 400);
+  return 0.28 * (1 - d / 250);
+}
+
+/**
+ * WHAT THE SWARD DOES WITH HEIGHT. Grass thins in deep forest shade, has its
+ * best year in the alpine meadow just above the trees, and stops entirely on
+ * scree and snow. A single multiplier over whatever the cover class already
+ * asked for.
+ */
+export function swardLift(elevEff: number, treeline: number): number {
+  const d = elevEff - treeline;
+  if (d >= 1000) return 0;                       // snow and bare rock
+  if (d >= 500) return 1 - (d - 500) / 500;      // scree, thinning out
+  if (d >= 0) return 1.35;                       // the meadow — its best season
+  if (d >= -400) return 1 + 0.35 * ((d + 400) / 400);
+  return 1;
+}
+
+/**
+ * ASPECT, EXPRESSED AS EFFECTIVE ELEVATION.
+ *
+ * A slope that faces the pole gets less sun, so it is colder and wetter and
+ * holds snow: more conifer, more moss, a treeline that sits lower on it than
+ * on the sunny side of the same valley. The cheapest honest way to say all of
+ * that at once is to treat it as HEIGHT — a poleward face behaves like ground
+ * a hundred and fifty metres higher — because every consumer already reacts
+ * correctly to height. One term, and the treeline, the temperature, the
+ * species mix and the sward all follow without knowing aspect exists.
+ *
+ * We already sample the heightfield constantly and throw the bearing away;
+ * this is the whole of what it costs to keep it.
+ *
+ * NORTH IS -Z in this world (see `heading = atan2(dx, -dz)`), and poleward
+ * flips below the equator — a Chilean south-facing slope is the shaded one.
+ */
+export const ASPECT_LIFT = 150;
+export function aspectLift(env: ClimateEnv, x: number, z: number, lat: number, step = 12): number {
+  let h0: number, hx: number, hz: number;
+  try {
+    h0 = env.groundAt(x, z); hx = env.groundAt(x + step, z); hz = env.groundAt(x, z + step);
+  } catch { return 0; }
+  const gx = (hx - h0) / step, gz = (hz - h0) / step;
+  const grade = Math.hypot(gx, gz);
+  if (grade < 0.05) return 0;                    // flat ground has no aspect
+  // Downhill is the negated gradient; poleward is -z north of the equator.
+  const pole = lat >= 0 ? -1 : 1;
+  const northness = (-gz / grade) * pole;        // +1 faces the pole, -1 the sun
+  // Saturate the steepness term: past about a 1:2 slope, more grade does not
+  // make the face any more shaded.
+  return northness * ASPECT_LIFT * Math.min(1, grade / 0.5);
+}
