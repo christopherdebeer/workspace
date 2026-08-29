@@ -10423,6 +10423,19 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       const gz = at0.uz * gAlong + cpz * gCross;
       const plane = (qx: number, qz: number): number => hy0 + (qx - nodeX) * gx + (qz - nodeZ) * gz;
       endPlane[end] = plane;
+      // A CONTINUATION TIE — the same road carrying on over a tile cut —
+      // takes the host's REGISTERED terminal camber, not the plane fit's.
+      // The three-point fit samples the host's interior bays, which mid-bend
+      // carry full superelevation, while the host's own terminal station
+      // (its curvature window truncated at the cut) drew drain-only camber:
+      // the fit handed this end 0.31 where the host drew 0.131, and the
+      // 0.18m kerb step at Chapman's -51,65 was exactly the difference —
+      // written AFTER the end weld had already matched the ends. The anchor
+      // reads what the host actually drew at the node; a genuine side-road
+      // junction (off-axis, so no anchor) keeps the plane's cross-fall.
+      const tAnchor = tiltAnchorAt(nodeX, nodeZ,
+        end === 0 ? dense[1][0] - dense[0][0] : dense[n - 1][0] - dense[n - 2][0],
+        end === 0 ? dense[1][1] - dense[0][1] : dense[n - 1][1] - dense[n - 2][1]);
       // NEVER THE FAR END'S OWN STATIONS. On a short way the old break-on-null
       // kept the fade from ever reaching the other end; the plane answers
       // everywhere, and the first run of this warp dragged a 4-station service
@@ -10441,7 +10454,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         const hL = plane(dense[i][0] + lx, dense[i][1] + lz);
         const w = 1 - k / WARP;
         prof[i] += clamp((hR + hL) * 0.5 - prof[i], -GRADE_SEP, GRADE_SEP) * w;
-        tilt[i] += ((hR - hL) * 0.5 - tilt[i]) * w;
+        tilt[i] += ((tAnchor ?? (hR - hL) * 0.5) - tilt[i]) * w;
       }
     }
   }
