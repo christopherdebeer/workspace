@@ -903,6 +903,11 @@ const BIOMES: Record<string, Biome> = {
   },
 };
 let biome: Biome = BIOMES.temperate;
+/** `?biome=` art direction, parsed once. When set it overrides the whole
+ *  climate field, not merely the sky — otherwise forcing `arid` would still
+ *  blend a green valley through the middle of the desert it was asked for. */
+const biomeForced: Biome | null =
+  BIOMES[new URLSearchParams(location.search).get('biome') ?? ''] ?? null;
 /** The latitude guess. It is a poor one — it gives a whole world ONE palette,
  *  so the Sahara and the Nile delta came out identical — but it is what stands
  *  in until real land cover arrives, and cover is never guaranteed. */
@@ -955,7 +960,228 @@ function biomeFromCover(lat: number, elevAbs: number): Biome | null {
 // Settled ONCE, the first time cover reaches the car. Re-picking mid-drive
 // would pop the sky, the haze and the light together, and a seam you can see is
 // worse than a biome that is a shade wrong for the last mile of a long crossing.
+//
+// THAT ARGUMENT IS RIGHT ABOUT THE SKY AND WRONG ABOUT THE GROUND, which is
+// what the climate field below exists to separate. The dome is one object and
+// genuinely wants one answer; the ground, the plants and the flowers are a
+// different thing at every point and were only ever sharing the sky's answer
+// because there was nothing else to ask.
 let biomeSettled = false;
+
+/**
+ * ══ THE CLIMATE FIELD ═══════════════════════════════════════════════
+ *
+ * `biome` is ONE VALUE FOR A WHOLE SESSION. Everything characterful reads it —
+ * VEG_MIX, STONE_MIX, FLOWER_PAL, BIRD_MIX, HERD_MIX, the ground ramp — so a
+ * three-thousand-kilometre leg of THE LINE comes out one palette with one
+ * species list under one sky. The note above `pickBiome` admitted as much
+ * ("it gives a whole world ONE palette, so the Sahara and the Nile delta came
+ * out identical"); it was written as an apology for a stand-in, and the
+ * stand-in became the architecture.
+ *
+ * So: a FIELD, sampled at a position, carrying WEIGHTS OVER THE FIVE
+ * ARCHETYPES rather than a pick. Consumers that can blend — the ramp, the
+ * species rolls, the flower palette — take the weights and mix. The few that
+ * genuinely need one answer take `dom`. Nothing switches at a boundary,
+ * because there are no longer any boundaries: the weights move continuously,
+ * which is the same rule the sward's flower patches had to learn the hard way
+ * (a threshold on a per-cell hash draws a grid; a threshold on a continuous
+ * field draws a coastline).
+ *
+ * WHAT IT IS BUILT FROM, all of it already in hand:
+ *   TEMPERATURE  from latitude and elevation, the two things that actually set
+ *                it — a quadratic in latitude fits the real profile far better
+ *                than the linear one the old latitude bands implied.
+ *   MOISTURE     from the land-cover histogram around the point. Cover is a
+ *                statement about what grows, which is a statement about water.
+ *   TREELINE     from latitude. The one place altitude produces a genuine
+ *                ordered sequence, and the reason `alpine` can stop being
+ *                "above 1500m" at every latitude on Earth.
+ */
+const BIOME_ORDER = ['arid', 'tropical', 'temperate', 'boreal', 'alpine'] as const;
+const BIOME_LIST: Biome[] = BIOME_ORDER.map((n) => BIOMES[n]);
+/** Every archetype's ramp shares these breakpoints, which is what makes a
+ *  blended ramp cheap: find the band once, then weight five colours. Asserted
+ *  at load because if a ramp ever gains a step, blending BY INDEX silently
+ *  starts mixing sea-level cyan into an alpine snowcap and nothing throws. */
+const RAMP_STEPS: number[] = BIOMES.temperate.ramp.map(([m]) => m);
+for (const b of BIOME_LIST) {
+  if (b.ramp.length !== RAMP_STEPS.length || b.ramp.some(([m], i) => m !== RAMP_STEPS[i])) {
+    console.warn(`biome ${b.name}: ramp steps differ from temperate — blended ramps will be wrong`);
+  }
+}
+/** Where each archetype lives in (normalised temperature, moisture). Arid and
+ *  tropical sit at the same temperature and are told apart by water alone,
+ *  which is why moisture is weighted as heavily as heat below. */
+const CLIM_HOME: Array<[number, number]> = [
+  [0.85, 0.12],   // arid       — hot, dry
+  [0.88, 0.80],   // tropical   — hot, wet
+  [0.55, 0.55],   // temperate  — mild, middling
+  [0.28, 0.50],   // boreal     — cold, middling
+  [0.20, 0.40],   // alpine     — cold, and mostly a matter of height (see below)
+];
+/** How much water each cover class implies. `built` abstains: a car park says
+ *  nothing about rainfall, and letting cities read as desert turned every
+ *  suburb arid. Snow abstains for the mirror reason — frozen is not dry. */
+const MOIST_OF: Record<number, number> = {
+  10: 0.75,   // tree
+  20: 0.28,   // shrub
+  30: 0.45,   // grass
+  40: 0.60,   // crop
+  60: 0.08,   // bare
+  80: 1.00,   // water
+  90: 1.00,   // wetland
+  95: 1.00,   // mangrove
+  100: 0.50,  // moss
+};
+/** Metres of elevation above which trees stop. Fits the Alps (46° → 2307m
+ *  against a real ~2200) and Scandinavia (62° → 924m against ~900), and
+ *  reaches zero near 70°. It UNDER-reads continental interiors — the Rockies
+ *  at 40° run some 800m above this — and that residual is honest: it is the
+ *  moisture axis, which this curve does not yet take a term from. */
+const treelineAt = (latAbs: number): number => Math.max(0, 4000 - 0.8 * latAbs * latAbs);
+interface Climate {
+  /** Weights over BIOME_ORDER, summing to one. */
+  w: number[];
+  /** The heaviest archetype — for the dome, the light, and anything else that
+   *  is one object and must therefore have one answer. */
+  dom: Biome;
+  tempC: number;
+  moisture: number;
+  /** Metres. See treelineAt. */
+  treeline: number;
+  elevAbs: number;
+}
+const CLIM_G = 256;              // metres between sampled corners
+const climCache = new Map<number, Climate>();
+/** Cover samples per corner: a 5×5 grid at 150m, so ~600m of neighbourhood.
+ *  Paid once per corner and then cached, which is why it can afford to be a
+ *  grid rather than a single read. */
+function moistureAt(x: number, z: number): number {
+  let sum = 0, n = 0;
+  for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) {
+    const cv = sampleCover(x + i * 150, z + j * 150);
+    if (cv === null) continue;
+    const m = MOIST_OF[cv];
+    if (m === undefined) continue;      // built and snow abstain
+    sum += m; n++;
+  }
+  return n ? sum / n : 0.5;             // no evidence: assume unremarkable
+}
+function climCompute(x: number, z: number): Climate {
+  const latAbs = Math.abs(localToLatLon(x, z)[0]);
+  const elevAbs = groundAt(x, z) + baseElev;
+  // Sea-level mean temperature falls off as a quadratic in latitude — 27°C at
+  // the equator, 13 at 45°, 2.5 at 60°, below freezing past 63 — then the
+  // standard atmospheric lapse takes it down with height.
+  const tempC = 27 - 0.0068 * latAbs * latAbs - 0.0065 * Math.max(0, elevAbs);
+  const moisture = moistureAt(x, z);
+  const treeline = treelineAt(latAbs);
+  const tempN = clamp((tempC + 10) / 40, 0, 1);
+  const w: number[] = [];
+  let total = 0;
+  for (let i = 0; i < CLIM_HOME.length; i++) {
+    const dt = tempN - CLIM_HOME[i][0], dm = moisture - CLIM_HOME[i][1];
+    const v = Math.exp(-(dt * dt * 12 + dm * dm * 10));
+    w.push(v); total += v;
+  }
+  // ALPINE IS A HEIGHT, NOT A TEMPERATURE. It sits close enough to boreal in
+  // the temperature/moisture plane that the soft assignment above can never
+  // separate them; what actually distinguishes it is being ABOVE THE TREES.
+  // So it takes its weight from the treeline directly, which is also what
+  // retires `elevAbs > 1500` — a rule that called the Ethiopian highlands
+  // alpine and the Norwegian fjells forest.
+  const above = clamp((elevAbs - (treeline - 500)) / 700, 0, 1);
+  const boost = above * above * (3 - 2 * above) * 3.2;
+  w[4] += boost * (total / CLIM_HOME.length);
+  total += boost * (total / CLIM_HOME.length);
+  let dom = 0;
+  for (let i = 0; i < w.length; i++) { w[i] /= total; if (w[i] > w[dom]) dom = i; }
+  return { w, dom: BIOME_LIST[dom], tempC, moisture, treeline, elevAbs };
+}
+function climCorner(gx: number, gz: number): Climate {
+  const k = gx * 65536 + gz;
+  let c = climCache.get(k);
+  if (c) return c;
+  const x = gx * CLIM_G, z = gz * CLIM_G;
+  c = climCompute(x, z);
+  // DO NOT FREEZE A GUESS. Cover and DEM arrive over the wire seconds after
+  // the ground they describe is first asked about, and a corner cached before
+  // either landed keeps a temperate-at-sea-level answer forever — the same
+  // trap `vegDeferredAt` was written for, where a razor-edged rectangle of
+  // wrong density the size of a cover tile survived the data that would have
+  // fixed it. Only a corner that had real evidence gets kept.
+  if (sampleCover(x, z) !== null) {
+    if (climCache.size > 6000) climCache.clear();
+    climCache.set(k, c);
+  }
+  return c;
+}
+/** Shared scratch — `climateAt` returns THIS OBJECT, so read what you need and
+ *  do not retain it across another call. The same convention `groundTintMemo`
+ *  and `swardCol` already use, for the same reason: this is called per terrain
+ *  vertex and per sward texel, and an allocation there is a garbage collection
+ *  in the middle of a build. */
+const climScratch: Climate = { w: [0, 0, 0, 0, 0], dom: BIOMES.temperate, tempC: 12, moisture: 0.5, treeline: 2000, elevAbs: 0 };
+/**
+ * The climate at a point, BILINEARLY INTERPOLATED between cached corners.
+ *
+ * The interpolation is not a nicety. Corners sit 256m apart, and a nearest-
+ * corner lookup would put a hard 256m grid into the ground colour and the
+ * species mix — which is precisely the checkerboard the flower patches drew
+ * when they thresholded a per-cell hash instead of a continuous field. A
+ * climate that steps is worse than a climate that is slightly wrong.
+ */
+function climateAt(x: number, z: number): Climate {
+  // ART DIRECTION WINS, and collapses the field to one archetype — otherwise
+  // `?biome=arid` would still blend a green valley through the middle of it.
+  if (biomeForced) {
+    climScratch.w.fill(0);
+    climScratch.w[BIOME_LIST.indexOf(biomeForced)] = 1;
+    climScratch.dom = biomeForced;
+    climScratch.elevAbs = groundAt(x, z) + baseElev;
+    climScratch.treeline = treelineAt(Math.abs(localToLatLon(x, z)[0]));
+    return climScratch;
+  }
+  const fx = x / CLIM_G, fz = z / CLIM_G;
+  const gx = Math.floor(fx), gz = Math.floor(fz);
+  const tx = fx - gx, tz = fz - gz;
+  const a = climCorner(gx, gz), b = climCorner(gx + 1, gz);
+  const c = climCorner(gx, gz + 1), d = climCorner(gx + 1, gz + 1);
+  const mix = (p: number, q: number, r: number, s: number): number =>
+    (p * (1 - tx) + q * tx) * (1 - tz) + (r * (1 - tx) + s * tx) * tz;
+  let dom = 0;
+  for (let i = 0; i < 5; i++) {
+    climScratch.w[i] = mix(a.w[i], b.w[i], c.w[i], d.w[i]);
+    if (climScratch.w[i] > climScratch.w[dom]) dom = i;
+  }
+  climScratch.dom = BIOME_LIST[dom];
+  climScratch.tempC = mix(a.tempC, b.tempC, c.tempC, d.tempC);
+  climScratch.moisture = mix(a.moisture, b.moisture, c.moisture, d.moisture);
+  climScratch.treeline = mix(a.treeline, b.treeline, c.treeline, d.treeline);
+  climScratch.elevAbs = mix(a.elevAbs, b.elevAbs, c.elevAbs, d.elevAbs);
+  return climScratch;
+}
+/** Pick from a per-archetype weight table by CLIMATE rather than by the one
+ *  global biome: every archetype's row contributes in proportion to how much
+ *  of it is present here, so a boreal-temperate margin really does grow both
+ *  conifers and broadleaves instead of flipping between them at a line. */
+function climPick<T>(table: Record<string, Array<[T, number]>>, cl: Climate, r: () => number): T | null {
+  let total = 0;
+  for (let i = 0; i < BIOME_ORDER.length; i++) {
+    const row = table[BIOME_ORDER[i]];
+    if (!row) continue;
+    for (const [, wt] of row) total += wt * cl.w[i];
+  }
+  if (total <= 0) return null;
+  let t = r() * total;
+  for (let i = 0; i < BIOME_ORDER.length; i++) {
+    const row = table[BIOME_ORDER[i]];
+    if (!row) continue;
+    for (const [k, wt] of row) { t -= wt * cl.w[i]; if (t <= 0) return k; }
+  }
+  return null;
+}
 
 // Where each land-cover class pulls the ground colour. Deliberately muted and
 // inside the existing solarpunk range: these are a shift in character, not a
@@ -974,11 +1200,23 @@ const COVER_TINT: Record<number, Rgb> = {
   100: [0.36, 0.38, 0.32],  // moss/lichen
 };
 const COVER_MIX = 0.55;     // how far toward the tint the biome ramp is pulled
-const terrainPalette = (elev: number, slope: number, cover?: number | null): [number, number, number] => {
+const terrainPalette = (elev: number, slope: number, cover?: number | null,
+  px?: number, pz?: number): [number, number, number] => {
   // Solarpunk desert: cyan shallows → warm sand → ochre scrub → dry upland →
   // bare rock → snow. The emerald in this world comes from the VEGETATION
   // standing on the sand, not from painting the ground green.
-  let c: Rgb = biome.ramp[biome.ramp.length - 1][1];
+  //
+  // THE RAMP IS NOW BLENDED PER PLACE. Given a position, the five archetype
+  // ramps are mixed by the climate weights there, so a coast that shades into
+  // highland shades in COLOUR too instead of holding one palette until the
+  // session ends. All five share breakpoints (RAMP_STEPS, asserted at load),
+  // so this costs one band lookup and a weighted sum of five colours rather
+  // than five separate scans. Without a position — a caller I have missed, or
+  // one that genuinely has none — it falls back to the settled `biome`, which
+  // is exactly the old behaviour.
+  const cl = px !== undefined && pz !== undefined ? climateAt(px, pz) : null;
+  const ramp = biome.ramp;
+  let c: Rgb = ramp[ramp.length - 1][1];
   // THE SHALLOWS BAND IS ABOUT WATER, NOT ABOUT ALTITUDE. Every ramp opens
   // with a cyan for ground at or below sea level, which is right on a coast
   // and catastrophic in a basin: Death Valley's floor is 86m down, so the
@@ -1005,9 +1243,23 @@ const terrainPalette = (elev: number, slope: number, cover?: number | null): [nu
   // shallows.
   const knownDry = cover !== null && cover !== undefined && cover !== COVER.water;
   const start = (dryAt || knownDry) ? 1 : 0;
-  for (let i = start; i < biome.ramp.length; i++) {
-    const [max, col] = biome.ramp[i];
-    if (elev <= max || i === biome.ramp.length - 1) { c = col; break; }
+  for (let i = start; i < ramp.length; i++) {
+    const [max, col] = ramp[i];
+    if (elev <= max || i === ramp.length - 1) {
+      // The band is found on shared breakpoints, so `i` indexes every
+      // archetype's ramp alike and the blend is a weighted sum in place.
+      if (cl) {
+        let r = 0, g = 0, b = 0;
+        for (let k = 0; k < BIOME_LIST.length; k++) {
+          const w = cl.w[k];
+          if (w <= 0.001) continue;
+          const bc = BIOME_LIST[k].ramp[i][1];
+          r += bc[0] * w; g += bc[1] * w; b += bc[2] * w;
+        }
+        c = [r, g, b];
+      } else c = col;
+      break;
+    }
   }
   // WHAT IS ACTUALLY GROWING ON IT. The elevation ramp knows how high the
   // ground is and nothing else, so farmland, forest and salt pan at the same
@@ -3522,7 +3774,7 @@ function buildTerrainMesh(t: HeightTile): void {
     // coverPaint, not sampleCover: this is the one consumer that only decides a
     // COLOUR, so it takes the dithered read and the 38m block edges dissolve
     // into a ragged boundary at vertex resolution. See coverPaint.
-    let [r, g, bb] = terrainPalette(elevAbs, Math.hypot(du, dv) / Math.max(cell, 1), coverPaint(ex, ez));
+    let [r, g, bb] = terrainPalette(elevAbs, Math.hypot(du, dv) / Math.max(cell, 1), coverPaint(ex, ez), ex, ez);
     // …and then whoever actually drew this ground. The 38m raster says what is
     // growing across a landscape; an OSM area says where a particular wood
     // STOPS, which is the thing the raster cannot resolve. Applied after it,
@@ -5641,39 +5893,36 @@ const COVER_VEG: Record<number, number> = {
 /** WHAT species, from what is actually there. Cover names the ground; the
  *  biome's own mix still supplies the character, so a boreal forest is
  *  conifers and a tropical one is palms without cover having to say so. */
-function coverKind(cover: number | null, r: () => number): VegKind {
+function coverKind(cover: number | null, r: () => number, x: number, z: number): VegKind {
   if (cover === COVER.mangrove) return r() < 0.75 ? 'palm' : 'broadleaf';
   if (cover === COVER.tree) {
-    const mix = VEG_MIX[biome.name] ?? VEG_MIX.temperate;
-    // Drop bushes and rocks: this pixel says CANOPY, so pick a tree from the
-    // biome's mix and only fall back to the general roll if it has none.
-    const trees = mix.filter(([k]) => k === 'broadleaf' || k === 'conifer' || k === 'palm' || k === 'acacia');
-    if (trees.length) {
-      let total = 0;
-      for (const [, w] of trees) total += w;
-      let t = r() * total;
-      for (const [k, w] of trees) { t -= w; if (t <= 0) return k; }
-      return trees[0][0];
-    }
+    // Drop bushes and rocks: this pixel says CANOPY, so pick a tree — but from
+    // the CLIMATE'S blend of every archetype's mix, so a boreal-temperate
+    // margin grows both conifers and broadleaves in proportion instead of
+    // flipping between two pure stands at an invisible line.
+    const t = climPick(VEG_TREES, climateAt(x, z), r);
+    if (t) return t;
   }
   if (cover === COVER.shrub || cover === COVER.grass || cover === COVER.crop) {
-    return r() < 0.82 ? 'bush' : pickKind(r);
+    return r() < 0.82 ? 'bush' : pickKind(r, x, z);
   }
   // WET GROUND GROWS THE UNDERSTOREY. Fern and bush where a swamp used to
   // deposit whatever the biome roll said, which in a boreal marsh was pines.
-  if (cover === COVER.wetland) return r() < 0.5 ? 'fern' : r() < 0.8 ? 'bush' : pickKind(r);
+  if (cover === COVER.wetland) return r() < 0.5 ? 'fern' : r() < 0.8 ? 'bush' : pickKind(r, x, z);
   // BARE AND FROZEN GROUND IS GEOLOGY. Nothing else is standing up out there,
   // and a shard reads as country where a lone shrub reads as a mistake.
   if (cover === COVER.bare || cover === COVER.snow) return r() < 0.62 ? 'rock' : 'spire';
-  return pickKind(r);
+  return pickKind(r, x, z);
 }
-function pickKind(r: () => number): VegKind {
-  const mix = VEG_MIX[biome.name] ?? VEG_MIX.temperate;
-  let total = 0;
-  for (const [, w] of mix) total += w;
-  let t = r() * total;
-  for (const [k, w] of mix) { t -= w; if (t <= 0) return k; }
-  return mix[0][0];
+/** VEG_MIX with everything that is not a tree removed, precomputed once — the
+ *  canopy pick above wants only trees, and filtering five rows per plant was
+ *  the sort of thing that turns a seed pass into a stall. */
+const VEG_TREES: Record<string, Array<[VegKind, number]>> = Object.fromEntries(
+  Object.entries(VEG_MIX).map(([k, row]) => [k, row.filter(([v]) =>
+    v === 'broadleaf' || v === 'conifer' || v === 'palm' || v === 'acacia')]),
+);
+function pickKind(r: () => number, x: number, z: number): VegKind {
+  return climPick(VEG_MIX, climateAt(x, z), r) ?? VEG_MIX.temperate[0][0];
 }
 /** WHAT GROWS HERE, taking the STAND rather than just the pixel — the same
  *  habitat read the sward's flowers use (SwardCtx / swardCtxAt), applied to a
@@ -5686,10 +5935,10 @@ function siteKindAt(x: number, z: number, cover: number | null, r: () => number)
   const h = groundAt(x, z);
   const slope = Math.abs(groundAt(x + SWARD_FM, z) - h) / SWARD_FM;
   switch (swardCtxAt(x, z, cover, slope)) {
-    case SwardCtx.Ruin: return r() < 0.75 ? 'bush' : coverKind(cover, r);
-    case SwardCtx.Water: return r() < 0.55 ? 'fern' : coverKind(cover, r);
-    case SwardCtx.Cliff: return r() < 0.6 ? (r() < 0.7 ? 'rock' : 'spire') : coverKind(cover, r);
-    default: return coverKind(cover, r);
+    case SwardCtx.Ruin: return r() < 0.75 ? 'bush' : coverKind(cover, r, x, z);
+    case SwardCtx.Water: return r() < 0.55 ? 'fern' : coverKind(cover, r, x, z);
+    case SwardCtx.Cliff: return r() < 0.6 ? (r() < 0.7 ? 'rock' : 'spire') : coverKind(cover, r, x, z);
+    default: return coverKind(cover, r, x, z);
   }
 }
 
@@ -5702,10 +5951,18 @@ const vegTint = new THREE.Color();
 /** What a STAND has in common: one shifted green and one bedrock, so a wood
  *  is a wood and a scree slope is one mountain's worth of rock. */
 interface VegTone { h: number; s: number; l: number; stone: number }
-function makeTone(r: () => number): VegTone {
-  const mix = STONE_MIX[biome.name] ?? STONE_MIX.temperate;
+function makeTone(r: () => number, x: number, z: number): VegTone {
+  // BEDROCK BLENDS TOO. STONE_MIX is a row per archetype; weighting all five
+  // by the climate here means a granite country shading into limestone does
+  // so gradually, which is what the ground actually does.
+  const cl = climateAt(x, z);
+  const mix: number[] = new Array(STONE.length).fill(0);
   let total = 0;
-  for (const w of mix) total += w;
+  for (let bi = 0; bi < BIOME_ORDER.length; bi++) {
+    const row = STONE_MIX[BIOME_ORDER[bi]];
+    if (!row) continue;
+    for (let i = 0; i < row.length; i++) { mix[i] += row[i] * cl.w[bi]; total += row[i] * cl.w[bi]; }
+  }
   let t = r() * total, stone = 0;
   for (let i = 0; i < mix.length; i++) { t -= mix[i]; if (t <= 0) { stone = i; break; } }
   return { h: (r() - 0.5) * 0.055, s: (r() - 0.5) * 0.26, l: (r() - 0.5) * 0.17, stone };
@@ -5718,7 +5975,7 @@ function pushSite(x: number, z: number, kind: VegKind, r: () => number, tone?: V
     const [cx2, cz2] = closestOnSeg(x, z, seg);
     if (Math.hypot(x - cx2, z - cz2) < 5) return;   // nor inside a building
   }
-  const tn = tone ?? makeTone(r);
+  const tn = tone ?? makeTone(r, x, z);
   if (STONY.includes(kind)) {
     const [hu, hv, sa, sv, li, lv] = STONE[tn.stone];
     vegTint.setHSL(hu + r() * hv, clamp(sa + r() * sv, 0, 1),
@@ -5738,11 +5995,23 @@ function pushSite(x: number, z: number, kind: VegKind, r: () => number, tone?: V
     const odd = r();
     if (odd < 0.045) vegTint.setHSL(0.055 + r() * 0.07, 0.4 + r() * 0.25, 0.34 + r() * 0.16);
     else if (odd < 0.085) vegTint.setHSL(0.36 + r() * 0.09, 0.07 + r() * 0.13, 0.44 + r() * 0.16);
-    else vegTint.setHSL(
-      biome.vegHue[0] + r() * biome.vegHue[1] + tn.h,
-      clamp(0.3 + r() * 0.3 + tn.s * 0.5, 0.05, 0.95),
-      clamp(biome.vegLit[0] + r() * biome.vegLit[1] + tn.l * 0.5, 0.05, 0.88),
-    );
+    else {
+      // THE GREEN BAND IS A PLACE'S, NOT A SESSION'S. vegHue/vegLit blend
+      // across the archetypes present here, so foliage shifts hue along a
+      // drive the way the ground under it now does.
+      const cl = climateAt(x, z);
+      let hue0 = 0, hue1 = 0, lit0 = 0, lit1 = 0;
+      for (let bi = 0; bi < BIOME_LIST.length; bi++) {
+        const w = cl.w[bi], b = BIOME_LIST[bi];
+        hue0 += b.vegHue[0] * w; hue1 += b.vegHue[1] * w;
+        lit0 += b.vegLit[0] * w; lit1 += b.vegLit[1] * w;
+      }
+      vegTint.setHSL(
+        hue0 + r() * hue1 + tn.h,
+        clamp(0.3 + r() * 0.3 + tn.s * 0.5, 0.05, 0.95),
+        clamp(lit0 + r() * lit1 + tn.l * 0.5, 0.05, 0.88),
+      );
+    }
   }
   const [s0, span] = VEG_SIZE[kind];
   let sc = s0 + r() * span;
@@ -5782,14 +6051,15 @@ function pushSite(x: number, z: number, kind: VegKind, r: () => number, tone?: V
 function plantClump(cx: number, cz: number, rad: number, count: number, dominant: VegKind, r: () => number): void {
   // ONE TONE FOR THE STAND: the same shifted green over this wood, the same
   // bedrock under this scree. Rolled per clump, not per plant.
-  const tone = makeTone(r);
+  const tone = makeTone(r, cx, cz);
   for (let i = 0; i < count; i++) {
     // sqrt-biased radius packs members toward the middle and thins the edge,
     // so a clump has a core and a fringe rather than a hard disc.
     const t = Math.pow(r(), 0.62) * rad;
     const a = r() * Math.PI * 2;
     // One member in six is a different species — mixed stands, not monoculture.
-    pushSite(cx + Math.cos(a) * t, cz + Math.sin(a) * t, r() < 0.83 ? dominant : pickKind(r), r, tone);
+    const mx2 = cx + Math.cos(a) * t, mz2 = cz + Math.sin(a) * t;
+    pushSite(mx2, mz2, r() < 0.83 ? dominant : pickKind(r, mx2, mz2), r, tone);
   }
 }
 // Where clumps WANT to be: a low-frequency field, so woodland gathers into
@@ -5832,8 +6102,10 @@ function scatterVeg(pts: Array<[number, number]>, seed: number, tags: Record<str
     const cv = sampleCover(x, z);
     if (cv !== null && (COVER_VEG[cv] ?? 6) <= 0) continue;
     k++;
+    // A WOOD IS STILL A WOOD, but which tree it is made of is now the
+    // climate's answer rather than a two-name test on one global label.
     const dominant: VegKind = wooded && r() < 0.8
-      ? (biome.name === 'boreal' || biome.name === 'alpine' ? 'conifer' : 'broadleaf')
+      ? (climPick(VEG_TREES, climateAt(x, z), r) ?? 'broadleaf')
       : siteKindAt(x, z, cv, r);
     const rad = wooded ? 10 + r() * 20 : 5 + r() * 13;
     plantClump(x, z, rad, Math.round((wooded ? 14 : 7) + r() * (wooded ? 22 : 12)), dominant, r);
@@ -5879,7 +6151,9 @@ function seedCell(gx: number, gz: number): void {
   if (!vegGrid.has(key)) vegGrid.set(key, []);
   const ceiling = cover !== null
     ? (COVER_VEG[cover] ?? 6)
-    : (biome.name === 'arid' ? 4 : biome.name === 'tropical' ? 14 : biome.name === 'boreal' ? 12 : 9);
+    // No cover here yet: fall back to a ceiling blended from the climate
+    // rather than a switch on one global name.
+    : (() => { const cw = climateAt(mx, mz).w; return 4 * cw[0] + 14 * cw[1] + 9 * cw[2] + 12 * cw[3] + 6 * cw[4]; })();
   // …and HOW MUCH of it, where, is still the noise field's business. Cover is
   // 37m data; it must never become a visible grid of thickets, so the density
   // field keeps deciding which patch of a cover class is thick and which is
@@ -5901,7 +6175,7 @@ function seedCell(gx: number, gz: number): void {
   const cellSlope = Math.abs(groundAt(mx + SWARD_FM, mz) - groundAt(mx, mz)) / SWARD_FM;
   const stony = cover === COVER.bare || cover === COVER.snow || cover === COVER.built
     || cellSlope > SWARD_CLIFF_SLOPE;
-  const tone = makeTone(r);
+  const tone = makeTone(r, mx, mz);
   for (let i = 0; i < strays; i++) {
     const roll = r();
     const k: VegKind = stony
@@ -6186,7 +6460,7 @@ function swardRows(from: number, to: number): void {
         ? 0
         : cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3);
       const slope = Math.abs(groundAt(wx + SWARD_FM, wz) - h) / SWARD_FM;
-      const [pr, pg, pb] = terrainPalette(h + baseElev, slope, coverPaint(wx, wz));
+      const [pr, pg, pb] = terrainPalette(h + baseElev, slope, coverPaint(wx, wz), wx, wz);
       swardScratchC[k] = Math.round(clamp(pr, 0, 1) * 255);
       swardScratchC[k + 1] = Math.round(clamp(pg, 0, 1) * 255);
       swardScratchC[k + 2] = Math.round(clamp(pb, 0, 1) * 255);
@@ -6904,10 +7178,26 @@ function swardFrame(): void {
   swardU.uSwardTint.value.copy(grassTint);
   // The biome barely changes and this is fifteen Color.set() calls — cheap
   // enough to just do every frame rather than hook a change event for it.
-  const fp = FLOWER_PAL[biome.name] ?? FLOWER_PAL.temperate;
+  // FLOWER COLOUR BLENDS, BUT SHARPLY. Species are discrete — there is no
+  // half a gentian — and a flat weighted mix of a blue gentian and a yellow
+  // marigold is mud, not a margin. Cubing the weights keeps the dominant
+  // archetype's palette essentially intact and lets a genuine near-tie mix,
+  // so crossing a climate boundary shifts the flora smoothly without ever
+  // passing through a colour that belongs to nothing.
+  const cl = climateAt(fx, fz);
+  let sharp = 0;
+  const sw: number[] = cl.w.map((v) => { const c = v * v * v; sharp += c; return c; });
   for (let ci = 0; ci < 5; ci++) for (let si = 0; si < 3; si++) {
+    let cr = 0, cg = 0, cb = 0;
+    for (let bi = 0; bi < BIOME_ORDER.length; bi++) {
+      const w = sw[bi] / (sharp || 1);
+      if (w <= 0.002) continue;
+      const row = FLOWER_PAL[BIOME_ORDER[bi]] ?? FLOWER_PAL.temperate;
+      const c = row[ci][si];
+      cr += c[0] * w; cg += c[1] * w; cb += c[2] * w;
+    }
     (swardU as unknown as Record<string, { value: THREE.Color }>)[SWARD_FLOW_NAMES[ci * 3 + si]]
-      .value.setRGB(...fp[ci][si]);
+      .value.setRGB(cr, cg, cb);
   }
   for (const b of swardBands) {
     // SNAPPED to the step, so a slot's world position never moves under it.
@@ -6966,7 +7256,7 @@ function refreshSward(): void {
           // ground here, not a generic dirt.
           const e0 = swardGround(px2, pz2);
           const slope = Math.hypot(swardGround(px2 + 8, pz2) - e0, swardGround(px2, pz2 + 8) - e0) / 8;
-          [blockR, blockG, blockB] = terrainPalette(e0 + baseElev, slope, cv);
+          [blockR, blockG, blockB] = terrainPalette(e0 + baseElev, slope, cv, px2, pz2);
         }
         if (blockRate <= 0) continue;
         // DITHERED, not scaled. Thinning by shrinking every blade turns a field
@@ -7089,7 +7379,7 @@ function refreshVeg(): void {
           // dissolve exists to kill. Linear starts telling at mid-range.
           const fmv = (tt - 0.5) / 0.5;
           const mixv = fmv * (v.h > 0 ? 0.55 : 0.85);
-          const [tr, tg, tb] = terrainPalette(y + baseElev, 0, sampleCover(v.x, v.z));
+          const [tr, tg, tb] = terrainPalette(y + baseElev, 0, sampleCover(v.x, v.z), v.x, v.z);
           swardCol.setRGB(
             v.c.r + (tr - v.c.r) * mixv,
             v.c.g + (tg - v.c.g) * mixv,
@@ -7337,23 +7627,27 @@ const HERD_GROUPS = 3;
  *  before — deer, bison and horses walking in one clump, alarmed by the same
  *  truck at the same moment, which is not a thing that happens. */
 let herdSpecies: number[] = [];
+/** Fauna by CLIMATE, weighted across every archetype present. A herd and a
+ *  flock are spawned around the truck, so the truck's own climate is the
+ *  right place to ask — and on a boreal/temperate margin the plain now
+ *  genuinely carries some of both rather than all of whichever label won. */
 function pickFrom(table: Record<string, number[]>): number {
-  const mix = table[biome.name] ?? table.temperate;
+  const cl = climateAt(state.x, state.z);
+  const n = (table.temperate ?? []).length;
+  const acc: number[] = new Array(n).fill(0);
   let total = 0;
-  for (const w of mix) total += w;
+  for (let bi = 0; bi < BIOME_ORDER.length; bi++) {
+    const row = table[BIOME_ORDER[bi]];
+    if (!row) continue;
+    for (let i = 0; i < row.length && i < n; i++) { acc[i] += row[i] * cl.w[bi]; total += row[i] * cl.w[bi]; }
+  }
+  if (total <= 0) return 0;
   let t = Math.random() * total;
-  for (let i = 0; i < mix.length; i++) { t -= mix[i]; if (t <= 0) return i; }
+  for (let i = 0; i < n; i++) { t -= acc[i]; if (t <= 0) return i; }
   return 0;
 }
 const pickBird = (): number => pickFrom(BIRD_MIX);
-function pickSpecies(): number {
-  const mix = HERD_MIX[biome.name] ?? HERD_MIX.temperate;
-  let total = 0;
-  for (const w of mix) total += w;
-  let t = Math.random() * total;
-  for (let i = 0; i < mix.length; i++) { t -= mix[i]; if (t <= 0) return i; }
-  return 0;
-}
+const pickSpecies = (): number => pickFrom(HERD_MIX);
 const mkPop = (n: number, box: number, air: boolean): Critter[] => {
   if (!air && !herdSpecies.length) herdSpecies = Array.from({ length: HERD_GROUPS }, pickSpecies);
   if (air && !birdSpecies.length) birdSpecies = Array.from({ length: BIRD_GROUPS }, pickBird);
@@ -11011,7 +11305,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     if (!hidden) {
       if (track) {
         const [tr, tg, tb] = terrainPalette(elev[i] + baseElev,
-          Math.abs((elev[Math.min(n - 1, i + 1)] - elev[i]) / Math.max(len, 1)), sampleCover(x0, z0));
+          Math.abs((elev[Math.min(n - 1, i + 1)] - elev[i]) / Math.max(len, 1)), sampleCover(x0, z0), x0, z0);
         for (let k = 0; k < 6; k++) cols.push(tr * 1.06, tg * 0.99, tb * 0.9);
       } else {
         const c = tint ?? [1, 1, 1];
@@ -11074,7 +11368,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // what a track already pays — because a slip is one slide of one
       // hillside and does not need to change hue across four metres.
       const [dr, dg, db] = terrainPalette(elev[i] + baseElev,
-        Math.abs((elev[Math.min(n - 1, i + 1)] - elev[i]) / Math.max(len, 1)), sampleCover(x0, z0));
+        Math.abs((elev[Math.min(n - 1, i + 1)] - elev[i]) / Math.max(len, 1)), sampleCover(x0, z0), x0, z0);
       for (let k = 0; k < 6; k++) dirts.push(dr, dg, db);
     }
     if (drivable) {
@@ -15359,11 +15653,12 @@ async function loadFarTile(x: number, y: number): Promise<void> {
     // escarpment at Senqu, where the shell stands up to 38m ABOVE the fine
     // ground and paints over it. Cover is null out past the loaded raster,
     // which is exactly the old behaviour, so the far horizon is unchanged.
-    const cv = sampleCover(xs + w / 2 + pos.getX(i), zs + h / 2 + pos.getZ(i));
+    const fwx = xs + w / 2 + pos.getX(i), fwz = zs + h / 2 + pos.getZ(i);
+    const cv = sampleCover(fwx, fwz);
     if (cv !== null) hit++;
     // …and where the raster does not reach, the average of what it does say
     // rather than nothing at all. See coverMode.
-    const [r, g, bb] = terrainPalette(raw, Math.hypot(du, dv) / Math.max(cell, 1), cv ?? coverMode);
+    const [r, g, bb] = terrainPalette(raw, Math.hypot(du, dv) / Math.max(cell, 1), cv ?? coverMode, fwx, fwz);
     colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
     tr += r; tg += g; tb += bb;
   }
@@ -17373,7 +17668,7 @@ function groundTint(x: number, z: number): [number, number, number] {
   const h = sampleHeight(x, z);
   const slope = Math.abs(sampleHeight(x + 3, z) - h) / 3;
   groundTintMemo.x = x; groundTintMemo.z = z;
-  groundTintMemo.c = terrainPalette(h + baseElev, slope, coverPaint(x, z));
+  groundTintMemo.c = terrainPalette(h + baseElev, slope, coverPaint(x, z), x, z);
   return groundTintMemo.c;
 }
 /** kind: 0 dust · 1 water · 2 grit. Velocity is stored as well as applied,
@@ -19568,6 +19863,36 @@ function truckSpec(): Record<string, number> {
     n++;
   }
   return { n, counts: Object.fromEntries(names.map((nm, i) => [nm, counts[i]])) };
+};
+/**
+ * THE CLIMATE FIELD, AS NUMBERS — at the truck, and along a transect.
+ *
+ * The whole point of the field is that it CHANGES ACROSS GROUND, and a single
+ * reading cannot show that. `span` walks a line out to `r` metres on the given
+ * bearing and reports the weights at each step, so "does this actually vary,
+ * and does it vary smoothly" is one call rather than a drive.
+ */
+(window as unknown as { __climate?: object }).__climate = (r = 0, bearing = 90, steps = 8): object => {
+  const at = (x: number, z: number): Record<string, unknown> => {
+    const c = climateAt(x, z);
+    return {
+      w: Object.fromEntries(BIOME_ORDER.map((n, i) => [n, +c.w[i].toFixed(3)])),
+      dom: c.dom.name, tempC: +c.tempC.toFixed(1), moisture: +c.moisture.toFixed(2),
+      treeline: Math.round(c.treeline), elevAbs: Math.round(c.elevAbs),
+      aboveTreeline: +(c.elevAbs - c.treeline).toFixed(0),
+    };
+  };
+  const out: Record<string, unknown> = { here: at(state.x, state.z), settledBiome: biome.name, cached: climCache.size };
+  if (r > 0) {
+    const dx = Math.sin(bearing * Math.PI / 180), dz = -Math.cos(bearing * Math.PI / 180);
+    const span: Array<Record<string, unknown>> = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = (i / steps) * r;
+      span.push({ m: Math.round(t), ...at(state.x + dx * t, state.z + dz * t) });
+    }
+    out.span = span;
+  }
+  return out;
 };
 /** siteKindAt's own histogram — the vegetation side of the same habitat
  *  question, over many rolls of the seeded RNG per point so a probabilistic
