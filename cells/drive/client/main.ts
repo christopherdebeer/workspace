@@ -2174,7 +2174,15 @@ function xrayWire(now: number): void {
   // with their materials solid and need catching.
   if (want && xrayWireOn && now - xrayWireAt < 2000) return;
   xrayWireAt = now; xrayWireOn = want;
-  worldGroup.traverse((o) => {
+  // The WHOLE scene, not just worldGroup — vegetation, critters, the sward
+  // and the sea are scene-level and the first sweep missed them (asked from
+  // the seat). Meshes only (points and lines have no triangles to strip);
+  // solid stays solid where lines would lie: the dome IS the light, and the
+  // truck and its through-terrain silhouette are the subject.
+  const keep = new Set<THREE.Object3D>([skyDome, car, xray, moon]);
+  scene.traverse((o) => {
+    for (let p: THREE.Object3D | null = o; p; p = p.parent) if (keep.has(p)) return;
+    if (!(o as THREE.Mesh).isMesh) return;
     const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
     if (!m) return;
     for (const mm of Array.isArray(m) ? m : [m]) {
@@ -2182,6 +2190,22 @@ function xrayWire(now: number): void {
     }
   });
 }
+// The X-RAY's WITNESS LIST: what is in the scene, and a way to stand one
+// system down while looking at a fault — through material.visible, which
+// nothing reasserts per frame (rain.visible is rewritten every tick).
+(window as unknown as { __sceneList?: object }).__sceneList = (): object =>
+  scene.children.map((o) => ({ n: o.name || o.type, vis: o.visible,
+    kids: (o as THREE.Group).children?.length ?? 0 }));
+(window as unknown as { __matShow?: object }).__matShow = (name: string, on: boolean): number => {
+  let n = 0;
+  scene.traverse((o) => {
+    if ((o.name || '') !== name) return;
+    const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+    if (!m) return;
+    for (const mm of Array.isArray(m) ? m : [m]) { mm.visible = on; n++; }
+  });
+  return n;
+};
 /** Background luminance under a HUD-pixel point, 0..1. GL rows run bottom-up,
  *  so the vertical index flips. */
 function hudBgLuma(hx: number, hy: number): number {
@@ -6502,6 +6526,7 @@ const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side, blend], bi) => {
   terrainFx(mat);
   grainFx(mat, `grain-sward${bi}`, 0.85, 3.6);
   const mesh = new THREE.Mesh(geo, mat);
+  mesh.name = 'sward';
   mesh.frustumCulled = false;      // the lattice spans the whole field
   mesh.castShadow = false;         // see the header: sub-pixel, and it doubles the vertices
   mesh.receiveShadow = false;
@@ -6849,6 +6874,7 @@ let birdSpecies: number[] = [];
 const birdMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true });
 const birdMeshes = BIRD_GEO.map((g) => {
   const m = new THREE.InstancedMesh(g, birdMat, BIRD_N);
+  m.name = 'birds';
   m.frustumCulled = false;
   m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(BIRD_N * 3).fill(1), 3);
@@ -6971,6 +6997,7 @@ const HERD_N = 30, HERD_BOX = 560;
 const herdMat = new THREE.MeshLambertMaterial({ color: 0xffffff, vertexColors: true, flatShading: true });
 const herds = HERD_GEO.map((g) => {
   const m = new THREE.InstancedMesh(g, herdMat, HERD_N);
+  m.name = 'herds';
   m.frustumCulled = false;
   m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(HERD_N * 3).fill(1), 3);
@@ -16556,6 +16583,7 @@ const rainMat = new THREE.ShaderMaterial({
     }`,
 });
 const rain = new THREE.Points(rainGeo, rainMat);
+rain.name = 'rain';
 rain.frustumCulled = false;
 scene.add(rain);
 const rainSlant = new THREE.Vector3();
@@ -16818,6 +16846,7 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
       gl_FragColor = vec4(col, a);
     }`,
 }));
+dustPoints.name = 'dust';
 dustPoints.frustumCulled = false;
 dustPoints.renderOrder = 30;
 scene.add(dustPoints);
