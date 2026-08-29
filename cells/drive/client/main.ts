@@ -19836,9 +19836,13 @@ function truckSpec(): Record<string, number> {
       if (a.fd !== -1 && a.fd === b.fd) continue;
       const dot = a.tx * b.tx + a.tz * b.tz;
       // A CONTINUATION — same width, same line — is the one case where kerb
-      // lies on kerb and the kerb step is defined. Anything else meeting here
-      // is a junction: judged on the centreline height both claim.
-      if (Math.abs(dot) < 0.7 || Math.abs(a.hw - b.hw) > 0.01) {
+      // lies on kerb and the kerb step is defined. STRICTLY in line: at 0.7
+      // the gate admitted a Noordhoek Road fork leaving at 38°, whose kerbs
+      // sit metres from the host's laterally — the ±camber comparison there
+      // read 0.34m of "seam" over a node whose centrelines agree to 4cm.
+      // Anything angled or width-mismatched is a junction: judged on the
+      // centreline height both claim, which is the warp's checkpoint too.
+      if (Math.abs(dot) < 0.92 || Math.abs(a.hw - b.hw) > 0.01) {
         const m = Math.abs(a.y - b.y);
         meets++;
         if (m > 0.1) meetOver++;
