@@ -19842,7 +19842,7 @@ function truckSpec(): Record<string, number> {
       // read 0.34m of "seam" over a node whose centrelines agree to 4cm.
       // Anything angled or width-mismatched is a junction: judged on the
       // centreline height both claim, which is the warp's checkpoint too.
-      if (Math.abs(dot) < 0.92 || Math.abs(a.hw - b.hw) > 0.01) {
+      if (Math.abs(dot) < 0.95 || Math.abs(a.hw - b.hw) > 0.01) {
         const m = Math.abs(a.y - b.y);
         meets++;
         if (m > 0.1) meetOver++;
