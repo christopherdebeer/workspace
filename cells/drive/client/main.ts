@@ -24949,7 +24949,10 @@ const audio = (() => {
     scrape(level: number, bright = 0.35): void {
       if (!ctx || !scrapeGain) return;
       const t = ctx.currentTime;
-      scrapeGain.gain.setTargetAtTime(level * 0.22, t, 0.05);
+      // 0.34, up from 0.22 — the bodywork dragging along a barrier was
+      // inaudible under the engine and tyre roar, and it is the one sound
+      // telling you the paint is going.
+      scrapeGain.gain.setTargetAtTime(level * 0.34, t, 0.05);
       scrapeFilt.frequency.setTargetAtTime(340 + bright * 640 + level * 620, t, 0.08);
     },
     water(level: number): void {
@@ -25636,6 +25639,7 @@ let dbgAmb: Record<string, unknown> = {};
 (window as unknown as { __amb?: object }).__amb = (): object => dbgAmb;
 let ambSampledAt = 0, ambRiverL = 0, ambVegL = 0, ambFrothL = 0;
 let brushPeak = 0;   // session max — a one-frame brush must not hide from the probe
+let wallTouchAt = -1e9, dragKnockAt = 0;   // wall contact edge + the drag's knock pacing
 let dbgSusp: object = {};
 // A shade over 9.81. Real gravity left long climbs feeling weightless once the
 // truck has 16m/s^2 of thrust to spend against it; this gives a hill enough
@@ -26386,18 +26390,19 @@ function tick(now: number): void {
         state.x += (state.x - cx2) * push;
         state.z += (state.z - cz2) * push;
         hit = true;
-        // A GUARD RAIL IS NOT A WALL. Losing the same speed to a barrier you
-        // brushed at five degrees as to one you hit square made a mountain
-        // pass punish the exact line you want to be driving — tight to the
-        // edge. Charge only for the component of travel that went INTO the
-        // rail; along it is free. Buildings keep the flat penalty: hitting a
-        // façade at any angle is a crash, not a lean.
+        // A GUARD RAIL IS NOT A WALL — and a WALL is not a dead stop either.
+        // Both charge by how SQUARE the travel went into them: along a rail
+        // is free (the mountain line stays drivable tight to the edge), and
+        // a façade taken at a shallow angle now GLANCES — asked from the
+        // seat, because the flat penalty stopped the truck dead off-angle.
+        // The difference that remains is the floor: masonry always bites at
+        // least a third, a rail not at all.
         let sq = 1;
-        if (seg.sl) {
+        {
           const sx = seg.bx - seg.ax, sz = seg.bz - seg.az;
           const sl = Math.hypot(sx, sz) || 1;
           const along = Math.abs((Math.sin(state.heading) * sx + -Math.cos(state.heading) * sz) / sl);
-          sq = clamp(1 - along, 0, 1);
+          sq = seg.sl ? clamp(1 - along, 0, 1) : clamp(1 - along, 0.35, 1);
         }
         if (sq > scrape) { scrape = sq; scrapeMetal = !!seg.sl; }
       }
@@ -26452,6 +26457,22 @@ function tick(now: number): void {
     const was = Math.abs(state.speed);
     state.speed *= Math.exp(-5 * scrape * dt);
     rigImpact(was - Math.abs(state.speed), scrapeMetal ? 'metal' : 'shell');
+    // THE ARRIVAL AND THE DRAG are separate sounds, and the drag was silent
+    // (reported from the seat: a barrier lean was a faint hiss and nothing
+    // else, because the impulse-billed crash only fires on frames that LOSE
+    // speed and a graze loses none). First contact strikes, sized by how
+    // square and how fast; held contact then knocks and groans at an
+    // irregular pace — posts, bolts and seams going past the bodywork.
+    const vNow = Math.abs(state.speed);
+    if (nowMs - wallTouchAt > 350) {
+      audio.crash(clamp((vNow * (0.3 + 0.7 * scrape)) / 11, 0.25, 1), scrapeMetal ? 'metal' : 'shell');
+      dragKnockAt = nowMs + 250 + Math.random() * 400;
+    } else if (vNow > 3.5 && nowMs > dragKnockAt) {
+      dragKnockAt = nowMs + 320 + Math.random() * 600;
+      if (Math.random() < 0.55) audio.crash(clamp(vNow / 26, 0.2, 0.55), scrapeMetal ? 'metal' : 'shell');
+      else audio.creak(clamp(vNow / 16, 0.3, 0.9));
+    }
+    wallTouchAt = nowMs;
   }
   // ── rocks: collideable, never blocking ──
   // A boulder is not scenery you clip through and not a wall that traps you:
@@ -26961,8 +26982,10 @@ function tick(now: number): void {
     engineSt === 'on' ? 1 : engineSt === 'crank' ? 0.35 : 0);
   // The rig against the world: bodywork on a wall while moving, the hull's
   // wash through water, and the slap of arriving in it with any speed on.
+  // The graze's floor rose from 0.4 to 0.55 of the mix: a lean along a rail
+  // is MOSTLY along, and it still has to be heard over the drivetrain.
   audio.scrape(scrape >= 0 && Math.abs(state.speed) > 1.5
-    ? clamp(Math.abs(state.speed) / 22, 0.15, 1) * (0.4 + 0.6 * Math.max(0, scrape)) : 0,
+    ? clamp(Math.abs(state.speed) / 22, 0.15, 1) * (0.55 + 0.45 * Math.max(0, scrape)) : 0,
   scrapeMetal ? 1 : 0.35);
   audio.brush(clamp(brushAmt, 0, 1.6) * clamp(Math.abs(state.speed) / 9, 0.15, 1));
   audio.water(surfKind === 'water' && groundedF > 0.2 ? clamp(Math.abs(state.speed) / 11, 0.12, 1) : 0);
