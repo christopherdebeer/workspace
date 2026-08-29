@@ -303,11 +303,42 @@ export class RoadSolver {
  * OSM ways only carry vertices where the road BENDS, so a long straight
  * segment would bridge every terrain dip between its endpoints like a
  * causeway. ~12m steps make the profile hug the ground it crosses.
+ *
+ * AND THE CORNERS ARE ROUNDED FIRST (road audit, finding 1). Densifying
+ * alone cannot help a bend: the added points are collinear, so the corner
+ * keeps its whole angle at the original vertex — which is exactly what
+ * drives the kerb mitre past its 2.4x cap and parts neighbouring bays on
+ * every hairpin. A real road arcs through its bends, so a sharp interior
+ * vertex becomes a short quadratic arc: shoulders pulled back along each
+ * leg, the vertex itself the control point. ENDPOINTS NEVER MOVE — they
+ * are the weld anchors, the junction pins and the kerbseam keys — and an
+ * interior vertex stays within its arc's sagitta (bounded by the shoulder
+ * length) of where OSM put it.
  */
 export function densifyPts(pts: Array<[number, number]>): Array<[number, number]> {
-  const dense: Array<[number, number]> = [pts[0]];
-  for (let i = 1; i < pts.length; i++) {
-    const [ax, az] = pts[i - 1], [bx, bz] = pts[i];
+  const rounded: Array<[number, number]> = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, pz] = pts[i - 1], [vx, vz] = pts[i], [qx, qz] = pts[i + 1];
+    const la = Math.hypot(vx - px, vz - pz) || 1, lb = Math.hypot(qx - vx, qz - vz) || 1;
+    const turn = Math.acos(Math.max(-1, Math.min(1,
+      ((vx - px) * (qx - vx) + (vz - pz) * (qz - vz)) / (la * lb))));
+    // Gentle bends keep their vertex; 0.45 keeps consecutive arcs off each
+    // other's legs; under 1.5m of shoulder an arc is noise, not a corner.
+    const r = Math.min(9, la * 0.45, lb * 0.45);
+    if (turn < 0.2 || r < 1.5) { rounded.push(pts[i]); continue; }
+    const ax = vx - ((vx - px) / la) * r, az = vz - ((vz - pz) / la) * r;
+    const bx = vx + ((qx - vx) / lb) * r, bz = vz + ((qz - vz) / lb) * r;
+    const segs = Math.max(2, Math.ceil(turn / 0.18));   // ~10 degrees per arc step
+    for (let s = 0; s <= segs; s++) {
+      const t = s / segs, u = 1 - t;
+      rounded.push([u * u * ax + 2 * u * t * vx + t * t * bx,
+        u * u * az + 2 * u * t * vz + t * t * bz]);
+    }
+  }
+  rounded.push(pts[pts.length - 1]);
+  const dense: Array<[number, number]> = [rounded[0]];
+  for (let i = 1; i < rounded.length; i++) {
+    const [ax, az] = rounded[i - 1], [bx, bz] = rounded[i];
     const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 12));
     for (let s = 1; s <= steps; s++) dense.push([ax + ((bx - ax) * s) / steps, az + ((bz - az) * s) / steps]);
   }

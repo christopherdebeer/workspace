@@ -148,11 +148,19 @@ eq('but the chains still solve', noPins.stats.chains > 0, true);
 
 // ── 5. THE REPLAY IS FAITHFUL ──
 // Everything below reads decks the LIVE session settled on, and everything
-// above reads a stub. The one thing that licenses reading them together is
-// that the replay lands the same number of stations as the session did.
+// above reads a stub. The licence for reading them together used to be an
+// EXACT station-count match — but the corner rounding in densifyPts (road
+// audit, tranche B) legitimately adds stations on bends, so the capture
+// (taken before it) undercounts by construction. The downstream checks are
+// keyed by POSITION, not index, and all pass across the change; the gate
+// now asks that the replay covers AT LEAST the capture's stations — fewer
+// would mean chains failed to solve, which is the fault it exists to catch.
 console.log('\nfidelity — the replay must land where the session landed');
-eq('replayed hint stations match the live capture',
-  [...spawn.hints.values()].reduce((n, a) => n + a.length, 0), fix.hints.length);
+const replayN = [...spawn.hints.values()].reduce((n, a) => n + a.length, 0);
+eq('replayed hint stations cover the live capture',
+  replayN >= fix.hints.length, true);
+console.log(`  ..   replayed = ${replayN}, captured = ${fix.hints.length}`
+  + ` (excess is the corner rounding densifying bends)`);
 
 // ── 6. SHARED NODES MUST BE WELDED ──
 // In OSM a junction is a SHARED NODE: both ways carry the identical vertex. So
