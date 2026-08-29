@@ -24452,6 +24452,7 @@ const audio = (() => {
   let brushGain: GainNode, brushFilt: BiquadFilterNode;
   let crashAt = 0, creakAt = 0;   // one-shot cooldowns — a scrape is not a drum roll
   let birdAt = 0;                 // next phrase, spaced by how alive the spot is
+  let scrapeLast = 0;             // the scrape's live level, for the sidechain below
   let noiseBuf: AudioBuffer;
   let on = true;
   try { on = localStorage.getItem('drive.mute') !== '1'; } catch { /* fine */ }
@@ -24653,7 +24654,7 @@ const audio = (() => {
       // turns it, 0 with the key off — the whole engine voice hangs on it.
       engGain.gain.setTargetAtTime(
         (0.1 + Math.abs(throttle) * 0.16 * (0.45 + 0.55 * grounded)
-          + (1 - grounded) * rev * 0.1 + Math.min(v / 60, 0.1)) * engF, t, 0.09,
+          + (1 - grounded) * rev * 0.1 + Math.min(v / 60, 0.1)) * engF * duck, t, 0.09,
       );
       // Rubber that has stopped rolling. Loud on tarmac, largely lost under the
       // gravel off it — and silent below a walking pace, where a slide is a
@@ -24677,8 +24678,15 @@ const audio = (() => {
       const sf = 1250 + Math.min(v * 14, 620) + sq2 * 260;
       squealFilt.frequency.setTargetAtTime(sf, t, 0.08);
       squealOsc.frequency.setTargetAtTime(sf, t, 0.08);
-      squealGain.gain.setTargetAtTime(
-        sq2 * bite * grounded * Math.min((v + spin * 9) / 8, 1) * 0.45, t, 0.06);
+      const sqT = sq2 * bite * grounded * Math.min((v + spin * 9) / 8, 1) * 0.6;
+      squealGain.gain.setTargetAtTime(sqT, t, 0.06);
+      // THE SIDECHAIN. Measured at Chapman's Peak (mix-audit): scrape peaked
+      // at 0.08 and squeal at 0.03 against an engine at 0.34 and grit at
+      // 0.40 — no per-channel raise wins against that bed, which is why two
+      // rounds of raises changed nothing from the seat. When rubber or
+      // bodywork speaks, the steady bed steps back; every real mix works
+      // this way.
+      const duck = 1 - 0.55 * clamp((sqT + scrapeLast * 1.2) * 2.2, 0, 1);
       // Tarmac hisses high and thin; loose ground growls low and loud. A graded
       // track sits between the two — you can hear which tier you are on.
       const road = surf === 'road';
@@ -24689,7 +24697,7 @@ const audio = (() => {
       const hard = surf === 'water' ? 0 : surf === 'road' || surf === 'track'
         ? clamp(q, 0, 1) : 0.08;
       roarFilt.frequency.setTargetAtTime(320 + hard * 830, t, 0.12);
-      roarGain.gain.setTargetAtTime(Math.min(v / 34, 1) * (0.26 - hard * 0.16) * grounded, t, 0.1);
+      roarGain.gain.setTargetAtTime(Math.min(v / 34, 1) * (0.26 - hard * 0.16) * grounded * duck, t, 0.1);
       // Rain rides the wind channel: same filtered noise, opened up and
       // lifted — and so does the WEATHER'S wind, which blows whether or not
       // the truck moves: a parked truck on a gusty pass is not silent.
@@ -24709,7 +24717,7 @@ const audio = (() => {
       // announces itself before the handling does — and at 0.3 it sat under the
       // engine at every speed that mattered.
       gritGain.gain.setTargetAtTime(
-        (Math.min(v / 12, 1) * 0.46 * loose + spin * 0.3 * (0.25 + 0.75 * loose)) * grounded, t, 0.09);
+        (Math.min(v / 12, 1) * 0.46 * loose + spin * 0.3 * (0.25 + 0.75 * loose)) * grounded * duck, t, 0.09);
     },
     /** The starter: four compressions through a low filter, dying if the
      *  catch has not happened by the end — the engine's own voice takes over
@@ -25042,10 +25050,11 @@ const audio = (() => {
     scrape(level: number, bright = 0.35): void {
       if (!ctx || !scrapeGain) return;
       const t = ctx.currentTime;
-      // 0.34, up from 0.22 — the bodywork dragging along a barrier was
-      // inaudible under the engine and tyre roar, and it is the one sound
-      // telling you the paint is going.
-      scrapeGain.gain.setTargetAtTime(level * 0.34, t, 0.05);
+      scrapeLast = level;   // the sidechain in update() reads this
+      // 0.55, third raise — but the real change is the sidechain: this is
+      // the one sound telling you the paint is going, and the bed now makes
+      // room for it instead of burying every raise.
+      scrapeGain.gain.setTargetAtTime(level * 0.55, t, 0.05);
       scrapeFilt.frequency.setTargetAtTime(340 + bright * 640 + level * 620, t, 0.08);
     },
     water(level: number): void {
@@ -27089,7 +27098,7 @@ function tick(now: number): void {
   // (reported from the seat, twice: no metal scraping on barriers). The
   // level now holds for a quarter second past the last contact frame.
   if (scrape >= 0 && Math.abs(state.speed) > 1.5) {
-    scrapeHoldLvl = clamp(Math.abs(state.speed) / 22, 0.15, 1) * (0.55 + 0.45 * Math.max(0, scrape));
+    scrapeHoldLvl = clamp(Math.abs(state.speed) / 22, 0.3, 1) * (0.75 + 0.25 * Math.max(0, scrape));
     scrapeHoldMetal = scrapeMetal;
   }
   const wallRecent = nowMs - wallTouchAt < 260;
