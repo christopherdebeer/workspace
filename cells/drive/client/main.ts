@@ -5514,17 +5514,49 @@ const STONE_MIX: Record<string, number[]> = {
  * cliff/scree, among ruins]. Index order matches SwardCtx below and the
  * shader's own branch on it.
  *
- * One colour per habitat, not a species list — the sward draws a fleck of
- * hue at this pixel scale, not a bloom anyone could name from the cab. The
- * habitat is what the eye is actually meant to read: gold at a mountain
- * tarn, magenta over a fallen wall, violet under the pines.
+ * THREE SPECIES PER HABITAT, not one colour standing for the whole thing.
+ * Reported from the seat: a single hue per habitat reads as one wildflower
+ * repeated to the horizon, and a real meadow is never that — it is drifts of
+ * several kinds sharing the same ground. The shader picks a species per
+ * PATCH (see sSpecies), so one meadow shows several colours across it while
+ * any one patch still reads as one kind of flower blooming together.
  */
-const FLOWER_PAL: Record<string, [number, number, number][]> = {
-  temperate: [[0.80, 0.70, 0.12], [0.42, 0.38, 0.75], [0.45, 0.62, 0.85], [0.85, 0.45, 0.55], [0.78, 0.30, 0.55]],
-  arid: [[0.85, 0.55, 0.15], [0.90, 0.85, 0.65], [0.85, 0.35, 0.45], [0.75, 0.15, 0.15], [0.70, 0.25, 0.20]],
-  tropical: [[0.85, 0.25, 0.45], [0.85, 0.30, 0.10], [0.55, 0.45, 0.80], [0.80, 0.70, 0.85], [0.80, 0.15, 0.55]],
-  boreal: [[0.65, 0.35, 0.55], [0.85, 0.80, 0.82], [0.80, 0.70, 0.75], [0.75, 0.40, 0.50], [0.60, 0.30, 0.60]],
-  alpine: [[0.35, 0.45, 0.75], [0.55, 0.50, 0.78], [0.85, 0.75, 0.20], [0.88, 0.86, 0.80], [0.85, 0.60, 0.20]],
+const FLOWER_PAL: Record<string, [number, number, number][][]> = {
+  temperate: [
+    [[0.80, 0.70, 0.12], [0.92, 0.90, 0.85], [0.75, 0.30, 0.35]],   // open: buttercup, ox-eye daisy, red clover
+    [[0.42, 0.38, 0.75], [0.90, 0.88, 0.85], [0.85, 0.80, 0.45]],   // wood: bluebell, wood anemone, primrose
+    [[0.45, 0.62, 0.85], [0.80, 0.70, 0.15], [0.65, 0.30, 0.55]],   // water: forget-me-not, marsh marigold, loosestrife
+    [[0.85, 0.45, 0.55], [0.80, 0.75, 0.25], [0.45, 0.50, 0.80]],   // cliff: thrift, stonecrop, harebell
+    [[0.78, 0.30, 0.55], [0.85, 0.75, 0.20], [0.72, 0.30, 0.25]],   // ruin: willowherb, toadflax, valerian
+  ],
+  arid: [
+    [[0.85, 0.55, 0.15], [0.85, 0.40, 0.30], [0.55, 0.35, 0.65]],   // open: desert marigold, globe mallow, verbena
+    [[0.90, 0.85, 0.65], [0.85, 0.80, 0.20], [0.85, 0.45, 0.15]],   // wood: desert lily, palo verde, honeysuckle
+    [[0.85, 0.35, 0.45], [0.85, 0.75, 0.15], [0.55, 0.50, 0.75]],   // water: oleander, monkeyflower, palo verde
+    [[0.75, 0.15, 0.15], [0.80, 0.65, 0.20], [0.80, 0.35, 0.50]],   // cliff: claret cup, brittlebush, penstemon
+    [[0.70, 0.25, 0.20], [0.85, 0.55, 0.15], [0.88, 0.85, 0.80]],   // ruin: globemallow, marigold, datura
+  ],
+  tropical: [
+    [[0.85, 0.25, 0.45], [0.85, 0.45, 0.15], [0.75, 0.15, 0.15]],   // open: lantana, impatiens, sage
+    [[0.85, 0.30, 0.10], [0.80, 0.30, 0.45], [0.80, 0.70, 0.85]],   // wood: heliconia, torch ginger, orchid
+    [[0.55, 0.45, 0.80], [0.85, 0.75, 0.20], [0.85, 0.45, 0.55]],   // water: water hyacinth, yellow lotus, pink lotus
+    [[0.80, 0.70, 0.85], [0.90, 0.85, 0.60], [0.75, 0.20, 0.20]],   // cliff: orchid, frangipani, bromeliad
+    [[0.80, 0.15, 0.55], [0.85, 0.75, 0.15], [0.80, 0.15, 0.20]],   // ruin: bougainvillea, golden trumpet, hibiscus
+  ],
+  boreal: [
+    [[0.65, 0.35, 0.55], [0.85, 0.83, 0.78], [0.78, 0.68, 0.15]],   // open: fireweed, yarrow, buttercup
+    [[0.85, 0.80, 0.82], [0.80, 0.50, 0.60], [0.88, 0.86, 0.80]],   // wood: wood sorrel, twinflower, bunchberry
+    [[0.85, 0.83, 0.80], [0.75, 0.55, 0.65], [0.80, 0.70, 0.15]],   // water: cotton-grass, bog rosemary, marsh marigold
+    [[0.75, 0.40, 0.50], [0.85, 0.78, 0.45], [0.85, 0.83, 0.78]],   // cliff: moss campion, arctic poppy, saxifrage
+    [[0.60, 0.30, 0.60], [0.82, 0.80, 0.75], [0.75, 0.65, 0.15]],   // ruin: fireweed, yarrow, tansy
+  ],
+  alpine: [
+    [[0.35, 0.45, 0.75], [0.80, 0.70, 0.15], [0.75, 0.40, 0.50]],   // open: gentian, alpine buttercup, moss campion
+    [[0.55, 0.50, 0.78], [0.80, 0.72, 0.20], [0.60, 0.40, 0.65]],   // wood: alpine aster, globeflower, cranesbill
+    [[0.85, 0.75, 0.20], [0.45, 0.55, 0.80], [0.70, 0.35, 0.50]],   // water: marsh marigold, forget-me-not, elephant head
+    [[0.88, 0.86, 0.80], [0.82, 0.78, 0.55], [0.80, 0.55, 0.60]],   // cliff: edelweiss, saxifrage, rock jasmine
+    [[0.85, 0.60, 0.20], [0.85, 0.83, 0.78], [0.72, 0.38, 0.48]],   // ruin: alpine poppy, edelweiss, moss campion
+  ],
 };
 /** SwardCtx: which habitat a sward field texel stands in — open/woodland/
  *  water/cliff/ruin, in FLOWER_PAL's index order. Priority when more than one
@@ -5533,6 +5565,10 @@ const FLOWER_PAL: Record<string, [number, number, number][]> = {
  *  then canopy, with open meadow the default everything else falls to. */
 const SwardCtx = { Open: 0, Wood: 1, Water: 2, Cliff: 3, Ruin: 4 } as const;
 type SwardCtx = typeof SwardCtx[keyof typeof SwardCtx];
+/** The 15 uniform names FLOWER_PAL's [ctx][species] cells upload to — ctx
+ *  outermost to match FLOWER_PAL's own nesting, species 0..2 within it. */
+const SWARD_FLOW_NAMES = ['Open', 'Wood', 'Water', 'Cliff', 'Ruin']
+  .flatMap((c) => [0, 1, 2].map((s) => `uFlow${c}${s}`));
 const SWARD_STRUCT_R = 14;    // metres to a wall/ruin that still reads as "at it"
 const SWARD_WATER_R = 9;      // metres beyond a channel's edge that is still "at the water"
 const SWARD_CLIFF_SLOPE = 0.5;  // rise/run past which the ground reads as scree, not turf
@@ -5628,6 +5664,23 @@ function pickKind(r: () => number): VegKind {
   let t = r() * total;
   for (const [k, w] of mix) { t -= w; if (t <= 0) return k; }
   return mix[0][0];
+}
+/** WHAT GROWS HERE, taking the STAND rather than just the pixel — the same
+ *  habitat read the sward's flowers use (SwardCtx / swardCtxAt), applied to a
+ *  clump's dominant species instead of a blade's colour. Cover already tells
+ *  coverKind about canopy, wetland and bare ground; this adds the two things
+ *  cover cannot see at all — a ruin's rubble and a hillside's own steepness —
+ *  and nudges water's edge toward what actually crowds a bank over what a
+ *  38m satellite pixel happened to classify the ground as. */
+function siteKindAt(x: number, z: number, cover: number | null, r: () => number): VegKind {
+  const h = groundAt(x, z);
+  const slope = Math.abs(groundAt(x + SWARD_FM, z) - h) / SWARD_FM;
+  switch (swardCtxAt(x, z, cover, slope)) {
+    case SwardCtx.Ruin: return r() < 0.75 ? 'bush' : coverKind(cover, r);
+    case SwardCtx.Water: return r() < 0.55 ? 'fern' : coverKind(cover, r);
+    case SwardCtx.Cliff: return r() < 0.6 ? (r() < 0.7 ? 'rock' : 'spire') : coverKind(cover, r);
+    default: return coverKind(cover, r);
+  }
 }
 
 // Plants grow in COMPANY. A clump is one dominant species with a scatter of
@@ -5771,7 +5824,7 @@ function scatterVeg(pts: Array<[number, number]>, seed: number, tags: Record<str
     k++;
     const dominant: VegKind = wooded && r() < 0.8
       ? (biome.name === 'boreal' || biome.name === 'alpine' ? 'conifer' : 'broadleaf')
-      : pickKind(r);
+      : siteKindAt(x, z, cv, r);
     const rad = wooded ? 10 + r() * 20 : 5 + r() * 13;
     plantClump(x, z, rad, Math.round((wooded ? 14 : 7) + r() * (wooded ? 22 : 12)), dominant, r);
   }
@@ -5827,13 +5880,17 @@ function seedCell(gx: number, gz: number): void {
     const x = gx * VEG_CELL + r() * VEG_CELL, z = gz * VEG_CELL + r() * VEG_CELL;
     const rad = 6 + r() * 16 * (0.4 + dens);
     const count = Math.round((5 + r() * 14) * (0.5 + dens));
-    plantClump(x, z, rad, count, coverKind(sampleCover(x, z), r), r);
+    plantClump(x, z, rad, count, siteKindAt(x, z, sampleCover(x, z), r), r);
   }
   // A few genuine loners — a lone snag or boulder still reads as deliberate.
   // Bare ground and ice get boulders and nothing else: a dead tree standing in
-  // a salt pan is the kind of detail that reads as a bug.
+  // a salt pan is the kind of detail that reads as a bug — and so does a
+  // scree slope that cover called grass because the satellite pixel landed on
+  // the one tuft holding on between the rocks.
   const strays = Math.round(r() * 3);
-  const stony = cover === COVER.bare || cover === COVER.snow || cover === COVER.built;
+  const cellSlope = Math.abs(groundAt(mx + SWARD_FM, mz) - groundAt(mx, mz)) / SWARD_FM;
+  const stony = cover === COVER.bare || cover === COVER.snow || cover === COVER.built
+    || cellSlope > SWARD_CLIFF_SLOPE;
   const tone = makeTone(r);
   for (let i = 0; i < strays; i++) {
     const roll = r();
@@ -6048,13 +6105,12 @@ const swardU = {
   // The outermost fade's END, not a band's reach: everything past this is
   // cut hard, so it has to sit beyond the last fade rather than inside it.
   uGReach: { value: 360 },
-  // FLOWER COLOUR, one per SwardCtx entry, refreshed from FLOWER_PAL whenever
-  // the biome is read (see swardFrame) — five named uniforms rather than an
-  // array uniform, since nothing else in this shader uses one and a fifth
-  // named field costs nothing a lookup table would not.
-  uFlowOpen: { value: new THREE.Color() }, uFlowWood: { value: new THREE.Color() },
-  uFlowWater: { value: new THREE.Color() }, uFlowCliff: { value: new THREE.Color() },
-  uFlowRuin: { value: new THREE.Color() },
+  // FLOWER COLOUR: three species per SwardCtx entry (see FLOWER_PAL and
+  // SWARD_FLOW_NAMES), refreshed whenever the biome is read (see swardFrame)
+  // — fifteen named uniforms rather than an array uniform, since nothing
+  // else in this shader uses one and named fields cost nothing a lookup
+  // table would not.
+  ...Object.fromEntries(SWARD_FLOW_NAMES.map((n) => [n, { value: new THREE.Color() }])),
 };
 /**
  * THE HEIGHTS AND THE MASK CHANGE ON DIFFERENT EVENTS, so they are rebuilt on
@@ -6293,6 +6349,18 @@ const SWARD_GLSL = `
     vec3 p3 = fract(vec3(p.xyx) * 0.1031);
     p3 += dot(p3, p3.yzx + 33.33);
     return fract((p3.x + p3.y) * p3.z);
+  }
+  // BILINEAR VALUE NOISE over swHash's lattice — a continuously varying field
+  // rather than one hash per cell. A flowering patch reads its shape off a
+  // THRESHOLD of this (see sClumpN), and a threshold on a continuous field is
+  // an organic contour; a threshold on floor(p) is a grid of squares, which
+  // is exactly the "blocky" patches reported from the seat.
+  float swNoise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    float a = swHash(i), b = swHash(i + vec2(1.0, 0.0));
+    float c = swHash(i + vec2(0.0, 1.0)), d = swHash(i + vec2(1.0, 1.0));
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
   }`;
 function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLambertMaterial {
   // flatShading OFF, deliberately, and it is the whole of the fix below: with
@@ -6317,8 +6385,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         uniform float uSwardFall; uniform float uSwardNear; uniform float uSwardMatch;
         uniform float uSwardVary; uniform float uSwardUp;
         uniform float uTime; uniform vec2 uGust;
-        uniform vec3 uFlowOpen; uniform vec3 uFlowWood; uniform vec3 uFlowWater;
-        uniform vec3 uFlowCliff; uniform vec3 uFlowRuin;
+        ${SWARD_FLOW_NAMES.map((n) => `uniform vec3 ${n};`).join(' ')}
         varying vec3 vSward;
         ${SWARD_GLSL}`)
       // ── A BLADE IS LIT LIKE THE GROUND IT STANDS IN ──
@@ -6409,6 +6476,42 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         vec4 sF = texture2D(uField, sUv);
         float sBlocked = texture2D(uSwardMask, sUv).r;
         float sD = length(sP - uSwardEye.xz);
+        // ── FLOWERS: RARE, CLUMPED, AND WHAT GROWS DEPENDS ON WHERE "HERE" IS ──
+        //
+        // Decided HERE, ahead of placement, because a flower is not just a
+        // recoloured blade any more (see sPosL below) — the geometry itself
+        // has to know before sLp is built. The habitat this texel stands in
+        // — open meadow, wood, water's edge, scree, or a ruin's rubble — rode
+        // along in uSwardCol's spare alpha channel (see SwardCtx / swardCtxAt
+        // on the CPU side). A CLUMP hash at a coarser cell than any one blade
+        // decides whether this patch of ground is flowering at all, so a
+        // stand of flowers reads as a stand and not a sprinkle of confetti;
+        // a blade's OWN hash then decides whether it is one of the flowers
+        // within a flowering clump, so the stand still has texture rather
+        // than being a solid tile of colour.
+        //
+        // A MEADOW, NOT A CHECKERBOARD. floor(sCell / 20.0) with one hash per
+        // cell drew a grid of hard-edged 20m squares across every hillside —
+        // reported from the seat with a photograph, and it was right there in
+        // the maths: a grid cell's boundary is a straight line, so every patch
+        // shared the same axis-aligned right angles. swNoise instead: a
+        // continuously varying field, thresholded by smoothstep rather than a
+        // hard cut, so a patch is a blob with the noise's own organic contour
+        // and its edge FADES rather than switching off — the same shape
+        // vegDensity() already draws thickets from, on the CPU side.
+        vec4 sColSample = texture2D(uSwardCol, sUv);
+        float sCtx = floor(sColSample.a * 255.0 + 0.5);
+        float sFlowerRate = sCtx > 3.5 ? 0.14 : sCtx > 2.5 ? 0.05 : sCtx > 1.5 ? 0.10 : sCtx > 0.5 ? 0.035 : 0.06;
+        float sClumpN = swNoise(sCell / 34.0);
+        float sClumpChance = smoothstep(sFlowerRate * 1.4, sFlowerRate * 0.3, sClumpN);
+        float sH4 = swHash(sKey * 3.3 + 47.1);
+        bool sIsFlower = sH4 < sClumpChance * 0.5;
+        // ONE SPECIES PER PATCH, not per blade — a drift of buttercups reads
+        // as a drift because every blade in it agrees on the flower, and the
+        // patch-scale key (same cell swNoise reads) is what makes neighbouring
+        // patches free to disagree, which is the "several colours in one
+        // meadow" a single habitat colour could never give.
+        float sSpecies = floor(swHash(floor(sCell / 34.0) * 5.3 + 71.0) * 3.0);
         // ── A PARTITION OF UNITY, WHICH IS WHY THERE IS NO LONGER A BAND EDGE ──
         //
         // Reported from the seat as "a stark band ahead of the car, mid grass,
@@ -6466,12 +6569,30 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // narrower the range of heights that could exist at all. One hash
         // cannot be a coin flip and a measurement at the same time.
         float sSize = swHash(sCell * 4.3 + 61.7);
+        // ── THE GEOMETRY ITSELF IS PROCEDURAL, NOT JUST THE COLOUR ──
+        //
+        // A flower was a recoloured blade at first — same card, different
+        // paint — and it showed: from the cab a fleck of colour on a spike is
+        // still a spike. grassGeo's base vertices sit at y=0 and its tip at
+        // y=h, so the tip is the one thing every blade shares and the one
+        // thing worth deforming. And it deforms BY SPECIES, not by one fixed
+        // amount: three of them meeting at a shared base can flare wide and
+        // squash short into a daisy-like fleck, or barely flare at all into a
+        // taller spike — the same shared card giving two different silhouettes
+        // depending on which flower is standing there. Grass blades never
+        // touch this branch, so the shape cost is paid only where a flower
+        // actually stands.
+        vec3 sPosL = position;
+        if (sIsFlower && sPosL.y > 0.01) {
+          vec2 sBloomShape = sSpecies < 0.5 ? vec2(2.6, 0.62) : sSpecies < 1.5 ? vec2(1.9, 0.8) : vec2(1.4, 1.0);
+          sPosL.x *= sBloomShape.x; sPosL.z *= sBloomShape.x; sPosL.y *= sBloomShape.y;
+        }
         // AND THEY GROW HARDER THAN THEY DID. With the ground density falling
         // as the square of range, coverage would fall with it unless the blades
         // take some of it back — a blade at two hundred metres drawn four times
         // the size subtends what a near one does, which is the whole reason an
         // eye accepts a thinner field out there.
-        vec3 sLp = position * (0.45 + sSize * 1.30) * (1.0 + 3.2 * pow(sT, 0.75)) * sAlive;
+        vec3 sLp = sPosL * (0.45 + sSize * 1.30) * (1.0 + 3.2 * pow(sT, 0.75)) * sAlive;
         sLp.xz = vec2(sCa * sLp.x - sSa * sLp.z, sSa * sLp.x + sCa * sLp.z);
         // Wind, from the blade's WORLD position so a gust crosses the field as
         // one front rather than every tuft nodding on its own clock.
@@ -6506,7 +6627,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // biome, the elevation band, the grade and the cover class — a crop
         // field, a wetland and a shrub slope are three different colours in it
         // before the grass says anything.
-        vec3 sGround = texture2D(uSwardCol, sUv).rgb;
+        vec3 sGround = sColSample.rgb;
         float sV = swHash(sCell * 5.3 + 71.0);
         float sWarm = swHash(sCell * 6.7 + 13.9);
         // ── THE BLADE WEARS THE GROUND'S COLOUR, AND VARIES AROUND IT ──
@@ -6528,25 +6649,27 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         vec3 sMixed = mix(mix(uSwardTint, sGround, uSwardMatch), sGround, sMix);
         vSward = mix(vec3(1.0), (0.82 + 0.36 * sV)
           * vec3(0.96 + 0.08 * sWarm, 1.0, 0.92 + 0.12 * (1.0 - sWarm)), uSwardVary) * sMixed;
-        // ── FLOWERS: RARE, CLUMPED, AND WHAT GROWS DEPENDS ON WHERE "HERE" IS ──
-        //
-        // The habitat this texel stands in — open meadow, wood, water's edge,
-        // scree, or a ruin's rubble — rode along in uSwardCol's spare alpha
-        // channel (see SwardCtx / swardCtxAt on the CPU side). A CLUMP hash at
-        // a coarser cell than any one blade decides whether this patch of
-        // ground is flowering at all, so a stand of flowers reads as a stand
-        // and not a sprinkle of confetti; a blade's OWN hash then decides
-        // whether it is one of the flowers within a flowering clump, so the
-        // stand still has texture rather than being a solid tile of colour.
-        float sCtx = floor(texture2D(uSwardCol, sUv).a * 255.0 + 0.5);
-        float sFlowerRate = sCtx > 3.5 ? 0.14 : sCtx > 2.5 ? 0.05 : sCtx > 1.5 ? 0.10 : sCtx > 0.5 ? 0.035 : 0.06;
-        vec2 sClumpKey = floor(sCell / 20.0);
-        float sClumpRoll = swHash(sClumpKey * 3.7 + 91.3);
-        float sH4 = swHash(sKey * 3.3 + 47.1);
-        if (sClumpRoll < sFlowerRate && sH4 < 0.4) {
-          vec3 sFlow = sCtx > 3.5 ? uFlowRuin : sCtx > 2.5 ? uFlowCliff
-            : sCtx > 1.5 ? uFlowWater : sCtx > 0.5 ? uFlowWood : uFlowOpen;
-          vSward = mix(vSward, sFlow * (0.85 + 0.3 * sV), 0.82);
+        // FLOWER COLOUR. sIsFlower, sCtx and sSpecies were decided up at sD,
+        // ahead of sLp, because the geometry needed them too — see the bloom
+        // flare above. Here they only pick the paint, and only the TIP wears
+        // it: a real flower is mostly green — stem and leaf — with the colour
+        // arriving at the top, not a blade dyed end to end. position.y is 0
+        // at every base corner and h at the tip (see grassGeo), so weighting
+        // by it and leaving vSward a VARYING does the gradient for free — the
+        // rasteriser interpolates green-at-base to bloom-at-tip across each
+        // triangle, no extra vertices, no extra pass.
+        if (sIsFlower) {
+          vec3 sFlow = sCtx > 3.5
+            ? (sSpecies < 0.5 ? uFlowRuin0 : sSpecies < 1.5 ? uFlowRuin1 : uFlowRuin2)
+            : sCtx > 2.5
+              ? (sSpecies < 0.5 ? uFlowCliff0 : sSpecies < 1.5 ? uFlowCliff1 : uFlowCliff2)
+              : sCtx > 1.5
+                ? (sSpecies < 0.5 ? uFlowWater0 : sSpecies < 1.5 ? uFlowWater1 : uFlowWater2)
+                : sCtx > 0.5
+                  ? (sSpecies < 0.5 ? uFlowWood0 : sSpecies < 1.5 ? uFlowWood1 : uFlowWood2)
+                  : (sSpecies < 0.5 ? uFlowOpen0 : sSpecies < 1.5 ? uFlowOpen1 : uFlowOpen2);
+          float sTipW = step(0.01, position.y);
+          vSward = mix(vSward, sFlow * (0.85 + 0.3 * sV), sTipW * 0.88);
         }`)
       // The blade is placed in WORLD metres, and the mesh sits at the origin
       // with an identity matrix, so object space already is world space.
@@ -6735,14 +6858,13 @@ function swardFrame(): void {
   }
   swardU.uSwardEye.value.set(fx, 0, fz);
   swardU.uSwardTint.value.copy(grassTint);
-  // The biome barely changes and this is five Color.set() calls — cheap
+  // The biome barely changes and this is fifteen Color.set() calls — cheap
   // enough to just do every frame rather than hook a change event for it.
   const fp = FLOWER_PAL[biome.name] ?? FLOWER_PAL.temperate;
-  swardU.uFlowOpen.value.setRGB(...fp[SwardCtx.Open]);
-  swardU.uFlowWood.value.setRGB(...fp[SwardCtx.Wood]);
-  swardU.uFlowWater.value.setRGB(...fp[SwardCtx.Water]);
-  swardU.uFlowCliff.value.setRGB(...fp[SwardCtx.Cliff]);
-  swardU.uFlowRuin.value.setRGB(...fp[SwardCtx.Ruin]);
+  for (let ci = 0; ci < 5; ci++) for (let si = 0; si < 3; si++) {
+    (swardU as unknown as Record<string, { value: THREE.Color }>)[SWARD_FLOW_NAMES[ci * 3 + si]]
+      .value.setRGB(...fp[ci][si]);
+  }
   for (const b of swardBands) {
     // SNAPPED to the step, so a slot's world position never moves under it.
     // The base cell, as an index and as metres. The INDEX is the authority: the
@@ -19402,6 +19524,25 @@ function truckSpec(): Record<string, number> {
     n++;
   }
   return { n, counts: Object.fromEntries(names.map((nm, i) => [nm, counts[i]])) };
+};
+/** siteKindAt's own histogram — the vegetation side of the same habitat
+ *  question, over many rolls of the seeded RNG per point so a probabilistic
+ *  pick (coverKind falls through with its own weights) shows its spread
+ *  rather than one lucky draw. */
+(window as unknown as { __vegkind?: object }).__vegkind = (r = 200, step = 24, rolls = 20): object => {
+  const seen: Record<string, number> = {};
+  let n = 0;
+  const rng = mulberry32(1);
+  for (let dx = -r; dx <= r; dx += step) for (let dz = -r; dz <= r; dz += step) {
+    const x = state.x + dx, z = state.z + dz;
+    const cv = sampleCover(x, z);
+    for (let i = 0; i < rolls; i++) {
+      const k = siteKindAt(x, z, cv, rng);
+      seen[k] = (seen[k] ?? 0) + 1;
+      n++;
+    }
+  }
+  return { n, counts: seen };
 };
 (window as unknown as { __fxchain?: object }).__fxchain = (): object => {
   const out: Record<string, string[]> = {};
