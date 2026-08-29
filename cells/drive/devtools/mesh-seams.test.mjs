@@ -23,11 +23,15 @@ import { openDrive, report } from './harness.mjs';
 // p95 0.242 over a partial population and 0.034 over the full one, same
 // build. So each spot waits for its population floor and is judged on the
 // over-10cm RATE.
+// Floors re-baselined 2026-08-29 after the probe learned the difference
+// between a node and a rounding bucket: pair counts fell to the genuine
+// continuation joins (the Bixby service-loop fictions are gone), so the old
+// floors would poll forever.
 const SPOTS = [
   { tag: 'bixby', spot: 'lat=36.37145&lon=-121.90158&h=340&cam=chase&time=NOON&sunalt=55&wx=clear',
-    minJoins: 100, bars: { p95M: 0.15, overRate: 0.08, worstM: 0.4 } },
+    minJoins: 40, bars: { p95M: 0.15, overRate: 0.08, worstM: 0.4 } },
   { tag: 'chapmans', spot: 'lat=-34.09885&lon=18.380684&h=255&cam=chase&time=NOON&sunalt=55&wx=clear',
-    minJoins: 60, bars: { p95M: 0.15, overRate: 0.08, worstM: 0.35 } },
+    minJoins: 30, bars: { p95M: 0.15, overRate: 0.08, worstM: 0.35 } },
 ];
 let fails = 0;
 const ok = (name, cond, detail = '') => {

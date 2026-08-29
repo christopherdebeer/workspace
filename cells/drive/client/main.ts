@@ -7419,6 +7419,11 @@ interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?:
   /** Which ribbon() build this segment came from — probe-only, for
    *  attributing profile discontinuities to fragment boundaries. */
   fd?: number;
+  /** The OSM way key this segment was built from — probe-only. Names cannot
+   *  say "same way": every unnamed service way matches every other by
+   *  nm '?', which once classified a whole web of DIFFERENT ways as
+   *  same-road weld failures. */
+  wid?: string;
   /** Which profile branch produced it: 1 hint, 2 ramp, 3 hold, 4 bench,
    *  5 solo DP, 6 raw/none — probe-only. */
   pb?: number;
@@ -10740,7 +10745,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     }
     if (drivable) {
       const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name, sq, fd: fid, pb: pbranch,
-        ca: tilt[i], cb: tilt[i + 1] };
+        wid: wayKey, ca: tilt[i], cb: tilt[i + 1] };
       addSeg(roadGrid, s);
       segsOf.push(s);
     }
@@ -19764,14 +19769,14 @@ function truckSpec(): Record<string, number> {
           y: ey === undefined ? null : +ey.toFixed(3),
           ca: eca === undefined ? null : +eca.toFixed(3),
           tx: +(dx / l).toFixed(2), tz: +(dz / l).toFixed(2),
-          hw: sg.hw, tk: !!sg.tk, nm: sg.nm ?? '?' });
+          hw: sg.hw, tk: !!sg.tk, nm: sg.nm ?? '?', fd: sg.fd ?? -1, wid: sg.wid ?? '' });
       }
     }
   }
   return rows;
 };
 (window as unknown as { __kerbseams?: object }).__kerbseams = (r = 260): object => {
-  interface End { x: number; z: number; y: number; ca: number; tx: number; tz: number; hw: number; nm: string }
+  interface End { x: number; z: number; y: number; ca: number; tx: number; tz: number; hw: number; nm: string; fd: number; wid: string }
   const seen = new Set<Seg>();
   const ends = new Map<string, End[]>();
   const c = Math.ceil(r / GRID);
@@ -19781,8 +19786,8 @@ function truckSpec(): Record<string, number> {
       seen.add(sg);
       const dx = sg.bx - sg.ax, dz = sg.bz - sg.az, l = Math.hypot(dx, dz) || 1;
       const rows: End[] = [
-        { x: sg.ax, z: sg.az, y: sg.ya, ca: sg.ca ?? 0, tx: dx / l, tz: dz / l, hw: sg.hw, nm: sg.nm ?? '?' },
-        { x: sg.bx, z: sg.bz, y: sg.yb, ca: sg.cb ?? 0, tx: dx / l, tz: dz / l, hw: sg.hw, nm: sg.nm ?? '?' },
+        { x: sg.ax, z: sg.az, y: sg.ya, ca: sg.ca ?? 0, tx: dx / l, tz: dz / l, hw: sg.hw, nm: sg.nm ?? '?', fd: sg.fd ?? -1, wid: sg.wid ?? '' },
+        { x: sg.bx, z: sg.bz, y: sg.yb, ca: sg.cb ?? 0, tx: dx / l, tz: dz / l, hw: sg.hw, nm: sg.nm ?? '?', fd: sg.fd ?? -1, wid: sg.wid ?? '' },
       ];
       for (const e of rows) {
         if (Math.hypot(e.x - state.x, e.z - state.z) > r) continue;
@@ -19806,6 +19811,11 @@ function truckSpec(): Record<string, number> {
   let sameRoad = 0, twoRoads = 0;
   let worst = 0, at: string | null = null, worstWays: string[] = [];
   let mainWorst = 0;
+  // MEETINGS, apart from continuations. Where two ways of different widths —
+  // or at an angle — share a node, kerb-against-kerb compares points metres
+  // apart laterally and the "step" is mostly cross-fall over that offset. The
+  // defined quantity at a shared node is the CENTRELINE height both claim.
+  let meets = 0, meetOver = 0, meetWorst = 0; let meetAt: string | null = null;
   // Every offending pair, for the net's post-mortems — the summary alone
   // cannot say WHICH joins tripped a bar.
   const bad: Array<{ m: number; at: string; ways: string[]; same: boolean }> = [];
@@ -19815,9 +19825,29 @@ function truckSpec(): Record<string, number> {
       const a = es[i], b = es[j];
       // Two roads crossing at levels is a flyover, not a seam.
       if (Math.abs(a.y - b.y) > GRADE_SEP) continue;
+      // SAME NODE, not same rounding bucket. The keys quantise to a metre, and
+      // a service loop tight enough puts CONSECUTIVE STATIONS of one way in
+      // one bucket — pairing a station against another 0.9m across the loop
+      // but metres apart along the arc, on a grade, read as a half-metre
+      // "seam" at a spot where the photograph shows plain hillside.
+      if (Math.hypot(a.x - b.x, a.z - b.z) > 0.6) continue;
+      // …and never a build against itself: one ribbon's internal continuity
+      // is construction, not a join.
+      if (a.fd !== -1 && a.fd === b.fd) continue;
+      const dot = a.tx * b.tx + a.tz * b.tz;
+      // A CONTINUATION — same width, same line — is the one case where kerb
+      // lies on kerb and the kerb step is defined. Anything else meeting here
+      // is a junction: judged on the centreline height both claim.
+      if (Math.abs(dot) < 0.7 || Math.abs(a.hw - b.hw) > 0.01) {
+        const m = Math.abs(a.y - b.y);
+        meets++;
+        if (m > 0.1) meetOver++;
+        if (m > meetWorst) { meetWorst = m; meetAt = k; }
+        continue;
+      }
       // Same physical side: +normal is defined from the way's own direction, so
       // a neighbour digitised the other way stores the same camber negated.
-      const flip = a.tx * b.tx + a.tz * b.tz < 0 ? -1 : 1;
+      const flip = dot < 0 ? -1 : 1;
       // The kerb heights each fragment draws, on each side of the centreline.
       const step = Math.max(
         Math.abs((a.y + a.ca) - (b.y + b.ca * flip)),
@@ -19829,9 +19859,10 @@ function truckSpec(): Record<string, number> {
         if (step > mainWorst) mainWorst = step;
       }
       if (step > 0.1) {
-        if (a.nm === b.nm) sameRoad++; else twoRoads++;
+        const same = a.wid && b.wid ? a.wid === b.wid : a.nm === b.nm;
+        if (same) sameRoad++; else twoRoads++;
         if (bad.length < 60) {
-          bad.push({ m: +step.toFixed(3), at: k, ways: [`${a.nm} hw${a.hw}`, `${b.nm} hw${b.hw}`], same: a.nm === b.nm });
+          bad.push({ m: +step.toFixed(3), at: k, ways: [`${a.nm} hw${a.hw}`, `${b.nm} hw${b.hw}`], same });
         }
       }
       if (step > worst) {
@@ -19852,7 +19883,8 @@ function truckSpec(): Record<string, number> {
     worstM: +worst.toFixed(3), worstAt: at, worstWays,
     mainJoins: mainSteps.length, mainP95M: q(mainSteps, 0.95),
     mainOver10cm: mainSteps.filter((v) => v > 0.1).length,
-    mainWorstM: +mainWorst.toFixed(3), bad };
+    mainWorstM: +mainWorst.toFixed(3),
+    meets, meetOver10cm: meetOver, meetWorstM: +meetWorst.toFixed(3), meetAt, bad };
 };
 /**
  * TWO ROADS DRAWN ON TOP OF EACH OTHER.
