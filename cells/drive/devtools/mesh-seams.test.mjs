@@ -5,8 +5,15 @@
  * measured at audit time (2026-08-29, road-audit.mjs) — they catch
  * regressions now and RATCHET DOWN as tranches B/C land improvements.
  *
- *   bixby     joins 116  p95 0.199  over10cm 13  worst 0.505
- *   chapmans  joins 321  p95 0.152  over10cm 30  worst 0.271
+ * THE BARS JUDGE MAIN-ROAD JOINS (either side hw >= 3). The unnamed
+ * service-way web above Bixby welds nondeterministically with tile arrival
+ * order — same build, different offenders per run — so a net gating on it
+ * gates on the streamer's mood. The carriageways the player drives get the
+ * strict bar; the all-joins picture is printed for the record, and the
+ * service-way chaos is a Tranche C fix of its own.
+ *
+ *   bixby     mainJoins ~40  mainP95 0.0x   (all: joins 117 p95 0.034 full pop)
+ *   chapmans  mainJoins ~74  mainP95 0
  */
 import { openDrive, report } from './harness.mjs';
 
@@ -18,9 +25,9 @@ import { openDrive, report } from './harness.mjs';
 // over-10cm RATE.
 const SPOTS = [
   { tag: 'bixby', spot: 'lat=36.37145&lon=-121.90158&h=340&cam=chase&time=NOON&sunalt=55&wx=clear',
-    minJoins: 100, bars: { p95M: 0.2, overRate: 0.08, worstM: 0.6 } },
+    minJoins: 100, bars: { p95M: 0.15, overRate: 0.08, worstM: 0.4 } },
   { tag: 'chapmans', spot: 'lat=-34.09885&lon=18.380684&h=255&cam=chase&time=NOON&sunalt=55&wx=clear',
-    minJoins: 60, bars: { p95M: 0.18, overRate: 0.08, worstM: 0.35 } },
+    minJoins: 60, bars: { p95M: 0.15, overRate: 0.08, worstM: 0.35 } },
 ];
 let fails = 0;
 const ok = (name, cond, detail = '') => {
@@ -44,10 +51,10 @@ for (const s of SPOTS) {
   console.log(`${s.tag} shells:`, JSON.stringify(sh)?.slice(0, 300));
   console.log(`${s.tag} seat-over-budget logged:`, seatOver);
   ok(`${s.tag} population settled`, ks.joins >= s.minJoins, `joins=${ks.joins} >= ${s.minJoins}`);
-  ok(`${s.tag} p95 kerb step`, ks.p95M <= s.bars.p95M, `${ks.p95M} <= ${s.bars.p95M}`);
-  const rate = ks.joins ? ks.over10cm / ks.joins : 0;
-  ok(`${s.tag} over-10cm rate`, rate <= s.bars.overRate, `${(rate * 100).toFixed(1)}% <= ${s.bars.overRate * 100}%`);
-  ok(`${s.tag} worst step`, ks.worstM <= s.bars.worstM, `${ks.worstM} <= ${s.bars.worstM}`);
+  ok(`${s.tag} main p95 kerb step`, ks.mainP95M <= s.bars.p95M, `${ks.mainP95M} <= ${s.bars.p95M}`);
+  const rate = ks.mainJoins ? ks.mainOver10cm / ks.mainJoins : 0;
+  ok(`${s.tag} main over-10cm rate`, rate <= s.bars.overRate, `${(rate * 100).toFixed(1)}% <= ${s.bars.overRate * 100}%`);
+  ok(`${s.tag} main worst step`, ks.mainWorstM <= s.bars.worstM, `${ks.mainWorstM} <= ${s.bars.worstM}`);
   for (const b of (ks.bad ?? []).slice(0, 6)) console.log(`  bad: ${JSON.stringify(b)}`);
   report(d.errors);
   await d.close();

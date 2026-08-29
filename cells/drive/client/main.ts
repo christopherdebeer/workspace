@@ -19666,12 +19666,19 @@ function truckSpec(): Record<string, number> {
     }
   }
   const steps: number[] = [];
+  // MAIN-ROAD JOINS SEPARATELY (either side hw >= 3): the service-way webs
+  // above Bixby weld nondeterministically with tile arrival order — same
+  // build, different offenders per run — and a net gating on them gates on
+  // the streamer's mood. The carriageways the player drives are the strict
+  // bar; the minor-way chaos stays counted, and is a fix of its own.
+  const mainSteps: number[] = [];
   // WHOSE kerbs disagree decides what to fix. Two fragments of ONE road parting
   // at the kerb is a cross-fall solved per fragment and never reconciled; two
   // DIFFERENT roads parting is a junction that did not warp. They look identical
   // from the cab and want opposite changes.
   let sameRoad = 0, twoRoads = 0;
   let worst = 0, at: string | null = null, worstWays: string[] = [];
+  let mainWorst = 0;
   // Every offending pair, for the net's post-mortems — the summary alone
   // cannot say WHICH joins tripped a bar.
   const bad: Array<{ m: number; at: string; ways: string[]; same: boolean }> = [];
@@ -19690,6 +19697,10 @@ function truckSpec(): Record<string, number> {
         Math.abs((a.y - a.ca) - (b.y - b.ca * flip)),
       );
       steps.push(step);
+      if (a.hw >= 3 || b.hw >= 3) {
+        mainSteps.push(step);
+        if (step > mainWorst) mainWorst = step;
+      }
       if (step > 0.1) {
         if (a.nm === b.nm) sameRoad++; else twoRoads++;
         if (bad.length < 60) {
@@ -19706,11 +19717,15 @@ function truckSpec(): Record<string, number> {
     }
   }
   steps.sort((x, y) => x - y);
-  const q = (f: number): number => (steps.length ? +steps[Math.min(steps.length - 1, Math.floor(f * steps.length))].toFixed(3) : 0);
+  mainSteps.sort((x, y) => x - y);
+  const q = (arr: number[], f: number): number => (arr.length ? +arr[Math.min(arr.length - 1, Math.floor(f * arr.length))].toFixed(3) : 0);
   bad.sort((x, y) => y.m - x.m);
-  return { joins: steps.length, medianM: q(0.5), p95M: q(0.95),
+  return { joins: steps.length, medianM: q(steps, 0.5), p95M: q(steps, 0.95),
     over10cm: steps.filter((v) => v > 0.1).length, sameRoad, twoRoads,
-    worstM: +worst.toFixed(3), worstAt: at, worstWays, bad };
+    worstM: +worst.toFixed(3), worstAt: at, worstWays,
+    mainJoins: mainSteps.length, mainP95M: q(mainSteps, 0.95),
+    mainOver10cm: mainSteps.filter((v) => v > 0.1).length,
+    mainWorstM: +mainWorst.toFixed(3), bad };
 };
 /**
  * TWO ROADS DRAWN ON TOP OF EACH OTHER.
