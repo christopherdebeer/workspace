@@ -1184,6 +1184,10 @@ const skyMat = new THREE.ShaderMaterial({
     uMoonCos1: { value: 0.99999 }, uMoonCos0: { value: 0.99998 },
     uMoonSin: { value: 0.005 },
     uBelow: { value: new THREE.Vector3() },
+    /** The compositor's own haze base, mirrored here — see the below-horizon
+     *  mix: a hole in the streamed world shows the dome, and the dome under
+     *  the horizon must read as AIR, not void. */
+    uHazeB: { value: new THREE.Vector3() },
     uCloud: { value: 0 }, uTime: { value: 0 },
     // HOW LOW THE SUN IS, as its own number. The warm side of the sky used to
     // be a fixed azimuthal blend, so noon and sunset warmed the same amount in
@@ -1206,7 +1210,8 @@ const skyMat = new THREE.ShaderMaterial({
   vertexShader: 'varying vec3 vDir; void main(){ vDir = position; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
   fragmentShader: `
     uniform vec3 sunDir; uniform vec3 uZenith; uniform vec3 uHorizon;
-    uniform vec3 uSunDisc; uniform vec3 uBelow; uniform float uCloud; uniform float uTime;
+    uniform vec3 uSunDisc; uniform vec3 uBelow; uniform vec3 uHazeB;
+    uniform float uCloud; uniform float uTime;
     uniform float uSunCos1; uniform float uSunCos0;
     uniform float uMoonCos1; uniform float uMoonCos0; uniform float uMoonSin;
     uniform float uLow; uniform vec3 uDusk; uniform float uNight; uniform vec3 moonDir;
@@ -1332,7 +1337,15 @@ const skyMat = new THREE.ShaderMaterial({
           col += vec3(0.30, 0.34, 0.45) * pow(max(md, 0.0), 200.0) * 0.35 * uNight;
         }
       }
-      col = mix(uBelow, col, smoothstep(-0.06, 0.02, d.y));
+      // BELOW THE HORIZON THE DOME IS AIR. Whatever ray reaches it down
+      // there is looking through a hole in the streamed world (a tile still
+      // on the wire, the shell still fetching), and what would really fill
+      // that line of sight is distance haze — the same colour the compositor
+      // fades far terrain into. Painted dark it was a fleet of black
+      // rectangles jittering over a stormy Val Müstair, stair-stepped at
+      // tile edges; hunted with the pick grid, which found dome-only rays
+      // under every block.
+      col = mix(mix(uBelow, uHazeB, 0.8), col, smoothstep(-0.06, 0.02, d.y));
       gl_FragColor = vec4(col, 1.0);
     }`,
 });
@@ -1903,6 +1916,7 @@ function applySkyTint(): void {
   const c = compMat.uniforms as Record<string, { value: THREE.Vector3 }>;
   c.uHazeBase.value.copy(mix(NIGHT_SKY.zenith, b.hazeBase));
   c.uHazeSun.value.copy(mix(NIGHT_SKY.horizon, b.hazeSun));
+  u.uHazeB.value.copy(c.uHazeBase.value);
 }
 
 const worldGroup = new THREE.Group();
@@ -16534,6 +16548,8 @@ function stepWeather(now: number, dt: number): void {
   };
   compMat.uniforms.uHazeBase.value.copy(night(biome.hazeBase, NIGHT_SKY.zenith));
   compMat.uniforms.uHazeSun.value.copy(night(biome.hazeSun, NIGHT_SKY.horizon));
+  (skyMat.uniforms.uHazeB.value as THREE.Vector3).copy(
+    compMat.uniforms.uHazeBase.value as THREE.Vector3);
   (skyMat.uniforms.uZenith.value as THREE.Vector3).copy(night(biome.zenith, NIGHT_SKY.zenith));
   (skyMat.uniforms.uHorizon.value as THREE.Vector3).copy(night(biome.horizon, NIGHT_SKY.horizon));
   stepRain(dt);
