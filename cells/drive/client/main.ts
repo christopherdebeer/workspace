@@ -9291,6 +9291,57 @@ const hintAt = (x: number, z: number, reach = 6): number | null => solver.hintAt
  * renderWays still stands its own mesh.
  */
 let ribBatch: Map<string, { mat: THREE.Material; geos: THREE.BufferGeometry[]; lift: number | null }> | null = null;
+/**
+ * SMOOTH THE NORMALS ACROSS THE SOUP'S INVISIBLE JOINTS (audit finding 3).
+ * Every bay and every fragment computed its normals alone, so the merged deck
+ * carries a lighting facet at each 12m station and a hard shading seam where
+ * two fragments of one road meet — on geometry whose positions agree to the
+ * centimetre. A real vertex weld is off the table here: a fragment's uv runs
+ * restart at zero, so indexing coincident verts would smear the first bay's
+ * texture. Normals are the only attribute that WANTS unifying, so only they
+ * are touched: group by centimetre-quantised position, then average within
+ * NORMAL CONES (dot > 0.75, ~40°) so the deck-to-fascia and kerb creases —
+ * 60° and up by construction — keep their edge while co-planar bay facets
+ * fuse. A pair that straddles a cone keeps its old normals: strictly no
+ * worse than the soup anywhere, smooth nearly everywhere.
+ */
+function smoothSoupNormals(out: THREE.BufferGeometry): void {
+  const pos = out.attributes.position as THREE.BufferAttribute | undefined;
+  const nrm = out.attributes.normal as THREE.BufferAttribute | undefined;
+  if (!pos || !nrm) return;
+  const pa = pos.array as Float32Array, na = nrm.array as Float32Array;
+  const groups = new Map<string, number[]>();
+  for (let i = 0; i < pos.count; i++) {
+    const k = `${Math.round(pa[i * 3] * 100)},${Math.round(pa[i * 3 + 1] * 100)},${Math.round(pa[i * 3 + 2] * 100)}`;
+    const g = groups.get(k);
+    if (g) g.push(i); else groups.set(k, [i]);
+  }
+  const COS = 0.75;
+  for (const g of groups.values()) {
+    if (g.length < 2) continue;
+    const used = new Uint8Array(g.length);
+    for (let s = 0; s < g.length; s++) {
+      if (used[s]) continue;
+      const i0 = g[s] * 3;
+      const members = [g[s]];
+      let sx = na[i0], sy = na[i0 + 1], sz = na[i0 + 2];
+      for (let t = s + 1; t < g.length; t++) {
+        if (used[t]) continue;
+        const j = g[t] * 3;
+        if (na[i0] * na[j] + na[i0 + 1] * na[j + 1] + na[i0 + 2] * na[j + 2] > COS) {
+          used[t] = 1;
+          members.push(g[t]);
+          sx += na[j]; sy += na[j + 1]; sz += na[j + 2];
+        }
+      }
+      if (members.length < 2) continue;
+      const l = Math.hypot(sx, sy, sz) || 1;
+      sx /= l; sy /= l; sz /= l;
+      for (const m of members) { na[m * 3] = sx; na[m * 3 + 1] = sy; na[m * 3 + 2] = sz; }
+    }
+  }
+  nrm.needsUpdate = true;
+}
 function flushRibbons(): void {
   const b = ribBatch;
   ribBatch = null;
@@ -9313,6 +9364,7 @@ function flushRibbons(): void {
       out.setAttribute(name, new THREE.BufferAttribute(arr, itemSize));
     }
     for (const g of geos) g.dispose();
+    smoothSoupNormals(out);
     const mesh = new THREE.Mesh(out, mat);
     mesh.userData.ribbon = true;
     worldGroup.add(mesh);
@@ -11011,6 +11063,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // shells can be pointed at the carriageway, where the question is the same
     // one: is this a continuous surface, or a run of separate pieces that
     // happen to be adjacent.
+    smoothSoupNormals(geo);
     const ribbon = new THREE.Mesh(geo, mat);
     ribbon.userData.ribbon = true;
     worldGroup.add(ribbon);
