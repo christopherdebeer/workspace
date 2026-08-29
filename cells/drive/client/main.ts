@@ -15,6 +15,8 @@
  * backend.
  */
 import * as THREE from 'three';
+import { BIOME_ORDER, ClimateField, climPick, climPickRow,
+  treelineAt, type ClimateSample } from './climate';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
@@ -600,7 +602,7 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
       w: Math.abs(wx1 - wx0), h: Math.abs(wz1 - wz0), data,
     });
     // New evidence: every climate corner that had none gets one more chance.
-    climStamp++;
+    climField.noteCover();
     // Terrain built before this arrived was coloured from a guess and, more
     // importantly, has no seabed under its water. Rebuild what this tile
     // covers — staggered by the rebuild throttle, so it costs a few frames
@@ -1000,254 +1002,47 @@ let biomeSettled = false;
  *                ordered sequence, and the reason `alpine` can stop being
  *                "above 1500m" at every latitude on Earth.
  */
-const BIOME_ORDER = ['arid', 'tropical', 'temperate', 'boreal', 'alpine'] as const;
 const BIOME_LIST: Biome[] = BIOME_ORDER.map((n) => BIOMES[n]);
 /** Every archetype's ramp shares these breakpoints, which is what makes a
- *  blended ramp cheap: find the band once, then weight five colours. Asserted
- *  at load because if a ramp ever gains a step, blending BY INDEX silently
- *  starts mixing sea-level cyan into an alpine snowcap and nothing throws. */
+ *  blended ramp cheap: find the band once, then weight five colours. Warned
+ *  about at load because if a ramp ever gains a step, blending BY INDEX
+ *  silently starts mixing sea-level cyan into an alpine snowcap. */
 const RAMP_STEPS: number[] = BIOMES.temperate.ramp.map(([m]) => m);
 for (const b of BIOME_LIST) {
   if (b.ramp.length !== RAMP_STEPS.length || b.ramp.some(([m], i) => m !== RAMP_STEPS[i])) {
     console.warn(`biome ${b.name}: ramp steps differ from temperate — blended ramps will be wrong`);
   }
 }
-/** Where each archetype lives in (normalised temperature, moisture). Arid and
- *  tropical sit at the same temperature and are told apart by water alone,
- *  which is why moisture is weighted as heavily as heat below. */
-const CLIM_HOME: Array<[number, number]> = [
-  [0.85, 0.12],   // arid       — hot, dry
-  [0.88, 0.80],   // tropical   — hot, wet
-  [0.55, 0.55],   // temperate  — mild, middling
-  [0.28, 0.50],   // boreal     — cold, middling
-  [0.20, 0.40],   // alpine     — cold, and mostly a matter of height (see below)
-];
-/** How much water each cover class implies. `built` abstains: a car park says
- *  nothing about rainfall, and letting cities read as desert turned every
- *  suburb arid. Snow abstains for the mirror reason — frozen is not dry. */
-const MOIST_OF: Record<number, number> = {
-  10: 0.75,   // tree
-  20: 0.28,   // shrub
-  30: 0.45,   // grass
-  40: 0.60,   // crop
-  60: 0.08,   // bare
-  80: 1.00,   // water
-  90: 1.00,   // wetland
-  95: 1.00,   // mangrove
-  100: 0.50,  // moss
-};
-/** Metres of elevation above which trees stop. Fits the Alps (46° → 2307m
- *  against a real ~2200) and Scandinavia (62° → 924m against ~900), and
- *  reaches zero near 70°. It UNDER-reads continental interiors — the Rockies
- *  at 40° run some 800m above this — and that residual is honest: it is the
- *  moisture axis, which this curve does not yet take a term from. */
-const treelineAt = (latAbs: number): number => Math.max(0, 4000 - 0.8 * latAbs * latAbs);
-interface Climate {
-  /** Weights over BIOME_ORDER, summing to one — the alpine boost applied at
-   *  whatever elevation the reader supplied. This is what consumers use. */
-  w: number[];
-  /** The same weights BEFORE the treeline boost: the pure temperature and
-   *  moisture assignment. Kept because altitude varies far faster than
-   *  climate does, so the boost has to be re-applied per point rather than
-   *  interpolated off a 2km lattice — see climateAt. */
-  w0: number[];
-  /** The heaviest archetype — for the dome, the light, and anything else that
-   *  is one object and must therefore have one answer. */
-  dom: Biome;
-  tempC: number;
-  moisture: number;
-  /** Metres. See treelineAt. */
-  treeline: number;
-  elevAbs: number;
-  /** Did cover actually answer here? An entry that had evidence is final; one
-   *  that did not is provisional and re-computed when new cover lands. */
-  hadCover: boolean;
-  /** The cover generation this was computed against. See climStamp. */
-  stamp: number;
-}
-/** Bumped whenever a cover tile lands. A climate corner computed before the
- *  raster reached it is a guess, and guesses have to be revisited — but they
- *  must still be CACHED while they stand, which is the whole lesson of the
- *  first cut of this: refusing to cache an evidence-free corner turned the far
- *  shell, which lies beyond the loaded raster by construction, into sixty-five
- *  thousand vertices each recomputing four corners at twenty-five cover
- *  samples apiece. The world stopped booting. Cache always; expire on news. */
-let climStamp = 0;
-/**
- * METRES BETWEEN SAMPLED CORNERS — and the first cut had this at 256, which
- * did not merely cost too much, it stopped the world booting.
- *
- * Climate varies over TENS OF KILOMETRES. Sampling it every 256m oversamples
- * a slow field by two orders of magnitude, and the bill arrives where the
- * world is largest: the far shell is 256x256 vertices over roughly a hundred
- * kilometres, which wants ~150,000 corners against a cache capped at 6,000.
- * It thrashed — clear, recompute twenty-five cover samples, clear again —
- * and presented as a 120-second boot timeout with no page error, because a
- * hot loop looks like nothing at all from outside.
- *
- * At 2km a hundred-kilometre shell needs some 2,500 corners, computed once.
- * Nothing is lost: bilinear interpolation across a 2km lattice is smoother
- * than the thing it samples.
- */
-const CLIM_G = 2048;
-const climCache = new Map<number, Climate>();
-/** Cover samples per corner: a 5×5 grid at 400m, so ~1.6km of neighbourhood —
- *  matched to CLIM_G, so a corner characterises the cell it stands for rather
- *  than one spot inside it. Paid once per corner and then cached, which is why
- *  it can afford to be a grid rather than a single read. */
-function moistureAt(x: number, z: number): number {
-  let sum = 0, n = 0;
-  for (let i = -2; i <= 2; i++) for (let j = -2; j <= 2; j++) {
-    const cv = sampleCover(x + i * 400, z + j * 400);
-    if (cv === null) continue;
-    const m = MOIST_OF[cv];
-    if (m === undefined) continue;      // built and snow abstain
-    sum += m; n++;
-  }
-  return n ? sum / n : 0.5;             // no evidence: assume unremarkable
-}
-function climCompute(x: number, z: number): Climate {
-  const latAbs = Math.abs(localToLatLon(x, z)[0]);
-  // THE GROUND MAY NOT EXIST YET. This is asked during module load — the
-  // critter populations roll their species before the terrain subsystem is
-  // up — and `groundAt` reaches through roadCeiling into structures that are
-  // still undefined at that point. Chasing each early caller is whack-a-mole;
-  // tolerating an absent heightfield here fixes all of them at once, and
-  // costs nothing afterwards because a corner computed without evidence
-  // carries hadCover:false and is recomputed the moment cover lands.
-  let elevAbs = baseElev;
-  try { elevAbs = groundAt(x, z) + baseElev; } catch { /* terrain not up yet */ }
-  // Sea-level mean temperature falls off as a quadratic in latitude — 27°C at
-  // the equator, 13 at 45°, 2.5 at 60°, below freezing past 63 — then the
-  // standard atmospheric lapse takes it down with height.
-  const tempC = 27 - 0.0068 * latAbs * latAbs - 0.0065 * Math.max(0, elevAbs);
-  const moisture = moistureAt(x, z);
-  const treeline = treelineAt(latAbs);
-  const tempN = clamp((tempC + 10) / 40, 0, 1);
-  const w: number[] = [];
-  let total = 0;
-  for (let i = 0; i < CLIM_HOME.length; i++) {
-    const dt = tempN - CLIM_HOME[i][0], dm = moisture - CLIM_HOME[i][1];
-    const v = Math.exp(-(dt * dt * 12 + dm * dm * 10));
-    w.push(v); total += v;
-  }
-  for (let i = 0; i < w.length; i++) w[i] /= total;
-  // The treeline boost is NOT applied here — see climateAt. A corner speaks
-  // for four square kilometres, and altitude changes across a hundred metres
-  // of mountain road.
-  const c: Climate = { w: w.slice(), w0: w, dom: BIOME_LIST[0], tempC, moisture, treeline, elevAbs,
-    hadCover: sampleCover(x, z) !== null, stamp: climStamp };
-  applyTreeline(c, elevAbs);
-  return c;
-}
-/**
- * ALPINE IS A HEIGHT, NOT A TEMPERATURE. It sits close enough to boreal in the
- * temperature/moisture plane that the soft assignment can never separate them;
- * what distinguishes it is being ABOVE THE TREES. Taking its weight from the
- * treeline directly is what retires `elevAbs > 1500` — a rule that called the
- * Ethiopian highlands alpine and the Norwegian fjells forest.
- *
- * Applied PER POINT rather than baked into the lattice, because a climate
- * corner speaks for four square kilometres while altitude changes over a
- * hundred metres of mountain road. Measured before this split: a 2km transect
- * up the Stelvio reported one elevation and one treeline margin from end to
- * end, which would have made the whole altitude axis invisible from the seat.
- */
-function applyTreeline(c: Climate, elevAbs: number): void {
-  c.elevAbs = elevAbs;
-  const above = clamp((elevAbs - (c.treeline - 500)) / 700, 0, 1);
-  const boost = above * above * (3 - 2 * above) * 3.2;
-  let total = 0, dom = 0;
-  for (let i = 0; i < 5; i++) { c.w[i] = c.w0[i]; total += c.w0[i]; }
-  c.w[4] += boost * (total / 5);
-  total += boost * (total / 5);
-  for (let i = 0; i < 5; i++) { c.w[i] /= total; if (c.w[i] > c.w[dom]) dom = i; }
-  c.dom = BIOME_LIST[dom];
-}
-function climCorner(gx: number, gz: number): Climate {
-  const k = gx * 65536 + gz;
-  const c = climCache.get(k);
-  // A corner that HAD cover is settled. One that did not is kept — it must be,
-  // or the far shell recomputes it per vertex — but only until the next cover
-  // tile lands, at which point it is asked again, once.
-  if (c && (c.hadCover || c.stamp === climStamp)) return c;
-  const fresh = climCompute(gx * CLIM_G, gz * CLIM_G);
-  // Generous: at CLIM_G the working set for a far shell is thousands, not
-  // tens of thousands, and a cap BELOW the working set is not a cap — it is a
-  // thrash, which is exactly how the 256m version hung the boot.
-  if (climCache.size > 20000) climCache.clear();
-  climCache.set(k, fresh);
-  return fresh;
-}
-/** Shared scratch — `climateAt` returns THIS OBJECT, so read what you need and
- *  do not retain it across another call. The same convention `groundTintMemo`
- *  and `swardCol` already use, for the same reason: this is called per terrain
- *  vertex and per sward texel, and an allocation there is a garbage collection
- *  in the middle of a build. */
-const climScratch: Climate = { w: [0, 0, 0, 0, 0], w0: [0, 0, 0, 0, 0], dom: BIOMES.temperate,
-  tempC: 12, moisture: 0.5, treeline: 2000, elevAbs: 0, hadCover: false, stamp: 0 };
-/**
- * The climate at a point, BILINEARLY INTERPOLATED between cached corners.
- *
- * The interpolation is not a nicety. Corners sit 256m apart, and a nearest-
- * corner lookup would put a hard 256m grid into the ground colour and the
- * species mix — which is precisely the checkerboard the flower patches drew
- * when they thresholded a per-cell hash instead of a continuous field. A
- * climate that steps is worse than a climate that is slightly wrong.
- */
+/** The field itself lives in `climate.ts`, out of the renderer — see the note
+ *  at the head of that file for what leaving it in here cost. This is only the
+ *  seam: the samplers it needs, and the mapping from its archetype INDEX back
+ *  to the Biome record the sky and the light still read. */
+const climField = new ClimateField({
+  coverAt: (x, z) => sampleCover(x, z),
+  latAbsAt: (x, z) => Math.abs(localToLatLon(x, z)[0]),
+  groundAt: (x, z) => groundAt(x, z) + baseElev,
+});
+type Climate = ClimateSample & { dom: Biome };
+const climOut = { dom: BIOMES.temperate } as { dom: Biome };
 function climateAt(x: number, z: number, elevAbs?: number): Climate {
   // ART DIRECTION WINS, and collapses the field to one archetype — otherwise
-  // `?biome=arid` would still blend a green valley through the middle of it.
+  // `?biome=arid` would still blend a green valley through the desert.
   if (biomeForced) {
-    climScratch.w.fill(0); climScratch.w0.fill(0);
-    climScratch.w[BIOME_LIST.indexOf(biomeForced)] = 1;
-    climScratch.w0[BIOME_LIST.indexOf(biomeForced)] = 1;
-    climScratch.dom = biomeForced;
-    climScratch.treeline = treelineAt(Math.abs(localToLatLon(x, z)[0]));
-    climScratch.elevAbs = elevAbs ?? climScratch.elevAbs;
-    return climScratch;
+    forcedSample.w.fill(0); forcedSample.w0.fill(0);
+    const i = BIOME_LIST.indexOf(biomeForced);
+    forcedSample.w[i] = 1; forcedSample.w0[i] = 1;
+    forcedSample.domIdx = i;
+    forcedSample.elevAbs = elevAbs ?? forcedSample.elevAbs;
+    return Object.assign(forcedSample, { dom: biomeForced }) as Climate;
   }
-  const fx = x / CLIM_G, fz = z / CLIM_G;
-  const gx = Math.floor(fx), gz = Math.floor(fz);
-  const tx = fx - gx, tz = fz - gz;
-  const a = climCorner(gx, gz), b = climCorner(gx + 1, gz);
-  const c = climCorner(gx, gz + 1), d = climCorner(gx + 1, gz + 1);
-  const mix = (p: number, q: number, r: number, s: number): number =>
-    (p * (1 - tx) + q * tx) * (1 - tz) + (r * (1 - tx) + s * tx) * tz;
-  for (let i = 0; i < 5; i++) climScratch.w0[i] = mix(a.w0[i], b.w0[i], c.w0[i], d.w0[i]);
-  climScratch.tempC = mix(a.tempC, b.tempC, c.tempC, d.tempC);
-  climScratch.moisture = mix(a.moisture, b.moisture, c.moisture, d.moisture);
-  climScratch.treeline = mix(a.treeline, b.treeline, c.treeline, d.treeline);
-  // THE ELEVATION IS THE CALLER'S IF IT HAS ONE. terrainPalette is handed the
-  // true height of the very vertex it is colouring; using the lattice's
-  // average instead would throw away the one term that varies fast enough to
-  // matter. Only a caller with no height of its own falls back to the corners.
-  const elev = elevAbs ?? mix(a.elevAbs, b.elevAbs, c.elevAbs, d.elevAbs);
-  // Lapse the blended sea-level-ish temperature to the real height.
-  climScratch.tempC += (mix(a.elevAbs, b.elevAbs, c.elevAbs, d.elevAbs) - elev) * 0.0065;
-  applyTreeline(climScratch, elev);
-  return climScratch;
+  const s = climField.at(x, z, elevAbs);
+  climOut.dom = BIOME_LIST[s.domIdx];
+  return Object.assign(s, climOut) as Climate;
 }
-/** Pick from a per-archetype weight table by CLIMATE rather than by the one
- *  global biome: every archetype's row contributes in proportion to how much
- *  of it is present here, so a boreal-temperate margin really does grow both
- *  conifers and broadleaves instead of flipping between them at a line. */
-function climPick<T>(table: Record<string, Array<[T, number]>>, cl: Climate, r: () => number): T | null {
-  let total = 0;
-  for (let i = 0; i < BIOME_ORDER.length; i++) {
-    const row = table[BIOME_ORDER[i]];
-    if (!row) continue;
-    for (const [, wt] of row) total += wt * cl.w[i];
-  }
-  if (total <= 0) return null;
-  let t = r() * total;
-  for (let i = 0; i < BIOME_ORDER.length; i++) {
-    const row = table[BIOME_ORDER[i]];
-    if (!row) continue;
-    for (const [k, wt] of row) { t -= wt * cl.w[i]; if (t <= 0) return k; }
-  }
-  return null;
-}
+const forcedSample: ClimateSample = {
+  w: [0, 0, 0, 0, 0], w0: [0, 0, 0, 0, 0], domIdx: 2, tempC: 12, moisture: 0.5,
+  treeline: 2000, elevAbs: 0, hadCover: true, stamp: 0,
+};
 
 // Where each land-cover class pulls the ground colour. Deliberately muted and
 // inside the existing solarpunk range: these are a shift in character, not a
@@ -5966,7 +5761,7 @@ function coverKind(cover: number | null, r: () => number, x: number, z: number):
     // the CLIMATE'S blend of every archetype's mix, so a boreal-temperate
     // margin grows both conifers and broadleaves in proportion instead of
     // flipping between two pure stands at an invisible line.
-    const t = climPick(VEG_TREES, climateAt(x, z), r);
+    const t = climPick(VEG_TREES, climateAt(x, z).w, r);
     if (t) return t;
   }
   if (cover === COVER.shrub || cover === COVER.grass || cover === COVER.crop) {
@@ -5988,7 +5783,7 @@ const VEG_TREES: Record<string, Array<[VegKind, number]>> = Object.fromEntries(
     v === 'broadleaf' || v === 'conifer' || v === 'palm' || v === 'acacia')]),
 );
 function pickKind(r: () => number, x: number, z: number): VegKind {
-  return climPick(VEG_MIX, climateAt(x, z), r) ?? VEG_MIX.temperate[0][0];
+  return climPick(VEG_MIX, climateAt(x, z).w, r) ?? VEG_MIX.temperate[0][0];
 }
 /** WHAT GROWS HERE, taking the STAND rather than just the pixel — the same
  *  habitat read the sward's flowers use (SwardCtx / swardCtxAt), applied to a
@@ -6171,7 +5966,7 @@ function scatterVeg(pts: Array<[number, number]>, seed: number, tags: Record<str
     // A WOOD IS STILL A WOOD, but which tree it is made of is now the
     // climate's answer rather than a two-name test on one global label.
     const dominant: VegKind = wooded && r() < 0.8
-      ? (climPick(VEG_TREES, climateAt(x, z), r) ?? 'broadleaf')
+      ? (climPick(VEG_TREES, climateAt(x, z).w, r) ?? 'broadleaf')
       : siteKindAt(x, z, cv, r);
     const rad = wooded ? 10 + r() * 20 : 5 + r() * 13;
     plantClump(x, z, rad, Math.round((wooded ? 14 : 7) + r() * (wooded ? 22 : 12)), dominant, r);
@@ -7702,22 +7497,10 @@ function pickFrom(table: Record<string, number[]>, atX?: number, atZ?: number): 
   // populations are constructed at module load — ten thousand lines before
   // `state` exists — so reaching for the truck inside this function threw
   // during init and the world never signalled ready. The spawn origin is the
-  // right default anyway: at construction time the truck is at 0,0, which is
+  // right default anyway: at construction time the truck IS at 0,0, which is
   // exactly the climate these first animals should be drawn from. The re-roll
   // that follows a real move passes the truck's actual position.
-  const cl = climateAt(atX ?? 0, atZ ?? 0);
-  const n = (table.temperate ?? []).length;
-  const acc: number[] = new Array(n).fill(0);
-  let total = 0;
-  for (let bi = 0; bi < BIOME_ORDER.length; bi++) {
-    const row = table[BIOME_ORDER[bi]];
-    if (!row) continue;
-    for (let i = 0; i < row.length && i < n; i++) { acc[i] += row[i] * cl.w[bi]; total += row[i] * cl.w[bi]; }
-  }
-  if (total <= 0) return 0;
-  let t = Math.random() * total;
-  for (let i = 0; i < n; i++) { t -= acc[i]; if (t <= 0) return i; }
-  return 0;
+  return climPickRow(table, climateAt(atX ?? 0, atZ ?? 0).w, Math.random());
 }
 const pickBird = (atX?: number, atZ?: number): number => pickFrom(BIRD_MIX, atX, atZ);
 const pickSpecies = (atX?: number, atZ?: number): number => pickFrom(HERD_MIX, atX, atZ);
@@ -19957,7 +19740,7 @@ function truckSpec(): Record<string, number> {
       aboveTreeline: +(c.elevAbs - c.treeline).toFixed(0),
     };
   };
-  const out: Record<string, unknown> = { here: at(state.x, state.z), settledBiome: biome.name, cached: climCache.size };
+  const out: Record<string, unknown> = { here: at(state.x, state.z), settledBiome: biome.name, cached: climField.size };
   if (r > 0) {
     const dx = Math.sin(bearing * Math.PI / 180), dz = -Math.cos(bearing * Math.PI / 180);
     const span: Array<Record<string, unknown>> = [];
