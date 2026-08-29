@@ -24430,6 +24430,8 @@ function updateCps(): void {
 // tire roar coloured by the surface underneath, wind that rises with speed,
 // and impacts when the suspension bottoms out. One noise buffer, a handful of
 // nodes, no assets — and it must be armed by a gesture (iOS autoplay policy).
+(window as unknown as { __armAudio?: object }).__armAudio = (): string => { audio.arm(); return audio.state; };
+(window as unknown as { __mix?: object }).__mix = (): object => audio.mix();
 /** What the truck HIT, material and all — kept regardless of whether the
  *  audio context is armed, because the harness verifies with this list what
  *  an ear cannot: that a rail clangs, a rock crunches, a façade crashes. */
@@ -24511,7 +24513,7 @@ const audio = (() => {
     squealGain = ctx.createGain(); squealGain.gain.value = 0;
     sqSrc.connect(squealFilt);
     squealOsc = ctx.createOscillator(); squealOsc.type = 'sawtooth'; squealOsc.frequency.value = 1500;
-    const sqMix = ctx.createGain(); sqMix.gain.value = 0.05;
+    const sqMix = ctx.createGain(); sqMix.gain.value = 0.09;   // the EDGE — noise alone reads as wind
     squealOsc.connect(sqMix); sqMix.connect(squealFilt);
     squealFilt.connect(squealGain); squealGain.connect(master);
     sqSrc.start(); squealOsc.start();
@@ -24598,6 +24600,16 @@ const audio = (() => {
   };
   return {
     arm,
+    /** The MIX, measured — what each channel's gain actually is right now,
+     *  because "should be audible" has been asserted from this desk twice
+     *  and disproved from the seat twice. Numbers or it did not happen. */
+    mix(): object {
+      const g = (n: GainNode | undefined): number => +(n?.gain.value ?? 0).toFixed(3);
+      return { state: ctx?.state ?? 'none', on,
+        eng: g(engGain), roar: g(roarGain), squeal: g(squealGain), scrape: g(scrapeGain),
+        grit: g(gritGain), wind: g(windGain), brush: g(brushGain),
+        rustle: g(rustleGain), river: g(riverGain), water: g(waterGain) };
+    },
     /** Stand the graph down — a backgrounded tab must not keep an engine
      *  running in it. `arm()` brings it back. */
     hush(): void { try { void ctx?.suspend(); } catch { /* fine */ } },
@@ -24657,12 +24669,16 @@ const audio = (() => {
       // slide). Spin squeals on tarmac like slip does; the 0.7 curve opens
       // the voice at the EDGE of grip; and the speed factor counts spin as
       // wheel speed, so a standstill burnout sings instead of muting.
-      const sq2 = Math.pow(clamp(Math.max(slip, spin * 0.85), 0, 1), 0.7);
+      // 0.55 and 0.45: THE LAMP AND THE EAR MUST AGREE. The HUD calls SLIP
+      // from skid 0.06, and at the old curve and gain the voice was not
+      // audible until ~0.4 — reported from the seat as a lit lamp over a
+      // silent tyre. The curve now opens where the lamp does.
+      const sq2 = Math.pow(clamp(Math.max(slip, spin * 0.85), 0, 1), 0.55);
       const sf = 1250 + Math.min(v * 14, 620) + sq2 * 260;
       squealFilt.frequency.setTargetAtTime(sf, t, 0.08);
       squealOsc.frequency.setTargetAtTime(sf, t, 0.08);
       squealGain.gain.setTargetAtTime(
-        sq2 * bite * grounded * Math.min((v + spin * 9) / 8, 1) * 0.3, t, 0.06);
+        sq2 * bite * grounded * Math.min((v + spin * 9) / 8, 1) * 0.45, t, 0.06);
       // Tarmac hisses high and thin; loose ground growls low and loud. A graded
       // track sits between the two — you can hear which tier you are on.
       const road = surf === 'road';
@@ -25717,6 +25733,7 @@ let dbgAmb: Record<string, unknown> = {};
 let ambSampledAt = 0, ambRiverL = 0, ambVegL = 0, ambFrothL = 0;
 let brushPeak = 0;   // session max — a one-frame brush must not hide from the probe
 let wallTouchAt = -1e9, dragKnockAt = 0;   // wall contact edge + the drag's knock pacing
+let scrapeHoldLvl = 0, scrapeHoldMetal = false;   // contact held across the graze's gap frames
 let dbgSusp: object = {};
 // A shade over 9.81. Real gravity left long climbs feeling weightless once the
 // truck has 16m/s^2 of thrust to spend against it; this gives a hill enough
@@ -27065,9 +27082,18 @@ function tick(now: number): void {
   // wash through water, and the slap of arriving in it with any speed on.
   // The graze's floor rose from 0.4 to 0.55 of the mix: a lean along a rail
   // is MOSTLY along, and it still has to be heard over the drivetrain.
-  audio.scrape(scrape >= 0 && Math.abs(state.speed) > 1.5
-    ? clamp(Math.abs(state.speed) / 22, 0.15, 1) * (0.55 + 0.45 * Math.max(0, scrape)) : 0,
-  scrapeMetal ? 1 : 0.35);
+  // AND CONTACT IS STICKY. The wall test only fires on frames that actually
+  // penetrate, and a lean along a rail penetrates a few frames a second —
+  // the push-out leaves the truck exactly touching. Gating the voice on
+  // those frames alone had it flickering toward silence between them
+  // (reported from the seat, twice: no metal scraping on barriers). The
+  // level now holds for a quarter second past the last contact frame.
+  if (scrape >= 0 && Math.abs(state.speed) > 1.5) {
+    scrapeHoldLvl = clamp(Math.abs(state.speed) / 22, 0.15, 1) * (0.55 + 0.45 * Math.max(0, scrape));
+    scrapeHoldMetal = scrapeMetal;
+  }
+  const wallRecent = nowMs - wallTouchAt < 260;
+  audio.scrape(wallRecent ? scrapeHoldLvl : 0, scrapeHoldMetal ? 1 : 0.35);
   audio.brush(clamp(brushAmt, 0, 1.6) * clamp(Math.abs(state.speed) / 9, 0.15, 1));
   audio.water(surfKind === 'water' && groundedF > 0.2 ? clamp(Math.abs(state.speed) / 11, 0.12, 1) : 0);
   if (surfKind === 'water' && prevSurfKind !== 'water' && Math.abs(state.speed) > 3) {
