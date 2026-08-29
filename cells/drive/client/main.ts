@@ -19859,7 +19859,10 @@ function truckSpec(): Record<string, number> {
         if (step > mainWorst) mainWorst = step;
       }
       if (step > 0.1) {
-        const same = a.wid && b.wid ? a.wid === b.wid : a.nm === b.nm;
+        // The way key carries a tile suffix (id@tile#part), so one OSM way
+        // clipped across a boundary carries two keys — identity is the id.
+        const same = a.wid && b.wid
+          ? a.wid.split('@')[0] === b.wid.split('@')[0] : a.nm === b.nm;
         if (same) sameRoad++; else twoRoads++;
         if (bad.length < 60) {
           bad.push({ m: +step.toFixed(3), at: k, ways: [`${a.nm} hw${a.hw}`, `${b.nm} hw${b.hw}`], same });

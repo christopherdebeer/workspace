@@ -27,7 +27,8 @@ let prev = -1, flat = 0;
 for (let w = 0; w < 40 && flat < 3; w++) {
   await d.page.waitForTimeout(5000);
   ks = await d.page.evaluate(() => window.__kerbseams(260));
-  flat = ks.joins === prev ? flat + 1 : 0;
+  // Flat at zero is a world that has not built yet, not one that has settled.
+  flat = ks.joins > 0 && ks.joins === prev ? flat + 1 : 0;
   prev = ks.joins;
 }
 console.log('joins:', ks.joins, 'worst:', ks.worstM, 'at:', ks.worstAt);
