@@ -24376,7 +24376,10 @@ const audio = (() => {
   let squealGain: GainNode, squealFilt: BiquadFilterNode, squealOsc: OscillatorNode;
   let scrapeGain: GainNode, scrapeFilt: BiquadFilterNode;
   let waterGain: GainNode, waterFilt: BiquadFilterNode;
+  let rustleGain: GainNode, rustleFilt: BiquadFilterNode;
+  let riverGain: GainNode, riverFilt: BiquadFilterNode;
   let crashAt = 0, creakAt = 0;   // one-shot cooldowns — a scrape is not a drum roll
+  let birdAt = 0;                 // next phrase, spaced by how alive the spot is
   let noiseBuf: AudioBuffer;
   let on = true;
   try { on = localStorage.getItem('drive.mute') !== '1'; } catch { /* fine */ }
@@ -24460,6 +24463,20 @@ const audio = (() => {
     waterFilt.frequency.value = 420; waterFilt.Q.value = 0.8;
     waterGain = ctx.createGain(); waterGain.gain.value = 0;
     waSrc.connect(waterFilt); waterFilt.connect(waterGain); waterGain.connect(master); waSrc.start();
+    // ── the world without the car ──
+    // Rustle: leaves as high thin noise the wind pushes around; River: the
+    // steady wide wash of moving water nearby. Both live under everything
+    // and only surface when the truck lets them (see ambience()).
+    const ruSrc = ctx.createBufferSource(); ruSrc.buffer = noiseBuf; ruSrc.loop = true;
+    rustleFilt = ctx.createBiquadFilter(); rustleFilt.type = 'bandpass';
+    rustleFilt.frequency.value = 1750; rustleFilt.Q.value = 0.5;
+    rustleGain = ctx.createGain(); rustleGain.gain.value = 0;
+    ruSrc.connect(rustleFilt); rustleFilt.connect(rustleGain); rustleGain.connect(master); ruSrc.start();
+    const rvSrc = ctx.createBufferSource(); rvSrc.buffer = noiseBuf; rvSrc.loop = true;
+    riverFilt = ctx.createBiquadFilter(); riverFilt.type = 'bandpass';
+    riverFilt.frequency.value = 470; riverFilt.Q.value = 0.8;
+    riverGain = ctx.createGain(); riverGain.gain.value = 0;
+    rvSrc.connect(riverFilt); riverFilt.connect(riverGain); riverGain.connect(master); rvSrc.start();
   };
   const arm = (): void => {
     // ── MUTED MEANS NO CONTEXT AT ALL ──
@@ -24530,7 +24547,7 @@ const audio = (() => {
      * surface being crossed.
      */
     update(speed: number, throttle: number, surf: Surface, grounded: number, rainAmt = 0, rev = 0, gear = 0, slip = 0,
-      q = 1, spin = 0): void {
+      q = 1, spin = 0, ambWind = 0, engF = 1): void {
       if (!ctx || !master || ctx.state !== 'running') return;
       const t = ctx.currentTime, v = Math.abs(speed);
       // Revs come from the DRIVETRAIN, not from road speed — the two part
@@ -24542,9 +24559,11 @@ const audio = (() => {
       engFilt.frequency.setTargetAtTime(500 + rev * 1500 + v * 22, t, 0.09);
       // Airborne the engine gets LOUDER, not quieter: it is unloaded and
       // screaming. Multiplying by `grounded` had it fade out over every jump.
+      // `engF` is the IGNITION: 1 running, a fraction while the starter
+      // turns it, 0 with the key off — the whole engine voice hangs on it.
       engGain.gain.setTargetAtTime(
-        0.1 + Math.abs(throttle) * 0.16 * (0.45 + 0.55 * grounded)
-          + (1 - grounded) * rev * 0.1 + Math.min(v / 60, 0.1), t, 0.09,
+        (0.1 + Math.abs(throttle) * 0.16 * (0.45 + 0.55 * grounded)
+          + (1 - grounded) * rev * 0.1 + Math.min(v / 60, 0.1)) * engF, t, 0.09,
       );
       // Rubber that has stopped rolling. Loud on tarmac, largely lost under the
       // gravel off it — and silent below a walking pace, where a slide is a
@@ -24569,9 +24588,12 @@ const audio = (() => {
         ? clamp(q, 0, 1) : 0.08;
       roarFilt.frequency.setTargetAtTime(320 + hard * 830, t, 0.12);
       roarGain.gain.setTargetAtTime(Math.min(v / 34, 1) * (0.26 - hard * 0.16) * grounded, t, 0.1);
-      // Rain rides the wind channel: same filtered noise, opened up and lifted.
-      windFilt.frequency.setTargetAtTime(900 - rainAmt * 500, t, 0.4);
-      windGain.gain.setTargetAtTime(Math.min((v * v) / 2600, 0.9) * 0.13 + rainAmt * 0.16, t, 0.15);
+      // Rain rides the wind channel: same filtered noise, opened up and
+      // lifted — and so does the WEATHER'S wind, which blows whether or not
+      // the truck moves: a parked truck on a gusty pass is not silent.
+      windFilt.frequency.setTargetAtTime(900 - rainAmt * 500 - ambWind * 250, t, 0.4);
+      windGain.gain.setTargetAtTime(
+        Math.min((v * v) / 2600, 0.9) * 0.13 + rainAmt * 0.16 + ambWind * 0.09, t, 0.15);
       // Gravel: absent on tarmac, dominant off it. Rate (playbackRate) AND
       // level rise with speed, so the crunch density tracks the wheels.
       // …and the grit is its complement, plus whatever the wheels are throwing
@@ -24586,6 +24608,73 @@ const audio = (() => {
       // engine at every speed that mattered.
       gritGain.gain.setTargetAtTime(
         (Math.min(v / 12, 1) * 0.46 * loose + spin * 0.3 * (0.25 + 0.75 * loose)) * grounded, t, 0.09);
+    },
+    /** The starter: four compressions through a low filter, dying if the
+     *  catch has not happened by the end — the engine's own voice takes over
+     *  from tick as engineSt turns on. */
+    crank(): void {
+      if (!ctx || !master || ctx.state !== 'running' || !on) return;
+      const t = ctx.currentTime;
+      const osc = ctx.createOscillator(); osc.type = 'sawtooth';
+      osc.frequency.setValueAtTime(24, t);
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 260;
+      const g = ctx.createGain(); g.gain.value = 0.0001;
+      for (let i = 0; i < 4; i++) {
+        const at = t + i * 0.15;
+        g.gain.setValueAtTime(0.001, at);
+        g.gain.exponentialRampToValueAtTime(0.15, at + 0.04);
+        g.gain.exponentialRampToValueAtTime(0.004, at + 0.13);
+      }
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.68);
+      osc.connect(lp); lp.connect(g); g.connect(master);
+      osc.start(t); osc.stop(t + 0.7);
+    },
+    /** The key off: one soft mechanical sigh as everything spins down. */
+    engOff(): void {
+      if (!ctx || !master || ctx.state !== 'running' || !on) return;
+      const t = ctx.currentTime;
+      const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 300;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.11, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+      src.connect(lp); lp.connect(g); g.connect(master);
+      src.start(t); src.stop(t + 0.32);
+    },
+    /** The world's own bed, set every frame like update(): leaves in the
+     *  wind, a river nearby, and now and then a bird — audible exactly as
+     *  much as the truck lets them be. `gusty` shifts the rustle's colour;
+     *  birds are PHRASES, not a loop: a few whistled notes, spaced by how
+     *  alive the spot is. */
+    ambience(rustle: number, river: number, birds: number, gusty: number): void {
+      if (!ctx || !master || !rustleGain || ctx.state !== 'running') return;
+      const t = ctx.currentTime;
+      rustleGain.gain.setTargetAtTime(rustle * 0.14, t, 0.5);
+      rustleFilt.frequency.setTargetAtTime(1300 + gusty * 900, t, 0.8);
+      riverGain.gain.setTargetAtTime(river * 0.2, t, 0.6);
+      if (on && birds > 0.03) {
+        const nowP = performance.now();
+        if (nowP > birdAt) {
+          birdAt = nowP + 1500 + (Math.random() * 9000) / (0.15 + birds);
+          const notes = 2 + Math.floor(Math.random() * 4);
+          const base = 2300 + Math.random() * 1700;
+          let at = t + Math.random() * 0.2;
+          for (let i = 0; i < notes; i++) {
+            const osc = ctx.createOscillator(); osc.type = 'sine';
+            const f0 = base * (0.9 + Math.random() * 0.25);
+            osc.frequency.setValueAtTime(f0, at);
+            osc.frequency.exponentialRampToValueAtTime(
+              f0 * (0.82 + Math.random() * 0.4), at + 0.05 + Math.random() * 0.05);
+            const g = ctx.createGain();
+            g.gain.setValueAtTime(0.0001, at);
+            g.gain.exponentialRampToValueAtTime(0.008 + 0.035 * clamp(birds, 0, 1), at + 0.015);
+            g.gain.exponentialRampToValueAtTime(0.0001, at + 0.05 + Math.random() * 0.07);
+            osc.connect(g); g.connect(master);
+            osc.start(at); osc.stop(at + 0.16);
+            at += 0.07 + Math.random() * 0.12;
+          }
+        }
+      }
     },
     // Thunder: a low rumble whose attack softens and whose tail lengthens with
     // distance — a near strike cracks, a far one rolls.
@@ -24680,16 +24769,22 @@ const audio = (() => {
         src.connect(lp); lp.connect(g); g.connect(mas);
         src.start(t); src.stop(t + 0.07);
       }
-      // 2 · THE BODY OF THE SOUND — and the MATERIAL lives here. A steel box
-      // has two low modes rung by the strike; a guard RAIL rings bright and
-      // long, a tuning fork bolted to posts; MASONRY has no modes at all,
-      // only one dead thump — stone does not sing about being hit.
-      const modes: Array<[number, number, number, number]> = kind === 'metal'
-        ? [[330 + Math.random() * 140, 15, 0.28, 0.6], [880 + Math.random() * 320, 13, 0.2, 0.7],
-          [1650 + Math.random() * 500, 11, 0.1, 0.55]]
-        : kind === 'stone'
-          ? [[64 + Math.random() * 18, 3, 0.5, 0.3]]
-          : [[58 + Math.random() * 16, 9, 0.42, 0.55], [132 + Math.random() * 30, 7, 0.26, 0.4]];
+      // 2 · THE BODY OF THE SOUND — two voices, and the TRUCK is always one
+      // of them: its steel box has two low modes rung by ANY strike. What
+      // was hit adds its own on top — a guard rail rings bright and long, a
+      // tuning fork bolted to posts; stone adds one dead extra thump and
+      // nothing more. (The first cut swapped the chassis out for the stone,
+      // and a boulder strike came back from the seat as "a dull thud" — the
+      // rock does not sing about being hit, but the truck folding around it
+      // still does.)
+      const modes: Array<[number, number, number, number]> = [
+        [58 + Math.random() * 16, 9, 0.42, 0.55], [132 + Math.random() * 30, 7, 0.26, 0.4],
+      ];
+      if (kind === 'metal') {
+        modes.push([330 + Math.random() * 140, 15, 0.24, 0.6],
+          [880 + Math.random() * 320, 13, 0.17, 0.7], [1650 + Math.random() * 500, 11, 0.09, 0.55]);
+      }
+      if (kind === 'stone') modes.push([64 + Math.random() * 18, 3, 0.5, 0.3]);
       for (const [hz, q, amp, len] of modes) {
         const src = noise();
         const bp = ac.createBiquadFilter(); bp.type = 'bandpass';
@@ -24702,11 +24797,12 @@ const audio = (() => {
       }
       // 3 · THE BUCKLE. Metal yielding is PITCH THAT FALLS: the panel gives,
       // and what was ringing at one frequency is suddenly ringing lower. A
-      // light knock buckles nothing, so this layer only shows up under load —
-      // and STONE never buckles: masonry breaks or holds, it does not fold.
-      if (f > 0.32 && kind !== 'stone') {
+      // light knock buckles nothing, so this layer only shows up under load.
+      // It is the TRUCK'S panel folding, whatever it folded around — a rock
+      // dents the wing exactly as hard as a wall does.
+      if (f > 0.32) {
         const osc = ac.createOscillator(); osc.type = 'sawtooth';
-        const f0 = (kind === 'metal' ? 310 : 150) + Math.random() * 90;
+        const f0 = 150 + Math.random() * 90;
         osc.frequency.setValueAtTime(f0, t + 0.01);
         osc.frequency.exponentialRampToValueAtTime(f0 * 0.34, t + 0.1 + f * 0.22);
         const lp = ac.createBiquadFilter(); lp.type = 'lowpass';
@@ -25451,6 +25547,12 @@ function rigLanding(sev: number): void {
   rig.susp = clamp(rig.susp - sev * 0.03, 0, 1);
   rig.tyre = clamp(rig.tyre - sev * 0.008, 0, 1);
   if (sev > 0.6) rig.hull = clamp(rig.hull - (sev - 0.6) * 0.02, 0, 1);
+  // The landing you HEAR. Every touch-down thuds; a hard one gets the same
+  // chassis voice a wall does — the box rings and a panel folds, because a
+  // drop onto rock IS a collision, just one the ground threw. The crash's
+  // own cooldown keeps a rough descent from machine-gunning it.
+  audio.thud(Math.min(3, 1 + sev * 2));
+  if (sev > 0.45) audio.crash(0.25 + (sev - 0.45) * 0.9, 'shell');
 }
 /** A hit, charged on the SPEED IT ACTUALLY COST YOU rather than per frame.
  *  The scrape loop runs every frame you are in contact, and the old flat 0.02
@@ -25469,6 +25571,19 @@ function rigImpact(lost: number, kind: ImpactKind = 'shell'): void {
 // The drivetrain's own state, separate from road speed — which is the point:
 // with the wheels off the ground they are no longer the same number.
 let engRev = 0, engGear = 0;
+// ── THE IGNITION ── the engine is a STATE, not a constant. It cranks on the
+// first ask, idles while you drive, and switches itself off after a few
+// seconds parked — which is when the world gets to speak: the river, the
+// wind and the birds were always there, under the idle.
+let engineSt: 'off' | 'crank' | 'on' = 'off';
+let engineCrankUntil = 0, engineStillS = 0;
+(window as unknown as { __engine?: object }).__engine = (): object =>
+  ({ st: engineSt, stillS: +engineStillS.toFixed(1) });
+// The ambience the HUD cannot show — probed instead, and kept as the same
+// numbers the mixer was handed.
+let dbgAmb: Record<string, unknown> = {};
+(window as unknown as { __amb?: object }).__amb = (): object => dbgAmb;
+let ambSampledAt = 0, ambRiverL = 0, ambVegL = 0;
 let dbgSusp: object = {};
 // A shade over 9.81. Real gravity left long climbs feeling weightless once the
 // truck has 16m/s^2 of thrust to spend against it; this gives a hill enough
@@ -26010,10 +26125,29 @@ function tick(now: number): void {
   // integrating a model on top of it would fight the receiver for the truck.
   // A battered hull and a flat pack cost DRIVE; worn tyres cost BRAKING, which
   // is the same contact patch the cornering budget comes out of below.
+  // ── the ignition, resolved before the thrust it gates ──
+  {
+    const asked = Math.abs(throttle) > 0.04;
+    const nowP = performance.now();
+    if (engineSt === 'off' && asked) {
+      engineSt = 'crank'; engineCrankUntil = nowP + 650; engineStillS = 0;
+      audio.crank();
+    } else if (engineSt === 'crank' && nowP >= engineCrankUntil) engineSt = 'on';
+    else if (engineSt === 'on') {
+      // Parked and unasked — brake held or not — counts as idle. Long enough
+      // that a junction pause keeps the idle; short enough that a parked
+      // truck hands the valley back to the valley.
+      engineStillS = Math.abs(state.speed) < 0.4 && !asked ? engineStillS + dt : 0;
+      if (engineStillS > 5) { engineSt = 'off'; audio.engOff(); }
+    }
+  }
   const power = rigPower();
-  const thrust = real.on ? 0 : brake
+  let thrust = real.on ? 0 : brake
     ? -Math.sign(state.speed) * CAR.brake * 1.4 * rigGrip() * brakeF
     : throttle >= 0 ? throttle * CAR.accel * power : throttle * CAR.brake * rigGrip();
+  // No engine, no thrust — in either direction. The brake works with the
+  // key off; the crank's half second is the pause before the catch.
+  if (engineSt !== 'on' && !brake) thrust = 0;
   // Grip comes from wheels on the ground: airborne there's no drive, no
   // braking, barely any steering — and gravity along the body's pitch makes
   // climbs cost speed and descents pay it back.
@@ -26128,7 +26262,13 @@ function tick(now: number): void {
   // back. That flare is the sound of a jump.
   {
     const vAbs = Math.abs(state.speed);
-    if (grip > 0.06) {
+    if (engineSt !== 'on') {
+      // Off, the needle falls to rest; cranking, it flutters at the starter's
+      // pace without catching.
+      engGear = 0;
+      const t = engineSt === 'crank' ? 0.09 + 0.05 * Math.sin(performance.now() / 42) : 0;
+      engRev += (t - engRev) * Math.min(1, 3 * dt);
+    } else if (grip > 0.06) {
       engGear = Math.floor(vAbs / 14);
       const t = (vAbs - engGear * 14) / 14;
       engRev += (t - engRev) * Math.min(1, 15 * dt);
@@ -26690,8 +26830,36 @@ function tick(now: number): void {
   // Same shape and for the same reason: a sliced CPU sweep the shader reads,
   // rebuilt when the truck leaves the middle of it rather than on a tick.
   sunmFrame();
+  // ── the world's own sound, sampled around the truck ──
+  // Cheap and cached: a ring of water probes and a look at this cell's
+  // foliage, twice a second. The bed is DUCKED by motion and by the engine
+  // — it was always there; the idle was on top of it.
+  if (nowMs - ambSampledAt > 500) {
+    ambSampledAt = nowMs;
+    let wet = 0;
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      if (waterInfoAt(state.x + Math.sin(a) * 24, state.z + Math.cos(a) * 24).depth > 0.06) wet++;
+    }
+    ambRiverL = clamp(wet / 3 + (surfKind === 'water' ? 0.4 : 0), 0, 1);
+    const sites = vegGrid.get(`${Math.floor(state.x / VEG_CELL)},${Math.floor(state.z / VEG_CELL)}`) ?? [];
+    let fol = 0;
+    for (const s of sites) if (s.k !== 'rock' && s.k !== 'spire') fol++;
+    ambVegL = clamp(fol / 12, 0, 1);
+  }
+  const windAmb = clamp((live.on ? live.windKmh : 12) / 55, 0, 1);
+  const bed = clamp(1 - Math.abs(state.speed) / 7, 0, 1) * (engineSt === 'on' ? 0.4 : 1);
+  dbgAmb = {
+    rustle: +(windAmb * (0.25 + 0.75 * ambVegL) * Math.max(bed, 0.2)).toFixed(3),
+    river: +(ambRiverL * (0.35 + 0.65 * bed)).toFixed(3),
+    birds: +((sunAlt > 0.06 ? 1 : 0) * (1 - wxL.rain) * ambVegL * bed).toFixed(3),
+    wind: +windAmb.toFixed(2), veg: +ambVegL.toFixed(2), riverRaw: +ambRiverL.toFixed(2),
+    engine: engineSt,
+  };
+  audio.ambience(dbgAmb.rustle as number, dbgAmb.river as number, dbgAmb.birds as number, windAmb);
   audio.update(state.speed, throttle, surfKind, groundedF, wxL.rain, engRev, engGear, skid,
-    surfKind === 'water' ? 0 : surfQ, wheelSlipL);
+    surfKind === 'water' ? 0 : surfQ, wheelSlipL, windAmb,
+    engineSt === 'on' ? 1 : engineSt === 'crank' ? 0.35 : 0);
   // The rig against the world: bodywork on a wall while moving, the hull's
   // wash through water, and the slap of arriving in it with any speed on.
   audio.scrape(scrape >= 0 && Math.abs(state.speed) > 1.5
