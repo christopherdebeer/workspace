@@ -58,7 +58,40 @@ function shell() {
  * Bundle, serve, launch, boot. Returns the page plus the handles a tool needs,
  * and a `close()` that tears down both the browser and the server.
  */
+// ── THE DEAD-MAN FUSE ──
+//
+// Everything above is best-effort cleanup, and best-effort cleanup is exactly
+// what fails on the paths nobody anticipated. The failure it guards is not a
+// slow run: it is a run whose WORK IS ALREADY DONE, parked in ep_poll on a
+// handle nobody closed, invisible because a `| tail` upstream will not flush
+// until the process it is reading from reaches EOF. One of those sat here for
+// three hours and eight minutes having spent one second of CPU, with its
+// verdict — a plain `BOOT FAILED` line — trapped in the pipe the whole time.
+// A wall clock is the only thing that catches that class, because from the
+// inside the program has no idea it is stuck.
+const FUSE_MIN = Number(process.env.HARNESS_FUSE_MIN ?? 20);
+let fuseArmed = false;
+function armFuse() {
+  if (fuseArmed || FUSE_MIN <= 0) return;
+  fuseArmed = true;
+  const t0 = Date.now();
+  const timer = setTimeout(() => {
+    const mins = ((Date.now() - t0) / 60000).toFixed(1);
+    // stderr first and unbuffered: whatever is downstream needs to see this
+    // even though we are about to deny it a graceful EOF.
+    process.stderr.write(`\n[harness] FUSE BLOWN after ${mins} min `
+      + `(HARNESS_FUSE_MIN=${FUSE_MIN}). The run is being killed, not waited on.\n`
+      + `[harness] If the work looked finished, this is a LEAKED HANDLE, not slow code:\n`
+      + `[harness]   something threw past its close(), or a browser was never closed.\n`);
+    // _exit, not exit: an exit handler that awaits a wedged browser is the
+    // very thing that produced the zombie.
+    process.exit(9);
+  }, FUSE_MIN * 60000);
+  timer.unref();
+}
+
 export async function openDrive(opts = {}) {
+  armFuse();
   const {
     spot = 'lat=-34.09905&lon=18.37835&h=0&cam=chase',
     port = 8800 + Math.floor(Math.random() * 90),
@@ -231,6 +264,12 @@ export async function openDrive(opts = {}) {
     else { res.writeHead(404); res.end('{}'); }
   });
   await new Promise((r) => server.listen(port, r));
+  // A listening socket is a live handle, and a live handle means node cannot
+  // exit. When a run threw between here and its `close()`, this server alone
+  // held the process open — measured once at three hours and eight minutes for
+  // a script whose actual work finished in two. Unref'd, it serves exactly as
+  // before but stops voting on whether the program is done.
+  server.unref();
 
   // ── HEADLESS IS A SOFTWARE RASTERISER, AND THAT IS A MEASUREMENT TRAP ──
   //
@@ -254,6 +293,15 @@ export async function openDrive(opts = {}) {
   // configuration no player has.
   const browser = await chromium.launch({
     headless: !opts.headed,
+    // ── A KILL MUST KILL ──
+    //
+    // Playwright's default SIGTERM handler tries to shut the browser down
+    // gracefully first. If the browser is the thing that is wedged, the
+    // handler waits on it forever and a plain `kill` does nothing — the one
+    // three-hour zombie here survived SIGTERM and needed SIGKILL. Cleanup is
+    // `close()`'s job and the fuse below is the backstop; a signal should end
+    // the process, not open a negotiation.
+    handleSIGINT: false, handleSIGTERM: false, handleSIGHUP: false,
     executablePath: existsSync('/opt/pw-browsers/chromium') ? '/opt/pw-browsers/chromium' : undefined,
     proxy: process.env.HTTPS_PROXY ? { server: process.env.HTTPS_PROXY, bypass: 'localhost,127.0.0.1' } : undefined,
     args: ['--no-sandbox', '--disable-dev-shm-usage',
