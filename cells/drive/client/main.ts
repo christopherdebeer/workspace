@@ -5210,6 +5210,7 @@ const swardCol = new THREE.Color();   // per-tuft scratch: tint blended toward t
 const vegDummy = new THREE.Object3D();
 function vegMesh(geo: THREE.BufferGeometry, mat: THREE.Material, cap: number): THREE.InstancedMesh {
   const m = new THREE.InstancedMesh(geo, mat, cap);
+  m.name = 'veg';
   m.count = 0;
   m.frustumCulled = false;                  // instances span the whole field
   m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
