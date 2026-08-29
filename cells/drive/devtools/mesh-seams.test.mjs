@@ -23,8 +23,14 @@ const ok = (name, cond, detail = '') => {
 };
 for (const s of SPOTS) {
   const d = await openDrive({ spot: s.spot, tag: `seam-${s.tag}` });
-  await d.page.waitForTimeout(35000);
-  const ks = await d.page.evaluate(() => window.__kerbseams(260));
+  // WAIT FOR THE DATA, NOT THE CLOCK. The upstream rate-limits tiles at
+  // whim; a fixed settle read joins=0 at a spot that measures 116 when the
+  // roads have actually landed. Poll until the neighbourhood is populated.
+  let ks = { joins: 0 };
+  for (let w = 0; w < 24 && ks.joins < 50; w++) {
+    await d.page.waitForTimeout(5000);
+    ks = await d.page.evaluate(() => window.__kerbseams(260));
+  }
   const sh = await d.page.evaluate(() => window.__shells ? window.__shells('ribbon') : null);
   const seatOver = await d.page.evaluate(() =>
     (window.__cropwhy ? window.__cropwhy() : []).filter?.((q) => String(q.why || '').startsWith('seat-over-budget')).length ?? -1);
