@@ -2200,7 +2200,16 @@ function xrayWire(now: number): void {
     const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
     if (!m) return;
     for (const mm of Array.isArray(m) ? m : [m]) {
-      if ('wireframe' in mm) (mm as THREE.MeshBasicMaterial).wireframe = want;
+      if (!('wireframe' in mm)) continue;
+      // A CUTOUT KEEPS ITS CUTOUT. The leaf cards' shape lives in the
+      // fragment discard, not the geometry — wireframed they lose it and
+      // render as their raw quads, which the user photographed as solid
+      // black boxes over Val Müstair (hunt3: standing veg down deleted
+      // them). Alpha-tested and blended materials stay solid; trunks,
+      // rocks, critters and the ground strip to honest triangles.
+      const mt = mm as THREE.Material;
+      if (mt.alphaTest > 0 || mt.transparent) continue;
+      (mm as THREE.MeshBasicMaterial).wireframe = want;
     }
   });
 }
