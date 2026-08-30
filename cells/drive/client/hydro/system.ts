@@ -353,6 +353,35 @@ class DefaultHydroSystem implements HydroSystem {
     return { tiles: this.records.size, visibleTiles, pendingBuilds, dirtyTiles };
   }
 
+  /** Per-tile truth for the harness: what each record was FED against what its
+   *  field actually HOLDS. A world with features fed and every wet count at
+   *  zero localises the fault to the build; features at zero localises it to
+   *  the feed. `stats()` can say neither. */
+  debugTiles(): Array<Record<string, unknown>> {
+    const out: Array<Record<string, unknown>> = [];
+    for (const [key, record] of this.records) {
+      const field = record.field;
+      let touched = 0, wet = 0, max = 0;
+      if (field) {
+        for (let i = 0; i < field.width * field.height; i++) {
+          const c = field.geometry[i * 4];
+          if (c > 0.005) touched++;
+          if (c >= 0.5) wet++;
+          if (c > max) max = c;
+        }
+      }
+      out.push({
+        key, feats: record.input.features.length,
+        kinds: record.input.features.map((f) => f.kind),
+        ocean: record.input.oceanCoverage.status,
+        built: !!field, hasWater: field?.hasWater ?? null,
+        touched, wet, maxCov: +max.toFixed(3),
+        mesh: !!record.mesh, dirty: record.dirty, building: record.building,
+      });
+    }
+    return out;
+  }
+
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;

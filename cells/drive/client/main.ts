@@ -1637,6 +1637,13 @@ function oceanCoverageFor(t: HeightTile): OceanCoverage {
 /** Hand one terrain tile to the hydro system. Called from flushTerrain, beside
  *  redrape and flushBatter — the same "the ground under this tile just moved"
  *  hook everything else that stands on terrain already uses. */
+/** Every feed, as it happened: which tile, which revision, how big the store
+ *  was and how many features passed the bbox test AT THAT MOMENT. The
+ *  Romsdalen hunt found records holding zero features while the store held
+ *  eight, and only this ledger can say whether the feed ran before the store
+ *  filled or scanned it and missed. */
+const hydroFeedLog: Array<{ at: number; key: string; rev: number; store: number; fed: number }> = [];
+(window as unknown as { __hydrofeeds?: object }).__hydrofeeds = (): object => hydroFeedLog.slice(-120);
 function hydroFeed(t: HeightTile): void {
   if (!HYDRO_ON) return;
   if (!hydroSys) {
@@ -1704,6 +1711,9 @@ function hydroFeed(t: HeightTile): void {
     if (e.maxZ < t.zs - pad || e.minZ > t.zs + t.h + pad) continue;
     feats.push(e.f);
   }
+  hydroFeedLog.push({ at: Math.round(performance.now()), key, rev,
+    store: hydroFeats.size, fed: feats.length });
+  if (hydroFeedLog.length > 400) hydroFeedLog.splice(0, 200);
   void hydroSys.upsertTile({
     key, revision: rev,
     bounds: { minX: t.xs, minZ: t.zs, maxX: t.xs + t.w, maxZ: t.zs + t.h },
@@ -4443,6 +4453,9 @@ function dirtyTerrainAround(pts: Array<[number, number]>): void {
 // frame while a city streams in around you.
 let terrainAt = 0;
 let terrainMs = 0;
+/** Rolls forever; only its modulus matters. See the fairness note in
+ *  flushTerrain. */
+let flushSlot = 0;
 /** Deck cross-slope, newest overwriting oldest — see the ribbon builder. The
  *  roll is designed now (a camber plus superelevation), and the whole point of
  *  recording it is that a regression to terrain-derived tilt is a number, not
@@ -4460,6 +4473,21 @@ let terrainBuilds = 0;
 const BATTER_STRAND_MS = 6000;
 function flushTerrain(now: number): void {
   if (now - terrainAt < 200) return;
+  // ── WATER MAY NOT WAIT FOR THE LAST ROAD ──
+  //
+  // The hydro drain below sits on the quiet path, and during a heavy stream
+  // the quiet never comes: every loaded tile dirties its neighbours, terrain
+  // holds the slot for minutes, and a river that decoded at t+60s reaches its
+  // field at t+2min — measured at Romsdalen as "missing river, terrain
+  // classing only", with the feed ledger showing every build fed from an
+  // empty store. So every third slot goes to a starved refeed first. Terrain
+  // keeps two-thirds of its throughput; water's wait is bounded at seconds.
+  if (++flushSlot % 3 === 0 && hydroDirty.size) {
+    const key = hydroDirty.values().next().value as string;
+    hydroDirty.delete(key);
+    const t = heightTiles.get(key);
+    if (t) { terrainAt = now; hydroFeed(t); return; }
+  }
   for (const key of terrainDirty) {
     terrainDirty.delete(key);
     const t = heightTiles.get(key);
@@ -21071,6 +21099,12 @@ function truckSpec(): Record<string, number> {
   if (hydroSys) hydroSys.object3d.visible = on;
   return !!hydroSys && hydroSys.object3d.visible;
 };
+/** Fed-versus-held, tile by tile — see HydroSystem.debugTiles. The Romsdalen
+ *  hunt needed exactly this: features reaching every record and every field
+ *  coming back dry, which no aggregate count could distinguish from a feed
+ *  that never ran. */
+(window as unknown as { __hydrotiles?: object }).__hydrotiles = (): object =>
+  hydroSys?.debugTiles() ?? [];
 (window as unknown as { __hydro?: object }).__hydro = (r = 0, bearing = 90, steps = 8): object => {
   const at = (x: number, z: number): Record<string, unknown> => {
     const raw = sampleCoverRaw(x, z);
