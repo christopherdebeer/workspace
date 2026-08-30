@@ -14,7 +14,7 @@ try {
   const d = await openDrive({ spot, tag: 'boot', bootTimeout: 45000 });
   console.log(`BOOTED in ${((Date.now() - t0) / 1000).toFixed(1)}s`);
   console.log('probes:', await d.page.evaluate(() =>
-    ['__climate', '__culture', '__sward', '__vegkind', '__swardctx'].filter((k) => typeof window[k] === 'function').join(' ')));
+    ['__climate', '__culture', '__hydro', '__sward', '__vegkind', '__swardctx'].filter((k) => typeof window[k] === 'function').join(' ')));
   report(d.errors);
   await d.close();
 } catch (e) {

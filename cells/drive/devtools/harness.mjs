@@ -123,7 +123,12 @@ export async function openDrive(opts = {}) {
     writeFileSync(src, execSync(`git show ${rev}:cells/drive/client/main.ts`,
       { cwd: ROOT, maxBuffer: 64e6 }) + shim);
   }
-  const bundle = join(WORK, `${tag}.js`);
+  // SANITISED, because this tag becomes an esbuild --outfile path. A tag with
+  // a space in it fails as `Must use "outdir" when there are multiple input
+  // files` — an error about something else entirely, which has now cost two
+  // runs. The tag is a label; the filename is a filename.
+  const safeTag = String(tag).replace(/[^A-Za-z0-9._-]+/g, '-');
+  const bundle = join(WORK, `${safeTag}.js`);
   try {
     execSync(`npx esbuild ${src} --bundle --format=esm --outfile=${bundle}`, { stdio: 'pipe', cwd: ROOT });
   } finally {

@@ -19,6 +19,8 @@ import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, altBandAt, aspectLi
   krummholz, swardLift, treelineAt, type ClimateSample } from './climate';
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, bedrockAt, buildLookAt, paintFor, roadLookAt,
   seedAt, snowLoad, stoneWalls, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
+import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
+import { createHydroSystem, extractOsmHydro, type HydroSystem } from './hydro';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
@@ -680,14 +682,34 @@ function remeasureCoverMode(): boolean {
  *  and keep whatever it did before — cover refines the world, it does not gate
  *  it, and a tile that has not arrived must never blank the ground. */
 function sampleCover(ex: number, ez: number): number | null {
+  const v = sampleCoverRaw(ex, ez);
+  return v === undefined || v === 0 ? null : v;
+}
+/**
+ * ── THE SAME LOOKUP, WITHOUT THROWING THE ANSWER AWAY ──
+ *
+ * `sampleCover` ends `v || null`, and its own comment says why that is wrong:
+ * zero means "no class here", which over a raster that classifies LAND means
+ * open ocean. Collapsing it to null makes a loaded pixel of open Pacific
+ * indistinguishable from a tile that has not arrived — and that distinction is
+ * the single most reliable ocean signal in the dataset. It is what separates
+ * Badwater Basin at −86m, which carries land classes, from the sea off Big Sur,
+ * which carries none.
+ *
+ *   undefined — no tile here, we do not know
+ *   0         — loaded, and no land class: open ocean
+ *   10..100   — a land or water class
+ *
+ * Every existing caller keeps the old behaviour through `sampleCover` above.
+ */
+function sampleCoverRaw(ex: number, ez: number): number | undefined {
   for (const t of coverTiles.values()) {
     if (ex < t.xs || ez < t.zs || ex >= t.xs + t.w || ez >= t.zs + t.h) continue;
     const px = Math.min(255, Math.max(0, Math.floor(((ex - t.xs) / t.w) * 256)));
     const pz = Math.min(255, Math.max(0, Math.floor(((ez - t.zs) / t.h) * 256)));
-    const v = t.data[pz * 256 + px];
-    return v || null;   // 0 is "no class here" (open ocean), not a class
+    return t.data[pz * 256 + px];
   }
-  return null;
+  return undefined;
 }
 /**
  * THE SAME RASTER, DITHERED — FOR PAINT ONLY.
@@ -1033,6 +1055,81 @@ const climEnv = {
   groundAt: (x: number, z: number) => groundAt(x, z) + baseElev,
 };
 const climField = new ClimateField(climEnv);
+/**
+ * ── THE HYDRO SEAM (stage 1: it answers, it does not draw) ──
+ *
+ * `?hydro=1` only. Nothing here is added to the scene, nothing existing reads
+ * `oceanAt` yet, and with the flag off not one line of this runs. That is the
+ * whole point of the stage: the ocean mask has to be shown correct at Badwater,
+ * in a polder and off Big Sur BEFORE the renderer that depends on it replaces
+ * the 40km plane, because a wrong mask and a new renderer arriving together are
+ * indistinguishable from each other on screen.
+ */
+const HYDRO_ON = /[?&]hydro=1/.test(location.search);
+/** One mask per cover tile, built once and expired when the datum moves —
+ *  the height gate is relative to the datum, so a measurement that shifts by
+ *  more than the tolerance invalidates every answer that used it. */
+const oceanMasks = new Map<string, { grid: MaskGrid; stats: MaskStats; datum: number }>();
+function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskStats } {
+  const datum = seaSurfaceAbs();
+  const got = oceanMasks.get(key);
+  if (got && Math.abs(got.datum - datum) < 0.5) return got;
+  // ELEVATION ONLY WHERE IT IS CONSULTED. The height gate reads heights at
+  // class-80 pixels and nowhere else, so a land tile costs zero samples and a
+  // coastal one costs a few thousand — against 65,536 for filling the grid
+  // blind, per tile, for an answer almost none of it would have been asked for.
+  let elevation: Float32Array | undefined;
+  for (let i = 0; i < t.data.length; i++) {
+    if (t.data[i] !== 80) continue;
+    if (!elevation) elevation = new Float32Array(t.data.length);
+    const px = i % 256, pz = (i / 256) | 0;
+    const ex = t.xs + ((px + 0.5) / 256) * t.w, ez = t.zs + ((pz + 0.5) / 256) * t.h;
+    elevation[i] = hasHeight(ex, ez) ? sampleHeight(ex, ez) + baseElev : datum;
+  }
+  const built = buildOceanMask(t.data, 256, 256, { datumM: datum, elevation, seedEdge: true });
+  const rec = { ...built, datum };
+  if (oceanMasks.size > 64) oceanMasks.clear();
+  oceanMasks.set(key, rec);
+  return rec;
+}
+/** Is THIS POINT the sea. The question the global `seaOn` could never ask. */
+function oceanAt(ex: number, ez: number): boolean {
+  for (const [key, t] of coverTiles) {
+    if (ex < t.xs || ez < t.zs || ex >= t.xs + t.w || ez >= t.zs + t.h) continue;
+    return maskAt(oceanMaskFor(key, t).grid, (ex - t.xs) / t.w, (ez - t.zs) / t.h);
+  }
+  return false;   // no tile: DO NOT DRAW OCEAN HERE. A late coastline beats a flooded Paris.
+}
+let hydroSys: HydroSystem | undefined;
+const hydroRev = new Map<string, number>();
+/** Hand one terrain tile to the hydro system. Called from flushTerrain, beside
+ *  redrape and flushBatter — the same "the ground under this tile just moved"
+ *  hook everything else that stands on terrain already uses. */
+function hydroFeed(t: HeightTile): void {
+  if (!HYDRO_ON) return;
+  hydroSys ??= createHydroSystem({ oceanLevelM: seaSurfaceAbs() });
+  const key = `${t.tx}/${t.ty}`;
+  const rev = (hydroRev.get(key) ?? 0) + 1;
+  hydroRev.set(key, rev);
+  // ABSOLUTE METRES, DECIDED ONCE. The module refuses to clamp negatives and
+  // wants one declared datum; main renders relative to baseElev. Feed absolute,
+  // render relative — the frame's worldOrigin carries the difference.
+  const n = Math.round(Math.sqrt(t.data.length)) || 1;
+  const elevation = new Float32Array(t.data.length);
+  for (let i = 0; i < t.data.length; i++) elevation[i] = t.data[i] + baseElev;
+  const cov = [...coverTiles.entries()].find(([, c]) =>
+    t.xs >= c.xs && t.zs >= c.zs && t.xs + t.w <= c.xs + c.w && t.zs + t.h <= c.zs + c.h);
+  void hydroSys.upsertTile({
+    key, revision: rev,
+    bounds: { minX: t.xs, minZ: t.zs, maxX: t.xs + t.w, maxZ: t.zs + t.h },
+    elevation: { width: n, height: n, data: elevation, verticalDatum: 'absolute-m' },
+    features: [],                       // stage 4 hands the OSM water over
+    oceanCoverage: cov
+      ? { status: 'ready', grid: oceanMaskFor(cov[0], cov[1]).grid }
+      : { status: 'unavailable' },
+  }).catch((e) => console.warn('[hydro]', e));
+}
+
 /** ── THE CULTURE SEAM ──
  *
  * Same shape as climEnv above, and for the same reason: the field itself is
@@ -3791,6 +3888,7 @@ function flushTerrain(now: number): void {
       terrainBuilds++;
       reseatBuildings(t);
       redrape(t);
+      hydroFeed(t);
       flushBatter(t);
       flushCulverts(t);
       terrainMs = performance.now() - t0;
@@ -20226,6 +20324,51 @@ function truckSpec(): Record<string, number> {
     };
   };
   const out: Record<string, unknown> = { here: at(state.x, state.z), settledBiome: biome.name, cached: climField.size };
+  if (r > 0) {
+    const dx = Math.sin(bearing * Math.PI / 180), dz = -Math.cos(bearing * Math.PI / 180);
+    const span: Array<Record<string, unknown>> = [];
+    for (let i = 0; i <= steps; i++) {
+      const t = (i / steps) * r;
+      span.push({ m: Math.round(t), ...at(state.x + dx * t, state.z + dz * t) });
+    }
+    out.span = span;
+  }
+  return out;
+};
+/**
+ * ── THE HYDRO PROBE ──
+ *
+ * Stage 1 draws nothing, so this IS the deliverable: the only way to know
+ * whether the mask is right before anything depends on it. It answers the three
+ * questions the acceptance set poses — is open sea ocean, is a basin below sea
+ * level land, and does a lake above the coast stay out — and reports what the
+ * flood actually did rather than only its verdict.
+ */
+(window as unknown as { __hydro?: object }).__hydro = (r = 0, bearing = 90, steps = 8): object => {
+  const at = (x: number, z: number): Record<string, unknown> => {
+    const raw = sampleCoverRaw(x, z);
+    return {
+      // The distinction the whole stage exists to preserve.
+      cover: raw === undefined ? 'NO TILE' : raw === 0 ? 'open ocean (raw 0)' : (COVER_NAME[raw] ?? raw),
+      ocean: oceanAt(x, z),
+      elevAbs: hasHeight(x, z) ? +(sampleHeight(x, z) + baseElev).toFixed(1) : null,
+      // What the OLD world would have said at this point, so the two can be
+      // compared at a spot rather than argued about.
+      wasWater: coverWater(x, z), seaOn, surface: surfaceAt(x, z),
+      sample: hydroSys?.sampleRestingSurface(x, z) ?? null,
+    };
+  };
+  const masks: Record<string, unknown> = {};
+  for (const [key] of oceanMasks) {
+    const m = oceanMasks.get(key)!;
+    masks[key] = { ...m.stats, oceanPct: +(m.stats.ocean / m.stats.total * 100).toFixed(1), datum: +m.datum.toFixed(2) };
+  }
+  const out: Record<string, unknown> = {
+    on: HYDRO_ON, here: at(state.x, state.z),
+    datum: +seaSurfaceAbs().toFixed(2), baseElev: +baseElev.toFixed(1),
+    masks, coverTiles: coverTiles.size,
+    stats: hydroSys?.stats() ?? null,
+  };
   if (r > 0) {
     const dx = Math.sin(bearing * Math.PI / 180), dz = -Math.cos(bearing * Math.PI / 180);
     const span: Array<Record<string, unknown>> = [];

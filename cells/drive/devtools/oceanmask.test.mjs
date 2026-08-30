@@ -1,0 +1,270 @@
+/**
+ * OCEAN MASK TESTS — no browser, no renderer, no truck.
+ *
+ *   node cells/drive/devtools/oceanmask.test.mjs
+ *
+ * The whole hydro cutover rests on one assertion, and it is cheap to check:
+ *
+ *   NO CHANGE IN DEM ELEVATION ALONE MAY CHANGE LAND INTO WATER.
+ *
+ * Every case below is a place you can drive to, reduced to the smallest grid
+ * that still poses its question. Badwater Basin sits at −86m and is land;
+ * a Dutch polder sits below the sea beside it and is land; the Pacific off
+ * Big Sur reads +1.2m in the elevation source and is ocean. Elevation cannot
+ * separate those three. Classification can.
+ */
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join, dirname } from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const HERE = dirname(fileURLToPath(import.meta.url));
+const tmp = mkdtempSync(join(tmpdir(), 'oceanmask-'));
+const built = join(tmp, 'oceanmask.mjs');
+execFileSync('npx', ['esbuild', join(HERE, '../client/oceanmask.ts'), '--bundle', '--format=esm',
+  `--outfile=${built}`], { cwd: join(HERE, '../../..'), stdio: 'pipe' });
+const { COVER_WATER, buildOceanMask, maskAt } = await import(pathToFileURL(built).href);
+
+let bad = 0;
+const ok = (name, cond, saw) => {
+  if (!cond) bad++;
+  console.log(`${cond ? 'ok  ' : 'FAIL'}  ${name}${cond ? '' : `\n        saw ${JSON.stringify(saw)}`}`);
+};
+
+/** Build a w×h cover grid from rows of single characters.
+ *   '.' open ocean (raw 0)   '~' class 80 water   '#' land (forest)   'b' bare */
+const W = COVER_WATER;
+const CLASS = { '.': 0, '~': W, '#': 10, b: 60, g: 30 };
+function grid(rows) {
+  const h = rows.length, w = rows[0].length;
+  const data = new Uint8Array(w * h);
+  rows.forEach((r, y) => [...r].forEach((c, x) => { data[y * w + x] = CLASS[c]; }));
+  return { data, w, h };
+}
+/** A matching elevation grid from the same row art, via a per-character height. */
+function heights(rows, at) {
+  const h = rows.length, w = rows[0].length;
+  const e = new Float32Array(w * h);
+  rows.forEach((r, y) => [...r].forEach((c, x) => { e[y * w + x] = at(c, x, y); }));
+  return e;
+}
+const show = (g, m) => {
+  const out = [];
+  for (let y = 0; y < g.h; y++) {
+    let s = '';
+    for (let x = 0; x < g.w; x++) s += m.data[y * g.w + x] ? 'O' : '·';
+    out.push(s);
+  }
+  return out.join(' / ');
+};
+
+// ── 1. OPEN OCEAN NEEDS NO ARGUMENT ───────────────────────────────
+{
+  const rows = ['....', '....', '..~#', '..##'];
+  const g = grid(rows);
+  const { grid: m, stats } = buildOceanMask(g.data, g.w, g.h, { datumM: 0 });
+  ok(`raw zero is ocean without consulting anything (${stats.seeds} seeds)`,
+    stats.seeds === 12, stats);
+  ok(`…and the land next to it is not (${show(g, m)})`,
+    m.data[2 * 4 + 3] === 0 && m.data[3 * 4 + 2] === 0, show(g, m));
+}
+
+// ── 2. BADWATER BASIN ─────────────────────────────────────────────
+// −86m, and every pixel of it carries a land class. The old world decided
+// this with `baseElev < -2` and a 30km suppression radius; the mask decides
+// it by looking.
+{
+  const rows = ['bbbb', 'bbgb', 'bbbb'];
+  const g = grid(rows);
+  const elev = heights(rows, () => -86);
+  const { grid: m, stats } = buildOceanMask(g.data, g.w, g.h, { datumM: 0, elevation: elev });
+  ok('a basin 86m below the sea is not the sea, because it has land classes',
+    stats.ocean === 0, stats);
+  ok('…and no amount of it turns into ocean', !maskAt(m, 0.5, 0.5), show(g, m));
+}
+
+// ── 3. THE DUTCH POLDER, WITH THE NORTH SEA IN THE SAME TILE ──────
+// The case the 30km global suppression radius CANNOT express: dry land below
+// sea level, a kilometre from visible ocean.
+{
+  const rows = [
+    '.....',   // North Sea
+    '..~..',   // the coastal band
+    '#####',   // the dyke
+    'ggggg',   // polder, below sea level and farmed
+    'ggggg',
+  ];
+  const g = grid(rows);
+  const elev = heights(rows, (c) => (c === '.' || c === '~' ? 0 : c === '#' ? 8 : -4));
+  const { grid: m, stats } = buildOceanMask(g.data, g.w, g.h, { datumM: 0, elevation: elev });
+  ok(`the sea is ocean and the polder is not, in one tile (${show(g, m)})`,
+    maskAt(m, 0.5, 0.1) && !maskAt(m, 0.5, 0.7) && !maskAt(m, 0.5, 0.9), show(g, m));
+  ok('…and the dyke between them holds', !maskAt(m, 0.5, 0.5), show(g, m));
+  ok(`…while the coastal band joined the sea (${stats.bridged} bridged)`,
+    stats.bridged === 1, stats);
+}
+
+// ── 4. THE FLOOD DOES NOT WALK UP THE RIVER ───────────────────────
+// A long class-80 channel running inland from open water. Unbounded, this
+// is how a mountain lake becomes the sea.
+{
+  const rows = [
+    '..........',
+    '..........',
+    '~~~~~~~~~~',   // the river, all one class, running inland
+    '##########',
+  ];
+  const g = grid(rows);
+  // Rising away from the coast, as a river does.
+  const elev = heights(rows, (c, x) => (c === '~' ? x * 1.2 : c === '.' ? 0 : 20));
+  const { grid: m, stats } = buildOceanMask(g.data, g.w, g.h, { datumM: 0, elevation: elev });
+  const reach = [...Array(10).keys()].filter((x) => m.data[2 * 10 + x]).length;
+  ok(`the flood stops a few pixels up the river, not at its head (${reach}/10 reached)`,
+    reach > 0 && reach <= 4, { reach, stats, map: show(g, m) });
+  ok('…and refuses the rest on height', stats.refused > 0, stats);
+}
+
+// ── 5. A MOUNTAIN TARN IS NEVER THE SEA ───────────────────────────
+{
+  const rows = ['####', '#~~#', '#~~#', '####'];
+  const g = grid(rows);
+  const elev = heights(rows, () => 1400);
+  const { stats } = buildOceanMask(g.data, g.w, g.h, { datumM: 0, elevation: elev });
+  ok('a lake at 1400m with no ocean in the tile is not ocean', stats.ocean === 0, stats);
+  ok('…and all four of its pixels are reported refused, not silently dropped',
+    stats.refused === 4, stats);
+}
+
+// ── 6. …EVEN WHEN IT TOUCHES THE SEA, IF IT SITS ABOVE IT ─────────
+// The gate that matters. A tarn draining to a coast is contiguous class 80
+// all the way down; only height tells them apart.
+{
+  const rows = ['..~~', '..~~', '..~~', '..~~'];
+  const g = grid(rows);
+  // The right-hand column is a lake perched 40m up, touching the sea band.
+  const elev = heights(rows, (c, x) => (x >= 2 ? 40 : 0));
+  const { grid: m, stats } = buildOceanMask(g.data, g.w, g.h, { datumM: 0, elevation: elev });
+  ok(`contiguous water 40m above the datum stays out (${show(g, m)})`,
+    !maskAt(m, 0.6, 0.5) && !maskAt(m, 0.9, 0.5), show(g, m));
+  ok('…and the open water beside it is still in', maskAt(m, 0.1, 0.5), show(g, m));
+  ok('…with every perched pixel refused', stats.refused === 8, stats);
+}
+
+// ── 7. NO ELEVATION YET ───────────────────────────────────────────
+// Cover routinely arrives before terrain. Without heights the mask must still
+// answer, on distance alone, rather than blanking the sea on approach.
+{
+  const rows = ['....', '..~~', '..~~', '####'];
+  const g = grid(rows);
+  const { stats } = buildOceanMask(g.data, g.w, g.h, { datumM: 0 });
+  ok(`with no elevation the bounded flood still runs (${stats.ocean} ocean px)`,
+    stats.ocean > stats.seeds, stats);
+  ok('…and land still stops it', stats.ocean < g.w * g.h, stats);
+}
+
+// ── 8. THE BRIDGE IS A RADIUS, NOT A SCAN ORDER ───────────────────
+// Breadth-first, so `bridgePx` means the same thing whichever side the seed
+// is on. A depth-first walk would reach far further along one axis.
+{
+  const rows = ['.~~~~~~~~~'];
+  const g = grid(rows);
+  for (const px of [1, 2, 4, 8]) {
+    const { stats } = buildOceanMask(g.data, g.w, g.h, { datumM: 0, bridgePx: px });
+    ok(`bridgePx ${px} reaches exactly ${px} water pixels`, stats.bridged === px, stats);
+  }
+}
+
+// ── 9. DETERMINISM AND BOUNDS ─────────────────────────────────────
+{
+  const rows = ['.~#g', '~~#b', '##~.', 'g.~#'];
+  const g = grid(rows);
+  const elev = heights(rows, (c, x, y) => (x + y) % 5);
+  const a = buildOceanMask(g.data, g.w, g.h, { datumM: 0, elevation: elev });
+  const b = buildOceanMask(g.data, g.w, g.h, { datumM: 0, elevation: elev });
+  ok('the same grid always gives the same mask', a.grid.data.join() === b.grid.data.join(), null);
+  ok('every value is 0 or 255', [...a.grid.data].every((v) => v === 0 || v === 255),
+    [...new Set(a.grid.data)]);
+  ok('sampling outside the tile is false, not a wrap',
+    !maskAt(a.grid, -0.1, 0.5) && !maskAt(a.grid, 1.2, 0.5) && !maskAt(a.grid, 0.5, 1.0), null);
+}
+
+// ── 9b. THE COAST, WHERE THERE IS NO ZERO AT ALL ──────────────────
+// Measured off Big Sur: 31,723 class-80 pixels and ZERO seeds, so the flood
+// never started. ESA ships WorldCover for land only, so raw zero means
+// "outside any source file" — true open ocean, far offshore. Near a coast the
+// file exists, covers the sea, and calls it class 80 like any other water.
+{
+  const rows = [
+    '~~~~~~~~',   // the Pacific, class 80, running off the tile
+    '~~~~~~~~',
+    '~~~~####',
+    '~~######',
+    '########',
+  ];
+  const g = grid(rows);
+  const elev = heights(rows, (c) => (c === '~' ? 0 : 60));
+  const plain = buildOceanMask(g.data, g.w, g.h, { datumM: 0, elevation: elev });
+  ok(`without edge seeding a coast with no zeros is entirely missed (${plain.stats.ocean} ocean px)`,
+    plain.stats.seeds === 0 && plain.stats.ocean === 0, plain.stats);
+  const edged = buildOceanMask(g.data, g.w, g.h, { datumM: 0, elevation: elev, seedEdge: true });
+  // COUNTED, NOT ASSERTED FROM MEMORY. Every water pixel here is contiguous
+  // and at the datum, so the right answer is "all of them" — which the grid
+  // can state itself. Three hand-counted expectations in this file have now
+  // been wrong where the code was right.
+  const water = rows.join('').split('').filter((c) => c === '~').length;
+  ok(`…and with it the whole sea is found (${edged.stats.ocean}/${water} px, ${edged.stats.edgeSeeds} edge seeds)`,
+    edged.stats.ocean === water, edged.stats);
+  ok(`…without taking the land with it (${show(g, edged.grid)})`,
+    !maskAt(edged.grid, 0.9, 0.9), show(g, edged.grid));
+}
+
+// ── 9c. AN ENCLOSED LAKE IS STILL NOT THE SEA ─────────────────────
+// The sea leaves the tile; a lake does not. That is the whole of the edge
+// rule, and this is the case it turns on — a lake AT the datum, which the
+// height gate alone cannot reject.
+{
+  const rows = ['#####', '#~~~#', '#~~~#', '#####'];
+  const g = grid(rows);
+  const elev = heights(rows, () => 0);            // at sea level, and still a lake
+  const { stats } = buildOceanMask(g.data, g.w, g.h, { datumM: 0, elevation: elev, seedEdge: true });
+  ok('a lake at the datum that touches no edge stays out', stats.ocean === 0, stats);
+}
+
+// ── 9d. THE KNOWN MISS, ASSERTED AS A MISS ────────────────────────
+// A large freshwater body AT the datum that DOES reach the tile edge reads as
+// sea. That is the IJsselmeer behind the Afsluitdijk: −0.4m, enormous, and
+// connected to nothing but a sluice. No local rule separates it from a bay —
+// it needs either the OSM coastline (stage 4) or real connectivity. Written
+// down so nobody "fixes" this by loosening the edge rule and quietly floods a
+// hundred inland lakes to get one right.
+{
+  const rows = ['~~~~~~', '~~~~~~', '######', '~~~~~~'];
+  const g = grid(rows);
+  const elev = heights(rows, () => 0);
+  const { grid: m, stats } = buildOceanMask(g.data, g.w, g.h, { datumM: 0, elevation: elev, seedEdge: true });
+  ok(`a datum-height body reaching the edge reads as sea — the IJsselmeer case (${show(g, m)})`,
+    maskAt(m, 0.5, 0.9), { stats, map: show(g, m) });
+  ok('…and the dyke still separates the two, so it is two bodies, not one',
+    !maskAt(m, 0.5, 0.6), show(g, m));
+}
+
+// ── 10. THE COST ──────────────────────────────────────────────────
+// One mask per cover tile, built once. A 256² tile is the real case.
+{
+  const w = 256, h = 256;
+  const cover = new Uint8Array(w * h);
+  for (let i = 0; i < cover.length; i++) {
+    const x = i % w, y = (i / w) | 0;
+    cover[i] = y < 90 ? 0 : y < 100 ? W : x % 7 === 0 ? 30 : 10;
+  }
+  const elev = new Float32Array(w * h);
+  const t0 = performance.now();
+  let acc = 0;
+  for (let k = 0; k < 20; k++) acc += buildOceanMask(cover, w, h, { datumM: 0, elevation: elev }).stats.ocean;
+  const per = (performance.now() - t0) / 20;
+  ok(`a 256² mask costs ${per.toFixed(2)}ms, well inside a tile build`, per < 12, { per, acc });
+}
+
+console.log(bad ? `\n${bad} FAILED` : '\nall good — classification, not elevation');
+if (bad) process.exitCode = 1;
