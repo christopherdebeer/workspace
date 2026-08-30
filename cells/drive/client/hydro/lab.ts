@@ -158,7 +158,7 @@ const STYLE = [
   '.head{position:fixed;left:16px;top:14px;z-index:4;display:flex;align-items:center;gap:10px;text-shadow:0 2px #07100f}',
   '.title{color:#f1ca62;letter-spacing:.18em;font-size:13px}.badge{color:#73d2af;border:1px solid #397e69;padding:4px 7px;font-size:9px;background:#0b1816dd}',
   '.back{color:#93aaa0;text-decoration:none;font-size:10px}.hint{position:fixed;left:16px;top:43px;z-index:4;color:#789188;font:9px ui-monospace,monospace;background:#07100faa;padding:5px 7px}',
-  '.panel{position:fixed;right:12px;top:12px;bottom:12px;z-index:5;width:min(310px,calc(100vw - 24px));overflow:auto;padding:12px;border:1px solid #31534b;background:#081311ef;box-shadow:7px 7px #02070699}',
+  '.panel{position:fixed;right:12px;top:50px;bottom:12px;z-index:5;width:min(310px,calc(100vw - 24px));overflow:auto;padding:12px;border:1px solid #31534b;background:#081311ef;box-shadow:7px 7px #02070699}',
   'h2{margin:0 0 8px;color:#72d2ae;font-size:11px;letter-spacing:.13em}.note{min-height:48px;color:#9fb1a6;font:10px/1.5 ui-monospace,monospace;margin-bottom:10px}',
   '.section{border-top:1px solid #203c35;padding-top:9px;margin-top:10px}.st{color:#efc968;font-size:9px;letter-spacing:.15em;margin-bottom:7px}',
   '.row{display:grid;grid-template-columns:105px 1fr 42px;gap:7px;align-items:center;min-height:27px}.row.wide{grid-template-columns:105px 1fr}.row label{color:#aabcb2;font-size:9px}',
@@ -166,6 +166,13 @@ const STYLE = [
   '.row input[type=number],.row select{width:100%;min-width:0;color:#dce8d5;background:#0c211c;border:1px solid #31534b;padding:5px;font-size:9px}',
   '.check{display:flex;gap:8px;align-items:center;color:#aabcb2;font-size:9px;min-height:27px}.check input{accent-color:#67bea0}',
   '.status{position:fixed;left:16px;bottom:14px;z-index:4;max-width:min(540px,calc(100vw - 350px));background:#07100fdd;border-left:3px solid #5ca78f;padding:8px 10px;color:#b8c8bf;font:10px/1.45 ui-monospace,monospace;white-space:pre-wrap}',
+  // The chrome eats 43vh on a phone, which is most of the thing you came to
+  // look at. `bare` takes all of it away; the toggle itself never hides, or
+  // there would be no way back.
+  '.uibtn{position:fixed;right:12px;top:12px;z-index:9;min-width:34px;height:30px;padding:0 8px;display:flex;align-items:center;justify-content:center;'
+    + 'color:#9fd8c2;background:#07100fee;border:1px solid #31534b;font:9px/1 ui-monospace,monospace;letter-spacing:.1em;cursor:pointer;user-select:none;-webkit-user-select:none}',
+  '.uibtn:active{background:#0f2a24}',
+  'body.bare .head,body.bare .hint,body.bare .panel,body.bare .status{display:none}',
   '@media(max-width:700px){.panel{top:auto;height:43vh;width:calc(100vw - 24px)}.status{bottom:calc(43vh + 22px);max-width:calc(100vw - 32px)}.hint{display:none}}',
 ].join('');
 
@@ -182,7 +189,8 @@ function page(): string {
   return '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">'
     + '<style>' + STYLE + '</style></head><body><canvas id="hydro-canvas"></canvas>'
     + '<div class="head"><span class="title">HYDROGRAPH</span><span class="badge">ISOLATED LAB</span><a class="back" href="/">← DRIVE</a></div>'
-    + '<div class="hint">drag orbit · wheel zoom · point to inspect</div>'
+    + '<div class="hint">drag orbit · shift-drag or two-finger pan · wheel or pinch zoom · tap to inspect · double-tap recentres · H hides the panels</div>'
+    + '<div class="uibtn" id="uibtn" title="hide the panels (H)">HIDE</div>'
     + '<aside class="panel"><h2>WATER FIELD / GPU SURFACE</h2><div class="note" id="note"></div>'
     + '<div class="row wide"><label>FIXTURE</label><select id="fixture">' + fixtureOptions + '</select></div>'
     + '<div class="row wide"><label>VIEW</label><select id="debug">' + debugOptions + '</select></div>'
@@ -258,12 +266,49 @@ export async function startHydroLab(): Promise<void> {
 
   const camera = new THREE.PerspectiveCamera(46, innerWidth / innerHeight, .5, 2200);
   const target = new THREE.Vector3();
-  let yaw = -.75, pitch = .78, distance = 650;
+  const HOME = { yaw: -.75, pitch: .78, distance: 650 };
+  let yaw = HOME.yaw, pitch = HOME.pitch, distance = HOME.distance;
   const placeCamera = (): void => {
     const cp = Math.cos(pitch);
     camera.position.set(target.x + Math.sin(yaw) * cp * distance,
       target.y + Math.sin(pitch) * distance, target.z + Math.cos(yaw) * cp * distance);
     camera.lookAt(target);
+  };
+  /**
+   * PAN, in metres, from a drag in pixels.
+   *
+   * The rig always had a `target` and never moved it, so the camera could only
+   * ever swing around the fixture's centre — fine for a 600m square seen whole,
+   * useless for putting your eye on one shoreline.
+   *
+   * The scale is the honest one: the vertical extent of the view frustum AT THE
+   * TARGET, divided by the viewport height, so a grabbed point stays under the
+   * finger at any zoom instead of sliding at a fixed pixel rate.
+   */
+  const panBy = (dxPx: number, dyPx: number): void => {
+    const mPerPx = (2 * Math.tan(camera.fov * Math.PI / 360) * distance) / innerHeight;
+    // Camera right and forward, flattened into the ground plane: panning is a
+    // move over the water, not a climb.
+    const rx = Math.cos(yaw), rz = -Math.sin(yaw);
+    const fx = -Math.sin(yaw), fz = -Math.cos(yaw);
+    // Negative on both, so the WORLD follows the finger rather than fleeing it.
+    target.x += (-dxPx * rx - dyPx * fx) * mPerPx;
+    target.z += (-dxPx * rz - dyPx * fz) * mPerPx;
+    // A fixture is 600m across. Past a kilometre out you are looking at nothing
+    // and cannot tell which way is back.
+    const LIM = 900;
+    target.x = Math.max(-LIM, Math.min(LIM, target.x));
+    target.z = Math.max(-LIM, Math.min(LIM, target.z));
+    placeCamera();
+  };
+  const zoomBy = (factor: number): void => {
+    distance = Math.max(40, Math.min(1600, distance * factor));
+    placeCamera();
+  };
+  const resetView = (): void => {
+    target.set(0, 0, 0);
+    yaw = HOME.yaw; pitch = HOME.pitch; distance = HOME.distance;
+    placeCamera();
   };
   placeCamera();
 
@@ -327,31 +372,111 @@ export async function startHydroLab(): Promise<void> {
   get<HTMLInputElement>('ocean').addEventListener('input', () => hydro?.setOceanLevelM(number('ocean')));
   for (const id of ['fixture','field','mesh']) get<HTMLSelectElement>(id).addEventListener('change', () => { void rebuild(); });
 
-  let drag = false, moved = false, lastX = 0, lastY = 0;
+  // ── ONE POINTER ORBITS, TWO PINCH AND PAN ──
+  //
+  // The first cut tracked a single pointer, so on a phone — which is where
+  // this thing is actually looked at — there was no pan and no zoom at all,
+  // and a fixture could only be viewed from wherever it opened.
   const ray = new THREE.Raycaster(), pointer = new THREE.Vector2();
-  canvas.addEventListener('pointerdown', (e) => {
-    drag = true; moved = false; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId);
-  });
-  canvas.addEventListener('pointermove', (e) => {
-    if (drag) {
-      const dx = e.clientX - lastX, dy = e.clientY - lastY;
-      moved ||= Math.abs(dx) + Math.abs(dy) > 2;
-      yaw -= dx * .006; pitch = Math.max(.16, Math.min(1.42, pitch + dy * .005));
-      lastX = e.clientX; lastY = e.clientY; placeCamera(); return;
-    }
+  const live = new Map<number, { x: number; y: number }>();
+  let moved = false, gesture: 'none' | 'orbit' | 'pan' | 'pinch' = 'none';
+  let pinchGap = 0, midX = 0, midY = 0, lastTap = 0;
+
+  /** Where the two-finger gesture currently is: centroid and separation. */
+  const centroid = (): { x: number; y: number; gap: number } => {
+    const ps = [...live.values()];
+    const x = (ps[0].x + ps[1].x) / 2, y = (ps[0].y + ps[1].y) / 2;
+    return { x, y, gap: Math.hypot(ps[0].x - ps[1].x, ps[0].y - ps[1].y) };
+  };
+
+  /** The CPU hydro sample under a screen point — the thing the status line
+   *  invites you to go and get. */
+  const inspectAt = (cx: number, cy: number): void => {
     const r = canvas.getBoundingClientRect();
-    pointer.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1);
+    pointer.set((cx - r.left) / r.width * 2 - 1, -(cy - r.top) / r.height * 2 + 1);
     ray.setFromCamera(pointer, camera);
     const hit = terrain ? ray.intersectObject(terrain, false)[0] : undefined;
     if (!hit) { probe.visible = false; inspected = ''; return; }
     const s = hydro?.sampleRestingSurface(hit.point.x, hit.point.z);
     inspected = sampleText(s, hit.point.x, hit.point.z);
     probe.position.set(hit.point.x, hit.point.y + .6, hit.point.z); probe.visible = true;
+  };
+
+  canvas.addEventListener('pointerdown', (e) => {
+    live.set(e.pointerId, { x: e.clientX, y: e.clientY });
+    canvas.setPointerCapture(e.pointerId);
+    if (live.size === 2) {
+      const c = centroid(); pinchGap = c.gap; midX = c.x; midY = c.y; gesture = 'pinch';
+    } else if (live.size === 1) {
+      moved = false;
+      // Shift, middle button or right button all mean pan on a desktop, where
+      // there is no second finger to offer.
+      gesture = (e.shiftKey || e.button === 1 || e.button === 2) ? 'pan' : 'orbit';
+    }
   });
-  canvas.addEventListener('pointerup', (e) => { drag = false; canvas.releasePointerCapture(e.pointerId); void moved; });
-  canvas.addEventListener('wheel', (e) => {
-    distance = Math.max(90, Math.min(1300, distance * Math.exp(e.deltaY * .001))); placeCamera();
-  }, { passive: true });
+
+  canvas.addEventListener('pointermove', (e) => {
+    const prev = live.get(e.pointerId);
+    if (!prev) { if (!live.size) inspectAt(e.clientX, e.clientY); return; }   // hover, mouse only
+    const dx = e.clientX - prev.x, dy = e.clientY - prev.y;
+    prev.x = e.clientX; prev.y = e.clientY;
+    moved ||= Math.abs(dx) + Math.abs(dy) > 2;
+
+    if (live.size >= 2) {
+      const c = centroid();
+      if (pinchGap > 0) zoomBy(pinchGap / Math.max(1, c.gap));
+      // The centroid drifting IS the pan, so a pinch that also slides does
+      // both at once, which is what a hand actually does.
+      panBy(c.x - midX, c.y - midY);
+      pinchGap = c.gap; midX = c.x; midY = c.y;
+      return;
+    }
+    if (gesture === 'pan') { panBy(dx, dy); return; }
+    yaw -= dx * .006; pitch = Math.max(.16, Math.min(1.42, pitch + dy * .005));
+    placeCamera();
+  });
+
+  const endPointer = (e: PointerEvent): void => {
+    const had = live.size;
+    live.delete(e.pointerId);
+    try { canvas.releasePointerCapture(e.pointerId); } catch { /* already gone */ }
+    if (live.size < 2) { pinchGap = 0; }
+    if (live.size === 0) {
+      // A TAP INSPECTS. There is no hover on a touch screen, so without this
+      // the status line's "point at the terrain to inspect" was an instruction
+      // that could not be followed on the device this is mostly used from.
+      if (had === 1 && !moved) {
+        const now = performance.now();
+        if (now - lastTap < 320) resetView(); else inspectAt(e.clientX, e.clientY);
+        lastTap = now;
+      }
+      gesture = 'none';
+    }
+  };
+  canvas.addEventListener('pointerup', endPointer);
+  canvas.addEventListener('pointercancel', endPointer);
+  canvas.addEventListener('contextmenu', (e) => e.preventDefault());
+  canvas.addEventListener('wheel', (e) => zoomBy(Math.exp(e.deltaY * .001)), { passive: true });
+  // ── THE PANELS COME OFF ──
+  //
+  // On a phone the rack is 43vh and the status line sits above it, so more
+  // than half the screen is chrome over the one thing worth looking at. The
+  // button never hides — a toggle you cannot find again is a trapdoor.
+  const uibtn = get('uibtn');
+  const setBare = (on: boolean): void => {
+    document.body.classList.toggle('bare', on);
+    uibtn.textContent = on ? 'SHOW' : 'HIDE';
+    uibtn.title = on ? 'show the panels (H)' : 'hide the panels (H)';
+  };
+  uibtn.addEventListener('click', () => setBare(!document.body.classList.contains('bare')));
+  addEventListener('keydown', (e) => {
+    // Never while typing a number into the ocean-level box.
+    const t = e.target as HTMLElement | null;
+    if (t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) return;
+    if (e.key === 'h' || e.key === 'H') setBare(!document.body.classList.contains('bare'));
+    if (e.key === 'r' || e.key === 'R') resetView();
+  });
+
   addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight, false);
   });
