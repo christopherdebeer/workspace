@@ -1096,6 +1096,9 @@ const HYDRO_ON = ((): boolean => {
  *  per-tile 65k and 17k pixel passes, so a rate rather than a total is the
  *  interesting number — see `__hydro`. */
 let maskBuilds = 0, covResamples = 0, lastMaskBuildAt = 0;
+/** The coastline side vote per cover tile, keyed to the coast bucket it was
+ *  taken at — see the note in oceanMaskFor. */
+const sideCaches = new Map<string, { coasts: number; side: Int8Array | undefined; landward: Uint8Array | undefined }>();
 const oceanMasks = new Map<string, { grid: MaskGrid; stats: MaskStats; datum: number; coasts: number;
   /** Class-80 pixels with no terrain under them when this was built. Zero
    *  means the answer is final; anything else means ask again as ground
@@ -1165,41 +1168,46 @@ function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskS
   // tile — cheap, one nearest-segment query per class-80 pixel — while the SIDE
   // test runs on the boundary only, because that is where seeds come from and
   // it is ~1000 queries against 65,536.
+  // ── THE VOTE IS CACHED, BECAUSE ONLY THE COASTLINE CAN CHANGE IT ──
+  //
+  // The side vote is the expensive part of a mask rebuild: every class-80
+  // pixel near a segment scans every segment in its 3x3 cells, and a rugged
+  // coast makes that hundreds of milliseconds per tile. But the vote depends
+  // ONLY on the coastline — not on terrain, not on the datum — and masks
+  // expire far more often than coastlines change (every streamed terrain
+  // tile expires them; only a new coast way changes the vote). Reported from
+  // the seat as minute-long stretches at 1-2fps while the world streamed.
+  //
+  // So the vote is computed per coast BUCKET and reused across every rebuild
+  // inside it, and it is taken on a 2x2 pixel lattice (one vote per 62m
+  // block, shared by the block) — the confidence radius of the vote is far
+  // coarser than a pixel, so nothing real is lost.
   let landward: Uint8Array | undefined, coastSide: Int8Array | undefined;
-  if (coastSegs.size) {
-    // ── ONE QUERY PER CANDIDATE PIXEL ──
-    //
-    // Restored, after a segment-walking rewrite that was faster and returned
-    // NOTHING — 472 coastline cells in the world and `walled` back to zero. I
-    // have not root-caused that, so this is the version that is measured to
-    // work rather than the one that is measured to be quick.
-    //
-    // The performance problem it was written for turned out to be elsewhere:
-    // the mask cache expired on the EXACT coastline count, so every streamed
-    // way rebuilt every 65k-pixel mask. Bucketing that (see oceanMaskFor)
-    // is what actually bought the budget back.
-    for (let i = 0; i < t.data.length; i++) {
-      const px = i % 256, pz = (i / 256) | 0;
-      const onEdge = px === 0 || pz === 0 || px === 255 || pz === 255;
-      if (t.data[i] !== 80 && !onEdge) continue;
-      const ex = t.xs + ((px + 0.5) / 256) * t.w, ez = t.zs + ((pz + 0.5) / 256) * t.h;
-      // ── WHICH SIDE OF THE LINE, PER NEAR-COAST PIXEL ──
-      //
-      // One signed byte replaces the barrier band, the landward flags and the
-      // height-gate waiver (see coastSide in the mask). The rasterised wall
-      // was measured eating a ~62m strip of sea along every mapped coast —
-      // the moment the coastline streamed in, the water detached from the
-      // shore at datum elevation the whole way. A wall is a line: the mask
-      // now refuses landward water, blocks only steps that CROSS the line,
-      // and trusts the winding over cliff-bled DEM on the seaward side.
-      if (t.data[i] === 80) {
-        const v = coastSideAt(ex, ez);
-        if (v !== 0) (coastSide ??= new Int8Array(t.data.length))[i] = v;
-      }
-      if (onEdge && coastSideAt(ex, ez) === -1) {
-        (landward ??= new Uint8Array(t.data.length))[i] = 1;
+  const bucket = coastSegs.size >> 6;
+  const cachedSide = sideCaches.get(key);
+  if (cachedSide && cachedSide.coasts === bucket) {
+    coastSide = cachedSide.side;
+    landward = cachedSide.landward;
+  } else if (coastSegs.size) {
+    for (let pz = 0; pz < 256; pz += 2) for (let px = 0; px < 256; px += 2) {
+      const onEdge = px <= 1 || pz <= 1 || px >= 254 || pz >= 254;
+      let any = onEdge;
+      const idx = [pz * 256 + px, pz * 256 + px + 1, (pz + 1) * 256 + px, (pz + 1) * 256 + px + 1];
+      if (!any) for (const i of idx) { if (t.data[i] === 80) { any = true; break; } }
+      if (!any) continue;
+      const ex = t.xs + ((px + 1) / 256) * t.w, ez = t.zs + ((pz + 1) / 256) * t.h;
+      const v = coastSideAt(ex, ez);
+      if (v === 0) continue;
+      for (const i of idx) {
+        const ipx = i % 256, ipz = (i / 256) | 0;
+        if (t.data[i] === 80) (coastSide ??= new Int8Array(t.data.length))[i] = v;
+        if (v === -1 && (ipx === 0 || ipz === 0 || ipx === 255 || ipz === 255)) {
+          (landward ??= new Uint8Array(t.data.length))[i] = 1;
+        }
       }
     }
+    if (sideCaches.size > 64) sideCaches.clear();
+    sideCaches.set(key, { coasts: bucket, side: coastSide, landward });
   }
   // ── SEED FROM NEIGHBOURING MASKS ALREADY BUILT ──
   //
@@ -19596,7 +19604,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // compiled program to change some bounds.
     for (const key of hydroRev.keys()) hydroSys?.removeTile(key);
     hydroRev.clear(); hydroDirty.clear(); hydroFeats.clear(); hydroFeatsFull = 0;
-    coastSegs.clear(); osmCoastSeen = 0; oceanMasks.clear();
+    coastSegs.clear(); osmCoastSeen = 0; oceanMasks.clear(); sideCaches.clear();
     // THE SOLVER SPEAKS IN LOCAL METRES TOO. Its deck hints and junctions are
     // spatially keyed, so the last postcard's road left an elevation under
     // local (0,0) — exactly where the next one spawns. See RoadSolver.reset.
