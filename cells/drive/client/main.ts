@@ -20,7 +20,7 @@ import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, altBandAt, aspectLi
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, bedrockAt, buildLookAt, paintFor, roadLookAt,
   seedAt, snowLoad, stoneWalls, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
-import { createHydroSystem, extractOsmHydro, type HydroFeature, type HydroSystem, type OceanCoverage } from './hydro';
+import { createHydroSystem, extractOsmHydro, type HydroDebugView, type HydroFeature, type HydroSystem, type OceanCoverage } from './hydro';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
@@ -1065,7 +1065,30 @@ const climField = new ClimateField(climEnv);
  * the 40km plane, because a wrong mask and a new renderer arriving together are
  * indistinguishable from each other on screen.
  */
-const HYDRO_ON = /[?&]hydro=1/.test(location.search);
+/**
+ * ── AND HOW YOU TURN IT ON WITHOUT A URL ──
+ *
+ * Read from the stored dial rack as well as the query string, and read HERE
+ * rather than through `applyDials` — this decides what the decode loop
+ * captures and what the renderers refuse to draw, so it has to be settled
+ * before the first tile arrives, and the rack applies long after that.
+ *
+ * The query string still wins when present, in either direction: `?hydro=0`
+ * forces the old world for a comparison shot regardless of what the dial
+ * remembers, the same way `?time=` overrules the stored clock.
+ *
+ * Read defensively because it is read once and early: a corrupt record, a
+ * private window, a browser with storage blocked — any of them must give the
+ * default rather than an exception in the module's first statements.
+ */
+const HYDRO_ON = ((): boolean => {
+  const q = /[?&]hydro=([01])/.exec(location.search);
+  if (q) return q[1] === '1';
+  try {
+    const rec = JSON.parse(localStorage.getItem('drive.dials') ?? '{}') as Record<string, number>;
+    return rec['water'] === 1;
+  } catch { return false; }
+})();
 /** One mask per cover tile, built once and expired when the datum moves —
  *  the height gate is relative to the datum, so a measurement that shifts by
  *  more than the tolerance invalidates every answer that used it. */
@@ -1283,6 +1306,10 @@ function noteHydroWay(id: string | number, tags: Record<string, string>,
   }
 }
 let hydroSys: HydroSystem | undefined;
+/** Held outside the system because the dial can be turned before the first
+ *  tile has built one — see the WATER VIEW dial. Re-applied on construction so
+ *  a view chosen at boot is not silently lost. */
+let hydroView: HydroDebugView = 'surface';
 const hydroRev = new Map<string, number>();
 /**
  * ── THE DATUM HANDOVER, DECIDED ONCE ──
@@ -1404,6 +1431,7 @@ function hydroFeed(t: HeightTile): void {
   if (!HYDRO_ON) return;
   if (!hydroSys) {
     hydroSys = createHydroSystem({ oceanLevelM: seaSurfaceAbs() });
+    hydroSys.setDebugView(hydroView);
     worldGroup.add(hydroSys.object3d);
     // THE OLD PLANE STANDS DOWN, rather than being deleted. Two renderers for
     // one sea is the failure to avoid, and a flag that can turn the new one off
@@ -32300,6 +32328,56 @@ const DIAL_GROUPS: DialGroup[] = [
       // world to its triangles: the geometry the truck actually collides
       // with, not the paint over it.
       dial('xray', 'X-RAY', ['OFF', 'DEPTH', 'WIRE'], 0, (i) => { xrayMode = i; }),
+      /**
+       * ── WHICH WATER SYSTEM IS DRAWING ──
+       *
+       * LEGACY is everything that shipped: the 40km sea plane switched on
+       * globally from the truck's own elevation, river ribbons draped on the
+       * ground, lake polygons, and bodies invented from the cover raster.
+       * FIELD is the hydro system — one per-tile field carrying the sea, every
+       * OSM lake and every OSM river at one reconciled level, with the physics
+       * asking the same field the picture is drawn from.
+       *
+       * RELOADS, and manually so. Which system is live decides what the decode
+       * loop captures and what each renderer refuses to draw, and both have
+       * already run by the time you reach this dial — flipping it in place
+       * would leave a world half-built by each. `manual` keeps `applyDials`
+       * away from it at boot, which would otherwise reload forever.
+       *
+       * The reload keeps the URL, so you land at the same coast within a
+       * second or two: that is the point of putting it on a dial rather than
+       * in a query string. Set it, look, set it back, look again.
+       */
+      dial('water', 'WATER', ['LEGACY', 'FIELD'], 0, (i) => {
+        if (i === (HYDRO_ON ? 1 : 0)) return;         // already what is running
+        saveDials();
+        // …and drop any ?hydro= from the URL, or the flag it carries would
+        // overrule the dial that was just turned and nothing would change.
+        const u = new URL(location.href);
+        u.searchParams.delete('hydro');
+        location.replace(u.toString());
+      }, false, true),
+      /**
+       * ── THE FIELD'S OWN ANSWER, PAINTED ──
+       *
+       * The certainty instrument. SURFACE is the water as it is meant to look;
+       * every other setting paints one channel of the field flat over it, so
+       * the question "is the new system drawing this at all" stops being a
+       * judgement about foam and becomes a thing you can see. COVERAGE is the
+       * mask it built, SHORE the signed distance to the bank, DEPTH the water
+       * column, FLOW the current direction, CLASS which kind of body claimed
+       * each texel — sea, lake or river, in flat distinct colours.
+       *
+       * If a view other than SURFACE changes nothing on screen, the field is
+       * not drawing there, whatever the water looks like.
+       *
+       * Does nothing on LEGACY, and says so by being the only dial in the rack
+       * with nothing behind it — there is no field to ask.
+       */
+      dial('hview', 'WATER VIEW', ['SURFACE', 'COVERAGE', 'SHORE', 'DEPTH', 'FLOW', 'CLASS'], 0, (i) => {
+        hydroView = (['surface', 'coverage', 'shore', 'depth', 'flow', 'class'] as const)[i];
+        hydroSys?.setDebugView(hydroView);
+      }),
       // ── HAZE: HOW MUCH AIR IS BETWEEN YOU AND THE HILL ──
       //
       // Asked for from the seat, and it has been wanted for several rounds:
