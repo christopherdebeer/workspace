@@ -165,7 +165,16 @@ export function createHydroMaterial(
       uFoamStrength: frame.uFoamStrength,
       uShoreFade: frame.uShoreFade,
     },
-    side: THREE.FrontSide,
+    // ── A SURFACE YOU CAN BE UNDERNEATH ──
+    //
+    // Front-faced, a water plane vanishes the moment the eye drops below it —
+    // and the eye does: the truck fords, the camera sits low in the cab, and
+    // a bank a metre high puts you under a river's surface while looking
+    // along it. Reported from the seat as water visible from the drone and
+    // absent from chase, with the plane at eye level. The level fix above is
+    // the substance of that; this is so the remaining centimetre of it does
+    // not disappear rather than showing a surface.
+    side: THREE.DoubleSide,
     transparent: false,
     depthTest: true,
     depthWrite: true,

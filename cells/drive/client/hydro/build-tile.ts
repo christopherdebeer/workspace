@@ -196,8 +196,47 @@ export function analyseHydroTile(input: HydroTileInput): HydroTileAnalysis {
   return { observations, profiles };
 }
 
-function bodyLevel(body: HydroBody, profile: Float32Array | undefined, x: number, z: number): number {
-  if (body.level.type === 'flat' || body.level.type === 'ocean') return body.level.elevationM;
+/**
+ * ── FLOWING WATER HAS NO SINGLE LEVEL ──
+ *
+ * A lake is flat and a sea is flat, so one elevation describes them. A river
+ * is not: it descends, which is the whole reason the level model carries a
+ * profile at all. But a profile only comes from LINE geometry, and OSM maps
+ * any river wide enough to see as an AREA — `waterway=riverbank`, or
+ * `natural=water` with `water=river`. Those fall through to `areaEvidence`,
+ * which returns one number for the body, and the registry then reconciles
+ * that one number across every tile the river crosses. Upstream wins as often
+ * as not, and the whole reach downstream is drawn at a level its bed never
+ * reaches.
+ *
+ * Measured on the Muota at Ingenbohl: one flat 440.7m over a bed running
+ * 433.6m to 438.0m — a sheet floating a median 6.8m above the valley, which
+ * from the cab is at or above eye level and therefore both invisible (a
+ * front-faced plane seen from beneath) and expensive. Reported from the seat
+ * as exactly that, and correctly diagnosed there before it was measured here.
+ *
+ * So a flowing body with no profile takes the LOCAL bed instead, plus a
+ * nominal depth. That is what the old watercourse solver has always done —
+ * it reads the ground station by station and lets the water descend with it —
+ * and it is right for the same reason: the surface of running water is a
+ * property of the channel under it, not of the body as a whole.
+ *
+ * Standing water is untouched. A lake's flatness is not an approximation.
+ */
+const FLOWING_NOMINAL_DEPTH_M = 0.6;
+function bodyLevel(
+  body: HydroBody,
+  profile: Float32Array | undefined,
+  x: number,
+  z: number,
+  bedM?: number,
+): number {
+  if (body.level.type === 'flat' || body.level.type === 'ocean') {
+    if (FLOWING.has(body.kind) && bedM !== undefined && Number.isFinite(bedM)) {
+      return bedM + FLOWING_NOMINAL_DEPTH_M;
+    }
+    return body.level.elevationM;
+  }
   const stations = profile ?? body.level.stations;
   const hit = nearestSegment(x, z, stations, 3);
   if (hit.segment < 0) return stations[2] ?? 0;
@@ -381,7 +420,10 @@ export function buildHydroTile(
       }
       const amount = clamp(0.5 + signed / Math.max(0.01, antialias * 2), 0, 1);
       const localFlow = profileFlow(item.profile, item.body, x, z);
-      paint(ix, iz, amount, item.body, bodyLevel(item.body, item.profile, x, z), localFlow);
+      // The bed under THIS texel, so a river given no profile can descend with
+      // its own valley rather than lie flat across it.
+      const bed = sampleElevation(input.elevation, input.bounds, x, z);
+      paint(ix, iz, amount, item.body, bodyLevel(item.body, item.profile, x, z, bed), localFlow);
     }
   }
 
