@@ -33,9 +33,16 @@ export interface CoverageGrid {
   data: Uint8Array;
 }
 
-/** Missing is deliberately not the same answer as known non-ocean. */
+/**
+ * Missing is deliberately not the same answer as known non-ocean.
+ *
+ * `bounds`, when present, is the world span the grid actually covers —
+ * normally the tile padded by the field gutter, so the distance transform
+ * can see a shore that lies just past the tile edge instead of clamping at
+ * it. Without it the grid is mapped across the tile bounds, as before.
+ */
 export type OceanCoverage =
-  | { status: 'ready'; grid: CoverageGrid }
+  | { status: 'ready'; grid: CoverageGrid; bounds?: WorldBounds }
   | { status: 'unavailable' };
 
 export type HydroKind =
@@ -215,7 +222,12 @@ export interface HydroBuildOptions {
 
 export const DEFAULT_HYDRO_BUILD: HydroBuildOptions = {
   fieldResolution: 128,
-  gutter: 1,
+  // Six texels (~112m at a 2.4km tile) rather than one. The gutter exists so
+  // per-tile passes — above all the shore-distance transform, which the
+  // nearshore wave PHASE now reads — can see past the tile edge. One texel of
+  // margin put a phase seam within 180m of every tile boundary a coast
+  // crossed; six covers most of the shore-distance limit.
+  gutter: 6,
   oceanLevelM: 0,
   shoreDistanceLimitM: 180,
   minimumDepthM: 0.08,

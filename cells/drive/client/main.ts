@@ -1442,11 +1442,16 @@ function hydroWet(x: number, z: number): boolean {
  * tiles — the old containment test called those unavailable and drew no sea at
  * all along every cover seam.
  *
- * 130 square to match `fieldResolution` 128 plus its one-pixel gutter: one
+ * 140 square to match `fieldResolution` 128 plus its six-texel gutter: one
  * mask texel per field texel, so the nearest-neighbour sampling downstream
- * lands on the answer this computed rather than between two of them.
+ * lands on the answer this computed rather than between two of them. The
+ * span is declared on the result — the module maps the grid over whatever
+ * bounds it carries — and it is the tile padded by the gutter, so the shore
+ * just past a tile edge is visible to that tile's distance transform instead
+ * of the edge being a wall the phase folds against.
  */
-const OCEAN_GRID_N = 130;
+const OCEAN_GRID_N = 140;
+const OCEAN_GUTTER_TEXELS = 6;
 function oceanCoverageFor(t: HeightTile): OceanCoverage {
   // Overlap, not containment: any cover under any part of this tile is
   // evidence. With none, the tile has no ocean answer yet and must say so —
@@ -1459,17 +1464,22 @@ function oceanCoverageFor(t: HeightTile): OceanCoverage {
   // one. Worth the eight lines: this runs inside the tile build, where the
   // budget is measured in milliseconds and the last regression cost two.
   const near: Array<{ mask: MaskGrid; xs: number; zs: number; w: number; h: number }> = [];
+  const seek = OCEAN_GUTTER_TEXELS * (t.w / 128);
   for (const [key, c] of coverTiles) {
-    if (t.xs + t.w < c.xs || t.xs > c.xs + c.w || t.zs + t.h < c.zs || t.zs > c.zs + c.h) continue;
+    if (t.xs + t.w + seek < c.xs || t.xs - seek > c.xs + c.w) continue;
+    if (t.zs + t.h + seek < c.zs || t.zs - seek > c.zs + c.h) continue;
     near.push({ mask: oceanMaskFor(key, c).grid, xs: c.xs, zs: c.zs, w: c.w, h: c.h });
   }
   if (!near.length) return { status: 'unavailable' };
   covResamples++;
+  const pad = OCEAN_GUTTER_TEXELS * (t.w / 128);
+  const bx0 = t.xs - pad, bz0 = t.zs - pad;
+  const bw = t.w + pad * 2, bh = t.h + pad * 2;
   const data = new Uint8Array(OCEAN_GRID_N * OCEAN_GRID_N);
   for (let iz = 0; iz < OCEAN_GRID_N; iz++) {
-    const z = t.zs + ((iz + 0.5) / OCEAN_GRID_N) * t.h;
+    const z = bz0 + ((iz + 0.5) / OCEAN_GRID_N) * bh;
     for (let ix = 0; ix < OCEAN_GRID_N; ix++) {
-      const x = t.xs + ((ix + 0.5) / OCEAN_GRID_N) * t.w;
+      const x = bx0 + ((ix + 0.5) / OCEAN_GRID_N) * bw;
       for (const c of near) {
         if (x < c.xs || z < c.zs || x >= c.xs + c.w || z >= c.zs + c.h) continue;
         if (maskAt(c.mask, (x - c.xs) / c.w, (z - c.zs) / c.h)) data[iz * OCEAN_GRID_N + ix] = 255;
@@ -1477,7 +1487,8 @@ function oceanCoverageFor(t: HeightTile): OceanCoverage {
       }
     }
   }
-  return { status: 'ready', grid: { width: OCEAN_GRID_N, height: OCEAN_GRID_N, data } };
+  return { status: 'ready', grid: { width: OCEAN_GRID_N, height: OCEAN_GRID_N, data },
+    bounds: { minX: bx0, minZ: bz0, maxX: bx0 + bw, maxZ: bz0 + bh } };
 }
 /** Hand one terrain tile to the hydro system. Called from flushTerrain, beside
  *  redrape and flushBatter — the same "the ground under this tile just moved"

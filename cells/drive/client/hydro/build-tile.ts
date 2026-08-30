@@ -458,8 +458,12 @@ export function buildHydroTile(
 
   const ocean = registry.get('hydro:ocean');
   if (ocean && input.oceanCoverage.status === 'ready') {
+    // The grid maps over the span it declares — the tile padded by the
+    // gutter, when the caller sampled that far — so gutter texels carry real
+    // coverage instead of an edge-clamped copy of the last tile row.
+    const covBounds = input.oceanCoverage.bounds ?? input.bounds;
     for (let iz = 0; iz < height; iz++) for (let ix = 0; ix < width; ix++) {
-      const amount = sampleCoverage(input.oceanCoverage.grid, input.bounds, xAt(ix), zAt(iz));
+      const amount = sampleCoverage(input.oceanCoverage.grid, covBounds, xAt(ix), zAt(iz));
       paint(ix, iz, amount, ocean, bodyLevel(ocean, undefined, xAt(ix), zAt(iz)), [0, 0]);
     }
   }
@@ -538,9 +542,15 @@ export function buildHydroTile(
       if (z > wz1) wz1 = z;
     }
     if (Number.isFinite(wx0)) {
+      // CLIPPED TO THE TILE. Gutter texels carry coverage now, and a mesh
+      // that followed them past the edge would overlap its neighbour's mesh
+      // in a strip of coplanar water — a z-fight at every join. Each tile
+      // draws exactly to its boundary and no further.
       waterBounds = {
-        minX: wx0 - pixelX, minZ: wz0 - pixelZ,
-        maxX: wx1 + pixelX, maxZ: wz1 + pixelZ,
+        minX: Math.max(wx0 - pixelX, input.bounds.minX),
+        minZ: Math.max(wz0 - pixelZ, input.bounds.minZ),
+        maxX: Math.min(wx1 + pixelX, input.bounds.maxX),
+        maxZ: Math.min(wz1 + pixelZ, input.bounds.maxZ),
       };
     }
   }

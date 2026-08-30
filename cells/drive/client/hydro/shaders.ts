@@ -154,6 +154,8 @@ uniform float uDebugView;
 uniform float uRippleStrength;
 uniform float uFoamStrength;
 uniform float uShoreFade;
+uniform vec2 uHydroTexel;
+uniform vec2 uFieldMeters;
 
 varying vec2 vHydroUv;
 varying vec2 vAbsoluteXZ;
@@ -309,10 +311,17 @@ void main() {
   vec2 crossFlow = vec2(-flowDirection.y, flowDirection.x);
   float downstream = dot(vAbsoluteXZ, flowDirection);
   float across = dot(vAbsoluteXZ, crossFlow);
-  // River froth: only above a high energy threshold, fragmented into
-  // downstream-aligned streaks with a low duty cycle. A calm reach shows
-  // nothing; a rapid shows white over a minority of its surface.
-  float energyGate = smoothstep(0.55, 0.82, energy);
+  // ── FOAM IS CAUSAL: IT FORMS AT A DISTURBANCE AND RIDES THE CURRENT ──
+  // The energy that gates froth is the maximum of the energy HERE and the
+  // energy a little UPSTREAM, decaying with distance — so white water starts
+  // at the drop that causes it, trails below it for a few tens of metres,
+  // and dies away, instead of switching off at the exact texel the slope
+  // relaxes. Real foam outlives its rapid; painted foam should too.
+  vec2 uvPerMetre = uHydroTexel / max(uFieldMeters, vec2(0.01));
+  float up1 = texture2D(uHydroDynamics, vHydroUv - flowDirection * 14.0 * uvPerMetre).w;
+  float up2 = texture2D(uHydroDynamics, vHydroUv - flowDirection * 34.0 * uvPerMetre).w;
+  float causalEnergy = max(energy, max(up1 * 0.75, up2 * 0.5));
+  float energyGate = smoothstep(0.55, 0.82, causalEnergy);
   float foamStreak = valueNoise(vec2(downstream * 0.16 - uTime * (0.72 + energy * 1.1),
     across * 0.31 + seed * 13.0));
   float riverFoam = vFlowing * energyGate
