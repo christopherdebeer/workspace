@@ -478,20 +478,25 @@ export function buildHydroTile(
       if (raw < 0.25) continue;
       answered[iz * width + ix] = 1;
       if (raw >= 0.7) {
-        // ── THE WATERLINE IS THE TERRAIN'S OWN DATUM CROSSING ──
+        // ── THE MASK RULES OFFSHORE; DEPTH SHAPES ONLY THE EDGE ──
         //
-        // The legacy sea never computed a coastline and its coast always
-        // looked right: the plane vanished wherever ground rose above the
-        // datum. Terrain intersection IS the coastline renderer. The mask
-        // here only nominates the REGION as sea (and vetoes basins); the
-        // edge itself comes from depth against the same DEM the terrain
-        // mesh is built from, so the drawn waterline hugs the drawn land by
-        // construction and the mask's raster blockiness stops being visible.
+        // Two regimes, split by how certain the coverage is. INTERIOR sea
+        // (>= 0.9: the mask's own ocean, away from its boundary) draws solid,
+        // because the DEM under open water is fill, not measurement — depth-
+        // gating it made the whole sea speckle at the threshold, photographed
+        // off Monterey as a checkerboard. The EDGE BAND (0.7..0.9: the
+        // mask's boundary texels and the dilation outside them) is where the
+        // DEM is real land data, and there the waterline is the terrain's own
+        // datum crossing — the mechanism that made the legacy plane's coast
+        // right for free, and that keeps the mask's 31m raster invisible.
         const x = xAt(ix), z = zAt(iz);
         const lvl = bodyLevel(ocean, undefined, x, z);
-        const ground = sampleElevation(input.elevation, input.bounds, x, z);
-        const amount = Number.isFinite(ground)
-          ? clamp((lvl - ground + 0.35) / 1.0, 0, 1) : 1;
+        let amount = 1;
+        if (raw < 0.9) {
+          const ground = sampleElevation(input.elevation, input.bounds, x, z);
+          amount = Number.isFinite(ground)
+            ? clamp((lvl - ground + 0.35) / 1.0, 0, 1) : 1;
+        }
         paint(ix, iz, amount, ocean, lvl, [0, 0]);
       }
     }

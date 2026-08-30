@@ -1095,7 +1095,7 @@ const HYDRO_ON = ((): boolean => {
 /** How much work the mask and the coverage resample have done. Both are
  *  per-tile 65k and 17k pixel passes, so a rate rather than a total is the
  *  interesting number — see `__hydro`. */
-let maskBuilds = 0, covResamples = 0;
+let maskBuilds = 0, covResamples = 0, lastMaskBuildAt = 0;
 const oceanMasks = new Map<string, { grid: MaskGrid; stats: MaskStats; datum: number; coasts: number;
   /** Class-80 pixels with no terrain under them when this was built. Zero
    *  means the answer is final; anything else means ask again as ground
@@ -1122,6 +1122,16 @@ function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskS
   // build budget against 10.9ms.
   if (got && Math.abs(got.datum - datum) < 0.5 && got.coasts === (coastSegs.size >> 6)
     && (got.unknown === 0 || got.tiles === heightTiles.size)) return got;
+  // ── A STALE MASK BEATS A HITCH ──
+  //
+  // A coastal rebuild runs the side vote over every class-80 pixel near a
+  // segment — tens of milliseconds — and streaming expires masks constantly
+  // (every terrain tile changes heightTiles.size, every coastline way moves
+  // the bucket). Rebuilding them all in the frames they expire is the 1fps
+  // hang reported while driving. At most one mask rebuilds per quarter
+  // second; everything else answers with its last build until its turn.
+  if (got && performance.now() - lastMaskBuildAt < 250) return got;
+  lastMaskBuildAt = performance.now();
   // ELEVATION ONLY WHERE IT IS CONSULTED. The height gate reads heights at
   // class-80 pixels and nowhere else, so a land tile costs zero samples and a
   // coastal one costs a few thousand — against 65,536 for filling the grid
@@ -1598,6 +1608,19 @@ function oceanCoverageFor(t: HeightTile): OceanCoverage {
       const wet = (ix > 0 && src[i - 1] >= 200) || (ix < OCEAN_GRID_N - 1 && src[i + 1] >= 200)
         || (iz > 0 && src[i - OCEAN_GRID_N] >= 200) || (iz < OCEAN_GRID_N - 1 && src[i + OCEAN_GRID_N] >= 200);
       if (wet) data[i] = 200;
+    }
+  }
+  // …and the mask's OWN boundary joins the depth-gated edge band (210, in
+  // 0.7..0.9), so the terrain shapes the waterline on both sides of the
+  // mask's blocky edge, while the interior stays solid.
+  {
+    const src = data.slice();
+    for (let iz = 0; iz < OCEAN_GRID_N; iz++) for (let ix = 0; ix < OCEAN_GRID_N; ix++) {
+      const i = iz * OCEAN_GRID_N + ix;
+      if (src[i] !== 255) continue;
+      const dryNear = (ix > 0 && src[i - 1] < 200) || (ix < OCEAN_GRID_N - 1 && src[i + 1] < 200)
+        || (iz > 0 && src[i - OCEAN_GRID_N] < 200) || (iz < OCEAN_GRID_N - 1 && src[i + OCEAN_GRID_N] < 200);
+      if (dryNear) data[i] = 210;
     }
   }
   return { status: 'ready', grid: { width: OCEAN_GRID_N, height: OCEAN_GRID_N, data },
