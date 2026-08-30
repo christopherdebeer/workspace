@@ -1092,6 +1092,10 @@ const HYDRO_ON = ((): boolean => {
 /** One mask per cover tile, built once and expired when the datum moves —
  *  the height gate is relative to the datum, so a measurement that shifts by
  *  more than the tolerance invalidates every answer that used it. */
+/** How much work the mask and the coverage resample have done. Both are
+ *  per-tile 65k and 17k pixel passes, so a rate rather than a total is the
+ *  interesting number — see `__hydro`. */
+let maskBuilds = 0, covResamples = 0;
 const oceanMasks = new Map<string, { grid: MaskGrid; stats: MaskStats; datum: number; coasts: number;
   /** Class-80 pixels with no terrain under them when this was built. Zero
    *  means the answer is final; anything else means ask again as ground
@@ -1177,6 +1181,7 @@ function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskS
       }
     }
   }
+  maskBuilds++;
   const built = buildOceanMask(t.data, 256, 256,
     { datumM: datum, elevation, seedEdge: true, barrier, landward });
   const rec = { ...built, datum, coasts: coastSegs.size >> 6, unknown, tiles: heightTiles.size };
@@ -1440,6 +1445,7 @@ function oceanCoverageFor(t: HeightTile): OceanCoverage {
     near.push({ mask: oceanMaskFor(key, c).grid, xs: c.xs, zs: c.zs, w: c.w, h: c.h });
   }
   if (!near.length) return { status: 'unavailable' };
+  covResamples++;
   const data = new Uint8Array(OCEAN_GRID_N * OCEAN_GRID_N);
   for (let iz = 0; iz < OCEAN_GRID_N; iz++) {
     const z = t.zs + ((iz + 0.5) / OCEAN_GRID_N) * t.h;
@@ -20925,6 +20931,19 @@ function truckSpec(): Record<string, number> {
     // `fedMax: 0` has a store filling and a feed that never sees it, which
     // looks identical from the seat to having no rivers at all.
     feats: hydroFeats.size, featsFull: hydroFeatsFull, hydroDirty: hydroDirty.size,
+    maskBuilds, covResamples, terrainTiles: heightTiles.size,
+    // What the water actually costs to rasterise. A full-tile lattice is
+    // 2*segments^2 triangles per tile (2048 at the default 32); the cull keeps
+    // only the cells with water under them, so this is the honest measure of
+    // how much of each tile is being shaded.
+    mesh: (() => {
+      let tris = 0, meshes = 0;
+      hydroSys?.object3d.traverse((o) => {
+        const g = (o as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+        if (g?.index) { tris += g.index.count / 3; meshes++; }
+      });
+      return { tris, meshes, fullWouldBe: meshes * 2048 };
+    })(),
     // THE BIGGEST BODIES THE STORE HOLDS, by bbox. A watercourse is a line and
     // a pond is small; anything here spanning hundreds of metres is either a
     // real lake or a way that was closed into a polygon it never was.

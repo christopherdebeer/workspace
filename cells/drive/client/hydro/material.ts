@@ -47,6 +47,46 @@ export function createHydroFrameUniforms(): HydroFrameUniforms {
   };
 }
 
+/**
+ * ── MESH UV TO FIELD UV ──
+ *
+ * Two corrections in one vector, because they compose and separating them
+ * invites one being applied without the other.
+ *
+ * V RUNS THE OTHER WAY ON THE MESH. The field's rows run with +Z: `zAt` is
+ * `minZ + …iz…`, texture row zero is at v=0, `flipY` is false, and
+ * `worldToUv` — the CPU binding for the same question — maps v increasing
+ * with +Z. `PlaneGeometry` puts uv.y=1 at +Y and the `rotateX(-PI/2)` that
+ * lays it flat sends +Y to −Z, so mesh uv.y=1 lands at minZ. Fed straight
+ * through, every tile sampled its field mirrored north-south and drew each
+ * body up to a tile from where it belongs.
+ *
+ * AND THE MESH NO LONGER COVERS THE WHOLE TILE. It spans `waterBounds`, so
+ * mesh uv 0..1 maps to a sub-rect of the field rather than to all of it.
+ *
+ * Both are a scale and a bias per axis, which is exactly what this vector is:
+ *   field_u = offset + (worldX - minX) / spanX * centralScale
+ *   worldX  = rect.minX + u * rectSpanX
+ *   worldZ  = rect.maxZ - v * rectSpanZ        (the mesh's V, flipped)
+ */
+function fieldUvFor(
+  field: HydroTileField,
+  centralScale: number,
+  offset: number,
+): THREE.Vector4 {
+  const spanX = Math.max(Number.EPSILON, field.bounds.maxX - field.bounds.minX);
+  const spanZ = Math.max(Number.EPSILON, field.bounds.maxZ - field.bounds.minZ);
+  const rect = field.waterBounds ?? field.bounds;
+  const su = ((rect.maxX - rect.minX) / spanX) * centralScale;
+  const sv = ((rect.maxZ - rect.minZ) / spanZ) * centralScale;
+  return new THREE.Vector4(
+    su,
+    -sv,
+    offset + ((rect.minX - field.bounds.minX) / spanX) * centralScale,
+    offset + ((rect.maxZ - field.bounds.minZ) / spanZ) * centralScale,
+  );
+}
+
 function configure(texture: THREE.DataTexture, linear: boolean): THREE.DataTexture {
   texture.minFilter = texture.magFilter = linear ? THREE.LinearFilter : THREE.NearestFilter;
   texture.wrapS = texture.wrapT = THREE.ClampToEdgeWrapping;
@@ -102,28 +142,9 @@ export function createHydroMaterial(
       uHydroGeometry: { value: textures.geometry },
       uHydroDynamics: { value: textures.dynamics },
       uHydroMaterial: { value: textures.material },
-      /**
-       * ── V RUNS THE OTHER WAY ON THE MESH THAN IT DOES IN THE FIELD ──
-       *
-       * The field's rows run with +Z: `zAt(iz)` is `minZ + …iz…`, texture row
-       * zero is at v=0, `flipY` is false, and `worldToUv` — the CPU binding
-       * for the same question — maps v increasing with +Z.
-       *
-       * The mesh does not. `PlaneGeometry` puts uv.y=1 at +Y, and the
-       * `rotateX(-PI/2)` that lays it flat sends +Y to −Z; measured on the
-       * real geometry, uv.y=1 lands at the minZ edge and uv.y=0 at maxZ. Fed
-       * straight through, every tile sampled its field MIRRORED north-south:
-       * a river in the north half was drawn in the south half, up to a tile
-       * away, over ground of an entirely different height. Reported from the
-       * seat as the water sitting in a different plane from the terrain under
-       * a pan, and it is also what made rivers read as broad pale blobs —
-       * the surface was landing on ground that was never theirs.
-       *
-       * Corrected in the uniform rather than in the shader, so it survives
-       * shader work: negate the V scale and push the offset to the far edge,
-       * which is `1 - uv.y` written as a scale and a bias.
-       */
-      uFieldUv: { value: new THREE.Vector4(centralScale, -centralScale, offset, offset + centralScale) },
+      // Both the V flip and the water-rect sub-mapping live in one place —
+      // see `fieldUvFor`.
+      uFieldUv: { value: fieldUvFor(field, centralScale, offset) },
       // Private field metrics let the shader derive shore normals, river
       // grade and flow curvature without expanding the integration API.
       uHydroTexel: { value: new THREE.Vector2(1 / field.width, 1 / field.height) },

@@ -75,11 +75,99 @@ interface TileRecord {
   field?: HydroTileField;
   textures?: HydroTileTextures;
   material?: THREE.ShaderMaterial;
-  mesh?: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  mesh?: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+  geometry?: THREE.BufferGeometry;
   binding?: HydroTileBinding;
 }
 
 const immediateBuild = async (job: () => HydroTileField): Promise<HydroTileField> => job();
+
+/**
+ * ── A MESH OVER THE WATER, NOT OVER THE TILE ──
+ *
+ * The shared unit grid spans whatever rect the mesh is scaled to, and every
+ * quad of it is rasterised whether or not there is water under it. That is
+ * cheap when the rect is a pond and ruinous when it is a tile: a river ten
+ * metres wide crossing 2.4km of ground touches perhaps thirty of a 32x32
+ * lattice's thousand cells, and the other 970 are shaded and discarded.
+ *
+ * Narrowing the rect to the water's bounding box helps a pond and does almost
+ * nothing for that river, whose bbox is very nearly the whole tile. So the
+ * cull has to follow the water's SHAPE, which is what this does: keep only the
+ * cells with coverage under them, dilated by one so the shore fade and the
+ * wave displacement have a cell to move into.
+ *
+ * The fragment shader carries a `discard`, which on most hardware forfeits
+ * early-Z — so the cells being skipped here were not merely overdrawn, they
+ * were shaded before the depth test could reject them, including where they
+ * lay buried under a hillside. That is why the cost was so much worse from the
+ * cab than from directly above: a near-horizontal sheet at eye level fills the
+ * view, and a ring of tiles is that many screens of it.
+ *
+ * Positions are the same unit plane the shared grid used — x,z in [-0.5, 0.5],
+ * uv.y=1 at the minZ edge to match `PlaneGeometry` after `rotateX(-PI/2)` — so
+ * `fieldUvFor` and the shaders need no adjustment at all.
+ */
+function waterGeometry(field: HydroTileField, segments: number): THREE.BufferGeometry {
+  const rect = field.waterBounds ?? field.bounds;
+  const spanX = Math.max(Number.EPSILON, field.bounds.maxX - field.bounds.minX);
+  const spanZ = Math.max(Number.EPSILON, field.bounds.maxZ - field.bounds.minZ);
+  // ── A CELL IS TESTED OVER ITS WHOLE SPAN, NOT AT ITS CORNERS ──
+  //
+  // A lattice cell is 75m at the defaults and a field texel 18.75m, so a cell
+  // covers about four texels each way — and a ten-metre river crossing one
+  // through the middle touches none of its four corners. Corner sampling drops
+  // exactly the features this system exists to draw. So each cell asks the
+  // texels it actually spans, with a one-texel margin, which is also all the
+  // margin the shoreline needs: the fragment cuts at half coverage and
+  // coverage reaches zero within a texel of the water's edge.
+  const fieldIx = (x: number): number =>
+    field.gutter + ((x - field.bounds.minX) / spanX) * (field.resolution - 1);
+  const fieldIz = (z: number): number =>
+    field.gutter + ((z - field.bounds.minZ) / spanZ) * (field.resolution - 1);
+  const keep = new Uint8Array(segments * segments);
+  for (let j = 0; j < segments; j++) for (let i = 0; i < segments; i++) {
+    const x0 = rect.minX + (i / segments) * (rect.maxX - rect.minX);
+    const x1 = rect.minX + ((i + 1) / segments) * (rect.maxX - rect.minX);
+    const z0 = rect.minZ + (j / segments) * (rect.maxZ - rect.minZ);
+    const z1 = rect.minZ + ((j + 1) / segments) * (rect.maxZ - rect.minZ);
+    const ix0 = Math.max(0, Math.floor(fieldIx(x0)) - 1);
+    const ix1 = Math.min(field.width - 1, Math.ceil(fieldIx(x1)) + 1);
+    const iz0 = Math.max(0, Math.floor(fieldIz(z0)) - 1);
+    const iz1 = Math.min(field.height - 1, Math.ceil(fieldIz(z1)) + 1);
+    let any = false;
+    for (let iz = iz0; iz <= iz1 && !any; iz++) {
+      for (let ix = ix0; ix <= ix1; ix++) {
+        if (field.geometry[(iz * field.width + ix) * 4] > 0.005) { any = true; break; }
+      }
+    }
+    if (any) keep[j * segments + i] = 1;
+  }
+  const pos: number[] = [], uvs: number[] = [], idx: number[] = [];
+  const vert = new Map<number, number>();
+  const at = (i: number, j: number): number => {
+    const k = j * (segments + 1) + i;
+    let v = vert.get(k);
+    if (v === undefined) {
+      v = pos.length / 3;
+      pos.push(i / segments - 0.5, 0, j / segments - 0.5);
+      uvs.push(i / segments, 1 - j / segments);
+      vert.set(k, v);
+    }
+    return v;
+  };
+  for (let j = 0; j < segments; j++) for (let i = 0; i < segments; i++) {
+    if (!keep[j * segments + i]) continue;
+    const a = at(i, j), b = at(i + 1, j), c = at(i, j + 1), d = at(i + 1, j + 1);
+    idx.push(a, c, b, b, c, d);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setIndex(idx);
+  geo.computeBoundingSphere();
+  return geo;
+}
 
 function worldToUv(field: HydroTileField): THREE.Matrix3 {
   const centralScale = field.resolution / field.width;
@@ -100,7 +188,7 @@ class DefaultHydroSystem implements HydroSystem {
   private readonly registry: HydroBodyRegistry;
   private readonly frameUniforms: HydroFrameUniforms = createHydroFrameUniforms();
   private readonly buildOptions: HydroBuildOptions;
-  private readonly grid: THREE.PlaneGeometry;
+  private readonly meshSegments: number;
   private readonly scheduleBuild: (job: () => HydroTileField) => Promise<HydroTileField>;
   private readonly rebuildsPerFrame: number;
   private disposed = false;
@@ -117,10 +205,7 @@ class DefaultHydroSystem implements HydroSystem {
     this.registry = new HydroBodyRegistry(this.buildOptions.oceanLevelM);
     this.scheduleBuild = options.scheduleBuild ?? immediateBuild;
     this.rebuildsPerFrame = Math.max(1, Math.floor(options.rebuildsPerFrame ?? 1));
-    const segments = Math.max(4, Math.floor(options.meshResolution ?? 32));
-    this.grid = new THREE.PlaneGeometry(1, 1, segments, segments);
-    this.grid.rotateX(-Math.PI / 2);
-    this.grid.computeBoundingSphere();
+    this.meshSegments = Math.max(4, Math.floor(options.meshResolution ?? 32));
     this.object3d.name = 'hydro-system';
   }
 
@@ -208,7 +293,12 @@ class DefaultHydroSystem implements HydroSystem {
 
     let admitted = 0;
     for (const [key, record] of this.records) {
-      if (record.mesh) this.placeMesh(record.mesh, record.input.bounds, frame.worldOrigin);
+      // THE SAME RECT THE MESH WAS SCALED TO. It spans the water, not the
+      // tile, and re-placing it on the tile's centre every frame would undo
+      // that — a mesh the size of the river sitting in the middle of the tile.
+      if (record.mesh) {
+        this.placeMesh(record.mesh, record.field?.waterBounds ?? record.input.bounds, frame.worldOrigin);
+      }
       if (record.dirty && !record.building && admitted < this.rebuildsPerFrame) {
         admitted++;
         void this.queueBuild(key);
@@ -272,7 +362,6 @@ class DefaultHydroSystem implements HydroSystem {
     }
     this.records.clear();
     this.registry.clear();
-    this.grid.dispose();
     this.object3d.removeFromParent();
   }
 
@@ -309,17 +398,39 @@ class DefaultHydroSystem implements HydroSystem {
     this.releaseGpu(record);
     record.field = field;
     if (!field.hasWater) return;
+    // The cull first: a tile can report water and still keep no cell, when the
+    // coverage is a sliver the lattice cannot resolve. Building the textures
+    // before finding that out would leak two float RGBA uploads per tile.
+    const geometry = waterGeometry(field, this.meshSegments);
+    if (!geometry.getIndex()?.count) { geometry.dispose(); return; }
     const textures = createHydroTextures(field);
     const material = createHydroMaterial(field, textures, this.frameUniforms);
-    const mesh = new THREE.Mesh(this.grid, material);
-    const spanX = field.bounds.maxX - field.bounds.minX;
-    const spanZ = field.bounds.maxZ - field.bounds.minZ;
+    const mesh = new THREE.Mesh(geometry, material);
+    // ── THE MESH COVERS THE WATER, NOT THE TILE ──
+    //
+    // A tile is 2.4km across and a river ten metres wide, so spanning
+    // `bounds` rasterised the whole tile to show about two per cent water —
+    // and because the fragment shader carries a `discard` it forfeits early-Z,
+    // so even the parts buried under a hillside were shaded before being
+    // thrown away. From above that is merely wasteful; from the cab a
+    // near-horizontal sheet at eye level fills the view, and with a ring of
+    // tiles it is that many times the screen shaded for nothing. Reported as
+    // 60fps falling to 4 in chase while top-down stayed fine, with no water
+    // visible in chase at all — invisible and expensive being the same fact.
+    //
+    // `waterBounds` is the rect the coverage actually occupies, padded a
+    // texel. Falls back to the tile when it is absent, which is the old
+    // behaviour and only happens on a tile with no water — and those are not
+    // meshed at all.
+    const rect = field.waterBounds ?? field.bounds;
+    const spanX = rect.maxX - rect.minX;
+    const spanZ = rect.maxZ - rect.minZ;
     mesh.scale.set(spanX, 1, spanZ);
     const origin = this.frameUniforms.uWorldOrigin.value;
     mesh.position.set(
-      (field.bounds.minX + field.bounds.maxX) * 0.5 - origin.x,
+      (rect.minX + rect.maxX) * 0.5 - origin.x,
       0,
-      (field.bounds.minZ + field.bounds.maxZ) * 0.5 - origin.z,
+      (rect.minZ + rect.maxZ) * 0.5 - origin.z,
     );
     // GPU displacement changes y beyond the CPU geometry bounds. The streamed
     // ring is already the culling structure, so do not let a flat unit plane
@@ -332,6 +443,7 @@ class DefaultHydroSystem implements HydroSystem {
     record.textures = textures;
     record.material = material;
     record.mesh = mesh;
+    record.geometry = geometry;
     record.binding = {
       ...base,
       bounds: field.bounds,
@@ -341,9 +453,12 @@ class DefaultHydroSystem implements HydroSystem {
 
   private releaseGpu(record: TileRecord): void {
     if (record.mesh) record.mesh.removeFromParent();
+    // Per-tile now, so it is per-tile to dispose — the shared grid never was.
+    record.geometry?.dispose();
     record.material?.dispose();
     if (record.textures) disposeHydroTextures(record.textures);
     record.mesh = undefined;
+    record.geometry = undefined;
     record.material = undefined;
     record.textures = undefined;
     record.binding = undefined;

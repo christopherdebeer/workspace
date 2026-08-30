@@ -408,6 +408,27 @@ export function buildHydroTile(
     if (coverage[i] > 0.005) { hasWater = true; waterLevels.push(level[i]); }
   }
   const elevationBaseM = quantile(waterLevels, 0.5) ?? options.oceanLevelM;
+  // THE RECT THE MESH ONLY NEEDS TO COVER. Measured on the coverage that will
+  // actually survive the fragment cut, then padded by a texel so the shore
+  // fade and the wave displacement have somewhere to go.
+  let waterBounds: WorldBounds | undefined;
+  {
+    let wx0 = Infinity, wz0 = Infinity, wx1 = -Infinity, wz1 = -Infinity;
+    for (let iz = 0; iz < height; iz++) for (let ix = 0; ix < width; ix++) {
+      if (coverage[iz * width + ix] <= 0.005) continue;
+      const x = xAt(ix), z = zAt(iz);
+      if (x < wx0) wx0 = x;
+      if (x > wx1) wx1 = x;
+      if (z < wz0) wz0 = z;
+      if (z > wz1) wz1 = z;
+    }
+    if (Number.isFinite(wx0)) {
+      waterBounds = {
+        minX: wx0 - pixelX, minZ: wz0 - pixelZ,
+        maxX: wx1 + pixelX, maxZ: wz1 + pixelZ,
+      };
+    }
+  }
   const toDry = distanceTransform(wet, width, height, 0);
   const toWet = distanceTransform(wet, width, height, 1);
   const geometry = new Float32Array(count * 4);
@@ -442,6 +463,7 @@ export function buildHydroTile(
     dynamics,
     material,
     hasWater,
+    waterBounds,
     bodyIds: [...bodyIds],
   };
 }

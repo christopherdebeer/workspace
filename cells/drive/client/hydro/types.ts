@@ -152,6 +152,17 @@ export interface HydroTileField {
   dynamics: Float32Array;
   material: Uint8Array;
   hasWater: boolean;
+  /**
+   * The world rect the water actually occupies, padded by a texel.
+   *
+   * A tile is 2.4km and a river is ten metres wide, so a mesh spanning
+   * `bounds` rasterises the whole tile to show about two per cent water. Every
+   * one of those fragments runs the water shader before its `discard`, and a
+   * shader containing `discard` forfeits early-Z, so the ones buried under
+   * terrain are shaded and then thrown away too. Absent when the tile has no
+   * water at all.
+   */
+  waterBounds?: WorldBounds;
   bodyIds: readonly string[];
 }
 
