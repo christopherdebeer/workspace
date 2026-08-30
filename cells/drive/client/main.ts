@@ -8581,6 +8581,18 @@ function surfaceAt(x: number, z: number): Surface {
   // AFTER the carriageways, same as cover: a road over a channel is a
   // culvert's deck or a bridge, and you are on it, not in the water under it.
   if (channelAt(x, z)) return 'water';
+  // ── THE SEA, ASKED SPATIALLY ──
+  //
+  // With the hydro field up this is `oceanAt`, and the two lines it replaces
+  // are the two the plan singles out. `coverWater` answers "class 80 and the
+  // terrain agrees", which cannot tell a tarn from a bay. The elevation
+  // fallback beneath it answers "lower than the sea", which is the rule that
+  // drowned Badwater and needed a 30km suppression radius to stop.
+  //
+  // NO CHANGE IN DEM ELEVATION ALONE MAY CHANGE LAND INTO WATER. That is the
+  // whole cutover in one sentence, and deleting the fallback is what enforces
+  // it. `oceanAt` consults classification and the datum, never height alone.
+  if (HYDRO_ON) return oceanAt(x, z) ? 'water' : 'ground';
   // WHAT THE GROUND IS beats how high the DEM thinks it is. Off Big Sur the
   // elevation source fills the whole ocean at a flat +1.2m, so the height test
   // below called four kilometres of open Pacific dry ground and let the truck
@@ -20417,7 +20429,16 @@ function truckSpec(): Record<string, number> {
       elevAbs: hasHeight(x, z) ? +(sampleHeight(x, z) + baseElev).toFixed(1) : null,
       // What the OLD world would have said at this point, so the two can be
       // compared at a spot rather than argued about.
+      // Both verdicts, side by side. The gate for this stage is not "does the
+      // new one work" but "where do the two differ, and is each difference
+      // one we meant".
       wasWater: coverWater(x, z), seaOn, surface: surfaceAt(x, z),
+      oldVerdict: (() => {
+        if (channelAt(x, z)) return 'water';
+        if (coverWater(x, z)) return 'water';
+        const sl = seaLevelY();
+        return sl !== null && sampleHeight(x, z) < sl - 0.7 ? 'water' : 'ground';
+      })(),
       sample: hydroSys?.sampleRestingSurface(x, z) ?? null,
     };
   };
@@ -24316,7 +24337,11 @@ function gripAhead(x: number, z: number): number {
   }
   if (road >= 0) return surfaceFor('road', road).mu;
   if (track >= 0) return surfaceFor('track', track).mu;
+  // The coarse mask, from whichever source is authoritative. The note above is
+  // right that this wants a CHEAP answer rather than the wading test — so with
+  // the hydro field up it asks the mask, not the sample, and stays one lookup.
   if (waterCells.has(gkey(x, z))) return SURFACE.water.mu;
+  if (HYDRO_ON && oceanAt(x, z)) return SURFACE.water.mu;
   return surfaceFor('ground', Q_GROUND).mu;
 }
 const autoGround: AutoGround = { height: groundAt, grip: gripAhead };
