@@ -59,13 +59,13 @@ function configure(texture: THREE.DataTexture, linear: boolean): THREE.DataTextu
 export function createHydroTextures(field: HydroTileField): HydroTileTextures {
   return {
     geometry: configure(new THREE.DataTexture(
-      field.geometry as unknown as BufferSource, field.width, field.height, THREE.RGBAFormat, THREE.FloatType,
+      field.geometry, field.width, field.height, THREE.RGBAFormat, THREE.FloatType,
     ), true),
     dynamics: configure(new THREE.DataTexture(
-      field.dynamics as unknown as BufferSource, field.width, field.height, THREE.RGBAFormat, THREE.FloatType,
+      field.dynamics, field.width, field.height, THREE.RGBAFormat, THREE.FloatType,
     ), true),
     material: configure(new THREE.DataTexture(
-      field.material as unknown as BufferSource, field.width, field.height, THREE.RGBAFormat, THREE.UnsignedByteType,
+      field.material, field.width, field.height, THREE.RGBAFormat, THREE.UnsignedByteType,
     ), false),
   };
 }
@@ -82,6 +82,23 @@ export function createHydroMaterial(
     vertexShader: HYDRO_VERTEX_SHADER,
     fragmentShader: HYDRO_FRAGMENT_SHADER,
     uniforms: {
+      // ── FOG UNIFORMS, OR THE FIRST RENDERED TILE THROWS ──
+      //
+      // The shaders already carry all four fog chunks, so the GLSL declares
+      // `fogColor`, `fogNear` and `fogFar` and expects them filled. But a
+      // ShaderMaterial does NOT inherit UniformsLib the way the built-in
+      // materials do — merging it is the caller's job — so with `fog: true`
+      // and a scene that has fog, three's refreshFogUniforms reached for
+      // `uniforms.fogColor.value` on a key that was not there and threw
+      // `Cannot read properties of undefined (reading 'value')` inside
+      // setProgram, on the first hydro tile ever drawn. The DOM panel still
+      // rendered, so the lab looked like it was up and merely showing nothing.
+      //
+      // Cloned, not shared: three writes into these per material, and the
+      // frame uniforms below are deliberately shared BY REFERENCE so one
+      // update reaches every tile. Mixing the two lifetimes in one object is
+      // how that sharing would quietly stop working.
+      ...THREE.UniformsUtils.clone(THREE.UniformsLib.fog),
       uHydroGeometry: { value: textures.geometry },
       uHydroDynamics: { value: textures.dynamics },
       uHydroMaterial: { value: textures.material },

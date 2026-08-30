@@ -176,7 +176,14 @@ export async function openDrive(opts = {}) {
   const server = http.createServer((req, res) => {
     const p = req.url.split('?')[0];
     if (p === '/app.js') { res.writeHead(200, { 'content-type': 'application/javascript' }); res.end(readFileSync(bundle)); }
-    else if (p === '/') {
+    // The shell, at `/` and at whatever OTHER route the caller asked for. The
+    // deployed cell serves this same 3162-byte document for any app path — a
+    // client-side route branch cannot fire unless the page is served there —
+    // and this server answered `{}` to /hydro, which reads on screen as a lab
+    // that renders nothing and reports no error, because none happened. Only
+    // the explicitly requested path is added, so every existing test keeps the
+    // 404 it relies on for a missing tile.
+    else if (p === '/' || (opts.pagePath && p === opts.pagePath.split('?')[0])) {
       // OPT-IN, and off by default. The real page ships a Content-Security
       // Policy and this server never has, so anything the policy forbids —
       // eval, a script from an unlisted host, a module imported from the wrong
@@ -390,6 +397,23 @@ export async function openDrive(opts = {}) {
   // cannot install them after `goto`, because by then the page has already
   // asked. `opts.route(page)` runs with the page created and nothing loaded.
   if (opts.route) await opts.route(page);
+  // ── A CELL IS NOT ONLY THE GAME ──
+  //
+  // `pagePath` opens some other route this cell serves — the hydro lab at
+  // /hydro is the first — and skips the boot wait, because only the game
+  // signals #boot.ready. Everything else the harness gives you (the local
+  // server, the collected page errors, the GLSL sniffer, the screenshot) is
+  // exactly as useful on a bench page as on the world, and without this a
+  // second route has no instrument at all.
+  if (opts.pagePath) {
+    await page.goto(`http://localhost:${port}${opts.pagePath}`, { waitUntil: 'load', timeout: 60000 });
+    if (settle) await page.waitForTimeout(settle);
+    return {
+      page, errors,
+      shot: (name) => page.screenshot({ path: join(WORK, `${name}.png`) }),
+      async close() { await browser.close(); server.close(); },
+    };
+  }
   await page.goto(`http://localhost:${port}/?${spot}`, { waitUntil: 'load', timeout: 60000 });
   // ── A FAILED BOOT MUST SAY WHY ──
   //
