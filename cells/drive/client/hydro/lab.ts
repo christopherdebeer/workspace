@@ -229,12 +229,21 @@ function sampleText(s: HydroSample | undefined, x: number, z: number): string {
 }
 
 export async function startHydroLab(): Promise<void> {
-  document.title = 'Hydrograph — isolated water laboratory';
   document.documentElement.innerHTML = page();
+  document.title = 'Hydrograph — isolated water laboratory';
   const get = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
   const number = (id: string): number => Number(get<HTMLInputElement>(id).value);
   const canvas = get<HTMLCanvasElement>('hydro-canvas');
-  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+  const contextAttributes: WebGLContextAttributes = { antialias: false, powerPreference: 'high-performance' };
+  const context = canvas.getContext('webgl2', contextAttributes) ?? canvas.getContext('webgl', contextAttributes);
+  if (!context) {
+    get('note').textContent = 'The isolated lab loaded, but this browser has WebGL disabled.';
+    get('status').textContent = 'WEBGL UNAVAILABLE\nOpen /hydro in a WebGL-capable browser to render and tune the water surface.';
+    return;
+  }
+  const renderer = new THREE.WebGLRenderer({
+    canvas, context: context as WebGLRenderingContext, antialias: false, powerPreference: 'high-performance',
+  });
   renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
   renderer.setSize(innerWidth, innerHeight, false);
   renderer.outputColorSpace = THREE.SRGBColorSpace;
