@@ -25915,11 +25915,28 @@ let droneDiscs: THREE.Mesh[] = [];          // the blur that replaces them at sp
 let droneDiscMat: THREE.MeshLambertMaterial | null = null;
 /** A body, four folding arms and four rotors. Small, dark, and legible from
  *  above, which is the only angle you ever see it from while flying it. */
+/**
+ * ── A THIRD OF THE SIZE IT WAS ──
+ *
+ * The airframe was authored at roughly 2.6m across the rotors, which is a
+ * survey drone you would need a trailer for — and from the seat it read as a
+ * second vehicle parked on the roof. A third of that is about 0.9m across
+ * folded, which is a thing you could lift with one hand and stow in the back
+ * of the rig, and it is the size the truck's proportions were asking for.
+ *
+ * Applied as ONE scale on the group rather than by rewriting every dimension:
+ * the arm hinges, the fold axes and the blade offsets are a set of numbers
+ * that agree with each other, and scaling them individually is how that
+ * agreement gets broken by a later edit. The flight model is untouched —
+ * position, altitude and speed are world metres and always were.
+ */
+const DRONE_SCALE = 1 / 3;
 function droneModel(): THREE.Object3D {
   const g = new THREE.Group();
   // Yaw first, then the pitch and roll that a climb, a dive or a landing flare
   // put on the airframe — same order and same reason as the truck's own group.
   g.rotation.order = 'YXZ';
+  g.scale.setScalar(DRONE_SCALE);
   droneArms = []; droneArmAxis = []; droneBlades = []; droneDiscs = [];
   const body = new THREE.Mesh(new THREE.BoxGeometry(1.1, 0.34, 1.1),
     new THREE.MeshLambertMaterial({ color: 0x2b2f33 }));
