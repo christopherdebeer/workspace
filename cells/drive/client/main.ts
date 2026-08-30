@@ -1102,12 +1102,62 @@ function oceanAt(ex: number, ez: number): boolean {
 }
 let hydroSys: HydroSystem | undefined;
 const hydroRev = new Map<string, number>();
+/**
+ * ── THE DATUM HANDOVER, DECIDED ONCE ──
+ *
+ * The module wants absolute elevations and refuses to clamp negatives; main
+ * renders relative to `baseElev`. The shader resolves it in one line —
+ *
+ *     renderPosition.y = uElevationBase + level - uWorldOrigin.y + displaced;
+ *
+ * — so feeding absolute heights and `worldOrigin.y = baseElev` puts the water
+ * in main's render space exactly. The plan warned that if this is not settled
+ * up front half the call sites pass one and half the other; this is it settled.
+ *
+ * `x` and `z` are ZERO, and that is not an oversight. main's world coordinates
+ * are already local to the origin, so bounds handed in are render coordinates
+ * and the mesh must land on them unshifted. The cost is that `vAbsoluteXZ` in
+ * the shader — used only for wave phase — is local rather than absolute, so a
+ * world hop re-phases the swell. A hop clears the registry and rebuilds every
+ * tile anyway, so there is nothing on screen to see it happen to.
+ */
+const hydroFrameOrigin = { x: 0, y: 0, z: 0 };
+/** The world's wind, written where the sky and the grass already agree on it.
+ *  12km/h is the calm-day default the deck drift uses. */
+const worldWind = { dirX: 0, dirZ: 1, kmh: 12 };
+/** Per frame: the clock, the datum, the weather and the sun. Cheap — the system
+ *  writes a handful of uniforms and admits at most one rebuild. */
+function hydroTick(nowMs: number): void {
+  if (!HYDRO_ON || !hydroSys) return;
+  hydroFrameOrigin.y = baseElev;
+  const w = wxAt(wxField, state.x, state.z);
+  hydroSys.update({
+    timeSeconds: nowMs / 1000,
+    worldOrigin: hydroFrameOrigin,
+    wind: { x: worldWind.dirX, z: worldWind.dirZ, speedMps: worldWind.kmh / 3.6 },
+    rain: w?.rain ?? 0,
+    sunDirection: { x: LIGHT_DIR.x, y: LIGHT_DIR.y, z: LIGHT_DIR.z },
+  });
+}
 /** Hand one terrain tile to the hydro system. Called from flushTerrain, beside
  *  redrape and flushBatter — the same "the ground under this tile just moved"
  *  hook everything else that stands on terrain already uses. */
 function hydroFeed(t: HeightTile): void {
   if (!HYDRO_ON) return;
-  hydroSys ??= createHydroSystem({ oceanLevelM: seaSurfaceAbs() });
+  if (!hydroSys) {
+    hydroSys = createHydroSystem({ oceanLevelM: seaSurfaceAbs() });
+    worldGroup.add(hydroSys.object3d);
+    // THE OLD PLANE STANDS DOWN, rather than being deleted. Two renderers for
+    // one sea is the failure to avoid, and a flag that can turn the new one off
+    // is worth more right now than the lines the delete would save: it is the
+    // only way to put the two side by side at the same coast. The plane and
+    // everything feeding it come out in stage 3, once `hydroAt` is the single
+    // predicate and there is nothing left reading `seaOn`.
+    sea.visible = false;
+  }
+  // The datum is measured as the world streams, so the system is told again
+  // rather than only at construction.
+  hydroSys.setOceanLevelM(seaSurfaceAbs());
   const key = `${t.tx}/${t.ty}`;
   const rev = (hydroRev.get(key) ?? 0) + 1;
   hydroRev.set(key, rev);
@@ -17712,6 +17762,11 @@ function stepWeather(now: number, dt: number): void {
     // metre of blade, so a stiff breeze lays a field over and a calm day
     // barely stirs it; the gust term rides on top of the steady lean.
     const kmh = live.on ? live.windKmh : 12;
+    // THE SAME NUMBER, ONE MORE CONSUMER. The note below insists the swell and
+    // the clouds must never disagree about which way the air is going; the
+    // hydro surface is now a third thing that must agree, so it reads the wind
+    // from here rather than deriving its own from the weather field.
+    worldWind.dirX = -Math.sin(t); worldWind.dirZ = Math.cos(t); worldWind.kmh = kmh;
     const amp = clamp(kmh / 130, 0.02, 0.35);
     windU.uTime.value = now / 1000;
     windU.uGust.value.set(-Math.sin(t) * amp, Math.cos(t) * amp);
@@ -20344,6 +20399,14 @@ function truckSpec(): Record<string, number> {
  * level land, and does a lake above the coast stay out — and reports what the
  * flood actually did rather than only its verdict.
  */
+/** Show or hide ONLY the hydro layer, leaving everything else in the frame
+ *  identical. Two screenshots either side of this isolate exactly what the new
+ *  renderer contributes — which a blue-pixel count cannot, because the sky is
+ *  blue and reads as 46% water over Badwater, where there is none. */
+(window as unknown as { __hydroshow?: object }).__hydroshow = (on: boolean): boolean => {
+  if (hydroSys) hydroSys.object3d.visible = on;
+  return !!hydroSys && hydroSys.object3d.visible;
+};
 (window as unknown as { __hydro?: object }).__hydro = (r = 0, bearing = 90, steps = 8): object => {
   const at = (x: number, z: number): Record<string, unknown> => {
     const raw = sampleCoverRaw(x, z);
@@ -28445,6 +28508,7 @@ function tick(now: number): void {
   } else dustBudget = 0;
   stepDust(dt);
   flushTerrain(now);
+  hydroTick(now);
   // The sea keeps its station off a coast and stands down over dry basins.
   // Slewed, not snapped: the transition happens kilometres before the basin
   // floor is reachable, and a falling waterline reads as the lake this basin
