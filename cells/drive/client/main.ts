@@ -20831,6 +20831,43 @@ function truckSpec(): Record<string, number> {
  *  identical. Two screenshots either side of this isolate exactly what the new
  *  renderer contributes — which a blue-pixel count cannot, because the sky is
  *  blue and reads as 46% water over Badwater, where there is none. */
+/**
+ * ── THE FIELD'S ANSWER AS A MAP, IN WORLD COORDINATES ──
+ *
+ * `__hydro`'s span walks one bearing, which answers "is there water at this
+ * point" and cannot answer "is the water WHERE the picture puts it". This
+ * draws the CPU field over a square around the truck, north up, so the shape
+ * it prints can be laid against a top-down screenshot directly.
+ *
+ * The registration instrument, in other words. It reads `sampleRestingSurface`
+ * — the field arrays, in world metres, nothing to do with the mesh, the
+ * textures or the shader — so a river that matches here and not on screen is
+ * a rendering fault, and one that matches both is drawn where it belongs. The
+ * north-south mirror that made every body land a tile away would have shown
+ * up here in one glance.
+ *
+ * `#` is water the physics also calls water, `.` is dry, and the truck is `@`.
+ */
+/** One point, in world metres: is the field's water here. The grid probe above
+ *  is truck-centred; this lets a caller anchor its own grid to a fixed lat/lon
+ *  and so compare two runs from different spawns cell for cell. */
+(window as unknown as { __hydroat?: object }).__hydroat = (x: number, z: number): boolean =>
+  !!hydroSys?.sampleRestingSurface(x, z);
+(window as unknown as { __hydromap?: object }).__hydromap = (halfM = 1200, n = 41): string[] => {
+  const out: string[] = [];
+  const cx = state.x, cz = state.z;
+  for (let iz = 0; iz < n; iz++) {
+    let row = '';
+    const z = cz - halfM + (iz / (n - 1)) * halfM * 2;
+    for (let ix = 0; ix < n; ix++) {
+      const x = cx - halfM + (ix / (n - 1)) * halfM * 2;
+      const mid = ix === (n >> 1) && iz === (n >> 1);
+      row += mid ? '@' : hydroSys?.sampleRestingSurface(x, z) ? '#' : '.';
+    }
+    out.push(row);
+  }
+  return out;
+};
 /** The WATER VIEW dial, reachable from a script. Same six names the dial
  *  offers; called with nothing it reports the view without changing it. The
  *  harness needs this to photograph what the field believes, which is the one
