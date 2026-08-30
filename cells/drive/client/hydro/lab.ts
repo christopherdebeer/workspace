@@ -1,0 +1,378 @@
+import * as THREE from 'three';
+import { createHydroSystem, type HydroSystem } from './system';
+import type {
+  CoverageGrid, ElevationGrid, HydroDebugView, HydroFeature, HydroKind,
+  HydroSample, HydroTileInput, HydroTuning, WorldBounds,
+} from './types';
+
+interface Fixture {
+  id: string;
+  label: string;
+  note: string;
+  originY: number;
+  oceanLevelM: number;
+  height(x: number, z: number): number;
+  ocean?: (x: number, z: number) => number;
+  features: readonly HydroFeature[];
+}
+
+const BOUNDS: WorldBounds = { minX: -300, minZ: -300, maxX: 300, maxZ: 300 };
+const pts = (...v: number[]): Float64Array => new Float64Array(v);
+
+function area(
+  id: string, kind: HydroKind, level: number, outer: number[], holes: number[][] = [],
+  tuning: Partial<Pick<HydroFeature, 'roughness' | 'turbidity' | 'intermittent' | 'tidal'>> = {},
+): HydroFeature {
+  return {
+    id, source: 'authored', kind, taggedLevelM: level,
+    intermittent: tuning.intermittent ?? false,
+    tidal: tuning.tidal ?? false,
+    roughness: tuning.roughness, turbidity: tuning.turbidity,
+    geometry: { type: 'area', polygons: [{ outer: pts(...outer), holes: holes.map((h) => pts(...h)) }] },
+  };
+}
+
+function channel(
+  id: string, kind: 'river' | 'stream' | 'canal', widthM: number, points: number[],
+  tuning: Partial<Pick<HydroFeature, 'roughness' | 'turbidity' | 'taggedLevelM'>> = {},
+): HydroFeature {
+  return {
+    id, source: 'authored', kind, intermittent: false, tidal: false, ...tuning,
+    geometry: { type: 'line', widthM, points: pts(...points) },
+  };
+}
+
+const FIXTURES: readonly Fixture[] = [
+  {
+    id: 'coast', label: 'COAST / OCEAN MASK', originY: 0, oceanLevelM: 0,
+    note: 'Explicit ocean coverage meets rising land. The lagoon is a separate body; neither is a global below-zero plane.',
+    height: (x, z) => x < -20
+      ? -9 + Math.sin(z * .035) * .7
+      : (x + 20) * .095 + Math.sin(z * .021) * 2.2 + Math.sin(x * .045) * .8,
+    ocean: (x, z) => x < -12 + Math.sin(z * .018) * 24 ? 1 : 0,
+    features: [
+      area('lab:lagoon', 'lagoon', .35,
+        [55,-130, 150,-150, 205,-85, 175,-20, 85,-35, 45,-82], [],
+        { roughness: .22, turbidity: .48 }),
+    ],
+  },
+  {
+    id: 'polder', label: 'NETHERLANDS / POLDER', originY: -2, oceanLevelM: 0,
+    note: 'Dry ground and inland water lie below the adjacent sea. Classification, not elevation, keeps the polder dry.',
+    height: (x, z) => x < -205 ? -7 + Math.sin(z * .04) * .25
+      : -4.4 + Math.exp(-Math.pow((x + 178) / 16, 2)) * 7
+        + Math.sin(x * .025) * .35 + Math.cos(z * .019) * .25,
+    ocean: (x) => x < -205 ? 1 : 0,
+    features: [
+      channel('lab:canal', 'canal', 12,
+        [-145,-260, -120,-160, -138,-55, -90,45, -105,155, -62,260],
+        { taggedLevelM: -2.7, roughness: .12, turbidity: .45 }),
+      area('lab:reservoir', 'reservoir', -3,
+        [35,-85, 145,-92, 184,-22, 145,62, 42,78, 8,-8], [],
+        { roughness: .15, turbidity: .38 }),
+    ],
+  },
+  {
+    id: 'death', label: 'DEATH VALLEY / TINY POND', originY: -85, oceanLevelM: 0,
+    note: 'A tiny pond at -84.7 m remains water while the surrounding -86 m basin remains dry.',
+    height: (x, z) => -86.1 + Math.sin(x * .025) * .45 + Math.cos(z * .019) * .35
+      + Math.hypot(x, z) * .0025,
+    features: [
+      area('lab:badwater', 'pond', -84.7,
+        [-18,-11, 18,-10, 24,1, 15,13, -17,11, -25,0], [],
+        { roughness: .08, turbidity: .67 }),
+    ],
+  },
+  {
+    id: 'lake', label: 'MOUNTAIN LAKE / ISLAND', originY: 425, oceanLevelM: 0,
+    note: 'A flat +426 m lake with a true dry inner ring. The lake never influences the ocean datum.',
+    height: (x, z) => {
+      const r = Math.hypot(x, z);
+      return 421.5 + Math.max(0, r - 120) * .085 + Math.sin(x * .025) * 1.1
+        + (r < 42 ? (1 - r / 42) * 14 : 0);
+    },
+    features: [
+      area('lab:alpine', 'lake', 426,
+        [-175,-70, -115,-150, 5,-177, 130,-128, 190,-20, 152,105, 45,168, -85,145, -180,55],
+        [[-32,-23, 24,-31, 39,11, 11,38, -35,24]],
+        { roughness: .27, turbidity: .18 }),
+    ],
+  },
+  {
+    id: 'river', label: 'RIVER / GRADED PROFILE', originY: 38, oceanLevelM: 0,
+    note: 'DEM samples become a monotone downstream profile. Flow texture follows the local channel tangent.',
+    height: (x, z) => 64 - (z + 300) * .09 + Math.sin(x * .025) * 3.5
+      + Math.cos(z * .031) * 1.4 + Math.abs(x - Math.sin(z * .014) * 72) * .018,
+    features: [
+      channel('lab:river', 'river', 15,
+        [-28,-285, 35,-225, 68,-150, 50,-75, -18,0, -76,85, -62,165, 4,238, 38,285],
+        { roughness: .72, turbidity: .42 }),
+    ],
+  },
+  {
+    id: 'micro', label: 'TWO-LEVEL MICROBODIES', originY: 30, oceanLevelM: 0,
+    note: 'Two tiny ponds share one coarse mesh tile but retain levels thirty metres apart.',
+    height: (x, z) => x < 0 ? 14 + Math.sin(z * .03) * .35 : 44 + Math.cos(z * .027) * .4,
+    features: [
+      area('lab:low', 'pond', 15, [-165,-20, -130,-25, -118,3, -139,27, -174,16, -180,-4]),
+      area('lab:high', 'pond', 45, [116,-15, 149,-24, 176,-3, 164,25, 126,29, 105,7]),
+    ],
+  },
+];
+
+function elevationGrid(f: Fixture, n = 129): ElevationGrid {
+  const data = new Float32Array(n * n);
+  for (let z = 0; z < n; z++) for (let x = 0; x < n; x++) {
+    data[z * n + x] = f.height(
+      BOUNDS.minX + x / (n - 1) * (BOUNDS.maxX - BOUNDS.minX),
+      BOUNDS.minZ + z / (n - 1) * (BOUNDS.maxZ - BOUNDS.minZ),
+    );
+  }
+  return { width: n, height: n, data, verticalDatum: 'hydro-lab' };
+}
+
+function coverageGrid(f: Fixture, n = 129): CoverageGrid | undefined {
+  if (!f.ocean) return undefined;
+  const data = new Uint8Array(n * n);
+  for (let z = 0; z < n; z++) for (let x = 0; x < n; x++) {
+    const wx = BOUNDS.minX + x / (n - 1) * (BOUNDS.maxX - BOUNDS.minX);
+    const wz = BOUNDS.minZ + z / (n - 1) * (BOUNDS.maxZ - BOUNDS.minZ);
+    data[z * n + x] = Math.round(Math.max(0, Math.min(1, f.ocean(wx, wz))) * 255);
+  }
+  return { width: n, height: n, data };
+}
+
+function tileInput(f: Fixture, revision: number): HydroTileInput {
+  const ocean = coverageGrid(f);
+  return {
+    key: 'lab/' + f.id, revision, bounds: BOUNDS,
+    elevation: elevationGrid(f), features: f.features,
+    oceanCoverage: ocean ? { status: 'ready', grid: ocean } : { status: 'unavailable' },
+  };
+}
+
+const STYLE = [
+  ':root{color-scheme:dark;font-family:Silkscreen,ui-monospace,monospace}',
+  '*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#07100f;color:#dce8d5}',
+  'button,select,input{font:inherit}#hydro-canvas{position:fixed;inset:0;width:100%;height:100%;touch-action:none;image-rendering:pixelated}',
+  '.head{position:fixed;left:16px;top:14px;z-index:4;display:flex;align-items:center;gap:10px;text-shadow:0 2px #07100f}',
+  '.title{color:#f1ca62;letter-spacing:.18em;font-size:13px}.badge{color:#73d2af;border:1px solid #397e69;padding:4px 7px;font-size:9px;background:#0b1816dd}',
+  '.back{color:#93aaa0;text-decoration:none;font-size:10px}.hint{position:fixed;left:16px;top:43px;z-index:4;color:#789188;font:9px ui-monospace,monospace;background:#07100faa;padding:5px 7px}',
+  '.panel{position:fixed;right:12px;top:12px;bottom:12px;z-index:5;width:min(310px,calc(100vw - 24px));overflow:auto;padding:12px;border:1px solid #31534b;background:#081311ef;box-shadow:7px 7px #02070699}',
+  'h2{margin:0 0 8px;color:#72d2ae;font-size:11px;letter-spacing:.13em}.note{min-height:48px;color:#9fb1a6;font:10px/1.5 ui-monospace,monospace;margin-bottom:10px}',
+  '.section{border-top:1px solid #203c35;padding-top:9px;margin-top:10px}.st{color:#efc968;font-size:9px;letter-spacing:.15em;margin-bottom:7px}',
+  '.row{display:grid;grid-template-columns:105px 1fr 42px;gap:7px;align-items:center;min-height:27px}.row.wide{grid-template-columns:105px 1fr}.row label{color:#aabcb2;font-size:9px}',
+  '.row output{text-align:right;color:#e6d694;font:9px ui-monospace,monospace}.row input[type=range]{width:100%;accent-color:#67bea0}',
+  '.row input[type=number],.row select{width:100%;min-width:0;color:#dce8d5;background:#0c211c;border:1px solid #31534b;padding:5px;font-size:9px}',
+  '.check{display:flex;gap:8px;align-items:center;color:#aabcb2;font-size:9px;min-height:27px}.check input{accent-color:#67bea0}',
+  '.status{position:fixed;left:16px;bottom:14px;z-index:4;max-width:min(540px,calc(100vw - 350px));background:#07100fdd;border-left:3px solid #5ca78f;padding:8px 10px;color:#b8c8bf;font:10px/1.45 ui-monospace,monospace;white-space:pre-wrap}',
+  '@media(max-width:700px){.panel{top:auto;height:43vh;width:calc(100vw - 24px)}.status{bottom:calc(43vh + 22px);max-width:calc(100vw - 32px)}.hint{display:none}}',
+].join('');
+
+function range(id: string, label: string, min: number, max: number, step: number, value: number): string {
+  return '<div class="row"><label for="' + id + '">' + label + '</label><input id="' + id
+    + '" type="range" min="' + min + '" max="' + max + '" step="' + step + '" value="' + value
+    + '"><output>' + value + '</output></div>';
+}
+
+function page(): string {
+  const fixtureOptions = FIXTURES.map((f) => '<option value="' + f.id + '">' + f.label + '</option>').join('');
+  const debugOptions = ['surface','coverage','shore','depth','flow','class']
+    .map((v) => '<option value="' + v + '">' + v.toUpperCase() + '</option>').join('');
+  return '<head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">'
+    + '<style>' + STYLE + '</style></head><body><canvas id="hydro-canvas"></canvas>'
+    + '<div class="head"><span class="title">HYDROGRAPH</span><span class="badge">ISOLATED LAB</span><a class="back" href="/">← DRIVE</a></div>'
+    + '<div class="hint">drag orbit · wheel zoom · point to inspect</div>'
+    + '<aside class="panel"><h2>WATER FIELD / GPU SURFACE</h2><div class="note" id="note"></div>'
+    + '<div class="row wide"><label>FIXTURE</label><select id="fixture">' + fixtureOptions + '</select></div>'
+    + '<div class="row wide"><label>VIEW</label><select id="debug">' + debugOptions + '</select></div>'
+    + '<div class="section"><div class="st">WEATHER</div>'
+    + range('wind','WIND m/s',0,22,.1,5) + range('direction','WIND °',0,359,1,35) + range('rain','RAIN',0,1,.01,.1)
+    + '<div class="row"><label>OCEAN m</label><input id="ocean" type="number" step=".1" value="0"><output></output></div></div>'
+    + '<div class="section"><div class="st">SURFACE</div>'
+    + range('amplitude','WAVE AMP',0,3,.01,1) + range('length','WAVE LENGTH',.2,3,.01,1)
+    + range('ripple','RIPPLE',0,3,.01,1) + range('foam','FOAM',0,3,.01,1) + range('shore','SHORE FADE',.2,3,.01,1)
+    + '</div><div class="section"><div class="st">SAMPLING</div>'
+    + '<div class="row wide"><label>FIELD px</label><select id="field"><option>32</option><option>64</option><option selected>128</option><option>256</option></select></div>'
+    + '<div class="row wide"><label>MESH seg</label><select id="mesh"><option>8</option><option>16</option><option selected>32</option><option>64</option></select></div>'
+    + '<label class="check"><input id="wire" type="checkbox"> water wireframe</label>'
+    + '<label class="check"><input id="ground" type="checkbox" checked> terrain visible</label></div></aside>'
+    + '<div class="status" id="status">building hydro fixture…</div></body>';
+}
+
+function makeTerrain(f: Fixture): THREE.Mesh {
+  const geometry = new THREE.PlaneGeometry(600, 600, 128, 128);
+  geometry.rotateX(-Math.PI / 2);
+  const p = geometry.attributes.position as THREE.BufferAttribute;
+  const colour = new Float32Array(p.count * 3);
+  const low = new THREE.Color(0x506352), high = new THREE.Color(0x967c55), scratch = new THREE.Color();
+  for (let i = 0; i < p.count; i++) {
+    const h = f.height(p.getX(i), p.getZ(i));
+    p.setY(i, h - f.originY);
+    scratch.copy(low).lerp(high, Math.max(0, Math.min(1, .45 + (h - f.originY) / 70)));
+    colour[i*3] = scratch.r; colour[i*3+1] = scratch.g; colour[i*3+2] = scratch.b;
+  }
+  geometry.setAttribute('color', new THREE.BufferAttribute(colour, 3));
+  geometry.computeVertexNormals();
+  return new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness: .94, metalness: 0, flatShading: true,
+  }));
+}
+
+function sampleText(s: HydroSample | undefined, x: number, z: number): string {
+  if (!s) return 'x ' + x.toFixed(1) + '  z ' + z.toFixed(1) + '  · DRY';
+  return 'x ' + x.toFixed(1) + '  z ' + z.toFixed(1) + '  · ' + s.kind.toUpperCase()
+    + '\nlevel ' + s.restingLevelM.toFixed(2) + 'm  depth ' + s.depthM.toFixed(2)
+    + 'm  shore ' + s.shoreDistanceM.toFixed(1) + 'm'
+    + '\nflow ' + s.flow[0].toFixed(2) + ',' + s.flow[1].toFixed(2)
+    + '  fetch ' + s.fetchM.toFixed(0) + 'm';
+}
+
+export async function startHydroLab(): Promise<void> {
+  document.title = 'Hydrograph — isolated water laboratory';
+  document.documentElement.innerHTML = page();
+  const get = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
+  const number = (id: string): number => Number(get<HTMLInputElement>(id).value);
+  const canvas = get<HTMLCanvasElement>('hydro-canvas');
+  const renderer = new THREE.WebGLRenderer({ canvas, antialias: false, powerPreference: 'high-performance' });
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 1.5));
+  renderer.setSize(innerWidth, innerHeight, false);
+  renderer.outputColorSpace = THREE.SRGBColorSpace;
+  renderer.toneMapping = THREE.ACESFilmicToneMapping;
+
+  const scene = new THREE.Scene();
+  scene.background = new THREE.Color(0x0b1715);
+  scene.fog = new THREE.Fog(0x0b1715, 480, 1100);
+  scene.add(new THREE.HemisphereLight(0xbad8cf, 0x332d25, 1.55));
+  const sun = new THREE.DirectionalLight(0xffd48b, 2.25);
+  sun.position.set(260, 430, 180); scene.add(sun);
+
+  const camera = new THREE.PerspectiveCamera(46, innerWidth / innerHeight, .5, 2200);
+  const target = new THREE.Vector3();
+  let yaw = -.75, pitch = .78, distance = 650;
+  const placeCamera = (): void => {
+    const cp = Math.cos(pitch);
+    camera.position.set(target.x + Math.sin(yaw) * cp * distance,
+      target.y + Math.sin(pitch) * distance, target.z + Math.cos(yaw) * cp * distance);
+    camera.lookAt(target);
+  };
+  placeCamera();
+
+  let hydro: HydroSystem | undefined;
+  let terrain: THREE.Mesh | undefined;
+  let fixture = FIXTURES[0];
+  let revision = 0;
+  let rebuilding = false;
+  let inspected = '';
+  const probe = new THREE.Mesh(new THREE.RingGeometry(3.2, 4.4, 20).rotateX(-Math.PI / 2),
+    new THREE.MeshBasicMaterial({ color: 0xf2cf67, side: THREE.DoubleSide, depthTest: false }));
+  probe.visible = false; probe.renderOrder = 20; scene.add(probe);
+
+  const tune = (): HydroTuning => ({
+    waveAmplitude: number('amplitude'), waveLength: number('length'),
+    rippleStrength: number('ripple'), foamStrength: number('foam'), shoreFade: number('shore'),
+  });
+  const apply = (): void => {
+    if (!hydro) return;
+    hydro.setDebugView(get<HTMLSelectElement>('debug').value as HydroDebugView);
+    hydro.setTuning(tune());
+    hydro.object3d.traverse((o) => {
+      const m = o as THREE.Mesh;
+      if (m.material instanceof THREE.ShaderMaterial) m.material.wireframe = get<HTMLInputElement>('wire').checked;
+    });
+  };
+
+  const rebuild = async (): Promise<void> => {
+    if (rebuilding) return;
+    rebuilding = true;
+    fixture = FIXTURES.find((f) => f.id === get<HTMLSelectElement>('fixture').value) ?? FIXTURES[0];
+    get('note').textContent = fixture.note;
+    get<HTMLInputElement>('ocean').value = String(fixture.oceanLevelM);
+    hydro?.dispose();
+    if (terrain) {
+      terrain.removeFromParent(); terrain.geometry.dispose(); (terrain.material as THREE.Material).dispose();
+    }
+    terrain = makeTerrain(fixture);
+    terrain.visible = get<HTMLInputElement>('ground').checked;
+    scene.add(terrain);
+    hydro = createHydroSystem({
+      fieldResolution: Number(get<HTMLSelectElement>('field').value),
+      meshResolution: Number(get<HTMLSelectElement>('mesh').value),
+      oceanLevelM: fixture.oceanLevelM,
+    });
+    scene.add(hydro.object3d);
+    await hydro.upsertTile(tileInput(fixture, ++revision));
+    apply(); inspected = ''; probe.visible = false; rebuilding = false;
+  };
+
+  document.querySelectorAll<HTMLInputElement>('input[type=range]').forEach((input) => {
+    const output = input.parentElement?.querySelector('output');
+    input.addEventListener('input', () => {
+      if (output) output.textContent = Number(input.value).toFixed(Number(input.step) < 1 ? 2 : 0);
+      apply();
+    });
+  });
+  get<HTMLSelectElement>('debug').addEventListener('change', apply);
+  get<HTMLInputElement>('wire').addEventListener('change', apply);
+  get<HTMLInputElement>('ground').addEventListener('change', () => { if (terrain) terrain.visible = get<HTMLInputElement>('ground').checked; });
+  get<HTMLInputElement>('ocean').addEventListener('input', () => hydro?.setOceanLevelM(number('ocean')));
+  for (const id of ['fixture','field','mesh']) get<HTMLSelectElement>(id).addEventListener('change', () => { void rebuild(); });
+
+  let drag = false, moved = false, lastX = 0, lastY = 0;
+  const ray = new THREE.Raycaster(), pointer = new THREE.Vector2();
+  canvas.addEventListener('pointerdown', (e) => {
+    drag = true; moved = false; lastX = e.clientX; lastY = e.clientY; canvas.setPointerCapture(e.pointerId);
+  });
+  canvas.addEventListener('pointermove', (e) => {
+    if (drag) {
+      const dx = e.clientX - lastX, dy = e.clientY - lastY;
+      moved ||= Math.abs(dx) + Math.abs(dy) > 2;
+      yaw -= dx * .006; pitch = Math.max(.16, Math.min(1.42, pitch + dy * .005));
+      lastX = e.clientX; lastY = e.clientY; placeCamera(); return;
+    }
+    const r = canvas.getBoundingClientRect();
+    pointer.set((e.clientX - r.left) / r.width * 2 - 1, -(e.clientY - r.top) / r.height * 2 + 1);
+    ray.setFromCamera(pointer, camera);
+    const hit = terrain ? ray.intersectObject(terrain, false)[0] : undefined;
+    if (!hit) { probe.visible = false; inspected = ''; return; }
+    const s = hydro?.sampleRestingSurface(hit.point.x, hit.point.z);
+    inspected = sampleText(s, hit.point.x, hit.point.z);
+    probe.position.set(hit.point.x, hit.point.y + .6, hit.point.z); probe.visible = true;
+  });
+  canvas.addEventListener('pointerup', (e) => { drag = false; canvas.releasePointerCapture(e.pointerId); void moved; });
+  canvas.addEventListener('wheel', (e) => {
+    distance = Math.max(90, Math.min(1300, distance * Math.exp(e.deltaY * .001))); placeCamera();
+  }, { passive: true });
+  addEventListener('resize', () => {
+    camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight, false);
+  });
+
+  await rebuild();
+  const started = performance.now();
+  let lastStatus = 0;
+  const frame = (now: number): void => {
+    const angle = number('direction') * Math.PI / 180;
+    hydro?.update({
+      timeSeconds: (now - started) / 1000,
+      worldOrigin: { x: 0, y: fixture.originY, z: 0 },
+      wind: { x: Math.cos(angle), z: Math.sin(angle), speedMps: number('wind') },
+      rain: number('rain'),
+      sunDirection: { x: sun.position.x, y: sun.position.y, z: sun.position.z },
+    });
+    renderer.render(scene, camera);
+    if (now - lastStatus > 180) {
+      lastStatus = now;
+      const stats = hydro?.stats();
+      get('status').textContent = fixture.label + ' · FIELD ' + get<HTMLSelectElement>('field').value
+        + '² · MESH ' + get<HTMLSelectElement>('mesh').value + '²\n'
+        + (stats?.visibleTiles ?? 0) + ' WATER TILE · ' + renderer.info.render.triangles.toLocaleString()
+        + ' TRIANGLES · ' + get<HTMLSelectElement>('debug').value.toUpperCase() + '\n'
+        + (inspected || 'point at the terrain to inspect the CPU hydro sample');
+    }
+    requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+  addEventListener('beforeunload', () => {
+    hydro?.dispose(); terrain?.geometry.dispose(); (terrain?.material as THREE.Material | undefined)?.dispose(); renderer.dispose();
+  }, { once: true });
+}

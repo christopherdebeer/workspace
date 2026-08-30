@@ -36,6 +36,14 @@ import { ATTRACT_TAPES, type AttractTape } from './tapes';
 import { autoDrive, autoMem, AUTO, type AutoOut, type Ground as AutoGround } from './autopilot';
 import { mkField, buildField, recenter as wxRecenter, wxAt, puddleAt, seedWet, WXF_N, WXF_SPAN } from './weatherfield';
 
+// A DISTINCT EXECUTION SURFACE. The lab shares the production hydro modules,
+// but the route branch guarantees the game bootstrap and lab never run together.
+const HYDRO_LAB = location.pathname === '/hydro' || location.pathname === '/hydro/';
+if (HYDRO_LAB) {
+  void import('./hydro/lab').then(({ startHydroLab }) => startHydroLab())
+    .catch((error) => console.error('[hydro-lab]', error));
+} else {
+
 // BEFORE ANYTHING READS THE QUERY STRING. Coming back from a sign-in, the URL
 // says `?code=…` where it used to say where the truck is, which way it faces
 // and what task is armed — and half this module reads those at import time.
@@ -34634,3 +34642,6 @@ let toastT = 0;
     console.log(`[probe] listening as ${probeKey} (${tabId})`);
   }
 }
+
+
+} // HYDRO_LAB route branch
