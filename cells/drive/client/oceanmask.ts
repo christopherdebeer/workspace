@@ -225,15 +225,38 @@ export function buildOceanMask(
       if (cover[j] !== COVER_WATER) continue;      // land stops the flood dead
       if (bar && bar[j]) { stats.walled++; continue; }   // …and so does a coastline
       if (land && land[j]) { stats.landward++; continue; }
-      // THE HEIGHT GATE. A tidal river mouth passes the distance test for a few
-      // pixels and then fails here, which is right: the water is still water,
-      // it is simply not the sea.
+      // ── UNKNOWN MAY TRAVEL, BUT MAY NOT SEED ──
+      //
+      // A pixel with no elevation is not a pixel at the datum, and admitting
+      // it as though it were floods every low valley the DEM has not reached.
+      // But refusing it outright is just as wrong in the other direction, and
+      // worse to look at: cover tiles are 8km and terrain streams a couple of
+      // kilometres around the truck, so MOST of the sea has no height under it
+      // and never will. Measured at Noordhoek: 306,773 class-80 pixels unjudged
+      // across nine masks, seven of them reporting no ocean at all — the sea
+      // truncated at the edge of the loaded terrain, in tile-shaped rectangles.
+      // Reported from the seat as a coast seriously out of sync with the land.
+      //
+      // The distinction that resolves it is between SEEDING and TRAVELLING.
+      // Starting the flood needs positive evidence — raw zero, or class 80 on
+      // the boundary measured at the datum — and an unknown pixel has none, so
+      // `atDatum` fails it there and the inland pool stays a pool. Continuing
+      // the flood is a different claim: this pixel is class 80 AND connected to
+      // water already established as sea. That connection is the evidence, and
+      // it is exactly what carries the ocean out past the last loaded tile.
+      //
+      // The coastline still binds: an unknown pixel behind a dyke is stopped by
+      // the barrier, and one on the landward side is refused above.
+      const known = !elev || Number.isFinite(elev[j]);
+      if (known && !atDatum(j)) continue;
+      // THE HEIGHT GATE, for pixels that HAVE a height. A tidal river mouth
+      // passes the distance test for a few pixels and then fails here, which is
+      // right: the water is still water, it is simply not the sea.
       // NOT counted as refused here. A pixel can be reached from several
       // neighbours and rejected each time, and an in-flood tally therefore
       // depends on scan order and can exceed the number of pixels that exist —
       // measured at 12 refusals in a grid holding 8 water pixels. The sweep
       // below counts the answer instead of the attempts.
-      if (!atDatum(j)) continue;
       data[j] = 255;
       step[j] = d + 1;
       stats.bridged++;

@@ -326,5 +326,55 @@ const show = (g, m) => {
   ok(`a 256² mask costs ${per.toFixed(2)}ms, well inside a tile build`, per < 12, { per, acc });
 }
 
+// ── 11. TERRAIN THAT NEVER ARRIVES ────────────────────────────────
+// Cover tiles are ~8km; terrain streams a couple of kilometres around the
+// truck. So most of the sea has NO elevation under it and never will, and how
+// an unjudged pixel is treated decides whether there is a coast at all.
+//
+// Both wrong answers are on record. Calling an unknown pixel "at the datum"
+// floods every low valley the DEM has not reached. Refusing it outright cuts
+// the sea off at the edge of the loaded terrain — measured at Noordhoek as
+// 306,773 unjudged pixels across nine masks, seven reporting no ocean, and
+// photographed from the seat as a coastline in tile-shaped rectangles.
+//
+// The rule that survives both: an unknown pixel may TRAVEL but may not SEED.
+{
+  // Left half sea, right half land. Elevation is known only in the middle
+  // columns — the streamed ring — and NaN elsewhere, as main now feeds it.
+  const rows = [
+    '~~~~~~~~##',
+    '~~~~~~~~##',
+    '~~~~~~~~##',
+    '~~~~~~~~##',
+  ];
+  const g = grid(rows);
+  const elev = heights(rows, (c, x) => (x >= 3 && x <= 6 ? (c === '~' ? 0 : 40) : NaN));
+  const { grid: m, stats } = buildOceanMask(g.data, g.w, g.h, {
+    datumM: 0, elevation: elev, seedEdge: true,
+  });
+  ok(`the sea reaches past the last loaded tile (${stats.ocean} px, ${show(g, m)})`,
+    maskAt(m, 0.05, 0.5) && maskAt(m, 0.55, 0.5), { stats, seen: show(g, m) });
+  ok('…and the land beyond the ring is still land',
+    !maskAt(m, 0.95, 0.5), show(g, m));
+}
+{
+  // The other half of the rule. An inland pool of class 80 with no elevation
+  // and no route to a datum-level seed must NOT become sea — this is the
+  // valley-flooding failure, posed as a unit.
+  const rows = [
+    '##########',
+    '###~~~~###',
+    '###~~~~###',
+    '##########',
+  ];
+  const g = grid(rows);
+  const elev = heights(rows, () => NaN);       // nothing judged anywhere
+  const { stats } = buildOceanMask(g.data, g.w, g.h, {
+    datumM: 0, elevation: elev, seedEdge: true,
+  });
+  ok(`an unjudged inland pool seeds nothing (${stats.ocean} ocean, ${stats.refused} refused)`,
+    stats.ocean === 0 && stats.refused === 8, stats);
+}
+
 console.log(bad ? `\n${bad} FAILED` : '\nall good — classification, not elevation');
 if (bad) process.exitCode = 1;
