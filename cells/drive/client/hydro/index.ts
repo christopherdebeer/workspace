@@ -1,6 +1,7 @@
 /** Public surface of drive's new, isolated hydro pipeline. */
 export { createHydroSystem } from './system';
 export { extractOsmHydro } from './osm';
+export { pointInArea } from './geometry';
 export { HYDRO_FRAGMENT_SHADER, HYDRO_VERTEX_SHADER } from './shaders';
 
 export type {

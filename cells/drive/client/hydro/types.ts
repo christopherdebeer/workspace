@@ -201,6 +201,10 @@ export interface HydroFrame {
   wind: { x: number; z: number; speedMps: number };
   rain: number;
   sunDirection?: { x: number; y: number; z: number };
+  /** The vehicle, when it is IN the water: absolute x/z, velocity in m/s and
+   *  how deep it is wading. Omit (or wadeM 0) and the surface ignores it —
+   *  the water only answers a hull that is actually displacing it. */
+  rig?: { x: number; z: number; vx: number; vz: number; wadeM: number };
 }
 
 export type HydroDebugView = 'surface' | 'coverage' | 'shore' | 'depth' | 'flow' | 'class';

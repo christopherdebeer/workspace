@@ -20,7 +20,7 @@ import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, altBandAt, aspectLi
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, bedrockAt, buildLookAt, paintFor, roadLookAt,
   seedAt, snowLoad, stoneWalls, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
-import { createHydroSystem, extractOsmHydro, type HydroDebugView, type HydroFeature, type HydroSystem, type OceanCoverage } from './hydro';
+import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSystem, type OceanCoverage } from './hydro';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
@@ -1468,6 +1468,20 @@ function noteHydroWay(id: string | number, tags: Record<string, string>,
     }
   }
 }
+/** Forget a feature and wake every fed tile it painted, so the water leaves
+ *  the field the same way it entered. The synth pass is the one caller: a
+ *  mapped body is never taken back, but a synthesised one is evicted when the
+ *  truck moves on, and its texels must not outlive it. */
+function dropHydroWay(id: string): void {
+  for (const [slot, e] of hydroFeats) {
+    if (e.f.id !== id) continue;
+    hydroFeats.delete(slot);
+    for (const [key, t] of heightTiles) {
+      if (e.maxX < t.xs || e.minX > t.xs + t.w || e.maxZ < t.zs || e.minZ > t.zs + t.h) continue;
+      if (hydroRev.has(key)) hydroDirty.add(key);
+    }
+  }
+}
 let hydroSys: HydroSystem | undefined;
 /** Held outside the system because the dial can be turned before the first
  *  tile has built one — see the WATER VIEW dial. Re-applied on construction so
@@ -1509,6 +1523,12 @@ function hydroTick(nowMs: number): void {
     wind: { x: worldWind.dirX, z: worldWind.dirZ, speedMps: worldWind.kmh / 3.6 },
     rain: w?.rain ?? 0,
     sunDirection: { x: LIGHT_DIR.x, y: LIGHT_DIR.y, z: LIGHT_DIR.z },
+    rig: {
+      x: state.x, z: state.z,
+      vx: Math.sin(state.heading) * state.speed,
+      vz: -Math.cos(state.heading) * state.speed,
+      wadeM: rigWadeM,
+    },
   });
 }
 /**
@@ -14743,7 +14763,7 @@ const SYNTH_MIN = 4;        // cells; under ~2300m² it is raster speckle, not a
 const SYNTH_MAX = 2600;     // cells; over ~1.5km² it is the sea, which has its own plane
 const SYNTH_CAP = 160;      // bodies held at once, farthest evicted
 const synthSeen = new Set<string>();
-interface SynthBody { meshes: THREE.Object3D[]; ring: Array<[number, number]>; x: number; z: number }
+interface SynthBody { meshes: THREE.Object3D[]; ring: Array<[number, number]>; x: number; z: number; hydroId?: string }
 const synthBodies: SynthBody[] = [];
 let synthCursor = 0, synthAt = 0, synthMade = 0, synthDropped = 0;
 /** Does something with better data already own this ground? */
@@ -14753,6 +14773,16 @@ function waterClaimed(x: number, z: number): boolean {
     const polys = waterPolys.get(k);
     if (!polys) return true;
     for (const poly of polys) if (pointInPoly(x, z, poly)) return true;
+  }
+  // Under the hydro field, a mapped lake never touches waterPolys (the drape
+  // that used to register it stands down), so OSM's claim has to be read from
+  // the hydro store itself — otherwise the synth pass rebuilds a body over
+  // every mapped lake it meets. Synthetic entries do not count as a claim:
+  // the pass may not cite its own output as the better data.
+  for (const e of hydroFeats.values()) {
+    if (e.f.geometry.type !== 'area' || e.f.id.startsWith('osm:synth:')) continue;
+    if (x < e.minX || x > e.maxX || z < e.minZ || z > e.maxZ) continue;
+    if (pointInArea(x, z, e.f.geometry)) return true;
   }
   return !!channelAt(x, z);
 }
@@ -14837,6 +14867,26 @@ function synthBuild(gx0: number, gz0: number): void {
     }
     synthEvict(worst);
   }
+  if (HYDRO_ON) {
+    // ── THE FIELD DRAWS IT; THE PASS ONLY DECLARES IT ──
+    //
+    // Measured at Romsdalen: the OSM tile at the spot carries two streams and
+    // no lake (its neighbour aborts on every mirror), while WorldCover paints
+    // the water plainly — and with the legacy drape standing down and this
+    // pass gated off, nothing drew it at all. So under the field the pass
+    // runs, and hands its ring to the SAME store an OSM lake enters through;
+    // the feed, the registry and the build treat it identically from there.
+    // The id is the QUANTISED CENTROID, not the flood-fill's seed cell, so a
+    // body rediscovered from the other shore converges on the same identity
+    // instead of stacking a twin.
+    const id = `synth:${Math.round(cx / 48)},${Math.round(cz / 48)}`;
+    noteHydroWay(id, { natural: 'water' }, ring, 'synth');
+    // The store holds the EXTRACTOR'S id (it prefixes 'osm:'), and eviction
+    // must ask for the same string it stored.
+    synthBodies.push({ meshes: [], ring, x: cx, z: cz, hydroId: `osm:${id}` });
+    synthMade++;
+    return;
+  }
   const before = worldGroup.children.length;
   polygon(ring, MAT.water, 0.025, 0, 'water');
   const born = worldGroup.children.slice(before);
@@ -14850,6 +14900,7 @@ function synthBuild(gx0: number, gz0: number): void {
 function synthEvict(i: number): void {
   const b = synthBodies[i];
   synthBodies.splice(i, 1);
+  if (b.hydroId) dropHydroWay(b.hydroId);
   for (const m of b.meshes) {
     worldGroup.remove(m);
     const mesh = m as THREE.Mesh;
@@ -18878,6 +18929,9 @@ function stepDust(dt: number): void {
 }
 
 const state = { x: 0, z: 0, heading: 0, speed: 0 };
+/** How deep the rig is wading right now, in metres; 0 on dry ground. Written
+ *  by the drive step, read by hydroTick — see the note at each. */
+let rigWadeM = 0;
 
 // ── real drive: the device is the controller ───────────────────────
 // The whole world already runs off real coordinates streamed from real
@@ -28580,6 +28634,10 @@ function tick(now: number): void {
   // In water the depth is the quality, and the current is a fact the drive
   // model below has to answer for (see the push after integration).
   const wInfo = surfKind === 'water' ? waterInfoAt(state.x, state.z) : null;
+  // The water surface reads this back — churn, rings and a wake around a
+  // wading hull. Held at module scope because the hydro tick runs on the
+  // frame clock, not the physics clock.
+  rigWadeM = wInfo ? wInfo.depth : 0;
   const surf = wInfo ? wadeParams(wInfo.depth) : surfaceFor(surfKind, surfQual);
   if (real.on) stepReal(dt);
   // Arcade bicycle model: thrust minus drag, steering authority grows then
@@ -29958,7 +30016,11 @@ function tick(now: number): void {
   // same cover raster as coverage and the same OSM as features, in one build
   // with one priority order — so running this alongside it would invent a
   // third surface over ground two others already own.
-  if (!paused && !HYDRO_ON && now > synthAt) { synthAt = now + 450; synthWaterStep(2.5); }
+  // The synth pass runs under BOTH water systems now — under the field it
+  // stopped drawing drapes and instead declares bodies into the hydro store
+  // (see synthBuild), which is how cover-only water at Romsdalen gets a
+  // surface at all.
+  if (!paused && now > synthAt) { synthAt = now + 450; synthWaterStep(2.5); }
   // The chart's fog lifts on its own clock: a capture sets the flag, this
   // walks what is still dark. Cheap (the list only ever shrinks) and never
   // urgent — a road earned this second can appear on the map next second.

@@ -177,6 +177,8 @@ uniform sampler2D uHydroMaterial;
 uniform float uTime;
 uniform vec3 uWind;
 uniform float uRain;
+uniform vec4 uRig;
+uniform float uRigWade;
 uniform vec3 uSunDirection;
 uniform float uDebugView;
 uniform float uRippleStrength;
@@ -472,6 +474,48 @@ void main() {
     // Foam takes the scene's light too — white paint at midnight is a bug.
     vec3 foamColour = vec3(0.84, 0.9, 0.88) * mix(0.14, 1.0, daylight);
     colour = mix(colour, foamColour, foam);
+  }
+
+  // ── THE WATER ANSWERS THE HULL ──
+  //
+  // When the rig is actually wading (uRigWade > 0, a fact the drive model
+  // already computes), the surface responds: churned white around the hull,
+  // rings spreading from it, and a pair of trailing arms once it is moving.
+  // Every phase here is a function of DISTANCE TO THE RIG — a distance field,
+  // continuous by construction, the same legality argument as the shore
+  // wave. Dry frames skip the whole block on one uniform test, and the
+  // response fades inside ~26m, so it costs nothing except where the story
+  // is happening.
+  if (uRigWade > 0.02 && nearWater) {
+    vec2 toHere = vAbsoluteXZ - uRig.xy;
+    float rigDist = length(toHere);
+    if (rigDist < 26.0) {
+      float rigSpeed = length(uRig.zw);
+      float sub = smoothstep(0.02, 0.55, uRigWade);
+      // Churn: the displaced collar at the hull, wider and whiter with speed.
+      float churn = smoothstep(5.0, 1.2, rigDist) * (0.3 + min(rigSpeed, 8.0) * 0.09);
+      // Rings: crests expanding from the hull, dying with distance. Fordings
+      // are slow, so the rings are what read; at speed the arms take over.
+      float ringWave = sin(rigDist * 2.1 - uTime * 5.5);
+      float rings = smoothstep(0.55, 0.95, ringWave)
+        * smoothstep(16.0, 3.0, rigDist) * 0.32
+        * (1.0 - smoothstep(2.0, 6.0, rigSpeed));
+      // Arms: two trailing streaks behind the velocity, the pixel-art cousin
+      // of a Kelvin wake. Only while moving; fragmented by the water's own
+      // grain so they read as churned water, not drawn lines.
+      float arms = 0.0;
+      if (rigSpeed > 1.2) {
+        vec2 vDir = uRig.zw / rigSpeed;
+        float behind = dot(toHere, -vDir);
+        float lateral = abs(dot(toHere, vec2(-vDir.y, vDir.x)));
+        arms = smoothstep(2.2, 0.6, abs(lateral - behind * 0.38))
+          * smoothstep(0.5, 2.5, behind) * smoothstep(24.0, 6.0, behind)
+          * smoothstep(0.35, 0.7, grain) * 0.45;
+      }
+      float wake = clamp((churn + rings + arms) * sub, 0.0, 0.8) * detailFade;
+      vec3 wakeFoam = vec3(0.84, 0.9, 0.88) * mix(0.14, 1.0, daylight);
+      colour = mix(colour, wakeFoam, wake);
+    }
   }
 
   gl_FragColor = vec4(colour, 1.0);

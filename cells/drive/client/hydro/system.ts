@@ -287,6 +287,9 @@ class DefaultHydroSystem implements HydroSystem {
       Math.max(0, frame.wind.speedMps),
     );
     this.frameUniforms.uRain.value = clamp(frame.rain, 0, 1);
+    const rig = frame.rig;
+    this.frameUniforms.uRig.value.set(rig?.x ?? 0, rig?.z ?? 0, rig?.vx ?? 0, rig?.vz ?? 0);
+    this.frameUniforms.uRigWade.value = Math.max(0, rig?.wadeM ?? 0);
     if (frame.sunDirection) {
       this.frameUniforms.uSunDirection.value
         .set(frame.sunDirection.x, frame.sunDirection.y, frame.sunDirection.z)

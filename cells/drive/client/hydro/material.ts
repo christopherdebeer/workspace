@@ -8,6 +8,10 @@ export interface HydroFrameUniforms {
   /** x=wind x, y=wind z, z=speed m/s. */
   uWind: { value: THREE.Vector3 };
   uRain: { value: number };
+  /** x,y = rig absolute x/z; z,w = rig velocity m/s. */
+  uRig: { value: THREE.Vector4 };
+  /** Wading depth in metres; 0 keeps the whole disturbance branch dark. */
+  uRigWade: { value: number };
   uSunDirection: { value: THREE.Vector3 };
   uDebugView: { value: number };
   uWaveAmplitude: { value: number };
@@ -37,6 +41,8 @@ export function createHydroFrameUniforms(): HydroFrameUniforms {
     uWorldOrigin: { value: new THREE.Vector3() },
     uWind: { value: new THREE.Vector3(1, 0, 0) },
     uRain: { value: 0 },
+    uRig: { value: new THREE.Vector4(0, 0, 0, 0) },
+    uRigWade: { value: 0 },
     uSunDirection: { value: new THREE.Vector3(0.45, 0.82, 0.35).normalize() },
     uDebugView: { value: 0 },
     uWaveAmplitude: { value: 1 },
@@ -157,6 +163,8 @@ export function createHydroMaterial(
       uWorldOrigin: frame.uWorldOrigin,
       uWind: frame.uWind,
       uRain: frame.uRain,
+      uRig: frame.uRig,
+      uRigWade: frame.uRigWade,
       uSunDirection: frame.uSunDirection,
       uDebugView: frame.uDebugView,
       uWaveAmplitude: frame.uWaveAmplitude,
