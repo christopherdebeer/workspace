@@ -24845,7 +24845,118 @@ function dropFix(x: number, z: number): Poi {
   audio.stone();
   return p;
 }
+/**
+ * ── THE SITE RECORD: WHAT THE GROUND HOLDS HERE ──
+ *
+ * THE LINE answers a double tap with the PIPELINE's books — which tile, what
+ * state, how many ways refused (see fieldQuery) — because on a run the
+ * question is always "why is the world missing here". Free drive asks a
+ * different question about the same gesture: WHAT IS THIS PLACE. So this is
+ * the GROUND's books, in the terminal's voice: how high, how steep and facing
+ * where, what the cover raster calls it, which biome the climate field
+ * settled on, what the wheels would find, and whether there is water in it.
+ *
+ * The neighbourhood, not just the point. A cover class sampled at one spot
+ * says "GRASS" for a clearing in a forest and reads as a lie from the seat,
+ * so the record names the classes actually present within ~120m and puts the
+ * dominant one first — the same reason the climate field samples 5x5.
+ */
+interface SiteRecord {
+  name: string;
+  sub: string;
+  status: string;
+  rows: Array<[string, string]>;
+  json: string;
+  x: number;
+  z: number;
+}
+const CARD_8 = ['N', 'NE', 'E', 'SE', 'S', 'SW', 'W', 'NW'];
+const compass8 = (dx: number, dz: number): string =>
+  CARD_8[(Math.round(Math.atan2(dx, -dz) / (Math.PI / 4)) + 8) % 8];
+function siteRecord(ex: number, ez: number, name: string): SiteRecord {
+  const [lat, lon] = localToLatLon(ex, ez);
+  const known = hasHeight(ex, ez);
+  const elevAbs = known ? sampleHeight(ex, ez) + baseElev : null;
+  // Slope and aspect from a 24m cross — wide enough that DEM quantisation
+  // does not read as a cliff, tight enough to describe the spot rather than
+  // the hillside it belongs to.
+  const R = 12;
+  let slopeDeg: number | null = null, aspect = '';
+  if (known && hasHeight(ex + R, ez) && hasHeight(ex - R, ez)
+    && hasHeight(ex, ez + R) && hasHeight(ex, ez - R)) {
+    const gx = (sampleHeight(ex + R, ez) - sampleHeight(ex - R, ez)) / (2 * R);
+    const gz = (sampleHeight(ex, ez + R) - sampleHeight(ex, ez - R)) / (2 * R);
+    slopeDeg = Math.atan(Math.hypot(gx, gz)) * 180 / Math.PI;
+    // Aspect points DOWNHILL, which is the direction a driver cares about.
+    if (slopeDeg > 0.5) aspect = ' ' + compass8(-gx, -gz);
+  }
+  // Cover: the dominant class here, then whatever else shares the ground.
+  const counts = new Map<number, number>();
+  for (let i = 0; i < 9; i++) {
+    const cx = ex + ((i % 3) - 1) * 60, cz = ez + (Math.floor(i / 3) - 1) * 60;
+    const raw = sampleCoverRaw(cx, cz);
+    if (raw === undefined) continue;
+    counts.set(raw, (counts.get(raw) ?? 0) + (i === 4 ? 2 : 1));
+  }
+  const ranked = [...counts.entries()].sort((a, b) => b[1] - a[1]);
+  const coverName = (c: number): string => c === 0 ? 'OCEAN' : (COVER_NAME[c] ?? `CLASS ${c}`);
+  const cover = ranked.length
+    ? ranked.map(([c]) => coverName(c)).slice(0, 3).join(' · ')
+    : 'NO RASTER';
+  const clim = climateAt(ex, ez, elevAbs ?? undefined);
+  const band = ALT_BAND_NAMES[altBandAt(elevEffAt(ex, ez), clim.treeline)];
+  const surf = surfaceAt(ex, ez);
+  const wet = hydroSys?.sampleRestingSurface(ex, ez) ?? null;
+  const dx = ex - state.x, dz = ez - state.z;
+  const range = Math.hypot(dx, dz);
+  const rangeText = range < 950 ? `${Math.round(range)}M` : `${(range / 1000).toFixed(1)}KM`;
+  const tile = (() => { const [tx, ty] = tileAt(lat, lon, OSM_Z); return { tx, ty, st: tileStateOf(tx, ty) }; })();
+  const rows: Array<[string, string]> = [
+    ['ELEV', elevAbs === null ? 'NOT SURVEYED' : `${Math.round(elevAbs)}M`],
+    ['SLOPE', slopeDeg === null ? '—' : `${slopeDeg.toFixed(1)}°${aspect}`],
+    ['COVER', cover],
+    ['BIOME', `${clim.dom.name.toUpperCase()} ${(clim.w[clim.domIdx] * 100).toFixed(0)}%`],
+    ['CLIMATE', `${clim.tempC.toFixed(0)}°C · MOIST ${(clim.moisture * 100).toFixed(0)}%`],
+    ['BAND', `${band.toUpperCase()} · TREELINE ${Math.round(clim.treeline)}M`],
+    ['GROUND', surf.toUpperCase()],
+    ['WATER', wet ? `${wet.kind.toUpperCase()} · ${wet.depthM.toFixed(1)}M DEEP` : oceanAt(ex, ez) ? 'OCEAN' : 'DRY'],
+    ['RANGE', `${rangeText} ${compass8(dx, dz)}`],
+    ['TILE', `${tile.tx}·${tile.ty} ${tile.st.toUpperCase()}`],
+  ];
+  const json = JSON.stringify({
+    name, at: [+lat.toFixed(5), +lon.toFixed(5)], elevAbs: elevAbs === null ? null : +elevAbs.toFixed(1),
+    slopeDeg: slopeDeg === null ? null : +slopeDeg.toFixed(2), aspect: aspect.trim() || null,
+    cover: ranked.map(([c, n]) => ({ class: c, name: coverName(c), n })),
+    biome: { dom: clim.dom.name, w: Object.fromEntries(BIOME_ORDER.map((n, i) => [n, +clim.w[i].toFixed(3)])),
+      tempC: +clim.tempC.toFixed(1), moisture: +clim.moisture.toFixed(2),
+      treeline: Math.round(clim.treeline), band },
+    surface: surf, water: wet ? { kind: wet.kind, depthM: +wet.depthM.toFixed(2),
+      levelM: +wet.restingLevelM.toFixed(1), flow: wet.flow.map((v) => +v.toFixed(2)) } : null,
+    ocean: oceanAt(ex, ez), rangeM: Math.round(range),
+    tile: `${OSM_Z}/${tile.tx}/${tile.ty}`, tileState: tile.st,
+  });
+  return {
+    name,
+    sub: `${lat.toFixed(5)} ${lon.toFixed(5)}`,
+    status: `${elevAbs === null ? 'UNSURVEYED' : `${Math.round(elevAbs)}M`} · ${ranked.length ? coverName(ranked[0][0]) : 'NO RASTER'} · ${rangeText}`,
+    rows, json, x: ex, z: ez,
+  };
+}
+/** The open site card, and the fix it belongs to (null for a spot with no
+ *  mark — the record can be read without one). */
+let siteOpen: { rec: SiteRecord; fix: string | null } | null = null;
+/** Open the record for a spot, with the clipboard copy THE LINE's field query
+ *  already gives — the write has to happen inside the gesture or the
+ *  permission model refuses it, which is why this is called from the handler
+ *  rather than from the frame. */
+function openSite(ex: number, ez: number, name: string, fix: string | null): void {
+  siteOpen = { rec: siteRecord(ex, ez, name), fix };
+  try { void navigator.clipboard?.writeText(siteOpen.rec.json); } catch { /* the card still answers */ }
+}
 function teleportTo(x: number, z: number): void {
+  // Any travel at all invalidates an open record: its RANGE row, and half the
+  // reason to be reading it, were about where the truck was standing.
+  siteOpen = null;
   state.x = x;
   state.z = z;
   state.speed = 0;
@@ -24900,10 +25011,18 @@ const endStick = (e: PointerEvent): void => {
       // permission model refuses it.
       if (!lineOn) {
         // OFF THE LINE THE GESTURE MARKS, IT DOES NOT MOVE. See dropFix: the
-        // travel is the SECOND act, a tap on the fix itself, so the map can be
-        // panned and prodded without the truck jumping across the veld.
+        // travel is the SECOND act, offered by the record the mark opens, so
+        // the map can be panned and prodded without the truck jumping across
+        // the veld.
+        //
+        // AND IT ANSWERS. The same gesture on the line returns the pipeline's
+        // books; here it returns the GROUND's — see siteRecord — because a
+        // mark dropped on a place you know nothing about is half a gesture.
+        // The record carries the relocation, so marking and travelling stay
+        // two deliberate acts while the middle one stops being blind.
         const [wx, wz] = chartToWorld(e.clientX, e.clientY);
-        dropFix(wx, wz);
+        const fix = dropFix(wx, wz);
+        openSite(wx, wz, fix.name, fix.name);
       } else {
         const [wx, wz] = chartToWorld(e.clientX, e.clientY);
         lastField = fieldQuery(wx, wz);
@@ -34337,6 +34456,19 @@ function stepOverlays(): void {
   overlays.mission(mc);
   overlays.prompt(stationNear && !stationOpen ? `${stationNear.st.name} · TERMINAL` : null);
   overlays.terminal(stationOpen ? terminalCard(stationOpen) : null);
+  // THE SITE CARD, and the one rule that keeps two centred panels apart: a
+  // station terminal is the world talking and wins the middle of the screen.
+  overlays.site(siteOpen && !stationOpen ? {
+    name: siteOpen.rec.name,
+    sub: siteOpen.rec.sub,
+    status: siteOpen.rec.status,
+    tone: 'good',
+    rows: siteOpen.rec.rows,
+    // RELOCATE, not GO: the word says what actually happens — the truck is
+    // picked up and set down there, which is a bigger thing than driving.
+    go: siteOpen.fix ? 'RELOCATE' : undefined,
+    note: 'RECORD COPIED',
+  } : null);
   // THE RECORD SAYS WHAT BOTH SOURCES SAY AND NOTHING ELSE. No verdict, no
   // "anomaly", no reassurance: the survey claimed one thing, the ground is
   // another, and the ranger's categories hold neither comfortably. Whether it
@@ -34500,6 +34632,23 @@ function setClean(on: boolean): void {
  *  has to run in both orientations and the toggle is otherwise a HUD tap. */
 /** Where the newest mark actually landed — the one number the placement bug
  *  was about, in world metres rather than in a label. */
+/** The open site record, and its action — so a test can assert that a tap on
+ *  a fix OPENS something rather than moving the truck, and can press the
+ *  relocation the way a thumb would. */
+(window as unknown as { __site?: object }).__site = (act?: 'go' | 'close'): object | null => {
+  if (act === 'close') { siteOpen = null; return null; }
+  if (act === 'go') {
+    const open = siteOpen;
+    siteOpen = null;
+    if (open?.fix) {
+      const fix = pois.get(open.fix);
+      if (fix) { teleportTo(fix.x, fix.z); pois.delete(fix.name); }
+    }
+    return null;
+  }
+  return siteOpen ? { name: siteOpen.rec.name, fix: siteOpen.fix, status: siteOpen.rec.status,
+    rows: Object.fromEntries(siteOpen.rec.rows), json: siteOpen.rec.json } : null;
+};
 (window as unknown as { __fixat?: object }).__fixat = (): object | null => {
   const mine = [...pois.values()].filter((p) => p.kind === 'survey');
   const p = mine[mine.length - 1];
@@ -34722,8 +34871,12 @@ function hudTap(cx: number, cy: number): boolean {
     if (!inside(r, 2)) continue;
     if (r.kind === 'survey') {
       const fix = pois.get(r.name);
-      // THE THIRD TAP. Double tap marked it; this moves the truck to it.
-      if (fix) { teleportTo(fix.x, fix.z); pois.delete(fix.name); }
+      // TAPPING A FIX OPENS ITS RECORD; the record's own action is what
+      // moves the truck. Travel used to fire from this tap directly, which
+      // put a teleport one stray thumb away from a pin that is deliberately
+      // always live — and gave no chance to ask what was there first. The
+      // relocation is now a labelled button on a card you had to open.
+      if (fix) openSite(fix.x, fix.z, fix.name, fix.name);
       return true;
     }
     // A mission pin belongs to the task and is not yours to unpin; nor is a
@@ -35109,6 +35262,18 @@ const overlays = createOverlays(
   () => { stationOpen = stationNear; },
   () => { stationOpen = null; },
   () => wakeStation(),
+  // RELOCATE: the fix is spent on arrival, exactly as it was when the pin
+  // itself travelled — a mark is a place you were going, and you are there.
+  () => {
+    const s = siteOpen;
+    siteOpen = null;
+    if (!s?.fix) return;
+    const fix = pois.get(s.fix);
+    if (!fix) return;
+    teleportTo(fix.x, fix.z);
+    pois.delete(fix.name);
+  },
+  () => { siteOpen = null; },
 );
 
 // ── boot ───────────────────────────────────────────────────────────

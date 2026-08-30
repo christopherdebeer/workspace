@@ -53,12 +53,35 @@ export interface TerminalCard {
   wake?: string;
 }
 
+/**
+ * A SITE RECORD — what the world holds at one spot on the chart, in the same
+ * instrument voice as the terminal above. THE LINE answered a double tap with
+ * its field query (the pipeline's books, on a toast); free drive answers with
+ * this: the GROUND's books — elevation, cover, biome, surface, what the water
+ * says — and, because off the line travel is allowed, one action that takes
+ * the truck there. The card is what makes the fix a decision rather than a
+ * jump: dropping the mark shows the record, and the record is where the
+ * relocation is offered, not the pin.
+ */
+export interface SiteCard {
+  name: string;
+  sub: string;
+  status: string;
+  tone: Tone;
+  rows: Array<[string, string]>;
+  /** The relocation's label — absent when the site is not somewhere to go. */
+  go?: string;
+  /** One line under the action: what the gesture already did for you. */
+  note?: string;
+}
+
 export interface Overlays {
   mission(m: MissionCard | null): void;
   toast(t: ToastCard | null): void;
   /** The in-range chip that opens the terminal; null when out of range. */
   prompt(label: string | null): void;
   terminal(t: TerminalCard | null): void;
+  site(s: SiteCard | null): void;
 }
 
 export function createOverlays(
@@ -72,6 +95,8 @@ export function createOverlays(
   onTerminal: () => void,
   onTerminalClose: () => void,
   onWake: () => void,
+  onSiteGo: () => void,
+  onSiteClose: () => void,
 ): Overlays {
   const C = colors;
   const style = document.createElement('style');
@@ -148,20 +173,30 @@ export function createOverlays(
     padding: 5px 12px 4px; font: inherit; font-family: inherit; font-size: 11px;
     letter-spacing: 1px; display: none; }
   #ov-term-go .ico { font-family: '${ICON_FONT}'; font-weight: 900; margin-right: 0.5em; }
-  /* The terminal itself: centred, one column, reads like the instrument it is. */
-  #ov-term { top: 50%; left: 50%; transform: translate(-50%, -52%);
+  /* The terminal itself: centred, one column, reads like the instrument it is.
+     The SITE card is the same instrument pointed at the ground, so it shares
+     the shell and differs only in its action. */
+  #ov-term, #ov-site { top: 50%; left: 50%; transform: translate(-50%, -52%);
     width: min(92vw, 340px); background: rgba(6,14,16,0.94);
     border: 1px solid ${C.edge}; padding: 10px 14px 12px; display: none; }
-  #ov-term .t-name { font-size: 18px; font-weight: 700; letter-spacing: 1px; }
-  #ov-term .t-sub { font-size: 9px; color: ${C.dim}; letter-spacing: 1px; margin-bottom: 6px; }
-  #ov-term .t-status { font-size: 11px; letter-spacing: 2px; border-top: 1px solid ${C.edge};
+  #ov-term .t-name, #ov-site .t-name { font-size: 18px; font-weight: 700; letter-spacing: 1px; }
+  #ov-term .t-sub, #ov-site .t-sub { font-size: 9px; color: ${C.dim}; letter-spacing: 1px; margin-bottom: 6px; }
+  #ov-term .t-status, #ov-site .t-status { font-size: 11px; letter-spacing: 2px; border-top: 1px solid ${C.edge};
     border-bottom: 1px solid ${C.edge}; padding: 5px 0 4px; margin-bottom: 6px; }
-  #ov-term .t-rows { font-size: 10px; line-height: 1.9; }
-  #ov-term .t-rows .k { color: ${C.dim}; display: inline-block; min-width: 9ch; letter-spacing: 1px; }
+  #ov-term .t-rows, #ov-site .t-rows { font-size: 10px; line-height: 1.9; }
+  #ov-term .t-rows .k, #ov-site .t-rows .k { color: ${C.dim}; display: inline-block; min-width: 9ch; letter-spacing: 1px; }
   #ov-term .t-wake { margin: 10px auto 0; padding: 6px 22px 5px; cursor: pointer; display: none;
     color: ${C.gold}; border: 1px solid ${C.gold}; background: rgba(245,196,83,0.08);
     font: inherit; font-family: inherit; font-size: 12px; font-weight: 700;
     letter-spacing: 2px; width: 100%; }
+  /* GOOD, not gold: relocation is a safe, ordinary act off the line, and the
+     gold reads as the station's one irreversible switch. */
+  #ov-site .t-go { margin: 10px auto 0; padding: 6px 22px 5px; cursor: pointer; display: none;
+    color: ${C.good}; border: 1px solid ${C.good}; background: rgba(120,220,180,0.08);
+    font: inherit; font-family: inherit; font-size: 12px; font-weight: 700;
+    letter-spacing: 2px; width: 100%; }
+  #ov-site .t-note { margin-top: 7px; font-size: 9px; color: ${C.dim}; letter-spacing: 1px;
+    text-align: center; }
   `;
   document.head.appendChild(style);
 
@@ -250,7 +285,29 @@ export function createOverlays(
   term.append(tName, tSub, tStatus, tRows, tWake, tx2);
   document.body.appendChild(term);
 
-  let mKey = '', tKey = '', mReady = false, gKey = '', teKey = '';
+  // ── the site record ──
+  // Its own element rather than the terminal's: a station terminal and a
+  // chart fix can both be live, and two panels sharing one node would have
+  // them overwrite each other's text on alternate frames.
+  const site = document.createElement('div');
+  site.id = 'ov-site';
+  site.className = 'ov ui';
+  const sName = document.createElement('div'); sName.className = 't-name';
+  const sSub = document.createElement('div'); sSub.className = 't-sub';
+  const sStatus = document.createElement('div'); sStatus.className = 't-status';
+  const sRows = document.createElement('div'); sRows.className = 't-rows';
+  const sGo = document.createElement('button'); sGo.className = 't-go';
+  sGo.addEventListener('click', (e) => { e.stopPropagation(); onSiteGo(); });
+  const sNote = document.createElement('div'); sNote.className = 't-note';
+  const sx = document.createElement('div');
+  sx.className = 'x';
+  sx.style.display = 'block';
+  sx.textContent = 'X';
+  sx.addEventListener('click', (e) => { e.stopPropagation(); onSiteClose(); });
+  site.append(sName, sSub, sStatus, sRows, sGo, sNote, sx);
+  document.body.appendChild(site);
+
+  let mKey = '', tKey = '', mReady = false, gKey = '', teKey = '', siKey = '';
   return {
     mission(mc) {
       const key = mc ? `${mc.kicker}|${mc.head}|${mc.body}|${mc.tone}|${mc.ready}|${mc.minimized}|${mc.chip}|${mc.ok}` : '';
@@ -318,6 +375,32 @@ export function createOverlays(
       tWake.textContent = tc.wake ?? '';
       tWake.style.display = tc.wake ? 'block' : 'none';
       term.style.display = 'block';
+    },
+    site(sc) {
+      const key = sc
+        ? `${sc.name}|${sc.status}|${sc.go}|${sc.note}|${sc.rows.map((r) => r.join('=')).join('|')}`
+        : '';
+      if (key === siKey) return;
+      siKey = key;
+      if (!sc) { site.style.display = 'none'; return; }
+      sName.textContent = sc.name;
+      sSub.textContent = sc.sub;
+      sStatus.textContent = sc.status;
+      sStatus.style.color = C[sc.tone];
+      site.style.borderColor = C[sc.tone];
+      sRows.replaceChildren(...sc.rows.map(([k, v]) => {
+        const row = document.createElement('div');
+        const kk = document.createElement('span');
+        kk.className = 'k';
+        kk.textContent = k;
+        row.append(kk, document.createTextNode(v));
+        return row;
+      }));
+      sGo.textContent = sc.go ?? '';
+      sGo.style.display = sc.go ? 'block' : 'none';
+      sNote.textContent = sc.note ?? '';
+      sNote.style.display = sc.note ? 'block' : 'none';
+      site.style.display = 'block';
     },
   };
 }
