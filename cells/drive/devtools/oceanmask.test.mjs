@@ -419,5 +419,48 @@ const show = (g, m) => {
     { stats, seen: show(g, m) });
 }
 
+// ── 14. THE WALL HAS NO WIDTH ─────────────────────────────────────
+// Rasterising the coastline as "pixels within a cover pixel of the line"
+// made a ~62m dead strip along every mapped coast: at Big Sur the sea
+// detached from the shore the moment the coastline streamed in, at datum
+// elevation the whole way. With the signed side array the flood reaches
+// seaward water right up to the line (cliff-bled heights waived), refuses
+// water BEHIND the line, and blocks only the step that crosses it.
+{
+  const rows = ['..~~~~##~~#'];
+  const g = grid(rows);
+  // Seaward band carries cliff-bled heights; the lagoon behind the coast
+  // sits at the datum — height alone would call IT sea and refuse the band.
+  const elev = heights(rows, (c, x) => (c === '~' ? (x < 6 ? 9 : 0) : c === '.' ? 0 : 40));
+  const side = new Int8Array(g.w * g.h);
+  // main marks EVERY class-80 pixel near the coast, so the whole seaward
+  // band carries +1 — a fixture marking only the last two would leave a
+  // refused wall of unmarked cliff-bled pixels in front of them.
+  side[2] = 1; side[3] = 1; side[4] = 1; side[5] = 1;
+  side[8] = -1; side[9] = -1;   // the lagoon behind it
+  const { grid: m, stats } = buildOceanMask(g.data, g.w, g.h,
+    { datumM: 0, elevation: elev, coastSide: side });
+  ok(`seaward water reaches the line despite cliff-bled DEM (${show(g, m)})`,
+    maskAt(m, 4.5 / 11, 0.5) && maskAt(m, 5.5 / 11, 0.5),
+    { stats, seen: show(g, m) });
+  ok('…and the lagoon behind the coast stays out',
+    !maskAt(m, 8.5 / 11, 0.5) && !maskAt(m, 9.5 / 11, 0.5),
+    { stats, seen: show(g, m) });
+}
+{
+  // The dyke narrower than a pixel: two class-80 pixels ADJACENT, opposite
+  // sides of the line. The step between them is the crossing, and only that
+  // step is blocked.
+  const rows = ['..~~~~'];
+  const g = grid(rows);
+  const side = new Int8Array(g.w * g.h);
+  side[3] = 1; side[4] = -1; side[5] = -1;
+  const { grid: m, stats } = buildOceanMask(g.data, g.w, g.h,
+    { datumM: 0, elevation: heights(rows, () => 0), coastSide: side });
+  ok(`the crossing step is walled and the far side stays out (${show(g, m)})`,
+    maskAt(m, 3.5 / 6, 0.5) && !maskAt(m, 4.5 / 6, 0.5) && stats.walled + stats.landward > 0,
+    { stats, seen: show(g, m) });
+}
+
 console.log(bad ? `\n${bad} FAILED` : '\nall good — classification, not elevation');
 if (bad) process.exitCode = 1;

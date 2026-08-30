@@ -1155,8 +1155,7 @@ function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskS
   // tile — cheap, one nearest-segment query per class-80 pixel — while the SIDE
   // test runs on the boundary only, because that is where seeds come from and
   // it is ~1000 queries against 65,536.
-  let barrier: Uint8Array | undefined, landward: Uint8Array | undefined,
-    nearCoastSea: Uint8Array | undefined;
+  let landward: Uint8Array | undefined, coastSide: Int8Array | undefined;
   if (coastSegs.size) {
     // ── ONE QUERY PER CANDIDATE PIXEL ──
     //
@@ -1174,16 +1173,20 @@ function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskS
       const onEdge = px === 0 || pz === 0 || px === 255 || pz === 255;
       if (t.data[i] !== 80 && !onEdge) continue;
       const ex = t.xs + ((px + 0.5) / 256) * t.w, ez = t.zs + ((pz + 0.5) / 256) * t.h;
-      if (t.data[i] === 80 && nearestCoast(ex, ez, COVER_PX_M) !== null) {
-        (barrier ??= new Uint8Array(t.data.length))[i] = 1;
-      } else if (t.data[i] === 80 && nearestCoast(ex, ez, COVER_PX_M * 2) !== null
-        && !coastLandward(ex, ez, COVER_PX_M * 4)) {
-        // Within a cliff's blur of the coast, on the sea side: the DEM in this
-        // pixel is contaminated by the cliff standing in it, and the winding
-        // is the better witness — the height gate is waived (see the mask).
-        (nearCoastSea ??= new Uint8Array(t.data.length))[i] = 1;
+      // ── WHICH SIDE OF THE LINE, PER NEAR-COAST PIXEL ──
+      //
+      // One signed byte replaces the barrier band, the landward flags and the
+      // height-gate waiver (see coastSide in the mask). The rasterised wall
+      // was measured eating a ~62m strip of sea along every mapped coast —
+      // the moment the coastline streamed in, the water detached from the
+      // shore at datum elevation the whole way. A wall is a line: the mask
+      // now refuses landward water, blocks only steps that CROSS the line,
+      // and trusts the winding over cliff-bled DEM on the seaward side.
+      if (t.data[i] === 80) {
+        const v = coastSideAt(ex, ez);
+        if (v !== 0) (coastSide ??= new Int8Array(t.data.length))[i] = v;
       }
-      if (onEdge && coastLandward(ex, ez)) {
+      if (onEdge && coastSideAt(ex, ez) === -1) {
         (landward ??= new Uint8Array(t.data.length))[i] = 1;
       }
     }
@@ -1213,7 +1216,7 @@ function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskS
   }
   maskBuilds++;
   const built = buildOceanMask(t.data, 256, 256,
-    { datumM: datum, elevation, seedEdge: true, barrier, landward, neighbourOcean, nearCoastSea });
+    { datumM: datum, elevation, seedEdge: true, landward, neighbourOcean, coastSide });
   const rec = { ...built, datum, coasts: coastSegs.size >> 6, unknown, tiles: heightTiles.size };
   if (oceanMasks.size > 64) oceanMasks.clear();
   oceanMasks.set(key, rec);
@@ -1291,11 +1294,58 @@ function nearestCoast(x: number, z: number, r: number): [number, number, number,
  * handedness is flipped against the textbook formula, and the sign below is
  * written for that rather than inherited from one.
  */
+/**
+ * ── WHICH SIDE, BY VOTE RATHER THAN BY ONE SEGMENT'S OPINION ──
+ *
+ * The single-nearest-segment side test is sound where the coast is locally
+ * straight — the Afsluitdijk — and a liar where it is convoluted. Measured
+ * at Big Sur: walking due WEST from the shore toward the open Pacific, the
+ * nearest segment flipped between samples and called 20m..90m of open sea
+ * LANDWARD, because at a cove the nearest mapped segment to an offshore
+ * point is often the far side of the cove, whose winding faces away. One
+ * segment is an opinion; the shoreline nearby is a jury.
+ *
+ * Every segment within reach votes its winding side, weighted by inverse
+ * square distance, and a side is declared only when the jury is lopsided —
+ * two thirds of the total weight. A mixed verdict returns 0 and the datum
+ * gate decides instead, which is exactly the right fallback: the side test
+ * exists for the one case the height gate cannot see (a dyke at the datum),
+ * and that case is a long straight wall where the vote is unanimous.
+ */
+function coastSideAt(x: number, z: number): -1 | 0 | 1 {
+  let sum = 0, total = 0;
+  for (const dx of [-GRID, 0, GRID]) for (const dz of [-GRID, 0, GRID]) {
+    for (const sgm of coastSegs.get(gkey(x + dx, z + dz)) ?? []) {
+      const [ax, az, bx, bz] = sgm;
+      const vx = bx - ax, vz = bz - az;
+      const t = clamp(((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz || 1), 0, 1);
+      const cx = ax + vx * t, cz = az + vz * t;
+      const d2 = (x - cx) * (x - cx) + (z - cz) * (z - cz);
+      const w = 1 / (d2 + 25);
+      // ── THE HANDEDNESS, DERIVED AND NOT INHERITED ──
+      // OSM winds a coastline with water on the RIGHT in the geographic
+      // frame (x east, y north). This world runs +z SOUTH, so y = -z, and
+      // converting the cross product flips its sign: water-side is
+      // cross_code > 0, land-side is cross_code < 0. The old test had this
+      // backwards — measured at Big Sur as 70m of open Pacific voting
+      // landward while the beach voted sea — and it survived because the
+      // side test guarded only edge seeds until it became load-bearing.
+      sum += ((bx - ax) * (z - az) - (bz - az) * (x - ax) > 0 ? -1 : 1) * w;
+      total += w;
+    }
+  }
+  if (total === 0) return 0;
+  if (sum > total * 0.66) return -1;   // decisively landward
+  if (sum < -total * 0.66) return 1;   // decisively seaward
+  return 0;
+}
 function coastLandward(x: number, z: number, r = 900): boolean {
   const sgm = nearestCoast(x, z, r);
   if (!sgm) return false;                       // nothing near enough to say
   const [ax, az, bx, bz] = sgm;
-  return (bx - ax) * (z - az) - (bz - az) * (x - ax) > 0;
+  // Sign derived in coastSideAt: water-side is positive here, so LANDWARD is
+  // the negative half-plane. The original had this inverted.
+  return (bx - ax) * (z - az) - (bz - az) * (x - ax) < 0;
 }
 /**
  * ── OSM WATER, KEPT AS FEATURES RATHER THAN AS MESHES ──
@@ -20983,6 +21033,14 @@ function truckSpec(): Record<string, number> {
       // new one work" but "where do the two differ, and is each difference
       // one we meant".
       wasWater: coverWater(x, z), seaOn, surface: surfaceAt(x, z),
+      // Where this point stands relative to the mapped coastline: which side
+      // by the winding, and roughly how near a segment is. The retreat hunt
+      // needed exactly this and had to guess.
+      coast: (() => {
+        const v = coastSideAt(x, z);
+        if (v !== 0) return v === -1 ? 'land' : 'sea';
+        return nearestCoast(x, z, 250) ? 'mixed' : null;
+      })(),
       oldVerdict: (() => {
         if (channelAt(x, z)) return 'water';
         if (coverWater(x, z)) return 'water';

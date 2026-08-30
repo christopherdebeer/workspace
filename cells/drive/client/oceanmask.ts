@@ -182,6 +182,22 @@ export interface MaskOptions {
    * height the cliff wrote.
    */
   nearCoastSea?: Uint8Array;
+  /**
+   * ── THE COASTLINE AS A LINE, NOT A REGION ──
+   *
+   * Signed side of the nearest coast segment, for pixels near one: +1
+   * seaward, -1 landward, 0 far or unsaid. Supersedes barrier+nearCoastSea
+   * where present, and fixes what the barrier band did wrong: rasterising
+   * the wall as "pixels within a cover pixel of the line" made a ~62m dead
+   * strip hugging every coast — measured at Big Sur as the sea detaching
+   * from the mapped shore the moment the coastline streamed in, at datum
+   * elevation the whole way. A wall has no width. With this array the flood
+   * refuses a LANDWARD pixel (water behind the coast is not the sea), blocks
+   * a step whose two ends sit on OPPOSITE sides (that step crosses the
+   * line — the dyke case), and waives the height gate on the SEAWARD side
+   * (the cliff-bleed case) — but seaward water right up to the line is sea.
+   */
+  coastSide?: Int8Array;
 }
 
 const DEFAULTS = { tolM: 3, bridgePx: 4 };
@@ -207,6 +223,7 @@ export function buildOceanMask(
   const land = options.landward;
   const neigh = options.neighbourOcean;
   const nearSea = options.nearCoastSea;
+  const side = options.coastSide;
   const n = width * height;
   const data = new Uint8Array(n);
   const stats: MaskStats = { seeds: 0, edgeSeeds: 0, bridged: 0, walled: 0, landward: 0, refused: 0, ocean: 0, total: n };
@@ -230,12 +247,14 @@ export function buildOceanMask(
       if (data[i] || cover[i] !== COVER_WATER) continue;
       if (bar && bar[i]) continue;              // an edge ON the coastline is not a seed
       if (land && land[i]) { stats.landward++; continue; }   // …nor one behind it
+      if (side && side[i] === -1) { stats.landward++; continue; }
       const x = i % width, y = (i / width) | 0;
       if (x !== 0 && y !== 0 && x !== width - 1 && y !== height - 1) continue;
       // A neighbour's established ocean seeds across the border regardless of
-      // the datum gate; the coastline waiver relaxes it; otherwise the gate
+      // the datum gate; the coastline waivers relax it; otherwise the gate
       // stands exactly as before.
-      if (!(neigh && neigh[i]) && !(nearSea && nearSea[i]) && !atDatum(i)) continue;
+      const waived = (nearSea && nearSea[i]) || (side && side[i] === 1);
+      if (!(neigh && neigh[i]) && !waived && !atDatum(i)) continue;
       data[i] = 255;
       stats.edgeSeeds++;
       queue[tail++] = i;
@@ -258,6 +277,13 @@ export function buildOceanMask(
       if (cover[j] !== COVER_WATER) continue;      // land stops the flood dead
       if (bar && bar[j]) { stats.walled++; continue; }   // …and so does a coastline
       if (land && land[j]) { stats.landward++; continue; }
+      if (side) {
+        // Water behind the coastline is not the sea, however it connects.
+        if (side[j] === -1) { stats.landward++; continue; }
+        // A step whose ends sit on opposite sides crosses the line itself —
+        // the dyke narrower than a pixel. The wall has no width otherwise.
+        if (side[i] !== 0 && side[j] !== 0 && side[i] !== side[j]) { stats.walled++; continue; }
+      }
       // ── UNKNOWN MAY TRAVEL, BUT MAY NOT SEED ──
       //
       // A pixel with no elevation is not a pixel at the datum, and admitting
@@ -281,7 +307,8 @@ export function buildOceanMask(
       // The coastline still binds: an unknown pixel behind a dyke is stopped by
       // the barrier, and one on the landward side is refused above.
       const known = !elev || Number.isFinite(elev[j]);
-      if (!(nearSea && nearSea[j]) && known && !atDatum(j)) continue;
+      const waived = (nearSea && nearSea[j]) || (side && side[j] === 1);
+      if (!waived && known && !atDatum(j)) continue;
       // THE HEIGHT GATE, for pixels that HAVE a height. A tidal river mouth
       // passes the distance test for a few pixels and then fails here, which is
       // right: the water is still water, it is simply not the sea.
