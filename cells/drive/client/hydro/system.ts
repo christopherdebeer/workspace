@@ -62,6 +62,8 @@ export interface HydroSystem {
   getTileBinding(key: TileKey): HydroTileBinding | undefined;
   sampleRestingSurface(x: number, z: number): HydroSample | undefined;
   stats(): HydroStats;
+  /** Per-tile fed-versus-held truth for the harness — see the implementation. */
+  debugTiles(): Array<Record<string, unknown>>;
   dispose(): void;
 }
 

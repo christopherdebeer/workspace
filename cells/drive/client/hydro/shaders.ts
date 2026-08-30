@@ -49,6 +49,23 @@
  * the breaker band. Offshore, colour depth becomes a smooth function of
  * shore distance, because raw DEM bathymetry painted patch-by-patch is the
  * camouflage the sea used to wear.
+ *
+ * RICHNESS CAME BACK ON THE SAME TERMS. Once the geometry, the coast and the
+ * scheduling stopped moving, detail was restored — but every term added had
+ * to name the rule it survives by. The shoaling harmonic is PHASE-LOCKED to
+ * the shore wave (a harmonic of a continuous phase is continuous; a second
+ * independent phase would fold). The flow streaks are anisotropic noise —
+ * long along the current, short across it — which is real structure the
+ * quantiser locks onto, at rippling-water contrast, advected downstream; on
+ * standing water the same machinery becomes wind streaks and earns its keep
+ * twice. The lapping foam PULSES with the shore-wave phase, so the water's
+ * edge breathes with the crests that feed it instead of wearing a static
+ * fringe. Spilling crests whiten just seaward of the breaker band, gated by
+ * the same fragment noise as the breakers so the surf zone stays broken
+ * patches. Mid-energy rivers get BOIL — luminance mottling, not white —
+ * because a reach below the foam threshold is textured water, not paint.
+ * Everything here lives inside the near-water branch; the far path did not
+ * get one instruction more expensive.
  */
 
 export const HYDRO_VERTEX_SHADER = /* glsl */`
@@ -74,6 +91,7 @@ varying float vWaveCrest;
 varying float vBreaker;
 varying float vTurbulence;
 varying float vFlowing;
+varying float vShorePhase;
 
 #include <common>
 #include <fog_pars_vertex>
@@ -108,9 +126,19 @@ void main() {
   // Crests shorten as they shoal; +time advances them toward the waterline
   // (decreasing shore distance).
   float shoreK = 6.28318530718 / max(5.0, wavelength * 0.55);
-  float shoreWave = sin(shoreDist * shoreK + uTime * omega * 0.9);
+  float shorePhase = shoreDist * shoreK + uTime * omega * 0.9;
+  // ── SHOALING STEEPENS THE CREST, NOT THE PHASE ──
+  // A second harmonic OF THE SAME phase sharpens the crest and flattens the
+  // trough as the water shallows (the Stokes profile, to first order). It is
+  // continuous because the phase it doubles is continuous — this is the one
+  // legal way to add wave shape after the fingerprint lesson above.
+  float steepen = (1.0 - smoothstep(0.8, 3.5, depth));
+  float shoreWave = sin(shorePhase) + sin(shorePhase * 2.0) * 0.28 * steepen;
   float nearShore = (1.0 - smoothstep(14.0, 70.0, max(0.0, shoreDist))) * (1.0 - vFlowing);
   float wave = mix(swell, shoreWave, nearShore);
+  // The fragment's lapping foam breathes with this: crests arriving at the
+  // waterline bring the froth that a static fringe only pretends to.
+  vShorePhase = sin(shorePhase);
 
   // ── THE BREAKER BAND, NARROW AND DEPTH-DEPENDENT ──
   float breakerDepth = mix(0.5, 2.4, energy);
@@ -164,6 +192,7 @@ varying float vWaveCrest;
 varying float vBreaker;
 varying float vTurbulence;
 varying float vFlowing;
+varying float vShorePhase;
 
 #include <common>
 #include <fog_pars_fragment>
@@ -312,6 +341,22 @@ void main() {
     grain = valueNoise(vAbsoluteXZ * mix(0.28, 0.055, energy)
       + flow * uTime * mix(0.12, 0.55, clamp(length(flow), 0.0, 1.0)));
     colour *= 1.0 + (grain - 0.5) * 0.14 * detailFade;
+    // ── STREAKS: LONG WITH THE CURRENT, SHORT ACROSS IT ──
+    // The single strongest read a river has — elongated luminance lanes
+    // sliding downstream — and on standing water the same term, steered by
+    // the wind, becomes wind streaks. Anisotropic noise is real structure
+    // at rippling-water contrast, so the quantiser renders lanes instead of
+    // inventing them; the 11:1 stretch is what says "moving water" at a
+    // glance. Kept low: this shades the surface, it does not stripe it.
+    float flowLen = clamp(length(flow), 0.0, 1.0);
+    vec2 streakDir = flowLen > 0.15 ? normalize(flow) : wind;
+    float along = dot(vAbsoluteXZ, streakDir);
+    float acrossStreak = dot(vAbsoluteXZ, vec2(-streakDir.y, streakDir.x));
+    float streak = valueNoise(vec2(along * 0.045 - uTime * (0.35 + flowLen * 1.4),
+      acrossStreak * 0.5 + seed * 9.0));
+    float streakAmp = mix(smoothstep(3.0, 10.0, uWind.z) * 0.05,
+      (0.05 + energy * 0.06), vFlowing);
+    colour *= 1.0 + (streak - 0.5) * streakAmp * detailFade;
   }
   // ── A FLAT FIELD DOES NOT SURVIVE THE QUANTISER ──
   //
@@ -327,7 +372,11 @@ void main() {
   // crawl under the dither.
   float broad = valueNoise(vAbsoluteXZ * 0.0031 + vec2(seed * 3.0, 7.0)) * 0.6
     + valueNoise(vAbsoluteXZ * 0.011 - vec2(uTime * 0.015, 0.0)) * 0.4;
-  colour *= 1.0 + (broad - 0.5) * 0.16 * (1.0 - vFlowing);
+  // Rivers get the broad term too, at half weight: a long reach was one flat
+  // ribbon for kilometres, which is the same quantiser trap the sea fell
+  // into, only narrower. Half, because a river's width gives the dither less
+  // room to spread a threshold than open water has.
+  colour *= 1.0 + (broad - 0.5) * 0.16 * mix(1.0, 0.5, vFlowing);
 
   // ── LIGHT FROM THE SKY, NOT ONLY THE SUN VECTOR ──
   // The daylight factor follows the sun's elevation: dusk rolls the water
@@ -342,9 +391,14 @@ void main() {
   colour = mix(colour * vec3(0.55, 0.75, 0.85), colour, daylight);
   if (nearWater) {
     // The glint is broad and quiet. A narrow bright crest highlight is what
-    // the quantiser promotes into white wave diagrams at low sun.
+    // the quantiser promotes into white wave diagrams at low sun. Sparkle
+    // comes from MODULATING that quiet lobe by the advected grain — pixels
+    // wink as the texture slides through the highlight — rather than from
+    // sharpening the lobe itself, so the total energy stays bounded and the
+    // winking rides structure that already moves with the water.
     float glint = pow(max(0.0, dot(reflect(-lightDirection, normal), viewDirection)), 9.0);
-    colour += vec3(1.0, 0.9, 0.7) * glint * 0.10 * daylight * detailFade;
+    float sparkle = 0.55 + 0.9 * smoothstep(0.45, 0.85, grain);
+    colour += vec3(1.0, 0.9, 0.7) * glint * sparkle * 0.10 * daylight * detailFade;
   }
 
   // ── FOAM IS PAID FOR ONLY WHERE FOAM CAN EXIST ──
@@ -354,7 +408,12 @@ void main() {
   // with the derivative normals above is the difference the frame counter
   // was reporting between the hydro sea and the legacy plane's flat colour.
   bool foamZone = vBreaker > 0.02 || vTurbulence > 0.01 || uRain > 0.05
-    || geometryField.g < 7.0 || uWind.z > 9.5;
+    || geometryField.g < 7.0 || uWind.z > 9.5
+    // A mid-energy reach earns entry for BOIL — mottling, not white — and a
+    // shoaling crest for its spilling top. Both are cheap and both are the
+    // texture that made "the river lacks detail" true.
+    || (vFlowing > 0.5 && energy > 0.22)
+    || (vWaveCrest > 0.6 && geometryField.a < 6.0);
   if (nearWater && foamZone) {
     // ── FOAM: SPARSE, CAUSAL, BRIEF ──
     vec2 flowDirection = normalize(flow + vec2(0.00001, 0.0));
@@ -376,20 +435,39 @@ void main() {
       across * 0.31 + seed * 13.0));
     float riverFoam = vFlowing * energyGate
       * smoothstep(0.66, 0.9, foamStreak + grain * 0.12) * 0.6;
+    // ── BOIL: THE TEXTURE OF WATER THAT IS WORKING BUT NOT BREAKING ──
+    // Below the white-foam threshold a reach still churns; that reads as
+    // luminance mottling riding the same advected streak field the foam
+    // uses, never as white. This is what stands between "calm ribbon" and
+    // "rapids" — the middle of the river's expressive range.
+    float boil = vFlowing * smoothstep(0.22, 0.5, causalEnergy) * (1.0 - energyGate);
+    colour *= 1.0 + (foamStreak - 0.5) * boil * 0.2 * detailFade;
     // Breakers: crests inside the narrow depth band, spatially fragmented so
     // the surf zone is broken white patches rather than a shoreline outline.
     float crestPick = smoothstep(0.6, 0.92, vWaveCrest);
     float fragmentNoise = smoothstep(0.42, 0.72,
       valueNoise(vec2(across * 0.14 + seed * 7.0, downstream * 0.05 - uTime * 0.3)));
     float breakerFoam = (1.0 - vFlowing) * vBreaker * crestPick * fragmentNoise;
-    // Residual surf-zone foam: sparse flecks, not a band.
+    // ── SPILLING CRESTS, JUST SEAWARD OF THE BREAK ──
+    // Shoaling steepens a crest before the depth band catches it; its top
+    // whitens faintly as it comes in. Gated by the same fragment noise as
+    // the breakers so the pre-surf stays broken patches, and by depth so
+    // open-water crests never wear it.
+    float spill = (1.0 - vFlowing) * smoothstep(0.78, 0.98, vWaveCrest)
+      * smoothstep(6.0, 2.2, geometryField.a) * fragmentNoise * 0.35;
+    // Residual surf-zone foam: sparse flecks — PULSED by the shore wave, so
+    // the waterline breathes with the crests that feed it. The floor keeps
+    // the trough from wiping the zone clean; a static fringe and a bare
+    // shore are both wrong.
+    float lapPulse = 0.35 + 0.65 * smoothstep(-0.2, 0.9, vShorePhase);
     float lappingFoam = (1.0 - vFlowing)
       * (1.0 - smoothstep(0.2, mix(1.3, 4.8, energy) * max(0.05, uShoreFade), shoreDist))
-      * smoothstep(0.74, 0.9, valueNoise(vAbsoluteXZ * 0.5 + vec2(0.0, uTime * 0.22))) * 0.5;
+      * smoothstep(0.74, 0.9, valueNoise(vAbsoluteXZ * 0.5 + vec2(0.0, uTime * 0.22)))
+      * lapPulse * 0.5;
     float whitecap = (1.0 - vFlowing) * smoothstep(9.5, 17.0, uWind.z)
       * energy * crestPick * fragmentNoise * 0.5;
     float rainPocks = smoothstep(0.42, 0.9, valueNoise(vAbsoluteXZ * 0.72 - uTime * 1.8)) * uRain;
-    float foam = clamp((lappingFoam + riverFoam + breakerFoam * 0.8
+    float foam = clamp((lappingFoam + riverFoam + breakerFoam * 0.8 + spill
       + whitecap + rainPocks * 0.14) * uFoamStrength, 0.0, 0.75) * detailFade;
     // Foam takes the scene's light too — white paint at midnight is a bug.
     vec3 foamColour = vec3(0.84, 0.9, 0.88) * mix(0.14, 1.0, daylight);
