@@ -1069,11 +1069,19 @@ const HYDRO_ON = /[?&]hydro=1/.test(location.search);
 /** One mask per cover tile, built once and expired when the datum moves —
  *  the height gate is relative to the datum, so a measurement that shifts by
  *  more than the tolerance invalidates every answer that used it. */
-const oceanMasks = new Map<string, { grid: MaskGrid; stats: MaskStats; datum: number }>();
+const oceanMasks = new Map<string, { grid: MaskGrid; stats: MaskStats; datum: number; coasts: number }>();
 function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskStats } {
   const datum = seaSurfaceAbs();
   const got = oceanMasks.get(key);
-  if (got && Math.abs(got.datum - datum) < 0.5) return got;
+  // …and on the coastline count, not only the datum. A tile masked before the
+  // vectors arrived answered without the one fact that settles a lagoon, and
+  // would have kept that answer for the session.
+  // COARSE, not exact. Keyed on the exact count this expired on EVERY streamed
+  // way that carried a coastline, and each rebuild is a full 65k-pixel mask —
+  // measured as the build budget failing outright, 18.3ms of hold against
+  // 10.9ms before. A bucket of 64 rebuilds a handful of times as a coast
+  // streams in and then stops.
+  if (got && Math.abs(got.datum - datum) < 0.5 && got.coasts === (coastSegs.size >> 6)) return got;
   // ELEVATION ONLY WHERE IT IS CONSULTED. The height gate reads heights at
   // class-80 pixels and nowhere else, so a land tile costs zero samples and a
   // coastal one costs a few thousand — against 65,536 for filling the grid
@@ -1086,8 +1094,39 @@ function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskS
     const ex = t.xs + ((px + 0.5) / 256) * t.w, ez = t.zs + ((pz + 0.5) / 256) * t.h;
     elevation[i] = hasHeight(ex, ez) ? sampleHeight(ex, ez) + baseElev : datum;
   }
-  const built = buildOceanMask(t.data, 256, 256, { datumM: datum, elevation, seedEdge: true });
-  const rec = { ...built, datum };
+  // The coastline, where there is one. The WALL is rasterised over the whole
+  // tile — cheap, one nearest-segment query per class-80 pixel — while the SIDE
+  // test runs on the boundary only, because that is where seeds come from and
+  // it is ~1000 queries against 65,536.
+  let barrier: Uint8Array | undefined, landward: Uint8Array | undefined;
+  if (coastSegs.size) {
+    // ── ONE QUERY PER CANDIDATE PIXEL ──
+    //
+    // Restored, after a segment-walking rewrite that was faster and returned
+    // NOTHING — 472 coastline cells in the world and `walled` back to zero. I
+    // have not root-caused that, so this is the version that is measured to
+    // work rather than the one that is measured to be quick.
+    //
+    // The performance problem it was written for turned out to be elsewhere:
+    // the mask cache expired on the EXACT coastline count, so every streamed
+    // way rebuilt every 65k-pixel mask. Bucketing that (see oceanMaskFor)
+    // is what actually bought the budget back.
+    for (let i = 0; i < t.data.length; i++) {
+      const px = i % 256, pz = (i / 256) | 0;
+      const onEdge = px === 0 || pz === 0 || px === 255 || pz === 255;
+      if (t.data[i] !== 80 && !onEdge) continue;
+      const ex = t.xs + ((px + 0.5) / 256) * t.w, ez = t.zs + ((pz + 0.5) / 256) * t.h;
+      if (t.data[i] === 80 && nearestCoast(ex, ez, COVER_PX_M) !== null) {
+        (barrier ??= new Uint8Array(t.data.length))[i] = 1;
+      }
+      if (onEdge && coastLandward(ex, ez)) {
+        (landward ??= new Uint8Array(t.data.length))[i] = 1;
+      }
+    }
+  }
+  const built = buildOceanMask(t.data, 256, 256,
+    { datumM: datum, elevation, seedEdge: true, barrier, landward });
+  const rec = { ...built, datum, coasts: coastSegs.size >> 6 };
   if (oceanMasks.size > 64) oceanMasks.clear();
   oceanMasks.set(key, rec);
   return rec;
@@ -1099,6 +1138,65 @@ function oceanAt(ex: number, ez: number): boolean {
     return maskAt(oceanMaskFor(key, t).grid, (ex - t.xs) / t.w, (ez - t.zs) / t.h);
   }
   return false;   // no tile: DO NOT DRAW OCEAN HERE. A late coastline beats a flooded Paris.
+}
+/**
+ * ── THE COASTLINE, CAPTURED AT LAST ──
+ *
+ * `renderWays` dropped `natural=coastline` deliberately and correctly: it is a
+ * LINE sharing a key with several areas, and feeding it to the polygon path
+ * would have painted a river green. But dropping it also threw away the one
+ * fact that separates a bay from a lagoon, and the mask has been guessing
+ * without it.
+ *
+ * Kept as segments in the road-grid's own cell scheme, because the question
+ * asked of them is always "what is near this point".
+ */
+const coastSegs = new Map<string, Array<[number, number, number, number]>>();
+/** Coastline ways seen at DECODE, before any rendering decision. */
+let osmCoastSeen = 0;
+function noteCoastline(pts: Array<[number, number]>): void {
+  for (let i = 0; i + 1 < pts.length; i++) {
+    const [ax, az] = pts[i], [bx, bz] = pts[i + 1];
+    if (!Number.isFinite(ax) || !Number.isFinite(bx)) continue;
+    // Registered in every cell the segment touches at its ends; segments are a
+    // few tens of metres and the grid is coarse, so this is enough.
+    for (const [px, pz] of [[ax, az], [bx, bz], [(ax + bx) / 2, (az + bz) / 2]]) {
+      const k = gkey(px, pz);
+      let arr = coastSegs.get(k);
+      if (!arr) coastSegs.set(k, (arr = []));
+      if (arr.length < 64) arr.push([ax, az, bx, bz]);
+    }
+  }
+}
+/** The nearest coastline segment to a point, within `r`, or null. */
+function nearestCoast(x: number, z: number, r: number): [number, number, number, number] | null {
+  let best: [number, number, number, number] | null = null, bd = r * r;
+  for (const dx of [-GRID, 0, GRID]) for (const dz of [-GRID, 0, GRID]) {
+    for (const sgm of coastSegs.get(gkey(x + dx, z + dz)) ?? []) {
+      const [ax, az, bx, bz] = sgm;
+      const vx = bx - ax, vz = bz - az;
+      const t = clamp(((x - ax) * vx + (z - az) * vz) / (vx * vx + vz * vz || 1), 0, 1);
+      const cx = ax + vx * t, cz = az + vz * t;
+      const d = (x - cx) * (x - cx) + (z - cz) * (z - cz);
+      if (d < bd) { bd = d; best = sgm; }
+    }
+  }
+  return best;
+}
+/**
+ * Is this point on the LAND side of the nearest coastline?
+ *
+ * OSM winds a coastline with land on the LEFT of the direction of travel, which
+ * makes this a cross-product sign and nothing more — no global topology, no
+ * flood, no polygon assembly. In this world +x is east and +z is SOUTH, so the
+ * handedness is flipped against the textbook formula, and the sign below is
+ * written for that rather than inherited from one.
+ */
+function coastLandward(x: number, z: number, r = 900): boolean {
+  const sgm = nearestCoast(x, z, r);
+  if (!sgm) return false;                       // nothing near enough to say
+  const [ax, az, bx, bz] = sgm;
+  return (bx - ax) * (z - az) - (bz - az) * (x - ax) > 0;
 }
 let hydroSys: HydroSystem | undefined;
 const hydroRev = new Map<string, number>();
@@ -14418,6 +14516,11 @@ function writeTileCache(x: number, y: number, els: OsmWay[]): void {
   const ways = els.map((e) => {
     let tags: Record<string, string> | undefined;
     for (const t of KEEP_TAGS) { const v = e.tags?.[t]; if (v !== undefined) (tags ??= {})[t] = v; }
+    // DECODE-TIME, deliberately upstream of renderWays. `coastSegs.size` being
+    // zero says only that noteCoastline never ran; it cannot say whether that
+    // is because no coastline arrived or because the branch never fired. This
+    // separates the two.
+    if (e.tags?.natural === 'coastline') osmCoastSeen++;
     return { id: e.id, tags, geometry: e.geometry };
   });
   try {
@@ -14964,7 +15067,8 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
       noteArea(pts, tags);
       scatterVeg(pts, el.id, tags);
     }
-    // Anything else — a coastline, a cliff edge, an unrecognised line — is
+    else if (tags.natural === 'coastline') noteCoastline(pts);
+    // Anything else — a cliff edge, an unrecognised line — is
     // deliberately dropped rather than fed to the polygon path. The old `else`
     // caught everything, which was harmless while the query only returned
     // areas; with lines in the answer it would paint a river green.
@@ -20450,7 +20554,9 @@ function truckSpec(): Record<string, number> {
   const out: Record<string, unknown> = {
     on: HYDRO_ON, here: at(state.x, state.z),
     datum: +seaSurfaceAbs().toFixed(2), baseElev: +baseElev.toFixed(1),
-    masks, coverTiles: coverTiles.size,
+    masks, coverTiles: coverTiles.size, coastCells: coastSegs.size, osmCoastSeen,
+    coastHere: coastSegs.get(gkey(state.x, state.z))?.length ?? 0,
+    landwardHere: coastLandward(state.x, state.z),
     stats: hydroSys?.stats() ?? null,
   };
   if (r > 0) {

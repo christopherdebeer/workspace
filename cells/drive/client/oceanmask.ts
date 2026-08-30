@@ -84,6 +84,12 @@ export interface MaskStats {
   edgeSeeds: number;
   /** Class-80 pixels the bounded flood absorbed. */
   bridged: number;
+  /** Pixels the coastline barrier stood in the way of. Zero on a tile with no
+   *  coastline in it, which is most of them. */
+  walled: number;
+  /** Pixels refused because the coastline puts them on the LAND side. This is
+   *  the count that closes the IJsselmeer case. */
+  landward: number;
   /** Class-80 pixels that did NOT join the ocean, on distance or on height.
    *  A count of pixels, not of rejections — see the note at the height gate.
    *  Worth reporting: a tile where this is large and `bridged` is small is a
@@ -113,6 +119,41 @@ export interface MaskOptions {
    *  where terrain has not arrived — then the height gate cannot be applied and
    *  the flood falls back to distance alone. */
   elevation?: Float32Array;
+  /**
+   * ── THE COASTLINE, AS A WALL ──
+   *
+   * Non-zero where an OSM `natural=coastline` way crosses this pixel. The flood
+   * will not enter one, exactly as it will not enter land.
+   *
+   * This needs none of OSM's left-of-the-way-is-land convention, and that is
+   * the point: it is pure topology. Land already stops the flood, so a barrier
+   * only changes an answer where there is WATER ON BOTH SIDES of it — which is
+   * precisely and only the case the height gate cannot reach: a large body at
+   * the datum, reaching the tile edge, separated from the sea by a dyke. The
+   * IJsselmeer behind the Afsluitdijk is the canonical one, and OSM's coastline
+   * runs along the dyke, so the barrier falls exactly where it must.
+   */
+  barrier?: Uint8Array;
+  /**
+   * ── WHICH SIDE OF THE COASTLINE THIS PIXEL IS ON ──
+   *
+   * 1 where the nearest OSM coastline says LANDWARD, 0 where seaward or where
+   * no coastline is near enough to say. This is the mechanism the barrier is
+   * not: OSM winds a coastline with land on the LEFT, so for a directed segment
+   * the side of a point is a cross-product sign, decided locally with no global
+   * topology at all.
+   *
+   * A wall stops the flood CROSSING a dyke. It cannot stop the far side being
+   * seeded directly, which is what happens when the inland body also reaches
+   * the tile boundary — measured, and the reason the IJsselmeer case survived
+   * the barrier. The side test is what closes it, because it disqualifies the
+   * seed rather than the path.
+   *
+   * Only meaningful where the caller bothered to compute it. Boundary pixels
+   * are enough: that is where seeds come from, and it is ~1000 nearest-segment
+   * queries per tile rather than 65,536.
+   */
+  landward?: Uint8Array;
 }
 
 const DEFAULTS = { tolM: 3, bridgePx: 4 };
@@ -134,9 +175,11 @@ export function buildOceanMask(
   const tolM = options.tolM ?? DEFAULTS.tolM;
   const bridgePx = Math.max(0, Math.floor(options.bridgePx ?? DEFAULTS.bridgePx));
   const elev = options.elevation;
+  const bar = options.barrier;
+  const land = options.landward;
   const n = width * height;
   const data = new Uint8Array(n);
-  const stats: MaskStats = { seeds: 0, edgeSeeds: 0, bridged: 0, refused: 0, ocean: 0, total: n };
+  const stats: MaskStats = { seeds: 0, edgeSeeds: 0, bridged: 0, walled: 0, landward: 0, refused: 0, ocean: 0, total: n };
 
   // ── PASS 1: the seeds, which need no argument at all ──
   // A queue of indices with the step count they were reached at, walked
@@ -155,6 +198,8 @@ export function buildOceanMask(
   if (options.seedEdge) {
     for (let i = 0; i < n; i++) {
       if (data[i] || cover[i] !== COVER_WATER) continue;
+      if (bar && bar[i]) continue;              // an edge ON the coastline is not a seed
+      if (land && land[i]) { stats.landward++; continue; }   // …nor one behind it
       const x = i % width, y = (i / width) | 0;
       if (x !== 0 && y !== 0 && x !== width - 1 && y !== height - 1) continue;
       if (!atDatum(i)) continue;
@@ -178,6 +223,8 @@ export function buildOceanMask(
       const j = ny * width + nx;
       if (data[j]) continue;                       // already ocean
       if (cover[j] !== COVER_WATER) continue;      // land stops the flood dead
+      if (bar && bar[j]) { stats.walled++; continue; }   // …and so does a coastline
+      if (land && land[j]) { stats.landward++; continue; }
       // THE HEIGHT GATE. A tidal river mouth passes the distance test for a few
       // pixels and then fails here, which is right: the water is still water,
       // it is simply not the sea.

@@ -231,7 +231,67 @@ const show = (g, m) => {
   ok('a lake at the datum that touches no edge stays out', stats.ocean === 0, stats);
 }
 
-// ── 9d. THE KNOWN MISS, ASSERTED AS A MISS ────────────────────────
+// ── 9e. THE COASTLINE CLOSES THE KNOWN MISS ───────────────────────
+// Land already stops the flood, so a barrier can only change an answer where
+// there is WATER ON BOTH SIDES of it — precisely and only the case the height
+// gate cannot reach. OSM's coastline runs along the Afsluitdijk, so the wall
+// falls exactly where it must, and none of this needs OSM's left-is-land
+// convention: it is pure topology.
+{
+  const rows = ['~~~~~~', '~~~~~~', '######', '~~~~~~'];
+  const g = grid(rows);
+  const elev = heights(rows, () => 0);
+  // Without a dyke in the cover at all — the harder case, where the two bodies
+  // touch and only the coastline separates them.
+  const open = ['~~~~~~', '~~~~~~', '~~~~~~', '~~~~~~'];
+  const go = grid(open);
+  const eo = heights(open, () => 0);
+  const before = buildOceanMask(go.data, go.w, go.h, { datumM: 0, elevation: eo, seedEdge: true });
+  ok(`with no coastline the whole basin is sea (${before.stats.ocean}/24)`,
+    before.stats.ocean === 24, before.stats);
+
+  // The coastline, rasterised across row 2 — the dyke's line.
+  const barrier = new Uint8Array(go.w * go.h);
+  for (let x = 0; x < go.w; x++) barrier[2 * go.w + x] = 1;
+  const after = buildOceanMask(go.data, go.w, go.h,
+    { datumM: 0, elevation: eo, seedEdge: true, barrier });
+  // WHAT THE BARRIER ACTUALLY DOES, which is less than claimed and worth
+  // stating exactly. The flood cannot CROSS the dyke — row 2 is walled and the
+  // sea does not reach through it. But row 3 lies on the tile boundary, so
+  // `seedEdge` seeds it directly and the wall is never consulted. A barrier
+  // constrains the flood; it does not decide which side of itself is sea.
+  ok(`the flood cannot cross the dyke (row 2 walled, ${after.stats.walled} blocked)`,
+    !maskAt(after.grid, 0.5, 0.5) && after.stats.walled > 0, after.stats);
+  ok('…while the seaward side is still sea', maskAt(after.grid, 0.5, 0.1), show(go, after.grid));
+  // …AND THE CASE IS STILL OPEN, asserted as open. Closing it needs the side
+  // test: OSM winds a coastline with land on the LEFT, so the seaward side of
+  // the nearest segment is decidable locally, per candidate edge pixel. That
+  // is the mechanism; a wall alone is not it.
+  ok('an inland body ON the tile edge still seeds past the wall — a wall alone does not close it',
+    maskAt(after.grid, 0.5, 0.9), { map: show(go, after.grid) });
+
+  // ── AND THE SIDE TEST DOES CLOSE IT ──
+  // OSM winds a coastline with land on the LEFT, so the side of any point is a
+  // cross-product sign against the nearest segment. Here the dyke runs along
+  // row 2 and everything below it is landward.
+  const landward = new Uint8Array(go.w * go.h);
+  for (let x = 0; x < go.w; x++) for (let y = 3; y < go.h; y++) landward[y * go.w + x] = 1;
+  const sided = buildOceanMask(go.data, go.w, go.h,
+    { datumM: 0, elevation: eo, seedEdge: true, barrier, landward });
+  ok(`the IJsselmeer case closes (${show(go, sided.grid)})`,
+    !maskAt(sided.grid, 0.5, 0.9), { stats: sided.stats, map: show(go, sided.grid) });
+  ok('…and the sea in front of the dyke is untouched',
+    maskAt(sided.grid, 0.5, 0.1) && maskAt(sided.grid, 0.5, 0.3), show(go, sided.grid));
+  ok(`…with the refusals attributed to the coastline, not to height (${sided.stats.landward})`,
+    sided.stats.landward > 0, sided.stats);
+  ok(`…and the wall reports itself (${after.stats.walled} pixels blocked)`,
+    after.stats.walled > 0, after.stats);
+  // A tile with no coastline must be untouched by the feature existing.
+  const none = buildOceanMask(g.data, g.w, g.h, { datumM: 0, elevation: elev, seedEdge: true });
+  ok('a tile with no coastline reports zero walled', none.stats.walled === 0, none.stats);
+}
+
+// ── 9d. THE KNOWN MISS, ASSERTED AS A MISS (WITHOUT A COASTLINE) ──
 // A large freshwater body AT the datum that DOES reach the tile edge reads as
 // sea. That is the IJsselmeer behind the Afsluitdijk: −0.4m, enormous, and
 // connected to nothing but a sluice. No local rule separates it from a bay —
@@ -243,7 +303,7 @@ const show = (g, m) => {
   const g = grid(rows);
   const elev = heights(rows, () => 0);
   const { grid: m, stats } = buildOceanMask(g.data, g.w, g.h, { datumM: 0, elevation: elev, seedEdge: true });
-  ok(`a datum-height body reaching the edge reads as sea — the IJsselmeer case (${show(g, m)})`,
+  ok(`without a coastline a datum-height body at the edge still reads as sea (${show(g, m)})`,
     maskAt(m, 0.5, 0.9), { stats, map: show(g, m) });
   ok('…and the dyke still separates the two, so it is two bodies, not one',
     !maskAt(m, 0.5, 0.6), show(g, m));
