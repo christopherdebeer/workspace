@@ -40,6 +40,15 @@ export interface CoverageGrid {
  * normally the tile padded by the field gutter, so the distance transform
  * can see a shore that lies just past the tile edge instead of clamping at
  * it. Without it the grid is mapped across the tile bounds, as before.
+ *
+ * ── THE GRID IS TRI-STATE ──
+ * 255 is confirmed ocean, ~128 is confirmed dry, 0 is NOT YET KNOWN — a
+ * pixel no loaded cover tile owns. The pipeline used to collapse unknown
+ * into dry, and a later arrival then "corrected" it: photographed as a
+ * straight-edged rectangle of missing sea that healed a minute later, and
+ * as resolved water vanishing when a partial revision replaced the field.
+ * Unknown pixels keep the PREVIOUS field's answer (see buildHydroTile), so
+ * an incomplete revision can only add knowledge, never destroy it.
  */
 export type OceanCoverage =
   | { status: 'ready'; grid: CoverageGrid; bounds?: WorldBounds }

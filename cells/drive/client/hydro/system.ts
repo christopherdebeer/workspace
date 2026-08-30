@@ -379,9 +379,13 @@ class DefaultHydroSystem implements HydroSystem {
       const generation = live.generation;
       live.dirty = false;
       live.building = true;
+      // Captured before the build so the replacement can keep this field's
+      // answers under any texel the new coverage cannot answer — a revision
+      // may add knowledge, never destroy it (see buildHydroTile).
+      const previous = live.field;
       try {
         const field = await this.scheduleBuild(() => buildHydroTile(
-          live.input, this.registry, live.analysis, this.buildOptions,
+          live.input, this.registry, live.analysis, this.buildOptions, previous,
         ));
         const current = this.records.get(key);
         if (!current || current.generation !== generation || this.disposed) return;

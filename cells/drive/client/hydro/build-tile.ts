@@ -39,6 +39,8 @@ export interface HydroTileAnalysis {
 }
 
 const FLOWING = new Set<HydroKind>(['river', 'stream', 'canal']);
+const ID_TO_KIND = new Map<number, HydroKind>(
+  (Object.entries(HYDRO_KIND_ID) as Array<[HydroKind, number]>).map(([k, v]) => [v, k]));
 
 function fillMissing(values: number[]): void {
   let first = values.findIndex(Number.isFinite);
@@ -393,6 +395,10 @@ export function buildHydroTile(
   registry: HydroBodyRegistry,
   analysis: HydroTileAnalysis,
   partialOptions: Partial<HydroBuildOptions> = {},
+  /** The field this build replaces, for last-known-good retention: texels the
+   *  new coverage cannot answer keep this field's answer instead of going
+   *  dry. A revision may add knowledge; it may not destroy it. */
+  previous?: HydroTileField,
 ): HydroTileField {
   const options = { ...DEFAULT_HYDRO_BUILD, ...partialOptions };
   const resolution = Math.max(8, Math.floor(options.fieldResolution));
@@ -457,14 +463,46 @@ export function buildHydroTile(
   };
 
   const ocean = registry.get('hydro:ocean');
+  // Which texels the CURRENT coverage actually answered — ocean or dry. The
+  // rest are unknown and keep the previous field's verdict below.
+  const answered = new Uint8Array(count);
   if (ocean && input.oceanCoverage.status === 'ready') {
     // The grid maps over the span it declares — the tile padded by the
     // gutter, when the caller sampled that far — so gutter texels carry real
     // coverage instead of an edge-clamped copy of the last tile row.
     const covBounds = input.oceanCoverage.bounds ?? input.bounds;
     for (let iz = 0; iz < height; iz++) for (let ix = 0; ix < width; ix++) {
-      const amount = sampleCoverage(input.oceanCoverage.grid, covBounds, xAt(ix), zAt(iz));
-      paint(ix, iz, amount, ocean, bodyLevel(ocean, undefined, xAt(ix), zAt(iz)), [0, 0]);
+      const raw = sampleCoverage(input.oceanCoverage.grid, covBounds, xAt(ix), zAt(iz));
+      // Tri-state: >=0.75 confirmed ocean, 0.25..0.75 confirmed dry,
+      // <0.25 not yet known. See OceanCoverage in types.
+      if (raw < 0.25) continue;
+      answered[iz * width + ix] = 1;
+      if (raw >= 0.75) {
+        paint(ix, iz, 1, ocean, bodyLevel(ocean, undefined, xAt(ix), zAt(iz)), [0, 0]);
+      }
+    }
+  }
+  // ── LAST KNOWN GOOD ──
+  // A texel the new coverage could not answer keeps what the old field knew.
+  // This is what stops a straight-edged rectangle of sea vanishing when a
+  // rebuild lands before its cover does, and healing a minute later — the
+  // shape a physical surface cannot make, photographed at Monterey. Only a
+  // like-for-like field is consulted: same layout, same bounds.
+  if (previous && previous.width === width && previous.height === height
+    && previous.bounds.minX === input.bounds.minX && previous.bounds.minZ === input.bounds.minZ
+    && previous.bounds.maxX === input.bounds.maxX && previous.bounds.maxZ === input.bounds.maxZ) {
+    for (let i = 0; i < count; i++) {
+      if (answered[i]) continue;
+      if (previous.geometry[i * 4] <= 0.005) continue;
+      const prevKind = previous.material[i * 4];
+      coverage[i] = previous.geometry[i * 4];
+      level[i] = previous.elevationBaseM + previous.geometry[i * 4 + 2];
+      depth[i] = previous.geometry[i * 4 + 3];
+      flowX[i] = previous.dynamics[i * 4]; flowZ[i] = previous.dynamics[i * 4 + 1];
+      fetch[i] = previous.dynamics[i * 4 + 2]; scale[i] = previous.dynamics[i * 4 + 3];
+      kind[i] = prevKind; seed[i] = previous.material[i * 4 + 1];
+      turbidity[i] = previous.material[i * 4 + 2]; flags[i] = previous.material[i * 4 + 3];
+      rank[i] = priority(ID_TO_KIND.get(prevKind) ?? 'ocean');
     }
   }
 

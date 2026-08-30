@@ -1566,6 +1566,9 @@ function oceanCoverageFor(t: HeightTile): OceanCoverage {
   const pad = OCEAN_GUTTER_TEXELS * (t.w / 128);
   const bx0 = t.xs - pad, bz0 = t.zs - pad;
   const bw = t.w + pad * 2, bh = t.h + pad * 2;
+  // TRI-STATE, never collapsing unknown into dry: 255 confirmed ocean, 128
+  // confirmed dry (a loaded tile answered), 0 not yet known (no tile owns
+  // the pixel). The module keeps its previous answer under the zeros.
   const data = new Uint8Array(OCEAN_GRID_N * OCEAN_GRID_N);
   for (let iz = 0; iz < OCEAN_GRID_N; iz++) {
     const z = bz0 + ((iz + 0.5) / OCEAN_GRID_N) * bh;
@@ -1573,7 +1576,7 @@ function oceanCoverageFor(t: HeightTile): OceanCoverage {
       const x = bx0 + ((ix + 0.5) / OCEAN_GRID_N) * bw;
       for (const c of near) {
         if (x < c.xs || z < c.zs || x >= c.xs + c.w || z >= c.zs + c.h) continue;
-        if (maskAt(c.mask, (x - c.xs) / c.w, (z - c.zs) / c.h)) data[iz * OCEAN_GRID_N + ix] = 255;
+        data[iz * OCEAN_GRID_N + ix] = maskAt(c.mask, (x - c.xs) / c.w, (z - c.zs) / c.h) ? 255 : 128;
         break;                     // one cover tile owns this pixel, as in oceanAt
       }
     }

@@ -90,6 +90,12 @@ export interface MaskStats {
   /** Pixels refused because the coastline puts them on the LAND side. This is
    *  the count that closes the IJsselmeer case. */
   landward: number;
+  /** Refused pixels absorbed after the flood because the sea surrounded
+   *  them: an isolated high DEM sample inside confirmed ocean is measurement
+   *  noise, not an island. Only class-80 pixels with three of four ocean
+   *  neighbours heal, and never across a barrier, a landward verdict or the
+   *  coastline's side. */
+  healed: number;
   /** Class-80 pixels that did NOT join the ocean, on distance or on height.
    *  A count of pixels, not of rejections — see the note at the height gate.
    *  Worth reporting: a tile where this is large and `bridged` is small is a
@@ -226,7 +232,7 @@ export function buildOceanMask(
   const side = options.coastSide;
   const n = width * height;
   const data = new Uint8Array(n);
-  const stats: MaskStats = { seeds: 0, edgeSeeds: 0, bridged: 0, walled: 0, landward: 0, refused: 0, ocean: 0, total: n };
+  const stats: MaskStats = { seeds: 0, edgeSeeds: 0, bridged: 0, walled: 0, landward: 0, healed: 0, refused: 0, ocean: 0, total: n };
 
   // ── PASS 1: the seeds, which need no argument at all ──
   // A queue of indices with the step count they were reached at, walked
@@ -322,6 +328,30 @@ export function buildOceanMask(
       stats.bridged++;
       queue[tail++] = j;
     }
+  }
+
+  // ── HEAL THE PINPRICKS ──
+  // A refused pixel with three of four neighbours ocean is not an island;
+  // it is one noisy DEM sample punching a hole in confirmed sea. Two passes
+  // close pairs. The guards keep every deliberate refusal deliberate: land,
+  // barriers, the coastline's landward side.
+  for (let pass = 0; pass < 2; pass++) {
+    let healedThisPass = 0;
+    for (let i = 0; i < n; i++) {
+      if (data[i] || cover[i] !== COVER_WATER) continue;
+      if (bar && bar[i]) continue;
+      if (land && land[i]) continue;
+      if (side && side[i] === -1) continue;
+      const x = i % width, y = (i / width) | 0;
+      let wet = 0;
+      if (x > 0 && data[i - 1]) wet++;
+      if (x < width - 1 && data[i + 1]) wet++;
+      if (y > 0 && data[i - width]) wet++;
+      if (y < height - 1 && data[i + width]) wet++;
+      if (wet >= 3) { data[i] = 255; healedThisPass++; }
+    }
+    stats.healed += healedThisPass;
+    if (!healedThisPass) break;
   }
 
   // Class-80 that never joined: reported so a caller can tell a coast from a

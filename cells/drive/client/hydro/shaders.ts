@@ -264,17 +264,28 @@ void main() {
   // far water is calm and simple rather than aliased.
   float camDist = distance(cameraPosition, vRenderPosition);
   float detailFade = 1.0 / (1.0 + camDist * 0.006);
+  // ── THE FAR PATH IS CHEAP BY CONSTRUCTION ──
+  // Beyond ~1.4km every fine term is invisible anyway (that is what
+  // detailFade means), so the fragment does not pay for it: no ripple taps,
+  // no grain, no glint, no foam machinery. The severe frame cost appeared
+  // exactly when the ocean was COMPLETE — a screen full of far water paying
+  // near-water prices — while the legacy plane paid one flat colour. Branch
+  // on a smoothly varying value, so warps stay coherent.
+  bool nearWater = detailFade > 0.16;
 
   vec2 wind = normalize(uWind.xy + vec2(0.00001, 0.0));
   vec2 flow = dynamics.xy;
-  float epsilon = mix(0.22, 0.75, energy);
-  float hL = rippleHeight(vAbsoluteXZ - vec2(epsilon, 0.0), flow, wind, energy, seed);
-  float hR = rippleHeight(vAbsoluteXZ + vec2(epsilon, 0.0), flow, wind, energy, seed);
-  float hD = rippleHeight(vAbsoluteXZ - vec2(0.0, epsilon), flow, wind, energy, seed);
-  float hU = rippleHeight(vAbsoluteXZ + vec2(0.0, epsilon), flow, wind, energy, seed);
-  vec2 gradient = vec2(hR - hL, hU - hD) / (2.0 * epsilon);
-  gradient *= (1.0 + vTurbulence * 0.8) * detailFade;
-  vec3 normal = normalize(vec3(-gradient.x, 1.0, -gradient.y));
+  vec3 normal = vec3(0.0, 1.0, 0.0);
+  if (nearWater) {
+    float epsilon = mix(0.22, 0.75, energy);
+    float hL = rippleHeight(vAbsoluteXZ - vec2(epsilon, 0.0), flow, wind, energy, seed);
+    float hR = rippleHeight(vAbsoluteXZ + vec2(epsilon, 0.0), flow, wind, energy, seed);
+    float hD = rippleHeight(vAbsoluteXZ - vec2(0.0, epsilon), flow, wind, energy, seed);
+    float hU = rippleHeight(vAbsoluteXZ + vec2(0.0, epsilon), flow, wind, energy, seed);
+    vec2 gradient = vec2(hR - hL, hU - hD) / (2.0 * epsilon);
+    gradient *= (1.0 + vTurbulence * 0.8) * detailFade;
+    normal = normalize(vec3(-gradient.x, 1.0, -gradient.y));
+  }
 
   // ── VISUAL DEPTH, SEPARATED FROM RAW BATHYMETRY ──
   // Nearshore keeps the true depth so shoaling and the breaker band read;
@@ -288,9 +299,12 @@ void main() {
     min(3.0 + shoreDist * 0.022, 14.0), offshore);
 
   vec3 colour = palette(kind, visualDepth, turbidity);
-  float grain = valueNoise(vAbsoluteXZ * mix(0.28, 0.055, energy)
-    + flow * uTime * mix(0.12, 0.55, clamp(length(flow), 0.0, 1.0)));
-  colour *= 1.0 + (grain - 0.5) * 0.14 * detailFade;
+  float grain = 0.5;
+  if (nearWater) {
+    grain = valueNoise(vAbsoluteXZ * mix(0.28, 0.055, energy)
+      + flow * uTime * mix(0.12, 0.55, clamp(length(flow), 0.0, 1.0)));
+    colour *= 1.0 + (grain - 0.5) * 0.14 * detailFade;
+  }
   // ── A FLAT FIELD DOES NOT SURVIVE THE QUANTISER ──
   //
   // Perfectly uniform deep water sits at one value for kilometres, and when
@@ -318,49 +332,55 @@ void main() {
     * (0.74 + max(0.0, dot(normal, lightDirection)) * 0.26);
   colour *= diffuse;
   colour = mix(colour * vec3(0.55, 0.75, 0.85), colour, daylight);
-  // The glint is broad and quiet. A narrow bright crest highlight is what
-  // the quantiser promotes into white wave diagrams at low sun.
-  float glint = pow(max(0.0, dot(reflect(-lightDirection, normal), viewDirection)), 9.0);
-  colour += vec3(1.0, 0.9, 0.7) * glint * 0.10 * daylight * detailFade;
+  if (nearWater) {
+    // The glint is broad and quiet. A narrow bright crest highlight is what
+    // the quantiser promotes into white wave diagrams at low sun.
+    float glint = pow(max(0.0, dot(reflect(-lightDirection, normal), viewDirection)), 9.0);
+    colour += vec3(1.0, 0.9, 0.7) * glint * 0.10 * daylight * detailFade;
+  }
 
-  // ── FOAM: SPARSE, CAUSAL, BRIEF ──
-  vec2 flowDirection = normalize(flow + vec2(0.00001, 0.0));
-  vec2 crossFlow = vec2(-flowDirection.y, flowDirection.x);
-  float downstream = dot(vAbsoluteXZ, flowDirection);
-  float across = dot(vAbsoluteXZ, crossFlow);
-  // ── FOAM IS CAUSAL: IT FORMS AT A DISTURBANCE AND RIDES THE CURRENT ──
-  // The energy that gates froth is the maximum of the energy HERE and the
-  // energy a little UPSTREAM, decaying with distance — so white water starts
-  // at the drop that causes it, trails below it for a few tens of metres,
-  // and dies away, instead of switching off at the exact texel the slope
-  // relaxes. Real foam outlives its rapid; painted foam should too.
-  vec2 uvPerMetre = uHydroTexel / max(uFieldMeters, vec2(0.01));
-  float up1 = texture2D(uHydroDynamics, vHydroUv - flowDirection * 14.0 * uvPerMetre).w;
-  float up2 = texture2D(uHydroDynamics, vHydroUv - flowDirection * 34.0 * uvPerMetre).w;
-  float causalEnergy = max(energy, max(up1 * 0.75, up2 * 0.5));
-  float energyGate = smoothstep(0.55, 0.82, causalEnergy);
-  float foamStreak = valueNoise(vec2(downstream * 0.16 - uTime * (0.72 + energy * 1.1),
-    across * 0.31 + seed * 13.0));
-  float riverFoam = vFlowing * energyGate
-    * smoothstep(0.66, 0.9, foamStreak + grain * 0.12) * 0.6;
-  // Breakers: crests inside the narrow depth band, spatially fragmented so
-  // the surf zone is broken white patches rather than a shoreline outline.
-  float crestPick = smoothstep(0.6, 0.92, vWaveCrest);
-  float fragmentNoise = smoothstep(0.42, 0.72,
-    valueNoise(vec2(across * 0.14 + seed * 7.0, downstream * 0.05 - uTime * 0.3)));
-  float breakerFoam = (1.0 - vFlowing) * vBreaker * crestPick * fragmentNoise;
-  // Residual surf-zone foam: sparse flecks, not a band.
-  float lappingFoam = (1.0 - vFlowing)
-    * (1.0 - smoothstep(0.2, mix(1.3, 4.8, energy) * max(0.05, uShoreFade), shoreDist))
-    * smoothstep(0.74, 0.9, valueNoise(vAbsoluteXZ * 0.5 + vec2(0.0, uTime * 0.22))) * 0.5;
-  float whitecap = (1.0 - vFlowing) * smoothstep(9.5, 17.0, uWind.z)
-    * energy * crestPick * fragmentNoise * 0.5;
-  float rainPocks = smoothstep(0.42, 0.9, valueNoise(vAbsoluteXZ * 0.72 - uTime * 1.8)) * uRain;
-  float foam = clamp((lappingFoam + riverFoam + breakerFoam * 0.8
-    + whitecap + rainPocks * 0.14) * uFoamStrength, 0.0, 0.75) * detailFade;
-  // Foam takes the scene's light too — white paint at midnight is a bug.
-  vec3 foamColour = vec3(0.84, 0.9, 0.88) * mix(0.14, 1.0, daylight);
-  colour = mix(colour, foamColour, foam);
+  // Foam is a near-water feature entirely: beyond the detail horizon it
+  // would be sub-pixel white noise for eleven noise taps a fragment.
+  if (nearWater) {
+    // ── FOAM: SPARSE, CAUSAL, BRIEF ──
+    vec2 flowDirection = normalize(flow + vec2(0.00001, 0.0));
+    vec2 crossFlow = vec2(-flowDirection.y, flowDirection.x);
+    float downstream = dot(vAbsoluteXZ, flowDirection);
+    float across = dot(vAbsoluteXZ, crossFlow);
+    // ── FOAM IS CAUSAL: IT FORMS AT A DISTURBANCE AND RIDES THE CURRENT ──
+    // The energy that gates froth is the maximum of the energy HERE and the
+    // energy a little UPSTREAM, decaying with distance — so white water starts
+    // at the drop that causes it, trails below it for a few tens of metres,
+    // and dies away, instead of switching off at the exact texel the slope
+    // relaxes. Real foam outlives its rapid; painted foam should too.
+    vec2 uvPerMetre = uHydroTexel / max(uFieldMeters, vec2(0.01));
+    float up1 = texture2D(uHydroDynamics, vHydroUv - flowDirection * 14.0 * uvPerMetre).w;
+    float up2 = texture2D(uHydroDynamics, vHydroUv - flowDirection * 34.0 * uvPerMetre).w;
+    float causalEnergy = max(energy, max(up1 * 0.75, up2 * 0.5));
+    float energyGate = smoothstep(0.55, 0.82, causalEnergy);
+    float foamStreak = valueNoise(vec2(downstream * 0.16 - uTime * (0.72 + energy * 1.1),
+      across * 0.31 + seed * 13.0));
+    float riverFoam = vFlowing * energyGate
+      * smoothstep(0.66, 0.9, foamStreak + grain * 0.12) * 0.6;
+    // Breakers: crests inside the narrow depth band, spatially fragmented so
+    // the surf zone is broken white patches rather than a shoreline outline.
+    float crestPick = smoothstep(0.6, 0.92, vWaveCrest);
+    float fragmentNoise = smoothstep(0.42, 0.72,
+      valueNoise(vec2(across * 0.14 + seed * 7.0, downstream * 0.05 - uTime * 0.3)));
+    float breakerFoam = (1.0 - vFlowing) * vBreaker * crestPick * fragmentNoise;
+    // Residual surf-zone foam: sparse flecks, not a band.
+    float lappingFoam = (1.0 - vFlowing)
+      * (1.0 - smoothstep(0.2, mix(1.3, 4.8, energy) * max(0.05, uShoreFade), shoreDist))
+      * smoothstep(0.74, 0.9, valueNoise(vAbsoluteXZ * 0.5 + vec2(0.0, uTime * 0.22))) * 0.5;
+    float whitecap = (1.0 - vFlowing) * smoothstep(9.5, 17.0, uWind.z)
+      * energy * crestPick * fragmentNoise * 0.5;
+    float rainPocks = smoothstep(0.42, 0.9, valueNoise(vAbsoluteXZ * 0.72 - uTime * 1.8)) * uRain;
+    float foam = clamp((lappingFoam + riverFoam + breakerFoam * 0.8
+      + whitecap + rainPocks * 0.14) * uFoamStrength, 0.0, 0.75) * detailFade;
+    // Foam takes the scene's light too — white paint at midnight is a bug.
+    vec3 foamColour = vec3(0.84, 0.9, 0.88) * mix(0.14, 1.0, daylight);
+    colour = mix(colour, foamColour, foam);
+  }
 
   gl_FragColor = vec4(colour, 1.0);
   #include <tonemapping_fragment>
