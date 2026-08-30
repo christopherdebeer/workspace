@@ -1658,29 +1658,28 @@ function hydroFeed(t: HeightTile): void {
   hydroDirty.delete(key);           // whatever made it stale is about to be fed
   const rev = (hydroRev.get(key) ?? 0) + 1;
   hydroRev.set(key, rev);
-  // ── ABSOLUTE METRES, AND `t.data` ALREADY IS ──
+  // ── THE WATER READS THE GROUND THE PLAYER SEES ──
   //
-  // The module refuses to clamp negatives and wants one declared datum; main
-  // renders relative to baseElev. Feed absolute, render relative — the frame's
-  // worldOrigin carries the difference.
-  //
-  // A TILE'S ARRAY IS THE RAW DEM, IN ABSOLUTE METRES. It is `sampleHeight`
-  // that subtracts baseElev, on the way out (`sampleHeightRaw` ends
-  // `- baseElev`), so it is the SAMPLER that is relative and not the store.
-  // The mask a few hundred lines up starts from `sampleHeight` and therefore
-  // has to add baseElev back; this starts from the array and must not. Written
-  // by analogy with that line, the `+ baseElev` here fed every elevation one
-  // baseElev too high — so the module built a self-consistent world sitting
-  // that far above the real one, and put every water surface there. Reported
-  // from the seat at Hout Bay as a pale band across the valley: a river
-  // correctly 10m wide in the field data, drawn as a sheet at 21.8m over
-  // ground at 7m, flooding every contour below it. The error is exactly
-  // baseElev, so it vanishes at a coastal spawn and is worst inland — which
-  // is why the first coast checks looked right.
-  const n = Math.round(Math.sqrt(t.data.length)) || 1;
-  // Copied rather than passed by reference: carving writes into a tile's array
-  // as roads land, and the module holds this until the next revision.
-  const elevation = new Float32Array(t.data);
+  // t.data is the raw DEM; the terrain MESH is built from sampleHeight, which
+  // carries repairDem and every road carve. Feeding the raw array meant the
+  // river's bed clamp held it to ground that was no longer there — measured
+  // at the Senqu as a surface floating a metre-plus above the drawn valley
+  // wherever repair or carving had lowered it. The field now samples the same
+  // function the mesh does, at its own resolution (132 to the field's
+  // 128+gutter), so bed, waterline and drawn ground agree by construction.
+  // Lattice points, not texel centres: the module's sampler puts grid point 0
+  // AT minX and point N-1 AT maxX, so sampling anywhere else would shift every
+  // bed half a texel sideways.
+  const EN = 132;
+  const n = EN;
+  const elevation = new Float32Array(EN * EN);
+  for (let iz = 0; iz < EN; iz++) {
+    const ez = t.zs + (iz / (EN - 1)) * t.h;
+    for (let ix = 0; ix < EN; ix++) {
+      const ex = t.xs + (ix / (EN - 1)) * t.w;
+      elevation[iz * EN + ix] = hasHeight(ex, ez) ? sampleHeight(ex, ez) + baseElev : NaN;
+    }
+  }
   // THE WATER THIS TILE STANDS UNDER. A bbox test against the store, not a
   // clip: `buildHydroTile` already bounds each feature to its own pixel range,
   // so handing it a river that mostly runs off the edge costs the pixels the

@@ -306,6 +306,99 @@ function energyAt(profile: Float32Array, energy: Float32Array, x: number, z: num
   return energy[hit.segment] * (1 - hit.t) + (energy[hit.segment + 1] ?? energy[hit.segment]) * hit.t;
 }
 
+/**
+ * ── ONE NEAREST-SEGMENT HIT PER TEXEL, FOUND THROUGH A BUCKET INDEX ──
+ *
+ * The paint loop used to walk the ENTIRE polyline three times per texel —
+ * once each for level, flow and energy — and a long river's bbox spans most
+ * of its tile. Measured at the Senqu: ~576 stations times ~19,600 texels
+ * times three is tens of millions of segment tests per rebuild, which is the
+ * coastless rebuild hang reported from the seat. The index buckets segments
+ * into cells sized to the river's own width; each texel asks only its 3x3
+ * neighbourhood, and a texel with no segment there cannot be inside the
+ * water (the search radius exceeds half-width plus antialias), so it skips
+ * the paint entirely. One hit then answers distance, level, flow AND energy.
+ */
+interface ProfileIndex {
+  cell: number;
+  minX: number;
+  minZ: number;
+  cols: number;
+  buckets: Map<number, number[]>;
+}
+function indexProfile(profile: Float32Array, widthM: number): ProfileIndex {
+  const cell = Math.max(96, widthM * 1.5);
+  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+  const n = profile.length / 3;
+  for (let i = 0; i < n; i++) {
+    minX = Math.min(minX, profile[i * 3]); maxX = Math.max(maxX, profile[i * 3]);
+    minZ = Math.min(minZ, profile[i * 3 + 1]); maxZ = Math.max(maxZ, profile[i * 3 + 1]);
+  }
+  const cols = Math.max(1, Math.ceil((maxX - minX) / cell) + 1);
+  const buckets = new Map<number, number[]>();
+  for (let i = 0; i + 1 < n; i++) {
+    const cx0 = Math.floor((Math.min(profile[i * 3], profile[i * 3 + 3]) - minX) / cell);
+    const cx1 = Math.floor((Math.max(profile[i * 3], profile[i * 3 + 3]) - minX) / cell);
+    const cz0 = Math.floor((Math.min(profile[i * 3 + 1], profile[i * 3 + 4]) - minZ) / cell);
+    const cz1 = Math.floor((Math.max(profile[i * 3 + 1], profile[i * 3 + 4]) - minZ) / cell);
+    for (let cz = cz0; cz <= cz1; cz++) for (let cx = cx0; cx <= cx1; cx++) {
+      const k = cz * cols + cx;
+      let arr = buckets.get(k);
+      if (!arr) buckets.set(k, (arr = []));
+      arr.push(i);
+    }
+  }
+  return { cell, minX, minZ, cols, buckets };
+}
+interface ProfileHit {
+  distanceM: number;
+  levelM: number;
+  /** Projection foot on the centreline — where the thalweg bed is sampled. */
+  px: number;
+  pz: number;
+  fx: number;
+  fz: number;
+  energy: number;
+}
+function sampleProfileAt(
+  profile: Float32Array,
+  energy: Float32Array | undefined,
+  index: ProfileIndex,
+  x: number,
+  z: number,
+): ProfileHit | null {
+  const cx = Math.floor((x - index.minX) / index.cell);
+  const cz = Math.floor((z - index.minZ) / index.cell);
+  let best = -1, bestD2 = Infinity, bestT = 0;
+  for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+    const arr = index.buckets.get((cz + dz) * index.cols + (cx + dx));
+    if (!arr) continue;
+    for (const i of arr) {
+      const o = i * 3, q = o + 3;
+      const ax = profile[o], az = profile[o + 1];
+      const vx = profile[q] - ax, vz = profile[q + 1] - az;
+      const d2v = vx * vx + vz * vz;
+      const t = d2v > 0 ? clamp(((x - ax) * vx + (z - az) * vz) / d2v, 0, 1) : 0;
+      const qx = ax + vx * t, qz = az + vz * t;
+      const d2 = (x - qx) * (x - qx) + (z - qz) * (z - qz);
+      if (d2 < bestD2) { bestD2 = d2; best = i; bestT = t; }
+    }
+  }
+  if (best < 0) return null;
+  const o = best * 3, q = o + 3;
+  const vx = profile[q] - profile[o], vz = profile[q + 1] - profile[o + 1];
+  const len = Math.hypot(vx, vz) || 1;
+  const eA = energy ? energy[best] : 0;
+  const eB = energy ? (energy[best + 1] ?? eA) : 0;
+  return {
+    distanceM: Math.sqrt(bestD2),
+    levelM: profile[o + 2] * (1 - bestT) + profile[q + 2] * bestT,
+    px: profile[o] + vx * bestT, pz: profile[o + 1] + vz * bestT,
+    fx: vx / len, fz: vz / len,
+    energy: eA * (1 - bestT) + eB * bestT,
+  };
+}
+
 function profileFlow(profile: Float32Array | undefined, body: HydroBody, x: number, z: number): readonly [number, number] {
   if (!profile?.length) return body.flow;
   const hit = nearestSegment(x, z, profile, 3);
@@ -541,20 +634,45 @@ export function buildHydroTile(
     const ix1 = clamp(Math.ceil((fb.maxX - input.bounds.minX) / pixelX) + gutter + 1, 0, width - 1);
     const iz0 = clamp(Math.floor((fb.minZ - input.bounds.minZ) / pixelZ) + gutter - 1, 0, height - 1);
     const iz1 = clamp(Math.ceil((fb.maxZ - input.bounds.minZ) / pixelZ) + gutter + 1, 0, height - 1);
+    const lineWidth = item.feature.geometry.type === 'line' ? item.feature.geometry.widthM : 0;
+    const index = item.profile && item.feature.geometry.type === 'line'
+      ? indexProfile(item.profile, lineWidth) : undefined;
     for (let iz = iz0; iz <= iz1; iz++) for (let ix = ix0; ix <= ix1; ix++) {
       const x = xAt(ix), z = zAt(iz);
+      if (index && item.profile) {
+        // The fast path: one bucket-indexed hit answers everything — asked
+        // BEFORE the bed sample, because most of a meander's bbox is dry and
+        // the index rejects it for the cost of nine Map lookups.
+        const hit = sampleProfileAt(item.profile, item.energy, index, x, z);
+        if (!hit) continue;                    // no segment within reach: dry
+        const signed = lineWidth * 0.5 - hit.distanceM;
+        const amount = clamp(0.5 + signed / Math.max(0.01, antialias * 2), 0, 1);
+        if (amount <= 0.005) continue;
+        // ── A RIVER SITS IN ITS VALLEY, NOT OVER IT ──
+        // The monotone-fitted profile smooths terrain dips away, so its level
+        // can ride more than a metre above the ground it crosses — reported
+        // from the cab at the Senqu as a floating surface. The ceiling is the
+        // bed at the CENTRELINE FOOT plus the nominal depth: sampled at the
+        // texel instead, each wet pixel hovers over its own bank and the
+        // cross-section humps upward at the edges; sampled at the thalweg,
+        // the surface stays flat across the section and follows the valley
+        // longitudinally. Where the fit says higher, the bed wins.
+        const bedFoot = sampleElevation(input.elevation, input.bounds, hit.px, hit.pz);
+        const levelM = Number.isFinite(bedFoot)
+          ? Math.min(hit.levelM, bedFoot + FLOWING_NOMINAL_DEPTH_M) : hit.levelM;
+        paint(ix, iz, amount, item.body, levelM, [hit.fx, hit.fz], hit.energy);
+        continue;
+      }
+      const bed = sampleElevation(input.elevation, input.bounds, x, z);
       let signed = -Infinity;
       if (item.feature.geometry.type === 'area') {
         signed = signedDistanceToArea(x, z, item.feature.geometry);
       } else {
-        signed = item.feature.geometry.widthM * 0.5
+        signed = lineWidth * 0.5
           - nearestSegment(x, z, item.feature.geometry.points).distanceM;
       }
       const amount = clamp(0.5 + signed / Math.max(0.01, antialias * 2), 0, 1);
       const localFlow = profileFlow(item.profile, item.body, x, z);
-      // The bed under THIS texel, so a river given no profile can descend with
-      // its own valley rather than lie flat across it.
-      const bed = sampleElevation(input.elevation, input.bounds, x, z);
       const localEnergy = item.profile && item.energy
         ? energyAt(item.profile, item.energy, x, z) : undefined;
       paint(ix, iz, amount, item.body, bodyLevel(item.body, item.profile, x, z, bed), localFlow, localEnergy);
