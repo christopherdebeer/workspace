@@ -103,6 +103,13 @@ export function createHydroMaterial(
       uHydroDynamics: { value: textures.dynamics },
       uHydroMaterial: { value: textures.material },
       uFieldUv: { value: new THREE.Vector4(centralScale, centralScale, offset, offset) },
+      // Private field metrics let the shader derive shore normals, river
+      // grade and flow curvature without expanding the integration API.
+      uHydroTexel: { value: new THREE.Vector2(1 / field.width, 1 / field.height) },
+      uFieldMeters: { value: new THREE.Vector2(
+        (field.bounds.maxX - field.bounds.minX) / field.resolution,
+        (field.bounds.maxZ - field.bounds.minZ) / field.resolution,
+      ) },
       uElevationBase: { value: field.elevationBaseM },
       uTime: frame.uTime,
       uWorldOrigin: frame.uWorldOrigin,

@@ -4,6 +4,8 @@ precision highp float;
 uniform sampler2D uHydroGeometry;
 uniform sampler2D uHydroDynamics;
 uniform vec4 uFieldUv;
+uniform vec2 uHydroTexel;
+uniform vec2 uFieldMeters;
 uniform float uElevationBase;
 uniform float uTime;
 uniform vec3 uWorldOrigin;
@@ -15,35 +17,92 @@ uniform float uShoreFade;
 varying vec2 vHydroUv;
 varying vec2 vAbsoluteXZ;
 varying vec3 vRenderPosition;
+varying float vWaveCrest;
+varying float vBreaker;
+varying float vTurbulence;
+varying float vFlowing;
 
 #include <common>
 #include <fog_pars_vertex>
 
-float hydroWave(vec2 p, vec2 wind, float time, float scale, float shore) {
+float waveSignal(vec2 p, vec2 direction, float time, float scale) {
   float speed = max(0.2, uWind.z);
   float wavelength = mix(2.4, 34.0, clamp(scale, 0.0, 1.0)) * max(0.05, uWaveLength);
   float k = 6.28318530718 / wavelength;
-  vec2 crossWind = vec2(-wind.y, wind.x);
-  float a = sin(dot(p, wind) * k - time * (0.7 + speed * 0.16));
-  float b = sin(dot(p, normalize(wind * 0.72 + crossWind * 0.69)) * k * 1.83
+  vec2 crossDirection = vec2(-direction.y, direction.x);
+  vec2 secondary = normalize(direction * 0.72 + crossDirection * 0.69);
+  float a = sin(dot(p, direction) * k - time * (0.7 + speed * 0.16));
+  float b = sin(dot(p, secondary) * k * 1.83
     - time * (1.05 + speed * 0.11) + 1.7);
-  float amplitude = mix(0.015, 0.72, scale * scale) * (0.55 + min(speed, 16.0) * 0.045);
-  return (a * 0.68 + b * 0.32) * amplitude * shore * uWaveAmplitude;
+  return a * 0.68 + b * 0.32;
 }
 
 void main() {
   vHydroUv = uv * uFieldUv.xy + uFieldUv.zw;
   vec4 geometryField = texture2D(uHydroGeometry, vHydroUv);
   vec4 dynamics = texture2D(uHydroDynamics, vHydroUv);
+  vec4 geometryL = texture2D(uHydroGeometry, vHydroUv - vec2(uHydroTexel.x, 0.0));
+  vec4 geometryR = texture2D(uHydroGeometry, vHydroUv + vec2(uHydroTexel.x, 0.0));
+  vec4 geometryD = texture2D(uHydroGeometry, vHydroUv - vec2(0.0, uHydroTexel.y));
+  vec4 geometryU = texture2D(uHydroGeometry, vHydroUv + vec2(0.0, uHydroTexel.y));
+  vec4 dynamicsL = texture2D(uHydroDynamics, vHydroUv - vec2(uHydroTexel.x, 0.0));
+  vec4 dynamicsR = texture2D(uHydroDynamics, vHydroUv + vec2(uHydroTexel.x, 0.0));
+  vec4 dynamicsD = texture2D(uHydroDynamics, vHydroUv - vec2(0.0, uHydroTexel.y));
+  vec4 dynamicsU = texture2D(uHydroDynamics, vHydroUv + vec2(0.0, uHydroTexel.y));
+
+  vec2 metres = max(uFieldMeters, vec2(0.01));
+  vec2 shoreGradient = vec2(
+    (geometryR.g - geometryL.g) / (2.0 * metres.x),
+    (geometryU.g - geometryD.g) / (2.0 * metres.y)
+  );
+  vec2 levelGradient = vec2(
+    (geometryR.b - geometryL.b) / (2.0 * metres.x),
+    (geometryU.b - geometryD.b) / (2.0 * metres.y)
+  );
+  float flowTurn = 0.5 * (length(dynamicsR.xy - dynamicsL.xy)
+    + length(dynamicsU.xy - dynamicsD.xy));
+
+  float flowLength = length(dynamics.xy);
+  vFlowing = smoothstep(0.2, 0.72, flowLength);
+  float bankEnergy = 1.0 - smoothstep(0.35, 2.8, max(0.0, geometryField.g));
+  float slopeEnergy = smoothstep(0.006, 0.075, length(levelGradient));
+  float turnEnergy = smoothstep(0.055, 0.38, flowTurn);
+  vTurbulence = vFlowing * clamp(slopeEnergy * 0.76 + turnEnergy * 0.42
+    + bankEnergy * 0.12, 0.0, 1.0);
+
+  vec2 wind = normalize(uWind.xy + vec2(0.00001, 0.0));
+  vec2 flowDirection = normalize(dynamics.xy + wind * (1.0 - vFlowing) + vec2(0.00001, 0.0));
+  vec2 coastward = length(shoreGradient) > 0.0001 ? normalize(-shoreGradient) : wind;
+  float depth = max(0.0, geometryField.a);
+  float breakerDepth = mix(0.38, 3.8, clamp(dynamics.w, 0.0, 1.0))
+    * (0.72 + min(uWind.z, 18.0) * 0.035) * mix(0.8, 1.2, clamp(uWaveAmplitude, 0.0, 2.0) * 0.5);
+  float innerSurf = 1.0 - smoothstep(0.08, max(0.18, breakerDepth * 0.46), depth);
+  float shallow = (1.0 - smoothstep(breakerDepth * 1.15, breakerDepth * 3.8, depth))
+    * (1.0 - innerSurf);
+  float refraction = (1.0 - vFlowing) * shallow * 0.78;
+  vec2 waveDirection = normalize(mix(wind, coastward, refraction) + vec2(0.00001, 0.0));
+  waveDirection = normalize(mix(waveDirection, flowDirection, vFlowing));
+
+  float width = max(0.18, breakerDepth * 0.38);
+  float depthDelta = (depth - breakerDepth) / width;
+  vBreaker = (1.0 - vFlowing) * exp(-depthDelta * depthDelta) * geometryField.r;
 
   vec4 renderPosition = modelMatrix * vec4(position, 1.0);
   vAbsoluteXZ = renderPosition.xz + uWorldOrigin.xz;
-  vec2 wind = normalize(uWind.xy + vec2(0.00001, 0.0));
-  float shoreFade = mix(0.8, 7.0, clamp(dynamics.w, 0.0, 1.0)) * max(0.05, uShoreFade);
-  float shore = smoothstep(0.0, shoreFade, geometryField.g) * geometryField.r;
-  float displaced = hydroWave(vAbsoluteXZ, wind, uTime, dynamics.w, shore);
+  float wave = waveSignal(vAbsoluteXZ, waveDirection, uTime, dynamics.w);
+  float sharpened = pow(max(0.0, wave), 4.0);
+  float speed = max(0.2, uWind.z);
+  float standingAmplitude = mix(0.015, 0.72, dynamics.w * dynamics.w)
+    * (0.55 + min(speed, 16.0) * 0.045)
+    * (1.0 + shallow * 0.58) * (1.0 - innerSurf * 0.88);
+  float riverAmplitude = mix(0.008, 0.16, clamp(dynamics.w, 0.0, 1.0))
+    * (0.32 + vTurbulence * 1.18);
+  float amplitude = mix(standingAmplitude, riverAmplitude, vFlowing) * uWaveAmplitude;
+  float displaced = (wave * 0.84 + sharpened * 0.16) * amplitude * geometryField.r;
   renderPosition.y = uElevationBase + geometryField.b - uWorldOrigin.y + displaced;
 
+  vWaveCrest = smoothstep(0.48, 0.93, wave)
+    * clamp(0.24 + vBreaker * 0.9 + vTurbulence * 0.85, 0.0, 1.0);
   vRenderPosition = renderPosition.xyz;
   vec4 mvPosition = viewMatrix * renderPosition;
   gl_Position = projectionMatrix * mvPosition;
@@ -69,6 +128,10 @@ uniform float uShoreFade;
 varying vec2 vHydroUv;
 varying vec2 vAbsoluteXZ;
 varying vec3 vRenderPosition;
+varying float vWaveCrest;
+varying float vBreaker;
+varying float vTurbulence;
+varying float vFlowing;
 
 #include <common>
 #include <fog_pars_fragment>
@@ -143,7 +206,9 @@ void main() {
     } else if (uDebugView < 3.5) {
       debugColour = mix(vec3(0.89, 0.72, 0.25), vec3(0.04, 0.12, 0.34), clamp(geometryField.a / 18.0, 0.0, 1.0));
     } else if (uDebugView < 4.5) {
-      debugColour = vec3(dynamics.xy * 0.5 + 0.5, clamp(length(dynamics.xy), 0.0, 1.0));
+      vec3 directionColour = vec3(dynamics.xy * 0.5 + 0.5, 0.28);
+      float energy = max(vTurbulence, vBreaker);
+      debugColour = mix(directionColour, vec3(1.0, 0.24, 0.07), energy * 0.88);
     } else {
       float hue = fract(kind * 0.173 + 0.07);
       debugColour = 0.55 + 0.45 * cos(6.28318 * (hue + vec3(0.0, 0.67, 0.33)));
@@ -163,12 +228,14 @@ void main() {
   float hD = rippleHeight(vAbsoluteXZ - vec2(0.0, epsilon), flow, wind, dynamics.w, seed);
   float hU = rippleHeight(vAbsoluteXZ + vec2(0.0, epsilon), flow, wind, dynamics.w, seed);
   vec2 gradient = vec2(hR - hL, hU - hD) / (2.0 * epsilon);
+  gradient *= 1.0 + vTurbulence * 1.9 + vBreaker * 0.55;
   vec3 normal = normalize(vec3(-gradient.x, 1.0, -gradient.y));
 
   vec3 colour = palette(kind, geometryField.a, turbidity);
   float grain = valueNoise(vAbsoluteXZ * mix(0.28, 0.055, dynamics.w)
     + flow * uTime * mix(0.12, 0.55, clamp(length(flow), 0.0, 1.0)));
   colour *= 0.88 + grain * 0.20;
+  colour = mix(colour, colour * 1.16, vTurbulence * (0.18 + grain * 0.18));
 
   vec3 lightDirection = normalize(uSunDirection);
   vec3 viewDirection = normalize(cameraPosition - vRenderPosition);
@@ -177,12 +244,24 @@ void main() {
   colour = colour * diffuse + vec3(1.0, 0.88, 0.56) * glint * (0.3 + dynamics.w * 0.55);
 
   float shoreWidth = mix(1.3, 4.8, dynamics.w) * max(0.05, uShoreFade);
-  float shoreFoam = 1.0 - smoothstep(0.2, shoreWidth, geometryField.g);
-  float currentFoam = smoothstep(0.26, 0.72, dynamics.w * length(flow))
-    * smoothstep(0.60, 0.88, grain);
+  float shoreBand = 1.0 - smoothstep(0.18, shoreWidth, geometryField.g);
+  float lappingFoam = (1.0 - vFlowing) * shoreBand * (0.07 + grain * 0.17);
+
+  vec2 flowDirection = normalize(flow + vec2(0.00001, 0.0));
+  vec2 crossFlow = vec2(-flowDirection.y, flowDirection.x);
+  float downstream = dot(vAbsoluteXZ, flowDirection);
+  float across = dot(vAbsoluteXZ, crossFlow);
+  float foamStreak = valueNoise(vec2(downstream * 0.16 - uTime * (0.72 + vTurbulence * 1.15),
+    across * 0.31 + seed * 13.0));
+  float brokenWater = smoothstep(0.47, 0.76, foamStreak + grain * 0.22);
+  float riverFoam = vFlowing * vTurbulence * brokenWater * (0.34 + vWaveCrest * 0.78);
+  float breakerFoam = (1.0 - vFlowing) * vBreaker
+    * smoothstep(0.38, 0.76, vWaveCrest + grain * 0.30);
+  float whitecap = (1.0 - vFlowing) * smoothstep(8.5, 17.0, uWind.z)
+    * dynamics.w * smoothstep(0.34, 0.82, vWaveCrest + grain * 0.18);
   float rainPocks = smoothstep(0.42, 0.9, valueNoise(vAbsoluteXZ * 0.72 - uTime * 1.8)) * uRain;
-  float foam = clamp((shoreFoam * (0.18 + grain * 0.28) + currentFoam * 0.55 + rainPocks * 0.16)
-    * uFoamStrength, 0.0, 0.8);
+  float foam = clamp((lappingFoam + riverFoam * 0.82 + breakerFoam * 0.88
+    + whitecap * 0.42 + rainPocks * 0.16) * uFoamStrength, 0.0, 0.92);
   colour = mix(colour, vec3(0.84, 0.91, 0.86), foam);
 
   gl_FragColor = vec4(colour, 1.0);

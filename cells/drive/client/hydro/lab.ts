@@ -45,7 +45,7 @@ function channel(
 const FIXTURES: readonly Fixture[] = [
   {
     id: 'coast', label: 'COAST / OCEAN MASK', originY: 0, oceanLevelM: 0,
-    note: 'Explicit ocean coverage meets rising land. The lagoon is a separate body; neither is a global below-zero plane.',
+    note: 'Depth-derived shoaling turns waves toward the coast, raises them before the break and leaves irregular crest foam through the surf zone. The lagoon remains a separate body.',
     height: (x, z) => x < -20
       ? -9 + Math.sin(z * .035) * .7
       : (x + 20) * .095 + Math.sin(z * .021) * 2.2 + Math.sin(x * .045) * .8,
@@ -100,13 +100,31 @@ const FIXTURES: readonly Fixture[] = [
   },
   {
     id: 'river', label: 'RIVER / GRADED PROFILE', originY: 38, oceanLevelM: 0,
-    note: 'DEM samples become a monotone downstream profile. Flow texture follows the local channel tangent.',
+    note: 'DEM samples become a monotone downstream profile. Surface energy now responds to grade and bends; FLOW view warms from direction colour toward orange where whitewater is generated.',
     height: (x, z) => 64 - (z + 300) * .09 + Math.sin(x * .025) * 3.5
       + Math.cos(z * .031) * 1.4 + Math.abs(x - Math.sin(z * .014) * 72) * .018,
     features: [
       channel('lab:river', 'river', 15,
         [-28,-285, 35,-225, 68,-150, 50,-75, -18,0, -76,85, -62,165, 4,238, 38,285],
         { roughness: .72, turbidity: .42 }),
+    ],
+  },
+  {
+    id: 'rapids', label: 'RIVER / POOL–RAPID', originY: 62, oceanLevelM: 0,
+    note: 'Alternating gentle reaches and two sharp profile drops exercise rapid crests, downstream froth and bend turbulence. FLOW view shows the derived energy field without authored rapid markers.',
+    height: (x, z) => {
+      const centre = Math.sin(z * .012) * 58 + Math.sin(z * .032) * 14;
+      const profile = 79 - (z + 300) * .032
+        - 4.8 * (.5 + .5 * Math.tanh((z + 130) / 12))
+        - 6.2 * (.5 + .5 * Math.tanh((z - 75) / 10));
+      return profile + Math.min(12, Math.abs(x - centre) * .055)
+        + Math.sin(x * .041 + z * .019) * .22;
+    },
+    features: [
+      channel('lab:rapids', 'river', 18,
+        [12,-285, -36,-225, -41,-165, -46,-130, -54,-95, -31,-30,
+          40,40, 54,70, 53,100, 42,150, 38,220, -12,285],
+        { roughness: .92, turbidity: .35 }),
     ],
   },
   {
