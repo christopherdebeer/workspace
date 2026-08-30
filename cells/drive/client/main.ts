@@ -20,7 +20,7 @@ import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, altBandAt, aspectLi
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, bedrockAt, buildLookAt, paintFor, roadLookAt,
   seedAt, snowLoad, stoneWalls, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
-import { createHydroSystem, extractOsmHydro, type HydroSystem } from './hydro';
+import { createHydroSystem, extractOsmHydro, type HydroFeature, type HydroSystem, type OceanCoverage } from './hydro';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
@@ -1198,6 +1198,90 @@ function coastLandward(x: number, z: number, r = 900): boolean {
   const [ax, az, bx, bz] = sgm;
   return (bx - ax) * (z - az) - (bz - az) * (x - ax) > 0;
 }
+/**
+ * ── OSM WATER, KEPT AS FEATURES RATHER THAN AS MESHES ──
+ *
+ * The ocean arrived as a raster and the mask turned it into coverage. Rivers
+ * and lakes cannot come that way: WorldCover's 10m pixel loses a stream
+ * entirely and gives a river a staircase edge, and the class carries no
+ * direction, so a flowing body rasterised from cover is a lake with a current
+ * painted on. OSM has the line, the width, the tags and the winding, and the
+ * hydro module already knows what to do with all four — `extractOsmHydro`
+ * normalises them and `buildHydroTile` rasterises area and line alike into the
+ * same field the ocean coverage writes into, with one priority order deciding
+ * what wins where they overlap.
+ *
+ * So the seam here is not a renderer. It is a STORE: catch the water ways as
+ * they decode, hold them by id, and hand each terrain tile the ones that land
+ * in it. That inversion is the whole point — the old path drew a river the
+ * moment its way arrived, which is why a river built before its terrain hung
+ * in the sky, and why one built across two batches was drawn twice.
+ *
+ * Held by feature id (`osm:<way>`), so a way that arrives in three overlapping
+ * Overpass answers is one feature, not three. The registry behind
+ * `upsertTile` unifies bodies across tiles by that same id, which is what lets
+ * a lake spanning four terrain tiles settle on ONE surface level instead of
+ * four that disagree at the seams.
+ */
+interface HydroFeatRec { f: HydroFeature; minX: number; minZ: number; maxX: number; maxZ: number }
+const hydroFeats = new Map<string, HydroFeatRec>();
+/** Terrain tiles already fed whose water has changed since. Water and terrain
+ *  stream on separate clocks and neither waits for the other, so a tile fed
+ *  before its river decoded has to be fed again — this is that queue. */
+const hydroDirty = new Set<string>();
+/** Refused for want of room in the store. Reported rather than silent: a world
+ *  that hits this is drawing less water than it knows about. */
+let hydroFeatsFull = 0;
+const HYDRO_FEAT_CAP = 6000;
+/**
+ * The adapter's contract is lat/lon in, world metres out, and `renderWays`
+ * holds world metres already — so the projection here is the identity and the
+ * pair the adapter calls lat/lon is really x/z.
+ *
+ * Deliberate rather than lazy. Projecting is main's job and main has done it,
+ * with the origin rebasing this world uses; re-deriving lat/lon to hand back
+ * for a second projection would put a second answer in the system for the same
+ * point. The one thing the identity costs is that the adapter's `isClosed`
+ * threshold (0.5) and `stripClosingPoint` (0.01) are read as metres, which is
+ * what they should be.
+ */
+const HYDRO_PROJECT = { project: (x: number, z: number): readonly [number, number] => [x, z] };
+/** One decoded OSM way, normalised and stored. Cheap enough to call from the
+ *  decode loop: a bbox, a map write, and a scan of the ~18 live height tiles. */
+function noteHydroWay(id: string | number, tags: Record<string, string>,
+                      pts: Array<[number, number]>): void {
+  if (!HYDRO_ON) return;
+  for (const f of extractOsmHydro([{ id, tags, geometry: pts }], HYDRO_PROJECT)) {
+    if (hydroFeats.has(f.id)) continue;
+    if (hydroFeats.size >= HYDRO_FEAT_CAP) { hydroFeatsFull++; return; }
+    let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
+    const eat = (p: Float64Array): void => {
+      for (let i = 0; i + 1 < p.length; i += 2) {
+        if (p[i] < minX) minX = p[i];
+        if (p[i] > maxX) maxX = p[i];
+        if (p[i + 1] < minZ) minZ = p[i + 1];
+        if (p[i + 1] > maxZ) maxZ = p[i + 1];
+      }
+    };
+    if (f.geometry.type === 'line') {
+      eat(f.geometry.points);
+      // A line's bbox is its centreline; the water reaches half a width past it
+      // on both banks, and a tile that only clips that margin still has water.
+      const r = f.geometry.widthM * 0.5;
+      minX -= r; minZ -= r; maxX += r; maxZ += r;
+    } else for (const poly of f.geometry.polygons) eat(poly.outer);
+    if (!Number.isFinite(minX)) continue;
+    hydroFeats.set(f.id, { f, minX, minZ, maxX, maxZ });
+    // Every tile already fed that this feature lands in is now stale. Tiles
+    // never fed need nothing: they will pick the feature up on their first
+    // feed, and marking them here would queue a rebuild of water that has not
+    // been drawn yet.
+    for (const [key, t] of heightTiles) {
+      if (maxX < t.xs || minX > t.xs + t.w || maxZ < t.zs || minZ > t.zs + t.h) continue;
+      if (hydroRev.has(key)) hydroDirty.add(key);
+    }
+  }
+}
 let hydroSys: HydroSystem | undefined;
 const hydroRev = new Map<string, number>();
 /**
@@ -1237,6 +1321,82 @@ function hydroTick(nowMs: number): void {
     sunDirection: { x: LIGHT_DIR.x, y: LIGHT_DIR.y, z: LIGHT_DIR.z },
   });
 }
+/**
+ * ── IS THIS POINT IN WATER THE FIELD IS DRAWING ──
+ *
+ * The picture-and-physics question, asked of the one thing that has the whole
+ * answer. `oceanAt` reads the mask and so knows only the sea; this reads the
+ * built field, which carries the sea, every OSM lake and every OSM river at
+ * once, at the level the body registry settled on. Where they agree, they
+ * agree by construction — the mask IS the field's ocean coverage.
+ *
+ * Costs a bbox test per live tile (≈18) and one array index, because
+ * `sampleRestingSurface` gates on coverage before it builds anything. Called
+ * up to forty times a frame by the autopilot's lookahead, so that mattered
+ * enough to check: it is the same order as the roadGrid scan immediately above
+ * every call site.
+ *
+ * `sampleRestingSurface` returns undefined below half coverage, so this is the
+ * classification answer and not the shoreline's soft edge. That is right for
+ * "may the truck drive here" and wrong for shading, which is why the shader
+ * reads a signed distance instead.
+ */
+function hydroWet(x: number, z: number): boolean {
+  return HYDRO_ON && !!hydroSys?.sampleRestingSurface(x, z);
+}
+/**
+ * ── THE OCEAN MASK, RESAMPLED INTO THE TILE'S OWN FRAME ──
+ *
+ * `sampleCoverage` maps the grid it is handed across `input.bounds` — the
+ * TERRAIN tile — corner to corner. The masks `oceanMaskFor` builds span a
+ * COVER tile, which is about 8km against the terrain tile's 2.4km, so handing
+ * one over directly stretched the sea by roughly three and a half times in
+ * each axis and drew it in the wrong place. Found by the disagreement it
+ * caused rather than by reading the contract: `oceanAt` said ocean at
+ * Windermere and `sampleRestingSurface`, fed the same mask, said nothing was
+ * there. Two answers from one source is always a frame error.
+ *
+ * Resampled through `oceanAt` rather than cropped out of one mask, which costs
+ * the same and answers correctly for a terrain tile STRADDLING two cover
+ * tiles — the old containment test called those unavailable and drew no sea at
+ * all along every cover seam.
+ *
+ * 130 square to match `fieldResolution` 128 plus its one-pixel gutter: one
+ * mask texel per field texel, so the nearest-neighbour sampling downstream
+ * lands on the answer this computed rather than between two of them.
+ */
+const OCEAN_GRID_N = 130;
+function oceanCoverageFor(t: HeightTile): OceanCoverage {
+  // Overlap, not containment: any cover under any part of this tile is
+  // evidence. With none, the tile has no ocean answer yet and must say so —
+  // "unavailable" and "known dry" are different, and the module treats them so.
+  //
+  // Gathered ONCE rather than per pixel. `oceanAt` walks every loaded cover
+  // tile on each call, and there are a couple of dozen; a terrain tile sits
+  // inside one of them and straddles at most four, so hoisting the search
+  // turns 17,000 scans of the whole map into 17,000 tests against a list of
+  // one. Worth the eight lines: this runs inside the tile build, where the
+  // budget is measured in milliseconds and the last regression cost two.
+  const near: Array<{ mask: MaskGrid; xs: number; zs: number; w: number; h: number }> = [];
+  for (const [key, c] of coverTiles) {
+    if (t.xs + t.w < c.xs || t.xs > c.xs + c.w || t.zs + t.h < c.zs || t.zs > c.zs + c.h) continue;
+    near.push({ mask: oceanMaskFor(key, c).grid, xs: c.xs, zs: c.zs, w: c.w, h: c.h });
+  }
+  if (!near.length) return { status: 'unavailable' };
+  const data = new Uint8Array(OCEAN_GRID_N * OCEAN_GRID_N);
+  for (let iz = 0; iz < OCEAN_GRID_N; iz++) {
+    const z = t.zs + ((iz + 0.5) / OCEAN_GRID_N) * t.h;
+    for (let ix = 0; ix < OCEAN_GRID_N; ix++) {
+      const x = t.xs + ((ix + 0.5) / OCEAN_GRID_N) * t.w;
+      for (const c of near) {
+        if (x < c.xs || z < c.zs || x >= c.xs + c.w || z >= c.zs + c.h) continue;
+        if (maskAt(c.mask, (x - c.xs) / c.w, (z - c.zs) / c.h)) data[iz * OCEAN_GRID_N + ix] = 255;
+        break;                     // one cover tile owns this pixel, as in oceanAt
+      }
+    }
+  }
+  return { status: 'ready', grid: { width: OCEAN_GRID_N, height: OCEAN_GRID_N, data } };
+}
 /** Hand one terrain tile to the hydro system. Called from flushTerrain, beside
  *  redrape and flushBatter — the same "the ground under this tile just moved"
  *  hook everything else that stands on terrain already uses. */
@@ -1257,6 +1417,7 @@ function hydroFeed(t: HeightTile): void {
   // rather than only at construction.
   hydroSys.setOceanLevelM(seaSurfaceAbs());
   const key = `${t.tx}/${t.ty}`;
+  hydroDirty.delete(key);           // whatever made it stale is about to be fed
   const rev = (hydroRev.get(key) ?? 0) + 1;
   hydroRev.set(key, rev);
   // ABSOLUTE METRES, DECIDED ONCE. The module refuses to clamp negatives and
@@ -1265,16 +1426,24 @@ function hydroFeed(t: HeightTile): void {
   const n = Math.round(Math.sqrt(t.data.length)) || 1;
   const elevation = new Float32Array(t.data.length);
   for (let i = 0; i < t.data.length; i++) elevation[i] = t.data[i] + baseElev;
-  const cov = [...coverTiles.entries()].find(([, c]) =>
-    t.xs >= c.xs && t.zs >= c.zs && t.xs + t.w <= c.xs + c.w && t.zs + t.h <= c.zs + c.h);
+  // THE WATER THIS TILE STANDS UNDER. A bbox test against the store, not a
+  // clip: `buildHydroTile` already bounds each feature to its own pixel range,
+  // so handing it a river that mostly runs off the edge costs the pixels the
+  // river actually covers here and nothing for the rest. Overlap is what is
+  // wanted, too — a feature must reach every tile it touches or the body
+  // registry cannot reconcile one lake across four of them.
+  const feats: HydroFeature[] = [];
+  const x1 = t.xs + t.w, z1 = t.zs + t.h;
+  for (const e of hydroFeats.values()) {
+    if (e.maxX < t.xs || e.minX > x1 || e.maxZ < t.zs || e.minZ > z1) continue;
+    feats.push(e.f);
+  }
   void hydroSys.upsertTile({
     key, revision: rev,
-    bounds: { minX: t.xs, minZ: t.zs, maxX: t.xs + t.w, maxZ: t.zs + t.h },
+    bounds: { minX: t.xs, minZ: t.zs, maxX: x1, maxZ: z1 },
     elevation: { width: n, height: n, data: elevation, verticalDatum: 'absolute-m' },
-    features: [],                       // stage 4 hands the OSM water over
-    oceanCoverage: cov
-      ? { status: 'ready', grid: oceanMaskFor(cov[0], cov[1]).grid }
-      : { status: 'unavailable' },
+    features: feats,
+    oceanCoverage: oceanCoverageFor(t),
   }).catch((e) => console.warn('[hydro]', e));
 }
 
@@ -4042,6 +4211,24 @@ function flushTerrain(now: number): void {
       terrainMs = performance.now() - t0;
       return;
     }
+  }
+  // ── WATER THAT ARRIVED AFTER ITS GROUND ──
+  //
+  // Terrain and OSM stream on separate clocks, so a tile is routinely built,
+  // fed, and only then handed the river running through it. Re-fed here rather
+  // than by marking the tile terrain-dirty, which is the cheap-looking move
+  // and wrong: that would rebuild the mesh, re-seat the buildings and re-drape
+  // everything standing on it to change a texture the hydro system owns.
+  //
+  // Same quiet path as the stranded kerbs, and ahead of them, because a lake
+  // that has not appeared yet is more visible than a kerb that has not been
+  // banked yet. One per visit — a build is asynchronous, and queueing thirty
+  // of them at once is how the budget test failed last time.
+  if (hydroDirty.size) {
+    const key = hydroDirty.values().next().value as string;
+    hydroDirty.delete(key);
+    const t = heightTiles.get(key);
+    if (t) { terrainAt = now; hydroFeed(t); return; }
   }
   // Nothing dirty. This is exactly when a stranded kerb can be picked up
   // without competing with a rebuild for the frame — the quiet path is the
@@ -8690,7 +8877,14 @@ function surfaceAt(x: number, z: number): Surface {
   // NO CHANGE IN DEM ELEVATION ALONE MAY CHANGE LAND INTO WATER. That is the
   // whole cutover in one sentence, and deleting the fallback is what enforces
   // it. `oceanAt` consults classification and the datum, never height alone.
-  if (HYDRO_ON) return oceanAt(x, z) ? 'water' : 'ground';
+  //
+  // TWO SOURCES, AND BOTH ARE NEEDED. `oceanAt` reads the mask directly and is
+  // right the instant a cover tile lands; the hydro sample reads the built
+  // field, which is where lakes and rivers live but which arrives a build
+  // later. Asking only the field would make a coast briefly drivable while its
+  // tile built; asking only the mask is what stage 3 did, and it left every
+  // lake dry the moment the drape stopped drawing them.
+  if (HYDRO_ON) return oceanAt(x, z) || hydroWet(x, z) ? 'water' : 'ground';
   // WHAT THE GROUND IS beats how high the DEM thinks it is. Off Big Sur the
   // elevation source fills the whole ocean at a flat +1.2m, so the height test
   // below called four kilometres of open Pacific dry ground and let the truck
@@ -12861,7 +13055,19 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
       hw: width / 2, ya: inv[i] - 0.15, yb: inv[i + 1] - 0.15 });
     mapSeg(x0, z0, x1, z1, Math.max(width, 8), 'rgba(96,132,158,0.75)');
   }
-  if (verts.length) {
+  // ── WHERE THE OLD RIVER STOPS BEING DRAWN ──
+  //
+  // Everything above this line still runs: the invert, the culverts, the
+  // boulders, the channel grid, the chart stroke. This block and this block
+  // alone is the water SURFACE, and with the hydro field up the field draws it
+  // instead — from the same OSM way, at a level the body registry reconciles
+  // across every tile the river crosses rather than per built run.
+  //
+  // Two renderers for one river is the failure this stage exists to avoid, and
+  // it would not have been subtle: the ribbon sits at invert+25mm and the
+  // field's mesh at the body's resting level, so a reach would have shown two
+  // surfaces a few centimetres apart, each with its own flow direction.
+  if (verts.length && !HYDRO_ON) {
     const geo = new THREE.BufferGeometry();
     geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(uvs), 2));
@@ -15044,6 +15250,15 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
       // anything short of a major river simply did not exist. Drawn as a draped
       // ribbon at the water lift, wide by class, and NOT drivable: it is water,
       // and the surface field already knows to slow you in it.
+      //
+      // `waterway` still runs with the hydro field up, and must: the drawn
+      // ribbon is the smallest thing it does. It solves the invert, digs the
+      // culverts that carry the stream under every road it crosses, seats the
+      // rapids boulders the wheels hit, registers the channel the physics
+      // reads and strokes the line on the chart — none of which the hydro
+      // module knows about or wants to. What it stops doing is drawing the
+      // SURFACE; see the note at the mesh in `waterRun`.
+      noteHydroWay(el.id, tags, pts);
       waterway(pts, WATER_W[tags.waterway as string], tags.name, dk);
     } else if (tags.railway) {
       // Rails read as a narrow dark line across the country and a thing you
@@ -15061,7 +15276,14 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
     } else if (tags.building) {
       building(pts, el.id, tags);
     } else if (tags.natural === 'water' || tags.waterway === 'riverbank') {
-      polygon(pts, MAT.water, 0.025, 0, 'water');
+      // A LAKE, AND ONLY ONE OF THE TWO PATHS DRAWS IT. The drape and the
+      // hydro field would otherwise sit within 25mm of each other over the
+      // same ring and z-fight the length of the shore. The drape also carried
+      // the physics — `polygon(..., 'water')` is what fills `waterPolys` — so
+      // this branch hands the surface AND the wading answer over together,
+      // which is why `surfaceAt` grew a hydro sample in the same change.
+      noteHydroWay(el.id, tags, pts);
+      if (!HYDRO_ON) polygon(pts, MAT.water, 0.025, 0, 'water');
     } else if (AREA_TAG(tags)) {
       // NOT A MESH — see noteArea. The ground wears it; the scatter stands on it.
       noteArea(pts, tags);
@@ -19101,6 +19323,21 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     roadGrid.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear();
     channelGrid.clear(); rapidRocks.clear(); chanSet.clear(); wiSet.clear();
     builtRuns.clear(); synthSeen.clear();
+    // ── THE HYDRO STORES SPEAK IN LOCAL METRES TOO ──
+    //
+    // Every one of these is keyed or valued in coordinates this hop has just
+    // invalidated: coastline segments in the road grid's cells, ocean masks
+    // built against the old datum, water features carrying packed x/z, and the
+    // system's own tiles holding local bounds. Carried across, a Norwegian
+    // fjord's coastline would decide which side of a Californian bay is land.
+    //
+    // The system's tiles are removed by key rather than by disposing it: the
+    // object3d is parented to worldGroup and the material and shader survive
+    // the hop intact, so rebuilding the whole system would throw away a
+    // compiled program to change some bounds.
+    for (const key of hydroRev.keys()) hydroSys?.removeTile(key);
+    hydroRev.clear(); hydroDirty.clear(); hydroFeats.clear(); hydroFeatsFull = 0;
+    coastSegs.clear(); osmCoastSeen = 0; oceanMasks.clear();
     // THE SOLVER SPEAKS IN LOCAL METRES TOO. Its deck hints and junctions are
     // spatially keyed, so the last postcard's road left an elevation under
     // local (0,0) — exactly where the next one spawns. See RoadSolver.reset.
@@ -20558,6 +20795,31 @@ function truckSpec(): Record<string, number> {
     coastHere: coastSegs.get(gkey(state.x, state.z))?.length ?? 0,
     landwardHere: coastLandward(state.x, state.z),
     stats: hydroSys?.stats() ?? null,
+    // ── THE FEATURE STORE, AND WHETHER IT REACHED THE FIELD ──
+    //
+    // `feats` is what decoded; `fedMax` is the most any one tile was handed.
+    // The pair is the one that matters: a world with hundreds of features and
+    // `fedMax: 0` has a store filling and a feed that never sees it, which
+    // looks identical from the seat to having no rivers at all.
+    feats: hydroFeats.size, featsFull: hydroFeatsFull, hydroDirty: hydroDirty.size,
+    kinds: (() => {
+      const k: Record<string, number> = {};
+      for (const e of hydroFeats.values()) k[e.f.kind] = (k[e.f.kind] ?? 0) + 1;
+      return k;
+    })(),
+    fedMax: (() => {
+      let most = 0;
+      for (const t of heightTiles.values()) {
+        let n = 0;
+        const tx1 = t.xs + t.w, tz1 = t.zs + t.h;
+        for (const e of hydroFeats.values()) {
+          if (e.maxX < t.xs || e.minX > tx1 || e.maxZ < t.zs || e.minZ > tz1) continue;
+          n++;
+        }
+        if (n > most) most = n;
+      }
+      return most;
+    })(),
   };
   if (r > 0) {
     const dx = Math.sin(bearing * Math.PI / 180), dz = -Math.cos(bearing * Math.PI / 180);
@@ -24447,7 +24709,10 @@ function gripAhead(x: number, z: number): number {
   // right that this wants a CHEAP answer rather than the wading test — so with
   // the hydro field up it asks the mask, not the sample, and stays one lookup.
   if (waterCells.has(gkey(x, z))) return SURFACE.water.mu;
-  if (HYDRO_ON && oceanAt(x, z)) return SURFACE.water.mu;
+  // Both sources here too, for the reason spelled out at `surfaceAt`: an
+  // autopilot that plans a line through a lake because the mask has never
+  // heard of it is the same bug as a truck that drives across one.
+  if (HYDRO_ON && (oceanAt(x, z) || hydroWet(x, z))) return SURFACE.water.mu;
   return surfaceFor('ground', Q_GROUND).mu;
 }
 const autoGround: AutoGround = { height: groundAt, grip: gripAhead };
@@ -29309,7 +29574,13 @@ function tick(now: number): void {
   // …and the cover raster gets its turn to declare a lake OSM never drew.
   // Slower than the drapes on purpose: each visit can stand up a mesh, and
   // there is no hurry about a pond you are not in yet.
-  if (!paused && now > synthAt) { synthAt = now + 450; synthWaterStep(2.5); }
+  // THE GUESS STANDS DOWN WHERE THERE IS AN ANSWER. Synthesised bodies exist
+  // because the old path could only draw water OSM had mapped as a polygon,
+  // which left every unmapped pond as dry raster. The hydro field takes the
+  // same cover raster as coverage and the same OSM as features, in one build
+  // with one priority order — so running this alongside it would invent a
+  // third surface over ground two others already own.
+  if (!paused && !HYDRO_ON && now > synthAt) { synthAt = now + 450; synthWaterStep(2.5); }
   // The chart's fog lifts on its own clock: a capture sets the flag, this
   // walks what is still dark. Cheap (the list only ever shrinks) and never
   // urgent — a road earned this second can appear on the map next second.
