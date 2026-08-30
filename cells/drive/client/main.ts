@@ -1092,7 +1092,11 @@ const HYDRO_ON = ((): boolean => {
 /** One mask per cover tile, built once and expired when the datum moves —
  *  the height gate is relative to the datum, so a measurement that shifts by
  *  more than the tolerance invalidates every answer that used it. */
-const oceanMasks = new Map<string, { grid: MaskGrid; stats: MaskStats; datum: number; coasts: number }>();
+const oceanMasks = new Map<string, { grid: MaskGrid; stats: MaskStats; datum: number; coasts: number;
+  /** Class-80 pixels with no terrain under them when this was built. Zero
+   *  means the answer is final; anything else means ask again as ground
+   *  arrives — see the cache test in `oceanMaskFor`. */
+  unknown: number; tiles: number }>();
 function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskStats } {
   const datum = seaSurfaceAbs();
   const got = oceanMasks.get(key);
@@ -1104,18 +1108,44 @@ function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskS
   // measured as the build budget failing outright, 18.3ms of hold against
   // 10.9ms before. A bucket of 64 rebuilds a handful of times as a coast
   // streams in and then stops.
-  if (got && Math.abs(got.datum - datum) < 0.5 && got.coasts === (coastSegs.size >> 6)) return got;
+  // ── …AND ON THE TERRAIN, WHILE ANY OF IT IS STILL MISSING ──
+  //
+  // A mask built before the terrain under it arrived has pixels it could not
+  // judge, and it must not keep that answer for the session. Only tiles that
+  // HAD an unjudged pixel pay for this: once every class-80 pixel has ground
+  // beneath it the answer cannot improve, and the tile stops rebuilding for
+  // good. That bound matters — the last unbounded expiry here cost 18.3ms of
+  // build budget against 10.9ms.
+  if (got && Math.abs(got.datum - datum) < 0.5 && got.coasts === (coastSegs.size >> 6)
+    && (got.unknown === 0 || got.tiles === heightTiles.size)) return got;
   // ELEVATION ONLY WHERE IT IS CONSULTED. The height gate reads heights at
   // class-80 pixels and nowhere else, so a land tile costs zero samples and a
   // coastal one costs a few thousand — against 65,536 for filling the grid
   // blind, per tile, for an answer almost none of it would have been asked for.
+  //
+  // ── AND NO MEASUREMENT IS NOT A MEASUREMENT OF ZERO ──
+  //
+  // This line used to fall back to `datum` where terrain had not streamed,
+  // which declares the pixel to be EXACTLY at sea level and hands it through
+  // the height gate unopposed. Cover arrives well ahead of terrain, so in any
+  // valley near a coast the flood ran inland across every class-80 pixel whose
+  // ground had not loaded yet — and the cache then kept that answer.
+  //
+  // Reported from the seat at Hout Bay: pale bands and blobs of sea lying
+  // across the valley floor hundreds of metres inland, at full coverage, still
+  // there long after the terrain arrived. NaN is the honest value — it fails
+  // `Math.abs(elev - datum) <= tol` the way an unknown should, so the pixel is
+  // refused rather than admitted, and the rebuild above lets it be asked again
+  // once the ground is there to answer with.
   let elevation: Float32Array | undefined;
+  let unknown = 0;
   for (let i = 0; i < t.data.length; i++) {
     if (t.data[i] !== 80) continue;
     if (!elevation) elevation = new Float32Array(t.data.length);
     const px = i % 256, pz = (i / 256) | 0;
     const ex = t.xs + ((px + 0.5) / 256) * t.w, ez = t.zs + ((pz + 0.5) / 256) * t.h;
-    elevation[i] = hasHeight(ex, ez) ? sampleHeight(ex, ez) + baseElev : datum;
+    if (hasHeight(ex, ez)) elevation[i] = sampleHeight(ex, ez) + baseElev;
+    else { elevation[i] = NaN; unknown++; }
   }
   // The coastline, where there is one. The WALL is rasterised over the whole
   // tile — cheap, one nearest-segment query per class-80 pixel — while the SIDE
@@ -1149,7 +1179,7 @@ function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskS
   }
   const built = buildOceanMask(t.data, 256, 256,
     { datumM: datum, elevation, seedEdge: true, barrier, landward });
-  const rec = { ...built, datum, coasts: coastSegs.size >> 6 };
+  const rec = { ...built, datum, coasts: coastSegs.size >> 6, unknown, tiles: heightTiles.size };
   if (oceanMasks.size > 64) oceanMasks.clear();
   oceanMasks.set(key, rec);
   return rec;
@@ -1448,12 +1478,29 @@ function hydroFeed(t: HeightTile): void {
   hydroDirty.delete(key);           // whatever made it stale is about to be fed
   const rev = (hydroRev.get(key) ?? 0) + 1;
   hydroRev.set(key, rev);
-  // ABSOLUTE METRES, DECIDED ONCE. The module refuses to clamp negatives and
-  // wants one declared datum; main renders relative to baseElev. Feed absolute,
-  // render relative — the frame's worldOrigin carries the difference.
+  // ── ABSOLUTE METRES, AND `t.data` ALREADY IS ──
+  //
+  // The module refuses to clamp negatives and wants one declared datum; main
+  // renders relative to baseElev. Feed absolute, render relative — the frame's
+  // worldOrigin carries the difference.
+  //
+  // A TILE'S ARRAY IS THE RAW DEM, IN ABSOLUTE METRES. It is `sampleHeight`
+  // that subtracts baseElev, on the way out (`sampleHeightRaw` ends
+  // `- baseElev`), so it is the SAMPLER that is relative and not the store.
+  // The mask a few hundred lines up starts from `sampleHeight` and therefore
+  // has to add baseElev back; this starts from the array and must not. Written
+  // by analogy with that line, the `+ baseElev` here fed every elevation one
+  // baseElev too high — so the module built a self-consistent world sitting
+  // that far above the real one, and put every water surface there. Reported
+  // from the seat at Hout Bay as a pale band across the valley: a river
+  // correctly 10m wide in the field data, drawn as a sheet at 21.8m over
+  // ground at 7m, flooding every contour below it. The error is exactly
+  // baseElev, so it vanishes at a coastal spawn and is worst inland — which
+  // is why the first coast checks looked right.
   const n = Math.round(Math.sqrt(t.data.length)) || 1;
-  const elevation = new Float32Array(t.data.length);
-  for (let i = 0; i < t.data.length; i++) elevation[i] = t.data[i] + baseElev;
+  // Copied rather than passed by reference: carving writes into a tile's array
+  // as roads land, and the module holds this until the next revision.
+  const elevation = new Float32Array(t.data);
   // THE WATER THIS TILE STANDS UNDER. A bbox test against the store, not a
   // clip: `buildHydroTile` already bounds each feature to its own pixel range,
   // so handing it a river that mostly runs off the edge costs the pixels the
@@ -20784,6 +20831,14 @@ function truckSpec(): Record<string, number> {
  *  identical. Two screenshots either side of this isolate exactly what the new
  *  renderer contributes — which a blue-pixel count cannot, because the sky is
  *  blue and reads as 46% water over Badwater, where there is none. */
+/** The WATER VIEW dial, reachable from a script. Same six names the dial
+ *  offers; called with nothing it reports the view without changing it. The
+ *  harness needs this to photograph what the field believes, which is the one
+ *  question a screenshot of the surface cannot answer. */
+(window as unknown as { __hydroview?: object }).__hydroview = (name?: HydroDebugView): string => {
+  if (name) { hydroView = name; hydroSys?.setDebugView(name); }
+  return hydroView;
+};
 (window as unknown as { __hydroshow?: object }).__hydroshow = (on: boolean): boolean => {
   if (hydroSys) hydroSys.object3d.visible = on;
   return !!hydroSys && hydroSys.object3d.visible;
@@ -20814,7 +20869,10 @@ function truckSpec(): Record<string, number> {
   const masks: Record<string, unknown> = {};
   for (const [key] of oceanMasks) {
     const m = oceanMasks.get(key)!;
-    masks[key] = { ...m.stats, oceanPct: +(m.stats.ocean / m.stats.total * 100).toFixed(1), datum: +m.datum.toFixed(2) };
+    masks[key] = { ...m.stats, oceanPct: +(m.stats.ocean / m.stats.total * 100).toFixed(1), datum: +m.datum.toFixed(2),
+      // Class-80 pixels this mask could not judge for want of terrain. Nonzero
+      // means the mask is provisional and will be asked again.
+      unknown: m.unknown };
   }
   const out: Record<string, unknown> = {
     on: HYDRO_ON, here: at(state.x, state.z),
@@ -20830,6 +20888,15 @@ function truckSpec(): Record<string, number> {
     // `fedMax: 0` has a store filling and a feed that never sees it, which
     // looks identical from the seat to having no rivers at all.
     feats: hydroFeats.size, featsFull: hydroFeatsFull, hydroDirty: hydroDirty.size,
+    // THE BIGGEST BODIES THE STORE HOLDS, by bbox. A watercourse is a line and
+    // a pond is small; anything here spanning hundreds of metres is either a
+    // real lake or a way that was closed into a polygon it never was.
+    biggest: [...hydroFeats.values()]
+      .map((e) => ({ id: e.f.id, kind: e.f.kind, geom: e.f.geometry.type,
+        pts: e.f.geometry.type === 'line' ? e.f.geometry.points.length / 2
+          : e.f.geometry.polygons[0]?.outer.length / 2,
+        w: Math.round(e.maxX - e.minX), h: Math.round(e.maxZ - e.minZ) }))
+      .sort((a, b) => Math.max(b.w, b.h) - Math.max(a.w, a.h)).slice(0, 6),
     kinds: (() => {
       const k: Record<string, number> = {};
       for (const e of hydroFeats.values()) k[e.f.kind] = (k[e.f.kind] ?? 0) + 1;
