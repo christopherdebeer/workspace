@@ -28,7 +28,13 @@ import {
 
 export interface HydroTileAnalysis {
   observations: HydroBodyObservation[];
-  /** Tile-local, downhill profiles keyed by stable feature id. */
+  /**
+   * Tile-local, downhill profiles. Keyed by feature id AND by id#index —
+   * Overpass clips one way into several fragments sharing an id, and each
+   * fragment carries its own stretch of geometry, so a bare-id lookup would
+   * hand every fragment whichever profile analysed last. The bare id stays
+   * as the first fragment's profile for callers that hold only the id.
+   */
   profiles: ReadonlyMap<string, Float32Array>;
 }
 
@@ -174,10 +180,14 @@ export function analyseHydroTile(input: HydroTileInput): HydroTileAnalysis {
     });
   }
 
-  for (const feature of input.features) {
+  for (let index = 0; index < input.features.length; index++) {
+    const feature = input.features[index];
     if (!boundsIntersect(featureBounds(feature), input.bounds)) continue;
     const profile = FLOWING.has(feature.kind) ? lineProfile(input, feature) : undefined;
-    if (profile) profiles.set(feature.id, profile);
+    if (profile) {
+      profiles.set(`${feature.id}#${index}`, profile);
+      if (!profiles.has(feature.id)) profiles.set(feature.id, profile);
+    }
     observations.push({
       tileKey: input.key,
       id: feature.id,
@@ -242,6 +252,56 @@ function bodyLevel(
   if (hit.segment < 0) return stations[2] ?? 0;
   const a = hit.segment * 3 + 2, b = (hit.segment + 1) * 3 + 2;
   return stations[a] * (1 - hit.t) + stations[b] * hit.t;
+}
+
+/**
+ * ── RIVER ENERGY, DECIDED HERE AND NOT IN THE SHADER ──
+ *
+ * The shader used to infer turbulence per vertex from raw level gradients,
+ * and DEM noise pushed most of every river over the rapids threshold. Energy
+ * is a property of the reach, so it is computed on the reach: per station,
+ * from the longitudinal slope of the monotone-fitted profile over a ~60m
+ * baseline (the same window the legacy watercourse solver settled on, for
+ * the same reason — one station of drop is mostly raster noise), mapped
+ * through sqrt as every open-channel formula and the eye agree, then
+ * smoothed twice so rapids form coherent reaches instead of pixel events.
+ *
+ * Packed into the field's dynamics.w, which for standing water carries the
+ * sea state — one channel, two regimes, split by flow length exactly as the
+ * shader splits everything else.
+ */
+function profileEnergy(profile: Float32Array): Float32Array {
+  const n = profile.length / 3;
+  const e = new Float32Array(n);
+  // Cumulative distance along the stations, once.
+  const along = new Float32Array(n);
+  for (let i = 1; i < n; i++) {
+    along[i] = along[i - 1] + Math.hypot(
+      profile[i * 3] - profile[(i - 1) * 3],
+      profile[i * 3 + 1] - profile[(i - 1) * 3 + 1]);
+  }
+  const HALF = 30;                 // metres of baseline each side
+  const FULL_AT = 0.04;            // 4% slope reads as full whitewater
+  for (let i = 0; i < n; i++) {
+    let a = i, b = i;
+    while (a > 0 && along[i] - along[a - 1] < HALF) a--;
+    while (b < n - 1 && along[b + 1] - along[i] < HALF) b++;
+    const run = along[b] - along[a];
+    const drop = profile[a * 3 + 2] - profile[b * 3 + 2];
+    const slope = run > 1 ? Math.max(0, drop) / run : 0;
+    e[i] = clamp(Math.sqrt(slope / FULL_AT), 0, 1);
+  }
+  for (let pass = 0; pass < 2; pass++) {
+    const c = e.slice();
+    for (let i = 1; i < n - 1; i++) e[i] = (c[i - 1] + c[i] * 2 + c[i + 1]) * 0.25;
+  }
+  return e;
+}
+
+function energyAt(profile: Float32Array, energy: Float32Array, x: number, z: number): number {
+  const hit = nearestSegment(x, z, profile, 3);
+  if (hit.segment < 0) return energy[0] ?? 0;
+  return energy[hit.segment] * (1 - hit.t) + (energy[hit.segment + 1] ?? energy[hit.segment]) * hit.t;
 }
 
 function profileFlow(profile: Float32Array | undefined, body: HydroBody, x: number, z: number): readonly [number, number] {
@@ -368,6 +428,7 @@ export function buildHydroTile(
     body: HydroBody,
     levelM: number,
     localFlow: readonly [number, number],
+    localEnergy?: number,
   ): void => {
     if (amount <= 0.005 || ix < 0 || iz < 0 || ix >= width || iz >= height) return;
     const i = iz * width + ix;
@@ -380,7 +441,12 @@ export function buildHydroTile(
     depth[i] = Number.isFinite(ground) ? Math.max(options.minimumDepthM, levelM - ground) : options.minimumDepthM;
     flowX[i] = localFlow[0]; flowZ[i] = localFlow[1];
     fetch[i] = body.fetchM;
-    scale[i] = waveScale(body.kind, body.fetchM, body.roughness);
+    // Flowing water's wave scale IS its reach energy — see profileEnergy.
+    // Without a profile a flowing body stays calm rather than inheriting a
+    // fetch-derived state it has no evidence for.
+    scale[i] = localEnergy !== undefined ? localEnergy
+      : FLOWING.has(body.kind) ? Math.min(0.15, waveScale(body.kind, body.fetchM, body.roughness))
+      : waveScale(body.kind, body.fetchM, body.roughness);
     kind[i] = HYDRO_KIND_ID[body.kind];
     seed[i] = Math.round(clamp(body.seed, 0, 1) * 255);
     turbidity[i] = Math.round(clamp(body.turbidity, 0, 1) * 255);
@@ -398,10 +464,15 @@ export function buildHydroTile(
     }
   }
 
-  const resolved: ResolvedHydroFeature[] = [];
-  for (const feature of input.features) {
+  const resolved: Array<ResolvedHydroFeature & { energy?: Float32Array }> = [];
+  for (let index = 0; index < input.features.length; index++) {
+    const feature = input.features[index];
     const body = registry.get(feature.id);
-    if (body) resolved.push({ feature, body, profile: analysis.profiles.get(feature.id) });
+    if (!body) continue;
+    // This fragment's OWN profile — see the note on the profiles map.
+    const profile = analysis.profiles.get(`${feature.id}#${index}`);
+    resolved.push({ feature, body, profile,
+      energy: profile && FLOWING.has(feature.kind) ? profileEnergy(profile) : undefined });
   }
   for (const item of resolved) {
     const fb = featureBounds(item.feature);
@@ -423,7 +494,9 @@ export function buildHydroTile(
       // The bed under THIS texel, so a river given no profile can descend with
       // its own valley rather than lie flat across it.
       const bed = sampleElevation(input.elevation, input.bounds, x, z);
-      paint(ix, iz, amount, item.body, bodyLevel(item.body, item.profile, x, z, bed), localFlow);
+      const localEnergy = item.profile && item.energy
+        ? energyAt(item.profile, item.energy, x, z) : undefined;
+      paint(ix, iz, amount, item.body, bodyLevel(item.body, item.profile, x, z, bed), localFlow, localEnergy);
     }
   }
 

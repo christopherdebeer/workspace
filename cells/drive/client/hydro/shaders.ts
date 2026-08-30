@@ -1,3 +1,56 @@
+/**
+ * ── QUIET WATER, BUILT TO SURVIVE THE QUANTISER ──
+ *
+ * Everything this game draws passes through a quantise/dither post pipeline,
+ * and that pipeline is merciless to two things: moderate periodic variation,
+ * which it promotes into hard alternating stripes, and narrow bright
+ * features, which it promotes into white contour diagrams. The first version
+ * of this shader produced both, and the analysis that led to this rewrite
+ * named the mechanisms exactly. They are worth keeping on record here,
+ * because each one is a mistake the code could drift back into:
+ *
+ * THE PHASE MUST BE CONTINUOUS. The old wave evaluated
+ * sin(dot(p, d(p)) - wt) with a direction d that varied per vertex (wind
+ * bent toward the shore gradient, bent toward flow). A spatially varying
+ * direction inserted into the phase is not a wave — where d(p) rotates, the
+ * phase folds, and folded phase is the concentric fingerprint pattern the
+ * sea showed every afternoon. The rewrite uses two individually continuous
+ * signals and crossfades their AMPLITUDES: offshore, a swell with one
+ * constant direction per frame; nearshore, crests that follow the shoreline
+ * by using the signed shore-distance field itself as the phase coordinate.
+ * Shore distance is continuous by construction (it is a distance), so its
+ * isolines are the crest lines, which is exactly what refraction should do
+ * to a first approximation. Direction is never inserted into a phase again.
+ *
+ * ENERGY IS DECIDED ON THE CPU. River turbulence used to be derived per
+ * vertex from raw level gradients and flow turns, which saturated on DEM
+ * noise until every reach read as rapids. The field's dynamics.w channel now
+ * carries a station-based energy computed in build-tile from the river's own
+ * longitudinal profile — smoothed, so rapids form coherent reaches. The
+ * shader treats it as settled fact. For standing water the same channel is
+ * the sea state, as before.
+ *
+ * FOAM IS SPARSE, CAUSAL AND BRIEF. Foam appears only above a high energy
+ * threshold, fragmented by advected noise with a low duty cycle, aligned
+ * downstream, and never as a bank-long outline. A calm reach shows no white
+ * at all in a still frame.
+ *
+ * LIGHT COMES FROM THE SKY. The water darkens with the sun: a daylight
+ * factor from the sun's elevation scales the whole response and cools it at
+ * night, so midnight water is a dark mass rather than daytime cyan. The
+ * glint is broad and low — a narrow specular crest is exactly the feature
+ * the quantiser turns into white bands.
+ *
+ * DETAIL FADES WITH DISTANCE. Ripple amplitude, grain and glint attenuate
+ * with camera distance so unresolved high-frequency structure never reaches
+ * the quantiser, and far water is simpler and calmer than near water.
+ *
+ * VISUAL DEPTH IS NOT BATHYMETRY. Nearshore, real depth drives shoaling and
+ * the breaker band. Offshore, colour depth becomes a smooth function of
+ * shore distance, because raw DEM bathymetry painted patch-by-patch is the
+ * camouflage the sea used to wear.
+ */
+
 export const HYDRO_VERTEX_SHADER = /* glsl */`
 precision highp float;
 
@@ -25,84 +78,61 @@ varying float vFlowing;
 #include <common>
 #include <fog_pars_vertex>
 
-float waveSignal(vec2 p, vec2 direction, float time, float scale) {
-  float speed = max(0.2, uWind.z);
-  float wavelength = mix(2.4, 34.0, clamp(scale, 0.0, 1.0)) * max(0.05, uWaveLength);
-  float k = 6.28318530718 / wavelength;
-  vec2 crossDirection = vec2(-direction.y, direction.x);
-  vec2 secondary = normalize(direction * 0.72 + crossDirection * 0.69);
-  float a = sin(dot(p, direction) * k - time * (0.7 + speed * 0.16));
-  float b = sin(dot(p, secondary) * k * 1.83
-    - time * (1.05 + speed * 0.11) + 1.7);
-  return a * 0.68 + b * 0.32;
-}
-
 void main() {
   vHydroUv = uv * uFieldUv.xy + uFieldUv.zw;
   vec4 geometryField = texture2D(uHydroGeometry, vHydroUv);
   vec4 dynamics = texture2D(uHydroDynamics, vHydroUv);
-  vec4 geometryL = texture2D(uHydroGeometry, vHydroUv - vec2(uHydroTexel.x, 0.0));
-  vec4 geometryR = texture2D(uHydroGeometry, vHydroUv + vec2(uHydroTexel.x, 0.0));
-  vec4 geometryD = texture2D(uHydroGeometry, vHydroUv - vec2(0.0, uHydroTexel.y));
-  vec4 geometryU = texture2D(uHydroGeometry, vHydroUv + vec2(0.0, uHydroTexel.y));
-  vec4 dynamicsL = texture2D(uHydroDynamics, vHydroUv - vec2(uHydroTexel.x, 0.0));
-  vec4 dynamicsR = texture2D(uHydroDynamics, vHydroUv + vec2(uHydroTexel.x, 0.0));
-  vec4 dynamicsD = texture2D(uHydroDynamics, vHydroUv - vec2(0.0, uHydroTexel.y));
-  vec4 dynamicsU = texture2D(uHydroDynamics, vHydroUv + vec2(0.0, uHydroTexel.y));
-
-  vec2 metres = max(uFieldMeters, vec2(0.01));
-  vec2 shoreGradient = vec2(
-    (geometryR.g - geometryL.g) / (2.0 * metres.x),
-    (geometryU.g - geometryD.g) / (2.0 * metres.y)
-  );
-  vec2 levelGradient = vec2(
-    (geometryR.b - geometryL.b) / (2.0 * metres.x),
-    (geometryU.b - geometryD.b) / (2.0 * metres.y)
-  );
-  float flowTurn = 0.5 * (length(dynamicsR.xy - dynamicsL.xy)
-    + length(dynamicsU.xy - dynamicsD.xy));
 
   float flowLength = length(dynamics.xy);
   vFlowing = smoothstep(0.2, 0.72, flowLength);
-  float bankEnergy = 1.0 - smoothstep(0.35, 2.8, max(0.0, geometryField.g));
-  float slopeEnergy = smoothstep(0.006, 0.075, length(levelGradient));
-  float turnEnergy = smoothstep(0.055, 0.38, flowTurn);
-  vTurbulence = vFlowing * clamp(slopeEnergy * 0.76 + turnEnergy * 0.42
-    + bankEnergy * 0.12, 0.0, 1.0);
+  // dynamics.w: CPU station energy for flowing water, sea state for standing.
+  float energy = clamp(dynamics.w, 0.0, 1.0);
+  vTurbulence = vFlowing * smoothstep(0.4, 0.85, energy);
 
-  vec2 wind = normalize(uWind.xy + vec2(0.00001, 0.0));
-  vec2 flowDirection = normalize(dynamics.xy + wind * (1.0 - vFlowing) + vec2(0.00001, 0.0));
-  vec2 coastward = length(shoreGradient) > 0.0001 ? normalize(-shoreGradient) : wind;
   float depth = max(0.0, geometryField.a);
-  float breakerDepth = mix(0.38, 3.8, clamp(dynamics.w, 0.0, 1.0))
-    * (0.72 + min(uWind.z, 18.0) * 0.035) * mix(0.8, 1.2, clamp(uWaveAmplitude, 0.0, 2.0) * 0.5);
-  float innerSurf = 1.0 - smoothstep(0.08, max(0.18, breakerDepth * 0.46), depth);
-  float shallow = (1.0 - smoothstep(breakerDepth * 1.15, breakerDepth * 3.8, depth))
-    * (1.0 - innerSurf);
-  float refraction = (1.0 - vFlowing) * shallow * 0.78;
-  vec2 waveDirection = normalize(mix(wind, coastward, refraction) + vec2(0.00001, 0.0));
-  waveDirection = normalize(mix(waveDirection, flowDirection, vFlowing));
-
-  float width = max(0.18, breakerDepth * 0.38);
-  float depthDelta = (depth - breakerDepth) / width;
-  vBreaker = (1.0 - vFlowing) * exp(-depthDelta * depthDelta) * geometryField.r;
+  float shoreDist = geometryField.g;
 
   vec4 renderPosition = modelMatrix * vec4(position, 1.0);
   vAbsoluteXZ = renderPosition.xz + uWorldOrigin.xz;
-  float wave = waveSignal(vAbsoluteXZ, waveDirection, uTime, dynamics.w);
-  float sharpened = pow(max(0.0, wave), 4.0);
+
+  // ── THE PHASE, CONTINUOUS BY CONSTRUCTION ──
+  // One constant-direction swell for open water; one shore-following wave
+  // whose phase coordinate IS the signed shore distance. Each is continuous
+  // everywhere; only their amplitudes crossfade.
   float speed = max(0.2, uWind.z);
-  float standingAmplitude = mix(0.015, 0.72, dynamics.w * dynamics.w)
-    * (0.55 + min(speed, 16.0) * 0.045)
-    * (1.0 + shallow * 0.58) * (1.0 - innerSurf * 0.88);
-  float riverAmplitude = mix(0.008, 0.16, clamp(dynamics.w, 0.0, 1.0))
-    * (0.32 + vTurbulence * 1.18);
-  float amplitude = mix(standingAmplitude, riverAmplitude, vFlowing) * uWaveAmplitude;
-  float displaced = (wave * 0.84 + sharpened * 0.16) * amplitude * geometryField.r;
+  float wavelength = mix(9.0, 34.0, clamp(energy, 0.0, 1.0)) * max(0.05, uWaveLength);
+  float k = 6.28318530718 / wavelength;
+  float omega = 0.6 + speed * 0.1;
+  vec2 windDir = normalize(uWind.xy + vec2(0.00001, 0.0));
+  float swell = sin(dot(vAbsoluteXZ, windDir) * k - uTime * omega);
+  // Crests shorten as they shoal; +time advances them toward the waterline
+  // (decreasing shore distance).
+  float shoreK = 6.28318530718 / max(5.0, wavelength * 0.55);
+  float shoreWave = sin(shoreDist * shoreK + uTime * omega * 0.9);
+  float nearShore = (1.0 - smoothstep(14.0, 70.0, max(0.0, shoreDist))) * (1.0 - vFlowing);
+  float wave = mix(swell, shoreWave, nearShore);
+
+  // ── THE BREAKER BAND, NARROW AND DEPTH-DEPENDENT ──
+  float breakerDepth = mix(0.5, 2.4, energy);
+  float depthDelta = (depth - breakerDepth) / max(0.25, breakerDepth * 0.45);
+  vBreaker = (1.0 - vFlowing) * exp(-depthDelta * depthDelta) * geometryField.r;
+
+  // Crest selection is for STANDING water only. A river's white comes from
+  // its energy field, never from tracing displacement crests — traced crests
+  // are the conveyor-belt bands.
+  vWaveCrest = smoothstep(0.55, 0.95, wave) * (1.0 - vFlowing);
+
+  // ── AMPLITUDE: CALM BASELINE, SIMPLER WITH DISTANCE ──
+  float camDist = distance(cameraPosition, renderPosition.xyz);
+  float distFade = 1.0 / (1.0 + camDist * 0.0035);
+  float standingAmplitude = mix(0.012, 0.34, energy * energy)
+    * (0.5 + min(speed, 16.0) * 0.03) * (1.0 + vBreaker * 0.5);
+  float riverAmplitude = mix(0.004, 0.05, energy);
+  float amplitude = mix(standingAmplitude, riverAmplitude, vFlowing)
+    * uWaveAmplitude * distFade;
+  float displaced = wave * amplitude * geometryField.r;
   renderPosition.y = uElevationBase + geometryField.b - uWorldOrigin.y + displaced;
 
-  vWaveCrest = smoothstep(0.48, 0.93, wave)
-    * clamp(0.24 + vBreaker * 0.9 + vTurbulence * 0.85, 0.0, 1.0);
   vRenderPosition = renderPosition.xyz;
   vec4 mvPosition = viewMatrix * renderPosition;
   gl_Position = projectionMatrix * mvPosition;
@@ -149,30 +179,28 @@ float valueNoise(vec2 p) {
              mix(hash21(i + vec2(0.0, 1.0)), hash21(i + 1.0), f.x), f.y);
 }
 
-float bayer4(vec2 p) {
-  vec2 q = mod(floor(p), 4.0);
-  float x = q.x, y = q.y;
-  float a = mod(x, 2.0) * 2.0 + mod(y, 2.0);
-  float b = floor(x * 0.5) * 2.0 + floor(y * 0.5);
-  return (a * 4.0 + b + 0.5) / 16.0;
-}
-
+// Darker and closer to the surrounding landscape than the first cut, whose
+// water was among the highest-contrast elements in the frame. Calm water
+// should sit INTO the land, not on top of it.
 vec3 palette(float kind, float depth, float turbidity) {
-  vec3 shallow = vec3(0.20, 0.48, 0.48);
-  vec3 deep = vec3(0.035, 0.15, 0.23);
+  vec3 shallow = vec3(0.14, 0.33, 0.36);
+  vec3 deep = vec3(0.03, 0.115, 0.16);
   if (kind > 6.5 && kind < 10.5) {
-    shallow = vec3(0.25, 0.43, 0.36);
-    deep = vec3(0.07, 0.18, 0.18);
+    // river / stream / canal
+    shallow = vec3(0.15, 0.25, 0.23);
+    deep = vec3(0.055, 0.125, 0.125);
   } else if (kind > 3.5 && kind < 7.0) {
-    shallow = vec3(0.27, 0.49, 0.42);
-    deep = vec3(0.055, 0.20, 0.24);
+    // lake / pond / reservoir / basin
+    shallow = vec3(0.16, 0.31, 0.28);
+    deep = vec3(0.045, 0.14, 0.16);
   } else if (kind > 9.5) {
-    shallow = vec3(0.31, 0.43, 0.29);
-    deep = vec3(0.10, 0.19, 0.16);
+    // wetland
+    shallow = vec3(0.20, 0.28, 0.20);
+    deep = vec3(0.08, 0.14, 0.12);
   }
-  shallow = mix(shallow, vec3(0.38, 0.34, 0.19), turbidity * 0.44);
-  deep = mix(deep, vec3(0.16, 0.15, 0.095), turbidity * 0.32);
-  float attenuation = 1.0 - exp(-max(depth, 0.0) * mix(0.42, 0.13, turbidity));
+  shallow = mix(shallow, vec3(0.30, 0.27, 0.16), turbidity * 0.44);
+  deep = mix(deep, vec3(0.13, 0.12, 0.08), turbidity * 0.32);
+  float attenuation = 1.0 - exp(-max(depth, 0.0) * mix(0.5, 0.16, turbidity));
   return mix(shallow, deep, clamp(attenuation, 0.0, 1.0));
 }
 
@@ -184,34 +212,26 @@ float rippleHeight(vec2 p, vec2 flow, vec2 wind, float scale, float seed) {
     - uTime * (1.7 + speed * 0.12) + seed * 6.283);
   float capillary = sin(dot(p, normalize(direction + crossDirection * 0.57)) * mix(5.8, 1.1, scale)
     - uTime * (2.5 + speed * 0.08) + 2.1);
-  return (small * 0.68 + capillary * 0.32) * mix(0.012, 0.17, scale) * uRippleStrength;
+  return (small * 0.68 + capillary * 0.32) * mix(0.012, 0.1, scale) * uRippleStrength;
 }
 
 void main() {
   vec4 geometryField = texture2D(uHydroGeometry, vHydroUv);
   // ── THE OUTLINE IS A CUT, NOT A STIPPLE ──
   //
-  // This was coverage <= bayer4(gl_FragCoord.xy), an ordered dither that
-  // turned partial coverage into scattered fragments. Two objections, both
-  // from the seat. It is a SECOND dither: the composite already owns the
-  // world's ink and has a dial for it, and this one kept stippling with that
-  // dial off, so water alone could not be turned solid. And a river a few
-  // metres wide is well under half a field texel, so almost every fragment of
-  // it was a coin toss and the reach read as loose white pixels rather than
-  // as water.
-  //
-  // Half coverage, hard, which is also the threshold sampleRestingSurface
-  // classifies on — so the water you can see and the water the wheels find
-  // are now the same set of texels rather than two answers that agree on
-  // average. The shoreline is a texel edge at that point; softening it is the
-  // shore-distance channel's job, which is continuous because it is a
-  // distance, and not the coverage channel's.
+  // The composite owns the world's ink and has a dial for it; a second
+  // in-shader dither kept stippling with that dial off, and a river a few
+  // metres wide (well under half a field texel) became loose white pixels.
+  // Half coverage is also the threshold sampleRestingSurface classifies on,
+  // so the water you can see and the water the wheels find are the same set
+  // of texels. Softening the shoreline is the shore-distance channel's job.
   if (geometryField.r < 0.5) discard;
   vec4 dynamics = texture2D(uHydroDynamics, vHydroUv);
   vec4 materialField = texture2D(uHydroMaterial, vHydroUv);
   float kind = floor(materialField.r * 255.0 + 0.5);
   float seed = materialField.g;
   float turbidity = materialField.b;
+  float energy = clamp(dynamics.w, 0.0, 1.0);
 
   if (uDebugView > 0.5) {
     vec3 debugColour = vec3(0.0);
@@ -224,8 +244,7 @@ void main() {
       debugColour = mix(vec3(0.89, 0.72, 0.25), vec3(0.04, 0.12, 0.34), clamp(geometryField.a / 18.0, 0.0, 1.0));
     } else if (uDebugView < 4.5) {
       vec3 directionColour = vec3(dynamics.xy * 0.5 + 0.5, 0.28);
-      float energy = max(vTurbulence, vBreaker);
-      debugColour = mix(directionColour, vec3(1.0, 0.24, 0.07), energy * 0.88);
+      debugColour = mix(directionColour, vec3(1.0, 0.24, 0.07), max(vTurbulence, vBreaker) * 0.88);
     } else {
       float hue = fract(kind * 0.173 + 0.07);
       debugColour = 0.55 + 0.45 * cos(6.28318 * (hue + vec3(0.0, 0.67, 0.33)));
@@ -237,49 +256,85 @@ void main() {
     return;
   }
 
+  // ── DETAIL BUDGET BY DISTANCE ──
+  // Nothing below the final screen resolution may reach the quantiser: fine
+  // normal detail, grain and glint all attenuate with camera distance, so
+  // far water is calm and simple rather than aliased.
+  float camDist = distance(cameraPosition, vRenderPosition);
+  float detailFade = 1.0 / (1.0 + camDist * 0.006);
+
   vec2 wind = normalize(uWind.xy + vec2(0.00001, 0.0));
   vec2 flow = dynamics.xy;
-  float epsilon = mix(0.22, 0.75, dynamics.w);
-  float hL = rippleHeight(vAbsoluteXZ - vec2(epsilon, 0.0), flow, wind, dynamics.w, seed);
-  float hR = rippleHeight(vAbsoluteXZ + vec2(epsilon, 0.0), flow, wind, dynamics.w, seed);
-  float hD = rippleHeight(vAbsoluteXZ - vec2(0.0, epsilon), flow, wind, dynamics.w, seed);
-  float hU = rippleHeight(vAbsoluteXZ + vec2(0.0, epsilon), flow, wind, dynamics.w, seed);
+  float epsilon = mix(0.22, 0.75, energy);
+  float hL = rippleHeight(vAbsoluteXZ - vec2(epsilon, 0.0), flow, wind, energy, seed);
+  float hR = rippleHeight(vAbsoluteXZ + vec2(epsilon, 0.0), flow, wind, energy, seed);
+  float hD = rippleHeight(vAbsoluteXZ - vec2(0.0, epsilon), flow, wind, energy, seed);
+  float hU = rippleHeight(vAbsoluteXZ + vec2(0.0, epsilon), flow, wind, energy, seed);
   vec2 gradient = vec2(hR - hL, hU - hD) / (2.0 * epsilon);
-  gradient *= 1.0 + vTurbulence * 1.9 + vBreaker * 0.55;
+  gradient *= (1.0 + vTurbulence * 0.8) * detailFade;
   vec3 normal = normalize(vec3(-gradient.x, 1.0, -gradient.y));
 
-  vec3 colour = palette(kind, geometryField.a, turbidity);
-  float grain = valueNoise(vAbsoluteXZ * mix(0.28, 0.055, dynamics.w)
-    + flow * uTime * mix(0.12, 0.55, clamp(length(flow), 0.0, 1.0)));
-  colour *= 0.88 + grain * 0.20;
-  colour = mix(colour, colour * 1.16, vTurbulence * (0.18 + grain * 0.18));
+  // ── VISUAL DEPTH, SEPARATED FROM RAW BATHYMETRY ──
+  // Nearshore keeps the true depth so shoaling and the breaker band read;
+  // offshore the colour depth becomes a smooth function of shore distance,
+  // because DEM bathymetry mapped patch-by-patch into colour is camouflage.
+  float shoreDist = max(0.0, geometryField.g);
+  float offshore = smoothstep(15.0, 70.0, shoreDist) * (1.0 - vFlowing);
+  float visualDepth = mix(min(geometryField.a, 14.0),
+    min(4.0 + shoreDist * 0.1, 14.0), offshore);
 
+  vec3 colour = palette(kind, visualDepth, turbidity);
+  float grain = valueNoise(vAbsoluteXZ * mix(0.28, 0.055, energy)
+    + flow * uTime * mix(0.12, 0.55, clamp(length(flow), 0.0, 1.0)));
+  colour *= 1.0 + (grain - 0.5) * 0.14 * detailFade;
+
+  // ── LIGHT FROM THE SKY, NOT ONLY THE SUN VECTOR ──
+  // The daylight factor follows the sun's elevation: dusk rolls the water
+  // down and cools it, and midnight water is a dark blue-green mass with no
+  // daytime cyan left in it.
   vec3 lightDirection = normalize(uSunDirection);
   vec3 viewDirection = normalize(cameraPosition - vRenderPosition);
-  float diffuse = 0.58 + max(0.0, dot(normal, lightDirection)) * 0.42;
-  float glint = pow(max(0.0, dot(reflect(-lightDirection, normal), viewDirection)), 42.0);
-  colour = colour * diffuse + vec3(1.0, 0.88, 0.56) * glint * (0.3 + dynamics.w * 0.55);
+  float daylight = smoothstep(-0.04, 0.22, lightDirection.y);
+  float diffuse = mix(0.10, 1.0, daylight)
+    * (0.74 + max(0.0, dot(normal, lightDirection)) * 0.26);
+  colour *= diffuse;
+  colour = mix(colour * vec3(0.55, 0.75, 0.85), colour, daylight);
+  // The glint is broad and quiet. A narrow bright crest highlight is what
+  // the quantiser promotes into white wave diagrams at low sun.
+  float glint = pow(max(0.0, dot(reflect(-lightDirection, normal), viewDirection)), 9.0);
+  colour += vec3(1.0, 0.9, 0.7) * glint * 0.10 * daylight * detailFade;
 
-  float shoreWidth = mix(1.3, 4.8, dynamics.w) * max(0.05, uShoreFade);
-  float shoreBand = 1.0 - smoothstep(0.18, shoreWidth, geometryField.g);
-  float lappingFoam = (1.0 - vFlowing) * shoreBand * (0.07 + grain * 0.17);
-
+  // ── FOAM: SPARSE, CAUSAL, BRIEF ──
   vec2 flowDirection = normalize(flow + vec2(0.00001, 0.0));
   vec2 crossFlow = vec2(-flowDirection.y, flowDirection.x);
   float downstream = dot(vAbsoluteXZ, flowDirection);
   float across = dot(vAbsoluteXZ, crossFlow);
-  float foamStreak = valueNoise(vec2(downstream * 0.16 - uTime * (0.72 + vTurbulence * 1.15),
+  // River froth: only above a high energy threshold, fragmented into
+  // downstream-aligned streaks with a low duty cycle. A calm reach shows
+  // nothing; a rapid shows white over a minority of its surface.
+  float energyGate = smoothstep(0.55, 0.82, energy);
+  float foamStreak = valueNoise(vec2(downstream * 0.16 - uTime * (0.72 + energy * 1.1),
     across * 0.31 + seed * 13.0));
-  float brokenWater = smoothstep(0.47, 0.76, foamStreak + grain * 0.22);
-  float riverFoam = vFlowing * vTurbulence * brokenWater * (0.34 + vWaveCrest * 0.78);
-  float breakerFoam = (1.0 - vFlowing) * vBreaker
-    * smoothstep(0.38, 0.76, vWaveCrest + grain * 0.30);
-  float whitecap = (1.0 - vFlowing) * smoothstep(8.5, 17.0, uWind.z)
-    * dynamics.w * smoothstep(0.34, 0.82, vWaveCrest + grain * 0.18);
+  float riverFoam = vFlowing * energyGate
+    * smoothstep(0.66, 0.9, foamStreak + grain * 0.12) * 0.6;
+  // Breakers: crests inside the narrow depth band, spatially fragmented so
+  // the surf zone is broken white patches rather than a shoreline outline.
+  float crestPick = smoothstep(0.6, 0.92, vWaveCrest);
+  float fragmentNoise = smoothstep(0.42, 0.72,
+    valueNoise(vec2(across * 0.14 + seed * 7.0, downstream * 0.05 - uTime * 0.3)));
+  float breakerFoam = (1.0 - vFlowing) * vBreaker * crestPick * fragmentNoise;
+  // Residual surf-zone foam: sparse flecks, not a band.
+  float lappingFoam = (1.0 - vFlowing)
+    * (1.0 - smoothstep(0.2, mix(1.3, 4.8, energy) * max(0.05, uShoreFade), shoreDist))
+    * smoothstep(0.74, 0.9, valueNoise(vAbsoluteXZ * 0.5 + vec2(0.0, uTime * 0.22))) * 0.5;
+  float whitecap = (1.0 - vFlowing) * smoothstep(9.5, 17.0, uWind.z)
+    * energy * crestPick * fragmentNoise * 0.5;
   float rainPocks = smoothstep(0.42, 0.9, valueNoise(vAbsoluteXZ * 0.72 - uTime * 1.8)) * uRain;
-  float foam = clamp((lappingFoam + riverFoam * 0.82 + breakerFoam * 0.88
-    + whitecap * 0.42 + rainPocks * 0.16) * uFoamStrength, 0.0, 0.92);
-  colour = mix(colour, vec3(0.84, 0.91, 0.86), foam);
+  float foam = clamp((lappingFoam + riverFoam + breakerFoam * 0.8
+    + whitecap + rainPocks * 0.14) * uFoamStrength, 0.0, 0.75) * detailFade;
+  // Foam takes the scene's light too — white paint at midnight is a bug.
+  vec3 foamColour = vec3(0.84, 0.9, 0.88) * mix(0.14, 1.0, daylight);
+  colour = mix(colour, foamColour, foam);
 
   gl_FragColor = vec4(colour, 1.0);
   #include <tonemapping_fragment>
