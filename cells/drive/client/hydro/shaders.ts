@@ -282,13 +282,30 @@ void main() {
   // because DEM bathymetry mapped patch-by-patch into colour is camouflage.
   float shoreDist = max(0.0, geometryField.g);
   float offshore = smoothstep(15.0, 70.0, shoreDist) * (1.0 - vFlowing);
+  // The shallow-to-deep ramp is BROAD — uniform only past ~450m — so the
+  // transition itself is structure the quantiser can render as bands.
   float visualDepth = mix(min(geometryField.a, 14.0),
-    min(4.0 + shoreDist * 0.1, 14.0), offshore);
+    min(3.0 + shoreDist * 0.022, 14.0), offshore);
 
   vec3 colour = palette(kind, visualDepth, turbidity);
   float grain = valueNoise(vAbsoluteXZ * mix(0.28, 0.055, energy)
     + flow * uTime * mix(0.12, 0.55, clamp(length(flow), 0.0, 1.0)));
   colour *= 1.0 + (grain - 0.5) * 0.14 * detailFade;
+  // ── A FLAT FIELD DOES NOT SURVIVE THE QUANTISER ──
+  //
+  // Perfectly uniform deep water sits at one value for kilometres, and when
+  // that value lands near a palette boundary the post dither turns the whole
+  // sea into a high-contrast maze — photographed from the seat off Hout Bay.
+  // The cure is not less variation but MORE, of the right kind: broad
+  // (90-320m), low-contrast, world-anchored and nearly static, so the
+  // quantiser locks onto real structure and different reaches of sea settle
+  // onto different palette rungs instead of one giant threshold field. This
+  // is the "broad, low-contrast variation" the analysis called for, and it
+  // must never be sharpened or sped up — fast or fine variation here would
+  // crawl under the dither.
+  float broad = valueNoise(vAbsoluteXZ * 0.0031 + vec2(seed * 3.0, 7.0)) * 0.6
+    + valueNoise(vAbsoluteXZ * 0.011 - vec2(uTime * 0.015, 0.0)) * 0.4;
+  colour *= 1.0 + (broad - 0.5) * 0.16 * (1.0 - vFlowing);
 
   // ── LIGHT FROM THE SKY, NOT ONLY THE SUN VECTOR ──
   // The daylight factor follows the sun's elevation: dusk rolls the water
