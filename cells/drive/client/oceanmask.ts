@@ -154,6 +154,34 @@ export interface MaskOptions {
    * queries per tile rather than 65,536.
    */
   landward?: Uint8Array;
+  /**
+   * ── THE SEA CONTINUES FROM WHERE IT IS ALREADY ESTABLISHED ──
+   *
+   * Boundary pixels whose abutting pixel in the ADJACENT tile's mask is
+   * ocean. A wholly-offshore cover tile has no seeds of its own — ESA
+   * classifies near-coast sea as class 80, terrain never streams that far
+   * out, and an unknown pixel may not seed — so entire tiles of open sea
+   * rendered as nothing, in tile-shaped holes. Measured off Big Sur:
+   * 65,536 class-80 pixels, all unknown, all refused, zero ocean, twice.
+   *
+   * Cross-border adjacency is the same evidence as in-tile travel: this
+   * pixel is class 80 and CONNECTED to established sea. So these seed even
+   * where elevation is unknown. Barrier and landward still bind.
+   */
+  neighbourOcean?: Uint8Array;
+  /**
+   * ── WITHIN A CLIFF'S BLUR, THE COASTLINE OUTRANKS THE DEM ──
+   *
+   * Class-80 pixels within a cover pixel or two of an OSM coastline, on the
+   * SEA side of it. A 31m coastal pixel that is mostly water still samples
+   * its elevation from ground contaminated by the cliff standing in the same
+   * pixel, reads +5..20m, fails the datum gate, and pulls the waterline
+   * seaward of the mapped coast. OSM's winding says which side is the sea
+   * with none of that contamination, so for these pixels the height gate is
+   * WAIVED — connectivity still decides, they just may not be refused on a
+   * height the cliff wrote.
+   */
+  nearCoastSea?: Uint8Array;
 }
 
 const DEFAULTS = { tolM: 3, bridgePx: 4 };
@@ -177,6 +205,8 @@ export function buildOceanMask(
   const elev = options.elevation;
   const bar = options.barrier;
   const land = options.landward;
+  const neigh = options.neighbourOcean;
+  const nearSea = options.nearCoastSea;
   const n = width * height;
   const data = new Uint8Array(n);
   const stats: MaskStats = { seeds: 0, edgeSeeds: 0, bridged: 0, walled: 0, landward: 0, refused: 0, ocean: 0, total: n };
@@ -202,7 +232,10 @@ export function buildOceanMask(
       if (land && land[i]) { stats.landward++; continue; }   // …nor one behind it
       const x = i % width, y = (i / width) | 0;
       if (x !== 0 && y !== 0 && x !== width - 1 && y !== height - 1) continue;
-      if (!atDatum(i)) continue;
+      // A neighbour's established ocean seeds across the border regardless of
+      // the datum gate; the coastline waiver relaxes it; otherwise the gate
+      // stands exactly as before.
+      if (!(neigh && neigh[i]) && !(nearSea && nearSea[i]) && !atDatum(i)) continue;
       data[i] = 255;
       stats.edgeSeeds++;
       queue[tail++] = i;
@@ -248,7 +281,7 @@ export function buildOceanMask(
       // The coastline still binds: an unknown pixel behind a dyke is stopped by
       // the barrier, and one on the landward side is refused above.
       const known = !elev || Number.isFinite(elev[j]);
-      if (known && !atDatum(j)) continue;
+      if (!(nearSea && nearSea[j]) && known && !atDatum(j)) continue;
       // THE HEIGHT GATE, for pixels that HAVE a height. A tidal river mouth
       // passes the distance test for a few pixels and then fails here, which is
       // right: the water is still water, it is simply not the sea.

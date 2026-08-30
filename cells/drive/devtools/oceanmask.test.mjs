@@ -376,5 +376,48 @@ const show = (g, m) => {
     stats.ocean === 0 && stats.refused === 8, stats);
 }
 
+// ── 12. THE SEA CONTINUES ACROSS A TILE BORDER ────────────────────
+// A wholly-offshore cover tile is ALL class 80 with no elevation ever —
+// no raw zeros (ESA classifies near-coast sea), no datum-level edge pixel.
+// Measured off Big Sur as 65,536 refused and zero ocean, twice: whole tiles
+// of open sea rendered as holes. The neighbour's established ocean at the
+// shared border is the same evidence as in-tile travel, and seeds it.
+{
+  const rows = ['~~~~~~', '~~~~~~', '~~~~~~', '~~~~~~'];
+  const g = grid(rows);
+  const elev = heights(rows, () => NaN);
+  const blank = buildOceanMask(g.data, g.w, g.h, { datumM: 0, elevation: elev, seedEdge: true });
+  ok('with no neighbour to vouch, the offshore tile still seeds nothing',
+    blank.stats.ocean === 0, blank.stats);
+  const neigh = new Uint8Array(g.w * g.h);
+  for (let x = 0; x < g.w; x++) neigh[x] = 1;          // the tile north of us is sea
+  const { grid: m, stats } = buildOceanMask(g.data, g.w, g.h,
+    { datumM: 0, elevation: elev, seedEdge: true, neighbourOcean: neigh });
+  ok(`vouched for, it fills entirely (${stats.ocean}/${g.w * g.h})`,
+    stats.ocean === g.w * g.h, { stats, seen: show(g, m) });
+}
+// ── 13. WITHIN A CLIFF'S BLUR, THE COASTLINE OUTRANKS THE DEM ─────
+// A coastal pixel that is mostly water samples its height from the cliff
+// standing in the same pixel, reads far above the datum, and refuses — so
+// the waterline sits seaward of the mapped coast. Marked nearCoastSea (the
+// caller checked the winding), the height gate is waived; connectivity
+// still decides, so the same value inland changes nothing.
+{
+  const rows = ['..~~##'];
+  const g = grid(rows);
+  // The two class-80 pixels carry cliff-bled heights of 12m and 18m.
+  const elev = heights(rows, (c, x) => (c === '~' ? (x === 2 ? 12 : 18) : c === '.' ? 0 : 40));
+  const refused = buildOceanMask(g.data, g.w, g.h, { datumM: 0, elevation: elev });
+  ok('cliff-bled heights refuse without the waiver (the setback)',
+    refused.stats.ocean === 2 && refused.stats.refused === 2, refused.stats);
+  const nearSea = new Uint8Array(g.w * g.h);
+  nearSea[2] = 1; nearSea[3] = 1;
+  const { grid: m, stats } = buildOceanMask(g.data, g.w, g.h,
+    { datumM: 0, elevation: elev, nearCoastSea: nearSea });
+  ok(`waived, the flood carries to the coast (${show(g, m)})`,
+    maskAt(m, 2.5 / 6, 0.5) && maskAt(m, 3.5 / 6, 0.5) && !maskAt(m, 4.5 / 6, 0.5),
+    { stats, seen: show(g, m) });
+}
+
 console.log(bad ? `\n${bad} FAILED` : '\nall good — classification, not elevation');
 if (bad) process.exitCode = 1;

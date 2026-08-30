@@ -1155,7 +1155,8 @@ function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskS
   // tile — cheap, one nearest-segment query per class-80 pixel — while the SIDE
   // test runs on the boundary only, because that is where seeds come from and
   // it is ~1000 queries against 65,536.
-  let barrier: Uint8Array | undefined, landward: Uint8Array | undefined;
+  let barrier: Uint8Array | undefined, landward: Uint8Array | undefined,
+    nearCoastSea: Uint8Array | undefined;
   if (coastSegs.size) {
     // ── ONE QUERY PER CANDIDATE PIXEL ──
     //
@@ -1175,18 +1176,58 @@ function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskS
       const ex = t.xs + ((px + 0.5) / 256) * t.w, ez = t.zs + ((pz + 0.5) / 256) * t.h;
       if (t.data[i] === 80 && nearestCoast(ex, ez, COVER_PX_M) !== null) {
         (barrier ??= new Uint8Array(t.data.length))[i] = 1;
+      } else if (t.data[i] === 80 && nearestCoast(ex, ez, COVER_PX_M * 2) !== null
+        && !coastLandward(ex, ez, COVER_PX_M * 4)) {
+        // Within a cliff's blur of the coast, on the sea side: the DEM in this
+        // pixel is contaminated by the cliff standing in it, and the winding
+        // is the better witness — the height gate is waived (see the mask).
+        (nearCoastSea ??= new Uint8Array(t.data.length))[i] = 1;
       }
       if (onEdge && coastLandward(ex, ez)) {
         (landward ??= new Uint8Array(t.data.length))[i] = 1;
       }
     }
   }
+  // ── SEED FROM NEIGHBOURING MASKS ALREADY BUILT ──
+  //
+  // A wholly-offshore tile has no seed of its own; its neighbour's
+  // established ocean at the shared border is the evidence — the cross-tile
+  // form of the travel rule. Only masks already in the cache contribute;
+  // the invalidation below re-asks a blank tile once a neighbour can vouch.
+  let neighbourOcean: Uint8Array | undefined;
+  {
+    const [ktx, kty] = key.split('/').map(Number);
+    const sides: Array<[string, (i: number) => number, (i: number) => number]> = [
+      [`${ktx}/${kty - 1}`, (i) => i, (i) => 255 * 256 + i],            // north edge ← their south row
+      [`${ktx}/${kty + 1}`, (i) => 255 * 256 + i, (i) => i],            // south edge ← their north row
+      [`${ktx - 1}/${kty}`, (i) => i * 256, (i) => i * 256 + 255],      // west edge ← their east col
+      [`${ktx + 1}/${kty}`, (i) => i * 256 + 255, (i) => i * 256],      // east edge ← their west col
+    ];
+    for (const [nk, mine, theirs] of sides) {
+      const rec = oceanMasks.get(nk);
+      if (!rec || rec.stats.ocean === 0) continue;
+      for (let i = 0; i < 256; i++) {
+        if (rec.grid.data[theirs(i)]) (neighbourOcean ??= new Uint8Array(t.data.length))[mine(i)] = 1;
+      }
+    }
+  }
   maskBuilds++;
   const built = buildOceanMask(t.data, 256, 256,
-    { datumM: datum, elevation, seedEdge: true, barrier, landward });
+    { datumM: datum, elevation, seedEdge: true, barrier, landward, neighbourOcean, nearCoastSea });
   const rec = { ...built, datum, coasts: coastSegs.size >> 6, unknown, tiles: heightTiles.size };
   if (oceanMasks.size > 64) oceanMasks.clear();
   oceanMasks.set(key, rec);
+  // A mask that reaches its border with ocean can vouch for a blank
+  // neighbour: drop any cached neighbour that found NO ocean while holding
+  // unjudged pixels, so its next query rebuilds with this seed available.
+  // Only ever promotes blank-to-sea, so it cannot ping-pong.
+  if (built.stats.ocean > 0) {
+    const [ktx, kty] = key.split('/').map(Number);
+    for (const nk of [`${ktx}/${kty - 1}`, `${ktx}/${kty + 1}`, `${ktx - 1}/${kty}`, `${ktx + 1}/${kty}`]) {
+      const nrec = oceanMasks.get(nk);
+      if (nrec && nrec.stats.ocean === 0 && nrec.unknown > 0) oceanMasks.delete(nk);
+    }
+  }
   return rec;
 }
 /** Is THIS POINT the sea. The question the global `seaOn` could never ask. */
