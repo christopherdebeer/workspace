@@ -1581,6 +1581,25 @@ function oceanCoverageFor(t: HeightTile): OceanCoverage {
       }
     }
   }
+  // ── DILATE THE VERDICT, NOT THE TRUTH ──
+  //
+  // The mask's 31m raster stops a pixel or two short of the true waterline
+  // in places, and any hard edge it draws is visibly blocky. Two dilation
+  // passes nominate the adjacent band as CANDIDATE sea (200 — still above
+  // the module's ocean threshold, distinguishable in debug); the depth cut
+  // in the field then decides the actual edge against the terrain, which is
+  // the same rule the legacy plane got right for free. Physics is untouched:
+  // oceanAt reads the raw mask, not this render grid.
+  for (let pass = 0; pass < 2; pass++) {
+    const src = data.slice();
+    for (let iz = 0; iz < OCEAN_GRID_N; iz++) for (let ix = 0; ix < OCEAN_GRID_N; ix++) {
+      const i = iz * OCEAN_GRID_N + ix;
+      if (src[i] >= 200) continue;
+      const wet = (ix > 0 && src[i - 1] >= 200) || (ix < OCEAN_GRID_N - 1 && src[i + 1] >= 200)
+        || (iz > 0 && src[i - OCEAN_GRID_N] >= 200) || (iz < OCEAN_GRID_N - 1 && src[i + OCEAN_GRID_N] >= 200);
+      if (wet) data[i] = 200;
+    }
+  }
   return { status: 'ready', grid: { width: OCEAN_GRID_N, height: OCEAN_GRID_N, data },
     bounds: { minX: bx0, minZ: bz0, maxX: bx0 + bw, maxZ: bz0 + bh } };
 }

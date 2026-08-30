@@ -477,8 +477,22 @@ export function buildHydroTile(
       // <0.25 not yet known. See OceanCoverage in types.
       if (raw < 0.25) continue;
       answered[iz * width + ix] = 1;
-      if (raw >= 0.75) {
-        paint(ix, iz, 1, ocean, bodyLevel(ocean, undefined, xAt(ix), zAt(iz)), [0, 0]);
+      if (raw >= 0.7) {
+        // ── THE WATERLINE IS THE TERRAIN'S OWN DATUM CROSSING ──
+        //
+        // The legacy sea never computed a coastline and its coast always
+        // looked right: the plane vanished wherever ground rose above the
+        // datum. Terrain intersection IS the coastline renderer. The mask
+        // here only nominates the REGION as sea (and vetoes basins); the
+        // edge itself comes from depth against the same DEM the terrain
+        // mesh is built from, so the drawn waterline hugs the drawn land by
+        // construction and the mask's raster blockiness stops being visible.
+        const x = xAt(ix), z = zAt(iz);
+        const lvl = bodyLevel(ocean, undefined, x, z);
+        const ground = sampleElevation(input.elevation, input.bounds, x, z);
+        const amount = Number.isFinite(ground)
+          ? clamp((lvl - ground + 0.35) / 1.0, 0, 1) : 1;
+        paint(ix, iz, amount, ocean, lvl, [0, 0]);
       }
     }
   }

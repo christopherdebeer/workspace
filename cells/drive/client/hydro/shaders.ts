@@ -277,14 +277,22 @@ void main() {
   vec2 flow = dynamics.xy;
   vec3 normal = vec3(0.0, 1.0, 0.0);
   if (nearWater) {
-    float epsilon = mix(0.22, 0.75, energy);
-    float hL = rippleHeight(vAbsoluteXZ - vec2(epsilon, 0.0), flow, wind, energy, seed);
-    float hR = rippleHeight(vAbsoluteXZ + vec2(epsilon, 0.0), flow, wind, energy, seed);
-    float hD = rippleHeight(vAbsoluteXZ - vec2(0.0, epsilon), flow, wind, energy, seed);
-    float hU = rippleHeight(vAbsoluteXZ + vec2(0.0, epsilon), flow, wind, energy, seed);
-    vec2 gradient = vec2(hR - hL, hU - hD) / (2.0 * epsilon);
-    gradient *= (1.0 + vTurbulence * 0.8) * detailFade;
-    normal = normalize(vec3(-gradient.x, 1.0, -gradient.y));
+    // ── ONE TAP AND THE HARDWARE'S DERIVATIVES, NOT FOUR TAPS ──
+    // The GPU already computes every fragment in 2x2 quads; dFdx/dFdy of a
+    // single ripple evaluation give its screen-space gradient for free, and
+    // the world-space gradient falls out of a 2x2 solve against the
+    // derivatives of the world position. A quarter of the ripple cost for
+    // normals the quantiser cannot tell apart.
+    float h = rippleHeight(vAbsoluteXZ, flow, wind, energy, seed);
+    vec2 dpx = dFdx(vAbsoluteXZ), dpy = dFdy(vAbsoluteXZ);
+    float det = dpx.x * dpy.y - dpx.y * dpy.x;
+    if (abs(det) > 1e-7) {
+      float dhx = dFdx(h), dhy = dFdy(h);
+      vec2 gradient = vec2(dhx * dpy.y - dhy * dpx.y, dhy * dpx.x - dhx * dpy.x) / det;
+      gradient = clamp(gradient, vec2(-2.0), vec2(2.0))
+        * (1.0 + vTurbulence * 0.8) * detailFade;
+      normal = normalize(vec3(-gradient.x, 1.0, -gradient.y));
+    }
   }
 
   // ── VISUAL DEPTH, SEPARATED FROM RAW BATHYMETRY ──
@@ -339,9 +347,15 @@ void main() {
     colour += vec3(1.0, 0.9, 0.7) * glint * 0.10 * daylight * detailFade;
   }
 
-  // Foam is a near-water feature entirely: beyond the detail horizon it
-  // would be sub-pixel white noise for eleven noise taps a fragment.
-  if (nearWater) {
+  // ── FOAM IS PAID FOR ONLY WHERE FOAM CAN EXIST ──
+  // Near water AND in a place that can hold any: the breaker band, an
+  // energetic river reach, the last few metres of shore, rain, or a gale.
+  // The open calm sea — most of every coastal frame — pays nothing, which
+  // with the derivative normals above is the difference the frame counter
+  // was reporting between the hydro sea and the legacy plane's flat colour.
+  bool foamZone = vBreaker > 0.02 || vTurbulence > 0.01 || uRain > 0.05
+    || geometryField.g < 7.0 || uWind.z > 9.5;
+  if (nearWater && foamZone) {
     // ── FOAM: SPARSE, CAUSAL, BRIEF ──
     vec2 flowDirection = normalize(flow + vec2(0.00001, 0.0));
     vec2 crossFlow = vec2(-flowDirection.y, flowDirection.x);
