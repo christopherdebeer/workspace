@@ -1307,10 +1307,29 @@ const HYDRO_PROJECT = { project: (x: number, z: number): readonly [number, numbe
 /** One decoded OSM way, normalised and stored. Cheap enough to call from the
  *  decode loop: a bbox, a map write, and a scan of the ~18 live height tiles. */
 function noteHydroWay(id: string | number, tags: Record<string, string>,
-                      pts: Array<[number, number]>): void {
+                      pts: Array<[number, number]>, key: string): void {
   if (!HYDRO_ON) return;
   for (const f of extractOsmHydro([{ id, tags, geometry: pts }], HYDRO_PROJECT)) {
-    if (hydroFeats.has(f.id)) continue;
+    // ── ONE WAY ARRIVES IN PIECES; KEEP THEM ALL ──
+    //
+    // Overpass clips a way at every vector-tile edge, so a river reaches
+    // `renderWays` as several elements sharing ONE osm id and carrying
+    // different stretches of geometry — which is why main keys its own dedupe
+    // on `el.ck`, the clipped key, and not on the id.
+    //
+    // Stored here by feature id, the first fragment to arrive won and every
+    // later stretch of the same river was discarded as a duplicate. That is a
+    // river drawn as whichever piece happened to decode first: reaches simply
+    // missing, and the piece that did survive ending in mid-valley. The hydro
+    // author's note lists exactly that — "some rivers terminate as hard wedges
+    // or exhibit width jumps and pinched joins" — under continuity.
+    //
+    // So the STORE is keyed per fragment and the FEATURE keeps `osm:<id>`.
+    // Those are two different identities and both are wanted: the fragment is
+    // the geometry, and the id is the body the registry reconciles to one
+    // level across every tile the river crosses.
+    const slot = `${key}:${f.id}`;
+    if (hydroFeats.has(slot)) continue;
     if (hydroFeats.size >= HYDRO_FEAT_CAP) { hydroFeatsFull++; return; }
     let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
     const eat = (p: Float64Array): void => {
@@ -1329,7 +1348,7 @@ function noteHydroWay(id: string | number, tags: Record<string, string>,
       minX -= r; minZ -= r; maxX += r; maxZ += r;
     } else for (const poly of f.geometry.polygons) eat(poly.outer);
     if (!Number.isFinite(minX)) continue;
-    hydroFeats.set(f.id, { f, minX, minZ, maxX, maxZ });
+    hydroFeats.set(slot, { f, minX, minZ, maxX, maxZ });
     // Every tile already fed that this feature lands in is now stale. Tiles
     // never fed need nothing: they will pick the feature up on their first
     // feed, and marking them here would queue a rebuild of water that has not
@@ -1514,14 +1533,26 @@ function hydroFeed(t: HeightTile): void {
   // wanted, too — a feature must reach every tile it touches or the body
   // registry cannot reconcile one lake across four of them.
   const feats: HydroFeature[] = [];
-  const x1 = t.xs + t.w, z1 = t.zs + t.h;
+  // ── AND THE GUTTER COUNTS ──
+  //
+  // The field is `fieldResolution` plus a one-texel gutter on each side, so it
+  // samples a little OUTSIDE the tile's bounds — that margin is what lets the
+  // shore distance and the wave displacement resolve at a tile edge instead of
+  // clamping. A feature that only reaches into the gutter was being dropped by
+  // a bbox test against the bare bounds, which puts a seam at the join.
+  //
+  // The pad widens the SEARCH and must not touch the tile's declared bounds —
+  // those are the tile, and a field built on padded bounds would sit half a
+  // texel off the world in both axes.
+  const pad = t.w / 128;
   for (const e of hydroFeats.values()) {
-    if (e.maxX < t.xs || e.minX > x1 || e.maxZ < t.zs || e.minZ > z1) continue;
+    if (e.maxX < t.xs - pad || e.minX > t.xs + t.w + pad) continue;
+    if (e.maxZ < t.zs - pad || e.minZ > t.zs + t.h + pad) continue;
     feats.push(e.f);
   }
   void hydroSys.upsertTile({
     key, revision: rev,
-    bounds: { minX: t.xs, minZ: t.zs, maxX: x1, maxZ: z1 },
+    bounds: { minX: t.xs, minZ: t.zs, maxX: t.xs + t.w, maxZ: t.zs + t.h },
     elevation: { width: n, height: n, data: elevation, verticalDatum: 'absolute-m' },
     features: feats,
     oceanCoverage: oceanCoverageFor(t),
@@ -15339,7 +15370,7 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
       // reads and strokes the line on the chart — none of which the hydro
       // module knows about or wants to. What it stops doing is drawing the
       // SURFACE; see the note at the mesh in `waterRun`.
-      noteHydroWay(el.id, tags, pts);
+      noteHydroWay(el.id, tags, pts, dk);
       waterway(pts, WATER_W[tags.waterway as string], tags.name, dk);
     } else if (tags.railway) {
       // Rails read as a narrow dark line across the country and a thing you
@@ -15363,7 +15394,7 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
       // the physics — `polygon(..., 'water')` is what fills `waterPolys` — so
       // this branch hands the surface AND the wading answer over together,
       // which is why `surfaceAt` grew a hydro sample in the same change.
-      noteHydroWay(el.id, tags, pts);
+      noteHydroWay(el.id, tags, pts, dk);
       if (!HYDRO_ON) polygon(pts, MAT.water, 0.025, 0, 'water');
     } else if (AREA_TAG(tags)) {
       // NOT A MESH — see noteArea. The ground wears it; the scatter stands on it.
