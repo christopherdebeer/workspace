@@ -30,6 +30,7 @@ import {
   solveChain as solveProfile,
 } from './roadprofile';
 import { createOverlays } from './overlays';
+import { createSplash } from './splash';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
@@ -13063,6 +13064,39 @@ function channelAt(x: number, z: number): Seg | null {
 }
 const wiSet = new Set<Seg>();
 function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: number; speed: number } {
+  // ── THE DRAWN WATER IS THE WATER ──
+  //
+  // This used to answer entirely from the CHANNEL grid — the carved ribbon a
+  // waterway line leaves behind — with a depth invented from the ribbon's own
+  // half-width (`0.3 + hw*0.09`), which is a constant per river and has no
+  // relationship to how deep the water at this point actually is. So the
+  // truck waded a fixed 0.3-1.4m whether it was crossing an ankle-deep gravel
+  // bar or the thalweg, and it waded wherever the RIBBON ran, which is not
+  // always where the surface is drawn. Reported from the seat as splashes
+  // over dry grass and as a crawl that arrives all at once.
+  //
+  // The field knows better and has since the hydro system landed: it holds a
+  // resting level and a depth at every texel of every body, ocean included.
+  // Ask it first. The channel model stays as the fallback for water that has
+  // a carved bed but no built field yet — a tile mid-stream, or a culvert.
+  const wet = hydroSys?.sampleRestingSurface(x, z);
+  if (wet) {
+    const bed = hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
+    // The field's own depth channel is floored at the build's minimumDepth, so
+    // prefer the honest level-minus-ground where the ground is known.
+    const d = Number.isFinite(bed) ? wet.restingLevelM - bed : wet.depthM;
+    const fx = wet.flow[0], fz = wet.flow[1];
+    const fl = Math.hypot(fx, fz);
+    return {
+      depth: clamp(d, 0.05, 4),
+      fx: fl > 0.01 ? fx / fl : 0,
+      fz: fl > 0.01 ? fz / fl : 0,
+      // Standing water does not push. A river's own energy rides the field's
+      // dynamics, but the direction is all this needs — the current's strength
+      // follows the depth, the same way the channel model's did.
+      speed: fl > 0.01 ? clamp(0.4 + fl * 2.2, 0.4, 3.2) : 0,
+    };
+  }
   wiSet.clear();
   channelsNear(x, z, wiSet);
   let best: Seg | null = null, bd = Infinity;
@@ -18717,8 +18751,11 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
       // 0.8+seed it photographed as grey boulders drifting behind the truck —
       // individually legible, which is exactly wrong: grit reads as a SHOWER or
       // it reads as debris. Halved here and emitted three times as often.
+      // Water is a THIRD of what it was: these are the torn tips off a drawn
+      // sheet now, not the splash itself, and at 7px each they read as
+      // confetti — which is exactly what the seat reported.
       float sz = (isDust * (1.7 + aSeed * 2.1)
-                + isWater * (1.2 + aSeed * 1.5)
+                + isWater * (0.42 + aSeed * 0.55)
                 + isGrit * (0.40 + aSeed * 0.45)) * uSizeK;
       float px = sz * grow * (175.0 / max(-mv.z, 1.0));
       gl_Position = projectionMatrix * mv;
@@ -18742,7 +18779,7 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
       px *= 1.0 + vStretch;
       // Caps per species, in low-res pixels. Dust is allowed to be the big one
       // and is still a third of the old ceiling.
-      gl_PointSize = min(px, isDust * 11.0 + isWater * 7.0 + isGrit * 3.0);
+      gl_PointSize = min(px, isDust * 11.0 + isWater * 3.0 + isGrit * 3.0);
       // ── BACKLIT DUST ──
       // Forward scattering is the dominant optical behaviour of airborne dust and
       // the whole reason a rally plume glows: looking THROUGH it toward the sun,
@@ -18798,9 +18835,17 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
       // So it MULTIPLIES the ground colour (backlit dust is brighter dust, not
       // whiter dust) and the result is capped below the bloom threshold. Airborne
       // soil does not glow, and this is the line that guarantees it cannot.
+      // ── A DROPLET IS THE COLOUR OF THE WATER IT CAME OFF ──
+      // Water used to take one flat unlit uWater whatever body threw it and
+      // whatever hour it was — pale cyan at midnight, in a muddy river, the
+      // same bug the foam had before the sky lit it. The emitter now supplies
+      // the body's own colour ALREADY LIT, through the same per-particle
+      // channel dust uses for the ground, and uWater is only the fallback for
+      // a droplet thrown before a body was known.
+      vec3 drop = mix(uWater, vCol, step(0.001, dot(vCol, vec3(1.0))));
       vec3 col = isDust * min(earth * (1.0 + 0.85 * vScatter), vec3(0.58))
                + isGrit * earth * 0.62
-               + isWater * uWater;
+               + isWater * drop;
       // Dust thins on the SQUARE of its life: the trailing end of the plume is
       // the part hanging in front of the camera, so it has to be nearly gone by
       // the time the truck has driven out from under it.
@@ -18816,8 +18861,15 @@ const dustPoints = new THREE.Points(dustGeo, new THREE.ShaderMaterial({
       // that decides whether it glows: dust is kept UNDER it (airborne soil is
       // not a light source, and a blooming plume is instantly a smoke machine),
       // while a lit droplet is pushed over so water sparkles for free.
+      // ── WATER IS A SPRITE PIXEL: ON OR OFF ──
+      // Dust and grit keep their ramps (a plume genuinely is a density), but a
+      // droplet had a soft alpha AND sat above the 0.62 bloom cut, so every
+      // one of them glowed and every one of them banded. Binary now, and held
+      // UNDER the cut: the sheet's torn rim is the only water allowed to
+      // sparkle, which is where the light actually catches it.
+      float wa = step(0.5, soft) * step(0.06, vLife) * 0.55;
       float a = isDust * soft * pow(vLife, 1.25) * 0.30
-              + isWater * soft * pow(vLife, 0.80) * 0.62
+              + isWater * wa
               + isGrit * soft * pow(vLife, 0.55) * 0.62;
       gl_FragColor = vec4(col, a);
     }`,
@@ -18864,18 +18916,24 @@ function spawnPart(kind: number, x: number, y: number, z: number,
  * wheel; the jitter here is the cone around it. Both species ride the wind that
  * is already leaning the grass and driving the deck.
  */
-function emitDust(x: number, y: number, z: number, vx: number, vz: number, water = false): void {
+function emitDust(x: number, y: number, z: number, vx: number, vz: number, water = false,
+                  tint?: [number, number, number]): void {
   const spread = water ? 0.28 : 0.22;
-  const jx = (Math.random() - 0.5) * (water ? 5.5 : 2.6);
-  const jz = (Math.random() - 0.5) * (water ? 5.5 : 2.6);
+  // ── THE JITTER USED TO BE THE WHOLE THROW ──
+  // At +/-2.75 m/s of random horizontal scatter, the ejection velocity the
+  // caller worked out was noise by comparison: a crawl and a charge threw the
+  // same fountain, which is exactly the complaint. A third of that, so the
+  // spray follows the hull's actual throw and the speed shows.
+  const jx = (Math.random() - 0.5) * (water ? 1.8 : 2.6);
+  const jz = (Math.random() - 0.5) * (water ? 1.8 : 2.6);
   spawnPart(water ? 1 : 0,
     x + (Math.random() - 0.5) * spread,
     y + (water ? 0.05 : 0.15),
     z + (Math.random() - 0.5) * spread,
     vx + wxWind.x * (water ? 0.15 : 0.4) + jx,
-    water ? 2.2 + Math.random() * 2.6 : 0.7 + Math.random() * 1.1,
+    water ? 1.6 + Math.random() * 1.9 : 0.7 + Math.random() * 1.1,
     vz + wxWind.z * (water ? 0.15 : 0.4) + jz,
-    water ? null : groundTint(x, z));
+    water ? (tint ?? null) : groundTint(x, z));
 }
 /**
  * A STONE, NOT A PUFF — and the sound for it was already here.
@@ -18886,6 +18944,108 @@ function emitDust(x: number, y: number, z: number, vx: number, vz: number, water
  * second. It is the cue that says the surface is COARSE, which no amount of
  * tuning the dust cloud can express.
  */
+/**
+ * ── THE SHEETS, AND WHAT THE TRUCK TELLS THEM ──
+ *
+ * The drawn sheet is the READ; the droplet points below it are the life. This
+ * is the half that says "a hull just displaced water", and it only ever fires
+ * where the FIELD says there is water to displace — see splashWet. Splashing
+ * over dry grass was half of why the effect read as comedy, and the carved
+ * channel grid (which is what the wade volume used to be) says water for
+ * every ribbon a waterway line leaves behind, drawn or not.
+ */
+const splash = createSplash();
+scene.add(splash.object3d);
+const splashTint = new THREE.Color();
+// Between the body's own colour and foam — thrown water is aerated, so it is
+// paler than the surface it came off, but it is NOT white. White is what the
+// bloom pass promotes into a headlight, and it is what made these read as
+// cartoon suds.
+const SPLASH_BODY: Record<string, number> = {
+  ocean: 0x76a8b0, lagoon: 0x74a4a0, lake: 0x6fa198, reservoir: 0x6fa198,
+  pond: 0x6f9888, basin: 0x6f9888, river: 0x6d9890, stream: 0x6d9890,
+  canal: 0x6d9490, wetland: 0x7a8c70,
+};
+/** Is there DRAWN water here, and what is it — the one gate every splash
+ *  passes through, and the tint it comes out with. */
+function splashWet(x: number, z: number): { levelM: number; depthM: number; kind: string } | null {
+  const w = hydroSys?.sampleRestingSurface(x, z);
+  if (!w) return null;
+  return { levelM: w.restingLevelM, depthM: w.depthM, kind: w.kind };
+}
+/** The body's own water, lit by the sky. A sheet thrown at midnight is dark
+ *  water — the same rule the foam in the water shader lives by, and the same
+ *  bug (white paint at night) if it is skipped. */
+function splashColour(kind: string): THREE.Color {
+  const day = clamp((LIGHT_DIR.y + 0.04) / 0.26, 0, 1);
+  return splashTint.setHex(SPLASH_BODY[kind] ?? 0x9cc4bc).multiplyScalar(0.2 + 0.8 * day);
+}
+/** The same colour as a tuple, for the droplet pool's per-particle channel. */
+function splashRgb(kind: string): [number, number, number] {
+  const c = splashColour(kind);
+  return [c.r, c.g, c.b];
+}
+/**
+ * THE ENTRY CROWN. Fired by the wade step from the PLOW IMPULSE — the speed
+ * the water actually took off the truck — so the picture cannot disagree with
+ * the physics about how hard the hull hit. A symmetric crown, thrown wide,
+ * standing on the waterline.
+ */
+function splashEntry(impulse: number, depthM: number): void {
+  const w = splashWet(state.x, state.z);
+  if (!w) return;
+  const tint = splashColour(w.kind);
+  const cosH = Math.sin(state.heading), sinH = -Math.cos(state.heading);
+  // A crown at each front corner, and the impulse decides how big. Two, not
+  // one: a truck is wide, and a single sheet on the centreline reads as a
+  // fin rather than as a bow wave.
+  for (const side of [-1, 1]) {
+    splash.emit({
+      x: state.x + cosH * 1.9 + sinH * side * 1.05,
+      y: w.levelM - baseElev,
+      z: state.z + sinH * 1.9 - cosH * side * 1.05,
+      dx: cosH * 0.4 + sinH * side, dz: sinH * 0.4 - cosH * side,
+      size: clamp(0.45 + impulse * 0.85 + depthM * 0.35, 0.45, 1.5),
+      lean: 0.35,
+      tint,
+      life: 0.3 + Math.random() * 0.1,
+    });
+  }
+}
+/**
+ * THE BOW SHEET. Continuous while the hull is moving through water: a curtain
+ * thrown forward and out, leaning away along its own travel. Height follows
+ * speed SQUARED against depth, because that is what displacing water costs and
+ * it is what makes a charge look different from a crawl — the complaint that
+ * started this round.
+ */
+let splashBowAt = 0;
+function splashBow(now: number, speed: number, depthM: number): void {
+  const v = Math.abs(speed);
+  if (v < 1.2 || depthM < 0.06) return;
+  // Frame-animated sheets do not need to be emitted per frame; a new one every
+  // ~90ms overlaps the previous one's last frames and reads as continuous.
+  if (now - splashBowAt < 90) return;
+  splashBowAt = now;
+  const w = splashWet(state.x, state.z);
+  if (!w) return;
+  const tint = splashColour(w.kind);
+  const cosH = Math.sin(state.heading), sinH = -Math.cos(state.heading);
+  const side = Math.random() < 0.5 ? 1 : -1;
+  const power = clamp((v * v) / 90 * clamp(depthM / 0.5, 0.25, 1.6), 0.1, 1.6);
+  splash.emit({
+    x: state.x + cosH * 1.7 + sinH * side * 1.15,
+    y: w.levelM - baseElev,
+    z: state.z + sinH * 1.7 - cosH * side * 1.15,
+    // Out and slightly forward: the sheet peels away from the hull.
+    dx: sinH * side * 0.85 + cosH * 0.5,
+    dz: -cosH * side * 0.85 + sinH * 0.5,
+    size: clamp(0.35 + power * 0.75, 0.35, 1.15),
+    lean: 1,
+    tint,
+    life: 0.3 + Math.random() * 0.12,
+  });
+}
 function emitGrit(x: number, y: number, z: number, vx: number, vz: number): void {
   spawnPart(2, x, y + 0.1, z,
     vx * 1.6 + (Math.random() - 0.5) * 4.5,
@@ -18921,6 +19081,8 @@ function stepDust(dt: number): void {
   const u = dustPoints.material as THREE.ShaderMaterial;
   (u.uniforms.uHard as { value: number }).value = partHard;
   (u.uniforms.uSizeK as { value: number }).value = dustSizeK;
+  // The sheets ride the same clock; they need the camera for their billboard.
+  splash.step(dt, camera);
   if (any) {
     for (const a of ['position', 'aLife', 'aSeed', 'aKind', 'aVel', 'aCol']) {
       (dustGeo.attributes[a] as THREE.BufferAttribute).needsUpdate = true;
@@ -18932,6 +19094,8 @@ const state = { x: 0, z: 0, heading: 0, speed: 0 };
 /** How deep the rig is wading right now, in metres; 0 on dry ground. Written
  *  by the drive step, read by hydroTick — see the note at each. */
 let rigWadeM = 0;
+/** The last entry impulse and the speed it was taken at — see __splash. */
+let lastPlow = 0, lastPlowKmh = 0;
 
 // ── real drive: the device is the controller ───────────────────────
 // The whole world already runs off real coordinates streamed from real
@@ -28753,11 +28917,53 @@ function tick(now: number): void {
   // In water the depth is the quality, and the current is a fact the drive
   // model below has to answer for (see the push after integration).
   const wInfo = surfKind === 'water' ? waterInfoAt(state.x, state.z) : null;
-  // The water surface reads this back — churn, rings and a wake around a
-  // wading hull. Held at module scope because the hydro tick runs on the
-  // frame clock, not the physics clock.
-  rigWadeM = wInfo ? wInfo.depth : 0;
-  const surf = wInfo ? wadeParams(wInfo.depth) : surfaceFor(surfKind, surfQual);
+  // ── THE HULL ENTERS THE WATER; IT DOES NOT TELEPORT INTO IT ──
+  //
+  // `wadeParams` was already a function of depth, but it was applied as a STEP
+  // the frame the surface verdict flipped: full wading drag at the waterline,
+  // identical whether you rolled in at walking pace or arrived at sixty.
+  // Reported from the seat as an instant crawl with no relation to depth or
+  // entry speed. Two things fix that, and both are ordinary physics.
+  //
+  // FIRST, THE DEPTH RAMPS. A truck is six metres long: the front wheels are
+  // in while the rears are still on the bank, and the hull settles over about
+  // a second. Chasing the target depth rather than snapping to it turns the
+  // step into the shape of a vehicle wading in — and the ramp runs BOTH ways,
+  // so climbing out is a recovery rather than a switch.
+  //
+  // SECOND, ENTRY COSTS SPEED IN PROPORTION TO WHAT IT DISPLACES. The water
+  // you push out of the way carries momentum away: a plow impulse that goes
+  // as v-squared times the depth entered, applied once, at the crossing. Hit
+  // a ford at 60 and it stops you hard; roll in at 8 and you barely notice —
+  // which is the difference the seat was asking for.
+  const wantWade = wInfo ? wInfo.depth : 0;
+  const wadePrev = rigWadeM;
+  rigWadeM += (wantWade - rigWadeM) * Math.min(1, dt * (wantWade > rigWadeM ? 2.6 : 1.6));
+  if (rigWadeM < 0.004) rigWadeM = 0;
+  {
+    // The crossing itself: how much MORE hull went under this frame. Only
+    // going in — climbing out gives nothing back.
+    const sank = Math.max(0, rigWadeM - wadePrev);
+    if (sank > 0.0005) {
+      const v0 = Math.abs(state.speed);
+      // Momentum out per metre of hull immersed, per (m/s)^2 — tuned so a
+      // 60km/h charge into half a metre loses about half its speed on entry
+      // and an 8km/h roll-in loses almost none. Capped so no single frame can
+      // reverse the truck or stop it dead.
+      const plow = Math.min(v0 * 0.55, sank * v0 * v0 * 0.85);
+      if (plow > 0.02) {
+        lastPlow = plow; lastPlowKmh = v0 * 3.6;
+        state.speed -= Math.sign(state.speed) * plow;
+        // The splash is the same event — see splashEntry. It reads the impulse
+        // rather than guessing from speed, so the picture and the physics can
+        // never disagree about how hard the truck hit the water.
+        splashEntry(plow, rigWadeM);
+      }
+    }
+  }
+  const surf = wInfo || rigWadeM > 0.02
+    ? wadeParams(Math.max(rigWadeM, wInfo?.depth ?? 0) * 0.5 + rigWadeM * 0.5)
+    : surfaceFor(surfKind, surfQual);
   if (real.on) stepReal(dt);
   // Arcade bicycle model: thrust minus drag, steering authority grows then
   // saturates with speed so the car neither pivots in place nor becomes twitchy.
@@ -29448,15 +29654,33 @@ function tick(now: number): void {
         emitGrit(wxw, contacts[i], wzw, ejX, ejZ);
       }
       if (wet) {
-        // The WAKE: a pair of droplets thrown sideways from the hull, so the
-        // truck leaves a widening V behind it rather than a plume.
-        const side = (Math.random() < 0.5 ? 1 : -1) * (1.1 + Math.random() * 0.6);
-        emitDust(state.x + cosH * side, contacts[i], state.z + sinH * side,
-          cosH * side * 2.2 - sinH * v * 0.1, sinH * side * 2.2 + cosH * v * 0.1, true);
+        // ── THE SPRAY IS THE LIFE; THE SHEET IS THE READ ──
+        //
+        // What used to be here threw a pair of droplets sideways from the
+        // hull to make a V. It fired on the WADE volume, which is the carved
+        // channel ribbon and says water wherever a waterway line ran — over
+        // dry grass included. And forty round soft dots can never make the
+        // shape of thrown water anyway; the drawn sheet does that now (see
+        // splashBow), and these are the torn tips that come off it.
+        //
+        // So: gated on the DRAWN surface, born at the WATERLINE rather than
+        // at the wheel's contact patch under it, and thrown out along the
+        // hull rather than straight up.
+        const spray = splashWet(wxw, wzw);
+        if (spray) {
+          const side = (Math.random() < 0.5 ? 1 : -1) * (1.0 + Math.random() * 0.5);
+          emitDust(wxw + cosH * side * 0.4, spray.levelM - baseElev, wzw + sinH * side * 0.4,
+            cosH * side * 1.6 - sinH * v * 0.12, sinH * side * 1.6 + cosH * v * 0.12, true,
+            splashRgb(spray.kind));
+        }
       } else if (Math.random() < 0.1) audio.stone(); // the pings ride the same plume
 
     }
   } else dustBudget = 0;
+  // THE BOW SHEET runs off the wade depth rather than the particle budget: it
+  // is a property of the hull being in water, not of a wheel touching it, and
+  // it must keep going when the budget is spent on spray.
+  splashBow(now, state.speed, rigWadeM);
   stepDust(dt);
   flushTerrain(now);
   hydroTick(now);
@@ -34635,6 +34859,15 @@ function setClean(on: boolean): void {
 /** The open site record, and its action — so a test can assert that a tap on
  *  a fix OPENS something rather than moving the truck, and can press the
  *  relocation the way a thumb would. */
+/** The splash, as numbers: how deep the hull is, what the last entry cost it,
+ *  and how many drawn sheets are standing. The seat's complaint — "instant
+ *  crawl, not relative to depth or entry speed" — is exactly `plow` against
+ *  `wade`, so both are reported rather than inferred from how it looked. */
+(window as unknown as { __splash?: object }).__splash = (): object => ({
+  wade: +rigWadeM.toFixed(3), sheets: splash.alive(),
+  lastPlow: +lastPlow.toFixed(3), lastPlowAtKmh: +lastPlowKmh.toFixed(1),
+  wet: !!splashWet(state.x, state.z),
+});
 (window as unknown as { __site?: object }).__site = (act?: 'go' | 'close'): object | null => {
   if (act === 'close') { siteOpen = null; return null; }
   if (act === 'go') {
