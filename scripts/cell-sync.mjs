@@ -104,7 +104,12 @@ if (cmd === 'pull') {
       console.log('skipped', f, '(vendored — source of truth is cells/vendor/)');
       continue;
     }
-    const { content } = await call('read', 'cells.readFile', { owner, name, path: f });
+    // `whole: true` because a PULL genuinely wants the entire file. Without
+    // it the substrate's 60KB read budget refuses anything larger and the pull
+    // dies partway through the list — measured on @c15r/drive, which stopped
+    // at a 158KB fixture and left the working tree half-updated with no
+    // indication of which files had made it.
+    const { content } = await call('read', 'cells.readFile', { owner, name, path: f, whole: true });
     const dest = join(localRoot, f);
     mkdirSync(dirname(dest), { recursive: true });
     writeFileSync(dest, content);
