@@ -102,7 +102,28 @@ export function createHydroMaterial(
       uHydroGeometry: { value: textures.geometry },
       uHydroDynamics: { value: textures.dynamics },
       uHydroMaterial: { value: textures.material },
-      uFieldUv: { value: new THREE.Vector4(centralScale, centralScale, offset, offset) },
+      /**
+       * ── V RUNS THE OTHER WAY ON THE MESH THAN IT DOES IN THE FIELD ──
+       *
+       * The field's rows run with +Z: `zAt(iz)` is `minZ + …iz…`, texture row
+       * zero is at v=0, `flipY` is false, and `worldToUv` — the CPU binding
+       * for the same question — maps v increasing with +Z.
+       *
+       * The mesh does not. `PlaneGeometry` puts uv.y=1 at +Y, and the
+       * `rotateX(-PI/2)` that lays it flat sends +Y to −Z; measured on the
+       * real geometry, uv.y=1 lands at the minZ edge and uv.y=0 at maxZ. Fed
+       * straight through, every tile sampled its field MIRRORED north-south:
+       * a river in the north half was drawn in the south half, up to a tile
+       * away, over ground of an entirely different height. Reported from the
+       * seat as the water sitting in a different plane from the terrain under
+       * a pan, and it is also what made rivers read as broad pale blobs —
+       * the surface was landing on ground that was never theirs.
+       *
+       * Corrected in the uniform rather than in the shader, so it survives
+       * shader work: negate the V scale and push the offset to the far edge,
+       * which is `1 - uv.y` written as a scale and a bias.
+       */
+      uFieldUv: { value: new THREE.Vector4(centralScale, -centralScale, offset, offset + centralScale) },
       // Private field metrics let the shader derive shore normals, river
       // grade and flow curvature without expanding the integration API.
       uHydroTexel: { value: new THREE.Vector2(1 / field.width, 1 / field.height) },

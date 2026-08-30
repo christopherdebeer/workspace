@@ -189,7 +189,24 @@ float rippleHeight(vec2 p, vec2 flow, vec2 wind, float scale, float seed) {
 
 void main() {
   vec4 geometryField = texture2D(uHydroGeometry, vHydroUv);
-  if (geometryField.r <= bayer4(gl_FragCoord.xy)) discard;
+  // ── THE OUTLINE IS A CUT, NOT A STIPPLE ──
+  //
+  // This was coverage <= bayer4(gl_FragCoord.xy), an ordered dither that
+  // turned partial coverage into scattered fragments. Two objections, both
+  // from the seat. It is a SECOND dither: the composite already owns the
+  // world's ink and has a dial for it, and this one kept stippling with that
+  // dial off, so water alone could not be turned solid. And a river a few
+  // metres wide is well under half a field texel, so almost every fragment of
+  // it was a coin toss and the reach read as loose white pixels rather than
+  // as water.
+  //
+  // Half coverage, hard, which is also the threshold sampleRestingSurface
+  // classifies on — so the water you can see and the water the wheels find
+  // are now the same set of texels rather than two answers that agree on
+  // average. The shoreline is a texel edge at that point; softening it is the
+  // shore-distance channel's job, which is continuous because it is a
+  // distance, and not the coverage channel's.
+  if (geometryField.r < 0.5) discard;
   vec4 dynamics = texture2D(uHydroDynamics, vHydroUv);
   vec4 materialField = texture2D(uHydroMaterial, vHydroUv);
   float kind = floor(materialField.r * 255.0 + 0.5);
