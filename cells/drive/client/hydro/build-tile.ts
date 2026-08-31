@@ -140,7 +140,10 @@ function lineProfile(input: HydroTileInput, feature: HydroFeature): Float32Array
   const edge = Math.max(1, Math.floor(count * 0.2));
   const start = smooth.slice(0, edge).reduce((a, b) => a + b, 0) / edge;
   const end = smooth.slice(count - edge).reduce((a, b) => a + b, 0) / edge;
-  const reverse = end > start;
+  // OSM waterway ways conventionally run in flow direction. Preserve that
+  // authored network orientation; a 30m DEM is too noisy to reverse adjacent
+  // fragments independently. Synthetic lines still use the terrain evidence.
+  const reverse = feature.source === 'osm' ? false : end > start;
   const order = Array.from({ length: count }, (_, i) => reverse ? count - 1 - i : i);
   const fitted = descendingFit(order.map((i) => smooth[i]));
   const out = new Float32Array(count * 3);
@@ -484,11 +487,13 @@ function sampleProfileAt(
   index: ProfileIndex,
   x: number,
   z: number,
+  searchCells = 1,
 ): ProfileHit | null {
   const cx = Math.floor((x - index.minX) / index.cell);
   const cz = Math.floor((z - index.minZ) / index.cell);
   let best = -1, bestD2 = Infinity, bestT = 0;
-  for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+  for (let dz = -searchCells; dz <= searchCells; dz++) {
+    for (let dx = -searchCells; dx <= searchCells; dx++) {
     const arr = index.buckets.get((cz + dz) * index.cols + (cx + dx));
     if (!arr) continue;
     for (const i of arr) {
@@ -501,6 +506,7 @@ function sampleProfileAt(
       const d2 = (x - qx) * (x - qx) + (z - qz) * (z - qz);
       if (d2 < bestD2) { bestD2 = d2; best = i; bestT = t; }
     }
+  }
   }
   if (best < 0) return null;
   const o = best * 3, q = o + 3;
@@ -777,8 +783,12 @@ export function buildHydroTile(
     }
   }
 
-  const resolved: Array<ResolvedHydroFeature
-    & { energy?: Float32Array; spine?: ProfileSpine; s0?: number }> = [];
+  const resolved: Array<ResolvedHydroFeature & {
+    energy?: Float32Array;
+    spine?: ProfileSpine;
+    s0?: number;
+    index?: ProfileIndex;
+  }> = [];
   for (let index = 0; index < input.features.length; index++) {
     const feature = input.features[index];
     const body = registry.get(feature.id);
@@ -797,8 +807,13 @@ export function buildHydroTile(
       profile[profile.length - 3], profile[profile.length - 2],
       spine.along[spine.along.length - 1],
     ) : undefined;
-    resolved.push({ feature, body, profile, spine, s0,
-      energy: flowing && profile ? profileEnergy(profile) : undefined });
+    const lineWidth = feature.geometry.type === 'line' ? feature.geometry.widthM : 0;
+    resolved.push({
+      feature, body, profile, spine, s0,
+      index: profile && feature.geometry.type === 'line'
+        ? indexProfile(profile, lineWidth) : undefined,
+      energy: flowing && profile ? profileEnergy(profile) : undefined,
+    });
   }
   for (const item of resolved) {
     const fb = featureBounds(item.feature);
@@ -807,15 +822,13 @@ export function buildHydroTile(
     const iz0 = clamp(Math.floor((fb.minZ - input.bounds.minZ) / pixelZ) + gutter - 1, 0, height - 1);
     const iz1 = clamp(Math.ceil((fb.maxZ - input.bounds.minZ) / pixelZ) + gutter + 1, 0, height - 1);
     const lineWidth = item.feature.geometry.type === 'line' ? item.feature.geometry.widthM : 0;
-    const index = item.profile && item.feature.geometry.type === 'line'
-      ? indexProfile(item.profile, lineWidth) : undefined;
     for (let iz = iz0; iz <= iz1; iz++) for (let ix = ix0; ix <= ix1; ix++) {
       const x = xAt(ix), z = zAt(iz);
-      if (index && item.profile && item.spine) {
+      if (item.index && item.profile && item.spine) {
         // The fast path: one bucket-indexed hit answers everything — asked
         // BEFORE the bed sample, because most of a meander's bbox is dry and
         // the index rejects it for the cost of nine Map lookups.
-        const hit = sampleProfileAt(item.profile, item.energy, item.spine, index, x, z);
+        const hit = sampleProfileAt(item.profile, item.energy, item.spine, item.index, x, z);
         if (!hit) continue;                    // no segment within reach: dry
         const signed = lineWidth * 0.5 - hit.distanceM;
         const amount = clamp(0.5 + signed / Math.max(0.01, antialias * 2), 0, 1);
@@ -850,10 +863,51 @@ export function buildHydroTile(
           - nearestSegment(x, z, item.feature.geometry.points).distanceM;
       }
       const amount = clamp(0.5 + signed / Math.max(0.01, antialias * 2), 0, 1);
-      const localFlow = profileFlow(item.profile, item.body, x, z);
-      const localEnergy = item.profile && item.energy
+      let localFlow: readonly [number, number] = profileFlow(item.profile, item.body, x, z);
+      let localEnergy = item.profile && item.energy
         ? energyAt(item.profile, item.energy, x, z) : undefined;
-      paint(ix, iz, amount, item.body, bodyLevel(item.body, item.profile, x, z, bed), localFlow, localEnergy);
+      let river: readonly [number, number, number, number] | undefined;
+
+      // Riverbank/natural-water polygons describe the visible width, while a
+      // neighbouring waterway line describes its motion. Project polygon
+      // texels into the nearest centreline chart instead of treating a broad
+      // river as a directionless, synchronously heaving lake.
+      if (FLOWING.has(item.feature.kind) && !item.spine
+        && item.feature.geometry.type === 'area') {
+        let best: ProfileHit | null = null;
+        let bestItem: typeof resolved[number] | undefined;
+        for (const candidate of resolved) {
+          if (!candidate.profile || !candidate.spine || !candidate.index) continue;
+          const hit = sampleProfileAt(
+            candidate.profile, candidate.energy, candidate.spine,
+            candidate.index, x, z, 7,
+          );
+          if (hit && hit.distanceM < (best?.distanceM ?? 900)) {
+            best = hit;
+            bestItem = candidate;
+          }
+        }
+        if (best && bestItem) {
+          localFlow = [best.fx, best.fz];
+          localEnergy = best.energy;
+          const centreHalfW = bestItem.feature.geometry.type === 'line'
+            ? bestItem.feature.geometry.widthM * 0.5 : 4;
+          // Preserve metres across the whole polygon even where it is wider
+          // than the nominal centreline way.
+          const chartHalfW = Math.max(centreHalfW, best.distanceM / 1.2, 1);
+          river = [
+            (bestItem.s0 ?? 0) + best.s,
+            clamp((best.side * best.distanceM) / chartHalfW, -1.25, 1.25),
+            best.curvature,
+            chartHalfW,
+          ];
+        }
+      }
+      paint(
+        ix, iz, amount, item.body,
+        bodyLevel(item.body, item.profile, x, z, bed),
+        localFlow, localEnergy, river,
+      );
     }
   }
 

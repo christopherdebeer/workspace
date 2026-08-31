@@ -467,6 +467,11 @@ class DefaultHydroSystem implements HydroSystem {
         const current = this.records.get(key);
         if (!current || current.generation !== generation || this.disposed) return;
         this.installField(current, field);
+        // A late centreline can join two components whose fields were already
+        // visible. Rebuild every rebased body except the tile just generated
+        // from the final chart; this turns the former permanent seam into one
+        // bounded topology correction.
+        this.markBodiesDirty(this.registry.consumeRiverSpanChanges(), key);
       } finally {
         const current = this.records.get(key);
         if (current) current.building = false;
