@@ -29,6 +29,7 @@ import {
   BENCH_OFFS, BENCH_K, BENCH_C, benchFlat, ruleGrade, latCands,
   solveChain as solveProfile,
 } from './roadprofile';
+import { RoadProfileWorker } from './roadprofile-worker';
 import { createOverlays } from './overlays';
 import { createSplash } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
@@ -9468,7 +9469,7 @@ const solver = new RoadSolver({
   hasHeight,
   gkey,
   deckAnchorAt: (x, z) => deckAnchorAt(x, z),
-  solveChain: (dense, maxGrade, p0, p1, pins) => solveChain(dense, maxGrade, p0, p1, pins),
+  solveChain: (dense, maxGrade, p0, p1, pins) => solveChainPlanned(dense, maxGrade, p0, p1, pins),
   get gradeMax() { return GRADE_MAX; },
   get roadLift() { return SURFACE.road.lift; },
   get juncR() { return JUNC_R; },
@@ -10932,11 +10933,31 @@ function dirAnchorAt(x: number, z: number, tx: number, tz: number): [number, num
 function latCandsFor(dense: Array<[number, number]>, i: number): number[] {
   return latCands(dense, i, sampleHeight);
 }
-function solveChain(dense: Array<[number, number]>, maxGrade: number, p0: number | null,
+function solveChainLocal(dense: Array<[number, number]>, maxGrade: number, p0: number | null,
   p1: number | null, pins?: Array<number | null>): number[] {
   const cand: number[][] = [];
   for (let i = 0; i < dense.length; i++) cand.push(latCandsFor(dense, i));
   return solveProfile(dense, cand, maxGrade, p0, p1, pins);
+}
+const roadProfileWorker = new RoadProfileWorker();
+const roadPlanCost = { samples: 0, sampleMs: 0, fallbacks: 0 };
+async function solveChainPlanned(
+  dense: Array<[number, number]>, maxGrade: number, p0: number | null,
+  p1: number | null, pins?: Array<number | null>,
+): Promise<number[]> {
+  const t0 = performance.now();
+  const cand: number[][] = [];
+  for (let i = 0; i < dense.length; i++) cand.push(latCandsFor(dense, i));
+  roadPlanCost.samples += dense.length * BENCH_K;
+  roadPlanCost.sampleMs += performance.now() - t0;
+  try {
+    return (await roadProfileWorker.solve(dense, cand, maxGrade, p0, p1, pins)).profile;
+  } catch {
+    // Worker construction can be refused by an old browser or an embedding
+    // policy. Correctness wins: the exact same kernel remains the fallback.
+    roadPlanCost.fallbacks++;
+    return solveProfile(dense, cand, maxGrade, p0, p1, pins);
+  }
 }
 // The hint store, the junction registry and the chain assembly all moved to
 // `roadsolve.ts` — they never needed a renderer, and having them in here meant
@@ -11241,7 +11262,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     }
   } else if (mode === 'auto' && n > 4) {
     pbranch = 5;
-    alg = solveChain(dense, maxGrade, p0, p1);
+    alg = solveChainLocal(dense, maxGrade, p0, p1);
   } else if (mode !== 'none') {
     // Chord fragments (tagged tunnels and bridges) anchor their portal
     // elevations to neighbours where they exist — and where they DON'T, to
@@ -15575,10 +15596,12 @@ let buildChain: Promise<void> = Promise.resolve();
 async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
   wayTape?.push({ els, halo });
   ribBatch = new Map();
+  const ep = worldEpoch;
   // PRE-PASS: chain this tile's drivable ways end-to-end and solve each chain's
   // profile whole, publishing hints for the per-way builds below. Lives in
   // `roadsolve.ts` now — see there for why.
-  solver.plan(els, halo);
+  await solver.plan(els, halo);
+  if (ep !== worldEpoch) { ribBatch = null; return; }
   // WIDEST FIRST. The junction warp asks the segment grid what road it is
   // joining, and a road that has not been built yet is not in the grid — so a
   // driveway that happened to arrive before Chapman's Peak Drive had nothing to
@@ -15654,7 +15677,6 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
   // no dependency (rank 0, which is most of the world) is untouched.
   const byDepth = ordered.slice().sort((a, b) =>
     (buildRank.get(a.ck ?? String(a.id)) ?? 0) - (buildRank.get(b.ck ?? String(b.id)) ?? 0));
-  const ep = worldEpoch;
   buildUntil = performance.now() + BUILD_MS;
   for (const el of byDepth) {
     await buildBreath();
@@ -20483,6 +20505,7 @@ function tapeKeep(): string {
     calls: r.calls, tris: r.triangles, progs: renderer.info.programs?.length ?? 0,
     vegMs: +vegMs.toFixed(1), swardMs: +swardMs.toFixed(1), terrainMs: +terrainMs.toFixed(1), seg: terrainSeg, cutL: +cutL.toFixed(1),
     build: { ...buildCost }, scan: { ...terrainScan },
+    roadPlan: { ...roadPlanCost, ...roadProfileWorker.stats },
     vegInstances: vegN, vegTris: Math.round(vegTris), veg,
   };
 };
@@ -30988,15 +31011,21 @@ function drawLumaMap(): void {
 // orange / green trio matches the instrument roles the spec names — amber
 // active/attention, orange adverse surface, green healthy energy. `bad` stays:
 // the spec carries no fault red and the game needs one.
+// QUIET IS DARK, NOT GREY. The recessive rungs (dim, faint, soft) used to be
+// desaturated as well as dark, and desaturation is the wrong axis: on a teal
+// glass a grey rung reads as a dead pixel, not a resting instrument. Each
+// rung keeps its WEIGHT (perceptual luminance within a point or two of the
+// old value, so nothing in the hierarchy moves) and gets its chroma back —
+// the whole ladder is one hue now, and quiet is simply further down it.
 const UI = {
-  ink: '#091411', edge: '#72bdb2', dim: '#477d78', text: '#e5e3c7', soft: '#9dc3ba',
+  ink: '#091411', edge: '#72bdb2', dim: '#2f8a7a', text: '#e5e3c7', soft: '#83cfbd',
   gold: '#f2b83f', hot: '#e8783e', good: '#61e88e', bad: '#d94f4f',
   // A RUNG BELOW `dim`, for a caption that is only there to be found. The gauge
   // corners are persistent and mostly nominal, and a label at `dim` beside a
   // healthy bar spends as much ink saying "TYRE" as the bar spends saying the
   // tyre is fine. Faint keeps the row findable and stops it competing; the
   // moment the row has something to say it takes its warning colour instead.
-  faint: '#25443f',
+  faint: '#175943',
 };
 /** Per-gauge recent history for the range whisker: decaying min/max
  *  envelopes plus an EWMA mean and mean-deviation. Display state, not sim
@@ -34643,11 +34672,17 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const GN = 6, GPITCH = 4, GSLOT = 38;
     const gauge = (y: number, frac: number, col0: string, quiet: boolean,
       side: 1 | -1, id: string, label: string, pred?: number): void => {
-      const col = quiet ? UI.dim : col0;
+      // NO GREYS ON THE GLASS. Quiet used to mean desaturated — dim ink, a
+      // faint label — and the grey rungs sat in the teal HUD like dead
+      // pixels. Quiet now means EDGE TEAL, the glass's own resting colour:
+      // the hierarchy is carried by hue alone (teal nominal, gold watch,
+      // red act), which is how the LEDs and the tach already say off.
+      const col = quiet ? UI.edge : col0;
       // Text and notch sit ON the edge: labels left-align to it on the left
       // stack, right-align on the right, and the triangle's flat back is the
-      // screen border itself.
-      textEdgeS(label, side === 1 ? 1 : HW - 1 - textSW(label), y, quiet ? UI.faint : col0);
+      // screen border itself. The label wears the gauge's own colour — a
+      // faint caption under a bright stack read as a renderer fault.
+      textEdgeS(label, side === 1 ? 1 : HW - 1 - textSW(label), y, col);
       const cxg = side === 1 ? 5 : HW - 10;
       const capY = y + 7;
       hctx.fillStyle = col;
