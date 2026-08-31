@@ -52,7 +52,7 @@ export const CSP = [
   // this cell's own host, so signing in is the only thing that reaches off it
   // (docs/cell-origin-isolation.md §4.5).
   "connect-src 'self' https://parc.land https://esm.sh https://overpass-api.de https://overpass.kumi.systems https://overpass.osm.jp https://overpass.private.coffee https://s3.amazonaws.com https://nominatim.openstreetmap.org https://api.open-meteo.com https://tiles.mapterhorn.com",
-  "img-src data: blob:",
+  "img-src 'self' data: blob:",
   // The menu's pixel face (Silkscreen) ships inside the bundle as data: URIs —
   // no font host, so the page stays self-contained.
   'font-src data:',
@@ -66,6 +66,15 @@ const SHELL = `<!doctype html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="theme-color" content="#071215">
+<meta name="color-scheme" content="dark">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Drive">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" type="image/png" sizes="32x32" href="/icons/drive-32.png">
+<link rel="apple-touch-icon" sizes="180x180" href="/icons/drive-180.png">
 <title>drive — the real world, top down</title>
 <style>
   *, *::before, *::after { box-sizing: border-box; }
@@ -117,6 +126,35 @@ const SHELL = `<!doctype html>
   <script type="module" src="/app.js"></script>
 </body>
 </html>`;
+
+const WEB_ASSETS: Record<string, { file: string; type: string }> = {
+  '/manifest.webmanifest': {
+    file: 'manifest.webmanifest',
+    type: 'application/manifest+json; charset=utf-8',
+  },
+  '/icons/drive-32.png': { file: 'icons/drive-32.png', type: 'image/png' },
+  '/icons/drive-180.png': { file: 'icons/drive-180.png', type: 'image/png' },
+  '/icons/drive-192.png': { file: 'icons/drive-192.png', type: 'image/png' },
+  '/icons/drive-512.png': { file: 'icons/drive-512.png', type: 'image/png' },
+  '/icons/drive-maskable-512.png': { file: 'icons/drive-maskable-512.png', type: 'image/png' },
+};
+
+function serveWebAsset(path: string) {
+  const asset = WEB_ASSETS[path];
+  if (!asset) return null;
+  const body = readFileSync(join(__dirname, 'web', asset.file));
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': asset.type,
+      'cache-control': path === '/manifest.webmanifest'
+        ? 'public, max-age=3600'
+        : 'public, max-age=86400',
+    },
+    body: body.toString('base64'),
+    isBase64Encoded: true,
+  };
+}
 
 // ── the OSM tile miss handler (ADR-0095) ────────────────────────────
 // Everything below runs ONLY on a cache miss: CloudFront looks in S3 first and
@@ -1535,6 +1573,8 @@ export const handler = async (event: {
     });
   }
   try {
+    const asset = serveWebAsset(path);
+    if (asset) return asset;
     if (path === '/app.js') {
       return respond(200, 'application/javascript; charset=utf-8', readFileSync(join(__dirname, 'app.js'), 'utf8'), {
         'cache-control': 'public, max-age=60',

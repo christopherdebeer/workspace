@@ -11,6 +11,9 @@ origin and proxies only the live cell/auth APIs. Capacitor uses its native HTTP
 bridge for those APIs. Native sign-in uses OAuth device authorization, so no
 custom callback scheme or embedded authentication page is required.
 
+Platform icon files under `electron/icons/` and the iOS asset catalogue are
+derived from the editable placeholder masters under `artwork/`.
+
 ## Setup
 
 ```sh
@@ -82,8 +85,10 @@ APPLE_TEAM_ID=... DRIVE_IOS_BUNDLE_ID=land.parc.drive \
 
 The archive and exported IPA land under `dist/ios`. Automatic signing requires
 an installed distribution certificate and an authenticated Xcode account.
-Before release, replace Capacitor's generated icons/splash assets and review
-the location/motion usage copy in `ios/App/App/Info.plist`.
+Placeholder artwork, editable SVG masters, and production image-generation
+prompts live under `artwork/`. Before release, replace the placeholders with
+selected production artwork and review the location/motion usage copy in
+`ios/App/App/Info.plist`.
 
 ## CI
 
