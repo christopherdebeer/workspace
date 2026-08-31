@@ -41,6 +41,7 @@ import { LANDMARKS, type Landmark } from './landmarks';
 import { ATTRACT_TAPES, type AttractTape } from './tapes';
 import { autoDrive, autoMem, AUTO, type AutoOut, type Ground as AutoGround } from './autopilot';
 import { mkField, buildField, recenter as wxRecenter, wxAt, puddleAt, seedWet, WXF_N, WXF_SPAN } from './weatherfield';
+import { decodeTune, fixtureById, type FixtureTune, type WorldFixture } from './world-fixtures';
 
 // A DISTINCT EXECUTION SURFACE. The labs share the production modules, and
 // the route branch guarantees the game bootstrap and a lab never run
@@ -135,6 +136,77 @@ const tileCentreLocal = (x: number, y: number): [number, number] => {
   return toLocal((b.latN + b.latS) / 2, (b.lonW + b.lonE) / 2);
 };
 
+// ── THE FIXTURE WORLD ──────────────────────────────────────────────
+//
+// `?fixture=tee` and the planet is replaced by an authored one. NOTHING
+// downstream knows: the world reaches this module through exactly three
+// fetches — a terrarium height tile, a WorldCover class tile and a vector
+// tile of ways — and a fixture answers all three, so the terrain build, the
+// corridor carve, the ribbon, the batter, the kerb, the junction, the
+// vegetation, the sward, the facades and the water all run precisely as they
+// ship, over ground you chose, with no network in the loop.
+//
+// That is the only honest way to lab a MESH. A solver is a pure function and
+// a lab can call it; `ribbon` is eighteen hundred lines wired into this
+// module's own state, and the choice is between reimplementing it in a lab —
+// which proves nothing about the thing that ships — and giving the real one a
+// world it can be judged against. See world-fixtures.ts.
+const FIXTURE: WorldFixture | null =
+  fixtureById(new URLSearchParams(location.search).get('fixture'));
+const FIXTURE_TUNE: FixtureTune = decodeTune(new URLSearchParams(location.search).get('ft'));
+/** One flat projection for the whole fixture, taken at its own origin.
+ *  Deliberately NOT `toLocal`: that is relative to the SPAWN, which moves when
+ *  the world rebases, and an authored world must not move with it. */
+const FIX_MLON = FIXTURE ? M_LAT * Math.cos((FIXTURE.spawn.lat * Math.PI) / 180) : M_LAT;
+const fixtureES = (f: WorldFixture, lat: number, lon: number): [number, number] =>
+  [(lon - f.spawn.lon) * FIX_MLON, (f.spawn.lat - lat) * M_LAT];
+const fixtureLatLon = (f: WorldFixture, e: number, s: number): { lat: number; lon: number } =>
+  ({ lat: f.spawn.lat - s / M_LAT, lon: f.spawn.lon + e / FIX_MLON });
+/**
+ * A 256x256 raster of whatever the fixture answers, over one tile. The height
+ * tile and the cover tile are the same shape, so they share the walk — and it
+ * inverts Mercator properly per row rather than lerping the latitude, because
+ * down a z12 tile that shortcut is tens of metres of drift and the treeline
+ * would bend with it.
+ */
+function fixtureRaster<T extends Float32Array | Uint8Array>(
+  out: T, x: number, y: number, z: number, at: (e: number, s: number) => number,
+): T {
+  const f = FIXTURE;
+  if (!f) return out;
+  const n = 2 ** z;
+  for (let j = 0; j < 256; j++) {
+    const lat = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + (j + 0.5) / 256)) / n))) * 180) / Math.PI;
+    for (let i = 0; i < 256; i++) {
+      const lon = ((x + (i + 0.5) / 256) / n) * 360 - 180;
+      const [e, s] = fixtureES(f, lat, lon);
+      out[j * 256 + i] = at(e, s);
+    }
+  }
+  return out;
+}
+/** The fixture's ways, as OSM would have given them for this tile and the ring
+ *  around it. Overlap between tiles costs nothing: renderWays dedupes by way
+ *  id, and the padding is what lets a road be solved across a tile seam. */
+function fixtureWays(x: number, y: number, pad = 1): OsmWay[] {
+  const f = FIXTURE;
+  if (!f) return [];
+  const b = tileBounds(x, y, OSM_Z);
+  const dLat = (b.latN - b.latS) * pad, dLon = (b.lonE - b.lonW) * pad;
+  const latN = b.latN + dLat, latS = b.latS - dLat;
+  const lonW = b.lonW - dLon, lonE = b.lonE + dLon;
+  const out: OsmWay[] = [];
+  for (const w of f.ways(FIXTURE_TUNE)) {
+    const geometry = w.pts.map(([e, s]) => fixtureLatLon(f, e, s));
+    let hit = false;
+    for (const p of geometry) {
+      if (p.lat <= latN && p.lat >= latS && p.lon >= lonW && p.lon <= lonE) { hit = true; break; }
+    }
+    if (hit) out.push({ id: w.id, tags: w.tags, geometry });
+  }
+  return out;
+}
+
 // ── boot UI ────────────────────────────────────────────────────────
 const $ = (id: string) => document.getElementById(id) as HTMLElement;
 const bootMsg = (m: string) => { $('boot-msg').textContent = m; };
@@ -188,6 +260,9 @@ async function overpass(query: string): Promise<any> {
   throw new Error('overpass unreachable');
 }
 async function findSpawn(): Promise<{ lat: number; lon: number; name: string | null }> {
+  // An authored world starts where it was authored to start — every fixture
+  // puts a road through its own origin, so the rig lands on tarmac.
+  if (FIXTURE) return { lat: FIXTURE.spawn.lat, lon: FIXTURE.spawn.lon, name: FIXTURE.label };
   const p = new URLSearchParams(location.search);
   const qlat = parseFloat(p.get('lat') ?? ''), qlon = parseFloat(p.get('lon') ?? '');
   if (Number.isFinite(qlat) && Number.isFinite(qlon)) return { lat: qlat, lon: qlon, name: null };
@@ -472,6 +547,15 @@ async function fetchMapterhorn(x: number, y: number, z: number): Promise<Float32
   return null;
 }
 async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promise<Float32Array | null> {
+  // ── THE FIXTURE ANSWERS BEFORE THE SOURCE LADDER ──
+  // Ahead of the repair passes and the plausibility tests, all of which exist
+  // to catch a bad decode. Authored ground has no decode to go wrong, and the
+  // spike test in particular would happily refuse a ridge for being too
+  // regular to be a planet.
+  if (FIXTURE) {
+    return fixtureRaster(new Float32Array(256 * 256), x, y, z,
+      (e, s) => FIXTURE.height(e, s, FIXTURE_TUNE));
+  }
   // LOCAL, not a field: several of these run at once (see demLast above).
   const tile = `${z}/${x}/${y}`;
   let src = 'mth';
@@ -594,6 +678,13 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
   if (coverAsked.has(key)) return;
   coverAsked.add(key);
   try {
+    let data: Uint8Array;
+    if (FIXTURE) {
+      // The fixture's own ecology — what vegetation, sward, biome and the
+      // far shell all read. No decode, no colour management, no retry.
+      data = fixtureRaster(new Uint8Array(256 * 256), x, y, COVER_Z,
+        (e, s) => FIXTURE.cover(e, s, FIXTURE_TUNE));
+    } else {
     const res = await fetch(`${CELL_BASE}/~/cover/v1/${COVER_Z}/${x}/${y}`);
     if (!res.ok) throw new Error(`cover ${res.status}`);
     // Same contract as the elevation decoder, and for the same reason: this
@@ -607,8 +698,9 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
       { willReadFrequently: true, colorSpace: 'srgb' }) as OffscreenCanvasRenderingContext2D;
     cx.drawImage(bmp, 0, 0);
     const d = cx.getImageData(0, 0, 256, 256).data;
-    const data = new Uint8Array(256 * 256);
+    data = new Uint8Array(256 * 256);
     for (let i = 0; i < data.length; i++) data[i] = d[i * 4];   // red channel IS the class
+    }
     const b = tileBounds(x, y, COVER_Z);
     const [wx0, wz0] = toLocal(b.latN, b.lonW);
     const [wx1, wz1] = toLocal(b.latS, b.lonE);
@@ -10946,6 +11038,11 @@ function flushRibbons(): void {
     smoothSoupNormals(out);
     const mesh = new THREE.Mesh(out, mat);
     mesh.userData.ribbon = true;
+    // NAMED, because __census can only report what a mesh calls itself and
+    // the two biggest things in the world — the carriageways and the building
+    // stock — both came back as `unnamed`. That is the census's one job, and
+    // it made a mesh audit impossible to write as an assertion.
+    mesh.name = 'ribbon';
     worldGroup.add(mesh);
     // A DRAPED batch registers ONCE for re-seating, in place of the entries
     // its pieces would each have made: redrape and __drape both walk vertices
@@ -13905,6 +14002,7 @@ function flushBuildings(): void {
     seats: Seats, opts: { noCast?: boolean; ruinLod?: boolean } = {}): void => {
     const mesh = new THREE.Mesh(geo, mat);
     if (opts.noCast) mesh.userData.noCast = true;
+    mesh.name = opts.ruinLod ? 'ruin' : 'building';
     worldGroup.add(mesh);
     // Under the chart's shed (see stepZoomShed) a batch born at altitude is
     // born hidden — the shed only flips visibility on TRANSITIONS.
@@ -15086,6 +15184,11 @@ const osmDbReady: Promise<void> = new Promise((resolve) => {
 try { for (const k of Object.keys(localStorage)) if (k.startsWith('drive.osm.')) localStorage.removeItem(k); } catch { /* fine */ }
 const osmCacheKey = (x: number, y: number): string => `5/${OSM_Z}/${x}/${y}`; // v5: nodes, rivers, rails
 async function readTileCache(x: number, y: number): Promise<OsmWay[] | null> {
+  // THE FIXTURE IS THE CACHE. Answering here as well as at the proxy is what
+  // gives renderGated its halo — so an authored road solves its profile
+  // across a tile seam exactly the way a real one does, which is precisely
+  // the seam the batter and the kerb step at.
+  if (FIXTURE) return fixtureWays(x, y);
   await osmDbReady;
   if (!osmDb) return null;
   return new Promise((resolve) => {
@@ -15098,6 +15201,10 @@ async function readTileCache(x: number, y: number): Promise<OsmWay[] | null> {
 }
 let osmWritesSincePrune = 0;
 function writeTileCache(x: number, y: number, els: OsmWay[]): void {
+  // Never persist an authored world into the real cache. The fixtures sit at
+  // 46.2N 6.1E, which is a real place above Geneva that somebody may later
+  // drive — and would then find paved with Fixture Way.
+  if (FIXTURE) return;
   if (!osmDb) return;
   const ways = els.map((e) => {
     let tags: Record<string, string> | undefined;
@@ -16080,6 +16187,7 @@ let tileProxyOk = true;   // one clean failure retires it for the session
 // cell filled it in the background anyway.
 const TILE_WAIT_MS = 9000;
 async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
+  if (FIXTURE) return fixtureWays(x, y);
   if (!tileProxyOk) return null;
   const ctl = new AbortController();
   const bail = setTimeout(() => ctl.abort(), TILE_WAIT_MS);
@@ -35644,6 +35752,13 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   // The default spawn faces its vista — El Capitan's rim looks southeast
   // down the valley; a URL heading always wins.
   if (!Number.isFinite(h0) && !q.get('lat') && !q.get('random')) state.heading = (145 * Math.PI) / 180;
+  // A fixture faces the way it was authored to be looked at — the T from the
+  // joiner, the hairpin along the first leg — unless its tune or the URL says
+  // otherwise. `?h=` still wins, as it does everywhere else.
+  if (FIXTURE && !Number.isFinite(h0)) {
+    const fh = FIXTURE_TUNE.heading >= 0 ? FIXTURE_TUNE.heading : FIXTURE.spawn.heading;
+    state.heading = (fh * Math.PI) / 180;
+  }
   // Armed here, taken up once the splash gesture lands: watchPosition before
   // that would burn a fix (and a permission prompt) against a world that has
   // not finished streaming.
@@ -35901,6 +36016,26 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
  * that only ever goes up. Draw calls and triangles say how bad the frame is,
  * and this says which pile grew to make it so.
  */
+/**
+ * WHICH WORLD IS THIS, AND HOW MUCH OF IT ARRIVED.
+ *
+ * The point of the fixture world is that nothing downstream knows it is one,
+ * which also means nothing downstream can SAY so. This is the only place that
+ * can, and a test asserting "the meshes built and no tile was ever fetched"
+ * needs both halves from the same call.
+ */
+(window as unknown as { __fixworld?: object }).__fixworld = (): object => ({
+  id: FIXTURE?.id ?? null,
+  tune: FIXTURE ? FIXTURE_TUNE : null,
+  ways: FIXTURE ? fixtureWays(...tileAt(origin.lat, origin.lon, OSM_Z)).length : 0,
+  cover: coverTiles.size,
+  roadCells: roadGrid.size,
+  seenWays: seenWays.size,
+  // A transect of the BUILT ground, east through the spawn — the terrain the
+  // pipeline made, not the function the fixture declares, which is the whole
+  // difference between testing the world and testing the file.
+  ground: Array.from({ length: 11 }, (_, i) => Math.round(groundAt((i - 5) * 60, 0) * 100) / 100),
+});
 (window as unknown as { __census?: object }).__census = (): object => {
   const kind: Record<string, number> = {};
   const tris: Record<string, number> = {};

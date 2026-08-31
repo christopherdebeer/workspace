@@ -66,7 +66,17 @@ for (const lab of LABS) {
     })(),
   }));
   ok(`${lab.slug}: the game's boot splash is gone`, !seen.boot, seen);
-  ok(`${lab.slug}: it put a canvas up`, seen.canvases > 0 && seen.painted, seen);
+  // A CHOOSER PUTS UP CHOICES, not a canvas — see LabEntry.chooser. Held to
+  // the same bar in its own terms: every option it offers has to be a link
+  // that goes somewhere, or the lab is a page of dead text.
+  if (lab.chooser) {
+    const links = await d.page.evaluate(() =>
+      [...document.querySelectorAll('a')].map((a) => a.getAttribute('href') ?? ''));
+    ok(`${lab.slug}: it offers worlds to open`,
+      links.length >= 3 && links.every((h) => h.includes('fixture=')), links);
+  } else {
+    ok(`${lab.slug}: it put a canvas up`, seen.canvases > 0 && seen.painted, seen);
+  }
   errors.push(...d.errors);
   await d.close();
 }

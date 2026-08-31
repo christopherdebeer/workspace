@@ -25,6 +25,12 @@ export interface LabEntry {
   slug: string;
   label: string;
   note: string;
+  /** A lab that renders nothing itself. The world lab is the only one: it
+   *  cannot draw a mesh in a panel, because the mesh is built by the game at
+   *  boot from the query string — so what it puts up is the CHOICE, and the
+   *  looking happens in the game. Declared rather than inferred so the lab
+   *  test can hold everything else to "it put a canvas up". */
+  chooser?: boolean;
   start: () => Promise<void>;
 }
 
@@ -40,6 +46,31 @@ export const LABS: readonly LabEntry[] = [
     label: 'MARKS',
     note: 'Graffiti on a wall: the production façade shader, with the culture, the density and the reachable band on dials.',
     start: () => import('./marks-lab').then((m) => m.startMarksLab()),
+  },
+  {
+    slug: 'roads',
+    label: 'ROADS',
+    note: 'A section through the bench search: the ground, the candidate offsets, the chosen profile and the cut and fill between them.',
+    start: () => import('./roads-lab').then((m) => m.startRoadsLab()),
+  },
+  {
+    slug: 'flora',
+    label: 'FLORA',
+    note: 'The climate ladder on one screen — biome mix at a point and a column through the altitudes, with the treeline walking as you turn the latitude.',
+    start: () => import('./flora-lab').then((m) => m.startFloraLab()),
+  },
+  {
+    slug: 'weather',
+    label: 'WEATHER',
+    note: 'Twelve kilometres of sky flat on a table: cover, rain, fog and the wet channel that remembers, with time on a dial.',
+    start: () => import('./weather-lab').then((m) => m.startWeatherLab()),
+  },
+  {
+    slug: 'world',
+    label: 'WORLD',
+    chooser: true,
+    note: 'The one that isolates nothing: the whole engine over an authored planet, so the MESHES — ribbon, batter, kerb, junction, sward, facade — can be looked at without an upstream.',
+    start: () => import('./world-lab').then((m) => m.startWorldLab()),
   },
 ];
 
