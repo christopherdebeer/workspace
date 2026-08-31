@@ -31,6 +31,7 @@ import {
 } from './roadprofile';
 import { createOverlays } from './overlays';
 import { createSplash } from './splash';
+import { MARK_COLS, MARK_PALETTE, drawMarkAtlas, markLookAt, packMark, type MarkLook } from './graffiti';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
@@ -5092,6 +5093,54 @@ const wallTexes = [7101, 7102].map((seed) => canvasTex(128, 1 / 9, 1 / 9, seed, 
   cracks(c, s, r, 5, 'rgba(20,16,10,0.35)');
   moss(c, s, r, 7, ['rgba(64,96,44,0.5)', 'rgba(42,70,32,0.45)', 'rgba(96,128,60,0.35)']);
 }));
+/**
+ * ── THE MARK ATLAS ──
+ *
+ * Sixteen marks, white on TRANSPARENT, tinted per settlement by the facade
+ * shader. Not a RepeatWrapping texture like the wall families: it is an atlas
+ * and a repeat would wrap one mark into the next, so it clamps — and the
+ * marks are drawn with a margin inside their cells because mipmapping (which
+ * stays on, or distant walls shimmer) bleeds across cell boundaries.
+ */
+const markAtlas = (() => {
+  const size = 256;
+  const cv = document.createElement('canvas');
+  cv.width = cv.height = size;
+  drawMarkAtlas(cv.getContext('2d')!, size, mulberry32(0x9a17));
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  t.magFilter = THREE.NearestFilter;
+  t.minFilter = THREE.NearestMipmapNearestFilter;
+  return t;
+})();
+/**
+ * ── THE TINS AS A TEXTURE, NOT AN ARRAY ──
+ *
+ * The obvious shape for eight colours is `uniform vec3 uMarkPal[8]` indexed
+ * by the building's tin — and it is illegal: GLSL ES 1.00 forbids indexing a
+ * uniform array with a non-constant expression in a FRAGMENT shader, so the
+ * whole facade program fails to compile on WebGL1 and every building in the
+ * world loses its windows along with its marks. Found exactly that way: the
+ * attribute arrived on the GPU, the marks did not draw, and nothing threw.
+ *
+ * A one-row lookup texture has no such restriction, costs one sample, and is
+ * the same route the mark atlas itself already takes.
+ */
+const markTins = (() => {
+  const data = new Uint8Array(MARK_PALETTE.length * 4);
+  MARK_PALETTE.forEach((hex, i) => {
+    data[i * 4] = (hex >> 16) & 255;
+    data[i * 4 + 1] = (hex >> 8) & 255;
+    data[i * 4 + 2] = hex & 255;
+    data[i * 4 + 3] = 255;
+  });
+  const t = new THREE.DataTexture(data, MARK_PALETTE.length, 1, THREE.RGBAFormat);
+  t.magFilter = t.minFilter = THREE.NearestFilter;
+  t.wrapS = t.wrapT = THREE.ClampToEdgeWrapping;
+  t.generateMipmaps = false;
+  t.needsUpdate = true;
+  return t;
+})();
 // ── M5: THE MATERIAL FAMILIES ─────────────────────────────────────
 //
 // The two textures above — one roof, two walls — were the whole vocabulary of
@@ -5680,6 +5729,10 @@ for (const m of Object.values(MAT)) {
 // line up per building no matter what the terrain under it is doing.
 function facade(mat: THREE.Material): void {
   mat.onBeforeCompile = (sh) => {
+    // Shared by reference: one atlas and one palette for the whole world, so
+    // a material per paint costs nothing extra.
+    sh.uniforms.uMarks = { value: markAtlas };
+    sh.uniforms.uMarkTins = { value: markTins };
     // THE BASE RIDES IN AS A VERTEX ATTRIBUTE, not off the model matrix.
     // Buildings batch per tile now (see flushBuildings), so one mesh carries
     // hundreds of them and modelMatrix[3][1] — the old source of "this
@@ -5687,15 +5740,17 @@ function facade(mat: THREE.Material): void {
     // its own building's base in aBase instead, and re-seating shifts the
     // attribute alongside the positions.
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aBase;\nvarying vec3 vFacW; varying vec3 vFacN; varying float vFacH;')
+      .replace('#include <common>', '#include <common>\nattribute float aBase;\nattribute float aMark;\nvarying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark;')
       .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
         vec4 facW = modelMatrix * vec4(transformed, 1.0);
         vFacW = facW.xyz;
         vFacN = mat3(modelMatrix) * objectNormal;
-        vFacH = facW.y - aBase;`);
+        vFacH = facW.y - aBase;
+        vMark = aMark;`);
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
-        varying vec3 vFacW; varying vec3 vFacN; varying float vFacH;
+        varying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark;
+        uniform sampler2D uMarks; uniform sampler2D uMarkTins;
         float fah(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 41.31); return fract(p.x * p.y); }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
       {
@@ -5729,6 +5784,56 @@ function facade(mat: THREE.Material): void {
             * exp(-vFacH * 0.13)
             * (0.5 + 0.5 * fah(vec2(colv, floor(vFacH * 0.75))));
           diffuseColor.rgb = mix(diffuseColor.rgb, vec3(0.11, 0.21, 0.09), clamp(vine, 0.0, 0.8));
+          // ── MARKS ──
+          //
+          // Where someone stood. Everything about the placement is a rule
+          // about a person with a can: REACHABLE (a tag at the fourth floor
+          // is the giveaway that nobody put it there), on BLANK wall rather
+          // than across a window, and SPARSE — a hash per patch against the
+          // settlement's own density, so a street has a few and not a mural.
+          //
+          // The look rides in on aMark: sigil*8+tin in the integer part, the
+          // density in the fraction. Packed because a building batch already
+          // pays for aBase, and one more float is free where one more
+          // attribute is not.
+          float mdens = fract(vMark);
+          if (mdens > 0.004 && vFacH > 0.4 && vFacH < 3.0) {
+            // A patch grid on the wall — 5m across, the height of the
+            // reachable band. Marks are placed per PATCH, not per building:
+            // one gable can carry two and the next wall none.
+            vec2 mcell = vec2(u / 5.0, (vFacH - 0.4) / 2.6);
+            vec2 mid = floor(mcell), mfr = fract(mcell);
+            float mrand = fah(mid + vec2(19.7, 4.3));
+            if (mrand < mdens) {
+              // Jittered within its patch, or the marks line up in a row and
+              // the grid that placed them is instantly visible — the same
+              // lesson the flower patches record in culture.ts.
+              vec2 jit = vec2(fah(mid + vec2(3.1, 7.7)), fah(mid + vec2(8.7, 2.3))) * 0.3 - 0.15;
+              vec2 q = (mfr - 0.5 - jit) * 1.7 + 0.5;
+              if (q.x > 0.0 && q.x < 1.0 && q.y > 0.0 && q.y < 1.0 && open < 0.02) {
+                // The settlement's own sigil most of the time, a neighbouring
+                // cell of the atlas the rest: one hand dominates a place, but
+                // it is not the only hand in it.
+                float sig = floor(vMark / 8.0);
+                float vary = step(0.62, fah(mid + vec2(5.5, 11.9)));
+                float pick = mod(sig + vary * (1.0 + floor(fah(mid + vec2(2.2, 9.1)) * 2.0)), 12.0);
+                vec2 acell = vec2(mod(pick, ${MARK_COLS}.0), floor(pick / ${MARK_COLS}.0));
+                // The atlas row runs DOWN in canvas space and UP on the wall.
+                vec2 auv = (acell + vec2(q.x, 1.0 - q.y)) / ${MARK_COLS}.0;
+                float ink = texture2D(uMarks, auv).a;
+                // Binary, like every other hard-edged thing in this world:
+                // the composite quantises and dithers, so a soft edge here
+                // becomes noise rather than a softer edge.
+                if (ink > 0.5) {
+                  vec3 tin = texture2D(uMarkTins, vec2((mod(vMark, 8.0) + 0.5) / 8.0, 0.5)).rgb;
+                  // Weathered per patch, and it never fully covers: old paint
+                  // on a rough wall is a stain, not a sticker.
+                  float fade = 0.45 + 0.4 * fah(mid + vec2(13.3, 6.1));
+                  diffuseColor.rgb = mix(diffuseColor.rgb, tin, fade);
+                }
+              }
+            }
+          }
         }
         // Water staining below every horizontal break, on every face.
         diffuseColor.rgb *= 1.0 - 0.16 * fah(floor(vFacW.xz * 1.7) + floor(vFacH * 2.3));
@@ -13874,7 +13979,7 @@ const bPaint = (id: number): number => {
 // The facade shader reads each building's ground line from the aBase vertex
 // attribute (see facade()), and re-seating shifts a building's own vertex
 // ranges inside the batch (see reseatBuildings).
-interface BldPiece { geo: THREE.BufferGeometry; base: number; pts: Array<[number, number]> }
+interface BldPiece { geo: THREE.BufferGeometry; base: number; mark: number; pts: Array<[number, number]> }
 let bldBatch: { walls: BldPiece[]; rubble: BldPiece[]; intact: Map<number, BldPiece[]> } | null = null;
 const openBldBatch = (): NonNullable<typeof bldBatch> =>
   (bldBatch ??= { walls: [], rubble: [], intact: new Map() });
@@ -14017,7 +14122,8 @@ function flushBuildings(): void {
     let total = 0;
     for (const p of pieces) total += p.geo.attributes.position.count;
     const pos = new Float32Array(total * 3), nor = new Float32Array(total * 3),
-      col = new Float32Array(total * 3), aB = new Float32Array(total);
+      col = new Float32Array(total * 3), aB = new Float32Array(total),
+      aM = new Float32Array(total);
     const seats: Seats = [];
     let o = 0;
     for (const p of pieces) {
@@ -14026,6 +14132,7 @@ function flushBuildings(): void {
       nor.set(p.geo.attributes.normal.array as Float32Array, o * 3);
       col.set(p.geo.attributes.color.array as Float32Array, o * 3);
       aB.fill(p.base, o, o + n);
+      aM.fill(p.mark, o, o + n);
       seats.push({ pts: p.pts, ranges: [{ start: o, count: n }] });
       o += n;
       p.geo.dispose();
@@ -14035,6 +14142,7 @@ function flushBuildings(): void {
     geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
     geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
     geo.setAttribute('aBase', new THREE.BufferAttribute(aB, 1));
+    geo.setAttribute('aMark', new THREE.BufferAttribute(aM, 1));
     finish(geo, rubble ? ruinMatFar : ruinMat, seats, { noCast: rubble, ruinLod: !rubble });
   };
   packRuin(b.walls, false);
@@ -14045,7 +14153,8 @@ function flushBuildings(): void {
   for (const arr of b.intact.values()) for (const p of arr) total += p.geo.attributes.position.count;
   if (total) {
     const pos = new Float32Array(total * 3), nor = new Float32Array(total * 3),
-      uv = new Float32Array(total * 2), aB = new Float32Array(total);
+      uv = new Float32Array(total * 2), aB = new Float32Array(total),
+      aM = new Float32Array(total);
     const geo = new THREE.BufferGeometry();
     const seatsBy = new Map<BldPiece, Array<{ start: number; count: number }>>();
     let o = 0;
@@ -14055,6 +14164,7 @@ function flushBuildings(): void {
       const u = p.geo.attributes.uv?.array as Float32Array | undefined;
       if (u) uv.set(u.subarray(start * 2, (start + count) * 2), o * 2);
       aB.fill(p.base, o, o + count);
+      aM.fill(p.mark, o, o + count);
       const list = seatsBy.get(p) ?? [];
       list.push({ start: o, count });
       seatsBy.set(p, list);
@@ -14076,6 +14186,7 @@ function flushBuildings(): void {
     geo.setAttribute('normal', new THREE.BufferAttribute(nor, 3));
     geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
     geo.setAttribute('aBase', new THREE.BufferAttribute(aB, 1));
+    geo.setAttribute('aMark', new THREE.BufferAttribute(aM, 1));
     finish(geo, B_MATS_FLAT, [...seatsBy.entries()].map(([p, ranges]) => ({ pts: p.pts, ranges })));
   }
 }
@@ -14250,6 +14361,53 @@ function roofGeo(pts: Array<[number, number]>, shape: string, top: number,
   geo.computeVertexNormals();
   return geo;
 }
+/**
+ * ── HOW BUILT-UP IS THIS, ROUGHLY ──
+ *
+ * The one term that decides whether marks read as "people live here" or as
+ * vandalism sprayed across an empty moor. Roads are the honest proxy the game
+ * already has: the collision grid holds every carriageway segment, so the
+ * length of road within about 70m of a wall says whether it stands on a
+ * street or in a field. A barn beside one lane scores near zero; a terrace in
+ * a town centre saturates.
+ *
+ * Deliberately NOT a building count: buildings arrive tile by tile and a
+ * count taken while the tile is still streaming would give the same wall a
+ * different answer depending on when it was built.
+ */
+function builtUpAt(x: number, z: number): number {
+  let segs = 0;
+  const gx = Math.floor(x / GRID), gz = Math.floor(z / GRID);
+  for (let dx = -1; dx <= 1; dx++) {
+    for (let dz = -1; dz <= 1; dz++) {
+      const k = `${gx + dx},${gz + dz}`;
+      // BOTH GRIDS, AND THE PRE-GRID IS THE IMPORTANT ONE. Buildings and
+      // roads decode in the same batch and in whatever order the tile lists
+      // them, so a street asked about a wall it has not built yet answers
+      // zero — and a town whose buildings happened to decode first would come
+      // out unmarked. The pre-grid holds the WHOLE batch before any way
+      // builds, which is exactly the ordering problem it was added to solve
+      // for junction cropping.
+      segs += (roadGrid.get(k) ?? []).length + (preRoadGrid.get(k) ?? []).length;
+    }
+  }
+  return clamp(segs / 22, 0, 1);
+}
+/** Buildings that are not places people walk past: no marks on a silo. */
+const MARK_SHY = new Set(['barn', 'farm_auxiliary', 'greenhouse', 'shed', 'hut',
+  'stable', 'cowshed', 'silo', 'bunker', 'garage', 'garages', 'roof', 'carport']);
+/**
+ * The mark this building carries, packed for the vertex attribute. Computed
+ * ONCE per building at build time — the look is a property of the place, and
+ * recomputing it per frame is how a wall would repaint itself as the truck
+ * drives past.
+ */
+function markForBuilding(x: number, z: number, kind: string): number {
+  const people = MARK_SHY.has(kind) ? 0 : builtUpAt(x, z);
+  if (people <= 0.001) return 0;
+  const look: MarkLook = markLookAt(cultEnv, x, z, climateAt(x, z).w, people);
+  return packMark(look);
+}
 function building(pts: Array<[number, number]>, id: number, tags: Record<string, string>): void {
   // Inside a landmark pad the authored geometry is the building. OSM's own
   // polygon for a pyramid extrudes into a flat-roofed prism through ours.
@@ -14283,11 +14441,12 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     (geo: THREE.BufferGeometry, base: number, top: number): void => {
       const batch = openBldBatch();
       const arr = batch.intact.get(paint) ?? [];
-      arr.push({ geo, base, pts });
+      const mark = markForBuilding(ctrX, ctrZ, kind);
+      arr.push({ geo, base, mark, pts });
       if (roof) {
         const rg = roofGeo(pts, roof, top,
           clamp(parseFloat(tags['roof:levels'] ?? '') * 2.6 || 0, 0, 9) || undefined);
-        if (rg) arr.push({ geo: rg, base, pts });
+        if (rg) arr.push({ geo: rg, base, mark, pts });
       }
       batch.intact.set(paint, arr);
     };
@@ -14341,9 +14500,10 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
         (geo, base, top) => {
           const batch = openBldBatch();
           const arr = batch.intact.get(paint) ?? [];
-          arr.push({ geo, base, pts: sq });
+          const mark = markForBuilding(tx, tz, kind);
+          arr.push({ geo, base, mark, pts: sq });
           const rg = roofGeo(sq, 'pyramidal', top, 4.5);
-          if (rg) arr.push({ geo: rg, base, pts: sq });
+          if (rg) arr.push({ geo: rg, base, mark, pts: sq });
           batch.intact.set(paint, arr);
         });
     }
@@ -14431,11 +14591,12 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   const batch = openBldBatch();
   const wallsGeo = mergeParts(parts);
   wallsGeo.translate(0, foot, 0);
-  batch.walls.push({ geo: wallsGeo, base: foot, pts });
+  batch.walls.push({ geo: wallsGeo, base: foot, mark: markForBuilding(ctrX, ctrZ, kind), pts });
   if (rubble.length) {
     const rubbleGeo = mergeParts(rubble);
     rubbleGeo.translate(0, foot, 0);
-    batch.rubble.push({ geo: rubbleGeo, base: foot, pts });
+    // Rubble takes no marks: a heap of broken slab has no wall to write on.
+    batch.rubble.push({ geo: rubbleGeo, base: foot, mark: 0, pts });
   }
   mapPoly(pts, 'rgba(70,66,58,0.9)');
   claimSolid(pts, foot + tallest, true);
@@ -34880,6 +35041,40 @@ function setClean(on: boolean): void {
  *  and how many drawn sheets are standing. The seat's complaint — "instant
  *  crawl, not relative to depth or entry speed" — is exactly `plow` against
  *  `wade`, so both are reported rather than inferred from how it looked. */
+/** What this place writes on its walls: the settlement's sigil and tin, the
+ *  region's mark culture, and the density after the built-up term. The whole
+ *  CPU half of the marks, at any point, without needing a wall in frame. */
+(window as unknown as { __marklook?: object }).__marklook = (la?: number, lo?: number): object => {
+  const [x, z] = la !== undefined && lo !== undefined ? toLocal(la, lo) : [state.x, state.z];
+  const people = builtUpAt(x, z);
+  const look = markLookAt(cultEnv, x, z, climateAt(x, z).w, people);
+  return { culture: look.culture.key, sigil: look.sigil, tin: look.tin,
+    density: +look.density.toFixed(3), people: +people.toFixed(3),
+    packed: +packMark(look).toFixed(3) };
+};
+/** What the BUILT geometry is actually carrying: the marks are a vertex
+ *  attribute, so "no graffiti on screen" has two very different causes —
+ *  the attribute is zero (the CPU decided there are no people here) or it is
+ *  set and the shader is not drawing it. This says which. */
+(window as unknown as { __markstat?: object }).__markstat = (): object => {
+  let meshes = 0, verts = 0, nonzero = 0, min = Infinity, max = -Infinity;
+  worldGroup.traverse((o) => {
+    const g = (o as THREE.Mesh).geometry as THREE.BufferGeometry | undefined;
+    const a = g?.getAttribute?.('aMark') as THREE.BufferAttribute | undefined;
+    if (!a) return;
+    meshes++;
+    const arr = a.array as Float32Array;
+    for (let i = 0; i < arr.length; i += 97) {     // sampled; these are big
+      verts++;
+      if (arr[i] > 0.0001) nonzero++;
+      if (arr[i] < min) min = arr[i];
+      if (arr[i] > max) max = arr[i];
+    }
+  });
+  return { meshes, sampled: verts, nonzero,
+    min: Number.isFinite(min) ? +min.toFixed(3) : null,
+    max: Number.isFinite(max) ? +max.toFixed(3) : null };
+};
 (window as unknown as { __splash?: object }).__splash = (): object => ({
   wade: +rigWadeM.toFixed(3), sheets: splash.alive(),
   lastPlow: +lastPlow.toFixed(3), lastPlowAtKmh: +lastPlowKmh.toFixed(1),
