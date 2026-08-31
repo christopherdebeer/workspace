@@ -74,15 +74,29 @@ export const LABS: readonly LabEntry[] = [
   },
 ];
 
+/**
+ * THIS CELL'S OWN PATH PREFIX, derived exactly as main.ts derives it.
+ *
+ * On the cell host the page lives at `/`; on the apex it lives at
+ * `/@c15r/drive` and a CloudFront Function prepends the prefix. Every route
+ * below is relative to that, because a hard-coded `/lab` matches on one host
+ * and not the other — and the failure is silent in the worst way: the route
+ * falls through, the GAME boots, and the lab looks like it was never
+ * deployed.
+ */
+const cellBase = (pathname: string): string =>
+  (pathname.match(/^\/@[^/]+\/[^/]+/) ?? [''])[0];
+
 /** The slug this URL asks for: /lab/marks, /lab (the index), or null when
  *  this is the game. `/hydro` stays valid — it is written down in notes and
  *  in at least one commit message, and breaking a documented URL to tidy a
  *  route is not a trade worth making. */
 export function labRoute(pathname: string): { slug: string | null } | null {
   const p = pathname.replace(/\/+$/, '');
-  if (p === '/hydro') return { slug: 'hydro' };
-  if (p === '/lab') return { slug: null };
-  const m = /^\/lab\/([a-z0-9-]+)$/.exec(p);
+  const rel = p.slice(cellBase(p).length) || '/';
+  if (rel === '/hydro') return { slug: 'hydro' };
+  if (rel === '/lab') return { slug: null };
+  const m = /^\/lab\/([a-z0-9-]+)$/.exec(rel);
   return m ? { slug: m[1] } : null;
 }
 
@@ -113,9 +127,10 @@ function renderIndex(unknown?: string): void {
     miss.textContent = `no lab called "${unknown}"`;
     document.body.append(miss);
   }
+  const base = cellBase(location.pathname);
   for (const lab of LABS) {
     const a = document.createElement('a');
-    a.href = `/lab/${lab.slug}`;
+    a.href = `${base}/lab/${lab.slug}`;
     const b = document.createElement('b');
     b.textContent = lab.label;
     const s = document.createElement('span');

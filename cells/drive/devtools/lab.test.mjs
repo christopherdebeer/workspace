@@ -47,12 +47,38 @@ ok('a trailing slash is the same route', labRoute('/lab/marks/')?.slug === 'mark
 // documented URL to tidy a route is not a trade worth making.
 ok('/hydro still reaches the hydro lab', labRoute('/hydro')?.slug === 'hydro', labRoute('/hydro'));
 ok('the game route is not a lab', labRoute('/') === null, labRoute('/'));
+// ── AND THE SAME ROUTES ON THE APEX ──
+// The cell is served at `/` on its own host and at `/@owner/cell` on the
+// apex. A route matched only on the first falls through on the second and the
+// GAME boots — which reads exactly like a lab that was never deployed.
+ok('the apex index is the index',
+  labRoute('/@c15r/drive/lab')?.slug === null, labRoute('/@c15r/drive/lab'));
+ok('an apex lab reaches its lab',
+  labRoute('/@c15r/drive/lab/world')?.slug === 'world', labRoute('/@c15r/drive/lab/world'));
+ok('the apex game route is not a lab',
+  labRoute('/@c15r/drive') === null, labRoute('/@c15r/drive'));
 ok('a deep game path is not a lab', labRoute('/some/where') === null, labRoute('/some/where'));
 ok('every registered lab has a unique slug',
   new Set(LABS.map((l) => l.slug)).size === LABS.length, LABS.map((l) => l.slug));
 
-// ── AND EACH ONE ACTUALLY OPENS ───────────────────────────────────
 const errors = [];
+
+// ── THE INDEX LISTS EVERY LAB ─────────────────────────────────────
+// A lab that is built, registered and reachable is still invisible if the
+// index does not name it — which is how three labs shipped as dead code.
+{
+  const d = await openDrive({ pagePath: '/lab', tag: 'lab-index', settle: 3000, bootTimeout: 45000 });
+  await d.page.waitForTimeout(1500);
+  const listed = await d.page.evaluate(() =>
+    [...document.querySelectorAll('a')].map((a) => a.querySelector('b')?.textContent ?? ''));
+  ok('the index names every registered lab',
+    LABS.every((l) => listed.includes(l.label)) && listed.length === LABS.length,
+    { listed, want: LABS.map((l) => l.label) });
+  errors.push(...d.errors);
+  await d.close();
+}
+
+// ── AND EACH ONE ACTUALLY OPENS ───────────────────────────────────
 for (const lab of LABS) {
   const d = await openDrive({ pagePath: `/lab/${lab.slug}`, tag: `lab-${lab.slug}`,
     settle: 6000, bootTimeout: 45000 });
