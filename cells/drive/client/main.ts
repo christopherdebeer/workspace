@@ -15103,6 +15103,267 @@ function pruneRaster(): void {
   } catch { /* cache is best-effort */ }
 }
 
+// ── what this device is holding, and how to hand it back ───────────
+/**
+ * DRIVE KEEPS THINGS IN FOUR PLACES, AND NOBODY SHOULD HAVE TO KNOW THAT.
+ *
+ * `localStorage` has the dials, the paint, the survey, the docket, the
+ * odometer and the saved spots. `sessionStorage` has a sign-in round trip and
+ * the attract reel's intent. IndexedDB has `drive-cache` — every OSM way and
+ * every raster tile this device has ever driven over, up to 64MB of it — and
+ * `drive-tapes`. The Cache Storage has the app shell the service worker
+ * precached. Four APIs, three lifetimes, one player who wants their space back
+ * or is stuck on a build that will not come right.
+ *
+ * ── ONLY OURS. NEVER A WHOLESALE CLEAR. ──
+ *
+ * `localStorage.clear()` is the obvious call and it is the wrong one. A browser
+ * cell can be served from a PATH on a shared origin (CELL_BASE in runtime.ts),
+ * where local storage, IndexedDB and the caches all belong to every cell on
+ * that host — so a wholesale clear from drive's settings screen would take a
+ * neighbouring cell's save with it, from a button that never mentioned it.
+ * Everything below is prefix-scoped, which is the same reasoning that made the
+ * `drive.osm.` sweep upstairs a loop rather than a `clear()`.
+ */
+const OUR_KEY = /^drive\./;
+const OUR_DB = /^drive-/;
+const OUR_CACHE = /^drive-/;
+/**
+ * The databases we know we own, for the browsers that will not enumerate.
+ * `indexedDB.databases()` is absent in Firefox and in Safari before 14, and it
+ * returns a promise that some engines simply never settle — so a sweep that
+ * TRUSTED the enumeration would quietly clear nothing at all on those, and
+ * report success while doing it. The union of what we are told and what we
+ * know is the only honest input.
+ */
+const ourDbNames = (): string[] => ['drive-cache', TAPE_DB];
+
+/** Every key of ours in one web storage area. Reading `length`/`key(i)` rather
+ *  than `Object.keys` because a private-mode store can throw on either, and a
+ *  reset that throws half way is worse than one that clears nothing. */
+function ourKeys(store: Storage): string[] {
+  const out: string[] = [];
+  try {
+    for (let i = 0; i < store.length; i++) {
+      const k = store.key(i);
+      if (k && OUR_KEY.test(k)) out.push(k);
+    }
+  } catch { /* private mode — nothing to clear is the honest answer */ }
+  return out;
+}
+
+/** Settle a promise, or say it did not. Every API in this block can hang: an
+ *  IndexedDB request whose callback never comes, a `databases()` that never
+ *  resolves, a cache delete behind a busy main thread. A reset button that
+ *  hangs is worse than one that reports a partial job. */
+async function orGiveUp<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([p, new Promise<T>((r) => { setTimeout(() => r(fallback), ms); })]);
+}
+
+/** How much of the ORIGIN's quota is in use, and how much of the world cache is
+ *  ours. The estimate is the origin's, not this cell's — there is no per-cell
+ *  figure to be had on a shared host — and the tile counts are, so the readout
+ *  says both rather than implying the first is the second. */
+async function storageReport(): Promise<{ used: number; quota: number; ways: number | null; tiles: number | null }> {
+  let used = 0, quota = 0;
+  try {
+    const e = await orGiveUp(navigator.storage?.estimate?.() ?? Promise.resolve({}), 2000, {});
+    used = (e as StorageEstimate).usage ?? 0;
+    quota = (e as StorageEstimate).quota ?? 0;
+  } catch { /* no estimate API; the counts below still say something */ }
+  /**
+   * NULL IS NOT ZERO, AND THIS IS WHERE THAT MATTERS MOST.
+   *
+   * A readonly count queues behind any readwrite transaction on the same store,
+   * and the raster flush writes a quarter of a megabyte per tile — so under a
+   * streaming load this waits. The first cut gave up after two seconds and
+   * answered 0, which put "0 GROUND TILES" on the settings screen of a session
+   * that had just stored twenty-seven of them. A reading that did not arrive
+   * has to say so: a cache that reports itself empty is how somebody concludes
+   * it is broken and clears it.
+   */
+  const count = async (store: string): Promise<number | null> => {
+    if (!osmDb) return null;
+    return orGiveUp(new Promise<number | null>((done) => {
+      try {
+        const rq = osmDb!.transaction(store, 'readonly').objectStore(store).count();
+        rq.onsuccess = () => done(rq.result);
+        rq.onerror = () => done(null);
+      } catch { done(null); }
+    }), 6000, null);
+  };
+  return { used, quota, ways: await count('osm'), tiles: await count('raster') };
+}
+
+/**
+ * EMPTY THE WORLD CACHE IN PLACE.
+ *
+ * The stores are cleared, not the database dropped — and that is the whole
+ * design of this one. Deleting `drive-cache` would leave `osmDb` pointing at
+ * nothing, and every read for the rest of the session would answer "not
+ * cached": indistinguishable from a cache that is merely cold, which is
+ * precisely the invisible failure the open upstairs was written to prevent.
+ * Clearing the stores keeps the handle live, so the session carries on driving
+ * and the next tile it asks for simply comes off the wire and is kept again.
+ */
+async function clearWorldCache(): Promise<boolean> {
+  if (!osmDb) return false;
+  // A queued write would land back in a store we just emptied.
+  rasterQueue.clear();
+  return orGiveUp(new Promise<boolean>((done) => {
+    try {
+      const tx = osmDb!.transaction(['osm', 'raster'], 'readwrite');
+      tx.objectStore('osm').clear();
+      tx.objectStore('raster').clear();
+      tx.oncomplete = () => done(true);
+      tx.onerror = () => done(false);
+      tx.onabort = () => done(false);
+    } catch { done(false); }
+  }), 8000, false);
+}
+
+/** Drop every cache of ours. Returns how many went. */
+async function dropCaches(): Promise<number> {
+  let n = 0;
+  try {
+    if (typeof caches === 'undefined') return 0;
+    for (const name of await orGiveUp(caches.keys(), 3000, [] as string[])) {
+      if (OUR_CACHE.test(name) && await orGiveUp(caches.delete(name), 3000, false)) n++;
+    }
+  } catch { /* best effort, and the caller reports what it got */ }
+  return n;
+}
+
+/**
+ * Drop every database of ours.
+ *
+ * `blocked` is not a failure and must not be reported as one. A delete is
+ * blocked while any connection to that database is open — and `tapeDb()` opens
+ * a fresh one per call and never closes it, so on a session that has touched
+ * the deck there are several. The request stays PENDING and completes the
+ * moment the last connection goes, which the reload immediately after this is.
+ * So the honest word for that outcome is "on reload", not "failed".
+ */
+async function dropDatabases(): Promise<{ gone: string[]; onReload: string[] }> {
+  const gone: string[] = [];
+  const onReload: string[] = [];
+  // Ours first: a handle we hold is a handle we can let go of, and it is the
+  // one blocker we are able to remove.
+  if (osmDb) { try { osmDb.close(); } catch { /* already closing */ } osmDb = null; }
+  const seen = new Set(ourDbNames());
+  try {
+    const api = (indexedDB as unknown as { databases?: () => Promise<Array<{ name?: string }>> }).databases;
+    if (api) {
+      for (const d of await orGiveUp(api.call(indexedDB), 2000, [])) {
+        if (d.name && OUR_DB.test(d.name)) seen.add(d.name);
+      }
+    }
+  } catch { /* enumeration is a bonus; ourDbNames is the floor */ }
+  for (const name of seen) {
+    const how = await new Promise<'gone' | 'onReload'>((done) => {
+      let settled = false;
+      const fin = (w: 'gone' | 'onReload'): void => { if (!settled) { settled = true; done(w); } };
+      // A blocked delete finishes when the page goes; a timer here is the
+      // backstop for an engine that reports neither.
+      const t = setTimeout(() => fin('onReload'), 2500);
+      try {
+        const rq = indexedDB.deleteDatabase(name);
+        rq.onsuccess = () => { clearTimeout(t); fin('gone'); };
+        rq.onerror = () => { clearTimeout(t); fin('onReload'); };
+        rq.onblocked = () => { clearTimeout(t); fin('onReload'); };
+      } catch { clearTimeout(t); fin('onReload'); }
+    });
+    (how === 'gone' ? gone : onReload).push(name);
+  }
+  return { gone, onReload };
+}
+
+/**
+ * Unregister the service worker.
+ *
+ * The most valuable half of a reset and the least obvious. A worker serves the
+ * app shell from ITS cache, so a player on a build that will not come right
+ * cannot reload their way out of it — the reload is the thing being answered
+ * from the cache. This is the only control that reaches that, which is why the
+ * reset owns it and the world-cache button does not.
+ *
+ * It is also why a reset needs the network: with the worker gone and its cache
+ * dropped, the next load has to come off the wire.
+ */
+async function dropWorkers(): Promise<number> {
+  let n = 0;
+  try {
+    if (!('serviceWorker' in navigator)) return 0;
+    const regs = await orGiveUp(navigator.serviceWorker.getRegistrations(), 3000, []);
+    for (const r of regs) if (await orGiveUp(r.unregister(), 3000, false)) n++;
+  } catch { /* best effort */ }
+  return n;
+}
+
+/**
+ * A LATCH THE UNLOAD FLUSHES HAVE TO RESPECT.
+ *
+ * `pagehide` and `visibilitychange` flush the survey, the marks and the docket
+ * to storage — which is right, and is how a phone ending a session keeps the
+ * last few hundred metres. It is also how a device reset undoes itself: clear
+ * the keys, reload, and the reload's OWN pagehide writes three of the biggest
+ * stores straight back before the fresh page exists. The reset then reports
+ * success and the player still has everything.
+ *
+ * `lineReset` solved its half of this by turning the line off before wiping.
+ * This is the general form: once the device has been handed back, nothing in
+ * this session may write to storage again.
+ *
+ * The sweep in `resetDevice` is the belt to this brace, and it is there because
+ * a latch only covers the writers it was fitted to. Anything written in the
+ * second before the reload — a dial cycled while the status line is up — is
+ * caught by a pagehide handler registered LAST, which is to say after the
+ * flushes, which is to say it gets the final word.
+ */
+let storageWiped = false;
+
+/** Everything, in the order that leaves nothing behind to put it back. */
+async function resetDevice(): Promise<{ keys: number; dbs: number; onReload: string[]; caches: number; workers: number }> {
+  // The worker first: while it is registered it can answer a navigation from a
+  // cache we are about to delete, and the whole point is that the next load is
+  // a fresh one.
+  // Before anything is removed, so nothing we remove can be written back by a
+  // flush that fires while we are still working.
+  storageWiped = true;
+  const workers = await dropWorkers();
+  const caches0 = await dropCaches();
+  const db = await dropDatabases();
+  const sweep = (): number => {
+    let n = 0;
+    for (const store of [localStorage, sessionStorage]) {
+      for (const k of ourKeys(store)) {
+        try { store.removeItem(k); n++; } catch { /* private mode */ }
+      }
+    }
+    return n;
+  };
+  const keys = sweep();
+  // Registered here and nowhere earlier, so it is the LAST pagehide listener
+  // on the page and runs after the flushes it exists to undo.
+  window.addEventListener('pagehide', () => { sweep(); });
+  return { keys, dbs: db.gone.length, onReload: db.onReload, caches: caches0, workers };
+}
+
+/** The last measurement, and when. The settings readout is synchronous by
+ *  contract (the menu's updaters are), so it answers from here. */
+let storeSnap: { used: number; quota: number; ways: number | null; tiles: number | null } | null = null;
+let storeAt = 0;
+
+/** The whole storage picture, for a probe and for the settings readout. */
+(window as unknown as { __storage?: object }).__storage = async (): Promise<object> => ({
+  ...await storageReport(),
+  local: ourKeys(localStorage),
+  session: ourKeys(sessionStorage),
+  caches: typeof caches === 'undefined' ? [] : await caches.keys().catch(() => []),
+  worker: 'serviceWorker' in navigator
+    ? (await navigator.serviceWorker.getRegistrations().catch(() => [])).length : 'n/a',
+});
+
 // ── points of interest (named features become HUD waypoints) ───────
 interface Poi { name: string; x: number; z: number;
   kind: 'park' | 'water' | 'place' | 'mission' | 'repair' | 'drone' | 'rig' | 'peak' | 'station' | 'survey' | 'obs';
@@ -27725,11 +27986,18 @@ addEventListener('visibilitychange', () => {
   // Backgrounding a tab is how a phone ends a session — the loop stops running,
   // so the debounced write has to happen on the way out or the last few
   // hundred metres are lost.
-  if (hidden) { surveyStore.flush(); marks.flush(); lineSave(); audio.hush(); return; }
+  // `storageWiped`: a reset is in flight or done, and these three writers are
+  // exactly the ones that would put the survey, the marks and the docket back.
+  if (hidden) { if (!storageWiped) { surveyStore.flush(); marks.flush(); lineSave(); } audio.hush(); return; }
   last = performance.now();   // no accumulated gap to integrate through
   audio.arm();
 });
-addEventListener('pagehide', () => { surveyStore.flush(); marks.flush(); lineSave(); });   // a close that skips `hidden`
+// A close that skips `hidden` — and, after a reset, a close that must write
+// nothing at all; see storageWiped.
+addEventListener('pagehide', () => {
+  if (storageWiped) return;
+  surveyStore.flush(); marks.flush(); lineSave();
+});
 
 // ── main loop ──────────────────────────────────────────────────────
 let last = performance.now();
@@ -35446,6 +35714,72 @@ const menu = createMenu({
       q.delete('line');
       q.delete('m');    // the armed leg must not ride the URL into the fresh boot
       setTimeout(() => { location.replace(`${location.pathname}?${q.toString()}`); }, 1600);
+    })();
+  },
+  // ── STORAGE ──
+  //
+  // The readout is a CACHED answer that asks for a fresh one on the menu's own
+  // tick. `storageReport` is async and the menu's updaters are not, and the
+  // measurement (an origin quota estimate plus two IndexedDB counts) is far too
+  // heavy for a 400ms loop — so it answers with the last one it has and takes a
+  // new reading every few seconds while the screen is open.
+  storageNote: () => {
+    if (Date.now() - storeAt > 4000) {
+      storeAt = Date.now();
+      void storageReport().then((r) => { storeSnap = r; });
+    }
+    if (!storeSnap) return 'MEASURING…';
+    const size = (b: number): string => (b >= 1048576
+      ? `${(b / 1048576).toFixed(b >= 104857600 ? 0 : 1)}MB`
+      : `${Math.max(1, Math.round(b / 1024))}KB`);
+    const { used, quota, ways, tiles } = storeSnap;
+    // A count that did not come back reads as '?', never as 0 — see the note on
+    // `count` in storageReport.
+    const n = (v: number | null): string => (v === null ? '?' : String(v));
+    // The quota is the ORIGIN'S and the tile counts are ours; on a shared host
+    // those are different things and the line says so rather than implying one
+    // number explains the other.
+    return `${n(tiles)} GROUND TILES · ${n(ways)} ROAD TILES · THIS SITE IS USING `
+      + `${size(used)}${quota ? ` OF ${size(quota)}` : ''}`;
+  },
+  cacheClear: (status) => {
+    void (async () => {
+      status('EMPTYING THE WORLD CACHE…');
+      const ok = await clearWorldCache();
+      storeAt = 0;   // the readout is stale the moment this returns
+      status(ok
+        ? 'WORLD CACHE EMPTY — GROUND AND ROADS WILL COME OFF THE WIRE AGAIN'
+        : 'COULD NOT EMPTY IT — ANOTHER TAB MAY BE HOLDING THE CACHE OPEN', !ok);
+    })();
+  },
+  // THE DEVICE RESET, and the two things about it that are not obvious.
+  //
+  // It REFUSES OFFLINE. The offline copy of the app is part of what goes — the
+  // service worker and the shell it precached — so a reset with no network
+  // takes the game away and cannot put it back. That is a dead page, from a
+  // button whose whole purpose is getting unstuck.
+  //
+  // It does NOT touch the durable copy, and says so. This is a device reset,
+  // not an account one: `sync.reset()` exists (lineReset uses it) and calling
+  // it here would mean a button labelled "reset this device" quietly deleting
+  // a career off the server. Signing back in brings everything back, which is
+  // the behaviour someone clearing space wants and the one someone stuck on a
+  // bad build does not have to think about.
+  deviceReset: (status) => {
+    void (async () => {
+      if (!navigator.onLine) {
+        status('OFFLINE — A RESET DROPS THE OFFLINE COPY TOO, SO IT NEEDS THE NETWORK TO PUT THE GAME BACK', true);
+        return;
+      }
+      status('CLEARING EVERYTHING ON THIS DEVICE…');
+      const r = await resetDevice();
+      const parts = [`${r.keys} SETTINGS`, `${r.dbs + r.onReload.length} STORES`, `${r.caches} CACHES`];
+      if (r.workers) parts.push('OFFLINE COPY');
+      // A blocked delete is PENDING, not failed — the deck leaves connections
+      // open and the unload is what closes them. Saying "on reload" is the
+      // difference between an honest report and a wrong one.
+      status(`CLEARED ${parts.join(' · ')}${r.onReload.length ? ' — THE REST GOES ON RELOAD' : ''} · RELOADING…`);
+      setTimeout(() => { location.replace(location.pathname); }, 1600);
     })();
   },
   // PROGRESS, off the device. The label is the ACTION, the note is the state —

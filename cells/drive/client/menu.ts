@@ -125,6 +125,17 @@ export interface MenuCtx {
    *  is a career, not a campaign. Status strings land back in the settings
    *  row via the callback; the game reloads off the line when it is done. */
   lineReset(status: (s: string, bad?: boolean) => void): void;
+  /** What this device is holding — tile counts and the origin's quota use.
+   *  Synchronous by contract: the measurement is async, so this answers with
+   *  the last one and asks for a fresh one on its own schedule. */
+  storageNote(): string;
+  /** Empty the world cache — OSM ways and raster tiles — without a reload and
+   *  without touching settings, progress or sign-in. */
+  cacheClear(status: (s: string, bad?: boolean) => void): void;
+  /** Hand the whole device back: every key, every database, every cache, and
+   *  the service worker. Signs out; the durable copy is not touched. Reloads
+   *  when it is done, for the same reason lineReset does. */
+  deviceReset(status: (s: string, bad?: boolean) => void): void;
   syncLabel(): string;
   syncNote(): string;
   syncTone(): Tone;
@@ -853,6 +864,58 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       });
     }, ICON.flag);
     body.append(reset, resetNote);
+
+    // ── storage ──
+    //
+    // Drive keeps things in four places and the player should not have to know
+    // that, so this is one readout and two buttons: the cheap one that gives
+    // the space back, and the one that hands the whole device over.
+    body.append(el('div', 'm-sect', 'STORAGE'));
+    const storeNote = el('div', 'm-dimline', ctx.storageNote());
+    updaters.push(() => { storeNote.textContent = ctx.storageNote(); });
+    body.append(storeNote);
+
+    // NOT destructive in the way the two below it are — the world cache is
+    // re-fetchable by definition, so this is one tap. It is also the one people
+    // will actually want: it is where the space is.
+    const cacheNote = el('div', 'm-dimline',
+      'FREES THE GROUND AND ROADS THIS DEVICE HAS DRIVEN OVER. THEY COME BACK OFF THE WIRE. SETTINGS, PROGRESS AND SIGN-IN KEEP.');
+    const clear = button('CLEAR THE WORLD CACHE', C.soft, () => {
+      ctx.cacheClear((s, bad) => {
+        cacheNote.textContent = s;
+        cacheNote.style.color = bad ? C.bad : C.dim;
+      });
+    }, ICON.drop);
+    body.append(clear, cacheNote);
+
+    // THE WHOLE DEVICE. Two-tap armed like the campaign reset above, and for
+    // more reason: this one takes the survey and the sign-in with it.
+    const wipeNote = el('div', 'm-dimline',
+      'EVERY SETTING, THE SURVEY, THE DOCKET, THE TAPES, THE CACHES AND THE OFFLINE COPY. SIGNS YOU OUT. IF YOU ARE SIGNED IN THE SERVER COPY IS UNTOUCHED AND COMES BACK WHEN YOU SIGN IN AGAIN.');
+    let wipeArmed = 0;
+    const disarmWipe = (): void => {
+      wipeArmed = 0;
+      setLab(wipe, 'RESET THIS DEVICE');
+      wipe.style.color = C.soft;
+      wipe.style.borderColor = C.soft;
+    };
+    const wipe = button('RESET THIS DEVICE', C.soft, () => {
+      if (Date.now() - wipeArmed > 4000) {
+        wipeArmed = Date.now();
+        setLab(wipe, 'TAP AGAIN TO CLEAR EVERYTHING');
+        wipe.style.color = C.bad;
+        wipe.style.borderColor = C.bad;
+        setTimeout(() => { if (wipeArmed && Date.now() - wipeArmed >= 4000) disarmWipe(); }, 4200);
+        return;
+      }
+      disarmWipe();
+      ctx.deviceReset((s, bad) => {
+        wipeNote.textContent = s;
+        wipeNote.style.color = bad ? C.bad : C.dim;
+      });
+    }, ICON.warn);
+    body.append(wipe, wipeNote);
+
     // ── the recorder ──
     // A DEV INSTRUMENT FIRST. It sits under the dials rather than in the deck
     // because nothing here is wanted mid-corner: you notice something, you

@@ -88,7 +88,8 @@ Nothing here is fast. Budget for it.
 | `node devtools/lab.test.mjs` | every lab opens, dials persist and travel | ~6min |
 | `node devtools/fixture-world.test.mjs` | the whole mesh pipeline over authored ground | ~7min |
 | `node devtools/appshell.test.mjs` | the worker precaches only what the cell serves | instant |
-| `node devtools/offline-shell.test.mjs` | the browser starts with the network off | ~1min |
+| `node devtools/offline-shell.test.mjs` | the browser starts with the network off | ~20s |
+| `node devtools/storage-reset.test.mjs` | settings can hand the whole device back | ~20s |
 | `node devtools/offline-ground.test.mjs` | and finds ground when it does | ~3min |
 | `node devtools/<name>.test.mjs` | 66 of them; pick what you touched | varies |
 
@@ -183,10 +184,41 @@ Three traps, each of which cost a round:
 - **Cache bytes only after something has decoded them.** A route that answers
   200 with an error document is a passing fault; storing it makes it permanent.
 
-`devtools/offline-ground.test.mjs` and `devtools/offline-shell.test.mjs` hold
-both halves. The second stands up its own loopback server, because the main
-harness relays through curl and is as blind to a service worker as it is to
-CSP.
+`devtools/offline-ground.test.mjs` holds the ground half, on the main harness.
+The page half is on **`devtools/shell-server.mjs`** instead — the same shell,
+bundle, `web/` assets and stamped worker on 127.0.0.1 — because the main
+harness serves no `/sw.js` and relays through curl, which makes it as blind to
+a service worker as it is to CSP. It is also seconds rather than minutes, so
+anything about the PAGE rather than the planet belongs there.
+
+## Giving the device back
+
+`__storage()` says what is held; SETTINGS → STORAGE has the two buttons.
+`devtools/storage-reset.test.mjs` drives them by the words on them.
+
+- **CLEAR THE WORLD CACHE** empties the `osm` and `raster` STORES, and must not
+  delete the database. Dropping it would leave `osmDb` pointing at nothing and
+  every read for the rest of the session answering "not cached" — the exact
+  invisible failure the open was written to prevent — and would need a reload
+  to recover from a button whose whole point is that it does not.
+- **RESET THIS DEVICE** takes keys, databases, caches and the service worker,
+  then reloads. It refuses when offline: the offline copy is part of what goes,
+  so a reset with no network takes the game away and cannot put it back.
+
+Three traps live in there:
+
+- **The unload flush undoes it.** `pagehide` and `visibilitychange` write the
+  survey, the marks and the docket — and the reload a reset schedules IS a
+  pagehide, so a wipe puts three of the biggest stores straight back and
+  reports success. `storageWiped` latches them off; a last-registered pagehide
+  sweep is the backstop.
+- **Never a wholesale clear.** A browser cell can share an origin with every
+  other cell on its host, so `localStorage.clear()`, or deleting every database
+  the origin has, is somebody else's lost save. Everything is prefix-scoped and
+  the test plants a neighbour to prove it.
+- **A count that did not answer is not zero.** A readonly count queues behind
+  the raster flush; the first cut timed out at 2s and put "0 GROUND TILES" on
+  the screen of a session holding twenty-seven. It reads `?` now.
 
 ---
 

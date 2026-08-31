@@ -358,3 +358,27 @@ to read" look identical from the outside.
 `devtools/offline-ground.test.mjs` blocks every source of ground and reloads;
 `devtools/offline-shell.test.mjs` stands the shell up on a loopback server,
 registers the worker, goes offline for real and reloads.
+
+### Giving it back
+
+Everything above is clearable from SETTINGS → STORAGE, which is one readout and
+two buttons: **CLEAR THE WORLD CACHE** (the `osm` and `raster` stores, emptied
+in place so the session carries on driving) and **RESET THIS DEVICE** (every
+`drive.` key in local and session storage, every `drive-` database, every
+`drive-` cache, and the service worker, then a reload).
+
+The reset is a DEVICE reset and not an account one. `sync.reset()` exists and
+`lineReset` uses it; calling it here would mean a button labelled "reset this
+device" quietly deleting a career off the server. Signing back in restores
+everything, and the copy on the button says so.
+
+Two rules it must keep:
+
+- **Prefix-scoped, never wholesale.** On a shared origin (`/@owner/cell`) the
+  storage belongs to every cell on the host, so `localStorage.clear()` from
+  drive's settings screen would take a neighbour's save. `devtools/storage-reset.test.mjs`
+  plants a neighbour and checks it survives.
+- **Nothing may write on the way out.** The unload flush that keeps a phone
+  session's last few hundred metres is also what writes the survey, the marks
+  and the docket back over a reset, because the reload is an unload. See
+  `storageWiped`.
