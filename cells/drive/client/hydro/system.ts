@@ -481,7 +481,10 @@ class DefaultHydroSystem implements HydroSystem {
         // visible. Rebuild every rebased body except the tile just generated
         // from the final chart; this turns the former permanent seam into one
         // bounded topology correction.
-        this.markBodiesDirty(this.registry.consumeRiverSpanChanges(), key);
+        // Do not exempt the completing tile: builds may resolve asynchronously,
+        // so another tile could consume a rebase that happened after this
+        // field's snapshot. An empty second pass is cheaper than a stale seam.
+        this.markBodiesDirty(this.registry.consumeRiverSpanChanges());
       } finally {
         const current = this.records.get(key);
         if (current) current.building = false;

@@ -51,7 +51,7 @@ interface RiverSpan {
 
 /** Overpass cuts share exact node coordinates, so this is slack for float
  *  drift and the resampler's endpoint preservation, not for real gaps. */
-const SPAN_JOIN_M = 8;
+const SPAN_JOIN_M = 3;
 
 export interface RegistryUpdate {
   changed: ReadonlySet<string>;

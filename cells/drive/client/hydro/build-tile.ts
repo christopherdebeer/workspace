@@ -880,9 +880,9 @@ export function buildHydroTile(
           if (!candidate.profile || !candidate.spine || !candidate.index) continue;
           const hit = sampleProfileAt(
             candidate.profile, candidate.energy, candidate.spine,
-            candidate.index, x, z, 7,
+            candidate.index, x, z, 3,
           );
-          if (hit && hit.distanceM < (best?.distanceM ?? 900)) {
+          if (hit && hit.distanceM < (best?.distanceM ?? 420)) {
             best = hit;
             bestItem = candidate;
           }

@@ -1,6 +1,7 @@
 import { HydroBodyRegistry } from './body-registry';
 import { analyseHydroTile, buildHydroTile } from './build-tile';
 import { HYDRO_KIND_ID, type HydroFeature, type HydroTileInput } from './types';
+import { HYDRO_FRAGMENT_SHADER } from './shaders';
 
 const assert = (condition: unknown, message: string): void => {
   if (!condition) throw new Error(`hydro self-test: ${message}`);
@@ -20,6 +21,12 @@ function constantInput(features: HydroFeature[], elevationM = -85): HydroTileInp
 }
 
 export function runHydroSelfTest(): void {
+  assert(!HYDRO_FRAGMENT_SHADER.includes('smoothstep(-0.04, 0.22'),
+    'lighting no longer flips through the old narrow dawn/dusk gate');
+  assert(HYDRO_FRAGMENT_SHADER.includes('reflectedSky')
+    && HYDRO_FRAGMENT_SHADER.includes('terrainCoupling'),
+  'surface colour continuously includes sky reflection and shallow terrain tint');
+
   const pond: HydroFeature = {
     id: 'osm:pond', source: 'osm', kind: 'pond', taggedLevelM: -84.7,
     intermittent: false, tidal: false,
