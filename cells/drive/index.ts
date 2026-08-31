@@ -1,5 +1,9 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+// The web surface travels INSIDE the bundle, because nothing else does — the
+// platform ships a cell as one bundled module plus app.js, so `web/` is not on
+// the Lambda's disk to be read. See scripts/build-web-assets.mjs.
+import { SERVICE_WORKER, WEB_ICONS, WEB_MANIFEST } from './web-assets';
 import { join } from 'node:path';
 import { gzipSync, deflateSync, inflateSync } from 'node:zlib';
 
@@ -166,8 +170,7 @@ function serveServiceWorker() {
         .update(readFileSync(join(__dirname, 'app.js'))).digest('hex').slice(0, 12);
     } catch { bundleStamp = 'unstamped'; }
   }
-  const body = readFileSync(join(__dirname, 'web', 'sw.js'), 'utf8')
-    .replace('__DRIVE_SW_BUILD__', bundleStamp);
+  const body = SERVICE_WORKER.replace('__DRIVE_SW_BUILD__', bundleStamp);
   return respond(200, 'application/javascript; charset=utf-8', body, {
     // The one file that must never come from a stale cache: it is the only
     // thing that can replace a stale cache. Browsers already refuse to reuse a
@@ -179,7 +182,9 @@ function serveServiceWorker() {
 function serveWebAsset(path: string) {
   const asset = WEB_ASSETS[path];
   if (!asset) return null;
-  const body = readFileSync(join(__dirname, 'web', asset.file));
+  // Already base64 for the icons, which is the wire format anyway; the manifest
+  // is text and gets encoded here so both take one exit.
+  const body = WEB_ICONS[asset.file] ?? Buffer.from(WEB_MANIFEST, 'utf8').toString('base64');
   return {
     statusCode: 200,
     headers: {
@@ -188,7 +193,7 @@ function serveWebAsset(path: string) {
         ? 'public, max-age=3600'
         : 'public, max-age=86400',
     },
-    body: body.toString('base64'),
+    body,
     isBase64Encoded: true,
   };
 }

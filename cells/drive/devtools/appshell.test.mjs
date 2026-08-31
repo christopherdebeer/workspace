@@ -16,6 +16,7 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { render, ASSETS_PATH } from '../scripts/build-web-assets.mjs';
 
 const CELL = join(dirname(fileURLToPath(import.meta.url)), '..');
 const sw = readFileSync(join(CELL, 'web/sw.js'), 'utf8');
@@ -58,6 +59,20 @@ check('the cell substitutes it', cell.includes(`.replace('${placeholder}'`), nul
 // A document may only register a worker its own policy admits, and a refused
 // registration reports nothing to the page.
 check("worker-src admits 'self'", /worker-src 'self'/.test(cell), null);
+
+// ── and the cell has to be able to reach any of it ──
+//
+// This is the check that would have caught the live 404s. `web/` is the source
+// of truth and the native shells copy it, but the PLATFORM ships a cell as one
+// bundle plus app.js: nothing under web/ is on the Lambda's disk. So the cell
+// serves from the generated `web-assets.ts`, and the only thing keeping that
+// honest is this comparison.
+const { body } = await render();
+check('web-assets.ts is what web/ generates',
+  body === readFileSync(ASSETS_PATH, 'utf8'),
+  'stale — run: node cells/drive/scripts/build-web-assets.mjs');
+check('the cell serves assets from the module, not the filesystem',
+  !/readFileSync\(join\(__dirname, 'web'/.test(cell), null);
 
 console.log(bad ? `\n${bad} FAILED` : '\nall ok');
 process.exitCode = bad ? 1 : 0;
