@@ -47,7 +47,7 @@ export interface SolveEnv {
   solveChain(
     dense: Array<[number, number]>, maxGrade: number,
     p0: number | null, p1: number | null, pins: Array<number | null>,
-  ): number[];
+  ): number[] | Promise<number[]>;
   /** The spatial-hash key the junction grid shares with the road grid. */
   gkey(x: number, z: number): string;
   /** Steepest grade per highway class. */
@@ -58,6 +58,8 @@ export interface SolveEnv {
   juncR: number;
   /** Off only from a probe, to measure what the pins are worth. */
   juncPins: boolean;
+  /** Let long batches of small chains share the main thread with a frame. */
+  breathe?: () => Promise<void>;
 }
 
 /** Ways that are drawn but never solved as part of a chain — plus `services`,
@@ -195,8 +197,11 @@ export class RoadSolver {
    * `els` are the ways this tile must build; `halo` are a neighbour's cached
    * copies, which reach further and make a better thing to solve over.
    */
-  plan(els: SolveWay[], halo: SolveWay[] = []): void {
+  async plan(els: SolveWay[], halo: SolveWay[] = []): Promise<void> {
     const env = this.env;
+    // A worker solve may finish after a world hop. reset() advances sweeps, so
+    // stale local coordinates can be rejected before they repopulate hints.
+    const sweep = this.sweeps;
     interface Mem { pts: Array<[number, number]>; name?: string; g: number; key: string; fresh: boolean }
     // ONE ENTRY PER OSM WAY, longest geometry wins. The same road reaches here
     // twice: clipped to this tile in `els`, and whole in a neighbour's cached
@@ -241,6 +246,10 @@ export class RoadSolver {
     const joins = (a: [number, number], b: [number, number]): boolean =>
       Math.hypot(a[0] - b[0], a[1] - b[1]) < 2;
     while (mems.length) {
+      if (env.breathe) {
+        await env.breathe();
+        if (sweep !== this.sweeps) return;
+      }
       const chain: Mem[] = [mems.pop() as Mem];
       let grew = true;
       while (grew) {
@@ -281,8 +290,9 @@ export class RoadSolver {
       // guessed from heights.
       const pins = dense.map(([px, pz]) => (env.juncPins ? this.hintAt(px, pz, env.juncR) : null));
       for (let i = 0; i < dense.length; i++) if (pins[i] != null) this.noteJunction(dense[i][0], dense[i][1]);
-      const alg = env.solveChain(dense, Math.min(...chain.map((m) => m.g)),
+      const alg = await env.solveChain(dense, Math.min(...chain.map((m) => m.g)),
         a0 === null ? null : a0 - env.roadLift, a1 === null ? null : a1 - env.roadLift, pins);
+      if (sweep !== this.sweeps) return;
       this.writeHints(dense, alg);
       {
         let len = 0;

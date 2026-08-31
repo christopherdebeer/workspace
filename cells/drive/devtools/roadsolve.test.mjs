@@ -93,7 +93,7 @@ show('terrain tiles', fix.tiles.length);
 // ── 1. THE SPAWN CASE: every tile arrives to a solver that knows nothing ──
 console.log('\nspawn — replay the taped calls into one fresh solver');
 const spawn = new RoadSolver(makeEnv());
-for (const c of fix.calls) spawn.plan(c.els, c.halo);
+for (const c of fix.calls) await spawn.plan(c.els, c.halo);
 show('considered', spawn.stats.considered);
 show('notDrivable', spawn.stats.notDrivable);
 show('noHeight', spawn.stats.noHeight);
@@ -112,10 +112,10 @@ eq('every way that arrived was either chained or explained',
 console.log('\ndrive-in — the arriving tile\'s ways were already solved elsewhere');
 const driveIn = new RoadSolver(makeEnv());
 const last = fix.calls[fix.calls.length - 1];
-for (const c of fix.calls.slice(0, -1)) driveIn.plan(c.els, c.halo);
+for (const c of fix.calls.slice(0, -1)) await driveIn.plan(c.els, c.halo);
 const beforeLast = driveIn.stats.pinned;
 for (const e of last.els) driveIn.hinted.add(String(e.id));
-driveIn.plan(last.els, last.halo);
+await driveIn.plan(last.els, last.halo);
 show('junction points before the last tile', beforeLast);
 show('junction points after it arrived pre-hinted', driveIn.stats.pinned);
 
@@ -135,14 +135,14 @@ if (driveIn.stats.pinned < spawnFinal) {
 console.log('\npin radius — stations are 12m apart, so a node can be 6m from one');
 for (const r of [3, 5, 7, 9]) {
   const s = new RoadSolver(makeEnv({ juncR: r }));
-  for (const c of fix.calls) s.plan(c.els, c.halo);
+  for (const c of fix.calls) await s.plan(c.els, c.halo);
   console.log(`  ..   juncR ${String(r).padStart(2)}m -> ${s.stats.pinned} junction points`);
 }
 
 // ── 4. PINS OFF, as a control ──
 console.log('\ncontrol — pins disabled');
 const noPins = new RoadSolver(makeEnv({ juncPins: false }));
-for (const c of fix.calls) noPins.plan(c.els, c.halo);
+for (const c of fix.calls) await noPins.plan(c.els, c.halo);
 eq('no pins means no junctions', noPins.stats.pinned, 0);
 eq('but the chains still solve', noPins.stats.chains > 0, true);
 
@@ -266,6 +266,33 @@ if (!fix.profiles?.length) {
   show(`pairs over ${WALL * 100}%`, walls);
   eq(`no consecutive pair is steeper than ${WALL * 100}%`, walls, 0);
 }
+
+// ── 9. A LATE WORKER RESULT BELONGS TO THE WORLD THAT ASKED ──
+console.log('\nworld hop — a solve finishing late cannot repopulate local coordinates');
+let releaseLate;
+const late = new RoadSolver({
+  toLocal: (lat, lon) => [lon, lat],
+  hasHeight: () => true,
+  deckAnchorAt: () => null,
+  solveChain: (dense) => new Promise((resolve) => {
+    releaseLate = () => resolve(dense.map(() => 12));
+  }),
+  gkey: (x, z) => `${Math.floor(x / 24)},${Math.floor(z / 24)}`,
+  gradeMax: { primary: 0.12 },
+  roadLift: 0.04,
+  juncR: 7,
+  juncPins: true,
+});
+const latePlan = late.plan([{
+  id: 'late',
+  tags: { highway: 'primary', name: 'Old World Road' },
+  geometry: [{ lat: 0, lon: 0 }, { lat: 0, lon: 240 }],
+}]);
+late.reset();
+releaseLate();
+await latePlan;
+eq('reset leaves no hints from the completed old-world solve', late.hints.size, 0);
+eq('reset leaves no old-world way marked as solved', late.hinted.size, 0);
 
 console.log(`\n${pass} passed, ${fail} failed\n`);
 process.exit(fail ? 1 : 0);

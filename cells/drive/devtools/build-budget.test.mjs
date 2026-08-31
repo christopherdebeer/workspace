@@ -71,6 +71,11 @@ check('…and never holds the thread far past its slice',
   (build.longestMs ?? 0) < 120, build);
 console.log(`      ${build.yields} yields, longest hold ${build.longestMs}ms`
   + ` | worst frame ${worst}ms over ${n} samples (software render, not the change)`);
+const roadPlan = gpu.roadPlan ?? {};
+check('the road planner ran through its measured path',
+  (roadPlan.syncJobs ?? 0) + (roadPlan.jobs ?? 0) > 0, roadPlan);
+check('the road profile worker did not fall back or fail',
+  (roadPlan.fallbacks ?? 0) === 0 && (roadPlan.failures ?? 0) === 0, roadPlan);
 
 report(d.errors);
 await d.close();

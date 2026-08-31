@@ -72,9 +72,36 @@
  * goes; far out is only there to catch a badly misregistered bench, where
  * landing within a few metres of it is enough.
  */
-export const BENCH_OFFS = [-45, -30, -20, -12, -6, 0, 6, 12, 20, 30, 45];
-export const BENCH_K = BENCH_OFFS.length;
-export const BENCH_C = BENCH_K >> 1;
+export interface ProfileWeights {
+  /** Pull towards the centreline. */
+  off: number;
+  /** Pull towards the flattest bench in reach. */
+  flat: number;
+  /** Grade in excess of the class limit, squared, per metre. */
+  grade: number;
+  /** A junction pin or a chain anchor — near enough to a law. */
+  pin: number;
+  /** Moving the bench sideways between stations, per candidate step squared.
+   *  Small: a sustained move is how misregistration is compensated. */
+  lat: number;
+  /** CHANGING the rate of that movement — the bench's own curvature. This is
+   *  what separates a deliberate shift from a jitter. */
+  latCurve: number;
+  /** Change of grade between consecutive spans, squared. The vertical curve. */
+  curve: number;
+}
+
+/**
+ * One self-contained numerical kernel for both the browser and its worker.
+ *
+ * The worker is born from this function's compiled source. Keeping every
+ * runtime dependency inside the closure means the worker and synchronous
+ * fallback cannot silently drift into two different road solvers.
+ */
+export function createRoadProfileKernel() {
+const BENCH_OFFS = [-45, -30, -20, -12, -6, 0, 6, 12, 20, 30, 45];
+const BENCH_K = BENCH_OFFS.length;
+const BENCH_C = BENCH_K >> 1;
 /** The spacing the lateral penalty is expressed in, so its weight reads as
  *  "cost per candidate step" rather than per metre. */
 const BENCH_STEP = 15;
@@ -99,25 +126,7 @@ const clamp = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > 
 
 /** The costs, in one place so a test can zero one and measure what it was
  *  worth. Every default here is the shipped behaviour. */
-export interface ProfileWeights {
-  /** Pull towards the centreline. */
-  off: number;
-  /** Pull towards the flattest bench in reach. */
-  flat: number;
-  /** Grade in excess of the class limit, squared, per metre. */
-  grade: number;
-  /** A junction pin or a chain anchor — near enough to a law. */
-  pin: number;
-  /** Moving the bench sideways between stations, per candidate step squared.
-   *  Small: a sustained move is how misregistration is compensated. */
-  lat: number;
-  /** CHANGING the rate of that movement — the bench's own curvature. This is
-   *  what separates a deliberate shift from a jitter. */
-  latCurve: number;
-  /** Change of grade between consecutive spans, squared. The vertical curve. */
-  curve: number;
-}
-export const WEIGHTS: ProfileWeights = {
+const WEIGHTS: ProfileWeights = {
   off: 0.35, flat: 0.5, grade: 30, pin: 120,
   // ── THESE TWO ARE A TRADE, AND THE TRADE IS THE POINT ──
   //
@@ -168,7 +177,7 @@ export const WEIGHTS: ProfileWeights = {
  * out so the DP itself never touches terrain — the game passes its live
  * sampler, a test passes a captured grid.
  */
-export function latCands(
+function latCands(
   dense: Array<[number, number]>, i: number, sample: (x: number, z: number) => number,
 ): number[] {
   const n = dense.length;
@@ -187,7 +196,7 @@ export function latCands(
  * as the sea/lowest slope and excluded; where that excludes everything
  * (ordinary flat ground) the spread is tiny and the answer is the median.
  */
-export function benchFlat(cs: number[]): number {
+function benchFlat(cs: number[]): number {
   const lo = Math.min(...cs);
   const sorted = cs.slice().sort((a, b) => a - b);
   const med = sorted[BENCH_K >> 1];
@@ -222,7 +231,7 @@ export function benchFlat(cs: number[]): number {
  * — which is why chain ANCHORS survived this and interior pins silently did
  * not. Neighbours absorb the ramp instead.
  */
-export function ruleGrade(
+function ruleGrade(
   dense: Array<[number, number]>, y: number[], gLim: number, held?: ArrayLike<unknown>,
 ): void {
   const n = y.length;
@@ -256,7 +265,7 @@ export function ruleGrade(
  * measured (22km, ~1800 stations) is well under a million operations and has
  * never been the expensive part of building a tile.
  */
-export function solveChain(
+function solveChain(
   dense: Array<[number, number]>,
   cand: number[][],
   maxGrade: number,
@@ -388,7 +397,7 @@ export function solveChain(
 /** The offsets a solve chose, for a test that wants to ask about the bench
  *  rather than the heights. Recomputed rather than returned from solveChain so
  *  the hot path allocates nothing extra. */
-export function chosenOffsets(cand: number[][], alg: number[]): number[] {
+function chosenOffsets(cand: number[][], alg: number[]): number[] {
   return alg.map((y, i) => {
     let bk = BENCH_C, bd = Infinity;
     for (let k = 0; k < BENCH_K; k++) {
@@ -398,3 +407,11 @@ export function chosenOffsets(cand: number[][], alg: number[]): number[] {
     return BENCH_OFFS[bk];
   });
 }
+
+return { BENCH_OFFS, BENCH_K, BENCH_C, WEIGHTS, latCands, benchFlat, ruleGrade, solveChain, chosenOffsets };
+}
+
+export const {
+  BENCH_OFFS, BENCH_K, BENCH_C, WEIGHTS,
+  latCands, benchFlat, ruleGrade, solveChain, chosenOffsets,
+} = createRoadProfileKernel();

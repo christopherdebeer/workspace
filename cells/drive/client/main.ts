@@ -9028,6 +9028,7 @@ const solver = new RoadSolver({
   get roadLift() { return SURFACE.road.lift; },
   get juncR() { return JUNC_R; },
   get juncPins() { return juncPins; },
+  breathe: () => buildBreath(),
 });
 (window as unknown as { __chaindbg?: object }).__chaindbg = (): object => ({ ...solver.stats });
 /**
@@ -10494,7 +10495,10 @@ function solveChainLocal(dense: Array<[number, number]>, maxGrade: number, p0: n
   return solveProfile(dense, cand, maxGrade, p0, p1, pins);
 }
 const roadProfileWorker = new RoadProfileWorker();
-const roadPlanCost = { samples: 0, sampleMs: 0, fallbacks: 0 };
+const roadPlanCost = { samples: 0, sampleMs: 0, syncJobs: 0, syncMs: 0, fallbacks: 0 };
+// Below this, a worker round trip costs more than the solve on a desktop and
+// delays streaming for no frame-time gain. Larger chains are the long tasks.
+const ROAD_WORKER_MIN = 192;
 async function solveChainPlanned(
   dense: Array<[number, number]>, maxGrade: number, p0: number | null,
   p1: number | null, pins?: Array<number | null>,
@@ -10504,11 +10508,23 @@ async function solveChainPlanned(
   for (let i = 0; i < dense.length; i++) cand.push(latCandsFor(dense, i));
   roadPlanCost.samples += dense.length * BENCH_K;
   roadPlanCost.sampleMs += performance.now() - t0;
+  if (dense.length < ROAD_WORKER_MIN) {
+    const ts = performance.now();
+    const profile = solveProfile(dense, cand, maxGrade, p0, p1, pins);
+    roadPlanCost.syncJobs++;
+    roadPlanCost.syncMs += performance.now() - ts;
+    return profile;
+  }
   try {
-    return (await roadProfileWorker.solve(dense, cand, maxGrade, p0, p1, pins)).profile;
+    const profile = (await roadProfileWorker.solve(dense, cand, maxGrade, p0, p1, pins)).profile;
+    // Waiting for a worker is not a main-thread hold. Start a fresh slice so
+    // buildBreath does not charge that wall time to the next piece of work.
+    buildUntil = performance.now() + BUILD_MS;
+    return profile;
   } catch {
     // Worker construction can be refused by an old browser or an embedding
     // policy. Correctness wins: the exact same kernel remains the fallback.
+    buildUntil = performance.now() + BUILD_MS;
     roadPlanCost.fallbacks++;
     return solveProfile(dense, cand, maxGrade, p0, p1, pins);
   }
@@ -15151,6 +15167,7 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
   wayTape?.push({ els, halo });
   ribBatch = new Map();
   const ep = worldEpoch;
+  buildUntil = performance.now() + BUILD_MS;
   // PRE-PASS: chain this tile's drivable ways end-to-end and solve each chain's
   // profile whole, publishing hints for the per-way builds below. Lives in
   // `roadsolve.ts` now — see there for why.
