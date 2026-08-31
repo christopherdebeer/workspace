@@ -318,6 +318,12 @@ It is web-only. `build-web.mjs` deletes `sw.js` out of the packaged bundle and
 `drive://app` and `capacitor://localhost`, where the absolute paths above mean
 nothing and nothing needs them.
 
+Both the worker and the manifest reach the Lambda through `web-assets.ts`,
+generated from `web/` by `scripts/build-web-assets.mjs`. A cell is deployed as
+one bundle plus `app.js` plus `static/`, so a file under `web/` is not on the
+running Lambda's disk to be read — which is why the manifest and icons 404'd
+live for as long as they existed. `appshell.test.mjs` regenerates and compares.
+
 ### The ground
 
 `readRaster`/`writeRaster` in `client/main.ts`, in the same `drive-cache`

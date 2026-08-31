@@ -25,6 +25,32 @@ a confusing module error):
 5. Verify by fetching the live bundle and grepping for a symbol you just added:
    `curl -s https://c15r-drive.on.parc.land/app.js | grep -c mySymbol`
 
+### WHAT ACTUALLY REACHES THE LAMBDA
+
+The cell is pushed as source and deployed as **one bundle**: the platform reads
+every file into a `Record<string, string>`, bundles `index.ts`, and ships that
+plus `app.js` plus anything under `static/`. Nothing else is on the running
+Lambda's disk.
+
+So `readFileSync(join(__dirname, 'web', …))` reads nothing, and it fails as a
+404 rather than an error. The PWA manifest and icons were added that way and
+were dead on the live cell from the day they landed — the shell linked a
+manifest that was never served, and no test noticed because every tool here
+runs the client, not the deployed handler. **Anything the cell serves has to be
+in the module graph**: `web/` is the source of truth (the native shells copy it
+verbatim), and `scripts/build-web-assets.mjs` renders it into the generated
+`web-assets.ts` that `index.ts` imports. `devtools/appshell.test.mjs`
+regenerates and compares, so the two cannot drift.
+
+`static/` would not have saved the icons either: that read is
+`Buffer.toString('utf-8')` and a PNG does not survive being a string.
+`getObjectRaw` sits beside it in `services/cells/provisioner.ts`, so making
+`static/` binary-safe is a real platform fix that nobody has made yet.
+
+**Verify the deployed HANDLER, not just the bundle.** Grepping `app.js` for a
+symbol proves the client shipped; it says nothing about a route. Curl the
+routes.
+
 ### PULL BEFORE YOU PUSH. ALWAYS.
 
 `cell-sync push` sends **every file in the cell**. Other agents edit the
