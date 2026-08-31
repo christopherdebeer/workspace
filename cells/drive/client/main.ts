@@ -42,6 +42,14 @@ import { LANDMARKS, type Landmark } from './landmarks';
 import { ATTRACT_TAPES, type AttractTape } from './tapes';
 import { autoDrive, autoMem, AUTO, type AutoOut, type Ground as AutoGround } from './autopilot';
 import { mkField, buildField, recenter as wxRecenter, wxAt, puddleAt, seedWet, WXF_N, WXF_SPAN } from './weatherfield';
+import { grainFx, grainU } from './grain';
+import {
+  DEADWOOD, FOLIAGE_BANDS, STONE, STONE_MIX_ROWS, STONY, TRUNKED, VEG_CAP, VEG_MIX,
+  VEG_SIZE, VEG_TREES, bandKind, coverKind as floraCoverKind, trunkReach,
+  acaciaGeo, broadleaf, bushGeo, cactusGeo, conifer, faceTone, fernGeo, grassGeo, logGeo,
+  mergeGeos, palm, plantLook, rockGeo, snag, spireGeo, standTone,
+  type VegKind, type VegSite, type VegTone,
+} from './flora';
 import { decodeTune, fixtureById, type FixtureTune, type WorldFixture } from './world-fixtures';
 
 // A DISTINCT EXECUTION SURFACE. The labs share the production modules, and
@@ -989,7 +997,7 @@ interface Biome {
   zenith: Rgb; horizon: Rgb; sunDisc: Rgb; below: Rgb;
   hazeBase: Rgb; hazeSun: Rgb;
   ramp: Array<[number, Rgb]>;         // [max elevation, colour]
-  vegHue: [number, number]; vegLit: [number, number];
+  vegHue: readonly [number, number]; vegLit: readonly [number, number];
   sun: number; sunI: number; hemiSky: number; hemiGnd: number; hemiI: number;
 }
 const BIOMES: Record<string, Biome> = {
@@ -998,7 +1006,7 @@ const BIOMES: Record<string, Biome> = {
     zenith: [0.055, 0.135, 0.30], horizon: [0.55, 0.48, 0.36], sunDisc: [1.0, 0.86, 0.55], below: [0.30, 0.26, 0.22],
     hazeBase: [0.24, 0.21, 0.17], hazeSun: [0.50, 0.35, 0.17],
     ramp: [[0.5, [0.07, 0.30, 0.35]], [60, [0.44, 0.37, 0.22]], [300, [0.41, 0.33, 0.19]], [900, [0.37, 0.27, 0.15]], [1800, [0.33, 0.28, 0.23]], [1e9, [0.62, 0.63, 0.65]]],
-    vegHue: [0.18, 0.06], vegLit: [0.18, 0.14],
+    ...FOLIAGE_BANDS.arid,
     sun: 0xffe0b0, sunI: 1.5, hemiSky: 0xbcd2ee, hemiGnd: 0x6a5a3c, hemiI: 0.95,
   },
   tropical: {
@@ -1006,7 +1014,7 @@ const BIOMES: Record<string, Biome> = {
     zenith: [0.05, 0.14, 0.26], horizon: [0.40, 0.46, 0.38], sunDisc: [1.0, 0.92, 0.70], below: [0.16, 0.20, 0.16],
     hazeBase: [0.20, 0.24, 0.20], hazeSun: [0.42, 0.40, 0.22],
     ramp: [[0.5, [0.06, 0.26, 0.30]], [60, [0.14, 0.27, 0.14]], [300, [0.13, 0.24, 0.13]], [900, [0.16, 0.24, 0.14]], [1800, [0.24, 0.26, 0.20]], [1e9, [0.60, 0.62, 0.64]]],
-    vegHue: [0.26, 0.08], vegLit: [0.14, 0.16],
+    ...FOLIAGE_BANDS.tropical,
     sun: 0xfff0cc, sunI: 1.35, hemiSky: 0xa8c8dc, hemiGnd: 0x2c4426, hemiI: 1.0,
   },
   temperate: {
@@ -1014,7 +1022,7 @@ const BIOMES: Record<string, Biome> = {
     zenith: [0.05, 0.12, 0.28], horizon: [0.46, 0.44, 0.40], sunDisc: [1.0, 0.88, 0.62], below: [0.22, 0.22, 0.20],
     hazeBase: [0.22, 0.22, 0.20], hazeSun: [0.46, 0.36, 0.20],
     ramp: [[0.5, [0.07, 0.28, 0.33]], [60, [0.25, 0.29, 0.17]], [300, [0.24, 0.27, 0.16]], [900, [0.28, 0.26, 0.17]], [1800, [0.31, 0.29, 0.25]], [1e9, [0.66, 0.67, 0.69]]],
-    vegHue: [0.24, 0.07], vegLit: [0.16, 0.16],
+    ...FOLIAGE_BANDS.temperate,
     sun: 0xffe6c2, sunI: 1.4, hemiSky: 0xb4ccea, hemiGnd: 0x4c5238, hemiI: 0.9,
   },
   boreal: {
@@ -1022,7 +1030,7 @@ const BIOMES: Record<string, Biome> = {
     zenith: [0.05, 0.11, 0.27], horizon: [0.40, 0.44, 0.48], sunDisc: [1.0, 0.84, 0.62], below: [0.20, 0.22, 0.24],
     hazeBase: [0.20, 0.23, 0.26], hazeSun: [0.42, 0.36, 0.26],
     ramp: [[0.5, [0.06, 0.24, 0.31]], [60, [0.18, 0.25, 0.19]], [300, [0.17, 0.23, 0.18]], [900, [0.21, 0.23, 0.19]], [1800, [0.30, 0.31, 0.30]], [1e9, [0.74, 0.76, 0.78]]],
-    vegHue: [0.30, 0.06], vegLit: [0.12, 0.13],
+    ...FOLIAGE_BANDS.boreal,
     sun: 0xffe2cc, sunI: 1.25, hemiSky: 0xaec6e4, hemiGnd: 0x3a4438, hemiI: 0.95,
   },
   alpine: {
@@ -1030,7 +1038,7 @@ const BIOMES: Record<string, Biome> = {
     zenith: [0.04, 0.10, 0.30], horizon: [0.52, 0.54, 0.58], sunDisc: [1.0, 0.94, 0.80], below: [0.26, 0.27, 0.29],
     hazeBase: [0.26, 0.28, 0.31], hazeSun: [0.48, 0.44, 0.36],
     ramp: [[0.5, [0.08, 0.28, 0.36]], [60, [0.28, 0.30, 0.24]], [300, [0.30, 0.30, 0.26]], [900, [0.34, 0.33, 0.30]], [1800, [0.44, 0.45, 0.46]], [1e9, [0.86, 0.88, 0.90]]],
-    vegHue: [0.29, 0.05], vegLit: [0.13, 0.12],
+    ...FOLIAGE_BANDS.alpine,
     sun: 0xfff2e0, sunI: 1.6, hemiSky: 0xc4d8f2, hemiGnd: 0x5a5e58, hemiI: 1.05,
   },
 };
@@ -6201,186 +6209,11 @@ function seaLevelY(): number | null {
 // sites nearest the truck. Plants far behind are recycled to dress the ground
 // ahead, so density is constant however far you drive, and the site list can
 // hold tens of thousands for the cost of the numbers.
-type VegKind = 'broadleaf' | 'conifer' | 'palm' | 'snag' | 'bush' | 'rock' | 'grass'
-  | 'acacia' | 'cactus' | 'fern' | 'log' | 'spire';
-interface VegSite { x: number; z: number; k: VegKind; s: number; rot: number; h: number; c: THREE.Color;
-  /** NON-UNIFORM SCALE, and the cheapest diversity in the file: one rock mesh
-   *  stretched flat is a slab, squeezed tall is a standing stone, squashed is
-   *  a pebble — no extra geometry, no extra draw call, no extra memory beyond
-   *  two numbers. `sy` is the vertical stretch, `sw` the width on one axis. */
-  sy?: number; sw?: number;
-  /** Lean, radians. Nothing in a landscape sits perfectly plumb: boulders
-   *  settle, snags lean out of the wind, a fallen log lies across a slope. */
-  tl?: number;
-  /** Last time the truck struck this (rocks) — one hit, not a machine gun. */
-  hit?: number }
 const VEG_CELL = 220;                       // spatial bucket, metres
 const vegGrid = new Map<string, VegSite[]>();
 const VEG_RANGE = 700;                      // plants are shown within this
 const vegKey = (x: number, z: number): string => `${Math.floor(x / VEG_CELL)},${Math.floor(z / VEG_CELL)}`;
 
-// Archetypes. Each is a squat, flat-shaded silhouette that survives the pixel
-// grid; variety comes from shape as much as tint.
-function conifer(): THREE.BufferGeometry {
-  const g = new THREE.ConeGeometry(1, 2.6, 6);
-  g.translate(0, 1.3, 0);
-  return g;
-}
-function broadleaf(): THREE.BufferGeometry {
-  const g = new THREE.IcosahedronGeometry(1, 0);
-  g.scale(1, 0.82, 1);
-  g.translate(0, 1, 0);
-  return g;
-}
-function palm(): THREE.BufferGeometry {
-  // A flattened star of fronds — reads as a palm crown in silhouette.
-  const g = new THREE.ConeGeometry(1.5, 0.5, 5, 1, true);
-  g.rotateX(Math.PI);
-  g.translate(0, 1.1, 0);
-  return g;
-}
-function snag(): THREE.BufferGeometry {
-  const g = new THREE.CylinderGeometry(0.1, 0.22, 2.4, 5);
-  g.translate(0, 1.2, 0);
-  return g;
-}
-function bushGeo(): THREE.BufferGeometry {
-  const g = new THREE.IcosahedronGeometry(1, 0);
-  g.scale(1.1, 0.7, 1.1);
-  g.translate(0, 0.6, 0);
-  return g;
-}
-function rockGeo(): THREE.BufferGeometry {
-  const g = new THREE.IcosahedronGeometry(1, 0);
-  g.scale(1.2, 0.6, 0.95);
-  g.translate(0, 0.35, 0);
-  return g;
-}
-/** Non-indexed concat — enough to build one plant out of several primitives
- *  without pulling in BufferGeometryUtils for four call sites. Flat shading
- *  wants non-indexed anyway, which is what everything here already is. */
-function mergeGeos(list: THREE.BufferGeometry[]): THREE.BufferGeometry {
-  const pos: number[] = [];
-  for (const g of list) {
-    const a = g.index ? g.toNonIndexed() : g;
-    const p = a.getAttribute('position') as THREE.BufferAttribute;
-    for (let i = 0; i < p.count * 3; i++) pos.push((p.array as ArrayLike<number>)[i]);
-  }
-  const out = new THREE.BufferGeometry();
-  out.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  out.computeVertexNormals();
-  return out;
-}
-/** THE UMBRELLA. Flat on top, tapering underneath — the one silhouette that
- *  says dry savanna from a kilometre away, and the shape a cone makes when
- *  you stand it on its point. */
-function acaciaGeo(): THREE.BufferGeometry {
-  const g = new THREE.ConeGeometry(1.7, 0.95, 7);
-  g.rotateX(Math.PI);
-  g.scale(1, 1, 0.88);
-  g.translate(0, 1.5, 0);
-  return g;
-}
-/** A COLUMN WITH ARMS. The desert's vertical, and the only plant here whose
- *  reading depends on the arms being at different heights — symmetry makes it
- *  a candelabra, which is a different (and sillier) plant. */
-function cactusGeo(): THREE.BufferGeometry {
-  const parts: THREE.BufferGeometry[] = [];
-  const trunk = new THREE.CylinderGeometry(0.24, 0.3, 2.4, 7);
-  trunk.translate(0, 1.2, 0);
-  parts.push(trunk);
-  for (const [dx, h, base] of [[0.42, 1.05, 1.15], [-0.38, 0.72, 1.55]] as Array<[number, number, number]>) {
-    const arm = new THREE.CylinderGeometry(0.16, 0.19, h, 6);
-    arm.translate(dx, base + h / 2, 0);
-    parts.push(arm);
-    const elbow = new THREE.CylinderGeometry(0.15, 0.15, Math.abs(dx), 6);
-    elbow.rotateZ(Math.PI / 2);
-    elbow.translate(dx / 2, base, 0);
-    parts.push(elbow);
-  }
-  return mergeGeos(parts);
-}
-/** THE UNDERSTOREY. Fronds radiating from a crown, knee high — what a wet
- *  forest floor and a tropical verge are actually made of, and the layer
- *  between the sward and the bushes that was simply missing. */
-function fernGeo(): THREE.BufferGeometry {
-  const v: number[] = [];
-  for (let b = 0; b < 5; b++) {
-    const a = (b / 5) * Math.PI * 2 + 0.4;
-    const dx = Math.cos(a), dz = Math.sin(a);
-    const w = 0.13, len = 0.62 + (b % 2) * 0.22, rise = 0.42;
-    v.push(dz * w, 0.06, -dx * w, -dz * w, 0.06, dx * w, dx * len, rise, dz * len);
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
-  g.computeVertexNormals();
-  return g;
-}
-/** DEADFALL. A trunk lying where it came down — the horizontal in a world of
- *  verticals, which is most of why it reads. Off-centre in its own cell so a
- *  clump of them does not look stacked. */
-function logGeo(): THREE.BufferGeometry {
-  const g = new THREE.CylinderGeometry(0.26, 0.34, 2.8, 6);
-  g.rotateZ(Math.PI / 2);
-  g.translate(0.2, 0.3, 0);
-  return g;
-}
-/** THE SHARD. Where rock comes through as a tooth rather than a lump: five
- *  sides, hard edges, taller than it is wide. Alpine and bare ground. */
-function spireGeo(): THREE.BufferGeometry {
-  const g = new THREE.ConeGeometry(0.52, 2.1, 5);
-  g.scale(1, 1, 0.72);
-  g.translate(0, 1.0, 0);
-  return g;
-}
-const VEG_CAP: Record<VegKind, number> = { broadleaf: 1600, conifer: 1400, palm: 600, snag: 450,
-  bush: 2600, rock: 900, grass: 26000,
-  // The new archetypes are BIOME-LOCAL — a cactus field and a fern floor are
-  // never the same drive — so their caps are what one landscape needs, not
-  // what every landscape might. An empty kind costs an instanced draw of zero.
-  acacia: 700, cactus: 500, fern: 1800, log: 500, spire: 700 };
-// ── grass ──────────────────────────────────────────────────────────
-// Sward was the one cover class the world could not draw. WorldCover calls it
-// grass, the palette painted it green, and then nothing grew there: the
-// thicket rate for class 30 is four per cell, which is the odd bush in an
-// otherwise bare field. This is the missing ground layer.
-//
-// Deliberately NOT the usual alpha-tested sprite recipe. That recipe exists to
-// carve a wispy blade out of a photographic texture, and it pays for it in
-// overdraw — the thing that actually hurts a phone, since a thousand mostly
-// transparent quads shade the same pixels over and over. Nothing else in this
-// world is textured; the trees are solid flat-shaded cones. So a tuft is three
-// solid tapered blades, NINE vertices, no texture, no alpha test, no blending
-// and therefore no overdraw at all. It is both cheaper than the sprite and a
-// better match for the art.
-function grassGeo(): THREE.BufferGeometry {
-  const v: number[] = [];
-  // WHICH OF THE THREE CARDS a vertex belongs to. Grass never reads it; the
-  // GPU sward's FLOWER branch does, and cannot do its job without it. A
-  // flower is not a differently-coloured tuft, it is a STEM WITH A HEAD ON
-  // IT — so card 0 becomes the stem and cards 1 and 2 are lifted to its top
-  // and splayed into petals. Deriving that from position alone is not
-  // possible: the three cards differ only by a rotation the shader cannot
-  // invert, so the index travels with the vertex.
-  const blade: number[] = [];
-  for (let b = 0; b < 3; b++) {
-    const a = (b / 3) * Math.PI * 2 + 0.7;
-    const dx = Math.cos(a), dz = Math.sin(a);
-    // THINNER AND LONGER, reported from the seat. 0.05 wide against 0.26 tall
-    // is a spike; grass is a ribbon. The width came down by nearly half and the
-    // height went up by half again, which also gives the blade something to
-    // bend — a stub cannot lean convincingly however good the wind term is.
-    const w = 0.028, h = 0.40 + (b % 2) * 0.22, lean = 0.14;
-    // A base edge across the blade, tapering to a tip that leans outward.
-    v.push(dz * w, 0, -dx * w, -dz * w, 0, dx * w, dx * lean, h, dz * lean);
-    blade.push(b, b, b);
-  }
-  const g = new THREE.BufferGeometry();
-  g.setAttribute('position', new THREE.Float32BufferAttribute(v, 3));
-  g.setAttribute('aBlade', new THREE.Float32BufferAttribute(blade, 1));
-  g.computeVertexNormals();
-  return g;
-}
 // How many tufts a square metre carries, by cover class. Zero is the important
 // entry: a salt pan, a snowfield and open water grow nothing, and the whole
 // point of reading cover is that they stay bare.
@@ -6438,141 +6271,6 @@ function vegMesh(geo: THREE.BufferGeometry, mat: THREE.Material, cap: number): T
   shadowy(m, true, false);
   scene.add(m);
   return m;
-}
-/**
- * TONE BAKED INTO THE ARCHETYPE — the cheapest texture in the file.
- *
- * Every kind is ONE shared geometry uploaded once, so an extra colour
- * attribute costs nothing per instance and nothing per frame; three multiplies
- * it with instanceColor, so the per-clump tint still lands on top. What it
- * buys is INTERNAL structure: a boulder whose faces differ instead of reading
- * as one lump, a crown darker where the light does not reach, a trunk that
- * goes to shadow at its foot.
- *
- * Per FACE where the geometry is non-indexed (the icosahedra and the merged
- * cactus): every triangle its own tone, which is what makes stone look
- * faceted. Per VERTEX where it is indexed (the cones and cylinders), which
- * gradients across a facet instead — softer, and it keeps the vertex sharing,
- * because converting to non-indexed to win crisper facets would multiply the
- * vertex count of the single most instanced geometry in the world.
- */
-function faceTone(geo: THREE.BufferGeometry, spread = 0.2, foot = 0.22): THREE.BufferGeometry {
-  const pos = geo.getAttribute('position') as THREE.BufferAttribute;
-  const n = pos.count;
-  geo.computeBoundingBox();
-  const bb = geo.boundingBox!;
-  const y0 = bb.min.y, span = Math.max(1e-3, bb.max.y - y0);
-  const indexed = !!geo.index;
-  const col = new Float32Array(n * 3);
-  for (let i = 0; i < n; i++) {
-    const key = indexed
-      ? (Math.round(pos.getX(i) * 64) * 73856093)
-        ^ (Math.round(pos.getY(i) * 64) * 19349663) ^ (Math.round(pos.getZ(i) * 64) * 83492791)
-      : Math.imul(Math.floor(i / 3) + 1, 2654435761);
-    let x = Math.imul(key ^ (key >>> 15), 2246822507);
-    x = (x ^ (x >>> 13)) >>> 0;
-    const t = x / 4294967296;
-    // Facet tone, then the foot in shadow: an ambient-occlusion the geometry
-    // is too coarse to earn honestly and the eye reads instantly.
-    const up = (pos.getY(i) - y0) / span;
-    const v = (1 + (t - 0.5) * spread) * (1 - foot * (1 - up) * (1 - up));
-    col[i * 3] = v; col[i * 3 + 1] = v; col[i * 3 + 2] = v;
-  }
-  geo.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  return geo;
-}
-/**
- * …AND GRAIN, IN THE FRAGMENT SHADER, WHICH IS ALSO NEARLY FREE HERE.
- *
- * The world renders at 148x320 — forty-seven thousand pixels, fewer than a
- * thumbnail — and is magnified with nearest-neighbour afterwards. That inverts
- * the usual advice: per-fragment work is the cheap resource in this engine and
- * per-vertex, per-draw work is the scarce one. So mottle is procedural and
- * per-pixel rather than a texture: no atlas, no memory, no bandwidth, no UVs,
- * and it scales with the object instead of aliasing like a bitmap.
- *
- * COARSE ON PURPOSE. The composite quantises to 14 levels, so one palette step
- * is about 0.07 in sRGB and anything subtler than that is eaten by the
- * quantiser or smeared into the dither — measured in the shutter round, where
- * a six-tap average of flat-banded colour moved the picture by 0.23/255. Blobs
- * a metre or two across at a tenth of the base tone survive; fine grain does
- * not, and would shimmer at range besides. Which is why it fades with
- * distance: at 200m a bush is three pixels tall and its texture is noise.
- */
-const GRAIN_GLSL = `
-  float grHash(vec3 p){ return fract(sin(dot(p, vec3(127.1, 311.7, 74.7))) * 43758.5453); }
-  float grNoise(vec3 p){
-    vec3 i = floor(p), f = fract(p);
-    f = f * f * (3.0 - 2.0 * f);
-    return mix(
-      mix(mix(grHash(i), grHash(i + vec3(1.0, 0.0, 0.0)), f.x),
-          mix(grHash(i + vec3(0.0, 1.0, 0.0)), grHash(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
-      mix(mix(grHash(i + vec3(0.0, 0.0, 1.0)), grHash(i + vec3(1.0, 0.0, 1.0)), f.x),
-          mix(grHash(i + vec3(0.0, 1.0, 1.0)), grHash(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z);
-  }`;
-/** Live handles, so the grain can be turned off for an A/B without a rebuild —
- *  each carrying the amplitude it was authored with, so the dial scales the
- *  set without having to know which material is which. */
-const grainU: Array<{ tag: string; base: number; u: { uGrainAmp: { value: number } } }> = [];
-function grainFx(mat: THREE.Material, tag: string, amp: number, scale: number): void {
-  const prev = mat.onBeforeCompile;
-  const u = { uGrainAmp: { value: amp }, uGrainScale: { value: scale },
-    uGrainNear: { value: 70 }, uGrainFar: { value: 240 } };
-  grainU.push({ tag, base: amp, u });
-  mat.onBeforeCompile = (sh, renderer) => {
-    prev?.call(mat, sh, renderer);
-    Object.assign(sh.uniforms, u);
-    sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', `#include <common>
-        varying vec3 vGrainP; varying float vGrainFade;
-        uniform float uGrainNear; uniform float uGrainFar;`)
-      // AFTER project_vertex, where mvPosition exists and the instance matrix
-      // has been applied — the world position this needs is the INSTANCE's,
-      // or every rock on the continent wears the same blotches.
-      .replace('#include <project_vertex>', `#include <project_vertex>
-        {
-          vec4 gWP = vec4(position, 1.0);
-          #ifdef USE_INSTANCING
-            gWP = instanceMatrix * gWP;
-          #endif
-          vGrainP = (modelMatrix * gWP).xyz;
-          vGrainFade = 1.0 - smoothstep(uGrainNear, uGrainFar, -mvPosition.z);
-        }`);
-    sh.fragmentShader = sh.fragmentShader
-      .replace('#include <common>', `#include <common>
-        varying vec3 vGrainP; varying float vGrainFade;
-        uniform float uGrainAmp; uniform float uGrainScale;
-        ${GRAIN_GLSL}`)
-      // On diffuseColor, BEFORE the lighting: grain that is lit is a property
-      // of the surface; grain added afterwards is a property of the screen.
-      .replace('#include <color_fragment>', `#include <color_fragment>
-        if (uGrainAmp > 0.001 && vGrainFade > 0.001) {
-          // THREE OCTAVES. The coarse one is the patch (lichen, a clump of
-          // canopy), the middle breaks the patch, and the fine one is what
-          // actually fights the flat facet — without it the shading is smooth
-          // across a face and the eye still reads a plane.
-          // WEIGHTED TOWARD THE FINE END. The first cut put half its energy in
-          // the coarsest octave, which tints a whole rock and does nothing to
-          // the flat facet it is standing on. The finest octave is held at
-          // roughly one art pixel at conversational range — past that it is
-          // shimmer, not texture, and this world magnifies every pixel it has.
-          float gN = grNoise(vGrainP * uGrainScale) * 0.40
-                   + grNoise(vGrainP * uGrainScale * 2.9) * 0.34
-                   + grNoise(vGrainP * uGrainScale * 6.7) * 0.26;
-          // CONTRAST IS NOT AMPLITUDE. Value noise piles up near its middle, so
-          // most of a surface sat within one palette step of flat however hard
-          // the amplitude was pushed. A gamma under one drags the mid values
-          // out toward the ends — the same total swing, far more of it landing
-          // on the far side of the quantiser, which is the only place texture
-          // can be seen at fourteen levels.
-          float gD = gN - 0.5;
-          gD = sign(gD) * pow(abs(gD) * 2.0, 0.72) * 0.5;
-          diffuseColor.rgb *= 1.0 + gD * uGrainAmp * vGrainFade;
-        }`);
-  };
-  // Materials that inject different source MUST NOT share a compiled program;
-  // three's cache keys on parameters, not on onBeforeCompile.
-  mat.customProgramCacheKey = () => tag;
 }
 // White base colours: every plant's hue arrives through instanceColor, and the
 // baked tone rides underneath it (three multiplies the two).
@@ -6657,61 +6355,6 @@ const trunkGeo2 = new THREE.CylinderGeometry(0.14, 0.2, 1, 5);
 trunkGeo2.translate(0, 0.5, 0);
 faceTone(trunkGeo2, 0.16, 0.36);
 const trunks = vegMesh(trunkGeo2, woodMat, 3600);
-// Kinds that stand on a drawn trunk. A cactus is its own column, a fern has
-// none, and a fallen log is all trunk already.
-const TRUNKED: VegKind[] = ['broadleaf', 'conifer', 'palm', 'acacia'];
-/** Size band per kind: [floor, span] of the uniform scale. Split out of
- *  pushSite's old two-way big/small guess, because a fern and a boulder and a
- *  standing stone are three different questions. */
-const VEG_SIZE: Record<VegKind, [number, number]> = {
-  broadleaf: [1.4, 2.2], conifer: [1.4, 2.2], palm: [1.5, 1.7], snag: [1.2, 1.8],
-  bush: [0.6, 0.9], rock: [0.55, 0.95], grass: [1, 0],
-  acacia: [1.5, 1.9], cactus: [0.85, 1.5], fern: [0.55, 0.6], log: [0.9, 1.5], spire: [0.75, 1.3],
-};
-
-// What grows where. Weights per biome, so a palm never appears in Tromsø and
-// the desert gets snags and rock instead of canopy.
-const VEG_MIX: Record<string, Array<[VegKind, number]>> = {
-  arid: [['bush', 5], ['rock', 4], ['cactus', 3], ['acacia', 3], ['snag', 2], ['spire', 2], ['palm', 1]],
-  tropical: [['broadleaf', 5], ['palm', 4], ['bush', 3], ['fern', 4], ['acacia', 1], ['log', 1], ['rock', 1]],
-  temperate: [['broadleaf', 5], ['conifer', 3], ['bush', 4], ['fern', 2], ['rock', 1], ['snag', 1], ['log', 1]],
-  boreal: [['conifer', 7], ['bush', 3], ['rock', 2], ['snag', 2], ['log', 2], ['fern', 1]],
-  alpine: [['conifer', 4], ['rock', 5], ['spire', 3], ['bush', 2], ['snag', 2], ['log', 1]],
-};
-/**
- * WHAT THE GROUND IS MADE OF.
- *
- * Rock was one colour with a little jitter — hue 0.09, barely saturated,
- * always the same mid-brown-grey — so every boulder on Earth was the same
- * boulder. Real stone is granite grey, chalk white, sandstone red, basalt
- * nearly black, ochre, greenstone, and WHICH of those it is barely varies
- * within a place: geology is a fact about a PLACE, not about a pebble. So a
- * family is drawn once per clump and every stone in that clump shares it,
- * varying only inside the family. That coherence is what makes it read as
- * country rather than confetti.
- *
- * [hue, hueSpan, sat, satSpan, lit, litSpan]
- */
-const STONE: Array<[number, number, number, number, number, number]> = [
-  [0.075, 0.02, 0.02, 0.05, 0.30, 0.15],   // granite    — grey, the world's default
-  [0.11, 0.02, 0.06, 0.07, 0.55, 0.14],    // limestone  — pale, chalky, catches the sun
-  [0.035, 0.025, 0.30, 0.16, 0.28, 0.13],  // sandstone  — the red country
-  [0.60, 0.08, 0.03, 0.05, 0.11, 0.07],    // basalt     — near black, cold cast
-  [0.09, 0.02, 0.34, 0.16, 0.40, 0.11],    // ochre      — iron-stained
-  [0.29, 0.07, 0.07, 0.07, 0.24, 0.11],    // greenstone — slate and serpentine
-];
-/** Which stone a landscape is likely to be standing on. */
-const STONE_MIX: Record<string, number[]> = {
-  arid: [2, 3, 6, 1, 5, 0],
-  tropical: [2, 1, 1, 4, 2, 2],
-  temperate: [4, 3, 1, 1, 1, 2],
-  boreal: [5, 1, 0, 3, 1, 2],
-  alpine: [6, 3, 1, 2, 0, 3],
-};
-/** The same table as rows in BIOME_ORDER, which is the shape `bedrockAt`
- *  wants. Derived rather than re-typed: two hand-maintained copies of one
- *  table is a divergence waiting to happen. */
-const STONE_MIX_ROWS: number[][] = BIOME_ORDER.map((n) => STONE_MIX[n] ?? []);
 
 /**
  * WHAT BLOOMS WHERE. The sward's colour so far has been the ground's own —
@@ -6839,33 +6482,11 @@ const COVER_VEG: Record<number, number> = {
  *  biome's own mix still supplies the character, so a boreal forest is
  *  conifers and a tropical one is palms without cover having to say so. */
 function coverKind(cover: number | null, r: () => number, x: number, z: number): VegKind {
-  if (cover === COVER.mangrove) return r() < 0.75 ? 'palm' : 'broadleaf';
-  if (cover === COVER.tree) {
-    // Drop bushes and rocks: this pixel says CANOPY, so pick a tree — but from
-    // the CLIMATE'S blend of every archetype's mix, so a boreal-temperate
-    // margin grows both conifers and broadleaves in proportion instead of
-    // flipping between two pure stands at an invisible line.
-    const t = climPick(VEG_TREES, climateAt(x, z).w, r);
-    if (t) return t;
-  }
-  if (cover === COVER.shrub || cover === COVER.grass || cover === COVER.crop) {
-    return r() < 0.82 ? 'bush' : pickKind(r, x, z);
-  }
-  // WET GROUND GROWS THE UNDERSTOREY. Fern and bush where a swamp used to
-  // deposit whatever the biome roll said, which in a boreal marsh was pines.
-  if (cover === COVER.wetland) return r() < 0.5 ? 'fern' : r() < 0.8 ? 'bush' : pickKind(r, x, z);
-  // BARE AND FROZEN GROUND IS GEOLOGY. Nothing else is standing up out there,
-  // and a shard reads as country where a lone shrub reads as a mistake.
-  if (cover === COVER.bare || cover === COVER.snow) return r() < 0.62 ? 'rock' : 'spire';
-  return pickKind(r, x, z);
+  // The rule itself lives in flora.ts, so /lab/flora can turn COVER CLASS and
+  // get the same answer this does. All the world contributes is the climate
+  // blend at this point.
+  return floraCoverKind(cover, climateAt(x, z).w, r);
 }
-/** VEG_MIX with everything that is not a tree removed, precomputed once — the
- *  canopy pick above wants only trees, and filtering five rows per plant was
- *  the sort of thing that turns a seed pass into a stall. */
-const VEG_TREES: Record<string, Array<[VegKind, number]>> = Object.fromEntries(
-  Object.entries(VEG_MIX).map(([k, row]) => [k, row.filter(([v]) =>
-    v === 'broadleaf' || v === 'conifer' || v === 'palm' || v === 'acacia')]),
-);
 function pickKind(r: () => number, x: number, z: number): VegKind {
   return climPick(VEG_MIX, climateAt(x, z).w, r) ?? VEG_MIX.temperate[0][0];
 }
@@ -6885,9 +6506,7 @@ function siteKindAt(x: number, z: number, cover: number | null, r: () => number)
   // with a lawn on it. Aspect rides in through elevEffAt, so the shaded side
   // of a col stops growing trees before the sunny side does.
   const band = altBandAt(elevEffAt(x, z), climateAt(x, z).treeline);
-  if (band >= AltBand.Scree) return r() < 0.68 ? 'rock' : 'spire';
-  if (band === AltBand.Meadow) return r() < 0.5 ? 'rock' : r() < 0.8 ? 'bush' : 'spire';
-  if (band === AltBand.Krummholz) return r() < 0.62 ? 'conifer' : r() < 0.85 ? 'bush' : 'rock';
+  { const k = bandKind(band, r); if (k) return k; }
   switch (swardCtxAt(x, z, cover, slope)) {
     case SwardCtx.Ruin: return r() < 0.75 ? 'bush' : coverKind(cover, r, x, z);
     case SwardCtx.Water: return r() < 0.55 ? 'fern' : coverKind(cover, r, x, z);
@@ -6901,7 +6520,6 @@ function siteKindAt(x: number, z: number, cover: number | null, r: () => number)
 // interloper of another species — which is what stops a wood reading as a
 // grid of lone trees. Members land in whichever bucket they fall in, so a
 // clump straddling a cell boundary still works.
-const vegTint = new THREE.Color();
 /** What a STAND has in common: one shifted green and one bedrock, so a wood
  *  is a wood and a scree slope is one mountain's worth of rock. */
 interface VegTone { h: number; s: number; l: number; stone: number }
@@ -6920,10 +6538,8 @@ function makeTone(r: () => number, x: number, z: number): VegTone {
   // through and the walls of the village below it be the same rock as the
   // hill. The clump still varies WITHIN the family, through the spans below.
   const stone = bedrockAt(cultEnv, x, z, STONE_MIX_ROWS, cl.w);
-  return { h: (r() - 0.5) * 0.055, s: (r() - 0.5) * 0.26, l: (r() - 0.5) * 0.17, stone };
+  return standTone(r, stone);
 }
-const STONY: VegKind[] = ['rock', 'spire'];
-const DEADWOOD: VegKind[] = ['snag', 'log'];
 function pushSite(x: number, z: number, kind: VegKind, r: () => number, tone?: VegTone): void {
   if (surfaceAt(x, z) !== 'ground') return;         // not on tarmac or water
   for (const seg of wallGrid.get(gkey(x, z)) ?? []) {
@@ -6931,81 +6547,19 @@ function pushSite(x: number, z: number, kind: VegKind, r: () => number, tone?: V
     if (Math.hypot(x - cx2, z - cz2) < 5) return;   // nor inside a building
   }
   const tn = tone ?? makeTone(r, x, z);
-  if (STONY.includes(kind)) {
-    const [hu, hv, sa, sv, li, lv] = STONE[tn.stone];
-    vegTint.setHSL(hu + r() * hv, clamp(sa + r() * sv, 0, 1),
-      clamp(li + r() * lv + tn.l * 0.35, 0.04, 0.86));
-  } else if (DEADWOOD.includes(kind)) {
-    // Dead wood is not a dark leaf. It bleaches: a snag that went last winter
-    // is still brown, one that has stood a decade is bone.
-    vegTint.setHSL(0.075 + r() * 0.035, 0.04 + r() * 0.18, 0.17 + r() * 0.3);
-  } else if (kind === 'cactus') {
-    vegTint.setHSL(0.28 + r() * 0.06, 0.22 + r() * 0.2, 0.26 + r() * 0.16);
-  } else {
-    // LIVING GREEN, and not all of it green. The biome band gives the region
-    // its character, the stand's tone shifts the whole clump together, and
-    // then one plant in fourteen breaks rank — a crown gone to autumn, a
-    // dead-standing individual, or the silver-blue of an olive or a spruce.
-    // Those outliers are most of what makes a hillside look observed.
-    const odd = r();
-    if (odd < 0.045) vegTint.setHSL(0.055 + r() * 0.07, 0.4 + r() * 0.25, 0.34 + r() * 0.16);
-    else if (odd < 0.085) vegTint.setHSL(0.36 + r() * 0.09, 0.07 + r() * 0.13, 0.44 + r() * 0.16);
-    else {
-      // THE GREEN BAND IS A PLACE'S, NOT A SESSION'S. vegHue/vegLit blend
-      // across the archetypes present here, so foliage shifts hue along a
-      // drive the way the ground under it now does.
-      const cl = climateAt(x, z);
-      let hue0 = 0, hue1 = 0, lit0 = 0, lit1 = 0;
-      for (let bi = 0; bi < BIOME_LIST.length; bi++) {
-        const w = cl.w[bi], b = BIOME_LIST[bi];
-        hue0 += b.vegHue[0] * w; hue1 += b.vegHue[1] * w;
-        lit0 += b.vegLit[0] * w; lit1 += b.vegLit[1] * w;
-      }
-      vegTint.setHSL(
-        hue0 + r() * hue1 + tn.h,
-        clamp(0.3 + r() * 0.3 + tn.s * 0.5, 0.05, 0.95),
-        clamp(lit0 + r() * lit1 + tn.l * 0.5, 0.05, 0.88),
-      );
-    }
-  }
-  const [s0, span] = VEG_SIZE[kind];
-  let sc = s0 + r() * span;
-  // KRUMMHOLZ. A spruce at the treeline is the same spruce, a century of wind
-  // shorter — a deformation of what is already there rather than a new
-  // archetype, which is the cheapest honest way to draw the band and the same
-  // move the sward's flowers make with their shared card.
-  if (TRUNKED.includes(kind)) {
-    const k = krummholz(elevEffAt(x, z), climateAt(x, z).treeline);
-    if (k < 1) sc *= Math.max(0.18, k);
-  }
-  // THE ERRATIC. One stone in twenty-five is far bigger than its neighbours —
-  // a boulder the last ice age left, a tor the hill wore down to. A landscape
-  // of uniformly-sized rocks reads as gravel at any scale; one outsized block
-  // gives the eye something to judge the rest against, and gives the truck
-  // something it genuinely must drive around.
-  if (STONY.includes(kind) && r() < 0.04) sc *= 1.9 + r() * 1.9;
-  const site: VegSite = {
-    x, z, k: kind,
-    s: sc,
-    rot: r() * Math.PI * 2,
-    h: TRUNKED.includes(kind) ? 1.1 + r() * 2.2 : 0,
-    c: vegTint.clone(),
-  };
-  // The shape lottery. A slab, a dome, a standing stone and a pebble are one
-  // mesh and two numbers apart; a slender fir and a spreading oak likewise.
-  if (kind === 'rock') {
-    site.sy = 0.4 + r() * 1.35; site.sw = 0.72 + r() * 0.95; site.tl = (r() - 0.5) * 0.5;
-  } else if (kind === 'spire') {
-    site.sy = 1.0 + r() * 1.5; site.sw = 0.7 + r() * 0.5; site.tl = (r() - 0.5) * 0.34;
-  } else if (kind === 'log') {
-    site.tl = (r() - 0.5) * 0.3;
-  } else if (kind === 'bush' || kind === 'fern') {
-    site.sy = 0.7 + r() * 0.7; site.sw = 0.8 + r() * 0.6;
-  } else if (site.h > 0 || kind === 'snag') {
-    // Crowns: slender or spreading, and never the same tree twice.
-    site.sy = 0.82 + r() * 0.55; site.sw = 0.85 + r() * 0.4;
-    if (kind !== 'palm') site.tl = (r() - 0.5) * 0.12;
-  }
+  // ── THE PLANT ITSELF IS FLORA'S BUSINESS ──
+  //
+  // Everything above this line is the WORLD's veto — tarmac, water, a wall —
+  // and everything below it is bookkeeping. What the plant looks like is a
+  // closed question about climate and a die, and it lives in flora.ts so that
+  // a lab can ask it the same question without a truck. The two callbacks are
+  // lazy because this runs tens of thousands of times a drive and only the
+  // living-green branch wants a climate sample.
+  const site = plantLook(x, z, kind, r, {
+    tone: tn,
+    biomeW: () => climateAt(x, z).w,
+    krummK: () => krummholz(elevEffAt(x, z), climateAt(x, z).treeline),
+  }, BIOME_LIST);
   const key = vegKey(x, z);
   let cell = vegGrid.get(key);
   if (!cell) vegGrid.set(key, (cell = []));
@@ -8363,7 +7917,7 @@ function refreshVeg(): void {
           vegDummy.rotation.set(0, 0, 0);
           // The trunk wears its crown's width, or a spreading acacia stands on
           // a sapling's stem and a slender fir on a fencepost.
-          vegDummy.scale.set(v.s * 0.42 * (v.sw ?? 1), v.h + v.s * 0.3, v.s * 0.42 * (v.sw ?? 1));
+          vegDummy.scale.set(v.s * 0.42 * (v.sw ?? 1), trunkReach(v.k, v.h, v.s), v.s * 0.42 * (v.sw ?? 1));
           vegDummy.updateMatrix();
           trunks.setMatrixAt(trunkN++, vegDummy.matrix);
         }
