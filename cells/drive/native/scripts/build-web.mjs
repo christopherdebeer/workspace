@@ -15,6 +15,14 @@ const buildId = process.env.DRIVE_BUILD_ID
 await rm(OUT, { recursive: true, force: true });
 await mkdir(OUT, { recursive: true });
 await cp(join(CELL, 'web'), OUT, { recursive: true });
+// THE PACKAGED SHELLS MUST NOT CARRY A SERVICE WORKER. `web/` is the browser
+// cell's static surface and sw.js lives there with the icons it precaches, but
+// it precaches absolute paths on the deployed host — and these shells serve the
+// same bundle from `drive://app` and `capacitor://localhost`, where those paths
+// mean nothing and nothing needs them anyway: the whole application is already
+// on the disk. Shipping it would be dead weight at best and a worker fighting
+// the local origin at worst.
+await rm(join(OUT, 'sw.js'), { force: true });
 
 const result = await build({
   absWorkingDir: NATIVE,

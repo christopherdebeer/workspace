@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { gzipSync, deflateSync, inflateSync } from 'node:zlib';
@@ -56,7 +57,11 @@ export const CSP = [
   // The menu's pixel face (Silkscreen) ships inside the bundle as data: URIs —
   // no font host, so the page stays self-contained.
   'font-src data:',
-  'worker-src blob:',
+  // blob: is the road profile solver; 'self' is /sw.js. A document may only
+  // register a service worker its OWN policy admits, and this directive is
+  // where that is decided — the registration fails silently otherwise, which
+  // is the same shape of invisible failure the mapterhorn host had above.
+  "worker-src 'self' blob:",
   "base-uri 'none'",
   "form-action 'none'",
 ].join('; ');
@@ -138,6 +143,38 @@ const WEB_ASSETS: Record<string, { file: string; type: string }> = {
   '/icons/drive-512.png': { file: 'icons/drive-512.png', type: 'image/png' },
   '/icons/drive-maskable-512.png': { file: 'icons/drive-maskable-512.png', type: 'image/png' },
 };
+
+/**
+ * THE SERVICE WORKER, STAMPED WITH THE BUNDLE IT BELONGS TO.
+ *
+ * The worker names its cache after this hash, so a deploy is a new cache filled
+ * from scratch and the page can never be served against an `app.js` it was not
+ * built with. Hashing the bundle rather than taking a version from anywhere
+ * else means the stamp cannot drift from what is actually being served: the two
+ * come off the same bytes on the same disk.
+ *
+ * Computed once per container and held, because it is 1.4MB of SHA1 and the
+ * answer cannot change under a running Lambda. Lazily, not at import: a deploy
+ * that somehow lacked `app.js` would otherwise take the whole cell down instead
+ * of one route.
+ */
+let bundleStamp: string | null = null;
+function serveServiceWorker() {
+  if (bundleStamp === null) {
+    try {
+      bundleStamp = createHash('sha1')
+        .update(readFileSync(join(__dirname, 'app.js'))).digest('hex').slice(0, 12);
+    } catch { bundleStamp = 'unstamped'; }
+  }
+  const body = readFileSync(join(__dirname, 'web', 'sw.js'), 'utf8')
+    .replace('__DRIVE_SW_BUILD__', bundleStamp);
+  return respond(200, 'application/javascript; charset=utf-8', body, {
+    // The one file that must never come from a stale cache: it is the only
+    // thing that can replace a stale cache. Browsers already refuse to reuse a
+    // worker script older than a day; this says so for the rest.
+    'cache-control': 'no-cache',
+  });
+}
 
 function serveWebAsset(path: string) {
   const asset = WEB_ASSETS[path];
@@ -1573,6 +1610,7 @@ export const handler = async (event: {
     });
   }
   try {
+    if (path === '/sw.js') return serveServiceWorker();
     const asset = serveWebAsset(path);
     if (asset) return asset;
     if (path === '/app.js') {

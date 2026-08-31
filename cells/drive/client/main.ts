@@ -53,8 +53,13 @@ import {
 import { decodeTune, fixtureById, type FixtureTune, type WorldFixture } from './world-fixtures';
 import {
   AUTH_BASE, AUTH_MODE, CELL_BASE, DRIVE_BUILD, closeExternalUrl, openExternalUrl,
-  publicCellUrl, publicGameUrl,
+  publicCellUrl, publicGameUrl, registerAppShell,
 } from './runtime';
+
+// AHEAD OF THE ROUTE BRANCH, so a lab visit arms offline boot for the game and
+// the other way round. One shell answers every path on this host, so there is
+// no route here that would want a different one.
+registerAppShell();
 
 // A DISTINCT EXECUTION SURFACE. The labs share the production modules, and
 // the route branch guarantees the game bootstrap and a lab never run
@@ -460,8 +465,10 @@ function repairDem(e: Float32Array, mpp: number, where: string): Float32Array {
  * not going to convert anyway.
  */
 const RAW_BITMAP: ImageBitmapOptions = { colorSpaceConversion: 'none', premultiplyAlpha: 'none' };
-async function decodeTerrarium(res: Response, px: number): Promise<Float32Array> {
-  const bmp = await createImageBitmap(await res.blob(), RAW_BITMAP);
+/** Takes a Blob rather than the Response it came from: the raster cache stores
+ *  bytes, and a cached tile must decode through exactly this path. */
+async function decodeTerrarium(blob: Blob, px: number): Promise<Float32Array> {
+  const bmp = await createImageBitmap(blob, RAW_BITMAP);
   const cv = typeof OffscreenCanvas !== 'undefined'
     ? new OffscreenCanvas(px, px)
     : Object.assign(document.createElement('canvas'), { width: px, height: px });
@@ -505,8 +512,14 @@ const demSource = { mth: 0, aws: 0, none: 0,
   // means step up the pyramid, a throw means the source is unreachable and
   // marking its tiles "missing" disables it for the whole session on the
   // strength of a policy header. Counted so `__demsrc` can say so.
-  mthBlocked: 0 };
+  mthBlocked: 0,
+  /** Tiles answered from the on-device raster cache — the number that says
+   *  whether an offline session has any ground to stand on. */
+  disk: 0 };
 async function fetchMapterhorn(x: number, y: number, z: number): Promise<Float32Array | null> {
+  // Set the moment a request is refused rather than answered: from then on
+  // this climb reads the cache and asks the network nothing. See the catch.
+  let refused = false;
   // Up the pyramid until something exists; z6 is the floor (all land has a
   // tile there), and each step up quarters the ground detail we can recover.
   for (let up = 0; up <= z - 6; up++) {
@@ -514,11 +527,33 @@ async function fetchMapterhorn(x: number, y: number, z: number): Promise<Float32
     const key = `${tz}/${tx}/${ty}`;
     if (mthMissing.has(key)) continue;
     let raw: Float32Array;
+    const url = `https://tiles.mapterhorn.com/${key}.webp`;
+    // Whether these bytes came off the disk decides two things in the catch:
+    // a stored tile that will not decode has to be dropped, and it cannot be
+    // evidence that the SOURCE is unreachable.
+    let disk = false;
     try {
-      const res = await fetch(`https://tiles.mapterhorn.com/${key}.webp`);
-      if (!res.ok) { mthMissing.add(key); continue; }
-      raw = await decodeTerrarium(res, 512);
+      let blob = await readRaster(url);
+      disk = !!blob;
+      if (!blob) {
+        // Nothing stored, and the network already said no on a level below —
+        // asking again would be a second failure for the same reason. Keep
+        // climbing on the disk alone.
+        if (refused) continue;
+        const res = await fetch(url);
+        if (!res.ok) { mthMissing.add(key); continue; }
+        blob = await res.blob();
+      }
+      raw = await decodeTerrarium(blob, 512);
+      // AFTER the decode, never before. Bytes are worth keeping only once
+      // something has proved they are an image: a route that answers 200 with
+      // an error document would otherwise be stored and re-read as a broken
+      // tile in every future session, and the cache would have manufactured a
+      // permanent fault out of a passing one.
+      if (!disk) writeRaster(url, blob);
+      if (disk) demSource.disk++;
     } catch (e) {
+      if (disk) dropRaster(url);
       // A tile that will not DECODE is a tile we do not have: step UP the
       // pyramid rather than abandoning the source — bailing out here sent every
       // request at Chapman's Peak, where nothing exists below z12, straight
@@ -530,7 +565,22 @@ async function fetchMapterhorn(x: number, y: number, z: number): Promise<Float32
       // missing, then did the same for the next tile, until the source was
       // silently dead for the session. Counted and reported instead, and the
       // tile is not blamed for it.
-      if (e instanceof TypeError) { demSource.mthBlocked++; return null; }
+      //
+      // …AND A REFUSED REQUEST MUST NOT END THE CLIMB EITHER.
+      //
+      // Returning here was right when the only thing further up was more
+      // network. With a cache above it, that same return is what makes an
+      // offline session groundless: Chapman's Peak has nothing below z12, so
+      // the tile that got STORED is an ancestor, and giving up at z14 means
+      // never reaching it. Measured before this line changed: 26 tiles, 26
+      // refusals, no ground, and a full cache sitting underneath. What must
+      // not happen, and still does not, is blaming the tile — nothing is added
+      // to mthMissing on this path.
+      if (!disk && e instanceof TypeError) {
+        if (!refused) demSource.mthBlocked++;
+        refused = true;
+        continue;
+      }
       mthMissing.add(key);
       continue;
     }
@@ -576,12 +626,21 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
   if (MAPTERHORN) out = await fetchMapterhorn(x, y, z);
   if (out) demSource.mth++;
   else {
+    const url = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
+    let disk = false;
     try {
-      const res = await fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`);
-      if (!res.ok) { demSource.none++; return null; }
-      out = await decodeTerrarium(res, 256);
+      let blob = await readRaster(url);
+      disk = !!blob;
+      if (!blob) {
+        const res = await fetch(url);
+        if (!res.ok) { demSource.none++; return null; }
+        blob = await res.blob();
+      }
+      out = await decodeTerrarium(blob, 256);
+      if (!disk) writeRaster(url, blob);   // only bytes that decoded — see above
       demSource.aws++; src = 'aws';
-    } catch { demSource.none++; return null; }
+      if (disk) demSource.disk++;
+    } catch { if (disk) dropRaster(url); demSource.none++; return null; }
   }
   // Metres per pixel at THIS tile's latitude — the footprint test is a
   // statement about the ground, so it has to be in ground units.
@@ -690,6 +749,10 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
   const key = `${x}/${y}`;
   if (coverAsked.has(key)) return;
   coverAsked.add(key);
+  // Set only when the bytes came off the disk. The retry below is what makes
+  // this matter: bad stored bytes would otherwise fail, wait twenty seconds,
+  // and fail again for the life of the installation.
+  let fromDisk = false;
   try {
     let data: Uint8Array;
     if (FIXTURE) {
@@ -698,12 +761,18 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
       data = fixtureRaster(new Uint8Array(256 * 256), x, y, COVER_Z,
         (e, s) => FIXTURE.cover(e, s, FIXTURE_TUNE));
     } else {
-    const res = await fetch(`${CELL_BASE}/~/cover/v1/${COVER_Z}/${x}/${y}`);
-    if (!res.ok) throw new Error(`cover ${res.status}`);
+    const url = `${CELL_BASE}/~/cover/v1/${COVER_Z}/${x}/${y}`;
+    let blob = await readRaster(url);
+    if (blob) fromDisk = true;
+    else {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(`cover ${res.status}`);
+      blob = await res.blob();
+    }
     // Same contract as the elevation decoder, and for the same reason: this
     // pixel is a CLASS INDEX, not a grey. A colour-managed decode turns urban
     // into water and cropland into snow, silently — see RAW_BITMAP.
-    const bmp = await createImageBitmap(await res.blob(), RAW_BITMAP);
+    const bmp = await createImageBitmap(blob, RAW_BITMAP);
     const cv = typeof OffscreenCanvas !== 'undefined'
       ? new OffscreenCanvas(256, 256)
       : Object.assign(document.createElement('canvas'), { width: 256, height: 256 });
@@ -713,6 +782,10 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
     const d = cx.getImageData(0, 0, 256, 256).data;
     data = new Uint8Array(256 * 256);
     for (let i = 0; i < data.length; i++) data[i] = d[i * 4];   // red channel IS the class
+    // Kept only now the pixels are real. The cell computes this tile out of
+    // WorldCover COGs and can answer 200 with an error document; storing that
+    // would turn one bad minute upstream into a permanently blank ecology.
+    if (!fromDisk) writeRaster(url, blob);
     }
     const b = tileBounds(x, y, COVER_Z);
     const [wx0, wz0] = toLocal(b.latN, b.lonW);
@@ -733,6 +806,7 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
     coverDirtiedFar(remeasureCoverMode(),
       Math.min(wx0, wx1), Math.min(wz0, wz1), Math.abs(wx1 - wx0), Math.abs(wz1 - wz0));
   } catch {
+    if (fromDisk) dropRaster(`${CELL_BASE}/~/cover/v1/${COVER_Z}/${x}/${y}`);
     // Let a later pass ask again — a cover miss is a softer failure than a road
     // one (everything downstream has a fallback), so it just retries slowly.
     setTimeout(() => coverAsked.delete(key), 20000);
@@ -14791,8 +14865,14 @@ const osmDbReady: Promise<void> = new Promise((resolve) => {
     clearTimeout(t); resolve();
   };
   try {
-    const req = indexedDB.open('drive-cache', 1);
-    req.onupgradeneeded = () => { req.result.createObjectStore('osm').createIndex('ts', 'ts'); };
+    const req = indexedDB.open('drive-cache', 2);
+    // v2 added `raster`. An upgrade from v1 must NOT assume `osm` is absent
+    // and must not drop it — everywhere anyone has already driven is in there.
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('osm')) db.createObjectStore('osm').createIndex('ts', 'ts');
+      if (!db.objectStoreNames.contains('raster')) db.createObjectStore('raster').createIndex('ts', 'ts');
+    };
     req.onsuccess = () => { osmDb = req.result; fin('open'); };
     req.onerror = () => fin('error');
     req.onblocked = () => fin('blocked');
@@ -14854,6 +14934,171 @@ function pruneTileCache(): void {
         c.delete();
         c.continue();
       };
+    };
+  } catch { /* cache is best-effort */ }
+}
+
+// ── the raster cache: the ground, kept the way the ways are ────────
+/**
+ * THE WORLD ARRIVES AS THREE FETCHES AND ONLY ONE OF THEM SURVIVED A RELOAD.
+ *
+ * OSM ways have been in IndexedDB since the localStorage era ended above, so
+ * with no network you got roads where you had already been — and nothing
+ * underneath them, because the heightfield and the land cover lived in module
+ * state and went with the tab. That is the worst shape an offline session can
+ * have: it boots, it shows the menu, it draws the roads you remember, and the
+ * planet they were on is gone. Both native shells carry the bundle inside the
+ * application and so start perfectly well with the network off, which means
+ * they reached that empty world FASTER than the browser did.
+ *
+ * Cached BY SOURCE URL, not by tile coordinate, and that is not a detail.
+ * Mapterhorn walks UP its pyramid when a tile is absent — Chapman's Peak has
+ * nothing below z12 — so the thing actually fetched is an ancestor that serves
+ * 4^up children, and the resample back down is ours. A URL key stores what was
+ * really asked for, one ancestor for sixteen tiles, and leaves every fallback
+ * rule above untouched: this layer answers a URL, it does not get a say in
+ * which URL is worth asking for.
+ *
+ * The BYTES are stored, never the decoded field. A decoded z14 tile is 256KB
+ * of Float32 against ~90KB of terrarium PNG or ~250KB of Mapterhorn WebP —
+ * and, worth more than the space, a cached tile re-enters `fetchHeights`
+ * through the same decode, the same off-the-planet test and the same
+ * `repairDem` as a fetched one. A tile that came off the disk is not a tile
+ * that skipped the checks.
+ */
+/**
+ * Bytes to keep. Measured on real ground: a Mapterhorn z14 WebP is ~250KB, an
+ * AWS terrarium PNG 72-118KB, a cover tile 2.7-5KB. 64MB is several hundred
+ * tiles — a long trip — and stays polite on an origin this cell shares with
+ * every other cell on parc.land, which is the quota lesson localStorage taught
+ * upstairs.
+ */
+const RASTER_BUDGET = 64 * 1024 * 1024;
+interface RasterRow { ts: number; type: string; bytes: ArrayBuffer; size: number }
+/**
+ * What the cache actually did, because every one of its failures is silent by
+ * design — it is best-effort, so every path swallows its error and carries on,
+ * and the only visible symptom of a cache that stores nothing is a world that
+ * is empty when you come back to it a day later. Three separate rounds went
+ * into "is it reading, or is it writing" before this existed.
+ */
+const rasterStat = { hit: 0, miss: 0, put: 0, stored: 0, failed: 0, dropped: 0, pruned: 0 };
+/** Read a tile's stored bytes back as the Blob its decoder wants.
+ *
+ *  A Blob is not stored directly: IndexedDB will take one, but Safari has
+ *  historically returned them detached, and an ArrayBuffer plus the MIME type
+ *  reconstructs exactly the same thing with no such history. */
+async function readRaster(url: string): Promise<Blob | null> {
+  await osmDbReady;
+  if (!osmDb) return null;
+  return new Promise((resolve) => {
+    try {
+      const rq = osmDb!.transaction('raster', 'readonly').objectStore('raster').get(url);
+      rq.onsuccess = () => {
+        const row = rq.result as RasterRow | undefined;
+        if (row) rasterStat.hit++; else rasterStat.miss++;
+        resolve(row ? new Blob([row.bytes], { type: row.type }) : null);
+      };
+      rq.onerror = () => { rasterStat.miss++; resolve(null); };
+    } catch { resolve(null); }
+  });
+}
+let rasterWritesSincePrune = 0;
+/**
+ * ONE TRANSACTION PER TILE IS TOO MANY TRANSACTIONS.
+ *
+ * The first version opened a readwrite transaction per stored tile, which is
+ * what the ways cache above does and is fine at its rate. The ring asks for
+ * roughly fifty tiles in the first seconds of a boot, and fifty overlapping
+ * readwrite transactions on one store do not run — they QUEUE, and each one's
+ * completion event has to be dispatched on a main thread that is busy
+ * rendering. Measured on the first drive: 56 puts, 4 of them stored, none
+ * failed, the rest draining at about one every four seconds. Nothing errored.
+ * Nothing reported. The next session simply had no ground.
+ *
+ * So writes go into a map and one transaction takes the lot. The map is keyed
+ * by URL, so a tile asked for twice before the flush is stored once.
+ */
+const rasterQueue = new Map<string, RasterRow>();
+let rasterFlush: ReturnType<typeof setTimeout> | null = null;
+/** Keep a tile. Fire-and-forget: nothing downstream may wait on the cache. */
+function writeRaster(url: string, blob: Blob): void {
+  rasterStat.put++;
+  if (!osmDb) { rasterStat.failed++; return; }
+  void blob.arrayBuffer().then((bytes) => {
+    rasterQueue.set(url, { ts: Date.now(), type: blob.type, bytes, size: bytes.byteLength });
+    // A second of coalescing is the whole ring; longer would be more tiles per
+    // transaction and more to lose to a tab that goes away, which is what the
+    // pagehide flush below is for.
+    if (rasterFlush === null) rasterFlush = setTimeout(flushRaster, 1000);
+  }).catch(() => { rasterStat.failed++; });
+}
+function flushRaster(): void {
+  rasterFlush = null;
+  if (!osmDb || rasterQueue.size === 0) return;
+  const batch = [...rasterQueue];
+  rasterQueue.clear();
+  try {
+    const store = osmDb.transaction('raster', 'readwrite').objectStore('raster');
+    for (const [url, row] of batch) {
+      // Counted on the REQUEST, not on the call. A put that is REJECTED — the
+      // origin over quota is the one that matters — reports through this and
+      // nowhere else, and "the cache is full" and "the cache is broken" are
+      // not the same fault.
+      const rq = store.put(row, url);
+      rq.onsuccess = () => { rasterStat.stored++; };
+      rq.onerror = () => { rasterStat.failed++; };
+    }
+    rasterWritesSincePrune += batch.length;
+    if (rasterWritesSincePrune >= 200) { rasterWritesSincePrune = 0; pruneRaster(); }
+  } catch { rasterStat.failed += batch.length; }
+}
+// THE MOMENT THE CACHE IS MOST WORTH HAVING is the moment the tab goes away —
+// on a phone that is every lock, every app switch, and iOS may never let the
+// page run again. `pagehide` is the one event that fires for all of those; a
+// queued second of tiles would otherwise be exactly the tiles you were driving
+// through when you stopped.
+window.addEventListener('pagehide', flushRaster);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushRaster();
+});
+/**
+ * Forget one tile.
+ *
+ * Only ever called when stored bytes failed to DECODE, and it is the
+ * difference between a bad tile and a permanent hole. Every caller below
+ * treats a decode failure as "this tile does not exist" and moves on — which
+ * is right for a tile that really is missing, and wrong forever for bytes that
+ * would be re-read and re-fail on every future session.
+ */
+function dropRaster(url: string): void {
+  if (!osmDb) return;
+  rasterStat.dropped++;
+  try { osmDb.transaction('raster', 'readwrite').objectStore('raster').delete(url); }
+  catch { /* cache is best-effort */ }
+}
+/**
+ * Prune to RASTER_BUDGET, oldest-first.
+ *
+ * By BYTES rather than by count, unlike the ways above, because these entries
+ * run from 2.7KB to 250KB and a count would either starve a WebP session or
+ * hoard a cover one. Insertion order, not use order: an LRU would have to
+ * re-put the whole record — a quarter-megabyte rewrite — every time a tile was
+ * read, which costs more than the eviction it avoids.
+ */
+function pruneRaster(): void {
+  try {
+    const store = osmDb!.transaction('raster', 'readwrite').objectStore('raster');
+    // Newest first, spending the budget as we go; everything past the point it
+    // runs out is older than something we chose to keep.
+    const cur = store.index('ts').openCursor(null, 'prev');
+    let kept = 0;
+    cur.onsuccess = () => {
+      const c = cur.result;
+      if (!c) return;
+      kept += (c.value as RasterRow).size ?? 0;
+      if (kept > RASTER_BUDGET) { c.delete(); rasterStat.pruned++; }
+      c.continue();
     };
   } catch { /* cache is best-effort */ }
 }
@@ -22571,6 +22816,11 @@ function heightsOf(): number[] {
       .map(([c, k]) => `${COVER_NAME[c] ?? c} ${((k / Math.max(1, n)) * 100).toFixed(0)}%`),
   };
 };
+/** Is the ground being kept, and if not which half is failing. `stored` well
+ *  below `put` says the writes are being refused; `hit` at zero on a second
+ *  visit says they were never there to read. */
+(window as unknown as { __raster?: object }).__raster = (): object =>
+  ({ ...rasterStat, db: osmDbHow, budgetMB: RASTER_BUDGET / 1024 / 1024 });
 /** What the elevation source got wrong here, and how much of it we repaired. */
 (window as unknown as { __demsrc?: object }).__demsrc = (): object =>
   ({ mapterhorn: MAPTERHORN, ...demSource, missingTiles: mthMissing.size });

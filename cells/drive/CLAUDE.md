@@ -61,6 +61,9 @@ Nothing here is fast. Budget for it.
 | `node devtools/boot.mjs` | the world boots and probes exist | ~1min |
 | `node devtools/lab.test.mjs` | every lab opens, dials persist and travel | ~6min |
 | `node devtools/fixture-world.test.mjs` | the whole mesh pipeline over authored ground | ~7min |
+| `node devtools/appshell.test.mjs` | the worker precaches only what the cell serves | instant |
+| `node devtools/offline-shell.test.mjs` | the browser starts with the network off | ~1min |
+| `node devtools/offline-ground.test.mjs` | and finds ground when it does | ~3min |
 | `node devtools/<name>.test.mjs` | 66 of them; pick what you touched | varies |
 
 Run them from `/home/user/workspace`, not from the cell directory.
@@ -125,6 +128,39 @@ Answer those three from an authored fixture and the **entire production
 pipeline** runs with no network: terrain build, corridor carve, ribbon, batter,
 kerb, junction, vegetation, sward, façades, water. That is `client/world-fixtures.ts`,
 reached with `?fixture=<id>` and chosen from `/lab/world`.
+
+---
+
+## Offline, and the two different things it means
+
+The native shells carry `dist/web` inside the application, so they have always
+started with no network — and then shown an empty planet, because only ONE of
+the three world fetches used to survive a reload. Both halves are fixed and
+they are fixed in different places (`docs/drive-persistence.md` §8):
+
+- the **app shell** is a service worker, `web/sw.js`, served at `/sw.js` and
+  registered only in the browser. It answers the page, the bundle, the manifest
+  and the icons, and deliberately nothing else.
+- the **ground** is `readRaster`/`writeRaster` in `main.ts` — the same
+  `drive-cache` database as the ways, keyed by SOURCE URL, holding bytes.
+
+Three traps, each of which cost a round:
+
+- **A refused fetch must not end the Mapterhorn pyramid climb.** Where a z14
+  tile is absent the thing that got STORED is an ancestor; returning at the
+  refused level never reaches it. 26 tiles, 26 refusals, no ground, full cache.
+- **One IndexedDB transaction per tile is too many.** Fifty overlapping
+  readwrite transactions queue and drain at roughly one every four seconds
+  behind the render loop. Measured: 56 puts, 4 stored, ZERO failed, nothing in
+  the console. Writes are batched now; `__raster()` exists so the next silent
+  version of this is one probe away rather than four rounds.
+- **Cache bytes only after something has decoded them.** A route that answers
+  200 with an error document is a passing fault; storing it makes it permanent.
+
+`devtools/offline-ground.test.mjs` and `devtools/offline-shell.test.mjs` hold
+both halves. The second stands up its own loopback server, because the main
+harness relays through curl and is as blind to a service worker as it is to
+CSP.
 
 ---
 

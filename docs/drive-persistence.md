@@ -291,3 +291,64 @@ no authorization logic in the route at all beyond refusing `anonymous`.
   workspace, as project bookkeeping written by the humans and agents working on
   drive. The isolation rule in this document is about what the *running game*
   reads and writes, which is nothing.
+
+## 8. What survives with no network
+
+Written after the native shells shipped, because packaging them is what made
+the gap visible: an Electron or Capacitor build carries `dist/web` inside the
+application and starts perfectly well with the radio off — and then shows you
+an empty planet. The browser could not even start. Two different faults, and
+only one of them is a service-worker fault.
+
+### The app shell
+
+`cells/drive/web/sw.js`, served by the cell at `/sw.js` and registered from
+`registerAppShell()` in `client/runtime.ts`. It precaches `/`, `/app.js`, the
+manifest and the five icons, and answers **nothing else** — every `/~/` route,
+`/state`, `/tape` and `/probe/` go to the network and fail honestly.
+
+The cache is named for a SHA1 of the `app.js` the cell is serving, so a deploy
+is a new cache filled completely before it replaces the old one; the page and
+the bundle can never be served from different builds. It may `skipWaiting`
+only because the bundle is one file with no lazy chunks — if that changes, that
+line has to change with it.
+
+It is web-only. `build-web.mjs` deletes `sw.js` out of the packaged bundle and
+`verify.mjs` fails if it reappears: the shells serve their own copy from
+`drive://app` and `capacitor://localhost`, where the absolute paths above mean
+nothing and nothing needs them.
+
+### The ground
+
+`readRaster`/`writeRaster` in `client/main.ts`, in the same `drive-cache`
+database as the OSM ways, keyed **by source URL** and holding the response
+bytes rather than the decoded field. The URL key is what makes Mapterhorn's
+pyramid work: where a z14 tile is absent the thing actually fetched is an
+ancestor serving sixteen children, and it is that ancestor which has to be
+stored. The bytes are kept only once something has decoded them, and a stored
+tile that later fails to decode is deleted rather than re-read forever.
+
+Deliberately NOT in the service worker, for two reasons: a worker cache would
+be a second copy of every tile under an eviction policy that disagrees with
+this one, and the native shells — which need this far more than the browser
+does, having always started fine and always been empty — cannot rely on one.
+
+Two lessons are in the code and worth repeating here:
+
+- **A refused request must not end the pyramid climb.** Returning at the first
+  refused level was correct when everything above it was more network. With a
+  cache underneath, it is what makes an offline session groundless.
+- **One IndexedDB transaction per tile is too many transactions.** The ring
+  asks for ~50 tiles in the first seconds of a boot; fifty overlapping
+  readwrite transactions queue and drain at about one every four seconds
+  behind a busy main thread. Measured: 56 puts, 4 stored, none failed, nothing
+  reported. Writes are batched into one transaction on a 1s timer, flushed on
+  `pagehide` — which on a phone is every lock and every app switch.
+
+`__raster()` reports the cache's own counters, because every failure path here
+is silent by design and "the writes are being refused" and "there was nothing
+to read" look identical from the outside.
+
+`devtools/offline-ground.test.mjs` blocks every source of ground and reloads;
+`devtools/offline-shell.test.mjs` stands the shell up on a loopback server,
+registers the worker, goes offline for real and reloads.
