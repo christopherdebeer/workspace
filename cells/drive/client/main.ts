@@ -51,6 +51,10 @@ import {
   type VegKind, type VegSite, type VegTone,
 } from './flora';
 import { decodeTune, fixtureById, type FixtureTune, type WorldFixture } from './world-fixtures';
+import {
+  AUTH_BASE, AUTH_MODE, CELL_BASE, DRIVE_BUILD, closeExternalUrl, openExternalUrl,
+  publicCellUrl, publicGameUrl,
+} from './runtime';
 
 // A DISTINCT EXECUTION SURFACE. The labs share the production modules, and
 // the route branch guarantees the game bootstrap and a lab never run
@@ -4184,7 +4188,7 @@ const farRing = {
 };
 const farMat = new THREE.MeshLambertMaterial({
   vertexColors: true,
-  normalMap: terrainMat.normalMap,
+  normalMap: terrainMat.normalMap ?? undefined,
   normalScale: new THREE.Vector2(0.32, 0.32),
 });
 terrainFx(farMat, { detail: true });
@@ -6810,11 +6814,13 @@ const SWARD_REBUILD = 48;
  * on a 47,360-pixel target rather than in CPU matrices.
  */
 const SWARD_LUSH = 14;
+const swardFieldData = new Float32Array(SWARD_F * SWARD_F * 4);
 const swardField = new THREE.DataTexture(
-  new Float32Array(SWARD_F * SWARD_F * 4), SWARD_F, SWARD_F, THREE.RGBAFormat, THREE.FloatType);
+  swardFieldData, SWARD_F, SWARD_F, THREE.RGBAFormat, THREE.FloatType);
 swardField.minFilter = swardField.magFilter = THREE.LinearFilter;
+const swardColData = new Uint8Array(SWARD_F * SWARD_F * 4);
 const swardColT = new THREE.DataTexture(
-  new Uint8Array(SWARD_F * SWARD_F * 4), SWARD_F, SWARD_F, THREE.RGBAFormat, THREE.UnsignedByteType);
+  swardColData, SWARD_F, SWARD_F, THREE.RGBAFormat, THREE.UnsignedByteType);
 swardColT.minFilter = swardColT.magFilter = THREE.LinearFilter;
 /** The mask is RASTERISED, not sampled. Asking surfaceAt per texel would be
  *  65k road-grid walks; stroking the road segments as fat lines into a canvas
@@ -7012,8 +7018,8 @@ function swardStep(sync = false): void {
   swardRow = to;
   swardFieldMs += performance.now() - t0;
   if (swardRow < SWARD_F) return;
-  (swardField.image.data as Float32Array).set(swardScratchF);
-  (swardColT.image.data as Uint8Array).set(swardScratchC);
+  swardFieldData.set(swardScratchF);
+  swardColData.set(swardScratchC);
   swardField.needsUpdate = true;
   swardColT.needsUpdate = true;
   swardFX = swardPendX; swardFZ = swardPendZ;
@@ -15444,6 +15450,12 @@ const sync = openSync({
   mergeMarks: (r) => marks.merge({ m: r.missions, s: r.stations }),
   odo: () => Math.round(odo.total),
   setOdo: (m) => { if (m > odo.total) { odo.total = m; saveOdo(); } },
+}, {
+  base: CELL_BASE,
+  apex: AUTH_BASE,
+  authMode: AUTH_MODE,
+  openExternal: openExternalUrl,
+  closeExternal: closeExternalUrl,
 });
 /** OSM tiles whose ways have actually been rendered — NOT the same as the
  *  requested set, which is marked before the fetch even starts. */
@@ -15757,11 +15769,6 @@ const osmNote = (d: number): void => { osmPending += d; };
 let osmFails = 0;
 let osmDown = false;
 
-// This cell's own path prefix. On the apex the page lives at `/@c15r/drive`;
-// on the cell host it lives at `/` and a CloudFront Function prepends the same
-// prefix. Deriving it from the pathname makes one relative fetch correct in
-// both places, which a hard-coded string is not.
-const CELL_BASE = (location.pathname.match(/^\/@[^/]+\/[^/]+/) ?? [''])[0];
 let tileProxyOk = true;   // one clean failure retires it for the session
 
 /**
@@ -19643,7 +19650,7 @@ const runBoot = ((): { user: string; id: string } | null => {
 })();
 async function runFetchWire(user: string, id: string): Promise<{ head: TapeHead; steps: string; keys: string } | null> {
   try {
-    const r = await fetch(`/~/tape/v1/${user}/${id}`);
+    const r = await fetch(`${CELL_BASE}/~/tape/v1/${user}/${id}`);
     if (!r.ok) return null;
     let w: { head?: TapeHead; steps?: string; keys?: string } | null = null;
     try { w = await r.clone().json(); } catch {
@@ -19972,8 +19979,8 @@ async function tapeBankLast(): Promise<string> {
   // The line shows the SHARE link — the game's own front door for the run —
   // not the raw wire blob.
   const user = sync.status().user;
-  const share = user ? `${location.origin}${location.pathname}?run=${user}/${w.head.at}`
-    : `${location.origin}${r.url ?? ''}`;
+  const share = user ? publicGameUrl(`?run=${user}/${w.head.at}`)
+    : publicCellUrl(r.url ?? '');
   return `BANKED ${r.kept ?? ''}/24 · ${share}`;
 }
 /** The banked-run shelf for the menu: server truth from the last sync. The
@@ -19984,7 +19991,7 @@ function tapeShelfRows(): Array<{ id: string; at: number; secs: number; lat: num
   const user = sync.status().user;
   if (!user) return [];
   return sync.tapes().map((t) => ({ id: t.id, at: t.at, secs: t.secs, lat: t.lat, lon: t.lon,
-    url: `${location.origin}${location.pathname}?run=${user}/${t.id}` }));
+    url: publicGameUrl(`?run=${user}/${t.id}`) }));
 }
 (window as unknown as { __tapebank?: object }).__tapebank = tapeBankLast;
 /** Export a banked tape in the reel's own shape — the authoring bridge.
@@ -20826,7 +20833,7 @@ function truckSpec(): Record<string, number> {
     fieldW: SWARD_FW, rebuildAt: SWARD_REBUILD,
     cpuTufts: vegMeshes.grass.count, cpuMs: +swardMs.toFixed(1),
     field: (() => {
-      const F = swardField.image.data as Float32Array;
+      const F = swardFieldData;
       let rate0 = 0, rateSum = 0, hMin = Infinity, hMax = -Infinity;
       for (let i = 0; i < SWARD_F * SWARD_F; i++) {
         const r = F[i * 4 + 1], h = F[i * 4];
@@ -28171,8 +28178,10 @@ const TAPE_V = 2;
  * checkpoints alone describe the drive; it just is not a re-simulation any
  * more, and __tapes() says so rather than pretending.
  */
-const TAPE_BUILD = (document.currentScript as HTMLScriptElement | null)?.src
-  ?? (location.origin + location.pathname);
+const TAPE_BUILD = DRIVE_BUILD !== 'web'
+  ? DRIVE_BUILD
+  : (document.currentScript as HTMLScriptElement | null)?.src
+    ?? (location.origin + location.pathname);
 /** Steps between checkpoints. Half a second: measured drift inside a window is
  *  a millimetre against a cached world and 0.14m against a cold one, so a
  *  correction lands as a nudge rather than as a jump either way. */
@@ -32741,7 +32750,7 @@ const DIAL_GROUPS: DialGroup[] = [
     dials: [
       dial('pix', 'PIXEL', ['240P', '320P', '480P', 'FULL'], 1, (i) => {
         PIX_H = [240, 320, 480, 4096][i];
-        resizePost();
+        resizePost?.();
       }),
       // THE NUMBER IS STEPS, AND N STEPS MAKE N+1 TONES — floor(c*N+0.5)/N
       // lands on 0..N inclusive. So '2' is genuinely THREE greys in MONO

@@ -1,0 +1,11 @@
+node_modules/
+dist/
+*.log
+steam.env
+*.p8
+*.p12
+*.mobileprovision
+
+# The repository ignores lockfiles globally; this package is independently
+# releasable and must retain the versions used to produce binaries.
+!package-lock.json

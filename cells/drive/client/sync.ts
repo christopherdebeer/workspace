@@ -159,9 +159,16 @@ export interface TapeShelfRow {
   id: string; at: number; secs: number; steps: number; lat: number; lon: number;
 }
 
-export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string } = {}): Sync {
+export function openSync(ports: SyncPorts, opts: {
+  base?: string;
+  apex?: string;
+  authMode?: 'redirect' | 'device';
+  openExternal?: (url: string) => Promise<void>;
+  closeExternal?: () => Promise<void>;
+} = {}): Sync {
   const base = opts.base ?? '';               // same origin as the page
   const apex = opts.apex ?? APEX;
+  const authMode = opts.authMode ?? 'redirect';
   /** The scope, and the whole of it. See the head of this file. */
   const scopeFor = (): string => {
     const host = location.host;
@@ -205,7 +212,7 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
     return j.client_id;
   }
 
-  async function signIn(): Promise<void> {
+  async function redirectSignIn(): Promise<void> {
     const clientId = await ensureClient();
     const verifier = rand(32);
     const state = rand(16);
@@ -221,6 +228,83 @@ export function openSync(ports: SyncPorts, opts: { base?: string; apex?: string 
     u.searchParams.set('scope', scopeFor());
     u.searchParams.set('state', state);
     location.assign(u.toString());
+  }
+
+  /**
+   * Native shells cannot safely receive an HTTPS redirect and a custom scheme
+   * would no longer identify this cell to the scope ceiling. RFC 8628 is the
+   * right native shape: approve in the system browser, then poll from the app.
+   */
+  async function deviceSignIn(): Promise<void> {
+    if (!opts.openExternal) throw new Error('this build cannot open the approval page');
+    set('busy', 'starting sign-in…');
+    const init = await fetch(`${apex}/auth/device`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ scope: scopeFor() }),
+    });
+    const d = (await init.json().catch(() => ({}))) as {
+      device_code?: string;
+      user_code?: string;
+      verification_uri_complete?: string;
+      expires_in?: number;
+      interval?: number;
+      error?: string;
+    };
+    if (!init.ok || !d.device_code || !d.user_code || !d.verification_uri_complete) {
+      throw new Error(d.error ?? `sign-in failed (${init.status})`);
+    }
+
+    set('busy', `approve ${d.user_code} in the browser`);
+    await opts.openExternal(d.verification_uri_complete);
+    const expiresAt = Date.now() + Math.max(30, d.expires_in ?? 600) * 1000;
+    const every = Math.max(2, d.interval ?? 5) * 1000;
+    try {
+      while (Date.now() < expiresAt) {
+        await new Promise<void>((resolve) => setTimeout(resolve, every));
+        let res: Response;
+        try {
+          res = await fetch(`${apex}/oauth/token`, {
+            method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({
+              grant_type: 'urn:ietf:params:oauth:grant-type:device_code',
+              device_code: d.device_code,
+            }),
+          });
+        } catch {
+          set('busy', `waiting for ${d.user_code}…`);
+          continue;
+        }
+        const j = (await res.json().catch(() => ({}))) as {
+          access_token?: string;
+          refresh_token?: string;
+          error?: string;
+          error_description?: string;
+        };
+        if (j.error === 'authorization_pending') continue;
+        if (!res.ok || !j.access_token) {
+          throw new Error(j.error_description ?? j.error ?? `sign-in failed (${res.status})`);
+        }
+        token = j.access_token;
+        local.set(K.tok, token);
+        if (j.refresh_token) local.set(K.ref, j.refresh_token); else local.del(K.ref);
+        await once('syncing…');
+        return;
+      }
+    } finally {
+      await opts.closeExternal?.().catch(() => undefined);
+    }
+    throw new Error('sign-in approval expired');
+  }
+
+  async function signIn(): Promise<void> {
+    try {
+      if (authMode === 'device') await deviceSignIn();
+      else await redirectSignIn();
+    } catch (err) {
+      set('error', (err as Error).message);
+    }
   }
 
   /** Spend the code `restoreUrl` caught. */
