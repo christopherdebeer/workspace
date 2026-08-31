@@ -1,5 +1,5 @@
 import { build } from 'esbuild';
-import { readFile, rm, mkdir, writeFile } from 'node:fs/promises';
+import { cp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -14,6 +14,7 @@ const buildId = process.env.DRIVE_BUILD_ID
 
 await rm(OUT, { recursive: true, force: true });
 await mkdir(OUT, { recursive: true });
+await cp(join(CELL, 'web'), OUT, { recursive: true });
 
 const result = await build({
   absWorkingDir: NATIVE,

@@ -80,6 +80,7 @@
       "main": "electron/main.mjs"
     },
     "mac": {
+      "icon": "electron/icons/drive.icns",
       "target": [
         "dir"
       ],
@@ -90,12 +91,14 @@
       "entitlementsInherit": "electron/entitlements.mac.inherit.plist"
     },
     "win": {
+      "icon": "electron/icons/drive.ico",
       "target": [
         "dir"
       ],
       "artifactName": "drive-${version}-${arch}.${ext}"
     },
     "linux": {
+      "icon": "electron/icons/drive-512x512.png",
       "target": [
         "dir"
       ],

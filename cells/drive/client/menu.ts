@@ -169,18 +169,25 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     font-family: '${PIXEL_FONT}', ui-monospace, Menlo, monospace; color: ${C.text};
     font-size: 12px; line-height: 1.5; -webkit-user-select: none; user-select: none; }
   #menu .m-scrim { position: absolute; background: rgba(6,14,17,0.92); }
-  #menu .m-panel { position: absolute; inset: 10px; border: 1px solid ${C.dim};
+  #menu .m-panel { position: absolute;
+    top: calc(10px + env(safe-area-inset-top, 0px));
+    right: calc(10px + env(safe-area-inset-right, 0px));
+    bottom: calc(10px + env(safe-area-inset-bottom, 0px));
+    left: calc(10px + env(safe-area-inset-left, 0px));
+    border: 1px solid ${C.dim};
     display: flex; flex-direction: column; padding: 10px 0 10px; min-height: 0; }
   #menu .m-corner { position: absolute; width: 9px; height: 9px; }
   #menu button { font: inherit; }
-  #menu .m-head { display: flex; align-items: center; gap: 8px; padding: 0 12px; min-height: 22px; }
+  #menu .m-head { display: flex; align-items: center; gap: 8px; padding: 0 12px; min-height: 44px; }
   #menu .m-back { cursor: pointer; color: ${C.soft}; border: 1px solid ${C.dim};
-    background: rgba(8,20,23,0.78); padding: 3px 8px 2px; font-size: 10px; }
+    background: rgba(8,20,23,0.78); padding: 3px 8px 2px; font-size: 10px;
+    min-width: 44px; min-height: 44px; }
   #menu .m-title { color: ${C.gold}; font-weight: 700; font-size: 16px; }
   #menu .m-title .arrow { color: ${C.hot}; }
   #menu .m-sub { padding: 2px 12px 6px; color: ${C.dim}; font-size: 10px; letter-spacing: 2px; }
   #menu .m-x { margin-left: auto; cursor: pointer; color: ${C.hot}; border: 1px solid ${C.hot};
-    background: rgba(8,20,23,0.78); padding: 3px 8px 2px; font-size: 10px; }
+    background: rgba(8,20,23,0.78); padding: 3px 8px 2px; font-size: 10px;
+    min-width: 44px; min-height: 44px; }
   #menu .m-rule { border-top: 1px solid ${C.dim}; margin: 4px 8px; }
   #menu .m-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
     padding: 6px 12px 4px; display: flex; flex-direction: column; }
