@@ -59,7 +59,16 @@ self.addEventListener('install', (event) => {
   // `addAll` is atomic on purpose: a shell that is missing its bundle is worse
   // than no shell, because the browser would then have a cached page that
   // cannot start and no reason to ask for a better one.
-  event.waitUntil(caches.open(CACHE).then((cache) => cache.addAll(SHELL)).then(() => self.skipWaiting()));
+  //
+  // `cache: 'reload'` because the whole point of this install is that a NEW
+  // build is being taken. `/app.js` is served with a minute of freshness, so a
+  // default fetch is entitled to answer it out of the HTTP cache — and this
+  // cache is named for the build it is meant to hold, which would then be a
+  // name that lies. The one thing worse than an old bundle is an old bundle
+  // filed under the new build's number.
+  event.waitUntil(caches.open(CACHE)
+    .then((cache) => cache.addAll(SHELL.map((path) => new Request(path, { cache: 'reload' }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener('activate', (event) => {
