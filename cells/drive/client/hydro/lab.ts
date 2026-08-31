@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { createDials } from '../lab-dials';
 import { createHydroSystem, type HydroSystem } from './system';
 import type {
   CoverageGrid, ElevationGrid, HydroDebugView, HydroFeature, HydroKind,
@@ -497,6 +498,17 @@ export async function startHydroLab(): Promise<void> {
 
   addEventListener('resize', () => {
     camera.aspect = innerWidth / innerHeight; camera.updateProjectionMatrix(); renderer.setSize(innerWidth, innerHeight, false);
+  });
+
+  // ── THE SAME BARGAIN AS EVERY OTHER LAB ──
+  // This lab built its own controls long before there was a shared panel, so
+  // rather than rewriting them it ADOPTS them by id: the existing markup keeps
+  // working and gains persistence across reloads, a COPY of the whole set, and
+  // a PASTE to put one back. Nothing here had to move.
+  createDials({
+    slug: 'hydro',
+    adopt: ['fixture', 'debug', 'ocean', 'field', 'mesh', 'wire', 'ground',
+      'wind', 'direction', 'rain', 'amplitude', 'length', 'ripple', 'foam', 'shore'],
   });
 
   await rebuild();

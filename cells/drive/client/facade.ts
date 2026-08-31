@@ -79,12 +79,71 @@ const markTins = (() => {
   return t;
 })();
 
+/**
+ * ── THE MARK TUNING, NAMED AND LIVE ──
+ *
+ * These were literals scattered through the shader, which meant every one of
+ * them cost an edit, a build and a hunt for a wall to judge it against. They
+ * are a named set now, carried as two vec4s, and the marks lab drives them
+ * live — COPY there writes exactly this literal, so tuning found on a wall
+ * arrives in the engine as a paste rather than as a memory of a slider.
+ */
+export interface MarkTuning {
+  /** Metres of wall each placement patch spans. */
+  patchM: number;
+  /** The reachable band, in metres above the building's own base. */
+  bandLo: number;
+  bandHi: number;
+  /** Mark box, metres square: the smallest, and how much larger it may get. */
+  sizeMin: number;
+  sizeVar: number;
+  /** How much of the wall the paint covers, at its weakest and its strongest. */
+  fadeMin: number;
+  fadeVar: number;
+  /** How far a mark may wander from its patch centre, as a share of it. */
+  jitter: number;
+}
+
+export const MARK_TUNING: MarkTuning = {
+  patchM: 5,
+  bandLo: 0.4,
+  bandHi: 3,
+  sizeMin: 1.5,
+  sizeVar: 0.85,
+  fadeMin: 0.55,
+  fadeVar: 0.35,
+  jitter: 0.55,
+};
+
+// Shared BY REFERENCE across every façade material, so one write here reaches
+// every wall in the world — a per-material copy would tune one building.
+const uMarkA = { value: new THREE.Vector4() };
+const uMarkB = { value: new THREE.Vector4() };
+const uMarksU = { value: markAtlas };
+const uMarkTinsU = { value: markTins };
+function pushTuning(): void {
+  const t = MARK_TUNING;
+  uMarkA.value.set(t.patchM, t.bandLo, t.bandHi, t.sizeMin);
+  uMarkB.value.set(t.sizeVar, t.fadeMin, t.fadeVar, t.jitter);
+}
+pushTuning();
+
+/** Change the tuning everywhere at once. The lab's dials call this; nothing
+ *  in the game does, which is the point — the game runs the defaults above. */
+export function setMarkTuning(patch: Partial<MarkTuning>): MarkTuning {
+  Object.assign(MARK_TUNING, patch);
+  pushTuning();
+  return MARK_TUNING;
+}
+
 export function facade(mat: THREE.Material): void {
   mat.onBeforeCompile = (sh) => {
     // Shared by reference: one atlas and one palette for the whole world, so
     // a material per paint costs nothing extra.
-    sh.uniforms.uMarks = { value: markAtlas };
-    sh.uniforms.uMarkTins = { value: markTins };
+    sh.uniforms.uMarks = uMarksU;
+    sh.uniforms.uMarkTins = uMarkTinsU;
+    sh.uniforms.uMarkA = uMarkA;
+    sh.uniforms.uMarkB = uMarkB;
     // THE BASE RIDES IN AS A VERTEX ATTRIBUTE, not off the model matrix.
     // Buildings batch per tile now (see flushBuildings), so one mesh carries
     // hundreds of them and modelMatrix[3][1] — the old source of "this
@@ -103,6 +162,7 @@ export function facade(mat: THREE.Material): void {
       .replace('#include <common>', `#include <common>
         varying vec3 vFacW; varying vec3 vFacN; varying float vFacH; varying float vMark;
         uniform sampler2D uMarks; uniform sampler2D uMarkTins;
+        uniform vec4 uMarkA; uniform vec4 uMarkB;
         float fah(vec2 p){ p = fract(p * vec2(127.31, 311.7)); p += dot(p, p + 41.31); return fract(p.x * p.y); }`)
       .replace('#include <color_fragment>', `#include <color_fragment>
       {
@@ -149,11 +209,11 @@ export function facade(mat: THREE.Material): void {
           // pays for aBase, and one more float is free where one more
           // attribute is not.
           float mdens = fract(vMark);
-          if (mdens > 0.004 && vFacH > 0.4 && vFacH < 3.0) {
+          if (mdens > 0.004 && vFacH > uMarkA.y && vFacH < uMarkA.z) {
             // A patch grid on the wall — 5m across, the height of the
             // reachable band. Marks are placed per PATCH, not per building:
             // one gable can carry two and the next wall none.
-            vec2 mcell = vec2(u / 5.0, (vFacH - 0.4) / 2.6);
+            vec2 mcell = vec2(u / uMarkA.x, (vFacH - uMarkA.y) / max(0.2, uMarkA.z - uMarkA.y));
             vec2 mid = floor(mcell), mfr = fract(mcell);
             float mrand = fah(mid + vec2(19.7, 4.3));
             if (mrand < mdens) {
@@ -167,12 +227,13 @@ export function facade(mat: THREE.Material): void {
               // mark now gets a SQUARE box a metre and a half or so on a side,
               // centred on a jittered point, and both axes are divided by the
               // same number — so it is the shape it was drawn as.
-              float mw = 1.5 + 0.85 * fah(mid + vec2(4.4, 1.9));
+              float mw = uMarkA.w + uMarkB.x * fah(mid + vec2(4.4, 1.9));
               vec2 jit = vec2(fah(mid + vec2(3.1, 7.7)), fah(mid + vec2(8.7, 2.3))) - 0.5;
-              vec2 centre = vec2(0.5 + jit.x * 0.55, 0.5 + jit.y * 0.35);
+              vec2 centre = vec2(0.5 + jit.x * uMarkB.w, 0.5 + jit.y * uMarkB.w * 0.64);
               // Offsets from that centre IN METRES, which is what makes the
               // two axes comparable at all.
-              vec2 dm = vec2((mfr.x - centre.x) * 5.0, (mfr.y - centre.y) * 2.6);
+              vec2 dm = vec2((mfr.x - centre.x) * uMarkA.x,
+                (mfr.y - centre.y) * max(0.2, uMarkA.z - uMarkA.y));
               vec2 q = dm / mw + 0.5;
               if (q.x > 0.0 && q.x < 1.0 && q.y > 0.0 && q.y < 1.0 && open < 0.02) {
                 // The settlement's own sigil most of the time, a neighbouring
@@ -199,7 +260,7 @@ export function facade(mat: THREE.Material): void {
                   vec3 tin = texture2D(uMarkTins, vec2((mod(mi, 8.0) + 0.5) / 8.0, 0.5)).rgb;
                   // Weathered per patch, and it never fully covers: old paint
                   // on a rough wall is a stain, not a sticker.
-                  float fade = 0.55 + 0.35 * fah(mid + vec2(13.3, 6.1));
+                  float fade = uMarkB.y + uMarkB.z * fah(mid + vec2(13.3, 6.1));
                   diffuseColor.rgb = mix(diffuseColor.rgb, tin, fade);
                 }
               }

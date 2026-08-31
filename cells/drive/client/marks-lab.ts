@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { facade, markAtlas } from './facade';
+import { MARK_TUNING, facade, markAtlas, setMarkTuning } from './facade';
+import { createDials, type DialValues } from './lab-dials';
 import {
   MARK_CULTURES, MARK_N, MARK_PALETTE, MARK_SERVICE_FIRST, markLookAt, packMark,
 } from './graffiti';
@@ -23,8 +24,14 @@ import {
  * artwork is empty" are never the same picture again.
  */
 
-const el = <T extends HTMLElement = HTMLElement>(id: string): T =>
-  document.getElementById(id) as T;
+/** A climate weight vector that reliably lands on each mark culture, so the
+ *  CULTURE dial exercises the real picker rather than bypassing it. */
+const CLIMATE_FOR: Record<string, number[]> = {
+  urban: [0.05, 0.15, 0.7, 0.1, 0],
+  painted: [0.8, 0.15, 0.05, 0, 0],
+  sparse: [0, 0, 0.1, 0.4, 0.5],
+  lush: [0, 0.85, 0.15, 0, 0],
+};
 
 /** A wall slab: a box, so it has a real normal and a real base like a
  *  building does. The façade shader keys off both. */
@@ -60,16 +67,6 @@ export async function startMarksLab(): Promise<void> {
       letter-spacing: 2px; }`;
   document.head.appendChild(style);
 
-  const ui = document.createElement('div');
-  ui.id = 'ui';
-  ui.innerHTML = `
-    <label>CULTURE <select id="culture"></select></label>
-    <label>DENSITY <input id="density" type="range" min="0" max="1" step="0.02" value="0.5"></label>
-    <label>SIGIL <input id="sigil" type="range" min="0" max="${MARK_N - 1}" step="1" value="3"></label>
-    <label>TIN <input id="tin" type="range" min="0" max="${MARK_PALETTE.length - 1}" step="1" value="1"></label>
-    <label>SUN <input id="sun" type="range" min="5" max="85" step="1" value="42"></label>
-    <label>PAINT <input id="paint" type="color" value="#e8e2d4"></label>`;
-  document.body.appendChild(ui);
   const status = document.createElement('div');
   status.id = 'status';
   document.body.appendChild(status);
@@ -77,12 +74,48 @@ export async function startMarksLab(): Promise<void> {
   back.className = 'back'; back.href = '/lab'; back.textContent = 'ALL LABS';
   document.body.appendChild(back);
 
-  const cultureSel = el<HTMLSelectElement>('culture');
-  for (const c of MARK_CULTURES) {
-    const o = document.createElement('option');
-    o.value = c.key; o.textContent = c.key.toUpperCase();
-    cultureSel.appendChild(o);
-  }
+  // ── THE DIALS ──
+  // Liberal on purpose: every number the marks actually depend on is here,
+  // including the ones that live in the shader, because a number you cannot
+  // turn is a number you will guess at. COPY writes the engine's own literal.
+  const T = MARK_TUNING;
+  const dials = createDials({
+    slug: 'marks',
+    spec: [
+      { id: 'culture', label: 'CULTURE', kind: 'select', value: MARK_CULTURES[0].key,
+        options: MARK_CULTURES.map((c) => c.key) },
+      { id: 'density', label: 'DENSITY', kind: 'range', min: 0, max: 1, step: 0.02, value: 0.5 },
+      { id: 'sigil', label: 'SIGIL', kind: 'range', min: 0, max: MARK_N - 1, step: 1, value: 3 },
+      { id: 'tin', label: 'TIN', kind: 'range', min: 0, max: MARK_PALETTE.length - 1, step: 1, value: 1 },
+      { id: 'patchM', label: 'PATCH m', kind: 'range', min: 2, max: 12, step: 0.25, value: T.patchM },
+      { id: 'bandLo', label: 'BAND LO m', kind: 'range', min: 0, max: 3, step: 0.05, value: T.bandLo },
+      { id: 'bandHi', label: 'BAND HI m', kind: 'range', min: 0.6, max: 8, step: 0.1, value: T.bandHi },
+      { id: 'sizeMin', label: 'SIZE m', kind: 'range', min: 0.3, max: 4, step: 0.05, value: T.sizeMin },
+      { id: 'sizeVar', label: 'SIZE VAR', kind: 'range', min: 0, max: 3, step: 0.05, value: T.sizeVar },
+      { id: 'fadeMin', label: 'FADE', kind: 'range', min: 0, max: 1, step: 0.02, value: T.fadeMin },
+      { id: 'fadeVar', label: 'FADE VAR', kind: 'range', min: 0, max: 1, step: 0.02, value: T.fadeVar },
+      { id: 'jitter', label: 'JITTER', kind: 'range', min: 0, max: 1, step: 0.05, value: T.jitter },
+      { id: 'sun', label: 'SUN', kind: 'range', min: 5, max: 85, step: 1, value: 42 },
+      { id: 'paint', label: 'PAINT', kind: 'color', value: '#e8e2d4' },
+      { id: 'wall', label: 'WALL m', kind: 'range', min: 3, max: 14, step: 0.5, value: 6.2 },
+    ],
+    // PASTE-READY. The literal below is the one in facade.ts, so tuning found
+    // here reaches the engine as a paste rather than as nine transcriptions.
+    source: (v: DialValues) => [
+      '// tuned in /lab/marks',
+      'export const MARK_TUNING: MarkTuning = {',
+      `  patchM: ${v.patchM},`,
+      `  bandLo: ${v.bandLo},`,
+      `  bandHi: ${v.bandHi},`,
+      `  sizeMin: ${v.sizeMin},`,
+      `  sizeVar: ${v.sizeVar},`,
+      `  fadeMin: ${v.fadeMin},`,
+      `  fadeVar: ${v.fadeVar},`,
+      `  jitter: ${v.jitter},`,
+      '};',
+    ].join('\n'),
+  });
+  void dials;
 
   const renderer = new THREE.WebGLRenderer({ antialias: false });
   renderer.setPixelRatio(1);
@@ -129,32 +162,39 @@ export async function startMarksLab(): Promise<void> {
     }
   }
 
-  const num = (id: string): number => parseFloat(el<HTMLInputElement>(id).value);
   const apply = (): void => {
-    const sigil = Math.round(num('sigil'));
-    const tin = Math.round(num('tin'));
-    const density = num('density');
+    const v = dials;
+    // The shader's own tuning, pushed live — this is the same object the
+    // game runs, so what the wall does here is what a wall does in Freiburg.
+    setMarkTuning({
+      patchM: v.num('patchM'), bandLo: v.num('bandLo'), bandHi: v.num('bandHi'),
+      sizeMin: v.num('sizeMin'), sizeVar: v.num('sizeVar'),
+      fadeMin: v.num('fadeMin'), fadeVar: v.num('fadeVar'), jitter: v.num('jitter'),
+    });
+    const sigil = Math.round(v.num('sigil'));
+    const tin = Math.round(v.num('tin'));
+    const density = v.num('density');
     const packed = sigil * 8 + tin + Math.min(0.999, density);
-    for (const s of slabs) {
-      const a = s.geometry.getAttribute('aMark') as THREE.BufferAttribute;
+    for (const s2 of slabs) {
+      const a = s2.geometry.getAttribute('aMark') as THREE.BufferAttribute;
       (a.array as Float32Array).fill(packed);
       a.needsUpdate = true;
     }
-    wallMat.color.set(el<HTMLInputElement>('paint').value);
-    const e = num('sun') * Math.PI / 180;
+    wallMat.color.set(v.str('paint'));
+    const e = v.num('sun') * Math.PI / 180;
     sun.position.set(Math.cos(e) * 9, Math.sin(e) * 11, 6);
-    const look = markLookAt(
-      { latLonAt: () => [48.8, 2.3] }, 0, 0,
-      [0.05, 0.15, 0.6, 0.15, 0.05], 1);
+    // What a real settlement of the chosen culture would have picked, beside
+    // what the dials are forcing — so the dials can be checked against the
+    // generator rather than replacing it.
+    const key = v.str('culture');
+    const look = markLookAt({ latLonAt: () => [48.8, 2.3] }, 0, 0,
+      CLIMATE_FOR[key] ?? [0.05, 0.15, 0.6, 0.15, 0.05], 1);
     status.textContent =
-      `SIGIL ${sigil}${sigil >= MARK_SERVICE_FIRST ? ' (SERVICE)' : ''} · TIN ${tin} · DENSITY ${density.toFixed(2)}\n`
-      + `packed ${packed.toFixed(3)} — the wall unpacks floor(v/8), mod(v,8), fract(v)\n`
-      + `a real settlement here would pick: sigil ${look.sigil} tin ${look.tin} `
-      + `density ${look.density.toFixed(2)} (${look.culture.key})`;
+      `SIGIL ${sigil}${sigil >= MARK_SERVICE_FIRST ? ' · SERVICE' : ''} · TIN ${tin} · DENSITY ${density.toFixed(2)}\n`
+      + `aMark ${packed.toFixed(3)} — the wall unpacks floor(v/8), mod(floor(v),8), fract(v)\n`
+      + `${key.toUpperCase()} would pick sigil ${look.sigil} tin ${look.tin} density ${look.density.toFixed(2)}`;
   };
-  for (const id of ['density', 'sigil', 'tin', 'sun', 'paint', 'culture']) {
-    el(id).addEventListener('input', apply);
-  }
+  dials.onChange(apply);
   apply();
 
   // Orbit: drag to turn, wheel to close in. A mark is a thing you walk up to.
