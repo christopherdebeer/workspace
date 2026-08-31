@@ -177,6 +177,18 @@ export function scopeMeta(scope: string): ScopeMeta {
       ? { verb, title: `Read "${t}" facts`, description: `See only facts of type "${t}" in your slice.` }
       : { verb, title: `Write "${t}" facts`, description: `Create, edit, and retire only facts of type "${t}" in your slice.` };
   }
+  // A cell sign-in (docs/cell-origin-isolation.md §4.5). Named plainly, because
+  // what it actually does is unusually small and the consent screen saying
+  // `cell:c15r/drive:*` tells a player nothing about that.
+  const cell = /^cell:([^/:]+)\/([^/:]+):([^:]+)$/.exec(scope);
+  if (cell) {
+    const addr = `@${cell[1]}/${cell[2]}`;
+    return {
+      verb: 'read',
+      title: `Sign in to ${addr}`,
+      description: `Let ${addr} know who you are. It learns your username — nothing in your workspace.`,
+    };
+  }
   const verb: ScopeMeta['verb'] =
     /(:admin$|^platform:\*$|^auth:)/.test(scope) ? 'admin'
     : /(^write:|:write$|^act:|:create$|^cells:)/.test(scope) ? 'write'
@@ -195,6 +207,34 @@ export function scopeMeta(scope: string): ScopeMeta {
  */
 export function isSelfGrantableGranular(scope: string): boolean {
   return /^(read|write):type:[^:]+$/.test(scope);
+}
+
+/**
+ * The cell scope a sign-in may grant BECAUSE OF WHERE IT CAME FROM.
+ *
+ * `cell:<owner>/<name>:<tool>` is open-ended in owner and name, so like the
+ * per-type scopes above it can never sit in the static `scopesSupported` — and
+ * unlike them it had no admission rule at all, so a client that asked for a
+ * cell scope ALONE was offered nothing and the consent screen disabled its own
+ * Authorize button. `cellCeiling` already caps such a token at the token step;
+ * this is the missing half, which makes the scope offerable at the authorize
+ * step so a code can carry it in the first place.
+ *
+ * Bounded to the cell the sign-in ORIGINATES AT, derived from the same
+ * `redirect_uri` the ceiling uses — so a request can only ever name the cell
+ * whose page the player is standing on, never a third party's.
+ *
+ * This grants no authority by itself, and that is the point. A cell call is
+ * authorised by the registry (`authorizeAccess`: owner, grants, tool grants),
+ * not by the caller's scopes, and a dynamic cell receives `x-cell-caller` and
+ * never the token. So a token holding ONLY this is an identity token — which
+ * is exactly what a cell that wants to know who you are should be able to ask
+ * for, instead of the `workspace:read workspace:write` the kernel's default
+ * scope asks for today (docs/cell-origin-isolation.md §4.5 — the least-
+ * privilege handoff this makes reachable).
+ */
+export function cellScopesFor(redirectUri: string | undefined): string[] {
+  return (cellCeiling(redirectUri) ?? []).filter((s) => s.startsWith('cell:'));
 }
 
 const DEFAULT_EXPIRY = 3600;
@@ -353,7 +393,10 @@ export async function handleConsent(
   // Admit the static grantable set, plus any requested per-type scope the owner is
   // inherently entitled to grant over their own slice (ADR-0023) — these are
   // open-ended in <T> so they can't sit in scopesSupported.
-  const granted = requested.filter((s) => allowed.has(s) || isSelfGrantableGranular(s)).join(' ');
+  const fromCell = new Set(cellScopesFor(b.redirectUri));
+  const granted = requested
+    .filter((s) => allowed.has(s) || isSelfGrantableGranular(s) || fromCell.has(s))
+    .join(' ');
 
   const code = generateToken('authz');
   await store.saveAuthCode({
@@ -390,9 +433,12 @@ export async function handleGrantableScopes(
   // write:type:<T>, ADR-0023); surface the requested ones the owner may self-grant
   // so they appear as per-type checkboxes (and so a granular elevation URL — ADR-0022
   // — actually offers the scope it asks for). Bounded to read/write type families.
+  // …and the cell scope this sign-in came from, for the same reason: open-ended,
+  // so it cannot be listed statically, and un-offerable until now.
+  const fromCell = new Set(cellScopesFor(redirectUri));
   const extra = (requestedScope ?? '')
     .split(/\s+/)
-    .filter((s) => s && isSelfGrantableGranular(s) && !base.includes(s));
+    .filter((s) => s && (isSelfGrantableGranular(s) || fromCell.has(s)) && !base.includes(s));
   const scopes = [...base, ...extra];
   // Capability metadata so the consent screen can group + label scopes.
   const catalog = Object.fromEntries(scopes.map((s) => [s, scopeMeta(s)]));

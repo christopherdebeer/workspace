@@ -261,10 +261,19 @@ async function doRefresh(): Promise<boolean> {
   }
   const j = (await res.json().catch(() => ({}))) as Tokens & { expires_in?: number };
   if (!j.access_token) {
-    // Refresh rejected. Only wipe if OUR refresh token is still the stored one:
-    // if a concurrent refresh (another tab) already rotated it and stored a fresh
-    // session, this is harmless rotation-reuse — must NOT clear the good session.
-    if (getTokens()?.refresh_token === usedRefresh) setTokens(null);
+    // No token came back. Only a DEFINITIVE rejection (HTTP 400/401 —
+    // invalid_grant: the server looked at the refresh token and said no) ends
+    // the session. A 429, a 5xx, or an unparseable body is the TOKEN ENDPOINT
+    // having a bad moment, and wiping a 30-day grant over it converts one
+    // transient server error into a sign-out the user never asked for — which
+    // was a reported failure, not a hypothetical. Those keep the tokens and
+    // let a later call retry.
+    // And even on a real rejection, only wipe if OUR refresh token is still
+    // the stored one: if a concurrent refresh (another tab) already rotated it
+    // and stored a fresh session, this is harmless rotation-reuse — must NOT
+    // clear the good session.
+    if ((res.status === 400 || res.status === 401)
+      && getTokens()?.refresh_token === usedRefresh) setTokens(null);
     return !!getTokens()?.access_token;
   }
   setTokens({ access_token: j.access_token, refresh_token: j.refresh_token ?? usedRefresh, scope: j.scope ?? t.scope });

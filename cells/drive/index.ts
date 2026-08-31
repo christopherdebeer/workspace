@@ -22,7 +22,12 @@ const respond = (statusCode: number, contentType: string, body: string, extra: R
   body,
 });
 
-const CSP = [
+// Exported so a test can serve the page under the POLICY THE PHONE GETS. The
+// harness sends no CSP of its own, which means anything the real page forbids
+// — eval, a script from an unlisted host — works perfectly in every test and
+// fails only where it cannot be inspected. A test that cares opts in by
+// passing this to openDrive; nothing else changes behaviour.
+export const CSP = [
   "default-src 'none'",
   // The game module (served here) + three.js from esm.sh.
   "script-src 'self' https://esm.sh",
@@ -43,7 +48,10 @@ const CSP = [
   // Mapterhorn was brought in to replace, including the -13,029m hole at
   // Chapman's Peak. Nothing reported it, because a silent fallback was the
   // designed behaviour for a genuinely missing tile.
-  "connect-src 'self' https://esm.sh https://overpass-api.de https://overpass.kumi.systems https://overpass.osm.jp https://overpass.private.coffee https://s3.amazonaws.com https://nominatim.openstreetmap.org https://api.open-meteo.com https://tiles.mapterhorn.com",
+  // …and the apex, for the OAuth endpoints ALONE. `/state` is same-origin on
+  // this cell's own host, so signing in is the only thing that reaches off it
+  // (docs/cell-origin-isolation.md §4.5).
+  "connect-src 'self' https://parc.land https://esm.sh https://overpass-api.de https://overpass.kumi.systems https://overpass.osm.jp https://overpass.private.coffee https://s3.amazonaws.com https://nominatim.openstreetmap.org https://api.open-meteo.com https://tiles.mapterhorn.com",
   "img-src data: blob:",
   // The menu's pixel face (Silkscreen) ships inside the bundle as data: URIs —
   // no font host, so the page stays self-contained.
@@ -117,7 +125,7 @@ const SHELL = `<!doctype html>
 // written — otherwise every ocean tile is a permanent miss and therefore a
 // permanent invocation — and (2) a failure must never be written, or one bad
 // minute upstream becomes our bad week.
-const TILE_RE = /^\/~\/osm\/v2\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+const TILE_RE = /^\/~\/osm\/v[23]\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 const COVER_RE = /^\/~\/cover\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // THREE upstreams, not one. Measured on a 12km corridor through Death Valley:
 // 7 of 25 cold tiles came back 503 at 9–12.5s because the single upstream was
@@ -137,9 +145,27 @@ const OVERPASS_MIRRORS = [
 // tiles came back `502 Error from cloudfront` at ~10.7s, because the function
 // was killed mid-fetch and never got to return its own 503. A 502 from a dead
 // Lambda is strictly worse than a 503 from a live one: no `retry-after`, no
-// `no-store`, and nothing in the logs saying which upstream failed. The cell is
-// configured at 30s (`cells.configureCell timeoutSeconds`), and this stays
-// under it so the handler always outlives its own request and can say why.
+// `no-store`, and nothing in the logs saying which upstream failed.
+//
+// THE CEILING WAS ~15.5s, AND IT WAS OURS TO MOVE. Measured live on
+// 2026-08-15 by walking five tiles of rising cost: one answered at 15.74s and
+// every slower one came back 502 at 15.5-16.3s, wherever its own budget sat.
+// That retired a long-standing mystery — the overview layer's "cold fill
+// sometimes 503s" was never mirror contention, it was OV_UPSTREAM_MS sitting
+// above a ceiling nobody had measured — and then it was treated as a fact of
+// nature for a fortnight. It was not. It was this cell's own Lambda timeout,
+// and `cells.configureCell` takes 10-300 seconds.
+//
+// It is 50s now. The next ceiling up is CloudFront's 60s origin read, which
+// is NOT ours, so 50 leaves the margin on the right side of the line.
+//
+// What that buys is the tiles that could never answer at all. A dense z12 box
+// wants 11-18s of Overpass and had a 10s window; legs 2 to 5 of the line each
+// had between four and twenty tiles that were not unlucky but simply too big
+// for the budget, and three re-runs moved leg 5 from four cold tiles to four.
+// The alternative — asking for LESS on the retry, dropping tertiary and then
+// secondary — was drafted and thrown away: it degrades the tile everywhere to
+// work around a number we control.
 // …but SPEND LESS OF IT FAILING. Rotating mirrors made the failure path longer
 // (three attempts where there had been one), and a slow failure is worse than a
 // fast one: the client holds a fetch slot for the whole of it, and six held
@@ -379,6 +405,311 @@ async function serveCover(path: string, m: RegExpMatchArray) {
   };
 }
 
+// ── the overview tiles: the chart's coarse vector source ───────────
+// The fine tiles stop at OSM_RING_MAX because covering a 47km chart at z16 is
+// 8649 Overpass queries — "anything more honest needs a coarser road source",
+// and this is that source. One tile at z10–13 carries only what a chart at
+// that scale can draw: the major road classes, rail, the big waterways, the
+// coastline, and the PLACES — city, town, village — that turn a landform into
+// a map. No buildings, no landuse, no barriers: those are world, not chart.
+const OV_RE = /^\/~\/osm\/ov1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+// The element budget, and it is a TRIPWIRE, not a target. `out geom N` stops
+// SILENTLY at N — a dense tile would come back looking complete, get written
+// to S3 `immutable`, and serve a map with the middle of a city missing for a
+// week. At the cap the tile is refused (503, no-store) rather than stored.
+// Per zoom, because the ladder below admits more classes as tiles shrink:
+// measured, central London at z12 lands at 5174 elements with rail in — the
+// worst real tile should pass, and a truncated one must not.
+const OV_CAP: Record<number, number> = { 10: 3000, 11: 4500, 12: 6000, 13: 6000 };
+// These tiles are rare and cached forever, so they may spend upstream time a
+// fine tile cannot. Measured: a z10 coastal tile needs 11-18s of Overpass, and
+// the densest z12 boxes on the line want more — the fine budget's 5s-per-mirror
+// would have refused every overview tile that matters.
+//
+// Sized under the 50s Lambda (see the note by OVERPASS_MIRRORS), leaving six
+// seconds for the trim, the gzip and the S3 write. A tile that cannot be got
+// inside this is better refused with a `retry-after` than killed mid-flight.
+const OV_UPSTREAM_MS = 44000;
+// PATIENCE FOR THE SLOW CASE, MIRRORS FOR THE FAST ONE — which is what this
+// number has to buy at once, and why it is most of the budget rather than a
+// third of it.
+//
+// A dense z12 tile near a metropolis needs 11-18s of Overpass. Halving the
+// window to 5000 to guarantee three attempts was tried on 2026-08-25 and was
+// strictly worse: every one of those tiles began failing with "operation was
+// aborted", the Paris aperture's own included. The tiles worth the most are
+// exactly the ones a hurried window cannot get.
+//
+// Two full attempts do not fit in the upstream budget, and they do not need
+// to. The commonest failure — a 429, a mirror at its per-IP limit — returns
+// INSTANTLY, so a first mirror that is merely busy still leaves room for the
+// other two. What this window protects is the other case: a mirror that is
+// genuinely working on a big query, which used to be aborted at ten seconds
+// and is now allowed to finish. The Overpass-side `timeout:25` gives up just
+// before we do, so a box that is truly too big returns a clean error rather
+// than a blind abort.
+const OV_ATTEMPT_MS = 26000;
+function overviewQuery(z: number, x: number, y: number): string {
+  const b = tileBounds(z, x, y);
+  const bbox = `${b.latS},${b.lonW},${b.latN},${b.lonE}`;
+  // THE CLASS LADDER IS THE BUDGET. A z10 box is ~40km on a side, and asking
+  // it for secondaries and rail is what timed out: the classes climb as the
+  // tiles shrink, and each level carries only what its scale can draw —
+  // motorways at the scale of a region, tertiaries only at the tightest band.
+  const hw = z <= 10 ? 'motorway|trunk|primary'
+    : z === 11 ? 'motorway|trunk|primary|secondary'
+    : 'motorway|trunk|primary|secondary|tertiary';
+  const rail = z >= 11 ? `way["railway"="rail"](${bbox});` : '';
+  const canal = z >= 11 ? '|canal' : '';
+  const place = z <= 10 ? 'city|town' : z === 11 ? 'city|town|village' : 'city|town|village|hamlet';
+  return `[out:json][timeout:25];(
+      way["highway"~"^(${hw})$"](${bbox});
+      ${rail}
+      way["waterway"~"^(river${canal})$"](${bbox});
+      way["natural"="coastline"](${bbox});
+      node["place"~"^(${place})$"](${bbox});
+      node["natural"="peak"]["name"](${bbox});
+    );out geom ${OV_CAP[z] ?? 6000};`;
+}
+/**
+ * Ramer–Douglas–Peucker, in metres. OSM survey geometry carries a vertex
+ * every few metres; a chart pixel at these zooms is twenty. Simplification is
+ * where the real byte savings live — the class filter decides what is in the
+ * tile, this decides what it weighs.
+ */
+export function simplifyLine(pts: Array<[number, number]>, tolM: number): Array<[number, number]> {
+  if (pts.length <= 2) return pts;
+  const lat0 = (pts[0][0] * Math.PI) / 180;
+  const mLon = 111320 * Math.cos(lat0);
+  const px = (p: [number, number]): [number, number] => [p[1] * mLon, p[0] * 111320];
+  const keep = new Uint8Array(pts.length);
+  keep[0] = keep[pts.length - 1] = 1;
+  const stack: Array<[number, number]> = [[0, pts.length - 1]];
+  while (stack.length) {
+    const [a, b] = stack.pop() as [number, number];
+    const [ax, ay] = px(pts[a]), [bx, by] = px(pts[b]);
+    const dx = bx - ax, dy = by - ay;
+    const len2 = dx * dx + dy * dy || 1;
+    let worst = -1, wd = tolM;
+    for (let i = a + 1; i < b; i++) {
+      const [cx, cy] = px(pts[i]);
+      const t = Math.max(0, Math.min(1, ((cx - ax) * dx + (cy - ay) * dy) / len2));
+      const d = Math.hypot(cx - (ax + dx * t), cy - (ay + dy * t));
+      if (d > wd) { wd = d; worst = i; }
+    }
+    if (worst >= 0) { keep[worst] = 1; stack.push([a, worst], [worst, b]); }
+  }
+  return pts.filter((_, i) => keep[i]);
+}
+const OV_TAGS = ['highway', 'railway', 'waterway', 'natural', 'place', 'name', 'ele'];
+/** What the chart reads and nothing else, simplified to what it can draw. */
+export function trimOverview(elements: RawWay[], z: number): Array<Record<string, unknown>> {
+  // Half a chart pixel at this zoom: 256px across a tile, in metres of ground.
+  const tol = (40075016.7 / 2 ** z) / 512;
+  const out: Array<Record<string, unknown>> = [];
+  for (const el of elements) {
+    const tags: Record<string, string> = {};
+    for (const k of OV_TAGS) if (el.tags?.[k] !== undefined) tags[k] = el.tags[k];
+    if (el.type === 'node' && el.lat !== undefined && el.lon !== undefined) {
+      out.push({ id: el.id, tags, geometry: [[+el.lat.toFixed(5), +el.lon.toFixed(5)]] });
+      continue;
+    }
+    if (!el.geometry?.length) continue;
+    const pts = el.geometry.map((g) => [g.lat, g.lon] as [number, number]);
+    out.push({ id: el.id, tags, geometry: simplifyLine(pts, tol).map(([la, lo]) => [+la.toFixed(5), +lo.toFixed(5)]) });
+  }
+  return out;
+}
+async function serveOverview(path: string, m: RegExpMatchArray) {
+  const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (z < 8 || z > 13 || x >= 2 ** z || y >= 2 ** z) {
+    return respond(400, 'application/json', JSON.stringify({ error: 'overview tile out of range' }));
+  }
+  let elements: RawWay[];
+  try {
+    // …AND THE ROTATION CARRIES A CLOCK, exactly as serveTile's does. Keyed to
+    // the tile alone, a tile is bound to the same first mirror for ever: if
+    // that mirror is down the tile is a permanent 503, and no amount of
+    // retrying moves it. With the minute in the key, the next attempt starts
+    // somewhere else and the tile fills on its own.
+    const rot = (x + y + z + Math.floor(Date.now() / 60000)) % OVERPASS_MIRRORS.length;
+    elements = await askOverpass(overviewQuery(z, x, y), OV_UPSTREAM_MS, OV_ATTEMPT_MS, rot);
+  } catch (err) {
+    return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {
+      'retry-after': '5', 'cache-control': 'no-store',
+    });
+  }
+  // The tripwire: a response AT the cap is a truncation, not an answer.
+  if (elements.length >= (OV_CAP[z] ?? 6000)) {
+    return respond(503, 'application/json', JSON.stringify({ error: 'tile too dense for the overview cap' }), {
+      'retry-after': '60', 'cache-control': 'no-store',
+    });
+  }
+  const payload = JSON.stringify({ v: 1, z, x, y, ways: trimOverview(elements, z) });
+  const gz = gzipSync(Buffer.from(payload, 'utf8'), { level: 9 });
+  try { await putTile(path, gz); } catch { /* best effort */ }
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'content-encoding': 'gzip',
+      'cache-control': 'public, max-age=604800, immutable',
+      'access-control-allow-origin': '*',
+    },
+    body: gz.toString('base64'),
+    isBase64Encoded: true,
+  };
+}
+
+// ── the campaign: authored destinations, served not compiled ───────
+/**
+ * The curated drives and their missions used to be a literal inside
+ * `client/main.ts`. That file reached a megabyte and crossed the single-write
+ * ceiling this week (see `scripts/cell-sync.mjs`), and authored content had no
+ * business being in it anyway: a destination list is data someone edits, not
+ * code someone runs.
+ *
+ * It is served from the cell's own public namespace — the same CDN-fronted
+ * prefix as the tiles — so a player's boot costs a cache hit, not a Lambda.
+ * The path carries the VERSION because those objects are immutable: bump
+ * `CAMPAIGN_V` here and in the client together with any edit to the JSON, or
+ * the old object shadows the new one forever. (The client also keeps its last
+ * good copy, so a cold namespace or a lost connection costs the list for that
+ * session and nothing else.)
+ *
+ * A MODULE, NOT JSON: the cell's own bundler has no JSON loader and parsed the
+ * file as JavaScript on the first deploy attempt. The shape is checked at build
+ * time now, which is the better answer anyway.
+ *
+ * Deliberately NOT substrate facts: the game is isolated and reads no slice.
+ * See `docs/drive-persistence.md`.
+ */
+import { CAMPAIGN } from './campaigns/dakar';
+
+const CAMPAIGN_V = CAMPAIGN.v;
+const CAMPAIGN_RE = /^\/~\/campaign\/(\d{1,4})$/;
+function serveCampaign(path: string, m: RegExpMatchArray) {
+  if (Number(m[1]) !== CAMPAIGN_V) {
+    return respond(404, 'application/json', JSON.stringify({ error: 'no such campaign version' }), {
+      'cache-control': 'no-store',
+    });
+  }
+  const gz = gzipSync(Buffer.from(JSON.stringify(CAMPAIGN), 'utf8'), { level: 9 });
+  void putTile(path, gz).catch(() => { /* serve now, store best-effort */ });
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'content-encoding': 'gzip',
+      'cache-control': 'public, max-age=2592000, immutable',
+      'access-control-allow-origin': '*',
+    },
+    body: gz.toString('base64'),
+    isBase64Encoded: true,
+  };
+}
+
+// ── the peak tiles: named summits, for the far landmarks ───────────
+/**
+ * SUMMITS, AT THE SCALE YOU CAN SEE THEM FROM.
+ *
+ * A mountain is the one map feature that is legible from hundreds of
+ * kilometres, so it has its own layer at its own zoom: z7, ~250km of ground
+ * per tile, which is also — not by coincidence — about the distance from
+ * which the tallest peak on Earth clears the horizon (√(2Rh): Everest 336km,
+ * Mont Blanc 248km, a 1000m hill 113km).
+ *
+ * The trap in this data is DENSITY, not size. Big Sur's whole z7 tile holds
+ * 151 named peaks with an elevation; the Mont Blanc massif's holds 7268 and
+ * takes Overpass ~18-27s. So the answer is capped at the HIGHEST few and the
+ * budget matches the overview layer's, which was tuned against the same
+ * upstream. What is stored is small either way: 150 summits is a few KB.
+ *
+ * Keeping the tallest — rather than a floor in metres — is what makes this
+ * work everywhere. A floor tuned for the Alps erases the Netherlands, whose
+ * highest ground is a 322m hill and is nonetheless the landmark there.
+ */
+const PEAK_CAP = 120;             // per tile, tallest first
+// MEASURED, AND THE FIRST ANSWER WAS WRONG. This began at z7 — 250km tiles,
+// one query per quarter-million km² — and the two tiles that mattered most
+// both came back 502: the Lambda is capped at 30s and the Mont Blanc massif
+// costs Overpass 18-27s of that, leaving nothing for the gzip and the S3
+// write. A 502 from a dead function is strictly worse than a 503 from a live
+// one, and it is exactly the mountainous ground this layer exists for.
+// z8 quarters the area: the same Alpine ground measures 7.6s and 1858
+// summits, which fits inside the budget with room to say why if it fails.
+// ONE HONEST ATTEMPT, not two half ones — the same rule as the overview's,
+// for the same reason. An Alpine z8 tile needs ~7.6s of upstream and a budget
+// split into two short tries spent the first on whichever mirror was unhealthy
+// and died before the second could finish. A window wide enough for the work,
+// and a mirror that fails FAST (a 429 returns instantly) still leaves room for
+// the next one — which is exactly the failure worth retrying inline.
+//
+// Widened with the rest when the Lambda ceiling went to 50s: z8 tiles over
+// dense ranges are the ones this layer exists for, and they were the ones the
+// old window could not get.
+const PEAK_UPSTREAM_MS = 44000;
+const PEAK_ATTEMPT_MS = 26000;
+const PEAK_RE = /^\/~\/osm\/peak1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+/** OSM `ele` is free text: "1234", "1234.5", "1234 m", "4,808", and junk.
+ *  Metres only — a value in feet is not marked as such often enough to guess,
+ *  so anything above the roof of the world is discarded rather than assumed. */
+export function parseEle(raw: string | undefined): number | null {
+  if (!raw) return null;
+  const m = raw.replace(/,/g, '').match(/^\s*(-?\d+(?:\.\d+)?)/);
+  if (!m) return null;
+  const v = parseFloat(m[1]);
+  return Number.isFinite(v) && v > -450 && v <= 8850 ? v : null;
+}
+export function trimPeaks(elements: RawWay[]): Array<{ n: string; la: number; lo: number; e: number }> {
+  const out: Array<{ n: string; la: number; lo: number; e: number }> = [];
+  for (const el of elements) {
+    if (el.lat === undefined || el.lon === undefined) continue;
+    const name = el.tags?.name;
+    const ele = parseEle(el.tags?.ele);
+    if (!name || ele === null) continue;
+    out.push({ n: name, la: +el.lat.toFixed(5), lo: +el.lon.toFixed(5), e: Math.round(ele) });
+  }
+  out.sort((a, b) => b.e - a.e);
+  return out.slice(0, PEAK_CAP);
+}
+async function servePeaks(path: string, m: RegExpMatchArray) {
+  const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  if (z !== 8 || x >= 2 ** z || y >= 2 ** z) {
+    return respond(400, 'application/json', JSON.stringify({ error: 'peak tile out of range' }));
+  }
+  const b = tileBounds(z, x, y);
+  const bbox = `${b.latS},${b.lonW},${b.latN},${b.lonE}`;
+  const q = `[out:json][timeout:25];node["natural"="peak"]["name"]["ele"](${bbox});out body 20000;`;
+  let elements: RawWay[];
+  try {
+    // The mirror rotates with the CLOCK as well as the tile: a tile whose
+    // first mirror is unhealthy would otherwise ask the same broken host on
+    // every retry forever. A minute apart is a different mirror.
+    const rot = (x + y + Math.floor(Date.now() / 60000)) % OVERPASS_MIRRORS.length;
+    elements = await askOverpass(q, PEAK_UPSTREAM_MS, PEAK_ATTEMPT_MS, rot);
+  } catch (err) {
+    return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {
+      'retry-after': '5', 'cache-control': 'no-store',
+    });
+  }
+  const payload = JSON.stringify({ v: 1, z, x, y, peaks: trimPeaks(elements) });
+  const gz = gzipSync(Buffer.from(payload, 'utf8'), { level: 9 });
+  try { await putTile(path, gz); } catch { /* best effort */ }
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'content-encoding': 'gzip',
+      // Mountains do not move. A month, and the object is immutable anyway.
+      'cache-control': 'public, max-age=2592000, immutable',
+      'access-control-allow-origin': '*',
+    },
+    body: gz.toString('base64'),
+    isBase64Encoded: true,
+  };
+}
+
 /** Tile bounds on the standard web-mercator grid (the client's `tileBounds`). */
 function tileBounds(z: number, x: number, y: number) {
   const n = 2 ** z;
@@ -401,12 +732,16 @@ function overpassQuery(z: number, x: number, y: number): string {
   // a LINE with no polygon at all, so anything short of a major river simply
   // did not exist.
   //
-  // Deliberately NOT here: barriers (walls, fences, hedges) and the wider
-  // man_made set. They are the most numerous objects in a city by a distance,
-  // the sim already grows its own guard rails, and we have just spent real
-  // effort making tiles arrive in time. Measured at Bormio, the additions below
-  // cost +20% bytes and +39% elements, which is a fair price; barriers were
-  // several times that on their own.
+  // Deliberately NOT here: barriers (walls, fences, hedges). They are the most
+  // numerous objects in a city by a distance, the sim already grows its own
+  // guard rails, and we have just spent real effort making tiles arrive in
+  // time. Measured at Bormio, the v2 additions cost +20% bytes and +39%
+  // elements, which is a fair price; barriers were several times that on their
+  // own. The v3 additions (R55) are the SINGULAR things instead — a town has
+  // one water tower, not four thousand fence segments: named man_made
+  // verticals, aeroways, historic sites, wind turbines, dams. Historic and
+  // dam/weir are fetched AHEAD of a renderer for them, because a fetch is a
+  // week of cache and a tile version, and a renderer is an evening.
   return `[out:json][timeout:15];(
       way["highway"](${bbox});
       way["building"](${bbox});
@@ -419,6 +754,11 @@ function overpassQuery(z: number, x: number, y: number): string {
       nwr["shop"~"^(car_repair|car|car_parts|tyres)$"](${bbox});
       node["tourism"~"^(viewpoint|camp_site|picnic_site)$"](${bbox});
       node["natural"="peak"](${bbox});
+      nwr["man_made"~"^(water_tower|silo|chimney|storage_tank|lighthouse|windmill|tower|communications_tower|obelisk|pier|breakwater)$"](${bbox});
+      way["aeroway"~"^(runway|taxiway|apron)$"](${bbox});
+      nwr["historic"~"^(castle|fort|monument|memorial|ruins|archaeological_site|city_gate|citywalls|aqueduct)$"](${bbox});
+      nwr["power"="generator"]["generator:source"="wind"](${bbox});
+      way["waterway"~"^(dam|weir)$"](${bbox});
     );out geom 2000;`;
 }
 
@@ -469,14 +809,18 @@ async function askMirror(url: string, query: string, ms: number): Promise<RawWay
  * out. The commonest failure is a 429 that returns immediately, so the rotation
  * usually costs milliseconds rather than a whole attempt window.
  */
-export async function askOverpass(query: string): Promise<RawWay[]> {
-  const deadline = Date.now() + UPSTREAM_MS;
+export async function askOverpass(query: string, budgetMs = UPSTREAM_MS, attemptMs = ATTEMPT_MS, rotate = 0): Promise<RawWay[]> {
+  const deadline = Date.now() + budgetMs;
   const tried: string[] = [];
-  for (const url of OVERPASS_MIRRORS) {
+  // `rotate` spreads which mirror is asked FIRST. The overview fill hits in
+  // bursts of a whole ring, and a burst aimed at one mirror queues behind its
+  // per-IP slots; rotated by tile, the burst lands a third on each.
+  const mirrors = OVERPASS_MIRRORS.map((_, i, a) => a[(i + rotate) % a.length]);
+  for (const url of mirrors) {
     const left = deadline - Date.now();
     if (left < 1500) break;   // not enough room to be worth the round trip
     try {
-      return await askMirror(url, query, Math.min(ATTEMPT_MS, left));
+      return await askMirror(url, query, Math.min(attemptMs, left));
     } catch (err) {
       tried.push(`${new URL(url).host} ${(err as Error).message ?? err}`);
     }
@@ -529,7 +873,10 @@ async function putTile(
   if (!bucket) return; // no namespace configured — serve, don't store
   const key = tileKey(path);
   // Required lazily: the SDK is not in the Node 20 Lambda image by default and
-  // a cell without a public namespace should never pay to load it.
+  // a cell without a public namespace should never pay to load it. It is also
+  // not in this repo's node_modules — it exists only in the Lambda runtime —
+  // so the type checker is told to expect the miss rather than fail on it.
+  // @ts-expect-error resolved at runtime by the Lambda image, not at build
   const { S3Client, PutObjectCommand } = await import('@aws-sdk/client-s3');
   await new S3Client({}).send(new PutObjectCommand({
     Bucket: bucket,
@@ -547,7 +894,11 @@ async function putTile(
 
 async function serveTile(path: string, m: RegExpMatchArray) {
   const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  if (z < 1 || z > 19 || x >= 2 ** z || y >= 2 ** z) {
+  // z14 is the floor now, not z1: the client has only ever asked at z16, and
+  // the FULL query over a z10 bbox would truncate at `out geom 2000` and store
+  // the damage for a week. Wide views ask the overview route, whose query is
+  // sized for its own zooms and which refuses to store a truncation.
+  if (z < 14 || z > 19 || x >= 2 ** z || y >= 2 ** z) {
     return respond(400, 'application/json', JSON.stringify({ error: 'tile out of range' }));
   }
   let ways: Array<Record<string, unknown>>;
@@ -581,19 +932,604 @@ async function serveTile(path: string, m: RegExpMatchArray) {
   };
 }
 
-export const handler = async (event: { rawPath?: string; requestContext?: { http?: { method?: string } } }) => {
+// ── the Google Maps link resolver ──────────────────────────────────
+/**
+ * A link shared out of the Google Maps app is a SHORTENER —
+ * maps.app.goo.gl/NnqHXgwN6T4PJnyL7 — and the coordinates live only in what it
+ * redirects to. The browser cannot follow it: the shortener answers with no
+ * CORS header, so the fetch fails before the redirect is ever visible. So the
+ * hop happens here.
+ *
+ * This is a URL-fetching endpoint, which is the shape of an SSRF, so it is
+ * fenced on all four sides: https only, EVERY hop's host re-checked against the
+ * allowlist (not just the first — a redirect is an attacker-controlled jump),
+ * a hop cap, a timeout, and — the containment that matters most — it returns
+ * the final URL and NEVER the body. There is no way to read a response through
+ * this, only to learn where a Google link points.
+ */
+const gmapHost = (h: string): boolean =>
+  h === 'maps.app.goo.gl' || h === 'goo.gl' || h === 'g.co'
+  || /^(www\.|maps\.)?google(\.[a-z]{2,3}){1,2}$/.test(h);
+
+async function resolveGmap(raw: string): Promise<{ url?: string; error?: string }> {
+  let u: URL;
+  try { u = new URL(raw); } catch { return { error: 'not a link' }; }
+  for (let hop = 0; hop < 6; hop++) {
+    if (u.protocol !== 'https:') return { error: 'https links only' };
+    if (!gmapHost(u.hostname)) return { error: `not a google maps link (${u.hostname})` };
+    const ctl = new AbortController();
+    const timer = setTimeout(() => ctl.abort(), 8000);
+    let res: Response;
+    try {
+      res = await fetch(u.toString(), {
+        redirect: 'manual',
+        // Google hands a bare Node fetch a consent interstitial; a browser UA
+        // gets the ordinary 302 the phone would have followed.
+        headers: { 'user-agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15' },
+        signal: ctl.signal,
+      });
+    } catch (e) {
+      return { error: `could not reach google (${(e as Error).name})` };
+    } finally { clearTimeout(timer); }
+    const loc = res.headers.get('location');
+    if (!loc) return { url: u.toString() };     // end of the chain — this is the real link
+    try { u = new URL(loc, u); } catch { return { error: 'bad redirect' }; }
+  }
+  return { error: 'too many redirects' };
+}
+
+// ── a player's own progress ──────────────────────────────────────────
+/**
+ * THE DURABLE COPY.
+ *
+ * `/state` is the only route here that is about a person rather than about the
+ * world, and it is deliberately the smallest thing that could work.
+ *
+ * WHO IS ASKING comes from `x-cell-caller` — a dispatch-validated identity
+ * string, set in `services/cells/service.ts` from a bearer this cell never
+ * sees. There is no token here to store, rotate or leak; an anonymous visitor
+ * arrives as the literal string `anonymous` and is turned away, which is the
+ * whole of the authentication logic.
+ *
+ * WHAT IS KEPT is counts and claims, one row per road, under `PLAYER#<caller>`
+ * in the cell's own table (`services/cells/cell-template.ts` provisions it,
+ * with IAM scoped to that table's ARN alone). No crumbs — they regenerate by
+ * driving, and 20,000 of them would not fit in an item anyway.
+ *
+ * MERGING IS A UNION AND A MAX because progress is monotonic. Last-writer-wins
+ * would silently delete a second device's work; this cannot, and it needs no
+ * clock, no vector and no conflict UI. It also self-heals: if two devices push
+ * across each other, the one whose value was overwritten still holds it locally
+ * and restores it on its next sync.
+ *
+ * WHO MAY WRITE is not decided here. A POST reaches this cell only if the
+ * platform already authorised it (`cells.call` → `authorizeAccess`: the owner,
+ * or a principal the cell is shared with). Any other signed-in player gets a
+ * 403 from the tier above and keeps playing locally — the same graceful path as
+ * anonymous. That is the platform's sharing model doing the work, rather than
+ * this game inventing an access rule of its own.
+ */
+const TABLE = process.env.TABLE_NAME ?? '';
+const PROFILE = 'PROFILE';
+const ROAD = 'ROAD#';
+// The reserved prefixes from docs/drive-persistence.md §5, now in use. On the
+// wire and in the client's marks store these are the kinds 'm' and 's'.
+const MARK_SK: Record<'m' | 's', string> = { m: 'MISSION#', s: 'STATION#' };
+const STATE_CAP = 20000;       // roads mirrored, per player
+const PUSH_CAP = 4000;         // roads accepted in one push
+const MARKS_CAP = 2000;        // marks accepted in one push, per kind
+interface StateRow { g: number; t: number; c?: number }
+interface MarkRows { m: Record<string, number>; s: Record<string, number> }
+interface PlayerState { roads: Record<string, StateRow>; marks: MarkRows; odo: number;
+  tapes: TapeMeta[] }
+/** A banked tape's INDEX row — the blob itself lives in the public namespace
+ *  (~/tape/v1/<user>/<id>), edge-served like any tile. Tens of bytes, which is
+ *  the state table's whole design. */
+export interface TapeMeta { id: string; at: number; secs: number; steps: number; lat: number; lon: number }
+const TAPE_SK = 'TAPE#';
+/** The corner of DynamoDB this needs, so a test can hand it a Map. */
+export interface StateTable {
+  /** The whole partition in one read: roads, marks and the profile together. */
+  all(pk: string): Promise<PlayerState>;
+  putRoads(pk: string, rows: Record<string, StateRow>): Promise<void>;
+  putMarks(pk: string, kind: 'm' | 's', rows: Record<string, number>): Promise<void>;
+  /** Remove rows by sort key — the campaign reset's half of the contract.
+   *  Roads and the profile are never passed here: distance and survey are a
+   *  career, not a campaign. */
+  delRows(pk: string, sks: string[]): Promise<void>;
+  setProfile(pk: string, p: { odo: number }): Promise<void>;
+  putTape(pk: string, meta: TapeMeta): Promise<void>;
+}
+const num = (v: unknown, cap = Number.MAX_SAFE_INTEGER): number => {
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n > 0 ? Math.min(n, cap) : 0;
+};
+/** DynamoDB, hand-marshalled. Every value here is a string or a number, so the
+ *  document client is a dependency this would pay for and not use. */
+function liveTable(): StateTable {
+  // Lazily, like the S3 client: a request that never touches a player's state
+  // should not pay to load an SDK. (Unlike S3, this one IS in the repo's
+  // node_modules, so it type-checks here as well as resolving in the image.)
+  const client = async () => {
+    const m = await import('@aws-sdk/client-dynamodb');
+    return { m, db: new m.DynamoDBClient({}) };
+  };
+  const S = (v: string) => ({ S: v });
+  const N = (v: number) => ({ N: String(Math.round(v)) });
+  // Items are built from S()/N() alone, which satisfies the SDK's
+  // AttributeValue union without pulling in the document client.
+  type Attr = { S: string } | { N: string };
+  const batchPut = async (items: Array<Record<string, Attr>>): Promise<void> => {
+    if (!items.length) return;
+    const { m, db } = await client();
+    for (let i = 0; i < items.length; i += 25) {
+      await db.send(new m.BatchWriteItemCommand({
+        RequestItems: { [TABLE]: items.slice(i, i + 25).map((Item) => ({ PutRequest: { Item } })) },
+      }));
+    }
+  };
+  return {
+    async all(pk) {
+      const { m, db } = await client();
+      const out: PlayerState = { roads: {}, marks: { m: {}, s: {} }, odo: 0, tapes: [] };
+      // ONE query for the whole partition — roads, marks and profile arrive
+      // together, split by sk prefix here. A page is 1MB and a row is tens of
+      // bytes, so this is one call for any real player; the loop is here so a
+      // very long career does not silently return a prefix of itself.
+      // The SDK's own AttributeValue union, opaque to us — a paging cursor is
+      // handed straight back, never read.
+      let startKey: Record<string, never> | undefined;
+      do {
+        const res = await db.send(new m.QueryCommand({
+          TableName: TABLE,
+          KeyConditionExpression: 'pk = :p',
+          ExpressionAttributeValues: { ':p': S(pk) },
+          ...(startKey ? { ExclusiveStartKey: startKey } : {}),
+        })) as { Items?: Array<Record<string, { S?: string; N?: string }>>;
+          LastEvaluatedKey?: Record<string, never> };
+        for (const it of res.Items ?? []) {
+          const sk = it.sk?.S ?? '';
+          if (sk === PROFILE) { out.odo = num(it.odo?.N); continue; }
+          if (sk.startsWith(ROAD)) {
+            const id = sk.slice(ROAD.length);
+            if (!id || Object.keys(out.roads).length >= STATE_CAP) continue;
+            const c = num(it.c?.N);
+            out.roads[id] = c ? { g: num(it.g?.N), t: num(it.t?.N), c } : { g: num(it.g?.N), t: num(it.t?.N) };
+            continue;
+          }
+          if (sk.startsWith(TAPE_SK)) {
+            const id = sk.slice(TAPE_SK.length);
+            if (id && out.tapes.length < 64) out.tapes.push({ id, at: num(it.c?.N),
+              secs: num(it.g?.N), steps: num(it.t?.N),
+              lat: Number(it.la?.N ?? 0), lon: Number(it.lo?.N ?? 0) });
+            continue;
+          }
+          for (const kind of ['m', 's'] as const) {
+            if (!sk.startsWith(MARK_SK[kind])) continue;
+            const id = sk.slice(MARK_SK[kind].length);
+            const c = num(it.c?.N);
+            if (id && c) out.marks[kind][id] = c;
+          }
+        }
+        startKey = res.LastEvaluatedKey;
+      } while (startKey);
+      return out;
+    },
+    putRoads: (pk, rows) => batchPut(Object.entries(rows).map(([id, r]) => ({
+      pk: S(pk), sk: S(ROAD + id), g: N(r.g), t: N(r.t), ...(r.c ? { c: N(r.c) } : {}),
+    }))),
+    putMarks: (pk, kind, rows) => batchPut(Object.entries(rows).map(([id, at]) => ({
+      pk: S(pk), sk: S(MARK_SK[kind] + id), c: N(at),
+    }))),
+    async delRows(pk, sks) {
+      if (!sks.length) return;
+      const { m, db } = await client();
+      for (let i = 0; i < sks.length; i += 25) {
+        await db.send(new m.BatchWriteItemCommand({
+          RequestItems: { [TABLE]: sks.slice(i, i + 25).map((sk) => ({
+            DeleteRequest: { Key: { pk: S(pk), sk: S(sk) } } })) },
+        }));
+      }
+    },
+    async putTape(pk, meta) {
+      // Reuses the batch writer's item shape: g/t/c are the table's own three
+      // numeric columns (secs/steps/banked-at here), lat/lon ride as extras.
+      await batchPut([{ pk: S(pk), sk: S(TAPE_SK + meta.id),
+        g: N(meta.secs), t: N(meta.steps), c: N(meta.at),
+        la: { N: String(meta.lat) }, lo: { N: String(meta.lon) } }]);
+    },
+    async setProfile(pk, p) {
+      const { m, db } = await client();
+      await db.send(new m.PutItemCommand({
+        TableName: TABLE,
+        Item: { pk: S(pk), sk: S(PROFILE), odo: N(p.odo), seenAt: N(Date.now()) },
+      }));
+    },
+  };
+}
+
+/**
+ * ── THE PROBE CHANNEL ──────────────────────────────────────────────
+ *
+ * A way to ask a QUESTION OF A RUNNING TAB, and the reason it exists is four
+ * hours of a fault that could not be reproduced anywhere it could be
+ * inspected. The test rig is headless Chromium on Linux; the player is Safari
+ * on a phone. Every bug that lives in the gap between those two — a shader
+ * that will not compile, a decoder that colour-manages, a GPU that rounds
+ * differently — is invisible to every test in this repo and obvious in one
+ * screenshot. Screenshots are a slow way to ask a precise question.
+ *
+ * So: the tab polls for expressions, evaluates them, and posts the answers
+ * back. Four routes, one partition, no sockets.
+ *
+ *   POST /probe/KEY/ask     {js}      → {id}
+ *   GET  /probe/KEY/next              → {id, js} | {}      (the tab polls)
+ *   POST /probe/KEY/answer  {id, v}   → {ok}               (the tab replies)
+ *   GET  /probe/KEY/get/ID            → {v} | {pending}
+ *
+ * THE KEY IS IN THE PATH, NOT A QUERY STRING, and that is not a style choice.
+ * Everything under `~/` is a CACHED surface keyed by path alone — the note
+ * above /gmaps says so, and it is why that route lives outside the namespace
+ * too. A probe keyed on `?k=` would have its key ignored by the cache and
+ * dropped before it arrived, which is exactly what the first cut did.
+ *
+ * IT IS AN EVAL ENDPOINT, so it is off unless asked for twice: the tab only
+ * polls when the URL carries `?probe=KEY`, and every route demands the same
+ * KEY. No key, no channel — and the key is chosen by whoever opens the tab,
+ * not baked in here. A stale queue expires on its own so a forgotten tab
+ * cannot be woken by yesterday's question.
+ */
+const PROBE_PK = 'PROBE#';
+const PROBE_TTL = 10 * 60 * 1000;
+async function serveProbe(path: string, method: string, q: URLSearchParams, body: string | undefined) {
+  const j = (code: number, o: unknown) => respond(code, 'application/json', JSON.stringify(o),
+    { 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
+  if (!TABLE) return j(503, { error: 'no table configured' });
+  // /probe/<key>/<action>[/<id>]
+  const bits = path.split('/').filter(Boolean);          // ['probe', key, action, id?]
+  const key = bits[1] ?? '';
+  const action = bits[2] ?? '';
+  const pathId = bits[3] ?? '';
+  if (!/^[A-Za-z0-9_-]{6,64}$/.test(key)) {
+    return j(400, { error: 'probe key must be 6-64 of [A-Za-z0-9_-]' });
+  }
+  const pk = PROBE_PK + key;
+  const m = await import('@aws-sdk/client-dynamodb');
+  const db = new m.DynamoDBClient({});
+  const S = (v: string) => ({ S: v });
+  const N = (v: number) => ({ N: String(Math.round(v)) });
+  const rows = async () => {
+    const res = await db.send(new m.QueryCommand({
+      TableName: TABLE, KeyConditionExpression: 'pk = :p',
+      ExpressionAttributeValues: { ':p': S(pk) },
+    })) as { Items?: Array<Record<string, { S?: string; N?: string }>> };
+    return (res.Items ?? []).filter((it) => Number(it.at?.N ?? 0) > Date.now() - PROBE_TTL);
+  };
+  if (action === 'ask' && method === 'POST') {
+    let js = '';
+    try { js = String((JSON.parse(body ?? '{}') as { js?: unknown }).js ?? ''); } catch { /* below */ }
+    if (!js || js.length > 8000) return j(400, { error: 'js required, under 8000 chars' });
+    const id = `${Date.now().toString(36)}${Math.floor(Math.random() * 1e6).toString(36)}`;
+    await db.send(new m.PutItemCommand({ TableName: TABLE,
+      Item: { pk: S(pk), sk: S(`q#${id}`), js: S(js), at: N(Date.now()) } }));
+    return j(200, { id });
+  }
+  // ── A NEW PROBE WITHOUT A DEPLOY ──
+  //
+  // Every question so far had to already exist in the bundle, so learning
+  // anything the bundle did not anticipate cost a deploy and a reload — and on
+  // a phone that means losing the session that was showing the fault. During a
+  // frame-rate hunt that is the whole game: the interesting state is exactly
+  // the state you are trying not to disturb.
+  //
+  // The page forbids eval (`script-src 'self' https://esm.sh`, no
+  // unsafe-eval), so a probe cannot be a string of code the tab runs. But
+  // 'self' permits a MODULE, and these routes are same-origin and outside `~/`
+  // — uncached, query strings intact. So: POST the source here, and the tab
+  // imports it. No eval, no CSP hole, no redeploy, no reload.
+  //
+  // Kept out of the TTL sweep that `rows()` applies: a module is the tooling,
+  // not a question, and it has to outlive the ten minutes a question gets.
+  if (action === 'mod' && method === 'POST') {
+    let js = '';
+    try { js = String((JSON.parse(body ?? '{}') as { js?: unknown }).js ?? ''); } catch { /* below */ }
+    if (!js) return j(400, { error: 'js required' });
+    if (js.length > 360000) return j(400, { error: 'module too large (360k)' });
+    const v = Date.now();
+    await db.send(new m.PutItemCommand({ TableName: TABLE,
+      Item: { pk: S(pk), sk: S('mod'), js: S(js), at: N(v) } }));
+    return j(200, { v, bytes: js.length });
+  }
+  if (action === 'mod.js') {
+    const got = await db.send(new m.GetItemCommand({ TableName: TABLE,
+      Key: { pk: S(pk), sk: S('mod') } })) as { Item?: Record<string, { S?: string }> };
+    const js = got.Item?.js?.S;
+    if (!js) {
+      return respond(404, 'application/javascript', '// no module posted for this key\n',
+        { 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
+    }
+    // no-store AND a caller-supplied ?v= — belt and braces, because a stale
+    // module is indistinguishable from a probe that did not work.
+    return respond(200, 'application/javascript', js,
+      { 'cache-control': 'no-store', 'access-control-allow-origin': '*' });
+  }
+  if (action === 'next') {
+    const qs = (await rows()).filter((it) => (it.sk?.S ?? '').startsWith('q#'))
+      .sort((a, b) => Number(a.at?.N ?? 0) - Number(b.at?.N ?? 0));
+    const first = qs[0];
+    if (!first) return j(200, {});
+    const sk = first.sk?.S ?? '';
+    // Taken, so a second tab cannot answer the same question twice.
+    await db.send(new m.DeleteItemCommand({ TableName: TABLE, Key: { pk: S(pk), sk: S(sk) } }));
+    return j(200, { id: sk.slice(2), js: first.js?.S ?? '' });
+  }
+  // ── THE REPLY IS A GET, AND THAT IS NOT LAZINESS ──
+  //
+  // The platform gates every non-GET on a cell, so the tab could poll happily
+  // and then fail to answer — measured, and invisible, because the failure is
+  // a 401 inside a catch that just tries again in 1.5 seconds. The queue
+  // drained and nothing ever came back.
+  //
+  // Rather than require the tab to be signed in to answer a question about
+  // itself, the reply rides a GET: `/probe/KEY/say/ID/PART/OF?v=<encoded>`.
+  // Query strings survive outside `~/` (they do not survive inside it — see
+  // the note above /gmaps), which is why the whole channel lives out here.
+  //
+  // CHUNKED, because a URL is not a body. A probe that returns a tile's worth
+  // of numbers arrives in parts and is stitched on read, so the size limit is
+  // the number of round trips rather than a cliff the answer falls off.
+  if (action === 'say') {
+    const id = pathId.slice(0, 64);
+    const part = Number(bits[4] ?? '0') || 0;
+    const of = Number(bits[5] ?? '1') || 1;
+    const v = q.get('v') ?? '';
+    // WHICH TAB. Two tabs on one key both poll and whichever reaches /next
+    // first takes the question, so a reading can come from a different device
+    // than the one before it. That is not hypothetical: a phone and a desktop
+    // browser shared a key through most of a performance hunt, and the
+    // apparent uptime resets read as a crashing tab when it was the two of
+    // them taking turns.
+    const tab = (q.get('tab') ?? '').slice(0, 32);
+    if (!id) return j(400, { error: 'id required' });
+    await db.send(new m.PutItemCommand({ TableName: TABLE,
+      Item: { pk: S(pk), sk: S(`a#${id}#${String(part).padStart(3, '0')}`),
+        v: S(v.slice(0, 350000)), of: N(of), at: N(Date.now()),
+        ...(tab ? { tab: S(tab) } : {}) } }));
+    return j(200, { ok: true, part, of });
+  }
+  if (action === 'answer' && method === 'POST') {
+    let id = '', v = '';
+    try {
+      const o = JSON.parse(body ?? '{}') as { id?: unknown; v?: unknown };
+      id = String(o.id ?? ''); v = typeof o.v === 'string' ? o.v : JSON.stringify(o.v ?? null);
+    } catch { /* below */ }
+    if (!id) return j(400, { error: 'id required' });
+    await db.send(new m.PutItemCommand({ TableName: TABLE,
+      Item: { pk: S(pk), sk: S(`a#${id}#000`), v: S(v.slice(0, 380000)), of: N(1), at: N(Date.now()) } }));
+    return j(200, { ok: true });
+  }
+  if (action === 'get') {
+    const id = pathId.slice(0, 64);
+    const parts = (await rows()).filter((it) => (it.sk?.S ?? '').startsWith(`a#${id}#`))
+      .sort((a, b) => (a.sk?.S ?? '').localeCompare(b.sk?.S ?? ''));
+    if (!parts.length) return j(200, { pending: true });
+    const of = Number(parts[0].of?.N ?? '1') || 1;
+    if (parts.length < of) return j(200, { pending: true, have: parts.length, of });
+    // The tab that answered rides back with the answer, so a reading always
+    // names its source — see the note in `say`.
+    const tab = parts[0].tab?.S;
+    return j(200, { v: parts.map((it) => it.v?.S ?? '').join(''), ...(tab ? { tab } : {}) });
+  }
+  return j(404, { error: 'no such probe route' });
+}
+
+export async function serveState(
+  method: string,
+  caller: string,
+  body: string | undefined,
+  table: StateTable = liveTable(),
+) {
+  const no = (code: number, error: string) =>
+    respond(code, 'application/json', JSON.stringify({ error }), { 'cache-control': 'no-store' });
+  if (!TABLE) return no(503, 'no table configured');
+  if (!caller || caller === 'anonymous') return no(401, 'sign in to keep progress');
+  const pk = `PLAYER#${caller}`;
+  const mine = await table.all(pk);
+
+  // THE CAMPAIGN RESET. A latched mark cannot be un-latched by the merge —
+  // that is the whole design — so restarting the line takes an explicit,
+  // destructive verb: DELETE removes every mission and station row for THIS
+  // caller and nothing else. Roads, claims and the odometer stay: the survey
+  // is a career, the line is a docket, and handing the docket back does not
+  // un-drive the roads. (Note the honest limit: a second device that still
+  // holds the marks locally will push them back on its next sync — the reset
+  // is of the durable copy and the device that asked, not of every device.)
+  let reset = 0;
+  if (method === 'DELETE') {
+    const sks: string[] = [];
+    for (const kind of ['m', 's'] as const) {
+      for (const id of Object.keys(mine.marks[kind])) sks.push(MARK_SK[kind] + id);
+    }
+    await table.delRows(pk, sks);
+    reset = sks.length;
+    mine.marks = { m: {}, s: {} };
+  }
+
+  let wrote = 0;
+  if (method === 'POST') {
+    let sent: {
+      roads?: Record<string, StateRow>;
+      missions?: Record<string, unknown>;
+      stations?: Record<string, unknown>;
+      odo?: unknown;
+    } = {};
+    try { sent = JSON.parse(body ?? '{}') as typeof sent; } catch { return no(400, 'unreadable'); }
+
+    const rows = sent.roads && typeof sent.roads === 'object' ? sent.roads : {};
+    const write: Record<string, StateRow> = {};
+    let n = 0;
+    for (const [id, row] of Object.entries(rows)) {
+      if (typeof id !== 'string' || !id || id.length > 300 || !row || typeof row !== 'object') continue;
+      if (++n > PUSH_CAP) break;
+      const g = num(row.g), t = num(row.t), c = num(row.c);
+      const had = mine.roads[id];
+      const merged: StateRow = {
+        g: Math.max(g, had?.g ?? 0),
+        t: Math.max(t, had?.t ?? 0),
+        // Latched, and the truth about a claim is the first time it happened.
+        ...((c || had?.c) ? { c: Math.min(c || Infinity, had?.c || Infinity) } : {}),
+      };
+      if (had && had.g === merged.g && had.t === merged.t && had.c === merged.c) continue;
+      write[id] = merged;
+      mine.roads[id] = merged;
+    }
+    await table.putRoads(pk, write);
+    wrote += Object.keys(write).length;
+
+    // Marks — a mission completed, a station woken. Same monotonic story as a
+    // road's claim, stated even more simply: the row IS the moment, and the
+    // earliest moment wins. Union-and-min converges from any order.
+    for (const [kind, field] of [['m', 'missions'], ['s', 'stations']] as const) {
+      const sentRows = sent[field] && typeof sent[field] === 'object' ? sent[field]! : {};
+      const put: Record<string, number> = {};
+      let k = 0;
+      for (const [id, at] of Object.entries(sentRows)) {
+        if (typeof id !== 'string' || !id || id.length > 200) continue;
+        if (++k > MARKS_CAP) break;
+        const t = num(at);
+        if (!t) continue;
+        const had = mine.marks[kind][id];
+        if (had && had <= t) continue;
+        put[id] = t;
+        mine.marks[kind][id] = t;
+      }
+      await table.putMarks(pk, kind, put);
+      wrote += Object.keys(put).length;
+    }
+
+    const odo = Math.max(num(sent.odo), mine.odo);
+    if (odo > mine.odo) { await table.setProfile(pk, { odo }); mine.odo = odo; }
+  }
+
+  return respond(200, 'application/json', JSON.stringify({
+    user: caller,
+    roads: mine.roads,
+    missions: mine.marks.m,
+    stations: mine.marks.s,
+    odo: mine.odo,
+    tapes: (mine.tapes ?? []).sort((a, b) => b.at - a.at),
+    ...(method === 'POST' ? { wrote } : {}),
+    ...(method === 'DELETE' ? { reset } : {}),
+  }), { 'cache-control': 'no-store' });
+}
+
+/**
+ * ── THE TAPE BANK (R59) ──
+ *
+ * A kept recording, made durable and SHAREABLE: the blob goes to the public
+ * namespace (edge-served, immutable — a drive is not a secret and a URL to
+ * one is a postcard), the index goes to the caller's own state partition.
+ * Pruned oldest-first past the shelf cap, so a device that banks freely
+ * cannot grow a bill. The blob of a pruned tape is left in the namespace —
+ * an orphan object is cheaper than a delete path, and a shared URL keeps
+ * working, which is what sharing means.
+ */
+const TAPE_SHELF = 24;
+const TAPE_BODY_CAP = 200_000;
+const TAPE_BLOB_RE = /^\/~\/tape\/v1\/([a-z0-9_.-]{1,40})\/(\d{10,16})$/;
+export async function serveTape(
+  caller: string,
+  body: string | undefined,
+  table: StateTable = liveTable(),
+  put: typeof putTile = putTile,
+) {
+  const no = (code: number, error: string) =>
+    respond(code, 'application/json', JSON.stringify({ error }), { 'cache-control': 'no-store' });
+  if (!TABLE) return no(503, 'no table configured');
+  if (!caller || caller === 'anonymous') return no(401, 'sign in to bank a tape');
+  if (!body || body.length > TAPE_BODY_CAP) return no(400, body ? 'tape too large' : 'no tape');
+  let tape: { head?: { v?: number; at?: number; secs?: number; steps?: number; lat?: number; lon?: number };
+    steps?: string; keys?: string } = {};
+  try { tape = JSON.parse(body) as typeof tape; } catch { return no(400, 'unreadable'); }
+  const h = tape.head;
+  if (!h || typeof tape.steps !== 'string' || typeof tape.keys !== 'string'
+    || !Number.isFinite(h.at) || !Number.isFinite(h.secs) || (h.secs as number) <= 0
+    || (h.secs as number) > 300) return no(400, 'not a tape');
+  const user = caller.toLowerCase().replace(/[^a-z0-9_.-]/g, '').slice(0, 40);
+  if (!user) return no(400, 'unusable caller');
+  const id = String(Math.round(h.at as number));
+  const path = `/~/tape/v1/${user}/${id}`;
+  await put(path, gzipSync(Buffer.from(body, 'utf8'), { level: 9 }));
+  const pk = `PLAYER#${caller}`;
+  await table.putTape(pk, { id, at: Math.round(h.at as number),
+    secs: Math.round(h.secs as number), steps: Math.round(h.steps ?? 0),
+    lat: +(h.lat ?? 0).toFixed(5), lon: +(h.lon ?? 0).toFixed(5) });
+  // The shelf holds TAPE_SHELF; beyond it the OLDEST index rows go. Read after
+  // write so the row just banked counts itself.
+  const shelf = ((await table.all(pk)).tapes ?? []).sort((a, b) => b.at - a.at);
+  if (shelf.length > TAPE_SHELF) {
+    await table.delRows(pk, shelf.slice(TAPE_SHELF).map((t) => TAPE_SK + t.id));
+  }
+  return respond(200, 'application/json', JSON.stringify({ ok: true, id, url: path, kept: Math.min(shelf.length, TAPE_SHELF) }),
+    { 'cache-control': 'no-store' });
+}
+
+export const handler = async (event: {
+  rawPath?: string; rawQueryString?: string; body?: string;
+  headers?: Record<string, string | undefined>;
+  requestContext?: { http?: { method?: string } };
+}) => {
   const method = event.requestContext?.http?.method ?? 'GET';
   const path = event.rawPath ?? '/';
+  // THE PROBE CHANNEL, first, because two of its four routes write and it must
+  // answer before any read-only gate below. See serveProbe: off unless the URL
+  // carries a key, and the tab only polls when it was opened with the same one.
+  if (path.startsWith('/probe/')) {
+    return serveProbe(path, method, new URLSearchParams(event.rawQueryString ?? ''), event.body);
+  }
+  // Same-origin on the cell's own host, so `'self'` covers it and no CORS is
+  // involved. Before the read-only gate below, because this one writes.
+  if (path === '/state') {
+    if (method !== 'GET' && method !== 'POST' && method !== 'DELETE') {
+      return respond(405, 'application/json', JSON.stringify({ error: 'GET, POST or DELETE' }));
+    }
+    return serveState(method, event.headers?.['x-cell-caller'] ?? 'anonymous', event.body);
+  }
+  if (path === '/tape') {
+    if (method !== 'POST') return respond(405, 'application/json', JSON.stringify({ error: 'POST' }));
+    return serveTape(event.headers?.['x-cell-caller'] ?? 'anonymous', event.body);
+  }
+  // Deliberately OUTSIDE the `~/` namespace: that surface is cached by path,
+  // and a resolver keyed on a query string has no business in a cache whose
+  // key would ignore it.
+  if (path === '/gmaps') {
+    const u = new URLSearchParams(event.rawQueryString ?? '').get('u') ?? '';
+    const out = u ? await resolveGmap(u) : { error: 'no link given' };
+    return respond(out.error ? 400 : 200, 'application/json', JSON.stringify(out), {
+      'cache-control': 'no-store',
+    });
+  }
   if (method !== 'GET') return respond(405, 'application/json', JSON.stringify({ error: 'read-only' }));
   // The public namespace is a CACHED surface, so anything under `~/` that this
   // cell does not serve must say so plainly. Falling through to the SPA shell
   // put a day-long copy of the whole page in the CDN under a tile-shaped key —
   // observed on the first live probe, before any tile existed.
   if (path.startsWith('/~/')) {
+    if (TAPE_BLOB_RE.test(path)) {
+      return respond(404, 'application/json', JSON.stringify({ error: 'no such tape' }), {
+        'cache-control': 'no-store',
+      });
+    }
     const tile = path.match(TILE_RE);
     if (tile) return serveTile(path, tile);
     const cover = path.match(COVER_RE);
     if (cover) return serveCover(path, cover);
+    const ov = path.match(OV_RE);
+    if (ov) return serveOverview(path, ov);
+    const pk = path.match(PEAK_RE);
+    if (pk) return servePeaks(path, pk);
+    const cp = path.match(CAMPAIGN_RE);
+    if (cp) return serveCampaign(path, cp);
     return respond(404, 'application/json', JSON.stringify({ error: 'no such object' }), {
       'cache-control': 'no-store',
     });

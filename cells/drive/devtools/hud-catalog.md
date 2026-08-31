@@ -92,3 +92,17 @@ keep 3×5 bitmap. The two already coexist.
    text; keep the 3×5 micro face bitmap.
 4. **Shell cleanup**: drop `#reroll`/`#place`/`#speed`/`#hint`, Silkscreen the
    boot overlay.
+
+## The safe area (R29)
+
+`hudSafeRects()` in `client/main.ts` is the one inventory of the glass's
+reserved ground, in HUD px: the compass strip (plus the tile-debug header when
+that dial is on), the top-left waypoint distance chip, MENU, the conditions
+column, the dock square with its chips and info lines, the dial/LED/RIG block,
+and the bottom place-and-coordinates line. Anything that PLACES itself — the
+chart's rim chips today — walks inward along its own screen bearing until it
+stands on open glass, and does so in `updatePois`, so `__pins().drawn[].sx/sy`
+(with `safe` and `hudS` in the same probe) is the position actually painted.
+The rects deliberately overshoot by a few pixels: open glass is cheap,
+a chip over the battery bar costs both readings. If an instrument moves,
+move its rect — the suite (`poi-project.test.mjs`) asserts chips stay clear.

@@ -1,0 +1,132 @@
+name: Drive native release
+
+on:
+  workflow_dispatch:
+    inputs:
+      upload_steam:
+        description: Upload all desktop artifacts with SteamCMD
+        required: true
+        type: boolean
+        default: false
+      steam_branch:
+        description: Steam branch to set live after upload (blank leaves build unpublished)
+        required: false
+        type: string
+      build_description:
+        description: Steam build description
+        required: false
+        type: string
+
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            script: desktop:win
+            artifact: windows
+          - os: ubuntu-latest
+            script: desktop:linux
+            artifact: linux
+          - os: macos-14
+            script: desktop:mac
+            artifact: macos
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: cells/drive/native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cells/drive/native/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:device-auth
+      - run: npm run ${{ matrix.script }}
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+      - run: npm run desktop:archive -- ${{ matrix.artifact }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: drive-${{ matrix.artifact }}
+          path: cells/drive/native/dist/artifacts/drive-${{ matrix.artifact }}.tar.gz
+          if-no-files-found: error
+
+  ios:
+    runs-on: macos-15
+    defaults:
+      run:
+        working-directory: cells/drive/native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cells/drive/native/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:device-auth
+      - run: npm run ios:build
+
+  steam:
+    if: ${{ inputs.upload_steam }}
+    needs: desktop
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cells/drive/native
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: cells/drive/native/package-lock.json
+      - run: npm ci
+      - uses: actions/download-artifact@v4
+        with:
+          name: drive-windows
+          path: cells/drive/native/dist/steam/packages/windows
+      - uses: actions/download-artifact@v4
+        with:
+          name: drive-macos
+          path: cells/drive/native/dist/steam/packages/macos
+      - uses: actions/download-artifact@v4
+        with:
+          name: drive-linux
+          path: cells/drive/native/dist/steam/packages/linux
+      - name: Restore depot permissions and symlinks
+        run: |
+          mkdir -p dist/steam/content/windows dist/steam/content/macos dist/steam/content/linux
+          tar -xzf dist/steam/packages/windows/drive-windows.tar.gz -C dist/steam/content/windows
+          tar -xzf dist/steam/packages/macos/drive-macos.tar.gz -C dist/steam/content/macos
+          tar -xzf dist/steam/packages/linux/drive-linux.tar.gz -C dist/steam/content/linux
+      - name: Install SteamCMD
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update
+          sudo apt-get install -y lib32gcc-s1
+          mkdir -p dist/steam/steamcmd
+          curl -fsSL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz -o dist/steam/steamcmd.tar.gz
+          tar -xzf dist/steam/steamcmd.tar.gz -C dist/steam/steamcmd
+      - name: Upload Steam depots
+        run: npm run steam:upload
+        env:
+          STEAMCMD: ${{ github.workspace }}/cells/drive/native/dist/steam/steamcmd/steamcmd.sh
+          STEAM_APP_ID: ${{ secrets.STEAM_APP_ID }}
+          STEAM_DEPOT_WINDOWS: ${{ secrets.STEAM_DEPOT_WINDOWS }}
+          STEAM_DEPOT_MACOS: ${{ secrets.STEAM_DEPOT_MACOS }}
+          STEAM_DEPOT_LINUX: ${{ secrets.STEAM_DEPOT_LINUX }}
+          STEAM_USER: ${{ secrets.STEAM_USER }}
+          STEAM_PASSWORD: ${{ secrets.STEAM_PASSWORD }}
+          STEAM_SET_LIVE: ${{ inputs.steam_branch }}
+          STEAM_BUILD_DESCRIPTION: ${{ inputs.build_description }}

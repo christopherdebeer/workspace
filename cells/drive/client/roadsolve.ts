@@ -47,7 +47,7 @@ export interface SolveEnv {
   solveChain(
     dense: Array<[number, number]>, maxGrade: number,
     p0: number | null, p1: number | null, pins: Array<number | null>,
-  ): number[];
+  ): number[] | Promise<number[]>;
   /** The spatial-hash key the junction grid shares with the road grid. */
   gkey(x: number, z: number): string;
   /** Steepest grade per highway class. */
@@ -58,6 +58,8 @@ export interface SolveEnv {
   juncR: number;
   /** Off only from a probe, to measure what the pins are worth. */
   juncPins: boolean;
+  /** Let long batches of small chains share the main thread with a frame. */
+  breathe?: () => Promise<void>;
 }
 
 /** Ways that are drawn but never solved as part of a chain — plus `services`,
@@ -111,6 +113,41 @@ export class RoadSolver {
 
   constructor(private readonly env: SolveEnv) {}
 
+  /**
+   * THE SOLVER SPEAKS IN LOCAL METRES, SO A WORLD HOP MUST EMPTY IT.
+   *
+   * `hints` is keyed by a spatial cell of LOCAL x/z and carries a settled deck
+   * ELEVATION; `junctions` likewise holds local positions. Both survive a
+   * world rebase unless emptied — and because every world seats the truck at
+   * local (0,0), the hints the last postcard left under its own wheels sit
+   * exactly where the next one spawns. hintAt then hands the new road the OLD
+   * world's deck height, the carve digs the hillside down to meet a deck that
+   * is not there, and the truck arrives at the bottom of a phantom trench
+   * (owner-caught, live). Advisory data with a hard spatial meaning is the
+   * most dangerous thing to carry across a rebase precisely because nothing
+   * about it looks like a coordinate.
+   */
+  /** How many times a world hop has emptied this solver, and what the last
+   *  sweep discarded — a hop's awaits let the NEW world start writing hints
+   *  before the caller resumes, so "is it empty now" is an unobservable
+   *  instant and cannot be the assertion. What the sweep THREW AWAY can. */
+  sweeps = 0;
+  readonly lastSwept = { hints: 0, juncs: 0 };
+
+  reset(): void {
+    this.sweeps++;
+    this.lastSwept.hints = this.hints.size;
+    this.lastSwept.juncs = this.junctions.size;
+    this.hints.clear();
+    this.hinted.clear();
+    this.junctions.clear();
+    this.profiles.length = 0;
+    const st = this.stats;
+    st.pinned = 0; st.chains = 0; st.maxChainM = 0; st.totalChainM = 0;
+    st.considered = 0; st.noHeight = 0; st.notDrivable = 0; st.chained = 0;
+    st.opened = 0; st.dropped.length = 0;
+  }
+
   writeHints(dense: Array<[number, number]>, alg: number[]): void {
     if (this.recording) this.profiles.push(dense.map((p, i) => [p[0], p[1], alg[i]]));
     if (this.hints.size > 6000) this.hints.clear();   // advisory data; rebuilt per tile
@@ -160,8 +197,11 @@ export class RoadSolver {
    * `els` are the ways this tile must build; `halo` are a neighbour's cached
    * copies, which reach further and make a better thing to solve over.
    */
-  plan(els: SolveWay[], halo: SolveWay[] = []): void {
+  async plan(els: SolveWay[], halo: SolveWay[] = []): Promise<void> {
     const env = this.env;
+    // A worker solve may finish after a world hop. reset() advances sweeps, so
+    // stale local coordinates can be rejected before they repopulate hints.
+    const sweep = this.sweeps;
     interface Mem { pts: Array<[number, number]>; name?: string; g: number; key: string; fresh: boolean }
     // ONE ENTRY PER OSM WAY, longest geometry wins. The same road reaches here
     // twice: clipped to this tile in `els`, and whole in a neighbour's cached
@@ -206,6 +246,10 @@ export class RoadSolver {
     const joins = (a: [number, number], b: [number, number]): boolean =>
       Math.hypot(a[0] - b[0], a[1] - b[1]) < 2;
     while (mems.length) {
+      if (env.breathe) {
+        await env.breathe();
+        if (sweep !== this.sweeps) return;
+      }
       const chain: Mem[] = [mems.pop() as Mem];
       let grew = true;
       while (grew) {
@@ -246,8 +290,9 @@ export class RoadSolver {
       // guessed from heights.
       const pins = dense.map(([px, pz]) => (env.juncPins ? this.hintAt(px, pz, env.juncR) : null));
       for (let i = 0; i < dense.length; i++) if (pins[i] != null) this.noteJunction(dense[i][0], dense[i][1]);
-      const alg = env.solveChain(dense, Math.min(...chain.map((m) => m.g)),
+      const alg = await env.solveChain(dense, Math.min(...chain.map((m) => m.g)),
         a0 === null ? null : a0 - env.roadLift, a1 === null ? null : a1 - env.roadLift, pins);
+      if (sweep !== this.sweeps) return;
       this.writeHints(dense, alg);
       {
         let len = 0;
@@ -268,11 +313,42 @@ export class RoadSolver {
  * OSM ways only carry vertices where the road BENDS, so a long straight
  * segment would bridge every terrain dip between its endpoints like a
  * causeway. ~12m steps make the profile hug the ground it crosses.
+ *
+ * AND THE CORNERS ARE ROUNDED FIRST (road audit, finding 1). Densifying
+ * alone cannot help a bend: the added points are collinear, so the corner
+ * keeps its whole angle at the original vertex — which is exactly what
+ * drives the kerb mitre past its 2.4x cap and parts neighbouring bays on
+ * every hairpin. A real road arcs through its bends, so a sharp interior
+ * vertex becomes a short quadratic arc: shoulders pulled back along each
+ * leg, the vertex itself the control point. ENDPOINTS NEVER MOVE — they
+ * are the weld anchors, the junction pins and the kerbseam keys — and an
+ * interior vertex stays within its arc's sagitta (bounded by the shoulder
+ * length) of where OSM put it.
  */
 export function densifyPts(pts: Array<[number, number]>): Array<[number, number]> {
-  const dense: Array<[number, number]> = [pts[0]];
-  for (let i = 1; i < pts.length; i++) {
-    const [ax, az] = pts[i - 1], [bx, bz] = pts[i];
+  const rounded: Array<[number, number]> = [pts[0]];
+  for (let i = 1; i < pts.length - 1; i++) {
+    const [px, pz] = pts[i - 1], [vx, vz] = pts[i], [qx, qz] = pts[i + 1];
+    const la = Math.hypot(vx - px, vz - pz) || 1, lb = Math.hypot(qx - vx, qz - vz) || 1;
+    const turn = Math.acos(Math.max(-1, Math.min(1,
+      ((vx - px) * (qx - vx) + (vz - pz) * (qz - vz)) / (la * lb))));
+    // Gentle bends keep their vertex; 0.45 keeps consecutive arcs off each
+    // other's legs; under 1.5m of shoulder an arc is noise, not a corner.
+    const r = Math.min(9, la * 0.45, lb * 0.45);
+    if (turn < 0.2 || r < 1.5) { rounded.push(pts[i]); continue; }
+    const ax = vx - ((vx - px) / la) * r, az = vz - ((vz - pz) / la) * r;
+    const bx = vx + ((qx - vx) / lb) * r, bz = vz + ((qz - vz) / lb) * r;
+    const segs = Math.max(2, Math.ceil(turn / 0.18));   // ~10 degrees per arc step
+    for (let s = 0; s <= segs; s++) {
+      const t = s / segs, u = 1 - t;
+      rounded.push([u * u * ax + 2 * u * t * vx + t * t * bx,
+        u * u * az + 2 * u * t * vz + t * t * bz]);
+    }
+  }
+  rounded.push(pts[pts.length - 1]);
+  const dense: Array<[number, number]> = [rounded[0]];
+  for (let i = 1; i < rounded.length; i++) {
+    const [ax, az] = rounded[i - 1], [bx, bz] = rounded[i];
     const steps = Math.max(1, Math.ceil(Math.hypot(bx - ax, bz - az) / 12));
     for (let s = 1; s <= steps; s++) dense.push([ax + ((bx - ax) * s) / steps, az + ((bz - az) * s) / steps]);
   }

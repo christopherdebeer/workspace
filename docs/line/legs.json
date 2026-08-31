@@ -1,0 +1,10 @@
+[
+ {
+  "id": "line-02",
+  "error": "no route: the graph is holed — 75 of 78 overview tiles served, 3 still cold. The road exists; the map of it does not yet. Re-run when the upstream recovers (each run banks what it does get)."
+ },
+ {
+  "id": "line-05",
+  "error": "no route: the graph is holed — 38 of 40 overview tiles served, 2 still cold. The road exists; the map of it does not yet. Re-run when the upstream recovers (each run banks what it does get)."
+ }
+]

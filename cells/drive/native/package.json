@@ -1,0 +1,107 @@
+{
+  "name": "@c15r/drive-native",
+  "version": "0.1.0",
+  "description": "Native Electron and Capacitor distribution shell for Drive",
+  "author": "c15r",
+  "private": true,
+  "type": "module",
+  "main": "electron/main.mjs",
+  "engines": {
+    "node": ">=22.12.0"
+  },
+  "scripts": {
+    "clean": "node scripts/clean.mjs",
+    "web": "node scripts/build-web.mjs",
+    "web:dev": "DRIVE_BUILD_MODE=development node scripts/build-web.mjs",
+    "typecheck": "tsc -p tsconfig.json",
+    "verify": "node scripts/verify.mjs",
+    "test:device-auth": "node scripts/device-auth.test.mjs",
+    "desktop": "npm run web:dev && electron .",
+    "desktop:smoke": "DRIVE_SMOKE=1 electron .",
+    "desktop:pack": "npm run web && electron-builder --dir",
+    "desktop:mac": "npm run web && electron-builder --mac --dir --universal",
+    "desktop:win": "npm run web && electron-builder --win --dir --x64",
+    "desktop:linux": "npm run web && electron-builder --linux --dir --x64",
+    "desktop:archive": "node scripts/archive-desktop.mjs",
+    "steam:stage": "node scripts/stage-steam.mjs",
+    "steam:config": "node scripts/write-steam-config.mjs",
+    "steam:upload": "node scripts/upload-steam.mjs",
+    "ios:add": "npm run web && cap add ios",
+    "ios:sync": "npm run web && cap sync ios",
+    "ios:open": "npm run ios:sync && cap open ios",
+    "ios:build": "npm run ios:sync && node scripts/build-ios.mjs",
+    "ios:archive": "npm run ios:sync && node scripts/archive-ios.mjs"
+  },
+  "dependencies": {
+    "@capacitor/browser": "8.0.4",
+    "@capacitor/core": "8.5.0"
+  },
+  "devDependencies": {
+    "@capacitor/cli": "8.5.0",
+    "@capacitor/ios": "8.5.0",
+    "@types/three": "0.160.0",
+    "electron": "44.1.0",
+    "electron-builder": "26.15.3",
+    "esbuild": "0.28.2",
+    "three": "0.160.0",
+    "typescript": "5.3.3"
+  },
+  "overrides": {
+    "xcode": {
+      "uuid": "11.1.1"
+    }
+  },
+  "build": {
+    "appId": "land.parc.drive",
+    "productName": "Drive",
+    "asar": true,
+    "npmRebuild": false,
+    "directories": {
+      "output": "dist/electron"
+    },
+    "files": [
+      {
+        "from": "electron",
+        "to": "electron",
+        "filter": [
+          "**/*"
+        ]
+      },
+      {
+        "from": "dist/web",
+        "to": "web",
+        "filter": [
+          "**/*"
+        ]
+      },
+      "package.json"
+    ],
+    "extraMetadata": {
+      "main": "electron/main.mjs"
+    },
+    "mac": {
+      "target": [
+        "dir"
+      ],
+      "category": "public.app-category.games",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false,
+      "entitlements": "electron/entitlements.mac.plist",
+      "entitlementsInherit": "electron/entitlements.mac.inherit.plist"
+    },
+    "win": {
+      "target": [
+        "dir"
+      ],
+      "artifactName": "drive-${version}-${arch}.${ext}"
+    },
+    "linux": {
+      "target": [
+        "dir"
+      ],
+      "category": "Game",
+      "executableName": "drive",
+      "artifactName": "drive-${version}-${arch}.${ext}"
+    }
+  }
+}

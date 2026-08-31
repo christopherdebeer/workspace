@@ -1,0 +1,86 @@
+[
+ {
+  "id": "obs-01-01",
+  "km": 0.5,
+  "lat": 48.7738,
+  "lon": 2.31326,
+  "tag": "historic=memorial",
+  "name": "Borne du Serment de Koufra",
+  "kind": "DISTURBANCE",
+  "sat": 10,
+  "satName": "TREE COVER",
+  "alibi": "a memorial is a stone in a verge; nothing this size survives a 10m pixel"
+ },
+ {
+  "id": "obs-01-02",
+  "km": 4.8,
+  "lat": 48.73579,
+  "lon": 2.30377,
+  "tag": "power=substation",
+  "name": null,
+  "kind": "STRUCTURE",
+  "sat": 10,
+  "satName": "TREE COVER",
+  "alibi": "a switchyard is gravel and steel inside a fence; at 10m the trees or scrub around it win the pixel"
+ },
+ {
+  "id": "obs-01-03",
+  "km": 7.7,
+  "lat": 48.71023,
+  "lon": 2.29842,
+  "tag": "power=substation",
+  "name": null,
+  "kind": "STRUCTURE",
+  "sat": 10,
+  "satName": "TREE COVER",
+  "alibi": "a switchyard is gravel and steel inside a fence; at 10m the trees or scrub around it win the pixel"
+ },
+ {
+  "id": "obs-01-04",
+  "km": 11.4,
+  "lat": 48.6825,
+  "lon": 2.30945,
+  "tag": "power=substation",
+  "name": null,
+  "kind": "STRUCTURE",
+  "sat": 10,
+  "satName": "TREE COVER",
+  "alibi": "a switchyard is gravel and steel inside a fence; at 10m the trees or scrub around it win the pixel"
+ },
+ {
+  "id": "obs-01-05",
+  "km": 17.7,
+  "lat": 48.66116,
+  "lon": 2.29887,
+  "tag": "power=substation",
+  "name": null,
+  "kind": "STRUCTURE",
+  "sat": 10,
+  "satName": "TREE COVER",
+  "alibi": "a switchyard is gravel and steel inside a fence; at 10m the trees or scrub around it win the pixel"
+ },
+ {
+  "id": "obs-01-06",
+  "km": 22.3,
+  "lat": 48.64156,
+  "lon": 2.26951,
+  "tag": "power=substation",
+  "name": null,
+  "kind": "STRUCTURE",
+  "sat": 10,
+  "satName": "TREE COVER",
+  "alibi": "a switchyard is gravel and steel inside a fence; at 10m the trees or scrub around it win the pixel"
+ },
+ {
+  "id": "obs-01-07",
+  "km": 25,
+  "lat": 48.61897,
+  "lon": 2.25748,
+  "tag": "power=substation",
+  "name": null,
+  "kind": "STRUCTURE",
+  "sat": 10,
+  "satName": "TREE COVER",
+  "alibi": "a switchyard is gravel and steel inside a fence; at 10m the trees or scrub around it win the pixel"
+ }
+]

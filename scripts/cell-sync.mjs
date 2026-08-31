@@ -73,9 +73,16 @@ async function call(verb, target, input) {
 }
 
 /** Repo-side entries that are not cell source: dot-files (the cells service
- *  rejects them as path segments anyway), dependency trees, and each cell's
- *  devtools/ (local harnesses — e.g. canvas's headless-repro). */
-const SKIP = new Set(['node_modules', 'devtools']);
+ *  rejects them as path segments anyway), dependency trees, each cell's
+ *  devtools/ (local harnesses — e.g. canvas's headless-repro), and native/.
+ *
+ *  NATIVE IS NOT SERVABLE, AND CANNOT BE STORED EITHER. Electron and Capacitor
+ *  scaffolding is built locally and shipped through the app stores; the cell
+ *  only ever serves the web client. It also cannot be pushed at all: an
+ *  appiconset contains `AppIcon-512@2x.png`, and cells.writeFile allows only
+ *  [A-Za-z0-9._-] in a path segment. So every deploy failed outright the
+ *  moment the packaging landed — not for one cell, for anyone deploying it. */
+const SKIP = new Set(['node_modules', 'devtools', 'native']);
 
 function* walk(dir, top = true) {
   for (const name of readdirSync(dir)) {
@@ -104,7 +111,12 @@ if (cmd === 'pull') {
       console.log('skipped', f, '(vendored — source of truth is cells/vendor/)');
       continue;
     }
-    const { content } = await call('read', 'cells.readFile', { owner, name, path: f });
+    // `whole: true` because a PULL genuinely wants the entire file. Without
+    // it the substrate's 60KB read budget refuses anything larger and the pull
+    // dies partway through the list — measured on @c15r/drive, which stopped
+    // at a 158KB fixture and left the working tree half-updated with no
+    // indication of which files had made it.
+    const { content } = await call('read', 'cells.readFile', { owner, name, path: f, whole: true });
     const dest = join(localRoot, f);
     mkdirSync(dirname(dest), { recursive: true });
     writeFileSync(dest, content);
@@ -113,10 +125,24 @@ if (cmd === 'pull') {
   console.log(`✓ ${files.length} files → cells/${name}/`);
 } else if (cmd === 'push') {
   const local = [...walk(localRoot)].map((p) => relative(localRoot, p));
+  // A BIG FILE GOES UP IN PIECES. `cells.writeFile` carries the whole body in
+  // one signed request, and somewhere just past a megabyte that request starts
+  // coming back `403 The request signature we calculated does not match` —
+  // measured on @c15r/drive: 1,000,000 bytes wrote fine and 1,020,000 did not,
+  // which is how a client/main.ts that had grown to 1,031,430 bytes stopped
+  // being deployable at all. So the first chunk is a `writeFile` (which
+  // replaces whatever was there, including a half-written previous attempt)
+  // and the rest are `appendToFile`. Well under the cliff, because the signed
+  // body carries the JSON-escaped content and that is larger than the file.
+  const CHUNK = 600000;
   for (const f of local) {
     const content = readFileSync(join(localRoot, f), 'utf8');
-    await call('act', 'cells.writeFile', { owner, name, path: f, content });
-    console.log('pushed', f, `(${content.length}b)`);
+    await call('act', 'cells.writeFile', { owner, name, path: f, content: content.slice(0, CHUNK) });
+    for (let at = CHUNK; at < content.length; at += CHUNK) {
+      await call('act', 'cells.appendToFile', { owner, name, path: f, content: content.slice(at, at + CHUNK) });
+    }
+    const parts = Math.max(1, Math.ceil(content.length / CHUNK));
+    console.log('pushed', f, `(${content.length}b${parts > 1 ? ` in ${parts} parts` : ''})`);
   }
   // Kernel-SDK vendor overlay (ADR-0076): a server-side https import hangs the
   // forge bundler (ADR-0017), so cells that use shared kernel modules import
