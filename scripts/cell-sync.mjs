@@ -73,9 +73,16 @@ async function call(verb, target, input) {
 }
 
 /** Repo-side entries that are not cell source: dot-files (the cells service
- *  rejects them as path segments anyway), dependency trees, and each cell's
- *  devtools/ (local harnesses — e.g. canvas's headless-repro). */
-const SKIP = new Set(['node_modules', 'devtools']);
+ *  rejects them as path segments anyway), dependency trees, each cell's
+ *  devtools/ (local harnesses — e.g. canvas's headless-repro), and native/.
+ *
+ *  NATIVE IS NOT SERVABLE, AND CANNOT BE STORED EITHER. Electron and Capacitor
+ *  scaffolding is built locally and shipped through the app stores; the cell
+ *  only ever serves the web client. It also cannot be pushed at all: an
+ *  appiconset contains `AppIcon-512@2x.png`, and cells.writeFile allows only
+ *  [A-Za-z0-9._-] in a path segment. So every deploy failed outright the
+ *  moment the packaging landed — not for one cell, for anyone deploying it. */
+const SKIP = new Set(['node_modules', 'devtools', 'native']);
 
 function* walk(dir, top = true) {
   for (const name of readdirSync(dir)) {
