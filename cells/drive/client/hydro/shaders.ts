@@ -92,6 +92,9 @@ varying float vBreaker;
 varying float vTurbulence;
 varying float vFlowing;
 varying float vShorePhase;
+varying float vSurfaceWave;
+varying float vSurfaceEnergy;
+varying float vShoal;
 
 #include <common>
 #include <fog_pars_vertex>
@@ -103,61 +106,88 @@ void main() {
 
   float flowLength = length(dynamics.xy);
   vFlowing = smoothstep(0.2, 0.72, flowLength);
-  // dynamics.w: CPU station energy for flowing water, sea state for standing.
+  // dynamics.w is settled reach energy for flowing water and sea state for
+  // standing water. dynamics.z remains physical fetch.
   float energy = clamp(dynamics.w, 0.0, 1.0);
-  vTurbulence = vFlowing * smoothstep(0.4, 0.85, energy);
+  float fetchM = max(1.0, dynamics.z);
+  vTurbulence = vFlowing * smoothstep(0.20, 0.78, energy);
 
   float depth = max(0.0, geometryField.a);
-  float shoreDist = geometryField.g;
+  float shoreDist = max(0.0, geometryField.g);
 
   vec4 renderPosition = modelMatrix * vec4(position, 1.0);
   vAbsoluteXZ = renderPosition.xz + uWorldOrigin.xz;
 
-  // ── THE PHASE, CONTINUOUS BY CONSTRUCTION ──
-  // One constant-direction swell for open water; one shore-following wave
-  // whose phase coordinate IS the signed shore distance. Each is continuous
-  // everywhere; only their amplitudes crossfade.
+  // ── BODY SCALE BELONGS TO GEOMETRY ──
+  //
+  // A production ocean tile is 2.4km wide and the default mesh is 32 cells:
+  // roughly 75m between vertices. The old 9-34m displacement could not exist
+  // on that lattice. Geometric wavelength is now fetch-scaled and never below
+  // 38m for small, tightly meshed bodies; open-ocean swell is ~360m, which the
+  // production mesh can actually resolve. The fragment owns shorter structure.
   float speed = max(0.2, uWind.z);
-  float wavelength = mix(9.0, 34.0, clamp(energy, 0.0, 1.0)) * max(0.05, uWaveLength);
+  float fetchScale = clamp(log2(max(fetchM, 80.0) / 80.0) / 8.0, 0.0, 1.0);
+  float wavelength = mix(38.0, 360.0, fetchScale) * max(0.2, uWaveLength);
   float k = 6.28318530718 / wavelength;
-  float omega = 0.6 + speed * 0.1;
+  float omega = 0.34 + speed * 0.055;
   vec2 windDir = normalize(uWind.xy + vec2(0.00001, 0.0));
-  float swell = sin(dot(vAbsoluteXZ, windDir) * k - uTime * omega);
-  // Crests shorten as they shoal; +time advances them toward the waterline
-  // (decreasing shore distance).
-  float shoreK = 6.28318530718 / max(5.0, wavelength * 0.55);
-  float shorePhase = shoreDist * shoreK + uTime * omega * 0.9;
-  // ── SHOALING STEEPENS THE CREST, NOT THE PHASE ──
-  // A second harmonic OF THE SAME phase sharpens the crest and flattens the
-  // trough as the water shallows (the Stokes profile, to first order). It is
-  // continuous because the phase it doubles is continuous — this is the one
-  // legal way to add wave shape after the fingerprint lesson above.
-  float steepen = (1.0 - smoothstep(0.8, 3.5, depth));
-  float shoreWave = sin(shorePhase) + sin(shorePhase * 2.0) * 0.28 * steepen;
-  float nearShore = (1.0 - smoothstep(14.0, 70.0, max(0.0, shoreDist))) * (1.0 - vFlowing);
-  float wave = mix(swell, shoreWave, nearShore);
-  // The fragment's lapping foam breathes with this: crests arriving at the
-  // waterline bring the froth that a static fringe only pretends to.
+  vec2 windCross = vec2(-windDir.y, windDir.x);
+  vec2 secondaryDir = normalize(windDir + windCross * 0.46);
+
+  // Each phase has one constant direction. Their amplitudes mix; their
+  // directions never vary inside dot(p,d), preserving the fingerprint fix.
+  float swellA = sin(dot(vAbsoluteXZ, windDir) * k - uTime * omega);
+  float swellB = sin(dot(vAbsoluteXZ, secondaryDir) * k * 1.62
+    - uTime * omega * 1.14 + 1.7);
+  float swell = swellA * 0.74 + swellB * 0.26;
+
+  // Shore-following geometry is also macro scale. The 5-30m crest structure
+  // belongs in the analytic normal and foam response, not a 75m vertex grid.
+  float shoreWavelength = max(72.0, wavelength * 0.42);
+  float shoreK = 6.28318530718 / shoreWavelength;
+  float shorePhase = shoreDist * shoreK + uTime * omega * 0.86;
+  float steepen = 1.0 - smoothstep(0.8, 4.5, depth);
+  float shoreWave = sin(shorePhase)
+    + sin(shorePhase * 2.0) * 0.24 * steepen;
+  float nearShore = (1.0 - smoothstep(22.0, 120.0, shoreDist))
+    * (1.0 - vFlowing);
+  float standingWave = mix(swell, shoreWave, nearShore);
   vShorePhase = sin(shorePhase);
 
-  // ── THE BREAKER BAND, NARROW AND DEPTH-DEPENDENT ──
-  float breakerDepth = mix(0.5, 2.4, energy);
-  float depthDelta = (depth - breakerDepth) / max(0.25, breakerDepth * 0.45);
+  // River geometry is broad heave only. Fast riffle/rapid structure is added
+  // analytically per fragment, avoiding the former full-width conveyor bands.
+  vec2 flowDir = normalize(dynamics.xy + vec2(0.00001, 0.0));
+  vec2 crossFlow = vec2(-flowDir.y, flowDir.x);
+  float riverWavelength = mix(100.0, 220.0, energy) * max(0.2, uWaveLength);
+  float riverK = 6.28318530718 / riverWavelength;
+  float riverPhase = dot(vAbsoluteXZ, flowDir) * riverK
+    - uTime * (0.42 + energy * 0.82);
+  float riverWave = sin(riverPhase) * 0.72
+    + sin(riverPhase * 0.57 + dot(vAbsoluteXZ, crossFlow) * 0.018 + 1.9) * 0.28;
+  float wave = mix(standingWave, riverWave, vFlowing);
+
+  // ── SHOAL, BREAK, THEN COLLAPSE ──
+  float breakerDepth = mix(0.55, 2.7, energy);
+  float depthDelta = (depth - breakerDepth) / max(0.28, breakerDepth * 0.48);
   vBreaker = (1.0 - vFlowing) * exp(-depthDelta * depthDelta) * geometryField.r;
+  vShoal = (1.0 - vFlowing)
+    * (1.0 - smoothstep(breakerDepth, max(breakerDepth + 0.1, 10.0), depth));
+  float postBreak = mix(0.28, 1.0,
+    smoothstep(0.12, max(0.3, breakerDepth * 0.85), depth));
 
-  // Crest selection is for STANDING water only. A river's white comes from
-  // its energy field, never from tracing displacement crests — traced crests
-  // are the conveyor-belt bands.
-  vWaveCrest = smoothstep(0.55, 0.95, wave) * (1.0 - vFlowing);
+  vWaveCrest = smoothstep(0.48, 0.94, standingWave) * (1.0 - vFlowing);
 
-  // ── AMPLITUDE: CALM BASELINE, SIMPLER WITH DISTANCE ──
-  float camDist = distance(cameraPosition, renderPosition.xyz);
-  float distFade = 1.0 / (1.0 + camDist * 0.0035);
-  float standingAmplitude = mix(0.012, 0.34, energy * energy)
-    * (0.5 + min(speed, 16.0) * 0.03) * (1.0 + vBreaker * 0.5);
-  float riverAmplitude = mix(0.004, 0.05, energy);
+  // Macro volume remains with distance. Only fragment-scale skin is allowed
+  // to fade; removing body amplitude was the principal flat-water regression.
+  float standingAmplitude = mix(0.015, 0.46, energy * energy)
+    * (0.48 + min(speed, 16.0) * 0.035)
+    * (1.0 + vShoal * 0.62) * postBreak;
+  float riverAmplitude = mix(0.006, 0.16, pow(energy, 1.35));
   float amplitude = mix(standingAmplitude, riverAmplitude, vFlowing)
-    * uWaveAmplitude * distFade;
+    * uWaveAmplitude;
+
+  vSurfaceWave = clamp(wave, -1.0, 1.0);
+  vSurfaceEnergy = clamp(amplitude / mix(0.42, 0.15, vFlowing), 0.0, 1.0);
   float displaced = wave * amplitude * geometryField.r;
   renderPosition.y = uElevationBase + geometryField.b - uWorldOrigin.y + displaced;
 
@@ -195,6 +225,9 @@ varying float vBreaker;
 varying float vTurbulence;
 varying float vFlowing;
 varying float vShorePhase;
+varying float vSurfaceWave;
+varying float vSurfaceEnergy;
+varying float vShoal;
 
 #include <common>
 #include <fog_pars_fragment>
@@ -237,15 +270,23 @@ vec3 palette(float kind, float depth, float turbidity) {
   return mix(shallow, deep, clamp(attenuation, 0.0, 1.0));
 }
 
-float rippleHeight(vec2 p, vec2 flow, vec2 wind, float scale, float seed) {
+// Exact world-space derivative of the two ripple components. This costs the
+// same two transcendental evaluations as rippleHeight did, but remains stable
+// across camera projection, discard edges and the final low-resolution pass.
+vec2 rippleGradient(vec2 p, vec2 flow, vec2 wind, float scale, float seed) {
   float speed = max(0.2, uWind.z);
   vec2 direction = length(flow) > 0.15 ? normalize(flow) : wind;
   vec2 crossDirection = vec2(-direction.y, direction.x);
-  float small = sin(dot(p, direction) * mix(2.8, 0.55, scale)
-    - uTime * (1.7 + speed * 0.12) + seed * 6.283);
-  float capillary = sin(dot(p, normalize(direction + crossDirection * 0.57)) * mix(5.8, 1.1, scale)
-    - uTime * (2.5 + speed * 0.08) + 2.1);
-  return (small * 0.68 + capillary * 0.32) * mix(0.012, 0.1, scale) * uRippleStrength;
+  vec2 capillaryDirection = normalize(direction + crossDirection * 0.57);
+  float kSmall = mix(2.8, 0.55, scale);
+  float kCapillary = mix(5.8, 1.1, scale);
+  float pSmall = dot(p, direction) * kSmall
+    - uTime * (1.7 + speed * 0.12) + seed * 6.283;
+  float pCapillary = dot(p, capillaryDirection) * kCapillary
+    - uTime * (2.5 + speed * 0.08) + 2.1;
+  float amplitude = mix(0.012, 0.1, scale) * uRippleStrength;
+  return (direction * cos(pSmall) * kSmall * 0.68
+    + capillaryDirection * cos(pCapillary) * kCapillary * 0.32) * amplitude;
 }
 
 void main() {
@@ -289,41 +330,40 @@ void main() {
     return;
   }
 
-  // ── DETAIL BUDGET BY DISTANCE ──
-  // Nothing below the final screen resolution may reach the quantiser: fine
-  // normal detail, grain and glint all attenuate with camera distance, so
-  // far water is calm and simple rather than aliased.
+  // ── THREE BANDS, THREE LIFETIMES ──
+  // Body displacement never fades here. Structure and skin fade smoothly,
+  // and the expensive path still ends around 875m, preserving the recovered
+  // full-ocean cost. foamLod reaches full strength sooner than the old raw
+  // distance multiplier, so nearby rapids and breakers survive quantisation.
   float camDist = distance(cameraPosition, vRenderPosition);
   float detailFade = 1.0 / (1.0 + camDist * 0.006);
-  // ── THE FAR PATH IS CHEAP BY CONSTRUCTION ──
-  // Beyond ~1.4km every fine term is invisible anyway (that is what
-  // detailFade means), so the fragment does not pay for it: no ripple taps,
-  // no grain, no glint, no foam machinery. The severe frame cost appeared
-  // exactly when the ocean was COMPLETE — a screen full of far water paying
-  // near-water prices — while the legacy plane paid one flat colour. Branch
-  // on a smoothly varying value, so warps stay coherent.
   bool nearWater = detailFade > 0.16;
+  float detailLod = smoothstep(0.16, 0.34, detailFade);
+  float foamLod = smoothstep(0.16, 0.26, detailFade);
 
   vec2 wind = normalize(uWind.xy + vec2(0.00001, 0.0));
   vec2 flow = dynamics.xy;
   vec3 normal = vec3(0.0, 1.0, 0.0);
   if (nearWater) {
-    // ── ONE TAP AND THE HARDWARE'S DERIVATIVES, NOT FOUR TAPS ──
-    // The GPU already computes every fragment in 2x2 quads; dFdx/dFdy of a
-    // single ripple evaluation give its screen-space gradient for free, and
-    // the world-space gradient falls out of a 2x2 solve against the
-    // derivatives of the world position. A quarter of the ripple cost for
-    // normals the quantiser cannot tell apart.
-    float h = rippleHeight(vAbsoluteXZ, flow, wind, energy, seed);
-    vec2 dpx = dFdx(vAbsoluteXZ), dpy = dFdy(vAbsoluteXZ);
-    float det = dpx.x * dpy.y - dpx.y * dpy.x;
-    if (abs(det) > 1e-7) {
-      float dhx = dFdx(h), dhy = dFdy(h);
-      vec2 gradient = vec2(dhx * dpy.y - dhy * dpx.y, dhy * dpx.x - dhx * dpy.x) / det;
-      gradient = clamp(gradient, vec2(-2.0), vec2(2.0))
-        * (1.0 + vTurbulence * 0.8) * detailFade;
-      normal = normalize(vec3(-gradient.x, 1.0, -gradient.y));
+    vec2 gradient = rippleGradient(vAbsoluteXZ, flow, wind, energy, seed);
+
+    // Mid-energy rivers need working volume before they earn white foam.
+    // Two analytic, flow-aligned slopes create broken riffle/boil facets;
+    // unlike colour bands, these respond to light and never trace the banks.
+    if (vFlowing > 0.5 && energy > 0.16) {
+      vec2 flowDirection = normalize(flow + vec2(0.00001, 0.0));
+      vec2 acrossDirection = vec2(-flowDirection.y, flowDirection.x);
+      float work = smoothstep(0.16, 0.72, energy);
+      float alongPhase = dot(vAbsoluteXZ, flowDirection) * mix(0.16, 0.38, energy)
+        - uTime * (1.0 + energy * 1.8) + seed * 4.1;
+      float acrossPhase = dot(vAbsoluteXZ, acrossDirection) * mix(0.22, 0.48, energy)
+        + sin(alongPhase * 0.47) * 1.3;
+      gradient += flowDirection * cos(alongPhase) * work * (0.045 + energy * 0.13);
+      gradient += acrossDirection * cos(acrossPhase) * work * (0.025 + energy * 0.07);
     }
+    gradient = clamp(gradient, vec2(-2.0), vec2(2.0))
+      * (1.0 + vTurbulence * 0.62) * detailLod;
+    normal = normalize(vec3(-gradient.x, 1.0, -gradient.y));
   }
 
   // ── VISUAL DEPTH, SEPARATED FROM RAW BATHYMETRY ──
@@ -338,11 +378,21 @@ void main() {
     min(3.0 + shoreDist * 0.022, 14.0), offshore);
 
   vec3 colour = palette(kind, visualDepth, turbidity);
+
+  // Geometry supplies the cheapest and most important structure signal.
+  // Give its crest/trough enough tonal separation to cross a palette rung,
+  // while broad random variation recedes into a supporting role.
+  float bodyTone = vSurfaceWave * mix(0.035, 0.13, vSurfaceEnergy)
+    * mix(1.0, 1.18, vFlowing);
+  float shoalCrest = (1.0 - vFlowing) * vShoal
+    * smoothstep(0.34, 0.94, vSurfaceWave) * 0.075;
+  colour *= 1.0 + bodyTone + shoalCrest;
+
   float grain = 0.5;
   if (nearWater) {
     grain = valueNoise(vAbsoluteXZ * mix(0.28, 0.055, energy)
       + flow * uTime * mix(0.12, 0.55, clamp(length(flow), 0.0, 1.0)));
-    colour *= 1.0 + (grain - 0.5) * 0.14 * detailFade;
+    colour *= 1.0 + (grain - 0.5) * 0.14 * detailLod;
     // ── STREAKS: LONG WITH THE CURRENT, SHORT ACROSS IT ──
     // The single strongest read a river has — elongated luminance lanes
     // sliding downstream — and on standing water the same term, steered by
@@ -358,7 +408,7 @@ void main() {
       acrossStreak * 0.5 + seed * 9.0));
     float streakAmp = mix(smoothstep(3.0, 10.0, uWind.z) * 0.05,
       (0.05 + energy * 0.06), vFlowing);
-    colour *= 1.0 + (streak - 0.5) * streakAmp * detailFade;
+    colour *= 1.0 + (streak - 0.5) * streakAmp * detailLod;
   }
   // ── A FLAT FIELD DOES NOT SURVIVE THE QUANTISER ──
   //
@@ -378,7 +428,7 @@ void main() {
   // ribbon for kilometres, which is the same quantiser trap the sea fell
   // into, only narrower. Half, because a river's width gives the dither less
   // room to spread a threshold than open water has.
-  colour *= 1.0 + (broad - 0.5) * 0.16 * mix(1.0, 0.5, vFlowing);
+  colour *= 1.0 + (broad - 0.5) * 0.10 * mix(1.0, 0.5, vFlowing);
 
   // ── LIGHT FROM THE SKY, NOT ONLY THE SUN VECTOR ──
   // The daylight factor follows the sun's elevation: dusk rolls the water
@@ -400,7 +450,7 @@ void main() {
     // winking rides structure that already moves with the water.
     float glint = pow(max(0.0, dot(reflect(-lightDirection, normal), viewDirection)), 9.0);
     float sparkle = 0.55 + 0.9 * smoothstep(0.45, 0.85, grain);
-    colour += vec3(1.0, 0.9, 0.7) * glint * sparkle * 0.10 * daylight * detailFade;
+    colour += vec3(1.0, 0.9, 0.7) * glint * sparkle * 0.11 * daylight * detailLod;
   }
 
   // ── FOAM IS PAID FOR ONLY WHERE FOAM CAN EXIST ──
@@ -410,7 +460,7 @@ void main() {
   // with the derivative normals above is the difference the frame counter
   // was reporting between the hydro sea and the legacy plane's flat colour.
   bool foamZone = vBreaker > 0.02 || vTurbulence > 0.01 || uRain > 0.05
-    || geometryField.g < 7.0 || uWind.z > 9.5
+    || geometryField.g < 22.0 || uWind.z > 9.5
     // A mid-energy reach earns entry for BOIL — mottling, not white — and a
     // shoaling crest for its spilling top. Both are cheap and both are the
     // texture that made "the river lacks detail" true.
@@ -422,28 +472,23 @@ void main() {
     vec2 crossFlow = vec2(-flowDirection.y, flowDirection.x);
     float downstream = dot(vAbsoluteXZ, flowDirection);
     float across = dot(vAbsoluteXZ, crossFlow);
-    // ── FOAM IS CAUSAL: IT FORMS AT A DISTURBANCE AND RIDES THE CURRENT ──
-    // The energy that gates froth is the maximum of the energy HERE and the
-    // energy a little UPSTREAM, decaying with distance — so white water starts
-    // at the drop that causes it, trails below it for a few tens of metres,
-    // and dies away, instead of switching off at the exact texel the slope
-    // relaxes. Real foam outlives its rapid; painted foam should too.
-    vec2 uvPerMetre = uHydroTexel / max(uFieldMeters, vec2(0.01));
-    float up1 = texture2D(uHydroDynamics, vHydroUv - flowDirection * 14.0 * uvPerMetre).w;
-    float up2 = texture2D(uHydroDynamics, vHydroUv - flowDirection * 34.0 * uvPerMetre).w;
-    float causalEnergy = max(energy, max(up1 * 0.75, up2 * 0.5));
+    // Reach energy already carries a distance-based downstream memory from
+    // build-tile. Foam remains causal and persistent without two more texture
+    // reads in every rapid fragment.
+    float causalEnergy = energy;
     float energyGate = smoothstep(0.55, 0.82, causalEnergy);
     float foamStreak = valueNoise(vec2(downstream * 0.16 - uTime * (0.72 + energy * 1.1),
       across * 0.31 + seed * 13.0));
     float riverFoam = vFlowing * energyGate
-      * smoothstep(0.66, 0.9, foamStreak + grain * 0.12) * 0.6;
+      * smoothstep(0.64, 0.89, foamStreak + grain * 0.12) * 0.72;
     // ── BOIL: THE TEXTURE OF WATER THAT IS WORKING BUT NOT BREAKING ──
     // Below the white-foam threshold a reach still churns; that reads as
     // luminance mottling riding the same advected streak field the foam
     // uses, never as white. This is what stands between "calm ribbon" and
     // "rapids" — the middle of the river's expressive range.
-    float boil = vFlowing * smoothstep(0.22, 0.5, causalEnergy) * (1.0 - energyGate);
-    colour *= 1.0 + (foamStreak - 0.5) * boil * 0.2 * detailFade;
+    float boil = vFlowing * smoothstep(0.18, 0.5, causalEnergy) * (1.0 - energyGate);
+    float workingWater = (foamStreak - 0.5) * 0.74 + (grain - 0.5) * 0.26;
+    colour *= 1.0 + workingWater * boil * 0.30 * detailLod;
     // Breakers: crests inside the narrow depth band, spatially fragmented so
     // the surf zone is broken white patches rather than a shoreline outline.
     float crestPick = smoothstep(0.6, 0.92, vWaveCrest);
@@ -456,21 +501,22 @@ void main() {
     // the breakers so the pre-surf stays broken patches, and by depth so
     // open-water crests never wear it.
     float spill = (1.0 - vFlowing) * smoothstep(0.78, 0.98, vWaveCrest)
-      * smoothstep(6.0, 2.2, geometryField.a) * fragmentNoise * 0.35;
+      * (1.0 - smoothstep(2.2, 6.0, geometryField.a)) * fragmentNoise * 0.35;
     // Residual surf-zone foam: sparse flecks — PULSED by the shore wave, so
     // the waterline breathes with the crests that feed it. The floor keeps
     // the trough from wiping the zone clean; a static fringe and a bare
     // shore are both wrong.
     float lapPulse = 0.35 + 0.65 * smoothstep(-0.2, 0.9, vShorePhase);
+    float shoreFoamWidth = mix(7.0, 24.0, energy) * max(0.05, uShoreFade);
     float lappingFoam = (1.0 - vFlowing)
-      * (1.0 - smoothstep(0.2, mix(1.3, 4.8, energy) * max(0.05, uShoreFade), shoreDist))
-      * smoothstep(0.74, 0.9, valueNoise(vAbsoluteXZ * 0.5 + vec2(0.0, uTime * 0.22)))
-      * lapPulse * 0.5;
+      * (1.0 - smoothstep(1.0, shoreFoamWidth, shoreDist))
+      * smoothstep(0.70, 0.88, valueNoise(vAbsoluteXZ * 0.18 + vec2(0.0, uTime * 0.22)))
+      * lapPulse * 0.46;
     float whitecap = (1.0 - vFlowing) * smoothstep(9.5, 17.0, uWind.z)
       * energy * crestPick * fragmentNoise * 0.5;
     float rainPocks = smoothstep(0.42, 0.9, valueNoise(vAbsoluteXZ * 0.72 - uTime * 1.8)) * uRain;
     float foam = clamp((lappingFoam + riverFoam + breakerFoam * 0.8 + spill
-      + whitecap + rainPocks * 0.14) * uFoamStrength, 0.0, 0.75) * detailFade;
+      + whitecap + rainPocks * 0.14) * uFoamStrength, 0.0, 0.82) * foamLod;
     // Foam takes the scene's light too — white paint at midnight is a bug.
     vec3 foamColour = vec3(0.84, 0.9, 0.88) * mix(0.14, 1.0, daylight);
     colour = mix(colour, foamColour, foam);
@@ -493,12 +539,12 @@ void main() {
       float rigSpeed = length(uRig.zw);
       float sub = smoothstep(0.02, 0.55, uRigWade);
       // Churn: the displaced collar at the hull, wider and whiter with speed.
-      float churn = smoothstep(5.0, 1.2, rigDist) * (0.3 + min(rigSpeed, 8.0) * 0.09);
+      float churn = (1.0 - smoothstep(1.2, 5.0, rigDist)) * (0.3 + min(rigSpeed, 8.0) * 0.09);
       // Rings: crests expanding from the hull, dying with distance. Fordings
       // are slow, so the rings are what read; at speed the arms take over.
       float ringWave = sin(rigDist * 2.1 - uTime * 5.5);
       float rings = smoothstep(0.55, 0.95, ringWave)
-        * smoothstep(16.0, 3.0, rigDist) * 0.32
+        * (1.0 - smoothstep(3.0, 16.0, rigDist)) * 0.32
         * (1.0 - smoothstep(2.0, 6.0, rigSpeed));
       // Arms: two trailing streaks behind the velocity, the pixel-art cousin
       // of a Kelvin wake. Only while moving; fragmented by the water's own
@@ -508,11 +554,11 @@ void main() {
         vec2 vDir = uRig.zw / rigSpeed;
         float behind = dot(toHere, -vDir);
         float lateral = abs(dot(toHere, vec2(-vDir.y, vDir.x)));
-        arms = smoothstep(2.2, 0.6, abs(lateral - behind * 0.38))
-          * smoothstep(0.5, 2.5, behind) * smoothstep(24.0, 6.0, behind)
+        arms = (1.0 - smoothstep(0.6, 2.2, abs(lateral - behind * 0.38)))
+          * smoothstep(0.5, 2.5, behind) * (1.0 - smoothstep(6.0, 24.0, behind))
           * smoothstep(0.35, 0.7, grain) * 0.45;
       }
-      float wake = clamp((churn + rings + arms) * sub, 0.0, 0.8) * detailFade;
+      float wake = clamp((churn + rings + arms) * sub, 0.0, 0.8) * foamLod;
       vec3 wakeFoam = vec3(0.84, 0.9, 0.88) * mix(0.14, 1.0, daylight);
       colour = mix(colour, wakeFoam, wake);
     }

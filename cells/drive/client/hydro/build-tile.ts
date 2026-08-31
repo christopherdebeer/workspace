@@ -291,11 +291,37 @@ function profileEnergy(profile: Float32Array): Float32Array {
     const run = along[b] - along[a];
     const drop = profile[a * 3 + 2] - profile[b * 3 + 2];
     const slope = run > 1 ? Math.max(0, drop) / run : 0;
-    e[i] = clamp(Math.sqrt(slope / FULL_AT), 0, 1);
+    const slopeEnergy = clamp(Math.sqrt(slope / FULL_AT), 0, 1);
+
+    // A hard bend produces working water even without a steep DEM profile:
+    // pressure piles up at the outside bank, the inner lane slackens, and the
+    // reach boils before it necessarily turns white. Curvature is deliberately
+    // capped below the foam threshold; grade still owns actual whitewater.
+    let bendEnergy = 0;
+    if (i > 0 && i + 1 < n) {
+      const ax = profile[i * 3] - profile[(i - 1) * 3];
+      const az = profile[i * 3 + 1] - profile[(i - 1) * 3 + 1];
+      const bx = profile[(i + 1) * 3] - profile[i * 3];
+      const bz = profile[(i + 1) * 3 + 1] - profile[i * 3 + 1];
+      const al = Math.hypot(ax, az) || 1, bl = Math.hypot(bx, bz) || 1;
+      const cross = Math.abs((ax / al) * (bz / bl) - (az / al) * (bx / bl));
+      bendEnergy = clamp(cross * 0.34, 0, 0.34);
+    }
+    e[i] = Math.max(slopeEnergy, bendEnergy);
   }
   for (let pass = 0; pass < 2; pass++) {
     const c = e.slice();
     for (let i = 1; i < n - 1; i++) e[i] = (c[i - 1] + c[i] * 2 + c[i + 1]) * 0.25;
+  }
+
+  // Turbulence does not stop at the final steep station. Carry the settled
+  // reach energy downstream with a distance-based decay: short after riffles,
+  // longer after true rapids. This moves the causal memory to the CPU and lets
+  // the fragment shader remove its two upstream texture reads.
+  for (let i = 1; i < n; i++) {
+    const ds = Math.max(0, along[i] - along[i - 1]);
+    const persistenceM = 26 + e[i - 1] * 72;
+    e[i] = Math.max(e[i], e[i - 1] * Math.exp(-ds / persistenceM));
   }
   return e;
 }

@@ -114,25 +114,35 @@ function waterGeometry(field: HydroTileField, segments: number): THREE.BufferGeo
   const rect = field.waterBounds ?? field.bounds;
   const spanX = Math.max(Number.EPSILON, field.bounds.maxX - field.bounds.minX);
   const spanZ = Math.max(Number.EPSILON, field.bounds.maxZ - field.bounds.minZ);
+  const rectSpanX = Math.max(Number.EPSILON, rect.maxX - rect.minX);
+  const rectSpanZ = Math.max(Number.EPSILON, rect.maxZ - rect.minZ);
+
+  // Keep approximately the same cell budget as the old square grid, but spend
+  // it in metres rather than equally per axis. A 200m x 2.4km river used to
+  // get 32 cells both ways: exquisite cross-channel sampling and 75m steps
+  // downstream. The anisotropic grid is roughly square in world space
+  // (~9 x 111 for that reach), restoring longitudinal volume at no meaningful
+  // triangle or fragment cost. Square ocean tiles remain 32 x 32.
+  const budget = segments * segments;
+  const aspect = rectSpanX / rectSpanZ;
+  const segmentsX = Math.round(clamp(Math.sqrt(budget * aspect), 4, 128));
+  const segmentsZ = Math.round(clamp(Math.sqrt(budget / aspect), 4, 128));
+
   // ── A CELL IS TESTED OVER ITS WHOLE SPAN, NOT AT ITS CORNERS ──
   //
-  // A lattice cell is 75m at the defaults and a field texel 18.75m, so a cell
-  // covers about four texels each way — and a ten-metre river crossing one
-  // through the middle touches none of its four corners. Corner sampling drops
-  // exactly the features this system exists to draw. So each cell asks the
-  // texels it actually spans, with a one-texel margin, which is also all the
-  // margin the shoreline needs: the fragment cuts at half coverage and
-  // coverage reaches zero within a texel of the water's edge.
+  // A lattice cell can cover several field texels and a ten-metre river may
+  // cross through its middle without touching a corner. Each anisotropic cell
+  // therefore asks every texel it spans, plus one texel of shoreline margin.
   const fieldIx = (x: number): number =>
     field.gutter + ((x - field.bounds.minX) / spanX) * (field.resolution - 1);
   const fieldIz = (z: number): number =>
     field.gutter + ((z - field.bounds.minZ) / spanZ) * (field.resolution - 1);
-  const keep = new Uint8Array(segments * segments);
-  for (let j = 0; j < segments; j++) for (let i = 0; i < segments; i++) {
-    const x0 = rect.minX + (i / segments) * (rect.maxX - rect.minX);
-    const x1 = rect.minX + ((i + 1) / segments) * (rect.maxX - rect.minX);
-    const z0 = rect.minZ + (j / segments) * (rect.maxZ - rect.minZ);
-    const z1 = rect.minZ + ((j + 1) / segments) * (rect.maxZ - rect.minZ);
+  const keep = new Uint8Array(segmentsX * segmentsZ);
+  for (let j = 0; j < segmentsZ; j++) for (let i = 0; i < segmentsX; i++) {
+    const x0 = rect.minX + (i / segmentsX) * rectSpanX;
+    const x1 = rect.minX + ((i + 1) / segmentsX) * rectSpanX;
+    const z0 = rect.minZ + (j / segmentsZ) * rectSpanZ;
+    const z1 = rect.minZ + ((j + 1) / segmentsZ) * rectSpanZ;
     const ix0 = Math.max(0, Math.floor(fieldIx(x0)) - 1);
     const ix1 = Math.min(field.width - 1, Math.ceil(fieldIx(x1)) + 1);
     const iz0 = Math.max(0, Math.floor(fieldIz(z0)) - 1);
@@ -143,23 +153,23 @@ function waterGeometry(field: HydroTileField, segments: number): THREE.BufferGeo
         if (field.geometry[(iz * field.width + ix) * 4] > 0.005) { any = true; break; }
       }
     }
-    if (any) keep[j * segments + i] = 1;
+    if (any) keep[j * segmentsX + i] = 1;
   }
   const pos: number[] = [], uvs: number[] = [], idx: number[] = [];
   const vert = new Map<number, number>();
   const at = (i: number, j: number): number => {
-    const k = j * (segments + 1) + i;
+    const k = j * (segmentsX + 1) + i;
     let v = vert.get(k);
     if (v === undefined) {
       v = pos.length / 3;
-      pos.push(i / segments - 0.5, 0, j / segments - 0.5);
-      uvs.push(i / segments, 1 - j / segments);
+      pos.push(i / segmentsX - 0.5, 0, j / segmentsZ - 0.5);
+      uvs.push(i / segmentsX, 1 - j / segmentsZ);
       vert.set(k, v);
     }
     return v;
   };
-  for (let j = 0; j < segments; j++) for (let i = 0; i < segments; i++) {
-    if (!keep[j * segments + i]) continue;
+  for (let j = 0; j < segmentsZ; j++) for (let i = 0; i < segmentsX; i++) {
+    if (!keep[j * segmentsX + i]) continue;
     const a = at(i, j), b = at(i + 1, j), c = at(i, j + 1), d = at(i + 1, j + 1);
     idx.push(a, c, b, b, c, d);
   }

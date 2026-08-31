@@ -220,8 +220,11 @@ function page(): string {
     + range('amplitude','WAVE AMP',0,3,.01,1) + range('length','WAVE LENGTH',.2,3,.01,1)
     + range('ripple','RIPPLE',0,3,.01,1) + range('foam','FOAM',0,3,.01,1) + range('shore','SHORE FADE',.2,3,.01,1)
     + '</div><div class="section"><div class="st">SAMPLING</div>'
-    + '<div class="row wide"><label>FIELD px</label><select id="field"><option>32</option><option>64</option><option selected>128</option><option>256</option></select></div>'
-    + '<div class="row wide"><label>MESH seg</label><select id="mesh"><option>8</option><option>16</option><option selected>32</option><option>64</option></select></div>'
+    // The 600m lab at 32/8 has the same physical sampling as a production
+    // 2.4km tile at 128/32: 18.75m field texels and 75m ocean mesh cells.
+    // Default to that honest view; higher settings remain useful microscopes.
+    + '<div class="row wide"><label>FIELD px</label><select id="field"><option selected value="32">32 · PROD SCALE</option><option>64</option><option>128</option><option>256</option></select></div>'
+    + '<div class="row wide"><label>MESH seg</label><select id="mesh"><option selected value="8">8 · PROD SCALE</option><option>16</option><option>32</option><option>64</option></select></div>'
     + '<label class="check"><input id="wire" type="checkbox"> water wireframe</label>'
     + '<label class="check"><input id="ground" type="checkbox" checked> terrain visible</label></div></aside>'
     + '<div class="status" id="status">building hydro fixture…</div></body>';
