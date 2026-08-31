@@ -1189,13 +1189,34 @@ const climField = new ClimateField(climEnv);
  * private window, a browser with storage blocked — any of them must give the
  * default rather than an exception in the module's first statements.
  */
+/**
+ * ── WHICH WATER SYSTEM BOOTS, AND WHY A STORED ZERO MEANS NOTHING ──
+ *
+ * FIELD is the default now. Getting there is not a one-character change,
+ * because `saveDials` persists the WHOLE rack on any change: every player who
+ * has ever touched any dial has `water: 0` in their record, written when
+ * LEGACY was the default and not because anyone chose it. Read literally,
+ * flipping the default would leave exactly the people who use the game most
+ * on the old system forever.
+ *
+ * So it is a record migration, like the TIME remap and the PALETTE shift
+ * before it. Below v4 the stored value cannot be told from "never touched" and
+ * is discarded; from v4 on it is a real choice and is honoured, including a
+ * deliberate 0. The one case this gets wrong is somebody who tried FIELD and
+ * went back to LEGACY before v4 — they get it once more, and one dial flip to
+ * undo. That is the right way round: the alternative is a default that never
+ * reaches anybody.
+ *
+ * `?hydro=0` and `?hydro=1` still win over all of it, for A/B shots.
+ */
+const waterFromDials = (rec: Record<string, number>): boolean =>
+  ((rec['v'] ?? 1) < 4 ? true : rec['water'] !== 0);
 const HYDRO_ON = ((): boolean => {
   const q = /[?&]hydro=([01])/.exec(location.search);
   if (q) return q[1] === '1';
   try {
-    const rec = JSON.parse(localStorage.getItem('drive.dials') ?? '{}') as Record<string, number>;
-    return rec['water'] === 1;
-  } catch { return false; }
+    return waterFromDials(JSON.parse(localStorage.getItem('drive.dials') ?? '{}') as Record<string, number>);
+  } catch { return true; }
 })();
 /** One mask per cover tile, built once and expired when the datum moves —
  *  the height gate is relative to the datum, so a measurement that shifts by
@@ -32838,7 +32859,7 @@ const DIAL_GROUPS: DialGroup[] = [
        * second or two: that is the point of putting it on a dial rather than
        * in a query string. Set it, look, set it back, look again.
        */
-      dial('water', 'WATER', ['LEGACY', 'FIELD'], 0, (i) => {
+      dial('water', 'WATER', ['LEGACY', 'FIELD'], 1, (i) => {
         if (i === (HYDRO_ON ? 1 : 0)) return;         // already what is running
         saveDials();
         // …and drop any ?hydro= from the URL, or the flag it carries would
@@ -33083,7 +33104,7 @@ function saveDials(): void {
   try {
     // `v` rides along with the dial values so a future reordering can tell a
     // migrated record from a stale one, the way this one had to.
-    const rec: Record<string, number> = { v: 3 };
+    const rec: Record<string, number> = { v: 4 };
     for (const d of DIALS) rec[d.key] = d.at;
     localStorage.setItem('drive.dials', JSON.stringify(rec));
   } catch { /* fine */ }
@@ -33104,6 +33125,10 @@ function loadDials(): void {
     // v3: PALETTE grew '1' (true 1-bit) at the FRONT, so every stored index
     // names the step one coarser than the player chose. Shift once.
     if (ver < 3 && Number.isInteger(raw['pal'])) raw['pal'] = raw['pal'] + 1;
+    // v4: FIELD is the default water system. A pre-v4 `water` cannot be told
+    // from unset (see waterFromDials), so the rack is pointed at whatever
+    // actually booted rather than at a zero nobody chose.
+    if (ver < 4) raw['water'] = HYDRO_ON ? 1 : 0;
     for (const d of DIALS) if (Number.isInteger(raw[d.key])) d.at = clamp(raw[d.key], 0, d.opts.length - 1);
     // …except a clock the URL asked for. ?time= is there to make a lighting
     // comparison reproducible, and a saved dial silently overruling it makes
