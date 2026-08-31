@@ -22,6 +22,9 @@
  */
 
 export type DialSpec =
+  /** A heading. Everything after it folds under it, until the next one. Not a
+   *  value: a section never appears in `values()` or on the clipboard. */
+  | { id: string; label: string; kind: 'section'; open?: boolean }
   | { id: string; label: string; kind: 'range'; min: number; max: number; step: number; value: number }
   | { id: string; label: string; kind: 'number'; step?: number; value: number }
   | { id: string; label: string; kind: 'select'; options: readonly string[]; value: string }
@@ -59,16 +62,38 @@ export interface DialsOptions {
 }
 
 const KEY = (slug: string): string => `drive.lab.${slug}.dials`;
+/** What is folded away. Separate from the VALUES key on purpose: how a panel
+ *  is arranged is a property of this device and this pair of eyes, and it must
+ *  never ride along on the clipboard when the tuning travels to a commit. */
+const FOLD = (slug: string): string => `drive.lab.${slug}.fold`;
 
 function styleOnce(): void {
   if (document.getElementById('lab-dials-style')) return;
   const s = document.createElement('style');
   s.id = 'lab-dials-style';
   s.textContent = `
-    .lab-dials { position: fixed; top: 0; left: 0; z-index: 40; padding: 9px 11px 8px;
-      background: rgba(8,14,16,.9); border-right: 1px solid #24343a; border-bottom: 1px solid #24343a;
-      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: #d6e2e4;
-      max-width: 272px; max-height: 88vh; overflow: auto; }
+    /* ── A COLUMN, NOT A SCROLLING BLOCK ──
+       The panel was one overflowing box with the buttons at the bottom OF the
+       scroll, so a liberal set of dials pushed COPY, PASTE and RESET past the
+       end of it: the tuning could be turned and then not taken out, which is
+       the one thing this panel must never do. Head and foot are pinned now and
+       only the dials scroll. */
+    .lab-dials { position: fixed; top: 0; left: 0; z-index: 40; display: flex; flex-direction: column;
+      width: 272px; max-width: 78vw; max-height: 100vh;
+      background: rgba(8,14,16,.93); border-right: 1px solid #24343a; border-bottom: 1px solid #24343a;
+      font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: #d6e2e4; }
+    .lab-dials .head { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between;
+      gap: 8px; padding: 7px 11px; border-bottom: 1px solid #24343a; cursor: pointer;
+      letter-spacing: 2px; color: #7fd0c4; user-select: none; }
+    .lab-dials .head small { color: #4f6469; letter-spacing: 1px; }
+    .lab-dials .body { flex: 1 1 auto; overflow: auto; padding: 3px 11px 2px; }
+    .lab-dials .foot { flex: 0 0 auto; padding: 7px 11px 8px; border-top: 1px solid #24343a; }
+    .lab-dials[data-shut="1"] .body, .lab-dials[data-shut="1"] .foot { display: none; }
+    .lab-dials .sh { display: flex; align-items: center; justify-content: space-between;
+      margin: 9px 0 2px; padding-bottom: 2px; border-bottom: 1px solid #1b282c;
+      color: #6f8285; letter-spacing: 2px; cursor: pointer; user-select: none; }
+    .lab-dials .sec[data-shut="1"] .rows { display: none; }
+    .lab-dials .sec[data-shut="1"] .sh { color: #4f6469; border-bottom-style: dashed; }
     .lab-dials .d { display: flex; align-items: center; justify-content: space-between;
       gap: 10px; margin: 4px 0; letter-spacing: 1px; color: #9fb2b5; }
     .lab-dials .d > span { white-space: nowrap; }
@@ -76,7 +101,7 @@ function styleOnce(): void {
       border: 1px solid #2b3d43; font: inherit; width: 118px; }
     .lab-dials input[type=checkbox] { width: auto; }
     .lab-dials .v { color: #7fd0c4; min-width: 40px; text-align: right; font-variant-numeric: tabular-nums; }
-    .lab-dials .bar { display: flex; gap: 6px; margin-top: 9px; }
+    .lab-dials .bar { display: flex; gap: 6px; }
     .lab-dials button { flex: 1; background: #10201f; color: #a9dcd2; border: 1px solid #2f5a52;
       font: inherit; letter-spacing: 1px; padding: 4px 0; cursor: pointer; }
     .lab-dials button:hover { background: #16302c; }
@@ -92,10 +117,88 @@ export function createDials(opts: DialsOptions): Dials {
   const listeners: Array<() => void> = [];
   const readouts = new Map<string, HTMLElement>();
 
+  // ── HOW THE PANEL IS FOLDED, REMEMBERED PER LAB ──
+  //
+  // Being liberal with the dials is the bargain (see the header), and the cost
+  // of keeping it is that a panel can be taller than the screen — the flora
+  // lab is thirty-one dials. So the answer is not fewer dials, it is FOLDING:
+  // the whole panel down to its title bar, and each section down to its
+  // heading. Both survive a reload, because a lab is a thing you refresh
+  // constantly and re-folding it every time is its own tax.
+  let fold: { shut?: boolean; secs?: Record<string, boolean> } = {};
+  try { fold = JSON.parse(localStorage.getItem(FOLD(opts.slug)) ?? '{}') as typeof fold; } catch { /* fine */ }
+  const saveFold = (): void => {
+    try { localStorage.setItem(FOLD(opts.slug), JSON.stringify(fold)); } catch { /* private mode */ }
+  };
+
+  const head = document.createElement('div');
+  head.className = 'head';
+  const headName = document.createElement('b');
+  headName.textContent = opts.slug.toUpperCase();
+  const headHint = document.createElement('small');
+  head.append(headName, headHint);
+  const body = document.createElement('div');
+  body.className = 'body';
+  const foot = document.createElement('div');
+  foot.className = 'foot';
+  root.append(head, body, foot);
+
+  const paintFold = (): void => {
+    const shut = !!fold.shut;
+    root.dataset.shut = shut ? '1' : '0';
+    headHint.textContent = shut ? '▸ H' : '▾ H';
+    // The page can lay itself out around the panel: a lab that offsets its
+    // content by a hard 288px keeps that gutter after the panel is folded,
+    // which is most of the reason folding it was worth doing.
+    document.documentElement.style.setProperty('--dials-w', shut ? '0px' : '272px');
+  };
+  head.addEventListener('click', () => { fold.shut = !fold.shut; saveFold(); paintFold(); });
+  // H, unless the caret is in a field — a lab with a text input should not
+  // vanish because someone typed a letter into it.
+  addEventListener('keydown', (e) => {
+    if (e.key !== 'h' && e.key !== 'H') return;
+    const t = e.target as HTMLElement | null;
+    if (t && /^(INPUT|SELECT|TEXTAREA)$/.test(t.tagName)) return;
+    fold.shut = !fold.shut;
+    saveFold();
+    paintFold();
+  });
+
+  /** Rows land here — the panel body, or the open section most recently
+   *  declared. */
+  let rows: HTMLElement = body;
+
   const inputOf = (id: string): HTMLInputElement | HTMLSelectElement | null =>
     document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
 
   for (const d of spec) {
+    if (d.kind === 'section') {
+      const sec = document.createElement('div');
+      sec.className = 'sec';
+      const sh = document.createElement('div');
+      sh.className = 'sh';
+      const name = document.createElement('span');
+      name.textContent = d.label;
+      const chev = document.createElement('span');
+      sh.append(name, chev);
+      const inner = document.createElement('div');
+      inner.className = 'rows';
+      sec.append(sh, inner);
+      const paint = (): void => {
+        const shut = fold.secs?.[d.id] ?? !(d.open ?? true);
+        sec.dataset.shut = shut ? '1' : '0';
+        chev.textContent = shut ? '▸' : '▾';
+      };
+      sh.addEventListener('click', () => {
+        (fold.secs ??= {})[d.id] = !(fold.secs?.[d.id] ?? !(d.open ?? true));
+        saveFold();
+        paint();
+      });
+      paint();
+      body.appendChild(sec);
+      rows = inner;
+      continue;
+    }
     const row = document.createElement('label');
     row.className = 'd';
     const name = document.createElement('span');
@@ -129,10 +232,11 @@ export function createDials(opts: DialsOptions): Dials {
       readouts.set(d.id, v);
       row.appendChild(v);
     }
-    root.appendChild(row);
+    rows.appendChild(row);
   }
 
-  const ids = [...spec.map((d) => d.id), ...(opts.adopt ?? [])];
+  const ids = [...spec.filter((d) => d.kind !== 'section').map((d) => d.id),
+    ...(opts.adopt ?? [])];
 
   const values = (): DialValues => {
     const out: DialValues = {};
@@ -233,12 +337,13 @@ export function createDials(opts: DialsOptions): Dials {
   button('RESET', () => {
     try { localStorage.removeItem(KEY(opts.slug)); } catch { /* fine */ }
     const back: DialValues = {};
-    for (const d of spec) back[d.id] = d.value;
+    for (const d of spec) if (d.kind !== 'section') back[d.id] = d.value;
     set(back);
     say('back to defaults');
   });
-  root.append(bar, msg);
+  foot.append(bar, msg);
   (opts.mount ?? document.body).appendChild(root);
+  paintFold();
 
   // Adopted controls exist in the lab's own markup, so they are wired after
   // the panel is mounted rather than as it is built.

@@ -41,7 +41,8 @@ export async function startWeatherLab(): Promise<void> {
       font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
     #wrap { position: fixed; inset: 0; display: grid; place-items: center; }
     canvas { image-rendering: pixelated; border: 1px solid #24343a; }
-    #status { position: fixed; left: 0; bottom: 0; padding: 8px 12px; white-space: pre;
+    #status { position: fixed; left: var(--dials-w, 272px); bottom: 0;
+      padding: 8px 12px; white-space: pre;
       background: rgba(8,14,16,.9); border-top: 1px solid #24343a; letter-spacing: 1px; }
     a.back { position: fixed; right: 8px; bottom: 8px; color: #6f8285; text-decoration: none;
       letter-spacing: 2px; }`;
@@ -63,13 +64,16 @@ export async function startWeatherLab(): Promise<void> {
   const dials = createDials({
     slug: 'weather',
     spec: [
+      { id: 'sField', label: 'THE FIELD', kind: 'section' },
       { id: 'view', label: 'CHANNEL', kind: 'select', value: 'wet', options: CH },
       { id: 'cover', label: 'COVER', kind: 'range', min: 0, max: 1, step: 0.02, value: 0.55 },
       { id: 'rain', label: 'RAIN', kind: 'range', min: 0, max: 1, step: 0.02, value: 0.45 },
       { id: 'fog', label: 'FOG', kind: 'range', min: 0, max: 1, step: 0.02, value: 0.2 },
+      { id: 'sWind', label: 'WIND AND SKY', kind: 'section' },
       { id: 'wind', label: 'WIND m/s', kind: 'range', min: 0, max: 30, step: 0.5, value: 8 },
       { id: 'dir', label: 'WIND °', kind: 'range', min: 0, max: 359, step: 1, value: 45 },
       { id: 'day', label: 'DAYLIGHT', kind: 'range', min: 0, max: 1, step: 0.05, value: 1 },
+      { id: 'sTime', label: 'TIME', kind: 'section' },
       { id: 'dt', label: 'STEP s', kind: 'range', min: 0.05, max: 4, step: 0.05, value: 1 },
       { id: 'run', label: 'RUN', kind: 'toggle', value: true },
       { id: 'relief', label: 'HILLS m', kind: 'range', min: 0, max: 900, step: 10, value: 220 },

@@ -55,7 +55,8 @@ export async function startWorldLab(): Promise<void> {
   style.textContent = `
     body { margin: 0; background: #0b0f11; color: #d6e2e4;
       font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
-      padding: 24px 22px 40px 306px; }
+      padding: 24px 22px 40px calc(var(--dials-w, 272px) + 34px);
+      transition: padding-left .12s ease; }
     @media (max-width: 720px) { body { padding: 320px 16px 40px; } }
     h1 { font-size: 15px; letter-spacing: 3px; margin: 0 0 4px; }
     p.sub { color: #6f8285; margin: 0 0 18px; letter-spacing: 1px; max-width: 640px; }
@@ -90,9 +91,11 @@ export async function startWorldLab(): Promise<void> {
   const dials = createDials({
     slug: 'world',
     spec: [
+      { id: 'sGround', label: 'GROUND', kind: 'section' },
       { id: 'relief', label: 'RELIEF', kind: 'range', min: 0, max: 3, step: 0.05, value: DEFAULT_FIXTURE_TUNE.relief },
       { id: 'slope', label: 'SLOPE', kind: 'range', min: 0, max: 3, step: 0.05, value: DEFAULT_FIXTURE_TUNE.slope },
       { id: 'lift', label: 'LIFT m', kind: 'range', min: -200, max: 2600, step: 10, value: DEFAULT_FIXTURE_TUNE.lift },
+      { id: 'sBuilt', label: 'WHAT IS BUILT', kind: 'section' },
       { id: 'roadClass', label: 'CLASS', kind: 'select', options: FIXTURE_ROAD_CLASSES, value: DEFAULT_FIXTURE_TUNE.roadClass },
       { id: 'lanes', label: 'LANES', kind: 'range', min: 1, max: 6, step: 1, value: DEFAULT_FIXTURE_TUNE.lanes },
       { id: 'surface', label: 'SURFACE', kind: 'select', options: FIXTURE_SURFACES, value: DEFAULT_FIXTURE_TUNE.surface },
@@ -102,6 +105,7 @@ export async function startWorldLab(): Promise<void> {
       // The game's own vocabularies, not near-misses: `?time=DAY` is not a
       // TIME_MODE, so it silently selected CYCLE and every fixture opened at
       // half past five in the morning.
+      { id: 'sView', label: 'CONDITIONS', kind: 'section' },
       { id: 'time', label: 'TIME', kind: 'select',
         options: ['auto', 'DAWN', 'MORNING', 'NOON', 'AFTERNOON', 'DUSK', 'NIGHT', 'LIVE'], value: 'MORNING' },
       { id: 'cam', label: 'CAM', kind: 'select', options: ['chase', 'cab', 'top'], value: 'chase' },

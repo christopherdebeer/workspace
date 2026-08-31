@@ -228,13 +228,18 @@ export async function startFloraLab(): Promise<void> {
   style.textContent = `
     html, body { margin: 0; height: 100%; background: #0b0f11; color: #d6e2e4; overflow: hidden;
       font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
-    #panes { position: fixed; inset: 0 0 104px 288px; display: flex; flex-direction: column; }
+    /* The gutter follows the panel — see paintFold in lab-dials. Folding it
+       away is most of the point, and a hard 288px would keep the hole. */
+    #panes { position: fixed; inset: 0 0 104px calc(var(--dials-w, 272px) + 16px);
+      display: flex; flex-direction: column; transition: left .12s ease; }
     @media (max-width: 720px) { #panes { inset: 0 0 104px 0; } }
     #stand { flex: 1 1 62%; min-height: 200px; border-bottom: 1px solid #24343a; position: relative; }
     #stand canvas { display: block; width: 100%; height: 100%; image-rendering: pixelated; }
     #ladderWrap { flex: 0 0 38%; display: grid; place-items: center; overflow: hidden; }
     #ladder { max-width: 98%; max-height: 100%; }
-    #status { position: fixed; left: 0; right: 0; bottom: 0; padding: 8px 12px; white-space: pre;
+    /* Clear of the dials, and it moves when they fold — see paintFold. */
+    #status { position: fixed; left: var(--dials-w, 272px); right: 0; bottom: 0;
+      padding: 8px 12px; white-space: pre;
       background: rgba(8,14,16,.94); border-top: 1px solid #24343a; letter-spacing: 1px; }
     a.back { position: fixed; right: 8px; bottom: 8px; color: #6f8285; text-decoration: none;
       letter-spacing: 2px; }`;
@@ -265,6 +270,7 @@ export async function startFloraLab(): Promise<void> {
     slug: 'flora',
     spec: [
       // ── WHERE ──
+      { id: 'sWhere', label: 'WHERE', kind: 'section' },
       { id: 'lat', label: 'LATITUDE', kind: 'range', min: 0, max: 78, step: 0.5, value: 46 },
       { id: 'elev', label: 'ELEV m', kind: 'range', min: -50, max: 4500, step: 25, value: 700 },
       { id: 'moist', label: 'MOISTURE', kind: 'range', min: 0, max: 1, step: 0.02, value: 0.5 },
@@ -273,6 +279,7 @@ export async function startFloraLab(): Promise<void> {
         options: ['10', '20', '30', '40', '50', '60', '70', '90', '100'] },
       { id: 'top', label: 'COLUMN TOP m', kind: 'range', min: 800, max: 6000, step: 100, value: 4000 },
       // ── THE STAND ──
+      { id: 'sStand', label: 'THE STAND', kind: 'section' },
       { id: 'species', label: 'SPECIES', kind: 'select', value: 'mix', options: ['mix', ...KINDS] },
       { id: 'count', label: 'PLANTS', kind: 'range', min: 4, max: 700, step: 2, value: 190 },
       { id: 'patch', label: 'PATCH m', kind: 'range', min: 6, max: 140, step: 2, value: 46 },
@@ -290,6 +297,7 @@ export async function startFloraLab(): Promise<void> {
       { id: 'trunks', label: 'TRUNKS', kind: 'toggle', value: true },
       { id: 'grain', label: 'GRAIN x', kind: 'range', min: 0, max: 3, step: 0.05, value: 1 },
       // ── THE LOTTERY, WHICH IS WHAT THE STAND IS FOR ──
+      { id: 'sLottery', label: 'THE LOTTERY', kind: 'section' },
       { id: 'sizeMul', label: 'SIZE x', kind: 'range', min: 0.2, max: 3, step: 0.05, value: FLORA_TUNING.sizeMul },
       { id: 'oddAutumn', label: 'AUTUMN', kind: 'range', min: 0, max: 0.4, step: 0.005, value: FLORA_TUNING.oddAutumn },
       { id: 'oddSilver', label: 'SILVER', kind: 'range', min: 0, max: 0.5, step: 0.005, value: FLORA_TUNING.oddSilver },

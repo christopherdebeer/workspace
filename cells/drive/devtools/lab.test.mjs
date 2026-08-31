@@ -152,6 +152,60 @@ for (const lab of LABS) {
   await d.close();
 }
 
+// ── AND THE PANEL FITS ON THE SCREEN ─────────────────────────────
+// Being liberal with the dials is the bargain; the cost is a panel that can be
+// taller than the viewport. It used to be one scrolling box with COPY, PASTE
+// and RESET at the bottom OF the scroll — so on a short screen the tuning
+// could be turned and then not taken out, which defeats the whole point. Head
+// and foot are pinned now, and both folds are asserted here because neither is
+// visible in a screenshot of a lab that happens to be tall enough.
+{
+  const d = await openDrive({ pagePath: '/lab/flora', tag: 'lab-fold',
+    settle: 5000, bootTimeout: 45000 });
+  await d.page.setViewportSize({ width: 900, height: 560 });
+  await d.page.waitForTimeout(2500);
+
+  const reach = await d.page.evaluate(() => {
+    const bar = document.querySelector('.lab-dials .foot');
+    const r = bar.getBoundingClientRect();
+    return { inView: r.top >= 0 && r.bottom <= innerHeight,
+      buttons: [...bar.querySelectorAll('button')].map((b) => b.textContent) };
+  });
+  ok('the buttons stay reachable on a short viewport',
+    reach.inView && ['COPY', 'PASTE', 'RESET'].every((b) => reach.buttons.includes(b)), reach);
+
+  const secs = await d.page.evaluate(() =>
+    [...document.querySelectorAll('.lab-dials .sec .sh span:first-child')].map((s) => s.textContent));
+  ok('the dials are grouped into sections', secs.length >= 3, secs);
+
+  // Fold one section, reload, and it has to still be folded.
+  await d.page.evaluate((want) => {
+    const h = [...document.querySelectorAll('.lab-dials .sh')]
+      .find((x) => x.textContent.includes(want));
+    h.click();
+  }, secs[secs.length - 1]);
+  await d.page.waitForTimeout(300);
+  await d.page.reload({ waitUntil: 'domcontentloaded' });
+  await d.page.waitForTimeout(3500);
+  const stuck = await d.page.evaluate(() =>
+    [...document.querySelectorAll('.lab-dials .sec')].map((s) => s.dataset.shut));
+  ok('a folded section stays folded across a reload',
+    stuck.length >= 3 && stuck[stuck.length - 1] === '1' && stuck[0] === '0', stuck);
+
+  // …and the whole panel folds to its title bar, giving the page the gutter.
+  await d.page.keyboard.press('h');
+  await d.page.waitForTimeout(350);
+  const shut = await d.page.evaluate(() => ({
+    shut: document.querySelector('.lab-dials').dataset.shut,
+    gutter: getComputedStyle(document.documentElement).getPropertyValue('--dials-w').trim(),
+    bodyShown: getComputedStyle(document.querySelector('.lab-dials .body')).display,
+  }));
+  ok('H folds the whole panel and gives back the gutter',
+    shut.shut === '1' && shut.gutter === '0px' && shut.bodyShown === 'none', shut);
+  errors.push(...d.errors);
+  await d.close();
+}
+
 console.log(bad ? `\n${bad} FAILED` : '\nall good — every lab opens, and its tuning can leave');
 report(errors);
 if (bad) process.exitCode = 1;

@@ -53,13 +53,8 @@ export async function startMarksLab(): Promise<void> {
     html, body { margin: 0; height: 100%; background: #0b0f11; overflow: hidden;
       font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; color: #d6e2e4; }
     canvas { display: block; }
-    #ui { position: fixed; top: 0; left: 0; padding: 10px 12px; background: rgba(8,14,16,.86);
-      border-right: 1px solid #24343a; border-bottom: 1px solid #24343a; max-width: 260px; }
-    #ui label { display: flex; justify-content: space-between; gap: 10px; margin: 5px 0;
-      letter-spacing: 1px; color: #9fb2b5; }
-    #ui input, #ui select { background: #101a1d; color: #d6e2e4; border: 1px solid #2b3d43;
-      font: inherit; width: 116px; }
-    #status { position: fixed; left: 0; bottom: 0; padding: 8px 12px; white-space: pre;
+    #status { position: fixed; left: var(--dials-w, 272px); bottom: 0;
+      padding: 8px 12px; white-space: pre;
       background: rgba(8,14,16,.86); border-top: 1px solid #24343a; letter-spacing: 1px; }
     #atlas { position: fixed; right: 8px; top: 8px; border: 1px solid #24343a;
       image-rendering: pixelated; width: 168px; height: 168px; background: #14201f; }
@@ -82,11 +77,13 @@ export async function startMarksLab(): Promise<void> {
   const dials = createDials({
     slug: 'marks',
     spec: [
+      { id: 'sHand', label: 'THE HAND', kind: 'section' },
       { id: 'culture', label: 'CULTURE', kind: 'select', value: MARK_CULTURES[0].key,
         options: MARK_CULTURES.map((c) => c.key) },
       { id: 'density', label: 'DENSITY', kind: 'range', min: 0, max: 1, step: 0.02, value: 0.5 },
       { id: 'sigil', label: 'SIGIL', kind: 'range', min: 0, max: MARK_N - 1, step: 1, value: 3 },
       { id: 'tin', label: 'TIN', kind: 'range', min: 0, max: MARK_PALETTE.length - 1, step: 1, value: 1 },
+      { id: 'sPlace', label: 'PLACEMENT', kind: 'section' },
       { id: 'patchM', label: 'PATCH m', kind: 'range', min: 2, max: 12, step: 0.25, value: T.patchM },
       { id: 'bandLo', label: 'BAND LO m', kind: 'range', min: 0, max: 3, step: 0.05, value: T.bandLo },
       { id: 'bandHi', label: 'BAND HI m', kind: 'range', min: 0.6, max: 8, step: 0.1, value: T.bandHi },
@@ -95,6 +92,7 @@ export async function startMarksLab(): Promise<void> {
       { id: 'fadeMin', label: 'FADE', kind: 'range', min: 0, max: 1, step: 0.02, value: T.fadeMin },
       { id: 'fadeVar', label: 'FADE VAR', kind: 'range', min: 0, max: 1, step: 0.02, value: T.fadeVar },
       { id: 'jitter', label: 'JITTER', kind: 'range', min: 0, max: 1, step: 0.05, value: T.jitter },
+      { id: 'sLight', label: 'LIGHT AND WALL', kind: 'section' },
       { id: 'sun', label: 'SUN', kind: 'range', min: 5, max: 85, step: 1, value: 42 },
       { id: 'paint', label: 'PAINT', kind: 'color', value: '#e8e2d4' },
       { id: 'wall', label: 'WALL m', kind: 'range', min: 3, max: 14, step: 0.5, value: 6.2 },

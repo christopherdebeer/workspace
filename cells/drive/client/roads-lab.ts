@@ -32,7 +32,8 @@ export async function startRoadsLab(): Promise<void> {
       font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
     #wrap { position: fixed; inset: 0 0 96px 0; display: grid; place-items: center; }
     canvas { border: 1px solid #24343a; max-width: 94vw; }
-    #status { position: fixed; left: 0; bottom: 0; padding: 8px 12px; white-space: pre;
+    #status { position: fixed; left: var(--dials-w, 272px); bottom: 0;
+      padding: 8px 12px; white-space: pre;
       background: rgba(8,14,16,.9); border-top: 1px solid #24343a; letter-spacing: 1px; }
     a.back { position: fixed; right: 8px; bottom: 8px; color: #6f8285; text-decoration: none;
       letter-spacing: 2px; }`;
@@ -53,12 +54,14 @@ export async function startRoadsLab(): Promise<void> {
   const dials = createDials({
     slug: 'roads',
     spec: [
+      { id: 'sGround', label: 'THE GROUND', kind: 'section' },
       { id: 'grade', label: 'MAX GRADE', kind: 'range', min: 0.02, max: 0.3, step: 0.005, value: 0.15 },
       { id: 'relief', label: 'RELIEF m', kind: 'range', min: 0, max: 300, step: 5, value: 90 },
       { id: 'rough', label: 'ROUGHNESS', kind: 'range', min: 0, max: 30, step: 0.5, value: 7 },
       { id: 'across', label: 'CROSS-SLOPE', kind: 'range', min: 0, max: 1.2, step: 0.02, value: 0.35 },
       { id: 'len', label: 'LENGTH m', kind: 'range', min: 200, max: 3000, step: 50, value: 1200 },
       { id: 'seed', label: 'SEED', kind: 'range', min: 0, max: 99, step: 1, value: 3 },
+      { id: 'sCost', label: 'COST WEIGHTS', kind: 'section' },
       { id: 'wOff', label: 'W OFF', kind: 'range', min: 0, max: 4, step: 0.05, value: WEIGHTS.off },
       { id: 'wFlat', label: 'W FLAT', kind: 'range', min: 0, max: 4, step: 0.05, value: WEIGHTS.flat },
       { id: 'wGrade', label: 'W GRADE', kind: 'range', min: 0, max: 120, step: 1, value: WEIGHTS.grade },
@@ -66,6 +69,7 @@ export async function startRoadsLab(): Promise<void> {
       { id: 'wLat', label: 'W LAT', kind: 'range', min: 0, max: 4, step: 0.02, value: WEIGHTS.lat },
       { id: 'wLatC', label: 'W LAT CURVE', kind: 'range', min: 0, max: 8, step: 0.05, value: WEIGHTS.latCurve },
       { id: 'wCurve', label: 'W CURVE', kind: 'range', min: 0, max: 60, step: 0.5, value: WEIGHTS.curve },
+      { id: 'sDraw', label: 'DRAWING', kind: 'section' },
       { id: 'pins', label: 'END PINS', kind: 'toggle', value: false },
       { id: 'cands', label: 'SHOW CANDIDATES', kind: 'toggle', value: true },
     ],
