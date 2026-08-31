@@ -22,6 +22,7 @@ import {
   type HydroKind,
   type HydroTileField,
   type HydroTileInput,
+  type PackedXZ,
   type ResolvedHydroFeature,
   type WorldBounds,
 } from './types';
@@ -75,9 +76,54 @@ function descendingFit(values: number[]): number[] {
   return out;
 }
 
+/**
+ * ── THE SPINE IS RESAMPLED, NOT INHERITED ──
+ *
+ * Every station-indexed quantity downstream of here — the energy baselines,
+ * the curvature estimate, the river-space `s` itself — used to inherit OSM's
+ * node density, which is whatever the mapper's hand did that day: forty
+ * metres on one reach, four hundred on the next. Curvature from unequal
+ * chords is noise, and an energy window counted in stations means nothing.
+ * Resampling at a consistent physical interval makes station arithmetic mean
+ * metres again. The original endpoints are kept EXACTLY, because the
+ * registry joins fragments of one river by endpoint coincidence.
+ */
+function resampleLine(points: PackedXZ, stepM: number): Float64Array {
+  const count = points.length >> 1;
+  if (count < 2) return Float64Array.from(points);
+  let total = 0;
+  for (let i = 1; i < count; i++) {
+    total += Math.hypot(points[i * 2] - points[(i - 1) * 2], points[i * 2 + 1] - points[(i - 1) * 2 + 1]);
+  }
+  // A degenerate or absurd fragment keeps a bounded station count: widen the
+  // step rather than allocating without limit.
+  const step = Math.max(stepM, total / 4096);
+  const stations = Math.max(2, Math.round(total / Math.max(1e-6, step)) + 1);
+  const out = new Float64Array(stations * 2);
+  out[0] = points[0]; out[1] = points[1];
+  let seg = 1, segStart = 0;
+  let segLen = Math.hypot(points[2] - points[0], points[3] - points[1]);
+  for (let j = 1; j < stations - 1; j++) {
+    const target = (j / (stations - 1)) * total;
+    while (segStart + segLen < target && seg < count - 1) {
+      segStart += segLen;
+      seg++;
+      segLen = Math.hypot(points[seg * 2] - points[(seg - 1) * 2], points[seg * 2 + 1] - points[(seg - 1) * 2 + 1]);
+    }
+    const t = segLen > 1e-9 ? (target - segStart) / segLen : 0;
+    out[j * 2] = points[(seg - 1) * 2] + (points[seg * 2] - points[(seg - 1) * 2]) * t;
+    out[j * 2 + 1] = points[(seg - 1) * 2 + 1] + (points[seg * 2 + 1] - points[(seg - 1) * 2 + 1]) * t;
+  }
+  out[(stations - 1) * 2] = points[(count - 1) * 2];
+  out[(stations - 1) * 2 + 1] = points[(count - 1) * 2 + 1];
+  return out;
+}
+
 function lineProfile(input: HydroTileInput, feature: HydroFeature): Float32Array | undefined {
   if (feature.geometry.type !== 'line') return undefined;
-  const points = feature.geometry.points;
+  // Sub-channel-width stations buy nothing; forty-metre ones lose the bends.
+  const points = resampleLine(feature.geometry.points,
+    clamp(feature.geometry.widthM * 1.25, 10, 40));
   const count = points.length >> 1;
   if (count < 2) return undefined;
   const heights = new Array<number>(count);
@@ -326,6 +372,46 @@ function profileEnergy(profile: Float32Array): Float32Array {
   return e;
 }
 
+/**
+ * ── THE SPINE: RIVER SPACE, DERIVED ONCE PER FRAGMENT ──
+ *
+ * `along` is cumulative distance downstream from the fragment's first station
+ * (the registry's s0 shifts it into the body's shared count). `curvature` is
+ * the signed heading rate dθ/ds — positive bends one way, negative the other
+ * — from the RESAMPLED stations, so equal chords make it an actual rate
+ * rather than node-density noise. Smoothed once for the same reason the
+ * energy is: a bend is a reach property, not a station event.
+ */
+interface ProfileSpine {
+  along: Float32Array;
+  curvature: Float32Array;
+}
+function profileSpine(profile: Float32Array): ProfileSpine {
+  const n = profile.length / 3;
+  const along = new Float32Array(n);
+  for (let i = 1; i < n; i++) {
+    along[i] = along[i - 1] + Math.hypot(
+      profile[i * 3] - profile[(i - 1) * 3],
+      profile[i * 3 + 1] - profile[(i - 1) * 3 + 1]);
+  }
+  const curvature = new Float32Array(n);
+  for (let i = 1; i + 1 < n; i++) {
+    const ax = profile[i * 3] - profile[(i - 1) * 3];
+    const az = profile[i * 3 + 1] - profile[(i - 1) * 3 + 1];
+    const bx = profile[(i + 1) * 3] - profile[i * 3];
+    const bz = profile[(i + 1) * 3 + 1] - profile[i * 3 + 1];
+    const al = Math.hypot(ax, az), bl = Math.hypot(bx, bz);
+    if (al < 1e-6 || bl < 1e-6) continue;
+    // cross of unit tangents ~ sin(dθ) ~ dθ over half the two chords' span.
+    const cross = (ax / al) * (bz / bl) - (az / al) * (bx / bl);
+    curvature[i] = cross / Math.max(1e-6, (al + bl) * 0.5);
+  }
+  if (n > 2) { curvature[0] = curvature[1]; curvature[n - 1] = curvature[n - 2]; }
+  const copy = curvature.slice();
+  for (let i = 1; i + 1 < n; i++) curvature[i] = (copy[i - 1] + copy[i] * 2 + copy[i + 1]) * 0.25;
+  return { along, curvature };
+}
+
 function energyAt(profile: Float32Array, energy: Float32Array, x: number, z: number): number {
   const hit = nearestSegment(x, z, profile, 3);
   if (hit.segment < 0) return energy[0] ?? 0;
@@ -385,10 +471,16 @@ interface ProfileHit {
   fx: number;
   fz: number;
   energy: number;
+  /** Metres downstream from the fragment's first station (add the span s0). */
+  s: number;
+  /** Which side of the centreline: +1 left of the tangent, -1 right. */
+  side: number;
+  curvature: number;
 }
 function sampleProfileAt(
   profile: Float32Array,
   energy: Float32Array | undefined,
+  spine: ProfileSpine,
   index: ProfileIndex,
   x: number,
   z: number,
@@ -416,12 +508,21 @@ function sampleProfileAt(
   const len = Math.hypot(vx, vz) || 1;
   const eA = energy ? energy[best] : 0;
   const eB = energy ? (energy[best + 1] ?? eA) : 0;
+  const px = profile[o] + vx * bestT, pz = profile[o + 1] + vz * bestT;
+  const fx = vx / len, fz = vz / len;
+  // The sign of the cross product tangent x offset says which bank; the
+  // magnitude is already bestD2. This is what makes `n` SIGNED — the two
+  // banks of one river must never share a coordinate.
+  const cross = fx * (z - pz) - fz * (x - px);
+  const curvA = spine.curvature[best], curvB = spine.curvature[best + 1] ?? curvA;
   return {
     distanceM: Math.sqrt(bestD2),
     levelM: profile[o + 2] * (1 - bestT) + profile[q + 2] * bestT,
-    px: profile[o] + vx * bestT, pz: profile[o + 1] + vz * bestT,
-    fx: vx / len, fz: vz / len,
+    px, pz, fx, fz,
     energy: eA * (1 - bestT) + eB * bestT,
+    s: spine.along[best] + (spine.along[best + 1] - spine.along[best]) * bestT,
+    side: cross >= 0 ? 1 : -1,
+    curvature: curvA * (1 - bestT) + curvB * bestT,
   };
 }
 
@@ -543,6 +644,10 @@ export function buildHydroTile(
   const flags = new Uint8Array(count);
   const rank = new Uint8Array(count);
   const bodyIds = new Set<string>();
+  // River space, allocated only once a flowing texel actually lands — an
+  // ocean tile never pays for it. See HydroTileField.structure.
+  let structure: Float32Array | null = null;
+  const structureAt = (): Float32Array => structure ?? (structure = new Float32Array(count * 4));
   const xAt = (ix: number): number => input.bounds.minX + ((ix - gutter) + 0.5) * pixelX;
   const zAt = (iz: number): number => input.bounds.minZ + ((iz - gutter) + 0.5) * pixelZ;
 
@@ -554,12 +659,31 @@ export function buildHydroTile(
     levelM: number,
     localFlow: readonly [number, number],
     localEnergy?: number,
+    /** River space for this texel: [s, n, curvature, halfWidth]. Flowing
+     *  paints without a spine get a legible fallback below. */
+    river?: readonly [number, number, number, number],
   ): void => {
     if (amount <= 0.005 || ix < 0 || iz < 0 || ix >= width || iz >= height) return;
     const i = iz * width + ix;
     const p = priority(body.kind);
     if (rank[i] > p || (rank[i] === p && coverage[i] > amount)) return;
     rank[i] = p;
+    if (FLOWING.has(body.kind)) {
+      const st = structureAt();
+      if (river) {
+        st[i * 4] = river[0]; st[i * 4 + 1] = river[1];
+        st[i * 4 + 2] = river[2]; st[i * 4 + 3] = river[3];
+      } else {
+        // No spine (an area river, or a profile too short to carry one): the
+        // world position projected onto the BODY's one average flow direction.
+        // One constant direction per body cannot fold a phase — this is the
+        // old behaviour, demoted to the fallback it should always have been.
+        st[i * 4] = xAt(ix) * body.flow[0] + zAt(iz) * body.flow[1];
+        st[i * 4 + 1] = 0;
+        st[i * 4 + 2] = 0;
+        st[i * 4 + 3] = Math.max(4, body.fetchM / 10);
+      }
+    }
     coverage[i] = Math.max(coverage[i], amount);
     level[i] = levelM;
     const ground = sampleElevation(input.elevation, input.bounds, xAt(ix), zAt(iz));
@@ -641,18 +765,40 @@ export function buildHydroTile(
       kind[i] = prevKind; seed[i] = previous.material[i * 4 + 1];
       turbidity[i] = previous.material[i * 4 + 2]; flags[i] = previous.material[i * 4 + 3];
       rank[i] = priority(ID_TO_KIND.get(prevKind) ?? 'ocean');
+      // A retained flowing texel keeps its river space too, or its phase
+      // would snap to zero while its motion machinery kept running.
+      if (previous.structure && (flags[i] & HydroFlags.Flowing)) {
+        const st = structureAt();
+        st[i * 4] = previous.structure[i * 4];
+        st[i * 4 + 1] = previous.structure[i * 4 + 1];
+        st[i * 4 + 2] = previous.structure[i * 4 + 2];
+        st[i * 4 + 3] = previous.structure[i * 4 + 3];
+      }
     }
   }
 
-  const resolved: Array<ResolvedHydroFeature & { energy?: Float32Array }> = [];
+  const resolved: Array<ResolvedHydroFeature
+    & { energy?: Float32Array; spine?: ProfileSpine; s0?: number }> = [];
   for (let index = 0; index < input.features.length; index++) {
     const feature = input.features[index];
     const body = registry.get(feature.id);
     if (!body) continue;
     // This fragment's OWN profile — see the note on the profiles map.
     const profile = analysis.profiles.get(`${feature.id}#${index}`);
-    resolved.push({ feature, body, profile,
-      energy: profile && FLOWING.has(feature.kind) ? profileEnergy(profile) : undefined });
+    const flowing = !!profile && FLOWING.has(feature.kind);
+    const spine = flowing ? profileSpine(profile) : undefined;
+    // The registry shifts this fragment's local chainage into the body's
+    // shared count, so `s` is continuous where fragments meet — and STAYS
+    // what it was on every rebuild, which is what stops the downstream
+    // phase popping as the streamed ring changes.
+    const s0 = spine && profile ? registry.riverSpanS0(
+      feature.id,
+      profile[0], profile[1],
+      profile[profile.length - 3], profile[profile.length - 2],
+      spine.along[spine.along.length - 1],
+    ) : undefined;
+    resolved.push({ feature, body, profile, spine, s0,
+      energy: flowing && profile ? profileEnergy(profile) : undefined });
   }
   for (const item of resolved) {
     const fb = featureBounds(item.feature);
@@ -665,11 +811,11 @@ export function buildHydroTile(
       ? indexProfile(item.profile, lineWidth) : undefined;
     for (let iz = iz0; iz <= iz1; iz++) for (let ix = ix0; ix <= ix1; ix++) {
       const x = xAt(ix), z = zAt(iz);
-      if (index && item.profile) {
+      if (index && item.profile && item.spine) {
         // The fast path: one bucket-indexed hit answers everything — asked
         // BEFORE the bed sample, because most of a meander's bbox is dry and
         // the index rejects it for the cost of nine Map lookups.
-        const hit = sampleProfileAt(item.profile, item.energy, index, x, z);
+        const hit = sampleProfileAt(item.profile, item.energy, item.spine, index, x, z);
         if (!hit) continue;                    // no segment within reach: dry
         const signed = lineWidth * 0.5 - hit.distanceM;
         const amount = clamp(0.5 + signed / Math.max(0.01, antialias * 2), 0, 1);
@@ -686,7 +832,13 @@ export function buildHydroTile(
         const bedFoot = sampleElevation(input.elevation, input.bounds, hit.px, hit.pz);
         const levelM = Number.isFinite(bedFoot)
           ? Math.min(hit.levelM, bedFoot + FLOWING_NOMINAL_DEPTH_M) : hit.levelM;
-        paint(ix, iz, amount, item.body, levelM, [hit.fx, hit.fz], hit.energy);
+        const halfW = Math.max(0.5, lineWidth * 0.5);
+        paint(ix, iz, amount, item.body, levelM, [hit.fx, hit.fz], hit.energy, [
+          (item.s0 ?? 0) + hit.s,
+          clamp((hit.side * hit.distanceM) / halfW, -1.25, 1.25),
+          hit.curvature,
+          halfW,
+        ]);
         continue;
       }
       const bed = sampleElevation(input.elevation, input.bounds, x, z);
@@ -718,6 +870,14 @@ export function buildHydroTile(
     flowX[i] = flowX[n]; flowZ[i] = flowZ[n];
     fetch[i] = fetch[n]; scale[i] = scale[n];
     kind[i] = kind[n]; seed[i] = seed[n]; turbidity[i] = turbidity[n]; flags[i] = flags[n];
+    // The mesh vertex just outside a river's coverage still displaces and
+    // still needs a sane s under it — same argument as the level above.
+    if (structure) {
+      structure[i * 4] = structure[n * 4];
+      structure[i * 4 + 1] = structure[n * 4 + 1];
+      structure[i * 4 + 2] = structure[n * 4 + 2];
+      structure[i * 4 + 3] = structure[n * 4 + 3];
+    }
   }
 
   const wet = new Uint8Array(count);
@@ -788,6 +948,7 @@ export function buildHydroTile(
     geometry,
     dynamics,
     material,
+    structure: structure ?? undefined,
     hasWater,
     waterBounds,
     bodyIds: [...bodyIds],

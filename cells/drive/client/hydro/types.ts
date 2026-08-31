@@ -154,6 +154,8 @@ export interface ResolvedHydroFeature {
  * geometry RGBA = coverage, signed shore distance m, level delta m, depth m
  * dynamics RGBA = flow x, flow z, fetch m, wave scale
  * material RGBA8 = class id, stable seed, turbidity, flags
+ * structure RGBA = river s (m downstream), river n (-1..1 across),
+ *                  signed curvature (1/m), channel half-width (m)
  */
 export interface HydroTileField {
   key: TileKey;
@@ -167,6 +169,27 @@ export interface HydroTileField {
   geometry: Float32Array;
   dynamics: Float32Array;
   material: Uint8Array;
+  /**
+   * ── RIVER SPACE, PER TEXEL ──
+   *
+   * R = s, cumulative metres DOWNSTREAM along the body (continuous across
+   * tile fragments — see the registry's river spans). G = n, signed
+   * cross-channel position in half-widths, -1 at one bank, +1 at the other.
+   * B = signed centreline curvature (1/m). A = channel half-width (m).
+   *
+   * This exists because river motion parameterised by world position
+   * projected onto a per-texel flow direction FOLDS ITS PHASE at every bend
+   * — the same fingerprint defect the sea shader was rewritten to remove.
+   * Distance along the river is continuous by construction, so phases built
+   * on it turn with the channel instead of folding.
+   *
+   * Allocated only when the tile holds flowing water, so an ocean tile pays
+   * neither the memory nor the texture. Float32, deliberately not half:
+   * s spans tens of kilometres and half-floats lose metre precision past
+   * 2048, which returns as phase jitter exactly where a long river needs
+   * the coordinate most.
+   */
+  structure?: Float32Array;
   hasWater: boolean;
   /**
    * The world rect the water actually occupies, padded by a texel.

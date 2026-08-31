@@ -67,6 +67,12 @@ export interface HydroSystem {
   dispose(): void;
 }
 
+interface TilePart {
+  mesh: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
+  geometry: THREE.BufferGeometry;
+  material: THREE.ShaderMaterial;
+}
+
 interface TileRecord {
   input: HydroTileInput;
   analysis: HydroTileAnalysis;
@@ -76,9 +82,9 @@ interface TileRecord {
   chain: Promise<void>;
   field?: HydroTileField;
   textures?: HydroTileTextures;
-  material?: THREE.ShaderMaterial;
-  mesh?: THREE.Mesh<THREE.BufferGeometry, THREE.ShaderMaterial>;
-  geometry?: THREE.BufferGeometry;
+  /** Up to two: the standing cells and the flowing cells, each under its own
+   *  material variant. See waterGeometry. */
+  parts: TilePart[];
   binding?: HydroTileBinding;
 }
 
@@ -109,8 +115,23 @@ const immediateBuild = async (job: () => HydroTileField): Promise<HydroTileField
  * Positions are the same unit plane the shared grid used — x,z in [-0.5, 0.5],
  * uv.y=1 at the minZ edge to match `PlaneGeometry` after `rotateX(-PI/2)` — so
  * `fieldUvFor` and the shaders need no adjustment at all.
+ *
+ * ── AND THE CELLS ARE SPLIT BY REGIME ──
+ *
+ * Standing cells and flowing cells return as separate geometries, because
+ * they take different material variants: the river shader samples the
+ * structure field and carries the river-space machinery, and the open ocean
+ * must pay for neither. A cell any of whose texels flow goes to the flowing
+ * set — that variant still renders standing texels correctly (it keeps the
+ * full shader; per-texel vFlowing selects), while the standing variant
+ * cannot render flowing ones. The two sets are disjoint, so no fragment is
+ * ever drawn by both.
  */
-function waterGeometry(field: HydroTileField, segments: number): THREE.BufferGeometry {
+interface WaterGeometries {
+  standing?: THREE.BufferGeometry;
+  flowing?: THREE.BufferGeometry;
+}
+function waterGeometry(field: HydroTileField, segments: number): WaterGeometries {
   const rect = field.waterBounds ?? field.bounds;
   const spanX = Math.max(Number.EPSILON, field.bounds.maxX - field.bounds.minX);
   const spanZ = Math.max(Number.EPSILON, field.bounds.maxZ - field.bounds.minZ);
@@ -137,6 +158,8 @@ function waterGeometry(field: HydroTileField, segments: number): THREE.BufferGeo
     field.gutter + ((x - field.bounds.minX) / spanX) * (field.resolution - 1);
   const fieldIz = (z: number): number =>
     field.gutter + ((z - field.bounds.minZ) / spanZ) * (field.resolution - 1);
+  // 0 dry, 1 standing water, 2 flowing water (any flowing texel claims the
+  // cell — see the regime note above).
   const keep = new Uint8Array(segmentsX * segmentsZ);
   for (let j = 0; j < segmentsZ; j++) for (let i = 0; i < segmentsX; i++) {
     const x0 = rect.minX + (i / segmentsX) * rectSpanX;
@@ -147,38 +170,46 @@ function waterGeometry(field: HydroTileField, segments: number): THREE.BufferGeo
     const ix1 = Math.min(field.width - 1, Math.ceil(fieldIx(x1)) + 1);
     const iz0 = Math.max(0, Math.floor(fieldIz(z0)) - 1);
     const iz1 = Math.min(field.height - 1, Math.ceil(fieldIz(z1)) + 1);
-    let any = false;
-    for (let iz = iz0; iz <= iz1 && !any; iz++) {
+    let regime = 0;
+    for (let iz = iz0; iz <= iz1 && regime < 2; iz++) {
       for (let ix = ix0; ix <= ix1; ix++) {
-        if (field.geometry[(iz * field.width + ix) * 4] > 0.005) { any = true; break; }
+        const t = iz * field.width + ix;
+        if (field.geometry[t * 4] <= 0.005) continue;
+        regime = (field.material[t * 4 + 3] & HydroFlags.Flowing) !== 0 ? 2
+          : Math.max(regime, 1);
+        if (regime === 2) break;
       }
     }
-    if (any) keep[j * segmentsX + i] = 1;
+    keep[j * segmentsX + i] = regime;
   }
-  const pos: number[] = [], uvs: number[] = [], idx: number[] = [];
-  const vert = new Map<number, number>();
-  const at = (i: number, j: number): number => {
-    const k = j * (segmentsX + 1) + i;
-    let v = vert.get(k);
-    if (v === undefined) {
-      v = pos.length / 3;
-      pos.push(i / segmentsX - 0.5, 0, j / segmentsZ - 0.5);
-      uvs.push(i / segmentsX, 1 - j / segmentsZ);
-      vert.set(k, v);
+  const build = (regime: number): THREE.BufferGeometry | undefined => {
+    const pos: number[] = [], uvs: number[] = [], idx: number[] = [];
+    const vert = new Map<number, number>();
+    const at = (i: number, j: number): number => {
+      const k = j * (segmentsX + 1) + i;
+      let v = vert.get(k);
+      if (v === undefined) {
+        v = pos.length / 3;
+        pos.push(i / segmentsX - 0.5, 0, j / segmentsZ - 0.5);
+        uvs.push(i / segmentsX, 1 - j / segmentsZ);
+        vert.set(k, v);
+      }
+      return v;
+    };
+    for (let j = 0; j < segmentsZ; j++) for (let i = 0; i < segmentsX; i++) {
+      if (keep[j * segmentsX + i] !== regime) continue;
+      const a = at(i, j), b = at(i + 1, j), c = at(i, j + 1), d = at(i + 1, j + 1);
+      idx.push(a, c, b, b, c, d);
     }
-    return v;
+    if (!idx.length) return undefined;
+    const geo = new THREE.BufferGeometry();
+    geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+    geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    geo.setIndex(idx);
+    geo.computeBoundingSphere();
+    return geo;
   };
-  for (let j = 0; j < segmentsZ; j++) for (let i = 0; i < segmentsX; i++) {
-    if (!keep[j * segmentsX + i]) continue;
-    const a = at(i, j), b = at(i + 1, j), c = at(i, j + 1), d = at(i + 1, j + 1);
-    idx.push(a, c, b, b, c, d);
-  }
-  const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-  geo.setIndex(idx);
-  geo.computeBoundingSphere();
-  return geo;
+  return { standing: build(1), flowing: build(2) };
 }
 
 function worldToUv(field: HydroTileField): THREE.Matrix3 {
@@ -233,7 +264,7 @@ class DefaultHydroSystem implements HydroSystem {
     if (!record) {
       record = {
         input, analysis, generation: 1, dirty: true, building: false,
-        chain: Promise.resolve(),
+        chain: Promise.resolve(), parts: [],
       };
       this.records.set(input.key, record);
     } else {
@@ -311,8 +342,8 @@ class DefaultHydroSystem implements HydroSystem {
       // THE SAME RECT THE MESH WAS SCALED TO. It spans the water, not the
       // tile, and re-placing it on the tile's centre every frame would undo
       // that — a mesh the size of the river sitting in the middle of the tile.
-      if (record.mesh) {
-        this.placeMesh(record.mesh, record.field?.waterBounds ?? record.input.bounds, frame.worldOrigin);
+      for (const part of record.parts) {
+        this.placeMesh(part.mesh, record.field?.waterBounds ?? record.input.bounds, frame.worldOrigin);
       }
       if (record.dirty && !record.building && admitted < this.rebuildsPerFrame) {
         admitted++;
@@ -361,7 +392,7 @@ class DefaultHydroSystem implements HydroSystem {
   stats(): HydroStats {
     let visibleTiles = 0, pendingBuilds = 0, dirtyTiles = 0;
     for (const record of this.records.values()) {
-      if (record.mesh) visibleTiles++;
+      if (record.parts.length) visibleTiles++;
       if (record.building) pendingBuilds++;
       if (record.dirty) dirtyTiles++;
     }
@@ -391,7 +422,9 @@ class DefaultHydroSystem implements HydroSystem {
         ocean: record.input.oceanCoverage.status,
         built: !!field, hasWater: field?.hasWater ?? null,
         touched, wet, maxCov: +max.toFixed(3),
-        mesh: !!record.mesh, dirty: record.dirty, building: record.building,
+        mesh: record.parts.length > 0,
+        flowingMesh: record.parts.some((p) => p.mesh.name.endsWith(':flowing')),
+        dirty: record.dirty, building: record.building,
       });
     }
     return out;
@@ -448,12 +481,10 @@ class DefaultHydroSystem implements HydroSystem {
     if (!field.hasWater) return;
     // The cull first: a tile can report water and still keep no cell, when the
     // coverage is a sliver the lattice cannot resolve. Building the textures
-    // before finding that out would leak two float RGBA uploads per tile.
-    const geometry = waterGeometry(field, this.meshSegments);
-    if (!geometry.getIndex()?.count) { geometry.dispose(); return; }
+    // before finding that out would leak the float RGBA uploads per tile.
+    const geometries = waterGeometry(field, this.meshSegments);
+    if (!geometries.standing && !geometries.flowing) return;
     const textures = createHydroTextures(field);
-    const material = createHydroMaterial(field, textures, this.frameUniforms);
-    const mesh = new THREE.Mesh(geometry, material);
     // ── THE MESH COVERS THE WATER, NOT THE TILE ──
     //
     // A tile is 2.4km across and a river ten metres wide, so spanning
@@ -473,25 +504,29 @@ class DefaultHydroSystem implements HydroSystem {
     const rect = field.waterBounds ?? field.bounds;
     const spanX = rect.maxX - rect.minX;
     const spanZ = rect.maxZ - rect.minZ;
-    mesh.scale.set(spanX, 1, spanZ);
     const origin = this.frameUniforms.uWorldOrigin.value;
-    mesh.position.set(
-      (rect.minX + rect.maxX) * 0.5 - origin.x,
-      0,
-      (rect.minZ + rect.maxZ) * 0.5 - origin.z,
-    );
-    // GPU displacement changes y beyond the CPU geometry bounds. The streamed
-    // ring is already the culling structure, so do not let a flat unit plane
-    // incorrectly cull a mountain lake.
-    mesh.frustumCulled = false;
-    mesh.renderOrder = 2;
-    mesh.name = `hydro-tile:${field.key}`;
-    this.object3d.add(mesh);
+    const install = (geometry: THREE.BufferGeometry, flowing: boolean): void => {
+      const material = createHydroMaterial(field, textures, this.frameUniforms, flowing);
+      const mesh = new THREE.Mesh(geometry, material);
+      mesh.scale.set(spanX, 1, spanZ);
+      mesh.position.set(
+        (rect.minX + rect.maxX) * 0.5 - origin.x,
+        0,
+        (rect.minZ + rect.maxZ) * 0.5 - origin.z,
+      );
+      // GPU displacement changes y beyond the CPU geometry bounds. The
+      // streamed ring is already the culling structure, so do not let a flat
+      // unit plane incorrectly cull a mountain lake.
+      mesh.frustumCulled = false;
+      mesh.renderOrder = 2;
+      mesh.name = `hydro-tile:${field.key}${flowing ? ':flowing' : ''}`;
+      this.object3d.add(mesh);
+      record.parts.push({ mesh, geometry, material });
+    };
+    if (geometries.standing) install(geometries.standing, false);
+    if (geometries.flowing) install(geometries.flowing, true);
     const base = hydroBinding(field, textures);
     record.textures = textures;
-    record.material = material;
-    record.mesh = mesh;
-    record.geometry = geometry;
     record.binding = {
       ...base,
       bounds: field.bounds,
@@ -500,14 +535,14 @@ class DefaultHydroSystem implements HydroSystem {
   }
 
   private releaseGpu(record: TileRecord): void {
-    if (record.mesh) record.mesh.removeFromParent();
     // Per-tile now, so it is per-tile to dispose — the shared grid never was.
-    record.geometry?.dispose();
-    record.material?.dispose();
+    for (const part of record.parts) {
+      part.mesh.removeFromParent();
+      part.geometry.dispose();
+      part.material.dispose();
+    }
+    record.parts = [];
     if (record.textures) disposeHydroTextures(record.textures);
-    record.mesh = undefined;
-    record.geometry = undefined;
-    record.material = undefined;
     record.textures = undefined;
     record.binding = undefined;
     record.field = undefined;

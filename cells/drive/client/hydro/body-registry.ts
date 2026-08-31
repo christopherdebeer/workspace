@@ -32,6 +32,25 @@ interface BodyState {
   body?: HydroBody;
 }
 
+/**
+ * One installed stretch of a river's centreline, in downstream order: where it
+ * starts, where it ends, how long it is, and the `s` its first station was
+ * assigned. The registry keeps these so the river-space coordinate does not
+ * restart at every tile — see riverSpanS0.
+ */
+interface RiverSpan {
+  headX: number;
+  headZ: number;
+  tailX: number;
+  tailZ: number;
+  lengthM: number;
+  s0: number;
+}
+
+/** Overpass cuts share exact node coordinates, so this is slack for float
+ *  drift and the resampler's endpoint preservation, not for real gaps. */
+const SPAN_JOIN_M = 8;
+
 export interface RegistryUpdate {
   changed: ReadonlySet<string>;
   removed: ReadonlySet<string>;
@@ -73,8 +92,60 @@ function median(values: number[]): number | undefined {
 export class HydroBodyRegistry {
   private states = new Map<string, BodyState>();
   private tileBodies = new Map<TileKey, Set<string>>();
+  private riverSpans = new Map<string, RiverSpan[]>();
 
   constructor(private oceanLevel = 0) {}
+
+  /**
+   * ── WHERE DOES THIS FRAGMENT'S `s` START? ──
+   *
+   * The river-space coordinate must not restart at every streamed fragment,
+   * or the downstream phase pops at each tile boundary as the ring changes.
+   * This does not need a perfect global chainage — it needs CONSISTENT
+   * OFFSETS: the same fragment always answers the same s0, and a fragment
+   * that touches an installed neighbour continues that neighbour's count.
+   *
+   * The rules, in order:
+   *  - a fragment already registered (same endpoints) keeps its s0 forever —
+   *    fragments are never renumbered because a new tile appeared upstream;
+   *  - a fragment whose HEAD meets an installed TAIL continues downstream
+   *    from it (neighbour.s0 + neighbour.length);
+   *  - a fragment whose TAIL meets an installed HEAD extends upstream of it
+   *    (neighbour.s0 - own length), so s may legitimately go negative;
+   *  - a fragment touching nothing starts its own count at zero. If the
+   *    connecting middle piece arrives later it will chain off whichever
+   *    side is installed first, and the OTHER join keeps a phase seam —
+   *    the accepted cost of never renumbering what is already on screen.
+   *
+   * Spans persist for the registry's lifetime (cleared on world hop with
+   * everything else): an evicted tile that streams back in re-finds the s0
+   * it had, which is the whole point.
+   */
+  riverSpanS0(
+    bodyId: string,
+    headX: number,
+    headZ: number,
+    tailX: number,
+    tailZ: number,
+    lengthM: number,
+  ): number {
+    let spans = this.riverSpans.get(bodyId);
+    if (!spans) this.riverSpans.set(bodyId, (spans = []));
+    const near = (ax: number, az: number, bx: number, bz: number): boolean =>
+      Math.abs(ax - bx) <= SPAN_JOIN_M && Math.abs(az - bz) <= SPAN_JOIN_M
+      && Math.hypot(ax - bx, az - bz) <= SPAN_JOIN_M;
+    for (const span of spans) {
+      if (near(span.headX, span.headZ, headX, headZ)
+        && near(span.tailX, span.tailZ, tailX, tailZ)) return span.s0;
+    }
+    let s0 = 0;
+    const upstream = spans.find((span) => near(span.tailX, span.tailZ, headX, headZ));
+    const downstream = spans.find((span) => near(span.headX, span.headZ, tailX, tailZ));
+    if (upstream) s0 = upstream.s0 + upstream.lengthM;
+    else if (downstream) s0 = downstream.s0 - lengthM;
+    spans.push({ headX, headZ, tailX, tailZ, lengthM, s0 });
+    return s0;
+  }
 
   get oceanLevelM(): number { return this.oceanLevel; }
 
@@ -169,6 +240,7 @@ export class HydroBodyRegistry {
   clear(): void {
     this.states.clear();
     this.tileBodies.clear();
+    this.riverSpans.clear();
   }
 
   private resolve(id: string, state: BodyState): HydroBody {

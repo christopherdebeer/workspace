@@ -22,7 +22,10 @@
  */
 import { execFile } from 'node:child_process';
 import { existsSync } from 'node:fs';
-import { chromium } from '/home/user/workspace/node_modules/playwright/index.mjs';
+// Bare specifier, as the harness imports it — an absolute path here was the
+// authoring box's filesystem, and the suite died with MODULE_NOT_FOUND on
+// any other machine.
+import { chromium } from 'playwright';
 
 let bad = 0;
 const check = (name, cond, saw) => {

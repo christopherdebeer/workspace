@@ -22,6 +22,25 @@
  * isolines are the crest lines, which is exactly what refraction should do
  * to a first approximation. Direction is never inserted into a phase again.
  *
+ * RIVERS LIVE IN RIVER SPACE. The river terms held the very defect the rule
+ * above was written against: dot(worldPosition, flowDirection(texel)), a
+ * direction that turns at every bend, inside every phase. The cure is the
+ * same as the shore wave's — find the coordinate that is continuous by
+ * construction and phase on THAT. For a river it is `s`, distance along the
+ * channel, with `n` the signed cross-channel position: both computed on the
+ * CPU per texel (build-tile), continuous across streamed fragments (the
+ * registry's river spans), and delivered in the private structure field.
+ * Every flowing phase is now wavenumber × s − ω × t with CONSTANT k and ω —
+ * a k that followed energy(s) would fold against s exactly as the rotating
+ * direction did, so energy buys amplitude and crossfades fixed-rate layers,
+ * never the phase rate. A bend changes where the river is, not where it is
+ * in its own cycle.
+ *
+ * TWO VARIANTS, ONE SOURCE. All of the above compiles only under
+ * HYDRO_FLOWING (the material variant standing on river cells); the ocean
+ * variant contains no river machinery and reads no structure texture, so
+ * the open sea pays nothing for the river's correctness.
+ *
  * ENERGY IS DECIDED ON THE CPU. River turbulence used to be derived per
  * vertex from raw level gradients and flow turns, which saturated on DEM
  * noise until every reach read as rapids. The field's dynamics.w channel now
@@ -73,6 +92,9 @@ precision highp float;
 
 uniform sampler2D uHydroGeometry;
 uniform sampler2D uHydroDynamics;
+#ifdef HYDRO_FLOWING
+uniform sampler2D uHydroStructure;
+#endif
 uniform vec4 uFieldUv;
 uniform vec2 uHydroTexel;
 uniform vec2 uFieldMeters;
@@ -105,7 +127,15 @@ void main() {
   vec4 dynamics = texture2D(uHydroDynamics, vHydroUv);
 
   float flowLength = length(dynamics.xy);
+#ifdef HYDRO_FLOWING
   vFlowing = smoothstep(0.2, 0.72, flowLength);
+#else
+  // The standing variant compiles no river machinery. A texel that claims
+  // to flow inside it (one pixel of bleed where the two variants' meshes
+  // meet) is drawn as standing water rather than reaching for a phase this
+  // variant does not have.
+  vFlowing = 0.0;
+#endif
   // dynamics.w is settled reach energy for flowing water and sea state for
   // standing water. dynamics.z remains physical fetch.
   float energy = clamp(dynamics.w, 0.0, 1.0);
@@ -154,17 +184,26 @@ void main() {
   float standingWave = mix(swell, shoreWave, nearShore);
   vShorePhase = sin(shorePhase);
 
-  // River geometry is broad heave only. Fast riffle/rapid structure is added
-  // analytically per fragment, avoiding the former full-width conveyor bands.
-  vec2 flowDir = normalize(dynamics.xy + vec2(0.00001, 0.0));
-  vec2 crossFlow = vec2(-flowDir.y, flowDir.x);
-  float riverWavelength = mix(100.0, 220.0, energy) * max(0.2, uWaveLength);
-  float riverK = 6.28318530718 / riverWavelength;
-  float riverPhase = dot(vAbsoluteXZ, flowDir) * riverK
-    - uTime * (0.42 + energy * 0.82);
+#ifdef HYDRO_FLOWING
+  // ── RIVER HEAVE LIVES IN RIVER SPACE ──
+  // The phase is wavenumber × s − ω × t and nothing else. It used to be
+  // dot(worldPosition, flowDirection(texel)); a direction that turns along
+  // the channel inside a phase FOLDS it, and every bend wore the concentric
+  // fingerprint the sea shader was rewritten to remove. "s" is distance
+  // along the river — continuous by construction, continuous across tile
+  // fragments — so the heave turns with the channel. k and ω are CONSTANTS:
+  // energy buys amplitude below, never phase rate, because k(energy(s))·s
+  // folds exactly as a rotating direction did. Broad heave only; fast
+  // riffle/rapid structure is added analytically per fragment.
+  vec4 structureField = texture2D(uHydroStructure, vHydroUv);
+  float riverK = 6.28318530718 / (150.0 * max(0.2, uWaveLength));
+  float riverPhase = structureField.r * riverK - uTime * 0.62;
   float riverWave = sin(riverPhase) * 0.72
-    + sin(riverPhase * 0.57 + dot(vAbsoluteXZ, crossFlow) * 0.018 + 1.9) * 0.28;
+    + sin(riverPhase * 0.57 + structureField.g * 2.4 + 1.9) * 0.28;
   float wave = mix(standingWave, riverWave, vFlowing);
+#else
+  float wave = standingWave;
+#endif
 
   // ── SHOAL, BREAK, THEN COLLAPSE ──
   float breakerDepth = mix(0.55, 2.7, energy);
@@ -204,6 +243,9 @@ precision highp float;
 uniform sampler2D uHydroGeometry;
 uniform sampler2D uHydroDynamics;
 uniform sampler2D uHydroMaterial;
+#ifdef HYDRO_FLOWING
+uniform sampler2D uHydroStructure;
+#endif
 uniform float uTime;
 uniform vec3 uWind;
 uniform float uRain;
@@ -289,6 +331,27 @@ vec2 rippleGradient(vec2 p, vec2 flow, vec2 wind, float scale, float seed) {
     + capillaryDirection * cos(pCapillary) * kCapillary * 0.32) * amplitude;
 }
 
+#ifdef HYDRO_FLOWING
+// The river's ripple normal, phased in river space: "s" metres downstream,
+// "crossM" metres off the centreline. The gradient DIRECTION may follow the
+// local tangent freely — direction only aims the normal — but the phase
+// inside the cosines never contains a spatially varying direction or rate.
+// The wavenumbers are FIXED, unlike the standing version's energy-scaled
+// ones: sea state is one value per body, so k(scale) is constant there,
+// but river energy varies along the reach and k(energy(s))·s would fold.
+// Energy buys amplitude here; the energetic look comes from the facet,
+// boil and foam terms.
+vec2 rippleGradientRiver(float s, float crossM, vec2 flow, float energy, float seed) {
+  vec2 direction = normalize(flow + vec2(0.00001, 0.0));
+  vec2 crossDirection = vec2(-direction.y, direction.x);
+  float pSmall = s * 1.5 - uTime * 1.9 + seed * 6.283;
+  float pCapillary = (s * 0.62 + crossM * 0.79) * 3.2 - uTime * 2.7 + 2.1;
+  float amplitude = mix(0.012, 0.1, energy) * uRippleStrength;
+  return (direction * cos(pSmall) * 1.5 * 0.68
+    + crossDirection * cos(pCapillary) * 3.2 * 0.32) * amplitude;
+}
+#endif
+
 void main() {
   vec4 geometryField = texture2D(uHydroGeometry, vHydroUv);
   // ── THE OUTLINE IS A CUT, NOT A STIPPLE ──
@@ -306,6 +369,19 @@ void main() {
   float seed = materialField.g;
   float turbidity = materialField.b;
   float energy = clamp(dynamics.w, 0.0, 1.0);
+#ifdef HYDRO_FLOWING
+  // River space, texel-accurate — the mesh lattice can be wider than the
+  // whole channel, so "n" has to come from the field, not from a varying.
+  // This is the one extra texture read the flowing variant costs.
+  vec4 riverField = texture2D(uHydroStructure, vHydroUv);
+  float riverS = riverField.r;
+  float riverCross = riverField.g * max(riverField.a, 1.0);
+  // Bends work their outer bank: pressure piles up on the outside of the
+  // turn, the inner lane slackens. Signs as the CPU packs them — n from
+  // cross(tangent, offset), curvature from cross(u1, u2) — make the outer
+  // bank the side where curvature × n is NEGATIVE.
+  float outerBank = clamp(0.5 - riverField.b * riverField.g * 60.0, 0.0, 1.0);
+#endif
 
   if (uDebugView > 0.5) {
     vec3 debugColour = vec3(0.0);
@@ -345,7 +421,10 @@ void main() {
   vec2 flow = dynamics.xy;
   vec3 normal = vec3(0.0, 1.0, 0.0);
   if (nearWater) {
-    vec2 gradient = rippleGradient(vAbsoluteXZ, flow, wind, energy, seed);
+#ifdef HYDRO_FLOWING
+    vec2 gradient = vFlowing > 0.5
+      ? rippleGradientRiver(riverS, riverCross, flow, energy, seed)
+      : rippleGradient(vAbsoluteXZ, flow, wind, energy, seed);
 
     // Mid-energy rivers need working volume before they earn white foam.
     // Two analytic, flow-aligned slopes create broken riffle/boil facets;
@@ -353,14 +432,22 @@ void main() {
     if (vFlowing > 0.5 && energy > 0.16) {
       vec2 flowDirection = normalize(flow + vec2(0.00001, 0.0));
       vec2 acrossDirection = vec2(-flowDirection.y, flowDirection.x);
-      float work = smoothstep(0.16, 0.72, energy);
-      float alongPhase = dot(vAbsoluteXZ, flowDirection) * mix(0.16, 0.38, energy)
-        - uTime * (1.0 + energy * 1.8) + seed * 4.1;
-      float acrossPhase = dot(vAbsoluteXZ, acrossDirection) * mix(0.22, 0.48, energy)
-        + sin(alongPhase * 0.47) * 1.3;
-      gradient += flowDirection * cos(alongPhase) * work * (0.045 + energy * 0.13);
+      float work = smoothstep(0.16, 0.72, energy) * (0.7 + 0.6 * outerBank);
+      // Two FIXED-RATE layers — a riffle and a rapid — crossfaded by energy.
+      // Crossfading the cosines keeps both phases continuous; crossfading
+      // the phases (or scaling k by energy, as this used to) folds where
+      // energy changes along the reach.
+      float slowFacet = cos(riverS * 0.22 - uTime * 1.2 + seed * 4.1);
+      float fastFacet = cos(riverS * 0.40 - uTime * 2.7 + seed * 4.1);
+      float facet = mix(slowFacet, fastFacet, smoothstep(0.3, 0.8, energy));
+      float acrossPhase = riverCross * 0.35
+        + sin(riverS * 0.103 - uTime * 0.56) * 1.3;
+      gradient += flowDirection * facet * work * (0.045 + energy * 0.13);
       gradient += acrossDirection * cos(acrossPhase) * work * (0.025 + energy * 0.07);
     }
+#else
+    vec2 gradient = rippleGradient(vAbsoluteXZ, flow, wind, energy, seed);
+#endif
     gradient = clamp(gradient, vec2(-2.0), vec2(2.0))
       * (1.0 + vTurbulence * 0.62) * detailLod;
     normal = normalize(vec3(-gradient.x, 1.0, -gradient.y));
@@ -390,8 +477,20 @@ void main() {
 
   float grain = 0.5;
   if (nearWater) {
+#ifdef HYDRO_FLOWING
+    // The river's grain advects in river space at a CONSTANT rate. It used
+    // to slide world noise along the per-texel flow vector, which is
+    // differential advection: neighbouring fragments on a bend sample
+    // ever-more-distant noise as time passes, and the texture shears into
+    // shimmer. One rate in s cannot shear.
+    grain = vFlowing > 0.5
+      ? valueNoise(vec2(riverS * 0.12 - uTime * 0.5, riverCross * 0.4 + seed * 7.0))
+      : valueNoise(vAbsoluteXZ * mix(0.28, 0.055, energy)
+        + flow * uTime * mix(0.12, 0.55, clamp(length(flow), 0.0, 1.0)));
+#else
     grain = valueNoise(vAbsoluteXZ * mix(0.28, 0.055, energy)
       + flow * uTime * mix(0.12, 0.55, clamp(length(flow), 0.0, 1.0)));
+#endif
     colour *= 1.0 + (grain - 0.5) * 0.14 * detailLod;
     // ── STREAKS: LONG WITH THE CURRENT, SHORT ACROSS IT ──
     // The single strongest read a river has — elongated luminance lanes
@@ -400,11 +499,15 @@ void main() {
     // at rippling-water contrast, so the quantiser renders lanes instead of
     // inventing them; the 11:1 stretch is what says "moving water" at a
     // glance. Kept low: this shades the surface, it does not stripe it.
-    float flowLen = clamp(length(flow), 0.0, 1.0);
-    vec2 streakDir = flowLen > 0.15 ? normalize(flow) : wind;
-    float along = dot(vAbsoluteXZ, streakDir);
-    float acrossStreak = dot(vAbsoluteXZ, vec2(-streakDir.y, streakDir.x));
-    float streak = valueNoise(vec2(along * 0.045 - uTime * (0.35 + flowLen * 1.4),
+    // A river's lanes run in (s, n) now, so a lane FOLLOWS ITS BEND instead
+    // of shearing off it on the world axis it was projected onto.
+    float along = dot(vAbsoluteXZ, wind);
+    float acrossStreak = dot(vAbsoluteXZ, vec2(-wind.y, wind.x));
+    float streakRate = 0.35;
+#ifdef HYDRO_FLOWING
+    if (vFlowing > 0.5) { along = riverS; acrossStreak = riverCross * 0.7; streakRate = 1.35; }
+#endif
+    float streak = valueNoise(vec2(along * 0.045 - uTime * streakRate,
       acrossStreak * 0.5 + seed * 9.0));
     float streakAmp = mix(smoothstep(3.0, 10.0, uWind.z) * 0.05,
       (0.05 + energy * 0.06), vFlowing);
@@ -468,16 +571,27 @@ void main() {
     || (vWaveCrest > 0.6 && geometryField.a < 6.0);
   if (nearWater && foamZone) {
     // ── FOAM: SPARSE, CAUSAL, BRIEF ──
-    vec2 flowDirection = normalize(flow + vec2(0.00001, 0.0));
-    vec2 crossFlow = vec2(-flowDirection.y, flowDirection.x);
-    float downstream = dot(vAbsoluteXZ, flowDirection);
-    float across = dot(vAbsoluteXZ, crossFlow);
+    // Standing water keeps the fixed world axes it always fragmented on
+    // (flow there is ~zero, so the old normalize degenerated to +x anyway);
+    // a river's foam runs in (s, n) so a streak of it rides its own bend.
+    float downstream = vAbsoluteXZ.x;
+    float across = vAbsoluteXZ.y;
+    float foamRate = 0.72 + energy * 1.1;
+#ifdef HYDRO_FLOWING
+    if (vFlowing > 0.5) {
+      downstream = riverS;
+      across = riverCross;
+      // CONSTANT advection: an energy-scaled rate is differential advection
+      // along the reach, and the streak field shears apart over time.
+      foamRate = 1.35;
+    }
+#endif
     // Reach energy already carries a distance-based downstream memory from
     // build-tile. Foam remains causal and persistent without two more texture
     // reads in every rapid fragment.
     float causalEnergy = energy;
     float energyGate = smoothstep(0.55, 0.82, causalEnergy);
-    float foamStreak = valueNoise(vec2(downstream * 0.16 - uTime * (0.72 + energy * 1.1),
+    float foamStreak = valueNoise(vec2(downstream * 0.16 - uTime * foamRate,
       across * 0.31 + seed * 13.0));
     float riverFoam = vFlowing * energyGate
       * smoothstep(0.64, 0.89, foamStreak + grain * 0.12) * 0.72;
@@ -487,6 +601,11 @@ void main() {
     // uses, never as white. This is what stands between "calm ribbon" and
     // "rapids" — the middle of the river's expressive range.
     float boil = vFlowing * smoothstep(0.18, 0.5, causalEnergy) * (1.0 - energyGate);
+#ifdef HYDRO_FLOWING
+    // The outside of a bend churns and whitens first — curvature × n.
+    riverFoam *= 0.6 + 0.8 * outerBank;
+    boil *= 0.7 + 0.6 * outerBank;
+#endif
     float workingWater = (foamStreak - 0.5) * 0.74 + (grain - 0.5) * 0.26;
     colour *= 1.0 + workingWater * boil * 0.30 * detailLod;
     // Breakers: crests inside the narrow depth band, spatially fragmented so

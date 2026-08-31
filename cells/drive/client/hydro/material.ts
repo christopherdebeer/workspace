@@ -25,6 +25,9 @@ export interface HydroTileTextures {
   geometry: THREE.DataTexture;
   dynamics: THREE.DataTexture;
   material: THREE.DataTexture;
+  /** River space (s, n, curvature, halfWidth) — only for tiles that hold
+   *  flowing water, and only ever bound by the flowing material variant. */
+  structure?: THREE.DataTexture;
 }
 
 export interface HydroTileGpuBinding {
@@ -113,6 +116,13 @@ export function createHydroTextures(field: HydroTileField): HydroTileTextures {
     material: configure(new THREE.DataTexture(
       field.material, field.width, field.height, THREE.RGBAFormat, THREE.UnsignedByteType,
     ), false),
+    // Float32 on purpose: s runs to tens of kilometres and half precision
+    // loses whole metres past 2km, which is phase jitter where a long river
+    // needs the coordinate most. Linear filtering is exactly right for s and
+    // n (both are locally linear fields).
+    structure: field.structure ? configure(new THREE.DataTexture(
+      field.structure, field.width, field.height, THREE.RGBAFormat, THREE.FloatType,
+    ), true) : undefined,
   };
 }
 
@@ -120,11 +130,22 @@ export function createHydroMaterial(
   field: HydroTileField,
   textures: HydroTileTextures,
   frame: HydroFrameUniforms,
+  /**
+   * ── TWO VARIANTS OF ONE SHADER ──
+   *
+   * `flowing` compiles the river machinery (and binds the structure field);
+   * standing compiles without it, so the open ocean — most of every coastal
+   * frame — carries neither the extra texture read nor the river-space
+   * instructions. One GLSL source, split by the preprocessor, because two
+   * hand-maintained shaders is how the regimes drift apart.
+   */
+  flowing = false,
 ): THREE.ShaderMaterial {
   const centralScale = field.resolution / field.width;
   const offset = field.gutter / field.width;
   return new THREE.ShaderMaterial({
-    name: `hydro:${field.key}`,
+    name: `hydro:${field.key}${flowing ? ':flowing' : ''}`,
+    defines: flowing ? { HYDRO_FLOWING: 1 } : {},
     vertexShader: HYDRO_VERTEX_SHADER,
     fragmentShader: HYDRO_FRAGMENT_SHADER,
     uniforms: {
@@ -148,6 +169,10 @@ export function createHydroMaterial(
       uHydroGeometry: { value: textures.geometry },
       uHydroDynamics: { value: textures.dynamics },
       uHydroMaterial: { value: textures.material },
+      // Bound only when the variant samples it; a uniform the GLSL never
+      // declares is silently dropped by three, so the standing variant
+      // carrying the key costs nothing and keeps this call-site unbranched.
+      uHydroStructure: { value: textures.structure ?? null },
       // Both the V flip and the water-rect sub-mapping live in one place —
       // see `fieldUvFor`.
       uFieldUv: { value: fieldUvFor(field, centralScale, offset) },
@@ -213,4 +238,5 @@ export function disposeHydroTextures(textures: HydroTileTextures): void {
   textures.geometry.dispose();
   textures.dynamics.dispose();
   textures.material.dispose();
+  textures.structure?.dispose();
 }
