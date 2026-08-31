@@ -13,6 +13,8 @@ export interface HydroFrameUniforms {
   /** Wading depth in metres; 0 keeps the whole disturbance branch dark. */
   uRigWade: { value: number };
   uSunDirection: { value: THREE.Vector3 };
+  uSkyColour: { value: THREE.Color };
+  uTerrainColour: { value: THREE.Color };
   uDebugView: { value: number };
   uWaveAmplitude: { value: number };
   uWaveLength: { value: number };
@@ -47,6 +49,8 @@ export function createHydroFrameUniforms(): HydroFrameUniforms {
     uRig: { value: new THREE.Vector4(0, 0, 0, 0) },
     uRigWade: { value: 0 },
     uSunDirection: { value: new THREE.Vector3(0.45, 0.82, 0.35).normalize() },
+    uSkyColour: { value: new THREE.Color(0.46, 0.58, 0.68) },
+    uTerrainColour: { value: new THREE.Color(0.16, 0.20, 0.13) },
     uDebugView: { value: 0 },
     uWaveAmplitude: { value: 1 },
     uWaveLength: { value: 1 },
@@ -191,6 +195,8 @@ export function createHydroMaterial(
       uRig: frame.uRig,
       uRigWade: frame.uRigWade,
       uSunDirection: frame.uSunDirection,
+      uSkyColour: frame.uSkyColour,
+      uTerrainColour: frame.uTerrainColour,
       uDebugView: frame.uDebugView,
       uWaveAmplitude: frame.uWaveAmplitude,
       uWaveLength: frame.uWaveLength,

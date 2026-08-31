@@ -336,6 +336,16 @@ class DefaultHydroSystem implements HydroSystem {
         .set(frame.sunDirection.x, frame.sunDirection.y, frame.sunDirection.z)
         .normalize();
     }
+    if (frame.skyColour) {
+      this.frameUniforms.uSkyColour.value.setRGB(
+        frame.skyColour.r, frame.skyColour.g, frame.skyColour.b,
+      );
+    }
+    if (frame.terrainColour) {
+      this.frameUniforms.uTerrainColour.value.setRGB(
+        frame.terrainColour.r, frame.terrainColour.g, frame.terrainColour.b,
+      );
+    }
 
     let admitted = 0;
     for (const [key, record] of this.records) {

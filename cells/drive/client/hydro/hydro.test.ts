@@ -171,7 +171,60 @@ export function runHydroSelfTest(): void {
   const aAgain = spanRegistry.riverSpanS0('osm:way', 0, 0, 0, 500, 500);
   assert(aAgain === 0, 'a re-registered fragment keeps its s0 — nobody is renumbered');
   const island = spanRegistry.riverSpanS0('osm:way', 5000, 5000, 5000, 5400, 400);
-  assert(island === 0, 'a disconnected fragment starts at zero, harmlessly');
+  assert(island === 0, 'a disconnected fragment starts at zero until topology connects it');
+
+  // OSM way ids are editing identities, not river identities. Directly
+  // touching ways chain geometrically across ids.
+  const networkRegistry = new HydroBodyRegistry(0);
+  const firstWay = networkRegistry.riverSpanS0('osm:101', 0, 0, 0, 500, 500);
+  const secondWay = networkRegistry.riverSpanS0('osm:202', 0, 500, 0, 900, 400);
+  assert(firstWay === 0 && secondWay === 500,
+    `connected OSM ways share chainage across ids (${firstWay}, ${secondWay})`);
+
+  // Arrival order cannot leave the old permanent seam. Install both sides as
+  // islands, then the missing middle: the downstream component is translated
+  // and exposed for rebuild.
+  const lateRegistry = new HydroBodyRegistry(0);
+  lateRegistry.riverSpanS0('osm:up', 0, 0, 0, 400, 400);
+  lateRegistry.riverSpanS0('osm:down', 0, 800, 0, 1200, 400);
+  const bridgeS = lateRegistry.riverSpanS0('osm:bridge', 0, 400, 0, 800, 400);
+  const downstreamAgain = lateRegistry.riverSpanS0('osm:down', 0, 800, 0, 1200, 400);
+  const rebased = lateRegistry.consumeRiverSpanChanges();
+  assert(bridgeS === 400 && downstreamAgain === 800,
+    `late bridge heals both joins (${bridgeS}, ${downstreamAgain})`);
+  assert(rebased.has('osm:down'), 'late join invalidates the rebased downstream body');
+
+  // A riverbank polygon borrows the nearby centreline's river chart. Probe
+  // well outside the nominal 8m line: s must still advance and n must retain
+  // a signed, non-zero cross-channel coordinate.
+  const areaLine: HydroFeature = {
+    id: 'osm:centre', source: 'osm', kind: 'river', intermittent: false, tidal: false,
+    geometry: { type: 'line', widthM: 8, points: ring(300, 40, 300, 560) },
+  };
+  const areaRiver: HydroFeature = {
+    id: 'osm:bank', source: 'osm', kind: 'river', intermittent: false, tidal: false,
+    geometry: { type: 'area', polygons: [{
+      outer: ring(210, 30, 390, 30, 390, 570, 210, 570), holes: [],
+    }] },
+  };
+  const areaInput = constantInput([areaLine, areaRiver], 0);
+  const areaAnalysis = analyseHydroTile(areaInput);
+  const areaRegistry = new HydroBodyRegistry(0);
+  areaRegistry.updateTile(areaInput.key, areaAnalysis.observations);
+  const areaField = buildHydroTile(areaInput, areaRegistry, areaAnalysis, { fieldResolution: 128 });
+  assert(!!areaField.structure, 'river area with centreline carries river space');
+  if (areaField.structure) {
+    const at = (x: number, z: number): number => {
+      const ix = areaField.gutter + Math.round((x / 600) * (areaField.resolution - 1));
+      const iz = areaField.gutter + Math.round((z / 600) * (areaField.resolution - 1));
+      return iz * areaField.width + ix;
+    };
+    const areaUp = at(365, 160), areaDown = at(365, 440);
+    const areaS = areaField.structure[areaDown * 4] - areaField.structure[areaUp * 4];
+    assert(areaS > 250 && areaS < 310, `river area follows centreline s (saw ${areaS})`);
+    assert(Math.abs(areaField.structure[areaUp * 4 + 1]) > 0.5,
+      'river area retains cross-channel position away from the nominal line');
+  }
 
   const bodyRegistry = new HydroBodyRegistry(0);
   const observation = pondAnalysis.observations[0];

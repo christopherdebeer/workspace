@@ -224,6 +224,11 @@ export interface HydroFrame {
   wind: { x: number; z: number; speedMps: number };
   rain: number;
   sunDirection?: { x: number; y: number; z: number };
+  /** Optional linear scene colours. They keep hydro's API stable while letting
+   * the surface reflect the actual environment rather than guessing a separate
+   * day/night palette. Fog/horizon colour remains the shader-side fallback. */
+  skyColour?: { r: number; g: number; b: number };
+  terrainColour?: { r: number; g: number; b: number };
   /** The vehicle, when it is IN the water: absolute x/z, velocity in m/s and
    *  how deep it is wading. Omit (or wadeM 0) and the surface ignores it —
    *  the water only answers a hull that is actually displacing it. */

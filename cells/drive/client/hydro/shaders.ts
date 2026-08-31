@@ -252,6 +252,8 @@ uniform float uRain;
 uniform vec4 uRig;
 uniform float uRigWade;
 uniform vec3 uSunDirection;
+uniform vec3 uSkyColour;
+uniform vec3 uTerrainColour;
 uniform float uDebugView;
 uniform float uRippleStrength;
 uniform float uFoamStrength;
@@ -533,24 +535,45 @@ void main() {
   // room to spread a threshold than open water has.
   colour *= 1.0 + (broad - 0.5) * 0.10 * mix(1.0, 0.5, vFlowing);
 
-  // ── LIGHT FROM THE SKY, NOT ONLY THE SUN VECTOR ──
-  // The daylight factor follows the sun's elevation: dusk rolls the water
-  // down and cools it, and midnight water is a dark blue-green mass with no
-  // daytime cyan left in it.
+  // ── ONE CONTINUOUS ENVIRONMENT, NOT DAY/NIGHT PALETTES ──
+  //
+  // The previous narrow smoothstep around the horizon was numerically smooth
+  // but visually categorical after quantisation: the whole river crossed a
+  // palette rung together at dawn and dusk. Solar contribution now rolls over
+  // a much broader altitude range, while sky reflection and shallow terrain
+  // tint remain present at every hour. No branch says "night".
   vec3 lightDirection = normalize(uSunDirection);
   vec3 viewDirection = normalize(cameraPosition - vRenderPosition);
-  float daylight = smoothstep(-0.04, 0.22, lightDirection.y);
-  float diffuse = mix(0.10, 1.0, daylight)
-    * (0.74 + max(0.0, dot(normal, lightDirection)) * 0.26);
-  colour *= diffuse;
-  colour = mix(colour * vec3(0.55, 0.75, 0.85), colour, daylight);
+  float solarT = clamp((lightDirection.y + 0.22) / 0.82, 0.0, 1.0);
+  float daylight = solarT * solarT * (3.0 - 2.0 * solarT);
+  float ambientLevel = mix(0.12, 0.82, daylight);
+  float directLight = max(0.0, dot(normal, lightDirection)) * daylight;
+  colour *= ambientLevel + directLight * 0.26;
+
+  // Scene fog is the horizon/sky proxy already maintained by Three. Explicit
+  // frame colour can refine it without making integration mandatory.
+  vec3 horizonColour = uSkyColour;
+#ifdef USE_FOG
+  horizonColour = mix(uSkyColour, fogColor, 0.62);
+#endif
+  float nightSkyEnergy = mix(0.10, 1.0, daylight);
+  vec3 reflectedSky = horizonColour * nightSkyEnergy;
+  float facing = clamp(dot(normal, viewDirection), 0.0, 1.0);
+  float fresnel = 0.055 + 0.34 * pow(1.0 - facing, 3.0);
+  colour = mix(colour, reflectedSky, fresnel);
+
+  // In shallow/turbid water the bed and banks tint the returning light. This
+  // is continuous environmental coupling, not a second time-of-day colour.
+  float terrainCoupling = (1.0 - smoothstep(0.45, 4.5, geometryField.a))
+    * mix(0.08, 0.28, turbidity);
+  colour = mix(colour,
+    uTerrainColour * mix(0.18, 0.9, daylight),
+    terrainCoupling);
+
   if (nearWater) {
     // The glint is broad and quiet. A narrow bright crest highlight is what
     // the quantiser promotes into white wave diagrams at low sun. Sparkle
-    // comes from MODULATING that quiet lobe by the advected grain — pixels
-    // wink as the texture slides through the highlight — rather than from
-    // sharpening the lobe itself, so the total energy stays bounded and the
-    // winking rides structure that already moves with the water.
+    // comes from MODULATING that quiet lobe by the advected grain.
     float glint = pow(max(0.0, dot(reflect(-lightDirection, normal), viewDirection)), 9.0);
     float sparkle = 0.55 + 0.9 * smoothstep(0.45, 0.85, grain);
     colour += vec3(1.0, 0.9, 0.7) * glint * sparkle * 0.11 * daylight * detailLod;
