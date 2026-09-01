@@ -47,9 +47,14 @@ import {
   DEADWOOD, FOLIAGE_BANDS, STONE, STONE_MIX_ROWS, STONY, TRUNKED, VEG_CAP, VEG_MIX,
   VEG_SIZE, VEG_TREES, bandKind, coverKind as floraCoverKind, trunkReach,
   acaciaGeo, broadleaf, bushGeo, cactusGeo, conifer, faceTone, fernGeo, grassGeo, logGeo,
-  mergeGeos, palm, plantLook, rockGeo, snag, spireGeo, standTone,
+  makeSapling, mergeGeos, palm, plantLook, promoteAnchor, rockGeo, snag, spireGeo, standTone,
   type VegKind, type VegSite, type VegTone,
 } from './flora';
+import {
+  VEGETATION_DISTRIBUTION, vegetationCandidate, vegetationClumpChance, vegetationClumpRole,
+  vegetationDensity as vegDensity, vegetationLivingChance, vegetationRoleWeights,
+  type VegetationHabitat, type VegetationRole,
+} from './vegetation-field';
 import { decodeTune, fixtureById, type FixtureTune, type WorldFixture } from './world-fixtures';
 import {
   AUTH_BASE, AUTH_MODE, CELL_BASE, DRIVE_BUILD, closeExternalUrl, openExternalUrl,
@@ -6538,7 +6543,27 @@ function seaLevelY(): number | null {
 // ahead, so density is constant however far you drive, and the site list can
 // hold tens of thousands for the cost of the numbers.
 const VEG_CELL = 220;                       // spatial bucket, metres
-const vegGrid = new Map<string, VegSite[]>();
+interface PlacedVegSite extends VegSite {
+  role: VegetationRole;
+  anchor?: boolean;
+}
+interface VegSeedStats {
+  proposedClumps: number;
+  acceptedClumps: number;
+  interiorGroups: number;
+  fringeGroups: number;
+  proposedLiving: number;
+  livingStrays: number;
+  groundEvents: number;
+  anchors: number;
+  acceptedSites: number;
+  rejectedSurface: number;
+  rejectedWall: number;
+  rejectedCover: number;
+  ms: number;
+}
+const vegGrid = new Map<string, PlacedVegSite[]>();
+const vegSeedStats = new Map<string, VegSeedStats>();
 const VEG_RANGE = 700;                      // plants are shown within this
 const vegKey = (x: number, z: number): string => `${Math.floor(x / VEG_CELL)},${Math.floor(z / VEG_CELL)}`;
 
@@ -6883,11 +6908,20 @@ function makeTone(r: () => number, x: number, z: number): VegTone {
   const stone = bedrockAt(cultEnv, x, z, STONE_MIX_ROWS, cl.w);
   return standTone(r, stone);
 }
-function pushSite(x: number, z: number, kind: VegKind, r: () => number, tone?: VegTone): void {
-  if (surfaceAt(x, z) !== 'ground') return;         // not on tarmac or water
+function pushSite(
+  x: number, z: number, kind: VegKind, r: () => number, tone?: VegTone,
+  role: VegetationRole = 'interior', stats?: VegSeedStats, allowAnchor = true,
+): boolean {
+  if (surfaceAt(x, z) !== 'ground') {
+    if (stats) stats.rejectedSurface++;
+    return false;                                    // not on tarmac or water
+  }
   for (const seg of wallGrid.get(gkey(x, z)) ?? []) {
     const [cx2, cz2] = closestOnSeg(x, z, seg);
-    if (Math.hypot(x - cx2, z - cz2) < 5) return;   // nor inside a building
+    if (Math.hypot(x - cx2, z - cz2) < 5) {
+      if (stats) stats.rejectedWall++;
+      return false;                                  // nor inside a building
+    }
   }
   const tn = tone ?? makeTone(r, x, z);
   // ── THE PLANT ITSELF IS FLORA'S BUSINESS ──
@@ -6903,12 +6937,31 @@ function pushSite(x: number, z: number, kind: VegKind, r: () => number, tone?: V
     biomeW: () => climateAt(x, z).w,
     krummK: () => krummholz(elevEffAt(x, z), climateAt(x, z).treeline),
   }, BIOME_LIST);
+  if (role === 'fringe') makeSapling(site);
+  // AN ANCHOR IS A PROMOTION, NOT A SITE. Its decision comes from world
+  // coordinates rather than this clump's RNG stream, so promoting one tree
+  // cannot reroll every member generated after it.
+  let anchor = false;
+  if (allowAnchor && (TRUNKED.includes(kind) || kind === 'bush')) {
+    const ax = Math.round(x * 8), az = Math.round(z * 8);
+    if (hash2(ax + 1709, az - 3253) < VEGETATION_DISTRIBUTION.anchorChance) {
+      const ar = mulberry32(((ax * 73856093) ^ (az * 19349663) ^ 0x5f356495) >>> 0);
+      promoteAnchor(site, ar);
+      anchor = true;
+      if (stats) stats.anchors++;
+    }
+  }
   const key = vegKey(x, z);
   let cell = vegGrid.get(key);
   if (!cell) vegGrid.set(key, (cell = []));
-  cell.push(site);
+  cell.push(Object.assign(site, { role, ...(anchor ? { anchor: true } : {}) }));
+  if (stats) stats.acceptedSites++;
+  return true;
 }
-function plantClump(cx: number, cz: number, rad: number, count: number, dominant: VegKind, r: () => number): void {
+function plantClump(
+  cx: number, cz: number, rad: number, count: number, dominant: VegKind, r: () => number,
+  role: 'interior' | 'fringe' | 'polygon' = 'interior', stats?: VegSeedStats,
+): void {
   // ONE TONE FOR THE STAND: the same shifted green over this wood, the same
   // bedrock under this scree. Rolled per clump, not per plant.
   const tone = makeTone(r, cx, cz);
@@ -6919,22 +6972,11 @@ function plantClump(cx: number, cz: number, rad: number, count: number, dominant
     const a = r() * Math.PI * 2;
     // One member in six is a different species — mixed stands, not monoculture.
     const mx2 = cx + Math.cos(a) * t, mz2 = cz + Math.sin(a) * t;
-    pushSite(mx2, mz2, r() < 0.83 ? dominant : pickKind(r, mx2, mz2), r, tone);
+    const other = role === 'fringe'
+      ? siteKindAt(mx2, mz2, sampleCover(mx2, mz2), r)
+      : pickKind(r, mx2, mz2);
+    pushSite(mx2, mz2, r() < 0.83 ? dominant : other, r, tone, role, stats);
   }
-}
-// Where clumps WANT to be: a low-frequency field, so woodland gathers into
-// belts and thickets across cell boundaries instead of respecting the grid.
-function vegDensity(x: number, z: number): number {
-  const h = (px: number, pz: number): number => {
-    const n = Math.sin(px * 12.9898 + pz * 78.233) * 43758.5453;
-    return n - Math.floor(n);
-  };
-  const sx = x * 0.0011, sz = z * 0.0011;
-  const ix = Math.floor(sx), iz = Math.floor(sz);
-  const fx = sx - ix, fz = sz - iz;
-  const u = fx * fx * (3 - 2 * fx), v = fz * fz * (3 - 2 * fz);
-  return (h(ix, iz) * (1 - u) + h(ix + 1, iz) * u) * (1 - v)
-    + (h(ix, iz + 1) * (1 - u) + h(ix + 1, iz + 1) * u) * v;
 }
 
 // Deposit sites for a polygon — no GPU work, just numbers in a bucket.
@@ -6968,7 +7010,12 @@ function scatterVeg(pts: Array<[number, number]>, seed: number, tags: Record<str
       ? (climPick(VEG_TREES, climateAt(x, z).w, r) ?? 'broadleaf')
       : siteKindAt(x, z, cv, r);
     const rad = wooded ? 10 + r() * 20 : 5 + r() * 13;
-    plantClump(x, z, rad, Math.round((wooded ? 14 : 7) + r() * (wooded ? 22 : 12)), dominant, r);
+    // ROLE `polygon`: a stand somebody MAPPED, not one the habitat field
+    // proposed. Counted apart so the distribution figures measure the field's
+    // own decisions, and so a re-seed knows these are the sites it cannot
+    // regenerate — they arrive with the tile, not with the cell.
+    plantClump(x, z, rad, Math.round((wooded ? 14 : 7) + r() * (wooded ? 22 : 12)), dominant, r,
+      'polygon');
   }
 }
 
@@ -6986,6 +7033,31 @@ const vegSeeded = new Set<string>();
 // granite, while ground seeded after it read the rock and stayed sparse.
 // Deferral is BOUNDED — a dead cover endpoint must not leave the world bald.
 const vegDeferredAt = new Map<string, number>();
+function vegCeilingAt(x: number, z: number, cover: number | null): number {
+  if (cover !== null) return COVER_VEG[cover] ?? 6;
+  const cw = climateAt(x, z).w;
+  return 4 * cw[0] + 14 * cw[1] + 9 * cw[2] + 12 * cw[3] + 6 * cw[4];
+}
+function vegetationHabitatAt(x: number, z: number, cover: number | null): VegetationHabitat {
+  const h = groundAt(x, z);
+  const slope = Math.abs(groundAt(x + SWARD_FM, z) - h) / SWARD_FM;
+  return (['open', 'wood', 'water', 'cliff', 'ruin'] as const)[swardCtxAt(x, z, cover, slope)];
+}
+function fringeKindAt(x: number, z: number, cover: number | null, r: () => number): VegKind {
+  const k = siteKindAt(x, z, cover, r);
+  if (!TRUNKED.includes(k)) return k;
+  const q = r();
+  return q < 0.38 ? 'bush' : q < 0.48 ? 'snag' : k;
+}
+function livingKindAt(x: number, z: number, cover: number | null, r: () => number): VegKind | null {
+  const k = siteKindAt(x, z, cover, r);
+  return STONY.includes(k) || DEADWOOD.includes(k) || k === 'grass' ? null : k;
+}
+const freshVegSeedStats = (): VegSeedStats => ({
+  proposedClumps: 0, acceptedClumps: 0, interiorGroups: 0, fringeGroups: 0,
+  proposedLiving: 0, livingStrays: 0, groundEvents: 0, anchors: 0, acceptedSites: 0,
+  rejectedSurface: 0, rejectedWall: 0, rejectedCover: 0, ms: 0,
+});
 function seedCell(gx: number, gz: number): void {
   const key = `${gx},${gz}`;
   if (vegSeeded.has(key)) return;
@@ -7007,30 +7079,66 @@ function seedCell(gx: number, gz: number): void {
   }
   vegDeferredAt.delete(key);
   vegSeeded.add(key);
-  const r = mulberry32(((gx * 73856093) ^ (gz * 19349663)) >>> 0);
   if (!vegGrid.has(key)) vegGrid.set(key, []);
-  const ceiling = cover !== null
-    ? (COVER_VEG[cover] ?? 6)
-    // No cover here yet: fall back to a ceiling blended from the climate
-    // rather than a switch on one global name.
-    : (() => { const cw = climateAt(mx, mz).w; return 4 * cw[0] + 14 * cw[1] + 9 * cw[2] + 12 * cw[3] + 6 * cw[4]; })();
-  // …and HOW MUCH of it, where, is still the noise field's business. Cover is
-  // 37m data; it must never become a visible grid of thickets, so the density
-  // field keeps deciding which patch of a cover class is thick and which is
-  // open, exactly as before.
-  const dens = vegDensity(mx, mz);
-  const clumps = Math.round(ceiling * (0.15 + dens * 1.25));
-  for (let i = 0; i < clumps; i++) {
-    const x = gx * VEG_CELL + r() * VEG_CELL, z = gz * VEG_CELL + r() * VEG_CELL;
-    const rad = 6 + r() * 16 * (0.4 + dens);
-    const count = Math.round((5 + r() * 14) * (0.5 + dens));
-    plantClump(x, z, rad, count, siteKindAt(x, z, sampleCover(x, z), r), r);
+  const t0 = performance.now();
+  const stats = freshVegSeedStats();
+
+  // A FIXED PROPOSAL BUDGET, with density sampled where each clump would
+  // actually stand. The old centre sample made all 220m agree; this lets the
+  // same continuous field carry a stand cleanly across a bucket boundary.
+  for (let i = 0; i < VEGETATION_DISTRIBUTION.clumpCandidates; i++) {
+    stats.proposedClumps++;
+    const c = vegetationCandidate(gx, gz, i, VEGETATION_DISTRIBUTION.clumpCandidates, 0x2a1f4d31);
+    const x = (gx + c.u) * VEG_CELL, z = (gz + c.v) * VEG_CELL;
+    const cv = sampleCover(x, z);
+    const ceiling = vegCeilingAt(x, z, cv);
+    if (ceiling <= 0) { stats.rejectedCover++; continue; }
+    const dens = vegDensity(x, z);
+    if (c.accept >= vegetationClumpChance(ceiling, dens)) continue;
+    const role = vegetationClumpRole(dens, c.role);
+    if (!role) continue;
+    stats.acceptedClumps++;
+    if (role === 'interior') stats.interiorGroups++; else stats.fringeGroups++;
+    const r = mulberry32(c.seed);
+    const dominant = role === 'fringe'
+      ? fringeKindAt(x, z, cv, r)
+      : siteKindAt(x, z, cv, r);
+    let rad = 6 + r() * 16 * (0.4 + dens);
+    let count = Math.round((5 + r() * 14) * (0.5 + dens));
+    if (role === 'fringe') {
+      rad *= VEGETATION_DISTRIBUTION.fringeRadiusMul;
+      count = Math.max(2, Math.round(count * VEGETATION_DISTRIBUTION.fringeCountMul));
+    }
+    plantClump(x, z, rad, count, dominant, r, role, stats);
   }
-  // A few genuine loners — a lone snag or boulder still reads as deliberate.
+
+  // LIVING STRAYS ARE THEIR OWN BOUNDED CANDIDATES. Their floor is strongest
+  // at wet/disturbed ground, weaker in woods and cliffs, and fades to zero in
+  // the strong interior where another plant carries no new information.
+  const lr = mulberry32(((gx * 1103515245) ^ (gz * 12345) ^ 0x34f17a2b) >>> 0);
+  const livingTone = makeTone(lr, mx, mz);
+  for (let i = 0; i < VEGETATION_DISTRIBUTION.livingCandidates; i++) {
+    stats.proposedLiving++;
+    const c = vegetationCandidate(gx, gz, i, VEGETATION_DISTRIBUTION.livingCandidates, 0x6b8b4567);
+    const x = (gx + c.u) * VEG_CELL, z = (gz + c.v) * VEG_CELL;
+    const cv = sampleCover(x, z);
+    if (vegCeilingAt(x, z, cv) <= 0) { stats.rejectedCover++; continue; }
+    const dens = vegDensity(x, z);
+    const habitat = vegetationHabitatAt(x, z, cv);
+    if (c.accept >= vegetationLivingChance(habitat, dens)) continue;
+    const r = mulberry32(c.seed);
+    const k = livingKindAt(x, z, cv, r);
+    if (!k) continue;
+    if (pushSite(x, z, k, r, livingTone, 'living-stray', stats)) stats.livingStrays++;
+  }
+
+  // GROUND EVENTS retain the old geology/deadwood pass. It has its own RNG so
+  // accepting a stand or a living stray cannot move a boulder elsewhere.
   // Bare ground and ice get boulders and nothing else: a dead tree standing in
   // a salt pan is the kind of detail that reads as a bug — and so does a
   // scree slope that cover called grass because the satellite pixel landed on
   // the one tuft holding on between the rocks.
+  const r = mulberry32(((gx * 73856093) ^ (gz * 19349663) ^ 0x1b873593) >>> 0);
   const strays = Math.round(r() * 3);
   const cellSlope = Math.abs(groundAt(mx + SWARD_FM, mz) - groundAt(mx, mz)) / SWARD_FM;
   const stony = cover === COVER.bare || cover === COVER.snow || cover === COVER.built
@@ -7041,8 +7149,11 @@ function seedCell(gx: number, gz: number): void {
     const k: VegKind = stony
       ? (roll < 0.72 ? 'rock' : 'spire')
       : roll < 0.4 ? 'rock' : roll < 0.68 ? 'snag' : roll < 0.9 ? 'log' : 'spire';
-    pushSite(gx * VEG_CELL + r() * VEG_CELL, gz * VEG_CELL + r() * VEG_CELL, k, r, tone);
+    if (pushSite(gx * VEG_CELL + r() * VEG_CELL, gz * VEG_CELL + r() * VEG_CELL,
+      k, r, tone, 'ground-event', stats, false)) stats.groundEvents++;
   }
+  stats.ms = performance.now() - t0;
+  vegSeedStats.set(key, stats);
 }
 
 // ── the sward ──────────────────────────────────────────────────────
@@ -8205,10 +8316,25 @@ function refreshSward(): void {
 // slow tick — the field only needs to change as fast as you drive through it.
 let vegAt = 0, swardAt = 0;
 let vegMs = 0;
+const emptyVegRoles = (): Record<VegetationRole, number> =>
+  ({ interior: 0, fringe: 0, 'living-stray': 0, 'ground-event': 0, polygon: 0 });
+let vegActiveRoles = emptyVegRoles();
+let vegActiveAnchors = 0;
+let vegRoleDebug = false;
+const VEG_ROLE_COL: Record<VegetationRole | 'anchor', THREE.Color> = {
+  interior: new THREE.Color(0x35d05b),
+  fringe: new THREE.Color(0xf2c94c),
+  'living-stray': new THREE.Color(0x35cfee),
+  'ground-event': new THREE.Color(0xe35a9b),
+  polygon: new THREE.Color(0x8a6bd8),
+  anchor: new THREE.Color(0xffffff),
+};
 function refreshVeg(): void {
   const t0 = performance.now();
   const counts: Record<string, number> = { broadleaf: 0, conifer: 0, palm: 0, snag: 0, bush: 0, rock: 0, grass: 0,
     acacia: 0, cactus: 0, fern: 0, log: 0, spire: 0 };
+  const activeRoles = emptyVegRoles();
+  let activeAnchors = 0;
   let trunkN = 0;
   const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
   const reach = Math.ceil(VEG_RANGE / VEG_CELL);
@@ -8260,6 +8386,8 @@ function refreshVeg(): void {
         vegDummy.scale.set(v.s * (v.sw ?? 1), v.s * (v.sy ?? 1), v.s);
         vegDummy.updateMatrix();
         mesh.setMatrixAt(i, vegDummy.matrix);
+        activeRoles[v.role]++;
+        if (v.anchor) activeAnchors++;
         // The same dissolve the sward does, at the scatter's own horizon: the
         // last ranks of scrub slide toward the colour of the ground they stand
         // on instead of standing as saturated confetti against it (and instead
@@ -8267,7 +8395,9 @@ function refreshVeg(): void {
         // more of themselves — a distant conifer is seen against the terrain
         // BEHIND it, not under it.
         const tt = Math.sqrt(d2v) / VEG_RANGE;
-        if (tt > 0.5) {
+        if (vegRoleDebug) {
+          mesh.setColorAt(i, VEG_ROLE_COL[v.anchor ? 'anchor' : v.role]);
+        } else if (tt > 0.5) {
           // LINEAR, not squared: a squared ramp left scrub on a 70%-range
           // ridge line at nine-tenths saturation — precisely the confetti the
           // dissolve exists to kill. Linear starts telling at mid-range.
@@ -8303,6 +8433,8 @@ function refreshVeg(): void {
   }
   trunks.count = trunkN;
   trunks.instanceMatrix.needsUpdate = true;
+  vegActiveRoles = activeRoles;
+  vegActiveAnchors = activeAnchors;
   vegMs = performance.now() - t0;
   // Forget buckets far behind so a long drive cannot grow the site list
   // without bound. They regenerate identically if you come back.
@@ -8312,6 +8444,7 @@ function refreshVeg(): void {
       if (Math.abs(kx - cx) > reach + 3 || Math.abs(kz - cz) > reach + 3) {
         vegGrid.delete(key);
         vegSeeded.delete(key);
+        vegSeedStats.delete(key);
       }
     }
   }
@@ -16960,6 +17093,7 @@ function streamWorld(ex: number, ez: number): void {
           for (const k of terrainMeshes.keys()) terrainDirty.add(k);
           vegSeeded.clear();
           vegGrid.clear();
+          vegSeedStats.clear();
           vegDeferredAt.clear();
         }
       }
@@ -20430,7 +20564,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     ribBatch = null;
     carveCost.tiles = 0; carveCost.ms = 0; carveCost.relieved = 0;
     pois.clear(); areaGrid.clear(); survey.clear();
-    vegGrid.clear(); vegSeeded.clear(); vegDeferredAt.clear();
+    vegGrid.clear(); vegSeeded.clear(); vegSeedStats.clear(); vegDeferredAt.clear();
     drapedWays.length = 0; drapeGrid.clear(); drapeWide.length = 0; seatGrid.clear();
     // NOT peakData: the summits themselves are global and immutable, and only
     // their LOCAL seats are stale. The ceiling does reset — the Alps must not
@@ -20979,6 +21113,108 @@ function tapeKeep(): string {
     size: [+(sMin === Infinity ? 0 : sMin).toFixed(2), +sMax.toFixed(2)],
     aspectMax: +wildest.toFixed(2),
     leafTones: hues.size, stoneTones: stones.size, biome: biome.name };
+};
+/**
+ * ── ARE THE SPATIAL LAYERS ACTUALLY WORKING? ──
+ *
+ * `__flora` answers what the plants LOOK like — kinds, tones, sizes — which is
+ * the question the flora lab already answers better. This answers the separate
+ * question distribution work actually asks: of a bounded candidate budget, how
+ * many were proposed, how many survived the habitat field, which role each was
+ * assigned, and who vetoed the rest. A stand that fails to form and a stand
+ * that forms and is then vetoed by surface look identical from the seat; they
+ * are two columns apart here.
+ *
+ * `roles` counts SEEDED sites over the ring's buckets; `active` counts what
+ * `refreshVeg` actually wrote into instance slots last pass. They differ by
+ * whatever fell outside VEG_RANGE or ran into a per-kind cap, which is the
+ * budget question — so both are reported rather than one standing in for the
+ * other.
+ *
+ * Pass `debug` to colour the instances BY ROLE instead of by species (green
+ * interior, gold fringe, cyan living stray, pink ground event, white anchor).
+ * Opt-in, and it only replaces the colour attribute the dissolve already
+ * writes — the normal material path is untouched.
+ */
+(window as unknown as { __vegdist?: object }).__vegdist = (debug?: boolean): object => {
+  if (debug !== undefined) { vegRoleDebug = debug; refreshVeg(); }
+  const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
+  const reach = Math.ceil(VEG_RANGE / VEG_CELL);
+  const sum = freshVegSeedStats();
+  const roles = emptyVegRoles();
+  const byKind: Record<string, number> = {};
+  let cells = 0, sites = 0, anchors = 0;
+  for (let gx = cx - reach; gx <= cx + reach; gx++) {
+    for (let gz = cz - reach; gz <= cz + reach; gz++) {
+      const key = `${gx},${gz}`;
+      const st = vegSeedStats.get(key);
+      if (st) {
+        cells++;
+        for (const k of Object.keys(sum) as Array<keyof VegSeedStats>) sum[k] += st[k];
+      }
+      for (const v of vegGrid.get(key) ?? []) {
+        sites++;
+        roles[v.role]++;
+        if (v.anchor) anchors++;
+        byKind[v.k] = (byKind[v.k] ?? 0) + 1;
+      }
+    }
+  }
+  const activeTotal = Object.values(vegActiveRoles).reduce((a, b) => a + b, 0);
+  return {
+    debug: vegRoleDebug,
+    cells,
+    // Proposed vs accepted is the calibration number: the plan holds the mean
+    // accepted count near the old one-sample-per-cell implementation.
+    clumps: { proposed: sum.proposedClumps, accepted: sum.acceptedClumps,
+      interior: sum.interiorGroups, fringe: sum.fringeGroups },
+    living: { proposed: sum.proposedLiving, accepted: sum.livingStrays },
+    groundEvents: sum.groundEvents,
+    anchors: { seeded: anchors, active: vegActiveAnchors, chance: VEGETATION_DISTRIBUTION.anchorChance },
+    vetoed: { surface: sum.rejectedSurface, wall: sum.rejectedWall, cover: sum.rejectedCover },
+    seeded: { sites, roles, perCell: cells ? +(sites / cells).toFixed(2) : 0 },
+    active: { total: activeTotal, roles: vegActiveRoles, trunks: trunks.count },
+    byKind,
+    budget: { range: VEG_RANGE, cell: VEG_CELL, caps: VEG_CAP,
+      capTotal: Object.values(VEG_CAP).reduce((a, b) => a + b, 0) },
+    ms: { seedTotal: +sum.ms.toFixed(1), refresh: +vegMs.toFixed(1) },
+  };
+};
+/**
+ * EVERY SITE IN ONE BUCKET, raw, so a test can fingerprint it.
+ *
+ * "A plant must not change species, move, appear or disappear merely because
+ * the vehicle or camera crossed a render-cell boundary" is the distribution
+ * work's hardest requirement and the easiest to break silently — a role
+ * decision drawn from a clump's own RNG stream reorders every member generated
+ * after it, and nothing on screen says so. Comparing this before and after a
+ * forced re-seed is the assertion.
+ */
+(window as unknown as { __vegsites?: object }).__vegsites = (gx: number, gz: number): object[] =>
+  (vegGrid.get(`${gx},${gz}`) ?? []).map((v) => ({
+    role: v.role, anchor: !!v.anchor, k: v.k,
+    x: +v.x.toFixed(2), z: +v.z.toFixed(2),
+    s: +v.s.toFixed(3), sw: +(v.sw ?? 1).toFixed(3), sy: +(v.sy ?? 1).toFixed(3),
+    h: +v.h.toFixed(2),
+  }));
+/**
+ * Drop every procedurally seeded site and build them again — the recycling a
+ * long drive does, on demand, so stability can be asserted without driving 900
+ * buckets.
+ *
+ * POLYGON STANDS SURVIVE. They are deposited by `scatterVeg` when a vector tile
+ * arrives, not by `seedCell`, so clearing them removes sites that will not come
+ * back until the tile is rebuilt — which reads exactly like a determinism
+ * failure and cost a round diagnosing as one.
+ */
+(window as unknown as { __vegreseed?: object }).__vegreseed = (): number => {
+  for (const [key, cell] of vegGrid) {
+    const kept = cell.filter((v) => v.role === 'polygon');
+    if (kept.length) vegGrid.set(key, kept); else vegGrid.delete(key);
+  }
+  vegSeeded.clear(); vegSeedStats.clear(); vegDeferredAt.clear();
+  refreshVeg();
+  return vegGrid.size;
 };
 /** WHO OWNS THE TRIANGLES — the world's geometry budget by class, with who
  *  is in the shadow pass. `__gpu` says what a frame costs; this says which

@@ -523,6 +523,33 @@ export function plantLook(
   return site;
 }
 
+/**
+ * A trunked plant at a stand edge is usually younger than the canopy behind
+ * it. Distribution decides that this site is fringe; flora decides how the
+ * same archetype reads as a sapling, with no new geometry or instance data.
+ */
+export function makeSapling(site: VegSite): void {
+  if (!TRUNKED.includes(site.k)) return;
+  site.s *= 0.68;
+  site.h *= 0.72;
+  site.sy = 0.9 + ((site.sy ?? 1) - 1) * 0.65;
+  site.sw = 0.88 + ((site.sw ?? 1) - 1) * 0.65;
+}
+
+/**
+ * Promote an accepted living site into a rare mature survivor. The caller owns
+ * rarity and habitat validity; this function only spends the attributes the
+ * instance already carries on scale, crown breadth, height and wind-shaped lean.
+ */
+export function promoteAnchor(site: VegSite, r: () => number): void {
+  const mature = 1.35 + r() * 0.2;
+  site.s *= mature;
+  site.sw = (site.sw ?? 1) * (1.12 + r() * 0.18);
+  site.sy = (site.sy ?? 1) * (1.04 + r() * 0.12);
+  if (site.h > 0) site.h *= 1.12 + r() * 0.12;
+  site.tl = (site.tl ?? 0) + (r() - 0.5) * 0.14 * FLORA_TUNING.leanMul;
+}
+
 /** What a STAND has in common: one shifted green and one bedrock, so a wood is
  *  a wood and a scree slope is one mountain's worth of rock. The bedrock index
  *  is decided by the CALLER — it is a fact about a district, and only the
