@@ -12814,31 +12814,61 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // (pc — full exemption still curtained the opening with the wall the
         // mesh interpolates to the uncut hill), and only the interior is
         // exempt and lives under the hill.
+        // ── A BORE IS AN ASSERTION, AND ONLY OSM GETS TO MAKE IT ──
+        //
+        // Burial is OUR arithmetic: the profile solver's answer minus the
+        // heightfield's, both of which are wrong here and there. `tunnel=*` is
+        // a surveyed fact. Building a tube wherever our own numbers say buried
+        // draws a black portal into a hillside that, as far as the data is
+        // concerned, has no tunnel in it — and does so most enthusiastically
+        // exactly where the profile solver is least reliable, which is steep
+        // ground. Measured at Fish Hoek: before this pass the world had zero
+        // tunnel meshes and one crater; after it, one tube — against an OSM
+        // tile whose only `tunnel=yes` ways are two pedestrian subways of two
+        // and three nodes, both `highway=footway`, and footways are tracks and
+        // were never carved in the first place. The tube corresponded to
+        // nothing in the data.
+        //
+        // So the two halves are separated by what backs them. Burial still
+        // decides the CARVE — `tn` keeps the excavation out of a hill the road
+        // is inside, and that needs no external evidence because it only ever
+        // declines to dig. A TUBE needs the tag. Untagged burial gets the
+        // exemption and nothing else: the road ducks out of sight under ground
+        // that stays intact, which is a silent wrong rather than a loud one,
+        // and it leaves the real defect — a profile solved metres under the
+        // hill — visible to `__buried` instead of dressed up as a feature.
         const s2 = s + 1, e2 = e - 1;
-        if (e2 - s2 >= 2) {
+        if (e2 - s2 >= 2 && mode === 'tunnel') {
           tunnelTube(dense, prof, elevMin, s2, e2, width, lift);
           for (let k = s2; k < e2 && k < segsOf.length; k++) {
             if (k === s2 || k === e2 - 1) segsOf[k].pc = TUNNEL_H + 1.6;
             else segsOf[k].tn = true;
           }
         } else {
-          // TOO SHORT FOR A BORE, AND STILL NOT SOMETHING TO DIG OUT.
+          // NO BORE HERE, AND STILL NOT SOMETHING TO DIG OUT.
           //
-          // A tube needs a mouth at each end and an interior between them; two
-          // or three buried stations have nothing to put between the mouths,
-          // so there is no tube to build. What the old code did here was
-          // NOTHING — no tube and, worse, no exemption either, so the stretch
-          // fell through to the carve with the full depth of its burial and
-          // the wash's ten-to-one reach to spend on it. That is the worst of
-          // the three available outcomes.
+          // Two ways in. Untagged burial, however long: our arithmetic says
+          // the hill covers the road and OSM does not say there is a tunnel,
+          // so the road is left under the hill and no portal is drawn. Or a
+          // TAGGED tunnel too short to build: a tube needs a mouth at each end
+          // and an interior between them, and two or three buried stations
+          // have nothing to put between the mouths.
           //
-          // Exempting without a tube hides a few metres of carriageway under
-          // the ground, which is wrong and looks it. Trenching removes the
-          // hill, takes the buildings standing on it with it, and is
-          // permanent — a way is rendered exactly once, so no later tile
-          // rebuild can put the hill back. Between a road that ducks out of
-          // sight for a car's length and a crater through a town, the road
-          // ducks.
+          // What the old code did in the short case was NOTHING — no tube and,
+          // worse, no exemption either, so the stretch fell through to the
+          // carve with the full depth of its burial and the wash's ten-to-one
+          // reach to spend on it. That is the worst of the three available
+          // outcomes.
+          //
+          // Exempting without a tube hides carriageway under the ground, which
+          // is wrong and looks it. Trenching removes the hill, takes the
+          // buildings standing on it with it, and is permanent — a way is
+          // rendered exactly once, so no later tile rebuild can put the hill
+          // back. Between a road that ducks out of sight and a crater through
+          // a town, the road ducks. And it stays visible as a defect: it is
+          // exactly what `__buried` counts as `exempt`, so a world quietly
+          // hiding kilometres of road under hillsides reads as a number rather
+          // than as scenery.
           // Inclusive of `e`, unlike the tube path's open notch: a single
           // buried station has no room for a notch, and `k < e` would exempt
           // nothing at all for it — leaving exactly the case this branch

@@ -237,6 +237,82 @@ export const WORLD_FIXTURES: readonly WorldFixture[] = [
         pts: run(0, 900, 0, 700) },
     ],
   },
+  {
+    id: 'sidehill',
+    label: 'SIDE HILL AND BORE',
+    note: 'Three roads the carve gets wrong in three different ways: a traverse whose bench sits below its mapped line, a ridge crossed untagged, and the same ridge crossed with tunnel=yes. Authored so the burial cases can be measured in seconds instead of the twelve minutes a real coastal spot takes to stream.',
+    spawn: { lat: HOME.lat, lon: HOME.lon, heading: 0 },
+    /**
+     * ── GROUND SHAPED TO PRODUCE BURIAL, NOT TO LOOK LIKE ANYWHERE ──
+     *
+     * Three features, each isolated in its own band of `e` so a probe reading
+     * one road cannot be answered by another. Every constant here was chosen
+     * against the arithmetic of the code it exercises, and the comments say
+     * which, because a fixture whose numbers are taste teaches nothing when it
+     * fails.
+     *
+     * THE TRAVERSE (e ≈ −800). A cliff face at 110%, with a flat shelf 30m to
+     * the seaward side sitting `SHELF` below the mapped centreline's ground.
+     * This is Chapman's Peak's documented failure in miniature: the mapped
+     * line and the DEM disagree laterally, the bench EXISTS in the raster a
+     * couple of pixels over, and `benchFlat` finds it — so the deck solves to
+     * the shelf and the centreline ground stands SHELF metres above the road.
+     *
+     * The face has to be steeper than about 92% for this fixture to do its
+     * job, and that is not an aesthetic choice. `elevMin` samples half-width
+     * plus 1.2m either side; for the width-minimum to read UNBURIED while the
+     * centreline reads buried, the downhill drop across that reach must exceed
+     * SHELF − 5.6. At hw+1.2 ≈ 3.7m for a 5m road that needs a slope past
+     * (9 − 5.6) / 3.7 ≈ 0.92. At 110% the drop is 4.1m, the minimum reads 4.9m
+     * of cover and the centreline 9m — one side of the threshold each, which
+     * is exactly the disagreement 18 of the 22 unfixed segments at Fish Hoek
+     * turned out to be.
+     *
+     * THE RIDGE (e ≈ 0 and e ≈ +800). A transverse ridge 22m high and about
+     * 110m wide. The width matters more than the height: the grade line
+     * averages the profile over ±8 stations twice, and at ~12m densified
+     * spacing that is a ±100m window applied twice, so a ridge this narrow is
+     * averaged away and the deck stays down in the valley while the ridge
+     * stands over it. A broader hill would simply be climbed.
+     */
+    height: (e, s, t) => {
+      const base = t.lift + 300;
+      // Local to the traverse band, so the ridge roads stand on level ground.
+      const face = Math.exp(-(((e + 800) / 300) ** 2));
+      const G = 1.1 * t.slope;              // 110% — see the note above on why
+      // The face itself, zero at the foot and climbing east.
+      const ramp = (e + 860) * G;
+      // THE BENCH THE SEARCH HAS TO FIND, and every number in it is forced.
+      // It sits 12m WEST of the mapped line rather than 30m, because it has to
+      // stand at a candidate the fan actually samples and be flat across three
+      // of them: BENCH_OFFS is …−20, −12, −6, 0… so a bench ~20m wide centred
+      // on −12 puts three consecutive candidates at the same height, which is
+      // what `benchFlat` looks for — a minimum GRADIENT, not a minimum height.
+      // It is SHELF below the mapped line's ground, and it must also stand
+      // clear of the fan's lowest candidate by more than 8m or `benchFlat`
+      // discards it as the sea: at ±45m and 110% the fan spans 99m, so a bench
+      // 9m down from the middle sits ~40m above the bottom and survives.
+      const SHELF = 9;
+      const flat = Math.exp(-(((e + 812) / 11) ** 4));   // super-Gaussian: a flat top
+      const benchY = (-812 + 860) * G - SHELF;
+      const traverse = (ramp * (1 - flat) + benchY * flat) * face;
+      const ridgeAt = Math.exp(-((e / 220) ** 2)) + Math.exp(-(((e - 800) / 220) ** 2));
+      const ridge = Math.exp(-((s / 55) ** 2)) * 22 * t.relief * Math.min(1, ridgeAt);
+      return base + traverse + ridge;
+    },
+    cover(e, s, t) { return coverFor(e, s, t, this.height(e, s, t)); },
+    ways: (t) => [
+      // Along the face, so the cross-section is the whole story and the
+      // along-way profile is flat — no knoll for the run detector to find.
+      { id: 1, tags: mainTags(t, 'Traverse Road'), pts: run(-800, -700, 180, 1400) },
+      // Straight over the ridge, untagged: burial with no surveyed tunnel, so
+      // the carve must stand down and NO bore may be drawn.
+      { id: 2, tags: mainTags(t, 'Duck Road'), pts: run(0, -700, 180, 1400) },
+      // The same crossing, tagged. This one has earned its tube.
+      { id: 3, tags: { ...mainTags(t, 'Bore Road'), tunnel: 'yes', layer: '-1' },
+        pts: run(800, -700, 180, 1400) },
+    ],
+  },
 ];
 
 export const fixtureById = (id: string | null | undefined): WorldFixture | null =>
