@@ -109,6 +109,14 @@ function run(e0: number, s0: number, deg: number, len: number, step = 25): Array
   return out;
 }
 
+/** A line THROUGH a point on a bearing, centred on it — for an arm that passes
+ *  a node rather than terminating at it. `run` starts AT its point, which is
+ *  what a terminating arm wants; this is the other half. */
+function through(e: number, s: number, deg: number, len: number, step = 20): Array<[number, number]> {
+  const r = deg * Math.PI / 180;
+  return run(e - Math.sin(r) * len / 2, s + Math.cos(r) * len / 2, deg, len, step);
+}
+
 /** The principal road's tags, from the tune — one place, so every fixture's
  *  main road answers the dials the same way. */
 const mainTags = (t: FixtureTune, name: string): Record<string, string> => ({
@@ -312,6 +320,90 @@ export const WORLD_FIXTURES: readonly WorldFixture[] = [
       { id: 3, tags: { ...mainTags(t, 'Bore Road'), tunnel: 'yes', layer: '-1' },
         pts: run(800, -700, 180, 1400) },
     ],
+  },
+  {
+    id: 'junctions',
+    label: 'JUNCTIONS, THE AWKWARD ONES',
+    note: 'Six nodes the tidy fixtures do not have: equal classes crossing, a five-way star, an acute Y, a stagger, a link shorter than the crop reach, and six arms of mixed class. Turn SLOPE up and every one of them becomes a batter case as well. This is the diversity the world has and crossroads/tee do not.',
+    spawn: { lat: HOME.lat, lon: HOME.lon, heading: 0 },
+    /**
+     * DELIBERATELY ALMOST FLAT, with the cross-fall on the SLOPE dial.
+     *
+     * At slope 0 the only variable is the junction geometry, so anything wrong
+     * in the picture is the crop, the bellmouth or the gore and nothing else.
+     * Turn slope up and the same six nodes acquire a cross-fall, which is what
+     * puts a batter on the low side of every mouth — the second half of the
+     * question, on the same ground, without a second fixture to keep in step.
+     *
+     * The gentle undulation is not decoration: a dead-flat world lets a wrong
+     * deck height hide, because everything is at the same height anyway.
+     */
+    height: (e, s, t) => t.lift + 300
+      + e * 0.085 * t.slope
+      + (Math.sin(e / 240) * 3.5 + Math.cos(s / 205) * 3) * t.relief,
+    cover(e, s, t) { return coverFor(e, s, t, this.height(e, s, t)); },
+    ways: (t) => {
+      const W = 420;                       // between node centres
+      const w: FixtureWay[] = [];
+      let id = 0;
+      const add = (name: string, hw: string, pts: Array<[number, number]>): void => {
+        w.push({ id: ++id, tags: { ...mainTags(t, name), highway: hw }, pts });
+      };
+
+      // ── 1 (0,0) EQUAL CLASSES CROSSING ──
+      // The crop runs down the hierarchy, and a tie defers to whichever built
+      // first — "arbitrary but consistent". Two identical secondaries crossing
+      // is the case that rule was written for; this is where it gets looked at.
+      add('Equal North', t.roadClass, through(0, 0, 0, 300));
+      add('Equal East', t.roadClass, through(0, 0, 90, 300));
+
+      // ── 2 (W,0) FIVE-WAY STAR ──
+      // Every arm TERMINATES at the node — none passes through — so no arm's
+      // carriageway covers the middle. The crop finds ONE host per end, so four
+      // of these defer to one arm and the gore between the other four is
+      // nobody's. If a junction has no mesh in its centre anywhere, it is here.
+      for (let k = 0; k < 5; k++) {
+        add(`Star ${k + 1}`, t.roadClass, run(W, 0, k * 72, 150));
+      }
+
+      // ── 3 (2W,0) ACUTE Y ──
+      // Two arms 25 degrees apart. The crop asks whether an end stands ON the
+      // host's tarmac and gives up past 1m out (`tooFarOut`); at a shallow
+      // angle the kerbs cross far from the node, so the end that should crop
+      // can be metres away from the arm it is joining.
+      add('Y Stem', t.roadClass, run(2 * W, 0, 180, 200));
+      add('Y Left', t.roadClass, run(2 * W, 0, 12, 200));
+      add('Y Right', t.roadClass, run(2 * W, 0, 37, 200));
+
+      // ── 4 (0,W) STAGGERED TEES ──
+      // Two side roads meeting a through road 18m apart on opposite sides —
+      // closer together than a mouth is wide, so the two bellmouths overlap on
+      // the host and each crop is cutting into ground the other just claimed.
+      add('Stagger Main', t.roadClass, through(0, W, 90, 320));
+      add('Stagger North', 'residential', run(-30, W, 0, 140));
+      add('Stagger South', 'residential', run(-12, W, 180, 140));
+
+      // ── 5 (W,W) A LINK SHORTER THAN THE CROP ──
+      // 22m between two nodes, and both ends of the link crop. If the two crops
+      // together eat more than its length there is nothing left to draw, which
+      // is a hole exactly where two junctions are closest together.
+      add('Link Main A', t.roadClass, through(W - 60, W, 0, 260));
+      add('Link Main B', t.roadClass, through(W + 60, W, 0, 260));
+      add('Short Link', 'unclassified', run(W - 60, W, 90, 120));
+
+      // ── 6 (2W,W) SIX ARMS, MIXED CLASS ──
+      // A trunk through, a primary through at 40 degrees, and four minor arms
+      // terminating between them. Widths from 12m to 4.5m at one node: whoever
+      // is chosen as host, four of the others are answering to a plane fitted
+      // from a road of a very different size.
+      add('Mixed Trunk', 'trunk', through(2 * W, W, 0, 320));
+      add('Mixed Primary', 'primary', through(2 * W, W, 40, 320));
+      add('Mixed Tertiary', 'tertiary', run(2 * W, W, 105, 150));
+      add('Mixed Residential', 'residential', run(2 * W, W, 160, 150));
+      add('Mixed Service', 'service', run(2 * W, W, 250, 150));
+      add('Mixed Track', 'unclassified', run(2 * W, W, 305, 150));
+      return w;
+    },
   },
 ];
 
