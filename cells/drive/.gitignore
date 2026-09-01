@@ -14,3 +14,4 @@
 # is visible while it exists, rather than committed by a tidy-up.
 client/__rev-main.ts
 client/__*-rev.ts
+.DS_Store

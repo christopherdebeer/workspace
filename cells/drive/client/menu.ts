@@ -178,15 +178,23 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
      NO BACKTICKS IN HERE: this block is a template literal and one closes it. */
   #menu { position: fixed; inset: 0; z-index: 15; display: none; touch-action: manipulation;
     font-family: '${PIXEL_FONT}', ui-monospace, Menlo, monospace; color: ${C.text};
-    font-size: 12px; line-height: 1.5; -webkit-user-select: none; user-select: none; }
-  #menu .m-scrim { position: absolute; background: rgba(6,14,17,0.92); }
+    font-size: 12px; line-height: 1.5; -webkit-user-select: none; user-select: none;
+    --m-ink: rgba(4,10,11,0.98);
+    --m-pixel-outline:
+      -1px 0 0 var(--m-ink), 1px 0 0 var(--m-ink),
+      0 -1px 0 var(--m-ink), 0 1px 0 var(--m-ink),
+      -1px -1px 0 var(--m-ink), 1px 1px 0 var(--m-ink),
+      -1px 1px 0 var(--m-ink), 1px -1px 0 var(--m-ink),
+      0 2px 6px rgba(4,10,11,0.85); }
+  #menu .m-scrim { position: absolute; }
   #menu .m-panel { position: absolute;
     top: calc(10px + env(safe-area-inset-top, 0px));
     right: calc(10px + env(safe-area-inset-right, 0px));
     bottom: calc(10px + env(safe-area-inset-bottom, 0px));
     left: calc(10px + env(safe-area-inset-left, 0px));
     border: 1px solid ${C.dim};
-    display: flex; flex-direction: column; padding: 10px 0 10px; min-height: 0; }
+    display: flex; flex-direction: column; padding: 10px 0 10px; min-height: 0;
+    text-shadow: var(--m-pixel-outline); }
   #menu .m-corner { position: absolute; width: 9px; height: 9px; }
   #menu button { font: inherit; }
   #menu .m-head { display: flex; align-items: center; gap: 8px; padding: 0 12px; min-height: 44px; }
@@ -194,16 +202,16 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     background: rgba(8,20,23,0.78); padding: 3px 8px 2px; font-size: 10px;
     min-width: 44px; min-height: 44px; }
   #menu .m-title { color: ${C.gold}; font-weight: 700; font-size: 16px; }
-  #menu .m-title .arrow { color: ${C.hot}; }
+  #menu .m-title .arrow { color: ${C.hot};  }
   #menu .m-sub { padding: 2px 12px 6px; color: ${C.dim}; font-size: 10px; letter-spacing: 2px; }
   #menu .m-x { margin-left: auto; cursor: pointer; color: ${C.hot}; border: 1px solid ${C.hot};
-    background: rgba(8,20,23,0.78); padding: 3px 8px 2px; font-size: 10px;
+    background: transparent; padding: 3px 8px 2px; font-size: 10px;
     min-width: 44px; min-height: 44px; }
   #menu .m-rule { border-top: 1px solid ${C.dim}; margin: 4px 8px; }
   #menu .m-body { flex: 1; min-height: 0; overflow-y: auto; overscroll-behavior: contain;
     padding: 6px 12px 4px; display: flex; flex-direction: column; }
   #menu .m-place { color: ${C.gold}; font-size: 16px; font-weight: 700;
-    text-shadow: 0 0 8px rgba(242,193,78,0.45); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #menu .m-dimline { color: ${C.dim}; font-size: 10px; margin: 2px 0 6px; }
   #menu table.m-kv { border-collapse: collapse; font-size: 11px; }
   #menu table.m-kv td { padding: 1px 1.2em 1px 0; vertical-align: baseline; }
@@ -266,18 +274,8 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
      the world; the pixel strokes below already carry the ink). The class stays
      as a no-op so an old cached shell can't render an unstyled div. */
   #menu .m-hubshade { display: none; pointer-events: none; }
-  /* The hub floats over the LIVE SCENE, which can be any country at any hour
-     — a soft drop shadow loses to a bright sky and the dim teal loses to
-     everything (reported from the seat). So: ACCENT AND WHITE ONLY up here,
-     and every word wears a real 1px pixel stroke — eight hard offsets in the
-     panel ink — plus one soft drop for ground. */
-  #menu.hub .m-title, #menu.hub .m-sub, #menu.hub .m-place, #menu.hub .m-dimline,
-  #menu.hub .m-statline, #menu.hub table.m-kv { text-shadow:
-    -1px 0 0 rgba(4,10,11,0.98), 1px 0 0 rgba(4,10,11,0.98),
-    0 -1px 0 rgba(4,10,11,0.98), 0 1px 0 rgba(4,10,11,0.98),
-    -1px -1px 0 rgba(4,10,11,0.98), 1px 1px 0 rgba(4,10,11,0.98),
-    -1px 1px 0 rgba(4,10,11,0.98), 1px -1px 0 rgba(4,10,11,0.98),
-    0 2px 6px rgba(4,10,11,0.85); }
+  /* The live scene can be any country at any hour, so every menu word carries
+     the panel's inherited 1px pixel ink rather than relying on a soft shadow. */
   #menu.hub .m-sub, #menu.hub .m-dimline, #menu.hub table.m-kv td { color: ${C.text}; }
   #menu.hub table.m-kv td:first-child { color: ${C.gold}; }
   #menu .m-title .at { color: ${C.text}; }
