@@ -119,6 +119,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/lab.test.mjs` | every lab opens, dials persist and travel | ~6min |
 | `node devtools/fixture-world.test.mjs` | the whole mesh pipeline over authored ground | ~7min |
 | `node client/clip.test.mjs` | tile clipping, incl. the corner nicks | instant |
+| `node devtools/dock-sky.test.mjs` | the chart dock's sky is the dock's own | ~3min |
 | `node devtools/appshell.test.mjs` | the worker precaches only what the cell serves | instant |
 | `node devtools/offline-shell.test.mjs` | the browser starts with the network off | ~20s |
 | `node devtools/storage-reset.test.mjs` | settings can hand the whole device back | ~20s |
@@ -130,6 +131,30 @@ Run them from `/home/user/workspace`, not from the cell directory.
 **`tsc` failure is silent if you pipe it.** `npx tsc --noEmit 2>&1 | head && echo OK`
 prints OK on failure, because `head` succeeds. Use `;` not `&&`, and read the
 output.
+
+### THE COMPILER IS PINNED NOW, AND IT HAD BEEN FLOATING
+
+Two configs compile this client — `cells/drive/tsconfig.json` (plus `index.ts`)
+and `native/tsconfig.json` (which includes `../client/**/*.ts`) — and they were
+running **different compilers**. The root had `"typescript": "^5.3.3"` and NO
+`package-lock.json`, so an install resolved it to whatever was newest; native
+pinned 5.3.3 exactly and has a lock. `npx tsc` in the cell therefore reported
+five errors that `npm run typecheck` in native did not, which is how a previous
+session recorded "the cell typechecks clean" in a commit message and was wrong.
+
+The errors were real and were entirely TypeScript 5.7's doing: typed arrays
+became generic in their buffer (`Float32Array<ArrayBufferLike>`), `BufferSource`
+in `lib.dom` is invariant `ArrayBufferView<ArrayBuffer>`, and `@types/three`
+0.160 types `new DataTexture(data)` as `BufferSource`. Five declarations —
+`HydroTileField`'s four arrays and `WxField.data` — now say `<ArrayBuffer>`,
+which is what they always were.
+
+**That syntax is a hard error on 5.3.3** ("Type 'Float32Array' is not generic"),
+so both sides moved together: root pinned to `5.9.3`, native's pin and lock
+bumped to match. Measured before committing to the direction — 5.9.3 over
+native's wider include produced the SAME five errors and nothing else, so the
+migration was bounded. If you ever unpin either one, they will drift again and
+the two checks will disagree in silence.
 
 ### Tests that fail for reasons that are not you
 
@@ -419,6 +444,38 @@ nearest-neighbour. Consequences that are not negotiable:
   a gamma under one.
 - Per-fragment work is the **cheap** resource here (the frame is ~148×320);
   per-vertex and per-draw work is the scarce one. Procedural beats textured.
+
+**Anything hung around the eye is a function of the CAMERA, not of the frame.**
+The scene is rendered more than once per frame — the world through `camera`,
+then the chart's POV dock through `miniCam`, then the studio bay — and anything
+set once per frame is silently inherited by every render after the first.
+
+The sky dome is the worked example. It is a 20km shell centred on the eye, and
+its centre, its scale and the cloud deck's ray origin (`uCamXZ`) were all set
+from the main camera. Reported from the chart: the sky in the dock lifts and
+drops as the MAIN viewport zooms. It did — the chart camera stands 3.4km up at
+reading zoom and 93km up at the ceiling, and the dock's preview, whose eye is at
+1.3m, was drawn under a dome centred at whichever of those the chart happened to
+be at, inflated by up to 3.4x because the scale rides the chart's near plane.
+Measured with `__docksky`: gaps of 5km, 32km and 97km across three zooms, and
+the far end rendered as a black band where the sky should be.
+
+`aimSky(cam)` is now called once per RENDER. The dock block already did exactly
+this for `ovGroup`/`farGroup` under a comment reading THE DOCK IS A POV, SO IT
+GETS THE POV'S WORLD; the sky was simply missed when that was written. If you
+add another camera, it needs the same treatment — and `__docksky` reports the
+dome's position from inside `blitPixelated`, at the render rather than beside
+the assignment, because a value asserted next to where it is set proves nothing.
+
+**Layers are NOT the fix for this, and were the first thing suggested.**
+`Object3D.layers` + `Camera.layers` do work — `skyDome.layers.set(2)` with
+`camera.layers.disable(2)` would genuinely hide the dome from the chart — but
+hiding it solves the wrong problem twice over: the dock NEEDS the sky and needs
+it in the right place, and the chart needs it too, because a hole in the
+streamed world shows the dome and a chart with no backdrop is the black map that
+was reported at half past midnight. Reach for layers when a camera should not
+SEE something; reach for a per-camera update when every camera needs its own
+version of it.
 
 **GLSL ES 1.00**: dynamic indexing of a uniform array in a fragment shader is
 illegal. Use a lookup texture. (`markTins` in `facade.ts` is the worked

@@ -46,7 +46,7 @@
     "electron-builder": "26.15.3",
     "esbuild": "0.28.2",
     "three": "0.160.0",
-    "typescript": "5.3.3"
+    "typescript": "5.9.3"
   },
   "overrides": {
     "xcode": {

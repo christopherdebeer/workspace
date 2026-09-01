@@ -2626,6 +2626,48 @@ skyDome.frustumCulled = false;
 skyDome.renderOrder = -10;
 scene.add(skyDome);
 
+/**
+ * ── THE SKY BELONGS TO WHOEVER IS ABOUT TO DRAW IT ──
+ *
+ * The dome is not in the world: it is a shell hung around the eye, so every
+ * number it needs is a fact about ONE camera. Three of them, and all three
+ * used to be set from the main `camera` once a frame and then reused by the
+ * chart dock's POV blit, which renders the same scene through `miniCam`.
+ *
+ * Reported from the chart: the sky in the dock lifts and drops as the MAIN
+ * viewport zooms. It did, and by kilometres. `position` put the dome's centre
+ * at the chart camera — up to 43km overhead — while the dock's eye stands at
+ * 1.3m, so the preview looked out at a horizon slung far above its own; and
+ * `scale` rides the chart's near plane, which grows to 22km at full zoom, so
+ * the shell also swelled ~9x as you pulled out. Two of the three moved with
+ * the zoom, which is exactly the lift and drop.
+ *
+ * So it is a function of a camera now, called once per render rather than
+ * once per frame. The dock already does this for `ovGroup`/`farGroup` under a
+ * comment that says THE DOCK IS A POV, SO IT GETS THE POV'S WORLD — the sky
+ * was simply missed when that was written.
+ *
+ * `scale` is here rather than fixed at 20km because the chart's near plane
+ * grows with altitude and at the widest zoom stands 22km out, which clips the
+ * entire sky away and leaves a black band above the horizon. Keep the shell
+ * comfortably outside whatever the near plane is now; it is a gradient
+ * backdrop, so scaling it costs nothing and shows nothing. From a POV eye
+ * (near = 1) the max() collapses to 1 and the dome is its natural 20km again.
+ *
+ * `uCamXZ` is the deck ray-march's origin — `uCamXZ + d.xz * (uDeckY / d.y)`
+ * is where the view ray meets the cloud deck — so a dock rendered with the
+ * chart's XZ sampled its clouds from wherever the chart happened to be panned
+ * to, not from over the truck. It used to be set inside `stepWeather`, which
+ * is the wrong owner for a camera fact; there is one owner now.
+ */
+/** Read by __docksky; written by blitPixelated at the render it describes. */
+const blitSky = { camY: 0, domeY: 0, scale: 1 };
+function aimSky(cam: THREE.PerspectiveCamera): void {
+  skyDome.position.copy(cam.position);
+  skyDome.scale.setScalar(Math.max(1, (cam.near * 8) / 20000));
+  (skyMat.uniforms.uCamXZ as { value: THREE.Vector2 }).value.set(cam.position.x, cam.position.z);
+}
+
 const hemi = new THREE.HemisphereLight(0xbcd2ee, 0x6a5a3c, 0.72); // sky fill + ground bounce
 scene.add(hemi);
 const sun = new THREE.DirectionalLight(0xffe0b0, 1.5);
@@ -18853,9 +18895,6 @@ function stepWeather(now: number, dt: number): void {
     const k = clamp(1 / sy, 0, 4);
     envU.uSunSkew.value.set(-SUN_DIR.x * k, -SUN_DIR.z * k);
   }
-  // The deck is anchored in the world, so the dome has to be told where the
-  // camera is standing under it.
-  (skyMat.uniforms.uCamXZ as { value: THREE.Vector2 }).value.set(camera.position.x, camera.position.z);
   // ONE WIND, and it is the real one. Open-Meteo reports the direction the air
   // is coming FROM, so the deck travels toward bearing+180; the sample offset
   // runs the other way again, because shifting a noise field moves what you see
@@ -30675,14 +30714,7 @@ function tick(now: number): void {
   // overlay projected through LAST frame's camera and trailed the world by
   // a frame while panning — pins visibly sliding off their buildings.
   camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
-  skyDome.position.copy(camera.position);
-  // The dome rides with the camera, but its RADIUS is fixed at 20km and the
-  // chart's near plane grows with altitude — at the widest zoom the near plane
-  // stands 22km out and clips the entire sky away, which is a black band above
-  // the horizon. Keep the shell comfortably outside whatever the near plane is
-  // now; it is a gradient backdrop, so scaling it costs nothing and shows
-  // nothing.
-  skyDome.scale.setScalar(Math.max(1, (camera.near * 8) / 20000));
+  aimSky(camera);
   compMat.uniforms.camPos.value.copy(camera.position);
   // Where the sun sits on screen, for the flare. Occlusion is left to the
   // shader (one depth fetch); here we only ask whether it is in frame at all.
@@ -30896,12 +30928,18 @@ function tick(now: number): void {
     // you into. Off for the blit, back on for the chart.
     const ovWas = ovGroup.visible, farWas = farGroup.visible;
     ovGroup.visible = false; farGroup.visible = false;
+    // …and the sky is part of that world. See aimSky: the dome is hung around
+    // ONE eye, so drawing it for the chart camera and then reusing it here
+    // slung the dock's horizon kilometres high and swelled it as the chart
+    // zoomed. Aim it at the eye actually rendering, then hand it back.
+    aimSky(miniCam);
     // Through the SAME low-res target, nearest magnification, sRGB encode,
     // grade and palette dither as the world. Rendered straight to the screen it
     // was a smooth, full-colour window inside a hand-built bitmap HUD — the one
     // thing on screen that did not look like the game.
     blitPixelated(scene, miniCam, vx, vy, vw, vh);
     ovGroup.visible = ovWas; farGroup.visible = farWas;
+    aimSky(camera);
     if (lastPov === 'cab') ghostCab(false);
   }
   { const bay = menu.bayRect(); if (bay) renderStudio(dt, bay); }
@@ -30947,6 +30985,16 @@ function blitPixelated(
   renderer.setRenderTarget(rtVeh);
   renderer.setClearColor(clear, 1);
   renderer.clear(true, true, false);
+  // WHERE THE SKY STOOD WHEN THIS WINDOW WAS DRAWN. Observed here, at the
+  // render, rather than beside the aimSky call that sets it — asserting a
+  // value next to its own assignment proves nothing, and what went wrong was
+  // precisely that this render inherited another camera's sky. Only for the
+  // world scene; the studio bay has no dome in it. See __docksky.
+  if (what === scene) {
+    blitSky.camY = cam.position.y;
+    blitSky.domeY = skyDome.position.y;
+    blitSky.scale = skyDome.scale.x;
+  }
   renderer.render(what, cam);
   renderer.setRenderTarget(null);
   renderer.setClearColor(0x05070c, 1);
@@ -35375,6 +35423,15 @@ function setClean(on: boolean): void {
 (window as unknown as { __hudrects?: object }).__hudrects = (): object =>
   ({ dock: dockRect, pov: povRect, mapUp: mapUpRect, drone: droneRect });
 (window as unknown as { __hudscale?: object }).__hudscale = (): number => hudS;
+/** THE SKY THE DOCK WAS ACTUALLY DRAWN UNDER. `gap` is the whole question: the
+ *  dome is a shell hung around ONE eye, so at the dock's render it must be on
+ *  the DOCK's eye and nowhere else. It used to be left wherever the chart
+ *  camera put it — 3km up at reading zoom, 80km at the widest — and the gap is
+ *  that mistake in metres. Zero at every zoom, or the preview's horizon rides
+ *  the main viewport's zoom, which is what was reported from the chart. */
+(window as unknown as { __docksky?: object }).__docksky = (): object =>
+  ({ camY: +blitSky.camY.toFixed(2), domeY: +blitSky.domeY.toFixed(2),
+    scale: +blitSky.scale.toFixed(3), gap: Math.round(Math.abs(blitSky.domeY - blitSky.camY)) });
 /** Reads which way the chart is turned; with an argument, SETS it — a pan test
  *  has to run in both orientations and the toggle is otherwise a HUD tap. */
 /** Where the newest mark actually landed — the one number the placement bug
