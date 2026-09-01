@@ -12760,18 +12760,50 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   if (drivable && mode !== 'tunnel') {
     for (let i = 0; i < dense.length; i += 10) noteDryLand(dense[i][0], dense[i][1], prof[i]);
   }
-  if (mode !== 'bridge') for (const [a, b] of runs) {
+  // ── BURIAL IS ASKED EVERYWHERE, NOT ONLY WHERE A RUN WAS FOUND ──
+  //
+  // This scan used to run inside `for (const [a, b] of runs)`, and a run and a
+  // burial are answers to two different questions. A run is a KNOLL IN THE
+  // ALONG-WAY PROFILE — `alg[i]` standing TUNNEL_TOL above its own ±20-station
+  // average. Burial is GROUND OVER THE DECK. On a long smooth grade the first
+  // never fires, so the second was never asked; and the grade line above runs
+  // AFTER the run detector and rewrites `prof` for every station, so a profile
+  // buried by that smoothing was invisible to the detector by construction.
+  //
+  // Measured at Fish Hoek on Highway Road, hard-settled over six minutes so it
+  // could not be a streaming artefact: natural ground +0.22m, deck −7.66m, and
+  // the terrain carved down to −7.78m to reach it. `__carve` at that spot: 248
+  // of 305 samples needing the cut and NONE of them an artefact, terrain over
+  // target a median 8.29m, vertices 5–12m past the kerb dropped a median
+  // 12.72m and one at 25m by 18.01m — and every corner of the triangle under
+  // the road sitting exactly on its dig limit, so the carve was not
+  // overshooting, it was doing precisely what it was licensed to do.
+  // `__tunnelBreach` reported ZERO tunnel meshes in the whole world.
+  //
+  // `tn` is the only thing that stops the carve digging a road out of the hill
+  // it is inside — `rasterizeCut` returns on it, so the segment never reaches
+  // `cutCells` and `carveCorridors` never sees it — and nothing was setting it
+  // here. The wash makes the damage wide as well as deep: `roadFloorHard` lets
+  // a vertex sit at deck + out·CUT_WASH, and at 0.1 per metre an 8m burial
+  // licences an 80m crater before the floor climbs back to grade. That is the
+  // hole, and the buildings standing on its rim.
+  //
+  // Canopies are still exempt: tunnel=avalanche_protector and covered=yes mean
+  // a roof over a road that keeps its own grade in the open air, and burying
+  // one is the fault the canopy branch exists to prevent. Bridges too — a
+  // bridge rides its chord and its deck is meant to be clear of the ground.
+  if (mode !== 'none' && mode !== 'bridge' && !canopy && n > 2) {
     // Tube only where the road is genuinely BURIED — where the terrain covers
     // the profile. An unburied stretch (coarse heightfield, shallow cut) stays
     // an open road; the tube would otherwise stand exposed like a dark box.
     let s = -1;
-    for (let i = a; i <= b; i++) {
+    for (let i = 0; i < n; i++) {
       // FULLY buried: there must be enough ground overhead to contain the
       // whole tube. The old 1.2m threshold let a 5m shell stand almost four
       // metres proud of flat ground — the black arch hanging over the road.
       const buried = elevMin[i] - prof[i] > TUNNEL_H + 0.6;
       if (buried && s < 0) s = i;
-      if ((!buried || i === b) && s >= 0) {
+      if ((!buried || i === n - 1) && s >= 0) {
         const e = buried ? i : i - 1;
         // THE PORTAL THROAT. The tube used to start at the first buried
         // station, so the terrain mesh interpolated a wall of dirt straight
@@ -12789,6 +12821,30 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
             if (k === s2 || k === e2 - 1) segsOf[k].pc = TUNNEL_H + 1.6;
             else segsOf[k].tn = true;
           }
+        } else {
+          // TOO SHORT FOR A BORE, AND STILL NOT SOMETHING TO DIG OUT.
+          //
+          // A tube needs a mouth at each end and an interior between them; two
+          // or three buried stations have nothing to put between the mouths,
+          // so there is no tube to build. What the old code did here was
+          // NOTHING — no tube and, worse, no exemption either, so the stretch
+          // fell through to the carve with the full depth of its burial and
+          // the wash's ten-to-one reach to spend on it. That is the worst of
+          // the three available outcomes.
+          //
+          // Exempting without a tube hides a few metres of carriageway under
+          // the ground, which is wrong and looks it. Trenching removes the
+          // hill, takes the buildings standing on it with it, and is
+          // permanent — a way is rendered exactly once, so no later tile
+          // rebuild can put the hill back. Between a road that ducks out of
+          // sight for a car's length and a crater through a town, the road
+          // ducks.
+          // Inclusive of `e`, unlike the tube path's open notch: a single
+          // buried station has no room for a notch, and `k < e` would exempt
+          // nothing at all for it — leaving exactly the case this branch
+          // exists to catch. One segment of over-exemption is a car's length
+          // of road under a hill; one segment of under-exemption is a hole.
+          for (let k = s; k <= e && k < segsOf.length; k++) segsOf[k].tn = true;
         }
         s = -1;
       }
@@ -24025,6 +24081,57 @@ function farHeightAt(wx: number, wz: number): number | null {
     ]);
   }
   return out;
+};
+/**
+ * EVERY BUILT SEGMENT WITH GROUND OVER IT, WITHOUT NEEDING ITS NAME.
+ *
+ * `__profile` and `__bury` both select on `s.nm`, so neither can see an
+ * unnamed way — and this tile's largest highway entry by node count is an
+ * unnamed footway. Asking them about a hole and getting "0 buried" once sent
+ * a whole investigation backwards: the road WAS 8m under the ground, the query
+ * was looking at the wrong roads, and the empty answer read as exoneration.
+ *
+ * So: no name, no radius that averages the sea in. For each built segment,
+ * the natural field over the deck at its midpoint, split by whether the
+ * segment carries the tunnel exemption. `exposed` is the defect — ground over
+ * a deck that the carve is still allowed to dig out — and on a healthy world
+ * it is empty. `deep` is the same thing past the tube threshold, which is the
+ * excavation that removes hillsides.
+ */
+(window as unknown as { __buried?: object }).__buried = (r = 400): object => {
+  const seen = new Set<Seg>();
+  const exposed: number[] = [], exempt: number[] = [];
+  let deep = 0, segs = 0, worst = 0, worstAt: number[] | null = null;
+  for (const arr of roadGrid.values()) for (const s of arr) {
+    if (seen.has(s) || s.ya === undefined || s.yb === undefined) continue;
+    seen.add(s);
+    const mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2;
+    if (Math.hypot(mx - state.x, mz - state.z) > r) continue;
+    segs++;
+    // A TRACK IS NOT A DEFECT. rasterizeCut returns on `tk` before `tn` is
+    // even consulted, so a buried footpath is already safe from the carve and
+    // counting it here would bury the signal in ways that were never at risk.
+    if (s.tk) continue;
+    const over = sampleHeight(mx, mz) - ((s.ya as number) + (s.yb as number)) / 2;
+    if (over <= 0.5) continue;
+    if (s.tn || s.pc !== undefined) { exempt.push(over); continue; }
+    exposed.push(over);
+    if (over > TUNNEL_H + 0.6) deep++;
+    if (over > worst) { worst = over; worstAt = [Math.round(mx), Math.round(mz)]; }
+  }
+  const stat = (v: number[]): object | null => {
+    if (!v.length) return null;
+    const q = v.slice().sort((a, b) => a - b);
+    return { n: q.length, med: +q[q.length >> 1].toFixed(2), max: +q[q.length - 1].toFixed(2) };
+  };
+  return {
+    segs, r,
+    exposed: stat(exposed),
+    exempt: stat(exempt),
+    deeperThanTube: deep,
+    worst: +worst.toFixed(2),
+    worstAt,
+  };
 };
 (window as unknown as { __tiledbg?: object }).__tiledbg = (v?: boolean): boolean => {
   tileDbg = v ?? !tileDbg;
