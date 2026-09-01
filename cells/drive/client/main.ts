@@ -6747,6 +6747,21 @@ type SwardCtx = typeof SwardCtx[keyof typeof SwardCtx];
  *  outermost to match FLOWER_PAL's own nesting, species 0..2 within it. */
 const SWARD_FLOW_NAMES = ['Open', 'Wood', 'Water', 'Cliff', 'Ruin']
   .flatMap((c) => [0, 1, 2].map((s) => `uFlow${c}${s}`));
+/**
+ * FLOWER DISTRIBUTION, separate from flower colour and from grass density.
+ *
+ * Patch fill is the established meadow treatment. The five stray floors add
+ * only the long tail between those meadows: the shader takes their maximum,
+ * rather than adding them, so a meadow's existing core density cannot rise.
+ * All eight values are uniforms so the shipping material can be tuned and
+ * probed directly without a second implementation in a lab.
+ */
+const SWARD_FLOWER = {
+  patchFill: 0.30,
+  stray: { open: 0.00125, wood: 0.0006, water: 0.0020, cliff: 0.0006, ruin: 0.0016 },
+  patchMetres: 34,
+  speciesMetres: 34,
+} as const;
 const SWARD_STRUCT_R = 14;    // metres to a wall/ruin that still reads as "at it"
 const SWARD_WATER_R = 9;      // metres beyond a channel's edge that is still "at the water"
 const SWARD_CLIFF_SLOPE = 0.5;  // rise/run past which the ground reads as scree, not turf
@@ -7231,6 +7246,16 @@ const swardU = {
    *  card lit exactly as the ground under it, 1 is a little wall. See the note
    *  at the injection site. */
   uSwardUp: { value: 0.25 },
+  uFlowerPatchFill: { value: SWARD_FLOWER.patchFill },
+  uFlowerStrayOpen: { value: SWARD_FLOWER.stray.open },
+  uFlowerStrayWood: { value: SWARD_FLOWER.stray.wood },
+  uFlowerStrayWater: { value: SWARD_FLOWER.stray.water },
+  uFlowerStrayCliff: { value: SWARD_FLOWER.stray.cliff },
+  uFlowerStrayRuin: { value: SWARD_FLOWER.stray.ruin },
+  uFlowerPatchM: { value: SWARD_FLOWER.patchMetres },
+  uFlowerSpeciesM: { value: SWARD_FLOWER.speciesMetres },
+  /** 1 paints patch flowers warm and solitary flowers cyan. Normal is 0. */
+  uFlowerDbg: { value: 0 },
   /** The outermost band's reach: the ONE curve every band thins along, so the
    *  fade cannot have a seam where two bands meet. */
   // The outermost fade's END, not a band's reach: everything past this is
@@ -7523,6 +7548,11 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         uniform vec3 uSwardEye; uniform vec3 uSwardTint; uniform float uSwardDbg;
         uniform float uSwardFall; uniform float uSwardNear; uniform float uSwardMatch;
         uniform float uSwardVary; uniform float uSwardUp;
+        uniform float uFlowerPatchFill;
+        uniform float uFlowerStrayOpen; uniform float uFlowerStrayWood;
+        uniform float uFlowerStrayWater; uniform float uFlowerStrayCliff;
+        uniform float uFlowerStrayRuin; uniform float uFlowerPatchM;
+        uniform float uFlowerSpeciesM; uniform float uFlowerDbg;
         uniform float uTime; uniform vec2 uGust;
         ${SWARD_FLOW_NAMES.map((n) => `uniform vec3 ${n};`).join(' ')}
         varying vec3 vSward;
@@ -7641,19 +7671,27 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         vec4 sColSample = texture2D(uSwardCol, sUv);
         float sCtx = floor(sColSample.a * 255.0 + 0.5);
         float sFlowerRate = sCtx > 3.5 ? 0.14 : sCtx > 2.5 ? 0.05 : sCtx > 1.5 ? 0.10 : sCtx > 0.5 ? 0.035 : 0.06;
-        float sClumpN = swNoise(sCell / 34.0);
+        float sClumpN = swNoise(sCell / max(uFlowerPatchM, 1.0));
         float sClumpChance = smoothstep(sFlowerRate * 1.4, sFlowerRate * 0.3, sClumpN);
         float sH4 = swHash(sKey * 3.3 + 47.1);
         // A THIRD OF A FLOWERING PATCH, not half of it. At 0.5 the reported
         // hillside came up a solid wash of colour; a meadow in bloom is still
         // mostly grass, with the flowers standing up THROUGH it.
-        bool sIsFlower = sH4 < sClumpChance * 0.3;
+        float sPatchChance = sClumpChance * uFlowerPatchFill;
+        float sStrayChance = sCtx > 3.5 ? uFlowerStrayRuin
+          : sCtx > 2.5 ? uFlowerStrayCliff
+          : sCtx > 1.5 ? uFlowerStrayWater
+          : sCtx > 0.5 ? uFlowerStrayWood
+          : uFlowerStrayOpen;
+        float sFlowerChance = max(sPatchChance, sStrayChance);
+        bool sIsFlower = sH4 < sFlowerChance;
+        bool sIsStrayFlower = sIsFlower && sH4 >= sPatchChance;
         // ONE SPECIES PER PATCH, not per blade — a drift of buttercups reads
         // as a drift because every blade in it agrees on the flower, and the
         // patch-scale key (same cell swNoise reads) is what makes neighbouring
         // patches free to disagree, which is the "several colours in one
         // meadow" a single habitat colour could never give.
-        float sSpecies = floor(swHash(floor(sCell / 34.0) * 5.3 + 71.0) * 3.0);
+        float sSpecies = floor(swHash(floor(sCell / max(uFlowerSpeciesM, 1.0)) * 5.3 + 71.0) * 3.0);
         // ── A PARTITION OF UNITY, WHICH IS WHY THERE IS NO LONGER A BAND EDGE ──
         //
         // Reported from the seat as "a stark band ahead of the car, mid grass,
@@ -7825,7 +7863,9 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // interpolated into grass with a gradient on it. Per-card and flat is
         // the whole point.
         if (sIsFlower) {
-          if (aBlade < 0.5) {
+          if (uFlowerDbg > 0.5) {
+            vSward = sIsStrayFlower ? vec3(0.05, 0.85, 1.0) : vec3(1.0, 0.18, 0.04);
+          } else if (aBlade < 0.5) {
             vSward *= vec3(0.80, 1.06, 0.74);
           } else {
             vec3 sFlow = sCtx > 3.5
@@ -21641,6 +21681,17 @@ function truckSpec(): Record<string, number> {
     // see it — which is exactly how one shipped.
     gReach: swardU.uGReach.value, fieldHalf: SWARD_FW / 2,
     match: swardU.uSwardMatch.value,
+    flowers: {
+      patchFill: swardU.uFlowerPatchFill.value,
+      stray: {
+        open: swardU.uFlowerStrayOpen.value, wood: swardU.uFlowerStrayWood.value,
+        water: swardU.uFlowerStrayWater.value, cliff: swardU.uFlowerStrayCliff.value,
+        ruin: swardU.uFlowerStrayRuin.value,
+      },
+      patchMetres: swardU.uFlowerPatchM.value,
+      speciesMetres: swardU.uFlowerSpeciesM.value,
+      debug: swardU.uFlowerDbg.value,
+    },
     slots: swardBands.reduce((a, b) => a + b.side * b.side, 0),
     verts: swardBands.reduce((a, b) => a + b.side * b.side * 9, 0),
     fieldMs: +swardFieldMs.toFixed(1), maskMs: +swardMaskMs.toFixed(1),
