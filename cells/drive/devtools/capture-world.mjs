@@ -31,9 +31,20 @@
  * survives a settled world is a defect in the geometry rather than in the
  * streaming.
  */
+import { execFileSync } from 'node:child_process';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { decodePng, CELL } from './harness.mjs';
+import { decodePng, CELL, ROOT } from './harness.mjs';
+
+// THE SHIPPING CONDITIONER, NOT A COPY OF IT. See client/demrepair.ts: a raw
+// terrarium pixel is not what the game builds, and a fixture captured from raw
+// pixels reproduces corruption the game repairs. esbuild it into the repo (the
+// same route every other tool here takes to a client module) and import it.
+const dmOut = join(ROOT, 'node_modules/.cache/drive-demrepair.mjs');
+mkdirSync(join(ROOT, 'node_modules/.cache'), { recursive: true });
+execFileSync('npx', ['esbuild', join(CELL, 'client/demrepair.ts'),
+  '--bundle', '--format=esm', `--outfile=${dmOut}`], { stdio: 'pipe', cwd: ROOT });
+const { demBad, demFloor, demPatch, demSpikes, repairDem } = await import(dmOut);
 
 const args = process.argv.slice(2);
 const name = args.find((a) => !a.startsWith('--')) ?? 'capture';
@@ -134,21 +145,64 @@ for (const [x, y] of tileRange(OSM_Z)) {
 // would invent detail the source does not have, and coarser would lose the
 // pixel-to-pixel roll that is the whole difficulty of a cliff road.
 const demTiles = new Map();
+const demReport = [];
 for (const [x, y] of tileRange(DEM_Z)) {
   const buf = await get(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${DEM_Z}/${x}/${y}.png`);
-  demTiles.set(`${x}/${y}`, decodePng(buf));
+  const t = decodePng(buf);
+  // Terrarium: elevation = R*256 + G + B/256 - 32768.
+  let e = new Float32Array(256 * 256);
+  for (let i = 0; i < 256 * 256; i++) {
+    const o = i * t.ch;
+    e[i] = t.px[o] * 256 + t.px[o + 1] + t.px[o + 2] / 256 - 32768;
+  }
+  // Looped, not `Math.min(...e)`: that spreads 65,536 arguments onto the call
+  // stack, which is a stack overflow waiting for a slightly bigger tile.
+  let rlo = Infinity, rhi = -Infinity;
+  for (let i = 0; i < e.length; i++) { if (e[i] < rlo) rlo = e[i]; if (e[i] > rhi) rhi = e[i]; }
+  const raw = [rlo, rhi];
+  // Metres per pixel at THIS tile's latitude — the tests are statements about
+  // the ground, so they are made in ground units.
+  const tLat = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 0.5)) / 2 ** DEM_Z))) * 180) / Math.PI;
+  const mpp = (40075016.686 * Math.cos((tLat * Math.PI) / 180)) / (2 ** DEM_Z * 256);
+  // A capture is always the FINE layer, so it always gets the fine floor: -500m
+  // says "land, near enough", and a reading below the Dead Sea in 2km of ground
+  // the truck drives on is a decode error rather than bathymetry.
+  const floor = demFloor(DEM_Z, DEM_Z);
+  const bad = demBad(e, floor);
+  const spikes = demSpikes(e, mpp);
+  // A TILE THE GAME WOULD REFUSE IS NOT A TILE THE FIXTURE MAY KEEP. The game
+  // returns null and the streamer asks again; a capture has nobody to ask, so
+  // it says so out loud rather than banking ground the game would never build.
+  const refused = bad > e.length * 0.02 ? 'range' : spikes > e.length * 0.03 ? 'spiked' : null;
+  if (bad) demPatch(e, floor);
+  let fixed = 0;
+  e = repairDem(e, mpp, (_, n) => { fixed = n; });
+  demTiles.set(`${x}/${y}`, e);
+  demReport.push({ x, y, raw, bad, spikes, fixed, refused });
 }
 const demMetresPerPx = (40075016.7 / 2 ** DEM_Z) * Math.cos((lat * Math.PI) / 180) / 256;
 const HN = Math.max(24, Math.min(256, Math.ceil((2 * R) / demMetresPerPx) + 1));
 const hstep = (2 * R) / (HN - 1);
+/** One conditioned pixel, addressed on the GLOBAL pixel grid — so a sample
+ *  straddling a tile edge resolves each corner in its own tile rather than
+ *  clamping to the edge of one. */
+const elevPx = (gx, gy) => {
+  const t = demTiles.get(`${Math.floor(gx / 256)}/${Math.floor(gy / 256)}`);
+  if (!t) return null;
+  return t[(((gy % 256) + 256) % 256) * 256 + (((gx % 256) + 256) % 256)];
+};
+/** Bilinear, as the grid comment above promises. It used to round, which is a
+ *  7.7m stair-step in ground a road profile is then solved over. */
 const elevAt = (e, s) => {
   const [fx, fy] = tileXY(latOf(s), lonOf(e), DEM_Z);
-  const t = demTiles.get(`${Math.floor(fx)}/${Math.floor(fy)}`);
-  if (!t) return 0;
-  const px = Math.min(255, Math.max(0, Math.round((fx - Math.floor(fx)) * 256)));
-  const py = Math.min(255, Math.max(0, Math.round((fy - Math.floor(fy)) * 256)));
-  const i = (py * t.w + px) * t.ch;
-  return t.px[i] * 256 + t.px[i + 1] + t.px[i + 2] / 256 - 32768;
+  const gx = fx * 256 - 0.5, gy = fy * 256 - 0.5;
+  const x0 = Math.floor(gx), y0 = Math.floor(gy);
+  const tx = gx - x0, ty = gy - y0;
+  const a = elevPx(x0, y0), b = elevPx(x0 + 1, y0), c = elevPx(x0, y0 + 1), d = elevPx(x0 + 1, y0 + 1);
+  if (a === null) return 0;
+  const e0 = a * (1 - tx) + (b ?? a) * tx;
+  const e1 = (c ?? a) * (1 - tx) + (d ?? b ?? a) * tx;
+  return e0 * (1 - ty) + e1 * ty;
 };
 // BASE64 Int16 CENTIMETRES, not JSON integers. The height grid is the largest
 // thing in a capture by some way — 55,696 samples came to 325KB written out as
@@ -207,5 +261,11 @@ const hs = abs;
 console.log(`captured ${name} at ${lat},${lon} r=${R}m`);
 console.log(`  ways    ${ways.length} (${ways.filter((w) => w.tags.highway).length} highway)`);
 console.log(`  heights ${HN}x${HN} @ ${hstep.toFixed(1)}m  ${Math.min(...hs).toFixed(0)}..${Math.max(...hs).toFixed(0)}m`);
+for (const t of demReport) {
+  const dirty = t.bad || t.spikes || t.fixed || t.refused;
+  console.log(`  dem ${DEM_Z}/${t.x}/${t.y} raw ${t.raw[0].toFixed(0)}..${t.raw[1].toFixed(0)}m`
+    + (dirty ? `  bad ${t.bad}  spiked ${t.spikes}  repaired ${t.fixed}px`
+      + (t.refused ? `  ** THE GAME WOULD REFUSE THIS TILE (${t.refused}) **` : '') : '  clean'));
+}
 console.log(`  cover   ${CN}x${CN} @ ${cstep.toFixed(1)}m  classes ${[...new Set(cover)].sort((a, b) => a - b).join(',')}`);
 console.log(`  -> ${path}  (${(JSON.stringify(out).length / 1024).toFixed(0)}KB)`);

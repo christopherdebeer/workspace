@@ -20,6 +20,7 @@ import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, altBandAt, aspectLi
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, bedrockAt, buildLookAt, paintFor, roadLookAt,
   seedAt, snowLoad, stoneWalls, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
+import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
 import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSystem, type OceanCoverage } from './hydro';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
@@ -220,6 +221,72 @@ const fixtureES = (f: WorldFixture, lat: number, lon: number): [number, number] 
 const fixtureLatLon = (f: WorldFixture, e: number, s: number): { lat: number; lon: number } =>
   ({ lat: f.spawn.lat - s / M_LAT, lon: f.spawn.lon + e / FIX_MLON });
 /**
+ * ── A FIXTURE IS A BOX, NOT A PLANET ──
+ *
+ * The streamer sizes its rings from the VIEW, which is right for a world that
+ * goes on for ever and wrong for one that stops. A z14 tile is about two
+ * kilometres, `tRing` is 2 to 3, and the cover ring is sized off `SIGHT_M` —
+ * so a fixture whose whole subject is 1.4km across was building a five-by-five
+ * to seven-by-seven block of ground, roughly ten kilometres on a side, and
+ * carving every tile of it. Measured on the Big Sur capture: 25 height tiles,
+ * 25 meshes, and a carve queue that took NINETY SECONDS to drain at one tile
+ * per 200ms — of which four tiles held every road in the fixture and the other
+ * twenty-one held the edge row of the height grid, smeared outward, with
+ * nothing on it.
+ *
+ * So a fixture streams its own extent instead. `FIX_R` is how far the authored
+ * world reaches — a capture's declared box, or the furthest way point of an
+ * authored one — plus a margin for the things built OUTSIDE the last kerb: the
+ * batter, the verge, the sward and the first rank of vegetation.
+ *
+ * Deliberately fixed at the fixture's ORIGIN rather than following the car. A
+ * ring that recentres would stream fresh ground as you drove off the edge, and
+ * there is no ground out there to stream: past the box a captured height grid
+ * clamps to its edge row and an authored one extrapolates whatever its formula
+ * says. Better that the world visibly ends where the evidence does.
+ */
+const FIX_MARGIN = 300;
+const FIX_R: number = (() => {
+  if (!FIXTURE) return 0;
+  // A CAPTURE'S OWN WORD FIRST. Measuring the ways is right for an authored
+  // fixture and badly wrong for a captured one: capture-world keeps any way
+  // that comes near the box, geometry and all, so a single arterial passing
+  // through measured 2,562m of extent for a 700m capture — and the streamer
+  // then built, and carved, nearly four times the ground that exists.
+  let r = FIXTURE.extent ?? 0;
+  if (!r) {
+    for (const w of FIXTURE.ways(FIXTURE_TUNE)) {
+      for (const [e, s] of w.pts) r = Math.max(r, Math.abs(e), Math.abs(s));
+    }
+  }
+  return Math.max(500, r + FIX_MARGIN);
+})();
+/**
+ * Every tile of `z` the fixture's box touches, absolute rather than a ring —
+ * and by its four CORNERS, because tile indices are not linear in metres and a
+ * box straddling a tile edge otherwise loses whichever tile it only just
+ * enters, which reads as a rectangular hole in the ground. Cached: the stream
+ * pass refires every ~1.2s and this answer never changes.
+ */
+const fixTileSets = new Map<number, Array<[number, number]>>();
+function fixtureTiles(z: number): Array<[number, number]> {
+  const held = fixTileSets.get(z);
+  if (held) return held;
+  const f = FIXTURE;
+  const out: Array<[number, number]> = [];
+  if (!f) return out;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [e, s] of [[-FIX_R, -FIX_R], [FIX_R, -FIX_R], [-FIX_R, FIX_R], [FIX_R, FIX_R]]) {
+    const ll = fixtureLatLon(f, e, s);
+    const [tx, ty] = tileAt(ll.lat, ll.lon, z);
+    x0 = Math.min(x0, tx); x1 = Math.max(x1, tx);
+    y0 = Math.min(y0, ty); y1 = Math.max(y1, ty);
+  }
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) out.push([x, y]);
+  fixTileSets.set(z, out);
+  return out;
+}
+/**
  * A 256x256 raster of whatever the fixture answers, over one tile. The height
  * tile and the cover tile are the same shape, so they share the walk — and it
  * inverts Mercator properly per row rather than lerping the latitude, because
@@ -363,33 +430,13 @@ function texel(tx: number, ty: number, px: number, pz: number): number | null {
   return t.data[(((pz % 256) + 256) % 256) * 256 + (((px % 256) + 256) % 256)];
 }
 // ── the DEM lies, sometimes ────────────────────────────────────────
-// The terrarium mosaic is not maintained and carries local corruption. Central
-// Reykjavik is the case that found this: a smooth 918m cone sitting in the
-// middle of the harbour, where Copernicus reads 0m — measured, not guessed.
-// Downtown Manhattan carries a -742m void, Hong Kong -7006m. Rendered, these
-// are the black spires and the bottomless pits.
-//
-// Nothing about the repair knows any geography. It rests on one fact about
-// LAND: a hill of height H has a footprint. Even a volcanic plug or a sea
-// cliff does not climb H metres within H/1.7 metres of run and then close back
-// on itself, and if it did it would run off the side of a 1km tile rather than
-// standing alone in the middle of one. So a blob is corrupt when BOTH:
-//
-//   · it is far too narrow for its height (radius < 0.6 of what the slope
-//     limit demands), and
-//   · it dwarfs the tile it sits in (more than 3x the tile's own relief) —
-//     which is what keeps a real summit inside a mountain range safe, since
-//     there the relief is already large.
-//
-// Validated against 28 of the hardest real landforms on Earth — Half Dome, El
-// Capitan, Devils Tower, Uluru (including tiles clipping only its edge),
-// Matterhorn, Cerro Torre, Meteora, Preikestolen, Gibraltar, Monument Valley,
-// the Grand Canyon, Cliffs of Moher, Death Valley: ZERO pixels touched on all
-// 28, while every known-bad tile comes back to a sane range.
-const DEM_RISE = 80;     // metres clear of the ground before a blob is even considered
-const DEM_SLOPE = 1.7;   // ~60°, the steepest slope a real landform sustains
-const DEM_RATIO = 0.6;   // how much narrower than that it must be to be called a lie
-const DEM_DWARF = 3;     // and how far it must tower over everything else around
+// The conditioning a decoded height tile goes through — the range and spike
+// refusals, the patch and the shape repair — lives in client/demrepair.ts, and
+// its header carries the reasoning. It is a MODULE rather than a block here
+// because devtools/capture-world.mjs reads the same DEM and must condition it
+// identically: a captured fixture built from raw terrarium pixels reproduces
+// corruption the game repairs, which is a defect report with a fabricated
+// witness. Measured at Cape Town: raw ground -7,049m, built ground 10..100m.
 /**
  * Repaired-pixel counts, newest last — so a probe can ask what the DEM cost.
  *
@@ -412,71 +459,6 @@ const demFixes: Array<{ t: string; n: number; tile?: string }> = [];
  * filing it against none.
  */
 let demLast = '';
-function repairDem(e: Float32Array, mpp: number, where: string): Float32Array {
-  const W = 256;
-  const s = Float32Array.from(e).sort();
-  const at = (f: number): number => s[Math.min(s.length - 1, Math.floor(s.length * f))];
-  const ground = at(0.2);
-  const relief = Math.max(30, at(0.95) - ground);
-  const flag = new Uint8Array(e.length);
-  const seen = new Uint8Array(e.length);
-  const stack = new Int32Array(e.length);
-  const cells = new Int32Array(e.length);
-  let flagged = 0;
-  for (const dir of [1, -1]) {
-    // A pit is ground missing from below the GROUND, not below the roof —
-    // basing it on a high percentile made every low-lying city one crater.
-    const base = dir > 0 ? ground : at(0.05);
-    seen.fill(0);
-    for (let st = 0; st < e.length; st++) {
-      if (seen[st] || (e[st] - base) * dir <= DEM_RISE) continue;
-      let sp = 0, nc = 0, peak = 0;
-      stack[sp++] = st; seen[st] = 1;
-      while (sp) {
-        const i = stack[--sp];
-        cells[nc++] = i;
-        const h = (e[i] - base) * dir;
-        if (h > peak) peak = h;
-        const x = i % W, y = (i / W) | 0;
-        if (x > 0) { const j = i - 1; if (!seen[j] && (e[j] - base) * dir > DEM_RISE) { seen[j] = 1; stack[sp++] = j; } }
-        if (x < W - 1) { const j = i + 1; if (!seen[j] && (e[j] - base) * dir > DEM_RISE) { seen[j] = 1; stack[sp++] = j; } }
-        if (y > 0) { const j = i - W; if (!seen[j] && (e[j] - base) * dir > DEM_RISE) { seen[j] = 1; stack[sp++] = j; } }
-        if (y < W - 1) { const j = i + W; if (!seen[j] && (e[j] - base) * dir > DEM_RISE) { seen[j] = 1; stack[sp++] = j; } }
-      }
-      if (peak <= DEM_DWARF * relief) continue;
-      if (Math.sqrt(nc / Math.PI) / (peak / (DEM_SLOPE * mpp)) >= DEM_RATIO) continue;
-      for (let k = 0; k < nc; k++) { flag[cells[k]] = 1; flagged++; }
-    }
-  }
-  // A "repair" that rewrites a fifth of the tile is far likelier to be this
-  // rule misfiring than real corruption. Leave the tile exactly as it came.
-  if (!flagged || flagged > e.length * 0.2) return e;
-  // Diffuse the surviving ground into the holes, so what is left is the land
-  // the blob was standing on rather than a flat plate.
-  const out = Float32Array.from(e);
-  let left = flagged;
-  const next = new Uint8Array(e.length);
-  for (let pass = 0; pass < 300 && left; pass++) {
-    next.set(flag);
-    for (let i = 0; i < e.length; i++) {
-      if (!flag[i]) continue;
-      const x = i % W, y = (i / W) | 0;
-      let sum = 0, n = 0;
-      if (x > 0 && !flag[i - 1]) { sum += out[i - 1]; n++; }
-      if (x < W - 1 && !flag[i + 1]) { sum += out[i + 1]; n++; }
-      if (y > 0 && !flag[i - W]) { sum += out[i - W]; n++; }
-      if (y < W - 1 && !flag[i + W]) { sum += out[i + W]; n++; }
-      if (n) { out[i] = sum / n; next[i] = 0; left--; }
-    }
-    flag.set(next);
-  }
-  for (let i = 0; i < e.length; i++) if (flag[i]) out[i] = ground;
-  if (flagged) {
-    demFixes.push({ t: `${flagged}px`, n: flagged, tile: where });
-    if (demFixes.length > 40) demFixes.shift();
-  }
-  return out;
-}
 /** Decode any terrarium-encoded PNG/WebP into a square Float32Array. Both
  *  sources use the same RGB packing, so one decoder serves both. */
 /**
@@ -687,83 +669,23 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
   const mpp = (40075016.686 * Math.cos((lat * Math.PI) / 180)) / (2 ** z * 256);
   // ── A TILE OFF THE PLANET IS NOT A TILE ──
   //
-  // repairDem is a SHAPE argument — it finds blobs that stand too tall for
-  // their footprint — and it deliberately stands down when it would rewrite
-  // more than a fifth of the tile, on the reasoning that a rule rewriting
-  // that much is more likely misfiring than right. Sound for the corruption
-  // it was written against (a few hundred stray pixels), and exactly
-  // backwards for the catastrophic case: THE WORSE THE TILE, THE LESS LIKELY
-  // IT IS TO BE TOUCHED. A tile that is mostly garbage sails through
-  // unrepaired and is built into terrain, which is what a field of spikes is.
+  // Three tests and a repair, all of them in client/demrepair.ts with the
+  // reasoning that earned each one: the absolute range test (Earth's land runs
+  // -430m to 8,849m, and this mosaic is documented above as serving -13,029m),
+  // the neighbour test that catches a byte in the wrong channel (256m of shift,
+  // comfortably inside a real planet's range), the patch to the tile's own
+  // ground, and repairDem's shape argument.
   //
-  // So there is an absolute test in front of it now, and it needs no shape
-  // heuristic to make its case: Earth's land runs from about -430m at the
-  // Dead Sea to 8849m at the summit. Anything outside that is not a reading.
-  // The AWS mosaic is documented above as serving -13,029m, so this is not
-  // hypothetical — it is the failure that source is known for.
-  //
-  // A few bad pixels are patched to the tile's own ground and handed on to
-  // repairDem. A tile with MANY is REFUSED — returning null leaves the ground
-  // unbuilt and the streamer asks again, which is strictly better than
-  // building a mountain range out of a decode error. Terrain that has not
-  // arrived is a gap you can see; terrain built from nonsense is a gap you
-  // drive into.
-  //
-  // ── THE FLOOR IS SEA LEVEL ONLY WHERE THE WHEELS ARE ──
-  //
-  // -500 says "land, near enough", and it is right for the fine layer: a z14
-  // tile is 2km of ground the truck drives on, and a reading below the Dead
-  // Sea there is a decode error. It is wrong for the SHELL, whose tiles are
-  // tens to hundreds of kilometres across and routinely mostly ocean — and
-  // AWS terrarium carries real bathymetry, so a z7 tile off the Cape measures
-  // 10.1% of its pixels below -500m, bottoming at -3,348m. All of that is the
-  // Atlantic, and the tile was refused for containing it.
-  //
-  // The symptom was silent and total: at the ceiling the shell selected z7,
-  // fetched its DEM, and stood at ZERO tiles — every coarse tile refused,
-  // re-asked on the next pass, and refused again. Mapterhorn hid it until
-  // now, because Copernicus is a LAND model whose sea is nodata rather than
-  // depth; only where mapterhorn has no tile does AWS answer, and that is
-  // exactly the coarse levels it was never asked for before.
-  //
-  // So the coarse floor is Challenger Deep instead. The guard keeps its teeth
-  // where it matters: -13,029m, the value this source is documented above as
-  // serving at Chapman's Peak, is still below the deepest water on Earth and
-  // still refused.
-  const floor = z >= TERRAIN_Z ? -500 : -11000;
-  let bad = 0;
-  for (let i = 0; i < out.length; i++) {
-    const v = out[i];
-    if (!Number.isFinite(v) || v < floor || v > 9000) bad++;
-  }
+  // What stays here is the CONTROL FLOW, because that is what is specific to
+  // the game: a few bad pixels are patched and handed on, a tile with many is
+  // REFUSED — returning null leaves the ground unbuilt and the streamer asks
+  // again, which is strictly better than building a mountain range out of a
+  // decode error. Terrain that has not arrived is a gap you can see; terrain
+  // built from nonsense is a gap you drive into.
+  const floor = demFloor(z, TERRAIN_Z);
+  const bad = demBad(out, floor);
   if (bad > out.length * 0.02) { demSource.bad++; return null; }
-  // ── …AND THE RANGE TEST IS THE EASY HALF ──
-  //
-  // A terrarium height is R*256 + G + B/256 - 32768, so a byte that lands in
-  // the wrong channel moves the ground by 256 METRES and stays comfortably
-  // inside the range of a real planet. That is a spike the test above cannot
-  // see, and it is the size of the ones being reported.
-  //
-  // What gives it away is not its height but its NEIGHBOURS. Real ground is
-  // continuous at 10-30m sampling: even a sea cliff climbs a few tens of
-  // metres between adjacent posts, and the pixels that do are a contiguous
-  // line, never scattered. A post standing a hundred metres off the four
-  // around it is not a landform, it is a bad byte.
-  //
-  // Deliberately NOT a repair, and deliberately without repairDem's
-  // stand-down: this only decides whether the tile is TRUSTWORTHY, so the
-  // more of it is wrong the more certain the answer gets, which is the right
-  // way round for the case that has been getting through.
-  const W = 256;
-  const spikeTh = Math.max(80, 12 * mpp);
-  let spikes = 0;
-  for (let yy = 1; yy < W - 1; yy++) {
-    for (let xx = 1; xx < W - 1; xx++) {
-      const i = yy * W + xx;
-      const n = (out[i - 1] + out[i + 1] + out[i - W] + out[i + W]) * 0.25;
-      if (Math.abs(out[i] - n) > spikeTh) spikes++;
-    }
-  }
+  const spikes = demSpikes(out, mpp);
   if (spikes > out.length * 0.03) {
     demSource.bad++;
     demFixes.push({ t: `refused ${((spikes / out.length) * 100).toFixed(1)}% spiked`,
@@ -771,23 +693,15 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
     if (demFixes.length > 40) demFixes.shift();
     return null;
   }
-  if (bad) {
-    // Their own ground, not zero: a patch at sea level in a mountain valley is
-    // its own crater. THE SAME FLOOR the refusal used, or a coarse tile that
-    // legitimately passed with bathymetry in it would have every metre of that
-    // bathymetry patched up to land level — the seabed rising through the sea
-    // plane across a whole ocean, which is a worse picture than the one the
-    // guard exists to prevent.
-    const ok = Array.from(out).filter((v) => Number.isFinite(v) && v >= floor && v <= 9000).sort((a, b) => a - b);
-    const ground = ok.length ? ok[Math.floor(ok.length * 0.2)] : 0;
-    for (let i = 0; i < out.length; i++) {
-      const v = out[i];
-      if (!Number.isFinite(v) || v < floor || v > 9000) out[i] = ground;
-    }
-    demSource.bad++;
-  }
+  if (bad) { demPatch(out, floor); demSource.bad++; }
   demLast = `${tile} ${src}`;
-  return repairDem(out, mpp, demLast);
+  // The note carries the TILE, because a count on its own cannot be chased:
+  // asked during a spike hunt this once said `tilesRepaired: 2, pixels: 421`
+  // with no way to find out which two.
+  return repairDem(out, mpp, (t, n) => {
+    demFixes.push({ t, n, tile: demLast });
+    if (demFixes.length > 40) demFixes.shift();
+  });
 }
 // ── land cover: what is actually growing here ──────────────────────
 // ESA WorldCover, 10m, global, through this cell's namespace (the bucket has no
@@ -17070,8 +16984,11 @@ function streamWorld(ex: number, ez: number): void {
   // zoom 44 alike — so the chart was an aerial photograph of a 1.5km disc of
   // roads adrift in blank hillside.
   const tRing = clamp(Math.ceil(r / tileMetres(TERRAIN_Z)), TERRAIN_RING, TERRAIN_RING_MAX);
-  for (let dx = -tRing; dx <= tRing; dx++)
-    for (let dy = -tRing; dy <= tRing; dy++) void loadTerrainTile(tx + dx, ty + dy);
+  if (FIXTURE) for (const [x, y] of fixtureTiles(TERRAIN_Z)) void loadTerrainTile(x, y);
+  else {
+    for (let dx = -tRing; dx <= tRing; dx++)
+      for (let dy = -tRing; dy <= tRing; dy++) void loadTerrainTile(tx + dx, ty + dy);
+  }
   // Land cover, over the FULL terrain footprint rather than the road ring: it
   // paints the ground and plants the vegetation, so it has to reach as far as
   // you can see, and at ~1–5KB a tile covering 9.8km that costs nothing.
@@ -17084,10 +17001,13 @@ function streamWorld(ex: number, ez: number): void {
     // learned about, and the near ones are the ones the ground pass wants.
     const cRing = clamp(Math.ceil(Math.max(r, SIGHT_M) / tileMetres(COVER_Z)), 1, 3);
     const [cx0, cy0] = tileAt(lat, lon, COVER_Z);
-    for (let d = 0; d <= cRing; d++)
-      for (let dx = -d; dx <= d; dx++)
-        for (let dy = -d; dy <= d; dy++)
-          if (Math.max(Math.abs(dx), Math.abs(dy)) === d) void loadCoverTile(cx0 + dx, cy0 + dy);
+    if (FIXTURE) for (const [x, y] of fixtureTiles(COVER_Z)) void loadCoverTile(x, y);
+    else {
+      for (let d = 0; d <= cRing; d++)
+        for (let dx = -d; dx <= d; dx++)
+          for (let dy = -d; dy <= d; dy++)
+            if (Math.max(Math.abs(dx), Math.abs(dy)) === d) void loadCoverTile(cx0 + dx, cy0 + dy);
+    }
     // Cover also knows which ground is water, and water is the only honest
     // witness to where sea level sits in THIS DEM's datum. Kept OUTSIDE the
     // biome latch on purpose: the biome is happy to settle on the first decent
@@ -17234,6 +17154,21 @@ function streamWorld(ex: number, ez: number): void {
     const sl = key.indexOf('/');
     want.push({ x: +key.slice(0, sl), y: +key.slice(sl + 1), c: along - 5e5 });
   }
+  // …AND OVER A FIXTURE, ONLY THE BOX. The wedge and the corridor are sized
+  // for a planet — three kilometres of ask around the truck and further down
+  // the road — while a fixture's ways stop at `FIX_R`. Every tile past it
+  // answers with an empty way list, which costs little but reports as world:
+  // `osmDone` climbs, the HUD says STREAMING, and a test asking whether the
+  // fixture has finished arriving is counting fields that do not exist. The
+  // tile under the truck is kept unconditionally — drive off the edge and the
+  // HUD should still be able to say the ground under you has landed.
+  if (FIXTURE) {
+    const box = new Set(fixtureTiles(OSM_Z).map(([x, y]) => `${x}/${y}`));
+    for (let i = want.length - 1; i >= 0; i--) {
+      const w = want[i];
+      if (!box.has(`${w.x}/${w.y}`) && !(w.x === ox && w.y === oy)) want.splice(i, 1);
+    }
+  }
   want.sort((a, b) => a.c - b.c);
   // KEPT, BECAUSE "STREAMING" IS NOT AN ANSWER. This is the pass's own idea of
   // what the world needs and in what order — the only place that knowledge
@@ -17264,11 +17199,20 @@ function streamWorld(ex: number, ez: number): void {
     // the next tick.
     const [cLat, cLon] = camMode === 'top' && (panX !== 0 || panZ !== 0)
       ? localToLatLon(ex + panX, ez + panZ) : [lat, lon];
-    setFarLevel(farLevelFor(sight));
+    // THE BACKDROP STOPS WHERE THE FIXTURE DOES. A fixture answers the height
+    // fetch from a formula or a clamped grid, so the coarse ring would happily
+    // build 80km of extrapolated edge row and present it as a horizon — a
+    // landscape made entirely of the last pixel of the evidence. The finest
+    // level, over the box only: enough to close the seam at the edge of the
+    // fine ring, and nothing beyond it.
+    setFarLevel(FIXTURE ? FAR_LEVELS[0] : farLevelFor(sight));
     const [fx, fy] = tileAt(cLat, cLon, farZ);
     const fRing = clamp(Math.ceil(sight / tileMetres(farZ)), 1, FAR_RING_MAX);
-    for (let dx = -fRing; dx <= fRing; dx++)
-      for (let dy = -fRing; dy <= fRing; dy++) void loadFarTile(fx + dx, fy + dy);
+    if (FIXTURE) for (const [x, y] of fixtureTiles(farZ)) void loadFarTile(x, y);
+    else {
+      for (let dx = -fRing; dx <= fRing; dx++)
+        for (let dy = -fRing; dy <= fRing; dy++) void loadFarTile(fx + dx, fy + dy);
+    }
     // …and the cover to PAINT it, once the shell has grown past the fine
     // raster's own 7x7 ring. Below that the fine tiles already cover every
     // shell tile and a second copy would be waste; above it, this is the
@@ -17281,7 +17225,7 @@ function streamWorld(ex: number, ez: number): void {
     // spans 40km — twelve past the fine raster — so gating on `sight` left the
     // outer tiles blind at every ordinary wide zoom. Measured 2 of 4 at zoom
     // 100 with the gate on `sight`, 0 of 6 with it here.
-    const shellR = (fRing + 0.5) * tileMetres(farZ);
+    const shellR = FIXTURE ? FIX_R : (fRing + 0.5) * tileMetres(farZ);
     if (shellR > tileMetres(COVER_Z) * 3.5) {
       setCoverWideLevel(coverWideLevelFor(shellR));
       const [wx, wy] = tileAt(cLat, cLon, coverWideZ);
@@ -17292,7 +17236,16 @@ function streamWorld(ex: number, ez: number): void {
     // …and the vectors to draw on it. Same trigger, same banding discipline:
     // the chart only pays for the coarse road source once it can see past the
     // fine ring, and only at the level its zoom band can read.
-    if (camMode === 'top') {
+    // …EXCEPT OVER A FIXTURE, WHICH HAS NO COARSE SOURCE AND SHOULD NOT ASK.
+    //
+    // This layer is the one part of the stream a fixture does not intercept:
+    // `loadOvTile` fetches `~/osm/ov1/` from the cell directly. So every
+    // top-view frame of an authored world was going to the network for the
+    // REAL road network at those coordinates — which for the authored
+    // fixtures is the country above Geneva, drawn as coarse ribbons over a
+    // synthetic crossroads. A fixture is supposed to run with the network out
+    // of the loop; this was the hole in that claim.
+    if (camMode === 'top' && !FIXTURE) {
       setOvLevel(ovLevelFor(r));
       const [vx, vy] = tileAt(cLat, cLon, ovZ);
       const vRing = clamp(Math.ceil(r / tileMetres(ovZ)), 1, OV_RING_MAX);
@@ -17331,7 +17284,11 @@ function streamWorld(ex: number, ez: number): void {
   const [hx, hy] = tileAt(lat, lon, OSM_Z);
   const roadHere = osmDone.has(`${hx}/${hy}`);
   const quiet = osmInFlight === 0 && osmQueue.length === 0;
-  if ((quiet || roadHere) && peakInFlight < 2) {
+  // A fixture has no summits, and asking for them fetches the REAL ones —
+  // `loadPeakTile` goes to `~/osm/peak1/` and the authored fixtures sit at
+  // 46.2N 6.1E, so a crossroads on a billiard table has been seating the Alps
+  // on its horizon and paying Overpass for them.
+  if (!FIXTURE && (quiet || roadHere) && peakInFlight < 2) {
     const [px, py] = tileAt(lat, lon, PEAK_Z);
     const tm = tileMetres(PEAK_Z);
     const pRing = clamp(Math.ceil(PEAK_R / tm), 1, PEAK_RING_MAX);
@@ -37035,6 +36992,22 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   id: FIXTURE?.id ?? null,
   tune: FIXTURE ? FIXTURE_TUNE : null,
   ways: FIXTURE ? fixtureWays(...tileAt(origin.lat, origin.lon, OSM_Z)).length : 0,
+  // HOW MUCH WORLD THIS FIXTURE ASKED FOR. `r` is the box the streamer was
+  // held to and the three counts are the tile sets it produced — reported
+  // together because the claim being made is a ratio ("four tiles, not
+  // twenty-five") and half of it proves nothing.
+  r: FIX_R,
+  tiles: FIXTURE
+    ? { terrain: fixtureTiles(TERRAIN_Z).length, cover: fixtureTiles(COVER_Z).length,
+        osm: fixtureTiles(OSM_Z).length }
+    : null,
+  // `ov` and `peaks` are the two layers a fixture cannot answer and therefore
+  // must not ask for — both go straight to the cell. They belong here rather
+  // than in a network log because the harness relays every request through
+  // curl and is structurally unable to witness one: the only place the ask is
+  // visible is the set it would have filled.
+  built: { terrain: terrainMeshes.size, cover: coverTiles.size, osm: osmDone.size,
+    far: farMeshes.size, ov: ovTiles.size, peaks: peakTiles.size },
   cover: coverTiles.size,
   roadCells: roadGrid.size,
   seenWays: seenWays.size,

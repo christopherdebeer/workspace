@@ -33,6 +33,7 @@
 import bixby from './fixtures/world-bixby.json';
 import carmelA from './fixtures/world-carmel-a.json';
 import carmelB from './fixtures/world-carmel-b.json';
+import campsbay from './fixtures/world-campsbay.json';
 
 /** Ground cover, by the WorldCover class the raster would have carried. */
 export type FixtureCover =
@@ -102,6 +103,20 @@ export interface WorldFixture {
   cover(e: number, s: number, t: FixtureTune): number;
   /** Everything OSM would have said about this place. */
   ways(t: FixtureTune): FixtureWay[];
+  /**
+   * HOW FAR THE EVIDENCE GOES, in metres from the origin — the streamer holds
+   * its rings to this (see FIX_R in main.ts).
+   *
+   * Only a CAPTURE knows it, and only a capture needs it. An authored fixture
+   * is a formula defined everywhere, so its ways are its extent; a captured one
+   * has a height grid that stops, and past the edge `sample` clamps, which
+   * means the ground out there is the last row of the evidence smeared to the
+   * horizon. Worse, the way extent is not a usable stand-in for a capture:
+   * `capture-world.mjs` keeps a way that merely COMES NEAR the box but keeps
+   * its whole geometry, so one arterial passing through put the measured extent
+   * at 2,562m for a 700m capture — nearly four times the ground that exists.
+   */
+  extent?: number;
 }
 
 /** A line of points along a bearing, so a fixture reads as intent rather than
@@ -263,6 +278,7 @@ function captured(cap: CapturedWorld, label: string, note: string, heading = 0):
       return c.px[y * c.n + x] ?? CLASS.grass;
     },
     ways: () => cap.ways.map((w) => ({ id: w.id, tags: w.tags, pts: w.pts })),
+    extent: cap.r,
   };
 }
 const clampF = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
@@ -641,6 +657,12 @@ export const CAPTURED: readonly WorldFixture[] = [
     'CARMEL HIGHLANDS — NORTH',
     'Captured at 36.5753,-121.9128, a kilometre north of the other. 145 highways in 244 ways — more road and fewer buildings, so the junctions are less obscured while the terrain is the same.',
     100,
+  ),
+  captured(
+    campsbay as unknown as CapturedWorld,
+    'CAMPS BAY — THE TWELVE APOSTLES',
+    'Reported from the seat at -33.94533,18.38296 heading 122. The western flank of Table Mountain: 325 METRES of relief across a 1.4km box, which is more than twice any other capture here, and 314 highways of every class on it — primary, secondary, tertiary, residential, and the only primary_link in the set. Victoria Road runs the contour while Camps Bay Drive, Geneva Drive and Kloof Road climb across it, so nearly every junction in the fixture is a joiner meeting a host at a different height on a cross-slope. That is the case the flat authored junctions cannot pose: the batter, the cut face and the bellmouth all have to solve at once.',
+    122,
   ),
 ];
 

@@ -147,6 +147,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/fixture-world.test.mjs` | the whole mesh pipeline over authored ground | ~7min |
 | `node client/clip.test.mjs` | tile clipping, incl. the corner nicks | instant |
 | `node devtools/dock-sky.test.mjs` | the chart dock's sky is the dock's own | ~3min |
+| `node devtools/fixture-stream.test.mjs` | a fixture streams its box and touches no network | ~3min |
 | `node devtools/appshell.test.mjs` | the worker precaches only what the cell serves | instant |
 | `node devtools/offline-shell.test.mjs` | the browser starts with the network off | ~20s |
 | `node devtools/storage-reset.test.mjs` | settings can hand the whole device back | ~20s |
@@ -432,6 +433,36 @@ ALREADY ARRIVED — every tile present in the first frame. That makes it useless
 for "it only happens on a drive-in, not on a reload" (`devtools/capture.mjs` is
 for that, and replays renderWays into the solver) and ideal for everything else,
 because a defect that survives a settled world is a defect in the geometry.
+
+**The capture conditions the DEM exactly as the game does**, and did not at
+first. `client/demrepair.ts` is the shipping range/spike guard, the patch and
+the shape repair, extracted so both readers of the terrarium mosaic run the
+same code. The Camps Bay capture is why: the raw tile there scatters a few
+dozen pixels from -5,600m downward — 0.5% of the tile, comfortably under the
+2% the game refuses at, so the game accepts it, patches those pixels to its own
+ground and builds ordinary suburb. The capture kept them and reported ground
+running **-7,049m to 399m**. A fixture that reproduces a defect the game does
+not have is worse than no fixture: it is a defect report with a fabricated
+witness. The capture now prints a per-tile line (raw range, bad, spiked,
+repaired) and says out loud when a tile is one the game would REFUSE.
+
+**A fixture streams its own box.** See FIX_R in `main.ts`: the terrain ring, the
+cover ring, the OSM ask set and the coarse shell are all held to the fixture's
+own extent, fixed at its origin rather than following the car. Before that, a
+1.4km fixture built a 5×5-to-7×7 block of z14 tiles — ten kilometres on a side —
+and carved every one at one tile per 200ms. And the extent for a CAPTURE is
+`cap.r`, not the extent of its ways: capture-world keeps any way that comes near
+the box but keeps its whole geometry, so one arterial passing through measured
+2,562m for a 700m capture.
+
+**Two streamed layers a fixture cannot answer, and used to ask for anyway.**
+`loadOvTile` and `loadPeakTile` go straight to the cell. So every top-view frame
+of an authored world fetched the REAL coarse road network and the REAL summits
+at the fixture's coordinates — for the authored fixtures that is the country
+above Geneva, drawn over a synthetic crossroads, with the Alps on its horizon.
+Both are gated on `!FIXTURE` now, and `devtools/fixture-stream.test.mjs` holds
+it. Asserted from `__fixworld().built` rather than a request log, because the
+harness relays through curl and is structurally unable to witness a request.
 
 `relief 0` on a capture flattens the ground to a plane at the site's mean
 elevation and LEAVES THE ROADS WHERE THEY ARE — the same junctions with and
