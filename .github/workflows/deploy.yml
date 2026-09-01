@@ -13,6 +13,42 @@ on:
       - 'cdk.json'
       - 'package.json'
       - 'tsconfig.json'
+  # ── THIS ALSO SHIPS A BRANCH HEAD TO PROD ──
+  #
+  # Dispatching this workflow against any ref deploys THAT REF'S HEAD, and runs
+  # that ref's own copy of this file. `actions/checkout@v4` below takes no
+  # explicit `ref`, so it checks out `github.ref` — the ref the dispatch named,
+  # not main. Which is the route for tier-1 control-plane code: `services/`,
+  # `platform/` and `lib/` do NOT ship through `cells.deploy`, so a fix to (say)
+  # the cells service reaches prod only through main or through this.
+  #
+  #   run_workflow(deploy.yml, ref: <branch>)      # 204, runs that branch
+  #
+  # Measured, because the obvious assumption is wrong in both directions: the
+  # REF is unrestricted (a dispatch against a feature branch returns 204 and
+  # runs it), while the FILE must exist on the default branch to be addressable
+  # at all — the workflow registry is built from main, and dispatching a
+  # workflow that lived only on a branch returned 404.
+  #
+  # ── GUARDS THIS DOES NOT HAVE, if a branch deploy ever goes wrong ──
+  #
+  # Deploying an unmerged branch to production has sharp edges this workflow
+  # does nothing about. Written down rather than built, deliberately — none of
+  # it is wanted today:
+  #
+  #   * a typed confirmation, so a mis-click is not consent
+  #   * `cdk diff --all` into the run summary before deploying, and a
+  #     diff-only mode, so what is about to change is on screen
+  #   * how far the ref is ahead of AND BEHIND main. Behind-ness is the trap:
+  #     deploying a stale branch silently ROLLS BACK whatever main has that it
+  #     does not, which is not what anyone expects from a deploy button
+  #   * `if: github.event_name == 'push'` on the docs-sync step below. It
+  #     publishes the repo's docs into the live substrate corpus (ADR-0045), so
+  #     a branch dispatch republishes the corpus from UNMERGED docs. It is
+  #     continue-on-error and gated on PARC_TOKEN, so the blast radius is small,
+  #     but it is the one step here that does something a branch deploy should
+  #     not. The EC2 retirement step is harmless by comparison — idempotent and
+  #     already a no-op.
   workflow_dispatch:
     inputs:
       force_docs_sync:
