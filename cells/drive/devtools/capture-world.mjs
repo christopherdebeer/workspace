@@ -84,12 +84,23 @@ const tileXY = (la, lo, z) => {
  *  BANKS the result — the next request is a CDN hit. That self-healing is the
  *  whole design of the tile bank, so a retry here is not papering over a
  *  failure, it is the documented second half of the first request. */
-async function get(url, tries = 4) {
+async function get(url, tries = 6) {
   for (let i = 0; i < tries; i++) {
     const res = await fetch(url);
     if (res.ok) return Buffer.from(await res.arrayBuffer());
-    if (i === tries - 1) throw new Error(`${url}: HTTP ${res.status}`);
-    await new Promise((r) => setTimeout(r, 1500 * (i + 1)));
+    if (i === tries - 1) throw new Error(`${url}: HTTP ${res.status} after ${tries} tries`);
+    // BACKED OFF PAST THE LAMBDA, NOT PAST THE EDGE. The edge gives up at
+    // ~15.5s while the cell has 50s to finish and bank, so a ladder totalling
+    // NINE seconds spends all four of its tries inside one upstream build and
+    // then declares the tile dead — it never once asks a question the cell has
+    // had time to answer. That is what a dense cold z16 over Paris did: four
+    // tries, four 503s, capture aborted. 3+6+9+12+15 = 45s straddles the whole
+    // budget instead.
+    const wait = 3000 * (i + 1);
+    // Two segments of path: enough to say WHICH tile without the host. `/~/`
+    // is not in the AWS DEM url, so this cannot key off it.
+    if (i === 1) console.log(`  ...${url.split('/').slice(-3).join('/')} is cold; waiting for the cell to bank it`);
+    await new Promise((r) => setTimeout(r, wait));
   }
   throw new Error('unreachable');
 }
