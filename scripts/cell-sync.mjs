@@ -84,6 +84,12 @@ async function call(verb, target, input) {
  *  moment the packaging landed — not for one cell, for anyone deploying it. */
 const SKIP = new Set(['node_modules', 'devtools', 'native']);
 
+/** Extensions pushed as BYTES rather than as text. Kept in step with the
+ *  service's own BINARY_TYPES table — anything here must be a type the service
+ *  will store with a non-text content type, or the round trip breaks in the
+ *  middle: pushed as base64, read back as UTF-8. */
+const BINARY_RE = /\.(png|jpe?g|gif|webp|avif|ico|bmp|woff2?|ttf|otf|mp3|ogg|wav|mp4|webm|pdf|zip|wasm)$/i;
+
 function* walk(dir, top = true) {
   for (const name of readdirSync(dir)) {
     if (name.startsWith('.') || (top && SKIP.has(name)) || name === 'node_modules') continue;
@@ -116,11 +122,19 @@ if (cmd === 'pull') {
     // dies partway through the list — measured on @c15r/drive, which stopped
     // at a 158KB fixture and left the working tree half-updated with no
     // indication of which files had made it.
-    const { content } = await call('read', 'cells.readFile', { owner, name, path: f, whole: true });
+    const res = await call('read', 'cells.readFile', { owner, name, path: f, whole: true });
     const dest = join(localRoot, f);
     mkdirSync(dirname(dest), { recursive: true });
-    writeFileSync(dest, content);
-    console.log('pulled', f, `(${content.length}b)`);
+    // BYTES COME BACK AS BYTES. `writeFileSync(dest, someString)` writes UTF-8,
+    // and a PNG that went through a UTF-8 decode is not merely wrong, it is
+    // BIGGER: every invalid sequence became U+FFFD, so drive's 19,203-byte icon
+    // came back as 34,465 bytes of mojibake. Every pull silently corrupted the
+    // five app icons, and the next push would have shipped the corruption — the
+    // only thing that ever caught it was `git status` showing five modified
+    // PNGs after a pull that should have been a no-op.
+    const body = res.encoding === 'base64' ? Buffer.from(res.content, 'base64') : res.content;
+    writeFileSync(dest, body);
+    console.log('pulled', f, `(${body.length}b${res.encoding === 'base64' ? ', bytes' : ''})`);
   }
   console.log(`✓ ${files.length} files → cells/${name}/`);
 } else if (cmd === 'push') {
@@ -136,6 +150,34 @@ if (cmd === 'pull') {
   // body carries the JSON-escaped content and that is larger than the file.
   const CHUNK = 600000;
   for (const f of local) {
+    // ── BYTES GO UP AS BYTES ──
+    //
+    // `readFileSync(path, 'utf8')` on a PNG replaces every invalid sequence
+    // with U+FFFD, so a push used to send mojibake and the cell served an
+    // image that no browser could decode. Drive's manifest and icons were dead
+    // on the live cell from the day they landed, and `web-assets.ts` — 230KB of
+    // generated base64 string literals dragged through the module graph — is a
+    // workaround for exactly this and nothing else.
+    //
+    // `cells.writeFile` takes `encoding: 'base64'` now and stores real bytes
+    // with a real content type, so the workaround can go.
+    //
+    // ONE CALL, NO CHUNKING, for binary. Two independently-decoded base64
+    // chunks only concatenate correctly when the first is a multiple of four
+    // characters; a transport that is correct only for aligned sizes is a trap
+    // waiting for the first asset that is not. Base64 is 4/3 of the file, so
+    // the ~1MB signing cliff caps a binary asset at about 750KB — comfortably
+    // past an icon or a font, and it FAILS LOUDLY rather than silently.
+    if (BINARY_RE.test(f)) {
+      const bytes = readFileSync(join(localRoot, f));
+      const b64 = bytes.toString('base64');
+      if (b64.length > CHUNK * 1.6) {
+        throw new Error(`${f} is ${bytes.length}b — too large to push as one signed request`);
+      }
+      await call('act', 'cells.writeFile', { owner, name, path: f, content: b64, encoding: 'base64' });
+      console.log('pushed', f, `(${bytes.length}b, bytes)`);
+      continue;
+    }
     const content = readFileSync(join(localRoot, f), 'utf8');
     await call('act', 'cells.writeFile', { owner, name, path: f, content: content.slice(0, CHUNK) });
     for (let at = CHUNK; at < content.length; at += CHUNK) {

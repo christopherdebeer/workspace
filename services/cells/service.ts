@@ -776,8 +776,49 @@ async function resolveAuthorized(input: CellRef, user: string): Promise<{ record
 interface WriteFileInput extends CellRef {
   path: string;
   content: string;
+  /**
+   * `base64` writes BYTES. Omitted (or `utf8`), `content` is text and is stored
+   * as text — which is what every caller has always done and stays the default.
+   *
+   * A cell could not ship an image before this. Source files are carried
+   * through the tools as JSON strings and stored `text/plain; charset=utf-8`,
+   * and a PNG does not survive being a string: `Buffer.from(bytes, 'utf8')`
+   * replaces every invalid sequence with U+FFFD, so drive's 19,203-byte icon
+   * came back 34,465 bytes of mojibake. Its manifest and icons were dead on the
+   * live cell from the day they landed, and the workaround — rendering `web/`
+   * into a 230KB generated `web-assets.ts` so the bytes ride inside the module
+   * graph as base64 string literals — is a workaround for exactly this.
+   *
+   * Base64 travels in one call, deliberately: `appendToFile` does not take an
+   * encoding, because two independently-decoded base64 chunks only concatenate
+   * correctly when the first is a multiple of four characters, and a transport
+   * that is correct only for aligned chunk sizes is a trap. Binary must fit one
+   * write, which the ~1MB request-signing cliff already bounds it to.
+   */
+  encoding?: 'utf8' | 'base64';
   deploy?: boolean;
 }
+
+/**
+ * Content type from the path, for objects that are not text.
+ *
+ * S3 keeps this and it is the ONLY durable record that a stored object is
+ * bytes: `readFile` and `deployCell` both decide how to read an object by
+ * asking what it is, rather than by guessing from its extension a second time.
+ */
+const BINARY_TYPES: Record<string, string> = {
+  png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg', gif: 'image/gif',
+  webp: 'image/webp', avif: 'image/avif', ico: 'image/x-icon', bmp: 'image/bmp',
+  woff: 'font/woff', woff2: 'font/woff2', ttf: 'font/ttf', otf: 'font/otf',
+  mp3: 'audio/mpeg', ogg: 'audio/ogg', wav: 'audio/wav',
+  mp4: 'video/mp4', webm: 'video/webm',
+  pdf: 'application/pdf', zip: 'application/zip', wasm: 'application/wasm',
+};
+const binaryTypeFor = (path: string): string =>
+  BINARY_TYPES[path.slice(path.lastIndexOf('.') + 1).toLowerCase()] ?? 'application/octet-stream';
+/** Text is anything we did not store as bytes — the content type is the record. */
+const isTextType = (contentType: string): boolean =>
+  contentType.startsWith('text/') || contentType.startsWith('application/json');
 
 /**
  * Announce a source mutation so the cell's substrate pointer fact tracks the
@@ -801,8 +842,24 @@ async function writeFile(input: WriteFileInput, ctx: ServiceContext): Promise<un
   const user = requireUser(ctx.identity);
   if (!input?.path) throw new Error('path is required');
   if (typeof input?.content !== 'string') throw new Error('content (string) is required');
+  if (input.encoding !== undefined && input.encoding !== 'utf8' && input.encoding !== 'base64') {
+    throw new Error("encoding must be 'utf8' or 'base64'");
+  }
   const { record, bucket, env } = await resolveAuthorized(input, user);
-  await putObject(bucket, srcKey(record.cellId, input.path), input.content, 'text/plain; charset=utf-8');
+  if (input.encoding === 'base64') {
+    // ROUND-TRIP THE DECODE BEFORE STORING. `Buffer.from(s,'base64')` never
+    // throws — it stops at the first character it cannot use and returns what
+    // it had — so a truncated or mistyped payload would land as a short file
+    // that looks fine until something tries to decode the image. Re-encoding
+    // and comparing is the cheap way to refuse it here instead.
+    const bytes = Buffer.from(input.content, 'base64');
+    if (bytes.toString('base64').replace(/=+$/, '') !== input.content.replace(/[\s=]+$/g, '').replace(/\s/g, '')) {
+      throw new Error(`content is not valid base64 for ${cleanPath(input.path)}`);
+    }
+    await putObject(bucket, srcKey(record.cellId, input.path), bytes, binaryTypeFor(input.path));
+  } else {
+    await putObject(bucket, srcKey(record.cellId, input.path), input.content, 'text/plain; charset=utf-8');
+  }
   ctx.logger.info('cell file written', { cellId: record.cellId, path: cleanPath(input.path) });
   if (input.deploy) return requestDeploy(record, env, ctx);
   await emitFilesChanged(ctx, record, 'write', [cleanPath(input.path)]);
@@ -933,9 +990,20 @@ async function readFile(input: ReadFileInput, ctx: ServiceContext): Promise<unkn
   const user = requireUser(ctx.identity);
   if (!input?.path) throw new Error('path is required');
   const { record, bucket } = await resolveAuthorized(input, user);
-  const content = await getObject(bucket, srcKey(record.cellId, input.path));
-  if (content === null) throw new Error(`file not found: ${cleanPath(input.path)}`);
-  return { cellId: record.cellId, path: cleanPath(input.path), content };
+  // RAW, THEN DECIDE. Reading as UTF-8 first and checking afterwards is not
+  // possible — the damage is done by the decode, and a caller cannot tell a
+  // mangled PNG from a text file that happens to contain U+FFFD. The stored
+  // content type is the record of what was written, so it makes the choice.
+  const raw = await getObjectRaw(bucket, srcKey(record.cellId, input.path));
+  if (raw === null) throw new Error(`file not found: ${cleanPath(input.path)}`);
+  if (!isTextType(raw.contentType)) {
+    return {
+      cellId: record.cellId, path: cleanPath(input.path),
+      content: raw.body.toString('base64'), encoding: 'base64' as const,
+      contentType: raw.contentType, bytes: raw.body.length,
+    };
+  }
+  return { cellId: record.cellId, path: cleanPath(input.path), content: raw.body.toString('utf-8') };
 }
 
 async function listFiles(input: CellRef, ctx: ServiceContext): Promise<unknown> {
@@ -966,11 +1034,21 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
   const prefix = srcPrefix(record.cellId);
   const keys = await listObjects(env.codeBucket, prefix);
   const files: Record<string, string> = {};
+  /** Bytes, kept out of `files` so nothing can hand them to a bundler. */
+  const blobs: Record<string, Buffer> = {};
   for (const k of keys) {
     const rel = k.slice(prefix.length);
     if (!rel) continue;
-    const content = await getObject(env.codeBucket, k);
-    if (content !== null) files[rel] = content;
+    // THE CONTENT TYPE DECIDES, not the extension and not the caller. Anything
+    // written as bytes (writeFile with encoding:'base64') comes back as bytes
+    // and never touches a UTF-8 decode; everything else is source and is text.
+    // `files` stays `Record<string, string>` deliberately — the bundler, the
+    // types.json parse and the ssr.json parse all take strings, and widening
+    // that type is how a Buffer would end up concatenated into a bundle.
+    const raw = await getObjectRaw(env.codeBucket, k);
+    if (raw === null) continue;
+    if (isTextType(raw.contentType)) files[rel] = raw.body.toString('utf-8');
+    else blobs[rel] = raw.body;
   }
   if (Object.keys(files).length === 0) throw new Error('no source files to deploy (write to src/ first)');
   const entry = files['index.ts'] !== undefined ? 'index.ts' : files['index.js'] !== undefined ? 'index.js' : Object.keys(files)[0];
@@ -994,7 +1072,7 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
   } catch (err) {
     throw new Error(`Cell source failed to bundle: ${(err as Error).message}`);
   }
-  const pkg: Array<{ name: string; content: string }> = [{ name: 'index.js', content: js }];
+  const pkg: Array<{ name: string; content: string | Buffer }> = [{ name: 'index.js', content: js }];
 
   // The tier-2 mirror of home's `clientEntry`: a `client/` entry in the src
   // tree browser-bundles to `app.js` (declared deps become esm.sh externals);
@@ -1008,8 +1086,15 @@ async function deployCell(record: CellRecord, env: ForgeEnv, ctx: ServiceContext
       throw new Error(`Cell client failed to bundle: ${(err as Error).message}`);
     }
   }
-  const staticFiles = Object.keys(files).filter((f) => f.startsWith('static/'));
-  for (const f of staticFiles) pkg.push({ name: f, content: files[f] });
+  // `static/` ships verbatim — text as text, bytes as bytes. The blob half is
+  // what makes an icon, a font or a sound possible at all: it goes into the
+  // package as a Buffer and `zipStore` writes it without a decode, so what the
+  // cell's handler reads off /var/task is byte-for-byte what was written.
+  const staticText = Object.keys(files).filter((f) => f.startsWith('static/'));
+  const staticBlobs = Object.keys(blobs).filter((f) => f.startsWith('static/'));
+  for (const f of staticText) pkg.push({ name: f, content: files[f] });
+  for (const f of staticBlobs) pkg.push({ name: f, content: blobs[f] });
+  const staticFiles = [...staticText, ...staticBlobs];
 
   // Vocabulary as data (docs/type-vocabulary.md): a cell declares the fact
   // types it manages in a `types.json` at its src root. They are stored on the
