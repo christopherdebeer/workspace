@@ -1,9 +1,15 @@
 import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
-// The web surface travels INSIDE the bundle, because nothing else does — the
-// platform ships a cell as one bundled module plus app.js, so `web/` is not on
-// the Lambda's disk to be read. See scripts/build-web-assets.mjs.
-import { SERVICE_WORKER, WEB_ICONS, WEB_MANIFEST } from './web-assets';
+// The web surface is READ FROM DISK, from `static/` beside index.js in
+// /var/task. It used to travel inside the bundle as a generated 230KB module of
+// base64 string literals, because a cell could not ship bytes: source files
+// were carried through the cells tools as JSON strings and stored as UTF-8, so
+// a PNG came back larger and wrong (19,203 bytes in, 34,465 out) and the icons
+// and manifest were dead on the live cell from the day they landed. That is
+// fixed at the platform now — `cells.writeFile` takes `encoding: 'base64'`,
+// `static/` deploys as bytes — so the generated module and its build script are
+// gone and `static/` is the one source of truth, copied verbatim by the native
+// shells too.
 import { join } from 'node:path';
 import { gzipSync, deflateSync, inflateSync } from 'node:zlib';
 
@@ -170,7 +176,7 @@ function serveServiceWorker() {
         .update(readFileSync(join(__dirname, 'app.js'))).digest('hex').slice(0, 12);
     } catch { bundleStamp = 'unstamped'; }
   }
-  const body = SERVICE_WORKER.replace('__DRIVE_SW_BUILD__', bundleStamp);
+  const body = webText('sw.js').replace('__DRIVE_SW_BUILD__', bundleStamp);
   return respond(200, 'application/javascript; charset=utf-8', body, {
     // The one file that must never come from a stale cache: it is the only
     // thing that can replace a stale cache. Browsers already refuse to reuse a
@@ -179,12 +185,46 @@ function serveServiceWorker() {
   });
 }
 
+/**
+ * A file from `static/`, read once and kept.
+ *
+ * READ WITHOUT AN ENCODING, so it is a Buffer and stays one. The whole class of
+ * bug this replaces was a UTF-8 decode applied to bytes that are not text —
+ * every invalid sequence becomes U+FFFD, which does not merely corrupt the file
+ * but INFLATES it, silently, behind a 200 and a correct content-type. So the
+ * icons never become strings anywhere in this path: disk to Buffer to base64 to
+ * the wire.
+ *
+ * Cached because a warm Lambda serves the same five icons for its whole life
+ * and /var/task is read-only — there is nothing to invalidate.
+ */
+const webCache = new Map<string, Buffer>();
+function webBytes(file: string): Buffer {
+  const hit = webCache.get(file);
+  if (hit) return hit;
+  const buf = readFileSync(join(__dirname, 'static', file));
+  webCache.set(file, buf);
+  return buf;
+}
+/** The text ones — the worker and the manifest — decoded at the last moment. */
+const webText = (file: string): string => webBytes(file).toString('utf8');
+
 function serveWebAsset(path: string) {
   const asset = WEB_ASSETS[path];
   if (!asset) return null;
-  // Already base64 for the icons, which is the wire format anyway; the manifest
-  // is text and gets encoded here so both take one exit.
-  const body = WEB_ICONS[asset.file] ?? Buffer.from(WEB_MANIFEST, 'utf8').toString('base64');
+  // ONE EXIT, base64, for text and bytes alike: the manifest could go out as a
+  // string but then this function would have two shapes and the icons would be
+  // the special case, which is how the last version of it got this wrong.
+  let body: string;
+  try {
+    body = webBytes(asset.file).toString('base64');
+  } catch {
+    // A missing static file is a DEPLOY fault, not a request fault. 404 rather
+    // than 500 so it reads the same as it did when these were served from a
+    // module that could not fail — and so the appshell test's fetch of every
+    // declared asset still names which one is absent.
+    return null;
+  }
   return {
     statusCode: 200,
     headers: {

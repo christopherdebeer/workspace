@@ -16,10 +16,10 @@
 import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { render, ASSETS_PATH } from '../scripts/build-web-assets.mjs';
+import { existsSync } from 'node:fs';
 
 const CELL = join(dirname(fileURLToPath(import.meta.url)), '..');
-const sw = readFileSync(join(CELL, 'web/sw.js'), 'utf8');
+const sw = readFileSync(join(CELL, 'static/sw.js'), 'utf8');
 const cell = readFileSync(join(CELL, 'index.ts'), 'utf8');
 
 let bad = 0;
@@ -60,19 +60,28 @@ check('the cell substitutes it', cell.includes(`.replace('${placeholder}'`), nul
 // registration reports nothing to the page.
 check("worker-src admits 'self'", /worker-src 'self'/.test(cell), null);
 
-// ── and the cell has to be able to reach any of it ──
+// ── and the cell has to be able to REACH any of it ──
 //
-// This is the check that would have caught the live 404s. `web/` is the source
-// of truth and the native shells copy it, but the PLATFORM ships a cell as one
-// bundle plus app.js: nothing under web/ is on the Lambda's disk. So the cell
-// serves from the generated `web-assets.ts`, and the only thing keeping that
-// honest is this comparison.
-const { body } = await render();
-check('web-assets.ts is what web/ generates',
-  body === readFileSync(ASSETS_PATH, 'utf8'),
-  'stale — run: node cells/drive/scripts/build-web-assets.mjs');
-check('the cell serves assets from the module, not the filesystem',
-  !/readFileSync\(join\(__dirname, 'web'/.test(cell), null);
+// These are the checks that would have caught the live 404s, restated for how
+// the assets actually travel now. They used to compare a generated module
+// against what `web/` would render into it, because nothing under `web/` was on
+// the Lambda's disk and the bytes had to ride inside the bundle. `static/` IS
+// shipped — the platform packages it verbatim beside index.js — so the module
+// is gone and what has to hold is simpler and stricter: every path the cell
+// declares must exist as a file, and the cell must read it from `static/`.
+const declared = [...cell.matchAll(/file: '([^']+)'/g)].map((m) => m[1]);
+check('the cell declares its web assets', declared.length >= 6, declared);
+for (const f of declared) {
+  check(`static/${f} exists to be served`, existsSync(join(CELL, 'static', f)), null);
+}
+check('the cell reads them from static/, which is what the platform ships',
+  /readFileSync\(join\(__dirname, 'static', file\)\)/.test(cell), null);
+// AND NOT WITH AN ENCODING. `readFileSync(path, 'utf8')` on a PNG is the exact
+// bug this replaced — it inflates the file and serves mojibake behind a 200.
+check('…as bytes, never through a UTF-8 decode',
+  !/readFileSync\(join\(__dirname, 'static'[^)]*\), *'utf8'\)/.test(cell), null);
+check('the generated base64 module is gone',
+  !existsSync(join(CELL, 'web-assets.ts')) && !/from '\.\/web-assets'/.test(cell), null);
 
 console.log(bad ? `\n${bad} FAILED` : '\nall ok');
 process.exitCode = bad ? 1 : 0;

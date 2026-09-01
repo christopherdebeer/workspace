@@ -43,7 +43,7 @@ export function serveShell(tag = 'shell') {
   // The stamp the cell computes, computed the same way, so the cache name here
   // is the one production would use.
   const stamp = createHash('sha1').update(bundle).digest('hex').slice(0, 12);
-  const sw = readFileSync(join(CELL, 'web/sw.js'), 'utf8').replace('__DRIVE_SW_BUILD__', stamp);
+  const sw = readFileSync(join(CELL, 'static/sw.js'), 'utf8').replace('__DRIVE_SW_BUILD__', stamp);
 
   const served = new Set();
   const server = http.createServer((req, res) => {
@@ -56,10 +56,10 @@ export function serveShell(tag = 'shell') {
     if (p === '/app.js') return send('application/javascript', bundle);
     if (p === '/sw.js') return send('application/javascript', sw, { 'cache-control': 'no-cache' });
     if (p === '/manifest.webmanifest') {
-      return send('application/manifest+json', readFileSync(join(CELL, 'web/manifest.webmanifest')));
+      return send('application/manifest+json', readFileSync(join(CELL, 'static/manifest.webmanifest')));
     }
     if (p.startsWith('/icons/')) {
-      try { return send('image/png', readFileSync(join(CELL, 'web', p.slice(1)))); }
+      try { return send('image/png', readFileSync(join(CELL, 'static', p.slice(1)))); }
       catch { res.writeHead(404); return res.end('{}'); }
     }
     // The world, which this server deliberately does not have.

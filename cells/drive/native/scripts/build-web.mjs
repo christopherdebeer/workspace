@@ -14,7 +14,7 @@ const buildId = process.env.DRIVE_BUILD_ID
 
 await rm(OUT, { recursive: true, force: true });
 await mkdir(OUT, { recursive: true });
-await cp(join(CELL, 'web'), OUT, { recursive: true });
+await cp(join(CELL, 'static'), OUT, { recursive: true });
 // THE PACKAGED SHELLS MUST NOT CARRY A SERVICE WORKER. `web/` is the browser
 // cell's static surface and sw.js lives there with the icons it precaches, but
 // it precaches absolute paths on the deployed host — and these shells serve the

@@ -67,16 +67,43 @@ So `readFileSync(join(__dirname, 'web', …))` reads nothing, and it fails as a
 404 rather than an error. The PWA manifest and icons were added that way and
 were dead on the live cell from the day they landed — the shell linked a
 manifest that was never served, and no test noticed because every tool here
-runs the client, not the deployed handler. **Anything the cell serves has to be
-in the module graph**: `web/` is the source of truth (the native shells copy it
-verbatim), and `scripts/build-web-assets.mjs` renders it into the generated
-`web-assets.ts` that `index.ts` imports. `devtools/appshell.test.mjs`
-regenerates and compares, so the two cannot drift.
+runs the client, not the deployed handler.
 
-`static/` would not have saved the icons either: that read is
-`Buffer.toString('utf-8')` and a PNG does not survive being a string.
-`getObjectRaw` sits beside it in `services/cells/provisioner.ts`, so making
-`static/` binary-safe is a real platform fix that nobody has made yet.
+**`static/` IS shipped, and is now binary-safe.** The directory is
+`cells/drive/static/` (it was `web/`), it is the one source of truth, the native
+shells copy it verbatim, and `index.ts` reads it off /var/task with
+`readFileSync(join(__dirname, 'static', file))` — no encoding, so a PNG stays a
+Buffer from disk to base64 to the wire.
+
+That took a platform fix, made 2026-09-01. Source files were carried through the
+cells tools as JSON strings and stored `text/plain; charset=utf-8`, so a PNG did
+not arrive corrupted, it arrived LARGER: every byte that is not valid UTF-8
+became U+FFFD, 19,203 bytes in and 34,465 out, served with a 200 and a
+content-type that still said image/png. `cells.writeFile` takes
+`encoding: 'base64'` now, `readFile` returns bytes as base64 with the stored
+content type, `deployCell` loads `static/` through `getObjectRaw`, and
+`zipStore` writes a Buffer verbatim. `tests/cell-files.test.ts` holds it.
+
+The workaround it replaced — `scripts/build-web-assets.mjs` rendering `web/`
+into a 230KB generated `web-assets.ts` of base64 literals so the bytes could
+ride inside the module graph — is deleted. If you find a reference to it, it is
+stale.
+
+**cell-sync is binary-safe in both directions too.** It sends a known binary
+extension as base64 in ONE call (never chunked — two independently-decoded
+base64 chunks only concatenate when the first is a multiple of four characters)
+and writes a base64 response as a Buffer. Before that fix every pull silently
+corrupted the five icons in the working tree, and the only thing that ever
+caught it was `git status` showing five modified PNGs after a pull that should
+have been a no-op.
+
+**COMMIT BEFORE YOU PULL.** `cell-sync pull` overwrites the working tree with
+the cell's copy of every file it has, and it does not care that you were
+mid-edit. It ate an uncommitted rewrite of `index.ts` and of this file during
+the very change that removed the workaround — `git status` then showed them as
+CLEAN, because the cell's copy matched HEAD, which is the most convincing way
+for work to disappear. It also RESURRECTS files you deleted locally, since the
+cell still has them; `cells.deleteFile` is what actually removes one.
 
 **Verify the deployed HANDLER, not just the bundle.** Grepping `app.js` for a
 symbol proves the client shipped; it says nothing about a route. Curl the
