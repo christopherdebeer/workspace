@@ -31,6 +31,8 @@
  */
 
 import bixby from './fixtures/world-bixby.json';
+import carmelA from './fixtures/world-carmel-a.json';
+import carmelB from './fixtures/world-carmel-b.json';
 
 /** Ground cover, by the WorldCover class the raster would have carried. */
 export type FixtureCover =
@@ -217,14 +219,24 @@ interface CapturedWorld {
   name: string;
   origin: { lat: number; lon: number };
   r: number;
-  height: { n: number; step: number; cm: number[] };
+  /** Base64 Int16 centimetres above `base` — see capture-world.mjs on why the
+   *  grid is not written out as JSON numbers (it is most of the file). */
+  height: { n: number; step: number; base: number; b64: string };
   cover: { n: number; step: number; px: number[] };
   ways: Array<{ id: number; tags: Record<string, string>; pts: Array<[number, number]> }>;
 }
 
 function captured(cap: CapturedWorld, label: string, note: string, heading = 0): WorldFixture {
-  const { n, step, cm } = cap.height;
-  const mean = cm.reduce((a, b) => a + b, 0) / (cm.length || 1) / 100;
+  const { n, step, base, b64 } = cap.height;
+  // atob, not Buffer: this runs in the browser. The Int16Array is built by copy
+  // rather than as a view, because a view onto a byte string's buffer inherits
+  // its offset and the first sample lands wherever the decode happened to
+  // start.
+  const bytes = Uint8Array.from(atob(b64), (c) => c.charCodeAt(0));
+  const cm = new Int16Array(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.byteLength));
+  let sum = 0;
+  for (let i = 0; i < cm.length; i++) sum += cm[i];
+  const mean = base + sum / (cm.length || 1) / 100;
   /** Bilinear, because the grid is the DEM's own ~8m and nearest-neighbour
    *  would put 8m stair-steps under a road whose whole difficulty is that its
    *  profile is solved over this ground. */
@@ -233,7 +245,7 @@ function captured(cap: CapturedWorld, label: string, note: string, heading = 0):
     const fy = clampF((s + cap.r) / step, 0, n - 1.001);
     const x0 = Math.floor(fx), y0 = Math.floor(fy);
     const tx = fx - x0, ty = fy - y0;
-    const at = (x: number, y: number): number => cm[y * n + x] / 100;
+    const at = (x: number, y: number): number => base + cm[y * n + x] / 100;
     return (at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx) * (1 - ty)
       + (at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx) * ty;
   };
@@ -616,6 +628,18 @@ export const CAPTURED: readonly WorldFixture[] = [
     bixby as unknown as CapturedWorld,
     'BIG SUR — COAST ROAD',
     'Captured from the live world at 36.3753,-121.8974: the Highway 1 approach above Bixby, where three separate OSM ways all called Coast Road meet at near-equal classes on a cliff the DEM resolves at 8m. Reported twice from the seat. relief 0 flattens the ground and keeps the roads, which is the comparison no authored fixture can offer.',
+    100,
+  ),
+  captured(
+    carmelA as unknown as CapturedWorld,
+    'CARMEL HIGHLANDS — SOUTH',
+    'Captured at 36.5665,-121.9130. 755 ways, 95 of them highway, on ground running 126m to 237m — a dense hillside street network rather than one cliff road, which is a different kind of hard: many short ways of near-equal class meeting each other on a slope.',
+    100,
+  ),
+  captured(
+    carmelB as unknown as CapturedWorld,
+    'CARMEL HIGHLANDS — NORTH',
+    'Captured at 36.5753,-121.9128, a kilometre north of the other. 145 highways in 244 ways — more road and fewer buildings, so the junctions are less obscured while the terrain is the same.',
     100,
   ),
 ];

@@ -115,9 +115,11 @@ for (const [x, y] of tileRange(OSM_Z)) {
     const k = `${w.id}:${g.length}:${g[0][0]},${g[0][1]}:${g[g.length - 1][0]},${g[g.length - 1][1]}`;
     if (seen.has(k)) continue;
     seen.add(k);
+    // A DECIMETRE is finer than anything downstream reads a way at — the
+    // solver densifies to 12m stations — and it is 10% of the file.
     const pts = g.map(([la, lo]) => [
-      +((lo - lon) * M_LON).toFixed(2),
-      +((lat - la) * M_LAT).toFixed(2),
+      +((lo - lon) * M_LON).toFixed(1),
+      +((lat - la) * M_LAT).toFixed(1),
     ]);
     // Keep anything that comes within the box; a way that merely passes nearby
     // still shapes the junction at its edge.
@@ -148,12 +150,22 @@ const elevAt = (e, s) => {
   const i = (py * t.w + px) * t.ch;
   return t.px[i] * 256 + t.px[i + 1] + t.px[i + 2] / 256 - 32768;
 };
-const heights = [];
+// BASE64 Int16 CENTIMETRES, not JSON integers. The height grid is the largest
+// thing in a capture by some way — 55,696 samples came to 325KB written out as
+// numbers, which is most of a bundle for one place. Two bytes a sample is a
+// third of that, and centimetres are already far finer than a 7.7m DEM pixel
+// earns. Stored relative to the site's own floor so the range always fits an
+// Int16: the whole Earth's relief does not, one 1.4km box always does.
+const raw = new Int16Array(HN * HN);
+const abs = [];
 for (let j = 0; j < HN; j++) {
-  for (let i = 0; i < HN; i++) {
-    heights.push(Math.round(elevAt(-R + i * hstep, -R + j * hstep) * 100));
-  }
+  for (let i = 0; i < HN; i++) abs.push(elevAt(-R + i * hstep, -R + j * hstep));
 }
+const base = Math.floor(Math.min(...abs));
+for (let i = 0; i < abs.length; i++) {
+  raw[i] = Math.max(-32768, Math.min(32767, Math.round((abs[i] - base) * 100)));
+}
+const heights = Buffer.from(raw.buffer).toString('base64');
 
 // ── the cover ──────────────────────────────────────────────────────
 const covTiles = new Map();
@@ -183,7 +195,7 @@ for (let j = 0; j < CN; j++) {
 const out = {
   name, origin: { lat, lon }, r: R,
   captured: new Date().toISOString().slice(0, 10),
-  height: { n: HN, step: +hstep.toFixed(3), cm: heights },
+  height: { n: HN, step: +hstep.toFixed(3), base, b64: heights },
   cover: { n: CN, step: +cstep.toFixed(3), px: cover },
   ways,
 };
@@ -191,9 +203,9 @@ const dir = join(CELL, 'client/fixtures');
 mkdirSync(dir, { recursive: true });
 const path = join(dir, `world-${name}.json`);
 writeFileSync(path, JSON.stringify(out));
-const hs = heights.filter((v) => v > -30000);
+const hs = abs;
 console.log(`captured ${name} at ${lat},${lon} r=${R}m`);
 console.log(`  ways    ${ways.length} (${ways.filter((w) => w.tags.highway).length} highway)`);
-console.log(`  heights ${HN}x${HN} @ ${hstep.toFixed(1)}m  ${(Math.min(...hs) / 100).toFixed(0)}..${(Math.max(...hs) / 100).toFixed(0)}m`);
+console.log(`  heights ${HN}x${HN} @ ${hstep.toFixed(1)}m  ${Math.min(...hs).toFixed(0)}..${Math.max(...hs).toFixed(0)}m`);
 console.log(`  cover   ${CN}x${CN} @ ${cstep.toFixed(1)}m  classes ${[...new Set(cover)].sort((a, b) => a - b).join(',')}`);
 console.log(`  -> ${path}  (${(JSON.stringify(out).length / 1024).toFixed(0)}KB)`);

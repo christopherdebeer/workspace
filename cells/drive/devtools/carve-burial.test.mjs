@@ -39,8 +39,35 @@ const d = await openDrive({
   spot: 'fixture=sidehill&cam=chase&time=NOON&cprobe=1',
   tag: 'carve-burial', settle: 9000, bootTimeout: 90000,
 });
-await d.page.waitForTimeout(6000);
 const q = async (fn, ...a) => d.page.evaluate(fn, ...a);
+
+/**
+ * WAIT FOR THE CARVE, NOT FOR A CLOCK.
+ *
+ * This used to be a flat six seconds. `dirtyTerrainAround` marks up to nine
+ * tiles for one run of road and `flushTerrain` rebuilds ONE per 200ms, so the
+ * ground lags the roads by a long way — measured on the Big Sur capture, the
+ * queue took ninety seconds to drain, and every number read before it did was
+ * a number about a half-built world. The batter count in particular read ZERO
+ * on an unsettled world and 2281 on the same world settled, which is the
+ * difference between "no batters are drawn here" and "the batters had not been
+ * built yet". Reported from a screenshot: the terrain cutting had not finished.
+ *
+ * `terrainDirty.size` is the queue itself, and the codebase's own
+ * tape-recording readiness gate gates on exactly this. Held for four
+ * consecutive polls, because it dips through zero between tiles.
+ */
+async function settle(label) {
+  let quiet = 0;
+  for (let i = 0; i < 60; i++) {
+    await d.page.waitForTimeout(3000);
+    const dirty = await q(() => window.__tstats().dirty);
+    quiet = dirty === 0 ? quiet + 1 : 0;
+    if (quiet >= 4) { console.log(`  ${label}: carve settled at t+${(i + 1) * 3}s`); return; }
+  }
+  console.log(`  ${label}: WARNING carve never settled — numbers below are provisional`);
+}
+await settle('sidehill');
 
 const buried = await q(() => window.__buried(1400));
 const tunnels = await q(() => window.__tunnelBreach());
