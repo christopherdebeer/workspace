@@ -147,6 +147,18 @@ function slip(
   return out;
 }
 
+/**
+ * A smooth 0..1 window around one node, so each junction can stand on its own
+ * landform without the next one feeling it. Cosine, not a Gaussian: a Gaussian
+ * never quite reaches zero, and at 420m spacing nine tails add up to a tilt
+ * nobody authored — which is exactly the kind of thing that makes a fixture
+ * lie about what it is testing.
+ */
+function near(e: number, s: number, ce: number, cs: number, r = 230): number {
+  const d = Math.hypot(e - ce, s - cs) / r;
+  return d >= 1 ? 0 : (Math.cos(d * Math.PI) + 1) / 2;
+}
+
 /** The principal road's tags, from the tune — one place, so every fixture's
  *  main road answers the dials the same way. */
 const mainTags = (t: FixtureTune, name: string): Record<string, string> => ({
@@ -354,7 +366,7 @@ export const WORLD_FIXTURES: readonly WorldFixture[] = [
   {
     id: 'junctions',
     label: 'JUNCTIONS, THE AWKWARD ONES',
-    note: 'Nine cases the tidy fixtures do not have — six nodes and three slip roads: equal classes crossing, a five-way star, an acute Y, a stagger, a link shorter than the crop reach, and six arms of mixed class; then an on/off slip pair, a shallow merge of equals, and a slip that forks. A merge is not an angle at a point — it is two carriageways whose gore narrows to nothing — which is why the node cases cannot stand in for it. Turn SLOPE up and every one becomes a batter case as well.',
+    note: 'Nine cases the tidy fixtures do not have — six nodes and three slip roads: equal classes crossing, a five-way star, an acute Y, a stagger, a link shorter than the crop reach, and six arms of mixed class; then an on/off slip pair, a shallow merge of equals, and a slip that forks. A merge is not an angle at a point — it is two carriageways whose gore narrows to nothing — which is why the node cases cannot stand in for it. Every node stands on its own landform — side slope, crown, cutting, embankment, grade change, bowl, hillside bench, valley and spur — so each mouth has a real cut face and a real batter rather than a table. RELIEF 0 flattens it back when the geometry alone is the question.',
     spawn: { lat: HOME.lat, lon: HOME.lon, heading: 0 },
     /**
      * DELIBERATELY ALMOST FLAT, with the cross-fall on the SLOPE dial.
@@ -368,9 +380,60 @@ export const WORLD_FIXTURES: readonly WorldFixture[] = [
      * The gentle undulation is not decoration: a dead-flat world lets a wrong
      * deck height hide, because everything is at the same height anyway.
      */
-    height: (e, s, t) => t.lift + 300
-      + e * 0.085 * t.slope
-      + (Math.sin(e / 240) * 3.5 + Math.cos(s / 205) * 3) * t.relief,
+    /**
+     * ── NINE LANDFORMS, ONE PER NODE ──
+     *
+     * A junction on flat ground exercises the crop and nothing else. What
+     * actually goes wrong in the world is the CUT FACE on the arm that climbs
+     * and the BATTER on the arm that falls, and neither exists if the ground is
+     * a table. So every case stands on its own landform, chosen for what it
+     * makes the mouth do, and `near()` keeps each one local to its node.
+     *
+     * The amounts are bounded on purpose. A bank steeper than about 6m over the
+     * road's own width would cross the burial threshold (TUNNEL_H + 0.6) and
+     * the stretch would be exempted from the carve as a tunnel — which is
+     * correct behaviour and completely useless here, because then there is no
+     * cutting to look at. These sit under that deliberately; `sidehill` is the
+     * fixture for burial.
+     *
+     * relief 0 flattens all of it back to a table, so the geometry can still be
+     * isolated when that is the question. slope multiplies the cross-falls.
+     */
+    height: (e, s, t) => {
+      const W = 420;
+      const R = t.relief, S = t.slope;
+      let y = t.lift + 300;
+      // Gentle everywhere, so nothing sits on a perfectly level plane — a wrong
+      // deck height hides on ground that has no height of its own.
+      y += (Math.sin(e / 240) * 2.5 + Math.cos(s / 205) * 2) * R;
+      // 1 SIDE SLOPE. One arm traverses it, the other climbs it: a cut face on
+      // the uphill kerb and a batter on the downhill one, at the same mouth.
+      y += near(e, s, 0, 0) * (e - 0) * 0.22 * R * S;
+      // 2 CROWN. Five arms all falling away from the node — batter on every
+      // one of them, and no uphill side anywhere to hide a mistake.
+      y += near(e, s, W, 0) * 16 * R;
+      // 3 CUTTING. A bank across the Y's throat that the roads cut through.
+      // 4.5m: a cutting, deliberately short of the burial threshold.
+      y += near(e, s, 2 * W, 0) * Math.exp(-(((s - 0) / 55) ** 2)) * 4.5 * R;
+      // 4 EMBANKMENT. A hollow the through road crosses on fill, so both
+      // staggered mouths sit on a bank with nothing under them.
+      y -= near(e, s, 0, W) * Math.exp(-(((s - W) / 60) ** 2)) * 9 * R;
+      // 5 GRADE CHANGE. A step across the short link, so its two nodes sit at
+      // different heights and the link itself is the ramp between them.
+      y += near(e, s, W, W) * Math.tanh((e - W) / 45) * 5 * R * S;
+      // 6 BOWL. Six arms climbing out in six directions.
+      y += near(e, s, 2 * W, W) * (Math.hypot(e - 2 * W, s - W) / 90 - 1) * 7 * R;
+      // 7 HILLSIDE TRAVERSE. The slip road runs on a bench below the motorway,
+      // so the gore between them is cut on one side and filled on the other —
+      // the thing a flat merge cannot show at all.
+      y += near(e, s, 0, 2 * W, 300) * (e - 0) * 0.30 * R * S;
+      // 8 VALLEY. Both carriageways of the merge on fill, converging.
+      y -= near(e, s, W, 2 * W, 300) * Math.exp(-(((e - W) / 80) ** 2)) * 11 * R;
+      // 9 SPUR. Ground falling away either side of the fork, so the gore point
+      // between the diverging kerbs has air under it.
+      y -= near(e, s, 2 * W, 2 * W, 300) * (Math.abs(e - 2 * W) / 70) * 6 * R;
+      return y;
+    },
     cover(e, s, t) { return coverFor(e, s, t, this.height(e, s, t)); },
     ways: (t) => {
       const W = 420;                       // between node centres

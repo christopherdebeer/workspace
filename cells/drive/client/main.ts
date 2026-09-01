@@ -36673,6 +36673,25 @@ if (timeFromUrl >= 0) {
   const d = DIALS.find((x) => x.key === 'time');
   if (d) { d.at = timeFromUrl; d.apply(timeFromUrl); }
 }
+/**
+ * A FIXTURE IS AN INSTRUMENT, SO IT DOES NOT SMEAR.
+ *
+ * Motion blur defaults to 180 degrees and is right for driving — it is half of
+ * every frame step, which is what a shutter does. It is wrong for a world whose
+ * entire purpose is that you can LOOK at the geometry: every inspection frame
+ * taken while the camera was still settling came back soft, and a soft frame is
+ * one you cannot judge a kerb seam or a batter face from. The blur was reading
+ * as a modelling defect in screenshots, which is worse than useless in a
+ * fixture — it is misleading.
+ *
+ * Off by default in a fixture world, and only by DEFAULT: `?mblur=` still wins,
+ * so the blur itself remains inspectable in the place where the ground holds
+ * still. The dial stays live for the session, exactly like the clock above.
+ */
+if (FIXTURE && !new URLSearchParams(location.search).has('mblur')) {
+  const d = DIALS.find((x) => x.key === 'mblur');
+  if (d) { d.at = 0; d.apply(0); }
+}
 // THE LINE RUNS ON WORLD TIME. A clock dial saved during free driving — NOON,
 // held for a screenshot weeks ago — would pin the ranger's whole docket in
 // amber forever. On the line the day CYCLES, unless the URL pinned a clock
