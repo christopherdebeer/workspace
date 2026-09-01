@@ -45,6 +45,14 @@ mkdirSync(join(ROOT, 'node_modules/.cache'), { recursive: true });
 execFileSync('npx', ['esbuild', join(CELL, 'client/demrepair.ts'),
   '--bundle', '--format=esm', `--outfile=${dmOut}`], { stdio: 'pipe', cwd: ROOT });
 const { demBad, demFloor, demPatch, demSpikes, repairDem } = await import(dmOut);
+// …and the shipping clipper, for the same reason. `captured()` clips every way
+// to the captured box when it reads the file, so geometry outside it is bytes
+// that are decoded, parsed and then thrown away on every boot. Paris arrived at
+// 2,289KB; the tag trim took it to 1,578KB and this takes the rest.
+const clOut = join(ROOT, 'node_modules/.cache/drive-clip.mjs');
+execFileSync('npx', ['esbuild', join(CELL, 'client/clip.ts'),
+  '--bundle', '--format=esm', `--outfile=${clOut}`], { stdio: 'pipe', cwd: ROOT });
+const { clipToBounds } = await import(clOut);
 
 const args = process.argv.slice(2);
 const name = args.find((a) => !a.startsWith('--')) ?? 'capture';
@@ -121,6 +129,44 @@ function tileRange(z) {
   return out;
 }
 
+/**
+ * ── A CAPTURE CARRIES WHAT THE GAME READS, AND NOT THE REST ──
+ *
+ * The Paris capture came to 2,289KB, which is most of a bundle for one place,
+ * and 973KB of that was TAGS. `source` alone was 511KB — the OSM contributor's
+ * note about where they got the data, on five thousand buildings, carried into
+ * a game bundle that has never once looked at it. Also present and unread:
+ * addr:*, phone, website, email, fax, wikidata, opening hours, every name:xx
+ * translation.
+ *
+ * This is the game's own KEEP_TAGS (main.ts), which is the list writeTileCache
+ * already applies before anything reaches IndexedDB — so a captured way now
+ * carries exactly what a streamed one does, and no capture can accidentally
+ * test the renderer on a tag the live world would have thrown away.
+ *
+ * The extras beyond that list are deliberate and few: `lanes` and its family
+ * are kept-but-unread TODAY, and the whole reason the Camps Bay capture is
+ * interesting is that width ignores them — a capture that dropped them could
+ * not be used to fix that. `oneway`, `width`, `junction` and `ref` are the same
+ * bet, small and specific.
+ */
+const KEEP_TAGS = new Set([
+  'highway', 'building', 'building:levels', 'natural', 'waterway', 'landuse',
+  'leisure', 'tunnel', 'bridge', 'layer', 'name', 'amenity', 'shop', 'surface',
+  'smoothness', 'tracktype', 'height', 'building:height', 'roof:shape',
+  'roof:levels', 'roof:colour', 'building:colour', 'building:material',
+  'religion', 'denomination', 'man_made', 'power', 'generator:source',
+  'historic', 'aeroway', 'content', 'covered', 'cutting', 'embankment',
+  'incline', 'maxheight',
+  // …and the carriageway-width evidence the renderer does not read yet.
+  'lanes', 'lanes:forward', 'lanes:backward', 'oneway', 'width', 'junction', 'ref',
+]);
+const keepTags = (t) => {
+  const out = {};
+  for (const k of Object.keys(t ?? {})) if (KEEP_TAGS.has(k)) out[k] = t[k];
+  return out;
+};
+
 // ── the ways ───────────────────────────────────────────────────────
 // ONE TILE THAT WILL NOT BUILD MUST NOT COST THE OTHER EIGHT.
 //
@@ -196,7 +242,19 @@ for (let ti = 0; ti < osmTiles.length; ti++) {
     // Keep anything that comes within the box; a way that merely passes nearby
     // still shapes the junction at its edge.
     if (!pts.some(([e, s]) => Math.abs(e) < R * 1.4 && Math.abs(s) < R * 1.4)) continue;
-    ways.push({ id: w.id, tags: w.tags ?? {}, pts });
+    // CLIPPED TO THE BOX HERE TOO, and to exactly the box `captured()` will
+    // clip it to. The height grid spans +/-R and clamps to its edge row beyond,
+    // so a way carried further than that is road over invented ground — which
+    // the reader already refuses. Writing it out anyway only costs bytes.
+    //
+    // North is -s and east is e: a relabelling, because the clipper's box is
+    // named in lat/lon and the arithmetic is affine.
+    for (const run of clipToBounds(pts.map(([e, s]) => ({ lat: -s, lon: e })),
+      { latN: R, latS: -R, lonW: -R, lonE: R })) {
+      if (run.length < 2) continue;      // a corner graze has no length to build from
+      ways.push({ id: w.id, tags: keepTags(w.tags),
+        pts: run.map((q) => [+q.lon.toFixed(1), +(-q.lat).toFixed(1)]) });
+    }
   }
 }
 

@@ -35,6 +35,7 @@ import bixby from './fixtures/world-bixby.json';
 import carmelA from './fixtures/world-carmel-a.json';
 import carmelB from './fixtures/world-carmel-b.json';
 import campsbay from './fixtures/world-campsbay.json';
+import parisWest from './fixtures/world-paris-west.json';
 
 /** Ground cover, by the WorldCover class the raster would have carried. */
 export type FixtureCover =
@@ -715,6 +716,12 @@ export const CAPTURED: readonly WorldFixture[] = [
     'CAMPS BAY — THE TWELVE APOSTLES',
     'Reported from the seat at -33.94533,18.38296 heading 122. The western flank of Table Mountain: 325 METRES of relief across a 1.4km box, which is more than twice any other capture here, and 314 highways of every class on it — primary, secondary, tertiary, residential, and the only primary_link in the set. Victoria Road runs the contour while Camps Bay Drive, Geneva Drive and Kloof Road climb across it, so nearly every junction in the fixture is a joiner meeting a host at a different height on a cross-slope. That is the case the flat authored junctions cannot pose: the batter, the cut face and the bellmouth all have to solve at once.',
     122,
+  ),
+  captured(
+    parisWest as unknown as CapturedWorld,
+    'SURESNES — THE BOULEVARDS',
+    'Reported from the seat at 48.86919,2.21523 heading 203. A dense European suburb rather than a hillside: 1,453 highways of which 762 are footway and 69 are steps, so nearly every carriageway here is flanked by a pavement solving its own profile a couple of metres away — the geometry that produces a lengthwise seam rather than a bad junction. 29 ways carry three or four lanes, which is where ROAD_W keying on class alone should show. 131m of relief, so it is not flat, but its difficulty is density and not gradient. One vector tile of the twenty (16/33171/22541) exceeds the cell Overpass budget and has never built; that corner has no roads in it.',
+    203,
   ),
 ];
 
