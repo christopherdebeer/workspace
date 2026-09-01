@@ -30,6 +30,8 @@
  * link, and /lab/world puts the same numbers on dials that persist and copy.
  */
 
+import bixby from './fixtures/world-bixby.json';
+
 /** Ground cover, by the WorldCover class the raster would have carried. */
 export type FixtureCover =
   | 'mixed' | 'forest' | 'scrub' | 'grass' | 'farmland' | 'urban' | 'barren';
@@ -187,6 +189,71 @@ function mixedCover(e: number, s: number, y: number): number {
 
 const coverFor = (e: number, s: number, t: FixtureTune, y: number): number =>
   (t.cover === 'mixed' ? mixedCover(e, s, y) : CLASS[t.cover]);
+
+
+/**
+ * ── A CAPTURED PLACE, PLAYED AS A FIXTURE ──
+ *
+ * `devtools/capture-world.mjs` pulls the three fetches for a real box — the
+ * terrarium heights, the WorldCover classes and the OSM ways — and writes them
+ * as one JSON. This turns that back into a `WorldFixture`, so somewhere that
+ * actually goes wrong can be opened in forty seconds and looked at, instead of
+ * six minutes of streaming that comes out different every run.
+ *
+ * The dials still work, and mean what they can mean for a real place: `relief`
+ * scales the ground's DEVIATION from its own mean rather than its absolute
+ * height, so relief 0 flattens the terrain to a plane at the site's average
+ * elevation and leaves the roads where they are. That is the comparison worth
+ * having — the same junctions, with and without the ground — and it is not
+ * available anywhere else. `lift` still shifts the whole thing, and `cover`
+ * overrides the captured classes only when it is not `mixed`, because on a
+ * capture the classes are evidence rather than a preference.
+ *
+ * The ROAD dials do nothing here on purpose. A capture's classes and widths are
+ * the thing under test; rewriting them with `roadClass` would replace the case
+ * with a different one that happens to be in the same place.
+ */
+interface CapturedWorld {
+  name: string;
+  origin: { lat: number; lon: number };
+  r: number;
+  height: { n: number; step: number; cm: number[] };
+  cover: { n: number; step: number; px: number[] };
+  ways: Array<{ id: number; tags: Record<string, string>; pts: Array<[number, number]> }>;
+}
+
+function captured(cap: CapturedWorld, label: string, note: string, heading = 0): WorldFixture {
+  const { n, step, cm } = cap.height;
+  const mean = cm.reduce((a, b) => a + b, 0) / (cm.length || 1) / 100;
+  /** Bilinear, because the grid is the DEM's own ~8m and nearest-neighbour
+   *  would put 8m stair-steps under a road whose whole difficulty is that its
+   *  profile is solved over this ground. */
+  const sample = (e: number, s: number): number => {
+    const fx = clampF((e + cap.r) / step, 0, n - 1.001);
+    const fy = clampF((s + cap.r) / step, 0, n - 1.001);
+    const x0 = Math.floor(fx), y0 = Math.floor(fy);
+    const tx = fx - x0, ty = fy - y0;
+    const at = (x: number, y: number): number => cm[y * n + x] / 100;
+    return (at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx) * (1 - ty)
+      + (at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx) * ty;
+  };
+  return {
+    id: `at-${cap.name}`,
+    label,
+    note,
+    spawn: { lat: cap.origin.lat, lon: cap.origin.lon, heading },
+    height: (e, s, t) => t.lift + mean + (sample(e, s) - mean) * t.relief,
+    cover(e, s, t) {
+      if (t.cover !== 'mixed') return CLASS[t.cover];
+      const c = cap.cover;
+      const x = Math.round(clampF((e + cap.r) / c.step, 0, c.n - 1));
+      const y = Math.round(clampF((s + cap.r) / c.step, 0, c.n - 1));
+      return c.px[y * c.n + x] ?? CLASS.grass;
+    },
+    ways: () => cap.ways.map((w) => ({ id: w.id, tags: w.tags, pts: w.pts })),
+  };
+}
+const clampF = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
 
 /** 46°N: temperate, which is where most of the world's road stock is and the
  *  climate the building and road cultures were tuned against. */
@@ -534,8 +601,27 @@ export const WORLD_FIXTURES: readonly WorldFixture[] = [
   },
 ];
 
+/**
+ * CAPTURED PLACES, appended so they sort after the authored ones in the lab.
+ *
+ * SIZE. Each capture is a couple of hundred KB of JSON in the bundle, which is
+ * fine for one and would not be for twenty. When there are enough to matter the
+ * answer is `static/` — it ships verbatim and the cell can serve it, which only
+ * became true when binary assets did — and a fetch at boot rather than an
+ * import. Written down here so the next person does not discover the ceiling by
+ * hitting it.
+ */
+export const CAPTURED: readonly WorldFixture[] = [
+  captured(
+    bixby as unknown as CapturedWorld,
+    'BIG SUR — COAST ROAD',
+    'Captured from the live world at 36.3753,-121.8974: the Highway 1 approach above Bixby, where three separate OSM ways all called Coast Road meet at near-equal classes on a cliff the DEM resolves at 8m. Reported twice from the seat. relief 0 flattens the ground and keeps the roads, which is the comparison no authored fixture can offer.',
+    100,
+  ),
+];
+
 export const fixtureById = (id: string | null | undefined): WorldFixture | null =>
-  (id ? WORLD_FIXTURES.find((f) => f.id === id) ?? null : null);
+  (id ? [...WORLD_FIXTURES, ...CAPTURED].find((f) => f.id === id) ?? null : null);
 
 /**
  * ── THE TUNE, AS A LINK ──

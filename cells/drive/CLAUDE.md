@@ -411,6 +411,37 @@ concurrent, and every one goes through the harness's curl relay. Budget three
 to five minutes per zoom step, and read `__far()` (meshes, asked, inFlight,
 queued, cover) rather than watching the picture.
 
+## Capturing a real place as a fixture
+
+`devtools/capture-world.mjs NAME --lat= --lon= [--r=700]` pulls the three
+fetches for a box — terrarium heights, WorldCover classes, OSM ways — and writes
+`client/fixtures/world-NAME.json`. `captured()` in world-fixtures.ts turns that
+back into a playable `WorldFixture`, listed in /lab/world as `?fixture=at-NAME`.
+
+**No browser.** All three sources are plain HTTPS: the cell serves the ways and
+the cover, AWS serves the DEM. So a capture is three fetches and some
+arithmetic, and takes seconds.
+
+Measured on the Big Sur report: a captured world settles in **28 seconds**
+against roughly six minutes of live streaming, and is identical every run
+instead of depending on tile arrival order. It found in one boot what two
+streaming boots had not.
+
+What it deliberately does NOT capture is arrival order. A captured world has
+ALREADY ARRIVED — every tile present in the first frame. That makes it useless
+for "it only happens on a drive-in, not on a reload" (`devtools/capture.mjs` is
+for that, and replays renderWays into the solver) and ideal for everything else,
+because a defect that survives a settled world is a defect in the geometry.
+
+`relief 0` on a capture flattens the ground to a plane at the site's mean
+elevation and LEAVES THE ROADS WHERE THEY ARE — the same junctions with and
+without their terrain, which is a comparison no authored fixture can offer. The
+road dials do nothing on a capture: its classes and widths are the evidence.
+
+Each capture is a couple of hundred KB in the bundle. Fine for one, not for
+twenty; at that point move them to `static/` (which ships verbatim now that
+binary assets work) and fetch at boot.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.
