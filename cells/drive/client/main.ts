@@ -5124,7 +5124,27 @@ function osmRelease(): void {
 // Full carriageway widths (both directions), not lane widths — OSM ways are
 // centerlines, and rendering them single-lane narrow made the real-size car
 // look like it straddled the whole street.
-const ROAD_W: Record<string, number> = { motorway: 13, trunk: 12, primary: 10.5, secondary: 9.5, tertiary: 8.5, residential: 7.5, unclassified: 7, service: 4.5, living_street: 6.5, track: 6.5, footway: 4.5, path: 4.5, cycleway: 5, bridleway: 5, steps: 2.2, pedestrian: 6 };
+const ROAD_W: Record<string, number> = { motorway: 13, trunk: 12, primary: 10.5, secondary: 9.5, tertiary: 8.5, residential: 7.5, unclassified: 7, service: 4.5, living_street: 6.5, track: 6.5, footway: 4.5, path: 4.5, cycleway: 5, bridleway: 5, steps: 2.2, pedestrian: 6,
+  // ── SLIP ROADS HAD NO WIDTH OF THEIR OWN ──
+  //
+  // Every `*_link` fell through to the `?? 5` fallback, so a motorway slip was
+  // five metres — narrower than a residential street, half a metre wider than a
+  // service road — where it met a 13m motorway. That reads as a footpath
+  // joining a dual carriageway, and it is an omission rather than a judgement:
+  // `GRADE_MAX` directly below names all five link classes, because the profile
+  // solver was taught what a slip road is. This table never was.
+  //
+  // A link is one running lane plus its shoulders, not a scaled copy of its
+  // parent: a motorway slip and a primary slip are much closer in width to each
+  // other than motorway is to primary. So they sit in a narrow band a little
+  // under the smallest full class, tapering with the parent rather than
+  // tracking it.
+  //
+  // The width also decides deference at the mouth — `at0.hw < width / 2 - 0.4`
+  // — and both the old value and these keep a link strictly narrower than any
+  // road it joins, so a slip still defers to its parent and cannot drag a
+  // motorway onto its camber.
+  motorway_link: 8, trunk_link: 7.5, primary_link: 7, secondary_link: 6.5, tertiary_link: 6 };
 // The RULING GRADE a class is engineered to — what the profile clamp treats
 // as "steeper than this is probably not real". Motorways hold ~4% by design
 // and 7% only in extremis; alpine passes run 9-12%; town streets can defy

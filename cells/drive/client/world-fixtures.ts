@@ -117,6 +117,36 @@ function through(e: number, s: number, deg: number, len: number, step = 20): Arr
   return run(e - Math.sin(r) * len / 2, s + Math.cos(r) * len / 2, deg, len, step);
 }
 
+/**
+ * A SLIP ROAD: parallel to its host for a while, then closing on it over a
+ * taper. Real merges are not a node with an angle at it — they are two
+ * carriageways side by side whose gore narrows to nothing, which is a
+ * completely different thing to crop and the reason `run`/`through` cannot
+ * express one.
+ *
+ * `side` is the offset it starts at (negative = the other side), `taperLen`
+ * how long it takes to close. The last point lands exactly on the host line, so
+ * the node is where the centrelines finally meet rather than where they first
+ * come near.
+ */
+function slip(
+  e0: number, s0: number, deg: number, side: number, runLen: number, taperLen: number, step = 12,
+): Array<[number, number]> {
+  const r = deg * Math.PI / 180;
+  const fx = Math.sin(r), fz = -Math.cos(r);      // along the host
+  const nx = Math.cos(r), nz = Math.sin(r);       // to its right
+  const out: Array<[number, number]> = [];
+  const total = runLen + taperLen;
+  for (let m = 0; m <= total; m += step) {
+    // Cosine ease, so the taper has no corner at either end — a straight
+    // chamfer puts a kink in the kerb exactly where the crop is looking.
+    const t = m <= runLen ? 0 : (m - runLen) / taperLen;
+    const off = side * (1 - (1 - Math.cos(Math.PI * (1 - t))) / 2);
+    out.push([e0 + fx * m + nx * off, s0 + fz * m + nz * off]);
+  }
+  return out;
+}
+
 /** The principal road's tags, from the tune — one place, so every fixture's
  *  main road answers the dials the same way. */
 const mainTags = (t: FixtureTune, name: string): Record<string, string> => ({
@@ -324,7 +354,7 @@ export const WORLD_FIXTURES: readonly WorldFixture[] = [
   {
     id: 'junctions',
     label: 'JUNCTIONS, THE AWKWARD ONES',
-    note: 'Six nodes the tidy fixtures do not have: equal classes crossing, a five-way star, an acute Y, a stagger, a link shorter than the crop reach, and six arms of mixed class. Turn SLOPE up and every one of them becomes a batter case as well. This is the diversity the world has and crossroads/tee do not.',
+    note: 'Nine cases the tidy fixtures do not have — six nodes and three slip roads: equal classes crossing, a five-way star, an acute Y, a stagger, a link shorter than the crop reach, and six arms of mixed class; then an on/off slip pair, a shallow merge of equals, and a slip that forks. A merge is not an angle at a point — it is two carriageways whose gore narrows to nothing — which is why the node cases cannot stand in for it. Turn SLOPE up and every one becomes a batter case as well.',
     spawn: { lat: HOME.lat, lon: HOME.lon, heading: 0 },
     /**
      * DELIBERATELY ALMOST FLAT, with the cross-fall on the SLOPE dial.
@@ -402,6 +432,40 @@ export const WORLD_FIXTURES: readonly WorldFixture[] = [
       add('Mixed Residential', 'residential', run(2 * W, W, 160, 150));
       add('Mixed Service', 'service', run(2 * W, W, 250, 150));
       add('Mixed Track', 'unclassified', run(2 * W, W, 305, 150));
+
+      // ── 7 (0,2W) ON-SLIP AND OFF-SLIP ──
+      // The case a node fixture cannot express. A merge is not an angle at a
+      // point — it is two carriageways running side by side whose gore narrows
+      // to nothing over a hundred metres. The crop asks where this way's kerb
+      // crosses the host's kerb line, and along a taper that crossing is both
+      // far from the node and very sensitive to a metre of geometry. The
+      // off-slip is the mirror, diverging, where the gore OPENS instead.
+      add('Slip Motorway', 'motorway', through(0, 2 * W, 0, 620));
+      w.push({ id: ++id, tags: { highway: 'motorway_link', name: 'On Slip', surface: t.surface },
+        pts: slip(0, 2 * W + 240, 0, 26, 90, 130) });
+      w.push({ id: ++id, tags: { highway: 'motorway_link', name: 'Off Slip', surface: t.surface },
+        pts: slip(0, 2 * W - 60, 180, 26, 90, 130) });
+
+      // ── 8 (W,2W) A SHALLOW MERGE OF EQUALS ──
+      // Two trunks converging at about six degrees, neither outranking the
+      // other. The tie rule defers to whichever built first, and here that
+      // choice is made along a hundred metres of near-parallel kerb rather
+      // than at a node — so if it is going to look arbitrary, it looks
+      // arbitrary for a long way.
+      add('Merge Main', 'trunk', through(W, 2 * W, 0, 520));
+      w.push({ id: ++id, tags: { highway: 'trunk', name: 'Merge Other', surface: t.surface },
+        pts: slip(W, 2 * W + 200, 0, 30, 60, 170) });
+
+      // ── 9 (2W,2W) A SLIP THAT FORKS ──
+      // One link splitting into two, so the gore point sits between two
+      // DIVERGING kerbs with nothing to host it — the shape at the top of
+      // every motorway exit, and the one most likely to leave a hole where
+      // the two mouths should meet.
+      add('Fork Trunk', 'trunk', through(2 * W, 2 * W, 0, 480));
+      w.push({ id: ++id, tags: { highway: 'trunk_link', name: 'Fork Stem', surface: t.surface },
+        pts: slip(2 * W, 2 * W - 40, 180, 24, 70, 120) });
+      w.push({ id: ++id, tags: { highway: 'trunk_link', name: 'Fork Branch', surface: t.surface },
+        pts: run(2 * W + 24, 2 * W + 150, 150, 170) });
       return w;
     },
   },
