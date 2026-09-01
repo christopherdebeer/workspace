@@ -25,6 +25,37 @@ a confusing module error):
 5. Verify by fetching the live bundle and grepping for a symbol you just added:
    `curl -s https://c15r-drive.on.parc.land/app.js | grep -c mySymbol`
 
+### THE TILE BANK IS ON NOW — AND WAS NOT, FOR A LONG TIME
+
+Every `~/` route ends in `putTile`, and `putTile` opens with
+`if (!process.env.CELL_PUBLIC_BUCKET) return;`. That variable is only set when
+the cell's `publicNamespace` flag is on, and drive's was **false** — so every
+bank was a silent no-op since the day the code was written, the S3-first origin
+group in front of the cell always missed, and EVERY tile request from EVERY
+player was a live Overpass query or a live COG read. The ADR-0095 comments in
+`index.ts` ("CloudFront looks in S3 first and falls through here on 403/404")
+described a mechanism that had never once run.
+
+Turned on with `cells.configureCell {cellId, publicNamespace: true}`. Measured
+immediately after, same tiles:
+
+| route | before | after |
+|---|---|---|
+| `~/osm/v3/` fine z16 | live Overpass, every request | 0.20–0.35s from S3 |
+| `~/osm/ov1/` overview | live Overpass, 502 roulette | 0.18–1.09s from S3 |
+| `~/cover/v1/` | live COG range-reads | 0.21s from S3 |
+
+**A stack change wipes `app.js`.** `configureCell` re-renders the stack from
+`src/` and does not reproduce the client bundle, so the game 404s until a
+`cells.deploy` follows. The tool says so in its own response; believe it, and
+have the deploy queued.
+
+**The edge gives up at ~15.5s; the Lambda has 50s.** A cold tile slower than
+that returns a 502 the client never sees a body for — and then banks anyway, so
+the NEXT request is a CDN hit. That self-healing is the whole design and it only
+works with the flag on. A tile needing more than the 44s Overpass budget still
+never lands.
+
 ### WHAT ACTUALLY REACHES THE LAMBDA
 
 The cell is pushed as source and deployed as **one bundle**: the platform reads
@@ -221,6 +252,63 @@ Three traps live in there:
   the screen of a session holding twenty-seven. It reads `?` now.
 
 ---
+
+## The wide view, and what feeds it
+
+Three layers stand in for the fine world past its rings, each on its own ladder
+of zoom levels, each a 5x5 ring at whichever level is current:
+
+| layer | levels | picked by | reach at the ceiling |
+|---|---|---|---|
+| terrain shell | `FAR_LEVELS` 13/11/9/7 | `farLevelFor(sight)` | z7, ~630km |
+| overview vectors | `OV_LEVELS` 13..8 | `ovLevelFor(r)` | z8, ~390km |
+| shell land cover | `COVER_WIDE_LEVELS` 10/8 | `coverWideLevelFor(shellR)` | z8, ~390km |
+
+**The ceiling is DERIVED, not chosen.** `SIGHT_MAX` says how far the world is
+streamed and `ZOOM_MAX` is computed from it by running `viewRadius`'s own
+arithmetic backwards. They were independent numbers once and had drifted three
+and a half times apart: `viewRadius` clamped at 60km while the ceiling stood at
+1600, so every reading was IDENTICAL at zoom 458, 800 and 1600 — the same shell
+level, the same tile counts, the same everything, with nothing but more empty
+frame. If you raise the reach, the ceiling follows; do not type a zoom number.
+
+**The shell has its own land cover, and must.** `coverTiles` (z12, 7x7, ~28km)
+feeds the biome, the sward, the vegetation and the sea datum, and wants its 37m
+pixels. Everything past it used to be painted with `coverMode`, the modal class
+of that ring — one colour for a whole quadrant. Measured with `__far().cover`,
+which reports how much real cover each shell tile had when it baked: **13 of 25
+tiles blind at zoom 300, 22 of 34 at the old ceiling, `min 0` throughout**.
+`coverWide` is a second, coarser raster sampled only by the shell's colour bake
+(`sampleCoverShell`). After: 0 blind, mean 0.99 at zoom 300.
+
+Three traps in there, each of which cost a round:
+
+- **Gate the coarse cover on the SHELL'S REACH, not the sight line.** They come
+  apart: `farLevelFor` rounds UP, so the ring it fills reaches further than the
+  number that chose it. At the 24km floor the z11 ring still spans 40km, twelve
+  past the fine raster — 2 of 4 tiles blind at zoom 100 with the gate on
+  `sight`.
+- **One shell rebuild when the coarse ring is home, not one per tile.** The
+  fine loader calls `coverDirtiedFar` per tile, which is right for an 8km tile
+  overlapping two shell tiles and catastrophic for a 130km one overlapping all
+  of them: twenty-five arrivals demolished the shell twenty-five times and
+  nothing survived to be seen.
+- **The plausibility floor is -500m only where the wheels are.** `fetchHeights`
+  refuses a tile with >2% of pixels outside Earth's LAND range, which is right
+  at z14 and wrong for a shell tile that is mostly ocean — AWS terrarium
+  carries real bathymetry, and the z7 tile off the Cape is 10.1% below -500m,
+  bottoming at -3,348m of Atlantic. Every coarse coastal tile was refused,
+  re-asked, refused again, and the shell stood at ZERO tiles with `bad` climbing
+  where nobody looked. Mapterhorn hid it for years: Copernicus is a LAND model
+  whose sea is nodata, so the guard only bites where mapterhorn has no tile —
+  exactly the coarse levels the shell never used to reach. The coarse floor is
+  Challenger Deep; the documented -13,029m corruption is still below it and
+  still refused.
+
+**Measuring any of this costs minutes.** A coarse ring is 25 DEM fetches at 4
+concurrent, and every one goes through the harness's curl relay. Budget three
+to five minutes per zoom step, and read `__far()` (meshes, asked, inFlight,
+queued, cover) rather than watching the picture.
 
 ## The labs
 

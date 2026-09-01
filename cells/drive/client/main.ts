@@ -113,16 +113,47 @@ const FOG_PX = 1024;
 // ~36; water a wallow. Steering authority FALLS with speed (below) so 180
 // doesn't mean a 180°/s twitch.
 const CAR = { accel: 16, brake: 26, maxRev: 9, wheelbase: 2.9, steerMax: 0.6 };
-const CAM = { base: 175, perKmh: 1.1, tilt: 70 };
+// `fov` lives here rather than only in the PerspectiveCamera constructor
+// because the zoom ceiling is DERIVED from it (see ZOOM_MAX): the widest
+// useful zoom is a fact about the frustum, and two copies of the number would
+// let the ceiling drift away from the lens it was computed for.
+const CAM = { base: 175, perKmh: 1.1, tilt: 70, fov: 55 };
 // 44 put the camera 6.8km up over a 4.8×8.3km view — a regional chart, but
 // only just, and the streaming never followed it out there. 260 reaches ~40km
 // across, which is a whole mountain range, a coastline, or the far end of a
 // pass you have not driven yet.
-// 1600 puts the camera 280km up. The ceiling used to be 260 (45km) because
-// that was as far as the coarse shell reached; the shell now picks its own
-// zoom level, so the limit is what is worth looking at rather than what is
-// loaded.
-const ZOOM_MIN = 0.25, ZOOM_MAX = 1600;
+/**
+ * HOW FAR THE WORLD IS STREAMED, AND THEREFORE HOW FAR YOU MAY ZOOM OUT.
+ *
+ * These two were independent numbers and they had drifted a long way apart.
+ * `viewRadius` clamped the streamed disc at 60km; the ceiling stood at 1600,
+ * which puts the camera 280km up. Measured across the whole ladder at
+ * Chapman's Peak: every layer's readings are IDENTICAL at zoom 458, 800 and
+ * 1600 — same shell level, same tile counts, same everything — because the
+ * clamp had saturated at 458 and the remaining 3.5x of ceiling bought nothing
+ * but empty frame around an unchanged island of world. A cap you can reach and
+ * then keep pulling against is worse than a lower one that means something.
+ *
+ * So the reach is the number that is chosen, and the ceiling is derived from
+ * it. 300km is picked against the shell's own ladder: `farLevelFor` drops to
+ * z7 past ~196km, and a 5x5 ring of z7 tiles spans 626km at the equator — room
+ * to spare. Tiles shrink with cos(latitude), so the ring still covers 300km
+ * out to about 61 degrees and falls short of it beyond, which is the same
+ * honest degradation SIGHT_M documents for the near shell rather than a new
+ * kind of failure.
+ */
+const SIGHT_MAX = 300000;
+const ZOOM_MIN = 0.25;
+/**
+ * The zoom at which the frustum's ground radius reaches SIGHT_MAX — the same
+ * arithmetic `viewRadius` does, run backwards, at a standstill. Derived and
+ * not typed in, so raising the reach raises the ceiling with it and the two
+ * cannot come apart again.
+ */
+const ZOOM_MAX = SIGHT_MAX / (CAM.base
+  * Math.tan(((CAM.fov / 2) * Math.PI) / 180)
+  * Math.max(1, 1 / Math.cos(((90 - CAM.tilt) * Math.PI) / 180))
+  * 1.35);
 const CAR_R = 2.4;            // collision circle — a real car's half-diagonal plus a whisker
 
 // ── geo helpers (local metres around the spawn; x=east, z=south) ───
@@ -669,10 +700,33 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
   // building a mountain range out of a decode error. Terrain that has not
   // arrived is a gap you can see; terrain built from nonsense is a gap you
   // drive into.
+  //
+  // ── THE FLOOR IS SEA LEVEL ONLY WHERE THE WHEELS ARE ──
+  //
+  // -500 says "land, near enough", and it is right for the fine layer: a z14
+  // tile is 2km of ground the truck drives on, and a reading below the Dead
+  // Sea there is a decode error. It is wrong for the SHELL, whose tiles are
+  // tens to hundreds of kilometres across and routinely mostly ocean — and
+  // AWS terrarium carries real bathymetry, so a z7 tile off the Cape measures
+  // 10.1% of its pixels below -500m, bottoming at -3,348m. All of that is the
+  // Atlantic, and the tile was refused for containing it.
+  //
+  // The symptom was silent and total: at the ceiling the shell selected z7,
+  // fetched its DEM, and stood at ZERO tiles — every coarse tile refused,
+  // re-asked on the next pass, and refused again. Mapterhorn hid it until
+  // now, because Copernicus is a LAND model whose sea is nodata rather than
+  // depth; only where mapterhorn has no tile does AWS answer, and that is
+  // exactly the coarse levels it was never asked for before.
+  //
+  // So the coarse floor is Challenger Deep instead. The guard keeps its teeth
+  // where it matters: -13,029m, the value this source is documented above as
+  // serving at Chapman's Peak, is still below the deepest water on Earth and
+  // still refused.
+  const floor = z >= TERRAIN_Z ? -500 : -11000;
   let bad = 0;
   for (let i = 0; i < out.length; i++) {
     const v = out[i];
-    if (!Number.isFinite(v) || v < -500 || v > 9000) bad++;
+    if (!Number.isFinite(v) || v < floor || v > 9000) bad++;
   }
   if (bad > out.length * 0.02) { demSource.bad++; return null; }
   // ── …AND THE RANGE TEST IS THE EASY HALF ──
@@ -711,12 +765,16 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
   }
   if (bad) {
     // Their own ground, not zero: a patch at sea level in a mountain valley is
-    // its own crater.
-    const ok = Array.from(out).filter((v) => Number.isFinite(v) && v >= -500 && v <= 9000).sort((a, b) => a - b);
+    // its own crater. THE SAME FLOOR the refusal used, or a coarse tile that
+    // legitimately passed with bathymetry in it would have every metre of that
+    // bathymetry patched up to land level — the seabed rising through the sea
+    // plane across a whole ocean, which is a worse picture than the one the
+    // guard exists to prevent.
+    const ok = Array.from(out).filter((v) => Number.isFinite(v) && v >= floor && v <= 9000).sort((a, b) => a - b);
     const ground = ok.length ? ok[Math.floor(ok.length * 0.2)] : 0;
     for (let i = 0; i < out.length; i++) {
       const v = out[i];
-      if (!Number.isFinite(v) || v < -500 || v > 9000) out[i] = ground;
+      if (!Number.isFinite(v) || v < floor || v > 9000) out[i] = ground;
     }
     demSource.bad++;
   }
@@ -745,33 +803,32 @@ const COVER_NAME: Record<number, string> = {
 interface CoverTile { xs: number; zs: number; w: number; h: number; data: Uint8Array }
 const coverTiles = new Map<string, CoverTile>();
 const coverAsked = new Set<string>();
-async function loadCoverTile(x: number, y: number): Promise<void> {
-  const key = `${x}/${y}`;
-  if (coverAsked.has(key)) return;
-  coverAsked.add(key);
-  // Set only when the bytes came off the disk. The retry below is what makes
-  // this matter: bad stored bytes would otherwise fail, wait twenty seconds,
-  // and fail again for the life of the installation.
-  let fromDisk = false;
+/**
+ * One cover tile's 256x256 class raster, at ANY zoom.
+ *
+ * Extracted so the shell's coarse ladder below can share it. The decode is the
+ * delicate half — the pixel is a CLASS INDEX and not a grey, so a
+ * colour-managed read turns urban into water and cropland into snow, silently
+ * (see RAW_BITMAP) — and two copies of that is how one of them quietly starts
+ * colour-managing. Throws on anything that is not a raster; both callers read
+ * that as "ask again later".
+ */
+async function coverRaster(z: number, x: number, y: number): Promise<Uint8Array> {
+  if (FIXTURE) {
+    // The fixture's own ecology — what vegetation, sward, biome and the far
+    // shell all read. No decode, no colour management, no retry.
+    return fixtureRaster(new Uint8Array(256 * 256), x, y, z,
+      (e, s) => FIXTURE.cover(e, s, FIXTURE_TUNE));
+  }
+  const url = `${CELL_BASE}/~/cover/v1/${z}/${x}/${y}`;
+  let blob = await readRaster(url);
+  const fromDisk = !!blob;
+  if (!blob) {
+    const res = await fetch(url);
+    if (!res.ok) throw new Error(`cover ${res.status}`);
+    blob = await res.blob();
+  }
   try {
-    let data: Uint8Array;
-    if (FIXTURE) {
-      // The fixture's own ecology — what vegetation, sward, biome and the
-      // far shell all read. No decode, no colour management, no retry.
-      data = fixtureRaster(new Uint8Array(256 * 256), x, y, COVER_Z,
-        (e, s) => FIXTURE.cover(e, s, FIXTURE_TUNE));
-    } else {
-    const url = `${CELL_BASE}/~/cover/v1/${COVER_Z}/${x}/${y}`;
-    let blob = await readRaster(url);
-    if (blob) fromDisk = true;
-    else {
-      const res = await fetch(url);
-      if (!res.ok) throw new Error(`cover ${res.status}`);
-      blob = await res.blob();
-    }
-    // Same contract as the elevation decoder, and for the same reason: this
-    // pixel is a CLASS INDEX, not a grey. A colour-managed decode turns urban
-    // into water and cropland into snow, silently — see RAW_BITMAP.
     const bmp = await createImageBitmap(blob, RAW_BITMAP);
     const cv = typeof OffscreenCanvas !== 'undefined'
       ? new OffscreenCanvas(256, 256)
@@ -780,13 +837,28 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
       { willReadFrequently: true, colorSpace: 'srgb' }) as OffscreenCanvasRenderingContext2D;
     cx.drawImage(bmp, 0, 0);
     const d = cx.getImageData(0, 0, 256, 256).data;
-    data = new Uint8Array(256 * 256);
+    const data = new Uint8Array(256 * 256);
     for (let i = 0; i < data.length; i++) data[i] = d[i * 4];   // red channel IS the class
     // Kept only now the pixels are real. The cell computes this tile out of
     // WorldCover COGs and can answer 200 with an error document; storing that
     // would turn one bad minute upstream into a permanently blank ecology.
     if (!fromDisk) writeRaster(url, blob);
-    }
+    return data;
+  } catch (e) {
+    // Bytes off the disk that will not decode are a permanent hole otherwise:
+    // the caller waits twenty seconds and re-reads the same bad bytes for the
+    // life of the installation.
+    if (fromDisk) dropRaster(url);
+    throw e;
+  }
+}
+
+async function loadCoverTile(x: number, y: number): Promise<void> {
+  const key = `${x}/${y}`;
+  if (coverAsked.has(key)) return;
+  coverAsked.add(key);
+  try {
+    const data = await coverRaster(COVER_Z, x, y);
     const b = tileBounds(x, y, COVER_Z);
     const [wx0, wz0] = toLocal(b.latN, b.lonW);
     const [wx1, wz1] = toLocal(b.latS, b.lonE);
@@ -806,7 +878,6 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
     coverDirtiedFar(remeasureCoverMode(),
       Math.min(wx0, wx1), Math.min(wz0, wz1), Math.abs(wx1 - wx0), Math.abs(wz1 - wz0));
   } catch {
-    if (fromDisk) dropRaster(`${CELL_BASE}/~/cover/v1/${COVER_Z}/${x}/${y}`);
     // Let a later pass ask again — a cover miss is a softer failure than a road
     // one (everything downstream has a fallback), so it just retries slowly.
     setTimeout(() => coverAsked.delete(key), 20000);
@@ -892,6 +963,119 @@ function sampleCoverRaw(ex: number, ez: number): number | undefined {
     return t.data[pz * 256 + px];
   }
   return undefined;
+}
+
+// ── the SHELL's land cover: the same raster, a rung or two coarser ──
+/**
+ * THE COARSE SHELL WAS WEARING A GUESS.
+ *
+ * The fine cover ring is 7x7 z12 tiles, about 28km at Chapman's latitude, and
+ * it is sized that way for good reason: it feeds the biome, the sward, the
+ * vegetation and the sea datum, and those want ~37m pixels. The far shell,
+ * meanwhile, reaches whatever `farLevelFor` picks — z9 out to ~117km, and now
+ * z7 further still. Everything between the two was coloured from `coverMode`,
+ * the modal class of the fine ring: one colour for a whole quadrant of the
+ * frame, chosen from ground you happen to be standing on.
+ *
+ * Measured on the zoom ladder at Chapman's Peak before this existed, reading
+ * `__far().cover`, which reports how much real cover each shell tile had when
+ * it baked:
+ *
+ *     zoom 100   13 of 25 shell tiles blind
+ *     zoom 300   13 of 25
+ *     zoom 1600  22 of 34, and `min 0` throughout — tiles with NOTHING
+ *
+ * So two thirds of the widest view was a climate guess with a hard rectangular
+ * edge where the one tile that did have data stopped. The cell has served
+ * `~/cover/v1` at any zoom from the start (measured: z7 through z12 all answer
+ * in 1.6-3.2s at 5-15KB), so the fix costs one more ring of very cheap tiles.
+ *
+ * A SEPARATE MAP, not a coarser COVER_Z. The fine raster is gameplay — swap it
+ * for z8 and the vegetation, the sward and the sea datum all start reading a
+ * 600m pixel. This tier is only ever sampled by the shell's colour bake.
+ */
+// Three rungs, because the shell's own reach runs past two. `fRing` fills to
+// its full 5x5 whatever chose the level, so the z7 shell spans 2.5 tiles =
+// ~648km at the equator — and a z8 cover ring reaches only 324km, which would
+// leave the outer half of the widest view blind again for want of one more
+// rung. z6 covers 1,296km. The cell serves every one of these (measured z5
+// through z12, all 200, 2-15KB, 3-4s cold and cached for ever after).
+const COVER_WIDE_LEVELS = [10, 8, 6];
+const COVER_WIDE_RING = 2;            // 5x5 tiles at whichever level is current
+let coverWideZ = 0;                   // 0 until the view is wide enough to want one
+const coverWide = new Map<string, CoverTile>();
+const coverWideAsked = new Set<string>();
+/** The finest level whose 5x5 ring covers the sight line — same shape as
+ *  `farLevelFor`, and deliberately the same 0.5 tile of slack. */
+function coverWideLevelFor(radius: number): number {
+  for (const z of COVER_WIDE_LEVELS) if (radius <= tileMetres(z) * (COVER_WIDE_RING + 0.5)) return z;
+  return COVER_WIDE_LEVELS[COVER_WIDE_LEVELS.length - 1];
+}
+function setCoverWideLevel(z: number): void {
+  if (z === coverWideZ) return;
+  coverWideZ = z;
+  // Dropped rather than retired: unlike the terrain and vector shells there is
+  // nothing on screen to hold — this map is only ever read while a shell tile
+  // bakes, and a tile that bakes before the new level lands falls back to
+  // `coverMode` exactly as it did before any of this existed.
+  coverWide.clear();
+  coverWideAsked.clear();
+}
+async function loadCoverWideTile(x: number, y: number, z: number): Promise<void> {
+  const key = `${z}/${x}/${y}`;
+  if (coverWideAsked.has(key)) return;
+  coverWideAsked.add(key);
+  try {
+    const data = await coverRaster(z, x, y);
+    if (z !== coverWideZ) { coverWideAsked.delete(key); return; }   // the level moved under us
+    const b = tileBounds(x, y, z);
+    const [wx0, wz0] = toLocal(b.latN, b.lonW);
+    const [wx1, wz1] = toLocal(b.latS, b.lonE);
+    const xs = Math.min(wx0, wx1), zs = Math.min(wz0, wz1);
+    const w = Math.abs(wx1 - wx0), h = Math.abs(wz1 - wz0);
+    coverWide.set(key, { xs, zs, w, h, data });
+    /**
+     * ONE REBUILD WHEN THE RING IS HOME, NOT ONE PER TILE.
+     *
+     * A shell tile bakes its colour ONCE, so anything already standing was
+     * painted from the guess these tiles replace, and the fine raster's own
+     * loader answers that by calling `coverDirtiedFar` per tile. Copying that
+     * here was wrong, and wrong in proportion to how well this tier works: a
+     * z12 cover tile is 8km and overlaps a couple of shell tiles, while a z8
+     * one is 130km and overlaps EVERY tile of a z7 shell. Twenty-five arrivals
+     * then demolished the whole shell twenty-five times, each rebuild racing
+     * the next teardown. Measured at the ceiling: `far z7 x 0` — the level
+     * selected, the DEM fetched, and not one mesh ever surviving long enough
+     * to be seen.
+     *
+     * So it waits for the ring, then rebuilds once. `true` because by that
+     * point the bounds test is pointless — every tile that is short of cover
+     * has new cover available — and because one pass over the shell is the
+     * whole cost either way.
+     */
+    if (coverWide.size >= coverWideAsked.size) coverDirtiedFar(true, xs, zs, w, h);
+  } catch {
+    setTimeout(() => coverWideAsked.delete(key), 20000);
+  }
+}
+/**
+ * Cover for the SHELL: the fine raster where it reaches, the coarse one beyond.
+ *
+ * Fine first and always — inside the near ring the shell and the fine terrain
+ * have to agree about a hillside's colour, and that agreement is what stops the
+ * seam between the layers reading as a band (see the note in the bake).
+ */
+function sampleCoverShell(ex: number, ez: number): number | null {
+  const near = sampleCover(ex, ez);
+  if (near !== null) return near;
+  for (const t of coverWide.values()) {
+    if (ex < t.xs || ez < t.zs || ex >= t.xs + t.w || ez >= t.zs + t.h) continue;
+    const px = Math.min(255, Math.max(0, Math.floor(((ex - t.xs) / t.w) * 256)));
+    const pz = Math.min(255, Math.max(0, Math.floor(((ez - t.zs) / t.h) * 256)));
+    const v = t.data[pz * 256 + px];
+    return v === 0 ? null : v;
+  }
+  return null;
 }
 /**
  * THE SAME RASTER, DITHERED — FOR PAINT ONLY.
@@ -2137,7 +2321,7 @@ renderer.shadowMap.type = THREE.BasicShadowMap;
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05070c);
-const camera = new THREE.PerspectiveCamera(55, 1, 1, 30000);
+const camera = new THREE.PerspectiveCamera(CAM.fov, 1, 1, 30000);
 // The near plane moves with the chart camera; only rebuild the projection when
 // it actually changes, since every uniform derived from it follows.
 /**
@@ -16484,8 +16668,10 @@ function viewRadius(): number {
   const halfV = Math.tan(((camera.fov / 2) * Math.PI) / 180);
   // The far edge of a tilted frustum reaches further than the near edge; the
   // /cos term is that stretch, capped so a near-horizon tilt cannot ask for
-  // the whole planet.
-  return Math.min(60000, dist * halfV * Math.max(1, 1 / Math.cos(((90 - CAM.tilt) * Math.PI) / 180)) * 1.35);
+  // the whole planet. SIGHT_MAX is that cap, and ZOOM_MAX is derived from it —
+  // so the clamp is now reached exactly at the ceiling instead of a third of
+  // the way to it.
+  return Math.min(SIGHT_MAX, dist * halfV * Math.max(1, 1 / Math.cos(((90 - CAM.tilt) * Math.PI) / 180)) * 1.35);
 }
 // Two budgets, and they are budgets rather than radii because the cost of the
 // two layers is nothing alike. A terrain tile is a PNG and a mesh; an OSM tile
@@ -16816,6 +17002,26 @@ function streamWorld(ex: number, ez: number): void {
     const fRing = clamp(Math.ceil(sight / tileMetres(farZ)), 1, FAR_RING_MAX);
     for (let dx = -fRing; dx <= fRing; dx++)
       for (let dy = -fRing; dy <= fRing; dy++) void loadFarTile(fx + dx, fy + dy);
+    // …and the cover to PAINT it, once the shell has grown past the fine
+    // raster's own 7x7 ring. Below that the fine tiles already cover every
+    // shell tile and a second copy would be waste; above it, this is the
+    // difference between real ground colour and one modal guess across the
+    // whole frame.
+    // THE SHELL'S REACH, NOT THE SIGHT LINE. Those come apart, and it is the
+    // shell that has to be painted: `farLevelFor` rounds UP to a level whose
+    // ring covers the sight line, and the ring it then fills reaches further
+    // than the number that chose it. At the 24km floor the z11 ring still
+    // spans 40km — twelve past the fine raster — so gating on `sight` left the
+    // outer tiles blind at every ordinary wide zoom. Measured 2 of 4 at zoom
+    // 100 with the gate on `sight`, 0 of 6 with it here.
+    const shellR = (fRing + 0.5) * tileMetres(farZ);
+    if (shellR > tileMetres(COVER_Z) * 3.5) {
+      setCoverWideLevel(coverWideLevelFor(shellR));
+      const [wx, wy] = tileAt(cLat, cLon, coverWideZ);
+      const wRing = clamp(Math.ceil(shellR / tileMetres(coverWideZ)), 1, COVER_WIDE_RING);
+      for (let dx = -wRing; dx <= wRing; dx++)
+        for (let dy = -wRing; dy <= wRing; dy++) void loadCoverWideTile(wx + dx, wy + dy, coverWideZ);
+    }
     // …and the vectors to draw on it. Same trigger, same banding discipline:
     // the chart only pays for the coarse road source once it can see past the
     // fine ring, and only at the level its zoom band can read.
@@ -17091,7 +17297,10 @@ async function loadFarTile(x: number, y: number): Promise<void> {
     // ground and paints over it. Cover is null out past the loaded raster,
     // which is exactly the old behaviour, so the far horizon is unchanged.
     const fwx = xs + w / 2 + pos.getX(i), fwz = zs + h / 2 + pos.getZ(i);
-    const cv = sampleCover(fwx, fwz);
+    // The SHELL sampler: the fine raster where it reaches, the coarse ladder
+    // beyond it. `hit` counts either, which is what makes __far().cover the
+    // measurement of "is this tile wearing real cover or a guess".
+    const cv = sampleCoverShell(fwx, fwz);
     if (cv !== null) hit++;
     // …and where the raster does not reach, the average of what it does say
     // rather than nothing at all. See coverMode.
@@ -17127,7 +17336,15 @@ const FAR_DROP = 12;
 // the way the far terrain shell renders ground — banded by zoom, swapped
 // whole, a backdrop nothing samples. Unlit and flat-coloured on purpose: at
 // these altitudes the world IS a map, and the palette says so.
-const OV_LEVELS = [13, 12, 11, 10];
+// z9 and z8 were always in the cell's route (`serveOverview` accepts 8-13) and
+// were never asked for, because a coarse tile meant a live Overpass query on
+// every view and those are the expensive ones. With the cell's public
+// namespace on, a tile is built ONCE for the whole world and served from S3
+// afterwards — measured at 0.18-1.09s against 6-16s of live Overpass — so the
+// cost of a rung is now a one-off rather than per-player. The query already
+// narrows itself for these: at z<=10 it asks for motorway/trunk/primary,
+// coastline, rivers, cities and towns, and nothing else.
+const OV_LEVELS = [13, 12, 11, 10, 9, 8];
 const OV_RING_MAX = 2;        // 5×5 tiles at whichever level is current
 /** How long the CHART waits, which is not how long the CELL takes. See the
  *  note in loadOvTile: an abandoned request still banks its tile. */
@@ -23071,6 +23288,10 @@ function heightsOf(): number[] {
   }
   return {
     tiles: coverTiles.size, asked: coverAsked.size,
+    // The shell's own tier: what level it is on and how much of it has landed.
+    // Separate from the counts above because they are different rasters for
+    // different jobs — these paint the backdrop, those feed the ecology.
+    wide: { level: coverWideZ, tiles: coverWide.size, asked: coverWideAsked.size },
     here: here === null ? null : `${here} ${COVER_NAME[here] ?? '?'}`,
     samples: n,
     mix: [...hist.entries()].sort((a, b) => b[1] - a[1])
@@ -23494,7 +23715,8 @@ function heightsOf(): number[] {
   (compMat.uniforms.uHazeDbg as { value: number }).value = m;
 };
 (window as unknown as { __far?: object }).__far = (): object =>
-  ({ tiles: farMeshes.size, shown: farGroup.visible, radius: Math.round(viewRadius()),
+  ({ tiles: farMeshes.size, asked: farTiles.size, inFlight: farInFlight, queued: farQueue.length,
+    retired: farRetired.length, shown: farGroup.visible, radius: Math.round(viewRadius()),
     sight: SIGHT_M, level: farZ, farPlane: camera.far,
     // How much land-cover each shell tile had when it was baked. A shell tile
     // is coloured once and never revisited, so anything below 1 here is a tile

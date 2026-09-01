@@ -500,7 +500,13 @@ const OV_RE = /^\/~\/osm\/ov1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // Per zoom, because the ladder below admits more classes as tiles shrink:
 // measured, central London at z12 lands at 5174 elements with rail in — the
 // worst real tile should pass, and a truncated one must not.
-const OV_CAP: Record<number, number> = { 10: 3000, 11: 4500, 12: 6000, 13: 6000 };
+// The TRUNCATION TRIPWIRE, per level — `out geom N`, and a response AT N is a
+// truncation rather than an answer. It rises with zoom because the class ladder
+// does (z13 carries tertiaries, z<=10 carries motorways and little else), and
+// the two coarse rungs get more headroom than z10 for the opposite reason: the
+// same narrow class set over 4x and 16x the ground. Measured on the first z9
+// tiles served: 19-24KB gzipped, nowhere near the cap.
+const OV_CAP: Record<number, number> = { 8: 8000, 9: 6000, 10: 3000, 11: 4500, 12: 6000, 13: 6000 };
 // These tiles are rare and cached forever, so they may spend upstream time a
 // fine tile cannot. Measured: a z10 coastal tile needs 11-18s of Overpass, and
 // the densest z12 boxes on the line want more — the fine budget's 5s-per-mirror
