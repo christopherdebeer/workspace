@@ -136,11 +136,42 @@ function tileRange(z) {
 // about the fixture and not something to find out later from a hole in it. Run
 // the capture again and the banked tiles come back instantly; the ones that
 // genuinely cannot be built stay named.
+// ── AND FETCHED SIDE BY SIDE, BECAUSE A LADDER IS SPENT WAITING ──
+//
+// The first cut asked for one tile at a time. Measured over Paris: 20 vector
+// tiles, and a cold one costs six attempts of ~13s edge timeout plus 45s of
+// backoff — about two minutes each, so twenty of them is FORTY MINUTES. Worse,
+// it is forty minutes in which the cell is only ever building ONE tile: the
+// whole point of the ladder is to give the Lambda time to finish and bank, and
+// serialising means every tile waits out its own build alone.
+//
+// Four at a time is the game's own shape (OSM_GATE is 6, and this is a devtool
+// that should ask for less than a player does). The waiting overlaps, so the
+// wall clock is the slowest tile rather than the sum of all of them, and the
+// cell builds four at once.
+async function pool(items, n, fn) {
+  const out = new Array(items.length);
+  let next = 0;
+  await Promise.all(Array.from({ length: Math.min(n, items.length) }, async () => {
+    for (;;) {
+      const i = next++;
+      if (i >= items.length) return;
+      out[i] = await fn(items[i], i);
+    }
+  }));
+  return out;
+}
+
 const ways = [];
 const seen = new Set();
 const missing = [];
-for (const [x, y] of tileRange(OSM_Z)) {
-  const buf = await get(`${CELL_BASE}/~/osm/v3/${OSM_Z}/${x}/${y}`, 6, true);
+const osmTiles = tileRange(OSM_Z);
+console.log(`  fetching ${osmTiles.length} vector tiles, 4 at a time...`);
+const bufs = await pool(osmTiles, 4, ([x, y]) =>
+  get(`${CELL_BASE}/~/osm/v3/${OSM_Z}/${x}/${y}`, 6, true));
+for (let ti = 0; ti < osmTiles.length; ti++) {
+  const [x, y] = osmTiles[ti];
+  const buf = bufs[ti];
   if (!buf) { missing.push(`${OSM_Z}/${x}/${y}`); continue; }
   const tile = JSON.parse(buf.toString('utf8'));
   for (const w of tile.ways ?? []) {
@@ -176,9 +207,12 @@ for (const [x, y] of tileRange(OSM_Z)) {
 // pixel-to-pixel roll that is the whole difficulty of a cliff road.
 const demTiles = new Map();
 const demReport = [];
-for (const [x, y] of tileRange(DEM_Z)) {
-  const buf = await get(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${DEM_Z}/${x}/${y}.png`);
-  const t = decodePng(buf);
+const demRange = tileRange(DEM_Z);
+const demBufs = await pool(demRange, 4, ([x, y]) =>
+  get(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${DEM_Z}/${x}/${y}.png`));
+for (let di = 0; di < demRange.length; di++) {
+  const [x, y] = demRange[di];
+  const t = decodePng(demBufs[di]);
   // Terrarium: elevation = R*256 + G + B/256 - 32768.
   let e = new Float32Array(256 * 256);
   for (let i = 0; i < 256 * 256; i++) {
@@ -253,11 +287,14 @@ const heights = Buffer.from(raw.buffer).toString('base64');
 
 // ── the cover ──────────────────────────────────────────────────────
 const covTiles = new Map();
-for (const [x, y] of tileRange(COVER_Z)) {
-  try {
-    const buf = await get(`${CELL_BASE}/~/cover/v1/${COVER_Z}/${x}/${y}`);
-    covTiles.set(`${x}/${y}`, decodePng(buf));
-  } catch { /* a missing cover tile is grass, not a failed capture */ }
+{
+  const range = tileRange(COVER_Z);
+  const bufs = await pool(range, 4, ([x, y]) =>
+    get(`${CELL_BASE}/~/cover/v1/${COVER_Z}/${x}/${y}`, 6, true));
+  // A missing cover tile is grass, not a failed capture.
+  for (let i = 0; i < range.length; i++) {
+    if (bufs[i]) covTiles.set(`${range[i][0]}/${range[i][1]}`, decodePng(bufs[i]));
+  }
 }
 const CN = 64;
 const cstep = (2 * R) / (CN - 1);
