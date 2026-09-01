@@ -30,6 +30,7 @@
  * link, and /lab/world puts the same numbers on dials that persist and copy.
  */
 
+import { clipToBounds } from './clip';
 import bixby from './fixtures/world-bixby.json';
 import carmelA from './fixtures/world-carmel-a.json';
 import carmelB from './fixtures/world-carmel-b.json';
@@ -277,11 +278,62 @@ function captured(cap: CapturedWorld, label: string, note: string, heading = 0):
       const y = Math.round(clampF((s + cap.r) / c.step, 0, c.n - 1));
       return c.px[y * c.n + x] ?? CLASS.grass;
     },
-    ways: () => cap.ways.map((w) => ({ id: w.id, tags: w.tags, pts: w.pts })),
+    ways: () => capturedWays(cap),
     extent: cap.r,
   };
 }
 const clampF = (v: number, lo: number, hi: number): number => (v < lo ? lo : v > hi ? hi : v);
+
+/**
+ * ── A CAPTURED WAY STOPS WHERE THE CAPTURED GROUND STOPS ──
+ *
+ * capture-world keeps a way that merely comes NEAR the box, and keeps its whole
+ * geometry: OSM returns a way's complete line, so one arterial passing through
+ * a 700m capture arrives 2,262m long. Measured on Camps Bay, 279 of 9,386 way
+ * points lay outside the box.
+ *
+ * That was harmless only while the streamer built ten kilometres of ground
+ * around every fixture. Now that it builds the fixture's own extent, those
+ * points stand over nothing: `hasHeight` refuses them, the way counts as
+ * unbuilt, and `loadOsmTile` re-renders that tile every three seconds for ever
+ * — which re-dirties the terrain under it, so the carve queue never drains.
+ * The world is then permanently mid-build, which is the one state that makes
+ * every measurement taken from it worthless.
+ *
+ * So the ways are clipped to the captured box. The height grid clamps to its
+ * edge row beyond `cap.r`, so a road out there was being drawn over invented
+ * ground in any case; cutting it is the honest line rather than a concession.
+ * If a junction you care about sits at the edge, that is a capture with too
+ * small an `r`, and the fix is to capture it again wider.
+ *
+ * THROUGH THE SHIPPING CLIPPER, not a second implementation of it. `clipToBounds`
+ * is Liang-Barsky per segment, and it exists because the obvious vertex walk
+ * silently drops the segment that crosses the box with neither endpoint inside
+ * (client/clip.ts carries that whole story). Its box is named in lat/lon and a
+ * fixture is authored in metres, but the arithmetic is affine and cares only
+ * about the shape: north is -s and east is e, and the clipper never divides one
+ * by the other.
+ */
+function capturedWays(cap: CapturedWorld): FixtureWay[] {
+  const R = cap.r;
+  const box = { latN: R, latS: -R, lonW: -R, lonE: R };
+  const out: FixtureWay[] = [];
+  for (const w of cap.ways) {
+    const runs = clipToBounds(w.pts.map(([e, s]) => ({ lat: -s, lon: e })), box);
+    for (let i = 0; i < runs.length; i++) {
+      // A run of one point is a way that grazed a corner: no length, no normal
+      // to build a ribbon from.
+      if (runs[i].length < 2) continue;
+      // ONE WAY CAN CLIP INTO SEVERAL RUNS, and renderWays dedupes by id — so
+      // two runs sharing an id would delete each other. Derived rather than
+      // raw: OSM ids are ~1.3e9, and 16x that is still nowhere near the integer
+      // limit. The name and the tags are what identify a way when reading a
+      // probe anyway.
+      out.push({ id: w.id * 16 + i, tags: w.tags, pts: runs[i].map((p) => [p.lon, -p.lat]) });
+    }
+  }
+  return out;
+}
 
 /** 46°N: temperate, which is where most of the world's road stock is and the
  *  climate the building and road cultures were tuned against. */

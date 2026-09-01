@@ -84,11 +84,14 @@ const tileXY = (la, lo, z) => {
  *  BANKS the result — the next request is a CDN hit. That self-healing is the
  *  whole design of the tile bank, so a retry here is not papering over a
  *  failure, it is the documented second half of the first request. */
-async function get(url, tries = 6) {
+async function get(url, tries = 6, orNull = false) {
   for (let i = 0; i < tries; i++) {
     const res = await fetch(url);
     if (res.ok) return Buffer.from(await res.arrayBuffer());
-    if (i === tries - 1) throw new Error(`${url}: HTTP ${res.status} after ${tries} tries`);
+    if (i === tries - 1) {
+      if (orNull) return null;
+      throw new Error(`${url}: HTTP ${res.status} after ${tries} tries`);
+    }
     // BACKED OFF PAST THE LAMBDA, NOT PAST THE EDGE. The edge gives up at
     // ~15.5s while the cell has 50s to finish and bank, so a ladder totalling
     // NINE seconds spends all four of its tries inside one upstream build and
@@ -119,10 +122,26 @@ function tileRange(z) {
 }
 
 // ── the ways ───────────────────────────────────────────────────────
+// ONE TILE THAT WILL NOT BUILD MUST NOT COST THE OTHER EIGHT.
+//
+// Paris is the case. The cell's Overpass budget is 44s and a dense central z16
+// can exceed it outright — CLAUDE.md says so — so a capture that throws on the
+// first refusal spends four minutes fetching, warms the bank for every tile it
+// touched, and then writes nothing. Worse, the tiles it DID get are the
+// expensive ones: each run banks what it managed, so aborting discards exactly
+// the progress that would have made the next run cheap.
+//
+// So a refused vector tile is RECORDED and the capture goes on. It is named in
+// the output, because a fixture missing a corner of its road network is a fact
+// about the fixture and not something to find out later from a hole in it. Run
+// the capture again and the banked tiles come back instantly; the ones that
+// genuinely cannot be built stay named.
 const ways = [];
 const seen = new Set();
+const missing = [];
 for (const [x, y] of tileRange(OSM_Z)) {
-  const buf = await get(`${CELL_BASE}/~/osm/v3/${OSM_Z}/${x}/${y}`);
+  const buf = await get(`${CELL_BASE}/~/osm/v3/${OSM_Z}/${x}/${y}`, 6, true);
+  if (!buf) { missing.push(`${OSM_Z}/${x}/${y}`); continue; }
   const tile = JSON.parse(buf.toString('utf8'));
   for (const w of tile.ways ?? []) {
     // One OSM way reaches several tiles clipped differently. Keyed by id AND
@@ -271,6 +290,11 @@ writeFileSync(path, JSON.stringify(out));
 const hs = abs;
 console.log(`captured ${name} at ${lat},${lon} r=${R}m`);
 console.log(`  ways    ${ways.length} (${ways.filter((w) => w.tags.highway).length} highway)`);
+if (missing.length) {
+  console.log(`  ** ${missing.length} VECTOR TILE(S) NEVER BUILT: ${missing.join(' ')}`);
+  console.log('     Those corners have no roads in them. Re-run to retry — every');
+  console.log('     tile that DID land is banked now, so a second pass is cheap.');
+}
 console.log(`  heights ${HN}x${HN} @ ${hstep.toFixed(1)}m  ${Math.min(...hs).toFixed(0)}..${Math.max(...hs).toFixed(0)}m`);
 for (const t of demReport) {
   const dirty = t.bad || t.spikes || t.fixed || t.refused;
