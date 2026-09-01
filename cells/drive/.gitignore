@@ -1,0 +1,16 @@
+# SCRATCH BUILDS OF AN OLDER REVISION, written here and deleted again.
+#
+# Several tools measure a change against the build before it — devtools/harness
+# `openDrive({rev})` writes `client/__rev-main.ts`, and any test that needs a
+# probe the old build lacks grafts its own copy beside it (dock-sky, road-hole).
+# They live INSIDE client/ on purpose: main.ts imports ./menu and ./overlays by
+# relative path and three from the repo's node_modules, so a copy bundled out of
+# a temp directory resolves none of them.
+#
+# Each of them is a ~2MB stale duplicate of main.ts. They are removed in a
+# `finally`, and that removal is the real guard — `cell-sync push` sends every
+# file in the cell and does not read this file, so one left behind by a crashed
+# run gets DEPLOYED as cell source. This keeps `git status` honest so the stray
+# is visible while it exists, rather than committed by a tidy-up.
+client/__rev-main.ts
+client/__*-rev.ts
