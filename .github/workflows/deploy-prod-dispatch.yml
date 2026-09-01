@@ -25,6 +25,26 @@ name: Deploy Prod (dispatch)
 # already idempotent) and the docs corpus sync (ADR-0045 — a main-branch
 # concern; a branch deploy should not rewrite the published corpus from
 # unmerged docs).
+#
+# ── WHAT THE DISPATCH API ACTUALLY CONSTRAINS, measured rather than assumed ──
+#
+# The REF may be ANY branch head. `POST /actions/workflows/ci.yml/dispatches`
+# with `ref: claude/cell-drive-github-actions-ah1p88` returns 204 and runs that
+# branch's copy of the workflow. There is no default-branch restriction on the
+# ref, and the "Run workflow" dropdown in the UI is the same mechanism.
+#
+# What IS constrained is which workflow FILES are addressable. GitHub builds its
+# workflow registry from the default branch: `list_workflows` returns six, every
+# one with an html_url under `blob/main/`, and dispatching this file by name
+# while it existed only on a branch returned 404 Not Found.
+#
+# So the practical note for this file: it is dispatchable once it is on main,
+# and from then on it targets any ref and runs that ref's own copy — including
+# a copy edited on the branch being deployed. Until then, `deploy.yml` is
+# already registered and already carries `workflow_dispatch`, so a branch head
+# can be shipped to prod today with `run_workflow(deploy.yml, ref: <branch>)`.
+# What that route does not give you is the confirm string, the ahead/behind
+# report, or the diff, which is the entire reason this exists.
 
 on:
   workflow_dispatch:
