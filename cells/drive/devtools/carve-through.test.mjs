@@ -62,12 +62,25 @@ const SPOTS = [
 ];
 
 const errors = [];
+/**
+ * THE WHOLE SUITE AGAINST AN OLDER BUILD, WITHOUT TOUCHING THE WORKING TREE.
+ *
+ *   DRIVE_REV=<commit> node cells/drive/devtools/carve-through.test.mjs
+ *
+ * This exists because the first attempt at that A/B did it by checking main.ts
+ * out over the working tree, and the repo then sat holding the OLD code —
+ * staged, because `git checkout <rev> -- <path>` stages what it writes — while
+ * a commit hook fired. Committing there would have silently reverted the fix
+ * under test. `openDrive({rev})` writes its copy to a scratch file and removes
+ * it in a finally, so the tree is never the thing being mutated.
+ */
+const REV = process.env.DRIVE_REV ?? '';
 /** Settle, then wait until the probe is actually standing on a road — a
  *  zero-sample reading is not a clean bill, and it used to look like one. */
 const measure = async (spot, relief) => {
   const d = await openDrive({
     spot: `${spot}&cam=cab&wx=clear&t=NOON${relief ? '' : '&relief=0'}`,
-    tag: `carve-${relief ? 'on' : 'off'}`, settle: 40000,
+    tag: `carve-${relief ? 'on' : 'off'}`, settle: 40000, rev: REV,
   });
   let r = null;
   for (let i = 0; i < 20; i++) {
