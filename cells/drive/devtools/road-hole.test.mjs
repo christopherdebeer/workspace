@@ -57,7 +57,7 @@ const TUBE_TH = 5.6;         // TUNNEL_H + 0.6, the code's own burial threshold
 const PROBE = `
 ;(window).__buried = (r = 400) => {
   const seen = new Set(); const exposed = []; const exempt = [];
-  let deep = 0, segs = 0, worst = 0, worstAt = null;
+  let deep = 0, missedByMin = 0, segs = 0, worst = 0, worstAt = null;
   for (const arr of roadGrid.values()) for (const s of arr) {
     if (seen.has(s) || s.ya === undefined || s.yb === undefined) continue;
     seen.add(s);
@@ -65,28 +65,48 @@ const PROBE = `
     if (Math.hypot(mx - state.x, mz - state.z) > r) continue;
     segs++;
     if (s.tk) continue;
-    const over = sampleHeight(mx, mz) - ((s.ya + s.yb) / 2);
+    const deck = (s.ya + s.yb) / 2;
+    const over = sampleHeight(mx, mz) - deck;
+    const dx = s.bx - s.ax, dz = s.bz - s.az, l = Math.hypot(dx, dz) || 1;
+    const ox = (-dz / l) * (s.hw + 1.2), oz = (dx / l) * (s.hw + 1.2);
+    const overMin = Math.min(sampleHeight(mx, mz),
+      sampleHeight(mx + ox, mz + oz), sampleHeight(mx - ox, mz - oz)) - deck;
     if (over <= 0.5) continue;
     if (s.tn || s.pc !== undefined) { exempt.push(over); continue; }
     exposed.push(over);
-    if (over > 5.6) deep++;
+    if (over > 5.6) { deep++; if (overMin <= 5.6) missedByMin++; }
     if (over > worst) { worst = over; worstAt = [Math.round(mx), Math.round(mz)]; }
   }
   const stat = (v) => { if (!v.length) return null;
     const q = v.slice().sort((a, b) => a - b);
     return { n: q.length, med: +q[q.length >> 1].toFixed(2), max: +q[q.length - 1].toFixed(2) }; };
   return { segs, r, exposed: stat(exposed), exempt: stat(exempt),
-    deeperThanTube: deep, worst: +worst.toFixed(2), worstAt };
+    deeperThanTube: deep, missedByWidthMin: missedByMin,
+    worst: +worst.toFixed(2), worstAt };
 };
 `;
 const BLOCK_END = '} // HYDRO_LAB route branch';
 const OLD_SRC = join(CELL, 'client/__roadhole-rev.ts');
+/**
+ * THE CONTROL IS A PINNED COMMIT, NOT `HEAD`.
+ *
+ * The first version of this read `git show HEAD:…`, and HEAD MOVED while the
+ * test was running: the fix was committed between the "after" boot and the
+ * control boot, so the control built the fixed code and reported it as the
+ * before. `before` and `after` came out within two segments of each other and
+ * both had the tunnel mesh the fix creates, and the last check passed
+ * vacuously — which is the exact failure mode a control exists to prevent,
+ * wearing a passing grade.
+ *
+ * `03fddf3` is the commit before the burial scan was moved out of `runs`.
+ */
+const CONTROL_REV = '03fddf3';
 
 function buildControl() {
-  const src = execSync('git show HEAD:cells/drive/client/main.ts',
+  const src = execSync(`git show ${CONTROL_REV}:cells/drive/client/main.ts`,
     { cwd: ROOT, maxBuffer: 64e6 }).toString();
   const at = src.lastIndexOf(BLOCK_END);
-  if (at < 0) throw new Error(`cannot graft the probe: no ${JSON.stringify(BLOCK_END)} in HEAD's main.ts`);
+  if (at < 0) throw new Error(`cannot graft the probe: no ${JSON.stringify(BLOCK_END)} in ${CONTROL_REV}'s main.ts`);
   writeFileSync(OLD_SRC, src.slice(0, at) + PROBE + src.slice(at));
   return OLD_SRC;
 }

@@ -68,12 +68,20 @@ const BLOCK_END = '} // HYDRO_LAB route branch';
 // Beside the real main.ts, because main.ts imports ./menu and ./overlays by
 // relative path — a copy bundled out of a temp directory resolves neither.
 const OLD_SRC = join(CELL, 'client/__docksky-rev.ts');
+/**
+ * A PINNED COMMIT, NOT `HEAD`. This read HEAD when it was written, which is
+ * only correct while the fix is uncommitted — and road-hole.test.mjs was
+ * caught by exactly that: its fix was committed between the two boots, so its
+ * control built the FIXED code, reported it as the before, and passed
+ * vacuously. `ef99d69` is the commit before aimSky existed.
+ */
+const CONTROL_REV = 'ef99d69';
 
 function buildControl() {
-  const src = execSync('git show HEAD:cells/drive/client/main.ts',
+  const src = execSync(`git show ${CONTROL_REV}:cells/drive/client/main.ts`,
     { cwd: ROOT, maxBuffer: 64e6 }).toString();
   const at = src.lastIndexOf(BLOCK_END);
-  if (at < 0) throw new Error(`cannot graft the probe: no ${JSON.stringify(BLOCK_END)} in HEAD's main.ts`);
+  if (at < 0) throw new Error(`cannot graft the probe: no ${JSON.stringify(BLOCK_END)} in ${CONTROL_REV}'s main.ts`);
   writeFileSync(OLD_SRC, src.slice(0, at) + PROBE + src.slice(at));
   return OLD_SRC;
 }

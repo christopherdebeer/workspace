@@ -24101,7 +24101,7 @@ function farHeightAt(wx: number, wz: number): number | null {
 (window as unknown as { __buried?: object }).__buried = (r = 400): object => {
   const seen = new Set<Seg>();
   const exposed: number[] = [], exempt: number[] = [];
-  let deep = 0, segs = 0, worst = 0, worstAt: number[] | null = null;
+  let deep = 0, missedByMin = 0, segs = 0, worst = 0, worstAt: number[] | null = null;
   for (const arr of roadGrid.values()) for (const s of arr) {
     if (seen.has(s) || s.ya === undefined || s.yb === undefined) continue;
     seen.add(s);
@@ -24112,11 +24112,32 @@ function farHeightAt(wx: number, wz: number): number | null {
     // even consulted, so a buried footpath is already safe from the carve and
     // counting it here would bury the signal in ways that were never at risk.
     if (s.tk) continue;
-    const over = sampleHeight(mx, mz) - ((s.ya as number) + (s.yb as number)) / 2;
+    const deck = ((s.ya as number) + (s.yb as number)) / 2;
+    const over = sampleHeight(mx, mz) - deck;
+    // ── THE TWO CRITERIA, SIDE BY SIDE ──
+    //
+    // `over` is cover on the CENTRELINE. `overMin` is cover measured the way
+    // ribbon's burial test measures it — the MINIMUM across the road's width,
+    // which is what `elevMin` is. On a side slope the two differ by about
+    // half-width times the cross-fall, so a road under nine metres of hillside
+    // can read as unburied because its downhill edge is low.
+    //
+    // Both are reported because the first cut of this probe carried only the
+    // centreline, and the gap between them is the whole question about the
+    // segments the burial fix does NOT catch. `elevMin` is the right measure
+    // for SIZING a tube — the ceiling must fit under the lowest ground, which
+    // is the Cairo defect its own comment records — and it is being asked to
+    // DECIDE burial as well. One variable, two jobs.
+    const dx = s.bx - s.ax, dz = s.bz - s.az, l = Math.hypot(dx, dz) || 1;
+    const ox = (-dz / l) * (s.hw + 1.2), oz = (dx / l) * (s.hw + 1.2);
+    const overMin = Math.min(
+      sampleHeight(mx, mz),
+      sampleHeight(mx + ox, mz + oz),
+      sampleHeight(mx - ox, mz - oz)) - deck;
     if (over <= 0.5) continue;
     if (s.tn || s.pc !== undefined) { exempt.push(over); continue; }
     exposed.push(over);
-    if (over > TUNNEL_H + 0.6) deep++;
+    if (over > TUNNEL_H + 0.6) { deep++; if (overMin <= TUNNEL_H + 0.6) missedByMin++; }
     if (over > worst) { worst = over; worstAt = [Math.round(mx), Math.round(mz)]; }
   }
   const stat = (v: number[]): object | null => {
@@ -24129,6 +24150,9 @@ function farHeightAt(wx: number, wz: number): number | null {
     exposed: stat(exposed),
     exempt: stat(exempt),
     deeperThanTube: deep,
+    // Of those, how many the code's own elevMin test would call unburied —
+    // i.e. how much of what is left is the centreline/width-minimum split.
+    missedByWidthMin: missedByMin,
     worst: +worst.toFixed(2),
     worstAt,
   };
