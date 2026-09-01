@@ -118,6 +118,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/boot.mjs` | the world boots and probes exist | ~1min |
 | `node devtools/lab.test.mjs` | every lab opens, dials persist and travel | ~6min |
 | `node devtools/fixture-world.test.mjs` | the whole mesh pipeline over authored ground | ~7min |
+| `node client/clip.test.mjs` | tile clipping, incl. the corner nicks | instant |
 | `node devtools/appshell.test.mjs` | the worker precaches only what the cell serves | instant |
 | `node devtools/offline-shell.test.mjs` | the browser starts with the network off | ~20s |
 | `node devtools/storage-reset.test.mjs` | settings can hand the whole device back | ~20s |
@@ -253,6 +254,44 @@ Three traps live in there:
 
 ---
 
+## A road can go missing with nothing failing
+
+`renderGated` clips every highway to its OWN tile before building it, so a road
+is drawn by each tile it passes through and by no other. That makes
+`client/clip.ts` the one place a road can vanish without anything reporting it:
+no fetch error, no console, the way present and complete in the tile's own data,
+and simply nothing built where it crosses.
+
+Which is exactly what it did. Reported from the seat driving Edge Hill to Ben
+Nevis at Senqu: short segments missing, consistently where a road nicks the
+CORNER of a tile between two nodes, metres at a time, on a road that is unbroken
+on the overview layer (which does not clip). The clipper walked the VERTICES and
+opened a run whenever one was inside the box — which covers wholly-in, entering
+and leaving, and silently drops the fourth case: a segment whose two endpoints
+are BOTH outside and which passes through. No vertex is ever inside, so no run
+is ever opened.
+
+Two things worth keeping from how it was found:
+
+- **The obvious suspect was wrong.** The first hypothesis was Overpass — that
+  its bbox filter does not return a way with no node inside the tile. Measured
+  before touching anything, over a 3x3 of live tiles at Senqu: every way that
+  crosses a tile IS present in that tile's own response. The data was never the
+  problem. `devtools/`-style measurement first, every time.
+- **The old code is the test's control.** `client/clip.test.mjs` drives the
+  SHIPPED function; the old vertex walk was replayed beside it to prove the new
+  cases actually fail against it (`[]` for both corner nicks, correct output for
+  a crossing with vertices inside). A regression test that does not fail on the
+  bug it names is decoration.
+
+The clipper is Liang–Barsky per segment now, which has no case split at all.
+Adjacent tiles still meet EXACTLY on their shared edge — both sides solve the
+same edge line against the same endpoints, so the crossing point is the same
+double — and the test asserts that, because trading a gap for a seam would not
+be a fix. A segment that only grazes a corner has `t0 === t1` and yields
+nothing: a two-point run of identical points is a zero-length ribbon with no
+normal to build from.
+
 ## The wide view, and what feeds it
 
 Three layers stand in for the fine world past its rings, each on its own ladder
@@ -304,6 +343,16 @@ Three traps in there, each of which cost a round:
   exactly the coarse levels the shell never used to reach. The coarse floor is
   Challenger Deep; the documented -13,029m corruption is still below it and
   still refused.
+
+**The tile-debug overlay folds as it stops being legible.** Its grids are sized
+in GROUND metres, so pulling the chart out does not spread them, it collapses
+them: at the wide end 361 z16 cells of grid line and pip stack into a few pixels
+of dirty haze in the middle of the frame, and the post chain turns narrow bright
+features into a white contour diagram rather than forgiving them. Each layer now
+draws cells only while a cell can carry a marker (`DBG_CELL_PX`) and outlines
+its RING when it cannot — and the far shell draws its own grid at exactly the
+zooms where the fine grids have folded, because that is the layer actually
+streaming out there. Close up is unchanged.
 
 **Measuring any of this costs minutes.** A coarse ring is 25 DEM fetches at 4
 concurrent, and every one goes through the harness's curl relay. Budget three

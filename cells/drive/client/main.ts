@@ -55,6 +55,9 @@ import {
   AUTH_BASE, AUTH_MODE, CELL_BASE, DRIVE_BUILD, closeExternalUrl, openExternalUrl,
   publicCellUrl, publicGameUrl, registerAppShell,
 } from './runtime';
+// Extracted so a test can drive the SHIPPED function — see client/clip.test.mjs
+// and the note in clip.ts about the corner nicks it used to drop.
+import { clipToBounds } from './clip';
 
 // AHEAD OF THE ROUTE BRANCH, so a lab visit arms offline boot for the game and
 // the other way round. One shell answers every path on this host, so there is
@@ -16353,64 +16356,6 @@ function stepSurvey(now: number): void {
 // the OSM cache made this a near-certainty on reload — cached vectors beat
 // the S3 elevation fetches every time). Gate each vector tile on the
 // elevation tiles covering it, with a one-tile margin for spilling geometry.
-/**
- * Cut a polyline down to the runs that lie inside a lat/lon box, adding the
- * exact crossing point wherever it leaves or re-enters.
- *
- * This is what makes the elevation gate above mean anything. Overpass `out
- * geom` returns a way's COMPLETE geometry, never clipped to the bbox that
- * asked for it — Badwater Road comes back as one way spanning 34km — so
- * "gate the tile on the terrain under it" was gating a 600m tile and then
- * building 34km of road, 72% of it over ground where sampleHeight has no
- * data and answers 0. Adjacent tiles produce pieces that meet exactly on the
- * shared boundary, so there is neither a gap nor doubled geometry.
- */
-function clipToBounds(
-  geom: Array<{ lat: number; lon: number }>,
-  b: { latN: number; latS: number; lonW: number; lonE: number },
-): Array<Array<{ lat: number; lon: number }>> {
-  const inside = (p: { lat: number; lon: number }): boolean =>
-    p.lat <= b.latN && p.lat >= b.latS && p.lon >= b.lonW && p.lon <= b.lonE;
-  // Where the segment a→b crosses the box edge, as a fraction along it.
-  const cross = (a: { lat: number; lon: number }, c: { lat: number; lon: number }): number => {
-    let t = 1;
-    const hit = (num: number, den: number): void => {
-      if (Math.abs(den) < 1e-12) return;
-      const q = num / den;
-      if (q > 0 && q < t) {
-        const lat = a.lat + (c.lat - a.lat) * q, lon = a.lon + (c.lon - a.lon) * q;
-        // Only a crossing that lands ON the box counts; the other three edge
-        // lines are hit somewhere out in space.
-        if (lat <= b.latN + 1e-9 && lat >= b.latS - 1e-9 && lon >= b.lonW - 1e-9 && lon <= b.lonE + 1e-9) t = q;
-      }
-    };
-    hit(b.latN - a.lat, c.lat - a.lat); hit(b.latS - a.lat, c.lat - a.lat);
-    hit(b.lonW - a.lon, c.lon - a.lon); hit(b.lonE - a.lon, c.lon - a.lon);
-    return t;
-  };
-  const runs: Array<Array<{ lat: number; lon: number }>> = [];
-  let cur: Array<{ lat: number; lon: number }> = [];
-  for (let i = 0; i < geom.length; i++) {
-    const p = geom[i], pin = inside(p);
-    if (pin) {
-      if (!cur.length && i > 0) {
-        // Entering: walk back from p toward the outside point for the edge.
-        const t = cross(p, geom[i - 1]);
-        cur.push({ lat: p.lat + (geom[i - 1].lat - p.lat) * t, lon: p.lon + (geom[i - 1].lon - p.lon) * t });
-      }
-      cur.push(p);
-      continue;
-    }
-    if (cur.length) {
-      const a = geom[i - 1], t = cross(a, p);
-      cur.push({ lat: a.lat + (p.lat - a.lat) * t, lon: a.lon + (p.lon - a.lon) * t });
-      runs.push(cur);
-      cur = [];
-    }
-  }
-  if (cur.length) runs.push(cur);
-  return runs.filter((r) => r.length > 1);
-}
 async function renderGated(x: number, y: number, ways: OsmWay[]): Promise<void> {
   const ep0 = worldEpoch;
   const b = tileBounds(x, y, OSM_Z);
@@ -34069,6 +34014,33 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         hctx.fillRect(Math.round(a[0] + ((b[0] - a[0]) * i) / n), Math.round(a[1] + ((b[1] - a[1]) * i) / n), 1, 1);
       }
     };
+    /** Outline the quad four projected corners make, clockwise from top-left. */
+    const dBox = (a: [number, number] | null, b: [number, number] | null,
+      c: [number, number] | null, d2: [number, number] | null): void => {
+      dSeg(a, b); dSeg(b, c); dSeg(c, d2); dSeg(d2, a);
+    };
+    /** How wide one cell of a grid lands on the HUD, in its own pixels — the
+     *  measure that decides whether a layer is worth drawing cell by cell. */
+    const dCell = (a: [number, number] | null, b: [number, number] | null): number =>
+      (a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0);
+    /**
+     * A CELL TOO SMALL TO HOLD A MARKER IS NOISE, NOT INFORMATION.
+     *
+     * The z16 grid is 19x19 cells and the z14 ring 9x9, and both are sized in
+     * GROUND metres — so as the chart pulls out they do not spread, they
+     * collapse. At the wide end a z16 tile is half a kilometre inside a view
+     * six hundred across: three hundred and sixty cells of grid line and pip
+     * stacked into a few pixels of dirty haze in the middle of the frame,
+     * every one of them drawn, none of them readable. The post chain makes it
+     * worse rather than better — narrow bright features are exactly what the
+     * quantiser turns into a white contour diagram.
+     *
+     * So each layer draws cells only while a cell can carry one, and outlines
+     * its RING when it cannot. At that zoom the useful fact is not which tile
+     * is queued, it is where the fine world sits inside the wide one — which
+     * is a rectangle, and reads as one.
+     */
+    const DBG_CELL_PX = 8;
     const [dLat, dLon] = localToLatLon(state.x + panX, state.z + panZ);
     const dR = viewRadius();
     const [ox0, oy0] = tileAt(dLat, dLon, OSM_Z);
@@ -34084,11 +34056,20 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       }
       dCor.push(row);
     }
+    const oPx = dCell(dCor[oN][oN], dCor[oN][oN + 1]);
+    const oFine = oPx >= DBG_CELL_PX;
     hctx.fillStyle = UI.soft;
     hctx.globalAlpha = 0.28;
-    for (let j = 0; j <= oN * 2 + 1; j++) for (let i = 0; i <= oN * 2 + 1; i++) {
-      if (i <= oN * 2) dSeg(dCor[j][i], dCor[j][i + 1]);
-      if (j <= oN * 2) dSeg(dCor[j][i], dCor[j + 1][i]);
+    if (oFine) {
+      for (let j = 0; j <= oN * 2 + 1; j++) for (let i = 0; i <= oN * 2 + 1; i++) {
+        if (i <= oN * 2) dSeg(dCor[j][i], dCor[j][i + 1]);
+        if (j <= oN * 2) dSeg(dCor[j][i], dCor[j + 1][i]);
+      }
+    } else {
+      // The whole vector ring as ONE rectangle: where the roads are, against a
+      // view mostly made of ground that has none.
+      const e = oN * 2 + 1;
+      dBox(dCor[0][0], dCor[0][e], dCor[e][e], dCor[e][0]);
     }
     // SERVING RANK UNDER THE METRIC THE GATE ACTUALLY USES — which for a long
     // time this did not do. It ranked by plain distance to the focus point
@@ -34104,7 +34085,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       })
       .sort((a, b) => a.d - b.d)
       .forEach((q, i) => dRank.set(q.k, i + 1));
-    for (let j = 0; j <= oN * 2; j++) for (let i = 0; i <= oN * 2; i++) {
+    for (let j = 0; oFine && j <= oN * 2; j++) for (let i = 0; i <= oN * 2; i++) {
       const key = `${ox0 - oN + i}/${oy0 - oN + j}`;
       const a = dCor[j][i], b = dCor[j + 1][i + 1];
       if (!a || !b) continue;
@@ -34162,15 +34143,50 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       }
       tCor.push(row);
     }
-    for (let j = 0; j <= tN * 2; j++) for (let i = 0; i <= tN * 2; i++) {
-      const key = `${tx0 - tN + i}/${ty0 - tN + j}`;
-      if (!terrainReady.has(key)) continue;
-      hctx.fillStyle = terrainDirty.has(key) ? UI.hot : terrainMeshes.has(key) ? UI.edge : UI.gold;
-      hctx.globalAlpha = terrainDirty.has(key) ? 0.8 : 0.5;
-      dSeg(tCor[j][i], tCor[j][i + 1]);
-      dSeg(tCor[j][i], tCor[j + 1][i]);
-      dSeg(tCor[j + 1][i], tCor[j + 1][i + 1]);
-      dSeg(tCor[j][i + 1], tCor[j + 1][i + 1]);
+    const tPx = dCell(tCor[tN][tN], tCor[tN][tN + 1]);
+    if (tPx >= DBG_CELL_PX) {
+      for (let j = 0; j <= tN * 2; j++) for (let i = 0; i <= tN * 2; i++) {
+        const key = `${tx0 - tN + i}/${ty0 - tN + j}`;
+        if (!terrainReady.has(key)) continue;
+        hctx.fillStyle = terrainDirty.has(key) ? UI.hot : terrainMeshes.has(key) ? UI.edge : UI.gold;
+        hctx.globalAlpha = terrainDirty.has(key) ? 0.8 : 0.5;
+        dSeg(tCor[j][i], tCor[j][i + 1]);
+        dSeg(tCor[j][i], tCor[j + 1][i]);
+        dSeg(tCor[j + 1][i], tCor[j + 1][i + 1]);
+        dSeg(tCor[j][i + 1], tCor[j + 1][i + 1]);
+      }
+    } else {
+      hctx.fillStyle = UI.edge;
+      hctx.globalAlpha = 0.5;
+      const e = tN * 2 + 1;
+      dBox(tCor[0][0], tCor[0][e], tCor[e][e], tCor[e][0]);
+    }
+    /**
+     * …AND THE LAYER THAT IS ACTUALLY STREAMING OUT HERE.
+     *
+     * The two rings above are the FINE world, and at the wide end they are a
+     * pair of small boxes near the middle — correct, and not what is doing the
+     * work. Everything filling the rest of the frame is the coarse shell, and
+     * until now the overlay said nothing about it beyond a count in the
+     * header. So the shell draws its own grid at exactly the zooms where the
+     * fine grids have folded: teal where a mesh stands, gold where a tile has
+     * been asked for and has not landed. It is the same reading the z14 ring
+     * gives close up, one ladder rung out.
+     */
+    if (!oFine) {
+      const [sx0, sy0] = tileAt(dLat, dLon, farZ);
+      const sN = clamp(Math.ceil(dR / tileMetres(farZ)), 1, FAR_RING_MAX);
+      for (let j = -sN; j <= sN; j++) for (let i = -sN; i <= sN; i++) {
+        const key = `${farZ}/${sx0 + i}/${sy0 + j}`;
+        if (!farTiles.has(key)) continue;
+        const b0 = tileBounds(sx0 + i, sy0 + j, farZ);
+        const b1 = tileBounds(sx0 + i + 1, sy0 + j + 1, farZ);
+        const [ax, az] = toLocal(b0.latN, b0.lonW);
+        const [bx, bz] = toLocal(b1.latN, b1.lonW);
+        hctx.fillStyle = farMeshes.has(key) ? UI.edge : UI.gold;
+        hctx.globalAlpha = farMeshes.has(key) ? 0.4 : 0.7;
+        dBox(dProj(ax, az), dProj(bx, az), dProj(bx, bz), dProj(ax, bz));
+      }
     }
     hctx.globalAlpha = 1;
     let fails = 0;
@@ -34178,7 +34194,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     textEdgeP(`Z${OSM_Z} DONE ${osmDone.size} WIRE ${osmInFlight} QUEUE ${osmQueue.length} FAIL ${fails}`,
       6, 40, UI.text);
     textEdgeP(`Z${TERRAIN_Z} MESH ${terrainMeshes.size} WAIT ${terrainReady.size - terrainMeshes.size}`
-      + ` REBUILD ${terrainDirty.size} · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`,
+      + ` REBUILD ${terrainDirty.size} · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`
+      + (coverWideZ ? ` · COV Z${coverWideZ} ${coverWide.size}` : ''),
       6, 48, UI.soft);
   }
   // ── checkpoint markers, under everything ──
