@@ -5312,7 +5312,7 @@ const SIGN_KINDS = 5;
 // delineator is cell 4, its band is drawn at x0+5..x0+W-5, y 9..24 of 192.
 const CATS_U0 = 0.85, CATS_U1 = 0.96, CATS_V0 = 0.06, CATS_V1 = 0.11;
 const CATS_EVERY = 7;    // metres between studs — close enough to read as a line
-const POST_EVERY = 11;   // metres between edge posts where a parapet cannot go
+const POST_EVERY = 22;   // metres between edge posts where a parapet cannot go (was 11: a picket fence)
 const CENTRE_EVERY = 9;  // metres between centreline reflectors
 const signTex = canvasTex(192, 1, 1, 122, (c, s, r) => {
   const W = s / SIGN_KINDS;
@@ -10427,7 +10427,7 @@ interface JuncArm { ux: number; uz: number; hw: number; dk: string }
 const juncNodes = new Map<string, { x: number; z: number; arms: JuncArm[] }>();
 const juncBoxed = new Set<string>();
 const spanStats = {
-  piers: 0, arches: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0, cats: 0, posts: 0,
+  piers: 0, arches: 0, railM: 0, deckM: 0, signs: 0, signRefused: 0, maxDaylight: 0, cats: 0, posts: 0,
   // Why a kerb quad did or did not get a batter — one counter per branch, so
   // "the fill stops halfway along this road" is attributable rather than argued.
   fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0, fillCap: 0,
@@ -12178,7 +12178,11 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // whole world read as a permanent contraflow. On a straight the default is
   // now a marker post, and a hazard board only appears where there is a drop
   // to be warned about.
-  const SIGN_EVERY = 190;
+  // Was 190, and with the bend and drop cases on top the roadside read as a
+  // permanent works site: a board or post every few seconds of driving. A
+  // real rural road carries a marker post every few hundred metres and a
+  // chevron only where the bend needs one.
+  const SIGN_EVERY = 340;
   const SIGN_DROP = 2.2;  // metres of fall past the kerb that earns a real warning
   const BEND_DEG = 14;    // heading change over one 12m step that reads as "a bend"
   // Deterministic per way: the same road grows the same signs on every device
@@ -12417,6 +12421,15 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     px: number, py: number, pz: number, fwdX: number, fwdZ: number, side: number, kind: number,
     scale = 1, wide = 1,
   ): void => {
+    // NEVER ON SOMEBODY ELSE'S TARMAC. A post stands 0.3m and a board 1.3m
+    // outside this road's kerb, and at a junction that point is inside the
+    // crossing road's carriageway: boards and marker posts standing in the
+    // middle of the side road, reported from the survey at every fork. Both
+    // the built grid and this batch's pre-grid answer, so it holds whatever
+    // the build order was.
+    const other = onCarriageway(px, pz, -0.3, fid, name).road;
+    const pre = preEdge(px, pz, wayKey);
+    if (other || (pre && pre.out < -0.3)) { spanStats.signRefused++; return; }
     const l = Math.hypot(fwdX, fwdZ) || 1;
     const fx = fwdX / l, fz = fwdZ / l;
     // Facing back along the way, canted 12° toward the carriageway.
@@ -13244,7 +13257,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         const fall = Math.max(drop[0], drop[1]) > SIGN_DROP;
         // Chevrons still march through a bend with a drop — that is the case
         // they were added for and it is the one worth keeping dense.
-        const gap = sharp && fall ? 18 : sharp ? 60 : SIGN_EVERY * (0.55 + signRng() * 0.9);
+        const gap = sharp && fall ? 34 : sharp ? 110 : SIGN_EVERY * (0.55 + signRng() * 0.9);
         signRun += len;
         if (signRun > gap) {
           signRun = 0;
