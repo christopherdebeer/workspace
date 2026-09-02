@@ -854,7 +854,9 @@ What the second pass changed, and what it left:
   paint alpha is `0.92 − 0.4·wear` — at 0.75 the Bixby centre line measured
   cream (219,200,164) and the edge lines grey through the quantiser. Judge
   a marking's colour by counting pixels in a top frame, never by eye through
-  the dither.
+  the dither. And no paint without tarmac: `surface` in `UNSEALED` (unpaved,
+  gravel, dirt, ground, …) or `tracktype` grade2-5 gets no edge and no centre
+  line — the Senqu tertiary wore yellow edge lines over gravel until it did.
 - **Still standing:** the pale kerb strip (a kerb is a shadow); the surface's
   periodic tar patches; roundabout islands and crossroads fillets; nothing
   separating a deck from the road beneath it in the chart; `HEAD_DAY`.

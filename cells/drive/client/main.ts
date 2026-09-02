@@ -5189,6 +5189,8 @@ const cssOf = (hex: number, a = 1): string =>
 interface RoadLook { lanes: number; oneway: boolean; edge: boolean; centre: 'none' | 'dash' | 'solid' | 'double' }
 const DEFAULT_LOOK: RoadLook = { lanes: 2, oneway: false, edge: true, centre: 'dash' };
 const lookKey = (k: RoadLook): string => `${k.lanes}|${k.oneway ? 1 : 0}|${k.edge ? 1 : 0}|${k.centre}`;
+const UNSEALED = new Set(['unpaved', 'gravel', 'fine_gravel', 'compacted', 'dirt', 'earth', 'ground', 'grass', 'sand', 'mud',
+  'pebblestone', 'rock', 'stone', 'woodchips', 'clay', 'shells']);
 function roadLook(tags: Record<string, string>): RoadLook {
   const hw = tags.highway ?? '';
   const link = hw.endsWith('_link');
@@ -5200,8 +5202,14 @@ function roadLook(tags: Record<string, string>): RoadLook {
   const dflt = link || minor ? 1 : cls === 'motorway' ? 3 : 2;
   const tagged = parseInt(tags.lanes ?? '', 10);
   const lanes = clamp(Number.isFinite(tagged) && tagged > 0 ? tagged : dflt, 1, 6);
-  const edge = tier >= 1;
-  const centre: RoadLook['centre'] = oneway || minor || lanes < 2 ? 'none' : lanes >= 4 ? 'double' : 'dash';
+  // NO PAINT WITHOUT TARMAC. An unpaved tertiary at Senqu wore southern
+  // Africa's yellow edge lines over gravel (measured in the chase frame);
+  // `surface` and `tracktype` say what is under the wheels, and paint on
+  // anything but a sealed surface is a rendering fault, not a convention.
+  const sf = tags.surface ?? '';
+  const loose = UNSEALED.has(sf) || sf.startsWith('gravel') || /^grade[2-5]$/.test(tags.tracktype ?? '');
+  const edge = tier >= 1 && !loose;
+  const centre: RoadLook['centre'] = loose || oneway || minor || lanes < 2 ? 'none' : lanes >= 4 ? 'double' : 'dash';
   return { lanes, oneway, edge, centre };
 }
 const roadTexCache = new Map<string, THREE.Texture>();
