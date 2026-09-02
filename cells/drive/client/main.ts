@@ -5170,33 +5170,86 @@ const roadTex = canvasTex(128, 1, 1, 101, (c, s, r) => {
  */
 const cssOf = (hex: number, a = 1): string =>
   `rgba(${(hex >> 16) & 255},${(hex >> 8) & 255},${hex & 255},${a})`;
-const ROAD_TEX = new Map(ROAD_CULTURES.map((rc) => [rc.key, canvasTex(128, 1, 1, 101, (c, s, r) => {
-  c.fillStyle = cssOf(rc.surface); c.fillRect(0, 0, s, s);
-  speckle(c, s, r, ['rgba(255,255,255,0.045)', 'rgba(0,0,0,0.12)'], 260);
-  // Wear buys patches and cracks. A chip-seal road at 0.85 gets roughly three
-  // times the repair history of fresh European bitumen at 0.3, which is what
-  // makes the two read as different ages of road rather than two tints.
-  for (let i = 0; i < Math.round(2 + rc.wear * 6); i++) {
-    c.fillStyle = 'rgba(20,23,28,0.35)';
-    c.fillRect(10 + r() * (s - 40), r() * s, 14 + r() * 22, 8 + r() * 14);
-  }
-  cracks(c, s, r, Math.round(4 + rc.wear * 9), 'rgba(12,14,18,0.5)');
-  // Paint fades with wear — the one place the two axes have to interact, or a
-  // ruined road still carries crisp new lines and looks freshly re-marked.
-  const paintA = 0.75 - rc.wear * 0.45;
-  if (rc.edge) {
-    c.fillStyle = cssOf(rc.edgeCol, paintA * 0.75);
-    c.fillRect(5, 0, 3, s); c.fillRect(s - 8, 0, 3, s);
-  }
-  c.fillStyle = cssOf(rc.centre, paintA);
-  c.fillRect(s / 2 - 2, 0, 4, Math.round(s * 0.4));
-  // The verge losing to the green. More of it where nothing is maintained.
-  for (let i = 0; i < Math.round(16 + rc.wear * 20); i++) {
-    const edge = r() < 0.5 ? 2 + r() * 8 : s - 2 - r() * 8;
-    c.fillStyle = i % 2 ? 'rgba(64,96,44,0.5)' : 'rgba(40,66,32,0.55)';
-    c.fillRect(edge, r() * s, 1.5 + r() * 2.5, 2 + r() * 3);
-  }
-})]));
+/**
+ * ── THE MARKINGS A ROAD ACTUALLY CARRIES ──
+ *
+ * One texture per culture was the whole of it, so a 4.5m service driveway
+ * wore a trunk road's edge lines and centre dash, a motorway had no lane
+ * lines, and every one-way carriageway — both halves of a dual carriageway,
+ * every slip road — had a centre line down the middle of it. `lanes`,
+ * `oneway` and the highway class never reached the paint.
+ *
+ * A road's LOOK is decided from its tags (roadLook), and the texture is
+ * baked per culture × look on demand: lane boundaries at k/lanes across the
+ * width, the centre line only where the road is two-way and the class
+ * paints one, edge lines only where the class paints them. u still spans
+ * the width and v still wraps every 20m, so the ribbon's UVs are untouched
+ * and ribBatch still merges a tile into a few meshes.
+ */
+interface RoadLook { lanes: number; oneway: boolean; edge: boolean; centre: 'none' | 'dash' | 'solid' | 'double' }
+const DEFAULT_LOOK: RoadLook = { lanes: 2, oneway: false, edge: true, centre: 'dash' };
+const lookKey = (k: RoadLook): string => `${k.lanes}|${k.oneway ? 1 : 0}|${k.edge ? 1 : 0}|${k.centre}`;
+function roadLook(tags: Record<string, string>): RoadLook {
+  const hw = tags.highway ?? '';
+  const link = hw.endsWith('_link');
+  const cls = link ? hw.slice(0, -5) : hw;
+  const tier = ({ motorway: 5, trunk: 4, primary: 3, secondary: 2, tertiary: 1 } as Record<string, number>)[cls] ?? 0;
+  const minor = cls === 'service' || cls === 'living_street' || cls === 'pedestrian';
+  const oneway = tags.oneway === 'yes' || tags.oneway === '-1' || tags.junction === 'roundabout'
+    || hw === 'motorway' || hw === 'motorway_link';
+  const dflt = link || minor ? 1 : cls === 'motorway' ? 3 : 2;
+  const tagged = parseInt(tags.lanes ?? '', 10);
+  const lanes = clamp(Number.isFinite(tagged) && tagged > 0 ? tagged : dflt, 1, 6);
+  const edge = tier >= 1;
+  const centre: RoadLook['centre'] = oneway || minor || lanes < 2 ? 'none' : lanes >= 4 ? 'double' : 'dash';
+  return { lanes, oneway, edge, centre };
+}
+const roadTexCache = new Map<string, THREE.Texture>();
+function roadTexture(rc: (typeof ROAD_CULTURES)[number], look: RoadLook): THREE.Texture {
+  const key = `${rc.key}|${lookKey(look)}`;
+  const hit = roadTexCache.get(key);
+  if (hit) return hit;
+  let seed = 101;
+  for (let i = 0; i < key.length; i++) seed = (seed * 31 + key.charCodeAt(i)) % 9973;
+  const tex = canvasTex(128, 1, 1, seed, (c, s, r) => {
+    c.fillStyle = cssOf(rc.surface); c.fillRect(0, 0, s, s);
+    speckle(c, s, r, ['rgba(255,255,255,0.045)', 'rgba(0,0,0,0.12)'], 260);
+    for (let i = 0; i < Math.round(2 + rc.wear * 6); i++) {
+      c.fillStyle = 'rgba(20,23,28,0.35)';
+      c.fillRect(10 + r() * (s - 40), r() * s, 14 + r() * 22, 8 + r() * 14);
+    }
+    cracks(c, s, r, Math.round(4 + rc.wear * 9), 'rgba(12,14,18,0.5)');
+    const paintA = 0.75 - rc.wear * 0.45;
+    if (rc.edge && look.edge) {
+      c.fillStyle = cssOf(rc.edgeCol, paintA * 0.75);
+      c.fillRect(5, 0, 3, s); c.fillRect(s - 8, 0, 3, s);
+    }
+    // Lane boundaries at k/lanes. The middle one of a two-way road is the
+    // centre line; every other is a lane divider — a short dash, twice per
+    // wrap, in the edge colour.
+    for (let k = 1; k < look.lanes; k++) {
+      const u = Math.round((k / look.lanes) * s);
+      const isCentre = !look.oneway && look.lanes % 2 === 0 && k === look.lanes / 2;
+      if (isCentre) {
+        if (look.centre === 'dash') { c.fillStyle = cssOf(rc.centre, paintA); c.fillRect(u - 2, 0, 4, Math.round(s * 0.4)); }
+        else if (look.centre === 'solid') { c.fillStyle = cssOf(rc.centre, paintA); c.fillRect(u - 2, 0, 4, s); }
+        else if (look.centre === 'double') { c.fillStyle = cssOf(rc.centre, paintA); c.fillRect(u - 5, 0, 3, s); c.fillRect(u + 2, 0, 3, s); }
+      } else {
+        c.fillStyle = cssOf(rc.edgeCol, paintA * 0.85);
+        c.fillRect(u - 1, 0, 3, Math.round(s * 0.15));
+        c.fillRect(u - 1, Math.round(s * 0.5), 3, Math.round(s * 0.15));
+      }
+    }
+    for (let i = 0; i < Math.round(16 + rc.wear * 20); i++) {
+      const edge = r() < 0.5 ? 2 + r() * 8 : s - 2 - r() * 8;
+      c.fillStyle = i % 2 ? 'rgba(64,96,44,0.5)' : 'rgba(40,66,32,0.55)';
+      c.fillRect(edge, r() * s, 1.5 + r() * 2.5, 2 + r() * 3);
+    }
+  });
+  roadTexCache.set(key, tex);
+  return tex;
+}
+const ROAD_TEX = new Map(ROAD_CULTURES.map((rc) => [rc.key, roadTexture(rc, DEFAULT_LOOK)]));
 
 // The junction mouth's own surface: the same tarmac with NO lines — a host's
 // painted edge line must not run across a turning, and it lives in a
@@ -6176,23 +6229,46 @@ const waterU = {
  * setup that took a measurement each to get right — a second hand-written
  * literal would drift from that one the first time either was touched.
  * Only the map differs. */
-const ROAD_MATS = new Map<string, THREE.Material>(ROAD_CULTURES.map((rc) => {
+const ROAD_MATS = new Map<string, THREE.Material>();
+/** The material for one culture and one look, made once. */
+function roadMatFor(rc: (typeof ROAD_CULTURES)[number], look: RoadLook): THREE.Material {
+  const key = `${rc.key}|${lookKey(look)}`;
+  const hit = ROAD_MATS.get(key);
+  if (hit) return hit;
   const m2 = MAT.road.clone() as THREE.MeshLambertMaterial;
-  m2.map = ROAD_TEX.get(rc.key) ?? (MAT.road as THREE.MeshLambertMaterial).map;
+  m2.map = roadTexture(rc, look);
   m2.needsUpdate = true;
-  return [rc.key, m2 as THREE.Material];
-}));
+  ROAD_MATS.set(key, m2);
+  return m2;
+}
+/**
+ * THE CONVENTION IS GEOGRAPHY FIRST, climate second. The culture pick below
+ * weights four conventions by climate affinity and a region hash, and it has
+ * no idea where it is: Camps Bay and a Paris boulevard both came out with a
+ * North American yellow centre line. Where the answer is known it is stated;
+ * the climate pick remains for everywhere it is not.
+ */
+function conventionFor(lat: number, lon: number): string | null {
+  if (lon < -30 && lon > -170 && lat > -56 && lat < 72) return 'yellow';   // the Americas
+  if (lat > 54 && lon > 3 && lon < 32) return 'nordic';                     // the Nordics
+  if (lat > 34 && lat < 72 && lon > -11 && lon < 45) return 'euro';         // Europe
+  if (lat < -15 && lon > 10 && lon < 41) return 'za';                       // southern Africa
+  if (lon > 110 && lon < 180 && lat < -10) return 'euro';                   // Australia, New Zealand
+  return null;
+}
 /** Which carriageway this stretch of road is surfaced and marked as. Cached on
  *  a 2km cell: a region is 96km, so this answers the same thing for a long
  *  drive, and the cache exists only so that a tile of two hundred ways does
  *  not re-derive it two hundred times. */
 const roadMatCache = new Map<string, THREE.Material>();
-function roadMatAt(x: number, z: number): THREE.Material {
-  const key = `${Math.round(x / 2000)},${Math.round(z / 2000)}`;
+function roadMatAt(x: number, z: number, look: RoadLook = DEFAULT_LOOK): THREE.Material {
+  const key = `${Math.round(x / 2000)},${Math.round(z / 2000)}|${lookKey(look)}`;
   let got = roadMatCache.get(key);
   if (got === undefined) {
-    const rc = roadLookAt(cultEnv, x, z, climateAt(x, z).w);
-    got = ROAD_MATS.get(rc.key) ?? MAT.road;
+    const [lat, lon] = localToLatLon(x, z);
+    const forced = conventionFor(lat, lon);
+    const rc = (forced && ROAD_CULTURES.find((c) => c.key === forced)) || roadLookAt(cultEnv, x, z, climateAt(x, z).w);
+    got = roadMatFor(rc, look);
     if (roadMatCache.size > 3000) roadMatCache.clear();
     roadMatCache.set(key, got);
   }
@@ -16905,7 +16981,7 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
       // at the way's first point, which keeps one way on one material even
       // where it happens to straddle a regional boundary; a road that changed
       // surface mid-span would read as a rendering fault, not as a border.
-      ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : roadMatAt(pts[0][0], pts[0][1]),
+      ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : roadMatAt(pts[0][0], pts[0][1], roadLook(tags)),
         track || stairs ? SURFACE.track.lift : SURFACE.road.lift, !stairs, mode, track, tags.name, wq,
         GRADE_MAX[tags.highway] ?? 0.15, canopy, roadTint(tags, wq), dk,
         // Which level OSM says this way is on — see layerOf. The planner pins and

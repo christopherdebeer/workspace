@@ -304,6 +304,13 @@ export const ROAD_CULTURES: RoadCulture[] = [
     surface: 0x4a4a4e, wear: 0.65,
     affinity: [0.0, 0.0, 0.02, 1.0, 0.85],
   },
+  // White centre, YELLOW edge: southern Africa's convention. Zero affinity,
+  // so the climate pick never lands on it; geography asks for it by name.
+  {
+    key: 'za', centre: 0xf0eee6, edge: true, edgeCol: 0xe8c65a,
+    surface: 0x3c3a3c, wear: 0.45,
+    affinity: [0.0, 0.0, 0.0, 0.0, 0.0],
+  },
 ];
 
 /**
