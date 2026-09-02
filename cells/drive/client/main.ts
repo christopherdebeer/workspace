@@ -11276,11 +11276,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const held = new Uint8Array(n);
   if (hinted) {
     for (let i = 0; i < n; i++) {
-      let c = 0;
-      for (const h of [...profileHints.values()].flat()) {
-        if (h[3] === layer && Math.hypot(h[0] - dense[i][0], h[1] - dense[i][1]) < 0.3 && ++c >= 2) break;
-      }
-      if (c >= 2) { jn.push(i); held[i] = 1; }
+      if (solver.hintsNear(dense[i][0], dense[i][1], 0.3, layer) >= 2) { jn.push(i); held[i] = 1; }
     }
   }
   /** What ruleGrade's `held` wants: a non-null entry per held station. */

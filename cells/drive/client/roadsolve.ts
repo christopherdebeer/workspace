@@ -174,12 +174,14 @@ export class RoadSolver {
     st.opened = 0; st.dropped.length = 0;
   }
 
-  writeHints(dense: Array<[number, number]>, alg: number[], layer = 0): void {
+  /** `layers` is per station: a chain is one named road, and OSM splits a road
+   *  at its bridge, so one chain can run at grade, over a flyover, and back. */
+  writeHints(dense: Array<[number, number]>, alg: number[], layers?: ArrayLike<number>): void {
     if (this.recording) this.profiles.push(dense.map((p, i) => [p[0], p[1], alg[i]]));
     if (this.hints.size > 6000) this.hints.clear();   // advisory data; rebuilt per tile
     for (let i = 0; i < dense.length; i++) {
       const k = `${Math.floor(dense[i][0] / HINT_CELL)},${Math.floor(dense[i][1] / HINT_CELL)}`;
-      const e: [number, number, number, number] = [dense[i][0], dense[i][1], alg[i], layer];
+      const e: [number, number, number, number] = [dense[i][0], dense[i][1], alg[i], layers ? layers[i] : 0];
       const arr = this.hints.get(k);
       if (arr) arr.push(e); else this.hints.set(k, [e]);
     }
@@ -198,6 +200,20 @@ export class RoadSolver {
       }
     }
     return best;
+  }
+
+  /** How many hints stand within `r` of a point on `layer` — two or more is a
+   *  junction, since two chains only leave hints at one spot where their roads
+   *  share a node. Cell-indexed: the per-way build asks this per station. */
+  hintsNear(x: number, z: number, r: number, layer: number, cap = 2): number {
+    let c = 0;
+    for (const dx of [0, -HINT_CELL, HINT_CELL]) for (const dz of [0, -HINT_CELL, HINT_CELL]) {
+      const arr = this.hints.get(`${Math.floor((x + dx) / HINT_CELL)},${Math.floor((z + dz) / HINT_CELL)}`);
+      if (arr) for (const [hx, hz, , hl] of arr) {
+        if (hl === layer && Math.hypot(hx - x, hz - z) < r && ++c >= cap) return c;
+      }
+    }
+    return c;
   }
 
   noteJunction(x: number, z: number): void {
@@ -301,11 +317,25 @@ export class RoadSolver {
       // ones already standing.
       if (!chain.some((m) => m.fresh)) continue;
       const all: Array<[number, number]> = [];
-      for (const m of chain) for (const pt of m.pts) {
-        if (!all.length || Math.hypot(pt[0] - all[all.length - 1][0], pt[1] - all[all.length - 1][1]) > 0.5) all.push(pt);
+      const allL: number[] = [];                       // the layer of the member each point came from
+      for (const m of chain) {
+        const L = layerOf(m.tags);
+        for (const pt of m.pts) {
+          if (!all.length || Math.hypot(pt[0] - all[all.length - 1][0], pt[1] - all[all.length - 1][1]) > 0.5) { all.push(pt); allL.push(L); }
+        }
       }
       const dense = densifyPts(all);
       if (dense.length < 8) continue;                  // single crumbs keep the fallback path
+      // A dense station's layer is its nearest source vertex's. Densify keeps
+      // the source vertices and only interpolates between them, so this walks
+      // forward in step with the chain rather than searching.
+      const layers = new Int8Array(dense.length);
+      { let k = 0;
+        for (let i = 0; i < dense.length; i++) {
+          while (k + 1 < all.length && Math.hypot(all[k + 1][0] - dense[i][0], all[k + 1][1] - dense[i][1])
+            <= Math.hypot(all[k][0] - dense[i][0], all[k][1] - dense[i][1])) k++;
+          layers[i] = allL[k];
+        } }
       const a0 = env.deckAnchorAt(dense[0][0], dense[0][1]);
       const a1 = env.deckAnchorAt(dense[dense.length - 1][0], dense[dense.length - 1][1]);
       // JUNCTION PINS. Chains are solved one after another, so the hint store
@@ -317,16 +347,12 @@ export class RoadSolver {
       // other, and nothing is pinned — which is precisely the distinction
       // between a turning and a flyover, taken from the data rather than
       // guessed from heights.
-      // ONE ROAD, ONE LAYER: a chain is one named road, and its layer is the
-      // first member's. A bridge tagged mid-street is its own way in OSM and
-      // so its own chain.
-      const L = layerOf(chain[0].tags);
-      const pins = dense.map(([px, pz]) => (env.juncPins ? this.hintAt(px, pz, env.juncR, L) : null));
+      const pins = dense.map(([px, pz], i) => (env.juncPins ? this.hintAt(px, pz, env.juncR, layers[i]) : null));
       for (let i = 0; i < dense.length; i++) if (pins[i] != null) this.noteJunction(dense[i][0], dense[i][1]);
       const alg = await env.solveChain(dense, Math.min(...chain.map((m) => m.g)),
         a0 === null ? null : a0 - env.roadLift, a1 === null ? null : a1 - env.roadLift, pins);
       if (sweep !== this.sweeps) return;
-      this.writeHints(dense, alg, L);
+      this.writeHints(dense, alg, layers);
       {
         let len = 0;
         for (let i = 1; i < dense.length; i++) {
