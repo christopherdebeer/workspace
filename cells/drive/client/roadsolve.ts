@@ -103,7 +103,13 @@ export class RoadSolver {
    * crossings, 10 of them inside the pin radius. So a hint carries the layer
    * it was solved on, and a pin is only ever taken from the same layer.
    */
-  readonly hints = new Map<string, Array<[number, number, number, number]>>();
+  /** [x, z, y, layer, chain, index] — the last two say which planned chain a
+   *  hint belongs to and where along it, so a lookup can read the chain's
+   *  SEGMENTS and not only its stations (see hintAt). */
+  readonly hints = new Map<string, Array<[number, number, number, number, number, number]>>();
+  /** Each planned chain's stations, by the id its hints carry. */
+  readonly chains = new Map<number, { xs: number[]; zs: number[]; ys: number[]; ls: number[] }>();
+  private chainSeq = 0;
   /** Ways already solved in some chain, so a later tile does not redo them. */
   readonly hinted = new Set<string>();
   /** Where roads were found to meet. */
@@ -165,6 +171,7 @@ export class RoadSolver {
     this.lastSwept.hints = this.hints.size;
     this.lastSwept.juncs = this.junctions.size;
     this.hints.clear();
+    this.chains.clear();
     this.hinted.clear();
     this.junctions.clear();
     this.profiles.length = 0;
@@ -178,25 +185,58 @@ export class RoadSolver {
    *  at its bridge, so one chain can run at grade, over a flyover, and back. */
   writeHints(dense: Array<[number, number]>, alg: number[], layers?: ArrayLike<number>): void {
     if (this.recording) this.profiles.push(dense.map((p, i) => [p[0], p[1], alg[i]]));
-    if (this.hints.size > 6000) this.hints.clear();   // advisory data; rebuilt per tile
+    if (this.hints.size > 6000) { this.hints.clear(); this.chains.clear(); }   // advisory data; rebuilt per tile
+    const id = ++this.chainSeq;
+    const ls = Array.from({ length: dense.length }, (_, i) => (layers ? layers[i] : 0));
+    this.chains.set(id, { xs: dense.map((p) => p[0]), zs: dense.map((p) => p[1]), ys: alg.slice(), ls });
     for (let i = 0; i < dense.length; i++) {
       const k = `${Math.floor(dense[i][0] / HINT_CELL)},${Math.floor(dense[i][1] / HINT_CELL)}`;
-      const e: [number, number, number, number] = [dense[i][0], dense[i][1], alg[i], layers ? layers[i] : 0];
+      const e: [number, number, number, number, number, number] = [dense[i][0], dense[i][1], alg[i], ls[i], id, i];
       const arr = this.hints.get(k);
       if (arr) arr.push(e); else this.hints.set(k, [e]);
     }
   }
 
-  /** The nearest settled deck within `reach` — on `layer` only, when one is
-   *  given. A flyover's station must never read the road beneath it. */
+  /**
+   * The settled deck nearest to a point within `reach` — on `layer` only, when
+   * one is given: a flyover's station must never read the road beneath it.
+   *
+   * READ ALONG THE CHAIN, NOT ONLY AT ITS STATIONS. This was the nearest
+   * STATION within reach, and a per-way station on a straight leg only found
+   * one when the chain's densify happened to be in phase with the way's own.
+   * They are in phase exactly when the chain begins where the way begins;
+   * where the chain has rounded a corner, or started three ways back, its
+   * stations along a 12m-stepped leg sit anywhere up to 6m from the way's,
+   * and the way loses its hints on a coin toss. Measured on Shanklin Crescent
+   * at Camps Bay: an 82m two-node way came out under the 80% hint gate, fell
+   * to the single-anchor branch, was held LEVEL at the deck its far end had
+   * found, and its hinted neighbour then welded 10.6m up to meet it. The
+   * chain's deck between two stations is the straight line the ribbon draws
+   * between them, so the projection onto that segment IS the chain's answer
+   * there, and a way now reads its chain wherever the chain passes.
+   */
   hintAt(x: number, z: number, reach = 6, layer?: number): number | null {
     let best: number | null = null, bd = reach;
     for (const dx of [0, -HINT_CELL, HINT_CELL]) for (const dz of [0, -HINT_CELL, HINT_CELL]) {
       const arr = this.hints.get(`${Math.floor((x + dx) / HINT_CELL)},${Math.floor((z + dz) / HINT_CELL)}`);
-      if (arr) for (const [hx, hz, he, hl] of arr) {
+      if (arr) for (const [hx, hz, he, hl, ci, ii] of arr) {
         if (layer !== undefined && hl !== layer) continue;
         const d = Math.hypot(hx - x, hz - z);
         if (d < bd) { bd = d; best = he; }
+        // The segment from this station to the chain's next, if it stays on
+        // the layer asked for. Its far station is at most a densify step
+        // away, so a point within reach of the segment always has one of
+        // its ends inside the cells searched here.
+        const ch = this.chains.get(ci);
+        if (!ch || ii + 1 >= ch.xs.length) continue;
+        if (layer !== undefined && ch.ls[ii + 1] !== layer) continue;
+        const sx = ch.xs[ii + 1] - hx, sz = ch.zs[ii + 1] - hz;
+        const l2 = sx * sx + sz * sz;
+        if (l2 < 1e-6) continue;
+        const t = ((x - hx) * sx + (z - hz) * sz) / l2;
+        if (t <= 0 || t >= 1) continue;
+        const pd = Math.hypot(hx + sx * t - x, hz + sz * t - z);
+        if (pd < bd) { bd = pd; best = he + (ch.ys[ii + 1] - he) * t; }
       }
     }
     return best;
