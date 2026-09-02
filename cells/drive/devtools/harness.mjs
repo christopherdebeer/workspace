@@ -111,17 +111,24 @@ export async function openDrive(opts = {}) {
   // because an older build usually lacks the very probe the measurement reads
   // and reconstructing it there is the only way to compare like with like.
   //
-  // IT HAS TO LIVE BESIDE THE REAL ONE. main.ts imports ./menu and ./overlays
-  // by relative path and three from the repo's node_modules, so a copy bundled
-  // out of a temp directory resolves none of them. Written into client/, built,
-  // and removed again — including on failure, or a stray __rev-main.ts is left
-  // in the cell and gets deployed.
+  // THE WHOLE CLIENT COMES FROM THE REVISION, not main.ts alone. The first
+  // version wrote the old main.ts beside the CURRENT siblings, and a control
+  // built that way measures the old main.ts over the new roadsolve.ts — which
+  // is no control at all once the change under test lives in a sibling. So
+  // the revision's entire client/ is unpacked under node_modules/.cache, which
+  // is inside the repo (three resolves upward from there) and outside the
+  // cell's source (nothing under it is deployed); ./menu and ../lab-dials
+  // resolve within the unpacked tree. Nothing is written into client/ now, so
+  // there is no stray file to leave behind on failure.
   let src = opts.src ?? join(CELL, 'client/main.ts');
-  let scratch = '';
   if (rev) {
-    src = scratch = join(CELL, 'client/__rev-main.ts');
-    writeFileSync(src, execSync(`git show ${rev}:cells/drive/client/main.ts`,
-      { cwd: ROOT, maxBuffer: 64e6 }) + shim);
+    const sha = execSync(`git rev-parse --short=12 ${rev}`, { cwd: ROOT }).toString().trim();
+    const dir = join(CELL, 'node_modules/.cache/rev', sha);
+    rmSync(dir, { recursive: true, force: true });
+    mkdirSync(dir, { recursive: true });
+    execSync(`git archive ${sha} cells/drive/client | tar -x --strip-components=2 -C ${dir}`, { cwd: ROOT, maxBuffer: 64e6 });
+    src = join(dir, 'client/main.ts');
+    if (shim) writeFileSync(src, readFileSync(src, 'utf8') + shim);
   }
   // SANITISED, because this tag becomes an esbuild --outfile path. A tag with
   // a space in it fails as `Must use "outdir" when there are multiple input
@@ -129,11 +136,7 @@ export async function openDrive(opts = {}) {
   // runs. The tag is a label; the filename is a filename.
   const safeTag = String(tag).replace(/[^A-Za-z0-9._-]+/g, '-');
   const bundle = join(WORK, `${safeTag}.js`);
-  try {
-    execSync(`npx esbuild ${src} --bundle --format=esm --outfile=${bundle}`, { stdio: 'pipe', cwd: ROOT });
-  } finally {
-    if (scratch) rmSync(scratch, { force: true });
-  }
+  execSync(`npx esbuild ${src} --bundle --format=esm --outfile=${bundle}`, { stdio: 'pipe', cwd: ROOT });
 
   const html = shell();
   // ── THE CELL'S OWN ROUTES, SERVED BY THE CELL'S OWN HANDLER ──

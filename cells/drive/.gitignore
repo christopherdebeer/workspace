@@ -1,11 +1,14 @@
 # SCRATCH BUILDS OF AN OLDER REVISION, written here and deleted again.
 #
-# Several tools measure a change against the build before it — devtools/harness
-# `openDrive({rev})` writes `client/__rev-main.ts`, and any test that needs a
-# probe the old build lacks grafts its own copy beside it (dock-sky, road-hole).
-# They live INSIDE client/ on purpose: main.ts imports ./menu and ./overlays by
-# relative path and three from the repo's node_modules, so a copy bundled out of
-# a temp directory resolves none of them.
+# Several tools measure a change against the build before it. devtools/harness
+# `openDrive({rev})` now unpacks the revision's WHOLE client/ under
+# node_modules/.cache/rev/<sha> (a main.ts alone beside the current siblings
+# measured the old main.ts over the new roadsolve.ts, which is no control),
+# but any test that needs a probe the old build lacks still grafts its own copy
+# beside it (dock-sky, road-hole). Those live INSIDE client/ on purpose:
+# main.ts imports ./menu and ./overlays by relative path and three from the
+# repo's node_modules, so a copy bundled out of a temp directory resolves none
+# of them.
 #
 # Each of them is a ~2MB stale duplicate of main.ts. They are removed in a
 # `finally`, and that removal is the real guard — `cell-sync push` sends every
