@@ -9120,6 +9120,8 @@ const gkey = (x: number, z: number): string => `${Math.floor(x / GRID)},${Math.f
 interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?: number; yb?: number; tk?: boolean; tn?: boolean;
   /** The corridor's break lines for this strip, computed once — see stripBreakLines. */
   bl?: BreakLine[];
+  /** How far out from the centreline this strip's corridor reaches: shoulder plus its widest toe. */
+  reach?: number;
   /** Pre-grid only: the OSM way key this deckless segment belongs to, so a
    *  way's own crop lookup can be blind to its own pre-registered body. */
   dks?: string;
@@ -10162,7 +10164,7 @@ const TOE_REACH = 16;       // how far out a bank or a face is looked for at all
 const DECK_GAP_T = 3;       // a crest this far above the ground is a structure: no bank
 const EARTH_T: Rgb = [0.42, 0.34, 0.26];
 /** Cost of the refinement, for `__refine`. */
-const refineCost = { tiles: 0, cells: 0, tris: 0, ms: 0, plainTris: 0 };
+const refineCost = { tiles: 0, cells: 0, tris: 0, ms: 0, plainTris: 0, verts: 0, msLines: 0, msSplit: 0, msHeights: 0, msGeo: 0 };
 
 /** How far out along (ox,oz) from a crest point (cx,cz) whose floor is y the
  *  wedge meets the ground: 0 at the crest already, CUT_REACH_M for a wall,
@@ -10190,31 +10192,50 @@ function stripBreakLines(s: Seg): BreakLine[] {
   if (s.bl) return s.bl;
   const out: BreakLine[] = [];
   s.bl = out;
+  s.reach = s.hw + 0.6;
   if (s.tk || s.tn || s.ya === undefined || s.yb === undefined) return out;
   const dx = s.bx - s.ax, dz = s.bz - s.az, l = Math.hypot(dx, dz);
   if (l < 0.5) return out;
   const nx = -dz / l, nz = dx / l;
   const r = s.hw + 0.6;
+  // AT GRADE, NO LINES. Where the shoulder's edge meets the ground within a
+  // decimetre at both ends on both sides there is no face and no bank, and
+  // the grid corners the profile sets to the floor already hold the
+  // carriageway within that decimetre. A town's flat streets cost nothing.
+  let flat = true;
+  const crest: Array<[number, number, number, number, number, number]> = [];
   for (const side of [-1, 1]) {
     const ox = nx * side, oz = nz * side;
     const cax = s.ax + ox * r, caz = s.az + oz * r, cbx = s.bx + ox * r, cbz = s.bz + oz * r;
-    out.push({ ax: cax, az: caz, bx: cbx, bz: cbz });
     const ya = stripFloor(s, cax, caz).y - CUT_CLEAR, yb = stripFloor(s, cbx, cbz).y - CUT_CLEAR;
+    if (Math.abs(ya - sampleHeight(cax, caz)) > 0.12 || Math.abs(yb - sampleHeight(cbx, cbz)) > 0.12) flat = false;
+    crest.push([cax, caz, cbx, cbz, ya, yb]);
+  }
+  if (flat) return out;
+  let far = 0;
+  for (let i = 0; i < 2; i++) {
+    const side = i === 0 ? -1 : 1, ox = nx * side, oz = nz * side;
+    const [cax, caz, cbx, cbz, ya, yb] = crest[i];
+    out.push({ ax: cax, az: caz, bx: cbx, bz: cbz });
     const ta = toeOut(cax, caz, ox, oz, ya), tb = toeOut(cbx, cbz, ox, oz, yb);
     if (ta < 0 || tb < 0) continue;
+    far = Math.max(far, ta, tb);
     if (ta > 0.3 || tb > 0.3) out.push({ ax: cax + ox * ta, az: caz + oz * ta, bx: cbx + ox * tb, bz: cbz + oz * tb });
   }
+  s.reach = r + far + 0.5;
   return out;
 }
 /** The corridor profile at a point: the height the terrain takes there and
  *  what it is — 0 ground, 1 floor, 2 cut face, 3 fill bank. */
-function corridorH(x: number, z: number, N: number): { h: number; k: number } {
-  cutSet.clear();
-  stripsNear(x, z, Math.ceil(TOE_REACH / Math.max(1, cutL)) + 1, cutSet);
-  if (!cutSet.size) return { h: N, k: 0 };
+function corridorH(x: number, z: number, N: number, cands?: Iterable<Seg>): { h: number; k: number } {
+  if (!cands) {
+    cutSet.clear();
+    stripsNear(x, z, Math.ceil(TOE_REACH / Math.max(1, cutL)) + 1, cutSet);
+    cands = cutSet;
+  }
   let floor = Infinity;
   let near: Seg | null = null, nearOut = Infinity, nearY = 0;
-  for (const s of cutSet) {
+  for (const s of cands) {
     if (s.tk || s.tn || s.ya === undefined || s.yb === undefined) continue;
     const f = stripFloor(s, x, z);
     if (f.out <= 0) floor = Math.min(floor, f.y - CUT_CLEAR);
@@ -10369,7 +10390,7 @@ function refineTileGeometry(t: HeightTile, SEG: number): RefinedTile | null {
   const cellLines = new Map<number, number[]>();
   const close = new Uint8Array(SEG * SEG);
   for (const s of near) {
-    const mm = s.hw + 0.6 + TOE_REACH + 1;
+    const mm = (s.reach ?? s.hw + 0.6 + TOE_REACH) + 1;
     const ix0 = Math.max(0, Math.floor((Math.min(s.ax, s.bx) - mm - t.xs) / cw)), ix1 = Math.min(SEG - 1, Math.floor((Math.max(s.ax, s.bx) + mm - t.xs) / cw));
     const iz0 = Math.max(0, Math.floor((Math.min(s.az, s.bz) - mm - t.zs) / ch)), iz1 = Math.min(SEG - 1, Math.floor((Math.max(s.az, s.bz) + mm - t.zs) / ch));
     for (let iz = iz0; iz <= iz1; iz++) for (let ix = ix0; ix <= ix1; ix++) close[iz * SEG + ix] = 1;
@@ -10388,6 +10409,20 @@ function refineTileGeometry(t: HeightTile, SEG: number): RefinedTile | null {
     }
   }
   if (!cellLines.size) return null;
+  const t1 = performance.now();
+  // The strips within reach of each cell, indexed once per tile, so the
+  // height of a vertex asks a short list rather than the world's raster.
+  const cellStrips = new Map<number, Seg[]>();
+  for (const s of near) {
+    const mm = (s.reach ?? s.hw + 0.6 + TOE_REACH) + 1;
+    const ix0 = Math.max(0, Math.floor((Math.min(s.ax, s.bx) - mm - t.xs) / cw)), ix1 = Math.min(SEG - 1, Math.floor((Math.max(s.ax, s.bx) + mm - t.xs) / cw));
+    const iz0 = Math.max(0, Math.floor((Math.min(s.az, s.bz) - mm - t.zs) / ch)), iz1 = Math.min(SEG - 1, Math.floor((Math.max(s.az, s.bz) + mm - t.zs) / ch));
+    for (let iz = iz0; iz <= iz1; iz++) for (let ix = ix0; ix <= ix1; ix++) {
+      const k = iz * SEG + ix;
+      const arr = cellStrips.get(k);
+      if (arr) arr.push(s); else cellStrips.set(k, [s]);
+    }
+  }
   // The vertex pool: the grid corners first, in lattice order, then whatever
   // the splits add, deduplicated on a millimetre key so a point two cells
   // both produce is one vertex.
@@ -10445,6 +10480,14 @@ function refineTileGeometry(t: HeightTile, SEG: number): RefinedTile | null {
       // centroid of a convex polygon is interior, so every side is an edge of
       // exactly one triangle and every point on it a vertex of one.
       if (ids.length === 3) { tri(ids[0], ids[1], ids[2], k); continue; }
+      // …and only where a side does carry one. A polygon whose every vertex
+      // is a true corner fans from one of them at half the triangles.
+      let flat = false;
+      for (let i = 0; i < p.length && !flat; i++) {
+        const a = p[(i + p.length - 1) % p.length], b = p[i], c = p[(i + 1) % p.length];
+        if (Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) < 1e-3) flat = true;
+      }
+      if (!flat) { for (let i = 1; i + 1 < ids.length; i++) tri(ids[0], ids[i], ids[i + 1], k); continue; }
       let mx = 0, mz = 0;
       for (const [x, z] of p) { mx += x; mz += z; }
       const cc = vtx(mx / p.length, mz / p.length);
@@ -10475,6 +10518,7 @@ function refineTileGeometry(t: HeightTile, SEG: number): RefinedTile | null {
     const cc = vtx(t.xs + (ix + 0.5) * cw, t.zs + (iz + 0.5) * ch);
     for (let i = 0; i < ring.length; i++) tri(cc, ring[i], ring[(i + 1) % ring.length], k);
   }
+  const t2 = performance.now();
   // Heights and kinds: the corridor profile where a strip is close, the
   // ground elsewhere. The sea floor rule is the same one the plain build uses.
   const n = px.length;
@@ -10482,25 +10526,23 @@ function refineTileGeometry(t: HeightTile, SEG: number): RefinedTile | null {
   const kinds = new Uint8Array(n);
   const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
   const seaLocal = seaSurfaceAbs() - baseElev;
-  const closeAt = (x: number, z: number): boolean => {
+  const candsAt = (x: number, z: number): Seg[] | null => {
     const ix = clamp(Math.floor((x - t.xs) / cw), 0, SEG - 1), iz = clamp(Math.floor((z - t.zs) / ch), 0, SEG - 1);
-    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
-      const jx = ix + dx, jz = iz + dz;
-      if (jx < 0 || jz < 0 || jx >= SEG || jz >= SEG) continue;
-      if (close[jz * SEG + jx]) return true;
-    }
-    return false;
+    if (!close[iz * SEG + ix]) return null;
+    return cellStrips.get(iz * SEG + ix) ?? null;
   };
   for (let i = 0; i < n; i++) {
     const x = px[i], z = pz[i];
     let N = sampleHeight(x, z);
     if (sampleCover(x, z) === COVER.water && N <= seaLocal + 2) N = Math.min(N, seaLocal - SEA_BED);
     let h = N, k = 0;
-    if (closeAt(x, z)) { const c = corridorH(x, z, N); h = c.h; k = c.k; }
+    const cands = candsAt(x, z);
+    if (cands) { const c = corridorH(x, z, N, cands); h = c.h; k = c.k; }
     pos[i * 3] = x - cxm; pos[i * 3 + 1] = h; pos[i * 3 + 2] = z - czm;
     uv[i * 2] = 0.5 + (x - cxm) / t.w; uv[i * 2 + 1] = 0.5 - (z - czm) / t.h;
     kinds[i] = k;
   }
+  const t3 = performance.now();
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
@@ -10519,8 +10561,10 @@ function refineTileGeometry(t: HeightTile, SEG: number): RefinedTile | null {
   }
   cellTrisCache.set(geo, { seg: SEG, offs, tris });
   (geo.userData as { seg?: number }).seg = SEG;
-  refineCost.tiles++; refineCost.cells += refinedCells; refineCost.tris += TA.length;
-  refineCost.plainTris += SEG * SEG * 2; refineCost.ms += performance.now() - t0;
+  const t4 = performance.now();
+  refineCost.tiles++; refineCost.cells += refinedCells; refineCost.tris += TA.length; refineCost.verts += n;
+  refineCost.plainTris += SEG * SEG * 2; refineCost.ms += t4 - t0;
+  refineCost.msLines += t1 - t0; refineCost.msSplit += t2 - t1; refineCost.msHeights += t3 - t2; refineCost.msGeo += t4 - t3;
   return { geo, kinds, cells: refinedCells, tris: TA.length };
 }
 (window as unknown as { __refine?: object }).__refine = (): object => ({ on: REFINE, ...refineCost });
