@@ -857,7 +857,10 @@ Camps Bay seams 8 / 0 / 0.19m, steep 41 / 1, seat 6 / 1.60m, through-node
 test green — because the refinement never touches a profile. Cost, first
 cut: Camps Bay 17 tiles, 11.5k split cells, 2.2× the plain triangles, 320ms
 a tile — too much, and the reason for per-strip reach, the at-grade skip,
-vertex fans and the per-tile strip index that followed.
+vertex fans and the per-tile strip index that followed (Camps Bay then
+1.7×, 125ms a tile). Unbounded, Vélizy refined 60 tile builds at 2.4× and
+200ms each — the number that made the radius: the corridor is a near-field
+detail and a phone cannot rebuild a whole interchange's tiles at that price.
 
 ## The visual survey
 
