@@ -577,11 +577,11 @@ station clears the highest lower-layer deck beneath it by `BRIDGE_CLEAR`, read
 from the planner's hints; higher layers build first so the approaches weld UP
 to the portals — is its own change, `__lifts` reports it.
 
-## The per-way build reads the chain — and ten ways it did not
+## The per-way build reads the chain — and eleven ways it did not
 
 The chain planner is the only thing in the pipeline that knows about more than
 one road at a time. Everything the per-way build does with a junction rests on
-reading the planner's answer back correctly, and ten separate mechanisms were
+reading the planner's answer back correctly, and eleven separate mechanisms were
 quietly failing to. Each was found with an instrument, on the Camps Bay and
 Vélizy captures, and each fix was measured on a pinned control (see the harness
 note below):
@@ -679,6 +679,22 @@ Not every step helped on its own: reading hints along the chain uncovered a
 made the warp reach further before it learned to stop at a pin. Attribute per
 commit, on a pinned control, or the middle of a sequence reads as a regression.
 
+- **A crumb anchored only to BUILT decks.** The short-fragment branches read
+  `deckAnchorAt` and nothing else, so a crumb that built before the road it
+  joins found no deck at the node — Vélizy's worst seam after everything
+  above: a three-station unnamed piece, one hinted station of three so
+  under the gate, held level 0.92m under the planner's pin at its own end.
+  The pin IS the deck the through road will build to; a hinted end now
+  serves as the anchor where nothing is built yet. Vélizy: pins left >10cm
+  18 → 7, seated ends off hint 54 → 39, worst seam 0.92 → 0.41m.
+
+**Vélizy's build is order-dependent and Camps Bay's is not.** The same
+commit measured 10 / 2 / 0.41m drawn and 12 / 3 / 0.92m without drawing at
+Paris, because which fragment builds first decides who anchors to whom, and
+the frame rate changes that order. Camps Bay reads identically both ways.
+The fix above removed the worst of the order dependence; the rest is the
+reason to keep measuring on the same path every time.
+
 `__fragwhy(x, z, r)` is the instrument that found most of these: every fragment
 with a station within r, its branch, its anchors, its hint coverage, and each
 such station after every stage. `__stagewhy` could say which stage moved a
@@ -724,6 +740,39 @@ welded up 2.8–4.4m onto the lifted portals, and the one cross-tile approach
 that built first has the bridge eased down onto it by the warp (a 2.08m
 residual, under `GRADE_SEP`). Any Paris number without a `settled` line
 beside it is from a partial world — see above.
+
+## The visual survey
+
+`scratch: survey.mjs` in the session, worth keeping as a devtool: six
+captures, sixteen spots, three frames each (chase, cab, top at zoom 0.35) at
+double resolution, each fixture settling blind and `__draw(true)` before the
+frames. Thirty minutes for everything, and the frames are the critique.
+
+What the first survey said, by layer:
+
+- **The noon headlight cone** was the additive beam at full strength: from
+  the cab it filled the frame and the road under it read as a white slab. It
+  takes `dayF` now, as the pool always did. The pool itself is still a white
+  square in daylight (`HEAD_DAY`).
+- **Markings** are one texture per road culture with the lines at fixed
+  positions across the width: a service road wears a trunk road's edge lines
+  and centre dash, and `lanes`, `oneway` and class never reach the paint.
+  South Africa's centre line is white and its edge line yellow, France's
+  centre line is white; both captures draw yellow dashes. A per-vertex
+  marking selector, the way `roadTint` already travels, is the shape of the
+  fix.
+- **The kerb strip** outlines every road in a pale line two or three palette
+  steps above the tarmac. A kerb is a shadow, not a highlight.
+- **The surface's tar patches** are 1-3m rectangles on a 20m wrap and read
+  as a periodic rhythm from the chart. No wheel-track wear anywhere.
+- **The batter** reads well as a grassed slope and badly as a cut: a flat
+  brown band with a hard edge against the sward, terraced stripes on a steep
+  fill. It wants a material by slope, the grain shader, a dithered edge and
+  a shadow line under the cut-side kerb.
+- **Junction planform**: crossroads meet as rectangles (the bellmouth only
+  serves cropped side roads), roundabout islands are featureless discs, and
+  at an interchange nothing separates a deck from the road beneath it in the
+  chart view.
 
 ## The labs
 
