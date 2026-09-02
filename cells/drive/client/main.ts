@@ -11331,8 +11331,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     if (hintEl[0] !== null) seatHold[0] = 1;
     if (hintEl[n - 1] !== null) seatHold[n - 1] = 1;
   }
-  /** What ruleGrade's `held` wants: a non-null entry per held station. */
-  const heldArr: Array<number | null> | undefined = jn.length ? dense.map((_, i) => (held[i] ? 1 : null)) : undefined;
+  /** What ruleGrade's `held` wants: a non-null entry per held station — the
+   *  junction stations AND the hinted ends. Holding an end through the seat
+   *  alone changed nothing measurable (Camps Bay: 32 -> 34 ends off their
+   *  hint): the second ruling's forward pass clamps station n-1 to its
+   *  neighbour, and a neighbour seated into a gully takes the end with it. Held
+   *  here, the neighbour ramps to the end instead, as it does to a pin. */
+  const heldArr: Array<number | null> | undefined = (jn.length || seatHold[0] || seatHold[n - 1])
+    ? dense.map((_, i) => (held[i] || seatHold[i] ? 1 : null)) : undefined;
   const stage = (name: string, arr: ArrayLike<number>): void => {
     if (stageLog.length >= 3000) return;
     for (const i of jn) {
@@ -11818,8 +11824,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         let f0: number, f1: number;
         if (firstHeld < 0) { const f = arc[i] / total; f0 = 1 - f; f1 = f; }
         else {
-          f0 = i <= firstHeld ? 1 - arc[i] / (arc[firstHeld] || 1) : 0;
-          f1 = i >= lastHeld ? (arc[i] - arc[lastHeld]) / ((total - arc[lastHeld]) || 1) : 0;
+          // A pin AT the end leaves that end's residual nowhere to go: the span
+          // to spread it over is zero, and dividing by `|| 1` instead handed
+          // station 1 a residual eleven times the end's and sign-flipped.
+          f0 = firstHeld === 0 ? (i === 0 ? 1 : 0)
+            : i <= firstHeld ? 1 - arc[i] / arc[firstHeld] : 0;
+          f1 = lastHeld === n - 1 ? (i === n - 1 ? 1 : 0)
+            : i >= lastHeld ? (arc[i] - arc[lastHeld]) / (total - arc[lastHeld]) : 0;
         }
         const dy = d0 * f0 + d1 * f1;
         const dt = e0 * f0 + e1 * f1;
