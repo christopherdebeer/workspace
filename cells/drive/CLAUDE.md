@@ -222,7 +222,10 @@ Other harness facts learned the hard way:
   loop, so a fixture that touches no network still took three minutes to
   settle — painting frames nobody looks at. `NODRAW` skips only the draws:
   Camps Bay settles at t+21s instead of t+180s with every probe reading the
-  same. A screenshot run leaves it off, by definition.
+  same. A screenshot run leaves it off, by definition. And a `rev` older than
+  the commit that added it simply ignores the flag and draws — four
+  "stalled" Vélizy runs were exactly that, the old eleven-minute path on a
+  pinned control, read as a freeze.
 - **`settle` is SIM seconds, and sim seconds are frames.** `openDrive({settle})`
   waits for the sim clock, which advances by a clamped `dt` per frame — so
   while a big capture's frames each carry seconds of synchronous road build,
