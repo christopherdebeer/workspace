@@ -4861,14 +4861,37 @@ function buildTerrainMesh(t: HeightTile): void {
   terrainMeshes.set(key, mesh);
   worldGroup.add(mesh);
   // A plain neighbour built before this refined tile has no points on the
-  // shared border: rebuilt, it takes them.
+  // shared border: rebuilt, it takes them. ONLY when it lacks them — every
+  // refined rebuild used to dirty all four neighbours unconditionally, each
+  // of those rebuilt and dirtied back, and Vélizy ran 212 tile builds for
+  // 30 tiles. The neighbour's stored border says whether it already carries
+  // this tile's edge points at this tile's heights.
   if (refined && corridor) {
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const nk = `${t.tx + dx}/${t.ty + dy}`;
       const nm = terrainMeshes.get(nk);
-      if (nm && !(nm.userData as { corridor?: boolean }).corridor) terrainDirty.add(nk);
+      if (nm && !(nm.userData as { corridor?: boolean }).corridor && !borderShared(t, nk)) terrainDirty.add(nk);
     }
   }
+}
+/** Does the tile at `nk` already carry every point of `t`'s border along
+ *  their shared edge, at the same heights? */
+function borderShared(t: HeightTile, nk: string): boolean {
+  const mine = refinedBorders.get(`${t.tx}/${t.ty}`), theirs = refinedBorders.get(nk);
+  if (!mine) return true;
+  if (!theirs) return false;
+  const nt = heightTiles.get(nk);
+  if (!nt) return true;
+  const have = new Map<string, number>();
+  for (let i = 0; i < theirs.length; i += 3) have.set(`${Math.round(theirs[i] * 1000)},${Math.round(theirs[i + 1] * 1000)}`, theirs[i + 2]);
+  for (let i = 0; i < mine.length; i += 3) {
+    const x = mine[i], z = mine[i + 1];
+    // On the shared edge: inside the neighbour's box (with slack) and on ours.
+    if (x < nt.xs - 1e-3 || x > nt.xs + nt.w + 1e-3 || z < nt.zs - 1e-3 || z > nt.zs + nt.h + 1e-3) continue;
+    const y = have.get(`${Math.round(x * 1000)},${Math.round(z * 1000)}`);
+    if (y === undefined || Math.abs(y - mine[i + 2]) > 0.02) return false;
+  }
+  return true;
 }
 /** The vertices of a plain tile that lie on a refined neighbour's border,
  *  with the neighbour's heights — re-applied after the carve. */
