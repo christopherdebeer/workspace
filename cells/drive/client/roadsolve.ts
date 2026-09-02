@@ -379,23 +379,48 @@ export class RoadSolver {
         prev.fresh ||= fresh;
       }
     };
-    for (const el of els) consider(el, !this.hinted.has(String(el.id)));
+    for (const el of els) consider(el, true);
     for (const el of halo) consider(el, false);
 
+    // A WAY IS PLANNED AS FAR AS THE GROUND IS LOADED. A rural way runs for
+    // kilometres — 285 points at Senqu — and the height check used to want
+    // every one of them under a loaded tile, or the whole way was dropped.
+    // Measured there: 23 ways considered, 23 dropped, zero chains, and every
+    // fragment then built by its own devices, one of them a 110m piece held
+    // LEVEL that put the road 11m under the hill or 11m over it, run to run.
+    // The way is now cut into the runs its nodes AND the densified stations
+    // between them have ground under, and each run is a member with its own
+    // key; a run that grows as more ground streams in is a new key, so it is
+    // fresh and solved again over the wider ground.
+    const linkCovered = (a: [number, number], b: [number, number]): boolean =>
+      densifyPts([a, b]).every(([px, pz]) => env.hasHeight(px, pz));
     const mems: Mem[] = [];
     for (const [id, { el, fresh }] of byId) {
       const t = el.tags ?? {};
       const pts: Array<[number, number]> = (el.geometry ?? []).map((g2) => env.toLocal(g2.lat, g2.lon));
       if (pts.length < 2) continue;
-      let ok = true;
-      for (const [px, pz] of pts) if (!env.hasHeight(px, pz)) { ok = false; break; }
       this.stats.considered++;
-      if (ok) mems.push({ pts, name: t.name, g: env.gradeMax[t.highway] ?? 0.15, key: id, fresh, tags: t });
-      else {
+      const runs: Array<{ from: number; pts: Array<[number, number]> }> = [];
+      let run: Array<[number, number]> = [], from = 0;
+      const close = (): void => { if (run.length >= 2) runs.push({ from, pts: run }); run = []; };
+      for (let i = 0; i < pts.length; i++) {
+        if (!env.hasHeight(pts[i][0], pts[i][1])) { close(); continue; }
+        if (run.length && !linkCovered(pts[i - 1], pts[i])) close();
+        if (!run.length) from = i;
+        run.push(pts[i]);
+      }
+      close();
+      if (!runs.length) {
         this.stats.noHeight++;
         if (this.stats.dropped.length < 12) {
           this.stats.dropped.push(`${t.name ?? '(unnamed)'} [${t.highway}] ${pts.length}pts`);
         }
+        continue;
+      }
+      for (const r of runs) {
+        const whole = r.pts.length === pts.length;
+        const key = whole ? id : `${id}:${r.from}+${r.pts.length}`;
+        mems.push({ pts: r.pts, name: t.name, g: env.gradeMax[t.highway] ?? 0.15, key, fresh: fresh && !this.hinted.has(key), tags: t });
       }
     }
 

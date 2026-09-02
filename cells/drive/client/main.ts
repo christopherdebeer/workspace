@@ -5219,9 +5219,11 @@ function roadTexture(rc: (typeof ROAD_CULTURES)[number], look: RoadLook): THREE.
       c.fillRect(10 + r() * (s - 40), r() * s, 14 + r() * 22, 8 + r() * 14);
     }
     cracks(c, s, r, Math.round(4 + rc.wear * 9), 'rgba(12,14,18,0.5)');
-    const paintA = 0.75 - rc.wear * 0.45;
+    // Paint bright enough to survive the quantiser: at 0.75 the Bixby centre
+    // line read as cream and the edge lines as pale grey (measured, marks1).
+    const paintA = 0.92 - rc.wear * 0.4;
     if (rc.edge && look.edge) {
-      c.fillStyle = cssOf(rc.edgeCol, paintA * 0.75);
+      c.fillStyle = cssOf(rc.edgeCol, paintA * 0.9);
       c.fillRect(5, 0, 3, s); c.fillRect(s - 8, 0, 3, s);
     }
     // Lane boundaries at k/lanes. The middle one of a two-way road is the
@@ -5231,7 +5233,10 @@ function roadTexture(rc: (typeof ROAD_CULTURES)[number], look: RoadLook): THREE.
       const u = Math.round((k / look.lanes) * s);
       const isCentre = !look.oneway && look.lanes % 2 === 0 && k === look.lanes / 2;
       if (isCentre) {
-        if (look.centre === 'dash') { c.fillStyle = cssOf(rc.centre, paintA); c.fillRect(u - 2, 0, 4, Math.round(s * 0.4)); }
+        if (look.centre === 'dash') {
+          c.fillStyle = cssOf(rc.centre, paintA);
+          c.fillRect(u - 2, 0, 4, Math.round(s * 0.175)); c.fillRect(u - 2, Math.round(s * 0.5), 4, Math.round(s * 0.175));
+        }
         else if (look.centre === 'solid') { c.fillStyle = cssOf(rc.centre, paintA); c.fillRect(u - 2, 0, 4, s); }
         else if (look.centre === 'double') { c.fillStyle = cssOf(rc.centre, paintA); c.fillRect(u - 5, 0, 3, s); c.fillRect(u + 2, 0, 3, s); }
       } else {
@@ -10628,9 +10633,12 @@ const deferLog: DeferRec[] = [];
  * A whole fixture is a few thousand stations by eight stages; the cap is on
  * stations, and a live world past it simply stops recording.
  */
-interface FragRec { fid: number; nm?: string; pb: number; n: number; layer: number; hinted: boolean; hintN: number;
+interface FragRec { fid: number; nm?: string; wid?: string; pb: number; n: number; layer: number; hinted: boolean; hintN: number;
   a0: number | null; a1: number | null; xs: number[]; zs: number[]; hint: Array<number | null>; st: Record<string, number[]> }
 const fragLog = new Map<number, FragRec>();
+/** The OSM tags each drivable way was built from, by way key — probe-only,
+ *  so a fragment found by `__fragwhy` can be asked what OSM called it. */
+const wayTagLog = new Map<string, Record<string, string>>();
 let fragStations = 0;
 const FRAG_CAP = 60000;
 const cropLog: Array<{ x: number; z: number; nm?: string; end: number; why: string;
@@ -11664,7 +11672,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const heldArr: Array<number | null> | undefined = (jn.length || seatHold[0] || seatHold[n - 1])
     ? dense.map((_, i) => (held[i] || seatHold[i] ? 1 : null)) : undefined;
   const frag: FragRec | null = fragStations + n <= FRAG_CAP
-    ? { fid, nm: name_, pb: 0, n, layer, hinted, hintN: hintEl.filter((h) => h !== null).length, a0: anchor0, a1: anchor1,
+    ? { fid, nm: name_, wid: wayKey, pb: 0, n, layer, hinted, hintN: hintEl.filter((h) => h !== null).length, a0: anchor0, a1: anchor1,
       xs: dense.map((p) => +p[0].toFixed(2)), zs: dense.map((p) => +p[1].toFixed(2)),
       hint: hintEl.length ? hintEl.map((h) => (h === null ? null : +h.toFixed(3))) : dense.map(() => null), st: {} }
     : null;
@@ -11728,6 +11736,15 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     }
     return false;
   };
+  // A CRUMB IS SHORT IN METRES, NOT IN STATIONS. Sixteen stations is 40-55m
+  // of gallery at Chapman's and 110m of hillside at Senqu, where a fifteen-
+  // station piece with 10.7m of ground fall along it was held LEVEL at its
+  // one anchor: a causeway 11m over the ground when its neighbour built
+  // first, a trench 11m under it when the far tile did — and the neighbour
+  // then welded down to that. Past CRUMB_M a piece has room to be solved.
+  let fragM = 0;
+  for (let i = 1; i < n; i++) fragM += Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
+  const CRUMB_M = 70;
   if (hinted) {
     pbranch = 1;
     const idxs: number[] = [];
@@ -11748,7 +11765,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     });
     if (p0 !== null && Math.abs(alg[0] - p0) < 4) alg[0] = p0;
     if (p1 !== null && Math.abs(alg[n - 1] - p1) < 4) alg[n - 1] = p1;
-  } else if (mode === 'auto' && (n <= 16 || (n <= 40 && chaoticHere() && (q0 !== null || q1 !== null)))) {
+  } else if (mode === 'auto' && ((n <= 16 && fragM <= CRUMB_M) || (n <= 40 && chaoticHere() && (q0 !== null || q1 !== null)))) {
     if (q0 !== null && q1 !== null) {
       pbranch = 2;
       alg = elev.map((_, i) => q0 + ((q1 - q0) * i) / (n - 1));
@@ -16981,6 +16998,7 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
       // at the way's first point, which keeps one way on one material even
       // where it happens to straddle a regional boundary; a road that changed
       // surface mid-span would read as a rendering fault, not as a border.
+      if (dk) wayTagLog.set(dk, tags);
       ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : roadMatAt(pts[0][0], pts[0][1], roadLook(tags)),
         track || stairs ? SURFACE.track.lift : SURFACE.road.lift, !stairs, mode, track, tags.name, wq,
         GRADE_MAX[tags.highway] ?? 0.15, canopy, roadTint(tags, wq), dk,
@@ -22249,15 +22267,16 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
       const st: Record<string, number> = {};
       for (const k of Object.keys(f.st)) st[k] = f.st[k][i];
       const sp = i > 0 ? +Math.hypot(f.xs[i] - f.xs[i - 1], f.zs[i] - f.zs[i - 1]).toFixed(2) : 0;
-      stations.push({ i, d: +d.toFixed(2), sp, hint: f.hint[i], st });
+      stations.push({ i, x: f.xs[i], z: f.zs[i], d: +d.toFixed(2), sp, hint: f.hint[i], st });
     }
     if (stations.length) {
-      out.push({ fid: f.fid, nm: f.nm, pb: f.pb, n: f.n, layer: f.layer, hinted: f.hinted, hintN: f.hintN, a0: f.a0, a1: f.a1, stations });
+      out.push({ fid: f.fid, nm: f.nm, wid: f.wid, pb: f.pb, n: f.n, layer: f.layer, hinted: f.hinted, hintN: f.hintN, a0: f.a0, a1: f.a1, stations });
     }
   }
   return out;
 };
 /** Every bridge the lift raised this session: where, which, by how much. */
+(window as unknown as { __wayTags?: object }).__wayTags = (wid: string): object | null => wayTagLog.get(wid) ?? null;
 (window as unknown as { __lifts?: object }).__lifts = (x?: number, z?: number, r = 1e9): object[] => {
   const px = x ?? state.x, pz = z ?? state.z;
   return liftLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r);

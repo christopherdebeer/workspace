@@ -696,8 +696,9 @@ The fix above removed the worst of the order dependence; the rest is the
 reason to keep measuring on the same path every time.
 
 `__fragwhy(x, z, r)` is the instrument that found most of these: every fragment
-with a station within r, its branch, its anchors, its hint coverage, and each
-such station after every stage. `__stagewhy` could say which stage moved a
+with a station within r, its way key (`wid`, for `__wayTags`), its branch,
+its anchors, its hint coverage, and each such station — with its `x, z` — after
+every stage. `__stagewhy` could say which stage moved a
 PIN; it could not say why a segment eight metres from any pin stood at 100%.
 
 **A control is the revision's WHOLE client.** `openDrive({rev})` used to write
@@ -741,6 +742,51 @@ that built first has the bridge eased down onto it by the warp (a 2.08m
 residual, under `GRADE_SEP`). Any Paris number without a `settled` line
 beside it is from a partial world — see above.
 
+### Senqu: a road with no chain, and a crumb held level
+
+The live spot `?lat=-30.75509&lon=27.68403` (rural Lesotho, an unnamed
+unpaved tertiary) drew a trench with no carve in it on one visit and a flat
+road on the next — reported as "terrain is not carving". Neither the carve
+nor the junction work was involved; `senqu-21ce3a9` (before all of it) has
+the same trench. Two mechanisms, both found with `__fragwhy` at the truck and
+then at BOTH ends of the fragment under it (`senqu4.mjs`, now with station
+coordinates and `__wayTags(wid)`):
+
+- **The planner wanted the WHOLE way under loaded ground.** `__chaindbg()`
+  read `considered: 23, noHeight: 23, chains: 0, dropped: "(unnamed)
+  [tertiary] 285pts" × 12`. A rural way runs for kilometres and always has a
+  node past the loaded DEM, so every way here was dropped and nothing had a
+  hint. The planner now cuts a way into the runs whose nodes AND densified
+  stations have ground under them; each run is a member keyed
+  `id:from+count` (the whole way keeps `id`), and a run that grows as ground
+  streams in is a new key, so it is fresh and solved again wider.
+- **A crumb was sixteen STATIONS.** With no hints, a fragment of ≤16 stations
+  took the crumb branches: ramp between two anchors, hold LEVEL at one, or
+  the bench. At Chapman's that is a 40-55m gallery piece; at Senqu it was a
+  15-station, 110m piece of hillside with 10.7m of ground fall along it.
+  Built after its neighbour it was held level at the shared node and stood
+  11m over the ground at its far end (`branch=-12.509` at every station,
+  ground −13 → −23.7); built after the far tile instead it was held level at
+  −23.8, sat 10.8m under the hill at the shared node, and the neighbour then
+  welded −11.3m down to it — the trench, and `tn` (no carve) because burial
+  past `TUNNEL_H + 0.6` is left under the hill by design. The crumb gate is
+  `n ≤ 16 && fragM ≤ CRUMB_M (70m)` now; a longer piece is solved.
+
+Measured after both fixes, two runs, identical: `noHeight: 0`, one chain of
+12.4km, every fragment at the spot `pb=1` with every station hinted, the 110m
+piece running −13.0 → −23.8 with the ground, the deck within 1.4m of the
+ground along all of it, and no weld residual anywhere on the road.
+
+The weld itself was not the fault: it spread a residual that was true of the
+deck it found. Refusing large residuals was considered and not done — it
+trades a buried road for a step, and the step is not more drivable.
+
+**Where the burial rule reads.** `elevMin[i] − prof[i] > TUNNEL_H + 0.6`
+(5.6m, lateral minimum of three ground samples at `halfW`) on an untagged run
+sets `tn` on those segments: `rasterizeCut` returns, no tube (a tube needs
+`tunnel=*`). It is the right rule for a road the solver put under a hill —
+the alternative is a permanent crater — and `__buried(r)` counts what it hid.
+
 ## The visual survey
 
 `scratch: survey.mjs` in the session, worth keeping as a devtool: six
@@ -773,6 +819,45 @@ What the first survey said, by layer:
   serves cropped side roads), roundabout islands are featureless discs, and
   at an interchange nothing separates a deck from the road beneath it in the
   chart view.
+
+What the second pass changed, and what it left:
+
+- **The batter is a wedge about the natural ground** (`flushBatter`): from
+  the verge it may fall at `BATT` (0.6) below the kerb line or rise at
+  `CUT_K` (0.62) above it, and it takes the ground wherever the ground is
+  inside that wedge — so a fill bank follows the hillside instead of sheeting
+  to a fixed slope, a cut face is earth (`EARTH`) and past `CUT_REACH` (8m) a
+  rock wall (`ROCK`) that steps to the ground, and a road at grade gets a
+  shoulder strip and nothing else. On-ground faces wear the terrain mesh's
+  own recipe (`terrainPalette` + `coverPaint`, per vertex via `tintInto`),
+  so the bank and the sward it meets are the same colour.
+- **A junction gets a box.** `juncNodes` collects every shared vertex of
+  drivable ways with its arms; `flushJunctions` puts a convex hull of the
+  kerb corners at `L = maxHw + 0.5` over any node with ≥3 arms from ≥2 ways,
+  fanned at `roadHeightAt` deck heights, in plain tarmac (`MAT.box`), with a
+  give-way bar (`MAT.gw`) across each arm narrower than the widest by 0.25m.
+  The old mouth bar is gone: two bars a metre apart was what the two
+  mechanisms drew.
+- **No sign stands on another road's tarmac.** `sign()` refuses a post whose
+  foot is on any carriageway (`onCarriageway` at −0.3, or `preEdge` inside
+  the kerb); `SIGN_EVERY` 340, chevrons 34/110, `POST_EVERY` 22;
+  `spanStats.signRefused` counts the refusals.
+- **Markings are per look and per region.** `roadLook(tags)` → `{lanes,
+  oneway, edge, centre}` from class tier, `lanes`, `oneway`, roundabouts,
+  motorways; `roadTexture(culture, look)` bakes one texture per pair (lane
+  boundaries at k/lanes, the middle one of a two-way road the centre line,
+  the rest short dividers); `conventionFor(lat, lon)` forces the culture by
+  geography — Americas `yellow`, Nordics `nordic`, Europe `euro`, southern
+  Africa `za` (white centre, yellow edge, zero climate affinity), Australasia
+  `euro`. The texture wraps every 20m of road (`v = along / 20`): the centre
+  dash is two 10m periods per wrap (3.5m on), dividers 3m on 7m off, and the
+  paint alpha is `0.92 − 0.4·wear` — at 0.75 the Bixby centre line measured
+  cream (219,200,164) and the edge lines grey through the quantiser. Judge
+  a marking's colour by counting pixels in a top frame, never by eye through
+  the dither.
+- **Still standing:** the pale kerb strip (a kerb is a shadow); the surface's
+  periodic tar patches; roundabout islands and crossroads fillets; nothing
+  separating a deck from the road beneath it in the chart; `HEAD_DAY`.
 
 ## The labs
 
