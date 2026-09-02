@@ -10016,7 +10016,11 @@ const CPROBE = /[?&]cprobe=1/.test(location.search);
  * what they are with it off. Never on for a person; a screenshot run leaves
  * it off by definition.
  */
-const NODRAW = /[?&]nodraw=1/.test(location.search);
+let NODRAW = /[?&]nodraw=1/.test(location.search);
+/** …and back on, for a run that settles blind and then wants pictures: a
+ *  screenshot survey of six captures spends its minutes settling, not
+ *  drawing, and the frames it does paint are the ones it keeps. */
+(window as unknown as { __draw?: object }).__draw = (on: boolean): boolean => { NODRAW = !on; return !NODRAW; };
 // s = [px, pz, tgt, meshBefore, field, offsetIndex]; v = [x, z, yBefore, yAfter]
 interface CarveLog { s: number[][]; v: number[][] }
 const carveLog = new Map<string, CarveLog>();
