@@ -12394,6 +12394,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // the profile log showed at 19% one stage earlier, because this ran
       // after the last logged stage. Sixty metres of ground now, whatever
       // the stations, and the far end's own stations still never.
+      // AND NEVER THROUGH A JUNCTION PIN. A held station is another road's
+      // deck; past it the disagreement with this end's host is somebody
+      // else's junction. Measured at Camps Bay where Eldon Lane crosses
+      // Shanklin Crescent 22m short of Eldon Lane's end: both chains agreed
+      // at 12.765, the per-way log left the pin at 12.607, and the built
+      // deck stood 1.02m off — the fade had reached back through the pin.
+      // Same rule as the weld spread: the residual reaches the nearest held
+      // station and no further.
       const WARP_M = 60;
       let along = 0;
       for (let k = 0; k < n - 2; k++) {
@@ -12402,7 +12410,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           const j = end === 0 ? k - 1 : n - k;
           along += Math.hypot(dense[i][0] - dense[j][0], dense[i][1] - dense[j][1]);
         }
-        if (along >= WARP_M) break;
+        if (along >= WARP_M || held[i]) break;
         const [rx, rz] = kerbMitre(i, 1, width / 2), [lx, lz] = kerbMitre(i, -1, width / 2);
         // The plane at this station's own kerbs — answered everywhere, so
         // the FADE governs the transition, not the kerb's luck at landing on
