@@ -10006,6 +10006,17 @@ function cellTriangles(geo: THREE.BufferGeometry, SEG: number): Int32Array {
 // road inside it changes, so an append-only log would count the same excavation
 // four times and read as four times the damage.
 const CPROBE = /[?&]cprobe=1/.test(location.search);
+/**
+ * MEASURE WITHOUT DRAWING (`?nodraw=1`). Headless Chromium renders this game
+ * through SwiftShader at three or four frames a second, and the world build
+ * is paced by the frame loop, so a fixture that is entirely local still took
+ * three minutes to settle — most of it spent painting frames nobody looks
+ * at. With this on, the frame loop does everything but the draws: streaming,
+ * carving, the road build, the settle counters and every probe are exactly
+ * what they are with it off. Never on for a person; a screenshot run leaves
+ * it off by definition.
+ */
+const NODRAW = /[?&]nodraw=1/.test(location.search);
 // s = [px, pz, tgt, meshBefore, field, offsetIndex]; v = [x, z, yBefore, yAfter]
 interface CarveLog { s: number[][]; v: number[][] }
 const carveLog = new Map<string, CarveLog>();
@@ -31745,6 +31756,7 @@ function tick(now: number): void {
   // fault it fixes was reported from the cab.
   stepFineRing(now);
   applyHidden();
+  if (NODRAW) { tickN++; requestAnimationFrame(tick); return; }
   // scene → target, two separable blur rounds at half res, composite to canvas
   renderer.setRenderTarget(rtScene);
   renderer.render(scene, camera);
