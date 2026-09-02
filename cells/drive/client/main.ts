@@ -11219,8 +11219,12 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const anchor0D = lastAnchorD;
   const anchor1 = deckAnchorAt(dense[n - 1][0], dense[n - 1][1]);
   const anchor1D = lastAnchorD;
-  let p0 = anchor0 === null ? null : anchor0 - lift;
-  let p1 = anchor1 === null ? null : anchor1 - lift;
+  const p0 = anchor0 === null ? null : anchor0 - lift;
+  const p1 = anchor1 === null ? null : anchor1 - lift;
+  /** The anchors the END WELD will use — the same as p0/p1 unless a lifted
+   *  bridge refuses one below. Separate names, because a `let` p0 would lose
+   *  TypeScript's null narrowing in every closure that reads it. */
+  let weldP0 = p0, weldP1 = p1;
   // ── AN APPROACH WAITS FOR ITS PORTAL ──
   //
   // A flyover is lifted whole and its approaches weld up to its portals — which
@@ -11514,8 +11518,8 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // back the floor. The approach welds up to this portal instead — on its
         // retry, if it deferred, or as a step if it did not, which is the one
         // case the defer above exists to make rare.
-        if (p0 !== null && prof[0] - p0 > 1) p0 = null;
-        if (p1 !== null && prof[n - 1] - p1 > 1) p1 = null;
+        if (weldP0 !== null && prof[0] - weldP0 > 1) weldP0 = null;
+        if (weldP1 !== null && prof[n - 1] - weldP1 > 1) weldP1 = null;
         if (liftLog.length < 500) {
           liftLog.push({ x: +dense[0][0].toFixed(1), z: +dense[0][1].toFixed(1), nm: name, fid, layer,
             m: +need.toFixed(2), n: runs.reduce((c, [a, b]) => c + (b - a + 1), 0) });
@@ -11772,8 +11776,8 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // are centimetres and this does nothing; where it is not, the result is
     // over the class grade but CONTINUOUS, and as shallow as this fragment's
     // length allows — which is the same principle the limiter itself follows.
-    const d0 = p0 === null || !endWeld ? 0 : p0 - prof[0];
-    const d1 = p1 === null || !endWeld ? 0 : p1 - prof[n - 1];
+    const d0 = weldP0 === null || !endWeld ? 0 : weldP0 - prof[0];
+    const d1 = weldP1 === null || !endWeld ? 0 : weldP1 - prof[n - 1];
     const pre0 = prof[0], pre1 = prof[n - 1];
     // AND THE TILT WITH IT. The centreline weld above closes the middle; the
     // cross-fall was still each fragment's own, and the audit measured half-
