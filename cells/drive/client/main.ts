@@ -30921,8 +30921,14 @@ function tick(now: number): void {
   // The lamps carry the pressure too — a trail-brake glows, a stop is bright.
   if (brake) tailMat.color.setHex(0xa8221a).lerp(TAIL_HOT, 0.25 + 0.75 * brakeF);
   else tailMat.color.setHex(state.speed < -0.5 ? 0xe8ded0 : 0xa8221a);
-  // Volumetric beam: strongest where the eye is nearly in line with it.
-  beamMat.uniforms.uAmp.value = camMode === 'cab' ? 1.25 : camMode === 'chase' ? 1 : 0.25;
+  // Volumetric beam: strongest where the eye is nearly in line with it — AND
+  // faded by daylight, as the pool it belongs to already is. At noon the
+  // additive cone was drawn at full strength: from the cab it filled the
+  // frame and the road under it read as a blown-out white slab, and from the
+  // chart it was a bright wedge on the tarmac ahead of the truck in every
+  // survey frame. A lamp's beam is not visible in sunlight; a hint of it is
+  // kept, as it is for the pool, so dusk is a ramp rather than a switch.
+  beamMat.uniforms.uAmp.value = (camMode === 'cab' ? 1.25 : camMode === 'chase' ? 1 : 0.25) * (0.15 + 0.85 * (1 - dayF));
   // HIGH BEAM AFTER DARK. One lamp spec cannot serve both: 110m of throw is
   // generous in daylight, where the beam is only a hint, and short at night,
   // where it is the only thing telling you where the road goes. Faded by the
