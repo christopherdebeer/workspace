@@ -517,7 +517,40 @@ flyover station inside the 3m pin radius of the road beneath — the grade line
 was un-welding those by accident, which is why holding pins and reading the
 layer had to ship as one change. `layerOf` in roadsolve.ts is the rule.
 
-`devtools/through-node.test.mjs` holds the bars at the pre-fix numbers.
+**The fix, measured.** A station carrying two same-layer chain hints is held
+through the grade line, the deviation clamp, the seat, the edge smoothing and
+both per-way grade rulings, and the end weld spreads its residual only as far
+as the nearest held station. Same fixtures, same probes, same settle gate:
+
+| | before | after |
+|---|---|---|
+| Camps Bay node steps >10cm / >30cm / worst | 32 / 5 / 2.18m | 27 / 1 / 0.47m |
+| Camps Bay pins lost through the per-way build | 179 of 262 | 24 of 262 |
+| (42.1,270) Eldon / Cheviots decks | 1.81 / −0.373 | 0.404 ×4 |
+| junctions (authored crossroads) steps >10cm | 4 of 4 meets | 0 of 792 joins |
+
+The 0.47m left is a through-node whose two CHAINS disagree by 7cm — the
+planner's residual. The 15 grade-line movers left are stations whose partner
+chain's station is more than 0.3m away, which is a bend rounded by densify; the
+`hintsNear` radius is the lever, and widening it blindly holds the wrong
+station. `devtools/through-node.test.mjs` holds the bars one notch above these.
+
+**And the pin learned the layer.** Hints carry the layer they were solved on
+(`layerOf`: `layer=*`, else `bridge=yes` is above and `tunnel=*` below), per
+STATION — OSM splits a road at its bridge and the planner chains the pieces by
+name, so one chain runs at grade, over the flyover and back. The planner pins
+and the per-way lookup stay on their own layer; the end weld is layer-blind on
+purpose, because a portal joins its approach across a layer change. This had to
+ship with the hold: at Vélizy the pin rule was welding flyovers to the road
+beneath and the grade line was un-welding them by accident.
+
+**What the layer does NOT do on its own is lift anything.** Vélizy after the pin
+fix: the N 118 (`layer=1 bridge=yes`) over the A 86 at deck 1.35m on ground
+1.34m. A tagged bridge is a chord between portals that anchor to at-grade
+approaches, and OSM carries no elevation. The lift — the chord rises so every
+station clears the highest lower-layer deck beneath it by `BRIDGE_CLEAR`, read
+from the planner's hints; higher layers build first so the approaches weld UP
+to the portals — is its own change, `__lifts` reports it.
 
 ## The labs
 
