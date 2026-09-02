@@ -60,7 +60,10 @@ const WORLDS = [
   // junctions, measured after the fix on 2026-09-02: over10cm 0, over30cm 0,
   // worst 0.05, 44 pinned stations and none lost. The bars sit one notch up.
   { id: 'junctions', bars: { over10cm: 1, over30cm: 0, worstM: 0.1, lostFrac: 0.05 } },
-  { id: 'at-campsbay', bars: { over10cm: 32, over30cm: 5, worstM: 2.18, lostFrac: 179 / 262 } },
+  // at-campsbay, measured after the fix on 2026-09-02: over10cm 27, over30cm 1,
+  // worst 0.47 (a through-node whose two CHAINS disagree by 7cm — a planner
+  // residual, not a per-way one), 24 of 262 pins lost. Was 32 / 5 / 2.18 / 179.
+  { id: 'at-campsbay', bars: { over10cm: 28, over30cm: 1, worstM: 0.5, lostFrac: 0.1 } },
 ];
 for (const w of WORLDS) {
   const d = await openDrive({
