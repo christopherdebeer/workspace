@@ -535,6 +535,14 @@ chain's station is more than 0.3m away, which is a bend rounded by densify; the
 `hintsNear` radius is the lever, and widening it blindly holds the wrong
 station. `devtools/through-node.test.mjs` holds the bars one notch above these.
 
+Two numbers that looked like the fix's doing were not: `__steep` reports an
+89% segment on The Cheviots Road and the seat log a 10.67m end on Shanklin
+Crescent after the fix. An A/B on the parent commit (the harness's `rev`, which
+rebuilds main.ts from git) reproduces both exactly — 89% at (106,407), 10.67m
+at (81.5,128.1) — and the fix took the seated-end count from 55 to 32. Both are
+the seat moving a fragment END, which the ruling grade exempts by construction.
+Attribute with the A/B before believing a probe you have no baseline for.
+
 **And the pin learned the layer.** Hints carry the layer they were solved on
 (`layerOf`: `layer=*`, else `bridge=yes` is above and `tunnel=*` below), per
 STATION — OSM splits a road at its bridge and the planner chains the pieces by
