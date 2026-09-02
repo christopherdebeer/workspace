@@ -25,7 +25,7 @@ import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, t
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
-import { RoadSolver, densifyPts } from './roadsolve';
+import { RoadSolver, densifyPts, layerOf } from './roadsolve';
 import {
   BENCH_OFFS, BENCH_K, BENCH_C, benchFlat, ruleGrade, latCands,
   solveChain as solveProfile,
@@ -11017,7 +11017,7 @@ async function solveChainPlanned(
 const profileHints = solver.hints;
 const hintedWays = solver.hinted;
 const writeHints = (dense: Array<[number, number]>, alg: number[]): void => solver.writeHints(dense, alg);
-const hintAt = (x: number, z: number, reach = 6): number | null => solver.hintAt(x, z, reach);
+const hintAt = (x: number, z: number, reach = 6, layer?: number): number | null => solver.hintAt(x, z, reach, layer);
 /**
  * ── RIBBON DECKS BATCH PER TILE (R57) ──
  *
@@ -11132,7 +11132,7 @@ function flushRibbons(): void {
     }
   }
 }
-function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string): void {
+function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string, layer = 0): void {
   const name_ = name;
   const fid = ++ribbonSeq;
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
@@ -11242,20 +11242,51 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // stations landing on different roads is a vertical step in the carriageway.
   // Measured where Coast Road meets Highway 1 at Big Sur.
   const hintEl: Array<number | null> = mode !== 'none' && drivable
-    ? dense.map(([x, z]) => hintAt(x, z, 2.5)) : [];
+    ? dense.map(([x, z]) => hintAt(x, z, 2.5, layer)) : [];
   const hinted = hintEl.filter((h) => h !== null).length >= n * 0.8 && n > 1;
   // The stations this fragment shares with another chain — see stageLog.
+  /**
+   * ── A PINNED STATION STAYS PINNED THROUGH THE WHOLE PER-WAY BUILD ──
+   *
+   * The chain planner reconciles junctions: where two roads share a node it
+   * pins the later chain to the earlier one's deck, and holds that pin through
+   * its own grade ruling. Measured at Camps Bay with __hintsAt: at every one of
+   * the eight worst node steps both chains AGREED — 0.404 and 0.404 at a node
+   * whose two built decks were 1.81 and -0.373.
+   *
+   * The per-way build then took the hint (stage 1, exact), ruled it (stage 2,
+   * exact), and the GRADE LINE below replaced it: a ±200m running mean that
+   * overwrites every interior station outright. Right for a heightfield
+   * sample — high-frequency content along a road IS DEM error — and wrong for
+   * a junction pin, which is deliberate high-frequency content the planner put
+   * there. 262 through-node stations in the fixture, 179 left their hint by
+   * more than 10cm, and the grade line was the first stage to move 128 of
+   * them. The ends were always protected (`pin` fades to zero there), which is
+   * exactly why fragment ends weld to 4cm and through-nodes step by metres.
+   *
+   * So a station that carries two chain hints — which is what a junction IS in
+   * the hint store — is held: the grade line and the deviation clamp leave it,
+   * both grade rulings treat it as they treat a chain pin, the seat and the
+   * smoothing pass over it, and the end weld spreads its residual only as far
+   * as the nearest held station. Neighbours absorb the ramp, as they do in the
+   * chain solve. Same layer only: a flyover's station over a road beneath is
+   * not a junction.
+   */
   const jn: number[] = [];
-  if (hinted && stageLog.length < 3000) {
+  const held = new Uint8Array(n);
+  if (hinted) {
     for (let i = 0; i < n; i++) {
       let c = 0;
       for (const h of [...profileHints.values()].flat()) {
-        if (Math.hypot(h[0] - dense[i][0], h[1] - dense[i][1]) < 0.3 && ++c >= 2) break;
+        if (h[3] === layer && Math.hypot(h[0] - dense[i][0], h[1] - dense[i][1]) < 0.3 && ++c >= 2) break;
       }
-      if (c >= 2) jn.push(i);
+      if (c >= 2) { jn.push(i); held[i] = 1; }
     }
   }
+  /** What ruleGrade's `held` wants: a non-null entry per held station. */
+  const heldArr: Array<number | null> | undefined = jn.length ? dense.map((_, i) => (held[i] ? 1 : null)) : undefined;
   const stage = (name: string, arr: ArrayLike<number>): void => {
+    if (stageLog.length >= 3000) return;
     for (const i of jn) {
       let r = stageLog.find((e) => e.fid === fid && e.i === i);
       if (!r) {
@@ -11363,7 +11394,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   for (const i of jn) { const r = stageLog.find((e) => e.fid === fid && e.i === i); if (r) r.pb = pbranch; }
   if (mode !== 'none' && n > 1) {
     alg = alg.slice();   // `alg` may still BE `elev`; the raw samples are read again below
-    ruleGrade(dense, alg, gLim);
+    ruleGrade(dense, alg, gLim, heldArr);
   }
   stage('2-ruled', alg);
   // Roads get their own longitudinal PROFILE. Terrain draping alone sends a
@@ -11421,6 +11452,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       });
       const eng = wide(wide(prof));
       for (let i = 0; i < n; i++) {
+        if (held[i]) continue;                         // a junction pin is not DEM noise
         const pin = clamp(Math.min(i, n - 1 - i) / 8, 0, 1);
         prof[i] += (eng[i] - prof[i]) * pin;
       }
@@ -11440,15 +11472,18 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       const DEV = 5;
       for (let pass = 0; pass < 3; pass++) {
         for (let i = 1; i < n; i++) {
+          if (held[i]) continue;
           const g = maxGrade * Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
           prof[i] = clamp(clamp(prof[i], prof[i - 1] - g, prof[i - 1] + g), base[i] - DEV, base[i] + DEV);
         }
         for (let i = n - 2; i >= 0; i--) {
+          if (held[i]) continue;
           const g = maxGrade * Math.max(1, Math.hypot(dense[i + 1][0] - dense[i][0], dense[i + 1][1] - dense[i][1]));
           prof[i] = clamp(clamp(prof[i], prof[i + 1] - g, prof[i + 1] + g), base[i] - DEV, base[i] + DEV);
         }
       }
       for (let i = 0; i < n; i++) {
+        if (held[i]) continue;
         const pin = clamp(Math.min(i, n - 1 - i) / 8, 0, 1);
         prof[i] = base[i] + (prof[i] - base[i]) * pin;
       }
@@ -11551,7 +11586,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // road stays in its cutting rather than climbing out of it, and `hug`
       // still fades the whole thing to zero over any drop worth bridging, which
       // is precisely the coastal case.
-      const seat = prof[i] + (Math.min(prof[i], (tR + tL) * 0.5) - prof[i]) * hug;
+      const seat = held[i] ? prof[i] : prof[i] + (Math.min(prof[i], (tR + tL) * 0.5) - prof[i]) * hug;
       // ── THE DECK'S ROLL IS DESIGNED, NOT SAMPLED ──
       //
       // This used to be `(tR - tL) * 0.5 * hug`, capped at MAX_FALL: the
@@ -11593,6 +11628,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     for (let pass = 0; pass < 3; pass++) {
       const a = edgeR.slice(), b = edgeL.slice();
       for (let i = 1; i < n - 1; i++) {
+        if (held[i]) continue;
         edgeR[i] = (a[i - 1] + a[i] * 2 + a[i + 1]) * 0.25;
         edgeL[i] = (b[i - 1] + b[i] * 2 + b[i + 1]) * 0.25;
       }
@@ -11626,7 +11662,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // ruled; the cross-fall rides with it and the section simply translates.
     stage('4-smoothed', prof);
     const before = prof.slice();
-    ruleGrade(dense, prof, gLim);
+    ruleGrade(dense, prof, gLim, heldArr);
     for (let i = 0; i < n; i++) {
       const dy = prof[i] - before[i];
       edgeR[i] += dy; edgeL[i] += dy;
@@ -11678,10 +11714,21 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         arc[i] = arc[i - 1] + Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
       }
       const total = arc[n - 1] || 1;
+      // The residual reaches the nearest HELD station and no further: a
+      // linear spread across the whole fragment carried +0.58m of one end's
+      // correction into a junction pin seven stations in (measured, Eldon
+      // Lane). Between held stations nothing moves; outside them each end's
+      // own residual fades to zero at the first pin it meets.
+      const firstHeld = jn.length ? jn[0] : -1, lastHeld = jn.length ? jn[jn.length - 1] : -1;
       for (let i = 0; i < n; i++) {
-        const f = arc[i] / total;
-        const dy = d0 + (d1 - d0) * f;
-        const dt = e0 + (e1 - e0) * f;
+        let f0: number, f1: number;
+        if (firstHeld < 0) { const f = arc[i] / total; f0 = 1 - f; f1 = f; }
+        else {
+          f0 = i <= firstHeld ? 1 - arc[i] / (arc[firstHeld] || 1) : 0;
+          f1 = i >= lastHeld ? (arc[i] - arc[lastHeld]) / ((total - arc[lastHeld]) || 1) : 0;
+        }
+        const dy = d0 * f0 + d1 * f1;
+        const dt = e0 * f0 + e1 * f1;
         prof[i] += dy; tilt[i] += dt;
         edgeR[i] += dy + dt; edgeL[i] += dy - dt;
       }
@@ -16361,7 +16408,10 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
       // surface mid-span would read as a rendering fault, not as a border.
       ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : roadMatAt(pts[0][0], pts[0][1]),
         track || stairs ? SURFACE.track.lift : SURFACE.road.lift, !stairs, mode, track, tags.name, wq,
-        GRADE_MAX[tags.highway] ?? 0.15, canopy, roadTint(tags, wq), dk);
+        GRADE_MAX[tags.highway] ?? 0.15, canopy, roadTint(tags, wq), dk,
+        // Which level OSM says this way is on — see layerOf. The planner pins and
+        // the per-way hints stay on it; the end weld deliberately does not.
+        layerOf(tags));
       if (unbuilt !== refusedAt) { seenWays.delete(dk); continue; }
       // Steps are named and drawn but nothing drives them, so they earn no
       // checkpoints — a road you cannot survey should not sit in the log.

@@ -68,6 +68,22 @@ export interface SolveEnv {
  *  profile of its own and pinned the real road to it. */
 const NOT_DRIVABLE = ['track', 'path', 'bridleway', 'cycleway', 'footway', 'steps', 'services'];
 
+/**
+ * WHICH LEVEL A WAY IS ON, as OSM means it. `layer` is the explicit answer;
+ * where it is absent, `bridge=*` means above and `tunnel=*` means below — a
+ * bridge with no layer tag is far more common than a bridge with one. A
+ * gallery (`tunnel=avalanche_protector`, `covered=yes`) keeps the road's own
+ * grade in the open air and is not below anything.
+ */
+export function layerOf(t: Record<string, string> | undefined): number {
+  if (!t) return 0;
+  const l = Number(t.layer);
+  if (t.layer !== undefined && Number.isFinite(l)) return l;
+  if (t.bridge && t.bridge !== 'no') return 1;
+  if (t.tunnel && t.tunnel !== 'no' && t.tunnel !== 'avalanche_protector' && !(t.covered && t.covered !== 'no')) return -1;
+  return 0;
+}
+
 const HINT_CELL = 24;
 
 /**
@@ -77,7 +93,17 @@ const HINT_CELL = 24;
  */
 export class RoadSolver {
   /** Settled deck heights, spatially hashed. Advisory — rebuilt per tile. */
-  readonly hints = new Map<string, Array<[number, number, number]>>();
+  /**
+   * x, z, deck height — AND THE LAYER. OSM says which roads pass over which:
+   * `layer=1 bridge=yes` on a flyover, `layer=-1` on the underpass, nothing on
+   * the road at grade. The junction pin below is "another road's deck within
+   * three metres of this station", which at 12m station spacing is a coin flip
+   * for any crossing, and without the layer it welds a flyover to the road it
+   * crosses. Counted offline at the Vélizy interchange: 44 grade-separated
+   * crossings, 10 of them inside the pin radius. So a hint carries the layer
+   * it was solved on, and a pin is only ever taken from the same layer.
+   */
+  readonly hints = new Map<string, Array<[number, number, number, number]>>();
   /** Ways already solved in some chain, so a later tile does not redo them. */
   readonly hinted = new Set<string>();
   /** Where roads were found to meet. */
@@ -148,22 +174,25 @@ export class RoadSolver {
     st.opened = 0; st.dropped.length = 0;
   }
 
-  writeHints(dense: Array<[number, number]>, alg: number[]): void {
+  writeHints(dense: Array<[number, number]>, alg: number[], layer = 0): void {
     if (this.recording) this.profiles.push(dense.map((p, i) => [p[0], p[1], alg[i]]));
     if (this.hints.size > 6000) this.hints.clear();   // advisory data; rebuilt per tile
     for (let i = 0; i < dense.length; i++) {
       const k = `${Math.floor(dense[i][0] / HINT_CELL)},${Math.floor(dense[i][1] / HINT_CELL)}`;
-      const e: [number, number, number] = [dense[i][0], dense[i][1], alg[i]];
+      const e: [number, number, number, number] = [dense[i][0], dense[i][1], alg[i], layer];
       const arr = this.hints.get(k);
       if (arr) arr.push(e); else this.hints.set(k, [e]);
     }
   }
 
-  hintAt(x: number, z: number, reach = 6): number | null {
+  /** The nearest settled deck within `reach` — on `layer` only, when one is
+   *  given. A flyover's station must never read the road beneath it. */
+  hintAt(x: number, z: number, reach = 6, layer?: number): number | null {
     let best: number | null = null, bd = reach;
     for (const dx of [0, -HINT_CELL, HINT_CELL]) for (const dz of [0, -HINT_CELL, HINT_CELL]) {
       const arr = this.hints.get(`${Math.floor((x + dx) / HINT_CELL)},${Math.floor((z + dz) / HINT_CELL)}`);
-      if (arr) for (const [hx, hz, he] of arr) {
+      if (arr) for (const [hx, hz, he, hl] of arr) {
+        if (layer !== undefined && hl !== layer) continue;
         const d = Math.hypot(hx - x, hz - z);
         if (d < bd) { bd = d; best = he; }
       }
@@ -202,7 +231,7 @@ export class RoadSolver {
     // A worker solve may finish after a world hop. reset() advances sweeps, so
     // stale local coordinates can be rejected before they repopulate hints.
     const sweep = this.sweeps;
-    interface Mem { pts: Array<[number, number]>; name?: string; g: number; key: string; fresh: boolean }
+    interface Mem { pts: Array<[number, number]>; name?: string; g: number; key: string; fresh: boolean; tags: Record<string, string> }
     // ONE ENTRY PER OSM WAY, longest geometry wins. The same road reaches here
     // twice: clipped to this tile in `els`, and whole in a neighbour's cached
     // copy. The whole one is the better thing to solve over — the clip is a
@@ -234,7 +263,7 @@ export class RoadSolver {
       let ok = true;
       for (const [px, pz] of pts) if (!env.hasHeight(px, pz)) { ok = false; break; }
       this.stats.considered++;
-      if (ok) mems.push({ pts, name: t.name, g: env.gradeMax[t.highway] ?? 0.15, key: id, fresh });
+      if (ok) mems.push({ pts, name: t.name, g: env.gradeMax[t.highway] ?? 0.15, key: id, fresh, tags: t });
       else {
         this.stats.noHeight++;
         if (this.stats.dropped.length < 12) {
@@ -288,12 +317,16 @@ export class RoadSolver {
       // other, and nothing is pinned — which is precisely the distinction
       // between a turning and a flyover, taken from the data rather than
       // guessed from heights.
-      const pins = dense.map(([px, pz]) => (env.juncPins ? this.hintAt(px, pz, env.juncR) : null));
+      // ONE ROAD, ONE LAYER: a chain is one named road, and its layer is the
+      // first member's. A bridge tagged mid-street is its own way in OSM and
+      // so its own chain.
+      const L = layerOf(chain[0].tags);
+      const pins = dense.map(([px, pz]) => (env.juncPins ? this.hintAt(px, pz, env.juncR, L) : null));
       for (let i = 0; i < dense.length; i++) if (pins[i] != null) this.noteJunction(dense[i][0], dense[i][1]);
       const alg = await env.solveChain(dense, Math.min(...chain.map((m) => m.g)),
         a0 === null ? null : a0 - env.roadLift, a1 === null ? null : a1 - env.roadLift, pins);
       if (sweep !== this.sweeps) return;
-      this.writeHints(dense, alg);
+      this.writeHints(dense, alg, L);
       {
         let len = 0;
         for (let i = 1; i < dense.length; i++) {
