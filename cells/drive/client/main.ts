@@ -10450,6 +10450,21 @@ interface JoinRec {
   y: number;
 }
 const joinLog: JoinRec[] = [];
+/**
+ * A THROUGH-NODE, TRACED THROUGH EVERY STAGE OF THE PER-WAY BUILD.
+ *
+ * Measured at Camps Bay: at (42.1,270) both chains pinned the junction to 0.404
+ * and the two built decks are 1.81 and -0.373 — each road's per-way build left
+ * the pinned value in a different direction, and both finished as straight
+ * lines through the node as if it had never been pinned. So the planner is
+ * right and something between "take the hint" and "emit the mesh" is not. This
+ * records the value at that station after each stage, for every station that
+ * has two or more chain hints at it (which is what a junction IS in the hint
+ * store), so the stage that moves it can be named rather than argued about.
+ */
+interface StageRec { x: number; z: number; nm?: string; fid: number; i: number; n: number; pb: number;
+  hint: number | null; hintsHere: number; st: Record<string, number> }
+const stageLog: StageRec[] = [];
 const cropLog: Array<{ x: number; z: number; nm?: string; end: number; why: string;
   out?: number; align?: number; host?: string; sR?: number; sL?: number; skip?: number }> = [];
 /** A way-end that found NO host when it built — the host may simply not have
@@ -11118,6 +11133,7 @@ function flushRibbons(): void {
   }
 }
 function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string): void {
+  const name_ = name;
   const fid = ++ribbonSeq;
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
   // point here has real elevation under it; if one does not, the profile would
@@ -11228,6 +11244,28 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const hintEl: Array<number | null> = mode !== 'none' && drivable
     ? dense.map(([x, z]) => hintAt(x, z, 2.5)) : [];
   const hinted = hintEl.filter((h) => h !== null).length >= n * 0.8 && n > 1;
+  // The stations this fragment shares with another chain — see stageLog.
+  const jn: number[] = [];
+  if (hinted && stageLog.length < 3000) {
+    for (let i = 0; i < n; i++) {
+      let c = 0;
+      for (const h of [...profileHints.values()].flat()) {
+        if (Math.hypot(h[0] - dense[i][0], h[1] - dense[i][1]) < 0.3 && ++c >= 2) break;
+      }
+      if (c >= 2) jn.push(i);
+    }
+  }
+  const stage = (name: string, arr: ArrayLike<number>): void => {
+    for (const i of jn) {
+      let r = stageLog.find((e) => e.fid === fid && e.i === i);
+      if (!r) {
+        r = { x: +dense[i][0].toFixed(1), z: +dense[i][1].toFixed(1), nm: name_, fid, i, n, pb: 0,
+          hint: hintEl[i] === null ? null : +(hintEl[i] as number).toFixed(3), hintsHere: 2, st: {} };
+        stageLog.push(r);
+      }
+      r.st[name] = +arr[i].toFixed(3);
+    }
+  };
   // A chaotic anchorless fragment DEFERS: on cliff ground any solve under a
   // few hundred stations is luck, and anchoring propagates whatever luck
   // built first. Refusing the build sends the tile back through the retry
@@ -11321,10 +11359,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // produced the numbers, so the limit is applied where the profile LEAVES the
   // solver rather than at one of the places it is made.
   const gLim = (maxGrade > 0 ? maxGrade : 0.15) * 1.2;
+  stage('1-branch', alg);
+  for (const i of jn) { const r = stageLog.find((e) => e.fid === fid && e.i === i); if (r) r.pb = pbranch; }
   if (mode !== 'none' && n > 1) {
     alg = alg.slice();   // `alg` may still BE `elev`; the raw samples are read again below
     ruleGrade(dense, alg, gLim);
   }
+  stage('2-ruled', alg);
   // Roads get their own longitudinal PROFILE. Terrain draping alone sends a
   // road over every hill in its path; real roads keep grade and go THROUGH.
   // Where a ~500m-smoothed profile sits more than TUNNEL_TOL below the terrain
@@ -11546,6 +11587,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // Smoothed along the way before use. The heightfield is noisy at 9.5m/px
     // and a deck taken straight from it would ripple; three passes of a 1-2-1
     // kernel keep the grade a road could actually have been built to.
+    stage('3-seated', dense.map((_, i) => (edgeR[i] + edgeL[i]) * 0.5));
     for (let pass = 0; pass < 3; pass++) {
       const a = edgeR.slice(), b = edgeL.slice();
       for (let i = 1; i < n - 1; i++) {
@@ -11580,12 +11622,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // survived on Coast Road at Big Sur with the pre-hug limit already applied.
     // The centreline is what "grade" means, so it is the centreline that is
     // ruled; the cross-fall rides with it and the section simply translates.
+    stage('4-smoothed', prof);
     const before = prof.slice();
     ruleGrade(dense, prof, gLim);
     for (let i = 0; i < n; i++) {
       const dy = prof[i] - before[i];
       edgeR[i] += dy; edgeL[i] += dy;
     }
+    stage('5-reruled', prof);
     // WELD LAST. An anchor is the neighbouring fragment's deck at the node the
     // two share; the ruling grade is what a vehicle can climb. Where the data
     // makes those contradict — Chapman's fragments either side of [110,-494]
@@ -11641,6 +11685,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       }
     }
   }
+  stage('6-welded', prof);
   const verts: number[] = [];
   const uvs: number[] = [];
   // Per-vertex tint: what the way is made of, or for a track the colour of the
@@ -21528,6 +21573,12 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
 (window as unknown as { __joinwhy?: object }).__joinwhy = (x?: number, z?: number, r = 8): object[] => {
   const px = x ?? state.x, pz = z ?? state.z;
   return joinLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r);
+};
+/** Every through-node station near a point, with its value after each stage
+ *  of the per-way build — which stage moved it off the pin. */
+(window as unknown as { __stagewhy?: object }).__stagewhy = (x?: number, z?: number, r = 8): object[] => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  return stageLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r);
 };
 (window as unknown as { __cropwhy?: object }).__cropwhy = (x?: number, z?: number, r = 80): object[] => {
   const px = x ?? state.x, pz = z ?? state.z;
