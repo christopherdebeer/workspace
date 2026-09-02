@@ -11425,6 +11425,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         prof[i] += (eng[i] - prof[i]) * pin;
       }
     }
+    stage('2b-gradeline', prof);
     // A ROAD CLASS IMPLIES A RULING GRADE. A motorway is BUILT to ~7%, an
     // ordinary paved road to low teens — so any along-way grade past the
     // class ceiling that survives the smoothing is DEM error, not geography.
@@ -11452,6 +11453,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         prof[i] = base[i] + (prof[i] - base[i]) * pin;
       }
     }
+    stage('2c-devclamp', prof);
   }
   const flat = mode !== 'none'; // profiled roads get a flat cross-section
   // ── hug the ground where there is nothing to bridge ────────────────

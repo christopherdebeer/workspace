@@ -738,6 +738,11 @@ export const CAPTURE_INDEX: readonly CaptureCard[] = [
     label: 'SURESNES — THE BOULEVARDS',
     note: 'Reported from the seat at 48.86919,2.21523 heading 203. A dense European suburb rather than a hillside: 1,453 highways of which 762 are footway and 69 are steps, so nearly every carriageway is flanked by a pavement solving its own profile a couple of metres away — the geometry that produces a lengthwise seam rather than a bad junction. 29 ways carry three or four lanes. One vector tile of the twenty (16/33171/22541) exceeds the cell Overpass budget and has never built; that corner has no roads in it.',
   },
+  {
+    id: 'at-paris-south', file: 'world-paris-south.json', heading: 281,
+    label: 'VÉLIZY — THE A 86 INTERCHANGE',
+    note: 'Reported from the seat at 48.77736,2.22332 heading 281. The A 86 / N 118 interchange: 1,078 highways, 49 trunk_link and 20 motorway_link slip roads, lanes tags up to 5. THE LEVELS CASE. OSM says exactly where the flyovers are — 14 ways carry layer=1 or 2 with bridge=yes, 13 carry layer=-1 — and the game keeps the layer tag and never reads it: a tagged bridge is a chord between its two portals, not a deck above the road it crosses. Counted offline: 44 genuine grade-separated crossings in the box, 10 of them with a station of the flyover inside the 3m junction-pin radius of the road beneath, where the planner will weld the two decks together. Flat (44m of relief), so nothing here is terrain.',
+  },
 ];
 
 /**

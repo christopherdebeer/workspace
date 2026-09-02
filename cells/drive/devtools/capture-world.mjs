@@ -378,7 +378,10 @@ const out = {
   cover: { n: CN, step: +cstep.toFixed(3), px: cover },
   ways,
 };
-const dir = join(CELL, 'client/fixtures');
+// static/, not client/: the captures ship over the wire now (see CAPTURE_INDEX
+// in world-fixtures.ts), and a file written under client/ would be inlined into
+// app.js by the next bundle — the 2.4MB this move exists to keep out of it.
+const dir = join(CELL, 'static/fixtures');
 mkdirSync(dir, { recursive: true });
 const path = join(dir, `world-${name}.json`);
 writeFileSync(path, JSON.stringify(out));
