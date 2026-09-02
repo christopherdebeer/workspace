@@ -12298,11 +12298,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
    *  host is unbuilt (pre-grid), or where the decks are grade-separated. */
   const endPlane: Array<((x: number, z: number) => number) | null> = [null, null];
   if (drivable && !track && n > 3) {
-    // Stations to fade over, ~60m at 12m steps — but never more than the way
-    // HAS. A four-station way walked off the end of `dense` and threw, which a
-    // page-error line with no stack in it reported as an anonymous TypeError
-    // somewhere in the world build.
-    const WARP = Math.min(5, n);
+    // Never past the way's own far end: a four-station way once walked off
+    // the end of `dense` and threw, which a page-error line with no stack in
+    // it reported as an anonymous TypeError somewhere in the world build.
     for (const end of [0, 1]) {
       const i0 = end === 0 ? 0 : n - 1;
       // A wider road must actually be underfoot at the node, not merely near it.
@@ -12377,9 +12375,25 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // way's FAR node 2m onto an extrapolation — measured as a new 2.05m
       // centreline step at Chapman's junction checkpoint. The far end is
       // somebody else's junction or continuation; it is not this end's to move.
-      const kMax = Math.min(WARP, n - 2);
-      for (let k = 0; k < kMax; k++) {
+      // THE FADE RUNS BY ARC LENGTH, NOT BY STATION. `1 - k / WARP` was
+      // written for 12m stations and read as "~60m"; on a bend the densify
+      // arcs put stations 2.4m apart with a 0.5m straight between two arcs,
+      // so the same five steps spanned eight metres, and the step between
+      // the two closest stations — a fifth of the whole disagreement with
+      // the host, 0.4m of a 2m one — landed on the half-metre station.
+      // Measured on The Cheviots Road at Camps Bay as an 86% segment that
+      // the profile log showed at 19% one stage earlier, because this ran
+      // after the last logged stage. Sixty metres of ground now, whatever
+      // the stations, and the far end's own stations still never.
+      const WARP_M = 60;
+      let along = 0;
+      for (let k = 0; k < n - 2; k++) {
         const i = end === 0 ? k : n - 1 - k;
+        if (k > 0) {
+          const j = end === 0 ? k - 1 : n - k;
+          along += Math.hypot(dense[i][0] - dense[j][0], dense[i][1] - dense[j][1]);
+        }
+        if (along >= WARP_M) break;
         const [rx, rz] = kerbMitre(i, 1, width / 2), [lx, lz] = kerbMitre(i, -1, width / 2);
         // The plane at this station's own kerbs — answered everywhere, so
         // the FADE governs the transition, not the kerb's luck at landing on
@@ -12387,12 +12401,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // relocate it.
         const hR = plane(dense[i][0] + rx, dense[i][1] + rz);
         const hL = plane(dense[i][0] + lx, dense[i][1] + lz);
-        const w = 1 - k / WARP;
+        const w = 1 - along / WARP_M;
         prof[i] += clamp((hR + hL) * 0.5 - prof[i], -GRADE_SEP, GRADE_SEP) * w;
         tilt[i] += ((tAnchor ?? (hR - hL) * 0.5) - tilt[i]) * w;
       }
     }
   }
+  stage('7-warped', prof);
   /**
    * THE CROP. A junction's shared node sits on the HOST's centreline, so this
    * way's ribbon used to run on across the host's carriageway to the middle —
