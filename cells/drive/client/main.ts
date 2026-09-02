@@ -10768,8 +10768,16 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
   const SHOULDER: [number, number, number] = [0.56, 0.52, 0.45];
   const EARTH: [number, number, number] = [0.42, 0.34, 0.26];
   const ROCK: [number, number, number] = [0.46, 0.45, 0.41];
-  const tintAt = (x: number, z: number, N: number): [number, number, number] =>
-    terrainPalette(N + baseElev, 0.15, sampleCover(x, z), x, z);
+  // THE SAME RECIPE THE TERRAIN MESH USES for its own vertices — the DEM's
+  // gradient for the slope and `coverPaint` for the cover — or the strip's
+  // ground-following part is a different brown from the ground it lies on,
+  // and its outer edge shows as a sawtooth on the mesh's cell period
+  // (measured at Carmel: the toe outlined against the hill at every cell).
+  const tintAt = (x: number, z: number, N: number): [number, number, number] => {
+    const du = sampleHeight(x + 2, z) - sampleHeight(x - 2, z);
+    const dv = sampleHeight(x, z + 2) - sampleHeight(x, z - 2);
+    return terrainPalette(N + baseElev, Math.hypot(du, dv) / 4, coverPaint(x, z), x, z);
+  };
   // AN EMBANKMENT IS ALLOWED TO BE AN EMBANKMENT. This used to stop at 5m —
   // 3m of drop — and anything steeper than that was declared "the road stands
   // clear of its surroundings" and given nothing at all: measured at Big Sur,
