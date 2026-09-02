@@ -828,8 +828,36 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   read it (`carveChannels` by vertex position now). `segOf(geo)` reads the
   lattice resolution off the geometry.
 
-`__refine()` counts tiles, split cells, triangles against the plain grid
-and milliseconds.
+- **Near the truck only, stitched beyond.** A tile within `REFINE_R`
+  (1100m, `?refr=`) of the truck at build time takes its corridor; further
+  out it keeps the plain grid and the carve, and STITCHES to any refined
+  neighbour: every refined tile stores its border vertices
+  (`refinedBorders`), a plain tile built beside one takes those points into
+  its border cells' rings at the neighbour's heights (re-pinned after its
+  own carve), and a plain tile that was built first is dirtied when the
+  refined neighbour lands. A plain tile that comes into range is rebuilt on
+  the quiet path, one per visit, and one no road reaches is flagged so it
+  never rebuilds for nothing.
+
+`__refine()` counts tiles, split cells, vertices, triangles against the
+plain grid and milliseconds by phase (lines, split, heights, geometry).
+
+**`__meshAt` was shadowed.** A second binding later in the file made it the
+RAYCAST probe, which answered 1688 at Dante's View where the vertex under
+the point (and the wheels, through `meshSurfaceAt`) read -0.05. The raycast
+is `__meshRay` now; `__meshAt` is the analytic read, and `__vtxAt` shows the
+vertex. Three sessions of "the mesh probe disagrees with the mesh" were
+this line.
+
+**Measured.** Bixby, the vertex 14m uphill of the Cabrillo Highway: carved
+grid 10.3m under natural ground (a corner dragged to the bench), refined
+0.08m from it; the cut face is a 32° earth slope in the terrain and the
+fill side falls to the sea with no sheet. The road numbers do not move —
+Camps Bay seams 8 / 0 / 0.19m, steep 41 / 1, seat 6 / 1.60m, through-node
+test green — because the refinement never touches a profile. Cost, first
+cut: Camps Bay 17 tiles, 11.5k split cells, 2.2× the plain triangles, 320ms
+a tile — too much, and the reason for per-strip reach, the at-grade skip,
+vertex fans and the per-tile strip index that followed.
 
 ## The visual survey
 

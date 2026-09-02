@@ -4743,7 +4743,9 @@ function buildTerrainMesh(t: HeightTile): void {
   const SEG = terrainSeg;
   // THE CORRIDOR IS IN THE GEOMETRY where a road comes near — see
   // refineTileGeometry. A tile with no road keeps the plain grid.
-  const refined = REFINE ? refineTileGeometry(t, SEG) : null;
+  const nearTruck = Math.max(0, Math.abs(state.x - (t.xs + t.w / 2)) - t.w / 2, Math.abs(state.z - (t.zs + t.h / 2)) - t.h / 2) <= REFINE_R;
+  const corridor = REFINE && nearTruck;
+  const refined = REFINE ? refineTileGeometry(t, SEG, corridor) : null;
   const geo = refined ? refined.geo : new THREE.PlaneGeometry(t.w, t.h, SEG, SEG);
   if (!refined) { geo.rotateX(-Math.PI / 2); (geo.userData as { seg?: number }).seg = SEG; }
   const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -4780,7 +4782,15 @@ function buildTerrainMesh(t: HeightTile): void {
     }
     pos.setY(i, elev);
   }
-  if (!refined) carveCorridors(t, geo, SEG);
+  // A stitched plain tile still carves — its own roads are the old grid's —
+  // but never the vertices pinned to a refined neighbour's border (the carve
+  // only lowers, and a pinned border vertex is already where it must be, so
+  // the carve is simply run on the plain lattice and the border re-pinned).
+  if (!refined || !corridor) carveCorridors(t, geo, SEG);
+  if (refined && !corridor) {
+    const pinned = refinedBorderPins(t, geo);
+    for (const [v, y] of pinned) pos.setY(v, y);
+  }
   carveChannels(t, geo, SEG);
   // PASS TWO: colour, off the heights the carve settled on.
   const kinds = refined ? refined.kinds : null;
@@ -4842,8 +4852,37 @@ function buildTerrainMesh(t: HeightTile): void {
   // triangles at COARSE, 3.3M at FINEST, 78-94% of the pass.
   shadowy(mesh, false, true);
   mesh.position.set(cxm, 0, czm);
+  (mesh.userData as { corridor?: boolean }).corridor = corridor && !!refined;
   terrainMeshes.set(key, mesh);
   worldGroup.add(mesh);
+  // A plain neighbour built before this refined tile has no points on the
+  // shared border: rebuilt, it takes them.
+  if (refined && corridor) {
+    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+      const nk = `${t.tx + dx}/${t.ty + dy}`;
+      const nm = terrainMeshes.get(nk);
+      if (nm && !(nm.userData as { corridor?: boolean }).corridor) terrainDirty.add(nk);
+    }
+  }
+}
+/** The vertices of a plain tile that lie on a refined neighbour's border,
+ *  with the neighbour's heights — re-applied after the carve. */
+function refinedBorderPins(t: HeightTile, geo: THREE.BufferGeometry): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
+  const want = new Map<string, number>();
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const nb = refinedBorders.get(`${t.tx + dx}/${t.ty + dy}`);
+    if (!nb) continue;
+    for (let i = 0; i < nb.length; i += 3) want.set(`${Math.round(nb[i] * 1000)},${Math.round(nb[i + 1] * 1000)}`, nb[i + 2]);
+  }
+  if (!want.size) return out;
+  for (let v = 0; v < pos.count; v++) {
+    const y = want.get(`${Math.round((pos.getX(v) + cxm) * 1000)},${Math.round((pos.getZ(v) + czm) * 1000)}`);
+    if (y !== undefined) out.push([v, y]);
+  }
+  return out;
 }
 // Rebuilds are not free — 16.6k vertices, each sampling the heightfield and
 // asking the road grid whether it is in a cutting. A tile arriving used to
@@ -4954,6 +4993,32 @@ function flushTerrain(now: number): void {
     hydroDirty.delete(key);
     const t = heightTiles.get(key);
     if (t) { terrainAt = now; hydroFeed(t); return; }
+  }
+  // A TILE THAT CAME INTO RANGE. Built plain because the truck was far, it
+  // takes its corridor now — one per quiet visit, so a drive into town is a
+  // rebuild every 200ms and never a burst.
+  if (REFINE) {
+    for (const [key, mesh] of terrainMeshes) {
+      if ((mesh.userData as { corridor?: boolean }).corridor) continue;
+      const t = heightTiles.get(key);
+      if (!t) continue;
+      const d = Math.max(0, Math.abs(state.x - (t.xs + t.w / 2)) - t.w / 2, Math.abs(state.z - (t.zs + t.h / 2)) - t.h / 2);
+      if (d > REFINE_R) continue;
+      // Only tiles a road actually reaches — a plain tile with no strip near
+      // it would rebuild plain again, every visit, for ever.
+      let any = false;
+      const mm = TOE_REACH + cutL;
+      for (let cx = Math.floor((t.xs - mm) / cutL); cx <= Math.floor((t.xs + t.w + mm) / cutL) && !any; cx++) {
+        for (let cz = Math.floor((t.zs - mm) / cutL); cz <= Math.floor((t.zs + t.h + mm) / cutL); cz++) {
+          const arr = cutCells.get(`${cx},${cz}`);
+          if (arr && arr.some((s) => !s.tk && !s.tn && s.ya !== undefined)) { any = true; break; }
+        }
+      }
+      if (!any) { (mesh.userData as { corridor?: boolean }).corridor = true; continue; }
+      terrainDirty.add(key);
+      terrainAt = now;
+      return;
+    }
   }
   // Nothing dirty. This is exactly when a stranded kerb can be picked up
   // without competing with a rebuild for the frame — the quiet path is the
@@ -10163,6 +10228,14 @@ const CUT_REACH_M = 8;      // past this an unmet cut face steps up to the hill:
 const TOE_REACH = 16;       // how far out a bank or a face is looked for at all
 const DECK_GAP_T = 3;       // a crest this far above the ground is a structure: no bank
 const EARTH_T: Rgb = [0.42, 0.34, 0.26];
+/** The corridor is built into tiles this close to the truck; further out a
+ *  tile keeps the plain grid and the carve, and STITCHES to any refined
+ *  neighbour along their shared border. A tile that comes into range while
+ *  plain is rebuilt — see flushTerrain. */
+const REFINE_R = Number(new URLSearchParams(location.search).get('refr') ?? 1100);
+/** Every refined tile's border vertices, world x, z, y in threes, so a plain
+ *  neighbour can take the same points on the shared edge and no crack opens. */
+const refinedBorders = new Map<string, Float32Array>();
 /** Cost of the refinement, for `__refine`. */
 const refineCost = { tiles: 0, cells: 0, tris: 0, ms: 0, plainTris: 0, verts: 0, msLines: 0, msSplit: 0, msHeights: 0, msGeo: 0 };
 
@@ -10370,7 +10443,7 @@ function segTouchesBox(L: BreakLine, x0: number, x1: number, z0: number, z1: num
 interface RefinedTile { geo: THREE.BufferGeometry; kinds: Uint8Array; cells: number; tris: number }
 /** A terrain tile with the road corridors built into its geometry, or null
  *  where no strip comes near it (a plain grid is the right answer there). */
-function refineTileGeometry(t: HeightTile, SEG: number): RefinedTile | null {
+function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): RefinedTile | null {
   const t0 = performance.now();
   const cw = t.w / SEG, ch = t.h / SEG;
   const near = new Set<Seg>();
@@ -10378,15 +10451,29 @@ function refineTileGeometry(t: HeightTile, SEG: number): RefinedTile | null {
   for (let cx = Math.floor((t.xs - m) / cutL); cx <= Math.floor((t.xs + t.w + m) / cutL); cx++) {
     for (let cz = Math.floor((t.zs - m) / cutL); cz <= Math.floor((t.zs + t.h + m) / cutL); cz++) {
       const arr = cutCells.get(`${cx},${cz}`);
-      if (arr) for (const s of arr) if (!s.tk && !s.tn && s.ya !== undefined && s.yb !== undefined) near.add(s);
+      if (arr) for (const s of arr) if (corridor && !s.tk && !s.tn && s.ya !== undefined && s.yb !== undefined) near.add(s);
     }
   }
-  if (!near.size) return null;
+  // THE NEIGHBOURS' BORDERS. A refined tile next door has vertices on the
+  // shared edge that this tile must share too, at its heights.
+  const seeds: Array<[number, number, number]> = [];
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const nb = refinedBorders.get(`${t.tx + dx}/${t.ty + dy}`);
+    if (!nb) continue;
+    for (let i = 0; i < nb.length; i += 3) {
+      const x = nb[i], z = nb[i + 1];
+      const onX = Math.abs(x - t.xs) < 1e-3 || Math.abs(x - (t.xs + t.w)) < 1e-3;
+      const onZ = Math.abs(z - t.zs) < 1e-3 || Math.abs(z - (t.zs + t.h)) < 1e-3;
+      if (onX || onZ) seeds.push([x, z, nb[i + 2]]);
+    }
+  }
+  if (!near.size && !seeds.length) return null;
   // The break lines, and the cells each one crosses. A cell within reach of
   // any strip is `close`: its vertices take the corridor profile, the rest
   // take the ground and never pay for the lookup.
   const lines: BreakLine[] = [];
-  for (const s of near) for (const L of stripBreakLines(s)) lines.push(L);
+  const ordered = [...near].sort((a, b) => b.hw - a.hw);
+  for (const s of ordered) for (const L of stripBreakLines(s)) lines.push(L);
   const cellLines = new Map<number, number[]>();
   const close = new Uint8Array(SEG * SEG);
   for (const s of near) {
@@ -10405,10 +10492,10 @@ function refineTileGeometry(t: HeightTile, SEG: number): RefinedTile | null {
       if (!segTouchesBox(L, x0 - 1e-6, x0 + cw + 1e-6, z0 - 1e-6, z0 + ch + 1e-6)) continue;
       const k = iz * SEG + ix;
       const arr = cellLines.get(k);
-      if (arr) { if (arr.length < 24) arr.push(li); } else cellLines.set(k, [li]);
+      if (arr) { if (arr.length < 16) arr.push(li); } else cellLines.set(k, [li]);
     }
   }
-  if (!cellLines.size) return null;
+  if (!cellLines.size && !seeds.length) return null;
   const t1 = performance.now();
   // The strips within reach of each cell, indexed once per tile, so the
   // height of a vertex asks a short list rather than the world's raster.
@@ -10436,6 +10523,7 @@ function refineTileGeometry(t: HeightTile, SEG: number): RefinedTile | null {
   };
   for (let iz = 0; iz <= SEG; iz++) for (let ix = 0; ix <= SEG; ix++) vtx(t.xs + ix * cw, t.zs + iz * ch);
   const corner = (ix: number, iz: number): number => iz * (SEG + 1) + ix;
+  const pinned = new Map<number, number>();                 // vertex → the neighbour's height
   // Extra points on cell edges, by edge, so a plain neighbour can pick them up.
   const edgePts = new Map<string, number[]>();
   const noteEdge = (ix: number, iz: number, x: number, z: number, x0: number, z0: number, v: number): void => {
@@ -10449,6 +10537,19 @@ function refineTileGeometry(t: HeightTile, SEG: number): RefinedTile | null {
     const arr = edgePts.get(key);
     if (arr) { if (!arr.includes(v)) arr.push(v); } else edgePts.set(key, [v]);
   };
+  for (const [x, z, y] of seeds) {
+    // Snapped to the lattice along the border, exactly as the neighbour's
+    // own splits were, so the key matches; a lattice corner is pinned too.
+    const v = vtx(x, z);
+    pinned.set(v, y);
+    const ix = clamp(Math.round((x - t.xs) / cw), 0, SEG), iz = clamp(Math.round((z - t.zs) / ch), 0, SEG);
+    const isCorner = Math.abs(x - (t.xs + ix * cw)) < 1e-3 && Math.abs(z - (t.zs + iz * ch)) < 1e-3;
+    if (isCorner) continue;
+    if (Math.abs(x - t.xs) < 1e-3) { const jz = clamp(Math.floor((z - t.zs) / ch), 0, SEG - 1); const k = `v0_${jz}`; (edgePts.get(k) ?? edgePts.set(k, []).get(k) as number[]).push(v); }
+    else if (Math.abs(x - (t.xs + t.w)) < 1e-3) { const jz = clamp(Math.floor((z - t.zs) / ch), 0, SEG - 1); const k = `v${SEG}_${jz}`; (edgePts.get(k) ?? edgePts.set(k, []).get(k) as number[]).push(v); }
+    else if (Math.abs(z - t.zs) < 1e-3) { const jx = clamp(Math.floor((x - t.xs) / cw), 0, SEG - 1); const k = `h0_${jx}`; (edgePts.get(k) ?? edgePts.set(k, []).get(k) as number[]).push(v); }
+    else if (Math.abs(z - (t.zs + t.h)) < 1e-3) { const jx = clamp(Math.floor((x - t.xs) / cw), 0, SEG - 1); const k = `h${SEG}_${jx}`; (edgePts.get(k) ?? edgePts.set(k, []).get(k) as number[]).push(v); }
+  }
   const TA: number[] = [], TB: number[] = [], TC: number[] = [], TK: number[] = [];
   const tri = (a: number, b: number, c: number, k: number): void => {
     // Wound so the normal points up: (b-a) x (c-a) has a positive y.
@@ -10536,11 +10637,23 @@ function refineTileGeometry(t: HeightTile, SEG: number): RefinedTile | null {
     let N = sampleHeight(x, z);
     if (sampleCover(x, z) === COVER.water && N <= seaLocal + 2) N = Math.min(N, seaLocal - SEA_BED);
     let h = N, k = 0;
-    const cands = candsAt(x, z);
-    if (cands) { const c = corridorH(x, z, N, cands); h = c.h; k = c.k; }
+    const pin = pinned.get(i);
+    if (pin !== undefined) h = pin;
+    else {
+      const cands = candsAt(x, z);
+      if (cands) { const c = corridorH(x, z, N, cands); h = c.h; k = c.k; }
+    }
     pos[i * 3] = x - cxm; pos[i * 3 + 1] = h; pos[i * 3 + 2] = z - czm;
     uv[i * 2] = 0.5 + (x - cxm) / t.w; uv[i * 2 + 1] = 0.5 - (z - czm) / t.h;
     kinds[i] = k;
+  }
+  {
+    const b: number[] = [];
+    for (let i = 0; i < n; i++) {
+      const x = px[i], z = pz[i];
+      if (Math.abs(x - t.xs) < 1e-3 || Math.abs(x - (t.xs + t.w)) < 1e-3 || Math.abs(z - t.zs) < 1e-3 || Math.abs(z - (t.zs + t.h)) < 1e-3) b.push(x, z, pos[i * 3 + 1]);
+    }
+    refinedBorders.set(`${t.tx}/${t.ty}`, Float32Array.from(b));
   }
   const t3 = performance.now();
   const geo = new THREE.BufferGeometry();
@@ -21764,7 +21877,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     for (const t of terrainNormals.values()) t.dispose();
     terrainMats.clear(); terrainNormals.clear();
     coverTiles.clear(); coverAsked.clear(); coverWaterMemo.clear();
-    cutCells.clear(); cutSet.clear(); carveLog.clear();
+    cutCells.clear(); cutSet.clear(); carveLog.clear(); refinedBorders.clear();
     preRoadGrid.clear(); crumbDefer.clear();
     osmLoaded.clear(); osmActive.clear(); osmFailedAt.clear(); osmPinned.clear();
     osmCorridor.clear(); osmDone.clear(); seenWays.clear();
@@ -24891,7 +25004,13 @@ function meshHeightAt(x: number, z: number): number | null {
   const hits = meshRay.intersectObjects([...terrainMeshes.values()], false);
   return hits.length ? +(4000 - hits[0].distance).toFixed(2) : null;
 }
-(window as unknown as { __meshAt?: object }).__meshAt = meshHeightAt;
+// `__meshRay`, not `__meshAt`: this line used to bind `__meshAt` a second
+// time and silently shadowed the analytic probe above — the one that reads
+// what the wheels read — with a raycast that answered 1688 at Dante's View
+// where the vertex under the point read -0.05. Measure the mesh with
+// `__meshAt` (meshSurfaceAt) or `__vtxAt`; this is the raycast, for what a
+// raycast is for.
+(window as unknown as { __meshRay?: object }).__meshRay = meshHeightAt;
 /** The sky's whole case file: where the sun is, what hour the world thinks it
  *  is, and whether the weather is a measurement or the synthetic chain. */
 (window as unknown as { __sky?: object }).__sky = (): object => ({
