@@ -145,6 +145,7 @@ Nothing here is fast. Budget for it.
 | `node devtools/boot.mjs` | the world boots and probes exist | ~1min |
 | `node devtools/lab.test.mjs` | every lab opens, dials persist and travel | ~6min |
 | `node devtools/fixture-world.test.mjs` | the whole mesh pipeline over authored ground | ~7min |
+| `node devtools/through-node.test.mjs` | junction pins survive the per-way build, on two fixtures | ~3min, no-draw |
 | `node client/clip.test.mjs` | tile clipping, incl. the corner nicks | instant |
 | `node devtools/dock-sky.test.mjs` | the chart dock's sky is the dock's own | ~3min |
 | `node devtools/fixture-stream.test.mjs` | a fixture streams its box and touches no network | ~3min |
@@ -216,6 +217,12 @@ Other harness facts learned the hard way:
   rather than failing. The dials panel mirrors COPY output to
   `root.dataset.lastCopy` for exactly this reason. A test that read the
   clipboard once stalled for ten minutes.
+- **Measure with `?nodraw=1`.** Headless Chromium paints through SwiftShader
+  at three or four frames a second and the world build is paced by the frame
+  loop, so a fixture that touches no network still took three minutes to
+  settle — painting frames nobody looks at. `NODRAW` skips only the draws:
+  Camps Bay settles at t+21s instead of t+180s with every probe reading the
+  same. A screenshot run leaves it off, by definition.
 - Screenshots land in `/tmp/drive-tools/` (`$DRIVE_WORK`).
 - A bundle built for a test must be written **inside the repo** (e.g.
   `node_modules/.cache`) — `--external:three` resolves from where the file
@@ -559,6 +566,154 @@ approaches, and OSM carries no elevation. The lift — the chord rises so every
 station clears the highest lower-layer deck beneath it by `BRIDGE_CLEAR`, read
 from the planner's hints; higher layers build first so the approaches weld UP
 to the portals — is its own change, `__lifts` reports it.
+
+## The per-way build reads the chain — and ten ways it did not
+
+The chain planner is the only thing in the pipeline that knows about more than
+one road at a time. Everything the per-way build does with a junction rests on
+reading the planner's answer back correctly, and ten separate mechanisms were
+quietly failing to. Each was found with an instrument, on the Camps Bay and
+Vélizy captures, and each fix was measured on a pinned control (see the harness
+note below):
+
+- **`ruleGrade` floored every span at ONE METRE.** `densifyPts` rounds a bend
+  with `r = 0.45 × leg`, so between two consecutive bends it leaves a straight
+  of `0.1 × leg` — 0.53m on The Cheviots Road — and under a 1m floor that
+  station may rise a full metre's worth of grade. The fixture's worst seam
+  (0.53m) and its 100% segment were that one station. The floor is 0.1m now.
+- **`hintAt` was the nearest chain STATION within 2.5m.** A per-way station on
+  a straight leg found one only when the chain's densify was in phase with the
+  way's own — which it is exactly when the chain begins where the way begins.
+  Where the chain has rounded a corner, or started three ways back, its
+  stations along a 12m-stepped leg sit anywhere up to 6m from the way's and the
+  way loses its hints on a coin toss: an 82m two-node piece of Shanklin
+  Crescent came out under the 80% hint gate, fell to the single-anchor branch,
+  was held LEVEL at the deck its far end had found, and its hinted neighbour
+  welded 10.6m up to meet it. Hints carry their chain and index now, and
+  `hintAt` projects onto the segment to the next station as well: the deck
+  between two stations IS the straight line the ribbon draws.
+- **A junction was "two hints within 0.3m".** Two chains only both have a
+  station on the node when neither rounded a bend there; the through road's
+  arc puts its stations `r(1 − cos(turn/2))` off the node — 0.3m at a
+  30-degree bend of a 9m arc, 2.6m at a right angle — so the fifteen
+  through-node stations the grade line was still moving were all at bends.
+  `chainsNear` counts DISTINCT chains at the planner's own pin radius, by the
+  same point-or-segment distance `hintAt` reads.
+- **The flyover lift was a step at the portal.** Raising the chord as one
+  piece works when the approach builds after the bridge and welds up to it,
+  and cannot work when the approach built first, at grade, from another tile —
+  measured at Vélizy with the layer, the defer and the build order all in: one
+  portal still 5.9m above the approach it was anchored to. The deck now climbs
+  from the portal at the ruling grade and is at clearance by the crossing (the
+  two-pass cone); the portals rise only by what the ramp cannot absorb, and
+  `__lifts` reports that residual per portal.
+
+- **The host warp faded by STATION, after the last logged stage.** Once the
+  ends are welded, a way's last stations are eased onto the host road's plane
+  with a weight of `1 − k/5` — written for 12m stations and read as "about
+  sixty metres". On a bend the arcs put stations 2.4m apart with the 0.1×leg
+  straight between them, so a fifth of the whole disagreement with the host
+  landed on the half-metre station: an 86% segment that `__fragwhy` showed at
+  19% one stage earlier. The fade runs over sixty metres of ground now and is
+  logged as `7-warped`. Anything that moves the profile after the last
+  `stage()` call is invisible to every instrument; log it or do not add it.
+
+- **And the same warp faded THROUGH junction pins.** Where Eldon Lane crosses
+  Shanklin Crescent 22m short of Eldon Lane's end, both chains agreed at
+  12.765, every logged stage left the pin within 16cm, and the built deck
+  stood 1.02m off: the fade had reached back through the held station toward
+  the host plane at the end. It stops at the first held station now — the
+  rule the weld spread already follows.
+
+- **A portal's hint was on the bridge's layer only.** The shared node is one
+  chain station; once it carried the bridge's layer, the approach — asking for
+  its own layer at its own end — found nothing there, and at Vélizy the
+  approach's deck was absent at the N 118 portal after the world settled. The
+  station's value is the chain's, one profile for both members, so it is
+  written once more under the neighbouring station's layer wherever the layer
+  changes; `hintAbove` still sees the bridge's layer there, so the approach
+  still waits for the portal.
+
+- **The tunnel/bridge chord wrote through pins.** Portal to portal, every
+  station between, held junction stations included — on Eldon Lane the one
+  stage that moved a pin both chains agreed on (12.765 → 12.343) while every
+  stage that knows about `held` left it alone. The chord runs between
+  consecutive pins now.
+- **The warp's plane was extrapolated sixty metres and believed.** Three
+  samples on a curving host, extended along the way, stood 1.8m under Lower
+  Kloof Road's through-stations — stations that agreed with their own chain to
+  the centimetre — and the fade pulled them down to it: a 139% segment on a
+  road whose end had welded to the host within 4cm. No station moves further
+  than the residual measured AT THE NODE now; the plane only shapes the fade.
+- **Equal-width roads cropped each other.** A tie defers to whichever is
+  built, but the pre-grid answers for a host that has NOT built, so two equal
+  roads meeting in one batch each found the other and both cropped: where
+  Blair Road turns into Shanklin Crescent, `__cropwhy` logged `cropped` from
+  both ends of the same node and the corner was drawn by nobody — the hole in
+  the carriageway reported from the seat. The first to build leaves a tie
+  alone, and nothing crops against a host that ENDS at the same node (a
+  corner is not a T).
+
+**Measured, same fixture, same three-signal gate**, from the chain of pinned
+runs (each commit's own control was the commit before it):
+
+| Camps Bay | before | after all ten |
+|---|---|---|
+| node steps >10cm / >30cm / worst | 26 / 1 / 0.53m | 8 / 0 / 0.19m |
+| through-node pins left >10cm / worst | 24 / 1.52m | 5 / 0.40m |
+| ends seated >30cm off hint / worst | 26 / 10.67m | 6 / 1.60m |
+| segments over 20% / over 50% | 106 / 7 | 41 / 1 |
+
+Not every step helped on its own: reading hints along the chain uncovered a
+1.02m step at a pin that the warp had been hiding, and the arc-length fade
+made the warp reach further before it learned to stop at a pin. Attribute per
+commit, on a pinned control, or the middle of a sequence reads as a regression.
+
+`__fragwhy(x, z, r)` is the instrument that found most of these: every fragment
+with a station within r, its branch, its anchors, its hint coverage, and each
+such station after every stage. `__stagewhy` could say which stage moved a
+PIN; it could not say why a segment eight metres from any pin stood at 100%.
+
+**A control is the revision's WHOLE client.** `openDrive({rev})` used to write
+the old `main.ts` beside the CURRENT siblings, so a control built that way
+measured the old `main.ts` over the new `roadsolve.ts` — no control at all once
+the change under test lives in a sibling, which every one of the four above
+does. It unpacks the revision's entire `client/` under `node_modules/.cache/rev`
+now. A measurement chain that reads the working tree at each run's start is
+not pinned either: pass `rev` explicitly and queue the runs, or the third run
+measures whatever you were editing when it started.
+
+**Two shell habits that cost a run each this session.** `kill` by pattern from
+inside a compound command matches the command itself when the pattern is in
+its own text (`pgrep -f "until grep"` found the shell that was running it, and
+the exit code 144 was the shell dying). And a measurement queued with
+`(until …; do sleep; done; node run.mjs) &` reads `run.mjs` and the working
+tree when the loop ENDS, not when it was queued.
+
+**A Paris run at 130 polls is not settled, and said nothing.** `after.mjs`
+capped its three-signal gate at 130 × 3s; Camps Bay settles at ~170s, the
+paris-south capture (16 tiles, 1,078 highways) does not settle in 390s, and the
+script printed a `settled` line only on success — so three Vélizy
+"measurements" were of three different partial worlds (5,608 / 5,255 built
+segments, 208 / 198 chains) and the comparison between them was noise dressed
+as a result. The cap is `SETTLE_POLLS` now and an unsettled world is named as
+such with its counts. Look for the `settled` line before reading any number
+under it.
+
+**The chase camera under a flyover is inside its slab.** A structure's beam is
+`1.15m + 0.085 × daylight` deep (1.6m under a 5.5m deck), so the soffit sits
+around 3.9m up and the chase camera, 3-4m above the car, renders the slab from
+inside: a black band across the frame and a flat tinted wall. It looks like a
+wall to the ground; it is not one. Judge clearance from `__joinAt` decks or a
+top view, never from the chase frame under a bridge.
+
+**Vélizy, settled, on the deployed lineage (`c050297`, t+654s, 9,318 joins):**
+39 node steps over 10cm, 17 over 30cm, worst 1.20m; 67 segments over 20%.
+The portal defer works there: four approaches built after their bridges and
+welded up 2.8–4.4m onto the lifted portals, and the one cross-tile approach
+that built first has the bridge eased down onto it by the warp (a 2.08m
+residual, under `GRADE_SEP`). Any Paris number without a `settled` line
+beside it is from a partial world — see above.
 
 ## The labs
 

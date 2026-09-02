@@ -67,7 +67,7 @@ const WORLDS = [
 ];
 for (const w of WORLDS) {
   const d = await openDrive({
-    spot: `fixture=${w.id}&cam=chase&time=NOON&cprobe=1`,
+    spot: `fixture=${w.id}&cam=chase&time=NOON&cprobe=1&nodraw=1`,
     tag: `through-${w.id}`, settle: 9000, bootTimeout: 150000,
   });
   const q = async (fn, ...a) => d.page.evaluate(fn, ...a);
