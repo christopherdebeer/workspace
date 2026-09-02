@@ -10878,7 +10878,9 @@ const GRADE_SEP = 2.6;
  *  Real road bridges hold ~5m; this is the deck-to-deck figure, so the drawn
  *  soffit (apron depth below) sits a little under that. */
 const BRIDGE_CLEAR = 5.5;
-interface LiftRec { x: number; z: number; nm?: string; fid: number; layer: number; m: number; n: number }
+/** `m` is the most any station rose; `p0`/`p1` are what the portals rose —
+ *  zero on a bridge long enough to ramp to its clearance. */
+interface LiftRec { x: number; z: number; nm?: string; fid: number; layer: number; m: number; n: number; p0: number; p1: number }
 const liftLog: LiftRec[] = [];
 const RAIL_H = 1;      // parapet height above the kerb it stands on
 // Off only from a probe (`?nofill=1`), to see the ditch the fill closes.
@@ -11516,13 +11518,26 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // OSM carries no elevation; `layer` is its whole statement about the
     // vertical, and it was being kept and never read.
     //
-    // So the chord rises, as one piece, by the least amount that puts every
-    // station BRIDGE_CLEAR above the highest lower-layer deck beneath it. The
-    // portals rise with it; the approaches build after (higher layer first,
-    // see renderWays) and weld up to them, ramping down under the ruling
-    // grade — a short approach ramps over grade but continuous, which is the
-    // weld's own rule. Bridges over nothing (a river, a railway not in the
-    // road set) find no deck and keep their chord.
+    // So the deck rises to put every station BRIDGE_CLEAR above the highest
+    // lower-layer deck beneath it. Bridges over nothing (a river, a railway
+    // not in the road set) find no deck and keep their chord.
+    //
+    // THE LIFT IS A RAMP, NOT A STEP. The first version raised the chord as
+    // one piece, portals included, and left the portals to the weld — which
+    // works when the approach builds after the bridge and welds up to it,
+    // and cannot work when the approach built FIRST, at grade, from another
+    // tile: measured at Vélizy after the layer, the defer and the build
+    // order had all shipped, one portal still stood 5.9m above the approach
+    // it was anchored to (fid531 at 9.39 over fid104 at 3.49), because the
+    // approach had built long before the bridge's tile was planned and
+    // nothing could have told it to wait. A real flyover does not step at
+    // its abutment either: the deck climbs from the portal at the ruling
+    // grade and is at its clearance by the time it crosses. So the profile
+    // is the lowest one that keeps the chord, keeps every crossing station
+    // at its clearance, and descends from those at no more than the class
+    // grade — the standard two-pass cone. The portals rise only by what the
+    // ramp cannot absorb: nothing, on a bridge long enough to climb; the
+    // residual, on a short span, where it is still handed to the weld below.
     if (mode === 'bridge' && layer > 0 && runs.length) {
       let need = 0;
       // NOT AT THE PORTALS. The nearest lower-layer deck to a portal station is
@@ -11533,12 +11548,23 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // crossing nothing. A crossed road passes mid-span, so the scan starts
       // one station in from each end; a two-station bridge (a culvert) has no
       // span to scan and keeps its chord, which is right for a culvert.
-      for (const [a, b] of runs) for (let i = a + 1; i <= b - 1; i++) {
-        const below = solver.deckBelow(dense[i][0], dense[i][1], layer, width / 2 + 1.5);
-        if (below !== null) need = Math.max(need, below + BRIDGE_CLEAR - prof[i]);
+      const chord = prof.slice();
+      for (const [a, b] of runs) {
+        for (let i = a + 1; i <= b - 1; i++) {
+          const below = solver.deckBelow(dense[i][0], dense[i][1], layer, width / 2 + 1.5);
+          if (below !== null && below + BRIDGE_CLEAR > prof[i]) prof[i] = below + BRIDGE_CLEAR;
+        }
+        for (let i = a + 1; i <= b; i++) {
+          const d = Math.max(0.1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
+          prof[i] = Math.max(prof[i], prof[i - 1] - gLim * d);
+        }
+        for (let i = b - 1; i >= a; i--) {
+          const d = Math.max(0.1, Math.hypot(dense[i + 1][0] - dense[i][0], dense[i + 1][1] - dense[i][1]));
+          prof[i] = Math.max(prof[i], prof[i + 1] - gLim * d);
+        }
+        for (let i = a; i <= b; i++) need = Math.max(need, prof[i] - chord[i]);
       }
       if (need > 0) {
-        for (const [a, b] of runs) for (let i = a; i <= b; i++) prof[i] += need;
         // AND IT DOES NOT WELD DOWN. An anchor more than a metre under a lifted
         // portal is an approach that built first, at grade; welding to it hands
         // back the floor. The approach welds up to this portal instead — on its
@@ -11548,7 +11574,8 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         if (weldP1 !== null && prof[n - 1] - weldP1 > 1) weldP1 = null;
         if (liftLog.length < 500) {
           liftLog.push({ x: +dense[0][0].toFixed(1), z: +dense[0][1].toFixed(1), nm: name, fid, layer,
-            m: +need.toFixed(2), n: runs.reduce((c, [a, b]) => c + (b - a + 1), 0) });
+            m: +need.toFixed(2), n: runs.reduce((c, [a, b]) => c + (b - a + 1), 0),
+            p0: +(prof[0] - chord[0]).toFixed(2), p1: +(prof[n - 1] - chord[n - 1]).toFixed(2) });
         }
       }
     }
