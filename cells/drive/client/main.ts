@@ -10468,6 +10468,18 @@ const joinLog: JoinRec[] = [];
 interface StageRec { x: number; z: number; nm?: string; fid: number; i: number; n: number; pb: number;
   hint: number | null; hintsHere: number; st: Record<string, number> }
 const stageLog: StageRec[] = [];
+/**
+ * EVERY station of EVERY fragment, after every stage — the through-node log
+ * above answers "which stage moved the pin", and could not answer the next
+ * question, which was why a segment eight metres from any pin stood at 100%.
+ * A whole fixture is a few thousand stations by eight stages; the cap is on
+ * stations, and a live world past it simply stops recording.
+ */
+interface FragRec { fid: number; nm?: string; pb: number; n: number; layer: number; hinted: boolean; hintN: number;
+  a0: number | null; a1: number | null; xs: number[]; zs: number[]; hint: Array<number | null>; st: Record<string, number[]> }
+const fragLog = new Map<number, FragRec>();
+let fragStations = 0;
+const FRAG_CAP = 60000;
 const cropLog: Array<{ x: number; z: number; nm?: string; end: number; why: string;
   out?: number; align?: number; host?: string; sR?: number; sL?: number; skip?: number }> = [];
 /** A way-end that found NO host when it built — the host may simply not have
@@ -11339,7 +11351,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
    *  here, the neighbour ramps to the end instead, as it does to a pin. */
   const heldArr: Array<number | null> | undefined = (jn.length || seatHold[0] || seatHold[n - 1])
     ? dense.map((_, i) => (held[i] || seatHold[i] ? 1 : null)) : undefined;
+  const frag: FragRec | null = fragStations + n <= FRAG_CAP
+    ? { fid, nm: name_, pb: 0, n, layer, hinted, hintN: hintEl.filter((h) => h !== null).length, a0: anchor0, a1: anchor1,
+      xs: dense.map((p) => +p[0].toFixed(2)), zs: dense.map((p) => +p[1].toFixed(2)),
+      hint: hintEl.length ? hintEl.map((h) => (h === null ? null : +h.toFixed(3))) : dense.map(() => null), st: {} }
+    : null;
+  if (frag) { fragStations += n; fragLog.set(fid, frag); }
   const stage = (name: string, arr: ArrayLike<number>): void => {
+    if (frag) frag.st[name] = Array.from({ length: n }, (_, i) => +arr[i].toFixed(3));
     if (stageLog.length >= 3000) return;
     for (const i of jn) {
       let r = stageLog.find((e) => e.fid === fid && e.i === i);
@@ -11446,6 +11465,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const gLim = (maxGrade > 0 ? maxGrade : 0.15) * 1.2;
   stage('1-branch', alg);
   for (const i of jn) { const r = stageLog.find((e) => e.fid === fid && e.i === i); if (r) r.pb = pbranch; }
+  if (frag) frag.pb = pbranch;
   if (mode !== 'none' && n > 1) {
     alg = alg.slice();   // `alg` may still BE `elev`; the raw samples are read again below
     ruleGrade(dense, alg, gLim, heldArr);
@@ -21744,6 +21764,28 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
 (window as unknown as { __stagewhy?: object }).__stagewhy = (x?: number, z?: number, r = 8): object[] => {
   const px = x ?? state.x, pz = z ?? state.z;
   return stageLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r);
+};
+/** Every FRAGMENT with a station within r of a point: its branch, its anchors,
+ *  its hint coverage, and each such station after every stage — the whole
+ *  per-way build, station by station, for a segment that is not a pin. */
+(window as unknown as { __fragwhy?: object }).__fragwhy = (x?: number, z?: number, r = 6): object[] => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const out: object[] = [];
+  for (const f of fragLog.values()) {
+    const stations: object[] = [];
+    for (let i = 0; i < f.n; i++) {
+      const d = Math.hypot(f.xs[i] - px, f.zs[i] - pz);
+      if (d > r) continue;
+      const st: Record<string, number> = {};
+      for (const k of Object.keys(f.st)) st[k] = f.st[k][i];
+      const sp = i > 0 ? +Math.hypot(f.xs[i] - f.xs[i - 1], f.zs[i] - f.zs[i - 1]).toFixed(2) : 0;
+      stations.push({ i, d: +d.toFixed(2), sp, hint: f.hint[i], st });
+    }
+    if (stations.length) {
+      out.push({ fid: f.fid, nm: f.nm, pb: f.pb, n: f.n, layer: f.layer, hinted: f.hinted, hintN: f.hintN, a0: f.a0, a1: f.a1, stations });
+    }
+  }
+  return out;
 };
 /** Every bridge the lift raised this session: where, which, by how much. */
 (window as unknown as { __lifts?: object }).__lifts = (x?: number, z?: number, r = 1e9): object[] => {
