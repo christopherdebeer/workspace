@@ -194,6 +194,19 @@ export class RoadSolver {
       const e: [number, number, number, number, number, number] = [dense[i][0], dense[i][1], alg[i], ls[i], id, i];
       const arr = this.hints.get(k);
       if (arr) arr.push(e); else this.hints.set(k, [e]);
+      // A PORTAL IS ON BOTH LAYERS. The shared node is one station and
+      // carries the bridge's layer, so the approach — asking for its own
+      // layer at its own end — found nothing there: its last station had no
+      // hint, and at Vélizy the approach's deck was simply absent at the N 118
+      // portal after the world settled. The station's value is the chain's,
+      // one profile for both members, so it is written once more under the
+      // neighbouring station's layer wherever the layer changes.
+      for (const j of [i - 1, i + 1]) {
+        if (j < 0 || j >= dense.length || ls[j] === ls[i]) continue;
+        const twin: [number, number, number, number, number, number] = [dense[i][0], dense[i][1], alg[i], ls[j], id, i];
+        const a2 = this.hints.get(k);
+        if (a2) a2.push(twin); else this.hints.set(k, [twin]);
+      }
     }
   }
 
