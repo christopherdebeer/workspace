@@ -5248,8 +5248,8 @@ const pathTex = canvasTex(64, 1, 1, 102, (c, s, r) => {
 // coarse and high-contrast, because the quantiser eats anything finer; the
 // tint that says shoulder / earth / grass rides on the vertices.
 const batterTex = canvasTex(64, 1, 1, 123, (c, s, r) => {
-  c.fillStyle = '#8a8070'; c.fillRect(0, 0, s, s);
-  speckle(c, s, r, ['rgba(40,32,22,0.5)', 'rgba(230,220,196,0.22)'], 220, 1.6);
+  c.fillStyle = '#726a5c'; c.fillRect(0, 0, s, s);
+  speckle(c, s, r, ['rgba(40,32,22,0.5)', 'rgba(230,220,196,0.2)'], 220, 1.6);
   for (let i = 0; i < 26; i++) {
     const x = r() * s, y = r() * s, w = 1.5 + r() * 3.5, h = 1 + r() * 2.5;
     c.fillStyle = `rgba(${150 + r() * 70 | 0},${140 + r() * 60 | 0},${118 + r() * 50 | 0},0.6)`;
@@ -10882,9 +10882,15 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       // toe a later carve can move out from under. A vertex on a cut face,
       // or roofing the bench along the natural surface, is pinned.
       pts.push([d, p0, p1, on0 && g0 >= N0 - 0.1 ? 1 : 0, on1 && g1 >= N1 - 0.1 ? 1 : 0]);
+      // EARTH ONLY WHERE THE GROUND WAS DUG. A fill bank is a grassed slope
+      // within a season, so it wears the terrain's own colour like the ground
+      // it lands on; a cut face — clamped from above, the hill cut back — is
+      // the one place fresh earth shows. Tinted all as earth, the inside of
+      // the Coast Road hairpin at Big Sur was one pale tan sheet.
+      const cut0 = !on0 && N0 > hi0, cut1 = !on1 && N1 > hi1;
       tints.push([
-        d <= VERGE ? SHOULDER : wall0 ? ROCK : on0 ? tintAt(qx0, qz0, N0) : EARTH,
-        d <= VERGE ? SHOULDER : wall1 ? ROCK : on1 ? tintAt(qx1, qz1, N1) : EARTH,
+        d <= VERGE ? SHOULDER : wall0 ? ROCK : cut0 ? EARTH : tintAt(qx0, qz0, N0),
+        d <= VERGE ? SHOULDER : wall1 ? ROCK : cut1 ? EARTH : tintAt(qx1, qz1, N1),
       ]);
       // Met: the strip lies on the natural ground at both ends AND the mesh is
       // back up to it — a fill toe on the ground, or a cut face past the
