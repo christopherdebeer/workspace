@@ -357,6 +357,15 @@ export class RoadSolver {
         const L = layerOf(m.tags);
         for (const pt of m.pts) {
           if (!all.length || Math.hypot(pt[0] - all[all.length - 1][0], pt[1] - all[all.length - 1][1]) > 0.5) { all.push(pt); allL.push(L); }
+          // A PORTAL BELONGS TO THE BRIDGE. The point two members share is kept
+          // once, and it was keeping the first member's layer — the approach's
+          // — so the hint at the node sat on layer 0, hintAbove found nothing
+          // above it, and the approach never waited: measured at Vélizy, every
+          // lifted bridge standing 5.9m over its own approach. The shared point
+          // takes the higher of the two layers; the approach's own end then
+          // reads no hint of its own there and holds its next station's, which
+          // the interpolation already does for an unhinted end.
+          else if (L > allL[allL.length - 1]) allL[allL.length - 1] = L;
         }
       }
       const dense = densifyPts(all);
