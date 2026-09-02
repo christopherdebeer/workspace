@@ -787,6 +787,50 @@ sets `tn` on those segments: `rasterizeCut` returns, no tube (a tube needs
 `tunnel=*`). It is the right rule for a road the solver put under a hill —
 the alternative is a permanent crater — and `__buried(r)` counts what it hid.
 
+## The corridor is in the terrain
+
+The structural job every batter pass was standing in for. A terrain cell is
+8-15m and a road's cross-section is metres wide, so while the corridor was
+something the carve did to a regular grid, every kerb sample dragged whole
+cell corners down and left a bench — a flat shelf a cell wide beside every
+road — which the batter strip then hid with a sheet, three times over.
+
+Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
+
+- **Break lines.** Every strip contributes its crest (the shoulder's outer
+  edge, `hw + 0.6`) and its toe on both sides; the toe is where the batter's
+  wedge — a face at `CUTF_K` up to the ground, a bank at `BANK_K` down to it
+  — meets the field (`toeOut`, cached on the strip as `bl`). A crest more
+  than `DECK_GAP_T` above the ground is a structure and gets no toe.
+- **Cells split along them.** Each cell a line crosses is a convex polygon
+  split by the line (`splitPoly`), and every polygon is fanned from its
+  CENTROID — a fan from a vertex leaves the collinear points on that vertex's
+  own sides out of every triangle, which is a T-junction. Points landing on
+  a cell boundary are recomputed from the line and the boundary coordinate
+  so the neighbour, split by the same line from different pieces, gets the
+  same point to the bit; a millimetre key then makes it one vertex. A plain
+  cell that shares an edge with a split one fans its augmented ring from
+  its centre. No T-junctions inside a tile; across tiles the same lines
+  produce the same edge points.
+- **One profile for every height.** `corridorH(x, z, N)`: under a
+  carriageway or its shoulder the deck floor (dug to where the ground stands
+  above, raised to where it falls away so an embankment is solid — unless
+  the road is a structure or the ground is water); outside it the wedge,
+  and the ground past the toe. The carve is skipped on a refined tile: the
+  surface is the profile by construction. Kinds ride with the vertices — a
+  cut face is tinted toward earth and shaded by its own slope, a bank by
+  its own; the batter strip, targeting `groundAt`, then finds the ground at
+  the crest and draws nothing.
+- **Lookups stopped assuming the grid.** `cellTrisOf(geo, SEG)` is a
+  per-geometry table of any number of triangles per lattice cell, built at
+  emission time for a refined tile and from the index for a plain one;
+  `meshSurfaceAt`, `meshTriAt`, the carve's `enforce` and `carveChannels`
+  read it (`carveChannels` by vertex position now). `segOf(geo)` reads the
+  lattice resolution off the geometry.
+
+`__refine()` counts tiles, split cells, triangles against the plain grid
+and milliseconds.
+
 ## The visual survey
 
 `scratch: survey.mjs` in the session, worth keeping as a devtool: six
