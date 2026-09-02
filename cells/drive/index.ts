@@ -209,6 +209,47 @@ function webBytes(file: string): Buffer {
 /** The text ones — the worker and the manifest — decoded at the last moment. */
 const webText = (file: string): string => webBytes(file).toString('utf8');
 
+/**
+ * ── A CAPTURED FIXTURE, OVER THE WIRE ──
+ *
+ * These used to be `import world-bixby.json` in the client, which esbuild
+ * inlines: six captures came to 2.37MB against a 1.51MB bundle, so they would
+ * have been sixty per cent of app.js on a game whose first tenet is mobile
+ * first. They live in `static/fixtures/` now and are fetched only when a URL
+ * actually names one.
+ *
+ * The name is matched against a strict pattern rather than joined straight onto
+ * a path: `readFileSync(join(dir, req))` with an unchecked name is how a static
+ * route becomes a file-read primitive, and `..` survives a lot of naive
+ * checking. Only `world-<lowercase, digits, dashes>.json` can address anything
+ * here, and a name that does not match never reaches the filesystem.
+ *
+ * Immutable, because a capture never changes in place: a new capture of the
+ * same place is still the same file, but its content only moves when someone
+ * re-runs the tool and deploys, and the bundle stamp changes with it.
+ */
+const FIXTURE_NAME = /^world-[a-z0-9-]+\.json$/;
+
+function serveFixture(path: string) {
+  const name = path.slice('/fixtures/'.length);
+  if (!FIXTURE_NAME.test(name)) return null;
+  let body: Buffer;
+  try {
+    body = webBytes(join('fixtures', name));
+  } catch {
+    return null;                       // absent is a 404, as for any other asset
+  }
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'public, max-age=86400',
+    },
+    body: body.toString('base64'),
+    isBase64Encoded: true,
+  };
+}
+
 function serveWebAsset(path: string) {
   const asset = WEB_ASSETS[path];
   if (!asset) return null;
@@ -1664,6 +1705,10 @@ export const handler = async (event: {
     if (path === '/sw.js') return serveServiceWorker();
     const asset = serveWebAsset(path);
     if (asset) return asset;
+    if (path.startsWith('/fixtures/')) {
+      const fx = serveFixture(path);
+      if (fx) return fx;
+    }
     if (path === '/app.js') {
       return respond(200, 'application/javascript; charset=utf-8', readFileSync(join(__dirname, 'app.js'), 'utf8'), {
         'cache-control': 'public, max-age=60',

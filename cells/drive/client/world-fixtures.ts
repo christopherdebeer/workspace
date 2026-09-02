@@ -31,11 +31,6 @@
  */
 
 import { clipToBounds } from './clip';
-import bixby from './fixtures/world-bixby.json';
-import carmelA from './fixtures/world-carmel-a.json';
-import carmelB from './fixtures/world-carmel-b.json';
-import campsbay from './fixtures/world-campsbay.json';
-import parisWest from './fixtures/world-paris-west.json';
 
 /** Ground cover, by the WorldCover class the raster would have carried. */
 export type FixtureCover =
@@ -692,41 +687,108 @@ export const WORLD_FIXTURES: readonly WorldFixture[] = [
  * import. Written down here so the next person does not discover the ceiling by
  * hitting it.
  */
-export const CAPTURED: readonly WorldFixture[] = [
-  captured(
-    bixby as unknown as CapturedWorld,
-    'BIG SUR — COAST ROAD',
-    'Captured from the live world at 36.3753,-121.8974: the Highway 1 approach above Bixby, where three separate OSM ways all called Coast Road meet at near-equal classes on a cliff the DEM resolves at 8m. Reported twice from the seat. relief 0 flattens the ground and keeps the roads, which is the comparison no authored fixture can offer.',
-    100,
-  ),
-  captured(
-    carmelA as unknown as CapturedWorld,
-    'CARMEL HIGHLANDS — SOUTH',
-    'Captured at 36.5665,-121.9130. 755 ways, 95 of them highway, on ground running 126m to 237m — a dense hillside street network rather than one cliff road, which is a different kind of hard: many short ways of near-equal class meeting each other on a slope.',
-    100,
-  ),
-  captured(
-    carmelB as unknown as CapturedWorld,
-    'CARMEL HIGHLANDS — NORTH',
-    'Captured at 36.5753,-121.9128, a kilometre north of the other. 145 highways in 244 ways — more road and fewer buildings, so the junctions are less obscured while the terrain is the same.',
-    100,
-  ),
-  captured(
-    campsbay as unknown as CapturedWorld,
-    'CAMPS BAY — THE TWELVE APOSTLES',
-    'Reported from the seat at -33.94533,18.38296 heading 122. The western flank of Table Mountain: 325 METRES of relief across a 1.4km box, which is more than twice any other capture here, and 314 highways of every class on it — primary, secondary, tertiary, residential, and the only primary_link in the set. Victoria Road runs the contour while Camps Bay Drive, Geneva Drive and Kloof Road climb across it, so nearly every junction in the fixture is a joiner meeting a host at a different height on a cross-slope. That is the case the flat authored junctions cannot pose: the batter, the cut face and the bellmouth all have to solve at once.',
-    122,
-  ),
-  captured(
-    parisWest as unknown as CapturedWorld,
-    'SURESNES — THE BOULEVARDS',
-    'Reported from the seat at 48.86919,2.21523 heading 203. A dense European suburb rather than a hillside: 1,453 highways of which 762 are footway and 69 are steps, so nearly every carriageway here is flanked by a pavement solving its own profile a couple of metres away — the geometry that produces a lengthwise seam rather than a bad junction. 29 ways carry three or four lanes, which is where ROAD_W keying on class alone should show. 131m of relief, so it is not flat, but its difficulty is density and not gradient. One vector tile of the twenty (16/33171/22541) exceeds the cell Overpass budget and has never built; that corner has no roads in it.',
-    203,
-  ),
+/**
+ * ── THE CARD IS BUNDLED; THE WORLD IS FETCHED ──
+ *
+ * These were `import world-bixby.json` and so on, which esbuild inlines into
+ * app.js. Measured when the sixth capture landed: the live bundle is 1.51MB and
+ * the captures came to 2.37MB, so bundling them would have taken app.js to
+ * ~3.9MB — sixty per cent of it captured fixtures — on a game whose first tenet
+ * is mobile first. Every player would download Cape Town and Suresnes to drive
+ * in Scotland.
+ *
+ * So what stays in the bundle is the CARD: an id, a label, a note and a
+ * heading, which is what /lab/world needs to list a fixture and build its link.
+ * A few hundred bytes each. The world itself lives in `static/fixtures/` — which
+ * ships verbatim now that binary assets work — and is fetched only when someone
+ * actually opens that fixture.
+ */
+export interface CaptureCard {
+  id: string;
+  label: string;
+  note: string;
+  /** The file under `static/fixtures/`. */
+  file: string;
+  heading: number;
+}
+
+export const CAPTURE_INDEX: readonly CaptureCard[] = [
+  {
+    id: 'at-bixby', file: 'world-bixby.json', heading: 100,
+    label: 'BIG SUR — COAST ROAD',
+    note: 'Captured from the live world at 36.3753,-121.8974: the Highway 1 approach above Bixby, where three separate OSM ways all called Coast Road meet at near-equal classes on a cliff the DEM resolves at 8m. Reported twice from the seat. NOTE its r is 700m and its road runs well past that, so most of what it draws stands on ground extrapolated from the edge of the evidence — re-capture it wider before quoting a number off it.',
+  },
+  {
+    id: 'at-carmel-a', file: 'world-carmel-a.json', heading: 100,
+    label: 'CARMEL HIGHLANDS — SOUTH',
+    note: 'Captured at 36.5665,-121.9130. A dense hillside street network rather than one cliff road, which is a different kind of hard: many short ways of near-equal class meeting each other on a slope.',
+  },
+  {
+    id: 'at-carmel-b', file: 'world-carmel-b.json', heading: 100,
+    label: 'CARMEL HIGHLANDS — NORTH',
+    note: 'Captured at 36.5753,-121.9128, a kilometre north of the other. More road and fewer buildings, so the junctions are less obscured while the terrain is the same.',
+  },
+  {
+    id: 'at-campsbay', file: 'world-campsbay.json', heading: 122,
+    label: 'CAMPS BAY — THE TWELVE APOSTLES',
+    note: 'Reported from the seat at -33.94533,18.38296 heading 122. The western flank of Table Mountain: 325 METRES of relief across a 1.4km box and 314 highways of every class on it. Victoria Road runs the contour while Camps Bay Drive, Geneva Drive and Kloof Road climb across it, so nearly every junction is a joiner meeting a host at a different height on a cross-slope. Settled, it reports 38 pairs of overlapping carriageway and node steps up to 2.18m — and it takes about four minutes to finish building, so do not read anything off it early.',
+  },
+  {
+    id: 'at-paris-west', file: 'world-paris-west.json', heading: 203,
+    label: 'SURESNES — THE BOULEVARDS',
+    note: 'Reported from the seat at 48.86919,2.21523 heading 203. A dense European suburb rather than a hillside: 1,453 highways of which 762 are footway and 69 are steps, so nearly every carriageway is flanked by a pavement solving its own profile a couple of metres away — the geometry that produces a lengthwise seam rather than a bad junction. 29 ways carry three or four lanes. One vector tile of the twenty (16/33171/22541) exceeds the cell Overpass budget and has never built; that corner has no roads in it.',
+  },
 ];
 
-export const fixtureById = (id: string | null | undefined): WorldFixture | null =>
-  (id ? [...WORLD_FIXTURES, ...CAPTURED].find((f) => f.id === id) ?? null : null);
+/**
+ * THE PAYLOAD, SYNCHRONOUSLY, AND ON PURPOSE.
+ *
+ * `main.ts` resolves its fixture at module scope — `const FIXTURE = ...` on line
+ * 213, with the projection, the extent and the streamed tile sets all derived
+ * from it immediately — so the data has to be in hand before the module body
+ * runs. Three ways to do that and only one is small:
+ *
+ *   · top-level await. The platform bundles every cell's client at
+ *     `target: 'es2020'` (services/cells/transpile.ts) and top-level await is
+ *     ES2022, so esbuild refuses it. Raising that target is a tier-1 platform
+ *     change on behalf of a dev-only lab path.
+ *   · make FIXTURE a mutable filled by an async pre-boot step. That means every
+ *     module-level constant derived from it becomes lazy, in a 36,000-line file
+ *     wired to module state. A wide refactor for a fixture loader.
+ *   · this.
+ *
+ * Synchronous XHR blocks the main thread, which is exactly why it is normally
+ * wrong and exactly why it is right here: nothing else has started, there is no
+ * frame to drop, and this code path CANNOT run for a player — it is reached only
+ * when the URL carries `?fixture=at-…`. The world it loads then takes minutes to
+ * build; a few hundred milliseconds of blocked boot is not the cost anyone will
+ * notice. If this ever needs to be async, do the pre-boot-fetch version rather
+ * than raising the platform's target.
+ */
+function loadCapture(card: CaptureCard): CapturedWorld | null {
+  try {
+    const x = new XMLHttpRequest();
+    x.open('GET', `/fixtures/${card.file}`, false);
+    x.send();
+    if (x.status !== 200) throw new Error(`HTTP ${x.status}`);
+    return JSON.parse(x.responseText) as CapturedWorld;
+  } catch (err) {
+    // Loud, because the alternative is a fixture that silently becomes an empty
+    // planet and reads as "the renderer built nothing".
+    console.error(`fixture ${card.id}: could not load /fixtures/${card.file}`, err);
+    return null;
+  }
+}
+
+export const fixtureById = (id: string | null | undefined): WorldFixture | null => {
+  if (!id) return null;
+  const authored = WORLD_FIXTURES.find((f) => f.id === id);
+  if (authored) return authored;
+  const card = CAPTURE_INDEX.find((c) => c.id === id);
+  if (!card) return null;
+  const cap = loadCapture(card);
+  return cap ? captured(cap, card.label, card.note, card.heading) : null;
+};
 
 /**
  * ── THE TUNE, AS A LINK ──

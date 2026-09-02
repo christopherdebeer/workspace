@@ -181,6 +181,24 @@ export async function openDrive(opts = {}) {
   const server = http.createServer((req, res) => {
     const p = req.url.split('?')[0];
     if (p === '/app.js') { res.writeHead(200, { 'content-type': 'application/javascript' }); res.end(readFileSync(bundle)); }
+    // ── THE CAPTURED FIXTURES, WHICH ARE NO LONGER IN THE BUNDLE ──
+    //
+    // They were `import world-bixby.json`, so they arrived inside app.js and
+    // this server never had to know about them. Six captures came to 2.37MB
+    // against a 1.51MB bundle, so they moved to static/fixtures/ and are
+    // fetched — which means a fixture test 404s here unless this route exists,
+    // and it 404s as an EMPTY PLANET rather than as an error, because a world
+    // with no ways looks exactly like a world that built nothing.
+    //
+    // Straight off disk rather than through the cell handler: the handler is
+    // only wired up for ~/cover (see below) and this is a file read, not
+    // compute. Same strict name test as the cell's own route.
+    else if (p.startsWith('/fixtures/') && /^world-[a-z0-9-]+\.json$/.test(p.slice(10))) {
+      try {
+        res.writeHead(200, { 'content-type': 'application/json' });
+        res.end(readFileSync(join(CELL, 'static/fixtures', p.slice(10))));
+      } catch { res.writeHead(404); res.end(); }
+    }
     // The shell, at `/` and at whatever OTHER route the caller asked for. The
     // deployed cell serves this same 3162-byte document for any app path — a
     // client-side route branch cannot fire unless the page is served there —

@@ -1,7 +1,7 @@
 import { createDials, type DialValues } from './lab-dials';
 import {
   DEFAULT_FIXTURE_TUNE, FIXTURE_COVERS, FIXTURE_ROAD_CLASSES, FIXTURE_SURFACES,
-  WORLD_FIXTURES, CAPTURED, encodeTune, type FixtureCover, type FixtureTune,
+  WORLD_FIXTURES, CAPTURE_INDEX, encodeTune, type FixtureCover, type FixtureTune,
 } from './world-fixtures';
 
 /**
@@ -122,7 +122,7 @@ export async function startWorldLab(): Promise<void> {
   });
 
   const links = new Map<string, { a: HTMLAnchorElement; em: HTMLElement }>();
-  for (const f of [...WORLD_FIXTURES, ...CAPTURED]) {
+  for (const f of [...WORLD_FIXTURES, ...CAPTURE_INDEX]) {
     const a = document.createElement('a');
     a.className = 'fx';
     const b = document.createElement('b');
@@ -142,7 +142,7 @@ export async function startWorldLab(): Promise<void> {
     if (v.time && v.time !== 'auto') extra.push(`time=${String(v.time)}`);
     if (v.cam && v.cam !== 'chase') extra.push(`cam=${String(v.cam)}`);
     if (v.wx && v.wx !== 'auto') extra.push(`wx=${String(v.wx)}`);
-    for (const f of [...WORLD_FIXTURES, ...CAPTURED]) {
+    for (const f of [...WORLD_FIXTURES, ...CAPTURE_INDEX]) {
       const q = [`fixture=${f.id}`, ...(ft ? [`ft=${encodeURIComponent(ft)}`] : []), ...extra];
       const href = `${base()}/?${q.join('&')}`;
       const row = links.get(f.id)!;
