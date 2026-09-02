@@ -10468,6 +10468,11 @@ const joinLog: JoinRec[] = [];
 interface StageRec { x: number; z: number; nm?: string; fid: number; i: number; n: number; pb: number;
   hint: number | null; hintsHere: number; st: Record<string, number> }
 const stageLog: StageRec[] = [];
+/** Every time an approach was asked to wait for a portal above its end —
+ *  and whether it built anyway on its last ask. The defer exists to make the
+ *  cross-tile portal step rare; this says whether it ever fired. */
+interface DeferRec { x: number; z: number; x1: number; z1: number; nm?: string; fid: number; layer: number; why: string; seen: number; built: boolean }
+const deferLog: DeferRec[] = [];
 /**
  * EVERY station of EVERY fragment, after every stage — the through-node log
  * above answers "which stage moved the pin", and could not answer the next
@@ -11263,6 +11268,10 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     if (wait) {
       const dkey = `${Math.round(dense[0][0])},${Math.round(dense[0][1])}`;
       const seen = crumbDefer.get(dkey) ?? 0;
+      if (deferLog.length < 2000) {
+        deferLog.push({ x: +dense[0][0].toFixed(1), z: +dense[0][1].toFixed(1), x1: +dense[n - 1][0].toFixed(1), z1: +dense[n - 1][1].toFixed(1),
+          nm: name, fid, layer, why: 'portal-above', seen, built: seen >= 3 });
+      }
       if (seen < 3) { crumbDefer.set(dkey, seen + 1); unbuilt++; return; }
     }
   }
@@ -21713,7 +21722,13 @@ function tapeKeep(): string {
   [...solver.hints.values()].flat()
     .filter((h) => Math.hypot(h[0] - x, h[1] - z) <= r)
     .map((h) => ({ x: +h[0].toFixed(2), z: +h[1].toFixed(2), y: +h[2].toFixed(3),
-      d: +Math.hypot(h[0] - x, h[1] - z).toFixed(2) }));
+      d: +Math.hypot(h[0] - x, h[1] - z).toFixed(2), l: h[3], c: h[4] }));
+/** Every approach end near a point that was asked to wait for a portal above
+ *  it: how many times, and whether it built on its last ask regardless. */
+(window as unknown as { __defers?: object }).__defers = (x?: number, z?: number, r = 6): object[] => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  return deferLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r || Math.hypot(e.x1 - px, e.z1 - pz) <= r);
+};
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number, margin = 0.8) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z, margin) });
 /** The nearest drivable centreline: how far OUTSIDE its kerb this point is
