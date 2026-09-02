@@ -473,6 +473,52 @@ Each capture is a couple of hundred KB in the bundle. Fine for one, not for
 twenty; at that point move them to `static/` (which ships verbatim now that
 binary assets work) and fetch at boot.
 
+## A junction is reconciled twice, and the second time undid the first
+
+Reported from Camps Bay: node steps of 2.18m and 1.81m where two residential
+streets cross, and "overlapping" carriageways down half the hillside. It took
+three instruments to attribute, and each one overturned the reading before it:
+
+| probe | what it says | what it showed |
+|---|---|---|
+| `__joinwhy(x,z,r)` | every fragment END built near a point — anchor found, at what distance, chain hint, weld residual, at BUILD time | 360 ends, 169 shared-node pairs, **zero** same-road pairs over 10cm. The end weld works. |
+| `__hintsAt(x,z,r)` | every chain hint at a point, with its value | at the eight worst steps both chains AGREED — `0.404, 0.404` at a node built as `1.81` and `-0.373`. The planner works. |
+| `__stagewhy(x,z,r)` | a through-node station after every stage of the per-way build | the GRADE LINE (`eng = wide(wide(prof))`, a ±200m running mean) overwrote 128 of 179 lost pins. |
+
+The through-node case is the one the end weld cannot reach by design
+(`deckAnchorAt` is ENDS ONLY; reaching along a segment was tried and reverted),
+so a crossroads depends entirely on the planner's junction pin surviving the
+per-way build. The ends were always protected (the grade line's `pin` fades to
+zero there), which is exactly why fragment ends weld to 4cm while through-nodes
+step by metres. The 4cm is `SURFACE.road.lift`.
+
+Two lessons that generalise:
+
+- **A post-hoc probe at a seam reports the store as it is now, not as it was
+  when the fragment built.** `__sharedAt` recorded that after four earlier fixes
+  moved nothing. Both `joinLog` and `stageLog` are written from inside the
+  build for that reason, as `cropLog` was.
+- **A settle gate on the carve is not a settle gate on the roads.** `dirty`
+  reached 0 at t+63s and held; `roadCells` went 171 → 2012 over the next two
+  minutes. Every junction number read at the old gate described an eighth of a
+  world and undercounted in the direction of "no problem". Wait for `dirty`,
+  `seenWays` AND `roadCells` to stop moving.
+
+And the `__overlap` "lengthwise seam" mostly is not one: of the six worst, four
+are a KINK at a welded node — the per-way pipeline seats one fragment's end
+0.6m off its chain hint, the weld pulls it back, and the correction is spread
+along the whole fragment, so one side leaves the node at 19% and the other
+arrives level. `__overlap` compares segment midpoints and reads that as a height
+gap. Two of the six are genuinely side by side (Kloof Road's hairpin arms).
+
+`layer` was kept in `KEEP_TAGS` and read nowhere. The pin rule was purely
+spatial, and at the Vélizy interchange 10 of 44 grade-separated crossings put a
+flyover station inside the 3m pin radius of the road beneath — the grade line
+was un-welding those by accident, which is why holding pins and reading the
+layer had to ship as one change. `layerOf` in roadsolve.ts is the rule.
+
+`devtools/through-node.test.mjs` holds the bars at the pre-fix numbers.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.
