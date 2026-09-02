@@ -10426,6 +10426,30 @@ const edgeLog: Array<{ x: number; z: number; rail: boolean; batter: boolean;
  *  overlapping" was unanswerable from a screenshot, because eligibility
  *  depends on what was BUILT when this way built, which no probe can
  *  reconstruct after the fact. Read by `__cropwhy`. */
+/**
+ * WHAT EACH FRAGMENT END TOOK, AT THE MOMENT IT WAS BUILT.
+ *
+ * `__sharedAt` carries the lesson that cost a previous session four fixes: the
+ * hint store is rebuilt as tiles stream, so what it holds when you ASK is not
+ * what it held when the road was built, and a post-hoc probe at a seam is
+ * evidence about now rather than then. `cropLog` exists for exactly this reason
+ * on the crop side. Nothing recorded the WELD side — which anchor an end found,
+ * how far away, whether it was hinted, and what residual the weld then spread
+ * — so a fragment standing 85cm off its own continuation could not be asked
+ * why. Now it can: `__joinwhy(x, z, r)`.
+ */
+interface JoinRec {
+  x: number; z: number; nm?: string; fid: number; end: 0 | 1; pb: number;
+  /** The neighbour deck the end anchored to, and how far off it stood. */
+  anchor: number | null; anchorD: number | null;
+  /** The chain hint at this station, if any. */
+  hint: number | null;
+  /** The profile at this end BEFORE the weld, and the weld's residual. */
+  pre: number; weld: number; tiltWeld: number;
+  /** Where it ended up. */
+  y: number;
+}
+const joinLog: JoinRec[] = [];
 const cropLog: Array<{ x: number; z: number; nm?: string; end: number; why: string;
   out?: number; align?: number; host?: string; sR?: number; sL?: number; skip?: number }> = [];
 /** A way-end that found NO host when it built — the host may simply not have
@@ -10831,8 +10855,12 @@ const vergeFill = !/[?&]nofill=1/.test(location.search);
  *  fragments had no room to escape their own ends. Anchoring to the
  *  neighbour's built deck instead lets the first fragment choose freely and
  *  every later one join it seamlessly. */
+/** The distance the last deckAnchorAt answer stood at — read straight after
+ *  the call by the join log, never by anything that decides geometry. */
+let lastAnchorD: number | null = null;
 function deckAnchorAt(x: number, z: number): number | null {
   let best: number | null = null, bd = 2.2;
+  lastAnchorD = null;
   for (const dx of [0, -GRID, GRID]) for (const dz of [0, -GRID, GRID]) {
     for (const s of roadGrid.get(gkey(x + dx, z + dz)) ?? []) {
       // Tracks and paths are DRAPED, not profiled — on a misregistered cliff
@@ -10852,6 +10880,7 @@ function deckAnchorAt(x: number, z: number): number | null {
       if (db < bd) { bd = db; best = s.yb; }
     }
   }
+  if (best !== null) lastAnchorD = bd;
   return best;
 }
 /** The CAMBER an already built neighbour holds at (x,z), in THIS fragment's
@@ -11162,7 +11191,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // deckAnchorAt) — a hard pin to the centreline sample gave the cliff its
   // contamination back at every one of the many short fragment joins.
   const anchor0 = deckAnchorAt(dense[0][0], dense[0][1]);
+  const anchor0D = lastAnchorD;
   const anchor1 = deckAnchorAt(dense[n - 1][0], dense[n - 1][1]);
+  const anchor1D = lastAnchorD;
   const p0 = anchor0 === null ? null : anchor0 - lift;
   const p1 = anchor1 === null ? null : anchor1 - lift;
   // ±2 samples of the SOURCE's real resolution, not the tile's: high-zoom
@@ -11571,6 +11602,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // length allows — which is the same principle the limiter itself follows.
     const d0 = p0 === null || !endWeld ? 0 : p0 - prof[0];
     const d1 = p1 === null || !endWeld ? 0 : p1 - prof[n - 1];
+    const pre0 = prof[0], pre1 = prof[n - 1];
     // AND THE TILT WITH IT. The centreline weld above closes the middle; the
     // cross-fall was still each fragment's own, and the audit measured half-
     // metre kerb steps over zero-centimetre centreline steps on one Bixby
@@ -11585,6 +11617,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         dense[n - 1][0] - dense[n - 2][0], dense[n - 1][1] - dense[n - 2][1]);
       if (t0 !== null) e0 = t0 - tilt[0];
       if (t1 !== null) e1 = t1 - tilt[n - 1];
+    }
+    if (joinLog.length < 6000) {
+      const rec = (end: 0 | 1, i: number, pre: number, weld: number, tw: number, anchor: number | null, aD: number | null): JoinRec =>
+        ({ x: +dense[i][0].toFixed(1), z: +dense[i][1].toFixed(1), nm: name, fid, end, pb: pbranch,
+          anchor: anchor === null ? null : +(anchor - lift).toFixed(3), anchorD: aD === null ? null : +aD.toFixed(2),
+          hint: hintEl[i] === undefined || hintEl[i] === null ? null : +(hintEl[i] as number).toFixed(3),
+          pre: +pre.toFixed(3), weld: +weld.toFixed(3), tiltWeld: +tw.toFixed(3), y: +(pre + weld).toFixed(3) });
+      joinLog.push(rec(0, 0, pre0, d0, e0, anchor0, anchor0D), rec(1, n - 1, pre1, d1, e1, anchor1, anchor1D));
     }
     if (d0 !== 0 || d1 !== 0 || e0 !== 0 || e1 !== 0) {
       const arc = new Array<number>(n).fill(0);
@@ -21474,6 +21514,12 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
 };
 // Every junction-crop decision near a point, with its reason — build-time
 // state no screenshot or rebuild can reconstruct.
+/** Every fragment end built near a point, with the anchor, hint and weld it
+ *  took at BUILD time — the weld-side twin of __cropwhy. */
+(window as unknown as { __joinwhy?: object }).__joinwhy = (x?: number, z?: number, r = 8): object[] => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  return joinLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r);
+};
 (window as unknown as { __cropwhy?: object }).__cropwhy = (x?: number, z?: number, r = 80): object[] => {
   const px = x ?? state.x, pz = z ?? state.z;
   return cropLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r);
