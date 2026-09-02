@@ -5209,9 +5209,27 @@ const mouthTex = canvasTex(128, 1, 1, 107, (c, s, r) => {
   c.fillStyle = 'rgba(20,23,28,0.3)';
   c.fillRect(r() * (s - 30), r() * s, 12 + r() * 18, 8 + r() * 12);
   cracks(c, s, r, 4, 'rgba(12,14,18,0.5)');
-  // The give-way bar: broken white, on the joining road's side of the kerb.
-  c.fillStyle = 'rgba(228,224,210,0.8)';
-  for (let x = 4; x < s; x += 22) c.fillRect(x, s * 0.6, 13, 4);
+  // No bar here any more: the junction box below draws one give-way line per
+  // minor arm, for every junction, so a cropped mouth and a plain crossing
+  // read the same. Two bars a metre apart is what the two mechanisms drew.
+});
+// THE JUNCTION BOX: plain tarmac over the crossing itself. Every arm's
+// texture carries its own edge lines and centre dash, and where two roads
+// cross those lines ran straight across each other — a crossroads read as a
+// hash of white stripes from the chart. The box overpaints the crossing
+// with lineless tarmac, and the arms' lines end at its edge.
+const boxTex = canvasTex(128, 1, 1, 113, (c, s, r) => {
+  c.fillStyle = '#3a3f46'; c.fillRect(0, 0, s, s);
+  speckle(c, s, r, ['rgba(255,255,255,0.045)', 'rgba(0,0,0,0.12)'], 260);
+  cracks(c, s, r, 5, 'rgba(12,14,18,0.5)');
+  c.fillStyle = 'rgba(20,23,28,0.28)';
+  for (let i = 0; i < 4; i++) c.fillRect(r() * (s - 30), r() * (s - 20), 12 + r() * 18, 8 + r() * 12);
+});
+// The give-way line: a broken white bar across a minor arm at the box edge.
+const gwTex = canvasTex(64, 1, 1, 131, (c, s) => {
+  c.clearRect(0, 0, s, s);
+  c.fillStyle = 'rgba(232,226,208,0.92)';
+  for (let x = 2; x < s; x += 16) c.fillRect(x, 0, 10, s);
 });
 const pathTex = canvasTex(64, 1, 1, 102, (c, s, r) => {
   c.fillStyle = '#847d6c'; c.fillRect(0, 0, s, s);
@@ -5222,6 +5240,24 @@ const pathTex = canvasTex(64, 1, 1, 102, (c, s, r) => {
 // The cut face under a carriageway: a road is a SOLID, not a decal, and what
 // you see at its edge is the shoulder gravel over compacted sub-base over
 // earth. v runs DOWN the face (0 at the tarmac), so the strata read in order.
+// The BATTER'S earth: what a bank or a cut face looks like from the road and
+// from above — compacted soil, stones, no strata. The strata texture below is
+// for the vertical fascia, where v runs down the face and the layers read in
+// order; laid over a bank seen from above its bands repeat every four metres
+// outward and read as terraces (measured on Round House Road). Isotropic,
+// coarse and high-contrast, because the quantiser eats anything finer; the
+// tint that says shoulder / earth / grass rides on the vertices.
+const batterTex = canvasTex(64, 1, 1, 123, (c, s, r) => {
+  c.fillStyle = '#8a8070'; c.fillRect(0, 0, s, s);
+  speckle(c, s, r, ['rgba(40,32,22,0.5)', 'rgba(230,220,196,0.22)'], 220, 1.6);
+  for (let i = 0; i < 26; i++) {
+    const x = r() * s, y = r() * s, w = 1.5 + r() * 3.5, h = 1 + r() * 2.5;
+    c.fillStyle = `rgba(${150 + r() * 70 | 0},${140 + r() * 60 | 0},${118 + r() * 50 | 0},0.6)`;
+    c.fillRect(x, y, w, h);
+    c.fillStyle = 'rgba(30,24,16,0.45)'; c.fillRect(x, y + h, w, 1);
+  }
+  cracks(c, s, r, 2, 'rgba(30,24,16,0.35)');
+});
 const vergeTex = canvasTex(64, 1, 1, 119, (c, s, r) => {
   c.fillStyle = '#4a4034'; c.fillRect(0, 0, s, s);
   // Strata: pale shoulder chippings at the lip, darker base course, then soil.
@@ -5905,6 +5941,14 @@ const MAT = {
     map: mouthTex, side: FS,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -14,
   }),
+  box: new THREE.MeshLambertMaterial({
+    map: boxTex, side: FS,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -15,
+  }),
+  gw: new THREE.MeshLambertMaterial({
+    map: gwTex, side: FS, transparent: true, alphaTest: 0.5,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -16,
+  }),
   // Ruts: alpha-cut, and depth-offset because it lies a few centimetres over
   // terrain it is meant to look part of.
   // OPACITY, not just alpha-cut. The ruts were a hard stencil over the ground —
@@ -5945,6 +5989,7 @@ const MAT = {
   // reliable; it isn't (see DS above), and a one-sided apron flickers out
   // whenever the camera crosses the road.
   verge: new THREE.MeshLambertMaterial({ map: vergeTex, side: DS }),
+  batter: new THREE.MeshLambertMaterial({ map: batterTex, side: DS, vertexColors: true }),
   deck: new THREE.MeshLambertMaterial({ map: deckTex, side: DS }),
   // alphaTest, not blending: a parapet is seen against sky, water and its own
   // deck at once, and a sorted transparent has no right answer for that.
@@ -10368,7 +10413,19 @@ const apron = {
   sgV: [] as number[], sgUV: [] as number[],
   stV: [] as number[], stUV: [] as number[],
   moV: [] as number[], moUV: [] as number[],
+  boV: [] as number[], boUV: [] as number[],
+  gwV: [] as number[], gwUV: [] as number[],
 };
+/**
+ * WHERE DRIVABLE WAYS MEET, from the batch's own topology: every vertex of
+ * every drivable way, keyed on a half-metre grid, with the arms leaving it.
+ * Three or more arms from two or more ways is a junction; a way passing
+ * through contributes two. Filled as the pre-grid is, read by flushJunctions
+ * once the ribbons stand, and each node boxed once.
+ */
+interface JuncArm { ux: number; uz: number; hw: number; dk: string }
+const juncNodes = new Map<string, { x: number; z: number; arms: JuncArm[] }>();
+const juncBoxed = new Set<string>();
 const spanStats = {
   piers: 0, arches: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0, cats: 0, posts: 0,
   // Why a kerb quad did or did not get a batter — one counter per branch, so
@@ -10540,6 +10597,12 @@ function preEdge(x: number, z: number, notKey?: string): { out: number; track: b
 /** Two triangles into a vertex/uv pair. `ribbon` has its own local `quad`, and
  *  the only `quad` in scope out here is a THREE.Mesh — which the stub types are
  *  happy to let you call, and which would have thrown on the first shoulder. */
+/** Per-corner colours for one quadInto call — a, b, c, d in the same
+ *  six-vertex order the two triangles are emitted in. */
+function tintInto(C: number[], a: number[], b: number[], c: number[], d: number[]): void {
+  C.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2],
+    b[0], b[1], b[2], d[0], d[1], d[2], c[0], c[1], c[2]);
+}
 function quadInto(V: number[], U: number[], p: number[], uv: number[], S?: number[], sm?: number[]): void {
   V.push(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8],
     p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
@@ -10667,9 +10730,46 @@ function redrape(t: HeightTile): void {
  *  ground as it now stands, and retire them. */
 function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
   if (!vergeFill || !pendingBatter.length) return;
-  const V: number[] = [], U: number[] = [], S: number[] = [];
+  const V: number[] = [], U: number[] = [], S: number[] = [], C: number[] = [];
   let bx0 = Infinity, bz0 = Infinity, bx1 = -Infinity, bz1 = -Infinity;
-  const BATT = 0.6;                      // metres of drop per metre out
+  const BATT = 0.6;                      // metres of drop per metre out (a fill bank)
+  // ── THE BATTER IS A WEDGE ABOUT THE NATURAL GROUND, ON BOTH SIDES ──
+  //
+  // This was a fill bank only: from the kerb down at BATT until it met the
+  // CARVED ground, and on a cut side — where the carved ground beside the
+  // kerb is the corridor's bench, dead level for a mesh cell or more — it
+  // found the ground at the first step and drew nothing. So beside every
+  // cut the thing you saw was the bench itself: a flat sheet of terrain a
+  // road's width wide and twenty metres deep, painted as ground, with the
+  // hillside starting where the carve's 32° climb began. The survey read it
+  // as "large sheets" on every Camps Bay street and on the Cabrillo shelf.
+  //
+  // Now each vertex takes the natural ground, `sampleHeight`, clamped into
+  // the wedge between a fill bank falling at BATT and a cut face rising at
+  // CUT_K from a short verge — so a cut gets a face that climbs from the
+  // kerb to meet the hill, a fill gets its bank, and past the toe the strip
+  // simply FOLLOWS the ground. It keeps following it while the carved mesh
+  // is still below the natural surface (the bench, and the carve's climb
+  // back to grade), so the bench is roofed over and never seen, and stops
+  // where the mesh returns to the natural ground. The other side, the water
+  // stop and the clip against other carriageways are unchanged.
+  const CUT_K = 0.62;                    // rise per metre out on a cut face — the carve's own slope
+  const VERGE = 0.6;                     // the flat shoulder before either slope starts
+  // A CUT IS SHORT OR IT IS A WALL. On a hillside steeper than the face — Round
+  // House Road at Camps Bay stands on a 76% cross-slope — a 32° face never
+  // meets the hill, and drawn to full reach it was a thirty-metre plane of
+  // earth laid over the whole slope, worse than the bench it replaced. Past
+  // CUT_REACH an unmet face steps straight up to the natural ground instead:
+  // the short face and the wall that a road on such a slope actually has.
+  const CUT_REACH = 8;
+  // Three tints, on the vertices: shoulder chippings, earth on the face, and
+  // the terrain's own colour where the strip lies on the ground, so a toe
+  // vanishes into the sward rather than ending in a line.
+  const SHOULDER: [number, number, number] = [0.56, 0.52, 0.45];
+  const EARTH: [number, number, number] = [0.42, 0.34, 0.26];
+  const ROCK: [number, number, number] = [0.46, 0.45, 0.41];
+  const tintAt = (x: number, z: number, N: number): [number, number, number] =>
+    terrainPalette(N + baseElev, 0.15, sampleCover(x, z), x, z);
   // AN EMBANKMENT IS ALLOWED TO BE AN EMBANKMENT. This used to stop at 5m —
   // 3m of drop — and anything steeper than that was declared "the road stands
   // clear of its surroundings" and given nothing at all: measured at Big Sur,
@@ -10680,7 +10780,7 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
   // than one that reaches. The tail steps are only ever walked by the runs that
   // need them: the loop breaks the moment the ground is met, which on ordinary
   // ground is the first or second step.
-  const STEPS = [0.6, 1.4, 2.4, 3.6, 5, 7, 9.5, 12.5, 16];
+  const STEPS = [0.6, 1.4, 2.4, 3.6, 5, 7, 9.5, 12.5, 16, 20, 25, 30];
   const REACH = STEPS[STEPS.length - 1];
   /** How far out this kerb may spread before it is over somebody else's tarmac.
    *  Only asked when a coarse step says "blocked", because it costs a road-grid
@@ -10722,6 +10822,8 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
     if (stranded) spanStats.fillStranded++;
     // [distance out, left height, right height, left seated?, right seated?]
     const pts: Array<[number, number, number, number, number]> = [];
+    // …and the tint at each end of each step, parallel to `pts`.
+    const tints: Array<[[number, number, number], [number, number, number]]> = [];
     // NEVER OVER ANOTHER ROAD — but a junction is a reason to STOP SHORT, not a
     // reason to draw nothing. This used to `break` out of the whole loop the
     // moment a step landed on somebody else's tarmac, and at a junction the
@@ -10758,15 +10860,36 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
         wet = true; break;
       }
       const g0 = groundAt(qx0, qz0), g1 = groundAt(qx1, qz1);
-      if (!pts.length && g0 >= b.y0 - 0.05 && g1 >= b.y1 - 0.05) {
+      const N0 = sampleHeight(qx0, qz0), N1 = sampleHeight(qx1, qz1);
+      // AT GRADE: the natural ground meets the kerb and the mesh is there too —
+      // nothing to draw. (The old test read the CARVED ground alone, which is
+      // true beside every cut, and skipped exactly the bays that needed a face.)
+      if (!pts.length && Math.abs(N0 - b.y0) < 0.35 && Math.abs(N1 - b.y1) < 0.35
+        && g0 >= b.y0 - 0.12 && g1 >= b.y1 - 0.12) {
         spanStats.fillNoGap++; met = true; break;
       }
-      const c0 = b.y0 - d * BATT, c1 = b.y1 - d * BATT;
-      const p0 = Math.min(b.y0, Math.max(g0, c0)), p1 = Math.min(b.y1, Math.max(g1, c1));
-      // Seated where the GROUND is what chose the height — that is the vertex
-      // a later carve moves out from under, and the only one that may follow.
-      pts.push([d, p0, p1, p0 === g0 ? 1 : 0, p1 === g1 ? 1 : 0]);
-      if (g0 >= c0 && g1 >= c1) { met = true; break; }   // met the ground
+      const dd = Math.max(0, d - VERGE);
+      const lo0 = b.y0 - dd * BATT, lo1 = b.y1 - dd * BATT;
+      const hi0 = b.y0 + dd * CUT_K, hi1 = b.y1 + dd * CUT_K;
+      let p0 = clamp(N0, lo0, hi0), p1 = clamp(N1, lo1, hi1);
+      let on0 = p0 === N0, on1 = p1 === N1;   // lying on the natural ground, not on a slope
+      let wall0 = false, wall1 = false;
+      if (d >= CUT_REACH) {
+        if (!on0 && N0 > hi0) { p0 = N0; on0 = true; wall0 = true; }
+        if (!on1 && N1 > hi1) { p1 = N1; on1 = true; wall1 = true; }
+      }
+      // Seated where the CARVED ground is what chose the height — the fill
+      // toe a later carve can move out from under. A vertex on a cut face,
+      // or roofing the bench along the natural surface, is pinned.
+      pts.push([d, p0, p1, on0 && g0 >= N0 - 0.1 ? 1 : 0, on1 && g1 >= N1 - 0.1 ? 1 : 0]);
+      tints.push([
+        d <= VERGE ? SHOULDER : wall0 ? ROCK : on0 ? tintAt(qx0, qz0, N0) : EARTH,
+        d <= VERGE ? SHOULDER : wall1 ? ROCK : on1 ? tintAt(qx1, qz1, N1) : EARTH,
+      ]);
+      // Met: the strip lies on the natural ground at both ends AND the mesh is
+      // back up to it — a fill toe on the ground, or a cut face past the
+      // bench. On the ground with the mesh still carved below, keep going.
+      if (on0 && on1 && g0 >= N0 - 0.1 && g1 >= N1 - 0.1) { met = true; break; }
       if (clipped) break;                // ran out of room, not out of slope
     }
     const reached = pts.length ? pts[pts.length - 1][0] : 0;
@@ -10788,6 +10911,11 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
     // unmet and drawn anyway, which is how a shelf of earth came to hang off
     // the side of a road with nothing under it.
     if (!pts.length) { spanStats.fillUnmet++; continue; }
+    // A CUT FACE THAT REACHED THE HILL IS MET, whether or not the carved mesh
+    // came back up to the natural ground within reach: the face is real and
+    // the strip beyond it is a roof over the bench, and stopping short there
+    // shows the bench rather than the hill.
+    if (!met && pts.some((p) => p[1] > b.y0 + 0.3 || p[2] > b.y1 + 0.3)) met = true;
     if (!met && !clipped && !wet) { spanStats.fillUnmet++; continue; }
     spanStats.fillDrawn++;
     // THE ENDS OF A RUN GET A FACE. Where the next bay has no batter — the run
@@ -10799,9 +10927,11 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       const ex = end ? b.bx : b.ax, ez = end ? b.bz : b.az;
       const nx2 = end ? b.nxB : b.nxA, nz2 = end ? b.nzB : b.nzA;
       const ky = end ? b.y1 : b.y0;
-      let ppx = 0, ppy = ky, pps = 0;
-      for (const p of pts) {
+      let ppx = 0, ppy = ky, pps = 0, ppc: [number, number, number] = SHOULDER;
+      for (let k = 0; k < pts.length; k++) {
+        const p = pts[k];
         const d = p[0], y = end ? p[2] : p[1], sd = end ? p[4] : p[3];
+        const tc = end ? tints[k][1] : tints[k][0];
         const fa = ppx / 2.2, fb = d / 2.2;
         // A quad with its inboard edge collapsed onto the kerb point: the fan
         // triangle, expressed in the one emitter this file has.
@@ -10810,21 +10940,26 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
           ex, ky, ez,
           ex + nx2 * fa, ppy, ez + nz2 * fa,
           ex + nx2 * fb, y, ez + nz2 * fb,
-        ], [b.uA, 0, b.uA, 0, b.uA, ppx / 4, b.uA, d / 4], S, [0, 0, pps, sd]);
-        ppx = d; ppy = y; pps = sd;
+        ], [b.uA * 2, 0, b.uA * 2, 0, b.uA * 2, ppx / 4, b.uA * 2, d / 4], S, [0, 0, pps, sd]);
+        tintInto(C, SHOULDER, SHOULDER, ppc, tc);
+        ppx = d; ppy = y; pps = sd; ppc = tc;
       }
       spanStats.fillCap++;
     }
     let px = 0, py0 = b.y0, py1 = b.y1, ps0 = 0, ps1 = 0;
-    for (const [d, y0, y1, s0, s1] of pts) {
+    let pc0: [number, number, number] = SHOULDER, pc1: [number, number, number] = SHOULDER;
+    for (let k = 0; k < pts.length; k++) {
+      const [d, y0, y1, s0, s1] = pts[k];
+      const [c0, c1] = tints[k];
       const fa = px / 2.2, fb = d / 2.2;
       quadInto(V, U, [
         b.ax + b.nxA * fa, py0, b.az + b.nzA * fa,
         b.bx + b.nxB * fa, py1, b.bz + b.nzB * fa,
         b.ax + b.nxA * fb, y0, b.az + b.nzA * fb,
         b.bx + b.nxB * fb, y1, b.bz + b.nzB * fb,
-      ], [b.uA, px / 4, b.uB, px / 4, b.uA, d / 4, b.uB, d / 4], S, [ps0, ps1, s0, s1]);
-      px = d; py0 = y0; py1 = y1; ps0 = s0; ps1 = s1;
+      ], [b.uA * 2, px / 4, b.uB * 2, px / 4, b.uA * 2, d / 4, b.uB * 2, d / 4], S, [ps0, ps1, s0, s1]);
+      tintInto(C, pc0, pc1, c0, c1);
+      px = d; py0 = y0; py1 = y1; ps0 = s0; ps1 = s1; pc0 = c0; pc1 = c1;
       bx0 = Math.min(bx0, b.ax, b.bx); bx1 = Math.max(bx1, b.ax, b.bx);
       bz0 = Math.min(bz0, b.az, b.bz); bz1 = Math.max(bz1, b.az, b.bz);
     }
@@ -10834,8 +10969,9 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(V), 3));
   g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(U), 2));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(C), 3));
   g.computeVertexNormals();
-  worldGroup.add(new THREE.Mesh(g, MAT.verge));
+  worldGroup.add(new THREE.Mesh(g, MAT.batter));
   // ── AND IT RE-SEATS FROM NOW ON ──
   //
   // A batter was a static mesh built against the ground as it stood at that
@@ -10853,6 +10989,64 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
     x0: bx0 - REACH, z0: bz0 - REACH, x1: bx1 + REACH, z1: bz1 + REACH };
   drapedWays.push(d2); indexDrape(d2);
 }
+/**
+ * THE JUNCTION BOX AND ITS GIVE-WAY LINES, one per node the batch's topology
+ * says is a crossing. The box is the convex hull of every arm's kerb corners
+ * a crossing half-width out from the node, fanned from the node at the deck
+ * heights the ribbons actually built (the day's junction work is what makes
+ * "the deck height at the node" one number). A minor arm — narrower than the
+ * widest arm here — gets a give-way line across it just outside the box.
+ * Nodes are boxed once; the registry is cleared with the pre-grid.
+ */
+function flushJunctions(): void {
+  for (const [key, node] of juncNodes) {
+    if (juncBoxed.has(key)) continue;
+    const ways = new Set(node.arms.map((a) => a.dk));
+    if (node.arms.length < 3 || ways.size < 2) continue;
+    const y0 = roadHeightAt(node.x, node.z, 1.2);
+    if (y0 === null) continue;                    // nothing built here yet: next batch
+    juncBoxed.add(key);
+    const maxHw = Math.max(...node.arms.map((a) => a.hw));
+    const L = maxHw + 0.5;
+    // Every arm's two kerb corners L out along the arm.
+    const corners: Array<[number, number]> = [];
+    for (const a of node.arms) {
+      const nx = -a.uz, nz = a.ux;
+      corners.push([node.x + a.ux * L + nx * a.hw, node.z + a.uz * L + nz * a.hw]);
+      corners.push([node.x + a.ux * L - nx * a.hw, node.z + a.uz * L - nz * a.hw]);
+    }
+    // Andrew's monotone chain, counter-clockwise.
+    corners.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+    const cross = (o: [number, number], a: [number, number], b: [number, number]): number =>
+      (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const lower: Array<[number, number]> = [], upper: Array<[number, number]> = [];
+    for (const p of corners) { while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop(); lower.push(p); }
+    for (let i = corners.length - 1; i >= 0; i--) { const p = corners[i]; while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop(); upper.push(p); }
+    const hull = lower.slice(0, -1).concat(upper.slice(0, -1));
+    if (hull.length < 3) continue;
+    const hy = (x: number, z: number): number => (roadHeightAt(x, z, 1.5) ?? y0) + SURFACE.road.lift + 0.008;
+    const cy = y0 + SURFACE.road.lift + 0.008;
+    for (let i = 0; i < hull.length; i++) {
+      const a = hull[i], b = hull[(i + 1) % hull.length];
+      apron.boV.push(node.x, cy, node.z, a[0], hy(a[0], a[1]), a[1], b[0], hy(b[0], b[1]), b[1]);
+      apron.boUV.push(node.x / 12, node.z / 12, a[0] / 12, a[1] / 12, b[0] / 12, b[1] / 12);
+    }
+    // Give-way lines on the minor arms, just outside the box.
+    for (const a of node.arms) {
+      if (a.hw >= maxHw - 0.25) continue;
+      const nx = -a.uz, nz = a.ux;
+      const d0 = L + 0.3, d1 = L + 0.65;
+      const p = (d: number, s: number): [number, number] => [node.x + a.ux * d + nx * s, node.z + a.uz * d + nz * s];
+      const [ax, az] = p(d0, a.hw - 0.2), [bx, bz] = p(d0, -a.hw + 0.2);
+      const [cx, cz] = p(d1, a.hw - 0.2), [dx, dz] = p(d1, -a.hw + 0.2);
+      const ya = hy(ax, az) + 0.004, yb = hy(bx, bz) + 0.004, yc = hy(cx, cz) + 0.004, yd = hy(dx, dz) + 0.004;
+      const uw = (a.hw * 2) / 1.6;
+      apron.gwV.push(ax, ya, az, bx, yb, bz, cx, yc, cz, bx, yb, bz, dx, yd, dz, cx, yc, cz);
+      apron.gwUV.push(0, 0, uw, 0, 0, 1, uw, 0, uw, 1, 0, 1);
+    }
+  }
+  juncNodes.clear();
+}
 function flushAprons(): void {
   for (const [v, u, m] of [
     [apron.cutV, apron.cutUV, MAT.verge],
@@ -10861,6 +11055,8 @@ function flushAprons(): void {
     [apron.sgV, apron.sgUV, MAT.sign],
     [apron.stV, apron.stUV, MAT.stud],
     [apron.moV, apron.moUV, MAT.mouth],
+    [apron.boV, apron.boUV, MAT.box],
+    [apron.gwV, apron.gwUV, MAT.gw],
   ] as const) {
     if (!v.length) continue;
     const g = new THREE.BufferGeometry();
@@ -16538,10 +16734,28 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
     if (!el.geometry || el.geometry.length < 2 || !tags.highway) continue;
     if (tags.highway === 'services' || tags.highway === 'steps') continue;
     const dk = el.ck ?? String(el.id);
-    if (seenWays.has(dk)) continue;
     const w = ROAD_W[tags.highway] ?? 5;
     const track = ['track', 'path', 'bridleway', 'cycleway', 'footway'].includes(tags.highway);
     const pts = el.geometry.map((g) => toLocal(g.lat, g.lon));
+    // The junction registry takes EVERY drivable way in the batch, built or
+    // not: a road built last batch still meets the one built now. The
+    // pre-grid below stays for unbuilt ways only — the built ones answer
+    // from the real grid.
+    if (!track) {
+      for (let i = 0; i < pts.length; i++) {
+        const [px, pz] = pts[i];
+        const key = `${Math.round(px * 2)},${Math.round(pz * 2)}`;
+        let node = juncNodes.get(key);
+        if (!node) juncNodes.set(key, node = { x: px, z: pz, arms: [] });
+        for (const j of [i - 1, i + 1]) {
+          if (j < 0 || j >= pts.length) continue;
+          const dx = pts[j][0] - px, dz = pts[j][1] - pz, l = Math.hypot(dx, dz);
+          if (l < 0.5) continue;
+          node.arms.push({ ux: dx / l, uz: dz / l, hw: w / 2, dk });
+        }
+      }
+    }
+    if (seenWays.has(dk)) continue;
     for (let i = 0; i < pts.length - 1; i++) {
       addSeg(preRoadGrid, { ax: pts[i][0], az: pts[i][1], bx: pts[i + 1][0], bz: pts[i + 1][1],
         hw: w / 2, tk: track || undefined, nm: tags.name, dks: dk });
@@ -16725,6 +16939,7 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
     // caught everything, which was harmless while the query only returned
     // areas; with lines in the answer it would paint a river green.
   }
+  flushJunctions();
   flushAprons();
   flushRibbons();
   // The pre-grid lives for exactly one batch: it exists to make build order
@@ -20901,7 +21116,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     tileStats.clear(); surveyedCache.clear();
     unbuilt = 0; osmFails = 0; osmDown = false;
     mapFeats.length = 0; mapStroked.clear();
-    roadGrid.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear();
+    roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear();
     channelGrid.clear(); rapidRocks.clear(); chanSet.clear(); wiSet.clear();
     builtRuns.clear(); synthSeen.clear();
     // ── THE HYDRO STORES SPEAK IN LOCAL METRES TOO ──
