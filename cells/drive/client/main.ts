@@ -2131,7 +2131,7 @@ const COVER_TINT: Record<number, Rgb> = {
   20: [0.34, 0.33, 0.19],   // shrub     — olive scrub
   30: [0.40, 0.42, 0.22],   // grass     — dry sward
   40: [0.46, 0.41, 0.18],   // crop      — worked earth and stubble
-  50: [0.38, 0.37, 0.35],   // built     — the grey of a made surface
+  // 50 built has no entry: it is the ramp itself, greyed — see terrainPalette.
   70: [0.86, 0.89, 0.93],   // snow
   80: [0.13, 0.29, 0.34],   // water
   90: [0.24, 0.30, 0.22],   // wetland
@@ -2206,7 +2206,22 @@ const terrainPalette = (elev: number, slope: number, cover?: number | null,
   // character of the ground — but only PART of the way, because the ramp is
   // where the art direction lives and a photographic land-cover map would
   // flatten the whole look. Data sets the fact; the palette keeps the feel.
-  if (cover !== null && cover !== undefined) {
+  if (cover === COVER.built) {
+    // BUILT GROUND IS THE RAMP, GREYED — NOT A FIXED GREY. WorldCover's
+    // built class is a 10m pixel, and along a rural road those pixels ARE the
+    // road and its shoulders, which are already drawn. Pulled 55% toward one
+    // dark grey they read from the chart as blocky brown blotches following
+    // every desert road (Badwater Road, Giza, San Juan County — measured on
+    // the live frames, with the mesh sitting exactly on natural ground). So
+    // the tint is the ramp's own colour desaturated to a warm neutral at 92%
+    // of its luminance — a made surface, in this ground's own key — mixed
+    // more lightly than the other classes. (Gating it by road density was
+    // tried: `builtUpAt` saturates beside a single carriageway.)
+    const l = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11;
+    const t: Rgb = [l * 0.92, l * 0.91, l * 0.9];
+    const k = COVER_MIX * 0.75;
+    c = [c[0] + (t[0] - c[0]) * k, c[1] + (t[1] - c[1]) * k, c[2] + (t[2] - c[2]) * k];
+  } else if (cover !== null && cover !== undefined) {
     const t = COVER_TINT[cover];
     if (t) c = [c[0] + (t[0] - c[0]) * COVER_MIX, c[1] + (t[1] - c[1]) * COVER_MIX, c[2] + (t[2] - c[2]) * COVER_MIX];
   }
@@ -10820,6 +10835,21 @@ function redrape(t: HeightTile): void {
 }
 /** Build the shoulders for every parked kerb inside this tile, against the
  *  ground as it now stands, and retire them. */
+/** The mean colour of `batterTex`, read once off its canvas: what a vertex
+ *  tint is multiplied by when the strip is drawn. */
+let batterMeanCache: [number, number, number] | null = null;
+function batterMean(): [number, number, number] {
+  if (batterMeanCache) return batterMeanCache;
+  const cv = batterTex.image as HTMLCanvasElement;
+  const ctx = cv.getContext('2d');
+  if (!ctx) return (batterMeanCache = [0.44, 0.41, 0.36]);
+  const d = ctx.getImageData(0, 0, cv.width, cv.height).data;
+  let r = 0, g = 0, b = 0;
+  for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
+  const n = (d.length / 4) * 255;
+  batterMeanCache = [Math.max(0.05, r / n), Math.max(0.05, g / n), Math.max(0.05, b / n)];
+  return batterMeanCache;
+}
 function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
   if (!vergeFill || !pendingBatter.length) return;
   const V: number[] = [], U: number[] = [], S: number[] = [], C: number[] = [];
@@ -10865,10 +10895,23 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
   // ground-following part is a different brown from the ground it lies on,
   // and its outer edge shows as a sawtooth on the mesh's cell period
   // (measured at Carmel: the toe outlined against the hill at every cell).
+  //
+  // …DIVIDED BY THE TEXTURE IT IS DRAWN THROUGH. The strip's material carries
+  // `batterTex`, whose mean is about 0.44, and the terrain mesh carries no map
+  // at all — so a vertex handed the terrain's own colour rendered at less
+  // than half its brightness. Measured on the live frames at Dante's View,
+  // Giza and San Juan County: every road wore blocky dark-earth blotches ten
+  // to thirty metres out, cover and carve both innocent (bare ground, mesh on
+  // natural). That was this strip roofing the carve's bench in the ground's
+  // colour times an earth texture. The tint is pre-divided by the texture's
+  // mean so colour × map lands on the terrain's colour; the earth, rock and
+  // shoulder tints were tuned with the texture and keep it.
+  const bm = batterMean();
   const tintAt = (x: number, z: number, N: number): [number, number, number] => {
     const du = sampleHeight(x + 2, z) - sampleHeight(x - 2, z);
     const dv = sampleHeight(x, z + 2) - sampleHeight(x, z - 2);
-    return terrainPalette(N + baseElev, Math.hypot(du, dv) / 4, coverPaint(x, z), x, z);
+    const c = terrainPalette(N + baseElev, Math.hypot(du, dv) / 4, coverPaint(x, z), x, z);
+    return [c[0] / bm[0], c[1] / bm[1], c[2] / bm[2]];
   };
   // AN EMBANKMENT IS ALLOWED TO BE AN EMBANKMENT. This used to stop at 5m —
   // 3m of drop — and anything steeper than that was declared "the road stands
@@ -19333,7 +19376,11 @@ for (const sx of [-0.62, 0.62]) {
 // CANDELA since three r155 — the old "3.2" was a rounding error, not a lamp.
 // Range and intensity are set per frame — see the night boost below. These are
 // the DAY values, where the beam is a hint rather than a searchlight.
-const HEAD_DAY = { i: 90, d: 110 }, HEAD_NIGHT = { i: 260, d: 230 };
+// Day at 90 cd was not a hint: in every noon survey frame the pool was a
+// pale slab beside the truck, and from the chart a white square on the
+// tarmac (the "slab" at the Suresnes cul-de-sac was this, not a junction
+// box). Sixteen candela over seventy metres is a lamp you can tell is on.
+const HEAD_DAY = { i: 16, d: 70 }, HEAD_NIGHT = { i: 260, d: 230 };
 const headSpot = new THREE.SpotLight(0xfff0d0, HEAD_DAY.i, HEAD_DAY.d, 0.52, 0.65, 1.0);
 /**
  * The beam occludes. A barrier stripes it, a trunk throws a shadow down the
@@ -22284,6 +22331,44 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
   return out;
 };
 /** Every bridge the lift raised this session: where, which, by how much. */
+/** The terrain mesh's own vertex nearest a point: where the tile says it is,
+ *  the vertex's height against the natural field, and the colour it was
+ *  painted — with the palette recomputed flat and at the tile's slope, so a
+ *  dark cell can be blamed on its shade, its cover or its carve. */
+(window as unknown as { __vtxAt?: object }).__vtxAt = (x: number, z: number): object | null => {
+  const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
+  const key = `${tx}/${ty}`;
+  const mesh = terrainMeshes.get(key), t = heightTiles.get(key);
+  if (!mesh || !t) return null;
+  const pos = mesh.geometry.attributes.position as THREE.BufferAttribute;
+  const col = mesh.geometry.attributes.color as THREE.BufferAttribute | undefined;
+  const ox = mesh.position.x, oz = mesh.position.z;
+  let best = -1, bd = Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    const d = Math.hypot(pos.getX(i) + ox - x, pos.getZ(i) + oz - z);
+    if (d < bd) { bd = d; best = i; }
+  }
+  if (best < 0) return null;
+  const vx = pos.getX(best) + ox, vz = pos.getZ(best) + oz, vy = pos.getY(best);
+  const SEG = Math.round(Math.sqrt(pos.count)) - 1, cell = t.w / SEG;
+  const u = clamp(Math.round(((vx - t.xs) / t.w) * 255), 0, 255);
+  const v = clamp(Math.round(((vz - t.zs) / t.h) * 255), 0, 255);
+  const du = t.data[v * 256 + Math.min(255, u + 1)] - t.data[v * 256 + u];
+  const dv = t.data[Math.min(255, v + 1) * 256 + u] - t.data[v * 256 + u];
+  const slope = Math.hypot(du, dv) / Math.max(cell, 1);
+  const cv = coverPaint(vx, vz);
+  const f3 = (c: [number, number, number]): number[] => c.map((k) => +k.toFixed(3));
+  return { key, tile: { xs: +t.xs.toFixed(1), zs: +t.zs.toFixed(1), w: +t.w.toFixed(1), h: +t.h.toFixed(1) }, meshAt: [+ox.toFixed(1), +oz.toFixed(1)],
+    seg: SEG, cell: +cell.toFixed(2), dirty: terrainDirty.has(key),
+    vtx: { x: +vx.toFixed(2), z: +vz.toFixed(2), y: +vy.toFixed(2), d: +bd.toFixed(2) },
+    nat: +sampleHeight(vx, vz).toFixed(2), baseElev: +baseElev.toFixed(1),
+    colour: col ? [+col.getX(best).toFixed(3), +col.getY(best).toFixed(3), +col.getZ(best).toFixed(3)] : null,
+    cover: cv, slope: +slope.toFixed(3),
+    flat: f3(terrainPalette(vy + baseElev, 0, cv, vx, vz)), sloped: f3(terrainPalette(vy + baseElev, slope, cv, vx, vz)),
+    area: areaTintAt(vx, vz) };
+};
+(window as unknown as { __coverAt?: object }).__coverAt = (x: number, z: number): object =>
+  ({ truth: sampleCover(x, z), paint: coverPaint(x, z), builtUp: +builtUpAt(x, z).toFixed(3) });
 (window as unknown as { __wayTags?: object }).__wayTags = (wid: string): object | null => wayTagLog.get(wid) ?? null;
 (window as unknown as { __lifts?: object }).__lifts = (x?: number, z?: number, r = 1e9): object[] => {
   const px = x ?? state.x, pz = z ?? state.z;

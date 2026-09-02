@@ -857,6 +857,31 @@ What the second pass changed, and what it left:
   the dither. And no paint without tarmac: `surface` in `UNSEALED` (unpaved,
   gravel, dirt, ground, …) or `tracktype` grade2-5 gets no edge and no centre
   line — the Senqu tertiary wore yellow edge lines over gravel until it did.
+- **The dark blotches beside every desert road were the batter, through its
+  texture.** Five live frames (Giza, San Juan County, Dante's View, Rueil)
+  showed blocky dark-earth sheets ten to thirty metres out from the roads.
+  Three suspects measured innocent in turn: the carve (`__vtxAt` — the mesh
+  vertex under the road sits on natural ground), the cover tint (`__coverAt`
+  — bare ground at Dante's View, and Giza's built pixels looked the same with
+  the tint changed), and the terrain palette (the vertex colour beside the
+  road is the plain sand). What was left was the strip that roofs the carve's
+  bench in "the terrain's own colour": `MAT.batter` carries `batterTex`
+  (mean ≈ 0.44) and the terrain carries no map, so colour × map rendered at
+  under half the ground's brightness. `tintAt` now divides by the texture's
+  mean (`batterMean()`, read once off the canvas). Cover, carve and palette
+  unchanged; the earth, rock and shoulder tints keep the texture.
+- **Built ground is the ramp, greyed.** WorldCover's built class was pulled
+  55% toward one fixed grey; it is now the ramp's own colour desaturated at
+  92% of its luminance, mixed at 0.75 of `COVER_MIX`. Not the blotch fix,
+  but a desert town no longer goes brown.
+- **The noon headlight pool is a hint.** `HEAD_DAY` 90 cd / 110 m → 16 cd /
+  70 m: at 90 it was a pale slab beside the truck in every noon frame, and
+  the "slab" at the Suresnes cul-de-sac was it.
+- **An instrument to distrust:** `__meshAt` (`meshSurfaceAt`) returned
+  heights metres off the vertex under the same point at Dante's View and
+  Suresnes while `__vtxAt` read the vertex directly. The physics did not
+  misbehave in either frame, so the fault may be the probe path; it is not
+  yet explained. Read `__vtxAt` for "what is the mesh doing here".
 - **Still standing:** the pale kerb strip (a kerb is a shadow); the surface's
   periodic tar patches; roundabout islands and crossroads fillets; nothing
   separating a deck from the road beneath it in the chart; `HEAD_DAY`.
