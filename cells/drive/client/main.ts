@@ -21433,6 +21433,15 @@ function tapeKeep(): string {
     hintCells: solver.hints.size, chains: solver.stats.chains, pinned: solver.stats.pinned,
     hintsNearby: [...solver.hints.values()].flat()
       .filter((h) => Math.hypot(h[0] - x, h[1] - z) < 40).length });
+/** EVERY hint within r of a point, with its height — not the nearest one. Two
+ *  chains that both hold a station at a junction leave two hints there, and
+ *  whether they AGREE is the whole question a step asks. `__sharedAt` reports
+ *  the count; this reports the values. */
+(window as unknown as { __hintsAt?: object }).__hintsAt = (x: number, z: number, r = 1): object[] =>
+  [...solver.hints.values()].flat()
+    .filter((h) => Math.hypot(h[0] - x, h[1] - z) <= r)
+    .map((h) => ({ x: +h[0].toFixed(2), z: +h[1].toFixed(2), y: +h[2].toFixed(3),
+      d: +Math.hypot(h[0] - x, h[1] - z).toFixed(2) }));
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number, margin = 0.8) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z, margin) });
 /** The nearest drivable centreline: how far OUTSIDE its kerb this point is
