@@ -11416,6 +11416,17 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   }
   let alg = elev;
   let pbranch = 6;
+  // A CRUMB'S HINTED END IS AN ANCHOR. The crumb branches below anchor only
+  // to BUILT decks, and a crumb that builds before the road it joins finds
+  // none there — measured at Vélizy as the worst seam on the capture: a
+  // three-station unnamed piece, one hinted station of three so under the
+  // hint gate, held LEVEL at its far end 0.92m under the pin at its near
+  // end, and the named road then built its through-station on that pin.
+  // The pin IS the deck the through road will build to, so where no deck
+  // stands yet the chain's hint at the end serves as the anchor. The end
+  // weld is untouched: it still reads built decks only.
+  const q0 = p0 ?? (hintEl[0] ?? null);
+  const q1 = p1 ?? (hintEl[n - 1] ?? null);
   // A CRUMB CANNOT PROFILE ITSELF. OSM splits a mountain road at every
   // structure change — Chapman's Peak alternates gallery / open road / gallery
   // in 40-55m pieces — and a fragment eight stations long is too short for
@@ -11451,16 +11462,16 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     });
     if (p0 !== null && Math.abs(alg[0] - p0) < 4) alg[0] = p0;
     if (p1 !== null && Math.abs(alg[n - 1] - p1) < 4) alg[n - 1] = p1;
-  } else if (mode === 'auto' && (n <= 16 || (n <= 40 && chaoticHere() && (p0 !== null || p1 !== null)))) {
-    if (p0 !== null && p1 !== null) {
+  } else if (mode === 'auto' && (n <= 16 || (n <= 40 && chaoticHere() && (q0 !== null || q1 !== null)))) {
+    if (q0 !== null && q1 !== null) {
       pbranch = 2;
-      alg = elev.map((_, i) => p0 + ((p1 - p0) * i) / (n - 1));
-    } else if (p0 !== null || p1 !== null) {
+      alg = elev.map((_, i) => q0 + ((q1 - q0) * i) / (n - 1));
+    } else if (q0 !== null || q1 !== null) {
       // LEVEL, not drifted: every DEM-derived drift term tried here smuggled
       // the plateau back in one crumb at a time — a 40-90m gallery shelf is
       // engineered near-level, and holding the anchor is closer to truth.
       pbranch = 3;
-      const a = (p0 ?? p1) as number;
+      const a = (q0 ?? q1) as number;
       alg = elev.map(() => a);
     } else {
       pbranch = 4;
