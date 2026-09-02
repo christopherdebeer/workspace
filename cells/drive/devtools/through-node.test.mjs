@@ -60,10 +60,12 @@ const WORLDS = [
   // junctions, measured after the fix on 2026-09-02: over10cm 0, over30cm 0,
   // worst 0.05, 44 pinned stations and none lost. The bars sit one notch up.
   { id: 'junctions', bars: { over10cm: 1, over30cm: 0, worstM: 0.1, lostFrac: 0.05 } },
-  // at-campsbay, measured after the fix on 2026-09-02: over10cm 27, over30cm 1,
-  // worst 0.47 (a through-node whose two CHAINS disagree by 7cm — a planner
-  // residual, not a per-way one), 24 of 262 pins lost. Was 32 / 5 / 2.18 / 179.
-  { id: 'at-campsbay', bars: { over10cm: 28, over30cm: 1, worstM: 0.5, lostFrac: 0.1 } },
+  // at-campsbay, measured 2026-09-02 after the ten per-way fixes recorded in
+  // CLAUDE.md (the metre floor, hints along the chain, junctions by chain, the
+  // warp's fade, bound and stop-at-pin, the chord at a pin, the crop tie):
+  // over10cm 8, over30cm 0, worst 0.19, 5 of 331 pins lost. Was 27 / 1 / 0.47 /
+  // 24 of 262 after the pin fix alone, and 32 / 5 / 2.18 / 179 before it.
+  { id: 'at-campsbay', bars: { over10cm: 10, over30cm: 0, worstM: 0.25, lostFrac: 0.03 } },
 ];
 for (const w of WORLDS) {
   const d = await openDrive({
