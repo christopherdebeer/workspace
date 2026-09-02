@@ -242,18 +242,41 @@ export class RoadSolver {
     return best;
   }
 
-  /** How many hints stand within `r` of a point on `layer` — two or more is a
-   *  junction, since two chains only leave hints at one spot where their roads
-   *  share a node. Cell-indexed: the per-way build asks this per station. */
-  hintsNear(x: number, z: number, r: number, layer: number, cap = 2): number {
-    let c = 0;
+  /**
+   * How many DISTINCT chains pass within `r` of a point on `layer` — two or
+   * more is a junction, and the per-way build holds such a station through
+   * every stage that would otherwise move it off the planner's pin.
+   *
+   * This counted HINTS within 0.3m, which is two chains only where both have
+   * a station on the very node — and the through road's densify rounds a
+   * bend at that node into an arc whose stations sit r(1-cos(turn/2)) off
+   * it: 0.3m at a 30-degree bend of a 9m arc, 2.6m at a right angle. Fifteen
+   * of Camps Bay's through-node stations were losing their pin to the grade
+   * line for exactly that reason, all of them at bends. Counting chains, by
+   * the id every hint carries now, at the planner's own pin radius and by
+   * the same point-or-segment distance hintAt reads, holds what the planner
+   * pinned — no more and no less.
+   */
+  chainsNear(x: number, z: number, r: number, layer: number, cap = 2): number {
+    const seen = new Set<number>();
     for (const dx of [0, -HINT_CELL, HINT_CELL]) for (const dz of [0, -HINT_CELL, HINT_CELL]) {
       const arr = this.hints.get(`${Math.floor((x + dx) / HINT_CELL)},${Math.floor((z + dz) / HINT_CELL)}`);
-      if (arr) for (const [hx, hz, , hl] of arr) {
-        if (hl === layer && Math.hypot(hx - x, hz - z) < r && ++c >= cap) return c;
+      if (arr) for (const [hx, hz, , hl, ci, ii] of arr) {
+        if (hl !== layer || seen.has(ci)) continue;
+        let d = Math.hypot(hx - x, hz - z);
+        const ch = this.chains.get(ci);
+        if (d >= r && ch && ii + 1 < ch.xs.length && ch.ls[ii + 1] === layer) {
+          const sx = ch.xs[ii + 1] - hx, sz = ch.zs[ii + 1] - hz;
+          const l2 = sx * sx + sz * sz;
+          if (l2 > 1e-6) {
+            const t = ((x - hx) * sx + (z - hz) * sz) / l2;
+            if (t > 0 && t < 1) d = Math.hypot(hx + sx * t - x, hz + sz * t - z);
+          }
+        }
+        if (d < r && (seen.add(ci), seen.size >= cap)) return seen.size;
       }
     }
-    return c;
+    return seen.size;
   }
 
   /**
