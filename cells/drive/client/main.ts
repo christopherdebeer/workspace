@@ -4612,10 +4612,15 @@ function terrainNormalTex(t: { w: number; data: Float32Array; xs?: number; zs?: 
   // border lit its edge pixels differently from the interior — a seam along
   // every tile boundary. At the border the sample beyond the edge is taken
   // from the field, which has the neighbouring tile when it is loaded.
+  // IN THE RASTER'S FRAME. `t.data` is absolute elevation and `sampleHeight`
+  // is local (minus baseElev); the first version mixed them, so every border
+  // pixel got a gradient the size of the base elevation and the tile edges
+  // drew as black lines at close zoom — the exact seam this exists to remove,
+  // inverted (Senqu, live, with the tile debug lines to correlate against).
   const beyond = (i: number, j: number): number | null => {
     if (t.xs === undefined || t.zs === undefined || t.h === undefined) return null;
     const ex = t.xs + (i + 0.5) * mpp, ez = t.zs + (j + 0.5) * (t.h / W);
-    return hasHeight(ex, ez) ? sampleHeight(ex, ez) : null;
+    return hasHeight(ex, ez) ? sampleHeightRaw(ex, ez) + baseElev : null;
   };
   for (let j = 0; j < W; j++) {
     const j0 = Math.max(0, j - 1) * W, j1 = Math.min(W - 1, j + 1) * W;
