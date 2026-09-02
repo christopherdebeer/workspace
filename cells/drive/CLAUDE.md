@@ -223,6 +223,13 @@ Other harness facts learned the hard way:
   settle — painting frames nobody looks at. `NODRAW` skips only the draws:
   Camps Bay settles at t+21s instead of t+180s with every probe reading the
   same. A screenshot run leaves it off, by definition.
+- **`settle` is SIM seconds, and sim seconds are frames.** `openDrive({settle})`
+  waits for the sim clock, which advances by a clamped `dt` per frame — so
+  while a big capture's frames each carry seconds of synchronous road build,
+  `settle: 9000` is 180 slow frames: eight minutes of boot on the paris-south
+  capture against fourteen seconds on Camps Bay, all of it before the script's
+  own gate started counting. A measurement with its own settle gate passes
+  `settle: 0`; the option exists for tests that integrate physics.
 - Screenshots land in `/tmp/drive-tools/` (`$DRIVE_WORK`).
 - A bundle built for a test must be written **inside the repo** (e.g.
   `node_modules/.cache`) — `--external:three` resolves from where the file
