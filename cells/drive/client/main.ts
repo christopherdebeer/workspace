@@ -4604,18 +4604,37 @@ const NRM_SCALE = Number(new URLSearchParams(location.search).get('nscale') ?? 0
 // about X, so uv.y grows toward world -Z. A DataTexture does not flip, so v=0
 // is buffer row 0 — which therefore sits at MAX z, while the tile's own data
 // row 0 sits at MIN z. The rows are stored reversed for exactly that reason.
-function terrainNormalTex(t: { w: number; data: Float32Array }): THREE.DataTexture {
+function terrainNormalTex(t: { w: number; data: Float32Array; xs?: number; zs?: number; h?: number }): THREE.DataTexture {
   const W = 256;
   const mpp = t.w / W;
   const buf = new Uint8Array(W * W * 4);
+  // THE EDGE ROWS READ THE NEIGHBOUR. The one-sided difference at a tile's
+  // border lit its edge pixels differently from the interior — a seam along
+  // every tile boundary. At the border the sample beyond the edge is taken
+  // from the field, which has the neighbouring tile when it is loaded.
+  const beyond = (i: number, j: number): number | null => {
+    if (t.xs === undefined || t.zs === undefined || t.h === undefined) return null;
+    const ex = t.xs + (i + 0.5) * mpp, ez = t.zs + (j + 0.5) * (t.h / W);
+    return hasHeight(ex, ez) ? sampleHeight(ex, ez) : null;
+  };
   for (let j = 0; j < W; j++) {
     const j0 = Math.max(0, j - 1) * W, j1 = Math.min(W - 1, j + 1) * W;
     const dj = (Math.min(W - 1, j + 1) - Math.max(0, j - 1)) * mpp;
     for (let i = 0; i < W; i++) {
       const i0 = Math.max(0, i - 1), i1 = Math.min(W - 1, i + 1);
       const di = (i1 - i0) * mpp;
-      const dzdx = (t.data[j * W + i1] - t.data[j * W + i0]) / di;
-      const dzdz = (t.data[j1 + i] - t.data[j0 + i]) / dj;
+      let dzdx = (t.data[j * W + i1] - t.data[j * W + i0]) / di;
+      let dzdz = (t.data[j1 + i] - t.data[j0 + i]) / dj;
+      if (i === 0 || i === W - 1) {
+        const a = i === 0 ? beyond(-1, j) : t.data[j * W + i - 1];
+        const b = i === W - 1 ? beyond(W, j) : t.data[j * W + i + 1];
+        if (a !== null && b !== null) dzdx = (b - a) / (2 * mpp);
+      }
+      if (j === 0 || j === W - 1) {
+        const a = j === 0 ? beyond(i, -1) : t.data[(j - 1) * W + i];
+        const b = j === W - 1 ? beyond(i, W) : t.data[(j + 1) * W + i];
+        if (a !== null && b !== null) dzdz = (b - a) / (2 * mpp);
+      }
       // World normal of the heightfield: y is up, and the surface falls away
       // from the gradient in x and z.
       // FLATTENED TOWARD UP by NRM_SCALE. Taken raw, a 9.5m/px gradient on a
@@ -4765,8 +4784,22 @@ function buildTerrainMesh(t: HeightTile): void {
     const elevAbs = pos.getY(i) + baseElev;
     const u = clamp(Math.round(((ex - t.xs) / t.w) * 255), 0, 255);
     const v = clamp(Math.round(((ez - t.zs) / t.h) * 255), 0, 255);
-    const du = t.data[v * 256 + Math.min(255, u + 1)] - t.data[v * 256 + u];
-    const dv = t.data[Math.min(255, v + 1) * 256 + u] - t.data[v * 256 + u];
+    // THE SLOPE READS ACROSS THE TILE EDGE. A forward difference clamped
+    // inside the tile gave the last column and row of every tile a slope of
+    // zero, so they took no shade darkening and drew a one-vertex bright line
+    // along two edges of each tile — the cross through the truck on every
+    // chart frame (Colcha K, Walter Sisulu). Central difference on the field
+    // itself, which knows the neighbouring tile; where no tile is loaded the
+    // in-tile one-sided read stands in, so the world's edge is not shaded as
+    // a cliff down to sea level.
+    let du: number, dv: number;
+    if (hasHeight(ex + cell, ez) && hasHeight(ex - cell, ez) && hasHeight(ex, ez + cell) && hasHeight(ex, ez - cell)) {
+      du = (sampleHeight(ex + cell, ez) - sampleHeight(ex - cell, ez)) / 2;
+      dv = (sampleHeight(ex, ez + cell) - sampleHeight(ex, ez - cell)) / 2;
+    } else {
+      du = t.data[v * 256 + Math.min(255, u + 1)] - t.data[v * 256 + Math.max(0, u - (u === 255 ? 1 : 0))];
+      dv = t.data[Math.min(255, v + 1) * 256 + u] - t.data[Math.max(0, v - (v === 255 ? 1 : 0)) * 256 + u];
+    }
     // coverPaint, not sampleCover: this is the one consumer that only decides a
     // COLOUR, so it takes the dithered read and the 38m block edges dissolve
     // into a ragged boundary at vertex resolution. See coverPaint.
@@ -10963,8 +10996,8 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       continue;
     }
     if (stranded) spanStats.fillStranded++;
-    // [distance out, left height, right height, left seated?, right seated?]
-    const pts: Array<[number, number, number, number, number]> = [];
+    // [left distance, right distance, left height, right height, left seated?, right seated?, left ground, right ground]
+    const pts: Array<[number, number, number, number, number, number, number, number]> = [];
     // …and the tint at each end of each step, parallel to `pts`.
     const tints: Array<[[number, number, number], [number, number, number]]> = [];
     // NEVER OVER ANOTHER ROAD — but a junction is a reason to STOP SHORT, not a
@@ -10976,6 +11009,7 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
     // batter is drawn up to it.
     let lim = REACH, clipped = false;
     let met = false, wet = false;
+    let toe0 = -1, toe1 = -1;
     for (const d0 of STEPS) {
       let d = d0;
       if (d > lim) break;
@@ -10986,9 +11020,10 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       };
       if (blocked(d)) {
         // Somewhere between the last good step and this one is the tarmac edge.
-        lim = clearTo(b, pts.length ? pts[pts.length - 1][0] : 0, d);
+        const last = pts.length ? Math.max(pts[pts.length - 1][0], pts[pts.length - 1][1]) : 0;
+        lim = clearTo(b, last, d);
         clipped = true;
-        if (lim <= (pts.length ? pts[pts.length - 1][0] : 0) + 0.2) break;
+        if (lim <= last + 0.2) break;
         d = lim;
       }
       const f = d / 2.2;                 // nx/nz carry 2.2m of reach
@@ -11002,46 +11037,79 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       if (coverWater(qx0, qz0) || coverWater(qx1, qz1)) {
         wet = true; break;
       }
+      // ── THE STRIP CLOSES THE GAP TO THE GROUND THAT IS DRAWN, AND NO MORE ──
+      //
+      // The wedge used to be clamped about the NATURAL surface and then kept
+      // going, on the ground, while the carved mesh lay below it — roofing the
+      // carve's bench out to thirty metres. On a coarse tile the bench is a
+      // whole cell, so beside every road the strip became a sheet with the
+      // mesh cell's straight edges, sampled at fixed step distances (Dakar,
+      // and every desert road once its tint stopped hiding it). The target
+      // is now the ground as rendered, `groundAt`: kerb above it, a bank
+      // falls to it; kerb below it, a face climbs to it; kerb at it, nothing.
+      // The bench is terrain and shows as terrain, which blends by
+      // construction; its depth is the carve's business, not this strip's.
       const g0 = groundAt(qx0, qz0), g1 = groundAt(qx1, qz1);
-      const N0 = sampleHeight(qx0, qz0), N1 = sampleHeight(qx1, qz1);
-      // AT GRADE: the natural ground meets the kerb and the mesh is there too —
-      // nothing to draw. (The old test read the CARVED ground alone, which is
-      // true beside every cut, and skipped exactly the bays that needed a face.)
-      if (!pts.length && Math.abs(N0 - b.y0) < 0.35 && Math.abs(N1 - b.y1) < 0.35
-        && g0 >= b.y0 - 0.12 && g1 >= b.y1 - 0.12) {
+      const N0 = g0, N1 = g1;
+      // AT GRADE: nothing to draw.
+      if (!pts.length && Math.abs(N0 - b.y0) < 0.35 && Math.abs(N1 - b.y1) < 0.35) {
         spanStats.fillNoGap++; met = true; break;
       }
       const dd = Math.max(0, d - VERGE);
       const lo0 = b.y0 - dd * BATT, lo1 = b.y1 - dd * BATT;
       const hi0 = b.y0 + dd * CUT_K, hi1 = b.y1 + dd * CUT_K;
       let p0 = clamp(N0, lo0, hi0), p1 = clamp(N1, lo1, hi1);
-      let on0 = p0 === N0, on1 = p1 === N1;   // lying on the natural ground, not on a slope
+      let on0 = p0 === N0, on1 = p1 === N1;   // lying on the ground, not on a slope
       let wall0 = false, wall1 = false;
       if (d >= CUT_REACH) {
         if (!on0 && N0 > hi0) { p0 = N0; on0 = true; wall0 = true; }
         if (!on1 && N1 > hi1) { p1 = N1; on1 = true; wall1 = true; }
       }
-      // Seated where the CARVED ground is what chose the height — the fill
-      // toe a later carve can move out from under. A vertex on a cut face,
-      // or roofing the bench along the natural surface, is pinned.
-      pts.push([d, p0, p1, on0 && g0 >= N0 - 0.1 ? 1 : 0, on1 && g1 >= N1 - 0.1 ? 1 : 0]);
+      // THE TOE IS WHERE THE WEDGE CROSSES THE GROUND, not the next step out.
+      // The first step a side lands on the ground, the crossing between the
+      // previous step and this one is solved on the two gaps and that side's
+      // outer edge goes there — so the strip's width is the height difference
+      // over the slope, continuously, and the toe is a curve along the road
+      // rather than a staircase of step distances. A side that has landed
+      // holds a metre past its toe while the other side finishes its slope.
+      const prev = pts.length ? pts[pts.length - 1] : null;
+      const cut0 = !on0 && N0 > hi0, cut1 = !on1 && N1 > hi1;
+      const side = (on: boolean, wall: boolean, N: number, lo: number, hi: number, pp: number, pN: number, pd: number,
+        toe: number, ax: number, az: number, nx: number, nz: number): [number, number, number] => {
+        // [distance, height, toe distance (or -1)]
+        if (!on) return [d, N < lo ? lo : hi, -1];
+        if (wall) return [d, N, d];
+        if (toe >= 0) {
+          const e = Math.min(d, toe + 1);
+          const f2 = e / 2.2;
+          return [e, groundAt(ax + nx * f2, az + nz * f2), toe];
+        }
+        const gPrev = prev ? Math.abs(pp - pN) : 0;
+        const gNow = Math.max(0, Math.min(N - lo, hi - N));
+        const t = gPrev + gNow > 1e-6 ? gPrev / (gPrev + gNow) : 1;
+        const e = prev ? pd + t * (d - pd) : d;
+        const f2 = e / 2.2;
+        return [e, groundAt(ax + nx * f2, az + nz * f2), e];
+      };
+      const r0 = side(on0, wall0, N0, lo0, hi0, prev ? prev[2] : 0, prev ? prev[6] : 0, prev ? prev[0] : 0, toe0, b.ax, b.az, b.nxA, b.nzA);
+      const r1 = side(on1, wall1, N1, lo1, hi1, prev ? prev[3] : 0, prev ? prev[7] : 0, prev ? prev[1] : 0, toe1, b.bx, b.bz, b.nxB, b.nzB);
+      toe0 = r0[2]; toe1 = r1[2];
+      // [left distance, right distance, left height, right height, left seated, right seated, left ground, right ground]
+      pts.push([r0[0], r1[0], r0[1], r1[1], on0 ? 1 : 0, on1 ? 1 : 0, N0, N1]);
       // EARTH ONLY WHERE THE GROUND WAS DUG. A fill bank is a grassed slope
       // within a season, so it wears the terrain's own colour like the ground
       // it lands on; a cut face — clamped from above, the hill cut back — is
       // the one place fresh earth shows. Tinted all as earth, the inside of
       // the Coast Road hairpin at Big Sur was one pale tan sheet.
-      const cut0 = !on0 && N0 > hi0, cut1 = !on1 && N1 > hi1;
       tints.push([
         d <= VERGE ? SHOULDER : wall0 ? ROCK : cut0 ? EARTH : tintAt(qx0, qz0, N0),
         d <= VERGE ? SHOULDER : wall1 ? ROCK : cut1 ? EARTH : tintAt(qx1, qz1, N1),
       ]);
-      // Met: the strip lies on the natural ground at both ends AND the mesh is
-      // back up to it — a fill toe on the ground, or a cut face past the
-      // bench. On the ground with the mesh still carved below, keep going.
-      if (on0 && on1 && g0 >= N0 - 0.1 && g1 >= N1 - 0.1) { met = true; break; }
+      // Met: both sides on the ground. Nothing follows the ground past that.
+      if (on0 && on1) { met = true; break; }
       if (clipped) break;                // ran out of room, not out of slope
     }
-    const reached = pts.length ? pts[pts.length - 1][0] : 0;
+    const reached = pts.length ? Math.max(pts[pts.length - 1][0], pts[pts.length - 1][1]) : 0;
     // Logged with what was actually DRAWN, not with what was computed. Once a
     // run that never met anything stopped being emitted, `pts.length > 0` was
     // reporting earth that is not there — an instrument lying about the thing
@@ -11064,7 +11132,7 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
     // came back up to the natural ground within reach: the face is real and
     // the strip beyond it is a roof over the bench, and stopping short there
     // shows the bench rather than the hill.
-    if (!met && pts.some((p) => p[1] > b.y0 + 0.3 || p[2] > b.y1 + 0.3)) met = true;
+    if (!met && pts.some((p) => p[2] > b.y0 + 0.3 || p[3] > b.y1 + 0.3)) met = true;
     if (!met && !clipped && !wet) { spanStats.fillUnmet++; continue; }
     spanStats.fillDrawn++;
     // THE ENDS OF A RUN GET A FACE. Where the next bay has no batter — the run
@@ -11079,7 +11147,7 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       let ppx = 0, ppy = ky, pps = 0, ppc: [number, number, number] = SHOULDER;
       for (let k = 0; k < pts.length; k++) {
         const p = pts[k];
-        const d = p[0], y = end ? p[2] : p[1], sd = end ? p[4] : p[3];
+        const d = end ? p[1] : p[0], y = end ? p[3] : p[2], sd = end ? p[5] : p[4];
         const tc = end ? tints[k][1] : tints[k][0];
         const fa = ppx / 2.2, fb = d / 2.2;
         // A quad with its inboard edge collapsed onto the kerb point: the fan
@@ -11095,20 +11163,20 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       }
       spanStats.fillCap++;
     }
-    let px = 0, py0 = b.y0, py1 = b.y1, ps0 = 0, ps1 = 0;
+    let px0 = 0, px1 = 0, py0 = b.y0, py1 = b.y1, ps0 = 0, ps1 = 0;
     let pc0: [number, number, number] = SHOULDER, pc1: [number, number, number] = SHOULDER;
     for (let k = 0; k < pts.length; k++) {
-      const [d, y0, y1, s0, s1] = pts[k];
+      const [d0, d1, y0, y1, s0, s1] = pts[k];
       const [c0, c1] = tints[k];
-      const fa = px / 2.2, fb = d / 2.2;
+      const fa0 = px0 / 2.2, fa1 = px1 / 2.2, fb0 = d0 / 2.2, fb1 = d1 / 2.2;
       quadInto(V, U, [
-        b.ax + b.nxA * fa, py0, b.az + b.nzA * fa,
-        b.bx + b.nxB * fa, py1, b.bz + b.nzB * fa,
-        b.ax + b.nxA * fb, y0, b.az + b.nzA * fb,
-        b.bx + b.nxB * fb, y1, b.bz + b.nzB * fb,
-      ], [b.uA * 2, px / 4, b.uB * 2, px / 4, b.uA * 2, d / 4, b.uB * 2, d / 4], S, [ps0, ps1, s0, s1]);
+        b.ax + b.nxA * fa0, py0, b.az + b.nzA * fa0,
+        b.bx + b.nxB * fa1, py1, b.bz + b.nzB * fa1,
+        b.ax + b.nxA * fb0, y0, b.az + b.nzA * fb0,
+        b.bx + b.nxB * fb1, y1, b.bz + b.nzB * fb1,
+      ], [b.uA * 2, px0 / 4, b.uB * 2, px1 / 4, b.uA * 2, d0 / 4, b.uB * 2, d1 / 4], S, [ps0, ps1, s0, s1]);
       tintInto(C, pc0, pc1, c0, c1);
-      px = d; py0 = y0; py1 = y1; ps0 = s0; ps1 = s1; pc0 = c0; pc1 = c1;
+      px0 = d0; px1 = d1; py0 = y0; py1 = y1; ps0 = s0; ps1 = s1; pc0 = c0; pc1 = c1;
       bx0 = Math.min(bx0, b.ax, b.bx); bx1 = Math.max(bx1, b.ax, b.bx);
       bz0 = Math.min(bz0, b.az, b.bz); bz1 = Math.max(bz1, b.az, b.bz);
     }

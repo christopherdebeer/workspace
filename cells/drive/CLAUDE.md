@@ -882,9 +882,31 @@ What the second pass changed, and what it left:
   Suresnes while `__vtxAt` read the vertex directly. The physics did not
   misbehave in either frame, so the fault may be the probe path; it is not
   yet explained. Read `__vtxAt` for "what is the mesh doing here".
+- **The batter closes the gap to the ground that is DRAWN, and no more.**
+  Third pass, from a Dakar frame: the wedge was clamped about the natural
+  surface and then followed it while the carved mesh lay below — roofing the
+  carve's bench out to 30m. On a coarse tile the bench is a whole cell, so
+  the strip was a sheet with the cell's straight edges sampled at the step
+  distances. The target is `groundAt` now (kerb above it: a bank; below it:
+  a face; at it: nothing), the toe is solved as the crossing between two
+  steps rather than the next step out, per side, and a landed side holds a
+  metre past its toe while the other finishes. Width is the height
+  difference over the slope, continuously. The bench beyond the toe shows as
+  terrain, which blends by construction; how deep and how wide it is belongs
+  to the carve and, properly, to a terrain mesh with vertices at the kerb
+  and the toe — the structural job still open.
+- **Tile seams.** The colour pass took its slope from a forward difference
+  clamped inside the tile, so the last column and row of every tile had zero
+  slope, no shade darkening, and drew a one-vertex bright line along two
+  edges of each tile — the cross through the truck on the Colcha K and
+  Walter Sisulu chart frames. It is a central difference on the field now
+  (which knows the neighbouring tile), and the per-tile normal map's edge
+  pixels read the neighbour through the field too. The lighter quadrant in
+  the Colcha K frame is NOT a missed cover recolour (`coverDirtiedTerrain`
+  rebuilds on arrival) and is not yet explained.
 - **Still standing:** the pale kerb strip (a kerb is a shadow); the surface's
   periodic tar patches; roundabout islands and crossroads fillets; nothing
-  separating a deck from the road beneath it in the chart; `HEAD_DAY`.
+  separating a deck from the road beneath it in the chart.
 
 ## The labs
 
