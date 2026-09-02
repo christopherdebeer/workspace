@@ -11219,8 +11219,35 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const anchor0D = lastAnchorD;
   const anchor1 = deckAnchorAt(dense[n - 1][0], dense[n - 1][1]);
   const anchor1D = lastAnchorD;
-  const p0 = anchor0 === null ? null : anchor0 - lift;
-  const p1 = anchor1 === null ? null : anchor1 - lift;
+  let p0 = anchor0 === null ? null : anchor0 - lift;
+  let p1 = anchor1 === null ? null : anchor1 - lift;
+  // ── AN APPROACH WAITS FOR ITS PORTAL ──
+  //
+  // A flyover is lifted whole and its approaches weld up to its portals — which
+  // only works if the portal is standing when the approach builds. Within one
+  // tile the build order says so (higher layer first, see renderWays); across
+  // tiles it says nothing, and measured at Vélizy every lifted bridge came back
+  // to the floor: its approach had built at grade from a neighbouring tile, the
+  // bridge's own ends anchored DOWN to it, and the weld spread that -5.4m along
+  // a fragment with no held station in it.
+  //
+  // So an end with no built anchor but a HIGHER-LAYER hint at it — a planned
+  // portal, not yet built — defers, through the same bounded retry a chaotic
+  // crumb uses: the tile comes back in three seconds, and by then the bridge
+  // tile has usually landed. Three tries, then it builds at grade regardless,
+  // which is the pre-existing picture rather than a stall.
+  if (drivable && mode === 'auto' && n > 1) {
+    let wait = false;
+    for (const [i, a] of [[0, anchor0], [n - 1, anchor1]] as Array<[number, number | null]>) {
+      if (a !== null) continue;
+      if (solver.hintAbove(dense[i][0], dense[i][1], layer, 2.5) !== null) wait = true;
+    }
+    if (wait) {
+      const dkey = `${Math.round(dense[0][0])},${Math.round(dense[0][1])}`;
+      const seen = crumbDefer.get(dkey) ?? 0;
+      if (seen < 3) { crumbDefer.set(dkey, seen + 1); unbuilt++; return; }
+    }
+  }
   // ±2 samples of the SOURCE's real resolution, not the tile's: high-zoom
   // terrarium here is oversampled ~30m SRTM, so ±8m candidates were mostly
   // re-reading the same underlying measurement.
@@ -11287,6 +11314,18 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     for (let i = 0; i < n; i++) {
       if (solver.hintsNear(dense[i][0], dense[i][1], 0.3, layer) >= 2) { jn.push(i); held[i] = 1; }
     }
+  }
+  // A HINTED END IS HELD THROUGH THE SEAT. The seat's move at a fragment end
+  // is undone by the end weld in every case — the neighbour was built from the
+  // same chain hint — so all it ever leaves is a kink: measured on Tree Road,
+  // one fragment leaving a 4cm-agreed node at 19% and the other arriving at
+  // ~0%, because one end had been seated 0.64m down and welded back up with
+  // the residual spread along its length. `seatHold` is separate from `held`
+  // so the grade line and the rulings still treat the end as an end.
+  const seatHold = new Uint8Array(n);
+  if (hinted && n > 2) {
+    if (hintEl[0] !== null) seatHold[0] = 1;
+    if (hintEl[n - 1] !== null) seatHold[n - 1] = 1;
   }
   /** What ruleGrade's `held` wants: a non-null entry per held station. */
   const heldArr: Array<number | null> | undefined = jn.length ? dense.map((_, i) => (held[i] ? 1 : null)) : undefined;
@@ -11470,6 +11509,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       }
       if (need > 0) {
         for (const [a, b] of runs) for (let i = a; i <= b; i++) prof[i] += need;
+        // AND IT DOES NOT WELD DOWN. An anchor more than a metre under a lifted
+        // portal is an approach that built first, at grade; welding to it hands
+        // back the floor. The approach welds up to this portal instead — on its
+        // retry, if it deferred, or as a step if it did not, which is the one
+        // case the defer above exists to make rare.
+        if (p0 !== null && prof[0] - p0 > 1) p0 = null;
+        if (p1 !== null && prof[n - 1] - p1 > 1) p1 = null;
         if (liftLog.length < 500) {
           liftLog.push({ x: +dense[0][0].toFixed(1), z: +dense[0][1].toFixed(1), nm: name, fid, layer,
             m: +need.toFixed(2), n: runs.reduce((c, [a, b]) => c + (b - a + 1), 0) });
@@ -11630,7 +11676,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // road stays in its cutting rather than climbing out of it, and `hug`
       // still fades the whole thing to zero over any drop worth bridging, which
       // is precisely the coastal case.
-      const seat = held[i] ? prof[i] : prof[i] + (Math.min(prof[i], (tR + tL) * 0.5) - prof[i]) * hug;
+      const seat = held[i] || seatHold[i] ? prof[i] : prof[i] + (Math.min(prof[i], (tR + tL) * 0.5) - prof[i]) * hug;
       // ── THE DECK'S ROLL IS DESIGNED, NOT SAMPLED ──
       //
       // This used to be `(tR - tL) * 0.5 * hug`, capped at MAX_FALL: the

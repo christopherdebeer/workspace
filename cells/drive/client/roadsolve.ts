@@ -235,6 +235,22 @@ export class RoadSolver {
     return best;
   }
 
+  /** The highest settled deck within `r` on any layer ABOVE `layer` — a
+   *  planned portal an approach should wait for, whether or not it has been
+   *  built yet. */
+  hintAbove(x: number, z: number, layer: number, r: number): number | null {
+    let best: number | null = null;
+    for (const dx of [0, -HINT_CELL, HINT_CELL]) for (const dz of [0, -HINT_CELL, HINT_CELL]) {
+      const arr = this.hints.get(`${Math.floor((x + dx) / HINT_CELL)},${Math.floor((z + dz) / HINT_CELL)}`);
+      if (arr) for (const [hx, hz, hy, hl] of arr) {
+        if (hl <= layer) continue;
+        if (Math.hypot(hx - x, hz - z) > r) continue;
+        if (best === null || hy > best) best = hy;
+      }
+    }
+    return best;
+  }
+
   noteJunction(x: number, z: number): void {
     this.stats.pinned++;
     if (this.junctions.size > 8000) this.junctions.clear();
