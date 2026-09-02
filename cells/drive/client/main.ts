@@ -11510,12 +11510,27 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         }
       }
     }
-    for (const [a, b] of runs) for (let i = a; i <= b; i++) {
-      const chord = alg[a] + ((alg[b] - alg[a]) * (i - a)) / (b - a);
-      // Tagged tunnels cap at the terrain: the z13 heightfield can't resolve
-      // small knolls, and an uncapped chord under flat data left a giant
-      // exposed tube sitting on the ground. Bridges ride the chord.
-      prof[i] = mode === 'tunnel' ? Math.min(chord, alg[i]) : chord;
+    // A CHORD BREAKS AT A PIN. The chord wrote portal to portal through every
+    // station between, held junction stations included — measured on Eldon
+    // Lane at Camps Bay as the one stage that moved a pin both chains agreed
+    // on (12.765 -> 12.343) while every stage that knows about `held` left it
+    // alone. A pinned station is another road's deck; the chord runs between
+    // consecutive pins instead, so a ramp merging onto a viaduct still meets
+    // it where the planner said.
+    for (const [a, b] of runs) {
+      const knots = [a];
+      for (let i = a + 1; i < b; i++) if (held[i]) knots.push(i);
+      knots.push(b);
+      for (let k = 0; k + 1 < knots.length; k++) {
+        const p = knots[k], q = knots[k + 1];
+        for (let i = p; i <= q; i++) {
+          const chord = alg[p] + ((alg[q] - alg[p]) * (i - p)) / (q - p || 1);
+          // Tagged tunnels cap at the terrain: the z13 heightfield can't resolve
+          // small knolls, and an uncapped chord under flat data left a giant
+          // exposed tube sitting on the ground. Bridges ride the chord.
+          prof[i] = mode === 'tunnel' ? Math.min(chord, alg[i]) : chord;
+        }
+      }
     }
     // ── A FLYOVER CLEARS THE ROAD IT CROSSES ──
     //
@@ -12365,6 +12380,15 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       const gz = at0.uz * gAlong + cpz * gCross;
       const plane = (qx: number, qz: number): number => hy0 + (qx - nodeX) * gx + (qz - nodeZ) * gz;
       endPlane[end] = plane;
+      // NO STATION MOVES FURTHER THAN THE NODE DID. The plane is three samples
+      // on a host that curves, extrapolated up to sixty metres along this
+      // way; measured on Lower Kloof Road at Camps Bay it stood 1.8m under
+      // through-stations that agreed with their own chain to the centimetre,
+      // and the fade pulled them down to it — a 139% segment on a road whose
+      // end had welded to the host within 4cm. The disagreement this warp
+      // exists to spread is the one AT THE NODE; the plane only shapes how it
+      // fades. Where the end already sits on the host, nothing here moves.
+      const r0 = Math.abs(clamp(hy0 - prof[i0], -GRADE_SEP, GRADE_SEP));
       // A CONTINUATION TIE — the same road carrying on over a tile cut —
       // takes the host's REGISTERED terminal camber, not the plane fit's.
       // The three-point fit samples the host's interior bays, which mid-bend
@@ -12419,7 +12443,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         const hR = plane(dense[i][0] + rx, dense[i][1] + rz);
         const hL = plane(dense[i][0] + lx, dense[i][1] + lz);
         const w = 1 - along / WARP_M;
-        prof[i] += clamp((hR + hL) * 0.5 - prof[i], -GRADE_SEP, GRADE_SEP) * w;
+        prof[i] += clamp(clamp((hR + hL) * 0.5 - prof[i], -GRADE_SEP, GRADE_SEP) * w, -r0, r0);
         tilt[i] += ((tAnchor ?? (hR - hL) * 0.5) - tilt[i]) * w;
       }
     }
@@ -12462,10 +12486,10 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // Built roads answer first (exact, decked); ways of THIS batch that
       // have not built yet answer through the pre-grid, blind to this way's
       // own body — which is what makes the crop independent of build order.
-      const hostEdge = (qx: number, qz: number): { out: number; track: boolean; hw: number; ux: number; uz: number; nm?: string } | null => {
+      const hostEdge = (qx: number, qz: number): { out: number; track: boolean; hw: number; ux: number; uz: number; nm?: string; fd?: number; built: boolean } | null => {
         const a = roadEdge(qx, qz);
         const b = preEdge(qx, qz, wayKey);
-        return a && (!b || a.out <= b.out) ? a : b;
+        return a && (!b || a.out <= b.out) ? { ...a, built: true } : b ? { ...b, built: false } : null;
       };
       const at0 = hostEdge(ex0, ez0);
       if (!at0) {
@@ -12484,6 +12508,22 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       if (at0.track) { clog('host-is-track'); continue; }
       if (at0.out >= -0.6) { clog('not-inside-host', { out: +at0.out.toFixed(2) }); continue; }
       if (at0.hw < width / 2 - 0.4) { clog('host-narrower', { host: at0.nm }); continue; }
+      // A TIE CROPS ONCE. Equal widths defer to whichever is already BUILT —
+      // but the pre-grid answers for a host that has not built yet, so two
+      // equal roads meeting in one batch each found the other and BOTH
+      // cropped: measured where Blair Road turns into Shanklin Crescent at
+      // Camps Bay, `cropped` logged from both ends of the same node and the
+      // corner between them drawn by nobody — the hole in the carriageway
+      // reported from the seat. The one that builds first now leaves the
+      // corner alone; the second finds it built and crops against it.
+      if (!at0.built && at0.hw < width / 2 + 0.4) { clog('tie-unbuilt-host', { host: at0.nm }); continue; }
+      // AND A HOST THAT ENDS HERE IS NOT A HOST. The crop stops a side road on
+      // a carriageway that continues past the node; where the other road
+      // also ends at this node — a corner where the name changes — its kerb
+      // line ends too, and a cut there only opens the outside of the bend.
+      // Both draw to the node, and the inside overlaps as a same-name
+      // continuation's does.
+      if (at0.built && hostEndsAt(ex0, ez0, at0.nm, at0.fd)) { clog('host-ends-here', { host: at0.nm }); continue; }
       // A FLYOVER IS NOT A MOUTH. Past GRADE_SEP the two roads are passing,
       // not meeting, and neither the cut nor the seat may apply — pulling a
       // viaduct's edge down to the road below it is worse than any overlap.
@@ -21741,8 +21781,29 @@ function tapeKeep(): string {
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z, margin) });
 /** The nearest drivable centreline: how far OUTSIDE its kerb this point is
  *  (negative on the carriageway), and the road's own surface height there. */
-function roadEdge(x: number, z: number, notFid?: number, notNm?: string): { out: number; y: number; track: boolean; hw: number; ux: number; uz: number; nm?: string } | null {
-  let best: { out: number; y: number; track: boolean; hw: number; ux: number; uz: number; nm?: string } | null = null;
+/** Does the road that owns this deck END at the point, or pass through it?
+ *  Counted by its built segment ends within 0.6m: one touching segment is a
+ *  terminus, two is a through road. Fragments of one road share its name, so
+ *  a named road split at a tile cut still counts as through; an unnamed one
+ *  is matched by fragment and may be misjudged at a cut, which only costs a
+ *  crop there. */
+function hostEndsAt(x: number, z: number, nm: string | undefined, fd: number | undefined): boolean {
+  let touching = 0;
+  const seen = new Set<Seg>();
+  for (const dx of [-GRID, 0, GRID]) for (const dz of [-GRID, 0, GRID]) {
+    for (const seg of roadGrid.get(gkey(x + dx, z + dz)) ?? []) {
+      if (seen.has(seg) || seg.ya === undefined) continue;
+      seen.add(seg);
+      const same = nm !== undefined ? seg.nm === nm : seg.fd === fd;
+      if (!same) continue;
+      if (Math.hypot(seg.ax - x, seg.az - z) < 0.6 || Math.hypot(seg.bx - x, seg.bz - z) < 0.6) touching++;
+      if (touching >= 2) return false;
+    }
+  }
+  return touching === 1;
+}
+function roadEdge(x: number, z: number, notFid?: number, notNm?: string): { out: number; y: number; track: boolean; hw: number; ux: number; uz: number; nm?: string; fd?: number } | null {
+  let best: { out: number; y: number; track: boolean; hw: number; ux: number; uz: number; nm?: string; fd?: number } | null = null;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
     if (seg.ya === undefined || seg.yb === undefined) continue;
     // Blind to ONE road, for the late-mask sweep: an intruder's end asking
@@ -21758,7 +21819,7 @@ function roadEdge(x: number, z: number, notFid?: number, notNm?: string): { out:
     // because the junction crop needs to know a join from a continuation.
     if (!best || out < best.out) {
       const l = Math.hypot(dx, dz) || 1;
-      best = { out, y: seg.ya + (seg.yb - seg.ya) * t, track: !!seg.tk, hw: seg.hw, ux: dx / l, uz: dz / l, nm: seg.nm };
+      best = { out, y: seg.ya + (seg.yb - seg.ya) * t, track: !!seg.tk, hw: seg.hw, ux: dx / l, uz: dz / l, nm: seg.nm, fd: seg.fd };
     }
   }
   return best;
