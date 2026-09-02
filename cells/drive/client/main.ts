@@ -11456,7 +11456,15 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // road set) find no deck and keep their chord.
     if (mode === 'bridge' && layer > 0 && runs.length) {
       let need = 0;
-      for (const [a, b] of runs) for (let i = a; i <= b; i++) {
+      // NOT AT THE PORTALS. The nearest lower-layer deck to a portal station is
+      // the bridge's OWN approach: the shared node is one dense point in the
+      // chain and carries whichever member's layer came first, and the
+      // approach's hints run away from it along the bridge's own line. Counted,
+      // every bridge would lift BRIDGE_CLEAR above its own approach while
+      // crossing nothing. A crossed road passes mid-span, so the scan starts
+      // one station in from each end; a two-station bridge (a culvert) has no
+      // span to scan and keeps its chord, which is right for a culvert.
+      for (const [a, b] of runs) for (let i = a + 1; i <= b - 1; i++) {
         const below = solver.deckBelow(dense[i][0], dense[i][1], layer, width / 2 + 1.5);
         if (below !== null) need = Math.max(need, below + BRIDGE_CLEAR - prof[i]);
       }
