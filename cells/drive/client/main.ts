@@ -8946,6 +8946,9 @@ interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?:
   /** Which ribbon() build this segment came from — probe-only, for
    *  attributing profile discontinuities to fragment boundaries. */
   fd?: number;
+  /** The OSM layer this deck was drawn on (see layerOf) — so a probe at a
+   *  crossing can say which deck is the flyover. */
+  ly?: number;
   /** The OSM way key this segment was built from — probe-only. Names cannot
    *  say "same way": every unnamed service way matches every other by
    *  nm '?', which once classified a whole web of DIFFERENT ways as
@@ -10859,6 +10862,12 @@ const juncPins = !/[?&]nopins=1/.test(location.search);
 // the other road's line. Below it there is a turning here, and a barrier across
 // a turning is both wrong to look at and wrong to drive.
 const GRADE_SEP = 2.6;
+/** Clearance a flyover keeps over the deck beneath it, soffit to surface.
+ *  Real road bridges hold ~5m; this is the deck-to-deck figure, so the drawn
+ *  soffit (apron depth below) sits a little under that. */
+const BRIDGE_CLEAR = 5.5;
+interface LiftRec { x: number; z: number; nm?: string; fid: number; layer: number; m: number; n: number }
+const liftLog: LiftRec[] = [];
 const RAIL_H = 1;      // parapet height above the kerb it stands on
 // Off only from a probe (`?nofill=1`), to see the ditch the fill closes.
 const vergeFill = !/[?&]nofill=1/.test(location.search);
@@ -11427,6 +11436,37 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // small knolls, and an uncapped chord under flat data left a giant
       // exposed tube sitting on the ground. Bridges ride the chord.
       prof[i] = mode === 'tunnel' ? Math.min(chord, alg[i]) : chord;
+    }
+    // ── A FLYOVER CLEARS THE ROAD IT CROSSES ──
+    //
+    // The chord above is portal to portal, and the portals anchor to the
+    // approaches, which are at grade — so on flat ground a tagged bridge is a
+    // chord along the ground. Measured at the Vélizy interchange before this:
+    // the N 118 (layer=1, bridge=yes) over the A 86 at deck 1.31m on ground
+    // 1.34m, and the layer-2 ramps 0.2-0.6m BELOW the roads they pass over.
+    // OSM carries no elevation; `layer` is its whole statement about the
+    // vertical, and it was being kept and never read.
+    //
+    // So the chord rises, as one piece, by the least amount that puts every
+    // station BRIDGE_CLEAR above the highest lower-layer deck beneath it. The
+    // portals rise with it; the approaches build after (higher layer first,
+    // see renderWays) and weld up to them, ramping down under the ruling
+    // grade — a short approach ramps over grade but continuous, which is the
+    // weld's own rule. Bridges over nothing (a river, a railway not in the
+    // road set) find no deck and keep their chord.
+    if (mode === 'bridge' && layer > 0 && runs.length) {
+      let need = 0;
+      for (const [a, b] of runs) for (let i = a; i <= b; i++) {
+        const below = solver.deckBelow(dense[i][0], dense[i][1], layer, width / 2 + 1.5);
+        if (below !== null) need = Math.max(need, below + BRIDGE_CLEAR - prof[i]);
+      }
+      if (need > 0) {
+        for (const [a, b] of runs) for (let i = a; i <= b; i++) prof[i] += need;
+        if (liftLog.length < 500) {
+          liftLog.push({ x: +dense[0][0].toFixed(1), z: +dense[0][1].toFixed(1), nm: name, fid, layer,
+            m: +need.toFixed(2), n: runs.reduce((c, [a, b]) => c + (b - a + 1), 0) });
+        }
+      }
     }
     // THE GRADE LINE. On a cliff face the 9.5m/px heightfield cannot resolve
     // a road bench: a pixel averages the rock above the deck with the drop
@@ -12581,7 +12621,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     }
     if (drivable) {
       const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name, sq, fd: fid, pb: pbranch,
-        wid: wayKey, ca: tilt[i], cb: tilt[i + 1] };
+        wid: wayKey, ca: tilt[i], cb: tilt[i + 1], ly: layer };
       addSeg(roadGrid, s);
       segsOf.push(s);
     }
@@ -16265,6 +16305,14 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
   // it is back because the warp cannot work without it, and the pair is
   // measured together below.
   const ordered = els.slice().sort((a, b) => {
+    // A HIGHER LAYER BUILDS FIRST. A flyover's approaches weld up to its
+    // portals through deckAnchorAt, which only works if the portals are
+    // already standing; built the other way round, the bridge's own ends
+    // anchor down to the approaches' at-grade ends, the lift then raises the
+    // chord, and the portal is left as a step. Width still decides within a
+    // layer, and the host-first rank below still overrides both.
+    const la = layerOf(a.tags), lb = layerOf(b.tags);
+    if (la !== lb) return lb - la;
     const wa = (a.tags?.highway ? ROAD_W[a.tags.highway] ?? 5 : -1);
     const wb = (b.tags?.highway ? ROAD_W[b.tags.highway] ?? 5 : -1);
     return wb - wa;
@@ -21627,6 +21675,11 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
 (window as unknown as { __stagewhy?: object }).__stagewhy = (x?: number, z?: number, r = 8): object[] => {
   const px = x ?? state.x, pz = z ?? state.z;
   return stageLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r);
+};
+/** Every bridge the lift raised this session: where, which, by how much. */
+(window as unknown as { __lifts?: object }).__lifts = (x?: number, z?: number, r = 1e9): object[] => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  return liftLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r);
 };
 (window as unknown as { __cropwhy?: object }).__cropwhy = (x?: number, z?: number, r = 80): object[] => {
   const px = x ?? state.x, pz = z ?? state.z;

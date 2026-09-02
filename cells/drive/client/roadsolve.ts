@@ -216,6 +216,25 @@ export class RoadSolver {
     return c;
   }
 
+  /**
+   * The highest settled deck within `r` on any layer BELOW `layer` — what a
+   * flyover has to clear. Read from the hints rather than the built grid
+   * because a tile is planned whole before any of its ribbons build, so the
+   * road beneath is known here whether or not it has been drawn yet.
+   */
+  deckBelow(x: number, z: number, layer: number, r: number): number | null {
+    let best: number | null = null;
+    for (const dx of [0, -HINT_CELL, HINT_CELL]) for (const dz of [0, -HINT_CELL, HINT_CELL]) {
+      const arr = this.hints.get(`${Math.floor((x + dx) / HINT_CELL)},${Math.floor((z + dz) / HINT_CELL)}`);
+      if (arr) for (const [hx, hz, hy, hl] of arr) {
+        if (hl >= layer) continue;
+        if (Math.hypot(hx - x, hz - z) > r) continue;
+        if (best === null || hy > best) best = hy;
+      }
+    }
+    return best;
+  }
+
   noteJunction(x: number, z: number): void {
     this.stats.pinned++;
     if (this.junctions.size > 8000) this.junctions.clear();
