@@ -1991,7 +1991,7 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
     hydroSys = createHydroSystem({ oceanLevelM: seaSurfaceAbs(), scheduleBuild: (job) => {
       const t0 = performance.now();
       try { return Promise.resolve(job()); }
-      finally { const d = performance.now() - t0; workerLedger.hydroBuildMs += d; workerLedger.hydroBuilds++; if (d > workerLedger.hydroBuildMax) workerLedger.hydroBuildMax = d; }
+      finally { const d = performance.now() - t0; workerLedger.hydroBuildMs += d; workerLedger.hydroBuilds++; if (d > workerLedger.hydroBuildMax) workerLedger.hydroBuildMax = d; profAdd('hydroBuild', t0); }
     } });
     hydroSys.setDebugView(hydroView);
     worldGroup.add(hydroSys.object3d);
@@ -4916,6 +4916,7 @@ function postTerrainBuild(t: HeightTile, key: string): void {
     workerLedger.applied++; workerLedger.applyMs += t2 - t1; workerLedger.postMs += t7 - t2;
     workerLedger.reseatMs += t3 - t2; workerLedger.redrapeMs += t4 - t3; workerLedger.hydroMs += t5 - t4; workerLedger.batterMs += t6 - t5; workerLedger.culvertMs += t7 - t6;
     workerLedger.postMax = Math.max(workerLedger.postMax, t7 - t2);
+    profAdd('terrainApply', t1);
     if (buildLog.length) { const b = buildLog[buildLog.length - 1]; b.ms = Math.round(terrainMs); b.bms = Math.round(t2 - t1 + prep); }
   }, (error: Error) => {
     // The worker is disabled by its own failure; the tile goes back on the
@@ -17050,6 +17051,7 @@ async function buildBreath(): Promise<void> {
   const held = now - (buildUntil - BUILD_MS);
   if (held > buildCost.longestMs) buildCost.longestMs = +held.toFixed(1);
   buildCost.yields++;
+  profAdd('roadBuild', now - held);                 // the slice that just ran, for __frameprof
   await yieldTask();
   buildUntil = performance.now() + BUILD_MS;
 }
