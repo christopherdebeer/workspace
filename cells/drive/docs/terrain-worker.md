@@ -203,6 +203,13 @@ rest the post-steps (reseat, redrape, hydro, batter, culverts), which are
 now the residue. In the harness the software renderer starves the worker
 (3 s of wait a job); on a GPU that is not a factor.
 
+One pacing rule changed with the worker: the synchronous slot builds at
+most one tile per 200 ms, and the worker path first inherited that, so the
+twenty-five first builds at boot took five seconds and two road-stream
+tests (Chapman's join population, the corridor's "truck is on a way") lost
+their windows. The worker path now posts the next tile on the next frame
+after a reply; both suites are back at their baseline.
+
 Step 4 (the queue in the worker) is optional now: the main-thread share
 of a build is the post-steps, not the ordering. Step 5 is the post-steps.
 
