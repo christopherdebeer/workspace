@@ -887,7 +887,12 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   seen from the drone the morning it shipped. So every tile stores its
   border (`storeBorder`), every tile pins its west and north edges to the
   owners' rows (`refinedBorderPins`, or seeds in the refined build), and
-  every build dirties its east and south followers whose rows differ.
+  every build dirties its east and south followers whose rows differ. The
+  read itself is back at the EXACT edge where the field has a tile — the
+  half-open box hands a border point to one raster for both sides — and
+  falls inside only where that raster is missing; the quiet path audits one
+  tile's followers per visit (`borderAuditAt`), so a follower that took a
+  row its owner then rebuilt past is caught whatever the build order did.
 
 `__refine()` counts tiles, split cells, vertices, triangles against the
 plain grid and milliseconds by phase (lines, split, heights, geometry).
