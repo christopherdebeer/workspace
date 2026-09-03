@@ -30810,6 +30810,30 @@ function tapeCorrect(): void {
   if (tapePlay.drift > tapePlay.worst) tapePlay.worst = tapePlay.drift;
   tapeRestore(t.keys, at);
 }
+/** WHERE THE FRAME GOES, by subsystem: milliseconds accumulated per call
+ *  site since the last read, with the worst single call — the instrument for
+ *  "FPS drops during streaming", which no single ledger could answer. */
+const frameProf = new Map<string, { ms: number; n: number; max: number }>();
+let profFrames = 0, profSince = 0, profWhole = 0;
+function profAdd(name: string, t0: number): void {
+  const d = performance.now() - t0;
+  const e = frameProf.get(name);
+  if (e) { e.ms += d; e.n++; if (d > e.max) e.max = d; } else frameProf.set(name, { ms: d, n: 1, max: d });
+}
+let profLast = 0;
+function profFrame(now: number): void {
+  profFrames++;
+  if (profLast) profWhole += now - profLast;
+  profLast = now;
+}
+(window as unknown as { __frameprof?: object }).__frameprof = (reset = true): object => {
+  const secs = (performance.now() - profSince) / 1000;
+  const rows = [...frameProf.entries()].map(([k, v]) => ({ name: k, ms: +v.ms.toFixed(1), perFrame: +(v.ms / Math.max(1, profFrames)).toFixed(2), n: v.n, max: +v.max.toFixed(1) }))
+    .sort((a, b) => b.ms - a.ms);
+  const out = { frames: profFrames, secs: +secs.toFixed(1), wallMs: +profWhole.toFixed(0), rows };
+  if (reset) { frameProf.clear(); profFrames = 0; profWhole = 0; profSince = performance.now(); }
+  return out;
+};
 function tick(now: number): void {
   // PAUSED WHILE THE MENU IS UP, and the "when appropriate" is real drive: the
   // car outside is still moving whatever this screen is doing, so freezing the
@@ -30825,7 +30849,7 @@ function tick(now: number): void {
   // BEFORE ANYTHING INTEGRATES. The chassis loop has no finite check inside it
   // and NaN survives every clamp on the way round, so the only place a break can
   // be made is ahead of the loop. See breakNanLatch.
-  breakNanLatch();
+  { const _p = performance.now(); breakNanLatch(); profAdd('breakNanLatch', _p); }
   const raw = now - last;
   if (raw > 0 && raw < 2000) frameMs += (raw - frameMs) * 0.1;
   // RAW SAMPLES, not the smoothed value. `frameMs` is a 0.1 lerp, which is the
@@ -30866,6 +30890,7 @@ function tick(now: number): void {
   // integrators (tyres, springs) substep internally so the bigger step stays
   // stable. Below 10fps dilation still guards against tab-stall teleports.
   const dt = played ? played.dt : (paused || scrubbing) ? 0 : (FIX_DT || Math.min(0.1, raw / 1000));
+  profFrame(now);
   last = now;
   simT += dt; simN++;
   // The splash's own clock: WALL time, because the sim's dt is zero exactly
@@ -30877,23 +30902,23 @@ function tick(now: number): void {
     splashGold += ((wantGold ? 1 : 0) - splashGold) * Math.min(1, 0.9 * wallDt / 0.6);
     if (splashGold < 0.003) splashGold = 0;
   }
-  stepAttract(now);
+  { const _p = performance.now(); stepAttract(now); profAdd('stepAttract', _p); }
   // The autopilot decides BEFORE the frame's input is read, because that is
   // what it is: this frame's controls. Handed the same reasons to stand down
   // that the manual path has — a replay is already driving, real drive has no
   // throttle to give it, and the drone has the controls.
-  stepAuto(dt, !!played || real.on || paused || scrubbing);
+  { const _p = performance.now(); stepAuto(dt, !!played || real.on || paused || scrubbing); profAdd('stepAuto', _p); }
   const raw2 = played
     ? { throttle: played.throttle, steer: played.steer, brake: played.brake, brakeF: played.brakeF }
     : real.on || paused || scrubbing ? { throttle: 0, steer: 0, brake: false, brakeF: 0 } : input();
   // …and the RING takes what the hands just did, before anything downstream has
   // a chance to reinterpret it. Always, unless a tape is already driving —
   // recording the replay would be recording our own echo.
-  if (!played && !paused && !scrubbing && dt > 0) tapeWrite(dt, raw2);
+  if (!played && !paused && !scrubbing && dt > 0) { const _p = performance.now(); tapeWrite(dt, raw2); profAdd('tapeWrite', _p); }
   // FLYING THE DRONE MEANS NOT DRIVING. The rig stays exactly where you left
   // it — that is the whole point of scouting ahead — so the controls are handed
   // over wholesale rather than shared.
-  stepDrone(dt, drone.up ? raw2.throttle : 0, drone.up ? raw2.steer : 0);
+  { const _p = performance.now(); stepDrone(dt, drone.up ? raw2.throttle : 0, drone.up ? raw2.steer : 0); profAdd('stepDrone', _p); }
   // FLYING USED TO MEAN NOT DRIVING — the controls hand over wholesale and
   // the rig parks. With the autopilot holding the wheel the rule inverts:
   // thumb flies the drone, arithmetic drives the truck, and the drone view
@@ -30911,8 +30936,8 @@ function tick(now: number): void {
   // in equilibrium.
   const parked = drone.up && !auto.on;
   if (parked) { state.speed = 0; slideV = 0; }
-  stepSun();
-  stepWeather(now, dt);
+  { const _p = performance.now(); stepSun(); profAdd('stepSun', _p); }
+  { const _p = performance.now(); stepWeather(now, dt); profAdd('stepWeather', _p); }
   const surfKind = surfaceAt(state.x, state.z);
   const surfQual = surfQ;                       // set by the call above
   // In water the depth is the quality, and the current is a fact the drive
@@ -30965,7 +30990,7 @@ function tick(now: number): void {
   const surf = wInfo || rigWadeM > 0.02
     ? wadeParams(Math.max(rigWadeM, wInfo?.depth ?? 0) * 0.5 + rigWadeM * 0.5)
     : surfaceFor(surfKind, surfQual);
-  if (real.on) stepReal(dt);
+  if (real.on) { const _p = performance.now(); stepReal(dt); profAdd('stepReal', _p); }
   // Arcade bicycle model: thrust minus drag, steering authority grows then
   // saturates with speed so the car neither pivots in place nor becomes twitchy.
   // SKIPPED ENTIRELY under real drive — the position is a measurement, and
@@ -31014,7 +31039,7 @@ function tick(now: number): void {
   if (!real.on && !parked && tractionMode > 0) {
     steerCur += clamp(steer - steerCur, -SRATE0 * dt, SRATE0 * dt);
     const wetDrag0 = 1 + wx.wet * (surfKind === 'road' ? 0.35 : 0.7);
-    stepTraction(dt, surf, grip, thrust, wetDrag0, gradePitch, gradeRoll);
+    { const _p = performance.now(); stepTraction(dt, surf, grip, thrust, wetDrag0, gradePitch, gradeRoll); profAdd('stepTraction', _p); }
     if (brake && brakeF > 0.5 && grip > 0.4 && Math.abs(state.speed) < 1.2) { state.speed = 0; slideV = 0; }
     if (parkHold) { state.speed = 0; slideV = 0; yawR = 0; }
     state.speed = clamp(state.speed, -CAR.maxRev, surf.max * (1.25 - wx.wet * 0.2));
@@ -31690,8 +31715,8 @@ function tick(now: number): void {
   // is a property of the hull being in water, not of a wheel touching it, and
   // it must keep going when the budget is spent on spray.
   splashBow(now, state.speed, rigWadeM);
-  stepDust(dt);
-  flushTerrain(now);
+  { const _p = performance.now(); stepDust(dt); profAdd('stepDust', _p); }
+  { const _p = performance.now(); flushTerrain(now); profAdd('flushTerrain', _p); }
   hydroTick(now);
   // The sea keeps its station off a coast and stands down over dry basins.
   // Slewed, not snapped: the transition happens kilometres before the basin
@@ -31702,8 +31727,8 @@ function tick(now: number): void {
     const target = sl ?? groundAt(state.x, state.z) - 60;
     sea.position.y += clamp(target - sea.position.y, -0.5, 0.5);
   }
-  if (wildlifeOn) stepWildlife(dt);
-  stepOdo(dt, now);
+  if (wildlifeOn) { const _p = performance.now(); stepWildlife(dt); profAdd('stepWildlife', _p); }
+  { const _p = performance.now(); stepOdo(dt, now); profAdd('stepOdo', _p); }
   // The rig's condition, from the frame that just happened. SUN_DIR.y is the
   // sun's elevation, so it doubles as "is the array making anything".
   {
@@ -31735,12 +31760,12 @@ function tick(now: number): void {
       }
     }
   }
-  stepMission(now);
-  stepSurvey(now);
-  stepStations(now);
-  stepLine(now);
-  stepRuinLod(now);
-  stepZoomShed();
+  { const _p = performance.now(); stepMission(now); profAdd('stepMission', _p); }
+  { const _p = performance.now(); stepSurvey(now); profAdd('stepSurvey', _p); }
+  { const _p = performance.now(); stepStations(now); profAdd('stepStations', _p); }
+  { const _p = performance.now(); stepLine(now); profAdd('stepLine', _p); }
+  { const _p = performance.now(); stepRuinLod(now); profAdd('stepRuinLod', _p); }
+  { const _p = performance.now(); stepZoomShed(); profAdd('stepZoomShed', _p); }
   // THE CAR IS EVIDENCE TOO. Dry-land proof used to come only from a ribbon
   // being built, and Badwater Road is a single OSM way — so it fired once, at
   // the spawn, and never again. Drive 8km up the valley and the anchor was
@@ -32378,16 +32403,16 @@ function tick(now: number): void {
   // the HUD drew the PREVIOUS frame's projections on top of this frame's
   // world: a second frame of trailing on top of the stale-inverse one.
   updatePois(); // every frame — throttled pins juddered against the camera
-  stepLuma(now);          // refresh what the glass is being written over
-  xrayWire(now);          // keep the wireframe sweep over streamed-in tiles
+  { const _p = performance.now(); stepLuma(now); profAdd('stepLuma', _p); } // refresh what the glass is being written over
+  { const _p = performance.now(); xrayWire(now); profAdd('xrayWire', _p); } // keep the wireframe sweep over streamed-in tiles
   drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF);
-  stepOverlays();
+  { const _p = performance.now(); stepOverlays(); profAdd('stepOverlays', _p); }
   // Whatever view is up: the frame follows the truck even while the dock shows
   // the POV preview, so the map is whole the moment the chart comes back.
-  mapRecentre();
+  { const _p = performance.now(); mapRecentre(); profAdd('mapRecentre', _p); }
   // The backdrop rides the curve under whoever is current (see alignFarShell),
   // and answers a probe's override last, after every camera rule has had its say.
-  alignFarShell();
+  { const _p = performance.now(); alignFarShell(); profAdd('alignFarShell', _p); }
   if (farForce !== null) farGroup.visible = farForce;
   if (camMode !== 'top' && now > miniAt) { miniAt = now + 250; drawMinimap(); }
   // Progress lives in the URL: reloading resumes here, not at the spawn.
@@ -32409,13 +32434,13 @@ function tick(now: number): void {
   // The coarse shell's hole, before anything draws: it is a fact about which
   // fine tiles have landed, and it has to be true in EVERY camera mode — the
   // fault it fixes was reported from the cab.
-  stepFineRing(now);
-  applyHidden();
+  { const _p = performance.now(); stepFineRing(now); profAdd('stepFineRing', _p); }
+  { const _p = performance.now(); applyHidden(); profAdd('applyHidden', _p); }
   if (NODRAW) { tickN++; requestAnimationFrame(tick); return; }
   // scene → target, two separable blur rounds at half res, composite to canvas
   renderer.setRenderTarget(rtScene);
-  renderer.render(scene, camera);
-  composite(mblurAmt);
+  { const _p = performance.now(); renderer.render(scene, camera); profAdd('render', _p); }
+  { const _p = performance.now(); composite(mblurAmt); profAdd('composite', _p); }
   // Kept every frame, blur or none: the jump guard above compares against it,
   // and a prev-camera that only updates while the effect is on would call the
   // first frame after switching it back on a teleport.
@@ -32473,7 +32498,7 @@ function tick(now: number): void {
     // grade and palette dither as the world. Rendered straight to the screen it
     // was a smooth, full-colour window inside a hand-built bitmap HUD — the one
     // thing on screen that did not look like the game.
-    blitPixelated(scene, miniCam, vx, vy, vw, vh);
+    { const _p = performance.now(); blitPixelated(scene, miniCam, vx, vy, vw, vh); profAdd('blitPixelated', _p); }
     ovGroup.visible = ovWas; farGroup.visible = farWas;
     aimSky(camera);
     if (lastPov === 'cab') ghostCab(false);
