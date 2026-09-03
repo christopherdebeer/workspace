@@ -920,6 +920,21 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   `cover`) — read it before believing any seam measurement: a page that is
   still rebuilding has not settled, whatever the dirty count says.
 
+- **THE BUILD LIVES IN `client/terrain-kernel.ts`.** Everything a tile
+  computes — lattice or refined geometry, heights, both carves, border
+  ownership, the colour pass, vertex normals, the normal-map bytes — over
+  plain arrays and a `TerrainStore` of world facts, with no THREE and no DOM.
+  main.ts supplies the store (`kStore`, getters onto its rasters, strips,
+  channels, palette, area tints, road grid) and does only what a renderer
+  must: wrap the arrays in a BufferGeometry, place the mesh, dirty the
+  followers. That split is the whole point: the same kernel runs in a worker
+  next (docs/terrain-worker.md). Measured before the split, a plain build
+  was 108 ms of which the colour pass was 69 and the heights pass 24 —
+  lookups, not arithmetic — with 17 ms of post-steps that stay on the main
+  thread. Anything the kernel needs from the world goes through the store;
+  a module global of main.ts read from the kernel would silently break the
+  worker.
+
 `__refine()` counts tiles, split cells, vertices, triangles against the
 plain grid and milliseconds by phase (lines, split, heights, geometry).
 `__borderDiff(x, z)` compares the tile under a point with each neighbour

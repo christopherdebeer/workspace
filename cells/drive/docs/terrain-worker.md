@@ -141,6 +141,28 @@ dropped, and a hop sends `reset`.
 reading the geometry arrays as they do now), texture upload, and every probe.
 Target after the move: no main-thread task from terrain above 15 ms.
 
+## Where it stands (2026-09-03, later)
+
+Step 1 is done and measured. Per plain build (97 builds, Camps Bay stream,
+`__refine().plain`): colour pass 69 ms, heights pass 24 ms, corridor carve
+5 ms, normals 5 ms, everything else under 3 ms — of a 108 ms mesh build, with
+17 ms of post-steps after it. The colour pass dominates: per vertex it reads
+the climate field, samples cover twice through a linear scan of the cover
+tiles, samples height four times for the slope, and tests the OSM area
+polygons. The heights pass is the same lookups once. That is lookup overhead
+more than arithmetic, and the kernel's store is where it gets fixed: a build
+resolves its rasters once and indexes them directly.
+
+The two cheap cuts landed but did not move the count (92 against 89): most
+neighbour dirties were already deduplicated by the set, and the owner cascade
+is across time — an owner rebuilt by a later way dirties its followers again
+— not within one dirty set. They stay because they are right, not because
+they paid.
+
+Step 2 is done: `client/terrain-kernel.ts` holds the whole build over plain
+arrays and a `TerrainStore`; `buildTerrainMesh` in main.ts is now the store,
+the BufferGeometry wrap and the mesh placement. The main file lost 1,340 lines.
+
 ## Steps, each shippable
 
 1. **Split the ledger.** Record `buildTerrainMesh` time and post-step time
