@@ -4985,8 +4985,14 @@ function postTerrainBuild(t: HeightTile, key: string): void {
 /** The hydro system's tile builds, run one a frame from the frame loop. */
 const hydroJobs: Array<{ job: () => unknown; resolve: (v: never) => void; reject: (e: Error) => void }> = [];
 let hydroJobAt = 0;
-function drainHydroJobs(now: number): void {
-  if (!hydroJobs.length || now - hydroJobAt < 0) return;
+function drainHydroJobs(now: number, applied: boolean): void {
+  if (!hydroJobs.length) return;
+  // Not in a frame that already carried a terrain apply — unless the queue
+  // is backing up or the last build is 200ms behind us. One a frame at 60Hz
+  // is sixty a second; at the harness's two seconds a frame the skip alone
+  // starved water to three builds in ninety seconds (measured), so the
+  // budget is time, not frames.
+  if (applied && hydroJobs.length <= 2 && now - hydroJobAt < 200) return;
   const j = hydroJobs.shift() as { job: () => unknown; resolve: (v: never) => void; reject: (e: Error) => void };
   hydroJobAt = now;
   const t0 = performance.now();
@@ -31795,7 +31801,7 @@ function tick(now: number): void {
   splashBow(now, state.speed, rigWadeM);
   { const _p = performance.now(); stepDust(dt); profAdd('stepDust', _p); }
   { const _p = performance.now(); flushTerrain(now); profAdd('flushTerrain', _p); }
-  if (!appliedThisFrame) drainHydroJobs(now);
+  drainHydroJobs(now, appliedThisFrame);
   appliedThisFrame = false;
   hydroTick(now);
   // The sea keeps its station off a coast and stands down over dry basins.

@@ -231,6 +231,13 @@ streamed tile the main thread now pays a hydro build, an apply, and a job
 packing — about 20 ms spread over three frames with the drain — where it
 paid 125 ms in one.
 
+With the drain in place the same profile shows hydro builds no longer
+stacking on applies — and, in the harness's two-second frames, starving:
+three builds in ninety seconds against fifty-eight before, because the
+drain skipped every frame that carried an apply. The budget is time now:
+a frame with an apply still runs a hydro build when the queue is backing
+up or the last build is 200 ms behind.
+
 The hydro tile build is the next candidate for the worker: build-tile.ts
 and the body registry are pure TypeScript, but the registry is shared state
 updated per tile, so the worker would need the same update stream or the
