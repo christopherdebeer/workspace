@@ -1015,6 +1015,24 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   harness. Read the "in slow frames" columns first: a phase with a small
   total but a large slow-frame share is the one causing drops; the slow
   frame log names each frame's top three, so stacked jobs show as such.
+  The second device report (Chapman's run, 40 s) read: tick 8.8 ms/frame
+  p50 5, gap 14.6 ms/frame (60% of wall, the vsync/GPU side), and the
+  slow frames were the SWARD SWEEP (15–26 ms a frame for twelve frames,
+  17 of 41 slow frames) stacked on a hydro build (8 a second, 7.8 ms) on a
+  vsync-quantised gap. drawHud was the largest steady tick line after
+  render at 1.9 ms every frame.
+
+- **ONE HEAVY JOB A FRAME.** `frameHeavyMs()` sums what this frame has
+  already paid to hydroBuild, terrainApply, roadBuild and swardFrame (read
+  from the profiler's `curFrame`, which is why the wrappers must stay).
+  The hydro drain and the sward step both stand down above
+  `FRAME_HEAVY_MS` (4 ms) — the sward unless its sweep has waited over
+  `SWARD_LAG_MS`, the hydro unless its queue is backing up. The sward step
+  itself is bounded by time now, a sixth of the smoothed frame (3 ms at
+  60 fps, 5 at 30, the old eight rows at the harness's two seconds), so a
+  sweep takes more frames at the same total cost. `refreshSwardField(true)`
+  and the `__sward(_, true)` probe still sweep synchronously, which is what
+  the tests use. The HUD draws every other frame while `frameMs < 22`.
 
 - **THE LUMA READBACK IS ASYNCHRONOUS.** `stepLuma` read its 40×88 luma
   and depth target with `readRenderTargetPixels` — a synchronous

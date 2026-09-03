@@ -4986,6 +4986,15 @@ function postTerrainBuild(t: HeightTile, key: string): void {
     terrainDirty.add(key); dirtyWhy.set(key, why);
   });
 }
+/** ONE HEAVY JOB A FRAME. The budgeted jobs — a hydro build, a road slice, a
+ *  terrain apply, a sward step — each kept their own budget and landed
+ *  together: the first sectioned device report's slow frames read "sward 20
+ *  + hydro 13 + gap 19", forty-one of them in forty seconds. This is what
+ *  the frame has already paid, so the next job can stand down. */
+const FRAME_HEAVY_MS = 4;
+function frameHeavyMs(): number {
+  return (curFrame.get('hydroBuild') ?? 0) + (curFrame.get('terrainApply') ?? 0) + (curFrame.get('roadBuild') ?? 0) + (curFrame.get('swardFrame') ?? 0);
+}
 /** The hydro system's tile builds, run one a frame from the frame loop. */
 const hydroJobs: Array<{ job: () => unknown; resolve: (v: never) => void; reject: (e: Error) => void }> = [];
 let hydroJobAt = 0;
@@ -4996,7 +5005,7 @@ function drainHydroJobs(now: number, applied: boolean): void {
   // is sixty a second; at the harness's two seconds a frame the skip alone
   // starved water to three builds in ninety seconds (measured), so the
   // budget is time, not frames.
-  if (applied && hydroJobs.length <= 2 && now - hydroJobAt < 200) return;
+  if ((applied || frameHeavyMs() >= FRAME_HEAVY_MS) && hydroJobs.length <= 2 && now - hydroJobAt < 200) return;
   // …and never faster than half the terrain posts' floor: a hydro build is
   // the largest single piece of a build's main-thread share.
   if (now - hydroJobAt < workerGap * 0.5) return;
@@ -7843,21 +7852,51 @@ function swardRows(from: number, to: number): void {
     }
   }
 }
+/** THE SWEEP YIELDS TO THE FRAME. A step was eight rows whatever the frame
+ *  had already paid — 768 texels of ground, cover, climate, palette and
+ *  context each — and on the phone that was 15–26 ms a frame for twelve
+ *  frames straight: the top contributor to slow frames in the first
+ *  sectioned device report (17 of 41), in the same frames as a hydro build.
+ *  A step is now bounded by time, and it stands down in a frame that has
+ *  already carried a heavy job — unless the sweep has waited so long the
+ *  field would lag the truck. The sweep takes more frames and costs the
+ *  same; what changes is that no single frame pays for it. */
+/** The step's budget follows the frame: a sixth of it, so a 60 fps frame
+ *  gives up 3 ms and a 30 fps frame 5, and the harness's two-second frames
+ *  still take the old eight rows at once. */
+const swardStepMs = (): number => clamp(frameMs / 6, 3, 40);
+const SWARD_LAG_MS = 1500;
+let swardSweepAt = 0;
+const swardLedger = { sweeps: 0, steps: 0, stepMs: 0, stepMax: 0, deferred: 0, masks: 0, maskMs: 0, maskMax: 0 };
+function swardMayStep(now: number): boolean {
+  if (now - swardSweepAt > SWARD_LAG_MS || frameHeavyMs() < FRAME_HEAVY_MS) return true;
+  swardLedger.deferred++;
+  return false;
+}
 /** Begin a height sweep for wherever the truck is now. */
 function swardStart(cx = state.x, cz = state.z): void {
   swardPendX = Math.round(cx / SWARD_FM) * SWARD_FM - SWARD_FW / 2;
   swardPendZ = Math.round(cz / SWARD_FM) * SWARD_FM - SWARD_FW / 2;
   swardRow = 0;
   swardFieldMs = 0;
+  swardSweepAt = performance.now();
+  swardLedger.sweeps++;
 }
 /** Advance a started sweep; swaps the scratch in when the last row lands. */
 function swardStep(sync = false): void {
   if (swardRow < 0) return;
   const t0 = performance.now();
-  const to = sync ? SWARD_F : Math.min(SWARD_F, swardRow + SWARD_ROWS);
-  swardRows(swardRow, to);
-  swardRow = to;
-  swardFieldMs += performance.now() - t0;
+  if (sync) { swardRows(swardRow, SWARD_F); swardRow = SWARD_F; }
+  else {
+    // Row by row until the step's time is spent — at least one, so a slow
+    // device still finishes — and never more than the old eight.
+    const from = swardRow, budget = swardStepMs();
+    do { swardRows(swardRow, swardRow + 1); swardRow++; }
+    while (swardRow < SWARD_F && swardRow - from < SWARD_ROWS && performance.now() - t0 < budget);
+  }
+  const d = performance.now() - t0;
+  swardFieldMs += d;
+  swardLedger.steps++; swardLedger.stepMs += d; if (d > swardLedger.stepMax) swardLedger.stepMax = d;
   if (swardRow < SWARD_F) return;
   swardFieldData.set(swardScratchF);
   swardColData.set(swardScratchC);
@@ -7976,6 +8015,7 @@ function refreshSwardField(full = true): void {
   swardRoadSeen = swardRoadRev();
   swardFieldAt = performance.now();
   swardMaskMs = performance.now() - t0;
+  swardLedger.masks++; swardLedger.maskMs += swardMaskMs; if (swardMaskMs > swardLedger.maskMax) swardLedger.maskMax = swardMaskMs;
 }
 /** One band of the sward: a lattice of `side²` slots at `step` metres. */
 interface SwardBand { mesh: THREE.Mesh; side: number; step: number; reach: number;
@@ -8544,17 +8584,17 @@ function swardFrame(): void {
   const fz = camMode === 'top' ? state.z + panZ : state.z;
   const now2 = performance.now();
   // A sweep already under way finishes before another is considered.
-  if (swardRow >= 0) { swardStep(); return; }
+  if (swardRow >= 0) { if (swardMayStep(now2)) swardStep(); return; }
   const moved = Number.isNaN(swardFX)
     || Math.hypot(fx - (swardFX + SWARD_FW / 2), fz - (swardFZ + SWARD_FW / 2)) > SWARD_REBUILD;
   if (moved) {
     swardStart(fx, fz);
-    swardStep();
+    if (swardMayStep(now2)) swardStep();
   } else if (swardGroundSeen !== swardGroundRev() && now2 - swardFieldAt > 2000) {
     // Terrain was rebuilt — a road was cut into it, or the DEM landed — so the
     // heights this field is standing its grass on are stale. Sweep again.
     swardStart(fx, fz);
-    swardStep();
+    if (swardMayStep(now2)) swardStep();
   } else if (swardRoadSeen !== swardRoadRev() && now2 - swardFieldAt > 1200) {
     // Roads arrived with no rebuild behind them yet: redraw the mask so nothing
     // grows through the new carriageway, and leave the heights alone.
@@ -31036,6 +31076,7 @@ function telemetryReport(): string {
     const pa = Math.max(1, workerLedger.applied);
     L.push(`post split ms/build reseat ${(workerLedger.reseatMs / pa).toFixed(1)} redrape ${(workerLedger.redrapeMs / pa).toFixed(1)} hydro ${(workerLedger.hydroMs / pa).toFixed(1)} batter ${(workerLedger.batterMs / pa).toFixed(1)} culvert ${(workerLedger.culvertMs / pa).toFixed(1)} · post max ${Math.round(workerLedger.postMax)} · dropped ${workerLedger.dropped}`); }
   L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
+  { const w = swardLedger; L.push(`sward sweeps ${w.sweeps} · steps ${w.steps} ms ${(w.stepMs / Math.max(1, w.steps)).toFixed(1)} max ${Math.round(w.stepMax)} · deferred ${w.deferred} · mask ${w.masks} ms ${(w.maskMs / Math.max(1, w.masks)).toFixed(1)} max ${Math.round(w.maskMax)}`); }
   if (sessSlowLog.length) L.push(`slow frames (last ${sessSlowLog.length}): ` + sessSlowLog.map((f) => `${f.t}s ${f.ms}ms [${f.tops}]`).join(' · '));
   return L.join('\n');
 }
@@ -32663,7 +32704,13 @@ function tick(now: number): void {
   { const _p = performance.now(); updatePois(); profAdd('updatePois', _p); } // every frame — throttled pins juddered against the camera
   { const _p = performance.now(); stepLuma(now); profAdd('stepLuma', _p); } // refresh what the glass is being written over
   { const _p = performance.now(); xrayWire(now); profAdd('xrayWire', _p); } // keep the wireframe sweep over streamed-in tiles
-  { const _p = performance.now(); drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF); profAdd('drawHud', _p); }
+  // HALF RATE NEAR 60. The HUD is text, needles and a compass on its own
+  // canvas, and at 1.9 ms a frame (device, measured) it was the largest
+  // steady line in the tick after render — a tenth of the 60 fps budget for
+  // digits no eye reads faster than 30 Hz. Every other frame while the game
+  // runs near 60; every frame once it is at 30, where the budget has room
+  // and 15 Hz digits would show.
+  if (!((tickN & 1) && frameMs < 22)) { const _p = performance.now(); drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF); profAdd('drawHud', _p); }
   { const _p = performance.now(); stepOverlays(); profAdd('stepOverlays', _p); }
   // Whatever view is up: the frame follows the truck even while the dock shows
   // the POV preview, so the map is whole the moment the chart comes back.
