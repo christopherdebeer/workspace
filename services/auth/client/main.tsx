@@ -108,7 +108,8 @@ function App(): React.JSX.Element {
   const p = params();
   const deviceMode = !!p.user_code;
   const oauthMode = !!p.client_id;
-  const requester = requesterName(p.redirect_uri);
+  // This document IS the authorization server, so our own origin is the anchor.
+  const requester = requesterName(p.redirect_uri, typeof location === 'undefined' ? undefined : location.origin);
 
   const [step, setStep] = useState<Step>('auth');
   const [error, setError] = useState<string>('');

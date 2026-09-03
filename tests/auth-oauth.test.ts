@@ -15,6 +15,7 @@ import {
   scopeMeta,
   isSelfGrantableGranular,
   cellScopesFor,
+  delegationActorForRedirect,
   frameAncestors,
 } from '../services/auth/oauth';
 import { sha256 } from '../services/auth/store';
@@ -573,13 +574,20 @@ describe('per-type consent + granular elevation (ADR-0023 §B / ADR-0022)', () =
   describe('a cell sign-in can be granted the scope that names it', () => {
     const CELL = 'c15r-drive.on.parc.land';
     let suffix: string | undefined;
+    let base: string | undefined;
     beforeEach(() => {
       suffix = process.env.CELL_DOMAIN_SUFFIX;
+      base = process.env.PUBLIC_BASE_URL;
       process.env.CELL_DOMAIN_SUFFIX = '.on.parc.land';
+      // The path form is only meaningful on our OWN host, so the anchor has to
+      // be configured for it to be read at all.
+      process.env.PUBLIC_BASE_URL = 'https://parc.land';
     });
     afterEach(() => {
       if (suffix === undefined) delete process.env.CELL_DOMAIN_SUFFIX;
       else process.env.CELL_DOMAIN_SUFFIX = suffix;
+      if (base === undefined) delete process.env.PUBLIC_BASE_URL;
+      else process.env.PUBLIC_BASE_URL = base;
     });
 
     it('offers the cell the sign-in came from', () => {
@@ -615,6 +623,29 @@ describe('per-type consent + granular elevation (ADR-0023 §B / ADR-0022)', () =
     // Widening the derivation must not have widened what it hands back.
     it('still offers only a cell scope from an apex redirect', () => {
       expect(cellScopesFor('https://parc.land/@c15r/shelved').every((s) => s.startsWith('cell:'))).toBe(true);
+    });
+
+    // `/@owner/name` is a route WE serve. On anyone else's origin it is just a
+    // path they chose, and reading it as a cell address let a foreign redirect
+    // borrow a cell's identity: the consent screen named that cell as the thing
+    // asking, and the minted token carried `actor: cell:<owner>/<name>` — a
+    // write attributed to a cell that never ran.
+    it('refuses to read a cell address off a foreign origin', () => {
+      expect(cellScopesFor('https://evil.example/@c15r/shelved')).toEqual([]);
+      expect(cellScopesFor('https://parc.land.evil.example/@c15r/shelved')).toEqual([]);
+    });
+    it('refuses a cell host that is not ours', () => {
+      expect(cellScopesFor('https://c15r-shelved.on.evil.example')).toEqual([]);
+    });
+    it('names no cell, and so no forged actor, for a foreign redirect', () => {
+      expect(delegationActorForRedirect('https://evil.example/@c15r/shelved', 'https://parc.land', 'Totally Fine', 'cl'))
+        .toBe('client:totally-fine');
+    });
+    it('has no path-form cell at all when no public base url is configured', () => {
+      delete process.env.PUBLIC_BASE_URL;
+      expect(cellScopesFor('https://parc.land/@c15r/shelved')).toEqual([]);
+      // The host form is anchored by the cell domain and is unaffected.
+      expect(cellScopesFor(`https://${CELL}`)).toEqual(['cell:c15r/drive:*']);
     });
     // It is a CELL scope only. The ceiling also contains workspace read/write,
     // and admitting those here would hand every cell sign-in the whole slice

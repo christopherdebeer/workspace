@@ -12,18 +12,37 @@
  * i.e. AFTER the passkey. The first screen is the one that has to say what
  * this is for, so it parses the same two shapes `cellFromRedirect` does:
  * a cell host (`<owner>-<name>.on.parc.land`) and an apex path (`/@owner/name`).
+ *
+ * BOTH ARE ANCHORED TO `apexOrigin`, and that is the whole point. The
+ * redirect_uri is chosen by whoever built the authorize URL, so an unanchored
+ * read of it is a headline an attacker writes: `https://evil.example/@c15r/shelved`
+ * and `https://c15r-shelved.on.evil.example` both said "Shelved" while the code
+ * went somewhere else entirely. Naming nothing is the safe answer — the screen
+ * falls back to a plain "Sign in", which claims nothing it cannot support.
  */
-export function requesterName(redirectUri?: string): string | null {
-  if (!redirectUri) return null;
+export function requesterName(redirectUri?: string, apexOrigin?: string): string | null {
+  if (!redirectUri || !apexOrigin) return null;
   let u: URL;
+  let apex: URL;
   try {
     u = new URL(redirectUri);
+    apex = new URL(apexOrigin);
   } catch {
     return null;
   }
-  const host = u.host.match(/^([^.-]+)-([^.]+)\.on\./);
-  const path = u.pathname.match(/^\/@([^/]+)\/([^/]+)/);
-  const name = host?.[2] ?? path?.[2];
+  let name: string | undefined;
+  if (u.host === apex.host) {
+    // Our own host: the `/@owner/name` route we serve.
+    name = u.pathname.match(/^\/@([^/]+)\/([^/]+)/)?.[2];
+  } else if (u.host.endsWith(`.on.${apex.host}`)) {
+    // A cell host under our cell domain. One label before `.on.`, and the
+    // owner is hyphen-free, so split on the first hyphen.
+    const label = u.host.slice(0, -`.on.${apex.host}`.length);
+    if (!label.includes('.')) {
+      const i = label.indexOf('-');
+      if (i > 0) name = label.slice(i + 1);
+    }
+  }
   if (!name) return null;
   const pretty = decodeURIComponent(name).replace(/[-_]+/g, ' ');
   return pretty.charAt(0).toUpperCase() + pretty.slice(1);

@@ -5,25 +5,51 @@ import { friendlyError, requesterName } from '../services/auth/client/copy';
 // above a checkbox reading "nothing in your workspace". These two helpers are
 // what replaced that: they decide the headline of every sign-in and the
 // sentence shown when one fails.
+const APEX = 'https://parc.land';
+
 describe('what the authorize screen calls the thing you are signing in to', () => {
   it('names a cell served from its own host', () => {
-    expect(requesterName('https://c15r-shelved.on.parc.land')).toBe('Shelved');
-    expect(requesterName('https://c15r-shelved.on.parc.land/readers')).toBe('Shelved');
+    expect(requesterName('https://c15r-shelved.on.parc.land', APEX)).toBe('Shelved');
+    expect(requesterName('https://c15r-shelved.on.parc.land/readers', APEX)).toBe('Shelved');
   });
   it('names a cell served from an apex path', () => {
-    expect(requesterName('https://parc.land/@c15r/shelved')).toBe('Shelved');
-    expect(requesterName('https://parc.land/@c15r/drive/deep/link')).toBe('Drive');
+    expect(requesterName('https://parc.land/@c15r/shelved', APEX)).toBe('Shelved');
+    expect(requesterName('https://parc.land/@c15r/drive/deep/link', APEX)).toBe('Drive');
   });
   it('makes a hyphenated cell readable rather than echoing the slug', () => {
-    expect(requesterName('https://parc.land/@c15r/reef-writer')).toBe('Reef writer');
+    expect(requesterName('https://parc.land/@c15r/reef-writer', APEX)).toBe('Reef writer');
   });
   // A platform redirect is not a cell, and inventing a name for it would put a
   // wrong noun in the headline. Falling back to a plain "Sign in" is correct.
   it('names nothing when the redirect is not a cell', () => {
-    expect(requesterName('https://parc.land/')).toBeNull();
-    expect(requesterName('https://claude.ai/api/mcp/auth_callback')).toBeNull();
-    expect(requesterName(undefined)).toBeNull();
-    expect(requesterName('not-a-url')).toBeNull();
+    expect(requesterName('https://parc.land/', APEX)).toBeNull();
+    expect(requesterName('https://claude.ai/api/mcp/auth_callback', APEX)).toBeNull();
+    expect(requesterName(undefined, APEX)).toBeNull();
+    expect(requesterName('not-a-url', APEX)).toBeNull();
+  });
+
+  // The headline is the one thing on this screen that says who is asking, and
+  // the redirect_uri is chosen by whoever built the authorize URL. Unanchored,
+  // every one of these read "Shelved" while the code went elsewhere.
+  describe('and refuses to be told by a stranger', () => {
+    it('will not read a cell address off a foreign origin', () => {
+      expect(requesterName('https://evil.example/@c15r/shelved', APEX)).toBeNull();
+      expect(requesterName('https://evil.example/@c15r/shelved/anything', APEX)).toBeNull();
+    });
+    it('will not accept a cell host under someone else’s domain', () => {
+      expect(requesterName('https://c15r-shelved.on.evil.example', APEX)).toBeNull();
+    });
+    it('will not accept a suffix that merely ends with ours', () => {
+      expect(requesterName('https://parc.land.evil.example/@c15r/shelved', APEX)).toBeNull();
+      expect(requesterName('https://c15r-shelved.on.parc.land.evil.example', APEX)).toBeNull();
+    });
+    // One label before `.on.` — a deeper name is not a cell host we serve.
+    it('will not accept a deeper label under the cell domain', () => {
+      expect(requesterName('https://a.c15r-shelved.on.parc.land', APEX)).toBeNull();
+    });
+    it('names nothing when it has no anchor to check against', () => {
+      expect(requesterName('https://parc.land/@c15r/shelved', undefined)).toBeNull();
+    });
   });
 });
 

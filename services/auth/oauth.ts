@@ -46,6 +46,18 @@ function cellCeiling(redirectUri: string | undefined): string[] | null {
   return ['workspace:read', 'workspace:write', `cell:${label.slice(0, i)}/${label.slice(i + 1)}:*`];
 }
 
+/** The platform's own host, from the configured public base URL. Unset (local,
+ *  bootstrap) means we cannot vouch for any host, so nothing is trusted by path. */
+function apexHost(): string | null {
+  const base = process.env.PUBLIC_BASE_URL;
+  if (!base) return null;
+  try {
+    return new URL(base).host;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The cell a sign-in originates at, derived from the redirect_uri — so consent can
  * name the *cell* ("Authorize @c15r/machine") rather than only the shared client.
@@ -70,6 +82,18 @@ function cellFromRedirect(redirectUri: string | undefined): { owner: string; nam
       return { owner, name, address: `@${owner}/${name}` };
     }
   }
+  // THE PATH FORM ONLY MEANS ANYTHING ON OUR OWN HOST. `/@owner/name` is a
+  // route the platform serves; on somebody else's origin it is just a path
+  // they chose. Unanchored, `https://evil.example/@c15r/shelved` reported
+  // itself as the cell @c15r/shelved — which the consent screen printed as the
+  // thing asking for access, `cellScopesFor` answered with that cell's scope,
+  // and `delegationActorForRedirect` stamped onto the minted token as
+  // `actor: cell:c15r/shelved`. The last one is provenance forgery: writes
+  // made through that token would be attributed to a cell that never ran.
+  // The host form above was always anchored (it must end in the cell domain);
+  // this one never was.
+  const apex = apexHost();
+  if (!apex || u.host !== apex) return null;
   const m = u.pathname.match(/^\/@([^/]+)\/([^/]+)/);
   if (m) return { owner: m[1], name: m[2], address: `@${m[1]}/${m[2]}` };
   return null;
