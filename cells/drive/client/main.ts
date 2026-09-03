@@ -3366,7 +3366,38 @@ const lumaMat = new THREE.ShaderMaterial({
 });
 const lumaPx = new Uint8Array(LUMA_W * LUMA_H * 4);
 let lumaNext = 0, lumaFar = 62000, lumaPrimed = false;
+/** THE READBACK IS ASYNCHRONOUS. `readRenderTargetPixels` is a synchronous
+ *  glReadPixels: the CPU waits for the GPU to finish everything queued before
+ *  it — the whole frame — eight times a second, streaming or not. On WebGL2
+ *  the pixels go into a pixel-pack buffer with a fence behind them and are
+ *  collected on a later frame once the fence has signalled; the luma is
+ *  120ms old by design, so one more frame changes nothing it feeds. WebGL1,
+ *  or any failure, falls back to the synchronous read. */
+let lumaPending: { pbo: WebGLBuffer; sync: WebGLSync; far: number } | null = null;
+let lumaAsync = true;
+const lumaStat = { async: 0, sync: 0, waits: 0 };
+function lumaCollect(gl: WebGL2RenderingContext): boolean {
+  const p = lumaPending;
+  if (!p) return true;
+  const st = gl.clientWaitSync(p.sync, 0, 0);
+  if (st === gl.TIMEOUT_EXPIRED || st === gl.WAIT_FAILED) { lumaStat.waits++; return false; }
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, p.pbo);
+  gl.getBufferSubData(gl.PIXEL_PACK_BUFFER, 0, lumaPx);
+  gl.bindBuffer(gl.PIXEL_PACK_BUFFER, null);
+  gl.deleteSync(p.sync);
+  gl.deleteBuffer(p.pbo);
+  lumaPending = null;
+  lumaFar = p.far;
+  lumaPrimed = true;
+  lumaStat.async++;
+  return true;
+}
 function stepLuma(now: number): void {
+  const gl = renderer.getContext();
+  const gl2 = lumaAsync && typeof WebGL2RenderingContext !== 'undefined' && gl instanceof WebGL2RenderingContext ? gl : null;
+  // A read in flight is collected first; while it is still in flight there is
+  // no point issuing another.
+  if (gl2 && !lumaCollect(gl2)) return;
   if (now < lumaNext) return;
   lumaNext = now + 120;
   lumaMat.uniforms.src.value = rtScene.texture;
@@ -3374,11 +3405,33 @@ function stepLuma(now: number): void {
   (lumaMat.uniforms.uNear as { value: number }).value = camera.near;
   (lumaMat.uniforms.uFar as { value: number }).value = camera.far;
   runPass(lumaMat, lumaRT);
+  if (gl2) {
+    try {
+      renderer.setRenderTarget(lumaRT);                      // binds the target's framebuffer
+      const pbo = gl2.createBuffer();
+      if (!pbo) throw new Error('no pbo');
+      gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, pbo);
+      gl2.bufferData(gl2.PIXEL_PACK_BUFFER, lumaPx.byteLength, gl2.STREAM_READ);
+      gl2.readPixels(0, 0, LUMA_W, LUMA_H, gl2.RGBA, gl2.UNSIGNED_BYTE, 0);
+      gl2.bindBuffer(gl2.PIXEL_PACK_BUFFER, null);
+      const sync = gl2.fenceSync(gl2.SYNC_GPU_COMMANDS_COMPLETE, 0);
+      if (!sync) throw new Error('no fence');
+      gl2.flush();
+      lumaPending = { pbo, sync, far: camera.far };
+      renderer.setRenderTarget(null);
+      return;
+    } catch {
+      lumaAsync = false;                                    // this context will not do it: the old path from here on
+      lumaPending = null;
+    }
+  }
   renderer.readRenderTargetPixels(lumaRT, 0, 0, LUMA_W, LUMA_H, lumaPx);
   renderer.setRenderTarget(null);
   lumaFar = camera.far;
   lumaPrimed = true;
+  lumaStat.sync++;
 }
+(window as unknown as { __lumastat?: object }).__lumastat = (): object => ({ ...lumaStat, async: lumaStat.async, on: lumaAsync, pending: !!lumaPending, primed: lumaPrimed });
 const depVec = new THREE.Vector3();
 /** Is a world point in front of everything the frame actually DREW? A ray
  *  cast answered by the depth buffer at the luma map's resolution — coarse,
