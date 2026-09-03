@@ -155,6 +155,15 @@ function renderIndex(unknown?: string): void {
 function clearShell(): void {
   document.getElementById('boot')?.remove();
   document.getElementById('scene')?.remove();
+  // …AND SO DOES ITS LAYOUT. The shell styles html and body for a fullscreen
+  // canvas — height 100%, overflow hidden — and a lab that is a document (the
+  // index, the world lab) could not scroll under it: the fixture list ran off
+  // the bottom of the phone and there was no way down. Undone here, once, for
+  // every lab; a canvas lab that wants the fullscreen box says so in its own
+  // stylesheet, which comes after this one and wins.
+  const style = document.createElement('style');
+  style.textContent = 'html, body { height: auto; min-height: 100%; overflow: auto; }';
+  document.head.appendChild(style);
 }
 
 /** Run whatever this URL asked for. Returns false when the URL is the game's,

@@ -53,8 +53,7 @@ export async function startWorldLab(): Promise<void> {
   document.title = 'DRIVE · WORLD LAB';
   const style = document.createElement('style');
   style.textContent = `
-    body { overflow: auto; // hack to make usable (needs proper layout fix)
-      margin: 0; background: #0b0f11; color: #d6e2e4;
+    body { margin: 0; background: #0b0f11; color: #d6e2e4;
       font: 13px/1.6 ui-monospace, SFMono-Regular, Menlo, monospace;
       padding: 24px 22px 40px calc(var(--dials-w, 272px) + 34px);
       transition: padding-left .12s ease; }
