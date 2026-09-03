@@ -893,6 +893,32 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   falls inside only where that raster is missing; the quiet path audits one
   tile's followers per visit (`borderAuditAt`), so a follower that took a
   row its owner then rebuilt past is caught whatever the build order did.
+- **A border point is matched WITHIN a millimetre, in Float64.** The rows
+  were Float32 world coordinates keyed by millimetre cell. At 3.4km from
+  the origin a Float32 x steps by 0.24mm, so the two tiles' copies of one
+  lattice point rounded to different cells: NOTHING in the owner's row
+  matched, nothing pinned, `borderShared` said no, and the audit rebuilt
+  the follower every 800ms for as long as the page lived (Camps Bay,
+  9027/9834 — 84 of 173 builds in the ledger, invisible to a dirty-count
+  poll because each build clears the flag in the same slot). Rows are
+  Float64 now, every lookup (`mmNear`) takes the nearest point within
+  1.5mm across the neighbouring cells, the vertex pool does the same, and
+  the audit gives a follower three tries and then leaves it alone — a
+  seam that cannot converge must never become a rebuild loop.
+- **A seed is on my EDGE, not on its line.** The seed filter accepted any
+  point of an owner's row on the infinite line of one of my edges, so a
+  tile took its north owner's whole east column: phantom vertices a
+  hundred metres outside the box, pinned, stored as its border, and fanned
+  into the corner cell's ring. They are what `__borderDiff` reported as a
+  3.5m "mismatch" between two corridor tiles at Camps Bay — two phantoms
+  from two different owners, used by no real triangle. `onTileEdge` gates
+  seeds, pins and stored rows.
+- **The settle criterion is the BUILD COUNT.** `__tstats().builds` counts
+  every build; `__refine().tiles` counts refined ones, and a plain rebuild
+  loop is invisible to it. `__buildLog()` is the last hundred builds with
+  the reason each was dirtied (`way`, `tile:`, `owner:`, `audit:`, `scan`,
+  `cover`) — read it before believing any seam measurement: a page that is
+  still rebuilding has not settled, whatever the dirty count says.
 
 `__refine()` counts tiles, split cells, vertices, triangles against the
 plain grid and milliseconds by phase (lines, split, heights, geometry).

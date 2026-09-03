@@ -4886,8 +4886,11 @@ function buildTerrainMesh(t: HeightTile): void {
   // neighbours on every rebuild ran Vélizy to 212 builds for 30 tiles.
   for (const [dx, dy] of [[1, 0], [0, 1]]) {
     const nk = `${t.tx + dx}/${t.ty + dy}`;
-    if (terrainMeshes.has(nk) && !borderShared(t, nk)) terrainDirty.add(nk);
+    if (terrainMeshes.has(nk) && !borderShared(t, nk)) { terrainDirty.add(nk); dirtyWhy.set(nk, `owner:${key}`); }
   }
+  buildLog.push({ key, why: dirtyWhy.get(key) ?? 'load', corridor, refined: !!refined, at: Math.round(performance.now()) });
+  if (buildLog.length > 100) buildLog.shift();
+  dirtyWhy.delete(key);
 }
 /** Every tile's border row, world x, z, y in threes, stored as it was built
  *  — what a follower pins to and what `borderShared` compares. */
@@ -4897,9 +4900,9 @@ function storeBorder(t: HeightTile, geo: THREE.BufferGeometry): void {
   const b: number[] = [];
   for (let v = 0; v < pos.count; v++) {
     const x = pos.getX(v) + cxm, z = pos.getZ(v) + czm;
-    if (Math.abs(x - t.xs) < 1e-3 || Math.abs(x - (t.xs + t.w)) < 1e-3 || Math.abs(z - t.zs) < 1e-3 || Math.abs(z - (t.zs + t.h)) < 1e-3) b.push(x, z, pos.getY(v));
+    if (onTileEdge(t, x, z)) b.push(x, z, pos.getY(v));
   }
-  refinedBorders.set(`${t.tx}/${t.ty}`, Float32Array.from(b));
+  refinedBorders.set(`${t.tx}/${t.ty}`, Float64Array.from(b));
 }
 /** Does the tile at `nk` already carry every point of `t`'s border along
  *  their shared edge, at the same heights? */
@@ -4909,14 +4912,13 @@ function borderShared(t: HeightTile, nk: string): boolean {
   if (!theirs) return false;
   const nt = heightTiles.get(nk);
   if (!nt) return true;
-  const have = new Map<string, number>();
-  for (let i = 0; i < theirs.length; i += 3) have.set(`${Math.round(theirs[i] * 1000)},${Math.round(theirs[i + 1] * 1000)}`, theirs[i + 2]);
+  const have = mmIndex(theirs);
   for (let i = 0; i < mine.length; i += 3) {
     const x = mine[i], z = mine[i + 1];
     // On the shared edge: inside the neighbour's box (with slack) and on ours.
     if (x < nt.xs - 1e-3 || x > nt.xs + nt.w + 1e-3 || z < nt.zs - 1e-3 || z > nt.zs + nt.h + 1e-3) continue;
-    const y = have.get(`${Math.round(x * 1000)},${Math.round(z * 1000)}`);
-    if (y === undefined || Math.abs(y - mine[i + 2]) > 0.02) return false;
+    const p = mmNear(have, x, z);
+    if (!p || Math.abs(p[2] - mine[i + 2]) > 0.02) return false;
   }
   return true;
 }
@@ -4926,16 +4928,22 @@ function refinedBorderPins(t: HeightTile, geo: THREE.BufferGeometry): Array<[num
   const out: Array<[number, number]> = [];
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
-  const want = new Map<string, number>();
+  const want = new Map<string, MmPt>();
   for (const [dx, dy] of [[-1, 0], [0, -1]]) {                 // the owners of this tile's west and north edges
     const nb = refinedBorders.get(`${t.tx + dx}/${t.ty + dy}`);
     if (!nb) continue;
-    for (let i = 0; i < nb.length; i += 3) want.set(`${Math.round(nb[i] * 1000)},${Math.round(nb[i + 1] * 1000)}`, nb[i + 2]);
+    for (let i = 0; i < nb.length; i += 3) {
+      const x = nb[i], z = nb[i + 1];
+      if (!onTileEdge(t, x, z)) continue;                       // the owner's OTHER edges are not ours
+      want.set(mmKey(x, z), [x, z, nb[i + 2]]);
+    }
   }
   if (!want.size) return out;
   for (let v = 0; v < pos.count; v++) {
-    const y = want.get(`${Math.round((pos.getX(v) + cxm) * 1000)},${Math.round((pos.getZ(v) + czm) * 1000)}`);
-    if (y !== undefined) out.push([v, y]);
+    const x = pos.getX(v) + cxm, z = pos.getZ(v) + czm;
+    if (!onTileEdge(t, x, z)) continue;
+    const p = mmNear(want, x, z);
+    if (p) out.push([v, p[2]]);
   }
   return out;
 }
@@ -4952,12 +4960,16 @@ const SEA_BED = 6;
 function coverDirtiedTerrain(xs: number, zs: number, w: number, h: number): void {
   for (const [key, t] of heightTiles) {
     if (t.xs > xs + w || t.zs > zs + h || t.xs + t.w < xs || t.zs + t.h < zs) continue;
-    markTerrainDirty(key);
+    markTerrainDirty(key, 'cover');
   }
 }
-function markTerrainDirty(key: string): void {
-  if (terrainMeshes.has(key)) terrainDirty.add(key);
+function markTerrainDirty(key: string, why = 'mark'): void {
+  if (terrainMeshes.has(key)) { terrainDirty.add(key); dirtyWhy.set(key, why); }
 }
+/** Why each dirty tile was dirtied, and the last hundred builds — the
+ *  instrument for a rebuild loop, which is invisible to a dirty-count poll. */
+const dirtyWhy = new Map<string, string>();
+const buildLog: Array<{ key: string; why: string; corridor: boolean; refined: boolean; at: number }> = [];
 // Every terrain tile a run of road passes through, plus a margin for the cut.
 // Sampled, not exhaustive: terrain tiles are ~2km across and road vertices are
 // 12m apart, so walking every one of them would ask the same question a hundred
@@ -4966,11 +4978,11 @@ function dirtyTerrainAround(pts: Array<[number, number]>): void {
   for (let i = 0; i < pts.length; i += 8) {
     const [x, z] = pts[i];
     const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
-    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) markTerrainDirty(`${tx + dx}/${ty + dy}`);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) markTerrainDirty(`${tx + dx}/${ty + dy}`, 'way');
   }
   const [lx, lz] = pts[pts.length - 1];
   const [tx, ty] = tileAt(origin.lat - lz / M_LAT, origin.lon + lx / origin.mLon, TERRAIN_Z);
-  markTerrainDirty(`${tx}/${ty}`);
+  markTerrainDirty(`${tx}/${ty}`, 'way');
 }
 // One rebuild at a time, and never two in the same fifth of a second. A tile is
 // ~9400 vertices, each sampling the heightfield and asking the road grid about
@@ -5071,7 +5083,7 @@ function flushTerrain(now: number): void {
         }
       }
       if (!any) { (mesh.userData as { scanned?: boolean }).scanned = true; continue; }
-      terrainDirty.add(key);
+      terrainDirty.add(key); dirtyWhy.set(key, 'scan');
       terrainAt = now;
       return;
     }
@@ -5089,7 +5101,15 @@ function flushTerrain(now: number): void {
     if (t && refinedBorders.has(key)) {
       for (const [dx, dy] of [[1, 0], [0, 1]]) {
         const nk = `${t.tx + dx}/${t.ty + dy}`;
-        if (terrainMeshes.has(nk) && !terrainDirty.has(nk) && !borderShared(t, nk)) { terrainDirty.add(nk); terrainAt = now; return; }
+        const nm = terrainMeshes.get(nk);
+        if (!nm || terrainDirty.has(nk) || borderShared(t, nk)) continue;
+        // A follower that cannot take the row it is given — it has happened,
+        // see refinedBorders — is rebuilt a few times and then left alone,
+        // never five times a second for ever.
+        const ud = nm.userData as { auditTries?: number };
+        if ((ud.auditTries ?? 0) >= 3) continue;
+        ud.auditTries = (ud.auditTries ?? 0) + 1;
+        terrainDirty.add(nk); dirtyWhy.set(nk, `audit:${key}`); terrainAt = now; return;
       }
     }
   }
@@ -5127,7 +5147,7 @@ async function loadTerrainTileInner(x: number, y: number): Promise<void> {
   // same cross-tile field — this is what stitches the seams shut.
   for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
     if (!dx && !dy) continue;
-    markTerrainDirty(`${x + dx}/${y + dy}`);
+    markTerrainDirty(`${x + dx}/${y + dy}`, `tile:${key}`);
   }
 }
 
@@ -10306,9 +10326,44 @@ const EARTH_T: Rgb = [0.42, 0.34, 0.26];
  *  neighbour along their shared border. A tile that comes into range while
  *  plain is rebuilt — see flushTerrain. */
 const REFINE_R = Number(new URLSearchParams(location.search).get('refr') ?? 1100);
-/** Every refined tile's border vertices, world x, z, y in threes, so a plain
- *  neighbour can take the same points on the shared edge and no crack opens. */
-const refinedBorders = new Map<string, Float32Array>();
+/** Every tile's border vertices, world x, z, y in threes, so a neighbour can
+ *  take the same points on the shared edge and no crack opens. Float64: a
+ *  Float32 world x at 3.4km from the origin steps by 0.24mm, and two tiles'
+ *  copies of one point rounded to different millimetre keys — no point of
+ *  the owner's row matched, nothing pinned, and the audit rebuilt the
+ *  follower five times a second for ever (Camps Bay, 9026/9834). */
+const refinedBorders = new Map<string, Float64Array>();
+/** A point's millimetre cell. */
+const mmKey = (x: number, z: number): string => `${Math.round(x * 1000)},${Math.round(z * 1000)}`;
+type MmPt = [number, number, number];
+/** A border row indexed by millimetre cell, and the lookup that finds a
+ *  point WITHIN a millimetre rather than in exactly its cell: a world
+ *  position recovered from a Float32 local one carries up to 6e-5 of error,
+ *  so the same point can sit either side of a cell boundary. */
+function mmIndex(row: ArrayLike<number>): Map<string, MmPt> {
+  const m = new Map<string, MmPt>();
+  for (let i = 0; i + 2 < row.length; i += 3) m.set(mmKey(row[i], row[i + 1]), [row[i], row[i + 1], row[i + 2]]);
+  return m;
+}
+function mmNear(idx: Map<string, MmPt>, x: number, z: number, tol = 1.5e-3): MmPt | undefined {
+  const kx = Math.round(x * 1000), kz = Math.round(z * 1000);
+  const exact = idx.get(`${kx},${kz}`);
+  if (exact && Math.abs(exact[0] - x) <= tol && Math.abs(exact[1] - z) <= tol) return exact;
+  let best: MmPt | undefined, bd = tol * tol;
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+    const p = idx.get(`${kx + dx},${kz + dz}`);
+    if (!p) continue;
+    const d = (p[0] - x) * (p[0] - x) + (p[1] - z) * (p[1] - z);
+    if (d < bd) { bd = d; best = p; }
+  }
+  return best;
+}
+/** Is (x, z) on the tile's boundary — one of its four edges, within it? */
+function onTileEdge(t: HeightTile, x: number, z: number): boolean {
+  const e = 1e-3;
+  if (x < t.xs - e || x > t.xs + t.w + e || z < t.zs - e || z > t.zs + t.h + e) return false;
+  return Math.abs(x - t.xs) < e || Math.abs(x - (t.xs + t.w)) < e || Math.abs(z - t.zs) < e || Math.abs(z - (t.zs + t.h)) < e;
+}
 /** Where the quiet-path border audit is in its round of the tiles. */
 let borderAuditAt = 0;
 /** Is the road stream quiet — nothing in flight and no road landed for a
@@ -10561,9 +10616,11 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
     if (!nb) continue;
     for (let i = 0; i < nb.length; i += 3) {
       const x = nb[i], z = nb[i + 1];
-      const onX = Math.abs(x - t.xs) < 1e-3 || Math.abs(x - (t.xs + t.w)) < 1e-3;
-      const onZ = Math.abs(z - t.zs) < 1e-3 || Math.abs(z - (t.zs + t.h)) < 1e-3;
-      if (!onX && !onZ) continue;
+      // ON ONE OF MY EDGES — within my box, not merely on the edge's line.
+      // The line test took the north owner's whole east column as seeds:
+      // phantom vertices a hundred metres outside the tile, pinned, stored
+      // as this tile's border, and fanned into the corner cell's ring.
+      if (!onTileEdge(t, x, z)) continue;
       seeds.push([x, z, nb[i + 2]]);
       const ix = Math.round((x - t.xs) / cw), iz = Math.round((z - t.zs) / ch);
       if (Math.abs(x - (t.xs + ix * cw)) > 1e-3 || Math.abs(z - (t.zs + iz * ch)) > 1e-3) extraSeed = true;
@@ -10619,9 +10676,23 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
   // both produce is one vertex.
   const px: number[] = [], pz: number[] = [];
   const pool = new Map<string, number>();
+  // …and within a millimetre, not only in the same cell: a seed comes back
+  // from the owner's Float32 geometry up to 6e-5 off the point this tile's
+  // own split lands on, and a pair a hair apart — one pinned, one solved —
+  // is a vertical sliver with a height step, a crack along the seam.
   const vtx = (x: number, z: number): number => {
-    const k = `${Math.round(x * 1000)},${Math.round(z * 1000)}`;
+    const kx = Math.round(x * 1000), kz = Math.round(z * 1000);
+    const k = `${kx},${kz}`;
     let i = pool.get(k);
+    if (i !== undefined) return i;
+    let bd = 1.5e-3 * 1.5e-3;
+    for (let dx = -1; dx <= 1 && i === undefined; dx++) for (let dz = -1; dz <= 1; dz++) {
+      if (!dx && !dz) continue;
+      const j = pool.get(`${kx + dx},${kz + dz}`);
+      if (j === undefined) continue;
+      const d = (px[j] - x) * (px[j] - x) + (pz[j] - z) * (pz[j] - z);
+      if (d < bd) { bd = d; i = j; }
+    }
     if (i === undefined) { i = px.length; pool.set(k, i); px.push(x); pz.push(z); }
     return i;
   };
@@ -10834,14 +10905,6 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
     uv[i * 2] = 0.5 + (x - cxm) / t.w; uv[i * 2 + 1] = 0.5 - (z - czm) / t.h;
     kinds[i] = k;
   }
-  {
-    const b: number[] = [];
-    for (let i = 0; i < n; i++) {
-      const x = px[i], z = pz[i];
-      if (Math.abs(x - t.xs) < 1e-3 || Math.abs(x - (t.xs + t.w)) < 1e-3 || Math.abs(z - t.zs) < 1e-3 || Math.abs(z - (t.zs + t.h)) < 1e-3) b.push(x, z, pos[i * 3 + 1]);
-    }
-    refinedBorders.set(`${t.tx}/${t.ty}`, Float32Array.from(b));
-  }
   const t3 = performance.now();
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
@@ -10926,19 +10989,34 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
  *  border: how many of this tile's border vertices the neighbour also has
  *  (by millimetre key), how many it lacks, and the worst height difference
  *  where both have the point. A crack is a missing point or a dy. */
-(window as unknown as { __borderDiff?: object }).__borderDiff = (x?: number, z?: number): object | null => {
+(window as unknown as { __borderDiff?: object }).__borderDiff = (x?: number, z?: number, detail?: boolean): object | null => {
   const px = x ?? state.x, pz = z ?? state.z;
   const [tx, ty] = tileAt(origin.lat - pz / M_LAT, origin.lon + px / origin.mLon, TERRAIN_Z);
   const key = `${tx}/${ty}`;
   const t = heightTiles.get(key), mine = refinedBorders.get(key);
   const out: Record<string, unknown> = { key, stored: !!mine, corridor: (terrainMeshes.get(key)?.userData as { corridor?: boolean } | undefined)?.corridor ?? null };
   if (!t || !mine) return out;
+  // The MESH's border row (what is drawn), by millimetre key, so a stale
+  // stored row and a post-build edit of the geometry can be told apart.
+  const meshRow = (k: string): Map<string, number> => {
+    const m = new Map<string, number>();
+    const mesh = terrainMeshes.get(k), tt = heightTiles.get(k);
+    if (!mesh || !tt) return m;
+    const pos = mesh.geometry.attributes.position as THREE.BufferAttribute;
+    const cxm = tt.xs + tt.w / 2, czm = tt.zs + tt.h / 2;
+    for (let v = 0; v < pos.count; v++) {
+      const xx = pos.getX(v) + cxm, zz = pos.getZ(v) + czm;
+      if (Math.abs(xx - tt.xs) < 1e-3 || Math.abs(xx - (tt.xs + tt.w)) < 1e-3 || Math.abs(zz - tt.zs) < 1e-3 || Math.abs(zz - (tt.zs + tt.h)) < 1e-3) m.set(`${Math.round(xx * 1000)},${Math.round(zz * 1000)}`, pos.getY(v));
+    }
+    return m;
+  };
+  const myMesh = detail ? meshRow(key) : null;
   for (const [name, dx, dy] of [['east', 1, 0], ['west', -1, 0], ['south', 0, 1], ['north', 0, -1]] as Array<[string, number, number]>) {
     const nk = `${t.tx + dx}/${t.ty + dy}`;
     const nb = refinedBorders.get(nk), nt = heightTiles.get(nk), nm = terrainMeshes.get(nk);
     if (!nt || !nm) { out[name] = 'no tile'; continue; }
-    const theirs = new Map<string, number>();
-    if (nb) for (let i = 0; i < nb.length; i += 3) theirs.set(`${Math.round(nb[i] * 1000)},${Math.round(nb[i + 1] * 1000)}`, nb[i + 2]);
+    const theirs = nb ? mmIndex(nb) : new Map<string, MmPt>();
+    const theirMesh = detail ? meshRow(nk) : null;
     let shared = 0, missing = 0, worst = 0, worstGap = 0;
     const ex = dx === 1 ? t.xs + t.w : dx === -1 ? t.xs : null, ez = dy === 1 ? t.zs + t.h : dy === -1 ? t.zs : null;
     // Their row along this edge, sorted, so a point they lack is measured
@@ -10957,22 +11035,59 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
       const span = row[hi][0] - row[lo][0];
       return span < 1e-9 ? row[lo][1] : row[lo][1] + ((a - row[lo][0]) / span) * (row[hi][1] - row[lo][1]);
     };
+    const pts: Array<Record<string, unknown>> = [];
+    const cw = t.w / segOf((terrainMeshes.get(key) as THREE.Mesh).geometry);
     for (let i = 0; i < mine.length; i += 3) {
       const mx = mine[i], mz = mine[i + 1];
       if (ex !== null && Math.abs(mx - ex) > 1e-3) continue;
       if (ez !== null && Math.abs(mz - ez) > 1e-3) continue;
-      const y = theirs.get(`${Math.round(mx * 1000)},${Math.round(mz * 1000)}`);
+      if (!onTileEdge(nt, mx, mz)) continue;                    // theirs too: not a phantom
+      const mk = mmKey(mx, mz);
+      const y = mmNear(theirs, mx, mz)?.[2];
+      let d = 0, kind = 'shared';
       if (y === undefined) {
-        missing++;
+        missing++; kind = 'missing';
         const ly = lineY(ex !== null ? mz : mx);
-        if (ly !== null) worstGap = Math.max(worstGap, Math.abs(ly - mine[i + 2]));
-      } else { shared++; worst = Math.max(worst, Math.abs(y - mine[i + 2])); }
+        if (ly !== null) { d = Math.abs(ly - mine[i + 2]); worstGap = Math.max(worstGap, d); }
+      } else { shared++; d = Math.abs(y - mine[i + 2]); worst = Math.max(worst, d); }
+      if (detail && d > 0.02) {
+        const lat = Math.abs(mx - t.xs - Math.round((mx - t.xs) / cw) * cw) < 1e-3 && Math.abs(mz - t.zs - Math.round((mz - t.zs) / cw) * cw) < 1e-3;
+        pts.push({ kind, x: +mx.toFixed(2), z: +mz.toFixed(2), lat, mine: +mine[i + 2].toFixed(2), theirs: y === undefined ? null : +y.toFixed(2), d: +d.toFixed(2),
+          meshMine: myMesh?.has(mk) ? +(myMesh.get(mk) as number).toFixed(2) : null, meshTheirs: theirMesh?.has(mk) ? +(theirMesh.get(mk) as number).toFixed(2) : null,
+          has: hasHeight(mx, mz), field: +sampleHeight(mx, mz).toFixed(2), cover: sampleCover(mx, mz) });
+      }
     }
-    out[name] = { key: nk, corridor: (nm.userData as { corridor?: boolean }).corridor ?? null, stored: !!nb, shared, missing, worstDy: +worst.toFixed(3), worstGap: +worstGap.toFixed(3) };
+    pts.sort((p, q) => (q.d as number) - (p.d as number));
+    const rec: Record<string, unknown> = { key: nk, corridor: (nm.userData as { corridor?: boolean }).corridor ?? null, scanned: (nm.userData as { scanned?: boolean }).scanned ?? null, stored: !!nb, shared, missing, worstDy: +worst.toFixed(3), worstGap: +worstGap.toFixed(3) };
+    if (detail) { rec.pts = pts.slice(0, 6); rec.bad = pts.length; rec.shared_ok = borderShared(t, nk); rec.dirty = terrainDirty.has(nk); }
+    out[name] = rec;
+  }
+  if (detail) {
+    out.quiet = osmStreamQuiet(); out.hydroDirty = hydroDirty.size; out.batter = pendingBatter.length; out.auditAt = borderAuditAt; out.meshes = terrainMeshes.size;
+    out.builds = terrainBuilds; out.dist = +Math.max(0, Math.abs(state.x - (t.xs + t.w / 2)) - t.w / 2, Math.abs(state.z - (t.zs + t.h / 2)) - t.h / 2).toFixed(0);
   }
   return out;
 };
 (window as unknown as { __refine?: object }).__refine = (): object => ({ on: REFINE, ...refineCost });
+(window as unknown as { __buildLog?: object }).__buildLog = (): object => buildLog.slice();
+/** borderShared, shown its working: the neighbour's box, how many of this
+ *  tile's points fell in it, and the first point that failed. */
+(window as unknown as { __bs?: object }).__bs = (key: string, nk: string): object | null => {
+  const t = heightTiles.get(key), nt = heightTiles.get(nk);
+  const mine = refinedBorders.get(key), theirs = refinedBorders.get(nk);
+  if (!t || !nt || !mine || !theirs) return { key, nk, t: !!t, nt: !!nt, mine: !!mine, theirs: !!theirs };
+  const have = mmIndex(theirs);
+  let inBox = 0, hit = 0; let first: unknown = null;
+  for (let i = 0; i < mine.length; i += 3) {
+    const x = mine[i], z = mine[i + 1];
+    if (x < nt.xs - 1e-3 || x > nt.xs + nt.w + 1e-3 || z < nt.zs - 1e-3 || z > nt.zs + nt.h + 1e-3) continue;
+    inBox++;
+    const y = mmNear(have, x, z)?.[2];
+    if (y !== undefined) hit++;
+    if ((y === undefined || Math.abs(y - mine[i + 2]) > 0.02) && !first) first = { x, z, mine: mine[i + 2], theirs: y ?? null };
+  }
+  return { key, nk, box: [nt.xs, nt.zs, nt.w, nt.h], tb: [t.xs, t.zs, t.w, t.h], minePts: mine.length / 3, theirPts: theirs.length / 3, inBox, hit, first, result: borderShared(t, nk) };
+};
 /** THE CORRIDOR CARVE, solved per TRIANGLE instead of per vertex.
  *
  * The guarantee has only ever been about one thing: at a point ON a deck, the
@@ -25441,7 +25556,7 @@ function heightsOf(): number[] {
   at: demLast,
 });
 (window as unknown as { __tstats?: object }).__tstats = (): object => ({
-  heightTiles: heightTiles.size, meshes: terrainMeshes.size, dirty: terrainDirty.size,
+  heightTiles: heightTiles.size, meshes: terrainMeshes.size, dirty: terrainDirty.size, builds: terrainBuilds,
   roadCells: roadGrid.size, seenWays: seenWays.size, unbuilt,
   osmDone: osmDone.size, inFlight: osmInFlight, queued: osmQueue.length,
 });
