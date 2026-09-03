@@ -880,6 +880,14 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   refined neighbour, a follower's own extra edge points are pinned onto the
   owner's polyline, and only an owner dirties a follower (`borderShared`).
   Vélizy after: worstDy 0, worstGap 0 on all four edges.
+- **…for EVERY tile, not only refined ones.** The clamp-inside read on its
+  own made the two sides of a plain border read rasters a DEM pixel apart —
+  the old code read one raster for both by the accident of a half-open box
+  — and on a Lesotho hillside that was a wall of metres along every seam,
+  seen from the drone the morning it shipped. So every tile stores its
+  border (`storeBorder`), every tile pins its west and north edges to the
+  owners' rows (`refinedBorderPins`, or seeds in the refined build), and
+  every build dirties its east and south followers whose rows differ.
 
 `__refine()` counts tiles, split cells, vertices, triangles against the
 plain grid and milliseconds by phase (lines, split, heights, geometry).
