@@ -13414,6 +13414,12 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // Explicit OSM structure/material tags are passed straight through and win
   // inside the pure planner.
   const maxDaylight = daylight.length ? Math.max(0, ...daylight) : 0;
+  // Cumulative station along the ribbon, for the recipe's span and the
+  // support stations below (the end-weld block above has its own copy in
+  // its own scope).
+  const arc = new Array<number>(n).fill(0);
+  for (let i = 1; i < n; i++) arc[i] = arc[i - 1] + Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
+  const total = arc[n - 1] || 1;
   let infraRecipe: StructureRecipe | null = null;
   if (drivable && apronOn && (mode === 'bridge' || mode === 'tunnel' || canopy || maxDaylight > DECK_GAP)) {
     const mi = n >> 1;

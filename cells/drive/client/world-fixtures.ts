@@ -446,7 +446,7 @@ export const WORLD_FIXTURES: readonly WorldFixture[] = [
       return base + (valley + ridge + bank) * t.relief;
     },
     cover(e, s, t) { return coverFor(e, s, t, this.height(e, s, t)); },
-    ways: (t) => [
+    ways: (t): FixtureWay[] => [
       { id: 1, tags: { ...mainTags(t, 'Arch Test'), bridge: 'yes', layer: '1',
           'bridge:structure': 'arch', 'bridge:material': 'stone', start_date: '1887' },
         pts: through(0, 0, 0, 520) },
