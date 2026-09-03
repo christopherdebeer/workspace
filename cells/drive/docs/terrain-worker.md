@@ -175,8 +175,36 @@ noise — the Bixby join population, the corridor wedge budget, carve-through
 at spots where the road stream has not landed inside the window — is
 identical on the parent.
 
-Step 3 is next. The store already names every fact the worker's mirror must
-carry; the kernel has no other inputs.
+Step 3 is done: `client/terrain-worker.ts`. The kernel became one closure
+(`createTerrainKernel`) whose source is embedded in a Blob worker, as the
+road profile worker is, so the cell is still one bundle. The worker mirrors
+the height and cover rasters once (a hop resets it) and takes everything
+else with each job — the strips and channels near the tile, flat, with
+their cell keys; the area patches; the landmark pads with their pad
+elevations resolved; a 17×17 climate raster of biome weights; the palette
+state and the constants. A job is self-contained on purpose: mirroring the
+strips would mean shadowing every mutation a road makes to its segments
+after they are rasterised, and the few hundred near a tile are tens of
+kilobytes. Replies are transferable arrays plus the border row and the
+followers to dirty; `applyTileBuild` wraps them and runs the post-steps.
+One job in flight, the queue and its owners-first order still on the main
+thread. `?tworker=0` keeps every build synchronous; a worker failure
+disables it and the synchronous slot takes the tile back. `__tworker()`
+is the ledger: jobs, worker ms, wait, prep, apply and post-step ms.
+
+Measured at Camps Bay (rendering off, so the worker is not starved by the
+software renderer): 83 builds to settle, all in the worker, borders 0/0 on
+every edge. Main thread per build: 5 ms to pack the job, 0.2 ms to wrap the
+arrays. The worker takes ~210 ms a build — its cover lookup is the linear
+scan and every job recomputes the break lines — which is fine off the main
+thread and the first thing to tune. With rendering on the main thread's
+whole slot is 35 ms a build, median 24: 5 ms of packing and wrapping, the
+rest the post-steps (reseat, redrape, hydro, batter, culverts), which are
+now the residue. In the harness the software renderer starves the worker
+(3 s of wait a job); on a GPU that is not a factor.
+
+Step 4 (the queue in the worker) is optional now: the main-thread share
+of a build is the post-steps, not the ordering. Step 5 is the post-steps.
 
 ## Steps, each shippable
 

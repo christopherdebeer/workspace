@@ -950,6 +950,19 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   tracer that found it — it records the first non-finite intermediate in
   the chassis step with the surface read's working (`meshDiag`).
 
+- **THE BUILD RUNS IN A WORKER** (`client/terrain-worker.ts`). The kernel
+  is one closure, `createTerrainKernel`, embedded as text in a Blob worker
+  like the road profile worker — nothing inside it may touch a module
+  binding of terrain-kernel.ts or the worker throws on its first job.
+  Rasters are mirrored once; strips, channels, areas, pads, a climate
+  raster and the palette state travel with every job, so nothing can go
+  stale. The main thread's share of a build fell from 125 ms to 5 ms plus
+  the post-steps (17–30 ms), which are the residue now. `?tworker=0` is the
+  synchronous path and the A/B; `__tworker()` the ledger. The harness's
+  software renderer starves the worker (seconds of wait a job): measure
+  throughput with `nodraw=1`, cost with rendering on, never the two from
+  one run.
+
 `__refine()` counts tiles, split cells, vertices, triangles against the
 plain grid and milliseconds by phase (lines, split, heights, geometry).
 `__borderDiff(x, z)` compares the tile under a point with each neighbour
