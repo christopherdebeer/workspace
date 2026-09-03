@@ -17,8 +17,9 @@
 import * as THREE from 'three';
 import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, altBandAt, aspectLift, climPick, climPickRow,
   krummholz, swardLift, treelineAt, type ClimateSample } from './climate';
-import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, bedrockAt, buildLookAt, paintFor, roadLookAt,
+import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt, paintFor, roadLookAt,
   seedAt, snowLoad, stoneWalls, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
+import { pickInfrastructureRecipe, planSupportStations, type StructureRecipe } from './infrastructure';
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
 import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
 import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSystem, type OceanCoverage } from './hydro';
@@ -11496,7 +11497,9 @@ interface JuncArm { ux: number; uz: number; hw: number; dk: string }
 const juncNodes = new Map<string, { x: number; z: number; arms: JuncArm[] }>();
 const juncBoxed = new Set<string>();
 const spanStats = {
-  piers: 0, arches: 0, railM: 0, deckM: 0, signs: 0, signRefused: 0, maxDaylight: 0, cats: 0, posts: 0,
+  piers: 0, pierRefused: 0, arches: 0, archRefused: 0, galleryRefused: 0,
+  recipes: {} as Record<string, number>,
+  railM: 0, deckM: 0, signs: 0, signRefused: 0, maxDaylight: 0, cats: 0, posts: 0,
   // Why a kerb quad did or did not get a batter — one counter per branch, so
   // "the fill stops halfway along this road" is attributable rather than argued.
   fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0, fillCap: 0,
@@ -11665,6 +11668,52 @@ function preEdge(x: number, z: number, notKey?: string): { out: number; track: b
     }
   }
   return best;
+}
+
+/**
+ * THE ROAD'S AIRSPACE IS RESERVED BEFORE STRUCTURES ARE DECORATED.
+ *
+ * A flyover's deck clearance was solved against lower roads, but its supports
+ * were placed later from a blind 26m counter. At an interchange that counter
+ * could put a pier on the lower carriageway; the arch hung between consecutive
+ * piers just as blindly. Galleries repeated the same fault with their open-side
+ * columns. Checking only roadGrid is not enough: higher layers deliberately
+ * build first, so the road underneath may not exist there yet. preRoadGrid
+ * contains every way in this batch before any of them builds and makes the veto
+ * independent of build order.
+ *
+ * This is deliberately a PLANAR veto. A support occupying a road corridor is
+ * refused whatever the layers claim; there is no useful case where a solid
+ * column through a carriageway becomes correct because another deck is higher.
+ * The current way is excluded by stable way identity (and fragment id for the
+ * built grid), because every legitimate support necessarily stands beneath it.
+ */
+function structureFootprintClear(x: number, z: number, radius: number, ownFid?: number, ownKey?: string): boolean {
+  for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
+    if (ownFid !== undefined && seg.fd === ownFid) continue;
+    if (ownKey !== undefined && seg.wid === ownKey) continue;
+    const [cx, cz] = closestOnSeg(x, z, seg);
+    if (Math.hypot(x - cx, z - cz) <= seg.hw + 0.8 + radius) return false;
+  }
+  for (const seg of preRoadGrid.get(gkey(x, z)) ?? []) {
+    if (ownKey !== undefined && seg.dks === ownKey) continue;
+    const [cx, cz] = closestOnSeg(x, z, seg);
+    if (Math.hypot(x - cx, z - cz) <= seg.hw + 0.8 + radius) return false;
+  }
+  return true;
+}
+
+/** Does a whole support/spandrel run stay out of every other road corridor? */
+function structureSpanClear(
+  ax: number, az: number, bx: number, bz: number, radius: number, ownFid?: number, ownKey?: string,
+): boolean {
+  const len = Math.hypot(bx - ax, bz - az);
+  const steps = Math.max(1, Math.ceil(len / 2));
+  for (let i = 0; i <= steps; i++) {
+    const t = i / steps;
+    if (!structureFootprintClear(ax + (bx - ax) * t, az + (bz - az) * t, radius, ownFid, ownKey)) return false;
+  }
+  return true;
 }
 /** Two triangles into a vertex/uv pair. `ribbon` has its own local `quad`, and
  *  the only `quad` in scope out here is a THREE.Mesh — which the stub types are
@@ -12520,7 +12569,7 @@ function flushRibbons(): void {
     }
   }
 }
-function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string, layer = 0): void {
+function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string, layer = 0, wayTags?: Record<string, string>): void {
   const name_ = name;
   const fid = ++ribbonSeq;
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
@@ -13358,6 +13407,81 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   const daylight = apronOn
     ? dense.map((_, i) => (flat ? prof[i] : elev[i]) + lift - elev[i])
     : [];
+
+  // ── CONTEXTUAL INFRASTRUCTURE GRAMMAR ─────────────────────────────
+  // Facts are sampled once per complete ribbon, never per bay. The recipe is
+  // therefore coherent across the structure and independent of draw order.
+  // Explicit OSM structure/material tags are passed straight through and win
+  // inside the pure planner.
+  const maxDaylight = daylight.length ? Math.max(0, ...daylight) : 0;
+  let infraRecipe: StructureRecipe | null = null;
+  if (drivable && apronOn && (mode === 'bridge' || mode === 'tunnel' || canopy || maxDaylight > DECK_GAP)) {
+    const mi = n >> 1;
+    const [mx, mz] = dense[mi];
+    const cc = climateAt(mx, mz, prof[mi] + baseElev);
+    const [pa, pb] = [dense[Math.max(0, mi - 1)], dense[Math.min(n - 1, mi + 1)]];
+    const tx = pb[0] - pa[0], tz = pb[1] - pa[1], tl = Math.hypot(tx, tz) || 1;
+    const px = -tz / tl, pz = tx / tl;
+    const sideSlope = Math.abs(sampleHeight(mx + px * 14, mz + pz * 14)
+      - sampleHeight(mx - px * 14, mz - pz * 14)) / 28;
+    const tags = wayTags ?? {};
+    const yearMatch = /(?:18|19|20)\d{2}/.exec(tags.start_date ?? '');
+    const tier = (width >= 11 ? 3 : width >= 8 ? 2 : width >= 6 ? 1 : 0) as 0 | 1 | 2 | 3;
+    infraRecipe = pickInfrastructureRecipe({
+      key: wayKey ?? `road:${name ?? ''}`,
+      kind: canopy || mode === 'tunnel' ? 'tunnel' : 'bridge',
+      lengthM: total, spanM: Math.min(total, Math.max(12, total * (maxDaylight > 20 ? 0.62 : 0.34))),
+      roadWidthM: width, tier, lanes: Number(tags.lanes) || undefined, layer,
+      taggedFamily: tags['bridge:structure'] ?? tags['tunnel:type'] ?? tags.tunnel,
+      taggedStructure: tags['bridge:structure'] ?? tags['bridge:support'],
+      taggedMaterial: tags['bridge:material'] ?? tags['tunnel:lining'] ?? tags.material,
+      startYear: yearMatch ? Number(yearMatch[0]) : undefined,
+      climate: cc.w, temperatureC: cc.tempC, moisture: cc.moisture,
+      snow: snowLoad(cc.w, cc.elevAbs), reliefM: maxDaylight, sideSlope,
+      coverM: mode === 'tunnel' ? Math.max(0, ...elev.map((y, j) => y - prof[j])) : 0,
+      daylightM: maxDaylight, waterWidthM: 0, urbanity: tier >= 2 && width >= 9 ? 0.55 : 0.15,
+      bedrock: 'unknown',
+      regionSeed: seedAt(cultEnv, mx, mz, 'region'),
+      districtSeed: seedAt(cultEnv, mx, mz, 'district'),
+      settlementSeed: seedAt(cultEnv, mx, mz, 'settlement'),
+      availableClearanceM: 99,
+    });
+    const rk = `${infraRecipe.kind}:${infraRecipe.family}:${infraRecipe.material}`;
+    spanStats.recipes[rk] = (spanStats.recipes[rk] ?? 0) + 1;
+  }
+
+  // Absolute projected phase: moving a clip edge changes the local station
+  // numbers but not the world positions selected for supports. Canonical
+  // endpoint order makes reversed OSM geometry choose the same sequence.
+  const supportAt = (s: number): [number, number] => {
+    let j = 0;
+    while (j + 1 < arc.length && arc[j + 1] < s) j++;
+    const d = Math.max(1e-6, arc[Math.min(j + 1, arc.length - 1)] - arc[j]);
+    const f = clamp((s - arc[j]) / d, 0, 1);
+    return [dense[j][0] + (dense[Math.min(j + 1, n - 1)][0] - dense[j][0]) * f,
+      dense[j][1] + (dense[Math.min(j + 1, n - 1)][1] - dense[j][1]) * f];
+  };
+  let pierStations: number[] = [];
+  if (infraRecipe?.kind === 'bridge' && infraRecipe.supportSpacingM > 0 && total > 4) {
+    const [lla, llb] = [localToLatLon(dense[0][0], dense[0][1]), localToLatLon(dense[n - 1][0], dense[n - 1][1])];
+    const [aa, bb] = [absMetres(lla[0], lla[1]), absMetres(llb[0], llb[1])];
+    const reverse = aa[0] > bb[0] || (aa[0] === bb[0] && aa[1] > bb[1]);
+    const ca = reverse ? bb : aa, cb = reverse ? aa : bb;
+    const ux = (cb[0] - ca[0]) / (Math.hypot(cb[0] - ca[0], cb[1] - ca[1]) || 1);
+    const uz = (cb[1] - ca[1]) / (Math.hypot(cb[0] - ca[0], cb[1] - ca[1]) || 1);
+    const offset = ca[0] * ux + ca[1] * uz;
+    const planned = planSupportStations({
+      key: wayKey ?? `road:${name ?? ''}`, lengthM: total,
+      spacingM: infraRecipe.supportSpacingM, endClearanceM: 1.5, stationOffsetM: offset,
+      clearAt: (canonicalS) => {
+        const localS = reverse ? total - canonicalS : canonicalS;
+        const [x, z] = supportAt(localS);
+        return structureFootprintClear(x, z, infraRecipe!.supportRadiusM, fid, wayKey);
+      },
+    });
+    spanStats.pierRefused += planned.refused;
+    pierStations = planned.accepted.map((q) => reverse ? total - q.stationM : q.stationM).sort((a, b) => a - b);
+  }
   // WHERE THE RAIL GOES, decided for the whole way before any of it is drawn.
   // Emitting per quad left holes: one 12m step whose drop dipped under the
   // threshold — the inside of a bend, a bench in the slope — opened a gap you
@@ -13978,7 +14102,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     }
   }
   let along = 0; // metres travelled — v wraps every 20m (the roadTex period)
-  let pierRun = PIER_SPAN;  // so the first bay of a span gets one
+  let nextPier = 0;
   // The last pier stood, for the arch back to it. Cleared whenever the deck
   // run breaks, so an arch never leaps a stretch where the road is on ground.
   let prevPier: { x: number; z: number; top: number; bot: number } | null = null;
@@ -14450,14 +14574,29 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
           [0, uA, 0, uB, width / 4, uA, width / 4, uB]);
         // And hold it up. Otherwise the road is simply hanging there, which is
         // what a thirty-metre span over a lake looked like.
-        pierRun += len;
-        if (daylight[i] > PIER_AT && pierRun >= PIER_SPAN) {
-          pierRun = 0;
-          const top = (bot[0] + bot[2]) / 2 + 0.05;
-          const base = Math.min(elevMin[i], sampleHeight(x0, z0)) - 1.2;
-          pier(x0, z0, dx, dz, top, base, width * 0.32);
-          const cur = { x: x0, z: z0, top, bot: base };
-          if (prevPier) arch(prevPier, cur, width * 0.3);
+        // Canonical station, interpolated inside this bay. The plan has
+        // already tried deterministic shifts around every crossed road and
+        // omitted candidates for which no safe footprint exists.
+        while (nextPier < pierStations.length && pierStations[nextPier] <= arc[i + 1] + 1e-4) {
+          const s = pierStations[nextPier++];
+          if (s < arc[i] - 1e-4) continue;
+          const f = clamp((s - arc[i]) / len, 0, 1);
+          const dl = daylight[i] + (daylight[Math.min(i + 1, daylight.length - 1)] - daylight[i]) * f;
+          if (dl <= PIER_AT) continue;
+          const cx = x0 + dx * f, cz = z0 + dz * f;
+          const halfPier = Math.max(width * 0.22, (infraRecipe?.supportRadiusM ?? width * 0.32) / 1.22);
+          const top0 = (bot[0] + bot[2]) / 2, top1 = (bot[1] + bot[3]) / 2;
+          const top = top0 + (top1 - top0) * f + 0.05;
+          const base = Math.min(elevMin[i] + (elevMin[i + 1] - elevMin[i]) * f, sampleHeight(cx, cz)) - 1.2;
+          pier(cx, cz, dx, dz, top, base, halfPier);
+          const cur = { x: cx, z: cz, top, bot: base };
+          // Arches are a selected family, never a universal decoration.
+          if (prevPier && infraRecipe?.family === 'arch') {
+            if (structureSpanClear(
+              prevPier.x, prevPier.z, cur.x, cur.z, width * 0.3 + 0.35, fid, wayKey,
+            )) arch(prevPier, cur, width * 0.3);
+            else spanStats.archRefused++;
+          }
           prevPier = cur;
         }
       } else prevPier = null;
@@ -14697,7 +14836,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // hill — visible to `__buried` instead of dressed up as a feature.
         const s2 = s + 1, e2 = e - 1;
         if (e2 - s2 >= 2 && mode === 'tunnel') {
-          tunnelTube(dense, prof, elevMin, s2, e2, width, lift);
+          tunnelTube(dense, prof, elevMin, s2, e2, width, lift, infraRecipe ?? undefined);
           for (let k = s2; k < e2 && k < segsOf.length; k++) {
             if (k === s2 || k === e2 - 1) segsOf[k].pc = TUNNEL_H + 1.6;
             else segsOf[k].tn = true;
@@ -14742,7 +14881,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // segment rasterized before its tunnel flag lands would trench the hill it
   // is buried in.
   for (const sg of segsOf) rasterizeCut(sg);
-  if (canopy && n > 2) canopyRun(dense, prof, width, lift);
+  if (canopy && n > 2) canopyRun(dense, prof, width, lift, fid, wayKey);
   if (drivable) { dirtyTerrainAround(dense); osmLastLand = performance.now(); }
 }
 /**
@@ -14792,7 +14931,10 @@ function mitreOffsets(dense: Array<[number, number]>, a: number, b: number, hw: 
 // view: a slab overhead, a solid wall against the mountain, columns over the
 // drop. The uphill side is measured, not tagged — the wall goes where the
 // ground is.
-function canopyRun(dense: Array<[number, number]>, prof: number[], width: number, lift: number): void {
+function canopyRun(
+  dense: Array<[number, number]>, prof: number[], width: number, lift: number,
+  ownFid?: number, ownKey?: string,
+): void {
   const n = dense.length;
   const mid = n >> 1;
   const [mxa, mza] = dense[Math.max(0, mid - 1)], [mxb, mzb] = dense[Math.min(n - 1, mid + 1)];
@@ -14828,10 +14970,16 @@ function canopyRun(dense: Array<[number, number]>, prof: number[], width: number
     // columns on the open side, thin crossed fins
     colAcc += len;
     if (colAcc >= 9) {
-      colAcc = 0;
       const cx2 = x0 - uax, cz2 = z0 - uaz;
-      quad([cx2 - 0.3, yA, cz2], [cx2 + 0.3, yA, cz2], [cx2 - 0.3, rA, cz2], [cx2 + 0.3, rA, cz2]);
-      quad([cx2, yA, cz2 - 0.3], [cx2, yA, cz2 + 0.3], [cx2, rA, cz2 - 0.3], [cx2, rA, cz2 + 0.3]);
+      // The open side routinely crosses side roads at a gallery mouth. Leave
+      // that bay open instead of planting a crossed pair of fins in the
+      // carriageway; do not reset the accumulator, so the rhythm resumes at
+      // the first clear station rather than losing a column altogether.
+      if (structureFootprintClear(cx2, cz2, 0.5, ownFid, ownKey)) {
+        colAcc = 0;
+        quad([cx2 - 0.3, yA, cz2], [cx2 + 0.3, yA, cz2], [cx2 - 0.3, rA, cz2], [cx2 + 0.3, rA, cz2]);
+        quad([cx2, yA, cz2 - 0.3], [cx2, yA, cz2 + 0.3], [cx2, rA, cz2 - 0.3], [cx2, rA, cz2 + 0.3]);
+      } else spanStats.galleryRefused++;
     }
   }
   const geo = new THREE.BufferGeometry();
@@ -15495,12 +15643,38 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
   }
   if (!isFinite(cover)) return;
   const room = cover;
-  // No room at all is a real answer: the water passes at grade and there is
-  // nothing to build. Drawing a bore anyway is what put concrete in the road.
-  if (room < 0.2) { culvertStats.tooTight++; return; }
+  // No usable room is a real answer: the water passes at grade and there is
+  // nothing to build. The old 0.2m rejection sat BELOW CULV_CLR, then clamp
+  // enlarged a 0.2–0.35m gap to a 0.35m bore — geometry larger than the room
+  // that sized it. A clearance calculation may only shrink geometry.
+  if (room < CULV_CLR) { culvertStats.tooTight++; return; }
+
+  const ci = Math.floor((core0 + core1) / 2);
+  const [cx, cz] = dense[ci];
+  const cclim = climateAt(cx, cz, inv[ci] + baseElev);
+  const [clat, clon] = localToLatLon(cx, cz);
+  const conduitKey = `conduit:${Math.round(clat * 1e6)}:${Math.round(clon * 1e6)}`;
+  const conduitRecipe = pickInfrastructureRecipe({
+    key: conduitKey, kind: 'conduit', lengthM: Math.max(1, b - a) * 12,
+    spanM: width, roadWidthM: width, tier: 1,
+    climate: cclim.w, temperatureC: cclim.tempC, moisture: cclim.moisture,
+    snow: snowLoad(cclim.w, cclim.elevAbs), reliefM: 0, sideSlope: 0,
+    coverM: room, daylightM: 0, waterWidthM: width, urbanity: 0.15,
+    bedrock: 'unknown',
+    regionSeed: seedAt(cultEnv, cx, cz, 'region'),
+    districtSeed: seedAt(cultEnv, cx, cz, 'district'),
+    settlementSeed: seedAt(cultEnv, cx, cz, 'settlement'),
+    availableClearanceM: room,
+  });
+  const crk = `conduit:${conduitRecipe.family}:${conduitRecipe.material}`;
+  spanStats.recipes[crk] = (spanStats.recipes[crk] ?? 0) + 1;
+  // Ford/none are intentionally geometry-free fallbacks: water continues at
+  // grade and no procedural solid can intrude into the deck above.
+  if (!conduitRecipe.feasible || conduitRecipe.family === 'ford') return;
+
   const rig = room >= CULV_RIG;
-  const H = rig ? CULV_RIG : clamp(room, CULV_CLR, 1.8);
-  const W = Math.max(width, rig ? 4.4 : 1.6);
+  const H = rig ? CULV_RIG : Math.min(room, conduitRecipe.family === 'pipe' ? 1.45 : 1.8);
+  const W = Math.max(width, rig ? 4.4 : conduitRecipe.family === 'pipe' ? 1.6 : 2.2);
   culvertStats.runs++;
   if (rig) culvertStats.rigSized++;
   const tv: number[] = [];
@@ -15518,6 +15692,11 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
     push(x0 + ax2, yA, z0 + az2, x1 + bx2, yB, z1 + bz2, x0 + ax2, cA, z0 + az2, x1 + bx2, cB, z1 + bz2);
     push(x0 - ax2, yA, z0 - az2, x1 - bx2, yB, z1 - bz2, x0 - ax2, cA, z0 - az2, x1 - bx2, cB, z1 - bz2);
     push(x0 + ax2, cA, z0 + az2, x1 + bx2, cB, z1 + bz2, x0 - ax2, cA, z0 - az2, x1 - bx2, cB, z1 - bz2);
+    // Twin-cell is the same safe outer envelope with a central divider, so the
+    // visual family changes without changing the clearance calculation.
+    if (conduitRecipe.family === 'twin-cell') {
+      push(x0, yA, z0, x1, yB, z1, x0, cA, z0, x1, cB, z1);
+    }
     // NOTHING GOES IN THE WALL GRID. A road tunnel's walls are solid because
     // you drive BETWEEN them; a culvert is buried, and the only thing near
     // enough to hit its walls is the traffic on the road over the top. Putting
@@ -15552,14 +15731,18 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
     const hdeck = deckOver(px, pz, 1.5);
     const hi = hdeck === null ? Infinity : hdeck - CULV_UNDER;
     const top = Math.min(inv[end] + H + 0.7, hi);
-    const hh = Math.max(0.4, top - (inv[end] - 0.4));
+    const bottom = inv[end] - 0.4;
+    const hh = top - bottom;
+    // Do not force a decorative minimum back through the deck ceiling. Where
+    // even a thin headwall will not fit, the safe visual is no headwall.
+    if (hh < 0.15) continue;
     const wall = new THREE.Mesh(new THREE.BoxGeometry(W + 2.4, hh, 0.7), MAT.portal);
-    wall.position.set(px, inv[end] - 0.4 + hh / 2, pz);
+    wall.position.set(px, bottom + hh / 2, pz);
     wall.rotation.y = ang + Math.PI / 2;
     worldGroup.add(wall);
   }
 }
-function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number[], a: number, b: number, width: number, lift: number): void {
+function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number[], a: number, b: number, width: number, lift: number, recipe?: StructureRecipe): void {
   // Belt and braces: the ceiling can never poke out through the hillside —
   // EXCEPT at the mouths, which wear a straight collar at tube height. The
   // mouth stations used to cap under the RAW terrain, but the portal-throat
@@ -15603,13 +15786,17 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number
   // not the DEM's.
   {
     const lv: number[] = [];
-    let run = 9;                                  // first lamp a few metres in
+    // Lighting is part of the deterministic recipe. Rural raw-rock bores stay
+    // sparse; major segmental/cut-cover tubes carry a continuous rhythm.
+    const lampEvery = recipe?.lighting === 'none' ? Infinity
+      : recipe?.lighting === 'portal' ? 36 : recipe?.lighting === 'continuous' ? 12 : 24;
+    let run = lampEvery * 0.5;
     for (let i = a; i < b; i++) {
       const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
       const dx = x1 - x0, dz = z1 - z0;
       const len = Math.hypot(dx, dz) || 1;
       run += len;
-      if (run < 18) continue;
+      if (run < lampEvery) continue;
       run = 0;
       const ux = dx / len, uz = dz / len;         // along
       const px2 = -uz * 0.4, pz2 = ux * 0.4;      // across, an 0.8m panel
@@ -15637,7 +15824,10 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number
     const i0 = end === a ? a : b - 1, i1 = end === a ? a + 1 : b;
     const [x0, z0] = dense[i0], [x1, z1] = dense[i1];
     const ang = Math.atan2(z1 - z0, x1 - x0);
-    const lintel = new THREE.Mesh(new THREE.BoxGeometry(width + 3, 1.6, 1.2), MAT.portal);
+    const rawPortal = recipe?.family === 'rock' || recipe?.family === 'gallery';
+    const lintel = new THREE.Mesh(new THREE.BoxGeometry(
+      width + (rawPortal ? 1.8 : 3), rawPortal ? 0.9 : 1.6, rawPortal ? 0.8 : 1.2,
+    ), MAT.portal);
     const [px, pz] = dense[end];
     lintel.position.set(px, ceil(end) + 0.3, pz);
     lintel.rotation.y = ang + Math.PI / 2; // across the road, not along it
@@ -17011,7 +17201,10 @@ const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterwa
   // keep the road's own grade under a canopy, and the rest are weak-but-real
   // signals (cut side, fill, mapped grade, clearance) held for when the
   // vertical alignment learns to consume them.
-  'covered', 'cutting', 'embankment', 'incline', 'maxheight'];
+  'covered', 'cutting', 'embankment', 'incline', 'maxheight',
+  // Infrastructure grammar: explicit facts always outrank procedural context.
+  'bridge:structure', 'bridge:support', 'bridge:material', 'tunnel:type',
+  'tunnel:lining', 'material', 'start_date', 'lanes', 'width', 'diameter'];
 let osmDb: IDBDatabase | null = null;
 let osmDbHow = 'pending';
 /**
@@ -18055,7 +18248,7 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
         GRADE_MAX[tags.highway] ?? 0.15, canopy, roadTint(tags, wq), dk,
         // Which level OSM says this way is on — see layerOf. The planner pins and
         // the per-way hints stay on it; the end weld deliberately does not.
-        layerOf(tags));
+        layerOf(tags), tags);
       if (unbuilt !== refusedAt) { seenWays.delete(dk); continue; }
       // Steps are named and drawn but nothing drives them, so they earn no
       // checkpoints — a road you cannot survey should not sit in the log.

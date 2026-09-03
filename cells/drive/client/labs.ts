@@ -54,6 +54,12 @@ export const LABS: readonly LabEntry[] = [
     start: () => import('./roads-lab').then((m) => m.startRoadsLab()),
   },
   {
+    slug: 'infrastructure',
+    label: 'INFRASTRUCTURE',
+    note: 'Deterministic bridge, tunnel and conduit families: feasibility gates, culture scopes, canonical supports and safety fallbacks.',
+    start: () => import('./infrastructure-lab').then((m) => m.startInfrastructureLab()),
+  },
+  {
     slug: 'flora',
     label: 'FLORA',
     note: 'The climate ladder on one screen — biome mix at a point and a column through the altitudes, with the treeline walking as you turn the latitude.',

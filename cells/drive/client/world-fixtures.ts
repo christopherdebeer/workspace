@@ -431,6 +431,44 @@ export const WORLD_FIXTURES: readonly WorldFixture[] = [
     ],
   },
   {
+    id: 'structures',
+    label: 'HOSTILE STRUCTURE CROSSINGS',
+    note: 'A tagged arch bridge whose nominal pier rhythm lands on three roads, a bored tunnel under a live surface crossing, and a stream conduit under a cutting. The geometry is intentionally hostile: every decorative support has a tempting but illegal place to stand. Clearance counters should report refusals while all carriageways remain open.',
+    spawn: { lat: HOME.lat, lon: HOME.lon, heading: 90 },
+    height: (e, s, t) => {
+      const base = t.lift + 320;
+      // Valley under the bridge at e=0.
+      const valley = -20 * Math.exp(-((s / 105) ** 2)) * Math.exp(-((e / 180) ** 2));
+      // Ridge over the tunnel at e=420.
+      const ridge = 24 * Math.exp(-((s / 82) ** 2)) * Math.exp(-(((e - 420) / 150) ** 2));
+      // A shallow cutting over the conduit at e=-420.
+      const bank = 5 * Math.exp(-((s / 65) ** 2)) * Math.exp(-(((e + 420) / 130) ** 2));
+      return base + (valley + ridge + bank) * t.relief;
+    },
+    cover(e, s, t) { return coverFor(e, s, t, this.height(e, s, t)); },
+    ways: (t) => [
+      { id: 1, tags: { ...mainTags(t, 'Arch Test'), bridge: 'yes', layer: '1',
+          'bridge:structure': 'arch', 'bridge:material': 'stone', start_date: '1887' },
+        pts: through(0, 0, 0, 520) },
+      // Three under-roads deliberately near a nominal support cadence.
+      { id: 2, tags: { highway: 'secondary', name: 'Under Centre', surface: t.surface },
+        pts: through(0, 0, 90, 620) },
+      { id: 3, tags: { highway: 'residential', name: 'Under North', surface: t.surface },
+        pts: through(0, -78, 90, 620) },
+      { id: 4, tags: { highway: 'residential', name: 'Under South', surface: t.surface },
+        pts: through(0, 78, 90, 620) },
+      { id: 5, tags: { ...mainTags(t, 'Bored Test'), tunnel: 'yes', layer: '-1',
+          'tunnel:type': 'bored', 'tunnel:lining': 'shotcrete' },
+        pts: through(420, 0, 0, 560) },
+      { id: 6, tags: { highway: 'tertiary', name: 'Tunnel Roof Road', surface: t.surface },
+        pts: through(420, 0, 90, 480) },
+      { id: 7, tags: { highway: 'secondary', name: 'Conduit Road', surface: t.surface },
+        pts: through(-420, 0, 90, 520) },
+      { id: 8, tags: { waterway: 'stream', name: 'Conduit Stream', width: '4' },
+        pts: through(-420, 0, 0, 480) },
+    ],
+  },
+  {
     id: 'sidehill',
     label: 'SIDE HILL AND BORE',
     note: 'Three roads the carve gets wrong in three different ways: a traverse whose bench sits below its mapped line, a ridge crossed untagged, and the same ridge crossed with tunnel=yes. Authored so the burial cases can be measured in seconds instead of the twelve minutes a real coastal spot takes to stream.',
