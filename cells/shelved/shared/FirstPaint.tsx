@@ -5,10 +5,14 @@
  * its first load resolves — which is what makes hydration clean. It is not a
  * skeleton: these are the REAL components, given empty data and inert
  * handlers. React does not serialise event handlers, so a no-op `onClick`
- * produces byte-identical markup to the live one; and every list here already
- * has an empty state, because it had to handle a reader with nothing on their
- * shelf. So "no data yet" and "no data at all" render the same, and neither
- * needs a second set of components to maintain.
+ * produces byte-identical markup to the live one.
+ *
+ * They are told they are PENDING, though, which the first cut got wrong. Empty
+ * data reused the empty states, so a shelf that had not loaded and a shelf with
+ * nothing on it looked the same — and the copy asserts the second ("No books in
+ * this category yet") at the moment we know least. A reader with books was
+ * briefly told, in confident prose, that they had none. Same shapes, different
+ * filling: rails and panels hold placeholders and say what is happening.
  *
  * Deliberately NOT personalised. Nothing here depends on who is asking, so the
  * response is identical for every visitor and safe to cache at the edge — the
@@ -49,7 +53,7 @@ export function FirstPaintBody({ view }: { view: ShelvedView }): React.JSX.Eleme
     return (
       <>
         <ShelfHeader onAdd={noop} />
-        <EmptyShelf authed={false} />
+        <EmptyShelf authed={false} pending />
       </>
     );
   }
@@ -60,6 +64,7 @@ export function FirstPaintBody({ view }: { view: ShelvedView }): React.JSX.Eleme
     <Discover
       books={[]}
       authed={false}
+      pending
       onJoin={noop}
       onAdd={noop}
       onManage={noop}

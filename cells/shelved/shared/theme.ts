@@ -27,4 +27,11 @@ export const GlobalStyle = createGlobalStyle`
   button { touch-action: manipulation; }
   a { color: inherit; }
   ::selection { background: ${theme.mossSoft}; }
+
+  /* The loading shimmer (components/Pending). It lives HERE, not on the styled
+     component that uses it: styled wraps every rule as .sv-x{ ... }, and an
+     @keyframes nested inside a style rule is not valid CSS. Nested @media is
+     (CSS Nesting allows it, and BrandNav already relies on it); @keyframes is
+     not, so the browser dropped the block and the placeholders sat still. */
+  @keyframes shelved-shimmer { from { background-position: 140% 0; } to { background-position: -40% 0; } }
 `;

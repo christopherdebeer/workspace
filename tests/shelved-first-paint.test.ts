@@ -10,6 +10,7 @@
 import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { FirstPaint, FirstPaintBody, viewForPath } from '../cells/shelved/shared/FirstPaint';
+import { EmptyShelf } from '../cells/shelved/shared/components/EmptyShelf';
 import styled, { collectStyles } from '../cells/shelved/shared/styled';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -27,7 +28,38 @@ describe('the page shelved serves before it knows anything', () => {
 
   it('renders the shelf frame for the shelf view', () => {
     const html = renderToString(createElement(FirstPaint, { view: 'shelf' as const }));
-    expect(html).toContain('Your shelf is personal.');
+    expect(html).toContain('Opening your shelf.');
+  });
+
+  // The first cut reused the empty states for empty data, so a shelf that had
+  // not loaded and a shelf with nothing on it looked identical — and the copy
+  // asserts the second. A reader who does have books was told, in confident
+  // prose, that they had none. Nothing in the first paint may claim emptiness.
+  it('never claims to be empty before it has looked', () => {
+    for (const view of ['discover', 'shelf', 'readers'] as const) {
+      const html = renderToString(createElement(FirstPaint, { view }));
+      expect(html).not.toContain('No books in this category yet');
+      expect(html).not.toContain('Your shelf is personal.');
+      expect(html).not.toContain('Begin with one spine.');
+      expect(html).not.toContain('will appear here');
+    }
+  });
+
+  it('says it is still looking, in text and not just in pixels', () => {
+    const discover = renderToString(createElement(FirstPaint, { view: 'discover' as const }));
+    expect(discover).toContain('Finding books readers have shared');
+    expect(discover).toContain('role="status"');
+    const shelf = renderToString(createElement(FirstPaint, { view: 'shelf' as const }));
+    expect(shelf).toContain('Fetching the books you have shelved');
+    expect(shelf).toContain('aria-busy="true"');
+  });
+
+  // Once data HAS arrived, the empty states are the truth again — the pending
+  // flag must not have swallowed them.
+  it('still tells an actually-empty shelf that it is empty', () => {
+    const html = renderToString(createElement(EmptyShelf, { authed: true }));
+    expect(html).toContain('Begin with one spine.');
+    expect(html).not.toContain('Fetching the books');
   });
 
   // THE failure this whole exercise turns on. `install()` only touches the DOM,
@@ -119,5 +151,30 @@ describe('class names do not depend on module evaluation order', () => {
   it('emits each rule once', () => {
     const ids = Array.from(collectStyles().matchAll(/^\.(sv-[a-z0-9-]+)\{/gm)).map((m) => m[1]);
     expect(new Set(ids).size).toBe(ids.length);
+  });
+});
+
+// `styled` emits every rule as `.sv-x{ … }`. Nested @media is fine (CSS
+// Nesting allows it, and BrandNav/Discover already rely on it), but a nested
+// @keyframes is invalid and the browser drops the whole block — the shimmer
+// simply stopped moving, silently, with the CSS still "present" in the page.
+describe('the collected sheet is valid where it has to be', () => {
+  it('declares no @keyframes inside a class rule', () => {
+    const css = collectStyles();
+    // Split on rule starts; a class rule must not contain @keyframes.
+    const classRules = css.split(/^\.(?=sv-)/m).slice(1);
+    const offenders = classRules.filter((r) => r.includes('@keyframes')).map((r) => r.split('{')[0]);
+    expect(offenders).toEqual([]);
+  });
+
+  it('declares the shimmer keyframes globally instead', () => {
+    const html = renderToString(createElement(FirstPaint, { view: 'discover' as const }));
+    // GlobalStyle renders into the tree, so the keyframes ship with the page.
+    expect(html).toContain('@keyframes shelved-shimmer');
+    expect(html).toContain('data-shelved-global');
+  });
+
+  it('still honours reduced motion', () => {
+    expect(collectStyles()).toContain('prefers-reduced-motion');
   });
 });
