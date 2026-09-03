@@ -4619,7 +4619,11 @@ function terrainNormalTex(t: { w: number; data: Float32Array; xs?: number; zs?: 
   // inverted (Senqu, live, with the tile debug lines to correlate against).
   const beyond = (i: number, j: number): number | null => {
     if (t.xs === undefined || t.zs === undefined || t.h === undefined) return null;
-    const ex = t.xs + (i + 0.5) * mpp, ez = t.zs + (j + 0.5) * (t.h / W);
+    // The raster's samples sit at xs + i·w/255 — 256 of them spanning the
+    // tile edge to edge, as the colour pass reads them — not at pixel
+    // centres on a w/256 pitch, and half a pixel of misplacement is a
+    // quarter of the slope in the edge gradient.
+    const ex = t.xs + i * (t.w / (W - 1)), ez = t.zs + j * (t.h / (W - 1));
     return hasHeight(ex, ez) ? sampleHeightRaw(ex, ez) + baseElev : null;
   };
   for (let j = 0; j < W; j++) {
@@ -5033,7 +5037,8 @@ function flushTerrain(now: number): void {
   // town is a rebuild every 200ms and never a burst.
   if (REFINE && osmStreamQuiet()) {
     for (const [key, mesh] of terrainMeshes) {
-      if ((mesh.userData as { corridor?: boolean }).corridor) continue;
+      const ud = mesh.userData as { corridor?: boolean; scanned?: boolean };
+      if (ud.corridor || ud.scanned) continue;
       const t = heightTiles.get(key);
       if (!t) continue;
       const d = Math.max(0, Math.abs(state.x - (t.xs + t.w / 2)) - t.w / 2, Math.abs(state.z - (t.zs + t.h / 2)) - t.h / 2);
@@ -5048,7 +5053,7 @@ function flushTerrain(now: number): void {
           if (arr && arr.some((s) => !s.tk && !s.tn && s.ya !== undefined)) { any = true; break; }
         }
       }
-      if (!any) { (mesh.userData as { corridor?: boolean }).corridor = true; continue; }
+      if (!any) { (mesh.userData as { scanned?: boolean }).scanned = true; continue; }
       terrainDirty.add(key);
       terrainAt = now;
       return;
@@ -10596,6 +10601,7 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
   };
   let refinedCells = 0;
   const done = new Uint8Array(SEG * SEG);
+  const cellPolys = new Map<number, number[][]>();          // cell → polygons as vertex ids
   for (const [k, lis] of cellLines) {
     const ix = k % SEG, iz = (k - ix) / SEG;
     const x0 = t.xs + ix * cw, z0 = t.zs + iz * ch, x1 = x0 + cw, z1 = z0 + ch;
@@ -10607,31 +10613,69 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
       for (const p of polys) for (const q of splitPoly(p, L, x0, x1, z0, z1, eps)) next.push(q);
       polys = next;
     }
+    const idPolys: number[][] = [];
     for (const p of polys) {
       const ids = p.map(([x, z]) => vtx(x, z));
       for (let i = 0; i < p.length; i++) noteEdge(ix, iz, p[i][0], p[i][1], x0, z0, ids[i]);
-      // FROM THE CENTROID, not a vertex. A split leaves collinear points along
-      // a polygon's sides — the other lines' crossings of the cell edge — and
-      // a fan from any vertex drops the ones on its own two sides out of every
-      // triangle: a T-junction on the edge the neighbour has them on. The
-      // centroid of a convex polygon is interior, so every side is an edge of
-      // exactly one triangle and every point on it a vertex of one.
+      idPolys.push(ids);
+    }
+    cellPolys.set(k, idPolys);
+    done[k] = 1;
+    refinedCells++;
+  }
+  // T-JUNCTION REPAIR. A cell's line list is capped, and the cell next door
+  // may have kept a line this one dropped — or lie in the next tile — so a
+  // point can stand on the shared edge for one side only. Measured at
+  // Vélizy as black dashes along the horizon. Every point any neighbour put
+  // on one of this cell's edges is inserted into the side of the polygon it
+  // lies on, and the fan then gives it a triangle.
+  const onSide = (ax: number, az: number, bx: number, bz: number, x: number, z: number): boolean => {
+    const dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz;
+    if (l2 < 1e-12) return false;
+    const u = ((x - ax) * dx + (z - az) * dz) / l2;
+    if (u <= 1e-6 || u >= 1 - 1e-6) return false;
+    return Math.abs((x - ax) * dz - (z - az) * dx) / Math.sqrt(l2) < 2e-3;
+  };
+  for (const [k, idPolys] of cellPolys) {
+    const ix = k % SEG, iz = (k - ix) / SEG;
+    const have = new Set<number>();
+    for (const ids of idPolys) for (const v of ids) have.add(v);
+    for (const key of [`h${iz}_${ix}`, `h${iz + 1}_${ix}`, `v${ix}_${iz}`, `v${ix + 1}_${iz}`]) {
+      const pts = edgePts.get(key);
+      if (!pts) continue;
+      for (const v of pts) {
+        if (have.has(v)) continue;
+        let placed = false;
+        for (const ids of idPolys) {
+          for (let i = 0; i < ids.length; i++) {
+            const a = ids[i], b = ids[(i + 1) % ids.length];
+            if (onSide(px[a], pz[a], px[b], pz[b], px[v], pz[v])) { ids.splice(i + 1, 0, v); placed = true; break; }
+          }
+          if (placed) break;
+        }
+        if (placed) have.add(v);
+      }
+    }
+    for (const ids of idPolys) {
+      // FROM THE CENTROID, not a vertex, where a side carries a collinear
+      // point: a fan from any vertex drops the points on its own two sides
+      // out of every triangle — a T-junction on the edge the neighbour has
+      // them on. The centroid of a convex polygon is interior, so every side
+      // is an edge of exactly one triangle and every point on it a vertex of
+      // one. A polygon whose every vertex is a true corner fans from one of
+      // them at half the triangles. Judged on the FINAL ring, after repair.
       if (ids.length === 3) { tri(ids[0], ids[1], ids[2], k); continue; }
-      // …and only where a side does carry one. A polygon whose every vertex
-      // is a true corner fans from one of them at half the triangles.
       let flat = false;
-      for (let i = 0; i < p.length && !flat; i++) {
-        const a = p[(i + p.length - 1) % p.length], b = p[i], c = p[(i + 1) % p.length];
-        if (Math.abs((b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0])) < 1e-3) flat = true;
+      for (let i = 0; i < ids.length && !flat; i++) {
+        const a = ids[(i + ids.length - 1) % ids.length], b = ids[i], c = ids[(i + 1) % ids.length];
+        if (Math.abs((px[b] - px[a]) * (pz[c] - pz[a]) - (pz[b] - pz[a]) * (px[c] - px[a])) < 1e-3) flat = true;
       }
       if (!flat) { for (let i = 1; i + 1 < ids.length; i++) tri(ids[0], ids[i], ids[i + 1], k); continue; }
       let mx = 0, mz = 0;
-      for (const [x, z] of p) { mx += x; mz += z; }
-      const cc = vtx(mx / p.length, mz / p.length);
+      for (const v of ids) { mx += px[v]; mz += pz[v]; }
+      const cc = vtx(mx / ids.length, mz / ids.length);
       for (let i = 0; i < ids.length; i++) tri(cc, ids[i], ids[(i + 1) % ids.length], k);
     }
-    done[k] = 1;
-    refinedCells++;
   }
   // The plain cells: two triangles, or a fan round a ring that takes in
   // whatever points its neighbours put on the shared edges.
@@ -10716,6 +10760,48 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
   refineCost.msLines += t1 - t0; refineCost.msSplit += t2 - t1; refineCost.msHeights += t3 - t2; refineCost.msGeo += t4 - t3;
   return { geo, kinds, cells: refinedCells, tris: TA.length };
 }
+/** A tile's normal map along its four edges against the row just inside:
+ *  the mean angle between them, degrees. A seam in the lighting is a number
+ *  here before it is a line on the chart. Also the vertex colour on the
+ *  border against one lattice row in. */
+(window as unknown as { __nrmEdge?: object }).__nrmEdge = (x?: number, z?: number): object | null => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const [tx, ty] = tileAt(origin.lat - pz / M_LAT, origin.lon + px / origin.mLon, TERRAIN_Z);
+  const key = `${tx}/${ty}`;
+  const tex = terrainNormals.get(key), mesh = terrainMeshes.get(key), t = heightTiles.get(key);
+  if (!tex || !mesh || !t) return null;
+  const buf = tex.image.data as unknown as Uint8Array;
+  const W = 256;
+  const nAt = (i: number, j: number): [number, number, number] => {
+    const o = (j * W + i) * 4;
+    return [buf[o] / 127.5 - 1, buf[o + 1] / 127.5 - 1, buf[o + 2] / 127.5 - 1];
+  };
+  const ang = (a: [number, number, number], b: [number, number, number]): number =>
+    (Math.acos(clamp(a[0] * b[0] + a[1] * b[1] + a[2] * b[2], -1, 1)) * 180) / Math.PI;
+  const edges: Record<string, number> = {};
+  for (const [name, f] of [['top', (k: number) => [nAt(k, 0), nAt(k, 1)]], ['bottom', (k: number) => [nAt(k, W - 1), nAt(k, W - 2)]],
+    ['left', (k: number) => [nAt(0, k), nAt(1, k)]], ['right', (k: number) => [nAt(W - 1, k), nAt(W - 2, k)]]] as Array<[string, (k: number) => [[number, number, number], [number, number, number]]]>) {
+    let sum = 0;
+    for (let k = 0; k < W; k++) { const [a, b] = f(k); sum += ang(a, b); }
+    edges[name] = +(sum / W).toFixed(2);
+  }
+  // and the interior's own row-to-row angle, for scale
+  let inner = 0;
+  for (let k = 0; k < W; k++) inner += ang(nAt(k, 100), nAt(k, 101));
+  edges.interior = +(inner / W).toFixed(2);
+  // Vertex colours: the border row against one lattice row in, along the south edge.
+  const pos = mesh.geometry.attributes.position as THREE.BufferAttribute;
+  const col = mesh.geometry.attributes.color as THREE.BufferAttribute | undefined;
+  const SEG = segOf(mesh.geometry), cw = t.w / SEG, ch = t.h / SEG;
+  const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
+  let bSum = 0, bN = 0, iSum = 0, iN = 0;
+  if (col) for (let v = 0; v < pos.count; v++) {
+    const zz = pos.getZ(v) + czm, lum = col.getX(v) * 0.3 + col.getY(v) * 0.59 + col.getZ(v) * 0.11;
+    if (Math.abs(zz - (t.zs + t.h)) < 1e-3) { bSum += lum; bN++; }
+    else if (Math.abs(zz - (t.zs + t.h - ch)) < 1e-3) { iSum += lum; iN++; }
+  }
+  return { key, edgesDeg: edges, colourSouthBorder: bN ? +(bSum / bN).toFixed(3) : null, colourOneRowIn: iN ? +(iSum / iN).toFixed(3) : null, cw: +cw.toFixed(1) };
+};
 (window as unknown as { __refine?: object }).__refine = (): object => ({ on: REFINE, ...refineCost });
 /** THE CORRIDOR CARVE, solved per TRIANGLE instead of per vertex.
  *
