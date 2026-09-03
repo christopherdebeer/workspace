@@ -839,8 +839,18 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   the quiet path, one per visit, and one no road reaches is flagged so it
   never rebuilds for nothing.
 
+- **…and only once the road stream is quiet.** Every way that lands dirties
+  the tiles it crosses, so during a stream the in-range tiles rebuild a
+  dozen times each: Vélizy ran 209 tile builds for 30 tiles with a corridor
+  build costing 350ms in that density, and gating the neighbour rebuild on
+  the border differing changed nothing (212 → 209) because the churn was
+  never the cascade. `corridor` now also needs `osmStreamQuiet()` (nothing
+  in flight, nothing queued); a tile built plain meanwhile is rebuilt with
+  its corridor by the quiet path, once.
+
 `__refine()` counts tiles, split cells, vertices, triangles against the
 plain grid and milliseconds by phase (lines, split, heights, geometry).
+`tiles` counts BUILDS, not tiles — read it against the tile count.
 
 **`__meshAt` was shadowed.** A second binding later in the file made it the
 RAYCAST probe, which answered 1688 at Dante's View where the vertex under
