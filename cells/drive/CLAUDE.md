@@ -858,8 +858,31 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   with the next tile's border) into the side of the polygon it lies on.
   The vertex-fan shortcut is judged on the ring AFTER that.
 
+- **The field is read inside the tile's own box.** A vertex exactly on the
+  border is outside the tile's half-open box, so `sampleHeight` looked to
+  the neighbour and answered ZERO while the neighbour's DEM had not loaded;
+  stored as the border, pinned into the neighbour, taken back as a seed on
+  the rebuild, that zero lived for ever — measured at Vélizy as border
+  vertices 18m and 89m off the field with the row inside within 3m, and
+  drawn as a dark line along every tile edge that the sun march, the shadow
+  map, the normal map and the vertex colours were each cleared of in turn
+  (`layers.mjs`, `ab.mjs`: hide the terrain and the line goes; nothing else
+  moves it). `fieldAt` clamps the read a hair inside the tile; break lines
+  are cached only once the ground is under both crests.
+- **Every border has one owner.** Two corridor tiles computing the same
+  border row from their own raster edges and their own line sets disagreed
+  by up to 0.91m with 41 points missing (`__borderDiff`). The west and the
+  north tile own a shared border; a corridor tile follows only the owners
+  of its west and north edges (seeds and pins), a plain tile follows every
+  refined neighbour, a follower's own extra edge points are pinned onto the
+  owner's polyline, and only an owner dirties a follower (`borderShared`).
+  Vélizy after: worstDy 0, worstGap 0 on all four edges.
+
 `__refine()` counts tiles, split cells, vertices, triangles against the
 plain grid and milliseconds by phase (lines, split, heights, geometry).
+`__borderDiff(x, z)` compares the tile under a point with each neighbour
+along their shared border: shared, missing, the worst height difference on
+a shared point and the worst gap of a missing one off the neighbour's edge.
 `tiles` counts BUILDS, not tiles — read it against the tile count.
 `__nrmEdge(x, z)` reads a tile's normal map along its four edges against
 the row inside (mean degrees) and the border vertex colour against one
