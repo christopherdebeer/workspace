@@ -4761,7 +4761,9 @@ function buildTerrainMesh(t: HeightTile): void {
   // a tile builds plain (the old carve, at the old price) and the quiet path
   // gives it its corridor exactly once, when nothing more is coming.
   const corridor = REFINE && nearTruck && osmStreamQuiet();
+  const p0 = performance.now();
   const refined = REFINE ? refineTileGeometry(t, SEG, corridor) : null;
+  const p1 = performance.now();
   const geo = refined ? refined.geo : new THREE.PlaneGeometry(t.w, t.h, SEG, SEG);
   if (!refined) { geo.rotateX(-Math.PI / 2); (geo.userData as { seg?: number }).seg = SEG; }
   const pos = geo.attributes.position as THREE.BufferAttribute;
@@ -4805,8 +4807,11 @@ function buildTerrainMesh(t: HeightTile): void {
   // but never the vertices pinned to a refined neighbour's border (the carve
   // only lowers, and a pinned border vertex is already where it must be, so
   // the carve is simply run on the plain lattice and the border re-pinned).
+  const p2 = performance.now();
   if (!refined || !corridor) carveCorridors(t, geo, SEG);
+  const p3 = performance.now();
   carveChannels(t, geo, SEG);
+  const p4 = performance.now();
   // The west and north edges take the owners' rows, after everything that
   // digs — for every build (a corridor build pinned them itself, and the
   // channel carve only lowers where a river is).
@@ -4815,6 +4820,7 @@ function buildTerrainMesh(t: HeightTile): void {
     for (const [v, y] of pinned) pos.setY(v, y);
   }
   storeBorder(t, geo);
+  const p5 = performance.now();
   // PASS TWO: colour, off the heights the carve settled on.
   const kinds = refined ? refined.kinds : null;
   for (let i = 0; i < pos.count; i++) {
@@ -4861,7 +4867,9 @@ function buildTerrainMesh(t: HeightTile): void {
     colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
   }
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
+  const p6 = performance.now();
   geo.computeVertexNormals();
+  const p7 = performance.now();
   const old = terrainMeshes.get(key);
   if (old) { worldGroup.remove(old); old.geometry.dispose(); }
   const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? terrainMatFor(t, key) : terrainMat);
@@ -4889,6 +4897,9 @@ function buildTerrainMesh(t: HeightTile): void {
     const nk = `${t.tx + dx}/${t.ty + dy}`;
     if (terrainMeshes.has(nk) && !borderShared(t, nk)) { terrainDirty.add(nk); dirtyWhy.set(nk, `owner:${key}`); }
   }
+  const p8 = performance.now();
+  plainCost.builds++; plainCost.refine += p1 - p0; plainCost.heights += p2 - p1; plainCost.carve += p3 - p2; plainCost.channels += p4 - p3;
+  plainCost.pins += p5 - p4; plainCost.colour += p6 - p5; plainCost.normals += p7 - p6; plainCost.mesh += p8 - p7;
   buildLog.push({ key, why: dirtyWhy.get(key) ?? 'load', corridor, refined: !!refined, at: Math.round(performance.now()) });
   if (buildLog.length > 400) buildLog.shift();
   dirtyWhy.delete(key);
@@ -4970,7 +4981,9 @@ function markTerrainDirty(key: string, why = 'mark'): void {
 /** Why each dirty tile was dirtied, and the last hundred builds — the
  *  instrument for a rebuild loop, which is invisible to a dirty-count poll. */
 const dirtyWhy = new Map<string, string>();
-const buildLog: Array<{ key: string; why: string; corridor: boolean; refined: boolean; at: number; ms?: number }> = [];
+/** …`ms` is the whole slot, `bms` the mesh build alone; the rest is the
+ *  post-steps (reseat, redrape, hydro, batter, culverts). */
+const buildLog: Array<{ key: string; why: string; corridor: boolean; refined: boolean; at: number; ms?: number; bms?: number }> = [];
 // Every terrain tile a run of road passes through, plus a margin for the cut.
 // Sampled, not exhaustive: terrain tiles are ~2km across and road vertices are
 // 12m apart, so walking every one of them would ask the same question a hundred
@@ -5026,13 +5039,24 @@ function flushTerrain(now: number): void {
     const t = heightTiles.get(key);
     if (t) { terrainAt = now; hydroFeed(t); return; }
   }
-  for (const key of terrainDirty) {
+  // OWNERS FIRST. A tile owns its east and south edges, so the north-west-most
+  // dirty tile is built before any follower of it: a follower built first
+  // takes a row its owner is about to replace and builds twice. Sorted by
+  // row then column, a dirty set builds each tile once.
+  while (terrainDirty.size) {
+    let key = '', best = Infinity;
+    for (const k of terrainDirty) {
+      const i = k.indexOf('/');
+      const o = Number(k.slice(i + 1)) * 1e6 + Number(k.slice(0, i));
+      if (o < best) { best = o; key = k; }
+    }
     terrainDirty.delete(key);
     const t = heightTiles.get(key);
     if (t) {
       terrainAt = now;
       const t0 = performance.now();
       buildTerrainMesh(t);
+      const t1 = performance.now();
       // The ground under this tile just moved; anything standing on it follows.
       terrainBuilds++;
       reseatBuildings(t);
@@ -5041,7 +5065,7 @@ function flushTerrain(now: number): void {
       flushBatter(t);
       flushCulverts(t);
       terrainMs = performance.now() - t0;
-      if (buildLog.length) buildLog[buildLog.length - 1].ms = Math.round(terrainMs);
+      if (buildLog.length) { const b = buildLog[buildLog.length - 1]; b.ms = Math.round(terrainMs); b.bms = Math.round(t1 - t0); }
       return;
     }
   }
@@ -5147,10 +5171,10 @@ async function loadTerrainTileInner(x: number, y: number): Promise<void> {
   // A tile built before its neighbour arrived clamped its border strip.
   // Rebuild the loaded neighbours so both sides of every edge sample the
   // same cross-tile field — this is what stitches the seams shut.
-  for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
-    if (!dx && !dy) continue;
-    markTerrainDirty(`${x + dx}/${y + dy}`, `tile:${key}`);
-  }
+  // The four edge neighbours only: a diagonal shares a corner, which the
+  // border rows carry, and the slope shade reads one cell along x or z. The
+  // eight-neighbour cascade was 24 of 89 builds in a Camps Bay stream.
+  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) markTerrainDirty(`${x + dx}/${y + dy}`, `tile:${key}`);
 }
 
 // ── OSM vectors ────────────────────────────────────────────────────
@@ -10375,6 +10399,8 @@ let osmLastLand = 0;
 function osmStreamQuiet(): boolean { return osmInFlight === 0 && performance.now() - osmLastLand > 2500; }
 /** Cost of the refinement, for `__refine`. */
 const refineCost = { tiles: 0, cells: 0, tris: 0, ms: 0, plainTris: 0, verts: 0, msLines: 0, msSplit: 0, msHeights: 0, msGeo: 0 };
+/** The plain build by phase, every build: where a 115ms tile goes. */
+const plainCost = { builds: 0, refine: 0, heights: 0, carve: 0, channels: 0, pins: 0, colour: 0, normals: 0, mesh: 0 };
 
 /** How far out along (ox,oz) from a crest point (cx,cz) whose floor is y the
  *  wedge meets the ground: 0 at the crest already, CUT_REACH_M for a wall,
@@ -11070,7 +11096,7 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
   }
   return out;
 };
-(window as unknown as { __refine?: object }).__refine = (): object => ({ on: REFINE, ...refineCost });
+(window as unknown as { __refine?: object }).__refine = (): object => ({ on: REFINE, ...refineCost, plain: { ...plainCost } });
 (window as unknown as { __buildLog?: object }).__buildLog = (): object => buildLog.slice();
 /** borderShared, shown its working: the neighbour's box, how many of this
  *  tile's points fell in it, and the first point that failed. */
