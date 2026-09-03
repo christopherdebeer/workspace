@@ -26785,6 +26785,7 @@ const setStickFrom = (e: PointerEvent): void => {
 };
 canvas.addEventListener('pointerdown', (e) => {
   if (e.pointerType === 'mouse' && e.button !== 0) return;
+  if (fpsDown(e)) return;
   if (autoDown(e)) return;
   if (poiDown(e)) return;
   if (rewindDown(e)) { try { canvas.setPointerCapture(e.pointerId); } catch { /* unsupported */ } return; }
@@ -30914,16 +30915,120 @@ function tapeCorrect(): void {
  *  "FPS drops during streaming", which no single ledger could answer. */
 const frameProf = new Map<string, { ms: number; n: number; max: number }>();
 let profFrames = 0, profSince = 0, profWhole = 0;
+/** THE SESSION'S TELEMETRY. Everything the windowed profiler sees, never
+ *  reset, plus what it cannot say per window: the frame-time distribution,
+ *  and for every frame over SLOW_FRAME_MS which phases ran in it and which
+ *  was the largest — the blame that isolates a contributor to a drop. The
+ *  unattributed remainder of a slow frame (wall time minus every measured
+ *  phase) is kept as its own row: GC, the GPU's own wait, an event-loop task
+ *  nothing here wraps. Read with __telemetry(); a double tap on the FPS
+ *  readout copies it to the clipboard. */
+const SLOW_FRAME_MS = 50;
+interface SessRow { ms: number; n: number; max: number; slowMs: number; top: number }
+const sessProf = new Map<string, SessRow>();
+const sessAt = performance.now();
+let sessFrames = 0, sessWall = 0, sessSlow = 0, sessUnattr = 0, sessUnattrSlow = 0, sessUnattrTop = 0;
+const sessHist = new Uint32Array(6);                       // <16.7 <33 <50 <100 <250 ≥250
+const sessRing = new Float32Array(4096); let sessRingN = 0; // last 4096 frame times
+const sessSlowLog: Array<{ t: number; ms: number; top: string; topMs: number; unattr: number }> = [];
+const curFrame = new Map<string, number>();
 function profAdd(name: string, t0: number): void {
   const d = performance.now() - t0;
   const e = frameProf.get(name);
   if (e) { e.ms += d; e.n++; if (d > e.max) e.max = d; } else frameProf.set(name, { ms: d, n: 1, max: d });
+  const r = sessProf.get(name);
+  if (r) { r.ms += d; r.n++; if (d > r.max) r.max = d; } else sessProf.set(name, { ms: d, n: 1, max: d, slowMs: 0, top: 0 });
+  curFrame.set(name, (curFrame.get(name) ?? 0) + d);
 }
 let profLast = 0;
 function profFrame(now: number): void {
   profFrames++;
-  if (profLast) profWhole += now - profLast;
+  if (profLast) {
+    const fm = now - profLast;
+    profWhole += fm;
+    sessFrames++; sessWall += fm;
+    sessRing[sessRingN++ % sessRing.length] = fm;
+    sessHist[fm < 16.7 ? 0 : fm < 33 ? 1 : fm < 50 ? 2 : fm < 100 ? 3 : fm < 250 ? 4 : 5]++;
+    let sum = 0, top = '', topMs = 0;
+    for (const [k, v] of curFrame) { sum += v; if (v > topMs) { topMs = v; top = k; } }
+    const unattr = Math.max(0, fm - sum);
+    sessUnattr += unattr;
+    if (fm > SLOW_FRAME_MS) {
+      sessSlow++;
+      for (const [k, v] of curFrame) { const r = sessProf.get(k); if (r) r.slowMs += v; }
+      sessUnattrSlow += unattr;
+      if (unattr > topMs) { sessUnattrTop++; top = 'unattributed'; topMs = unattr; }
+      else { const r = sessProf.get(top); if (r) r.top++; }
+      sessSlowLog.push({ t: Math.round(now / 1000), ms: Math.round(fm), top, topMs: Math.round(topMs), unattr: Math.round(unattr) });
+      if (sessSlowLog.length > 24) sessSlowLog.shift();
+    }
+  }
+  curFrame.clear();
   profLast = now;
+}
+/** The session's telemetry as text, for a clipboard or a probe. */
+function telemetryReport(): string {
+  const secs = (performance.now() - sessAt) / 1000;
+  const n = Math.min(sessRingN, sessRing.length);
+  const sorted = Array.from(sessRing.subarray(0, n)).sort((a, b) => a - b);
+  const pct = (q: number): number => n ? +sorted[Math.min(n - 1, Math.floor(q * n))].toFixed(1) : 0;
+  const gl = renderer.getContext();
+  const dbg = gl.getExtension('WEBGL_debug_renderer_info') as { UNMASKED_RENDERER_WEBGL: number } | null;
+  const gpu = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : 'n/a';
+  const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
+  const L: string[] = [];
+  L.push(`DRIVE TELEMETRY · ${new Date().toISOString().slice(0, 19)}Z · ${Math.round(secs)}s · ${location.search}`);
+  L.push(`device ${navigator.hardwareConcurrency ?? '?'} cores · dpr ${devicePixelRatio} · ${innerWidth}x${innerHeight} · ${gpu}`);
+  L.push(`ua ${navigator.userAgent.slice(0, 90)}`);
+  L.push(`settings tseg ${terrainSeg} · veg ${vegScale} · grass ${grassScale} · refine ${REFINE ? 'on' : 'off'} r${REFINE_R} · worker ${tworker && !tworker.disabled ? 'on' : 'off'} · luma ${lumaAsync ? 'async' : 'sync'}${mem ? ` · heap ${Math.round(mem.usedJSHeapSize / 1048576)}MB` : ''}`);
+  L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · frame ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(>${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
+  L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);
+  const rows = [...sessProf.entries()].map(([k, v]) => ({ k, ...v })).sort((a, b) => b.slowMs - a.slowMs || b.ms - a.ms);
+  const slowTotal = rows.reduce((a, r) => a + r.slowMs, 0) + sessUnattrSlow;
+  L.push(`phase                 total ms   share   calls   mean    max | in slow frames ms  share  top-of-frame`);
+  const row = (k: string, ms: number, cnt: number, max: number, slowMs: number, top: number): string =>
+    `${k.padEnd(20)} ${String(Math.round(ms)).padStart(9)} ${String((100 * ms / Math.max(1, sessWall)).toFixed(1)).padStart(6)}% ${String(cnt).padStart(7)} ${String((ms / Math.max(1, cnt)).toFixed(1)).padStart(6)} ${String(max.toFixed(0)).padStart(6)} | ${String(Math.round(slowMs)).padStart(15)} ${String((100 * slowMs / Math.max(1, slowTotal)).toFixed(0)).padStart(5)}% ${String(top).padStart(6)}`;
+  for (const r of rows) L.push(row(r.k, r.ms, r.n, r.max, r.slowMs, r.top));
+  L.push(row('unattributed', sessUnattr, sessFrames, 0, sessUnattrSlow, sessUnattrTop));
+  if (tworker) { const w = tworker.stats; L.push(`worker jobs ${w.jobs} fail ${w.failures} · worker ms/build ${(w.workerMs / Math.max(1, w.jobs)).toFixed(0)} · gap ${Math.round(workerGap)} · main ms/build prep ${(workerLedger.prepMs / Math.max(1, workerLedger.applied)).toFixed(1)} apply ${(workerLedger.applyMs / Math.max(1, workerLedger.applied)).toFixed(1)} post ${(workerLedger.postMs / Math.max(1, workerLedger.applied)).toFixed(1)} (hydro ${(workerLedger.hydroMs / Math.max(1, workerLedger.applied)).toFixed(1)}) · hydro build ${(workerLedger.hydroBuildMs / Math.max(1, workerLedger.hydroBuilds)).toFixed(1)} max ${Math.round(workerLedger.hydroBuildMax)}`); }
+  L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
+  if (sessSlowLog.length) L.push(`slow frames (last ${sessSlowLog.length}): ` + sessSlowLog.map((f) => `${f.t}s ${f.ms}ms ${f.top}:${f.topMs}${f.unattr > 5 ? ` u${f.unattr}` : ''}`).join(' · '));
+  return L.join('\n');
+}
+/** Copy the telemetry: the clipboard where a gesture allows it, a text box
+ *  to select otherwise. */
+function copyTelemetry(): void {
+  const text = telemetryReport();
+  const fallback = (): void => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.cssText = 'position:fixed;inset:10% 6%;z-index:60;background:#080e10;color:#d6e2e4;border:1px solid #2b3d43;font:11px ui-monospace,monospace;padding:8px;white-space:pre;';
+    ta.readOnly = true;
+    ta.addEventListener('pointerdown', (ev) => { ev.stopPropagation(); });
+    ta.addEventListener('click', () => { ta.select(); });
+    const close = document.createElement('button');
+    close.textContent = 'CLOSE';
+    close.style.cssText = 'position:fixed;top:5%;right:6%;z-index:61;font:12px ui-monospace,monospace;padding:6px 10px;';
+    close.addEventListener('click', () => { ta.remove(); close.remove(); });
+    document.body.append(ta, close);
+    ta.focus(); ta.select();
+  };
+  const clip = navigator.clipboard;
+  if (clip && clip.writeText) clip.writeText(text).then(() => hudFlash('TELEMETRY COPIED'), fallback);
+  else fallback();
+}
+(window as unknown as { __telemetry?: object }).__telemetry = (copy = false): string => { if (copy) copyTelemetry(); return telemetryReport(); };
+/** The FPS readout's hit box, in HUD units, set where it is drawn. */
+const fpsRect = { x: 0, y: 0, w: 0, h: 0 };
+let fpsTapAt = 0;
+function fpsDown(e: PointerEvent): boolean {
+  if (fpsRect.w === 0 || menu.tab() !== null) return false;
+  const x = e.clientX / hudS, y = e.clientY / hudS;
+  if (x < fpsRect.x - 8 || x > fpsRect.x + fpsRect.w + 8 || y < fpsRect.y - 8 || y > fpsRect.y + fpsRect.h + 8) return false;
+  const now = performance.now();
+  if (now - fpsTapAt < 450) { fpsTapAt = 0; copyTelemetry(); return true; }
+  fpsTapAt = now;
+  return true;
 }
 (window as unknown as { __frameprof?: object }).__frameprof = (reset = true): object => {
   const secs = (performance.now() - profSince) / 1000;
@@ -36657,6 +36762,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       // block on the left and the trip readout on the right.
       textEdgeS(fs, Math.round((HW - textSW(fs)) / 2), infoY + 17,
         fps < 25 ? UI.bad : fps < 40 ? UI.gold : UI.dim);
+      fpsRect.x = Math.round((HW - textSW(fs)) / 2); fpsRect.y = infoY + 17 - 4; fpsRect.w = textSW(fs); fpsRect.h = 16;
     }
   }
   // ── the rig, bottom-right ──

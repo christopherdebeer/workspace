@@ -992,6 +992,18 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   old floor. Anything that changes how often per-build work runs needs the
   device, or an FPS number from `__clock`, before it ships.
 
+- **TELEMETRY IN PLAY: double-tap the FPS readout.** The profiler keeps a
+  session aggregate the windows never reset: per phase, total ms, calls,
+  max, and — the part that isolates a contributor — the ms it spent inside
+  frames over 50 ms and how often it was the largest thing in one. The
+  remainder of a slow frame that no wrapped call explains is its own row,
+  `unattributed` (GC, the GPU's own wait, an event-loop task nothing wraps).
+  A double tap on the FPS figure copies the report to the clipboard, or
+  opens it in a text box where the clipboard is refused; `__telemetry()`
+  returns the same text for the harness. Read the "in slow frames" columns
+  first: a phase with a small total but a large slow-frame share is the one
+  causing drops.
+
 - **THE LUMA READBACK IS ASYNCHRONOUS.** `stepLuma` read its 40×88 luma
   and depth target with `readRenderTargetPixels` — a synchronous
   glReadPixels that waits for the GPU to finish the whole frame queued
