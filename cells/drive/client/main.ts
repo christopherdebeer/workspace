@@ -1988,11 +1988,11 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
     // The tile build itself is scheduled through us, so its time is a number
     // in the worker ledger (it runs on the main thread in a promise job,
     // where no frame-loop timer can see it).
-    hydroSys = createHydroSystem({ oceanLevelM: seaSurfaceAbs(), scheduleBuild: (job) => {
-      const t0 = performance.now();
-      try { return Promise.resolve(job()); }
-      finally { const d = performance.now() - t0; workerLedger.hydroBuildMs += d; workerLedger.hydroBuilds++; if (d > workerLedger.hydroBuildMax) workerLedger.hydroBuildMax = d; profAdd('hydroBuild', t0); }
-    } });
+    // …and it runs from OUR queue, one a frame at most, never in the same
+    // frame as a terrain apply: measured 13ms a tile (max 41), which stacked
+    // on the apply's 7ms in the promise job right behind it.
+    hydroSys = createHydroSystem({ oceanLevelM: seaSurfaceAbs(), scheduleBuild: (job) =>
+      new Promise((resolve, reject) => { hydroJobs.push({ job, resolve, reject }); }) });
     hydroSys.setDebugView(hydroView);
     worldGroup.add(hydroSys.object3d);
     // THE OLD PLANE STANDS DOWN, rather than being deleted. Two renderers for
@@ -4843,6 +4843,8 @@ function buildTerrainMesh(t: HeightTile): void {
 const TWORKER = new URLSearchParams(location.search).get('tworker') !== '0';
 const tworker: TerrainWorker | null = TWORKER ? new TerrainWorker() : null;
 let buildInFlight: string | null = null;
+/** A terrain apply landed since the last frame: the hydro drain skips one. */
+let appliedThisFrame = false;
 const workerLedger = { posts: 0, applied: 0, dropped: 0, prepMs: 0, applyMs: 0, postMs: 0, postMax: 0, reseatMs: 0, redrapeMs: 0, hydroMs: 0, batterMs: 0, culvertMs: 0, hydroBuildMs: 0, hydroBuilds: 0, hydroBuildMax: 0 };
 /** Everything a build reads that is not a raster, packed for the worker. */
 function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<TerrainJob, 'id'>; transfer: Transferable[] } {
@@ -4966,6 +4968,7 @@ function postTerrainBuild(t: HeightTile, key: string): void {
     flushBatter(t); const t6 = performance.now();
     flushCulverts(t); const t7 = performance.now();
     terrainMs = t7 - t1 + prep;
+    appliedThisFrame = true;
     workerLedger.applied++; workerLedger.applyMs += t2 - t1; workerLedger.postMs += t7 - t2;
     workerLedger.reseatMs += t3 - t2; workerLedger.redrapeMs += t4 - t3; workerLedger.hydroMs += t5 - t4; workerLedger.batterMs += t6 - t5; workerLedger.culvertMs += t7 - t6;
     workerLedger.postMax = Math.max(workerLedger.postMax, t7 - t2);
@@ -4978,6 +4981,19 @@ function postTerrainBuild(t: HeightTile, key: string): void {
     console.warn('terrain worker:', error.message);
     terrainDirty.add(key); dirtyWhy.set(key, why);
   });
+}
+/** The hydro system's tile builds, run one a frame from the frame loop. */
+const hydroJobs: Array<{ job: () => unknown; resolve: (v: never) => void; reject: (e: Error) => void }> = [];
+let hydroJobAt = 0;
+function drainHydroJobs(now: number): void {
+  if (!hydroJobs.length || now - hydroJobAt < 0) return;
+  const j = hydroJobs.shift() as { job: () => unknown; resolve: (v: never) => void; reject: (e: Error) => void };
+  hydroJobAt = now;
+  const t0 = performance.now();
+  try { j.resolve(j.job() as never); } catch (e) { j.reject(e instanceof Error ? e : new Error(String(e))); }
+  const d = performance.now() - t0;
+  workerLedger.hydroBuildMs += d; workerLedger.hydroBuilds++; if (d > workerLedger.hydroBuildMax) workerLedger.hydroBuildMax = d;
+  profAdd('hydroBuild', t0);
 }
 /** A refeed with no build behind it: the hydro raster alone, off the worker.
  *  Falls back to sampling here when the worker is off or busy. */
@@ -31779,6 +31795,8 @@ function tick(now: number): void {
   splashBow(now, state.speed, rigWadeM);
   { const _p = performance.now(); stepDust(dt); profAdd('stepDust', _p); }
   { const _p = performance.now(); flushTerrain(now); profAdd('flushTerrain', _p); }
+  if (!appliedThisFrame) drainHydroJobs(now);
+  appliedThisFrame = false;
   hydroTick(now);
   // The sea keeps its station off a coast and stands down over dry basins.
   // Slewed, not snapped: the transition happens kilometres before the basin
