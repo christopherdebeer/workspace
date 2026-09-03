@@ -219,6 +219,24 @@ asks the worker for the raster alone. After: 3 ms to pack, 0.2 ms to wrap,
 7 ms of post-steps of which 6 is the hydro system's own synchronous upsert;
 the median build slot on the main thread is 4 ms, the worst 88.
 
+Attributed with `__frameprof` (Camps Bay, 90 s of streaming, main thread,
+totals): hydro tile builds 623 ms over 58 builds (11 ms each, max 22; 15 ms
+and max 46 at boot), the software renderer's draw issue 440, road build
+slices 209 over 32 slices (the 6 ms budget holding), the terrain pick and
+job packing 148, the terrain apply with post-steps 105 over 35 (3 ms each,
+max 45; 14 ms and max 65 at boot, where a first build reseats and redrapes
+everything on the tile). The frame loop's own subsystems are under a
+millisecond each except weather and wildlife at half a millisecond. So per
+streamed tile the main thread now pays a hydro build, an apply, and a job
+packing — about 20 ms spread over three frames with the drain — where it
+paid 125 ms in one.
+
+The hydro tile build is the next candidate for the worker: build-tile.ts
+and the body registry are pure TypeScript, but the registry is shared state
+updated per tile, so the worker would need the same update stream or the
+registry's relevant bodies shipped with each job. Halving the field
+resolution is the cheap lever if it is needed sooner.
+
 Step 4 (the queue in the worker) is optional now: the main-thread share
 of a build is the post-steps, not the ordering. Step 5 is the post-steps.
 
