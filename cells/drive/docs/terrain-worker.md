@@ -162,6 +162,21 @@ they paid.
 Step 2 is done: `client/terrain-kernel.ts` holds the whole build over plain
 arrays and a `TerrainStore`; `buildTerrainMesh` in main.ts is now the store,
 the BufferGeometry wrap and the mesh placement. The main file lost 1,340 lines.
+Verified against the parent commit: seam probes 0/0 on all edges at Camps
+Bay and Senqu (settled on the full build count), through-node, carve-burial
+and terrain-scan green, and an interleaved A/B at Camps Bay — head and parent
+twice each, same script — settling at 151 builds every time with the same
+reasons. Build counts vary with the road stream's batching by time of day
+(87–96 in the morning, ~150 in the afternoon); compare against the parent
+in the same hour, never against a number from another day. One bug shipped
+and was caught: the plain lattice's cell table counted index entries, not
+triangles (CLAUDE.md, "A cell table counts TRIANGLES"). The remaining test
+noise — the Bixby join population, the corridor wedge budget, carve-through
+at spots where the road stream has not landed inside the window — is
+identical on the parent.
+
+Step 3 is next. The store already names every fact the worker's mirror must
+carry; the kernel has no other inputs.
 
 ## Steps, each shippable
 
