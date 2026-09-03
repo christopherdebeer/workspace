@@ -210,6 +210,15 @@ tests (Chapman's join population, the corridor's "truck is on a way") lost
 their windows. The worker path now posts the next tile on the next frame
 after a reply; both suites are back at their baseline.
 
+Step 5, the post-steps, measured per build with the ledger split: reseat,
+redrape, batter and culverts are each under a millisecond; hydroFeed was
+the whole 20 ms — it sampled a 132×132 elevation raster (17k height reads)
+on the main thread after every build. The worker now samples that raster
+with the build off the same sampler and hands it back; a starved refeed
+asks the worker for the raster alone. After: 3 ms to pack, 0.2 ms to wrap,
+7 ms of post-steps of which 6 is the hydro system's own synchronous upsert;
+the median build slot on the main thread is 4 ms, the worst 88.
+
 Step 4 (the queue in the worker) is optional now: the main-thread share
 of a build is the post-steps, not the ordering. Step 5 is the post-steps.
 
