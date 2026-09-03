@@ -4,7 +4,7 @@ import { createElement } from 'react';
 import { renderToString } from 'react-dom/server';
 import { FirstPaint, viewForPath } from './shared/FirstPaint';
 import { collectStyles } from './shared/styled';
-import type { AddBookInput, Availability, BookCopy, ReadingState, ShippingAddress, UserBookState } from './shared/types';
+import type { AddBookInput, Availability, BookCopy, BorrowRequest, ReadingState, ShippingAddress, UserBookState } from './shared/types';
 import { addBook, listBooks, listBorrowRequests, listDiscovery, removeBook, requestBook, updateBook, updateBorrowRequest } from './lib/store';
 import { lookupIsbn } from './lib/isbn';
 import { configureShipping, getShippingAddress, listShipments, purchaseTestLabel, quoteRequestShipping, saveShippingAddress, shippingStatus } from './lib/shipping';
@@ -48,6 +48,9 @@ type Event = { rawPath?: string; requestContext?: { http?: { method?: string } }
 type Args = Record<string, unknown>;
 const readingStates: ReadingState[] = ['unread', 'reading', 'read', 'want'];
 const availabilities: Availability[] = ['private', 'ask', 'lend', 'pass'];
+// The schema and the handler check used to carry separate copies of this, so
+// widening the tool left the handler still rejecting the new values.
+const requestTransitions: BorrowRequest['status'][] = ['accepted', 'declined', 'cancelled', 'shipped', 'delivered', 'returned', 'completed'];
 
 const TOOLS = [
   { name: 'list_books', kind: 'read', description: 'List the authenticated caller’s physical book copies.', inputSchema: { type: 'object', properties: {} } },
@@ -67,7 +70,7 @@ const TOOLS = [
   { name: 'update_copy', kind: 'act', description: 'Change a copy’s reading state, availability, condition, note, or edition metadata.', inputSchema: { type: 'object', properties: { id: { type: 'string' }, title: { type: 'string' }, authors: { type: 'array', items: { type: 'string' } }, coverUrl: { type: 'string' }, genres: { type: 'array', items: { type: 'string' } }, readingState: { type: 'string', enum: readingStates }, availability: { type: 'string', enum: availabilities }, condition: { type: 'string', enum: ['new', 'very-good', 'good', 'fair'] }, note: { type: 'string' } }, required: ['id'] } },
   { name: 'remove_copy', kind: 'act', description: 'Remove one copy from the authenticated caller’s shelf.', inputSchema: { type: 'object', properties: { id: { type: 'string' } }, required: ['id'] } },
   { name: 'request_book', kind: 'act', description: 'Ask the owner to borrow or receive an available copy.', inputSchema: { type: 'object', properties: { copyId: { type: 'string' }, deliveryMethod: { type: 'string', enum: ['local', 'post'] }, message: { type: 'string' } }, required: ['copyId'] } },
-  { name: 'update_borrow_request', kind: 'act', description: 'Accept, decline, or cancel a borrow request.', inputSchema: { type: 'object', properties: { requestId: { type: 'string' }, status: { type: 'string', enum: ['accepted', 'declined', 'cancelled'] } }, required: ['requestId', 'status'] } },
+  { name: 'update_borrow_request', kind: 'act', description: 'Move a borrow request along: accept, decline, cancel, or mark it shipped, delivered, returned or completed.', inputSchema: { type: 'object', properties: { requestId: { type: 'string' }, status: { type: 'string', enum: requestTransitions } }, required: ['requestId', 'status'] } },
   { name: 'configure_shipping', kind: 'act', description: 'Cell-owner-only, write-only configuration of a Shippo test or live token.', inputSchema: { type: 'object', properties: { token: { type: 'string' } }, required: ['token'] } },
   { name: 'set_shipping_address', kind: 'act', description: 'Save the authenticated caller’s private UK postal address in their cell partition.', inputSchema: { type: 'object', properties: { name: { type: 'string' }, street1: { type: 'string' }, street2: { type: 'string' }, city: { type: 'string' }, postcode: { type: 'string' }, email: { type: 'string' }, phone: { type: 'string' } }, required: ['name', 'street1', 'city', 'postcode'] } },
   { name: 'quote_shipping', kind: 'act', description: 'Get live UK postage rates for an accepted postal request using both readers’ private saved addresses.', inputSchema: { type: 'object', properties: { requestId: { type: 'string' }, parcel: { type: 'string', enum: ['single-book', 'book-box'] } }, required: ['requestId'] } },
@@ -128,7 +131,7 @@ async function tool(name: string, caller: string, args: Args): Promise<unknown> 
   }
   if (name === 'remove_copy') { const id = typeof args.id === 'string' ? args.id : ''; return { removed: id ? await removeBook(caller, id) : false }; }
   if (name === 'request_book') { const copyId = typeof args.copyId === 'string' ? args.copyId : ''; if (!copyId) throw new Error('copyId is required'); const deliveryMethod = args.deliveryMethod === 'post' ? 'post' : 'local'; return { request: await requestBook(caller, copyId, deliveryMethod, typeof args.message === 'string' ? args.message : undefined) }; }
-  if (name === 'update_borrow_request') { const requestId = typeof args.requestId === 'string' ? args.requestId : ''; const status = args.status; if (!requestId || !['accepted', 'declined', 'cancelled'].includes(status as string)) throw new Error('requestId and a valid status are required'); return { request: await updateBorrowRequest(caller, requestId, status as 'accepted' | 'declined' | 'cancelled') }; }
+  if (name === 'update_borrow_request') { const requestId = typeof args.requestId === 'string' ? args.requestId : ''; const status = args.status; if (!requestId || !requestTransitions.includes(status as BorrowRequest['status'])) throw new Error(`requestId and one of ${requestTransitions.join(', ')} are required`); return { request: await updateBorrowRequest(caller, requestId, status as BorrowRequest['status']) }; }
   if (name === 'configure_shipping') return { shipping: await configureShipping(caller, typeof args.token === 'string' ? args.token : '') };
   if (name === 'set_shipping_address') { const address = validAddress(args); await saveShippingAddress(caller, address); return { saved: true, address }; }
   if (name === 'quote_shipping') return { rates: await quoteRequestShipping(caller, String(args.requestId ?? ''), args.parcel === 'book-box' ? 'book-box' : 'single-book') };
