@@ -119,6 +119,11 @@ registry, not by the caller's scopes.
 So the over-ask is real and total. A user signing in to look at their books
 grants read and write over everything in their slice.
 
+drive already avoids it, incidentally: there is a live token scoped
+`cell:c15r/drive:*` with actor `cell:c15r/drive`, minted through the cell-host
+path where `cellCeiling` caps the scope. So the identity-only session is not
+theoretical — it just wasn't reachable from the apex, or askable for on purpose.
+
 ### The server already has the answer
 
 `cellScopesFor` (`services/auth/oauth.ts:236`) exists to make
@@ -185,7 +190,7 @@ from `cell-origin-isolation.md` §4.5, which is a bigger piece and not this.
 
 All pre-existing and independent of the above. The first is the serious one.
 
-### redirect_uri is never checked against the registered client
+### redirect_uri was never checked against the registered client (fixed)
 
 `handleDCR` stores `redirect_uris` on the client record
 (`services/auth/oauth.ts:360`), and nothing ever reads them back. The two
@@ -207,10 +212,27 @@ So the code goes wherever the authorize URL said:
 
 PKCE doesn't help: whoever crafted the authorize URL holds the verifier.
 
-The fix is the standard one — exact-match `redirectUri` against
-`client.redirectUris` in `handleConsent`, and reject otherwise. Worth checking
-first what the connected clients (Claude, ChatGPT) actually registered, since
-enforcement breaks any client whose sent URI differs from its registered one.
+`handleConsent` now looks the client up and refuses a redirect it never
+registered, before any code is minted.
+
+The bound is the ORIGIN, not the exact string RFC 6749 §3.1.2.3 asks for. The
+kernel caches one client per origin and reuses it across every surface path
+there (`ensureClientId` registers `[origin, origin + pathname]`), so the client
+a reader registered at `/` is the one that signs them in at `/@c15r/shelved`.
+Exact matching would reject every path but the one they first landed on.
+Origin matching still closes the hole — a code cannot land anywhere the client
+did not name — and tightening further is a kernel change, not a server one.
+
+Two things it does not address:
+
+- DCR is open and `client_name` is attacker-chosen, so a client registered as
+  "parc.land" with its own redirect still reads as parc.land at consent. The
+  cell-as-resource line helps (a foreign redirect names no cell), but the
+  client name itself is unverified.
+- I could not enumerate what the existing clients registered — there is no
+  capability that reads back `redirect_uris`. Origin matching is what makes
+  that acceptable; exact matching would have been a guess about live
+  integrations.
 
 ### /oauth/authorize can be framed
 

@@ -292,6 +292,9 @@ describe('OAuth 2.1 authorization_code + PKCE flow', () => {
     config: OAuthConfig = CONFIG,
   ): Promise<{ access_token: string; refresh_token?: string; expires_in?: number; scope: string }> {
     await store.createUser('u1', 'alice');
+    // `cl` must be a registered client whose redirect covers `https://app/cb`:
+    // handleConsent now refuses to mint a code for an unregistered redirect.
+    await store.saveOAuthClient({ clientId: 'cl', clientSecret: null, redirectUris: ['https://app/cb'], clientName: null });
     const sessionId = await store.createSession('u1');
     const verifier = 'verifier-grant-test';
     const consent = await handleConsent(
@@ -338,9 +341,74 @@ describe('OAuth 2.1 authorization_code + PKCE flow', () => {
     expect(tok.expires_in).toBe(300);
   });
 
+  // redirect_uri was never checked against the registered client: DCR stored
+  // `redirect_uris` and nothing read them back, so an authorize URL could name
+  // any destination. Craft one with your own code_challenge, let the victim
+  // approve a real consent screen, and the code lands on your site to be
+  // exchanged with the verifier you chose — PKCE does not help, because you
+  // crafted the URL.
+  describe('the code only goes where the client registered', () => {
+    async function consentTo(redirectUri: string, registered: string[] = ['https://app/cb']) {
+      const store = createMemoryStore();
+      await store.createUser('u1', 'alice');
+      await store.saveOAuthClient({ clientId: 'cl', clientSecret: null, redirectUris: registered, clientName: null });
+      const sessionId = await store.createSession('u1');
+      return handleConsent(
+        makeReq({
+          path: '/oauth/consent',
+          body: { sessionId, clientId: 'cl', redirectUri, codeChallenge: sha256('v'), codeChallengeMethod: 'S256', scope: 'workspace:read' },
+        }),
+        store,
+        CONFIG,
+      );
+    }
+
+    it('refuses a redirect to an origin the client never registered', async () => {
+      const res = await consentTo('https://evil.example/steal');
+      expect(res.statusCode).toBe(400);
+      expect((res.body as { error: string }).error).toBe('invalid_request');
+      expect((res.body as { redirect?: string }).redirect).toBeUndefined();
+    });
+
+    it('refuses a client that does not exist', async () => {
+      const store = createMemoryStore();
+      await store.createUser('u1', 'alice');
+      const sessionId = await store.createSession('u1');
+      const res = await handleConsent(
+        makeReq({
+          path: '/oauth/consent',
+          body: { sessionId, clientId: 'never-registered', redirectUri: 'https://app/cb', codeChallenge: sha256('v'), codeChallengeMethod: 'S256' },
+        }),
+        store,
+        CONFIG,
+      );
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('refuses a malformed redirect', async () => {
+      expect((await consentTo('not-a-url')).statusCode).toBe(400);
+    });
+
+    // The bound is the ORIGIN, not the exact string: the kernel caches one client
+    // per origin and reuses it across every surface path there, so a reader who
+    // registered at `/` signs in at `/@c15r/shelved` on the same client.
+    it('allows another path on an origin the client registered', async () => {
+      const res = await consentTo('https://parc.land/@c15r/shelved', ['https://parc.land', 'https://parc.land/']);
+      expect(res.statusCode ?? 200).toBe(200);
+      expect((res.body as { redirect: string }).redirect).toContain('https://parc.land/@c15r/shelved?code=');
+    });
+
+    it('still refuses a lookalike origin', async () => {
+      expect((await consentTo('https://parc.land.evil.example/@c15r/shelved', ['https://parc.land'])).statusCode).toBe(400);
+    });
+  });
+
   it('rejects a bad PKCE verifier', async () => {
     const store = createMemoryStore();
     await store.createUser('u1', 'alice');
+    // `cl` must be a registered client whose redirect covers `https://app/cb`:
+    // handleConsent now refuses to mint a code for an unregistered redirect.
+    await store.saveOAuthClient({ clientId: 'cl', clientSecret: null, redirectUris: ['https://app/cb'], clientName: null });
     const sessionId = await store.createSession('u1');
     await handleConsent(
       makeReq({
@@ -607,6 +675,9 @@ describe('per-type consent + granular elevation (ADR-0023 §B / ADR-0022)', () =
   it('handleConsent grants a requested per-type scope even though it is not in scopesSupported', async () => {
     const store = createMemoryStore();
     await store.createUser('u1', 'alice');
+    // `cl` must be a registered client whose redirect covers `https://app/cb`:
+    // handleConsent now refuses to mint a code for an unregistered redirect.
+    await store.saveOAuthClient({ clientId: 'cl', clientSecret: null, redirectUris: ['https://app/cb'], clientName: null });
     const sessionId = await store.createSession('u1');
     const verifier = 'verifier-typescope';
     const consent = await handleConsent(

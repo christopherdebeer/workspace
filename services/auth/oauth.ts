@@ -18,6 +18,7 @@ import {
   chainDepth,
   chainActors,
   type ActClaim,
+  type OAuthClient,
 } from './store';
 
 /**
@@ -372,6 +373,38 @@ export async function handleDCR(req: ServiceHttpRequest, store: AuthStore): Prom
 
 // ─── Consent ─────────────────────────────────────────────────────
 
+/**
+ * Is this `redirect_uri` one the client registered?
+ *
+ * It was never checked. `handleDCR` stored `redirect_uris` and nothing read
+ * them back, so an authorize URL could name any destination at all: craft one
+ * with your own `code_challenge`, let the victim approve a real consent screen
+ * on the real origin, and the code arrives at your site to be exchanged with
+ * the verifier you chose. PKCE does not help, because whoever crafted the URL
+ * holds the verifier.
+ *
+ * The bound is the ORIGIN, not the exact string RFC 6749 §3.1.2.3 asks for.
+ * The kernel caches one client per origin and reuses it across every surface
+ * path there (`ensureClientId`), so the client a reader registered at `/` is
+ * the one that signs them in at `/@c15r/shelved`; exact matching would reject
+ * every path but the one they first landed on. Origin matching still closes
+ * the hole — a code cannot land anywhere the client did not name — and
+ * tightening it further is a kernel change (register the path, or re-register
+ * when it moves), not a server one.
+ */
+export function redirectAllowed(client: OAuthClient | null, redirectUri: string | undefined): boolean {
+  if (!client || !redirectUri) return false;
+  const originOf = (u: string): string | null => {
+    try {
+      return new URL(u).origin;
+    } catch {
+      return null;
+    }
+  };
+  const want = originOf(redirectUri);
+  return !!want && client.redirectUris.some((u) => originOf(u) === want);
+}
+
 interface ConsentBody {
   sessionId: string;
   clientId: string;
@@ -394,6 +427,14 @@ export async function handleConsent(
   const session = await store.validateSession(b.sessionId);
   if (!session) return ok({ error: 'Invalid or expired session' }, 401);
   if (session.scope !== 'consent') return ok({ error: 'Session not authorized for consent' }, 403);
+
+  // The code is about to be minted against this redirect. It must be one the
+  // client registered, or the authorize URL chooses where the code lands.
+  const client = await store.getOAuthClient(b.clientId);
+  if (!redirectAllowed(client, b.redirectUri)) {
+    console.warn('[oauth] consent: unregistered redirect_uri', { clientId: b.clientId, redirectUri: b.redirectUri });
+    return ok({ error: 'invalid_request', error_description: 'redirect_uri is not registered for this client' }, 400);
+  }
 
   // Authoritative scope gating: keep only scopes this user may actually grant
   // (admin scopes require an admin username), regardless of what the page sent.
