@@ -1,10 +1,10 @@
 import * as React from 'react';
-import styled from '../../shared/styled';
-import { theme } from '../../shared/theme';
-import type { DiscoverCopy } from '../../shared/types';
-import { ClayButton, Field, QuietButton } from '../../shared/components/Layout';
-import { DiscoveryBookCard } from '../../shared/components/DiscoveryBookCard';
-import { BookCover } from '../../shared/components/BookCover';
+import styled from '../styled';
+import { theme } from '../theme';
+import type { DiscoverCopy } from '../types';
+import { ClayButton, Field, QuietButton } from './Layout';
+import { DiscoveryBookCard } from './DiscoveryBookCard';
+import { BookCover } from './BookCover';
 
 const Hero = styled.section`
   display: grid; grid-template-columns: minmax(0, 1.2fr) minmax(260px, .8fr); gap: 32px; align-items: center;

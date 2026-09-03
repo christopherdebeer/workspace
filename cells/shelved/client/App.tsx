@@ -8,8 +8,9 @@ import { ShelfStats } from '../shared/components/ShelfStats';
 import { BookCard } from '../shared/components/BookCard';
 import { EmptyShelf } from '../shared/components/EmptyShelf';
 import { IsbnCapture } from './components/IsbnCapture';
-import { BrandNav } from './components/BrandNav';
-import { Discover } from './components/Discover';
+import { BrandNav } from '../shared/components/BrandNav';
+import { Discover } from '../shared/components/Discover';
+import { FirstPaintBody, viewForPath } from '../shared/FirstPaint';
 import { RequestsPanel } from './components/RequestsPanel';
 import { CanonicalBookSheet } from './components/CanonicalBookSheet';
 import { ReadersPage } from './components/ReadersPage';
@@ -18,7 +19,6 @@ import { completeLoginIfReturning, login, logout } from './lib/auth';
 import { act, read } from './lib/substrate';
 
 const Grid = styled.div`display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 310px), 1fr)); gap: 12px;`;
-const Loading = styled.p`padding: 80px 0; color: ${theme.quiet}; text-align: center;`;
 const cellPath = (path: string): string => location.host.endsWith('.on.parc.land') ? path : `/@c15r/shelved${path}`;
 
 async function loadBooks(): Promise<BookCopy[]> {
@@ -81,7 +81,12 @@ export function App(): React.JSX.Element {
   const [userBooks, setUserBooks] = React.useState<UserBook[]>([]);
   const [notifications, setNotifications] = React.useState<AvailabilityNotification[]>([]);
   const [openBookView, setOpenBookView] = React.useState<PublicBookView | null>(null);
-  const [view, setView] = React.useState<'discover' | 'shelf' | 'readers'>(returning ? 'shelf' : location.pathname.startsWith('/reader') || location.pathname === '/readers' ? 'readers' : 'discover');
+  // Resolved through the same helper the server used, so the first render on
+  // each side agrees. `returning` (an OAuth redirect back, now the fallback
+  // route rather than the normal one) still lands on the shelf, and cannot
+  // disagree with the server because a `?code=` navigation is never the
+  // response we served — that page was rendered for the path, not the query.
+  const [view, setView] = React.useState<'discover' | 'shelf' | 'readers'>(returning ? 'shelf' : viewForPath(location.pathname));
 
   React.useEffect(() => { void (async () => {
     const [signedIn, discovered, publicProfiles] = await Promise.all([completeLoginIfReturning(), loadDiscovery().catch(() => []), loadProfiles()]);
@@ -153,5 +158,5 @@ export function App(): React.JSX.Element {
   };
 
   const ownBookIds = React.useMemo(() => new Set(books.map((book) => book.id)), [books]);
-  return <ThemeProvider theme={theme}><GlobalStyle /><Page><Shell><BrandNav view={view} authed={authed} onBrowse={() => { setView('discover'); history.pushState({}, '', '/'); }} onShelf={openShelf} onReaders={() => { setView('readers'); history.pushState({}, '', '/readers'); }} onSignIn={signIn} onSignOut={signOut} />{!ready ? <Loading>Opening the shelves…</Loading> : view === 'discover' ? <Discover books={available} authed={authed} onJoin={signIn} onAdd={openCapture} onManage={() => setView('shelf')} onOpenBook={(workId) => void openCanonical(workId)} onViewProfile={viewProfile} onLookupIsbn={lookupIsbn} /> : view === 'readers' ? <ReadersPage profiles={profiles} books={available} social={social} authed={authed} onSignIn={signIn} onSaveProfile={saveProfile} onFollow={toggleFollow} onOpenBook={(workId) => void openCanonical(workId)} /> : <><ShelfHeader onAdd={openCapture} /><ShelfStats books={books} />{books.length ? <Grid>{books.map((book) => <BookCard key={book.id} book={book} onChange={(patch) => void updateBook(book.id, patch)} />)}</Grid> : <EmptyShelf authed={authed} onAdd={openCapture} onLogin={signIn} />}<ReadingPanel books={userBooks} notifications={notifications} onOpenBook={(workId) => void openCanonical(workId)} onReadNotification={readNotification} /><RequestsPanel incoming={requests.incoming} outgoing={requests.outgoing} address={shippingAddress} shipping={shipping} shipments={shipments} onDecision={decideRequest} onSaveAddress={saveAddress} onQuote={quotePostage} onPurchaseTest={purchaseTestLabel} onConfigure={configureShipping} /></>}</Shell></Page>{capture ? <IsbnCapture onClose={() => setCapture(false)} onAdd={addBook} /> : null}{openBookView ? <CanonicalBookSheet view={openBookView} authed={authed} ownBookIds={ownBookIds} onClose={closeCanonical} onSignIn={signInHere} onManage={() => { closeCanonical(); setView('shelf'); }} onRequest={requestBook} onSetUserBook={setReadingState} onViewProfile={viewProfile} /> : null}</ThemeProvider>;
+  return <ThemeProvider theme={theme}><GlobalStyle /><Page><Shell><BrandNav view={view} authed={authed} onBrowse={() => { setView('discover'); history.pushState({}, '', '/'); }} onShelf={openShelf} onReaders={() => { setView('readers'); history.pushState({}, '', '/readers'); }} onSignIn={signIn} onSignOut={signOut} />{!ready ? <FirstPaintBody view={view} /> : view === 'discover' ? <Discover books={available} authed={authed} onJoin={signIn} onAdd={openCapture} onManage={() => setView('shelf')} onOpenBook={(workId) => void openCanonical(workId)} onViewProfile={viewProfile} onLookupIsbn={lookupIsbn} /> : view === 'readers' ? <ReadersPage profiles={profiles} books={available} social={social} authed={authed} onSignIn={signIn} onSaveProfile={saveProfile} onFollow={toggleFollow} onOpenBook={(workId) => void openCanonical(workId)} /> : <><ShelfHeader onAdd={openCapture} /><ShelfStats books={books} />{books.length ? <Grid>{books.map((book) => <BookCard key={book.id} book={book} onChange={(patch) => void updateBook(book.id, patch)} />)}</Grid> : <EmptyShelf authed={authed} onAdd={openCapture} onLogin={signIn} />}<ReadingPanel books={userBooks} notifications={notifications} onOpenBook={(workId) => void openCanonical(workId)} onReadNotification={readNotification} /><RequestsPanel incoming={requests.incoming} outgoing={requests.outgoing} address={shippingAddress} shipping={shipping} shipments={shipments} onDecision={decideRequest} onSaveAddress={saveAddress} onQuote={quotePostage} onPurchaseTest={purchaseTestLabel} onConfigure={configureShipping} /></>}</Shell></Page>{capture ? <IsbnCapture onClose={() => setCapture(false)} onAdd={addBook} /> : null}{openBookView ? <CanonicalBookSheet view={openBookView} authed={authed} ownBookIds={ownBookIds} onClose={closeCanonical} onSignIn={signInHere} onManage={() => { closeCanonical(); setView('shelf'); }} onRequest={requestBook} onSetUserBook={setReadingState} onViewProfile={viewProfile} /> : null}</ThemeProvider>;
 }

@@ -1,5 +1,9 @@
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { createElement } from 'react';
+import { renderToString } from 'react-dom/server';
+import { FirstPaint, viewForPath } from './shared/FirstPaint';
+import { collectStyles } from './shared/styled';
 import type { AddBookInput, Availability, BookCopy, ReadingState, ShippingAddress, UserBookState } from './shared/types';
 import { addBook, listBooks, listBorrowRequests, listDiscovery, removeBook, requestBook, updateBook, updateBorrowRequest } from './lib/store';
 import { lookupIsbn } from './lib/isbn';
@@ -10,6 +14,34 @@ const OWNER = process.env.CELL_OWNER ?? 'c15r';
 const readAsset = (path: string): string => readFileSync(join(__dirname, path), 'utf8');
 const response = (statusCode: number, body: unknown, contentType = 'application/json', headers: Record<string, string> = {}) => ({ statusCode, headers: { 'content-type': contentType, ...headers }, body: typeof body === 'string' ? body : JSON.stringify(body) });
 const jsonBody = (raw?: string): Record<string, unknown> => { try { return raw ? JSON.parse(raw) as Record<string, unknown> : {}; } catch { throw new Error('invalid JSON body'); } };
+
+/**
+ * The page, with its first paint already drawn.
+ *
+ * Shelved used to serve a bare shell whose only content was the word "opening
+ * your shelf…", so every visitor got a blank cream page until the bundle
+ * parsed, ran, and made two round trips. The layout does not depend on any of
+ * that: the nav, the hero and the section frames are the same for everyone
+ * before any data exists, so they can be in the HTML.
+ *
+ * `data-ssr="1"` is the client's signal to `hydrateRoot` rather than
+ * `createRoot` (client/main.tsx), which needs the markup here to match its
+ * first render exactly — hence both sides rendering the same `FirstPaint`.
+ * If the render throws, fall back to the plain shell: a slow page is a much
+ * smaller failure than a 500, and the client can still do all of this itself.
+ */
+function renderPage(path: string): string {
+  const shell = readAsset('static/index.html');
+  try {
+    const markup = renderToString(createElement(FirstPaint, { view: viewForPath(path) }));
+    return shell
+      .replace('<!-- styled -->', `<style data-shelved-ssr="1">${collectStyles()}</style>`)
+      .replace('<div id="app"><p class="boot">opening your shelf…</p></div>', `<div id="app" data-ssr="1">${markup}</div>`);
+  } catch (err) {
+    console.warn('[shelved ssr] falling back to the shell', (err as Error).message);
+    return shell;
+  }
+}
 const authedCaller = (event: Event): string | null => { const caller = event.headers?.['x-cell-caller']; return caller && caller !== 'anonymous' ? caller : null; };
 
 type Event = { rawPath?: string; requestContext?: { http?: { method?: string } }; headers?: Record<string, string | undefined>; body?: string };
@@ -138,7 +170,7 @@ export const handler = async (event: Event) => {
       return response(404, { error: `no API route for ${method} ${path}` });
     }
     if (method === 'GET' && (path === '/' || path === '' || path === '/readers' || path.startsWith('/book/') || path.startsWith('/reader/'))) {
-      return response(200, readAsset('static/index.html'), 'text/html; charset=utf-8');
+      return response(200, renderPage(path || '/'), 'text/html; charset=utf-8');
     }
     return response(404, { error: `no route for ${method} ${path}` });
   } catch (err) {

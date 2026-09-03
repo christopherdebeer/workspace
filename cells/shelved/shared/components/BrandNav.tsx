@@ -1,6 +1,6 @@
 import * as React from 'react';
-import styled from '../../shared/styled';
-import { theme } from '../../shared/theme';
+import styled from '../styled';
+import { theme } from '../theme';
 
 const Nav = styled.header`display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 9px 0 17px; border-bottom: 1px solid ${theme.line};`;
 const Brand = styled.button`display: flex; align-items: center; gap: 9px; border: 0; background: none; padding: 0; color: ${theme.ink}; cursor: pointer;`;
