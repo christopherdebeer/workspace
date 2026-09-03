@@ -52,12 +52,42 @@ export interface InfrastructureContext {
   availableClearanceM: number;
 }
 
+export type StructureSilhouette =
+  | 'thin-deck' | 'box-girder' | 'open-truss' | 'arch-spandrel' | 'cable-tower'
+  | 'rock-cut' | 'horseshoe' | 'rectangular' | 'gallery'
+  | 'round' | 'masonry-vault' | 'open-crossing';
+export type SupportForm = 'none' | 'wall' | 'column' | 'twin-column' | 'masonry-pier' | 'tower';
+
+export interface StructureGeometryRecipe {
+  silhouette: StructureSilhouette;
+  support: SupportForm;
+  deckDepthM: number;
+  portalDepthM: number;
+  cells: 0 | 1 | 2;
+  /** Surface/joint repetition. Zero means no authored repeat. */
+  repeatM: number;
+  /** 0..1: reuses geometry/material detail; never permission for a draw call. */
+  detail: number;
+}
+
+export interface StructureFinishRecipe {
+  base: number;
+  shadow: number;
+  edge: number;
+  light: number;
+  moss: number;
+  rust: number;
+  soot: number;
+}
+
 export interface StructureRecipe {
   kind: InfrastructureKind;
   family: StructureFamily;
   material: StructureMaterial;
   era: InfrastructureEra;
   maintenance: MaintenanceState;
+  geometry: StructureGeometryRecipe;
+  finish: StructureFinishRecipe;
   supportSpacingM: number;
   supportRadiusM: number;
   rail: 'parapet' | 'open-rail' | 'stone-wall' | 'none';
@@ -142,11 +172,14 @@ function eraFor(c: InfrastructureContext): InfrastructureEra {
   if (c.startYear && c.startYear < 1900) return 'vernacular';
   if (c.startYear && c.startYear < 1960) return 'industrial';
   if (c.startYear && c.startYear > 1995) return 'modern';
-  const r = deterministicUnit(c.key, c.regionSeed ^ 0x455241);
+  // The broad era is regional, not per-structure noise. A district may
+  // carry a repair campaign, while explicit construction dates still win.
+  const r = deterministicUnit(`region:${c.regionSeed}`, 0x455241);
+  const retrofit = deterministicUnit(`district:${c.districtSeed}`, 0x524550);
   const oldBias = 0.18 + 0.32 * clamp01(c.urbanity) + 0.15 * clamp01(c.climate[2] ?? 0);
+  if (retrofit > 0.94) return 'repair';
   if (r < oldBias * 0.35) return 'vernacular';
   if (r < oldBias) return 'industrial';
-  if (r > 0.91) return 'repair';
   return 'modern';
 }
 
@@ -161,7 +194,7 @@ function materialFor(c: InfrastructureContext, family: StructureFamily, era: Inf
 
   if (family === 'truss' || family === 'cable') return 'steel';
   if (family === 'rock') return 'raw-rock';
-  if (family === 'masonry-arch') return deterministicUnit(c.key, c.districtSeed) < 0.3 ? 'brick' : 'stone';
+  if (family === 'masonry-arch') return deterministicUnit(`district:${c.districtSeed}`, 0x4d4154) < 0.3 ? 'brick' : 'stone';
   if (family === 'arch' && (era === 'vernacular' || era === 'industrial')) return 'stone';
   if (family === 'gallery' && c.bedrock !== 'soft' && c.coverM > 2) return 'raw-rock';
   return 'concrete';
@@ -221,12 +254,66 @@ function conduitFamily(c: InfrastructureContext): { family: ConduitFamily; reaso
   return { family: f, reason: 'context-weighted feasible conduit family' };
 }
 
+function geometryFor(c: InfrastructureContext, family: StructureFamily, material: StructureMaterial): StructureGeometryRecipe {
+  const districtDetail = deterministicUnit(`district:${c.districtSeed}`, 0xd37a);
+  const microDetail = deterministicUnit(c.key, 0xd37b);
+  const detail = clamp01(0.22
+    + (c.tier >= 2 ? 0.16 : 0)
+    + districtDetail * 0.25 + microDetail * 0.09);
+  const repeatM = material === 'stone' || material === 'brick' ? 1.1
+    : material === 'steel' ? 3.6 : material === 'timber' ? 2.2
+    : material === 'concrete' ? 7.5 : 0;
+  switch (family) {
+    case 'slab': return { silhouette: 'thin-deck', support: 'wall', deckDepthM: 0.65, portalDepthM: 0, cells: 0, repeatM, detail };
+    case 'beam': return { silhouette: 'box-girder', support: 'column', deckDepthM: 1.15, portalDepthM: 0, cells: 0, repeatM, detail };
+    case 'viaduct': return { silhouette: 'box-girder', support: 'twin-column', deckDepthM: 1.35, portalDepthM: 0, cells: 0, repeatM, detail };
+    case 'arch': return { silhouette: 'arch-spandrel', support: 'masonry-pier', deckDepthM: 0.9, portalDepthM: 0, cells: 0, repeatM, detail };
+    case 'truss': return { silhouette: 'open-truss', support: 'column', deckDepthM: 0.8, portalDepthM: 0, cells: 0, repeatM, detail };
+    case 'cable': return { silhouette: 'cable-tower', support: 'tower', deckDepthM: 1.0, portalDepthM: 0, cells: 0, repeatM, detail };
+    case 'rock': return { silhouette: 'rock-cut', support: 'none', deckDepthM: 0, portalDepthM: 1.2, cells: 0, repeatM, detail };
+    case 'shotcrete': return { silhouette: 'horseshoe', support: 'none', deckDepthM: 0, portalDepthM: 1.6, cells: 0, repeatM, detail };
+    case 'segmental': return { silhouette: 'horseshoe', support: 'none', deckDepthM: 0, portalDepthM: 2.4, cells: 0, repeatM: 1.5, detail };
+    case 'cut-cover': return { silhouette: 'rectangular', support: 'none', deckDepthM: 0, portalDepthM: 2.0, cells: 0, repeatM: 6, detail };
+    case 'gallery': return { silhouette: 'gallery', support: 'column', deckDepthM: 0, portalDepthM: 0.8, cells: 0, repeatM, detail };
+    case 'pipe': return { silhouette: 'round', support: 'none', deckDepthM: 0, portalDepthM: 0.55, cells: 1, repeatM, detail };
+    case 'box': return { silhouette: 'rectangular', support: 'none', deckDepthM: 0, portalDepthM: 0.7, cells: 1, repeatM, detail };
+    case 'twin-cell': return { silhouette: 'rectangular', support: 'wall', deckDepthM: 0, portalDepthM: 0.8, cells: 2, repeatM, detail };
+    case 'masonry-arch': return { silhouette: 'masonry-vault', support: 'wall', deckDepthM: 0, portalDepthM: 0.9, cells: 1, repeatM, detail };
+    case 'ford': return { silhouette: 'open-crossing', support: 'none', deckDepthM: 0, portalDepthM: 0, cells: 0, repeatM: 0, detail: 0 };
+    case 'none': return { silhouette: 'open-crossing', support: 'none', deckDepthM: 0, portalDepthM: 0, cells: 0, repeatM: 0, detail: 0 };
+  }
+}
+
+function finishFor(c: InfrastructureContext, material: StructureMaterial, maintenance: MaintenanceState, weathering: number): StructureFinishRecipe {
+  const colours: Record<StructureMaterial, [number, number, number]> = {
+    concrete: [0x77766f, 0x414348, 0xa7a49a],
+    stone: [0x71695d, 0x3d3b38, 0xa79b84],
+    brick: [0x765044, 0x3e3030, 0xae7860],
+    steel: [0x56656b, 0x263238, 0x91a2a5],
+    timber: [0x66503f, 0x302a25, 0x9b7958],
+    'raw-rock': [0x54524d, 0x292c2d, 0x807b70],
+  };
+  const [base, shadow, edge] = colours[material];
+  const wet = clamp01(c.moisture * 0.72 + c.snow * 0.18);
+  const neglect = maintenance === 'reclaimed' ? 1 : maintenance === 'weathered' ? 0.68
+    : maintenance === 'patched' ? 0.35 : 0.12;
+  return {
+    base, shadow, edge,
+    light: c.temperatureC < 2 ? 0xcad8d5 : 0xd8a45e,
+    moss: clamp01(wet * (0.35 + neglect * 0.65) * weathering),
+    rust: material === 'steel' ? clamp01((0.2 + c.moisture * 0.5) * (0.4 + neglect * 0.6)) : 0,
+    soot: clamp01((c.kind === 'tunnel' ? 0.24 : 0.04) + c.urbanity * 0.32 + neglect * 0.18),
+  };
+}
+
 export function pickInfrastructureRecipe(c: InfrastructureContext): StructureRecipe {
   const selected = c.kind === 'bridge' ? bridgeFamily(c) : c.kind === 'tunnel' ? tunnelFamily(c) : conduitFamily(c);
   const era = eraFor(c);
   const material = materialFor(c, selected.family, era);
   const wet = clamp01(c.moisture * 0.7 + Math.max(0, c.snow) * 0.3);
-  const maintenanceRoll = deterministicUnit(c.key, c.settlementSeed ^ 0x4d4e54);
+  const settlementMaintenance = deterministicUnit(`settlement:${c.settlementSeed}`, 0x4d4e54);
+  const structureMaintenance = deterministicUnit(c.key, 0x4d4943);
+  const maintenanceRoll = settlementMaintenance * 0.78 + structureMaintenance * 0.22;
   const maintenance: MaintenanceState =
     maintenanceRoll < 0.16 + wet * 0.12 ? 'weathered' :
     maintenanceRoll > 0.88 ? 'reclaimed' :
@@ -256,6 +343,8 @@ export function pickInfrastructureRecipe(c: InfrastructureContext): StructureRec
     material,
     era,
     maintenance,
+    geometry: geometryFor(c, selected.family, material),
+    finish: finishFor(c, material, maintenance, weathering),
     supportSpacingM,
     supportRadiusM,
     rail,
@@ -306,6 +395,10 @@ export interface SupportPlanOptions {
    * projection makes stations survive clipping; zero preserves whole-way use.
    */
   stationOffsetM?: number;
+  /** Canonical chainage of this rendered fragment inside the full structure. */
+  fragmentStartM?: number;
+  /** Full canonical structure length. End clearances apply here, not at clips. */
+  structureLengthM?: number;
   /** Pure world query supplied by caller; station is local to this fragment. */
   clearAt: (stationM: number) => boolean;
 }
@@ -319,16 +412,22 @@ export function planSupportStations(o: SupportPlanOptions): SupportPlan {
   if (!(o.lengthM > 0 && o.spacingM > 0)) return { accepted, refused: 0 };
   const phase = deterministicUnit(o.key, 0x53555050) * o.spacingM;
   const offset = o.stationOffsetM ?? 0;
+  const fragmentStart = o.fragmentStartM ?? 0;
+  const structureLength = o.structureLengthM ?? o.lengthM;
+  const absoluteStart = offset + fragmentStart;
+  const localMin = Math.max(0, o.endClearanceM - fragmentStart);
+  const localMax = Math.min(o.lengthM, structureLength - o.endClearanceM - fragmentStart);
+  if (localMax < localMin) return { accepted, refused: 0 };
   const shifts = [0, -0.18, 0.18, -0.34, 0.34].map((v) => v * o.spacingM);
   let refused = 0;
-  const first = Math.ceil((offset + o.endClearanceM - phase) / o.spacingM);
-  const last = Math.floor((offset + o.lengthM - o.endClearanceM - phase) / o.spacingM);
+  const first = Math.ceil((absoluteStart + localMin - phase) / o.spacingM);
+  const last = Math.floor((absoluteStart + localMax - phase) / o.spacingM);
   for (let k = first; k <= last; k++) {
-    const nominalM = phase + k * o.spacingM - offset;
+    const nominalM = phase + k * o.spacingM - absoluteStart;
     let chosen: number | null = null;
     for (const shift of shifts) {
       const s = nominalM + shift;
-      if (s < o.endClearanceM || s > o.lengthM - o.endClearanceM) continue;
+      if (s < localMin || s > localMax) continue;
       if (accepted.length && s - accepted[accepted.length - 1].stationM < o.spacingM * 0.52) continue;
       if (o.clearAt(s)) { chosen = s; break; }
     }

@@ -1,7 +1,7 @@
 import {
-  type InfrastructureContext, canonicalAlignment, pickInfrastructureRecipe,
-  planSupportStations,
+  type InfrastructureContext, pickInfrastructureRecipe, planSupportStations,
 } from './infrastructure';
+import { runInfrastructureChecks } from './infrastructure-checks';
 
 const BASE: InfrastructureContext = {
   key: 'way/1001', kind: 'bridge', lengthM: 140, spanM: 34, roadWidthM: 8,
@@ -30,23 +30,8 @@ const CASES: Array<{ label: string; context: InfrastructureContext }> = [
 ];
 
 function tests(): string[] {
-  const out: string[] = [];
-  const same = JSON.stringify(pickInfrastructureRecipe(BASE)) === JSON.stringify(pickInfrastructureRecipe({ ...BASE }));
-  out.push(`${same ? 'PASS' : 'FAIL'} call-order independent recipe`);
-  const a = canonicalAlignment([{ x: -40, z: 2 }, { x: 0, z: 5 }, { x: 80, z: 9 }]);
-  const b = canonicalAlignment([{ x: 80, z: 9 }, { x: 0, z: 5 }, { x: -40, z: 2 }]);
-  out.push(`${JSON.stringify(a.points) === JSON.stringify(b.points) ? 'PASS' : 'FAIL'} reverse-order canonical alignment`);
-  const supports = planSupportStations({
-    key: 'way/crossing', lengthM: 150, spacingM: 25, endClearanceM: 9,
-    clearAt: (s) => Math.abs(s - 75) > 20,
-  });
-  out.push(`${supports.refused > 0 && supports.accepted.every((s) => Math.abs(s.stationM - 75) > 20) ? 'PASS' : 'FAIL'} road prism veto never relaxed`);
-  const tagged = pickInfrastructureRecipe({ ...BASE, taggedStructure: 'truss' });
-  out.push(`${tagged.family === 'truss' ? 'PASS' : 'FAIL'} explicit OSM structure wins`);
-  const buried = pickInfrastructureRecipe({ ...BASE, key: 'way/buried', kind: 'conduit',
-    tier: 3, waterWidthM: 8, availableClearanceM: 0.2 });
-  out.push(`${buried.family === 'none' && !buried.feasible ? 'PASS' : 'FAIL'} buried conduit omitted`);
-  return out;
+  return runInfrastructureChecks().map((c) =>
+    `${c.pass ? 'PASS' : 'FAIL'} ${c.name} · ${c.detail}`);
 }
 
 export async function startInfrastructureLab(): Promise<void> {
@@ -107,13 +92,14 @@ export async function startInfrastructureLab(): Promise<void> {
     ctx.fillStyle = '#d6e2e4'; ctx.font = '15px ui-monospace,monospace';
     ctx.fillText(`${CASES[index].label} · ${String(r.family).toUpperCase()} · ${r.material.toUpperCase()}`, 28, 28);
     ctx.fillStyle = '#7f9296'; ctx.font = '12px ui-monospace,monospace';
-    ctx.fillText(`${r.era} · ${r.maintenance} · weather ${r.weathering.toFixed(2)} · ${r.reason}`, 28, 49);
+    ctx.fillText(`${r.geometry.silhouette} · ${r.geometry.support} · repeat ${r.geometry.repeatM.toFixed(1)}m · detail ${r.geometry.detail.toFixed(2)}`, 28, 49);
+    ctx.fillText(`${r.era} · ${r.maintenance} · moss ${r.finish.moss.toFixed(2)} · rust ${r.finish.rust.toFixed(2)} · soot ${r.finish.soot.toFixed(2)}`, 28, 68);
   };
 
   CASES.forEach((item, i) => {
     const r = pickInfrastructureRecipe(item.context);
     const b = document.createElement('button');
-    b.innerHTML = `<b>${item.label}</b><div class="family">${String(r.family).toUpperCase()}</div><div class="meta">${r.material} · ${r.era} · ${r.maintenance}<br>${r.reason}</div>`;
+    b.innerHTML = `<b>${item.label}</b><div class="family">${String(r.family).toUpperCase()}</div><div class="meta">${r.material} · ${r.era} · ${r.maintenance}<br>${r.geometry.silhouette} · ${r.geometry.support} · ${r.geometry.repeatM.toFixed(1)}m rhythm<br>${r.reason}</div>`;
     b.onclick = () => draw(i); grid.appendChild(b);
   });
   draw(0);
