@@ -4786,7 +4786,7 @@ function buildTerrainMesh(t: HeightTile): void {
 const TWORKER = new URLSearchParams(location.search).get('tworker') !== '0';
 const tworker: TerrainWorker | null = TWORKER ? new TerrainWorker() : null;
 let buildInFlight: string | null = null;
-const workerLedger = { posts: 0, applied: 0, dropped: 0, prepMs: 0, applyMs: 0, postMs: 0 };
+const workerLedger = { posts: 0, applied: 0, dropped: 0, prepMs: 0, applyMs: 0, postMs: 0, postMax: 0, reseatMs: 0, redrapeMs: 0, hydroMs: 0, batterMs: 0, culvertMs: 0 };
 /** Everything a build reads that is not a raster, packed for the worker. */
 function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<TerrainJob, 'id'>; transfer: Transferable[] } {
   const flatten = (grid: Map<string, Seg[]>, cell: number, margin: number): { flat: Float64Array; cells: Array<[string, number[]]> } => {
@@ -4903,9 +4903,15 @@ function postTerrainBuild(t: HeightTile, key: string): void {
     applyTileBuild(t, key, r, why);
     const t2 = performance.now();
     terrainBuilds++;
-    reseatBuildings(t); redrape(t); hydroFeed(t); flushBatter(t); flushCulverts(t);
-    terrainMs = performance.now() - t1 + prep;
-    workerLedger.applied++; workerLedger.applyMs += t2 - t1; workerLedger.postMs += performance.now() - t2;
+    reseatBuildings(t); const t3 = performance.now();
+    redrape(t); const t4 = performance.now();
+    hydroFeed(t); const t5 = performance.now();
+    flushBatter(t); const t6 = performance.now();
+    flushCulverts(t); const t7 = performance.now();
+    terrainMs = t7 - t1 + prep;
+    workerLedger.applied++; workerLedger.applyMs += t2 - t1; workerLedger.postMs += t7 - t2;
+    workerLedger.reseatMs += t3 - t2; workerLedger.redrapeMs += t4 - t3; workerLedger.hydroMs += t5 - t4; workerLedger.batterMs += t6 - t5; workerLedger.culvertMs += t7 - t6;
+    workerLedger.postMax = Math.max(workerLedger.postMax, t7 - t2);
     if (buildLog.length) { const b = buildLog[buildLog.length - 1]; b.ms = Math.round(terrainMs); b.bms = Math.round(t2 - t1 + prep); }
   }, (error: Error) => {
     // The worker is disabled by its own failure; the tile goes back on the
