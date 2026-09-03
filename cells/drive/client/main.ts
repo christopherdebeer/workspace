@@ -1980,7 +1980,9 @@ function oceanCoverageFor(t: HeightTile): OceanCoverage {
  *  filled or scanned it and missed. */
 const hydroFeedLog: Array<{ at: number; key: string; rev: number; store: number; fed: number }> = [];
 (window as unknown as { __hydrofeeds?: object }).__hydrofeeds = (): object => hydroFeedLog.slice(-120);
-function hydroFeed(t: HeightTile): void {
+/** The hydro system's elevation raster side — see hydroFeed. */
+const HYDRO_EN = 132;
+function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
   if (!HYDRO_ON) return;
   if (!hydroSys) {
     hydroSys = createHydroSystem({ oceanLevelM: seaSurfaceAbs() });
@@ -2013,16 +2015,11 @@ function hydroFeed(t: HeightTile): void {
   // Lattice points, not texel centres: the module's sampler puts grid point 0
   // AT minX and point N-1 AT maxX, so sampling anywhere else would shift every
   // bed half a texel sideways.
-  const EN = 132;
+  const EN = HYDRO_EN;
   const n = EN;
-  const elevation = new Float32Array(EN * EN);
-  for (let iz = 0; iz < EN; iz++) {
-    const ez = t.zs + (iz / (EN - 1)) * t.h;
-    for (let ix = 0; ix < EN; ix++) {
-      const ex = t.xs + (ix / (EN - 1)) * t.w;
-      elevation[iz * EN + ix] = hasHeight(ex, ez) ? sampleHeight(ex, ez) + baseElev : NaN;
-    }
-  }
+  // The worker samples this raster with the build (terrain-kernel's
+  // hydroElevation); only a refeed with no build behind it samples here.
+  const elevation = ready && ready.length === EN * EN ? ready : K.hydroElevation(kStore, t, EN);
   // THE WATER THIS TILE STANDS UNDER. A bbox test against the store, not a
   // clip: `buildHydroTile` already bounds each feature to its own pixel range,
   // so handing it a river that mostly runs off the edge costs the pixels the
@@ -4838,7 +4835,7 @@ function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<
   const job: Omit<TerrainJob, 'id'> = {
     epoch: worldEpoch, key: `${t.tx}/${t.ty}`,
     tile: { tx: t.tx, ty: t.ty, xs: t.xs, zs: t.zs, w: t.w, h: t.h, data },
-    seg: SEG, corridor, refine: REFINE,
+    seg: SEG, corridor, refine: REFINE, hydroN: HYDRO_ON ? HYDRO_EN : 0,
     baseElev, seaAbs: seaSurfaceAbs(), seaOn, dryAt: !!dryAt,
     nrmScale: NRM_SCALE, cutWash: CUT_WASH, cprobe: CPROBE, cutRelief: CUT_RELIEF,
     cutL, grid: GRID, water: COVER.water, built: COVER.built, waterTilt: WATER_TILT, coverPx: COVER_PX,
@@ -4905,7 +4902,7 @@ function postTerrainBuild(t: HeightTile, key: string): void {
     terrainBuilds++;
     reseatBuildings(t); const t3 = performance.now();
     redrape(t); const t4 = performance.now();
-    hydroFeed(t); const t5 = performance.now();
+    hydroFeed(t, r.hydroElev); const t5 = performance.now();
     flushBatter(t); const t6 = performance.now();
     flushCulverts(t); const t7 = performance.now();
     terrainMs = t7 - t1 + prep;

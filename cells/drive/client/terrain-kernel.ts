@@ -1703,6 +1703,21 @@ export function createTerrainKernel() {
     };
     return palette;
   }
+  /** The hydro system's elevation raster for a tile — EN×EN absolute
+   *  heights, NaN where the field has no tile — off the same sampler the
+   *  build used. main.ts's hydroFeed sampled this on the main thread, 17k
+   *  reads a tile, and it was the whole post-step cost once the build moved. */
+  function hydroElevation(S: TerrainStore, t: HeightTile, EN: number): Float32Array {
+    const out = new Float32Array(EN * EN);
+    for (let iz = 0; iz < EN; iz++) {
+      const ez = t.zs + (iz / (EN - 1)) * t.h;
+      for (let ix = 0; ix < EN; ix++) {
+        const ex = t.xs + (ix / (EN - 1)) * t.w;
+        out[iz * EN + ix] = S.hasHeight(ex, ez) ? S.sampleHeight(ex, ez) + S.baseElev : NaN;
+      }
+    }
+    return out;
+  }
   /** An area tint: the patches overlapping a point, last one wins. */
   function areaTintOf(patches: AreaPatchLike[], x: number, z: number): Rgb | null {
     let hit: Rgb | null = null;
@@ -1729,7 +1744,7 @@ export function createTerrainKernel() {
   }
   return {
     buildTile, borderShared, roadFloorHard, corridorH, stripBreakLines, stripFloor, cellTable, normalMapBytes, plainLattice, vertexNormals,
-    refineCost, plainCost, carveCost, mmKey, mmIndex, mmNear, onTileEdge, channelsNear, makeSampler, makePalette, areaTintOf, onRoadOf,
+    refineCost, plainCost, carveCost, mmKey, mmIndex, mmNear, onTileEdge, channelsNear, makeSampler, makePalette, areaTintOf, onRoadOf, hydroElevation,
     BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, SEA_BED, AREA_MIX, RELIEF_MIN,
   };
 }

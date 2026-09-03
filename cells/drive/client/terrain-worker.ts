@@ -22,6 +22,8 @@ export interface TerrainJob {
   id: number; epoch: number; key: string;
   tile: HeightTile;
   seg: number; corridor: boolean; refine: boolean;
+  /** Side of the hydro elevation raster wanted with the reply, 0 for none. */
+  hydroN: number;
   baseElev: number; seaAbs: number; seaOn: boolean; dryAt: boolean;
   nrmScale: number; cutWash: number; cprobe: boolean; cutRelief: boolean;
   cutL: number; grid: number; water: number; built: number; waterTilt: number; coverPx: number;
@@ -38,6 +40,7 @@ export interface TerrainReply {
   pos: Float32Array; uv: Float32Array; idx: Uint32Array; colors: Float32Array; normals: Float32Array;
   kinds: Uint8Array | null; cellOffs: Int32Array; cellTris: Int32Array;
   border: Float64Array; normalMap: Uint8Array; refined: boolean; corridor: boolean;
+  hydroElev: Float32Array | null;
   followers: string[]; workerMs: number;
   carveLog: CarveLog | null;
   refineCost: Record<string, number>; plainCost: Record<string, number | string>; carveCost: Record<string, number>;
@@ -108,6 +111,7 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
       };
       const b = K.buildTile(S, t, job.seg, job.corridor, job.refine);
       const normalMap = K.normalMapBytes(S, t);
+      const hydroElev = job.hydroN > 0 ? K.hydroElevation(S, t, job.hydroN) : null;
       const border = borders.get(job.key) ?? new Float64Array(0);
       const followers: string[] = [];
       for (const [dx, dy] of [[1, 0], [0, 1]]) {
@@ -118,11 +122,12 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
         id: job.id, key: job.key, epoch: job.epoch,
         pos: b.pos, uv: b.uv, idx: b.idx, colors: b.colors, normals: b.normals, kinds: b.kinds,
         cellOffs: b.cellTris.offs, cellTris: b.cellTris.tris, border, normalMap, refined: b.refined, corridor: b.corridor,
-        followers, workerMs: performance.now() - t0, carveLog: carveLog.get(job.key) ?? null,
+        hydroElev, followers, workerMs: performance.now() - t0, carveLog: carveLog.get(job.key) ?? null,
         refineCost: { ...K.refineCost }, plainCost: { ...K.plainCost }, carveCost: { ...K.carveCost },
       };
       const transfer = [b.pos.buffer, b.uv.buffer, b.idx.buffer, b.colors.buffer, b.normals.buffer, b.cellTris.offs.buffer, b.cellTris.tris.buffer, normalMap.buffer] as unknown as Transferable[];
       if (b.kinds) transfer.push(b.kinds.buffer as unknown as Transferable);
+      if (hydroElev) transfer.push(hydroElev.buffer as unknown as Transferable);
       (self as unknown as { postMessage(m: unknown, t: Transferable[]): void }).postMessage(reply, transfer);
     } catch (error) {
       (self as unknown as { postMessage(m: unknown): void }).postMessage({ id: job.id, key: job.key, epoch: job.epoch, error: String(error && (error as Error).stack || error) });
