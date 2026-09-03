@@ -996,13 +996,25 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   session aggregate the windows never reset: per phase, total ms, calls,
   max, and — the part that isolates a contributor — the ms it spent inside
   frames over 50 ms and how often it was the largest thing in one. The
-  remainder of a slow frame that no wrapped call explains is its own row,
-  `unattributed` (GC, the GPU's own wait, an event-loop task nothing wraps).
-  A double tap on the FPS figure copies the report to the clipboard, or
-  opens it in a text box where the clipboard is refused; `__telemetry()`
-  returns the same text for the harness. Read the "in slow frames" columns
-  first: a phase with a small total but a large slow-frame share is the one
-  causing drops.
+  tick is sectioned with `profMark` (sim:drive, sim:collide,
+  sim:suspension, lamps, world:fx, world:stream, camera, hud+misc,
+  draw:misc): a mark claims everything since the previous one that no
+  wrapped call inside it already took, so inline code shows up by name.
+  What nothing explains is two rows, not one: `tick residue` (tick code no
+  mark covers — it reads 0 now) and `gap (gpu/vsync/gc)` (time the main
+  thread never ran: the GPU's wait, vsync, GC). Off-tick tasks are wrapped
+  too (terrainApply, hydroRefeed, tileDecode, coverDecode, osmParse) and
+  counted against the frame that paid for them. The "main thread" line is
+  the CPU-or-GPU verdict: a gap that dwarfs the tick is the GPU or vsync.
+  The first device report (iPhone, 153 s) had 70% of wall time in one
+  undifferentiated row and could not say which; with p50 28 ms and ~8 ms
+  of JS a frame, most of it was vsync quantisation (a 17 ms budget missed
+  by a little costs a whole 33 ms frame). A double tap on the FPS figure
+  copies the report to the clipboard, or opens it in a text box where the
+  clipboard is refused; `__telemetry()` returns the same text for the
+  harness. Read the "in slow frames" columns first: a phase with a small
+  total but a large slow-frame share is the one causing drops; the slow
+  frame log names each frame's top three, so stacked jobs show as such.
 
 - **THE LUMA READBACK IS ASYNCHRONOUS.** `stepLuma` read its 40×88 luma
   and depth target with `readRenderTargetPixels` — a synchronous
