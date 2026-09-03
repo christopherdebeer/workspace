@@ -848,9 +848,22 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   in flight, nothing queued); a tile built plain meanwhile is rebuilt with
   its corridor by the quiet path, once.
 
+- **T-junction repair.** A cell's line list is capped at 16 (widest roads
+  first), so the cell next door may keep a line this one dropped — or lie
+  in the next tile — and a point then stands on the shared edge for one
+  side only: black dashes along the horizon at Vélizy, pure (0,0,0) in the
+  frame, which is the void through a crack and not a shading seam. After
+  every cell has split, each refined cell takes every point any neighbour
+  put on its edges (`edgePts`, the same store the plain rings read, seeded
+  with the next tile's border) into the side of the polygon it lies on.
+  The vertex-fan shortcut is judged on the ring AFTER that.
+
 `__refine()` counts tiles, split cells, vertices, triangles against the
 plain grid and milliseconds by phase (lines, split, heights, geometry).
 `tiles` counts BUILDS, not tiles — read it against the tile count.
+`__nrmEdge(x, z)` reads a tile's normal map along its four edges against
+the row inside (mean degrees) and the border vertex colour against one
+row in — a lighting seam is a number there before it is a line.
 
 **`__meshAt` was shadowed.** A second binding later in the file made it the
 RAYCAST probe, which answered 1688 at Dante's View where the vertex under
