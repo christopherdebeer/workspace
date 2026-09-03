@@ -68,6 +68,22 @@ export interface SolveEnv {
  *  profile of its own and pinned the real road to it. */
 const NOT_DRIVABLE = ['track', 'path', 'bridleway', 'cycleway', 'footway', 'steps', 'services'];
 
+/**
+ * WHICH LEVEL A WAY IS ON, as OSM means it. `layer` is the explicit answer;
+ * where it is absent, `bridge=*` means above and `tunnel=*` means below — a
+ * bridge with no layer tag is far more common than a bridge with one. A
+ * gallery (`tunnel=avalanche_protector`, `covered=yes`) keeps the road's own
+ * grade in the open air and is not below anything.
+ */
+export function layerOf(t: Record<string, string> | undefined): number {
+  if (!t) return 0;
+  const l = Number(t.layer);
+  if (t.layer !== undefined && Number.isFinite(l)) return l;
+  if (t.bridge && t.bridge !== 'no') return 1;
+  if (t.tunnel && t.tunnel !== 'no' && t.tunnel !== 'avalanche_protector' && !(t.covered && t.covered !== 'no')) return -1;
+  return 0;
+}
+
 const HINT_CELL = 24;
 
 /**
@@ -77,7 +93,23 @@ const HINT_CELL = 24;
  */
 export class RoadSolver {
   /** Settled deck heights, spatially hashed. Advisory — rebuilt per tile. */
-  readonly hints = new Map<string, Array<[number, number, number]>>();
+  /**
+   * x, z, deck height — AND THE LAYER. OSM says which roads pass over which:
+   * `layer=1 bridge=yes` on a flyover, `layer=-1` on the underpass, nothing on
+   * the road at grade. The junction pin below is "another road's deck within
+   * three metres of this station", which at 12m station spacing is a coin flip
+   * for any crossing, and without the layer it welds a flyover to the road it
+   * crosses. Counted offline at the Vélizy interchange: 44 grade-separated
+   * crossings, 10 of them inside the pin radius. So a hint carries the layer
+   * it was solved on, and a pin is only ever taken from the same layer.
+   */
+  /** [x, z, y, layer, chain, index] — the last two say which planned chain a
+   *  hint belongs to and where along it, so a lookup can read the chain's
+   *  SEGMENTS and not only its stations (see hintAt). */
+  readonly hints = new Map<string, Array<[number, number, number, number, number, number]>>();
+  /** Each planned chain's stations, by the id its hints carry. */
+  readonly chains = new Map<number, { xs: number[]; zs: number[]; ys: number[]; ls: number[] }>();
+  private chainSeq = 0;
   /** Ways already solved in some chain, so a later tile does not redo them. */
   readonly hinted = new Set<string>();
   /** Where roads were found to meet. */
@@ -139,6 +171,7 @@ export class RoadSolver {
     this.lastSwept.hints = this.hints.size;
     this.lastSwept.juncs = this.junctions.size;
     this.hints.clear();
+    this.chains.clear();
     this.hinted.clear();
     this.junctions.clear();
     this.profiles.length = 0;
@@ -148,24 +181,147 @@ export class RoadSolver {
     st.opened = 0; st.dropped.length = 0;
   }
 
-  writeHints(dense: Array<[number, number]>, alg: number[]): void {
+  /** `layers` is per station: a chain is one named road, and OSM splits a road
+   *  at its bridge, so one chain can run at grade, over a flyover, and back. */
+  writeHints(dense: Array<[number, number]>, alg: number[], layers?: ArrayLike<number>): void {
     if (this.recording) this.profiles.push(dense.map((p, i) => [p[0], p[1], alg[i]]));
-    if (this.hints.size > 6000) this.hints.clear();   // advisory data; rebuilt per tile
+    if (this.hints.size > 6000) { this.hints.clear(); this.chains.clear(); }   // advisory data; rebuilt per tile
+    const id = ++this.chainSeq;
+    const ls = Array.from({ length: dense.length }, (_, i) => (layers ? layers[i] : 0));
+    this.chains.set(id, { xs: dense.map((p) => p[0]), zs: dense.map((p) => p[1]), ys: alg.slice(), ls });
     for (let i = 0; i < dense.length; i++) {
       const k = `${Math.floor(dense[i][0] / HINT_CELL)},${Math.floor(dense[i][1] / HINT_CELL)}`;
-      const e: [number, number, number] = [dense[i][0], dense[i][1], alg[i]];
+      const e: [number, number, number, number, number, number] = [dense[i][0], dense[i][1], alg[i], ls[i], id, i];
       const arr = this.hints.get(k);
       if (arr) arr.push(e); else this.hints.set(k, [e]);
+      // A PORTAL IS ON BOTH LAYERS. The shared node is one station and
+      // carries the bridge's layer, so the approach — asking for its own
+      // layer at its own end — found nothing there: its last station had no
+      // hint, and at Vélizy the approach's deck was simply absent at the N 118
+      // portal after the world settled. The station's value is the chain's,
+      // one profile for both members, so it is written once more under the
+      // neighbouring station's layer wherever the layer changes.
+      for (const j of [i - 1, i + 1]) {
+        if (j < 0 || j >= dense.length || ls[j] === ls[i]) continue;
+        const twin: [number, number, number, number, number, number] = [dense[i][0], dense[i][1], alg[i], ls[j], id, i];
+        const a2 = this.hints.get(k);
+        if (a2) a2.push(twin); else this.hints.set(k, [twin]);
+      }
     }
   }
 
-  hintAt(x: number, z: number, reach = 6): number | null {
+  /**
+   * The settled deck nearest to a point within `reach` — on `layer` only, when
+   * one is given: a flyover's station must never read the road beneath it.
+   *
+   * READ ALONG THE CHAIN, NOT ONLY AT ITS STATIONS. This was the nearest
+   * STATION within reach, and a per-way station on a straight leg only found
+   * one when the chain's densify happened to be in phase with the way's own.
+   * They are in phase exactly when the chain begins where the way begins;
+   * where the chain has rounded a corner, or started three ways back, its
+   * stations along a 12m-stepped leg sit anywhere up to 6m from the way's,
+   * and the way loses its hints on a coin toss. Measured on Shanklin Crescent
+   * at Camps Bay: an 82m two-node way came out under the 80% hint gate, fell
+   * to the single-anchor branch, was held LEVEL at the deck its far end had
+   * found, and its hinted neighbour then welded 10.6m up to meet it. The
+   * chain's deck between two stations is the straight line the ribbon draws
+   * between them, so the projection onto that segment IS the chain's answer
+   * there, and a way now reads its chain wherever the chain passes.
+   */
+  hintAt(x: number, z: number, reach = 6, layer?: number): number | null {
     let best: number | null = null, bd = reach;
     for (const dx of [0, -HINT_CELL, HINT_CELL]) for (const dz of [0, -HINT_CELL, HINT_CELL]) {
       const arr = this.hints.get(`${Math.floor((x + dx) / HINT_CELL)},${Math.floor((z + dz) / HINT_CELL)}`);
-      if (arr) for (const [hx, hz, he] of arr) {
+      if (arr) for (const [hx, hz, he, hl, ci, ii] of arr) {
+        if (layer !== undefined && hl !== layer) continue;
         const d = Math.hypot(hx - x, hz - z);
         if (d < bd) { bd = d; best = he; }
+        // The segment from this station to the chain's next, if it stays on
+        // the layer asked for. Its far station is at most a densify step
+        // away, so a point within reach of the segment always has one of
+        // its ends inside the cells searched here.
+        const ch = this.chains.get(ci);
+        if (!ch || ii + 1 >= ch.xs.length) continue;
+        if (layer !== undefined && ch.ls[ii + 1] !== layer) continue;
+        const sx = ch.xs[ii + 1] - hx, sz = ch.zs[ii + 1] - hz;
+        const l2 = sx * sx + sz * sz;
+        if (l2 < 1e-6) continue;
+        const t = ((x - hx) * sx + (z - hz) * sz) / l2;
+        if (t <= 0 || t >= 1) continue;
+        const pd = Math.hypot(hx + sx * t - x, hz + sz * t - z);
+        if (pd < bd) { bd = pd; best = he + (ch.ys[ii + 1] - he) * t; }
+      }
+    }
+    return best;
+  }
+
+  /**
+   * How many DISTINCT chains pass within `r` of a point on `layer` — two or
+   * more is a junction, and the per-way build holds such a station through
+   * every stage that would otherwise move it off the planner's pin.
+   *
+   * This counted HINTS within 0.3m, which is two chains only where both have
+   * a station on the very node — and the through road's densify rounds a
+   * bend at that node into an arc whose stations sit r(1-cos(turn/2)) off
+   * it: 0.3m at a 30-degree bend of a 9m arc, 2.6m at a right angle. Fifteen
+   * of Camps Bay's through-node stations were losing their pin to the grade
+   * line for exactly that reason, all of them at bends. Counting chains, by
+   * the id every hint carries now, at the planner's own pin radius and by
+   * the same point-or-segment distance hintAt reads, holds what the planner
+   * pinned — no more and no less.
+   */
+  chainsNear(x: number, z: number, r: number, layer: number, cap = 2): number {
+    const seen = new Set<number>();
+    for (const dx of [0, -HINT_CELL, HINT_CELL]) for (const dz of [0, -HINT_CELL, HINT_CELL]) {
+      const arr = this.hints.get(`${Math.floor((x + dx) / HINT_CELL)},${Math.floor((z + dz) / HINT_CELL)}`);
+      if (arr) for (const [hx, hz, , hl, ci, ii] of arr) {
+        if (hl !== layer || seen.has(ci)) continue;
+        let d = Math.hypot(hx - x, hz - z);
+        const ch = this.chains.get(ci);
+        if (d >= r && ch && ii + 1 < ch.xs.length && ch.ls[ii + 1] === layer) {
+          const sx = ch.xs[ii + 1] - hx, sz = ch.zs[ii + 1] - hz;
+          const l2 = sx * sx + sz * sz;
+          if (l2 > 1e-6) {
+            const t = ((x - hx) * sx + (z - hz) * sz) / l2;
+            if (t > 0 && t < 1) d = Math.hypot(hx + sx * t - x, hz + sz * t - z);
+          }
+        }
+        if (d < r && (seen.add(ci), seen.size >= cap)) return seen.size;
+      }
+    }
+    return seen.size;
+  }
+
+  /**
+   * The highest settled deck within `r` on any layer BELOW `layer` — what a
+   * flyover has to clear. Read from the hints rather than the built grid
+   * because a tile is planned whole before any of its ribbons build, so the
+   * road beneath is known here whether or not it has been drawn yet.
+   */
+  deckBelow(x: number, z: number, layer: number, r: number): number | null {
+    let best: number | null = null;
+    for (const dx of [0, -HINT_CELL, HINT_CELL]) for (const dz of [0, -HINT_CELL, HINT_CELL]) {
+      const arr = this.hints.get(`${Math.floor((x + dx) / HINT_CELL)},${Math.floor((z + dz) / HINT_CELL)}`);
+      if (arr) for (const [hx, hz, hy, hl] of arr) {
+        if (hl >= layer) continue;
+        if (Math.hypot(hx - x, hz - z) > r) continue;
+        if (best === null || hy > best) best = hy;
+      }
+    }
+    return best;
+  }
+
+  /** The highest settled deck within `r` on any layer ABOVE `layer` — a
+   *  planned portal an approach should wait for, whether or not it has been
+   *  built yet. */
+  hintAbove(x: number, z: number, layer: number, r: number): number | null {
+    let best: number | null = null;
+    for (const dx of [0, -HINT_CELL, HINT_CELL]) for (const dz of [0, -HINT_CELL, HINT_CELL]) {
+      const arr = this.hints.get(`${Math.floor((x + dx) / HINT_CELL)},${Math.floor((z + dz) / HINT_CELL)}`);
+      if (arr) for (const [hx, hz, hy, hl] of arr) {
+        if (hl <= layer) continue;
+        if (Math.hypot(hx - x, hz - z) > r) continue;
+        if (best === null || hy > best) best = hy;
       }
     }
     return best;
@@ -202,7 +358,7 @@ export class RoadSolver {
     // A worker solve may finish after a world hop. reset() advances sweeps, so
     // stale local coordinates can be rejected before they repopulate hints.
     const sweep = this.sweeps;
-    interface Mem { pts: Array<[number, number]>; name?: string; g: number; key: string; fresh: boolean }
+    interface Mem { pts: Array<[number, number]>; name?: string; g: number; key: string; fresh: boolean; tags: Record<string, string> }
     // ONE ENTRY PER OSM WAY, longest geometry wins. The same road reaches here
     // twice: clipped to this tile in `els`, and whole in a neighbour's cached
     // copy. The whole one is the better thing to solve over — the clip is a
@@ -223,23 +379,48 @@ export class RoadSolver {
         prev.fresh ||= fresh;
       }
     };
-    for (const el of els) consider(el, !this.hinted.has(String(el.id)));
+    for (const el of els) consider(el, true);
     for (const el of halo) consider(el, false);
 
+    // A WAY IS PLANNED AS FAR AS THE GROUND IS LOADED. A rural way runs for
+    // kilometres — 285 points at Senqu — and the height check used to want
+    // every one of them under a loaded tile, or the whole way was dropped.
+    // Measured there: 23 ways considered, 23 dropped, zero chains, and every
+    // fragment then built by its own devices, one of them a 110m piece held
+    // LEVEL that put the road 11m under the hill or 11m over it, run to run.
+    // The way is now cut into the runs its nodes AND the densified stations
+    // between them have ground under, and each run is a member with its own
+    // key; a run that grows as more ground streams in is a new key, so it is
+    // fresh and solved again over the wider ground.
+    const linkCovered = (a: [number, number], b: [number, number]): boolean =>
+      densifyPts([a, b]).every(([px, pz]) => env.hasHeight(px, pz));
     const mems: Mem[] = [];
     for (const [id, { el, fresh }] of byId) {
       const t = el.tags ?? {};
       const pts: Array<[number, number]> = (el.geometry ?? []).map((g2) => env.toLocal(g2.lat, g2.lon));
       if (pts.length < 2) continue;
-      let ok = true;
-      for (const [px, pz] of pts) if (!env.hasHeight(px, pz)) { ok = false; break; }
       this.stats.considered++;
-      if (ok) mems.push({ pts, name: t.name, g: env.gradeMax[t.highway] ?? 0.15, key: id, fresh });
-      else {
+      const runs: Array<{ from: number; pts: Array<[number, number]> }> = [];
+      let run: Array<[number, number]> = [], from = 0;
+      const close = (): void => { if (run.length >= 2) runs.push({ from, pts: run }); run = []; };
+      for (let i = 0; i < pts.length; i++) {
+        if (!env.hasHeight(pts[i][0], pts[i][1])) { close(); continue; }
+        if (run.length && !linkCovered(pts[i - 1], pts[i])) close();
+        if (!run.length) from = i;
+        run.push(pts[i]);
+      }
+      close();
+      if (!runs.length) {
         this.stats.noHeight++;
         if (this.stats.dropped.length < 12) {
           this.stats.dropped.push(`${t.name ?? '(unnamed)'} [${t.highway}] ${pts.length}pts`);
         }
+        continue;
+      }
+      for (const r of runs) {
+        const whole = r.pts.length === pts.length;
+        const key = whole ? id : `${id}:${r.from}+${r.pts.length}`;
+        mems.push({ pts: r.pts, name: t.name, g: env.gradeMax[t.highway] ?? 0.15, key, fresh: fresh && !this.hinted.has(key), tags: t });
       }
     }
 
@@ -272,11 +453,34 @@ export class RoadSolver {
       // ones already standing.
       if (!chain.some((m) => m.fresh)) continue;
       const all: Array<[number, number]> = [];
-      for (const m of chain) for (const pt of m.pts) {
-        if (!all.length || Math.hypot(pt[0] - all[all.length - 1][0], pt[1] - all[all.length - 1][1]) > 0.5) all.push(pt);
+      const allL: number[] = [];                       // the layer of the member each point came from
+      for (const m of chain) {
+        const L = layerOf(m.tags);
+        for (const pt of m.pts) {
+          if (!all.length || Math.hypot(pt[0] - all[all.length - 1][0], pt[1] - all[all.length - 1][1]) > 0.5) { all.push(pt); allL.push(L); }
+          // A PORTAL BELONGS TO THE BRIDGE. The point two members share is kept
+          // once, and it was keeping the first member's layer — the approach's
+          // — so the hint at the node sat on layer 0, hintAbove found nothing
+          // above it, and the approach never waited: measured at Vélizy, every
+          // lifted bridge standing 5.9m over its own approach. The shared point
+          // takes the higher of the two layers; the approach's own end then
+          // reads no hint of its own there and holds its next station's, which
+          // the interpolation already does for an unhinted end.
+          else if (L > allL[allL.length - 1]) allL[allL.length - 1] = L;
+        }
       }
       const dense = densifyPts(all);
       if (dense.length < 8) continue;                  // single crumbs keep the fallback path
+      // A dense station's layer is its nearest source vertex's. Densify keeps
+      // the source vertices and only interpolates between them, so this walks
+      // forward in step with the chain rather than searching.
+      const layers = new Int8Array(dense.length);
+      { let k = 0;
+        for (let i = 0; i < dense.length; i++) {
+          while (k + 1 < all.length && Math.hypot(all[k + 1][0] - dense[i][0], all[k + 1][1] - dense[i][1])
+            <= Math.hypot(all[k][0] - dense[i][0], all[k][1] - dense[i][1])) k++;
+          layers[i] = allL[k];
+        } }
       const a0 = env.deckAnchorAt(dense[0][0], dense[0][1]);
       const a1 = env.deckAnchorAt(dense[dense.length - 1][0], dense[dense.length - 1][1]);
       // JUNCTION PINS. Chains are solved one after another, so the hint store
@@ -288,12 +492,12 @@ export class RoadSolver {
       // other, and nothing is pinned — which is precisely the distinction
       // between a turning and a flyover, taken from the data rather than
       // guessed from heights.
-      const pins = dense.map(([px, pz]) => (env.juncPins ? this.hintAt(px, pz, env.juncR) : null));
+      const pins = dense.map(([px, pz], i) => (env.juncPins ? this.hintAt(px, pz, env.juncR, layers[i]) : null));
       for (let i = 0; i < dense.length; i++) if (pins[i] != null) this.noteJunction(dense[i][0], dense[i][1]);
       const alg = await env.solveChain(dense, Math.min(...chain.map((m) => m.g)),
         a0 === null ? null : a0 - env.roadLift, a1 === null ? null : a1 - env.roadLift, pins);
       if (sweep !== this.sweeps) return;
-      this.writeHints(dense, alg);
+      this.writeHints(dense, alg, layers);
       {
         let len = 0;
         for (let i = 1; i < dense.length; i++) {

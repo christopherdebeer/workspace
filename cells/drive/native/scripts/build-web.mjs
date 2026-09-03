@@ -1,6 +1,6 @@
 import { build } from 'esbuild';
 import { cp, readFile, rm, mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const NATIVE = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -14,7 +14,23 @@ const buildId = process.env.DRIVE_BUILD_ID
 
 await rm(OUT, { recursive: true, force: true });
 await mkdir(OUT, { recursive: true });
-await cp(join(CELL, 'web'), OUT, { recursive: true });
+// NOT THE FIXTURES. static/fixtures/ holds the captured lab worlds — six of
+// them, 2.4MB — which the cell serves over the wire so they stay out of app.js.
+// A recursive copy of static/ would put every one of them inside the native
+// bundle instead, for a lab a player never opens. Everything else in static/
+// (the icons, the manifest, the worker) is the app's own surface and ships.
+await cp(join(CELL, 'static'), OUT, {
+  recursive: true,
+  filter: (src) => !src.includes(`${sep}static${sep}fixtures`),
+});
+// THE PACKAGED SHELLS MUST NOT CARRY A SERVICE WORKER. `web/` is the browser
+// cell's static surface and sw.js lives there with the icons it precaches, but
+// it precaches absolute paths on the deployed host — and these shells serve the
+// same bundle from `drive://app` and `capacitor://localhost`, where those paths
+// mean nothing and nothing needs them anyway: the whole application is already
+// on the disk. Shipping it would be dead weight at best and a worker fighting
+// the local origin at worst.
+await rm(join(OUT, 'sw.js'), { force: true });
 
 const result = await build({
   absWorkingDir: NATIVE,

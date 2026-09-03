@@ -1,4 +1,15 @@
+import { createHash } from 'node:crypto';
 import { readFileSync } from 'node:fs';
+// The web surface is READ FROM DISK, from `static/` beside index.js in
+// /var/task. It used to travel inside the bundle as a generated 230KB module of
+// base64 string literals, because a cell could not ship bytes: source files
+// were carried through the cells tools as JSON strings and stored as UTF-8, so
+// a PNG came back larger and wrong (19,203 bytes in, 34,465 out) and the icons
+// and manifest were dead on the live cell from the day they landed. That is
+// fixed at the platform now — `cells.writeFile` takes `encoding: 'base64'`,
+// `static/` deploys as bytes — so the generated module and its build script are
+// gone and `static/` is the one source of truth, copied verbatim by the native
+// shells too.
 import { join } from 'node:path';
 import { gzipSync, deflateSync, inflateSync } from 'node:zlib';
 
@@ -56,7 +67,11 @@ export const CSP = [
   // The menu's pixel face (Silkscreen) ships inside the bundle as data: URIs —
   // no font host, so the page stays self-contained.
   'font-src data:',
-  'worker-src blob:',
+  // blob: is the road profile solver; 'self' is /sw.js. A document may only
+  // register a service worker its OWN policy admits, and this directive is
+  // where that is decided — the registration fails silently otherwise, which
+  // is the same shape of invisible failure the mapterhorn host had above.
+  "worker-src 'self' blob:",
   "base-uri 'none'",
   "form-action 'none'",
 ].join('; ');
@@ -139,10 +154,118 @@ const WEB_ASSETS: Record<string, { file: string; type: string }> = {
   '/icons/drive-maskable-512.png': { file: 'icons/drive-maskable-512.png', type: 'image/png' },
 };
 
+/**
+ * THE SERVICE WORKER, STAMPED WITH THE BUNDLE IT BELONGS TO.
+ *
+ * The worker names its cache after this hash, so a deploy is a new cache filled
+ * from scratch and the page can never be served against an `app.js` it was not
+ * built with. Hashing the bundle rather than taking a version from anywhere
+ * else means the stamp cannot drift from what is actually being served: the two
+ * come off the same bytes on the same disk.
+ *
+ * Computed once per container and held, because it is 1.4MB of SHA1 and the
+ * answer cannot change under a running Lambda. Lazily, not at import: a deploy
+ * that somehow lacked `app.js` would otherwise take the whole cell down instead
+ * of one route.
+ */
+let bundleStamp: string | null = null;
+function serveServiceWorker() {
+  if (bundleStamp === null) {
+    try {
+      bundleStamp = createHash('sha1')
+        .update(readFileSync(join(__dirname, 'app.js'))).digest('hex').slice(0, 12);
+    } catch { bundleStamp = 'unstamped'; }
+  }
+  const body = webText('sw.js').replace('__DRIVE_SW_BUILD__', bundleStamp);
+  return respond(200, 'application/javascript; charset=utf-8', body, {
+    // The one file that must never come from a stale cache: it is the only
+    // thing that can replace a stale cache. Browsers already refuse to reuse a
+    // worker script older than a day; this says so for the rest.
+    'cache-control': 'no-cache',
+  });
+}
+
+/**
+ * A file from `static/`, read once and kept.
+ *
+ * READ WITHOUT AN ENCODING, so it is a Buffer and stays one. The whole class of
+ * bug this replaces was a UTF-8 decode applied to bytes that are not text —
+ * every invalid sequence becomes U+FFFD, which does not merely corrupt the file
+ * but INFLATES it, silently, behind a 200 and a correct content-type. So the
+ * icons never become strings anywhere in this path: disk to Buffer to base64 to
+ * the wire.
+ *
+ * Cached because a warm Lambda serves the same five icons for its whole life
+ * and /var/task is read-only — there is nothing to invalidate.
+ */
+const webCache = new Map<string, Buffer>();
+function webBytes(file: string): Buffer {
+  const hit = webCache.get(file);
+  if (hit) return hit;
+  const buf = readFileSync(join(__dirname, 'static', file));
+  webCache.set(file, buf);
+  return buf;
+}
+/** The text ones — the worker and the manifest — decoded at the last moment. */
+const webText = (file: string): string => webBytes(file).toString('utf8');
+
+/**
+ * ── A CAPTURED FIXTURE, OVER THE WIRE ──
+ *
+ * These used to be `import world-bixby.json` in the client, which esbuild
+ * inlines: six captures came to 2.37MB against a 1.51MB bundle, so they would
+ * have been sixty per cent of app.js on a game whose first tenet is mobile
+ * first. They live in `static/fixtures/` now and are fetched only when a URL
+ * actually names one.
+ *
+ * The name is matched against a strict pattern rather than joined straight onto
+ * a path: `readFileSync(join(dir, req))` with an unchecked name is how a static
+ * route becomes a file-read primitive, and `..` survives a lot of naive
+ * checking. Only `world-<lowercase, digits, dashes>.json` can address anything
+ * here, and a name that does not match never reaches the filesystem.
+ *
+ * Immutable, because a capture never changes in place: a new capture of the
+ * same place is still the same file, but its content only moves when someone
+ * re-runs the tool and deploys, and the bundle stamp changes with it.
+ */
+const FIXTURE_NAME = /^world-[a-z0-9-]+\.json$/;
+
+function serveFixture(path: string) {
+  const name = path.slice('/fixtures/'.length);
+  if (!FIXTURE_NAME.test(name)) return null;
+  let body: Buffer;
+  try {
+    body = webBytes(join('fixtures', name));
+  } catch {
+    return null;                       // absent is a 404, as for any other asset
+  }
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'cache-control': 'public, max-age=86400',
+    },
+    body: body.toString('base64'),
+    isBase64Encoded: true,
+  };
+}
+
 function serveWebAsset(path: string) {
   const asset = WEB_ASSETS[path];
   if (!asset) return null;
-  const body = readFileSync(join(__dirname, 'web', asset.file));
+  // ONE EXIT, base64, for text and bytes alike: the manifest could go out as a
+  // string but then this function would have two shapes and the icons would be
+  // the special case, which is how the last version of it got this wrong.
+  let body: string;
+  try {
+    body = webBytes(asset.file).toString('base64');
+  } catch {
+    // A missing static file is a DEPLOY fault, not a request fault. 404 rather
+    // than 500 so it reads the same as it did when these were served from a
+    // module that could not fail — and so the appshell test's fetch of every
+    // declared asset still names which one is absent.
+    return null;
+  }
   return {
     statusCode: 200,
     headers: {
@@ -151,7 +274,7 @@ function serveWebAsset(path: string) {
         ? 'public, max-age=3600'
         : 'public, max-age=86400',
     },
-    body: body.toString('base64'),
+    body,
     isBase64Encoded: true,
   };
 }
@@ -458,7 +581,13 @@ const OV_RE = /^\/~\/osm\/ov1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // Per zoom, because the ladder below admits more classes as tiles shrink:
 // measured, central London at z12 lands at 5174 elements with rail in — the
 // worst real tile should pass, and a truncated one must not.
-const OV_CAP: Record<number, number> = { 10: 3000, 11: 4500, 12: 6000, 13: 6000 };
+// The TRUNCATION TRIPWIRE, per level — `out geom N`, and a response AT N is a
+// truncation rather than an answer. It rises with zoom because the class ladder
+// does (z13 carries tertiaries, z<=10 carries motorways and little else), and
+// the two coarse rungs get more headroom than z10 for the opposite reason: the
+// same narrow class set over 4x and 16x the ground. Measured on the first z9
+// tiles served: 19-24KB gzipped, nowhere near the cap.
+const OV_CAP: Record<number, number> = { 8: 8000, 9: 6000, 10: 3000, 11: 4500, 12: 6000, 13: 6000 };
 // These tiles are rare and cached forever, so they may spend upstream time a
 // fine tile cannot. Measured: a z10 coastal tile needs 11-18s of Overpass, and
 // the densest z12 boxes on the line want more — the fine budget's 5s-per-mirror
@@ -1573,8 +1702,13 @@ export const handler = async (event: {
     });
   }
   try {
+    if (path === '/sw.js') return serveServiceWorker();
     const asset = serveWebAsset(path);
     if (asset) return asset;
+    if (path.startsWith('/fixtures/')) {
+      const fx = serveFixture(path);
+      if (fx) return fx;
+    }
     if (path === '/app.js') {
       return respond(200, 'application/javascript; charset=utf-8', readFileSync(join(__dirname, 'app.js'), 'utf8'), {
         'cache-control': 'public, max-age=60',

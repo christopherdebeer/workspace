@@ -166,9 +166,9 @@ export interface HydroTileField {
   width: number;
   height: number;
   elevationBaseM: number;
-  geometry: Float32Array;
-  dynamics: Float32Array;
-  material: Uint8Array;
+  geometry: Float32Array<ArrayBuffer>;
+  dynamics: Float32Array<ArrayBuffer>;
+  material: Uint8Array<ArrayBuffer>;
   /**
    * ── RIVER SPACE, PER TEXEL ──
    *
@@ -189,7 +189,7 @@ export interface HydroTileField {
    * 2048, which returns as phase jitter exactly where a long river needs
    * the coordinate most.
    */
-  structure?: Float32Array;
+  structure?: Float32Array<ArrayBuffer>;
   hasWater: boolean;
   /**
    * The world rect the water actually occupies, padded by a texel.

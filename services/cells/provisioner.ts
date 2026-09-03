@@ -65,8 +65,12 @@ export async function uploadCode(p: UploadCodeParams): Promise<void> {
 export interface UploadPackageParams {
   bucket: string;
   key: string;
-  /** Files for the deployment package (handler + client bundle + static assets). */
-  files: Array<{ name: string; content: string }>;
+  /**
+   * Files for the deployment package (handler + client bundle + static assets).
+   * A Buffer entry ships verbatim — that is how a `static/` icon, font or sound
+   * reaches /var/task intact rather than as UTF-8 replacement characters.
+   */
+  files: Array<{ name: string; content: string | Buffer }>;
 }
 
 /** Upload a multi-file deployment package (the tier-2 mirror of home's asset). */

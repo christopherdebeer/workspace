@@ -20,11 +20,12 @@ import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, altBandAt, aspectLi
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, bedrockAt, buildLookAt, paintFor, roadLookAt,
   seedAt, snowLoad, stoneWalls, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
+import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
 import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSystem, type OceanCoverage } from './hydro';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
-import { RoadSolver, densifyPts } from './roadsolve';
+import { RoadSolver, densifyPts, layerOf } from './roadsolve';
 import {
   BENCH_OFFS, BENCH_K, BENCH_C, benchFlat, ruleGrade, latCands,
   solveChain as solveProfile,
@@ -47,14 +48,27 @@ import {
   DEADWOOD, FOLIAGE_BANDS, STONE, STONE_MIX_ROWS, STONY, TRUNKED, VEG_CAP, VEG_MIX,
   VEG_SIZE, VEG_TREES, bandKind, coverKind as floraCoverKind, trunkReach,
   acaciaGeo, broadleaf, bushGeo, cactusGeo, conifer, faceTone, fernGeo, grassGeo, logGeo,
-  mergeGeos, palm, plantLook, rockGeo, snag, spireGeo, standTone,
+  makeSapling, mergeGeos, palm, plantLook, promoteAnchor, rockGeo, snag, spireGeo, standTone,
   type VegKind, type VegSite, type VegTone,
 } from './flora';
+import {
+  VEGETATION_DISTRIBUTION, vegetationCandidate, vegetationClumpChance, vegetationClumpRole,
+  vegetationDensity as vegDensity, vegetationLivingChance, vegetationRoleWeights,
+  type VegetationHabitat, type VegetationRole,
+} from './vegetation-field';
 import { decodeTune, fixtureById, type FixtureTune, type WorldFixture } from './world-fixtures';
 import {
   AUTH_BASE, AUTH_MODE, CELL_BASE, DRIVE_BUILD, closeExternalUrl, openExternalUrl,
-  publicCellUrl, publicGameUrl,
+  publicCellUrl, publicGameUrl, registerAppShell,
 } from './runtime';
+// Extracted so a test can drive the SHIPPED function — see client/clip.test.mjs
+// and the note in clip.ts about the corner nicks it used to drop.
+import { clipToBounds } from './clip';
+
+// AHEAD OF THE ROUTE BRANCH, so a lab visit arms offline boot for the game and
+// the other way round. One shell answers every path on this host, so there is
+// no route here that would want a different one.
+registerAppShell();
 
 // A DISTINCT EXECUTION SURFACE. The labs share the production modules, and
 // the route branch guarantees the game bootstrap and a lab never run
@@ -108,16 +122,47 @@ const FOG_PX = 1024;
 // ~36; water a wallow. Steering authority FALLS with speed (below) so 180
 // doesn't mean a 180°/s twitch.
 const CAR = { accel: 16, brake: 26, maxRev: 9, wheelbase: 2.9, steerMax: 0.6 };
-const CAM = { base: 175, perKmh: 1.1, tilt: 70 };
+// `fov` lives here rather than only in the PerspectiveCamera constructor
+// because the zoom ceiling is DERIVED from it (see ZOOM_MAX): the widest
+// useful zoom is a fact about the frustum, and two copies of the number would
+// let the ceiling drift away from the lens it was computed for.
+const CAM = { base: 175, perKmh: 1.1, tilt: 70, fov: 55 };
 // 44 put the camera 6.8km up over a 4.8×8.3km view — a regional chart, but
 // only just, and the streaming never followed it out there. 260 reaches ~40km
 // across, which is a whole mountain range, a coastline, or the far end of a
 // pass you have not driven yet.
-// 1600 puts the camera 280km up. The ceiling used to be 260 (45km) because
-// that was as far as the coarse shell reached; the shell now picks its own
-// zoom level, so the limit is what is worth looking at rather than what is
-// loaded.
-const ZOOM_MIN = 0.25, ZOOM_MAX = 1600;
+/**
+ * HOW FAR THE WORLD IS STREAMED, AND THEREFORE HOW FAR YOU MAY ZOOM OUT.
+ *
+ * These two were independent numbers and they had drifted a long way apart.
+ * `viewRadius` clamped the streamed disc at 60km; the ceiling stood at 1600,
+ * which puts the camera 280km up. Measured across the whole ladder at
+ * Chapman's Peak: every layer's readings are IDENTICAL at zoom 458, 800 and
+ * 1600 — same shell level, same tile counts, same everything — because the
+ * clamp had saturated at 458 and the remaining 3.5x of ceiling bought nothing
+ * but empty frame around an unchanged island of world. A cap you can reach and
+ * then keep pulling against is worse than a lower one that means something.
+ *
+ * So the reach is the number that is chosen, and the ceiling is derived from
+ * it. 300km is picked against the shell's own ladder: `farLevelFor` drops to
+ * z7 past ~196km, and a 5x5 ring of z7 tiles spans 626km at the equator — room
+ * to spare. Tiles shrink with cos(latitude), so the ring still covers 300km
+ * out to about 61 degrees and falls short of it beyond, which is the same
+ * honest degradation SIGHT_M documents for the near shell rather than a new
+ * kind of failure.
+ */
+const SIGHT_MAX = 300000;
+const ZOOM_MIN = 0.25;
+/**
+ * The zoom at which the frustum's ground radius reaches SIGHT_MAX — the same
+ * arithmetic `viewRadius` does, run backwards, at a standstill. Derived and
+ * not typed in, so raising the reach raises the ceiling with it and the two
+ * cannot come apart again.
+ */
+const ZOOM_MAX = SIGHT_MAX / (CAM.base
+  * Math.tan(((CAM.fov / 2) * Math.PI) / 180)
+  * Math.max(1, 1 / Math.cos(((90 - CAM.tilt) * Math.PI) / 180))
+  * 1.35);
 const CAR_R = 2.4;            // collision circle — a real car's half-diagonal plus a whisker
 
 // ── geo helpers (local metres around the spawn; x=east, z=south) ───
@@ -175,6 +220,72 @@ const fixtureES = (f: WorldFixture, lat: number, lon: number): [number, number] 
   [(lon - f.spawn.lon) * FIX_MLON, (f.spawn.lat - lat) * M_LAT];
 const fixtureLatLon = (f: WorldFixture, e: number, s: number): { lat: number; lon: number } =>
   ({ lat: f.spawn.lat - s / M_LAT, lon: f.spawn.lon + e / FIX_MLON });
+/**
+ * ── A FIXTURE IS A BOX, NOT A PLANET ──
+ *
+ * The streamer sizes its rings from the VIEW, which is right for a world that
+ * goes on for ever and wrong for one that stops. A z14 tile is about two
+ * kilometres, `tRing` is 2 to 3, and the cover ring is sized off `SIGHT_M` —
+ * so a fixture whose whole subject is 1.4km across was building a five-by-five
+ * to seven-by-seven block of ground, roughly ten kilometres on a side, and
+ * carving every tile of it. Measured on the Big Sur capture: 25 height tiles,
+ * 25 meshes, and a carve queue that took NINETY SECONDS to drain at one tile
+ * per 200ms — of which four tiles held every road in the fixture and the other
+ * twenty-one held the edge row of the height grid, smeared outward, with
+ * nothing on it.
+ *
+ * So a fixture streams its own extent instead. `FIX_R` is how far the authored
+ * world reaches — a capture's declared box, or the furthest way point of an
+ * authored one — plus a margin for the things built OUTSIDE the last kerb: the
+ * batter, the verge, the sward and the first rank of vegetation.
+ *
+ * Deliberately fixed at the fixture's ORIGIN rather than following the car. A
+ * ring that recentres would stream fresh ground as you drove off the edge, and
+ * there is no ground out there to stream: past the box a captured height grid
+ * clamps to its edge row and an authored one extrapolates whatever its formula
+ * says. Better that the world visibly ends where the evidence does.
+ */
+const FIX_MARGIN = 300;
+const FIX_R: number = (() => {
+  if (!FIXTURE) return 0;
+  // A CAPTURE'S OWN WORD FIRST. Measuring the ways is right for an authored
+  // fixture and badly wrong for a captured one: capture-world keeps any way
+  // that comes near the box, geometry and all, so a single arterial passing
+  // through measured 2,562m of extent for a 700m capture — and the streamer
+  // then built, and carved, nearly four times the ground that exists.
+  let r = FIXTURE.extent ?? 0;
+  if (!r) {
+    for (const w of FIXTURE.ways(FIXTURE_TUNE)) {
+      for (const [e, s] of w.pts) r = Math.max(r, Math.abs(e), Math.abs(s));
+    }
+  }
+  return Math.max(500, r + FIX_MARGIN);
+})();
+/**
+ * Every tile of `z` the fixture's box touches, absolute rather than a ring —
+ * and by its four CORNERS, because tile indices are not linear in metres and a
+ * box straddling a tile edge otherwise loses whichever tile it only just
+ * enters, which reads as a rectangular hole in the ground. Cached: the stream
+ * pass refires every ~1.2s and this answer never changes.
+ */
+const fixTileSets = new Map<number, Array<[number, number]>>();
+function fixtureTiles(z: number): Array<[number, number]> {
+  const held = fixTileSets.get(z);
+  if (held) return held;
+  const f = FIXTURE;
+  const out: Array<[number, number]> = [];
+  if (!f) return out;
+  let x0 = Infinity, y0 = Infinity, x1 = -Infinity, y1 = -Infinity;
+  for (const [e, s] of [[-FIX_R, -FIX_R], [FIX_R, -FIX_R], [-FIX_R, FIX_R], [FIX_R, FIX_R]]) {
+    const ll = fixtureLatLon(f, e, s);
+    const [tx, ty] = tileAt(ll.lat, ll.lon, z);
+    x0 = Math.min(x0, tx); x1 = Math.max(x1, tx);
+    y0 = Math.min(y0, ty); y1 = Math.max(y1, ty);
+  }
+  for (let x = x0; x <= x1; x++) for (let y = y0; y <= y1; y++) out.push([x, y]);
+  fixTileSets.set(z, out);
+  return out;
+}
 /**
  * A 256x256 raster of whatever the fixture answers, over one tile. The height
  * tile and the cover tile are the same shape, so they share the walk — and it
@@ -319,33 +430,13 @@ function texel(tx: number, ty: number, px: number, pz: number): number | null {
   return t.data[(((pz % 256) + 256) % 256) * 256 + (((px % 256) + 256) % 256)];
 }
 // ── the DEM lies, sometimes ────────────────────────────────────────
-// The terrarium mosaic is not maintained and carries local corruption. Central
-// Reykjavik is the case that found this: a smooth 918m cone sitting in the
-// middle of the harbour, where Copernicus reads 0m — measured, not guessed.
-// Downtown Manhattan carries a -742m void, Hong Kong -7006m. Rendered, these
-// are the black spires and the bottomless pits.
-//
-// Nothing about the repair knows any geography. It rests on one fact about
-// LAND: a hill of height H has a footprint. Even a volcanic plug or a sea
-// cliff does not climb H metres within H/1.7 metres of run and then close back
-// on itself, and if it did it would run off the side of a 1km tile rather than
-// standing alone in the middle of one. So a blob is corrupt when BOTH:
-//
-//   · it is far too narrow for its height (radius < 0.6 of what the slope
-//     limit demands), and
-//   · it dwarfs the tile it sits in (more than 3x the tile's own relief) —
-//     which is what keeps a real summit inside a mountain range safe, since
-//     there the relief is already large.
-//
-// Validated against 28 of the hardest real landforms on Earth — Half Dome, El
-// Capitan, Devils Tower, Uluru (including tiles clipping only its edge),
-// Matterhorn, Cerro Torre, Meteora, Preikestolen, Gibraltar, Monument Valley,
-// the Grand Canyon, Cliffs of Moher, Death Valley: ZERO pixels touched on all
-// 28, while every known-bad tile comes back to a sane range.
-const DEM_RISE = 80;     // metres clear of the ground before a blob is even considered
-const DEM_SLOPE = 1.7;   // ~60°, the steepest slope a real landform sustains
-const DEM_RATIO = 0.6;   // how much narrower than that it must be to be called a lie
-const DEM_DWARF = 3;     // and how far it must tower over everything else around
+// The conditioning a decoded height tile goes through — the range and spike
+// refusals, the patch and the shape repair — lives in client/demrepair.ts, and
+// its header carries the reasoning. It is a MODULE rather than a block here
+// because devtools/capture-world.mjs reads the same DEM and must condition it
+// identically: a captured fixture built from raw terrarium pixels reproduces
+// corruption the game repairs, which is a defect report with a fabricated
+// witness. Measured at Cape Town: raw ground -7,049m, built ground 10..100m.
 /**
  * Repaired-pixel counts, newest last — so a probe can ask what the DEM cost.
  *
@@ -368,71 +459,6 @@ const demFixes: Array<{ t: string; n: number; tile?: string }> = [];
  * filing it against none.
  */
 let demLast = '';
-function repairDem(e: Float32Array, mpp: number, where: string): Float32Array {
-  const W = 256;
-  const s = Float32Array.from(e).sort();
-  const at = (f: number): number => s[Math.min(s.length - 1, Math.floor(s.length * f))];
-  const ground = at(0.2);
-  const relief = Math.max(30, at(0.95) - ground);
-  const flag = new Uint8Array(e.length);
-  const seen = new Uint8Array(e.length);
-  const stack = new Int32Array(e.length);
-  const cells = new Int32Array(e.length);
-  let flagged = 0;
-  for (const dir of [1, -1]) {
-    // A pit is ground missing from below the GROUND, not below the roof —
-    // basing it on a high percentile made every low-lying city one crater.
-    const base = dir > 0 ? ground : at(0.05);
-    seen.fill(0);
-    for (let st = 0; st < e.length; st++) {
-      if (seen[st] || (e[st] - base) * dir <= DEM_RISE) continue;
-      let sp = 0, nc = 0, peak = 0;
-      stack[sp++] = st; seen[st] = 1;
-      while (sp) {
-        const i = stack[--sp];
-        cells[nc++] = i;
-        const h = (e[i] - base) * dir;
-        if (h > peak) peak = h;
-        const x = i % W, y = (i / W) | 0;
-        if (x > 0) { const j = i - 1; if (!seen[j] && (e[j] - base) * dir > DEM_RISE) { seen[j] = 1; stack[sp++] = j; } }
-        if (x < W - 1) { const j = i + 1; if (!seen[j] && (e[j] - base) * dir > DEM_RISE) { seen[j] = 1; stack[sp++] = j; } }
-        if (y > 0) { const j = i - W; if (!seen[j] && (e[j] - base) * dir > DEM_RISE) { seen[j] = 1; stack[sp++] = j; } }
-        if (y < W - 1) { const j = i + W; if (!seen[j] && (e[j] - base) * dir > DEM_RISE) { seen[j] = 1; stack[sp++] = j; } }
-      }
-      if (peak <= DEM_DWARF * relief) continue;
-      if (Math.sqrt(nc / Math.PI) / (peak / (DEM_SLOPE * mpp)) >= DEM_RATIO) continue;
-      for (let k = 0; k < nc; k++) { flag[cells[k]] = 1; flagged++; }
-    }
-  }
-  // A "repair" that rewrites a fifth of the tile is far likelier to be this
-  // rule misfiring than real corruption. Leave the tile exactly as it came.
-  if (!flagged || flagged > e.length * 0.2) return e;
-  // Diffuse the surviving ground into the holes, so what is left is the land
-  // the blob was standing on rather than a flat plate.
-  const out = Float32Array.from(e);
-  let left = flagged;
-  const next = new Uint8Array(e.length);
-  for (let pass = 0; pass < 300 && left; pass++) {
-    next.set(flag);
-    for (let i = 0; i < e.length; i++) {
-      if (!flag[i]) continue;
-      const x = i % W, y = (i / W) | 0;
-      let sum = 0, n = 0;
-      if (x > 0 && !flag[i - 1]) { sum += out[i - 1]; n++; }
-      if (x < W - 1 && !flag[i + 1]) { sum += out[i + 1]; n++; }
-      if (y > 0 && !flag[i - W]) { sum += out[i - W]; n++; }
-      if (y < W - 1 && !flag[i + W]) { sum += out[i + W]; n++; }
-      if (n) { out[i] = sum / n; next[i] = 0; left--; }
-    }
-    flag.set(next);
-  }
-  for (let i = 0; i < e.length; i++) if (flag[i]) out[i] = ground;
-  if (flagged) {
-    demFixes.push({ t: `${flagged}px`, n: flagged, tile: where });
-    if (demFixes.length > 40) demFixes.shift();
-  }
-  return out;
-}
 /** Decode any terrarium-encoded PNG/WebP into a square Float32Array. Both
  *  sources use the same RGB packing, so one decoder serves both. */
 /**
@@ -460,8 +486,10 @@ function repairDem(e: Float32Array, mpp: number, where: string): Float32Array {
  * not going to convert anyway.
  */
 const RAW_BITMAP: ImageBitmapOptions = { colorSpaceConversion: 'none', premultiplyAlpha: 'none' };
-async function decodeTerrarium(res: Response, px: number): Promise<Float32Array> {
-  const bmp = await createImageBitmap(await res.blob(), RAW_BITMAP);
+/** Takes a Blob rather than the Response it came from: the raster cache stores
+ *  bytes, and a cached tile must decode through exactly this path. */
+async function decodeTerrarium(blob: Blob, px: number): Promise<Float32Array> {
+  const bmp = await createImageBitmap(blob, RAW_BITMAP);
   const cv = typeof OffscreenCanvas !== 'undefined'
     ? new OffscreenCanvas(px, px)
     : Object.assign(document.createElement('canvas'), { width: px, height: px });
@@ -505,8 +533,14 @@ const demSource = { mth: 0, aws: 0, none: 0,
   // means step up the pyramid, a throw means the source is unreachable and
   // marking its tiles "missing" disables it for the whole session on the
   // strength of a policy header. Counted so `__demsrc` can say so.
-  mthBlocked: 0 };
+  mthBlocked: 0,
+  /** Tiles answered from the on-device raster cache — the number that says
+   *  whether an offline session has any ground to stand on. */
+  disk: 0 };
 async function fetchMapterhorn(x: number, y: number, z: number): Promise<Float32Array | null> {
+  // Set the moment a request is refused rather than answered: from then on
+  // this climb reads the cache and asks the network nothing. See the catch.
+  let refused = false;
   // Up the pyramid until something exists; z6 is the floor (all land has a
   // tile there), and each step up quarters the ground detail we can recover.
   for (let up = 0; up <= z - 6; up++) {
@@ -514,11 +548,33 @@ async function fetchMapterhorn(x: number, y: number, z: number): Promise<Float32
     const key = `${tz}/${tx}/${ty}`;
     if (mthMissing.has(key)) continue;
     let raw: Float32Array;
+    const url = `https://tiles.mapterhorn.com/${key}.webp`;
+    // Whether these bytes came off the disk decides two things in the catch:
+    // a stored tile that will not decode has to be dropped, and it cannot be
+    // evidence that the SOURCE is unreachable.
+    let disk = false;
     try {
-      const res = await fetch(`https://tiles.mapterhorn.com/${key}.webp`);
-      if (!res.ok) { mthMissing.add(key); continue; }
-      raw = await decodeTerrarium(res, 512);
+      let blob = await readRaster(url);
+      disk = !!blob;
+      if (!blob) {
+        // Nothing stored, and the network already said no on a level below —
+        // asking again would be a second failure for the same reason. Keep
+        // climbing on the disk alone.
+        if (refused) continue;
+        const res = await fetch(url);
+        if (!res.ok) { mthMissing.add(key); continue; }
+        blob = await res.blob();
+      }
+      raw = await decodeTerrarium(blob, 512);
+      // AFTER the decode, never before. Bytes are worth keeping only once
+      // something has proved they are an image: a route that answers 200 with
+      // an error document would otherwise be stored and re-read as a broken
+      // tile in every future session, and the cache would have manufactured a
+      // permanent fault out of a passing one.
+      if (!disk) writeRaster(url, blob);
+      if (disk) demSource.disk++;
     } catch (e) {
+      if (disk) dropRaster(url);
       // A tile that will not DECODE is a tile we do not have: step UP the
       // pyramid rather than abandoning the source — bailing out here sent every
       // request at Chapman's Peak, where nothing exists below z12, straight
@@ -530,7 +586,22 @@ async function fetchMapterhorn(x: number, y: number, z: number): Promise<Float32
       // missing, then did the same for the next tile, until the source was
       // silently dead for the session. Counted and reported instead, and the
       // tile is not blamed for it.
-      if (e instanceof TypeError) { demSource.mthBlocked++; return null; }
+      //
+      // …AND A REFUSED REQUEST MUST NOT END THE CLIMB EITHER.
+      //
+      // Returning here was right when the only thing further up was more
+      // network. With a cache above it, that same return is what makes an
+      // offline session groundless: Chapman's Peak has nothing below z12, so
+      // the tile that got STORED is an ancestor, and giving up at z14 means
+      // never reaching it. Measured before this line changed: 26 tiles, 26
+      // refusals, no ground, and a full cache sitting underneath. What must
+      // not happen, and still does not, is blaming the tile — nothing is added
+      // to mthMissing on this path.
+      if (!disk && e instanceof TypeError) {
+        if (!refused) demSource.mthBlocked++;
+        refused = true;
+        continue;
+      }
       mthMissing.add(key);
       continue;
     }
@@ -576,12 +647,21 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
   if (MAPTERHORN) out = await fetchMapterhorn(x, y, z);
   if (out) demSource.mth++;
   else {
+    const url = `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
+    let disk = false;
     try {
-      const res = await fetch(`https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`);
-      if (!res.ok) { demSource.none++; return null; }
-      out = await decodeTerrarium(res, 256);
+      let blob = await readRaster(url);
+      disk = !!blob;
+      if (!blob) {
+        const res = await fetch(url);
+        if (!res.ok) { demSource.none++; return null; }
+        blob = await res.blob();
+      }
+      out = await decodeTerrarium(blob, 256);
+      if (!disk) writeRaster(url, blob);   // only bytes that decoded — see above
       demSource.aws++; src = 'aws';
-    } catch { demSource.none++; return null; }
+      if (disk) demSource.disk++;
+    } catch { if (disk) dropRaster(url); demSource.none++; return null; }
   }
   // Metres per pixel at THIS tile's latitude — the footprint test is a
   // statement about the ground, so it has to be in ground units.
@@ -589,60 +669,23 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
   const mpp = (40075016.686 * Math.cos((lat * Math.PI) / 180)) / (2 ** z * 256);
   // ── A TILE OFF THE PLANET IS NOT A TILE ──
   //
-  // repairDem is a SHAPE argument — it finds blobs that stand too tall for
-  // their footprint — and it deliberately stands down when it would rewrite
-  // more than a fifth of the tile, on the reasoning that a rule rewriting
-  // that much is more likely misfiring than right. Sound for the corruption
-  // it was written against (a few hundred stray pixels), and exactly
-  // backwards for the catastrophic case: THE WORSE THE TILE, THE LESS LIKELY
-  // IT IS TO BE TOUCHED. A tile that is mostly garbage sails through
-  // unrepaired and is built into terrain, which is what a field of spikes is.
+  // Three tests and a repair, all of them in client/demrepair.ts with the
+  // reasoning that earned each one: the absolute range test (Earth's land runs
+  // -430m to 8,849m, and this mosaic is documented above as serving -13,029m),
+  // the neighbour test that catches a byte in the wrong channel (256m of shift,
+  // comfortably inside a real planet's range), the patch to the tile's own
+  // ground, and repairDem's shape argument.
   //
-  // So there is an absolute test in front of it now, and it needs no shape
-  // heuristic to make its case: Earth's land runs from about -430m at the
-  // Dead Sea to 8849m at the summit. Anything outside that is not a reading.
-  // The AWS mosaic is documented above as serving -13,029m, so this is not
-  // hypothetical — it is the failure that source is known for.
-  //
-  // A few bad pixels are patched to the tile's own ground and handed on to
-  // repairDem. A tile with MANY is REFUSED — returning null leaves the ground
-  // unbuilt and the streamer asks again, which is strictly better than
-  // building a mountain range out of a decode error. Terrain that has not
-  // arrived is a gap you can see; terrain built from nonsense is a gap you
-  // drive into.
-  let bad = 0;
-  for (let i = 0; i < out.length; i++) {
-    const v = out[i];
-    if (!Number.isFinite(v) || v < -500 || v > 9000) bad++;
-  }
+  // What stays here is the CONTROL FLOW, because that is what is specific to
+  // the game: a few bad pixels are patched and handed on, a tile with many is
+  // REFUSED — returning null leaves the ground unbuilt and the streamer asks
+  // again, which is strictly better than building a mountain range out of a
+  // decode error. Terrain that has not arrived is a gap you can see; terrain
+  // built from nonsense is a gap you drive into.
+  const floor = demFloor(z, TERRAIN_Z);
+  const bad = demBad(out, floor);
   if (bad > out.length * 0.02) { demSource.bad++; return null; }
-  // ── …AND THE RANGE TEST IS THE EASY HALF ──
-  //
-  // A terrarium height is R*256 + G + B/256 - 32768, so a byte that lands in
-  // the wrong channel moves the ground by 256 METRES and stays comfortably
-  // inside the range of a real planet. That is a spike the test above cannot
-  // see, and it is the size of the ones being reported.
-  //
-  // What gives it away is not its height but its NEIGHBOURS. Real ground is
-  // continuous at 10-30m sampling: even a sea cliff climbs a few tens of
-  // metres between adjacent posts, and the pixels that do are a contiguous
-  // line, never scattered. A post standing a hundred metres off the four
-  // around it is not a landform, it is a bad byte.
-  //
-  // Deliberately NOT a repair, and deliberately without repairDem's
-  // stand-down: this only decides whether the tile is TRUSTWORTHY, so the
-  // more of it is wrong the more certain the answer gets, which is the right
-  // way round for the case that has been getting through.
-  const W = 256;
-  const spikeTh = Math.max(80, 12 * mpp);
-  let spikes = 0;
-  for (let yy = 1; yy < W - 1; yy++) {
-    for (let xx = 1; xx < W - 1; xx++) {
-      const i = yy * W + xx;
-      const n = (out[i - 1] + out[i + 1] + out[i - W] + out[i + W]) * 0.25;
-      if (Math.abs(out[i] - n) > spikeTh) spikes++;
-    }
-  }
+  const spikes = demSpikes(out, mpp);
   if (spikes > out.length * 0.03) {
     demSource.bad++;
     demFixes.push({ t: `refused ${((spikes / out.length) * 100).toFixed(1)}% spiked`,
@@ -650,19 +693,15 @@ async function fetchHeights(x: number, y: number, z: number = TERRAIN_Z): Promis
     if (demFixes.length > 40) demFixes.shift();
     return null;
   }
-  if (bad) {
-    // Their own ground, not zero: a patch at sea level in a mountain valley is
-    // its own crater.
-    const ok = Array.from(out).filter((v) => Number.isFinite(v) && v >= -500 && v <= 9000).sort((a, b) => a - b);
-    const ground = ok.length ? ok[Math.floor(ok.length * 0.2)] : 0;
-    for (let i = 0; i < out.length; i++) {
-      const v = out[i];
-      if (!Number.isFinite(v) || v < -500 || v > 9000) out[i] = ground;
-    }
-    demSource.bad++;
-  }
+  if (bad) { demPatch(out, floor); demSource.bad++; }
   demLast = `${tile} ${src}`;
-  return repairDem(out, mpp, demLast);
+  // The note carries the TILE, because a count on its own cannot be chased:
+  // asked during a spike hunt this once said `tilesRepaired: 2, pixels: 421`
+  // with no way to find out which two.
+  return repairDem(out, mpp, (t, n) => {
+    demFixes.push({ t, n, tile: demLast });
+    if (demFixes.length > 40) demFixes.shift();
+  });
 }
 // ── land cover: what is actually growing here ──────────────────────
 // ESA WorldCover, 10m, global, through this cell's namespace (the bucket has no
@@ -686,24 +725,33 @@ const COVER_NAME: Record<number, string> = {
 interface CoverTile { xs: number; zs: number; w: number; h: number; data: Uint8Array }
 const coverTiles = new Map<string, CoverTile>();
 const coverAsked = new Set<string>();
-async function loadCoverTile(x: number, y: number): Promise<void> {
-  const key = `${x}/${y}`;
-  if (coverAsked.has(key)) return;
-  coverAsked.add(key);
-  try {
-    let data: Uint8Array;
-    if (FIXTURE) {
-      // The fixture's own ecology — what vegetation, sward, biome and the
-      // far shell all read. No decode, no colour management, no retry.
-      data = fixtureRaster(new Uint8Array(256 * 256), x, y, COVER_Z,
-        (e, s) => FIXTURE.cover(e, s, FIXTURE_TUNE));
-    } else {
-    const res = await fetch(`${CELL_BASE}/~/cover/v1/${COVER_Z}/${x}/${y}`);
+/**
+ * One cover tile's 256x256 class raster, at ANY zoom.
+ *
+ * Extracted so the shell's coarse ladder below can share it. The decode is the
+ * delicate half — the pixel is a CLASS INDEX and not a grey, so a
+ * colour-managed read turns urban into water and cropland into snow, silently
+ * (see RAW_BITMAP) — and two copies of that is how one of them quietly starts
+ * colour-managing. Throws on anything that is not a raster; both callers read
+ * that as "ask again later".
+ */
+async function coverRaster(z: number, x: number, y: number): Promise<Uint8Array> {
+  if (FIXTURE) {
+    // The fixture's own ecology — what vegetation, sward, biome and the far
+    // shell all read. No decode, no colour management, no retry.
+    return fixtureRaster(new Uint8Array(256 * 256), x, y, z,
+      (e, s) => FIXTURE.cover(e, s, FIXTURE_TUNE));
+  }
+  const url = `${CELL_BASE}/~/cover/v1/${z}/${x}/${y}`;
+  let blob = await readRaster(url);
+  const fromDisk = !!blob;
+  if (!blob) {
+    const res = await fetch(url);
     if (!res.ok) throw new Error(`cover ${res.status}`);
-    // Same contract as the elevation decoder, and for the same reason: this
-    // pixel is a CLASS INDEX, not a grey. A colour-managed decode turns urban
-    // into water and cropland into snow, silently — see RAW_BITMAP.
-    const bmp = await createImageBitmap(await res.blob(), RAW_BITMAP);
+    blob = await res.blob();
+  }
+  try {
+    const bmp = await createImageBitmap(blob, RAW_BITMAP);
     const cv = typeof OffscreenCanvas !== 'undefined'
       ? new OffscreenCanvas(256, 256)
       : Object.assign(document.createElement('canvas'), { width: 256, height: 256 });
@@ -711,9 +759,28 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
       { willReadFrequently: true, colorSpace: 'srgb' }) as OffscreenCanvasRenderingContext2D;
     cx.drawImage(bmp, 0, 0);
     const d = cx.getImageData(0, 0, 256, 256).data;
-    data = new Uint8Array(256 * 256);
+    const data = new Uint8Array(256 * 256);
     for (let i = 0; i < data.length; i++) data[i] = d[i * 4];   // red channel IS the class
-    }
+    // Kept only now the pixels are real. The cell computes this tile out of
+    // WorldCover COGs and can answer 200 with an error document; storing that
+    // would turn one bad minute upstream into a permanently blank ecology.
+    if (!fromDisk) writeRaster(url, blob);
+    return data;
+  } catch (e) {
+    // Bytes off the disk that will not decode are a permanent hole otherwise:
+    // the caller waits twenty seconds and re-reads the same bad bytes for the
+    // life of the installation.
+    if (fromDisk) dropRaster(url);
+    throw e;
+  }
+}
+
+async function loadCoverTile(x: number, y: number): Promise<void> {
+  const key = `${x}/${y}`;
+  if (coverAsked.has(key)) return;
+  coverAsked.add(key);
+  try {
+    const data = await coverRaster(COVER_Z, x, y);
     const b = tileBounds(x, y, COVER_Z);
     const [wx0, wz0] = toLocal(b.latN, b.lonW);
     const [wx1, wz1] = toLocal(b.latS, b.lonE);
@@ -818,6 +885,119 @@ function sampleCoverRaw(ex: number, ez: number): number | undefined {
     return t.data[pz * 256 + px];
   }
   return undefined;
+}
+
+// ── the SHELL's land cover: the same raster, a rung or two coarser ──
+/**
+ * THE COARSE SHELL WAS WEARING A GUESS.
+ *
+ * The fine cover ring is 7x7 z12 tiles, about 28km at Chapman's latitude, and
+ * it is sized that way for good reason: it feeds the biome, the sward, the
+ * vegetation and the sea datum, and those want ~37m pixels. The far shell,
+ * meanwhile, reaches whatever `farLevelFor` picks — z9 out to ~117km, and now
+ * z7 further still. Everything between the two was coloured from `coverMode`,
+ * the modal class of the fine ring: one colour for a whole quadrant of the
+ * frame, chosen from ground you happen to be standing on.
+ *
+ * Measured on the zoom ladder at Chapman's Peak before this existed, reading
+ * `__far().cover`, which reports how much real cover each shell tile had when
+ * it baked:
+ *
+ *     zoom 100   13 of 25 shell tiles blind
+ *     zoom 300   13 of 25
+ *     zoom 1600  22 of 34, and `min 0` throughout — tiles with NOTHING
+ *
+ * So two thirds of the widest view was a climate guess with a hard rectangular
+ * edge where the one tile that did have data stopped. The cell has served
+ * `~/cover/v1` at any zoom from the start (measured: z7 through z12 all answer
+ * in 1.6-3.2s at 5-15KB), so the fix costs one more ring of very cheap tiles.
+ *
+ * A SEPARATE MAP, not a coarser COVER_Z. The fine raster is gameplay — swap it
+ * for z8 and the vegetation, the sward and the sea datum all start reading a
+ * 600m pixel. This tier is only ever sampled by the shell's colour bake.
+ */
+// Three rungs, because the shell's own reach runs past two. `fRing` fills to
+// its full 5x5 whatever chose the level, so the z7 shell spans 2.5 tiles =
+// ~648km at the equator — and a z8 cover ring reaches only 324km, which would
+// leave the outer half of the widest view blind again for want of one more
+// rung. z6 covers 1,296km. The cell serves every one of these (measured z5
+// through z12, all 200, 2-15KB, 3-4s cold and cached for ever after).
+const COVER_WIDE_LEVELS = [10, 8, 6];
+const COVER_WIDE_RING = 2;            // 5x5 tiles at whichever level is current
+let coverWideZ = 0;                   // 0 until the view is wide enough to want one
+const coverWide = new Map<string, CoverTile>();
+const coverWideAsked = new Set<string>();
+/** The finest level whose 5x5 ring covers the sight line — same shape as
+ *  `farLevelFor`, and deliberately the same 0.5 tile of slack. */
+function coverWideLevelFor(radius: number): number {
+  for (const z of COVER_WIDE_LEVELS) if (radius <= tileMetres(z) * (COVER_WIDE_RING + 0.5)) return z;
+  return COVER_WIDE_LEVELS[COVER_WIDE_LEVELS.length - 1];
+}
+function setCoverWideLevel(z: number): void {
+  if (z === coverWideZ) return;
+  coverWideZ = z;
+  // Dropped rather than retired: unlike the terrain and vector shells there is
+  // nothing on screen to hold — this map is only ever read while a shell tile
+  // bakes, and a tile that bakes before the new level lands falls back to
+  // `coverMode` exactly as it did before any of this existed.
+  coverWide.clear();
+  coverWideAsked.clear();
+}
+async function loadCoverWideTile(x: number, y: number, z: number): Promise<void> {
+  const key = `${z}/${x}/${y}`;
+  if (coverWideAsked.has(key)) return;
+  coverWideAsked.add(key);
+  try {
+    const data = await coverRaster(z, x, y);
+    if (z !== coverWideZ) { coverWideAsked.delete(key); return; }   // the level moved under us
+    const b = tileBounds(x, y, z);
+    const [wx0, wz0] = toLocal(b.latN, b.lonW);
+    const [wx1, wz1] = toLocal(b.latS, b.lonE);
+    const xs = Math.min(wx0, wx1), zs = Math.min(wz0, wz1);
+    const w = Math.abs(wx1 - wx0), h = Math.abs(wz1 - wz0);
+    coverWide.set(key, { xs, zs, w, h, data });
+    /**
+     * ONE REBUILD WHEN THE RING IS HOME, NOT ONE PER TILE.
+     *
+     * A shell tile bakes its colour ONCE, so anything already standing was
+     * painted from the guess these tiles replace, and the fine raster's own
+     * loader answers that by calling `coverDirtiedFar` per tile. Copying that
+     * here was wrong, and wrong in proportion to how well this tier works: a
+     * z12 cover tile is 8km and overlaps a couple of shell tiles, while a z8
+     * one is 130km and overlaps EVERY tile of a z7 shell. Twenty-five arrivals
+     * then demolished the whole shell twenty-five times, each rebuild racing
+     * the next teardown. Measured at the ceiling: `far z7 x 0` — the level
+     * selected, the DEM fetched, and not one mesh ever surviving long enough
+     * to be seen.
+     *
+     * So it waits for the ring, then rebuilds once. `true` because by that
+     * point the bounds test is pointless — every tile that is short of cover
+     * has new cover available — and because one pass over the shell is the
+     * whole cost either way.
+     */
+    if (coverWide.size >= coverWideAsked.size) coverDirtiedFar(true, xs, zs, w, h);
+  } catch {
+    setTimeout(() => coverWideAsked.delete(key), 20000);
+  }
+}
+/**
+ * Cover for the SHELL: the fine raster where it reaches, the coarse one beyond.
+ *
+ * Fine first and always — inside the near ring the shell and the fine terrain
+ * have to agree about a hillside's colour, and that agreement is what stops the
+ * seam between the layers reading as a band (see the note in the bake).
+ */
+function sampleCoverShell(ex: number, ez: number): number | null {
+  const near = sampleCover(ex, ez);
+  if (near !== null) return near;
+  for (const t of coverWide.values()) {
+    if (ex < t.xs || ez < t.zs || ex >= t.xs + t.w || ez >= t.zs + t.h) continue;
+    const px = Math.min(255, Math.max(0, Math.floor(((ex - t.xs) / t.w) * 256)));
+    const pz = Math.min(255, Math.max(0, Math.floor(((ez - t.zs) / t.h) * 256)));
+    const v = t.data[pz * 256 + px];
+    return v === 0 ? null : v;
+  }
+  return null;
 }
 /**
  * THE SAME RASTER, DITHERED — FOR PAINT ONLY.
@@ -1951,7 +2131,7 @@ const COVER_TINT: Record<number, Rgb> = {
   20: [0.34, 0.33, 0.19],   // shrub     — olive scrub
   30: [0.40, 0.42, 0.22],   // grass     — dry sward
   40: [0.46, 0.41, 0.18],   // crop      — worked earth and stubble
-  50: [0.38, 0.37, 0.35],   // built     — the grey of a made surface
+  // 50 built has no entry: it is the ramp itself, greyed — see terrainPalette.
   70: [0.86, 0.89, 0.93],   // snow
   80: [0.13, 0.29, 0.34],   // water
   90: [0.24, 0.30, 0.22],   // wetland
@@ -2026,7 +2206,22 @@ const terrainPalette = (elev: number, slope: number, cover?: number | null,
   // character of the ground — but only PART of the way, because the ramp is
   // where the art direction lives and a photographic land-cover map would
   // flatten the whole look. Data sets the fact; the palette keeps the feel.
-  if (cover !== null && cover !== undefined) {
+  if (cover === COVER.built) {
+    // BUILT GROUND IS THE RAMP, GREYED — NOT A FIXED GREY. WorldCover's
+    // built class is a 10m pixel, and along a rural road those pixels ARE the
+    // road and its shoulders, which are already drawn. Pulled 55% toward one
+    // dark grey they read from the chart as blocky brown blotches following
+    // every desert road (Badwater Road, Giza, San Juan County — measured on
+    // the live frames, with the mesh sitting exactly on natural ground). So
+    // the tint is the ramp's own colour desaturated to a warm neutral at 92%
+    // of its luminance — a made surface, in this ground's own key — mixed
+    // more lightly than the other classes. (Gating it by road density was
+    // tried: `builtUpAt` saturates beside a single carriageway.)
+    const l = c[0] * 0.3 + c[1] * 0.59 + c[2] * 0.11;
+    const t: Rgb = [l * 0.92, l * 0.91, l * 0.9];
+    const k = COVER_MIX * 0.75;
+    c = [c[0] + (t[0] - c[0]) * k, c[1] + (t[1] - c[1]) * k, c[2] + (t[2] - c[2]) * k];
+  } else if (cover !== null && cover !== undefined) {
     const t = COVER_TINT[cover];
     if (t) c = [c[0] + (t[0] - c[0]) * COVER_MIX, c[1] + (t[1] - c[1]) * COVER_MIX, c[2] + (t[2] - c[2]) * COVER_MIX];
   }
@@ -2063,7 +2258,7 @@ renderer.shadowMap.type = THREE.BasicShadowMap;
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 const scene = new THREE.Scene();
 scene.background = new THREE.Color(0x05070c);
-const camera = new THREE.PerspectiveCamera(55, 1, 1, 30000);
+const camera = new THREE.PerspectiveCamera(CAM.fov, 1, 1, 30000);
 // The near plane moves with the chart camera; only rebuild the projection when
 // it actually changes, since every uniform derived from it follows.
 /**
@@ -2364,6 +2559,48 @@ const skyDome = new THREE.Mesh(new THREE.SphereGeometry(20000, 32, 16), skyMat);
 skyDome.frustumCulled = false;
 skyDome.renderOrder = -10;
 scene.add(skyDome);
+
+/**
+ * ── THE SKY BELONGS TO WHOEVER IS ABOUT TO DRAW IT ──
+ *
+ * The dome is not in the world: it is a shell hung around the eye, so every
+ * number it needs is a fact about ONE camera. Three of them, and all three
+ * used to be set from the main `camera` once a frame and then reused by the
+ * chart dock's POV blit, which renders the same scene through `miniCam`.
+ *
+ * Reported from the chart: the sky in the dock lifts and drops as the MAIN
+ * viewport zooms. It did, and by kilometres. `position` put the dome's centre
+ * at the chart camera — up to 43km overhead — while the dock's eye stands at
+ * 1.3m, so the preview looked out at a horizon slung far above its own; and
+ * `scale` rides the chart's near plane, which grows to 22km at full zoom, so
+ * the shell also swelled ~9x as you pulled out. Two of the three moved with
+ * the zoom, which is exactly the lift and drop.
+ *
+ * So it is a function of a camera now, called once per render rather than
+ * once per frame. The dock already does this for `ovGroup`/`farGroup` under a
+ * comment that says THE DOCK IS A POV, SO IT GETS THE POV'S WORLD — the sky
+ * was simply missed when that was written.
+ *
+ * `scale` is here rather than fixed at 20km because the chart's near plane
+ * grows with altitude and at the widest zoom stands 22km out, which clips the
+ * entire sky away and leaves a black band above the horizon. Keep the shell
+ * comfortably outside whatever the near plane is now; it is a gradient
+ * backdrop, so scaling it costs nothing and shows nothing. From a POV eye
+ * (near = 1) the max() collapses to 1 and the dome is its natural 20km again.
+ *
+ * `uCamXZ` is the deck ray-march's origin — `uCamXZ + d.xz * (uDeckY / d.y)`
+ * is where the view ray meets the cloud deck — so a dock rendered with the
+ * chart's XZ sampled its clouds from wherever the chart happened to be panned
+ * to, not from over the truck. It used to be set inside `stepWeather`, which
+ * is the wrong owner for a camera fact; there is one owner now.
+ */
+/** Read by __docksky; written by blitPixelated at the render it describes. */
+const blitSky = { camY: 0, domeY: 0, scale: 1 };
+function aimSky(cam: THREE.PerspectiveCamera): void {
+  skyDome.position.copy(cam.position);
+  skyDome.scale.setScalar(Math.max(1, (cam.near * 8) / 20000));
+  (skyMat.uniforms.uCamXZ as { value: THREE.Vector2 }).value.set(cam.position.x, cam.position.z);
+}
 
 const hemi = new THREE.HemisphereLight(0xbcd2ee, 0x6a5a3c, 0.72); // sky fill + ground bounce
 scene.add(hemi);
@@ -4367,18 +4604,46 @@ const NRM_SCALE = Number(new URLSearchParams(location.search).get('nscale') ?? 0
 // about X, so uv.y grows toward world -Z. A DataTexture does not flip, so v=0
 // is buffer row 0 — which therefore sits at MAX z, while the tile's own data
 // row 0 sits at MIN z. The rows are stored reversed for exactly that reason.
-function terrainNormalTex(t: { w: number; data: Float32Array }): THREE.DataTexture {
+function terrainNormalTex(t: { w: number; data: Float32Array; xs?: number; zs?: number; h?: number }): THREE.DataTexture {
   const W = 256;
   const mpp = t.w / W;
   const buf = new Uint8Array(W * W * 4);
+  // THE EDGE ROWS READ THE NEIGHBOUR. The one-sided difference at a tile's
+  // border lit its edge pixels differently from the interior — a seam along
+  // every tile boundary. At the border the sample beyond the edge is taken
+  // from the field, which has the neighbouring tile when it is loaded.
+  // IN THE RASTER'S FRAME. `t.data` is absolute elevation and `sampleHeight`
+  // is local (minus baseElev); the first version mixed them, so every border
+  // pixel got a gradient the size of the base elevation and the tile edges
+  // drew as black lines at close zoom — the exact seam this exists to remove,
+  // inverted (Senqu, live, with the tile debug lines to correlate against).
+  const beyond = (i: number, j: number): number | null => {
+    if (t.xs === undefined || t.zs === undefined || t.h === undefined) return null;
+    // The raster's samples sit at xs + i·w/255 — 256 of them spanning the
+    // tile edge to edge, as the colour pass reads them — not at pixel
+    // centres on a w/256 pitch, and half a pixel of misplacement is a
+    // quarter of the slope in the edge gradient.
+    const ex = t.xs + i * (t.w / (W - 1)), ez = t.zs + j * (t.h / (W - 1));
+    return hasHeight(ex, ez) ? sampleHeightRaw(ex, ez) + baseElev : null;
+  };
   for (let j = 0; j < W; j++) {
     const j0 = Math.max(0, j - 1) * W, j1 = Math.min(W - 1, j + 1) * W;
     const dj = (Math.min(W - 1, j + 1) - Math.max(0, j - 1)) * mpp;
     for (let i = 0; i < W; i++) {
       const i0 = Math.max(0, i - 1), i1 = Math.min(W - 1, i + 1);
       const di = (i1 - i0) * mpp;
-      const dzdx = (t.data[j * W + i1] - t.data[j * W + i0]) / di;
-      const dzdz = (t.data[j1 + i] - t.data[j0 + i]) / dj;
+      let dzdx = (t.data[j * W + i1] - t.data[j * W + i0]) / di;
+      let dzdz = (t.data[j1 + i] - t.data[j0 + i]) / dj;
+      if (i === 0 || i === W - 1) {
+        const a = i === 0 ? beyond(-1, j) : t.data[j * W + i - 1];
+        const b = i === W - 1 ? beyond(W, j) : t.data[j * W + i + 1];
+        if (a !== null && b !== null) dzdx = (b - a) / (2 * mpp);
+      }
+      if (j === 0 || j === W - 1) {
+        const a = j === 0 ? beyond(i, -1) : t.data[(j - 1) * W + i];
+        const b = j === W - 1 ? beyond(i, W) : t.data[(j + 1) * W + i];
+        if (a !== null && b !== null) dzdz = (b - a) / (2 * mpp);
+      }
       // World normal of the heightfield: y is up, and the surface falls away
       // from the gradient in x and z.
       // FLATTENED TOWARD UP by NRM_SCALE. Taken raw, a 9.5m/px gradient on a
@@ -4485,8 +4750,19 @@ const terrainMeshes = new Map<string, THREE.Mesh>();
 function buildTerrainMesh(t: HeightTile): void {
   const key = `${t.tx}/${t.ty}`;
   const SEG = terrainSeg;
-  const geo = new THREE.PlaneGeometry(t.w, t.h, SEG, SEG);
-  geo.rotateX(-Math.PI / 2);
+  // THE CORRIDOR IS IN THE GEOMETRY where a road comes near — see
+  // refineTileGeometry. A tile with no road keeps the plain grid.
+  const nearTruck = Math.max(0, Math.abs(state.x - (t.xs + t.w / 2)) - t.w / 2, Math.abs(state.z - (t.zs + t.h / 2)) - t.h / 2) <= REFINE_R;
+  // …AND ONLY ONCE THE ROADS HAVE STOPPED ARRIVING. Every way that lands
+  // dirties the tiles it crosses, so during a stream the four in-range tiles
+  // rebuild a dozen times each — measured at Vélizy as 209 builds for 30
+  // tiles, 350ms a corridor build in that density. While the stream is busy
+  // a tile builds plain (the old carve, at the old price) and the quiet path
+  // gives it its corridor exactly once, when nothing more is coming.
+  const corridor = REFINE && nearTruck && osmStreamQuiet();
+  const refined = REFINE ? refineTileGeometry(t, SEG, corridor) : null;
+  const geo = refined ? refined.geo : new THREE.PlaneGeometry(t.w, t.h, SEG, SEG);
+  if (!refined) { geo.rotateX(-Math.PI / 2); (geo.userData as { seg?: number }).seg = SEG; }
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const colors = new Float32Array(pos.count * 3);
   const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
@@ -4495,10 +4771,14 @@ function buildTerrainMesh(t: HeightTile): void {
   // afterwards, per triangle, because the constraint it has to satisfy is
   // about the interpolated SURFACE at a deck point and not about any one
   // vertex — see carveCorridors. Colour comes last, off the carved heights.
-  for (let i = 0; i < pos.count; i++) {
+  // A refined tile arrives with its heights set and its corridor built in.
+  for (let i = 0; i < (refined ? 0 : pos.count); i++) {
     const ex = pos.getX(i) + cxm, ez = pos.getZ(i) + czm;
     const cv = sampleCover(ex, ez);
-    let elev = sampleHeight(ex, ez);
+    // The exact edge where the field has a tile, inside this one where it
+    // does not — see refineTileGeometry's fieldAt.
+    let elev = hasHeight(ex, ez) ? sampleHeight(ex, ez)
+      : sampleHeight(clamp(ex, t.xs + 1e-4, t.xs + t.w - 1e-4), clamp(ez, t.zs + 1e-4, t.zs + t.h - 1e-4));
     // GIVE THE SEA A FLOOR. The elevation source carries no bathymetry: it
     // fills the ocean with a flat plate AT the waterline, so once the water
     // plane was placed correctly the Pacific rendered as a 40cm lagoon over
@@ -4520,20 +4800,54 @@ function buildTerrainMesh(t: HeightTile): void {
     }
     pos.setY(i, elev);
   }
-  carveCorridors(t, geo, SEG);
+  // A stitched plain tile still carves — its own roads are the old grid's —
+  // but never the vertices pinned to a refined neighbour's border (the carve
+  // only lowers, and a pinned border vertex is already where it must be, so
+  // the carve is simply run on the plain lattice and the border re-pinned).
+  if (!refined || !corridor) carveCorridors(t, geo, SEG);
   carveChannels(t, geo, SEG);
+  // The west and north edges take the owners' rows, after everything that
+  // digs — for every build (a corridor build pinned them itself, and the
+  // channel carve only lowers where a river is).
+  if (!refined || !corridor) {
+    const pinned = refinedBorderPins(t, geo);
+    for (const [v, y] of pinned) pos.setY(v, y);
+  }
+  storeBorder(t, geo);
   // PASS TWO: colour, off the heights the carve settled on.
+  const kinds = refined ? refined.kinds : null;
   for (let i = 0; i < pos.count; i++) {
     const ex = pos.getX(i) + cxm, ez = pos.getZ(i) + czm;
     const elevAbs = pos.getY(i) + baseElev;
     const u = clamp(Math.round(((ex - t.xs) / t.w) * 255), 0, 255);
     const v = clamp(Math.round(((ez - t.zs) / t.h) * 255), 0, 255);
-    const du = t.data[v * 256 + Math.min(255, u + 1)] - t.data[v * 256 + u];
-    const dv = t.data[Math.min(255, v + 1) * 256 + u] - t.data[v * 256 + u];
+    // THE SLOPE READS ACROSS THE TILE EDGE. A forward difference clamped
+    // inside the tile gave the last column and row of every tile a slope of
+    // zero, so they took no shade darkening and drew a one-vertex bright line
+    // along two edges of each tile — the cross through the truck on every
+    // chart frame (Colcha K, Walter Sisulu). Central difference on the field
+    // itself, which knows the neighbouring tile; where no tile is loaded the
+    // in-tile one-sided read stands in, so the world's edge is not shaded as
+    // a cliff down to sea level.
+    let du: number, dv: number;
+    if (hasHeight(ex + cell, ez) && hasHeight(ex - cell, ez) && hasHeight(ex, ez + cell) && hasHeight(ex, ez - cell)) {
+      du = (sampleHeight(ex + cell, ez) - sampleHeight(ex - cell, ez)) / 2;
+      dv = (sampleHeight(ex, ez + cell) - sampleHeight(ex, ez - cell)) / 2;
+    } else {
+      du = t.data[v * 256 + Math.min(255, u + 1)] - t.data[v * 256 + Math.max(0, u - (u === 255 ? 1 : 0))];
+      dv = t.data[Math.min(255, v + 1) * 256 + u] - t.data[Math.max(0, v - (v === 255 ? 1 : 0)) * 256 + u];
+    }
     // coverPaint, not sampleCover: this is the one consumer that only decides a
     // COLOUR, so it takes the dithered read and the 38m block edges dissolve
     // into a ragged boundary at vertex resolution. See coverPaint.
-    let [r, g, bb] = terrainPalette(elevAbs, Math.hypot(du, dv) / Math.max(cell, 1), coverPaint(ex, ez), ex, ez);
+    // A cut face is steeper than any DEM slope and is fresh earth; a bank is
+    // as steep and grassed. Both shade by their own slope, the face wears
+    // the earth the batter strip used to.
+    const kind = kinds ? kinds[i] : 0;
+    let slope = Math.hypot(du, dv) / Math.max(cell, 1);
+    if (kind === 2) slope = Math.max(slope, CUTF_K); else if (kind === 3) slope = Math.max(slope, BANK_K);
+    let [r, g, bb] = terrainPalette(elevAbs, slope, coverPaint(ex, ez), ex, ez);
+    if (kind === 2) { r += (EARTH_T[0] - r) * 0.6; g += (EARTH_T[1] - g) * 0.6; bb += (EARTH_T[2] - bb) * 0.6; }
     // …and then whoever actually drew this ground. The 38m raster says what is
     // growing across a landscape; an OSM area says where a particular wood
     // STOPS, which is the thing the raster cannot resolve. Applied after it,
@@ -4560,8 +4874,78 @@ function buildTerrainMesh(t: HeightTile): void {
   // triangles at COARSE, 3.3M at FINEST, 78-94% of the pass.
   shadowy(mesh, false, true);
   mesh.position.set(cxm, 0, czm);
+  // INTENT, not outcome: a corridor build that found no break lines (every
+  // road at grade) is still done, or the quiet path would dirty it on every
+  // visit for ever — five rebuilds a second of a tile that never changes.
+  (mesh.userData as { corridor?: boolean }).corridor = corridor;
   terrainMeshes.set(key, mesh);
   worldGroup.add(mesh);
+  // THE FOLLOWERS. This tile owns its east and its south edge; a neighbour
+  // there that was built before this row existed, or against an older one,
+  // is rebuilt to take it. ONLY when its border differs — dirtying all four
+  // neighbours on every rebuild ran Vélizy to 212 builds for 30 tiles.
+  for (const [dx, dy] of [[1, 0], [0, 1]]) {
+    const nk = `${t.tx + dx}/${t.ty + dy}`;
+    if (terrainMeshes.has(nk) && !borderShared(t, nk)) { terrainDirty.add(nk); dirtyWhy.set(nk, `owner:${key}`); }
+  }
+  buildLog.push({ key, why: dirtyWhy.get(key) ?? 'load', corridor, refined: !!refined, at: Math.round(performance.now()) });
+  if (buildLog.length > 400) buildLog.shift();
+  dirtyWhy.delete(key);
+}
+/** Every tile's border row, world x, z, y in threes, stored as it was built
+ *  — what a follower pins to and what `borderShared` compares. */
+function storeBorder(t: HeightTile, geo: THREE.BufferGeometry): void {
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
+  const b: number[] = [];
+  for (let v = 0; v < pos.count; v++) {
+    const x = pos.getX(v) + cxm, z = pos.getZ(v) + czm;
+    if (onTileEdge(t, x, z)) b.push(x, z, pos.getY(v));
+  }
+  refinedBorders.set(`${t.tx}/${t.ty}`, Float64Array.from(b));
+}
+/** Does the tile at `nk` already carry every point of `t`'s border along
+ *  their shared edge, at the same heights? */
+function borderShared(t: HeightTile, nk: string): boolean {
+  const mine = refinedBorders.get(`${t.tx}/${t.ty}`), theirs = refinedBorders.get(nk);
+  if (!mine) return true;
+  if (!theirs) return false;
+  const nt = heightTiles.get(nk);
+  if (!nt) return true;
+  const have = mmIndex(theirs);
+  for (let i = 0; i < mine.length; i += 3) {
+    const x = mine[i], z = mine[i + 1];
+    // On the shared edge: inside the neighbour's box (with slack) and on ours.
+    if (x < nt.xs - 1e-3 || x > nt.xs + nt.w + 1e-3 || z < nt.zs - 1e-3 || z > nt.zs + nt.h + 1e-3) continue;
+    const p = mmNear(have, x, z);
+    if (!p || Math.abs(p[2] - mine[i + 2]) > 0.02) return false;
+  }
+  return true;
+}
+/** The vertices of a plain tile that lie on a refined neighbour's border,
+ *  with the neighbour's heights — re-applied after the carve. */
+function refinedBorderPins(t: HeightTile, geo: THREE.BufferGeometry): Array<[number, number]> {
+  const out: Array<[number, number]> = [];
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
+  const want = new Map<string, MmPt>();
+  for (const [dx, dy] of [[-1, 0], [0, -1]]) {                 // the owners of this tile's west and north edges
+    const nb = refinedBorders.get(`${t.tx + dx}/${t.ty + dy}`);
+    if (!nb) continue;
+    for (let i = 0; i < nb.length; i += 3) {
+      const x = nb[i], z = nb[i + 1];
+      if (!onTileEdge(t, x, z)) continue;                       // the owner's OTHER edges are not ours
+      want.set(mmKey(x, z), [x, z, nb[i + 2]]);
+    }
+  }
+  if (!want.size) return out;
+  for (let v = 0; v < pos.count; v++) {
+    const x = pos.getX(v) + cxm, z = pos.getZ(v) + czm;
+    if (!onTileEdge(t, x, z)) continue;
+    const p = mmNear(want, x, z);
+    if (p) out.push([v, p[2]]);
+  }
+  return out;
 }
 // Rebuilds are not free — 16.6k vertices, each sampling the heightfield and
 // asking the road grid whether it is in a cutting. A tile arriving used to
@@ -4576,12 +4960,16 @@ const SEA_BED = 6;
 function coverDirtiedTerrain(xs: number, zs: number, w: number, h: number): void {
   for (const [key, t] of heightTiles) {
     if (t.xs > xs + w || t.zs > zs + h || t.xs + t.w < xs || t.zs + t.h < zs) continue;
-    markTerrainDirty(key);
+    markTerrainDirty(key, 'cover');
   }
 }
-function markTerrainDirty(key: string): void {
-  if (terrainMeshes.has(key)) terrainDirty.add(key);
+function markTerrainDirty(key: string, why = 'mark'): void {
+  if (terrainMeshes.has(key)) { terrainDirty.add(key); dirtyWhy.set(key, why); }
 }
+/** Why each dirty tile was dirtied, and the last hundred builds — the
+ *  instrument for a rebuild loop, which is invisible to a dirty-count poll. */
+const dirtyWhy = new Map<string, string>();
+const buildLog: Array<{ key: string; why: string; corridor: boolean; refined: boolean; at: number; ms?: number }> = [];
 // Every terrain tile a run of road passes through, plus a margin for the cut.
 // Sampled, not exhaustive: terrain tiles are ~2km across and road vertices are
 // 12m apart, so walking every one of them would ask the same question a hundred
@@ -4590,11 +4978,11 @@ function dirtyTerrainAround(pts: Array<[number, number]>): void {
   for (let i = 0; i < pts.length; i += 8) {
     const [x, z] = pts[i];
     const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
-    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) markTerrainDirty(`${tx + dx}/${ty + dy}`);
+    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) markTerrainDirty(`${tx + dx}/${ty + dy}`, 'way');
   }
   const [lx, lz] = pts[pts.length - 1];
   const [tx, ty] = tileAt(origin.lat - lz / M_LAT, origin.lon + lx / origin.mLon, TERRAIN_Z);
-  markTerrainDirty(`${tx}/${ty}`);
+  markTerrainDirty(`${tx}/${ty}`, 'way');
 }
 // One rebuild at a time, and never two in the same fifth of a second. A tile is
 // ~9400 vertices, each sampling the heightfield and asking the road grid about
@@ -4652,6 +5040,7 @@ function flushTerrain(now: number): void {
       flushBatter(t);
       flushCulverts(t);
       terrainMs = performance.now() - t0;
+      if (buildLog.length) buildLog[buildLog.length - 1].ms = Math.round(terrainMs);
       return;
     }
   }
@@ -4672,6 +5061,58 @@ function flushTerrain(now: number): void {
     hydroDirty.delete(key);
     const t = heightTiles.get(key);
     if (t) { terrainAt = now; hydroFeed(t); return; }
+  }
+  // A TILE THAT CAME INTO RANGE, or was built plain while roads were still
+  // streaming, takes its corridor now — one per quiet visit, so a drive into
+  // town is a rebuild every 200ms and never a burst.
+  if (REFINE && osmStreamQuiet()) {
+    for (const [key, mesh] of terrainMeshes) {
+      const ud = mesh.userData as { corridor?: boolean; scanned?: boolean };
+      if (ud.corridor || ud.scanned) continue;
+      const t = heightTiles.get(key);
+      if (!t) continue;
+      const d = Math.max(0, Math.abs(state.x - (t.xs + t.w / 2)) - t.w / 2, Math.abs(state.z - (t.zs + t.h / 2)) - t.h / 2);
+      if (d > REFINE_R) continue;
+      // Only tiles a road actually reaches — a plain tile with no strip near
+      // it would rebuild plain again, every visit, for ever.
+      let any = false;
+      const mm = TOE_REACH + cutL;
+      for (let cx = Math.floor((t.xs - mm) / cutL); cx <= Math.floor((t.xs + t.w + mm) / cutL) && !any; cx++) {
+        for (let cz = Math.floor((t.zs - mm) / cutL); cz <= Math.floor((t.zs + t.h + mm) / cutL); cz++) {
+          const arr = cutCells.get(`${cx},${cz}`);
+          if (arr && arr.some((s) => !s.tk && !s.tn && s.ya !== undefined)) { any = true; break; }
+        }
+      }
+      if (!any) { (mesh.userData as { scanned?: boolean }).scanned = true; continue; }
+      terrainDirty.add(key); dirtyWhy.set(key, 'scan');
+      terrainAt = now;
+      return;
+    }
+  }
+  // THE BORDER AUDIT. Owners dirty followers as they build, but builds race
+  // the stream and a follower can take a row the owner then rebuilt past.
+  // One tile per quiet visit, its east and south followers are checked
+  // against its stored row and rebuilt if they differ; over a few seconds of
+  // quiet every seam has been looked at.
+  if (REFINE && terrainMeshes.size) {
+    const keys = [...terrainMeshes.keys()];
+    borderAuditAt = (borderAuditAt + 1) % keys.length;
+    const key = keys[borderAuditAt];
+    const t = heightTiles.get(key);
+    if (t && refinedBorders.has(key)) {
+      for (const [dx, dy] of [[1, 0], [0, 1]]) {
+        const nk = `${t.tx + dx}/${t.ty + dy}`;
+        const nm = terrainMeshes.get(nk);
+        if (!nm || terrainDirty.has(nk) || borderShared(t, nk)) continue;
+        // A follower that cannot take the row it is given — it has happened,
+        // see refinedBorders — is rebuilt a few times and then left alone,
+        // never five times a second for ever.
+        const ud = nm.userData as { auditTries?: number };
+        if ((ud.auditTries ?? 0) >= 3) continue;
+        ud.auditTries = (ud.auditTries ?? 0) + 1;
+        terrainDirty.add(nk); dirtyWhy.set(nk, `audit:${key}`); terrainAt = now; return;
+      }
+    }
   }
   // Nothing dirty. This is exactly when a stranded kerb can be picked up
   // without competing with a rebuild for the frame — the quiet path is the
@@ -4707,7 +5148,7 @@ async function loadTerrainTileInner(x: number, y: number): Promise<void> {
   // same cross-tile field — this is what stitches the seams shut.
   for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
     if (!dx && !dy) continue;
-    markTerrainDirty(`${x + dx}/${y + dy}`);
+    markTerrainDirty(`${x + dx}/${y + dy}`, `tile:${key}`);
   }
 }
 
@@ -4816,7 +5257,27 @@ function osmRelease(): void {
 // Full carriageway widths (both directions), not lane widths — OSM ways are
 // centerlines, and rendering them single-lane narrow made the real-size car
 // look like it straddled the whole street.
-const ROAD_W: Record<string, number> = { motorway: 13, trunk: 12, primary: 10.5, secondary: 9.5, tertiary: 8.5, residential: 7.5, unclassified: 7, service: 4.5, living_street: 6.5, track: 6.5, footway: 4.5, path: 4.5, cycleway: 5, bridleway: 5, steps: 2.2, pedestrian: 6 };
+const ROAD_W: Record<string, number> = { motorway: 13, trunk: 12, primary: 10.5, secondary: 9.5, tertiary: 8.5, residential: 7.5, unclassified: 7, service: 4.5, living_street: 6.5, track: 6.5, footway: 4.5, path: 4.5, cycleway: 5, bridleway: 5, steps: 2.2, pedestrian: 6,
+  // ── SLIP ROADS HAD NO WIDTH OF THEIR OWN ──
+  //
+  // Every `*_link` fell through to the `?? 5` fallback, so a motorway slip was
+  // five metres — narrower than a residential street, half a metre wider than a
+  // service road — where it met a 13m motorway. That reads as a footpath
+  // joining a dual carriageway, and it is an omission rather than a judgement:
+  // `GRADE_MAX` directly below names all five link classes, because the profile
+  // solver was taught what a slip road is. This table never was.
+  //
+  // A link is one running lane plus its shoulders, not a scaled copy of its
+  // parent: a motorway slip and a primary slip are much closer in width to each
+  // other than motorway is to primary. So they sit in a narrow band a little
+  // under the smallest full class, tapering with the parent rather than
+  // tracking it.
+  //
+  // The width also decides deference at the mouth — `at0.hw < width / 2 - 0.4`
+  // — and both the old value and these keep a link strictly narrower than any
+  // road it joins, so a slip still defers to its parent and cannot drag a
+  // motorway onto its camber.
+  motorway_link: 8, trunk_link: 7.5, primary_link: 7, secondary_link: 6.5, tertiary_link: 6 };
 // The RULING GRADE a class is engineered to — what the profile clamp treats
 // as "steeper than this is probably not real". Motorways hold ~4% by design
 // and 7% only in extremis; alpine passes run 9-12%; town streets can defy
@@ -4928,33 +5389,99 @@ const roadTex = canvasTex(128, 1, 1, 101, (c, s, r) => {
  */
 const cssOf = (hex: number, a = 1): string =>
   `rgba(${(hex >> 16) & 255},${(hex >> 8) & 255},${hex & 255},${a})`;
-const ROAD_TEX = new Map(ROAD_CULTURES.map((rc) => [rc.key, canvasTex(128, 1, 1, 101, (c, s, r) => {
-  c.fillStyle = cssOf(rc.surface); c.fillRect(0, 0, s, s);
-  speckle(c, s, r, ['rgba(255,255,255,0.045)', 'rgba(0,0,0,0.12)'], 260);
-  // Wear buys patches and cracks. A chip-seal road at 0.85 gets roughly three
-  // times the repair history of fresh European bitumen at 0.3, which is what
-  // makes the two read as different ages of road rather than two tints.
-  for (let i = 0; i < Math.round(2 + rc.wear * 6); i++) {
-    c.fillStyle = 'rgba(20,23,28,0.35)';
-    c.fillRect(10 + r() * (s - 40), r() * s, 14 + r() * 22, 8 + r() * 14);
-  }
-  cracks(c, s, r, Math.round(4 + rc.wear * 9), 'rgba(12,14,18,0.5)');
-  // Paint fades with wear — the one place the two axes have to interact, or a
-  // ruined road still carries crisp new lines and looks freshly re-marked.
-  const paintA = 0.75 - rc.wear * 0.45;
-  if (rc.edge) {
-    c.fillStyle = cssOf(rc.edgeCol, paintA * 0.75);
-    c.fillRect(5, 0, 3, s); c.fillRect(s - 8, 0, 3, s);
-  }
-  c.fillStyle = cssOf(rc.centre, paintA);
-  c.fillRect(s / 2 - 2, 0, 4, Math.round(s * 0.4));
-  // The verge losing to the green. More of it where nothing is maintained.
-  for (let i = 0; i < Math.round(16 + rc.wear * 20); i++) {
-    const edge = r() < 0.5 ? 2 + r() * 8 : s - 2 - r() * 8;
-    c.fillStyle = i % 2 ? 'rgba(64,96,44,0.5)' : 'rgba(40,66,32,0.55)';
-    c.fillRect(edge, r() * s, 1.5 + r() * 2.5, 2 + r() * 3);
-  }
-})]));
+/**
+ * ── THE MARKINGS A ROAD ACTUALLY CARRIES ──
+ *
+ * One texture per culture was the whole of it, so a 4.5m service driveway
+ * wore a trunk road's edge lines and centre dash, a motorway had no lane
+ * lines, and every one-way carriageway — both halves of a dual carriageway,
+ * every slip road — had a centre line down the middle of it. `lanes`,
+ * `oneway` and the highway class never reached the paint.
+ *
+ * A road's LOOK is decided from its tags (roadLook), and the texture is
+ * baked per culture × look on demand: lane boundaries at k/lanes across the
+ * width, the centre line only where the road is two-way and the class
+ * paints one, edge lines only where the class paints them. u still spans
+ * the width and v still wraps every 20m, so the ribbon's UVs are untouched
+ * and ribBatch still merges a tile into a few meshes.
+ */
+interface RoadLook { lanes: number; oneway: boolean; edge: boolean; centre: 'none' | 'dash' | 'solid' | 'double' }
+const DEFAULT_LOOK: RoadLook = { lanes: 2, oneway: false, edge: true, centre: 'dash' };
+const lookKey = (k: RoadLook): string => `${k.lanes}|${k.oneway ? 1 : 0}|${k.edge ? 1 : 0}|${k.centre}`;
+const UNSEALED = new Set(['unpaved', 'gravel', 'fine_gravel', 'compacted', 'dirt', 'earth', 'ground', 'grass', 'sand', 'mud',
+  'pebblestone', 'rock', 'stone', 'woodchips', 'clay', 'shells']);
+function roadLook(tags: Record<string, string>): RoadLook {
+  const hw = tags.highway ?? '';
+  const link = hw.endsWith('_link');
+  const cls = link ? hw.slice(0, -5) : hw;
+  const tier = ({ motorway: 5, trunk: 4, primary: 3, secondary: 2, tertiary: 1 } as Record<string, number>)[cls] ?? 0;
+  const minor = cls === 'service' || cls === 'living_street' || cls === 'pedestrian';
+  const oneway = tags.oneway === 'yes' || tags.oneway === '-1' || tags.junction === 'roundabout'
+    || hw === 'motorway' || hw === 'motorway_link';
+  const dflt = link || minor ? 1 : cls === 'motorway' ? 3 : 2;
+  const tagged = parseInt(tags.lanes ?? '', 10);
+  const lanes = clamp(Number.isFinite(tagged) && tagged > 0 ? tagged : dflt, 1, 6);
+  // NO PAINT WITHOUT TARMAC. An unpaved tertiary at Senqu wore southern
+  // Africa's yellow edge lines over gravel (measured in the chase frame);
+  // `surface` and `tracktype` say what is under the wheels, and paint on
+  // anything but a sealed surface is a rendering fault, not a convention.
+  const sf = tags.surface ?? '';
+  const loose = UNSEALED.has(sf) || sf.startsWith('gravel') || /^grade[2-5]$/.test(tags.tracktype ?? '');
+  const edge = tier >= 1 && !loose;
+  const centre: RoadLook['centre'] = loose || oneway || minor || lanes < 2 ? 'none' : lanes >= 4 ? 'double' : 'dash';
+  return { lanes, oneway, edge, centre };
+}
+const roadTexCache = new Map<string, THREE.Texture>();
+function roadTexture(rc: (typeof ROAD_CULTURES)[number], look: RoadLook): THREE.Texture {
+  const key = `${rc.key}|${lookKey(look)}`;
+  const hit = roadTexCache.get(key);
+  if (hit) return hit;
+  let seed = 101;
+  for (let i = 0; i < key.length; i++) seed = (seed * 31 + key.charCodeAt(i)) % 9973;
+  const tex = canvasTex(128, 1, 1, seed, (c, s, r) => {
+    c.fillStyle = cssOf(rc.surface); c.fillRect(0, 0, s, s);
+    speckle(c, s, r, ['rgba(255,255,255,0.045)', 'rgba(0,0,0,0.12)'], 260);
+    for (let i = 0; i < Math.round(2 + rc.wear * 6); i++) {
+      c.fillStyle = 'rgba(20,23,28,0.35)';
+      c.fillRect(10 + r() * (s - 40), r() * s, 14 + r() * 22, 8 + r() * 14);
+    }
+    cracks(c, s, r, Math.round(4 + rc.wear * 9), 'rgba(12,14,18,0.5)');
+    // Paint bright enough to survive the quantiser: at 0.75 the Bixby centre
+    // line read as cream and the edge lines as pale grey (measured, marks1).
+    const paintA = 0.92 - rc.wear * 0.4;
+    if (rc.edge && look.edge) {
+      c.fillStyle = cssOf(rc.edgeCol, paintA * 0.9);
+      c.fillRect(5, 0, 3, s); c.fillRect(s - 8, 0, 3, s);
+    }
+    // Lane boundaries at k/lanes. The middle one of a two-way road is the
+    // centre line; every other is a lane divider — a short dash, twice per
+    // wrap, in the edge colour.
+    for (let k = 1; k < look.lanes; k++) {
+      const u = Math.round((k / look.lanes) * s);
+      const isCentre = !look.oneway && look.lanes % 2 === 0 && k === look.lanes / 2;
+      if (isCentre) {
+        if (look.centre === 'dash') {
+          c.fillStyle = cssOf(rc.centre, paintA);
+          c.fillRect(u - 2, 0, 4, Math.round(s * 0.175)); c.fillRect(u - 2, Math.round(s * 0.5), 4, Math.round(s * 0.175));
+        }
+        else if (look.centre === 'solid') { c.fillStyle = cssOf(rc.centre, paintA); c.fillRect(u - 2, 0, 4, s); }
+        else if (look.centre === 'double') { c.fillStyle = cssOf(rc.centre, paintA); c.fillRect(u - 5, 0, 3, s); c.fillRect(u + 2, 0, 3, s); }
+      } else {
+        c.fillStyle = cssOf(rc.edgeCol, paintA * 0.85);
+        c.fillRect(u - 1, 0, 3, Math.round(s * 0.15));
+        c.fillRect(u - 1, Math.round(s * 0.5), 3, Math.round(s * 0.15));
+      }
+    }
+    for (let i = 0; i < Math.round(16 + rc.wear * 20); i++) {
+      const edge = r() < 0.5 ? 2 + r() * 8 : s - 2 - r() * 8;
+      c.fillStyle = i % 2 ? 'rgba(64,96,44,0.5)' : 'rgba(40,66,32,0.55)';
+      c.fillRect(edge, r() * s, 1.5 + r() * 2.5, 2 + r() * 3);
+    }
+  });
+  roadTexCache.set(key, tex);
+  return tex;
+}
+const ROAD_TEX = new Map(ROAD_CULTURES.map((rc) => [rc.key, roadTexture(rc, DEFAULT_LOOK)]));
 
 // The junction mouth's own surface: the same tarmac with NO lines — a host's
 // painted edge line must not run across a turning, and it lives in a
@@ -4967,9 +5494,27 @@ const mouthTex = canvasTex(128, 1, 1, 107, (c, s, r) => {
   c.fillStyle = 'rgba(20,23,28,0.3)';
   c.fillRect(r() * (s - 30), r() * s, 12 + r() * 18, 8 + r() * 12);
   cracks(c, s, r, 4, 'rgba(12,14,18,0.5)');
-  // The give-way bar: broken white, on the joining road's side of the kerb.
-  c.fillStyle = 'rgba(228,224,210,0.8)';
-  for (let x = 4; x < s; x += 22) c.fillRect(x, s * 0.6, 13, 4);
+  // No bar here any more: the junction box below draws one give-way line per
+  // minor arm, for every junction, so a cropped mouth and a plain crossing
+  // read the same. Two bars a metre apart is what the two mechanisms drew.
+});
+// THE JUNCTION BOX: plain tarmac over the crossing itself. Every arm's
+// texture carries its own edge lines and centre dash, and where two roads
+// cross those lines ran straight across each other — a crossroads read as a
+// hash of white stripes from the chart. The box overpaints the crossing
+// with lineless tarmac, and the arms' lines end at its edge.
+const boxTex = canvasTex(128, 1, 1, 113, (c, s, r) => {
+  c.fillStyle = '#3a3f46'; c.fillRect(0, 0, s, s);
+  speckle(c, s, r, ['rgba(255,255,255,0.045)', 'rgba(0,0,0,0.12)'], 260);
+  cracks(c, s, r, 5, 'rgba(12,14,18,0.5)');
+  c.fillStyle = 'rgba(20,23,28,0.28)';
+  for (let i = 0; i < 4; i++) c.fillRect(r() * (s - 30), r() * (s - 20), 12 + r() * 18, 8 + r() * 12);
+});
+// The give-way line: a broken white bar across a minor arm at the box edge.
+const gwTex = canvasTex(64, 1, 1, 131, (c, s) => {
+  c.clearRect(0, 0, s, s);
+  c.fillStyle = 'rgba(232,226,208,0.92)';
+  for (let x = 2; x < s; x += 16) c.fillRect(x, 0, 10, s);
 });
 const pathTex = canvasTex(64, 1, 1, 102, (c, s, r) => {
   c.fillStyle = '#847d6c'; c.fillRect(0, 0, s, s);
@@ -4980,6 +5525,24 @@ const pathTex = canvasTex(64, 1, 1, 102, (c, s, r) => {
 // The cut face under a carriageway: a road is a SOLID, not a decal, and what
 // you see at its edge is the shoulder gravel over compacted sub-base over
 // earth. v runs DOWN the face (0 at the tarmac), so the strata read in order.
+// The BATTER'S earth: what a bank or a cut face looks like from the road and
+// from above — compacted soil, stones, no strata. The strata texture below is
+// for the vertical fascia, where v runs down the face and the layers read in
+// order; laid over a bank seen from above its bands repeat every four metres
+// outward and read as terraces (measured on Round House Road). Isotropic,
+// coarse and high-contrast, because the quantiser eats anything finer; the
+// tint that says shoulder / earth / grass rides on the vertices.
+const batterTex = canvasTex(64, 1, 1, 123, (c, s, r) => {
+  c.fillStyle = '#726a5c'; c.fillRect(0, 0, s, s);
+  speckle(c, s, r, ['rgba(40,32,22,0.5)', 'rgba(230,220,196,0.2)'], 220, 1.6);
+  for (let i = 0; i < 26; i++) {
+    const x = r() * s, y = r() * s, w = 1.5 + r() * 3.5, h = 1 + r() * 2.5;
+    c.fillStyle = `rgba(${150 + r() * 70 | 0},${140 + r() * 60 | 0},${118 + r() * 50 | 0},0.6)`;
+    c.fillRect(x, y, w, h);
+    c.fillStyle = 'rgba(30,24,16,0.45)'; c.fillRect(x, y + h, w, 1);
+  }
+  cracks(c, s, r, 2, 'rgba(30,24,16,0.35)');
+});
 const vergeTex = canvasTex(64, 1, 1, 119, (c, s, r) => {
   c.fillStyle = '#4a4034'; c.fillRect(0, 0, s, s);
   // Strata: pale shoulder chippings at the lip, darker base course, then soil.
@@ -5034,7 +5597,7 @@ const SIGN_KINDS = 5;
 // delineator is cell 4, its band is drawn at x0+5..x0+W-5, y 9..24 of 192.
 const CATS_U0 = 0.85, CATS_U1 = 0.96, CATS_V0 = 0.06, CATS_V1 = 0.11;
 const CATS_EVERY = 7;    // metres between studs — close enough to read as a line
-const POST_EVERY = 11;   // metres between edge posts where a parapet cannot go
+const POST_EVERY = 22;   // metres between edge posts where a parapet cannot go (was 11: a picket fence)
 const CENTRE_EVERY = 9;  // metres between centreline reflectors
 const signTex = canvasTex(192, 1, 1, 122, (c, s, r) => {
   const W = s / SIGN_KINDS;
@@ -5663,6 +6226,14 @@ const MAT = {
     map: mouthTex, side: FS,
     polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -14,
   }),
+  box: new THREE.MeshLambertMaterial({
+    map: boxTex, side: FS,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -15,
+  }),
+  gw: new THREE.MeshLambertMaterial({
+    map: gwTex, side: FS, transparent: true, alphaTest: 0.5,
+    polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -16,
+  }),
   // Ruts: alpha-cut, and depth-offset because it lies a few centimetres over
   // terrain it is meant to look part of.
   // OPACITY, not just alpha-cut. The ruts were a hard stencil over the ground —
@@ -5703,6 +6274,7 @@ const MAT = {
   // reliable; it isn't (see DS above), and a one-sided apron flickers out
   // whenever the camera crosses the road.
   verge: new THREE.MeshLambertMaterial({ map: vergeTex, side: DS }),
+  batter: new THREE.MeshLambertMaterial({ map: batterTex, side: DS, vertexColors: true }),
   deck: new THREE.MeshLambertMaterial({ map: deckTex, side: DS }),
   // alphaTest, not blending: a parapet is seen against sky, water and its own
   // deck at once, and a sorted transparent has no right answer for that.
@@ -5889,23 +6461,46 @@ const waterU = {
  * setup that took a measurement each to get right — a second hand-written
  * literal would drift from that one the first time either was touched.
  * Only the map differs. */
-const ROAD_MATS = new Map<string, THREE.Material>(ROAD_CULTURES.map((rc) => {
+const ROAD_MATS = new Map<string, THREE.Material>();
+/** The material for one culture and one look, made once. */
+function roadMatFor(rc: (typeof ROAD_CULTURES)[number], look: RoadLook): THREE.Material {
+  const key = `${rc.key}|${lookKey(look)}`;
+  const hit = ROAD_MATS.get(key);
+  if (hit) return hit;
   const m2 = MAT.road.clone() as THREE.MeshLambertMaterial;
-  m2.map = ROAD_TEX.get(rc.key) ?? (MAT.road as THREE.MeshLambertMaterial).map;
+  m2.map = roadTexture(rc, look);
   m2.needsUpdate = true;
-  return [rc.key, m2 as THREE.Material];
-}));
+  ROAD_MATS.set(key, m2);
+  return m2;
+}
+/**
+ * THE CONVENTION IS GEOGRAPHY FIRST, climate second. The culture pick below
+ * weights four conventions by climate affinity and a region hash, and it has
+ * no idea where it is: Camps Bay and a Paris boulevard both came out with a
+ * North American yellow centre line. Where the answer is known it is stated;
+ * the climate pick remains for everywhere it is not.
+ */
+function conventionFor(lat: number, lon: number): string | null {
+  if (lon < -30 && lon > -170 && lat > -56 && lat < 72) return 'yellow';   // the Americas
+  if (lat > 54 && lon > 3 && lon < 32) return 'nordic';                     // the Nordics
+  if (lat > 34 && lat < 72 && lon > -11 && lon < 45) return 'euro';         // Europe
+  if (lat < -15 && lon > 10 && lon < 41) return 'za';                       // southern Africa
+  if (lon > 110 && lon < 180 && lat < -10) return 'euro';                   // Australia, New Zealand
+  return null;
+}
 /** Which carriageway this stretch of road is surfaced and marked as. Cached on
  *  a 2km cell: a region is 96km, so this answers the same thing for a long
  *  drive, and the cache exists only so that a tile of two hundred ways does
  *  not re-derive it two hundred times. */
 const roadMatCache = new Map<string, THREE.Material>();
-function roadMatAt(x: number, z: number): THREE.Material {
-  const key = `${Math.round(x / 2000)},${Math.round(z / 2000)}`;
+function roadMatAt(x: number, z: number, look: RoadLook = DEFAULT_LOOK): THREE.Material {
+  const key = `${Math.round(x / 2000)},${Math.round(z / 2000)}|${lookKey(look)}`;
   let got = roadMatCache.get(key);
   if (got === undefined) {
-    const rc = roadLookAt(cultEnv, x, z, climateAt(x, z).w);
-    got = ROAD_MATS.get(rc.key) ?? MAT.road;
+    const [lat, lon] = localToLatLon(x, z);
+    const forced = conventionFor(lat, lon);
+    const rc = (forced && ROAD_CULTURES.find((c) => c.key === forced)) || roadLookAt(cultEnv, x, z, climateAt(x, z).w);
+    got = roadMatFor(rc, look);
     if (roadMatCache.size > 3000) roadMatCache.clear();
     roadMatCache.set(key, got);
   }
@@ -6235,7 +6830,27 @@ function seaLevelY(): number | null {
 // ahead, so density is constant however far you drive, and the site list can
 // hold tens of thousands for the cost of the numbers.
 const VEG_CELL = 220;                       // spatial bucket, metres
-const vegGrid = new Map<string, VegSite[]>();
+interface PlacedVegSite extends VegSite {
+  role: VegetationRole;
+  anchor?: boolean;
+}
+interface VegSeedStats {
+  proposedClumps: number;
+  acceptedClumps: number;
+  interiorGroups: number;
+  fringeGroups: number;
+  proposedLiving: number;
+  livingStrays: number;
+  groundEvents: number;
+  anchors: number;
+  acceptedSites: number;
+  rejectedSurface: number;
+  rejectedWall: number;
+  rejectedCover: number;
+  ms: number;
+}
+const vegGrid = new Map<string, PlacedVegSite[]>();
+const vegSeedStats = new Map<string, VegSeedStats>();
 const VEG_RANGE = 700;                      // plants are shown within this
 const vegKey = (x: number, z: number): string => `${Math.floor(x / VEG_CELL)},${Math.floor(z / VEG_CELL)}`;
 
@@ -6444,6 +7059,21 @@ type SwardCtx = typeof SwardCtx[keyof typeof SwardCtx];
  *  outermost to match FLOWER_PAL's own nesting, species 0..2 within it. */
 const SWARD_FLOW_NAMES = ['Open', 'Wood', 'Water', 'Cliff', 'Ruin']
   .flatMap((c) => [0, 1, 2].map((s) => `uFlow${c}${s}`));
+/**
+ * FLOWER DISTRIBUTION, separate from flower colour and from grass density.
+ *
+ * Patch fill is the established meadow treatment. The five stray floors add
+ * only the long tail between those meadows: the shader takes their maximum,
+ * rather than adding them, so a meadow's existing core density cannot rise.
+ * All eight values are uniforms so the shipping material can be tuned and
+ * probed directly without a second implementation in a lab.
+ */
+const SWARD_FLOWER = {
+  patchFill: 0.30,
+  stray: { open: 0.00125, wood: 0.0006, water: 0.0020, cliff: 0.0006, ruin: 0.0016 },
+  patchMetres: 34,
+  speciesMetres: 34,
+} as const;
 const SWARD_STRUCT_R = 14;    // metres to a wall/ruin that still reads as "at it"
 const SWARD_WATER_R = 9;      // metres beyond a channel's edge that is still "at the water"
 const SWARD_CLIFF_SLOPE = 0.5;  // rise/run past which the ground reads as scree, not turf
@@ -6565,11 +7195,20 @@ function makeTone(r: () => number, x: number, z: number): VegTone {
   const stone = bedrockAt(cultEnv, x, z, STONE_MIX_ROWS, cl.w);
   return standTone(r, stone);
 }
-function pushSite(x: number, z: number, kind: VegKind, r: () => number, tone?: VegTone): void {
-  if (surfaceAt(x, z) !== 'ground') return;         // not on tarmac or water
+function pushSite(
+  x: number, z: number, kind: VegKind, r: () => number, tone?: VegTone,
+  role: VegetationRole = 'interior', stats?: VegSeedStats, allowAnchor = true,
+): boolean {
+  if (surfaceAt(x, z) !== 'ground') {
+    if (stats) stats.rejectedSurface++;
+    return false;                                    // not on tarmac or water
+  }
   for (const seg of wallGrid.get(gkey(x, z)) ?? []) {
     const [cx2, cz2] = closestOnSeg(x, z, seg);
-    if (Math.hypot(x - cx2, z - cz2) < 5) return;   // nor inside a building
+    if (Math.hypot(x - cx2, z - cz2) < 5) {
+      if (stats) stats.rejectedWall++;
+      return false;                                  // nor inside a building
+    }
   }
   const tn = tone ?? makeTone(r, x, z);
   // ── THE PLANT ITSELF IS FLORA'S BUSINESS ──
@@ -6585,12 +7224,31 @@ function pushSite(x: number, z: number, kind: VegKind, r: () => number, tone?: V
     biomeW: () => climateAt(x, z).w,
     krummK: () => krummholz(elevEffAt(x, z), climateAt(x, z).treeline),
   }, BIOME_LIST);
+  if (role === 'fringe') makeSapling(site);
+  // AN ANCHOR IS A PROMOTION, NOT A SITE. Its decision comes from world
+  // coordinates rather than this clump's RNG stream, so promoting one tree
+  // cannot reroll every member generated after it.
+  let anchor = false;
+  if (allowAnchor && (TRUNKED.includes(kind) || kind === 'bush')) {
+    const ax = Math.round(x * 8), az = Math.round(z * 8);
+    if (hash2(ax + 1709, az - 3253) < VEGETATION_DISTRIBUTION.anchorChance) {
+      const ar = mulberry32(((ax * 73856093) ^ (az * 19349663) ^ 0x5f356495) >>> 0);
+      promoteAnchor(site, ar);
+      anchor = true;
+      if (stats) stats.anchors++;
+    }
+  }
   const key = vegKey(x, z);
   let cell = vegGrid.get(key);
   if (!cell) vegGrid.set(key, (cell = []));
-  cell.push(site);
+  cell.push(Object.assign(site, { role, ...(anchor ? { anchor: true } : {}) }));
+  if (stats) stats.acceptedSites++;
+  return true;
 }
-function plantClump(cx: number, cz: number, rad: number, count: number, dominant: VegKind, r: () => number): void {
+function plantClump(
+  cx: number, cz: number, rad: number, count: number, dominant: VegKind, r: () => number,
+  role: 'interior' | 'fringe' | 'polygon' = 'interior', stats?: VegSeedStats,
+): void {
   // ONE TONE FOR THE STAND: the same shifted green over this wood, the same
   // bedrock under this scree. Rolled per clump, not per plant.
   const tone = makeTone(r, cx, cz);
@@ -6601,22 +7259,11 @@ function plantClump(cx: number, cz: number, rad: number, count: number, dominant
     const a = r() * Math.PI * 2;
     // One member in six is a different species — mixed stands, not monoculture.
     const mx2 = cx + Math.cos(a) * t, mz2 = cz + Math.sin(a) * t;
-    pushSite(mx2, mz2, r() < 0.83 ? dominant : pickKind(r, mx2, mz2), r, tone);
+    const other = role === 'fringe'
+      ? siteKindAt(mx2, mz2, sampleCover(mx2, mz2), r)
+      : pickKind(r, mx2, mz2);
+    pushSite(mx2, mz2, r() < 0.83 ? dominant : other, r, tone, role, stats);
   }
-}
-// Where clumps WANT to be: a low-frequency field, so woodland gathers into
-// belts and thickets across cell boundaries instead of respecting the grid.
-function vegDensity(x: number, z: number): number {
-  const h = (px: number, pz: number): number => {
-    const n = Math.sin(px * 12.9898 + pz * 78.233) * 43758.5453;
-    return n - Math.floor(n);
-  };
-  const sx = x * 0.0011, sz = z * 0.0011;
-  const ix = Math.floor(sx), iz = Math.floor(sz);
-  const fx = sx - ix, fz = sz - iz;
-  const u = fx * fx * (3 - 2 * fx), v = fz * fz * (3 - 2 * fz);
-  return (h(ix, iz) * (1 - u) + h(ix + 1, iz) * u) * (1 - v)
-    + (h(ix, iz + 1) * (1 - u) + h(ix + 1, iz + 1) * u) * v;
 }
 
 // Deposit sites for a polygon — no GPU work, just numbers in a bucket.
@@ -6650,7 +7297,12 @@ function scatterVeg(pts: Array<[number, number]>, seed: number, tags: Record<str
       ? (climPick(VEG_TREES, climateAt(x, z).w, r) ?? 'broadleaf')
       : siteKindAt(x, z, cv, r);
     const rad = wooded ? 10 + r() * 20 : 5 + r() * 13;
-    plantClump(x, z, rad, Math.round((wooded ? 14 : 7) + r() * (wooded ? 22 : 12)), dominant, r);
+    // ROLE `polygon`: a stand somebody MAPPED, not one the habitat field
+    // proposed. Counted apart so the distribution figures measure the field's
+    // own decisions, and so a re-seed knows these are the sites it cannot
+    // regenerate — they arrive with the tile, not with the cell.
+    plantClump(x, z, rad, Math.round((wooded ? 14 : 7) + r() * (wooded ? 22 : 12)), dominant, r,
+      'polygon');
   }
 }
 
@@ -6668,6 +7320,31 @@ const vegSeeded = new Set<string>();
 // granite, while ground seeded after it read the rock and stayed sparse.
 // Deferral is BOUNDED — a dead cover endpoint must not leave the world bald.
 const vegDeferredAt = new Map<string, number>();
+function vegCeilingAt(x: number, z: number, cover: number | null): number {
+  if (cover !== null) return COVER_VEG[cover] ?? 6;
+  const cw = climateAt(x, z).w;
+  return 4 * cw[0] + 14 * cw[1] + 9 * cw[2] + 12 * cw[3] + 6 * cw[4];
+}
+function vegetationHabitatAt(x: number, z: number, cover: number | null): VegetationHabitat {
+  const h = groundAt(x, z);
+  const slope = Math.abs(groundAt(x + SWARD_FM, z) - h) / SWARD_FM;
+  return (['open', 'wood', 'water', 'cliff', 'ruin'] as const)[swardCtxAt(x, z, cover, slope)];
+}
+function fringeKindAt(x: number, z: number, cover: number | null, r: () => number): VegKind {
+  const k = siteKindAt(x, z, cover, r);
+  if (!TRUNKED.includes(k)) return k;
+  const q = r();
+  return q < 0.38 ? 'bush' : q < 0.48 ? 'snag' : k;
+}
+function livingKindAt(x: number, z: number, cover: number | null, r: () => number): VegKind | null {
+  const k = siteKindAt(x, z, cover, r);
+  return STONY.includes(k) || DEADWOOD.includes(k) || k === 'grass' ? null : k;
+}
+const freshVegSeedStats = (): VegSeedStats => ({
+  proposedClumps: 0, acceptedClumps: 0, interiorGroups: 0, fringeGroups: 0,
+  proposedLiving: 0, livingStrays: 0, groundEvents: 0, anchors: 0, acceptedSites: 0,
+  rejectedSurface: 0, rejectedWall: 0, rejectedCover: 0, ms: 0,
+});
 function seedCell(gx: number, gz: number): void {
   const key = `${gx},${gz}`;
   if (vegSeeded.has(key)) return;
@@ -6689,30 +7366,66 @@ function seedCell(gx: number, gz: number): void {
   }
   vegDeferredAt.delete(key);
   vegSeeded.add(key);
-  const r = mulberry32(((gx * 73856093) ^ (gz * 19349663)) >>> 0);
   if (!vegGrid.has(key)) vegGrid.set(key, []);
-  const ceiling = cover !== null
-    ? (COVER_VEG[cover] ?? 6)
-    // No cover here yet: fall back to a ceiling blended from the climate
-    // rather than a switch on one global name.
-    : (() => { const cw = climateAt(mx, mz).w; return 4 * cw[0] + 14 * cw[1] + 9 * cw[2] + 12 * cw[3] + 6 * cw[4]; })();
-  // …and HOW MUCH of it, where, is still the noise field's business. Cover is
-  // 37m data; it must never become a visible grid of thickets, so the density
-  // field keeps deciding which patch of a cover class is thick and which is
-  // open, exactly as before.
-  const dens = vegDensity(mx, mz);
-  const clumps = Math.round(ceiling * (0.15 + dens * 1.25));
-  for (let i = 0; i < clumps; i++) {
-    const x = gx * VEG_CELL + r() * VEG_CELL, z = gz * VEG_CELL + r() * VEG_CELL;
-    const rad = 6 + r() * 16 * (0.4 + dens);
-    const count = Math.round((5 + r() * 14) * (0.5 + dens));
-    plantClump(x, z, rad, count, siteKindAt(x, z, sampleCover(x, z), r), r);
+  const t0 = performance.now();
+  const stats = freshVegSeedStats();
+
+  // A FIXED PROPOSAL BUDGET, with density sampled where each clump would
+  // actually stand. The old centre sample made all 220m agree; this lets the
+  // same continuous field carry a stand cleanly across a bucket boundary.
+  for (let i = 0; i < VEGETATION_DISTRIBUTION.clumpCandidates; i++) {
+    stats.proposedClumps++;
+    const c = vegetationCandidate(gx, gz, i, VEGETATION_DISTRIBUTION.clumpCandidates, 0x2a1f4d31);
+    const x = (gx + c.u) * VEG_CELL, z = (gz + c.v) * VEG_CELL;
+    const cv = sampleCover(x, z);
+    const ceiling = vegCeilingAt(x, z, cv);
+    if (ceiling <= 0) { stats.rejectedCover++; continue; }
+    const dens = vegDensity(x, z);
+    if (c.accept >= vegetationClumpChance(ceiling, dens)) continue;
+    const role = vegetationClumpRole(dens, c.role);
+    if (!role) continue;
+    stats.acceptedClumps++;
+    if (role === 'interior') stats.interiorGroups++; else stats.fringeGroups++;
+    const r = mulberry32(c.seed);
+    const dominant = role === 'fringe'
+      ? fringeKindAt(x, z, cv, r)
+      : siteKindAt(x, z, cv, r);
+    let rad = 6 + r() * 16 * (0.4 + dens);
+    let count = Math.round((5 + r() * 14) * (0.5 + dens));
+    if (role === 'fringe') {
+      rad *= VEGETATION_DISTRIBUTION.fringeRadiusMul;
+      count = Math.max(2, Math.round(count * VEGETATION_DISTRIBUTION.fringeCountMul));
+    }
+    plantClump(x, z, rad, count, dominant, r, role, stats);
   }
-  // A few genuine loners — a lone snag or boulder still reads as deliberate.
+
+  // LIVING STRAYS ARE THEIR OWN BOUNDED CANDIDATES. Their floor is strongest
+  // at wet/disturbed ground, weaker in woods and cliffs, and fades to zero in
+  // the strong interior where another plant carries no new information.
+  const lr = mulberry32(((gx * 1103515245) ^ (gz * 12345) ^ 0x34f17a2b) >>> 0);
+  const livingTone = makeTone(lr, mx, mz);
+  for (let i = 0; i < VEGETATION_DISTRIBUTION.livingCandidates; i++) {
+    stats.proposedLiving++;
+    const c = vegetationCandidate(gx, gz, i, VEGETATION_DISTRIBUTION.livingCandidates, 0x6b8b4567);
+    const x = (gx + c.u) * VEG_CELL, z = (gz + c.v) * VEG_CELL;
+    const cv = sampleCover(x, z);
+    if (vegCeilingAt(x, z, cv) <= 0) { stats.rejectedCover++; continue; }
+    const dens = vegDensity(x, z);
+    const habitat = vegetationHabitatAt(x, z, cv);
+    if (c.accept >= vegetationLivingChance(habitat, dens)) continue;
+    const r = mulberry32(c.seed);
+    const k = livingKindAt(x, z, cv, r);
+    if (!k) continue;
+    if (pushSite(x, z, k, r, livingTone, 'living-stray', stats)) stats.livingStrays++;
+  }
+
+  // GROUND EVENTS retain the old geology/deadwood pass. It has its own RNG so
+  // accepting a stand or a living stray cannot move a boulder elsewhere.
   // Bare ground and ice get boulders and nothing else: a dead tree standing in
   // a salt pan is the kind of detail that reads as a bug — and so does a
   // scree slope that cover called grass because the satellite pixel landed on
   // the one tuft holding on between the rocks.
+  const r = mulberry32(((gx * 73856093) ^ (gz * 19349663) ^ 0x1b873593) >>> 0);
   const strays = Math.round(r() * 3);
   const cellSlope = Math.abs(groundAt(mx + SWARD_FM, mz) - groundAt(mx, mz)) / SWARD_FM;
   const stony = cover === COVER.bare || cover === COVER.snow || cover === COVER.built
@@ -6723,8 +7436,11 @@ function seedCell(gx: number, gz: number): void {
     const k: VegKind = stony
       ? (roll < 0.72 ? 'rock' : 'spire')
       : roll < 0.4 ? 'rock' : roll < 0.68 ? 'snag' : roll < 0.9 ? 'log' : 'spire';
-    pushSite(gx * VEG_CELL + r() * VEG_CELL, gz * VEG_CELL + r() * VEG_CELL, k, r, tone);
+    if (pushSite(gx * VEG_CELL + r() * VEG_CELL, gz * VEG_CELL + r() * VEG_CELL,
+      k, r, tone, 'ground-event', stats, false)) stats.groundEvents++;
   }
+  stats.ms = performance.now() - t0;
+  vegSeedStats.set(key, stats);
 }
 
 // ── the sward ──────────────────────────────────────────────────────
@@ -6928,6 +7644,16 @@ const swardU = {
    *  card lit exactly as the ground under it, 1 is a little wall. See the note
    *  at the injection site. */
   uSwardUp: { value: 0.25 },
+  uFlowerPatchFill: { value: SWARD_FLOWER.patchFill },
+  uFlowerStrayOpen: { value: SWARD_FLOWER.stray.open },
+  uFlowerStrayWood: { value: SWARD_FLOWER.stray.wood },
+  uFlowerStrayWater: { value: SWARD_FLOWER.stray.water },
+  uFlowerStrayCliff: { value: SWARD_FLOWER.stray.cliff },
+  uFlowerStrayRuin: { value: SWARD_FLOWER.stray.ruin },
+  uFlowerPatchM: { value: SWARD_FLOWER.patchMetres },
+  uFlowerSpeciesM: { value: SWARD_FLOWER.speciesMetres },
+  /** 1 paints patch flowers warm and solitary flowers cyan. Normal is 0. */
+  uFlowerDbg: { value: 0 },
   /** The outermost band's reach: the ONE curve every band thins along, so the
    *  fade cannot have a seam where two bands meet. */
   // The outermost fade's END, not a band's reach: everything past this is
@@ -7220,6 +7946,11 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         uniform vec3 uSwardEye; uniform vec3 uSwardTint; uniform float uSwardDbg;
         uniform float uSwardFall; uniform float uSwardNear; uniform float uSwardMatch;
         uniform float uSwardVary; uniform float uSwardUp;
+        uniform float uFlowerPatchFill;
+        uniform float uFlowerStrayOpen; uniform float uFlowerStrayWood;
+        uniform float uFlowerStrayWater; uniform float uFlowerStrayCliff;
+        uniform float uFlowerStrayRuin; uniform float uFlowerPatchM;
+        uniform float uFlowerSpeciesM; uniform float uFlowerDbg;
         uniform float uTime; uniform vec2 uGust;
         ${SWARD_FLOW_NAMES.map((n) => `uniform vec3 ${n};`).join(' ')}
         varying vec3 vSward;
@@ -7338,19 +8069,27 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         vec4 sColSample = texture2D(uSwardCol, sUv);
         float sCtx = floor(sColSample.a * 255.0 + 0.5);
         float sFlowerRate = sCtx > 3.5 ? 0.14 : sCtx > 2.5 ? 0.05 : sCtx > 1.5 ? 0.10 : sCtx > 0.5 ? 0.035 : 0.06;
-        float sClumpN = swNoise(sCell / 34.0);
+        float sClumpN = swNoise(sCell / max(uFlowerPatchM, 1.0));
         float sClumpChance = smoothstep(sFlowerRate * 1.4, sFlowerRate * 0.3, sClumpN);
         float sH4 = swHash(sKey * 3.3 + 47.1);
         // A THIRD OF A FLOWERING PATCH, not half of it. At 0.5 the reported
         // hillside came up a solid wash of colour; a meadow in bloom is still
         // mostly grass, with the flowers standing up THROUGH it.
-        bool sIsFlower = sH4 < sClumpChance * 0.3;
+        float sPatchChance = sClumpChance * uFlowerPatchFill;
+        float sStrayChance = sCtx > 3.5 ? uFlowerStrayRuin
+          : sCtx > 2.5 ? uFlowerStrayCliff
+          : sCtx > 1.5 ? uFlowerStrayWater
+          : sCtx > 0.5 ? uFlowerStrayWood
+          : uFlowerStrayOpen;
+        float sFlowerChance = max(sPatchChance, sStrayChance);
+        bool sIsFlower = sH4 < sFlowerChance;
+        bool sIsStrayFlower = sIsFlower && sH4 >= sPatchChance;
         // ONE SPECIES PER PATCH, not per blade — a drift of buttercups reads
         // as a drift because every blade in it agrees on the flower, and the
         // patch-scale key (same cell swNoise reads) is what makes neighbouring
         // patches free to disagree, which is the "several colours in one
         // meadow" a single habitat colour could never give.
-        float sSpecies = floor(swHash(floor(sCell / 34.0) * 5.3 + 71.0) * 3.0);
+        float sSpecies = floor(swHash(floor(sCell / max(uFlowerSpeciesM, 1.0)) * 5.3 + 71.0) * 3.0);
         // ── A PARTITION OF UNITY, WHICH IS WHY THERE IS NO LONGER A BAND EDGE ──
         //
         // Reported from the seat as "a stark band ahead of the car, mid grass,
@@ -7522,7 +8261,9 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // interpolated into grass with a gradient on it. Per-card and flat is
         // the whole point.
         if (sIsFlower) {
-          if (aBlade < 0.5) {
+          if (uFlowerDbg > 0.5) {
+            vSward = sIsStrayFlower ? vec3(0.05, 0.85, 1.0) : vec3(1.0, 0.18, 0.04);
+          } else if (aBlade < 0.5) {
             vSward *= vec3(0.80, 1.06, 0.74);
           } else {
             vec3 sFlow = sCtx > 3.5
@@ -7862,10 +8603,25 @@ function refreshSward(): void {
 // slow tick — the field only needs to change as fast as you drive through it.
 let vegAt = 0, swardAt = 0;
 let vegMs = 0;
+const emptyVegRoles = (): Record<VegetationRole, number> =>
+  ({ interior: 0, fringe: 0, 'living-stray': 0, 'ground-event': 0, polygon: 0 });
+let vegActiveRoles = emptyVegRoles();
+let vegActiveAnchors = 0;
+let vegRoleDebug = false;
+const VEG_ROLE_COL: Record<VegetationRole | 'anchor', THREE.Color> = {
+  interior: new THREE.Color(0x35d05b),
+  fringe: new THREE.Color(0xf2c94c),
+  'living-stray': new THREE.Color(0x35cfee),
+  'ground-event': new THREE.Color(0xe35a9b),
+  polygon: new THREE.Color(0x8a6bd8),
+  anchor: new THREE.Color(0xffffff),
+};
 function refreshVeg(): void {
   const t0 = performance.now();
   const counts: Record<string, number> = { broadleaf: 0, conifer: 0, palm: 0, snag: 0, bush: 0, rock: 0, grass: 0,
     acacia: 0, cactus: 0, fern: 0, log: 0, spire: 0 };
+  const activeRoles = emptyVegRoles();
+  let activeAnchors = 0;
   let trunkN = 0;
   const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
   const reach = Math.ceil(VEG_RANGE / VEG_CELL);
@@ -7917,6 +8673,8 @@ function refreshVeg(): void {
         vegDummy.scale.set(v.s * (v.sw ?? 1), v.s * (v.sy ?? 1), v.s);
         vegDummy.updateMatrix();
         mesh.setMatrixAt(i, vegDummy.matrix);
+        activeRoles[v.role]++;
+        if (v.anchor) activeAnchors++;
         // The same dissolve the sward does, at the scatter's own horizon: the
         // last ranks of scrub slide toward the colour of the ground they stand
         // on instead of standing as saturated confetti against it (and instead
@@ -7924,7 +8682,9 @@ function refreshVeg(): void {
         // more of themselves — a distant conifer is seen against the terrain
         // BEHIND it, not under it.
         const tt = Math.sqrt(d2v) / VEG_RANGE;
-        if (tt > 0.5) {
+        if (vegRoleDebug) {
+          mesh.setColorAt(i, VEG_ROLE_COL[v.anchor ? 'anchor' : v.role]);
+        } else if (tt > 0.5) {
           // LINEAR, not squared: a squared ramp left scrub on a 70%-range
           // ridge line at nine-tenths saturation — precisely the confetti the
           // dissolve exists to kill. Linear starts telling at mid-range.
@@ -7960,6 +8720,8 @@ function refreshVeg(): void {
   }
   trunks.count = trunkN;
   trunks.instanceMatrix.needsUpdate = true;
+  vegActiveRoles = activeRoles;
+  vegActiveAnchors = activeAnchors;
   vegMs = performance.now() - t0;
   // Forget buckets far behind so a long drive cannot grow the site list
   // without bound. They regenerate identically if you come back.
@@ -7969,6 +8731,7 @@ function refreshVeg(): void {
       if (Math.abs(kx - cx) > reach + 3 || Math.abs(kz - cz) > reach + 3) {
         vegGrid.delete(key);
         vegSeeded.delete(key);
+        vegSeedStats.delete(key);
       }
     }
   }
@@ -8514,6 +9277,10 @@ const Q_ROAD = 1, Q_TRACK = 0.55, Q_GROUND = 0.2;
 const GRID = 24;
 const gkey = (x: number, z: number): string => `${Math.floor(x / GRID)},${Math.floor(z / GRID)}`;
 interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?: number; yb?: number; tk?: boolean; tn?: boolean;
+  /** The corridor's break lines for this strip, computed once — see stripBreakLines. */
+  bl?: BreakLine[];
+  /** How far out from the centreline this strip's corridor reaches: shoulder plus its widest toe. */
+  reach?: number;
   /** Pre-grid only: the OSM way key this deckless segment belongs to, so a
    *  way's own crop lookup can be blind to its own pre-registered body. */
   dks?: string;
@@ -8536,6 +9303,9 @@ interface Seg { ax: number; az: number; bx: number; bz: number; hw: number; ya?:
   /** Which ribbon() build this segment came from — probe-only, for
    *  attributing profile discontinuities to fragment boundaries. */
   fd?: number;
+  /** The OSM layer this deck was drawn on (see layerOf) — so a probe at a
+   *  crossing can say which deck is the flyover. */
+  ly?: number;
   /** The OSM way key this segment was built from — probe-only. Names cannot
    *  say "same way": every unnamed service way matches every other by
    *  nm '?', which once classified a whole web of DIFFERENT ways as
@@ -9522,43 +10292,803 @@ function roadCeiling(x: number, z: number): number | null {
   }
   return best === null ? null : best - CUT_CLEAR;
 }
-/** The two triangles of every grid cell of a terrain tile, as index triples,
- *  derived from the index buffer rather than from PlaneGeometry's internal
- *  vertex order — which is the sort of assumption that survives until a three
- *  release quietly changes it. Built once per (SEG, tile) and cached by SEG,
- *  since every tile at a given dial setting shares the topology. */
-const cellTriCache = new Map<number, Int32Array>();
-function cellTriangles(geo: THREE.BufferGeometry, SEG: number): Int32Array {
-  const hit = cellTriCache.get(SEG);
-  if (hit) return hit;
+// ═══════════════════ THE CORRIDOR IS IN THE TERRAIN ═══════════════════
+//
+// A road's cross-section — carriageway floor, a shoulder, then a cut face
+// climbing to the hill or a bank falling to the field, then the ground — is
+// metres wide. A terrain cell is 8-15m. For as long as the corridor was
+// something the carve did to a regular grid, every kerb sample dragged whole
+// cell corners down and the result was a bench: a flat shelf a cell wide
+// beside every road, which the batter strip then tried to hide with a sheet
+// (three passes of that, measured on every survey). The fix is the one a
+// terrain that has roads in it needs: vertices ON the corridor's break lines.
+//
+// Every cell a strip's crest line or toe line crosses is split along those
+// lines (convex polygon splitting, fan-triangulated), so the mesh has a row
+// of vertices at the shoulder's edge and a row at the toe; a plain cell that
+// shares an edge with a split one takes the edge's points into its own fan,
+// so there are no T-junctions. Heights come from one closed-form profile,
+// `corridorH`: under the carriageway the deck floor, then the wedge the
+// batter always drew — a face at CUTF_K up to the ground or a bank at
+// BANK_K down to it — and the ground itself past the toe. The carve is then
+// not needed on a refined tile: the surface is the profile by construction.
+//
+// `?refine=0` builds the old grid and carves it, so the two can be measured
+// against each other.
+const REFINE = new URLSearchParams(location.search).get('refine') !== '0';
+const BANK_K = 0.6;         // a fill bank falls this much per metre out from the crest
+const CUTF_K = 0.62;        // a cut face rises this much per metre out — the carve's own slope
+const CUT_REACH_M = 8;      // past this an unmet cut face steps up to the hill: a wall
+const TOE_REACH = 16;       // how far out a bank or a face is looked for at all
+const DECK_GAP_T = 3;       // a crest this far above the ground is a structure: no bank
+const EARTH_T: Rgb = [0.42, 0.34, 0.26];
+/** The corridor is built into tiles this close to the truck; further out a
+ *  tile keeps the plain grid and the carve, and STITCHES to any refined
+ *  neighbour along their shared border. A tile that comes into range while
+ *  plain is rebuilt — see flushTerrain. */
+const REFINE_R = Number(new URLSearchParams(location.search).get('refr') ?? 1100);
+/** Every tile's border vertices, world x, z, y in threes, so a neighbour can
+ *  take the same points on the shared edge and no crack opens. Float64: a
+ *  Float32 world x at 3.4km from the origin steps by 0.24mm, and two tiles'
+ *  copies of one point rounded to different millimetre keys — no point of
+ *  the owner's row matched, nothing pinned, and the audit rebuilt the
+ *  follower five times a second for ever (Camps Bay, 9026/9834). */
+const refinedBorders = new Map<string, Float64Array>();
+/** A point's millimetre cell. */
+const mmKey = (x: number, z: number): string => `${Math.round(x * 1000)},${Math.round(z * 1000)}`;
+type MmPt = [number, number, number];
+/** A border row indexed by millimetre cell, and the lookup that finds a
+ *  point WITHIN a millimetre rather than in exactly its cell: a world
+ *  position recovered from a Float32 local one carries up to 6e-5 of error,
+ *  so the same point can sit either side of a cell boundary. */
+function mmIndex(row: ArrayLike<number>): Map<string, MmPt> {
+  const m = new Map<string, MmPt>();
+  for (let i = 0; i + 2 < row.length; i += 3) m.set(mmKey(row[i], row[i + 1]), [row[i], row[i + 1], row[i + 2]]);
+  return m;
+}
+function mmNear(idx: Map<string, MmPt>, x: number, z: number, tol = 1.5e-3): MmPt | undefined {
+  const kx = Math.round(x * 1000), kz = Math.round(z * 1000);
+  const exact = idx.get(`${kx},${kz}`);
+  if (exact && Math.abs(exact[0] - x) <= tol && Math.abs(exact[1] - z) <= tol) return exact;
+  let best: MmPt | undefined, bd = tol * tol;
+  for (let dx = -1; dx <= 1; dx++) for (let dz = -1; dz <= 1; dz++) {
+    const p = idx.get(`${kx + dx},${kz + dz}`);
+    if (!p) continue;
+    const d = (p[0] - x) * (p[0] - x) + (p[1] - z) * (p[1] - z);
+    if (d < bd) { bd = d; best = p; }
+  }
+  return best;
+}
+/** Is (x, z) on the tile's boundary — one of its four edges, within it? */
+function onTileEdge(t: HeightTile, x: number, z: number): boolean {
+  const e = 1e-3;
+  if (x < t.xs - e || x > t.xs + t.w + e || z < t.zs - e || z > t.zs + t.h + e) return false;
+  return Math.abs(x - t.xs) < e || Math.abs(x - (t.xs + t.w)) < e || Math.abs(z - t.zs) < e || Math.abs(z - (t.zs + t.h)) < e;
+}
+/** Where the quiet-path border audit is in its round of the tiles. */
+let borderAuditAt = 0;
+/** Is the road stream quiet — nothing in flight and no road landed for a
+ *  breath? Not "nothing queued": a tile waiting on a retry backoff would
+ *  hold every corridor off for as long as it kept failing. */
+let osmLastLand = 0;
+function osmStreamQuiet(): boolean { return osmInFlight === 0 && performance.now() - osmLastLand > 2500; }
+/** Cost of the refinement, for `__refine`. */
+const refineCost = { tiles: 0, cells: 0, tris: 0, ms: 0, plainTris: 0, verts: 0, msLines: 0, msSplit: 0, msHeights: 0, msGeo: 0 };
+
+/** How far out along (ox,oz) from a crest point (cx,cz) whose floor is y the
+ *  wedge meets the ground: 0 at the crest already, CUT_REACH_M for a wall,
+ *  -1 where the road stands clear of the ground (a structure: no bank). */
+function toeOut(cx: number, cz: number, ox: number, oz: number, y: number): number {
+  const N0 = sampleHeight(cx, cz);
+  if (y - N0 > DECK_GAP_T) return -1;
+  if (Math.abs(N0 - y) < 0.25) return 0;
+  const cut = N0 > y;
+  let pd = 0, pg = Math.abs(N0 - y);
+  for (let d = 0.5; d <= TOE_REACH + 1e-6; d += 0.5) {
+    const N = sampleHeight(cx + ox * d, cz + oz * d);
+    const w = cut ? y + d * CUTF_K : y - d * BANK_K;
+    const g = cut ? N - w : w - N;                 // positive while still off the ground
+    if (g <= 0) return pd + (d - pd) * (pg / (pg - g || 1));
+    if (cut && d >= CUT_REACH_M) return CUT_REACH_M;
+    pd = d; pg = g;
+  }
+  return cut ? CUT_REACH_M : -1;
+}
+interface BreakLine { ax: number; az: number; bx: number; bz: number }
+/** The break lines a strip adds to the terrain: its crest (the shoulder's
+ *  outer edge) and its toe, on both sides. */
+function stripBreakLines(s: Seg): BreakLine[] {
+  if (s.bl) return s.bl;
+  const out: BreakLine[] = [];
+  s.bl = out;
+  s.reach = s.hw + 0.6;
+  if (s.tk || s.tn || s.ya === undefined || s.yb === undefined) return out;
+  const dx = s.bx - s.ax, dz = s.bz - s.az, l = Math.hypot(dx, dz);
+  if (l < 0.5) return out;
+  const nx = -dz / l, nz = dx / l;
+  const r = s.hw + 0.6;
+  // Not until the ground is there: a toe marched over a missing DEM tile is
+  // marched over zero, and it would be cached for the strip's whole life.
+  for (const side of [-1, 1]) {
+    if (!hasHeight(s.ax + nx * side * r, s.az + nz * side * r) || !hasHeight(s.bx + nx * side * r, s.bz + nz * side * r)) { s.bl = undefined; return out; }
+  }
+  // AT GRADE, NO LINES. Where the shoulder's edge meets the ground within a
+  // decimetre at both ends on both sides there is no face and no bank, and
+  // the grid corners the profile sets to the floor already hold the
+  // carriageway within that decimetre. A town's flat streets cost nothing.
+  let flat = true;
+  const crest: Array<[number, number, number, number, number, number]> = [];
+  for (const side of [-1, 1]) {
+    const ox = nx * side, oz = nz * side;
+    const cax = s.ax + ox * r, caz = s.az + oz * r, cbx = s.bx + ox * r, cbz = s.bz + oz * r;
+    const ya = stripFloor(s, cax, caz).y - CUT_CLEAR, yb = stripFloor(s, cbx, cbz).y - CUT_CLEAR;
+    if (Math.abs(ya - sampleHeight(cax, caz)) > 0.12 || Math.abs(yb - sampleHeight(cbx, cbz)) > 0.12) flat = false;
+    crest.push([cax, caz, cbx, cbz, ya, yb]);
+  }
+  if (flat) return out;
+  let far = 0;
+  for (let i = 0; i < 2; i++) {
+    const side = i === 0 ? -1 : 1, ox = nx * side, oz = nz * side;
+    const [cax, caz, cbx, cbz, ya, yb] = crest[i];
+    out.push({ ax: cax, az: caz, bx: cbx, bz: cbz });
+    const ta = toeOut(cax, caz, ox, oz, ya), tb = toeOut(cbx, cbz, ox, oz, yb);
+    if (ta < 0 || tb < 0) continue;
+    far = Math.max(far, ta, tb);
+    if (ta > 0.3 || tb > 0.3) out.push({ ax: cax + ox * ta, az: caz + oz * ta, bx: cbx + ox * tb, bz: cbz + oz * tb });
+  }
+  s.reach = r + far + 0.5;
+  return out;
+}
+/** The corridor profile at a point: the height the terrain takes there and
+ *  what it is — 0 ground, 1 floor, 2 cut face, 3 fill bank. */
+function corridorH(x: number, z: number, N: number, cands?: Iterable<Seg>): { h: number; k: number } {
+  if (!cands) {
+    cutSet.clear();
+    stripsNear(x, z, Math.ceil(TOE_REACH / Math.max(1, cutL)) + 1, cutSet);
+    cands = cutSet;
+  }
+  let floor = Infinity;
+  let near: Seg | null = null, nearOut = Infinity, nearY = 0;
+  for (const s of cands) {
+    if (s.tk || s.tn || s.ya === undefined || s.yb === undefined) continue;
+    const f = stripFloor(s, x, z);
+    if (f.out <= 0) floor = Math.min(floor, f.y - CUT_CLEAR);
+    if (f.out < nearOut) { nearOut = f.out; near = s; nearY = f.y - CUT_CLEAR; }
+  }
+  if (near === null) return { h: N, k: 0 };
+  // A structure stands clear of the ground: the crest of the nearest strip,
+  // at the foot of this point, against the ground there.
+  const dx = near.bx - near.ax, dz = near.bz - near.az, l2 = dx * dx + dz * dz || 1;
+  const tt = clamp(((x - near.ax) * dx + (z - near.az) * dz) / l2, 0, 1);
+  const px = near.ax + dx * tt, pz = near.az + dz * tt, l = Math.sqrt(l2);
+  const sgn = ((x - px) * (-dz / l) + (z - pz) * (dx / l)) >= 0 ? 1 : -1;
+  const r = near.hw + 0.6;
+  const crestN = sampleHeight(px + (-dz / l) * sgn * r, pz + (dx / l) * sgn * r);
+  const structure = nearY - crestN > DECK_GAP_T;
+  if (floor < Infinity) {
+    // Under a carriageway or its shoulder: the floor. Dug to it where the
+    // ground stands above, raised to it where the ground falls away so an
+    // embankment is solid — unless the road stands clear, or this is water.
+    if (N >= floor) return { h: floor, k: 1 };
+    return structure || coverWater(x, z) ? { h: N, k: 0 } : { h: floor, k: 1 };
+  }
+  const out = nearOut;
+  if (N > nearY) {
+    const face = nearY + out * CUTF_K;
+    if (out >= CUT_REACH_M && N > face) return { h: N, k: 0 };
+    return face < N ? { h: face, k: 2 } : { h: N, k: 0 };
+  }
+  if (structure || coverWater(x, z)) return { h: N, k: 0 };
+  const bank = nearY - out * BANK_K;
+  return bank > N ? { h: bank, k: 3 } : { h: N, k: 0 };
+}
+/** The triangles of each lattice cell of a terrain geometry: `offs[c]..offs[c+1]`
+ *  index triples into `tris`. Two per cell on a plain grid, any number on a
+ *  refined one. Built once per geometry. */
+interface CellTris { seg: number; offs: Int32Array; tris: Int32Array }
+const cellTrisCache = new WeakMap<THREE.BufferGeometry, CellTris>();
+function cellTrisOf(geo: THREE.BufferGeometry, SEG: number): CellTris {
+  const hit = cellTrisCache.get(geo);
+  if (hit && hit.seg === SEG) return hit;
   const idx = geo.index as THREE.BufferAttribute;
   const pos = geo.attributes.position as THREE.BufferAttribute;
-  // Local coords run -w/2..w/2; the cell index is derived from position, so
-  // the mapping holds whatever order the vertices were emitted in.
-  let minX = Infinity, minZ = Infinity, maxX = -Infinity;
+  let minX = Infinity, minZ = Infinity, maxX = -Infinity, maxZ = -Infinity;
   for (let i = 0; i < pos.count; i++) {
     const x = pos.getX(i), z = pos.getZ(i);
     if (x < minX) minX = x; if (x > maxX) maxX = x;
-    if (z < minZ) minZ = z;
+    if (z < minZ) minZ = z; if (z > maxZ) maxZ = z;
   }
-  const cell = (maxX - minX) / SEG;
-  const out = new Int32Array(SEG * SEG * 6).fill(-1);
-  const seen = new Int32Array(SEG * SEG);
-  for (let f = 0; f < idx.count / 3; f++) {
+  const cw = (maxX - minX) / SEG || 1, ch = (maxZ - minZ) / SEG || 1;
+  const nT = idx.count / 3;
+  const cellOf = new Int32Array(nT);
+  const counts = new Int32Array(SEG * SEG);
+  for (let f = 0; f < nT; f++) {
     const a = idx.getX(f * 3), b = idx.getX(f * 3 + 1), c = idx.getX(f * 3 + 2);
     const mx = (pos.getX(a) + pos.getX(b) + pos.getX(c)) / 3 - minX;
     const mz = (pos.getZ(a) + pos.getZ(b) + pos.getZ(c)) / 3 - minZ;
-    const ix = clamp(Math.floor(mx / cell), 0, SEG - 1);
-    const iz = clamp(Math.floor(mz / cell), 0, SEG - 1);
+    const ix = clamp(Math.floor(mx / cw), 0, SEG - 1), iz = clamp(Math.floor(mz / ch), 0, SEG - 1);
     const k = iz * SEG + ix;
-    if (seen[k] > 1) continue;
-    const o = k * 6 + seen[k] * 3;
-    out[o] = a; out[o + 1] = b; out[o + 2] = c;
-    seen[k]++;
+    cellOf[f] = k; counts[k]++;
   }
-  cellTriCache.set(SEG, out);
+  const offs = new Int32Array(SEG * SEG + 1);
+  for (let k = 0; k < SEG * SEG; k++) offs[k + 1] = offs[k] + counts[k];
+  const fill = new Int32Array(SEG * SEG);
+  const tris = new Int32Array(nT * 3);
+  for (let f = 0; f < nT; f++) {
+    const k = cellOf[f];
+    const o = (offs[k] + fill[k]++) * 3;
+    tris[o] = idx.getX(f * 3); tris[o + 1] = idx.getX(f * 3 + 1); tris[o + 2] = idx.getX(f * 3 + 2);
+  }
+  const out = { seg: SEG, offs, tris };
+  cellTrisCache.set(geo, out);
   return out;
 }
+/** The lattice resolution a terrain geometry was built at. */
+function segOf(geo: THREE.BufferGeometry): number {
+  const s = (geo.userData as { seg?: number }).seg;
+  if (s) return s;
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  return Math.round(Math.sqrt(pos.count)) - 1;
+}
+type Poly = Array<[number, number]>;
+/** Split a convex polygon by the infinite line through a break line. Points
+ *  that land on a cell boundary are recomputed from the line and the boundary
+ *  coordinate, so the neighbouring cell — split by the same line, from its own
+ *  pieces — arrives at the same point bit for bit. */
+function splitPoly(poly: Poly, L: BreakLine, x0: number, x1: number, z0: number, z1: number, eps: number): Poly[] {
+  const ax = L.ax, az = L.az, dx = L.bx - ax, dz = L.bz - az;
+  const n = poly.length;
+  const sd = new Float64Array(n);
+  let pos = false, neg = false;
+  for (let i = 0; i < n; i++) {
+    sd[i] = (poly[i][0] - ax) * dz - (poly[i][1] - az) * dx;
+    if (sd[i] > eps) pos = true; else if (sd[i] < -eps) neg = true;
+  }
+  if (!pos || !neg) return [poly];
+  const left: Poly = [], right: Poly = [];
+  const onX = (x: number): boolean => Math.abs(x - x0) < 1e-7 || Math.abs(x - x1) < 1e-7;
+  const onZ = (z: number): boolean => Math.abs(z - z0) < 1e-7 || Math.abs(z - z1) < 1e-7;
+  for (let i = 0; i < n; i++) {
+    const p = poly[i], q = poly[(i + 1) % n], sp = sd[i], sq = sd[(i + 1) % n];
+    if (sp >= -eps) left.push(p);
+    if (sp <= eps) right.push(p);
+    if ((sp > eps && sq < -eps) || (sp < -eps && sq > eps)) {
+      const f = sp / (sp - sq);
+      let ix = p[0] + (q[0] - p[0]) * f, iz = p[1] + (q[1] - p[1]) * f;
+      if (onX(p[0]) && onX(q[0]) && Math.abs(p[0] - q[0]) < 1e-7 && Math.abs(dx) > 1e-9) {
+        ix = p[0]; iz = az + (ix - ax) * (dz / dx);
+      } else if (onZ(p[1]) && onZ(q[1]) && Math.abs(p[1] - q[1]) < 1e-7 && Math.abs(dz) > 1e-9) {
+        iz = p[1]; ix = ax + (iz - az) * (dx / dz);
+      }
+      left.push([ix, iz]); right.push([ix, iz]);
+    }
+  }
+  const out: Poly[] = [];
+  if (left.length >= 3) out.push(left);
+  if (right.length >= 3) out.push(right);
+  return out;
+}
+/** Does a segment touch an axis-aligned box? (Liang–Barsky.) */
+function segTouchesBox(L: BreakLine, x0: number, x1: number, z0: number, z1: number): boolean {
+  const dx = L.bx - L.ax, dz = L.bz - L.az;
+  let t0 = 0, t1 = 1;
+  const clip = (p: number, q: number): boolean => {
+    if (Math.abs(p) < 1e-12) return q >= 0;
+    const r = q / p;
+    if (p < 0) { if (r > t1) return false; if (r > t0) t0 = r; }
+    else { if (r < t0) return false; if (r < t1) t1 = r; }
+    return true;
+  };
+  return clip(-dx, L.ax - x0) && clip(dx, x1 - L.ax) && clip(-dz, L.az - z0) && clip(dz, z1 - L.az);
+}
+interface RefinedTile { geo: THREE.BufferGeometry; kinds: Uint8Array; cells: number; tris: number }
+/** A terrain tile with the road corridors built into its geometry, or null
+ *  where no strip comes near it (a plain grid is the right answer there). */
+function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): RefinedTile | null {
+  const t0 = performance.now();
+  const cw = t.w / SEG, ch = t.h / SEG;
+  const near = new Set<Seg>();
+  const m = TOE_REACH + cutL;
+  for (let cx = Math.floor((t.xs - m) / cutL); cx <= Math.floor((t.xs + t.w + m) / cutL); cx++) {
+    for (let cz = Math.floor((t.zs - m) / cutL); cz <= Math.floor((t.zs + t.h + m) / cutL); cz++) {
+      const arr = cutCells.get(`${cx},${cz}`);
+      if (arr) for (const s of arr) if (corridor && !s.tk && !s.tn && s.ya !== undefined && s.yb !== undefined) near.add(s);
+    }
+  }
+  // THE NEIGHBOURS' BORDERS. A refined tile next door has vertices on the
+  // shared edge that this tile must share too, at its heights.
+  // A BORDER HAS ONE OWNER. Two corridor tiles computing the same border
+  // row from their own raster edges and their own line sets disagreed by up
+  // to 0.91m with 41 points missing (Vélizy, north edge) — the crack that
+  // drew as a dark line. The west and the north tile own a shared border; a
+  // corridor tile follows only the owners of its west and north edges, a
+  // plain tile follows every refined neighbour.
+  // Every tile — plain or corridor — follows the owners of its west and
+  // north edges. Reading the field "a hair inside" each tile made the two
+  // sides of a plain border read two different rasters, a DEM pixel apart,
+  // and on a Lesotho hillside that is a wall of metres along every seam
+  // (measured live at Senqu from the drone). The owner reads its own raster;
+  // the follower takes the owner's row.
+  const seeds: Array<[number, number, number]> = [];
+  let extraSeed = false;
+  for (const [dx, dy] of [[-1, 0], [0, -1]]) {
+    const nk = `${t.tx + dx}/${t.ty + dy}`;
+    const nb = refinedBorders.get(nk);
+    if (!nb) continue;
+    for (let i = 0; i < nb.length; i += 3) {
+      const x = nb[i], z = nb[i + 1];
+      // ON ONE OF MY EDGES — within my box, not merely on the edge's line.
+      // The line test took the north owner's whole east column as seeds:
+      // phantom vertices a hundred metres outside the tile, pinned, stored
+      // as this tile's border, and fanned into the corner cell's ring.
+      if (!onTileEdge(t, x, z)) continue;
+      seeds.push([x, z, nb[i + 2]]);
+      const ix = Math.round((x - t.xs) / cw), iz = Math.round((z - t.zs) / ch);
+      if (Math.abs(x - (t.xs + ix * cw)) > 1e-3 || Math.abs(z - (t.zs + iz * ch)) > 1e-3) extraSeed = true;
+    }
+  }
+  // Lattice-only seeds are pins the plain path applies itself; only a
+  // neighbour's extra edge points need the ring machinery.
+  if (!near.size && !extraSeed) return null;
+  // The break lines, and the cells each one crosses. A cell within reach of
+  // any strip is `close`: its vertices take the corridor profile, the rest
+  // take the ground and never pay for the lookup.
+  const lines: BreakLine[] = [];
+  const ordered = [...near].sort((a, b) => b.hw - a.hw);
+  for (const s of ordered) for (const L of stripBreakLines(s)) lines.push(L);
+  const cellLines = new Map<number, number[]>();
+  const close = new Uint8Array(SEG * SEG);
+  for (const s of near) {
+    const mm = (s.reach ?? s.hw + 0.6 + TOE_REACH) + 1;
+    const ix0 = Math.max(0, Math.floor((Math.min(s.ax, s.bx) - mm - t.xs) / cw)), ix1 = Math.min(SEG - 1, Math.floor((Math.max(s.ax, s.bx) + mm - t.xs) / cw));
+    const iz0 = Math.max(0, Math.floor((Math.min(s.az, s.bz) - mm - t.zs) / ch)), iz1 = Math.min(SEG - 1, Math.floor((Math.max(s.az, s.bz) + mm - t.zs) / ch));
+    for (let iz = iz0; iz <= iz1; iz++) for (let ix = ix0; ix <= ix1; ix++) close[iz * SEG + ix] = 1;
+  }
+  for (let li = 0; li < lines.length; li++) {
+    const L = lines[li];
+    const ix0 = Math.max(0, Math.floor((Math.min(L.ax, L.bx) - t.xs) / cw) - 1), ix1 = Math.min(SEG - 1, Math.floor((Math.max(L.ax, L.bx) - t.xs) / cw) + 1);
+    const iz0 = Math.max(0, Math.floor((Math.min(L.az, L.bz) - t.zs) / ch) - 1), iz1 = Math.min(SEG - 1, Math.floor((Math.max(L.az, L.bz) - t.zs) / ch) + 1);
+    if (ix1 < 0 || iz1 < 0 || ix0 > SEG - 1 || iz0 > SEG - 1) continue;
+    for (let iz = iz0; iz <= iz1; iz++) for (let ix = ix0; ix <= ix1; ix++) {
+      const x0 = t.xs + ix * cw, z0 = t.zs + iz * ch;
+      if (!segTouchesBox(L, x0 - 1e-6, x0 + cw + 1e-6, z0 - 1e-6, z0 + ch + 1e-6)) continue;
+      const k = iz * SEG + ix;
+      const arr = cellLines.get(k);
+      if (arr) { if (arr.length < 16) arr.push(li); } else cellLines.set(k, [li]);
+    }
+  }
+  if (!cellLines.size && !extraSeed) return null;
+  const t1 = performance.now();
+  // The strips within reach of each cell, indexed once per tile, so the
+  // height of a vertex asks a short list rather than the world's raster.
+  const cellStrips = new Map<number, Seg[]>();
+  for (const s of near) {
+    const mm = (s.reach ?? s.hw + 0.6 + TOE_REACH) + 1;
+    const ix0 = Math.max(0, Math.floor((Math.min(s.ax, s.bx) - mm - t.xs) / cw)), ix1 = Math.min(SEG - 1, Math.floor((Math.max(s.ax, s.bx) + mm - t.xs) / cw));
+    const iz0 = Math.max(0, Math.floor((Math.min(s.az, s.bz) - mm - t.zs) / ch)), iz1 = Math.min(SEG - 1, Math.floor((Math.max(s.az, s.bz) + mm - t.zs) / ch));
+    for (let iz = iz0; iz <= iz1; iz++) for (let ix = ix0; ix <= ix1; ix++) {
+      const k = iz * SEG + ix;
+      const arr = cellStrips.get(k);
+      if (arr) arr.push(s); else cellStrips.set(k, [s]);
+    }
+  }
+  // The vertex pool: the grid corners first, in lattice order, then whatever
+  // the splits add, deduplicated on a millimetre key so a point two cells
+  // both produce is one vertex.
+  const px: number[] = [], pz: number[] = [];
+  const pool = new Map<string, number>();
+  // …and within a millimetre, not only in the same cell: a seed comes back
+  // from the owner's Float32 geometry up to 6e-5 off the point this tile's
+  // own split lands on, and a pair a hair apart — one pinned, one solved —
+  // is a vertical sliver with a height step, a crack along the seam.
+  const vtx = (x: number, z: number): number => {
+    const kx = Math.round(x * 1000), kz = Math.round(z * 1000);
+    const k = `${kx},${kz}`;
+    let i = pool.get(k);
+    if (i !== undefined) return i;
+    let bd = 1.5e-3 * 1.5e-3;
+    for (let dx = -1; dx <= 1 && i === undefined; dx++) for (let dz = -1; dz <= 1; dz++) {
+      if (!dx && !dz) continue;
+      const j = pool.get(`${kx + dx},${kz + dz}`);
+      if (j === undefined) continue;
+      const d = (px[j] - x) * (px[j] - x) + (pz[j] - z) * (pz[j] - z);
+      if (d < bd) { bd = d; i = j; }
+    }
+    if (i === undefined) { i = px.length; pool.set(k, i); px.push(x); pz.push(z); }
+    return i;
+  };
+  for (let iz = 0; iz <= SEG; iz++) for (let ix = 0; ix <= SEG; ix++) vtx(t.xs + ix * cw, t.zs + iz * ch);
+  const corner = (ix: number, iz: number): number => iz * (SEG + 1) + ix;
+  const pinned = new Map<number, number>();                 // vertex → the neighbour's height
+  // Extra points on cell edges, by edge, so a plain neighbour can pick them up.
+  const edgePts = new Map<string, number[]>();
+  const noteEdge = (ix: number, iz: number, x: number, z: number, x0: number, z0: number, v: number): void => {
+    const onL = Math.abs(x - x0) < 1e-6, onR = Math.abs(x - (x0 + cw)) < 1e-6;
+    const onT = Math.abs(z - z0) < 1e-6, onB = Math.abs(z - (z0 + ch)) < 1e-6;
+    if ((onL || onR) && (onT || onB)) return;                 // a corner
+    let key: string | null = null;
+    if (onL) key = `v${ix}_${iz}`; else if (onR) key = `v${ix + 1}_${iz}`;
+    else if (onT) key = `h${iz}_${ix}`; else if (onB) key = `h${iz + 1}_${ix}`;
+    if (!key) return;
+    const arr = edgePts.get(key);
+    if (arr) { if (!arr.includes(v)) arr.push(v); } else edgePts.set(key, [v]);
+  };
+  // The owners' rows along each followed edge, sorted along the edge, so a
+  // follower's OWN extra points on that edge (its lines' crossings the owner
+  // does not have) can be pinned onto the owner's polyline rather than
+  // solved apart from it — a point standing off the neighbour's straight
+  // edge by even a decimetre is a hairline of sky.
+  const ownerRows = new Map<string, Array<[number, number]>>();   // edge → [along, y]
+  const edgeOf = (x: number, z: number): string | null =>
+    Math.abs(x - t.xs) < 1e-3 ? 'W' : Math.abs(x - (t.xs + t.w)) < 1e-3 ? 'E' : Math.abs(z - t.zs) < 1e-3 ? 'N' : Math.abs(z - (t.zs + t.h)) < 1e-3 ? 'S' : null;
+  for (const [x, z, y] of seeds) {
+    const e = edgeOf(x, z);
+    if (!e) continue;
+    const arr = ownerRows.get(e) ?? ownerRows.set(e, []).get(e) as Array<[number, number]>;
+    arr.push([e === 'W' || e === 'E' ? z : x, y]);
+  }
+  for (const arr of ownerRows.values()) arr.sort((a, b) => a[0] - b[0]);
+  const ownerY = (x: number, z: number): number | undefined => {
+    const e = edgeOf(x, z);
+    if (!e) return undefined;
+    const arr = ownerRows.get(e);
+    if (!arr || arr.length < 2) return undefined;
+    const a = e === 'W' || e === 'E' ? z : x;
+    if (a < arr[0][0] - 1e-3 || a > arr[arr.length - 1][0] + 1e-3) return undefined;
+    let lo = 0, hi = arr.length - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (arr[mid][0] <= a) lo = mid; else hi = mid; }
+    const span = arr[hi][0] - arr[lo][0];
+    return span < 1e-9 ? arr[lo][1] : arr[lo][1] + ((a - arr[lo][0]) / span) * (arr[hi][1] - arr[lo][1]);
+  };
+  for (const [x, z, y] of seeds) {
+    // Snapped to the lattice along the border, exactly as the neighbour's
+    // own splits were, so the key matches; a lattice corner is pinned too.
+    const v = vtx(x, z);
+    pinned.set(v, y);
+    const ix = clamp(Math.round((x - t.xs) / cw), 0, SEG), iz = clamp(Math.round((z - t.zs) / ch), 0, SEG);
+    const isCorner = Math.abs(x - (t.xs + ix * cw)) < 1e-3 && Math.abs(z - (t.zs + iz * ch)) < 1e-3;
+    if (isCorner) continue;
+    if (Math.abs(x - t.xs) < 1e-3) { const jz = clamp(Math.floor((z - t.zs) / ch), 0, SEG - 1); const k = `v0_${jz}`; (edgePts.get(k) ?? edgePts.set(k, []).get(k) as number[]).push(v); }
+    else if (Math.abs(x - (t.xs + t.w)) < 1e-3) { const jz = clamp(Math.floor((z - t.zs) / ch), 0, SEG - 1); const k = `v${SEG}_${jz}`; (edgePts.get(k) ?? edgePts.set(k, []).get(k) as number[]).push(v); }
+    else if (Math.abs(z - t.zs) < 1e-3) { const jx = clamp(Math.floor((x - t.xs) / cw), 0, SEG - 1); const k = `h0_${jx}`; (edgePts.get(k) ?? edgePts.set(k, []).get(k) as number[]).push(v); }
+    else if (Math.abs(z - (t.zs + t.h)) < 1e-3) { const jx = clamp(Math.floor((x - t.xs) / cw), 0, SEG - 1); const k = `h${SEG}_${jx}`; (edgePts.get(k) ?? edgePts.set(k, []).get(k) as number[]).push(v); }
+  }
+  const TA: number[] = [], TB: number[] = [], TC: number[] = [], TK: number[] = [];
+  const tri = (a: number, b: number, c: number, k: number): void => {
+    // Wound so the normal points up: (b-a) x (c-a) has a positive y.
+    const cy = (pz[b] - pz[a]) * (px[c] - px[a]) - (px[b] - px[a]) * (pz[c] - pz[a]);
+    if (Math.abs(cy) < 1e-4) return;                            // a sliver
+    if (cy > 0) { TA.push(a); TB.push(b); TC.push(c); } else { TA.push(a); TB.push(c); TC.push(b); }
+    TK.push(k);
+  };
+  let refinedCells = 0;
+  const done = new Uint8Array(SEG * SEG);
+  const cellPolys = new Map<number, number[][]>();          // cell → polygons as vertex ids
+  for (const [k, lis] of cellLines) {
+    const ix = k % SEG, iz = (k - ix) / SEG;
+    const x0 = t.xs + ix * cw, z0 = t.zs + iz * ch, x1 = x0 + cw, z1 = z0 + ch;
+    let polys: Poly[] = [[[x0, z0], [x1, z0], [x1, z1], [x0, z1]]];
+    const eps = 1e-6 * cw;
+    for (const li of lis) {
+      const L = lines[li];
+      const next: Poly[] = [];
+      for (const p of polys) for (const q of splitPoly(p, L, x0, x1, z0, z1, eps)) next.push(q);
+      polys = next;
+    }
+    const idPolys: number[][] = [];
+    for (const p of polys) {
+      const ids = p.map(([x, z]) => vtx(x, z));
+      for (let i = 0; i < p.length; i++) noteEdge(ix, iz, p[i][0], p[i][1], x0, z0, ids[i]);
+      idPolys.push(ids);
+    }
+    cellPolys.set(k, idPolys);
+    done[k] = 1;
+    refinedCells++;
+  }
+  // T-JUNCTION REPAIR. A cell's line list is capped, and the cell next door
+  // may have kept a line this one dropped — or lie in the next tile — so a
+  // point can stand on the shared edge for one side only. Measured at
+  // Vélizy as black dashes along the horizon. Every point any neighbour put
+  // on one of this cell's edges is inserted into the side of the polygon it
+  // lies on, and the fan then gives it a triangle.
+  const onSide = (ax: number, az: number, bx: number, bz: number, x: number, z: number): boolean => {
+    const dx = bx - ax, dz = bz - az, l2 = dx * dx + dz * dz;
+    if (l2 < 1e-12) return false;
+    const u = ((x - ax) * dx + (z - az) * dz) / l2;
+    if (u <= 1e-6 || u >= 1 - 1e-6) return false;
+    return Math.abs((x - ax) * dz - (z - az) * dx) / Math.sqrt(l2) < 2e-3;
+  };
+  for (const [k, idPolys] of cellPolys) {
+    const ix = k % SEG, iz = (k - ix) / SEG;
+    const have = new Set<number>();
+    for (const ids of idPolys) for (const v of ids) have.add(v);
+    for (const key of [`h${iz}_${ix}`, `h${iz + 1}_${ix}`, `v${ix}_${iz}`, `v${ix + 1}_${iz}`]) {
+      const pts = edgePts.get(key);
+      if (!pts) continue;
+      for (const v of pts) {
+        if (have.has(v)) continue;
+        let placed = false;
+        for (const ids of idPolys) {
+          for (let i = 0; i < ids.length; i++) {
+            const a = ids[i], b = ids[(i + 1) % ids.length];
+            if (onSide(px[a], pz[a], px[b], pz[b], px[v], pz[v])) { ids.splice(i + 1, 0, v); placed = true; break; }
+          }
+          if (placed) break;
+        }
+        if (placed) have.add(v);
+      }
+    }
+    for (const ids of idPolys) {
+      // FROM THE CENTROID, not a vertex, where a side carries a collinear
+      // point: a fan from any vertex drops the points on its own two sides
+      // out of every triangle — a T-junction on the edge the neighbour has
+      // them on. The centroid of a convex polygon is interior, so every side
+      // is an edge of exactly one triangle and every point on it a vertex of
+      // one. A polygon whose every vertex is a true corner fans from one of
+      // them at half the triangles. Judged on the FINAL ring, after repair.
+      if (ids.length === 3) { tri(ids[0], ids[1], ids[2], k); continue; }
+      let flat = false;
+      for (let i = 0; i < ids.length && !flat; i++) {
+        const a = ids[(i + ids.length - 1) % ids.length], b = ids[i], c = ids[(i + 1) % ids.length];
+        if (Math.abs((px[b] - px[a]) * (pz[c] - pz[a]) - (pz[b] - pz[a]) * (px[c] - px[a])) < 1e-3) flat = true;
+      }
+      if (!flat) { for (let i = 1; i + 1 < ids.length; i++) tri(ids[0], ids[i], ids[i + 1], k); continue; }
+      let mx = 0, mz = 0;
+      for (const v of ids) { mx += px[v]; mz += pz[v]; }
+      const cc = vtx(mx / ids.length, mz / ids.length);
+      for (let i = 0; i < ids.length; i++) tri(cc, ids[i], ids[(i + 1) % ids.length], k);
+    }
+  }
+  // The plain cells: two triangles, or a fan round a ring that takes in
+  // whatever points its neighbours put on the shared edges.
+  const along = (key: string): number[] => {
+    const arr = edgePts.get(key);
+    if (!arr) return [];
+    const horiz = key[0] === 'h';
+    return arr.slice().sort((a, b) => (horiz ? px[a] - px[b] : pz[a] - pz[b]));
+  };
+  for (let iz = 0; iz < SEG; iz++) for (let ix = 0; ix < SEG; ix++) {
+    const k = iz * SEG + ix;
+    if (done[k]) continue;
+    const c00 = corner(ix, iz), c10 = corner(ix + 1, iz), c11 = corner(ix + 1, iz + 1), c01 = corner(ix, iz + 1);
+    const top = along(`h${iz}_${ix}`), right = along(`v${ix + 1}_${iz}`), bottom = along(`h${iz + 1}_${ix}`), left = along(`v${ix}_${iz}`);
+    if (!top.length && !right.length && !bottom.length && !left.length) {
+      tri(c00, c10, c11, k); tri(c00, c11, c01, k);
+      continue;
+    }
+    const ring = [c00, ...top, c10, ...right, c11, ...bottom.reverse(), c01, ...left.reverse()];
+    // From the cell's centre, for the same reason the polygons fan from theirs.
+    const cc = vtx(t.xs + (ix + 0.5) * cw, t.zs + (iz + 0.5) * ch);
+    for (let i = 0; i < ring.length; i++) tri(cc, ring[i], ring[(i + 1) % ring.length], k);
+  }
+  const t2 = performance.now();
+  // Heights and kinds: the corridor profile where a strip is close, the
+  // ground elsewhere. The sea floor rule is the same one the plain build uses.
+  const n = px.length;
+  const pos = new Float32Array(n * 3), uv = new Float32Array(n * 2);
+  const kinds = new Uint8Array(n);
+  const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
+  const seaLocal = seaSurfaceAbs() - baseElev;
+  const candsAt = (x: number, z: number): Seg[] | null => {
+    const ix = clamp(Math.floor((x - t.xs) / cw), 0, SEG - 1), iz = clamp(Math.floor((z - t.zs) / ch), 0, SEG - 1);
+    if (!close[iz * SEG + ix]) return null;
+    return cellStrips.get(iz * SEG + ix) ?? null;
+  };
+  // THE FIELD, READ INSIDE THIS TILE'S OWN BOX. A vertex exactly on the
+  // border is outside the tile's half-open box, so `sampleHeight` looks to the
+  // neighbour — and answers ZERO while the neighbour's DEM has not loaded.
+  // Stored as this tile's border, pinned into the neighbour when it built,
+  // and taken back as a seed when this tile rebuilt, that zero lived for
+  // ever: measured at Vélizy as border vertices 18m and 89m off the field
+  // with the row inside within 3m, and drawn as the dark line along every
+  // tile edge. Clamped a hair inside, the read is this tile's raster, which
+  // is loaded by construction.
+  // …BUT AT THE EXACT EDGE WHERE THE FIELD HAS A TILE. Clamping inside
+  // unconditionally made the two sides of a plain border read two rasters a
+  // DEM pixel apart — a wall of metres along every seam on a hillside (Senqu,
+  // from the drone). The half-open tile box hands a border point to ONE
+  // raster for both sides; only where that raster is missing does the read
+  // fall back inside this tile, and the owner's row then pins the follower.
+  const fieldAt = (x: number, z: number): number => hasHeight(x, z) ? sampleHeight(x, z)
+    : sampleHeight(clamp(x, t.xs + 1e-4, t.xs + t.w - 1e-4), clamp(z, t.zs + 1e-4, t.zs + t.h - 1e-4));
+  for (let i = 0; i < n; i++) {
+    const x = px[i], z = pz[i];
+    let N = fieldAt(x, z);
+    if (sampleCover(x, z) === COVER.water && N <= seaLocal + 2) N = Math.min(N, seaLocal - SEA_BED);
+    let h = N, k = 0;
+    const pin = pinned.get(i) ?? ownerY(x, z);
+    if (pin !== undefined) h = pin;
+    else {
+      const cands = candsAt(x, z);
+      if (cands) { const c = corridorH(x, z, N, cands); h = c.h; k = c.k; }
+    }
+    pos[i * 3] = x - cxm; pos[i * 3 + 1] = h; pos[i * 3 + 2] = z - czm;
+    uv[i * 2] = 0.5 + (x - cxm) / t.w; uv[i * 2 + 1] = 0.5 - (z - czm) / t.h;
+    kinds[i] = k;
+  }
+  const t3 = performance.now();
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(uv, 2));
+  const idx = new Uint32Array(TA.length * 3);
+  for (let f = 0; f < TA.length; f++) { idx[f * 3] = TA[f]; idx[f * 3 + 1] = TB[f]; idx[f * 3 + 2] = TC[f]; }
+  geo.setIndex(new THREE.BufferAttribute(idx, 1));
+  // The cell table, straight from the emitter — no need to rediscover it.
+  const counts = new Int32Array(SEG * SEG);
+  for (let f = 0; f < TK.length; f++) counts[TK[f]]++;
+  const offs = new Int32Array(SEG * SEG + 1);
+  for (let k = 0; k < SEG * SEG; k++) offs[k + 1] = offs[k] + counts[k];
+  const fill = new Int32Array(SEG * SEG), tris = new Int32Array(TK.length * 3);
+  for (let f = 0; f < TK.length; f++) {
+    const o = (offs[TK[f]] + fill[TK[f]]++) * 3;
+    tris[o] = TA[f]; tris[o + 1] = TB[f]; tris[o + 2] = TC[f];
+  }
+  cellTrisCache.set(geo, { seg: SEG, offs, tris });
+  (geo.userData as { seg?: number }).seg = SEG;
+  const t4 = performance.now();
+  refineCost.tiles++; refineCost.cells += refinedCells; refineCost.tris += TA.length; refineCost.verts += n;
+  refineCost.plainTris += SEG * SEG * 2; refineCost.ms += t4 - t0;
+  refineCost.msLines += t1 - t0; refineCost.msSplit += t2 - t1; refineCost.msHeights += t3 - t2; refineCost.msGeo += t4 - t3;
+  return { geo, kinds, cells: refinedCells, tris: TA.length };
+}
+/** A tile's normal map along its four edges against the row just inside:
+ *  the mean angle between them, degrees. A seam in the lighting is a number
+ *  here before it is a line on the chart. Also the vertex colour on the
+ *  border against one lattice row in. */
+(window as unknown as { __nrmEdge?: object }).__nrmEdge = (x?: number, z?: number): object | null => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const [tx, ty] = tileAt(origin.lat - pz / M_LAT, origin.lon + px / origin.mLon, TERRAIN_Z);
+  const key = `${tx}/${ty}`;
+  const tex = terrainNormals.get(key), mesh = terrainMeshes.get(key), t = heightTiles.get(key);
+  if (!tex || !mesh || !t) return null;
+  const buf = tex.image.data as unknown as Uint8Array;
+  const W = 256;
+  const nAt = (i: number, j: number): [number, number, number] => {
+    const o = (j * W + i) * 4;
+    return [buf[o] / 127.5 - 1, buf[o + 1] / 127.5 - 1, buf[o + 2] / 127.5 - 1];
+  };
+  const ang = (a: [number, number, number], b: [number, number, number]): number =>
+    (Math.acos(clamp(a[0] * b[0] + a[1] * b[1] + a[2] * b[2], -1, 1)) * 180) / Math.PI;
+  const edges: Record<string, number> = {};
+  for (const [name, f] of [['top', (k: number) => [nAt(k, 0), nAt(k, 1)]], ['bottom', (k: number) => [nAt(k, W - 1), nAt(k, W - 2)]],
+    ['left', (k: number) => [nAt(0, k), nAt(1, k)]], ['right', (k: number) => [nAt(W - 1, k), nAt(W - 2, k)]]] as Array<[string, (k: number) => [[number, number, number], [number, number, number]]]>) {
+    let sum = 0;
+    for (let k = 0; k < W; k++) { const [a, b] = f(k); sum += ang(a, b); }
+    edges[name] = +(sum / W).toFixed(2);
+  }
+  // and the interior's own row-to-row angle, for scale
+  let inner = 0;
+  for (let k = 0; k < W; k++) inner += ang(nAt(k, 100), nAt(k, 101));
+  edges.interior = +(inner / W).toFixed(2);
+  // Vertex colours: the border row against one lattice row in, along the south edge.
+  const pos = mesh.geometry.attributes.position as THREE.BufferAttribute;
+  const col = mesh.geometry.attributes.color as THREE.BufferAttribute | undefined;
+  const SEG = segOf(mesh.geometry), cw = t.w / SEG, ch = t.h / SEG;
+  const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
+  // Vertex colour on each border row against the row one lattice step in,
+  // and the vertex heights there against the field, for all four edges.
+  const rowStat = (pick: (x: number, z: number) => boolean): { lum: number; n: number; dy: number } => {
+    let sum = 0, n = 0, dy = 0;
+    for (let v = 0; v < pos.count; v++) {
+      const xx = pos.getX(v) + cxm, zz = pos.getZ(v) + czm;
+      if (!pick(xx, zz)) continue;
+      if (col) sum += col.getX(v) * 0.3 + col.getY(v) * 0.59 + col.getZ(v) * 0.11;
+      dy = Math.max(dy, Math.abs(pos.getY(v) - sampleHeight(xx, zz)));
+      n++;
+    }
+    return { lum: n ? +(sum / n).toFixed(3) : 0, n, dy: +dy.toFixed(2) };
+  };
+  const colours = {
+    north: rowStat((_, z) => Math.abs(z - t.zs) < 1e-3), northIn: rowStat((_, z) => Math.abs(z - (t.zs + ch)) < 1e-3),
+    south: rowStat((_, z) => Math.abs(z - (t.zs + t.h)) < 1e-3), southIn: rowStat((_, z) => Math.abs(z - (t.zs + t.h - ch)) < 1e-3),
+    west: rowStat((x) => Math.abs(x - t.xs) < 1e-3), westIn: rowStat((x) => Math.abs(x - (t.xs + cw)) < 1e-3),
+    east: rowStat((x) => Math.abs(x - (t.xs + t.w)) < 1e-3), eastIn: rowStat((x) => Math.abs(x - (t.xs + t.w - cw)) < 1e-3),
+  };
+  return { key, edgesDeg: edges, colours, cw: +cw.toFixed(1) };
+};
+/** The tile under a point against each neighbour, along their shared
+ *  border: how many of this tile's border vertices the neighbour also has
+ *  (by millimetre key), how many it lacks, and the worst height difference
+ *  where both have the point. A crack is a missing point or a dy. */
+(window as unknown as { __borderDiff?: object }).__borderDiff = (x?: number, z?: number, detail?: boolean): object | null => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const [tx, ty] = tileAt(origin.lat - pz / M_LAT, origin.lon + px / origin.mLon, TERRAIN_Z);
+  const key = `${tx}/${ty}`;
+  const t = heightTiles.get(key), mine = refinedBorders.get(key);
+  const out: Record<string, unknown> = { key, stored: !!mine, corridor: (terrainMeshes.get(key)?.userData as { corridor?: boolean } | undefined)?.corridor ?? null };
+  if (!t || !mine) return out;
+  // The MESH's border row (what is drawn), by millimetre key, so a stale
+  // stored row and a post-build edit of the geometry can be told apart.
+  const meshRow = (k: string): Map<string, number> => {
+    const m = new Map<string, number>();
+    const mesh = terrainMeshes.get(k), tt = heightTiles.get(k);
+    if (!mesh || !tt) return m;
+    const pos = mesh.geometry.attributes.position as THREE.BufferAttribute;
+    const cxm = tt.xs + tt.w / 2, czm = tt.zs + tt.h / 2;
+    for (let v = 0; v < pos.count; v++) {
+      const xx = pos.getX(v) + cxm, zz = pos.getZ(v) + czm;
+      if (Math.abs(xx - tt.xs) < 1e-3 || Math.abs(xx - (tt.xs + tt.w)) < 1e-3 || Math.abs(zz - tt.zs) < 1e-3 || Math.abs(zz - (tt.zs + tt.h)) < 1e-3) m.set(`${Math.round(xx * 1000)},${Math.round(zz * 1000)}`, pos.getY(v));
+    }
+    return m;
+  };
+  const myMesh = detail ? meshRow(key) : null;
+  for (const [name, dx, dy] of [['east', 1, 0], ['west', -1, 0], ['south', 0, 1], ['north', 0, -1]] as Array<[string, number, number]>) {
+    const nk = `${t.tx + dx}/${t.ty + dy}`;
+    const nb = refinedBorders.get(nk), nt = heightTiles.get(nk), nm = terrainMeshes.get(nk);
+    if (!nt || !nm) { out[name] = 'no tile'; continue; }
+    const theirs = nb ? mmIndex(nb) : new Map<string, MmPt>();
+    const theirMesh = detail ? meshRow(nk) : null;
+    let shared = 0, missing = 0, worst = 0, worstGap = 0;
+    const ex = dx === 1 ? t.xs + t.w : dx === -1 ? t.xs : null, ez = dy === 1 ? t.zs + t.h : dy === -1 ? t.zs : null;
+    // Their row along this edge, sorted, so a point they lack is measured
+    // against their straight edge there — that distance is the crack.
+    const row: Array<[number, number]> = [];
+    if (nb) for (let i = 0; i < nb.length; i += 3) {
+      if (ex !== null && Math.abs(nb[i] - ex) > 1e-3) continue;
+      if (ez !== null && Math.abs(nb[i + 1] - ez) > 1e-3) continue;
+      row.push([ex !== null ? nb[i + 1] : nb[i], nb[i + 2]]);
+    }
+    row.sort((a, b) => a[0] - b[0]);
+    const lineY = (a: number): number | null => {
+      if (row.length < 2 || a < row[0][0] || a > row[row.length - 1][0]) return null;
+      let lo = 0, hi = row.length - 1;
+      while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (row[mid][0] <= a) lo = mid; else hi = mid; }
+      const span = row[hi][0] - row[lo][0];
+      return span < 1e-9 ? row[lo][1] : row[lo][1] + ((a - row[lo][0]) / span) * (row[hi][1] - row[lo][1]);
+    };
+    const pts: Array<Record<string, unknown>> = [];
+    const cw = t.w / segOf((terrainMeshes.get(key) as THREE.Mesh).geometry);
+    for (let i = 0; i < mine.length; i += 3) {
+      const mx = mine[i], mz = mine[i + 1];
+      if (ex !== null && Math.abs(mx - ex) > 1e-3) continue;
+      if (ez !== null && Math.abs(mz - ez) > 1e-3) continue;
+      if (!onTileEdge(nt, mx, mz)) continue;                    // theirs too: not a phantom
+      const mk = mmKey(mx, mz);
+      const y = mmNear(theirs, mx, mz)?.[2];
+      let d = 0, kind = 'shared';
+      if (y === undefined) {
+        missing++; kind = 'missing';
+        const ly = lineY(ex !== null ? mz : mx);
+        if (ly !== null) { d = Math.abs(ly - mine[i + 2]); worstGap = Math.max(worstGap, d); }
+      } else { shared++; d = Math.abs(y - mine[i + 2]); worst = Math.max(worst, d); }
+      if (detail && d > 0.02) {
+        const lat = Math.abs(mx - t.xs - Math.round((mx - t.xs) / cw) * cw) < 1e-3 && Math.abs(mz - t.zs - Math.round((mz - t.zs) / cw) * cw) < 1e-3;
+        pts.push({ kind, x: +mx.toFixed(2), z: +mz.toFixed(2), lat, mine: +mine[i + 2].toFixed(2), theirs: y === undefined ? null : +y.toFixed(2), d: +d.toFixed(2),
+          meshMine: myMesh?.has(mk) ? +(myMesh.get(mk) as number).toFixed(2) : null, meshTheirs: theirMesh?.has(mk) ? +(theirMesh.get(mk) as number).toFixed(2) : null,
+          has: hasHeight(mx, mz), field: +sampleHeight(mx, mz).toFixed(2), cover: sampleCover(mx, mz) });
+      }
+    }
+    pts.sort((p, q) => (q.d as number) - (p.d as number));
+    const rec: Record<string, unknown> = { key: nk, corridor: (nm.userData as { corridor?: boolean }).corridor ?? null, scanned: (nm.userData as { scanned?: boolean }).scanned ?? null, stored: !!nb, shared, missing, worstDy: +worst.toFixed(3), worstGap: +worstGap.toFixed(3) };
+    if (detail) { rec.pts = pts.slice(0, 6); rec.bad = pts.length; rec.shared_ok = borderShared(t, nk); rec.dirty = terrainDirty.has(nk); }
+    out[name] = rec;
+  }
+  if (detail) {
+    out.quiet = osmStreamQuiet(); out.hydroDirty = hydroDirty.size; out.batter = pendingBatter.length; out.auditAt = borderAuditAt; out.meshes = terrainMeshes.size;
+    out.builds = terrainBuilds; out.dist = +Math.max(0, Math.abs(state.x - (t.xs + t.w / 2)) - t.w / 2, Math.abs(state.z - (t.zs + t.h / 2)) - t.h / 2).toFixed(0);
+  }
+  return out;
+};
+(window as unknown as { __refine?: object }).__refine = (): object => ({ on: REFINE, ...refineCost });
+(window as unknown as { __buildLog?: object }).__buildLog = (): object => buildLog.slice();
+/** borderShared, shown its working: the neighbour's box, how many of this
+ *  tile's points fell in it, and the first point that failed. */
+(window as unknown as { __bs?: object }).__bs = (key: string, nk: string): object | null => {
+  const t = heightTiles.get(key), nt = heightTiles.get(nk);
+  const mine = refinedBorders.get(key), theirs = refinedBorders.get(nk);
+  if (!t || !nt || !mine || !theirs) return { key, nk, t: !!t, nt: !!nt, mine: !!mine, theirs: !!theirs };
+  const have = mmIndex(theirs);
+  let inBox = 0, hit = 0; let first: unknown = null;
+  for (let i = 0; i < mine.length; i += 3) {
+    const x = mine[i], z = mine[i + 1];
+    if (x < nt.xs - 1e-3 || x > nt.xs + nt.w + 1e-3 || z < nt.zs - 1e-3 || z > nt.zs + nt.h + 1e-3) continue;
+    inBox++;
+    const y = mmNear(have, x, z)?.[2];
+    if (y !== undefined) hit++;
+    if ((y === undefined || Math.abs(y - mine[i + 2]) > 0.02) && !first) first = { x, z, mine: mine[i + 2], theirs: y ?? null };
+  }
+  return { key, nk, box: [nt.xs, nt.zs, nt.w, nt.h], tb: [t.xs, t.zs, t.w, t.h], minePts: mine.length / 3, theirPts: theirs.length / 3, inBox, hit, first, result: borderShared(t, nk) };
+};
 /** THE CORRIDOR CARVE, solved per TRIANGLE instead of per vertex.
  *
  * The guarantee has only ever been about one thing: at a point ON a deck, the
@@ -9593,6 +11123,21 @@ function cellTriangles(geo: THREE.BufferGeometry, SEG: number): Int32Array {
 // road inside it changes, so an append-only log would count the same excavation
 // four times and read as four times the damage.
 const CPROBE = /[?&]cprobe=1/.test(location.search);
+/**
+ * MEASURE WITHOUT DRAWING (`?nodraw=1`). Headless Chromium renders this game
+ * through SwiftShader at three or four frames a second, and the world build
+ * is paced by the frame loop, so a fixture that is entirely local still took
+ * three minutes to settle — most of it spent painting frames nobody looks
+ * at. With this on, the frame loop does everything but the draws: streaming,
+ * carving, the road build, the settle counters and every probe are exactly
+ * what they are with it off. Never on for a person; a screenshot run leaves
+ * it off by definition.
+ */
+let NODRAW = /[?&]nodraw=1/.test(location.search);
+/** …and back on, for a run that settles blind and then wants pictures: a
+ *  screenshot survey of six captures spends its minutes settling, not
+ *  drawing, and the frames it does paint are the ones it keeps. */
+(window as unknown as { __draw?: object }).__draw = (on: boolean): boolean => { NODRAW = !on; return !NODRAW; };
 // s = [px, pz, tgt, meshBefore, field, offsetIndex]; v = [x, z, yBefore, yAfter]
 interface CarveLog { s: number[][]; v: number[][] }
 const carveLog = new Map<string, CarveLog>();
@@ -9602,7 +11147,7 @@ const carveCost = { tiles: 0, ms: 0, relieved: 0 };
 function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): void {
   const t0 = performance.now();
   const cell = t.w / SEG;
-  const tris = cellTriangles(geo, SEG);
+  const ct = cellTrisOf(geo, SEG);
   const pos = geo.attributes.position as THREE.BufferAttribute;
   // Strips overlapping the tile. cutL IS the mesh cell, so the raster's own
   // index is the right thing to walk — no geometry test needed to gather.
@@ -9691,10 +11236,9 @@ function carveCorridors(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): 
   const enforce = (px: number, pz: number, tgt: number): void => {
     const fx = (px - t.xs) / cell, fz = (pz - t.zs) / cell;
     if (fx < 0 || fz < 0 || fx >= SEG || fz >= SEG) return;
-    const k = (Math.floor(fz) * SEG + Math.floor(fx)) * 6;
-    for (let h = 0; h < 2; h++) {
-      const a = tris[k + h * 3], b = tris[k + h * 3 + 1], c = tris[k + h * 3 + 2];
-      if (a < 0) continue;
+    const kc = Math.floor(fz) * SEG + Math.floor(fx);
+    for (let h = ct.offs[kc]; h < ct.offs[kc + 1]; h++) {
+      const a = ct.tris[h * 3], b = ct.tris[h * 3 + 1], c = ct.tris[h * 3 + 2];
       // Barycentric in the XZ plane. Local coords, so shift the sample too.
       const ax = pos.getX(a) + t.xs + t.w / 2, az = pos.getZ(a) + t.zs + t.h / 2;
       const bx = pos.getX(b) + t.xs + t.w / 2, bz = pos.getZ(b) + t.zs + t.h / 2;
@@ -9834,17 +11378,16 @@ function meshTriAt(x: number, z: number): Array<{ x: number; y: number; z: numbe
   if (!mesh || !t) return null;
   const geo = mesh.geometry;
   const pos = geo.attributes.position as THREE.BufferAttribute;
-  const SEG = Math.round(Math.sqrt(pos.count)) - 1;
+  const SEG = segOf(geo);
   if (SEG < 1) return null;
-  const cell = t.w / SEG;
-  const fx = (x - t.xs) / cell, fz = (z - t.zs) / cell;
+  const cell = t.w / SEG, cellH = t.h / SEG;
+  const fx = (x - t.xs) / cell, fz = (z - t.zs) / cellH;
   if (fx < 0 || fz < 0 || fx >= SEG || fz >= SEG) return null;
-  const tris = cellTriangles(geo, SEG);
-  const k = (Math.floor(fz) * SEG + Math.floor(fx)) * 6;
+  const ct = cellTrisOf(geo, SEG);
+  const kc = Math.floor(fz) * SEG + Math.floor(fx);
   const ox = t.xs + t.w / 2, oz = t.zs + t.h / 2;
-  for (let h = 0; h < 2; h++) {
-    const a = tris[k + h * 3], b = tris[k + h * 3 + 1], c = tris[k + h * 3 + 2];
-    if (a < 0) continue;
+  for (let h = ct.offs[kc]; h < ct.offs[kc + 1]; h++) {
+    const a = ct.tris[h * 3], b = ct.tris[h * 3 + 1], c = ct.tris[h * 3 + 2];
     const P = [a, b, c].map((v) => ({ x: pos.getX(v) + ox, y: pos.getY(v), z: pos.getZ(v) + oz }));
     const d = (P[1].z - P[2].z) * (P[0].x - P[2].x) + (P[2].x - P[1].x) * (P[0].z - P[2].z);
     if (Math.abs(d) < 1e-9) continue;
@@ -9869,17 +11412,16 @@ function meshSurfaceAt(x: number, z: number): number | null {
   if (!mesh || !t) return null;
   const geo = mesh.geometry;
   const pos = geo.attributes.position as THREE.BufferAttribute;
-  const SEG = Math.round(Math.sqrt(pos.count)) - 1;
+  const SEG = segOf(geo);
   if (SEG < 1) return null;
-  const cell = t.w / SEG;
-  const fx = (x - t.xs) / cell, fz = (z - t.zs) / cell;
+  const cell = t.w / SEG, cellH = t.h / SEG;
+  const fx = (x - t.xs) / cell, fz = (z - t.zs) / cellH;
   if (fx < 0 || fz < 0 || fx >= SEG || fz >= SEG) return null;
-  const tris = cellTriangles(geo, SEG);
-  const k = (Math.floor(fz) * SEG + Math.floor(fx)) * 6;
+  const ct = cellTrisOf(geo, SEG);
+  const kc = Math.floor(fz) * SEG + Math.floor(fx);
   const ox = t.xs + t.w / 2, oz = t.zs + t.h / 2;
-  for (let h = 0; h < 2; h++) {
-    const a = tris[k + h * 3], b = tris[k + h * 3 + 1], c = tris[k + h * 3 + 2];
-    if (a < 0) continue;
+  for (let h = ct.offs[kc]; h < ct.offs[kc + 1]; h++) {
+    const a = ct.tris[h * 3], b = ct.tris[h * 3 + 1], c = ct.tris[h * 3 + 2];
     const ax = pos.getX(a) + ox, az = pos.getZ(a) + oz;
     const bx = pos.getX(b) + ox, bz = pos.getZ(b) + oz;
     const cx = pos.getX(c) + ox, cz = pos.getZ(c) + oz;
@@ -9940,9 +11482,21 @@ const apron = {
   sgV: [] as number[], sgUV: [] as number[],
   stV: [] as number[], stUV: [] as number[],
   moV: [] as number[], moUV: [] as number[],
+  boV: [] as number[], boUV: [] as number[],
+  gwV: [] as number[], gwUV: [] as number[],
 };
+/**
+ * WHERE DRIVABLE WAYS MEET, from the batch's own topology: every vertex of
+ * every drivable way, keyed on a half-metre grid, with the arms leaving it.
+ * Three or more arms from two or more ways is a junction; a way passing
+ * through contributes two. Filled as the pre-grid is, read by flushJunctions
+ * once the ribbons stand, and each node boxed once.
+ */
+interface JuncArm { ux: number; uz: number; hw: number; dk: string }
+const juncNodes = new Map<string, { x: number; z: number; arms: JuncArm[] }>();
+const juncBoxed = new Set<string>();
 const spanStats = {
-  piers: 0, arches: 0, railM: 0, deckM: 0, signs: 0, maxDaylight: 0, cats: 0, posts: 0,
+  piers: 0, arches: 0, railM: 0, deckM: 0, signs: 0, signRefused: 0, maxDaylight: 0, cats: 0, posts: 0,
   // Why a kerb quad did or did not get a batter — one counter per branch, so
   // "the fill stops halfway along this road" is attributable rather than argued.
   fillDrawn: 0, fillOpen: 0, fillDeck: 0, fillNoGap: 0, fillUnmet: 0, fillCap: 0,
@@ -10016,6 +11570,65 @@ const edgeLog: Array<{ x: number; z: number; rail: boolean; batter: boolean;
  *  overlapping" was unanswerable from a screenshot, because eligibility
  *  depends on what was BUILT when this way built, which no probe can
  *  reconstruct after the fact. Read by `__cropwhy`. */
+/**
+ * WHAT EACH FRAGMENT END TOOK, AT THE MOMENT IT WAS BUILT.
+ *
+ * `__sharedAt` carries the lesson that cost a previous session four fixes: the
+ * hint store is rebuilt as tiles stream, so what it holds when you ASK is not
+ * what it held when the road was built, and a post-hoc probe at a seam is
+ * evidence about now rather than then. `cropLog` exists for exactly this reason
+ * on the crop side. Nothing recorded the WELD side — which anchor an end found,
+ * how far away, whether it was hinted, and what residual the weld then spread
+ * — so a fragment standing 85cm off its own continuation could not be asked
+ * why. Now it can: `__joinwhy(x, z, r)`.
+ */
+interface JoinRec {
+  x: number; z: number; nm?: string; fid: number; end: 0 | 1; pb: number;
+  /** The neighbour deck the end anchored to, and how far off it stood. */
+  anchor: number | null; anchorD: number | null;
+  /** The chain hint at this station, if any. */
+  hint: number | null;
+  /** The profile at this end BEFORE the weld, and the weld's residual. */
+  pre: number; weld: number; tiltWeld: number;
+  /** Where it ended up. */
+  y: number;
+}
+const joinLog: JoinRec[] = [];
+/**
+ * A THROUGH-NODE, TRACED THROUGH EVERY STAGE OF THE PER-WAY BUILD.
+ *
+ * Measured at Camps Bay: at (42.1,270) both chains pinned the junction to 0.404
+ * and the two built decks are 1.81 and -0.373 — each road's per-way build left
+ * the pinned value in a different direction, and both finished as straight
+ * lines through the node as if it had never been pinned. So the planner is
+ * right and something between "take the hint" and "emit the mesh" is not. This
+ * records the value at that station after each stage, for every station that
+ * has two or more chain hints at it (which is what a junction IS in the hint
+ * store), so the stage that moves it can be named rather than argued about.
+ */
+interface StageRec { x: number; z: number; nm?: string; fid: number; i: number; n: number; pb: number;
+  hint: number | null; hintsHere: number; st: Record<string, number> }
+const stageLog: StageRec[] = [];
+/** Every time an approach was asked to wait for a portal above its end —
+ *  and whether it built anyway on its last ask. The defer exists to make the
+ *  cross-tile portal step rare; this says whether it ever fired. */
+interface DeferRec { x: number; z: number; x1: number; z1: number; nm?: string; fid: number; layer: number; why: string; seen: number; built: boolean }
+const deferLog: DeferRec[] = [];
+/**
+ * EVERY station of EVERY fragment, after every stage — the through-node log
+ * above answers "which stage moved the pin", and could not answer the next
+ * question, which was why a segment eight metres from any pin stood at 100%.
+ * A whole fixture is a few thousand stations by eight stages; the cap is on
+ * stations, and a live world past it simply stops recording.
+ */
+interface FragRec { fid: number; nm?: string; wid?: string; pb: number; n: number; layer: number; hinted: boolean; hintN: number;
+  a0: number | null; a1: number | null; xs: number[]; zs: number[]; hint: Array<number | null>; st: Record<string, number[]> }
+const fragLog = new Map<number, FragRec>();
+/** The OSM tags each drivable way was built from, by way key — probe-only,
+ *  so a fragment found by `__fragwhy` can be asked what OSM called it. */
+const wayTagLog = new Map<string, Record<string, string>>();
+let fragStations = 0;
+const FRAG_CAP = 60000;
 const cropLog: Array<{ x: number; z: number; nm?: string; end: number; why: string;
   out?: number; align?: number; host?: string; sR?: number; sL?: number; skip?: number }> = [];
 /** A way-end that found NO host when it built — the host may simply not have
@@ -10056,6 +11669,12 @@ function preEdge(x: number, z: number, notKey?: string): { out: number; track: b
 /** Two triangles into a vertex/uv pair. `ribbon` has its own local `quad`, and
  *  the only `quad` in scope out here is a THREE.Mesh — which the stub types are
  *  happy to let you call, and which would have thrown on the first shoulder. */
+/** Per-corner colours for one quadInto call — a, b, c, d in the same
+ *  six-vertex order the two triangles are emitted in. */
+function tintInto(C: number[], a: number[], b: number[], c: number[], d: number[]): void {
+  C.push(a[0], a[1], a[2], b[0], b[1], b[2], c[0], c[1], c[2],
+    b[0], b[1], b[2], d[0], d[1], d[2], c[0], c[1], c[2]);
+}
 function quadInto(V: number[], U: number[], p: number[], uv: number[], S?: number[], sm?: number[]): void {
   V.push(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8],
     p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
@@ -10181,11 +11800,84 @@ function redrape(t: HeightTile): void {
 }
 /** Build the shoulders for every parked kerb inside this tile, against the
  *  ground as it now stands, and retire them. */
+/** The mean colour of `batterTex`, read once off its canvas: what a vertex
+ *  tint is multiplied by when the strip is drawn. */
+let batterMeanCache: [number, number, number] | null = null;
+function batterMean(): [number, number, number] {
+  if (batterMeanCache) return batterMeanCache;
+  const cv = batterTex.image as HTMLCanvasElement;
+  const ctx = cv.getContext('2d');
+  if (!ctx) return (batterMeanCache = [0.44, 0.41, 0.36]);
+  const d = ctx.getImageData(0, 0, cv.width, cv.height).data;
+  let r = 0, g = 0, b = 0;
+  for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
+  const n = (d.length / 4) * 255;
+  batterMeanCache = [Math.max(0.05, r / n), Math.max(0.05, g / n), Math.max(0.05, b / n)];
+  return batterMeanCache;
+}
 function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
   if (!vergeFill || !pendingBatter.length) return;
-  const V: number[] = [], U: number[] = [], S: number[] = [];
+  const V: number[] = [], U: number[] = [], S: number[] = [], C: number[] = [];
   let bx0 = Infinity, bz0 = Infinity, bx1 = -Infinity, bz1 = -Infinity;
-  const BATT = 0.6;                      // metres of drop per metre out
+  const BATT = BANK_K;                   // metres of drop per metre out (a fill bank)
+  // ── THE BATTER IS A WEDGE ABOUT THE NATURAL GROUND, ON BOTH SIDES ──
+  //
+  // This was a fill bank only: from the kerb down at BATT until it met the
+  // CARVED ground, and on a cut side — where the carved ground beside the
+  // kerb is the corridor's bench, dead level for a mesh cell or more — it
+  // found the ground at the first step and drew nothing. So beside every
+  // cut the thing you saw was the bench itself: a flat sheet of terrain a
+  // road's width wide and twenty metres deep, painted as ground, with the
+  // hillside starting where the carve's 32° climb began. The survey read it
+  // as "large sheets" on every Camps Bay street and on the Cabrillo shelf.
+  //
+  // Now each vertex takes the natural ground, `sampleHeight`, clamped into
+  // the wedge between a fill bank falling at BATT and a cut face rising at
+  // CUT_K from a short verge — so a cut gets a face that climbs from the
+  // kerb to meet the hill, a fill gets its bank, and past the toe the strip
+  // simply FOLLOWS the ground. It keeps following it while the carved mesh
+  // is still below the natural surface (the bench, and the carve's climb
+  // back to grade), so the bench is roofed over and never seen, and stops
+  // where the mesh returns to the natural ground. The other side, the water
+  // stop and the clip against other carriageways are unchanged.
+  const CUT_K = CUTF_K;                  // rise per metre out on a cut face — the carve's own slope
+  const VERGE = 0.6;                     // the flat shoulder before either slope starts
+  // A CUT IS SHORT OR IT IS A WALL. On a hillside steeper than the face — Round
+  // House Road at Camps Bay stands on a 76% cross-slope — a 32° face never
+  // meets the hill, and drawn to full reach it was a thirty-metre plane of
+  // earth laid over the whole slope, worse than the bench it replaced. Past
+  // CUT_REACH an unmet face steps straight up to the natural ground instead:
+  // the short face and the wall that a road on such a slope actually has.
+  const CUT_REACH = CUT_REACH_M;
+  // Three tints, on the vertices: shoulder chippings, earth on the face, and
+  // the terrain's own colour where the strip lies on the ground, so a toe
+  // vanishes into the sward rather than ending in a line.
+  const SHOULDER: [number, number, number] = [0.56, 0.52, 0.45];
+  const EARTH: [number, number, number] = [0.42, 0.34, 0.26];
+  const ROCK: [number, number, number] = [0.46, 0.45, 0.41];
+  // THE SAME RECIPE THE TERRAIN MESH USES for its own vertices — the DEM's
+  // gradient for the slope and `coverPaint` for the cover — or the strip's
+  // ground-following part is a different brown from the ground it lies on,
+  // and its outer edge shows as a sawtooth on the mesh's cell period
+  // (measured at Carmel: the toe outlined against the hill at every cell).
+  //
+  // …DIVIDED BY THE TEXTURE IT IS DRAWN THROUGH. The strip's material carries
+  // `batterTex`, whose mean is about 0.44, and the terrain mesh carries no map
+  // at all — so a vertex handed the terrain's own colour rendered at less
+  // than half its brightness. Measured on the live frames at Dante's View,
+  // Giza and San Juan County: every road wore blocky dark-earth blotches ten
+  // to thirty metres out, cover and carve both innocent (bare ground, mesh on
+  // natural). That was this strip roofing the carve's bench in the ground's
+  // colour times an earth texture. The tint is pre-divided by the texture's
+  // mean so colour × map lands on the terrain's colour; the earth, rock and
+  // shoulder tints were tuned with the texture and keep it.
+  const bm = batterMean();
+  const tintAt = (x: number, z: number, N: number): [number, number, number] => {
+    const du = sampleHeight(x + 2, z) - sampleHeight(x - 2, z);
+    const dv = sampleHeight(x, z + 2) - sampleHeight(x, z - 2);
+    const c = terrainPalette(N + baseElev, Math.hypot(du, dv) / 4, coverPaint(x, z), x, z);
+    return [c[0] / bm[0], c[1] / bm[1], c[2] / bm[2]];
+  };
   // AN EMBANKMENT IS ALLOWED TO BE AN EMBANKMENT. This used to stop at 5m —
   // 3m of drop — and anything steeper than that was declared "the road stands
   // clear of its surroundings" and given nothing at all: measured at Big Sur,
@@ -10196,7 +11888,7 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
   // than one that reaches. The tail steps are only ever walked by the runs that
   // need them: the loop breaks the moment the ground is met, which on ordinary
   // ground is the first or second step.
-  const STEPS = [0.6, 1.4, 2.4, 3.6, 5, 7, 9.5, 12.5, 16];
+  const STEPS = [0.6, 1.4, 2.4, 3.6, 5, 7, 9.5, 12.5, 16, 20, 25, 30];
   const REACH = STEPS[STEPS.length - 1];
   /** How far out this kerb may spread before it is over somebody else's tarmac.
    *  Only asked when a coarse step says "blocked", because it costs a road-grid
@@ -10236,8 +11928,10 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       continue;
     }
     if (stranded) spanStats.fillStranded++;
-    // [distance out, left height, right height, left seated?, right seated?]
-    const pts: Array<[number, number, number, number, number]> = [];
+    // [left distance, right distance, left height, right height, left seated?, right seated?, left ground, right ground]
+    const pts: Array<[number, number, number, number, number, number, number, number]> = [];
+    // …and the tint at each end of each step, parallel to `pts`.
+    const tints: Array<[[number, number, number], [number, number, number]]> = [];
     // NEVER OVER ANOTHER ROAD — but a junction is a reason to STOP SHORT, not a
     // reason to draw nothing. This used to `break` out of the whole loop the
     // moment a step landed on somebody else's tarmac, and at a junction the
@@ -10247,6 +11941,7 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
     // batter is drawn up to it.
     let lim = REACH, clipped = false;
     let met = false, wet = false;
+    let toe0 = -1, toe1 = -1;
     for (const d0 of STEPS) {
       let d = d0;
       if (d > lim) break;
@@ -10257,9 +11952,10 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       };
       if (blocked(d)) {
         // Somewhere between the last good step and this one is the tarmac edge.
-        lim = clearTo(b, pts.length ? pts[pts.length - 1][0] : 0, d);
+        const last = pts.length ? Math.max(pts[pts.length - 1][0], pts[pts.length - 1][1]) : 0;
+        lim = clearTo(b, last, d);
         clipped = true;
-        if (lim <= (pts.length ? pts[pts.length - 1][0] : 0) + 0.2) break;
+        if (lim <= last + 0.2) break;
         d = lim;
       }
       const f = d / 2.2;                 // nx/nz carry 2.2m of reach
@@ -10273,19 +11969,79 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       if (coverWater(qx0, qz0) || coverWater(qx1, qz1)) {
         wet = true; break;
       }
+      // ── THE STRIP CLOSES THE GAP TO THE GROUND THAT IS DRAWN, AND NO MORE ──
+      //
+      // The wedge used to be clamped about the NATURAL surface and then kept
+      // going, on the ground, while the carved mesh lay below it — roofing the
+      // carve's bench out to thirty metres. On a coarse tile the bench is a
+      // whole cell, so beside every road the strip became a sheet with the
+      // mesh cell's straight edges, sampled at fixed step distances (Dakar,
+      // and every desert road once its tint stopped hiding it). The target
+      // is now the ground as rendered, `groundAt`: kerb above it, a bank
+      // falls to it; kerb below it, a face climbs to it; kerb at it, nothing.
+      // The bench is terrain and shows as terrain, which blends by
+      // construction; its depth is the carve's business, not this strip's.
       const g0 = groundAt(qx0, qz0), g1 = groundAt(qx1, qz1);
-      if (!pts.length && g0 >= b.y0 - 0.05 && g1 >= b.y1 - 0.05) {
+      const N0 = g0, N1 = g1;
+      // AT GRADE: nothing to draw.
+      if (!pts.length && Math.abs(N0 - b.y0) < 0.35 && Math.abs(N1 - b.y1) < 0.35) {
         spanStats.fillNoGap++; met = true; break;
       }
-      const c0 = b.y0 - d * BATT, c1 = b.y1 - d * BATT;
-      const p0 = Math.min(b.y0, Math.max(g0, c0)), p1 = Math.min(b.y1, Math.max(g1, c1));
-      // Seated where the GROUND is what chose the height — that is the vertex
-      // a later carve moves out from under, and the only one that may follow.
-      pts.push([d, p0, p1, p0 === g0 ? 1 : 0, p1 === g1 ? 1 : 0]);
-      if (g0 >= c0 && g1 >= c1) { met = true; break; }   // met the ground
+      const dd = Math.max(0, d - VERGE);
+      const lo0 = b.y0 - dd * BATT, lo1 = b.y1 - dd * BATT;
+      const hi0 = b.y0 + dd * CUT_K, hi1 = b.y1 + dd * CUT_K;
+      let p0 = clamp(N0, lo0, hi0), p1 = clamp(N1, lo1, hi1);
+      let on0 = p0 === N0, on1 = p1 === N1;   // lying on the ground, not on a slope
+      let wall0 = false, wall1 = false;
+      if (d >= CUT_REACH) {
+        if (!on0 && N0 > hi0) { p0 = N0; on0 = true; wall0 = true; }
+        if (!on1 && N1 > hi1) { p1 = N1; on1 = true; wall1 = true; }
+      }
+      // THE TOE IS WHERE THE WEDGE CROSSES THE GROUND, not the next step out.
+      // The first step a side lands on the ground, the crossing between the
+      // previous step and this one is solved on the two gaps and that side's
+      // outer edge goes there — so the strip's width is the height difference
+      // over the slope, continuously, and the toe is a curve along the road
+      // rather than a staircase of step distances. A side that has landed
+      // holds a metre past its toe while the other side finishes its slope.
+      const prev = pts.length ? pts[pts.length - 1] : null;
+      const cut0 = !on0 && N0 > hi0, cut1 = !on1 && N1 > hi1;
+      const side = (on: boolean, wall: boolean, N: number, lo: number, hi: number, pp: number, pN: number, pd: number,
+        toe: number, ax: number, az: number, nx: number, nz: number): [number, number, number] => {
+        // [distance, height, toe distance (or -1)]
+        if (!on) return [d, N < lo ? lo : hi, -1];
+        if (wall) return [d, N, d];
+        if (toe >= 0) {
+          const e = Math.min(d, toe + 1);
+          const f2 = e / 2.2;
+          return [e, groundAt(ax + nx * f2, az + nz * f2), toe];
+        }
+        const gPrev = prev ? Math.abs(pp - pN) : 0;
+        const gNow = Math.max(0, Math.min(N - lo, hi - N));
+        const t = gPrev + gNow > 1e-6 ? gPrev / (gPrev + gNow) : 1;
+        const e = prev ? pd + t * (d - pd) : d;
+        const f2 = e / 2.2;
+        return [e, groundAt(ax + nx * f2, az + nz * f2), e];
+      };
+      const r0 = side(on0, wall0, N0, lo0, hi0, prev ? prev[2] : 0, prev ? prev[6] : 0, prev ? prev[0] : 0, toe0, b.ax, b.az, b.nxA, b.nzA);
+      const r1 = side(on1, wall1, N1, lo1, hi1, prev ? prev[3] : 0, prev ? prev[7] : 0, prev ? prev[1] : 0, toe1, b.bx, b.bz, b.nxB, b.nzB);
+      toe0 = r0[2]; toe1 = r1[2];
+      // [left distance, right distance, left height, right height, left seated, right seated, left ground, right ground]
+      pts.push([r0[0], r1[0], r0[1], r1[1], on0 ? 1 : 0, on1 ? 1 : 0, N0, N1]);
+      // EARTH ONLY WHERE THE GROUND WAS DUG. A fill bank is a grassed slope
+      // within a season, so it wears the terrain's own colour like the ground
+      // it lands on; a cut face — clamped from above, the hill cut back — is
+      // the one place fresh earth shows. Tinted all as earth, the inside of
+      // the Coast Road hairpin at Big Sur was one pale tan sheet.
+      tints.push([
+        d <= VERGE ? SHOULDER : wall0 ? ROCK : cut0 ? EARTH : tintAt(qx0, qz0, N0),
+        d <= VERGE ? SHOULDER : wall1 ? ROCK : cut1 ? EARTH : tintAt(qx1, qz1, N1),
+      ]);
+      // Met: both sides on the ground. Nothing follows the ground past that.
+      if (on0 && on1) { met = true; break; }
       if (clipped) break;                // ran out of room, not out of slope
     }
-    const reached = pts.length ? pts[pts.length - 1][0] : 0;
+    const reached = pts.length ? Math.max(pts[pts.length - 1][0], pts[pts.length - 1][1]) : 0;
     // Logged with what was actually DRAWN, not with what was computed. Once a
     // run that never met anything stopped being emitted, `pts.length > 0` was
     // reporting earth that is not there — an instrument lying about the thing
@@ -10304,6 +12060,11 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
     // unmet and drawn anyway, which is how a shelf of earth came to hang off
     // the side of a road with nothing under it.
     if (!pts.length) { spanStats.fillUnmet++; continue; }
+    // A CUT FACE THAT REACHED THE HILL IS MET, whether or not the carved mesh
+    // came back up to the natural ground within reach: the face is real and
+    // the strip beyond it is a roof over the bench, and stopping short there
+    // shows the bench rather than the hill.
+    if (!met && pts.some((p) => p[2] > b.y0 + 0.3 || p[3] > b.y1 + 0.3)) met = true;
     if (!met && !clipped && !wet) { spanStats.fillUnmet++; continue; }
     spanStats.fillDrawn++;
     // THE ENDS OF A RUN GET A FACE. Where the next bay has no batter — the run
@@ -10315,9 +12076,11 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       const ex = end ? b.bx : b.ax, ez = end ? b.bz : b.az;
       const nx2 = end ? b.nxB : b.nxA, nz2 = end ? b.nzB : b.nzA;
       const ky = end ? b.y1 : b.y0;
-      let ppx = 0, ppy = ky, pps = 0;
-      for (const p of pts) {
-        const d = p[0], y = end ? p[2] : p[1], sd = end ? p[4] : p[3];
+      let ppx = 0, ppy = ky, pps = 0, ppc: [number, number, number] = SHOULDER;
+      for (let k = 0; k < pts.length; k++) {
+        const p = pts[k];
+        const d = end ? p[1] : p[0], y = end ? p[3] : p[2], sd = end ? p[5] : p[4];
+        const tc = end ? tints[k][1] : tints[k][0];
         const fa = ppx / 2.2, fb = d / 2.2;
         // A quad with its inboard edge collapsed onto the kerb point: the fan
         // triangle, expressed in the one emitter this file has.
@@ -10326,21 +12089,26 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
           ex, ky, ez,
           ex + nx2 * fa, ppy, ez + nz2 * fa,
           ex + nx2 * fb, y, ez + nz2 * fb,
-        ], [b.uA, 0, b.uA, 0, b.uA, ppx / 4, b.uA, d / 4], S, [0, 0, pps, sd]);
-        ppx = d; ppy = y; pps = sd;
+        ], [b.uA * 2, 0, b.uA * 2, 0, b.uA * 2, ppx / 4, b.uA * 2, d / 4], S, [0, 0, pps, sd]);
+        tintInto(C, SHOULDER, SHOULDER, ppc, tc);
+        ppx = d; ppy = y; pps = sd; ppc = tc;
       }
       spanStats.fillCap++;
     }
-    let px = 0, py0 = b.y0, py1 = b.y1, ps0 = 0, ps1 = 0;
-    for (const [d, y0, y1, s0, s1] of pts) {
-      const fa = px / 2.2, fb = d / 2.2;
+    let px0 = 0, px1 = 0, py0 = b.y0, py1 = b.y1, ps0 = 0, ps1 = 0;
+    let pc0: [number, number, number] = SHOULDER, pc1: [number, number, number] = SHOULDER;
+    for (let k = 0; k < pts.length; k++) {
+      const [d0, d1, y0, y1, s0, s1] = pts[k];
+      const [c0, c1] = tints[k];
+      const fa0 = px0 / 2.2, fa1 = px1 / 2.2, fb0 = d0 / 2.2, fb1 = d1 / 2.2;
       quadInto(V, U, [
-        b.ax + b.nxA * fa, py0, b.az + b.nzA * fa,
-        b.bx + b.nxB * fa, py1, b.bz + b.nzB * fa,
-        b.ax + b.nxA * fb, y0, b.az + b.nzA * fb,
-        b.bx + b.nxB * fb, y1, b.bz + b.nzB * fb,
-      ], [b.uA, px / 4, b.uB, px / 4, b.uA, d / 4, b.uB, d / 4], S, [ps0, ps1, s0, s1]);
-      px = d; py0 = y0; py1 = y1; ps0 = s0; ps1 = s1;
+        b.ax + b.nxA * fa0, py0, b.az + b.nzA * fa0,
+        b.bx + b.nxB * fa1, py1, b.bz + b.nzB * fa1,
+        b.ax + b.nxA * fb0, y0, b.az + b.nzA * fb0,
+        b.bx + b.nxB * fb1, y1, b.bz + b.nzB * fb1,
+      ], [b.uA * 2, px0 / 4, b.uB * 2, px1 / 4, b.uA * 2, d0 / 4, b.uB * 2, d1 / 4], S, [ps0, ps1, s0, s1]);
+      tintInto(C, pc0, pc1, c0, c1);
+      px0 = d0; px1 = d1; py0 = y0; py1 = y1; ps0 = s0; ps1 = s1; pc0 = c0; pc1 = c1;
       bx0 = Math.min(bx0, b.ax, b.bx); bx1 = Math.max(bx1, b.ax, b.bx);
       bz0 = Math.min(bz0, b.az, b.bz); bz1 = Math.max(bz1, b.az, b.bz);
     }
@@ -10350,8 +12118,9 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(V), 3));
   g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(U), 2));
+  g.setAttribute('color', new THREE.BufferAttribute(new Float32Array(C), 3));
   g.computeVertexNormals();
-  worldGroup.add(new THREE.Mesh(g, MAT.verge));
+  worldGroup.add(new THREE.Mesh(g, MAT.batter));
   // ── AND IT RE-SEATS FROM NOW ON ──
   //
   // A batter was a static mesh built against the ground as it stood at that
@@ -10369,6 +12138,64 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
     x0: bx0 - REACH, z0: bz0 - REACH, x1: bx1 + REACH, z1: bz1 + REACH };
   drapedWays.push(d2); indexDrape(d2);
 }
+/**
+ * THE JUNCTION BOX AND ITS GIVE-WAY LINES, one per node the batch's topology
+ * says is a crossing. The box is the convex hull of every arm's kerb corners
+ * a crossing half-width out from the node, fanned from the node at the deck
+ * heights the ribbons actually built (the day's junction work is what makes
+ * "the deck height at the node" one number). A minor arm — narrower than the
+ * widest arm here — gets a give-way line across it just outside the box.
+ * Nodes are boxed once; the registry is cleared with the pre-grid.
+ */
+function flushJunctions(): void {
+  for (const [key, node] of juncNodes) {
+    if (juncBoxed.has(key)) continue;
+    const ways = new Set(node.arms.map((a) => a.dk));
+    if (node.arms.length < 3 || ways.size < 2) continue;
+    const y0 = roadHeightAt(node.x, node.z, 1.2);
+    if (y0 === null) continue;                    // nothing built here yet: next batch
+    juncBoxed.add(key);
+    const maxHw = Math.max(...node.arms.map((a) => a.hw));
+    const L = maxHw + 0.5;
+    // Every arm's two kerb corners L out along the arm.
+    const corners: Array<[number, number]> = [];
+    for (const a of node.arms) {
+      const nx = -a.uz, nz = a.ux;
+      corners.push([node.x + a.ux * L + nx * a.hw, node.z + a.uz * L + nz * a.hw]);
+      corners.push([node.x + a.ux * L - nx * a.hw, node.z + a.uz * L - nz * a.hw]);
+    }
+    // Andrew's monotone chain, counter-clockwise.
+    corners.sort((p, q) => p[0] - q[0] || p[1] - q[1]);
+    const cross = (o: [number, number], a: [number, number], b: [number, number]): number =>
+      (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+    const lower: Array<[number, number]> = [], upper: Array<[number, number]> = [];
+    for (const p of corners) { while (lower.length >= 2 && cross(lower[lower.length - 2], lower[lower.length - 1], p) <= 0) lower.pop(); lower.push(p); }
+    for (let i = corners.length - 1; i >= 0; i--) { const p = corners[i]; while (upper.length >= 2 && cross(upper[upper.length - 2], upper[upper.length - 1], p) <= 0) upper.pop(); upper.push(p); }
+    const hull = lower.slice(0, -1).concat(upper.slice(0, -1));
+    if (hull.length < 3) continue;
+    const hy = (x: number, z: number): number => (roadHeightAt(x, z, 1.5) ?? y0) + SURFACE.road.lift + 0.008;
+    const cy = y0 + SURFACE.road.lift + 0.008;
+    for (let i = 0; i < hull.length; i++) {
+      const a = hull[i], b = hull[(i + 1) % hull.length];
+      apron.boV.push(node.x, cy, node.z, a[0], hy(a[0], a[1]), a[1], b[0], hy(b[0], b[1]), b[1]);
+      apron.boUV.push(node.x / 12, node.z / 12, a[0] / 12, a[1] / 12, b[0] / 12, b[1] / 12);
+    }
+    // Give-way lines on the minor arms, just outside the box.
+    for (const a of node.arms) {
+      if (a.hw >= maxHw - 0.25) continue;
+      const nx = -a.uz, nz = a.ux;
+      const d0 = L + 0.3, d1 = L + 0.65;
+      const p = (d: number, s: number): [number, number] => [node.x + a.ux * d + nx * s, node.z + a.uz * d + nz * s];
+      const [ax, az] = p(d0, a.hw - 0.2), [bx, bz] = p(d0, -a.hw + 0.2);
+      const [cx, cz] = p(d1, a.hw - 0.2), [dx, dz] = p(d1, -a.hw + 0.2);
+      const ya = hy(ax, az) + 0.004, yb = hy(bx, bz) + 0.004, yc = hy(cx, cz) + 0.004, yd = hy(dx, dz) + 0.004;
+      const uw = (a.hw * 2) / 1.6;
+      apron.gwV.push(ax, ya, az, bx, yb, bz, cx, yc, cz, bx, yb, bz, dx, yd, dz, cx, yc, cz);
+      apron.gwUV.push(0, 0, uw, 0, 0, 1, uw, 0, uw, 1, 0, 1);
+    }
+  }
+  juncNodes.clear();
+}
 function flushAprons(): void {
   for (const [v, u, m] of [
     [apron.cutV, apron.cutUV, MAT.verge],
@@ -10377,6 +12204,8 @@ function flushAprons(): void {
     [apron.sgV, apron.sgUV, MAT.sign],
     [apron.stV, apron.stUV, MAT.stud],
     [apron.moV, apron.moUV, MAT.mouth],
+    [apron.boV, apron.boUV, MAT.box],
+    [apron.gwV, apron.gwUV, MAT.gw],
   ] as const) {
     if (!v.length) continue;
     const g = new THREE.BufferGeometry();
@@ -10410,6 +12239,14 @@ const juncPins = !/[?&]nopins=1/.test(location.search);
 // the other road's line. Below it there is a turning here, and a barrier across
 // a turning is both wrong to look at and wrong to drive.
 const GRADE_SEP = 2.6;
+/** Clearance a flyover keeps over the deck beneath it, soffit to surface.
+ *  Real road bridges hold ~5m; this is the deck-to-deck figure, so the drawn
+ *  soffit (apron depth below) sits a little under that. */
+const BRIDGE_CLEAR = 5.5;
+/** `m` is the most any station rose; `p0`/`p1` are what the portals rose —
+ *  zero on a bridge long enough to ramp to its clearance. */
+interface LiftRec { x: number; z: number; nm?: string; fid: number; layer: number; m: number; n: number; p0: number; p1: number }
+const liftLog: LiftRec[] = [];
 const RAIL_H = 1;      // parapet height above the kerb it stands on
 // Off only from a probe (`?nofill=1`), to see the ditch the fill closes.
 const vergeFill = !/[?&]nofill=1/.test(location.search);
@@ -10421,8 +12258,12 @@ const vergeFill = !/[?&]nofill=1/.test(location.search);
  *  fragments had no room to escape their own ends. Anchoring to the
  *  neighbour's built deck instead lets the first fragment choose freely and
  *  every later one join it seamlessly. */
+/** The distance the last deckAnchorAt answer stood at — read straight after
+ *  the call by the join log, never by anything that decides geometry. */
+let lastAnchorD: number | null = null;
 function deckAnchorAt(x: number, z: number): number | null {
   let best: number | null = null, bd = 2.2;
+  lastAnchorD = null;
   for (const dx of [0, -GRID, GRID]) for (const dz of [0, -GRID, GRID]) {
     for (const s of roadGrid.get(gkey(x + dx, z + dz)) ?? []) {
       // Tracks and paths are DRAPED, not profiled — on a misregistered cliff
@@ -10442,6 +12283,7 @@ function deckAnchorAt(x: number, z: number): number | null {
       if (db < bd) { bd = db; best = s.yb; }
     }
   }
+  if (best !== null) lastAnchorD = bd;
   return best;
 }
 /** The CAMBER an already built neighbour holds at (x,z), in THIS fragment's
@@ -10563,7 +12405,7 @@ async function solveChainPlanned(
 const profileHints = solver.hints;
 const hintedWays = solver.hinted;
 const writeHints = (dense: Array<[number, number]>, alg: number[]): void => solver.writeHints(dense, alg);
-const hintAt = (x: number, z: number, reach = 6): number | null => solver.hintAt(x, z, reach);
+const hintAt = (x: number, z: number, reach = 6, layer?: number): number | null => solver.hintAt(x, z, reach, layer);
 /**
  * ── RIBBON DECKS BATCH PER TILE (R57) ──
  *
@@ -10678,7 +12520,8 @@ function flushRibbons(): void {
     }
   }
 }
-function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string): void {
+function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material, lift: number, drivable = false, mode: RoadMode = 'none', track = false, name?: string, sq?: number, maxGrade = 0, canopy = false, tint?: [number, number, number], wayKey?: string, layer = 0): void {
+  const name_ = name;
   const fid = ++ribbonSeq;
   // BELT TO THE CLIPPER'S BRACES. Clipping to the gated tile should mean every
   // point here has real elevation under it; if one does not, the profile would
@@ -10752,9 +12595,46 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // deckAnchorAt) — a hard pin to the centreline sample gave the cliff its
   // contamination back at every one of the many short fragment joins.
   const anchor0 = deckAnchorAt(dense[0][0], dense[0][1]);
+  const anchor0D = lastAnchorD;
   const anchor1 = deckAnchorAt(dense[n - 1][0], dense[n - 1][1]);
+  const anchor1D = lastAnchorD;
   const p0 = anchor0 === null ? null : anchor0 - lift;
   const p1 = anchor1 === null ? null : anchor1 - lift;
+  /** The anchors the END WELD will use — the same as p0/p1 unless a lifted
+   *  bridge refuses one below. Separate names, because a `let` p0 would lose
+   *  TypeScript's null narrowing in every closure that reads it. */
+  let weldP0 = p0, weldP1 = p1;
+  // ── AN APPROACH WAITS FOR ITS PORTAL ──
+  //
+  // A flyover is lifted whole and its approaches weld up to its portals — which
+  // only works if the portal is standing when the approach builds. Within one
+  // tile the build order says so (higher layer first, see renderWays); across
+  // tiles it says nothing, and measured at Vélizy every lifted bridge came back
+  // to the floor: its approach had built at grade from a neighbouring tile, the
+  // bridge's own ends anchored DOWN to it, and the weld spread that -5.4m along
+  // a fragment with no held station in it.
+  //
+  // So an end with no built anchor but a HIGHER-LAYER hint at it — a planned
+  // portal, not yet built — defers, through the same bounded retry a chaotic
+  // crumb uses: the tile comes back in three seconds, and by then the bridge
+  // tile has usually landed. Three tries, then it builds at grade regardless,
+  // which is the pre-existing picture rather than a stall.
+  if (drivable && mode === 'auto' && n > 1) {
+    let wait = false;
+    for (const [i, a] of [[0, anchor0], [n - 1, anchor1]] as Array<[number, number | null]>) {
+      if (a !== null) continue;
+      if (solver.hintAbove(dense[i][0], dense[i][1], layer, 2.5) !== null) wait = true;
+    }
+    if (wait) {
+      const dkey = `${Math.round(dense[0][0])},${Math.round(dense[0][1])}`;
+      const seen = crumbDefer.get(dkey) ?? 0;
+      if (deferLog.length < 2000) {
+        deferLog.push({ x: +dense[0][0].toFixed(1), z: +dense[0][1].toFixed(1), x1: +dense[n - 1][0].toFixed(1), z1: +dense[n - 1][1].toFixed(1),
+          nm: name, fid, layer, why: 'portal-above', seen, built: seen >= 3 });
+      }
+      if (seen < 3) { crumbDefer.set(dkey, seen + 1); unbuilt++; return; }
+    }
+  }
   // ±2 samples of the SOURCE's real resolution, not the tile's: high-zoom
   // terrarium here is oversampled ~30m SRTM, so ±8m candidates were mostly
   // re-reading the same underlying measurement.
@@ -10785,8 +12665,82 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // stations landing on different roads is a vertical step in the carriageway.
   // Measured where Coast Road meets Highway 1 at Big Sur.
   const hintEl: Array<number | null> = mode !== 'none' && drivable
-    ? dense.map(([x, z]) => hintAt(x, z, 2.5)) : [];
+    ? dense.map(([x, z]) => hintAt(x, z, 2.5, layer)) : [];
   const hinted = hintEl.filter((h) => h !== null).length >= n * 0.8 && n > 1;
+  // The stations this fragment shares with another chain — see stageLog.
+  /**
+   * ── A PINNED STATION STAYS PINNED THROUGH THE WHOLE PER-WAY BUILD ──
+   *
+   * The chain planner reconciles junctions: where two roads share a node it
+   * pins the later chain to the earlier one's deck, and holds that pin through
+   * its own grade ruling. Measured at Camps Bay with __hintsAt: at every one of
+   * the eight worst node steps both chains AGREED — 0.404 and 0.404 at a node
+   * whose two built decks were 1.81 and -0.373.
+   *
+   * The per-way build then took the hint (stage 1, exact), ruled it (stage 2,
+   * exact), and the GRADE LINE below replaced it: a ±200m running mean that
+   * overwrites every interior station outright. Right for a heightfield
+   * sample — high-frequency content along a road IS DEM error — and wrong for
+   * a junction pin, which is deliberate high-frequency content the planner put
+   * there. 262 through-node stations in the fixture, 179 left their hint by
+   * more than 10cm, and the grade line was the first stage to move 128 of
+   * them. The ends were always protected (`pin` fades to zero there), which is
+   * exactly why fragment ends weld to 4cm and through-nodes step by metres.
+   *
+   * So a station that carries two chain hints — which is what a junction IS in
+   * the hint store — is held: the grade line and the deviation clamp leave it,
+   * both grade rulings treat it as they treat a chain pin, the seat and the
+   * smoothing pass over it, and the end weld spreads its residual only as far
+   * as the nearest held station. Neighbours absorb the ramp, as they do in the
+   * chain solve. Same layer only: a flyover's station over a road beneath is
+   * not a junction.
+   */
+  const jn: number[] = [];
+  const held = new Uint8Array(n);
+  if (hinted) {
+    for (let i = 0; i < n; i++) {
+      if (solver.chainsNear(dense[i][0], dense[i][1], JUNC_R, layer) >= 2) { jn.push(i); held[i] = 1; }
+    }
+  }
+  // A HINTED END IS HELD THROUGH THE SEAT. The seat's move at a fragment end
+  // is undone by the end weld in every case — the neighbour was built from the
+  // same chain hint — so all it ever leaves is a kink: measured on Tree Road,
+  // one fragment leaving a 4cm-agreed node at 19% and the other arriving at
+  // ~0%, because one end had been seated 0.64m down and welded back up with
+  // the residual spread along its length. `seatHold` is separate from `held`
+  // so the grade line and the rulings still treat the end as an end.
+  const seatHold = new Uint8Array(n);
+  if (hinted && n > 2) {
+    if (hintEl[0] !== null) seatHold[0] = 1;
+    if (hintEl[n - 1] !== null) seatHold[n - 1] = 1;
+  }
+  /** What ruleGrade's `held` wants: a non-null entry per held station — the
+   *  junction stations AND the hinted ends. Holding an end through the seat
+   *  alone changed nothing measurable (Camps Bay: 32 -> 34 ends off their
+   *  hint): the second ruling's forward pass clamps station n-1 to its
+   *  neighbour, and a neighbour seated into a gully takes the end with it. Held
+   *  here, the neighbour ramps to the end instead, as it does to a pin. */
+  const heldArr: Array<number | null> | undefined = (jn.length || seatHold[0] || seatHold[n - 1])
+    ? dense.map((_, i) => (held[i] || seatHold[i] ? 1 : null)) : undefined;
+  const frag: FragRec | null = fragStations + n <= FRAG_CAP
+    ? { fid, nm: name_, wid: wayKey, pb: 0, n, layer, hinted, hintN: hintEl.filter((h) => h !== null).length, a0: anchor0, a1: anchor1,
+      xs: dense.map((p) => +p[0].toFixed(2)), zs: dense.map((p) => +p[1].toFixed(2)),
+      hint: hintEl.length ? hintEl.map((h) => (h === null ? null : +h.toFixed(3))) : dense.map(() => null), st: {} }
+    : null;
+  if (frag) { fragStations += n; fragLog.set(fid, frag); }
+  const stage = (name: string, arr: ArrayLike<number>): void => {
+    if (frag) frag.st[name] = Array.from({ length: n }, (_, i) => +arr[i].toFixed(3));
+    if (stageLog.length >= 3000) return;
+    for (const i of jn) {
+      let r = stageLog.find((e) => e.fid === fid && e.i === i);
+      if (!r) {
+        r = { x: +dense[i][0].toFixed(1), z: +dense[i][1].toFixed(1), nm: name_, fid, i, n, pb: 0,
+          hint: hintEl[i] === null ? null : +(hintEl[i] as number).toFixed(3), hintsHere: 2, st: {} };
+        stageLog.push(r);
+      }
+      r.st[name] = +arr[i].toFixed(3);
+    }
+  };
   // A chaotic anchorless fragment DEFERS: on cliff ground any solve under a
   // few hundred stations is luck, and anchoring propagates whatever luck
   // built first. Refusing the build sends the tile back through the retry
@@ -10807,6 +12761,17 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   }
   let alg = elev;
   let pbranch = 6;
+  // A CRUMB'S HINTED END IS AN ANCHOR. The crumb branches below anchor only
+  // to BUILT decks, and a crumb that builds before the road it joins finds
+  // none there — measured at Vélizy as the worst seam on the capture: a
+  // three-station unnamed piece, one hinted station of three so under the
+  // hint gate, held LEVEL at its far end 0.92m under the pin at its near
+  // end, and the named road then built its through-station on that pin.
+  // The pin IS the deck the through road will build to, so where no deck
+  // stands yet the chain's hint at the end serves as the anchor. The end
+  // weld is untouched: it still reads built decks only.
+  const q0 = p0 ?? (hintEl[0] ?? null);
+  const q1 = p1 ?? (hintEl[n - 1] ?? null);
   // A CRUMB CANNOT PROFILE ITSELF. OSM splits a mountain road at every
   // structure change — Chapman's Peak alternates gallery / open road / gallery
   // in 40-55m pieces — and a fragment eight stations long is too short for
@@ -10822,6 +12787,15 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     }
     return false;
   };
+  // A CRUMB IS SHORT IN METRES, NOT IN STATIONS. Sixteen stations is 40-55m
+  // of gallery at Chapman's and 110m of hillside at Senqu, where a fifteen-
+  // station piece with 10.7m of ground fall along it was held LEVEL at its
+  // one anchor: a causeway 11m over the ground when its neighbour built
+  // first, a trench 11m under it when the far tile did — and the neighbour
+  // then welded down to that. Past CRUMB_M a piece has room to be solved.
+  let fragM = 0;
+  for (let i = 1; i < n; i++) fragM += Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
+  const CRUMB_M = 70;
   if (hinted) {
     pbranch = 1;
     const idxs: number[] = [];
@@ -10842,16 +12816,16 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     });
     if (p0 !== null && Math.abs(alg[0] - p0) < 4) alg[0] = p0;
     if (p1 !== null && Math.abs(alg[n - 1] - p1) < 4) alg[n - 1] = p1;
-  } else if (mode === 'auto' && (n <= 16 || (n <= 40 && chaoticHere() && (p0 !== null || p1 !== null)))) {
-    if (p0 !== null && p1 !== null) {
+  } else if (mode === 'auto' && ((n <= 16 && fragM <= CRUMB_M) || (n <= 40 && chaoticHere() && (q0 !== null || q1 !== null)))) {
+    if (q0 !== null && q1 !== null) {
       pbranch = 2;
-      alg = elev.map((_, i) => p0 + ((p1 - p0) * i) / (n - 1));
-    } else if (p0 !== null || p1 !== null) {
+      alg = elev.map((_, i) => q0 + ((q1 - q0) * i) / (n - 1));
+    } else if (q0 !== null || q1 !== null) {
       // LEVEL, not drifted: every DEM-derived drift term tried here smuggled
       // the plateau back in one crumb at a time — a 40-90m gallery shelf is
       // engineered near-level, and holding the anchor is closer to truth.
       pbranch = 3;
-      const a = (p0 ?? p1) as number;
+      const a = (q0 ?? q1) as number;
       alg = elev.map(() => a);
     } else {
       pbranch = 4;
@@ -10880,10 +12854,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // produced the numbers, so the limit is applied where the profile LEAVES the
   // solver rather than at one of the places it is made.
   const gLim = (maxGrade > 0 ? maxGrade : 0.15) * 1.2;
+  stage('1-branch', alg);
+  for (const i of jn) { const r = stageLog.find((e) => e.fid === fid && e.i === i); if (r) r.pb = pbranch; }
+  if (frag) frag.pb = pbranch;
   if (mode !== 'none' && n > 1) {
     alg = alg.slice();   // `alg` may still BE `elev`; the raw samples are read again below
-    ruleGrade(dense, alg, gLim);
+    ruleGrade(dense, alg, gLim, heldArr);
   }
+  stage('2-ruled', alg);
   // Roads get their own longitudinal PROFILE. Terrain draping alone sends a
   // road over every hill in its path; real roads keep grade and go THROUGH.
   // Where a ~500m-smoothed profile sits more than TUNNEL_TOL below the terrain
@@ -10912,12 +12890,98 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         }
       }
     }
-    for (const [a, b] of runs) for (let i = a; i <= b; i++) {
-      const chord = alg[a] + ((alg[b] - alg[a]) * (i - a)) / (b - a);
-      // Tagged tunnels cap at the terrain: the z13 heightfield can't resolve
-      // small knolls, and an uncapped chord under flat data left a giant
-      // exposed tube sitting on the ground. Bridges ride the chord.
-      prof[i] = mode === 'tunnel' ? Math.min(chord, alg[i]) : chord;
+    // A CHORD BREAKS AT A PIN. The chord wrote portal to portal through every
+    // station between, held junction stations included — measured on Eldon
+    // Lane at Camps Bay as the one stage that moved a pin both chains agreed
+    // on (12.765 -> 12.343) while every stage that knows about `held` left it
+    // alone. A pinned station is another road's deck; the chord runs between
+    // consecutive pins instead, so a ramp merging onto a viaduct still meets
+    // it where the planner said.
+    for (const [a, b] of runs) {
+      const knots = [a];
+      for (let i = a + 1; i < b; i++) if (held[i]) knots.push(i);
+      knots.push(b);
+      for (let k = 0; k + 1 < knots.length; k++) {
+        const p = knots[k], q = knots[k + 1];
+        for (let i = p; i <= q; i++) {
+          const chord = alg[p] + ((alg[q] - alg[p]) * (i - p)) / (q - p || 1);
+          // Tagged tunnels cap at the terrain: the z13 heightfield can't resolve
+          // small knolls, and an uncapped chord under flat data left a giant
+          // exposed tube sitting on the ground. Bridges ride the chord.
+          prof[i] = mode === 'tunnel' ? Math.min(chord, alg[i]) : chord;
+        }
+      }
+    }
+    // ── A FLYOVER CLEARS THE ROAD IT CROSSES ──
+    //
+    // The chord above is portal to portal, and the portals anchor to the
+    // approaches, which are at grade — so on flat ground a tagged bridge is a
+    // chord along the ground. Measured at the Vélizy interchange before this:
+    // the N 118 (layer=1, bridge=yes) over the A 86 at deck 1.31m on ground
+    // 1.34m, and the layer-2 ramps 0.2-0.6m BELOW the roads they pass over.
+    // OSM carries no elevation; `layer` is its whole statement about the
+    // vertical, and it was being kept and never read.
+    //
+    // So the deck rises to put every station BRIDGE_CLEAR above the highest
+    // lower-layer deck beneath it. Bridges over nothing (a river, a railway
+    // not in the road set) find no deck and keep their chord.
+    //
+    // THE LIFT IS A RAMP, NOT A STEP. The first version raised the chord as
+    // one piece, portals included, and left the portals to the weld — which
+    // works when the approach builds after the bridge and welds up to it,
+    // and cannot work when the approach built FIRST, at grade, from another
+    // tile: measured at Vélizy after the layer, the defer and the build
+    // order had all shipped, one portal still stood 5.9m above the approach
+    // it was anchored to (fid531 at 9.39 over fid104 at 3.49), because the
+    // approach had built long before the bridge's tile was planned and
+    // nothing could have told it to wait. A real flyover does not step at
+    // its abutment either: the deck climbs from the portal at the ruling
+    // grade and is at its clearance by the time it crosses. So the profile
+    // is the lowest one that keeps the chord, keeps every crossing station
+    // at its clearance, and descends from those at no more than the class
+    // grade — the standard two-pass cone. The portals rise only by what the
+    // ramp cannot absorb: nothing, on a bridge long enough to climb; the
+    // residual, on a short span, where it is still handed to the weld below.
+    if (mode === 'bridge' && layer > 0 && runs.length) {
+      let need = 0;
+      // NOT AT THE PORTALS. The nearest lower-layer deck to a portal station is
+      // the bridge's OWN approach: the shared node is one dense point in the
+      // chain and carries whichever member's layer came first, and the
+      // approach's hints run away from it along the bridge's own line. Counted,
+      // every bridge would lift BRIDGE_CLEAR above its own approach while
+      // crossing nothing. A crossed road passes mid-span, so the scan starts
+      // one station in from each end; a two-station bridge (a culvert) has no
+      // span to scan and keeps its chord, which is right for a culvert.
+      const chord = prof.slice();
+      for (const [a, b] of runs) {
+        for (let i = a + 1; i <= b - 1; i++) {
+          const below = solver.deckBelow(dense[i][0], dense[i][1], layer, width / 2 + 1.5);
+          if (below !== null && below + BRIDGE_CLEAR > prof[i]) prof[i] = below + BRIDGE_CLEAR;
+        }
+        for (let i = a + 1; i <= b; i++) {
+          const d = Math.max(0.1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
+          prof[i] = Math.max(prof[i], prof[i - 1] - gLim * d);
+        }
+        for (let i = b - 1; i >= a; i--) {
+          const d = Math.max(0.1, Math.hypot(dense[i + 1][0] - dense[i][0], dense[i + 1][1] - dense[i][1]));
+          prof[i] = Math.max(prof[i], prof[i + 1] - gLim * d);
+        }
+        for (let i = a; i <= b; i++) need = Math.max(need, prof[i] - chord[i]);
+      }
+      if (need > 0) {
+        // AND IT DOES NOT WELD DOWN. An anchor more than a metre under a lifted
+        // portal is an approach that built first, at grade; welding to it hands
+        // back the floor. The approach welds up to this portal instead — on its
+        // retry, if it deferred, or as a step if it did not, which is the one
+        // case the defer above exists to make rare.
+        if (weldP0 !== null && prof[0] - weldP0 > 1) weldP0 = null;
+        if (weldP1 !== null && prof[n - 1] - weldP1 > 1) weldP1 = null;
+        if (liftLog.length < 500) {
+          liftLog.push({ x: +dense[0][0].toFixed(1), z: +dense[0][1].toFixed(1), nm: name, fid, layer,
+            m: +need.toFixed(2), n: runs.reduce((c, [a, b]) => c + (b - a + 1), 0),
+            p0: +(prof[0] - chord[0]).toFixed(2), p1: +(prof[n - 1] - chord[n - 1]).toFixed(2) });
+        }
+      }
     }
     // THE GRADE LINE. On a cliff face the 9.5m/px heightfield cannot resolve
     // a road bench: a pixel averages the rock above the deck with the drop
@@ -10939,10 +13003,12 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       });
       const eng = wide(wide(prof));
       for (let i = 0; i < n; i++) {
+        if (held[i]) continue;                         // a junction pin is not DEM noise
         const pin = clamp(Math.min(i, n - 1 - i) / 8, 0, 1);
         prof[i] += (eng[i] - prof[i]) * pin;
       }
     }
+    stage('2b-gradeline', prof);
     // A ROAD CLASS IMPLIES A RULING GRADE. A motorway is BUILT to ~7%, an
     // ordinary paved road to low teens — so any along-way grade past the
     // class ceiling that survives the smoothing is DEM error, not geography.
@@ -10957,19 +13023,23 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       const DEV = 5;
       for (let pass = 0; pass < 3; pass++) {
         for (let i = 1; i < n; i++) {
+          if (held[i]) continue;
           const g = maxGrade * Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
           prof[i] = clamp(clamp(prof[i], prof[i - 1] - g, prof[i - 1] + g), base[i] - DEV, base[i] + DEV);
         }
         for (let i = n - 2; i >= 0; i--) {
+          if (held[i]) continue;
           const g = maxGrade * Math.max(1, Math.hypot(dense[i + 1][0] - dense[i][0], dense[i + 1][1] - dense[i][1]));
           prof[i] = clamp(clamp(prof[i], prof[i + 1] - g, prof[i + 1] + g), base[i] - DEV, base[i] + DEV);
         }
       }
       for (let i = 0; i < n; i++) {
+        if (held[i]) continue;
         const pin = clamp(Math.min(i, n - 1 - i) / 8, 0, 1);
         prof[i] = base[i] + (prof[i] - base[i]) * pin;
       }
     }
+    stage('2c-devclamp', prof);
   }
   const flat = mode !== 'none'; // profiled roads get a flat cross-section
   // ── hug the ground where there is nothing to bridge ────────────────
@@ -11067,7 +13137,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // road stays in its cutting rather than climbing out of it, and `hug`
       // still fades the whole thing to zero over any drop worth bridging, which
       // is precisely the coastal case.
-      const seat = prof[i] + (Math.min(prof[i], (tR + tL) * 0.5) - prof[i]) * hug;
+      const seat = held[i] || seatHold[i] ? prof[i] : prof[i] + (Math.min(prof[i], (tR + tL) * 0.5) - prof[i]) * hug;
       // ── THE DECK'S ROLL IS DESIGNED, NOT SAMPLED ──
       //
       // This used to be `(tR - tL) * 0.5 * hug`, capped at MAX_FALL: the
@@ -11105,9 +13175,11 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // Smoothed along the way before use. The heightfield is noisy at 9.5m/px
     // and a deck taken straight from it would ripple; three passes of a 1-2-1
     // kernel keep the grade a road could actually have been built to.
+    stage('3-seated', dense.map((_, i) => (edgeR[i] + edgeL[i]) * 0.5));
     for (let pass = 0; pass < 3; pass++) {
       const a = edgeR.slice(), b = edgeL.slice();
       for (let i = 1; i < n - 1; i++) {
+        if (held[i]) continue;
         edgeR[i] = (a[i - 1] + a[i] * 2 + a[i + 1]) * 0.25;
         edgeL[i] = (b[i - 1] + b[i] * 2 + b[i + 1]) * 0.25;
       }
@@ -11139,12 +13211,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // survived on Coast Road at Big Sur with the pre-hug limit already applied.
     // The centreline is what "grade" means, so it is the centreline that is
     // ruled; the cross-fall rides with it and the section simply translates.
+    stage('4-smoothed', prof);
     const before = prof.slice();
-    ruleGrade(dense, prof, gLim);
+    ruleGrade(dense, prof, gLim, heldArr);
     for (let i = 0; i < n; i++) {
       const dy = prof[i] - before[i];
       edgeR[i] += dy; edgeL[i] += dy;
     }
+    stage('5-reruled', prof);
     // WELD LAST. An anchor is the neighbouring fragment's deck at the node the
     // two share; the ruling grade is what a vehicle can climb. Where the data
     // makes those contradict — Chapman's fragments either side of [110,-494]
@@ -11159,8 +13233,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // are centimetres and this does nothing; where it is not, the result is
     // over the class grade but CONTINUOUS, and as shallow as this fragment's
     // length allows — which is the same principle the limiter itself follows.
-    const d0 = p0 === null || !endWeld ? 0 : p0 - prof[0];
-    const d1 = p1 === null || !endWeld ? 0 : p1 - prof[n - 1];
+    const d0 = weldP0 === null || !endWeld ? 0 : weldP0 - prof[0];
+    const d1 = weldP1 === null || !endWeld ? 0 : weldP1 - prof[n - 1];
+    const pre0 = prof[0], pre1 = prof[n - 1];
     // AND THE TILT WITH IT. The centreline weld above closes the middle; the
     // cross-fall was still each fragment's own, and the audit measured half-
     // metre kerb steps over zero-centimetre centreline steps on one Bixby
@@ -11176,21 +13251,46 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       if (t0 !== null) e0 = t0 - tilt[0];
       if (t1 !== null) e1 = t1 - tilt[n - 1];
     }
+    if (joinLog.length < 6000) {
+      const rec = (end: 0 | 1, i: number, pre: number, weld: number, tw: number, anchor: number | null, aD: number | null): JoinRec =>
+        ({ x: +dense[i][0].toFixed(1), z: +dense[i][1].toFixed(1), nm: name, fid, end, pb: pbranch,
+          anchor: anchor === null ? null : +(anchor - lift).toFixed(3), anchorD: aD === null ? null : +aD.toFixed(2),
+          hint: hintEl[i] === undefined || hintEl[i] === null ? null : +(hintEl[i] as number).toFixed(3),
+          pre: +pre.toFixed(3), weld: +weld.toFixed(3), tiltWeld: +tw.toFixed(3), y: +(pre + weld).toFixed(3) });
+      joinLog.push(rec(0, 0, pre0, d0, e0, anchor0, anchor0D), rec(1, n - 1, pre1, d1, e1, anchor1, anchor1D));
+    }
     if (d0 !== 0 || d1 !== 0 || e0 !== 0 || e1 !== 0) {
       const arc = new Array<number>(n).fill(0);
       for (let i = 1; i < n; i++) {
         arc[i] = arc[i - 1] + Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]);
       }
       const total = arc[n - 1] || 1;
+      // The residual reaches the nearest HELD station and no further: a
+      // linear spread across the whole fragment carried +0.58m of one end's
+      // correction into a junction pin seven stations in (measured, Eldon
+      // Lane). Between held stations nothing moves; outside them each end's
+      // own residual fades to zero at the first pin it meets.
+      const firstHeld = jn.length ? jn[0] : -1, lastHeld = jn.length ? jn[jn.length - 1] : -1;
       for (let i = 0; i < n; i++) {
-        const f = arc[i] / total;
-        const dy = d0 + (d1 - d0) * f;
-        const dt = e0 + (e1 - e0) * f;
+        let f0: number, f1: number;
+        if (firstHeld < 0) { const f = arc[i] / total; f0 = 1 - f; f1 = f; }
+        else {
+          // A pin AT the end leaves that end's residual nowhere to go: the span
+          // to spread it over is zero, and dividing by `|| 1` instead handed
+          // station 1 a residual eleven times the end's and sign-flipped.
+          f0 = firstHeld === 0 ? (i === 0 ? 1 : 0)
+            : i <= firstHeld ? 1 - arc[i] / arc[firstHeld] : 0;
+          f1 = lastHeld === n - 1 ? (i === n - 1 ? 1 : 0)
+            : i >= lastHeld ? (arc[i] - arc[lastHeld]) / (total - arc[lastHeld]) : 0;
+        }
+        const dy = d0 * f0 + d1 * f1;
+        const dt = e0 * f0 + e1 * f1;
         prof[i] += dy; tilt[i] += dt;
         edgeR[i] += dy + dt; edgeL[i] += dy - dt;
       }
     }
   }
+  stage('6-welded', prof);
   const verts: number[] = [];
   const uvs: number[] = [];
   // Per-vertex tint: what the way is made of, or for a track the colour of the
@@ -11230,7 +13330,11 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // whole world read as a permanent contraflow. On a straight the default is
   // now a marker post, and a hazard board only appears where there is a drop
   // to be warned about.
-  const SIGN_EVERY = 190;
+  // Was 190, and with the bend and drop cases on top the roadside read as a
+  // permanent works site: a board or post every few seconds of driving. A
+  // real rural road carries a marker post every few hundred metres and a
+  // chevron only where the bend needs one.
+  const SIGN_EVERY = 340;
   const SIGN_DROP = 2.2;  // metres of fall past the kerb that earns a real warning
   const BEND_DEG = 14;    // heading change over one 12m step that reads as "a bend"
   // Deterministic per way: the same road grows the same signs on every device
@@ -11469,6 +13573,15 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     px: number, py: number, pz: number, fwdX: number, fwdZ: number, side: number, kind: number,
     scale = 1, wide = 1,
   ): void => {
+    // NEVER ON SOMEBODY ELSE'S TARMAC. A post stands 0.3m and a board 1.3m
+    // outside this road's kerb, and at a junction that point is inside the
+    // crossing road's carriageway: boards and marker posts standing in the
+    // middle of the side road, reported from the survey at every fork. Both
+    // the built grid and this batch's pre-grid answer, so it holds whatever
+    // the build order was.
+    const other = onCarriageway(px, pz, -0.3, fid, name).road;
+    const pre = preEdge(px, pz, wayKey);
+    if (other || (pre && pre.out < -0.3)) { spanStats.signRefused++; return; }
     const l = Math.hypot(fwdX, fwdZ) || 1;
     const fx = fwdX / l, fz = fwdZ / l;
     // Facing back along the way, canted 12° toward the carriageway.
@@ -11602,11 +13715,9 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
    *  host is unbuilt (pre-grid), or where the decks are grade-separated. */
   const endPlane: Array<((x: number, z: number) => number) | null> = [null, null];
   if (drivable && !track && n > 3) {
-    // Stations to fade over, ~60m at 12m steps — but never more than the way
-    // HAS. A four-station way walked off the end of `dense` and threw, which a
-    // page-error line with no stack in it reported as an anonymous TypeError
-    // somewhere in the world build.
-    const WARP = Math.min(5, n);
+    // Never past the way's own far end: a four-station way once walked off
+    // the end of `dense` and threw, which a page-error line with no stack in
+    // it reported as an anonymous TypeError somewhere in the world build.
     for (const end of [0, 1]) {
       const i0 = end === 0 ? 0 : n - 1;
       // A wider road must actually be underfoot at the node, not merely near it.
@@ -11662,6 +13773,15 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       const gz = at0.uz * gAlong + cpz * gCross;
       const plane = (qx: number, qz: number): number => hy0 + (qx - nodeX) * gx + (qz - nodeZ) * gz;
       endPlane[end] = plane;
+      // NO STATION MOVES FURTHER THAN THE NODE DID. The plane is three samples
+      // on a host that curves, extrapolated up to sixty metres along this
+      // way; measured on Lower Kloof Road at Camps Bay it stood 1.8m under
+      // through-stations that agreed with their own chain to the centimetre,
+      // and the fade pulled them down to it — a 139% segment on a road whose
+      // end had welded to the host within 4cm. The disagreement this warp
+      // exists to spread is the one AT THE NODE; the plane only shapes how it
+      // fades. Where the end already sits on the host, nothing here moves.
+      const r0 = Math.abs(clamp(hy0 - prof[i0], -GRADE_SEP, GRADE_SEP));
       // A CONTINUATION TIE — the same road carrying on over a tile cut —
       // takes the host's REGISTERED terminal camber, not the plane fit's.
       // The three-point fit samples the host's interior bays, which mid-bend
@@ -11681,9 +13801,33 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // way's FAR node 2m onto an extrapolation — measured as a new 2.05m
       // centreline step at Chapman's junction checkpoint. The far end is
       // somebody else's junction or continuation; it is not this end's to move.
-      const kMax = Math.min(WARP, n - 2);
-      for (let k = 0; k < kMax; k++) {
+      // THE FADE RUNS BY ARC LENGTH, NOT BY STATION. `1 - k / WARP` was
+      // written for 12m stations and read as "~60m"; on a bend the densify
+      // arcs put stations 2.4m apart with a 0.5m straight between two arcs,
+      // so the same five steps spanned eight metres, and the step between
+      // the two closest stations — a fifth of the whole disagreement with
+      // the host, 0.4m of a 2m one — landed on the half-metre station.
+      // Measured on The Cheviots Road at Camps Bay as an 86% segment that
+      // the profile log showed at 19% one stage earlier, because this ran
+      // after the last logged stage. Sixty metres of ground now, whatever
+      // the stations, and the far end's own stations still never.
+      // AND NEVER THROUGH A JUNCTION PIN. A held station is another road's
+      // deck; past it the disagreement with this end's host is somebody
+      // else's junction. Measured at Camps Bay where Eldon Lane crosses
+      // Shanklin Crescent 22m short of Eldon Lane's end: both chains agreed
+      // at 12.765, the per-way log left the pin at 12.607, and the built
+      // deck stood 1.02m off — the fade had reached back through the pin.
+      // Same rule as the weld spread: the residual reaches the nearest held
+      // station and no further.
+      const WARP_M = 60;
+      let along = 0;
+      for (let k = 0; k < n - 2; k++) {
         const i = end === 0 ? k : n - 1 - k;
+        if (k > 0) {
+          const j = end === 0 ? k - 1 : n - k;
+          along += Math.hypot(dense[i][0] - dense[j][0], dense[i][1] - dense[j][1]);
+        }
+        if (along >= WARP_M || held[i]) break;
         const [rx, rz] = kerbMitre(i, 1, width / 2), [lx, lz] = kerbMitre(i, -1, width / 2);
         // The plane at this station's own kerbs — answered everywhere, so
         // the FADE governs the transition, not the kerb's luck at landing on
@@ -11691,12 +13835,13 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // relocate it.
         const hR = plane(dense[i][0] + rx, dense[i][1] + rz);
         const hL = plane(dense[i][0] + lx, dense[i][1] + lz);
-        const w = 1 - k / WARP;
-        prof[i] += clamp((hR + hL) * 0.5 - prof[i], -GRADE_SEP, GRADE_SEP) * w;
+        const w = 1 - along / WARP_M;
+        prof[i] += clamp(clamp((hR + hL) * 0.5 - prof[i], -GRADE_SEP, GRADE_SEP) * w, -r0, r0);
         tilt[i] += ((tAnchor ?? (hR - hL) * 0.5) - tilt[i]) * w;
       }
     }
   }
+  stage('7-warped', prof);
   /**
    * THE CROP. A junction's shared node sits on the HOST's centreline, so this
    * way's ribbon used to run on across the host's carriageway to the middle —
@@ -11734,10 +13879,10 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // Built roads answer first (exact, decked); ways of THIS batch that
       // have not built yet answer through the pre-grid, blind to this way's
       // own body — which is what makes the crop independent of build order.
-      const hostEdge = (qx: number, qz: number): { out: number; track: boolean; hw: number; ux: number; uz: number; nm?: string } | null => {
+      const hostEdge = (qx: number, qz: number): { out: number; track: boolean; hw: number; ux: number; uz: number; nm?: string; fd?: number; built: boolean } | null => {
         const a = roadEdge(qx, qz);
         const b = preEdge(qx, qz, wayKey);
-        return a && (!b || a.out <= b.out) ? a : b;
+        return a && (!b || a.out <= b.out) ? { ...a, built: true } : b ? { ...b, built: false } : null;
       };
       const at0 = hostEdge(ex0, ez0);
       if (!at0) {
@@ -11756,6 +13901,22 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       if (at0.track) { clog('host-is-track'); continue; }
       if (at0.out >= -0.6) { clog('not-inside-host', { out: +at0.out.toFixed(2) }); continue; }
       if (at0.hw < width / 2 - 0.4) { clog('host-narrower', { host: at0.nm }); continue; }
+      // A TIE CROPS ONCE. Equal widths defer to whichever is already BUILT —
+      // but the pre-grid answers for a host that has not built yet, so two
+      // equal roads meeting in one batch each found the other and BOTH
+      // cropped: measured where Blair Road turns into Shanklin Crescent at
+      // Camps Bay, `cropped` logged from both ends of the same node and the
+      // corner between them drawn by nobody — the hole in the carriageway
+      // reported from the seat. The one that builds first now leaves the
+      // corner alone; the second finds it built and crops against it.
+      if (!at0.built && at0.hw < width / 2 + 0.4) { clog('tie-unbuilt-host', { host: at0.nm }); continue; }
+      // AND A HOST THAT ENDS HERE IS NOT A HOST. The crop stops a side road on
+      // a carriageway that continues past the node; where the other road
+      // also ends at this node — a corner where the name changes — its kerb
+      // line ends too, and a cut there only opens the outside of the bend.
+      // Both draw to the node, and the inside overlaps as a same-name
+      // continuation's does.
+      if (at0.built && hostEndsAt(ex0, ez0, at0.nm, at0.fd)) { clog('host-ends-here', { host: at0.nm }); continue; }
       // A FLYOVER IS NOT A MOUTH. Past GRADE_SEP the two roads are passing,
       // not meeting, and neither the cut nor the seat may apply — pulling a
       // viaduct's edge down to the road below it is worse than any overlap.
@@ -12041,7 +14202,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     }
     if (drivable) {
       const s: Seg = { ax: x0, az: z0, bx: x1, bz: z1, hw: width / 2, ya: prof[i], yb: prof[i + 1], tk: track, nm: name, sq, fd: fid, pb: pbranch,
-        wid: wayKey, ca: tilt[i], cb: tilt[i + 1] };
+        wid: wayKey, ca: tilt[i], cb: tilt[i + 1], ly: layer };
       addSeg(roadGrid, s);
       segsOf.push(s);
     }
@@ -12248,7 +14409,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         const fall = Math.max(drop[0], drop[1]) > SIGN_DROP;
         // Chevrons still march through a bend with a drop — that is the case
         // they were added for and it is the one worth keeping dense.
-        const gap = sharp && fall ? 18 : sharp ? 60 : SIGN_EVERY * (0.55 + signRng() * 0.9);
+        const gap = sharp && fall ? 34 : sharp ? 110 : SIGN_EVERY * (0.55 + signRng() * 0.9);
         signRun += len;
         if (signRun > gap) {
           signRun = 0;
@@ -12457,18 +14618,50 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   if (drivable && mode !== 'tunnel') {
     for (let i = 0; i < dense.length; i += 10) noteDryLand(dense[i][0], dense[i][1], prof[i]);
   }
-  if (mode !== 'bridge') for (const [a, b] of runs) {
+  // ── BURIAL IS ASKED EVERYWHERE, NOT ONLY WHERE A RUN WAS FOUND ──
+  //
+  // This scan used to run inside `for (const [a, b] of runs)`, and a run and a
+  // burial are answers to two different questions. A run is a KNOLL IN THE
+  // ALONG-WAY PROFILE — `alg[i]` standing TUNNEL_TOL above its own ±20-station
+  // average. Burial is GROUND OVER THE DECK. On a long smooth grade the first
+  // never fires, so the second was never asked; and the grade line above runs
+  // AFTER the run detector and rewrites `prof` for every station, so a profile
+  // buried by that smoothing was invisible to the detector by construction.
+  //
+  // Measured at Fish Hoek on Highway Road, hard-settled over six minutes so it
+  // could not be a streaming artefact: natural ground +0.22m, deck −7.66m, and
+  // the terrain carved down to −7.78m to reach it. `__carve` at that spot: 248
+  // of 305 samples needing the cut and NONE of them an artefact, terrain over
+  // target a median 8.29m, vertices 5–12m past the kerb dropped a median
+  // 12.72m and one at 25m by 18.01m — and every corner of the triangle under
+  // the road sitting exactly on its dig limit, so the carve was not
+  // overshooting, it was doing precisely what it was licensed to do.
+  // `__tunnelBreach` reported ZERO tunnel meshes in the whole world.
+  //
+  // `tn` is the only thing that stops the carve digging a road out of the hill
+  // it is inside — `rasterizeCut` returns on it, so the segment never reaches
+  // `cutCells` and `carveCorridors` never sees it — and nothing was setting it
+  // here. The wash makes the damage wide as well as deep: `roadFloorHard` lets
+  // a vertex sit at deck + out·CUT_WASH, and at 0.1 per metre an 8m burial
+  // licences an 80m crater before the floor climbs back to grade. That is the
+  // hole, and the buildings standing on its rim.
+  //
+  // Canopies are still exempt: tunnel=avalanche_protector and covered=yes mean
+  // a roof over a road that keeps its own grade in the open air, and burying
+  // one is the fault the canopy branch exists to prevent. Bridges too — a
+  // bridge rides its chord and its deck is meant to be clear of the ground.
+  if (mode !== 'none' && mode !== 'bridge' && !canopy && n > 2) {
     // Tube only where the road is genuinely BURIED — where the terrain covers
     // the profile. An unburied stretch (coarse heightfield, shallow cut) stays
     // an open road; the tube would otherwise stand exposed like a dark box.
     let s = -1;
-    for (let i = a; i <= b; i++) {
+    for (let i = 0; i < n; i++) {
       // FULLY buried: there must be enough ground overhead to contain the
       // whole tube. The old 1.2m threshold let a 5m shell stand almost four
       // metres proud of flat ground — the black arch hanging over the road.
       const buried = elevMin[i] - prof[i] > TUNNEL_H + 0.6;
       if (buried && s < 0) s = i;
-      if ((!buried || i === b) && s >= 0) {
+      if ((!buried || i === n - 1) && s >= 0) {
         const e = buried ? i : i - 1;
         // THE PORTAL THROAT. The tube used to start at the first buried
         // station, so the terrain mesh interpolated a wall of dirt straight
@@ -12479,13 +14672,67 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         // (pc — full exemption still curtained the opening with the wall the
         // mesh interpolates to the uncut hill), and only the interior is
         // exempt and lives under the hill.
+        // ── A BORE IS AN ASSERTION, AND ONLY OSM GETS TO MAKE IT ──
+        //
+        // Burial is OUR arithmetic: the profile solver's answer minus the
+        // heightfield's, both of which are wrong here and there. `tunnel=*` is
+        // a surveyed fact. Building a tube wherever our own numbers say buried
+        // draws a black portal into a hillside that, as far as the data is
+        // concerned, has no tunnel in it — and does so most enthusiastically
+        // exactly where the profile solver is least reliable, which is steep
+        // ground. Measured at Fish Hoek: before this pass the world had zero
+        // tunnel meshes and one crater; after it, one tube — against an OSM
+        // tile whose only `tunnel=yes` ways are two pedestrian subways of two
+        // and three nodes, both `highway=footway`, and footways are tracks and
+        // were never carved in the first place. The tube corresponded to
+        // nothing in the data.
+        //
+        // So the two halves are separated by what backs them. Burial still
+        // decides the CARVE — `tn` keeps the excavation out of a hill the road
+        // is inside, and that needs no external evidence because it only ever
+        // declines to dig. A TUBE needs the tag. Untagged burial gets the
+        // exemption and nothing else: the road ducks out of sight under ground
+        // that stays intact, which is a silent wrong rather than a loud one,
+        // and it leaves the real defect — a profile solved metres under the
+        // hill — visible to `__buried` instead of dressed up as a feature.
         const s2 = s + 1, e2 = e - 1;
-        if (e2 - s2 >= 2) {
+        if (e2 - s2 >= 2 && mode === 'tunnel') {
           tunnelTube(dense, prof, elevMin, s2, e2, width, lift);
           for (let k = s2; k < e2 && k < segsOf.length; k++) {
             if (k === s2 || k === e2 - 1) segsOf[k].pc = TUNNEL_H + 1.6;
             else segsOf[k].tn = true;
           }
+        } else {
+          // NO BORE HERE, AND STILL NOT SOMETHING TO DIG OUT.
+          //
+          // Two ways in. Untagged burial, however long: our arithmetic says
+          // the hill covers the road and OSM does not say there is a tunnel,
+          // so the road is left under the hill and no portal is drawn. Or a
+          // TAGGED tunnel too short to build: a tube needs a mouth at each end
+          // and an interior between them, and two or three buried stations
+          // have nothing to put between the mouths.
+          //
+          // What the old code did in the short case was NOTHING — no tube and,
+          // worse, no exemption either, so the stretch fell through to the
+          // carve with the full depth of its burial and the wash's ten-to-one
+          // reach to spend on it. That is the worst of the three available
+          // outcomes.
+          //
+          // Exempting without a tube hides carriageway under the ground, which
+          // is wrong and looks it. Trenching removes the hill, takes the
+          // buildings standing on it with it, and is permanent — a way is
+          // rendered exactly once, so no later tile rebuild can put the hill
+          // back. Between a road that ducks out of sight and a crater through
+          // a town, the road ducks. And it stays visible as a defect: it is
+          // exactly what `__buried` counts as `exempt`, so a world quietly
+          // hiding kilometres of road under hillsides reads as a number rather
+          // than as scenery.
+          // Inclusive of `e`, unlike the tube path's open notch: a single
+          // buried station has no room for a notch, and `k < e` would exempt
+          // nothing at all for it — leaving exactly the case this branch
+          // exists to catch. One segment of over-exemption is a car's length
+          // of road under a hill; one segment of under-exemption is a hole.
+          for (let k = s; k <= e && k < segsOf.length; k++) segsOf[k].tn = true;
         }
         s = -1;
       }
@@ -12496,7 +14743,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // is buried in.
   for (const sg of segsOf) rasterizeCut(sg);
   if (canopy && n > 2) canopyRun(dense, prof, width, lift);
-  if (drivable) dirtyTerrainAround(dense);
+  if (drivable) { dirtyTerrainAround(dense); osmLastLand = performance.now(); }
 }
 /**
  * ONE OFFSET PER STATION, MITRED — so neighbouring bays share their corners.
@@ -12804,18 +15051,18 @@ function carveChannels(t: HeightTile, geo: THREE.BufferGeometry, SEG: number): v
     for (const c of channelGrid.get(`${gx},${gz}`) ?? []) seen.add(c);
   }
   if (!seen.size) return;
-  const touched = new Set<number>();
+  // By position, not by lattice index: a refined tile's vertices are not on
+  // the lattice. The boxes are few and the vertices are walked once.
+  const boxes: number[][] = [];
   for (const c of seen) {
-    const m = c.hw + 3;
-    const ax = Math.floor((Math.min(c.ax, c.bx) - m - t.xs) / cell);
-    const bx = Math.ceil((Math.max(c.ax, c.bx) + m - t.xs) / cell);
-    const az = Math.floor((Math.min(c.az, c.bz) - m - t.zs) / cell);
-    const bz = Math.ceil((Math.max(c.az, c.bz) + m - t.zs) / cell);
-    for (let iz = Math.max(0, az); iz <= Math.min(SEG, bz); iz++) {
-      for (let ix = Math.max(0, ax); ix <= Math.min(SEG, bx); ix++) {
-        touched.add(iz * (SEG + 1) + ix);
-      }
-    }
+    const m = c.hw + 3 + cell;
+    boxes.push([Math.min(c.ax, c.bx) - m, Math.max(c.ax, c.bx) + m, Math.min(c.az, c.bz) - m, Math.max(c.az, c.bz) + m]);
+  }
+  const touched = new Set<number>();
+  const ox = t.xs + t.w / 2, oz = t.zs + t.h / 2;
+  for (let v = 0; v < pos.count; v++) {
+    const x = pos.getX(v) + ox, z = pos.getZ(v) + oz;
+    for (const b of boxes) if (x >= b[0] && x <= b[1] && z >= b[2] && z <= b[3]) { touched.add(v); break; }
   }
   for (const v of touched) {
     const x = pos.getX(v) + t.xs + t.w / 2, z = pos.getZ(v) + t.zs + t.h / 2;
@@ -14791,8 +17038,14 @@ const osmDbReady: Promise<void> = new Promise((resolve) => {
     clearTimeout(t); resolve();
   };
   try {
-    const req = indexedDB.open('drive-cache', 1);
-    req.onupgradeneeded = () => { req.result.createObjectStore('osm').createIndex('ts', 'ts'); };
+    const req = indexedDB.open('drive-cache', 2);
+    // v2 added `raster`. An upgrade from v1 must NOT assume `osm` is absent
+    // and must not drop it — everywhere anyone has already driven is in there.
+    req.onupgradeneeded = () => {
+      const db = req.result;
+      if (!db.objectStoreNames.contains('osm')) db.createObjectStore('osm').createIndex('ts', 'ts');
+      if (!db.objectStoreNames.contains('raster')) db.createObjectStore('raster').createIndex('ts', 'ts');
+    };
     req.onsuccess = () => { osmDb = req.result; fin('open'); };
     req.onerror = () => fin('error');
     req.onblocked = () => fin('blocked');
@@ -14857,6 +17110,432 @@ function pruneTileCache(): void {
     };
   } catch { /* cache is best-effort */ }
 }
+
+// ── the raster cache: the ground, kept the way the ways are ────────
+/**
+ * THE WORLD ARRIVES AS THREE FETCHES AND ONLY ONE OF THEM SURVIVED A RELOAD.
+ *
+ * OSM ways have been in IndexedDB since the localStorage era ended above, so
+ * with no network you got roads where you had already been — and nothing
+ * underneath them, because the heightfield and the land cover lived in module
+ * state and went with the tab. That is the worst shape an offline session can
+ * have: it boots, it shows the menu, it draws the roads you remember, and the
+ * planet they were on is gone. Both native shells carry the bundle inside the
+ * application and so start perfectly well with the network off, which means
+ * they reached that empty world FASTER than the browser did.
+ *
+ * Cached BY SOURCE URL, not by tile coordinate, and that is not a detail.
+ * Mapterhorn walks UP its pyramid when a tile is absent — Chapman's Peak has
+ * nothing below z12 — so the thing actually fetched is an ancestor that serves
+ * 4^up children, and the resample back down is ours. A URL key stores what was
+ * really asked for, one ancestor for sixteen tiles, and leaves every fallback
+ * rule above untouched: this layer answers a URL, it does not get a say in
+ * which URL is worth asking for.
+ *
+ * The BYTES are stored, never the decoded field. A decoded z14 tile is 256KB
+ * of Float32 against ~90KB of terrarium PNG or ~250KB of Mapterhorn WebP —
+ * and, worth more than the space, a cached tile re-enters `fetchHeights`
+ * through the same decode, the same off-the-planet test and the same
+ * `repairDem` as a fetched one. A tile that came off the disk is not a tile
+ * that skipped the checks.
+ */
+/**
+ * Bytes to keep. Measured on real ground: a Mapterhorn z14 WebP is ~250KB, an
+ * AWS terrarium PNG 72-118KB, a cover tile 2.7-5KB. 64MB is several hundred
+ * tiles — a long trip — and stays polite on an origin this cell shares with
+ * every other cell on parc.land, which is the quota lesson localStorage taught
+ * upstairs.
+ */
+const RASTER_BUDGET = 64 * 1024 * 1024;
+interface RasterRow { ts: number; type: string; bytes: ArrayBuffer; size: number }
+/**
+ * What the cache actually did, because every one of its failures is silent by
+ * design — it is best-effort, so every path swallows its error and carries on,
+ * and the only visible symptom of a cache that stores nothing is a world that
+ * is empty when you come back to it a day later. Three separate rounds went
+ * into "is it reading, or is it writing" before this existed.
+ */
+const rasterStat = { hit: 0, miss: 0, put: 0, stored: 0, failed: 0, dropped: 0, pruned: 0 };
+/** Read a tile's stored bytes back as the Blob its decoder wants.
+ *
+ *  A Blob is not stored directly: IndexedDB will take one, but Safari has
+ *  historically returned them detached, and an ArrayBuffer plus the MIME type
+ *  reconstructs exactly the same thing with no such history. */
+async function readRaster(url: string): Promise<Blob | null> {
+  await osmDbReady;
+  if (!osmDb) return null;
+  return new Promise((resolve) => {
+    try {
+      const rq = osmDb!.transaction('raster', 'readonly').objectStore('raster').get(url);
+      rq.onsuccess = () => {
+        const row = rq.result as RasterRow | undefined;
+        if (row) rasterStat.hit++; else rasterStat.miss++;
+        resolve(row ? new Blob([row.bytes], { type: row.type }) : null);
+      };
+      rq.onerror = () => { rasterStat.miss++; resolve(null); };
+    } catch { resolve(null); }
+  });
+}
+let rasterWritesSincePrune = 0;
+/**
+ * ONE TRANSACTION PER TILE IS TOO MANY TRANSACTIONS.
+ *
+ * The first version opened a readwrite transaction per stored tile, which is
+ * what the ways cache above does and is fine at its rate. The ring asks for
+ * roughly fifty tiles in the first seconds of a boot, and fifty overlapping
+ * readwrite transactions on one store do not run — they QUEUE, and each one's
+ * completion event has to be dispatched on a main thread that is busy
+ * rendering. Measured on the first drive: 56 puts, 4 of them stored, none
+ * failed, the rest draining at about one every four seconds. Nothing errored.
+ * Nothing reported. The next session simply had no ground.
+ *
+ * So writes go into a map and one transaction takes the lot. The map is keyed
+ * by URL, so a tile asked for twice before the flush is stored once.
+ */
+const rasterQueue = new Map<string, RasterRow>();
+let rasterFlush: ReturnType<typeof setTimeout> | null = null;
+/** Keep a tile. Fire-and-forget: nothing downstream may wait on the cache. */
+function writeRaster(url: string, blob: Blob): void {
+  rasterStat.put++;
+  if (!osmDb) { rasterStat.failed++; return; }
+  void blob.arrayBuffer().then((bytes) => {
+    rasterQueue.set(url, { ts: Date.now(), type: blob.type, bytes, size: bytes.byteLength });
+    // A second of coalescing is the whole ring; longer would be more tiles per
+    // transaction and more to lose to a tab that goes away, which is what the
+    // pagehide flush below is for.
+    if (rasterFlush === null) rasterFlush = setTimeout(flushRaster, 1000);
+  }).catch(() => { rasterStat.failed++; });
+}
+function flushRaster(): void {
+  rasterFlush = null;
+  if (!osmDb || rasterQueue.size === 0) return;
+  const batch = [...rasterQueue];
+  rasterQueue.clear();
+  try {
+    const store = osmDb.transaction('raster', 'readwrite').objectStore('raster');
+    for (const [url, row] of batch) {
+      // Counted on the REQUEST, not on the call. A put that is REJECTED — the
+      // origin over quota is the one that matters — reports through this and
+      // nowhere else, and "the cache is full" and "the cache is broken" are
+      // not the same fault.
+      const rq = store.put(row, url);
+      rq.onsuccess = () => { rasterStat.stored++; };
+      rq.onerror = () => { rasterStat.failed++; };
+    }
+    rasterWritesSincePrune += batch.length;
+    if (rasterWritesSincePrune >= 200) { rasterWritesSincePrune = 0; pruneRaster(); }
+  } catch { rasterStat.failed += batch.length; }
+}
+// THE MOMENT THE CACHE IS MOST WORTH HAVING is the moment the tab goes away —
+// on a phone that is every lock, every app switch, and iOS may never let the
+// page run again. `pagehide` is the one event that fires for all of those; a
+// queued second of tiles would otherwise be exactly the tiles you were driving
+// through when you stopped.
+window.addEventListener('pagehide', flushRaster);
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushRaster();
+});
+/**
+ * Forget one tile.
+ *
+ * Only ever called when stored bytes failed to DECODE, and it is the
+ * difference between a bad tile and a permanent hole. Every caller below
+ * treats a decode failure as "this tile does not exist" and moves on — which
+ * is right for a tile that really is missing, and wrong forever for bytes that
+ * would be re-read and re-fail on every future session.
+ */
+function dropRaster(url: string): void {
+  if (!osmDb) return;
+  rasterStat.dropped++;
+  try { osmDb.transaction('raster', 'readwrite').objectStore('raster').delete(url); }
+  catch { /* cache is best-effort */ }
+}
+/**
+ * Prune to RASTER_BUDGET, oldest-first.
+ *
+ * By BYTES rather than by count, unlike the ways above, because these entries
+ * run from 2.7KB to 250KB and a count would either starve a WebP session or
+ * hoard a cover one. Insertion order, not use order: an LRU would have to
+ * re-put the whole record — a quarter-megabyte rewrite — every time a tile was
+ * read, which costs more than the eviction it avoids.
+ */
+function pruneRaster(): void {
+  try {
+    const store = osmDb!.transaction('raster', 'readwrite').objectStore('raster');
+    // Newest first, spending the budget as we go; everything past the point it
+    // runs out is older than something we chose to keep.
+    const cur = store.index('ts').openCursor(null, 'prev');
+    let kept = 0;
+    cur.onsuccess = () => {
+      const c = cur.result;
+      if (!c) return;
+      kept += (c.value as RasterRow).size ?? 0;
+      if (kept > RASTER_BUDGET) { c.delete(); rasterStat.pruned++; }
+      c.continue();
+    };
+  } catch { /* cache is best-effort */ }
+}
+
+// ── what this device is holding, and how to hand it back ───────────
+/**
+ * DRIVE KEEPS THINGS IN FOUR PLACES, AND NOBODY SHOULD HAVE TO KNOW THAT.
+ *
+ * `localStorage` has the dials, the paint, the survey, the docket, the
+ * odometer and the saved spots. `sessionStorage` has a sign-in round trip and
+ * the attract reel's intent. IndexedDB has `drive-cache` — every OSM way and
+ * every raster tile this device has ever driven over, up to 64MB of it — and
+ * `drive-tapes`. The Cache Storage has the app shell the service worker
+ * precached. Four APIs, three lifetimes, one player who wants their space back
+ * or is stuck on a build that will not come right.
+ *
+ * ── ONLY OURS. NEVER A WHOLESALE CLEAR. ──
+ *
+ * `localStorage.clear()` is the obvious call and it is the wrong one. A browser
+ * cell can be served from a PATH on a shared origin (CELL_BASE in runtime.ts),
+ * where local storage, IndexedDB and the caches all belong to every cell on
+ * that host — so a wholesale clear from drive's settings screen would take a
+ * neighbouring cell's save with it, from a button that never mentioned it.
+ * Everything below is prefix-scoped, which is the same reasoning that made the
+ * `drive.osm.` sweep upstairs a loop rather than a `clear()`.
+ */
+const OUR_KEY = /^drive\./;
+const OUR_DB = /^drive-/;
+const OUR_CACHE = /^drive-/;
+/**
+ * The databases we know we own, for the browsers that will not enumerate.
+ * `indexedDB.databases()` is absent in Firefox and in Safari before 14, and it
+ * returns a promise that some engines simply never settle — so a sweep that
+ * TRUSTED the enumeration would quietly clear nothing at all on those, and
+ * report success while doing it. The union of what we are told and what we
+ * know is the only honest input.
+ */
+const ourDbNames = (): string[] => ['drive-cache', TAPE_DB];
+
+/** Every key of ours in one web storage area. Reading `length`/`key(i)` rather
+ *  than `Object.keys` because a private-mode store can throw on either, and a
+ *  reset that throws half way is worse than one that clears nothing. */
+function ourKeys(store: Storage): string[] {
+  const out: string[] = [];
+  try {
+    for (let i = 0; i < store.length; i++) {
+      const k = store.key(i);
+      if (k && OUR_KEY.test(k)) out.push(k);
+    }
+  } catch { /* private mode — nothing to clear is the honest answer */ }
+  return out;
+}
+
+/** Settle a promise, or say it did not. Every API in this block can hang: an
+ *  IndexedDB request whose callback never comes, a `databases()` that never
+ *  resolves, a cache delete behind a busy main thread. A reset button that
+ *  hangs is worse than one that reports a partial job. */
+async function orGiveUp<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([p, new Promise<T>((r) => { setTimeout(() => r(fallback), ms); })]);
+}
+
+/** How much of the ORIGIN's quota is in use, and how much of the world cache is
+ *  ours. The estimate is the origin's, not this cell's — there is no per-cell
+ *  figure to be had on a shared host — and the tile counts are, so the readout
+ *  says both rather than implying the first is the second. */
+async function storageReport(): Promise<{ used: number; quota: number; ways: number | null; tiles: number | null }> {
+  let used = 0, quota = 0;
+  try {
+    const e = await orGiveUp(navigator.storage?.estimate?.() ?? Promise.resolve({}), 2000, {});
+    used = (e as StorageEstimate).usage ?? 0;
+    quota = (e as StorageEstimate).quota ?? 0;
+  } catch { /* no estimate API; the counts below still say something */ }
+  /**
+   * NULL IS NOT ZERO, AND THIS IS WHERE THAT MATTERS MOST.
+   *
+   * A readonly count queues behind any readwrite transaction on the same store,
+   * and the raster flush writes a quarter of a megabyte per tile — so under a
+   * streaming load this waits. The first cut gave up after two seconds and
+   * answered 0, which put "0 GROUND TILES" on the settings screen of a session
+   * that had just stored twenty-seven of them. A reading that did not arrive
+   * has to say so: a cache that reports itself empty is how somebody concludes
+   * it is broken and clears it.
+   */
+  const count = async (store: string): Promise<number | null> => {
+    if (!osmDb) return null;
+    return orGiveUp(new Promise<number | null>((done) => {
+      try {
+        const rq = osmDb!.transaction(store, 'readonly').objectStore(store).count();
+        rq.onsuccess = () => done(rq.result);
+        rq.onerror = () => done(null);
+      } catch { done(null); }
+    }), 6000, null);
+  };
+  return { used, quota, ways: await count('osm'), tiles: await count('raster') };
+}
+
+/**
+ * EMPTY THE WORLD CACHE IN PLACE.
+ *
+ * The stores are cleared, not the database dropped — and that is the whole
+ * design of this one. Deleting `drive-cache` would leave `osmDb` pointing at
+ * nothing, and every read for the rest of the session would answer "not
+ * cached": indistinguishable from a cache that is merely cold, which is
+ * precisely the invisible failure the open upstairs was written to prevent.
+ * Clearing the stores keeps the handle live, so the session carries on driving
+ * and the next tile it asks for simply comes off the wire and is kept again.
+ */
+async function clearWorldCache(): Promise<boolean> {
+  if (!osmDb) return false;
+  // A queued write would land back in a store we just emptied.
+  rasterQueue.clear();
+  return orGiveUp(new Promise<boolean>((done) => {
+    try {
+      const tx = osmDb!.transaction(['osm', 'raster'], 'readwrite');
+      tx.objectStore('osm').clear();
+      tx.objectStore('raster').clear();
+      tx.oncomplete = () => done(true);
+      tx.onerror = () => done(false);
+      tx.onabort = () => done(false);
+    } catch { done(false); }
+  }), 8000, false);
+}
+
+/** Drop every cache of ours. Returns how many went. */
+async function dropCaches(): Promise<number> {
+  let n = 0;
+  try {
+    if (typeof caches === 'undefined') return 0;
+    for (const name of await orGiveUp(caches.keys(), 3000, [] as string[])) {
+      if (OUR_CACHE.test(name) && await orGiveUp(caches.delete(name), 3000, false)) n++;
+    }
+  } catch { /* best effort, and the caller reports what it got */ }
+  return n;
+}
+
+/**
+ * Drop every database of ours.
+ *
+ * `blocked` is not a failure and must not be reported as one. A delete is
+ * blocked while any connection to that database is open — and `tapeDb()` opens
+ * a fresh one per call and never closes it, so on a session that has touched
+ * the deck there are several. The request stays PENDING and completes the
+ * moment the last connection goes, which the reload immediately after this is.
+ * So the honest word for that outcome is "on reload", not "failed".
+ */
+async function dropDatabases(): Promise<{ gone: string[]; onReload: string[] }> {
+  const gone: string[] = [];
+  const onReload: string[] = [];
+  // Ours first: a handle we hold is a handle we can let go of, and it is the
+  // one blocker we are able to remove.
+  if (osmDb) { try { osmDb.close(); } catch { /* already closing */ } osmDb = null; }
+  const seen = new Set(ourDbNames());
+  try {
+    const api = (indexedDB as unknown as { databases?: () => Promise<Array<{ name?: string }>> }).databases;
+    if (api) {
+      for (const d of await orGiveUp(api.call(indexedDB), 2000, [])) {
+        if (d.name && OUR_DB.test(d.name)) seen.add(d.name);
+      }
+    }
+  } catch { /* enumeration is a bonus; ourDbNames is the floor */ }
+  for (const name of seen) {
+    const how = await new Promise<'gone' | 'onReload'>((done) => {
+      let settled = false;
+      const fin = (w: 'gone' | 'onReload'): void => { if (!settled) { settled = true; done(w); } };
+      // A blocked delete finishes when the page goes; a timer here is the
+      // backstop for an engine that reports neither.
+      const t = setTimeout(() => fin('onReload'), 2500);
+      try {
+        const rq = indexedDB.deleteDatabase(name);
+        rq.onsuccess = () => { clearTimeout(t); fin('gone'); };
+        rq.onerror = () => { clearTimeout(t); fin('onReload'); };
+        rq.onblocked = () => { clearTimeout(t); fin('onReload'); };
+      } catch { clearTimeout(t); fin('onReload'); }
+    });
+    (how === 'gone' ? gone : onReload).push(name);
+  }
+  return { gone, onReload };
+}
+
+/**
+ * Unregister the service worker.
+ *
+ * The most valuable half of a reset and the least obvious. A worker serves the
+ * app shell from ITS cache, so a player on a build that will not come right
+ * cannot reload their way out of it — the reload is the thing being answered
+ * from the cache. This is the only control that reaches that, which is why the
+ * reset owns it and the world-cache button does not.
+ *
+ * It is also why a reset needs the network: with the worker gone and its cache
+ * dropped, the next load has to come off the wire.
+ */
+async function dropWorkers(): Promise<number> {
+  let n = 0;
+  try {
+    if (!('serviceWorker' in navigator)) return 0;
+    const regs = await orGiveUp(navigator.serviceWorker.getRegistrations(), 3000, []);
+    for (const r of regs) if (await orGiveUp(r.unregister(), 3000, false)) n++;
+  } catch { /* best effort */ }
+  return n;
+}
+
+/**
+ * A LATCH THE UNLOAD FLUSHES HAVE TO RESPECT.
+ *
+ * `pagehide` and `visibilitychange` flush the survey, the marks and the docket
+ * to storage — which is right, and is how a phone ending a session keeps the
+ * last few hundred metres. It is also how a device reset undoes itself: clear
+ * the keys, reload, and the reload's OWN pagehide writes three of the biggest
+ * stores straight back before the fresh page exists. The reset then reports
+ * success and the player still has everything.
+ *
+ * `lineReset` solved its half of this by turning the line off before wiping.
+ * This is the general form: once the device has been handed back, nothing in
+ * this session may write to storage again.
+ *
+ * The sweep in `resetDevice` is the belt to this brace, and it is there because
+ * a latch only covers the writers it was fitted to. Anything written in the
+ * second before the reload — a dial cycled while the status line is up — is
+ * caught by a pagehide handler registered LAST, which is to say after the
+ * flushes, which is to say it gets the final word.
+ */
+let storageWiped = false;
+
+/** Everything, in the order that leaves nothing behind to put it back. */
+async function resetDevice(): Promise<{ keys: number; dbs: number; onReload: string[]; caches: number; workers: number }> {
+  // The worker first: while it is registered it can answer a navigation from a
+  // cache we are about to delete, and the whole point is that the next load is
+  // a fresh one.
+  // Before anything is removed, so nothing we remove can be written back by a
+  // flush that fires while we are still working.
+  storageWiped = true;
+  const workers = await dropWorkers();
+  const caches0 = await dropCaches();
+  const db = await dropDatabases();
+  const sweep = (): number => {
+    let n = 0;
+    for (const store of [localStorage, sessionStorage]) {
+      for (const k of ourKeys(store)) {
+        try { store.removeItem(k); n++; } catch { /* private mode */ }
+      }
+    }
+    return n;
+  };
+  const keys = sweep();
+  // Registered here and nowhere earlier, so it is the LAST pagehide listener
+  // on the page and runs after the flushes it exists to undo.
+  window.addEventListener('pagehide', () => { sweep(); });
+  return { keys, dbs: db.gone.length, onReload: db.onReload, caches: caches0, workers };
+}
+
+/** The last measurement, and when. The settings readout is synchronous by
+ *  contract (the menu's updaters are), so it answers from here. */
+let storeSnap: { used: number; quota: number; ways: number | null; tiles: number | null } | null = null;
+let storeAt = 0;
+
+/** The whole storage picture, for a probe and for the settings readout. */
+(window as unknown as { __storage?: object }).__storage = async (): Promise<object> => ({
+  ...await storageReport(),
+  local: ourKeys(localStorage),
+  session: ourKeys(sessionStorage),
+  caches: typeof caches === 'undefined' ? [] : await caches.keys().catch(() => []),
+  worker: 'serviceWorker' in navigator
+    ? (await navigator.serviceWorker.getRegistrations().catch(() => [])).length : 'n/a',
+});
 
 // ── points of interest (named features become HUD waypoints) ───────
 interface Poi { name: string; x: number; z: number;
@@ -15207,6 +17886,14 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
   // it is back because the warp cannot work without it, and the pair is
   // measured together below.
   const ordered = els.slice().sort((a, b) => {
+    // A HIGHER LAYER BUILDS FIRST. A flyover's approaches weld up to its
+    // portals through deckAnchorAt, which only works if the portals are
+    // already standing; built the other way round, the bridge's own ends
+    // anchor down to the approaches' at-grade ends, the lift then raises the
+    // chord, and the portal is left as a step. Width still decides within a
+    // layer, and the host-first rank below still overrides both.
+    const la = layerOf(a.tags), lb = layerOf(b.tags);
+    if (la !== lb) return lb - la;
     const wa = (a.tags?.highway ? ROAD_W[a.tags.highway] ?? 5 : -1);
     const wb = (b.tags?.highway ? ROAD_W[b.tags.highway] ?? 5 : -1);
     return wb - wa;
@@ -15218,10 +17905,28 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
     if (!el.geometry || el.geometry.length < 2 || !tags.highway) continue;
     if (tags.highway === 'services' || tags.highway === 'steps') continue;
     const dk = el.ck ?? String(el.id);
-    if (seenWays.has(dk)) continue;
     const w = ROAD_W[tags.highway] ?? 5;
     const track = ['track', 'path', 'bridleway', 'cycleway', 'footway'].includes(tags.highway);
     const pts = el.geometry.map((g) => toLocal(g.lat, g.lon));
+    // The junction registry takes EVERY drivable way in the batch, built or
+    // not: a road built last batch still meets the one built now. The
+    // pre-grid below stays for unbuilt ways only — the built ones answer
+    // from the real grid.
+    if (!track) {
+      for (let i = 0; i < pts.length; i++) {
+        const [px, pz] = pts[i];
+        const key = `${Math.round(px * 2)},${Math.round(pz * 2)}`;
+        let node = juncNodes.get(key);
+        if (!node) juncNodes.set(key, node = { x: px, z: pz, arms: [] });
+        for (const j of [i - 1, i + 1]) {
+          if (j < 0 || j >= pts.length) continue;
+          const dx = pts[j][0] - px, dz = pts[j][1] - pz, l = Math.hypot(dx, dz);
+          if (l < 0.5) continue;
+          node.arms.push({ ux: dx / l, uz: dz / l, hw: w / 2, dk });
+        }
+      }
+    }
+    if (seenWays.has(dk)) continue;
     for (let i = 0; i < pts.length - 1; i++) {
       addSeg(preRoadGrid, { ax: pts[i][0], az: pts[i][1], bx: pts[i + 1][0], bz: pts[i + 1][1],
         hw: w / 2, tk: track || undefined, nm: tags.name, dks: dk });
@@ -15344,9 +18049,13 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
       // at the way's first point, which keeps one way on one material even
       // where it happens to straddle a regional boundary; a road that changed
       // surface mid-span would read as a rendering fault, not as a border.
-      ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : roadMatAt(pts[0][0], pts[0][1]),
+      if (dk) wayTagLog.set(dk, tags);
+      ribbon(pts, w, stairs ? MAT.minor : track ? MAT.track : roadMatAt(pts[0][0], pts[0][1], roadLook(tags)),
         track || stairs ? SURFACE.track.lift : SURFACE.road.lift, !stairs, mode, track, tags.name, wq,
-        GRADE_MAX[tags.highway] ?? 0.15, canopy, roadTint(tags, wq), dk);
+        GRADE_MAX[tags.highway] ?? 0.15, canopy, roadTint(tags, wq), dk,
+        // Which level OSM says this way is on — see layerOf. The planner pins and
+        // the per-way hints stay on it; the end weld deliberately does not.
+        layerOf(tags));
       if (unbuilt !== refusedAt) { seenWays.delete(dk); continue; }
       // Steps are named and drawn but nothing drives them, so they earn no
       // checkpoints — a road you cannot survey should not sit in the log.
@@ -15402,6 +18111,7 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
     // caught everything, which was harmless while the query only returned
     // areas; with lines in the answer it would paint a river green.
   }
+  flushJunctions();
   flushAprons();
   flushRibbons();
   // The pre-grid lives for exactly one batch: it exists to make build order
@@ -15663,64 +18373,6 @@ function stepSurvey(now: number): void {
 // the OSM cache made this a near-certainty on reload — cached vectors beat
 // the S3 elevation fetches every time). Gate each vector tile on the
 // elevation tiles covering it, with a one-tile margin for spilling geometry.
-/**
- * Cut a polyline down to the runs that lie inside a lat/lon box, adding the
- * exact crossing point wherever it leaves or re-enters.
- *
- * This is what makes the elevation gate above mean anything. Overpass `out
- * geom` returns a way's COMPLETE geometry, never clipped to the bbox that
- * asked for it — Badwater Road comes back as one way spanning 34km — so
- * "gate the tile on the terrain under it" was gating a 600m tile and then
- * building 34km of road, 72% of it over ground where sampleHeight has no
- * data and answers 0. Adjacent tiles produce pieces that meet exactly on the
- * shared boundary, so there is neither a gap nor doubled geometry.
- */
-function clipToBounds(
-  geom: Array<{ lat: number; lon: number }>,
-  b: { latN: number; latS: number; lonW: number; lonE: number },
-): Array<Array<{ lat: number; lon: number }>> {
-  const inside = (p: { lat: number; lon: number }): boolean =>
-    p.lat <= b.latN && p.lat >= b.latS && p.lon >= b.lonW && p.lon <= b.lonE;
-  // Where the segment a→b crosses the box edge, as a fraction along it.
-  const cross = (a: { lat: number; lon: number }, c: { lat: number; lon: number }): number => {
-    let t = 1;
-    const hit = (num: number, den: number): void => {
-      if (Math.abs(den) < 1e-12) return;
-      const q = num / den;
-      if (q > 0 && q < t) {
-        const lat = a.lat + (c.lat - a.lat) * q, lon = a.lon + (c.lon - a.lon) * q;
-        // Only a crossing that lands ON the box counts; the other three edge
-        // lines are hit somewhere out in space.
-        if (lat <= b.latN + 1e-9 && lat >= b.latS - 1e-9 && lon >= b.lonW - 1e-9 && lon <= b.lonE + 1e-9) t = q;
-      }
-    };
-    hit(b.latN - a.lat, c.lat - a.lat); hit(b.latS - a.lat, c.lat - a.lat);
-    hit(b.lonW - a.lon, c.lon - a.lon); hit(b.lonE - a.lon, c.lon - a.lon);
-    return t;
-  };
-  const runs: Array<Array<{ lat: number; lon: number }>> = [];
-  let cur: Array<{ lat: number; lon: number }> = [];
-  for (let i = 0; i < geom.length; i++) {
-    const p = geom[i], pin = inside(p);
-    if (pin) {
-      if (!cur.length && i > 0) {
-        // Entering: walk back from p toward the outside point for the edge.
-        const t = cross(p, geom[i - 1]);
-        cur.push({ lat: p.lat + (geom[i - 1].lat - p.lat) * t, lon: p.lon + (geom[i - 1].lon - p.lon) * t });
-      }
-      cur.push(p);
-      continue;
-    }
-    if (cur.length) {
-      const a = geom[i - 1], t = cross(a, p);
-      cur.push({ lat: a.lat + (p.lat - a.lat) * t, lon: a.lon + (p.lon - a.lon) * t });
-      runs.push(cur);
-      cur = [];
-    }
-  }
-  if (cur.length) runs.push(cur);
-  return runs.filter((r) => r.length > 1);
-}
 async function renderGated(x: number, y: number, ways: OsmWay[]): Promise<void> {
   const ep0 = worldEpoch;
   const b = tileBounds(x, y, OSM_Z);
@@ -15978,8 +18630,10 @@ function viewRadius(): number {
   const halfV = Math.tan(((camera.fov / 2) * Math.PI) / 180);
   // The far edge of a tilted frustum reaches further than the near edge; the
   // /cos term is that stretch, capped so a near-horizon tilt cannot ask for
-  // the whole planet.
-  return Math.min(60000, dist * halfV * Math.max(1, 1 / Math.cos(((90 - CAM.tilt) * Math.PI) / 180)) * 1.35);
+  // the whole planet. SIGHT_MAX is that cap, and ZOOM_MAX is derived from it —
+  // so the clamp is now reached exactly at the ceiling instead of a third of
+  // the way to it.
+  return Math.min(SIGHT_MAX, dist * halfV * Math.max(1, 1 / Math.cos(((90 - CAM.tilt) * Math.PI) / 180)) * 1.35);
 }
 // Two budgets, and they are budgets rather than radii because the cost of the
 // two layers is nothing alike. A terrain tile is a PNG and a mesh; an OSM tile
@@ -16112,8 +18766,11 @@ function streamWorld(ex: number, ez: number): void {
   // zoom 44 alike — so the chart was an aerial photograph of a 1.5km disc of
   // roads adrift in blank hillside.
   const tRing = clamp(Math.ceil(r / tileMetres(TERRAIN_Z)), TERRAIN_RING, TERRAIN_RING_MAX);
-  for (let dx = -tRing; dx <= tRing; dx++)
-    for (let dy = -tRing; dy <= tRing; dy++) void loadTerrainTile(tx + dx, ty + dy);
+  if (FIXTURE) for (const [x, y] of fixtureTiles(TERRAIN_Z)) void loadTerrainTile(x, y);
+  else {
+    for (let dx = -tRing; dx <= tRing; dx++)
+      for (let dy = -tRing; dy <= tRing; dy++) void loadTerrainTile(tx + dx, ty + dy);
+  }
   // Land cover, over the FULL terrain footprint rather than the road ring: it
   // paints the ground and plants the vegetation, so it has to reach as far as
   // you can see, and at ~1–5KB a tile covering 9.8km that costs nothing.
@@ -16126,10 +18783,13 @@ function streamWorld(ex: number, ez: number): void {
     // learned about, and the near ones are the ones the ground pass wants.
     const cRing = clamp(Math.ceil(Math.max(r, SIGHT_M) / tileMetres(COVER_Z)), 1, 3);
     const [cx0, cy0] = tileAt(lat, lon, COVER_Z);
-    for (let d = 0; d <= cRing; d++)
-      for (let dx = -d; dx <= d; dx++)
-        for (let dy = -d; dy <= d; dy++)
-          if (Math.max(Math.abs(dx), Math.abs(dy)) === d) void loadCoverTile(cx0 + dx, cy0 + dy);
+    if (FIXTURE) for (const [x, y] of fixtureTiles(COVER_Z)) void loadCoverTile(x, y);
+    else {
+      for (let d = 0; d <= cRing; d++)
+        for (let dx = -d; dx <= d; dx++)
+          for (let dy = -d; dy <= d; dy++)
+            if (Math.max(Math.abs(dx), Math.abs(dy)) === d) void loadCoverTile(cx0 + dx, cy0 + dy);
+    }
     // Cover also knows which ground is water, and water is the only honest
     // witness to where sea level sits in THIS DEM's datum. Kept OUTSIDE the
     // biome latch on purpose: the biome is happy to settle on the first decent
@@ -16155,6 +18815,7 @@ function streamWorld(ex: number, ez: number): void {
           for (const k of terrainMeshes.keys()) terrainDirty.add(k);
           vegSeeded.clear();
           vegGrid.clear();
+          vegSeedStats.clear();
           vegDeferredAt.clear();
         }
       }
@@ -16275,6 +18936,21 @@ function streamWorld(ex: number, ez: number): void {
     const sl = key.indexOf('/');
     want.push({ x: +key.slice(0, sl), y: +key.slice(sl + 1), c: along - 5e5 });
   }
+  // …AND OVER A FIXTURE, ONLY THE BOX. The wedge and the corridor are sized
+  // for a planet — three kilometres of ask around the truck and further down
+  // the road — while a fixture's ways stop at `FIX_R`. Every tile past it
+  // answers with an empty way list, which costs little but reports as world:
+  // `osmDone` climbs, the HUD says STREAMING, and a test asking whether the
+  // fixture has finished arriving is counting fields that do not exist. The
+  // tile under the truck is kept unconditionally — drive off the edge and the
+  // HUD should still be able to say the ground under you has landed.
+  if (FIXTURE) {
+    const box = new Set(fixtureTiles(OSM_Z).map(([x, y]) => `${x}/${y}`));
+    for (let i = want.length - 1; i >= 0; i--) {
+      const w = want[i];
+      if (!box.has(`${w.x}/${w.y}`) && !(w.x === ox && w.y === oy)) want.splice(i, 1);
+    }
+  }
   want.sort((a, b) => a.c - b.c);
   // KEPT, BECAUSE "STREAMING" IS NOT AN ANSWER. This is the pass's own idea of
   // what the world needs and in what order — the only place that knowledge
@@ -16305,15 +18981,53 @@ function streamWorld(ex: number, ez: number): void {
     // the next tick.
     const [cLat, cLon] = camMode === 'top' && (panX !== 0 || panZ !== 0)
       ? localToLatLon(ex + panX, ez + panZ) : [lat, lon];
-    setFarLevel(farLevelFor(sight));
+    // THE BACKDROP STOPS WHERE THE FIXTURE DOES. A fixture answers the height
+    // fetch from a formula or a clamped grid, so the coarse ring would happily
+    // build 80km of extrapolated edge row and present it as a horizon — a
+    // landscape made entirely of the last pixel of the evidence. The finest
+    // level, over the box only: enough to close the seam at the edge of the
+    // fine ring, and nothing beyond it.
+    setFarLevel(FIXTURE ? FAR_LEVELS[0] : farLevelFor(sight));
     const [fx, fy] = tileAt(cLat, cLon, farZ);
     const fRing = clamp(Math.ceil(sight / tileMetres(farZ)), 1, FAR_RING_MAX);
-    for (let dx = -fRing; dx <= fRing; dx++)
-      for (let dy = -fRing; dy <= fRing; dy++) void loadFarTile(fx + dx, fy + dy);
+    if (FIXTURE) for (const [x, y] of fixtureTiles(farZ)) void loadFarTile(x, y);
+    else {
+      for (let dx = -fRing; dx <= fRing; dx++)
+        for (let dy = -fRing; dy <= fRing; dy++) void loadFarTile(fx + dx, fy + dy);
+    }
+    // …and the cover to PAINT it, once the shell has grown past the fine
+    // raster's own 7x7 ring. Below that the fine tiles already cover every
+    // shell tile and a second copy would be waste; above it, this is the
+    // difference between real ground colour and one modal guess across the
+    // whole frame.
+    // THE SHELL'S REACH, NOT THE SIGHT LINE. Those come apart, and it is the
+    // shell that has to be painted: `farLevelFor` rounds UP to a level whose
+    // ring covers the sight line, and the ring it then fills reaches further
+    // than the number that chose it. At the 24km floor the z11 ring still
+    // spans 40km — twelve past the fine raster — so gating on `sight` left the
+    // outer tiles blind at every ordinary wide zoom. Measured 2 of 4 at zoom
+    // 100 with the gate on `sight`, 0 of 6 with it here.
+    const shellR = FIXTURE ? FIX_R : (fRing + 0.5) * tileMetres(farZ);
+    if (shellR > tileMetres(COVER_Z) * 3.5) {
+      setCoverWideLevel(coverWideLevelFor(shellR));
+      const [wx, wy] = tileAt(cLat, cLon, coverWideZ);
+      const wRing = clamp(Math.ceil(shellR / tileMetres(coverWideZ)), 1, COVER_WIDE_RING);
+      for (let dx = -wRing; dx <= wRing; dx++)
+        for (let dy = -wRing; dy <= wRing; dy++) void loadCoverWideTile(wx + dx, wy + dy, coverWideZ);
+    }
     // …and the vectors to draw on it. Same trigger, same banding discipline:
     // the chart only pays for the coarse road source once it can see past the
     // fine ring, and only at the level its zoom band can read.
-    if (camMode === 'top') {
+    // …EXCEPT OVER A FIXTURE, WHICH HAS NO COARSE SOURCE AND SHOULD NOT ASK.
+    //
+    // This layer is the one part of the stream a fixture does not intercept:
+    // `loadOvTile` fetches `~/osm/ov1/` from the cell directly. So every
+    // top-view frame of an authored world was going to the network for the
+    // REAL road network at those coordinates — which for the authored
+    // fixtures is the country above Geneva, drawn as coarse ribbons over a
+    // synthetic crossroads. A fixture is supposed to run with the network out
+    // of the loop; this was the hole in that claim.
+    if (camMode === 'top' && !FIXTURE) {
       setOvLevel(ovLevelFor(r));
       const [vx, vy] = tileAt(cLat, cLon, ovZ);
       const vRing = clamp(Math.ceil(r / tileMetres(ovZ)), 1, OV_RING_MAX);
@@ -16352,7 +19066,11 @@ function streamWorld(ex: number, ez: number): void {
   const [hx, hy] = tileAt(lat, lon, OSM_Z);
   const roadHere = osmDone.has(`${hx}/${hy}`);
   const quiet = osmInFlight === 0 && osmQueue.length === 0;
-  if ((quiet || roadHere) && peakInFlight < 2) {
+  // A fixture has no summits, and asking for them fetches the REAL ones —
+  // `loadPeakTile` goes to `~/osm/peak1/` and the authored fixtures sit at
+  // 46.2N 6.1E, so a crossroads on a billiard table has been seating the Alps
+  // on its horizon and paying Overpass for them.
+  if (!FIXTURE && (quiet || roadHere) && peakInFlight < 2) {
     const [px, py] = tileAt(lat, lon, PEAK_Z);
     const tm = tileMetres(PEAK_Z);
     const pRing = clamp(Math.ceil(PEAK_R / tm), 1, PEAK_RING_MAX);
@@ -16585,7 +19303,10 @@ async function loadFarTile(x: number, y: number): Promise<void> {
     // ground and paints over it. Cover is null out past the loaded raster,
     // which is exactly the old behaviour, so the far horizon is unchanged.
     const fwx = xs + w / 2 + pos.getX(i), fwz = zs + h / 2 + pos.getZ(i);
-    const cv = sampleCover(fwx, fwz);
+    // The SHELL sampler: the fine raster where it reaches, the coarse ladder
+    // beyond it. `hit` counts either, which is what makes __far().cover the
+    // measurement of "is this tile wearing real cover or a guess".
+    const cv = sampleCoverShell(fwx, fwz);
     if (cv !== null) hit++;
     // …and where the raster does not reach, the average of what it does say
     // rather than nothing at all. See coverMode.
@@ -16621,7 +19342,15 @@ const FAR_DROP = 12;
 // the way the far terrain shell renders ground — banded by zoom, swapped
 // whole, a backdrop nothing samples. Unlit and flat-coloured on purpose: at
 // these altitudes the world IS a map, and the palette says so.
-const OV_LEVELS = [13, 12, 11, 10];
+// z9 and z8 were always in the cell's route (`serveOverview` accepts 8-13) and
+// were never asked for, because a coarse tile meant a live Overpass query on
+// every view and those are the expensive ones. With the cell's public
+// namespace on, a tile is built ONCE for the whole world and served from S3
+// afterwards — measured at 0.18-1.09s against 6-16s of live Overpass — so the
+// cost of a rung is now a one-off rather than per-player. The query already
+// narrows itself for these: at z<=10 it asks for motorway/trunk/primary,
+// coastline, rivers, cities and towns, and nothing else.
+const OV_LEVELS = [13, 12, 11, 10, 9, 8];
 const OV_RING_MAX = 2;        // 5×5 tiles at whichever level is current
 /** How long the CHART waits, which is not how long the CELL takes. See the
  *  note in loadOvTile: an abandoned request still banks its tile. */
@@ -17647,7 +20376,11 @@ for (const sx of [-0.62, 0.62]) {
 // CANDELA since three r155 — the old "3.2" was a rounding error, not a lamp.
 // Range and intensity are set per frame — see the night boost below. These are
 // the DAY values, where the beam is a hint rather than a searchlight.
-const HEAD_DAY = { i: 90, d: 110 }, HEAD_NIGHT = { i: 260, d: 230 };
+// Day at 90 cd was not a hint: in every noon survey frame the pool was a
+// pale slab beside the truck, and from the chart a white square on the
+// tarmac (the "slab" at the Suresnes cul-de-sac was this, not a junction
+// box). Sixteen candela over seventy metres is a lamp you can tell is on.
+const HEAD_DAY = { i: 16, d: 70 }, HEAD_NIGHT = { i: 260, d: 230 };
 const headSpot = new THREE.SpotLight(0xfff0d0, HEAD_DAY.i, HEAD_DAY.d, 0.52, 0.65, 1.0);
 /**
  * The beam occludes. A barrier stripes it, a trunk throws a shadow down the
@@ -18185,9 +20918,6 @@ function stepWeather(now: number, dt: number): void {
     const k = clamp(1 / sy, 0, 4);
     envU.uSunSkew.value.set(-SUN_DIR.x * k, -SUN_DIR.z * k);
   }
-  // The deck is anchored in the world, so the dome has to be told where the
-  // camera is standing under it.
-  (skyMat.uniforms.uCamXZ as { value: THREE.Vector2 }).value.set(camera.position.x, camera.position.z);
   // ONE WIND, and it is the real one. Open-Meteo reports the direction the air
   // is coming FROM, so the deck travels toward bearing+180; the sample offset
   // runs the other way again, because shifting a noise field moves what you see
@@ -19555,14 +22285,14 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     for (const t of terrainNormals.values()) t.dispose();
     terrainMats.clear(); terrainNormals.clear();
     coverTiles.clear(); coverAsked.clear(); coverWaterMemo.clear();
-    cutCells.clear(); cutSet.clear(); carveLog.clear(); cellTriCache.clear();
+    cutCells.clear(); cutSet.clear(); carveLog.clear(); refinedBorders.clear();
     preRoadGrid.clear(); crumbDefer.clear();
     osmLoaded.clear(); osmActive.clear(); osmFailedAt.clear(); osmPinned.clear();
     osmCorridor.clear(); osmDone.clear(); seenWays.clear();
     tileStats.clear(); surveyedCache.clear();
     unbuilt = 0; osmFails = 0; osmDown = false;
     mapFeats.length = 0; mapStroked.clear();
-    roadGrid.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear();
+    roadGrid.clear(); juncBoxed.clear(); juncNodes.clear(); wallGrid.clear(); waterCells.clear(); waterPolys.clear(); plotGrid.clear();
     channelGrid.clear(); rapidRocks.clear(); chanSet.clear(); wiSet.clear();
     builtRuns.clear(); synthSeen.clear();
     // ── THE HYDRO STORES SPEAK IN LOCAL METRES TOO ──
@@ -19597,7 +22327,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     ribBatch = null;
     carveCost.tiles = 0; carveCost.ms = 0; carveCost.relieved = 0;
     pois.clear(); areaGrid.clear(); survey.clear();
-    vegGrid.clear(); vegSeeded.clear(); vegDeferredAt.clear();
+    vegGrid.clear(); vegSeeded.clear(); vegSeedStats.clear(); vegDeferredAt.clear();
     drapedWays.length = 0; drapeGrid.clear(); drapeWide.length = 0; seatGrid.clear();
     // NOT peakData: the summits themselves are global and immutable, and only
     // their LOCAL seats are stale. The ceiling does reset — the Alps must not
@@ -20147,6 +22877,108 @@ function tapeKeep(): string {
     aspectMax: +wildest.toFixed(2),
     leafTones: hues.size, stoneTones: stones.size, biome: biome.name };
 };
+/**
+ * ── ARE THE SPATIAL LAYERS ACTUALLY WORKING? ──
+ *
+ * `__flora` answers what the plants LOOK like — kinds, tones, sizes — which is
+ * the question the flora lab already answers better. This answers the separate
+ * question distribution work actually asks: of a bounded candidate budget, how
+ * many were proposed, how many survived the habitat field, which role each was
+ * assigned, and who vetoed the rest. A stand that fails to form and a stand
+ * that forms and is then vetoed by surface look identical from the seat; they
+ * are two columns apart here.
+ *
+ * `roles` counts SEEDED sites over the ring's buckets; `active` counts what
+ * `refreshVeg` actually wrote into instance slots last pass. They differ by
+ * whatever fell outside VEG_RANGE or ran into a per-kind cap, which is the
+ * budget question — so both are reported rather than one standing in for the
+ * other.
+ *
+ * Pass `debug` to colour the instances BY ROLE instead of by species (green
+ * interior, gold fringe, cyan living stray, pink ground event, white anchor).
+ * Opt-in, and it only replaces the colour attribute the dissolve already
+ * writes — the normal material path is untouched.
+ */
+(window as unknown as { __vegdist?: object }).__vegdist = (debug?: boolean): object => {
+  if (debug !== undefined) { vegRoleDebug = debug; refreshVeg(); }
+  const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
+  const reach = Math.ceil(VEG_RANGE / VEG_CELL);
+  const sum = freshVegSeedStats();
+  const roles = emptyVegRoles();
+  const byKind: Record<string, number> = {};
+  let cells = 0, sites = 0, anchors = 0;
+  for (let gx = cx - reach; gx <= cx + reach; gx++) {
+    for (let gz = cz - reach; gz <= cz + reach; gz++) {
+      const key = `${gx},${gz}`;
+      const st = vegSeedStats.get(key);
+      if (st) {
+        cells++;
+        for (const k of Object.keys(sum) as Array<keyof VegSeedStats>) sum[k] += st[k];
+      }
+      for (const v of vegGrid.get(key) ?? []) {
+        sites++;
+        roles[v.role]++;
+        if (v.anchor) anchors++;
+        byKind[v.k] = (byKind[v.k] ?? 0) + 1;
+      }
+    }
+  }
+  const activeTotal = Object.values(vegActiveRoles).reduce((a, b) => a + b, 0);
+  return {
+    debug: vegRoleDebug,
+    cells,
+    // Proposed vs accepted is the calibration number: the plan holds the mean
+    // accepted count near the old one-sample-per-cell implementation.
+    clumps: { proposed: sum.proposedClumps, accepted: sum.acceptedClumps,
+      interior: sum.interiorGroups, fringe: sum.fringeGroups },
+    living: { proposed: sum.proposedLiving, accepted: sum.livingStrays },
+    groundEvents: sum.groundEvents,
+    anchors: { seeded: anchors, active: vegActiveAnchors, chance: VEGETATION_DISTRIBUTION.anchorChance },
+    vetoed: { surface: sum.rejectedSurface, wall: sum.rejectedWall, cover: sum.rejectedCover },
+    seeded: { sites, roles, perCell: cells ? +(sites / cells).toFixed(2) : 0 },
+    active: { total: activeTotal, roles: vegActiveRoles, trunks: trunks.count },
+    byKind,
+    budget: { range: VEG_RANGE, cell: VEG_CELL, caps: VEG_CAP,
+      capTotal: Object.values(VEG_CAP).reduce((a, b) => a + b, 0) },
+    ms: { seedTotal: +sum.ms.toFixed(1), refresh: +vegMs.toFixed(1) },
+  };
+};
+/**
+ * EVERY SITE IN ONE BUCKET, raw, so a test can fingerprint it.
+ *
+ * "A plant must not change species, move, appear or disappear merely because
+ * the vehicle or camera crossed a render-cell boundary" is the distribution
+ * work's hardest requirement and the easiest to break silently — a role
+ * decision drawn from a clump's own RNG stream reorders every member generated
+ * after it, and nothing on screen says so. Comparing this before and after a
+ * forced re-seed is the assertion.
+ */
+(window as unknown as { __vegsites?: object }).__vegsites = (gx: number, gz: number): object[] =>
+  (vegGrid.get(`${gx},${gz}`) ?? []).map((v) => ({
+    role: v.role, anchor: !!v.anchor, k: v.k,
+    x: +v.x.toFixed(2), z: +v.z.toFixed(2),
+    s: +v.s.toFixed(3), sw: +(v.sw ?? 1).toFixed(3), sy: +(v.sy ?? 1).toFixed(3),
+    h: +v.h.toFixed(2),
+  }));
+/**
+ * Drop every procedurally seeded site and build them again — the recycling a
+ * long drive does, on demand, so stability can be asserted without driving 900
+ * buckets.
+ *
+ * POLYGON STANDS SURVIVE. They are deposited by `scatterVeg` when a vector tile
+ * arrives, not by `seedCell`, so clearing them removes sites that will not come
+ * back until the tile is rebuilt — which reads exactly like a determinism
+ * failure and cost a round diagnosing as one.
+ */
+(window as unknown as { __vegreseed?: object }).__vegreseed = (): number => {
+  for (const [key, cell] of vegGrid) {
+    const kept = cell.filter((v) => v.role === 'polygon');
+    if (kept.length) vegGrid.set(key, kept); else vegGrid.delete(key);
+  }
+  vegSeeded.clear(); vegSeedStats.clear(); vegDeferredAt.clear();
+  refreshVeg();
+  return vegGrid.size;
+};
 /** WHO OWNS THE TRIANGLES — the world's geometry budget by class, with who
  *  is in the shadow pass. `__gpu` says what a frame costs; this says which
  *  class of thing is charging it, which is the question a frame-rate
@@ -20347,12 +23179,48 @@ function tapeKeep(): string {
     hintCells: solver.hints.size, chains: solver.stats.chains, pinned: solver.stats.pinned,
     hintsNearby: [...solver.hints.values()].flat()
       .filter((h) => Math.hypot(h[0] - x, h[1] - z) < 40).length });
+/** EVERY hint within r of a point, with its height — not the nearest one. Two
+ *  chains that both hold a station at a junction leave two hints there, and
+ *  whether they AGREE is the whole question a step asks. `__sharedAt` reports
+ *  the count; this reports the values. */
+(window as unknown as { __hintsAt?: object }).__hintsAt = (x: number, z: number, r = 1): object[] =>
+  [...solver.hints.values()].flat()
+    .filter((h) => Math.hypot(h[0] - x, h[1] - z) <= r)
+    .map((h) => ({ x: +h[0].toFixed(2), z: +h[1].toFixed(2), y: +h[2].toFixed(3),
+      d: +Math.hypot(h[0] - x, h[1] - z).toFixed(2), l: h[3], c: h[4] }));
+/** Every approach end near a point that was asked to wait for a portal above
+ *  it: how many times, and whether it built on its last ask regardless. */
+(window as unknown as { __defers?: object }).__defers = (x?: number, z?: number, r = 6): object[] => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  return deferLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r || Math.hypot(e.x1 - px, e.z1 - pz) <= r);
+};
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number, margin = 0.8) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z, margin) });
 /** The nearest drivable centreline: how far OUTSIDE its kerb this point is
  *  (negative on the carriageway), and the road's own surface height there. */
-function roadEdge(x: number, z: number, notFid?: number, notNm?: string): { out: number; y: number; track: boolean; hw: number; ux: number; uz: number; nm?: string } | null {
-  let best: { out: number; y: number; track: boolean; hw: number; ux: number; uz: number; nm?: string } | null = null;
+/** Does the road that owns this deck END at the point, or pass through it?
+ *  Counted by its built segment ends within 0.6m: one touching segment is a
+ *  terminus, two is a through road. Fragments of one road share its name, so
+ *  a named road split at a tile cut still counts as through; an unnamed one
+ *  is matched by fragment and may be misjudged at a cut, which only costs a
+ *  crop there. */
+function hostEndsAt(x: number, z: number, nm: string | undefined, fd: number | undefined): boolean {
+  let touching = 0;
+  const seen = new Set<Seg>();
+  for (const dx of [-GRID, 0, GRID]) for (const dz of [-GRID, 0, GRID]) {
+    for (const seg of roadGrid.get(gkey(x + dx, z + dz)) ?? []) {
+      if (seen.has(seg) || seg.ya === undefined) continue;
+      seen.add(seg);
+      const same = nm !== undefined ? seg.nm === nm : seg.fd === fd;
+      if (!same) continue;
+      if (Math.hypot(seg.ax - x, seg.az - z) < 0.6 || Math.hypot(seg.bx - x, seg.bz - z) < 0.6) touching++;
+      if (touching >= 2) return false;
+    }
+  }
+  return touching === 1;
+}
+function roadEdge(x: number, z: number, notFid?: number, notNm?: string): { out: number; y: number; track: boolean; hw: number; ux: number; uz: number; nm?: string; fd?: number } | null {
+  let best: { out: number; y: number; track: boolean; hw: number; ux: number; uz: number; nm?: string; fd?: number } | null = null;
   for (const seg of roadGrid.get(gkey(x, z)) ?? []) {
     if (seg.ya === undefined || seg.yb === undefined) continue;
     // Blind to ONE road, for the late-mask sweep: an intruder's end asking
@@ -20368,7 +23236,7 @@ function roadEdge(x: number, z: number, notFid?: number, notNm?: string): { out:
     // because the junction crop needs to know a join from a continuation.
     if (!best || out < best.out) {
       const l = Math.hypot(dx, dz) || 1;
-      best = { out, y: seg.ya + (seg.yb - seg.ya) * t, track: !!seg.tk, hw: seg.hw, ux: dx / l, uz: dz / l, nm: seg.nm };
+      best = { out, y: seg.ya + (seg.yb - seg.ya) * t, track: !!seg.tk, hw: seg.hw, ux: dx / l, uz: dz / l, nm: seg.nm, fd: seg.fd };
     }
   }
   return best;
@@ -20428,6 +23296,84 @@ function tyreHeight(x: number, z: number, sk: Surface, near: number): number {
 };
 // Every junction-crop decision near a point, with its reason — build-time
 // state no screenshot or rebuild can reconstruct.
+/** Every fragment end built near a point, with the anchor, hint and weld it
+ *  took at BUILD time — the weld-side twin of __cropwhy. */
+(window as unknown as { __joinwhy?: object }).__joinwhy = (x?: number, z?: number, r = 8): object[] => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  return joinLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r);
+};
+/** Every through-node station near a point, with its value after each stage
+ *  of the per-way build — which stage moved it off the pin. */
+(window as unknown as { __stagewhy?: object }).__stagewhy = (x?: number, z?: number, r = 8): object[] => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  return stageLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r);
+};
+/** Every FRAGMENT with a station within r of a point: its branch, its anchors,
+ *  its hint coverage, and each such station after every stage — the whole
+ *  per-way build, station by station, for a segment that is not a pin. */
+(window as unknown as { __fragwhy?: object }).__fragwhy = (x?: number, z?: number, r = 6): object[] => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const out: object[] = [];
+  for (const f of fragLog.values()) {
+    const stations: object[] = [];
+    for (let i = 0; i < f.n; i++) {
+      const d = Math.hypot(f.xs[i] - px, f.zs[i] - pz);
+      if (d > r) continue;
+      const st: Record<string, number> = {};
+      for (const k of Object.keys(f.st)) st[k] = f.st[k][i];
+      const sp = i > 0 ? +Math.hypot(f.xs[i] - f.xs[i - 1], f.zs[i] - f.zs[i - 1]).toFixed(2) : 0;
+      stations.push({ i, x: f.xs[i], z: f.zs[i], d: +d.toFixed(2), sp, hint: f.hint[i], st });
+    }
+    if (stations.length) {
+      out.push({ fid: f.fid, nm: f.nm, wid: f.wid, pb: f.pb, n: f.n, layer: f.layer, hinted: f.hinted, hintN: f.hintN, a0: f.a0, a1: f.a1, stations });
+    }
+  }
+  return out;
+};
+/** Every bridge the lift raised this session: where, which, by how much. */
+/** The terrain mesh's own vertex nearest a point: where the tile says it is,
+ *  the vertex's height against the natural field, and the colour it was
+ *  painted — with the palette recomputed flat and at the tile's slope, so a
+ *  dark cell can be blamed on its shade, its cover or its carve. */
+(window as unknown as { __vtxAt?: object }).__vtxAt = (x: number, z: number): object | null => {
+  const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
+  const key = `${tx}/${ty}`;
+  const mesh = terrainMeshes.get(key), t = heightTiles.get(key);
+  if (!mesh || !t) return null;
+  const pos = mesh.geometry.attributes.position as THREE.BufferAttribute;
+  const col = mesh.geometry.attributes.color as THREE.BufferAttribute | undefined;
+  const ox = mesh.position.x, oz = mesh.position.z;
+  let best = -1, bd = Infinity;
+  for (let i = 0; i < pos.count; i++) {
+    const d = Math.hypot(pos.getX(i) + ox - x, pos.getZ(i) + oz - z);
+    if (d < bd) { bd = d; best = i; }
+  }
+  if (best < 0) return null;
+  const vx = pos.getX(best) + ox, vz = pos.getZ(best) + oz, vy = pos.getY(best);
+  const SEG = segOf(mesh.geometry), cell = t.w / SEG;
+  const u = clamp(Math.round(((vx - t.xs) / t.w) * 255), 0, 255);
+  const v = clamp(Math.round(((vz - t.zs) / t.h) * 255), 0, 255);
+  const du = t.data[v * 256 + Math.min(255, u + 1)] - t.data[v * 256 + u];
+  const dv = t.data[Math.min(255, v + 1) * 256 + u] - t.data[v * 256 + u];
+  const slope = Math.hypot(du, dv) / Math.max(cell, 1);
+  const cv = coverPaint(vx, vz);
+  const f3 = (c: [number, number, number]): number[] => c.map((k) => +k.toFixed(3));
+  return { key, tile: { xs: +t.xs.toFixed(1), zs: +t.zs.toFixed(1), w: +t.w.toFixed(1), h: +t.h.toFixed(1) }, meshAt: [+ox.toFixed(1), +oz.toFixed(1)],
+    seg: SEG, cell: +cell.toFixed(2), dirty: terrainDirty.has(key),
+    vtx: { x: +vx.toFixed(2), z: +vz.toFixed(2), y: +vy.toFixed(2), d: +bd.toFixed(2) },
+    nat: +sampleHeight(vx, vz).toFixed(2), baseElev: +baseElev.toFixed(1),
+    colour: col ? [+col.getX(best).toFixed(3), +col.getY(best).toFixed(3), +col.getZ(best).toFixed(3)] : null,
+    cover: cv, slope: +slope.toFixed(3),
+    flat: f3(terrainPalette(vy + baseElev, 0, cv, vx, vz)), sloped: f3(terrainPalette(vy + baseElev, slope, cv, vx, vz)),
+    area: areaTintAt(vx, vz) };
+};
+(window as unknown as { __coverAt?: object }).__coverAt = (x: number, z: number): object =>
+  ({ truth: sampleCover(x, z), paint: coverPaint(x, z), builtUp: +builtUpAt(x, z).toFixed(3) });
+(window as unknown as { __wayTags?: object }).__wayTags = (wid: string): object | null => wayTagLog.get(wid) ?? null;
+(window as unknown as { __lifts?: object }).__lifts = (x?: number, z?: number, r = 1e9): object[] => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  return liftLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r);
+};
 (window as unknown as { __cropwhy?: object }).__cropwhy = (x?: number, z?: number, r = 80): object[] => {
   const px = x ?? state.x, pz = z ?? state.z;
   return cropLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r);
@@ -20848,6 +23794,17 @@ function truckSpec(): Record<string, number> {
     // see it — which is exactly how one shipped.
     gReach: swardU.uGReach.value, fieldHalf: SWARD_FW / 2,
     match: swardU.uSwardMatch.value,
+    flowers: {
+      patchFill: swardU.uFlowerPatchFill.value,
+      stray: {
+        open: swardU.uFlowerStrayOpen.value, wood: swardU.uFlowerStrayWood.value,
+        water: swardU.uFlowerStrayWater.value, cliff: swardU.uFlowerStrayCliff.value,
+        ruin: swardU.uFlowerStrayRuin.value,
+      },
+      patchMetres: swardU.uFlowerPatchM.value,
+      speciesMetres: swardU.uFlowerSpeciesM.value,
+      debug: swardU.uFlowerDbg.value,
+    },
     slots: swardBands.reduce((a, b) => a + b.side * b.side, 0),
     verts: swardBands.reduce((a, b) => a + b.side * b.side * 9, 0),
     fieldMs: +swardFieldMs.toFixed(1), maskMs: +swardMaskMs.toFixed(1),
@@ -22455,7 +25412,13 @@ function meshHeightAt(x: number, z: number): number | null {
   const hits = meshRay.intersectObjects([...terrainMeshes.values()], false);
   return hits.length ? +(4000 - hits[0].distance).toFixed(2) : null;
 }
-(window as unknown as { __meshAt?: object }).__meshAt = meshHeightAt;
+// `__meshRay`, not `__meshAt`: this line used to bind `__meshAt` a second
+// time and silently shadowed the analytic probe above — the one that reads
+// what the wheels read — with a raycast that answered 1688 at Dante's View
+// where the vertex under the point read -0.05. Measure the mesh with
+// `__meshAt` (meshSurfaceAt) or `__vtxAt`; this is the raycast, for what a
+// raycast is for.
+(window as unknown as { __meshRay?: object }).__meshRay = meshHeightAt;
 /** The sky's whole case file: where the sun is, what hour the world thinks it
  *  is, and whether the weather is a measurement or the synthetic chain. */
 (window as unknown as { __sky?: object }).__sky = (): object => ({
@@ -22565,12 +25528,21 @@ function heightsOf(): number[] {
   }
   return {
     tiles: coverTiles.size, asked: coverAsked.size,
+    // The shell's own tier: what level it is on and how much of it has landed.
+    // Separate from the counts above because they are different rasters for
+    // different jobs — these paint the backdrop, those feed the ecology.
+    wide: { level: coverWideZ, tiles: coverWide.size, asked: coverWideAsked.size },
     here: here === null ? null : `${here} ${COVER_NAME[here] ?? '?'}`,
     samples: n,
     mix: [...hist.entries()].sort((a, b) => b[1] - a[1])
       .map(([c, k]) => `${COVER_NAME[c] ?? c} ${((k / Math.max(1, n)) * 100).toFixed(0)}%`),
   };
 };
+/** Is the ground being kept, and if not which half is failing. `stored` well
+ *  below `put` says the writes are being refused; `hit` at zero on a second
+ *  visit says they were never there to read. */
+(window as unknown as { __raster?: object }).__raster = (): object =>
+  ({ ...rasterStat, db: osmDbHow, budgetMB: RASTER_BUDGET / 1024 / 1024 });
 /** What the elevation source got wrong here, and how much of it we repaired. */
 (window as unknown as { __demsrc?: object }).__demsrc = (): object =>
   ({ mapterhorn: MAPTERHORN, ...demSource, missingTiles: mthMissing.size });
@@ -22585,7 +25557,7 @@ function heightsOf(): number[] {
   at: demLast,
 });
 (window as unknown as { __tstats?: object }).__tstats = (): object => ({
-  heightTiles: heightTiles.size, meshes: terrainMeshes.size, dirty: terrainDirty.size,
+  heightTiles: heightTiles.size, meshes: terrainMeshes.size, dirty: terrainDirty.size, builds: terrainBuilds,
   roadCells: roadGrid.size, seenWays: seenWays.size, unbuilt,
   osmDone: osmDone.size, inFlight: osmInFlight, queued: osmQueue.length,
 });
@@ -22983,7 +25955,8 @@ function heightsOf(): number[] {
   (compMat.uniforms.uHazeDbg as { value: number }).value = m;
 };
 (window as unknown as { __far?: object }).__far = (): object =>
-  ({ tiles: farMeshes.size, shown: farGroup.visible, radius: Math.round(viewRadius()),
+  ({ tiles: farMeshes.size, asked: farTiles.size, inFlight: farInFlight, queued: farQueue.length,
+    retired: farRetired.length, shown: farGroup.visible, radius: Math.round(viewRadius()),
     sight: SIGHT_M, level: farZ, farPlane: camera.far,
     // How much land-cover each shell tile had when it was baked. A shell tile
     // is coloured once and never revisited, so anything below 1 here is a tile
@@ -23308,6 +26281,81 @@ function farHeightAt(wx: number, wz: number): number | null {
     ]);
   }
   return out;
+};
+/**
+ * EVERY BUILT SEGMENT WITH GROUND OVER IT, WITHOUT NEEDING ITS NAME.
+ *
+ * `__profile` and `__bury` both select on `s.nm`, so neither can see an
+ * unnamed way — and this tile's largest highway entry by node count is an
+ * unnamed footway. Asking them about a hole and getting "0 buried" once sent
+ * a whole investigation backwards: the road WAS 8m under the ground, the query
+ * was looking at the wrong roads, and the empty answer read as exoneration.
+ *
+ * So: no name, no radius that averages the sea in. For each built segment,
+ * the natural field over the deck at its midpoint, split by whether the
+ * segment carries the tunnel exemption. `exposed` is the defect — ground over
+ * a deck that the carve is still allowed to dig out — and on a healthy world
+ * it is empty. `deep` is the same thing past the tube threshold, which is the
+ * excavation that removes hillsides.
+ */
+(window as unknown as { __buried?: object }).__buried = (r = 400): object => {
+  const seen = new Set<Seg>();
+  const exposed: number[] = [], exempt: number[] = [];
+  let deep = 0, missedByMin = 0, segs = 0, worst = 0, worstAt: number[] | null = null;
+  for (const arr of roadGrid.values()) for (const s of arr) {
+    if (seen.has(s) || s.ya === undefined || s.yb === undefined) continue;
+    seen.add(s);
+    const mx = (s.ax + s.bx) / 2, mz = (s.az + s.bz) / 2;
+    if (Math.hypot(mx - state.x, mz - state.z) > r) continue;
+    segs++;
+    // A TRACK IS NOT A DEFECT. rasterizeCut returns on `tk` before `tn` is
+    // even consulted, so a buried footpath is already safe from the carve and
+    // counting it here would bury the signal in ways that were never at risk.
+    if (s.tk) continue;
+    const deck = ((s.ya as number) + (s.yb as number)) / 2;
+    const over = sampleHeight(mx, mz) - deck;
+    // ── THE TWO CRITERIA, SIDE BY SIDE ──
+    //
+    // `over` is cover on the CENTRELINE. `overMin` is cover measured the way
+    // ribbon's burial test measures it — the MINIMUM across the road's width,
+    // which is what `elevMin` is. On a side slope the two differ by about
+    // half-width times the cross-fall, so a road under nine metres of hillside
+    // can read as unburied because its downhill edge is low.
+    //
+    // Both are reported because the first cut of this probe carried only the
+    // centreline, and the gap between them is the whole question about the
+    // segments the burial fix does NOT catch. `elevMin` is the right measure
+    // for SIZING a tube — the ceiling must fit under the lowest ground, which
+    // is the Cairo defect its own comment records — and it is being asked to
+    // DECIDE burial as well. One variable, two jobs.
+    const dx = s.bx - s.ax, dz = s.bz - s.az, l = Math.hypot(dx, dz) || 1;
+    const ox = (-dz / l) * (s.hw + 1.2), oz = (dx / l) * (s.hw + 1.2);
+    const overMin = Math.min(
+      sampleHeight(mx, mz),
+      sampleHeight(mx + ox, mz + oz),
+      sampleHeight(mx - ox, mz - oz)) - deck;
+    if (over <= 0.5) continue;
+    if (s.tn || s.pc !== undefined) { exempt.push(over); continue; }
+    exposed.push(over);
+    if (over > TUNNEL_H + 0.6) { deep++; if (overMin <= TUNNEL_H + 0.6) missedByMin++; }
+    if (over > worst) { worst = over; worstAt = [Math.round(mx), Math.round(mz)]; }
+  }
+  const stat = (v: number[]): object | null => {
+    if (!v.length) return null;
+    const q = v.slice().sort((a, b) => a - b);
+    return { n: q.length, med: +q[q.length >> 1].toFixed(2), max: +q[q.length - 1].toFixed(2) };
+  };
+  return {
+    segs, r,
+    exposed: stat(exposed),
+    exempt: stat(exempt),
+    deeperThanTube: deep,
+    // Of those, how many the code's own elevMin test would call unburied —
+    // i.e. how much of what is left is the centreline/width-minimum split.
+    missedByWidthMin: missedByMin,
+    worst: +worst.toFixed(2),
+    worstAt,
+  };
 };
 (window as unknown as { __tiledbg?: object }).__tiledbg = (v?: boolean): boolean => {
   tileDbg = v ?? !tileDbg;
@@ -27475,11 +30523,18 @@ addEventListener('visibilitychange', () => {
   // Backgrounding a tab is how a phone ends a session — the loop stops running,
   // so the debounced write has to happen on the way out or the last few
   // hundred metres are lost.
-  if (hidden) { surveyStore.flush(); marks.flush(); lineSave(); audio.hush(); return; }
+  // `storageWiped`: a reset is in flight or done, and these three writers are
+  // exactly the ones that would put the survey, the marks and the docket back.
+  if (hidden) { if (!storageWiped) { surveyStore.flush(); marks.flush(); lineSave(); } audio.hush(); return; }
   last = performance.now();   // no accumulated gap to integrate through
   audio.arm();
 });
-addEventListener('pagehide', () => { surveyStore.flush(); marks.flush(); lineSave(); });   // a close that skips `hidden`
+// A close that skips `hidden` — and, after a reset, a close that must write
+// nothing at all; see storageWiped.
+addEventListener('pagehide', () => {
+  if (storageWiped) return;
+  surveyStore.flush(); marks.flush(); lineSave();
+});
 
 // ── main loop ──────────────────────────────────────────────────────
 let last = performance.now();
@@ -29313,8 +32368,14 @@ function tick(now: number): void {
   // The lamps carry the pressure too — a trail-brake glows, a stop is bright.
   if (brake) tailMat.color.setHex(0xa8221a).lerp(TAIL_HOT, 0.25 + 0.75 * brakeF);
   else tailMat.color.setHex(state.speed < -0.5 ? 0xe8ded0 : 0xa8221a);
-  // Volumetric beam: strongest where the eye is nearly in line with it.
-  beamMat.uniforms.uAmp.value = camMode === 'cab' ? 1.25 : camMode === 'chase' ? 1 : 0.25;
+  // Volumetric beam: strongest where the eye is nearly in line with it — AND
+  // faded by daylight, as the pool it belongs to already is. At noon the
+  // additive cone was drawn at full strength: from the cab it filled the
+  // frame and the road under it read as a blown-out white slab, and from the
+  // chart it was a bright wedge on the tarmac ahead of the truck in every
+  // survey frame. A lamp's beam is not visible in sunlight; a hint of it is
+  // kept, as it is for the pool, so dusk is a ramp rather than a switch.
+  beamMat.uniforms.uAmp.value = (camMode === 'cab' ? 1.25 : camMode === 'chase' ? 1 : 0.25) * (0.15 + 0.85 * (1 - dayF));
   // HIGH BEAM AFTER DARK. One lamp spec cannot serve both: 110m of throw is
   // generous in daylight, where the beam is only a hint, and short at night,
   // where it is the only thing telling you where the road goes. Faded by the
@@ -29990,14 +33051,7 @@ function tick(now: number): void {
   // overlay projected through LAST frame's camera and trailed the world by
   // a frame while panning — pins visibly sliding off their buildings.
   camera.matrixWorldInverse.copy(camera.matrixWorld).invert();
-  skyDome.position.copy(camera.position);
-  // The dome rides with the camera, but its RADIUS is fixed at 20km and the
-  // chart's near plane grows with altitude — at the widest zoom the near plane
-  // stands 22km out and clips the entire sky away, which is a black band above
-  // the horizon. Keep the shell comfortably outside whatever the near plane is
-  // now; it is a gradient backdrop, so scaling it costs nothing and shows
-  // nothing.
-  skyDome.scale.setScalar(Math.max(1, (camera.near * 8) / 20000));
+  aimSky(camera);
   compMat.uniforms.camPos.value.copy(camera.position);
   // Where the sun sits on screen, for the flare. Occlusion is left to the
   // shader (one depth fetch); here we only ask whether it is in frame at all.
@@ -30159,6 +33213,7 @@ function tick(now: number): void {
   // fault it fixes was reported from the cab.
   stepFineRing(now);
   applyHidden();
+  if (NODRAW) { tickN++; requestAnimationFrame(tick); return; }
   // scene → target, two separable blur rounds at half res, composite to canvas
   renderer.setRenderTarget(rtScene);
   renderer.render(scene, camera);
@@ -30211,12 +33266,18 @@ function tick(now: number): void {
     // you into. Off for the blit, back on for the chart.
     const ovWas = ovGroup.visible, farWas = farGroup.visible;
     ovGroup.visible = false; farGroup.visible = false;
+    // …and the sky is part of that world. See aimSky: the dome is hung around
+    // ONE eye, so drawing it for the chart camera and then reusing it here
+    // slung the dock's horizon kilometres high and swelled it as the chart
+    // zoomed. Aim it at the eye actually rendering, then hand it back.
+    aimSky(miniCam);
     // Through the SAME low-res target, nearest magnification, sRGB encode,
     // grade and palette dither as the world. Rendered straight to the screen it
     // was a smooth, full-colour window inside a hand-built bitmap HUD — the one
     // thing on screen that did not look like the game.
     blitPixelated(scene, miniCam, vx, vy, vw, vh);
     ovGroup.visible = ovWas; farGroup.visible = farWas;
+    aimSky(camera);
     if (lastPov === 'cab') ghostCab(false);
   }
   { const bay = menu.bayRect(); if (bay) renderStudio(dt, bay); }
@@ -30262,6 +33323,16 @@ function blitPixelated(
   renderer.setRenderTarget(rtVeh);
   renderer.setClearColor(clear, 1);
   renderer.clear(true, true, false);
+  // WHERE THE SKY STOOD WHEN THIS WINDOW WAS DRAWN. Observed here, at the
+  // render, rather than beside the aimSky call that sets it — asserting a
+  // value next to its own assignment proves nothing, and what went wrong was
+  // precisely that this render inherited another camera's sky. Only for the
+  // world scene; the studio bay has no dome in it. See __docksky.
+  if (what === scene) {
+    blitSky.camY = cam.position.y;
+    blitSky.domeY = skyDome.position.y;
+    blitSky.scale = skyDome.scale.x;
+  }
   renderer.render(what, cam);
   renderer.setRenderTarget(null);
   renderer.setClearColor(0x05070c, 1);
@@ -33329,6 +36400,33 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         hctx.fillRect(Math.round(a[0] + ((b[0] - a[0]) * i) / n), Math.round(a[1] + ((b[1] - a[1]) * i) / n), 1, 1);
       }
     };
+    /** Outline the quad four projected corners make, clockwise from top-left. */
+    const dBox = (a: [number, number] | null, b: [number, number] | null,
+      c: [number, number] | null, d2: [number, number] | null): void => {
+      dSeg(a, b); dSeg(b, c); dSeg(c, d2); dSeg(d2, a);
+    };
+    /** How wide one cell of a grid lands on the HUD, in its own pixels — the
+     *  measure that decides whether a layer is worth drawing cell by cell. */
+    const dCell = (a: [number, number] | null, b: [number, number] | null): number =>
+      (a && b ? Math.hypot(b[0] - a[0], b[1] - a[1]) : 0);
+    /**
+     * A CELL TOO SMALL TO HOLD A MARKER IS NOISE, NOT INFORMATION.
+     *
+     * The z16 grid is 19x19 cells and the z14 ring 9x9, and both are sized in
+     * GROUND metres — so as the chart pulls out they do not spread, they
+     * collapse. At the wide end a z16 tile is half a kilometre inside a view
+     * six hundred across: three hundred and sixty cells of grid line and pip
+     * stacked into a few pixels of dirty haze in the middle of the frame,
+     * every one of them drawn, none of them readable. The post chain makes it
+     * worse rather than better — narrow bright features are exactly what the
+     * quantiser turns into a white contour diagram.
+     *
+     * So each layer draws cells only while a cell can carry one, and outlines
+     * its RING when it cannot. At that zoom the useful fact is not which tile
+     * is queued, it is where the fine world sits inside the wide one — which
+     * is a rectangle, and reads as one.
+     */
+    const DBG_CELL_PX = 8;
     const [dLat, dLon] = localToLatLon(state.x + panX, state.z + panZ);
     const dR = viewRadius();
     const [ox0, oy0] = tileAt(dLat, dLon, OSM_Z);
@@ -33344,11 +36442,20 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       }
       dCor.push(row);
     }
+    const oPx = dCell(dCor[oN][oN], dCor[oN][oN + 1]);
+    const oFine = oPx >= DBG_CELL_PX;
     hctx.fillStyle = UI.soft;
     hctx.globalAlpha = 0.28;
-    for (let j = 0; j <= oN * 2 + 1; j++) for (let i = 0; i <= oN * 2 + 1; i++) {
-      if (i <= oN * 2) dSeg(dCor[j][i], dCor[j][i + 1]);
-      if (j <= oN * 2) dSeg(dCor[j][i], dCor[j + 1][i]);
+    if (oFine) {
+      for (let j = 0; j <= oN * 2 + 1; j++) for (let i = 0; i <= oN * 2 + 1; i++) {
+        if (i <= oN * 2) dSeg(dCor[j][i], dCor[j][i + 1]);
+        if (j <= oN * 2) dSeg(dCor[j][i], dCor[j + 1][i]);
+      }
+    } else {
+      // The whole vector ring as ONE rectangle: where the roads are, against a
+      // view mostly made of ground that has none.
+      const e = oN * 2 + 1;
+      dBox(dCor[0][0], dCor[0][e], dCor[e][e], dCor[e][0]);
     }
     // SERVING RANK UNDER THE METRIC THE GATE ACTUALLY USES — which for a long
     // time this did not do. It ranked by plain distance to the focus point
@@ -33364,7 +36471,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       })
       .sort((a, b) => a.d - b.d)
       .forEach((q, i) => dRank.set(q.k, i + 1));
-    for (let j = 0; j <= oN * 2; j++) for (let i = 0; i <= oN * 2; i++) {
+    for (let j = 0; oFine && j <= oN * 2; j++) for (let i = 0; i <= oN * 2; i++) {
       const key = `${ox0 - oN + i}/${oy0 - oN + j}`;
       const a = dCor[j][i], b = dCor[j + 1][i + 1];
       if (!a || !b) continue;
@@ -33422,15 +36529,50 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       }
       tCor.push(row);
     }
-    for (let j = 0; j <= tN * 2; j++) for (let i = 0; i <= tN * 2; i++) {
-      const key = `${tx0 - tN + i}/${ty0 - tN + j}`;
-      if (!terrainReady.has(key)) continue;
-      hctx.fillStyle = terrainDirty.has(key) ? UI.hot : terrainMeshes.has(key) ? UI.edge : UI.gold;
-      hctx.globalAlpha = terrainDirty.has(key) ? 0.8 : 0.5;
-      dSeg(tCor[j][i], tCor[j][i + 1]);
-      dSeg(tCor[j][i], tCor[j + 1][i]);
-      dSeg(tCor[j + 1][i], tCor[j + 1][i + 1]);
-      dSeg(tCor[j][i + 1], tCor[j + 1][i + 1]);
+    const tPx = dCell(tCor[tN][tN], tCor[tN][tN + 1]);
+    if (tPx >= DBG_CELL_PX) {
+      for (let j = 0; j <= tN * 2; j++) for (let i = 0; i <= tN * 2; i++) {
+        const key = `${tx0 - tN + i}/${ty0 - tN + j}`;
+        if (!terrainReady.has(key)) continue;
+        hctx.fillStyle = terrainDirty.has(key) ? UI.hot : terrainMeshes.has(key) ? UI.edge : UI.gold;
+        hctx.globalAlpha = terrainDirty.has(key) ? 0.8 : 0.5;
+        dSeg(tCor[j][i], tCor[j][i + 1]);
+        dSeg(tCor[j][i], tCor[j + 1][i]);
+        dSeg(tCor[j + 1][i], tCor[j + 1][i + 1]);
+        dSeg(tCor[j][i + 1], tCor[j + 1][i + 1]);
+      }
+    } else {
+      hctx.fillStyle = UI.edge;
+      hctx.globalAlpha = 0.5;
+      const e = tN * 2 + 1;
+      dBox(tCor[0][0], tCor[0][e], tCor[e][e], tCor[e][0]);
+    }
+    /**
+     * …AND THE LAYER THAT IS ACTUALLY STREAMING OUT HERE.
+     *
+     * The two rings above are the FINE world, and at the wide end they are a
+     * pair of small boxes near the middle — correct, and not what is doing the
+     * work. Everything filling the rest of the frame is the coarse shell, and
+     * until now the overlay said nothing about it beyond a count in the
+     * header. So the shell draws its own grid at exactly the zooms where the
+     * fine grids have folded: teal where a mesh stands, gold where a tile has
+     * been asked for and has not landed. It is the same reading the z14 ring
+     * gives close up, one ladder rung out.
+     */
+    if (!oFine) {
+      const [sx0, sy0] = tileAt(dLat, dLon, farZ);
+      const sN = clamp(Math.ceil(dR / tileMetres(farZ)), 1, FAR_RING_MAX);
+      for (let j = -sN; j <= sN; j++) for (let i = -sN; i <= sN; i++) {
+        const key = `${farZ}/${sx0 + i}/${sy0 + j}`;
+        if (!farTiles.has(key)) continue;
+        const b0 = tileBounds(sx0 + i, sy0 + j, farZ);
+        const b1 = tileBounds(sx0 + i + 1, sy0 + j + 1, farZ);
+        const [ax, az] = toLocal(b0.latN, b0.lonW);
+        const [bx, bz] = toLocal(b1.latN, b1.lonW);
+        hctx.fillStyle = farMeshes.has(key) ? UI.edge : UI.gold;
+        hctx.globalAlpha = farMeshes.has(key) ? 0.4 : 0.7;
+        dBox(dProj(ax, az), dProj(bx, az), dProj(bx, bz), dProj(ax, bz));
+      }
     }
     hctx.globalAlpha = 1;
     let fails = 0;
@@ -33438,7 +36580,8 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     textEdgeP(`Z${OSM_Z} DONE ${osmDone.size} WIRE ${osmInFlight} QUEUE ${osmQueue.length} FAIL ${fails}`,
       6, 40, UI.text);
     textEdgeP(`Z${TERRAIN_Z} MESH ${terrainMeshes.size} WAIT ${terrainReady.size - terrainMeshes.size}`
-      + ` REBUILD ${terrainDirty.size} · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`,
+      + ` REBUILD ${terrainDirty.size} · FAR Z${farZ} ${farMeshes.size}/${farTiles.size}`
+      + (coverWideZ ? ` · COV Z${coverWideZ} ${coverWide.size}` : ''),
       6, 48, UI.soft);
   }
   // ── checkpoint markers, under everything ──
@@ -34618,6 +37761,15 @@ function setClean(on: boolean): void {
 (window as unknown as { __hudrects?: object }).__hudrects = (): object =>
   ({ dock: dockRect, pov: povRect, mapUp: mapUpRect, drone: droneRect });
 (window as unknown as { __hudscale?: object }).__hudscale = (): number => hudS;
+/** THE SKY THE DOCK WAS ACTUALLY DRAWN UNDER. `gap` is the whole question: the
+ *  dome is a shell hung around ONE eye, so at the dock's render it must be on
+ *  the DOCK's eye and nowhere else. It used to be left wherever the chart
+ *  camera put it — 3km up at reading zoom, 80km at the widest — and the gap is
+ *  that mistake in metres. Zero at every zoom, or the preview's horizon rides
+ *  the main viewport's zoom, which is what was reported from the chart. */
+(window as unknown as { __docksky?: object }).__docksky = (): object =>
+  ({ camY: +blitSky.camY.toFixed(2), domeY: +blitSky.domeY.toFixed(2),
+    scale: +blitSky.scale.toFixed(3), gap: Math.round(Math.abs(blitSky.domeY - blitSky.camY)) });
 /** Reads which way the chart is turned; with an argument, SETS it — a pan test
  *  has to run in both orientations and the toggle is otherwise a HUD tap. */
 /** Where the newest mark actually landed — the one number the placement bug
@@ -35198,6 +38350,72 @@ const menu = createMenu({
       setTimeout(() => { location.replace(`${location.pathname}?${q.toString()}`); }, 1600);
     })();
   },
+  // ── STORAGE ──
+  //
+  // The readout is a CACHED answer that asks for a fresh one on the menu's own
+  // tick. `storageReport` is async and the menu's updaters are not, and the
+  // measurement (an origin quota estimate plus two IndexedDB counts) is far too
+  // heavy for a 400ms loop — so it answers with the last one it has and takes a
+  // new reading every few seconds while the screen is open.
+  storageNote: () => {
+    if (Date.now() - storeAt > 4000) {
+      storeAt = Date.now();
+      void storageReport().then((r) => { storeSnap = r; });
+    }
+    if (!storeSnap) return 'MEASURING…';
+    const size = (b: number): string => (b >= 1048576
+      ? `${(b / 1048576).toFixed(b >= 104857600 ? 0 : 1)}MB`
+      : `${Math.max(1, Math.round(b / 1024))}KB`);
+    const { used, quota, ways, tiles } = storeSnap;
+    // A count that did not come back reads as '?', never as 0 — see the note on
+    // `count` in storageReport.
+    const n = (v: number | null): string => (v === null ? '?' : String(v));
+    // The quota is the ORIGIN'S and the tile counts are ours; on a shared host
+    // those are different things and the line says so rather than implying one
+    // number explains the other.
+    return `${n(tiles)} GROUND TILES · ${n(ways)} ROAD TILES · THIS SITE IS USING `
+      + `${size(used)}${quota ? ` OF ${size(quota)}` : ''}`;
+  },
+  cacheClear: (status) => {
+    void (async () => {
+      status('EMPTYING THE WORLD CACHE…');
+      const ok = await clearWorldCache();
+      storeAt = 0;   // the readout is stale the moment this returns
+      status(ok
+        ? 'WORLD CACHE EMPTY — GROUND AND ROADS WILL COME OFF THE WIRE AGAIN'
+        : 'COULD NOT EMPTY IT — ANOTHER TAB MAY BE HOLDING THE CACHE OPEN', !ok);
+    })();
+  },
+  // THE DEVICE RESET, and the two things about it that are not obvious.
+  //
+  // It REFUSES OFFLINE. The offline copy of the app is part of what goes — the
+  // service worker and the shell it precached — so a reset with no network
+  // takes the game away and cannot put it back. That is a dead page, from a
+  // button whose whole purpose is getting unstuck.
+  //
+  // It does NOT touch the durable copy, and says so. This is a device reset,
+  // not an account one: `sync.reset()` exists (lineReset uses it) and calling
+  // it here would mean a button labelled "reset this device" quietly deleting
+  // a career off the server. Signing back in brings everything back, which is
+  // the behaviour someone clearing space wants and the one someone stuck on a
+  // bad build does not have to think about.
+  deviceReset: (status) => {
+    void (async () => {
+      if (!navigator.onLine) {
+        status('OFFLINE — A RESET DROPS THE OFFLINE COPY TOO, SO IT NEEDS THE NETWORK TO PUT THE GAME BACK', true);
+        return;
+      }
+      status('CLEARING EVERYTHING ON THIS DEVICE…');
+      const r = await resetDevice();
+      const parts = [`${r.keys} SETTINGS`, `${r.dbs + r.onReload.length} STORES`, `${r.caches} CACHES`];
+      if (r.workers) parts.push('OFFLINE COPY');
+      // A blocked delete is PENDING, not failed — the deck leaves connections
+      // open and the unload is what closes them. Saying "on reload" is the
+      // difference between an honest report and a wrong one.
+      status(`CLEARED ${parts.join(' · ')}${r.onReload.length ? ' — THE REST GOES ON RELOAD' : ''} · RELOADING…`);
+      setTimeout(() => { location.replace(location.pathname); }, 1600);
+    })();
+  },
   // PROGRESS, off the device. The label is the ACTION, the note is the state —
   // and when signed out the note says what you keep either way, because that is
   // the honest answer to "why would I sign in".
@@ -35324,6 +38542,25 @@ if (customPaint) bodyMat?.color.set(customPaint);
 if (timeFromUrl >= 0) {
   const d = DIALS.find((x) => x.key === 'time');
   if (d) { d.at = timeFromUrl; d.apply(timeFromUrl); }
+}
+/**
+ * A FIXTURE IS AN INSTRUMENT, SO IT DOES NOT SMEAR.
+ *
+ * Motion blur defaults to 180 degrees and is right for driving — it is half of
+ * every frame step, which is what a shutter does. It is wrong for a world whose
+ * entire purpose is that you can LOOK at the geometry: every inspection frame
+ * taken while the camera was still settling came back soft, and a soft frame is
+ * one you cannot judge a kerb seam or a batter face from. The blur was reading
+ * as a modelling defect in screenshots, which is worse than useless in a
+ * fixture — it is misleading.
+ *
+ * Off by default in a fixture world, and only by DEFAULT: `?mblur=` still wins,
+ * so the blur itself remains inspectable in the place where the ground holds
+ * still. The dial stays live for the session, exactly like the clock above.
+ */
+if (FIXTURE && !new URLSearchParams(location.search).has('mblur')) {
+  const d = DIALS.find((x) => x.key === 'mblur');
+  if (d) { d.at = 0; d.apply(0); }
 }
 // THE LINE RUNS ON WORLD TIME. A clock dial saved during free driving — NOON,
 // held for a screenshot weeks ago — would pin the ranger's whole docket in
@@ -35668,6 +38905,22 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   id: FIXTURE?.id ?? null,
   tune: FIXTURE ? FIXTURE_TUNE : null,
   ways: FIXTURE ? fixtureWays(...tileAt(origin.lat, origin.lon, OSM_Z)).length : 0,
+  // HOW MUCH WORLD THIS FIXTURE ASKED FOR. `r` is the box the streamer was
+  // held to and the three counts are the tile sets it produced — reported
+  // together because the claim being made is a ratio ("four tiles, not
+  // twenty-five") and half of it proves nothing.
+  r: FIX_R,
+  tiles: FIXTURE
+    ? { terrain: fixtureTiles(TERRAIN_Z).length, cover: fixtureTiles(COVER_Z).length,
+        osm: fixtureTiles(OSM_Z).length }
+    : null,
+  // `ov` and `peaks` are the two layers a fixture cannot answer and therefore
+  // must not ask for — both go straight to the cell. They belong here rather
+  // than in a network log because the harness relays every request through
+  // curl and is structurally unable to witness one: the only place the ask is
+  // visible is the set it would have filled.
+  built: { terrain: terrainMeshes.size, cover: coverTiles.size, osm: osmDone.size,
+    far: farMeshes.size, ov: ovTiles.size, peaks: peakTiles.size },
   cover: coverTiles.size,
   roadCells: roadGrid.size,
   seenWays: seenWays.size,

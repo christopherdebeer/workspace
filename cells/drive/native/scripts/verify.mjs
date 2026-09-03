@@ -1,4 +1,5 @@
 import { readFile } from 'node:fs/promises';
+import { existsSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 
 const native = resolve(import.meta.dirname, '..');
@@ -22,6 +23,9 @@ const checks = [
   ['maskable icon', manifest.icons.some((icon) => icon.purpose === 'maskable')],
   ['live cell endpoint', js.includes('c15r-drive.on.parc.land')],
   ['Three.js bundled', !js.includes('https://esm.sh/three')],
+  // Pins the deletion in build-web.mjs: the packaged shells serve their bundle
+  // from a local origin and have no use for the browser cell's service worker.
+  ['no service worker packaged', !existsSync(join(native, 'dist/web/sw.js'))],
 ];
 for (const [name, ok] of checks) {
   if (!ok) throw new Error(`verification failed: ${name}`);

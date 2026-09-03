@@ -92,6 +92,7 @@ precision highp float;
 
 uniform sampler2D uHydroGeometry;
 uniform sampler2D uHydroDynamics;
+uniform sampler2D uHydroMaterial;
 #ifdef HYDRO_FLOWING
 uniform sampler2D uHydroStructure;
 #endif
@@ -143,7 +144,14 @@ void main() {
   vTurbulence = vFlowing * smoothstep(0.20, 0.78, energy);
 
   float depth = max(0.0, geometryField.a);
-  float shoreDist = max(0.0, geometryField.g);
+  float signedShoreDist = geometryField.g;
+  float shoreDist = max(0.0, signedShoreDist);
+  // Only ocean and lagoon coverage carries the terrain-relative coastal ramp.
+  // Reading the already-bound material field at vertices lets the cheap
+  // run-up approximation remain coastal rather than pulsing every pond bank.
+  float vertexKind = floor(texture2D(uHydroMaterial, vHydroUv).r * 255.0 + 0.5);
+  float coastalStanding = (1.0 - vFlowing)
+    * step(0.5, vertexKind) * (1.0 - step(2.5, vertexKind));
 
   vec4 renderPosition = modelMatrix * vec4(position, 1.0);
   vAbsoluteXZ = renderPosition.xz + uWorldOrigin.xz;
@@ -153,11 +161,13 @@ void main() {
   // A production ocean tile is 2.4km wide and the default mesh is 32 cells:
   // roughly 75m between vertices. The old 9-34m displacement could not exist
   // on that lattice. Geometric wavelength is now fetch-scaled and never below
-  // 38m for small, tightly meshed bodies; open-ocean swell is ~360m, which the
-  // production mesh can actually resolve. The fragment owns shorter structure.
+  // 38m for small, tightly meshed bodies; open-ocean swell is ~300m: four
+  // production cells per dominant wave, rather than the barely perceptible
+  // 360m sheet, while remaining above the lattice's aliasing floor. The
+  // fragment still owns all shorter structure.
   float speed = max(0.2, uWind.z);
   float fetchScale = clamp(log2(max(fetchM, 80.0) / 80.0) / 8.0, 0.0, 1.0);
-  float wavelength = mix(38.0, 360.0, fetchScale) * max(0.2, uWaveLength);
+  float wavelength = mix(38.0, 300.0, fetchScale) * max(0.2, uWaveLength);
   float k = 6.28318530718 / wavelength;
   float omega = 0.34 + speed * 0.055;
   vec2 windDir = normalize(uWind.xy + vec2(0.00001, 0.0));
@@ -217,18 +227,38 @@ void main() {
   vWaveCrest = smoothstep(0.48, 0.94, standingWave) * (1.0 - vFlowing);
 
   // Macro volume remains with distance. Only fragment-scale skin is allowed
-  // to fade; removing body amplitude was the principal flat-water regression.
-  float standingAmplitude = mix(0.015, 0.46, energy * energy)
-    * (0.48 + min(speed, 16.0) * 0.035)
+  // to fade. Body roughness supplies persistent swell, but wind now opens the
+  // range substantially: the previous linear multiplier compressed calm sea,
+  // moderate weather and gale into variations of the same shallow sheet.
+  float windSea = smoothstep(0.5, 15.0, speed);
+  float standingState = clamp(energy * (0.50 + windSea * 0.75), 0.0, 1.0);
+  float standingAmplitude = mix(0.012, 0.72, pow(standingState, 1.60))
     * (1.0 + vShoal * 0.62) * postBreak;
   float riverAmplitude = mix(0.006, 0.16, pow(energy, 1.35));
   float amplitude = mix(standingAmplitude, riverAmplitude, vFlowing)
     * uWaveAmplitude;
 
   vSurfaceWave = clamp(wave, -1.0, 1.0);
-  vSurfaceEnergy = clamp(amplitude / mix(0.42, 0.15, vFlowing), 0.0, 1.0);
+  vSurfaceEnergy = clamp(amplitude / mix(0.55, 0.15, vFlowing), 0.0, 1.0);
   float displaced = wave * amplitude * geometryField.r;
-  renderPosition.y = uElevationBase + geometryField.b - uWorldOrigin.y + displaced;
+
+  // ── THE EXISTING COASTAL RAMP CAN LAP BEFORE A SURF STRIP EXISTS ──
+  // Ocean coverage already extends over a narrow terrain-relative edge band:
+  // for those texels coverage ~= level - ground + 0.35. The fixed 0.5 cut
+  // threw that information away. During an advancing shore phase, lift only
+  // the dry half of that coastal band by the encoded bank rise so fragments
+  // admitted by the moving cut sit just above the terrain instead of remaining
+  // depth-occluded below it. This is deliberately a bounded approximation;
+  // proper bore, swash and backwash geometry belongs to the deferred strip.
+  float dryCoast = coastalStanding * (1.0 - step(0.0, signedShoreDist));
+  float edgeEvidence = smoothstep(0.01, 0.18, geometryField.r)
+    * (1.0 - smoothstep(0.48, 0.72, geometryField.r));
+  float lapAdvance = smoothstep(-0.20, 0.88, sin(shorePhase));
+  float encodedBankRise = clamp(0.35 - geometryField.r, 0.0, 0.34);
+  float runupLift = dryCoast * edgeEvidence * lapAdvance
+    * (encodedBankRise + 0.025) * clamp(uShoreFade, 0.2, 2.0);
+  renderPosition.y = uElevationBase + geometryField.b - uWorldOrigin.y
+    + displaced + runupLift;
 
   vRenderPosition = renderPosition.xyz;
   vec4 mvPosition = viewMatrix * renderPosition;
@@ -356,18 +386,32 @@ vec2 rippleGradientRiver(float s, float crossM, vec2 flow, float energy, float s
 
 void main() {
   vec4 geometryField = texture2D(uHydroGeometry, vHydroUv);
-  // ── THE OUTLINE IS A CUT, NOT A STIPPLE ──
-  //
-  // The composite owns the world's ink and has a dial for it; a second
-  // in-shader dither kept stippling with that dial off, and a river a few
-  // metres wide (well under half a field texel) became loose white pixels.
-  // Half coverage is also the threshold sampleRestingSurface classifies on,
-  // so the water you can see and the water the wheels find are the same set
-  // of texels. Softening the shoreline is the shore-distance channel's job.
-  if (geometryField.r < 0.5) discard;
-  vec4 dynamics = texture2D(uHydroDynamics, vHydroUv);
   vec4 materialField = texture2D(uHydroMaterial, vHydroUv);
   float kind = floor(materialField.r * 255.0 + 0.5);
+  // ── A HARD CUT, BUT NO LONGER A FROZEN COAST ──
+  //
+  // The composite still owns dithering: this remains one binary alpha test,
+  // never a stippled transparency edge. Ocean and lagoon texels in the partial
+  // terrain-aware coastal ramp move that cut with the legal shore-distance
+  // phase. Broad world-anchored set noise prevents an entire coastline moving
+  // as a ruler. Rivers and inland banks retain the exact 0.5 physics/visual
+  // threshold; only the explicitly coastal transition departs from it.
+  float coverageCut = 0.5;
+  bool coastalKind = kind > 0.5 && kind < 2.5;
+  bool partialCoast = coastalKind && geometryField.r > 0.005
+    && geometryField.r < 0.9 && geometryField.g < 0.0;
+  if (partialCoast) {
+    float setEnvelope = valueNoise(vAbsoluteXZ * 0.0042
+      + vec2(uTime * 0.018, -uTime * 0.009));
+    float phaseDrive = smoothstep(-0.24, 0.88, vShorePhase)
+      * mix(0.78, 1.08, setEnvelope);
+    float lapExtent = clamp(uShoreFade * 0.5, 0.1, 1.0);
+    float retreatCut = mix(0.54, 0.68, lapExtent);
+    float advanceCut = mix(0.34, 0.10, lapExtent);
+    coverageCut = mix(retreatCut, advanceCut, clamp(phaseDrive, 0.0, 1.0));
+  }
+  if (geometryField.r < coverageCut) discard;
+  vec4 dynamics = texture2D(uHydroDynamics, vHydroUv);
   float seed = materialField.g;
   float turbidity = materialField.b;
   float energy = clamp(dynamics.w, 0.0, 1.0);

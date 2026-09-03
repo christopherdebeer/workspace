@@ -70,6 +70,22 @@ check('the sward shader links', d.errors.filter((e) => e.startsWith('GLSL:')).le
   d.errors.filter((e) => e.startsWith('GLSL:')));
 check('the GPU sward is what runs by default', gpu.gpu === true, gpu);
 check('float textures can be filtered on this device', gpu.floatLinear === true, gpu);
+check('flower refinement did not change the sward geometry budget',
+  gpu.slots === 194336 && gpu.verts === 1749024 && gpu.fieldW === 768,
+  { slots: gpu.slots, verts: gpu.verts, fieldW: gpu.fieldW });
+check('the established meadow fill and spatial scales remain pinned',
+  gpu.flowers.patchFill === 0.3
+    && gpu.flowers.patchMetres === 34 && gpu.flowers.speciesMetres === 34,
+  gpu.flowers);
+check('solitary flower floors stay rare and habitat-specific',
+  gpu.flowers.stray.open === 0.00125
+    && gpu.flowers.stray.wood === 0.0006
+    && gpu.flowers.stray.water === 0.002
+    && gpu.flowers.stray.cliff === 0.0006
+    && gpu.flowers.stray.ruin === 0.0016
+    && gpu.flowers.stray.water > gpu.flowers.stray.open
+    && gpu.flowers.stray.ruin > gpu.flowers.stray.open,
+  gpu.flowers);
 
 // (2) THE FIELD, AND THE MASK UNDER THE TRUCK.
 //

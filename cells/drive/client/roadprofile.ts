@@ -236,14 +236,21 @@ function ruleGrade(
 ): void {
   const n = y.length;
   for (let r = 0; r < 2; r++) {
+    // THE SPAN IS THE REAL SPAN. This floored at one metre, which let any
+    // station shorter than that rise a full metre's worth of grade: densify
+    // leaves a 0.1x-leg straight between two consecutive rounded bends, and
+    // on The Cheviots Road at Camps Bay that straight is 0.53m long and was
+    // carrying a 0.53m step — the fixture's worst seam and a 100% grade,
+    // legal under a 1m floor at 1.2x the class limit. The floor only ever
+    // guarded a coincident pair, and for those the right answer IS no rise.
     for (let i = 1; i < n; i++) {
       if (held?.[i] != null) continue;
-      const d = Math.max(1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
+      const d = Math.max(0.1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
       y[i] = clamp(y[i], y[i - 1] - gLim * d, y[i - 1] + gLim * d);
     }
     for (let i = n - 2; i >= 1; i--) {
       if (held?.[i] != null) continue;
-      const d = Math.max(1, Math.hypot(dense[i + 1][0] - dense[i][0], dense[i + 1][1] - dense[i][1]));
+      const d = Math.max(0.1, Math.hypot(dense[i + 1][0] - dense[i][0], dense[i + 1][1] - dense[i][1]));
       y[i] = clamp(y[i], y[i + 1] - gLim * d, y[i + 1] + gLim * d);
     }
   }

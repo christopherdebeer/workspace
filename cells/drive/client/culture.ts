@@ -286,7 +286,7 @@ export const ROAD_CULTURES: RoadCulture[] = [
   },
   {
     // Yellow centre, white edge — the North American convention.
-    key: 'yellow', centre: 0xe8c65a, edge: true, edgeCol: 0xf0eee6,
+    key: 'yellow', centre: 0xf2c53d, edge: true, edgeCol: 0xf0eee6,
     surface: 0x403e40, wear: 0.4,
     affinity: [0.45, 0.40, 0.42, 0.30, 0.40],
   },
@@ -303,6 +303,13 @@ export const ROAD_CULTURES: RoadCulture[] = [
     key: 'nordic', centre: 0xe8d98a, edge: false, edgeCol: 0xf0eee6,
     surface: 0x4a4a4e, wear: 0.65,
     affinity: [0.0, 0.0, 0.02, 1.0, 0.85],
+  },
+  // White centre, YELLOW edge: southern Africa's convention. Zero affinity,
+  // so the climate pick never lands on it; geography asks for it by name.
+  {
+    key: 'za', centre: 0xf0eee6, edge: true, edgeCol: 0xf2c53d,
+    surface: 0x3c3a3c, wear: 0.45,
+    affinity: [0.0, 0.0, 0.0, 0.0, 0.0],
   },
 ];
 

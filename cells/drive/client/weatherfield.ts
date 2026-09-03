@@ -67,7 +67,7 @@ export interface WxField {
   /** World coords of the grid's corner (cell [0,0]'s min corner). */
   ox: number; oz: number;
   /** RGBA bytes, WXF_N², ready to be a DataTexture. */
-  data: Uint8Array;
+  data: Uint8Array<ArrayBuffer>;
   /** Wet, kept at float precision — bytes quantise the slow dry to nothing. */
   wet: Float32Array;
   /** Absolute Y of the mist ceiling, world metres. */

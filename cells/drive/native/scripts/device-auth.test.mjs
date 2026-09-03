@@ -1,6 +1,7 @@
 import { strict as assert } from 'node:assert';
 import { mkdir } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { build } from 'esbuild';
 
 const native = resolve(import.meta.dirname, '..');
@@ -62,7 +63,15 @@ globalThis.fetch = async (raw, init = {}) => {
   return Response.json({ error: 'unexpected request' }, { status: 500 });
 };
 
-const { openSync } = await import(`${out}?${Date.now()}`);
+// `import()` takes a URL, not a path, and the difference is invisible on the
+// two runners where a path happens to look like one. On Windows this test
+// failed with ERR_UNSUPPORTED_ESM_URL_SCHEME "Received protocol 'd:'" —
+// Node had read the drive letter of `D:\a\workspace\...` as a URL scheme.
+// The query string is a cache-buster, so the URL has to be built by hand
+// rather than handed to `import()` as a bare specifier.
+const bundle = pathToFileURL(out);
+bundle.search = `?${Date.now()}`;
+const { openSync } = await import(bundle.href);
 let opened = '';
 let closed = 0;
 const sync = openSync({

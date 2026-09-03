@@ -171,6 +171,79 @@ describe('forge: cell common layer (S3 files + data)', () => {
     expect((await call<{ files: string[] }>('alice', 'listFiles', { cellId })).result!.files).toEqual(['index.ts']);
   });
 
+  /**
+   * A CELL COULD NOT SHIP AN IMAGE.
+   *
+   * Source files travel through the tools as JSON strings and were stored
+   * `text/plain; charset=utf-8`, so every byte a PNG carries that is not valid
+   * UTF-8 became U+FFFD. That does not merely corrupt the file, it INFLATES it:
+   * measured on drive's icons, 19,203 bytes in and 34,465 bytes out, served
+   * with a 200 and a content-type that still said image/png. The manifest and
+   * icons were dead on that live cell from the day they landed, and nothing
+   * caught it for months because the only symptom was a broken picture.
+   *
+   * The bytes are asserted at both ends AND in the middle: a round trip that
+   * only checks read-after-write would pass while the DEPLOY still mangled it,
+   * which is exactly where the last version of this failed.
+   */
+  it('a binary asset survives write, read and deploy byte-for-byte', async () => {
+    const cellId = await makeCell('alice');
+    // A real 1x1 PNG. Its IDAT carries 0x89, 0xC4, 0xFF — three bytes that are
+    // not valid UTF-8 in any position, which is what makes it a fair witness.
+    const png = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+      'base64',
+    );
+    expect(png.subarray(0, 4).toString('latin1')).toBe('\x89PNG');
+
+    const wrote = await call('alice', 'writeFile', {
+      cellId, path: 'static/icon.png', content: png.toString('base64'), encoding: 'base64',
+    });
+    expect(wrote.ok).toBe(true);
+
+    // READ gives the bytes back, and says so rather than leaving the caller to
+    // guess — a caller that guesses wrong writes UTF-8 and undoes the fix.
+    const read = await call<{ content: string; encoding?: string; contentType?: string }>(
+      'alice', 'readFile', { cellId, path: 'static/icon.png' },
+    );
+    expect(read.result!.encoding).toBe('base64');
+    expect(read.result!.contentType).toBe('image/png');
+    expect(Buffer.from(read.result!.content, 'base64').equals(png)).toBe(true);
+
+    // …and the DEPLOY carries them into the package. The zip is STORED (no
+    // compression), so the file's bytes appear in it verbatim and can be found
+    // with indexOf — if any stage had decoded them as UTF-8 they would not.
+    const deploy = await deployAndRun('alice', cellId);
+    expect(deploy.phase).toBe('DEPLOYED');
+    const zip = s3mem.store.get(`code-bucket/cells/${cellId}/build/${deploy.version}.zip`) as Buffer;
+    expect(zip.includes(png)).toBe(true);
+    // The inflation is the signature of the old bug: assert it did NOT happen.
+    expect(zip.includes(Buffer.from(png.toString('utf8'), 'utf8'))).toBe(false);
+  });
+
+  it('refuses content that is not the base64 it claims to be', async () => {
+    const cellId = await makeCell('alice');
+    // Buffer.from(s, 'base64') never throws — it stops at the first character
+    // it cannot use and returns a SHORT buffer. Without the round-trip check a
+    // typo lands as a truncated file that looks fine until something decodes it.
+    const res = await call('alice', 'writeFile', {
+      cellId, path: 'static/icon.png', content: 'not base64!!', encoding: 'base64',
+    });
+    expect(res.ok).toBe(false);
+    expect(res.error).toMatch(/not valid base64/i);
+  });
+
+  it('text files are unaffected — no encoding means what it always meant', async () => {
+    const cellId = await makeCell('alice');
+    const src = 'export const x = 1; // é — ünïcode survives as text\n';
+    await call('alice', 'writeFile', { cellId, path: 'lib/util.ts', content: src });
+    const read = await call<{ content: string; encoding?: string }>(
+      'alice', 'readFile', { cellId, path: 'lib/util.ts' },
+    );
+    expect(read.result!.encoding).toBeUndefined();
+    expect(read.result!.content).toBe(src);
+  });
+
   it('rejects path traversal', async () => {
     const cellId = await makeCell('alice');
     const res = await call('alice', 'writeFile', { cellId, path: '../escape.ts', content: 'x' });

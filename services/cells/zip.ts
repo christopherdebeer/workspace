@@ -32,8 +32,17 @@ export function crc32(buf: Buffer): number {
 export interface ZipFileEntry {
   /** Archive path, e.g. "index.js". */
   name: string;
-  /** UTF-8 file contents. */
-  content: string;
+  /**
+   * File contents. A string is written as UTF-8; a Buffer is written verbatim.
+   *
+   * The Buffer arm is what lets a cell ship an ICON. Everything here used to be
+   * `string`, and `Buffer.from(content, 'utf8')` on bytes that are not text
+   * replaces every invalid sequence with U+FFFD — so a PNG did not arrive
+   * corrupted, it arrived LARGER and wrong: measured on drive's icons, 19,203
+   * bytes in and 34,465 bytes out. Silently, with a 200 and a content-type that
+   * still said image/png.
+   */
+  content: string | Buffer;
 }
 
 // Fixed DOS timestamp (1980-01-01 00:00:00) for deterministic, reproducible
@@ -49,7 +58,7 @@ export function zipStore(entries: ZipFileEntry[]): Buffer {
 
   for (const entry of entries) {
     const nameBuf = Buffer.from(entry.name, 'utf8');
-    const dataBuf = Buffer.from(entry.content, 'utf8');
+    const dataBuf = Buffer.isBuffer(entry.content) ? entry.content : Buffer.from(entry.content, 'utf8');
     const crc = crc32(dataBuf);
     const size = dataBuf.length;
 
