@@ -141,7 +141,12 @@ export const AREA_MIX = 0.5;               // how far the ramp is pulled, after 
 export const refineCost = { tiles: 0, cells: 0, tris: 0, ms: 0, plainTris: 0, verts: 0, msLines: 0, msSplit: 0, msHeights: 0, msGeo: 0 };
 /** The plain build by phase, every build: where a 115ms tile goes. */
 /** The plain build by phase, every build: where a 115ms tile goes. */
-export const plainCost = { builds: 0, refine: 0, heights: 0, carve: 0, channels: 0, pins: 0, colour: 0, normals: 0, mesh: 0 };
+export const plainCost = { builds: 0, refine: 0, heights: 0, carve: 0, channels: 0, pins: 0, colour: 0, normals: 0, mesh: 0, nan: '' as string };
+/** The first phase that wrote a non-finite height, recorded once. */
+function nanScan(pos: Float32Array, phase: string, key: string): void {
+  if (plainCost.nan) return;
+  for (let i = 1; i < pos.length; i += 3) if (!Number.isFinite(pos[i])) { plainCost.nan = `${phase} ${key} v${(i - 1) / 3} x=${pos[i - 1]} z=${pos[i + 1]}`; return; }
+}
 
 /** How far out along (ox,oz) from a crest point (cx,cz) whose floor is y the
  *  wedge meets the ground: 0 at the crest already, CUT_REACH_M for a wall,
@@ -1289,7 +1294,10 @@ export function plainLattice(t: HeightTile, SEG: number): { pos: Float32Array; u
     const k = iz * SEG + ix, o = k * 6;
     idx[o] = a; idx[o + 1] = b; idx[o + 2] = d; idx[o + 3] = b; idx[o + 4] = c; idx[o + 5] = d;
     tris[o] = a; tris[o + 1] = b; tris[o + 2] = d; tris[o + 3] = b; tris[o + 4] = c; tris[o + 5] = d;
-    offs[k + 1] = o + 6;
+    // `offs` counts TRIANGLES, not index entries: two a cell. Counting six
+    // sent every reader three cells past its own and off the end of the
+    // table — undefined vertices, NaN heights, a truck with no ground.
+    offs[k + 1] = (k + 1) * 2;
   }
   return { pos, uv, idx, cellTris: { seg: SEG, offs, tris } };
 }
@@ -1357,14 +1365,19 @@ export function buildTile(S: TerrainStore, t: HeightTile, SEG: number, corridor:
   // only lowers, and a pinned border vertex is already where it must be, so
   // the carve is simply run on the plain lattice and the border re-pinned).
   const p2 = performance.now();
+  const tk = `${t.tx}/${t.ty}`;
+  nanScan(pos, 'heights', tk);
   if (!refined || !corridor) carveCorridors(S, t, pos, cellTris, SEG);
+  nanScan(pos, 'carve', tk);
   const p3 = performance.now();
   carveChannels(S, t, pos, SEG);
+  nanScan(pos, 'channels', tk);
   const p4 = performance.now();
   if (!refined || !corridor) {
     const pinned = refinedBorderPins(S, t, pos);
     for (const [v, y] of pinned) pos[v * 3 + 1] = y;
   }
+  nanScan(pos, 'pins', tk);
   storeBorder(S, t, pos);
   const p5 = performance.now();
   const kinds = refined ? refined.kinds : null;

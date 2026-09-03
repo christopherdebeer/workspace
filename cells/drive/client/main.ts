@@ -10201,6 +10201,17 @@ function segOf(geo: THREE.BufferGeometry): number {
     y0: b.pos[1], yMid: b.pos[Math.floor(b.pos.length / 6) * 3 + 1], ground: groundAt(state.x, state.z), meshAt: meshSurfaceAt(state.x, state.z),
     state: [state.x, state.z, state.heading, state.speed].map((v) => Number.isFinite(v) ? +v.toFixed(2) : String(v)), builds: terrainBuilds };
 };
+/** Where the first non-finite number comes from: the ground reads at a
+ *  finite point, every layer of the fallback separately. */
+(window as unknown as { __nanWhere?: object }).__nanWhere = (x = 0, z = 0): object => {
+  const f = (v: unknown): unknown => typeof v === 'number' ? (Number.isFinite(v) ? +v.toFixed(3) : String(v)) : v;
+  return { has: hasHeight(x, z), sh: f(sampleHeight(x, z)), shRaw: f(sampleHeightRaw(x, z)), ceiling: f(roadCeiling(x, z)), floorHard: f(roadFloorHard(x, z)),
+    mesh: f(meshSurfaceAt(x, z)), ground: f(groundAt(x, z)), baseElev: f(baseElev), sea: f(seaSurfaceAbs()), cutL: f(cutL), grid: f(GRID),
+    tiles: heightTiles.size, meshes: terrainMeshes.size, strips: cutCells.size, cover: sampleCover(x, z), water: coverWater(x, z),
+    corridorH: f(corridorH(x, z, 0).h), tint: areaTintAt(x, z), pal: terrainPalette(0, 0, null, x, z).map(f),
+    edge: (() => { const e = roadEdge(x, z); return e ? { y: f(e.y), out: f(e.out), track: e.track } : null; })(), surf: surfaceAt(x, z), rough: f(roughNoise(x, z)),
+    tyre: f(tyreHeight(x, z, surfaceAt(x, z), groundAt(x, z))), depth: f(waterInfoAt(x, z).depth), seaY: f(seaLevelY()), lift: f(SURFACE.ground.lift) };
+};
 (window as unknown as { __refine?: object }).__refine = (): object => ({ on: REFINE, ...refineCost, plain: { ...plainCost } });
 (window as unknown as { __buildLog?: object }).__buildLog = (): object => buildLog.slice();
 /** borderShared, shown its working: the neighbour's box, how many of this
@@ -10354,6 +10365,29 @@ function meshSurfaceAt(x: number, z: number): number | null {
  * closed form remains as the fallback for ground no mesh has been built for
  * yet — beyond the near tiles, or in the moment before a dirtied tile rebuilds.
  */
+/** meshSurfaceAt, showing its working — for the NaN tracer. */
+function meshDiag(x: number, z: number): Record<string, unknown> {
+  const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
+  const key = `${tx}/${ty}`;
+  const mesh = terrainMeshes.get(key), t = heightTiles.get(key);
+  if (!mesh || !t) return { key, mesh: !!mesh, tile: !!t };
+  const geo = mesh.geometry;
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const SEG = segOf(geo);
+  const cell = t.w / SEG, cellH = t.h / SEG;
+  const fx = (x - t.xs) / cell, fz = (z - t.zs) / cellH;
+  const ct = cellTrisOf(geo, SEG);
+  const kc = Math.floor(fz) * SEG + Math.floor(fx);
+  const ox = t.xs + t.w / 2, oz = t.zs + t.h / 2;
+  const tris: number[] = [], pts: number[] = [], ds: number[] = [];
+  for (let h = ct.offs[kc]; h < ct.offs[kc + 1]; h++) {
+    const a = ct.tris[h * 3], b = ct.tris[h * 3 + 1], c = ct.tris[h * 3 + 2];
+    tris.push(a, b, c);
+    pts.push(pos.getX(a) + ox, pos.getZ(a) + oz, pos.getY(a), pos.getX(b) + ox, pos.getZ(b) + oz, pos.getY(b), pos.getX(c) + ox, pos.getZ(c) + oz, pos.getY(c));
+    ds.push((pos.getZ(b) + oz - (pos.getZ(c) + oz)) * (pos.getX(a) + ox - (pos.getX(c) + ox)) + (pos.getX(c) + ox - (pos.getX(b) + ox)) * (pos.getZ(a) + oz - (pos.getZ(c) + oz)));
+  }
+  return { key, dirty: terrainDirty.has(key), seg: SEG, count: pos.count, fx, fz, kc, offs: [ct.offs[kc], ct.offs[kc + 1]], offsLen: ct.offs.length, trisLen: ct.tris.length, tris, pts, ds, arr: pos.array.constructor.name, arrLen: pos.array.length };
+}
 function groundAt(x: number, z: number): number {
   const m = meshSurfaceAt(x, z);
   if (m !== null) {
@@ -29955,6 +29989,7 @@ function stepTraction(dt: number, surf: SurfParams, grip: number, thrust: number
     const resist = (surf.roll * (0.4 + 0.6 * wetF) + aero * u * u) * (0.1 + 0.9 * grip);
     const ax = fx + v * yawR - GRAV * Math.sin(gradeP) * grip - Math.sign(u) * resist;
     const ay = fyF + fyR - u * yawR - GRAV * Math.sin(gradeR) * grip;
+    if (!Number.isFinite(ax) || !Number.isFinite(ay)) nanTraceAt('accel', { fx, fyF, fyR, v, u, yawR, gradeP, gradeR, grip, resist, ax, ay, h });
     const izz = IZZ_K * AXLE_A * AXLE_A;
     const dr = (AXLE_A * fyF - AXLE_A * fyR) / izz;
     state.speed += ax * h;
@@ -30019,6 +30054,14 @@ let gradePitch = 0, gradeRoll = 0, slideV = 0;
  * instead of a drive.
  */
 let nanBreaks = 0;
+/** The first non-finite intermediate the chassis step produced, and where. */
+let nanTrace: Record<string, unknown> | null = null;
+function nanTraceAt(where: string, vals: Record<string, unknown>): void {
+  if (nanTrace) return;
+  const bad = Object.entries(vals).filter(([, v]) => Array.isArray(v) ? v.some((q) => typeof q === 'number' && !Number.isFinite(q)) : typeof v === 'number' && !Number.isFinite(v));
+  if (bad.length) nanTrace = { where, bad: bad.map(([k]) => k), vals: JSON.parse(JSON.stringify(vals, (_, v) => typeof v === 'number' && !Number.isFinite(v) ? String(v) : v)) };
+}
+(window as unknown as { __nanTrace?: object }).__nanTrace = (): object | null => nanTrace;
 const lastSane = { x: 0, z: 0, heading: 0 };
 function breakNanLatch(): void {
   const badState = !Number.isFinite(state.x) || !Number.isFinite(state.z)
@@ -31187,6 +31230,7 @@ function tick(now: number): void {
     rawSum += g;
     smooth.push(g);
     contacts.push(g + roughNoise(wxw, wzw) * sw.rough);
+    if (!Number.isFinite(g)) nanTraceAt('contact', { wI, wxw, wzw, sk, g, prevGround: prevGround ?? null, gnd: groundAt(wxw, wzw), rc: roadCeiling(wxw, wzw), sh: sampleHeight(wxw, wzw), ms: meshSurfaceAt(wxw, wzw), diag: meshDiag(wxw, wzw), tiles: heightTiles.size, meshes: terrainMeshes.size, sx: state.x, sz: state.z, h: state.heading });
     wI++;
   }
   // WHEELS is [FL, FR, RL, RR] — negative z is forward, which is why the first
@@ -31324,6 +31368,7 @@ function tick(now: number): void {
     // and the truck went from planted to helpless with no warning through the
     // controls. Load fades in over the last 10cm of extension instead.
     groundedF += 0.25 * clamp((def + SUSP.droop) / 0.1, 0, 1);
+    if (!Number.isFinite(def)) nanTraceAt('susp', { i, plane, def, bodyY, pitchC, rollC, contact: contacts[i], groundedF, vPitch, vRoll, tPitch, tRoll, gradeRate, dt });
     wheelPivots[i].position.y = def;
     wheelMeshes[i].scale.y = 1 - (0.1 * Math.max(0, def)) / SUSP.travel; // tire give under load
     wheelMeshes[i].rotation.x = wheelSpin;

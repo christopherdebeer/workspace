@@ -935,6 +935,21 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   a module global of main.ts read from the kernel would silently break the
   worker.
 
+- **A cell table counts TRIANGLES.** The kernel's plain lattice wrote its
+  `offs` in index entries (six a cell) where every reader — `meshSurfaceAt`,
+  the carve, the batter — walks `offs[c]..offs[c+1]` as triangles and reads
+  `tris[h*3]`. Every plain tile's surface read landed three cells past its
+  own and then off the end of the table: undefined vertices, a NaN ground
+  under the first wheel, the chassis NaN latch firing twice, and the frame
+  loop dying on a non-finite radial gradient at 443ms — which is why every
+  Chromium test then saw an empty world (joins 0, "settled NEVER"). The
+  parent commit passing under the same network was the proof it was mine.
+  `__kernelCheck` had said the lattice matched PlaneGeometry to 6e-14 and no
+  position was non-finite, both true: it is the TABLE that was wrong, and a
+  probe that scans positions cannot see an index bug. `__nanTrace()` is the
+  tracer that found it — it records the first non-finite intermediate in
+  the chassis step with the surface read's working (`meshDiag`).
+
 `__refine()` counts tiles, split cells, vertices, triangles against the
 plain grid and milliseconds by phase (lines, split, heights, geometry).
 `__borderDiff(x, z)` compares the tile under a point with each neighbour
