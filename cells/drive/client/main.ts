@@ -4868,7 +4868,10 @@ function buildTerrainMesh(t: HeightTile): void {
   // triangles at COARSE, 3.3M at FINEST, 78-94% of the pass.
   shadowy(mesh, false, true);
   mesh.position.set(cxm, 0, czm);
-  (mesh.userData as { corridor?: boolean }).corridor = corridor && !!refined;
+  // INTENT, not outcome: a corridor build that found no break lines (every
+  // road at grade) is still done, or the quiet path would dirty it on every
+  // visit for ever — five rebuilds a second of a tile that never changes.
+  (mesh.userData as { corridor?: boolean }).corridor = corridor;
   terrainMeshes.set(key, mesh);
   worldGroup.add(mesh);
   // A plain neighbour built before this refined tile has no points on the
@@ -10281,8 +10284,11 @@ const REFINE_R = Number(new URLSearchParams(location.search).get('refr') ?? 1100
 /** Every refined tile's border vertices, world x, z, y in threes, so a plain
  *  neighbour can take the same points on the shared edge and no crack opens. */
 const refinedBorders = new Map<string, Float32Array>();
-/** Is the road stream quiet — nothing in flight and nothing queued? */
-function osmStreamQuiet(): boolean { return osmInFlight === 0 && osmQueue.length === 0; }
+/** Is the road stream quiet — nothing in flight and no road landed for a
+ *  breath? Not "nothing queued": a tile waiting on a retry backoff would
+ *  hold every corridor off for as long as it kept failing. */
+let osmLastLand = 0;
+function osmStreamQuiet(): boolean { return osmInFlight === 0 && performance.now() - osmLastLand > 2500; }
 /** Cost of the refinement, for `__refine`. */
 const refineCost = { tiles: 0, cells: 0, tris: 0, ms: 0, plainTris: 0, verts: 0, msLines: 0, msSplit: 0, msHeights: 0, msGeo: 0 };
 
@@ -14577,7 +14583,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // is buried in.
   for (const sg of segsOf) rasterizeCut(sg);
   if (canopy && n > 2) canopyRun(dense, prof, width, lift);
-  if (drivable) dirtyTerrainAround(dense);
+  if (drivable) { dirtyTerrainAround(dense); osmLastLand = performance.now(); }
 }
 /**
  * ONE OFFSET PER STATION, MITRED — so neighbouring bays share their corners.
