@@ -979,6 +979,19 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   right behind the apply, invisible to every frame timer. It now runs from
   the frame loop's own queue, one a frame and never in a frame with a
   terrain apply (`drainHydroJobs`).
+- **A BUILD'S MAIN-THREAD SHARE IS PACED BY TIME, NOT FRAMES — ON THE
+  WORKER PATH TOO.** With the build off the thread the reply zeroed the
+  pacing so the next tile went out on the next frame, which read as a win
+  here (5 ms a build) and put the device under 10 fps for the length of
+  every stream: packing, apply, the hydro analysis and the hydro tile build
+  are ~25 ms a build on this machine and three times that on a phone, once
+  a frame instead of five times a second. `workerGap` is three times the
+  last build's own main-thread cost, clamped to 100–400 ms, and the hydro
+  drain keeps half of it. The harness cannot see this class of regression:
+  its frames are seconds apart, so "once a frame" is rarer there than the
+  old floor. Anything that changes how often per-build work runs needs the
+  device, or an FPS number from `__clock`, before it ships.
+
 - **THE LUMA READBACK IS ASYNCHRONOUS.** `stepLuma` read its 40×88 luma
   and depth target with `readRenderTargetPixels` — a synchronous
   glReadPixels that waits for the GPU to finish the whole frame queued
