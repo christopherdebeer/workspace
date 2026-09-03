@@ -4843,9 +4843,11 @@ function buildTerrainMesh(t: HeightTile): void {
 const TWORKER = new URLSearchParams(location.search).get('tworker') !== '0';
 const tworker: TerrainWorker | null = TWORKER ? new TerrainWorker() : null;
 let buildInFlight: string | null = null;
+/** Milliseconds between worker posts: 3× the last build's main-thread cost, clamped. */
+let workerGap = 100;
 /** A terrain apply landed since the last frame: the hydro drain skips one. */
 let appliedThisFrame = false;
-const workerLedger = { posts: 0, applied: 0, dropped: 0, prepMs: 0, applyMs: 0, postMs: 0, postMax: 0, reseatMs: 0, redrapeMs: 0, hydroMs: 0, batterMs: 0, culvertMs: 0, hydroBuildMs: 0, hydroBuilds: 0, hydroBuildMax: 0 };
+const workerLedger = { posts: 0, applied: 0, dropped: 0, prepMs: 0, applyMs: 0, postMs: 0, postMax: 0, reseatMs: 0, redrapeMs: 0, hydroMs: 0, batterMs: 0, culvertMs: 0, hydroBuildMs: 0, hydroBuilds: 0, hydroBuildMax: 0, lastHydroMs: 0 };
 /** Everything a build reads that is not a raster, packed for the worker. */
 function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<TerrainJob, 'id'>; transfer: Transferable[] } {
   const flatten = (grid: Map<string, Seg[]>, cell: number, margin: number): { flat: Float64Array; cells: Array<[string, number[]]> } => {
@@ -4956,7 +4958,6 @@ function postTerrainBuild(t: HeightTile, key: string): void {
     // The next tile goes out on the next frame, not after the synchronous
     // slot's 200ms: the main thread paid 5ms for this one, and twenty-five
     // first builds at boot would otherwise take five seconds of pacing.
-    terrainAt = 0;
     if (r.epoch !== worldEpoch || heightTiles.get(key) !== t) { workerLedger.dropped++; return; }
     const t1 = performance.now();
     applyTileBuild(t, key, r, why);
@@ -4968,6 +4969,7 @@ function postTerrainBuild(t: HeightTile, key: string): void {
     flushBatter(t); const t6 = performance.now();
     flushCulverts(t); const t7 = performance.now();
     terrainMs = t7 - t1 + prep;
+    workerGap = clamp(3 * (terrainMs + workerLedger.lastHydroMs), 100, 400);
     appliedThisFrame = true;
     workerLedger.applied++; workerLedger.applyMs += t2 - t1; workerLedger.postMs += t7 - t2;
     workerLedger.reseatMs += t3 - t2; workerLedger.redrapeMs += t4 - t3; workerLedger.hydroMs += t5 - t4; workerLedger.batterMs += t6 - t5; workerLedger.culvertMs += t7 - t6;
@@ -4993,12 +4995,16 @@ function drainHydroJobs(now: number, applied: boolean): void {
   // starved water to three builds in ninety seconds (measured), so the
   // budget is time, not frames.
   if (applied && hydroJobs.length <= 2 && now - hydroJobAt < 200) return;
+  // …and never faster than half the terrain posts' floor: a hydro build is
+  // the largest single piece of a build's main-thread share.
+  if (now - hydroJobAt < workerGap * 0.5) return;
   const j = hydroJobs.shift() as { job: () => unknown; resolve: (v: never) => void; reject: (e: Error) => void };
   hydroJobAt = now;
   const t0 = performance.now();
   try { j.resolve(j.job() as never); } catch (e) { j.reject(e instanceof Error ? e : new Error(String(e))); }
   const d = performance.now() - t0;
   workerLedger.hydroBuildMs += d; workerLedger.hydroBuilds++; if (d > workerLedger.hydroBuildMax) workerLedger.hydroBuildMax = d;
+  workerLedger.lastHydroMs = d;
   profAdd('hydroBuild', t0);
 }
 /** A refeed with no build behind it: the hydro raster alone, off the worker.
@@ -5015,7 +5021,7 @@ function hydroRefeed(t: HeightTile, key: string): void {
   }, () => { buildInFlight = null; hydroFeed(t); });
 }
 (window as unknown as { __tworker?: object }).__tworker = (): object =>
-  tworker ? { on: !tworker.disabled, ...tworker.stats, inFlight: buildInFlight, ...workerLedger } : { on: false };
+  tworker ? { on: !tworker.disabled, ...tworker.stats, inFlight: buildInFlight, gap: Math.round(workerGap), ...workerLedger } : { on: false };
 
 const terrainDirty = new Set<string>();
 function coverDirtiedTerrain(xs: number, zs: number, w: number, h: number): void {
@@ -5072,7 +5078,15 @@ let terrainBuilds = 0;
  *  and sweeping early would build the bank against a half-loaded hillside. */
 const BATTER_STRAND_MS = 6000;
 function flushTerrain(now: number): void {
-  if (now - terrainAt < 200) return;
+  // THE WORKER PATH KEEPS A FLOOR TOO. Posting the next tile on the next frame
+  // (the reply zeroed `terrainAt`) made every frame of a stream carry a
+  // build's main-thread share — packing, apply, the hydro analysis and the
+  // hydro tile build, ~25ms here and three times that on a phone — which is
+  // under 10fps for as long as tiles are dirty, as reported from the device.
+  // The floor is three times the last build's own main-thread cost, never
+  // under 100ms: ten builds a second on a desktop, about five on a phone,
+  // the build itself still off the thread.
+  if (now - terrainAt < (tworker && !tworker.disabled ? workerGap : 200)) return;
   // ── WATER MAY NOT WAIT FOR THE LAST ROAD ──
   //
   // The hydro drain below sits on the quiet path, and during a heavy stream
