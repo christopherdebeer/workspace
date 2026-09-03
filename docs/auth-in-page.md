@@ -1,0 +1,200 @@
+# Sign-in without leaving the page
+
+Two asks about platform auth, explored together because the second one makes
+the first one cheap:
+
+1. Run the authorize/consent flow as an in-site modal or sheet instead of a
+   full-page redirect to `/oauth/authorize`.
+2. Simplify the grant a cell asks for when all it wants is "who are you".
+
+Status: exploration. Nothing here is built yet, but most of (2) turns out to
+already exist server-side.
+
+## How sign-in works today
+
+A cell calls `login()` from the kernel (`cells/kernel/client/main.ts:142`):
+
+- register a DCR client once per origin, cache the `client_id`
+- generate a PKCE verifier + state into `sessionStorage`
+- stash `location.href` as the return URL
+- `location.assign('/oauth/authorize?…')`
+
+parc.land then serves a React SPA (`services/auth/client/main.tsx`) that runs
+the passkey ceremony, fetches `/auth/grantable` for the scope picker, and
+POSTs `/oauth/consent`. That returns `{ redirect }` as JSON and the SPA does
+`location.href = redirect`. Back on the cell, `completeLoginIfReturning()`
+exchanges the code at `/oauth/token` and rewrites the URL.
+
+For shelved that's four full page loads to answer "who are you", and the app
+state is rebuilt from scratch on the way back.
+
+The useful thing about the current shape: every step is already a JSON API.
+`/auth/grantable` and `/oauth/consent` take a `sessionId` and return data, not
+HTML. The redirect is the last 5% of the flow, not the mechanism.
+
+## Part 1 — the modal
+
+Three shapes, all preserving PKCE and the passkey ceremony.
+
+### A. Popup + postMessage
+
+`window.open('/oauth/authorize?…&response_mode=web_message')`, and the consent
+SPA, when it detects `window.opener`, posts `{ code, state }` back instead of
+navigating. The kernel resolves a pending promise and exchanges the code.
+
+- Works from any origin, apex or cell host, no CORS.
+- Passkeys work unmodified: the popup is a top-level browsing context on
+  parc.land.
+- The address bar stays visible, so the user can see who is asking. That's the
+  property the redirect buys and the reason I'd not drop it lightly.
+- Not a sheet. On iOS Safari a popup is a new tab, which is worse than the
+  redirect on the tenet that matters most here (mobile first).
+
+### B. Cross-origin iframe inside a cell-drawn sheet
+
+The cell draws the sheet chrome and animation; parc.land draws the actual
+consent content inside `<iframe src="/oauth/authorize?…&response_mode=web_message">`.
+Result comes back over `postMessage`.
+
+- Feels native on mobile. The cell owns the sheet, so it matches the app.
+- Genuinely isolated for host-isolated cells (`c15r-shelved.on.parc.land`
+  framing `parc.land`): the cell cannot read the iframe or the session.
+- Passkey sign-in needs `allow="publickey-credentials-get"` on the iframe.
+  Widely supported.
+- Passkey *registration* needs `publickey-credentials-create`, which is newer
+  (Chrome 123+, Safari 18). Registration should fall back to the redirect
+  rather than depend on it.
+- On the apex the iframe is same-origin, so the isolation is cosmetic. That's
+  fine, because an apex cell already reads the session out of `localStorage` —
+  it's not a new exposure, just not a real boundary either.
+- Needs CORS on `/auth/grantable` and `/oauth/consent`, which don't have it
+  today (only `/oauth/register` and `/oauth/token` do,
+  `services/auth/service.ts:722`).
+
+### C. Native in-cell modal calling the JSON APIs directly
+
+No iframe, no popup. The cell renders its own sheet and calls
+`/webauthn/authenticate/options`, `/auth/grantable`, `/oauth/consent` itself.
+
+- Best UX by a distance. Fully styled by the cell, one DOM, no frame seams.
+- The cell's own JS handles the passkey ceremony and holds the consent-scoped
+  `sessionId`. Anything holding that session can post `/oauth/consent` for any
+  scope the user can grant, with no screen the user can trust.
+- Only defensible for apex-served first-party cells, which already have the
+  session anyway. Never for a third-party cell.
+- Blocked for cell hosts regardless: `/webauthn/*` has no CORS. The preflight
+  returns 204 with no `Access-Control-Allow-Origin`, so the call fails.
+
+### Where I'd land
+
+C for apex-served first-party cells, B for everything else, and keep the
+redirect as the fallback for both (registration, popup blockers, no
+postMessage). A is the cheapest to build and the one I'd reach for if only one
+gets done, but it loses the sheet, so it doesn't really answer the ask.
+
+The shared piece all three need is small: a `response_mode=web_message` branch
+in `submitConsent` (`services/auth/client/main.tsx`) that posts the result to
+`window.opener ?? window.parent` instead of navigating, gated on an origin
+allowlist. Everything else is the kernel growing a `login({ mode })` that
+awaits a message rather than returning `Promise<never>`.
+
+## Part 2 — what a sign-in-only cell should ask for
+
+Today every cell sign-in asks for `workspace:read workspace:write`, because
+that is the kernel's `DEFAULT_SCOPE` (`cells/kernel/client/main.ts:26`) and no
+cell overrides it. shelved calls a bare `login()`
+(`cells/shelved/client/App.tsx:100`).
+
+shelved does not read or write the workspace at all. Its data lives in its own
+DynamoDB table keyed by `x-cell-caller` (`cells/shelved/lib/store.ts`), and
+`index.ts` derives the caller from that header. It needs one fact from the
+platform: the username.
+
+Confirmed by probe rather than by reading: a token minted with
+`scope: "cells:create"` and no workspace scope called
+`@c15r/shelved.list_books` successfully and returned the real shelf, while
+`workspace.recall` on the same token returned `scope_denied`. Cell tools carry
+`scope: null` (`services/cells/service.ts:1438`) and are authorised by the
+registry, not by the caller's scopes.
+
+So the over-ask is real and total. A user signing in to look at their books
+grants read and write over everything in their slice.
+
+### The server already has the answer
+
+`cellScopesFor` (`services/auth/oauth.ts:236`) exists to make
+`cell:<owner>/<name>:*` grantable at consent, and its own comment says what
+it's for: a token holding only that scope is an identity token, which is what
+a cell that wants to know who you are should ask for instead of the kernel's
+default.
+
+`scopeMeta` even has the copy written (`services/auth/oauth.ts` in the `cell:`
+branch):
+
+> Sign in to @c15r/shelved — Let @c15r/shelved know who you are. It learns your
+> username, nothing in your workspace.
+
+Both `handleConsent` and `handleGrantableScopes` already admit it
+(`oauth.ts:396`, `:438`).
+
+### Two gaps stop it working
+
+- The kernel never asks for it. `login()` defaults to workspace read+write and
+  has no identity-only mode.
+- `cellScopesFor` is derived from `cellCeiling` (`oauth.ts:32`), which returns
+  `null` unless the redirect host ends with `CELL_DOMAIN_SUFFIX`. An apex cell
+  at `/@c15r/shelved` gets an empty list, so requesting `cell:c15r/shelved:*`
+  there is filtered out of `granted` and the consent screen offers nothing.
+  That's the disabled-Authorize-button case the comment on `cellScopesFor`
+  describes, still live for apex paths.
+
+`cellFromRedirect` (`oauth.ts:54`) already parses both forms, host-isolated and
+apex. Deriving `cellScopesFor` from it instead of from `cellCeiling` closes the
+second gap, and doesn't widen anything: the scope is still bounded to the cell
+whose page you're standing on, and it still grants no authority by itself.
+
+Kernel boot survives it: both `$types` (read at `main.ts:421`) and `$catalog`
+answered normally on the no-workspace-scope probe token, so a cell can boot the
+kernel on an identity-only session.
+
+For the first, something like:
+
+```ts
+// kernel
+login({ identity: true })   // → scope `cell:<owner>/<name>:*` from cellAddress()
+```
+
+shelved's `signIn` becomes `login({ identity: true })` and the consent screen
+reads "Sign in to @c15r/shelved" with one checkbox instead of two workspace
+grants.
+
+### What this doesn't cover
+
+A cell that genuinely does write back to the slice (lit, canvas, input) still
+needs workspace scope. The identity-only path is for cells whose storage is
+their own table. Anything in between wants the declared write-back prefixes
+from `cell-origin-isolation.md` §4.5, which is a bigger piece and not this.
+
+## Two things found on the way
+
+- `/oauth/authorize` serves with no `X-Frame-Options` and no
+  `frame-ancestors`. Any site can iframe the consent screen and clickjack
+  Authorize. Shape B needs a `frame-ancestors` policy anyway, so it'd be fixed
+  in passing, but it's a live gap now and independent of any of this.
+- `/webauthn/*` has no CORS, so cell hosts can't run a ceremony against the
+  apex directly. Adding it is what shape C would need to work off-apex, and I'd
+  rather not add it — it's the thing that currently stops a cell-host page from
+  driving a passkey ceremony it shouldn't be driving.
+
+## Open questions
+
+- Is the address bar worth keeping for first-party cells? Shape C drops the
+  only un-forgeable signal of who is asking. For `@c15r/*` on the apex the
+  answer is probably yes-drop-it, since the origin is already shared. It stops
+  being true the moment a cell someone else wrote is served from the apex.
+- Should the identity scope be `cell:<owner>/<name>:*` or a narrower
+  `cell:<owner>/<name>:signin`? The `:*` form reads as "all its tools", which
+  overstates it, though the tools are registry-authorised regardless.
+- Should `requestScopes` (`main.ts:161`) still union in `DEFAULT_SCOPE`? It
+  does today, so one incremental-consent call from a sign-in-only cell would
+  re-introduce the workspace grant it avoided at sign-in.
