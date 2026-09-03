@@ -32,9 +32,12 @@ import {
   solveChain as solveProfile,
 } from './roadprofile';
 import { RoadProfileWorker } from './roadprofile-worker';
-import { buildTile, plainLattice, borderShared as kBorderShared, roadFloorHard as kRoadFloorHard, corridorH as kCorridorH, stripBreakLines as kStripBreakLines, stripFloor, cellTable, normalMapBytes, refineCost, plainCost, carveCost, mmKey, mmIndex, mmNear, onTileEdge, channelsNear as kChannelsNear,
-  BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, SEA_BED, AREA_MIX,
-  type HeightTile, type CellTris, type StripLike, type BreakLine, type TerrainStore, type CarveLog, type MmPt } from './terrain-kernel';
+import { createTerrainKernel, type HeightTile, type CellTris, type StripLike, type BreakLine, type TerrainStore, type CarveLog, type MmPt, type CoverTile } from './terrain-kernel';
+import { TerrainWorker, type TerrainJob, type TerrainReply } from './terrain-worker';
+// THE TERRAIN KERNEL, instantiated once for the synchronous path and the
+// probes; the worker builds its own from the same source (terrain-worker.ts).
+const K = createTerrainKernel();
+const { BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, SEA_BED, AREA_MIX, refineCost, plainCost, carveCost, stripFloor, mmKey, mmIndex, mmNear, onTileEdge, plainLattice, cellTable } = K;
 import { createOverlays } from './overlays';
 import { createSplash } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
@@ -786,10 +789,12 @@ async function loadCoverTile(x: number, y: number): Promise<void> {
     const b = tileBounds(x, y, COVER_Z);
     const [wx0, wz0] = toLocal(b.latN, b.lonW);
     const [wx1, wz1] = toLocal(b.latS, b.lonE);
-    coverTiles.set(key, {
+    const ctile: CoverTile = {
       xs: Math.min(wx0, wx1), zs: Math.min(wz0, wz1),
       w: Math.abs(wx1 - wx0), h: Math.abs(wz1 - wz0), data,
-    });
+    };
+    coverTiles.set(key, ctile);
+    tworker?.mirrorCover(key, ctile);
     // New evidence: every climate corner that had none gets one more chance.
     climField.noteCover();
     // Terrain built before this arrived was coloured from a guess and, more
@@ -4615,10 +4620,10 @@ const terrainMats = new Map<string, THREE.MeshLambertMaterial>();
  * rebuild of the same tile.
  */
 const terrainNormals = new Map<string, THREE.DataTexture>();
-function terrainNormalFor(t: HeightTile, key: string): THREE.DataTexture {
+function terrainNormalFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.DataTexture {
   const had = terrainNormals.get(key);
   if (had) return had;
-  const tex = terrainNormalTex(t);
+  const tex = terrainNormalTex(t, bytes);
   terrainNormals.set(key, tex);
   // Bounded for the same reason the materials are, and kept LOOSER than them:
   // a texture whose material has already been evicted is exactly the one worth
@@ -4636,7 +4641,7 @@ function terrainNormalFor(t: HeightTile, key: string): THREE.DataTexture {
   }
   return tex;
 }
-function terrainMatFor(t: HeightTile, key: string): THREE.MeshLambertMaterial {
+function terrainMatFor(t: HeightTile, key: string, bytes?: Uint8Array): THREE.MeshLambertMaterial {
   const old = terrainMats.get(key);
   if (old) old.dispose();
   // A quarter-megabyte of texture per tile, and nothing prunes the tile maps —
@@ -4656,7 +4661,7 @@ function terrainMatFor(t: HeightTile, key: string): THREE.MeshLambertMaterial {
   }
   const m = new THREE.MeshLambertMaterial({
     vertexColors: true,
-    normalMap: terrainNormalFor(t, key),
+    normalMap: terrainNormalFor(t, key, bytes),
   });
   // Set after construction: three's Lambert PARAMETERS type omits
   // `normalMapType` even though the material carries it and the shader honours
@@ -4703,14 +4708,14 @@ const kStore: TerrainStore = {
   get cutRelief() { return CUT_RELIEF; },
 };
 const chanSet = new Set<Seg>();
-function channelsNear(x: number, z: number, into: Set<Seg>): void { kChannelsNear(kStore, x, z, into as Set<StripLike>); }
+function channelsNear(x: number, z: number, into: Set<Seg>): void { K.channelsNear(kStore, x, z, into as Set<StripLike>); }
 /** Every tile's border row, world x, z, y in threes — written by the kernel,
  *  read here by the probes. */
 const refinedBorders = new Map<string, Float64Array>();
-function borderShared(t: HeightTile, nk: string): boolean { return kBorderShared(kStore, t, nk); }
-function roadFloorHard(x: number, z: number, wash = CUT_WASH): number | null { return kRoadFloorHard(kStore, x, z, wash); }
-function corridorH(x: number, z: number, N: number, cands?: Iterable<Seg>): { h: number; k: number } { return kCorridorH(kStore, x, z, N, cands); }
-function stripBreakLines(s: Seg): BreakLine[] { return kStripBreakLines(kStore, s); }
+function borderShared(t: HeightTile, nk: string): boolean { return K.borderShared(kStore, t, nk); }
+function roadFloorHard(x: number, z: number, wash = CUT_WASH): number | null { return K.roadFloorHard(kStore, x, z, wash); }
+function corridorH(x: number, z: number, N: number, cands?: Iterable<Seg>): { h: number; k: number } { return K.corridorH(kStore, x, z, N, cands); }
+function stripBreakLines(s: Seg): BreakLine[] { return K.stripBreakLines(kStore, s); }
 const cellTrisCache = new WeakMap<THREE.BufferGeometry, CellTris>();
 /** The cell table of a terrain geometry: registered by the build, rebuilt
  *  from the arrays for anything else. */
@@ -4723,8 +4728,8 @@ function cellTrisOf(geo: THREE.BufferGeometry, SEG: number): CellTris {
   cellTrisCache.set(geo, ct);
   return ct;
 }
-function terrainNormalTex(t: { w: number; data: Float32Array; xs?: number; zs?: number; h?: number }): THREE.DataTexture {
-  const tex = new THREE.DataTexture(normalMapBytes(kStore, t) as Uint8Array<ArrayBuffer>, 256, 256, THREE.RGBAFormat);
+function terrainNormalTex(t: { w: number; data: Float32Array; xs?: number; zs?: number; h?: number }, bytes?: Uint8Array): THREE.DataTexture {
+  const tex = new THREE.DataTexture((bytes ?? K.normalMapBytes(kStore, t)) as Uint8Array<ArrayBuffer>, 256, 256, THREE.RGBAFormat);
   tex.needsUpdate = true;
   return tex;
 }
@@ -4738,7 +4743,7 @@ function buildTerrainMesh(t: HeightTile): void {
   // While the stream is busy a tile builds plain and the quiet path gives it
   // its corridor exactly once, when nothing more is coming.
   const corridor = REFINE && nearTruck && osmStreamQuiet();
-  const b = buildTile(kStore, t, SEG, corridor, REFINE);
+  const b = K.buildTile(kStore, t, SEG, corridor, REFINE);
   const p7 = performance.now();
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(b.pos, 3));
@@ -4772,6 +4777,142 @@ function buildTerrainMesh(t: HeightTile): void {
   if (buildLog.length > 400) buildLog.shift();
   dirtyWhy.delete(key);
 }
+
+// ── THE TERRAIN WORKER ─────────────────────────────────────────────
+// The same kernel, off the main thread: a build is posted as a self-contained
+// job and its arrays come back to be wrapped in a mesh. One in flight at a
+// time — the queue and its owners-first order stay here for now (see
+// docs/terrain-worker.md, step 4). ?tworker=0 keeps every build synchronous.
+const TWORKER = new URLSearchParams(location.search).get('tworker') !== '0';
+const tworker: TerrainWorker | null = TWORKER ? new TerrainWorker() : null;
+let buildInFlight: string | null = null;
+const workerLedger = { posts: 0, applied: 0, dropped: 0, prepMs: 0, applyMs: 0, postMs: 0 };
+/** Everything a build reads that is not a raster, packed for the worker. */
+function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<TerrainJob, 'id'>; transfer: Transferable[] } {
+  const flatten = (grid: Map<string, Seg[]>, cell: number, margin: number): { flat: Float64Array; cells: Array<[string, number[]]> } => {
+    const ids = new Map<Seg, number>(); const cells: Array<[string, number[]]> = [];
+    for (let cx = Math.floor((t.xs - margin) / cell); cx <= Math.floor((t.xs + t.w + margin) / cell); cx++) {
+      for (let cz = Math.floor((t.zs - margin) / cell); cz <= Math.floor((t.zs + t.h + margin) / cell); cz++) {
+        const arr = grid.get(`${cx},${cz}`);
+        if (!arr || !arr.length) continue;
+        cells.push([`${cx},${cz}`, arr.map((s) => { let i = ids.get(s); if (i === undefined) { i = ids.size; ids.set(s, i); } return i; })]);
+      }
+    }
+    const flat = new Float64Array(ids.size * 13);
+    for (const [s, i] of ids) {
+      const o = i * 13;
+      flat[o] = s.ax; flat[o + 1] = s.az; flat[o + 2] = s.bx; flat[o + 3] = s.bz; flat[o + 4] = s.hw;
+      flat[o + 5] = s.ya ?? NaN; flat[o + 6] = s.yb ?? NaN; flat[o + 7] = s.tk ? 1 : 0; flat[o + 8] = s.tn ? 1 : 0;
+      flat[o + 9] = s.ca ?? NaN; flat[o + 10] = s.cb ?? NaN; flat[o + 11] = s.pc ?? NaN; flat[o + 12] = NaN;
+    }
+    return { flat, cells };
+  };
+  const st = flatten(cutCells, cutL, TOE_REACH + cutL);
+  const ch = flatten(channelGrid, GRID, GRID * 2);
+  const areas: Array<{ pts: Array<[number, number]>; tint: Rgb; x0: number; z0: number; x1: number; z1: number }> = [];
+  const seenA = new Set<AreaPatch>();
+  for (let cx = Math.floor(t.xs / AREA_CELL); cx <= Math.floor((t.xs + t.w) / AREA_CELL); cx++) {
+    for (let cz = Math.floor(t.zs / AREA_CELL); cz <= Math.floor((t.zs + t.h) / AREA_CELL); cz++) {
+      for (const p of areaGrid.get(`${cx},${cz}`) ?? []) {
+        if (seenA.has(p)) continue; seenA.add(p);
+        if (p.x1 < t.xs || p.x0 > t.xs + t.w || p.z1 < t.zs || p.z0 > t.zs + t.h) continue;
+        areas.push({ pts: p.pts, tint: p.tint, x0: p.x0, z0: p.z0, x1: p.x1, z1: p.z1 });
+      }
+    }
+  }
+  const pads = new Float64Array(landmarksLive.length * 4);
+  landmarksLive.forEach((lm, i) => {
+    if (lm.padEle === null) lm.padEle = landmarkPadEle(lm);
+    pads[i * 4] = lm.x; pads[i * 4 + 1] = lm.z; pads[i * 4 + 2] = lm.def.pad ?? lm.def.base * 1.1; pads[i * 4 + 3] = lm.padEle;
+  });
+  // The climate field, sampled on a grid over the tile: the palette blends
+  // the biome ramps by these weights, and the field is smooth at this scale.
+  const N = 17, KW = BIOME_LIST.length;
+  const clim = new Float32Array(N * N * KW);
+  for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
+    const x = t.xs + (i / (N - 1)) * t.w, z = t.zs + (j / (N - 1)) * t.h;
+    const w = climateAt(x, z, sampleHeight(x, z) + baseElev).w;
+    for (let k = 0; k < KW; k++) clim[(j * N + i) * KW + k] = w[k];
+  }
+  const data = t.data.slice();
+  const job: Omit<TerrainJob, 'id'> = {
+    epoch: worldEpoch, key: `${t.tx}/${t.ty}`,
+    tile: { tx: t.tx, ty: t.ty, xs: t.xs, zs: t.zs, w: t.w, h: t.h, data },
+    seg: SEG, corridor, refine: REFINE,
+    baseElev, seaAbs: seaSurfaceAbs(), seaOn, dryAt: !!dryAt,
+    nrmScale: NRM_SCALE, cutWash: CUT_WASH, cprobe: CPROBE, cutRelief: CUT_RELIEF,
+    cutL, grid: GRID, water: COVER.water, built: COVER.built, waterTilt: WATER_TILT, coverPx: COVER_PX,
+    origin: { lat: origin.lat, lon: origin.lon, mLon: origin.mLon },
+    strips: st.flat, stripCells: st.cells, channels: ch.flat, chanCells: ch.cells, areas, pads,
+    clim, climN: N, climK: KW,
+    ramp: biome.ramp, ramps: BIOME_LIST.map((b) => b.ramp), coverTint: COVER_TINT, coverMix: COVER_MIX,
+  };
+  return { job, transfer: [data.buffer, st.flat.buffer, ch.flat.buffer, pads.buffer, clim.buffer] as unknown as Transferable[] };
+}
+/** The worker's arrays become the tile's mesh — what buildTerrainMesh does
+ *  after its kernel call, with the rows and the followers from the reply. */
+function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string): void {
+  const SEG = terrainSeg;
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute('position', new THREE.BufferAttribute(r.pos, 3));
+  geo.setAttribute('uv', new THREE.BufferAttribute(r.uv, 2));
+  geo.setAttribute('color', new THREE.BufferAttribute(r.colors, 3));
+  geo.setAttribute('normal', new THREE.BufferAttribute(r.normals, 3));
+  geo.setIndex(new THREE.BufferAttribute(r.idx, 1));
+  cellTrisCache.set(geo, { seg: SEG, offs: r.cellOffs, tris: r.cellTris });
+  (geo.userData as { seg?: number }).seg = SEG;
+  const old = terrainMeshes.get(key);
+  if (old) { worldGroup.remove(old); old.geometry.dispose(); }
+  const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? terrainMatFor(t, key, r.normalMap) : terrainMat);
+  shadowy(mesh, false, true);
+  mesh.position.set(t.xs + t.w / 2, 0, t.zs + t.h / 2);
+  (mesh.userData as { corridor?: boolean }).corridor = r.corridor;
+  terrainMeshes.set(key, mesh);
+  worldGroup.add(mesh);
+  refinedBorders.set(key, r.border);
+  if (r.carveLog) carveLog.set(key, r.carveLog);
+  Object.assign(refineCost, r.refineCost); Object.assign(plainCost, r.plainCost); Object.assign(carveCost, r.carveCost);
+  for (const nk of r.followers) {
+    if (terrainMeshes.has(nk)) { terrainDirty.add(nk); dirtyWhy.set(nk, `owner:${key}`); }
+  }
+  buildLog.push({ key, why, corridor: r.corridor, refined: r.refined, at: Math.round(performance.now()) });
+  if (buildLog.length > 400) buildLog.shift();
+}
+/** Post a tile's build to the worker; the reply lands as a mesh and runs the
+ *  post-steps, exactly as the synchronous slot does. */
+function postTerrainBuild(t: HeightTile, key: string): void {
+  const w = tworker as TerrainWorker;
+  const SEG = terrainSeg;
+  const nearTruck = Math.max(0, Math.abs(state.x - (t.xs + t.w / 2)) - t.w / 2, Math.abs(state.z - (t.zs + t.h / 2)) - t.h / 2) <= REFINE_R;
+  const corridor = REFINE && nearTruck && osmStreamQuiet();
+  const why = dirtyWhy.get(key) ?? 'load';
+  dirtyWhy.delete(key);
+  const t0 = performance.now();
+  const { job, transfer } = terrainJob(t, SEG, corridor);
+  const prep = performance.now() - t0;
+  workerLedger.prepMs += prep; workerLedger.posts++;
+  buildInFlight = key;
+  w.build(job, transfer).then((r) => {
+    buildInFlight = null;
+    if (r.epoch !== worldEpoch || heightTiles.get(key) !== t) { workerLedger.dropped++; return; }
+    const t1 = performance.now();
+    applyTileBuild(t, key, r, why);
+    const t2 = performance.now();
+    terrainBuilds++;
+    reseatBuildings(t); redrape(t); hydroFeed(t); flushBatter(t); flushCulverts(t);
+    terrainMs = performance.now() - t1 + prep;
+    workerLedger.applied++; workerLedger.applyMs += t2 - t1; workerLedger.postMs += performance.now() - t2;
+    if (buildLog.length) { const b = buildLog[buildLog.length - 1]; b.ms = Math.round(terrainMs); b.bms = Math.round(t2 - t1 + prep); }
+  }, (error: Error) => {
+    // The worker is disabled by its own failure; the tile goes back on the
+    // queue and the synchronous slot takes it.
+    buildInFlight = null;
+    console.warn('terrain worker:', error.message);
+    terrainDirty.add(key); dirtyWhy.set(key, why);
+  });
+}
+(window as unknown as { __tworker?: object }).__tworker = (): object =>
+  tworker ? { on: !tworker.disabled, ...tworker.stats, inFlight: buildInFlight, ...workerLedger } : { on: false };
 
 const terrainDirty = new Set<string>();
 function coverDirtiedTerrain(xs: number, zs: number, w: number, h: number): void {
@@ -4848,6 +4989,7 @@ function flushTerrain(now: number): void {
   // dirty tile is built before any follower of it: a follower built first
   // takes a row its owner is about to replace and builds twice. Sorted by
   // row then column, a dirty set builds each tile once.
+  if (tworker && !tworker.disabled && buildInFlight) return;
   while (terrainDirty.size) {
     let key = '', best = Infinity;
     for (const k of terrainDirty) {
@@ -4859,6 +5001,7 @@ function flushTerrain(now: number): void {
     const t = heightTiles.get(key);
     if (t) {
       terrainAt = now;
+      if (tworker && !tworker.disabled) { postTerrainBuild(t, key); return; }
       const t0 = performance.now();
       buildTerrainMesh(t);
       const t1 = performance.now();
@@ -4972,7 +5115,9 @@ async function loadTerrainTileInner(x: number, y: number): Promise<void> {
   const [wx1, wz1] = toLocal(b.latS, b.lonE);
   const tile: HeightTile = { tx: x, ty: y, xs: Math.min(wx0, wx1), zs: Math.min(wz0, wz1), w: Math.abs(wx1 - wx0), h: Math.abs(wz1 - wz0), data };
   heightTiles.set(key, tile);
-  buildTerrainMesh(tile);
+  tworker?.mirrorHeight(key, tile);
+  if (tworker && !tworker.disabled) { terrainDirty.add(key); dirtyWhy.set(key, 'load'); }
+  else buildTerrainMesh(tile);
   // A tile built before its neighbour arrived clamped its border strip.
   // Rebuild the loaded neighbours so both sides of every edge sample the
   // same cross-tile field — this is what stitches the seams shut.
@@ -10192,7 +10337,7 @@ function segOf(geo: THREE.BufferGeometry): number {
   let dp = 0; for (let i = 0; i < gp.length; i++) dp = Math.max(dp, Math.abs(gp[i] - L.pos[i]));
   let di = 0; for (let i = 0; i < gi.length; i++) if (gi[i] !== L.idx[i]) di++;
   const gu = (g.attributes.uv as THREE.BufferAttribute).array as Float32Array; let du = 0; for (let i = 0; i < gu.length; i++) du = Math.max(du, Math.abs(gu[i] - L.uv[i]));
-  const b = buildTile(kStore, t, SEG, false, REFINE);
+  const b = K.buildTile(kStore, t, SEG, false, REFINE);
   const bad = (a: Float32Array): number => { let n = 0; for (let i = 0; i < a.length; i++) if (!Number.isFinite(a[i])) n++; return n; };
   const mesh = terrainMeshes.get(`${t.tx}/${t.ty}`);
   const mp = mesh ? (mesh.geometry.attributes.position as THREE.BufferAttribute).array as Float32Array : null;
@@ -21307,6 +21452,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     terrainMats.clear(); terrainNormals.clear();
     coverTiles.clear(); coverAsked.clear(); coverWaterMemo.clear();
     cutCells.clear(); cutSet.clear(); carveLog.clear(); refinedBorders.clear();
+    tworker?.reset(); buildInFlight = null;
     preRoadGrid.clear(); crumbDefer.clear();
     osmLoaded.clear(); osmActive.clear(); osmFailedAt.clear(); osmPinned.clear();
     osmCorridor.clear(); osmDone.clear(); seenWays.clear();
