@@ -1985,7 +1985,14 @@ const HYDRO_EN = 132;
 function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
   if (!HYDRO_ON) return;
   if (!hydroSys) {
-    hydroSys = createHydroSystem({ oceanLevelM: seaSurfaceAbs() });
+    // The tile build itself is scheduled through us, so its time is a number
+    // in the worker ledger (it runs on the main thread in a promise job,
+    // where no frame-loop timer can see it).
+    hydroSys = createHydroSystem({ oceanLevelM: seaSurfaceAbs(), scheduleBuild: (job) => {
+      const t0 = performance.now();
+      try { return Promise.resolve(job()); }
+      finally { const d = performance.now() - t0; workerLedger.hydroBuildMs += d; workerLedger.hydroBuilds++; if (d > workerLedger.hydroBuildMax) workerLedger.hydroBuildMax = d; }
+    } });
     hydroSys.setDebugView(hydroView);
     worldGroup.add(hydroSys.object3d);
     // THE OLD PLANE STANDS DOWN, rather than being deleted. Two renderers for
@@ -4783,7 +4790,7 @@ function buildTerrainMesh(t: HeightTile): void {
 const TWORKER = new URLSearchParams(location.search).get('tworker') !== '0';
 const tworker: TerrainWorker | null = TWORKER ? new TerrainWorker() : null;
 let buildInFlight: string | null = null;
-const workerLedger = { posts: 0, applied: 0, dropped: 0, prepMs: 0, applyMs: 0, postMs: 0, postMax: 0, reseatMs: 0, redrapeMs: 0, hydroMs: 0, batterMs: 0, culvertMs: 0 };
+const workerLedger = { posts: 0, applied: 0, dropped: 0, prepMs: 0, applyMs: 0, postMs: 0, postMax: 0, reseatMs: 0, redrapeMs: 0, hydroMs: 0, batterMs: 0, culvertMs: 0, hydroBuildMs: 0, hydroBuilds: 0, hydroBuildMax: 0 };
 /** Everything a build reads that is not a raster, packed for the worker. */
 function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<TerrainJob, 'id'>; transfer: Transferable[] } {
   const flatten = (grid: Map<string, Seg[]>, cell: number, margin: number): { flat: Float64Array; cells: Array<[string, number[]]> } => {
