@@ -4918,6 +4918,19 @@ function postTerrainBuild(t: HeightTile, key: string): void {
     terrainDirty.add(key); dirtyWhy.set(key, why);
   });
 }
+/** A refeed with no build behind it: the hydro raster alone, off the worker.
+ *  Falls back to sampling here when the worker is off or busy. */
+function hydroRefeed(t: HeightTile, key: string): void {
+  if (!tworker || tworker.disabled || buildInFlight) { hydroFeed(t); return; }
+  const { job, transfer } = terrainJob(t, terrainSeg, false);
+  buildInFlight = key;
+  workerLedger.posts++;
+  tworker.build({ ...job, hydroOnly: true }, transfer).then((r) => {
+    buildInFlight = null;
+    if (r.epoch !== worldEpoch || heightTiles.get(key) !== t) { workerLedger.dropped++; return; }
+    hydroFeed(t, r.hydroElev);
+  }, () => { buildInFlight = null; hydroFeed(t); });
+}
 (window as unknown as { __tworker?: object }).__tworker = (): object =>
   tworker ? { on: !tworker.disabled, ...tworker.stats, inFlight: buildInFlight, ...workerLedger } : { on: false };
 
@@ -4990,7 +5003,7 @@ function flushTerrain(now: number): void {
     const key = hydroDirty.values().next().value as string;
     hydroDirty.delete(key);
     const t = heightTiles.get(key);
-    if (t) { terrainAt = now; hydroFeed(t); return; }
+    if (t) { terrainAt = now; hydroRefeed(t, key); return; }
   }
   // OWNERS FIRST. A tile owns its east and south edges, so the north-west-most
   // dirty tile is built before any follower of it: a follower built first
@@ -5040,7 +5053,7 @@ function flushTerrain(now: number): void {
     const key = hydroDirty.values().next().value as string;
     hydroDirty.delete(key);
     const t = heightTiles.get(key);
-    if (t) { terrainAt = now; hydroFeed(t); return; }
+    if (t) { terrainAt = now; hydroRefeed(t, key); return; }
   }
   // A TILE THAT CAME INTO RANGE, or was built plain while roads were still
   // streaming, takes its corridor now — one per quiet visit, so a drive into

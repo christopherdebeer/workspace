@@ -24,6 +24,8 @@ export interface TerrainJob {
   seg: number; corridor: boolean; refine: boolean;
   /** Side of the hydro elevation raster wanted with the reply, 0 for none. */
   hydroN: number;
+  /** Only the hydro raster: no build, no mesh — a refeed with no build behind it. */
+  hydroOnly?: boolean;
   baseElev: number; seaAbs: number; seaOn: boolean; dryAt: boolean;
   nrmScale: number; cutWash: number; cprobe: boolean; cutRelief: boolean;
   cutL: number; grid: number; water: number; built: number; waterTilt: number; coverPx: number;
@@ -36,7 +38,7 @@ export interface TerrainJob {
   ramp: Array<[number, Rgb]>; ramps: Array<Array<[number, Rgb]>>; coverTint: Record<number, Rgb>; coverMix: number;
 }
 export interface TerrainReply {
-  id: number; key: string; epoch: number; error?: string;
+  id: number; key: string; epoch: number; error?: string; hydroOnly?: boolean;
   pos: Float32Array; uv: Float32Array; idx: Uint32Array; colors: Float32Array; normals: Float32Array;
   kinds: Uint8Array | null; cellOffs: Int32Array; cellTris: Int32Array;
   border: Float64Array; normalMap: Uint8Array; refined: boolean; corridor: boolean;
@@ -109,6 +111,11 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
         palette, areaTint: (x, z) => K.areaTintOf(job.areas, x, z),
         borders, nrmScale: job.nrmScale, cutWash: job.cutWash, cprobe: job.cprobe, carveLog, cutRelief: job.cutRelief,
       };
+      if (job.hydroOnly) {
+        const hydroElev = K.hydroElevation(S, t, job.hydroN || 132);
+        (self as unknown as { postMessage(m: unknown, t: Transferable[]): void }).postMessage({ id: job.id, key: job.key, epoch: job.epoch, hydroOnly: true, hydroElev, workerMs: performance.now() - t0 }, [hydroElev.buffer as unknown as Transferable]);
+        return;
+      }
       const b = K.buildTile(S, t, job.seg, job.corridor, job.refine);
       const normalMap = K.normalMapBytes(S, t);
       const hydroElev = job.hydroN > 0 ? K.hydroElevation(S, t, job.hydroN) : null;
