@@ -4803,11 +4803,15 @@ function buildTerrainMesh(t: HeightTile): void {
   // only lowers, and a pinned border vertex is already where it must be, so
   // the carve is simply run on the plain lattice and the border re-pinned).
   if (!refined || !corridor) carveCorridors(t, geo, SEG);
-  if (refined && !corridor) {
+  carveChannels(t, geo, SEG);
+  // The west and north edges take the owners' rows, after everything that
+  // digs — for every build (a corridor build pinned them itself, and the
+  // channel carve only lowers where a river is).
+  if (!refined || !corridor) {
     const pinned = refinedBorderPins(t, geo);
     for (const [v, y] of pinned) pos.setY(v, y);
   }
-  carveChannels(t, geo, SEG);
+  storeBorder(t, geo);
   // PASS TWO: colour, off the heights the carve settled on.
   const kinds = refined ? refined.kinds : null;
   for (let i = 0; i < pos.count; i++) {
@@ -4874,24 +4878,26 @@ function buildTerrainMesh(t: HeightTile): void {
   (mesh.userData as { corridor?: boolean }).corridor = corridor;
   terrainMeshes.set(key, mesh);
   worldGroup.add(mesh);
-  // A plain neighbour built before this refined tile has no points on the
-  // shared border: rebuilt, it takes them. ONLY when it lacks them — every
-  // refined rebuild used to dirty all four neighbours unconditionally, each
-  // of those rebuilt and dirtied back, and Vélizy ran 212 tile builds for
-  // 30 tiles. The neighbour's stored border says whether it already carries
-  // this tile's edge points at this tile's heights.
-  if (refined && corridor) {
-    for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-      const nk = `${t.tx + dx}/${t.ty + dy}`;
-      const nm = terrainMeshes.get(nk);
-      if (!nm) continue;
-      const theirs = !!(nm.userData as { corridor?: boolean }).corridor;
-      // A plain neighbour always follows; a corridor neighbour follows only
-      // across the border this tile owns — its east and its south.
-      const follows = !theirs || dx === 1 || dy === 1;
-      if (follows && !borderShared(t, nk)) terrainDirty.add(nk);
-    }
+  // THE FOLLOWERS. This tile owns its east and its south edge; a neighbour
+  // there that was built before this row existed, or against an older one,
+  // is rebuilt to take it. ONLY when its border differs — dirtying all four
+  // neighbours on every rebuild ran Vélizy to 212 builds for 30 tiles.
+  for (const [dx, dy] of [[1, 0], [0, 1]]) {
+    const nk = `${t.tx + dx}/${t.ty + dy}`;
+    if (terrainMeshes.has(nk) && !borderShared(t, nk)) terrainDirty.add(nk);
   }
+}
+/** Every tile's border row, world x, z, y in threes, stored as it was built
+ *  — what a follower pins to and what `borderShared` compares. */
+function storeBorder(t: HeightTile, geo: THREE.BufferGeometry): void {
+  const pos = geo.attributes.position as THREE.BufferAttribute;
+  const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
+  const b: number[] = [];
+  for (let v = 0; v < pos.count; v++) {
+    const x = pos.getX(v) + cxm, z = pos.getZ(v) + czm;
+    if (Math.abs(x - t.xs) < 1e-3 || Math.abs(x - (t.xs + t.w)) < 1e-3 || Math.abs(z - t.zs) < 1e-3 || Math.abs(z - (t.zs + t.h)) < 1e-3) b.push(x, z, pos.getY(v));
+  }
+  refinedBorders.set(`${t.tx}/${t.ty}`, Float32Array.from(b));
 }
 /** Does the tile at `nk` already carry every point of `t`'s border along
  *  their shared edge, at the same heights? */
@@ -4919,7 +4925,7 @@ function refinedBorderPins(t: HeightTile, geo: THREE.BufferGeometry): Array<[num
   const pos = geo.attributes.position as THREE.BufferAttribute;
   const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
   const want = new Map<string, number>();
-  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+  for (const [dx, dy] of [[-1, 0], [0, -1]]) {                 // the owners of this tile's west and north edges
     const nb = refinedBorders.get(`${t.tx + dx}/${t.ty + dy}`);
     if (!nb) continue;
     for (let i = 0; i < nb.length; i += 3) want.set(`${Math.round(nb[i] * 1000)},${Math.round(nb[i + 1] * 1000)}`, nb[i + 2]);
@@ -10520,20 +10526,31 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
   // drew as a dark line. The west and the north tile own a shared border; a
   // corridor tile follows only the owners of its west and north edges, a
   // plain tile follows every refined neighbour.
+  // Every tile — plain or corridor — follows the owners of its west and
+  // north edges. Reading the field "a hair inside" each tile made the two
+  // sides of a plain border read two different rasters, a DEM pixel apart,
+  // and on a Lesotho hillside that is a wall of metres along every seam
+  // (measured live at Senqu from the drone). The owner reads its own raster;
+  // the follower takes the owner's row.
   const seeds: Array<[number, number, number]> = [];
-  for (const [dx, dy] of corridor ? [[-1, 0], [0, -1]] : [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+  let extraSeed = false;
+  for (const [dx, dy] of [[-1, 0], [0, -1]]) {
     const nk = `${t.tx + dx}/${t.ty + dy}`;
     const nb = refinedBorders.get(nk);
     if (!nb) continue;
-    if (corridor && !(terrainMeshes.get(nk)?.userData as { corridor?: boolean } | undefined)?.corridor) continue;
     for (let i = 0; i < nb.length; i += 3) {
       const x = nb[i], z = nb[i + 1];
       const onX = Math.abs(x - t.xs) < 1e-3 || Math.abs(x - (t.xs + t.w)) < 1e-3;
       const onZ = Math.abs(z - t.zs) < 1e-3 || Math.abs(z - (t.zs + t.h)) < 1e-3;
-      if (onX || onZ) seeds.push([x, z, nb[i + 2]]);
+      if (!onX && !onZ) continue;
+      seeds.push([x, z, nb[i + 2]]);
+      const ix = Math.round((x - t.xs) / cw), iz = Math.round((z - t.zs) / ch);
+      if (Math.abs(x - (t.xs + ix * cw)) > 1e-3 || Math.abs(z - (t.zs + iz * ch)) > 1e-3) extraSeed = true;
     }
   }
-  if (!near.size && !seeds.length) return null;
+  // Lattice-only seeds are pins the plain path applies itself; only a
+  // neighbour's extra edge points need the ring machinery.
+  if (!near.size && !extraSeed) return null;
   // The break lines, and the cells each one crosses. A cell within reach of
   // any strip is `close`: its vertices take the corridor profile, the rest
   // take the ground and never pay for the lookup.
@@ -10561,7 +10578,7 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
       if (arr) { if (arr.length < 16) arr.push(li); } else cellLines.set(k, [li]);
     }
   }
-  if (!cellLines.size && !seeds.length) return null;
+  if (!cellLines.size && !extraSeed) return null;
   const t1 = performance.now();
   // The strips within reach of each cell, indexed once per tile, so the
   // height of a vertex asks a short list rather than the world's raster.
