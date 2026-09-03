@@ -4775,8 +4775,10 @@ function buildTerrainMesh(t: HeightTile): void {
   for (let i = 0; i < (refined ? 0 : pos.count); i++) {
     const ex = pos.getX(i) + cxm, ez = pos.getZ(i) + czm;
     const cv = sampleCover(ex, ez);
-    // Inside this tile's own box — see refineTileGeometry's fieldAt.
-    let elev = sampleHeight(clamp(ex, t.xs + 1e-4, t.xs + t.w - 1e-4), clamp(ez, t.zs + 1e-4, t.zs + t.h - 1e-4));
+    // The exact edge where the field has a tile, inside this one where it
+    // does not — see refineTileGeometry's fieldAt.
+    let elev = hasHeight(ex, ez) ? sampleHeight(ex, ez)
+      : sampleHeight(clamp(ex, t.xs + 1e-4, t.xs + t.w - 1e-4), clamp(ez, t.zs + 1e-4, t.zs + t.h - 1e-4));
     // GIVE THE SEA A FLOOR. The elevation source carries no bathymetry: it
     // fills the ocean with a flat plate AT the waterline, so once the water
     // plane was placed correctly the Pacific rendered as a 40cm lagoon over
@@ -5072,6 +5074,23 @@ function flushTerrain(now: number): void {
       terrainDirty.add(key);
       terrainAt = now;
       return;
+    }
+  }
+  // THE BORDER AUDIT. Owners dirty followers as they build, but builds race
+  // the stream and a follower can take a row the owner then rebuilt past.
+  // One tile per quiet visit, its east and south followers are checked
+  // against its stored row and rebuilt if they differ; over a few seconds of
+  // quiet every seam has been looked at.
+  if (REFINE && terrainMeshes.size) {
+    const keys = [...terrainMeshes.keys()];
+    borderAuditAt = (borderAuditAt + 1) % keys.length;
+    const key = keys[borderAuditAt];
+    const t = heightTiles.get(key);
+    if (t && refinedBorders.has(key)) {
+      for (const [dx, dy] of [[1, 0], [0, 1]]) {
+        const nk = `${t.tx + dx}/${t.ty + dy}`;
+        if (terrainMeshes.has(nk) && !terrainDirty.has(nk) && !borderShared(t, nk)) { terrainDirty.add(nk); terrainAt = now; return; }
+      }
     }
   }
   // Nothing dirty. This is exactly when a stranded kerb can be picked up
@@ -10290,6 +10309,8 @@ const REFINE_R = Number(new URLSearchParams(location.search).get('refr') ?? 1100
 /** Every refined tile's border vertices, world x, z, y in threes, so a plain
  *  neighbour can take the same points on the shared edge and no crack opens. */
 const refinedBorders = new Map<string, Float32Array>();
+/** Where the quiet-path border audit is in its round of the tiles. */
+let borderAuditAt = 0;
 /** Is the road stream quiet — nothing in flight and no road landed for a
  *  breath? Not "nothing queued": a tile waiting on a retry backoff would
  *  hold every corridor off for as long as it kept failing. */
@@ -10790,8 +10811,14 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
   // with the row inside within 3m, and drawn as the dark line along every
   // tile edge. Clamped a hair inside, the read is this tile's raster, which
   // is loaded by construction.
-  const fieldAt = (x: number, z: number): number =>
-    sampleHeight(clamp(x, t.xs + 1e-4, t.xs + t.w - 1e-4), clamp(z, t.zs + 1e-4, t.zs + t.h - 1e-4));
+  // …BUT AT THE EXACT EDGE WHERE THE FIELD HAS A TILE. Clamping inside
+  // unconditionally made the two sides of a plain border read two rasters a
+  // DEM pixel apart — a wall of metres along every seam on a hillside (Senqu,
+  // from the drone). The half-open tile box hands a border point to ONE
+  // raster for both sides; only where that raster is missing does the read
+  // fall back inside this tile, and the owner's row then pins the follower.
+  const fieldAt = (x: number, z: number): number => hasHeight(x, z) ? sampleHeight(x, z)
+    : sampleHeight(clamp(x, t.xs + 1e-4, t.xs + t.w - 1e-4), clamp(z, t.zs + 1e-4, t.zs + t.h - 1e-4));
   for (let i = 0; i < n; i++) {
     const x = px[i], z = pz[i];
     let N = fieldAt(x, z);
