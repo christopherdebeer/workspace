@@ -256,6 +256,8 @@ shouldn't be driving.
 - Should the identity scope be `cell:<owner>/<name>:*` or a narrower
   `cell:<owner>/<name>:signin`? The `:*` form reads as "all its tools", which
   overstates it, though the tools are registry-authorised regardless.
-- Should `requestScopes` (`main.ts:161`) still union in `DEFAULT_SCOPE`? It
-  does today, so one incremental-consent call from a sign-in-only cell would
-  re-introduce the workspace grant it avoided at sign-in.
+- Was dropping `DEFAULT_SCOPE` from `requestScopes` right? It now unions only
+  what the session already holds, so an identity-only session stays narrow at
+  the first incremental widen. The cost is that a user who deselected
+  `workspace:write` at consent no longer has it silently re-requested, which
+  reads as correct to me but is a behaviour change for existing sessions.
