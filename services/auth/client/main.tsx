@@ -14,7 +14,7 @@ import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
 import { Page, Card, Heading, Badge, Button, TextInput, Checkbox, theme } from '../../../platform/ui';
-import { friendlyError, requesterName } from './copy';
+import { friendlyError, requesterIdentity } from './copy';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -109,7 +109,7 @@ function App(): React.JSX.Element {
   const deviceMode = !!p.user_code;
   const oauthMode = !!p.client_id;
   // This document IS the authorization server, so our own origin is the anchor.
-  const requester = requesterName(p.redirect_uri, typeof location === 'undefined' ? undefined : location.origin);
+  const apexOrigin = typeof location === 'undefined' ? undefined : location.origin;
 
   const [step, setStep] = useState<Step>('auth');
   const [error, setError] = useState<string>('');
@@ -304,6 +304,17 @@ function App(): React.JSX.Element {
    */
   const identityOnly = !deviceMode && grantable.length > 0 && grantable.every((sc) => sc.startsWith('cell:'));
 
+  // Who is asking, split by what we can actually vouch for. `clientName` comes
+  // from open registration, so it never leads.
+  const who = requesterIdentity(p.redirect_uri, apexOrigin, clientName || null);
+  const requester = who?.kind === 'cell' ? who.name : null;
+  // What the sentence leads with. A cell we serve gets its name; everything
+  // else is introduced by the origin the code will actually land on, which is
+  // the one property /oauth/consent pins.
+  const subject = who
+    ? who.kind === 'cell' ? who.name : who.origin
+    : resourceAddr || clientName || p.client_id || 'An application';
+
   const toggle = (scope: string, on: boolean) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -387,25 +398,26 @@ function App(): React.JSX.Element {
                   // workspace" — flatly contradicting itself, and the more
                   // alarming half was the false one.
                   <>
-                    <strong style={{ color: theme.text }}>{requester ?? resourceAddr}</strong> will know you are{' '}
+                    <strong style={{ color: theme.text }}>{subject}</strong> will know you are{' '}
                     <strong style={{ color: theme.text }}>{signedInUser || '…'}</strong>. It gets nothing else — no
                     books, notes or files from your workspace.
                   </>
                 ) : (
                   <>
                     Signed in as <strong style={{ color: theme.text }}>{signedInUser || '…'}</strong>.{' '}
-                    {resourceAddr ? (
-                      <>
-                        <strong style={{ color: theme.text }}>{resourceAddr}</strong> is asking for access to your
-                        workspace{clientName || p.client_id ? <> (via {clientName || p.client_id})</> : null}:
-                      </>
-                    ) : (
-                      <><strong style={{ color: theme.text }}>{clientName || p.client_id}</strong> is requesting:</>
-                    )}
+                    <strong style={{ color: theme.text }}>{subject}</strong> is asking for access to your workspace:
                   </>
                 )
               )}
             </p>
+            {who?.kind === 'external' && who.claimed ? (
+              // Registration is open, so this string is whatever the registrant
+              // typed — including "parc.land". Showing it without saying so is
+              // how a screen lends its own credibility to a stranger's label.
+              <p style={{ color: theme.dim, fontSize: '0.75rem', margin: 0 }}>
+                It calls itself “{who.claimed}”. Only the address above is verified.
+              </p>
+            ) : null}
             <div style={{ display: 'grid', gap: '0.9rem' }}>
               {identityOnly ? null : VERB_GROUPS.map((g) => {
                 const inGroup = grantable.filter((s) => (catalog[s]?.verb ?? 'read') === g.verb);

@@ -1,4 +1,4 @@
-import { friendlyError, requesterName } from '../services/auth/client/copy';
+import { friendlyError, requesterIdentity, requesterName } from '../services/auth/client/copy';
 
 // The authorize screen used to headline "workspace [auth]" and, at consent,
 // tell a reader that a cell "is requesting access to your workspace" directly
@@ -74,5 +74,56 @@ describe('what it says when sign-in fails', () => {
   // than an ugly one.
   it('passes an unrecognised failure through unchanged', () => {
     expect(friendlyError('Consent failed')).toEqual({ message: 'Consent failed' });
+  });
+});
+
+
+// Registration is open (RFC 7591) and `client_name` is whatever the registrant
+// typed, so the consent screen must never lead with it. A client registered as
+// "parc.land" pointing at its own origin used to be introduced, in bold, as
+// parc.land.
+describe('what the consent screen is allowed to call the requester', () => {
+  const APEX2 = 'https://parc.land';
+
+  it('names a cell we serve, because we serve it', () => {
+    expect(requesterIdentity('https://c15r-shelved.on.parc.land', APEX2, 'parc.land'))
+      .toEqual({ kind: 'cell', name: 'Shelved' });
+    expect(requesterIdentity('https://parc.land/@c15r/drive', APEX2, null))
+      .toEqual({ kind: 'cell', name: 'Drive' });
+  });
+
+  it('calls our own apex the platform, not a cell', () => {
+    expect(requesterIdentity('https://parc.land/', APEX2, 'parc.land'))
+      .toEqual({ kind: 'platform', origin: 'parc.land' });
+  });
+
+  // The point of the whole exercise: a stranger is introduced by the origin the
+  // code can actually reach, and its chosen name is demoted to a claim.
+  it('introduces a stranger by origin and demotes its chosen name to a claim', () => {
+    expect(requesterIdentity('https://evil.example/cb', APEX2, 'parc.land'))
+      .toEqual({ kind: 'external', origin: 'evil.example', claimed: 'parc.land' });
+  });
+
+  it('does not let a lookalike host pass as ours', () => {
+    expect(requesterIdentity('https://parc.land.evil.example/@c15r/shelved', APEX2, 'Shelved'))
+      .toEqual({ kind: 'external', origin: 'parc.land.evil.example', claimed: 'Shelved' });
+    expect(requesterIdentity('https://c15r-shelved.on.evil.example', APEX2, null))
+      .toEqual({ kind: 'external', origin: 'c15r-shelved.on.evil.example' });
+  });
+
+  // A real connected client should still read sensibly, not alarmingly.
+  it('reads sensibly for a genuine third-party client', () => {
+    expect(requesterIdentity('https://claude.ai/api/mcp/auth_callback', APEX2, 'Claude'))
+      .toEqual({ kind: 'external', origin: 'claude.ai', claimed: 'Claude' });
+  });
+
+  it('omits the claim when none was registered', () => {
+    expect(requesterIdentity('https://claude.ai/cb', APEX2, null))
+      .toEqual({ kind: 'external', origin: 'claude.ai' });
+  });
+
+  it('says nothing at all without a usable redirect', () => {
+    expect(requesterIdentity(undefined, APEX2, 'Claude')).toBeNull();
+    expect(requesterIdentity('not-a-url', APEX2, 'Claude')).toBeNull();
   });
 });

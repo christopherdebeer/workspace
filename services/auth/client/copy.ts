@@ -78,3 +78,52 @@ export function friendlyError(raw: string): { message: string; detail?: string }
   }
   return { message: raw };
 }
+
+/** Who is asking, split by what the server can actually vouch for. */
+export type Requester =
+  /** A cell on our own origin or cell domain. The name is ours; we serve it. */
+  | { kind: 'cell'; name: string }
+  /** Our own apex, not a cell surface — the platform itself. */
+  | { kind: 'platform'; origin: string }
+  /**
+   * Anywhere else. The ORIGIN is verified: `/oauth/consent` refuses a
+   * redirect_uri the client never registered, so the code can only land there.
+   * `claimed` is not verified by anything — registration is open and
+   * `client_name` is whatever the registrant typed, so a client calling itself
+   * "parc.land" says nothing about whether it is.
+   */
+  | { kind: 'external'; origin: string; claimed?: string };
+
+/**
+ * Decide what the consent screen may present as identity.
+ *
+ * The rule is that the screen never leads with a string the platform cannot
+ * stand behind. A cell we serve gets named. Anything else is introduced by its
+ * ORIGIN — the one property the redirect_uri check actually pins — with any
+ * self-declared name kept subordinate and marked as such.
+ */
+export function requesterIdentity(
+  redirectUri?: string,
+  apexOrigin?: string,
+  clientName?: string | null,
+): Requester | null {
+  const name = requesterName(redirectUri, apexOrigin);
+  if (name) return { kind: 'cell', name };
+  if (!redirectUri) return null;
+  let u: URL;
+  try {
+    u = new URL(redirectUri);
+  } catch {
+    return null;
+  }
+  let apexHost: string | null = null;
+  try {
+    apexHost = apexOrigin ? new URL(apexOrigin).host : null;
+  } catch {
+    apexHost = null;
+  }
+  if (apexHost && (u.host === apexHost || u.host.endsWith(`.on.${apexHost}`))) {
+    return { kind: 'platform', origin: u.host };
+  }
+  return { kind: 'external', origin: u.host, ...(clientName ? { claimed: clientName } : {}) };
+}
