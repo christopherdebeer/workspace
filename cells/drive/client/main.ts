@@ -4955,9 +4955,7 @@ function postTerrainBuild(t: HeightTile, key: string): void {
   buildInFlight = key;
   w.build(job, transfer).then((r) => {
     buildInFlight = null;
-    // The next tile goes out on the next frame, not after the synchronous
-    // slot's 200ms: the main thread paid 5ms for this one, and twenty-five
-    // first builds at boot would otherwise take five seconds of pacing.
+    // The next tile goes out after `workerGap` — see flushTerrain.
     if (r.epoch !== worldEpoch || heightTiles.get(key) !== t) { workerLedger.dropped++; return; }
     const t1 = performance.now();
     applyTileBuild(t, key, r, why);
