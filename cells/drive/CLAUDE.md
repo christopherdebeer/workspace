@@ -845,8 +845,11 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   build costing 350ms in that density, and gating the neighbour rebuild on
   the border differing changed nothing (212 → 209) because the churn was
   never the cascade. `corridor` now also needs `osmStreamQuiet()` (nothing
-  in flight, nothing queued); a tile built plain meanwhile is rebuilt with
-  its corridor by the quiet path, once.
+  in flight, and no road landed for 2.5s — not "nothing queued", a tile on
+  a retry backoff would hold every corridor off); a tile built plain
+  meanwhile is rebuilt with its corridor by the quiet path, once. The tile's
+  `corridor` flag records INTENT: a corridor build that found no break
+  lines is still done, or the quiet path would dirty it on every visit.
 
 - **T-junction repair.** A cell's line list is capped at 16 (widest roads
   first), so the cell next door may keep a line this one dropped — or lie
