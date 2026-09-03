@@ -14,6 +14,7 @@ import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { startAuthentication, startRegistration } from '@simplewebauthn/browser';
 import { Page, Card, Heading, Badge, Button, TextInput, Checkbox, theme } from '../../../platform/ui';
+import { friendlyError, requesterName } from './copy';
 
 const { useState, useEffect, useCallback } = React;
 
@@ -65,6 +66,7 @@ function params(): Params {
   return Object.fromEntries(new URLSearchParams(location.search)) as Params;
 }
 
+
 /** Is this a granular (verb-first) scope, vs. a legacy coarse bucket? */
 function isGranular(scope: string): boolean {
   return /^(read|write|act):/.test(scope) || scope === 'cells:create';
@@ -101,10 +103,12 @@ async function postJson<T = Record<string, unknown>>(path: string, body: unknown
 
 type Step = 'auth' | 'consent' | 'busy' | 'done' | 'error';
 
+
 function App(): React.JSX.Element {
   const p = params();
   const deviceMode = !!p.user_code;
   const oauthMode = !!p.client_id;
+  const requester = requesterName(p.redirect_uri);
 
   const [step, setStep] = useState<Step>('auth');
   const [error, setError] = useState<string>('');
@@ -119,6 +123,9 @@ function App(): React.JSX.Element {
   // Grant lifetime: 0 = the server default (full ceiling); >0 = a user-chosen, shorter horizon.
   const [maxGrantSecs, setMaxGrantSecs] = useState<number>(0);
   const [grantSecs, setGrantSecs] = useState<number>(0);
+  // Registration is the rare path — a returning reader should see one button,
+  // not a form asking for a username they already have.
+  const [registering, setRegistering] = useState<boolean>(false);
 
   const fail = useCallback((msg: string) => {
     setError(msg);
@@ -286,6 +293,16 @@ function App(): React.JSX.Element {
     }
   }, [p, selected, grantSecs, deviceMode, fail, postToEmbedder]);
 
+  /**
+   * Is the whole ask just "know who I am"? A `cell:<owner>/<name>:*` scope
+   * grants no workspace authority at all (a cell call is authorised by the
+   * registry, and the cell is handed `x-cell-caller`, never the token), so
+   * when that is the ONLY thing offered there is nothing to decide. Rendering
+   * a checkbox, a "Reads" heading and a grant-lifetime picker over a plain
+   * yes/no is what made this read as a developer console.
+   */
+  const identityOnly = !deviceMode && grantable.length > 0 && grantable.every((sc) => sc.startsWith('cell:'));
+
   const toggle = (scope: string, on: boolean) => {
     setSelected((prev) => {
       const next = new Set(prev);
@@ -298,8 +315,18 @@ function App(): React.JSX.Element {
   return (
     <Page>
       <Card>
-        <Heading sub={deviceMode ? 'Approve device access.' : 'Sign in or register to authorize access.'}>
-          workspace <Badge tone="dim">auth</Badge>
+        <Heading
+          sub={
+            deviceMode
+              ? 'Approve device access.'
+              : step === 'auth'
+                ? 'parc.land keeps your sign-in, so you only do this once.'
+                : undefined
+          }
+        >
+          {deviceMode ? <>workspace <Badge tone="dim">auth</Badge></>
+            : requester ? <>Sign in to {requester}</>
+            : <>Sign in</>}
         </Heading>
 
         {deviceMode && p.user_code ? (
@@ -311,22 +338,36 @@ function App(): React.JSX.Element {
         {step === 'auth' ? (
           <div style={{ display: 'grid', gap: '0.75rem', marginTop: '0.5rem' }}>
             <Button onClick={doAuth}>Sign in with passkey</Button>
-            <div style={{ display: 'grid', gap: '0.4rem' }}>
-              <TextInput
-                value={username}
-                onChange={setUsername}
-                placeholder="username (to register a new passkey)"
-                autoComplete="username webauthn"
-                onEnter={doRegister}
-              />
-              <Button kind="secondary" onClick={doRegister}>
-                Register new passkey
-              </Button>
-            </div>
+            {registering ? (
+              <div style={{ display: 'grid', gap: '0.4rem' }}>
+                <TextInput
+                  value={username}
+                  onChange={setUsername}
+                  placeholder="Pick a username"
+                  autoComplete="username webauthn"
+                  onEnter={doRegister}
+                />
+                <Button kind="secondary" onClick={doRegister}>
+                  Create account
+                </Button>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setRegistering(true)}
+                style={{
+                  background: 'none', border: 0, padding: 0, cursor: 'pointer',
+                  color: theme.dim, fontSize: '0.8rem', textAlign: 'center',
+                  textDecoration: 'underline',
+                }}
+              >
+                First time here? Create an account
+              </button>
+            )}
           </div>
         ) : null}
 
-        {step === 'busy' ? <p style={{ color: theme.dim }}>🔐 Waiting…</p> : null}
+        {step === 'busy' ? <p style={{ color: theme.dim }}>Waiting for your passkey…</p> : null}
 
         {step === 'consent' ? (
           <div style={{ display: 'grid', gap: '0.75rem', marginTop: '0.5rem' }}>
@@ -338,21 +379,34 @@ function App(): React.JSX.Element {
                   <strong style={{ color: theme.text }}>Only approve if you started this sign-in.</strong>
                 </>
               ) : (
-                <>
-                  Signed in as <strong style={{ color: theme.text }}>{signedInUser || '…'}</strong>.{' '}
-                  {resourceAddr ? (
-                    <>
-                      <strong style={{ color: theme.text }}>{resourceAddr}</strong> is requesting access to your workspace
-                      {clientName || p.client_id ? <> (via {clientName || p.client_id})</> : null}:
-                    </>
-                  ) : (
-                    <><strong style={{ color: theme.text }}>{clientName || p.client_id}</strong> is requesting:</>
-                  )}
-                </>
+                identityOnly ? (
+                  // The one sentence that is actually true of an identity-only
+                  // grant. The old copy said "is requesting access to your
+                  // workspace" above a checkbox reading "nothing in your
+                  // workspace" — flatly contradicting itself, and the more
+                  // alarming half was the false one.
+                  <>
+                    <strong style={{ color: theme.text }}>{requester ?? resourceAddr}</strong> will know you are{' '}
+                    <strong style={{ color: theme.text }}>{signedInUser || '…'}</strong>. It gets nothing else — no
+                    books, notes or files from your workspace.
+                  </>
+                ) : (
+                  <>
+                    Signed in as <strong style={{ color: theme.text }}>{signedInUser || '…'}</strong>.{' '}
+                    {resourceAddr ? (
+                      <>
+                        <strong style={{ color: theme.text }}>{resourceAddr}</strong> is asking for access to your
+                        workspace{clientName || p.client_id ? <> (via {clientName || p.client_id})</> : null}:
+                      </>
+                    ) : (
+                      <><strong style={{ color: theme.text }}>{clientName || p.client_id}</strong> is requesting:</>
+                    )}
+                  </>
+                )
               )}
             </p>
             <div style={{ display: 'grid', gap: '0.9rem' }}>
-              {VERB_GROUPS.map((g) => {
+              {identityOnly ? null : VERB_GROUPS.map((g) => {
                 const inGroup = grantable.filter((s) => (catalog[s]?.verb ?? 'read') === g.verb);
                 if (!inGroup.length) return null;
                 return (
@@ -389,7 +443,7 @@ function App(): React.JSX.Element {
                 <Badge tone="dim">{deviceMode ? 'This device requested no scopes' : 'No grantable scopes'}</Badge>
               ) : null}
             </div>
-            {maxGrantSecs > 0 ? (
+            {maxGrantSecs > 0 && !identityOnly ? (
               <label style={{ display: 'grid', gap: '0.3rem' }}>
                 <span style={{ color: theme.dim, fontSize: '0.75rem' }}>This access lasts</span>
                 <select
@@ -415,24 +469,40 @@ function App(): React.JSX.Element {
               </label>
             ) : null}
             <Button onClick={submitConsent} disabled={!deviceMode && selected.size === 0}>
-              {deviceMode ? 'Approve device access' : `Authorize${selected.size ? ` (${selected.size})` : ''}`}
+              {deviceMode
+                ? 'Approve device access'
+                : identityOnly
+                  // Nothing was picked, so there is no count to report and
+                  // "Authorize (1)" only asks the reader to wonder what the 1 is.
+                  ? `Continue${requester ? ` to ${requester}` : ''}`
+                  : `Authorize${selected.size ? ` (${selected.size})` : ''}`}
             </Button>
           </div>
         ) : null}
 
         {step === 'done' ? (
-          <p style={{ color: theme.accent }}>✓ {okMsg || 'Authorized'}</p>
+          <p style={{ color: theme.accent }}>✓ {okMsg || "You're signed in"}</p>
         ) : null}
 
-        {step === 'error' ? (
-          <div style={{ display: 'grid', gap: '0.6rem', marginTop: '0.5rem' }}>
-            <Badge tone="danger">Failed</Badge>
-            <p style={{ color: theme.dim, fontSize: '0.85rem', margin: 0, wordBreak: 'break-word' }}>{error}</p>
-            <Button kind="secondary" onClick={() => { setError(''); setStep('auth'); }}>
-              Try again
-            </Button>
-          </div>
-        ) : null}
+        {step === 'error' ? (() => {
+          const friendly = friendlyError(error);
+          return (
+            <div style={{ display: 'grid', gap: '0.6rem', marginTop: '0.5rem' }}>
+              <p style={{ color: theme.text, fontSize: '0.9rem', margin: 0, wordBreak: 'break-word' }}>
+                {friendly.message}
+              </p>
+              {friendly.detail ? (
+                <details style={{ color: theme.dim, fontSize: '0.75rem' }}>
+                  <summary style={{ cursor: 'pointer' }}>Details</summary>
+                  <p style={{ margin: '0.4rem 0 0', wordBreak: 'break-word' }}>{friendly.detail}</p>
+                </details>
+              ) : null}
+              <Button kind="secondary" onClick={() => { setError(''); setStep('auth'); }}>
+                Try again
+              </Button>
+            </div>
+          );
+        })() : null}
       </Card>
     </Page>
   );
