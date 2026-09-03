@@ -220,9 +220,18 @@ export function isSelfGrantableGranular(scope: string): boolean {
  * this is the missing half, which makes the scope offerable at the authorize
  * step so a code can carry it in the first place.
  *
- * Bounded to the cell the sign-in ORIGINATES AT, derived from the same
- * `redirect_uri` the ceiling uses — so a request can only ever name the cell
- * whose page the player is standing on, never a third party's.
+ * Bounded to the cell the sign-in ORIGINATES AT, derived from the
+ * `redirect_uri` — so a request can only ever name the cell whose page the
+ * player is standing on, never a third party's.
+ *
+ * Derived via `cellFromRedirect`, not `cellCeiling`, because the ceiling only
+ * recognises a HOST-ISOLATED redirect (`<owner>-<name>.on.parc.land`). An
+ * apex-served cell at `/@owner/name` got an empty list, so the scope was
+ * filtered out of `granted` and the consent screen offered nothing — the same
+ * disabled-Authorize case described above, still live for every apex cell.
+ * `cellFromRedirect` already parses both forms. This widens nothing: the two
+ * agree on the host-isolated case, and the apex case stays bounded to the cell
+ * in the path.
  *
  * This grants no authority by itself, and that is the point. A cell call is
  * authorised by the registry (`authorizeAccess`: owner, grants, tool grants),
@@ -230,11 +239,12 @@ export function isSelfGrantableGranular(scope: string): boolean {
  * never the token. So a token holding ONLY this is an identity token — which
  * is exactly what a cell that wants to know who you are should be able to ask
  * for, instead of the `workspace:read workspace:write` the kernel's default
- * scope asks for today (docs/cell-origin-isolation.md §4.5 — the least-
- * privilege handoff this makes reachable).
+ * scope asks for (docs/cell-origin-isolation.md §4.5 — the least-privilege
+ * handoff this makes reachable).
  */
 export function cellScopesFor(redirectUri: string | undefined): string[] {
-  return (cellCeiling(redirectUri) ?? []).filter((s) => s.startsWith('cell:'));
+  const cell = cellFromRedirect(redirectUri);
+  return cell ? [`cell:${cell.owner}/${cell.name}:*`] : [];
 }
 
 const DEFAULT_EXPIRY = 3600;

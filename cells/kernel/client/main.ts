@@ -139,7 +139,36 @@ async function ensureClientId(): Promise<string> {
   return j.client_id;
 }
 
-export async function login(scope: string = DEFAULT_SCOPE): Promise<never> {
+/**
+ * The scope that asks only "who is this", for the cell being viewed:
+ * `cell:<owner>/<name>:*`. It carries no workspace authority — a cell call is
+ * authorised by the registry and the cell reads `x-cell-caller`, never the
+ * token — so a cell whose storage is its own table (shelved, drive) needs
+ * nothing else. Null off a cell surface, where there is no cell to name.
+ * See docs/auth-in-page.md, docs/cell-origin-isolation.md §4.5.
+ */
+export function identityScope(): string | null {
+  const cell = cellAddress();
+  return cell ? `cell:${cell.owner}/${cell.name}:*` : null;
+}
+
+export interface LoginOptions {
+  /** Ask only to learn who you are, instead of the workspace default. */
+  identity?: boolean;
+  /** An explicit scope string (wins over `identity`). */
+  scope?: string;
+}
+
+/** Resolve the scope to request. Identity-only falls back to the default off a cell. */
+function scopeFor(opts?: string | LoginOptions): string {
+  if (typeof opts === 'string') return opts;
+  if (opts?.scope) return opts.scope;
+  if (opts?.identity) return identityScope() ?? DEFAULT_SCOPE;
+  return DEFAULT_SCOPE;
+}
+
+export async function login(opts?: string | LoginOptions): Promise<never> {
+  const scope = scopeFor(opts);
   const clientId = await ensureClientId();
   const verifier = rand(32);
   const state = rand(16);
@@ -158,11 +187,18 @@ export async function login(scope: string = DEFAULT_SCOPE): Promise<never> {
   return new Promise<never>(() => undefined); // navigation is taking over
 }
 
-/** Incremental consent: re-authorize with the union of current + needed. */
+/**
+ * Incremental consent: re-authorize with the union of current + needed.
+ *
+ * The union is over what the session ALREADY holds, not over DEFAULT_SCOPE.
+ * Adding the default back meant one incremental request from an identity-only
+ * session (`cell:<owner>/<name>:*`) silently re-asked for the whole workspace,
+ * undoing the narrowing at the first widen. A session that has no scopes yet
+ * still falls back to the default.
+ */
 export async function requestScopes(scopes: string[]): Promise<void> {
   const want = new Set([...grantedScopes(), ...scopes]);
-  for (const s of DEFAULT_SCOPE.split(' ')) want.add(s);
-  await login([...want].join(' '));
+  await login(want.size ? [...want].join(' ') : DEFAULT_SCOPE);
 }
 
 export function signOut(): void {
@@ -302,7 +338,7 @@ export async function authFetch(path: string, init?: RequestInit): Promise<Respo
  * Boot gate: finish a returning OAuth redirect, else sign in. A repeated
  * failed return fails LOUD instead of looping invisibly.
  */
-export async function ensureAuth(scope: string = DEFAULT_SCOPE): Promise<void> {
+export async function ensureAuth(opts?: string | LoginOptions): Promise<void> {
   try {
     await completeLoginIfReturning();
   } catch (err) {
@@ -313,7 +349,7 @@ export async function ensureAuth(scope: string = DEFAULT_SCOPE): Promise<void> {
     const n = Number(sessionStorage.getItem(K.attempts) ?? '0');
     if (n >= 2) throw new Error('sign-in loop detected — the OAuth return keeps failing; try ?debug=1');
     sessionStorage.setItem(K.attempts, String(n + 1));
-    await login(scope);
+    await login(opts);
   }
   sessionStorage.removeItem(K.attempts);
 }

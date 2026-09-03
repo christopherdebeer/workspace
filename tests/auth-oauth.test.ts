@@ -526,6 +526,27 @@ describe('per-type consent + granular elevation (ADR-0023 §B / ADR-0022)', () =
       expect(cellScopesFor('https://parc.land/whatever')).toEqual([]);
       expect(cellScopesFor(undefined)).toEqual([]);
     });
+    // An APEX-served cell is the common case (every /@owner/name surface), and it
+    // was the case this missed: derived from `cellCeiling`, which only recognises
+    // a host-isolated redirect, the apex offered nothing — so a cell asking to be
+    // signed in to got an empty picker and had to ask for the whole workspace.
+    it('offers the cell an apex /@owner/name redirect names', () => {
+      expect(cellScopesFor('https://parc.land/@c15r/shelved')).toEqual(['cell:c15r/shelved:*']);
+      expect(cellScopesFor('https://parc.land/@c15r/drive/deep/link')).toEqual(['cell:c15r/drive:*']);
+    });
+    // The apex path is bounded the same way the host is: by what the redirect says.
+    it('never offers a different cell from an apex redirect', () => {
+      expect(cellScopesFor('https://parc.land/@c15r/shelved')).not.toContain('cell:someone/else:*');
+    });
+    // The two forms address the same cell, so they must name the same scope —
+    // otherwise a cell's sign-in would depend on which origin served it.
+    it('agrees between the host-isolated and apex forms of one cell', () => {
+      expect(cellScopesFor('https://c15r-drive.on.parc.land')).toEqual(cellScopesFor('https://parc.land/@c15r/drive'));
+    });
+    // Widening the derivation must not have widened what it hands back.
+    it('still offers only a cell scope from an apex redirect', () => {
+      expect(cellScopesFor('https://parc.land/@c15r/shelved').every((s) => s.startsWith('cell:'))).toBe(true);
+    });
     // It is a CELL scope only. The ceiling also contains workspace read/write,
     // and admitting those here would hand every cell sign-in the whole slice
     // without anyone choosing it.
