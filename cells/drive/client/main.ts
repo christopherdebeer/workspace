@@ -10198,7 +10198,8 @@ function segOf(geo: THREE.BufferGeometry): number {
   const mp = mesh ? (mesh.geometry.attributes.position as THREE.BufferAttribute).array as Float32Array : null;
   return { key: `${t.tx}/${t.ty}`, seg: SEG, nPlane: gp.length / 3, nLattice: L.pos.length / 3, maxPosDiff: dp, idxDiffs: di, maxUvDiff: du, idxLen: [gi.length, L.idx.length],
     nanPos: bad(b.pos), nanCol: bad(b.colors), nanNrm: bad(b.normals), nanUv: bad(b.uv), meshNan: mp ? bad(mp) : null, meshN: mp ? mp.length / 3 : null,
-    y0: b.pos[1], yMid: b.pos[Math.floor(b.pos.length / 6) * 3 + 1], ground: groundAt(state.x, state.z), meshAt: meshSurfaceAt(state.x, state.z) };
+    y0: b.pos[1], yMid: b.pos[Math.floor(b.pos.length / 6) * 3 + 1], ground: groundAt(state.x, state.z), meshAt: meshSurfaceAt(state.x, state.z),
+    state: [state.x, state.z, state.heading, state.speed].map((v) => Number.isFinite(v) ? +v.toFixed(2) : String(v)), builds: terrainBuilds };
 };
 (window as unknown as { __refine?: object }).__refine = (): object => ({ on: REFINE, ...refineCost, plain: { ...plainCost } });
 (window as unknown as { __buildLog?: object }).__buildLog = (): object => buildLog.slice();
