@@ -4775,7 +4775,8 @@ function buildTerrainMesh(t: HeightTile): void {
   for (let i = 0; i < (refined ? 0 : pos.count); i++) {
     const ex = pos.getX(i) + cxm, ez = pos.getZ(i) + czm;
     const cv = sampleCover(ex, ez);
-    let elev = sampleHeight(ex, ez);
+    // Inside this tile's own box — see refineTileGeometry's fieldAt.
+    let elev = sampleHeight(clamp(ex, t.xs + 1e-4, t.xs + t.w - 1e-4), clamp(ez, t.zs + 1e-4, t.zs + t.h - 1e-4));
     // GIVE THE SEA A FLOOR. The elevation source carries no bathymetry: it
     // fills the ocean with a flat plate AT the waterline, so once the water
     // plane was placed correctly the Pacific rendered as a 40cm lagoon over
@@ -4880,7 +4881,12 @@ function buildTerrainMesh(t: HeightTile): void {
     for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
       const nk = `${t.tx + dx}/${t.ty + dy}`;
       const nm = terrainMeshes.get(nk);
-      if (nm && !(nm.userData as { corridor?: boolean }).corridor && !borderShared(t, nk)) terrainDirty.add(nk);
+      if (!nm) continue;
+      const theirs = !!(nm.userData as { corridor?: boolean }).corridor;
+      // A plain neighbour always follows; a corridor neighbour follows only
+      // across the border this tile owns — its east and its south.
+      const follows = !theirs || dx === 1 || dy === 1;
+      if (follows && !borderShared(t, nk)) terrainDirty.add(nk);
     }
   }
 }
@@ -10312,6 +10318,11 @@ function stripBreakLines(s: Seg): BreakLine[] {
   if (l < 0.5) return out;
   const nx = -dz / l, nz = dx / l;
   const r = s.hw + 0.6;
+  // Not until the ground is there: a toe marched over a missing DEM tile is
+  // marched over zero, and it would be cached for the strip's whole life.
+  for (const side of [-1, 1]) {
+    if (!hasHeight(s.ax + nx * side * r, s.az + nz * side * r) || !hasHeight(s.bx + nx * side * r, s.bz + nz * side * r)) { s.bl = undefined; return out; }
+  }
   // AT GRADE, NO LINES. Where the shoulder's edge meets the ground within a
   // decimetre at both ends on both sides there is no face and no bank, and
   // the grid corners the profile sets to the floor already hold the
@@ -10497,10 +10508,18 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
   }
   // THE NEIGHBOURS' BORDERS. A refined tile next door has vertices on the
   // shared edge that this tile must share too, at its heights.
+  // A BORDER HAS ONE OWNER. Two corridor tiles computing the same border
+  // row from their own raster edges and their own line sets disagreed by up
+  // to 0.91m with 41 points missing (Vélizy, north edge) — the crack that
+  // drew as a dark line. The west and the north tile own a shared border; a
+  // corridor tile follows only the owners of its west and north edges, a
+  // plain tile follows every refined neighbour.
   const seeds: Array<[number, number, number]> = [];
-  for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
-    const nb = refinedBorders.get(`${t.tx + dx}/${t.ty + dy}`);
+  for (const [dx, dy] of corridor ? [[-1, 0], [0, -1]] : [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+    const nk = `${t.tx + dx}/${t.ty + dy}`;
+    const nb = refinedBorders.get(nk);
     if (!nb) continue;
+    if (corridor && !(terrainMeshes.get(nk)?.userData as { corridor?: boolean } | undefined)?.corridor) continue;
     for (let i = 0; i < nb.length; i += 3) {
       const x = nb[i], z = nb[i + 1];
       const onX = Math.abs(x - t.xs) < 1e-3 || Math.abs(x - (t.xs + t.w)) < 1e-3;
@@ -10577,6 +10596,33 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
     if (!key) return;
     const arr = edgePts.get(key);
     if (arr) { if (!arr.includes(v)) arr.push(v); } else edgePts.set(key, [v]);
+  };
+  // The owners' rows along each followed edge, sorted along the edge, so a
+  // follower's OWN extra points on that edge (its lines' crossings the owner
+  // does not have) can be pinned onto the owner's polyline rather than
+  // solved apart from it — a point standing off the neighbour's straight
+  // edge by even a decimetre is a hairline of sky.
+  const ownerRows = new Map<string, Array<[number, number]>>();   // edge → [along, y]
+  const edgeOf = (x: number, z: number): string | null =>
+    Math.abs(x - t.xs) < 1e-3 ? 'W' : Math.abs(x - (t.xs + t.w)) < 1e-3 ? 'E' : Math.abs(z - t.zs) < 1e-3 ? 'N' : Math.abs(z - (t.zs + t.h)) < 1e-3 ? 'S' : null;
+  for (const [x, z, y] of seeds) {
+    const e = edgeOf(x, z);
+    if (!e) continue;
+    const arr = ownerRows.get(e) ?? ownerRows.set(e, []).get(e) as Array<[number, number]>;
+    arr.push([e === 'W' || e === 'E' ? z : x, y]);
+  }
+  for (const arr of ownerRows.values()) arr.sort((a, b) => a[0] - b[0]);
+  const ownerY = (x: number, z: number): number | undefined => {
+    const e = edgeOf(x, z);
+    if (!e) return undefined;
+    const arr = ownerRows.get(e);
+    if (!arr || arr.length < 2) return undefined;
+    const a = e === 'W' || e === 'E' ? z : x;
+    if (a < arr[0][0] - 1e-3 || a > arr[arr.length - 1][0] + 1e-3) return undefined;
+    let lo = 0, hi = arr.length - 1;
+    while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (arr[mid][0] <= a) lo = mid; else hi = mid; }
+    const span = arr[hi][0] - arr[lo][0];
+    return span < 1e-9 ? arr[lo][1] : arr[lo][1] + ((a - arr[lo][0]) / span) * (arr[hi][1] - arr[lo][1]);
   };
   for (const [x, z, y] of seeds) {
     // Snapped to the lattice along the border, exactly as the neighbour's
@@ -10712,12 +10758,23 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
     if (!close[iz * SEG + ix]) return null;
     return cellStrips.get(iz * SEG + ix) ?? null;
   };
+  // THE FIELD, READ INSIDE THIS TILE'S OWN BOX. A vertex exactly on the
+  // border is outside the tile's half-open box, so `sampleHeight` looks to the
+  // neighbour — and answers ZERO while the neighbour's DEM has not loaded.
+  // Stored as this tile's border, pinned into the neighbour when it built,
+  // and taken back as a seed when this tile rebuilt, that zero lived for
+  // ever: measured at Vélizy as border vertices 18m and 89m off the field
+  // with the row inside within 3m, and drawn as the dark line along every
+  // tile edge. Clamped a hair inside, the read is this tile's raster, which
+  // is loaded by construction.
+  const fieldAt = (x: number, z: number): number =>
+    sampleHeight(clamp(x, t.xs + 1e-4, t.xs + t.w - 1e-4), clamp(z, t.zs + 1e-4, t.zs + t.h - 1e-4));
   for (let i = 0; i < n; i++) {
     const x = px[i], z = pz[i];
-    let N = sampleHeight(x, z);
+    let N = fieldAt(x, z);
     if (sampleCover(x, z) === COVER.water && N <= seaLocal + 2) N = Math.min(N, seaLocal - SEA_BED);
     let h = N, k = 0;
-    const pin = pinned.get(i);
+    const pin = pinned.get(i) ?? ownerY(x, z);
     if (pin !== undefined) h = pin;
     else {
       const cands = candsAt(x, z);
@@ -10794,13 +10851,76 @@ function refineTileGeometry(t: HeightTile, SEG: number, corridor: boolean): Refi
   const col = mesh.geometry.attributes.color as THREE.BufferAttribute | undefined;
   const SEG = segOf(mesh.geometry), cw = t.w / SEG, ch = t.h / SEG;
   const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
-  let bSum = 0, bN = 0, iSum = 0, iN = 0;
-  if (col) for (let v = 0; v < pos.count; v++) {
-    const zz = pos.getZ(v) + czm, lum = col.getX(v) * 0.3 + col.getY(v) * 0.59 + col.getZ(v) * 0.11;
-    if (Math.abs(zz - (t.zs + t.h)) < 1e-3) { bSum += lum; bN++; }
-    else if (Math.abs(zz - (t.zs + t.h - ch)) < 1e-3) { iSum += lum; iN++; }
+  // Vertex colour on each border row against the row one lattice step in,
+  // and the vertex heights there against the field, for all four edges.
+  const rowStat = (pick: (x: number, z: number) => boolean): { lum: number; n: number; dy: number } => {
+    let sum = 0, n = 0, dy = 0;
+    for (let v = 0; v < pos.count; v++) {
+      const xx = pos.getX(v) + cxm, zz = pos.getZ(v) + czm;
+      if (!pick(xx, zz)) continue;
+      if (col) sum += col.getX(v) * 0.3 + col.getY(v) * 0.59 + col.getZ(v) * 0.11;
+      dy = Math.max(dy, Math.abs(pos.getY(v) - sampleHeight(xx, zz)));
+      n++;
+    }
+    return { lum: n ? +(sum / n).toFixed(3) : 0, n, dy: +dy.toFixed(2) };
+  };
+  const colours = {
+    north: rowStat((_, z) => Math.abs(z - t.zs) < 1e-3), northIn: rowStat((_, z) => Math.abs(z - (t.zs + ch)) < 1e-3),
+    south: rowStat((_, z) => Math.abs(z - (t.zs + t.h)) < 1e-3), southIn: rowStat((_, z) => Math.abs(z - (t.zs + t.h - ch)) < 1e-3),
+    west: rowStat((x) => Math.abs(x - t.xs) < 1e-3), westIn: rowStat((x) => Math.abs(x - (t.xs + cw)) < 1e-3),
+    east: rowStat((x) => Math.abs(x - (t.xs + t.w)) < 1e-3), eastIn: rowStat((x) => Math.abs(x - (t.xs + t.w - cw)) < 1e-3),
+  };
+  return { key, edgesDeg: edges, colours, cw: +cw.toFixed(1) };
+};
+/** The tile under a point against each neighbour, along their shared
+ *  border: how many of this tile's border vertices the neighbour also has
+ *  (by millimetre key), how many it lacks, and the worst height difference
+ *  where both have the point. A crack is a missing point or a dy. */
+(window as unknown as { __borderDiff?: object }).__borderDiff = (x?: number, z?: number): object | null => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const [tx, ty] = tileAt(origin.lat - pz / M_LAT, origin.lon + px / origin.mLon, TERRAIN_Z);
+  const key = `${tx}/${ty}`;
+  const t = heightTiles.get(key), mine = refinedBorders.get(key);
+  const out: Record<string, unknown> = { key, stored: !!mine, corridor: (terrainMeshes.get(key)?.userData as { corridor?: boolean } | undefined)?.corridor ?? null };
+  if (!t || !mine) return out;
+  for (const [name, dx, dy] of [['east', 1, 0], ['west', -1, 0], ['south', 0, 1], ['north', 0, -1]] as Array<[string, number, number]>) {
+    const nk = `${t.tx + dx}/${t.ty + dy}`;
+    const nb = refinedBorders.get(nk), nt = heightTiles.get(nk), nm = terrainMeshes.get(nk);
+    if (!nt || !nm) { out[name] = 'no tile'; continue; }
+    const theirs = new Map<string, number>();
+    if (nb) for (let i = 0; i < nb.length; i += 3) theirs.set(`${Math.round(nb[i] * 1000)},${Math.round(nb[i + 1] * 1000)}`, nb[i + 2]);
+    let shared = 0, missing = 0, worst = 0, worstGap = 0;
+    const ex = dx === 1 ? t.xs + t.w : dx === -1 ? t.xs : null, ez = dy === 1 ? t.zs + t.h : dy === -1 ? t.zs : null;
+    // Their row along this edge, sorted, so a point they lack is measured
+    // against their straight edge there — that distance is the crack.
+    const row: Array<[number, number]> = [];
+    if (nb) for (let i = 0; i < nb.length; i += 3) {
+      if (ex !== null && Math.abs(nb[i] - ex) > 1e-3) continue;
+      if (ez !== null && Math.abs(nb[i + 1] - ez) > 1e-3) continue;
+      row.push([ex !== null ? nb[i + 1] : nb[i], nb[i + 2]]);
+    }
+    row.sort((a, b) => a[0] - b[0]);
+    const lineY = (a: number): number | null => {
+      if (row.length < 2 || a < row[0][0] || a > row[row.length - 1][0]) return null;
+      let lo = 0, hi = row.length - 1;
+      while (hi - lo > 1) { const mid = (lo + hi) >> 1; if (row[mid][0] <= a) lo = mid; else hi = mid; }
+      const span = row[hi][0] - row[lo][0];
+      return span < 1e-9 ? row[lo][1] : row[lo][1] + ((a - row[lo][0]) / span) * (row[hi][1] - row[lo][1]);
+    };
+    for (let i = 0; i < mine.length; i += 3) {
+      const mx = mine[i], mz = mine[i + 1];
+      if (ex !== null && Math.abs(mx - ex) > 1e-3) continue;
+      if (ez !== null && Math.abs(mz - ez) > 1e-3) continue;
+      const y = theirs.get(`${Math.round(mx * 1000)},${Math.round(mz * 1000)}`);
+      if (y === undefined) {
+        missing++;
+        const ly = lineY(ex !== null ? mz : mx);
+        if (ly !== null) worstGap = Math.max(worstGap, Math.abs(ly - mine[i + 2]));
+      } else { shared++; worst = Math.max(worst, Math.abs(y - mine[i + 2])); }
+    }
+    out[name] = { key: nk, corridor: (nm.userData as { corridor?: boolean }).corridor ?? null, stored: !!nb, shared, missing, worstDy: +worst.toFixed(3), worstGap: +worstGap.toFixed(3) };
   }
-  return { key, edgesDeg: edges, colourSouthBorder: bN ? +(bSum / bN).toFixed(3) : null, colourOneRowIn: iN ? +(iSum / iN).toFixed(3) : null, cw: +cw.toFixed(1) };
+  return out;
 };
 (window as unknown as { __refine?: object }).__refine = (): object => ({ on: REFINE, ...refineCost });
 /** THE CORRIDOR CARVE, solved per TRIANGLE instead of per vertex.
