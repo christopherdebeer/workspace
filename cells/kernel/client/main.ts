@@ -139,30 +139,230 @@ async function ensureClientId(): Promise<string> {
   return j.client_id;
 }
 
-export async function login(scope: string = DEFAULT_SCOPE): Promise<never> {
+/**
+ * The scope that asks only "who is this", for the cell being viewed:
+ * `cell:<owner>/<name>:*`. It carries no workspace authority — a cell call is
+ * authorised by the registry and the cell reads `x-cell-caller`, never the
+ * token — so a cell whose storage is its own table (shelved, drive) needs
+ * nothing else. Null off a cell surface, where there is no cell to name.
+ * See docs/auth-in-page.md, docs/cell-origin-isolation.md §4.5.
+ */
+export function identityScope(): string | null {
+  const cell = cellAddress();
+  return cell ? `cell:${cell.owner}/${cell.name}:*` : null;
+}
+
+export interface LoginOptions {
+  /** Ask only to learn who you are, instead of the workspace default. */
+  identity?: boolean;
+  /** An explicit scope string (wins over `identity`). */
+  scope?: string;
+}
+
+/** Resolve the scope to request. Identity-only falls back to the default off a cell. */
+function scopeFor(opts?: string | LoginOptions): string {
+  if (typeof opts === 'string') return opts;
+  if (opts?.scope) return opts.scope;
+  if (opts?.identity) return identityScope() ?? DEFAULT_SCOPE;
+  return DEFAULT_SCOPE;
+}
+
+/** Where a code comes back to. Also the origin the consent screen posts to,
+ *  and the value `/oauth/token` matches the code against, so it has exactly
+ *  one definition. */
+const redirectUri = (): string => `${location.origin}${location.pathname.replace(/\/+$/, '')}`;
+
+/** The origin serving /oauth/* — the apex from a cell host, ourselves on it. */
+const apexOrigin = (): string => apiBase() || location.origin;
+
+/** Build an authorize URL and arm the PKCE/state/return values it will be
+ *  checked against. Shared by the redirect and the sheet so the two cannot
+ *  drift — a mismatched redirect_uri between them fails at the token step. */
+async function authorizeUrl(scope: string, extra?: Record<string, string>): Promise<string> {
   const clientId = await ensureClientId();
   const verifier = rand(32);
   const state = rand(16);
   sessionStorage.setItem(K.pkce, verifier);
   sessionStorage.setItem(K.state, state);
   sessionStorage.setItem(K.ret, location.href);
-  const u = new URL('/oauth/authorize', apiBase() || location.origin);
+  const u = new URL('/oauth/authorize', apexOrigin());
   u.searchParams.set('response_type', 'code');
   u.searchParams.set('client_id', clientId);
-  u.searchParams.set('redirect_uri', `${location.origin}${location.pathname.replace(/\/+$/, '')}`);
+  u.searchParams.set('redirect_uri', redirectUri());
   u.searchParams.set('code_challenge', await sha256(verifier));
   u.searchParams.set('code_challenge_method', 'S256');
   u.searchParams.set('scope', scope);
   u.searchParams.set('state', state);
-  location.assign(u.toString());
+  for (const [k, v] of Object.entries(extra ?? {})) u.searchParams.set(k, v);
+  return u.toString();
+}
+
+export async function login(opts?: string | LoginOptions): Promise<never> {
+  location.assign(await authorizeUrl(scopeFor(opts)));
   return new Promise<never>(() => undefined); // navigation is taking over
 }
 
-/** Incremental consent: re-authorize with the union of current + needed. */
+/**
+ * Incremental consent: re-authorize with the union of current + needed.
+ *
+ * The union is over what the session ALREADY holds, not over DEFAULT_SCOPE.
+ * Adding the default back meant one incremental request from an identity-only
+ * session (`cell:<owner>/<name>:*`) silently re-asked for the whole workspace,
+ * undoing the narrowing at the first widen. A session that has no scopes yet
+ * still falls back to the default.
+ */
 export async function requestScopes(scopes: string[]): Promise<void> {
   const want = new Set([...grantedScopes(), ...scopes]);
-  for (const s of DEFAULT_SCOPE.split(' ')) want.add(s);
-  await login([...want].join(' '));
+  await login(want.size ? [...want].join(' ') : DEFAULT_SCOPE);
+}
+
+/* ── sign-in as a sheet (docs/auth-in-page.md) ──────────────────── */
+
+/**
+ * Sign in without leaving the page.
+ *
+ * The consent screen is parc.land's own document in an iframe; this only draws
+ * the sheet around it. That split is the point: on a cell host the frame is
+ * cross-origin, so the cell cannot read the passkey ceremony, the consent
+ * session, or the code — it just gets told the outcome. The alternative (the
+ * cell calling /webauthn/* and /oauth/consent itself) would hand every cell
+ * the authority to mint whatever scope the user can grant, with no screen the
+ * user could trust.
+ *
+ * Resolves true when signed in, false when dismissed. Anything structural —
+ * a blocked frame, no message, an exchange that fails — falls back to the
+ * full-page redirect rather than leaving the caller with no way in.
+ */
+export async function loginSheet(opts?: string | LoginOptions): Promise<boolean> {
+  if (typeof document === 'undefined') return login(opts);
+  const scope = scopeFor(opts);
+  const url = await authorizeUrl(scope, { response_mode: 'web_message' });
+  const origin = apexOrigin();
+  injectTheme();
+
+  const host = document.createElement('div');
+  host.setAttribute('role', 'dialog');
+  host.setAttribute('aria-modal', 'true');
+  host.setAttribute('aria-label', 'Sign in');
+  host.style.cssText = [
+    'position:fixed', 'inset:0', 'z-index:2147483000',
+    'background:rgba(0,0,0,.45)',
+    'display:flex', 'align-items:flex-end', 'justify-content:center',
+    'opacity:0', 'transition:opacity .18s ease',
+  ].join(';');
+
+  const panel = document.createElement('div');
+  panel.style.cssText = [
+    'background:var(--paper,#fbfbf8)', 'color:var(--ink,#1c1c1a)',
+    'width:100%', 'max-width:min(100%,440px)',
+    // svh, not vh: mobile browsers count the collapsing toolbar in vh, so a
+    // vh-sized sheet sits partly under it until the user scrolls.
+    'height:min(88svh,620px)',
+    'border-radius:18px 18px 0 0',
+    'display:flex', 'flex-direction:column', 'overflow:hidden',
+    'box-shadow:0 -8px 40px rgba(0,0,0,.28)',
+    'padding-bottom:env(safe-area-inset-bottom,0px)',
+    'transform:translateY(14px)', 'transition:transform .18s ease',
+  ].join(';');
+  // A wide viewport gets a centred dialog rather than a bottom sheet.
+  if (window.matchMedia('(min-width: 640px)').matches) {
+    host.style.alignItems = 'center';
+    panel.style.borderRadius = '18px';
+    panel.style.height = 'min(80svh,620px)';
+  }
+
+  const bar = document.createElement('div');
+  bar.style.cssText = [
+    'display:flex', 'align-items:center', 'justify-content:space-between',
+    'gap:.5rem', 'padding:.6rem .5rem .6rem .9rem',
+    'border-bottom:1px solid var(--line,#e4e4dc)', 'flex:0 0 auto',
+  ].join(';');
+  const label = document.createElement('span');
+  label.textContent = 'parc.land';
+  label.style.cssText = 'font:600 13px/1 system-ui,sans-serif;color:var(--faint,#8a8a82);letter-spacing:.02em';
+  const actions = document.createElement('div');
+  actions.style.cssText = 'display:flex;align-items:center;gap:.25rem';
+  // The escape hatch. A cross-origin frame may refuse the passkey ceremony —
+  // REGISTERING one needs publickey-credentials-create, which is newer than
+  // the get side — and a dead sheet with no way out is worse than a redirect.
+  const full = document.createElement('button');
+  full.type = 'button';
+  full.textContent = 'Open as page';
+  full.style.cssText = 'font:500 13px/1 system-ui,sans-serif;color:var(--faint,#8a8a82);background:none;border:0;padding:.5rem;cursor:pointer';
+  const close = document.createElement('button');
+  close.type = 'button';
+  close.setAttribute('aria-label', 'Close');
+  close.textContent = '\u00d7';
+  close.style.cssText = 'font:400 22px/1 system-ui,sans-serif;color:var(--faint,#8a8a82);background:none;border:0;padding:.25rem .6rem;cursor:pointer';
+
+  const frame = document.createElement('iframe');
+  frame.src = url;
+  frame.title = 'Sign in to parc.land';
+  // Cross-origin frames get no passkey access unless the embedder delegates it.
+  frame.allow = 'publickey-credentials-get; publickey-credentials-create';
+  frame.style.cssText = 'flex:1 1 auto;width:100%;border:0;background:transparent';
+
+  actions.append(full, close);
+  bar.append(label, actions);
+  panel.append(bar, frame);
+  host.append(panel);
+  document.body.append(host);
+  requestAnimationFrame(() => { host.style.opacity = '1'; panel.style.transform = 'translateY(0)'; });
+
+  const prevOverflow = document.body.style.overflow;
+  document.body.style.overflow = 'hidden';
+
+  return new Promise<boolean>((resolve) => {
+    let done = false;
+    const finish = (result: boolean): void => {
+      if (done) return;
+      done = true;
+      window.removeEventListener('message', onMessage);
+      document.removeEventListener('keydown', onKey);
+      document.body.style.overflow = prevOverflow;
+      host.remove();
+      resolve(result);
+    };
+
+    function onMessage(ev: MessageEvent): void {
+      // Both bounds matter: the right origin AND the frame we opened. Origin
+      // alone would accept a message from any other parc.land frame on the
+      // page, and on the apex that includes same-origin frames a cell embeds.
+      if (ev.origin !== origin || ev.source !== frame.contentWindow) return;
+      const data = ev.data as { type?: string; redirect?: string; error?: string } | null;
+      if (!data || data.type !== 'parc.auth') return;
+      if (data.error || !data.redirect) { finish(false); return; }
+      let params: URLSearchParams;
+      try {
+        params = new URL(data.redirect).searchParams;
+      } catch {
+        finish(false);
+        return;
+      }
+      const code = params.get('code');
+      if (!code) { finish(false); return; }
+      void exchangeCode(code, params.get('state'))
+        .then(() => finish(true))
+        .catch((err) => {
+          console.warn('[kernel] sheet exchange failed, falling back', err);
+          finish(false);
+          void login(opts); // navigates; the sheet is already gone
+        });
+    }
+    function onKey(ev: KeyboardEvent): void {
+      if (ev.key === 'Escape') finish(false);
+    }
+
+    window.addEventListener('message', onMessage);
+    document.addEventListener('keydown', onKey);
+    close.addEventListener('click', () => finish(false));
+    host.addEventListener('click', (ev) => { if (ev.target === host) finish(false); });
+    full.addEventListener('click', () => { finish(false); void login(opts); });
+    // A frame the browser refuses to load (CSP, blocked third-party) never
+    // fires `load`; without this the sheet would just sit there empty.
+    const guard = setTimeout(() => { if (!done) { finish(false); void login(opts); } }, 15000);
+    frame.addEventListener('load', () => clearTimeout(guard));
+  });
 }
 
 export function signOut(): void {
@@ -177,13 +377,15 @@ export function signOut(): void {
   location.reload();
 }
 
-async function completeLoginIfReturning(): Promise<boolean> {
-  const search = new URLSearchParams(location.search);
-  const code = search.get('code');
-  if (!code) return false;
-  const returnedState = search.get('state');
-  const back = sessionStorage.getItem(K.ret);
-  sessionStorage.removeItem(K.ret);
+/**
+ * Redeem an authorization code for a session.
+ *
+ * Split out of the returning-navigation path because the code no longer only
+ * arrives in `location.search`: an in-page sheet gets the same code over
+ * postMessage (see `loginSheet`). Both routes must consume the SAME one-shot
+ * state and verifier, so the check lives here once rather than in each caller.
+ */
+async function exchangeCode(code: string, returnedState: string | null): Promise<void> {
   const expected = sessionStorage.getItem(K.state);
   const verifier = sessionStorage.getItem(K.pkce);
   sessionStorage.removeItem(K.state);
@@ -196,7 +398,7 @@ async function completeLoginIfReturning(): Promise<boolean> {
     body: JSON.stringify({
       grant_type: 'authorization_code',
       code,
-      redirect_uri: `${location.origin}${location.pathname.replace(/\/+$/, '')}`,
+      redirect_uri: redirectUri(),
       code_verifier: verifier,
       client_id: localStorage.getItem(K.client),
     }),
@@ -205,6 +407,15 @@ async function completeLoginIfReturning(): Promise<boolean> {
   if (!j.access_token) throw new Error(j.error_description ?? j.error ?? 'token exchange failed');
   setTokens({ access_token: j.access_token, refresh_token: j.refresh_token, scope: j.scope });
   scheduleRefresh(j.expires_in); // arm proactive refresh for this fresh session
+}
+
+async function completeLoginIfReturning(): Promise<boolean> {
+  const search = new URLSearchParams(location.search);
+  const code = search.get('code');
+  if (!code) return false;
+  const back = sessionStorage.getItem(K.ret);
+  sessionStorage.removeItem(K.ret);
+  await exchangeCode(code, search.get('state'));
   // Restore the pre-login URL (minus the code) — query params and all.
   history.replaceState({}, '', back && back.startsWith(location.origin) ? back : location.pathname);
   return true;
@@ -302,7 +513,7 @@ export async function authFetch(path: string, init?: RequestInit): Promise<Respo
  * Boot gate: finish a returning OAuth redirect, else sign in. A repeated
  * failed return fails LOUD instead of looping invisibly.
  */
-export async function ensureAuth(scope: string = DEFAULT_SCOPE): Promise<void> {
+export async function ensureAuth(opts?: string | LoginOptions): Promise<void> {
   try {
     await completeLoginIfReturning();
   } catch (err) {
@@ -313,7 +524,7 @@ export async function ensureAuth(scope: string = DEFAULT_SCOPE): Promise<void> {
     const n = Number(sessionStorage.getItem(K.attempts) ?? '0');
     if (n >= 2) throw new Error('sign-in loop detected — the OAuth return keeps failing; try ?debug=1');
     sessionStorage.setItem(K.attempts, String(n + 1));
-    await login(scope);
+    await login(opts);
   }
   sessionStorage.removeItem(K.attempts);
 }

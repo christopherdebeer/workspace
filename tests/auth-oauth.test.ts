@@ -15,6 +15,8 @@ import {
   scopeMeta,
   isSelfGrantableGranular,
   cellScopesFor,
+  delegationActorForRedirect,
+  frameAncestors,
 } from '../services/auth/oauth';
 import { sha256 } from '../services/auth/store';
 import type { ServiceHttpRequest } from '../platform/runtime';
@@ -292,6 +294,9 @@ describe('OAuth 2.1 authorization_code + PKCE flow', () => {
     config: OAuthConfig = CONFIG,
   ): Promise<{ access_token: string; refresh_token?: string; expires_in?: number; scope: string }> {
     await store.createUser('u1', 'alice');
+    // `cl` must be a registered client whose redirect covers `https://app/cb`:
+    // handleConsent now refuses to mint a code for an unregistered redirect.
+    await store.saveOAuthClient({ clientId: 'cl', clientSecret: null, redirectUris: ['https://app/cb'], clientName: null });
     const sessionId = await store.createSession('u1');
     const verifier = 'verifier-grant-test';
     const consent = await handleConsent(
@@ -338,9 +343,74 @@ describe('OAuth 2.1 authorization_code + PKCE flow', () => {
     expect(tok.expires_in).toBe(300);
   });
 
+  // redirect_uri was never checked against the registered client: DCR stored
+  // `redirect_uris` and nothing read them back, so an authorize URL could name
+  // any destination. Craft one with your own code_challenge, let the victim
+  // approve a real consent screen, and the code lands on your site to be
+  // exchanged with the verifier you chose — PKCE does not help, because you
+  // crafted the URL.
+  describe('the code only goes where the client registered', () => {
+    async function consentTo(redirectUri: string, registered: string[] = ['https://app/cb']) {
+      const store = createMemoryStore();
+      await store.createUser('u1', 'alice');
+      await store.saveOAuthClient({ clientId: 'cl', clientSecret: null, redirectUris: registered, clientName: null });
+      const sessionId = await store.createSession('u1');
+      return handleConsent(
+        makeReq({
+          path: '/oauth/consent',
+          body: { sessionId, clientId: 'cl', redirectUri, codeChallenge: sha256('v'), codeChallengeMethod: 'S256', scope: 'workspace:read' },
+        }),
+        store,
+        CONFIG,
+      );
+    }
+
+    it('refuses a redirect to an origin the client never registered', async () => {
+      const res = await consentTo('https://evil.example/steal');
+      expect(res.statusCode).toBe(400);
+      expect((res.body as { error: string }).error).toBe('invalid_request');
+      expect((res.body as { redirect?: string }).redirect).toBeUndefined();
+    });
+
+    it('refuses a client that does not exist', async () => {
+      const store = createMemoryStore();
+      await store.createUser('u1', 'alice');
+      const sessionId = await store.createSession('u1');
+      const res = await handleConsent(
+        makeReq({
+          path: '/oauth/consent',
+          body: { sessionId, clientId: 'never-registered', redirectUri: 'https://app/cb', codeChallenge: sha256('v'), codeChallengeMethod: 'S256' },
+        }),
+        store,
+        CONFIG,
+      );
+      expect(res.statusCode).toBe(400);
+    });
+
+    it('refuses a malformed redirect', async () => {
+      expect((await consentTo('not-a-url')).statusCode).toBe(400);
+    });
+
+    // The bound is the ORIGIN, not the exact string: the kernel caches one client
+    // per origin and reuses it across every surface path there, so a reader who
+    // registered at `/` signs in at `/@c15r/shelved` on the same client.
+    it('allows another path on an origin the client registered', async () => {
+      const res = await consentTo('https://parc.land/@c15r/shelved', ['https://parc.land', 'https://parc.land/']);
+      expect(res.statusCode ?? 200).toBe(200);
+      expect((res.body as { redirect: string }).redirect).toContain('https://parc.land/@c15r/shelved?code=');
+    });
+
+    it('still refuses a lookalike origin', async () => {
+      expect((await consentTo('https://parc.land.evil.example/@c15r/shelved', ['https://parc.land'])).statusCode).toBe(400);
+    });
+  });
+
   it('rejects a bad PKCE verifier', async () => {
     const store = createMemoryStore();
     await store.createUser('u1', 'alice');
+    // `cl` must be a registered client whose redirect covers `https://app/cb`:
+    // handleConsent now refuses to mint a code for an unregistered redirect.
+    await store.saveOAuthClient({ clientId: 'cl', clientSecret: null, redirectUris: ['https://app/cb'], clientName: null });
     const sessionId = await store.createSession('u1');
     await handleConsent(
       makeReq({
@@ -504,13 +574,20 @@ describe('per-type consent + granular elevation (ADR-0023 §B / ADR-0022)', () =
   describe('a cell sign-in can be granted the scope that names it', () => {
     const CELL = 'c15r-drive.on.parc.land';
     let suffix: string | undefined;
+    let base: string | undefined;
     beforeEach(() => {
       suffix = process.env.CELL_DOMAIN_SUFFIX;
+      base = process.env.PUBLIC_BASE_URL;
       process.env.CELL_DOMAIN_SUFFIX = '.on.parc.land';
+      // The path form is only meaningful on our OWN host, so the anchor has to
+      // be configured for it to be read at all.
+      process.env.PUBLIC_BASE_URL = 'https://parc.land';
     });
     afterEach(() => {
       if (suffix === undefined) delete process.env.CELL_DOMAIN_SUFFIX;
       else process.env.CELL_DOMAIN_SUFFIX = suffix;
+      if (base === undefined) delete process.env.PUBLIC_BASE_URL;
+      else process.env.PUBLIC_BASE_URL = base;
     });
 
     it('offers the cell the sign-in came from', () => {
@@ -526,6 +603,50 @@ describe('per-type consent + granular elevation (ADR-0023 §B / ADR-0022)', () =
       expect(cellScopesFor('https://parc.land/whatever')).toEqual([]);
       expect(cellScopesFor(undefined)).toEqual([]);
     });
+    // An APEX-served cell is the common case (every /@owner/name surface), and it
+    // was the case this missed: derived from `cellCeiling`, which only recognises
+    // a host-isolated redirect, the apex offered nothing — so a cell asking to be
+    // signed in to got an empty picker and had to ask for the whole workspace.
+    it('offers the cell an apex /@owner/name redirect names', () => {
+      expect(cellScopesFor('https://parc.land/@c15r/shelved')).toEqual(['cell:c15r/shelved:*']);
+      expect(cellScopesFor('https://parc.land/@c15r/drive/deep/link')).toEqual(['cell:c15r/drive:*']);
+    });
+    // The apex path is bounded the same way the host is: by what the redirect says.
+    it('never offers a different cell from an apex redirect', () => {
+      expect(cellScopesFor('https://parc.land/@c15r/shelved')).not.toContain('cell:someone/else:*');
+    });
+    // The two forms address the same cell, so they must name the same scope —
+    // otherwise a cell's sign-in would depend on which origin served it.
+    it('agrees between the host-isolated and apex forms of one cell', () => {
+      expect(cellScopesFor('https://c15r-drive.on.parc.land')).toEqual(cellScopesFor('https://parc.land/@c15r/drive'));
+    });
+    // Widening the derivation must not have widened what it hands back.
+    it('still offers only a cell scope from an apex redirect', () => {
+      expect(cellScopesFor('https://parc.land/@c15r/shelved').every((s) => s.startsWith('cell:'))).toBe(true);
+    });
+
+    // `/@owner/name` is a route WE serve. On anyone else's origin it is just a
+    // path they chose, and reading it as a cell address let a foreign redirect
+    // borrow a cell's identity: the consent screen named that cell as the thing
+    // asking, and the minted token carried `actor: cell:<owner>/<name>` — a
+    // write attributed to a cell that never ran.
+    it('refuses to read a cell address off a foreign origin', () => {
+      expect(cellScopesFor('https://evil.example/@c15r/shelved')).toEqual([]);
+      expect(cellScopesFor('https://parc.land.evil.example/@c15r/shelved')).toEqual([]);
+    });
+    it('refuses a cell host that is not ours', () => {
+      expect(cellScopesFor('https://c15r-shelved.on.evil.example')).toEqual([]);
+    });
+    it('names no cell, and so no forged actor, for a foreign redirect', () => {
+      expect(delegationActorForRedirect('https://evil.example/@c15r/shelved', 'https://parc.land', 'Totally Fine', 'cl'))
+        .toBe('client:totally-fine');
+    });
+    it('has no path-form cell at all when no public base url is configured', () => {
+      delete process.env.PUBLIC_BASE_URL;
+      expect(cellScopesFor('https://parc.land/@c15r/shelved')).toEqual([]);
+      // The host form is anchored by the cell domain and is unaffected.
+      expect(cellScopesFor(`https://${CELL}`)).toEqual(['cell:c15r/drive:*']);
+    });
     // It is a CELL scope only. The ceiling also contains workspace read/write,
     // and admitting those here would hand every cell sign-in the whole slice
     // without anyone choosing it.
@@ -538,6 +659,39 @@ describe('per-type consent + granular elevation (ADR-0023 §B / ADR-0022)', () =
       expect(m.verb).toBe('read');
       expect(m.title).toContain('@c15r/drive');
       expect(m.description).toMatch(/username/i);
+    });
+  });
+
+  // The authorize screen had no framing policy at all, so any site could frame
+  // the real consent screen and clickjack Authorize. It now also has a
+  // legitimate embedder — a cell drawing sign-in as a sheet — so the policy is
+  // an allowlist, and the thing worth pinning is that it stays narrow.
+  describe('who may frame the authorize screen', () => {
+    let suffix: string | undefined;
+    beforeEach(() => { suffix = process.env.CELL_DOMAIN_SUFFIX; });
+    afterEach(() => {
+      if (suffix === undefined) delete process.env.CELL_DOMAIN_SUFFIX;
+      else process.env.CELL_DOMAIN_SUFFIX = suffix;
+    });
+
+    it('admits cell hosts when a cell domain is configured', () => {
+      process.env.CELL_DOMAIN_SUFFIX = '.on.parc.land';
+      expect(frameAncestors()).toBe("frame-ancestors 'self' https://*.on.parc.land");
+    });
+    it('collapses to self when no cell domain is configured', () => {
+      delete process.env.CELL_DOMAIN_SUFFIX;
+      expect(frameAncestors()).toBe("frame-ancestors 'self'");
+    });
+    // The failure that would matter: a policy that is present but permissive
+    // reads as "handled" while leaving the clickjacking hole wide open.
+    it('never admits everyone', () => {
+      for (const v of ['.on.parc.land', undefined]) {
+        if (v) process.env.CELL_DOMAIN_SUFFIX = v; else delete process.env.CELL_DOMAIN_SUFFIX;
+        const policy = frameAncestors();
+        expect(policy).toMatch(/^frame-ancestors /);
+        expect(policy.split(/\s+/).slice(1)).not.toContain('*');
+        expect(policy).not.toContain('http://');
+      }
     });
   });
 
@@ -586,6 +740,9 @@ describe('per-type consent + granular elevation (ADR-0023 §B / ADR-0022)', () =
   it('handleConsent grants a requested per-type scope even though it is not in scopesSupported', async () => {
     const store = createMemoryStore();
     await store.createUser('u1', 'alice');
+    // `cl` must be a registered client whose redirect covers `https://app/cb`:
+    // handleConsent now refuses to mint a code for an unregistered redirect.
+    await store.saveOAuthClient({ clientId: 'cl', clientSecret: null, redirectUris: ['https://app/cb'], clientName: null });
     const sessionId = await store.createSession('u1');
     const verifier = 'verifier-typescope';
     const consent = await handleConsent(

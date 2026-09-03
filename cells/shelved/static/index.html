@@ -1,0 +1,19 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#f3eee2" />
+  <meta name="description" content="Find books to borrow or pass on from the shelves around you." />
+  <title>Shelved · books are better shared</title>
+  <!-- styled -->
+</head>
+<body>
+  <div id="app"><p class="boot">opening your shelf…</p></div>
+  <!-- state -->
+  <script>
+    window.addEventListener('error', function (e) { var n = document.createElement('pre'); n.style.cssText = 'position:fixed;inset:auto 8px 8px;background:#7b2f25;color:white;padding:8px;z-index:99;white-space:pre-wrap'; n.textContent = e.message || 'Shelved failed to start'; document.body.appendChild(n); });
+  </script>
+  <script type="module" src="/@c15r/shelved/app.js"></script>
+</body>
+</html>

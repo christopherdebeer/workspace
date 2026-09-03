@@ -154,7 +154,16 @@ jobs:
       # script means an unchanged corpus is a no-op (no revision churn). Gated
       # on the PARC_TOKEN secret (mint a narrow write:workspace token via
       # auth.mintToken and add it as a repo secret); never fails the deploy.
+      # ...but NOT from a branch dispatch, unless asked for. This publishes the
+      # repo's docs into the LIVE substrate corpus, so dispatching a feature
+      # branch republished ~60 facts from unmerged docs — the one step here that
+      # does something a branch deploy should not, called out in the dispatch
+      # comment at the top of this file and then observed doing exactly that
+      # (`file/docs/auth-in-page.md` landed at revision 1 from an unmerged
+      # branch). `force_docs_sync` still overrides, because that input exists to
+      # recover a stranded decomposition and a human asking for it has said so.
       - name: Sync docs corpus into the substrate
+        if: github.event_name == 'push' || inputs.force_docs_sync
         continue-on-error: true
         env:
           PARC_TOKEN: ${{ secrets.PARC_TOKEN }}

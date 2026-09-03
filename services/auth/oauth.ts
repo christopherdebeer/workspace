@@ -18,6 +18,7 @@ import {
   chainDepth,
   chainActors,
   type ActClaim,
+  type OAuthClient,
 } from './store';
 
 /**
@@ -45,6 +46,18 @@ function cellCeiling(redirectUri: string | undefined): string[] | null {
   return ['workspace:read', 'workspace:write', `cell:${label.slice(0, i)}/${label.slice(i + 1)}:*`];
 }
 
+/** The platform's own host, from the configured public base URL. Unset (local,
+ *  bootstrap) means we cannot vouch for any host, so nothing is trusted by path. */
+function apexHost(): string | null {
+  const base = process.env.PUBLIC_BASE_URL;
+  if (!base) return null;
+  try {
+    return new URL(base).host;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * The cell a sign-in originates at, derived from the redirect_uri — so consent can
  * name the *cell* ("Authorize @c15r/machine") rather than only the shared client.
@@ -69,6 +82,18 @@ function cellFromRedirect(redirectUri: string | undefined): { owner: string; nam
       return { owner, name, address: `@${owner}/${name}` };
     }
   }
+  // THE PATH FORM ONLY MEANS ANYTHING ON OUR OWN HOST. `/@owner/name` is a
+  // route the platform serves; on somebody else's origin it is just a path
+  // they chose. Unanchored, `https://evil.example/@c15r/shelved` reported
+  // itself as the cell @c15r/shelved — which the consent screen printed as the
+  // thing asking for access, `cellScopesFor` answered with that cell's scope,
+  // and `delegationActorForRedirect` stamped onto the minted token as
+  // `actor: cell:c15r/shelved`. The last one is provenance forgery: writes
+  // made through that token would be attributed to a cell that never ran.
+  // The host form above was always anchored (it must end in the cell domain);
+  // this one never was.
+  const apex = apexHost();
+  if (!apex || u.host !== apex) return null;
   const m = u.pathname.match(/^\/@([^/]+)\/([^/]+)/);
   if (m) return { owner: m[1], name: m[2], address: `@${m[1]}/${m[2]}` };
   return null;
@@ -220,9 +245,18 @@ export function isSelfGrantableGranular(scope: string): boolean {
  * this is the missing half, which makes the scope offerable at the authorize
  * step so a code can carry it in the first place.
  *
- * Bounded to the cell the sign-in ORIGINATES AT, derived from the same
- * `redirect_uri` the ceiling uses — so a request can only ever name the cell
- * whose page the player is standing on, never a third party's.
+ * Bounded to the cell the sign-in ORIGINATES AT, derived from the
+ * `redirect_uri` — so a request can only ever name the cell whose page the
+ * player is standing on, never a third party's.
+ *
+ * Derived via `cellFromRedirect`, not `cellCeiling`, because the ceiling only
+ * recognises a HOST-ISOLATED redirect (`<owner>-<name>.on.parc.land`). An
+ * apex-served cell at `/@owner/name` got an empty list, so the scope was
+ * filtered out of `granted` and the consent screen offered nothing — the same
+ * disabled-Authorize case described above, still live for every apex cell.
+ * `cellFromRedirect` already parses both forms. This widens nothing: the two
+ * agree on the host-isolated case, and the apex case stays bounded to the cell
+ * in the path.
  *
  * This grants no authority by itself, and that is the point. A cell call is
  * authorised by the registry (`authorizeAccess`: owner, grants, tool grants),
@@ -230,11 +264,12 @@ export function isSelfGrantableGranular(scope: string): boolean {
  * never the token. So a token holding ONLY this is an identity token — which
  * is exactly what a cell that wants to know who you are should be able to ask
  * for, instead of the `workspace:read workspace:write` the kernel's default
- * scope asks for today (docs/cell-origin-isolation.md §4.5 — the least-
- * privilege handoff this makes reachable).
+ * scope asks for (docs/cell-origin-isolation.md §4.5 — the least-privilege
+ * handoff this makes reachable).
  */
 export function cellScopesFor(redirectUri: string | undefined): string[] {
-  return (cellCeiling(redirectUri) ?? []).filter((s) => s.startsWith('cell:'));
+  const cell = cellFromRedirect(redirectUri);
+  return cell ? [`cell:${cell.owner}/${cell.name}:*`] : [];
 }
 
 const DEFAULT_EXPIRY = 3600;
@@ -360,7 +395,58 @@ export async function handleDCR(req: ServiceHttpRequest, store: AuthStore): Prom
   );
 }
 
+/**
+ * Who may frame the authorize screen (`Content-Security-Policy`).
+ *
+ * It carried NO framing policy, so any site could put the real consent screen
+ * in an iframe and clickjack Authorize. It also has a legitimate embedder now:
+ * a cell drawing sign-in as an in-page sheet around this document
+ * (docs/auth-in-page.md), which is why this is an allowlist and not DENY.
+ *
+ * Cell hosts only. A CSP host wildcard matches exactly ONE label, so
+ * `https://*.on.parc.land` admits `c15r-shelved.on.parc.land` and not a
+ * deeper `on.parc.land.evil.example` — and never a bare `*`, which would put
+ * the clickjacking hole back while looking like a policy. Unset cell domain
+ * (local, bootstrap) collapses to `'self'`.
+ */
+export function frameAncestors(): string {
+  const suffix = process.env.CELL_DOMAIN_SUFFIX; // e.g. ".on.parc.land"
+  return suffix ? `frame-ancestors 'self' https://*${suffix}` : "frame-ancestors 'self'";
+}
+
 // ─── Consent ─────────────────────────────────────────────────────
+
+/**
+ * Is this `redirect_uri` one the client registered?
+ *
+ * It was never checked. `handleDCR` stored `redirect_uris` and nothing read
+ * them back, so an authorize URL could name any destination at all: craft one
+ * with your own `code_challenge`, let the victim approve a real consent screen
+ * on the real origin, and the code arrives at your site to be exchanged with
+ * the verifier you chose. PKCE does not help, because whoever crafted the URL
+ * holds the verifier.
+ *
+ * The bound is the ORIGIN, not the exact string RFC 6749 §3.1.2.3 asks for.
+ * The kernel caches one client per origin and reuses it across every surface
+ * path there (`ensureClientId`), so the client a reader registered at `/` is
+ * the one that signs them in at `/@c15r/shelved`; exact matching would reject
+ * every path but the one they first landed on. Origin matching still closes
+ * the hole — a code cannot land anywhere the client did not name — and
+ * tightening it further is a kernel change (register the path, or re-register
+ * when it moves), not a server one.
+ */
+export function redirectAllowed(client: OAuthClient | null, redirectUri: string | undefined): boolean {
+  if (!client || !redirectUri) return false;
+  const originOf = (u: string): string | null => {
+    try {
+      return new URL(u).origin;
+    } catch {
+      return null;
+    }
+  };
+  const want = originOf(redirectUri);
+  return !!want && client.redirectUris.some((u) => originOf(u) === want);
+}
 
 interface ConsentBody {
   sessionId: string;
@@ -384,6 +470,14 @@ export async function handleConsent(
   const session = await store.validateSession(b.sessionId);
   if (!session) return ok({ error: 'Invalid or expired session' }, 401);
   if (session.scope !== 'consent') return ok({ error: 'Session not authorized for consent' }, 403);
+
+  // The code is about to be minted against this redirect. It must be one the
+  // client registered, or the authorize URL chooses where the code lands.
+  const client = await store.getOAuthClient(b.clientId);
+  if (!redirectAllowed(client, b.redirectUri)) {
+    console.warn('[oauth] consent: unregistered redirect_uri', { clientId: b.clientId, redirectUri: b.redirectUri });
+    return ok({ error: 'invalid_request', error_description: 'redirect_uri is not registered for this client' }, 400);
+  }
 
   // Authoritative scope gating: keep only scopes this user may actually grant
   // (admin scopes require an admin username), regardless of what the page sent.
