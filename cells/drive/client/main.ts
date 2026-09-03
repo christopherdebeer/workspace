@@ -4749,7 +4749,13 @@ function buildTerrainMesh(t: HeightTile): void {
   // THE CORRIDOR IS IN THE GEOMETRY where a road comes near — see
   // refineTileGeometry. A tile with no road keeps the plain grid.
   const nearTruck = Math.max(0, Math.abs(state.x - (t.xs + t.w / 2)) - t.w / 2, Math.abs(state.z - (t.zs + t.h / 2)) - t.h / 2) <= REFINE_R;
-  const corridor = REFINE && nearTruck;
+  // …AND ONLY ONCE THE ROADS HAVE STOPPED ARRIVING. Every way that lands
+  // dirties the tiles it crosses, so during a stream the four in-range tiles
+  // rebuild a dozen times each — measured at Vélizy as 209 builds for 30
+  // tiles, 350ms a corridor build in that density. While the stream is busy
+  // a tile builds plain (the old carve, at the old price) and the quiet path
+  // gives it its corridor exactly once, when nothing more is coming.
+  const corridor = REFINE && nearTruck && osmStreamQuiet();
   const refined = REFINE ? refineTileGeometry(t, SEG, corridor) : null;
   const geo = refined ? refined.geo : new THREE.PlaneGeometry(t.w, t.h, SEG, SEG);
   if (!refined) { geo.rotateX(-Math.PI / 2); (geo.userData as { seg?: number }).seg = SEG; }
@@ -5022,10 +5028,10 @@ function flushTerrain(now: number): void {
     const t = heightTiles.get(key);
     if (t) { terrainAt = now; hydroFeed(t); return; }
   }
-  // A TILE THAT CAME INTO RANGE. Built plain because the truck was far, it
-  // takes its corridor now — one per quiet visit, so a drive into town is a
-  // rebuild every 200ms and never a burst.
-  if (REFINE) {
+  // A TILE THAT CAME INTO RANGE, or was built plain while roads were still
+  // streaming, takes its corridor now — one per quiet visit, so a drive into
+  // town is a rebuild every 200ms and never a burst.
+  if (REFINE && osmStreamQuiet()) {
     for (const [key, mesh] of terrainMeshes) {
       if ((mesh.userData as { corridor?: boolean }).corridor) continue;
       const t = heightTiles.get(key);
@@ -10264,6 +10270,8 @@ const REFINE_R = Number(new URLSearchParams(location.search).get('refr') ?? 1100
 /** Every refined tile's border vertices, world x, z, y in threes, so a plain
  *  neighbour can take the same points on the shared edge and no crack opens. */
 const refinedBorders = new Map<string, Float32Array>();
+/** Is the road stream quiet — nothing in flight and nothing queued? */
+function osmStreamQuiet(): boolean { return osmInFlight === 0 && osmQueue.length === 0; }
 /** Cost of the refinement, for `__refine`. */
 const refineCost = { tiles: 0, cells: 0, tris: 0, ms: 0, plainTris: 0, verts: 0, msLines: 0, msSplit: 0, msHeights: 0, msGeo: 0 };
 
