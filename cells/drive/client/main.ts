@@ -32,7 +32,7 @@ import {
   solveChain as solveProfile,
 } from './roadprofile';
 import { RoadProfileWorker } from './roadprofile-worker';
-import { buildTile, borderShared as kBorderShared, roadFloorHard as kRoadFloorHard, corridorH as kCorridorH, stripBreakLines as kStripBreakLines, stripFloor, cellTable, normalMapBytes, refineCost, plainCost, carveCost, mmKey, mmIndex, mmNear, onTileEdge, channelsNear as kChannelsNear,
+import { buildTile, plainLattice, borderShared as kBorderShared, roadFloorHard as kRoadFloorHard, corridorH as kCorridorH, stripBreakLines as kStripBreakLines, stripFloor, cellTable, normalMapBytes, refineCost, plainCost, carveCost, mmKey, mmIndex, mmNear, onTileEdge, channelsNear as kChannelsNear,
   BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, SEA_BED, AREA_MIX,
   type HeightTile, type CellTris, type StripLike, type BreakLine, type TerrainStore, type CarveLog, type MmPt } from './terrain-kernel';
 import { createOverlays } from './overlays';
@@ -10179,6 +10179,26 @@ function segOf(geo: THREE.BufferGeometry): number {
     out.builds = terrainBuilds; out.dist = +Math.max(0, Math.abs(state.x - (t.xs + t.w / 2)) - t.w / 2, Math.abs(state.z - (t.zs + t.h / 2)) - t.h / 2).toFixed(0);
   }
   return out;
+};
+/** The kernel's lattice against THREE's PlaneGeometry, and a build scanned
+ *  for non-finite numbers — the two ways the split could silently break. */
+(window as unknown as { __kernelCheck?: object }).__kernelCheck = (): object => {
+  const t = heightTiles.get(`${tileAt(origin.lat - state.z / M_LAT, origin.lon + state.x / origin.mLon, TERRAIN_Z).join('/')}`) ?? [...heightTiles.values()][0];
+  if (!t) return { err: 'no tile' };
+  const SEG = terrainSeg;
+  const g = new THREE.PlaneGeometry(t.w, t.h, SEG, SEG); g.rotateX(-Math.PI / 2);
+  const L = plainLattice(t, SEG);
+  const gp = (g.attributes.position as THREE.BufferAttribute).array as Float32Array, gi = (g.index as THREE.BufferAttribute).array;
+  let dp = 0; for (let i = 0; i < gp.length; i++) dp = Math.max(dp, Math.abs(gp[i] - L.pos[i]));
+  let di = 0; for (let i = 0; i < gi.length; i++) if (gi[i] !== L.idx[i]) di++;
+  const gu = (g.attributes.uv as THREE.BufferAttribute).array as Float32Array; let du = 0; for (let i = 0; i < gu.length; i++) du = Math.max(du, Math.abs(gu[i] - L.uv[i]));
+  const b = buildTile(kStore, t, SEG, false, REFINE);
+  const bad = (a: Float32Array): number => { let n = 0; for (let i = 0; i < a.length; i++) if (!Number.isFinite(a[i])) n++; return n; };
+  const mesh = terrainMeshes.get(`${t.tx}/${t.ty}`);
+  const mp = mesh ? (mesh.geometry.attributes.position as THREE.BufferAttribute).array as Float32Array : null;
+  return { key: `${t.tx}/${t.ty}`, seg: SEG, nPlane: gp.length / 3, nLattice: L.pos.length / 3, maxPosDiff: dp, idxDiffs: di, maxUvDiff: du, idxLen: [gi.length, L.idx.length],
+    nanPos: bad(b.pos), nanCol: bad(b.colors), nanNrm: bad(b.normals), nanUv: bad(b.uv), meshNan: mp ? bad(mp) : null, meshN: mp ? mp.length / 3 : null,
+    y0: b.pos[1], yMid: b.pos[Math.floor(b.pos.length / 6) * 3 + 1], ground: groundAt(state.x, state.z), meshAt: meshSurfaceAt(state.x, state.z) };
 };
 (window as unknown as { __refine?: object }).__refine = (): object => ({ on: REFINE, ...refineCost, plain: { ...plainCost } });
 (window as unknown as { __buildLog?: object }).__buildLog = (): object => buildLog.slice();
