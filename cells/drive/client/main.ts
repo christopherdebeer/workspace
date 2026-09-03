@@ -495,6 +495,7 @@ const RAW_BITMAP: ImageBitmapOptions = { colorSpaceConversion: 'none', premultip
  *  bytes, and a cached tile must decode through exactly this path. */
 async function decodeTerrarium(blob: Blob, px: number): Promise<Float32Array> {
   const bmp = await createImageBitmap(blob, RAW_BITMAP);
+  const t0 = performance.now();
   const cv = typeof OffscreenCanvas !== 'undefined'
     ? new OffscreenCanvas(px, px)
     : Object.assign(document.createElement('canvas'), { width: px, height: px });
@@ -504,6 +505,7 @@ async function decodeTerrarium(blob: Blob, px: number): Promise<Float32Array> {
   const d = cx.getImageData(0, 0, px, px).data;
   const out = new Float32Array(px * px);
   for (let i = 0; i < px * px; i++) out[i] = d[i * 4] * 256 + d[i * 4 + 1] + d[i * 4 + 2] / 256 - 32768;
+  profAdd('tileDecode', t0);
   return out;
 }
 // ── MAPTERHORN: the same encoding, better ground ───────────────────
@@ -757,6 +759,7 @@ async function coverRaster(z: number, x: number, y: number): Promise<Uint8Array>
   }
   try {
     const bmp = await createImageBitmap(blob, RAW_BITMAP);
+    const t0 = performance.now();
     const cv = typeof OffscreenCanvas !== 'undefined'
       ? new OffscreenCanvas(256, 256)
       : Object.assign(document.createElement('canvas'), { width: 256, height: 256 });
@@ -766,6 +769,7 @@ async function coverRaster(z: number, x: number, y: number): Promise<Uint8Array>
     const d = cx.getImageData(0, 0, 256, 256).data;
     const data = new Uint8Array(256 * 256);
     for (let i = 0; i < data.length; i++) data[i] = d[i * 4];   // red channel IS the class
+    profAdd('coverDecode', t0);
     // Kept only now the pixels are real. The cell computes this tile out of
     // WorldCover COGs and can answer 200 with an error document; storing that
     // would turn one bad minute upstream into a permanently blank ecology.
@@ -5015,8 +5019,8 @@ function hydroRefeed(t: HeightTile, key: string): void {
   tworker.build({ ...job, hydroOnly: true }, transfer).then((r) => {
     buildInFlight = null;
     if (r.epoch !== worldEpoch || heightTiles.get(key) !== t) { workerLedger.dropped++; return; }
-    hydroFeed(t, r.hydroElev);
-  }, () => { buildInFlight = null; hydroFeed(t); });
+    const t0 = performance.now(); hydroFeed(t, r.hydroElev); profAdd('hydroRefeed', t0);
+  }, () => { buildInFlight = null; const t0 = performance.now(); hydroFeed(t); profAdd('hydroRefeed', t0); });
 }
 (window as unknown as { __tworker?: object }).__tworker = (): object =>
   tworker ? { on: !tworker.disabled, ...tworker.stats, inFlight: buildInFlight, gap: Math.round(workerGap), ...workerLedger } : { on: false };
@@ -17755,11 +17759,14 @@ async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
     const json = await res.json() as { ways?: Array<{ id: number; tags?: Record<string, string>; geometry?: Array<[number, number]> }> };
     // Stored as [lat, lon] pairs — a third of the bytes of {lat, lon} objects,
     // and the renderer wants the object shape, so widen on the way in.
-    return (json.ways ?? []).map((w) => ({
+    const t0 = performance.now();
+    const ways = (json.ways ?? []).map((w) => ({
       id: w.id,
       tags: w.tags,
       geometry: (w.geometry ?? []).map(([lat, lon]) => ({ lat, lon })),
     })) as OsmWay[];
+    profAdd('osmParse', t0);
+    return ways;
   } finally { clearTimeout(bail); }
   // NOTE: no catch. A timeout or a network blip is THIS TILE failing, and the
   // caller's backoff already handles that; swallowing it here dropped the
@@ -30918,48 +30925,79 @@ let profFrames = 0, profSince = 0, profWhole = 0;
 /** THE SESSION'S TELEMETRY. Everything the windowed profiler sees, never
  *  reset, plus what it cannot say per window: the frame-time distribution,
  *  and for every frame over SLOW_FRAME_MS which phases ran in it and which
- *  was the largest — the blame that isolates a contributor to a drop. The
- *  unattributed remainder of a slow frame (wall time minus every measured
- *  phase) is kept as its own row: GC, the GPU's own wait, an event-loop task
- *  nothing here wraps. Read with __telemetry(); a double tap on the FPS
- *  readout copies it to the clipboard. */
+ *  was the largest — the blame that isolates a contributor to a drop. What
+ *  no wrapper or mark explains is split into two rows: `tick residue` (tick
+ *  code nothing here covers) and `gap` (time the main thread never ran —
+ *  the GPU's wait, vsync, GC). Read with __telemetry(); a double tap on the
+ *  FPS readout copies it to the clipboard. */
 const SLOW_FRAME_MS = 50;
 interface SessRow { ms: number; n: number; max: number; slowMs: number; top: number }
 const sessProf = new Map<string, SessRow>();
 const sessAt = performance.now();
-let sessFrames = 0, sessWall = 0, sessSlow = 0, sessUnattr = 0, sessUnattrSlow = 0, sessUnattrTop = 0;
+let sessFrames = 0, sessWall = 0, sessSlow = 0;
 const sessHist = new Uint32Array(6);                       // <16.7 <33 <50 <100 <250 ≥250
 const sessRing = new Float32Array(4096); let sessRingN = 0; // last 4096 frame times
-const sessSlowLog: Array<{ t: number; ms: number; top: string; topMs: number; unattr: number }> = [];
+const sessSlowLog: Array<{ t: number; ms: number; tops: string }> = [];
 const curFrame = new Map<string, number>();
-function profAdd(name: string, t0: number): void {
-  const d = performance.now() - t0;
+/** WHICH SIDE OF THE FRAME LOOP a measurement fell on. Inside the tick it is
+ *  the main thread's own frame work; outside it is an event-loop task — a
+ *  worker reply, a fetch continuation, a raster decode — that the frame's
+ *  wall time still paid for. The two residues are the diagnosis: `tick
+ *  residue` is tick code no mark or wrapper covers, `gap` is time the main
+ *  thread never ran at all — the GPU's own wait, vsync, GC, layout. A frame
+ *  whose gap dwarfs its tick is bound by the GPU, not by anything here. The
+ *  first device report could not say which: 70% of its wall time was one
+ *  undifferentiated "unattributed" row. */
+let inTick = false, tickStart = 0, tickMsCur = 0, attrIn = 0, attrOut = 0, markAt = 0, attrSinceMark = 0;
+let sessTick = 0, sessOff = 0;
+const tickRing = new Float32Array(4096);
+function profBump(name: string, d: number): void {
   const e = frameProf.get(name);
   if (e) { e.ms += d; e.n++; if (d > e.max) e.max = d; } else frameProf.set(name, { ms: d, n: 1, max: d });
   const r = sessProf.get(name);
   if (r) { r.ms += d; r.n++; if (d > r.max) r.max = d; } else sessProf.set(name, { ms: d, n: 1, max: d, slowMs: 0, top: 0 });
   curFrame.set(name, (curFrame.get(name) ?? 0) + d);
 }
+function profAdd(name: string, t0: number): void {
+  const d = performance.now() - t0;
+  if (inTick) { attrIn += d; attrSinceMark += d; } else attrOut += d;
+  profBump(name, d);
+}
+/** A SECTION MARK: everything since the previous mark that no wrapped call
+ *  inside it already claimed. The tick is sectioned with these, so its
+ *  inline physics, streaming and camera code show up by name without a
+ *  wrapper around every statement. */
+function profMark(name: string): void {
+  const now = performance.now();
+  const d = Math.max(0, now - markAt - attrSinceMark);
+  markAt = now; attrSinceMark = 0;
+  attrIn += d;
+  profBump(name, d);
+}
+function profTickStart(): void { inTick = true; tickStart = markAt = performance.now(); attrSinceMark = 0; }
+function profTickEnd(name: string): void { profMark(name); tickMsCur = performance.now() - tickStart; inTick = false; }
 let profLast = 0;
 function profFrame(now: number): void {
   profFrames++;
   if (profLast) {
     const fm = now - profLast;
     profWhole += fm;
-    sessFrames++; sessWall += fm;
-    sessRing[sessRingN++ % sessRing.length] = fm;
+    sessFrames++; sessWall += fm; sessTick += tickMsCur; sessOff += attrOut;
+    sessRing[sessRingN % sessRing.length] = fm;
+    tickRing[sessRingN % tickRing.length] = tickMsCur;
+    sessRingN++;
     sessHist[fm < 16.7 ? 0 : fm < 33 ? 1 : fm < 50 ? 2 : fm < 100 ? 3 : fm < 250 ? 4 : 5]++;
-    let sum = 0, top = '', topMs = 0;
-    for (const [k, v] of curFrame) { sum += v; if (v > topMs) { topMs = v; top = k; } }
-    const unattr = Math.max(0, fm - sum);
-    sessUnattr += unattr;
+    // The two residues, as phases of their own, so the blame below can name them.
+    profBump('tick residue', Math.max(0, tickMsCur - attrIn));
+    profBump('gap (gpu/vsync/gc)', Math.max(0, fm - tickMsCur - attrOut));
+    attrIn = attrOut = 0;
     if (fm > SLOW_FRAME_MS) {
       sessSlow++;
-      for (const [k, v] of curFrame) { const r = sessProf.get(k); if (r) r.slowMs += v; }
-      sessUnattrSlow += unattr;
-      if (unattr > topMs) { sessUnattrTop++; top = 'unattributed'; topMs = unattr; }
-      else { const r = sessProf.get(top); if (r) r.top++; }
-      sessSlowLog.push({ t: Math.round(now / 1000), ms: Math.round(fm), top, topMs: Math.round(topMs), unattr: Math.round(unattr) });
+      let top = '', topMs = 0;
+      for (const [k, v] of curFrame) { const r = sessProf.get(k); if (r) r.slowMs += v; if (v > topMs) { topMs = v; top = k; } }
+      const r = sessProf.get(top); if (r) r.top++;
+      const tops = [...curFrame.entries()].sort((x, y) => y[1] - x[1]).slice(0, 3).map(([k, v]) => `${k}:${Math.round(v)}`).join(' ');
+      sessSlowLog.push({ t: Math.round(now / 1000), ms: Math.round(fm), tops });
       if (sessSlowLog.length > 24) sessSlowLog.shift();
     }
   }
@@ -30972,6 +31010,10 @@ function telemetryReport(): string {
   const n = Math.min(sessRingN, sessRing.length);
   const sorted = Array.from(sessRing.subarray(0, n)).sort((a, b) => a - b);
   const pct = (q: number): number => n ? +sorted[Math.min(n - 1, Math.floor(q * n))].toFixed(1) : 0;
+  const tsorted = Array.from(tickRing.subarray(0, n)).sort((a, b) => a - b);
+  const tpct = (q: number): number => n ? +tsorted[Math.min(n - 1, Math.floor(q * n))].toFixed(1) : 0;
+  const shareOf = (ms: number): string => `${(100 * ms / Math.max(1, sessWall)).toFixed(0)}%`;
+  const gapRow = sessProf.get('gap (gpu/vsync/gc)');
   const gl = renderer.getContext();
   const dbg = gl.getExtension('WEBGL_debug_renderer_info') as { UNMASKED_RENDERER_WEBGL: number } | null;
   const gpu = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : 'n/a';
@@ -30983,16 +31025,18 @@ function telemetryReport(): string {
   L.push(`settings tseg ${terrainSeg} · veg ${vegScale} · grass ${grassScale} · refine ${REFINE ? 'on' : 'off'} r${REFINE_R} · worker ${tworker && !tworker.disabled ? 'on' : 'off'} · luma ${lumaAsync ? 'async' : 'sync'}${mem ? ` · heap ${Math.round(mem.usedJSHeapSize / 1048576)}MB` : ''}`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · frame ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(>${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
   L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);
+  L.push(`main thread: in tick ${(sessTick / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(sessTick)} of wall) p50 ${tpct(0.5)} p95 ${tpct(0.95)} p99 ${tpct(0.99)} max ${tpct(1)} · off-tick tasks ${(sessOff / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(sessOff)}) · gap ${((gapRow?.ms ?? 0) / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(gapRow?.ms ?? 0)}) — a gap that dwarfs the tick is the GPU or vsync, not this code`);
   const rows = [...sessProf.entries()].map(([k, v]) => ({ k, ...v })).sort((a, b) => b.slowMs - a.slowMs || b.ms - a.ms);
-  const slowTotal = rows.reduce((a, r) => a + r.slowMs, 0) + sessUnattrSlow;
+  const slowTotal = rows.reduce((a, r) => a + r.slowMs, 0);
   L.push(`phase                 total ms   share   calls   mean    max | in slow frames ms  share  top-of-frame`);
   const row = (k: string, ms: number, cnt: number, max: number, slowMs: number, top: number): string =>
     `${k.padEnd(20)} ${String(Math.round(ms)).padStart(9)} ${String((100 * ms / Math.max(1, sessWall)).toFixed(1)).padStart(6)}% ${String(cnt).padStart(7)} ${String((ms / Math.max(1, cnt)).toFixed(1)).padStart(6)} ${String(max.toFixed(0)).padStart(6)} | ${String(Math.round(slowMs)).padStart(15)} ${String((100 * slowMs / Math.max(1, slowTotal)).toFixed(0)).padStart(5)}% ${String(top).padStart(6)}`;
   for (const r of rows) L.push(row(r.k, r.ms, r.n, r.max, r.slowMs, r.top));
-  L.push(row('unattributed', sessUnattr, sessFrames, 0, sessUnattrSlow, sessUnattrTop));
-  if (tworker) { const w = tworker.stats; L.push(`worker jobs ${w.jobs} fail ${w.failures} · worker ms/build ${(w.workerMs / Math.max(1, w.jobs)).toFixed(0)} · gap ${Math.round(workerGap)} · main ms/build prep ${(workerLedger.prepMs / Math.max(1, workerLedger.applied)).toFixed(1)} apply ${(workerLedger.applyMs / Math.max(1, workerLedger.applied)).toFixed(1)} post ${(workerLedger.postMs / Math.max(1, workerLedger.applied)).toFixed(1)} (hydro ${(workerLedger.hydroMs / Math.max(1, workerLedger.applied)).toFixed(1)}) · hydro build ${(workerLedger.hydroBuildMs / Math.max(1, workerLedger.hydroBuilds)).toFixed(1)} max ${Math.round(workerLedger.hydroBuildMax)}`); }
+  if (tworker) { const w = tworker.stats; L.push(`worker jobs ${w.jobs} fail ${w.failures} · worker ms/build ${(w.workerMs / Math.max(1, w.jobs)).toFixed(0)} · gap ${Math.round(workerGap)} · main ms/build prep ${(workerLedger.prepMs / Math.max(1, workerLedger.applied)).toFixed(1)} apply ${(workerLedger.applyMs / Math.max(1, workerLedger.applied)).toFixed(1)} post ${(workerLedger.postMs / Math.max(1, workerLedger.applied)).toFixed(1)} (hydro ${(workerLedger.hydroMs / Math.max(1, workerLedger.applied)).toFixed(1)}) · hydro build ${(workerLedger.hydroBuildMs / Math.max(1, workerLedger.hydroBuilds)).toFixed(1)} max ${Math.round(workerLedger.hydroBuildMax)}`);
+    const pa = Math.max(1, workerLedger.applied);
+    L.push(`post split ms/build reseat ${(workerLedger.reseatMs / pa).toFixed(1)} redrape ${(workerLedger.redrapeMs / pa).toFixed(1)} hydro ${(workerLedger.hydroMs / pa).toFixed(1)} batter ${(workerLedger.batterMs / pa).toFixed(1)} culvert ${(workerLedger.culvertMs / pa).toFixed(1)} · post max ${Math.round(workerLedger.postMax)} · dropped ${workerLedger.dropped}`); }
   L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
-  if (sessSlowLog.length) L.push(`slow frames (last ${sessSlowLog.length}): ` + sessSlowLog.map((f) => `${f.t}s ${f.ms}ms ${f.top}:${f.topMs}${f.unattr > 5 ? ` u${f.unattr}` : ''}`).join(' · '));
+  if (sessSlowLog.length) L.push(`slow frames (last ${sessSlowLog.length}): ` + sessSlowLog.map((f) => `${f.t}s ${f.ms}ms [${f.tops}]`).join(' · '));
   return L.join('\n');
 }
 /** Copy the telemetry: the clipboard where a gesture allows it, a text box
@@ -31049,6 +31093,7 @@ function tick(now: number): void {
   // where it stands; REAL drive is exempt for the same reason the menu is —
   // the road outside does not pause, and a clock that lies about that is worse
   // than no clock.
+  profTickStart();
   const paused = ((menu.tab() !== null || hidden) || rewindPaused) && !real.on;
   // BEFORE ANYTHING INTEGRATES. The chassis loop has no finite check inside it
   // and NaN survives every clamp on the way round, so the only place a break can
@@ -31335,6 +31380,7 @@ function tick(now: number): void {
     state.x += wInfo.fx * push * dt;
     state.z += wInfo.fz * push * dt;
   }
+  profMark('sim:drive');
   // ── revs: what the engine is doing, not what the road is doing ──
   // Grounded, the two agree and the box shifts every 14m/s. Airborne there is
   // no load at all: the throttle spins the engine straight up against its own
@@ -31580,6 +31626,7 @@ function tick(now: number): void {
   // laid on the terrain — so a corrected position gets its suspension resolved
   // this frame rather than showing one frame of the truck in the old attitude.
   if (played) { tapePlay.i++; tapeCorrect(); }
+  profMark('sim:collide');
   // ── suspension: the truck LIES on the terrain via 4 wheel contacts ──
   const sinH = Math.sin(state.heading), cosH = Math.cos(state.heading);
   const contacts: number[] = [];
@@ -31803,6 +31850,7 @@ function tick(now: number): void {
   // survey frame. A lamp's beam is not visible in sunlight; a hint of it is
   // kept, as it is for the pool, so dusk is a ramp rather than a switch.
   beamMat.uniforms.uAmp.value = (camMode === 'cab' ? 1.25 : camMode === 'chase' ? 1 : 0.25) * (0.15 + 0.85 * (1 - dayF));
+  profMark('sim:suspension');
   // HIGH BEAM AFTER DARK. One lamp spec cannot serve both: 110m of throw is
   // generous in daylight, where the beam is only a hint, and short at night,
   // where it is the only thing telling you where the road goes. Faded by the
@@ -31918,12 +31966,13 @@ function tick(now: number): void {
   // THE BOW SHEET runs off the wade depth rather than the particle budget: it
   // is a property of the hull being in water, not of a wheel touching it, and
   // it must keep going when the budget is spent on spray.
+  profMark('lamps');
   splashBow(now, state.speed, rigWadeM);
   { const _p = performance.now(); stepDust(dt); profAdd('stepDust', _p); }
   { const _p = performance.now(); flushTerrain(now); profAdd('flushTerrain', _p); }
   drainHydroJobs(now, appliedThisFrame);
   appliedThisFrame = false;
-  hydroTick(now);
+  { const _p = performance.now(); hydroTick(now); profAdd('hydroTick', _p); }
   // The sea keeps its station off a coast and stands down over dry basins.
   // Slewed, not snapped: the transition happens kilometres before the basin
   // floor is reachable, and a falling waterline reads as the lake this basin
@@ -31985,10 +32034,10 @@ function tick(now: number): void {
   else if (now > swardAt) { swardAt = now + 700; if (!swardGpu) refreshSward(); }
   // The GPU sward is uniform writes and a field rebuild only when the truck
   // leaves the middle of it, so it runs every frame rather than on a slow tick.
-  swardFrame();
+  { const _p = performance.now(); swardFrame(); profAdd('swardFrame', _p); }
   // Same shape and for the same reason: a sliced CPU sweep the shader reads,
   // rebuilt when the truck leaves the middle of it rather than on a tick.
-  sunmFrame();
+  { const _p = performance.now(); sunmFrame(); profAdd('sunmFrame', _p); }
   // ── the world's own sound, sampled around the truck ──
   // Cheap and cached: a ring of water probes and a look at this cell's
   // foliage, twice a second. The bed is DUCKED by motion and by the engine
@@ -32070,7 +32119,8 @@ function tick(now: number): void {
     rig.hull = clamp(rig.hull - dt * 0.0035 * Math.min(1, Math.abs(state.speed) / 8), 0, 1);
   }
   prevSurfKind = surfKind;
-  reveal(state.x, state.z);
+  { const _p = performance.now(); reveal(state.x, state.z); profAdd('reveal', _p); }
+  profMark('world:fx');
   // A ZOOM IS A MOVE. The 1.2s cadence is right for a truck that covers 40m
   // between ticks; a pinch that doubles the view radius in one gesture used
   // to wait out the full tick before the first far or overview tile was even
@@ -32334,6 +32384,7 @@ function tick(now: number): void {
   // The cab is WELDED to the body — no smoothing at all. A lerped eye lags the
   // shell it is supposed to be inside, and at 25/s that reads as the whole
   // truck sliding around the camera every time you turn in.
+  profMark('world:stream');
   // A SCRUB SNAPS, because a scrub has no dt to ease over. The follow is
   // `1 - exp(-k * dt)` and a scrub freezes dt at zero, so the factor is
   // exactly zero and the camera CANNOT move: reported from the seat as the rig
@@ -32608,10 +32659,11 @@ function tick(now: number): void {
   // Project FIRST, draw SECOND — updatePois used to run after drawHud, so
   // the HUD drew the PREVIOUS frame's projections on top of this frame's
   // world: a second frame of trailing on top of the stale-inverse one.
-  updatePois(); // every frame — throttled pins juddered against the camera
+  profMark('camera');
+  { const _p = performance.now(); updatePois(); profAdd('updatePois', _p); } // every frame — throttled pins juddered against the camera
   { const _p = performance.now(); stepLuma(now); profAdd('stepLuma', _p); } // refresh what the glass is being written over
   { const _p = performance.now(); xrayWire(now); profAdd('xrayWire', _p); } // keep the wireframe sweep over streamed-in tiles
-  drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF);
+  { const _p = performance.now(); drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF); profAdd('drawHud', _p); }
   { const _p = performance.now(); stepOverlays(); profAdd('stepOverlays', _p); }
   // Whatever view is up: the frame follows the truck even while the dock shows
   // the POV preview, so the map is whole the moment the chart comes back.
@@ -32642,7 +32694,8 @@ function tick(now: number): void {
   // fault it fixes was reported from the cab.
   { const _p = performance.now(); stepFineRing(now); profAdd('stepFineRing', _p); }
   { const _p = performance.now(); applyHidden(); profAdd('applyHidden', _p); }
-  if (NODRAW) { tickN++; requestAnimationFrame(tick); return; }
+  profMark('hud+misc');
+  if (NODRAW) { profTickEnd('nodraw'); tickN++; requestAnimationFrame(tick); return; }
   // scene → target, two separable blur rounds at half res, composite to canvas
   renderer.setRenderTarget(rtScene);
   { const _p = performance.now(); renderer.render(scene, camera); profAdd('render', _p); }
@@ -32720,6 +32773,7 @@ function tick(now: number): void {
   // froze the entire game on the first idle cycle — dead renderer, dead
   // streamer, and every later tap reading as a hang (owner-caught, live).
   if (attractGoI !== null) attractGoNow();
+  profTickEnd('draw:misc');
   tickN++;
   requestAnimationFrame(tick);
 }
