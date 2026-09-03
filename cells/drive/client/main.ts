@@ -4889,7 +4889,7 @@ function buildTerrainMesh(t: HeightTile): void {
     if (terrainMeshes.has(nk) && !borderShared(t, nk)) { terrainDirty.add(nk); dirtyWhy.set(nk, `owner:${key}`); }
   }
   buildLog.push({ key, why: dirtyWhy.get(key) ?? 'load', corridor, refined: !!refined, at: Math.round(performance.now()) });
-  if (buildLog.length > 100) buildLog.shift();
+  if (buildLog.length > 400) buildLog.shift();
   dirtyWhy.delete(key);
 }
 /** Every tile's border row, world x, z, y in threes, stored as it was built
@@ -4969,7 +4969,7 @@ function markTerrainDirty(key: string, why = 'mark'): void {
 /** Why each dirty tile was dirtied, and the last hundred builds — the
  *  instrument for a rebuild loop, which is invisible to a dirty-count poll. */
 const dirtyWhy = new Map<string, string>();
-const buildLog: Array<{ key: string; why: string; corridor: boolean; refined: boolean; at: number }> = [];
+const buildLog: Array<{ key: string; why: string; corridor: boolean; refined: boolean; at: number; ms?: number }> = [];
 // Every terrain tile a run of road passes through, plus a margin for the cut.
 // Sampled, not exhaustive: terrain tiles are ~2km across and road vertices are
 // 12m apart, so walking every one of them would ask the same question a hundred
@@ -5040,6 +5040,7 @@ function flushTerrain(now: number): void {
       flushBatter(t);
       flushCulverts(t);
       terrainMs = performance.now() - t0;
+      if (buildLog.length) buildLog[buildLog.length - 1].ms = Math.round(terrainMs);
       return;
     }
   }
