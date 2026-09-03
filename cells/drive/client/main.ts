@@ -3374,7 +3374,7 @@ let lumaNext = 0, lumaFar = 62000, lumaPrimed = false;
  *  120ms old by design, so one more frame changes nothing it feeds. WebGL1,
  *  or any failure, falls back to the synchronous read. */
 let lumaPending: { pbo: WebGLBuffer; sync: WebGLSync; far: number } | null = null;
-let lumaAsync = true;
+let lumaAsync = new URLSearchParams(location.search).get('lumasync') !== '1';   // ?lumasync=1: the old read, for an A/B on a device
 const lumaStat = { async: 0, sync: 0, waits: 0 };
 function lumaCollect(gl: WebGL2RenderingContext): boolean {
   const p = lumaPending;
