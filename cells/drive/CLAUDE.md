@@ -963,6 +963,30 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   throughput with `nodraw=1`, cost with rendering on, never the two from
   one run.
 
+- **WHERE THE FRAME GOES: `__frameprof()`.** Milliseconds per call site
+  since the last read, with the worst call — the frame loop's subsystems
+  and, outside the loop, the road build slices, the terrain apply and the
+  hydro builds. Read it in three windows (boot, streaming, quiet). In the
+  harness the `render` row is the software renderer issuing draws and the
+  wall time is seconds a frame; only the other rows carry to a device.
+- **THE POST-STEPS AFTER A BUILD** were one thing: `hydroFeed` sampling a
+  132×132 elevation raster on the main thread — 20 ms of a 20 ms residue;
+  reseat, redrape, batter and culverts are each under a millisecond. The
+  worker samples that raster with the build (`hydroElevation`) and hands it
+  back; a starved refeed asks the worker for the raster alone. What is
+  left is the hydro system's own work: 6 ms of analysis in `upsertTile`
+  and a 13 ms tile build (max 41) that used to run in the promise job
+  right behind the apply, invisible to every frame timer. It now runs from
+  the frame loop's own queue, one a frame and never in a frame with a
+  terrain apply (`drainHydroJobs`).
+- **THE LUMA READBACK IS ASYNCHRONOUS.** `stepLuma` read its 40×88 luma
+  and depth target with `readRenderTargetPixels` — a synchronous
+  glReadPixels that waits for the GPU to finish the whole frame queued
+  before it — eight times a second, streaming or not. On WebGL2 the pixels
+  go into a pixel-pack buffer behind a fence and are collected a frame
+  later; the luma was 120 ms old by design. `?lumasync=1` is the old read
+  for an A/B on a device; `__lumastat()` counts which path ran.
+
 `__refine()` counts tiles, split cells, vertices, triangles against the
 plain grid and milliseconds by phase (lines, split, heights, geometry).
 `__borderDiff(x, z)` compares the tile under a point with each neighbour
