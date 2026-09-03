@@ -24829,6 +24829,9 @@ function heightsOf(): number[] {
 });
 (window as unknown as { __tstats?: object }).__tstats = (): object => ({
   heightTiles: heightTiles.size, meshes: terrainMeshes.size, dirty: terrainDirty.size, builds: terrainBuilds,
+  // What the terrain costs the GPU right now: live triangles and vertices,
+  // and how many of the meshes are corridor builds.
+  ...(() => { let tris = 0, verts = 0, corridor = 0; for (const m of terrainMeshes.values()) { const g = m.geometry; tris += (g.index ? g.index.count : (g.attributes.position?.count ?? 0)) / 3; verts += g.attributes.position?.count ?? 0; if ((m.userData as { corridor?: boolean }).corridor) corridor++; } return { terrainTris: Math.round(tris), terrainVerts: verts, corridorMeshes: corridor }; })(),
   roadCells: roadGrid.size, seenWays: seenWays.size, unbuilt,
   osmDone: osmDone.size, inFlight: osmInFlight, queued: osmQueue.length,
 });

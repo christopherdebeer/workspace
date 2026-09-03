@@ -1500,16 +1500,24 @@ export function createTerrainKernel() {
       if (!t) return null;
       return t.data[(((pz % 256) + 256) % 256) * 256 + (((px % 256) + 256) % 256)];
     };
+    // The tile a point is in is asked ten times a vertex (the slope's four
+    // neighbours, twice each, and the point itself) and each ask was the
+    // web-mercator tile math — atan, sinh, log — so the answer is kept per
+    // 64m cell; the half-open box test below still decides.
+    const cellTile = new Map<string, HeightTile | undefined>();
     const heightTileAt = (ex: number, ez: number): HeightTile | undefined => {
       const inside = (t: HeightTile | undefined): HeightTile | undefined =>
         t && ex >= t.xs && ez >= t.zs && ex < t.xs + t.w && ez < t.zs + t.h ? t : undefined;
+      const ck = `${Math.floor(ex / 64)},${Math.floor(ez / 64)}`;
+      const cached = cellTile.get(ck);
+      if (cached) { const c = inside(cached); if (c) return c; }
       const [tx, ty] = tileAt(H.origin.lat - ez / M_LAT, H.origin.lon + ex / H.origin.mLon, TERRAIN_Z);
       const hit = inside(H.heights.get(`${tx}/${ty}`));
-      if (hit) return hit;
+      if (hit) { cellTile.set(ck, hit); return hit; }
       for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) {
         if (!dx && !dy) continue;
         const n = inside(H.heights.get(`${tx + dx}/${ty + dy}`));
-        if (n) return n;
+        if (n) { cellTile.set(ck, n); return n; }
       }
       return undefined;
     };
@@ -1553,8 +1561,23 @@ export function createTerrainKernel() {
       if (box === null || ex < box[0] || ex > box[2] || ez < box[1] || ez > box[3]) return raw;
       return landmarkFlatten(ex, ez, raw);
     };
+    // Cover tiles by 2km cell, built once a sampler: the scan of every tile
+    // for every read was three scans a vertex over seventy tiles.
+    const coverCells = new Map<string, CoverTile[]>();
+    const CC = 2000;
+    for (const t of H.cover.values()) {
+      for (let cx = Math.floor(t.xs / CC); cx <= Math.floor((t.xs + t.w) / CC); cx++) {
+        for (let cz = Math.floor(t.zs / CC); cz <= Math.floor((t.zs + t.h) / CC); cz++) {
+          const k = `${cx},${cz}`;
+          const arr = coverCells.get(k);
+          if (arr) arr.push(t); else coverCells.set(k, [t]);
+        }
+      }
+    }
     const sampleCoverRaw = (ex: number, ez: number): number | undefined => {
-      for (const t of H.cover.values()) {
+      const arr = coverCells.get(`${Math.floor(ex / CC)},${Math.floor(ez / CC)}`);
+      if (!arr) return undefined;
+      for (const t of arr) {
         if (ex < t.xs || ez < t.zs || ex >= t.xs + t.w || ez >= t.zs + t.h) continue;
         const px = Math.min(255, Math.max(0, Math.floor(((ex - t.xs) / t.w) * 256)));
         const pz = Math.min(255, Math.max(0, Math.floor(((ez - t.zs) / t.h) * 256)));
