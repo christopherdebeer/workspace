@@ -97,7 +97,32 @@ export function App(): React.JSX.Element {
     if (match) setOpenBookView(await loadCanonicalBook(decodeURIComponent(match[1]), signedIn).catch(() => null));
   })(); }, []);
 
-  const signIn = (): void => { login(); };
+  // The sheet leaves the page mounted, so nothing reloads the authed data for
+  // us the way the old full-page redirect did — sign-in folds its own result
+  // back in. A dismissal (false) leaves the anonymous view exactly as it was.
+  const afterSignIn = async (then: () => void | Promise<void>): Promise<void> => {
+    if (!(await login())) return;
+    setAuthed(true);
+    await refresh();
+    await then();
+  };
+  // Both entry points take NO arguments, deliberately. Every caller is a prop
+  // wired straight onto `onClick` (`<SignIn onClick={onSignIn}>`), so React
+  // hands a click event to the first parameter — a `then?: () => void` here
+  // would be invoked as the SyntheticEvent. The prop types say `() => void`,
+  // which does not catch it, because the extra argument is React's to pass.
+  // Where the reader LANDS is therefore chosen by picking a function, not by
+  // passing one.
+
+  /** The redirect always dumped a reader on the shelf, a full reload having
+   *  lost wherever they were. That stays the default. */
+  const signIn = (): void => { void afterSignIn(() => setView('shelf')); };
+  /** Sign in without leaving the open book, re-read as its owner — only
+   *  possible now the page survives the ceremony. */
+  const signInHere = (): void => { void afterSignIn(async () => {
+    if (!openBookView) return;
+    setOpenBookView(await loadCanonicalBook(openBookView.work.id, true).catch(() => openBookView));
+  }); };
   const signOut = (): void => { void logout(); };
   const openShelf = (): void => { if (authed) setView('shelf'); else signIn(); };
   const openCapture = (): void => { if (authed) setCapture(true); else signIn(); };
@@ -128,5 +153,5 @@ export function App(): React.JSX.Element {
   };
 
   const ownBookIds = React.useMemo(() => new Set(books.map((book) => book.id)), [books]);
-  return <ThemeProvider theme={theme}><GlobalStyle /><Page><Shell><BrandNav view={view} authed={authed} onBrowse={() => { setView('discover'); history.pushState({}, '', '/'); }} onShelf={openShelf} onReaders={() => { setView('readers'); history.pushState({}, '', '/readers'); }} onSignIn={signIn} onSignOut={signOut} />{!ready ? <Loading>Opening the shelves…</Loading> : view === 'discover' ? <Discover books={available} authed={authed} onJoin={signIn} onAdd={openCapture} onManage={() => setView('shelf')} onOpenBook={(workId) => void openCanonical(workId)} onViewProfile={viewProfile} onLookupIsbn={lookupIsbn} /> : view === 'readers' ? <ReadersPage profiles={profiles} books={available} social={social} authed={authed} onSignIn={signIn} onSaveProfile={saveProfile} onFollow={toggleFollow} onOpenBook={(workId) => void openCanonical(workId)} /> : <><ShelfHeader onAdd={openCapture} /><ShelfStats books={books} />{books.length ? <Grid>{books.map((book) => <BookCard key={book.id} book={book} onChange={(patch) => void updateBook(book.id, patch)} />)}</Grid> : <EmptyShelf authed={authed} onAdd={openCapture} onLogin={signIn} />}<ReadingPanel books={userBooks} notifications={notifications} onOpenBook={(workId) => void openCanonical(workId)} onReadNotification={readNotification} /><RequestsPanel incoming={requests.incoming} outgoing={requests.outgoing} address={shippingAddress} shipping={shipping} shipments={shipments} onDecision={decideRequest} onSaveAddress={saveAddress} onQuote={quotePostage} onPurchaseTest={purchaseTestLabel} onConfigure={configureShipping} /></>}</Shell></Page>{capture ? <IsbnCapture onClose={() => setCapture(false)} onAdd={addBook} /> : null}{openBookView ? <CanonicalBookSheet view={openBookView} authed={authed} ownBookIds={ownBookIds} onClose={closeCanonical} onSignIn={signIn} onManage={() => { closeCanonical(); setView('shelf'); }} onRequest={requestBook} onSetUserBook={setReadingState} onViewProfile={viewProfile} /> : null}</ThemeProvider>;
+  return <ThemeProvider theme={theme}><GlobalStyle /><Page><Shell><BrandNav view={view} authed={authed} onBrowse={() => { setView('discover'); history.pushState({}, '', '/'); }} onShelf={openShelf} onReaders={() => { setView('readers'); history.pushState({}, '', '/readers'); }} onSignIn={signIn} onSignOut={signOut} />{!ready ? <Loading>Opening the shelves…</Loading> : view === 'discover' ? <Discover books={available} authed={authed} onJoin={signIn} onAdd={openCapture} onManage={() => setView('shelf')} onOpenBook={(workId) => void openCanonical(workId)} onViewProfile={viewProfile} onLookupIsbn={lookupIsbn} /> : view === 'readers' ? <ReadersPage profiles={profiles} books={available} social={social} authed={authed} onSignIn={signIn} onSaveProfile={saveProfile} onFollow={toggleFollow} onOpenBook={(workId) => void openCanonical(workId)} /> : <><ShelfHeader onAdd={openCapture} /><ShelfStats books={books} />{books.length ? <Grid>{books.map((book) => <BookCard key={book.id} book={book} onChange={(patch) => void updateBook(book.id, patch)} />)}</Grid> : <EmptyShelf authed={authed} onAdd={openCapture} onLogin={signIn} />}<ReadingPanel books={userBooks} notifications={notifications} onOpenBook={(workId) => void openCanonical(workId)} onReadNotification={readNotification} /><RequestsPanel incoming={requests.incoming} outgoing={requests.outgoing} address={shippingAddress} shipping={shipping} shipments={shipments} onDecision={decideRequest} onSaveAddress={saveAddress} onQuote={quotePostage} onPurchaseTest={purchaseTestLabel} onConfigure={configureShipping} /></>}</Shell></Page>{capture ? <IsbnCapture onClose={() => setCapture(false)} onAdd={addBook} /> : null}{openBookView ? <CanonicalBookSheet view={openBookView} authed={authed} ownBookIds={ownBookIds} onClose={closeCanonical} onSignIn={signInHere} onManage={() => { closeCanonical(); setView('shelf'); }} onRequest={requestBook} onSetUserBook={setReadingState} onViewProfile={viewProfile} /> : null}</ThemeProvider>;
 }

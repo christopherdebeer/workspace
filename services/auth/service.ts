@@ -39,6 +39,7 @@ import {
   handleRefreshSession,
   validateBearer,
   performTokenExchange,
+  frameAncestors,
 } from './oauth';
 import {
   WebAuthnConfig,
@@ -97,7 +98,11 @@ function appJs(): string {
   }
   return appJsCache;
 }
-const shell = (): ServiceHttpResponse => ({ statusCode: 200, headers: HTML_HEADERS, body: SHELL });
+const shell = (): ServiceHttpResponse => ({
+  statusCode: 200,
+  headers: { ...HTML_HEADERS, 'content-security-policy': frameAncestors() },
+  body: SHELL,
+});
 
 const WEBAUTHN_CONFIG: WebAuthnConfig = {
   rpName: SERVER_NAME,

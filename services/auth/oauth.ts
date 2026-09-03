@@ -371,6 +371,25 @@ export async function handleDCR(req: ServiceHttpRequest, store: AuthStore): Prom
   );
 }
 
+/**
+ * Who may frame the authorize screen (`Content-Security-Policy`).
+ *
+ * It carried NO framing policy, so any site could put the real consent screen
+ * in an iframe and clickjack Authorize. It also has a legitimate embedder now:
+ * a cell drawing sign-in as an in-page sheet around this document
+ * (docs/auth-in-page.md), which is why this is an allowlist and not DENY.
+ *
+ * Cell hosts only. A CSP host wildcard matches exactly ONE label, so
+ * `https://*.on.parc.land` admits `c15r-shelved.on.parc.land` and not a
+ * deeper `on.parc.land.evil.example` — and never a bare `*`, which would put
+ * the clickjacking hole back while looking like a policy. Unset cell domain
+ * (local, bootstrap) collapses to `'self'`.
+ */
+export function frameAncestors(): string {
+  const suffix = process.env.CELL_DOMAIN_SUFFIX; // e.g. ".on.parc.land"
+  return suffix ? `frame-ancestors 'self' https://*${suffix}` : "frame-ancestors 'self'";
+}
+
 // ─── Consent ─────────────────────────────────────────────────────
 
 /**

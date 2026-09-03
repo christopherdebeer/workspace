@@ -15,6 +15,7 @@ import {
   scopeMeta,
   isSelfGrantableGranular,
   cellScopesFor,
+  frameAncestors,
 } from '../services/auth/oauth';
 import { sha256 } from '../services/auth/store';
 import type { ServiceHttpRequest } from '../platform/runtime';
@@ -627,6 +628,39 @@ describe('per-type consent + granular elevation (ADR-0023 §B / ADR-0022)', () =
       expect(m.verb).toBe('read');
       expect(m.title).toContain('@c15r/drive');
       expect(m.description).toMatch(/username/i);
+    });
+  });
+
+  // The authorize screen had no framing policy at all, so any site could frame
+  // the real consent screen and clickjack Authorize. It now also has a
+  // legitimate embedder — a cell drawing sign-in as a sheet — so the policy is
+  // an allowlist, and the thing worth pinning is that it stays narrow.
+  describe('who may frame the authorize screen', () => {
+    let suffix: string | undefined;
+    beforeEach(() => { suffix = process.env.CELL_DOMAIN_SUFFIX; });
+    afterEach(() => {
+      if (suffix === undefined) delete process.env.CELL_DOMAIN_SUFFIX;
+      else process.env.CELL_DOMAIN_SUFFIX = suffix;
+    });
+
+    it('admits cell hosts when a cell domain is configured', () => {
+      process.env.CELL_DOMAIN_SUFFIX = '.on.parc.land';
+      expect(frameAncestors()).toBe("frame-ancestors 'self' https://*.on.parc.land");
+    });
+    it('collapses to self when no cell domain is configured', () => {
+      delete process.env.CELL_DOMAIN_SUFFIX;
+      expect(frameAncestors()).toBe("frame-ancestors 'self'");
+    });
+    // The failure that would matter: a policy that is present but permissive
+    // reads as "handled" while leaving the clickjacking hole wide open.
+    it('never admits everyone', () => {
+      for (const v of ['.on.parc.land', undefined]) {
+        if (v) process.env.CELL_DOMAIN_SUFFIX = v; else delete process.env.CELL_DOMAIN_SUFFIX;
+        const policy = frameAncestors();
+        expect(policy).toMatch(/^frame-ancestors /);
+        expect(policy.split(/\s+/).slice(1)).not.toContain('*');
+        expect(policy).not.toContain('http://');
+      }
     });
   });
 

@@ -26,6 +26,9 @@ interface Params {
   state?: string;
   resource?: string;
   user_code?: string;
+  /** `web_message` = we are embedded (sheet/popup): post the result to the
+   *  embedder instead of navigating. Anything else keeps the redirect. */
+  response_mode?: string;
 }
 
 /** Capability metadata for a scope (served by /auth/grantable; see oauth.ts). */
@@ -216,6 +219,27 @@ function App(): React.JSX.Element {
     }
   }, [username, afterAuth, fail]);
 
+  /**
+   * Hand the result to the embedder rather than navigating.
+   *
+   * The target origin is the redirect_uri's, never `'*'` — an auth code posted
+   * to a wildcard is readable by any frame that can reach this document. That
+   * origin is trustworthy because `/oauth/consent` refuses a redirect_uri the
+   * client never registered, so it is the same bound the redirect itself has.
+   */
+  const postToEmbedder = useCallback((payload: Record<string, string>): boolean => {
+    const target = window.opener ?? (window.parent !== window ? window.parent : null);
+    if (!target || !p.redirect_uri) return false;
+    let origin: string;
+    try {
+      origin = new URL(p.redirect_uri).origin;
+    } catch {
+      return false;
+    }
+    target.postMessage({ type: 'parc.auth', ...payload }, origin);
+    return true;
+  }, [p.redirect_uri]);
+
   const submitConsent = useCallback(async () => {
     setStep('busy');
     try {
@@ -244,6 +268,14 @@ function App(): React.JSX.Element {
         ...(grantSecs > 0 ? { expiresInSec: grantSecs } : {}),
       });
       if (r.error || !r.redirect) throw new Error(r.error ?? 'Consent failed');
+      // Embedded: the code rides a postMessage and the embedder keeps its page.
+      // The whole redirect goes over, not just the code, so the embedder parses
+      // exactly what a returning navigation would have carried.
+      if (p.response_mode === 'web_message' && postToEmbedder({ redirect: r.redirect })) {
+        setOkMsg('Done — you can close this.');
+        setStep('done');
+        return;
+      }
       setOkMsg('Redirecting…');
       setStep('done');
       setTimeout(() => {
@@ -252,7 +284,7 @@ function App(): React.JSX.Element {
     } catch (e) {
       fail((e as Error).message);
     }
-  }, [p, selected, grantSecs, deviceMode, fail]);
+  }, [p, selected, grantSecs, deviceMode, fail, postToEmbedder]);
 
   const toggle = (scope: string, on: boolean) => {
     setSelected((prev) => {

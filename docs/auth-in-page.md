@@ -7,8 +7,9 @@ the first one cheap:
    full-page redirect to `/oauth/authorize`.
 2. Simplify the grant a cell asks for when all it wants is "who are you".
 
-Status: (2) is built, (1) is still exploration. Most of (2) already existed
-server-side; the gaps were two small ones, noted below.
+Status: both built. (2) shipped first and is what made (1) worth doing — a
+one-line consent is sheet-sized, a grouped scope picker with a lifetime
+selector is a page.
 
 ## How sign-in works today
 
@@ -67,9 +68,10 @@ Result comes back over `postMessage`.
 - On the apex the iframe is same-origin, so the isolation is cosmetic. That's
   fine, because an apex cell already reads the session out of `localStorage` —
   it's not a new exposure, just not a real boundary either.
-- Needs CORS on `/auth/grantable` and `/oauth/consent`, which don't have it
-  today (only `/oauth/register` and `/oauth/token` do,
-  `services/auth/service.ts:722`).
+- Needs no CORS, which I got wrong the first time through. The iframe loads
+  `parc.land/oauth/authorize`, so the SPA inside it IS parc.land — its own
+  `/auth/grantable` and `/oauth/consent` fetches are same-origin no matter who
+  embeds it. That mistake made this shape look more expensive than it is.
 
 ### C. Native in-cell modal calling the JSON APIs directly
 
@@ -85,18 +87,40 @@ No iframe, no popup. The cell renders its own sheet and calls
 - Blocked for cell hosts regardless: `/webauthn/*` has no CORS. The preflight
   returns 204 with no `Access-Control-Allow-Origin`, so the call fails.
 
-### Where I'd land
+### What was built: B
 
-C for apex-served first-party cells, B for everything else, and keep the
-redirect as the fallback for both (registration, popup blockers, no
-postMessage). A is the cheapest to build and the one I'd reach for if only one
-gets done, but it loses the sheet, so it doesn't really answer the ask.
+C is off the table for shelved specifically. shelved routes on absolute paths
+(`/readers`, `/book/<id>`), so it is a CELL-HOST app, and there C would need
+CORS on `/webauthn/*` — the one thing that currently stops a cell-host page
+driving a passkey ceremony it should not be driving. B keeps the ceremony on
+parc.land's own document and gives the cell only the outcome, which is the
+right split for a cell host and costs nothing on the apex.
 
-The shared piece all three need is small: a `response_mode=web_message` branch
-in `submitConsent` (`services/auth/client/main.tsx`) that posts the result to
-`window.opener ?? window.parent` instead of navigating, gated on an origin
-allowlist. Everything else is the kernel growing a `login({ mode })` that
-awaits a message rather than returning `Promise<never>`.
+Three pieces:
+
+- `services/auth/client/main.tsx` — `response_mode=web_message`. On consent,
+  post the redirect to the embedder instead of navigating. The target origin is
+  the redirect_uri's, never `'*'`: an auth code posted to a wildcard is
+  readable by any frame that can reach the document. That origin is
+  trustworthy only because `/oauth/consent` now refuses a redirect_uri the
+  client never registered — the two changes hold each other up.
+- `services/auth/service.ts` + `frameAncestors()` — a CSP on the authorize
+  screen. It had none, so this closes the clickjacking gap and admits the
+  sheet in the same line. One label of wildcard (`https://*.on.parc.land`),
+  never a bare `*`.
+- `cells/kernel` — `loginSheet()`. Builds the same authorize URL as `login()`
+  via a shared `authorizeUrl()` so the two cannot drift on `redirect_uri`
+  (a mismatch fails at the token step), draws the sheet, and redeems the code
+  through `exchangeCode()`, which is `completeLoginIfReturning` split so both
+  routes consume the same one-shot state and verifier.
+
+The message is accepted only from the apex origin AND the frame we opened.
+Origin alone is not enough: on the apex that would accept any same-origin
+frame the page happens to embed.
+
+A is still the one to reach for if the sheet ever has to work somewhere framing
+is refused; it keeps the address bar, which is the only un-forgeable signal of
+who is asking.
 
 ## Part 2 — what a sign-in-only cell should ask for
 
@@ -179,6 +203,22 @@ The platform change has to land before the cell does. A cell asking for
 apex, which is the disabled-Authorize case above. So: platform deploy, then the
 kernel cell, then shelved.
 
+### What the sheet changes for a cell
+
+The page stays mounted, so nothing reloads the authed view the way a redirect
+did — the cell folds the result in itself. In shelved that is `setAuthed(true)`
+plus its existing `refresh()`. It also makes context survivable: a reader
+signing in from an open book is left on that book, re-read as its owner,
+rather than dumped on the shelf because a full reload had lost where they were.
+
+One trap worth writing down. Both sign-in entry points take NO arguments on
+purpose. Every caller is a prop wired straight onto `onClick`
+(`<SignIn onClick={onSignIn}>`), so React hands a click event to the first
+parameter — a `then?: () => void` would be invoked as the SyntheticEvent. The
+prop types say `() => void` and do not catch it, because the extra argument is
+React's to pass. Where the reader lands is chosen by picking a function, not
+by passing one.
+
 ### What this doesn't cover
 
 A cell that genuinely does write back to the slice (lit, canvas, input) still
@@ -234,18 +274,18 @@ Two things it does not address:
   that acceptable; exact matching would have been a guess about live
   integrations.
 
-### /oauth/authorize can be framed
+### /oauth/authorize could be framed by anyone (fixed)
 
-No `X-Frame-Options` and no `frame-ancestors`, so any site can iframe the
-consent screen and clickjack Authorize. Shape B needs a `frame-ancestors`
-policy anyway, so it'd be fixed in passing.
+No `X-Frame-Options` and no `frame-ancestors`, so any site could iframe the
+consent screen and clickjack Authorize. Fixed in passing by the sheet work,
+which needed a policy there anyway: `frame-ancestors 'self' https://*<cell
+domain>`.
 
 ### /webauthn/* has no CORS
 
-Cell hosts can't run a ceremony against the apex directly. Adding it is what
-shape C would need to work off-apex, and I'd rather not add it — it's the thing
-that currently stops a cell-host page from driving a passkey ceremony it
-shouldn't be driving.
+Cell hosts can't run a ceremony against the apex directly. That is what ruled
+out shape C for shelved, and it stays unfixed on purpose — it is the thing that
+stops a cell-host page driving a passkey ceremony it shouldn't be driving.
 
 ## Open questions
 
