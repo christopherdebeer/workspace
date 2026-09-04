@@ -1092,6 +1092,24 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   the tool for the next one of these: a phone number with no harness
   reproduction is a bench run away.
 
+- **THE REGISTRY PICKS A RIVER'S PROFILE IN A FIXED ORDER.** The fourth
+  device report (Breede, 76 s): 277 hydro builds for 77 terrain builds, 25
+  tiles, hydroBuild top of 92 slow frames at 22 ms each. `resolve()` took
+  the longest observation's profile with ties to INSERTION order, and
+  `updateTile` deletes and re-adds a tile's observation — so re-feeding
+  the earliest tile (every terrain rebuild) moved it to the end, another
+  tile's profile took over, its stations differed (each tile samples its
+  own ground and extrapolates the rest of a 26 km line), the body
+  "changed", and `markBodiesDirty` rebuilt every tile along the river.
+  Ties break on the tile key now. The bench's re-feed check reads 0
+  changed bodies over three rounds against 1 for the old order. The
+  deeper fix — merging the per-tile profiles station by station, each
+  tile contributing the stations it actually sampled — is still open, and
+  is what would make a long river's level right away from the tile that
+  happened to answer first. The HUD's half-rate gate is 40 ms now: at the
+  device's usual 26 ms frames the 22 ms gate never fired and drawHud
+  (4.5 ms, 14.7% of wall) drew every frame.
+
 - **iOS DITHERS THE COVER CLASSES; THE DECODE SNAPS THEM.** A field query
   at George read "CLASS 9 ×6, FOREST ×3" off one z12 cover raster that
   holds nothing but exact classes (verified byte for byte through the

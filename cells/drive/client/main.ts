@@ -32917,7 +32917,10 @@ function tick(now: number): void {
   // digits no eye reads faster than 30 Hz. Every other frame while the game
   // runs near 60; every frame once it is at 30, where the budget has room
   // and 15 Hz digits would show.
-  if (!((tickN & 1) && frameMs < 22)) { const _p = performance.now(); drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF); profAdd('drawHud', _p); }
+  // …and the gate is 40 ms, not 22: at the device's usual 26 ms frames the
+  // old gate never fired and the HUD (4.5 ms, measured) drew every frame.
+  // Every other frame down to 25 fps is 12–30 Hz for text and a needle.
+  if (!((tickN & 1) && frameMs < 40)) { const _p = performance.now(); drawHud(surfKind, surfQual, Math.round(Math.abs(state.speed) * 3.6), groundedF); profAdd('drawHud', _p); }
   { const _p = performance.now(); stepOverlays(); profAdd('stepOverlays', _p); }
   // Whatever view is up: the frame follows the truck even while the dock shows
   // the POV preview, so the map is whole the moment the chart comes back.
