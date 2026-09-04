@@ -1197,6 +1197,23 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   and the `__sward(_, true)` probe still sweep synchronously, which is what
   the tests use. The HUD draws every other frame while `frameMs < 22`.
 
+- **A HYDRO FEED THAT CHANGES NOTHING IS NOT A BUILD.** Every terrain apply
+  re-fed its tile's water in full — a corridor refinement, a border audit, a
+  road update — and the field rebuilt, 15 ms a tile and 35 for a river
+  tile, whether or not anything the water reads had moved. The phone at
+  Yosemite: 345 hydro builds in 52 s for 35 tiles, the top contributor to
+  slow frames. `hydroFeed` now keeps what each tile was last fed
+  (`hydroFedInputs`: the elevation raster, and a signature of the
+  overlapping features by id and size plus the ocean's status and mask) and
+  ends without a build when all three are unchanged. A tile made stale by a
+  BODY change elsewhere (`hydroDirty`) is fed regardless: same inputs, new
+  answer. The telemetry worker line says `feeds N skipped M`; `?hydroskip=0`
+  turns the skip off for an A/B. What remains after the skip is the build
+  itself on the main thread — the next cut, if hydro still tops the slow
+  frames, is the build in the worker: it is arithmetic on plain data (the
+  raster, the features, the registry's resolved bodies, the previous field),
+  all of it transferable.
+
 - **THE LUMA READBACK IS ASYNCHRONOUS.** `stepLuma` read its 40×88 luma
   and depth target with `readRenderTargetPixels` — a synchronous
   glReadPixels that waits for the GPU to finish the whole frame queued

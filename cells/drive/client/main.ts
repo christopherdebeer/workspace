@@ -2214,6 +2214,43 @@ const hydroFeedLog: Array<{ at: number; key: string; rev: number; store: number;
 (window as unknown as { __hydrofeeds?: object }).__hydrofeeds = (): object => hydroFeedLog.slice(-120);
 /** The hydro system's elevation raster side — see hydroFeed. */
 const HYDRO_EN = 132;
+const HYDRO_SKIP = new URLSearchParams(location.search).get('hydroskip') !== '0';
+/** What each tile was last fed, so an identical feed can end without a build. */
+const hydroFedInputs = new Map<string, { elev: Float32Array; sig: string }>();
+function sameRaster(a: Float32Array, b: Float32Array): boolean {
+  if (a === b) return true;
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return false;
+  return true;
+}
+/** The features by id and size, and the ocean's answer by status and mask. */
+function hydroInputSig(feats: readonly HydroFeature[], ocean: OceanCoverage): string {
+  const ids: string[] = [];
+  for (const f of feats) {
+    let n = 0;
+    for (const v of Object.values(f.geometry as unknown as Record<string, unknown>)) {
+      if (Array.isArray(v) || ArrayBuffer.isView(v)) n += (v as ArrayLike<unknown>).length;
+    }
+    ids.push(`${f.id}:${n}`);
+  }
+  ids.sort();
+  // The coverage is a status, a grid (its mask hashed) and bounds — walked
+  // two levels down so the grid's array is seen, not its wrapper.
+  let oceanSig = '';
+  const walk = (o: Record<string, unknown>, depth: number): void => {
+    for (const [k, v] of Object.entries(o)) {
+      if (ArrayBuffer.isView(v)) {
+        const arr = v as unknown as ArrayLike<number>;
+        let h = 0;
+        for (let i = 0; i < arr.length; i++) h = (h + Math.imul(arr[i] + 1, i + 1)) | 0;
+        oceanSig += `${k}=${arr.length}/${h};`;
+      } else if (v && typeof v === 'object') { if (depth < 2) walk(v as Record<string, unknown>, depth + 1); }
+      else oceanSig += `${k}=${String(v)};`;
+    }
+  };
+  walk(ocean as unknown as Record<string, unknown>, 0);
+  return `${oceanSig}|${ids.join(',')}`;
+}
 function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
   if (!HYDRO_ON) return;
   if (!hydroSys) {
@@ -2239,9 +2276,7 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
   // rather than only at construction.
   hydroSys.setOceanLevelM(seaSurfaceAbs());
   const key = `${t.tx}/${t.ty}`;
-  hydroDirty.delete(key);           // whatever made it stale is about to be fed
-  const rev = (hydroRev.get(key) ?? 0) + 1;
-  hydroRev.set(key, rev);
+  const wasDirty = hydroDirty.delete(key);   // whatever made it stale is about to be fed
   // ── THE WATER READS THE GROUND THE PLAYER SEES ──
   //
   // t.data is the raw DEM; the terrain MESH is built from sampleHeight, which
@@ -2287,6 +2322,29 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
     if (e.maxZ < t.zs - pad || e.minZ > t.zs + t.h + pad) continue;
     feats.push(e.f);
   }
+  // ── A FEED THAT CHANGES NOTHING IS NOT A BUILD ──
+  //
+  // Every terrain apply re-feeds its tile's water in full: a corridor
+  // refinement, a border audit, a road update — and the field is rebuilt,
+  // 15 ms a tile, 35 ms for a river tile, whether or not anything the water
+  // reads has moved. Measured on the phone at Yosemite: 345 hydro builds in
+  // 52 s for 35 tiles, the top contributor to slow frames. The water reads
+  // exactly three things — the elevation raster it is handed, the features
+  // that overlap the tile, and the ocean's answer — so when all three are
+  // what they were last time, the field it would build is the field it has,
+  // and the feed ends here. A tile made stale by a BODY change elsewhere
+  // (hydroDirty) is fed regardless: its inputs are the same, its answer is
+  // not. ?hydroskip=0 turns the skip off for an A/B.
+  workerLedger.hydroFeeds++;
+  const sig = hydroInputSig(feats, ocean);
+  const prev = hydroFedInputs.get(key);
+  if (HYDRO_SKIP && !wasDirty && prev && prev.sig === sig && sameRaster(prev.elev, elevation)) {
+    workerLedger.hydroSkips++;
+    return;
+  }
+  hydroFedInputs.set(key, { elev: elevation, sig });
+  const rev = (hydroRev.get(key) ?? 0) + 1;
+  hydroRev.set(key, rev);
   hydroFeedLog.push({ at: Math.round(performance.now()), key, rev,
     store: hydroFeats.size, fed: feats.length });
   if (hydroFeedLog.length > 400) hydroFeedLog.splice(0, 200);
@@ -5083,7 +5141,7 @@ let buildInFlight: string | null = null;
 let workerGap = 100;
 /** A terrain apply landed since the last frame: the hydro drain skips one. */
 let appliedThisFrame = false;
-const workerLedger = { posts: 0, applied: 0, dropped: 0, prepMs: 0, applyMs: 0, postMs: 0, postMax: 0, reseatMs: 0, redrapeMs: 0, hydroMs: 0, batterMs: 0, culvertMs: 0, hydroBuildMs: 0, hydroBuilds: 0, hydroBuildMax: 0, lastHydroMs: 0 };
+const workerLedger = { posts: 0, applied: 0, dropped: 0, prepMs: 0, applyMs: 0, postMs: 0, postMax: 0, reseatMs: 0, redrapeMs: 0, hydroMs: 0, batterMs: 0, culvertMs: 0, hydroBuildMs: 0, hydroBuilds: 0, hydroBuildMax: 0, lastHydroMs: 0, hydroFeeds: 0, hydroSkips: 0 };
 /** Everything a build reads that is not a raster, packed for the worker. */
 function terrainJob(t: HeightTile, SEG: number, corridor: boolean): { job: Omit<TerrainJob, 'id'>; transfer: Transferable[] } {
   const flatten = (grid: Map<string, Seg[]>, cell: number, margin: number): { flat: Float64Array; cells: Array<[string, number[]]> } => {
@@ -22142,7 +22200,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // the hop intact, so rebuilding the whole system would throw away a
     // compiled program to change some bounds.
     for (const key of hydroRev.keys()) hydroSys?.removeTile(key);
-    hydroRev.clear(); hydroDirty.clear(); hydroFeats.clear(); hydroFeatsFull = 0; coverHydro.clear();
+    hydroRev.clear(); hydroDirty.clear(); hydroFedInputs.clear(); hydroFeats.clear(); hydroFeatsFull = 0; coverHydro.clear();
     coastSegs.clear(); osmCoastSeen = 0; oceanMasks.clear(); sideCaches.clear();
     // THE SOLVER SPEAKS IN LOCAL METRES TOO. Its deck hints and junctions are
     // spatially keyed, so the last postcard's road left an elevation under
@@ -31630,7 +31688,7 @@ function telemetryReport(): string {
   const row = (k: string, ms: number, cnt: number, max: number, slowMs: number, top: number): string =>
     `${k.padEnd(20)} ${String(Math.round(ms)).padStart(9)} ${String((100 * ms / Math.max(1, sessWall)).toFixed(1)).padStart(6)}% ${String(cnt).padStart(7)} ${String((ms / Math.max(1, cnt)).toFixed(1)).padStart(6)} ${String(max.toFixed(0)).padStart(6)} | ${String(Math.round(slowMs)).padStart(15)} ${String((100 * slowMs / Math.max(1, slowTotal)).toFixed(0)).padStart(5)}% ${String(top).padStart(6)}`;
   for (const r of rows) L.push(row(r.k, r.ms, r.n, r.max, r.slowMs, r.top));
-  if (tworker) { const w = tworker.stats; L.push(`worker jobs ${w.jobs} fail ${w.failures} · worker ms/build ${(w.workerMs / Math.max(1, w.jobs)).toFixed(0)} · gap ${Math.round(workerGap)} · main ms/build prep ${(workerLedger.prepMs / Math.max(1, workerLedger.applied)).toFixed(1)} apply ${(workerLedger.applyMs / Math.max(1, workerLedger.applied)).toFixed(1)} post ${(workerLedger.postMs / Math.max(1, workerLedger.applied)).toFixed(1)} (hydro ${(workerLedger.hydroMs / Math.max(1, workerLedger.applied)).toFixed(1)}) · hydro build ${(workerLedger.hydroBuildMs / Math.max(1, workerLedger.hydroBuilds)).toFixed(1)} max ${Math.round(workerLedger.hydroBuildMax)}`);
+  if (tworker) { const w = tworker.stats; L.push(`worker jobs ${w.jobs} fail ${w.failures} · worker ms/build ${(w.workerMs / Math.max(1, w.jobs)).toFixed(0)} · gap ${Math.round(workerGap)} · main ms/build prep ${(workerLedger.prepMs / Math.max(1, workerLedger.applied)).toFixed(1)} apply ${(workerLedger.applyMs / Math.max(1, workerLedger.applied)).toFixed(1)} post ${(workerLedger.postMs / Math.max(1, workerLedger.applied)).toFixed(1)} (hydro ${(workerLedger.hydroMs / Math.max(1, workerLedger.applied)).toFixed(1)}) · hydro build ${(workerLedger.hydroBuildMs / Math.max(1, workerLedger.hydroBuilds)).toFixed(1)} max ${Math.round(workerLedger.hydroBuildMax)} · feeds ${workerLedger.hydroFeeds} skipped ${workerLedger.hydroSkips}`);
     const pa = Math.max(1, workerLedger.applied);
     L.push(`post split ms/build reseat ${(workerLedger.reseatMs / pa).toFixed(1)} redrape ${(workerLedger.redrapeMs / pa).toFixed(1)} hydro ${(workerLedger.hydroMs / pa).toFixed(1)} batter ${(workerLedger.batterMs / pa).toFixed(1)} culvert ${(workerLedger.culvertMs / pa).toFixed(1)} · post max ${Math.round(workerLedger.postMax)} · dropped ${workerLedger.dropped}`); }
   L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
