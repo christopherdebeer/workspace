@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { HydroBodyRegistry } from './body-registry';
 import { analyseHydroTile, buildHydroTile, type HydroTileAnalysis } from './build-tile';
-import { clamp } from './geometry';
+import { clamp, sampleElevation } from './geometry';
 import {
   createHydroFrameUniforms,
   createHydroMaterial,
@@ -61,6 +61,9 @@ export interface HydroSystem {
   update(frame: HydroFrame): void;
   getTileBinding(key: TileKey): HydroTileBinding | undefined;
   sampleRestingSurface(x: number, z: number): HydroSample | undefined;
+  /** Everything that decided the surface at a point: the texel, the bodies
+   *  the tile holds and how each one's level was modelled. */
+  debugAt(x: number, z: number): Record<string, unknown> | null;
   stats(): HydroStats;
   /** Per-tile fed-versus-held truth for the harness — see the implementation. */
   debugTiles(): Array<Record<string, unknown>>;
@@ -449,6 +452,54 @@ class DefaultHydroSystem implements HydroSystem {
       };
     }
     return undefined;
+  }
+
+  /**
+   * WHY THE WATER IS WHERE IT IS. `sampleRestingSurface` answers what the
+   * field holds; this answers who put it there — the body, its kind, and
+   * whether its level is one flat number for the whole footprint, a river
+   * profile, or the ocean datum. A surface standing over the valley floor
+   * is nearly always a `flat` body on sloping ground, and that is only
+   * visible from here.
+   */
+  debugAt(x: number, z: number): Record<string, unknown> | null {
+    for (const [key, record] of this.records) {
+      const field = record.field;
+      if (!field || x < field.bounds.minX || x > field.bounds.maxX
+        || z < field.bounds.minZ || z > field.bounds.maxZ) continue;
+      const u = (x - field.bounds.minX) / Math.max(Number.EPSILON, field.bounds.maxX - field.bounds.minX);
+      const v = (z - field.bounds.minZ) / Math.max(Number.EPSILON, field.bounds.maxZ - field.bounds.minZ);
+      const ix = clamp(Math.round(field.gutter + u * (field.resolution - 1)), 0, field.width - 1);
+      const iz = clamp(Math.round(field.gutter + v * (field.resolution - 1)), 0, field.height - 1);
+      const i = iz * field.width + ix;
+      const bodies = this.registry.bodiesForTile(key).map((b) => ({
+        id: b.id, kind: b.kind, level: b.level.type,
+        elevationM: b.level.type === 'profile' ? null : +b.level.elevationM.toFixed(2),
+        stations: b.level.type === 'profile' ? b.level.stations.length / 3 : 0,
+        flow: [+b.flow[0].toFixed(2), +b.flow[1].toFixed(2)],
+      }));
+      const obs = record.analysis.observations.map((o) => ({
+        id: o.id, kind: o.kind,
+        cand: o.candidateLevelM === undefined ? null : +o.candidateLevelM.toFixed(2),
+        tagged: o.taggedLevelM === undefined ? null : +o.taggedLevelM.toFixed(2),
+        stations: o.profile ? o.profile.length / 3 : 0,
+      }));
+      // The raster the build levelled against, at this very point — the one
+      // number that separates "the profile smoothed it" from "the field's
+      // ground and the drawn ground disagree here".
+      const rb = sampleElevation(record.input.elevation, record.input.bounds, x, z);
+      return {
+        key,
+        rasterBedM: Number.isFinite(rb) ? +rb.toFixed(2) : null,
+        coverage: +field.geometry[i * 4].toFixed(2),
+        kind: HYDRO_ID_KIND[field.material[i * 4]] ?? null,
+        restingLevelM: +(field.elevationBaseM + field.geometry[i * 4 + 2]).toFixed(2),
+        fieldDepthM: +field.geometry[i * 4 + 3].toFixed(2),
+        elevationBaseM: +field.elevationBaseM.toFixed(2),
+        bodies, obs,
+      };
+    }
+    return null;
   }
 
   stats(): HydroStats {

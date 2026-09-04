@@ -24147,6 +24147,15 @@ function truckSpec(): Record<string, number> {
 /** One point, in world metres: is the field's water here. The grid probe above
  *  is truck-centred; this lets a caller anchor its own grid to a fixed lat/lon
  *  and so compare two runs from different spawns cell for cell. */
+/** WHY THE WATER STANDS WHERE IT DOES at a point, with the DRAWN ground
+ *  beside it — the pair that tells a lake from a slab hanging over a valley. */
+(window as unknown as { __hydrowhy?: object }).__hydrowhy = (x = state.x, z = state.z): object => {
+  const d = hydroSys?.debugAt(x, z) ?? null;
+  const bed = hasHeight(x, z) ? sampleHeight(x, z) + baseElev : null;
+  const level = d ? (d.restingLevelM as number) : null;
+  return { x: Math.round(x), z: Math.round(z), bed: bed === null ? null : +bed.toFixed(2),
+    over: bed !== null && level !== null ? +(level - bed).toFixed(2) : null, ...(d ?? {}) };
+};
 (window as unknown as { __hydroat?: object }).__hydroat = (x: number, z: number): boolean =>
   !!hydroSys?.sampleRestingSurface(x, z);
 (window as unknown as { __hydromap?: object }).__hydromap = (halfM = 1200, n = 41): string[] => {

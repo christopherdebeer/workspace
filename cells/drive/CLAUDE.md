@@ -1525,6 +1525,31 @@ scale 3, 40 m and 105 m cameras:
   source fine/coarse/none, ground, sight line, margin) and `__farat(x,z)`
   says what each source answers at a point.
 
+- **WHY A WATER SURFACE STANDS OVER THE VALLEY FLOOR** — measured in the
+  Rhône gorge above Obergoms with `__hydrowhy(x,z)`, which names the body,
+  its level model, the field's own bed raster and the drawn ground at one
+  point. 157 wet texels: the water is SEATED on average (median surface
+  minus drawn ground +0.01m mid-channel, −0.69m at the rim); the artefacts
+  are the tails, and there are two of them.
+  **One, the ribbon is a fixed half-width on a section that is not.** The
+  cross-section is deliberately flat (`bedFoot` is sampled at the centreline
+  thalweg so the surface does not hump at its edges), so where the drawn
+  ribbon ends before the ground has risen to the level, its rim stands proud
+  — worst measured 4.35m over the drawn ground with the field's own depth
+  channel reading 0.32m, and 3.04m over the field's OWN bed at that texel.
+  **Two, the field's raster and the drawn mesh disagree by up to 3m at a
+  point** (median 0.00, range −2.47…+3.02): the field is ~16m a texel over a
+  2km tile and an alpine channel is narrower than two of those.
+  TWO FIXES THAT DID NOT WORK, both measured and reverted: sampling the
+  profile stations from the fine `sampleHeight` instead of the raster made
+  the rim sink (median −0.05 → −0.75m) and the worst burial went from −5.9m
+  to −10.9m, because the profile then follows a channel the ribbon's width
+  does not; doing the same per wet texel cost +5ms a build (14.7 → 19.8) and
+  is the exact fault the `bedFoot` comment warns about. What would actually
+  work is either a field resolution that follows the terrain's steepness, or
+  a river channel carved into the terrain mesh the way a road corridor is —
+  make the ground agree with the water rather than the water with the ground.
+
 **The rule that keeps a lab honest: it imports the SAME modules the game runs.**
 A lab that reimplements what it is inspecting proves nothing about what ships.
 This is why the façade shader became `client/facade.ts`, the plants became
