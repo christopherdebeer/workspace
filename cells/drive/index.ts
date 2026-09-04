@@ -286,7 +286,7 @@ function serveWebAsset(path: string) {
 // written — otherwise every ocean tile is a permanent miss and therefore a
 // permanent invocation — and (2) a failure must never be written, or one bad
 // minute upstream becomes our bad week.
-const TILE_RE = /^\/~\/osm\/v[23]\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+const TILE_RE = /^\/~\/osm\/v[2-4]\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;   // v4: water relations
 const COVER_RE = /^\/~\/cover\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // THREE upstreams, not one. Measured on a 12km corridor through Death Valley:
 // 7 of 25 cold tiles came back 503 at 9–12.5s because the single upstream was
@@ -752,6 +752,7 @@ async function serveOverview(path: string, m: RegExpMatchArray) {
  * See `docs/drive-persistence.md`.
  */
 import { CAMPAIGN } from './campaigns/dakar';
+import { assembleRelationRings } from './osm-rings';
 
 const CAMPAIGN_V = CAMPAIGN.v;
 const CAMPAIGN_RE = /^\/~\/campaign\/(\d{1,4})$/;
@@ -914,6 +915,8 @@ function overpassQuery(z: number, x: number, y: number): string {
       way["building"](${bbox});
       way["natural"~"water|coastline|cliff|scrub|wetland|bare_rock|sand"](${bbox});
       way["waterway"~"riverbank|river|stream|canal"](${bbox});
+      relation["natural"="water"](${bbox});
+      relation["waterway"="riverbank"](${bbox});
       way["landuse"~"forest|meadow|grass|recreation_ground|farmland|orchard|vineyard|quarry"](${bbox});
       way["leisure"~"park|pitch|garden|nature_reserve"](${bbox});
       way["railway"~"rail|light_rail|tram|narrow_gauge"](${bbox});
@@ -932,6 +935,8 @@ function overpassQuery(z: number, x: number, y: number): string {
 interface RawWay {
   type?: string; id: number; tags?: Record<string, string>;
   geometry?: Array<{ lat: number; lon: number }>;
+  /** A relation's member ways, each with its geometry under `out geom`. */
+  members?: Array<{ type?: string; ref?: number; role?: string; geometry?: Array<{ lat: number; lon: number }> }>;
   /** Nodes carry their position directly rather than as a geometry array. */
   lat?: number; lon?: number;
 }
@@ -1003,6 +1008,18 @@ export async function askOverpass(query: string, budgetMs = UPSTREAM_MS, attempt
 export function trimWays(elements: RawWay[]): Array<Record<string, unknown>> {
   const out: Array<Record<string, unknown>> = [];
   for (const el of elements) {
+    if (el.type === 'relation') {
+      // v4: water multipolygons, joined into rings here (see osm-rings.ts).
+      // A NEGATIVE id: ways and relations share a number space in OSM and
+      // the client dedupes by id, so a relation is -id, unmistakably. Its
+      // `geometry` is the first outer ring, which is what every consumer
+      // that only knows a way expects to find there.
+      if (!el.members?.length) continue;
+      const rings = assembleRelationRings(el.members);
+      if (!rings?.length) continue;
+      out.push({ id: -el.id, tags: el.tags ?? {}, geometry: rings[0].outer, rings });
+      continue;
+    }
     // A NODE IS A ONE-POINT GEOMETRY. Dropping everything that was not a `way`
     // is what silently threw away every fuel station, viewpoint and summit the
     // query now asks for — they are nodes, and a node keeps its position in

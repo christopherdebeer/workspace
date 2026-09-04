@@ -32,6 +32,8 @@ import {
   solveChain as solveProfile,
 } from './roadprofile';
 import { RoadProfileWorker } from './roadprofile-worker';
+import { inlandComponents, inlandMask, maskSignature } from './inland-water';
+import { pointInPolygon } from './hydro/geometry';
 import { createTerrainKernel, type HeightTile, type CellTris, type StripLike, type BreakLine, type TerrainStore, type CarveLog, type MmPt, type CoverTile } from './terrain-kernel';
 import { TerrainWorker, type TerrainJob, type TerrainReply } from './terrain-worker';
 // THE TERRAIN KERNEL, instantiated once for the synchronous path and the
@@ -1424,6 +1426,121 @@ const oceanMasks = new Map<string, { grid: MaskGrid; stats: MaskStats; datum: nu
    *  means the answer is final; anything else means ask again as ground
    *  arrives — see the cache test in `oceanMaskFor`. */
   unknown: number; tiles: number }>();
+/**
+ * ── INLAND WATER FOR HYDRO, FROM THE COVER ──
+ *
+ * The terrain painter knew more water than the hydro field. It paints every
+ * WorldCover class-80 pixel; hydro was handed OSM ways and the ocean mask,
+ * which refuses every class-80 pixel above the sea datum or landward of the
+ * coastline — and an estuary is landward by definition. At George (measured
+ * through the cell's cache) the OSM tiles held one river centreline with no
+ * width while the cover held a band 110–270 m wide; the drawn river was the
+ * centreline buffered by a class default.
+ *
+ * Every time a cover tile's ocean mask is (re)built, the class-80 pixels the
+ * flood refused are traced into polygons (client/inland-water.ts) and
+ * registered as `landcover` features, one per connected component: a `lake`,
+ * or a `river` when a flowing OSM line runs through it, in which case hydro
+ * grades its surface along that centreline's profile (build-tile). The
+ * registry keys bodies by feature id, so a component keeps one level across
+ * the terrain tiles it spans; a body split by a COVER tile edge is two ids,
+ * which is the known seam (cover tiles are ~10 km, so rare).
+ *
+ * The mask signature skips the retrace when nothing changed; a rebuild that
+ * changes it replaces the tile's features and dirties the terrain tiles they
+ * touch, exactly as an OSM way arriving does.
+ */
+const COVER_WATER_MIN_PX = 4;                    // a lone 38 m pixel is a shadow, not a pond
+interface CoverHydroRec { slots: string[]; sig: number; pixels: number }
+const coverHydro = new Map<string, CoverHydroRec>();
+let coverHydroTraceMs = 0, coverHydroTraces = 0;
+const FLOWING_KINDS = new Set<string>(['river', 'stream', 'canal']);
+function hydroDirtyBox(minX: number, minZ: number, maxX: number, maxZ: number): void {
+  for (const [k, h] of heightTiles) {
+    if (maxX < h.xs || minX > h.xs + h.w || maxZ < h.zs || minZ > h.zs + h.h) continue;
+    if (hydroRev.has(k)) hydroDirty.add(k);
+  }
+}
+/** Does a flowing OSM line already in the store run through this polygon? */
+function coverFlowingCrosses(outer: Float64Array, minX: number, minZ: number, maxX: number, maxZ: number): boolean {
+  const poly = { outer, holes: [] as Float64Array[] };
+  for (const e of hydroFeats.values()) {
+    const f = e.f;
+    if (f.geometry.type !== 'line' || !FLOWING_KINDS.has(f.kind)) continue;
+    if (e.maxX < minX || e.minX > maxX || e.maxZ < minZ || e.minZ > maxZ) continue;
+    const p = f.geometry.points;
+    for (let i = 0; i + 1 < p.length; i += 6) if (pointInPolygon(p[i], p[i + 1], poly)) return true;
+  }
+  return false;
+}
+function coverWaterFeed(key: string, t: CoverTile, ocean: MaskGrid, elevation?: Float32Array): void {
+  if (!HYDRO_ON) return;
+  const mask = inlandMask(t.data, ocean.data, 256 * 256);
+  // The signature carries how much of the water the DEM answers for: a lake
+  // with no ground under it yet is skipped below, and must come back when
+  // its tiles land even though the inland mask itself has not changed.
+  let known = 0;
+  if (elevation) for (let i = 0; i < mask.length; i++) if (mask[i] && Number.isFinite(elevation[i])) known++;
+  const sig = (maskSignature(mask) ^ Math.imul(known, 7919)) | 0;
+  const had = coverHydro.get(key);
+  if (had && had.sig === sig) return;
+  const t0 = performance.now();
+  const drop = (rec: CoverHydroRec): void => {
+    for (const slot of rec.slots) {
+      const e = hydroFeats.get(slot);
+      if (!e) continue;
+      hydroFeats.delete(slot);
+      hydroDirtyBox(e.minX, e.minZ, e.maxX, e.maxZ);
+    }
+  };
+  if (had) drop(had);
+  // Cover tiles that left the ring take their water with them.
+  for (const [k, rec] of coverHydro) if (k !== key && !coverTiles.has(k)) { drop(rec); coverHydro.delete(k); }
+  const comps = inlandComponents(mask, 256, 256, COVER_WATER_MIN_PX, 200, elevation);
+  const toX = (px: number): number => t.xs + (px / 256) * t.w;
+  const toZ = (pz: number): number => t.zs + (pz / 256) * t.h;
+  const ring = (r: number[]): Float64Array => {
+    const out = new Float64Array(r.length);
+    for (let i = 0; i < r.length; i += 2) { out[i] = toX(r[i]); out[i + 1] = toZ(r[i + 1]); }
+    return out;
+  };
+  const slots: string[] = [];
+  let pixels = 0;
+  for (let i = 0; i < comps.length; i++) {
+    if (hydroFeats.size >= HYDRO_FEAT_CAP) { hydroFeatsFull++; break; }
+    const c = comps[i];
+    if (elevation && c.known === 0) continue;         // no DEM under it yet: nothing to build on
+    const outer = ring(c.outer), holes = c.holes.map(ring);
+    const minX = toX(c.minX), maxX = toX(c.maxX + 1), minZ = toZ(c.minY), maxZ = toZ(c.maxY + 1);
+    const id = `landcover:${key}:${i}`;
+    const kind = coverFlowingCrosses(outer, minX, minZ, maxX, maxZ) ? 'river' : 'lake';
+    const f: HydroFeature = {
+      id, source: 'landcover', kind, intermittent: false, tidal: false,
+      geometry: { type: 'area', polygons: [{ outer, holes }] },
+    };
+    const slot = `cover:${id}`;
+    hydroFeats.set(slot, { f, minX, minZ, maxX, maxZ });
+    slots.push(slot);
+    pixels += c.pixels;
+    hydroDirtyBox(minX, minZ, maxX, maxZ);
+  }
+  coverHydro.set(key, { slots, sig, pixels });
+  coverHydroTraceMs += performance.now() - t0; coverHydroTraces++;
+}
+/** A river line that arrived after the cover: the lake it crosses is a reach. */
+function coverWaterReclassify(points: Float64Array, minX: number, minZ: number, maxX: number, maxZ: number): void {
+  for (const e of hydroFeats.values()) {
+    const f = e.f;
+    if (f.source !== 'landcover' || f.kind !== 'lake' || f.geometry.type !== 'area') continue;
+    if (e.maxX < minX || e.minX > maxX || e.maxZ < minZ || e.minZ > maxZ) continue;
+    const poly = f.geometry.polygons[0];
+    let inside = false;
+    for (let i = 0; i + 1 < points.length && !inside; i += 6) inside = pointInPolygon(points[i], points[i + 1], poly);
+    if (!inside) continue;
+    f.kind = 'river';
+    hydroDirtyBox(e.minX, e.minZ, e.maxX, e.maxZ);
+  }
+}
 function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskStats } {
   const datum = seaSurfaceAbs();
   const got = oceanMasks.get(key);
@@ -1558,6 +1675,7 @@ function oceanMaskFor(key: string, t: CoverTile): { grid: MaskGrid; stats: MaskS
   const rec = { ...built, datum, coasts: coastSegs.size >> 6, unknown, tiles: heightTiles.size };
   if (oceanMasks.size > 64) oceanMasks.clear();
   oceanMasks.set(key, rec);
+  coverWaterFeed(key, t, built.grid, elevation);
   // A mask that reaches its border with ocean can vouch for a blank
   // neighbour: drop any cached neighbour that found NO ocean while holding
   // unjudged pixels, so its next query rebuilds with this seed available.
@@ -1736,9 +1854,16 @@ const HYDRO_PROJECT = { project: (x: number, z: number): readonly [number, numbe
 /** One decoded OSM way, normalised and stored. Cheap enough to call from the
  *  decode loop: a bbox, a map write, and a scan of the ~18 live height tiles. */
 function noteHydroWay(id: string | number, tags: Record<string, string>,
-                      pts: Array<[number, number]>, key: string): void {
+                      pts: Array<[number, number]>, key: string,
+                      rings?: OsmWay['rings']): void {
   if (!HYDRO_ON) return;
-  for (const f of extractOsmHydro([{ id, tags, geometry: pts }], HYDRO_PROJECT)) {
+  // A relation's rings, in local metres already — the projection below is
+  // the identity, so what it is handed must be what the world uses.
+  const polygons = rings?.map((r) => ({
+    outer: r.outer.map(([la, lo]) => toLocal(la, lo)),
+    holes: r.holes.map((h) => h.map(([la, lo]) => toLocal(la, lo))),
+  }));
+  for (const f of extractOsmHydro([{ id, tags, geometry: pts, polygons }], HYDRO_PROJECT)) {
     // ── ONE WAY ARRIVES IN PIECES; KEEP THEM ALL ──
     //
     // Overpass clips a way at every vector-tile edge, so a river reaches
@@ -1785,6 +1910,9 @@ function noteHydroWay(id: string | number, tags: Record<string, string>,
     for (const [key, t] of heightTiles) {
       if (maxX < t.xs || minX > t.xs + t.w || maxZ < t.zs || minZ > t.zs + t.h) continue;
       if (hydroRev.has(key)) hydroDirty.add(key);
+    }
+    if (f.geometry.type === 'line' && FLOWING_KINDS.has(f.kind)) {
+      coverWaterReclassify(f.geometry.points, minX, minZ, maxX, maxZ);
     }
   }
 }
@@ -2054,6 +2182,10 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
   // river actually covers here and nothing for the rest. Overlap is what is
   // wanted, too — a feature must reach every tile it touches or the body
   // registry cannot reconcile one lake across four of them.
+  // The mask first: building it is what registers the cover's inland water
+  // (coverWaterFeed), and those features must be in the store before the
+  // gather below or the first feed of every tile misses its own lakes.
+  const ocean = oceanCoverageFor(t);
   const feats: HydroFeature[] = [];
   // ── AND THE GUTTER COUNTS ──
   //
@@ -2080,7 +2212,7 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
     bounds: { minX: t.xs, minZ: t.zs, maxX: t.xs + t.w, maxZ: t.zs + t.h },
     elevation: { width: n, height: n, data: elevation, verticalDatum: 'absolute-m' },
     features: feats,
-    oceanCoverage: oceanCoverageFor(t),
+    oceanCoverage: ocean,
   }).catch((e) => console.warn('[hydro]', e));
 }
 
@@ -16331,6 +16463,9 @@ function synthRing(set: Set<string>): Array<[number, number]> | null {
 // IndexedDB gets an origin quota in the hundreds of MB.
 interface OsmWay {
   id: number; tags?: Record<string, string>; geometry: Array<{ lat: number; lon: number }>;
+  /** A water multipolygon's rings (v4 tiles), [lat, lon] pairs; `geometry`
+   *  is then the first outer ring. Relations carry NEGATIVE ids. */
+  rings?: Array<{ outer: Array<[number, number]>; holes: Array<Array<[number, number]>> }>;
   /** Dedupe key. A way clipped across several vector tiles arrives once per
    *  tile under the SAME id, so the id alone would render the first piece and
    *  silently drop the rest. */
@@ -16352,6 +16487,8 @@ const KEEP_TAGS = ['highway', 'building', 'building:levels', 'natural', 'waterwa
   // signals (cut side, fill, mapped grade, clearance) held for when the
   // vertical alignment learns to consume them.
   'covered', 'cutting', 'embankment', 'incline', 'maxheight',
+  // Hydro's vocabulary: kind, width, level and regime of a water body.
+  'water', 'width', 'intermittent', 'seasonal', 'tidal', 'water_level',
   // Infrastructure grammar: explicit facts always outrank procedural context.
   'bridge:structure', 'bridge:support', 'bridge:material', 'tunnel:type',
   'tunnel:lining', 'material', 'start_date', 'lanes', 'width', 'diameter'];
@@ -16396,7 +16533,7 @@ const osmDbReady: Promise<void> = new Promise((resolve) => {
 });
 // Free the shared origin quota from the failed localStorage era.
 try { for (const k of Object.keys(localStorage)) if (k.startsWith('drive.osm.')) localStorage.removeItem(k); } catch { /* fine */ }
-const osmCacheKey = (x: number, y: number): string => `5/${OSM_Z}/${x}/${y}`; // v5: nodes, rivers, rails
+const osmCacheKey = (x: number, y: number): string => `6/${OSM_Z}/${x}/${y}`; // v6: water relations (v4 tiles)
 async function readTileCache(x: number, y: number): Promise<OsmWay[] | null> {
   // THE FIXTURE IS THE CACHE. Answering here as well as at the proxy is what
   // gives renderGated its halo — so an authored road solves its profile
@@ -16428,7 +16565,7 @@ function writeTileCache(x: number, y: number, els: OsmWay[]): void {
     // is because no coastline arrived or because the branch never fired. This
     // separates the two.
     if (e.tags?.natural === 'coastline') osmCoastSeen++;
-    return { id: e.id, tags, geometry: e.geometry };
+    return { id: e.id, tags, geometry: e.geometry, ...(e.rings ? { rings: e.rings } : {}) };
   });
   try {
     osmDb.transaction('osm', 'readwrite').objectStore('osm').put({ ts: Date.now(), ways }, osmCacheKey(x, y));
@@ -17441,7 +17578,7 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
       // the physics — `polygon(..., 'water')` is what fills `waterPolys` — so
       // this branch hands the surface AND the wading answer over together,
       // which is why `surfaceAt` grew a hydro sample in the same change.
-      noteHydroWay(el.id, tags, pts, dk);
+      noteHydroWay(el.id, tags, pts, dk, el.rings);
       if (!HYDRO_ON) polygon(pts, MAT.water, 0.025, 0, 'water');
     } else if (AREA_TAG(tags)) {
       // NOT A MESH — see noteArea. The ground wears it; the scatter stands on it.
@@ -17808,12 +17945,12 @@ async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
   const ctl = new AbortController();
   const bail = setTimeout(() => ctl.abort(), TILE_WAIT_MS);
   try {
-    const res = await fetch(`${CELL_BASE}/~/osm/v3/${OSM_Z}/${x}/${y}`, { signal: ctl.signal });
+    const res = await fetch(`${CELL_BASE}/~/osm/v4/${OSM_Z}/${x}/${y}`, { signal: ctl.signal });
     // 503 is the cell telling us Overpass just failed IT — a real answer, and a
     // reason to retry this tile later, not to abandon the proxy.
     if (res.status === 503) throw new Error('fill failed');
     if (!res.ok) { tileProxyOk = false; return null; }
-    const json = await res.json() as { ways?: Array<{ id: number; tags?: Record<string, string>; geometry?: Array<[number, number]> }> };
+    const json = await res.json() as { ways?: Array<{ id: number; tags?: Record<string, string>; geometry?: Array<[number, number]>; rings?: OsmWay['rings'] }> };
     // Stored as [lat, lon] pairs — a third of the bytes of {lat, lon} objects,
     // and the renderer wants the object shape, so widen on the way in.
     const t0 = performance.now();
@@ -17821,6 +17958,7 @@ async function proxyTile(x: number, y: number): Promise<OsmWay[] | null> {
       id: w.id,
       tags: w.tags,
       geometry: (w.geometry ?? []).map(([lat, lon]) => ({ lat, lon })),
+      ...(w.rings ? { rings: w.rings } : {}),
     })) as OsmWay[];
     profAdd('osmParse', t0);
     return ways;
@@ -21655,7 +21793,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // the hop intact, so rebuilding the whole system would throw away a
     // compiled program to change some bounds.
     for (const key of hydroRev.keys()) hydroSys?.removeTile(key);
-    hydroRev.clear(); hydroDirty.clear(); hydroFeats.clear(); hydroFeatsFull = 0;
+    hydroRev.clear(); hydroDirty.clear(); hydroFeats.clear(); hydroFeatsFull = 0; coverHydro.clear();
     coastSegs.clear(); osmCoastSeen = 0; oceanMasks.clear(); sideCaches.clear();
     // THE SOLVER SPEAKS IN LOCAL METRES TOO. Its deck hints and junctions are
     // spatially keyed, so the last postcard's road left an elevation under
@@ -23411,6 +23549,17 @@ function truckSpec(): Record<string, number> {
     // `fedMax: 0` has a store filling and a feed that never sees it, which
     // looks identical from the seat to having no rivers at all.
     feats: hydroFeats.size, featsFull: hydroFeatsFull, hydroDirty: hydroDirty.size,
+    landcover: (() => {
+      let feats = 0, pixels = 0, rivers = 0, pts = 0, maxPts = 0;
+      for (const rec of coverHydro.values()) { feats += rec.slots.length; pixels += rec.pixels; }
+      for (const e of hydroFeats.values()) {
+        if (e.f.source !== 'landcover' || e.f.geometry.type !== 'area') continue;
+        if (e.f.kind === 'river') rivers++;
+        let n = 0; for (const poly of e.f.geometry.polygons) { n += poly.outer.length >> 1; for (const h of poly.holes) n += h.length >> 1; }
+        pts += n; if (n > maxPts) maxPts = n;
+      }
+      return { tiles: coverHydro.size, feats, rivers, pixels, pts, maxPts, traces: coverHydroTraces, traceMs: Math.round(coverHydroTraceMs) };
+    })(),
     maskBuilds, covResamples, terrainTiles: heightTiles.size,
     // What the water actually costs to rasterise. A full-tile lattice is
     // 2*segments^2 triangles per tile (2048 at the default 32); the cull keeps

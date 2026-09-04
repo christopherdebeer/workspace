@@ -1022,6 +1022,54 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   vsync-quantised gap. drawHud was the largest steady tick line after
   render at 1.9 ms every frame.
 
+- **INLAND WATER FOR HYDRO COMES FROM THE COVER.** The terrain painter
+  paints every WorldCover class-80 pixel; hydro was handed OSM ways and the
+  ocean mask only, and the mask refuses class-80 pixels above the sea datum
+  or landward of the coastline — an estuary is landward by definition. At
+  George (measured through the cell's cache) the OSM tiles held one river
+  centreline with no width, the cover a band 110–270 m wide. Now every
+  ocean-mask build hands the refused class-80 pixels to
+  `client/inland-water.ts`: four-connected components, rings traced along
+  pixel edges (water on the right; right-most turn at a checkerboard
+  corner), collinear merge, one Chaikin pass, Douglas–Peucker at 0.2 px.
+  `coverWaterFeed` (main.ts, above `oceanMaskFor`) registers them as
+  `landcover` features, `lake` or `river` when a flowing OSM line runs
+  through (and `coverWaterReclassify` flips a lake to a river when the line
+  arrives later). The signature is the inland mask XOR the count of pixels
+  the DEM answers for, so a lake with no ground under it yet is skipped and
+  retraced when its tiles land. `hydroFeed` builds the mask BEFORE gathering
+  features, or a tile's first feed misses its own lakes. `__hydro().landcover`
+  has tiles/feats/rivers/pixels/pts/maxPts/traceMs. Known seam: a body split
+  by a cover-tile edge (~10 km) is two ids and may settle two levels.
+
+- **A FLOWING AREA TAKES THE NEAREST PROFILE'S LEVEL.** A riverbank or a
+  cover reach of kind `river` has no profile of its own; build-tile used bed
+  plus nominal depth per texel, a surface copying every DEM wrinkle. Where
+  a centreline profile is within reach (the same search that gives the area
+  its river space) the texel takes that profile's level, capped at the
+  thalweg bed plus nominal depth like the line branch.
+
+- **AREA COVERAGE IS A SCANLINE FILL, NOT A DISTANCE.** An area's coverage
+  was a signed distance to its rings per texel — O(texels × points), 177 ms
+  for one hydro tile in the harness once a cover lagoon arrived. It is now a
+  4×4 sub-sampled even-odd scanline fill (`areaCoverageRaster`), O(rows ×
+  edges), and dry texels skip the nearest-profile search. Harness: 19.6 →
+  15.1 ms mean, 177 → 69 ms max.
+
+- **WATER RELATIONS ARRIVE IN v4 TILES.** Anything larger than a pond is a
+  `type=multipolygon` relation in OSM, and the tile query fetched ways only.
+  The proxy query now adds `relation["natural"="water"]` and
+  `relation["waterway"="riverbank"]`; `osm-rings.ts` joins the member ways
+  into closed rings (an unclosable chain is dropped, a relation over 6000
+  points is dropped — the cover gives hydro the giants) and `trimWays` emits
+  them with a NEGATIVE id (ways and relations share a number space), the
+  first outer ring as `geometry`, and `rings` for the polygons. The client
+  fetches `/~/osm/v4/`, its IndexedDB key is `6/…`, `OsmWay.rings` rides
+  through the cache, `KEEP_TAGS` keeps water/width/intermittent/seasonal/
+  tidal/water_level, and `noteHydroWay` hands the rings to `extractOsmHydro`
+  as `polygons` in local metres. `devtools/osm-rings.test.mjs` and
+  `devtools/inland-water.test.mjs` are the unit tests.
+
 - **ONE HEAVY JOB A FRAME.** `frameHeavyMs()` sums what this frame has
   already paid to hydroBuild, terrainApply, roadBuild and swardFrame (read
   from the profiler's `curFrame`, which is why the wrappers must stay).

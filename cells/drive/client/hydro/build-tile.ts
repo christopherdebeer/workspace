@@ -9,7 +9,6 @@ import {
   quantile,
   sampleCoverage,
   sampleElevation,
-  signedDistanceToArea,
 } from './geometry';
 import {
   DEFAULT_HYDRO_BUILD,
@@ -616,6 +615,56 @@ function nearestSourceMap(source: Uint8Array, width: number, height: number): In
   return nearest;
 }
 
+/** ── COVERAGE BY SCANLINE, NOT BY DISTANCE ──
+ *
+ * An area's coverage was a signed distance to its rings, per texel: O(texels
+ * × ring points), and a cover-raster lagoon or a real OSM lake outline runs
+ * to a thousand points — measured at 177 ms for one hydro tile in the harness
+ * once the cover's inland water arrived, against a 10 ms main-thread budget.
+ * This fills the polygon by scanline at 4×4 sub-samples a texel instead:
+ * O(rows × edges) once, then a lookup. The band the distance used to
+ * anti-alias is now the sub-sample fraction, which is the same thing
+ * measured the other way round. Holes are rings too: even-odd. */
+const AREA_SS = 4;
+function areaCoverageRaster(
+  geometry: Extract<HydroFeature['geometry'], { type: 'area' }>,
+  ix0: number, ix1: number, iz0: number, iz1: number,
+  xAt: (ix: number) => number, zAt: (iz: number) => number,
+  pixelX: number, pixelZ: number,
+): Float32Array {
+  const w = ix1 - ix0 + 1, h = iz1 - iz0 + 1;
+  const counts = new Uint8Array(w * h);
+  const X0 = xAt(ix0) - pixelX / 2, Z0 = zAt(iz0) - pixelZ / 2;
+  const subW = pixelX / AREA_SS, subH = pixelZ / AREA_SS;
+  const rings: Float64Array[] = [];
+  for (const poly of geometry.polygons) { rings.push(poly.outer); for (const hole of poly.holes) rings.push(hole); }
+  const xs: number[] = [];
+  for (let sy = 0; sy < h * AREA_SS; sy++) {
+    const zs = Z0 + (sy + 0.5) * subH;
+    xs.length = 0;
+    for (const ring of rings) {
+      const n = ring.length >> 1;
+      for (let i = 0, j = n - 1; i < n; j = i++) {
+        const z0 = ring[j * 2 + 1], z1 = ring[i * 2 + 1];
+        if ((z0 > zs) === (z1 > zs)) continue;
+        const x0 = ring[j * 2], x1 = ring[i * 2];
+        xs.push(x0 + ((zs - z0) / (z1 - z0)) * (x1 - x0));
+      }
+    }
+    if (xs.length < 2) continue;
+    xs.sort((a, b) => a - b);
+    const row = ((sy / AREA_SS) | 0) * w;
+    for (let k = 0; k + 1 < xs.length; k += 2) {
+      const a = Math.max(0, Math.ceil((xs[k] - X0) / subW - 0.5));
+      const b = Math.min(w * AREA_SS - 1, Math.floor((xs[k + 1] - X0) / subW - 0.5));
+      for (let sx = a; sx <= b; sx++) counts[row + ((sx / AREA_SS) | 0)]++;
+    }
+  }
+  const out = new Float32Array(w * h);
+  for (let i = 0; i < out.length; i++) out[i] = counts[i] / (AREA_SS * AREA_SS);
+  return out;
+}
+
 export function buildHydroTile(
   input: HydroTileInput,
   registry: HydroBodyRegistry,
@@ -822,6 +871,9 @@ export function buildHydroTile(
     const iz0 = clamp(Math.floor((fb.minZ - input.bounds.minZ) / pixelZ) + gutter - 1, 0, height - 1);
     const iz1 = clamp(Math.ceil((fb.maxZ - input.bounds.minZ) / pixelZ) + gutter + 1, 0, height - 1);
     const lineWidth = item.feature.geometry.type === 'line' ? item.feature.geometry.widthM : 0;
+    const areaCov = item.feature.geometry.type === 'area'
+      ? areaCoverageRaster(item.feature.geometry, ix0, ix1, iz0, iz1, xAt, zAt, pixelX, pixelZ) : null;
+    const covW = ix1 - ix0 + 1;
     for (let iz = iz0; iz <= iz1; iz++) for (let ix = ix0; ix <= ix1; ix++) {
       const x = xAt(ix), z = zAt(iz);
       if (item.index && item.profile && item.spine) {
@@ -854,19 +906,29 @@ export function buildHydroTile(
         ]);
         continue;
       }
-      const bed = sampleElevation(input.elevation, input.bounds, x, z);
-      let signed = -Infinity;
+      let amount: number;
       if (item.feature.geometry.type === 'area') {
-        signed = signedDistanceToArea(x, z, item.feature.geometry);
+        amount = (areaCov as Float32Array)[(iz - iz0) * covW + (ix - ix0)];
       } else {
-        signed = lineWidth * 0.5
+        const signed = lineWidth * 0.5
           - nearestSegment(x, z, item.feature.geometry.points).distanceM;
+        amount = clamp(0.5 + signed / Math.max(0.01, antialias * 2), 0, 1);
       }
-      const amount = clamp(0.5 + signed / Math.max(0.01, antialias * 2), 0, 1);
+      // Dry texels pay nothing: the nearest-profile search below was run for
+      // every texel of a lake's bounding box, water or not.
+      if (amount <= 0.005) continue;
+      const bed = sampleElevation(input.elevation, input.bounds, x, z);
       let localFlow: readonly [number, number] = profileFlow(item.profile, item.body, x, z);
       let localEnergy = item.profile && item.energy
         ? energyAt(item.profile, item.energy, x, z) : undefined;
       let river: readonly [number, number, number, number] | undefined;
+      // A flowing AREA with no profile of its own — an OSM riverbank, or a
+      // cover-raster reach — used to take bed + nominal depth per texel, a
+      // surface that copies every DEM wrinkle. Where a centreline profile is
+      // within reach it takes THAT level instead, graded and monotone, the
+      // same surface the centreline body draws, capped at the thalweg bed
+      // plus nominal depth exactly as the line branch above does.
+      let levelM: number | undefined;
 
       // Riverbank/natural-water polygons describe the visible width, while a
       // neighbouring waterway line describes its motion. Project polygon
@@ -901,11 +963,14 @@ export function buildHydroTile(
             best.curvature,
             chartHalfW,
           ];
+          const bedFoot = sampleElevation(input.elevation, input.bounds, best.px, best.pz);
+          levelM = Number.isFinite(bedFoot)
+            ? Math.min(best.levelM, bedFoot + FLOWING_NOMINAL_DEPTH_M) : best.levelM;
         }
       }
       paint(
         ix, iz, amount, item.body,
-        bodyLevel(item.body, item.profile, x, z, bed),
+        levelM ?? bodyLevel(item.body, item.profile, x, z, bed),
         localFlow, localEnergy, river,
       );
     }
