@@ -135,21 +135,25 @@ export function createHydroMaterial(
   textures: HydroTileTextures,
   frame: HydroFrameUniforms,
   /**
-   * ── TWO VARIANTS OF ONE SHADER ──
+   * ── THREE BEHAVIOURS, ONE SHADER ──
    *
-   * `flowing` compiles the river machinery (and binds the structure field);
-   * standing compiles without it, so the open ocean — most of every coastal
-   * frame — carries neither the extra texture read nor the river-space
-   * instructions. One GLSL source, split by the preprocessor, because two
-   * hand-maintained shaders is how the regimes drift apart.
+   * `flowing` compiles the river machinery (and binds the structure field).
+   * `surf` keeps the standing-water path but enables moving coastal coverage
+   * and terrain-clearing run-up on the shoreline-only fine mesh. The ordinary
+   * standing variant remains the cheap open-ocean body.
    */
   flowing = false,
+  surf = false,
 ): THREE.ShaderMaterial {
   const centralScale = field.resolution / field.width;
   const offset = field.gutter / field.width;
+  const suffix = `${flowing ? ':flowing' : ''}${surf ? ':surf' : ''}`;
   return new THREE.ShaderMaterial({
-    name: `hydro:${field.key}${flowing ? ':flowing' : ''}`,
-    defines: flowing ? { HYDRO_FLOWING: 1 } : {},
+    name: `hydro:${field.key}${suffix}`,
+    defines: {
+      ...(flowing ? { HYDRO_FLOWING: 1 } : {}),
+      ...(surf ? { HYDRO_SURF: 1 } : {}),
+    },
     vertexShader: HYDRO_VERTEX_SHADER,
     fragmentShader: HYDRO_FRAGMENT_SHADER,
     uniforms: {
@@ -221,7 +225,9 @@ export function createHydroMaterial(
     toneMapped: true,
     polygonOffset: true,
     polygonOffsetFactor: -1,
-    polygonOffsetUnits: -3,
+    // The swash mesh deliberately overlaps the body at its wet edge. Bias it
+    // forward just enough to make that overlap seamless instead of z-fighting.
+    polygonOffsetUnits: surf ? -5 : -3,
   });
 }
 

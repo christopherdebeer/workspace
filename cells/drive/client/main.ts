@@ -1828,6 +1828,8 @@ const hydroRev = new Map<string, number>();
  * tile anyway, so there is nothing on screen to see it happen to.
  */
 const hydroFrameOrigin = { x: 0, y: 0, z: 0 };
+const hydroFrameSky = { r: 0, g: 0, b: 0 };
+const hydroFrameTerrain = { r: 0, g: 0, b: 0 };
 /** The world's wind, written where the sky and the grass already agree on it.
  *  12km/h is the calm-day default the deck drift uses. */
 const worldWind = { dirX: 0, dirZ: 1, kmh: 12 };
@@ -1837,12 +1839,27 @@ function hydroTick(nowMs: number): void {
   if (!HYDRO_ON || !hydroSys) return;
   hydroFrameOrigin.y = baseElev;
   const w = wxAt(wxField, state.x, state.z);
+  // Hydro already exposes environmental colours, but leaving them absent made
+  // every body reflect its fixed cool-day fallbacks through dusk, night and a
+  // change of biome. The puddle colour is the scene's existing reflection
+  // answer (horizon toward zenith); groundTint is memoised on a 3m cell, so it
+  // is a cached read per frame and recomputes only as the rig crosses a cell.
+  // Persistent records keep this completion out of the frame's allocation path.
+  const sky = wxU.uPudSky.value;
+  const terrain = groundTint(state.x, state.z);
+  hydroFrameSky.r = sky.x; hydroFrameSky.g = sky.y; hydroFrameSky.b = sky.z;
+  hydroFrameTerrain.r = terrain[0]; hydroFrameTerrain.g = terrain[1]; hydroFrameTerrain.b = terrain[2];
   hydroSys.update({
     timeSeconds: nowMs / 1000,
     worldOrigin: hydroFrameOrigin,
     wind: { x: worldWind.dirX, z: worldWind.dirZ, speedMps: worldWind.kmh / 3.6 },
     rain: w?.rain ?? 0,
-    sunDirection: { x: LIGHT_DIR.x, y: LIGHT_DIR.y, z: LIGHT_DIR.z },
+    // Colour follows the TRUE solar altitude. LIGHT_DIR is deliberately lifted
+    // above the horizon at night to rake the terrain with moonlight; feeding it
+    // here made hydro interpret midnight as daylight and stay cyan-white.
+    sunDirection: { x: SUN_DIR.x, y: SUN_DIR.y, z: SUN_DIR.z },
+    skyColour: hydroFrameSky,
+    terrainColour: hydroFrameTerrain,
     rig: {
       x: state.x, z: state.z,
       vx: Math.sin(state.heading) * state.speed,
@@ -35565,13 +35582,13 @@ const DIAL_GROUPS: DialGroup[] = [
       // Grass is the one layer whose cost is worth handing over: it is the
       // difference between a field and a golf course, and it is also the
       // difference between a phone holding 60fps and not. Five steps, and the
-      // top two are deliberately past what I would ship as a default.
-      // A WIDER BAND AT BOTH ENDS, asked for from the seat. LOW is half what it
-      // was and LUSH is double, which the sward can now spend because density
-      // costs vertices on a 47,360-pixel target rather than CPU matrices — a
-      // slot the dither drops is three vertices and no fragments at all.
+      // The upper stops are deliberately experimental. LOW retains the original
+      // shipping density, MEDIUM sits halfway to the former maximum, HIGH is
+      // that former 6.4 ceiling, and LUSH doubles it for device profiling.
+      // Density costs vertices on a 47,360-pixel target rather than CPU matrices —
+      // a slot the dither drops is three vertices and no fragments at all.
       dial('grass', 'GRASS', ['OFF', 'LOW', 'MEDIUM', 'HIGH', 'LUSH'], 2, (i) => {
-        grassScale = [0, 0.22, 1, 2.6, 6.4][i];
+        grassScale = [0, 1, 3.2, 6.4, 12.8][i];
       }),
       // TERRAIN detail, and what it really buys is ROADS. A finer mesh means a
       // smaller cell, a smaller cell means the road cut reaches less far, and
