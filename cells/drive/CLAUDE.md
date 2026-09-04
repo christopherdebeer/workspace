@@ -1092,6 +1092,20 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   the tool for the next one of these: a phone number with no harness
   reproduction is a bench run away.
 
+- **THERE IS NO ROAD LOD; THE "LOD AHEAD" WAS THE TEXTURE FILTER.** Asked
+  from the seat what LOD the ribbons have: none — a ribbon is built once at
+  full detail. The radii that DO change with distance are shadows (80/110/
+  150 m by quality), grass (140 m, GPU fade to 360), plants and ruins
+  (700 m), corridor refinement (`REFINE_R` 1100 m), the fine OSM ring
+  (5×5 of ~500 m tiles plus one ahead at speed; the overview road layer is
+  chart-only, so beyond it chase view has NO roads), and fine terrain (5×5
+  of 2 km tiles, then the z11 shell at 63 m/px). The reported effect was
+  unchanged by `?refr=2000` and the PIXEL FULL frame showed it: the coarse
+  mip's blocks, road-width squares, nearest-sampled. Canvas textures now
+  take anisotropic filtering (`TEX_ANISO`, min(8, max), `?aniso=0` for
+  the old filter, `__texfilter()`) with trilinear minification; the
+  magnification stays NEAREST for the pixel look.
+
 - **THE REGISTRY PICKS A RIVER'S PROFILE IN A FIXED ORDER.** The fourth
   device report (Breede, 76 s): 277 hydro builds for 77 terrain builds, 25
   tiles, hydroBuild top of 92 slow frames at 22 ms each. `resolve()` took

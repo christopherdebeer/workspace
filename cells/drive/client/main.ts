@@ -5590,6 +5590,27 @@ function mulberry32(seed: number): () => number {
   };
 }
 type Rng = () => number;
+/** ROAD TEXTURES ARE FILTERED ANISOTROPICALLY. A road ahead of the truck is
+ *  seen at a grazing angle: one screen pixel covers a texel's width across
+ *  the carriageway and dozens of texels along it, and isotropic mipmapping
+ *  picks the mip from the LONG axis — so a few hundred metres out the tar
+ *  patches and the markings were the coarse mip's blocks, nearest-sampled,
+ *  each the width of the road. Reported from the seat as "LOD reduction
+ *  ahead of the vehicle" at PIXEL FULL, unchanged by `?refr=2000`, which
+ *  ruled out every ring the world actually has. Anisotropic sampling takes
+ *  its taps along the long axis and picks the mip from the short one, so
+ *  the surface ahead keeps its detail until the texels really are
+ *  sub-pixel; the mip blend (trilinear) removes the level boundaries that
+ *  nearest-within-mip drew as steps. Magnification stays NEAREST: crisp
+ *  texels close up are half the pixel look. `?aniso=0` is the old filter,
+ *  `?aniso=N` a cap; `__texfilter()` says what is in effect. */
+const TEX_ANISO = ((): number => {
+  const max = renderer.capabilities.getMaxAnisotropy();
+  const ask = new URLSearchParams(location.search).get('aniso');
+  return ask === null ? Math.min(8, max) : clamp(Number(ask) || 0, 0, max);
+})();
+(window as unknown as { __texfilter?: () => object }).__texfilter = () =>
+  ({ anisotropy: TEX_ANISO, max: renderer.capabilities.getMaxAnisotropy(), minFilter: TEX_ANISO > 1 ? 'LinearMipmapLinear' : 'NearestMipmapNearest' });
 function canvasTex(size: number, repeatX: number, repeatY: number, seed: number, draw: (c: CanvasRenderingContext2D, s: number, r: Rng) => void): THREE.Texture {
   const cv = document.createElement('canvas');
   cv.width = cv.height = size;
@@ -5600,7 +5621,8 @@ function canvasTex(size: number, repeatX: number, repeatY: number, seed: number,
   // ON (nearest-within-mip) or distant surfaces shimmer as texels fall below
   // the pixel grid — the classic failure of naive pixel-art 3D.
   t.magFilter = THREE.NearestFilter;
-  t.minFilter = THREE.NearestMipmapNearestFilter;
+  t.minFilter = TEX_ANISO > 1 ? THREE.LinearMipmapLinearFilter : THREE.NearestMipmapNearestFilter;
+  if (TEX_ANISO > 1) t.anisotropy = TEX_ANISO;
   t.repeat.set(repeatX, repeatY);
   return t;
 }
