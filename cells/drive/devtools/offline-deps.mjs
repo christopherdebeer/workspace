@@ -10,16 +10,30 @@
  * package only a lab reaches would still break EVERY page load if it were
  * merely marked external. `three` is installed. Anything else in the map is
  * aliased here to a stand-in that fails when it is USED, with the reason,
- * not when the bundle links.
+ * not when the bundle links. A session that installs the real package
+ * (`npm i --no-save`) gets the real thing: the alias is only for an absent one.
  */
+import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
+const require = createRequire(import.meta.url);
 
-export const OFFLINE_ALIASES = {
+const STAND_INS = {
   '@dgreenheck/ez-tree': join(HERE, 'stubs/ez-tree.mjs'),
 };
+
+/** A package that IS installed (an `npm i --no-save` for a session that
+ *  wants the real thing in the harness) is bundled as itself; only an absent
+ *  one gets its stand-in. */
+function installed(name) {
+  try { require.resolve(name); return true; } catch { return false; }
+}
+
+export const OFFLINE_ALIASES = Object.fromEntries(
+  Object.entries(STAND_INS).filter(([name]) => !installed(name)),
+);
 
 /** The `--alias:` flags for an esbuild command line. */
 export function offlineAliasFlags() {

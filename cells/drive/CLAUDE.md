@@ -218,9 +218,12 @@ Its own header documents two traps in detail; the short version:
   bundle, so a package only a lab reaches would break EVERY page load if it
   were merely marked external. `devtools/offline-deps.mjs` aliases each such
   package to a stand-in under `devtools/stubs/` that throws when USED, with
-  the reason; `three` is installed and is not in that table. The type check
-  is the same story: `client/ez-tree.d.ts` declares the module loosely
-  because the lab is still being shaped against the published API. A new
+  the reason — and only when the package is absent: `npm i --no-save
+  @dgreenheck/ez-tree@1.1.0` at the workspace root and the harness bundles
+  the real thing, which is how the lab was measured. `three` is installed
+  and is not in that table. The type check is the same story:
+  `client/ez-tree.d.ts` is the published declaration trimmed to the callable
+  surface, so tsc holds the lab to the real API on a fresh checkout. A new
   esm.sh dependency needs a stub row and a declaration, or the harness dies
   at link with `Could not resolve`.
 
@@ -1365,7 +1368,50 @@ What the second pass changed, and what it left:
 | `flora` | the climate ladder **and** a real stand of the shipping plants |
 | `weather` | the 48×48 weather lattice, with time on a dial |
 | `world` | a chooser: the whole engine over an authored planet |
-| `flora-ez` | the shipping silhouettes against a reduced EZ-Tree skeleton (an evaluation surface; pulls `@dgreenheck/ez-tree` from esm.sh) |
+| `flora-ez` | the shipping silhouettes against a reduced EZ-Tree skeleton, and the hybrid: EZ wood under Drive crowns (pulls `@dgreenheck/ez-tree` from esm.sh; see below) |
+
+### EZ-Tree: what the flora-ez lab found
+
+The question the lab asks is whether a procedural skeleton, cut down hard,
+reads better than the 20-triangle archetypes at Drive's pixel scale. Measured
+in the harness with the real package (three 0.160 runs it), 8 m trees, pixel
+scale 3, 40 m and 105 m cameras:
+
+- **The package.** 4.0 MB from esm.sh, 3.97 MB of it twenty embedded bark and
+  leaf textures loaded at import; the generator itself is ~47 KB, MIT. Full
+  presets are 3.6k–19k triangles and 8–70 ms to generate; the lab's hard
+  reduction (levels 2, sections ×0.3, segments ×0.4, children ×0.3) is
+  80–800 triangles at ~1 ms. EZ-Tree has no decimation of its own — the
+  reduction is its `branch` and `leaves` option groups, multiplied.
+- **EZ's own leaves are the wrong leaf.** They are alpha-textured cards; drawn
+  opaque and untextured at three pixels they are confetti, and the canopy
+  never closes short of the full 7k-triangle preset. Cards lose at every
+  reduction.
+- **The hybrid wins for broadleaf.** EZ's wood with a Drive icosahedron
+  (`clumpsAt`) on every leaf anchor: leaves ×0.15, clump 2 m, ~390 triangles
+  (10× the archetype, 2.4 ms). At 40 m it is a lobed, branching tree beside
+  the lollipop; at 105 m it still reads as a canopy with more variety than the
+  archetype stand. Aspen and oak presets both work.
+- **Conifers: no.** The pine skeleton is a spindly scribble with cards and a
+  blob pile with clumps (2.1k triangles); the shipping cone is more legible at
+  every distance and 56× cheaper.
+- **Bare skeletons win outright.** The shipping snag is a tapered post; an ash
+  or aspen with leaves ×0 is a dead tree with branches at 60–250 triangles.
+  This is the case where the eye needs branching most and pays least.
+- **The budget forbids a straight swap.** Caps are 1600 broadleaf and 1400
+  conifer within `VEG_RANGE`; at 390 triangles that is 600k triangles for
+  broadleaf alone against ~60k for all plants today. Snags (cap 450, ~100
+  triangles) fit wholesale. A near ring is not a radius: on the A6 at the Aare
+  there is one broadleaf within 300 m and 218 within 700, while a dense wood
+  can put the whole cap inside 300 m — so a hybrid tier must be **the N
+  nearest** (N≈120 → ~47k triangles), the rest the archetype, bucketed in the
+  placement loop that already knows every site's distance.
+- **Ship a bake, not the dependency.** Generation is a millisecond, but the
+  4 MB import is not a play-time cost worth paying: a devtool with a DOM stub
+  (`document.createElementNS` is all the texture loader touches) can generate
+  K skeletons per family in node and write wood + leaf anchors as quantised
+  arrays; clumps are made at load with the game's own icosahedra so flora
+  tuning stays live. K variants are K InstancedMeshes per kind.
 
 **The rule that keeps a lab honest: it imports the SAME modules the game runs.**
 A lab that reimplements what it is inspecting proves nothing about what ships.

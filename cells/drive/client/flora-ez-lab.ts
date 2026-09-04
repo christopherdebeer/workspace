@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { Tree, TreePreset } from '@dgreenheck/ez-tree';
 import { createDials, type DialValues } from './lab-dials';
 import {
-  broadleaf, conifer, faceTone, snag, trunkReach,
+  broadleaf, conifer, faceTone, mergeGeos, snag, trunkReach,
   type VegKind,
 } from './flora';
 import { grainFx } from './grain';
@@ -17,20 +17,94 @@ import { grainFx } from './grain';
  * and camera have had their say?
  *
  * LEFT is the shipping archetype and trunk composition from flora.ts. RIGHT is
- * raw geometry returned by EZ-Tree's createGeometry(), rendered through Drive's
- * plain flat Lambert treatment — no photographic leaf or bark textures and no
- * alpha blending to flatter it or hide mobile overdraw. Both sides are
- * InstancedMesh batches. A dial change rebuilds one shared candidate geometry,
- * never one tree per site.
+ * the geometry EZ-Tree's generate() leaves on its branchesMesh and leavesMesh,
+ * rendered through Drive's plain flat Lambert treatment with the same faceTone
+ * bake — no photographic leaf or bark textures and no alpha blending to
+ * flatter it or hide mobile overdraw. Both sides are InstancedMesh batches. A
+ * dial change rebuilds one shared candidate geometry, never one tree per site.
+ *
+ * THE REDUCTION IS THE PACKAGE'S OWN OPTIONS, SCALED. EZ-Tree has no decimation
+ * of its own: a tree is `branch.levels` deep, each level `sections` rings of
+ * `segments` vertices, each branch spawning `children` and carrying
+ * `leaves.count` cards (one quad per card with `billboard: 'single'`, two
+ * crossed with 'double'). The dials multiply those, so the numbers on the
+ * glass are the numbers a bake would use. Full presets are 3–19k triangles;
+ * the shipping broadleaf is 20.
  *
  * This is an evaluation surface only. Nothing in main.ts imports this module;
- * the external package is lazy-loaded only when /lab/flora-ez is opened.
+ * the external package is lazy-loaded only when /lab/flora-ez is opened — and
+ * it is 4 MB, 3.97 MB of which are twenty embedded bark and leaf textures this
+ * lab never draws.
  */
 
 type Family = 'broadleaf' | 'conifer' | 'snag';
 interface GeoPair { branches: THREE.BufferGeometry; leaves: THREE.BufferGeometry }
 
-const PRESETS = ['Ash Small', 'Aspen Small', 'Oak Small', 'Pine Small'] as const;
+const PRESETS = ['Ash Small', 'Aspen Small', 'Oak Small', 'Pine Small', 'Oak Medium', 'Pine Medium'] as const;
+
+/** Multipliers on the preset's own option groups; null is the preset as published. */
+interface Reduction {
+  levels: number;
+  sections: number;
+  segments: number;
+  children: number;
+  leaves: number;
+  leafScale: number;
+  billboard: 'single' | 'double';
+}
+
+/** One EZ-Tree, generated, its geometry taken and its materials let go. The
+ *  Tree is a THREE.Group with its own meshes and MeshStandardMaterials; the
+ *  lab wants only the two BufferGeometries. */
+function ezBuild(preset: string, seed: number, r: Reduction | null): GeoPair & { ms: number } {
+  const tree = new Tree();
+  const chosen = (TreePreset as Record<string, unknown>)[preset];
+  if (chosen) tree.options.copy(chosen as typeof tree.options);
+  const o = tree.options;
+  o.seed = seed;
+  o.bark.textured = false;
+  if (r) {
+    o.branch.levels = Math.max(1, Math.min(o.branch.levels, r.levels));
+    for (const l of [0, 1, 2, 3] as const) {
+      o.branch.sections[l] = Math.max(2, Math.round(o.branch.sections[l] * r.sections));
+      o.branch.segments[l] = Math.max(3, Math.round(o.branch.segments[l] * r.segments));
+    }
+    for (const l of [0, 1, 2] as const) o.branch.children[l] = Math.round(o.branch.children[l] * r.children);
+    o.leaves.count = Math.max(0, Math.round(o.leaves.count * r.leaves));
+    o.leaves.size *= r.leafScale;
+    o.leaves.billboard = r.billboard;
+  }
+  const t0 = performance.now();
+  tree.generate();
+  const ms = performance.now() - t0;
+  const branches = tree.branchesMesh.geometry as THREE.BufferGeometry;
+  const leaves = tree.leavesMesh.geometry as THREE.BufferGeometry;
+  for (const m of [tree.branchesMesh.material, tree.leavesMesh.material]) {
+    if (Array.isArray(m)) m.forEach((x) => x.dispose()); else (m as THREE.Material).dispose();
+  }
+  return { branches, leaves, ms };
+}
+
+/** THE HYBRID: EZ-Tree's wood, Drive's leaf. A leaf card without its texture
+ *  is confetti at three pixels; a Drive crown is a faceted blob. Every card
+ *  the skeleton placed (four vertices for a single billboard, eight for a
+ *  double) becomes an anchor, and an icosahedron of `radius` sits on each —
+ *  the same 20-triangle blob the shipping broadleaf is made of, so the
+ *  canopy closes the way the shipping one does while the wood beneath it
+ *  branches the way the shipping one cannot. */
+function clumpsAt(cards: THREE.BufferGeometry, radius: number, perCard: number): THREE.BufferGeometry {
+  const pos = cards.getAttribute('position') as THREE.BufferAttribute | undefined;
+  if (!pos || pos.count < perCard) return new THREE.BufferGeometry();
+  const out: THREE.BufferGeometry[] = [];
+  for (let i = 0; i + perCard <= pos.count; i += perCard) {
+    let x = 0, y = 0, z = 0;
+    for (let k = 0; k < perCard; k++) { x += pos.getX(i + k); y += pos.getY(i + k); z += pos.getZ(i + k); }
+    const g = new THREE.IcosahedronGeometry(radius, 0);
+    g.translate(x / perCard, y / perCard, z / perCard);
+    out.push(g);
+  }
+  return mergeGeos(out);
+}
 
 function rng(seed: number): () => number {
   let a = (seed >>> 0) || 1;
@@ -208,11 +282,17 @@ export async function startEzFloraLab(): Promise<void> {
       { id: 'patch', label: 'PATCH m', kind: 'range', min: 8, max: 90, step: 1, value: 34 },
 
       { id: 'sMesh', label: 'EZ REDUCTION', kind: 'section' },
-      { id: 'sectionStride', label: 'BRANCH STRIDE', kind: 'range', min: 1, max: 12, step: 1, value: 5 },
-      { id: 'segmentFactor', label: 'RADIAL x', kind: 'range', min: 0.2, max: 1, step: 0.05, value: 0.4 },
-      { id: 'leafStride', label: 'LEAF STRIDE', kind: 'range', min: 1, max: 20, step: 1, value: 6 },
-      { id: 'leafScale', label: 'LEAF SCALE', kind: 'range', min: 0.3, max: 3, step: 0.05, value: 1.35 },
+      { id: 'levels', label: 'BRANCH LEVELS', kind: 'range', min: 1, max: 3, step: 1, value: 2 },
+      { id: 'sectionsX', label: 'SECTIONS x', kind: 'range', min: 0.1, max: 1, step: 0.05, value: 0.3 },
+      { id: 'segmentsX', label: 'SEGMENTS x', kind: 'range', min: 0.2, max: 1, step: 0.05, value: 0.4 },
+      { id: 'childrenX', label: 'CHILDREN x', kind: 'range', min: 0.05, max: 1, step: 0.05, value: 0.3 },
+      { id: 'leavesX', label: 'LEAVES x', kind: 'range', min: 0, max: 1, step: 0.05, value: 0.15 },
+      { id: 'leafScale', label: 'LEAF SCALE', kind: 'range', min: 0.3, max: 3, step: 0.05, value: 1.8 },
+      { id: 'billboard', label: 'LEAF CARD', kind: 'select', value: 'single', options: ['single', 'double'] },
+      { id: 'leafAs', label: 'LEAF AS', kind: 'select', value: 'clump', options: ['card', 'clump'] },
+      { id: 'clumpM', label: 'CLUMP m', kind: 'range', min: 0.4, max: 4, step: 0.1, value: 2.0 },
       { id: 'showLeaves', label: 'SHOW LEAVES', kind: 'toggle', value: true },
+      { id: 'tone', label: 'FACE TONE', kind: 'toggle', value: true },
 
       { id: 'sView', label: 'VIEW', kind: 'section' },
       { id: 'distance', label: 'CAMERA m', kind: 'range', min: 25, max: 240, step: 2, value: 105 },
@@ -224,10 +304,10 @@ export async function startEzFloraLab(): Promise<void> {
     ],
     source: (v: DialValues) => JSON.stringify({
       preset: String(v.preset), seed: Number(v.seed),
-      detail: {
-        sectionStride: Number(v.sectionStride), segmentFactor: Number(v.segmentFactor),
-        leafStride: Number(v.leafStride), leafScale: Number(v.leafScale),
-        billboard: 'single',
+      reduction: {
+        levels: Number(v.levels), sections: Number(v.sectionsX), segments: Number(v.segmentsX),
+        children: Number(v.childrenX), leaves: Number(v.leavesX), leafScale: Number(v.leafScale),
+        billboard: String(v.billboard), leafAs: String(v.leafAs), clumpM: Number(v.clumpM),
       },
     }, null, 2),
   });
@@ -265,7 +345,7 @@ export async function startEzFloraLab(): Promise<void> {
   let population: THREE.Group | null = null;
   let driveStats = { draws: 0, trisEach: 0, verticesEach: 0 };
   let ezStats = { draws: 0, trisEach: 0, verticesEach: 0 };
-  let ezFull = { tris: 0, vertices: 0 };
+  let ezFull = { tris: 0, vertices: 0, ms: 0 };
   let buildMs = 0;
   let dirty = true;
 
@@ -291,35 +371,57 @@ export async function startEzFloraLab(): Promise<void> {
     driveStats = addPopulation(population, current, count, seed + 101, -patch * 1.12, patch,
       height, new THREE.Color(0x527c48), new THREE.Color(0x4a3826), shadows);
 
-    const t0 = performance.now();
-    const tree = new Tree();
-    const chosen = (TreePreset as Record<string, unknown>)[preset];
-    if (chosen && typeof (tree.options as { copy?: unknown }).copy === 'function') {
-      (tree.options as { copy(v: unknown): void }).copy(chosen);
-    }
-    tree.options.seed = seed;
-    const full = tree.createGeometry({});
+    // The preset as published, for the bill only.
+    const full = ezBuild(preset, seed, null);
     ezFull = {
       tris: triangles(full.branches) + triangles(full.leaves),
       vertices: vertices(full.branches) + vertices(full.leaves),
+      ms: full.ms,
     };
     full.branches.dispose();
     full.leaves.dispose();
-    const reduced = tree.createGeometry({
-      sectionStride: Math.round(dials.num('sectionStride')),
-      segmentFactor: dials.num('segmentFactor'),
-      leafStride: Math.round(dials.num('leafStride')),
+    const reduced = ezBuild(preset, seed, {
+      levels: Math.round(dials.num('levels')),
+      sections: dials.num('sectionsX'),
+      segments: dials.num('segmentsX'),
+      children: dials.num('childrenX'),
+      leaves: dials.num('leavesX'),
       leafScale: dials.num('leafScale'),
-      billboard: 'single',
+      billboard: dials.str('billboard') === 'double' ? 'double' : 'single',
     });
+    buildMs = reduced.ms;
     if (!dials.bool('showLeaves') || family === 'snag') {
       reduced.leaves.dispose();
       reduced.leaves = new THREE.BufferGeometry();
+    } else if (dials.str('leafAs') === 'clump') {
+      // The clump radius is asked for in metres of the finished tree; the
+      // skeleton is in the preset's own units, so it is scaled back through
+      // the same normalisation the population applies.
+      const s0 = scalePair(reduced, height);
+      const perCard = dials.str('billboard') === 'double' ? 8 : 4;
+      const t1 = performance.now();
+      const clumps = clumpsAt(reduced.leaves, dials.num('clumpM') / Math.max(1e-6, s0), perCard);
+      buildMs += performance.now() - t1;
+      reduced.leaves.dispose();
+      reduced.leaves = clumps;
     }
-    buildMs = performance.now() - t0;
+    if (dials.bool('tone')) {
+      // The same bake the shipping side gets: facet tone and a foot in shadow.
+      faceTone(reduced.branches, 0.16, 0.36);
+      if (vertices(reduced.leaves) > 0) faceTone(reduced.leaves);
+    }
     ezStats = addPopulation(population, reduced, count, seed + 101, patch * 1.12, patch,
       height, new THREE.Color(0x527c48), new THREE.Color(0x4a3826), shadows);
+    lastBuild = { preset, seed, family };
   };
+
+  // For the harness: the bill, and a way to turn the dials.
+  let lastBuild = { preset: '', seed: 0, family: '' as string };
+  (globalThis as unknown as Record<string, unknown>).__ezlab = () => ({
+    ...lastBuild, drive: driveStats, ez: ezStats, full: ezFull, buildMs,
+    calls: renderer.info.render.calls, triangles: renderer.info.render.triangles,
+  });
+  (globalThis as unknown as Record<string, unknown>).__ezlabSet = (values: DialValues) => { dials.set(values); dirty = true; };
 
   const resize = (): void => {
     const px = Math.max(1, Math.round(dials.num('pixel')));
@@ -351,13 +453,14 @@ export async function startEzFloraLab(): Promise<void> {
 
     const n = Math.round(dials.num('count'));
     const reduction = ezFull.tris > 0 ? (100 * ezStats.trisEach / ezFull.tris) : 0;
+    const ratio = driveStats.trisEach > 0 ? ezStats.trisEach / driveStats.trisEach : 0;
     status.textContent =
       `PER TREE  DRIVE ${driveStats.verticesEach}v / ${driveStats.trisEach}t · `
-      + `EZ FULL ${ezFull.vertices}v / ${ezFull.tris}t · `
-      + `EZ SHOWN ${ezStats.verticesEach}v / ${ezStats.trisEach}t (${reduction.toFixed(1)}%)\n`
+      + `EZ FULL ${ezFull.vertices}v / ${ezFull.tris}t (${ezFull.ms.toFixed(0)}ms) · `
+      + `EZ SHOWN ${ezStats.verticesEach}v / ${ezStats.trisEach}t (${reduction.toFixed(1)}% of full, ${ratio.toFixed(0)}× drive)\n`
       + `POPULATION ×${n}  DRIVE ${(driveStats.trisEach * n).toLocaleString()}t / ${driveStats.draws} batches · `
       + `EZ ${(ezStats.trisEach * n).toLocaleString()}t / ${ezStats.draws} batches · `
-      + `candidate build ${buildMs.toFixed(1)}ms · frame calls ${renderer.info.render.calls} / `
+      + `candidate generate ${buildMs.toFixed(1)}ms · frame calls ${renderer.info.render.calls} / `
       + `${renderer.info.render.triangles.toLocaleString()} triangles\n`
       + `OPAQUE FLAT CARDS · NO EZ TEXTURES · ONE SHARED EZ SKELETON · LAB ONLY`;
     requestAnimationFrame(frame);
