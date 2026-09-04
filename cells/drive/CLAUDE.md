@@ -1467,9 +1467,24 @@ scale 3, 40 m and 105 m cameras:
   and never slows the frame. At these recipes that is ~310 broadleaf and
   ~270 conifers in view, so a forest thins past a few hundred metres;
   paste a leaner JSON (fewer leaves, four-sided wood) to buy count back.
-  `?ez=0` brings the archetypes back; `__ez()` is the bill (budget, cap
-  scale, effective caps, mean triangles, per-variant counts, every placed
-  site's numbers), `__ezgeo()` every decoded variant's extent.
+  **A CAP THAT BINDS MUST BIND BY DISTANCE.** The first budgeted build
+  admitted trees in the placement's own order — square rings of 220 m
+  cells, cells in grid order, sites in seed order — so crossing a cell
+  boundary re-centred the rings and admitted a DIFFERENT subset: seen from
+  the seat as vegetation popping in and out and rerolling as you drive, and
+  first blamed on terrain refinement. `refreshVeg` now gathers the tree
+  kinds first and admits the nearest N of each by true distance
+  (`ezAdmit`), so the set changes only at its far edge, and the crowns fade
+  toward the ground over the last third of THAT edge (`ezEdge`, reported by
+  `__ez().edge`), not over VEG_RANGE, which the budget never reaches.
+  Measured driving 60 m steps through the Aare woods: every appearance and
+  vanishing is in the outer 40% of the admitted radius, none inside it.
+  Refinement itself only re-seats a tree vertically; the one legitimate
+  reroll is the biome settling from its guess, which replants everything
+  once. `?ez=0` brings the archetypes back; `__ez()` is the bill (budget,
+  cap scale, effective caps, admitted edge, mean triangles, per-variant
+  counts, every placed site's numbers), `__ezgeo()` every decoded variant's
+  extent.
 
 - **THE SWARD'S SHRUB LAYER** (`refreshShrubs`, beside `refreshVeg`). The
   sward stopped at flowers; between them and the trees nothing stood

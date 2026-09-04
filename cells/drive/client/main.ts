@@ -7477,6 +7477,8 @@ for (const fam of EZ_FAMILIES) {
 }
 /** What the last refresh stood up, for the harness. */
 let ezPlaced: Array<Record<string, number | string>> = [];
+/** The admitted edge per family last refresh, metres. */
+let ezEdgeLast: Record<EzFamily, number> = { broadleaf: 0, conifer: 0, snag: 0 };
 
 /**
  * WHAT BLOOMS WHERE. The sward's colour so far has been the ground's own —
@@ -9248,6 +9250,44 @@ function refreshVeg(): void {
   const ezCounts: Record<EzFamily, number> = { broadleaf: 0, conifer: 0, snag: 0 };
   for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) t.n = 0;
   ezPlaced = [];
+  // ── THE TREES ARE ADMITTED BY DISTANCE, NOT BY CELL ──
+  //
+  // The tree budget scales the tree caps to a few hundred, so in any wood
+  // the cap binds — and a cap that binds in RING order is a cap that
+  // rerolls: the rings are square, 220 m a step, cells within a ring come in
+  // grid order and sites within a cell in seed order, so crossing a cell
+  // boundary re-centred the rings and admitted a different subset of trees.
+  // Seen from the seat as vegetation popping in and out and rerolling as
+  // you drive. The tree kinds are gathered first and the nearest N of each
+  // admitted by true distance, so the admitted set changes only at its far
+  // edge, and the crowns fade toward the ground over the last third of that
+  // edge so a tree is a smudge before it is gone.
+  const ezAdmit = new Set<PlacedVegSite>();
+  const ezEdge: Record<EzFamily, number> = { broadleaf: VEG_RANGE, conifer: VEG_RANGE, snag: VEG_RANGE };
+  if (EZ_ON) {
+    const cand: Record<EzFamily, Array<[number, PlacedVegSite]>> = { broadleaf: [], conifer: [], snag: [] };
+    for (const [gx, gz] of ring) {
+      seedCell(gx, gz);
+      const cell = vegGrid.get(`${gx},${gz}`);
+      if (!cell) continue;
+      for (const v of cell) {
+        if (!isEzKind(v.k)) continue;
+        const dx = v.x - state.x, dz = v.z - state.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 < r2) cand[v.k].push([d2, v]);
+      }
+    }
+    for (const fam of EZ_FAMILIES) {
+      const list = cand[fam];
+      const cap = Math.floor(VEG_CAP[fam] * vegScale * ezCapScale);
+      if (list.length > cap) {
+        list.sort((p, q) => p[0] - q[0]);
+        list.length = cap;
+        ezEdge[fam] = cap > 0 ? Math.sqrt(list[cap - 1][0]) : 0;
+      }
+      for (const [, v] of list) ezAdmit.add(v);
+    }
+  }
   for (const [gx, gz] of ring) {
     {
       seedCell(gx, gz);
@@ -9279,7 +9319,7 @@ function refreshVeg(): void {
           // height the archetype would have reached, crown included. The
           // kind's cap and the far dissolve are the archetype's own.
           const fam = v.k;
-          if (ezCounts[fam] >= VEG_CAP[fam] * vegScale * ezCapScale) continue;
+          if (!ezAdmit.has(v)) continue;
           const tier = ezTiers[fam][ezVariantFor(fam, v.x, v.z)];
           if (!tier || tier.n >= tier.mesh.instanceMatrix.count) continue;
           const y = groundAt(v.x, v.z);
@@ -9290,12 +9330,14 @@ function refreshVeg(): void {
           vegDummy.scale.set(H * (v.sw ?? 1), H, H * (v.sw ?? 1));
           vegDummy.updateMatrix();
           tier.mesh.setMatrixAt(tier.n, vegDummy.matrix);
-          const tt = Math.sqrt(d2v) / VEG_RANGE;
+          // Distance over the ADMITTED edge, not the plant range: the budget's
+          // edge is where a tree vanishes, so that is where it must fade.
+          const tt = Math.sqrt(d2v) / Math.max(120, ezEdge[fam]);
           if (vegRoleDebug) {
             tier.mesh.setColorAt(tier.n, VEG_ROLE_COL[v.anchor ? 'anchor' : v.role]);
-          } else if (tt > 0.5) {
-            const fmv = (tt - 0.5) / 0.5;
-            const mixv = fmv * 0.55;
+          } else if (tt > 0.66) {
+            const fmv = Math.min(1, (tt - 0.66) / 0.34);
+            const mixv = fmv * 0.7;
             const [tr, tg, tb] = terrainPalette(y + baseElev, 0, sampleCover(v.x, v.z), v.x, v.z);
             swardCol.setRGB(v.c.r + (tr - v.c.r) * mixv, v.c.g + (tg - v.c.g) * mixv, v.c.b + (tb - v.c.b) * mixv);
             tier.mesh.setColorAt(tier.n, swardCol);
@@ -9371,6 +9413,7 @@ function refreshVeg(): void {
     }
   }
   vegActiveRoles = activeRoles;
+  ezEdgeLast = { broadleaf: Math.round(ezEdge.broadleaf), conifer: Math.round(ezEdge.conifer), snag: Math.round(ezEdge.snag) };
   refreshShrubs();
   vegActiveAnchors = activeAnchors;
   vegMs = performance.now() - t0;
@@ -22847,7 +22890,7 @@ function tapeKeep(): string {
  */
 /** The skeleton tier's bill: how many of each family wear one, per variant, and the triangles. */
 (window as unknown as { __ez?: object }).__ez = (): object => {
-  const out: Record<string, unknown> = { on: EZ_ON, budget: TREE_TRI_BUDGET, capScale: +ezCapScale.toFixed(3),
+  const out: Record<string, unknown> = { on: EZ_ON, budget: TREE_TRI_BUDGET, capScale: +ezCapScale.toFixed(3), edge: ezEdgeLast,
     caps: Object.fromEntries(EZ_FAMILIES.map((f) => [f, Math.round(VEG_CAP[f] * vegScale * ezCapScale)])),
     meanTris: Object.fromEntries(EZ_FAMILIES.map((f) => [f, ezMeanTris(f)])) };
   let tris = 0;
