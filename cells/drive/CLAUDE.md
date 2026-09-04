@@ -209,6 +209,21 @@ Its own header documents two traps in detail; the short version:
 - **Headless renders at 2–4 fps**, so wall time is not sim time. Anything that
   integrates must wait on `simWait`, never a timeout.
 
+- **A package that only exists in `client/imports.json` is stood in for.**
+  The import map is the platform's: the browser fetches those packages from
+  esm.sh at the pin and the deploy transpile bundles them the same way, but
+  the harness, `shell-server.mjs` and the native build run esbuild against
+  node_modules with no network — and esbuild without code splitting hoists a
+  lazily imported module's externals into static imports at the top of the
+  bundle, so a package only a lab reaches would break EVERY page load if it
+  were merely marked external. `devtools/offline-deps.mjs` aliases each such
+  package to a stand-in under `devtools/stubs/` that throws when USED, with
+  the reason; `three` is installed and is not in that table. The type check
+  is the same story: `client/ez-tree.d.ts` declares the module loosely
+  because the lab is still being shaped against the published API. A new
+  esm.sh dependency needs a stub row and a declaration, or the harness dies
+  at link with `Could not resolve`.
+
 Other harness facts learned the hard way:
 
 - Synthetic double-taps must dispatch **both** PointerEvents inside ONE
@@ -1350,6 +1365,7 @@ What the second pass changed, and what it left:
 | `flora` | the climate ladder **and** a real stand of the shipping plants |
 | `weather` | the 48×48 weather lattice, with time on a dial |
 | `world` | a chooser: the whole engine over an authored planet |
+| `flora-ez` | the shipping silhouettes against a reduced EZ-Tree skeleton (an evaluation surface; pulls `@dgreenheck/ez-tree` from esm.sh) |
 
 **The rule that keeps a lab honest: it imports the SAME modules the game runs.**
 A lab that reimplements what it is inspecting proves nothing about what ships.

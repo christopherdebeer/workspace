@@ -22,6 +22,7 @@ import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import { chromium } from 'playwright';
+import { offlineAliasFlags } from './offline-deps.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const CELL = join(HERE, '..');
@@ -37,7 +38,7 @@ export function serveShell(tag = 'shell') {
     .replace(/\$\{[^}]*\}/g, '');
   mkdirSync(WORK, { recursive: true });
   const bundlePath = join(WORK, `${tag}.js`);
-  execSync(`npx esbuild ${join(CELL, 'client/main.ts')} --bundle --format=esm --outfile=${bundlePath}`,
+  execSync(`npx esbuild ${join(CELL, 'client/main.ts')} --bundle --format=esm ${offlineAliasFlags()} --outfile=${bundlePath}`,
     { stdio: 'pipe', cwd: ROOT });
   const bundle = readFileSync(bundlePath);
   // The stamp the cell computes, computed the same way, so the cache name here

@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import http from 'node:http';
 import zlib from 'node:zlib';
 import { chromium } from 'playwright';
+import { offlineAliasFlags } from './offline-deps.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 export const CELL = join(HERE, '..');
@@ -136,7 +137,7 @@ export async function openDrive(opts = {}) {
   // runs. The tag is a label; the filename is a filename.
   const safeTag = String(tag).replace(/[^A-Za-z0-9._-]+/g, '-');
   const bundle = join(WORK, `${safeTag}.js`);
-  execSync(`npx esbuild ${src} --bundle --format=esm --outfile=${bundle}`, { stdio: 'pipe', cwd: ROOT });
+  execSync(`npx esbuild ${src} --bundle --format=esm ${offlineAliasFlags()} --outfile=${bundle}`, { stdio: 'pipe', cwd: ROOT });
 
   const html = shell();
   // ── THE CELL'S OWN ROUTES, SERVED BY THE CELL'S OWN HANDLER ──
