@@ -191,6 +191,13 @@ function areaEvidence(input: HydroTileInput, feature: HydroFeature): number | un
   }
   // Slightly below the median resists a few high bank pixels without selecting
   // the deepest DEM error in the body.
+  // A COVER-RASTER BODY STANDS AT THE LOWEST GROUND IN IT. Its outline is
+  // 38 m pixels, so it always takes in bank: at the Hunzikenbrücke over the
+  // Aare the 40th percentile of the ground inside it read 520.4 m against a
+  // river surface of 517.1, and the bridge deck stood in the water. An OSM
+  // outline is drawn at the waterline and its median is the surface; a
+  // cover outline is not, and only its low ground is.
+  if (feature.source === 'landcover') return quantile(samples, samples.length >= 8 ? 0.12 : 0);
   return quantile(samples, samples.length >= 8 ? 0.4 : 0.5);
 }
 

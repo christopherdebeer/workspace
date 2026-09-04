@@ -1548,6 +1548,7 @@ function coverWaterFeed(key: string, t: CoverTile, ocean: MaskGrid, elevation?: 
     if (hydroFeats.has(slot)) { slots.push(slot); pixels += c.pixels; continue; }   // unchanged: keep it, dirty nothing
     const outer = ring(c.outer), holes = c.holes.map(ring);
     const minX = toX(c.minX), maxX = toX(c.maxX + 1), minZ = toZ(c.minY), maxZ = toZ(c.maxY + 1);
+    if (coverOsmFraction({ outer, holes }, minX, minZ, maxX, maxZ) >= COVER_OSM_COVERED) continue;   // OSM draws this water
     const kind = coverFlowingCrosses(outer, minX, minZ, maxX, maxZ) ? 'river' : 'lake';
     const f: HydroFeature = {
       id, source: 'landcover', kind, intermittent: false, tidal: false,
@@ -1560,6 +1561,51 @@ function coverWaterFeed(key: string, t: CoverTile, ocean: MaskGrid, elevation?: 
   }
   coverHydro.set(key, { slots, sig, pixels });
   coverHydroTraceMs += performance.now() - t0; coverHydroTraces++;
+}
+/** HOW MUCH OF A COVER BODY OSM ALREADY DRAWS. Where an OSM water outline
+ *  covers most of a cover component, the component is the same water at 38 m
+ *  and with bank in it, and it is dropped: the outline is the better body,
+ *  and the cover's version stood above it — the Aare at the Hunzikenbrücke
+ *  had both, the cover's 3.3 m higher, flooding the bridge. Sampled on a
+ *  grid over the component's box, points inside the component only; a
+ *  specific OSM feature can be asked about, or every OSM area in the store. */
+const COVER_OSM_COVERED = 0.6;
+function coverOsmFraction(poly: { outer: Float64Array; holes: readonly Float64Array[] }, minX: number, minZ: number, maxX: number, maxZ: number,
+  only?: HydroFeature): number {
+  const areas: Array<Extract<HydroFeature['geometry'], { type: 'area' }>> = [];
+  if (only) { if (only.geometry.type === 'area') areas.push(only.geometry); }
+  else for (const e of hydroFeats.values()) {
+    if (e.f.source !== 'osm' || e.f.geometry.type !== 'area') continue;
+    if (e.maxX < minX || e.minX > maxX || e.maxZ < minZ || e.minZ > maxZ) continue;
+    areas.push(e.f.geometry);
+  }
+  if (!areas.length) return 0;
+  const N = 7;
+  let inside = 0, covered = 0;
+  for (let iz = 0; iz < N; iz++) for (let ix = 0; ix < N; ix++) {
+    const x = minX + ((ix + 0.5) / N) * (maxX - minX), z = minZ + ((iz + 0.5) / N) * (maxZ - minZ);
+    if (!pointInPolygon(x, z, poly)) continue;
+    inside++;
+    for (const a of areas) if (pointInArea(x, z, a)) { covered++; break; }
+  }
+  if (inside < 3) {
+    // A sliver: judge it by its own ring instead.
+    const r = poly.outer;
+    for (let i = 0; i + 1 < r.length; i += 4) { inside++; for (const a of areas) if (pointInArea(r[i], r[i + 1], a)) { covered++; break; } }
+  }
+  return inside ? covered / inside : 0;
+}
+/** An OSM water outline that arrived after the cover: the cover bodies it
+ *  draws over are dropped, exactly as they would have been skipped had it
+ *  come first. */
+function coverWaterSuperseded(f: HydroFeature, minX: number, minZ: number, maxX: number, maxZ: number): void {
+  for (const [slot, e] of hydroFeats) {
+    if (e.f.source !== 'landcover' || e.f.geometry.type !== 'area') continue;
+    if (e.maxX < minX || e.minX > maxX || e.maxZ < minZ || e.minZ > maxZ) continue;
+    if (coverOsmFraction(e.f.geometry.polygons[0], e.minX, e.minZ, e.maxX, e.maxZ, f) < COVER_OSM_COVERED) continue;
+    hydroFeats.delete(slot);
+    hydroDirtyBox(e.minX, e.minZ, e.maxX, e.maxZ);
+  }
 }
 /** A river line that arrived after the cover: the lake it crosses is a reach. */
 function coverWaterReclassify(points: Float64Array, minX: number, minZ: number, maxX: number, maxZ: number): void {
@@ -1947,6 +1993,8 @@ function noteHydroWay(id: string | number, tags: Record<string, string>,
     }
     if (f.geometry.type === 'line' && FLOWING_KINDS.has(f.kind)) {
       coverWaterReclassify(f.geometry.points, minX, minZ, maxX, maxZ);
+    } else if (f.geometry.type === 'area') {
+      coverWaterSuperseded(f, minX, minZ, maxX, maxZ);
     }
   }
 }
