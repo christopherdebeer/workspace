@@ -1392,9 +1392,12 @@ scale 3, 40 m and 105 m cameras:
   (10× the archetype, 2.4 ms). At 40 m it is a lobed, branching tree beside
   the lollipop; at 105 m it still reads as a canopy with more variety than the
   archetype stand. Aspen and oak presets both work.
-- **Conifers: no.** The pine skeleton is a spindly scribble with cards and a
-  blob pile with clumps (2.1k triangles); the shipping cone is more legible at
-  every distance and 56× cheaper.
+- **Conifers want a frond, not a blob.** Round 2 m crowns on every leaf
+  anchor of a pine made a blob pile (2.1k triangles). One leaf per branch,
+  started at 0.9 of its length, with a squat five-sided cone on each tip
+  (`clumpShape: cone`, 1.3 m) reads as a whorled spruce at 40 m and a dark
+  dense stand at 105 m, ~700–900 triangles: 24× the cone, and worth it for
+  the nearest few dozen.
 - **Bare skeletons win outright.** The shipping snag is a tapered post; an ash
   or aspen with leaves ×0 is a dead tree with branches at 60–250 triangles.
   This is the case where the eye needs branching most and pays least.
@@ -1417,12 +1420,31 @@ scale 3, 40 m and 105 m cameras:
   survives bundling as a dynamic import (the platform marks the bare name
   external; esbuild keeps `import()` of an external lazy). `curl
   …/app.js | grep '^import '` is the check.
-- **Ship a bake, not the dependency.** Generation is a millisecond, but the
-  3 MB import is not a play-time cost worth paying even lazily: a devtool with a DOM stub
-  (`document.createElementNS` is all the texture loader touches) can generate
-  K skeletons per family in node and write wood + leaf anchors as quantised
-  arrays; clumps are made at load with the game's own icosahedra so flora
-  tuning stays live. K variants are K InstancedMeshes per kind.
+- **Shipped as a bake, not the dependency — THE SKELETON TIER.**
+  `devtools/bake-ez-flora.mjs` generates the variants in node (a DOM stub;
+  `document.createElementNS` is all the package's texture loader touches)
+  and writes `client/flora-ez-baked.ts`: fourteen variants, 35 KB of Int16
+  wood positions, Uint16 indices and leaf anchors, each standing on y=0 with
+  its top at y=1. `client/flora-ez.ts` decodes them once into a wood
+  geometry and a crown (an icosahedron per anchor for broadleaf, a squat
+  cone for conifer, nothing for snag), faceToned like everything else. In
+  main.ts (`ezTiers`, beside `trunks`) each variant is an InstancedMesh pair
+  — wood in the trunk material, crown in the leaf material with the site's
+  colour. `refreshVeg` runs a pre-pass first: the **N nearest** broadleaf
+  (120), conifer (60) and snag (all, 450) sites within 360 m are picked,
+  by count and not radius; a picked site is stood up as a skeleton at the
+  height its archetype would have reached and skips the archetype and its
+  trunk. A site keeps its variant across refreshes (a hash of where it
+  stands). Measured in a dense stand: +100k triangles (877k against 777k)
+  and +23 draw calls (240 against 217), refresh time unchanged. **`?ez=0`**
+  turns the tier off for an A/B on the device; `__ez()` is the bill (per
+  family, per variant, triangles, and every placed site's numbers) and
+  `__ezgeo()` every decoded variant's extent. Change a recipe → re-bake
+  (`npm i --no-save @dgreenheck/ez-tree@1.1.0`, then run the devtool) and
+  the lab (`/lab/flora-ez`) is where a recipe is judged first. Two draws a
+  variant is the known cost; merging wood and crown into one geometry would
+  need the wood to ignore instanceColor (a vertex flag in a material chunk)
+  and halves it when draw calls matter.
 
 **The rule that keeps a lab honest: it imports the SAME modules the game runs.**
 A lab that reimplements what it is inspecting proves nothing about what ships.

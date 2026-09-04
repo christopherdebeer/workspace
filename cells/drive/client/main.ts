@@ -46,6 +46,7 @@ import { createSplash } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { facade } from './facade';
 import { startLab } from './labs';
+import { ezCrownReach, ezVariantFor, ezVariants, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
@@ -7353,6 +7354,64 @@ faceTone(trunkGeo2, 0.16, 0.36);
 const trunks = vegMesh(trunkGeo2, woodMat, 3600);
 
 /**
+ * ── THE SKELETON TIER ──
+ *
+ * The flora-ez lab's verdict (see CLAUDE.md, "EZ-Tree: what the flora-ez lab
+ * found"): a procedural skeleton cut down hard, wearing Drive's OWN crowns,
+ * reads better than the 20-triangle archetype — a lobed, branching broadleaf
+ * beside the lollipop, a whorled spruce beside the cone, a dead tree beside
+ * the post — at ten to twenty-four times the triangles. Too dear for the
+ * sixteen hundred broadleaf inside VEG_RANGE; cheap for the trees you are
+ * actually driving past. So the N NEAREST broadleaf and conifer sites wear a
+ * baked skeleton and the rest keep the archetype, chosen by count and not by
+ * radius, because a dense wood can put its whole cap inside three hundred
+ * metres while a motorway has one tree there. Every snag in reach wears one:
+ * its post was the weakest silhouette in the field and the skeleton is the
+ * cheapest of the three.
+ *
+ * The skeletons are baked (devtools/bake-ez-flora.mjs → flora-ez-baked.ts),
+ * K variants a family, each its own InstancedMesh pair — wood in the trunk
+ * material, crown in the leaf material with the site's colour. A site keeps
+ * its variant across refreshes (a hash of where it stands). ?ez=0 turns the
+ * tier off, for an A/B against the archetypes on the device.
+ */
+const EZ_ON = new URLSearchParams(location.search).get('ez') !== '0';
+const EZ_FAMILIES: EzFamily[] = ['broadleaf', 'conifer', 'snag'];
+/** How many of the nearest sites of each family wear a skeleton. */
+const EZ_NEAR: Record<EzFamily, number> = { broadleaf: 120, conifer: 60, snag: VEG_CAP.snag };
+/** Candidates are sought within this many metres of the truck. */
+const EZ_REACH = 360;
+interface EzTier { wood: THREE.InstancedMesh; crown: THREE.InstancedMesh | null; tris: number; n: number }
+const ezTiers: Record<EzFamily, EzTier[]> = { broadleaf: [], conifer: [], snag: [] };
+if (EZ_ON) {
+  for (const fam of EZ_FAMILIES) {
+    for (const v of ezVariants(fam)) {
+      // Worst case every pick lands on one variant, so each holds the family's whole allowance.
+      const cap = EZ_NEAR[fam];
+      const wood = vegMesh(v.wood, woodMat, cap);
+      wood.name = 'veg-ez-wood';
+      (wood.instanceColor as THREE.InstancedBufferAttribute).array.fill(1);
+      let crown: THREE.InstancedMesh | null = null;
+      if (v.crown.getAttribute('position')) {
+        crown = vegMesh(v.crown, leafMat, cap);
+        crown.name = 'veg-ez-crown';
+      }
+      ezTiers[fam].push({ wood, crown, tris: v.tris, n: 0 });
+    }
+  }
+}
+/** The height the archetype would have stood at: trunk plus its crown's top. */
+const ezArchetypeTop: Record<EzFamily, number> = { broadleaf: 0, conifer: 0, snag: 0 };
+for (const fam of EZ_FAMILIES) {
+  const g = vegMeshes[fam].geometry;
+  g.computeBoundingBox();
+  ezArchetypeTop[fam] = g.boundingBox ? g.boundingBox.max.y : 1;
+}
+const ezWoodTint = new THREE.Color();
+/** What the last refresh stood up, for the harness. */
+let ezPlaced: Array<Record<string, number | string>> = [];
+
+/**
  * WHAT BLOOMS WHERE. The sward's colour so far has been the ground's own —
  * biome and cover, faithfully — with no life of its own on top. Five
  * habitats within a biome grow different flowers for the same reason five
@@ -9025,6 +9084,33 @@ function refreshVeg(): void {
       }
     }
   }
+  // THE SKELETON TIER'S PICKS: the N nearest of each family within reach.
+  // Cells are seeded here so the first refresh after a move already sees
+  // them; the main loop's seedCell is then a no-op.
+  const ezPick = new Set<PlacedVegSite>();
+  if (EZ_ON && vegScale > 0) {
+    const cand: Record<EzFamily, Array<[number, PlacedVegSite]>> = { broadleaf: [], conifer: [], snag: [] };
+    const er2 = EZ_REACH * EZ_REACH;
+    for (const [gx, gz] of ring) {
+      seedCell(gx, gz);
+      const cell = vegGrid.get(`${gx},${gz}`);
+      if (!cell) continue;
+      for (const v of cell) {
+        if (v.k !== 'broadleaf' && v.k !== 'conifer' && v.k !== 'snag') continue;
+        const dx = v.x - state.x, dz = v.z - state.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 <= er2) cand[v.k].push([d2, v]);
+      }
+    }
+    for (const fam of EZ_FAMILIES) {
+      const list = cand[fam];
+      const n = Math.round(EZ_NEAR[fam] * vegScale);
+      if (list.length > n) { list.sort((p, q) => p[0] - q[0]); list.length = n; }
+      for (const [, v] of list) ezPick.add(v);
+    }
+    for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) t.n = 0;
+    ezPlaced = [];
+  }
   for (const [gx, gz] of ring) {
     {
       seedCell(gx, gz);
@@ -9050,6 +9136,34 @@ function refreshVeg(): void {
         if (on.road || on.track) {
           if (v.k !== 'rock') continue;
           if ((((v.x * 73856093) ^ (v.z * 19349663)) >>> 0) % 4 !== 0) continue;
+        }
+        if (ezPick.has(v)) {
+          // A skeleton instead of the archetype and its trunk, stood at the
+          // height the archetype would have reached, crown included.
+          const fam = v.k as EzFamily;
+          const tier = ezTiers[fam][ezVariantFor(fam, v.x, v.z)];
+          if (tier && tier.n < tier.wood.instanceMatrix.count) {
+            const y = groundAt(v.x, v.z);
+            const total = v.h + ezArchetypeTop[fam] * v.s * (v.sy ?? 1);
+            const H = total / (1 + ezCrownReach(fam));
+            vegDummy.position.set(v.x, y, v.z);
+            vegDummy.rotation.set(v.tl ?? 0, v.rot, 0);
+            vegDummy.scale.set(H * (v.sw ?? 1), H, H * (v.sw ?? 1));
+            vegDummy.updateMatrix();
+            tier.wood.setMatrixAt(tier.n, vegDummy.matrix);
+            // The bark varies a little tree to tree, as the crowns already do.
+            const tint = 0.84 + ((((v.x * 40503) ^ (v.z * 22695)) >>> 0) % 100) * 0.0032;
+            tier.wood.setColorAt(tier.n, ezWoodTint.setRGB(tint, tint, tint));
+            if (tier.crown) {
+              tier.crown.setMatrixAt(tier.n, vegDummy.matrix);
+              tier.crown.setColorAt(tier.n, v.c);
+            }
+            tier.n++;
+            if (ezPlaced.length < 600) ezPlaced.push({ k: v.k, role: v.role, x: +v.x.toFixed(1), z: +v.z.toFixed(1), h: +v.h.toFixed(2), s: +v.s.toFixed(2), sy: +(v.sy ?? 1).toFixed(2), sw: +(v.sw ?? 1).toFixed(2), top: +ezArchetypeTop[fam].toFixed(2), H: +H.toFixed(2) });
+            activeRoles[v.role]++;
+            if (v.anchor) activeAnchors++;
+            continue;
+          }
         }
         const mesh = vegMeshes[v.k];
         const i = counts[v.k];
@@ -9107,6 +9221,18 @@ function refreshVeg(): void {
   }
   trunks.count = trunkN;
   trunks.instanceMatrix.needsUpdate = true;
+  for (const fam of EZ_FAMILIES) {
+    for (const t of ezTiers[fam]) {
+      t.wood.count = t.n;
+      t.wood.instanceMatrix.needsUpdate = true;
+      if (t.wood.instanceColor) t.wood.instanceColor.needsUpdate = true;
+      if (t.crown) {
+        t.crown.count = t.n;
+        t.crown.instanceMatrix.needsUpdate = true;
+        if (t.crown.instanceColor) t.crown.instanceColor.needsUpdate = true;
+      }
+    }
+  }
   vegActiveRoles = activeRoles;
   vegActiveAnchors = activeAnchors;
   vegMs = performance.now() - t0;
@@ -22581,6 +22707,40 @@ function tapeKeep(): string {
  * after it, and nothing on screen says so. Comparing this before and after a
  * forced re-seed is the assertion.
  */
+/** The skeleton tier's bill: how many of each family wear one, per variant, and the triangles. */
+(window as unknown as { __ez?: object }).__ez = (): object => {
+  const out: Record<string, unknown> = { on: EZ_ON, near: EZ_NEAR, reach: EZ_REACH };
+  let tris = 0;
+  for (const fam of EZ_FAMILIES) {
+    const per = ezTiers[fam].map((t) => t.n);
+    out[fam] = { placed: per.reduce((p, q) => p + q, 0), perVariant: per, variants: ezTiers[fam].length };
+    for (const t of ezTiers[fam]) tris += t.n * t.tris;
+  }
+  out.tris = tris;
+  out.placed = ezPlaced;
+  return out;
+};
+/** Every decoded variant's extent, for the harness: a bad bake shows here. */
+(window as unknown as { __ezgeo?: object }).__ezgeo = (): object[] => {
+  const rows: object[] = [];
+  for (const fam of EZ_FAMILIES) {
+    ezTiers[fam].forEach((t, i) => {
+      for (const [part, g] of [['wood', t.wood.geometry], ['crown', t.crown?.geometry]] as Array<[string, THREE.BufferGeometry | undefined]>) {
+        if (!g) continue;
+        g.computeBoundingBox();
+        const p = g.getAttribute('position') as THREE.BufferAttribute;
+        let nan = 0;
+        for (let k = 0; k < p.count * 3; k++) if (!Number.isFinite((p.array as Float32Array)[k])) nan++;
+        const bb = g.boundingBox;
+        rows.push({ fam, i, part, n: p.count, idx: g.index ? g.index.count : 0, nan,
+          min: bb ? [+bb.min.x.toFixed(2), +bb.min.y.toFixed(2), +bb.min.z.toFixed(2)] : null,
+          max: bb ? [+bb.max.x.toFixed(2), +bb.max.y.toFixed(2), +bb.max.z.toFixed(2)] : null,
+          count: (part === 'wood' ? t.wood : t.crown)?.count });
+      }
+    });
+  }
+  return rows;
+};
 (window as unknown as { __vegsites?: object }).__vegsites = (gx: number, gz: number): object[] =>
   (vegGrid.get(`${gx},${gz}`) ?? []).map((v) => ({
     role: v.role, anchor: !!v.anchor, k: v.k,

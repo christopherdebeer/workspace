@@ -64,6 +64,8 @@ interface Reduction {
   leaves: number;
   leafScale: number;
   billboard: 'single' | 'double';
+  /** Where along a branch the leaves begin (0..1); below 0 keeps the preset's. */
+  leafStart: number;
 }
 
 /** One EZ-Tree, generated, its geometry taken and its materials let go. The
@@ -88,6 +90,7 @@ function ezBuild(preset: string, seed: number, r: Reduction | null): GeoPair & {
     o.leaves.count = Math.max(0, Math.round(o.leaves.count * r.leaves));
     o.leaves.size *= r.leafScale;
     o.leaves.billboard = r.billboard;
+    if (r.leafStart >= 0) o.leaves.start = r.leafStart;
   }
   const t0 = performance.now();
   tree.generate();
@@ -107,14 +110,20 @@ function ezBuild(preset: string, seed: number, r: Reduction | null): GeoPair & {
  *  the same 20-triangle blob the shipping broadleaf is made of, so the
  *  canopy closes the way the shipping one does while the wood beneath it
  *  branches the way the shipping one cannot. */
-function clumpsAt(cards: THREE.BufferGeometry, radius: number, perCard: number): THREE.BufferGeometry {
+type ClumpShape = 'icosa' | 'flat' | 'cone';
+
+function clumpsAt(cards: THREE.BufferGeometry, radius: number, perCard: number, shape: ClumpShape = 'icosa'): THREE.BufferGeometry {
   const pos = cards.getAttribute('position') as THREE.BufferAttribute | undefined;
   if (!pos || pos.count < perCard) return new THREE.BufferGeometry();
   const out: THREE.BufferGeometry[] = [];
   for (let i = 0; i + perCard <= pos.count; i += perCard) {
     let x = 0, y = 0, z = 0;
     for (let k = 0; k < perCard; k++) { x += pos.getX(i + k); y += pos.getY(i + k); z += pos.getZ(i + k); }
-    const g = new THREE.IcosahedronGeometry(radius, 0);
+    // A conifer's frond is a squat cone, point up — the shipping conifer is a
+    // stack of them; a flat clump is the broadleaf blob pressed to a pad.
+    const g = shape === 'cone' ? new THREE.ConeGeometry(radius, radius * 1.6, 5)
+      : new THREE.IcosahedronGeometry(radius, 0);
+    if (shape === 'flat') g.scale(1, 0.45, 1);
     g.translate(x / perCard, y / perCard, z / perCard);
     out.push(g);
   }
@@ -307,6 +316,8 @@ export async function startEzFloraLab(): Promise<void> {
       { id: 'billboard', label: 'LEAF CARD', kind: 'select', value: 'single', options: ['single', 'double'] },
       { id: 'leafAs', label: 'LEAF AS', kind: 'select', value: 'clump', options: ['card', 'clump'] },
       { id: 'clumpM', label: 'CLUMP m', kind: 'range', min: 0.4, max: 4, step: 0.1, value: 2.0 },
+      { id: 'clumpShape', label: 'CLUMP SHAPE', kind: 'select', value: 'icosa', options: ['icosa', 'flat', 'cone'] },
+      { id: 'leafStart', label: 'LEAF START', kind: 'range', min: 0, max: 1, step: 0.05, value: -1 },
       { id: 'showLeaves', label: 'SHOW LEAVES', kind: 'toggle', value: true },
       { id: 'tone', label: 'FACE TONE', kind: 'toggle', value: true },
 
@@ -324,6 +335,7 @@ export async function startEzFloraLab(): Promise<void> {
         levels: Number(v.levels), sections: Number(v.sectionsX), segments: Number(v.segmentsX),
         children: Number(v.childrenX), leaves: Number(v.leavesX), leafScale: Number(v.leafScale),
         billboard: String(v.billboard), leafAs: String(v.leafAs), clumpM: Number(v.clumpM),
+        clumpShape: String(v.clumpShape), leafStart: Number(v.leafStart),
       },
     }, null, 2),
   });
@@ -404,6 +416,7 @@ export async function startEzFloraLab(): Promise<void> {
       leaves: dials.num('leavesX'),
       leafScale: dials.num('leafScale'),
       billboard: dials.str('billboard') === 'double' ? 'double' : 'single',
+      leafStart: dials.num('leafStart'),
     });
     buildMs = reduced.ms;
     if (!dials.bool('showLeaves') || family === 'snag') {
@@ -416,7 +429,7 @@ export async function startEzFloraLab(): Promise<void> {
       const s0 = scalePair(reduced, height);
       const perCard = dials.str('billboard') === 'double' ? 8 : 4;
       const t1 = performance.now();
-      const clumps = clumpsAt(reduced.leaves, dials.num('clumpM') / Math.max(1e-6, s0), perCard);
+      const clumps = clumpsAt(reduced.leaves, dials.num('clumpM') / Math.max(1e-6, s0), perCard, dials.str('clumpShape') as ClumpShape);
       buildMs += performance.now() - t1;
       reduced.leaves.dispose();
       reduced.leaves = clumps;
