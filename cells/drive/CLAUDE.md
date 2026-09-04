@@ -1406,8 +1406,19 @@ scale 3, 40 m and 105 m cameras:
   can put the whole cap inside 300 m — so a hybrid tier must be **the N
   nearest** (N≈120 → ~47k triangles), the rest the archetype, bucketed in the
   placement loop that already knows every site's distance.
+- **A lab's static import of an imports.json package is a GAME-LOAD cost.**
+  labs.ts reaches every lab through `import('./x-lab')`, but the platform
+  bundles the client without code splitting, so the lab's body is inlined
+  into app.js and a static `import … from '@dgreenheck/ez-tree'` inside it
+  became a top-level `import … from "https://esm.sh/@dgreenheck/ez-tree…"`
+  of app.js — 3.0 MB brotli, fetched and its twenty textures decoded by
+  every player before the game booted, for as long as the pulled lab was
+  live. Only a dynamic `import('@dgreenheck/ez-tree')` of the package ITSELF
+  survives bundling as a dynamic import (the platform marks the bare name
+  external; esbuild keeps `import()` of an external lazy). `curl
+  …/app.js | grep '^import '` is the check.
 - **Ship a bake, not the dependency.** Generation is a millisecond, but the
-  4 MB import is not a play-time cost worth paying: a devtool with a DOM stub
+  3 MB import is not a play-time cost worth paying even lazily: a devtool with a DOM stub
   (`document.createElementNS` is all the texture loader touches) can generate
   K skeletons per family in node and write wood + leaf anchors as quantised
   arrays; clumps are made at load with the game's own icosahedra so flora

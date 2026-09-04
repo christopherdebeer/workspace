@@ -1,5 +1,4 @@
 import * as THREE from 'three';
-import { Tree, TreePreset } from '@dgreenheck/ez-tree';
 import { createDials, type DialValues } from './lab-dials';
 import {
   broadleaf, conifer, faceTone, mergeGeos, snag, trunkReach,
@@ -31,14 +30,28 @@ import { grainFx } from './grain';
  * glass are the numbers a bake would use. Full presets are 3–19k triangles;
  * the shipping broadleaf is 20.
  *
- * This is an evaluation surface only. Nothing in main.ts imports this module;
- * the external package is lazy-loaded only when /lab/flora-ez is opened — and
- * it is 4 MB, 3.97 MB of which are twenty embedded bark and leaf textures this
- * lab never draws.
+ * This is an evaluation surface only, and THE PACKAGE MUST STAY OUT OF THE
+ * GAME'S LOAD. labs.ts reaches this module through a dynamic import, but the
+ * platform bundles the client without code splitting, so this module's body
+ * is inlined into app.js — and a STATIC import of the package here became a
+ * top-level `import … from "https://esm.sh/@dgreenheck/ez-tree…"` in app.js,
+ * fetched and evaluated by every player before the game booted: 4 MB,
+ * 3.97 MB of which are twenty embedded bark and leaf textures this lab never
+ * draws, decoded at module evaluation. Only a dynamic import of the package
+ * itself survives bundling as a dynamic import, so that is the one form
+ * allowed here: `ezModule()` below, called when the lab starts.
  */
 
 type Family = 'broadleaf' | 'conifer' | 'snag';
 interface GeoPair { branches: THREE.BufferGeometry; leaves: THREE.BufferGeometry }
+
+type EzModule = typeof import('@dgreenheck/ez-tree');
+let ez: EzModule | null = null;
+/** The package, fetched on first use and never at the game's load. */
+async function ezModule(): Promise<EzModule> {
+  if (!ez) ez = await import('@dgreenheck/ez-tree');
+  return ez;
+}
 
 const PRESETS = ['Ash Small', 'Aspen Small', 'Oak Small', 'Pine Small', 'Oak Medium', 'Pine Medium'] as const;
 
@@ -57,6 +70,8 @@ interface Reduction {
  *  Tree is a THREE.Group with its own meshes and MeshStandardMaterials; the
  *  lab wants only the two BufferGeometries. */
 function ezBuild(preset: string, seed: number, r: Reduction | null): GeoPair & { ms: number } {
+  if (!ez) throw new Error('flora-ez: the package has not been loaded');
+  const { Tree, TreePreset } = ez;
   const tree = new Tree();
   const chosen = (TreePreset as Record<string, unknown>)[preset];
   if (chosen) tree.options.copy(chosen as typeof tree.options);
@@ -232,6 +247,7 @@ function addPopulation(
 
 export async function startEzFloraLab(): Promise<void> {
   document.title = 'DRIVE · EZ-TREE CANDIDATE LAB';
+  await ezModule();
   const style = document.createElement('style');
   style.textContent = `
     html, body { margin: 0; height: 100%; overflow: hidden; background: #0b0f11; color: #d6e2e4;
