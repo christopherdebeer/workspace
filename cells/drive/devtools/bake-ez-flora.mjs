@@ -34,37 +34,42 @@ const { Tree, TreePreset } = await import(join(pkgDir, 'build/ez-tree.es.js'));
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = join(HERE, '../client/flora-ez-baked.ts');
 
-/** The lab's "hard" reduction; leaves are the anchors, not drawn. */
-const HARD = { levels: 2, sections: 0.3, segments: 0.4, children: 0.3, leaves: 0.15, leafStart: -1 };
+/** THE WHOLE-POPULATION RECIPE. Every broadleaf, conifer and snag in the
+ *  plant range wears a skeleton — no archetype, no switching with distance —
+ *  so the recipe is priced for sixteen hundred broadleaf and fourteen hundred
+ *  conifers at once, not a hundred and twenty beside the truck: three-sided
+ *  branches, a fifth of the children, four to six crowns. Judge a change in
+ *  the lab first (/lab/flora-ez, the EZ REDUCTION dials are these numbers). */
+const LEAN = { levels: 2, sections: 0.2, segments: 0.35, children: 0.2, leaves: 0.06, leafStart: -1 };
 const RECIPES = {
-  // Crown 2 m on an 8 m tree; a Drive icosahedron on every anchor.
+  // Crown 2.4 m on an 8 m tree; a Drive icosahedron on every anchor.
   broadleaf: {
-    crown: 0.25, shape: 'icosa',
+    crown: 0.3, shape: 'icosa',
     variants: [
-      ['Oak Small', 37, HARD], ['Oak Small', 118, HARD], ['Aspen Small', 5, HARD],
-      // An ash carries three times the leaves an oak does; an oak medium twice.
-      ['Aspen Small', 71, HARD], ['Ash Small', 12, { ...HARD, leaves: 0.05 }], ['Oak Medium', 9, { ...HARD, leaves: 0.08 }],
+      // Four crowns each: the leaf fraction is per preset because an aspen
+      // carries twice the leaves an oak does and an ash three times.
+      ['Oak Small', 37, LEAN], ['Oak Small', 118, LEAN], ['Aspen Small', 5, { ...LEAN, leaves: 0.03 }],
+      ['Aspen Small', 71, { ...LEAN, leaves: 0.03 }], ['Ash Small', 12, { ...LEAN, leaves: 0.01 }], ['Oak Medium', 9, { ...LEAN, leaves: 0.015 }],
     ],
   },
   // One frond at each branch tip: a single leaf per branch, started at 0.9.
   conifer: {
-    crown: 0.16, shape: 'cone',
+    crown: 0.17, shape: 'cone',
     variants: [
-      ['Pine Small', 37, { ...HARD, children: 0.25, leaves: 0.05, leafStart: 0.9 }],
-      ['Pine Small', 84, { ...HARD, children: 0.25, leaves: 0.05, leafStart: 0.9 }],
-      ['Pine Small', 7, { ...HARD, children: 0.25, leaves: 0.05, leafStart: 0.9 }],
-      ['Pine Medium', 3, { ...HARD, children: 0.25, leaves: 0.05, leafStart: 0.9 }],
+      ['Pine Small', 37, { ...LEAN, children: 0.16, leaves: 0.05, leafStart: 0.9 }],
+      ['Pine Small', 84, { ...LEAN, children: 0.16, leaves: 0.05, leafStart: 0.9 }],
+      ['Pine Small', 7, { ...LEAN, children: 0.16, leaves: 0.05, leafStart: 0.9 }],
+      ['Pine Medium', 3, { ...LEAN, children: 0.12, leaves: 0.05, leafStart: 0.9 }],
     ],
   },
-  // Bare, and thinner still: every snag in range wears one, so it is priced
-  // for four hundred and fifty of them.
+  // Bare, and thinner still.
   snag: {
     crown: 0, shape: 'none',
     variants: [
-      ['Ash Small', 12, { ...HARD, sections: 0.2, segments: 0.35, children: 0.2, leaves: 0 }],
-      ['Aspen Small', 71, { ...HARD, sections: 0.2, segments: 0.35, children: 0.2, leaves: 0 }],
-      ['Ash Small', 41, { ...HARD, sections: 0.2, segments: 0.35, children: 0.2, leaves: 0 }],
-      ['Oak Small', 37, { ...HARD, sections: 0.2, segments: 0.35, children: 0.2, leaves: 0 }],
+      ['Ash Small', 12, { ...LEAN, children: 0.15, leaves: 0 }],
+      ['Aspen Small', 71, { ...LEAN, children: 0.15, leaves: 0 }],
+      ['Ash Small', 41, { ...LEAN, children: 0.15, leaves: 0 }],
+      ['Oak Small', 37, { ...LEAN, children: 0.15, leaves: 0 }],
     ],
   },
 };
@@ -127,7 +132,7 @@ for (const [family, recipe] of Object.entries(RECIPES)) {
   const variants = recipe.variants.map(([preset, seed, r]) => {
     const v = generate(preset, seed, r);
     total += v.P.byteLength + v.I.byteLength + v.A.byteLength;
-    const crownTris = recipe.shape === 'icosa' ? 20 : recipe.shape === 'cone' ? 10 : 0;
+    const crownTris = recipe.shape === 'icosa' ? 20 : recipe.shape === 'cone' ? 4 : 0;   // an open four-sided frond
     console.log(`${family.padEnd(10)} ${v.name.padEnd(18)} verts ${String(v.verts).padStart(5)} wood ${String(v.tris).padStart(5)}t anchors ${String(v.anchors).padStart(3)} → ${String(v.tris + v.anchors * crownTris).padStart(5)}t drawn`);
     return { name: v.name, verts: v.verts, tris: v.tris, anchors: v.anchors, pos: b64(v.P), idx: b64(v.I), anc: b64(v.A) };
   });

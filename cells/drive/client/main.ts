@@ -46,7 +46,7 @@ import { createSplash } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { facade } from './facade';
 import { startLab } from './labs';
-import { ezCrownReach, ezVariantFor, ezVariants, type EzFamily } from './flora-ez';
+import { ezCrownReach, ezMaterial, ezVariantFor, ezVariants, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
@@ -58,7 +58,7 @@ import { grainFx, grainU } from './grain';
 import {
   DEADWOOD, FOLIAGE_BANDS, STONE, STONE_MIX_ROWS, STONY, TRUNKED, VEG_CAP, VEG_MIX,
   VEG_SIZE, VEG_TREES, bandKind, coverKind as floraCoverKind, trunkReach,
-  acaciaGeo, broadleaf, bushGeo, cactusGeo, conifer, faceTone, fernGeo, grassGeo, logGeo,
+  acaciaGeo, broadleaf, bushGeo, cactusGeo, shrubGeo, conifer, faceTone, fernGeo, grassGeo, logGeo,
   makeSapling, mergeGeos, palm, plantLook, promoteAnchor, rockGeo, snag, spireGeo, standTone,
   type VegKind, type VegSite, type VegTone,
 } from './flora';
@@ -7354,49 +7354,41 @@ faceTone(trunkGeo2, 0.16, 0.36);
 const trunks = vegMesh(trunkGeo2, woodMat, 3600);
 
 /**
- * ── THE SKELETON TIER ──
+ * ── THE SKELETONS: EVERY TREE, EVERY DISTANCE ──
  *
  * The flora-ez lab's verdict (see CLAUDE.md, "EZ-Tree: what the flora-ez lab
  * found"): a procedural skeleton cut down hard, wearing Drive's OWN crowns,
  * reads better than the 20-triangle archetype — a lobed, branching broadleaf
  * beside the lollipop, a whorled spruce beside the cone, a dead tree beside
- * the post — at ten to twenty-four times the triangles. Too dear for the
- * sixteen hundred broadleaf inside VEG_RANGE; cheap for the trees you are
- * actually driving past. So the N NEAREST broadleaf and conifer sites wear a
- * baked skeleton and the rest keep the archetype, chosen by count and not by
- * radius, because a dense wood can put its whole cap inside three hundred
- * metres while a motorway has one tree there. Every snag in reach wears one:
- * its post was the weakest silhouette in the field and the skeleton is the
- * cheapest of the three.
+ * the post. The first build gave only the nearest trees a skeleton and the
+ * verdict from the seat was immediate: a tree that changes shape as you
+ * drive at it looks worse than either shape. So there is no tier and no
+ * archetype for these three kinds any more: every broadleaf, conifer and
+ * snag in VEG_RANGE wears a skeleton, priced for the whole population — the
+ * bake's LEAN recipe is 160–250 triangles a tree against the archetype's 20,
+ * ten times the plants' bill, and the VEGETATION dial is the lever if a
+ * device cannot carry it.
  *
  * The skeletons are baked (devtools/bake-ez-flora.mjs → flora-ez-baked.ts),
- * K variants a family, each its own InstancedMesh pair — wood in the trunk
- * material, crown in the leaf material with the site's colour. A site keeps
- * its variant across refreshes (a hash of where it stands). ?ez=0 turns the
- * tier off, for an A/B against the archetypes on the device.
+ * K variants a family, each ONE InstancedMesh: wood and crown share the
+ * draw, the crown in the site's colour and the wood in bark (ezMaterial).
+ * A site keeps its variant across refreshes (a hash of where it stands).
+ * ?ez=0 brings the archetypes back, for an A/B on the device.
  */
-const EZ_ON = new URLSearchParams(location.search).get('ez') !== '0';
+const EZ_ON = ((): boolean => { const ask = new URLSearchParams(location.search).get('ez'); return ask !== '0' && ask !== 'off'; })();
 const EZ_FAMILIES: EzFamily[] = ['broadleaf', 'conifer', 'snag'];
-/** How many of the nearest sites of each family wear a skeleton. */
-const EZ_NEAR: Record<EzFamily, number> = { broadleaf: 120, conifer: 60, snag: VEG_CAP.snag };
-/** Candidates are sought within this many metres of the truck. */
-const EZ_REACH = 360;
-interface EzTier { wood: THREE.InstancedMesh; crown: THREE.InstancedMesh | null; tris: number; n: number }
+const isEzKind = (k: VegKind): k is EzFamily => k === 'broadleaf' || k === 'conifer' || k === 'snag';
+interface EzTier { mesh: THREE.InstancedMesh; tris: number; n: number }
 const ezTiers: Record<EzFamily, EzTier[]> = { broadleaf: [], conifer: [], snag: [] };
+const ezMat = ezMaterial(0x4a3826);
+grainFx(ezMat, 'grain-ez', 0.95, 2.2);
 if (EZ_ON) {
   for (const fam of EZ_FAMILIES) {
     for (const v of ezVariants(fam)) {
-      // Worst case every pick lands on one variant, so each holds the family's whole allowance.
-      const cap = EZ_NEAR[fam];
-      const wood = vegMesh(v.wood, woodMat, cap);
-      wood.name = 'veg-ez-wood';
-      (wood.instanceColor as THREE.InstancedBufferAttribute).array.fill(1);
-      let crown: THREE.InstancedMesh | null = null;
-      if (v.crown.getAttribute('position')) {
-        crown = vegMesh(v.crown, leafMat, cap);
-        crown.name = 'veg-ez-crown';
-      }
-      ezTiers[fam].push({ wood, crown, tris: v.tris, n: 0 });
+      // Worst case every site of a kind lands on one variant, so each holds the kind's whole cap.
+      const mesh = vegMesh(v.geometry, ezMat, VEG_CAP[fam]);
+      mesh.name = 'veg-ez';
+      ezTiers[fam].push({ mesh, tris: v.tris, n: 0 });
     }
   }
 }
@@ -7407,7 +7399,6 @@ for (const fam of EZ_FAMILIES) {
   g.computeBoundingBox();
   ezArchetypeTop[fam] = g.boundingBox ? g.boundingBox.max.y : 1;
 }
-const ezWoodTint = new THREE.Color();
 /** What the last refresh stood up, for the harness. */
 let ezPlaced: Array<Record<string, number | string>> = [];
 
@@ -9062,6 +9053,100 @@ const VEG_ROLE_COL: Record<VegetationRole | 'anchor', THREE.Color> = {
   polygon: new THREE.Color(0x8a6bd8),
   anchor: new THREE.Color(0xffffff),
 };
+/**
+ * ── THE SWARD'S SHRUB LAYER ──
+ *
+ * The sward stopped at flowers: blades that bloom where the habitat class
+ * says so, out to 140 m. Between those and the trees there was nothing
+ * knee-high, so the near field read as a lawn with trees standing in it.
+ * This band is the next rung of the same ladder — small shrubs on a 5 m
+ * lattice inside the grass's own reach, standing where the sward's field
+ * says grass grows, at a rate the habitat sets: sparse in an open meadow,
+ * thick on a wood's floor and a water's edge, next to none on a cliff or a
+ * ruin's rubble. It reads the SAME field the GPU sward reads (height, rate,
+ * ground colour and habitat class per 8 m texel), so shrubs and blades agree
+ * about where the ground is bare, and it slides toward the ground colour
+ * with distance the way the tufts do. Rebuilt with the vegetation every
+ * 900 ms; the lattice is world-snapped, so a shrub never moves — it appears
+ * at the edge, where it is a pixel. Without the GPU sward there is no field,
+ * and no shrubs.
+ */
+const SHRUB_SIGHT = 140;
+const SHRUB_STEP = 5;
+const SHRUB_CAP = 1200;
+/** Shrubs per slot by habitat class, before the sward's own rate. */
+const SHRUB_RATE: Record<SwardCtx, number> = {
+  [SwardCtx.Open]: 0.34, [SwardCtx.Wood]: 0.6, [SwardCtx.Water]: 0.5, [SwardCtx.Cliff]: 0.05, [SwardCtx.Ruin]: 0.15,
+};
+/** ?shrub=0 for an A/B on the device. */
+const SHRUB_ON = new URLSearchParams(location.search).get('shrub') !== '0';
+const shrubs = vegMesh(faceTone(shrubGeo(), 0.24, 0.3), leafMat, SHRUB_CAP);
+shrubs.name = 'veg-shrub';
+const shrubCol = new THREE.Color();
+let shrubN = 0, shrubNear = 0;
+function refreshShrubs(): void {
+  shrubs.visible = camMode !== 'top';
+  if (!SHRUB_ON || Number.isNaN(swardFX) || vegScale <= 0 || grassScale <= 0) { shrubs.count = 0; shrubN = 0; shrubNear = 0; return; }
+  let near = 0;
+  const cap = Math.min(SHRUB_CAP, Math.floor(SHRUB_CAP * vegScale * Math.min(1, grassScale)));
+  const reach = SHRUB_SIGHT * Math.min(1.6, 0.55 + grassScale * 0.6);
+  const R2 = reach * reach;
+  const x0 = Math.floor((state.x - reach) / SHRUB_STEP), x1 = Math.ceil((state.x + reach) / SHRUB_STEP);
+  const z0 = Math.floor((state.z - reach) / SHRUB_STEP), z1 = Math.ceil((state.z + reach) / SHRUB_STEP);
+  let n = 0;
+  for (let ix = x0; ix <= x1 && n < cap; ix++) {
+    for (let iz = z0; iz <= z1 && n < cap; iz++) {
+      const sx = ix * SHRUB_STEP, sz = iz * SHRUB_STEP;
+      const dx = sx - state.x, dz = sz - state.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 > R2) continue;
+      // The sward's own field: the texel this slot stands in.
+      const fi = Math.floor((sx - swardFX) / SWARD_FM), fj = Math.floor((sz - swardFZ) / SWARD_FM);
+      if (fi < 0 || fj < 0 || fi >= SWARD_F || fj >= SWARD_F) continue;
+      const k = (fj * SWARD_F + fi) * 4;
+      const rate = swardFieldData[k + 1];
+      if (rate <= 0.05) continue;
+      const ctx = swardColData[k + 3] as SwardCtx;
+      const h1 = hash2(ix * 17 + 5, iz * 3 + 1);
+      const t = Math.sqrt(d2) / reach;
+      // Dithered like the tufts: whole shrubs dropped on a hash, the
+      // survivors full size, thinning outward.
+      if (h1 > (SHRUB_RATE[ctx] ?? 0.1) * Math.min(1, rate) * (0.25 + 0.75 * (1 - t) * (1 - t))) continue;
+      const h2 = hash2(ix + 771, iz + 12007);
+      const wx = sx + (h2 - 0.5) * SHRUB_STEP * 0.9;
+      const wz = sz + (hash2(ix + 31, iz + 9973) - 0.5) * SHRUB_STEP * 0.9;
+      if (roadGrid.has(gkey(wx, wz)) && surfaceAt(wx, wz) !== 'ground') continue;
+      vegDummy.position.set(wx, swardGround(wx, wz), wz);
+      vegDummy.rotation.set(0, h2 * 6.283, 0);
+      // Knee to waist high; a wood's floor grows them taller.
+      const size = 0.55 + h1 * 0.9 + (ctx === SwardCtx.Wood ? 0.3 : 0);
+      vegDummy.scale.set(size * (0.85 + hash2(ix, iz + 77) * 0.3), size, size);
+      vegDummy.updateMatrix();
+      shrubs.setMatrixAt(n, vegDummy.matrix);
+      // The sward's green, DARKER — a shrub is a shadow in the grass before
+      // it is a shape — and varied bush to bush, sliding toward the ground's
+      // own colour over the outer half as the tufts do.
+      const v = 0.42 + hash2(ix + 5, iz + 5) * 0.28;
+      if (d2 < 1600) near++;
+      const fm = clamp((t - 0.45) / 0.55, 0, 1);
+      const mix = fm * fm * 0.8;
+      const gr = swardColData[k] / 255, gg = swardColData[k + 1] / 255, gb = swardColData[k + 2] / 255;
+      shrubCol.setRGB(
+        grassTint.r * v + (gr - grassTint.r * v) * mix,
+        grassTint.g * v + (gg - grassTint.g * v) * mix,
+        grassTint.b * v + (gb - grassTint.b * v) * mix,
+      );
+      shrubs.setColorAt(n, shrubCol);
+      n++;
+    }
+  }
+  shrubs.count = n;
+  shrubN = n;
+  shrubNear = near;
+  shrubs.instanceMatrix.needsUpdate = true;
+  if (shrubs.instanceColor) shrubs.instanceColor.needsUpdate = true;
+}
+(window as unknown as { __shrubs?: object }).__shrubs = (): object => ({ on: SHRUB_ON, n: shrubN, within40m: shrubNear, cap: SHRUB_CAP, step: SHRUB_STEP, sight: SHRUB_SIGHT, field: !Number.isNaN(swardFX) });
 function refreshVeg(): void {
   const t0 = performance.now();
   const counts: Record<string, number> = { broadleaf: 0, conifer: 0, palm: 0, snag: 0, bush: 0, rock: 0, grass: 0,
@@ -9084,33 +9169,9 @@ function refreshVeg(): void {
       }
     }
   }
-  // THE SKELETON TIER'S PICKS: the N nearest of each family within reach.
-  // Cells are seeded here so the first refresh after a move already sees
-  // them; the main loop's seedCell is then a no-op.
-  const ezPick = new Set<PlacedVegSite>();
-  if (EZ_ON && vegScale > 0) {
-    const cand: Record<EzFamily, Array<[number, PlacedVegSite]>> = { broadleaf: [], conifer: [], snag: [] };
-    const er2 = EZ_REACH * EZ_REACH;
-    for (const [gx, gz] of ring) {
-      seedCell(gx, gz);
-      const cell = vegGrid.get(`${gx},${gz}`);
-      if (!cell) continue;
-      for (const v of cell) {
-        if (v.k !== 'broadleaf' && v.k !== 'conifer' && v.k !== 'snag') continue;
-        const dx = v.x - state.x, dz = v.z - state.z;
-        const d2 = dx * dx + dz * dz;
-        if (d2 <= er2) cand[v.k].push([d2, v]);
-      }
-    }
-    for (const fam of EZ_FAMILIES) {
-      const list = cand[fam];
-      const n = Math.round(EZ_NEAR[fam] * vegScale);
-      if (list.length > n) { list.sort((p, q) => p[0] - q[0]); list.length = n; }
-      for (const [, v] of list) ezPick.add(v);
-    }
-    for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) t.n = 0;
-    ezPlaced = [];
-  }
+  const ezCounts: Record<EzFamily, number> = { broadleaf: 0, conifer: 0, snag: 0 };
+  for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) t.n = 0;
+  ezPlaced = [];
   for (const [gx, gz] of ring) {
     {
       seedCell(gx, gz);
@@ -9137,33 +9198,38 @@ function refreshVeg(): void {
           if (v.k !== 'rock') continue;
           if ((((v.x * 73856093) ^ (v.z * 19349663)) >>> 0) % 4 !== 0) continue;
         }
-        if (ezPick.has(v)) {
+        if (EZ_ON && isEzKind(v.k)) {
           // A skeleton instead of the archetype and its trunk, stood at the
-          // height the archetype would have reached, crown included.
-          const fam = v.k as EzFamily;
+          // height the archetype would have reached, crown included. The
+          // kind's cap and the far dissolve are the archetype's own.
+          const fam = v.k;
+          if (ezCounts[fam] >= VEG_CAP[fam] * vegScale) continue;
           const tier = ezTiers[fam][ezVariantFor(fam, v.x, v.z)];
-          if (tier && tier.n < tier.wood.instanceMatrix.count) {
-            const y = groundAt(v.x, v.z);
-            const total = v.h + ezArchetypeTop[fam] * v.s * (v.sy ?? 1);
-            const H = total / (1 + ezCrownReach(fam));
-            vegDummy.position.set(v.x, y, v.z);
-            vegDummy.rotation.set(v.tl ?? 0, v.rot, 0);
-            vegDummy.scale.set(H * (v.sw ?? 1), H, H * (v.sw ?? 1));
-            vegDummy.updateMatrix();
-            tier.wood.setMatrixAt(tier.n, vegDummy.matrix);
-            // The bark varies a little tree to tree, as the crowns already do.
-            const tint = 0.84 + ((((v.x * 40503) ^ (v.z * 22695)) >>> 0) % 100) * 0.0032;
-            tier.wood.setColorAt(tier.n, ezWoodTint.setRGB(tint, tint, tint));
-            if (tier.crown) {
-              tier.crown.setMatrixAt(tier.n, vegDummy.matrix);
-              tier.crown.setColorAt(tier.n, v.c);
-            }
-            tier.n++;
-            if (ezPlaced.length < 600) ezPlaced.push({ k: v.k, role: v.role, x: +v.x.toFixed(1), z: +v.z.toFixed(1), h: +v.h.toFixed(2), s: +v.s.toFixed(2), sy: +(v.sy ?? 1).toFixed(2), sw: +(v.sw ?? 1).toFixed(2), top: +ezArchetypeTop[fam].toFixed(2), H: +H.toFixed(2) });
-            activeRoles[v.role]++;
-            if (v.anchor) activeAnchors++;
-            continue;
-          }
+          if (!tier || tier.n >= tier.mesh.instanceMatrix.count) continue;
+          const y = groundAt(v.x, v.z);
+          const total = v.h + ezArchetypeTop[fam] * v.s * (v.sy ?? 1);
+          const H = total / (1 + ezCrownReach(fam));
+          vegDummy.position.set(v.x, y, v.z);
+          vegDummy.rotation.set(v.tl ?? 0, v.rot, 0);
+          vegDummy.scale.set(H * (v.sw ?? 1), H, H * (v.sw ?? 1));
+          vegDummy.updateMatrix();
+          tier.mesh.setMatrixAt(tier.n, vegDummy.matrix);
+          const tt = Math.sqrt(d2v) / VEG_RANGE;
+          if (vegRoleDebug) {
+            tier.mesh.setColorAt(tier.n, VEG_ROLE_COL[v.anchor ? 'anchor' : v.role]);
+          } else if (tt > 0.5) {
+            const fmv = (tt - 0.5) / 0.5;
+            const mixv = fmv * 0.55;
+            const [tr, tg, tb] = terrainPalette(y + baseElev, 0, sampleCover(v.x, v.z), v.x, v.z);
+            swardCol.setRGB(v.c.r + (tr - v.c.r) * mixv, v.c.g + (tg - v.c.g) * mixv, v.c.b + (tb - v.c.b) * mixv);
+            tier.mesh.setColorAt(tier.n, swardCol);
+          } else tier.mesh.setColorAt(tier.n, v.c);
+          tier.n++;
+          ezCounts[fam]++;
+          if (ezPlaced.length < 600) ezPlaced.push({ k: v.k, role: v.role, x: +v.x.toFixed(1), z: +v.z.toFixed(1), h: +v.h.toFixed(2), s: +v.s.toFixed(2), sy: +(v.sy ?? 1).toFixed(2), sw: +(v.sw ?? 1).toFixed(2), top: +ezArchetypeTop[fam].toFixed(2), H: +H.toFixed(2) });
+          activeRoles[v.role]++;
+          if (v.anchor) activeAnchors++;
+          continue;
         }
         const mesh = vegMeshes[v.k];
         const i = counts[v.k];
@@ -9223,17 +9289,13 @@ function refreshVeg(): void {
   trunks.instanceMatrix.needsUpdate = true;
   for (const fam of EZ_FAMILIES) {
     for (const t of ezTiers[fam]) {
-      t.wood.count = t.n;
-      t.wood.instanceMatrix.needsUpdate = true;
-      if (t.wood.instanceColor) t.wood.instanceColor.needsUpdate = true;
-      if (t.crown) {
-        t.crown.count = t.n;
-        t.crown.instanceMatrix.needsUpdate = true;
-        if (t.crown.instanceColor) t.crown.instanceColor.needsUpdate = true;
-      }
+      t.mesh.count = t.n;
+      t.mesh.instanceMatrix.needsUpdate = true;
+      if (t.mesh.instanceColor) t.mesh.instanceColor.needsUpdate = true;
     }
   }
   vegActiveRoles = activeRoles;
+  refreshShrubs();
   vegActiveAnchors = activeAnchors;
   vegMs = performance.now() - t0;
   // Forget buckets far behind so a long drive cannot grow the site list
@@ -22709,7 +22771,7 @@ function tapeKeep(): string {
  */
 /** The skeleton tier's bill: how many of each family wear one, per variant, and the triangles. */
 (window as unknown as { __ez?: object }).__ez = (): object => {
-  const out: Record<string, unknown> = { on: EZ_ON, near: EZ_NEAR, reach: EZ_REACH };
+  const out: Record<string, unknown> = { on: EZ_ON };
   let tris = 0;
   for (const fam of EZ_FAMILIES) {
     const per = ezTiers[fam].map((t) => t.n);
@@ -22725,7 +22787,7 @@ function tapeKeep(): string {
   const rows: object[] = [];
   for (const fam of EZ_FAMILIES) {
     ezTiers[fam].forEach((t, i) => {
-      for (const [part, g] of [['wood', t.wood.geometry], ['crown', t.crown?.geometry]] as Array<[string, THREE.BufferGeometry | undefined]>) {
+      for (const [part, g] of [['tree', t.mesh.geometry]] as Array<[string, THREE.BufferGeometry | undefined]>) {
         if (!g) continue;
         g.computeBoundingBox();
         const p = g.getAttribute('position') as THREE.BufferAttribute;
@@ -22735,7 +22797,7 @@ function tapeKeep(): string {
         rows.push({ fam, i, part, n: p.count, idx: g.index ? g.index.count : 0, nan,
           min: bb ? [+bb.min.x.toFixed(2), +bb.min.y.toFixed(2), +bb.min.z.toFixed(2)] : null,
           max: bb ? [+bb.max.x.toFixed(2), +bb.max.y.toFixed(2), +bb.max.z.toFixed(2)] : null,
-          count: (part === 'wood' ? t.wood : t.crown)?.count });
+          count: t.mesh.count });
       }
     });
   }

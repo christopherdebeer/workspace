@@ -65,6 +65,18 @@ export function bushGeo(): THREE.BufferGeometry {
   g.translate(0, 0.6, 0);
   return g;
 }
+/** THE SWARD'S SHRUB: knee-high, two blobs leaning on each other, the thing
+ *  that stands between the flowers and the trees. Sized to one metre so the
+ *  sward can scale it from ankle scrub to a small bush. */
+export function shrubGeo(): THREE.BufferGeometry {
+  const a = new THREE.IcosahedronGeometry(0.5, 0);
+  a.scale(1.15, 0.8, 1.0);
+  a.translate(-0.12, 0.42, 0.05);
+  const b = new THREE.IcosahedronGeometry(0.36, 0);
+  b.scale(1.0, 0.85, 1.1);
+  b.translate(0.3, 0.34, -0.14);
+  return mergeGeos([a, b]);
+}
 export function rockGeo(): THREE.BufferGeometry {
   const g = new THREE.IcosahedronGeometry(1, 0);
   g.scale(1.2, 0.6, 0.95);
