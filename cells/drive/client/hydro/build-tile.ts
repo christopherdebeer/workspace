@@ -464,6 +464,14 @@ function indexProfile(profile: Float32Array, widthM: number): ProfileIndex {
   }
   return { cell, minX, minZ, cols, buckets };
 }
+/** One 2×2-texel block's answer from the nearest-profile search: the segment
+ *  it found, from which every texel in the block derives its own distance,
+ *  side and station exactly (a straight segment projects), so the search
+ *  runs a quarter as often and the centreline seam stays where it is. */
+interface BlockHit {
+  px: number; pz: number; fx: number; fz: number;
+  energy: number; s: number; curvature: number; centreHalfW: number; levelM: number;
+}
 interface ProfileHit {
   distanceM: number;
   levelM: number;
@@ -636,20 +644,29 @@ function areaCoverageRaster(
   const counts = new Uint8Array(w * h);
   const X0 = xAt(ix0) - pixelX / 2, Z0 = zAt(iz0) - pixelZ / 2;
   const subW = pixelX / AREA_SS, subH = pixelZ / AREA_SS;
-  const rings: Float64Array[] = [];
-  for (const poly of geometry.polygons) { rings.push(poly.outer); for (const hole of poly.holes) rings.push(hole); }
+  // Only the edges that cross this raster's rows: a relation ring runs to
+  // thousands of points and this tile sees a few dozen of them. An edge to
+  // the LEFT or RIGHT of the raster still counts — even-odd parity needs it.
+  const Z1 = Z0 + h * pixelZ;
+  const ex0: number[] = [], ez0: number[] = [], ex1: number[] = [], ez1: number[] = [];
+  for (const poly of geometry.polygons) {
+    for (const ring of [poly.outer, ...poly.holes]) {
+      const n = ring.length >> 1;
+      for (let i = 0, j = n - 1; i < n; j = i++) {
+        const z0 = ring[j * 2 + 1], z1 = ring[i * 2 + 1];
+        if (Math.max(z0, z1) < Z0 || Math.min(z0, z1) > Z1 || z0 === z1) continue;
+        ex0.push(ring[j * 2]); ez0.push(z0); ex1.push(ring[i * 2]); ez1.push(z1);
+      }
+    }
+  }
   const xs: number[] = [];
   for (let sy = 0; sy < h * AREA_SS; sy++) {
     const zs = Z0 + (sy + 0.5) * subH;
     xs.length = 0;
-    for (const ring of rings) {
-      const n = ring.length >> 1;
-      for (let i = 0, j = n - 1; i < n; j = i++) {
-        const z0 = ring[j * 2 + 1], z1 = ring[i * 2 + 1];
-        if ((z0 > zs) === (z1 > zs)) continue;
-        const x0 = ring[j * 2], x1 = ring[i * 2];
-        xs.push(x0 + ((zs - z0) / (z1 - z0)) * (x1 - x0));
-      }
+    for (let e = 0; e < ex0.length; e++) {
+      const z0 = ez0[e], z1 = ez1[e];
+      if ((z0 > zs) === (z1 > zs)) continue;
+      xs.push(ex0[e] + ((zs - z0) / (z1 - z0)) * (ex1[e] - ex0[e]));
     }
     if (xs.length < 2) continue;
     xs.sort((a, b) => a - b);
@@ -665,6 +682,12 @@ function areaCoverageRaster(
   return out;
 }
 
+/** WHERE A BUILD GOES, cumulative across the session: the instrument for a
+ *  hydro build that costs more than its frame. Read via __hydro().buildProf. */
+export const HYDRO_BUILD_PROF = {
+  builds: 0, total: 0, max: 0, ocean: 0, analyse: 0, raster: 0, texels: 0, search: 0, sources: 0, rest: 0,
+  items: 0, areaItems: 0, flowingAreas: 0, searchTexels: 0, paints: 0,
+};
 export function buildHydroTile(
   input: HydroTileInput,
   registry: HydroBodyRegistry,
@@ -713,6 +736,26 @@ export function buildHydroTile(
   const xAt = (ix: number): number => input.bounds.minX + ((ix - gutter) + 0.5) * pixelX;
   const zAt = (iz: number): number => input.bounds.minZ + ((iz - gutter) + 0.5) * pixelZ;
 
+  // WHAT A BODY PAINTS IS THE SAME AT EVERY TEXEL — its priority, kind id,
+  // seed, turbidity, flags and flat wave scale were recomputed per paint,
+  // twelve thousand times for one wide river in one tile. Once per body.
+  interface BodyConsts { p: number; flowing: boolean; scaleFlat: number; kindId: number; seed: number; turb: number; flags: number }
+  const bodyConsts = new Map<HydroBody, BodyConsts>();
+  const constsOf = (body: HydroBody): BodyConsts => {
+    let c = bodyConsts.get(body);
+    if (!c) {
+      const flowing = FLOWING.has(body.kind);
+      const ws = waveScale(body.kind, body.fetchM, body.roughness);
+      c = {
+        p: priority(body.kind), flowing, scaleFlat: flowing ? Math.min(0.15, ws) : ws,
+        kindId: HYDRO_KIND_ID[body.kind],
+        seed: Math.round(clamp(body.seed, 0, 1) * 255), turb: Math.round(clamp(body.turbidity, 0, 1) * 255),
+        flags: (body.intermittent ? HydroFlags.Intermittent : 0) | (body.tidal ? HydroFlags.Tidal : 0) | (flowing ? HydroFlags.Flowing : 0),
+      };
+      bodyConsts.set(body, c);
+    }
+    return c;
+  };
   const paint = (
     ix: number,
     iz: number,
@@ -724,13 +767,16 @@ export function buildHydroTile(
     /** River space for this texel: [s, n, curvature, halfWidth]. Flowing
      *  paints without a spine get a legible fallback below. */
     river?: readonly [number, number, number, number],
+    /** The ground at this texel when the caller has already sampled it. */
+    groundM?: number,
   ): void => {
     if (amount <= 0.005 || ix < 0 || iz < 0 || ix >= width || iz >= height) return;
     const i = iz * width + ix;
-    const p = priority(body.kind);
+    const c = constsOf(body);
+    const p = c.p;
     if (rank[i] > p || (rank[i] === p && coverage[i] > amount)) return;
     rank[i] = p;
-    if (FLOWING.has(body.kind)) {
+    if (c.flowing) {
       const st = structureAt();
       if (river) {
         st[i * 4] = river[0]; st[i * 4 + 1] = river[1];
@@ -748,25 +794,25 @@ export function buildHydroTile(
     }
     coverage[i] = Math.max(coverage[i], amount);
     level[i] = levelM;
-    const ground = sampleElevation(input.elevation, input.bounds, xAt(ix), zAt(iz));
+    const ground = groundM ?? sampleElevation(input.elevation, input.bounds, xAt(ix), zAt(iz));
     depth[i] = Number.isFinite(ground) ? Math.max(options.minimumDepthM, levelM - ground) : options.minimumDepthM;
     flowX[i] = localFlow[0]; flowZ[i] = localFlow[1];
     fetch[i] = body.fetchM;
     // Flowing water's wave scale IS its reach energy — see profileEnergy.
     // Without a profile a flowing body stays calm rather than inheriting a
     // fetch-derived state it has no evidence for.
-    scale[i] = localEnergy !== undefined ? localEnergy
-      : FLOWING.has(body.kind) ? Math.min(0.15, waveScale(body.kind, body.fetchM, body.roughness))
-      : waveScale(body.kind, body.fetchM, body.roughness);
-    kind[i] = HYDRO_KIND_ID[body.kind];
-    seed[i] = Math.round(clamp(body.seed, 0, 1) * 255);
-    turbidity[i] = Math.round(clamp(body.turbidity, 0, 1) * 255);
-    flags[i] = (body.intermittent ? HydroFlags.Intermittent : 0)
-      | (body.tidal ? HydroFlags.Tidal : 0)
-      | (FLOWING.has(body.kind) ? HydroFlags.Flowing : 0);
+    scale[i] = localEnergy !== undefined ? localEnergy : c.scaleFlat;
+    kind[i] = c.kindId;
+    seed[i] = c.seed;
+    turbidity[i] = c.turb;
+    flags[i] = c.flags;
     bodyIds.add(body.id);
   };
 
+  const P = HYDRO_BUILD_PROF;
+  const T0 = performance.now();
+  let tMark = T0;
+  const lap = (k: 'ocean' | 'analyse' | 'sources' | 'rest'): void => { const now = performance.now(); P[k] += now - tMark; tMark = now; };
   const ocean = registry.get('hydro:ocean');
   // Which texels the CURRENT coverage actually answered — ocean or dry. The
   // rest are unknown and keep the previous field's verdict below.
@@ -839,6 +885,7 @@ export function buildHydroTile(
     }
   }
 
+  lap('ocean');
   const resolved: Array<ResolvedHydroFeature & {
     energy?: Float32Array;
     spine?: ProfileSpine;
@@ -871,16 +918,38 @@ export function buildHydroTile(
       energy: flowing && profile ? profileEnergy(profile) : undefined,
     });
   }
+  lap('analyse');
   for (const item of resolved) {
+    P.items++;
     const fb = featureBounds(item.feature);
     const ix0 = clamp(Math.floor((fb.minX - input.bounds.minX) / pixelX) + gutter - 1, 0, width - 1);
     const ix1 = clamp(Math.ceil((fb.maxX - input.bounds.minX) / pixelX) + gutter + 1, 0, width - 1);
     const iz0 = clamp(Math.floor((fb.minZ - input.bounds.minZ) / pixelZ) + gutter - 1, 0, height - 1);
     const iz1 = clamp(Math.ceil((fb.maxZ - input.bounds.minZ) / pixelZ) + gutter + 1, 0, height - 1);
     const lineWidth = item.feature.geometry.type === 'line' ? item.feature.geometry.widthM : 0;
+    const tRaster = performance.now();
     const areaCov = item.feature.geometry.type === 'area'
       ? areaCoverageRaster(item.feature.geometry, ix0, ix1, iz0, iz1, xAt, zAt, pixelX, pixelZ) : null;
     const covW = ix1 - ix0 + 1;
+    const tTexels = performance.now();
+    P.raster += tTexels - tRaster;
+    if (areaCov) P.areaItems++;
+    if (areaCov && FLOWING.has(item.feature.kind)) P.flowingAreas++;
+    // THE SEARCH'S CANDIDATES ARE CHOSEN ONCE. The nearest-profile search
+    // below ran every profile in the tile for every wet texel of a flowing
+    // area: a 300 m river relation over a ~9 m field is thousands of wet
+    // texels, and a coastal tile holds a dozen streams — 292 ms a build on
+    // the phone (De Hoop, measured by the telemetry), where the search is
+    // the only thing a relation added to a build. Only a profile whose
+    // reach touches the area is a candidate, and each is skipped at a
+    // texel its bounds cannot reach.
+    const SEARCH_REACH = 420;
+    const cands = FLOWING.has(item.feature.kind) && !item.spine && item.feature.geometry.type === 'area'
+      ? resolved.filter((c) => c.profile && c.spine && c.index && boundsIntersect(featureBounds(c.feature), fb, SEARCH_REACH))
+        .map((c) => ({ c, b: featureBounds(c.feature) }))
+      : [];
+    const covH = iz1 - iz0 + 1, bw = (covW + 1) >> 1;
+    const blockHits: Array<BlockHit | null | undefined> = cands.length ? new Array<BlockHit | null | undefined>(bw * ((covH + 1) >> 1)) : [];
     for (let iz = iz0; iz <= iz1; iz++) for (let ix = ix0; ix <= ix1; ix++) {
       const x = xAt(ix), z = zAt(iz);
       if (item.index && item.profile && item.spine) {
@@ -943,45 +1012,61 @@ export function buildHydroTile(
       // river as a directionless, synchronously heaving lake.
       if (FLOWING.has(item.feature.kind) && !item.spine
         && item.feature.geometry.type === 'area') {
-        let best: ProfileHit | null = null;
-        let bestItem: typeof resolved[number] | undefined;
-        for (const candidate of resolved) {
-          if (!candidate.profile || !candidate.spine || !candidate.index) continue;
-          const hit = sampleProfileAt(
-            candidate.profile, candidate.energy, candidate.spine,
-            candidate.index, x, z, 3,
-          );
-          if (hit && hit.distanceM < (best?.distanceM ?? 420)) {
-            best = hit;
-            bestItem = candidate;
+        const tSearch = performance.now();
+        P.searchTexels++;
+        const bk = ((iz - iz0) >> 1) * bw + ((ix - ix0) >> 1);
+        let hb = blockHits[bk];
+        if (hb === undefined) {
+          let best: ProfileHit | null = null;
+          let bestItem: typeof resolved[number] | undefined;
+          for (const { c: candidate, b } of cands) {
+            if (x < b.minX - SEARCH_REACH || x > b.maxX + SEARCH_REACH || z < b.minZ - SEARCH_REACH || z > b.maxZ + SEARCH_REACH) continue;
+            const hit = sampleProfileAt(
+              candidate.profile as Float32Array, candidate.energy, candidate.spine as ProfileSpine,
+              candidate.index as ProfileIndex, x, z, 3,
+            );
+            if (hit && hit.distanceM < (best?.distanceM ?? SEARCH_REACH)) {
+              best = hit;
+              bestItem = candidate;
+            }
           }
+          if (best && bestItem) {
+            const bedFoot = sampleElevation(input.elevation, input.bounds, best.px, best.pz);
+            hb = {
+              px: best.px, pz: best.pz, fx: best.fx, fz: best.fz,
+              energy: best.energy, s: (bestItem.s0 ?? 0) + best.s, curvature: best.curvature,
+              centreHalfW: bestItem.feature.geometry.type === 'line' ? bestItem.feature.geometry.widthM * 0.5 : 4,
+              levelM: Number.isFinite(bedFoot) ? Math.min(best.levelM, bedFoot + FLOWING_NOMINAL_DEPTH_M) : best.levelM,
+            };
+          } else hb = null;
+          blockHits[bk] = hb;
         }
-        if (best && bestItem) {
-          localFlow = [best.fx, best.fz];
-          localEnergy = best.energy;
-          const centreHalfW = bestItem.feature.geometry.type === 'line'
-            ? bestItem.feature.geometry.widthM * 0.5 : 4;
-          // Preserve metres across the whole polygon even where it is wider
-          // than the nominal centreline way.
-          const chartHalfW = Math.max(centreHalfW, best.distanceM / 1.2, 1);
+        if (hb) {
+          const cross = hb.fx * (z - hb.pz) - hb.fz * (x - hb.px);
+          const dist = Math.abs(cross);
+          const chartHalfW = Math.max(hb.centreHalfW, dist / 1.2, 1);
+          localFlow = [hb.fx, hb.fz];
+          localEnergy = hb.energy;
           river = [
-            (bestItem.s0 ?? 0) + best.s,
-            clamp((best.side * best.distanceM) / chartHalfW, -1.25, 1.25),
-            best.curvature,
+            hb.s + (x - hb.px) * hb.fx + (z - hb.pz) * hb.fz,
+            clamp(((cross >= 0 ? 1 : -1) * dist) / chartHalfW, -1.25, 1.25),
+            hb.curvature,
             chartHalfW,
           ];
-          const bedFoot = sampleElevation(input.elevation, input.bounds, best.px, best.pz);
-          levelM = Number.isFinite(bedFoot)
-            ? Math.min(best.levelM, bedFoot + FLOWING_NOMINAL_DEPTH_M) : best.levelM;
+          levelM = hb.levelM;
         }
+        P.search += performance.now() - tSearch;
       }
       paint(
         ix, iz, amount, item.body,
         levelM ?? bodyLevel(item.body, item.profile, x, z, bed),
-        localFlow, localEnergy, river,
+        localFlow, localEnergy, river, bed,
       );
+      P.paints++;
     }
+    P.texels += performance.now() - tTexels;
   }
+  tMark = performance.now();
 
   // Extend body parameters outside the visible mask. The water mesh is much
   // coarser than this field, so its dry vertices still need the elevation of
@@ -989,6 +1074,7 @@ export function buildHydroTile(
   const sources = new Uint8Array(count);
   for (let i = 0; i < count; i++) sources[i] = coverage[i] > 0.005 && kind[i] !== 0 ? 1 : 0;
   const nearest = nearestSourceMap(sources, width, height);
+  lap('sources');
   for (let i = 0; i < count; i++) {
     if (sources[i] || nearest[i] < 0) continue;
     const n = nearest[i];
@@ -1062,6 +1148,8 @@ export function buildHydroTile(
     material[i * 4 + 3] = flags[i];
   }
 
+  lap('rest');
+  { const d = performance.now() - T0; P.builds++; P.total += d; if (d > P.max) P.max = d; }
   return {
     key: input.key,
     revision: input.revision,

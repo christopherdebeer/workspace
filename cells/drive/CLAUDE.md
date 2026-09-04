@@ -1070,6 +1070,28 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   as `polygons` in local metres. `devtools/osm-rings.test.mjs` and
   `devtools/inland-water.test.mjs` are the unit tests.
 
+- **A HYDRO BUILD IS PROFILED, AND A WIDE RIVER WAS 292 MS OF IT.** The
+  third device report (De Hoop / Breede River, 160 s): hydroBuild 292 ms a
+  call, 332 calls, 61% of wall, every slow frame 350–600 ms. The v4 tiles
+  had just brought the Breede River `water=river` relation (1830 points,
+  300 m wide) into every tile along it, and the flowing-area path — which
+  had never run before, since relations were never fetched — searched every
+  profile in the tile for every wet texel: 12k texels × candidates ×
+  `sampleProfileAt` at 3 search cells. Reproduced OFFLINE to the millisecond
+  (281 ms) with `node_modules/.cache/hydrobench.ts`: the real v4 tile JSON,
+  a synthetic DEM, `analyseHydroTile` + registry + `buildHydroTile`, and
+  `HYDRO_BUILD_PROF` (also `__hydro().buildProf` on a device) split by
+  phase. The harness could not: Overpass was refusing the fills. Three
+  cuts, measured on the same bench: candidates chosen once per area by
+  reach and skipped per texel by bounds; the search once per 2×2 texel
+  block with each texel's distance, side and station derived from the
+  block's segment (`BlockHit`, the centreline seam stays exact); the
+  scanline raster walking only the edges that cross the tile's rows; and
+  `paint` reading per-body constants once (`constsOf`) with the caller's
+  ground sample. Worst tile 281 → 42 ms, typical 10–20 ms. The benchmark is
+  the tool for the next one of these: a phone number with no harness
+  reproduction is a bench run away.
+
 - **iOS DITHERS THE COVER CLASSES; THE DECODE SNAPS THEM.** A field query
   at George read "CLASS 9 ×6, FOREST ×3" off one z12 cover raster that
   holds nothing but exact classes (verified byte for byte through the

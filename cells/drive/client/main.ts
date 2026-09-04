@@ -34,6 +34,7 @@ import {
 import { RoadProfileWorker } from './roadprofile-worker';
 import { inlandComponents, inlandMask, maskSignature } from './inland-water';
 import { pointInPolygon } from './hydro/geometry';
+import { HYDRO_BUILD_PROF } from './hydro/build-tile';
 import { createTerrainKernel, type HeightTile, type CellTris, type StripLike, type BreakLine, type TerrainStore, type CarveLog, type MmPt, type CoverTile } from './terrain-kernel';
 import { TerrainWorker, type TerrainJob, type TerrainReply } from './terrain-worker';
 // THE TERRAIN KERNEL, instantiated once for the synchronous path and the
@@ -1474,6 +1475,13 @@ const oceanMasks = new Map<string, { grid: MaskGrid; stats: MaskStats; datum: nu
  */
 const COVER_WATER_MIN_PX = 4;                    // a lone 38 m pixel is a shadow, not a pond
 interface CoverHydroRec { slots: string[]; sig: number; pixels: number }
+/** A component's id is its SHAPE, not its position in the trace: a retrace
+ *  that leaves a lake alone keeps its feature, its body and its level, and
+ *  dirties nothing. Without this every mask rebuild (each DEM tile that
+ *  lands moves the flood a little) replaced every feature of the cover tile
+ *  and rebuilt every hydro tile under it. */
+const coverCompId = (key: string, c: { minX: number; minY: number; maxX: number; maxY: number; pixels: number }): string =>
+  `landcover:${key}:${c.minX},${c.minY},${c.maxX},${c.maxY},${c.pixels}`;
 const coverHydro = new Map<string, CoverHydroRec>();
 let coverHydroTraceMs = 0, coverHydroTraces = 0;
 const FLOWING_KINDS = new Set<string>(['river', 'stream', 'canal']);
@@ -1507,18 +1515,21 @@ function coverWaterFeed(key: string, t: CoverTile, ocean: MaskGrid, elevation?: 
   const had = coverHydro.get(key);
   if (had && had.sig === sig) return;
   const t0 = performance.now();
-  const drop = (rec: CoverHydroRec): void => {
+  const drop = (rec: CoverHydroRec, keep?: Set<string>): void => {
     for (const slot of rec.slots) {
+      if (keep?.has(slot)) continue;
       const e = hydroFeats.get(slot);
       if (!e) continue;
       hydroFeats.delete(slot);
       hydroDirtyBox(e.minX, e.minZ, e.maxX, e.maxZ);
     }
   };
-  if (had) drop(had);
   // Cover tiles that left the ring take their water with them.
   for (const [k, rec] of coverHydro) if (k !== key && !coverTiles.has(k)) { drop(rec); coverHydro.delete(k); }
   const comps = inlandComponents(mask, 256, 256, COVER_WATER_MIN_PX, 200, elevation);
+  const wanted = new Set<string>();
+  for (const c of comps) if (!(elevation && c.known === 0)) wanted.add(`cover:${coverCompId(key, c)}`);
+  if (had) drop(had, wanted);
   const toX = (px: number): number => t.xs + (px / 256) * t.w;
   const toZ = (pz: number): number => t.zs + (pz / 256) * t.h;
   const ring = (r: number[]): Float64Array => {
@@ -1532,15 +1543,16 @@ function coverWaterFeed(key: string, t: CoverTile, ocean: MaskGrid, elevation?: 
     if (hydroFeats.size >= HYDRO_FEAT_CAP) { hydroFeatsFull++; break; }
     const c = comps[i];
     if (elevation && c.known === 0) continue;         // no DEM under it yet: nothing to build on
+    const id = coverCompId(key, c);
+    const slot = `cover:${id}`;
+    if (hydroFeats.has(slot)) { slots.push(slot); pixels += c.pixels; continue; }   // unchanged: keep it, dirty nothing
     const outer = ring(c.outer), holes = c.holes.map(ring);
     const minX = toX(c.minX), maxX = toX(c.maxX + 1), minZ = toZ(c.minY), maxZ = toZ(c.maxY + 1);
-    const id = `landcover:${key}:${i}`;
     const kind = coverFlowingCrosses(outer, minX, minZ, maxX, maxZ) ? 'river' : 'lake';
     const f: HydroFeature = {
       id, source: 'landcover', kind, intermittent: false, tidal: false,
       geometry: { type: 'area', polygons: [{ outer, holes }] },
     };
-    const slot = `cover:${id}`;
     hydroFeats.set(slot, { f, minX, minZ, maxX, maxZ });
     slots.push(slot);
     pixels += c.pixels;
@@ -23571,6 +23583,12 @@ function truckSpec(): Record<string, number> {
     // `fedMax: 0` has a store filling and a feed that never sees it, which
     // looks identical from the seat to having no rivers at all.
     feats: hydroFeats.size, featsFull: hydroFeatsFull, hydroDirty: hydroDirty.size,
+    buildProf: (() => {
+      const P = HYDRO_BUILD_PROF, b = Math.max(1, P.builds);
+      const ms = (v: number): number => +(v / b).toFixed(1);
+      return { builds: P.builds, meanMs: ms(P.total), maxMs: Math.round(P.max), ocean: ms(P.ocean), analyse: ms(P.analyse), raster: ms(P.raster), texels: ms(P.texels), search: ms(P.search), sources: ms(P.sources), rest: ms(P.rest),
+        itemsPerBuild: +(P.items / b).toFixed(1), areaItems: +(P.areaItems / b).toFixed(1), flowingAreas: +(P.flowingAreas / b).toFixed(1), searchTexels: Math.round(P.searchTexels / b), paints: Math.round(P.paints / b) };
+    })(),
     landcover: (() => {
       let feats = 0, pixels = 0, rivers = 0, pts = 0, maxPts = 0;
       for (const rec of coverHydro.values()) { feats += rec.slots.length; pixels += rec.pixels; }
