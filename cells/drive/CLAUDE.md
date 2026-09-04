@@ -1070,6 +1070,29 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   as `polygons` in local metres. `devtools/osm-rings.test.mjs` and
   `devtools/inland-water.test.mjs` are the unit tests.
 
+- **iOS DITHERS THE COVER CLASSES; THE DECODE SNAPS THEM.** A field query
+  at George read "CLASS 9 ×6, FOREST ×3" off one z12 cover raster that
+  holds nothing but exact classes (verified byte for byte through the
+  cache, at z12, z10 and z8). Safari colour-manages the greyscale PNG
+  despite `RAW_BITMAP`, with dither, so one class comes back as two
+  values — and every reader compares exactly (`coverWater` is `=== 80`),
+  so a dithered 79 was dry land. `snapCoverClass` in `loadCoverTile`'s
+  decode takes the nearest valid class within 2; `__cover().snapped`
+  counts the pixels that needed it, and a non-zero count is the tell for
+  a colour-managing browser. If the DEM ever looks noisy on a phone, the
+  same mechanism on terrarium's G channel is ±1 m and worth a probe.
+
+- **A STREAM NARROWER THAN A TEXEL STILL DRAWS.** The wooded valley east
+  of George has two unnamed `waterway=stream` ways in its tile and had no
+  water in the hydro field: a 4 m default width against a ~9 m texel
+  peaked at 0.66 coverage on the centreline and the shore fade took the
+  rest. `drawnHalfW` in build-tile makes a line body's coverage half-width
+  at least 0.8 × antialias, and the profile index reaches as far as the
+  drawn width; the structure's cross-channel chart keeps the tagged width.
+  The cover cannot help there — under a canopy WorldCover says forest,
+  not water — so the streams are the only source, and OSM widths are what
+  they are.
+
 - **ONE HEAVY JOB A FRAME.** `frameHeavyMs()` sums what this frame has
   already paid to hydroBuild, terrainApply, roadBuild and swardFrame (read
   from the profiler's `curFrame`, which is why the wrappers must stay).
