@@ -42,7 +42,7 @@ import { TerrainWorker, type TerrainJob, type TerrainReply } from './terrain-wor
 const K = createTerrainKernel();
 const { BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, SEA_BED, AREA_MIX, refineCost, plainCost, carveCost, stripFloor, mmKey, mmIndex, mmNear, onTileEdge, plainLattice, cellTable } = K;
 import { createOverlays } from './overlays';
-import { createSplash } from './splash';
+import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { facade } from './facade';
 import { startLab } from './labs';
@@ -21380,12 +21380,79 @@ const SPLASH_BODY: Record<string, number> = {
   pond: 0x6f9888, basin: 0x6f9888, river: 0x6d9890, stream: 0x6d9890,
   canal: 0x6d9490, wetland: 0x7a8c70,
 };
-/** Is there DRAWN water here, and what is it — the one gate every splash
- *  passes through, and the tint it comes out with. */
-function splashWet(x: number, z: number): { levelM: number; depthM: number; kind: string } | null {
+/**
+ * ── A WATER EFFECT IS DRAWN ON WATER THE TRUCK IS IN, OR NOT AT ALL ──
+ *
+ * Every sheet and every droplet stands on `restingLevelM` — the surface of
+ * whatever body the field holds at that x,z — and nothing used to ask
+ * WHERE that surface was. Two ways that goes wrong, both photographed at
+ * Obergoms at midnight: a body whose resolved level sits above the road (a
+ * river in a steep valley, a level carried in from another tile) hangs the
+ * splash in the sky above the truck; and a bridge over a river answers with
+ * the water fifteen metres below, so a puddle on the deck sprays down
+ * there. The sheets were the right size — two metres — in the wrong place,
+ * which is why they read as a curtain.
+ *
+ * So the gate is geometric, and it is the only one: there must be real
+ * water here (a surface standing above the ground, not merely a covered
+ * texel — the field's own depth channel is floored at the build's minimum,
+ * so it cannot answer this), and the truck must be IN it — the waterline
+ * within a hull's reach of the chassis, above the wheels and below the
+ * roof. Water the truck is not in is somebody else's water, and nothing is
+ * thrown off it.
+ */
+const WETFX_MIN_DEPTH = 0.03;   // a surface this far over the bed is water
+const WETFX_LIFT = 1.3;         // waterline at most this far ABOVE the chassis: a deep ford
+const WETFX_DROP = 1.6;         // and at most this far below it: wheels in the shallows
+const WETFX_ROOF = 1.7;         // the truck's own roof over the chassis reference
+/** The most water a truck throws: a metre of sheet over the line it stands on. */
+const WETFX_SHEET_MAX = 1.1;
+/** The chassis rides its springs, so a sheet fitted to the roof at the top of
+ *  a bob pokes over it once the truck settles — measured at 14cm mid-ford.
+ *  The fit keeps this much back, against the waterline, which does not bob. */
+const WETFX_BOB = 0.2;
+interface WetFx { levelM: number; levelY: number; depthM: number; kind: string }
+let wetfxWhy = 'idle';
+function splashWet(x: number, z: number): WetFx | null {
   const w = hydroSys?.sampleRestingSurface(x, z);
-  if (!w) return null;
-  return { levelM: w.restingLevelM, depthM: w.depthM, kind: w.kind };
+  if (!w) { wetfxWhy = 'no-field'; return null; }
+  const levelY = w.restingLevelM - baseElev;
+  // Level over the DRAWN ground, the same honest depth waterInfoAt prefers.
+  const bed = hasHeight(x, z) ? sampleHeight(x, z) : NaN;
+  const depthM = Number.isFinite(bed) ? levelY - bed : w.depthM;
+  if (depthM < WETFX_MIN_DEPTH) { wetfxWhy = 'dry'; return null; }
+  if (levelY > bodyY + WETFX_LIFT) { wetfxWhy = 'perched'; return null; }
+  if (levelY < bodyY - WETFX_DROP) { wetfxWhy = 'below'; return null; }
+  wetfxWhy = 'wet';
+  return { levelM: w.restingLevelM, levelY, depthM, kind: w.kind };
+}
+/** THE RULE, MEASURED: where the gate stands, and whether any live sheet is
+ *  over the roof of the truck that threw it or off the water it stands on. */
+(window as unknown as { __wetfx?: object }).__wetfx = (): object => {
+  const roof = bodyY + WETFX_ROOF;
+  const sheets = splash.peek();
+  const w = splashWet(state.x, state.z);
+  // The RAW answer beside the verdict: a refusal has to say what it refused,
+  // or 'perched' and 'no water here at all' look the same from the seat.
+  const raw = hydroSys?.sampleRestingSurface(state.x, state.z);
+  const bed = hasHeight(state.x, state.z) ? sampleHeight(state.x, state.z) : NaN;
+  return {
+    why: wetfxWhy, wade: +rigWadeM.toFixed(3), bodyY: +bodyY.toFixed(2), roof: +roof.toFixed(2),
+    raw: raw ? { level: +(raw.restingLevelM - baseElev).toFixed(2), bed: Number.isFinite(bed) ? +bed.toFixed(2) : null,
+      over: Number.isFinite(bed) ? +(raw.restingLevelM - baseElev - bed).toFixed(2) : null,
+      fieldDepth: +raw.depthM.toFixed(2), kind: raw.kind } : null,
+    level: w ? +w.levelY.toFixed(2) : null, depth: w ? +w.depthM.toFixed(2) : null, kind: w?.kind ?? null,
+    sheets: sheets.length,
+    maxTop: sheets.length ? +Math.max(...sheets.map((p) => p.top)).toFixed(2) : null,
+    overRoof: sheets.filter((p) => p.top > roof + 0.01).length,
+    aboveTruck: sheets.filter((p) => p.y > roof).length,
+  };
+};
+/** A sheet standing on `levelY` may not reach over the truck's roof. */
+function splashFit(size: number, levelY: number): number {
+  const ceiling = Math.min(bodyY + WETFX_ROOF, levelY + WETFX_SHEET_MAX);
+  const headroom = Math.max(0.15, ceiling - levelY - WETFX_BOB);
+  return Math.min(size, headroom / SPLASH_TALL_MAX);
 }
 /** The body's own water, lit by the sky. A sheet thrown at midnight is dark
  *  water — the same rule the foam in the water shader lives by, and the same
@@ -21416,10 +21483,10 @@ function splashEntry(impulse: number, depthM: number): void {
   for (const side of [-1, 1]) {
     splash.emit({
       x: state.x + cosH * 1.9 + sinH * side * 1.05,
-      y: w.levelM - baseElev,
+      y: w.levelY,
       z: state.z + sinH * 1.9 - cosH * side * 1.05,
       dx: cosH * 0.4 + sinH * side, dz: sinH * 0.4 - cosH * side,
-      size: clamp(0.45 + impulse * 0.85 + depthM * 0.35, 0.45, 1.5),
+      size: splashFit(clamp(0.45 + impulse * 0.85 + depthM * 0.35, 0.45, 1.5), w.levelY),
       lean: 0.35,
       tint,
       life: 0.3 + Math.random() * 0.1,
@@ -21449,12 +21516,12 @@ function splashBow(now: number, speed: number, depthM: number): void {
   const power = clamp((v * v) / 90 * clamp(depthM / 0.5, 0.25, 1.6), 0.1, 1.6);
   splash.emit({
     x: state.x + cosH * 1.7 + sinH * side * 1.15,
-    y: w.levelM - baseElev,
+    y: w.levelY,
     z: state.z + sinH * 1.7 - cosH * side * 1.15,
     // Out and slightly forward: the sheet peels away from the hull.
     dx: sinH * side * 0.85 + cosH * 0.5,
     dz: -cosH * side * 0.85 + sinH * 0.5,
-    size: clamp(0.35 + power * 0.75, 0.35, 1.15),
+    size: splashFit(clamp(0.35 + power * 0.75, 0.35, 1.15), w.levelY),
     lean: 1,
     tint,
     life: 0.3 + Math.random() * 0.12,
@@ -32673,12 +32740,17 @@ function tick(now: number): void {
         // So: gated on the DRAWN surface, born at the WATERLINE rather than
         // at the wheel's contact patch under it, and thrown out along the
         // hull rather than straight up.
+        // A PUDDLE'S SURFACE IS THE ROAD, NOT THE RIVER UNDER THE BRIDGE.
+        // The gate answers for drawn bodies; standing rain has no body, so
+        // it sprays off the contact patch it is actually lying on. Either
+        // way the droplets are born on a surface the truck is touching.
         const spray = splashWet(wxw, wzw);
-        if (spray) {
+        const sprayY = spray ? spray.levelY : pud >= 0.35 ? contacts[i] : null;
+        if (sprayY !== null) {
           const side = (Math.random() < 0.5 ? 1 : -1) * (1.0 + Math.random() * 0.5);
-          emitDust(wxw + cosH * side * 0.4, spray.levelM - baseElev, wzw + sinH * side * 0.4,
+          emitDust(wxw + cosH * side * 0.4, Math.min(sprayY, bodyY + WETFX_ROOF), wzw + sinH * side * 0.4,
             cosH * side * 1.6 - sinH * v * 0.12, sinH * side * 1.6 + cosH * v * 0.12, true,
-            splashRgb(spray.kind));
+            splashRgb(spray?.kind ?? 'rain'));
         }
       } else if (Math.random() < 0.1) audio.stone(); // the pings ride the same plume
 
@@ -38030,7 +38102,7 @@ function setClean(on: boolean): void {
     max: Number.isFinite(max) ? +max.toFixed(3) : null };
 };
 (window as unknown as { __splash?: object }).__splash = (): object => ({
-  wade: +rigWadeM.toFixed(3), sheets: splash.alive(),
+  wade: +rigWadeM.toFixed(3), sheets: splash.alive(), wetfx: wetfxWhy,
   lastPlow: +lastPlow.toFixed(3), lastPlowAtKmh: +lastPlowKmh.toFixed(1),
   wet: !!splashWet(state.x, state.z),
 });

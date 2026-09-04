@@ -1478,6 +1478,27 @@ scale 3, 40 m and 105 m cameras:
   a few hundred instances. No GPU sward, no field, no shrubs. `?shrub=0`;
   `__shrubs()`.
 
+- **A WATER EFFECT IS DRAWN ON WATER THE TRUCK IS IN, OR NOT AT ALL.**
+  Every sheet and droplet stands on the `restingLevelM` of whatever body the
+  field holds at that x,z, and nothing used to ask WHERE that surface was.
+  Photographed at Obergoms at midnight as a pale curtain hanging in the sky
+  over the road: the sheets were the right size (two metres) standing on a
+  river surface three metres above the truck. Surveyed there with a settled
+  suspension, 9 of 20 of that river's own texels resolve their level ABOVE
+  the chassis and 3 hold no depth over the drawn ground at all — so half the
+  emissions were wrong. `splashWet` is now the one geometric gate every
+  effect passes: real water (level over the DRAWN ground, because the
+  field's depth channel is floored at the build's minimum and cannot answer
+  it) and the truck IN it — the waterline within `WETFX_LIFT` above the
+  chassis and `WETFX_DROP` below. `splashFit` then keeps a sheet under the
+  lower of the truck's roof and a metre over the waterline, less a bob
+  margin: fitting to the roof alone left sheets 14cm over it once the
+  springs settled, because the chassis moves and the waterline does not. A
+  puddle has no body, so puddle spray is born on the contact patch instead
+  of on the river under the bridge. `__wetfx()` reports the verdict, the raw
+  sample beside it, and whether any live sheet is over the roof — that pair
+  is what tells a perched body from no water at all.
+
 **The rule that keeps a lab honest: it imports the SAME modules the game runs.**
 A lab that reimplements what it is inspecting proves nothing about what ships.
 This is why the façade shader became `client/facade.ts`, the plants became

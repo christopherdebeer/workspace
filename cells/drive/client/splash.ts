@@ -41,6 +41,12 @@ import * as THREE from 'three';
  * the throw direction. Nothing in here knows what a truck is.
  */
 
+/**
+ * The tallest the shader ever draws a sheet, as a multiple of its `size` —
+ * the peak of the growth curve in the vertex shader below. The caller needs
+ * it to keep a splash under the roof of whatever made it.
+ */
+export const SPLASH_TALL_MAX = 1.45;
 /** Sheets live and die fast; a pool this size never ran dry at speed. */
 const N = 28;
 /** Animation frames. Five is enough to read as drawn and few enough that each
@@ -71,6 +77,9 @@ export interface SplashSystem {
   step(dt: number, camera: THREE.Camera): void;
   /** Live sheets — the harness asserts on this. */
   alive(): number;
+  /** Where the live sheets stand and how big they are, so a caller can prove
+   *  none of them is over the thing that threw it. */
+  peek(): Array<{ y: number; size: number; top: number }>;
   dispose(): void;
 }
 
@@ -236,6 +245,14 @@ export function createSplash(): SplashSystem {
       let n = 0;
       for (let i = 0; i < N; i++) if (iLife[i] > 0) n++;
       return n;
+    },
+    peek() {
+      const out: Array<{ y: number; size: number; top: number }> = [];
+      for (let i = 0; i < N; i++) {
+        if (iLife[i] <= 0) continue;
+        out.push({ y: iPos[i * 3 + 1], size: iSize[i], top: iPos[i * 3 + 1] + iSize[i] * SPLASH_TALL_MAX });
+      }
+      return out;
     },
     dispose() { geo.dispose(); material.dispose(); },
   };
