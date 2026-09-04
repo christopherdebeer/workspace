@@ -1092,6 +1092,26 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   the tool for the next one of these: a phone number with no harness
   reproduction is a bench run away.
 
+- **A FOOTBRIDGE IS A BRIDGE, AND A COVERED BRIDGE IS STILL ONE.** Reported
+  from the A6 at Rubigen (`?lat=46.88905&lon=7.54015&h=345`): a dark slab
+  across both carriageways. Three things stood between a `highway=footway
+  bridge=yes layer=1 covered=yes` way and a lift over the motorway, found
+  one at a time with `__fragwhy` (which now logs `2d-chord` and `2e-lift`
+  stages), `__lifts` and `__hintsAt`: tracks took mode `'none'` whatever
+  their tags said (renderWays), so no chord and no lift; `deckBelow` in
+  roadsolve measured the distance to chain STATIONS twelve metres apart
+  with a footway's 2.25 m radius, so a narrow bridge crossing a motorway
+  almost never found the deck beneath — it projects onto the chain segment
+  now, as `hintAt` does, and the lift samples every three metres along
+  each leg, clear of `PORTAL_R` (8 m) of either portal so a river bridge
+  does not lift off its own approach; and `canopy` (covered=yes) skipped
+  the chord block — right for a Chapman's gallery at grade, wrong for a
+  roofed bridge, which now chords and lifts and wears its roof on the
+  lifted deck. After: the covered footbridge lifts 4.74 m over the A6 with
+  its portals raised 3.4 / 3.0 m; the plain footbridge beside it 0.12 m.
+  Verifying any of this takes a 300 s harness run at the spot — the roads
+  there take that long to stream through the curl relay.
+
 - **THERE IS NO ROAD LOD; THE "LOD AHEAD" WAS THE TEXTURE FILTER.** Asked
   from the seat what LOD the ribbons have: none — a ribbon is built once at
   full detail. The radii that DO change with distance are shadows (80/110/

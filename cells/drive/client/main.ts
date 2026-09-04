@@ -12412,7 +12412,14 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
   // walk already dodged must not become phantom tunnels.
   const prof = alg.slice();
   const runs: Array<[number, number]> = [];
-  if (mode !== 'none' && n > 4 && !canopy) {
+  // A COVERED BRIDGE IS STILL A BRIDGE. `canopy` (covered=yes, or an
+  // avalanche gallery) means "profile on the ground and wear a roof", which
+  // is right for Chapman's galleries and wrong for a roofed footbridge: the
+  // covered footway over the A6 at Rubigen skipped the chord and the lift
+  // here, and its roof and walls stood across both carriageways at grade —
+  // the obstruction reported from the seat. The chord and the lift run for
+  // every bridge; the roof then rides the lifted deck.
+  if (mode !== 'none' && n > 4 && (!canopy || mode === 'bridge')) {
     if (mode === 'tunnel' || mode === 'bridge') runs.push([0, n - 1]);
     else {
       const avg = (src: number[]): number[] => src.map((_, i) => {
@@ -12453,6 +12460,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
         }
       }
     }
+    stage('2d-chord', prof);
     // ── A FLYOVER CLEARS THE ROAD IT CROSSES ──
     //
     // The chord above is portal to portal, and the portals anchor to the
@@ -12495,9 +12503,33 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
       // span to scan and keeps its chord, which is right for a culvert.
       const chord = prof.slice();
       for (const [a, b] of runs) {
-        for (let i = a + 1; i <= b - 1; i++) {
-          const below = solver.deckBelow(dense[i][0], dense[i][1], layer, width / 2 + 1.5);
-          if (below !== null && below + BRIDGE_CLEAR > prof[i]) prof[i] = below + BRIDGE_CLEAR;
+        // ALONG THE SPAN, NOT ONLY AT ITS STATIONS. A bridge's own stations
+        // are twelve metres apart too, so the crossing over the road beneath
+        // fell between them for anything narrow: the decks are read every
+        // three metres along each leg and the higher answer holds both ends.
+        // …and never within PORTAL_R of a portal, where the only lower deck
+        // is the bridge's own approach: sampled up to the portal, the
+        // Hunzikenbrücke — a river bridge with nothing beneath it — lifted
+        // 8.6 m off its own abutments.
+        const PORTAL_R = 8;
+        const [pax, paz] = dense[a], [pbx, pbz] = dense[b];
+        const nearPortal = (x: number, z: number): boolean =>
+          Math.hypot(x - pax, z - paz) < PORTAL_R || Math.hypot(x - pbx, z - pbz) < PORTAL_R;
+        for (let i = a + 1; i <= b; i++) {
+          const [x0, z0] = dense[i - 1], [x1, z1] = dense[i];
+          const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, z1 - z0) / 3));
+          let below: number | null = null;
+          for (let k = 0; k <= steps; k++) {
+            const t = k / steps;
+            const x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
+            if (nearPortal(x, z)) continue;
+            const v = solver.deckBelow(x, z, layer, width / 2 + 1.5);
+            if (v !== null && (below === null || v > below)) below = v;
+          }
+          if (below === null) continue;
+          const want = below + BRIDGE_CLEAR;
+          if (i - 1 > a && want > prof[i - 1]) prof[i - 1] = want;
+          if (i < b && want > prof[i]) prof[i] = want;
         }
         for (let i = a + 1; i <= b; i++) {
           const d = Math.max(0.1, Math.hypot(dense[i][0] - dense[i - 1][0], dense[i][1] - dense[i - 1][1]));
@@ -12536,6 +12568,7 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // turns the run into a tunnel. The ENDS are pinned to the raw samples:
     // fragments smooth independently, and two one-sided averages disagreeing
     // at a shared tile-boundary vertex would step the deck mid-street.
+    stage('2e-lift', prof);
     if (mode === 'auto' && n > 8) {
       const wide = (src: number[]): number[] => src.map((_, i) => {
         let s = 0, c = 0;
@@ -17623,10 +17656,16 @@ async function renderWays(els: OsmWay[], halo: OsmWay[] = []): Promise<void> {
       // normally and wears a roof, a wall on the uphill side, and columns
       // over the drop — which is what the real Chapman's overhang is.
       const canopy = tags.tunnel === 'avalanche_protector' || (!!tags.covered && tags.covered !== 'no');
-      const mode: RoadMode = track || stairs ? 'none'
+      // A FOOTBRIDGE IS A BRIDGE. Tracks took 'none' whatever their tags said,
+      // so a footway tagged bridge=yes layer=1 over the A6 at Rubigen was a
+      // draped ribbon at grade — a slab across both carriageways, seen from
+      // the seat — and a footway tunnel under a road ran over it. A track
+      // keeps 'none' only where it carries no structure tag: it has no chain
+      // and no profile to solve, and 'auto' would ask for one.
+      const mode: RoadMode = stairs ? 'none'
         : !canopy && tags.tunnel && tags.tunnel !== 'no' ? 'tunnel'
         : tags.bridge && tags.bridge !== 'no' ? 'bridge'
-        : 'auto';
+        : track ? 'none' : 'auto';
       const wq = wayQuality(tags, track);
       // The carriageway wears its REGION's convention — yellow centre line or
       // white, edge lines or none, fresh bitumen or bleached chip seal. Picked
