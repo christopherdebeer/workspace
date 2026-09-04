@@ -66,6 +66,12 @@ export const LABS: readonly LabEntry[] = [
     start: () => import('./flora-lab').then((m) => m.startFloraLab()),
   },
   {
+    slug: 'flora-ez',
+    label: 'FLORA · EZ CANDIDATE',
+    note: 'Shipping silhouettes against one aggressively reduced, shared and instanced EZ-Tree skeleton — with the geometry bill on the glass.',
+    start: () => import('./flora-ez-lab').then((m) => m.startEzFloraLab()),
+  },
+  {
     slug: 'weather',
     label: 'WEATHER',
     note: 'Twelve kilometres of sky flat on a table: cover, rain, fog and the wet channel that remembers, with time on a dial.',
