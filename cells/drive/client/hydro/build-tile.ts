@@ -685,6 +685,13 @@ export function buildHydroTile(
   const pixelX = spanX / resolution, pixelZ = spanZ / resolution;
   const pixelM = Math.sqrt(Math.abs(pixelX * pixelZ));
   const antialias = Math.max(pixelX, pixelZ) * 0.7;
+  // A STREAM NARROWER THAN A TEXEL STILL DRAWS. An unnamed `waterway=stream`
+  // is 4 m by default and a tile's texel is ~9 m, so its coverage peaked at
+  // 0.66 on the centreline and the shore fade took the rest: a whole wooded
+  // valley at George with two streams in its tile and no water in the field.
+  // The drawn half-width is at least most of a texel; the structure's own
+  // half-width (the cross-channel chart) stays the tagged one.
+  const drawnHalfW = (lineWidth: number): number => Math.max(lineWidth * 0.5, antialias * 0.8);
 
   const coverage = new Float32Array(count);
   const level = new Float32Array(count);
@@ -860,7 +867,7 @@ export function buildHydroTile(
     resolved.push({
       feature, body, profile, spine, s0,
       index: profile && feature.geometry.type === 'line'
-        ? indexProfile(profile, lineWidth) : undefined,
+        ? indexProfile(profile, Math.max(lineWidth, antialias * 1.6)) : undefined,   // the DRAWN width's reach
       energy: flowing && profile ? profileEnergy(profile) : undefined,
     });
   }
@@ -882,7 +889,7 @@ export function buildHydroTile(
         // the index rejects it for the cost of nine Map lookups.
         const hit = sampleProfileAt(item.profile, item.energy, item.spine, item.index, x, z);
         if (!hit) continue;                    // no segment within reach: dry
-        const signed = lineWidth * 0.5 - hit.distanceM;
+        const signed = drawnHalfW(lineWidth) - hit.distanceM;
         const amount = clamp(0.5 + signed / Math.max(0.01, antialias * 2), 0, 1);
         if (amount <= 0.005) continue;
         // ── A RIVER SITS IN ITS VALLEY, NOT OVER IT ──
@@ -910,7 +917,7 @@ export function buildHydroTile(
       if (item.feature.geometry.type === 'area') {
         amount = (areaCov as Float32Array)[(iz - iz0) * covW + (ix - ix0)];
       } else {
-        const signed = lineWidth * 0.5
+        const signed = drawnHalfW(lineWidth)
           - nearestSegment(x, z, item.feature.geometry.points).distanceM;
         amount = clamp(0.5 + signed / Math.max(0.01, antialias * 2), 0, 1);
       }

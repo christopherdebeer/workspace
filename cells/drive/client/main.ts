@@ -727,6 +727,15 @@ const COVER_Z = 12;   // ~9.8km per tile; the source pyramid has a level at 37m/
 const COVER_PX = 38;
 const COVER = { tree: 10, shrub: 20, grass: 30, crop: 40, built: 50, bare: 60,
   snow: 70, water: 80, wetland: 90, mangrove: 95, moss: 100 } as const;
+/** Pixels a decode moved off a valid class, session-wide. Non-zero is the
+ *  tell that this browser colour-manages the raster (iOS Safari does). */
+let coverSnapped = 0;
+const COVER_CLASSES = [0, 10, 20, 30, 40, 50, 60, 70, 80, 90, 95, 100];
+function snapCoverClass(v: number): number {
+  let best = v, dist = 3;                    // further than 2 off is not a shifted class
+  for (const c of COVER_CLASSES) { const d = Math.abs(c - v); if (d < dist) { dist = d; best = c; } }
+  return best;
+}
 const COVER_NAME: Record<number, string> = {
   10: 'FOREST', 20: 'SCRUB', 30: 'GRASS', 40: 'FARMLAND', 50: 'URBAN', 60: 'BARREN',
   70: 'ICE', 80: 'WATER', 90: 'WETLAND', 95: 'MANGROVE', 100: 'TUNDRA',
@@ -770,7 +779,20 @@ async function coverRaster(z: number, x: number, y: number): Promise<Uint8Array>
     cx.drawImage(bmp, 0, 0);
     const d = cx.getImageData(0, 0, 256, 256).data;
     const data = new Uint8Array(256 * 256);
-    for (let i = 0; i < data.length; i++) data[i] = d[i * 4];   // red channel IS the class
+    // THE CLASS IS SNAPPED, because iOS colour-manages it anyway. RAW_BITMAP
+    // asks for no colour-space conversion and Safari still applies one — with
+    // DITHER — so a tile of class 10 came back as a mix of 9 and 10 (a field
+    // query at George read "CLASS 9 ×6, FOREST ×3" off one raster that holds
+    // nothing but exact classes: verified byte for byte through the cache).
+    // Every reader compares exactly (`coverWater` is `=== 80`), so a dithered
+    // 79 was dry land. The nearest valid class is the truth; the count of
+    // pixels that needed it is in `__cover().snapped`.
+    for (let i = 0; i < data.length; i++) {
+      const v = d[i * 4];
+      const snapped = snapCoverClass(v);
+      if (snapped !== v) coverSnapped++;
+      data[i] = snapped;
+    }
     profAdd('coverDecode', t0);
     // Kept only now the pixels are real. The cell computes this tile out of
     // WorldCover COGs and can answer 200 with an error document; storing that
@@ -25030,6 +25052,7 @@ function heightsOf(): number[] {
     wide: { level: coverWideZ, tiles: coverWide.size, asked: coverWideAsked.size },
     here: here === null ? null : `${here} ${COVER_NAME[here] ?? '?'}`,
     samples: n,
+    snapped: coverSnapped,
     mix: [...hist.entries()].sort((a, b) => b[1] - a[1])
       .map(([c, k]) => `${COVER_NAME[c] ?? c} ${((k / Math.max(1, n)) * 100).toFixed(0)}%`),
   };
