@@ -34,44 +34,46 @@ const { Tree, TreePreset } = await import(join(pkgDir, 'build/ez-tree.es.js'));
 const HERE = dirname(fileURLToPath(import.meta.url));
 const OUT = join(HERE, '../client/flora-ez-baked.ts');
 
-/** THE WHOLE-POPULATION RECIPE. Every broadleaf, conifer and snag in the
- *  plant range wears a skeleton — no archetype, no switching with distance —
- *  so the recipe is priced for sixteen hundred broadleaf and fourteen hundred
- *  conifers at once, not a hundred and twenty beside the truck: three-sided
- *  branches, a fifth of the children, four to six crowns. Judge a change in
- *  the lab first (/lab/flora-ez, the EZ REDUCTION dials are these numbers). */
-const LEAN = { levels: 2, sections: 0.2, segments: 0.35, children: 0.2, leaves: 0.06, leafStart: -1 };
+/**
+ * THE RECIPES ARE THE LAB'S OWN JSON. Open /lab/flora-ez, turn the dials until
+ * a tree reads, press COPY, paste the object here under its family, and bake.
+ * `reduction.leafAs` decides what the crown is made of: 'card' takes the
+ * package's own leaf quads (two triangles each, opaque, at leafScale); 'clump'
+ * takes only their centres and the world stands a Drive blob on each —
+ * 'icosa' (20 triangles), 'flat' (the same pressed to a pad) or 'cone' (an
+ * open four-sided frond). `clumpM` is metres on the lab's 8 m tree.
+ *
+ * The world pays for every tree in VEG_RANGE at once, so the cost line the
+ * bake prints per variant is the number to watch: main.ts scales the tree
+ * caps to TREE_TRI_BUDGET, keeping the nearest, so a richer recipe means a
+ * thinner far wood, never a slower frame.
+ */
+const LAB_HEIGHT_M = 8;
 const RECIPES = {
-  // Crown 2.4 m on an 8 m tree; a Drive icosahedron on every anchor.
-  broadleaf: {
-    crown: 0.3, shape: 'icosa',
-    variants: [
-      // Four crowns each: the leaf fraction is per preset because an aspen
-      // carries twice the leaves an oak does and an ash three times.
-      ['Oak Small', 37, LEAN], ['Oak Small', 118, LEAN], ['Aspen Small', 5, { ...LEAN, leaves: 0.03 }],
-      ['Aspen Small', 71, { ...LEAN, leaves: 0.03 }], ['Ash Small', 12, { ...LEAN, leaves: 0.01 }], ['Oak Medium', 9, { ...LEAN, leaves: 0.015 }],
-    ],
-  },
-  // One frond at each branch tip: a single leaf per branch, started at 0.9.
-  conifer: {
-    crown: 0.17, shape: 'cone',
-    variants: [
-      ['Pine Small', 37, { ...LEAN, children: 0.16, leaves: 0.05, leafStart: 0.9 }],
-      ['Pine Small', 84, { ...LEAN, children: 0.16, leaves: 0.05, leafStart: 0.9 }],
-      ['Pine Small', 7, { ...LEAN, children: 0.16, leaves: 0.05, leafStart: 0.9 }],
-      ['Pine Medium', 3, { ...LEAN, children: 0.12, leaves: 0.05, leafStart: 0.9 }],
-    ],
-  },
-  // Bare, and thinner still.
-  snag: {
-    crown: 0, shape: 'none',
-    variants: [
-      ['Ash Small', 12, { ...LEAN, children: 0.15, leaves: 0 }],
-      ['Aspen Small', 71, { ...LEAN, children: 0.15, leaves: 0 }],
-      ['Ash Small', 41, { ...LEAN, children: 0.15, leaves: 0 }],
-      ['Oak Small', 37, { ...LEAN, children: 0.15, leaves: 0 }],
-    ],
-  },
+  broadleaf: [
+    { preset: 'Oak Medium', seed: 387, reduction: { levels: 3, sections: 0.7, segments: 0.7, children: 0.35, leaves: 1, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0 } },
+    { preset: 'Oak Medium', seed: 91, reduction: { levels: 3, sections: 0.7, segments: 0.7, children: 0.35, leaves: 1, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0 } },
+    { preset: 'Oak Small', seed: 387, reduction: { levels: 3, sections: 0.7, segments: 0.7, children: 0.35, leaves: 1, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0 } },
+    { preset: 'Aspen Small', seed: 387, reduction: { levels: 3, sections: 0.7, segments: 0.7, children: 0.35, leaves: 0.6, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0 } },
+    { preset: 'Ash Small', seed: 387, reduction: { levels: 3, sections: 0.7, segments: 0.7, children: 0.35, leaves: 0.4, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0 } },
+    { preset: 'Oak Medium', seed: 12, reduction: { levels: 3, sections: 0.7, segments: 0.7, children: 0.35, leaves: 1, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0 } },
+  ],
+  // The pasted pine put a pad on every one of 672 anchors — 15k triangles a
+  // tree — and its seven-sided wood was 1.9k on its own. Four-sided branches,
+  // a third of the children and a fifth of the leaves keep the whorls and
+  // the pads at a price the budget can carry.
+  conifer: [
+    { preset: 'Pine Small', seed: 387, reduction: { levels: 3, sections: 0.5, segments: 0.5, children: 0.3, leaves: 0.2, leafScale: 3, billboard: 'single', leafAs: 'clump', clumpM: 0.6, clumpShape: 'flat', leafStart: 0.9 } },
+    { preset: 'Pine Small', seed: 84, reduction: { levels: 3, sections: 0.5, segments: 0.5, children: 0.3, leaves: 0.2, leafScale: 3, billboard: 'single', leafAs: 'clump', clumpM: 0.6, clumpShape: 'flat', leafStart: 0.9 } },
+    { preset: 'Pine Small', seed: 7, reduction: { levels: 3, sections: 0.5, segments: 0.5, children: 0.3, leaves: 0.2, leafScale: 3, billboard: 'single', leafAs: 'clump', clumpM: 0.6, clumpShape: 'flat', leafStart: 0.9 } },
+    { preset: 'Pine Medium', seed: 3, reduction: { levels: 3, sections: 0.5, segments: 0.5, children: 0.25, leaves: 0.2, leafScale: 3, billboard: 'single', leafAs: 'clump', clumpM: 0.6, clumpShape: 'flat', leafStart: 0.9 } },
+  ],
+  snag: [
+    { preset: 'Ash Small', seed: 12, reduction: { levels: 3, sections: 0.5, segments: 0.5, children: 0.2, leaves: 0, leafScale: 1, billboard: 'single', leafAs: 'clump', clumpM: 0, clumpShape: 'icosa', leafStart: 0 } },
+    { preset: 'Aspen Small', seed: 71, reduction: { levels: 3, sections: 0.5, segments: 0.5, children: 0.2, leaves: 0, leafScale: 1, billboard: 'single', leafAs: 'clump', clumpM: 0, clumpShape: 'icosa', leafStart: 0 } },
+    { preset: 'Ash Small', seed: 41, reduction: { levels: 3, sections: 0.5, segments: 0.5, children: 0.2, leaves: 0, leafScale: 1, billboard: 'single', leafAs: 'clump', clumpM: 0, clumpShape: 'icosa', leafStart: 0 } },
+    { preset: 'Oak Small', seed: 37, reduction: { levels: 3, sections: 0.5, segments: 0.5, children: 0.2, leaves: 0, leafScale: 1, billboard: 'single', leafAs: 'clump', clumpM: 0, clumpShape: 'icosa', leafStart: 0 } },
+  ],
 };
 
 function generate(preset, seed, r) {
@@ -87,23 +89,27 @@ function generate(preset, seed, r) {
   }
   for (const l of [0, 1, 2]) o.branch.children[l] = Math.round(o.branch.children[l] * r.children);
   o.leaves.count = Math.max(0, Math.round(o.leaves.count * r.leaves));
+  o.leaves.size *= r.leafScale;
   o.leaves.billboard = 'single';
-  if (r.leafStart >= 0) o.leaves.start = r.leafStart;
+  if (r.leafStart > 0) o.leaves.start = r.leafStart;
   tree.generate();
   const wood = tree.branchesMesh.geometry;
   const pos = wood.getAttribute('position');
   const idx = wood.index;
-  const cards = tree.leavesMesh.geometry.getAttribute('position');
+  const cardPos = tree.leavesMesh.geometry.getAttribute('position');
+  const cardIdx = tree.leavesMesh.geometry.index;
+  // Anchors: the centre of every card (four vertices a single billboard).
   const anchors = [];
-  if (cards) for (let i = 0; i + 4 <= cards.count; i += 4) {
+  if (cardPos) for (let i = 0; i + 4 <= cardPos.count; i += 4) {
     let x = 0, y = 0, z = 0;
-    for (let k = 0; k < 4; k++) { x += cards.getX(i + k); y += cards.getY(i + k); z += cards.getZ(i + k); }
+    for (let k = 0; k < 4; k++) { x += cardPos.getX(i + k); y += cardPos.getY(i + k); z += cardPos.getZ(i + k); }
     anchors.push(x / 4, y / 4, z / 4);
   }
-  // Normalise: wood on y=0, top of wood-or-anchors at y=1.
+  // Normalise: wood on y=0, top of wood-or-crown at y=1.
   let minY = Infinity, maxY = -Infinity;
   for (let i = 0; i < pos.count; i++) { minY = Math.min(minY, pos.getY(i)); maxY = Math.max(maxY, pos.getY(i)); }
-  for (let i = 1; i < anchors.length; i += 3) maxY = Math.max(maxY, anchors[i]);
+  if (r.leafAs === 'card' && cardPos) for (let i = 0; i < cardPos.count; i++) maxY = Math.max(maxY, cardPos.getY(i));
+  else for (let i = 1; i < anchors.length; i += 3) maxY = Math.max(maxY, anchors[i]);
   const s = 1 / Math.max(1e-6, maxY - minY);
   const P = new Int16Array(pos.count * 3);
   for (let i = 0; i < pos.count; i++) {
@@ -111,12 +117,31 @@ function generate(preset, seed, r) {
   }
   const I = new Uint16Array(idx.count);
   for (let i = 0; i < idx.count; i++) I[i] = idx.getX(i);
-  const A = new Int16Array(anchors.length);
-  for (let i = 0; i < anchors.length; i += 3) {
-    A[i] = q(anchors[i] * s); A[i + 1] = q((anchors[i + 1] - minY) * s); A[i + 2] = q(anchors[i + 2] * s);
-  }
   if (pos.count > 65535) throw new Error(`${preset}/${seed}: ${pos.count} vertices do not fit a Uint16 index`);
-  return { name: `${preset} #${seed}`, verts: pos.count, tris: idx.count / 3, anchors: anchors.length / 3, P, I, A };
+  // The crown: cards as quads (4 vertices, 2 triangles, the package's own
+  // index tells the winding) or anchors for the world to stand blobs on.
+  let C = new Int16Array(0), CI = new Uint16Array(0), A = new Int16Array(0);
+  let crown = { shape: 'none', r: 0 };
+  if (r.leafAs === 'card' && cardPos && cardIdx && r.leaves > 0) {
+    C = new Int16Array(cardPos.count * 3);
+    for (let i = 0; i < cardPos.count; i++) {
+      C[i * 3] = q(cardPos.getX(i) * s); C[i * 3 + 1] = q((cardPos.getY(i) - minY) * s); C[i * 3 + 2] = q(cardPos.getZ(i) * s);
+    }
+    CI = new Uint16Array(cardIdx.count);
+    for (let i = 0; i < cardIdx.count; i++) CI[i] = cardIdx.getX(i);
+    if (cardPos.count > 65535) throw new Error(`${preset}/${seed}: ${cardPos.count} card vertices do not fit a Uint16 index`);
+    crown = { shape: 'card', r: 0 };
+  } else if (r.leaves > 0 && anchors.length) {
+    A = new Int16Array(anchors.length);
+    for (let i = 0; i < anchors.length; i += 3) {
+      A[i] = q(anchors[i] * s); A[i + 1] = q((anchors[i + 1] - minY) * s); A[i + 2] = q(anchors[i + 2] * s);
+    }
+    crown = { shape: r.clumpShape, r: r.clumpM / LAB_HEIGHT_M };
+  }
+  const cardTris = CI.length / 3;
+  const blobTris = { icosa: 20, flat: 8, cone: 4, none: 0, card: 0 }[crown.shape] * (A.length / 3);   // a pad is a pressed octahedron
+  return { name: `${preset} #${seed}`, verts: pos.count, tris: idx.count / 3, cards: cardPos ? cardPos.count / 4 : 0,
+    drawn: idx.count / 3 + cardTris + blobTris, crown, P, I, C, CI, A };
 }
 const Q = 10000;
 function q(v) {
@@ -128,24 +153,26 @@ const b64 = (typed) => Buffer.from(typed.buffer, typed.byteOffset, typed.byteLen
 
 const families = {};
 let total = 0;
-for (const [family, recipe] of Object.entries(RECIPES)) {
-  const variants = recipe.variants.map(([preset, seed, r]) => {
-    const v = generate(preset, seed, r);
-    total += v.P.byteLength + v.I.byteLength + v.A.byteLength;
-    const crownTris = recipe.shape === 'icosa' ? 20 : recipe.shape === 'cone' ? 4 : 0;   // an open four-sided frond
-    console.log(`${family.padEnd(10)} ${v.name.padEnd(18)} verts ${String(v.verts).padStart(5)} wood ${String(v.tris).padStart(5)}t anchors ${String(v.anchors).padStart(3)} → ${String(v.tris + v.anchors * crownTris).padStart(5)}t drawn`);
-    return { name: v.name, verts: v.verts, tris: v.tris, anchors: v.anchors, pos: b64(v.P), idx: b64(v.I), anc: b64(v.A) };
+for (const [family, list] of Object.entries(RECIPES)) {
+  const variants = list.map(({ preset, seed, reduction }) => {
+    const v = generate(preset, seed, reduction);
+    total += v.P.byteLength + v.I.byteLength + v.C.byteLength + v.CI.byteLength + v.A.byteLength;
+    console.log(`${family.padEnd(10)} ${v.name.padEnd(18)} wood ${String(v.tris).padStart(5)}t  crown ${v.crown.shape.padEnd(5)} ${String(v.crown.shape === 'card' ? v.CI.length / 3 : v.A.length / 3).padStart(4)} → ${String(v.drawn).padStart(6)}t drawn`);
+    return { name: v.name, verts: v.verts, tris: v.tris, drawn: v.drawn, crown: v.crown,
+      pos: b64(v.P), idx: b64(v.I), cards: b64(v.C), cardIdx: b64(v.CI), anc: b64(v.A) };
   });
-  families[family] = { crown: recipe.crown, shape: recipe.shape, variants };
+  families[family] = { variants, meanDrawn: Math.round(variants.reduce((n, v) => n + v.drawn, 0) / variants.length) };
 }
 const body = JSON.stringify({ q: Q, families }, null, 1).replace(/\n\s*/g, '\n ');
 writeFileSync(OUT, `// GENERATED by devtools/bake-ez-flora.mjs — do not edit; re-bake.
 // EZ-Tree skeletons per family: wood as Int16 positions (1/${Q} of the tree's
-// height, standing on y=0 with its top at y=1) and Uint16 triangle indices,
-// plus the leaf anchors the crowns hang on, all base64 little-endian.
+// height, standing on y=0 with its top at y=1) and Uint16 triangle indices;
+// the crown as leaf cards (positions + indices) or as anchors for blobs;
+// all base64 little-endian. drawn = the triangles the world draws per tree.
 // ${Object.values(families).reduce((n, f) => n + f.variants.length, 0)} variants, ${(total / 1024).toFixed(0)} KB of arrays.
-export interface EzBakedVariant { name: string; verts: number; tris: number; anchors: number; pos: string; idx: string; anc: string }
-export interface EzBakedFamily { crown: number; shape: 'icosa' | 'cone' | 'none'; variants: EzBakedVariant[] }
+export interface EzBakedCrown { shape: 'card' | 'icosa' | 'flat' | 'cone' | 'none'; r: number }
+export interface EzBakedVariant { name: string; verts: number; tris: number; drawn: number; crown: EzBakedCrown; pos: string; idx: string; cards: string; cardIdx: string; anc: string }
+export interface EzBakedFamily { variants: EzBakedVariant[]; meanDrawn: number }
 export const EZ_BAKE: { q: number; families: Record<'broadleaf' | 'conifer' | 'snag', EzBakedFamily> } = ${body};
 `);
 console.log(`wrote ${OUT}: ${(total / 1024).toFixed(0)} KB of arrays`);

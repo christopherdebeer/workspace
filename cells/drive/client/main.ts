@@ -46,7 +46,7 @@ import { createSplash } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { facade } from './facade';
 import { startLab } from './labs';
-import { ezCrownReach, ezMaterial, ezVariantFor, ezVariants, type EzFamily } from './flora-ez';
+import { ezCrownReach, ezMaterial, ezMeanTris, ezVariantFor, ezVariants, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
@@ -7377,6 +7377,24 @@ const trunks = vegMesh(trunkGeo2, woodMat, 3600);
  */
 const EZ_ON = ((): boolean => { const ask = new URLSearchParams(location.search).get('ez'); return ask !== '0' && ask !== 'off'; })();
 const EZ_FAMILIES: EzFamily[] = ['broadleaf', 'conifer', 'snag'];
+/**
+ * THE TREE BUDGET. The recipes are the lab's, pasted, and a recipe the eye
+ * likes is a thousand triangles a tree; sixteen hundred broadleaf of those
+ * is more than the whole scene was. So the three tree caps are scaled
+ * together to fit this many triangles, and because the placement walks
+ * rings outward and stops at the cap, what a richer recipe costs is the far
+ * wood thinning — never a slower frame. ?treetris=900000 tries a larger
+ * budget on the device; the VEGETATION dial multiplies on top.
+ */
+const TREE_TRI_BUDGET = ((): number => {
+  const ask = Number(new URLSearchParams(location.search).get('treetris'));
+  return Number.isFinite(ask) && ask > 0 ? ask : 800000;
+})();
+const ezCapScale = ((): number => {
+  let atCap = 0;
+  for (const fam of EZ_FAMILIES) atCap += VEG_CAP[fam] * ezMeanTris(fam);
+  return atCap > 0 ? clamp(TREE_TRI_BUDGET / atCap, 0.08, 1) : 1;
+})();
 const isEzKind = (k: VegKind): k is EzFamily => k === 'broadleaf' || k === 'conifer' || k === 'snag';
 interface EzTier { mesh: THREE.InstancedMesh; tris: number; n: number }
 const ezTiers: Record<EzFamily, EzTier[]> = { broadleaf: [], conifer: [], snag: [] };
@@ -9203,7 +9221,7 @@ function refreshVeg(): void {
           // height the archetype would have reached, crown included. The
           // kind's cap and the far dissolve are the archetype's own.
           const fam = v.k;
-          if (ezCounts[fam] >= VEG_CAP[fam] * vegScale) continue;
+          if (ezCounts[fam] >= VEG_CAP[fam] * vegScale * ezCapScale) continue;
           const tier = ezTiers[fam][ezVariantFor(fam, v.x, v.z)];
           if (!tier || tier.n >= tier.mesh.instanceMatrix.count) continue;
           const y = groundAt(v.x, v.z);
@@ -22771,7 +22789,9 @@ function tapeKeep(): string {
  */
 /** The skeleton tier's bill: how many of each family wear one, per variant, and the triangles. */
 (window as unknown as { __ez?: object }).__ez = (): object => {
-  const out: Record<string, unknown> = { on: EZ_ON };
+  const out: Record<string, unknown> = { on: EZ_ON, budget: TREE_TRI_BUDGET, capScale: +ezCapScale.toFixed(3),
+    caps: Object.fromEntries(EZ_FAMILIES.map((f) => [f, Math.round(VEG_CAP[f] * vegScale * ezCapScale)])),
+    meanTris: Object.fromEntries(EZ_FAMILIES.map((f) => [f, ezMeanTris(f)])) };
   let tris = 0;
   for (const fam of EZ_FAMILIES) {
     const per = ezTiers[fam].map((t) => t.n);

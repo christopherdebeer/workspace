@@ -17,7 +17,7 @@
  * the site's height, so the crown radius is a fraction of that height too.
  */
 import * as THREE from 'three';
-import { EZ_BAKE, type EzBakedFamily, type EzBakedVariant } from './flora-ez-baked';
+import { EZ_BAKE, type EzBakedVariant } from './flora-ez-baked';
 import { faceTone, mergeGeos } from './flora';
 
 export type EzFamily = keyof typeof EZ_BAKE.families;
@@ -27,7 +27,7 @@ export interface EzVariant {
   /** Wood and crown in one, with `aWood` per vertex and faceTone in `color`. */
   geometry: THREE.BufferGeometry;
   tris: number;
-  anchors: number;
+  crown: string;
 }
 
 function bytes(b64: string): Uint8Array {
@@ -49,22 +49,63 @@ function woodOf(v: EzBakedVariant, q: number): THREE.BufferGeometry {
   return faceTone(g, 0.16, 0.36);
 }
 
-function crownOf(v: EzBakedVariant, fam: EzBakedFamily, q: number): THREE.BufferGeometry | null {
-  if (fam.shape === 'none' || v.anchors === 0) return null;
+/** Per-card tone, not per-triangle: a card is one leaf and its two
+ *  triangles must agree, or every leaf shows a diagonal. The same spread and
+ *  foot-in-shadow the other plants get. */
+function cardTone(g: THREE.BufferGeometry, spread = 0.2, foot = 0.22): THREE.BufferGeometry {
+  const pos = g.getAttribute('position') as THREE.BufferAttribute;
+  g.computeBoundingBox();
+  const bb = g.boundingBox as THREE.Box3;
+  const y0 = bb.min.y, span = Math.max(1e-3, bb.max.y - y0);
+  const col = new Float32Array(pos.count * 3);
+  for (let i = 0; i < pos.count; i++) {
+    const card = i >> 2;
+    let x = Math.imul(card + 1, 2654435761);
+    x = Math.imul(x ^ (x >>> 15), 2246822507);
+    x = (x ^ (x >>> 13)) >>> 0;
+    const t = x / 4294967296;
+    const up = (pos.getY(i) - y0) / span;
+    const v = (1 + (t - 0.5) * spread) * (1 - foot * (1 - up) * (1 - up));
+    col[i * 3] = v; col[i * 3 + 1] = v; col[i * 3 + 2] = v;
+  }
+  g.setAttribute('color', new THREE.BufferAttribute(col, 3));
+  return g;
+}
+
+function crownOf(v: EzBakedVariant, q: number): THREE.BufferGeometry | null {
+  const shape = v.crown.shape;
+  if (shape === 'none') return null;
+  if (shape === 'card') {
+    // The package's own leaf quads, opaque, as they stood on the skeleton.
+    const C = int16(v.cards), CI = uint16(v.cardIdx);
+    if (!C.length || !CI.length) return null;
+    const pos = new Float32Array(C.length);
+    for (let i = 0; i < C.length; i++) pos[i] = C[i] / q;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    g.setIndex(new THREE.BufferAttribute(CI, 1));
+    return cardTone(g);
+  }
   const A = int16(v.anc);
+  if (!A.length) return null;
   const parts: THREE.BufferGeometry[] = [];
+  const r = v.crown.r;
   for (let i = 0; i + 3 <= A.length; i += 3) {
-    // The frond is open at its base: a cone seen from the road never shows
-    // its underside, and four triangles is what fifteen of them a tree can
-    // afford across a thousand trees.
-    const g = fam.shape === 'cone'
-      ? new THREE.ConeGeometry(fam.crown, fam.crown * 1.6, 4, 1, true)
-      : new THREE.IcosahedronGeometry(fam.crown, 0);
+    let g: THREE.BufferGeometry;
+    if (shape === 'cone') {
+      // Open at its base: a frond seen from the road never shows its underside.
+      g = new THREE.ConeGeometry(r, r * 1.6, 4, 1, true);
+    } else {
+      // A pad: an octahedron pressed flat, the way a spruce's foliage lies —
+      // eight triangles, and at sixty centimetres no eye tells it from twenty.
+      g = shape === 'flat' ? new THREE.OctahedronGeometry(r, 0) : new THREE.IcosahedronGeometry(r, 0);
+      if (shape === 'flat') g.scale(1, 0.45, 1);
+    }
     g.translate(A[i] / q, A[i + 1] / q, A[i + 2] / q);
     parts.push(g);
   }
   const crown = mergeGeos(parts);
-  return fam.shape === 'cone' ? faceTone(crown, 0.16, 0.3) : faceTone(crown);
+  return shape === 'cone' ? faceTone(crown, 0.16, 0.3) : faceTone(crown);
 }
 
 /** Wood (indexed) and crown (soup) into one indexed geometry with `aWood`. */
@@ -85,9 +126,12 @@ function join(wood: THREE.BufferGeometry, crown: THREE.BufferGeometry | null): T
     pos.set(cp.array as Float32Array, nW * 3);
     col.set(cc.array as Float32Array, nW * 3);
   }
-  const idx = new Uint16Array(wi.count + nC);
+  const ci = crown?.index as THREE.BufferAttribute | null | undefined;
+  const nCI = ci ? ci.count : nC;
+  const idx = new Uint16Array(wi.count + nCI);
   idx.set(wi.array as Uint16Array, 0);
-  for (let i = 0; i < nC; i++) idx[wi.count + i] = nW + i;
+  if (ci) for (let i = 0; i < nCI; i++) idx[wi.count + i] = nW + (ci.array as Uint16Array)[i];
+  else for (let i = 0; i < nC; i++) idx[wi.count + i] = nW + i;
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
@@ -106,9 +150,9 @@ export function ezVariants(family: EzFamily): EzVariant[] {
   const fam = EZ_BAKE.families[family];
   out = fam.variants.map((v) => {
     const wood = woodOf(v, EZ_BAKE.q);
-    const crown = crownOf(v, fam, EZ_BAKE.q);
+    const crown = crownOf(v, EZ_BAKE.q);
     const geometry = join(wood, crown);
-    return { name: v.name, geometry, tris: (geometry.index as THREE.BufferAttribute).count / 3, anchors: v.anchors };
+    return { name: v.name, geometry, tris: (geometry.index as THREE.BufferAttribute).count / 3, crown: v.crown.shape };
   });
   cache.set(family, out);
   return out;
@@ -117,8 +161,16 @@ export function ezVariants(family: EzFamily): EzVariant[] {
 /** The crown's reach above the wood's top, as a fraction of height — what the
  *  world adds when it wants the whole tree under a given height. */
 export function ezCrownReach(family: EzFamily): number {
-  const fam = EZ_BAKE.families[family];
-  return fam.shape === 'cone' ? fam.crown * 0.8 : fam.crown;
+  // Cards were normalised with the wood, so they add nothing; a blob adds its radius.
+  const vs = EZ_BAKE.families[family].variants;
+  let reach = 0;
+  for (const v of vs) reach += v.crown.shape === 'cone' ? v.crown.r * 0.8 : v.crown.shape === 'card' || v.crown.shape === 'none' ? 0 : v.crown.r;
+  return vs.length ? reach / vs.length : 0;
+}
+
+/** The triangles the world draws for one tree of a family, on average. */
+export function ezMeanTris(family: EzFamily): number {
+  return EZ_BAKE.families[family].meanDrawn;
 }
 
 /** A stable variant index for a site, so a tree keeps its skeleton across
@@ -134,7 +186,8 @@ export function ezVariantFor(family: EzFamily, x: number, z: number): number {
  *  on the leaf material's terms (white, flat, vertex colours) so a caller can
  *  add the same grain it gives the other plants. */
 export function ezMaterial(bark: THREE.ColorRepresentation): THREE.MeshLambertMaterial {
-  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true });
+  // Double-sided for the leaf cards: a quad has no back to cull.
+  const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true, side: THREE.DoubleSide });
   const uWood = { value: new THREE.Color(bark) };
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uWood = uWood;

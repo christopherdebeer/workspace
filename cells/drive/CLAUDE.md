@@ -1421,30 +1421,38 @@ scale 3, 40 m and 105 m cameras:
   external; esbuild keeps `import()` of an external lazy). `curl
   …/app.js | grep '^import '` is the check.
 - **Shipped as a bake, not the dependency — on EVERY tree, at EVERY
-  distance.** `devtools/bake-ez-flora.mjs` generates the variants in node (a
-  DOM stub; `document.createElementNS` is all the package's texture loader
-  touches) and writes `client/flora-ez-baked.ts`: fourteen variants, 19 KB
-  of Int16 wood positions, Uint16 indices and leaf anchors, each standing on
-  y=0 with its top at y=1. `client/flora-ez.ts` decodes them once into ONE
-  geometry per variant — wood and crown in a single draw, a per-vertex
-  `aWood` flag telling `ezMaterial` to colour the wood bark and the crown
-  the instance's colour, faceToned like everything else. In main.ts
-  (`ezTiers`, beside `trunks`) every broadleaf, conifer and snag site in
-  VEG_RANGE is stood up as a skeleton at the height its archetype would have
-  reached, under the kind's own cap and the same far dissolve; the archetype
-  and its trunk are not drawn for those kinds. The first build gave only the
-  nearest trees a skeleton, and the verdict from the seat was immediate:
-  **a tree that changes shape as you drive at it looks worse than either
-  shape** — so no tier, no switching, and the bake's LEAN recipe is priced
-  for the whole population: 158–240 triangles a broadleaf (four crowns),
-  212–252 a conifer (open four-sided fronds), 60–84 a snag, against the
-  archetype's 20. Measured beside a stand: +70k triangles (744k against
-  675k) and +11 draw calls; in a thick wood expect +200–300k. `?ez=0`
-  brings the archetypes back; the VEGETATION dial is the lever on a device
-  that cannot carry it. `__ez()` is the bill (per family, per variant,
-  triangles, every placed site's numbers), `__ezgeo()` every decoded
-  variant's extent. Change a recipe → judge it in the lab → re-bake
-  (`npm i --no-save @dgreenheck/ez-tree@1.1.0`, then run the devtool).
+  distance, and THE RECIPE IS THE LAB'S OWN JSON.** Turn the dials in
+  `/lab/flora-ez` until a tree reads, press COPY, paste the object into
+  `RECIPES` in `devtools/bake-ez-flora.mjs` under its family, and bake
+  (`npm i --no-save @dgreenheck/ez-tree@1.1.0`, then run the devtool; a
+  DOM stub covers the package's texture loader). The bake writes
+  `client/flora-ez-baked.ts`: the wood as Int16 positions and Uint16
+  indices, standing on y=0 with its top at y=1, and the crown as the
+  recipe asks — `leafAs: 'card'` keeps the package's own leaf quads (two
+  triangles a leaf, opaque, drawn double-sided, toned per card), `'clump'`
+  keeps only the leaf centres and the world stands a Drive blob on each
+  (`icosa` 20 triangles, `flat` an eight-triangle pressed octahedron,
+  `cone` an open four-sided frond; `clumpM` is metres on the lab's 8 m
+  tree). `client/flora-ez.ts` decodes each variant into ONE geometry — a
+  per-vertex `aWood` flag lets `ezMaterial` colour the wood bark and the
+  crown the instance's colour. In main.ts (`ezTiers`, beside `trunks`)
+  every broadleaf, conifer and snag site is stood up as a skeleton at the
+  height its archetype would have reached; the archetype and its trunk
+  are not drawn for those kinds. The first build gave only the nearest
+  trees a skeleton and the verdict from the seat was immediate: **a tree
+  that changes shape as you drive at it looks worse than either shape** —
+  so no tier, no switching.
+  **THE TREE BUDGET** is what makes that affordable: the chosen recipes
+  are ~1000 triangles a broadleaf (cards), ~1700 a conifer (pads), ~330 a
+  snag, so `TREE_TRI_BUDGET` (800k, `?treetris=` overrides) scales the
+  three tree caps together (`ezCapScale`), and because placement walks
+  rings outward and stops at the cap, a richer recipe thins the FAR wood
+  and never slows the frame. At these recipes that is ~310 broadleaf and
+  ~270 conifers in view, so a forest thins past a few hundred metres;
+  paste a leaner JSON (fewer leaves, four-sided wood) to buy count back.
+  `?ez=0` brings the archetypes back; `__ez()` is the bill (budget, cap
+  scale, effective caps, mean triangles, per-variant counts, every placed
+  site's numbers), `__ezgeo()` every decoded variant's extent.
 
 - **THE SWARD'S SHRUB LAYER** (`refreshShrubs`, beside `refreshVeg`). The
   sward stopped at flowers; between them and the trees nothing stood
