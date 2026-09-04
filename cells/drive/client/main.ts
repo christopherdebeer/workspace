@@ -19169,6 +19169,42 @@ const farMeshes = new Map<string, THREE.Mesh>();
 const farCoverHit = new Map<string, number>();
 const farTint = new Map<string, [number, number, number]>();
 /**
+ * ── THE COARSE GROUND, KEPT AS DATA ──
+ *
+ * A far tile arrives as a 256x256 height raster and used to survive only as
+ * the mesh built from it — a lattice of `farSeg` quads that CHORDS across
+ * every valley between its vertices, which is why the peak occlusion test
+ * refused to use it and stopped at the fine ring. The raster itself has no
+ * such problem: at z13 it is 19m of ground a pixel, at z11 76m. Kept here it
+ * answers "how high is the land there" anywhere the shell reaches, which is
+ * as far as anything is drawn.
+ */
+interface FarRaster { xs: number; zs: number; w: number; h: number; data: Float32Array }
+const farRasters = new Map<string, FarRaster>();
+/** Absolute ground at a world point from the coarse rasters, or null out of
+ *  reach. Bilinear, because a peak's sight line grazes ridges and a nearest
+ *  sample steps by a whole pixel across one. */
+function farRasterAt(wx: number, wz: number): number | null {
+  for (const r of farRasters.values()) {
+    if (wx < r.xs || wx > r.xs + r.w || wz < r.zs || wz > r.zs + r.h) continue;
+    const u = clamp(((wx - r.xs) / r.w) * 255, 0, 255);
+    const v = clamp(((wz - r.zs) / r.h) * 255, 0, 255);
+    const u0 = Math.floor(u), v0 = Math.floor(v);
+    const u1 = Math.min(255, u0 + 1), v1 = Math.min(255, v0 + 1);
+    const fu = u - u0, fv = v - v0;
+    const a00 = r.data[v0 * 256 + u0], a10 = r.data[v0 * 256 + u1];
+    const a01 = r.data[v1 * 256 + u0], a11 = r.data[v1 * 256 + u1];
+    return (a00 * (1 - fu) + a10 * fu) * (1 - fv) + (a01 * (1 - fu) + a11 * fu) * fv;
+  }
+  return null;
+}
+/** Metres of ground one coarse pixel spans — the scale of the error the
+ *  raster can still be making, and so the margin a blocker has to beat. */
+function farPixelM(): number {
+  const r = farRasters.values().next().value as FarRaster | undefined;
+  return r ? r.w / 256 : 250;
+}
+/**
  * A cover tile landed. Throw away any shell tile whose colour it invalidates,
  * so the streamer fetches and re-bakes it.
  *
@@ -19191,7 +19227,7 @@ function coverDirtiedFar(modeMoved: boolean, x: number, z: number, w: number, h:
     }
     farGroup.remove(mesh); mesh.geometry.dispose();
     farMeshes.delete(key); farTiles.delete(key);
-    farCoverHit.delete(key); farTint.delete(key);
+    farCoverHit.delete(key); farTint.delete(key); farRasters.delete(key);
   }
 }
 const farGroup = new THREE.Group();
@@ -19276,6 +19312,7 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? farMatFor(data, w, key) : farMat);
   mesh.position.set(xs + w / 2, 0, zs + h / 2);
   farMeshes.set(key, mesh);
+  farRasters.set(key, { xs, zs, w, h, data });
   farGroup.add(mesh);
   // Last fetch of the batch home? The new level covers the frame now.
   if (farInFlight === 0 && farQueue.length === 0) dropRetiredFar();
@@ -19915,30 +19952,60 @@ function peakLook(p: Peak, vx: number, vz: number, eyeY: number): { d: number; r
  * are in, the ridge across it — and because that is where this world actually
  * holds ground it can answer with.
  *
- * FINE TERRAIN ONLY, and deliberately. The coarse shell would extend the reach
- * to tens of kilometres, but it samples the DEM every 250m and CHORDS over
- * every valley between — so it stands above the true ground exactly where a
- * distant peak would be seen through a gap, and would hide summits that are
- * plainly in view. Missing a blocker beyond the fine ring leaves a label on a
- * peak you cannot quite see; inventing one removes a peak you can. The first
- * is a smaller lie, so the test only ever speaks where it has real ground.
+ * THE FINE RING IS NOT ENOUGH, AND THE SHELL'S MESH WAS THE WRONG WITNESS.
+ * This used to march 4.2km of fine terrain only, on the grounds that the
+ * coarse shell's MESH chords over every valley between its vertices and so
+ * invents ridges where a peak is really seen through a gap. That is true of
+ * the mesh and not of the RASTER it is built from, which is 19m of ground a
+ * pixel at z13 and 76m at z11 (see farRasters). Photographed in the Senqu:
+ * THABA-NTSO at 25.3km and QUTHING DISTRICT HIGH POINT at 47.1km both
+ * labelled over a hillside that plainly hides them, because every blocker
+ * between them and the camera stood beyond four kilometres.
+ *
+ * So the line is walked as far as the summit's own flank, on whatever ground
+ * the world can honestly answer with: the fine mesh where it reaches (the
+ * carved one, which is what the player is looking at), the coarse raster
+ * beyond it. The raster still smooths — a spire comes out shorter and a notch
+ * shallower than the real land — so a coarse blocker must beat the sight line
+ * by a margin of its own pixel size before it is believed, where fine ground
+ * needs only PEAK_CLEAR. Past the shell there is no ground and nothing is
+ * claimed: a label on a peak you cannot quite see is a smaller lie than a
+ * peak removed from a view that holds it.
  */
 const PEAK_CLEAR = 15;            // metres of daylight the sight line must keep
+/** …and what a COARSE sample must beat, being a smoothed answer: its own
+ *  pixel, so a gap the raster half-filled cannot kill a visible summit. */
+const peakCoarseClear = (): number => Math.max(45, farPixelM() * 0.8);
+/** Samples along the line. Logarithmic, because a blocker is usually near —
+ *  but the far half now has to be walked too, so there are more of them. */
+const PEAK_MARCH = 26;
 /** Where the march starts. Inside this the "terrain" is the verge, the cut
  *  face and the batter beside the wheels — a metre of kerb is not a mountain,
  *  and a camera sitting low in a cutting would otherwise be blind. */
 const PEAK_NEAR = 250;
 const peakBlockMemo = new Map<string, boolean>();
 let peakMemoX = NaN, peakMemoZ = NaN;
-function peakBlocked(p: Peak, vx: number, vz: number, eyeY: number, rise: number, d: number): boolean {
+/** …and the memo is stale when the GROUND changes, not only when the truck
+ *  does. A verdict reached before the ridge in front of you had loaded said
+ *  "nothing in the way" and survived every frame until you had driven forty
+ *  metres — which is how a summit behind a hill keeps its label for as long
+ *  as you sit still and watch the hill arrive. */
+let peakMemoBuilds = -1;
+interface PeakStep { d: number; src: string; ground: number; line: number; over: number }
+function peakBlocked(p: Peak, vx: number, vz: number, eyeY: number, rise: number, d: number,
+                     out?: PeakStep[]): boolean {
   // The answer is a property of WHERE YOU STAND, so it survives until you have
-  // moved far enough for a ridge line to have changed.
-  if (!(Math.abs(vx - peakMemoX) < 40 && Math.abs(vz - peakMemoZ) < 40)) {
-    peakMemoX = vx; peakMemoZ = vz;
-    peakBlockMemo.clear();
+  // moved far enough for a ridge line to have changed. A caller asking for the
+  // PROFILE wants the walk itself, so it skips the memo both ways.
+  if (!out) {
+    if (!(Math.abs(vx - peakMemoX) < 40 && Math.abs(vz - peakMemoZ) < 40) || peakMemoBuilds !== terrainBuilds) {
+      peakMemoX = vx; peakMemoZ = vz;
+      peakMemoBuilds = terrainBuilds;
+      peakBlockMemo.clear();
+    }
+    const memo = peakBlockMemo.get(p.name);
+    if (memo !== undefined) return memo;
   }
-  const memo = peakBlockMemo.get(p.name);
-  if (memo !== undefined) return memo;
   // 0.72, NOT 0.9: the last stretch of the ray is the mountain's own flank,
   // and marching it let a summit block ITSELF — the DEM smears a spire below
   // its OSM elevation, so the rim of the very mesa it stands on rose over the
@@ -19946,25 +20013,70 @@ function peakBlocked(p: Peak, vx: number, vz: number, eyeY: number, rise: number
   // Monument Valley: The Setting Hen in the middle of the frame, unnamed. A
   // real blocker — the wall of the valley you are in — is near by nature and
   // still well inside the shortened march.
-  const reach = Math.min(d * 0.72, 4200);
+  const reach = d * 0.72;
   let hit = false;
   if (reach > PEAK_NEAR) {
-    for (let i = 1; i <= 12 && !hit; i++) {
-      const sd = PEAK_NEAR * Math.pow(reach / PEAK_NEAR, i / 12);
+    for (let i = 1; i <= PEAK_MARCH && !hit; i++) {
+      const sd = PEAK_NEAR * Math.pow(reach / PEAK_NEAR, i / PEAK_MARCH);
       const f = sd / d;
       const sx = vx + (p.x - vx) * f, sz = vz + (p.z - vz) * f;
-      if (!hasHeight(sx, sz)) continue;
+      const line = eyeY + rise * f;
+      if (!hasHeight(sx, sz)) {
+        // BEYOND THE FINE RING, THE COARSE RASTER — the only ground the world
+        // holds out here, and the reason a ridge at ten kilometres can now
+        // hide the mountain behind it.
+        const coarse = farRasterAt(sx, sz);
+        if (coarse === null) { out?.push({ d: Math.round(sd), src: 'none', ground: 0, line: +line.toFixed(0), over: 0 }); continue; }
+        const cg = coarse - baseElev - curveDrop(sx - vx, sz - vz);
+        if (cg > line + peakCoarseClear()) hit = true;
+        out?.push({ d: Math.round(sd), src: 'coarse', ground: +cg.toFixed(0), line: +line.toFixed(0), over: +(cg - line).toFixed(0) });
+        continue;
+      }
       // groundAt, NOT sampleHeight: the raw heightfield still holds the
       // hillside that was CARVED AWAY for the road, so from inside a cutting
       // every summit is behind a hill that is not there any more. The carved
       // mesh is what the player is looking at, and it is what gets to occlude.
       const ground = groundAt(sx, sz) - curveDrop(sx - vx, sz - vz);
-      if (ground > eyeY + rise * f + PEAK_CLEAR) hit = true;
+      if (ground > line + PEAK_CLEAR) hit = true;
+      out?.push({ d: Math.round(sd), src: 'fine', ground: +ground.toFixed(0), line: +line.toFixed(0), over: +(ground - line).toFixed(0) });
     }
   }
-  peakBlockMemo.set(p.name, hit);
+  if (!out) peakBlockMemo.set(p.name, hit);
   return hit;
 }
+/**
+ * WHY A SUMMIT IS OR IS NOT ON THE GLASS — the sight line, sample by sample.
+ *
+ * The one question the label cannot answer for itself: was there a hill in the
+ * way, how far out, and on whose word — the carved fine mesh, the coarse
+ * raster, or nothing at all. `worst` is the sample that came closest to the
+ * line, so a peak that survives by ten metres is visible in the same table as
+ * one blocked by four hundred.
+ */
+/** The coarse ground under a world point, and whether the fine world also
+ *  answers there — the two sources the sight line walks on. */
+(window as unknown as { __farat?: object }).__farat = (x: number, z: number): object => ({
+  coarse: farRasterAt(x, z), fine: hasHeight(x, z) ? +(groundAt(x, z) + baseElev).toFixed(1) : null,
+  pixelM: Math.round(farPixelM()), tiles: farRasters.size,
+  boxes: [...farRasters.entries()].map(([k, r]) => ({ k, x0: Math.round(r.xs), x1: Math.round(r.xs + r.w), z0: Math.round(r.zs), z1: Math.round(r.zs + r.h) })),
+});
+(window as unknown as { __peakwhy?: object }).__peakwhy = (match = ''): object[] => {
+  const eyeY = camera.position.y;
+  const rows: object[] = [];
+  for (const p of peaks.values()) {
+    if (match && !p.name.toLowerCase().includes(match.toLowerCase())) continue;
+    const l = peakLook(p, state.x, state.z, eyeY);
+    const steps: PeakStep[] = [];
+    const blocked = peakBlocked(p, state.x, state.z, eyeY, l.rise, l.d, steps);
+    const worst = steps.length ? steps.reduce((a, b) => (a.over > b.over ? a : b)) : null;
+    rows.push({ name: p.name, ele: p.ele, km: +(l.d / 1000).toFixed(1), rise: Math.round(l.rise),
+      blocked, fine: steps.filter((q) => q.src === 'fine').length,
+      coarse: steps.filter((q) => q.src === 'coarse').length,
+      blind: steps.filter((q) => q.src === 'none').length,
+      worst, clear: { fine: PEAK_CLEAR, coarse: Math.round(peakCoarseClear()) } });
+  }
+  return rows.sort((a, b) => (a as { km: number }).km - (b as { km: number }).km);
+};
 // What the chart's coarse layer is holding, for the tools.
 //
 // `float` is the one that matters: how far the drawn ribbon sits ABOVE the
@@ -22281,7 +22393,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // are SHARED and never touched.
     dropRetiredFar(); dropRetiredOv();
     for (const m of farMeshes.values()) { farGroup.remove(m); m.geometry.dispose(); }
-    farMeshes.clear(); farTiles.clear(); farCoverHit.clear(); farTint.clear();
+    farMeshes.clear(); farTiles.clear(); farCoverHit.clear(); farTint.clear(); farRasters.clear();
     for (const m of ovMeshes.values()) { ovGroup.remove(m); m.geometry.dispose(); }
     ovMeshes.clear(); ovTiles.clear(); ovPlaces.clear();
     for (const child of [...worldGroup.children]) {
@@ -29691,9 +29803,27 @@ function updatePeaks(vx: number, vz: number): void {
   let drawn = 0;
   for (let i = 0; i < seen.length && drawn < PEAK_SHOW; i++) {
     const e = seen[i];
-    const hidden = lumaPrimed
-      ? !depthVisible(e.p.x, e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) + 6, e.p.z)
-      : peakBlocked(e.p, vx, vz, eyeY, e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) - eyeY, e.d);
+    // ── TWO EYES, AND EITHER MAY SAY NO ──
+    //
+    // The depth map was the sole authority whenever it was primed, and it has
+    // one pardon that a distant summit walks straight through: past 25km it
+    // scans several rows ABOVE the apex for sky, because the analytic curve
+    // and the renderer's disagree by whole grid rows at that range (Bears
+    // Ears, 68km). At 25-47km those rows are about eighty screen pixels —
+    // enough to clear a ridge a kilometre away and find the sky over it.
+    // Photographed in the Senqu: THABA-NTSO at 25.3km and QUTHING DISTRICT
+    // HIGH POINT at 47.1km, both marked INSIDE the hillside that hides them,
+    // while the sight line through that hillside stood 16m and 23m over the
+    // line to each.
+    //
+    // So the geometric march is not the fallback any more, it is a VETO. The
+    // depth map keeps what it is good at — the near occluders no heightfield
+    // knows, a building, the wall of a cutting, a tree — and the march keeps
+    // what IT is good at: a ridge ten kilometres out that the depth buffer
+    // either did not draw or forgave. A summit has to pass both.
+    const rise = e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) - eyeY;
+    const hidden = peakBlocked(e.p, vx, vz, eyeY, rise, e.d)
+      || (lumaPrimed && !depthVisible(e.p.x, e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) + 6, e.p.z));
     const nowMs = performance.now();
     let st = peakSeen.get(e.p.name);
     if (!st) { st = { on: !hidden, raw: !hidden, rawAt: nowMs, sx: e.sx, sy: e.sy }; peakSeen.set(e.p.name, st); }

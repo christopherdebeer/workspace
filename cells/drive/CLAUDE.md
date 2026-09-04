@@ -1499,6 +1499,32 @@ scale 3, 40 m and 105 m cameras:
   sample beside it, and whether any live sheet is over the roof — that pair
   is what tells a perched body from no water at all.
 
+- **A SUMMIT PASSES TWO EYES, AND EITHER MAY SAY NO.** The peak labels have
+  a depth-buffer test (`depthVisible`, the 40x88 luma map) and a geometric
+  sight-line march (`peakBlocked`), and the depth map used to be the SOLE
+  authority whenever it was primed. It has one pardon a distant summit walks
+  straight through: past 25km it scans several grid rows ABOVE the apex for
+  sky, because the analytic earth-curve and the renderer's disagree by whole
+  rows at that range (Bears Ears, 68km). At 25-47km those rows are ~80 screen
+  pixels — enough to clear a ridge a kilometre away and find sky over it.
+  Photographed in the Senqu: THABA-NTŠO at 25.3km and QUTHING DISTRICT HIGH
+  POINT at 47.1km labelled with their marks INSIDE the hillside that hides
+  them, while the sight line through that hillside stood 16m and 23m over the
+  line to each. So the march is a VETO, not a fallback: the depth map keeps
+  the near occluders no heightfield knows (a building, a cutting wall, a
+  tree), the march keeps the ridge ten kilometres out. Both must pass.
+  Three supporting repairs: the march no longer stops at 4.2km (it walks to
+  0.72 of the summit's own distance); beyond the fine ring it reads the
+  COARSE RASTER — the far shell's own 256² height tiles, kept now in
+  `farRasters` (19m of ground a pixel at z13, 66-76m at z11), which is the
+  honest source the shell's chorded MESH never was, with a blocker there
+  having to beat the line by its own pixel size; and the per-peak verdict
+  memo is cleared when `terrainBuilds` changes, not only after 40m of
+  driving, or a verdict reached before the ridge loaded outlives the ridge's
+  arrival. `__peakwhy('name')` walks the line sample by sample (distance,
+  source fine/coarse/none, ground, sight line, margin) and `__farat(x,z)`
+  says what each source answers at a point.
+
 **The rule that keeps a lab honest: it imports the SAME modules the game runs.**
 A lab that reimplements what it is inspecting proves nothing about what ships.
 This is why the façade shader became `client/facade.ts`, the plants became
