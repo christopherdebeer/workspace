@@ -1437,69 +1437,46 @@ scale 3, 40 m and 105 m cameras:
   survives bundling as a dynamic import (the platform marks the bare name
   external; esbuild keeps `import()` of an external lazy). `curl
   …/app.js | grep '^import '` is the check.
-- **Shipped as a bake, not the dependency — on EVERY tree, at EVERY
-  distance, and THE RECIPE IS THE LAB'S OWN JSON.** Turn the dials in
-  `/lab/flora-ez` until a tree reads, press COPY, paste the object into
-  `RECIPES` in `devtools/bake-ez-flora.mjs` under its family, and bake
-  (`npm i --no-save @dgreenheck/ez-tree@1.1.0`, then run the devtool; a
-  DOM stub covers the package's texture loader). The bake writes
-  `client/flora-ez-baked.ts`: the wood as Int16 positions and Uint16
-  indices, standing on y=0 with its top at y=1, and the crown as the
-  recipe asks — `leafAs: 'card'` keeps the package's own leaf quads (two
-  triangles a leaf, opaque, drawn double-sided, toned per card), `'clump'`
-  keeps only the leaf centres and the world stands a Drive blob on each
-  (`icosa` 20 triangles, `flat` an eight-triangle pressed octahedron,
-  `cone` an open four-sided frond; `clumpM` is metres on the lab's 8 m
-  tree). `client/flora-ez.ts` decodes each variant into ONE geometry — a
-  per-vertex `aWood` flag lets `ezMaterial` colour the wood bark and the
-  crown the instance's colour. In main.ts (`ezTiers`, beside `trunks`)
-  every broadleaf, conifer and snag site is stood up as a skeleton at the
-  height its archetype would have reached; the archetype and its trunk
-  are not drawn for those kinds. The first build gave only the nearest
-  trees a skeleton and the verdict from the seat was immediate: **a tree
-  that changes shape as you drive at it looks worse than either shape** —
-  so no tier, no switching.
-  **THE TREE BUDGET** is what makes that affordable: the chosen recipes
-  are ~1000 triangles a broadleaf (cards), ~1700 a conifer (pads), ~330 a
-  snag, so `TREE_TRI_BUDGET` (800k, `?treetris=` overrides) scales the
-  three tree caps together (`ezCapScale`), and because placement walks
-  rings outward and stops at the cap, a richer recipe thins the FAR wood
-  and never slows the frame. At these recipes that is ~310 broadleaf and
-  ~270 conifers in view, so a forest thins past a few hundred metres;
-  paste a leaner JSON (fewer leaves, four-sided wood) to buy count back.
-  **A CAP THAT BINDS MUST BIND BY DISTANCE.** The first budgeted build
-  admitted trees in the placement's own order — square rings of 220 m
-  cells, cells in grid order, sites in seed order — so crossing a cell
-  boundary re-centred the rings and admitted a DIFFERENT subset: seen from
-  the seat as vegetation popping in and out and rerolling as you drive, and
-  first blamed on terrain refinement. `refreshVeg` now gathers the tree
-  kinds first and admits the nearest N of each by true distance
-  (`ezAdmit`), so the set changes only at its far edge, and the crowns fade
-  toward the ground over the last third of THAT edge (`ezEdge`, reported by
-  `__ez().edge`), not over VEG_RANGE, which the budget never reaches.
-  Measured driving 60 m steps through the Aare woods: every appearance and
-  vanishing is in the outer 40% of the admitted radius, none inside it.
-  Refinement itself only re-seats a tree vertically; the one legitimate
-  reroll is the biome settling from its guess, which replants everything
-  once. `?ez=0` brings the archetypes back; `__ez()` is the bill (budget,
-  cap scale, effective caps, admitted edge, mean triangles, per-variant
-  counts, every placed site's numbers), `__ezgeo()` every decoded variant's
-  extent.
+- **Shipped as a bake, not the dependency — EVERY TREE, EVERY DISTANCE.**
+  `devtools/bake-ez-flora.mjs` takes the lab's COPY JSON per family (paste
+  what read well) and generates the variants in node (a DOM stub;
+  `document.createElementNS` is all the package's texture loader touches),
+  writing `client/flora-ez-baked.ts`: Int16 wood, Uint16 indices, and the
+  crown as leaf cards (`leafAs: card`, two triangles a leaf, opaque,
+  double-sided, toned per card) or as anchors for a Drive blob (`clump`:
+  icosa, `flat` = a pressed octahedron, `cone` = an open frond). Each
+  variant is ONE geometry with a per-vertex `aWood` flag; `ezMaterial`
+  colours the crown from the instance and the wood from bark. In main.ts
+  every broadleaf, conifer and snag site wears a skeleton (`ezTiers`, two
+  InstancedMeshes a variant: one casts shadows for trees inside
+  `shadowSpan`, its twin does not, same shape). Sized in METRES:
+  `EZ_M_PER_SCALE` × the site's scale draw, so an oak is 8–21 m, a pine
+  10–26, a snag 4–11. **The near tier was rejected from the seat** — a tree
+  that changes shape as you drive at it is worse than either shape — and
+  so was ring-order admission: with the caps binding, crossing a 220 m
+  cell re-centred the rings and rerolled the wood. Trees are gathered and
+  the nearest N admitted by true distance, fading toward the ground over
+  the last third of the admitted edge (`__ez().edge`).
+  **The budget:** the recipes are ~1000 triangles a broadleaf and ~1700 a
+  conifer, so the three tree caps are scaled together to `TREE_TRI_BUDGET`
+  (2.4M; `?treetris=` overrides, the VEGETATION dial multiplies) — a
+  richer recipe thins the far wood, never the frame. `?ez=0` restores the
+  archetypes; `__ez()` is the bill, `__ezgeo()` every variant's extent.
+  Change a recipe → re-bake (`npm i --no-save @dgreenheck/ez-tree@1.1.0`,
+  run the devtool); the bake prints the drawn triangles per variant.
 
-- **THE SWARD'S SHRUB LAYER** (`refreshShrubs`, beside `refreshVeg`). The
-  sward stopped at flowers; between them and the trees nothing stood
-  knee-high, so the near field read as a lawn with trees in it. Shrubs
-  (`shrubGeo`, two blobs, 40 triangles) on a 5 m world-snapped lattice
-  inside the grass's 140 m reach, standing where the GPU sward's own field
-  says grass grows — it reads `swardFieldData` (rate) and `swardColData`
-  (ground colour, habitat class) per 8 m texel — at a rate the habitat sets
-  (`SHRUB_RATE`: meadow 0.34, wood floor 0.6, water's edge 0.5, cliff and
-  ruin next to nothing), dithered on a hash and thinning outward like the
-  tufts, coloured the sward's green at half its light so a shrub is a shadow
-  in the grass before it is a shape, sliding to the ground colour over the
-  outer half. Rebuilt with the vegetation every 900 ms, one draw, ~300–450
-  instances. No GPU sward, no field, no shrubs. `?shrub=0` for an A/B;
-  `__shrubs()` counts them, and how many stand within 40 m.
+- **THE SWARD GROWS SHRUBS.** Between the sward's flowers and the trees
+  there was nothing knee-high. `refreshShrubs` (beside `refreshVeg`, every
+  900 ms) stands `shrubGeo` — two blobs leaning on each other — on a 5 m
+  lattice inside the grass's 140 m reach, reading the GPU sward's OWN field
+  (`swardFieldData` rate, `swardColData` ground colour + `SwardCtx` habitat
+  per 8 m texel): a shrub stands where grass grows, at `SHRUB_RATE` for the
+  habitat (open meadow sparse, wood floor and water's edge thick, cliff and
+  ruin next to none), the sward's green at half its light so it reads as a
+  shadow in the grass before a shape, dissolving toward the ground colour
+  like the tufts. World-snapped lattice, so a shrub never moves. One draw,
+  a few hundred instances. No GPU sward, no field, no shrubs. `?shrub=0`;
+  `__shrubs()`.
 
 **The rule that keeps a lab honest: it imports the SAME modules the game runs.**
 A lab that reimplements what it is inspecting proves nothing about what ships.

@@ -7446,7 +7446,7 @@ const EZ_FAMILIES: EzFamily[] = ['broadleaf', 'conifer', 'snag'];
  */
 const TREE_TRI_BUDGET = ((): number => {
   const ask = Number(new URLSearchParams(location.search).get('treetris'));
-  return Number.isFinite(ask) && ask > 0 ? ask : 800000;
+  return Number.isFinite(ask) && ask > 0 ? ask : 2400000;
 })();
 const ezCapScale = ((): number => {
   let atCap = 0;
@@ -7454,7 +7454,16 @@ const ezCapScale = ((): number => {
   return atCap > 0 ? clamp(TREE_TRI_BUDGET / atCap, 0.08, 1) : 1;
 })();
 const isEzKind = (k: VegKind): k is EzFamily => k === 'broadleaf' || k === 'conifer' || k === 'snag';
-interface EzTier { mesh: THREE.InstancedMesh; tris: number; n: number }
+/**
+ * TWO MESHES A VARIANT, ONE SHAPE. The shadow map reaches `shadowSpan` metres
+ * (80–150 by quality); an instanced mesh is not culled per instance, so every
+ * tree in range was drawn into the depth pass, a million triangles of wood
+ * whose shadow lands outside the map. A tree inside the span goes in the
+ * mesh that casts, the rest in its twin that does not — the same geometry
+ * and material, so nothing about a tree changes with distance but whether
+ * the GPU spends a depth pass on it.
+ */
+interface EzTier { near: THREE.InstancedMesh; far: THREE.InstancedMesh; tris: number; n: number; nNear: number; nFar: number }
 const ezTiers: Record<EzFamily, EzTier[]> = { broadleaf: [], conifer: [], snag: [] };
 const ezMat = ezMaterial(0x4a3826);
 grainFx(ezMat, 'grain-ez', 0.95, 2.2);
@@ -7462,19 +7471,24 @@ if (EZ_ON) {
   for (const fam of EZ_FAMILIES) {
     for (const v of ezVariants(fam)) {
       // Worst case every site of a kind lands on one variant, so each holds the kind's whole cap.
-      const mesh = vegMesh(v.geometry, ezMat, VEG_CAP[fam]);
-      mesh.name = 'veg-ez';
-      ezTiers[fam].push({ mesh, tris: v.tris, n: 0 });
+      const near = vegMesh(v.geometry, ezMat, VEG_CAP[fam]);
+      near.name = 'veg-ez';
+      const far = vegMesh(v.geometry, ezMat, VEG_CAP[fam]);
+      far.name = 'veg-ez-far';
+      shadowy(far, false, false);
+      ezTiers[fam].push({ near, far, tris: v.tris, n: 0, nNear: 0, nFar: 0 });
     }
   }
 }
-/** The height the archetype would have stood at: trunk plus its crown's top. */
-const ezArchetypeTop: Record<EzFamily, number> = { broadleaf: 0, conifer: 0, snag: 0 };
-for (const fam of EZ_FAMILIES) {
-  const g = vegMeshes[fam].geometry;
-  g.computeBoundingBox();
-  ezArchetypeTop[fam] = g.boundingBox ? g.boundingBox.max.y : 1;
-}
+/**
+ * HOW TALL A TREE IS, IN METRES. The archetypes stood three to nine metres —
+ * a crown on a short post, sized for twenty triangles. A skeleton with real
+ * branching wants a real height: a site's scale draw (VEG_SIZE, 1.4–3.6 for
+ * a broadleaf, krummholz and the tuning already in it) becomes metres at a
+ * rate per family, so an oak stands 8–21 m, a pine 10–26, a snag 4–11, and a
+ * treeline spruce is still the short one. The crown's reach rides on top.
+ */
+const EZ_M_PER_SCALE: Record<EzFamily, number> = { broadleaf: 5.7, conifer: 7.2, snag: 3.6 };
 /** What the last refresh stood up, for the harness. */
 let ezPlaced: Array<Record<string, number | string>> = [];
 /** The admitted edge per family last refresh, metres. */
@@ -9248,7 +9262,7 @@ function refreshVeg(): void {
     }
   }
   const ezCounts: Record<EzFamily, number> = { broadleaf: 0, conifer: 0, snag: 0 };
-  for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) t.n = 0;
+  for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) { t.n = 0; t.nNear = 0; t.nFar = 0; }
   ezPlaced = [];
   // ── THE TREES ARE ADMITTED BY DISTANCE, NOT BY CELL ──
   //
@@ -9321,30 +9335,33 @@ function refreshVeg(): void {
           const fam = v.k;
           if (!ezAdmit.has(v)) continue;
           const tier = ezTiers[fam][ezVariantFor(fam, v.x, v.z)];
-          if (!tier || tier.n >= tier.mesh.instanceMatrix.count) continue;
+          if (!tier || tier.n >= tier.near.instanceMatrix.count) continue;
           const y = groundAt(v.x, v.z);
-          const total = v.h + ezArchetypeTop[fam] * v.s * (v.sy ?? 1);
+          const total = EZ_M_PER_SCALE[fam] * v.s * (v.sy ?? 1);
           const H = total / (1 + ezCrownReach(fam));
           vegDummy.position.set(v.x, y, v.z);
           vegDummy.rotation.set(v.tl ?? 0, v.rot, 0);
           vegDummy.scale.set(H * (v.sw ?? 1), H, H * (v.sw ?? 1));
           vegDummy.updateMatrix();
-          tier.mesh.setMatrixAt(tier.n, vegDummy.matrix);
+          const casts = d2v < shadowSpan * shadowSpan;
+          const mesh = casts ? tier.near : tier.far;
+          const slot = casts ? tier.nNear++ : tier.nFar++;
+          mesh.setMatrixAt(slot, vegDummy.matrix);
           // Distance over the ADMITTED edge, not the plant range: the budget's
           // edge is where a tree vanishes, so that is where it must fade.
           const tt = Math.sqrt(d2v) / Math.max(120, ezEdge[fam]);
           if (vegRoleDebug) {
-            tier.mesh.setColorAt(tier.n, VEG_ROLE_COL[v.anchor ? 'anchor' : v.role]);
+            mesh.setColorAt(slot, VEG_ROLE_COL[v.anchor ? 'anchor' : v.role]);
           } else if (tt > 0.66) {
             const fmv = Math.min(1, (tt - 0.66) / 0.34);
             const mixv = fmv * 0.7;
             const [tr, tg, tb] = terrainPalette(y + baseElev, 0, sampleCover(v.x, v.z), v.x, v.z);
             swardCol.setRGB(v.c.r + (tr - v.c.r) * mixv, v.c.g + (tg - v.c.g) * mixv, v.c.b + (tb - v.c.b) * mixv);
-            tier.mesh.setColorAt(tier.n, swardCol);
-          } else tier.mesh.setColorAt(tier.n, v.c);
+            mesh.setColorAt(slot, swardCol);
+          } else mesh.setColorAt(slot, v.c);
           tier.n++;
           ezCounts[fam]++;
-          if (ezPlaced.length < 600) ezPlaced.push({ k: v.k, role: v.role, x: +v.x.toFixed(1), z: +v.z.toFixed(1), h: +v.h.toFixed(2), s: +v.s.toFixed(2), sy: +(v.sy ?? 1).toFixed(2), sw: +(v.sw ?? 1).toFixed(2), top: +ezArchetypeTop[fam].toFixed(2), H: +H.toFixed(2) });
+          if (ezPlaced.length < 600) ezPlaced.push({ k: v.k, role: v.role, x: +v.x.toFixed(1), z: +v.z.toFixed(1), h: +v.h.toFixed(2), s: +v.s.toFixed(2), sy: +(v.sy ?? 1).toFixed(2), sw: +(v.sw ?? 1).toFixed(2), H: +H.toFixed(2), casts: casts ? 1 : 0 });
           activeRoles[v.role]++;
           if (v.anchor) activeAnchors++;
           continue;
@@ -9407,9 +9424,12 @@ function refreshVeg(): void {
   trunks.instanceMatrix.needsUpdate = true;
   for (const fam of EZ_FAMILIES) {
     for (const t of ezTiers[fam]) {
-      t.mesh.count = t.n;
-      t.mesh.instanceMatrix.needsUpdate = true;
-      if (t.mesh.instanceColor) t.mesh.instanceColor.needsUpdate = true;
+      t.near.count = t.nNear;
+      t.near.instanceMatrix.needsUpdate = true;
+      if (t.near.instanceColor) t.near.instanceColor.needsUpdate = true;
+      t.far.count = t.nFar;
+      t.far.instanceMatrix.needsUpdate = true;
+      if (t.far.instanceColor) t.far.instanceColor.needsUpdate = true;
     }
   }
   vegActiveRoles = activeRoles;
@@ -22896,7 +22916,8 @@ function tapeKeep(): string {
   let tris = 0;
   for (const fam of EZ_FAMILIES) {
     const per = ezTiers[fam].map((t) => t.n);
-    out[fam] = { placed: per.reduce((p, q) => p + q, 0), perVariant: per, variants: ezTiers[fam].length };
+    out[fam] = { placed: per.reduce((p, q) => p + q, 0), perVariant: per, variants: ezTiers[fam].length,
+      casting: ezTiers[fam].reduce((p, t) => p + t.nNear, 0), mPerScale: EZ_M_PER_SCALE[fam] };
     for (const t of ezTiers[fam]) tris += t.n * t.tris;
   }
   out.tris = tris;
@@ -22908,7 +22929,7 @@ function tapeKeep(): string {
   const rows: object[] = [];
   for (const fam of EZ_FAMILIES) {
     ezTiers[fam].forEach((t, i) => {
-      for (const [part, g] of [['tree', t.mesh.geometry]] as Array<[string, THREE.BufferGeometry | undefined]>) {
+      for (const [part, g] of [['tree', t.near.geometry]] as Array<[string, THREE.BufferGeometry | undefined]>) {
         if (!g) continue;
         g.computeBoundingBox();
         const p = g.getAttribute('position') as THREE.BufferAttribute;
@@ -22918,7 +22939,7 @@ function tapeKeep(): string {
         rows.push({ fam, i, part, n: p.count, idx: g.index ? g.index.count : 0, nan,
           min: bb ? [+bb.min.x.toFixed(2), +bb.min.y.toFixed(2), +bb.min.z.toFixed(2)] : null,
           max: bb ? [+bb.max.x.toFixed(2), +bb.max.y.toFixed(2), +bb.max.z.toFixed(2)] : null,
-          count: t.mesh.count });
+          count: t.near.count + t.far.count });
       }
     });
   }
