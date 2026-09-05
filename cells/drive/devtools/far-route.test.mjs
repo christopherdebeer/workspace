@@ -4,25 +4,18 @@
  *   node cells/drive/devtools/far-route.test.mjs [spot]
  *
  * The solver was never the problem; the graph was. `roadGraph()` was built
- * from `roadGrid`, which is the FINE OSM ring and stops around five
- * kilometres out — so a goal thirty kilometres away had no path, and said so
- * honestly, while the chart was at that moment DRAWING the motorway that goes
- * there. The overview tiles have always carried those roads as tagged
- * polylines; the layer spent them on ribbons and threw the vectors away.
+ * from `roadGrid`, which is the FINE OSM ring and stops a couple of kilometres
+ * out — so a goal thirty kilometres away had no path, and said so honestly,
+ * while the chart was at that moment DRAWING the trunk road that goes there.
  *
- * What this asserts, in the order the failure actually happens:
- *
- *   1. THE COARSE NETWORK IS RETAINED AT ALL (__ovroads). If the chart has
- *      not fetched its tiles yet there is nothing to test and the run says so
- *      rather than passing vacuously.
- *   2. IT REACHES FURTHER THAN THE SURVEY. A coarse network that stops where
- *      the fine one does buys nothing.
- *   3. A GOAL BEYOND THE FINE RING SOLVES. This is the feature.
- *   4. THE ROUTE IS MIXED, AND FINE AT THE NEAR END. A plan that is coarse
- *      under the truck would be steering it off the tarmac.
- *   5. THE AUTOPILOT IS ONLY GIVEN THE SURVEYED HALF. The one that matters:
- *      a z10 polyline is out by fifty to a hundred metres, and driving one
- *      with confidence is worse than not planning at all.
+ * WHY THE COARSE NETWORK IS INJECTED RATHER THAN AWAITED. Three runs went by
+ * measuring Overpass instead of the router: z13 arriving after 36s with four
+ * kilometres of reach (not enough to prove anything), then z8 not arriving at
+ * all in two minutes. The tile path is exercised by the chart every time
+ * anyone opens it. What needs a deterministic bench is the part that was
+ * written here — the two-tier graph, the portals across the handover, and the
+ * rule that keeps the autopilot off a simplified line. So a known network is
+ * pushed in with __ovinject and the live one is reported beside it.
  */
 import { openDrive, report } from './harness.mjs';
 
@@ -34,83 +27,70 @@ const check = (name, cond, saw) => {
 };
 
 const d = await openDrive({ spot: SPOT, tag: 'farroute', settle: 25000 });
-// THE COARSE LAYER ONLY STREAMS FROM THE CHART, AND ONLY ZOOMED OUT. The gate
-// is `camMode === 'top'` plus a view radius wide enough that the fine ring is
-// no longer the better map of itself — which is the whole reason the router
-// could not see these roads either. Open the chart, wind the zoom out, and
-// wait: these are cell-built tiles and a cold one is a live Overpass query.
-// AND THE TRUCK HAS TO BE ON A ROAD. A spawn coordinate is a wish: the first
-// run reported "no road under the truck" with 126 fine nodes in the graph and
-// spent all five of its failures on that one fact. __toroad exists for exactly
-// this and says so in its own comment.
+// A spawn coordinate is a wish. The router's first question is which node the
+// truck is standing on, and it must be a surveyed one.
 const onRoad = await d.page.evaluate(() => window.__toroad(400));
 console.log('to road:', JSON.stringify(onRoad));
-await d.page.evaluate(() => {
-  window.__hold(0, 0, 1);
-  window.__cam('top');
-  // All the way out: ovLevelFor drops a rung only when the view radius passes
-  // 2.5 tiles of the current one, so z13 holds until about twelve kilometres.
-  // Clamped internally, so asking for more than exists is the way to ask for
-  // the most there is.
-  window.__zoom(1e6);
-});
-for (let i = 0; i < 10; i++) {
-  await d.page.waitForTimeout(12000);
-  const o = await d.page.evaluate(() => window.__ovroads());
-  console.log(`  +${(i + 1) * 12}s  level ${o.level}  tiles ${o.tiles}  ways ${o.ways}  reach ${o.reachKm}km`);
-  if (o.reachKm > 12) break;
-}
+check('the truck is on a surveyed road', onRoad.ok === true, onRoad);
+await d.page.evaluate(() => window.__hold(0, 0, 1));
 
-const ov = await d.page.evaluate(() => window.__ovroads());
-console.log('coarse network:', JSON.stringify(ov));
-if (!ov.ways) {
-  console.log('\nSKIPPED — no overview tiles arrived; nothing to route over.');
-  report(d.errors);
-  await d.close();
-  process.exit(0);
-}
-check('the coarse network is kept, not just drawn', ov.ways > 0 && ov.pts > 0, ov);
-check('…and it reaches past the fine survey',
-  ov.fineRingM !== null && ov.reachKm * 1000 > ov.fineRingM, ov);
-
-// A goal out where only the coarse network goes: straight down the wind of
-// the coarse layer's own reach, so it is inside what the chart has fetched.
-const far = await d.page.evaluate((km) => {
-  const s = window.__drive;
-  let best = null;
-  // The farthest coarse point actually held, which is a target we KNOW the
-  // network reaches rather than a guess at a compass bearing.
+const geom = await d.page.evaluate(() => {
   const o = window.__ovroads();
-  return { ask: km, ring: o.fineRingM, reach: o.reachKm, x: s.x, z: s.z, best };
-}, 0);
-console.log('truck:', JSON.stringify(far));
-
-const res = await d.page.evaluate(() => {
-  const o = window.__ovroads();
-  // Aim at something comfortably past the survey but inside the coarse reach.
-  const want = Math.min(o.reachKm * 1000 * 0.7, (o.fineRingM ?? 5000) * 3.5);
-  const s = window.__drive;
-  window.__goal('far probe', s.x, s.z - want);
-  return { want: Math.round(want), route: window.__route(true) };
+  return { ring: o.fineRingM, handover: o.handoverM, x: window.__drive.x, z: window.__drive.z };
 });
+console.log('geometry:', JSON.stringify(geom));
+
+// A trunk road running north from just inside the handover to 30km out, with a
+// deliberate kink so the plan cannot be mistaken for a straight-line fallback.
+const built = await d.page.evaluate((g) => {
+  const pts = [];
+  for (let m = g.handover * 0.9; m <= 30000; m += 250) {
+    pts.push([g.x + Math.sin(m / 9000) * 900, g.z - m]);
+  }
+  return window.__ovinject([pts]);
+}, geom);
+console.log('injected:', JSON.stringify(built));
+
+const res = await d.page.evaluate((g) => {
+  window.__goal('far probe', g.x, g.z - 26000);
+  const route = window.__route(true);
+  return { route, ov: window.__ovroads() };
+}, geom);
 console.log('route:', JSON.stringify(res.route));
-check(`a goal ${res.want}m out solves at all`, res.route.pts >= 2, res.route);
+
+check('a goal 26km out solves at all', res.route.pts >= 2, res.route);
 check('…over a graph with both tiers in it',
   res.route.graph.coarse > 0 && res.route.graph.fine > 0, res.route.graph);
 check('…joined by at least one portal', res.route.graph.portals > 0, res.route.graph);
 check('…and the plan reaches past the survey',
-  res.route.km * 1000 > (ov.fineRingM ?? 0), { km: res.route.km, ring: ov.fineRingM });
-check('the plan is mixed, not all coarse', res.route.coarsePts > 0
-  && res.route.coarsePts < res.route.pts, res.route);
+  res.route.km * 1000 > geom.ring * 2, { km: res.route.km, ring: geom.ring });
+check('the plan is mixed, not all coarse',
+  res.route.coarsePts > 0 && res.route.coarsePts < res.route.pts, res.route);
+// THE ONE THAT MATTERS. A coarse leg is right about the valley and out by a
+// hundred metres about the tarmac; steering down one with confidence is worse
+// than not planning at all.
 check('THE AUTOPILOT IS ONLY GIVEN THE SURVEYED HALF',
-  res.route.fineKm < res.route.km, res.route);
+  res.route.fineKm > 0 && res.route.fineKm < res.route.km, res.route);
+check('…and the driving line it hands over is short',
+  res.route.driveTo === 0 || res.route.fineKm * 1000 < geom.ring * 1.6, res.route);
 check('the solve stays cheap', res.route.ms < 250, { ms: res.route.ms });
-// The whole point of the tier, in one number: the plan must outrun the survey.
-console.log(`\nplanned ${res.route.km}km, of which ${res.route.fineKm}km is surveyed `
-  + `and driveable; ${res.route.coarsePts} of ${res.route.pts} points are the chart's; `
-  + `${res.route.graph.portals} portal(s) across a ${res.route.graph.inner}m handover.`);
 
-await d.shot('farroute-chart');
+// With the coarse tier taken away again, the same goal must fall back to the
+// old honest answer rather than keeping a stale plan.
+const off = await d.page.evaluate(() => {
+  window.__ovinject();
+  return window.__route(true);
+});
+check('without the coarse tier the far goal is unreachable again',
+  off.pts === 0 || off.km * 1000 < geom.ring * 2, off);
+console.log('without coarse:', JSON.stringify({ pts: off.pts, km: off.km, last: off.last }));
+
+console.log(`\nplanned ${res.route.km}km, of which ${res.route.fineKm}km is surveyed and `
+  + `driveable; ${res.route.coarsePts} of ${res.route.pts} points are the chart's; `
+  + `${res.route.graph.portals} portal(s) across a ${res.route.graph.inner}m handover; `
+  + `solve ${res.route.ms.toFixed(1)}ms over ${res.route.nodes} nodes.`);
+console.log(`the live coarse layer meanwhile: ${JSON.stringify(res.ov)}`);
+
 console.log(bad ? `\n${bad} FAILED` : '\nall ok');
 report(d.errors);
 await d.close();

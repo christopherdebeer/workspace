@@ -39479,6 +39479,28 @@ function setClean(on: boolean): void {
     graph: graphStat, ovWays: [...ovWays.values()].reduce((n, l) => n + l.length, 0),
     shortM: Math.round(goalShortM), onIt: !!drive, ...goalSolveStat };
 };
+/**
+ * A COARSE NETWORK ON DEMAND, so the router can be tested without waiting on
+ * the weather.
+ *
+ * These tiles are the one layer a fixture does not intercept: they come from
+ * the cell, a cold one is a live Overpass query, and the level is chosen by
+ * the chart's zoom. A harness that wants to assert the two-tier graph would
+ * otherwise be asserting whether Overpass felt well — measured across three
+ * runs: z13 arriving in 36s with 4km of reach, then z8 not arriving at all in
+ * two minutes. The tile PATH is exercised by the chart every time anyone opens
+ * it; what needs a deterministic bench is the graph, the portals and the rule
+ * that the autopilot only steers on the survey.
+ *
+ * Ways are [[x, z], ...] in world metres, which is what ovWays holds.
+ */
+(window as unknown as { __ovinject?: object }).__ovinject =
+  (ways?: Array<Array<[number, number]>>, hw = 6): object => {
+    if (ways === undefined) { ovWays.delete('inject'); ovWayV++; return { cleared: true }; }
+    ovWays.set('inject', ways.map((pts) => ({ pts, hw, name: 'injected' })));
+    ovWayV++;
+    return { ways: ways.length, pts: ways.reduce((n, w) => n + w.length, 0), v: ovWayV };
+  };
 /** The coarse network the chart fetched and the router now walks. */
 (window as unknown as { __ovroads?: object }).__ovroads = (): object => {
   let ways = 0, pts = 0, far = 0;
