@@ -1752,6 +1752,79 @@ comments.
 
 ---
 
+## The chassis
+
+The truck is three models stacked, and knowing which one is arguing matters
+more than any single number in them.
+
+- **The drive step** picks between ARCADE (the shipped bicycle model, the
+  `trac` dial's 0) and the TYRE model (LOOSE/REAL, `stepTraction`). Both write
+  `state.x/z/heading/speed` and `slideV`.
+- **The suspension pass** lays the body on four wheel contacts and writes
+  `bodyY`, `pitchC`, `rollC`, `groundedF`, `gradePitch`, `gradeRoll`, `axleMu`
+  and `wheelMu` — which the NEXT frame's drive step reads. One frame of lag,
+  deliberately.
+- **`groundedF`** is the contact fraction, 0–1, summed from the four wheel
+  deflections. It gates thrust, braking, steering and the friction budget.
+
+Two rules used to stand in for physics here, and both were felt from the seat.
+
+- **PARKED IS A HOLD, AND IT IS DECIDED BEFORE THE STEP.** The old `parkHold`
+  zeroed `state.speed`/`slideV` AFTER `stepTraction` had already integrated the
+  frame's position, so the velocities were reset and the DISPLACEMENT was kept:
+  two millimetres a frame is twelve centimetres a second, and a stopped truck
+  crept downhill forever. It now latches (`parkLatch`) before the step and the
+  step is skipped entirely — nothing integrates, so nothing moves. Measured
+  with `devtools/park-air.mjs`.
+- **THE GRADE IT SURVIVES IS THE TYRES', NOT A NUMBER.** g·sinθ pulls, μ·g·cosθ
+  holds, so a standing truck stays put while `tanθ ≤ μ` — the angle of repose,
+  read from the friction the four wheels are already sampling. Dry tarmac holds
+  past 40°, wet mud lets go by 20; the old fixed 30° was wrong both ways.
+  Release is the throttle, real drive, a wheel lifting, or a steeper grade
+  streaming in underneath — never a timer.
+- **THE BRAKE NO LONGER DEFEATS THE HOLD.** Requiring "no pedal" made the one
+  input that should guarantee a parked truck the one that forbade it, and it is
+  why a rig left on a hillside under the drone slid off its own pin.
+- **NOTHING YANKS AN AIRBORNE TRUCK DOWN.** The reseat read
+  `Math.abs(tY - bodyY) > 6` and seated the body on the ground whenever it
+  found itself six metres from it, in either direction. It exists to recover a
+  relocation that left the hull 3.9km up — but it cannot tell that from a truck
+  that drove off a ledge, so every jump ended in a teleport at exactly six
+  metres. Three narrow reseats replace it, each naming what actually went
+  wrong: **buried** (`bodyY < tY - 6`, the ground came up through the hull — a
+  lift, never a drop), **the ground moved** (`tY` jumped >6m in one frame while
+  the truck was still standing on it, which is streaming and cannot fire on a
+  truck already in the air), and **never landed** (12 unbroken seconds of air,
+  a 700m fall; the watchdog, and the only one that is a rule). The fall itself
+  is the heave spring's `-9.81` floor and nothing else.
+- **AIRBORNE, THE ATTITUDE SPRINGS ARE OFF TOO.** They ARE the wheels holding
+  the body against the ground; with nothing touching, chasing `tPitch` had the
+  hull rotate in mid-air to lie parallel to terrain it was only flying over.
+  In flight the body carries the rate it left with, bled at `exp(-0.6·dt)`; the
+  springs re-engage the instant a wheel touches, and that is the landing.
+- **GRAVITY DOES NOT NEED FOUR WHEELS** (`gravGrip`). Thrust, braking and
+  cornering come out of the contact patch and are rightly scaled by
+  `groundedF`; the pull down the hill is not — a truck accelerates at g·sinθ on
+  four tyres, two, or ice. Scaling it by the contact fraction meant the
+  steepest, most articulated ground was also where the hill stopped pulling.
+  Any contact now gives the whole of gravity; only genuine flight takes it.
+- **ROLLING RESISTANCE FADES OUT, it does not flip.** `Math.sign(u)` is a step:
+  at a crawl it reverses every sub-step and shoves a nearly-stopped truck about
+  in the noise. `clamp(u / 0.5, -1, 1)` is what a rolling wheel does, and what
+  has stopped rolling is held by the latch instead.
+
+Probes: `__phys()` (adds `park` — the latch, the slope in degrees and the
+degrees the surface could hold — plus `air` and `grounded`), `__susp()` (adds
+`air` and `gap`), `__launch(vy)` kicks the sprung body upward so a fall can be
+measured without hunting for a ramp, and `devtools/park-air.mjs` runs both
+halves. Sim seconds cost roughly ten real ones in the harness, so keep the
+windows short and state the thresholds per second.
+
+Still open, and deliberately left alone: a landing costs the truck no forward
+speed and no condition, however far it fell; there is no lateral load transfer,
+so a corner never loses grip to roll; and a river current still walks a latched
+truck downstream, which is arguably right and certainly untested.
+
 ## Big shapes worth knowing
 
 - **`client/main.ts` is ~36k lines** and holds the world's module state. Do not

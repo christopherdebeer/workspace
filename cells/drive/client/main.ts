@@ -23328,6 +23328,14 @@ function tapeKeep(): string {
   return { x: Math.round(state.x), z: Math.round(state.z),
     fromOrigin: Math.round(Math.hypot(state.x, state.z)) };
 };
+/** KICK THE SPRUNG BODY UPWARD, in m/s — the only repeatable way to put the
+ *  truck in the air. A ramp depends on finding one; this is the launch itself,
+ *  so what comes after it is purely the fall, and a harness can check that the
+ *  fall is gravity's and nobody else's. */
+(window as unknown as { __launch?: object }).__launch = (vy = 12): object => {
+  vBodyY = vy;
+  return { vBodyY, bodyY: +bodyY.toFixed(2) };
+};
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
 (window as unknown as { __coverAt?: (x: number, z: number) => number | null }).__coverAt = sampleCover;
 /** Camera mode and the double-tap state behind it — so a test can see WHY a
@@ -25671,6 +25679,10 @@ function truckSpec(): Record<string, number> {
     wheelMu: wheelMu.map((m) => +m.toFixed(2)),
     rackYaw: +((steerCur * CAR.steerMax * v) / CAR.wheelbase).toFixed(3),
     slipL: +wheelSlipL.toFixed(3), slipAngDeg: +((slipAng * 180) / Math.PI).toFixed(2),
+    // THE PARKING BRAKE and the slope it is holding against, both in degrees:
+    // `slopeDeg` under `maxDeg` is a truck that will not move, and the gap
+    // between them is how much grade the surface has left before it does.
+    park: dbgPark, air: +airS.toFixed(2), grounded: wasGrounded,
   };
 };
 // The road corridor at a point: the raw heightfield, what the cut allows, and
@@ -31633,6 +31645,24 @@ const IZZ_K = 1.7;
 /** Slip angle at which a tyre has given everything it has, near enough:
  *  tanh(9·α) is 0.9 by about nine degrees, which is a real tyre's shape. */
 const TYRE_K = 9;
+/**
+ * GRAVITY DOES NOT NEED FOUR WHEELS.
+ *
+ * Thrust, braking and cornering all come out of the contact patch, so they are
+ * rightly scaled by `groundedF` — lift a wheel and you have less of all three.
+ * The pull down the hill is not like that: a truck on a slope accelerates at
+ * g·sinθ whether it is sitting on four tyres, two, or a sheet of ice, and the
+ * wheels only decide which WAY it is free to go. Scaling it by the contact
+ * fraction meant the steepest, most articulated ground — the ground where a
+ * wheel is most likely to be light — was also where the hill stopped pulling,
+ * which is the wrong way round and was half of why articulating over a crest
+ * felt weightless.
+ *
+ * So any contact at all gives the whole of gravity, and only genuine flight
+ * takes it away: airborne the along-slope direction means nothing, and the
+ * fall is the sprung body's business rather than the drivetrain's.
+ */
+const gravGrip = (g: number): number => clamp(g * 4, 0, 1);
 /** Yaw rate, kept between frames now — the old model recomputed it from the
  *  rack every frame and never had to remember it. */
 let yawR = 0;
@@ -31677,6 +31707,7 @@ function stepTraction(dt: number, surf: SurfParams, grip: number, thrust: number
   // Euler step through it rings; the tick's clamp now allows up to 100ms, so
   // the count scales with the step instead of assuming one halving is enough.
   const n = Math.max(1, Math.ceil(dt / 0.025)), h = dt / n;
+  const gG = gravGrip(grip);
   for (let i = 0; i < n; i++) {
     const u = state.speed, v = slideV;
     const su = u < 0 ? -1 : 1;
@@ -31725,8 +31756,14 @@ function stepTraction(dt: number, surf: SurfParams, grip: number, thrust: number
     const pull = Math.min(CAR.accel, (muF * nF + muR * nR) * GRAV * TRACTION_LONG[tractionMode]);
     const aero = Math.max(0.0005, pull - surf.roll) / (surf.max * surf.max);
     const resist = (surf.roll * (0.4 + 0.6 * wetF) + aero * u * u) * (0.1 + 0.9 * grip);
-    const ax = fx + v * yawR - GRAV * Math.sin(gradeP) * grip - Math.sign(u) * resist;
-    const ay = fyF + fyR - u * yawR - GRAV * Math.sin(gradeR) * grip;
+    // ROLLING RESISTANCE OPPOSES MOTION AND VANISHES WITH IT. `Math.sign` is a
+    // step function: at a crawl it flips every sub-step and shoves a nearly
+    // stopped truck back and forth in the noise, which is slip the driver never
+    // asked for. Faded out over the last half metre per second it is what a
+    // rolling wheel actually does — and what has stopped rolling is held by the
+    // park latch, not by a resistance that never quite reaches zero.
+    const ax = fx + v * yawR - GRAV * Math.sin(gradeP) * gG - clamp(u / 0.5, -1, 1) * resist;
+    const ay = fyF + fyR - u * yawR - GRAV * Math.sin(gradeR) * gG;
     if (!Number.isFinite(ax) || !Number.isFinite(ay)) nanTraceAt('accel', { fx, fyF, fyR, v, u, yawR, gradeP, gradeR, grip, resist, ax, ay, h });
     const izz = IZZ_K * AXLE_A * AXLE_A;
     const dr = (AXLE_A * fyF - AXLE_A * fyR) / izz;
@@ -31826,6 +31863,16 @@ function breakNanLatch(): void {
   bodyInit = false;
 }
 let prevGradePitch = 0;   // last frame's terrain grade, for the feed-forward above
+/** Last frame's axle-plane target and whether the truck ended that frame with
+ *  any wheel loaded, plus how long it has been in the air. The three of them
+ *  are what tells a truck that JUMPED from a world that moved underneath one
+ *  that did not — see the reseat rules in the suspension pass. */
+let prevTY = 0, wasGrounded = false, airS = 0;
+/** THE PARKING BRAKE. Latched, because the condition that earns the hold is
+ *  read from a truck that is already stopped: without a latch the hold would
+ *  chatter on and off at its own threshold. Released by the throttle, by real
+ *  drive, or by the ground itself going out from under it. */
+let parkLatch = false;
 // How hard the tyres are currently being asked to work beyond what they have
 // (0 = planted, 1 = fully away). Drives the squeal, the dust, and the HUD.
 let skid = 0;
@@ -31956,6 +32003,8 @@ let brushPeak = 0;   // session max — a one-frame brush must not hide from the
 let wallTouchAt = -1e9, dragKnockAt = 0;   // wall contact edge + the drag's knock pacing
 let scrapeHoldLvl = 0, scrapeHoldMetal = false;   // contact held across the graze's gap frames
 let dbgSusp: object = {};
+/** What the park latch is holding, and against what — read by __phys. */
+let dbgPark: object = {};
 // A shade over 9.81. Real gravity left long climbs feeling weightless once the
 // truck has 16m/s^2 of thrust to spend against it; this gives a hill enough
 // authority that you pick your line up it.
@@ -32740,33 +32789,66 @@ function tick(now: number): void {
   // climbs cost speed and descents pay it back.
   const grip = groundedF;
   let yawRate = 0;
-  // PARKED IS A STATE, not a coincidence of forces. With no pedal down and no
-  // real speed left, static friction holds the truck on any sane grade —
-  // integrating grade-gravity and side-slope pull every frame instead had a
-  // "stopped" car creeping downhill forever. Past ~30° it genuinely rolls.
-  const parkHold = !real.on && !brake && Math.abs(throttle) < 0.02
-    && Math.abs(state.speed) < 0.45 && Math.abs(slideV) < 0.6
-    && Math.abs(Math.sin(gradePitch)) < 0.5 && Math.abs(Math.sin(gradeRoll)) < 0.5;
+  // ── PARKED IS A HOLD, NOT A BALANCE OF FORCES ──────────────────────
+  //
+  // A stopped truck must STAY stopped. The old rule had the right idea in the
+  // wrong PLACE: it zeroed the velocities after the integrator had already
+  // moved the truck for the frame, so every frame still contributed its own
+  // small displacement and the rig crept downhill forever regardless. Two
+  // millimetres a frame is twelve centimetres a second — which is exactly the
+  // "slipping slowly moves the rig when actually stationary" this ends. The
+  // hold is decided BEFORE the step now and the step is SKIPPED while it
+  // holds: nothing integrates, so nothing moves. That is a parking brake.
+  //
+  // AND THE GRADE IT SURVIVES IS THE TYRES', not a number. Gravity pulls a
+  // standing body along the slope at g·sinθ and the contact patch holds it at
+  // μ·g·cosθ, so it stays put while tanθ ≤ μ — the angle of repose, and the
+  // one honest place for the friction the four wheels are already sampling to
+  // decide something. Dry tarmac holds past 40°, wet mud lets go by 20, and
+  // the old fixed 30° was wrong in both directions.
+  //
+  // THE BRAKE NO LONGER DEFEATS IT. Coming to rest with the pedal down is the
+  // most obviously parked a truck ever is; requiring "no pedal" made the one
+  // input that should guarantee the hold the one that forbade it.
+  const holdMu = ((axleMu[0] + axleMu[1]) / 2) * rigGrip() * tune.grip;
+  const holdSlope = Math.hypot(Math.tan(gradePitch), Math.tan(gradeRoll));
+  // Wheels on the ground and a slope the patch can hold. Both are also the
+  // RELEASE: a steeper grade streaming in under a parked truck, or a wheel
+  // lifting off, hands it straight back to the physics instead of pinning it.
+  const canHold = !real.on && groundedF > 0.5 && holdSlope <= holdMu;
+  if (Math.abs(throttle) >= 0.02 || !canHold) parkLatch = false;
+  else if (Math.abs(state.speed) < 0.45 && Math.abs(slideV) < 0.6) parkLatch = true;
+  const parkHold = parkLatch;
+  dbgPark = { hold: parkHold, mu: +holdMu.toFixed(3), slope: +holdSlope.toFixed(3),
+    slopeDeg: +((Math.atan(holdSlope) * 180) / Math.PI).toFixed(1),
+    maxDeg: +((Math.atan(holdMu) * 180) / Math.PI).toFixed(1), grip: +groundedF.toFixed(2) };
   // THE STEERING RACK IS SHARED. Both models take the same input through the
   // same first-order lag; what they disagree about is what the front wheels
   // can DO with it.
   const SRATE0 = 7 * tune.steer;
   if (!real.on && !parked && tractionMode > 0) {
     steerCur += clamp(steer - steerCur, -SRATE0 * dt, SRATE0 * dt);
-    const wetDrag0 = 1 + wx.wet * (surfKind === 'road' ? 0.35 : 0.7);
-    { const _p = performance.now(); stepTraction(dt, surf, grip, thrust, wetDrag0, gradePitch, gradeRoll); profAdd('stepTraction', _p); }
-    if (brake && brakeF > 0.5 && grip > 0.4 && Math.abs(state.speed) < 1.2) { state.speed = 0; slideV = 0; }
-    if (parkHold) { state.speed = 0; slideV = 0; yawR = 0; }
-    state.speed = clamp(state.speed, -CAR.maxRev, surf.max * (1.25 - wx.wet * 0.2));
-    const want0 = clamp((Math.abs(slideV) - 0.5) / 3.5, 0, 1);
-    skid += (want0 - skid) * Math.min(1, (want0 > skid ? 9 : 3.5) * dt);
+    // The rack still turns while parked — a stopped truck can be pointed — but
+    // nothing else runs. Not the tyre model, not the position integral: the
+    // hold is the absence of a step, not a step whose result is thrown away.
+    if (parkHold) {
+      state.speed = 0; slideV = 0; yawR = 0; lastFx = 0; wheelSlipL = 0; slipAng = 0; dbgYaw = 0;
+      skid += (0 - skid) * Math.min(1, 3.5 * dt);
+    } else {
+      const wetDrag0 = 1 + wx.wet * (surfKind === 'road' ? 0.35 : 0.7);
+      { const _p = performance.now(); stepTraction(dt, surf, grip, thrust, wetDrag0, gradePitch, gradeRoll); profAdd('stepTraction', _p); }
+      if (brake && brakeF > 0.5 && grip > 0.4 && Math.abs(state.speed) < 1.2) { state.speed = 0; slideV = 0; }
+      state.speed = clamp(state.speed, -CAR.maxRev, surf.max * (1.25 - wx.wet * 0.2));
+      const want0 = clamp((Math.abs(slideV) - 0.5) / 3.5, 0, 1);
+      skid += (want0 - skid) * Math.min(1, (want0 > skid ? 9 : 3.5) * dt);
+    }
   } else if (!real.on && !parked) {
     state.speed += thrust * grip * dt;
     // Gravity acts on the GROUND's grade, not on the sprung body's pitch. pitchC
     // is damped by the suspension, carries a throttle-squat fudge, and is clamped
     // to 26 degrees — so it under-read every real hill and lagged the ones it did
     // see. gradePitch comes straight off the four wheel contacts.
-    state.speed -= GRAV * Math.sin(gradePitch) * grip * dt;
+    state.speed -= GRAV * Math.sin(gradePitch) * gravGrip(grip) * dt;
     // Wet ground drags and caps lower — the weather is felt through the wheels.
     const wetDrag = 1 + wx.wet * (surfKind === 'road' ? 0.35 : 0.7);
     state.speed -= state.speed * surf.drag * wetDrag * (0.1 + 0.9 * grip) * dt;
@@ -32776,7 +32858,7 @@ function tick(now: number): void {
     // the exact opposite of what that input meant, and it was the whole of what
     // "a small motion down stops the rig" felt like.
     if (brake && brakeF > 0.5 && grip > 0.4 && Math.abs(state.speed) < 1.2) state.speed = 0;
-    if (parkHold) state.speed = 0;
+    if (parkHold) { state.speed = 0; yawR = 0; }
     state.speed = clamp(state.speed, -CAR.maxRev, surf.max * (1.25 - wx.wet * 0.2)); // downhill may overrun the flat cap
     const SRATE = 7 * tune.steer; // full-lock in ~0.14s at STOCK
     steerCur += clamp(steer - steerCur, -SRATE * dt, SRATE * dt);
@@ -32809,7 +32891,7 @@ function tick(now: number): void {
     // Only partly — a fully coupled circle makes an arcade car undriveable.
     const longG = Math.min(Math.abs(thrust), budget);
     const lateral = Math.sqrt(Math.max(0, budget * budget - longG * longG * 0.5));
-    const gravLat = GRAV * Math.sin(gradeRoll) * grip;   // + = pulled to the car's LEFT
+    const gravLat = GRAV * Math.sin(gradeRoll) * gravGrip(grip);   // + = pulled to the car's LEFT
     const demand = state.speed * yawRate;                // + = wants to accelerate RIGHT
     // The slope's pull is served first; the corner gets what's left.
     const spare = Math.max(0, lateral - Math.abs(gravLat));
@@ -33171,16 +33253,48 @@ function tick(now: number): void {
   // (a 45 degree lean looks wrong), but gravity should see the real angle.
   gradePitch = Math.atan2((cFL + cFR - cRL - cRR) / 2, 2 * AXLE);
   gradeRoll = Math.atan2((cFR + cRR - cFL - cRL) / 2, 2 * TRACK);
-  if (!bodyInit) { bodyInit = true; bodyY = tY; pitchC = tPitch; rollC = tRoll; }
-  // SNAP when the ground moves further than any suspension could follow. The
-  // body descends at 9.81 and no faster (that cap is what makes crests launch
-  // you), so after anything that repositions the truck — a spawn, a curated
-  // start, a shove out of a building, a tunnel chord, terrain streaming in at a
-  // different height — it can be left hundreds of metres in the air, falling
-  // for tens of seconds with all four wheels drooped and therefore ZERO grip:
-  // no thrust, no braking, no steering, no gravity. Measured 3.9km of daylight
-  // under the hull after a relocation.
-  if (Math.abs(tY - bodyY) > 6) { bodyY = tY; vBodyY = 0; pitchC = tPitch; rollC = tRoll; }
+  // Seating the body is a placement, not a landing: whatever it was doing
+  // before the relocation is not a velocity it gets to keep, or the first frame
+  // after a teleport bottoms the bump stops and thuds.
+  if (!bodyInit) {
+    bodyInit = true; bodyY = tY; pitchC = tPitch; rollC = tRoll;
+    vBodyY = 0; vPitch = 0; vRoll = 0; prevTY = tY; wasGrounded = true; airS = 0;
+  }
+  // ── WHAT BRINGS THE TRUCK DOWN IS GRAVITY, NOT A RULE ──────────────
+  //
+  // This read `Math.abs(tY - bodyY) > 6` and seated the body on the ground the
+  // moment it found itself six metres from it, in either direction. It was
+  // written to recover a relocation that left the hull 3.9km in the air — and
+  // it does — but it cannot tell that from a truck that has simply driven off
+  // a ledge, so every jump ended the same way: clear six metres of air and you
+  // are yanked flat onto whatever terrain is underneath. The heave spring is
+  // already honest about flight (the -9.81 floor below means an airborne body
+  // falls at exactly g and nothing else, and the spring above it is the only
+  // thing that ever lifts one), so the fix is to stop overriding it.
+  //
+  // Three narrow reseats replace the blanket one, and each names the physical
+  // thing that went wrong rather than how far apart two numbers have got:
+  //
+  //   BURIED — the body is metres BELOW its own axle plane. The ground came up
+  //   through it: a tile refined, a chord loaded, a shove out of a building.
+  //   No fall produces this, and seating it is a lift, never a yank down.
+  //
+  //   THE GROUND MOVED — tY jumped further in one frame than a wheel could
+  //   have carried it, while the truck was still standing on it. That is the
+  //   world being rebuilt under a grounded truck, which is the streaming case
+  //   exactly; a truck LEAVING the ground is already airborne and this cannot
+  //   fire on it.
+  //
+  //   NEVER LANDED — the watchdog, and the only one of the three that is a
+  //   rule rather than a fact. Twelve unbroken seconds of air is a 700m fall;
+  //   nothing in this terrain offers one, so it means the hull is somewhere the
+  //   ground never was. It bounds the pathological case without touching any
+  //   real jump: the longest drop the Alps can hand you lands inside eight.
+  airS = wasGrounded ? 0 : airS + dt;
+  if (bodyY < tY - 6 || (wasGrounded && Math.abs(tY - prevTY) > 6) || airS > 12) {
+    bodyY = tY; vBodyY = 0; pitchC = tPitch; rollC = tRoll; vPitch = 0; vRoll = 0; airS = 0;
+  }
+  prevTY = tY;
   // THE DESCENT BUG. Capping downward acceleration at 1g is what makes a crest
   // launch the truck, and it must stay — but it was applied in the WORLD frame,
   // against a damper that wanted vBodyY = 0. On a sustained descent the ground
@@ -33256,10 +33370,27 @@ function tick(now: number): void {
   prevGradePitch = gradePitch;
   // Attitude springs are the same stiffness class as the heave spring — same
   // substep, same reason.
-  for (let si = 0; si < sn; si++) {
-    vPitch += (SUSP.ka * sK * (tPitch - pitchC) - SUSP.da * sD * (vPitch - gradeRate)) * sh;
-    pitchC += vPitch * sh;
-    vRoll += (SUSP.ka * sK * (tRoll - rollC) - SUSP.da * sD * vRoll) * sh; rollC += vRoll * sh;
+  //
+  // AND THEY ONLY EXIST WHILE A WHEEL IS LOADED. These springs ARE the
+  // suspension holding the body against the ground; with nothing touching,
+  // there is nothing to hold it, and chasing tPitch anyway had the hull rotate
+  // in mid-air to lie parallel to terrain it was merely flying over — the
+  // attitude half of the same yank the reseat above used to do to the height.
+  // In flight the body carries the rate it left with, bled slowly (a hull
+  // pushing air, no more), and the springs take back over the instant a wheel
+  // touches. That re-engagement, against whatever mismatch the landing found,
+  // is what makes a landing read as one.
+  if (wasGrounded) {
+    for (let si = 0; si < sn; si++) {
+      vPitch += (SUSP.ka * sK * (tPitch - pitchC) - SUSP.da * sD * (vPitch - gradeRate)) * sh;
+      pitchC += vPitch * sh;
+      vRoll += (SUSP.ka * sK * (tRoll - rollC) - SUSP.da * sD * vRoll) * sh; rollC += vRoll * sh;
+    }
+  } else {
+    const bleed = Math.exp(-0.6 * dt);
+    vPitch *= bleed; vRoll *= bleed;
+    pitchC = clamp(pitchC + vPitch * dt, -1.0, 1.0);
+    rollC = clamp(rollC + vRoll * dt, -1.0, 1.0);
   }
   // Articulation: wheels chase their own contact while the sprung body lags.
   groundedF = 0;
@@ -33282,11 +33413,16 @@ function tick(now: number): void {
     wheelMeshes[i].rotation.x = wheelSpin;
     if (i < 2) wheelPivots[i].rotation.y = -steerCur * 0.42;
   }
+  // The airborne test the next frame reads, taken from THIS frame's contacts
+  // rather than from the height difference: a truck at full articulation with
+  // one wheel still loaded is not flying, and only the four deflections know.
+  wasGrounded = groundedF > 0;
   dbgSusp = { bodyY: +bodyY.toFixed(2), tY: +tY.toFixed(2), ground: +ground.toFixed(2),
     defs: wheelPivots.map((p) => +p.position.y.toFixed(3)),
     contacts: contacts.map((c) => +c.toFixed(2)),
     pitch: +((pitchC * 180) / Math.PI).toFixed(1), grounded: groundedF,
     vBodyY: +vBodyY.toFixed(2), terrainVy: +terrainVy.toFixed(2),
+    air: +airS.toFixed(2), gap: +(bodyY - tY).toFixed(2),
     gradeDeg: +((gradePitch * 180) / Math.PI).toFixed(1), dt: +dt.toFixed(3) };
   // With no load the wheels follow the ENGINE, not the road — so they blur up
   // over a jump and are still spinning when the truck lands.
