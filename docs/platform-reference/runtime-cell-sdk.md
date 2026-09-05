@@ -605,6 +605,11 @@ when `data` is a non-array object.
 
 **Invariants & edge cases.**
 
+- **DISABLED pending rework:** `structuredContent` is not emitted at all while
+  `mcpUiChannelEnabled()` is false (env `MCP_UI_CHANNEL` unset) — every result is
+  text-only and a rich `McpToolResult` collapses to its `text` (or the JSON of its
+  `data`). The text block stays lossless for objects, which is what text-only
+  callers parse. The rules below describe the channel when it is re-enabled.
 - `structuredContent` is emitted only for **non-array objects** (the spec requires
   a JSON object) — an array or scalar result stays text-only.
 - A rich result's `text` overrides the default JSON; the widget binding lives on
@@ -625,6 +630,12 @@ formatting primitive local to the MCP layer, not new storage.
 ---
 
 ## 8. MCP resources & MCP-Apps widget binding
+
+> **The widget binding is DISABLED pending rework** — `mcpUiChannelEnabled()`
+> (env `MCP_UI_CHANNEL`) withholds `_meta.ui` from `tools/list`, strips the
+> `io.modelcontextprotocol/ui` extension from `initialize`, and drops
+> `structuredContent` from every result. Tool `ui:` declarations are kept, just
+> not advertised. Resource serving itself (surface 1 below) is unaffected.
 
 **What it does.** Two related surfaces (both ADR-0034):
 

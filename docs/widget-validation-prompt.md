@@ -1,5 +1,9 @@
 # parc.land conversation-card validation prompt (ADR-0034 → 0038)
 
+> **The card is DISABLED pending rework.** The gateway serves no `ui://parc/card`
+> and advertises no widget binding while `MCP_UI_CHANNEL` is unset, so this prompt
+> has nothing to audit — set `MCP_UI_CHANNEL=on` on the gateway Lambda first.
+
 Paste the block below into a **fresh claude.ai chat connected to the parc.land MCP connector**
 (mobile *and* desktop, separately — host capabilities differ). It exercises every render
 surface and interaction the card now supports and records a structured audit fact.

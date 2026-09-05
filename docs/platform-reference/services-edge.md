@@ -347,6 +347,19 @@ defineMcpService({ events: { emits: ['capability.invoked'] } }); // :899
 
 ## 10. MCP-Apps conversation card + cell-renderer federation (widgets.ts) — ADR-0034/0039
 
+> **DISABLED pending rework.** The whole structured/UI channel below is off behind
+> one flag (`MCP_UI_CHANNEL`, `mcpUiChannelEnabled()` in `define-mcp-service.ts`):
+> results carry no `structuredContent`, `tools/list` advertises no `_meta.ui`
+> binding, `initialize` does not declare the `io.modelcontextprotocol/ui`
+> extension, `resources/list`/`resources/read` withhold `ui://parc/card`, and
+> `withRender` does not stamp `_render`. Nothing is deleted — set
+> `MCP_UI_CHANNEL=on` on the gateway Lambda to restore every behaviour described
+> here. Consumers degrade to the text channel, which is lossless for object
+> results; home's console falls back to its ordinary fact/list/JSON rendering
+> instead of a federated renderer. The **cell-renderer federation hop**
+> (`ui://@owner/name/<path>` over `resources/read`) keeps working — home fetches
+> those in-page, independent of the card.
+
 **What it does.** The gateway serves the `ui://parc/card` resource — a self-contained sandboxed-iframe widget that renders a `read`/`act` result's `structuredContent` in the conversation, using the same `platform/ui` render vocabulary as the home cell (esbuilt to `app.js`, inlined into an HTML shell, with a minimal fallback that still does the MCP-Apps handshake). The card is bound statically to `whoami`/`read`/`act` via `_meta.ui.resourceUri` (parc has only 3 tools, so per-target binding is impossible — the card resolves per-type rendering at runtime). `withRender` stamps a capability's declared renderer onto its object result as `_render` (the per-tool analogue of a type's `handlers.render`). **Federation hop** (ADR-0039): a cell-authored renderer addressed `ui://@owner/name/<path>` is resolved server-side by fetching the owning cell's served asset over `cells.call` (TTL-cached), so a type's conversational renderer is authored + deployed by its cell with no platform `cdk deploy`.
 
 **Public API** (`services/gateway/widgets.ts` + `service.ts`).

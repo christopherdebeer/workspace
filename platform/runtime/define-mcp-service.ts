@@ -26,6 +26,47 @@ import type {
 /** Latest MCP protocol revision this server defaults to. */
 const PROTOCOL_VERSION = '2025-06-18';
 
+/** The MCP-Apps UI extension key (spec 2026-01-26), declared in `initialize`. */
+export const MCP_APPS_UI_EXTENSION = 'io.modelcontextprotocol/ui';
+
+/**
+ * DISABLED PENDING REWORK — the structured/UI channel (ADR-0034/0039).
+ *
+ * Every MCP result used to carry a `structuredContent` mirror of the tool's
+ * object return alongside the model-facing `text` block, every tool advertised a
+ * `_meta.ui.resourceUri` widget binding, and `initialize` declared the MCP-Apps
+ * UI extension — the data channel a conversation card renders. That whole
+ * dynamic-UI path needs significant rework, so it is off by default: results are
+ * text-only, tools advertise no widget, and the extension is not declared.
+ *
+ * Nothing was deleted. Set `MCP_UI_CHANNEL=on` (per-cell Lambda env) to restore
+ * the channel exactly as it was; the flag is read per call, not at module load,
+ * so it can be flipped without a redeploy of the code path.
+ *
+ * Callers degrade cleanly: the text block still carries the full JSON of an
+ * object result, which is what the home cell's `mcpCall` falls back to parsing
+ * when `structuredContent` is absent.
+ */
+export function mcpUiChannelEnabled(): boolean {
+  return process.env.MCP_UI_CHANNEL === 'on';
+}
+
+/**
+ * Strip the MCP-Apps UI extension from the advertised handshake capabilities
+ * while the channel is disabled, so a client never negotiates a widget surface
+ * this server will not feed. Drops `extensions` entirely when it empties out.
+ */
+function announcedCapabilities(caps: Record<string, unknown>): Record<string, unknown> {
+  if (mcpUiChannelEnabled()) return caps;
+  const extensions = caps.extensions as Record<string, unknown> | undefined;
+  if (!extensions || !(MCP_APPS_UI_EXTENSION in extensions)) return caps;
+  const { [MCP_APPS_UI_EXTENSION]: _dropped, ...rest } = extensions;
+  const out = { ...caps };
+  if (Object.keys(rest).length > 0) out.extensions = rest;
+  else delete out.extensions;
+  return out;
+}
+
 /**
  * A single MCP tool: metadata for `tools/list` plus the handler for `tools/call`.
  * `Input` defaults to `never` so authors can register handlers with their own
@@ -54,6 +95,9 @@ export interface McpToolDefinition<Input = never, Output = unknown> {
    * a STATIC `ui://` resource the host preloads and renders for this tool, surfaced
    * in `tools/list` as the tool's `_meta.ui.resourceUri`. The widget receives the
    * call's `structuredContent` via the host's `ui/notifications/tool-result` channel.
+   *
+   * Declarations are kept but NOT advertised while the structured/UI channel is
+   * disabled — see `mcpUiChannelEnabled`.
    */
   ui?: { resourceUri: string; visibility?: string[] };
 }
@@ -198,6 +242,12 @@ function unauthorized(req: ServiceHttpRequest, resourcePath: string): ServiceHtt
  * client (or an MCP-Apps widget) consumes directly, alongside the `text` block the
  * model reasons over (the same text-vs-data split ADR-0033 made for `recall`).
  * structuredContent must be a JSON object, so arrays/scalars stay text-only.
+ *
+ * That data channel is DISABLED pending rework (`mcpUiChannelEnabled`): results
+ * are text-only, so a rich `McpToolResult` collapses to its `text` summary (or
+ * the JSON of its `data` when it declares none) and a plain object result to its
+ * JSON. The text block is lossless for objects, which is what keeps text-only
+ * callers whole.
  */
 function toContent(value: unknown): {
   content: Array<{ type: 'text'; text: string }>;
@@ -207,16 +257,17 @@ function toContent(value: unknown): {
 } {
   // A rich result (ADR-0034) splits the channels explicitly: `text` for the model,
   // `data` for structuredContent/widget, `ui` → the result's `_meta.ui.resourceUri`.
+  const uiChannel = mcpUiChannelEnabled();
   if (isRichResult(value)) {
     const data = value.data;
     const text = value.text ?? (typeof data === 'string' ? data : JSON.stringify(data, null, 2));
     const out: ReturnType<typeof toContent> = { content: [{ type: 'text', text }] };
-    if (data && typeof data === 'object' && !Array.isArray(data)) out.structuredContent = data as Record<string, unknown>;
+    if (uiChannel && data && typeof data === 'object' && !Array.isArray(data)) out.structuredContent = data as Record<string, unknown>;
     return out;
   }
   const text = typeof value === 'string' ? value : JSON.stringify(value, null, 2);
   const base = { content: [{ type: 'text' as const, text }] };
-  if (value && typeof value === 'object' && !Array.isArray(value)) {
+  if (uiChannel && value && typeof value === 'object' && !Array.isArray(value)) {
     return { ...base, structuredContent: value as Record<string, unknown> };
   }
   return base;
@@ -253,13 +304,16 @@ export function defineMcpService(def: McpServiceDefinition) {
         return rpcResult(id, {
           protocolVersion:
             typeof params.protocolVersion === 'string' ? params.protocolVersion : PROTOCOL_VERSION,
-          capabilities: {
+          capabilities: announcedCapabilities({
             tools: {},
             // `resources` is declared only when we actually answer resources/read,
             // and never advertises `subscribe` (no SSE under CloudFront — ADR-0034).
+            // It stays declared while the UI channel is off: `resources/read` also
+            // serves the cell-authored renderers the home surface federates
+            // (ADR-0039), which is a different consumer than the conversation card.
             ...(def.resources ? { resources: { listChanged: false } } : {}),
             ...(def.capabilities ?? {}),
-          },
+          }),
           serverInfo,
           ...(def.instructions ? { instructions: def.instructions } : {}),
         });
@@ -298,7 +352,11 @@ export function defineMcpService(def: McpServiceDefinition) {
                 ...(t.annotations ? { annotations: t.annotations } : {}),
                 // MCP-Apps tool→UI binding (spec 2026-01-26): the host preloads this
                 // `ui://` resource and renders it with the call's structuredContent.
-                ...(t.ui ? { _meta: { ui: { resourceUri: t.ui.resourceUri, visibility: t.ui.visibility ?? ['model', 'app'] } } } : {}),
+                // Withheld while the UI channel is disabled — advertising a widget
+                // whose data channel is off would render an empty card.
+                ...(t.ui && mcpUiChannelEnabled()
+                  ? { _meta: { ui: { resourceUri: t.ui.resourceUri, visibility: t.ui.visibility ?? ['model', 'app'] } } }
+                  : {}),
               };
             }),
         });
