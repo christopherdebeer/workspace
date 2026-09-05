@@ -86,6 +86,16 @@ console.log('wind:   ', JSON.stringify(on.wind));
 check('the leaf material carries the wind', (on.chain.leaf ?? []).includes('wind'), on.chain.leaf);
 check('the skeletons carry the wind', (on.chain.ez ?? []).includes('wind'), on.chain.ez);
 check('the sward still carries it', (on.chain.grass ?? []).includes('wind'), on.chain.grass);
+check('the skeletons stand in the same weather as everything else',
+  (on.chain.ez ?? []).includes('terrainFx'), on.chain.ez);
+// PRESENT AND WRONG LOOKED EXACTLY LIKE PRESENT AND RIGHT. Every one of these
+// is an InstancedMesh, and vWorldP fed the cloud shadow and the sun march from
+// the vertex's position in the GEOMETRY — the same two metres from the origin
+// for a tree here and a tree forty kilometres away.
+for (const m of ['leaf', 'ez', 'grass', 'stone']) {
+  check(`${m}'s world position knows where its instance is`,
+    (on.chain[m] ?? []).includes('worldInst'), on.chain[m]);
+}
 check('wood and stone stay rigid',
   !(on.chain.wood ?? []).includes('wind') && !(on.chain.stone ?? []).includes('wind'),
   { wood: on.chain.wood, stone: on.chain.stone });

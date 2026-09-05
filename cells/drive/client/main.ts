@@ -4685,7 +4685,27 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
     sh.uniforms.uWxInv = wxU.uWxInv;
     sh.vertexShader = sh.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWorldP;')
-      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorldP = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+      // ── AND IT HAS TO KNOW WHERE THE INSTANCE IS ──
+      //
+      // This read `modelMatrix * transformed` and skipped `instanceMatrix`,
+      // which is only correct for a mesh drawn once. Every plant and every
+      // rock in the world is an InstancedMesh added straight to the scene, so
+      // for all of them `vWorldP` was the vertex's position in the GEOMETRY —
+      // a couple of metres from the origin, the same couple of metres for a
+      // tree here and a tree forty kilometres away. Both things this varying
+      // feeds were therefore answering the wrong question everywhere at once:
+      // the cloud shadow sampled one point of the sky for the entire flora
+      // pool (so a front crossing the valley darkened the ground and left the
+      // trees standing in it lit), and `sunMarch` tested a ridge line against
+      // the origin rather than against the plant. Three's own `worldpos_vertex`
+      // has had the instancing branch all along; this line simply never copied
+      // it.
+      .replace('#include <worldpos_vertex>', `#include <worldpos_vertex>
+        vec4 fxWp = vec4(transformed, 1.0);
+        #ifdef USE_INSTANCING
+          fxWp = instanceMatrix * fxWp;
+        #endif
+        vWorldP = (modelMatrix * fxWp).xyz;`);
     sh.uniforms.uSunSkew = envU.uSunSkew;
     sh.uniforms.uDeckY = envU.uDeckY;
     sh.uniforms.uCloudScale = envU.uCloudScale;
@@ -7575,6 +7595,15 @@ const ezCapFor = (fam: EzFamily): number =>
 interface EzTier { near: THREE.InstancedMesh; far: THREE.InstancedMesh; tris: number; n: number; nNear: number; nFar: number }
 const ezTiers: Record<EzFamily, EzTier[]> = { broadleaf: [], conifer: [], snag: [] };
 const ezMat = ezMaterial(0x4a3826, { bend: treeBendU, wind: windU });
+// THE SKELETONS STAND IN THE SAME WEATHER AS EVERYTHING ELSE. They were the
+// one thing in the landscape outside `terrainFx` — no cloud shadow, no terrain
+// self-shadowing — while the archetypes they replaced, the sward, the stones
+// and the ground itself all took it. Since the skeletons are now EVERY
+// broadleaf, conifer and snag, that left a front crossing the valley darkening
+// the grass and the rocks and leaving the whole wood lit. Ordered as leafMat's
+// is: the wind's hook first (set inside ezMaterial), then this, then the
+// grain, each chaining the last.
+terrainFx(ezMat);
 grainFx(ezMat, 'grain-ez', 0.95, 2.2);
 if (EZ_ON) {
   for (const fam of EZ_FAMILIES) {
@@ -24994,6 +25023,12 @@ function truckSpec(): Record<string, number> {
     const has: string[] = [];
     if (/uGust/.test(sh.vertexShader)) has.push('wind');
     if (/vWorldP/.test(sh.vertexShader)) has.push('terrainFx');
+    // …AND WHETHER IT KNOWS WHERE THE INSTANCE IS. `vWorldP` fed the cloud
+    // shadow and the sun march from `modelMatrix * transformed` for years,
+    // which is the vertex's position in the GEOMETRY — the same two metres
+    // from the origin for every plant in the world. Present and wrong looked
+    // exactly like present and right, so the audit now says which.
+    if (/fxWp = instanceMatrix/.test(sh.vertexShader)) has.push('worldInst');
     if (/vGrainP/.test(sh.vertexShader)) has.push('grain');
     out[name] = has;
   }
