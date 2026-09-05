@@ -44,7 +44,7 @@ const page = await d.page.evaluate(() => {
   return {
     title: document.querySelector('#menu .m-title')?.textContent ?? '',
     sects: [...b.querySelectorAll('.m-sect')].map((e) => e.textContent),
-    names: [...b.querySelectorAll('.m-row .name')].map((e) => e.textContent),
+    names: [...b.querySelectorAll('.m-credit')].map((e) => e.textContent),
     dim: [...b.querySelectorAll('.m-dimline')].map((e) => e.textContent),
     kv: [...b.querySelectorAll('table.m-kv td')].map((e) => e.textContent),
   };
@@ -63,6 +63,12 @@ for (const terms of ['ODbL', 'CC BY 4.0', 'MIT', 'public domain', 'SIL Open Font
   check(`the terms "${terms}" appear`, page.dim.some((t) => t.includes(terms)), null);
 }
 check('and the build names itself', page.kv.includes('BUILD'), page.kv);
+// THE ONE THE DOM CANNOT SEE. textContent is whole however the box clips, so
+// the first version of this page ellipsised half its credits and passed every
+// assertion. Measured against the element's own scroll width instead.
+const clipped = await d.page.evaluate(() => [...document.querySelectorAll('#menu .m-credit')]
+  .filter((e) => e.scrollWidth > e.clientWidth + 1).map((e) => e.textContent));
+check('no credit is visually truncated', clipped.length === 0, clipped);
 check('no page errors', d.errors.length === 0, d.errors);
 
 await d.page.evaluate(() => window.__menutab?.(6));

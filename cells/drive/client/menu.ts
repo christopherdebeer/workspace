@@ -250,6 +250,13 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   #menu .m-row { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; }
   #menu .m-row.hit { cursor: pointer; }
   #menu .m-row .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* A CREDIT MUST NOT BE ELLIPSISED. Every other name in this menu is a road
+     or a rig and fits; an attribution is a sentence with a licence in it, and
+     .m-row's clip turned "contains modified Copernicus Sentinel data" into
+     "CONTAINS MODI…". The DOM test could not see it — textContent is whole
+     however the box clips — and it took the screenshot to catch, which is the
+     argument for taking one. */
+  #menu .m-credit { white-space: normal; overflow-wrap: anywhere; padding: 1px 0; }
   #menu .m-row .sub { margin-left: auto; color: ${C.dim}; font-size: 10px; text-align: right;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; flex-shrink: 0; max-width: 55%; }
   #menu .m-row .del { color: ${C.soft}; cursor: pointer; padding: 0 6px; flex-shrink: 0; }
@@ -902,9 +909,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       + 'and most of it is given on terms that ask to be credited.'));
     for (const [what, who, terms, where] of CREDITS) {
       body.append(el('div', 'm-sect', what));
-      const line = el('div', 'm-row');
-      line.append(el('span', 'name', who));
-      body.append(line);
+      body.append(el('div', 'm-credit', who));
       const t = el('div', 'm-dimline', `${terms} · ${where}`);
       body.append(t);
     }
