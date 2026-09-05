@@ -10373,7 +10373,7 @@ function wayAt(x: number, z: number): { name: string; on: boolean } | null {
 interface Goal { name: string; lat: number; lon: number; x: number; z: number }
 let goal: Goal | null = null;
 let goalAt = '';
-let goalDone: { name: string; at: number } | null = null;
+let goalDone: { name: string; at: number; shortM?: number } | null = null;
 /** Arrived, for a place with no other arrival rule of its own. */
 const GOAL_WITHIN = 28;
 /** How near the course has to pass the goal before the drive treats it as
@@ -10404,6 +10404,12 @@ const GOAL_SOLVE_MS = 2500;
 const GOAL_NARROW = 2.2;
 /** Give up rather than walk the whole continent. */
 const GOAL_MAX_NODES = 24000;
+/** What a metre of driving is worth against a metre of getting closer. Small,
+ *  so the route will happily drive a kilometre to halve the walk-in, and will
+ *  not drive ten to shave a hundred metres. */
+const GOAL_DETOUR = 0.06;
+/** How far the road's closest approach leaves you from the goal itself. */
+let goalShortM = 0;
 /**
  * TWO SEGMENTS MEET WHEN THEIR ENDS ARE WITHIN A METRE AND A HALF — which is
  * the tolerance the chain walk has always used, and it has to be the same one
@@ -10519,28 +10525,45 @@ function solveGoalRoute(): void {
   const g = roadGraph();
   goalSolveStat.nodes = g.size;
   const from = nearestNode(g, state.x, state.z, 120);
-  const to = nearestNode(g, goal.x, goal.z, 400);
   goalSolveFor = `${goal.name}|${osmDone.size}`;
-  if (!from || !to) {
+  if (!from) {
     goalRoute = null;
     goalSolveStat.failed++;
-    goalSolveStat.last = !from ? 'no road under the truck' : 'no road at the goal';
+    goalSolveStat.last = 'no road under the truck';
     goalSolveStat.ms = performance.now() - t0;
     return;
   }
+  // ── AS CLOSE AS THE ROADS GET ──
+  //
+  // Most places worth driving to are not ON the network. A trig point is up a
+  // hillside, a lake's name sits in the middle of the water, a fix is dropped
+  // wherever the thumb landed, and while the world streams even a town's pin
+  // can be a kilometre from the nearest loaded road. Demanding a node within
+  // some radius of the goal makes all of those unroutable, which is the same
+  // failure as having no router at all.
+  //
+  // So there is no target: the walk settles the whole reachable component
+  // (bounded) and the best node is the one that gets CLOSEST to the goal,
+  // with a light penalty on the drive itself so a hundred metres of gain is
+  // not bought with ten kilometres of road. The last stretch is the driver's
+  // — which is honest, because it is not a road.
   const dist = new Map<string, number>([[from, 0]]);
   const prev = new Map<string, string>();
   const done = new Set<string>();
   const heap = new MinHeap();
   heap.push(0, from);
-  let hit = false;
+  let bestId: string | null = null, bestScore = Infinity, bestGap = Infinity;
   while (heap.size && done.size < GOAL_MAX_NODES) {
     const top = heap.pop() as { cost: number; id: string };
     if (done.has(top.id)) continue;
     done.add(top.id);
-    if (top.id === to) { hit = true; break; }
     const n = g.get(top.id);
     if (!n) continue;
+    const gap = Math.hypot(n.x - goal.x, n.z - goal.z);
+    const score = gap + top.cost * GOAL_DETOUR;
+    if (score < bestScore) { bestScore = score; bestId = top.id; bestGap = gap; }
+    // Standing on it: nothing further can be closer.
+    if (gap < 4) break;
     for (const e of n.to) {
       if (done.has(e.id)) continue;
       const nd = top.cost + e.cost;
@@ -10549,13 +10572,16 @@ function solveGoalRoute(): void {
       }
     }
   }
-  if (!hit) {
+  const to = bestId;
+  if (!to || to === from) {
     goalRoute = null;
+    goalShortM = bestGap;
     goalSolveStat.failed++;
-    goalSolveStat.last = `no path (${done.size} nodes)`;
+    goalSolveStat.last = to ? 'already as close as the road gets' : `no path (${done.size} nodes)`;
     goalSolveStat.ms = performance.now() - t0;
     return;
   }
+  goalShortM = bestGap;
   const out: Array<[number, number]> = [];
   for (let k: string | undefined = to; k !== undefined; k = prev.get(k)) {
     const n = g.get(k);
@@ -10565,7 +10591,7 @@ function solveGoalRoute(): void {
   out.reverse();
   goalRoute = out.length >= 2 ? out : null;
   goalSolveStat.found++;
-  goalSolveStat.last = `${out.length} nodes`;
+  goalSolveStat.last = `${out.length} nodes, ${Math.round(bestGap)}m short`;
   goalSolveStat.ms = performance.now() - t0;
 }
 /** Where we are on the solved route and what is left of it — the same shape
@@ -28872,10 +28898,15 @@ function autoCourse(): AutoPlan {
   // (that road IS the task); everything below it is the chain, which is what
   // drives while the solver has no answer yet.
   const gr = goalAhead(state.x, state.z, AUTO_REACH);
-  if (gr && goal) {
+  if (gr && goal && goalRoute) {
+    // THE END OF THE PLAN IS A DESTINATION, wherever it lands. When the goal
+    // is off the network the route stops at the road's closest approach and
+    // the truck should stop there too — driving past it, or wandering off the
+    // end of the course, is worse than arriving where the roads end.
     const end = gr[gr.length - 1];
+    const tail = goalRoute[goalRoute.length - 1];
     return { pts: gr, src: `route:${goal.name}`, width: 1.8, regain: false,
-      endsHere: Math.hypot(end[0] - goal.x, end[1] - goal.z) < GOAL_REACH };
+      endsHere: Math.hypot(end[0] - tail[0], end[1] - tail[1]) < 1 };
   }
   const w = wayAhead(state.x, state.z, state.heading, AUTO_REACH, AUTO_HOPS, false);
   // The road simply running out of streamed geometry is not a destination, so
@@ -28964,11 +28995,24 @@ const autoHandsOn = (): boolean => stick !== null || brakeId !== null || lift !=
 function stepAuto(dt: number, off: boolean): void {
   // ARRIVED. Checked here rather than in the controller because a goal is
   // reached whether the autopilot or a thumb did the driving.
-  if (goal && Math.hypot(goal.x - state.x, goal.z - state.z) < GOAL_WITHIN) {
-    goalDone = { name: goal.name, at: performance.now() };
-    goal = null;
-    goalRoute = null;
-    goalSolveFor = '';
+  if (goal) {
+    // ARRIVED — at the place, or at the end of the road that reaches for it.
+    // A goal off the network (a trig point, a lake's name, a fix dropped on a
+    // hillside) is never reached by driving, and a run that can never end is
+    // worse than one that ends honestly: standing at the plan's last node
+    // with the roads no closer IS the arrival, and the toast says how far the
+    // rest is on foot.
+    const dGoal = Math.hypot(goal.x - state.x, goal.z - state.z);
+    const tail = goalRoute?.[goalRoute.length - 1];
+    const atEnd = !!tail && Math.hypot(tail[0] - state.x, tail[1] - state.z) < GOAL_WITHIN
+      && goalShortM > GOAL_WITHIN && Math.abs(state.speed) < 1;
+    if (dGoal < GOAL_WITHIN || atEnd) {
+      goalDone = { name: goal.name, at: performance.now(),
+        shortM: dGoal < GOAL_WITHIN ? 0 : Math.round(dGoal) };
+      goal = null;
+      goalRoute = null;
+      goalSolveFor = '';
+    }
   }
   // ── SOLVE, AND RE-SOLVE AS THE WORLD ARRIVES ──
   //
@@ -30335,7 +30379,7 @@ interface CpDraw { x: number; y: number; tx: number; ty: number; got: boolean; a
 let cpDraw: CpDraw[] = [];
 /** One screen-space stretch of the active way on the chart — the line the
  *  pips are pearls on. Built only in top mode. */
-interface RoadSeg { x1: number; y1: number; x2: number; y2: number; task: boolean; d: number }
+interface RoadSeg { x1: number; y1: number; x2: number; y2: number; task: boolean; route?: boolean; d: number }
 let roadSegs: RoadSeg[] = [];
 // The line is drawn from the way's REAL centreline geometry, not by joining
 // checkpoints: the survey lays checkpoints fragment by fragment in tile-load
@@ -30346,19 +30390,28 @@ let roadSegs: RoadSeg[] = [];
 // frame, because a cached projection slides against the scene the moment the
 // camera pans.
 interface RoadLineSeg { ax: number; ay: number; az: number; bx: number; by: number; bz: number;
-  mx: number; mz: number; task: boolean }
+  mx: number; mz: number; task: boolean; route?: boolean }
 let roadLineWorld: RoadLineSeg[] = [];
 let roadLineKey = ''; let roadLineAt = -1e9;
 function refreshRoadLine(via: string | undefined, cur: string | undefined, now: number): void {
-  const key = `${via ?? ''}|${cur ?? ''}|${routeFor}|${routeXZ.length}`;
+  const key = `${via ?? ''}|${routeFor}|${routeXZ.length}|${goal?.name ?? ''}|${goalRoute?.length ?? 0}`;
   if (key === roadLineKey && now - roadLineAt < 1000) return;
   roadLineKey = key; roadLineAt = now;
   roadLineWorld = [];
-  if (!via && !cur) return;
+  // ── THE ROAD UNDER THE WHEELS IS NOT A NAVIGATION LAYER ──
+  //
+  // This used to trace every streamed segment sharing the CURRENT road's name
+  // in teal, so the chart could answer "which way does this run". The chart
+  // draws the roads itself now, and since the drive gained a solved route the
+  // teal was competing with the one line that is actually a plan — two
+  // highlights, neither obviously the answer to "where am I going". So the
+  // named-road pass keeps only the TASK's via, and the plan gets its own
+  // line below.
+  if (!via && !goalRoute) return;
   const seen = new Set<string>();
   for (const arr of roadGrid.values()) {
     for (const s of arr) {
-      if ((s.nm !== via && s.nm !== cur) || !s.nm) continue;
+      if (!via || s.nm !== via) continue;
       // The grid buckets a segment into every 24m cell it crosses — one copy.
       const k = `${s.ax.toFixed(1)},${s.az.toFixed(1)},${s.bx.toFixed(1)},${s.bz.toFixed(1)}`;
       if (seen.has(k)) continue;
@@ -30383,6 +30436,19 @@ function refreshRoadLine(via: string | undefined, cur: string | undefined, now: 
         ax, ay: groundAt(ax, az) + 1.2, az,
         bx, by: groundAt(bx, bz) + 1.2, bz,
         mx: (ax + bx) / 2, mz: (az + bz) / 2, task: true,
+      });
+    }
+  }
+  // THE PLAN, drawn last so it reads over everything: the solved route to the
+  // goal. Its own flag, because on the chart it is dotted and its own colour —
+  // a line you are going to drive, not a road that exists.
+  if (goalRoute && goalRoute.length >= 2) {
+    for (let i = 1; i < goalRoute.length && roadLineWorld.length < 1100; i++) {
+      const [ax, az] = goalRoute[i - 1], [bx, bz] = goalRoute[i];
+      roadLineWorld.push({
+        ax, ay: groundAt(ax, az) + 1.2, az,
+        bx, by: groundAt(bx, bz) + 1.2, bz,
+        mx: (ax + bx) / 2, mz: (az + bz) / 2, task: false, route: true,
       });
     }
   }
@@ -30420,7 +30486,7 @@ function projectRoadLine(): void {
     roadSegs.push({
       x1, y1,
       x2: (poiVec.x * 0.5 + 0.5) * innerWidth, y2: (-poiVec.y * 0.5 + 0.5) * innerHeight,
-      task: s.task, d: Math.hypot(s.mx - state.x, s.mz - state.z),
+      task: s.task, route: s.route, d: Math.hypot(s.mx - state.x, s.mz - state.z),
     });
   }
 }
@@ -37259,15 +37325,20 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         if (Math.max(x1, x2) < -4 || Math.min(x1, x2) > HW + 4
           || Math.max(y1, y2) < -4 || Math.min(y1, y2) > HH + 4) continue;
         const near = Math.round(clamp(1 - s.d / CP_SIGHT, 0, 1) * 3) / 3;
-        hctx.fillStyle = pass === 0 ? UI.ink : s.task ? UI.gold : UI.edge;
-        // A floor high enough to trace the WHOLE road across the chart — this
-        // line is orientation, and orientation two valleys over is the point.
-        hctx.globalAlpha = pass === 0 ? 0.7 : (s.task ? 0.6 : 0.5) + 0.35 * near;
+        // TWO LINES, TWO JOBS. Gold and solid is the TASK's road — the thing
+        // the run is about. The solved route is mint and DOTTED: subtle
+        // enough to sit inside the chart's own language, dashed so it never
+        // reads as another road, and unmistakably the plan rather than the
+        // ground.
+        hctx.fillStyle = pass === 0 ? UI.ink : s.route ? UI.good : UI.gold;
+        hctx.globalAlpha = pass === 0 ? (s.route ? 0.45 : 0.7)
+          : (s.route ? 0.5 : 0.6) + 0.35 * near;
         const n = Math.max(1, Math.round(Math.hypot(x2 - x1, y2 - y1) / 2));
         for (let i = 0; i <= n; i++) {
+          if (s.route && (i & 1)) continue;              // the dots of the plan
           const x = Math.round(x1 + ((x2 - x1) * i) / n);
           const y = Math.round(y1 + ((y2 - y1) * i) / n);
-          if (pass === 0) hctx.fillRect(x - 1, y - 1, 3, 3);
+          if (pass === 0) hctx.fillRect(x - 1, y - 1, s.route ? 2 : 3, s.route ? 2 : 3);
           else hctx.fillRect(x - 1, y - 1, 2, 2);
         }
       }
@@ -38518,7 +38589,8 @@ function stepOverlays(): void {
       head: `SURVEY SAYS ${obsFlash.o.satName}`,
       body: `GROUND: ${obsFlash.o.name ? obsFlash.o.name.toUpperCase() + ' · ' : ''}${obsFlash.o.tag.replace('=', ' ').toUpperCase()}` }
     : goalDone && performance.now() - goalDone.at < 6000
-    ? { kicker: 'ARRIVED', head: goalDone.name.toUpperCase(), body: 'GOAL REACHED' }
+    ? { kicker: 'ARRIVED', head: goalDone.name.toUpperCase(),
+      body: goalDone.shortM ? `AS NEAR AS THE ROAD GETS · ${goalDone.shortM}M ON FOOT` : 'GOAL REACHED' }
     : surveyClaim && performance.now() - surveyClaim.at < 6000
     ? { kicker: 'SURVEYED', head: surveyClaim.name.toUpperCase(), body: `${surveyClaim.n} CHECKPOINTS` }
     : stationWoke && performance.now() - stationWoke.at < 6000
@@ -38794,7 +38866,7 @@ function setClean(on: boolean): void {
   let km = 0;
   if (rt) for (let i = 1; i < rt.length; i++) km += Math.hypot(rt[i][0] - rt[i - 1][0], rt[i][1] - rt[i - 1][1]);
   return { goal: goal?.name ?? null, pts: rt?.length ?? 0, km: +(km / 1000).toFixed(2),
-    onIt: !!goalAhead(state.x, state.z, 200), ...goalSolveStat };
+    shortM: Math.round(goalShortM), onIt: !!goalAhead(state.x, state.z, 200), ...goalSolveStat };
 };
 (window as unknown as { __goal?: object }).__goal =
   (name?: string | null, x?: number, z?: number): object | null => {

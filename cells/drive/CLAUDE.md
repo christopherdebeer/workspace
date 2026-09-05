@@ -1625,8 +1625,32 @@ scale 3, 40 m and 105 m cameras:
   same place. `__route()` reports the solve, `__farnode()` the farthest
   REACHABLE node — a test that picks the farthest node anywhere is testing
   whether OSM happened to stream a connected world, not the solver.
+  **AND IT AIMS FOR THE CLOSEST IT CAN GET.** Most places worth driving to
+  are not ON the network — a trig point is up a hillside, a lake's name sits
+  in the water, a fix lands where the thumb did, and while the world streams
+  even a town's pin can be a kilometre from the nearest loaded road.
+  Demanding a node within some radius of the goal made all of those
+  unroutable, which is the same failure as having no router. There is no
+  target now: the walk settles the whole reachable component and takes the
+  node that gets CLOSEST, with a light penalty on the driving itself
+  (`GOAL_DETOUR`) so a hundred metres of gain is not bought with ten
+  kilometres of road. Measured: an on-network goal solves 0m short, the same
+  goal shoved 700m into open veld solves 521m short in 1.5ms. The end of the
+  plan is a destination wherever it lands — the course brakes there rather
+  than running off its end — and arrival at the road's closest approach
+  counts as arriving, with the toast saying how far the rest is on foot.
   Still not done: no turn cost, no one-way, no surface preference.
 
+- **THE CHART SHOWS THE PLAN, NOT THE ROAD YOU HAPPEN TO BE ON.** The chart
+  used to trace every streamed segment sharing the CURRENT road's name in
+  teal, so it could answer "which way does this run". The chart draws the
+  roads itself, and once the drive gained a solved route that teal was
+  competing with the one line that is actually a plan — two highlights,
+  neither obviously the answer to "where am I going". So the named-road pass
+  keeps only the TASK's via (gold, solid) and the solved route gets its own
+  line: mint and DOTTED (`s.route` in `refreshRoadLine`/`projectRoadLine`),
+  subtle enough to sit inside the chart's own language, dashed so it never
+  reads as another road.
 - **A PIN IS A RECORD ALREADY, AND THE LINE IS NOT A PLACE TO TELEPORT FROM.**
   A double tap on the chart dropped a NEW fix wherever it landed, including
   squarely on a pin that already names that place — burying the thing you
