@@ -1844,6 +1844,69 @@ here: it would change the look of every tree in the game, and it may well be
 a considered omission, since the skeletons carry the largest fragment bill in
 the scene and `terrainFx` is not free. Ask before landing it.
 
+## Routing across two maps
+
+The router's graph was the fine OSM survey and nothing else, so a goal past the
+ring had no path — while the chart was at that moment DRAWING the trunk road
+that goes there. The overview tiles have always arrived as tagged polylines and
+been spent on ribbons ("a backdrop nothing samples", in the layer's own words):
+true of the picture, false of the need.
+
+- **THE COARSE WAYS ARE KEPT** (`ovWays`), in world metres, exactly as
+  `ovPlaces` keeps the names. RAW geometry, not the tile-clipped pieces the
+  ribbons draw: a way crossing three tiles arrives three times and the node
+  matcher collapses the shared ends, which is what makes the network continuous
+  across a boundary instead of a row of stubs.
+- **WHERE THE SURVEY ENDS IS A FACT; ITS BUDGET IS A WISH.** The handover was
+  `osmRingR * 0.8` — the radius the tile queue is *willing* to reach — and the
+  roads it has actually got are another matter. Measured: a budget of 1541m
+  over a network that petered out at 250m, so the coarse tier began a kilometre
+  beyond anything it could be joined to and floated unreachable. It now reads
+  the graph it has just built: the **85th percentile** of fine-node distance,
+  not the farthest (one motorway spur streamed along the corridor would drag
+  the handover out behind it). Where the survey is healthy this lands on the
+  budget; where it is thin the chart's roads arrive closer, which is the right
+  way round.
+- **AND NO FLOOR UNDER IT.** A fixed 250m looked like the obvious guard and
+  cost three runs: the percentile *guarantees* that 15% of surveyed nodes lie
+  beyond the handover, so there is always something to portal from, and a
+  metre count guarantees nothing. The percentile is its own floor.
+- **PORTALS, NOT GEOMETRY, AND ASKED FROM THE SURVEY'S EDGE.** A z10 polyline
+  sits fifty to a hundred metres off the surveyed centreline of the same road,
+  so `NODE_SNAP`'s metre and a half never fires between tiers. Each fine node
+  past the handover — a road that, to the graph, ends in the middle of nowhere
+  — gets one synthetic edge to the nearest coarse node within `PORTAL_R`,
+  priced at the straight line × `PORTAL_K`. Asking from the coarse side instead
+  made *zero* (three times as many nodes, a 105-cell span over the shared 4m
+  hash, and the wrong question); asking from the survey's edge puts the join on
+  the boundary where it belongs. The reach is 420m because the tiers are not
+  two samplings of the same points — the nearest coarse node to the last
+  surveyed one is routinely a few hundred metres *along* the road.
+- **THE AUTOPILOT ONLY STEERS ON THE SURVEY.** The half that decides whether
+  this is good or dangerous. A coarse leg is right about which valley the road
+  goes up and wrong by a hundred metres about where it is, so `goalAhead`
+  neither locates the truck on one nor walks past one: the driving line stops
+  at the handover and the junction bias carries on, which is what that bias was
+  built for. The chart draws the whole plan, the far half fainter and at a
+  longer stride, because the plan has two confidences and should say so.
+
+**Measured** (`devtools/far-route.test.mjs`): a 26km goal plans 26.18km, of
+which 0.34km is surveyed and driveable; 104 of 175 points are the chart's; 28
+portals across a 247m handover; 3.2ms over 349 nodes; and it finishes 225m from
+the goal against 25,889m short before. The negative control matters as much:
+take the coarse tier away and the same goal falls back to 0.43km and 25,689m
+short, so the tier is doing all of the work and none of it is the search
+getting cleverer.
+
+**The bench injects its network** (`__ovinject`) rather than waiting for tiles.
+Three runs went by measuring Overpass instead of the router — z13 after 36s
+with 4km of reach, then z8 not arriving at all in two minutes — and every one
+ended in an honest SKIP, which is not verification. The tile path is exercised
+by the chart whenever anyone opens it; what needed a deterministic bench is the
+graph, the portals and the steering rule. Probes: `__route()` (both tiers, the
+portals, `inner` against `budget`, and the driveable fraction beside the
+planned one), `__ovroads()`, `__ovinject()`.
+
 ## The chassis
 
 The truck is three models stacked, and knowing which one is arguing matters
