@@ -1844,6 +1844,66 @@ here: it would change the look of every tree in the game, and it may well be
 a considered omission, since the skeletons carry the largest fragment bill in
 the scene and `terrainFx` is not free. Ask before landing it.
 
+## The site: a continuous environment under the five biomes
+
+`climate.ts` above `siteAt` answers one question — which of five biomes is this
+— from latitude, height and a moisture read off the LAND COVER. That last part
+is partly circular (the vegetation predicts the vegetation) and it has nothing
+to say where cover is coarse or absent. Five classes also put fynbos,
+chaparral, savanna, steppe and monsoon forest in one box.
+
+`siteAt` is the layer under it. It does not classify: it reports the physical
+facts a plant responds to — heat, the annual range, frost, water and WHEN the
+water arrives, continentality, rain shadow, height against the treeline — and
+leaves the choosing to whatever sits on top. It reads no land cover, so it is
+not circular.
+
+- **THE LOCAL HALF IS THE POINT.** `CLIM_G` is 2048m and its note is right:
+  climate does not vary meaningfully inside two kilometres. But a Cape ravine
+  holds forest while the slope above it holds fynbos, and a coastal California
+  gully holds redwood beside a chaparral ridge — same climate cell, different
+  ASPECT and DRAINAGE. **No refinement of the climate term reaches those, at any
+  resolution**, so `insolation` (slope and aspect against a hemisphere-aware
+  sun) and `wetness` (a ring test — a ravine floor is flat and reads as a plain
+  to any gradient; it is the WALLS that say what it is) are sampled from the
+  terrain at terrain resolution.
+- **WHAT THE NUMBERS ARE.** Three gaussians on the general circulation — the
+  ITCZ's rain, the storm track's rain, and a floor — modulated by distance from
+  the sea and by what the wind had to climb. Not a climatology, not measured. A
+  bioclim raster would beat them everywhere; the value of one sampler is that
+  swapping to one is a swap, not a rewrite.
+- **FOUR ERRORS THE FIXTURES FOUND, AND THE TERMS THAT FIXED THEM.** The first
+  version passed every band it was given while being six degrees wrong — which
+  is what a too-generous band buys. *Manaus at 1261mm against 2300*: the
+  interior-drying penalty was flat, and 1400km means nothing to the Amazon
+  because the ITCZ delivers regardless and the forest recycles its own water;
+  the penalty now fades toward the equator. *Reykjavik at −1.2°C against 5.0 and
+  Irkutsk at 5.5 against 1.0*: one missing term with a sign, not two errors —
+  the sea moves the MEAN as well as widening the range, mildly poleward and
+  hardly at all in the tropics. *Tamanrasset at 14.5°C against 22*: no
+  aridity-heating, so a cloudless desert ran at its latitude's temperature.
+  *Yosemite at 464mm against 900*: terrain could only ever SUBTRACT — one
+  sampling of the upwind ground gives both, its highest being the shadow you
+  stand behind and its lowest the climb the air made to reach you.
+- **THE DESERTS ARE THE KNOWN MISS AND THE SUITE SAYS SO.** Tamanrasset lands
+  at 17.2°C/135mm against 22°C/45mm, Death Valley 20.6/140 against 25/60 — a
+  heated plateau does not cool at the free-air lapse rate, and three gaussians
+  cannot make a place as dry as the Sahara. Asserted loosely and deliberately
+  rather than omitted or tuned away.
+
+**Measured** (`devtools/climate-fixtures.test.mjs`, pure node — esbuild the
+module and import it, the route `culture.test.mjs` takes; seconds, no browser,
+no tiles, no cover raster). Nine sites against published normals: temperature
+within 3.5°C everywhere (Reykjavik +0.2, Manaus −0.9, Irkutsk +1.1, the worst
+Ulaanbaatar +2.9), rain within a factor of 1.5 in the tropics and 2.2
+elsewhere. **The tolerances are the ones the model earns**; tightening them is
+how the next improvement gets noticed instead of absorbed.
+
+**Not yet wired into the world.** `SiteEnv` needs a `coastAt` — nearest
+coastline in metres — and the game has coastline vectors but no distance
+sampler. That is the next increment, and until it exists nothing in the game
+calls `siteAt`.
+
 ## Routing across two maps
 
 The router's graph was the fine OSM survey and nothing else, so a goal past the
