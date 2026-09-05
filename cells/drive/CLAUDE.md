@@ -1898,6 +1898,28 @@ take the coarse tier away and the same goal falls back to 0.43km and 25,689m
 short, so the tier is doing all of the work and none of it is the search
 getting cleverer.
 
+- **AND IT COST 17% OF A PHONE'S CPU BEFORE ANY OF THAT WAS MEASURED THERE.**
+  The harness said 3.2ms over 349 nodes; the device said 141,147ms over 286
+  solves — a mean of 493ms, a worst of 1237ms, the single largest cost in the
+  game, and a 797ms frame that was 732ms of route. A phone on Chapman's Peak
+  has 72,084 road cells and thirty kilometres of coarse network behind them.
+  Two causes, and the split (`graphMs` against `ms`) is now in the probe
+  because the first telemetry could not say which:
+  **the graph was rebuilt every solve** — every cell, every coarse way, every
+  2.5s, to reconstruct something that had not changed. It changes when a fine
+  tile streams, a coarse tile lands, or the truck moves `GRAPH_MOVE`; nothing
+  else. Cached on exactly those, which also takes a large recurring allocation
+  out of a session whose gap row is 27%.
+  **And the walk settled the whole reachable component** — fine at five
+  kilometres, tens of thousands of nodes behind thirty. It stops when nothing
+  in the frontier can win, and the bound is EXACT rather than heuristic because
+  the walk's contract is to find the closest the roads get: a prune that can
+  drop the winner is a wrong answer, not a faster one. Dijkstra pops in
+  increasing cost and no gap is negative, so nothing unsettled scores below
+  `cost · GOAL_DETOUR`. **The tempting tighter form, `GOAL_DETOUR · (cost +
+  gap)`, is unsound** and was written first: the next node need not lie beyond
+  this one and may sit on a branch already nearer the goal.
+
 **The bench injects its network** (`__ovinject`) rather than waiting for tiles.
 Three runs went by measuring Overpass instead of the router — z13 after 36s
 with 4km of reach, then z8 not arriving at all in two minutes — and every one
