@@ -10728,8 +10728,35 @@ function roadGraph(): Map<string, GraphNode> {
     }
   }
   // ── the coarse tier, and only where the fine one has given out ──
+  //
+  // WHERE THE SURVEY ENDS IS A FACT, NOT A BUDGET. The handover was
+  // `osmRingR * 0.8` — the radius the tile queue is WILLING to stream to — and
+  // the roads it has actually got are another matter entirely. Measured: a
+  // budget of 1541m over a surveyed network that petered out around 400m, so
+  // the coarse tier began a kilometre beyond anything it could be joined to,
+  // floated unreachable, and a 26km goal solved to a 380m route that was
+  // 25.7km short. That is not a rare case: it is every session's first minute,
+  // and every sparsely mapped corner of the world.
+  //
+  // So the handover follows the data and comes in to meet it. The 85th
+  // percentile rather than the farthest node, because a single motorway spur
+  // streamed along the corridor reaches much further than the coverage does
+  // and would drag the handover out behind it. Where the survey is healthy
+  // this lands on the budget and nothing changes; where it is thin the coarse
+  // map arrives closer, which is the right way round — the less you know
+  // finely, the sooner you should be reading the chart.
   const fineN = g.size;
-  const inner = osmRingR * OV_ROUTE_IN;
+  const budget = osmRingR * OV_ROUTE_IN;
+  let inner = budget;
+  if (Number.isFinite(budget) && fineN > 8) {
+    const ds: number[] = [];
+    for (const n of g.values()) ds.push(Math.hypot(n.x - osmCarX, n.z - osmCarZ));
+    ds.sort((a, b) => a - b);
+    const edge = ds[Math.min(ds.length - 1, Math.floor(ds.length * 0.85))];
+    // A floor, so a world that has streamed almost nothing does not put the
+    // chart's roads under the wheels.
+    inner = clamp(Math.min(budget, edge), 250, budget);
+  }
   const coarse: string[] = [];
   if (Number.isFinite(inner)) {
     for (const list of ovWays.values()) {
@@ -10799,12 +10826,15 @@ function roadGraph(): Map<string, GraphNode> {
       f.to.push({ id: best, cost }); c.to.push({ id: fk, cost });
       made++;
     }
-    graphStat = { fine: fineN, coarse: g.size - fineN, portals: made, inner: Math.round(inner) };
-  } else graphStat = { fine: fineN, coarse: 0, portals: 0, inner: 0 };
+    graphStat = { fine: fineN, coarse: g.size - fineN, portals: made,
+      inner: Math.round(inner), budget: Math.round(budget) };
+  } else graphStat = { fine: fineN, coarse: 0, portals: 0, inner: 0, budget: 0 };
   return g;
 }
-/** What the last graph was made of — read by __route. */
-let graphStat = { fine: 0, coarse: 0, portals: 0, inner: 0 };
+/** What the last graph was made of — read by __route. `inner` is where the
+ *  handover actually fell and `budget` where the tile queue would have put it;
+ *  the two differ exactly when the survey is thinner than its allowance. */
+let graphStat = { fine: 0, coarse: 0, portals: 0, inner: 0, budget: 0 };
 /** The node nearest a place, or null when the roads do not reach it. */
 function nearestNode(g: Map<string, GraphNode>, x: number, z: number, r: number,
   fineOnly = false): string | null {
