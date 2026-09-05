@@ -2350,6 +2350,7 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
   if (hydroFeedLog.length > 400) hydroFeedLog.splice(0, 200);
   void hydroSys.upsertTile({
     key, revision: rev,
+    channelInvertM: channelInvertAt,
     bounds: { minX: t.xs, minZ: t.zs, maxX: t.xs + t.w, maxZ: t.zs + t.h },
     elevation: { width: n, height: n, data: elevation, verticalDatum: 'absolute-m' },
     features: feats,
@@ -14904,6 +14905,39 @@ function channelAt(x: number, z: number): Seg | null {
     }
   }
   return null;
+}
+/**
+ * THE INVERT OF THE CARVED CHANNEL at a point, absolute metres, or NaN where
+ * no watercourse has been dug. `channelAt` finds the segment whose half width
+ * covers the point; `ya`/`yb` are the same monotone invert the terrain kernel
+ * lowered the ground to (less its 0.15m), so a river levelled on this stands
+ * in the channel the player can see rather than on the raster's bank.
+ */
+function channelInvertAt(x: number, z: number): number {
+  if (!channelGrid.size) return NaN;
+  // THE LOWEST CHANNEL, NOT THE FIRST. `channelAt` returns whichever segment
+  // the 3x3 walk meets first, and in a steep valley that is as likely to be a
+  // tributary hanging on the wall as the river in the floor — measured above
+  // Obergoms as an invert six metres over the drawn ground, which put the
+  // surface there with it. The terrain's own carve takes the lowest bed for
+  // exactly this reason (channelFloorAt); so does this.
+  const cx = Math.floor(x / GRID), cz = Math.floor(z / GRID);
+  let best = NaN;
+  for (let ax = cx - 1; ax <= cx + 1; ax++) {
+    for (let az = cz - 1; az <= cz + 1; az++) {
+      const arr = channelGrid.get(`${ax},${az}`);
+      if (!arr) continue;
+      for (const c of arr) {
+        if (c.ya === undefined || c.yb === undefined) continue;
+        const dx = c.bx - c.ax, dz = c.bz - c.az;
+        const t = clamp(((x - c.ax) * dx + (z - c.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+        if (Math.hypot(x - (c.ax + dx * t), z - (c.az + dz * t)) > c.hw) continue;
+        const y = (c.ya as number) + ((c.yb as number) - (c.ya as number)) * t;
+        if (Number.isNaN(best) || y < best) best = y;
+      }
+    }
+  }
+  return Number.isNaN(best) ? NaN : best + 0.15 + baseElev;
 }
 const wiSet = new Set<Seg>();
 function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: number; speed: number } {

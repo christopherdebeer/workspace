@@ -125,10 +125,23 @@ function lineProfile(input: HydroTileInput, feature: HydroFeature): Float32Array
     clamp(feature.geometry.widthM * 1.25, 10, 40));
   const count = points.length >> 1;
   if (count < 2) return undefined;
+  // THE CARVED BED FIRST. Where the terrain has already dug this channel the
+  // stations stand on its invert, so the surface and the ground are one
+  // solve; the raster answers everywhere else, as it always did. One call a
+  // station (10-40m apart), not one a texel — see the bedFoot note below for
+  // what happens when this is asked per pixel.
+  // THE INVERT IS THE FLOOR, NOT THE SURFACE. Levelling the stations ON it
+  // gave a river of exactly zero depth — surface and bed the same number at
+  // every texel, measured — so the station stands a nominal depth above the
+  // bed the ground was carved to, which is what the ribbon has always drawn.
+  const invert = input.channelInvertM;
   const heights = new Array<number>(count);
   for (let i = 0; i < count; i++) {
+    const x = points[i * 2], z = points[i * 2 + 1];
+    const inv = invert ? invert(x, z) : NaN;
     heights[i] = feature.taggedLevelM
-      ?? sampleElevation(input.elevation, input.bounds, points[i * 2], points[i * 2 + 1]);
+      ?? (Number.isFinite(inv) ? inv + FLOWING_NOMINAL_DEPTH_M
+        : sampleElevation(input.elevation, input.bounds, x, z));
   }
   fillMissing(heights);
   // A tiny symmetric filter removes individual DEM pits before direction is
@@ -977,6 +990,15 @@ export function buildHydroTile(
         // cross-section humps upward at the edges; sampled at the thalweg,
         // the surface stays flat across the section and follows the valley
         // longitudinally. Where the fit says higher, the bed wins.
+        // The ceiling on the fitted level. The carved invert is the true bed
+        // where there is one — and it is a grid lookup, not a heightfield
+        // walk, so it can be afforded per texel where sampleHeight could not
+        // (that cost +5ms a build, measured, and seated every pixel on its
+        // own dip).
+        // THE RASTER HERE, THE INVERT AT THE STATIONS. Asked per wet texel the
+        // channel lookup is a grid walk each time and cost 7ms a build,
+        // measured; the profile above already carries the invert, so this
+        // ceiling has nothing left to correct where there is a carve.
         const bedFoot = sampleElevation(input.elevation, input.bounds, hit.px, hit.pz);
         const levelM = Number.isFinite(bedFoot)
           ? Math.min(hit.levelM, bedFoot + FLOWING_NOMINAL_DEPTH_M) : hit.levelM;

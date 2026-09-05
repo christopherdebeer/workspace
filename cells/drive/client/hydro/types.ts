@@ -94,6 +94,21 @@ export interface HydroFeature {
 }
 
 export interface HydroTileInput {
+  /**
+   * THE BED THE TERRAIN WAS ACTUALLY CARVED TO, when the caller has one.
+   *
+   * A watercourse is solved twice in this world: the terrain kernel digs a
+   * channel to a monotone invert (`carveChannels`), and the hydro build fits
+   * its own profile to the elevation raster. Two answers to "where is the
+   * bed" that nobody reconciled, and in a gorge the raster's answer is the
+   * BANK — measured above Obergoms as a surface standing 4.35m over the
+   * drawn valley floor with the field's own depth channel reading 0.32m.
+   * Handed the carved invert, the profile becomes the channel the player is
+   * driving past, and the water sits in it by construction. Absolute metres
+   * at a point inside a channel; NaN anywhere else, where the raster remains
+   * the honest fallback.
+   */
+  channelInvertM?: (x: number, z: number) => number;
   key: TileKey;
   /** Monotonic for this key. Stale asynchronous builds are discarded. */
   revision: number;

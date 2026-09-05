@@ -1540,7 +1540,28 @@ scale 3, 40 m and 105 m cameras:
   **Two, the field's raster and the drawn mesh disagree by up to 3m at a
   point** (median 0.00, range −2.47…+3.02): the field is ~16m a texel over a
   2km tile and an alpine channel is narrower than two of those.
-  TWO FIXES THAT DID NOT WORK, both measured and reverted: sampling the
+  **THE FIX: ONE BED, NOT TWO.** A watercourse was solved twice — the
+  terrain kernel carves a channel to a monotone invert (`carveChannels`,
+  from `channelGrid`, whose `ya`/`yb` are that invert less 0.15m) while the
+  hydro build fitted its own profile to the elevation raster, and nobody
+  reconciled them. `HydroTileInput.channelInvertM` now hands the build the
+  carved invert (`channelInvertAt` in main.ts) and `lineProfile` stands its
+  stations a nominal depth above it, so the surface sits in the channel the
+  player is driving past by construction. Measured over 158 wet texels above
+  Obergoms: the rim, where a hanging edge shows, went from +2.36m worst to
+  **−0.03m — no texel's surface stands over the ground at all** — and the
+  mid-channel worst halved, 5.24m to 2.93m.
+  TWO RULES LEARNED THE HARD WAY. **Take the LOWEST channel, not the first:**
+  `channelAt` returns whichever segment the 3×3 walk meets first, and in a
+  gorge that is as often a tributary hanging on the wall — it put an invert
+  6m over the drawn ground and the water with it (worst went to +6.9m before
+  this was found). **And ask it per STATION, never per texel:** the lookup is
+  a grid walk, and in the wet-texel loop it cost +7ms a build, on top of the
+  +3-5ms the station calls already cost (14.7 → ~19). What remains unfixed is
+  the ribbon's WIDTH against the channel's: texels painted wet on high ground
+  now sink further under it (worst −9.9m, up from −5.9m). Buried water is
+  invisible, which is why this trade was taken, but the widths still disagree.
+  TWO FIXES THAT DID NOT WORK, both measured and reverted:  TWO FIXES THAT DID NOT WORK, both measured and reverted: sampling the
   profile stations from the fine `sampleHeight` instead of the raster made
   the rim sink (median −0.05 → −0.75m) and the worst burial went from −5.9m
   to −10.9m, because the profile then follows a channel the ribbon's width
