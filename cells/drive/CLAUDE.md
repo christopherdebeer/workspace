@@ -1457,11 +1457,23 @@ scale 3, 40 m and 105 m cameras:
   cell re-centred the rings and rerolled the wood. Trees are gathered and
   the nearest N admitted by true distance, fading toward the ground over
   the last third of the admitted edge (`__ez().edge`).
-  **The budget:** the recipes are ~1000 triangles a broadleaf and ~1700 a
-  conifer, so the three tree caps are scaled together to `TREE_TRI_BUDGET`
-  (2.4M; `?treetris=` overrides, the VEGETATION dial multiplies) — a
-  richer recipe thins the far wood, never the frame. `?ez=0` restores the
-  archetypes; `__ez()` is the bill, `__ezgeo()` every variant's extent.
+  **The tree rack:** SETTINGS → TREES exposes the real levers independently:
+  POPULATION CAP (0.25×–16×), DRAW RANGE (350 m–2.8 km), EZ TRI CAP
+  (0.3M–100M), baked variant breadth, whole-tree height, form spread and
+  deterministic growth bend. The upper stops are deliberately allowed far
+  beyond frame budget; instance pools grow only on demand, so the shipped
+  defaults still allocate and draw exactly what they did before. The defaults
+  are 1×, 700 m, 2.4M, ALL, 1×, STOCK and bend OFF. `?treetris=` remains an
+  exact, unsaved override and outranks the remembered rack; `?ez=0` restores
+  the archetypes. `__ez()` reports the live tuning, capacity and triangle
+  bill; `__ezgeo()` reports every variant's extent.
+  **Diversity has two scales:** the 6/4/4 baked silhouettes remain stable per
+  site and EZ VARIANTS can collapse them to prove what that atlas contributes;
+  FORM SPREAD magnifies the already stable height/width/lean draws, while
+  GROWTH BEND adds a continuous position-hashed bow in the vertex shader for
+  no vertices or draw calls. The next high-leverage bake is more
+  recipe × seed silhouettes selected coherently per stand (rather than random
+  species confetti), with runtime generation still kept out of the game.
   Change a recipe → re-bake (`npm i --no-save @dgreenheck/ez-tree@1.1.0`,
   run the devtool); the bake prints the drawn triangles per variant.
 
@@ -1771,11 +1783,16 @@ Two rules used to stand in for physics here, and both were felt from the seat.
 
 - **PARKED IS A HOLD, AND IT IS DECIDED BEFORE THE STEP.** The old `parkHold`
   zeroed `state.speed`/`slideV` AFTER `stepTraction` had already integrated the
-  frame's position, so the velocities were reset and the DISPLACEMENT was kept:
-  two millimetres a frame is twelve centimetres a second, and a stopped truck
-  crept downhill forever. It now latches (`parkLatch`) before the step and the
-  step is skipped entirely — nothing integrates, so nothing moves. Measured
-  with `devtools/park-air.mjs`.
+  frame's position, so the velocities were reset and the DISPLACEMENT was kept.
+  The shape of that leak is worth knowing, because it explains why the
+  complaint came from the seat and never from the harness: the frame's own
+  displacement is ½·a·dt², so the creep per SECOND is ½·a·dt — **proportional
+  to the frame time**. On a 20° slope that is 2.8cm/s at 60fps, 5.6 at 30 and
+  16.8 at 10, so the worse the phone was doing the further the parked truck
+  wandered. It now latches (`parkLatch`) before the step and the step is
+  skipped entirely: nothing integrates, so nothing moves. **Measured** on 1.1°
+  ground with 28.8° of hold available, all three traction modes: 0.000m over
+  5.1 sim seconds, speed and `slideV` both exactly zero.
 - **THE GRADE IT SURVIVES IS THE TYRES', NOT A NUMBER.** g·sinθ pulls, μ·g·cosθ
   holds, so a standing truck stays put while `tanθ ≤ μ` — the angle of repose,
   read from the friction the four wheels are already sampling. Dry tarmac holds

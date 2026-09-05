@@ -174,25 +174,49 @@ export function ezMeanTris(family: EzFamily): number {
 }
 
 /** A stable variant index for a site, so a tree keeps its skeleton across
- *  refreshes and its neighbours differ. */
-export function ezVariantFor(family: EzFamily, x: number, z: number): number {
-  const n = EZ_BAKE.families[family].variants.length;
+ *  refreshes and its neighbours differ. `limit` is the SETTINGS instrument:
+ *  ONE/TWO/FOUR can prove what the atlas buys without changing where a tree
+ *  stands, while ALL remains the shipping answer. */
+export function ezVariantFor(family: EzFamily, x: number, z: number, limit = Number.MAX_SAFE_INTEGER): number {
+  const available = EZ_BAKE.families[family].variants.length;
+  const n = Math.min(available, Math.max(1, Math.floor(limit)));
   const h = (Math.imul(Math.round(x * 8), 73856093) ^ Math.imul(Math.round(z * 8), 19349663)) >>> 0;
-  return n ? h % n : 0;
+  return available ? h % n : 0;
 }
 
 /** The one material for every skeleton: the crown wears the instance's
- *  colour, the wood a bark colour, both under the faceTone in `color`. Built
+ *  colour, the wood a bark colour, both under the faceTone in colour. Built
  *  on the leaf material's terms (white, flat, vertex colours) so a caller can
- *  add the same grain it gives the other plants. */
-export function ezMaterial(bark: THREE.ColorRepresentation): THREE.MeshLambertMaterial {
+ *  add the same grain it gives the other plants.
+ *
+ *  BEND IS INSTANCE-DERIVED, NOT ANOTHER GEOMETRY. EZ supplied genuinely
+ *  different skeletons; the bake necessarily made that infinity a small atlas.
+ *  A stable hash of the instance position bows each normalised tree in its own
+ *  direction as it rises. That recovers a continuous layer of growth form for
+ *  one uniform and no extra vertices, variants or draws. Zero is an exact A/B.
+ */
+export function ezMaterial(
+  bark: THREE.ColorRepresentation,
+  tuning: { bend?: { value: number } } = {},
+): THREE.MeshLambertMaterial {
   // Double-sided for the leaf cards: a quad has no back to cull.
   const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true, side: THREE.DoubleSide });
   const uWood = { value: new THREE.Color(bark) };
+  const uEzBend = tuning.bend ?? { value: 0 };
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uWood = uWood;
+    sh.uniforms.uEzBend = uEzBend;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aWood; uniform vec3 uWood;')
+      .replace('#include <common>', '#include <common>\nattribute float aWood; uniform vec3 uWood; uniform float uEzBend;')
+      .replace('#include <begin_vertex>', [
+        '#include <begin_vertex>',
+        '#ifdef USE_INSTANCING',
+        'float ezBx = fract(sin(dot(instanceMatrix[3].xz, vec2(12.9898, 78.233))) * 43758.5453) - 0.5;',
+        'float ezBz = fract(sin(dot(instanceMatrix[3].zx, vec2(39.3468, 11.135))) * 24634.6345) - 0.5;',
+        'float ezRise = max(0.0, transformed.y);',
+        'transformed.xz += vec2(ezBx, ezBz) * uEzBend * ezRise * ezRise;',
+        '#endif',
+      ].join('\n'))
       .replace('#include <color_vertex>', THREE.ShaderChunk.color_vertex
         .replace('vColor.xyz *= instanceColor.xyz;', 'vColor.xyz *= mix(instanceColor.xyz, uWood, aWood);'));
   };

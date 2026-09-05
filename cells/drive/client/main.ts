@@ -7328,6 +7328,24 @@ function vegMesh(geo: THREE.BufferGeometry, mat: THREE.Material, cap: number): T
   scene.add(m);
   return m;
 }
+/**
+ * The shipped pools stay small; the SETTINGS tree rack is allowed to be
+ * ridiculous. Grow only when a dial asks for more so ordinary boot pays
+ * neither the RAM nor upload cost of the experimental ceilings.
+ */
+function ensureVegCapacity(m: THREE.InstancedMesh, need: number): void {
+  const have = m.instanceMatrix.count;
+  if (need <= have) return;
+  const cap = Math.ceil(Math.max(need, have * 1.6) / 128) * 128;
+  const attrs = (renderer as unknown as {
+    attributes?: { remove: (attribute: THREE.BufferAttribute) => void };
+  }).attributes;
+  attrs?.remove(m.instanceMatrix);
+  if (m.instanceColor) attrs?.remove(m.instanceColor);
+  m.instanceMatrix = new THREE.InstancedBufferAttribute(new Float32Array(cap * 16), 16);
+  m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
+  m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
+}
 // White base colours: every plant's hue arrives through instanceColor, and the
 // baked tone rides underneath it (three multiplies the two).
 const leafMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true });
@@ -7445,16 +7463,40 @@ const EZ_FAMILIES: EzFamily[] = ['broadleaf', 'conifer', 'snag'];
  * wood thinning — never a slower frame. ?treetris=900000 tries a larger
  * budget on the device; the VEGETATION dial multiplies on top.
  */
-const TREE_TRI_BUDGET = ((): number => {
-  const ask = Number(new URLSearchParams(location.search).get('treetris'));
-  return Number.isFinite(ask) && ask > 0 ? ask : 2400000;
-})();
-const ezCapScale = ((): number => {
-  let atCap = 0;
-  for (const fam of EZ_FAMILIES) atCap += VEG_CAP[fam] * ezMeanTris(fam);
-  return atCap > 0 ? clamp(TREE_TRI_BUDGET / atCap, 0.08, 1) : 1;
-})();
+const TREE_TRI_STEPS = [300000, 1000000, 2400000, 6000000, 15000000, 40000000, 100000000] as const;
+const TREE_RANGE_STEPS = [350, 700, 1400, 2100, 2800] as const;
+const TREE_POP_STEPS = [0.25, 0.5, 1, 2, 4, 8, 16] as const;
+const TREE_SIZE_STEPS = [0.5, 1, 1.5, 2, 3, 4] as const;
+const TREE_FORM_STEPS = [0, 1, 1.75, 3, 5] as const;
+const TREE_BEND_STEPS = [0, 0.08, 0.18, 0.35, 0.65, 1.1] as const;
+const TREE_VARIANT_STEPS = [1, 2, 4, Number.MAX_SAFE_INTEGER] as const;
+const treeTriUrl = Number(new URLSearchParams(location.search).get('treetris'));
+let treeTriBudget = Number.isFinite(treeTriUrl) && treeTriUrl > 0 ? treeTriUrl : 2400000;
+let treeRange = 700;
+let treePopulationScale = 1;
+let treeSizeScale = 1;
+let treeFormScale = 1;
+let treeVariantCap: number = Number.MAX_SAFE_INTEGER;
+/** Shared by every baked skeleton; zero preserves the previous frame exactly. */
+const treeBendU = { value: 0 };
+const TREE_KINDS = ['broadleaf', 'conifer', 'palm', 'snag', 'acacia'] as const;
+const isTreeKind = (k: VegKind): boolean => (TREE_KINDS as readonly VegKind[]).includes(k);
 const isEzKind = (k: VegKind): k is EzFamily => k === 'broadleaf' || k === 'conifer' || k === 'snag';
+/**
+ * Population says how much forest may exist; TRI CAP says how much baked
+ * geometry may reach the GPU. Keeping them independent makes the upper stops
+ * honest stress instruments instead of labels over a silently fixed pool.
+ */
+function ezCapScale(): number {
+  let atCap = 0;
+  for (const fam of EZ_FAMILIES) {
+    atCap += VEG_CAP[fam] * vegScale * treePopulationScale * ezMeanTris(fam);
+  }
+  return atCap > 0 ? clamp(treeTriBudget / atCap, 0, 1) : 1;
+}
+const ezCapFor = (fam: EzFamily): number =>
+  Math.floor(VEG_CAP[fam] * vegScale * treePopulationScale * ezCapScale());
+
 /**
  * TWO MESHES A VARIANT, ONE SHAPE. The shadow map reaches `shadowSpan` metres
  * (80–150 by quality); an instanced mesh is not culled per instance, so every
@@ -7466,7 +7508,7 @@ const isEzKind = (k: VegKind): k is EzFamily => k === 'broadleaf' || k === 'coni
  */
 interface EzTier { near: THREE.InstancedMesh; far: THREE.InstancedMesh; tris: number; n: number; nNear: number; nFar: number }
 const ezTiers: Record<EzFamily, EzTier[]> = { broadleaf: [], conifer: [], snag: [] };
-const ezMat = ezMaterial(0x4a3826);
+const ezMat = ezMaterial(0x4a3826, { bend: treeBendU });
 grainFx(ezMat, 'grain-ez', 0.95, 2.2);
 if (EZ_ON) {
   for (const fam of EZ_FAMILIES) {
@@ -9248,8 +9290,9 @@ function refreshVeg(): void {
   let activeAnchors = 0;
   let trunkN = 0;
   const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
-  const reach = Math.ceil(VEG_RANGE / VEG_CELL);
-  const r2 = VEG_RANGE * VEG_RANGE;
+  const reach = Math.ceil(Math.max(VEG_RANGE, treeRange) / VEG_CELL);
+  const vegR2 = VEG_RANGE * VEG_RANGE;
+  const treeR2 = treeRange * treeRange;
   // NEAREST FIRST. Walk cells in rings outward from the truck, so when a pool
   // fills it is the far plants that get dropped — visiting the grid in raster
   // order let distant thickets eat the caps and leave the ground you are
@@ -9263,6 +9306,12 @@ function refreshVeg(): void {
     }
   }
   const ezCounts: Record<EzFamily, number> = { broadleaf: 0, conifer: 0, snag: 0 };
+  const ezVariant = new WeakMap<PlacedVegSite, number>();
+  const ezNeed: Record<EzFamily, number[]> = {
+    broadleaf: ezTiers.broadleaf.map(() => 0),
+    conifer: ezTiers.conifer.map(() => 0),
+    snag: ezTiers.snag.map(() => 0),
+  };
   for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) { t.n = 0; t.nNear = 0; t.nFar = 0; }
   ezPlaced = [];
   // ── THE TREES ARE ADMITTED BY DISTANCE, NOT BY CELL ──
@@ -9278,7 +9327,7 @@ function refreshVeg(): void {
   // edge, and the crowns fade toward the ground over the last third of that
   // edge so a tree is a smudge before it is gone.
   const ezAdmit = new Set<PlacedVegSite>();
-  const ezEdge: Record<EzFamily, number> = { broadleaf: VEG_RANGE, conifer: VEG_RANGE, snag: VEG_RANGE };
+  const ezEdge: Record<EzFamily, number> = { broadleaf: treeRange, conifer: treeRange, snag: treeRange };
   if (EZ_ON) {
     const cand: Record<EzFamily, Array<[number, PlacedVegSite]>> = { broadleaf: [], conifer: [], snag: [] };
     for (const [gx, gz] of ring) {
@@ -9289,20 +9338,37 @@ function refreshVeg(): void {
         if (!isEzKind(v.k)) continue;
         const dx = v.x - state.x, dz = v.z - state.z;
         const d2 = dx * dx + dz * dz;
-        if (d2 < r2) cand[v.k].push([d2, v]);
+        if (d2 < treeR2) cand[v.k].push([d2, v]);
       }
     }
     for (const fam of EZ_FAMILIES) {
       const list = cand[fam];
-      const cap = Math.floor(VEG_CAP[fam] * vegScale * ezCapScale);
+      const cap = ezCapFor(fam);
       if (list.length > cap) {
         list.sort((p, q) => p[0] - q[0]);
         list.length = cap;
         ezEdge[fam] = cap > 0 ? Math.sqrt(list[cap - 1][0]) : 0;
       }
-      for (const [, v] of list) ezAdmit.add(v);
+      for (const [, v] of list) {
+        ezAdmit.add(v);
+        const vi = ezVariantFor(fam, v.x, v.z, treeVariantCap);
+        ezVariant.set(v, vi);
+        ezNeed[fam][vi] = (ezNeed[fam][vi] ?? 0) + 1;
+      }
+      ezTiers[fam].forEach((t, vi) => {
+        const need = ezNeed[fam][vi] ?? 0;
+        ensureVegCapacity(t.near, need);
+        ensureVegCapacity(t.far, need);
+      });
     }
   }
+  // Archetype trees (?ez=0, plus palms/acacias) and their trunks use the same
+  // real population ceiling. Pools only grow when an upper stop needs them.
+  for (const k of TREE_KINDS) {
+    if (EZ_ON && isEzKind(k)) continue;
+    ensureVegCapacity(vegMeshes[k], Math.ceil(VEG_CAP[k] * vegScale * treePopulationScale));
+  }
+  ensureVegCapacity(trunks, Math.ceil(3600 * vegScale * treePopulationScale));
   for (const [gx, gz] of ring) {
     {
       seedCell(gx, gz);
@@ -9311,7 +9377,8 @@ function refreshVeg(): void {
       for (const v of cell) {
         const dx = v.x - state.x, dz = v.z - state.z;
         const d2v = dx * dx + dz * dz;
-        if (d2v > r2) continue;
+        const tree = isTreeKind(v.k);
+        if (d2v > (tree ? treeR2 : vegR2)) continue;
         // NOTHING GROWS ON THE TARMAC. `pushSite` already refuses a site on a
         // carriageway, but a cell is seeded ONCE and the roads through it
         // stream in afterwards — so every cell seeded before its own road
@@ -9335,14 +9402,17 @@ function refreshVeg(): void {
           // kind's cap and the far dissolve are the archetype's own.
           const fam = v.k;
           if (!ezAdmit.has(v)) continue;
-          const tier = ezTiers[fam][ezVariantFor(fam, v.x, v.z)];
+          const vi = ezVariant.get(v) ?? ezVariantFor(fam, v.x, v.z, treeVariantCap);
+          const tier = ezTiers[fam][vi];
           if (!tier || tier.n >= tier.near.instanceMatrix.count) continue;
           const y = groundAt(v.x, v.z);
-          const total = EZ_M_PER_SCALE[fam] * v.s * (v.sy ?? 1);
+          const formSy = clamp(1 + ((v.sy ?? 1) - 1) * treeFormScale, 0.18, 4.5);
+          const formSw = clamp(1 + ((v.sw ?? 1) - 1) * treeFormScale, 0.18, 4.5);
+          const total = EZ_M_PER_SCALE[fam] * v.s * formSy * treeSizeScale;
           const H = total / (1 + ezCrownReach(fam));
           vegDummy.position.set(v.x, y, v.z);
-          vegDummy.rotation.set(v.tl ?? 0, v.rot, 0);
-          vegDummy.scale.set(H * (v.sw ?? 1), H, H * (v.sw ?? 1));
+          vegDummy.rotation.set((v.tl ?? 0) * treeFormScale, v.rot, 0);
+          vegDummy.scale.set(H * formSw, H, H * formSw);
           vegDummy.updateMatrix();
           const casts = d2v < shadowSpan * shadowSpan;
           const mesh = casts ? tier.near : tier.far;
@@ -9362,18 +9432,25 @@ function refreshVeg(): void {
           } else mesh.setColorAt(slot, v.c);
           tier.n++;
           ezCounts[fam]++;
-          if (ezPlaced.length < 600) ezPlaced.push({ k: v.k, role: v.role, x: +v.x.toFixed(1), z: +v.z.toFixed(1), h: +v.h.toFixed(2), s: +v.s.toFixed(2), sy: +(v.sy ?? 1).toFixed(2), sw: +(v.sw ?? 1).toFixed(2), H: +H.toFixed(2), casts: casts ? 1 : 0 });
+          if (ezPlaced.length < 600) ezPlaced.push({ k: v.k, role: v.role, x: +v.x.toFixed(1), z: +v.z.toFixed(1), h: +v.h.toFixed(2), s: +v.s.toFixed(2), sy: +formSy.toFixed(2), sw: +formSw.toFixed(2), variant: vi, H: +H.toFixed(2), casts: casts ? 1 : 0 });
           activeRoles[v.role]++;
           if (v.anchor) activeAnchors++;
           continue;
         }
         const mesh = vegMeshes[v.k];
         const i = counts[v.k];
-        if (i >= VEG_CAP[v.k] * vegScale) continue;
+        const kindScale = tree ? treePopulationScale : 1;
+        if (i >= VEG_CAP[v.k] * vegScale * kindScale) continue;
         const y = groundAt(v.x, v.z);
-        vegDummy.position.set(v.x, y + v.h, v.z);
-        vegDummy.rotation.set(v.tl ?? 0, v.rot, 0);
-        vegDummy.scale.set(v.s * (v.sw ?? 1), v.s * (v.sy ?? 1), v.s);
+        const size = tree ? treeSizeScale : 1;
+        const form = tree ? treeFormScale : 1;
+        const siteS = v.s * size;
+        const siteH = v.h * size;
+        const formSy = clamp(1 + ((v.sy ?? 1) - 1) * form, 0.18, 4.5);
+        const formSw = clamp(1 + ((v.sw ?? 1) - 1) * form, 0.18, 4.5);
+        vegDummy.position.set(v.x, y + siteH, v.z);
+        vegDummy.rotation.set((v.tl ?? 0) * form, v.rot, 0);
+        vegDummy.scale.set(siteS * formSw, siteS * formSy, siteS);
         vegDummy.updateMatrix();
         mesh.setMatrixAt(i, vegDummy.matrix);
         activeRoles[v.role]++;
@@ -9384,7 +9461,7 @@ function refreshVeg(): void {
         // of alpha, which sorts badly and reads as ghosts). Tall kinds keep
         // more of themselves — a distant conifer is seen against the terrain
         // BEHIND it, not under it.
-        const tt = Math.sqrt(d2v) / VEG_RANGE;
+        const tt = Math.sqrt(d2v) / (tree ? treeRange : VEG_RANGE);
         if (vegRoleDebug) {
           mesh.setColorAt(i, VEG_ROLE_COL[v.anchor ? 'anchor' : v.role]);
         } else if (tt > 0.5) {
@@ -9402,12 +9479,12 @@ function refreshVeg(): void {
           mesh.setColorAt(i, swardCol);
         } else mesh.setColorAt(i, v.c);
         counts[v.k] = i + 1;
-        if (v.h > 0 && trunkN < 3600) {
+        if (v.h > 0 && trunkN < trunks.instanceMatrix.count) {
           vegDummy.position.set(v.x, y, v.z);
           vegDummy.rotation.set(0, 0, 0);
           // The trunk wears its crown's width, or a spreading acacia stands on
           // a sapling's stem and a slender fir on a fencepost.
-          vegDummy.scale.set(v.s * 0.42 * (v.sw ?? 1), trunkReach(v.k, v.h, v.s), v.s * 0.42 * (v.sw ?? 1));
+          vegDummy.scale.set(siteS * 0.42 * formSw, trunkReach(v.k, siteH, siteS), siteS * 0.42 * formSw);
           vegDummy.updateMatrix();
           trunks.setMatrixAt(trunkN++, vegDummy.matrix);
         }
@@ -23433,7 +23510,7 @@ function tapeKeep(): string {
 (window as unknown as { __vegdist?: object }).__vegdist = (debug?: boolean): object => {
   if (debug !== undefined) { vegRoleDebug = debug; refreshVeg(); }
   const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
-  const reach = Math.ceil(VEG_RANGE / VEG_CELL);
+  const reach = Math.ceil(Math.max(VEG_RANGE, treeRange) / VEG_CELL);
   const sum = freshVegSeedStats();
   const roles = emptyVegRoles();
   const byKind: Record<string, number> = {};
@@ -23469,8 +23546,8 @@ function tapeKeep(): string {
     seeded: { sites, roles, perCell: cells ? +(sites / cells).toFixed(2) : 0 },
     active: { total: activeTotal, roles: vegActiveRoles, trunks: trunks.count },
     byKind,
-    budget: { range: VEG_RANGE, cell: VEG_CELL, caps: VEG_CAP,
-      capTotal: Object.values(VEG_CAP).reduce((a, b) => a + b, 0) },
+    budget: { range: { vegetation: VEG_RANGE, trees: treeRange }, cell: VEG_CELL, caps: VEG_CAP,
+      treePopulationScale, capTotal: Object.values(VEG_CAP).reduce((a, b) => a + b, 0) },
     ms: { seedTotal: +sum.ms.toFixed(1), refresh: +vegMs.toFixed(1) },
   };
 };
@@ -23486,20 +23563,42 @@ function tapeKeep(): string {
  */
 /** The skeleton tier's bill: how many of each family wear one, per variant, and the triangles. */
 (window as unknown as { __ez?: object }).__ez = (): object => {
-  const out: Record<string, unknown> = { on: EZ_ON, budget: TREE_TRI_BUDGET, capScale: +ezCapScale.toFixed(3), edge: ezEdgeLast,
-    caps: Object.fromEntries(EZ_FAMILIES.map((f) => [f, Math.round(VEG_CAP[f] * vegScale * ezCapScale)])),
-    meanTris: Object.fromEntries(EZ_FAMILIES.map((f) => [f, ezMeanTris(f)])) };
+  const out: Record<string, unknown> = {
+    on: EZ_ON,
+    budget: treeTriBudget,
+    capScale: +ezCapScale().toFixed(3),
+    edge: ezEdgeLast,
+    caps: Object.fromEntries(EZ_FAMILIES.map((f) => [f, ezCapFor(f)])),
+    meanTris: Object.fromEntries(EZ_FAMILIES.map((f) => [f, ezMeanTris(f)])),
+    tuning: {
+      range: treeRange,
+      population: treePopulationScale,
+      size: treeSizeScale,
+      form: treeFormScale,
+      bend: treeBendU.value,
+      variantCap: treeVariantCap >= 1000 ? 'ALL' : treeVariantCap,
+    },
+  };
   let tris = 0;
   for (const fam of EZ_FAMILIES) {
     const per = ezTiers[fam].map((t) => t.n);
-    out[fam] = { placed: per.reduce((p, q) => p + q, 0), perVariant: per, variants: ezTiers[fam].length,
-      casting: ezTiers[fam].reduce((p, t) => p + t.nNear, 0), mPerScale: EZ_M_PER_SCALE[fam] };
+    const variants = ezTiers[fam].length;
+    out[fam] = {
+      placed: per.reduce((p, q) => p + q, 0),
+      perVariant: per,
+      variants,
+      activeVariants: Math.min(variants, treeVariantCap),
+      capacity: ezTiers[fam].map((t) => t.near.instanceMatrix.count),
+      casting: ezTiers[fam].reduce((p, t) => p + t.nNear, 0),
+      mPerScale: EZ_M_PER_SCALE[fam],
+    };
     for (const t of ezTiers[fam]) tris += t.n * t.tris;
   }
   out.tris = tris;
   out.placed = ezPlaced;
   return out;
 };
+
 /** Every decoded variant's extent, for the harness: a bad bake shows here. */
 (window as unknown as { __ezgeo?: object }).__ezgeo = (): object[] => {
   const rows: object[] = [];
@@ -37227,6 +37326,31 @@ const DIAL_GROUPS: DialGroup[] = [
     ],
   },
   {
+    title: 'TREES',
+    dials: [
+      // These upper stops are intentionally unsafe. Together, 16X population,
+      // 2.8 km reach and a 100M-triangle ceiling are a profiler instrument,
+      // not a promise that a phone can render them.
+      dial('tpop', 'POPULATION CAP', ['0.25X', '0.5X', '1X', '2X', '4X', '8X', '16X'], 2,
+        (i) => { treePopulationScale = TREE_POP_STEPS[i]; }, true),
+      dial('trng', 'DRAW RANGE', ['350M', '700M', '1.4KM', '2.1KM', '2.8KM'], 1,
+        (i) => { treeRange = TREE_RANGE_STEPS[i]; }, true),
+      dial('ttri', 'EZ TRI CAP', ['0.3M', '1M', '2.4M', '6M', '15M', '40M', '100M'], 2,
+        (i) => { treeTriBudget = TREE_TRI_STEPS[i]; }, true),
+      dial('tvar', 'EZ VARIANTS', ['ONE', 'TWO', 'FOUR', 'ALL'], 3,
+        (i) => { treeVariantCap = TREE_VARIANT_STEPS[i]; }, true),
+      // FORM magnifies the stable per-site height/width/lean draws; BEND adds
+      // continuous deterministic growth shape in the vertex shader. Neither
+      // creates another draw call or asks the runtime EZ package to generate.
+      dial('tsiz', 'HEIGHT', ['0.5X', '1X', '1.5X', '2X', '3X', '4X'], 1,
+        (i) => { treeSizeScale = TREE_SIZE_STEPS[i]; }, true),
+      dial('tfrm', 'FORM SPREAD', ['EVEN', 'STOCK', 'RICH', 'WILD', 'EXTREME'], 1,
+        (i) => { treeFormScale = TREE_FORM_STEPS[i]; }, true),
+      dial('tbnd', 'GROWTH BEND', ['OFF', 'SUBTLE', 'RICH', 'WILD', 'STORM', 'IMPOSSIBLE'], 0,
+        (i) => { treeBendU.value = TREE_BEND_STEPS[i]; }, true),
+    ],
+  },
+  {
     title: 'VEHICLE',
     dials: [
       dial('wear', 'WEATHERING', ['CLEAN', 'WORN', 'BEATEN'], 1, (i) => { wearU.value = [0.15, 1, 1.8][i]; }),
@@ -39755,6 +39879,8 @@ const overlays = createOverlays(
 loadDials();
 loadSpots();
 applyDials();
+// A URL instrument outranks the remembered rack, as the other URL fixtures do.
+if (Number.isFinite(treeTriUrl) && treeTriUrl > 0) treeTriBudget = treeTriUrl;
 // The custom paint rides OVER whatever preset the dial just applied.
 if (customPaint) bodyMat?.color.set(customPaint);
 // …and THEN the URL, because a dial that persists to localStorage will happily
