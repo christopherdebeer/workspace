@@ -260,6 +260,41 @@ export function grassGeo(): THREE.BufferGeometry {
  * because converting to non-indexed to win crisper facets would multiply the
  * vertex count of the single most instanced geometry in the world.
  */
+/**
+ * ── HOW MUCH OF THE WIND THIS VERTEX FEELS ──
+ *
+ * The sward leans linearly with height because a blade of grass is a blade of
+ * grass all the way up. Woody things are not: a trunk is stiff at the ground
+ * and limber at the tip, so the deflection goes as the SQUARE of the rise —
+ * the same shape the growth bend already uses, and near enough to a loaded
+ * cantilever for an eye.
+ *
+ * Baked per vertex rather than computed in the shader, because the archetypes
+ * are not normalised to a common height: a conifer cone stands 2.6 units tall
+ * and a bush 1.2, so `y*y` in the shader would have swayed the conifer six
+ * times as hard as the bush for no reason but how each geometry happened to be
+ * built. Normalising here makes one shader line correct for every kind, and
+ * makes STIFFNESS a property of the plant — a saguaro barely moves in a gale
+ * and a palm frond is mostly wind — rather than another uniform.
+ *
+ * A material that declares the attribute and meets a geometry without it reads
+ * zero and simply stands still, which is the right way for this to fail.
+ */
+export function swayWeight(geo: THREE.BufferGeometry, stiff = 1): THREE.BufferGeometry {
+  const p = geo.getAttribute('position') as THREE.BufferAttribute;
+  geo.computeBoundingBox();
+  const bb = geo.boundingBox;
+  if (!bb) return geo;
+  const y0 = bb.min.y, span = Math.max(1e-3, bb.max.y - y0);
+  const w = new Float32Array(p.count);
+  for (let i = 0; i < p.count; i++) {
+    const r = Math.max(0, (p.getY(i) - y0) / span);
+    w[i] = r * r * stiff;
+  }
+  geo.setAttribute('aSway', new THREE.BufferAttribute(w, 1));
+  return geo;
+}
+
 export function faceTone(geo: THREE.BufferGeometry, spread = 0.2, foot = 0.22): THREE.BufferGeometry {
   const pos = geo.getAttribute('position') as THREE.BufferAttribute;
   const n = pos.count;

@@ -1764,6 +1764,73 @@ comments.
 
 ---
 
+## The one wind, and who reads it
+
+`worldWind` is the single source: bearing and km/h, from live weather, or
+forced with `?wind=60&winddir=200` / `__windset(kmh, deg)` — which exist
+because a calm day is the common case and nothing wind-driven can be judged
+from the seat, or asserted in a harness, without a gale you can ask for. Every
+consumer goes through `windKmhNow()`/`windDegNow()`, so a forced wind cannot
+make two of them disagree.
+
+The readers: the sky deck and the cloud shadows it throws (`envU.uWind`), the
+standing-water swell (`waterU.uWDrift`), the hydro system, the ambience mixer's
+`gusty`, the sward (`windU`, both the CPU tufts and the GPU field) — and, since
+the complaint that a stiff breeze lays a meadow over between a hundred rigid
+lampposts, **the trees**.
+
+- **THE TREES WERE NEVER PATCHED, and nothing could see it.** `leafMat`,
+  `woodMat`, `stoneMat` and `ezMaterial` simply had no wind term. A material
+  that had silently never been given one looked exactly like one that had, so
+  `__fxchain()` now covers `ez` and `wood` too and `__wind()` reports the live
+  wind beside the crown throw it implies — the number to argue with when it
+  looks wrong from the seat.
+- **`uWindK` IS THE WHOLE DIFFERENCE BETWEEN GRASS AND TIMBER.** `uGust` is
+  direction × amplitude in metres of tip travel per metre of BLADE — the
+  grass's unit, and far too much for wood. `TREE_WIND_K` (0.085) is the
+  fraction of that a tree takes, so a 20m crown moves about 15cm on an ordinary
+  day and about 60cm in a blow. `?treewind=0` is an exact A/B.
+- **THE SQUARE OF THE RISE, BAKED PER VERTEX** (`swayWeight`). A blade leans
+  linearly because it is uniform all the way up; a trunk is stiff at the base
+  and limber at the tip. It is baked rather than computed as `y*y` in the
+  shader because the archetypes are not normalised to a common height — a
+  conifer cone stands 2.6 units and a bush 1.2, so one shader line would have
+  swayed the conifer six times as hard for no reason but how it was built. That
+  also makes STIFFNESS a property of the plant: palm 1.6, shrub 1.3, acacia
+  1.2, bush 1.1, broadleaf 1.0, conifer 0.7, **cactus 0.1** — a saguaro in a
+  gale is a saguaro. The EZ bake is already unit-height, so the skeletons use
+  `y*y` directly.
+- **THE OFFSET IS A WORLD DIRECTION, PROJECTED BACK INTO THE INSTANCE.**
+  Instances carry a Y rotation (`v.rot`), so adding the gust in the local frame
+  would have sent every tree in a stand its own way and a wood would have
+  milled about instead of leaning downwind. `dot(gust, iX)/dot(iX, iX)` puts
+  the same world metres on every tree whichever way it is turned, and survives
+  the instance scale for free.
+- **BIG TREES ARE SLOW.** Frequency goes as 1/sqrt(height) off the instance's
+  own Y scale: about 2.3s a cycle at 20m, 1.2s at 5m. Phase runs along the
+  wind's bearing at a forest's wavelength (~100m, against the sward's ~15m) so
+  gust fronts sweep downwind, plus a per-instance hash so a stand does not
+  pulse as one animal.
+- **LEAVES FLUTTER FASTER THAN TIMBER BENDS.** `aWood` already separates crown
+  from wood for the colour; the crown takes a second, quicker, smaller term on
+  top of the bend. Nothing extra is stored for it.
+- **WOOD AND STONE STAY RIGID** — deliberately. `woodMat` draws the archetype
+  snag, the fallen logs and the separate trunk mesh under archetype crowns, and
+  a log swaying would be worse than a still forest. The archetype crown sits on
+  that rigid trunk and its own base is planted, so there is no seam: what moves
+  is the canopy, which is what a palm actually does.
+- **CHAIN, DO NOT CLOBBER** — `leafMat`'s hook is assigned BEFORE `terrainFx`
+  and `grainFx`, which capture and call the previous one. This is the third
+  helper to want that one slot, and the grass lost its wind for months to a
+  hook written straight over another.
+
+Verified by `devtools/tree-wind.test.mjs`: `__fxchain` for the structure, and
+then pixels, because carrying a uniform proves nothing about motion — a shader
+that fails to link logs to the console and throws nothing. Two shots 1.5 sim
+seconds apart in a 70km/h wind, run once with the sway and once with
+`?treewind=0`; the sward moves in both, so the measurement is the difference
+between the runs and never against zero.
+
 ## The chassis
 
 The truck is three models stacked, and knowing which one is arguing matters

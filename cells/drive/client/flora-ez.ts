@@ -195,19 +195,83 @@ export function ezVariantFor(family: EzFamily, x: number, z: number, limit = Num
  *  direction as it rises. That recovers a continuous layer of growth form for
  *  one uniform and no extra vertices, variants or draws. Zero is an exact A/B.
  */
+/**
+ * ── THE WIND REACHES THE WOOD ──
+ *
+ * The sward has leaned on the world's wind since the grass got its gust back,
+ * and every tree in the same field stood dead still — so a stiff breeze laid a
+ * meadow over between a hundred lampposts. This is the same wind, the same
+ * `uGust` (direction × amplitude) and the same `uTime`, reaching the only
+ * things in the landscape that were still refusing it.
+ *
+ * FOUR THINGS THE GRASS DOES NOT NEED:
+ *
+ *   THE SQUARE OF THE RISE. A blade leans linearly because it is uniform all
+ *   the way up; a trunk is stiff at the ground and limber at the tip. The
+ *   weight arrives baked (`swayWeight`, or `y*y` for the unit-height bake).
+ *
+ *   THE OFFSET IS A WORLD DIRECTION. Instances carry a Y rotation, so adding
+ *   the gust in the instance's LOCAL frame would have sent every tree in a
+ *   stand a different way and a wood would have milled about instead of
+ *   leaning downwind. The gust is projected onto the instance's own axes and
+ *   divided by their length, which puts the same world metres on every tree
+ *   whichever way it happens to be turned.
+ *
+ *   BIG TREES ARE SLOW. A cantilever's period grows with its height, and it is
+ *   most of what separates a poplar from a sapling at a glance: the frequency
+ *   goes as 1/sqrt(height), so a 20m conifer takes about 2.3s a cycle and a 5m
+ *   one about 1.2s. The instance's own Y scale is the height, free.
+ *
+ *   LEAVES FLUTTER FASTER THAN TIMBER BENDS. `aWood` already separates crown
+ *   from wood for the colour, so the crown takes a second, quicker, smaller
+ *   term on top of the bend — the difference between a branch moving and the
+ *   leaves on it moving.
+ *
+ * The phase runs along the wind's own bearing so gust fronts sweep downwind
+ * (the sward's fix, at a forest's wavelength — ~100m rather than ~15m), and a
+ * per-instance hash keeps a stand from pulsing as one animal.
+ */
+export const FOLIAGE_WIND_UNIFORMS = 'uniform float uTime; uniform vec2 uGust; uniform float uWindK;';
+/** `wRise` is how much of the lean this vertex takes (0 planted, 1 at the tip)
+ *  and `wFlut` how much of the flutter (crown 1, wood 0). Both are supplied by
+ *  the caller, because the two materials know them by different routes. */
+export const foliageWind = (wRise: string, wFlut: string): string => [
+  '#ifdef USE_INSTANCING',
+  `float wR = ${wRise};`,
+  'if (uWindK > 0.0 && wR > 0.0) {',
+  '  vec3 iX = instanceMatrix[0].xyz, iZ = instanceMatrix[2].xyz;',
+  '  float iH = max(1.0, length(instanceMatrix[1].xyz));',
+  '  float gM = length(uGust);',
+  '  vec2 gD = gM > 1e-4 ? uGust / gM : vec2(0.0, 1.0);',
+  '  float wPh = dot(instanceMatrix[3].xz, gD) * 0.06',
+  '    + fract(sin(dot(instanceMatrix[3].xz, vec2(45.23, 91.17))) * 19341.7) * 6.2832;',
+  '  float wW = 12.0 / sqrt(iH);',
+  '  vec3 wG = vec3(uGust.x, 0.0, uGust.y) * uWindK',
+  '    * (wR * (0.55 + 0.45 * sin(uTime * wW + wPh))',
+  `       + ${wFlut} * 0.22 * sin(uTime * wW * 3.4 + wPh * 2.7));`,
+  '  transformed.x += dot(wG, iX) / dot(iX, iX);',
+  '  transformed.z += dot(wG, iZ) / dot(iZ, iZ);',
+  '}',
+  '#endif',
+].join('\n');
+
 export function ezMaterial(
   bark: THREE.ColorRepresentation,
-  tuning: { bend?: { value: number } } = {},
+  tuning: { bend?: { value: number }; wind?: { uTime: { value: number }; uGust: { value: THREE.Vector2 }; uWindK: { value: number } } } = {},
 ): THREE.MeshLambertMaterial {
   // Double-sided for the leaf cards: a quad has no back to cull.
   const mat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true, side: THREE.DoubleSide });
   const uWood = { value: new THREE.Color(bark) };
   const uEzBend = tuning.bend ?? { value: 0 };
+  const wind = tuning.wind ?? { uTime: { value: 0 }, uGust: { value: new THREE.Vector2() }, uWindK: { value: 0 } };
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uWood = uWood;
     sh.uniforms.uEzBend = uEzBend;
+    sh.uniforms.uTime = wind.uTime;
+    sh.uniforms.uGust = wind.uGust;
+    sh.uniforms.uWindK = wind.uWindK;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', '#include <common>\nattribute float aWood; uniform vec3 uWood; uniform float uEzBend;')
+      .replace('#include <common>', `#include <common>\nattribute float aWood; uniform vec3 uWood; uniform float uEzBend;\n${FOLIAGE_WIND_UNIFORMS}`)
       .replace('#include <begin_vertex>', [
         '#include <begin_vertex>',
         '#ifdef USE_INSTANCING',
@@ -216,6 +280,11 @@ export function ezMaterial(
         'float ezRise = max(0.0, transformed.y);',
         'transformed.xz += vec2(ezBx, ezBz) * uEzBend * ezRise * ezRise;',
         '#endif',
+        // The bake stands every skeleton on y=0 with its top at y=1, so the
+        // rise IS the normalised height and the square of it is the bend.
+        // `aWood` is 1 in the timber and 0 in the crown, which is exactly the
+        // flutter's weight the other way round.
+        foliageWind('ezRise * ezRise', '(1.0 - aWood)'),
       ].join('\n'))
       .replace('#include <color_vertex>', THREE.ShaderChunk.color_vertex
         .replace('vColor.xyz *= instanceColor.xyz;', 'vColor.xyz *= mix(instanceColor.xyz, uWood, aWood);'));

@@ -46,7 +46,7 @@ import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { facade } from './facade';
 import { startLab } from './labs';
-import { ezCrownReach, ezMaterial, ezMeanTris, ezVariantFor, ezVariants, type EzFamily } from './flora-ez';
+import { FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezMaterial, ezMeanTris, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
@@ -58,7 +58,7 @@ import { grainFx, grainU } from './grain';
 import {
   DEADWOOD, FOLIAGE_BANDS, STONE, STONE_MIX_ROWS, STONY, TRUNKED, VEG_CAP, VEG_MIX,
   VEG_SIZE, VEG_TREES, bandKind, coverKind as floraCoverKind, trunkReach,
-  acaciaGeo, broadleaf, bushGeo, cactusGeo, shrubGeo, conifer, faceTone, fernGeo, grassGeo, logGeo,
+  acaciaGeo, broadleaf, bushGeo, cactusGeo, shrubGeo, conifer, faceTone, fernGeo, grassGeo, logGeo, swayWeight,
   makeSapling, mergeGeos, palm, plantLook, promoteAnchor, rockGeo, snag, spireGeo, standTone,
   type VegKind, type VegSite, type VegTone,
 } from './flora';
@@ -2044,6 +2044,32 @@ const hydroFrameTerrain = { r: 0, g: 0, b: 0 };
 /** The world's wind, written where the sky and the grass already agree on it.
  *  12km/h is the calm-day default the deck drift uses. */
 const worldWind = { dirX: 0, dirZ: 1, kmh: 12 };
+/**
+ * A WIND YOU CAN ASK FOR. Live weather decides the real one and a calm day is
+ * the common case, which makes anything wind-driven nearly impossible to judge
+ * from the seat and impossible to assert in a harness. `?wind=60&winddir=200`
+ * overrides the speed and the bearing for the session, `__windset(kmh, deg)`
+ * does it live, and either with `null` hands the sky back to the weather.
+ * Read by every consumer of the one wind — the field, the deck, the swell, the
+ * grass and now the trees — so a forced gale cannot make two of them disagree.
+ * Nothing in the game sets it.
+ */
+let windForce: number | null = null;
+let windForceDeg: number | null = null;
+{
+  const q = new URLSearchParams(location.search);
+  const k = Number(q.get('wind'));
+  if (q.get('wind') !== null && Number.isFinite(k)) windForce = Math.max(0, k);
+  const d = Number(q.get('winddir'));
+  if (q.get('winddir') !== null && Number.isFinite(d)) windForceDeg = d;
+}
+const windKmhNow = (): number => windForce ?? (live.on ? live.windKmh : 12);
+const windDegNow = (): number => windForceDeg ?? (live.on ? live.windDeg : 250);
+(window as unknown as { __windset?: object }).__windset = (kmh?: number | null, deg?: number | null): object => {
+  if (kmh !== undefined) windForce = kmh === null ? null : Math.max(0, kmh);
+  if (deg !== undefined) windForceDeg = deg === null ? null : deg;
+  return { forced: windForce, dir: windForceDeg, kmh: windKmhNow(), deg: windDegNow() };
+};
 /** Per frame: the clock, the datum, the weather and the sun. Cheap — the system
  *  writes a handful of uniforms and admits at most one rebuild. */
 function hydroTick(nowMs: number): void {
@@ -7349,6 +7375,24 @@ function ensureVegCapacity(m: THREE.InstancedMesh, need: number): void {
 // White base colours: every plant's hue arrives through instanceColor, and the
 // baked tone rides underneath it (three multiplies the two).
 const leafMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true });
+// THE ARCHETYPES AND THE UNDERSTOREY LEAN TOO — palms, acacias, bushes, the
+// sward's shrubs, and the whole archetype set under ?ez=0. They reach the wind
+// by a different route from the skeletons: no `aWood` to separate crown from
+// timber (the crown IS the geometry, standing on a trunk mesh of its own), and
+// no unit-height bake, so `swayWeight` carries the normalised rise per vertex
+// and the plant's own stiffness with it. The trunk under them stays rigid,
+// which is what a palm actually does.
+// FIRST IN THE CHAIN, so terrainFx and grainFx find it and call it — see the
+// note on those: one slot, three helpers, and the grass lost its wind for
+// months to a hook assigned straight over the top of another.
+leafMat.onBeforeCompile = (sh) => {
+  sh.uniforms.uTime = windU.uTime;
+  sh.uniforms.uGust = windU.uGust;
+  sh.uniforms.uWindK = windU.uWindK;
+  sh.vertexShader = sh.vertexShader
+    .replace('#include <common>', `#include <common>\nattribute float aSway;\n${FOLIAGE_WIND_UNIFORMS}`)
+    .replace('#include <begin_vertex>', `#include <begin_vertex>\n${foliageWind('aSway', 'aSway')}`);
+};
 const woodMat = new THREE.MeshLambertMaterial({ color: 0x4a3826, flatShading: true, vertexColors: true });
 const stoneMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true });
 terrainFx(leafMat);
@@ -7385,7 +7429,23 @@ grainFx(woodMat, 'grain-wood', 0.95, 2.6);
 // blades for nothing. Sway scales with height above the tuft's own base, so
 // the roots stay planted, and the phase is seeded from the instance's world
 // position so a field ripples rather than pulsing as one.
-const windU = { uTime: { value: 0 }, uGust: { value: new THREE.Vector2(0, 0) } };
+/**
+ * THE ONE WIND, and now the trees read it too. `uGust` is direction times
+ * amplitude in METRES OF TIP TRAVEL PER METRE of blade — the grass's own unit,
+ * and far too much for timber: a field lays flat in a gale and a poplar does
+ * not. `uWindK` is the whole of the difference, the fraction of the grass's
+ * lean a tree takes, so the crown of a 20m tree moves about 15cm on a normal
+ * day and about 60cm in a blow. Zero is an exact A/B (`?treewind=0`), which is
+ * the only honest way to judge whether a moving wood is better than a still
+ * one.
+ */
+const TREE_WIND_K = 0.085;
+const treeWindUrl = new URLSearchParams(location.search).get('treewind');
+const windU = {
+  uTime: { value: 0 },
+  uGust: { value: new THREE.Vector2(0, 0) },
+  uWindK: { value: treeWindUrl === null ? TREE_WIND_K : Math.max(0, Number(treeWindUrl) || 0) },
+};
 const grassMat = new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, side: THREE.DoubleSide });
 grassMat.onBeforeCompile = (sh) => {
   sh.uniforms.uTime = windU.uTime;
@@ -7407,17 +7467,23 @@ const vegMeshes: Record<VegKind, THREE.InstancedMesh> = {
   // faceTone on every geometry these three materials draw — vertexColors is on
   // now, and a material asking for a `color` attribute a geometry does not
   // carry reads it as black.
-  broadleaf: vegMesh(faceTone(broadleaf()), leafMat, VEG_CAP.broadleaf),
-  conifer: vegMesh(faceTone(conifer(), 0.16, 0.3), leafMat, VEG_CAP.conifer),
-  palm: vegMesh(faceTone(palm(), 0.22, 0.1), leafMat, VEG_CAP.palm),
+  // STIFFNESS IS THE PLANT'S, and it is the whole reason the weight is baked
+  // per geometry rather than computed from `y` in one shared line: a palm
+  // crown is mostly wind and a saguaro is a post. The numbers are ratios of
+  // the base lean, which is itself a fraction of the grass's.
+  broadleaf: vegMesh(swayWeight(faceTone(broadleaf())), leafMat, VEG_CAP.broadleaf),
+  conifer: vegMesh(swayWeight(faceTone(conifer(), 0.16, 0.3), 0.7), leafMat, VEG_CAP.conifer),
+  palm: vegMesh(swayWeight(faceTone(palm(), 0.22, 0.1), 1.6), leafMat, VEG_CAP.palm),
   snag: vegMesh(faceTone(snag(), 0.14, 0.34), woodMat, VEG_CAP.snag),
-  bush: vegMesh(faceTone(bushGeo(), 0.24, 0.28), leafMat, VEG_CAP.bush),
+  bush: vegMesh(swayWeight(faceTone(bushGeo(), 0.24, 0.28), 1.1), leafMat, VEG_CAP.bush),
   // Stone gets the widest facet spread and the deepest foot — it is the kind
   // you drive up to, and the one whose old flat lump the eye kept naming.
   rock: vegMesh(faceTone(rockGeo(), 0.34, 0.3), stoneMat, VEG_CAP.rock),
   grass: vegMesh(grassGeo(), grassMat, VEG_CAP.grass),
-  acacia: vegMesh(faceTone(acaciaGeo(), 0.18, 0.12), leafMat, VEG_CAP.acacia),
-  cactus: vegMesh(faceTone(cactusGeo(), 0.2, 0.22), leafMat, VEG_CAP.cactus),
+  acacia: vegMesh(swayWeight(faceTone(acaciaGeo(), 0.18, 0.12), 1.2), leafMat, VEG_CAP.acacia),
+  // A saguaro in a gale is a saguaro. Not zero — an arm does flex — but a
+  // fifteenth of a palm, which at this scale is a couple of centimetres.
+  cactus: vegMesh(swayWeight(faceTone(cactusGeo(), 0.2, 0.22), 0.1), leafMat, VEG_CAP.cactus),
   // The fern takes the SWARD's material, so the understorey leans in the same
   // wind as the grass around it — two layers of one ground cover, not a stiff
   // plastic frond standing in a moving field.
@@ -7508,7 +7574,7 @@ const ezCapFor = (fam: EzFamily): number =>
  */
 interface EzTier { near: THREE.InstancedMesh; far: THREE.InstancedMesh; tris: number; n: number; nNear: number; nFar: number }
 const ezTiers: Record<EzFamily, EzTier[]> = { broadleaf: [], conifer: [], snag: [] };
-const ezMat = ezMaterial(0x4a3826, { bend: treeBendU });
+const ezMat = ezMaterial(0x4a3826, { bend: treeBendU, wind: windU });
 grainFx(ezMat, 'grain-ez', 0.95, 2.2);
 if (EZ_ON) {
   for (const fam of EZ_FAMILIES) {
@@ -9215,7 +9281,7 @@ const SHRUB_RATE: Record<SwardCtx, number> = {
 };
 /** ?shrub=0 for an A/B on the device. */
 const SHRUB_ON = new URLSearchParams(location.search).get('shrub') !== '0';
-const shrubs = vegMesh(faceTone(shrubGeo(), 0.24, 0.3), leafMat, SHRUB_CAP);
+const shrubs = vegMesh(swayWeight(faceTone(shrubGeo(), 0.24, 0.3), 1.3), leafMat, SHRUB_CAP);
 shrubs.name = 'veg-shrub';
 const shrubCol = new THREE.Color();
 let shrubN = 0, shrubNear = 0;
@@ -21300,9 +21366,9 @@ function stepWeather(now: number, dt: number): void {
   } else if (wx.next !== 'storm') wxWarnFor = '';
   // ── the field: spread the regional sky over the ground ──
   {
-    const toDeg = (live.on ? live.windDeg : 250) + 180;   // FROM → toward
+    const toDeg = windDegNow() + 180;   // FROM → toward
     const tw = (toDeg * Math.PI) / 180;
-    wxWind.kmh = live.on ? live.windKmh : 12;
+    wxWind.kmh = windKmhNow();
     const ms = wxWind.kmh / 3.6;
     // Compass bearing to world axes: +x east, −z north.
     wxWind.x = Math.sin(tw) * ms;
@@ -21456,9 +21522,9 @@ function stepWeather(now: number, dt: number): void {
   // in the opposite direction. Both the sky deck and the shadows it throws on
   // the ground read this, so they can never drift apart.
   {
-    const toDeg = (live.on ? live.windDeg : 250) + 180;
+    const toDeg = windDegNow() + 180;
     const t = (toDeg * Math.PI) / 180;
-    const spd = (live.on ? live.windKmh : 12) * 0.0005;   // 12km/h ≈ the old fixed drift
+    const spd = windKmhNow() * 0.0005;   // 12km/h ≈ the old fixed drift
     const wxv = -Math.sin(t) * spd, wzv = Math.cos(t) * spd;
     // ONE OFFSET, in the deck's own units, read by both shaders. The sky used
     // to multiply a velocity by uTime while the ground was handed a
@@ -21470,7 +21536,7 @@ function stepWeather(now: number, dt: number): void {
     // The same wind leans the grass. Amplitude in METRES of tip travel per
     // metre of blade, so a stiff breeze lays a field over and a calm day
     // barely stirs it; the gust term rides on top of the steady lean.
-    const kmh = live.on ? live.windKmh : 12;
+    const kmh = windKmhNow();
     // THE SAME NUMBER, ONE MORE CONSUMER. The note below insists the swell and
     // the clouds must never disagree about which way the air is going; the
     // hydro surface is now a third thing that must agree, so it reads the wind
@@ -24884,10 +24950,38 @@ function truckSpec(): Record<string, number> {
   }
   return { n, counts: seen };
 };
+/**
+ * ONE WIND, AND WHO IS ACTUALLY READING IT.
+ *
+ * The complaint that started this — the sward moves and the trees do not —
+ * was invisible to every probe there was: nothing reported which layers were
+ * consuming `worldWind`, so a material that had silently never been patched
+ * looked exactly like one that had. `lean` is the sward's tip travel per metre
+ * of blade and `treeLean` the tree's, both in metres, beside the crown throw a
+ * tree of a given height would actually show — which is the number to argue
+ * with when it looks wrong from the seat.
+ */
+(window as unknown as { __wind?: object }).__wind = (h = 20): object => {
+  const amp = windU.uGust.value.length();
+  const k = windU.uWindK.value;
+  return {
+    kmh: +worldWind.kmh.toFixed(1),
+    bearing: +((Math.atan2(-worldWind.dirX, worldWind.dirZ) * 180) / Math.PI + 360).toFixed(0),
+    live: live.on,
+    lean: +amp.toFixed(3),
+    treeK: k,
+    treeLean: +(amp * k).toFixed(4),
+    // Steady lean is 0.55 of the amplitude and the gust rides ±0.45 on top,
+    // so a crown's throw is the pair, not the peak.
+    crownM: [+(h * amp * k * 0.1).toFixed(2), +(h * amp * k).toFixed(2)],
+    swayS: +(6.2832 / (12 / Math.sqrt(Math.max(1, h)))).toFixed(2),
+    readers: (window as unknown as { __fxchain: () => Record<string, string[]> }).__fxchain(),
+  };
+};
 (window as unknown as { __fxchain?: object }).__fxchain = (): object => {
   const out: Record<string, string[]> = {};
   const mats: Record<string, THREE.Material> = {
-    grass: grassMat, leaf: leafMat, stone: stoneMat, terrain: terrainMat, far: farMat };
+    grass: grassMat, leaf: leafMat, ez: ezMat, wood: woodMat, stone: stoneMat, terrain: terrainMat, far: farMat };
   for (const [name, m] of Object.entries(mats)) {
     const sh = {
       uniforms: {} as Record<string, unknown>,
