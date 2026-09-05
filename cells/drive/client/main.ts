@@ -10574,11 +10574,11 @@ const GOAL_REACH = 45;
 const GOAL_SOLVE_MS = 2500;
 /** A metre of the narrowest track costs this much more than a metre of road. */
 const GOAL_NARROW = 2.2;
-/** Give up rather than walk the whole continent. Raised with the coarse tier:
- *  the walk settles the whole reachable component by design, and that
- *  component is now tens of kilometres of trunk road rather than the fine
- *  ring's five. Dijkstra over this many is still milliseconds — see __route. */
-const GOAL_MAX_NODES = 60000;
+/** Give up rather than walk the whole continent. Back down from the 60000 the
+ *  coarse tier was given: with the admissible bound in the walk this is a
+ *  backstop rather than the working limit, and 60000 nodes of a real city's
+ *  streamed network is a second of frozen frame. */
+const GOAL_MAX_NODES = 24000;
 /** What a metre of driving is worth against a metre of getting closer. Small,
  *  so the route will happily drive a kilometre to halve the walk-in, and will
  *  not drive ten to shave a hundred metres. */
@@ -10685,9 +10685,41 @@ const PORTAL_K = 1.8;
 /** No more than this many, so a dense handover annulus cannot explode. */
 const PORTAL_MAX = 64;
 interface GraphNode { x: number; z: number; y: number; c: boolean; to: Array<{ id: string; cost: number }> }
+/**
+ * ── THE GRAPH IS BUILT ONCE PER WORLD, NOT ONCE PER SOLVE ──
+ *
+ * Measured on the device and not in the harness, which is the whole lesson:
+ * 286 solves at a mean of 493ms and a worst of 1237ms — 17% of the session's
+ * entire CPU, the largest single cost in the game, and a 797ms frame with 732
+ * of it in here. The bench that passed had 349 nodes; a real phone driving
+ * Chapman's Peak has 72,084 road cells and thirty kilometres of coarse network
+ * behind them, and this function walked every one of them from scratch every
+ * two and a half seconds to rebuild a graph that had not changed.
+ *
+ * It changes for exactly three reasons: another fine tile streamed
+ * (`osmDone.size`), another coarse tile landed (`ovWayV`), or the truck has
+ * moved far enough that the handover radius means something different. Nothing
+ * else, and none of them every frame.
+ */
+let graphCache: { g: Map<string, GraphNode>; key: string; x: number; z: number } | null = null;
+/** How far the truck may move before the handover is re-measured. A quarter of
+ *  a kilometre changes the 85th percentile hardly at all, and the solve is
+ *  throttled to 2.5s anyway. */
+const GRAPH_MOVE = 250;
+function roadGraph(): Map<string, GraphNode> {
+  const key = `${osmDone.size}|${ovWayV}`;
+  const c = graphCache;
+  if (c && c.key === key && Math.hypot(c.x - state.x, c.z - state.z) < GRAPH_MOVE) {
+    graphStat.cached = (graphStat.cached ?? 0) + 1;
+    return c.g;
+  }
+  const built = buildRoadGraph();
+  graphCache = { g: built, key, x: state.x, z: state.z };
+  return built;
+}
 /** The carriageway as a graph — the fine survey, plus the coarse network
  *  beyond it, joined by portals across the handover. */
-function roadGraph(): Map<string, GraphNode> {
+function buildRoadGraph(): Map<string, GraphNode> {
   const g = new Map<string, GraphNode>();
   const hash = new Map<string, string[]>();      // 4m cell -> node ids
   const seen = new Set<Seg>();
@@ -10842,8 +10874,11 @@ function roadGraph(): Map<string, GraphNode> {
 }
 /** What the last graph was made of — read by __route. `inner` is where the
  *  handover actually fell and `budget` where the tile queue would have put it;
- *  the two differ exactly when the survey is thinner than its allowance. */
-let graphStat = { fine: 0, coarse: 0, portals: 0, inner: 0, budget: 0 };
+ *  the two differ exactly when the survey is thinner than its allowance.
+ *  `cached` counts the solves that reused a graph rather than building one. */
+let graphStat: { fine: number; coarse: number; portals: number; inner: number;
+  budget: number; cached?: number; ms?: number } =
+  { fine: 0, coarse: 0, portals: 0, inner: 0, budget: 0, cached: 0, ms: 0 };
 /** The node nearest a place, or null when the roads do not reach it. */
 function nearestNode(g: Map<string, GraphNode>, x: number, z: number, r: number,
   fineOnly = false): string | null {
@@ -10861,12 +10896,17 @@ function nearestNode(g: Map<string, GraphNode>, x: number, z: number, r: number,
 let goalRoute: Array<[number, number, number]> | null = null;
 let goalSolveAt = 0;
 let goalSolveFor = '';
-const goalSolveStat = { runs: 0, ms: 0, nodes: 0, found: 0, failed: 0, last: '' };
+/** `graphMs` against `ms` is the question the device telemetry asked and this
+ *  could not answer: whether a half-second solve was the graph being rebuilt
+ *  or the walk being unbounded. `walked` is how many nodes the walk actually
+ *  settled, which is the other half of it. */
+const goalSolveStat = { runs: 0, ms: 0, graphMs: 0, walked: 0, nodes: 0, found: 0, failed: 0, last: '' };
 function solveGoalRoute(): void {
   if (!goal) { goalRoute = null; goalSolveFor = ''; return; }
   const t0 = performance.now();
   goalSolveStat.runs++;
   const g = roadGraph();
+  goalSolveStat.graphMs = performance.now() - t0;
   goalSolveStat.nodes = g.size;
   // THE TRUCK STARTS ON THE SURVEY. Its nearest node has to be a fine one:
   // beginning a route on a simplified line would hand the autopilot a first
@@ -10900,6 +10940,33 @@ function solveGoalRoute(): void {
   const heap = new MinHeap();
   heap.push(0, from);
   let bestId: string | null = null, bestScore = Infinity, bestGap = Infinity;
+  // ── AND IT STOPS WHEN NOTHING FURTHER CAN WIN ──
+  //
+  // "Settle the whole reachable component" was affordable while the component
+  // was a five-kilometre ring. With thirty kilometres of trunk road behind it
+  // that is tens of thousands of nodes for every solve, and it is what put a
+  // 1237ms worst case on the device.
+  //
+  // The bound is exact rather than a heuristic, and it has to be: the walk's
+  // whole contract is that it finds the CLOSEST the roads get, so a prune that
+  // can drop the winner is a wrong answer, not a slower one.
+  //
+  // The score is `gap + cost·DETOUR`. Dijkstra pops in increasing cost, so
+  // every node still unsettled has cost at least the popped node's c; and no
+  // gap is ever negative. So no unsettled node can score below `c·DETOUR`, and
+  // once that floor reaches the best score found the frontier holds nothing
+  // that can win.
+  //
+  // (The tempting tighter form — `DETOUR·(c + g)`, on the grounds that
+  // reaching the goal from here costs at least g more — is NOT sound: the next
+  // node need not lie beyond this one, and may sit on another branch already
+  // nearer the goal. This one is weaker and true.)
+  //
+  // It tightens as the answer improves, and it tightens where the waste was.
+  // Twenty-six kilometres out with the goal still unreached the floor is far
+  // below the best score and nothing is pruned; the moment a node lands 225m
+  // from the goal, the floor is 1560 against a best of 1785 and four more
+  // kilometres of driving is all that is left to explore.
   while (heap.size && done.size < GOAL_MAX_NODES) {
     const top = heap.pop() as { cost: number; id: string };
     if (done.has(top.id)) continue;
@@ -10909,6 +10976,7 @@ function solveGoalRoute(): void {
     const gap = Math.hypot(n.x - goal.x, n.z - goal.z);
     const score = gap + top.cost * GOAL_DETOUR;
     if (score < bestScore) { bestScore = score; bestId = top.id; bestGap = gap; }
+    if (top.cost * GOAL_DETOUR >= bestScore) break;
     // Standing on it: nothing further can be closer.
     if (gap < 4) break;
     for (const e of n.to) {
@@ -10919,6 +10987,7 @@ function solveGoalRoute(): void {
       }
     }
   }
+  goalSolveStat.walked = done.size;
   const to = bestId;
   if (!to || to === from) {
     goalRoute = null;
