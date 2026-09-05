@@ -71,6 +71,9 @@ export interface SiteCard {
   rows: Array<[string, string]>;
   /** The relocation's label — absent when the site is not somewhere to go. */
   go?: string;
+  /** The second action: make this place the drive's goal. Absent when the
+   *  site has no position worth steering to. */
+  goal?: string;
   /** One line under the action: what the gesture already did for you. */
   note?: string;
 }
@@ -97,6 +100,7 @@ export function createOverlays(
   onWake: () => void,
   onSiteGo: () => void,
   onSiteClose: () => void,
+  onSiteGoal: () => void,
 ): Overlays {
   const C = colors;
   const style = document.createElement('style');
@@ -298,13 +302,18 @@ export function createOverlays(
   const sRows = document.createElement('div'); sRows.className = 't-rows';
   const sGo = document.createElement('button'); sGo.className = 't-go';
   sGo.addEventListener('click', (e) => { e.stopPropagation(); onSiteGo(); });
+  // The second action, under the first: RELOCATE puts you there, DRIVE TO
+  // makes it the thing the road is chosen for. Same button treatment, so
+  // neither reads as the safer one.
+  const sGoal = document.createElement('button'); sGoal.className = 't-go';
+  sGoal.addEventListener('click', (e) => { e.stopPropagation(); onSiteGoal(); });
   const sNote = document.createElement('div'); sNote.className = 't-note';
   const sx = document.createElement('div');
   sx.className = 'x';
   sx.style.display = 'block';
   sx.textContent = 'X';
   sx.addEventListener('click', (e) => { e.stopPropagation(); onSiteClose(); });
-  site.append(sName, sSub, sStatus, sRows, sGo, sNote, sx);
+  site.append(sName, sSub, sStatus, sRows, sGo, sGoal, sNote, sx);
   document.body.appendChild(site);
 
   let mKey = '', tKey = '', mReady = false, gKey = '', teKey = '', siKey = '';
@@ -378,7 +387,7 @@ export function createOverlays(
     },
     site(sc) {
       const key = sc
-        ? `${sc.name}|${sc.status}|${sc.go}|${sc.note}|${sc.rows.map((r) => r.join('=')).join('|')}`
+        ? `${sc.name}|${sc.status}|${sc.go}|${sc.goal}|${sc.note}|${sc.rows.map((r) => r.join('=')).join('|')}`
         : '';
       if (key === siKey) return;
       siKey = key;
@@ -398,6 +407,8 @@ export function createOverlays(
       }));
       sGo.textContent = sc.go ?? '';
       sGo.style.display = sc.go ? 'block' : 'none';
+      sGoal.textContent = sc.goal ?? '';
+      sGoal.style.display = sc.goal ? 'block' : 'none';
       sNote.textContent = sc.note ?? '';
       sNote.style.display = sc.note ? 'block' : 'none';
       site.style.display = 'block';

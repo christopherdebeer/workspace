@@ -1571,6 +1571,43 @@ scale 3, 40 m and 105 m cameras:
   a river channel carved into the terrain mesh the way a road corridor is —
   make the ground agree with the water rather than the water with the ground.
 
+- **A ROAD IS A LINE ON THE GROUND, NOT A NAME.** `wayAhead` chains the
+  carriageway forward and used to refuse any segment whose name differed
+  from the one under the wheels. That breaks a drive twice over, both
+  reported from the seat: a through road that CHANGES NAME at a boundary —
+  the commonest thing in OSM — ended the chain dead, so the autopilot's
+  course simply stopped; and at a junction where the through road renames
+  while a spur keeps the name, the only candidate the filter allowed was the
+  spur, so the drive turned off. Continuity decides now and the name only
+  votes: a candidate must clear `AHEAD_MIN_DOT` (0.12, about 83° — LOOSE on
+  purpose, because a hairpin's apex is one vertex with most of a right angle
+  in it and a tight gate would end the chain inside every switchback), and
+  the best score wins — alignment, plus `NAME_BONUS` for keeping the name
+  (heavier for the co-driver's `namedOnly` ask, which wants one road's
+  identity), less a penalty for a step change in width so a farm track
+  cannot hijack a highway it happens to line up with. Walls (`ya`
+  undefined) are not candidates at all.
+- **AND A GOAL IS A PLACE THE DRIVE IS TRYING TO REACH.** A mission carries
+  an AUTHORED route (`buildRoute`, `routeAhead`) and the autopilot follows
+  it; everything else the world knows was somewhere you could be teleported
+  to and nothing you could drive to. `goal` is the smallest thing that fixes
+  that: a named point, set by the site card's second action (DRIVE TO,
+  beside RELOCATE), which biases every junction in the chain toward it
+  (`AHEAD_GOAL_W`, scaled by how much of the leg is progress, so a slight
+  bend toward the target beats a hard turn away and never the reverse).
+  Once the chain passes within `GOAL_REACH` the course is CUT there and
+  declared a destination, so the speed plan brakes to a stop on the place
+  instead of carrying past it; within `GOAL_WITHIN` it clears and toasts.
+  Held in lat/lon and re-projected on a hop, exactly as the mission route
+  is. `__goal(name,x,z)` sets one, `__goal(null)` clears, `__chain()`
+  reports the chain's length and the distinct names it crosses — which is
+  how to check the rename fix on a device, since the harness's proxy often
+  has no roads streamed at all (`cells: 0`) and could not exercise it here.
+  NOT DONE, and the honest next step: this is a greedy junction bias, not a
+  solved route. It will take a dead end that points at the target where a
+  router would not. A Dijkstra over the road grid's endpoints, re-solved as
+  tiles arrive, is what turns it into navigation.
+
 **The rule that keeps a lab honest: it imports the SAME modules the game runs.**
 A lab that reimplements what it is inspecting proves nothing about what ships.
 This is why the façade shader became `client/facade.ts`, the plants became

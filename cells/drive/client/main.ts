@@ -10355,6 +10355,57 @@ function wayAt(x: number, z: number): { name: string; on: boolean } | null {
  * follow through junctions, and an unnamed track through a field is exactly
  * where a driver reads the ground instead of a pace note.
  */
+/**
+ * ── THE GOAL: A PLACE THE DRIVE IS TRYING TO REACH ──
+ *
+ * A mission carries an AUTHORED route and the autopilot follows it. Anything
+ * else the world knows about — a survey fix, a station, a town — was
+ * somewhere you could be teleported to and nothing you could drive to, so an
+ * autopilot with a destination in mind still just held whatever road it woke
+ * up on. A goal is the smallest thing that fixes that: a named point, set
+ * from the site card, that the road chain steers toward at every junction
+ * (see AHEAD_GOAL_W) and that clears itself when the truck arrives.
+ *
+ * Kept in LAT/LON, because a world hop rebases every local metre and a goal
+ * held in metres would end up in the sea; x,z is the projection, refreshed
+ * whenever the origin moves, exactly as the mission route is.
+ */
+interface Goal { name: string; lat: number; lon: number; x: number; z: number }
+let goal: Goal | null = null;
+let goalAt = '';
+let goalDone: { name: string; at: number } | null = null;
+/** Arrived, for a place with no other arrival rule of its own. */
+const GOAL_WITHIN = 28;
+/** How near the course has to pass the goal before the drive treats it as
+ *  the end of the run rather than something to keep steering toward. */
+const GOAL_REACH = 45;
+function goalRebase(): void {
+  if (!goal) { goalAt = ''; return; }
+  const at = `${origin.lat.toFixed(4)},${origin.lon.toFixed(4)}`;
+  if (at === goalAt) return;
+  goalAt = at;
+  const [gx, gz] = toLocal(goal.lat, goal.lon);
+  goal.x = gx; goal.z = gz;
+}
+function setGoal(name: string, x: number, z: number): void {
+  const [la, lo] = localToLatLon(x, z);
+  goal = { name, lat: la, lon: lo, x, z };
+  goalAt = `${origin.lat.toFixed(4)},${origin.lon.toFixed(4)}`;
+}
+/**
+ * How square a join may be and still be a candidate at all: about 83 degrees,
+ * which is what this walk always allowed. It is deliberately LOOSE and the
+ * score decides — a hairpin's apex is a single vertex with most of a right
+ * angle in it (Trollstigen, Stelvio), and a gate tight enough to mean
+ * "a turning, not this road" would end the chain in the middle of every
+ * switchback. What keeps a side road from hijacking the chain is that a
+ * straighter candidate scores higher, not that the turn was refused.
+ */
+const AHEAD_MIN_DOT = 0.12;
+/** What a goal is worth against alignment when the two disagree. Enough to
+ *  take a real turning toward the target, not enough to leave a road for a
+ *  farm track that happens to point at it. */
+const AHEAD_GOAL_W = 0.6;
 interface NavBend { dist: number; ang: number; left: boolean }
 const NAV_REACH = 350;              // how far ahead the co-driver reads
 const NAV_WIN = 30;                 // metres a "corner" is allowed to span
@@ -10392,9 +10443,32 @@ function wayAhead(
   }
   if (!cur) return null;
   const name = cur.nm, hw = cur.hw;
-  /** What counts as "the same road" at a junction. */
-  const same = (s2: Seg): boolean =>
-    (name ? s2.nm === name : !s2.nm && Math.abs(s2.hw - hw) < 1.5);
+  /**
+   * ── A ROAD IS A LINE ON THE GROUND, NOT A NAME ──
+   *
+   * This used to refuse any segment whose name differed from the one under
+   * the wheels, which breaks a long drive in two ways, both reported from the
+   * seat. A through road that CHANGES NAME at a parish boundary — the
+   * commonest thing in OSM — ended the chain dead, so the autopilot's course
+   * simply stopped and the truck braked for nothing. And at a junction where
+   * the through road changes name while a spur keeps it, the only candidate
+   * the filter allowed was the spur: the drive turned off.
+   *
+   * So continuity decides and the name only votes. A candidate must first be
+   * a plausible continuation at all (`AHEAD_MIN_DOT`, about 55 degrees — past
+   * that it is a turning, not this road), and then the best score wins:
+   * alignment, plus a bonus for keeping the name, less a penalty for a step
+   * change in width, so a farm track cannot hijack a highway even when it
+   * lines up better. The co-driver asks with `namedOnly` and gets a heavier
+   * name bonus, because a pace note wants one road's identity — but even it
+   * follows a rename now rather than falling silent.
+   */
+  const NAME_BONUS = namedOnly ? 0.5 : 0.22;
+  const chainScore = (s2: Seg, dot: number): number => {
+    const named = name !== undefined && s2.nm === name;
+    const width = Math.min(0.3, Math.abs((s2.hw ?? hw) - hw) / 6);
+    return dot + (named ? NAME_BONUS : 0) - width;
+  };
   // Travel direction: whichever way along the seg the heading points.
   const hx = Math.sin(heading), hz = -Math.cos(heading);
   const fwd = (cur.bx - cur.ax) * hx + (cur.bz - cur.az) * hz >= 0;
@@ -10418,9 +10492,10 @@ function wayAhead(
   const used = new Set<Seg>([cur]);
   let total = leg;
   for (let hop = 0; hop < maxHops && total < reach; hop++) {
-    let nxt: Seg | null = null, fromA = false, best = 0.1;
+    let nxt: Seg | null = null, fromA = false, best = -Infinity;
     for (const seg of roadGrid.get(gkey(ex, ez)) ?? []) {
-      if (used.has(seg) || !same(seg)) continue;
+      if (used.has(seg) || seg.ya === undefined) continue;
+      if (namedOnly && !seg.nm) continue;
       for (const a of [true, false]) {
         const jx = a ? seg.ax : seg.bx, jz = a ? seg.az : seg.bz;
         if (Math.hypot(jx - ex, jz - ez) > 1.5) continue;
@@ -10428,7 +10503,23 @@ function wayAhead(
         let vz = a ? seg.bz - seg.az : seg.az - seg.bz;
         const l = Math.hypot(vx, vz) || 1; vx /= l; vz /= l;
         const dot = vx * dirX + vz * dirZ;
-        if (dot > best) { best = dot; nxt = seg; fromA = a; }
+        if (dot < AHEAD_MIN_DOT) continue;          // not a continuation at all
+        // ── AND WHERE YOU ARE TRYING TO GET TO, IF ANYWHERE ──
+        // With a goal set, the branch that closes on it wins over the one
+        // that merely lines up: this is the difference between an autopilot
+        // that drives to a place and one that holds whatever road it woke up
+        // on. Scaled by how much of the leg is progress, so a slight bend
+        // toward the goal beats a hard turn away from it and never the
+        // reverse.
+        let bias = 0;
+        if (goal) {
+          const ax2 = a ? seg.bx : seg.ax, az2 = a ? seg.bz : seg.az;
+          const was = Math.hypot(ex - goal.x, ez - goal.z);
+          const now = Math.hypot(ax2 - goal.x, az2 - goal.z);
+          bias = AHEAD_GOAL_W * clamp((was - now) / Math.max(1, l), -1, 1);
+        }
+        const sc = chainScore(seg, dot) + bias;
+        if (sc > best) { best = sc; nxt = seg; fromA = a; }
       }
     }
     if (!nxt) break;
@@ -18344,6 +18435,7 @@ function stepSurvey(now: number): void {
   // above: passing a course point on the far carriageway, or on the service
   // road beside the old N20, is still driving the line.
   buildRoute(mission);
+  goalRebase();
   stepRoute(now, prev);
   if (routeFor !== obsFor) { obsFor = routeFor; buildObs(mission); }
   stepObs(now);
@@ -28142,13 +28234,13 @@ function siteRecord(ex: number, ez: number, name: string): SiteRecord {
 }
 /** The open site card, and the fix it belongs to (null for a spot with no
  *  mark — the record can be read without one). */
-let siteOpen: { rec: SiteRecord; fix: string | null } | null = null;
+let siteOpen: { rec: SiteRecord; fix: string | null; x: number; z: number } | null = null;
 /** Open the record for a spot, with the clipboard copy THE LINE's field query
  *  already gives — the write has to happen inside the gesture or the
  *  permission model refuses it, which is why this is called from the handler
  *  rather than from the frame. */
 function openSite(ex: number, ez: number, name: string, fix: string | null): void {
-  siteOpen = { rec: siteRecord(ex, ez, name), fix };
+  siteOpen = { rec: siteRecord(ex, ez, name), fix, x: ex, z: ez };
   try { void navigator.clipboard?.writeText(siteOpen.rec.json); } catch { /* the card still answers */ }
 }
 function teleportTo(x: number, z: number): void {
@@ -28527,7 +28619,25 @@ function autoCourse(): AutoPlan {
   // Width: the carriageway's half minus the truck's own half and a margin —
   // what the racing line may actually spend.
   if (w && w.pts.length >= 2) {
-    return { pts: w.pts, endsHere: false, src: w.name ?? 'road', regain: false,
+    // ── ARRIVING IS PART OF DRIVING THERE ──
+    // With a goal in reach the course is cut at the point nearest it and
+    // declared a destination, so the speed plan brakes to a stop ON the
+    // place instead of carrying past it at road speed. Out of reach, or off
+    // to one side of the road the chain took, nothing changes: the drive
+    // continues and the goal keeps biasing the junctions.
+    const pts = w.pts;
+    if (goal) {
+      let bi = -1, bd = GOAL_REACH;
+      for (let i = 1; i < pts.length; i++) {
+        const d = Math.hypot(pts[i][0] - goal.x, pts[i][1] - goal.z);
+        if (d < bd) { bd = d; bi = i; }
+      }
+      if (bi > 0) {
+        return { pts: pts.slice(0, bi + 1), endsHere: true, src: `goal:${goal.name}`,
+          regain: false, width: Math.max(0, (w.hw ?? 0) - 1.5) };
+      }
+    }
+    return { pts, endsHere: false, src: w.name ?? 'road', regain: false,
       width: Math.max(0, (w.hw ?? 0) - 1.5) };
   }
   // ── NO ROAD UNDER THE WHEELS, AND WHAT TO DO ABOUT IT ──
@@ -28587,6 +28697,12 @@ const autoHandsOn = (): boolean => stick !== null || brakeId !== null || lift !=
   || ['w', 's', 'a', 'd', ' ', 'arrowup', 'arrowdown', 'arrowleft', 'arrowright']
     .some((k) => keys.has(k));
 function stepAuto(dt: number, off: boolean): void {
+  // ARRIVED. Checked here rather than in the controller because a goal is
+  // reached whether the autopilot or a thumb did the driving.
+  if (goal && Math.hypot(goal.x - state.x, goal.z - state.z) < GOAL_WITHIN) {
+    goalDone = { name: goal.name, at: performance.now() };
+    goal = null;
+  }
   // THE THUMB WINS. A tool that keeps driving while you are trying to take
   // over is not a tool, and the one time you most want to grab the wheel is
   // the one time it is going somewhere you did not intend. UNLESS the drone
@@ -38096,6 +38212,10 @@ function stepOverlays(): void {
     // RELOCATE, not GO: the word says what actually happens — the truck is
     // picked up and set down there, which is a bigger thing than driving.
     go: siteOpen.fix ? 'RELOCATE' : undefined,
+    // DRIVE TO: the same place, reached rather than arrived at. Offered for
+    // any site with a position — a fix, a station, a town — because "make
+    // this the destination" is the question the card could not answer.
+    goal: 'DRIVE TO',
     note: 'RECORD COPIED',
   } : null);
   // THE RECORD SAYS WHAT BOTH SOURCES SAY AND NOTHING ELSE. No verdict, no
@@ -38106,6 +38226,8 @@ function stepOverlays(): void {
     ? { kicker: `RECORDED · ${obsFlash.o.kind}`,
       head: `SURVEY SAYS ${obsFlash.o.satName}`,
       body: `GROUND: ${obsFlash.o.name ? obsFlash.o.name.toUpperCase() + ' · ' : ''}${obsFlash.o.tag.replace('=', ' ').toUpperCase()}` }
+    : goalDone && performance.now() - goalDone.at < 6000
+    ? { kicker: 'ARRIVED', head: goalDone.name.toUpperCase(), body: 'GOAL REACHED' }
     : surveyClaim && performance.now() - surveyClaim.at < 6000
     ? { kicker: 'SURVEYED', head: surveyClaim.name.toUpperCase(), body: `${surveyClaim.n} CHECKPOINTS` }
     : stationWoke && performance.now() - stationWoke.at < 6000
@@ -38316,7 +38438,52 @@ function setClean(on: boolean): void {
   lastPlow: +lastPlow.toFixed(3), lastPlowAtKmh: +lastPlowKmh.toFixed(1),
   wet: !!splashWet(state.x, state.z),
 });
-(window as unknown as { __site?: object }).__site = (act?: 'go' | 'close'): object | null => {
+/** The goal: read it, set one at a place, or clear it. `__goal('name', x, z)`
+ *  is what a test drives with; the card is what a player uses. */
+/** THE ROAD CHAIN, AS IT IS ACTUALLY WALKED — length, hops, and the distinct
+ *  names it crosses. Two names in one chain is a rename followed through; one
+ *  short chain that stops at a junction is the fault this replaced. */
+(window as unknown as { __chain?: object }).__chain = (reach = 900, hops = 60): object | null => {
+  const w = wayAhead(state.x, state.z, state.heading, reach, hops, false);
+  if (!w) {
+    const near = nearestDeck(state.x, state.z, 200);
+    return { start: null, m: 0, pts: 0, names: [], goal: null,
+      why: near ? `off-deck by ${near.d.toFixed(1)}m` : 'no deck within 200m',
+      cells: roadGrid.size };
+  }
+  let len = 0;
+  for (let i = 1; i < w.pts.length; i++) {
+    len += Math.hypot(w.pts[i][0] - w.pts[i - 1][0], w.pts[i][1] - w.pts[i - 1][1]);
+  }
+  // The names under the chain, sampled every 25m along it.
+  const names: string[] = [];
+  for (let d = 0; d < len; d += 25) {
+    let run = 0;
+    for (let i = 1; i < w.pts.length; i++) {
+      const l = Math.hypot(w.pts[i][0] - w.pts[i - 1][0], w.pts[i][1] - w.pts[i - 1][1]);
+      if (run + l >= d) {
+        const t = (d - run) / (l || 1);
+        const px = w.pts[i - 1][0] + (w.pts[i][0] - w.pts[i - 1][0]) * t;
+        const pz = w.pts[i - 1][1] + (w.pts[i][1] - w.pts[i - 1][1]) * t;
+        const nm = wayAt(px, pz)?.name ?? '—';
+        if (names[names.length - 1] !== nm) names.push(nm);
+        break;
+      }
+      run += l;
+    }
+  }
+  return { start: w.name ?? null, m: Math.round(len), pts: w.pts.length, names,
+    goal: goal ? { name: goal.name, d: Math.round(Math.hypot(goal.x - state.x, goal.z - state.z)) } : null };
+};
+(window as unknown as { __goal?: object }).__goal =
+  (name?: string | null, x?: number, z?: number): object | null => {
+    if (name === null) { goal = null; return null; }
+    if (name !== undefined && x !== undefined && z !== undefined) setGoal(name, x, z);
+    return goal ? { name: goal.name, x: Math.round(goal.x), z: Math.round(goal.z),
+      d: Math.round(Math.hypot(goal.x - state.x, goal.z - state.z)),
+      done: goalDone?.name ?? null } : { name: null, done: goalDone?.name ?? null };
+  };
+(window as unknown as { __site?: object }).__site = (act?: 'go' | 'close' | 'goal'): object | null => {
   if (act === 'close') { siteOpen = null; return null; }
   if (act === 'go') {
     const open = siteOpen;
@@ -38324,6 +38491,15 @@ function setClean(on: boolean): void {
     if (open?.fix) {
       const fix = pois.get(open.fix);
       if (fix) { teleportTo(fix.x, fix.z); pois.delete(fix.name); }
+    }
+    return null;
+  }
+  if (act === 'goal') {
+    const open = siteOpen;
+    siteOpen = null;
+    if (open) {
+      const fix = open.fix ? pois.get(open.fix) : null;
+      setGoal(open.rec.name, fix ? fix.x : open.x, fix ? fix.z : open.z);
     }
     return null;
   }
@@ -39021,6 +39197,18 @@ const overlays = createOverlays(
     pois.delete(fix.name);
   },
   () => { siteOpen = null; },
+  // DRIVE TO: the card's second action. The site becomes the goal the road
+  // chain steers for at every junction; the card closes because the answer
+  // to "what now" is out of the window, not in the panel.
+  () => {
+    const s = siteOpen;
+    siteOpen = null;
+    if (!s) return;
+    // The PIN's position when there is one — a fix is a place with a name —
+    // and the point the card was opened on otherwise.
+    const fix = s.fix ? pois.get(s.fix) : null;
+    setGoal(s.rec.name, fix ? fix.x : s.x, fix ? fix.z : s.z);
+  },
 );
 
 // ── boot ───────────────────────────────────────────────────────────
