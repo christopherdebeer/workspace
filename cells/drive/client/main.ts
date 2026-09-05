@@ -10668,8 +10668,19 @@ const OV_ROUTE_IN = 0.8;
 /** Simplification cuts corners, so a coarse metre is really a bit more than
  *  one. Without this the router would rather take the smoothed line. */
 const OV_COARSE_K = 1.15;
-/** How far a portal will reach, and what its metres cost. */
-const PORTAL_R = 140;
+/** How far a portal will reach, and what its metres cost.
+ *
+ *  MEASURED WIDER THAN IT LOOKS. The two tiers are not two samplings of the
+ *  same points: the survey ends at the ring and the coarse layer begins at 0.8
+ *  of it, and in between they are the same ROADS described by different data —
+ *  so the nearest coarse node to the last surveyed one is routinely a few
+ *  hundred metres along it rather than a few tens. At 140m a rural handover
+ *  made no portals at all (measured: 126 fine nodes, 272 coarse, zero joins),
+ *  which left the coarse network floating and every distant goal unreachable.
+ *  The length is priced, so a long portal is expensive and a short one cheap
+ *  and the router sorts it out; the radius only has to be generous enough that
+ *  the join EXISTS. */
+const PORTAL_R = 420;
 const PORTAL_K = 1.8;
 /** No more than this many, so a dense handover annulus cannot explode. */
 const PORTAL_MAX = 64;
@@ -10743,32 +10754,49 @@ function roadGraph(): Map<string, GraphNode> {
         }
       }
     }
-    // ── the portals ──
-    // Only the handover annulus produces any: fine nodes stop at the ring and
-    // coarse ones start at 0.8 of it, so the two are within reach of each
-    // other in a band and nowhere else.
-    let made = 0;
+    // ── the portals, built FROM THE SURVEY'S EDGE ──
+    //
+    // The first cut walked the coarse nodes looking for a fine one nearby and
+    // made none. Two things wrong with that. It scanned the shared 4m hash, so
+    // a 420m reach is a 105-cell span and a hundred thousand lookups a node.
+    // And the question was the wrong way round: what has to be joined is the
+    // place the SURVEY runs out. Every fine node past the handover is a road
+    // that, as far as the graph is concerned, ends in the middle of nowhere,
+    // and each of those is exactly one portal's worth of question — where does
+    // the coarse network pick this up? There are far fewer of them, and asking
+    // from that side puts the join on the boundary rather than wherever the
+    // two tiers happened to sample near each other.
+    const cellR = Math.max(NODE_CELL, PORTAL_R / 2);
+    const chash = new Map<string, string[]>();
     for (const ck of coarse) {
+      const n = g.get(ck) as GraphNode;
+      const k = `${Math.floor(n.x / cellR)},${Math.floor(n.z / cellR)}`;
+      const arr = chash.get(k);
+      if (arr) arr.push(ck); else chash.set(k, [ck]);
+    }
+    let made = 0;
+    for (const [fk, f] of g) {
       if (made >= PORTAL_MAX) break;
-      const c = g.get(ck) as GraphNode;
-      if (c.to.some((e) => !(g.get(e.id) as GraphNode).c)) continue;   // already on the survey
+      if (f.c) continue;
+      // Inside the handover the survey IS the map, and a portal there would let
+      // the router leave a road it can see for a smoothed line it cannot.
+      if (Math.hypot(f.x - osmCarX, f.z - osmCarZ) < inner) continue;
+      if (f.to.some((e) => (g.get(e.id) as GraphNode).c)) continue;    // already joined
       let best: string | null = null, bd = PORTAL_R * PORTAL_R;
-      const cx = Math.floor(c.x / NODE_CELL), cz = Math.floor(c.z / NODE_CELL);
-      const span = Math.ceil(PORTAL_R / NODE_CELL);
-      for (let ax = cx - span; ax <= cx + span; ax++) {
-        for (let az = cz - span; az <= cz + span; az++) {
-          for (const id of hash.get(`${ax},${az}`) ?? []) {
+      const cx = Math.floor(f.x / cellR), cz = Math.floor(f.z / cellR);
+      for (let ax = cx - 1; ax <= cx + 1; ax++) {
+        for (let az = cz - 1; az <= cz + 1; az++) {
+          for (const id of chash.get(`${ax},${az}`) ?? []) {
             const n = g.get(id) as GraphNode;
-            if (n.c) continue;
-            const d = (n.x - c.x) ** 2 + (n.z - c.z) ** 2;
+            const d = (n.x - f.x) ** 2 + (n.z - f.z) ** 2;
             if (d < bd) { bd = d; best = id; }
           }
         }
       }
       if (!best) continue;
-      const f = g.get(best) as GraphNode;
+      const c = g.get(best) as GraphNode;
       const cost = Math.sqrt(bd) * PORTAL_K;
-      c.to.push({ id: best, cost }); f.to.push({ id: ck, cost });
+      f.to.push({ id: best, cost }); c.to.push({ id: fk, cost });
       made++;
     }
     graphStat = { fine: fineN, coarse: g.size - fineN, portals: made, inner: Math.round(inner) };

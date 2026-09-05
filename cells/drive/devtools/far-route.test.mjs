@@ -39,16 +39,26 @@ const d = await openDrive({ spot: SPOT, tag: 'farroute', settle: 25000 });
 // no longer the better map of itself — which is the whole reason the router
 // could not see these roads either. Open the chart, wind the zoom out, and
 // wait: these are cell-built tiles and a cold one is a live Overpass query.
+// AND THE TRUCK HAS TO BE ON A ROAD. A spawn coordinate is a wish: the first
+// run reported "no road under the truck" with 126 fine nodes in the graph and
+// spent all five of its failures on that one fact. __toroad exists for exactly
+// this and says so in its own comment.
+const onRoad = await d.page.evaluate(() => window.__toroad(400));
+console.log('to road:', JSON.stringify(onRoad));
 await d.page.evaluate(() => {
   window.__hold(0, 0, 1);
   window.__cam('top');
-  window.__zoom(60);
+  // All the way out: ovLevelFor drops a rung only when the view radius passes
+  // 2.5 tiles of the current one, so z13 holds until about twelve kilometres.
+  // Clamped internally, so asking for more than exists is the way to ask for
+  // the most there is.
+  window.__zoom(1e6);
 });
-for (let i = 0; i < 8; i++) {
+for (let i = 0; i < 10; i++) {
   await d.page.waitForTimeout(12000);
   const o = await d.page.evaluate(() => window.__ovroads());
   console.log(`  +${(i + 1) * 12}s  level ${o.level}  tiles ${o.tiles}  ways ${o.ways}  reach ${o.reachKm}km`);
-  if (o.ways > 40) break;
+  if (o.reachKm > 12) break;
 }
 
 const ov = await d.page.evaluate(() => window.__ovroads());
@@ -95,6 +105,10 @@ check('the plan is mixed, not all coarse', res.route.coarsePts > 0
 check('THE AUTOPILOT IS ONLY GIVEN THE SURVEYED HALF',
   res.route.fineKm < res.route.km, res.route);
 check('the solve stays cheap', res.route.ms < 250, { ms: res.route.ms });
+// The whole point of the tier, in one number: the plan must outrun the survey.
+console.log(`\nplanned ${res.route.km}km, of which ${res.route.fineKm}km is surveyed `
+  + `and driveable; ${res.route.coarsePts} of ${res.route.pts} points are the chart's; `
+  + `${res.route.graph.portals} portal(s) across a ${res.route.graph.inner}m handover.`);
 
 await d.shot('farroute-chart');
 console.log(bad ? `\n${bad} FAILED` : '\nall ok');
