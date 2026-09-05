@@ -10379,6 +10379,224 @@ const GOAL_WITHIN = 28;
 /** How near the course has to pass the goal before the drive treats it as
  *  the end of the run rather than something to keep steering toward. */
 const GOAL_REACH = 45;
+/**
+ * ── THE ROUTE TO THE GOAL, SOLVED ──
+ *
+ * The junction bias (AHEAD_GOAL_W) steers toward a goal one turn at a time,
+ * which is a driver with a compass and no map: it takes the branch that
+ * points at the target and will follow it into a dead end, a river bank or a
+ * cul-de-sac that happens to face the right way. This is the map. Dijkstra
+ * over the streamed carriageway — nodes are segment ENDPOINTS quantised to
+ * half a metre so two ways that meet share one, edges are the segments —
+ * from the deck under the truck to the deck nearest the goal.
+ *
+ * WHAT IT COSTS is length times a penalty for narrowness: a lane is not
+ * worth the same metre as a road, and without that the route cuts every
+ * corner through farm tracks. Nothing else — no turn cost, no one-way, no
+ * surface. Those are refinements; a route that exists at all is the feature.
+ *
+ * WHAT BOUNDS IT is the world that has actually streamed. A goal beyond the
+ * loaded roads has no path and the answer is honestly null, which is why the
+ * junction bias STAYS: it is what drives while the map fills in.
+ */
+const GOAL_SOLVE_MS = 2500;
+/** A metre of the narrowest track costs this much more than a metre of road. */
+const GOAL_NARROW = 2.2;
+/** Give up rather than walk the whole continent. */
+const GOAL_MAX_NODES = 24000;
+/**
+ * TWO SEGMENTS MEET WHEN THEIR ENDS ARE WITHIN A METRE AND A HALF — which is
+ * the tolerance the chain walk has always used, and it has to be the same one
+ * here or the graph disagrees with the road. Quantising instead (a half-metre
+ * key) looked equivalent and was not: two ends 0.9m and 1.1m either side of a
+ * bucket boundary land in different nodes, the junction never joins, and the
+ * solver reports "no path" across a road you can see. Measured at the Senqu:
+ * 646 nodes, the truck's own component 477 of them, and a target 1.9km away
+ * unreachable along a road that plainly connects.
+ *
+ * So ends are MATCHED, through a coarse hash, against nodes already placed.
+ * Height is part of the match because a bridge deck and the road under it
+ * pass within a metre of each other in plan and are not the same place.
+ */
+const NODE_SNAP = 1.5;
+const NODE_CELL = 4;
+const NODE_DY = 4;
+/** A tiny binary heap. The frontier is thousands of nodes and a linear scan
+ *  of it is what turns a 6ms solve into a 400ms one. */
+class MinHeap {
+  private k: number[] = [];
+  private v: string[] = [];
+  get size(): number { return this.k.length; }
+  push(cost: number, id: string): void {
+    this.k.push(cost); this.v.push(id);
+    let i = this.k.length - 1;
+    while (i > 0) {
+      const p = (i - 1) >> 1;
+      if (this.k[p] <= this.k[i]) break;
+      [this.k[p], this.k[i]] = [this.k[i], this.k[p]];
+      [this.v[p], this.v[i]] = [this.v[i], this.v[p]];
+      i = p;
+    }
+  }
+  pop(): { cost: number; id: string } | null {
+    if (!this.k.length) return null;
+    const cost = this.k[0], id = this.v[0];
+    const lk = this.k.pop() as number, lv = this.v.pop() as string;
+    if (this.k.length) {
+      this.k[0] = lk; this.v[0] = lv;
+      let i = 0;
+      for (;;) {
+        const l = i * 2 + 1, r = l + 1;
+        let m = i;
+        if (l < this.k.length && this.k[l] < this.k[m]) m = l;
+        if (r < this.k.length && this.k[r] < this.k[m]) m = r;
+        if (m === i) break;
+        [this.k[m], this.k[i]] = [this.k[i], this.k[m]];
+        [this.v[m], this.v[i]] = [this.v[i], this.v[m]];
+        i = m;
+      }
+    }
+    return { cost, id };
+  }
+}
+interface GraphNode { x: number; z: number; y: number; to: Array<{ id: string; cost: number }> }
+/** The carriageway as a graph, from whatever has streamed. */
+function roadGraph(): Map<string, GraphNode> {
+  const g = new Map<string, GraphNode>();
+  const hash = new Map<string, string[]>();      // 4m cell -> node ids
+  const seen = new Set<Seg>();
+  let next = 0;
+  /** The node at this end, matched against one already placed or created. */
+  const node = (x: number, z: number, y: number): string => {
+    const cx = Math.floor(x / NODE_CELL), cz = Math.floor(z / NODE_CELL);
+    for (let ax = cx - 1; ax <= cx + 1; ax++) {
+      for (let az = cz - 1; az <= cz + 1; az++) {
+        for (const id of hash.get(`${ax},${az}`) ?? []) {
+          const n = g.get(id) as GraphNode;
+          if (Math.hypot(n.x - x, n.z - z) <= NODE_SNAP && Math.abs(n.y - y) <= NODE_DY) return id;
+        }
+      }
+    }
+    const id = `n${next++}`;
+    g.set(id, { x, z, y, to: [] });
+    const k = `${cx},${cz}`;
+    const arr = hash.get(k);
+    if (arr) arr.push(id); else hash.set(k, [id]);
+    return id;
+  };
+  for (const cell of roadGrid.values()) {
+    for (const sg of cell) {
+      if (seen.has(sg) || sg.ya === undefined) continue;   // a wall is not a road
+      seen.add(sg);
+      const len = Math.hypot(sg.bx - sg.ax, sg.bz - sg.az);
+      if (len < 0.05) continue;
+      const ak = node(sg.ax, sg.az, sg.ya ?? 0), bk = node(sg.bx, sg.bz, sg.yb ?? sg.ya ?? 0);
+      if (ak === bk) continue;
+      const cost = len * (1 + (GOAL_NARROW - 1) * clamp((5 - sg.hw) / 4, 0, 1));
+      (g.get(ak) as GraphNode).to.push({ id: bk, cost });
+      (g.get(bk) as GraphNode).to.push({ id: ak, cost });
+    }
+  }
+  return g;
+}
+/** The node nearest a place, or null when the roads do not reach it. */
+function nearestNode(g: Map<string, GraphNode>, x: number, z: number, r: number): string | null {
+  let best: string | null = null, bd = r * r;
+  for (const [k, n] of g) {
+    const d = (n.x - x) ** 2 + (n.z - z) ** 2;
+    if (d < bd) { bd = d; best = k; }
+  }
+  return best;
+}
+let goalRoute: Array<[number, number]> | null = null;
+let goalSolveAt = 0;
+let goalSolveFor = '';
+const goalSolveStat = { runs: 0, ms: 0, nodes: 0, found: 0, failed: 0, last: '' };
+function solveGoalRoute(): void {
+  if (!goal) { goalRoute = null; goalSolveFor = ''; return; }
+  const t0 = performance.now();
+  goalSolveStat.runs++;
+  const g = roadGraph();
+  goalSolveStat.nodes = g.size;
+  const from = nearestNode(g, state.x, state.z, 120);
+  const to = nearestNode(g, goal.x, goal.z, 400);
+  goalSolveFor = `${goal.name}|${osmDone.size}`;
+  if (!from || !to) {
+    goalRoute = null;
+    goalSolveStat.failed++;
+    goalSolveStat.last = !from ? 'no road under the truck' : 'no road at the goal';
+    goalSolveStat.ms = performance.now() - t0;
+    return;
+  }
+  const dist = new Map<string, number>([[from, 0]]);
+  const prev = new Map<string, string>();
+  const done = new Set<string>();
+  const heap = new MinHeap();
+  heap.push(0, from);
+  let hit = false;
+  while (heap.size && done.size < GOAL_MAX_NODES) {
+    const top = heap.pop() as { cost: number; id: string };
+    if (done.has(top.id)) continue;
+    done.add(top.id);
+    if (top.id === to) { hit = true; break; }
+    const n = g.get(top.id);
+    if (!n) continue;
+    for (const e of n.to) {
+      if (done.has(e.id)) continue;
+      const nd = top.cost + e.cost;
+      if (nd < (dist.get(e.id) ?? Infinity)) {
+        dist.set(e.id, nd); prev.set(e.id, top.id); heap.push(nd, e.id);
+      }
+    }
+  }
+  if (!hit) {
+    goalRoute = null;
+    goalSolveStat.failed++;
+    goalSolveStat.last = `no path (${done.size} nodes)`;
+    goalSolveStat.ms = performance.now() - t0;
+    return;
+  }
+  const out: Array<[number, number]> = [];
+  for (let k: string | undefined = to; k !== undefined; k = prev.get(k)) {
+    const n = g.get(k);
+    if (n) out.push([n.x, n.z]);
+    if (k === from) break;
+  }
+  out.reverse();
+  goalRoute = out.length >= 2 ? out : null;
+  goalSolveStat.found++;
+  goalSolveStat.last = `${out.length} nodes`;
+  goalSolveStat.ms = performance.now() - t0;
+}
+/** Where we are on the solved route and what is left of it — the same shape
+ *  `routeAhead` hands the autopilot for a mission leg. */
+function goalAhead(x: number, z: number, reach: number): Array<[number, number]> | null {
+  const rt = goalRoute;
+  if (!rt || rt.length < 2) return null;
+  let bi = 1, bt = 0, bd = Infinity;
+  for (let i = 1; i < rt.length; i++) {
+    const dx = rt[i][0] - rt[i - 1][0], dz = rt[i][1] - rt[i - 1][1];
+    const t = clamp(((x - rt[i - 1][0]) * dx + (z - rt[i - 1][1]) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    const px = rt[i - 1][0] + dx * t, pz = rt[i - 1][1] + dz * t;
+    const d = Math.hypot(x - px, z - pz);
+    if (d < bd) { bd = d; bi = i; bt = t; }
+  }
+  // Off the solved line by more than a road's width: it is not what we are
+  // driving, so say nothing and let the chain carry on. The re-solve catches
+  // up on its own timer.
+  if (bd > 26) return null;
+  const pts: Array<[number, number]> = [[
+    rt[bi - 1][0] + (rt[bi][0] - rt[bi - 1][0]) * bt,
+    rt[bi - 1][1] + (rt[bi][1] - rt[bi - 1][1]) * bt,
+  ]];
+  let run = 0;
+  for (let i = bi; i < rt.length && run < reach; i++) {
+    run += Math.hypot(rt[i][0] - pts[pts.length - 1][0], rt[i][1] - pts[pts.length - 1][1]);
+    pts.push([rt[i][0], rt[i][1]]);
+  }
+  return pts.length >= 2 ? pts : null;
+}
+
 function goalRebase(): void {
   if (!goal) { goalAt = ''; return; }
   const at = `${origin.lat.toFixed(4)},${origin.lon.toFixed(4)}`;
@@ -28239,6 +28457,33 @@ let siteOpen: { rec: SiteRecord; fix: string | null; x: number; z: number } | nu
  *  already gives — the write has to happen inside the gesture or the
  *  permission model refuses it, which is why this is called from the handler
  *  rather than from the frame. */
+/**
+ * THE PIN UNDER THE TAP, if the tap landed on one.
+ *
+ * A double tap on the chart used to drop a NEW fix wherever it landed —
+ * including squarely on top of a pin that already names that place, which
+ * buries the thing you were pointing at under a fresh mark called something
+ * else. A pin is a record already; tapping it should open THAT.
+ *
+ * The radius is in world metres and scales with the chart's zoom, because a
+ * thumb is a thumb: at a wide zoom the pins are close together on the glass
+ * and the tap has to mean the nearest one, at a tight zoom it must not grab a
+ * pin half a kilometre away.
+ */
+/** How near the tap has to land, in world metres, to count as ON a pin:
+ *  about eight millimetres of glass at whatever the chart is showing, so the
+ *  gesture means the same thing at every zoom. */
+function chartTapR(): number {
+  return clamp(viewRadius() * 0.05, 12, 900);
+}
+function poiUnder(wx: number, wz: number, r: number): { name: string; x: number; z: number } | null {
+  let best: { name: string; x: number; z: number } | null = null, bd = r * r;
+  for (const p of pois.values()) {
+    const d = (p.x - wx) ** 2 + (p.z - wz) ** 2;
+    if (d < bd) { bd = d; best = { name: p.name, x: p.x, z: p.z }; }
+  }
+  return best;
+}
 function openSite(ex: number, ez: number, name: string, fix: string | null): void {
   siteOpen = { rec: siteRecord(ex, ez, name), fix, x: ex, z: ez };
   try { void navigator.clipboard?.writeText(siteOpen.rec.json); } catch { /* the card still answers */ }
@@ -28311,10 +28556,21 @@ const endStick = (e: PointerEvent): void => {
         // The record carries the relocation, so marking and travelling stay
         // two deliberate acts while the middle one stops being blind.
         const [wx, wz] = chartToWorld(e.clientX, e.clientY);
-        const fix = dropFix(wx, wz);
-        openSite(wx, wz, fix.name, fix.name);
+        // A PIN IS A RECORD ALREADY. Landing on one opens it rather than
+        // burying it under a new mark of its own.
+        const pin = poiUnder(wx, wz, chartTapR());
+        if (pin) { openSite(pin.x, pin.z, pin.name, null); }
+        else {
+          const fix = dropFix(wx, wz);
+          openSite(wx, wz, fix.name, fix.name);
+        }
       } else {
         const [wx, wz] = chartToWorld(e.clientX, e.clientY);
+        // ON THE LINE a pin still opens — reading a place is not travelling to
+        // it, and the card's two travel actions are withheld there (see the
+        // site card). Empty ground still answers with the field query.
+        const pin = poiUnder(wx, wz, chartTapR());
+        if (pin) { openSite(pin.x, pin.z, pin.name, null); return; }
         lastField = fieldQuery(wx, wz);
         lineNudge = performance.now();
         try { void navigator.clipboard?.writeText(lastField.json); } catch { /* the toast still answers */ }
@@ -28612,6 +28868,15 @@ function autoCourse(): AutoPlan {
     return { pts: r, src: 'leg', width: 1.8, regain: false,
       endsHere: !!tail && end[0] === tail[0] && end[1] === tail[1] };
   }
+  // THE SOLVED ROUTE, when there is one. A mission's authored leg outranks it
+  // (that road IS the task); everything below it is the chain, which is what
+  // drives while the solver has no answer yet.
+  const gr = goalAhead(state.x, state.z, AUTO_REACH);
+  if (gr && goal) {
+    const end = gr[gr.length - 1];
+    return { pts: gr, src: `route:${goal.name}`, width: 1.8, regain: false,
+      endsHere: Math.hypot(end[0] - goal.x, end[1] - goal.z) < GOAL_REACH };
+  }
   const w = wayAhead(state.x, state.z, state.heading, AUTO_REACH, AUTO_HOPS, false);
   // The road simply running out of streamed geometry is not a destination, so
   // `endsHere` stays false — braking for the edge of the data would be braking
@@ -28702,6 +28967,27 @@ function stepAuto(dt: number, off: boolean): void {
   if (goal && Math.hypot(goal.x - state.x, goal.z - state.z) < GOAL_WITHIN) {
     goalDone = { name: goal.name, at: performance.now() };
     goal = null;
+    goalRoute = null;
+    goalSolveFor = '';
+  }
+  // ── SOLVE, AND RE-SOLVE AS THE WORLD ARRIVES ──
+  //
+  // Not every frame: the graph is every streamed segment and the walk is
+  // thousands of nodes. On the timer, and only when the answer could have
+  // changed — a different goal, or more road (osmDone) than the last solve
+  // saw. A route that exists and is still under the truck is left alone.
+  if (goal) {
+    const now = performance.now();
+    const want = `${goal.name}|${osmDone.size}`;
+    const stale = goalSolveFor !== want
+      || (!goalRoute && now - goalSolveAt > GOAL_SOLVE_MS * 2)
+      || (!!goalRoute && !goalAhead(state.x, state.z, 60));
+    if (stale && now - goalSolveAt > GOAL_SOLVE_MS) {
+      goalSolveAt = now;
+      const t0 = performance.now();
+      solveGoalRoute();
+      profAdd('routeSolve', t0);
+    }
   }
   // THE THUMB WINS. A tool that keeps driving while you are trying to take
   // over is not a tool, and the one time you most want to grab the wheel is
@@ -38211,11 +38497,16 @@ function stepOverlays(): void {
     rows: siteOpen.rec.rows,
     // RELOCATE, not GO: the word says what actually happens — the truck is
     // picked up and set down there, which is a bigger thing than driving.
-    go: siteOpen.fix ? 'RELOCATE' : undefined,
+    // ── NOT ON THE LINE ──
+    // Both of these are travel, and the line is a run: a ranger who can
+    // relocate to the next checkpoint, or hand the drive to an autopilot
+    // aimed at it, is not driving the pipeline. Off the line they are the
+    // whole point of the card. The RECORD reads the same either way.
+    go: !lineOn && siteOpen.fix ? 'RELOCATE' : undefined,
     // DRIVE TO: the same place, reached rather than arrived at. Offered for
     // any site with a position — a fix, a station, a town — because "make
     // this the destination" is the question the card could not answer.
-    goal: 'DRIVE TO',
+    goal: lineOn ? undefined : 'DRIVE TO',
     note: 'RECORD COPIED',
   } : null);
   // THE RECORD SAYS WHAT BOTH SOURCES SAY AND NOTHING ELSE. No verdict, no
@@ -38474,6 +38765,36 @@ function setClean(on: boolean): void {
   }
   return { start: w.name ?? null, m: Math.round(len), pts: w.pts.length, names,
     goal: goal ? { name: goal.name, d: Math.round(Math.hypot(goal.x - state.x, goal.z - state.z)) } : null };
+};
+/** The graph node farthest from the truck — a goal a test can be sure is
+ *  actually connected to the road under the wheels. */
+(window as unknown as { __farnode?: object }).__farnode = (): object | null => {
+  const g = roadGraph();
+  const from = nearestNode(g, state.x, state.z, 120);
+  if (!from) return null;
+  // REACHABLE, not merely far: a test that picks the farthest node anywhere
+  // is testing whether the world happens to be connected, which is a fact
+  // about OSM streaming and not about the solver.
+  const seen = new Set<string>([from]);
+  const queue = [from];
+  let best: { x: number; z: number; d: number } | null = null;
+  while (queue.length) {
+    const id = queue.shift() as string;
+    const n = g.get(id) as GraphNode;
+    const d = Math.hypot(n.x - state.x, n.z - state.z);
+    if (!best || d > best.d) best = { x: n.x, z: n.z, d: Math.round(d) };
+    for (const e of n.to) if (!seen.has(e.id)) { seen.add(e.id); queue.push(e.id); }
+  }
+  return best ? { ...best, nodes: g.size, reachable: seen.size } : null;
+};
+/** The solved route, and what the solver last did. */
+(window as unknown as { __route?: object }).__route = (force?: boolean): object => {
+  if (force) { goalSolveAt = performance.now(); solveGoalRoute(); }
+  const rt = goalRoute;
+  let km = 0;
+  if (rt) for (let i = 1; i < rt.length; i++) km += Math.hypot(rt[i][0] - rt[i - 1][0], rt[i][1] - rt[i - 1][1]);
+  return { goal: goal?.name ?? null, pts: rt?.length ?? 0, km: +(km / 1000).toFixed(2),
+    onIt: !!goalAhead(state.x, state.z, 200), ...goalSolveStat };
 };
 (window as unknown as { __goal?: object }).__goal =
   (name?: string | null, x?: number, z?: number): object | null => {

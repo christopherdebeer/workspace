@@ -1603,10 +1603,40 @@ scale 3, 40 m and 105 m cameras:
   reports the chain's length and the distinct names it crosses — which is
   how to check the rename fix on a device, since the harness's proxy often
   has no roads streamed at all (`cells: 0`) and could not exercise it here.
-  NOT DONE, and the honest next step: this is a greedy junction bias, not a
-  solved route. It will take a dead end that points at the target where a
-  router would not. A Dijkstra over the road grid's endpoints, re-solved as
-  tiles arrive, is what turns it into navigation.
+  **AND NOW IT IS SOLVED.** `solveGoalRoute` is Dijkstra over the streamed
+  carriageway — nodes are segment endpoints, edges the segments, cost is
+  length times a penalty for narrowness (`GOAL_NARROW`, so the route prefers
+  the road to the lane beside it) — from the deck under the truck to the deck
+  nearest the goal. `autoCourse` ranks a mission's authored leg first, the
+  solved route second, the chain last; the chain's junction bias is what
+  drives while the map fills in, which is why it stays. Re-solved on
+  `GOAL_SOLVE_MS` when the goal changes, when more road has streamed
+  (`osmDone.size`), or when the truck has left the line it solved. Measured
+  at the Senqu: 470 nodes, 110-node path, 1.14km of road for 933m of straight
+  line, **2.9ms**, and the autopilot reports `src: route:<name>`.
+  **THE LESSON THAT COST TWO RUNS: match endpoints, do not quantise them.**
+  A half-metre key looked equivalent to the chain walk's 1.5m adjacency
+  tolerance and is not — two ends either side of a bucket boundary land in
+  different nodes, the junction never joins, and the solver says "no path"
+  across a road you can see (646 nodes, the truck's own component 477, a
+  target 1.9km off unreachable). Ends are matched through a coarse hash
+  against nodes already placed, with HEIGHT in the match, because a bridge
+  deck and the road under it pass within a metre in plan and are not the
+  same place. `__route()` reports the solve, `__farnode()` the farthest
+  REACHABLE node — a test that picks the farthest node anywhere is testing
+  whether OSM happened to stream a connected world, not the solver.
+  Still not done: no turn cost, no one-way, no surface preference.
+
+- **A PIN IS A RECORD ALREADY, AND THE LINE IS NOT A PLACE TO TELEPORT FROM.**
+  A double tap on the chart dropped a NEW fix wherever it landed, including
+  squarely on a pin that already names that place — burying the thing you
+  were pointing at under a fresh mark called something else. A tap within
+  `chartTapR()` (about eight millimetres of glass, so the gesture means the
+  same at every zoom) opens THAT pin's record instead, on the line as well as
+  off it, because reading a place is not travelling to it. The card's two
+  travel actions — RELOCATE and DRIVE TO — are withheld while `lineOn`: a
+  ranger who can teleport to the next checkpoint, or hand the drive to an
+  autopilot aimed at it, is not driving the pipeline.
 
 **The rule that keeps a lab honest: it imports the SAME modules the game runs.**
 A lab that reimplements what it is inspecting proves nothing about what ships.
