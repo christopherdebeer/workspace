@@ -10574,8 +10574,11 @@ const GOAL_REACH = 45;
 const GOAL_SOLVE_MS = 2500;
 /** A metre of the narrowest track costs this much more than a metre of road. */
 const GOAL_NARROW = 2.2;
-/** Give up rather than walk the whole continent. */
-const GOAL_MAX_NODES = 24000;
+/** Give up rather than walk the whole continent. Raised with the coarse tier:
+ *  the walk settles the whole reachable component by design, and that
+ *  component is now tens of kilometres of trunk road rather than the fine
+ *  ring's five. Dijkstra over this many is still milliseconds — see __route. */
+const GOAL_MAX_NODES = 60000;
 /** What a metre of driving is worth against a metre of getting closer. Small,
  *  so the route will happily drive a kilometre to halve the walk-in, and will
  *  not drive ten to shave a hundred metres. */
@@ -10637,26 +10640,64 @@ class MinHeap {
     return { cost, id };
   }
 }
-interface GraphNode { x: number; z: number; y: number; to: Array<{ id: string; cost: number }> }
-/** The carriageway as a graph, from whatever has streamed. */
+/**
+ * ── TWO TIERS, BECAUSE THE WORLD HAS TWO ──
+ *
+ * The fine survey stops around five kilometres out; the chart's overview
+ * vectors carry the trunk network for tens more. A goal past the fine ring had
+ * no path at all — the search was never the problem, the graph was — so the
+ * coarse ways go in too, and the two have to be made to meet.
+ *
+ * WHERE THEY MEET IS THE SAME LINE THE CHART ALREADY DRAWS. `osmRingR * 0.8`
+ * is where the ribbons start fading up because the fine world is giving out;
+ * coarse ways enter the graph at exactly that radius, so the router's handover
+ * and the ink's handover are one decision rather than two that can drift.
+ *
+ * THEY ARE JOINED BY PORTALS, NOT BY GEOMETRY. A z10 polyline is simplified:
+ * it can sit fifty to a hundred metres off the surveyed centreline of the same
+ * road, so matching ends at NODE_SNAP's metre and a half would never fire once
+ * between the tiers and the coarse network would float, connected to nothing.
+ * Instead a coarse node near a fine one gets a synthetic edge to it, priced at
+ * the straight line between them and then some. That is honest about what is
+ * actually known — these are within a hundred metres of each other, and the
+ * exact junction is not in the data at this zoom — and it degrades the right
+ * way: where a real road exists the router prefers it, because the portal is
+ * deliberately the more expensive metre.
+ */
+const OV_ROUTE_IN = 0.8;
+/** Simplification cuts corners, so a coarse metre is really a bit more than
+ *  one. Without this the router would rather take the smoothed line. */
+const OV_COARSE_K = 1.15;
+/** How far a portal will reach, and what its metres cost. */
+const PORTAL_R = 140;
+const PORTAL_K = 1.8;
+/** No more than this many, so a dense handover annulus cannot explode. */
+const PORTAL_MAX = 64;
+interface GraphNode { x: number; z: number; y: number; c: boolean; to: Array<{ id: string; cost: number }> }
+/** The carriageway as a graph — the fine survey, plus the coarse network
+ *  beyond it, joined by portals across the handover. */
 function roadGraph(): Map<string, GraphNode> {
   const g = new Map<string, GraphNode>();
   const hash = new Map<string, string[]>();      // 4m cell -> node ids
   const seen = new Set<Seg>();
   let next = 0;
   /** The node at this end, matched against one already placed or created. */
-  const node = (x: number, z: number, y: number): string => {
+  const node = (x: number, z: number, y: number, coarse = false): string => {
     const cx = Math.floor(x / NODE_CELL), cz = Math.floor(z / NODE_CELL);
     for (let ax = cx - 1; ax <= cx + 1; ax++) {
       for (let az = cz - 1; az <= cz + 1; az++) {
         for (const id of hash.get(`${ax},${az}`) ?? []) {
           const n = g.get(id) as GraphNode;
+          // ACROSS THE TIERS TOO. When a coarse end really does land on a
+          // surveyed one it is the same junction and joining it is free and
+          // exact; the portals below exist for the ordinary case where the
+          // simplification has moved it a hundred metres.
           if (Math.hypot(n.x - x, n.z - z) <= NODE_SNAP && Math.abs(n.y - y) <= NODE_DY) return id;
         }
       }
     }
     const id = `n${next++}`;
-    g.set(id, { x, z, y, to: [] });
+    g.set(id, { x, z, y, c: coarse, to: [] });
     const k = `${cx},${cz}`;
     const arr = hash.get(k);
     if (arr) arr.push(id); else hash.set(k, [id]);
@@ -10675,18 +10716,82 @@ function roadGraph(): Map<string, GraphNode> {
       (g.get(bk) as GraphNode).to.push({ id: ak, cost });
     }
   }
+  // ── the coarse tier, and only where the fine one has given out ──
+  const fineN = g.size;
+  const inner = osmRingR * OV_ROUTE_IN;
+  const coarse: string[] = [];
+  if (Number.isFinite(inner)) {
+    for (const list of ovWays.values()) {
+      for (const w of list) {
+        const narrow = 1 + (GOAL_NARROW - 1) * clamp((5 - w.hw) / 4, 0, 1);
+        let pk: string | null = null;
+        for (let i = 0; i < w.pts.length; i++) {
+          const [px, pz] = w.pts[i];
+          // Segment by segment against the handover, not way by way: a trunk
+          // road running from under the truck to the horizon belongs to the
+          // coarse graph for its far half and to the survey for its near one.
+          const out = Math.hypot(px - osmCarX, pz - osmCarZ) > inner;
+          if (!out) { pk = null; continue; }
+          const k = node(px, pz, 0, true);
+          if (g.get(k)?.c) coarse.push(k);
+          if (pk && pk !== k) {
+            const q = g.get(pk) as GraphNode, n = g.get(k) as GraphNode;
+            const cost = Math.hypot(n.x - q.x, n.z - q.z) * narrow * OV_COARSE_K;
+            if (cost > 0) { q.to.push({ id: k, cost }); n.to.push({ id: pk, cost }); }
+          }
+          pk = k;
+        }
+      }
+    }
+    // ── the portals ──
+    // Only the handover annulus produces any: fine nodes stop at the ring and
+    // coarse ones start at 0.8 of it, so the two are within reach of each
+    // other in a band and nowhere else.
+    let made = 0;
+    for (const ck of coarse) {
+      if (made >= PORTAL_MAX) break;
+      const c = g.get(ck) as GraphNode;
+      if (c.to.some((e) => !(g.get(e.id) as GraphNode).c)) continue;   // already on the survey
+      let best: string | null = null, bd = PORTAL_R * PORTAL_R;
+      const cx = Math.floor(c.x / NODE_CELL), cz = Math.floor(c.z / NODE_CELL);
+      const span = Math.ceil(PORTAL_R / NODE_CELL);
+      for (let ax = cx - span; ax <= cx + span; ax++) {
+        for (let az = cz - span; az <= cz + span; az++) {
+          for (const id of hash.get(`${ax},${az}`) ?? []) {
+            const n = g.get(id) as GraphNode;
+            if (n.c) continue;
+            const d = (n.x - c.x) ** 2 + (n.z - c.z) ** 2;
+            if (d < bd) { bd = d; best = id; }
+          }
+        }
+      }
+      if (!best) continue;
+      const f = g.get(best) as GraphNode;
+      const cost = Math.sqrt(bd) * PORTAL_K;
+      c.to.push({ id: best, cost }); f.to.push({ id: ck, cost });
+      made++;
+    }
+    graphStat = { fine: fineN, coarse: g.size - fineN, portals: made, inner: Math.round(inner) };
+  } else graphStat = { fine: fineN, coarse: 0, portals: 0, inner: 0 };
   return g;
 }
+/** What the last graph was made of — read by __route. */
+let graphStat = { fine: 0, coarse: 0, portals: 0, inner: 0 };
 /** The node nearest a place, or null when the roads do not reach it. */
-function nearestNode(g: Map<string, GraphNode>, x: number, z: number, r: number): string | null {
+function nearestNode(g: Map<string, GraphNode>, x: number, z: number, r: number,
+  fineOnly = false): string | null {
   let best: string | null = null, bd = r * r;
   for (const [k, n] of g) {
+    if (fineOnly && n.c) continue;
     const d = (n.x - x) ** 2 + (n.z - z) ** 2;
     if (d < bd) { bd = d; best = k; }
   }
   return best;
 }
-let goalRoute: Array<[number, number]> | null = null;
+/** The solved line, and which tier each point came from: 0 the fine survey,
+ *  1 the chart's coarse network. The tier is not decoration — the autopilot is
+ *  only allowed to STEER on the fine half (see goalAhead). */
+let goalRoute: Array<[number, number, number]> | null = null;
 let goalSolveAt = 0;
 let goalSolveFor = '';
 const goalSolveStat = { runs: 0, ms: 0, nodes: 0, found: 0, failed: 0, last: '' };
@@ -10696,8 +10801,11 @@ function solveGoalRoute(): void {
   goalSolveStat.runs++;
   const g = roadGraph();
   goalSolveStat.nodes = g.size;
-  const from = nearestNode(g, state.x, state.z, 120);
-  goalSolveFor = `${goal.name}|${osmDone.size}`;
+  // THE TRUCK STARTS ON THE SURVEY. Its nearest node has to be a fine one:
+  // beginning a route on a simplified line would hand the autopilot a first
+  // leg that is nowhere near the road it is actually standing on.
+  const from = nearestNode(g, state.x, state.z, 120, true);
+  goalSolveFor = `${goal.name}|${osmDone.size}|${ovWayV}`;
   if (!from) {
     goalRoute = null;
     goalSolveStat.failed++;
@@ -10754,16 +10862,17 @@ function solveGoalRoute(): void {
     return;
   }
   goalShortM = bestGap;
-  const out: Array<[number, number]> = [];
+  const out: Array<[number, number, number]> = [];
   for (let k: string | undefined = to; k !== undefined; k = prev.get(k)) {
     const n = g.get(k);
-    if (n) out.push([n.x, n.z]);
+    if (n) out.push([n.x, n.z, n.c ? 1 : 0]);
     if (k === from) break;
   }
   out.reverse();
   goalRoute = out.length >= 2 ? out : null;
   goalSolveStat.found++;
-  goalSolveStat.last = `${out.length} nodes, ${Math.round(bestGap)}m short`;
+  const cn = out.filter((p) => p[2]).length;
+  goalSolveStat.last = `${out.length} nodes (${cn} coarse), ${Math.round(bestGap)}m short`;
   goalSolveStat.ms = performance.now() - t0;
 }
 /** Where we are on the solved route and what is left of it — the same shape
@@ -10773,6 +10882,13 @@ function goalAhead(x: number, z: number, reach: number): Array<[number, number]>
   if (!rt || rt.length < 2) return null;
   let bi = 1, bt = 0, bd = Infinity;
   for (let i = 1; i < rt.length; i++) {
+    // ONLY THE SURVEYED HALF IS A LINE TO DRIVE. A coarse leg is a z10
+    // polyline: right about which valley the road goes up, wrong by fifty to a
+    // hundred metres about where it is, and following one would steer the
+    // truck off the tarmac with complete confidence. So the search for "where
+    // am I on the route" never lands on a coarse leg either — the nearest
+    // point on one is not a position on anything the truck can drive.
+    if (rt[i][2] || rt[i - 1][2]) continue;
     const dx = rt[i][0] - rt[i - 1][0], dz = rt[i][1] - rt[i - 1][1];
     const t = clamp(((x - rt[i - 1][0]) * dx + (z - rt[i - 1][1]) * dz) / (dx * dx + dz * dz || 1), 0, 1);
     const px = rt[i - 1][0] + dx * t, pz = rt[i - 1][1] + dz * t;
@@ -10789,6 +10905,12 @@ function goalAhead(x: number, z: number, reach: number): Array<[number, number]>
   ]];
   let run = 0;
   for (let i = bi; i < rt.length && run < reach; i++) {
+    // AND THE DRIVING LINE STOPS WHERE THE SURVEY DOES. Past the handover the
+    // plan is still a plan — the chart draws the whole of it, and that is most
+    // of the point — but the autopilot gets a shorter horizon and the junction
+    // bias carries it the rest of the way, which is exactly what that bias was
+    // built for: driving while the map fills in.
+    if (rt[i][2]) break;
     run += Math.hypot(rt[i][0] - pts[pts.length - 1][0], rt[i][1] - pts[pts.length - 1][1]);
     pts.push([rt[i][0], rt[i][1]]);
   }
@@ -20047,6 +20169,33 @@ function ovInkRefresh(): void {
 /** A place the chart can write on the land: rank 0 city … 3 hamlet, 4 peak. */
 interface OvPlace { name: string; x: number; z: number; y: number; rank: number }
 const ovPlaces = new Map<string, OvPlace>();
+/**
+ * ── THE COARSE ROAD NETWORK, KEPT ──
+ *
+ * The overview tiles have always arrived as tagged polylines and been spent
+ * on ribbons: "a backdrop nothing samples", in the layer's own words. That was
+ * true of the picture and false of the need. The router's graph is built from
+ * `roadGrid`, which is the FINE ring and stops around five kilometres out, so
+ * a goal thirty kilometres away had no path — not because the search failed
+ * but because the only roads that go there were drawn and thrown away.
+ *
+ * So the drivable ones are kept, in world metres, exactly as `ovPlaces` keeps
+ * the names. Raw geometry rather than the clipped pieces the ribbons use: a
+ * way crossing three tiles arrives three times and the node matcher collapses
+ * the shared ends (they are the same OSM nodes, to the metre), which is what
+ * makes the network continuous across a tile boundary instead of a row of
+ * disconnected stubs.
+ */
+interface OvWay { pts: Array<[number, number]>; hw: number; name: string }
+const ovWays = new Map<string, OvWay[]>();
+/** Bumped whenever the coarse network changes, so a solve can tell. */
+let ovWayV = 0;
+/** A half-width in metres per class, standing in for the fine survey's `hw` so
+ *  one cost model serves both tiers: a trunk road is not a lane. */
+const OV_HW: Record<string, number> = {
+  motorway: 7, trunk: 6.5, primary: 5.5, secondary: 4.5, tertiary: 4,
+  motorway_link: 4, trunk_link: 4, primary_link: 4, unclassified: 3.5, residential: 3.5,
+};
 const OV_RANK: Record<string, number> = { city: 0, town: 1, village: 2, hamlet: 3 };
 /** The finest overview level whose 5×5 ring still fills the view. */
 function ovLevelFor(radius: number): number {
@@ -20062,6 +20211,7 @@ function setOvLevel(z: number): void {
   for (const m of ovMeshes.values()) { m.position.y -= 15; ovRetired.push(m); }
   ovMeshes.clear();
   ovTiles.clear();
+  ovWays.clear(); ovWayV++;    // the level swapped; the coarse graph is stale
 }
 function dropRetiredOv(): void {
   for (const m of ovRetired) { ovGroup.remove(m); m.geometry.dispose(); }
@@ -20231,6 +20381,15 @@ function buildOvTile(key: string, x: number, y: number, z: number,
     }
     const style = OV_STYLE.find(([match]) => match(t));
     if (!style || w.geometry.length < 2) continue;
+    // KEPT FOR THE ROUTER, not for the picture — see ovWays. Drivable only: a
+    // railway and a coastline are drawn by the same layer and are not roads.
+    if (t.highway && !/^(path|footway|cycleway|steps|track|bridleway|construction|proposed)$/.test(t.highway)) {
+      const pts: Array<[number, number]> = w.geometry.map(([wla, wlo]) => toLocal(wla, wlo));
+      const arr = ovWays.get(key);
+      const one = { pts, hw: OV_HW[t.highway] ?? 3, name: t.name ?? '' };
+      if (arr) arr.push(one); else ovWays.set(key, [one]);
+      ovWayV++;
+    }
     // ON THE LINE the far chart holds the minimap's rule: a road appears once
     // the survey has ANY of it, or the docket runs through it. Rail, coastline
     // and the waterways are terrain's infrastructure — chart, not survey — and
@@ -22956,7 +23115,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     for (const m of farMeshes.values()) { farGroup.remove(m); m.geometry.dispose(); }
     farMeshes.clear(); farTiles.clear(); farCoverHit.clear(); farTint.clear(); farRasters.clear();
     for (const m of ovMeshes.values()) { ovGroup.remove(m); m.geometry.dispose(); }
-    ovMeshes.clear(); ovTiles.clear(); ovPlaces.clear();
+    ovMeshes.clear(); ovTiles.clear(); ovPlaces.clear(); ovWays.clear(); ovWayV++;
     for (const child of [...worldGroup.children]) {
       if (child === farGroup || child === ovGroup) continue;
       worldGroup.remove(child);
@@ -30621,7 +30780,7 @@ interface CpDraw { x: number; y: number; tx: number; ty: number; got: boolean; a
 let cpDraw: CpDraw[] = [];
 /** One screen-space stretch of the active way on the chart — the line the
  *  pips are pearls on. Built only in top mode. */
-interface RoadSeg { x1: number; y1: number; x2: number; y2: number; task: boolean; route?: boolean; d: number }
+interface RoadSeg { x1: number; y1: number; x2: number; y2: number; task: boolean; route?: boolean; far?: boolean; d: number }
 let roadSegs: RoadSeg[] = [];
 // The line is drawn from the way's REAL centreline geometry, not by joining
 // checkpoints: the survey lays checkpoints fragment by fragment in tile-load
@@ -30632,7 +30791,7 @@ let roadSegs: RoadSeg[] = [];
 // frame, because a cached projection slides against the scene the moment the
 // camera pans.
 interface RoadLineSeg { ax: number; ay: number; az: number; bx: number; by: number; bz: number;
-  mx: number; mz: number; task: boolean; route?: boolean }
+  mx: number; mz: number; task: boolean; route?: boolean; far?: boolean }
 let roadLineWorld: RoadLineSeg[] = [];
 let roadLineKey = ''; let roadLineAt = -1e9;
 function refreshRoadLine(via: string | undefined, cur: string | undefined, now: number): void {
@@ -30686,11 +30845,17 @@ function refreshRoadLine(via: string | undefined, cur: string | undefined, now: 
   // a line you are going to drive, not a road that exists.
   if (goalRoute && goalRoute.length >= 2) {
     for (let i = 1; i < goalRoute.length && roadLineWorld.length < 1100; i++) {
-      const [ax, az] = goalRoute[i - 1], [bx, bz] = goalRoute[i];
+      const [ax, az, at] = goalRoute[i - 1], [bx, bz, bt] = goalRoute[i];
       roadLineWorld.push({
         ax, ay: groundAt(ax, az) + 1.2, az,
         bx, by: groundAt(bx, bz) + 1.2, bz,
+        // THE PLAN HAS TWO CONFIDENCES NOW and the chart says which. The near
+        // half is the surveyed road and the truck can be steered down it; the
+        // far half is the chart's own coarse network, right about the valley
+        // and out by a hundred metres about the tarmac. Drawing them alike
+        // would promise a precision the far half does not have.
         mx: (ax + bx) / 2, mz: (az + bz) / 2, task: false, route: true,
+        far: !!(at || bt),
       });
     }
   }
@@ -30728,7 +30893,7 @@ function projectRoadLine(): void {
     roadSegs.push({
       x1, y1,
       x2: (poiVec.x * 0.5 + 0.5) * innerWidth, y2: (-poiVec.y * 0.5 + 0.5) * innerHeight,
-      task: s.task, route: s.route, d: Math.hypot(s.mx - state.x, s.mz - state.z),
+      task: s.task, route: s.route, far: s.far, d: Math.hypot(s.mx - state.x, s.mz - state.z),
     });
   }
 }
@@ -37729,12 +37894,17 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         // enough to sit inside the chart's own language, dashed so it never
         // reads as another road, and unmistakably the plan rather than the
         // ground.
+        // …AND THE PLAN ITSELF HAS TWO HALVES. Past the survey the route is
+        // the chart's coarse network — the right valley, the wrong hundred
+        // metres — so it is drawn fainter and at a longer stride: still the
+        // plan, visibly less certain, and never mistakable for a road anyone
+        // has driven.
         hctx.fillStyle = pass === 0 ? UI.ink : s.route ? UI.good : UI.gold;
-        hctx.globalAlpha = pass === 0 ? (s.route ? 0.45 : 0.7)
-          : (s.route ? 0.5 : 0.6) + 0.35 * near;
+        hctx.globalAlpha = (pass === 0 ? (s.route ? 0.45 : 0.7)
+          : (s.route ? 0.5 : 0.6) + 0.35 * near) * (s.far ? 0.55 : 1);
         const n = Math.max(1, Math.round(Math.hypot(x2 - x1, y2 - y1) / 2));
         for (let i = 0; i <= n; i++) {
-          if (s.route && (i & 1)) continue;              // the dots of the plan
+          if (s.route && (i % (s.far ? 4 : 2))) continue;   // the dots of the plan
           const x = Math.round(x1 + ((x2 - x1) * i) / n);
           const y = Math.round(y1 + ((y2 - y1) * i) / n);
           if (pass === 0) hctx.fillRect(x - 1, y - 1, s.route ? 2 : 3, s.route ? 2 : 3);
@@ -39262,10 +39432,38 @@ function setClean(on: boolean): void {
 (window as unknown as { __route?: object }).__route = (force?: boolean): object => {
   if (force) { goalSolveAt = performance.now(); solveGoalRoute(); }
   const rt = goalRoute;
-  let km = 0;
-  if (rt) for (let i = 1; i < rt.length; i++) km += Math.hypot(rt[i][0] - rt[i - 1][0], rt[i][1] - rt[i - 1][1]);
+  let km = 0, fineKm = 0;
+  if (rt) {
+    for (let i = 1; i < rt.length; i++) {
+      const l = Math.hypot(rt[i][0] - rt[i - 1][0], rt[i][1] - rt[i - 1][1]);
+      km += l;
+      if (!rt[i][2] && !rt[i - 1][2]) fineKm += l;
+    }
+  }
+  const drive = goalAhead(state.x, state.z, 200);
   return { goal: goal?.name ?? null, pts: rt?.length ?? 0, km: +(km / 1000).toFixed(2),
-    shortM: Math.round(goalShortM), onIt: !!goalAhead(state.x, state.z, 200), ...goalSolveStat };
+    // WHAT IS PLANNED AND WHAT IS DRIVEABLE ARE NOT THE SAME NUMBER any more.
+    // `fineKm` is the surveyed part the autopilot may steer on; the rest is a
+    // corridor the chart draws and the junction bias drives toward.
+    fineKm: +(fineKm / 1000).toFixed(2),
+    coarsePts: rt?.filter((p) => p[2]).length ?? 0,
+    driveTo: drive ? drive.length : 0,
+    graph: graphStat, ovWays: [...ovWays.values()].reduce((n, l) => n + l.length, 0),
+    shortM: Math.round(goalShortM), onIt: !!drive, ...goalSolveStat };
+};
+/** The coarse network the chart fetched and the router now walks. */
+(window as unknown as { __ovroads?: object }).__ovroads = (): object => {
+  let ways = 0, pts = 0, far = 0;
+  for (const l of ovWays.values()) {
+    for (const w of l) {
+      ways++; pts += w.pts.length;
+      for (const [px, pz] of w.pts) far = Math.max(far, Math.hypot(px - osmCarX, pz - osmCarZ));
+    }
+  }
+  return { tiles: ovWays.size, ways, pts, v: ovWayV, level: ovZ,
+    reachKm: +(far / 1000).toFixed(2),
+    handoverM: Number.isFinite(osmRingR) ? Math.round(osmRingR * OV_ROUTE_IN) : null,
+    fineRingM: Number.isFinite(osmRingR) ? Math.round(osmRingR) : null };
 };
 (window as unknown as { __goal?: object }).__goal =
   (name?: string | null, x?: number, z?: number): object | null => {
