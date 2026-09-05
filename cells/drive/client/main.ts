@@ -10753,9 +10753,18 @@ function roadGraph(): Map<string, GraphNode> {
     for (const n of g.values()) ds.push(Math.hypot(n.x - osmCarX, n.z - osmCarZ));
     ds.sort((a, b) => a - b);
     const edge = ds[Math.min(ds.length - 1, Math.floor(ds.length * 0.85))];
-    // A floor, so a world that has streamed almost nothing does not put the
-    // chart's roads under the wheels.
-    inner = clamp(Math.min(budget, edge), 250, budget);
+    // AND NO FLOOR UNDER IT. A floor was the obvious guard — do not put the
+    // chart's roads under the wheels in a world that has streamed almost
+    // nothing — and it broke the one property that makes this work. The edge
+    // is a PERCENTILE, so fifteen per cent of the surveyed nodes lie beyond it
+    // by construction and there is always something to portal from. A fixed
+    // 250m does not: measured on a network whose whole extent was inside that,
+    // it put the handover past every node in the graph, left nothing on the
+    // survey side of it, and made zero portals for the third run running. The
+    // percentile is its own floor — a network three kilometres across puts the
+    // edge at two and a half, not at a hundred metres — and where the survey
+    // really is only a car park, the chart's roads are better than nothing.
+    inner = Math.min(budget, edge);
   }
   const coarse: string[] = [];
   if (Number.isFinite(inner)) {
