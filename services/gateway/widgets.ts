@@ -11,6 +11,7 @@
  */
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { mcpUiChannelEnabled } from '../../platform/runtime';
 import type { ServiceContext } from '../../platform/runtime';
 
 export const UI_MIME = 'text/html;profile=mcp-app';
@@ -190,9 +191,15 @@ async function resolveCellRenderer(uri: string, ctx: ServiceContext): Promise<Ui
 /** Resolve a `ui://` widget URI to its contents, or null if unknown. `ui://parc/card`
  *  is the platform floor (served from this bundle); `ui://@owner/name/<path>` federates
  *  to the owning cell (ADR-0039). The card reuses these over the host proxy; mermaid/d3
- *  lazy-load from the jsDelivr CDN, declared in `_meta.ui.csp.resourceDomains`. */
+ *  lazy-load from the jsDelivr CDN, declared in `_meta.ui.csp.resourceDomains`.
+ *
+ *  The CARD is withheld while the structured/UI channel is disabled (`MCP_UI_CHANNEL`):
+ *  no tool advertises it and no result carries the structuredContent it renders, so
+ *  serving it would only hand a host an empty shell. Cell-authored renderers keep
+ *  resolving — the home surface federates those in-page, independent of the card. */
 export function resolveUiResource(uri: string, ctx?: ServiceContext): UiResource | Promise<UiResource | null> | null {
   if (uri === CARD_URI) {
+    if (!mcpUiChannelEnabled()) return null;
     return {
       uri,
       mimeType: UI_MIME,
@@ -211,8 +218,9 @@ export function resolveUiResource(uri: string, ctx?: ServiceContext): UiResource
   return null;
 }
 
-/** Descriptors for `resources/list`. */
+/** Descriptors for `resources/list` — empty while the structured/UI channel is off. */
 export function listUiResources(): Array<{ uri: string; name: string; mimeType: string; description: string }> {
+  if (!mcpUiChannelEnabled()) return [];
   return [
     {
       uri: CARD_URI,

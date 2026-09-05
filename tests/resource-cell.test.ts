@@ -265,54 +265,98 @@ describe('resource cell (MCP gateway, read/act)', () => {
     expect(result.instructions).toContain('read("$catalog"');
   });
 
-  it('initialize declares the MCP-Apps ui extension (nested) + resources (ADR-0034)', async () => {
+  // ─── the structured/UI channel is DISABLED pending rework (MCP_UI_CHANNEL) ───
+  //
+  // The ADR-0034/0039 behaviour is not deleted, only withheld, so it is pinned
+  // from both sides: off by default, and byte-identical when the flag is set.
+
+  it('initialize does NOT declare the MCP-Apps ui extension while the channel is disabled', async () => {
     const init = await mcp('creator', 'initialize', { protocolVersion: '2025-06-18' });
-    const caps = (init.result as { capabilities: Record<string, { mimeTypes?: string[] } & Record<string, unknown>> }).capabilities;
+    const caps = (init.result as { capabilities: Record<string, unknown> }).capabilities;
     expect(caps.tools).toBeDefined();
+    // `resources` stays declared: resources/read still federates cell-authored
+    // renderers to the home surface (ADR-0039), a different consumer than the card.
     expect(caps.resources).toBeDefined();
-    // Spec 2026-01-26: nested under capabilities.extensions with mimeTypes.
-    const ext = (caps.extensions as Record<string, { mimeTypes?: string[] }>)['io.modelcontextprotocol/ui'];
-    expect(ext?.mimeTypes).toContain('text/html;profile=mcp-app');
+    expect(caps.extensions).toBeUndefined();
   });
 
-  it('tools advertise the MCP-Apps widget on the tool definition (_meta.ui), and results carry structuredContent (ADR-0034 Inc 0/1)', async () => {
-    // The tool→UI binding is STATIC on the tool def (host preloads it) — not on the result.
+  it('tools advertise no widget binding and results carry no structuredContent while disabled', async () => {
     const list = await mcp('creator', 'tools/list');
-    const tools = list.result!.tools as Array<{ name: string; _meta?: { ui?: { resourceUri: string; visibility?: string[] } } }>;
-    const whoami = tools.find((t) => t.name === 'whoami')!;
-    expect(whoami._meta?.ui?.resourceUri).toBe('ui://parc/card');
-    expect(whoami._meta?.ui?.visibility).toContain('app');
-    expect(tools.find((t) => t.name === 'read')!._meta?.ui?.resourceUri).toBe('ui://parc/card');
-    // ADR-0039 Inc 2: act is widget-bound too, so an act result's renderer (the
-    // `_render` stamp) actually has a shell to render in.
-    expect(tools.find((t) => t.name === 'act')!._meta?.ui?.resourceUri).toBe('ui://parc/card');
+    const tools = list.result!.tools as Array<{ name: string; _meta?: unknown }>;
+    for (const name of ['whoami', 'read', 'act']) {
+      expect(tools.find((t) => t.name === name)!._meta).toBeUndefined();
+    }
 
-    // Inc 0: an object result is mirrored as structuredContent (the widget's data channel)…
     const res = await mcp('creator', 'tools/call', { name: 'read', arguments: { target: '$catalog' } });
-    const result = res.result as { structuredContent?: { cells?: unknown[] }; _meta?: unknown; content: Array<{ text: string }> };
-    expect(result.structuredContent?.cells).toBeDefined();
-    // …the text channel still carries it for the model; the result no longer carries the ui binding.
-    expect(result.content[0].text).toContain('cells');
+    const result = res.result as { structuredContent?: unknown; _meta?: unknown; content: Array<{ text: string }> };
+    expect(result.structuredContent).toBeUndefined();
+    // The text channel is lossless for an object result — the whole point of the
+    // fallback every text-only caller (including home's mcpCall) parses.
+    expect(JSON.parse(result.content[0].text).cells).toBeDefined();
     expect(result._meta).toBeUndefined();
   });
 
-  it('resources/list + resources/read serve the ui:// widget (ADR-0034 Inc 1)', async () => {
+  it('resources/list omits the card and resources/read refuses it while disabled', async () => {
     const list = await mcp('creator', 'resources/list');
-    const resources = (list.result as { resources: Array<{ uri: string; mimeType: string }> }).resources;
-    expect(resources.some((r) => r.uri === 'ui://parc/card')).toBe(true);
+    const resources = (list.result as { resources: Array<{ uri: string }> }).resources;
+    expect(resources.some((r) => r.uri === 'ui://parc/card')).toBe(false);
 
     const read = await mcp('creator', 'resources/read', { uri: 'ui://parc/card' });
-    const contents = (read.result as { contents: Array<{ uri: string; mimeType: string; text: string }> }).contents;
-    expect(contents[0].uri).toBe('ui://parc/card');
-    expect(contents[0].mimeType).toContain('text/html');
-    expect(contents[0].text).toContain('<!doctype html>');
-    // Unmistakably-ours marker (renders immediately) + the required init handshake.
-    expect(contents[0].text).toContain('parc.land');
-    expect(contents[0].text).toContain('ui/initialize');
-    expect(contents[0].text).toContain('ui/notifications/initialized');
+    expect(read.error?.code).toBe(-32602);
+  });
 
-    const missing = await mcp('creator', 'resources/read', { uri: 'ui://parc/nope' });
-    expect(missing.error?.code).toBe(-32602);
+  describe('MCP_UI_CHANNEL=on restores the structured/UI channel (ADR-0034 Inc 0/1)', () => {
+    beforeEach(() => { process.env.MCP_UI_CHANNEL = 'on'; });
+    afterEach(() => { delete process.env.MCP_UI_CHANNEL; });
+
+    it('initialize declares the MCP-Apps ui extension (nested) + resources', async () => {
+      const init = await mcp('creator', 'initialize', { protocolVersion: '2025-06-18' });
+      const caps = (init.result as { capabilities: Record<string, { mimeTypes?: string[] } & Record<string, unknown>> }).capabilities;
+      expect(caps.resources).toBeDefined();
+      // Spec 2026-01-26: nested under capabilities.extensions with mimeTypes.
+      const ext = (caps.extensions as Record<string, { mimeTypes?: string[] }>)['io.modelcontextprotocol/ui'];
+      expect(ext?.mimeTypes).toContain('text/html;profile=mcp-app');
+    });
+
+    it('tools advertise the MCP-Apps widget on the tool definition (_meta.ui), and results carry structuredContent', async () => {
+      // The tool→UI binding is STATIC on the tool def (host preloads it) — not on the result.
+      const list = await mcp('creator', 'tools/list');
+      const tools = list.result!.tools as Array<{ name: string; _meta?: { ui?: { resourceUri: string; visibility?: string[] } } }>;
+      const whoami = tools.find((t) => t.name === 'whoami')!;
+      expect(whoami._meta?.ui?.resourceUri).toBe('ui://parc/card');
+      expect(whoami._meta?.ui?.visibility).toContain('app');
+      expect(tools.find((t) => t.name === 'read')!._meta?.ui?.resourceUri).toBe('ui://parc/card');
+      // ADR-0039 Inc 2: act is widget-bound too, so an act result's renderer (the
+      // `_render` stamp) actually has a shell to render in.
+      expect(tools.find((t) => t.name === 'act')!._meta?.ui?.resourceUri).toBe('ui://parc/card');
+
+      // Inc 0: an object result is mirrored as structuredContent (the widget's data channel)…
+      const res = await mcp('creator', 'tools/call', { name: 'read', arguments: { target: '$catalog' } });
+      const result = res.result as { structuredContent?: { cells?: unknown[] }; _meta?: unknown; content: Array<{ text: string }> };
+      expect(result.structuredContent?.cells).toBeDefined();
+      // …the text channel still carries it for the model; the result no longer carries the ui binding.
+      expect(result.content[0].text).toContain('cells');
+      expect(result._meta).toBeUndefined();
+    });
+
+    it('resources/list + resources/read serve the ui:// widget', async () => {
+      const list = await mcp('creator', 'resources/list');
+      const resources = (list.result as { resources: Array<{ uri: string; mimeType: string }> }).resources;
+      expect(resources.some((r) => r.uri === 'ui://parc/card')).toBe(true);
+
+      const read = await mcp('creator', 'resources/read', { uri: 'ui://parc/card' });
+      const contents = (read.result as { contents: Array<{ uri: string; mimeType: string; text: string }> }).contents;
+      expect(contents[0].uri).toBe('ui://parc/card');
+      expect(contents[0].mimeType).toContain('text/html');
+      expect(contents[0].text).toContain('<!doctype html>');
+      // Unmistakably-ours marker (renders immediately) + the required init handshake.
+      expect(contents[0].text).toContain('parc.land');
+      expect(contents[0].text).toContain('ui/initialize');
+      expect(contents[0].text).toContain('ui/notifications/initialized');
+
+      const missing = await mcp('creator', 'resources/read', { uri: 'ui://parc/nope' });
+      expect(missing.error?.code).toBe(-32602);
+    });
   });
 
   it('resources/read federates a cell-authored renderer (ui://@owner/name/<path>) via cells.call (ADR-0039)', async () => {
@@ -409,27 +453,45 @@ describe('resource cell (MCP gateway, read/act)', () => {
     });
   });
 
-  it('stamps a cell tool\'s declared renderer onto its result as _render (ADR-0039 Inc 2)', async () => {
-    cellTools = [
-      {
-        name: 'machine-1__define_machine', address: '@c15r/machine', description: 'Define.', inputSchema: { type: 'object' },
-        scope: null, kind: 'act', cellId: 'machine-1', tool: 'define_machine',
-        ui: { renderer: 'ui://@c15r/machine/renderers/define-plan.js', as: 'machine.define_machine' },
-      },
-    ];
+  const RENDERER_TOOL = {
+    name: 'machine-1__define_machine', address: '@c15r/machine', description: 'Define.', inputSchema: { type: 'object' },
+    scope: null, kind: 'act', cellId: 'machine-1', tool: 'define_machine',
+    ui: { renderer: 'ui://@c15r/machine/renderers/define-plan.js', as: 'machine.define_machine' },
+  };
+
+  it('does NOT stamp a cell tool\'s declared renderer while the structured/UI channel is disabled', async () => {
+    // With no card to run it, `_render` has no consumer — stamping it would only
+    // ride along in the model-facing text channel as noise. The declaration on the
+    // capability is untouched; only the stamp stops.
+    cellTools = [RENDERER_TOOL];
     const res = await callTool('creator', 'act', { target: '@c15r/machine.define_machine', input: { name: 'm', dryRun: true } });
     expect(res.isError).toBeUndefined();
-    const out = res.parsed as { echoed?: unknown; _render?: { renderer: string; as: string } };
-    // The gateway forwarded the call AND stamped the tool's renderer directive.
-    expect(out._render).toEqual({ renderer: 'ui://@c15r/machine/renderers/define-plan.js', as: 'machine.define_machine' });
+    const out = res.parsed as { echoed?: unknown; _render?: unknown };
+    expect(out._render).toBeUndefined();
+    // The forward itself is unaffected — only the UI stamp is withheld.
     expect(out.echoed).toEqual({ owner: 'c15r', name: 'machine', tool: 'define_machine', args: { name: 'm', dryRun: true } });
+  });
 
-    // A tool WITHOUT a ui declaration gets no _render (no accidental stamping).
-    cellTools = [
-      { name: 'tools-demo-1__echo', address: '@alice/tools-demo', description: 'Echo.', inputSchema: { type: 'object' }, scope: null, kind: 'act', cellId: 'tools-demo-1', tool: 'echo' },
-    ];
-    const plain = await callTool('creator', 'act', { target: '@alice/tools-demo.echo', input: { x: 1 } });
-    expect((plain.parsed as { _render?: unknown })._render).toBeUndefined();
+  it('stamps a cell tool\'s declared renderer onto its result as _render when re-enabled (ADR-0039 Inc 2)', async () => {
+    process.env.MCP_UI_CHANNEL = 'on';
+    try {
+      cellTools = [RENDERER_TOOL];
+      const res = await callTool('creator', 'act', { target: '@c15r/machine.define_machine', input: { name: 'm', dryRun: true } });
+      expect(res.isError).toBeUndefined();
+      const out = res.parsed as { echoed?: unknown; _render?: { renderer: string; as: string } };
+      // The gateway forwarded the call AND stamped the tool's renderer directive.
+      expect(out._render).toEqual({ renderer: 'ui://@c15r/machine/renderers/define-plan.js', as: 'machine.define_machine' });
+      expect(out.echoed).toEqual({ owner: 'c15r', name: 'machine', tool: 'define_machine', args: { name: 'm', dryRun: true } });
+
+      // A tool WITHOUT a ui declaration gets no _render (no accidental stamping).
+      cellTools = [
+        { name: 'tools-demo-1__echo', address: '@alice/tools-demo', description: 'Echo.', inputSchema: { type: 'object' }, scope: null, kind: 'act', cellId: 'tools-demo-1', tool: 'echo' },
+      ];
+      const plain = await callTool('creator', 'act', { target: '@alice/tools-demo.echo', input: { x: 1 } });
+      expect((plain.parsed as { _render?: unknown })._render).toBeUndefined();
+    } finally {
+      delete process.env.MCP_UI_CHANNEL;
+    }
   });
 
   it('surfaces a cell tool\'s declared argument form on the $catalog entry, but not its renderer (ADR-0041 Inc 3)', async () => {

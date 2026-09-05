@@ -382,6 +382,12 @@ export class PlatformStack extends cdk.Stack {
       // The MCP-Apps card widget (ADR-0034/0035): esbuilt to `app.js` beside the
       // handler, inlined by `widgets.ts` into the `ui://parc/card` resource. Uses the
       // shared `platform/ui` render vocabulary + marked.
+      //
+      // The card and the whole structured/UI channel are DISABLED pending rework:
+      // no `MCP_UI_CHANNEL` env is set, so `mcpUiChannelEnabled()` is false and the
+      // gateway serves neither the card nor `structuredContent` nor the `_meta.ui`
+      // bindings. The bundle keeps building so re-enabling is one env var
+      // (`gateway.fn.addEnvironment('MCP_UI_CHANNEL', 'on')`), not a code change.
       clientEntry: path.join(__dirname, '..', '..', 'services', 'gateway', 'client', 'main.ts'),
       // Both the bare resource identifier (`/mcp`, advertised in the PRM) and its
       // sub-paths. CloudFront's `/mcp/*` pattern does not match the bare `/mcp`.

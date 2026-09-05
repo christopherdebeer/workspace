@@ -31,6 +31,7 @@
  */
 import {
   defineMcpService,
+  mcpUiChannelEnabled,
   withIdentity,
   hasScope,
   hasGrantScope,
@@ -547,8 +548,14 @@ async function buildTypes(ctx: ServiceContext): Promise<{ types: Record<string, 
  * declaration on the tool, delivery on the result — parc can't bind per-tool widgets
  * in `tools/list` (3 tools, one card). Only objects are stamped; arrays/scalars pass
  * through untouched, and a renderer-less capability is unchanged.
+ *
+ * Withheld while the structured/UI channel is disabled (`MCP_UI_CHANNEL`): with no
+ * card to run the renderer, `_render` has no consumer and would only ride along in
+ * the model-facing text channel as noise. The capability's `ui.renderer` declaration
+ * is untouched — only the stamp stops.
  */
 function withRender(result: unknown, cap: Capability): unknown {
+  if (!mcpUiChannelEnabled()) return result;
   if (!cap.ui?.renderer || !result || typeof result !== 'object' || Array.isArray(result)) return result;
   return { ...(result as Record<string, unknown>), _render: { renderer: cap.ui.renderer, as: cap.ui.as ?? cap.target } };
 }
@@ -1045,6 +1052,15 @@ export const handler = defineMcpService({
   // ADR-0034: declare the MCP-Apps UI extension (spec 2026-01-26 nests it under
   // `capabilities.extensions` with the supported `mimeTypes`) + serve the `ui://`
   // widget resources the tools bind to via their `_meta.ui.resourceUri`.
+  //
+  // DISABLED pending rework (`mcpUiChannelEnabled`, MCP_UI_CHANNEL): the runtime
+  // strips this extension from the advertised handshake, withholds every `ui:`
+  // binding below from `tools/list`, and drops `structuredContent` from results,
+  // so the whole dynamic-UI path is off while these declarations stay intact.
+  // `resources` stays wired: `resources/read` also serves the cell-authored
+  // renderers the home surface federates in-page (ADR-0039), which is a separate
+  // consumer from the conversation card — and `widgets.ts` withholds the card
+  // itself under the same flag.
   capabilities: { extensions: { 'io.modelcontextprotocol/ui': { mimeTypes: [UI_MIME] } } },
   resources: {
     read: (uri: string, ctx: ServiceContext) => resolveUiResource(uri, ctx),
