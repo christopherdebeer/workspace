@@ -32999,6 +32999,15 @@ function telemetryReport(): string {
   L.push(`device ${navigator.hardwareConcurrency ?? '?'} cores · dpr ${devicePixelRatio} · ${innerWidth}x${innerHeight} · ${gpu}`);
   L.push(`ua ${navigator.userAgent.slice(0, 90)}`);
   L.push(`settings tseg ${terrainSeg} · veg ${vegScale} · grass ${grassScale} · refine ${REFINE ? 'on' : 'off'} r${REFINE_R} · worker ${tworker && !tworker.disabled ? 'on' : 'off'} · luma ${lumaAsync ? 'async' : 'sync'}${mem ? ` · heap ${Math.round(mem.usedJSHeapSize / 1048576)}MB` : ''}`);
+  const _treePlacedByFamily = EZ_FAMILIES.map(f => ezTiers[f].reduce((n, t) => n + t.n, 0));
+  const _treePlaced = _treePlacedByFamily.reduce((n, v) => n + v, 0);
+  const _treeTris = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + t.n * t.tris, 0), 0);
+  const _treeBatches = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].filter(t => t.n > 0).length, 0);
+  const _treeCasting = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + (t.n > 0 && t.mesh.castShadow ? 1 : 0), 0), 0);
+  const _treeVariants = treeVariantCap >= 1000 ? 'ALL' : String(treeVariantCap);
+  const _treeMix = EZ_FAMILIES.map((f, i) => `${f[0]}${_treePlacedByFamily[i]}`).join('/');
+  const _treeEdge = EZ_FAMILIES.map(f => `${f[0]}${ezEdgeLast[f]}`).join('/');
+  L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge}`);
   L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · frame ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(>${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
   L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);
   L.push(`main thread: in tick ${(sessTick / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(sessTick)} of wall) p50 ${tpct(0.5)} p95 ${tpct(0.95)} p99 ${tpct(0.99)} max ${tpct(1)} · off-tick tasks ${(sessOff / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(sessOff)}) · gap ${((gapRow?.ms ?? 0) / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(gapRow?.ms ?? 0)}) — a gap that dwarfs the tick is the GPU or vsync, not this code`);
@@ -34107,7 +34116,7 @@ function tick(now: number): void {
   if (seaOn && (surfKind === 'road' || surfKind === 'track')) {
     noteDryLand(state.x, state.z, groundAt(state.x, state.z));
   }
-  if (now > vegAt) { vegAt = now + 900; refreshVeg(); }
+  if (now > vegAt) { vegAt = now + 900; const _treeRefreshAt = performance.now(); refreshVeg(); profAdd('treeRefresh', _treeRefreshAt); }
   else if (now > swardAt) { swardAt = now + 700; if (!swardGpu) refreshSward(); }
   // The GPU sward is uniform writes and a field rebuild only when the truck
   // leaves the middle of it, so it runs every frame rather than on a slow tick.
