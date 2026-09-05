@@ -33003,7 +33003,12 @@ function telemetryReport(): string {
   const _treePlaced = _treePlacedByFamily.reduce((n, v) => n + v, 0);
   const _treeTris = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + t.n * t.tris, 0), 0);
   const _treeBatches = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].filter(t => t.n > 0).length, 0);
-  const _treeCasting = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + (t.n > 0 && t.mesh.castShadow ? 1 : 0), 0), 0);
+  // `t.mesh` as merged from the cell: EzTier carries the NEAR/FAR shadow split
+  // (only the near half is inside the shadow map and casts), so there is no
+  // single mesh and this read `undefined.castShadow` — a crash the moment the
+  // overlay opened. esbuild strips the types, so it reached the deployed cell
+  // without a murmur; tsc is the only reason it is not still there.
+  const _treeCasting = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + (t.n > 0 && t.near.castShadow ? 1 : 0), 0), 0);
   const _treeVariants = treeVariantCap >= 1000 ? 'ALL' : String(treeVariantCap);
   const _treeMix = EZ_FAMILIES.map((f, i) => `${f[0]}${_treePlacedByFamily[i]}`).join('/');
   const _treeEdge = EZ_FAMILIES.map(f => `${f[0]}${ezEdgeLast[f]}`).join('/');
