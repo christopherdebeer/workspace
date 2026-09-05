@@ -32,6 +32,12 @@ execFileSync('npx', ['esbuild', join(HERE, '../client/climate.ts'), '--bundle', 
   `--outfile=${built}`], { cwd: join(HERE, '../../..'), stdio: 'pipe' });
 const { siteAt, beltRainAt, upwindAt, treelineAt, seaTempAt } =
   await import(pathToFileURL(built).href);
+// The baked coast field, bundled separately — atob is a browser global that
+// node has had since 16, so the module loads unchanged.
+const coastBuilt = join(tmp, 'coast.mjs');
+execFileSync('npx', ['esbuild', join(HERE, '../client/coast.ts'), '--bundle', '--format=esm',
+  `--outfile=${coastBuilt}`], { cwd: join(HERE, '../../..'), stdio: 'pipe' });
+const { coastKm, onLand } = await import(pathToFileURL(coastBuilt).href);
 
 let bad = 0;
 const ok = (name, cond, saw) => {
@@ -48,12 +54,14 @@ const band = (name, v, lo, hi) =>
  * `tilt` the fall per metre and `face` which way it falls (+1 toward the
  * equator, −1 away).
  */
-const at = (lat, elev, coastM, relief = {}) => {
-  const { up = 0, tilt = 0, face = 0, upwind = 0 } = relief;
+const at = (lat, elev, coastKm, relief = {}) => {
+  const { up = 0, tilt = 0, face = 0, upwind = 0, seaM = null } = relief;
   const env = {
     latAt: () => lat,
     latAbsAt: () => Math.abs(lat),
-    coastAt: () => coastM,
+    // Kilometres for continentality; metres, separately, for salt.
+    coastKmAt: () => coastKm,
+    seaNearAt: () => seaM,
     coverAt: () => null,
     groundAt: (x, z) => {
       const r = Math.hypot(x, z);
@@ -78,7 +86,7 @@ ok('the trades blow easterly, the westerlies do not',
   [upwindAt(15), upwindAt(45), upwindAt(70)]);
 
 console.log('\n── CAPE PENINSULA · fynbos (real: 17°C, ~515mm, summer-dry, maritime) ──');
-const cape = at(-34.0, 200, 2000);
+const cape = at(-34.0, 200, 2);
 band('mean temperature', cape.heatC, 13, 21);
 band('annual water', cape.waterMm, 250, 900);
 ok('summer-dry, not winter-dry', cape.summerDry > 0.5 && cape.summerDry > cape.winterDry * 2, cape);
@@ -86,8 +94,8 @@ ok('maritime', cape.contin < 0.15, cape.contin);
 ok('frost-free', cape.frostDays < 20, cape.frostDays);
 
 console.log('\n── YOSEMITE · oak woodland to treeline (real: valley 1200m ~11°C, treeline ~3200m) ──');
-const yoValley = at(37.75, 1200, 250000);
-const yoHigh = at(37.75, 3000, 250000);
+const yoValley = at(37.75, 1200, 250);
+const yoHigh = at(37.75, 3000, 250);
 band('valley temperature', yoValley.heatC, 6, 15);
 ok('valley is below the treeline', yoValley.treelineDelta < -800, yoValley.treelineDelta);
 ok('3000m is near or above it', yoHigh.treelineDelta > -500, yoHigh.treelineDelta);
@@ -95,17 +103,17 @@ ok('summer-dry at this latitude too', yoValley.summerDry > 0.4, yoValley.summerD
 ok('more continental than the Cape', yoValley.contin > cape.contin, [yoValley.contin, cape.contin]);
 
 console.log('\n── SWISS ALPS · broadleaf to krummholz (real: 1600m ~4°C, treeline ~2200m) ──');
-const alpLow = at(46.3, 700, 500000);
-const alpHigh = at(46.3, 2400, 500000);
-band('1600m-equivalent temperature', at(46.3, 1600, 500000).heatC, 0, 9);
+const alpLow = at(46.3, 700, 500);
+const alpHigh = at(46.3, 2400, 500);
+band('1600m-equivalent temperature', at(46.3, 1600, 500).heatC, 0, 9);
 ok('700m is well below the treeline', alpLow.treelineDelta < -1000, alpLow.treelineDelta);
 ok('2400m is above it', alpHigh.treelineDelta > 0, alpHigh.treelineDelta);
 ok('hard winters', alpHigh.frostDays > 150, alpHigh.frostDays);
 
 console.log('\n── COASTAL CALIFORNIA · the fixture no climate model can pass ──');
 // One climate cell. Two places. The whole argument for a local term.
-const ridge = at(37.0, 300, 3000, { tilt: 0.35, face: 1 });
-const ravine = at(37.0, 300, 3000, { up: 120, tilt: 0.35, face: -1 });
+const ridge = at(37.0, 300, 3, { tilt: 0.35, face: 1 });
+const ravine = at(37.0, 300, 3, { up: 120, tilt: 0.35, face: -1 });
 ok('identical climate', Math.abs(ridge.waterMm - ravine.waterMm) < 1
   && Math.abs(ridge.heatC - ravine.heatC) < 0.01, [ridge.waterMm, ravine.waterMm]);
 ok('the sun-facing slope takes more sun', ridge.insolation > 0.7, ridge.insolation);
@@ -114,8 +122,8 @@ ok('and the ravine keeps its water', ravine.wetness > 0.6 && ridge.wetness < 0.2
   [ravine.wetness, ridge.wetness]);
 
 console.log('\n── TROPICAL RAINFOREST vs SAVANNA (Manaus 3°S ~2300mm; Zambia 13°S winter-dry) ──');
-const manaus = at(-3.1, 60, 1400000);
-const savanna = at(-13.0, 1100, 800000);
+const manaus = at(-3.1, 60, 1400);
+const savanna = at(-13.0, 1100, 800);
 band('Manaus temperature', manaus.heatC, 24, 30);
 band('Manaus water', manaus.waterMm, 1200, 2600);
 ok('Manaus has no dry half-year', manaus.winterDry < 0.35 && manaus.summerDry < 0.2, manaus);
@@ -123,15 +131,15 @@ ok('the savanna does', savanna.winterDry > 0.6, savanna.winterDry);
 ok('…and is drier', savanna.waterMm < manaus.waterMm * 0.8, [savanna.waterMm, manaus.waterMm]);
 
 console.log('\n── MANGROVE COAST vs the same latitude inland ──');
-const mangrove = at(-8.0, 1, 120);
-const inland = at(-8.0, 40, 60000);
+const mangrove = at(-8.0, 1, 0, { seaM: 120 });
+const inland = at(-8.0, 40, 60);
 ok('salt at the waterline', mangrove.salt > 0.5, mangrove.salt);
 ok('none inland', inland.salt < 0.01, inland.salt);
 ok('warm enough for it', mangrove.heatC > 20, mangrove.heatC);
 
 console.log('\n── HOT DESERT vs COLD STEPPE — the pair the five-class model calls one thing ──');
-const sahara = at(25.0, 300, 600000);
-const gobi = at(45.0, 1200, 1600000, { upwind: 2400 });
+const sahara = at(25.0, 300, 600);
+const gobi = at(45.0, 1200, 1600, { upwind: 2400 });
 band('Sahara water', sahara.waterMm, 0, 350);
 band('Gobi water', gobi.waterMm, 0, 400);
 ok('the Sahara does not freeze', sahara.frostDays < 30, sahara.frostDays);
@@ -164,15 +172,15 @@ console.log('\n── against published normals ──');
 console.log('site            model            real       error');
 const NORMALS = [
   // name,          lat,    elev, coast,   up,     realC, realMm, tolC, tolMm
-  ['Cape Town',    -34.0,   200,    2000,     0,   16.7,   515,  3.5,  0.55],
-  ['Yosemite',      37.75, 1200,  250000, -1150,   11.0,   900,  3.5,  0.55],
-  ['Zermatt',       46.0,  1600,  500000, -1200,    3.9,   700,  3.5,  0.55],
-  ['Manaus',        -3.1,    60, 1400000,     0,   27.4,  2300,  3.5,  0.35],
-  ['Lusaka',       -15.4,  1280,  800000,     0,   20.4,   830,  3.5,  0.60],
-  ['Ulaanbaatar',   47.9,  1300, 1600000,  2400,   -0.4,   267,  3.5,  0.55],
-  ['Singapore',      1.3,    15,    5000,     0,   27.8,  2170,  3.5,  0.35],
-  ['Reykjavik',     64.1,    40,    2000,     0,    5.0,   800,  3.5,  0.55],
-  ['Irkutsk',       52.3,   440, 2500000,     0,    1.0,   470,  3.5,  0.55],
+  ['Cape Town',    -34.0,   200,       2,     0,   16.7,   515,  3.5,  0.55],
+  ['Yosemite',      37.75, 1200,     250, -1150,   11.0,   900,  3.5,  0.55],
+  ['Zermatt',       46.0,  1600,     250, -1200,    3.9,   700,  3.5,  0.55],
+  ['Manaus',        -3.1,    60,    1200,     0,   27.4,  2300,  3.5,  0.35],
+  ['Lusaka',       -15.4,  1280,     800,     0,   20.4,   830,  3.5,  0.60],
+  ['Ulaanbaatar',   47.9,  1300,    1380,  2400,   -0.4,   267,  3.5,  0.55],
+  ['Singapore',      1.3,    15,      57,     0,   27.8,  2170,  3.5,  0.35],
+  ['Reykjavik',     64.1,    40,      24,     0,    5.0,   800,  3.5,  0.55],
+  ['Irkutsk',       52.3,   440,    1827,     0,    1.0,   470,  3.5,  0.55],
 ];
 for (const [name, lat, elev, coast, up, realC, realMm, tolC, tolMm] of NORMALS) {
   const s = at(lat, elev, coast, { upwind: up });
@@ -195,8 +203,8 @@ for (const [name, lat, elev, coast, up, realC, realMm, tolC, tolMm] of NORMALS) 
  */
 console.log('\n── the known miss: deserts run cold and wet in this model ──');
 for (const [name, lat, elev, coast, up, realC, realMm] of [
-  ['Tamanrasset', 22.8, 1380, 600000, 0, 22.0, 45],
-  ['Death Valley', 36.5, -60, 250000, 2000, 25.0, 60],
+  ['Tamanrasset', 22.8, 1380, 600, 0, 22.0, 45],
+  ['Death Valley', 36.5, -60, 250, 2000, 25.0, 60],
 ]) {
   const s = at(lat, elev, coast, { upwind: up });
   console.log(`${name.padEnd(14)} ${s.heatC.toFixed(1).padStart(6)}C ${String(Math.round(s.waterMm)).padStart(5)}mm  `
@@ -204,6 +212,62 @@ for (const [name, lat, elev, coast, up, realC, realMm] of [
     + `${(s.heatC - realC).toFixed(1)}C  x${(s.waterMm / realMm).toFixed(1)}`);
   ok(`${name}: still recognisably a desert (under 250mm)`, s.waterMm < 250, Math.round(s.waterMm));
   ok(`${name}: and still hot (over 15C)`, s.heatC > 15, +s.heatC.toFixed(1));
+}
+
+/**
+ * ── AND NOW WITH THE REAL FIELD UNDER IT ──
+ *
+ * Everything above hands `siteAt` a coast distance by hand, which tests the
+ * model and not the data. This drives it from the BAKED field at real
+ * coordinates, so a bake that is upside down, off by a hemisphere or scaled
+ * wrongly fails here rather than in a screenshot three weeks later. The
+ * distances themselves are checked first, because a climate built on a broken
+ * lookup would be wrong in ways that still looked plausible.
+ */
+console.log('\n── the baked coast field, at real coordinates ──');
+for (const [name, lat, lon, lo, hi] of [
+  ['Cape Town',      -34.00,  18.42,    0,   60],
+  ['Reykjavik',       64.14, -21.94,    0,   60],
+  ['Singapore',        1.35, 103.82,    0,   90],
+  ['Zermatt',         46.02,   7.75,  150,  400],
+  ['Yosemite',        37.75,-119.55,  150,  400],
+  ['Manaus',          -3.12, -60.02,  900, 1600],
+  ['Ulaanbaatar',     47.89, 106.92, 1100, 1900],
+  ['Irkutsk',         52.29, 104.30, 1500, 2300],
+]) {
+  const km = coastKm(lat, lon);
+  console.log(`  ${name.padEnd(14)} ${Math.round(km).toString().padStart(5)} km`);
+  ok(`${name}: coast distance in [${lo}, ${hi}] km`, km >= lo && km <= hi, Math.round(km));
+}
+ok('mid-Pacific is sea', !onLand(0, -140), coastKm(0, -140));
+ok('mid-Sahara is land', onLand(23, 12), coastKm(23, 12));
+// A hemisphere flip is the classic bake bug and reads as plausible everywhere
+// except where the two hemispheres disagree, so it is asserted directly.
+ok('the field is not flipped in latitude',
+  coastKm(52.29, 104.30) > 1000 && coastKm(-52.29, 104.30) < 200,
+  [Math.round(coastKm(52.29, 104.3)), Math.round(coastKm(-52.29, 104.3))]);
+
+console.log('\n── the whole chain: baked coast into the site model ──');
+const real = (lat, lon, elev, up = 0) => siteAt({
+  latAt: () => lat, latAbsAt: () => Math.abs(lat),
+  coastKmAt: () => coastKm(lat, lon),
+  seaNearAt: () => null,
+  coverAt: () => null,
+  groundAt: (x, z) => (Math.hypot(x, z) > 10000 ? elev + up : elev),
+}, 0, 0);
+for (const [name, lat, lon, elev, up, realC, tolC] of [
+  ['Reykjavik',   64.14, -21.94,   40,     0,  5.0, 3.5],
+  ['Irkutsk',     52.29, 104.30,  440,     0,  1.0, 3.5],
+  ['Cape Town',  -34.00,  18.42,  200,     0, 16.7, 3.5],
+  ['Manaus',      -3.12, -60.02,   60,     0, 27.4, 3.5],
+  ['Zermatt',     46.02,   7.75, 1600, -1200,  3.9, 3.5],
+]) {
+  const s = real(lat, lon, elev, up);
+  const d = s.heatC - realC;
+  console.log(`  ${name.padEnd(14)} ${s.heatC.toFixed(1).padStart(6)}C  `
+    + `${String(Math.round(s.waterMm)).padStart(5)}mm  cont ${s.contin.toFixed(2)}  `
+    + `(${(d >= 0 ? '+' : '') + d.toFixed(1)}C)`);
+  ok(`${name}: end to end within ${tolC}C`, Math.abs(d) <= tolC, +d.toFixed(1));
 }
 
 console.log(bad ? `\n${bad} FAILED` : '\nall ok');

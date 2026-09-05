@@ -1899,10 +1899,49 @@ Ulaanbaatar +2.9), rain within a factor of 1.5 in the tropics and 2.2
 elsewhere. **The tolerances are the ones the model earns**; tightening them is
 how the next improvement gets noticed instead of absorbed.
 
-**Not yet wired into the world.** `SiteEnv` needs a `coastAt` — nearest
-coastline in metres — and the game has coastline vectors but no distance
-sampler. That is the next increment, and until it exists nothing in the game
-calls `siteAt`.
+- **CONTINENTALITY IS BAKED, NOT STREAMED** (`devtools/bake-coast.mjs` →
+  `coast-baked.ts` → `coast.ts`). It has to be answered at 400km, which is the
+  one scale nothing the game streams reaches — the fine ring stops at 5km and
+  the chart's overview at 47. Natural Earth 110m land (127 features, 5143
+  vertices, 138KB) rasterised to a half-degree mask, chamfer-transformed to the
+  nearest sea cell with a PER-ROW horizontal step (an equirectangular cell is
+  55.6km tall everywhere and narrower away from the equator, so a transform in
+  cells would call Siberia as coastal as the Congo), and stored one byte a cell
+  SQRT-scaled over 0–3000km: half a kilometre of resolution at the coast, twelve
+  in the far interior, which is the right way round.
+  **Bundled rather than fetched**, and that is the deliberate half: 55KB gzipped
+  on a 618KB bundle, against a fetched asset that would leave every climate
+  verdict unevidenced for the first seconds and then CHANGE it — the failure
+  this codebase has recorded from the seat more than once.
+- **AND THE BAKE SPLIT `salt` OFF FROM IT.** The measurement made the case:
+  a half-degree field puts Cape Town at 0km and Singapore at 57. Perfect for a
+  400km e-folding, hopeless for a term that resolves nine hundred metres. So
+  `coastKmAt` (coarse, global, kilometres) and `seaNearAt` (local, metres) are
+  separate inputs, and deriving salt from the coarse one — which the first cut
+  did — would have made every coastal city a mangrove swamp.
+
+**ECOREGIONS ARE THE ONE THING CLIMATE CANNOT DERIVE**, and they arrive through
+the same read-through cache as everything else (`~/eco/v1/{z}/{x}/{y}`,
+`serveEco`). The Cape is an ordinary Mediterranean climate — mild wet winter,
+bone-dry summer, maritime — growing something structurally unlike any other
+Mediterranean climate on earth, and no refinement of a temperature and a
+rainfall reaches it because the difference is not climatic. RESOLVE Ecoregions
+2017 (846 regions in 14 biomes) via ArcGIS Living Atlas, **verified against the
+fixture set before the route was written**: the Cape returns *Fynbos
+shrubland*, Yosemite *Sierra Nevada forests*, Zermatt *Alps conifer and mixed
+forests*, Tamanrasset *West Saharan montane xeric woodlands*.
+One zoom and a coarse one — z5, ~1250km tiles, simplified to 0.05° server-side.
+Measured over the Cape: six features, 52KB gzipped, and the six are exactly the
+distinctions that matter (Fynbos, Renosterveld, Succulent Karoo, Albany
+thickets). 0.02° doubled the payload and moved nothing. An EMPTY tile is a real
+answer and is stored like any other — most of the planet is ocean and has no
+terrestrial ecoregion, and leaving that unwritten makes the commonest tile on
+earth a permanent miss.
+
+**Not yet wired into the world.** The cell route is live-ready and `siteAt` is
+tested end to end from the baked field, but nothing in `main.ts` constructs a
+`SiteEnv` yet, and there is no client-side loader for the eco tiles. That is
+the next increment.
 
 ## Routing across two maps
 

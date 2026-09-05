@@ -510,10 +510,19 @@ export interface SiteEnv extends ClimateEnv {
   /** SIGNED latitude. The hemisphere decides which way a slope faces the sun,
    *  and the existing model only ever needed the absolute value. */
   latAt(x: number, z: number): number;
-  /** Metres to the nearest coastline, or null where the coast is unknown —
-   *  which is not the same as far from it, and is treated as "no evidence"
-   *  rather than "inland". */
-  coastAt(x: number, z: number): number | null;
+  /** KILOMETRES to salt water, coarse and global — the continentality axis and
+   *  nothing else. Null where the coast is unknown, which is not the same as
+   *  far from it and is treated as no evidence rather than as an interior. */
+  coastKmAt(x: number, z: number): number | null;
+  /** METRES to salt water nearby, or null where the local water is unknown.
+   *
+   *  A DIFFERENT QUESTION AT A DIFFERENT SCALE, and it earned its own input by
+   *  being measured: the baked coast field is half-degree, so it puts Cape Town
+   *  at 0km and Singapore at 57 — perfect for a 400km e-folding and hopeless
+   *  for a term that has to resolve nine hundred metres. Deriving `salt` from
+   *  the coarse field would have made every coastal city a mangrove swamp and
+   *  every island interior a dune. */
+  seaNearAt?(x: number, z: number): number | null;
 }
 
 export interface SiteClimate {
@@ -616,12 +625,12 @@ export function siteAt(env: SiteEnv, x: number, z: number): SiteClimate {
   const latAbs = Math.abs(lat);
   let elevAbs = 0;
   try { elevAbs = env.groundAt(x, z); } catch { /* terrain not up yet */ }
-  const coastRaw = env.coastAt(x, z);
+  const coastRaw = env.coastKmAt(x, z);
   const hadCoast = coastRaw !== null;
   // No evidence is not the same as an interior. An unknown coast is treated as
-  // middling rather than dry, so a world that has not streamed its coastline
-  // does not turn every biome continental for the first thirty seconds.
-  const contin = hadCoast ? 1 - Math.exp(-(coastRaw as number) / CONTIN_E) : 0.45;
+  // middling rather than dry, so a world that has not answered for its
+  // coastline does not turn every biome continental.
+  const contin = hadCoast ? 1 - Math.exp(-((coastRaw as number) * 1000) / CONTIN_E) : 0.45;
 
   // ── THE SEA MOVES THE MEAN, NOT JUST THE RANGE ──
   //
@@ -738,10 +747,11 @@ export function siteAt(env: SiteEnv, x: number, z: number): SiteClimate {
 
   // Salt reaches a few hundred metres inland and a few metres up, and nowhere
   // else. Mangrove and dune scrub live in that sliver; the guild above decides
-  // whether it is warm enough for either.
-  const salt = hadCoast
-    ? clamp(1 - (coastRaw as number) / 900, 0, 1) * clamp(1 - Math.max(0, elevAbs) / 6, 0, 1)
-    : 0;
+  // whether it is warm enough for either. It reads the LOCAL sea, never the
+  // continentality field — see seaNearAt.
+  const seaM = env.seaNearAt ? env.seaNearAt(x, z) : null;
+  const salt = seaM === null ? 0
+    : clamp(1 - seaM / 900, 0, 1) * clamp(1 - Math.max(0, elevAbs) / 6, 0, 1);
 
   const treeline = treelineAt(latAbs, 0.5);
   return {

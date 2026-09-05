@@ -818,6 +818,116 @@ const PEAK_CAP = 120;             // per tile, tallest first
 // old window could not get.
 const PEAK_UPSTREAM_MS = 44000;
 const PEAK_ATTEMPT_MS = 26000;
+/**
+ * ══════════════════════════════════════════════════════════════════
+ * ECOREGIONS — the one thing climate cannot derive
+ * ══════════════════════════════════════════════════════════════════
+ *
+ * The site model under `climate.ts` computes heat, water, seasonality and the
+ * rest from physics, and it can reach most of the world that way. It cannot
+ * reach FYNBOS. The Cape is an ordinary Mediterranean climate — mild, wet
+ * winter, bone-dry summer, maritime — that grows something structurally unlike
+ * any other Mediterranean climate on earth. No refinement of a temperature and
+ * a rainfall gets there, because the difference is not climatic: it is who
+ * happened to evolve there. Chaparral, matorral, maquis and kwongan are the
+ * same argument on four other coasts.
+ *
+ * So this is the one place the model reads a MAP instead of computing. RESOLVE
+ * Ecoregions 2017 — 846 terrestrial ecoregions inside 14 biomes, the standard
+ * carve-up — served through the same read-through cache as everything else:
+ * asked once for a tile, banked in the public namespace, served from the edge
+ * afterwards. Verified against the fixture set before the route was written:
+ * the Cape returns "Fynbos shrubland", Yosemite "Sierra Nevada forests",
+ * Zermatt "Alps conifer and mixed forests", Tamanrasset "West Saharan montane
+ * xeric woodlands".
+ *
+ * ── ONE ZOOM, AND IT IS A COARSE ONE ──
+ *
+ * Ecoregions are enormous and their boundaries are fuzzy in nature as well as
+ * in the data, so there is no pyramid: z5 tiles, about 1250km across at the
+ * equator, and the server simplifies to 0.05 degrees on the way out. Measured
+ * over the Cape: six features, 52KB gzipped — an overview tile's weight for a
+ * region's worth of answer, where the alternative was a point query per plant.
+ *
+ * ── AN EMPTY TILE IS AN ANSWER ──
+ *
+ * Most of the planet is ocean and has no terrestrial ecoregion. That must be
+ * stored like any other tile or the commonest tile on earth is a permanent
+ * cache miss — the same rule serveTile records for open country.
+ */
+const ECO_RE = /^\/~\/eco\/v1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
+/** RESOLVE Ecoregions 2017, as published on ArcGIS Living Atlas. */
+const ECO_URL = 'https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services'
+  + '/Resolve_Ecoregions/FeatureServer/0/query';
+/** Degrees of boundary simplification asked of the server. 0.05 is about 5km,
+ *  which is coarser than the 2km climate lattice and finer than any ecoregion
+ *  boundary is real to. 0.02 doubled the payload and moved nothing. */
+const ECO_OFFSET = 0.05;
+const ECO_MS = 20000;
+
+async function serveEco(path: string, m: RegExpMatchArray) {
+  const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
+  // ONE ZOOM. A pyramid over data this coarse would multiply the upstream
+  // traffic and the storage to say the same thing at every level.
+  if (z !== 5 || x >= 2 ** z || y >= 2 ** z) {
+    return respond(400, 'application/json', JSON.stringify({ error: 'eco tiles are z5 only' }));
+  }
+  const b = tileBounds(z, x, y);
+  const env = JSON.stringify({
+    xmin: b.lonW, ymin: b.latS, xmax: b.lonE, ymax: b.latN,
+    spatialReference: { wkid: 4326 },
+  });
+  const q = new URLSearchParams({
+    geometry: env,
+    geometryType: 'esriGeometryEnvelope',
+    spatialRel: 'esriSpatialRelIntersects',
+    outFields: 'ECO_ID,ECO_NAME,BIOME_NUM,BIOME_NAME,REALM',
+    returnGeometry: 'true',
+    maxAllowableOffset: String(ECO_OFFSET),
+    geometryPrecision: '3',
+    outSR: '4326',
+    f: 'geojson',
+  });
+  let raw: { features?: Array<{ properties?: Record<string, unknown>; geometry?: unknown }> };
+  try {
+    const ctl = new AbortController();
+    const bail = setTimeout(() => ctl.abort(), ECO_MS);
+    try {
+      const res = await fetch(`${ECO_URL}?${q}`, { signal: ctl.signal });
+      if (!res.ok) throw new Error(`eco HTTP ${res.status}`);
+      raw = (await res.json()) as typeof raw;
+    } finally { clearTimeout(bail); }
+  } catch (err) {
+    // WRITE NOTHING. A 503 is retried; a stored failure is not.
+    return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {
+      'retry-after': '5', 'cache-control': 'no-store',
+    });
+  }
+  // Trimmed to what a guild rule can use: the id to key a prior on, the biome
+  // for the coarse fallback, and the name so a probe can be read by a human.
+  // Everything else the service carries — colours, areas, NNH status — is the
+  // conservation dataset's business and not this game's.
+  const regions = (raw.features ?? []).map((f) => ({
+    id: Number(f.properties?.ECO_ID ?? -1),
+    biome: Number(f.properties?.BIOME_NUM ?? -1),
+    name: String(f.properties?.ECO_NAME ?? ''),
+    realm: String(f.properties?.REALM ?? ''),
+    g: f.geometry ?? null,
+  })).filter((r) => r.g && r.id >= 0);
+  const payload = JSON.stringify({ v: 1, z, x, y, regions });
+  const gz = gzipSync(Buffer.from(payload, 'utf8'), { level: 9 });
+  try { await putTile(path, gz); } catch { /* best effort */ }
+  return {
+    statusCode: 200,
+    headers: {
+      'content-type': 'application/json; charset=utf-8',
+      'content-encoding': 'gzip',
+      'cache-control': 'public, max-age=604800, immutable',
+    },
+    body: gz.toString('base64'),
+    isBase64Encoded: true,
+  };
+}
 const PEAK_RE = /^\/~\/osm\/peak1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 /** OSM `ele` is free text: "1234", "1234.5", "1234 m", "4,808", and junk.
  *  Metres only — a value in feet is not marked as such often enough to guess,
@@ -1712,6 +1822,8 @@ export const handler = async (event: {
     if (ov) return serveOverview(path, ov);
     const pk = path.match(PEAK_RE);
     if (pk) return servePeaks(path, pk);
+    const eco = path.match(ECO_RE);
+    if (eco) return serveEco(path, eco);
     const cp = path.match(CAMPAIGN_RE);
     if (cp) return serveCampaign(path, cp);
     return respond(404, 'application/json', JSON.stringify({ error: 'no such object' }), {
