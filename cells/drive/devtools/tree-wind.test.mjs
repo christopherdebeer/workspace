@@ -90,6 +90,8 @@ check('wood and stone stay rigid',
   !(on.chain.wood ?? []).includes('wind') && !(on.chain.stone ?? []).includes('wind'),
   { wood: on.chain.wood, stone: on.chain.stone });
 check('the gale reached the model', on.wind.kmh >= GALE - 1, on.wind);
+// 250 FROM is 70 TOWARD, and the gust vector is in the toward convention.
+check('…blowing the way it was asked to', on.wind.toward === 70, on.wind);
 check('no page errors with the trees moving', on.errs.length === 0, on.errs);
 
 const off = await run('treewind-off', 0);

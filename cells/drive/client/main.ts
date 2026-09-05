@@ -24966,7 +24966,9 @@ function truckSpec(): Record<string, number> {
   const k = windU.uWindK.value;
   return {
     kmh: +worldWind.kmh.toFixed(1),
-    bearing: +((Math.atan2(-worldWind.dirX, worldWind.dirZ) * 180) / Math.PI + 360).toFixed(0),
+    // The bearing the air is GOING, not the one it is from — which is the
+    // convention `toDeg` set upstream and the one the gust vector is in.
+    toward: +(((Math.atan2(-worldWind.dirX, worldWind.dirZ) * 180) / Math.PI + 360) % 360).toFixed(0),
     live: live.on,
     lean: +amp.toFixed(3),
     treeK: k,

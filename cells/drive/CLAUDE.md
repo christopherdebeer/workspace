@@ -1829,7 +1829,20 @@ then pixels, because carrying a uniform proves nothing about motion — a shader
 that fails to link logs to the console and throws nothing. Two shots 1.5 sim
 seconds apart in a 70km/h wind, run once with the sway and once with
 `?treewind=0`; the sward moves in both, so the measurement is the difference
-between the runs and never against zero.
+between the runs and never against zero. **Measured**: 31.89% of the frame
+moved with the trees swaying against 16.22% with them rigid — the trees roughly
+double what a gale changes on screen — with no page errors and `wood`/`stone`
+confirmed still rigid.
+
+**FOUND WHILE LOOKING, NOT FIXED: `ezMat` never gets `terrainFx`.** The audit
+reports `ez: ["wind", "grain"]` beside `leaf: ["wind", "terrainFx", "grain"]`,
+so the baked skeletons — which are now EVERY broadleaf, conifer and snag —
+are the one thing in the landscape standing outside the cloud shadows and the
+weather tint that the archetypes, the sward, the stones and the ground all
+take. It is a one-line fix (`terrainFx(ezMat)`) and deliberately not made
+here: it would change the look of every tree in the game, and it may well be
+a considered omission, since the skeletons carry the largest fragment bill in
+the scene and `terrainFx` is not free. Ask before landing it.
 
 ## The chassis
 
