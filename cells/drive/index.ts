@@ -169,14 +169,23 @@ const WEB_ASSETS: Record<string, { file: string; type: string }> = {
  * of one route.
  */
 let bundleStamp: string | null = null;
-function serveServiceWorker() {
+/** The bundle's own fingerprint, computed once. Named here rather than inside
+ *  the service worker's handler because the CLIENT wants it too now — the
+ *  ABOUT page has to be able to say which build the reader is looking at, and
+ *  the first question of any report is which version it was. Hashing app.js
+ *  BEFORE the placeholder is filled keeps it stable: the placeholder is a
+ *  constant, so the stamp does not depend on itself. */
+function stampOf(): string {
   if (bundleStamp === null) {
     try {
       bundleStamp = createHash('sha1')
         .update(readFileSync(join(__dirname, 'app.js'))).digest('hex').slice(0, 12);
     } catch { bundleStamp = 'unstamped'; }
   }
-  const body = webText('sw.js').replace('__DRIVE_SW_BUILD__', bundleStamp);
+  return bundleStamp;
+}
+function serveServiceWorker() {
+  const body = webText('sw.js').replace('__DRIVE_SW_BUILD__', stampOf());
   return respond(200, 'application/javascript; charset=utf-8', body, {
     // The one file that must never come from a stale cache: it is the only
     // thing that can replace a stale cache. Browsers already refuse to reuse a
@@ -1839,7 +1848,8 @@ export const handler = async (event: {
       if (fx) return fx;
     }
     if (path === '/app.js') {
-      return respond(200, 'application/javascript; charset=utf-8', readFileSync(join(__dirname, 'app.js'), 'utf8'), {
+      return respond(200, 'application/javascript; charset=utf-8',
+        readFileSync(join(__dirname, 'app.js'), 'utf8').replace('__DRIVE_BUILD__', stampOf()), {
         'cache-control': 'public, max-age=60',
         'access-control-allow-origin': '*',
       });

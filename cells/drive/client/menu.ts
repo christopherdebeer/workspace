@@ -33,8 +33,8 @@ import { ICON, ICON_FONT, loadIcons } from './icons';
 
 // Screen indices are the probe API (__menutab) and predate the redesign:
 // 0 was the DRIVE tab and is now the splash hub; the rest keep their numbers.
-export const T_DRIVE = 0, T_SURVEY = 1, T_RIG = 2, T_WORLD = 3, T_SYSTEM = 4, T_LINE = 5;
-const TITLES: Record<number, string> = { [T_SURVEY]: 'SURVEYS', [T_RIG]: 'RIG', [T_WORLD]: 'DRIVES', [T_SYSTEM]: 'SETTINGS', [T_LINE]: 'THE LINE' };
+export const T_DRIVE = 0, T_SURVEY = 1, T_RIG = 2, T_WORLD = 3, T_SYSTEM = 4, T_LINE = 5, T_ABOUT = 6;
+const TITLES: Record<number, string> = { [T_SURVEY]: 'SURVEYS', [T_RIG]: 'RIG', [T_WORLD]: 'DRIVES', [T_SYSTEM]: 'SETTINGS', [T_LINE]: 'THE LINE', [T_ABOUT]: 'ABOUT' };
 
 export interface Rect { x: number; y: number; w: number; h: number }
 
@@ -68,6 +68,10 @@ export interface MenuCtx {
   driveStats(): Array<[string, string]>;
   worldRows(): Array<[string, string]>;
   systemRows(): Array<[string, string]>;
+  /** The build's own identity, for the foot of ABOUT — a page that credits
+   *  everyone and cannot say WHICH build the reader is looking at is half a
+   *  page, and the first question of any report is which version it was. */
+  aboutRows(): Array<[string, string]>;
   real(): { on: boolean; err: string };
   surveyHere(): { name: string; tally: string; frac: number; state: string; tone: Tone } | null;
   surveyTotals(): { roads: number; got: number; total: number };
@@ -532,14 +536,17 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       row.addEventListener('click', () => setTab(t));
       nav.appendChild(row);
     }
-    // …and PROGRESS, in the same stack rather than shouting above it. A player
+    // …and SIGN IN, in the same stack rather than shouting above it. A player
     // who never taps it loses nothing, so it reads as one more section — but it
     // is ON THE SPLASH, because a sign-in buried three screens down is a sign-in
     // nobody finds until after they have driven a thousand kilometres.
     //
-    // SIGNED OUT it is the only place that starts the redirect; SIGNED IN it
-    // reports and hands off to SETTINGS. Signing out is a destructive tap and
-    // does not belong on the screen you land on.
+    // ONLY WHEN IT IS A SIGN-IN. Signed in, this row said PROGRESS and did
+    // nothing but hop to SETTINGS — a whole line of the first screen anyone
+    // sees, spent on a redirect to a page already one row above it. The sync
+    // state it reported lives in SETTINGS beside the button that changes it,
+    // which is where a status belongs. Signing out is a destructive tap and
+    // does not belong on the screen you land on either.
     const signRow = el('div', 'm-navrow');
     const signIco = ico(ICON.save), signName = el('span', 'name', ''),
       signSub = el('span', 'sub', ''), signChev = el('span', 'chev', '>');
@@ -549,15 +556,26 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       else setTab(T_SYSTEM);
     });
     updaters.push(() => {
-      const p = ctx.syncPhase();
-      const out = p === 'off';
-      signName.textContent = out ? 'SIGN IN' : 'PROGRESS';
-      signName.style.color = out ? C.gold : C.text;
-      signSub.textContent = out ? 'PROGRESS ON EVERY DEVICE' : ctx.syncNote();
-      signSub.style.color = ctx.syncTone() === 'bad' ? C.bad : C.dim;
-      signChev.style.color = out ? C.gold : C.edge;
+      const out = ctx.syncPhase() === 'off';
+      signRow.style.display = out ? 'flex' : 'none';
+      signName.textContent = 'SIGN IN';
+      signName.style.color = C.gold;
+      signSub.textContent = 'PROGRESS ON EVERY DEVICE';
+      signSub.style.color = C.dim;
+      signChev.style.color = C.gold;
     });
     nav.appendChild(signRow);
+    // ABOUT, and it is not decoration: this world is built out of other
+    // people's surveys — OpenStreetMap's roads, a dozen nations' elevation
+    // data, ESA's land cover — and most of those are given on terms that ASK
+    // to be credited. A game that ships them with no visible attribution is
+    // taking something. It sits on the splash rather than three screens down
+    // for the same reason the sign-in does.
+    const aboutRow = el('div', 'm-navrow');
+    aboutRow.append(ico(ICON.map), el('span', 'name', 'ABOUT'),
+      el('span', 'sub', 'WHOSE MAPS THIS IS BUILT FROM'), el('span', 'chev', '>'));
+    aboutRow.addEventListener('click', () => setTab(T_ABOUT));
+    nav.appendChild(aboutRow);
     // The way home: the attract reel carried this session somewhere else, and
     // the ticket back sits in the stack until it is spent. Hidden otherwise.
     const retRow = el('div', 'm-navrow ret');
@@ -812,6 +830,95 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     }
   }
 
+  /**
+   * ── ABOUT: WHOSE MAPS THIS IS BUILT FROM ──
+   *
+   * Almost nothing in this world is invented. The roads are OpenStreetMap's,
+   * surveyed by people on bicycles with GPS units; the ground is a dozen
+   * nations' elevation programmes; the land cover is ESA's; the weather is
+   * whatever the national forecasters published this morning. Most of it is
+   * given on terms that ASK for credit, and several of those terms are
+   * licences rather than requests. A game that ships them with no visible
+   * attribution is taking something.
+   *
+   * So the list is the real one, and it is kept honest by being derived from
+   * what the code actually calls: every host here appears in the cell's
+   * `connect-src` or is fetched by a devtool that bakes an asset into the
+   * bundle. If a source is added and this page is not, the CSP line is the
+   * place the omission shows.
+   */
+  const CREDITS: Array<[string, string, string, string]> = [
+    // what it gives, who made it, the terms, where to look
+    ['ROADS · PLACES · WATER · BUILDINGS',
+      'OpenStreetMap contributors',
+      'Open Database Licence (ODbL) 1.0',
+      'openstreetmap.org/copyright'],
+    ['THE SAME, QUERIED',
+      'Overpass API — overpass-api.de, kumi.systems, osm.jp, private.coffee',
+      'volunteer infrastructure, used sparingly and cached',
+      'overpass-api.de'],
+    ['PLACE SEARCH',
+      'Nominatim, by the OpenStreetMap Foundation',
+      'ODbL 1.0',
+      'nominatim.openstreetmap.org'],
+    ['ELEVATION — every hill you drive',
+      '© Mapterhorn, aggregating national elevation surveys',
+      'per the sources listed by Mapterhorn',
+      'mapterhorn.com/attribution'],
+    ['LAND COVER — what grows where',
+      'ESA WorldCover 2021 v200 · contains modified Copernicus Sentinel data',
+      'CC BY 4.0',
+      'esa-worldcover.org'],
+    ['WEATHER — cloud, rain, wind',
+      'Open-Meteo, relaying the national weather services',
+      'CC BY 4.0',
+      'open-meteo.com'],
+    ['ECOREGIONS — why the Cape is fynbos',
+      'RESOLVE Ecoregions 2017 · Dinerstein et al., BioScience 67(6)',
+      'CC BY 4.0',
+      'ecoregions.appspot.com'],
+    ['COASTLINES — distance to the sea',
+      'Natural Earth, 110m land',
+      'public domain',
+      'naturalearthdata.com'],
+    ['TREE SKELETONS',
+      'EZ-Tree, by Daniel Greenheck',
+      'MIT',
+      'github.com/dgreenheck/ez-tree'],
+    ['RENDERING',
+      'three.js',
+      'MIT',
+      'threejs.org'],
+    ['THE PIXEL FACE',
+      'Silkscreen, by Jason Kottke',
+      'SIL Open Font Licence 1.1',
+      'kottke.org/plus/type/silkscreen'],
+  ];
+
+  function renderAbout(): void {
+    body.append(el('div', 'm-dimline',
+      'A driving sim over the real world. The world is not ours — it is '
+      + 'surveyed, measured and published by the people and institutions below, '
+      + 'and most of it is given on terms that ask to be credited.'));
+    for (const [what, who, terms, where] of CREDITS) {
+      body.append(el('div', 'm-sect', what));
+      const line = el('div', 'm-row');
+      line.append(el('span', 'name', who));
+      body.append(line);
+      const t = el('div', 'm-dimline', `${terms} · ${where}`);
+      body.append(t);
+    }
+    body.append(el('div', 'm-sect', 'AND THE REST'));
+    body.append(el('div', 'm-dimline',
+      'Everything else — the terrain mesh, the roads as they are drawn, the '
+      + 'water, the flora, the weather model, the truck and how it drives — is '
+      + 'built here from those inputs.'));
+    // WHERE A BUG REPORT GOES. An about page that credits everyone and gives
+    // the reader nowhere to push back is only half a page.
+    body.append(el('div', 'm-sect', 'THIS BUILD'));
+    body.appendChild(kvTable(ctx.aboutRows));
+  }
+
   function renderSettings(): void {
     body.appendChild(kvTable(ctx.systemRows));
     // SIGNING IN IS OPTIONAL AND SAYS SO. A player who never touches this keeps
@@ -992,7 +1099,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     updaters = [];
     renderHead();
     ([
-      renderHome, renderSurveys, renderRig, renderDrives, renderSettings, renderLine,
+      renderHome, renderSurveys, renderRig, renderDrives, renderSettings, renderLine, renderAbout,
     ][tab] ?? renderHome)();
     // FILL THE VALUES BEFORE THE SCREEN IS SEEN. Everything dynamic here is
     // created empty and written by an updater, and the updaters only ran on the

@@ -174,6 +174,12 @@ const ZOOM_MAX = SIGHT_MAX / (CAM.base
   * Math.tan(((CAM.fov / 2) * Math.PI) / 180)
   * Math.max(1, 1 / Math.cos(((90 - CAM.tilt) * Math.PI) / 180))
   * 1.35);
+/** THE BUNDLE'S FINGERPRINT, filled in by the cell as it serves this file —
+ *  the same sha1 of app.js the service worker's cache name carries, so the
+ *  build a player quotes from ABOUT and the build the shell cached are provably
+ *  the same one. Unsubstituted (a dev server, a fixture run) it says so rather
+ *  than lying. */
+const BUILD_STAMP = '__DRIVE_BUILD__'.startsWith('__') ? 'dev' : '__DRIVE_BUILD__';
 const CAR_R = 2.4;            // collision circle — a real car's half-diagonal plus a whisker
 
 // ── geo helpers (local metres around the spawn; x=east, z=south) ───
@@ -40001,6 +40007,14 @@ const menu = createMenu({
   ],
   systemRows: () => [
     ['SOUND', audio.on ? (audio.state === 'running' ? 'ON' : 'NEEDS TAP') : 'OFF'],
+  ],
+  // The build, named where a reader can quote it back. `__BUILD__` is not a
+  // thing here, so the cell's own deployed version is the honest answer and it
+  // is already on the page that served this script.
+  aboutRows: () => [
+    ['CELL', 'drive · @c15r'],
+    ['BUILD', BUILD_STAMP],
+    ['DEVICE', `${navigator.hardwareConcurrency ?? '?'} CORES · DPR ${Math.round(devicePixelRatio * 10) / 10}`],
   ],
   real: () => ({ on: real.on, err: real.err }),
   surveyHere: () => {
