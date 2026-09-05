@@ -1818,6 +1818,16 @@ Two rules used to stand in for physics here, and both were felt from the seat.
   in the noise. `clamp(u / 0.5, -1, 1)` is what a rolling wheel does, and what
   has stopped rolling is held by the latch instead.
 
+**Measured** (`park-air.mjs`, Stelvio, LOOSE): `__launch(14)` gives an apex of
+10.12m against the 9.99m that v²/2g predicts, a median descent acceleration of
+−9.80 m/s², `grounded` 0 for the whole 2.9s of flight and a landing that
+settles to a zero gap. Under the old rule the body was teleported onto the
+terrain the moment the gap passed 6m — about 0.55s in, a third of the way up.
+The same run also caught the model refusing to hold where it should: 39°, 32.5°
+and 19.9° of ground against 28.8°, 28.3° and 17.5° of tyre, so the truck slid
+in all three modes, which is right and is why the audit now hunts for ground
+inside the repose angle before it measures a creep.
+
 Probes: `__phys()` (adds `park` — the latch, the slope in degrees and the
 degrees the surface could hold — plus `air` and `grounded`), `__susp()` (adds
 `air` and `gap`), `__launch(vy)` kicks the sprung body upward so a fall can be
