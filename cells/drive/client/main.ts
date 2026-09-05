@@ -33380,7 +33380,15 @@ function tick(now: number): void {
   // pushing air, no more), and the springs take back over the instant a wheel
   // touches. That re-engagement, against whatever mismatch the landing found,
   // is what makes a landing read as one.
-  if (wasGrounded) {
+  //
+  // FLYING, NOT MERELY LIGHT. A fifth of a second is the threshold, and it is
+  // the difference between a jump and a bump: a descent over broken ground
+  // takes all four wheels off the deck for a frame or two at a time (35% of
+  // frames, measured on the Stelvio descent), and freezing the attitude on
+  // those would stop the body following a hill it is still driving down —
+  // which keeps the wheels drooped, which keeps it "airborne", which is a loop.
+  // Nothing real clears the ground for 200ms without having left it.
+  if (airS <= 0.2) {
     for (let si = 0; si < sn; si++) {
       vPitch += (SUSP.ka * sK * (tPitch - pitchC) - SUSP.da * sD * (vPitch - gradeRate)) * sh;
       pitchC += vPitch * sh;

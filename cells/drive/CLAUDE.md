@@ -1802,6 +1802,11 @@ Two rules used to stand in for physics here, and both were felt from the seat.
   hull rotate in mid-air to lie parallel to terrain it was only flying over.
   In flight the body carries the rate it left with, bled at `exp(-0.6·dt)`; the
   springs re-engage the instant a wheel touches, and that is the landing.
+  **Flying, not merely light**: the freeze needs `airS > 0.2`, because a
+  descent over broken ground lifts all four wheels for a frame or two at a time
+  (35% of frames on the Stelvio descent) and freezing the attitude on those
+  would stop the body following a hill it is still driving down — which keeps
+  the wheels drooped, which keeps it airborne, which is a loop.
 - **GRAVITY DOES NOT NEED FOUR WHEELS** (`gravGrip`). Thrust, braking and
   cornering come out of the contact patch and are rightly scaled by
   `groundedF`; the pull down the hill is not — a truck accelerates at g·sinθ on

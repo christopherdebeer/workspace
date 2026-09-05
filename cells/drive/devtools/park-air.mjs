@@ -40,9 +40,51 @@ const waitS = (s) => d.page.evaluate(([n, cap]) => new Promise((r) => {
 }), [s, FRAME_CAP]);
 
 console.log(`\n── STOPPED, HANDS OFF, ${HOLD_S} sim seconds ──`);
+// ON A ROAD, ON PURPOSE. The first run took its measurement wherever the spot
+// dropped the truck, which at Stelvio is a 35° scree face — a slope no tyre
+// holds, so the model correctly let it go and the run read that as a failure.
+// A road is where "stopped" means anything, and its grade is inside what any
+// surface can hold, which is exactly where the old creep lived.
+// A ROAD FIRST, THEN THE FLATTEST FIELD. Roads are often not streamed in the
+// harness, and the fallback matters: the only way to read the grade at a point
+// is to stand the truck on it, so this drives the search — teleport, let the
+// body seat, read what the latch thinks of the slope, keep the first ground it
+// can actually hold. Without it every run is measured on whatever face the
+// spot happened to drop the truck on.
+const cands = await d.page.evaluate(() => {
+  const s = window.__drive, out = [];
+  for (const want of ['road', 'field', 'grass', 'sand', 'ground']) {
+    for (let r = 0; r < 500 && out.length < 9; r += 7) {
+      for (let a = 0; a < 24 && out.length < 9; a++) {
+        const x = s.x + Math.cos((a / 24) * 6.283) * r, z = s.z + Math.sin((a / 24) * 6.283) * r;
+        if (window.__surfaceAt(x, z) === want) out.push([x - s.x, z - s.z, want, Math.round(r)]);
+      }
+    }
+    if (out.length) break;
+  }
+  return out;
+});
+let road = null;
+for (const c of cands) {
+  await d.page.evaluate((j) => window.__jump(j[0], j[1]), c);
+  await waitS(1.5);
+  const p = await d.page.evaluate(() => window.__phys().park);
+  console.log(`  candidate ${c[2]} ${c[3]}m: ${p.slopeDeg}° against ${p.maxDeg}° of hold`);
+  if (p.slopeDeg <= p.maxDeg) { road = [-c[0], -c[1], c[2], c[3]]; break; }
+}
+if (road) console.log(`standing on ${road[2]} ${road[3]}m from the spot`);
+else console.log('nothing holdable within 500m — measuring where it stands');
+// BACK TO THE SAME PATCH EVERY MODE. Whatever the search settled on is the
+// bench; a mode that lets the truck go would otherwise hand the next one a
+// different hillside and three measurements of three places is not a
+// comparison.
+const bench = await d.page.evaluate(() => [window.__drive.x, window.__drive.z]);
 for (const [mode, mi] of Object.entries(JSON.parse(process.env.MODES ?? '{"LOOSE":1,"REAL":2,"ARCADE":0}'))) {
+  await d.page.evaluate((b) => {
+    window.__jump(b[0] - window.__drive.x, b[1] - window.__drive.z);
+  }, bench);
   await d.page.evaluate((m) => { window.__dial('trac', m); window.__hold(0, 0, 1); }, mi);
-  await waitS(2.5);                                   // brake to a genuine rest
+  await waitS(3);                                     // land, then brake to a rest
   const r = await d.page.evaluate(async ([n, cap]) => {
     window.__hold(0, 0, 0);                           // hands off entirely
     const s = window.__drive;
@@ -58,13 +100,24 @@ for (const [mode, mi] of Object.entries(JSON.parse(process.env.MODES ?? '{"LOOSE
     const p = window.__phys();
     return { m: +Math.hypot(s.x - x0, s.z - z0).toFixed(3), peak: +peak.toFixed(3),
       secs: +(window.__clock().simS - t0).toFixed(2), frames: f, park: p.park,
+      surf: window.__surfaceAt(s.x, s.z),
       kmh: +(Math.abs(p.v) * 3.6).toFixed(2), slide: p.slideV };
   }, [HOLD_S, FRAME_CAP]);
   const rate = r.m / Math.max(r.secs, 0.05);
   console.log(`${mode}: ${JSON.stringify(r)}  →  ${(rate * 100).toFixed(1)} cm/s`);
-  check(`${mode}: parked creep under 1cm/s`, rate < 0.01, { rate, ...r });
-  check(`${mode}: the latch is holding`, r.park?.hold === true, r.park);
+  // THE MODEL'S OWN CLAIM IS THE ASSERTION. Under the repose angle the truck
+  // must not move at all; over it, it must genuinely go — a slope steeper than
+  // the tyres can hold is not a bug, and pinning the truck there would be one.
+  if (r.park?.slopeDeg <= r.park?.maxDeg) {
+    check(`${mode}: on ${r.surf} at ${r.park.slopeDeg}° (holds to ${r.park.maxDeg}°) — latched`,
+      r.park?.hold === true, r.park);
+    check(`${mode}: …and did not move (under 1cm/s)`, rate < 0.01, { rate, ...r });
+  } else {
+    check(`${mode}: at ${r.park?.slopeDeg}° past the ${r.park?.maxDeg}° the surface holds — it slides`,
+      r.park?.hold === false && rate > 0.05, { rate, ...r });
+  }
 }
+
 
 console.log('\n── LAUNCHED, THEN LEFT ALONE ──');
 await d.page.evaluate(() => { window.__dial('trac', 1); window.__hold(0, 0, 1); });
