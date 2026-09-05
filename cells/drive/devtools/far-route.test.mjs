@@ -34,10 +34,22 @@ const check = (name, cond, saw) => {
 };
 
 const d = await openDrive({ spot: SPOT, tag: 'farroute', settle: 25000 });
-// The overview layer only streams while the chart can see it, so open it and
-// give the tiles a chance to land.
-await d.page.evaluate(() => { window.__hold(0, 0, 1); window.__cam?.('chart'); });
-await d.page.waitForTimeout(30000);
+// THE COARSE LAYER ONLY STREAMS FROM THE CHART, AND ONLY ZOOMED OUT. The gate
+// is `camMode === 'top'` plus a view radius wide enough that the fine ring is
+// no longer the better map of itself — which is the whole reason the router
+// could not see these roads either. Open the chart, wind the zoom out, and
+// wait: these are cell-built tiles and a cold one is a live Overpass query.
+await d.page.evaluate(() => {
+  window.__hold(0, 0, 1);
+  window.__cam('top');
+  window.__zoom(60);
+});
+for (let i = 0; i < 8; i++) {
+  await d.page.waitForTimeout(12000);
+  const o = await d.page.evaluate(() => window.__ovroads());
+  console.log(`  +${(i + 1) * 12}s  level ${o.level}  tiles ${o.tiles}  ways ${o.ways}  reach ${o.reachKm}km`);
+  if (o.ways > 40) break;
+}
 
 const ov = await d.page.evaluate(() => window.__ovroads());
 console.log('coarse network:', JSON.stringify(ov));
