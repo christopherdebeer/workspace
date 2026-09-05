@@ -19932,6 +19932,15 @@ async function loadPeakTile(x: number, y: number): Promise<void> {
  * marked and the draw pass ghosts it, which is the same law the POI pins
  * already follow for a place behind a ridge.
  */
+/** Is the earth's own bulge in front of this summit? See the gate above. */
+function peakUnderCurve(p: Peak, d: number, eyeY: number, vx: number, vz: number): boolean {
+  const gy = hasHeight(vx, vz) ? groundAt(vx, vz) : eyeY - 2;
+  const h = Math.max(0.5, eyeY - gy);          // eye over the ground it stands on
+  const horizon = Math.sqrt(2 * EARTH_R * h);
+  if (d <= horizon) return false;              // inside the horizon nothing is under the curve
+  const sight = ((d - horizon) ** 2) / (2 * EARTH_R);
+  return (p.ele - baseElev) - gy < sight;
+}
 function peakLook(p: Peak, vx: number, vz: number, eyeY: number): { d: number; rise: number; app: number } {
   const d = Math.hypot(p.x - vx, p.z - vz) || 1;
   const rise = (p.ele - baseElev) - curveDrop(p.x - vx, p.z - vz) - eyeY;
@@ -19972,7 +19981,17 @@ function peakLook(p: Peak, vx: number, vz: number, eyeY: number): { d: number; r
  * claimed: a label on a peak you cannot quite see is a smaller lie than a
  * peak removed from a view that holds it.
  */
-const PEAK_CLEAR = 15;            // metres of daylight the sight line must keep
+/**
+ * METRES OF DAYLIGHT THE SIGHT LINE MUST KEEP — and it was 15, which is more
+ * slop than the ground it is measured against. The fine mesh and the field's
+ * own raster disagree by about 3m at a point (measured), so 15 buys nothing
+ * but indecision: Thaba-Ntšo's blocker measured 16m over the line in one
+ * session and 13m in the next as the corridor refined under it, and the
+ * label blinked on and off between sessions at a ridge that hides it in
+ * both. Five is clear of the noise and decisive about a ridge — and a summit
+ * peeking five metres over one at a kilometre is a sliver, not a view.
+ */
+const PEAK_CLEAR = 5;
 /** …and what a COARSE sample must beat, being a smoothed answer: its own
  *  pixel, so a gap the raster half-filled cannot kill a visible summit. */
 const peakCoarseClear = (): number => Math.max(45, farPixelM() * 0.8);
@@ -29720,7 +29739,7 @@ function updatePois(): void {
  */
 const PEAK_SHOW = 3;
 /** Why each summit did or did not reach the glass this frame — see __peaks. */
-let peakGates = { cands: 0, near: 0, sunk: 0, behind: 0, frame: 0, blocked: 0, drawn: 0 };
+let peakGates = { cands: 0, near: 0, sunk: 0, belowEye: 0, kept: 0, behind: 0, frame: 0, blocked: 0, drawn: 0 };
 /** A summit must HOLD its verdict before the glass believes it — 350ms to
  *  appear, 900ms to go — and its screen point is smoothed, so a bobbing
  *  camera and a 120ms depth cadence cannot make a name blink or shiver.
@@ -29755,7 +29774,7 @@ function updatePeaks(vx: number, vz: number): void {
   // heading. What belongs on the glass is the biggest summits ON the glass.
   const seen: Array<{ p: Peak; d: number; app: number;
     sx: number; sy: number; wx: number; wz: number; wy: number }> = [];
-  peakGates = { cands: cands.length, near: 0, sunk: 0, behind: 0, frame: 0, blocked: 0, drawn: 0 };
+  peakGates = { cands: cands.length, near: 0, sunk: 0, belowEye: 0, kept: 0, behind: 0, frame: 0, blocked: 0, drawn: 0 };
   for (const p of cands) {
     const l = peakLook(p, vx, vz, eyeY);
     // IN VIEW IS THE LAW, NOT DISTANCE. This gate has come down twice on the
@@ -29766,13 +29785,27 @@ function updatePeaks(vx: number, vz: number): void {
     // that (your eye is above the apex). 250m keeps a label from sitting on
     // the bonnet, nothing more.
     if (l.d < 250) { peakGates.near++; continue; }
-    // BELOW THE HORIZON IS NOT A VIEW. These markers used to survive as
-    // ghosted bearings — Mount Whitney from the Big Sur coast, 330km off and
-    // 8.5km under the curve — but a label on something the earth is in front
-    // of is furniture, not information. A summit is drawn when it can be
-    // seen, which is the same law the frustum check below already applies
-    // sideways.
-    if (l.rise <= 0) { peakGates.sunk++; continue; }
+    // ── UNDER THE EARTH'S BULGE, NOT MERELY UNDER YOU ──
+    //
+    // This rejected every summit whose apex sat below the EYE, which
+    // confuses two different things. One is a mountain the world's curve is
+    // in front of — Mount Whitney from the Big Sur coast, 330km off and
+    // 8.5km under — and that is furniture, correctly dropped. The other is
+    // a mountain simply BELOW you, which is every summit seen from a pass or
+    // a high shelf: plainly in view, and nameless. At the Senqu shelf the
+    // old test threw away 56 of 106 candidates before the depth map ever
+    // saw them.
+    //
+    // The eye's own height buys horizon: sqrt(2Rh). Inside that distance the
+    // curve hides nothing at all, whatever the apex's height relative to the
+    // eye; beyond it, the line of sight rises off the surface as
+    // (d - sqrt(2Rh))^2 / 2R, and only a summit under THAT is hidden. The
+    // terrain in between is `peakBlocked`'s business, not this gate's.
+    // `belowEye` is what the old test dropped and `kept` what this one saves:
+    // the two numbers that say whether a high vantage is being censored.
+    if (l.rise <= 0) peakGates.belowEye++;
+    if (peakUnderCurve(p, l.d, eyeY, vx, vz)) { peakGates.sunk++; continue; }
+    if (l.rise <= 0) peakGates.kept++;
     const dx = p.x - vx, dz = p.z - vz;
     const dc = Math.min(l.d, 900);                   // the pin's own stand-off
     const wx = vx + (dx / l.d) * dc, wz = vz + (dz / l.d) * dc;
@@ -29780,7 +29813,11 @@ function updatePeaks(vx: number, vz: number): void {
     // of frame in chase pitch, so an apex-true marker never drew exactly
     // where the shell dominates the view. Its label sits lower, ON the dome's
     // mass (anywhere on the thing is honest); a summit keeps its true angle.
-    const wy = eyeY + (p.r ? Math.min(l.app, 0.16) : Math.max(l.app, 0.004)) * dc;
+    // A summit BELOW the eye is placed below the horizon, where it is. The
+    // old floor of 0.004 lifted every marker to just over the horizontal,
+    // which was invisible while the sunk gate meant nothing below the eye
+    // ever got here, and would now put a valley's peak in the sky.
+    const wy = eyeY + (p.r ? Math.min(l.app, 0.16) : l.app) * dc;
     poiVec.set(wx, wy, wz);
     poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse);
     if (poiView.z >= -1) { peakGates.behind++; continue; }   // behind the camera
