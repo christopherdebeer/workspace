@@ -145,6 +145,7 @@ const isTree = (k: VegKind): boolean => TREE_KINDS.includes(k);
  *  which is a lovely fact and not one this silhouette can express. */
 const CACTUS_REALMS = new Set(['Nearctic', 'Neotropic']);
 
+const clamp01 = (v: number): number => (v < 0 ? 0 : v > 1 ? 1 : v);
 const scaleWeight = (mix: GuildMix, pred: (k: VegKind) => boolean, f: number): GuildMix =>
   mix.map(([k, w]) => [k, pred(k) ? w * f : w] as [VegKind, number]);
 const drop = (mix: GuildMix, k: VegKind): GuildMix => mix.filter(([j]) => j !== k);
@@ -245,8 +246,19 @@ export function guildAt(site: SiteClimate, eco: EcoHit | null): Guild | null {
   // savanna and a desert is a desert — their rows already carry their spacing,
   // and applying a rainfall penalty on top of it halved the Cape's fynbos to
   // savanna density in the first A/B. `dry` marks the rows that thin.
+  //
+  // AND IT IS SUB-LINEAR, BECAUSE THE RAINFALL IS A GUESS. `waterMm` is three
+  // gaussians on the general circulation and its own fixtures only claim a
+  // factor of 1.5 in the tropics and 2.2 elsewhere — so a term that reads it
+  // linearly is trusting it far past what it is worth. Measured at Yosemite:
+  // the model says 372mm against a real ~900, the linear form cut the density
+  // to 0.62 and thinned a Sierra Nevada conifer forest from 511 standing
+  // plants to 322. A rainfall estimate good to a factor of two must not be
+  // allowed to remove a third of a forest. The floor is 0.55 and the response
+  // starts there, so a true desert still reads as one and a wet forest the
+  // model happens to under-rain stays a forest.
   if (base.dry && site.waterMm < 600) {
-    const f = Math.max(0.35, site.waterMm / 600);
+    const f = 0.55 + 0.45 * clamp01(site.waterMm / 600);
     density *= f;
     why.push(`only ${Math.round(site.waterMm)}mm of rain`);
   }

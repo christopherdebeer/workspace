@@ -122,6 +122,25 @@ ok('…and a cold shore stays a temperate wood',
 ok('the warm one says why it changed',
   shore.why.some((w) => /salt/.test(w)), shore.why);
 
+// ── ARIDITY MUST NOT TRUST A GUESS TOO FAR ───────────────────────────────
+// `waterMm` is three gaussians whose own fixtures claim a factor of 1.5 to 2.2.
+// Measured at Yosemite: the model reads 372mm against a real ~900, and a linear
+// density response thinned a Sierra Nevada conifer forest from 511 standing
+// plants to 322. A desert must still read as a desert; a forest the model
+// happens to under-rain must still read as a forest.
+const yosemite = guildAt(site({ heatC: 11, waterMm: 372, frostDays: 60 }), eco(5, 'Nearctic'));
+const trueDesertForest = guildAt(site({ heatC: 11, waterMm: 40, frostDays: 60 }), eco(5, 'Nearctic'));
+const wetForest = guildAt(site({ heatC: 11, waterMm: 1200, frostDays: 60 }), eco(5, 'Nearctic'));
+console.log(`\nconifer forest density by rainfall: 40mm ${trueDesertForest.density.toFixed(2)}`
+  + ` · 372mm ${yosemite.density.toFixed(2)} · 1200mm ${wetForest.density.toFixed(2)}`);
+ok('an under-rained forest is still a forest', yosemite.density > 0.8, yosemite.density);
+ok('…but a genuinely dry one does thin', trueDesertForest.density < yosemite.density,
+  [trueDesertForest.density, yosemite.density]);
+ok('…and never below the floor', trueDesertForest.density > 0.5, trueDesertForest.density);
+ok('a wet forest is not thinned at all', wetForest.density === 1, wetForest.density);
+ok('and a scrub is never thinned by its own definition',
+  !fynbos.why.some((w) => /mm of rain/.test(w)), fynbos.why);
+
 // ── THE COARSE BIOMES, sanity ────────────────────────────────────────────
 ok('taiga is conifer', top(guildAt(site({ heatC: -2, frostDays: 180 }), eco(6))) === 'conifer');
 ok('savanna has acacia', has(guildAt(site({ heatC: 25, winterDry: 0.8 }), eco(7, 'Afrotropic')), 'acacia'));

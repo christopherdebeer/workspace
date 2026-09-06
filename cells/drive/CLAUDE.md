@@ -2167,6 +2167,28 @@ of the same pair read palm 7% and broadleaf 13/9 — same direction, weaker
 everywhere, because the world was a third empty. Quote a number from this table
 only against the gate that produced it.
 
+The other two sites, same gate:
+
+| | guild | climate |
+|---|---|---|
+| **Sahara** (13, Palearctic) — `why: no cactus outside the New World` | cactus 0% | cactus 4% |
+| standing plants | 15 (0.5/ha) | 22 (0.8/ha) |
+| **Sierra** (5, Nearctic) — conifer share | 52% | 34% |
+| palm / acacia | 0% / 0% | 2% / 1% |
+| standing plants | 410 (14.5/ha) | 509 (18/ha) |
+
+**AND THE SIERRA CAUGHT A TERM TRUSTING A GUESS TOO FAR.** The first Sierra run
+read density 0.62 and thinned a Sierra Nevada conifer forest from 511 standing
+plants to 322 — because the aridity multiplier read `waterMm` linearly, and the
+model says 372mm at Yosemite against a real ~900. `waterMm` is three gaussians
+whose own fixtures claim only a factor of 1.5 in the tropics and 2.2 elsewhere;
+a term that responds linearly to it is trusting it far past what it is worth.
+The response is sub-linear with a 0.55 floor now (`0.55 + 0.45·min(1, mm/600)`),
+so a true desert still reads as one and an under-rained forest stays a forest:
+0.62 → 0.83, and 410 plants against 509. **The general rule: a derived quantity
+with a stated tolerance must not drive a visible effect harder than that
+tolerance allows.**
+
 ## Routing across two maps
 
 The router's graph was the fine OSM survey and nothing else, so a goal past the
