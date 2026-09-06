@@ -2993,10 +2993,23 @@ the ring was written. `wet` is the honest answer now; `depth` keeps its default
 so no existing caller changes behaviour.
 
 **A CENTRALISED SUBSYSTEM IS WHAT MAKES THIS KIND OF THING VISIBLE.** The bug
-is four years old in spirit and was invisible while the mixer was 624 lines in
-the middle of main.ts: nothing could ask "what is the river channel doing right
-now" without a probe nobody had written. `__mix()` and one measurement at a
-place with no water is the whole diagnosis.
+is old and was invisible while the mixer was 624 lines in the middle of
+main.ts: nothing could ask "what is the river channel doing right now" without
+a probe nobody had written. `__mix()` and one measurement at a place with no
+water is the whole diagnosis.
+
+**AND FIXING IT EXPOSED WHAT IT HAD BEEN HIDING: THE RING REACHED 24 METRES.**
+With the bed on everywhere, nobody could tell it could not hear anything
+further than a cricket pitch. Measured at the Yosemite valley floor with the
+default gone — the spot `amb-audit.mjs` has always used, chosen for "the Merced
+nearby" — the Merced is **67 m away, the 24 m, 40 m and 60 m rings are all dry,
+and its nearest wet probe is on the 90 m ring**. A river you can see from the
+road, silent. So water is audible a long way and quieter further off, which
+makes distance a WEIGHT rather than a radius: three rings at 24/60/120 m
+weighted 1 / 0.55 / 0.28, eighteen probes twice a second instead of six. The
+bearing is the same weighted sum, which makes it better too. **Froth stays on
+the inner ring alone** — rapids two hundred metres off are a wash, not a
+rattle.
 
 `__space(x?, z?)` reports the verdict at the truck or at any point — the deck,
 the clearance, the two flags and the glided `enc` — and `__audioSpace(e)` forces

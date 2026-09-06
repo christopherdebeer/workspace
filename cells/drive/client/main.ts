@@ -32765,6 +32765,9 @@ let dbgSlip: Record<string, unknown> = {};
 let ambSampledAt = 0, ambRiverL = 0, ambVegL = 0, ambFrothL = 0;
 /** The room the last sample found, which `encL` is easing toward. */
 let encTarget = 0;
+/** Radius and weight of each water-probe ring — see the ambience sampler. */
+const AMB_WATER_RINGS: ReadonlyArray<readonly [number, number]> =
+  [[24, 1], [60, 0.55], [120, 0.28]];
 /** Where the water is, in the TRUCK's frame: −1 hard left, +1 hard right. */
 let ambRiverAt = 0;
 /** How enclosed the truck is, 0 open sky and 1 inside a bore — glided, so a
@@ -34546,25 +34549,44 @@ function tick(now: number): void {
     // and wide, a river runs mid, and fast water over the rapids' own
     // boulder grid froths bright. Birds and rustle already answer to this
     // cell's real foliage the same way.
-    // THE SAME RING ALREADY KNOWS WHICH WAY THE WATER IS. It was spent
-    // entirely on "how much", so a river you were driving alongside sat in
-    // the middle of your head. Summing the wet probes' own directions gives a
-    // bearing for free — and it is a SUM, not a nearest: water on both sides
-    // of a ford should cancel to the middle, which is where it actually is.
-    let wet = 0, flow = 0, bx = 0, bz = 0;
-    for (let i = 0; i < 6; i++) {
-      const a = (i / 6) * Math.PI * 2;
-      const wi = waterInfoAt(state.x + Math.sin(a) * 24, state.z + Math.cos(a) * 24);
-      // `wi.wet`, NOT `depth > 0.06` — see waterInfoAt. The depth is a default
-      // on dry land and this ring is the one caller asking whether there IS
-      // any water, so the old test was true at every point on the planet.
-      if (wi.wet && wi.depth > 0.06) { wet++; flow = Math.max(flow, wi.speed); bx += Math.sin(a); bz += Math.cos(a); }
+    // ── THE RING IS THREE RINGS, AND IT KNOWS WHICH WAY THE WATER IS ──
+    //
+    // It was one ring at 24m spent entirely on "how much", so a river you were
+    // driving alongside sat in the middle of your head — and a river a hundred
+    // metres off did not exist at all. That second half was invisible for as
+    // long as every dry probe came back half a metre deep (see waterInfoAt):
+    // the bed played everywhere, so nobody could tell it could not hear past a
+    // cricket pitch. Measured at the Yosemite valley floor with the default
+    // gone: the Merced is 67m away, the 24m, 40m and 60m rings are all dry and
+    // its nearest wet probe is on the 90m ring. A river you can SEE from the
+    // road, silent.
+    //
+    // Water is audible a long way and quieter further off, so distance is a
+    // WEIGHT and not a radius. Summing the wet probes' own directions then
+    // gives the bearing for free — a SUM, not a nearest, so water on both
+    // sides of a ford cancels to the middle, which is where it actually is.
+    let wetW = 0, flow = 0, bx = 0, bz = 0, near = 0;
+    for (const [rad, w] of AMB_WATER_RINGS) {
+      for (let i = 0; i < 6; i++) {
+        const a = (i / 6) * Math.PI * 2;
+        const wi = waterInfoAt(state.x + Math.sin(a) * rad, state.z + Math.cos(a) * rad);
+        // `wi.wet`, NOT `depth > 0.06` — see waterInfoAt. The depth is a
+        // default on dry land and this ring is the one caller asking whether
+        // there IS any water, so the old test was true at every point on the
+        // planet.
+        if (!wi.wet || wi.depth <= 0.06) continue;
+        wetW += w;
+        bx += Math.sin(a) * w; bz += Math.cos(a) * w;
+        // FROTH IS A NEAR THING. Rapids two hundred metres off are a wash, not
+        // a rattle, so only the inner ring opens the bright channel.
+        if (rad === AMB_WATER_RINGS[0][0]) { near++; flow = Math.max(flow, wi.speed); }
+      }
     }
-    ambRiverL = clamp(wet / 3 + (surfKind === 'water' ? 0.4 : 0), 0, 1);
+    ambRiverL = clamp(wetW / 3 + (surfKind === 'water' ? 0.4 : 0), 0, 1);
     // Into the TRUCK's frame. Forward is (sin h, -cos h), so the right vector
     // is (cos h, sin h) — the dot with it is the ear the water is in.
-    ambRiverAt = wet === 0 || surfKind === 'water' ? 0
-      : clamp(((bx / wet) * Math.cos(state.heading) + (bz / wet) * Math.sin(state.heading)), -1, 1);
+    ambRiverAt = wetW === 0 || surfKind === 'water' ? 0
+      : clamp(((bx / wetW) * Math.cos(state.heading) + (bz / wetW) * Math.sin(state.heading)), -1, 1);
     // The room, on the same half-second tick as the rest of the bed: a hint
     // walk and a grid-cell walk are cheap, and a ceiling does not move.
     encTarget = enclosureAt(state.x, state.z, bodyY).e;
@@ -34573,7 +34595,7 @@ function tick(now: number): void {
     for (let ox = -1; ox <= 1; ox++) {
       for (let oz = -1; oz <= 1; oz++) rap += (rapidRocks.get(`${cxA + ox},${czA + oz}`) ?? []).length;
     }
-    ambFrothL = wet > 0 || surfKind === 'water' ? clamp(flow / 2.2 + rap / 6, 0, 1) : 0;
+    ambFrothL = near > 0 || surfKind === 'water' ? clamp(flow / 2.2 + rap / 6, 0, 1) : 0;
     const sites = vegGrid.get(`${cxA},${czA}`) ?? [];
     let fol = 0;
     for (const s of sites) if (s.k !== 'rock' && s.k !== 'spire') fol++;
