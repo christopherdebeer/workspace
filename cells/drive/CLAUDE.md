@@ -3011,6 +3011,20 @@ bearing is the same weighted sum, which makes it better too. **Froth stays on
 the inner ring alone** — rapids two hundred metres off are a wash, not a
 rattle.
 
+**Measured after, same spot: `riverRaw` 0.09 at a bearing of −0.83** — the
+Merced faint, off the port side, where it was silent an hour before and a
+full-level 1.0 before that. **The 1.0 was the bug and the 0.09 is a
+judgement**: 0.28 is what a river a hundred metres off is worth, and there is
+no external anchor for that number the way there is for a tree's height or a
+site's rainfall, so it is written down here rather than defended. Two things
+to know before moving it. The level is dominated by the INNER ring by
+construction, so raising the far weight makes distant water louder and changes
+nothing about a river you are beside. And six probes on a 120 m circle is 754 m
+of circumference sampled at 126 m intervals — at Yosemite the 90 m ring caught
+three of twenty-four bearings and the shipped six caught one — so the far rings
+UNDER-sample a linear feature, and constant arc spacing (6 / 10 / 14 probes)
+would steady the estimate without making it louder.
+
 `__space(x?, z?)` reports the verdict at the truck or at any point — the deck,
 the clearance, the two flags and the glided `enc` — and `__audioSpace(e)` forces
 the room for twelve seconds the way `__windset` forces a gale, because a tunnel
