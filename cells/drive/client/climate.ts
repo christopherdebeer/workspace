@@ -114,10 +114,6 @@ export const CLIM_HOMES: Array<Array<[number, number, number]>> = [
   // should never be. Weak here, decisive where the trees stop.
   [[0.20, 0.40, 0.75]], // alpine    — cold, and mostly a matter of height
 ];
-/** The primary home of each archetype, kept for anything that wants one
- *  representative point rather than the set. */
-export const CLIM_HOME: Array<[number, number]> =
-  CLIM_HOMES.map((h) => [h[0][0], h[0][1]] as [number, number]);
 /** How much water each land-cover class implies. `built` and `snow` are absent
  *  DELIBERATELY and abstain from the average: a car park says nothing about
  *  rainfall, and frozen is not dry. */

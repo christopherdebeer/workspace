@@ -1771,4 +1771,3 @@ export function createTerrainKernel() {
     BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, SEA_BED, AREA_MIX, RELIEF_MIN,
   };
 }
-export type TerrainKernel = ReturnType<typeof createTerrainKernel>;

@@ -16,8 +16,6 @@
  */
 import { createTerrainKernel, type HeightTile, type CoverTile, type StripLike, type Rgb, type AreaPatchLike, type TerrainStore, type CarveLog } from './terrain-kernel';
 
-/** Strips and channels travel flat, this many numbers each. */
-export const STRIP_F = 13;
 export interface TerrainJob {
   id: number; epoch: number; key: string;
   tile: HeightTile;

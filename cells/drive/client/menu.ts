@@ -73,6 +73,11 @@ export interface MenuCtx {
   driveStats(): Array<[string, string]>;
   worldRows(): Array<[string, string]>;
   systemRows(): Array<[string, string]>;
+  /** Every switch this build has, from `switches.ts`, with what THIS session is
+   *  running. Rendered whole and not filtered: the panel exists so that a
+   *  switch cannot be forgotten, and a list that hides the ones nobody set
+   *  hides exactly the ones nobody remembers. Optional: older ctx builds. */
+  switches?(): Array<{ id: string; value: string; set: boolean; marks: readonly string[] }>;
   /** The build's own identity, for the foot of ABOUT — a page that credits
    *  everyone and cannot say WHICH build the reader is looking at is half a
    *  page, and the first question of any report is which version it was. */
@@ -987,6 +992,24 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
 
   function renderSettings(): void {
     body.appendChild(kvTable(ctx.systemRows));
+    // ── EVERY SWITCH, WHETHER OR NOT IT IS ON ──
+    //
+    // Fifty-three query-string switches had grown up one at a time and nothing
+    // listed them: ten appeared in no note, no test and no devtool. They are
+    // declared in one table now and this is that table, so the surface cannot
+    // drift out of a reader's reach again. A `•` is one this URL set; LEGACY
+    // marks a switch whose other position keeps a superseded path alive, which
+    // is the list to read when asking what can be retired.
+    const sw = ctx.switches?.() ?? [];
+    if (sw.length) {
+      const legacy = sw.filter((x) => x.marks.includes('legacy')).length;
+      const set = sw.filter((x) => x.set).length;
+      body.append(el('div', 'm-sect', 'SWITCHES'));
+      body.append(el('div', 'm-dimline',
+        `${sw.length} in this build · ${legacy} keep an older path alive · ${set} set by this link`));
+      body.appendChild(kvTable(() => (ctx.switches?.() ?? []).map((x) =>
+        [`${x.set ? '• ' : ''}?${x.id}${x.marks.includes('legacy') ? '  LEGACY' : ''}`, x.value] as [string, string])));
+    }
     // SIGNING IN IS OPTIONAL AND SAYS SO. A player who never touches this keeps
     // playing exactly as before, with progress on the device — so the row leads
     // with what it does rather than with a demand.

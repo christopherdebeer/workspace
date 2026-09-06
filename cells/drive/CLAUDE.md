@@ -2780,6 +2780,88 @@ speed and no condition, however far it fell; there is no lateral load transfer,
 so a corner never loses grip to roll; and a river current still walks a latched
 truck downstream, which is arguably right and certainly untested.
 
+## What main.ts actually is, measured
+
+Surveyed with the TypeScript checker rather than by grep, because the first
+pass matched identifiers by TEXT and reported **zero** dead declarations in a
+42,000-line file — which is not a credible answer, and was shadowing: with two
+thousand module names every short one collides with a local. Only symbol
+identity is trustworthy here.
+
+- **41,915 lines, of which 42% are comment.** The program is ~24,000 lines and
+  the rest is this file's own doctrine doing its job. It is 64% of the client.
+- **The whole body is the else-clause of one `if (startLab(...))`.** Nothing
+  inside is module-scoped in the ES sense; it is one 41,800-line block, which
+  is why nothing is exported and why every extraction so far has had to hand
+  state across by hand.
+- 2,024 declarations: 663 functions (22,375 lines), 828 `const`, 451 `let`,
+  70 interfaces. Plus 494 loose statements — **304 of them probe assignments,
+  4,744 lines, 11% of the file.**
+- **There is almost no dead code.** 12 declarations referenced nowhere, 36
+  lines; 6 more across the siblings, 24 lines. All removed. Three shapes worth
+  recognising: aliases left behind when their call sites went with an
+  extraction (`profileHints`/`hintedWays`/`writeHints`, whose own comment said
+  they were kept so the call sites would read the same); a documented function
+  whose consumer was deleted (`tapeCount`); and **a rule stated twice where the
+  copies disagree** — `routeDriven` restated the inline mission check with
+  `Math.min` where the live one has `Math.max(1, …)`, so an edit to the obvious
+  helper would have changed nothing.
+- **A checker cannot see the devtools.** They are `.mjs` importing an esbuild
+  bundle, so `SERVICE_MARK`, `onLand`, `GUILD_BIOMES` and `corners` all read as
+  dead exports and are test API. Re-grep `devtools/` before deleting anything.
+- **302 `window.__*` probes, 120 driven by no devtool, test, lab or sibling.**
+  Deliberate — a console surface — and they ship to every player.
+- **The entanglement is shallower than the size suggests.** 366 of 663
+  functions (55%) touch NO module `let`; 441 `let`s are read by at least one
+  function and **197 by exactly one**. There is no god-variable: the largest
+  hubs are `baseElev` (30 functions), `camMode` (24), `origin` (20). Eight
+  utilities are reached by everything and would be imports, not members:
+  `clamp`(44), `gkey`(19), `GRID`(18), `roadGrid`(17), `state`(14),
+  `climateAt`(11), `hctx`(10), `groundAt`(9).
+- **TREE SHAKING IS NOT THE LEVER.** esbuild already shakes, and there is
+  nothing to shake. The 2.2 MB bundle is `three` 654 KB (28%), main.ts 641 KB
+  (28%), **`coast-baked` 337 KB and `flora-ez-baked` 279 KB — 616 KB of baked
+  data, 27%** — and 83 KB of LABS, which every player downloads because the
+  platform bundles without code splitting. The levers are splitting and moving
+  baked data to `static/`, not elimination.
+
+## The switch table
+
+Fifty-three query-string switches had grown up one at a time, each read where
+it was needed with its own `new URLSearchParams(location.search).get(…)`.
+Nothing listed them, so nothing could: ten appeared in no note, no test and no
+devtool — alive, shipped and forgotten. **A switch nobody remembers is worse
+than no switch, because the legacy branch it guards is kept alive by a flag
+that will never be turned on again.**
+
+`client/switches.ts` is the table, and the reader is TYPED: `qs` takes a
+`SwitchId` derived from the table, so a switch cannot be read without being
+declared. SETTINGS renders the table itself (`switchRows`), so the list on the
+glass cannot drift from the list in the code, and `devtools/switches.test.mjs`
+closes the other direction — a switch declared and no longer read fails.
+
+- **BUILDING THE TABLE FOUND TWO MORE.** `?reelidle` and `?reeldwell` are read
+  through a variable rather than a literal, so the survey's own grep for
+  `.get('…')` never saw them. Fifty-one became fifty-three by writing them
+  down, which is the argument for writing them down.
+- **`URL_OWNED` IS DERIVED FROM IT NOW.** That set — the keys the drive
+  rewrites as the truck moves — was itself added after a bug where rebuilding
+  the query from scratch deleted every art-direction and instrumentation flag
+  about a second after boot (found while measuring species mixes with a world
+  pinned to ARID that reported temperate ten seconds later). It was a second
+  hand-maintained list of the same thing; now it is the `owned` rows.
+- **SEVENTEEN ARE MARKED `legacy`** — the non-default value keeps a superseded
+  implementation alive, so each one is a retirement candidate and the question
+  "what can we retire" is a filter rather than an archaeology expedition:
+  `ez ezstand guild refine tworker sward lumasync hydroskip vegseed relief
+  shfade shsnap shrub treewind ezbark ezedge imu`.
+  **Not all of them are retirable, and the mark does not claim they are.**
+  `refine=0` and `guild=0` both restore paths that are still LIVE for another
+  reason — the plain lattice is what builds past `REFINE_R`, and the climate
+  path is what runs wherever `guildAt` returns null (the sea, a fixture, a tile
+  in flight). Retiring one of these means proving the other branch is
+  unreachable, not just unfashionable.
+
 ## Big shapes worth knowing
 
 - **`client/main.ts` is ~36k lines** and holds the world's module state. Do not

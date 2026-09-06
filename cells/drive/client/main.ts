@@ -18,6 +18,7 @@ import * as THREE from 'three';
 import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, GROUND_RAMPS, altBandAt, aspectLift, climPick,
   climPickRow, krummholz, siteAt, swardLift, treelineAt, type ClimateSample, type SiteClimate } from './climate';
 import { coastKm } from './coast';
+import { URL_OWNED, qs, qsHas, switchRows } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt, paintFor, roadLookAt,
@@ -225,8 +226,8 @@ const tileCentreLocal = (x: number, y: number): [number, number] => {
 // which proves nothing about the thing that ships — and giving the real one a
 // world it can be judged against. See world-fixtures.ts.
 const FIXTURE: WorldFixture | null =
-  fixtureById(new URLSearchParams(location.search).get('fixture'));
-const FIXTURE_TUNE: FixtureTune = decodeTune(new URLSearchParams(location.search).get('ft'));
+  fixtureById(qs('fixture'));
+const FIXTURE_TUNE: FixtureTune = decodeTune(qs('ft'));
 /** One flat projection for the whole fixture, taken at its own origin.
  *  Deliberately NOT `toLocal`: that is relative to the SPAWN, which moves when
  *  the world rebases, and an authored world must not move with it. */
@@ -402,15 +403,14 @@ async function findSpawn(): Promise<{ lat: number; lon: number; name: string | n
   // An authored world starts where it was authored to start — every fixture
   // puts a road through its own origin, so the rig lands on tarmac.
   if (FIXTURE) return { lat: FIXTURE.spawn.lat, lon: FIXTURE.spawn.lon, name: FIXTURE.label };
-  const p = new URLSearchParams(location.search);
-  const qlat = parseFloat(p.get('lat') ?? ''), qlon = parseFloat(p.get('lon') ?? '');
+  const qlat = parseFloat(qs('lat') ?? ''), qlon = parseFloat(qs('lon') ?? '');
   if (Number.isFinite(qlat) && Number.isFinite(qlon)) return { lat: qlat, lon: qlon, name: null };
   // Default: the TOP OF EL CAPITAN, rig parked on the rim looking down the
   // valley — the splash frames the truck against that vista in chase cam, so
   // the first thing a new arrival sees is the game's whole pitch. Still a
   // KNOWN start (testing/demos want determinism); random-anywhere stays the
   // deliberate gesture: ELSEWHERE (?random=1) or a hand-typed param.
-  if (!p.has('random')) return { lat: 37.7351, lon: -119.637, name: 'El Capitan, Yosemite' };
+  if (!qsHas('random')) return { lat: 37.7351, lon: -119.637, name: 'El Capitan, Yosemite' };
   for (let i = 0; i < 4; i++) {
     // Uniform over the sphere (asin), clipped to the inhabited belt.
     const lat = clamp((Math.asin(Math.random() * 2 - 1) * 180) / Math.PI, -50, 66);
@@ -1272,12 +1272,12 @@ let biome: Biome = BIOMES.temperate;
  *  climate field, not merely the sky — otherwise forcing `arid` would still
  *  blend a green valley through the middle of the desert it was asked for. */
 const biomeForced: Biome | null =
-  BIOMES[new URLSearchParams(location.search).get('biome') ?? ''] ?? null;
+  BIOMES[qs('biome') ?? ''] ?? null;
 /** The latitude guess. It is a poor one — it gives a whole world ONE palette,
  *  so the Sahara and the Nile delta came out identical — but it is what stands
  *  in until real land cover arrives, and cover is never guaranteed. */
 function pickBiome(lat: number, elevAbs: number): Biome {
-  const q = new URLSearchParams(location.search).get('biome');
+  const q = qs('biome');
   if (q && BIOMES[q]) return BIOMES[q];
   if (elevAbs > 1500) return BIOMES.alpine;
   const a = Math.abs(lat);
@@ -1290,7 +1290,7 @@ function pickBiome(lat: number, elevAbs: number): Biome {
  *  the ground around you. Latitude still breaks the ties a cover class cannot —
  *  forest is boreal at 60° and jungle at 5°, and the pixel says only "trees". */
 function biomeFromCover(lat: number, elevAbs: number): Biome | null {
-  if (new URLSearchParams(location.search).get('biome')) return null;  // art direction wins
+  if (qs('biome')) return null;  // art direction wins
   const hist = new Map<number, number>();
   let n = 0;
   for (let dz = -2400; dz <= 2400; dz += 200) {
@@ -1549,7 +1549,7 @@ function ecoAt(ex: number, ez: number): EcoHit | null {
  * completely, which matters because this changes the vegetation of every
  * landscape in the game and "it looks different" is not a measurement.
  */
-const GUILD_ON = new URLSearchParams(location.search).get('guild') !== '0';
+const GUILD_ON = qs('guild') !== '0';
 const guildMemo = new Map<string, { g: Guild | null; stamp: number; eco: number }>();
 // ONE ENTRY IN FRONT OF THE MAP. `guildNow` is asked once per vegetation
 // CANDIDATE and once per planted site — tens of thousands of times in a seed
@@ -2274,11 +2274,10 @@ const worldWind = { dirX: 0, dirZ: 1, kmh: 12 };
 let windForce: number | null = null;
 let windForceDeg: number | null = null;
 {
-  const q = new URLSearchParams(location.search);
-  const k = Number(q.get('wind'));
-  if (q.get('wind') !== null && Number.isFinite(k)) windForce = Math.max(0, k);
-  const d = Number(q.get('winddir'));
-  if (q.get('winddir') !== null && Number.isFinite(d)) windForceDeg = d;
+  const k = Number(qs('wind'));
+  if (qsHas('wind') && Number.isFinite(k)) windForce = Math.max(0, k);
+  const d = Number(qs('winddir'));
+  if (qsHas('winddir') && Number.isFinite(d)) windForceDeg = d;
 }
 const windKmhNow = (): number => windForce ?? (live.on ? live.windKmh : 12);
 const windDegNow = (): number => windForceDeg ?? (live.on ? live.windDeg : 250);
@@ -2457,7 +2456,7 @@ const hydroFeedLog: Array<{ at: number; key: string; rev: number; store: number;
 (window as unknown as { __hydrofeeds?: object }).__hydrofeeds = (): object => hydroFeedLog.slice(-120);
 /** The hydro system's elevation raster side — see hydroFeed. */
 const HYDRO_EN = 132;
-const HYDRO_SKIP = new URLSearchParams(location.search).get('hydroskip') !== '0';
+const HYDRO_SKIP = qs('hydroskip') !== '0';
 /** What each tile was last fed, so an identical feed can end without a build. */
 const hydroFedInputs = new Map<string, { elev: Float32Array; sig: string }>();
 function sameRaster(a: Float32Array, b: Float32Array): boolean {
@@ -2802,7 +2801,7 @@ const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 // nothing downstream can hold. A dial, because it is the one addition here that
 // costs a whole extra scene pass and a phone that cannot afford it should be
 // able to say so.
-renderer.shadowMap.enabled = new URLSearchParams(location.search).get('shadows') !== '0';
+renderer.shadowMap.enabled = qs('shadows') !== '0';
 renderer.shadowMap.type = THREE.BasicShadowMap;
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 const scene = new THREE.Scene();
@@ -2832,7 +2831,7 @@ const camera = new THREE.PerspectiveCamera(CAM.fov, 1, 1, 30000);
  * is worth more than one that has been removed: it stops the next person
  * deriving this theory again from the same true-looking algebra.
  */
-let nearLock = Math.max(0, Number(new URLSearchParams(location.search).get('near') ?? 0) || 0);
+let nearLock = Math.max(0, Number(qs('near') ?? 0) || 0);
 function setNear(n: number, far = 30000): void {
   if (nearLock) n = nearLock;
   if (Math.abs(camera.near - n) < n * 0.02 && camera.far === far) return;
@@ -3280,7 +3279,7 @@ let shadowMaskPatched = false;
  * nested block in here silently truncates the loop and the shader stops
  * compiling. Everything is expressions.
  */
-const SHADOW_FADE = new URLSearchParams(location.search).get('shfade') !== '0';
+const SHADOW_FADE = qs('shfade') !== '0';
 let shadowFadePatched = false;
 /** What the chunk ACTUALLY said, when the patch could not find its anchor. A
  *  failed replace is silent and looks exactly like a feature that does not
@@ -3365,7 +3364,7 @@ let shadowLitSaw = '';
 // same symbol, and a patch that failed to find its anchor would otherwise take
 // the march down with it.
 THREE.ShaderChunk.common = `#define SHADOW_DARKNESS 1.000\n${SHADOW_COMMON}`;
-const shadowsWanted = new URLSearchParams(location.search).get('shadows') !== '0';
+const shadowsWanted = qs('shadows') !== '0';
 sun.castShadow = shadowsWanted;
 /** Re-cut the sun's box. The map has to be DISPOSED by hand when its size
  *  changes or three keeps rendering into the old one at the old resolution. */
@@ -3423,7 +3422,7 @@ scene.add(sun.target);
  * it wobbles with every metre of ground — and with the sun anywhere but
  * straight overhead, a vertical wobble is a LATERAL move on the shadow map.
  */
-let SHADOW_SNAP = new URLSearchParams(location.search).get('shsnap') !== '0';
+let SHADOW_SNAP = qs('shsnap') !== '0';
 const shadowAt = new THREE.Vector3();
 const shX = new THREE.Vector3(), shY = new THREE.Vector3(), shZ = new THREE.Vector3();
 let shadowPhase = 0;
@@ -3484,7 +3483,7 @@ const castIfSolid = (o: THREE.Object3D): void => {
 // lightings where a landscape's own shadows are either absent or invisible.
 // Nine and fifteen are where a dune has a lit face and a dark one.
 let SUN_ALT_FORCE: number | null = (() => {
-  const v = new URLSearchParams(location.search).get('sunalt');
+  const v = qs('sunalt');
   return v === null || v === '' || !Number.isFinite(Number(v)) ? null : clamp(Number(v), -20, 89);
 })();
 /**
@@ -3514,14 +3513,14 @@ const TIME_MODES_V1 = ['CYCLE', 'LIVE', 'DAWN', 'NOON', 'DUSK', 'NIGHT'];
 // as well, or half the difference between the pictures is the time of day.
 // Overridden below by a saved dial only when the URL says nothing.
 let timeMode = (() => {
-  const v = (new URLSearchParams(location.search).get('time') ?? '').toUpperCase();
+  const v = (qs('time') ?? '').toUpperCase();
   const i = TIME_MODES.indexOf(v as typeof TIME_MODES[number]);
   return i < 0 ? 0 : i;
 })();
 // Read here, APPLIED AFTER the dials load — see the boot sequence. A dial that
 // remembers itself in localStorage will otherwise stamp on the query parameter.
 const timeFromUrl = TIME_MODES.indexOf(
-  ((new URLSearchParams(location.search).get('t') ?? '').toUpperCase()) as typeof TIME_MODES[number]);
+  ((qs('t') ?? '').toUpperCase()) as typeof TIME_MODES[number]);
 if (timeFromUrl >= 0) timeMode = timeFromUrl;
 const cycleT0 = Date.now();
 /**
@@ -3912,7 +3911,7 @@ let lumaNext = 0, lumaFar = 62000, lumaPrimed = false;
  *  120ms old by design, so one more frame changes nothing it feeds. WebGL1,
  *  or any failure, falls back to the synchronous read. */
 let lumaPending: { pbo: WebGLBuffer; sync: WebGLSync; far: number } | null = null;
-let lumaAsync = new URLSearchParams(location.search).get('lumasync') !== '1';   // ?lumasync=1: the old read, for an A/B on a device
+let lumaAsync = qs('lumasync') !== '1';   // ?lumasync=1: the old read, for an A/B on a device
 const lumaStat = { async: 0, sync: 0, waits: 0 };
 function lumaCollect(gl: WebGL2RenderingContext): boolean {
   const p = lumaPending;
@@ -5212,7 +5211,7 @@ let farClipOff = false;
 // `normal` tiles for the same ground, this agrees to a mean 13.0° at Big Sur
 // and 7.9° at Chapman's Peak — the residual being estimator convention, not
 // information, which is why the extra download is not worth making.
-const NRM_SCALE = Number(new URLSearchParams(location.search).get('nscale') ?? 0.35);
+const NRM_SCALE = Number(qs('nscale') ?? 0.35);
 const terrainMats = new Map<string, THREE.MeshLambertMaterial>();
 /**
  * THE NORMAL MAP OUTLIVES THE REBUILD THAT ASKED FOR IT.
@@ -5330,7 +5329,6 @@ const refinedBorders = new Map<string, Float64Array>();
 function borderShared(t: HeightTile, nk: string): boolean { return K.borderShared(kStore, t, nk); }
 function roadFloorHard(x: number, z: number, wash = CUT_WASH): number | null { return K.roadFloorHard(kStore, x, z, wash); }
 function corridorH(x: number, z: number, N: number, cands?: Iterable<Seg>): { h: number; k: number } { return K.corridorH(kStore, x, z, N, cands); }
-function stripBreakLines(s: Seg): BreakLine[] { return K.stripBreakLines(kStore, s); }
 const cellTrisCache = new WeakMap<THREE.BufferGeometry, CellTris>();
 /** The cell table of a terrain geometry: registered by the build, rebuilt
  *  from the arrays for anything else. */
@@ -5398,7 +5396,7 @@ function buildTerrainMesh(t: HeightTile): void {
 // job and its arrays come back to be wrapped in a mesh. One in flight at a
 // time — the queue and its owners-first order stay here for now (see
 // docs/terrain-worker.md, step 4). ?tworker=0 keeps every build synchronous.
-const TWORKER = new URLSearchParams(location.search).get('tworker') !== '0';
+const TWORKER = qs('tworker') !== '0';
 const tworker: TerrainWorker | null = TWORKER ? new TerrainWorker() : null;
 let buildInFlight: string | null = null;
 /** Milliseconds between worker posts: 3× the last build's main-thread cost, clamped. */
@@ -5977,7 +5975,7 @@ type Rng = () => number;
  *  `?aniso=N` a cap; `__texfilter()` says what is in effect. */
 const TEX_ANISO = ((): number => {
   const max = renderer.capabilities.getMaxAnisotropy();
-  const ask = new URLSearchParams(location.search).get('aniso');
+  const ask = qs('aniso');
   return ask === null ? Math.min(8, max) : clamp(Number(ask) || 0, 0, max);
 })();
 (window as unknown as { __texfilter?: () => object }).__texfilter = () =>
@@ -6160,7 +6158,6 @@ function roadTexture(rc: (typeof ROAD_CULTURES)[number], look: RoadLook): THREE.
   roadTexCache.set(key, tex);
   return tex;
 }
-const ROAD_TEX = new Map(ROAD_CULTURES.map((rc) => [rc.key, roadTexture(rc, DEFAULT_LOOK)]));
 
 // The junction mouth's own surface: the same tarmac with NO lines — a host's
 // painted edge line must not run across a turning, and it lives in a
@@ -7559,14 +7556,6 @@ const GRASS_BANDS: Array<[number, number]> = [[40, 1.0], [82, 1.9], [140, 3.4]];
 const GRASS_SIGHT = 140;     // the outermost band; past this the ground texture works
 /** Density and reach multiplier from the RIG dial. */
 let grassScale = 1;
-/** Per-kind draw distance. Grass is ankle height: at 50m it is a pixel of
- *  noise the terrain colour already provides, so drawing it there is pure
- *  cost. Everything else keeps the old full-field range. */
-const VEG_SIGHT: Partial<Record<VegKind, number>> = { grass: GRASS_SIGHT,
-  // A frond and a fallen log are ankle-and-knee work: past a couple of hundred
-  // metres they are a pixel of noise the ground colour already supplies, so
-  // the instances are better spent on the things that break the skyline.
-  fern: 190, log: 330 };
 /** A stable 0..1 from a lattice slot. Same slot, same tuft, forever — which is
  *  what lets grass be regenerated every second instead of remembered. */
 function hash2(a: number, b: number): number {
@@ -7677,7 +7666,7 @@ grainFx(woodMat, 'grain-wood', 0.95, 2.6);
  * one.
  */
 const TREE_WIND_K = 0.085;
-const treeWindUrl = new URLSearchParams(location.search).get('treewind');
+const treeWindUrl = qs('treewind');
 const windU = {
   uTime: { value: 0 },
   uGust: { value: new THREE.Vector2(0, 0) },
@@ -7755,7 +7744,7 @@ const trunks = vegMesh(trunkGeo2, woodMat, 3600);
  * A site keeps its variant across refreshes (a hash of where it stands).
  * ?ez=0 brings the archetypes back, for an A/B on the device.
  */
-const EZ_ON = ((): boolean => { const ask = new URLSearchParams(location.search).get('ez'); return ask !== '0' && ask !== 'off'; })();
+const EZ_ON = ((): boolean => { const ask = qs('ez'); return ask !== '0' && ask !== 'off'; })();
 /**
  * THE TREE BUDGET. The recipes are the lab's, pasted, and a recipe the eye
  * likes is a thousand triangles a tree; sixteen hundred broadleaf of those
@@ -7772,7 +7761,7 @@ const TREE_SIZE_STEPS = [0.5, 1, 1.5, 2, 3, 4] as const;
 const TREE_FORM_STEPS = [0, 1, 1.75, 3, 5] as const;
 const TREE_BEND_STEPS = [0, 0.08, 0.18, 0.35, 0.65, 1.1] as const;
 const TREE_VARIANT_STEPS = [1, 2, 4, Number.MAX_SAFE_INTEGER] as const;
-const treeTriUrl = Number(new URLSearchParams(location.search).get('treetris'));
+const treeTriUrl = Number(qs('treetris'));
 let treeTriBudget = Number.isFinite(treeTriUrl) && treeTriUrl > 0 ? treeTriUrl : 2400000;
 /**
  * THE TREE RACK'S TWO BIGGEST STOPS, ALSO AS URL OVERRIDES.
@@ -7788,10 +7777,9 @@ let treeTriBudget = Number.isFinite(treeTriUrl) && treeTriUrl > 0 ? treeTriUrl :
 let treeRange = 700;
 let treePopulationScale = 1;
 {
-  const q = new URLSearchParams(location.search);
-  const r = Number(q.get('treerange'));
+  const r = Number(qs('treerange'));
   if (Number.isFinite(r) && r > 0) treeRange = clamp(r, 100, 6000);
-  const p = Number(q.get('treepop'));
+  const p = Number(qs('treepop'));
   if (Number.isFinite(p) && p > 0) treePopulationScale = clamp(p, 0.05, 32);
 }
 let treeSizeScale = 1;
@@ -7829,7 +7817,7 @@ const ezCapFor = (fam: EzFamily): number =>
  * `?ezstand=0` is the exact A/B: the old per-position hash, which is what
  * every wood in the game looked like until now.
  */
-const EZ_STAND_ON = new URLSearchParams(location.search).get('ezstand') !== '0';
+const EZ_STAND_ON = qs('ezstand') !== '0';
 function ezVariantAt(fam: EzFamily, x: number, z: number): number {
   if (!EZ_STAND_ON) return ezVariantFor(fam, x, z, treeVariantCap);
   // THE GUILD'S PREFERENCE, WHICH ONLY NOW MEANS ANYTHING. Until the bake had
@@ -7865,11 +7853,10 @@ const ezMat = ezMaterial(0x4a3826, { bend: treeBendU, wind: windU });
 // seat. `?ezbark=0` is the flat prism the trunks were; `?ezedge=1` is the
 // bright one-pixel line a grazing card used to draw.
 {
-  const q = new URLSearchParams(location.search);
-  const bk = Number(q.get('ezbark'));
-  if (q.has('ezbark') && Number.isFinite(bk)) ezLookU.uEzBark.value = clamp(bk, 0, 2);
-  const ed = Number(q.get('ezedge'));
-  if (q.has('ezedge') && Number.isFinite(ed)) ezLookU.uEzEdge.value = clamp(ed, 0, 1);
+  const bk = Number(qs('ezbark'));
+  if (qsHas('ezbark') && Number.isFinite(bk)) ezLookU.uEzBark.value = clamp(bk, 0, 2);
+  const ed = Number(qs('ezedge'));
+  if (qsHas('ezedge') && Number.isFinite(ed)) ezLookU.uEzEdge.value = clamp(ed, 0, 1);
 }
 // THE SKELETONS STAND IN THE SAME WEATHER AS EVERYTHING ELSE. They were the
 // one thing in the landscape outside `terrainFx` — no cloud shadow, no terrain
@@ -9399,7 +9386,7 @@ const swardBands: SwardBand[] = SWARD_BANDS.map(([step, side, blend], bi) => {
   return band;
 });
 /** GPU sward on? `?sward=cpu` goes back to the old lattice. */
-let swardGpu = new URLSearchParams(location.search).get('sward') !== 'cpu';
+let swardGpu = qs('sward') !== 'cpu';
 /** Per-frame: the lattice origins, the eye, the tint, the density. All uniform
  *  writes — there is no per-blade work left on this side of the wire. */
 /**
@@ -9641,7 +9628,7 @@ let vegSeedMsNow = 0;
  */
 const VEG_SEED_MS = 8;
 const VEG_SEED_CATCHUP = 120;
-const VEG_SEED_BUDGET = new URLSearchParams(location.search).get('vegseed') !== '0';
+const VEG_SEED_BUDGET = qs('vegseed') !== '0';
 let vegSeedLeft = 0;
 let vegSeedDeferred = 0;
 const vegMark = (name: string): void => {
@@ -9688,7 +9675,7 @@ const SHRUB_RATE: Record<SwardCtx, number> = {
   [SwardCtx.Open]: 0.34, [SwardCtx.Wood]: 0.6, [SwardCtx.Water]: 0.5, [SwardCtx.Cliff]: 0.05, [SwardCtx.Ruin]: 0.15,
 };
 /** ?shrub=0 for an A/B on the device. */
-const SHRUB_ON = new URLSearchParams(location.search).get('shrub') !== '0';
+const SHRUB_ON = qs('shrub') !== '0';
 const shrubs = vegMesh(swayWeight(faceTone(shrubGeo(), 0.24, 0.3), 1.3), leafMat, SHRUB_CAP);
 shrubs.name = 'veg-shrub';
 const shrubCol = new THREE.Color();
@@ -11758,7 +11745,6 @@ const solver = new RoadSolver({
 });
 const juncGrid = solver.junctions;
 const juncStats = solver.stats;
-const noteJunction = (x: number, z: number): void => solver.noteJunction(x, z);
 /**
  * Is this stretch of road the mouth of a turning?
  *
@@ -11993,10 +11979,10 @@ const cutSet = new Set<Seg>();
 // dug more than half a metre below natural within 6m of the kerb fall 61.1% to
 // 48.6%. Still a knob (`?wash=0`) — this is a judgement about looks, and looks
 // change when anything else on the verge does.
-const CUT_WASH = Number(new URLSearchParams(location.search).get('wash') ?? 0.1);
+const CUT_WASH = Number(qs('wash') ?? 0.1);
 /** The relief pass, switchable, so its cost and its benefit can both be
  *  measured against the behaviour it replaces rather than argued about. */
-const CUT_RELIEF = new URLSearchParams(location.search).get('relief') !== '0';
+const CUT_RELIEF = qs('relief') !== '0';
 /**
  * HOW BURIED IS BURIED ENOUGH TO DIG FOR.
  *
@@ -12037,7 +12023,7 @@ const CUT_RELIEF = new URLSearchParams(location.search).get('relief') !== '0';
  * this is trying to answer. The grit is hashed from quantised world XZ, so it
  * is stuck to the road: drive past it and it holds still, exactly like dirt.
  */
-const SLIP_K = Math.max(0, Number(new URLSearchParams(location.search).get('slip') ?? 1) || 0);
+const SLIP_K = Math.max(0, Number(qs('slip') ?? 1) || 0);
 function roadCeiling(x: number, z: number): number | null {
   cutSet.clear();
   stripsNear(x, z, 2, cutSet);
@@ -12072,8 +12058,8 @@ function roadCeiling(x: number, z: number): number | null {
 //
 // `?refine=0` builds the old grid and carves it, so the two can be measured
 // against each other.
-const REFINE = new URLSearchParams(location.search).get('refine') !== '0';
-const REFINE_R = Number(new URLSearchParams(location.search).get('refr') ?? 1100);
+const REFINE = qs('refine') !== '0';
+const REFINE_R = Number(qs('refr') ?? 1100);
 let borderAuditAt = 0;
 /** Is the road stream quiet — nothing in flight and no road landed for a
  *  breath? Not "nothing queued": a tile waiting on a retry backoff would
@@ -13425,10 +13411,9 @@ async function solveChainPlanned(
 // The hint store, the junction registry and the chain assembly all moved to
 // `roadsolve.ts` — they never needed a renderer, and having them in here meant
 // every question about them cost a headless browser at two frames a second.
-// These aliases keep the call sites in this file reading as they did.
-const profileHints = solver.hints;
-const hintedWays = solver.hinted;
-const writeHints = (dense: Array<[number, number]>, alg: number[]): void => solver.writeHints(dense, alg);
+// The alias that is left keeps this file's call sites reading as they did;
+// the store, the registry and the write path went with the code and their
+// aliases went with the call sites, three releases after the comment above.
 const hintAt = (x: number, z: number, reach = 6, layer?: number): number | null => solver.hintAt(x, z, reach, layer);
 /**
  * ── RIBBON DECKS BATCH PER TILE (R57) ──
@@ -16020,7 +16005,6 @@ function canopyRun(
 // only ever descends. Where that puts the water under the ground, the water is
 // in a culvert, and the ground it is under is usually a road.
 const CULV_MAX = 9;        // deepest a culvert goes before we call the DEM wrong
-const CULV_MIN = 0.7;      // burial past which a run earns a bore rather than a dip
 const CULV_CLR = 0.35;     // headroom from invert to soffit on a plain pipe
 const CULV_RIG = 3.2;      // …and the bore height that fits a rig, where there is room
 // Slab and cover between a culvert's soffit and the carriageway over it. The
@@ -22032,19 +22016,19 @@ const WX_LIVE = { cloud: 0 };
 // screenshot of the rain. Beats both the live feed and the synthetic chain.
 /** ?fixdt=<seconds> — see the note at its use in the tick. 0 is off. */
 const FIX_DT = Math.max(0, Math.min(0.05,
-  Number(new URLSearchParams(location.search).get('fixdt') ?? 0) || 0));
+  Number(qs('fixdt') ?? 0) || 0));
 const WX_PIN = ((): Sky | null => {
-  const v = new URLSearchParams(location.search).get('wx');
+  const v = qs('wx');
   return v === 'clear' || v === 'haze' || v === 'rain' || v === 'storm' ? v : null;
 })();
 /** ?fog=0..1 pins the regional mist the way ?wx pins the sky, and ?wet=0..1
  *  floods the ground — a puddle screenshot must not wait out a storm. */
 const WX_FOG = ((): number | null => {
-  const v = new URLSearchParams(location.search).get('fog');
+  const v = qs('fog');
   return v === null ? null : clamp(Number(v) || 0, 0, 1);
 })();
 const WX_WET = ((): number | null => {
-  const v = new URLSearchParams(location.search).get('wet');
+  const v = qs('wet');
   return v === null ? null : clamp(Number(v) || 0, 0, 1);
 })();
 function rollWeather(now: number): void {
@@ -23006,7 +22990,7 @@ const real = {
  * cable. The gyro plus the receiver's own course covers the same ground without
  * either problem.
  */
-const IMU_OFF = new URLSearchParams(location.search).get('imu') === '0';
+const IMU_OFF = qs('imu') === '0';
 const imu = {
   on: false,
   err: 'NOT STARTED',
@@ -23533,9 +23517,8 @@ function tapeRestoreDials(prior: Record<string, number>): void {
 // is the camera orbiting a parked truck. Stretching the dwell makes the reel
 // LONGER without making it show MORE. Longer drives are a recording job (the
 // game has a recorder), not a constant.
-const reelQ = new URLSearchParams(location.search);
-const reelSecs = (k: string, d: number): number => {
-  const v = Number(reelQ.get(k));
+const reelSecs = (k: 'reelidle' | 'reeldwell', d: number): number => {
+  const v = Number(qs(k));
   return Number.isFinite(v) && v > 0 ? v * 1000 : d;
 };
 const ATTRACT_IDLE_MS = reelSecs('reelidle', 90000);
@@ -23819,7 +23802,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
  */
 const runBoot = ((): { user: string; id: string } | null => {
   try {
-    const m = (new URLSearchParams(location.search).get('run') ?? '')
+    const m = (qs('run') ?? '')
       .match(/^([a-z0-9_.-]{1,40})\/(\d{10,16})$/);
     return m ? { user: m[1], id: m[2] } : null;
   } catch { return null; }
@@ -24439,6 +24422,9 @@ function tapeKeep(): string {
   (out as { pendingAfter?: number | null }).pendingAfter = attractGoI;
   return out;
 };
+/** The switch table with what this session is running — the same rows the
+ *  SETTINGS panel draws, so a test can assert the panel without a pointer. */
+(window as unknown as { __switches?: object }).__switches = (): object => switchRows();
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
 (window as unknown as { __coverAt?: (x: number, z: number) => number | null }).__coverAt = sampleCover;
 /** Camera mode and the double-tap state behind it — so a test can see WHY a
@@ -32687,12 +32673,12 @@ let navAt = 0;
 let drapeAt = 0;
 let urlAt = 0, urlX = Infinity, urlZ = 0, urlH = 0;
 let urlCam: CamMode = 'chase', urlZoom = 1;
-/** The query keys the DRIVE owns and rewrites. Everything else in the bar
- *  belongs to whoever put it there. */
+// The query keys the DRIVE owns and rewrites are the `owned` rows of
+// `switches.ts` now, so a key cannot be added to one list and forgotten in the
+// other — which is the fault this set was itself added to fix.
 // `run` is owned-and-never-written: a shared run's link spawns AT the run,
 // so leaving ?run= in a rewritten URL would make every later reload fight
 // the player's own position with the run's head.
-const URL_OWNED = new Set(['lat', 'lon', 'h', 'cam', 'z', 'm', 'line', 'run']);
 const writeUrl = (la: number, lo: number): void => {
   // The URL is the PLAYER'S resumable state; a reel driving the truck through
   // a postcard must not write the postcard over it. `hopping` and the flagged
@@ -33578,20 +33564,6 @@ async function tapeSave(t: Tape): Promise<string> {
   });
   db.close();
   return id;
-}
-/** How many runs are already banked — the deck shows it and nothing else needs
- *  the list until you ask to play one. */
-async function tapeCount(): Promise<number> {
-  try {
-    const db = await tapeDb();
-    const n = await new Promise<number>((go, no) => {
-      const q = db.transaction('runs', 'readonly').objectStore('runs').count();
-      q.onsuccess = () => go(q.result);
-      q.onerror = () => no(q.error);
-    });
-    db.close();
-    return n;
-  } catch { return 0; }
 }
 async function tapeLoad(id?: string): Promise<Tape | null> {
   const db = await tapeDb();
@@ -36000,7 +35972,6 @@ const fit = (s: string, maxPx: number): string => {
 // exact mechanism, with the font as the source of truth instead of a hex
 // string. Hard pixels on every browser, and any character the subset lacks
 // (an accented place name) quantizes through the same sieve.
-const MICRO_PX = 5;
 interface MGlyph { w: number; rows: number[] }   // rows[0] = baseline-5; bit b = column b
 const microGlyphs = new Map<string, MGlyph>();
 // If boot's 2s font timeout ever races a slow load, glyphs would quantize
@@ -36343,12 +36314,6 @@ function glowText(s: string, x: number, y: number, col: string, sc = 1): void {
   for (const [dx, dy] of [[-1, 0], [1, 0], [0, -1], [0, 1]] as const) text(hctx, s, x + dx * sc, y + dy * sc, col, sc);
   hctx.globalAlpha = 1;
   text(hctx, s, x, y, col, sc);
-}
-function meter(x: number, y: number, n: number, lit: number, col: string, w = 3, h = 5, gap = 1): void {
-  for (let i = 0; i < n; i++) {
-    hctx.fillStyle = i < lit ? col : 'rgba(87,201,176,0.16)';
-    hctx.fillRect(x + i * (w + gap), y, w, h);
-  }
 }
 // ── the co-driver's arrow ──────────────────────────────────────────
 // The call is DRAWN now: a bent arrow whose geometry IS the bend — a lean,
@@ -36708,12 +36673,6 @@ function stepRoute(now: number, prev: [number, number] | null): void {
     surveyFlash = 1;
     audio.stone();
   }
-}
-/** Has the line been DRIVEN, as opposed to its far end reached. */
-function routeDriven(m: Mission): boolean {
-  if (!m.route || !routeCps.length) return true;   // no course authored: arriving is the whole test
-  const need = m.via?.atLeast ?? Math.ceil(routeCps.length * ROUTE_MAJORITY);
-  return routeGot >= Math.min(need, routeCps.length);
 }
 type MissionPhase = 'none' | 'offered' | 'active' | 'done';
 let mission: Mission | null = null;
@@ -38739,7 +38698,7 @@ function loadDials(): void {
     // …except a clock the URL asked for. ?time= is there to make a lighting
     // comparison reproducible, and a saved dial silently overruling it makes
     // the shot depend on which browser profile took it.
-    if (new URLSearchParams(location.search).has('time')) {
+    if (qsHas('time')) {
       const d = DIALS.find((x) => x.key === 'time');
       if (d) d.at = timeMode;
     }
@@ -40877,6 +40836,10 @@ const menu = createMenu({
   systemRows: () => [
     ['SOUND', audio.on ? (audio.state === 'running' ? 'ON' : 'NEEDS TAP') : 'OFF'],
   ],
+  // THE TABLE IS THE PANEL. `switchRows` reads the declaration in switches.ts
+  // and the live query string; nothing here restates either, so a switch added
+  // to the table appears on the glass without anyone remembering to add it.
+  switches: () => switchRows(),
   // The build, named where a reader can quote it back. `__BUILD__` is not a
   // thing here, so the cell's own deployed version is the honest answer and it
   // is already on the page that served this script.
@@ -41289,7 +41252,7 @@ if (timeFromUrl >= 0) {
  * so the blur itself remains inspectable in the place where the ground holds
  * still. The dial stays live for the session, exactly like the clock above.
  */
-if (FIXTURE && !new URLSearchParams(location.search).has('mblur')) {
+if (FIXTURE && !qsHas('mblur')) {
   const d = DIALS.find((x) => x.key === 'mblur');
   if (d) { d.at = 0; d.apply(0); }
 }
@@ -41299,8 +41262,8 @@ if (FIXTURE && !new URLSearchParams(location.search).has('mblur')) {
 // (?time / ?t), because probes and screenshots need a held sun more than the
 // fiction needs a moving one. The dial stays live for this session; it is the
 // stale saved value that loses, not the ranger's hand.
-if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
-  && new URLSearchParams(location.search).get('line') === '1') {
+if (timeFromUrl < 0 && !qs('time')
+  && qs('line') === '1') {
   const d = DIALS.find((x) => x.key === 'time');
   const i = TIME_MODES.indexOf('CYCLE');
   if (d && i >= 0) { d.at = i; d.apply(i); }
@@ -41310,7 +41273,7 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
 // changed a render dial, and until now the render dials were the one set of
 // conditions a screenshot could not state.
 {
-  const q = new URLSearchParams(location.search).get('mblur');
+  const q = qs('mblur');
   const d = q === null ? null : DIALS.find((x) => x.key === 'mblur');
   if (d) { d.at = clamp(Math.round(Number(q)) || 0, 0, d.opts.length - 1); d.apply(d.at); }
 }
@@ -41349,17 +41312,16 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   placeLabel = spawn.name ?? '…';
   renderPlace();
   // Resume orientation and camera from the URL (written live while driving).
-  const q = new URLSearchParams(location.search);
-  const h0 = parseFloat(q.get('h') ?? '');
+  const h0 = parseFloat(qs('h') ?? '');
   if (Number.isFinite(h0)) state.heading = (h0 * Math.PI) / 180;
-  { const c = q.get('cam'); if (c === 'chase' || c === 'cab' || c === 'top') setCam(c); }
+  { const c = qs('cam'); if (c === 'chase' || c === 'cab' || c === 'top') setCam(c); }
   // …and the chart's zoom, so a reload mid-survey resumes the survey. Applied
   // to both the target and the current so the camera does not spend the first
   // seconds flying out from street level.
-  { const z0 = parseFloat(q.get('z') ?? ''); if (Number.isFinite(z0)) zoomT = zoomCur = clamp(z0, ZOOM_MIN, ZOOM_MAX); }
+  { const z0 = parseFloat(qs('z') ?? ''); if (Number.isFinite(z0)) zoomT = zoomCur = clamp(z0, ZOOM_MIN, ZOOM_MAX); }
   // The default spawn faces its vista — El Capitan's rim looks southeast
   // down the valley; a URL heading always wins.
-  if (!Number.isFinite(h0) && !q.get('lat') && !q.get('random')) state.heading = (145 * Math.PI) / 180;
+  if (!Number.isFinite(h0) && !qsHas('lat') && !qsHas('random')) state.heading = (145 * Math.PI) / 180;
   // A fixture faces the way it was authored to be looked at — the T from the
   // joiner, the hairpin along the first leg — unless its tune or the URL says
   // otherwise. `?h=` still wins, as it does everywhere else.
@@ -41370,7 +41332,7 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   // Armed here, taken up once the splash gesture lands: watchPosition before
   // that would burn a fix (and a permission prompt) against a world that has
   // not finished streaming.
-  real.on = q.get('real') === '1';
+  real.on = qs('real') === '1';
   // The destinations, before anything asks for one. A shared link can carry
   // `&m=<id>`, and the task it names lives in the campaign — so this has to have
   // landed before `missionById` is asked. It is one small cached fetch on a
@@ -41384,7 +41346,7 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   // is optimistic — a stored token, or a sign-in finishing on this very load —
   // so an expired token still boots the run and is found out on the first
   // sync rather than locking a ranger out at the roadside.
-  if (q.get('line') === '1' && sync.signedIn()) {
+  if (qs('line') === '1' && sync.signedIn()) {
     lineOn = true;
     const st = lineLoad();
     lineOdo = st?.odo ?? 0;
@@ -41397,7 +41359,7 @@ if (timeFromUrl < 0 && !new URLSearchParams(location.search).get('time')
   void sync.start();
   // The task, if this spawn carries one. Armed AFTER `origin` is set, because
   // both its waypoints are lat/lon and have to be projected into local metres.
-  const mid = q.get('m');
+  const mid = qs('m');
   if (mid) { const m = missionById(mid); if (m) armMission(m); }
   // NOT on a reel boot: this write runs before attractArm raises the gate, and
   // it was the last leak — the postcard's spawn went over the player's URL in
@@ -41766,7 +41728,7 @@ let toastT = 0;
 // back is JSON if it can be and its own toString if it cannot — an Error
 // included, because "it threw, and this is what it said" is an answer.
 {
-  const probeKey = (new URLSearchParams(location.search).get('probe') ?? '').trim();
+  const probeKey = (qs('probe') ?? '').trim();
   if (/^[A-Za-z0-9_-]{6,64}$/.test(probeKey)) {
     // Outside the `~/` namespace on purpose — that surface is cached by path
     // and would serve one tab's answer to another. See serveProbe.

@@ -354,7 +354,3 @@ function drips(c: CanvasRenderingContext2D, s: number, r: Rand, n: number): void
   }
 }
 
-/** Deterministic per-place variation for callers that want one number. */
-export function markSeedAt(env: CultureEnv, x: number, z: number): number {
-  return hash3(seedAt(env, x, z, 'settlement'), Math.round(SCOPE.stand), 0x9a17);
-}
