@@ -65,6 +65,11 @@ export interface MenuCtx {
    *  null once spent (or never set). */
   attractRet?(): string | null;
   attractRetGo?(): void;
+  /** The reel as a programme: how many stops it has, which is showing
+   *  (-1 = the player's own spot), and whether there is a home to go back to. */
+  reel?(): { n: number; at: number; home: boolean };
+  /** -1 is home; 0..n-1 are the reel's stops. */
+  reelGo?(i: number): void;
   driveStats(): Array<[string, string]>;
   worldRows(): Array<[string, string]>;
   systemRows(): Array<[string, string]>;
@@ -217,6 +222,32 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   #menu .m-place { color: ${C.gold}; font-size: 16px; font-weight: 700;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
   #menu .m-dimline { color: ${C.dim}; font-size: 10px; margin: 2px 0 6px; }
+  /* The carousel. Hit boxes are 32px tall with the ink drawn small inside —
+     a 6px dot is a 6px target otherwise, and this strip sits where a thumb
+     rests on a phone. */
+  #menu .m-dots { display: flex; gap: 2px; justify-content: center;
+    align-items: center; padding: 2px 8px 0; flex-wrap: wrap; }
+  #menu .m-dot { -webkit-appearance: none; appearance: none; background: none;
+    border: 0; cursor: pointer; padding: 0; width: 22px; height: 32px;
+    position: relative; }
+  /* THE UNVISITED DOTS HAVE TO BE VISIBLE — they are the "how many" half of
+     the affordance, and at dim-grey-on-a-live-sunset they read as dirt on the
+     screen. Photographed: the strip was there and could not be found. Soft
+     ink, a size that survives the pixel grid, and the same near-black ring
+     every glyph in this menu wears so they hold over any scene behind them. */
+  #menu .m-dot::after { content: ''; position: absolute; left: 50%; top: 50%;
+    width: 8px; height: 8px; margin: -4px 0 0 -4px; border-radius: 50%;
+    background: ${C.soft}; box-shadow: 0 0 0 2px rgba(4,10,11,0.92); }
+  /* HOME is a SQUARE. The one stop that is not a recording should not look
+     like one, and shape reads before colour at this size. */
+  #menu .m-dot.home::after { border-radius: 0; width: 9px; height: 9px;
+    margin: -4.5px 0 0 -4.5px; background: ${C.good}; }
+  #menu .m-dot.home.off::after { background: ${C.dim}; }
+  #menu .m-dot.on::after { background: ${C.gold}; width: 12px; height: 12px;
+    margin: -6px 0 0 -6px; box-shadow: 0 0 0 2px rgba(4,10,11,0.92); }
+  #menu .m-dot.home.on::after { background: ${C.good}; }
+  #menu .m-dotlab { text-align: center; font-size: 10px; letter-spacing: 2px;
+    padding: 0 8px 4px; }
   #menu table.m-kv { border-collapse: collapse; font-size: 11px; }
   #menu table.m-kv td { padding: 1px 1.2em 1px 0; vertical-align: baseline; }
   #menu table.m-kv td:first-child { color: ${C.dim}; padding-right: 1.6em; white-space: nowrap; }
@@ -583,21 +614,51 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       el('span', 'sub', 'WHOSE MAPS THIS IS BUILT FROM'), el('span', 'chev', '>'));
     aboutRow.addEventListener('click', () => setTab(T_ABOUT));
     nav.appendChild(aboutRow);
-    // The way home: the attract reel carried this session somewhere else, and
-    // the ticket back sits in the stack until it is spent. Hidden otherwise.
-    const retRow = el('div', 'm-navrow ret');
-    retRow.append(ico(ICON.gps), el('span', 'name', 'RETURN'),
-      el('span', 'sub', 'BACK TO WHERE YOU WERE'), el('span', 'chev', '>'));
-    retRow.addEventListener('click', () => ctx.attractRetGo?.());
-    nav.appendChild(retRow);
-    updaters.push(() => { retRow.style.display = ctx.attractRet?.() ? 'flex' : 'none'; });
+    // ── THE REEL, AS A CAROUSEL ──
+    //
+    // What stood here was a RETURN row that appeared only after the reel had
+    // already carried the session away: a one-way door with no map. You could
+    // not see how many places there were, which one you were looking at, or
+    // reach a particular one deliberately.
+    //
+    // A dot strip says all three at a glance, and it goes ABOVE the stack
+    // because it describes WHERE YOU ARE rather than offering somewhere to go
+    // — the nav below it is the going. HOME is the first stop and drawn as a
+    // square against the reel's dots, so "am I at my own place or in the
+    // programme" is answerable without reading a word. That is what retires
+    // RETURN: home stops being a special escape hatch and becomes the first
+    // thing on the strip.
+    const dots = el('div', 'm-dots');
+    const dotAt = el('div', 'm-dotlab', '');
+    updaters.push(() => {
+      const r = ctx.reel?.() ?? { n: 0, at: -1, home: false };
+      // Nothing to page through until the programme exists.
+      dots.style.display = r.n ? 'flex' : 'none';
+      dotAt.style.display = r.n ? 'block' : 'none';
+      const want = `${r.n}|${r.at}|${r.home}`;
+      if (dots.dataset.sig !== want) {
+        dots.dataset.sig = want;
+        dots.replaceChildren();
+        for (let i = -1; i < r.n; i++) {
+          const d = el('button', `m-dot${i < 0 ? ' home' : ''}${i === r.at ? ' on' : ''}`);
+          d.type = 'button';
+          d.setAttribute('aria-label', i < 0 ? 'HOME' : `DRIVE ${i + 1}`);
+          // Home is only reachable once there is somewhere to come back FROM.
+          if (i < 0 && !r.home) d.classList.add('off');
+          d.addEventListener('click', () => ctx.reelGo?.(i));
+          dots.appendChild(d);
+        }
+      }
+      dotAt.textContent = r.at < 0 ? 'YOUR OWN ROAD' : `DRIVE ${r.at + 1} OF ${r.n}`;
+      dotAt.style.color = r.at < 0 ? C.good : C.gold;
+    });
     // The scene IS the splash's background — no scrim, no window (the .hub
     // class kills the strips): the rig stands in the live world behind
     // everything, and the spacer holds the sections down where the chase
     // camera keeps the truck visible between the stats and the buttons.
     const spacer = el('div', '');
     spacer.style.flex = '1';
-    body.append(place, situation, kv, spacer, nav);
+    body.append(place, situation, kv, spacer, dots, dotAt, nav);
     // DRIVE anchors the BOTTOM of the page — pinned in the foot, under the
     // sections, always reachable without scrolling past it.
     foot.append(cta, gps);

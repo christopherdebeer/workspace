@@ -23110,11 +23110,36 @@ function tapeRestoreDials(prior: Record<string, number>): void {
     if (d && d.at !== at) { d.at = at; d.apply(at); }
   }
 }
-// A LOT longer than the original 12s/2.6s (owner-asked): the hub sits half a
-// minute before the reel presumes, and a finished drive holds its country for
-// twenty seconds of orbit — the dwell doubling as the priming window.
-const ATTRACT_IDLE_MS = 30000;
-const ATTRACT_DWELL_MS = 20000;
+// ── HOW LONG THE REEL WAITS, AND HOW LONG IT STAYS ──
+//
+// Twice now the answer has been "much longer" (12s/2.6s → 30s/20s → this).
+// The instinct that keeps getting it wrong is treating the reel as a
+// screensaver, something to fill a gap before the player does anything. It is
+// not: it is the game showing you places, and a place needs LOOKING at. Ninety
+// seconds of hub before it presumes to travel, and a minute and a half of
+// orbit over the finished drive — long enough that the postcard is the point
+// rather than the transition between postcards.
+//
+// The dwell also does double duty as the priming window (see stepAttract), so
+// stretching it makes every hop land on warmer caches than the last.
+//
+// AND THEY ARE TUNABLE FROM THE SEAT, because the right number is a judgement
+// nobody can make from a source file: `?reelidle=45&reeldwell=120`, in
+// SECONDS. The same lever every other taste knob in this world has.
+//
+// WHAT THESE CANNOT FIX, and it is the more useful half: the reel is two
+// recordings — NOORDHOEK ROAD at 21.2s and ROMSDALEN at 18.9s — so forty
+// seconds of actual driving is the whole programme, and everything past that
+// is the camera orbiting a parked truck. Stretching the dwell makes the reel
+// LONGER without making it show MORE. Longer drives are a recording job (the
+// game has a recorder), not a constant.
+const reelQ = new URLSearchParams(location.search);
+const reelSecs = (k: string, d: number): number => {
+  const v = Number(reelQ.get(k));
+  return Number.isFinite(v) && v > 0 ? v * 1000 : d;
+};
+const ATTRACT_IDLE_MS = reelSecs('reelidle', 90000);
+const ATTRACT_DWELL_MS = reelSecs('reeldwell', 90000);
 const ATTRACT_RET_KEY = 'drive.attract.ret';
 const attract = { on: false, i: 0, idleAt: 0, doneAt: 0, showAt: 0, dials: {} as Record<string, number> };
 const b64ToBytes = (s: string): Uint8Array => {
@@ -23647,6 +23672,46 @@ function attractGoNow(): void {
     }
   })();
 }
+/** BACK TO THE PLAYER'S OWN SPOT — the first stop on the carousel, and the
+ *  only one that is not a recording. Named rather than inlined in the menu's
+ *  context because the dot strip and the old RETURN row are two callers of one
+ *  behaviour, and a second copy of a hop-or-reload fallback is a second place
+ *  for it to drift. */
+function goHome(): void {
+  try {
+    const ret = sessionStorage.getItem(ATTRACT_RET_KEY);
+    if (!ret) return;
+    sessionStorage.removeItem(ATTRACT_RET_KEY);
+    // Home is a HOP, not a navigation — and when the hop cannot run (mid-hop,
+    // a GPS drive, the line) the reload REPLACES the entry: travel never
+    // leaves a history trail to back-button through.
+    const q = new URL(ret, location.href).searchParams;
+    const la = parseFloat(q.get('lat') ?? ''), lo = parseFloat(q.get('lon') ?? '');
+    const hh = parseFloat(q.get('h') ?? '0');
+    if (Number.isFinite(la) && Number.isFinite(lo) && !real.on && !lineOn && !hopping) {
+      attractStop();
+      void worldHop(la, lo, Number.isFinite(hh) ? hh : 0, { mission: q.get('m') ?? undefined })
+        .then(() => { history.replaceState(null, '', ret); })
+        .catch(() => { location.replace(ret); });
+      return;
+    }
+    location.replace(ret);
+  } catch { /* fine */ }
+}
+/** Go to a stop on the strip: -1 is home, 0..n-1 the reel's own. */
+function reelGoAt(i: number): void {
+  if (i < 0) { goHome(); return; }
+  if (hopping || real.on || lineOn) return;
+  // The way home has to EXIST before the first hop, or a player who taps
+  // straight into the reel has nothing to come back to. stepAttract banks it
+  // on the auto path; this is the same bank on the deliberate one.
+  try {
+    if (!sessionStorage.getItem(ATTRACT_RET_KEY)) sessionStorage.setItem(ATTRACT_RET_KEY, location.href);
+  } catch { /* private mode: the reel still runs, RETURN just cannot */ }
+  reelSnap(performance.now());
+  attract.idleAt = performance.now();
+  attractGo(i);
+}
 function attractStop(): void {
   car.visible = true;
   attractHoldDrop();
@@ -23802,6 +23867,18 @@ function tapeKeep(): string {
 (window as unknown as { __launch?: object }).__launch = (vy = 12): object => {
   vBodyY = vy;
   return { vBodyY, bodyY: +bodyY.toFixed(2) };
+};
+/** The reel's programme, for a test that wants to know what the dot strip is
+ *  drawing and cannot ask the DOM what it MEANS. */
+(window as unknown as { __reel?: object }).__reel = (i?: number): object => {
+  const list = reelNow.length ? reelNow : reelList();
+  let home = false;
+  try { home = !!sessionStorage.getItem(ATTRACT_RET_KEY); } catch { /* private mode */ }
+  const out = { n: list.length, at: attract.on ? attract.i : -1, home,
+    idleMs: ATTRACT_IDLE_MS, dwellMs: ATTRACT_DWELL_MS,
+    src: list[0]?.src ?? null };
+  if (i !== undefined) reelGoAt(i);
+  return out;
 };
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
 (window as unknown as { __coverAt?: (x: number, z: number) => number | null }).__coverAt = sampleCover;
@@ -39955,28 +40032,30 @@ const menu = createMenu({
     attract.idleAt = performance.now();
     attractStop();
   },
-  attractRet: () => { try { return sessionStorage.getItem(ATTRACT_RET_KEY); } catch { return null; } },
-  attractRetGo: () => {
-    try {
-      const ret = sessionStorage.getItem(ATTRACT_RET_KEY);
-      if (!ret) return;
-      sessionStorage.removeItem(ATTRACT_RET_KEY);
-      // Home is a HOP now, not a navigation — and when the hop cannot run
-      // (mid-hop, a GPS drive, the line) the reload REPLACES the entry:
-      // travel never leaves a history trail to back-button through.
-      const q = new URL(ret, location.href).searchParams;
-      const la = parseFloat(q.get('lat') ?? ''), lo = parseFloat(q.get('lon') ?? '');
-      const hh = parseFloat(q.get('h') ?? '0');
-      if (Number.isFinite(la) && Number.isFinite(lo) && !real.on && !lineOn && !hopping) {
-        attractStop();
-        void worldHop(la, lo, Number.isFinite(hh) ? hh : 0, { mission: q.get('m') ?? undefined })
-          .then(() => { history.replaceState(null, '', ret); })
-          .catch(() => { location.replace(ret); });
-        return;
-      }
-      location.replace(ret);
-    } catch { /* fine */ }
+  /**
+   * ── THE REEL AS A CAROUSEL ──
+   *
+   * The hub used to say only "RETURN · BACK TO WHERE YOU WERE", and only once
+   * the reel had already carried you off. That is a one-way door with no map:
+   * you could not see how many places there were, which one you were looking
+   * at, or get to a particular one on purpose.
+   *
+   * So the hub carries the whole programme instead. `at` is -1 when the truck
+   * is on the player's OWN spot and the index of the showing postcard
+   * otherwise, and HOME is a stop on the strip like any other — which is what
+   * retires RETURN: going home is no longer a special escape, it is just
+   * choosing the first dot.
+   */
+  reel: () => {
+    const list = reelNow.length ? reelNow : reelList();
+    let home = false;
+    try { home = !!sessionStorage.getItem(ATTRACT_RET_KEY); } catch { /* private mode */ }
+    return { n: list.length, at: attract.on ? attract.i : -1, home };
   },
+  /** -1 is home; 0..n-1 are the reel's stops. Both are a hop, not a jump. */
+  reelGo: reelGoAt,
+  attractRet: () => { try { return sessionStorage.getItem(ATTRACT_RET_KEY); } catch { return null; } },
+  attractRetGo: goHome,
   situation: () => {
     const [la, lo] = localToLatLon(state.x, state.z);
     const sh = solarHour();
