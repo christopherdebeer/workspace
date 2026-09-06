@@ -1568,9 +1568,59 @@ less — with every tree still placed.** It matters more with the palette: a
 district uses two silhouettes of a family's six, so four tiers stand empty at
 any moment and used to be empty AND fully allocated.
 
+### `treeRefresh` was never the refresh — it was the seeding
+
+The device put `treeRefresh` at 9% of session CPU with a mean of 93 ms a call.
+`vegMs` is ONE NUMBER for a function that walks a ring of cells twice, sorts
+every tree by distance and composes a matrix per plant, and one number cannot
+say which of those to cut. `devtools/veg-cost.mjs` splits it, on a fixture so
+no tile arrival can move the answer.
+
+**Both obvious suspects measured innocent.** The new two-scale variant choice
+costs 0.98 µs a tree against the old hash's 0.15 — 6.5× more and 1.5 ms of the
+93. And the refresh loop itself is **5.5 ms median**, of which `place` is 60%.
+
+What the split actually found: **worst refresh 104 ms, of which 94 ms was
+`seedCell` seeding EIGHTY-ONE CELLS IN ONE CALL.** Seeding is a FIRST-VISIT
+cost — once per 220m cell, from inside `refreshVeg` — so a settled world seeds
+nothing and the 93 ms mean was the calls that hit a burst. The whole ring
+arrives together at boot and on every world hop, which the attract reel does on
+a timer.
+
+- **MEASURE FROM THE FIRST FRAME, NOT AFTER QUIET.** The first cut of the bench
+  waited for the population to settle and then sampled, and reported 5.9 ms
+  with the seeding at zero — a perfect measurement of the one state in which
+  the problem does not exist.
+- **A refresh may now spend `VEG_SEED_MS` (8) seeding and no more**, less
+  whatever the frame has already paid to `frameHeavyMs()`. The ring is already
+  walked outward from the truck, so what defers is the FAR country.
+- **AND IT CATCHES UP FAST.** Deferring inside the 900 ms cadence would fill a
+  hop's ring over a quarter of a minute; a refresh that had to defer asks for
+  the next one in 120 ms. `?vegseed=0` is the exact A/B.
+- The budget is checked BEFORE the cover and ecoregion waits and does not touch
+  `vegDeferredAt`: that clock is about EVIDENCE and this is about TIME, and
+  starting it here would make a busy frame look like a missing tile.
+- It can overshoot by one cell, because nothing stops a cell mid-seed — which
+  is why the worst refresh lands near 28 ms rather than at 8.
+
+**Measured**, Camps Bay fixture, sampled from the first frame, the switch the
+only difference:
+
+| | budget on | `?vegseed=0` |
+|---|---|---|
+| worst refresh | **28.0 ms** | 108.7 ms |
+| worst seeding | **12.0 ms over 2 cells** | 95.4 ms over 81 cells |
+| median refresh | 6.8 ms | 5.6 ms |
+| trees placed | 741 | 741 |
+
+`?treerange=` and `?treepop=` are exact unsaved overrides for the rack's two
+biggest stops, so a bench can stand the world up where the cost is without
+driving the settings panel.
+
 Probes: `__stand(r)` reports `forms`, `variants`, `stands` and `perStand` (the
 mean distinct silhouettes in one stand — the number that says whether the
-confetti is gone); `__ez()` adds `slots` and `slotsIfCapped`. Held by
+confetti is gone); `__ez()` adds `slots` and `slotsIfCapped`;
+`__vegdist().ms` adds `phase`, `seededNow`, `seedMsNow` and `seedDeferred`. Held by
 `devtools/tree-stand.test.mjs` (the palette in node, the world on a fixture, no
 network either way) and checked live by `devtools/savanna.mjs`, which is the
 one that proves the whole chain closes: the Serengeti returns *Southern

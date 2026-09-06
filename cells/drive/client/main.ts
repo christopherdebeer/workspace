@@ -7790,8 +7790,26 @@ const TREE_BEND_STEPS = [0, 0.08, 0.18, 0.35, 0.65, 1.1] as const;
 const TREE_VARIANT_STEPS = [1, 2, 4, Number.MAX_SAFE_INTEGER] as const;
 const treeTriUrl = Number(new URLSearchParams(location.search).get('treetris'));
 let treeTriBudget = Number.isFinite(treeTriUrl) && treeTriUrl > 0 ? treeTriUrl : 2400000;
+/**
+ * THE TREE RACK'S TWO BIGGEST STOPS, ALSO AS URL OVERRIDES.
+ *
+ * The rack lives in SETTINGS and persists, which is right for a player and
+ * wrong for a bench: the device report that put `treeRefresh` at 9% of session
+ * CPU was taken at `range 2800m · pop 2x`, and a measurement of a cut made
+ * only at the shipped defaults is a measurement taken where the cost is not.
+ * `?treerange=` and `?treepop=` are exact and unsaved, exactly as `?treetris=`
+ * already is, so a harness run can stand the world up at the stops without
+ * driving the panel or writing to the player's own rack.
+ */
 let treeRange = 700;
 let treePopulationScale = 1;
+{
+  const q = new URLSearchParams(location.search);
+  const r = Number(q.get('treerange'));
+  if (Number.isFinite(r) && r > 0) treeRange = clamp(r, 100, 6000);
+  const p = Number(q.get('treepop'));
+  if (Number.isFinite(p) && p > 0) treePopulationScale = clamp(p, 0.05, 32);
+}
 let treeSizeScale = 1;
 let treeFormScale = 1;
 let treeVariantCap: number = Number.MAX_SAFE_INTEGER;
@@ -8290,6 +8308,12 @@ const freshVegSeedStats = (): VegSeedStats => ({
 function seedCell(gx: number, gz: number): void {
   const key = `${gx},${gz}`;
   if (vegSeeded.has(key)) return;
+  // THE BUDGET IS CHECKED BEFORE ANYTHING ELSE, and deliberately does not
+  // touch `vegDeferredAt`: that clock belongs to the cover and ecoregion
+  // waits, which are decisions about EVIDENCE, and this is a decision about
+  // TIME. Starting their 30s ceiling here would make a busy frame look like a
+  // missing tile.
+  if (vegSeedLeft <= 0) { vegSeedDeferred++; return; }
   const mx = gx * VEG_CELL + VEG_CELL / 2, mz = gz * VEG_CELL + VEG_CELL / 2;
   // WHAT GROWS HERE IS A FACT, not a guess. The biome ceiling below stands in
   // only until WorldCover has this ground: it is one number for a whole world,
@@ -8397,6 +8421,9 @@ function seedCell(gx: number, gz: number): void {
       k, r, tone, 'ground-event', stats, false)) stats.groundEvents++;
   }
   stats.ms = performance.now() - t0;
+  vegSeedLeft -= stats.ms;
+  vegSeedNow++;
+  vegSeedMsNow += stats.ms;
   vegSeedStats.set(key, stats);
 }
 
@@ -9591,6 +9618,56 @@ function refreshSward(): void {
 // slow tick — the field only needs to change as fast as you drive through it.
 let vegAt = 0, swardAt = 0;
 let vegMs = 0;
+/**
+ * WHERE refreshVeg's MILLISECONDS GO.
+ *
+ * The device telemetry put `treeRefresh` at 9% of session CPU with a mean of
+ * 93 ms a call, and `vegMs` is one number for a function that walks a ring of
+ * cells TWICE, sorts every tree by distance, and composes a matrix per plant.
+ * One number cannot say which of those to cut, and the two obvious suspects
+ * have both already turned out to be wrong when measured — the variant choice
+ * costs 1.5 ms of the 93, and the seeding has its own clock.
+ */
+const vegPhase: Record<string, number> = {};
+let vegPhaseAt = 0;
+/** Cells seeded during THIS refresh, and what they cost. `__vegdist().ms.seedTotal`
+ *  is a running total over the cells in the debug window and cannot say what a
+ *  single call paid — which is the whole question, because seeding is a
+ *  FIRST-VISIT cost and a refresh that seeds nothing is a different animal
+ *  from one that seeds twenty cells. */
+let vegSeedNow = 0;
+let vegSeedMsNow = 0;
+/**
+ * ── SEEDING IS A FIRST-VISIT COST, AND IT ARRIVED ALL AT ONCE ──
+ *
+ * `seedCell` runs once per 220m cell, from inside `refreshVeg`, and a settled
+ * world seeds nothing at all — so `treeRefresh`'s reported 93 ms mean was never
+ * the refresh loop. Measured on the Camps Bay fixture, sampling every refresh
+ * from the first frame rather than after quiet: **median 5.5 ms, worst 104 ms,
+ * of which 94 ms was seeding EIGHTY-ONE CELLS IN ONE CALL.** The whole ring
+ * arrives together at boot and on every world hop, which the attract reel does
+ * on a timer.
+ *
+ * So a refresh may spend `VEG_SEED_MS` seeding and no more. The ring is
+ * already walked outward from the truck, so what gets deferred is the FAR
+ * country and the ground you are standing on is dressed first — the same
+ * bargain the terrain and the roads already strike.
+ *
+ * AND IT CATCHES UP FAST. Deferring inside a 900ms cadence would fill a
+ * hop's ring over a quarter of a minute; a refresh that had to defer asks for
+ * the next one in `VEG_SEED_CATCHUP` instead, so the cost is spread over
+ * frames without being spread over seconds. `?vegseed=0` is the exact A/B.
+ */
+const VEG_SEED_MS = 8;
+const VEG_SEED_CATCHUP = 120;
+const VEG_SEED_BUDGET = new URLSearchParams(location.search).get('vegseed') !== '0';
+let vegSeedLeft = 0;
+let vegSeedDeferred = 0;
+const vegMark = (name: string): void => {
+  const now = performance.now();
+  vegPhase[name] = (vegPhase[name] ?? 0) + (now - vegPhaseAt);
+  vegPhaseAt = now;
+};
 const emptyVegRoles = (): Record<VegetationRole, number> =>
   ({ interior: 0, fringe: 0, 'living-stray': 0, 'ground-event': 0, polygon: 0 });
 let vegActiveRoles = emptyVegRoles();
@@ -9700,6 +9777,15 @@ function refreshShrubs(): void {
 (window as unknown as { __shrubs?: object }).__shrubs = (): object => ({ on: SHRUB_ON, n: shrubN, within40m: shrubNear, cap: SHRUB_CAP, step: SHRUB_STEP, sight: SHRUB_SIGHT, field: !Number.isNaN(swardFX) });
 function refreshVeg(): void {
   const t0 = performance.now();
+  for (const k of Object.keys(vegPhase)) delete vegPhase[k];
+  vegPhaseAt = t0;
+  vegSeedNow = 0;
+  vegSeedMsNow = 0;
+  vegSeedDeferred = 0;
+  // What the FRAME has already spent on other heavy work comes out of the
+  // budget, so a refresh that lands on a terrain apply or a hydro build seeds
+  // little or nothing rather than stacking on top of it.
+  vegSeedLeft = VEG_SEED_BUDGET ? Math.max(0, VEG_SEED_MS - frameHeavyMs()) : Infinity;
   const counts: Record<string, number> = { broadleaf: 0, conifer: 0, palm: 0, snag: 0, bush: 0, rock: 0, grass: 0,
     acacia: 0, cactus: 0, fern: 0, log: 0, spire: 0 };
   const activeRoles = emptyVegRoles();
@@ -9726,6 +9812,7 @@ function refreshVeg(): void {
   const ezNeed: Record<EzFamily, number[]> = ezRecord((f) => ezTiers[f].map(() => 0));
   for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) { t.n = 0; t.nNear = 0; t.nFar = 0; }
   ezPlaced = [];
+  vegMark('ring');
   // ── THE TREES ARE ADMITTED BY DISTANCE, NOT BY CELL ──
   //
   // The tree budget scales the tree caps to a few hundred, so in any wood
@@ -9753,6 +9840,7 @@ function refreshVeg(): void {
         if (d2 < treeR2) cand[v.k].push([d2, v]);
       }
     }
+    vegMark('ezGather');
     for (const fam of EZ_FAMILIES) {
       const list = cand[fam];
       const cap = ezCapFor(fam);
@@ -9774,6 +9862,7 @@ function refreshVeg(): void {
       });
     }
   }
+  vegMark('ezAdmit');
   // Archetype trees (?ez=0, plus palms/acacias) and their trunks use the same
   // real population ceiling. Pools only grow when an upper stop needs them.
   for (const k of TREE_KINDS) {
@@ -9903,6 +9992,7 @@ function refreshVeg(): void {
       }
     }
   }
+  vegMark('place');
   for (const k of Object.keys(vegMeshes) as VegKind[]) {
     if (k === 'grass') continue;              // the sward keeps its own clock
     const m = vegMeshes[k];
@@ -9922,9 +10012,11 @@ function refreshVeg(): void {
       if (t.far.instanceColor) t.far.instanceColor.needsUpdate = true;
     }
   }
+  vegMark('upload');
   vegActiveRoles = activeRoles;
   ezEdgeLast = ezRecord((f) => Math.round(ezEdge[f]));
   refreshShrubs();
+  vegMark('shrubs');
   vegActiveAnchors = activeAnchors;
   vegMs = performance.now() - t0;
   // Forget buckets far behind so a long drive cannot grow the site list
@@ -24342,7 +24434,13 @@ function tapeKeep(): string {
     byKind,
     budget: { range: { vegetation: VEG_RANGE, trees: treeRange }, cell: VEG_CELL, caps: VEG_CAP,
       treePopulationScale, capTotal: Object.values(VEG_CAP).reduce((a, b) => a + b, 0) },
-    ms: { seedTotal: +sum.ms.toFixed(1), refresh: +vegMs.toFixed(1) },
+    // `seedTotal` is the SEEDING, which happens inside `ring`/`ezGather` and
+    // `place` — subtract it before blaming either. The phases are the last
+    // refresh only; `refresh` is its total.
+    ms: { seedTotal: +sum.ms.toFixed(1), refresh: +vegMs.toFixed(1),
+      phase: Object.fromEntries(Object.entries(vegPhase).map(([k, v]) => [k, +v.toFixed(2)])),
+      seededNow: vegSeedNow, seedMsNow: +vegSeedMsNow.toFixed(2),
+      seedDeferred: vegSeedDeferred, seedBudget: VEG_SEED_BUDGET ? VEG_SEED_MS : 0 },
   };
 };
 /**
@@ -34780,7 +34878,15 @@ function tick(now: number): void {
   if (seaOn && (surfKind === 'road' || surfKind === 'track')) {
     noteDryLand(state.x, state.z, groundAt(state.x, state.z));
   }
-  if (now > vegAt) { vegAt = now + 900; const _treeRefreshAt = performance.now(); refreshVeg(); profAdd('treeRefresh', _treeRefreshAt); }
+  if (now > vegAt) {
+    const _treeRefreshAt = performance.now();
+    refreshVeg();
+    profAdd('treeRefresh', _treeRefreshAt);
+    // A refresh that ran out of seeding budget comes back in a fifth of a
+    // second rather than in nine tenths, so a hop's ring fills in a second or
+    // two instead of a quarter of a minute.
+    vegAt = now + (vegSeedDeferred ? VEG_SEED_CATCHUP : 900);
+  }
   else if (now > swardAt) { swardAt = now + 700; if (!swardGpu) refreshSward(); }
   // The GPU sward is uniform writes and a field rebuild only when the truck
   // leaves the middle of it, so it runs every frame rather than on a slow tick.
