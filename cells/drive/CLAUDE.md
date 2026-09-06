@@ -2825,6 +2825,67 @@ identity is trustworthy here.
   platform bundles without code splitting. The levers are splitting and moving
   baked data to `static/`, not elimination.
 
+## The soundscape, lifted out
+
+`client/audio.ts`. It was the easiest thing in main.ts to lift and the survey
+said so before anyone opened it: **624 lines reaching exactly three things
+outside themselves** — `clamp`, a four-word string union, and a callback. Every
+other input arrives as an argument, every frame, which is what a mixer is.
+`createAudio()` returns the same twenty-member surface; `client/num.ts` now
+owns `clamp` (44 of main's state-free functions reach it — the most shared
+thing in the client) so a module that leaves no longer has to take a copy.
+
+**THE CALLBACK DID NOTHING.** `syncBtn()` was `const syncBtn = (): void => { /*
+label is drawn from audio state each frame */ };` — an empty arrow, declared
+four hundred lines BELOW the call that hoisting made legal, kept alive for a
+button that had stopped needing it. It was the only thing in the file reaching
+back into the game, and moving the file is what made it visible.
+
+**AND THE VOICES DID NOT AGREE ABOUT WHAT "OFF" MEANS.** Eight one-shots asked
+for a context, a master, a RUNNING context and the dial on. `update` and
+`ambience` omitted the dial — safe, but only because the context happens to be
+suspended when the dial is off, which is a coincidence and not a reason. And
+`brush`, `scrape` and `water` asked NEITHER, writing gain automation onto a
+suspended context whose clock is not advancing. Nothing was audibly wrong (the
+master sits at zero) but three voices were living on someone else's guard and
+the next voice copied from one of them would have inherited that. `live()` is
+the one predicate now. Verified by `mix-audit.mjs`: engine 0.336, grit 0.38,
+roar 0.19, no page errors, same numbers as before the move.
+
+### What the soundscape is missing, now that it can be read at once
+
+Not fixed — recorded, because the list is the useful thing and each item is its
+own piece of work. In rough order of what a driver would notice:
+
+- **NOTHING IS SPATIALISED.** Every voice is mono into `master`. The river is
+  audible but not LOCATED: it does not sit on one side, and it does not pan as
+  you drive past it. The world knows where the water is (`__hydrowhy` will tell
+  you to the metre) and the mixer is told only "how much". A `StereoPannerNode`
+  on the river, the rustle and the impacts is nearly free.
+- **NO SENSE OF ENCLOSURE.** The game has tunnels, galleries and bridge
+  soffits — this file documents the chase camera rendering from INSIDE a slab —
+  and the mix is identical under one. Enclosure is the most recognisable
+  acoustic cue in driving and the world already knows it (`tn` segments,
+  `TUNNEL_H`, `deckAnchorAt`). A lowpass sweep and a short feedback delay would
+  carry it without a convolver.
+- **THE MIX DOES NOT KNOW WHICH CAMERA IS IN USE.** Cab and chase sound the
+  same. In the cab there should be less wind and more engine; that is one
+  argument to `update`.
+- **A SURFACE CHANGE HAS NO EDGE.** Tarmac to gravel glides across on
+  `setTargetAtTime`; there is no kerb tick, no rumble strip, no cattle grid.
+  `surfKind` changes on a known frame.
+- **RAIN HAS NO IMPACTS.** `rainAmt` only opens the wind channel. Rain in a
+  vehicle is patter on the roof, which is the one thing this does not do.
+- **THE BIRDS DO NOT KNOW WHERE THEY ARE.** One phrase generator, 2.3–4 kHz,
+  everywhere on Earth — while the guild layer three modules away can say
+  whether this is fynbos, taiga or mangrove. The same "the world knows and the
+  layer is not told" shape the flora review found, one layer over.
+- **NO ENGINE LOAD.** Pitch follows `rev` and `gear`; coasting and pulling
+  sound the same, which is most of what an engine actually says.
+- **`drive.mute` LIVES OUTSIDE THE DIAL RACK**, in its own localStorage key, so
+  it is not covered by the rack's versioning or its migrations the way TIME,
+  PALETTE and WATER are.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where
