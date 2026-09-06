@@ -1487,11 +1487,96 @@ scale 3, 40 m and 105 m cameras:
   site and EZ VARIANTS can collapse them to prove what that atlas contributes;
   FORM SPREAD magnifies the already stable height/width/lean draws, while
   GROWTH BEND adds a continuous position-hashed bow in the vertex shader for
-  no vertices or draw calls. The next high-leverage bake is more
-  recipe × seed silhouettes selected coherently per stand (rather than random
-  species confetti), with runtime generation still kept out of the game.
+  no vertices or draw calls.
   Change a recipe → re-bake (`npm i --no-save @dgreenheck/ez-tree@1.1.0`,
   run the devtool); the bake prints the drawn triangles per variant.
+
+### The atlas has a vocabulary now, and a wood is one wood
+
+Three things it did not have, and the fourth is what makes it extensible.
+
+- **A FORM, DECLARED AND CHECKED.** Every variant says what shape it is —
+  `round`, `columnar`, `conic`, `umbrella`, `palm`, `bare` — and the bake
+  MEASURES the silhouette off the geometry it just produced: the bare trunk
+  below the crown (`clear`), the crown's widest radius (`width`), and whether
+  it widens or narrows going up (`taper`), all as fractions of the tree's own
+  height, read from the points the world will actually draw. A declaration
+  nothing checks is a label. The whole point is that a guild can ASK for a
+  shape; the form is GEOMETRY and `guild.ts` owns the biology, because the same
+  umbrella crown is an acacia in the Sahel and a paperbark in Kakadu.
+- **THE CHECK CAUGHT ITS OWN RULE TWICE, on the first run.** Width was tested
+  before taper, so a small pine at width 0.22 with taper −0.31 came out
+  `columnar` — a narrow cone is still a cone. And `umbrella` demanded a clear
+  trunk over 0.45 of the height, which no acacia on earth has: a mature
+  *Vachellia tortilis* is about 8m with 3m of clear trunk and a 10m crown, so
+  clear ≈ 0.38 and width ≈ 0.6. **The threshold is anchored to the real tree,
+  not to a recipe that needs to pass**, and moving it was checked to
+  reclassify none of the fourteen variants that already existed.
+- **AND THE ATLAS HAS NO COLUMNAR TREE.** Every broadleaf measures 0.34 to 0.57
+  wide. That is a real gap the vocabulary made visible, and it is where the
+  next bake should go: a columnar broadleaf, and a small-leaved sclerophyll for
+  the Mediterranean rows, which the guild currently has to serve with an oak.
+
+**AN ACACIA AND A PALM**, because the guild has asked for both since it shipped
+and the package's sixteen presets are all temperate northern — so a savanna got
+oaks and a mangrove got a 20-triangle archetype. Same generator, different
+dials, and the dials were found by measuring rather than by eye:
+
+- a clear trunk needs `branchStart` at BOTH levels; `start[1]` alone stalls at
+  0.23 of the height, because level-2 branches hang back down through it;
+- near-horizontal arms are the obvious answer for a flat crown and are wrong —
+  at 80° the children droop and the clear trunk fell from 0.45 to 0.30;
+- trunk length against arm length is the real lever, and it is a TRADE: a
+  longer trunk raises `clear` and narrows `width` together, so the acacia sits
+  on a frontier rather than at an optimum;
+- **`branch.force` is the droop, and it defaults to pulling branches UP.**
+  Pointing it down is what makes a palm a palm: it took the crown from 0.10 of
+  the tree across to 0.22, while `length[1]` — the obvious lever — moved it
+  from 0.060 to 0.070 and no further.
+
+Both cost less than the broadleaf beside them (acacia 720t, palm 632–696t
+against an oak's 1032t). `EZ_FAMILIES` is five now and six hard-coded
+three-family record literals are derived from it, so a sixth is one edit.
+
+**A WOOD IS A WOOD.** A silhouette was chosen by hashing the TREE'S OWN
+COORDINATES at an eighth of a metre — every variant equally likely at every
+point, so two trees standing together came out a broad oak and a leggy aspen.
+That is not variety, it is noise. Real vegetation is coherent at two scales, so
+`ezPalette(family, districtSeed)` picks the few silhouettes a country grows and
+`ezPickVariant(palette, standSeed)` picks which one this thicket is, both from
+`culture.ts`'s own scopes (district 6km, stand 32m) — jittered Voronoi keyed on
+lat/lon, so a palette survives a world rebase and a stand does not reroll as
+you drive past it. That machinery already existed for bedrock; this is the
+second thing to use it. `?ezstand=0` is the exact A/B.
+
+**Measured** at Camps Bay, same fixture, the switch the only difference:
+
+| | per stand | per position (`?ezstand=0`) |
+|---|---|---|
+| distinct silhouettes in a 32m stand | **1.07** | 1.54 |
+| distinct silhouettes across 400m | **5** | 12 |
+
+**AND THE ATLAS IS CHEAP TO EXTEND NOW.** Each tier was born holding its
+FAMILY'S WHOLE CAP, on the reasoning that worst case every site lands on one
+variant — true, and it meant the boot allocation was the cap times the variant
+count: 40,600 instance slots, about 3MB of matrices and colours, of which at
+most one family's cap is ever in use. `refreshVeg` already computed the true
+per-variant need and already called `ensureVegCapacity` with it every refresh,
+so the up-front cap bought nothing the growth path was not going to provide.
+Tiers are seeded at 64 and grown. **Measured: 4,096 slots against 40,600 — 90%
+less — with every tree still placed.** It matters more with the palette: a
+district uses two silhouettes of a family's six, so four tiers stand empty at
+any moment and used to be empty AND fully allocated.
+
+Probes: `__stand(r)` reports `forms`, `variants`, `stands` and `perStand` (the
+mean distinct silhouettes in one stand — the number that says whether the
+confetti is gone); `__ez()` adds `slots` and `slotsIfCapped`. Held by
+`devtools/tree-stand.test.mjs` (the palette in node, the world on a fixture, no
+network either way) and checked live by `devtools/savanna.mjs`, which is the
+one that proves the whole chain closes: the Serengeti returns *Southern
+Acacia-Commiphora bushlands* → the savanna guild → `forms {bare 6, umbrella 2}`,
+and the Sundarbans returns *Sundarbans mangroves* → the mangrove guild →
+`forms {bare 16, palm 11}`.
 
 - **THE SWARD GROWS SHRUBS.** Between the sward's flowers and the trees
   there was nothing knee-high. `refreshShrubs` (beside `refreshVeg`, every

@@ -7843,6 +7843,10 @@ function ezVariantAt(fam: EzFamily, x: number, z: number): number {
  * and material, so nothing about a tree changes with distance but whether
  * the GPU spends a depth pass on it.
  */
+/** What a tier is BORN with. `ensureVegCapacity` rounds to 128 and grows by
+ *  1.6x, so this only has to be small enough not to waste and large enough
+ *  that a sparse family never reallocates at all. */
+const EZ_TIER_SEED = 64;
 interface EzTier { near: THREE.InstancedMesh; far: THREE.InstancedMesh; tris: number; n: number; nNear: number; nFar: number }
 const ezTiers: Record<EzFamily, EzTier[]> = ezRecord(() => [] as EzTier[]);
 const ezMat = ezMaterial(0x4a3826, { bend: treeBendU, wind: windU });
@@ -7859,10 +7863,26 @@ grainFx(ezMat, 'grain-ez', 0.95, 2.2);
 if (EZ_ON) {
   for (const fam of EZ_FAMILIES) {
     for (const v of ezVariants(fam)) {
-      // Worst case every site of a kind lands on one variant, so each holds the kind's whole cap.
-      const near = vegMesh(v.geometry, ezMat, VEG_CAP[fam]);
+      // ── ALLOCATED SMALL, GROWN ON DEMAND ──
+      //
+      // Each tier used to be born holding the whole FAMILY's cap, on the
+      // reasoning that worst case every site lands on one variant. True, and
+      // it means the boot allocation is the cap times the number of variants:
+      // nineteen variants over five families, two meshes each, came to 40,600
+      // instance slots — about 3 MB of matrices and colours — of which at most
+      // a family's cap is ever in use at once.
+      //
+      // `refreshVeg` already computes the true per-variant need (`ezNeed`) and
+      // already calls `ensureVegCapacity` on both meshes with it, every
+      // refresh, before a single tree is placed. So the up-front cap bought
+      // nothing the growth path was not going to provide, and it made the
+      // atlas expensive to extend — which is the opposite of what a bake with
+      // a vocabulary is for. It matters more now that the palette exists: a
+      // district uses two silhouettes of a family's six, so four tiers stand
+      // empty at any moment and used to be empty AND fully allocated.
+      const near = vegMesh(v.geometry, ezMat, EZ_TIER_SEED);
       near.name = 'veg-ez';
-      const far = vegMesh(v.geometry, ezMat, VEG_CAP[fam]);
+      const far = vegMesh(v.geometry, ezMat, EZ_TIER_SEED);
       far.name = 'veg-ez-far';
       shadowy(far, false, false);
       ezTiers[fam].push({ near, far, tris: v.tris, n: 0, nNear: 0, nFar: 0 });
@@ -24348,6 +24368,16 @@ function tapeKeep(): string {
     },
   };
   let tris = 0;
+  // EVERY INSTANCE SLOT ALLOCATED, near and far, over every variant of every
+  // family — the number that says what the atlas costs to HOLD rather than to
+  // draw. Tiers are born at EZ_TIER_SEED and grown from the measured need, so
+  // this should track what is standing rather than the sum of the caps.
+  let slots = 0;
+  for (const fam of EZ_FAMILIES) {
+    for (const t of ezTiers[fam]) slots += t.near.instanceMatrix.count + t.far.instanceMatrix.count;
+  }
+  out.slots = slots;
+  out.slotsIfCapped = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].length * 2 * VEG_CAP[f], 0);
   for (const fam of EZ_FAMILIES) {
     const per = ezTiers[fam].map((t) => t.n);
     const variants = ezTiers[fam].length;

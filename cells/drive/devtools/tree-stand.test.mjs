@@ -99,9 +99,10 @@ async function stand(ezstand) {
     requestAnimationFrame(w);
   }));
   const out = await d.page.evaluate(() => window.__stand(400));
+  const ez = await d.page.evaluate(() => window.__ez());
   const errs = d.errors.slice();
   await d.close();
-  return { out, errs };
+  return { out, ez, errs };
 }
 
 const on = await stand('1');
@@ -124,6 +125,19 @@ ok('…and the landscape is still not a monoculture',
   Object.keys(on.out.variants).length >= 2, on.out.variants);
 ok('no page errors', on.errs.length === 0 && off.errs.length === 0,
   [...on.errs, ...off.errs].slice(0, 3));
+
+// ── AND WHAT THE ATLAS COSTS TO HOLD ─────────────────────────────────────
+// Each tier used to be born holding its family's whole cap, so the boot
+// allocation was the cap times the variant count — and every variant added to
+// the atlas cost that again whether or not anything stood in it. Tiers are
+// seeded small and grown from the measured per-variant need instead, which is
+// what makes a vocabulary worth extending.
+console.log(`\ninstance slots: ${on.ez.slots} allocated · ${on.ez.slotsIfCapped} under the old`
+  + ` per-family cap (${(100 - on.ez.slots / on.ez.slotsIfCapped * 100).toFixed(0)}% less)`);
+ok('the atlas is not allocated at the sum of its caps',
+  on.ez.slots < on.ez.slotsIfCapped * 0.5, [on.ez.slots, on.ez.slotsIfCapped]);
+ok('…and still holds every tree it placed',
+  on.ez.slots >= on.out.trees, [on.ez.slots, on.out.trees]);
 
 console.log(bad ? `\n${bad} FAILED` : '\nall ok');
 process.exit(bad ? 1 : 0);
