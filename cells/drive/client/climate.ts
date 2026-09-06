@@ -723,10 +723,24 @@ export function siteAt(env: SiteEnv, x: number, z: number): SiteClimate {
   const dx = (hE - hW) / (2 * SLOPE_R), dz = (hS - hN) / (2 * SLOPE_R);
   const grade = Math.hypot(dx, dz);
   // The sun sits equatorward: south of you in the north, north of you in the
-  // south. A slope faces the sun when its downhill direction points that way.
-  // −z is north in this world, so the sunward sign flips with the hemisphere.
+  // south. A slope faces the sun when its DOWNHILL direction points that way,
+  // and −z is north in this world, so the sign flips with the hemisphere.
+  //
+  // THE MINUS IS THE WHOLE POINT, and it was missing. `dz` is the GRADIENT,
+  // which points UPHILL; the direction a slope faces is its negation. Without
+  // it every pole-facing slope on earth read as full sun and every sunny one as
+  // shade — in both hemispheres, symmetrically, which is exactly why the
+  // fixture missed it: the authored hillside in `climate-fixtures.test.mjs`
+  // was built from the same wrong premise, so the two agreed and the suite was
+  // green. What disagreed was a REAL hillside — Chapman's Peak, 32° falling
+  // south at 34°S, the pole-facing side of the ridge, reported `insolation`
+  // 1.00 the first time `siteAt` was asked about ground the game had streamed.
+  //
+  // `aspectLift` above has always had it right (`northness` is +1 poleward),
+  // and the fixtures now assert the two against each other rather than each
+  // against its own idea of a slope.
   const sunZ = lat >= 0 ? 1 : -1;
-  const sunward = grade > 1e-4 ? (dz * sunZ) / grade : 0;
+  const sunward = grade > 1e-4 ? -(dz * sunZ) / grade : 0;
   const insolation = clamp(0.5 + 0.5 * sunward * clamp(grade * 2.2, 0, 1), 0, 1);
 
   // A hollow is ground with ground above it on most sides. Ring-sampled rather

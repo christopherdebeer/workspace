@@ -288,6 +288,22 @@ export async function openDrive(opts = {}) {
         })
         .catch(() => { res.writeHead(503); res.end('{}'); });
     }
+    // ECOREGION TILES, and for the third time the same reason: the client has
+    // no fallback for these, so a 404 here does not degrade the answer, it
+    // deletes it — and it deletes it PERMANENTLY, because `loadEcoTile` reads
+    // a 4xx as "this tile is not coming, whatever we do" and never asks again.
+    // A run against this server therefore reported `ecoState: failed` on frame
+    // zero and looked exactly like a broken route on the cell. One z5 tile
+    // covers twelve hundred kilometres, so this is one fetch a continent.
+    else if (p.startsWith('/~/eco/v1/')) {
+      fetch(`https://c15r-drive.on.parc.land${p}`)
+        .then(async (r) => {
+          if (!r.ok) { res.writeHead(r.status); res.end('{}'); return; }
+          res.writeHead(200, { 'content-type': 'application/json' });
+          res.end(Buffer.from(await r.arrayBuffer()));
+        })
+        .catch(() => { res.writeHead(503); res.end('{}'); });
+    }
     else if (p.startsWith('/~/cover/v1/')) {
       cellRoute(p).then((out) => {
         if (!out) { res.writeHead(404); res.end('{}'); return; }

@@ -16,7 +16,9 @@
  */
 import * as THREE from 'three';
 import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, altBandAt, aspectLift, climPick, climPickRow,
-  krummholz, swardLift, treelineAt, type ClimateSample } from './climate';
+  krummholz, siteAt, swardLift, treelineAt, type ClimateSample, type SiteClimate } from './climate';
+import { coastKm } from './coast';
+import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt, paintFor, roadLookAt,
   seedAt, snowLoad, stoneWalls, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
 import { pickInfrastructureRecipe, planSupportStations, type StructureRecipe } from './infrastructure';
@@ -1380,6 +1382,152 @@ const climEnv = {
   groundAt: (x: number, z: number) => groundAt(x, z) + baseElev,
 };
 const climField = new ClimateField(climEnv);
+/**
+ * ── THE SITE: THE SAME WORLD, ASKED A HARDER QUESTION ──
+ *
+ * `climField` answers "which of five biomes", which is what the sky, the light
+ * and the ground ramp need and is far too coarse to choose a plant with: it
+ * puts fynbos, chaparral, savanna, steppe and monsoon forest in one box, and
+ * it reads the LAND COVER, so its verdict is partly the vegetation predicting
+ * the vegetation.
+ *
+ * `siteAt` is the layer under it. It classifies nothing — it reports the
+ * physical facts a plant responds to (heat, the annual range, frost, water and
+ * WHEN the water arrives, continentality, rain shadow, height against the
+ * treeline, and the local slope/hollow/salt terms) and leaves the choosing to
+ * whatever sits on top. It reads no cover at all, so it is not circular.
+ *
+ * Three inputs the biome field never needed, and each is a different scale:
+ * the SIGNED latitude (a slope faces the sun the other way in the south), the
+ * COARSE distance to salt water in kilometres (baked and bundled — see
+ * coast.ts, it has to answer at 400km and nothing streamed reaches that), and
+ * the LOCAL distance to salt water in metres, which is a different question
+ * with a different answer and gets its own sampler below.
+ */
+/** METRES to the nearest sea, or null where no cover tile has judged this
+ *  point at all. Read only by `salt`, whose whole reach is nine hundred
+ *  metres, so the search stops there and a farther sea is the same as none.
+ *
+ *  `oceanAt` cannot say "I do not know" — it answers false both for dry land
+ *  and for a point no cover tile covers — so the two are separated here by
+ *  asking the tile index directly. That distinction is the entire reason this
+ *  returns `number | null`: an unevidenced coast must not read as an interior,
+ *  and a mangrove is not the fallback for a world that has not streamed. */
+const SEA_NEAR_MAX = 1000;
+function seaNearAt(ex: number, ez: number): number | null {
+  // THE GLOBAL FIELD REJECTS THE INTERIOR FOR FREE, and most of the world is
+  // the interior. A half-degree cell is 55km across, so a point the baked
+  // coastline puts 60km from salt water cannot be within a kilometre of it —
+  // and that verdict needs no cover tile, no mask build and no ring walk. It
+  // is also STRONGER than the cover raster could be: the raster reaches 28km
+  // and would have to say "not in my ring" where this says "not on Earth".
+  const [la, lo] = localToLatLon(ex, ez);
+  if (Number.isFinite(la) && Number.isFinite(lo) && coastKm(la, lo) > 60) return 1e9;
+  let covered = false;
+  for (const [, t] of coverTiles) {
+    if (ex >= t.xs && ez >= t.zs && ex < t.xs + t.w && ez < t.zs + t.h) { covered = true; break; }
+  }
+  if (!covered) return null;
+  if (oceanAt(ex, ez)) return 0;
+  // Rings outward at the resolution the TERM can use, and no finer. `salt` is
+  // `1 - seaM/900`, so a hundred metres of distance is a tenth of the answer
+  // and sixteen samples put one every 39m of arc at the outer ring. The first
+  // cut walked 818 samples for one site — 60m steps with the ring count
+  // growing — which is a mask read per sample through every loaded cover tile,
+  // paid on every INLAND site since the early-out above did not exist yet.
+  for (let r = 100; r <= SEA_NEAR_MAX; r += 100) {
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      if (oceanAt(ex + Math.cos(a) * r, ez + Math.sin(a) * r)) return r;
+    }
+  }
+  return 1e9;   // covered, and the sea is not within reach of the term
+}
+const siteEnv = {
+  ...climEnv,
+  latAt: (x: number, z: number) => localToLatLon(x, z)[0],
+  coastKmAt: (x: number, z: number) => {
+    const [la, lo] = localToLatLon(x, z);
+    return Number.isFinite(la) && Number.isFinite(lo) ? coastKm(la, lo) : null;
+  },
+  seaNearAt,
+};
+/** A site costs roughly twenty ground reads — four for the slope, eight for
+ *  the hollow ring, six along the upwind line — so it is memoised on a 250m
+ *  cell and thrown away whenever the terrain has been rebuilt. The stamp
+ *  matters more than the cell: a site sampled before the DEM arrived is all
+ *  fallbacks, and it must not outlive the ground that would correct it. */
+const siteMemo = new Map<string, { s: SiteClimate; stamp: number }>();
+const SITE_CELL = 250;
+function siteNow(ex: number, ez: number): SiteClimate {
+  const k = `${Math.round(ex / SITE_CELL)}/${Math.round(ez / SITE_CELL)}`;
+  const held = siteMemo.get(k);
+  if (held && held.stamp === terrainBuilds) return held.s;
+  const s = siteAt(siteEnv, ex, ez);
+  siteMemo.set(k, { s, stamp: terrainBuilds });
+  // Insertion order is eviction order: the country behind you goes first.
+  while (siteMemo.size > 96) siteMemo.delete(siteMemo.keys().next().value as string);
+  return s;
+}
+/**
+ * ── AND THE ONE THING NO CLIMATE CAN DERIVE ──
+ *
+ * RESOLVE Ecoregions, through the same read-through tile cache as everything
+ * else. One coarse zoom (z5, ~1250km a tile) because ecoregion boundaries are
+ * not real to five kilometres, let alone to five hundred metres, and a pyramid
+ * over data this coarse would multiply the traffic to say the same thing.
+ *
+ * The decode and the point test are in `client/eco.ts` and are pure, so they
+ * are tested in node over the real payloads (`devtools/eco.test.mjs`). What
+ * lives here is only the wiring: which tile, when to ask, and what a caller
+ * sees while the answer is in flight — which is `null`, the same as the true
+ * answer over the ocean, because a caller that must not guess and a caller
+ * that must wait want the same thing from this.
+ */
+const ecoTiles = new Map<string, EcoRegion[]>();
+const ecoAsked = new Set<string>();
+const ecoFail = new Map<string, number>();
+const ECO_RETRY_MS = 30000;
+let ecoInFlight = 0;
+async function loadEcoTile(tx: number, ty: number): Promise<void> {
+  const key = `${tx}/${ty}`;
+  if (ecoAsked.has(key)) return;
+  const cold = ecoFail.get(key);
+  if (cold !== undefined && (cold === Infinity || performance.now() - cold < ECO_RETRY_MS)) return;
+  ecoAsked.add(key);
+  ecoInFlight++;
+  try {
+    const res = await fetch(`${CELL_BASE}/~/eco/v1/${ECO_Z}/${tx}/${ty}`);
+    if (!res.ok) throw new Error(`eco HTTP ${res.status}`);
+    ecoTiles.set(key, decodeEcoTile(await res.json()));
+    ecoFail.delete(key);
+    // A z5 tile is a twelve-hundred-kilometre square: a session that drove for
+    // a week would hold a handful. The cap is against the attract reel, which
+    // hops continents on a timer and would otherwise accumulate the planet.
+    while (ecoTiles.size > 24) ecoTiles.delete(ecoTiles.keys().next().value as string);
+  } catch (err) {
+    ecoAsked.delete(key);
+    // A 4xx is permanent — the route refuses anything but z5 and the tile
+    // index cannot change under us — so it is never asked again.
+    const hard = /HTTP 4\d\d/.test(String((err as Error).message ?? err));
+    ecoFail.set(key, hard ? Infinity : performance.now());
+  } finally {
+    ecoInFlight--;
+  }
+}
+/** Which ecoregion holds this point, or null while the tile is in flight, over
+ *  the sea, or on a fixture — where asking would fetch the REAL ecology of the
+ *  authored crossroads' coordinates, which is the trap `loadOvTile` and
+ *  `loadPeakTile` already wear a gate for. */
+function ecoAt(ex: number, ez: number): EcoHit | null {
+  if (FIXTURE) return null;
+  const [la, lo] = localToLatLon(ex, ez);
+  if (!Number.isFinite(la) || !Number.isFinite(lo)) return null;
+  const [tx, ty] = ecoTileOf(la, lo);
+  const regs = ecoTiles.get(`${tx}/${ty}`);
+  if (!regs) { void loadEcoTile(tx, ty); return null; }
+  return ecoLookup(regs, lo, la);
+}
 /**
  * ── THE HYDRO SEAM (stage 1: it answers, it does not draw) ──
  *
@@ -19849,6 +19997,16 @@ function streamWorld(ex: number, ez: number): void {
     }
     if (best) void loadPeakTile(best[1], best[2]);
   }
+  // ONE TILE, AND ONLY THE ONE UNDER THE TRUCK. An ecoregion tile is twelve
+  // hundred kilometres square, so a ring of them would be the whole hemisphere
+  // to answer a question about the ground under the wheels. Asked here rather
+  // than left to `ecoAt`'s own lazy fetch so the answer is already in hand the
+  // first time anything asks — a guild that changed its mind a second after
+  // the plants were placed would be worse than one that never knew.
+  if (!FIXTURE && ecoInFlight === 0) {
+    const [ex, ey] = ecoTileOf(lat, lon);
+    if (!ecoTiles.has(`${ex}/${ey}`)) void loadEcoTile(ex, ey);
+  }
 }
 
 // ── the far shell: coarse terrain for the wide view ────────────────
@@ -25362,6 +25520,52 @@ function truckSpec(): Record<string, number> {
  * tree of a given height would actually show — which is the number to argue
  * with when it looks wrong from the seat.
  */
+/**
+ * THE SITE UNDER A POINT — the physics, the ecoregion, and the biome field's
+ * own verdict beside them so the three can be compared in one read.
+ *
+ * Defaults to the truck. `__site` was taken years ago by the place card, and
+ * renaming that would break every session note that mentions it, so this is
+ * `__siteclim` — ugly, and cheaper than the ambiguity.
+ */
+(window as unknown as { __siteclim?: object }).__siteclim = (x?: number, z?: number): object => {
+  const ex = x ?? state.x, ez = z ?? state.z;
+  const s = siteNow(ex, ez);
+  const eco = ecoAt(ex, ez);
+  const [la, lo] = localToLatLon(ex, ez);
+  const clim = climateAt(ex, ez);
+  const [tx, ty] = ecoTileOf(la, lo);
+  return {
+    at: [+la.toFixed(5), +lo.toFixed(5)],
+    heatC: +s.heatC.toFixed(1), summerC: +s.summerC.toFixed(1), winterC: +s.winterC.toFixed(1),
+    rangeC: +s.rangeC.toFixed(1), frostDays: Math.round(s.frostDays),
+    waterMm: Math.round(s.waterMm),
+    summerDry: +s.summerDry.toFixed(2), winterDry: +s.winterDry.toFixed(2),
+    contin: +s.contin.toFixed(2), hadCoast: s.hadCoast,
+    coastKm: +(siteEnv.coastKmAt(ex, ez) ?? -1).toFixed(1),
+    seaM: seaNearAt(ex, ez),
+    rainShadow: +s.rainShadow.toFixed(2),
+    elevAbs: Math.round(s.elevAbs), treelineDelta: Math.round(s.treelineDelta),
+    insolation: +s.insolation.toFixed(2), wetness: +s.wetness.toFixed(2),
+    salt: +s.salt.toFixed(2), exposure: +s.exposure.toFixed(2),
+    // The five-way field, for the comparison that is the whole point of this.
+    biome: clim.dom.name,
+    eco: eco ? { ...eco, biomeName: ecoBiomeName(eco.biome) } : null,
+    ecoTile: `${ECO_Z}/${tx}/${ty}`,
+    ecoState: FIXTURE ? 'fixture' : ecoTiles.has(`${tx}/${ty}`) ? 'loaded'
+      : ecoInFlight ? 'asking' : ecoFail.has(`${tx}/${ty}`) ? 'failed' : 'unasked',
+    ecoRegions: ecoTiles.get(`${tx}/${ty}`)?.length ?? 0,
+    memo: siteMemo.size,
+  };
+};
+/** THE PLACE CARD'S OWN ROWS, which is what a player actually reads on a tap.
+ *  Its own probe rather than a field on `__siteclim`, because the card also
+ *  counts cover, samples the hydro field and reads the tile books — none of
+ *  which belongs in a call a test uses to time the site memo. (`__field` is a
+ *  different readout entirely: the LINE's tile-pipeline record. A test that
+ *  reached for it looking for the site found nothing, and was right to.) */
+(window as unknown as { __sitecard?: object }).__sitecard = (x?: number, z?: number): object =>
+  siteRecord(x ?? state.x, z ?? state.z, 'PROBE').rows;
 (window as unknown as { __wind?: object }).__wind = (h = 20): object => {
   const amp = windU.uGust.value.length();
   const k = windU.uWindK.value;
@@ -29053,6 +29257,20 @@ function siteRecord(ex: number, ez: number, name: string): SiteRecord {
     : 'NO RASTER';
   const clim = climateAt(ex, ez, elevAbs ?? undefined);
   const band = ALT_BAND_NAMES[altBandAt(elevEffAt(ex, ez), clim.treeline)];
+  // The site sampler and the ecoregion, side by side with the biome field, so
+  // the three can be argued with from the seat rather than from a probe. They
+  // deliberately disagree: BIOME is the five-way ramp the sky and the ground
+  // read, SITE is the physics under it, and ECO is the history neither can
+  // derive. A site whose three lines tell the same story is one the vegetation
+  // rules have nothing to add to.
+  const site = siteNow(ex, ez);
+  const eco = ecoAt(ex, ez);
+  // WHEN the rain arrives, which separates chaparral from monsoon forest at
+  // the same latitude and the same annual total.
+  const season = site.summerDry > 0.45 ? `SUMMER-DRY ${site.summerDry.toFixed(2)}`
+    : site.winterDry > 0.45 ? `WINTER-DRY ${site.winterDry.toFixed(2)}`
+      : 'EVEN';
+  const tlDelta = Math.round(site.treelineDelta);
   const surf = surfaceAt(ex, ez);
   const wet = hydroSys?.sampleRestingSurface(ex, ez) ?? null;
   const dx = ex - state.x, dz = ez - state.z;
@@ -29066,6 +29284,12 @@ function siteRecord(ex: number, ez: number, name: string): SiteRecord {
     ['BIOME', `${clim.dom.name.toUpperCase()} ${(clim.w[clim.domIdx] * 100).toFixed(0)}%`],
     ['CLIMATE', `${clim.tempC.toFixed(0)}°C · MOIST ${(clim.moisture * 100).toFixed(0)}%`],
     ['BAND', `${band.toUpperCase()} · TREELINE ${Math.round(clim.treeline)}M`],
+    ['SITE', `${site.heatC.toFixed(0)}°C ±${(site.rangeC / 2).toFixed(0)} · ${Math.round(site.waterMm)}MM · ${season}`],
+    ['LOCAL', `SUN ${site.insolation.toFixed(2)} · WET ${site.wetness.toFixed(2)}`
+      + `${site.salt > 0.02 ? ` · SALT ${site.salt.toFixed(2)}` : ''}`
+      + ` · ${tlDelta >= 0 ? `${tlDelta}M ABOVE` : `${-tlDelta}M BELOW`} TREELINE`],
+    ['ECO', eco ? `${eco.name.toUpperCase()} · ${ecoBiomeName(eco.biome).toUpperCase()}`
+      : FIXTURE ? 'FIXTURE' : ecoInFlight ? 'ASKING…' : 'NO REGION'],
     ['GROUND', surf.toUpperCase()],
     ['WATER', wet ? `${wet.kind.toUpperCase()} · ${wet.depthM.toFixed(1)}M DEEP` : oceanAt(ex, ez) ? 'OCEAN' : 'DRY'],
     ['RANGE', `${rangeText} ${compass8(dx, dz)}`],
@@ -29078,6 +29302,17 @@ function siteRecord(ex: number, ez: number, name: string): SiteRecord {
     biome: { dom: clim.dom.name, w: Object.fromEntries(BIOME_ORDER.map((n, i) => [n, +clim.w[i].toFixed(3)])),
       tempC: +clim.tempC.toFixed(1), moisture: +clim.moisture.toFixed(2),
       treeline: Math.round(clim.treeline), band },
+    site: {
+      heatC: +site.heatC.toFixed(1), summerC: +site.summerC.toFixed(1), winterC: +site.winterC.toFixed(1),
+      rangeC: +site.rangeC.toFixed(1), frostDays: Math.round(site.frostDays),
+      waterMm: Math.round(site.waterMm),
+      summerDry: +site.summerDry.toFixed(2), winterDry: +site.winterDry.toFixed(2),
+      contin: +site.contin.toFixed(2), rainShadow: +site.rainShadow.toFixed(2),
+      treelineDelta: Math.round(site.treelineDelta),
+      insolation: +site.insolation.toFixed(2), wetness: +site.wetness.toFixed(2),
+      salt: +site.salt.toFixed(2), exposure: +site.exposure.toFixed(2), hadCoast: site.hadCoast,
+    },
+    eco: eco ? { ...eco, biomeName: ecoBiomeName(eco.biome) } : null,
     surface: surf, water: wet ? { kind: wet.kind, depthM: +wet.depthM.toFixed(2),
       levelM: +wet.restingLevelM.toFixed(1), flow: wet.flow.map((v) => +v.toFixed(2)) } : null,
     ocean: oceanAt(ex, ez), rangeM: Math.round(range),

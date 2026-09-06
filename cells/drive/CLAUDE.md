@@ -1954,10 +1954,78 @@ answer and is stored like any other — most of the planet is ocean and has no
 terrestrial ecoregion, and leaving that unwritten makes the commonest tile on
 earth a permanent miss.
 
-**Not yet wired into the world.** The cell route is live-ready and `siteAt` is
-tested end to end from the baked field, but nothing in `main.ts` constructs a
-`SiteEnv` yet, and there is no client-side loader for the eco tiles. That is
-the next increment.
+**WIRED INTO THE WORLD NOW.** `siteEnv` in main.ts extends `climEnv` with the
+three inputs the biome field never needed — the SIGNED latitude, the coarse
+`coastKm`, and `seaNearAt` — and `siteNow(x, z)` memoises a site on a 250m cell
+stamped with `terrainBuilds`, so a verdict reached before the DEM arrived never
+outlives the ground that would correct it. `client/eco.ts` decodes the z5
+ecoregion tiles and answers a point; main.ts asks for the truck's tile from the
+stream loop and `ecoAt` looks it up. The place card carries SITE, LOCAL and ECO
+rows beside BIOME; `__siteclim(x, z)` is the probe and `__sitecard(x, z)` the
+card's own rows. Nothing chooses a plant with any of it yet — that is the
+guild layer, and it is next.
+
+- **`seaNearAt` IS A DIFFERENT QUESTION AND HAS TO BE CHEAP.** `oceanAt` cannot
+  say "I do not know" — it answers false for dry land and for a point no cover
+  tile covers — so the tile index is asked directly, and only a covered point
+  ever walks rings. The first cut walked 818 samples out to a kilometre, each
+  one a mask read through every loaded cover tile, on every INLAND site as well.
+  The baked coast field rejects the interior for free (a half-degree cell is
+  55km, so past 60km nothing is within a kilometre of salt water), and what
+  survives that walks 16 samples on 100m rings, which is the resolution `salt`
+  can actually use.
+- **`__site` WAS ALREADY TAKEN** by the place card, years ago. The site
+  sampler's probe is `__siteclim`, and the card's rows are `__sitecard` —
+  separately, because the card also counts cover, samples the hydro field and
+  reads the tile books, none of which belongs in a call used to time the memo.
+  `__field` is a third thing again: the LINE's tile-pipeline record.
+- **THE ECO ROUTE NEEDED A HARNESS ROUTE.** `devtools/harness.mjs` serves a
+  fixed list of paths and 404s everything else, and `loadEcoTile` reads a 4xx
+  as permanent — so the first in-world run reported `ecoState: failed` on frame
+  zero and looked exactly like a broken cell. Proxied to the deployed cell now,
+  like the overview, summit and fine vector tiles, and for the same reason: no
+  client fallback exists, so a local 404 does not degrade the layer, it deletes
+  it.
+
+**AND WIRING IT FOUND A SIGN ERROR NOTHING ELSE COULD.** The first honest run
+at Chapman's Peak read `insolation 1.00` — full sun — on ground the card
+described as falling 32° SOUTH at 34°S, which is the pole-facing side of the
+ridge. `sunward` was built from `dz`, the GRADIENT, which points UPHILL; the
+direction a slope faces is its negation. Every pole-facing slope on earth read
+as sunny and every sunny one as shaded, **symmetrically in both hemispheres**,
+which is exactly why nine climate fixtures were green: the authored hillside in
+`climate-fixtures.test.mjs` was built from the same wrong premise, so the model
+and its test agreed. `aspectLift` — the term the game has actually shipped for
+months — had it right all along, so nothing on screen was ever wrong.
+
+Three things came out of it, and the third is the general one:
+
+- the minus sign in `siteAt`;
+- the same minus in the fixture's own ground function, plus a `fall` relief
+  option that is stated in ABSOLUTE world terms (+z, whatever the hemisphere) —
+  because a hemisphere-relative fixture cannot catch a hemisphere-symmetric
+  error, and the new pair asks about ONE slope at +45° and −45° and requires
+  opposite answers;
+- **a new term is asserted against the shipped one, not against its author's
+  idea of a slope.** `insolation > 0.5` must equal `aspectLift < 0` on the same
+  ground, four ways. Reverting the sign fails all eight of the new assertions
+  and prints the contradiction (`insolation 0.11` beside `aspectLiftM -105`);
+  before the fix, two of them passed.
+
+Held by `devtools/eco.test.mjs` (pure: authored geometry with a hole, a
+multipolygon and a vertex on the ray, then the live tiles under five fixture
+sites — the Cape returns *Fynbos shrubland*, Manaus the
+*Japurá-Solimões-Negro moist forests*, 38µs a lookup worst case) and
+`devtools/site-world.test.mjs` (the real thing at Chapman's Peak).
+
+**AND A TEST'S COORDINATES ARE PART OF ITS MEASUREMENT.** The first cut of
+`site-world.test.mjs` used a point four hundred metres north and passed every
+assertion in it — while the truck floated in Hout Bay: elevation −1m, cover
+WATER, ground WATER, salt 1.00, and a "Mediterranean" temperature that was the
+sea-level fallback for a world with no DEM under it. Sixteen green checks
+describing the ocean. The spot was then chosen by reading the terrarium mosaic
+directly (318.7m), and the preconditions — on land, on the hillside, DEM
+arrived — are assertions in the file rather than assumptions behind it.
 
 ## Routing across two maps
 

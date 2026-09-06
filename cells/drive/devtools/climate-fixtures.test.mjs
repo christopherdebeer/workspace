@@ -30,7 +30,7 @@ const tmp = mkdtempSync(join(tmpdir(), 'climate-'));
 const built = join(tmp, 'climate.mjs');
 execFileSync('npx', ['esbuild', join(HERE, '../client/climate.ts'), '--bundle', '--format=esm',
   `--outfile=${built}`], { cwd: join(HERE, '../../..'), stdio: 'pipe' });
-const { siteAt, beltRainAt, upwindAt, treelineAt, seaTempAt } =
+const { siteAt, aspectLift, beltRainAt, upwindAt, treelineAt, seaTempAt } =
   await import(pathToFileURL(built).href);
 // The baked coast field, bundled separately — atob is a browser global that
 // node has had since 16, so the module loads unchanged.
@@ -51,11 +51,20 @@ const band = (name, v, lo, hi) =>
  * A site is a latitude, a height, a distance to the sea, and a piece of
  * terrain. `relief` describes the ground around the point so the local half
  * has something to read: `up` is how much higher the ring is (a hollow),
- * `tilt` the fall per metre and `face` which way it falls (+1 toward the
- * equator, −1 away).
+ * `tilt` the fall per metre, `face` which way it falls RELATIVE TO THE SUN
+ * (+1 toward the equator, −1 away) and `fall` which way it falls in ABSOLUTE
+ * world terms (+1 toward +z, which is south, whatever the hemisphere).
+ *
+ * BOTH, DELIBERATELY. `face` reads naturally and is hemisphere-relative — and
+ * a hemisphere-relative fixture cannot catch a hemisphere-symmetric error,
+ * which is exactly what happened: this helper's own hillside carried the same
+ * inverted sign as `siteAt`, the two agreed, and every insolation assertion
+ * below was green while the model called a pole-facing slope full sun. `fall`
+ * is the control that has no opinion about the sun at all, so the SAME piece
+ * of ground can be asked about at +45° and −45° and must answer oppositely.
  */
 const at = (lat, elev, coastKm, relief = {}) => {
-  const { up = 0, tilt = 0, face = 0, upwind = 0, seaM = null } = relief;
+  const { up = 0, tilt = 0, face = 0, fall = 0, upwind = 0, seaM = null } = relief;
   const env = {
     latAt: () => lat,
     latAbsAt: () => Math.abs(lat),
@@ -69,12 +78,23 @@ const at = (lat, elev, coastKm, relief = {}) => {
       // Upwind relief lives out at 15-40km; the ring and the slope are local.
       if (r > 10000) return elev + upwind;
       if (r > 150) return elev + up;
-      // A slope falling toward the equator has `face` +1. −z is north.
+      // GROUND FALLING TOWARD +z IS GROUND WHOSE HEIGHT DECREASES WITH z, so
+      // a fall of `k` per metre toward +z is `-k*z`. That minus is the one the
+      // first version of this helper was missing.
+      //
+      // `face` +1 means "toward the equator": +z (south) in the north, −z in
+      // the south, so it carries the hemisphere. `fall` +1 means "+z", full
+      // stop. They add, so a fixture may use either.
       const sunZ = lat >= 0 ? 1 : -1;
-      return elev + (z / Math.max(1, Math.abs(z))) * 0 + tilt * z * face * sunZ;
+      return elev - tilt * z * (face * sunZ + fall);
     },
   };
-  return siteAt(env, 0, 0);
+  const site = siteAt(env, 0, 0);
+  // The shipping aspect term, over the SAME ground, so the two can be checked
+  // against each other rather than each against its author's idea of a slope.
+  // `northness` is +1 poleward, so a positive lift is the shaded face.
+  site.aspectLiftM = aspectLift(env, 0, 0, lat);
+  return site;
 };
 
 console.log('── the circulation, before any land ──');
@@ -118,6 +138,26 @@ ok('identical climate', Math.abs(ridge.waterMm - ravine.waterMm) < 1
   && Math.abs(ridge.heatC - ravine.heatC) < 0.01, [ridge.waterMm, ravine.waterMm]);
 ok('the sun-facing slope takes more sun', ridge.insolation > 0.7, ridge.insolation);
 ok('the shaded ravine takes less', ravine.insolation < 0.3, ravine.insolation);
+// ── AND THE SAME HILLSIDE, ASKED IN BOTH HEMISPHERES ──
+// `fall` has no opinion about the sun: this is one piece of ground falling
+// toward +z (south) at 1:3. In the north that is the sunny face; at the same
+// latitude south of the equator it is the shaded one. A sign error in either
+// the model or this helper is symmetric and would pass every assertion above;
+// it cannot pass this pair.
+const fallsSouthN = at(45.0, 300, 400, { tilt: 0.35, fall: 1 });
+const fallsSouthS = at(-45.0, 300, 400, { tilt: 0.35, fall: 1 });
+ok('a south-falling slope is sunny in the NORTHERN hemisphere',
+  fallsSouthN.insolation > 0.7, fallsSouthN.insolation);
+ok('…and shaded in the southern', fallsSouthS.insolation < 0.3, fallsSouthS.insolation);
+// And against the term the game has actually shipped for months: aspectLift
+// treats a poleward face as extra HEIGHT, so its sign is the opposite of the
+// sun's. Two independent readings of one slope, and they must disagree.
+for (const [what, s] of [['north', fallsSouthN], ['south', fallsSouthS],
+  ['a sunny ridge', ridge], ['a shaded ravine', ravine]]) {
+  ok(`insolation and aspectLift agree about ${what}`,
+    (s.insolation > 0.5) === (s.aspectLiftM < 0),
+    { insolation: +s.insolation.toFixed(2), aspectLiftM: +s.aspectLiftM.toFixed(1) });
+}
 ok('and the ravine keeps its water', ravine.wetness > 0.6 && ridge.wetness < 0.2,
   [ravine.wetness, ridge.wetness]);
 
