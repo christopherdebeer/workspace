@@ -1848,8 +1848,7 @@ export const handler = async (event: {
       if (fx) return fx;
     }
     if (path === '/app.js') {
-      return respond(200, 'application/javascript; charset=utf-8',
-        readFileSync(join(__dirname, 'app.js'), 'utf8').replace('__DRIVE_BUILD__', stampOf()), {
+      return respond(200, 'application/javascript; charset=utf-8', readFileSync(join(__dirname, 'app.js'), 'utf8'), {
         'cache-control': 'public, max-age=60',
         'access-control-allow-origin': '*',
       });
