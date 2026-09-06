@@ -19,6 +19,7 @@ import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, altBandAt, aspectLi
   krummholz, siteAt, swardLift, treelineAt, type ClimateSample, type SiteClimate } from './climate';
 import { coastKm } from './coast';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
+import { guildAt, guildKind, pickMix, type Guild } from './guild';
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt, paintFor, roadLookAt,
   seedAt, snowLoad, stoneWalls, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
 import { pickInfrastructureRecipe, planSupportStations, type StructureRecipe } from './infrastructure';
@@ -1527,6 +1528,66 @@ function ecoAt(ex: number, ez: number): EcoHit | null {
   const regs = ecoTiles.get(`${tx}/${ty}`);
   if (!regs) { void loadEcoTile(tx, ty); return null; }
   return ecoLookup(regs, lo, la);
+}
+/**
+ * ── AND THE GUILD, WHICH IS WHAT ANY OF THIS WAS FOR ──
+ *
+ * `client/guild.ts` turns a site and an ecoregion into weights over the
+ * archetypes the game already has. This is the seam: the memo, the switch, and
+ * the one thing the pure module cannot decide — what to do when there is no
+ * answer yet.
+ *
+ * `?guild=0` is the exact A/B. It restores the shipping climate path
+ * completely, which matters because this changes the vegetation of every
+ * landscape in the game and "it looks different" is not a measurement.
+ */
+const GUILD_ON = new URLSearchParams(location.search).get('guild') !== '0';
+const guildMemo = new Map<string, { g: Guild | null; stamp: number; eco: number }>();
+// ONE ENTRY IN FRONT OF THE MAP. `guildNow` is asked once per vegetation
+// CANDIDATE and once per planted site — tens of thousands of times in a seed
+// burst — and almost every one of those is the same 250m cell as the last,
+// because a veg cell is 220m. Without this the map lookup is fine and the
+// STRING KEY is not: it is an allocation per call, in the hottest loop the
+// vegetation has, in a session whose profiler already reads 27% gap.
+let guildLastX = NaN, guildLastZ = NaN, guildLastStamp = -1, guildLastEco = -1;
+let guildLast: Guild | null = null;
+function guildNow(ex: number, ez: number): Guild | null {
+  if (!GUILD_ON) return null;
+  const cx = Math.round(ex / SITE_CELL), cz = Math.round(ez / SITE_CELL);
+  if (cx === guildLastX && cz === guildLastZ
+    && guildLastStamp === terrainBuilds && guildLastEco === ecoTiles.size) return guildLast;
+  const k = `${cx}/${cz}`;
+  const held = guildMemo.get(k);
+  // Stamped on the ECO TILE COUNT as well as the terrain, because a guild
+  // reached before the region arrived is the climate fallback and must be
+  // replaced the moment there is a real answer — the veg cells that already
+  // seeded under it are held off separately (see `ecoPending` in seedCell).
+  const g = held && held.stamp === terrainBuilds && held.eco === ecoTiles.size
+    ? held.g
+    : guildAt(siteNow(ex, ez), ecoAt(ex, ez));
+  if (!held || held.stamp !== terrainBuilds || held.eco !== ecoTiles.size) {
+    guildMemo.set(k, { g, stamp: terrainBuilds, eco: ecoTiles.size });
+    while (guildMemo.size > 96) guildMemo.delete(guildMemo.keys().next().value as string);
+  }
+  guildLastX = cx; guildLastZ = cz;
+  guildLastStamp = terrainBuilds; guildLastEco = ecoTiles.size;
+  guildLast = g;
+  return g;
+}
+/** Is the ecoregion for this point still coming? A veg cell that seeds now
+ *  would plant the climate's guess and never revisit it, so `seedCell` waits —
+ *  the same bargain it already strikes with a cover tile, and for the same
+ *  reason: vegetation that changes species while you look at it is worse than
+ *  vegetation that arrives a second late. */
+function ecoPending(ex: number, ez: number): boolean {
+  if (FIXTURE || !GUILD_ON) return false;
+  const [la, lo] = localToLatLon(ex, ez);
+  if (!Number.isFinite(la) || !Number.isFinite(lo)) return false;
+  const [tx, ty] = ecoTileOf(la, lo);
+  const key = `${tx}/${ty}`;
+  if (ecoTiles.has(key)) return false;
+  // A tile that has permanently refused is not pending — it is an answer.
+  return ecoFail.get(key) !== Infinity;
 }
 /**
  * ── THE HYDRO SEAM (stage 1: it answers, it does not draw) ──
@@ -7921,12 +7982,23 @@ const COVER_VEG: Record<number, number> = {
  *  biome's own mix still supplies the character, so a boreal forest is
  *  conifers and a tropical one is palms without cover having to say so. */
 function coverKind(cover: number | null, r: () => number, x: number, z: number): VegKind {
+  // THE GUILD FIRST, WHERE THERE IS ONE. `guild.ts` narrows the same cover
+  // class against what actually grows in this ecoregion; with no region (the
+  // sea, a fixture, a tile still in flight) it returns null and the shipping
+  // climate path below runs unchanged. That fallback is deliberate and total:
+  // a half-guild would be a landscape that changes species under the player.
+  const g = guildNow(x, z);
+  if (g) return guildKind(g, cover, r);
   // The rule itself lives in flora.ts, so /lab/flora can turn COVER CLASS and
   // get the same answer this does. All the world contributes is the climate
   // blend at this point.
   return floraCoverKind(cover, climateAt(x, z).w, r);
 }
 function pickKind(r: () => number, x: number, z: number): VegKind {
+  // The interloper in a clump — one member in six — comes from the same guild
+  // as its neighbours, or a fynbos thicket gets a boreal conifer in it.
+  const g = guildNow(x, z);
+  if (g) return pickMix(g.mix, r) ?? 'bush';
   return climPick(VEG_MIX, climateAt(x, z).w, r) ?? VEG_MIX.temperate[0][0];
 }
 /** WHAT GROWS HERE, taking the STAND rather than just the pixel — the same
@@ -8008,6 +8080,17 @@ function pushSite(
     biomeW: () => climateAt(x, z).w,
     krummK: () => krummholz(elevEffAt(x, z), climateAt(x, z).treeline),
   }, BIOME_LIST);
+  // ── AND THE GUILD SETS THE HEIGHT ──
+  //
+  // A proportion is only half of what makes a landscape read: fynbos is not a
+  // sparse wood, it is a dense stand of waist-high shrubs, and the same
+  // `bush` archetype at 0.6 scale and at 1.0 is those two different places.
+  // Applied here rather than inside `plantLook` so flora.ts keeps its one
+  // question — what does this plant look like — and the world keeps its own:
+  // how big is it here. STONE IS EXEMPT: a boulder's size is the mountain's
+  // business, not the vegetation's.
+  const gScale = guildNow(x, z)?.scale ?? 1;
+  if (gScale !== 1 && !STONY.includes(kind)) site.s *= gScale;
   if (role === 'fringe') makeSapling(site);
   // AN ANCHOR IS A PROMOTION, NOT A SITE. Its decision comes from world
   // coordinates rather than this clump's RNG stream, so promoting one tree
@@ -8148,6 +8231,17 @@ function seedCell(gx: number, gz: number): void {
       if (performance.now() - t0 < 30000) return;   // the fact is seconds away — wait for it
     }
   }
+  // …AND THE SAME BARGAIN WITH THE ECOREGION. A cell that seeds before its
+  // region has landed plants the climate's guess and is never revisited, so
+  // a continent's worth of vegetation would be decided by whichever cells
+  // happened to seed in the first second of a session. One z5 tile covers
+  // twelve hundred kilometres and arrives in about a second; the same 30s
+  // ceiling applies, after which the climate path is the honest answer.
+  if (ecoPending(mx, mz)) {
+    const t0 = vegDeferredAt.get(key) ?? performance.now();
+    vegDeferredAt.set(key, t0);
+    if (performance.now() - t0 < 30000) return;
+  }
   vegDeferredAt.delete(key);
   vegSeeded.add(key);
   if (!vegGrid.has(key)) vegGrid.set(key, []);
@@ -8164,7 +8258,11 @@ function seedCell(gx: number, gz: number): void {
     const cv = sampleCover(x, z);
     const ceiling = vegCeilingAt(x, z, cv);
     if (ceiling <= 0) { stats.rejectedCover++; continue; }
-    const dens = vegDensity(x, z);
+    // THE GUILD SETS HOW MUCH GROUND IS COVERED. A desert is mostly bare and
+    // a rainforest is mostly not, and until now both were the same field with
+    // a different species list on it. Clamped, because `dens` also sizes the
+    // clump below and the field's own callers assume 0..1.
+    const dens = clamp(vegDensity(x, z) * (guildNow(x, z)?.density ?? 1), 0, 1);
     if (c.accept >= vegetationClumpChance(ceiling, dens)) continue;
     const role = vegetationClumpRole(dens, c.role);
     if (!role) continue;
@@ -8194,7 +8292,7 @@ function seedCell(gx: number, gz: number): void {
     const x = (gx + c.u) * VEG_CELL, z = (gz + c.v) * VEG_CELL;
     const cv = sampleCover(x, z);
     if (vegCeilingAt(x, z, cv) <= 0) { stats.rejectedCover++; continue; }
-    const dens = vegDensity(x, z);
+    const dens = clamp(vegDensity(x, z) * (guildNow(x, z)?.density ?? 1), 0, 1);
     const habitat = vegetationHabitatAt(x, z, cv);
     if (c.accept >= vegetationLivingChance(habitat, dens)) continue;
     const r = mulberry32(c.seed);
@@ -25494,6 +25592,38 @@ function truckSpec(): Record<string, number> {
  *  question, over many rolls of the seeded RNG per point so a probabilistic
  *  pick (coverKind falls through with its own weights) shows its spread
  *  rather than one lucky draw. */
+/**
+ * WHAT IS ACTUALLY STANDING, as opposed to what the rules would choose.
+ *
+ * `__vegkind` rolls the chooser and is the right instrument for a rule; it
+ * cannot see DENSITY or HEIGHT, and a guild changes both. This walks the
+ * placed sites — the things with geometry on them — and reports the count per
+ * kind, the mean scale per kind, and the population per hectare, which is the
+ * number that says whether a savanna is open and a fynbos is closed.
+ */
+(window as unknown as { __stand?: object }).__stand = (r = 300): object => {
+  const counts: Record<string, number> = {};
+  const scale: Record<string, number> = {};
+  let n = 0;
+  const r2 = r * r;
+  for (const [, cell] of vegGrid) {
+    for (const v of cell) {
+      const dx = v.x - state.x, dz = v.z - state.z;
+      if (dx * dx + dz * dz > r2) continue;
+      counts[v.k] = (counts[v.k] ?? 0) + 1;
+      scale[v.k] = (scale[v.k] ?? 0) + v.s;
+      n++;
+    }
+  }
+  const meanS: Record<string, number> = {};
+  for (const k of Object.keys(counts)) meanS[k] = +(scale[k] / counts[k]).toFixed(2);
+  return {
+    n, r,
+    perHa: +(n / (Math.PI * r * r / 10000)).toFixed(1),
+    counts, meanScale: meanS,
+    guild: guildNow(state.x, state.z)?.name ?? null,
+  };
+};
 (window as unknown as { __vegkind?: object }).__vegkind = (r = 200, step = 24, rolls = 20): object => {
   const seen: Record<string, number> = {};
   let n = 0;
@@ -25532,6 +25662,7 @@ function truckSpec(): Record<string, number> {
   const ex = x ?? state.x, ez = z ?? state.z;
   const s = siteNow(ex, ez);
   const eco = ecoAt(ex, ez);
+  const g = guildNow(ex, ez);
   const [la, lo] = localToLatLon(ex, ez);
   const clim = climateAt(ex, ez);
   const [tx, ty] = ecoTileOf(la, lo);
@@ -25556,6 +25687,16 @@ function truckSpec(): Record<string, number> {
       : ecoInFlight ? 'asking' : ecoFail.has(`${tx}/${ty}`) ? 'failed' : 'unasked',
     ecoRegions: ecoTiles.get(`${tx}/${ty}`)?.length ?? 0,
     memo: siteMemo.size,
+    // THE GUILD IS THE ANSWER; everything above it is the working. `mix` comes
+    // back as a plain object of weights because that is the thing to argue
+    // with — a landscape that looks wrong is a row in here that is wrong.
+    guild: g ? {
+      name: g.name, biome: g.biome, scale: +g.scale.toFixed(2), density: +g.density.toFixed(2),
+      mix: Object.fromEntries(g.mix.map(([k, w]) => [k, +w.toFixed(2)])),
+      trees: g.trees.map(([k]) => k),
+      why: g.why,
+    } : null,
+    guildOn: GUILD_ON,
   };
 };
 /** THE PLACE CARD'S OWN ROWS, which is what a player actually reads on a tap.
@@ -29265,6 +29406,7 @@ function siteRecord(ex: number, ez: number, name: string): SiteRecord {
   // rules have nothing to add to.
   const site = siteNow(ex, ez);
   const eco = ecoAt(ex, ez);
+  const guild = guildNow(ex, ez);
   // WHEN the rain arrives, which separates chaparral from monsoon forest at
   // the same latitude and the same annual total.
   const season = site.summerDry > 0.45 ? `SUMMER-DRY ${site.summerDry.toFixed(2)}`
@@ -29290,6 +29432,10 @@ function siteRecord(ex: number, ez: number, name: string): SiteRecord {
       + ` · ${tlDelta >= 0 ? `${tlDelta}M ABOVE` : `${-tlDelta}M BELOW`} TREELINE`],
     ['ECO', eco ? `${eco.name.toUpperCase()} · ${ecoBiomeName(eco.biome).toUpperCase()}`
       : FIXTURE ? 'FIXTURE' : ecoInFlight ? 'ASKING…' : 'NO REGION'],
+    ['GROWS', guild
+      ? `${guild.name.toUpperCase()} · ${guild.mix.slice(0, 3).map(([k]) => k.toUpperCase()).join(' ')}`
+        + ` · ×${guild.scale.toFixed(2)} AT ${(guild.density * 100).toFixed(0)}%`
+      : GUILD_ON ? 'BY CLIMATE' : 'BY CLIMATE (GUILDS OFF)'],
     ['GROUND', surf.toUpperCase()],
     ['WATER', wet ? `${wet.kind.toUpperCase()} · ${wet.depthM.toFixed(1)}M DEEP` : oceanAt(ex, ez) ? 'OCEAN' : 'DRY'],
     ['RANGE', `${rangeText} ${compass8(dx, dz)}`],
@@ -29313,6 +29459,12 @@ function siteRecord(ex: number, ez: number, name: string): SiteRecord {
       salt: +site.salt.toFixed(2), exposure: +site.exposure.toFixed(2), hadCoast: site.hadCoast,
     },
     eco: eco ? { ...eco, biomeName: ecoBiomeName(eco.biome) } : null,
+    guild: guild ? {
+      name: guild.name, biome: guild.biome,
+      scale: +guild.scale.toFixed(2), density: +guild.density.toFixed(2),
+      mix: Object.fromEntries(guild.mix.map(([k, w]) => [k, +w.toFixed(2)])),
+      why: guild.why,
+    } : null,
     surface: surf, water: wet ? { kind: wet.kind, depthM: +wet.depthM.toFixed(2),
       levelM: +wet.restingLevelM.toFixed(1), flow: wet.flow.map((v) => +v.toFixed(2)) } : null,
     ocean: oceanAt(ex, ez), rangeM: Math.round(range),

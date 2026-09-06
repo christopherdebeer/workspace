@@ -2027,6 +2027,104 @@ describing the ocean. The spot was then chosen by reading the terrarium mosaic
 directly (318.7m), and the preconditions — on land, on the hillside, DEM
 arrived — are assertions in the file rather than assumptions behind it.
 
+## The guild: what actually grows, from the site and the ecoregion
+
+`client/guild.ts` is the layer that turns the two sensing layers into a
+landscape. It is pure, it draws nothing, and it needs no new art: it returns
+weights over the SAME twelve archetypes the game has always had, plus a height
+and a density multiplier. A guild is a proportion, not a species.
+
+Two inputs, two jobs, and they are genuinely different questions:
+
+- the **ECOREGION** says what KIND of vegetation this is — RESOLVE's fourteen
+  biomes, looked up because no climate model can derive them.
+- the **SITE** says how much, how tall, and what THIS slope does — the ravine
+  that holds forest in shrubland country, the pole-facing face that holds
+  conifer in a broadleaf valley, the salt sliver where only mangrove lives.
+
+`?guild=0` is the exact A/B and restores the shipping climate path completely.
+`guildAt` returns **null** wherever there is no region — the sea, a fixture, a
+tile still in flight — and the caller then runs the old path unchanged; a
+half-guild would be a landscape that changes species under the player.
+
+- **THE REALM IS THE OTHER THING ONLY THE DATASET KNOWS.** Cacti are Nearctic
+  and Neotropic; everything cactus-shaped in the Sahara or the Karoo is a
+  euphorbia that converged on the silhouette. The old rule had one `arid`
+  archetype for the planet and put saguaros in the Sahara. The gate is a string
+  compare on `REALM`, and the weight goes to `bush` rather than vanishing —
+  an Old World desert has the same amount of standing scrub, it is a different
+  plant.
+- **A RELATIVE BOOST APPLIED TO A TOKEN WEIGHT INVENTS A STAND.** The first
+  A/B put conifer at 35% of the Cape's standing plants — worse than what it
+  replaced — from a "the shaded face favours conifer" rule multiplying a mix
+  that carried one point of conifer against two of broadleaf. Two fixes: the
+  Mediterranean row leans its trees hard to broadleaf (3 against 0.5), and the
+  boost is gated on the conifer's EXISTING share of the mix, so it shifts a
+  mixed wood and cannot create a pine forest out of a rounding error.
+- **A DRY BIOME IS NOT A DRY FOREST.** The aridity multiplier halved the Cape's
+  density, because fynbos at 350mm tripped a rainfall penalty — but summer
+  drought is the DEFINITION of Mediterranean scrub, not a degradation of it,
+  and the row already says how dense it is. Only rows flagged `dry` (the six
+  forest biomes) thin on their own dry edge; a savanna, a desert, a tundra and
+  a scrub carry their spacing in the row.
+- **THE COVER PIXEL NARROWS THE GUILD; IT DOES NOT REPLACE IT.** A canopy pixel
+  picks from the guild's TREES — WorldCover is 10m data and is right about the
+  structure of this spot, while RESOLVE at z5 is right about the country — so
+  fynbos on a tree-cover pixel grows the trees that stand out of fynbos rather
+  than becoming a wood. Bare and frozen ground stays geology whatever the
+  region says.
+- **A SEED IS ONE-SHOT, SO THE CELL WAITS FOR ITS REGION.** `seedCell` already
+  defers up to 30s for a cover tile; it now strikes the same bargain with the
+  ecoregion, because a cell that seeds before its region lands plants the
+  climate's guess and is never revisited.
+- **THE MEMO NEEDS A SINGLE ENTRY IN FRONT OF IT.** `guildNow` is asked once
+  per vegetation candidate and once per planted site — tens of thousands of
+  times in a seed burst — and a 250m cell key is a string allocation per call
+  in the hottest loop the vegetation has. The map is still there for the cell
+  either side; the front cache is what stops the allocation.
+
+Probes: `__siteclim()` carries the guild with its `why` (the interesting half —
+what moved it off the base row); `__sitecard()` shows the GROWS row a player
+reads; `__stand(r)` counts what is actually PLACED by kind with the mean scale
+and the population per hectare, which is the only instrument that can see
+density and height — `__vegkind` rolls the chooser and cannot.
+
+Held by `devtools/guild.test.mjs` (pure, a second, and every case is one the
+five-biome model gets wrong) and measured in the world by
+`devtools/guild-ab.mjs`, which boots the same spot twice with the switch as the
+only difference.
+
+**AND A STABLE COUNT IS NOT A SETTLED WORLD.** The first A/B accepted twenty
+frames in, on a world holding 27 plants: the population had not started moving
+yet, so the "comparison" was between two accidents of arrival order. The gate
+is a FRAME FLOOR as well as a stability window. Two boots is most of the
+harness's twenty-minute fuse (screenshots mean `nodraw` is unavailable), so run
+ONE SITE PER PROCESS or raise `HARNESS_FUSE_MIN` — six in one process blows it
+with nothing printed, because each site's line is written after both its runs.
+
+**MEASURED**, Chapman's Peak, both runs settled at 392 frames, the switch the
+only difference:
+
+| within 300m | guild | climate (`?guild=0`) |
+|---|---|---|
+| palm | **0%** | 7% |
+| bush | 54% | 57% |
+| broadleaf | 13% | 9% |
+| rock | 7% | 1% |
+| plants per hectare | 3.6 | 3.3 |
+| mean scale: bush | **0.62** | 1.03 |
+| mean scale: broadleaf | **1.09** | 1.62 |
+| mean scale: snag | **1.25** | 2.19 |
+
+**READ THAT HONESTLY: the proportions barely move.** What the guild actually
+changes at the Cape is the HEIGHT — a third to a half off every woody plant,
+which is the difference between a scrub and a thin wood — and the PALM VETO:
+seven per cent of the standing plants there were palms, and there are no palms
+in fynbos. The species mix is close because WorldCover calls much of that slope
+tree cover and a canopy pixel picks trees under either model. A guild earns its
+keep on the rows where the five-biome model has no answer at all (the realm
+gate, the savanna's spacing, the mangrove sliver); it is not a repaint.
+
 ## Routing across two maps
 
 The router's graph was the fine OSM survey and nothing else, so a goal past the
