@@ -53,6 +53,7 @@ const readStatus = () => d.page.evaluate(() => document.getElementById('status')
 const BASE = {
   orbit: false, patch: PATCH, count: COUNT, seed: arg('seed', '7'),
   dist: arg('dist', '78'), eye: arg('eye', '16'), turn: arg('turn', '0.6'),
+  species: arg('species', 'mix'),
 };
 
 await d.page.waitForTimeout(2500);

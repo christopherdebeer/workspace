@@ -105,6 +105,14 @@ function silhouette(crownPts) {
     if (crownPts[i + 1] < mid) rLo = Math.max(rLo, r); else rHi = Math.max(rHi, r);
   }
   const taper = width > 1e-6 ? (rHi - rLo) / width : 0;
+  // A BLOB CROWN'S WIDTH IS ITS ANCHOR SPREAD, NOT ITS DRAWN SILHOUETTE: the
+  // blob's own radius stands outside these points and is not counted, so a
+  // conifer measures ~0.075 narrower than it draws and a palm ~0.2. Left as it
+  // is on purpose — the thresholds below were set against these numbers, and
+  // adding the radius would reclassify the palms (0.24 + 0.2 is past the 0.30
+  // the rule calls palm) for no gain. Read `width` as "how far the crown's
+  // anchors reach", and compare a card crown with a card crown.
+
   // ── ORDER, AND TWO THRESHOLDS THE FIRST BAKE CORRECTED ──
   //
   // The trunk-clearance cases go first: a palm and a columnar tree can share a
@@ -133,6 +141,45 @@ function silhouette(crownPts) {
   return { form, clear: lo, width, taper };
 }
 
+/**
+ * ── HOW BIG A LEAF CARD IS AGAINST THE CROWN IT HANGS IN ──
+ *
+ * The number that decides whether a crown reads as foliage or as a stack of
+ * plates, and the bake could not see it: card size is set by `leafScale` on the
+ * preset's own leaf, which is a fraction of the TREE, so a narrow crown gets
+ * the same card a broad one does. Measured over the first bake: a round oak's
+ * card is 0.11-0.15 of its crown's diameter — seven or eight cards across — and
+ * a columnar aspen's is 0.49, so TWO cards span the whole crown. From the seat
+ * at 30 m that aspen is a column of overlapping plates beside a conifer that
+ * reads as a tree.
+ *
+ * Returned as a fraction of the crown's DIAMETER, because that is the ratio the
+ * eye judges: a card must be small against the thing it is filling, whatever
+ * size the thing is.
+ */
+function cardSpan(cardPts, width) {
+  const n = cardPts.length / 3;
+  if (n < 4 || width <= 1e-6) return 0;
+  let sum = 0, cards = 0;
+  for (let c = 0; c + 3 < n; c += 4) {
+    let d = 0;
+    for (let a = 0; a < 4; a++) {
+      for (let b = a + 1; b < 4; b++) {
+        const ax = cardPts[(c + a) * 3], ay = cardPts[(c + a) * 3 + 1], az = cardPts[(c + a) * 3 + 2];
+        const bx = cardPts[(c + b) * 3], by = cardPts[(c + b) * 3 + 1], bz = cardPts[(c + b) * 3 + 2];
+        d = Math.max(d, Math.hypot(ax - bx, ay - by, az - bz));
+      }
+    }
+    sum += d; cards++;
+  }
+  return cards ? (sum / cards) / (2 * width) : 0;
+}
+/** Where a card stops reading as a leaf. The round broadleaves sit at 0.11-0.15
+ *  and read as canopy; the columnar pair sat at 0.49 and read as plates. 0.25
+ *  is the line, set between the two AND above every variant that already
+ *  looked right, so it flags the failure and not the family. */
+const CARD_MAX = 0.25;
+
 const RECIPES = {
   broadleaf: [
     { preset: 'Oak Medium', seed: 387, form: 'round', reduction: { levels: 3, sections: 0.7, segments: 0.7, children: 0.35, leaves: 1, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0 } },
@@ -143,7 +190,7 @@ const RECIPES = {
     // said so. THE ATLAS HAS NO COLUMNAR VARIANT AT ALL — every broadleaf here
     // is 0.34 to 0.57 wide — which is a real gap in the vocabulary and worth
     // more than a label that hides it.
-    { preset: 'Aspen Small', seed: 387, form: 'round', reduction: { levels: 3, sections: 0.7, segments: 0.7, children: 0.35, leaves: 0.6, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0 } },
+    { preset: 'Aspen Small', seed: 387, form: 'round', reduction: { levels: 3, sections: 0.7, segments: 0.7, children: 0.35, leaves: 1.5, leafScale: 1.7, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0 } },
     { preset: 'Ash Small', seed: 387, form: 'round', reduction: { levels: 3, sections: 0.7, segments: 0.7, children: 0.35, leaves: 0.4, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0 } },
     { preset: 'Oak Medium', seed: 12, form: 'round', reduction: { levels: 3, sections: 0.7, segments: 0.7, children: 0.35, leaves: 1, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0 } },
     // ── THE COLUMN ──
@@ -160,14 +207,25 @@ const RECIPES = {
     // start and produced a `palm`: a narrow crown on a bare pole is a palm by
     // this vocabulary's own definition, and correctly so. A poplar carries its
     // foliage almost to the ground, and `leaves.start` 0.05 is what says it.
+    //
+    // AND THE CARD IS SIZED AGAINST THE CROWN, NOT THE TREE. The first cut of
+    // these two measured `columnar` correctly and drew as a stack of plates:
+    // `leafScale` acts on the preset's leaf, which is a fraction of the TREE,
+    // so a crown a fifth as wide as an oak's got the same card and TWO of them
+    // spanned it (`card` 0.49 against a round oak's 0.13). The fix is both
+    // halves of that ratio — a slightly wider crown (longer, less steeply
+    // swept level-1 branches; still under the 0.26 the vocabulary calls
+    // columnar) and a card under half the size, with the leaf count raised so
+    // the crown still closes. `card` is measured and flagged at bake time now,
+    // so the next recipe cannot reintroduce it quietly.
     { preset: 'Aspen Small', seed: 29, form: 'columnar',
-      opts: { branchStart: { 1: 0.06, 2: 0.1 }, branchAngle: { 1: 20, 2: 16 }, leavesStart: 0.05,
-        length: { 0: 40, 1: 14, 2: 8 }, force: { direction: { x: 0, y: 1, z: 0 }, strength: 0.05 } },
-      reduction: { levels: 2, sections: 0.7, segments: 0.7, children: 0.5, leaves: 0.7, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0.05 } },
+      opts: { branchStart: { 1: 0.06, 2: 0.1 }, branchAngle: { 1: 34, 2: 26 }, leavesStart: 0.05,
+        length: { 0: 40, 1: 24, 2: 11 }, force: { direction: { x: 0, y: 1, z: 0 }, strength: 0.05 } },
+      reduction: { levels: 2, sections: 0.7, segments: 0.7, children: 0.5, leaves: 3, leafScale: 1.3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0.05 } },
     { preset: 'Aspen Small', seed: 11, form: 'columnar',
-      opts: { branchStart: { 1: 0.06, 2: 0.1 }, branchAngle: { 1: 20, 2: 16 }, leavesStart: 0.05,
-        length: { 0: 40, 1: 14, 2: 8 }, force: { direction: { x: 0, y: 1, z: 0 }, strength: 0.05 } },
-      reduction: { levels: 2, sections: 0.7, segments: 0.7, children: 0.5, leaves: 0.7, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0.05 } },
+      opts: { branchStart: { 1: 0.06, 2: 0.1 }, branchAngle: { 1: 34, 2: 26 }, leavesStart: 0.05,
+        length: { 0: 40, 1: 24, 2: 11 }, force: { direction: { x: 0, y: 1, z: 0 }, strength: 0.05 } },
+      reduction: { levels: 2, sections: 0.7, segments: 0.7, children: 0.5, leaves: 3, leafScale: 1.3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0.05 } },
   ],
   // The pasted pine put a pad on every one of 672 anchors — 15k triangles a
   // tree — and its seven-sided wood was 1.9k on its own. Four-sided branches,
@@ -372,6 +430,7 @@ function generate(preset, seed, r, opts) {
     ? Array.from(C, (v) => v / Q)
     : Array.from(A, (v) => v / Q);
   const sil = silhouette(crownPts);
+  sil.card = crown.shape === 'card' ? cardSpan(crownPts, sil.width) : 0;
   return { name: `${preset} #${seed}`, verts: pos.count, tris: idx.count / 3, cards: cardPos ? cardPos.count / 4 : 0,
     drawn: idx.count / 3 + cardTris + blobTris, crown, sil, P, I, C, CI, A };
 }
@@ -405,11 +464,17 @@ for (const [family, list] of Object.entries(RECIPES)) {
     // move the declaration — but never leave it unexplained.
     const agrees = v.sil.form === form;
     if (!agrees) mismatches.push(`${family}/${v.name}: declared ${form}, measured ${v.sil.form}`);
+    // A CARD TOO BIG FOR ITS CROWN IS A DEFECT THE FORM CHECK CANNOT SEE. The
+    // columnar pair measured `columnar` correctly and still drew as plates.
+    const cardOk = v.sil.card <= CARD_MAX;
+    if (!cardOk) mismatches.push(`${family}/${v.name}: leaf card is ${v.sil.card.toFixed(2)} of the crown's diameter (max ${CARD_MAX})`);
     console.log(`${family.padEnd(10)} ${v.name.padEnd(18)} wood ${String(v.tris).padStart(5)}t  crown ${v.crown.shape.padEnd(5)} ${String(v.crown.shape === 'card' ? v.CI.length / 3 : v.A.length / 3).padStart(4)} → ${String(v.drawn).padStart(6)}t drawn`
       + `  ${agrees ? ' ' : '!'}${form.padEnd(9)} clear ${v.sil.clear.toFixed(2)} width ${v.sil.width.toFixed(2)} taper ${v.sil.taper >= 0 ? '+' : ''}${v.sil.taper.toFixed(2)}`
+      + `  card ${v.sil.card.toFixed(2)}${cardOk ? '' : ' !'}`
       + (agrees ? '' : `  ← MEASURED ${v.sil.form}`));
     return { name: v.name, form, verts: v.verts, tris: v.tris, drawn: v.drawn, crown: v.crown,
-      sil: { clear: +v.sil.clear.toFixed(3), width: +v.sil.width.toFixed(3), taper: +v.sil.taper.toFixed(3) },
+      sil: { clear: +v.sil.clear.toFixed(3), width: +v.sil.width.toFixed(3), taper: +v.sil.taper.toFixed(3),
+        card: +v.sil.card.toFixed(3) },
       pos: b64(v.P), idx: b64(v.I), cards: b64(v.C), cardIdx: b64(v.CI), anc: b64(v.A) };
   });
   families[family] = { variants, meanDrawn: Math.round(variants.reduce((n, v) => n + v.drawn, 0) / variants.length) };
@@ -428,8 +493,10 @@ export interface EzBakedCrown { shape: 'card' | 'icosa' | 'flat' | 'cone' | 'non
 export type EzForm = ${FORMS.map((f) => `'${f}'`).join(' | ')};
 /** The measurement behind the form: the bare trunk below the crown, the
  *  crown's widest radius, and whether it widens or narrows going up — all as
- *  fractions of the tree's own height. */
-export interface EzBakedSil { clear: number; width: number; taper: number }
+ *  fractions of the tree's own height — plus \`card\`, the mean leaf card as a
+ *  fraction of the crown's DIAMETER, which is what decides whether a crown
+ *  reads as foliage or as a stack of plates. */
+export interface EzBakedSil { clear: number; width: number; taper: number; card: number }
 export interface EzBakedVariant { name: string; form: EzForm; verts: number; tris: number; drawn: number; crown: EzBakedCrown; sil: EzBakedSil; pos: string; idx: string; cards: string; cardIdx: string; anc: string }
 export interface EzBakedFamily { variants: EzBakedVariant[]; meanDrawn: number }
 export const EZ_BAKE: { q: number; families: Record<${Object.keys(families).map((f) => `'${f}'`).join(' | ')}, EzBakedFamily> } = ${body};

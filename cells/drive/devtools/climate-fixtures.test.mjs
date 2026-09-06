@@ -221,6 +221,17 @@ const NORMALS = [
   ['Singapore',      1.3,    15,      57,     0,   27.8,  2170,  3.5,  0.35],
   ['Reykjavik',     64.1,    40,      24,     0,    5.0,   800,  3.5,  0.55],
   ['Irkutsk',       52.3,   440,    1827,     0,    1.0,   470,  3.5,  0.55],
+  // ── THE SERENGETI, WHICH IS HERE BECAUSE A LAB FRAME ACCUSED THE MODEL ──
+  //
+  // The flora lab read 2208mm on a savanna, and the model was innocent: the
+  // lab's authored ground is FLAT, so `rainShadow` had nothing to fire on. Two
+  // degrees south the belt term hands out 2208mm and it is the Crater
+  // Highlands — 1500m of relief in the upwind 15-40km — that make the plain
+  // dry. With them the model reads within 10% of the real 800mm. The lesson
+  // generalises past this row: a site term that reads TERRAIN cannot be judged
+  // on a fixture with none, and a number quoted from such a frame is a
+  // measurement of the fixture.
+  ['Serengeti',     -2.33, 1500,     600,  1500,   20.0,   800,  3.5,  0.55],
 ];
 for (const [name, lat, elev, coast, up, realC, realMm, tolC, tolMm] of NORMALS) {
   const s = at(lat, elev, coast, { upwind: up });
@@ -252,6 +263,36 @@ for (const [name, lat, elev, coast, up, realC, realMm] of [
     + `${(s.heatC - realC).toFixed(1)}C  x${(s.waterMm / realMm).toFixed(1)}`);
   ok(`${name}: still recognisably a desert (under 250mm)`, s.waterMm < 250, Math.round(s.waterMm));
   ok(`${name}: and still hot (over 15C)`, s.heatC > 15, +s.heatC.toFixed(1));
+}
+
+/**
+ * ── THE SECOND KNOWN MISS: THE MONSOON, WHICH IS NOT A TUNING PROBLEM ──
+ *
+ * The Sundarbans is a mangrove delta at 21.95°N getting some 1800mm a year,
+ * and this model gives it 194 — a factor of nine. Tamanrasset is at 22.79°N
+ * and the SAME call is doing its job there. That is the whole finding: the
+ * belt model is a function of latitude and terrain, and monsoon-versus-desert
+ * at one parallel is a fact about longitude and continent geometry. Widening
+ * the tropics until Bengal is wet floods the Sahara by construction, so there
+ * is no tuning that fixes this and it is asserted as a MISS rather than
+ * papered over.
+ *
+ * What it changes downstream is recorded in guild.ts: a row the ecoregion has
+ * already called MOIST is not thinned by this number, because the ecoregion is
+ * the better witness exactly where the model is blind.
+ */
+console.log('\n── the known miss: the monsoon is invisible to a belt model ──');
+{
+  const sund = at(21.95, 2, 0, { seaM: 200 });
+  const tam = at(22.79, 1380, 600);
+  console.log(`Sundarbans     ${sund.heatC.toFixed(1).padStart(6)}C ${String(Math.round(sund.waterMm)).padStart(5)}mm  `
+    + `  26.1C  1800mm  x${(sund.waterMm / 1800).toFixed(2)}`);
+  ok('the Sundarbans is warm enough to be a mangrove', sund.heatC > 22, +sund.heatC.toFixed(1));
+  ok('…and salt, which is the term that decides it', sund.salt > 0.4, +sund.salt.toFixed(2));
+  ok('the rainfall is the miss, and it is under half',
+    sund.waterMm < 900, Math.round(sund.waterMm));
+  ok('a degree away the same call is right about the Sahara',
+    Math.abs(sund.waterMm - tam.waterMm) < 120, [Math.round(sund.waterMm), Math.round(tam.waterMm)]);
 }
 
 /**

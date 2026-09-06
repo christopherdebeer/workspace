@@ -387,6 +387,32 @@ export const foliageWind = (wRise: string, wFlut: string): string => [
   '#endif',
 ].join('\n');
 
+/**
+ * ── TWO NUMBERS THE SKELETONS' SURFACE NEEDS, SHARED BY EVERY MATERIAL ──
+ *
+ * `uEzBark` is how hard the wood's own vertical grain bites; `uEzEdge` is how
+ * far a leaf card seen edge-on is pulled toward its neighbours. Live handles,
+ * so a device can A/B them (`?ezbark=`, `?ezedge=`) and a lab can put them on
+ * dials, exactly as the wind and the growth bend already are.
+ */
+export const ezLookU = { uEzBark: { value: 0.55 }, uEzEdge: { value: 0.62 } };
+/** A hash and a value noise of our own. `grain.ts` has the same pair under
+ *  different names and IS chained onto this material — declaring `grNoise`
+ *  twice is a redefinition, and a shader that fails to link logs to the
+ *  console and throws nothing, which in this engine means a wood that simply
+ *  does not draw. */
+const EZ_NOISE_GLSL = `
+  float ezHash(vec3 p){ return fract(sin(dot(p, vec3(113.5, 271.9, 124.6))) * 43758.5453); }
+  float ezNoise(vec3 p){
+    vec3 i = floor(p), f = fract(p);
+    f = f * f * (3.0 - 2.0 * f);
+    return mix(
+      mix(mix(ezHash(i), ezHash(i + vec3(1.0, 0.0, 0.0)), f.x),
+          mix(ezHash(i + vec3(0.0, 1.0, 0.0)), ezHash(i + vec3(1.0, 1.0, 0.0)), f.x), f.y),
+      mix(mix(ezHash(i + vec3(0.0, 0.0, 1.0)), ezHash(i + vec3(1.0, 0.0, 1.0)), f.x),
+          mix(ezHash(i + vec3(0.0, 1.0, 1.0)), ezHash(i + vec3(1.0, 1.0, 1.0)), f.x), f.y), f.z);
+  }`;
+
 export function ezMaterial(
   bark: THREE.ColorRepresentation,
   tuning: { bend?: { value: number }; wind?: { uTime: { value: number }; uGust: { value: THREE.Vector2 }; uWindK: { value: number } } } = {},
@@ -399,11 +425,13 @@ export function ezMaterial(
   mat.onBeforeCompile = (sh) => {
     sh.uniforms.uWood = uWood;
     sh.uniforms.uEzBend = uEzBend;
+    sh.uniforms.uEzBark = ezLookU.uEzBark;
+    sh.uniforms.uEzEdge = ezLookU.uEzEdge;
     sh.uniforms.uTime = wind.uTime;
     sh.uniforms.uGust = wind.uGust;
     sh.uniforms.uWindK = wind.uWindK;
     sh.vertexShader = sh.vertexShader
-      .replace('#include <common>', `#include <common>\nattribute float aWood; uniform vec3 uWood; uniform float uEzBend;\n${FOLIAGE_WIND_UNIFORMS}`)
+      .replace('#include <common>', `#include <common>\nattribute float aWood; uniform vec3 uWood; uniform float uEzBend;\nvarying float vEzWood; varying vec3 vEzLocal; varying float vEzJit;\n${FOLIAGE_WIND_UNIFORMS}`)
       .replace('#include <begin_vertex>', [
         '#include <begin_vertex>',
         '#ifdef USE_INSTANCING',
@@ -417,9 +445,71 @@ export function ezMaterial(
         // `aWood` is 1 in the timber and 0 in the crown, which is exactly the
         // flutter's weight the other way round.
         foliageWind('ezRise * ezRise', '(1.0 - aWood)'),
+        // ── WHAT THE SURFACE PASS NEEDS ──
+        // The wood flag, the vertex in the SKELETON's own frame (the bake is
+        // unit-height, so this is a stable frame at any tree size and the bark
+        // scales with the trunk for free), and a per-instance jitter so a
+        // hundred trees of one variant do not all wear the same knot.
+        'vEzWood = aWood;',
+        'vEzLocal = position;',
+        '#ifdef USE_INSTANCING',
+        'vEzJit = fract(sin(dot(instanceMatrix[3].xz, vec2(21.7, 47.3))) * 7351.3);',
+        '#else',
+        'vEzJit = 0.0;',
+        '#endif',
       ].join('\n'))
       .replace('#include <color_vertex>', THREE.ShaderChunk.color_vertex
         .replace('vColor.xyz *= instanceColor.xyz;', 'vColor.xyz *= mix(instanceColor.xyz, uWood, aWood);'));
+    /**
+     * ── THE SURFACE PASS: BARK ON THE WOOD, AND NO BRIGHT EDGE ON A CARD ──
+     *
+     * Both were reported from the flora lab at windscreen height, and both are
+     * about what a skeleton looks like at ten to thirty metres — the range the
+     * game is actually played at and the one the atlas had never been judged
+     * from.
+     *
+     * BARK. The wood carried `uWood` and the baked facet tone and nothing else,
+     * so an Amazon trunk at ten metres was an untextured brown prism.
+     * `grain.ts` IS chained onto this material, but its noise is isotropic at
+     * about half a metre and a trunk is half a metre wide — one blob across the
+     * whole trunk, which tints it and does not texture it. Bark is VERTICAL:
+     * fast around the trunk and slow up it, which is what the 150/14 ratio
+     * says. IN THE SKELETON'S OWN UNIT-HEIGHT FRAME, so the bark scales with
+     * the tree for free — and that frame is why the first numbers were an
+     * order out: a trunk's radius there is about 0.02, not half a metre, so
+     * 34 put barely one light-to-dark transition across the whole trunk.
+     *
+     * THE CARD EDGE. Cards are double-sided and lit, so one turned edge-on to
+     * the eye is a one-pixel line at whatever the sun gives it — and this
+     * engine quantises to fourteen levels and magnifies with nearest
+     * neighbour, which turns exactly that into the white contour diagram the
+     * rendering doctrine forbids. A card is pulled toward a darker tone as it
+     * turns away, so it fades into the crown instead of drawing a line; its
+     * projected area there is nearly nothing, so nothing is lost.
+     *
+     * AT `normal_fragment_begin`, WHICH NOTHING ELSE HOOKS — `grain.ts` owns
+     * `color_fragment`, `terrainFx` owns `worldpos_vertex`,
+     * `lights_fragment_begin` and `dithering_fragment`, and this file's own
+     * wind owns `begin_vertex`. `vNormal` does NOT exist here: the material is
+     * flat-shaded and three declares that varying only `#ifndef FLAT_SHADED`.
+     * `normal` has just been derived and `vViewPosition` is declared by the
+     * Lambert shader itself.
+     */
+    sh.fragmentShader = sh.fragmentShader
+      .replace('#include <common>', `#include <common>
+        varying float vEzWood; varying vec3 vEzLocal; varying float vEzJit;
+        uniform float uEzBark; uniform float uEzEdge;
+        ${EZ_NOISE_GLSL}`)
+      .replace('#include <normal_fragment_begin>', `#include <normal_fragment_begin>
+        if (vEzWood > 0.5) {
+          if (uEzBark > 0.001) {
+            float ezB = ezNoise(vec3(vEzLocal.x * 150.0, vEzLocal.y * 14.0 + vEzJit * 37.0, vEzLocal.z * 150.0));
+            diffuseColor.rgb *= 1.0 + (ezB - 0.5) * uEzBark;
+          }
+        } else if (uEzEdge < 0.999) {
+          float ezNdv = abs(dot(normalize(normal), normalize(vViewPosition)));
+          diffuseColor.rgb *= mix(uEzEdge, 1.0, smoothstep(0.0, 0.35, ezNdv));
+        }`);
   };
   return mat;
 }

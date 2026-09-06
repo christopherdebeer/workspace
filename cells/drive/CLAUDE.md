@@ -1725,9 +1725,112 @@ same crowns read as foliage. The findings that survived a fair framing:
   faceTone and nothing else; at 10 m an Amazon trunk is an untextured prism.
   The grain shader is already on the material and could carry bark.
 - **THE LAB'S GROUND IS A DIAL, so a desert stands on grass.** The Sonoran
-  frame is honest about its plants and misleading about its place. Colouring it
-  properly means `terrainPalette`, which is main.ts's; until that moves, judge
-  a dry place by its plants and not by its picture.
+  frame is honest about its plants and misleading about its place.
+
+### …and what was done about it
+
+Every item above is fixed. Two of them turned out to be a different fault from
+the one the frame accused, which is the part worth keeping.
+
+- **A CARD IS SIZED AGAINST THE TREE AND HAS TO BE JUDGED AGAINST THE CROWN.**
+  `leafScale` multiplies the preset's own leaf, which is a fraction of the
+  TREE, so a crown a fifth as wide as an oak's got the same card. **Measured
+  over the first bake: a round oak's card is 0.11–0.15 of its crown's DIAMETER
+  — seven or eight cards across — and a columnar aspen's was 0.49, so two cards
+  spanned the whole crown.** That is the plate look, as a number. The bake
+  measures `sil.card` now and flags anything over **0.25** — a line set between
+  the two AND above every variant that already looked right, so it names the
+  failure and not the family. It caught its own three on the first run
+  (both columns and the leggy round aspen at 0.34).
+  The fix is BOTH HALVES of the ratio: a wider crown (level-1 branches longer
+  and less steeply swept, still under the 0.26 the vocabulary calls columnar)
+  and a card under half the size with the leaf count tripled so the crown still
+  closes. 0.49 → 0.23, at 1,448 drawn triangles against 908.
+  **A BLOB CROWN WAS TRIED AND REJECTED**: 27 icosahedra up the column closed
+  perfectly and read as *beads on a stick* at 1,268 triangles. Denser smaller
+  cards are what a poplar is.
+- **A BLOB CROWN'S `width` IS ITS ANCHOR SPREAD**, not its drawn silhouette —
+  the blob's own radius stands outside those points, so a conifer measures
+  ~0.075 narrower than it draws and a palm ~0.2. Left alone deliberately: the
+  thresholds were set against these numbers and adding the radius reclassifies
+  the palms (0.24 + 0.2 is past the 0.30 the rule calls palm) for no gain.
+- **BARK, AND THE FRAME IT IS MEASURED IN.** The wood carried `uWood` and the
+  baked facet tone and nothing else. `grain.ts` IS chained onto the material
+  and could not help: its noise is isotropic at about half a metre and a trunk
+  is half a metre wide, so it tints a trunk rather than texturing it. Bark is
+  VERTICAL — fast around, slow up — in the skeleton's own unit-height frame so
+  it scales with the tree. **The first numbers were an order out**, because a
+  trunk's radius in that frame is about 0.02 and not half a metre: 34 put one
+  light-to-dark transition across the whole trunk. 150/14 is what reads.
+- **A CARD SEEN EDGE-ON IS A ONE-PIXEL BRIGHT LINE**, which is the white
+  contour diagram the rendering doctrine forbids. It is pulled toward a darker
+  tone as it turns away; its projected area there is nearly nothing.
+  **Measured, because carrying a uniform proves nothing and a shader that fails
+  to link throws nothing** (`devtools/ez-edge-ab.mjs`, two runs of one stand
+  with `uEzEdge` the only difference): **3.07% of the stand moved, worst
+  channel 25/255** — the edge-on cards and nothing else, which is the intent.
+  Both live on `#include <normal_fragment_begin>`, which nothing else hooks:
+  `grain.ts` owns `color_fragment`, `terrainFx` owns `worldpos_vertex`,
+  `lights_fragment_begin` and `dithering_fragment`. `vNormal` does not exist
+  there — the material is flat-shaded and three declares that varying only
+  `#ifndef FLAT_SHADED` — but `normal` and `vViewPosition` do. `?ezbark=0` and
+  `?ezedge=1` are the exact A/Bs.
+- **THE FERN WAS ANKLE-HIGH. MEASURED: 0.20–0.41 m tall and up to 1.5 m
+  across** — a rosette lying flat, and it is the understory the guild leans on
+  hardest (43% of a mangrove, 22% of the Amazon). Its fronds reached 0.7 and
+  rose 0.42, a 31-degree arch. Rise and reach are swapped and a three-frond
+  lower whorl added: **0.68–1.41 m, taller than wide**, at eight triangles.
+  Every archetype's real height is now on the record — `broadleaf` 1.95–5.02 m,
+  `conifer` 3.64–9.36, `snag` 2.88–7.20, `bush` 0.71–1.79 — because "the
+  understory is invisible" is a claim about metres and nobody had measured one.
+- **THE SERENGETI'S 2208 mm WAS THE LAB'S FLAT GROUND, NOT THE MODEL.** The
+  authored hillside has no upwind relief, so `rainShadow` had nothing to fire
+  on; with the Crater Highlands where they actually are (1500 m in the upwind
+  15–40 km) the same model reads **883 mm against a real 800**. It is a fixture
+  now. **A site term that reads TERRAIN cannot be judged on a fixture with
+  none**, and a number quoted from such a frame is a measurement of the
+  fixture — the same lesson as the settle gate, one layer down.
+- **THE MONSOON, HOWEVER, IS REAL AND IS NOT A TUNING PROBLEM.** The Sundarbans
+  reads 194 mm against ~1800. Tamanrasset is 0.84° further north and the SAME
+  call is doing its job at 135 mm against 45. Monsoon-versus-desert on one
+  parallel is a fact about longitude and continent geometry; widening the
+  tropics until Bengal is wet floods the Sahara BY CONSTRUCTION. So it is
+  asserted as a known miss beside the deserts, and what changes is downstream:
+  **`tropical moist forest` loses its `dry` flag.** A row is `dry` when the
+  biome spans a moisture gradient and its dry edge really is thinner; a row the
+  ecoregion has already called MOIST has answered that question better than the
+  rainfall model can, and flagged `dry` it would have thinned every monsoon
+  forest in Asia toward the 0.55 floor on a number that is blind there. The
+  same reasoning already exempts Mediterranean scrub.
+- **AND THE LAB'S GROUND IS THE PLACE'S NOW.** `GROUND_RAMPS` and
+  `groundColourAt` moved into `climate.ts`, so main.ts and the lab paint from
+  the same numbers; the lab does the band-and-blend itself and NOT the whole of
+  `terrainPalette` (no cover tint, no slope shade, no shallows rule), which
+  stays where the world state it reads lives. GROUND FROM SITE is on by
+  default with the colour dial as the override.
+
+**`tree-wind.test.mjs` FAILS AT BOTH SPOTS, AND THE CONTROL SAYS IT IS NOT THE
+CHANGE.** It asserts that a gale moves more of the frame with the trees swaying
+than with them rigid, and it recorded 31.89% against 16.22% when it was written.
+Now: at its default Paris spot, 28.26% against 37.49% — the RIGID number more
+than doubled, which is tiles landing between the two shots, not shading. On the
+Camps Bay fixture (no network, so no streaming at all) both runs saturate near
+50%, because a 70 km/h gale moves the sward and the sward fills that frame; the
+trees' contribution is inside the noise. **The control is the pair that matters:
+same fixture, `?ezedge=1&ezbark=0` — the two new surface terms OFF — reads
+−2.47 points where the shipped build reads +2.45.** The sign flips with the
+noise and both fail, so the instrument is not measuring this change. Left
+failing and recorded rather than retuned: the honest fix is to count only the
+band above the sward line (the way `ez-edge-ab.mjs` restricts to the stand
+pane), and a threshold moved to make a test pass is a test that has stopped
+meaning anything.
+
+**A SHELL TRAP THAT COST TWO ROUNDS.** `npm i --no-save @dgreenheck/ez-tree`
+PRUNES `three` and `@types/three` from the root tree, and installing those back
+prunes ez-tree — so the bake and the typecheck take it in turns to be broken.
+Install all three in ONE command, with `--legacy-peer-deps` (ez-tree peers on
+`@types/three` ^0.169 and this repo pins 0.160):
+`npm i --no-save --legacy-peer-deps @dgreenheck/ez-tree@1.1.0 three@0.160.0 @types/three@0.160.0`.
 
 - **THE SWARD GROWS SHRUBS.** Between the sward's flowers and the trees
   there was nothing knee-high. `refreshShrubs` (beside `refreshVeg`, every

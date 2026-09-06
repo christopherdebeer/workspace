@@ -28,6 +28,50 @@ export const BIOME_ORDER = ['arid', 'tropical', 'temperate', 'boreal', 'alpine']
 export type BiomeName = typeof BIOME_ORDER[number];
 export const ALPINE = 4;
 
+/**
+ * ── THE GROUND'S OWN COLOUR, PER BIOME ──
+ *
+ * `[max elevation, colour]`, sharing breakpoints across all five so a place is
+ * one band lookup and a weighted sum rather than five scans. Solarpunk desert:
+ * cyan shallows → warm sand → ochre scrub → dry upland → bare rock → snow. The
+ * emerald in this world comes from the VEGETATION standing on the sand, not
+ * from painting the ground green.
+ *
+ * HERE RATHER THAN IN main.ts, so a lab can stand its plants on the ground
+ * they would actually stand on. The full `terrainPalette` — cover tint, slope
+ * shade, the shallows rule and its two hard-won corroboration tests — stays in
+ * main.ts where the world state it reads lives; what moves is the DATA, which
+ * is what a bare stand needs and all it needs. The Sonoran in the flora lab
+ * stood on grass until this did.
+ */
+export const GROUND_RAMPS: Record<BiomeName, Array<[number, [number, number, number]]>> = {
+  arid: [[0.5, [0.07, 0.30, 0.35]], [60, [0.44, 0.37, 0.22]], [300, [0.41, 0.33, 0.19]], [900, [0.37, 0.27, 0.15]], [1800, [0.33, 0.28, 0.23]], [1e9, [0.62, 0.63, 0.65]]],
+  tropical: [[0.5, [0.06, 0.26, 0.30]], [60, [0.14, 0.27, 0.14]], [300, [0.13, 0.24, 0.13]], [900, [0.16, 0.24, 0.14]], [1800, [0.24, 0.26, 0.20]], [1e9, [0.60, 0.62, 0.64]]],
+  temperate: [[0.5, [0.07, 0.28, 0.33]], [60, [0.25, 0.29, 0.17]], [300, [0.24, 0.27, 0.16]], [900, [0.28, 0.26, 0.17]], [1800, [0.31, 0.29, 0.25]], [1e9, [0.66, 0.67, 0.69]]],
+  boreal: [[0.5, [0.06, 0.24, 0.31]], [60, [0.18, 0.25, 0.19]], [300, [0.17, 0.23, 0.18]], [900, [0.21, 0.23, 0.19]], [1800, [0.30, 0.31, 0.30]], [1e9, [0.74, 0.76, 0.78]]],
+  alpine: [[0.5, [0.08, 0.28, 0.36]], [60, [0.28, 0.30, 0.24]], [300, [0.30, 0.30, 0.26]], [900, [0.34, 0.33, 0.30]], [1800, [0.44, 0.45, 0.46]], [1e9, [0.86, 0.88, 0.90]]],
+};
+/** The ground colour a stand of this climate stands on: the five ramps mixed
+ *  by the weights, at this elevation. The same band-then-blend rule
+ *  `terrainPalette` uses, over the same numbers. */
+export function groundColourAt(w: ArrayLike<number>, elev: number): [number, number, number] {
+  const ramps = BIOME_ORDER.map((b) => GROUND_RAMPS[b]);
+  const steps = ramps[0];
+  let band = steps.length - 1;
+  // From 1: the shallows band is about water, not altitude, and a stand is on
+  // land by construction. (main.ts's version has to corroborate that against
+  // the cover raster; here there is nothing to corroborate against.)
+  for (let i = 1; i < steps.length; i++) { if (elev <= steps[i][0]) { band = i; break; } }
+  let r = 0, g = 0, b = 0, tot = 0;
+  for (let k = 0; k < ramps.length; k++) {
+    const wk = w[k] ?? 0;
+    if (wk <= 0) continue;
+    const c = ramps[k][band][1];
+    r += c[0] * wk; g += c[1] * wk; b += c[2] * wk; tot += wk;
+  }
+  return tot > 0 ? [r / tot, g / tot, b / tot] : ramps[2][band][1];
+}
+
 /** Metres between sampled corners. See the note at the head of this file: at
  *  256 this hung the boot. Climate does not vary meaningfully inside 2km, and
  *  bilinear interpolation across that lattice is smoother than the field. */
@@ -608,6 +652,19 @@ export function beltRainAt(lat: number): number {
   // downstream could tell a true desert from a steppe. Ninety still keeps the
   // driest place on earth off zero, which is right: even the Atacama gets
   // something, and a hard zero makes every ratio built on this divide by it.
+  // ── AND THE MONSOON IS THE MISS THIS SHAPE CANNOT HAVE ──
+  //
+  // The ITCZ here sits on the equator all year. The real one MIGRATES, and far
+  // further over a continent than over an ocean — which is the whole of the
+  // Asian monsoon. Measured at the Sundarbans (21.95°N): this returns 194mm
+  // against a real ~1800. The same call at Tamanrasset (22.79°N) returns
+  // 135mm against a real 45, and is doing its job. Both are right on the
+  // latitude and one of them is a delta of mangrove: monsoon-versus-desert at
+  // one parallel is a fact about longitude and continent geometry, and NO
+  // latitude-only term can represent it — widening the tropics to reach Bengal
+  // floods the Sahara by construction. Recorded in the fixtures as a known
+  // miss, and the reason `guild.ts` will not thin a row the ecoregion has
+  // already called moist.
   return 2200 * Math.exp(-((lat / 12) ** 2))
     + 900 * Math.exp(-(((a - 52) / 16) ** 2))
     + 90;

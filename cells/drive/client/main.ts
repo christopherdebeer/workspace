@@ -15,8 +15,8 @@
  * backend.
  */
 import * as THREE from 'three';
-import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, altBandAt, aspectLift, climPick, climPickRow,
-  krummholz, siteAt, swardLift, treelineAt, type ClimateSample, type SiteClimate } from './climate';
+import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, GROUND_RAMPS, altBandAt, aspectLift, climPick,
+  climPickRow, krummholz, siteAt, swardLift, treelineAt, type ClimateSample, type SiteClimate } from './climate';
 import { coastKm } from './coast';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
@@ -49,7 +49,7 @@ import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { facade } from './facade';
 import { startLab } from './labs';
-import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezMaterial, ezMeanTris, ezPalette, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
+import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
@@ -1230,7 +1230,7 @@ const BIOMES: Record<string, Biome> = {
     name: 'arid',
     zenith: [0.055, 0.135, 0.30], horizon: [0.55, 0.48, 0.36], sunDisc: [1.0, 0.86, 0.55], below: [0.30, 0.26, 0.22],
     hazeBase: [0.24, 0.21, 0.17], hazeSun: [0.50, 0.35, 0.17],
-    ramp: [[0.5, [0.07, 0.30, 0.35]], [60, [0.44, 0.37, 0.22]], [300, [0.41, 0.33, 0.19]], [900, [0.37, 0.27, 0.15]], [1800, [0.33, 0.28, 0.23]], [1e9, [0.62, 0.63, 0.65]]],
+    ramp: GROUND_RAMPS.arid,
     ...FOLIAGE_BANDS.arid,
     sun: 0xffe0b0, sunI: 1.5, hemiSky: 0xbcd2ee, hemiGnd: 0x6a5a3c, hemiI: 0.95,
   },
@@ -1238,7 +1238,7 @@ const BIOMES: Record<string, Biome> = {
     name: 'tropical',
     zenith: [0.05, 0.14, 0.26], horizon: [0.40, 0.46, 0.38], sunDisc: [1.0, 0.92, 0.70], below: [0.16, 0.20, 0.16],
     hazeBase: [0.20, 0.24, 0.20], hazeSun: [0.42, 0.40, 0.22],
-    ramp: [[0.5, [0.06, 0.26, 0.30]], [60, [0.14, 0.27, 0.14]], [300, [0.13, 0.24, 0.13]], [900, [0.16, 0.24, 0.14]], [1800, [0.24, 0.26, 0.20]], [1e9, [0.60, 0.62, 0.64]]],
+    ramp: GROUND_RAMPS.tropical,
     ...FOLIAGE_BANDS.tropical,
     sun: 0xfff0cc, sunI: 1.35, hemiSky: 0xa8c8dc, hemiGnd: 0x2c4426, hemiI: 1.0,
   },
@@ -1246,7 +1246,7 @@ const BIOMES: Record<string, Biome> = {
     name: 'temperate',
     zenith: [0.05, 0.12, 0.28], horizon: [0.46, 0.44, 0.40], sunDisc: [1.0, 0.88, 0.62], below: [0.22, 0.22, 0.20],
     hazeBase: [0.22, 0.22, 0.20], hazeSun: [0.46, 0.36, 0.20],
-    ramp: [[0.5, [0.07, 0.28, 0.33]], [60, [0.25, 0.29, 0.17]], [300, [0.24, 0.27, 0.16]], [900, [0.28, 0.26, 0.17]], [1800, [0.31, 0.29, 0.25]], [1e9, [0.66, 0.67, 0.69]]],
+    ramp: GROUND_RAMPS.temperate,
     ...FOLIAGE_BANDS.temperate,
     sun: 0xffe6c2, sunI: 1.4, hemiSky: 0xb4ccea, hemiGnd: 0x4c5238, hemiI: 0.9,
   },
@@ -1254,7 +1254,7 @@ const BIOMES: Record<string, Biome> = {
     name: 'boreal',
     zenith: [0.05, 0.11, 0.27], horizon: [0.40, 0.44, 0.48], sunDisc: [1.0, 0.84, 0.62], below: [0.20, 0.22, 0.24],
     hazeBase: [0.20, 0.23, 0.26], hazeSun: [0.42, 0.36, 0.26],
-    ramp: [[0.5, [0.06, 0.24, 0.31]], [60, [0.18, 0.25, 0.19]], [300, [0.17, 0.23, 0.18]], [900, [0.21, 0.23, 0.19]], [1800, [0.30, 0.31, 0.30]], [1e9, [0.74, 0.76, 0.78]]],
+    ramp: GROUND_RAMPS.boreal,
     ...FOLIAGE_BANDS.boreal,
     sun: 0xffe2cc, sunI: 1.25, hemiSky: 0xaec6e4, hemiGnd: 0x3a4438, hemiI: 0.95,
   },
@@ -1262,7 +1262,7 @@ const BIOMES: Record<string, Biome> = {
     name: 'alpine',
     zenith: [0.04, 0.10, 0.30], horizon: [0.52, 0.54, 0.58], sunDisc: [1.0, 0.94, 0.80], below: [0.26, 0.27, 0.29],
     hazeBase: [0.26, 0.28, 0.31], hazeSun: [0.48, 0.44, 0.36],
-    ramp: [[0.5, [0.08, 0.28, 0.36]], [60, [0.28, 0.30, 0.24]], [300, [0.30, 0.30, 0.26]], [900, [0.34, 0.33, 0.30]], [1800, [0.44, 0.45, 0.46]], [1e9, [0.86, 0.88, 0.90]]],
+    ramp: GROUND_RAMPS.alpine,
     ...FOLIAGE_BANDS.alpine,
     sun: 0xfff2e0, sunI: 1.6, hemiSky: 0xc4d8f2, hemiGnd: 0x5a5e58, hemiI: 1.05,
   },
@@ -7858,6 +7858,19 @@ const EZ_TIER_SEED = 64;
 interface EzTier { near: THREE.InstancedMesh; far: THREE.InstancedMesh; tris: number; n: number; nNear: number; nFar: number }
 const ezTiers: Record<EzFamily, EzTier[]> = ezRecord(() => [] as EzTier[]);
 const ezMat = ezMaterial(0x4a3826, { bend: treeBendU, wind: windU });
+// ── THE SURFACE, WITH ITS OWN EXACT A/B ──
+// Bark on the wood and the fade on a card seen edge-on: both were reported
+// from the flora lab at windscreen height, and both change the look of every
+// tree in the game, so both get a switch that costs nothing to try from the
+// seat. `?ezbark=0` is the flat prism the trunks were; `?ezedge=1` is the
+// bright one-pixel line a grazing card used to draw.
+{
+  const q = new URLSearchParams(location.search);
+  const bk = Number(q.get('ezbark'));
+  if (q.has('ezbark') && Number.isFinite(bk)) ezLookU.uEzBark.value = clamp(bk, 0, 2);
+  const ed = Number(q.get('ezedge'));
+  if (q.has('ezedge') && Number.isFinite(ed)) ezLookU.uEzEdge.value = clamp(ed, 0, 1);
+}
 // THE SKELETONS STAND IN THE SAME WEATHER AS EVERYTHING ELSE. They were the
 // one thing in the landscape outside `terrainFx` — no cloud shadow, no terrain
 // self-shadowing — while the archetypes they replaced, the sward, the stones

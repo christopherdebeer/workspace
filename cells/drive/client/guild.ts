@@ -106,10 +106,21 @@ interface BaseGuild {
   dry?: boolean;
 }
 const BASE: Record<number, BaseGuild> = {
+  // NOT `dry`, AND THE NAME IS THE REASON. A row is flagged `dry` when the
+  // biome spans a moisture gradient and its dry edge really is thinner; a
+  // MOIST forest has already answered that question, and answered it better
+  // than the rainfall model can. Measured at the Sundarbans: `beltRainAt` puts
+  // 22°N in the subtropical trough — right for the Sahara at the same
+  // latitude, and a factor of nine wrong on the Bay of Bengal, because the
+  // summer monsoon is a fact about longitude and continent geometry that no
+  // latitude-only model can see. Flagged `dry`, this row would have thinned
+  // every monsoon forest in Asia toward the 0.55 floor on a number that is
+  // structurally blind there. The same reasoning already exempts Mediterranean
+  // scrub: summer drought is its definition, not its degradation.
   1: { name: 'tropical moist forest',
     forms: ['round', 'palm'],
     mix: [['broadleaf', 6], ['palm', 4], ['fern', 4], ['bush', 3], ['log', 1]],
-    scale: 1.15, density: 1.15, dry: true },
+    scale: 1.15, density: 1.15 },
   2: { name: 'tropical dry forest',
     forms: ['round', 'umbrella'],
     mix: [['broadleaf', 4], ['acacia', 3], ['bush', 4], ['palm', 1], ['snag', 1], ['log', 1]],

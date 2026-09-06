@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { createDials, type DialValues } from './lab-dials';
 import {
-  ALT_BAND_NAMES, AltBand, BIOME_ORDER, LAPSE, altBandAt, climCompute, climPick, krummholz,
-  seaTempAt, siteAt, swardLift, treelineAt, type SiteClimate, type SiteEnv,
+  ALT_BAND_NAMES, AltBand, BIOME_ORDER, LAPSE, altBandAt, climCompute, climPick, groundColourAt,
+  krummholz, seaTempAt, siteAt, swardLift, treelineAt, type SiteClimate, type SiteEnv,
 } from './climate';
 import {
   FLORA_TUNING, FOLIAGE_ROWS, STONE, STONY, VEG_MIX,
@@ -15,8 +15,8 @@ import { guildAt, type Guild } from './guild';
 import { guildKind } from './guild';
 import { ecoBiomeName, type EcoHit } from './eco';
 import {
-  EZ_FAMILIES, EZ_M_PER_SCALE, ezCrownReach, ezMaterial, ezPalette, ezPickVariant, ezVariantFor,
-  ezVariants, type EzFamily,
+  EZ_FAMILIES, EZ_M_PER_SCALE, ezCrownReach, ezLookU, ezMaterial, ezPalette, ezPickVariant,
+  ezVariantFor, ezVariants, type EzFamily,
 } from './flora-ez';
 import { seedAt, type CultureEnv } from './culture';
 import { coastKm } from './coast';
@@ -336,6 +336,8 @@ function makeStand(mount: HTMLElement): {
     sun.intensity = o.sunI;
 
     ezBendU.value = o.bend;
+    ezLookU.uEzBark.value = o.bark;
+    ezLookU.uEzEdge.value = o.cardEdge;
     ezWindU.uTime.value = now / 1000;
     // EXACTLY THE WORLD'S ARITHMETIC (see the wind step in main.ts): the gust
     // is metres of tip travel per metre of blade, clamped, and the trees take
@@ -423,7 +425,7 @@ interface StandOpts {
    *  because that is where the guild's form preference and the district and
    *  stand seeds are known. */
   ez: boolean; ezPick: Map<VegSite, number>;
-  sizeScale: number; formScale: number; bend: number;
+  sizeScale: number; formScale: number; bend: number; bark: number; cardEdge: number;
   windKmh: number; windDeg: number;
 }
 
@@ -516,6 +518,11 @@ export async function startFloraLab(): Promise<void> {
       { id: 'treeSize', label: 'HEIGHT x', kind: 'range', min: 0.4, max: 3, step: 0.1, value: 1 },
       { id: 'treeForm', label: 'FORM SPREAD x', kind: 'range', min: 0, max: 5, step: 0.25, value: 1 },
       { id: 'treeBend', label: 'GROWTH BEND', kind: 'range', min: 0, max: 1.1, step: 0.02, value: 0 },
+      // The two surface numbers, on dials because the frames that found them
+      // were taken here: a trunk that reads as a prism and a card that draws a
+      // bright line are both invisible from any distance but this one.
+      { id: 'bark', label: 'BARK', kind: 'range', min: 0, max: 1.5, step: 0.05, value: 0.55 },
+      { id: 'cardEdge', label: 'CARD EDGE', kind: 'range', min: 0.2, max: 1, step: 0.02, value: 0.62 },
       { id: 'windKmh', label: 'WIND km/h', kind: 'range', min: 0, max: 130, step: 5, value: 0 },
       { id: 'windDeg', label: 'WIND FROM °', kind: 'range', min: 0, max: 350, step: 10, value: 220 },
       // ── THE STAND ──
@@ -532,6 +539,12 @@ export async function startFloraLab(): Promise<void> {
       { id: 'sunEl', label: 'SUN °', kind: 'range', min: 3, max: 88, step: 1, value: 34 },
       { id: 'sunI', label: 'SUN INT', kind: 'range', min: 0, max: 4, step: 0.05, value: 2.1 },
       { id: 'sky', label: 'SKY', kind: 'color', value: '#2b3a44' },
+      // THE GROUND IS THE PLACE'S, NOT A DIAL — a desert standing on grass is
+      // a frame that is honest about its plants and misleading about where
+      // they are, and the Sonoran shot in the first review was exactly that.
+      // The dial stays as an override, because a stand photographed against a
+      // flat tone is sometimes the clearer picture.
+      { id: 'groundAuto', label: 'GROUND FROM SITE', kind: 'toggle', value: true },
       { id: 'groundCol', label: 'GROUND', kind: 'color', value: '#5d6a44' },
       { id: 'showGround', label: 'SHOW GROUND', kind: 'toggle', value: true },
       { id: 'trunks', label: 'TRUNKS', kind: 'toggle', value: true },
@@ -581,6 +594,8 @@ export async function startFloraLab(): Promise<void> {
   let perStand = 0;
   /** Written by the place selector, read to stop it writing again. */
   let lastPlace = '';
+  /** The ground this climate actually paints, from the shipped ramps. */
+  let autoGround = '#5d6a44';
 
   /** Grow the stand. Deliberately the same sequence plantClump uses: ONE tone
    *  for the whole stand, a sqrt-biased radius so the clump has a core and a
@@ -748,6 +763,15 @@ export async function startFloraLab(): Promise<void> {
     const site: SiteClimate = siteAt(siteEnv, 0, 0);
     const eco: EcoHit | null = place && dials.bool('guild') ? place.eco : null;
     const guild = guildAt(site, eco);
+    // THE SAME BAND-AND-BLEND, OVER THE SAME NUMBERS the terrain paints with —
+    // see `groundColourAt`. Not the whole of `terrainPalette` (no cover tint,
+    // no slope shade, no shallows rule), which is main.ts's and needs world
+    // state a bare stand does not have.
+    {
+      const [gr, gg, gb] = groundColourAt(s.w, elev);
+      const hex = (v: number): string => Math.round(clamp(v, 0, 1) * 255).toString(16).padStart(2, '0');
+      autoGround = `#${hex(gr)}${hex(gg)}${hex(gb)}`;
+    }
     const treeline = treelineAt(lat, moist);
     const eff0 = elev + dials.num('aspect');
     grow(s.w, treeline, eff0, altBandAt(eff0, treeline), guild, { lat: latSigned, lon });
@@ -897,6 +921,8 @@ export async function startFloraLab(): Promise<void> {
     sizeScale: dials.num('treeSize'),
     formScale: dials.num('treeForm'),
     bend: dials.num('treeBend'),
+    bark: dials.num('bark'),
+    cardEdge: dials.num('cardEdge'),
     windKmh: dials.num('windKmh'),
     windDeg: dials.num('windDeg'),
     patch: dials.num('patch'),
@@ -907,7 +933,7 @@ export async function startFloraLab(): Promise<void> {
     sunEl: dials.num('sunEl'),
     sunI: dials.num('sunI'),
     sky: dials.str('sky'),
-    groundCol: dials.str('groundCol'),
+    groundCol: dials.bool('groundAuto') ? autoGround : dials.str('groundCol'),
     ground: dials.bool('showGround'),
     trunks: dials.bool('trunks'),
   });
