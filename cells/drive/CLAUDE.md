@@ -2324,6 +2324,80 @@ so a true desert still reads as one and an under-rained forest stays a forest:
 with a stated tolerance must not drive a visible effect harder than that
 tolerance allows.**
 
+## The attract reel drives itself
+
+A tape (`client/tapes.ts`) is recorded INPUT — four bytes a step of steer,
+throttle and brake, replayed through the sim. That is right for a player's own
+banked run, because a run is a performance and the point is that it was theirs.
+It was wrong for the house programme, and the arithmetic says why: the two
+authored tapes ran **21.25 and 18.9 seconds**, so forty seconds of driving was
+the whole show, and every extra minute had to be driven by hand and pasted into
+the bundle as base64.
+
+`client/reel-drives.ts` is the same entry as data: WHERE TO BOOT and WHERE TO
+GO. The autopilot — the same `goal` and Dijkstra route the DRIVE TO action
+already uses — does the driving, live, on the player's hour and weather. A new
+postcard costs two coordinate pairs and a name.
+
+- **IT IS A DIRECTION, NOT AN APPOINTMENT.** The slot ends on a time cap far
+  more often than on arrival, by design: the goal exists to give the router
+  something to aim at so the truck takes the scenic road rather than the first
+  turning. Three ends, and all three are needed — ARRIVED (`goalDone`), CAPPED
+  (the slot's own seconds), STUCK (`ATTRACT_STILL_S` of not moving). Without
+  the last, the orbit circles a parked truck for ever.
+- **THE AUTOPILOT IS ENGAGED LATE, NOT AT ARM.** It needs a road graph and
+  there is none in the first frames after a hop. `attractDriveTick` waits for
+  `roadGrid.size`, and writes the slot off after `ATTRACT_ROADS_S` if the
+  survey never arrives. (That rule was seen working before it was wanted: with
+  drawing on, the harness streams at three frames a second, no road reached the
+  rig in forty seconds, and the slot correctly moved on.)
+- **THE BANKED PATH IS UNTOUCHED.** The reel is designed to show the player's
+  own runs and the authored tapes were "placeholders for a cold account, not
+  the show" — so drives replace that fallback and a signed-in player still sees
+  their own tapes. `ATTRACT_TAPES` stays: the recorder writes them, a banked
+  run is one, and the reload fallback re-arms from whichever bundle
+  `reelList` would have built.
+
+**THE PAUSE AND THE REEL FLATLY CONTRADICTED EACH OTHER.** `paused` is
+`menu.tab() !== null`, and the reel only runs with the hub OPEN — `stepAttract`
+stands it down otherwise. A recorded tape never noticed, because `played` is
+spliced in ahead of the pause: a replay drives a paused world by construction.
+The autopilot has no such splice — it is handed `off` when paused AND its
+output is zeroed when paused — so a driven slot armed, engaged, streamed four
+thousand road cells and **sat still for ninety seconds with `src: none`**. A
+driven reel is exempt from the pause now, exactly as REAL drive already is, and
+recording is suppressed separately so the reel's own driving cannot land in the
+player's tape ring and come back as something they KEPT.
+
+**AND `?nodraw=1` FROZE THE WHOLE SUBSYSTEM.** The hop leaves from after the
+render because it captures the frame it is departing on for the cross-fade;
+with nothing drawn there is no frame, and the early return skipped the hop
+entirely. So the one flag that makes the harness fast made the reel untestable.
+It travels under `nodraw` now.
+
+**EVERY START IS ON A ROAD, AND IT IS CHECKED** —
+`devtools/reel-roads.mjs`, against the same OSM tiles the game streams. It
+exists because the first cut put Chapman's Peak at `-34.0745,18.3590`, a
+coordinate THIS SESSION had already established sits in Hout Bay, on the water.
+The failure was silent in the way that costs an afternoon: the slot armed, the
+goal was set, the roads streamed, the autopilot engaged, and the rig sat still
+because there was nothing under it to drive on. A start must be within 25m of a
+drivable way; a goal need not be on one at all, since the router aims for the
+closest it can get.
+
+Held by `devtools/reel-drive.test.mjs`, whose last assertion is the one that
+matters most: **the reel gives the wheel back.** `travelTo` calls `attractStop`
+on every tap, so a reel that left the autopilot on and a goal set would hand
+the player a truck that drives itself to Noordhoek.
+
+**AND A TEST HAS TO BE IN THE STATE THE FEATURE LIVES IN.** The first cut of
+that test opened the world in chase view with no menu, so every slot armed
+correctly and `stepAttract` stood it down on the very next frame — "leaving the
+hub mid-reel means the player chose THIS place". The probe read `drive: null`
+six times over and could not say whether the arm had failed or never been
+attempted, which is why `__reel()` now reports `busy` (hopping, real, line,
+pending, quiet) and `why` — the last reason a go did not arm.
+
 ## Routing across two maps
 
 The router's graph was the fine OSM survey and nothing else, so a goal past the

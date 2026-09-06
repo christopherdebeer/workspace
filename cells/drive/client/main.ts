@@ -55,6 +55,7 @@ import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
 import { LANDMARKS, type Landmark } from './landmarks';
 import { ATTRACT_TAPES, type AttractTape } from './tapes';
+import { REEL_DRIVES, type ReelDrive } from './reel-drives';
 import { autoDrive, autoMem, AUTO, type AutoOut, type Ground as AutoGround } from './autopilot';
 import { mkField, buildField, recenter as wxRecenter, wxAt, puddleAt, seedWet, WXF_N, WXF_SPAN } from './weatherfield';
 import { grainFx, grainU } from './grain';
@@ -23560,7 +23561,13 @@ const reelSecs = (k: string, d: number): number => {
 const ATTRACT_IDLE_MS = reelSecs('reelidle', 90000);
 const ATTRACT_DWELL_MS = reelSecs('reeldwell', 90000);
 const ATTRACT_RET_KEY = 'drive.attract.ret';
-const attract = { on: false, i: 0, idleAt: 0, doneAt: 0, showAt: 0, dials: {} as Record<string, number> };
+const attract = {
+  on: false, i: 0, idleAt: 0, doneAt: 0, showAt: 0, dials: {} as Record<string, number>,
+  /** The driven slot, where this one is a place-and-goal rather than a tape. */
+  drive: null as ReelDrive | null,
+  /** When the slot started, and when the rig was last actually moving. */
+  driveAt: 0, driveStill: 0,
+};
 const b64ToBytes = (s: string): Uint8Array => {
   const bin = atob(s);
   const out = new Uint8Array(bin.length);
@@ -23591,7 +23598,11 @@ const attractBoot = ((): { i: number; lat: number; lon: number; h: number } | nu
     if (!raw) return null;
     sessionStorage.removeItem(ATTRACT_GO_KEY);
     const v = JSON.parse(raw) as { i: number; lat: number; lon: number; h: number };
-    return ATTRACT_TAPES[v.i] ? v : null;
+    // EITHER BUNDLE CAN BE RE-ARMED FROM. The reload fallback re-enters at an
+    // INDEX, so the index has to exist in whichever list this boot's reel is
+    // going to build — drives when there are any, tapes otherwise, which is
+    // exactly what `reelList` decides.
+    return (REEL_DRIVES.length ? REEL_DRIVES[v.i] : ATTRACT_TAPES[v.i]) ? v : null;
   } catch { return null; }
 })();
 // THE HELD FRAME. The cycle still travels by reload — the world origin is
@@ -23973,10 +23984,87 @@ function attractArmTape(w: { head: TapeHead; steps: string; keys: string }, i: n
   car.visible = false;
   attract.showAt = performance.now() + 25000;
 }
+/**
+ * ── ARMING A DRIVEN SLOT ──
+ *
+ * No tape, no checkpoints, no drift correction: the goal is set, the autopilot
+ * is switched on, and the sim drives. Everything else — the hidden rig waiting
+ * for its ground, the orbit, the dwell — is the tape path's, unchanged.
+ *
+ * THE AUTOPILOT IS NOT ENGAGED HERE. It needs a road graph, and at the first
+ * frame after a hop there is none: engaging into an empty survey makes the rig
+ * sit still while the orbit circles it, which is the exact failure the reel
+ * exists to avoid. `attractDriveTick` engages once roads have actually
+ * streamed, and gives up on the slot if they never do.
+ */
+function attractArmDrive(d: ReelDrive, i: number): void {
+  tapePlay.armed = false; tapePlay.on = false;
+  attract.on = true; attract.i = i; attract.doneAt = 0;
+  attract.dials = {};
+  attract.drive = d;
+  attract.driveAt = 0;
+  attract.driveStill = 0;
+  const [gx, gz] = toLocal(d.goal.lat, d.goal.lon);
+  setGoal(d.goal.name, gx, gz);
+  goalDone = null;
+  streamWorld(state.x, state.z);
+  car.visible = false;
+  attract.showAt = performance.now() + 25000;
+}
 /** The authored-index arm, kept for the boot/fallback-reload path. */
 function attractArm(i: number): void {
+  // MIRRORS `reelList`'s OWN RULE and does not consult `reelNow`: this runs at
+  // BOOT, from the reload fallback, before the cycle has ever called
+  // `reelSnap`, so the snapshot is empty and reading it would arm a tape on a
+  // world the drive list was going to fill.
+  if (REEL_DRIVES.length) {
+    const d = REEL_DRIVES[i];
+    if (d) attractArmDrive(d, i);
+    return;
+  }
   const t = ATTRACT_TAPES[i];
   if (t) attractArmTape(t, i);
+}
+/**
+ * ── AND THE THREE WAYS A DRIVEN SLOT ENDS ──
+ *
+ * A tape ends because it runs out. A drive has to be told, and all three of
+ * these have to be honoured or the reel stalls on one postcard for ever:
+ *
+ *   ARRIVED  `goalDone` fired. The rare one, and the nicest.
+ *   CAPPED   the slot's own seconds ran out. THE COMMON ONE, by design — the
+ *            goal is a direction, not an appointment.
+ *   STUCK    the rig has not moved for `ATTRACT_STILL_S`. An autopilot with no
+ *            road under it, a goal on the wrong side of a river, a spawn in a
+ *            cul-de-sac. Without this the orbit circles a parked truck until
+ *            the player gives up on the game, which is worse than a short slot.
+ */
+const ATTRACT_DRIVE_S = 150;
+const ATTRACT_STILL_S = 22;
+/** How long the roads get to arrive before the slot is written off. */
+const ATTRACT_ROADS_S = 40;
+function attractDriveTick(now: number): boolean {
+  const d = attract.drive;
+  if (!d) return false;
+  if (!attract.driveAt) attract.driveAt = now;
+  const elapsed = (now - attract.driveAt) / 1000;
+  // ── ENGAGE ONCE THERE IS A ROAD TO DRIVE ON ──
+  if (!auto.on) {
+    if (roadGrid.size > 0) {
+      auto.on = true;
+      auto.out = null;
+      auto.mem = autoMem();
+      auto.mem.lastHeading = state.heading;
+      attract.driveStill = now;      // the stall clock starts when the driving does
+    } else if (elapsed > ATTRACT_ROADS_S) {
+      return true;                   // no survey ever arrived; take the next postcard
+    }
+    return false;
+  }
+  if (Math.abs(state.speed) > 0.8) attract.driveStill = now;
+  if (goalDone) return true;
+  if (now - attract.driveStill > ATTRACT_STILL_S * 1000) return true;
+  return elapsed > (d.cap ?? ATTRACT_DRIVE_S);
 }
 /**
  * ── THE REEL'S PROGRAMME (R66) ──
@@ -23988,6 +24076,7 @@ function attractArm(i: number): void {
  */
 type ReelTape =
   | { src: 'authored'; lat: number; lon: number; h: number; t: AttractTape }
+  | { src: 'drive'; lat: number; lon: number; h: number; d: ReelDrive }
   | { src: 'banked'; lat: number; lon: number; h: number; user: string; id: string };
 const reelWire = new Map<string, { head: TapeHead; steps: string; keys: string } | null>();
 let reelNow: ReelTape[] = [];
@@ -23999,6 +24088,14 @@ function reelList(): ReelTape[] {
     return shelf.slice(0, 8).map((t) => (
       { src: 'banked' as const, lat: t.lat, lon: t.lon, h: 0, user, id: t.id }));
   }
+  // THE HOUSE PROGRAMME IS DRIVEN, NOT PLAYED. `ATTRACT_TAPES` stays — the
+  // recorder writes them, a banked run IS one, and the reload fallback below
+  // still re-arms from it — but the cold-account reel is `REEL_DRIVES` now,
+  // because forty seconds of authored tape was the whole show and every extra
+  // minute had to be driven by hand and pasted in as base64.
+  if (REEL_DRIVES.length) {
+    return REEL_DRIVES.map((d) => ({ src: 'drive' as const, lat: d.lat, lon: d.lon, h: d.h, d }));
+  }
   return ATTRACT_TAPES.map((t) => ({ src: 'authored' as const, lat: t.lat, lon: t.lon, h: t.h, t }));
 }
 /** The programme for THIS sitting — snapshotted so a mid-reel sync cannot
@@ -24007,7 +24104,11 @@ function reelSnap(now: number): ReelTape[] {
   if (!reelNow.length || now - reelAt > 60000) { reelNow = reelList(); reelAt = now; }
   return reelNow;
 }
+/** A drive has no wire: there is nothing recorded to fetch. Callers must ask
+ *  `e.src === 'drive'` before reaching for one — the null here means "this
+ *  slot is dead", and a drive is very much alive. */
 async function reelWireFor(e: ReelTape): Promise<{ head: TapeHead; steps: string; keys: string } | null> {
+  if (e.src === 'drive') return null;
   if (e.src === 'authored') return e.t;
   if (!reelWire.has(e.id)) reelWire.set(e.id, await runFetchWire(e.user, e.id));
   return reelWire.get(e.id) ?? null;
@@ -24061,11 +24162,17 @@ let attractGoI: number | null = null;
 function attractGo(i: number): void {
   if (reelNow[i]) attractGoI = i;
 }
+/** WHY THE LAST GO DID NOT ARM. The hop runs in a detached async block whose
+ *  catch falls back to a reload, so a failure here is invisible from outside:
+ *  the pending index is consumed, nothing arms, and no error reaches the page.
+ *  Two rounds of the reel test read `drive: null` and could not say more. */
+let attractWhy = '';
 function attractGoNow(): void {
   const i = attractGoI as number;
   attractGoI = null;
+  attractWhy = 'started';
   const e = reelNow[i];
-  if (!e) return;
+  if (!e) { attractWhy = `no entry at ${i} of ${reelNow.length}`; return; }
   // The parting shot bridges the hop either way — held over the in-place
   // rebuild, or banked across the reload if the hop has to fall back.
   let shot: string | null = null;
@@ -24073,16 +24180,30 @@ function attractGoNow(): void {
   attractHoldShow(shot);
   void (async () => {
     try {
+      // A DRIVE HAS NOWHERE TO FETCH FROM. It is the entry itself: hop to the
+      // place and point the autopilot at the goal. No wire, so no cold-fetch
+      // latency and no dead-blob case either — the commonest way a slot used
+      // to be skipped cannot happen to one.
+      if (e.src === 'drive') {
+        attractWhy = 'hopping';
+        await worldHop(e.lat, e.lon, e.h);
+        attractWhy = 'arming';
+        attractArmDrive(e.d, i);
+        attractWhy = 'armed';
+        return;
+      }
       // Primed cycles find the wire already cached; a cold one fetches here.
       const w = await reelWireFor(e);
       if (!w) { attractHoldDrop(); return; }   // a dead blob skips its slot
       await worldHop(w.head.lat, w.head.lon, w.head.hdg);
       attractArmTape(w, i);
-    } catch {
-      // The in-place road failed under this cycle; travel the old way —
-      // which only the authored tapes can, since a fresh boot re-arms from
-      // ATTRACT_TAPES. A banked entry just stands down until the next idle.
-      if (e.src !== 'authored') { attractHoldDrop(); return; }
+    } catch (err) {
+      attractWhy = `threw at ${attractWhy}: ${String((err as Error)?.message ?? err).slice(0, 120)}`;
+      // The in-place road failed under this cycle; travel the old way — which
+      // a bundled entry can, since a fresh boot re-arms from the bundle. A
+      // banked entry has nothing to re-arm FROM after a reload, so it stands
+      // down until the next idle.
+      if (e.src === 'banked') { attractHoldDrop(); return; }
       try {
         sessionStorage.setItem(ATTRACT_GO_KEY, JSON.stringify({ i, lat: e.lat, lon: e.lon, h: e.h }));
         if (shot) sessionStorage.setItem(ATTRACT_SHOT_KEY, shot);
@@ -24137,6 +24258,17 @@ function attractStop(): void {
   attractGoI = null;
   if (!attract.on) return;
   attract.on = false;
+  // GIVE THE WHEEL BACK. A reel that leaves the autopilot on and a goal set
+  // hands the player a truck that drives itself to Noordhoek — and `travelTo`
+  // calls this on every tap, so it is the one place that has to be right.
+  if (attract.drive) {
+    auto.on = false;
+    auto.out = null;
+    goal = null;
+    goalRoute = null;
+    goalDone = null;
+    attract.drive = null;
+  }
   tapeRestoreDials(attract.dials);
   attract.dials = {};
   tapeEnd();
@@ -24156,8 +24288,13 @@ function stepAttract(now: number): void {
     return;
   }
   if (attract.on) {
-    if (tapePlay.on || now > attract.showAt) { car.visible = true; attractHoldDrop(); }
-    if (!tapePlay.on && !tapePlay.armed) {
+    if (tapePlay.on || attract.drive || now > attract.showAt) { car.visible = true; attractHoldDrop(); }
+    // A DRIVEN SLOT IS FINISHED BY ITS OWN RULE, not by a tape running out —
+    // and until it is, it is emphatically not done, so the dwell must not
+    // start. `attractDriveTick` also does the engaging, so it runs every
+    // frame of the slot and not only at the end of it.
+    if (attract.drive && !attract.doneAt && !attractDriveTick(now)) return;
+    if (attract.drive || (!tapePlay.on && !tapePlay.armed)) {
       // The tape ran out. THE DWELL IS THE SHOW (owner-asked: "wait a lot
       // longer before cycling") — the orbit keeps circling the parked rig in
       // the finished country for a good while, and the pause is when the
@@ -24295,8 +24432,31 @@ function tapeKeep(): string {
   try { home = !!sessionStorage.getItem(ATTRACT_RET_KEY); } catch { /* private mode */ }
   const out = { n: list.length, at: attract.on ? attract.i : -1, home,
     idleMs: ATTRACT_IDLE_MS, dwellMs: ATTRACT_DWELL_MS,
-    src: list[0]?.src ?? null };
+    src: list[0]?.src ?? null,
+    names: list.map((e) => (e.src === 'drive' ? e.d.name : e.src === 'authored' ? e.t.name : e.id)),
+    // The driven slot, which is the only kind with anything to watch: whether
+    // the autopilot has found a road yet, how long it has been driving, how
+    // far it still is from the goal, and which of the three end conditions is
+    // approaching. A reel that stalls is diagnosed from this line.
+    drive: attract.drive ? {
+      id: attract.drive.id, name: attract.drive.name,
+      goal: goal?.name ?? null,
+      auto: auto.on, src: auto.src, roads: roadGrid.size,
+      secs: attract.driveAt ? +((performance.now() - attract.driveAt) / 1000).toFixed(1) : 0,
+      cap: attract.drive.cap ?? ATTRACT_DRIVE_S,
+      stillS: attract.driveStill ? +((performance.now() - attract.driveStill) / 1000).toFixed(1) : 0,
+      speed: +state.speed.toFixed(1),
+      goalM: goal ? Math.round(Math.hypot(goal.x - state.x, goal.z - state.z)) : null,
+      arrived: !!goalDone,
+    } : null,
+    // WHY A GO WAS REFUSED. `reelGoAt` stands down silently while the world is
+    // hopping or the session is on the line or a GPS drive, which is right for
+    // a tap and opaque to a test: the first cut of the reel test read `drive:
+    // null` six times and could not say whether the arm had failed or never
+    // been attempted.
+    busy: { hopping, real: real.on, line: lineOn, pending: attractGoI, quiet: worldQuiet(), why: attractWhy } };
   if (i !== undefined) reelGoAt(i);
+  (out as { pendingAfter?: number | null }).pendingAfter = attractGoI;
   return out;
 };
 (window as unknown as { __surfaceAt?: (x: number, z: number) => string }).__surfaceAt = surfaceAt; // debug/test handles (read-only use)
@@ -33842,7 +34002,19 @@ function tick(now: number): void {
   // the road outside does not pause, and a clock that lies about that is worse
   // than no clock.
   profTickStart();
-  const paused = ((menu.tab() !== null || hidden) || rewindPaused) && !real.on;
+  // A DRIVEN REEL IS EXEMPT, EXACTLY AS REAL DRIVE IS. The reel only runs with
+  // the hub open — `stepAttract` stands it down otherwise — and an open menu is
+  // what `paused` MEANS, so the two flatly contradict each other. A recorded
+  // tape never noticed: `played` is spliced in ahead of the pause a few lines
+  // below, so a replay drives a paused world by construction. The autopilot has
+  // no such splice — it is handed `off` when paused and its output is zeroed
+  // when paused — so a driven slot armed, engaged, streamed four thousand road
+  // cells and sat still for ninety seconds with `src: none`.
+  //
+  // Recording is still suppressed below: the reel's own driving must not land
+  // in the player's tape ring and come back as something they KEPT.
+  const attractDriving = attract.on && !!attract.drive;
+  const paused = ((menu.tab() !== null || hidden) || rewindPaused) && !real.on && !attractDriving;
   // BEFORE ANYTHING INTEGRATES. The chassis loop has no finite check inside it
   // and NaN survives every clamp on the way round, so the only place a break can
   // be made is ahead of the loop. See breakNanLatch.
@@ -33911,7 +34083,7 @@ function tick(now: number): void {
   // …and the RING takes what the hands just did, before anything downstream has
   // a chance to reinterpret it. Always, unless a tape is already driving —
   // recording the replay would be recording our own echo.
-  if (!played && !paused && !scrubbing && dt > 0) { const _p = performance.now(); tapeWrite(dt, raw2); profAdd('tapeWrite', _p); }
+  if (!played && !paused && !attractDriving && !scrubbing && dt > 0) { const _p = performance.now(); tapeWrite(dt, raw2); profAdd('tapeWrite', _p); }
   // FLYING THE DRONE MEANS NOT DRIVING. The rig stays exactly where you left
   // it — that is the whole point of scouting ahead — so the controls are handed
   // over wholesale rather than shared.
@@ -35560,7 +35732,17 @@ function tick(now: number): void {
   { const _p = performance.now(); stepFineRing(now); profAdd('stepFineRing', _p); }
   { const _p = performance.now(); applyHidden(); profAdd('applyHidden', _p); }
   profMark('hud+misc');
-  if (NODRAW) { profTickEnd('nodraw'); tickN++; requestAnimationFrame(tick); return; }
+  if (NODRAW) {
+    // THE REEL STILL TRAVELS WITH THE DRAWS OFF. The hop below normally leaves
+    // from AFTER the render, because it captures the frame it is departing on
+    // for the cross-fade — and with nothing drawn there is no frame to
+    // capture, so this early return skipped it entirely and the whole attract
+    // subsystem was frozen under `?nodraw=1`. Which made it exactly the thing
+    // the fast harness could not test: a reel test had to draw, at three
+    // frames a second, or measure a reel that could never advance.
+    if (attractGoI !== null) attractGoNow();
+    profTickEnd('nodraw'); tickN++; requestAnimationFrame(tick); return;
+  }
   // scene → target, two separable blur rounds at half res, composite to canvas
   renderer.setRenderTarget(rtScene);
   { const _p = performance.now(); renderer.render(scene, camera); profAdd('render', _p); }
@@ -38592,6 +38774,14 @@ const odo = { total: 0, trip: 0, at: 0 };
 try { odo.total = Number(localStorage.getItem('drive.odo') ?? 0) || 0; } catch { /* fine */ }
 const fmtKm = (m: number): string => (m < 1000 ? `${Math.round(m)} M` : `${(m / 1000).toFixed(m < 100000 ? 1 : 0)} KM`);
 function stepOdo(dt: number, now: number): void {
+  // THE REEL IS A TRAILER, NOT A DRIVE. The odometer is the player's record of
+  // what THEY drove and `drive.odo` is persisted for the life of the device, so
+  // an attract slot must not touch it. Caught in a frame: the splash orbit
+  // reading "111 M TRIP · 111 M TOTAL" while the reel drove Chapman's Peak on
+  // its own. A recorded tape had the same leak and it never showed, because
+  // twenty-one seconds is two hundred metres; a driven slot runs for two and a
+  // half minutes and the reel cycles for as long as the machine is left alone.
+  if (attract.on) return;
   const d = Math.abs(state.speed) * dt;
   odo.total += d;
   odo.trip += d;
@@ -40332,6 +40522,13 @@ function setClean(on: boolean): void {
     reachKm: +(far / 1000).toFixed(2),
     handoverM: Number.isFinite(osmRingR) ? Math.round(osmRingR * OV_ROUTE_IN) : null,
     fineRingM: Number.isFinite(osmRingR) ? Math.round(osmRingR) : null };
+};
+/** Stand the reel down, exactly as a tap on the screen does. The one thing a
+ *  driven reel must never fail at is giving the wheel back, and this is what
+ *  lets a test check it without synthesising a pointer event. */
+(window as unknown as { __attractstop?: object }).__attractstop = (): object => {
+  attractStop();
+  return { on: attract.on, drive: attract.drive, auto: auto.on, goal: goal?.name ?? null };
 };
 (window as unknown as { __goal?: object }).__goal =
   (name?: string | null, x?: number, z?: number): object | null => {
