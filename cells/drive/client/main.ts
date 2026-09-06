@@ -49,7 +49,7 @@ import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { facade } from './facade';
 import { startLab } from './labs';
-import { EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezMaterial, ezMeanTris, ezPalette, ezPickVariant, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
+import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezMaterial, ezMeanTris, ezPalette, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
@@ -7757,23 +7757,6 @@ const trunks = vegMesh(trunkGeo2, woodMat, 3600);
  */
 const EZ_ON = ((): boolean => { const ask = new URLSearchParams(location.search).get('ez'); return ask !== '0' && ask !== 'off'; })();
 /**
- * THE FAMILIES WITH A BAKED SKELETON.
- *
- * `acacia` and `palm` joined the three because the guild asks for them and the
- * atlas had neither: every savanna and dry-forest row wants an umbrella crown
- * and every mangrove and tropical row a palm, and both were still 20-triangle
- * archetypes while an oak two hundred metres away had real branching. The
- * bake's own vocabulary now carries `umbrella` and `palm` forms, checked
- * against the geometry — see `silhouette` in devtools/bake-ez-flora.mjs.
- */
-const EZ_FAMILIES: EzFamily[] = ['broadleaf', 'conifer', 'acacia', 'palm', 'snag'];
-/** A record over every EZ family, built from the list rather than typed out.
- *  Six literals used to name the three families by hand, which is six places
- *  to forget when a fourth arrives — and TypeScript would have caught only the
- *  ones whose type is `Record<EzFamily, …>`. */
-const ezRecord = <T>(fill: (f: EzFamily) => T): Record<EzFamily, T> =>
-  Object.fromEntries(EZ_FAMILIES.map((f) => [f, fill(f)])) as Record<EzFamily, T>;
-/**
  * THE TREE BUDGET. The recipes are the lab's, pasted, and a recipe the eye
  * likes is a thousand triangles a tree; sixteen hundred broadleaf of those
  * is more than the whole scene was. So the three tree caps are scaled
@@ -7914,22 +7897,6 @@ if (EZ_ON) {
     }
   }
 }
-/**
- * HOW TALL A TREE IS, IN METRES. The archetypes stood three to nine metres —
- * a crown on a short post, sized for twenty triangles. A skeleton with real
- * branching wants a real height: a site's scale draw (VEG_SIZE, 1.4–3.6 for
- * a broadleaf, krummholz and the tuning already in it) becomes metres at a
- * rate per family, so an oak stands 8–21 m, a pine 10–26, a snag 4–11, and a
- * treeline spruce is still the short one. The crown's reach rides on top.
- */
-const EZ_M_PER_SCALE: Record<EzFamily, number> = {
-  broadleaf: 5.7, conifer: 7.2, snag: 3.6,
-  // An umbrella thorn is a SMALL tree — six to twelve metres, and it reads as
-  // wide rather than tall, which is most of what makes a savanna look like
-  // one. A coconut palm is the opposite: eight to twenty metres of trunk with
-  // a tuft on it, so it stands above everything around it and is mostly bare.
-  acacia: 3.6, palm: 5.4,
-};
 /** What the last refresh stood up, for the harness. */
 let ezPlaced: Array<Record<string, number | string>> = [];
 /** The admitted edge per family last refresh, metres. */

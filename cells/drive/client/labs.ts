@@ -62,7 +62,7 @@ export const LABS: readonly LabEntry[] = [
   {
     slug: 'flora',
     label: 'FLORA',
-    note: 'The climate ladder on one screen — biome mix at a point and a column through the altitudes, with the treeline walking as you turn the latitude.',
+    note: 'What grows at a real place and what it looks like: the site sampler, the ecoregion, the guild and the baked skeletons the world actually draws — with the climate ladder beside them as the A/B.',
     start: () => import('./flora-lab').then((m) => m.startFloraLab()),
   },
   {

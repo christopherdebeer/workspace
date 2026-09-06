@@ -1628,6 +1628,107 @@ Acacia-Commiphora bushlands* → the savanna guild → `forms {bare 6, umbrella 
 and the Sundarbans returns *Sundarbans mangroves* → the mangrove guild →
 `forms {bare 16, palm 11}`.
 
+### The flora lab was reviewing a game nobody plays
+
+Asked to look at the new vegetation in the flora lab, and the lab could not
+show it. It drove `climate.ts` and the twenty-triangle archetypes — the five
+biomes and the lollipops — while the world had moved to
+site → ecoregion → guild for the CHOOSING and to baked EZ skeletons for every
+broadleaf, conifer, acacia, palm and snag it DRAWS. So the one surface whose
+entire job is "does this look like anything" had been silently reviewing a
+previous version of the game for as long as the atlas has existed. It runs the
+real chain now: a real place, `siteAt` over an authored hillside, the place's
+real ecoregion, `guildAt`, and the skeletons.
+
+- **THE PLACES ARE RESOLVED, NOT TYPED.** Seventeen coordinates, each looked up
+  against the live `~/eco/v1/` tiles by `devtools/eco-places.mjs`, covering ten
+  of the fourteen biomes and — deliberately — the distinctions one sample
+  cannot make: two Mediterranean shrublands in different realms (Cape, Big
+  Sur), two savannas in two (Serengeti, Kakadu) and three deserts in three
+  (Sonoran, Sahara, Outback), which is the only way to watch the cactus gate do
+  its one job. An eighteenth, a New Zealand fiord, came back with no
+  terrestrial ecoregion at z5 and was dropped rather than nudged onto land.
+- **`EZ_FAMILIES` AND `EZ_M_PER_SCALE` MOVED INTO `flora-ez.ts`.** They were
+  module state of main.ts, so a lab could not size a tree the way the world
+  sizes it without retyping both — and a lab that retypes what it inspects
+  proves something about itself and nothing about what ships. main.ts still
+  owns where a tree stands; the atlas owns what the families are and how tall
+  one grows.
+- **A PATCH WAS ONE CLUMP, so it could not show a guild's proportions at all.**
+  The old stand drew a single dominant and gave it 83% of the population, which
+  is right for one thicket and useless as a landscape: the Cape came out 244
+  broadleaf and 3 conifer out of a mix that is 59% bush. It scatters clumps now
+  with `seedCell`'s own draws — 3–19 plants at 6–22 m, a tone and a dominant
+  rolled for each — and reads bush 133 / broadleaf 103 / rock 6 / snag 3 /
+  conifer 2. **The lumpiness those numbers produce is most of what a landscape
+  looks like from a distance**, and it is also why a census under about fifteen
+  clumps is noise: one extra broadleaf clump is seventeen plants.
+- **AND `COVER CLASS` DEFAULTED TO CANOPY**, which narrows a guild to its TREES
+  by design. Every reading was a guild's forest and never its country. `none`
+  is a real answer, the commonest one, and is now the default.
+- **A VARIANT'S NAME WAS THE RECIPE'S, NOT THE TREE'S.** Every acacia recipe
+  started from an EZ-Tree Oak preset and every palm from a Pine, so the lab's
+  own readout said the Sundarbans grows `Pine Small #44 ×35` and the Serengeti
+  `Oak Medium #3 ×17`. The geometry was right — the form is MEASURED off the
+  bake — but the line reads exactly like the guild planting the wrong tree,
+  which is a fabricated witness of the kind this file keeps warning about.
+  `EzVariant.label` (`acacia umbrella 2`, `palm palm 1`) is what readouts use;
+  `name` keeps the provenance, because it is how a recipe is found again.
+- **THE SITE COLUMN RAN OFF THE CANVAS** and the first thing it cut was `salt`
+  — the one term that decides whether a coast grows mangrove.
+
+`devtools/flora-guild.mjs` drives it: a place per frame, `--ab` for the guild
+and skeleton switches, `--dist/--eye/--turn` for the framing. Thirty seconds a
+place, no network at all, against eight and a half minutes for one live
+`guild-ab.mjs` pair.
+
+### What the frames said
+
+Judged from windscreen height (`--eye=2.5 --dist=34`), which is the distance
+and the height a driver actually sees roadside trees from. **Frame the camera
+before believing an impression**: the first close-up put the eye inside a
+crown and the leaf cards looked like sheets of cardboard; from the seat the
+same crowns read as foliage. The findings that survived a fair framing:
+
+- **The conifers and the palms are good.** A Sierra spruce reads as a whorled
+  conifer at 30 m, and the Amazon from the seat is bare palm trunks going up
+  out of frame with a closed canopy overhead and a shaded floor — the `clear
+  0.83` trunk doing exactly what it was dialled for.
+- **THE COLUMNAR BROADLEAF IS A STACK OF PLATES.** `width 0.15` with the
+  family's card size gives cards wider than the crown they hang in, so they
+  overlap flat-on and the tree reads as a column of leaves on a pole with no
+  branching — beside a conifer it looks like a different, worse art style. It
+  is not a rare case: the guild asks `forms conic,columnar` for temperate
+  conifer forest, so EVERY broadleaf in a Sierra Nevada is one of the two
+  columnar aspens. The fix is in the bake — card size as a fraction of the
+  crown's own radius rather than of the tree's height — and it needs a re-bake,
+  so it is reported rather than done.
+- **AND THEIR EDGES DRAW BRIGHT SLIVERS.** The cards are double-sided and lit,
+  so one seen edge-on is a one-pixel bright line — precisely the "narrow bright
+  features become white contour diagrams" the rendering doctrine forbids.
+- **NOTHING IS KNEE-HIGH IN A FOREST.** From the seat the floor of both the
+  Amazon and the Sierra is bare between the trunks, while the census says
+  `fern 70` and `bush 23`: the archetype fern is a three-pixel sprite at 30 m.
+  `refreshShrubs` fixed this for the WORLD's sward and the guild's understory
+  weights have no equivalent — a guild that spends 43% of a mangrove on `fern`
+  is spending it on something the player cannot see.
+- **THE RAINFALL MODEL IS FAR OUTSIDE ITS STATED TOLERANCE AWAY FROM ITS OWN
+  FIXTURES.** Serengeti 2208 mm against a real ~800; Sundarbans 194 mm against
+  a real ~1800. That is a factor of 2.8 and 9 respectively, where
+  `climate-fixtures.test.mjs` claims 1.5 in the tropics — because the claim is
+  a tolerance AT its nine sites, not a global one. It matters because
+  `waterMm` is a guild input: the six `dry` forest rows thin on it, and the
+  Yosemite lesson (a sub-linear response with a 0.55 floor) is the only reason
+  a three-fold error is not visible today. **Do not add a term that reads
+  `waterMm` linearly.**
+- **A TRUNK IS A FLAT BROWN SLAB CLOSE UP.** The wood takes `uWood` and
+  faceTone and nothing else; at 10 m an Amazon trunk is an untextured prism.
+  The grain shader is already on the material and could carry bark.
+- **THE LAB'S GROUND IS A DIAL, so a desert stands on grass.** The Sonoran
+  frame is honest about its plants and misleading about its place. Colouring it
+  properly means `terrainPalette`, which is main.ts's; until that moves, judge
+  a dry place by its plants and not by its picture.
+
 - **THE SWARD GROWS SHRUBS.** Between the sward's flowers and the trees
   there was nothing knee-high. `refreshShrubs` (beside `refreshVeg`, every
   900 ms) stands `shrubGeo` — two blobs leaning on each other — on a 5 m

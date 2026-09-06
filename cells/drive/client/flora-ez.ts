@@ -23,12 +23,65 @@ import { faceTone, mergeGeos } from './flora';
 
 export type EzFamily = keyof typeof EZ_BAKE.families;
 
+/**
+ * THE FAMILIES WITH A BAKED SKELETON.
+ *
+ * `acacia` and `palm` joined the three because the guild asks for both and the
+ * atlas had neither: every savanna and dry-forest row wants an umbrella crown
+ * and every mangrove and tropical row a palm, and both were still 20-triangle
+ * archetypes while an oak two hundred metres away had real branching.
+ *
+ * THE LIST AND THE HEIGHTS LIVE HERE, NOT IN THE WORLD. main.ts owns where a
+ * tree stands; the atlas owns what the families are and how tall one grows per
+ * unit of a site's scale draw. They were module state of main.ts, which meant
+ * the flora lab — the surface whose entire job is judging how the vegetation
+ * looks — could not draw a single one of the skeletons the game actually
+ * draws, and would have had to retype both to try. A lab that retypes what it
+ * is inspecting proves something about itself and nothing about what ships.
+ */
+export const EZ_FAMILIES: EzFamily[] = ['broadleaf', 'conifer', 'acacia', 'palm', 'snag'];
+/** A record over every EZ family, built from the list rather than typed out.
+ *  Six literals used to name the three families by hand, which is six places
+ *  to forget when a fourth arrives — and TypeScript would have caught only the
+ *  ones whose type is `Record<EzFamily, …>`. */
+export const ezRecord = <T>(fill: (f: EzFamily) => T): Record<EzFamily, T> =>
+  Object.fromEntries(EZ_FAMILIES.map((f) => [f, fill(f)])) as Record<EzFamily, T>;
+/**
+ * HOW TALL A TREE IS, IN METRES. The archetypes stood three to nine metres —
+ * a crown on a short post, sized for twenty triangles. A skeleton with real
+ * branching wants a real height: a site's scale draw (VEG_SIZE, 1.4–3.6 for
+ * a broadleaf, krummholz and the tuning already in it) becomes metres at a
+ * rate per family, so an oak stands 8–21 m, a pine 10–26, a snag 4–11, and a
+ * treeline spruce is still the short one. The crown's reach rides on top.
+ */
+export const EZ_M_PER_SCALE: Record<EzFamily, number> = {
+  broadleaf: 5.7, conifer: 7.2, snag: 3.6,
+  // An umbrella thorn is a SMALL tree — six to twelve metres, and it reads as
+  // wide rather than tall, which is most of what makes a savanna look like
+  // one. A coconut palm is the opposite: eight to twenty metres of trunk with
+  // a tuft on it, so it stands above everything around it and is mostly bare.
+  acacia: 3.6, palm: 5.4,
+};
+
 export interface EzVariant {
   name: string;
   /** The silhouette class — round, columnar, conic, umbrella, palm or bare —
    *  declared by the recipe and CHECKED against the baked geometry, so it is
    *  a measurement and not a label. See `silhouette` in the bake devtool. */
   form: EzForm;
+  /**
+   * WHAT TO CALL IT IN A READOUT, which is not what the recipe is called.
+   *
+   * `name` is the EZ-Tree preset the recipe STARTED from, and every acacia
+   * began life as an Oak and every palm as a Pine — so a flora-lab line
+   * reporting what the Sundarbans grows read "Pine Small #44 ×35" and a
+   * savanna's acacias read "Oak Medium #3". That is a fabricated witness: it
+   * looks exactly like the guild planting the wrong tree, and the geometry is
+   * in fact correct (the form is MEASURED off the bake). The provenance is
+   * still worth keeping — it is how a recipe is found again — so it stays in
+   * `name` and the readouts use this.
+   */
+  label: string;
   /** Wood and crown in one, with `aWood` per vertex and faceTone in `color`. */
   geometry: THREE.BufferGeometry;
   tris: number;
@@ -158,8 +211,17 @@ export function ezVariants(family: EzFamily): EzVariant[] {
     const crown = crownOf(v, EZ_BAKE.q);
     const geometry = join(wood, crown);
     return { name: v.name, form: v.form, geometry,
-      tris: (geometry.index as THREE.BufferAttribute).count / 3, crown: v.crown.shape };
+      tris: (geometry.index as THREE.BufferAttribute).count / 3, crown: v.crown.shape,
+      label: '' };
   });
+  // Numbered WITHIN a form, so "columnar 2" is the second columnar tree of
+  // this family rather than the second variant that happens to be one.
+  const seen = new Map<string, number>();
+  for (const v of out) {
+    const n = (seen.get(v.form) ?? 0) + 1;
+    seen.set(v.form, n);
+    v.label = `${family} ${v.form} ${n}`;
+  }
   cache.set(family, out);
   return out;
 }
