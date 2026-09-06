@@ -2090,40 +2090,82 @@ and the population per hectare, which is the only instrument that can see
 density and height — `__vegkind` rolls the chooser and cannot.
 
 Held by `devtools/guild.test.mjs` (pure, a second, and every case is one the
-five-biome model gets wrong) and measured in the world by
-`devtools/guild-ab.mjs`, which boots the same spot twice with the switch as the
-only difference.
+five-biome model gets wrong), by `devtools/guild-fixture.test.mjs` (four worlds
+in 30 SECONDS, no network, the same answer every run) and measured in the world
+by `devtools/guild-ab.mjs`, which boots the same spot twice with the switch as
+the only difference.
 
-**AND A STABLE COUNT IS NOT A SETTLED WORLD.** The first A/B accepted twenty
-frames in, on a world holding 27 plants: the population had not started moving
-yet, so the "comparison" was between two accidents of arrival order. The gate
-is a FRAME FLOOR as well as a stability window. Two boots is most of the
-harness's twenty-minute fuse (screenshots mean `nodraw` is unavailable), so run
-ONE SITE PER PROCESS or raise `HARNESS_FUSE_MIN` — six in one process blows it
-with nothing printed, because each site's line is written after both its runs.
+**A FIXTURE DECLARES ITS ECOREGION.** `ecoAt` refuses to fetch on a fixture —
+asking would pull the REAL ecology of the authored crossroads' coordinates, the
+country above Geneva, which is the trap `loadOvTile` and `loadPeakTile` already
+wear a gate for. But a flat null left the guild untestable on the only worlds
+that are deterministic and need no network: every fixture fell back to the
+climate path, so the fast offline harness could say nothing about the rule that
+decides what grows. `WorldFixture.eco` is one record — id, biome, name, realm —
+and a point answer for a 700m–1.4km box is not an approximation worth
+apologising for, because an ecoregion boundary is not real to five kilometres.
+The six captures carry theirs from one lookup at their own coordinates, recorded
+in `CAPTURE_INDEX`; `capture-world.mjs` prints the line to paste for a new one
+and deliberately does NOT write it into the capture JSON, which is the three
+world FETCHES and nothing else.
+
+The set is worth knowing, because the answers cannot all be the same:
+Camps Bay is *Fynbos shrubland* (12, Afrotropic), Big Sur and both Carmels are
+*Santa Lucia Montane Chaparral & Woodlands* (12, Nearctic), both Paris captures
+are *European Atlantic mixed forests* (4, Palearctic), and an authored fixture
+is nowhere — which has no ecoregion and keeps the shipping path. The Cape and
+Big Sur landing on the SAME guild is the honest answer: fynbos and chaparral
+are structurally alike, and the realm parts them only where a cactus is
+involved.
+
+**A STABLE COUNT IS NOT A SETTLED WORLD, AND A FRAME IS NOT A CLOCK.** Two
+gate mistakes in a row, each measured:
+
+- The first A/B accepted twenty frames in, on a world holding 27 plants — the
+  population had not started moving yet, so the "comparison" was between two
+  accidents of arrival order. So: a floor before stability counts.
+- The floor was in FRAMES, which paces the BUILD and says nothing about the
+  NETWORK. Turning the draws off made a frame a tenth of the wall time, so the
+  same 900-frame floor took thirty seconds instead of twenty minutes — and
+  measured a third fewer plants, because the tiles were still on the wire. The
+  gate is wall-clock now (90s floor, 25s of the count holding still), and both
+  runs of a pair use the same numbers, which is what makes the comparison mean
+  anything.
+
+**AND THE DRAWS WERE MOST OF THE FORTY MINUTES.** `guild-ab.mjs` drew because
+it took a screenshot; headless paints through SwiftShader at two to four frames
+a second AND THE WORLD BUILD IS PACED BY THE FRAME LOOP, so drawing did not
+merely cost the picture, it slowed the streaming the measurement was waiting
+for. The frames were no use anyway — a chase camera on a 32° slope shows sward
+and hillside, and a shrub at that distance is three pixels. **Numbers are the
+default, `--shots` is opt-in**: 8m26s a pair against 40 minutes, on a MORE
+complete world.
 
 **MEASURED**, Chapman's Peak, both runs settled at 392 frames, the switch the
 only difference:
 
 | within 300m | guild | climate (`?guild=0`) |
 |---|---|---|
-| palm | **0%** | 7% |
-| bush | 54% | 57% |
-| broadleaf | 13% | 9% |
-| rock | 7% | 1% |
-| plants per hectare | 3.6 | 3.3 |
-| mean scale: bush | **0.62** | 1.03 |
-| mean scale: broadleaf | **1.09** | 1.62 |
-| mean scale: snag | **1.25** | 2.19 |
+| palm | **0%** | 16% |
+| acacia | **0%** | 3% |
+| bush | 32% | 37% |
+| broadleaf | 45% | 22% |
+| plants per hectare | 3.4 | 4.1 |
+| mean scale: bush | **0.67** | 1.08 |
+| mean scale: broadleaf | **1.03** | 1.84 |
+| mean scale: snag | **1.28** | 2.02 |
 
-**READ THAT HONESTLY: the proportions barely move.** What the guild actually
-changes at the Cape is the HEIGHT — a third to a half off every woody plant,
-which is the difference between a scrub and a thin wood — and the PALM VETO:
-seven per cent of the standing plants there were palms, and there are no palms
-in fynbos. The species mix is close because WorldCover calls much of that slope
-tree cover and a canopy pixel picks trees under either model. A guild earns its
-keep on the rows where the five-biome model has no answer at all (the realm
-gate, the savanna's spacing, the mangrove sliver); it is not a repaint.
+**WHAT ACTUALLY CHANGES IS HEIGHT AND THE VETOES.** Every woody plant loses a
+third to a half of its height, which is the difference between a scrub and a
+thin wood; and a sixth of the standing plants at the Cape were PALMS, with
+acacias beside them, in a shrubland that has neither. The broadleaf share rises
+because the guild's tree list for this row is broadleaf-heavy where the climate
+model split a canopy pixel four ways.
+
+**AND THE MEASUREMENT MOVED WHEN THE GATE DID.** An earlier, less-streamed run
+of the same pair read palm 7% and broadleaf 13/9 — same direction, weaker
+everywhere, because the world was a third empty. Quote a number from this table
+only against the gate that produced it.
 
 ## Routing across two maps
 

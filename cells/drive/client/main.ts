@@ -1521,7 +1521,14 @@ async function loadEcoTile(tx: number, ty: number): Promise<void> {
  *  authored crossroads' coordinates, which is the trap `loadOvTile` and
  *  `loadPeakTile` already wear a gate for. */
 function ecoAt(ex: number, ez: number): EcoHit | null {
-  if (FIXTURE) return null;
+  // A FIXTURE DECLARES ITS REGION RATHER THAN ASKING FOR ONE. Fetching here
+  // would pull the REAL ecology of the fixture's coordinates — for the authored
+  // worlds that is the country above Geneva, which is the trap `loadOvTile` and
+  // `loadPeakTile` already wear a gate for. But returning a flat null left the
+  // guild untestable on the only worlds that are deterministic and need no
+  // network, so a fixture that knows where it is says so (world-fixtures.ts,
+  // `WorldFixture.eco`); an authored one is nowhere and still answers null.
+  if (FIXTURE) return FIXTURE.eco ?? null;
   const [la, lo] = localToLatLon(ex, ez);
   if (!Number.isFinite(la) || !Number.isFinite(lo)) return null;
   const [tx, ty] = ecoTileOf(la, lo);
