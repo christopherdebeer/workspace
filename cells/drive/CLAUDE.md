@@ -13,6 +13,22 @@ tried and was wrong.
 
 ## The deploy ritual
 
+> **PARSE THE BUNDLE BEFORE YOU BELIEVE THE DEPLOY.** Step 5 below greps
+> `app.js` for a symbol, and a grep cannot tell a working bundle from a broken
+> one — measured: a deploy whose `app.js` contained every symbol the check
+> looked for and would not parse, so the game did not load at all. And
+> **`node --check` is not the gate**: on that same file it exited 0. `npx
+> esbuild --log-level=error --outfile=/dev/null app.js` found it instantly
+> (`Syntax error "a"`, line 14569). Use esbuild.
+>
+> The break was a `String.replace()` filling a placeholder in the served
+> `app.js`. `replace` takes the FIRST occurrence, `client/runtime.ts` had been
+> using that same placeholder for years, and the substitution landed inside
+> `typeof __DRIVE_BUILD__`. **Grep for a placeholder before minting one** — the
+> build id already existed as `DRIVE_BUILD`, already exported, already imported
+> by `main.ts`.
+
+
 The cell is deployed from `/home/user/workspace` (the cwd matters — `cell-sync`
 resolves paths from the repo root, and running it from `cells/drive` fails with
 a confusing module error):
