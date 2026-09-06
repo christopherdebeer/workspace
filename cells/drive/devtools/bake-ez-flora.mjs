@@ -146,6 +146,28 @@ const RECIPES = {
     { preset: 'Aspen Small', seed: 387, form: 'round', reduction: { levels: 3, sections: 0.7, segments: 0.7, children: 0.35, leaves: 0.6, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0 } },
     { preset: 'Ash Small', seed: 387, form: 'round', reduction: { levels: 3, sections: 0.7, segments: 0.7, children: 0.35, leaves: 0.4, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0 } },
     { preset: 'Oak Medium', seed: 12, form: 'round', reduction: { levels: 3, sections: 0.7, segments: 0.7, children: 0.35, leaves: 1, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0 } },
+    // ── THE COLUMN ──
+    //
+    // The vocabulary's own gap: before these, every broadleaf in the atlas
+    // measured 0.34 to 0.57 wide and the word `columnar` described nothing.
+    // A Lombardy poplar on a French roadside and a cypress in Tuscany are
+    // among the most recognisable trees there are, and the game had no way to
+    // draw either.
+    //
+    // Branches from NEAR THE BASE (start 0.06), swept steeply up (angle 20)
+    // and held there by an upward `force` — the same dial the palm uses,
+    // pointed the other way. The first attempt kept the preset's high branch
+    // start and produced a `palm`: a narrow crown on a bare pole is a palm by
+    // this vocabulary's own definition, and correctly so. A poplar carries its
+    // foliage almost to the ground, and `leaves.start` 0.05 is what says it.
+    { preset: 'Aspen Small', seed: 29, form: 'columnar',
+      opts: { branchStart: { 1: 0.06, 2: 0.1 }, branchAngle: { 1: 20, 2: 16 }, leavesStart: 0.05,
+        length: { 0: 40, 1: 14, 2: 8 }, force: { direction: { x: 0, y: 1, z: 0 }, strength: 0.05 } },
+      reduction: { levels: 2, sections: 0.7, segments: 0.7, children: 0.5, leaves: 0.7, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0.05 } },
+    { preset: 'Aspen Small', seed: 11, form: 'columnar',
+      opts: { branchStart: { 1: 0.06, 2: 0.1 }, branchAngle: { 1: 20, 2: 16 }, leavesStart: 0.05,
+        length: { 0: 40, 1: 14, 2: 8 }, force: { direction: { x: 0, y: 1, z: 0 }, strength: 0.05 } },
+      reduction: { levels: 2, sections: 0.7, segments: 0.7, children: 0.5, leaves: 0.7, leafScale: 3, billboard: 'single', leafAs: 'card', clumpM: 2.6, clumpShape: 'icosa', leafStart: 0.05 } },
   ],
   // The pasted pine put a pad on every one of 672 anchors — 15k triangles a
   // tree — and its seven-sided wood was 1.9k on its own. Four-sided branches,

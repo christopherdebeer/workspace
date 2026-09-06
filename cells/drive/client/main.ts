@@ -7830,7 +7830,13 @@ const ezCapFor = (fam: EzFamily): number =>
 const EZ_STAND_ON = new URLSearchParams(location.search).get('ezstand') !== '0';
 function ezVariantAt(fam: EzFamily, x: number, z: number): number {
   if (!EZ_STAND_ON) return ezVariantFor(fam, x, z, treeVariantCap);
-  const pal = ezPalette(fam, seedAt(cultEnv, x, z, 'district'), treeVariantCap);
+  // THE GUILD'S PREFERENCE, WHICH ONLY NOW MEANS ANYTHING. Until the bake had
+  // two forms in one family this filter could only return everything or
+  // nothing; with a columnar broadleaf beside six round ones it is the
+  // difference between a poplar on a French roadside and a poplar in the
+  // Amazon. Unsatisfiable preferences are ignored inside `ezPalette` — asking
+  // for `round` must not empty the conifers.
+  const pal = ezPalette(fam, seedAt(cultEnv, x, z, 'district'), treeVariantCap, guildNow(x, z)?.forms);
   return ezPickVariant(pal, seedAt(cultEnv, x, z, 'stand'));
 }
 

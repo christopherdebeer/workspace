@@ -148,6 +148,33 @@ ok('…and is open ground', guildAt(site({ heatC: 25, winterDry: 0.8 }), eco(7, 
 ok('tundra is stone and scrub', top(guildAt(site({ heatC: -8, frostDays: 260 }), eco(11))) === 'rock');
 ok('…and is low', guildAt(site({ heatC: -8, frostDays: 260 }), eco(11)).scale < 0.5);
 
+// ── THE FORM PREFERENCE ──────────────────────────────────────────────────
+// A columnar broadleaf is the first silhouette that discriminates: a Lombardy
+// poplar belongs on a French roadside and a cypress in Tuscany, and neither
+// belongs in a rainforest or a savanna. Before the bake carried two forms in
+// one family this filter could only return everything or nothing.
+const formsOf = (biome, realm = 'Palearctic') => guildAt(site(), eco(biome, realm)).forms;
+console.log(`\nform preferences: temperate ${JSON.stringify(formsOf(4))}`
+  + ` · tropical ${JSON.stringify(formsOf(1))} · savanna ${JSON.stringify(formsOf(7))}`);
+ok('a temperate wood may grow columnar trees', formsOf(4).includes('columnar'), formsOf(4));
+ok('a Mediterranean one too — the cypress', formsOf(12).includes('columnar'), formsOf(12));
+ok('…and so may a shelterbelt on grassland', formsOf(8).includes('columnar'), formsOf(8));
+ok('a rainforest may NOT', !formsOf(1).includes('columnar'), formsOf(1));
+ok('nor a savanna', !formsOf(7).includes('columnar'), formsOf(7));
+ok('nor a desert', !formsOf(13).includes('columnar'), formsOf(13));
+ok('a savanna asks for the umbrella', formsOf(7).includes('umbrella'), formsOf(7));
+ok('a mangrove asks for the palm', formsOf(14).includes('palm'), formsOf(14));
+ok('every row states a preference',
+  [...Array(14)].every((_, i) => (formsOf(i + 1) ?? []).length > 0),
+  [...Array(14)].map((_, i) => formsOf(i + 1).length));
+// THE VOCABULARY IS DUPLICATED, so it has to be checked. guild.ts names forms
+// as a string union rather than importing 186KB of generated geometry; if the
+// bake ever renames one, this is what says so.
+const BAKE_FORMS = ['round', 'columnar', 'conic', 'umbrella', 'palm', 'bare'];
+const named = new Set([...Array(14)].flatMap((_, i) => formsOf(i + 1)));
+ok('every form a guild asks for exists in the bake',
+  [...named].every((f) => BAKE_FORMS.includes(f)), [...named]);
+
 // ── guildKind: the cover raster narrows the guild, it does not replace it ─
 const r = (seq) => { let i = 0; return () => seq[i++ % seq.length]; };
 const many = (g, cover, n = 400) => {

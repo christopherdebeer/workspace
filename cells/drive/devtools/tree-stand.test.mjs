@@ -72,9 +72,27 @@ ok('…and the world uses ALL of them across districts',
 // A one-variant family cannot fail.
 ok('a family with one variant still answers', ezPalette('palm', 12345).length >= 1, ezPalette('palm', 12345));
 ok('a limit of 1 collapses the palette', ezPalette('broadleaf', 999, 1).length === 1, ezPalette('broadleaf', 999, 1));
+// ── THE FORM FILTER, NOW THAT IT DISCRIMINATES ───────────────────────────
+// Broadleaf carries six `round` and two `columnar`, so this is the first
+// filter in the atlas that can return a proper subset. A guild that does not
+// want poplars must not get them.
+const bl = ezVariants('broadleaf');
+const formsIn = (pal) => pal.map((i) => bl[i].form);
+let sawColumnar = false, roundOnlyLeaked = false;
+for (let seed = 1; seed < 4000; seed += 3) {
+  if (formsIn(ezPalette('broadleaf', seed, 99, ['round'])).includes('columnar')) roundOnlyLeaked = true;
+  if (formsIn(ezPalette('broadleaf', seed, 99, ['round', 'columnar'])).includes('columnar')) sawColumnar = true;
+}
+ok('a guild that asks for round only never gets a column', !roundOnlyLeaked);
+ok('…and one that allows columnar does get them somewhere', sawColumnar);
+ok('the atlas has columnar broadleaf at all',
+  bl.some((v) => v.form === 'columnar'), bl.map((v) => v.form));
 // The form filter is ignored rather than obeyed when it matches nothing.
 ok('an impossible form filter still grows trees',
   ezPalette('broadleaf', 42, 99, ['palm']).length >= 1, ezPalette('broadleaf', 42, 99, ['palm']));
+ok('…and an unsatisfiable one does not empty the conifers',
+  ezPalette('conifer', 42, 99, ['round', 'columnar']).length >= 1,
+  ezPalette('conifer', 42, 99, ['round', 'columnar']));
 // A stand picks from its palette and nowhere else.
 const pal = ezPalette('broadleaf', 77);
 let outside = 0;

@@ -53,6 +53,9 @@ export interface Guild {
   scale: number;
   /** Multiplier on how much stands here. A desert is mostly ground. */
   density: number;
+  /** The silhouettes this country grows — see `BaseGuild.forms`. Empty means
+   *  no opinion, and an unsatisfiable preference is ignored downstream. */
+  forms: readonly GuildForm[];
   /** What moved it off the base row, for the probe — the interesting half. */
   why: string[];
 }
@@ -71,8 +74,29 @@ export interface Guild {
  * asking, per biome, roughly what fraction of the standing things in view
  * would be each shape.
  */
+/** The silhouette classes the bake carries. Duplicated as a string union
+ *  rather than imported from `flora-ez-baked` because that module is 186KB of
+ *  generated arrays and this one is a rule sheet — a guild has no business
+ *  pulling the geometry in to name a shape. The bake is the authority; this
+ *  list is checked against it by `devtools/guild.test.mjs`. */
+export type GuildForm = 'round' | 'columnar' | 'conic' | 'umbrella' | 'palm' | 'bare';
+
 interface BaseGuild {
   name: string; mix: GuildMix; scale: number; density: number;
+  /**
+   * WHICH SILHOUETTES THIS COUNTRY GROWS.
+   *
+   * Filters the palette a district draws from, per family — so a Lombardy
+   * poplar can stand on a French roadside and a cypress in Tuscany while
+   * neither appears in a rainforest or a savanna. It is a preference and not a
+   * veto: where a family carries none of the listed forms the filter is
+   * IGNORED, because a landscape with no matching silhouette must still grow
+   * trees. Asking for `round` does not empty the conifers.
+   *
+   * Undeclared means no opinion, which is the right default for a row whose
+   * trees are all one shape anyway.
+   */
+  forms?: readonly GuildForm[];
   /** DOES THIS BIOME THIN OUT ON ITS OWN DRY EDGE? A forest at 400mm is an
    *  open woodland and should stand further apart. A Mediterranean scrub at
    *  400mm is a Mediterranean scrub — summer drought is its DEFINITION, not a
@@ -83,36 +107,47 @@ interface BaseGuild {
 }
 const BASE: Record<number, BaseGuild> = {
   1: { name: 'tropical moist forest',
+    forms: ['round', 'palm'],
     mix: [['broadleaf', 6], ['palm', 4], ['fern', 4], ['bush', 3], ['log', 1]],
     scale: 1.15, density: 1.15, dry: true },
   2: { name: 'tropical dry forest',
+    forms: ['round', 'umbrella'],
     mix: [['broadleaf', 4], ['acacia', 3], ['bush', 4], ['palm', 1], ['snag', 1], ['log', 1]],
     scale: 0.95, density: 0.75, dry: true },
   3: { name: 'tropical conifer forest',
+    forms: ['conic', 'round'],
     mix: [['conifer', 6], ['broadleaf', 2], ['bush', 3], ['snag', 1]],
     scale: 1.05, density: 0.9, dry: true },
   4: { name: 'temperate broadleaf forest',
+    forms: ['round', 'columnar'],
     mix: [['broadleaf', 6], ['conifer', 2], ['bush', 3], ['fern', 2], ['log', 1], ['snag', 1]],
     scale: 1.0, density: 1.0, dry: true },
   5: { name: 'temperate conifer forest',
+    forms: ['conic', 'columnar'],
     mix: [['conifer', 7], ['broadleaf', 2], ['bush', 2], ['snag', 2], ['log', 2]],
     scale: 1.15, density: 1.0, dry: true },
   6: { name: 'boreal taiga',
+    forms: ['conic', 'columnar'],
     mix: [['conifer', 8], ['bush', 3], ['snag', 3], ['log', 2], ['rock', 1], ['fern', 1]],
     scale: 0.85, density: 0.85, dry: true },
   7: { name: 'tropical savanna',
+    forms: ['umbrella', 'round'],
     mix: [['acacia', 4], ['bush', 5], ['rock', 1], ['snag', 1]],
     scale: 0.95, density: 0.4 },
   8: { name: 'temperate grassland',
+    forms: ['round', 'columnar'],
     mix: [['bush', 5], ['rock', 2], ['snag', 1], ['broadleaf', 1]],
     scale: 0.8, density: 0.3 },
   9: { name: 'flooded grassland',
+    forms: ['round', 'columnar', 'palm'],
     mix: [['fern', 5], ['bush', 4], ['palm', 2], ['log', 1]],
     scale: 0.8, density: 0.7 },
   10: { name: 'montane shrubland',
+    forms: ['round', 'conic'],
     mix: [['bush', 5], ['rock', 4], ['spire', 2], ['conifer', 1], ['snag', 1]],
     scale: 0.6, density: 0.5 },
   11: { name: 'tundra',
+    forms: ['round'],
     mix: [['rock', 5], ['bush', 3], ['spire', 2]],
     scale: 0.4, density: 0.35 },
   // THE ROW THIS WHOLE FILE EXISTS FOR. Mediterranean scrub is DENSE and LOW:
@@ -127,12 +162,15 @@ const BASE: Record<number, BaseGuild> = {
   // worse than what it replaced: WorldCover calls much of that slope tree
   // cover, and a canopy pixel picks from the tree list alone.
   12: { name: 'mediterranean scrub',
+    forms: ['round', 'columnar', 'conic'],
     mix: [['bush', 8], ['broadleaf', 3], ['conifer', 0.5], ['rock', 1], ['snag', 1]],
     scale: 0.6, density: 0.95 },
   13: { name: 'desert and xeric scrub',
+    forms: ['umbrella', 'round'],
     mix: [['rock', 5], ['bush', 3], ['cactus', 3], ['acacia', 2], ['spire', 2], ['snag', 1]],
     scale: 0.7, density: 0.25 },
   14: { name: 'mangrove',
+    forms: ['palm', 'round'],
     mix: [['palm', 4], ['broadleaf', 4], ['fern', 3]],
     scale: 0.9, density: 1.0 },
 };
@@ -267,6 +305,7 @@ export function guildAt(site: SiteClimate, eco: EcoHit | null): Guild | null {
   return {
     biome: eco.biome,
     name: base.name,
+    forms: base.forms ?? [],
     mix: mix.filter(([, w]) => w > 0),
     trees: trees.length ? trees : [['bush', 1]],
     scale, density, why,
