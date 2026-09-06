@@ -49,7 +49,7 @@ import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { facade } from './facade';
 import { startLab } from './labs';
-import { FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezMaterial, ezMeanTris, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
+import { EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezMaterial, ezMeanTris, ezPalette, ezPickVariant, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
 import { openSync, restoreUrl } from './sync';
 import { openMarks } from './marks';
@@ -7755,7 +7755,23 @@ const trunks = vegMesh(trunkGeo2, woodMat, 3600);
  * ?ez=0 brings the archetypes back, for an A/B on the device.
  */
 const EZ_ON = ((): boolean => { const ask = new URLSearchParams(location.search).get('ez'); return ask !== '0' && ask !== 'off'; })();
-const EZ_FAMILIES: EzFamily[] = ['broadleaf', 'conifer', 'snag'];
+/**
+ * THE FAMILIES WITH A BAKED SKELETON.
+ *
+ * `acacia` and `palm` joined the three because the guild asks for them and the
+ * atlas had neither: every savanna and dry-forest row wants an umbrella crown
+ * and every mangrove and tropical row a palm, and both were still 20-triangle
+ * archetypes while an oak two hundred metres away had real branching. The
+ * bake's own vocabulary now carries `umbrella` and `palm` forms, checked
+ * against the geometry — see `silhouette` in devtools/bake-ez-flora.mjs.
+ */
+const EZ_FAMILIES: EzFamily[] = ['broadleaf', 'conifer', 'acacia', 'palm', 'snag'];
+/** A record over every EZ family, built from the list rather than typed out.
+ *  Six literals used to name the three families by hand, which is six places
+ *  to forget when a fourth arrives — and TypeScript would have caught only the
+ *  ones whose type is `Record<EzFamily, …>`. */
+const ezRecord = <T>(fill: (f: EzFamily) => T): Record<EzFamily, T> =>
+  Object.fromEntries(EZ_FAMILIES.map((f) => [f, fill(f)])) as Record<EzFamily, T>;
 /**
  * THE TREE BUDGET. The recipes are the lab's, pasted, and a recipe the eye
  * likes is a thousand triangles a tree; sixteen hundred broadleaf of those
@@ -7783,7 +7799,7 @@ let treeVariantCap: number = Number.MAX_SAFE_INTEGER;
 const treeBendU = { value: 0 };
 const TREE_KINDS = ['broadleaf', 'conifer', 'palm', 'snag', 'acacia'] as const;
 const isTreeKind = (k: VegKind): boolean => (TREE_KINDS as readonly VegKind[]).includes(k);
-const isEzKind = (k: VegKind): k is EzFamily => k === 'broadleaf' || k === 'conifer' || k === 'snag';
+const isEzKind = (k: VegKind): k is EzFamily => (EZ_FAMILIES as string[]).includes(k);
 /**
  * Population says how much forest may exist; TRI CAP says how much baked
  * geometry may reach the GPU. Keeping them independent makes the upper stops
@@ -7800,6 +7816,25 @@ const ezCapFor = (fam: EzFamily): number =>
   Math.floor(VEG_CAP[fam] * vegScale * treePopulationScale * ezCapScale());
 
 /**
+ * ── WHICH SILHOUETTE THIS TREE IS ──
+ *
+ * The seam between `flora-ez`'s two-scale palette and the world's own sense of
+ * place. The district decides which few silhouettes this country grows and the
+ * stand decides which of them this thicket is; both seeds come from
+ * `culture.ts`, so they are stable under a world rebase and do not reroll as
+ * you drive — the same guarantee the bedrock families already rely on.
+ *
+ * `?ezstand=0` is the exact A/B: the old per-position hash, which is what
+ * every wood in the game looked like until now.
+ */
+const EZ_STAND_ON = new URLSearchParams(location.search).get('ezstand') !== '0';
+function ezVariantAt(fam: EzFamily, x: number, z: number): number {
+  if (!EZ_STAND_ON) return ezVariantFor(fam, x, z, treeVariantCap);
+  const pal = ezPalette(fam, seedAt(cultEnv, x, z, 'district'), treeVariantCap);
+  return ezPickVariant(pal, seedAt(cultEnv, x, z, 'stand'));
+}
+
+/**
  * TWO MESHES A VARIANT, ONE SHAPE. The shadow map reaches `shadowSpan` metres
  * (80–150 by quality); an instanced mesh is not culled per instance, so every
  * tree in range was drawn into the depth pass, a million triangles of wood
@@ -7809,7 +7844,7 @@ const ezCapFor = (fam: EzFamily): number =>
  * the GPU spends a depth pass on it.
  */
 interface EzTier { near: THREE.InstancedMesh; far: THREE.InstancedMesh; tris: number; n: number; nNear: number; nFar: number }
-const ezTiers: Record<EzFamily, EzTier[]> = { broadleaf: [], conifer: [], snag: [] };
+const ezTiers: Record<EzFamily, EzTier[]> = ezRecord(() => [] as EzTier[]);
 const ezMat = ezMaterial(0x4a3826, { bend: treeBendU, wind: windU });
 // THE SKELETONS STAND IN THE SAME WEATHER AS EVERYTHING ELSE. They were the
 // one thing in the landscape outside `terrainFx` — no cloud shadow, no terrain
@@ -7842,11 +7877,18 @@ if (EZ_ON) {
  * rate per family, so an oak stands 8–21 m, a pine 10–26, a snag 4–11, and a
  * treeline spruce is still the short one. The crown's reach rides on top.
  */
-const EZ_M_PER_SCALE: Record<EzFamily, number> = { broadleaf: 5.7, conifer: 7.2, snag: 3.6 };
+const EZ_M_PER_SCALE: Record<EzFamily, number> = {
+  broadleaf: 5.7, conifer: 7.2, snag: 3.6,
+  // An umbrella thorn is a SMALL tree — six to twelve metres, and it reads as
+  // wide rather than tall, which is most of what makes a savanna look like
+  // one. A coconut palm is the opposite: eight to twenty metres of trunk with
+  // a tuft on it, so it stands above everything around it and is mostly bare.
+  acacia: 3.6, palm: 5.4,
+};
 /** What the last refresh stood up, for the harness. */
 let ezPlaced: Array<Record<string, number | string>> = [];
 /** The admitted edge per family last refresh, metres. */
-let ezEdgeLast: Record<EzFamily, number> = { broadleaf: 0, conifer: 0, snag: 0 };
+let ezEdgeLast: Record<EzFamily, number> = ezRecord(() => 0);
 
 /**
  * WHAT BLOOMS WHERE. The sward's colour so far has been the ground's own —
@@ -9653,13 +9695,9 @@ function refreshVeg(): void {
       }
     }
   }
-  const ezCounts: Record<EzFamily, number> = { broadleaf: 0, conifer: 0, snag: 0 };
+  const ezCounts: Record<EzFamily, number> = ezRecord(() => 0);
   const ezVariant = new WeakMap<PlacedVegSite, number>();
-  const ezNeed: Record<EzFamily, number[]> = {
-    broadleaf: ezTiers.broadleaf.map(() => 0),
-    conifer: ezTiers.conifer.map(() => 0),
-    snag: ezTiers.snag.map(() => 0),
-  };
+  const ezNeed: Record<EzFamily, number[]> = ezRecord((f) => ezTiers[f].map(() => 0));
   for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) { t.n = 0; t.nNear = 0; t.nFar = 0; }
   ezPlaced = [];
   // ── THE TREES ARE ADMITTED BY DISTANCE, NOT BY CELL ──
@@ -9675,9 +9713,9 @@ function refreshVeg(): void {
   // edge, and the crowns fade toward the ground over the last third of that
   // edge so a tree is a smudge before it is gone.
   const ezAdmit = new Set<PlacedVegSite>();
-  const ezEdge: Record<EzFamily, number> = { broadleaf: treeRange, conifer: treeRange, snag: treeRange };
+  const ezEdge: Record<EzFamily, number> = ezRecord(() => treeRange);
   if (EZ_ON) {
-    const cand: Record<EzFamily, Array<[number, PlacedVegSite]>> = { broadleaf: [], conifer: [], snag: [] };
+    const cand: Record<EzFamily, Array<[number, PlacedVegSite]>> = ezRecord(() => [] as Array<[number, PlacedVegSite]>);
     for (const [gx, gz] of ring) {
       seedCell(gx, gz);
       const cell = vegGrid.get(`${gx},${gz}`);
@@ -9699,7 +9737,7 @@ function refreshVeg(): void {
       }
       for (const [, v] of list) {
         ezAdmit.add(v);
-        const vi = ezVariantFor(fam, v.x, v.z, treeVariantCap);
+        const vi = ezVariantAt(fam, v.x, v.z);
         ezVariant.set(v, vi);
         ezNeed[fam][vi] = (ezNeed[fam][vi] ?? 0) + 1;
       }
@@ -9750,7 +9788,7 @@ function refreshVeg(): void {
           // kind's cap and the far dissolve are the archetype's own.
           const fam = v.k;
           if (!ezAdmit.has(v)) continue;
-          const vi = ezVariant.get(v) ?? ezVariantFor(fam, v.x, v.z, treeVariantCap);
+          const vi = ezVariant.get(v) ?? ezVariantAt(fam, v.x, v.z);
           const tier = ezTiers[fam][vi];
           if (!tier || tier.n >= tier.near.instanceMatrix.count) continue;
           const y = groundAt(v.x, v.z);
@@ -9859,7 +9897,7 @@ function refreshVeg(): void {
     }
   }
   vegActiveRoles = activeRoles;
-  ezEdgeLast = { broadleaf: Math.round(ezEdge.broadleaf), conifer: Math.round(ezEdge.conifer), snag: Math.round(ezEdge.snag) };
+  ezEdgeLast = ezRecord((f) => Math.round(ezEdge[f]));
   refreshShrubs();
   vegActiveAnchors = activeAnchors;
   vegMs = performance.now() - t0;
@@ -25629,8 +25667,53 @@ function truckSpec(): Record<string, number> {
     perHa: +(n / (Math.PI * r * r / 10000)).toFixed(1),
     counts, meanScale: meanS,
     guild: guildNow(state.x, state.z)?.name ?? null,
+    ...ezStandReport(r),
   };
 };
+/**
+ * WHICH SILHOUETTES ARE ACTUALLY STANDING, and how mixed each thicket is.
+ *
+ * The number that says whether the confetti is gone is `perStand`: the mean
+ * count of DISTINCT silhouettes inside one 32m culture stand. A wood of one
+ * species reads 1.0; the old per-position hash reads whatever the family has.
+ * Reported beside the landscape's own spread, because a world where every
+ * stand is coherent AND every stand is identical is the other failure.
+ */
+function ezStandReport(r: number): object {
+  const r2 = r * r;
+  const byStand = new Map<string, Set<number>>();
+  const forms: Record<string, number> = {};
+  const variants: Record<string, number> = {};
+  let trees = 0;
+  for (const [, cell] of vegGrid) {
+    for (const v of cell) {
+      if (!isEzKind(v.k)) continue;
+      const dx = v.x - state.x, dz = v.z - state.z;
+      if (dx * dx + dz * dz > r2) continue;
+      const vi = ezVariantAt(v.k, v.x, v.z);
+      const rec = ezVariants(v.k)[vi];
+      if (!rec) continue;
+      trees++;
+      forms[rec.form] = (forms[rec.form] ?? 0) + 1;
+      variants[rec.name] = (variants[rec.name] ?? 0) + 1;
+      // The stand cell the culture layer would put this tree in — quantised
+      // the same way, so the grouping is the one the palette actually used.
+      const k = `${v.k}/${Math.floor(v.x / 32)}/${Math.floor(v.z / 32)}`;
+      (byStand.get(k) ?? byStand.set(k, new Set()).get(k) as Set<number>).add(vi);
+    }
+  }
+  let sum = 0;
+  for (const [, set] of byStand) sum += set.size;
+  return {
+    trees,
+    forms,
+    variants,
+    stands: byStand.size,
+    perStand: byStand.size ? +(sum / byStand.size).toFixed(2) : 0,
+    paletteN: EZ_PALETTE_N,
+    standOn: EZ_STAND_ON,
+  };
+}
 (window as unknown as { __vegkind?: object }).__vegkind = (r = 200, step = 24, rolls = 20): object => {
   const seen: Record<string, number> = {};
   let n = 0;

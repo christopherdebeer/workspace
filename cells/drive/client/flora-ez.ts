@@ -17,13 +17,18 @@
  * the site's height, so the crown radius is a fraction of that height too.
  */
 import * as THREE from 'three';
-import { EZ_BAKE, type EzBakedVariant } from './flora-ez-baked';
+import { EZ_BAKE, type EzBakedVariant, type EzForm } from './flora-ez-baked';
+export type { EzForm };
 import { faceTone, mergeGeos } from './flora';
 
 export type EzFamily = keyof typeof EZ_BAKE.families;
 
 export interface EzVariant {
   name: string;
+  /** The silhouette class — round, columnar, conic, umbrella, palm or bare —
+   *  declared by the recipe and CHECKED against the baked geometry, so it is
+   *  a measurement and not a label. See `silhouette` in the bake devtool. */
+  form: EzForm;
   /** Wood and crown in one, with `aWood` per vertex and faceTone in `color`. */
   geometry: THREE.BufferGeometry;
   tris: number;
@@ -152,7 +157,8 @@ export function ezVariants(family: EzFamily): EzVariant[] {
     const wood = woodOf(v, EZ_BAKE.q);
     const crown = crownOf(v, EZ_BAKE.q);
     const geometry = join(wood, crown);
-    return { name: v.name, geometry, tris: (geometry.index as THREE.BufferAttribute).count / 3, crown: v.crown.shape };
+    return { name: v.name, form: v.form, geometry,
+      tris: (geometry.index as THREE.BufferAttribute).count / 3, crown: v.crown.shape };
   });
   cache.set(family, out);
   return out;
@@ -182,6 +188,70 @@ export function ezVariantFor(family: EzFamily, x: number, z: number, limit = Num
   const n = Math.min(available, Math.max(1, Math.floor(limit)));
   const h = (Math.imul(Math.round(x * 8), 73856093) ^ Math.imul(Math.round(z * 8), 19349663)) >>> 0;
   return available ? h % n : 0;
+}
+
+/**
+ * ── A LANDSCAPE HAS A FEW SPECIES, NOT ALL OF THEM ──
+ *
+ * `ezVariantFor` above hashes the tree's OWN COORDINATES, at an eighth of a
+ * metre. Every silhouette in the family is therefore equally likely at every
+ * point, and two trees standing together in one thicket come out a broad oak
+ * and a leggy aspen because their positions happened to hash differently. That
+ * is the species confetti: it is not variety, it is noise, and it is why a
+ * wood in this game has never read as a wood.
+ *
+ * Real vegetation is coherent at two scales at once. A LANDSCAPE grows a
+ * handful of species — a Cape hillside is not a global sample of trees — and a
+ * STAND within it is usually one of them, because a thicket is a clone patch,
+ * a seed fall, or one age class after a fire. So:
+ *
+ *   ezPalette(family, districtSeed)  which few silhouettes this country uses
+ *   ezPickVariant(palette, standSeed)  which of those this thicket is
+ *
+ * The seeds come from `culture.ts`'s own scopes — district 6km, stand 32m —
+ * which are jittered Voronoi cells keyed on lat/lon, so a palette survives a
+ * world rebase and a stand does not reroll when you drive past it. That
+ * machinery already existed for bedrock; this is the second thing to use it.
+ */
+export const EZ_PALETTE_N = 2;
+export function ezPalette(
+  family: EzFamily, districtSeed: number, limit = Number.MAX_SAFE_INTEGER, forms?: readonly string[],
+): number[] {
+  const all = EZ_BAKE.families[family].variants;
+  const n = Math.min(all.length, Math.max(1, Math.floor(limit)));
+  if (n <= 1) return [0];
+  // THE FORM FILTER IS A HOOK, AND TODAY IT IS A NO-OP BY CONSTRUCTION: every
+  // family in the bake carries exactly one form (broadleaf all `round`,
+  // conifer all `conic`, acacia all `umbrella`, palm all `palm`, snag all
+  // `bare`), so asking for a form can only return everything or nothing. It is
+  // wired now because the moment a family gains a second form — a columnar
+  // broadleaf, a sclerophyll one for the Mediterranean rows — this is where a
+  // guild's preference has to arrive, and a caller that has to be rewritten to
+  // pass it is a caller that will not. An empty filter is IGNORED rather than
+  // obeyed: a landscape with no matching silhouette must still grow trees.
+  const pool: number[] = [];
+  for (let i = 0; i < n; i++) if (!forms?.length || forms.includes(all[i].form)) pool.push(i);
+  const from = pool.length ? pool : Array.from({ length: n }, (_, i) => i);
+  // Draw PALETTE_N distinct silhouettes, by walking the pool from a
+  // seed-derived offset at a seed-derived stride. A stride coprime with the
+  // pool size visits every entry, so the draw cannot repeat and cannot fail —
+  // which a rejection loop over a two-entry pool very much can.
+  const want = Math.min(EZ_PALETTE_N, from.length);
+  const off = (districtSeed >>> 3) % from.length;
+  const stride = 1 + ((districtSeed >>> 11) % Math.max(1, from.length - 1));
+  const out: number[] = [];
+  for (let k = 0, at = off; k < want; k++, at = (at + stride) % from.length) {
+    if (!out.includes(from[at])) out.push(from[at]);
+    else k--, at = (at + 1) % from.length;      // stride shared a factor; step on
+    if (out.length >= want) break;
+  }
+  return out.length ? out : [from[0]];
+}
+
+/** Which of the landscape's silhouettes THIS stand is. */
+export function ezPickVariant(palette: number[], standSeed: number): number {
+  if (!palette.length) return 0;
+  return palette[(standSeed >>> 5) % palette.length];
 }
 
 /** The one material for every skeleton: the crown wears the instance's
