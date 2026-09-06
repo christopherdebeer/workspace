@@ -2857,17 +2857,10 @@ roar 0.19, no page errors, same numbers as before the move.
 Not fixed — recorded, because the list is the useful thing and each item is its
 own piece of work. In rough order of what a driver would notice:
 
-- **NOTHING IS SPATIALISED.** Every voice is mono into `master`. The river is
-  audible but not LOCATED: it does not sit on one side, and it does not pan as
-  you drive past it. The world knows where the water is (`__hydrowhy` will tell
-  you to the metre) and the mixer is told only "how much". A `StereoPannerNode`
-  on the river, the rustle and the impacts is nearly free.
-- **NO SENSE OF ENCLOSURE.** The game has tunnels, galleries and bridge
-  soffits — this file documents the chase camera rendering from INSIDE a slab —
-  and the mix is identical under one. Enclosure is the most recognisable
-  acoustic cue in driving and the world already knows it (`tn` segments,
-  `TUNNEL_H`, `deckAnchorAt`). A lowpass sweep and a short feedback delay would
-  carry it without a convolver.
+- **NOTHING IS SPATIALISED** and **NO SENSE OF ENCLOSURE** — the first two are
+  DONE, and the next section is what they cost. What is left of the first is
+  the contacts: the rustle, the scrape, the brush and the crash are still mono,
+  and a graze is on one side of the truck.
 - **THE MIX DOES NOT KNOW WHICH CAMERA IS IN USE.** Cab and chase sound the
   same. In the cab there should be less wind and more engine; that is one
   argument to `update`.
@@ -2885,6 +2878,143 @@ own piece of work. In rough order of what a driver would notice:
 - **`drive.mute` LIVES OUTSIDE THE DIAL RACK**, in its own localStorage key, so
   it is not covered by the rack's versioning or its migrations the way TIME,
   PALETTE and WATER are.
+
+### The water has a side, and a ceiling changes the mix
+
+The first two items off the gap list above, taken together because they are one
+change to the graph: everything was mono into `master`, so nothing could be
+LOCATED and nothing could be ENCLOSED.
+
+- **TWO BUSES, BECAUSE ENCLOSURE IS NOT A VOLUME KNOB.** Under a bridge the
+  world outside goes away and your own noise comes back at you, and one master
+  gain cannot say that — muffling everything takes the engine with it, and the
+  engine is the thing a tunnel makes louder. The world's voices (wind, leaves,
+  river, birds, thunder) share `outBus`; the truck's (engine, tyres, grit,
+  rubber, bodywork, every impact) share `nearBus`. `space(enc)` closes a
+  lowpass from 20 kHz to 900 Hz over the first and opens a 55 ms slap with
+  feedback on the second. **At zero enclosure the path is the old one exactly**
+  — filter at 20 kHz, bus at unity, send at silence — so an open road is
+  unchanged and the mechanism costs three nodes nobody hears.
+- **THE RING THAT MEASURED HOW MUCH WATER ALREADY KNEW WHERE IT WAS.** The
+  ambience sampler walks six probes at 24 m twice a second; summing the wet
+  ones' own directions gives a bearing for free. It is a SUM, not a nearest, so
+  water on both sides of a ford cancels to the middle, which is where it
+  actually is. Panned to ±0.75 with a 0.7 s glide.
+- **THE ROOM IS GLIDED IN TWO PLACES** — `encL` eases toward the sampled
+  verdict at about 0.4 s, and `space()`'s own `setTargetAtTime` at 0.45 s. A
+  portal is a hard edge in geometry and a soft one in air: you hear a tunnel a
+  moment before you are inside it, and snapping the filter at the mouth reads
+  as a bug rather than as an entrance.
+
+**FOUR RUNS, AND EVERY ONE FAILED FOR A DIFFERENT REASON.** The mixer half
+passed first time; the detector took all four, and three of them are lessons.
+
+- **A BLANKET REWRITE PASSED `tsc` AND THREW ON THE FIRST FRAME.** Sending
+  fourteen voices to two buses was done with one `connect(master)` →
+  `connect(nearBus)` rewrite, which also rewrote the bus plumbing it had just
+  introduced: `outLP.connect(nearBus)` (unassigned at that line),
+  `nearBus.connect(nearBus)`, `slapDelay.connect(nearBus)`. **tsc was happy
+  because every one of those is an `AudioNode`.** Only running it caught it —
+  `Overload resolution failed` inside `build()`.
+- **`at-paris-west` IS NOT VÉLIZY.** The first run over the live planet read no
+  ceilings because Overpass served nothing; the second went to a capture
+  believed to be the interchange. It is SURESNES — a flat suburb of pavements
+  with nothing to drive under — and read zero for the honest reason.
+  `at-paris-south` is the A 86 interchange. Read the card, not the name.
+- **`roadCells` IS ON `__tstats`, NOT `__field`.** The gate read
+  `__field?.().roadCells ?? __built?.().roadCells ?? 0`, got 0 from both, and
+  looked exactly like an empty world.
+- **AND THE ONE THAT MATTERED: THE HINT STORE IS THE PLANNER'S PROFILE, AND IT
+  IS NOT LIFTED.** Reading the deck above a point from `solver.hints` looked
+  right — a tile is planned whole before any ribbon builds, which is why
+  `hintAbove` reads there — and it cannot work, because the flyover's rise over
+  the road beneath is the per-way build's chord-and-lift stage and that never
+  writes back. This file already said so about the layer tag; it applies to the
+  whole store. **Measured at the layer-2 lift at (-133,-62): `__lifts` reports
+  6.39 m raised, and the highest hint within 8 m over a 60 m box stands at
+  2.765 on ground of 2.352 — four tenths of a metre where six were built.**
+  The deck is read from `roadGrid`'s `ya`/`yb` now, which is after the lift,
+  and the half-width test comes free with it: a roof is only over you if you
+  are under the carriageway. **After: 46 of 2,601 swept points enclosed, all of
+  them decks, clearances 4.1-5.6 m, clustered on that same layer-2 crossing —
+  and 98.2% of the interchange still open sky, which is the assertion that
+  would catch a rule that simply says yes.**
+
+**WHAT THE DETECTOR READS.** Three sources, and they are not the same amount of
+room: a tunnel interior (`tn`, the solver's own flag, set on the inside of every
+tagged tube as well as on untagged burial) is 1; a tunnel mouth (`pc`, the
+portal porch) is 0.65, because a portal that snapped to full bore would read as
+a wall rather than as an entrance; a deck overhead caps at 0.7 and fades out as
+it climbs away — full to five metres of clearance, nothing by nine. Two rules
+guard it, and each was a wrong answer first:
+
+- **THE BASE IS THE LISTENER'S HEIGHT, NOT THE GROUND'S.** At the truck it is
+  `bodyY`. `roadHeightAt` looked like the better answer for a swept point and
+  is not: it takes the road NEAREST IN PLAN, and a flyover is directly over the
+  road beneath it, so at a crossing the base comes back as the flyover's own
+  deck and the sweep asks what is above the bridge. A swept point uses
+  `groundAt` — the mechanism question a sweep is for.
+- **A DECK IS ONLY A ROOF IF THE GROUND UNDER IT HAS FALLEN AWAY**, and it has
+  to clear head height. Without the first a steep road is its own ceiling — a
+  station on a 25% grade stands 1.7 m over your head within seven metres, and
+  Vélizy is flat and would never have shown it. Without the second the lowest
+  deck above you is the carriageway under your own wheels, four centimetres up.
+
+**THE BORE BRANCH SHIPS UNMEASURED, AND THE AUDIT SAYS SO OUT LOUD.**
+`__buried(400)` at Vélizy reports `exempt: null` — not one segment marked `tn`
+or `pc`, worst cover 1.72 m — because its 23 tagged tunnels are car-park ramps
+and footway subways whose chords are capped at the terrain on flat ground, so
+nothing ever ends up the 5.6 m under a hill that sets the flag. No capture in
+the index has a drivable bore. Reported rather than asserted, and rather than
+dressed up with a synthetic segment: a test that plants its own witness proves
+nothing.
+
+**AND A GALLERY IS STILL SILENT.** `canopyRun` roofs a road, leaves no flag on
+its segments, and its roof is not in `roadGrid`, so nothing can see it.
+Chapman's Peak galleries are the most audible enclosure this game has. One flag
+in the ribbon — and no fixture to measure it on, which is why it is written
+down here instead of shipped.
+
+### The river was playing at Vélizy, four hundred kilometres from the sea
+
+Found by the pan, which is the argument for building it. The first Camps Bay run
+of the audit read the sea as present on BOTH beams; the first Vélizy run read
+`__mix().river` at 0.16, which is the channel's full level, on a dry
+interchange.
+
+**`waterInfoAt` RETURNS `depth: 0.5` WHEN THERE IS NO WATER.** Every other
+caller has already established there is — the physics asks after `surfaceAt`
+says `water`, the wheel sink asks inside the water branch — so the last line is
+a sensible default rather than a claim. The ambience ring was the first caller
+to use the function as the DETECTOR, testing `depth > 0.06` at six points, and
+every dry probe came back 0.5. So the river bed has been at full level
+everywhere on earth with no hydro body, no carved channel and no ocean, since
+the ring was written. `wet` is the honest answer now; `depth` keeps its default
+so no existing caller changes behaviour.
+
+**A CENTRALISED SUBSYSTEM IS WHAT MAKES THIS KIND OF THING VISIBLE.** The bug
+is four years old in spirit and was invisible while the mixer was 624 lines in
+the middle of main.ts: nothing could ask "what is the river channel doing right
+now" without a probe nobody had written. `__mix()` and one measurement at a
+place with no water is the whole diagnosis.
+
+`__space(x?, z?)` reports the verdict at the truck or at any point — the deck,
+the clearance, the two flags and the glided `enc` — and `__audioSpace(e)` forces
+the room for twelve seconds the way `__windset` forces a gale, because a tunnel
+is somewhere you have to drive to and a mix cannot be photographed.
+`devtools/space-audit.mjs` holds both halves, on two captures: Vélizy for the
+ceiling and Camps Bay for the side the sea is on.
+
+**THE PAN IS ASSERTED AS THE SAME WATER FROM TWO HEADINGS**, which is what makes
+it an assertion rather than a coincidence: park sixteen metres off a wet point,
+face so the sea is off the port beam and read the pan; turn a hundred and eighty
+degrees so the SAME water is off the starboard beam and read it again. Nothing
+about where the Atlantic actually is has to be assumed, and a pan wired to a
+constant, to the world axes, or to the wrong sign fails one of the two.
+Measured: bearing −0.75 panned to −0.56, then +0.75 panned to +0.54, at a river
+level of 0.186 both ways. **Sixteen metres and not twenty-four**: the ring's six
+probes sit at fixed sixty-degree bearings on a 24 m circle, so a stand exactly
+on that circle catches one of them and a stand well inside it catches three.
 
 ## The switch table
 

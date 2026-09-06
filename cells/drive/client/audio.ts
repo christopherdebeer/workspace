@@ -53,6 +53,27 @@ export function createAudio() {
   let crashAt = 0, creakAt = 0;   // one-shot cooldowns — a scrape is not a drum roll
   let birdAt = 0;                 // next phrase, spaced by how alive the spot is
   let scrapeLast = 0;             // the scrape's live level, for the sidechain below
+  /**
+   * ── TWO BUSES, BECAUSE ENCLOSURE IS NOT A VOLUME KNOB ──
+   *
+   * Under a bridge or in a bore the world outside goes away and YOUR OWN
+   * noise comes back at you. One master gain cannot say that: muffling
+   * everything would take the engine with it, and the engine is the thing a
+   * tunnel makes louder. So the world's voices (wind, leaves, water at a
+   * distance, birds, thunder) share `outBus` and the truck's own (engine,
+   * tyres, grit, rubber, bodywork, every impact) share `nearBus`. Enclosure
+   * closes a lowpass over the first and opens a short slap-back on the second.
+   *
+   * AT ZERO ENCLOSURE THE PATH IS THE OLD ONE: the filter sits at 20 kHz, the
+   * bus at unity and the send at silence, so an open road sounds exactly as it
+   * did and the whole mechanism costs three nodes nobody hears.
+   */
+  let outBus: GainNode, outLP: BiquadFilterNode, nearBus: GainNode;
+  let slapSend: GainNode, slapDelay: DelayNode, slapFb: GainNode;
+  /** The river's bearing, panned. Null on a browser without a stereo panner —
+   *  Safari has had one for years, but a missing node must not silence the
+   *  water. */
+  let riverPan: StereoPannerNode | null = null;
   let noiseBuf: AudioBuffer;
   let on = true;
   try { on = localStorage.getItem('drive.mute') !== '1'; } catch { /* fine */ }
@@ -64,6 +85,22 @@ export function createAudio() {
     master = ctx.createGain();
     master.gain.value = on ? 0.55 : 0;
     master.connect(ctx.destination);
+    // The world's bus, through the filter enclosure closes.
+    outLP = ctx.createBiquadFilter(); outLP.type = 'lowpass';
+    outLP.frequency.value = 20000; outLP.Q.value = 0.4;
+    outBus = ctx.createGain(); outBus.gain.value = 1;
+    outBus.connect(outLP); outLP.connect(master);
+    // The truck's bus, and the slap-back a hard ceiling gives it. 55 ms is a
+    // road tunnel's own distance — long enough to hear as a separate return,
+    // short enough not to read as a cathedral.
+    nearBus = ctx.createGain(); nearBus.gain.value = 1;
+    nearBus.connect(master);
+    slapDelay = ctx.createDelay(0.4); slapDelay.delayTime.value = 0.055;
+    slapFb = ctx.createGain(); slapFb.gain.value = 0.36;
+    slapSend = ctx.createGain(); slapSend.gain.value = 0;
+    nearBus.connect(slapSend); slapSend.connect(slapDelay);
+    slapDelay.connect(slapFb); slapFb.connect(slapDelay);
+    slapDelay.connect(master);
     // Two seconds of white noise, looped — the source of tires and wind.
     noiseBuf = ctx.createBuffer(1, ctx.sampleRate * 2, ctx.sampleRate);
     const d = noiseBuf.getChannelData(0);
@@ -71,7 +108,7 @@ export function createAudio() {
     // Engine: detuned saw + square through a lowpass that opens with revs.
     engFilt = ctx.createBiquadFilter(); engFilt.type = 'lowpass'; engFilt.frequency.value = 700;
     engGain = ctx.createGain(); engGain.gain.value = 0;
-    engFilt.connect(engGain); engGain.connect(master);
+    engFilt.connect(engGain); engGain.connect(nearBus);
     engA = ctx.createOscillator(); engA.type = 'sawtooth'; engA.frequency.value = 40;
     engB = ctx.createOscillator(); engB.type = 'square'; engB.frequency.value = 60;
     const engMix = ctx.createGain(); engMix.gain.value = 0.5;
@@ -81,7 +118,7 @@ export function createAudio() {
     const roarSrc = ctx.createBufferSource(); roarSrc.buffer = noiseBuf; roarSrc.loop = true;
     roarFilt = ctx.createBiquadFilter(); roarFilt.type = 'bandpass'; roarFilt.frequency.value = 300; roarFilt.Q.value = 0.7;
     roarGain = ctx.createGain(); roarGain.gain.value = 0;
-    roarSrc.connect(roarFilt); roarFilt.connect(roarGain); roarGain.connect(master); roarSrc.start();
+    roarSrc.connect(roarFilt); roarFilt.connect(roarGain); roarGain.connect(nearBus); roarSrc.start();
     // GRIT: the gravel bed. Not steady noise — a few seconds of individual
     // stone impacts (sharp attack, short decay, random pitch), looped and
     // sped up with the truck so loose ground CRUNCHES rather than hisses.
@@ -104,7 +141,7 @@ export function createAudio() {
     gritSrc = ctx.createBufferSource(); gritSrc.buffer = gritBuf; gritSrc.loop = true;
     gritFilt = ctx.createBiquadFilter(); gritFilt.type = 'bandpass'; gritFilt.frequency.value = 1400; gritFilt.Q.value = 0.5;
     gritGain = ctx.createGain(); gritGain.gain.value = 0;
-    gritSrc.connect(gritFilt); gritFilt.connect(gritGain); gritGain.connect(master); gritSrc.start();
+    gritSrc.connect(gritFilt); gritFilt.connect(gritGain); gritGain.connect(nearBus); gritSrc.start();
     // SQUEAL: a tyre that is sliding rather than rolling. Noise through a very
     // narrow bandpass, plus a thin sawtooth at the same pitch so it has an edge
     // — pure filtered noise reads as wind, not rubber.
@@ -116,26 +153,26 @@ export function createAudio() {
     squealOsc = ctx.createOscillator(); squealOsc.type = 'sawtooth'; squealOsc.frequency.value = 1500;
     const sqMix = ctx.createGain(); sqMix.gain.value = 0.09;   // the EDGE — noise alone reads as wind
     squealOsc.connect(sqMix); sqMix.connect(squealFilt);
-    squealFilt.connect(squealGain); squealGain.connect(master);
+    squealFilt.connect(squealGain); squealGain.connect(nearBus);
     sqSrc.start(); squealOsc.start();
     // Wind: highpassed noise that climbs with the square of speed.
     const windSrc = ctx.createBufferSource(); windSrc.buffer = noiseBuf; windSrc.loop = true;
     windFilt = ctx.createBiquadFilter(); windFilt.type = 'highpass'; windFilt.frequency.value = 900;
     windGain = ctx.createGain(); windGain.gain.value = 0;
-    windSrc.connect(windFilt); windFilt.connect(windGain); windGain.connect(master); windSrc.start();
+    windSrc.connect(windFilt); windFilt.connect(windGain); windGain.connect(outBus); windSrc.start();
     // Scrape: the continuous half of a collision — bodywork dragged along a
     // wall or rail. A mid bandpass with some bite; gain rides contact + speed.
     const scSrc = ctx.createBufferSource(); scSrc.buffer = noiseBuf; scSrc.loop = true;
     scrapeFilt = ctx.createBiquadFilter(); scrapeFilt.type = 'bandpass';
     scrapeFilt.frequency.value = 640; scrapeFilt.Q.value = 2.4;
     scrapeGain = ctx.createGain(); scrapeGain.gain.value = 0;
-    scSrc.connect(scrapeFilt); scrapeFilt.connect(scrapeGain); scrapeGain.connect(master); scSrc.start();
+    scSrc.connect(scrapeFilt); scrapeFilt.connect(scrapeGain); scrapeGain.connect(nearBus); scSrc.start();
     // Water: the wash of a hull pushing through it — low, wide, speed-driven.
     const waSrc = ctx.createBufferSource(); waSrc.buffer = noiseBuf; waSrc.loop = true;
     waterFilt = ctx.createBiquadFilter(); waterFilt.type = 'bandpass';
     waterFilt.frequency.value = 420; waterFilt.Q.value = 0.8;
     waterGain = ctx.createGain(); waterGain.gain.value = 0;
-    waSrc.connect(waterFilt); waterFilt.connect(waterGain); waterGain.connect(master); waSrc.start();
+    waSrc.connect(waterFilt); waterFilt.connect(waterGain); waterGain.connect(nearBus); waSrc.start();
     // ── the world without the car ──
     // Rustle: leaves as high thin noise the wind pushes around; River: the
     // steady wide wash of moving water nearby. Both live under everything
@@ -144,12 +181,18 @@ export function createAudio() {
     rustleFilt = ctx.createBiquadFilter(); rustleFilt.type = 'bandpass';
     rustleFilt.frequency.value = 1750; rustleFilt.Q.value = 0.5;
     rustleGain = ctx.createGain(); rustleGain.gain.value = 0;
-    ruSrc.connect(rustleFilt); rustleFilt.connect(rustleGain); rustleGain.connect(master); ruSrc.start();
+    ruSrc.connect(rustleFilt); rustleFilt.connect(rustleGain); rustleGain.connect(outBus); ruSrc.start();
     const rvSrc = ctx.createBufferSource(); rvSrc.buffer = noiseBuf; rvSrc.loop = true;
     riverFilt = ctx.createBiquadFilter(); riverFilt.type = 'bandpass';
     riverFilt.frequency.value = 470; riverFilt.Q.value = 0.8;
     riverGain = ctx.createGain(); riverGain.gain.value = 0;
-    rvSrc.connect(riverFilt); riverFilt.connect(riverGain); riverGain.connect(master); rvSrc.start();
+    rvSrc.connect(riverFilt); riverFilt.connect(riverGain);
+    // WATER HAS A SIDE. The ring that measures how much water is near already
+    // knows WHERE it is; until now the mixer was told only the amount, so a
+    // river you were driving alongside sat in the middle of your head.
+    try { riverPan = ctx.createStereoPanner(); } catch { riverPan = null; }
+    if (riverPan) { riverGain.connect(riverPan); riverPan.connect(outBus); } else riverGain.connect(outBus);
+    rvSrc.start();
     // Brush: FOLIAGE ON THE BODYWORK — higher and thinner than the rustle
     // bed, because these leaves are against the panels, not across the
     // valley. Gain rides contact + speed like the scrape it is cousin to.
@@ -157,7 +200,7 @@ export function createAudio() {
     brushFilt = ctx.createBiquadFilter(); brushFilt.type = 'bandpass';
     brushFilt.frequency.value = 2400; brushFilt.Q.value = 0.7;
     brushGain = ctx.createGain(); brushGain.gain.value = 0;
-    brSrc.connect(brushFilt); brushFilt.connect(brushGain); brushGain.connect(master); brSrc.start();
+    brSrc.connect(brushFilt); brushFilt.connect(brushGain); brushGain.connect(nearBus); brSrc.start();
   };
   /**
    * ── WHAT "LIVE" MEANS, IN ONE PLACE ──
@@ -236,7 +279,14 @@ export function createAudio() {
       return { state: ctx?.state ?? 'none', on,
         eng: g(engGain), roar: g(roarGain), squeal: g(squealGain), scrape: g(scrapeGain),
         grit: g(gritGain), wind: g(windGain), brush: g(brushGain),
-        rustle: g(rustleGain), river: g(riverGain), water: g(waterGain) };
+        rustle: g(rustleGain), river: g(riverGain), water: g(waterGain),
+        // The room, so a test can assert a tunnel rather than describe one.
+        // Before `build()` these read as OPEN SKY rather than as zero: an
+        // unbuilt filter is not a shut one, and a mix read before the first
+        // gesture should not say the truck is in a bore.
+        out: outBus ? g(outBus) : 1, slap: g(slapSend),
+        muffle: Math.round(outLP?.frequency.value ?? 20000),
+        riverAt: +(riverPan?.pan.value ?? 0).toFixed(2) };
     },
     /** Stand the graph down — a backgrounded tab must not keep an engine
      *  running in it. `arm()` brings it back. */
@@ -360,7 +410,7 @@ export function createAudio() {
         g.gain.exponentialRampToValueAtTime(0.004, at + 0.13);
       }
       g.gain.exponentialRampToValueAtTime(0.0001, t + 0.68);
-      osc.connect(lp); lp.connect(g); g.connect(master);
+      osc.connect(lp); lp.connect(g); g.connect(nearBus);
       osc.start(t); osc.stop(t + 0.7);
     },
     /** The key off: one soft mechanical sigh as everything spins down. */
@@ -372,7 +422,7 @@ export function createAudio() {
       const g = ctx.createGain();
       g.gain.setValueAtTime(0.11, t);
       g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
-      src.connect(lp); lp.connect(g); g.connect(master);
+      src.connect(lp); lp.connect(g); g.connect(nearBus);
       src.start(t); src.stop(t + 0.32);
     },
     /** The world's own bed, set every frame like update(): leaves in the
@@ -380,7 +430,7 @@ export function createAudio() {
      *  much as the truck lets them be. `gusty` shifts the rustle's colour;
      *  birds are PHRASES, not a loop: a few whistled notes, spaced by how
      *  alive the spot is. */
-    ambience(rustle: number, river: number, birds: number, gusty: number, froth = 0): void {
+    ambience(rustle: number, river: number, birds: number, gusty: number, froth = 0, riverAt = 0): void {
       if (!live() || !ctx || !master || !rustleGain) return;
       const t = ctx.currentTime;
       rustleGain.gain.setTargetAtTime(rustle * 0.14, t, 0.5);
@@ -389,6 +439,12 @@ export function createAudio() {
       // it: 0 is still water lapping low and wide, 1 is rapids — brighter,
       // narrower, and a shade louder for the same nearness.
       riverGain.gain.setTargetAtTime(river * (0.16 + froth * 0.12), t, 0.6);
+      // `riverAt` is −1 hard left through +1 hard right, in the TRUCK's frame,
+      // and it glides slowly: water does not jump across the road, and a pan
+      // that chases a noisy bearing is worse than no pan at all. Held short of
+      // the hard edges — a river fully in one ear is a headphone effect, not a
+      // valley.
+      if (riverPan) riverPan.pan.setTargetAtTime(clamp(riverAt, -1, 1) * 0.75, t, 0.7);
       riverFilt.frequency.setTargetAtTime(340 + froth * 520, t, 0.9);
       riverFilt.Q.setTargetAtTime(0.8 - froth * 0.3, t, 0.9);
       if (on && birds > 0.03) {
@@ -408,7 +464,7 @@ export function createAudio() {
             g.gain.setValueAtTime(0.0001, at);
             g.gain.exponentialRampToValueAtTime(0.008 + 0.035 * clamp(birds, 0, 1), at + 0.015);
             g.gain.exponentialRampToValueAtTime(0.0001, at + 0.05 + Math.random() * 0.07);
-            osc.connect(g); g.connect(master);
+            osc.connect(g); g.connect(outBus);
             osc.start(at); osc.stop(at + 0.16);
             at += 0.07 + Math.random() * 0.12;
           }
@@ -428,7 +484,7 @@ export function createAudio() {
       g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(0.55 - far * 0.32, t + atk);
       g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      src.connect(lp); lp.connect(g); g.connect(master);
+      src.connect(lp); lp.connect(g); g.connect(outBus);
       src.start(t); src.stop(t + dur + 0.1);
     },
     // A stone spat out from under a tire — sharp, pitched, very short.
@@ -441,7 +497,7 @@ export function createAudio() {
       const g = ctx.createGain();
       g.gain.setValueAtTime(0.16 + Math.random() * 0.14, t);
       g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05 + Math.random() * 0.06);
-      src.connect(bp); bp.connect(g); g.connect(master);
+      src.connect(bp); bp.connect(g); g.connect(nearBus);
       src.start(t); src.stop(t + 0.14);
     },
     // A short filtered burst — landings, kerb strikes, scrapes.
@@ -453,7 +509,7 @@ export function createAudio() {
       const g = ctx.createGain();
       g.gain.setValueAtTime(Math.min(0.5, force * 0.42), t);
       g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
-      src.connect(bp); bp.connect(g); g.connect(master);
+      src.connect(bp); bp.connect(g); g.connect(nearBus);
       src.start(t); src.stop(t + 0.3);
     },
     // ── the rig meeting the world ──────────────────────────────────
@@ -485,7 +541,7 @@ export function createAudio() {
       // tumble down a bank arrives as mush instead of a sequence of hits.
       if (now - crashAt < 260 + force * 340 || force < 0.2) return;
       crashAt = now;
-      const ac = ctx, mas = master;          // narrowed once, for the closures
+      const ac = ctx;                        // narrowed once, for the closures
       const f = clamp(force, 0, 1);
       const t = ac.currentTime;
       const dur = 0.5 + f * 0.95;
@@ -505,7 +561,7 @@ export function createAudio() {
         const g = ac.createGain();
         g.gain.setValueAtTime(0.28 + f * 0.34, t);
         g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
-        src.connect(lp); lp.connect(g); g.connect(mas);
+        src.connect(lp); lp.connect(g); g.connect(nearBus);
         src.start(t); src.stop(t + 0.07);
       }
       // 2 · THE BODY OF THE SOUND — two voices, and the TRUCK is always one
@@ -531,7 +587,7 @@ export function createAudio() {
         const g = ac.createGain();
         g.gain.setValueAtTime(Math.min(0.6, amp * (0.4 + f)), t);
         g.gain.exponentialRampToValueAtTime(0.0001, t + len + f * 0.5);
-        src.connect(bp); bp.connect(g); g.connect(mas);
+        src.connect(bp); bp.connect(g); g.connect(nearBus);
         src.start(t); src.stop(t + len + f * 0.55);
       }
       // 3 · THE BUCKLE. Metal yielding is PITCH THAT FALLS: the panel gives,
@@ -550,7 +606,7 @@ export function createAudio() {
         g.gain.setValueAtTime(0.0001, t);
         g.gain.exponentialRampToValueAtTime(0.05 + f * 0.13, t + 0.03);
         g.gain.exponentialRampToValueAtTime(0.0001, t + 0.18 + f * 0.3);
-        osc.connect(lp); lp.connect(g); g.connect(mas);
+        osc.connect(lp); lp.connect(g); g.connect(nearBus);
         osc.start(t); osc.stop(t + 0.22 + f * 0.32);
       }
       // 4 · THE GRAUNCH. Momentum drags the damage along whatever it hit, and
@@ -574,7 +630,7 @@ export function createAudio() {
           g.gain.setValueAtTime(Math.max(0.0002, peak * fade * (0.25 + Math.random())), st);
         }
         g.gain.exponentialRampToValueAtTime(0.0001, t + dur + 0.05);
-        src.connect(bp); bp.connect(g); g.connect(mas);
+        src.connect(bp); bp.connect(g); g.connect(nearBus);
         src.start(t + 0.02); src.stop(t + dur + 0.08);
       }
       // 5 · THE SETTLING. Trim, grit and panels finding their rest — scattered
@@ -593,7 +649,7 @@ export function createAudio() {
         const late = clamp(1 - (at - t) / (dur + 0.1), 0.15, 1);
         g.gain.setValueAtTime((0.03 + Math.random() * 0.05) * (0.4 + f) * late, at);
         g.gain.exponentialRampToValueAtTime(0.0001, at + 0.05 + Math.random() * 0.07);
-        src.connect(bp); bp.connect(g); g.connect(mas);
+        src.connect(bp); bp.connect(g); g.connect(nearBus);
         src.start(at); src.stop(at + 0.14);
       }
     },
@@ -612,7 +668,7 @@ export function createAudio() {
       const g = ctx.createGain();
       g.gain.setValueAtTime(force * 0.11, t);
       g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
-      osc.connect(bp); bp.connect(g); g.connect(master);
+      osc.connect(bp); bp.connect(g); g.connect(nearBus);
       osc.start(t); osc.stop(t + 0.18);
     },
     /** Hitting water at speed: a broad wet slap, then the wash channel
@@ -626,7 +682,7 @@ export function createAudio() {
       g.gain.setValueAtTime(0.0001, t);
       g.gain.exponentialRampToValueAtTime(Math.min(0.5, 0.2 + force * 0.35), t + 0.03);
       g.gain.exponentialRampToValueAtTime(0.0001, t + 0.5);
-      src.connect(lp); lp.connect(g); g.connect(master);
+      src.connect(lp); lp.connect(g); g.connect(nearBus);
       src.start(t); src.stop(t + 0.55);
     },
     /** Continuous channels, set every frame from tick like everything in
@@ -656,7 +712,7 @@ export function createAudio() {
         const g = ctx.createGain();
         g.gain.setValueAtTime(0.12 + f * 0.22, t);
         g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
-        src.connect(bp); bp.connect(g); g.connect(master);
+        src.connect(bp); bp.connect(g); g.connect(nearBus);
         src.start(t); src.stop(t + 0.2);
       }
       const snap = ctx.createBufferSource(); snap.buffer = noiseBuf; snap.loop = true;
@@ -665,7 +721,7 @@ export function createAudio() {
       const g2 = ctx.createGain();
       g2.gain.setValueAtTime((woody ? 0.1 : 0.05) + f * 0.1, t);
       g2.gain.exponentialRampToValueAtTime(0.0001, t + (woody ? 0.06 : 0.13));
-      snap.connect(hp); hp.connect(g2); g2.connect(master);
+      snap.connect(hp); hp.connect(g2); g2.connect(nearBus);
       snap.start(t); snap.stop(t + 0.16);
     },
     /** `bright` is the MATERIAL under the bodywork: 0.35 is concrete and
@@ -680,6 +736,28 @@ export function createAudio() {
       // room for it instead of burying every raise.
       scrapeGain.gain.setTargetAtTime(level * 0.55, t, 0.05);
       scrapeFilt.frequency.setTargetAtTime(340 + bright * 640 + level * 620, t, 0.08);
+    },
+    /**
+     * ── ENCLOSURE: A CEILING, NOT A VOLUME ──
+     *
+     * `enc` is 0 under open sky and 1 inside a bore. What it does is what a
+     * tunnel does: the world outside is muffled and turned down (a lowpass
+     * closing from 20 kHz to 900 Hz over `outBus`), and the truck's own noise
+     * comes back at it (a 55 ms slap with feedback on `nearBus`). Those are
+     * the two halves people actually recognise — the second is why a tunnel
+     * feels loud even though less sound is reaching you.
+     *
+     * The glide is long on purpose. A portal is a hard edge in geometry and a
+     * soft one in air: you hear a tunnel a moment before you are in it and for
+     * a moment after you leave, and snapping the filter at the portal reads as
+     * a bug rather than as an entrance.
+     */
+    space(enc: number): void {
+      if (!live() || !ctx || !outBus) return;
+      const t = ctx.currentTime, e = clamp(enc, 0, 1);
+      outLP.frequency.setTargetAtTime(20000 - e * 19100, t, 0.45);
+      outBus.gain.setTargetAtTime(1 - e * 0.6, t, 0.45);
+      slapSend.gain.setTargetAtTime(e * 0.34, t, 0.45);
     },
     water(level: number): void {
       if (!live() || !ctx || !waterGain) return;

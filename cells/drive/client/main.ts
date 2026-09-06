@@ -16081,7 +16081,22 @@ function channelInvertAt(x: number, z: number): number {
   return Number.isNaN(best) ? NaN : best + 0.15 + baseElev;
 }
 const wiSet = new Set<Seg>();
-function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: number; speed: number } {
+/**
+ * `wet` IS NOT `depth > 0`, AND THE AMBIENCE BED LEARNED THAT THE HARD WAY.
+ *
+ * Every branch below answers a caller who has ALREADY established there is
+ * water here — the physics asks after `surfaceAt` has said `water`, the wheel
+ * sink asks inside the water branch — so the last line returns half a metre as
+ * a sensible default rather than as a claim. The ambience ring was the first
+ * caller to use this function as the DETECTOR, testing `depth > 0.06` around a
+ * six-point ring, and every dry probe came back 0.5: measured at the Vélizy
+ * interchange, four hundred kilometres from the sea and with no water in the
+ * capture at all, `__mix().river` read 0.16 — the river channel at its full
+ * level, everywhere on earth that has no hydro body, no channel and no ocean.
+ * `wet` is the honest answer to "is there water here"; `depth` keeps its
+ * default so no existing caller changes behaviour.
+ */
+function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: number; speed: number; wet: boolean } {
   // ── THE DRAWN WATER IS THE WATER ──
   //
   // This used to answer entirely from the CHANNEL grid — the carved ribbon a
@@ -16106,7 +16121,7 @@ function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: num
     const fx = wet.flow[0], fz = wet.flow[1];
     const fl = Math.hypot(fx, fz);
     return {
-      depth: clamp(d, 0.05, 4),
+      depth: clamp(d, 0.05, 4), wet: true,
       fx: fl > 0.01 ? fx / fl : 0,
       fz: fl > 0.01 ? fz / fl : 0,
       // Standing water does not push. A river's own energy rides the field's
@@ -16130,7 +16145,7 @@ function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: num
     const drop = (best.ya as number) - (best.yb as number);   // + means it flows a→b
     const s = Math.sign(drop) || 1;
     return {
-      depth: clamp(0.3 + best.hw * 0.09, 0.3, 1.4),
+      depth: clamp(0.3 + best.hw * 0.09, 0.3, 1.4), wet: true,
       fx: (dx / len) * s,
       fz: (dz / len) * s,
       speed: clamp(0.4 + 4.5 * Math.sqrt(Math.abs(drop) / len), 0.4, 3.2),
@@ -16139,9 +16154,9 @@ function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: num
   const sl = seaLevelY();
   if (sl !== null) {
     const d = sl - groundAt(x, z);
-    if (d > 0.05) return { depth: d, fx: 0, fz: 0, speed: 0 };
+    if (d > 0.05) return { depth: d, fx: 0, fz: 0, speed: 0, wet: true };
   }
-  return { depth: 0.5, fx: 0, fz: 0, speed: 0 };
+  return { depth: 0.5, fx: 0, fz: 0, speed: 0, wet: false };
 }
 const builtRuns = new Map<string, Set<number>>();
 function waterway(pts: Array<[number, number]>, width: number, name?: string, key?: string): void {
@@ -25371,7 +25386,7 @@ function applyHidden(): void {
 (window as unknown as { __waterinfo?: object }).__waterinfo = (x?: number, z?: number): object => {
   const px = x ?? state.x, pz = z ?? state.z;
   const wi = waterInfoAt(px, pz);
-  return { surface: surfaceAt(px, pz), depth: +wi.depth.toFixed(2), speed: +wi.speed.toFixed(2),
+  return { surface: surfaceAt(px, pz), wet: wi.wet, depth: +wi.depth.toFixed(2), speed: +wi.speed.toFixed(2),
     fx: +wi.fx.toFixed(2), fz: +wi.fz.toFixed(2) };
 };
 (window as unknown as { __contact?: object }).__contact = (x: number, z: number): object => {
@@ -31989,6 +32004,40 @@ function updateCps(): void {
 (window as unknown as { __armAudio?: object }).__armAudio = (): string => { audio.arm(); return audio.state; };
 (window as unknown as { __mix?: object }).__mix = (): object => audio.mix();
 (window as unknown as { __impacts?: object }).__impacts = (): object => audio.impacts();
+/** WHY THE MIX SOUNDS ENCLOSED HERE — every input, the raw verdict at the
+ *  point and the glided one the mixer was handed. A ceiling is the one
+ *  acoustic cue a screenshot cannot carry, so it needs a number. */
+(window as unknown as { __space?: object }).__space = (x?: number, z?: number): object => {
+  // ── THE BASE FOR A SWEPT POINT IS THE GROUND, AND THE FIRST CUT USED THE
+  //    ROAD, WHICH READ ZERO CEILINGS AT AN INTERCHANGE ──
+  //
+  // At the truck the base is `bodyY`, which is unambiguous: it is where the
+  // listener's head actually is. Away from the truck there is no listener, and
+  // `roadHeightAt` looked like the better answer — the deck you would be
+  // standing on. It is not, because it takes the road NEAREST IN PLAN, and a
+  // flyover is directly over the road beneath it, so at a crossing the base
+  // comes back as the flyover's own deck and the sweep asks what is above the
+  // bridge.
+  //
+  // So a swept point asks the ground's question — "is there a roof over this
+  // patch of Vélizy" — which is the mechanism question a sweep is for.
+  const at = x === undefined ? null : [x, z ?? state.z] as [number, number];
+  const r = enclosureAt(at ? at[0] : state.x, at ? at[1] : state.z,
+    at ? groundAt(at[0], at[1]) : bodyY);
+  return { ...r, enc: +encL.toFixed(3), forced: encForceUntil > performance.now(),
+    riverAt: +ambRiverAt.toFixed(2), mix: audio.mix() };
+};
+/** ── AN ENCLOSURE YOU CAN ASK FOR ──
+ *  The same bargain `__windset` strikes with the weather, for the same reason:
+ *  a tunnel is somewhere you have to DRIVE to, and a mix cannot be
+ *  photographed. Held for a few seconds so a measurement has time to read the
+ *  glided result, then the world takes it back. `__audioSpace(-1)` releases it
+ *  at once. */
+(window as unknown as { __audioSpace?: object }).__audioSpace = (e: number): void => {
+  if (e < 0) { encForceUntil = 0; return; }
+  encForce = clamp(e, 0, 1); encForceUntil = performance.now() + 12000;
+  encL = encForce; audio.space(encL);
+};
 const audio = createAudio();
 // ANY first gesture arms the context. iOS grants user activation on
 // touchend/click far more reliably than on pointerdown, so listen broadly and
@@ -32714,6 +32763,103 @@ let dbgAmb: Record<string, unknown> = {};
 let dbgSlip: Record<string, unknown> = {};
 (window as unknown as { __slip?: object }).__slip = (): object => dbgSlip;
 let ambSampledAt = 0, ambRiverL = 0, ambVegL = 0, ambFrothL = 0;
+/** The room the last sample found, which `encL` is easing toward. */
+let encTarget = 0;
+/** Where the water is, in the TRUCK's frame: −1 hard left, +1 hard right. */
+let ambRiverAt = 0;
+/** How enclosed the truck is, 0 open sky and 1 inside a bore — glided, so a
+ *  portal is an entrance rather than a switch. */
+let encL = 0;
+/** The debug override and its lease — see __audioSpace. */
+let encForce = 0, encForceUntil = 0;
+/** Head height: a deck lower than this over your base is not a ceiling, it is
+ *  the road. See the search below. */
+const ENC_HEAD = 1.6;
+/**
+ * ── IS THERE A CEILING HERE ──
+ *
+ * The one acoustic cue this game had every ingredient for and never used. The
+ * world knows exactly where its roofs are; the mixer was told nothing, so a
+ * bore, a bridge soffit and open sky all sounded identical. Three sources,
+ * and they are not the same amount of room:
+ *
+ *   · a TUNNEL INTERIOR (`tn`) — the solver's own flag for a stretch it left
+ *     under ground, which the tube pass sets on the inside of every tagged
+ *     tunnel as well as on untagged burial. Nothing is more enclosed than
+ *     this, so it is the 1.
+ *   · a TUNNEL MOUTH (`pc`, the portal porch) — you are under the collar with
+ *     daylight behind you. Two thirds, not one: a portal that snapped to full
+ *     bore would read as a wall rather than as an entrance.
+ *   · a DECK OVERHEAD — a flyover, a footbridge, a gallery. It roofs you and
+ *     leaves both sides open, so it caps at 0.7 and fades out as the deck
+ *     climbs away: full up to five metres of clearance, nothing by nine.
+ *
+ * `base` is the LISTENER's height, not the ground's — on a flyover the two are
+ * six metres apart and the ground's answer would put a ceiling over a truck
+ * standing in open air on top of the bridge.
+ *
+ * THE STRUCTURE TEST IS THE PART THAT IS EASY TO GET WRONG. A deck above you
+ * is only a roof if the ground under IT has fallen away; without that check a
+ * steep road is its own ceiling, because a station seven metres ahead on a
+ * 25% grade stands the required 1.7m over your head. Vélizy is flat and would
+ * never have shown it — Chapman's Peak has an 89% segment on the record.
+ */
+function enclosureAt(px: number, pz: number, base: number): {
+  e: number; deck: number | null; clear: number | null; buried: boolean; mouth: boolean;
+} {
+  let buried = false, mouth = false;
+  for (const seg of roadGrid.get(gkey(px, pz)) ?? []) {
+    if (!seg.tn && seg.pc === undefined) continue;
+    const [cx, cz] = closestOnSeg(px, pz, seg);
+    if (Math.hypot(px - cx, pz - cz) > seg.hw + 1.2) continue;
+    if (seg.tn) { buried = true; break; }
+    mouth = true;
+  }
+  if (buried) return { e: 1, deck: null, clear: null, buried, mouth };
+  // ── THE BUILT DECK, NOT THE PLANNER'S ──
+  //
+  // The first cut asked the solver's hint store, on the reasoning that a tile
+  // is planned whole before any of its ribbons build, so the deck above is
+  // known there whether or not it has been drawn. That is exactly right for
+  // `hintAbove`'s own consumer and useless here, because THE HINTS ARE NOT
+  // LIFTED. `writeHints` records the chain's algorithm profile; the flyover's
+  // rise over the road beneath is the per-way build's chord-and-lift stage,
+  // which never writes back. This file already says as much about the layer
+  // tag — "what the layer does NOT do on its own is lift anything" — and the
+  // measurement is unambiguous: at the layer-2 lift at (-133,-62), `__lifts`
+  // reports 6.39m raised and the highest hint within 8m over a 60m box stands
+  // at 2.765 on ground of 2.352. Four tenths of a metre where six were built.
+  //
+  // So the deck is read from `roadGrid`, which holds `ya`/`yb` AFTER the lift.
+  // The half-width test comes free with it and is better than a radius: a roof
+  // is only over you if you are under the carriageway.
+  let deck: number | null = null, clear: number | null = null;
+  let e = mouth ? 0.65 : 0;
+  for (const seg of roadGrid.get(gkey(px, pz)) ?? []) {
+    if (seg.ya === undefined || seg.yb === undefined) continue;
+    const dx = seg.bx - seg.ax, dz = seg.bz - seg.az;
+    const t = clamp(((px - seg.ax) * dx + (pz - seg.az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+    const cx = seg.ax + dx * t, cz = seg.az + dz * t;
+    if (Math.hypot(px - cx, pz - cz) > seg.hw + 0.5) continue;
+    const y = seg.ya + (seg.yb - seg.ya) * t;
+    // Head height: a deck lower than this is the road you are standing on, not
+    // a ceiling. `SURFACE.road.lift` alone puts a carriageway 4cm up.
+    if (y < base + ENC_HEAD) continue;
+    // A STRUCTURE, NOT A HILL. Without this a steep road is its own ceiling —
+    // a station seven metres ahead on a 25% grade stands the required 1.7m
+    // over your head. Vélizy is flat and would never have shown it; Chapman's
+    // Peak has an 89% segment on the record.
+    if (y - groundAt(cx, cz) <= 1.6) continue;
+    // The LOWEST qualifying deck: under two stacked flyovers the near one is
+    // what encloses you.
+    if (deck === null || y < deck) deck = y;
+  }
+  if (deck !== null) {
+    clear = +(deck - base).toFixed(2);
+    e = Math.max(e, 0.7 * clamp((9 - clear) / 4, 0, 1));
+  }
+  return { e: +e.toFixed(3), deck: deck === null ? null : +deck.toFixed(2), clear, buried, mouth };
+}
 let brushPeak = 0;   // session max — a one-frame brush must not hide from the probe
 let wallTouchAt = -1e9, dragKnockAt = 0;   // wall contact edge + the drag's knock pacing
 let scrapeHoldLvl = 0, scrapeHoldMetal = false;   // contact held across the graze's gap frames
@@ -34400,13 +34546,28 @@ function tick(now: number): void {
     // and wide, a river runs mid, and fast water over the rapids' own
     // boulder grid froths bright. Birds and rustle already answer to this
     // cell's real foliage the same way.
-    let wet = 0, flow = 0;
+    // THE SAME RING ALREADY KNOWS WHICH WAY THE WATER IS. It was spent
+    // entirely on "how much", so a river you were driving alongside sat in
+    // the middle of your head. Summing the wet probes' own directions gives a
+    // bearing for free — and it is a SUM, not a nearest: water on both sides
+    // of a ford should cancel to the middle, which is where it actually is.
+    let wet = 0, flow = 0, bx = 0, bz = 0;
     for (let i = 0; i < 6; i++) {
       const a = (i / 6) * Math.PI * 2;
       const wi = waterInfoAt(state.x + Math.sin(a) * 24, state.z + Math.cos(a) * 24);
-      if (wi.depth > 0.06) { wet++; flow = Math.max(flow, wi.speed); }
+      // `wi.wet`, NOT `depth > 0.06` — see waterInfoAt. The depth is a default
+      // on dry land and this ring is the one caller asking whether there IS
+      // any water, so the old test was true at every point on the planet.
+      if (wi.wet && wi.depth > 0.06) { wet++; flow = Math.max(flow, wi.speed); bx += Math.sin(a); bz += Math.cos(a); }
     }
     ambRiverL = clamp(wet / 3 + (surfKind === 'water' ? 0.4 : 0), 0, 1);
+    // Into the TRUCK's frame. Forward is (sin h, -cos h), so the right vector
+    // is (cos h, sin h) — the dot with it is the ear the water is in.
+    ambRiverAt = wet === 0 || surfKind === 'water' ? 0
+      : clamp(((bx / wet) * Math.cos(state.heading) + (bz / wet) * Math.sin(state.heading)), -1, 1);
+    // The room, on the same half-second tick as the rest of the bed: a hint
+    // walk and a grid-cell walk are cheap, and a ceiling does not move.
+    encTarget = enclosureAt(state.x, state.z, bodyY).e;
     const cxA = Math.floor(state.x / VEG_CELL), czA = Math.floor(state.z / VEG_CELL);
     let rap = 0;
     for (let ox = -1; ox <= 1; ox++) {
@@ -34426,9 +34587,18 @@ function tick(now: number): void {
     birds: +((sunAlt > 0.06 ? 1 : 0) * (1 - wxL.rain) * ambVegL * bed).toFixed(3),
     wind: +windAmb.toFixed(2), veg: +ambVegL.toFixed(2), riverRaw: +ambRiverL.toFixed(2),
     froth: +ambFrothL.toFixed(2), engine: engineSt, brush: +brushAmt.toFixed(2),
+    riverAt: +ambRiverAt.toFixed(2), enc: +encL.toFixed(3), encRaw: +encTarget.toFixed(3),
     brushPeak: +(brushPeak = Math.max(brushPeak, brushAmt)).toFixed(2),
   };
-  audio.ambience(dbgAmb.rustle as number, dbgAmb.river as number, dbgAmb.birds as number, windAmb, ambFrothL);
+  // THE GLIDE IS THE POINT. A portal is a hard edge in geometry and a soft one
+  // in air — you hear a tunnel a moment before you are inside it — and this
+  // half of the ease is what carries the approach; `space()` has its own,
+  // shorter, on the filter itself.
+  if (encForceUntil > nowMs) encL = encForce;
+  else encL += (encTarget - encL) * Math.min(1, dt * 2.5);
+  audio.space(encL);
+  audio.ambience(dbgAmb.rustle as number, dbgAmb.river as number, dbgAmb.birds as number,
+    windAmb, ambFrothL, ambRiverAt);
   // The squeal's raw inputs, photographed at the same instant the mixer
   // reads them — chasing "SLIP lit, tyre silent" needs the SIGNAL, not
   // another guess at the gain.
