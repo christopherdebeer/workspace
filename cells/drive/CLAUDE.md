@@ -1166,11 +1166,21 @@ Now (`refineTileGeometry`, `?refine=0` for the old grid + carve):
   draw:misc): a mark claims everything since the previous one that no
   wrapped call inside it already took, so inline code shows up by name.
   What nothing explains is two rows, not one: `tick residue` (tick code no
-  mark covers — it reads 0 now) and `gap (gpu/vsync/gc)` (time the main
-  thread never ran: the GPU's wait, vsync, GC). Off-tick tasks are wrapped
-  too (terrainApply, hydroRefeed, tileDecode, coverDecode, osmParse) and
-  counted against the frame that paid for them. The "main thread" line is
-  the CPU-or-GPU verdict: a gap that dwarfs the tick is the GPU or vsync.
+  mark covers — it reads 0 now) and `gap (unmeasured)` (wall time between
+  frames that no wrapped call accounts for: the GPU's wait, vsync, GC,
+  layout, the browser's own scheduling — any of them). Off-tick tasks are
+  wrapped too (terrainApply, hydroRefeed, tileDecode, coverDecode, osmParse)
+  and counted against the frame that paid for them. **The gap cannot
+  establish a GPU bottleneck.** It was labelled `gpu/vsync/gc` and read as
+  "the CPU-or-GPU verdict" here; the other agent's polish pass relabelled it
+  and withdrew the claim, and the claim was wrong: unmeasured time is a
+  residual, and a residual has no cause until something measures one. The
+  same pass moved the frame boundary to the tick's entry time
+  (`performance.now()` rather than the animation timestamp, which can
+  precede the callback), counts a slow frame at 50 ms inclusive so it
+  agrees with the histogram, and reports the percentiles as the RECENT
+  window they are. So a device report from before 2026-09-07 is not
+  comparable to one after it on the gap row or the slow-frame count.
   The first device report (iPhone, 153 s) had 70% of wall time in one
   undifferentiated row and could not say which; with p50 28 ms and ~8 ms
   of JS a frame, most of it was vsync quantisation (a 17 ms budget missed
@@ -1998,6 +2008,35 @@ one that proves the whole chain closes: the Serengeti returns *Southern
 Acacia-Commiphora bushlands* → the savanna guild → `forms {bare 6, umbrella 2}`,
 and the Sundarbans returns *Sundarbans mangroves* → the mangrove guild →
 `forms {bare 16, palm 11}`.
+
+### The polish pass — another agent, on the cell, two pushes apart
+
+Astra (a ChatGPT-6 client on the same workspace) worked directly on the
+deployed cell again on 2026-09-07 and was pulled on a watch loop, one cycle
+every ten to fifteen minutes, each pull committed verbatim as NOT MINE so
+nothing could be lost. The first pull caught the work HALF LANDED —
+`main.ts` passing `audio.space` a cab flag that `audio.ts` did not yet
+declare, so the tree did not type-check — and the second pull completed it.
+**A pull of another agent's cell is a snapshot of its editor, not a
+release**: read `tsc` before reading the diff, and expect the second pull
+to change the meaning of the first.
+
+What it landed, in `POLISH-2026-09-07.md`'s own order: rain as two voices
+(an outdoor wash on the world bus, roof drops from a bed of 720 impacts
+baked once at arm on the near bus, sheltered by enclosure and louder in the
+cab); the mix told which camera is in use (`space(enc, cab)` closes the
+outside lowpass and bus in the cab); a wet road in the tyre roar; one
+stereo position per bird phrase, and the phrase's nodes released after its
+tail — the old code leaked them until GC; a crown interior shade on the
+baked skeletons and a root shade on the sward blades; the tree refresh
+yielding to a heavy frame with a 180 ms starvation cap; the re-drape
+skipping vertices whose float would not change; and the telemetry
+semantics above. `client/polish-check.mjs` is its component witness and
+passes here; the report is explicit that no frame was rendered and nothing
+was listened to. The two visual changes were photographed on the Camps Bay
+capture against the revision before them before deploying — see the
+session's frames — and the enclosure audit was re-run against the new
+`space()`.
 
 ### The refresh was tuned by another agent, on the cell, and the ritual held
 
