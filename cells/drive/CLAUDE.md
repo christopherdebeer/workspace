@@ -2492,6 +2492,78 @@ nearest-neighbour. Consequences that are not negotiable:
 - Per-fragment work is the **cheap** resource here (the frame is ~148×320);
   per-vertex and per-draw work is the scarce one. Procedural beats textured.
 
+### The dither is a rack, and what can and cannot go in it
+
+Nine threshold patterns on the PATTERN dial — `BAYER4 BAYER8 CHECK GRAIN LINES
+BAYER16 IGN TPDF HALFTONE` — plus DITHER (amplitude), THRESHOLD (the rounding
+constant, which on the 1-bit inks IS the ink point), CONTRAST, PALETTE and INK.
+
+- **THE GLSL LIVES ONCE, IN `DITHER_GLSL`.** It had been copy-pasted into the
+  composite AND the vehicle bay's copy pass — which exists precisely so the
+  truck in the bay ends on the same grade and palette as the world — each with
+  its own `bayer2/4/8` and its own five-way selector. A sixth pattern would have
+  landed in one and not the other and the bay would have quietly stopped
+  matching. Both inject the one string now.
+- **ERROR DIFFUSION CANNOT GO HERE, and it is what anyone asking for "more
+  dither algorithms" usually means.** Floyd–Steinberg, Atkinson and Sierra are
+  sequential by definition: each pixel's error is pushed into neighbours that
+  have not been quantised yet, so pixel N depends on N−1. A fragment shader has
+  no ordering and no neighbour feedback. Doing it honestly needs a serial CPU
+  pass over the 148×320 buffer — feasible at 47k pixels, but a readback and an
+  upload every frame, and the readback is the thing the luma map just went
+  ASYNCHRONOUS to avoid. So the honest set is ordered patterns and noise.
+- **APPEND TO THE DIAL, NEVER INSERT.** The rack persists an INDEX, so splicing
+  a pattern into the middle silently re-points every saved preference — the trap
+  the TIME dial needed a named migration to undo. The four new patterns are 5–8.
+- **`uDChan` IS A SECOND AXIS, NOT A PATTERN.** One scalar threshold added to all
+  three channels means every channel crosses its level boundary on the same
+  pixel, so the dither can only move a pixel along the GREY axis and fourteen
+  levels stay fourteen. A threshold per channel lets a pixel land on a mixture
+  of two palette entries. **Measured at Camps Bay, land band, same frame:
+  distinct tones 128 → 154 (bayer4), 130 → 166 (ign), 129 → 172 (grain)** — a
+  quarter to a third more apparent colour for no extra level and no extra pass.
+  The cost is a little chroma fringing on a shallow ramp, which is why it is a
+  dial (`DITHER CH: GREY | RGB`) and not a change.
+
+**MEASURE ON ONE SCENE RENDER.** `composite()` lives outside the frame loop so a
+probe can re-run it over whatever is already in `rtScene`; `__draw(false)` then
+`__dither({pat})` gives frames that differ by the post chain and nothing else.
+This matters more here than it did for the shutter: the clouds, sward, wildlife,
+suspension and still-arriving tiles move far more pixels between two frames than
+any threshold pattern does. `devtools/dither-lab.mjs` does it for all nine.
+
+**THE RUN-LENGTH METRIC SATURATES, so read the tone count and the frames too.**
+`banding.test.mjs`'s median longest run of one exact colour is the right measure
+of "dithered versus rounded" and it cannot rank the ordered patterns against each
+other — at 14 levels bayer4, bayer8, bayer16 and check all hit 3 and IGN 4.
+Measured at 14 / 2 levels (sky band):
+
+| pattern | run @14 | run @2 | what it is |
+|---|---|---|---|
+| bayer4 (shipped) | 3 | 8 | the control |
+| bayer8 / bayer16 | 3 | 8 | larger tile, no measurable gain |
+| check | 3 | 3 | bayer2; loudest weave |
+| ign | 4 | 16 | closed-form, nearest blue noise, no tile to read |
+| halftone | 8 | 8 | clustered dot — a printing press, pairs with MONO |
+| grain | 14 | 32 | white noise; clumps |
+| tpdf | 21 | 56 | triangular noise: smoother, dithers LESS |
+| lines | 390 | 390 | varies in y only — degenerate by construction |
+
+**TPDF dithers less, not better.** Two uniform draws summed concentrate the
+threshold near 0.5, so it breaks a ramp up less than plain grain at the same
+amplitude — it trades break-up for a quieter floor. Worth knowing before
+reaching for it as "the better noise".
+
+**Still not in the rack:** true blue noise (a void-and-cluster LUT — the one
+pattern that would need a baked texture, and IGN gets most of the way there for
+free), and a **surface-locked** dither. The pattern is keyed to
+`floor(vUv * uPix)`, i.e. screen space, so the weave crawls across surfaces as
+the camera moves; the composite already carries `invPV`, `camPos` and
+`depthTex`, so keying it to reconstructed world position is possible and would
+make the weave stick to the ground. It is the most interesting experiment left
+and the most likely to look worse — it will swim at silhouette edges where the
+depth reconstruction jumps.
+
 **Anything hung around the eye is a function of the CAMERA, not of the frame.**
 The scene is rendered more than once per frame — the world through `camera`,
 then the chart's POV dock through `miniCam`, then the studio bay — and anything

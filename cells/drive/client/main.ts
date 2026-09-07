@@ -3803,6 +3803,96 @@ const fogTex = new THREE.CanvasTexture(fogCanvas);
 // sharp -> blurred -> haze by how far and how unexplored that point is:
 // distance genuinely blurs and dims, and the haze warms toward the sun.
 const QUAD_VS = 'varying vec2 vUv; void main(){ vUv = uv; gl_Position = vec4(position.xy, 0.0, 1.0); }';
+/**
+ * ── THE DITHER, IN ONE PLACE ──
+ *
+ * This was copy-pasted into TWO shaders — the composite and the vehicle bay's
+ * copy pass, which exists precisely so the truck in the bay ends on the same
+ * grade and palette as the world. Both carried their own `bayer2/4/8` and their
+ * own five-way pattern selector, so a sixth pattern would have landed in one and
+ * not the other and the bay would have quietly stopped matching the world it is
+ * supposed to match. One string, injected into both.
+ *
+ * Everything here is closed-form and free of array indexing, because GLSL ES
+ * 1.00 forbids indexing a uniform array with a non-constant expression in a
+ * fragment shader — the restriction that already cost this codebase every
+ * building's windows once (see markTins in facade.ts).
+ *
+ * ── WHAT CANNOT GO HERE ──
+ *
+ * ERROR DIFFUSION — Floyd–Steinberg, Atkinson, Sierra — is not expressible in a
+ * fragment shader at all, and it is the family anyone asking for "more dither
+ * algorithms" usually has in mind. It is sequential by definition: each pixel's
+ * error is pushed into neighbours that have not been quantised yet, so pixel N
+ * depends on N−1. A fragment shader has no ordering and no neighbour feedback.
+ * Doing it properly needs either a serial pass on the CPU over a 148×320 buffer
+ * (feasible — 47k pixels — but a readback and an upload every frame, and the
+ * readback is the thing this renderer just spent a change making ASYNCHRONOUS
+ * for the luma map) or a multi-pass approximation whose artefacts do not look
+ * like error diffusion anyway. So the honest set is ORDERED patterns and NOISE,
+ * and this file should not pretend otherwise.
+ */
+const DITHER_GLSL = `
+    // Recursive 2x2 -> 16x16. bayer2 is the checkerboard on its own.
+    float bayer2(vec2 a){ a = floor(a); return fract(a.x * 0.5 + a.y * a.y * 0.75); }
+    float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
+    float bayer8(vec2 a){ return bayer4(0.5 * a) * 0.25 + bayer2(a); }
+    float bayer16(vec2 a){ return bayer8(0.5 * a) * 0.25 + bayer2(a); }
+    float whiteNoise(vec2 a){ return fract(sin(dot(a, vec2(12.9898, 78.233))) * 43758.5453); }
+    // INTERLEAVED GRADIENT NOISE (Jimenez). The one closed-form pattern whose
+    // spectrum is close to blue noise: no repeating tile to read as a texture
+    // the way Bayer does, and none of white noise's clumping. Three constants
+    // and a fract, so it costs what the hash costs.
+    float ign(vec2 a){ return fract(52.9829189 * fract(dot(floor(a), vec2(0.06711056, 0.00583715)))); }
+    // TRIANGULAR PDF NOISE. Uniform noise added to a quantiser modulates with
+    // the signal — flat areas get the full noise floor and the grain visibly
+    // swims. Two independent uniform draws summed give a triangular
+    // distribution, which is the standard audio-dither answer and looks like
+    // finer grain for the same amplitude. Remapped back to 0..1.
+    float tpdf(vec2 a){ return (whiteNoise(a) + whiteNoise(a + vec2(37.0, 17.0))) * 0.5; }
+    // CLUSTERED DOT — a halftone rosette rather than a dispersed weave. Ink
+    // gathers into growing dots instead of scattering, which is a printing press
+    // and not a CRT. Pairs with the MONO inks; on a 14-level colour palette it
+    // is loud, and that is the point of having it on a dial.
+    float halftone(vec2 a){
+      vec2 p = a * 0.7853981634;                       // pi/4: the rosette angle
+      return (sin(p.x + p.y) * sin(p.x - p.y) + 1.0) * 0.5;
+    }
+    /** One threshold in 0..1 for a pixel of the LOW-RES grid. */
+    float ditherPat(vec2 dp, float kind){
+      return kind < 0.5 ? bayer4(dp)
+        : kind < 1.5 ? bayer8(dp)
+        : kind < 2.5 ? bayer2(dp)
+        : kind < 3.5 ? whiteNoise(dp)
+        : kind < 4.5 ? fract(dp.y * 0.25)
+        : kind < 5.5 ? bayer16(dp)
+        : kind < 6.5 ? ign(dp)
+        : kind < 7.5 ? tpdf(dp)
+        : halftone(dp);
+    }
+    /**
+     * THE QUANTISER, AND WHETHER THE CHANNELS AGREE.
+     *
+     * One scalar threshold added to all three channels means every channel
+     * crosses its level boundary on the same pixel, so the dither can only ever
+     * move a pixel along the grey axis — fourteen levels stay fourteen levels.
+     * Decorrelating the channels lets a pixel land on a MIXTURE of two palette
+     * entries, which is how a 14-level palette can carry more apparent colour
+     * without adding a level. It also trades the clean weave for a hint of
+     * chroma fringing on a ramp, which is exactly the sort of thing that has to
+     * be looked at rather than argued about — hence the dial.
+     *
+     * The offsets are small integers so an ordered pattern lands on a genuinely
+     * different cell of its own tile rather than a near-identical one.
+     */
+    vec3 ditherQuant(vec3 enc, vec2 dp, float kind, float amt, float bias, float levels, float chan){
+      float p0 = ditherPat(dp, kind);
+      vec3 p = mix(vec3(p0),
+        vec3(p0, ditherPat(dp + vec2(2.0, 1.0), kind), ditherPat(dp + vec2(1.0, 3.0), kind)),
+        chan);
+      vec3 d = (p - 0.5) * amt;
+      return clamp(floor(enc * levels + d + bias) / levels, 0.0, 1.0);
+    }`;
 const rtType = renderer.extensions.has('EXT_color_buffer_float') || renderer.extensions.has('EXT_color_buffer_half_float')
   ? THREE.HalfFloatType
   : THREE.UnsignedByteType;
@@ -4321,6 +4411,11 @@ const compMat = new THREE.ShaderMaterial({
     /** Which threshold pattern the dither reads: 0 bayer4 · 1 bayer8 ·
      *  2 bayer2 (checker) · 3 hash grain · 4 line etch. */
     uDPat: { value: 0 },
+    /** 0 = one threshold for all three channels (the shipped truth: the dither
+     *  can then only ever move a pixel along the grey axis). 1 = a threshold per
+     *  channel, so a pixel can land on a MIXTURE of two palette entries and
+     *  fourteen levels carry more apparent colour than fourteen. */
+    uDChan: { value: 0 },
     /** The quantiser's rounding constant — 0.5 is round-to-nearest; lower
      *  floods ink, higher lifts to paper. THE threshold, on the 1-bit looks. */
     uBias: { value: 0.5 },
@@ -4340,6 +4435,7 @@ const compMat = new THREE.ShaderMaterial({
     uniform float uLevels; uniform float uFow; uniform float uFlare;
     uniform float uDither; uniform float uMono;
     uniform float uDPat; uniform float uBias; uniform float uCon; uniform vec3 uTint;
+    uniform float uDChan;
     uniform float uFlash; uniform vec2 uSunUv; uniform float uSunVis;
     uniform sampler2D mask; uniform mat4 invPV; uniform vec3 camPos; uniform float span;
     uniform vec2 sunXZ; uniform vec2 uPix; uniform vec3 uHazeBase; uniform vec3 uHazeSun; varying vec2 vUv;
@@ -4350,11 +4446,7 @@ const compMat = new THREE.ShaderMaterial({
     uniform float uHazeDbg; uniform float uHazeWarm;
     uniform float uHazeE; uniform float uHazeAmt; uniform float uSkyD;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
-    // Ordered (Bayer) dither, computed without array indexing so it compiles
-    // on GLSL ES 1.0. Recursive 2x2 → 4x4.
-    float bayer2(vec2 a){ a = floor(a); return fract(a.x * 0.5 + a.y * a.y * 0.75); }
-    float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
-    float bayer8(vec2 a){ return bayer4(0.5 * a) * 0.25 + bayer2(a); }
+${DITHER_GLSL}
     // The warm argument is HOW MUCH OF THE SUNWARD LOBE THIS CALLER WANTS. The sky wants
     // all of it — that warm side is the sunset, and it was built on purpose.
     // Ground aerial perspective wants much less, and the reason is a measured
@@ -4544,16 +4636,9 @@ const compMat = new THREE.ShaderMaterial({
       // Contrast about mid-grey BEFORE the quantiser — at one or two steps the
       // midtones have to pick a side, and this is the dial that makes them.
       enc = (enc - 0.5) * uCon + 0.5;
-      vec2 dp = floor(vUv * uPix);
-      float pat = uDPat < 0.5 ? bayer4(dp)
-        : uDPat < 1.5 ? bayer8(dp)
-        : uDPat < 2.5 ? bayer2(dp)
-        : uDPat < 3.5 ? fract(sin(dot(dp, vec2(12.9898, 78.233))) * 43758.5453)
-        : fract(dp.y * 0.25);
-      float d = (pat - 0.5) * uDither;
       // uBias is the rounding constant — 0.5 rounds to nearest; the THRESHOLD
       // dial moves it, which on the 1-bit looks is the ink point itself.
-      enc = clamp(floor(enc * uLevels + d + uBias) / uLevels, 0.0, 1.0);
+      enc = ditherQuant(enc, floor(vUv * uPix), uDPat, uDither, uBias, uLevels, uDChan);
       // Phosphor tint AFTER the quantise: tinting first would quantise the
       // channels apart and break the exact-N-tone promise the dial makes.
       enc *= mix(vec3(1.0), uTint, uMono);
@@ -22437,6 +22522,7 @@ const vehCopyMat = new THREE.ShaderMaterial({
     uDither: { value: 1 },
     uMono: { value: 0 },
     uDPat: { value: 0 },
+    uDChan: { value: 0 },
     uBias: { value: 0.5 },
     uCon: { value: 1 },
     uTint: { value: new THREE.Vector3(1, 1, 1) },
@@ -22449,10 +22535,9 @@ const vehCopyMat = new THREE.ShaderMaterial({
     uniform sampler2D src; uniform vec2 uPix; uniform float uLevels; varying vec2 vUv;
     uniform float uDither; uniform float uMono;
     uniform float uDPat; uniform float uBias; uniform float uCon; uniform vec3 uTint;
+    uniform float uDChan;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
-    float bayer2(vec2 a){ a = floor(a); return fract(a.x * 0.5 + a.y * a.y * 0.75); }
-    float bayer4(vec2 a){ return bayer2(0.5 * a) * 0.25 + bayer2(a); }
-    float bayer8(vec2 a){ return bayer4(0.5 * a) * 0.25 + bayer2(a); }
+${DITHER_GLSL}
     void main(){
       vec3 enc = srgb(max(texture2D(src, vUv).rgb, 0.0));
       float l = dot(enc, vec3(0.299, 0.587, 0.114));
@@ -22465,14 +22550,7 @@ const vehCopyMat = new THREE.ShaderMaterial({
       // a plain backdrop, which is nothing BUT shallow ramps.
       enc = mix(enc, vec3(dot(enc, vec3(0.299, 0.587, 0.114))), uMono);
       enc = (enc - 0.5) * uCon + 0.5;
-      vec2 dp = floor(vUv * uPix);
-      float pat = uDPat < 0.5 ? bayer4(dp)
-        : uDPat < 1.5 ? bayer8(dp)
-        : uDPat < 2.5 ? bayer2(dp)
-        : uDPat < 3.5 ? fract(sin(dot(dp, vec2(12.9898, 78.233))) * 43758.5453)
-        : fract(dp.y * 0.25);
-      float d = (pat - 0.5) * uDither;
-      enc = clamp(floor(enc * uLevels + d + uBias) / uLevels, 0.0, 1.0);
+      enc = ditherQuant(enc, floor(vUv * uPix), uDPat, uDither, uBias, uLevels, uDChan);
       enc *= mix(vec3(1.0), uTint, uMono);
       gl_FragColor = vec4(enc, 1.0);
     }`,
@@ -30124,6 +30202,50 @@ function noteTags(t: Record<string, string>): void {
  * drawn mesh through `meshSurfaceAt` and got nothing at all — that samples the
  * TERRAIN mesh, and the deck's cross-width heights exist nowhere else.
  */
+/**
+ * ── DRIVE THE DITHER, AND RE-COMPOSITE ON ONE SCENE RENDER ──
+ *
+ * The whole reason `composite()` was lifted out of the frame loop: a probe can
+ * run it again over whatever is already sitting in rtScene, so two pictures
+ * differ by the post chain and by NOTHING ELSE. Comparing dither patterns any
+ * other way is hopeless — this world's clouds, sward, wildlife, suspension and
+ * still-arriving tiles move more pixels between two frames than a threshold
+ * pattern ever will, which is a mistake this file has already recorded once for
+ * the shutter.
+ *
+ * So: `__draw(false)` to stop the loop drawing, then `__dither({pat})` per
+ * pattern, screenshotting between. The scene underneath is frozen.
+ *
+ * Named for the patterns rather than numbered, because `uDPat: 6` in a test log
+ * says nothing a year later.
+ */
+const DITHER_PATS = ['bayer4', 'bayer8', 'check', 'grain', 'lines', 'bayer16', 'ign', 'tpdf', 'halftone'];
+(window as unknown as { __dither?: object }).__dither = (patch?: {
+  pat?: number | string; amt?: number; chan?: number; levels?: number; bias?: number; con?: number;
+}): object => {
+  const u = compMat.uniforms as Record<string, { value: number }>;
+  if (patch) {
+    if (patch.pat !== undefined) {
+      const i = typeof patch.pat === 'string' ? DITHER_PATS.indexOf(patch.pat) : patch.pat;
+      if (i >= 0) u.uDPat.value = i;
+    }
+    if (patch.amt !== undefined) u.uDither.value = patch.amt;
+    if (patch.chan !== undefined) u.uDChan.value = patch.chan;
+    if (patch.levels !== undefined) u.uLevels.value = patch.levels;
+    if (patch.bias !== undefined) u.uBias.value = patch.bias;
+    if (patch.con !== undefined) u.uCon.value = patch.con;
+    // Re-run the post chain over the scene already in rtScene, so the change
+    // is on the glass immediately even with the frame loop stood down.
+    composite(mblurAmt);
+  }
+  return {
+    pat: DITHER_PATS[u.uDPat.value] ?? u.uDPat.value,
+    pats: DITHER_PATS,
+    amt: u.uDither.value, chan: u.uDChan.value, levels: u.uLevels.value,
+    bias: +u.uBias.value.toFixed(3), con: u.uCon.value, mono: u.uMono.value,
+    pix: [pixSize.x, pixSize.y],
+  };
+};
 /** How many full-screen passes the last frame ran, and what is on. */
 (window as unknown as { __passes?: object }).__passes = (): object => ({
   lastFrame: passCount.last,
@@ -36288,6 +36410,7 @@ function blitPixelated(
   vehCopyMat.uniforms.uDither.value = (compMat.uniforms.uDither as { value: number }).value;
   vehCopyMat.uniforms.uMono.value = (compMat.uniforms.uMono as { value: number }).value;
   vehCopyMat.uniforms.uDPat.value = (compMat.uniforms.uDPat as { value: number }).value;
+  vehCopyMat.uniforms.uDChan.value = (compMat.uniforms.uDChan as { value: number }).value;
   vehCopyMat.uniforms.uBias.value = (compMat.uniforms.uBias as { value: number }).value;
   vehCopyMat.uniforms.uCon.value = (compMat.uniforms.uCon as { value: number }).value;
   (vehCopyMat.uniforms.uTint.value as THREE.Vector3).copy(compMat.uniforms.uTint.value as THREE.Vector3);
@@ -38818,8 +38941,23 @@ const DIAL_GROUPS: DialGroup[] = [
       // trades pattern visibility for more apparent tones; CHECK is the chunky
       // 2x2; GRAIN is a static hash — newsprint; LINES thresholds by row —
       // the etching. The pattern is the whole character of a 1-bit frame.
-      dial('dpat', 'PATTERN', ['BAYER4', 'BAYER8', 'CHECK', 'GRAIN', 'LINES'], 0,
+      // APPENDED, NEVER INSERTED. The rack persists an INDEX, so splicing a
+      // pattern into the middle of this list silently re-points every saved
+      // preference — the trap the TIME dial needed a named migration to undo.
+      // BAYER16 is one more turn of the same recursion; IGN is the closed-form
+      // pattern whose spectrum comes nearest blue noise; TPDF is grain with the
+      // signal-modulation taken out of it; HALFTONE is a clustered dot, which
+      // is a printing press rather than a CRT and belongs with the MONO inks.
+      dial('dpat', 'PATTERN',
+        ['BAYER4', 'BAYER8', 'CHECK', 'GRAIN', 'LINES', 'BAYER16', 'IGN', 'TPDF', 'HALFTONE'], 0,
         (i) => { cu.uDPat.value = i; }),
+      // Whether the three channels share one threshold. GREY keeps the shipped
+      // truth — the dither moves a pixel along the grey axis only. RGB gives
+      // each channel its own, so a pixel can land between two palette entries
+      // and the palette carries more apparent colour than it has levels, at the
+      // cost of a little chroma fringing on a shallow ramp.
+      dial('dchan', 'DITHER CH', ['GREY', 'RGB'], 0,
+        (i) => { cu.uDChan.value = i; }),
       // The quantiser's rounding constant. On the 1-bit looks this IS the ink
       // point: minus floods shadows to black, plus lifts midtones to paper.
       dial('thr', 'THRESHOLD', ['-2', '-1', '0', '+1', '+2'], 2,
