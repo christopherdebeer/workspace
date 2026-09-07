@@ -1628,6 +1628,50 @@ Acacia-Commiphora bushlands* → the savanna guild → `forms {bare 6, umbrella 
 and the Sundarbans returns *Sundarbans mangroves* → the mangrove guild →
 `forms {bare 16, palm 11}`.
 
+### The refresh was tuned by another agent, on the cell, and the ritual held
+
+Pulled from the deployed cell after a deploy from this branch: a second agent
+(a ChatGPT-connected client on the same workspace — `auth.tokens` shows it as
+`act.sub: client:chatgpt`) had rewritten parts of `refreshVeg` and
+`ensureVegCapacity` directly on the cell, with two new files beside them.
+`client/render-work.ts` is three pure helpers — `squareRings` (walk the
+perimeter, not the interior; the old loop was cubic in `reach`),
+`nearestStable` (heap selection of the nearest N instead of sorting the whole
+candidate list, ties kept in input order so an equidistant tree cannot change
+identity), `uploadPrefix` (a GPU `updateRange` over the live instance prefix
+instead of `needsUpdate` on the whole allocation). In main.ts: road-clearance
+(`onCarriageway`) is asked only of sites that survived admission, not of every
+candidate; the near/far tiers are sized to their DISJOINT counts instead of
+both to the combined need; and `ensureVegCapacity`'s
+`renderer.attributes?.remove(…)` — an internal that does not exist on this
+three, so a silent no-op that retained GPU buffers on every pool growth — is
+`m.dispose()`.
+
+**IT ARRIVED WITHOUT ITS OWN WITNESS.** `client/perf-check.mjs` extracts both
+versions of `refreshVeg` from main.ts by AST and asserts byte-identical output
+over a deterministic mock world; it reads the pre-change function from
+`baseline-refresh.txt`, which was not on the cell. Reconstructed here from this
+branch's own pre-diff main.ts with the same extraction, and the agent's own copy
+arrived on the next pull byte-identical bar a trailing newline. **Measured:**
+20/20 refills identical; road queries at 2.8 km / cap 120 **18,335 → 1,160**;
+allocation at cap 1200 **1,609,984 → 1,118,720 bytes**; nearest-8 of 100k
+**49 → 3 ms**. `client/upload-check.mjs` then drives `uploadPrefix` and
+`dispose` against three r160's REAL `WebGLAttributes`/`WebGLObjects` with a
+recording GL: a 10-instance refill sends 640 bytes where the capacity is
+65,536, and dispose deletes exactly the two instance buffers with the shared
+geometry and material surviving. In a real page: `boot.mjs` clean,
+`tree-stand.test.mjs` all ok at **3,648 slots** against the 4,096 recorded
+above. Synthetic component numbers and a fixture, not device frames — the
+agent's own `PERFORMANCE-2026-09-07.md` says the same.
+
+**THE BASELINE IS A SNAPSHOT AND WILL GO STALE.** `perf-check.mjs` compares the
+live `refreshVeg` against a text file of the old one. The next change to
+`refreshVeg` makes that file the WRONG control — the check would then be
+comparing a new version against a version two steps back and passing or failing
+for the wrong reason, which is a fabricated witness of the kind this file keeps
+warning about. Re-snapshot it (`git show <parent>:…/main.ts`, extract
+`refreshVeg`) as part of any change to the refresh, or retire the check.
+
 ### The flora lab was reviewing a game nobody plays
 
 Asked to look at the new vegetation in the flora lab, and the lab could not
