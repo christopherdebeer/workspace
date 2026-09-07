@@ -37,6 +37,25 @@ export type AudioSurface = 'road' | 'track' | 'water' | 'ground';
 
 export interface Impact { t: number; kind: ImpactKind; force: number }
 
+/** A bounded, repeatable bed of soft roof impacts, generated only at arm.
+ * Individual drops ring briefly; a rain channel made only from noise sounds
+ * like more wind. No event allocation is needed while the truck is driving. */
+export function rainPattern(rate: number): Float32Array {
+  const data = new Float32Array(Math.round(rate * 3));
+  let seed = 0x7261696e;
+  const rand = (): number => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
+  for (let drop = 0; drop < 720; drop++) {
+    const at = Math.floor(rand() * data.length);
+    const hz = 650 + rand() * 2100, amp = 0.08 + rand() * 0.2;
+    const len = Math.round(rate * (0.004 + rand() * 0.009));
+    for (let i = 0; i < len; i++) {
+      const env = Math.exp(-6 * i / len);
+      data[(at + i) % data.length] += amp * env * (Math.sin(i * hz * Math.PI * 2 / rate) * 0.7 + (rand() * 2 - 1) * 0.3);
+    }
+  }
+  return data;
+}
+
 export function createAudio() {
   const impactLog: Impact[] = [];
   let ctx: AudioContext | null = null;
@@ -50,6 +69,8 @@ export function createAudio() {
   let rustleGain: GainNode, rustleFilt: BiquadFilterNode;
   let riverGain: GainNode, riverFilt: BiquadFilterNode;
   let brushGain: GainNode, brushFilt: BiquadFilterNode;
+  let rainGain: GainNode, roofGain: GainNode;
+  let cabin = 0, enclosure = 0;
   let crashAt = 0, creakAt = 0;   // one-shot cooldowns — a scrape is not a drum roll
   let birdAt = 0;                 // next phrase, spaced by how alive the spot is
   let scrapeLast = 0;             // the scrape's live level, for the sidechain below
@@ -193,6 +214,18 @@ export function createAudio() {
     try { riverPan = ctx.createStereoPanner(); } catch { riverPan = null; }
     if (riverPan) { riverGain.connect(riverPan); riverPan.connect(outBus); } else riverGain.connect(outBus);
     rvSrc.start();
+    // Rain has two scales: a fine outdoor wash and resolved drops on the
+    // roof. Both are persistent voices; weather only changes their envelopes.
+    const rainSrc = ctx.createBufferSource(); rainSrc.buffer = noiseBuf; rainSrc.loop = true;
+    const rainHP = ctx.createBiquadFilter(); rainHP.type = 'highpass'; rainHP.frequency.value = 1800;
+    rainGain = ctx.createGain(); rainGain.gain.value = 0;
+    rainSrc.connect(rainHP); rainHP.connect(rainGain); rainGain.connect(outBus); rainSrc.start();
+    const rainBuf = ctx.createBuffer(1, Math.round(ctx.sampleRate * 3), ctx.sampleRate);
+    rainBuf.getChannelData(0).set(rainPattern(ctx.sampleRate));
+    const roofSrc = ctx.createBufferSource(); roofSrc.buffer = rainBuf; roofSrc.loop = true;
+    const roofLP = ctx.createBiquadFilter(); roofLP.type = 'lowpass'; roofLP.frequency.value = 2400;
+    roofGain = ctx.createGain(); roofGain.gain.value = 0;
+    roofSrc.connect(roofLP); roofLP.connect(roofGain); roofGain.connect(nearBus); roofSrc.start();
     // Brush: FOLIAGE ON THE BODYWORK — higher and thinner than the rustle
     // bed, because these leaves are against the panels, not across the
     // valley. Gain rides contact + speed like the scrape it is cousin to.
@@ -279,6 +312,7 @@ export function createAudio() {
       return { state: ctx?.state ?? 'none', on,
         eng: g(engGain), roar: g(roarGain), squeal: g(squealGain), scrape: g(scrapeGain),
         grit: g(gritGain), wind: g(windGain), brush: g(brushGain),
+        rain: g(rainGain), roof: g(roofGain), cabin, enclosure,
         rustle: g(rustleGain), river: g(riverGain), water: g(waterGain),
         // The room, so a test can assert a tunnel rather than describe one.
         // Before `build()` these read as OPEN SKY rather than as zero: an

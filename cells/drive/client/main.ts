@@ -9438,6 +9438,9 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         vec3 sMixed = mix(mix(uSwardTint, sGround, uSwardMatch), sGround, sMix);
         vSward = mix(vec3(1.0), (0.82 + 0.36 * sV)
           * vec3(0.96 + 0.08 * sWarm, 1.0, 0.92 + 0.12 * (1.0 - sWarm)), uSwardVary) * sMixed;
+        // Root shade anchors stalks in their neighbours without extra geometry.
+        // Flower heads receive their own colour below and remain clear.
+        vSward *= mix(0.76, 1.0, smoothstep(0.0, 0.32, position.y));
         // FLOWER COLOUR, AND ONLY ON THE HEAD. sIsFlower, sCtx and sSpecies
         // were decided up at sD because the geometry above needed them too.
         //
@@ -9803,6 +9806,7 @@ let vegMs = 0;
  * costs 1.5 ms of the 93, and the seeding has its own clock.
  */
 const vegPhase: Record<string, number> = {};
+const vegPhaseTotals = new Map<string, { ms: number; n: number; max: number }>();
 let vegPhaseAt = 0;
 /** Cells seeded during THIS refresh, and what they cost. `__vegdist().ms.seedTotal`
  *  is a running total over the cells in the debug window and cannot say what a
@@ -9839,7 +9843,11 @@ let vegSeedLeft = 0;
 let vegSeedDeferred = 0;
 const vegMark = (name: string): void => {
   const now = performance.now();
-  vegPhase[name] = (vegPhase[name] ?? 0) + (now - vegPhaseAt);
+  const ms = now - vegPhaseAt;
+  vegPhase[name] = (vegPhase[name] ?? 0) + ms;
+  const total = vegPhaseTotals.get(name);
+  if (total) { total.ms += ms; total.n++; total.max = Math.max(total.max, ms); }
+  else vegPhaseTotals.set(name, { ms, n: 1, max: ms });
   vegPhaseAt = now;
 };
 const emptyVegRoles = (): Record<VegetationRole, number> =>
@@ -13122,7 +13130,10 @@ function redrape(t: HeightTile): void {
       if (d.seat !== undefined && d.seat[i] !== 1) continue;   // welded, not seated
       const x = pos.getX(i), z = pos.getZ(i);
       if (x < t.xs || z < t.zs || x >= tx1 || z >= tz1) continue;
-      pos.setY(i, groundAt(x, z) + d.lift);
+      // Compare the stored float, not a double that rounds to the same float.
+      const y = Math.fround(groundAt(x, z) + d.lift);
+      if (pos.getY(i) === y) continue;
+      pos.setY(i, y);
       touched = true;
     }
     if (touched) {
@@ -34340,8 +34351,8 @@ let profFrames = 0, profSince = 0, profWhole = 0;
  *  and for every frame over SLOW_FRAME_MS which phases ran in it and which
  *  was the largest — the blame that isolates a contributor to a drop. What
  *  no wrapper or mark explains is split into two rows: `tick residue` (tick
- *  code nothing here covers) and `gap` (time the main thread never ran —
- *  the GPU's wait, vsync, GC). Read with __telemetry(); a double tap on the
+ *  code nothing here covers) and `gap` (unmeasured elapsed time, including
+ *  browser scheduling and uninstrumented work). Read with __telemetry(); a double tap on the
  *  FPS readout copies it to the clipboard. */
 const SLOW_FRAME_MS = 50;
 interface SessRow { ms: number; n: number; max: number; slowMs: number; top: number }
@@ -34356,13 +34367,12 @@ const curFrame = new Map<string, number>();
  *  the main thread's own frame work; outside it is an event-loop task — a
  *  worker reply, a fetch continuation, a raster decode — that the frame's
  *  wall time still paid for. The two residues are the diagnosis: `tick
- *  residue` is tick code no mark or wrapper covers, `gap` is time the main
- *  thread never ran at all — the GPU's own wait, vsync, GC, layout. A frame
- *  whose gap dwarfs its tick is bound by the GPU, not by anything here. The
+ *  residue` is tick code no mark or wrapper covers; `gap` is elapsed time
+ *  these instruments cannot explain. It cannot establish a GPU bottleneck. The
  *  first device report could not say which: 70% of its wall time was one
  *  undifferentiated "unattributed" row. */
 let inTick = false, tickStart = 0, tickMsCur = 0, attrIn = 0, attrOut = 0, markAt = 0, attrSinceMark = 0;
-let sessTick = 0, sessOff = 0;
+let sessTick = 0, sessOff = 0, sessTickMax = 0;
 const tickRing = new Float32Array(4096);
 function profBump(name: string, d: number): void {
   const e = frameProf.get(name);
@@ -34396,15 +34406,16 @@ function profFrame(now: number): void {
     const fm = now - profLast;
     profWhole += fm;
     sessFrames++; sessWall += fm; sessTick += tickMsCur; sessOff += attrOut;
+    sessTickMax = Math.max(sessTickMax, tickMsCur);
     sessRing[sessRingN % sessRing.length] = fm;
     tickRing[sessRingN % tickRing.length] = tickMsCur;
     sessRingN++;
     sessHist[fm < 16.7 ? 0 : fm < 33 ? 1 : fm < 50 ? 2 : fm < 100 ? 3 : fm < 250 ? 4 : 5]++;
     // The two residues, as phases of their own, so the blame below can name them.
     profBump('tick residue', Math.max(0, tickMsCur - attrIn));
-    profBump('gap (gpu/vsync/gc)', Math.max(0, fm - tickMsCur - attrOut));
+    profBump('gap (unmeasured)', Math.max(0, fm - tickMsCur - attrOut));
     attrIn = attrOut = 0;
-    if (fm > SLOW_FRAME_MS) {
+    if (fm >= SLOW_FRAME_MS) {
       sessSlow++;
       let top = '', topMs = 0;
       for (const [k, v] of curFrame) { const r = sessProf.get(k); if (r) r.slowMs += v; if (v > topMs) { topMs = v; top = k; } }
@@ -34414,6 +34425,7 @@ function profFrame(now: number): void {
       if (sessSlowLog.length > 24) sessSlowLog.shift();
     }
   }
+  attrIn = attrOut = 0;
   curFrame.clear();
   profLast = now;
 }
@@ -34426,7 +34438,7 @@ function telemetryReport(): string {
   const tsorted = Array.from(tickRing.subarray(0, n)).sort((a, b) => a - b);
   const tpct = (q: number): number => n ? +tsorted[Math.min(n - 1, Math.floor(q * n))].toFixed(1) : 0;
   const shareOf = (ms: number): string => `${(100 * ms / Math.max(1, sessWall)).toFixed(0)}%`;
-  const gapRow = sessProf.get('gap (gpu/vsync/gc)');
+  const gapRow = sessProf.get('gap (unmeasured)');
   const gl = renderer.getContext();
   const dbg = gl.getExtension('WEBGL_debug_renderer_info') as { UNMASKED_RENDERER_WEBGL: number } | null;
   const gpu = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)) : 'n/a';
@@ -34439,20 +34451,20 @@ function telemetryReport(): string {
   const _treePlacedByFamily = EZ_FAMILIES.map(f => ezTiers[f].reduce((n, t) => n + t.n, 0));
   const _treePlaced = _treePlacedByFamily.reduce((n, v) => n + v, 0);
   const _treeTris = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + t.n * t.tris, 0), 0);
-  const _treeBatches = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].filter(t => t.n > 0).length, 0);
+  const _treeBatches = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + Number(t.nNear > 0) + Number(t.nFar > 0), 0), 0);
   // `t.mesh` as merged from the cell: EzTier carries the NEAR/FAR shadow split
   // (only the near half is inside the shadow map and casts), so there is no
   // single mesh and this read `undefined.castShadow` — a crash the moment the
   // overlay opened. esbuild strips the types, so it reached the deployed cell
   // without a murmur; tsc is the only reason it is not still there.
-  const _treeCasting = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + (t.n > 0 && t.near.castShadow ? 1 : 0), 0), 0);
+  const _treeCasting = EZ_FAMILIES.reduce((n, f) => n + ezTiers[f].reduce((m, t) => m + (t.nNear > 0 && t.near.castShadow ? 1 : 0), 0), 0);
   const _treeVariants = treeVariantCap >= 1000 ? 'ALL' : String(treeVariantCap);
   const _treeMix = EZ_FAMILIES.map((f, i) => `${f[0]}${_treePlacedByFamily[i]}`).join('/');
   const _treeEdge = EZ_FAMILIES.map(f => `${f[0]}${ezEdgeLast[f]}`).join('/');
   L.push(`trees ez ${EZ_ON ? 'on' : 'off'} · range ${treeRange}m · pop ${treePopulationScale}x · size ${treeSizeScale}x · form ${treeFormScale}x · bend ${treeBendU.value} · variants ${_treeVariants} · budget ${(treeTriBudget / 1e6).toFixed(1)}M · cap ${(ezCapScale() * 100).toFixed(0)}% · placed ${_treePlaced} [${_treeMix}] · tris ${(_treeTris / 1e6).toFixed(2)}M · batches ${_treeBatches} · casting ${_treeCasting} · edge ${_treeEdge}`);
-  L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · frame ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(>${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
+  L.push(`frames ${sessFrames} · fps mean ${sessWall ? (1000 * sessFrames / sessWall).toFixed(1) : '?'} · recent ${n} frames ms p50 ${pct(0.5)} p95 ${pct(0.95)} p99 ${pct(0.99)} · slow(≥${SLOW_FRAME_MS}ms) ${sessSlow} (${sessFrames ? (100 * sessSlow / sessFrames).toFixed(1) : 0}%)`);
   L.push(`hist <16.7 ${sessHist[0]} · <33 ${sessHist[1]} · <50 ${sessHist[2]} · <100 ${sessHist[3]} · <250 ${sessHist[4]} · ≥250 ${sessHist[5]}`);
-  L.push(`main thread: in tick ${(sessTick / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(sessTick)} of wall) p50 ${tpct(0.5)} p95 ${tpct(0.95)} p99 ${tpct(0.99)} max ${tpct(1)} · off-tick tasks ${(sessOff / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(sessOff)}) · gap ${((gapRow?.ms ?? 0) / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(gapRow?.ms ?? 0)}) — a gap that dwarfs the tick is the GPU or vsync, not this code`);
+  L.push(`main thread: in tick ${(sessTick / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(sessTick)} of wall) recent ${n} ticks p50 ${tpct(0.5)} p95 ${tpct(0.95)} p99 ${tpct(0.99)} recent max ${tpct(1)} session max ${Math.round(sessTickMax)} · off-tick tasks ${(sessOff / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(sessOff)}) · gap ${((gapRow?.ms ?? 0) / Math.max(1, sessFrames)).toFixed(1)} ms/frame (${shareOf(gapRow?.ms ?? 0)}) — unmeasured time includes scheduling, GPU waits and uninstrumented work; not a GPU measurement`);
   const rows = [...sessProf.entries()].map(([k, v]) => ({ k, ...v })).sort((a, b) => b.slowMs - a.slowMs || b.ms - a.ms);
   const slowTotal = rows.reduce((a, r) => a + r.slowMs, 0);
   L.push(`phase                 total ms   share   calls   mean    max | in slow frames ms  share  top-of-frame`);
@@ -34465,6 +34477,7 @@ function telemetryReport(): string {
   L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
   { const w = swardLedger; L.push(`sward sweeps ${w.sweeps} · steps ${w.steps} ms ${(w.stepMs / Math.max(1, w.steps)).toFixed(1)} max ${Math.round(w.stepMax)} · deferred ${w.deferred} · mask ${w.masks} ms ${(w.maskMs / Math.max(1, w.masks)).toFixed(1)} max ${Math.round(w.maskMax)}`); }
   if (sessSlowLog.length) L.push(`slow frames (last ${sessSlowLog.length}): ` + sessSlowLog.map((f) => `${f.t}s ${f.ms}ms [${f.tops}]`).join(' · '));
+  L.push('tree phases ms/call (max): ' + [...vegPhaseTotals].map(([k, v]) => `${k} ${(v.ms / Math.max(1, v.n)).toFixed(1)} (${Math.round(v.max)})`).join(' · '));
   return L.join('\n');
 }
 /** Copy the telemetry: the clipboard where a gesture allows it, a text box
@@ -34521,6 +34534,9 @@ function tick(now: number): void {
   // where it stands; REAL drive is exempt for the same reason the menu is —
   // the road outside does not pause, and a clock that lies about that is worse
   // than no clock.
+  // Close the previous frame before recording this tick, on actual entry
+  // times. The animation timestamp can precede callback execution.
+  profFrame(performance.now());
   profTickStart();
   // A DRIVEN REEL IS EXEMPT, EXACTLY AS REAL DRIVE IS. The reel only runs with
   // the hub open — `stepAttract` stands it down otherwise — and an open menu is
@@ -34579,7 +34595,6 @@ function tick(now: number): void {
   // integrators (tyres, springs) substep internally so the bigger step stays
   // stable. Below 10fps dilation still guards against tab-stall teleports.
   const dt = played ? played.dt : (paused || scrubbing) ? 0 : (FIX_DT || Math.min(0.1, raw / 1000));
-  profFrame(now);
   last = now;
   simT += dt; simN++;
   // The splash's own clock: WALL time, because the sim's dt is zero exactly
@@ -35570,7 +35585,8 @@ function tick(now: number): void {
   if (seaOn && (surfKind === 'road' || surfKind === 'track')) {
     noteDryLand(state.x, state.z, groundAt(state.x, state.z));
   }
-  if (now > vegAt) {
+  // Keep the existing population through a costly frame, but never starve it.
+  if (now > vegAt && (frameHeavyMs() < FRAME_HEAVY_MS || now - vegAt > 180)) {
     const _treeRefreshAt = performance.now();
     refreshVeg();
     profAdd('treeRefresh', _treeRefreshAt);
@@ -35655,7 +35671,8 @@ function tick(now: number): void {
   dbgAmb = {
     rustle: +(windAmb * (0.25 + 0.75 * ambVegL) * Math.max(bed, 0.2)).toFixed(3),
     river: +(ambRiverL * (0.35 + 0.65 * bed)).toFixed(3),
-    birds: +((sunAlt > 0.06 ? 1 : 0) * (1 - wxL.rain) * ambVegL * bed).toFixed(3),
+    // Dawn arrives gradually in the soundscape, as it does in the light.
+    birds: +(clamp((sunAlt + 0.04) / 0.16, 0, 1) * (1 - wxL.rain) * ambVegL * bed).toFixed(3),
     wind: +windAmb.toFixed(2), veg: +ambVegL.toFixed(2), riverRaw: +ambRiverL.toFixed(2),
     froth: +ambFrothL.toFixed(2), engine: engineSt, brush: +brushAmt.toFixed(2),
     riverAt: +ambRiverAt.toFixed(2), enc: +encL.toFixed(3), encRaw: +encTarget.toFixed(3),
@@ -35667,7 +35684,7 @@ function tick(now: number): void {
   // shorter, on the filter itself.
   if (encForceUntil > nowMs) encL = encForce;
   else encL += (encTarget - encL) * Math.min(1, dt * 2.5);
-  audio.space(encL);
+  audio.space(encL, camMode === 'cab' ? 1 : 0);
   audio.ambience(dbgAmb.rustle as number, dbgAmb.river as number, dbgAmb.birds as number,
     windAmb, ambFrothL, ambRiverAt);
   // The squeal's raw inputs, photographed at the same instant the mixer
