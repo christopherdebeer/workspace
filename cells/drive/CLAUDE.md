@@ -558,8 +558,26 @@ that every build is the vector stream's doing:
 | builds per landed vector tile | **18** | **2.4** |
 
 The relay's network is not the phone's — seven tiles in four minutes where
-the device had 216 — so the ratio is the number, not the totals. FIXTURE
-CHURN PENDING.
+the device had 216 — so the ratio is the number, not the totals. The Vélizy
+capture is the deterministic witness: every way lands in the first frames,
+so the churn is bounded by how the flush coalesces them. Same fixture, both
+runs settled to the same world (2,945 road cells, 4 corridor tiles):
+
+| Vélizy, 20 tiles | control | fix |
+|---|---|---|
+| builds | 82 | 51 |
+| …of which `way` | 56 | 16 |
+| worst tile | 25 builds | 10 |
+
+**And the order is the truck's now.** The first sixteen tiles BUILT at the
+CBD, as distance from the truck in metres — control: 534, 2561, 3226, 2034,
+4857, 4391, 6172, 9041, 7680, 6669, 6181, 6338, 7098, 8296, 7801, 4161 (its
+own tile, then the north-west corner of the box outward, nine kilometres
+away before the next ring); fix: 534, 2561, 3226, 2033, 3309, 2163, 4590,
+4161, 4992, 4391, 2578, 1501, 2470, 6083, 4743, 4027 — the inner ring, then
+the next. Builds follow arrivals, and the DEM gate is still a FIFO, so a
+tile fetched late builds late (the 1501 at rank 12 was rank 8 to be asked);
+the pick can only order what has arrived.
 
 **`__streamAudit` is the instrument**, and `devtools/stream-audit.mjs` runs
 it live at a spot for a fixed budget (`REV=` for a control, which falls back
