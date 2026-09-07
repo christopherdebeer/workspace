@@ -504,6 +504,78 @@ capture, the default live at the Cape and at Paris).
   only real cover, so the blind count is unchanged and honest — it is
   measuring the raster, not the paint.
 
+## The stream, audited: what loads, at what scale, in what order
+
+Asked from the chart over the Cape Town CBD, facing south, with the tile
+overlay on: the fine ring was filling from Table Bay northward while the tile
+under the wheels and the peninsula ahead waited, and the same minute's device
+telemetry read 260 terrain builds for 26 tiles in 85 s at 58 ms of main
+thread each (39 of them re-draping). Every layer's ask was read and the
+answer is a table, because the layers are not alike:
+
+| layer | level | ring | asked in | served by | prioritised? |
+|---|---|---|---|---|---|
+| fine terrain (DEM) | z14 | 5×5 to 7×7 by view | **rings outward** (was raster) | DEM gate, FIFO | fetch order only |
+| terrain BUILDS | — | the dirty set | **wedge-cheapest, owner-first hop** (was raster) | one build a slot | yes now |
+| land cover | z12 | 3×3 to 7×7 | rings outward | — | yes |
+| vector tiles | z16 | 5×5 to 9×9 + corridor | sorted by wedge cost | gate of 6, wedge-cheapest, ring gate drops | yes, and best of all |
+| far shell | z13→z6 | 5×5 | **rings outward** (was raster) | gate of 4, FIFO | fetch order only |
+| shell cover | z10→z6 | 5×5 | raster | — | no; cheap |
+| overview vectors | z13→z7 | 5×5 | raster | queue | no; chart only |
+| summits | z8 | 3×3 + reach | nearest tile per pass | 2 in flight | yes |
+
+**THE BUILD ORDER KNEW NOTHING ABOUT THE TRUCK.** `flushTerrain` took the
+dirty set in raster order — row then column, north-west first — because that
+is the cheapest way to build an owner before its followers (a follower built
+first takes a row its owner is about to replace and builds twice). It is
+also why the sea to the north built before the road ahead. The pick is now
+the dirty tile cheapest in the vector stream's own wedge (`wedgeCost`:
+ahead is cheap, behind is dear), and then walks to a dirty west or north
+owner while there is one, at most two hops, so the ownership rule holds
+locally and the near tile builds within a hop rather than after the sea.
+
+**A WAY DIRTIED A SIX-KILOMETRE BOX.** `dirtyTerrainAround` marked a 3×3 of
+terrain tiles around every eighth vertex of every landing way — nine tiles
+of two kilometres for a road twelve metres wide whose earthworks reach
+thirty. In a city every vector tile that lands dirties the whole ring, and
+the ring rebuilds for every vector tile: 25 of 26 tiles dirty at once in the
+telemetry, a rebuild every third of a second. A way now dirties the tiles it
+crosses and a neighbour only where a sample stands within the corridor's
+reach (`TOE_REACH + cutL`) of that edge. And a way-dirtied tile waits
+`WAY_HOLD_MS` (1.5 s) from the FIRST way that dirtied it while the stream is
+busy, so the hundreds of ways one vector tile carries build once; a freshly
+loaded tile, a cover arrival, a border owner's rebuild and the corridor scan
+are not held.
+
+**Measured at the CBD spot, same 240 s through the relay, control against
+fix.** Terrain loads are identical (63 builds by t+30 s, 49 tiles). After
+that every build is the vector stream's doing:
+
+| | control | fix |
+|---|---|---|
+| vector tiles landed / ways | 5 / 1,722 | 7 / 2,437 |
+| builds after the ring was up | 90 | 17 |
+| builds per landed vector tile | **18** | **2.4** |
+
+The relay's network is not the phone's — seven tiles in four minutes where
+the device had 216 — so the ratio is the number, not the totals. FIXTURE
+CHURN PENDING.
+
+**`__streamAudit` is the instrument**, and `devtools/stream-audit.mjs` runs
+it live at a spot for a fixed budget (`REV=` for a control, which falls back
+to `__buildLog` on a revision older than the probe; `FIX=` for a capture).
+It reports each layer's ask order as (rank: distance, ahead/behind), builds
+per tile and per reason, and the last re-drape's reach.
+
+**What the same telemetry says that is NOT fixed here**, for the next pass:
+`drawHud` at 10 ms a frame on the chart — the half-rate gate is 40 ms and
+these frames were 54, so it drew every one; `treeRefresh` at 37 ms a call
+with the tree rack's DRAW RANGE at 2.8 km, which is the dial's own price;
+`redrape` at 39 ms a build in a city, because a two-kilometre tile in the
+CBD touches most of the draped footways in the world and every vertex of
+each is re-read — fewer builds is the first cut at it, an incremental
+re-drape (only the drapes over cells the build actually moved) the second.
+
 ## Capturing a real place as a fixture
 
 `devtools/capture-world.mjs NAME --lat= --lon= [--r=700]` pulls the three

@@ -20,7 +20,7 @@ import { writeFileSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 const OUT = process.env.AUDIT_OUT ?? join(WORK, 'stream-audit');
 mkdirSync(OUT, { recursive: true });
-const SPOT = process.env.SPOT ?? 'lat=-33.91661&lon=18.40784&h=179&cam=top&z=145';
+const SPOT = process.env.FIX ? `fixture=${process.env.FIX}&cam=chase` : (process.env.SPOT ?? 'lat=-33.91661&lon=18.40784&h=179&cam=top&z=145');
 const REV = process.env.REV || '';
 const TAG = process.env.TAG ?? `stream-audit${REV ? '-ctl' : ''}`;
 const BUDGET = +(process.env.BUDGET ?? 240);
@@ -35,7 +35,30 @@ for (let s = 0; s < BUDGET; s += 10) {
   samples.push({ t: s + 10, ...t });
   console.log(`[${el()}] t+${s + 10}s tiles ${t.heightTiles} meshes ${t.meshes} builds ${t.builds} dirty ${t.dirty} corridor ${t.corridorMeshes} | osmDone ${t.osmDone} inFlight ${t.inFlight} queued ${t.queued} ways ${t.seenWays} roadCells ${t.roadCells}`);
 }
-const a = await q(() => window.__streamAudit());
+// A control older than the probe still has the build log: derive the build
+// order and the reasons from it, with distances from the tile keys.
+const a = await q((spot) => {
+  if (window.__streamAudit) return window.__streamAudit();
+  const log = window.__buildLog();
+  const t = window.__tstats();
+  const m = /lat=(-?[\d.]+)&lon=(-?[\d.]+)/.exec(spot);
+  const lat0 = m ? +m[1] : 0, lon0 = m ? +m[2] : 0;
+  const centre = (key) => {
+    const [x, y] = key.split('/').map(Number), n = 2 ** 14;
+    const lon = ((x + 0.5) / n) * 360 - 180;
+    const lat = (Math.atan(Math.sinh(Math.PI * (1 - (2 * (y + 0.5)) / n))) * 180) / Math.PI;
+    return { d: Math.round(Math.hypot((lon - lon0) * 111320 * Math.cos((lat0 * Math.PI) / 180), (lat - lat0) * 111320)), ahead: null };
+  };
+  const byWhy = {}, perTile = new Map(), seen = new Set(), firstOrder = [];
+  for (const b of log) {
+    const w = b.why.split(':')[0]; byWhy[w] = (byWhy[w] ?? 0) + 1;
+    perTile.set(b.key, (perTile.get(b.key) ?? 0) + 1);
+    if (!seen.has(b.key)) { seen.add(b.key); firstOrder.push({ key: b.key, at: b.at, ...centre(b.key) }); }
+  }
+  return { fromBuildLog: true, terrain: { tiles: t.meshes, builds: t.builds, byWhy, perTile: [...perTile].map(([key, n]) => ({ key, n })).sort((p, q) => q.n - p.n).slice(0, 10), firstOrder, fetchOrder: [], dirty: t.dirty, held: null },
+    osm: { ask: [], done: t.osmDone, inFlight: t.inFlight, queued: t.queued }, far: { level: null, tiles: null, asked: null, fetchOrder: [] }, drapes: { drapes: null, ofDrapes: null } };
+}, SPOT);
+if (a.fromBuildLog) console.log(`[${el()}] (no __streamAudit at this revision: build order and reasons from the last ${Math.min(400, a.terrain.builds)} entries of __buildLog)`);
 writeFileSync(join(OUT, `audit-${TAG}.json`), JSON.stringify({ samples, audit: a }, null, 1));
 const tr = a.terrain;
 console.log(`[${el()}] terrain: ${tr.tiles} tiles, ${tr.builds} builds (${(tr.builds / Math.max(1, tr.tiles)).toFixed(1)} per tile), by reason ${JSON.stringify(tr.byWhy)}; worst tiles ${JSON.stringify(tr.perTile.slice(0, 6))}`);
