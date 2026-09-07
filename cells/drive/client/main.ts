@@ -20,6 +20,7 @@ import { ALT_BAND_NAMES, AltBand, BIOME_ORDER, ClimateField, GROUND_RAMPS, altBa
 import { createAudio, type ImpactKind } from './audio';
 import { coastKm } from './coast';
 import { clamp } from './num';
+import { nearestStable, squareRings, uploadPrefix } from './render-work';
 import { URL_OWNED, qs, qsHas, switchRows } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
@@ -7591,11 +7592,11 @@ function ensureVegCapacity(m: THREE.InstancedMesh, need: number): void {
   const have = m.instanceMatrix.count;
   if (need <= have) return;
   const cap = Math.ceil(Math.max(need, have * 1.6) / 128) * 128;
-  const attrs = (renderer as unknown as {
-    attributes?: { remove: (attribute: THREE.BufferAttribute) => void };
-  }).attributes;
-  attrs?.remove(m.instanceMatrix);
-  if (m.instanceColor) attrs?.remove(m.instanceColor);
+  // WebGLRenderer does not expose its attribute cache. The old optional
+  // `renderer.attributes` access did nothing, retaining GPU buffers whenever
+  // a pool grew. InstancedMesh.dispose releases just its instance buffers;
+  // the shared geometry/material survive and three reattaches on the next draw.
+  m.dispose();
   m.instanceMatrix = new THREE.InstancedBufferAttribute(new Float32Array(cap * 16), 16);
   m.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
   m.instanceColor = new THREE.InstancedBufferAttribute(new Float32Array(cap * 3), 3);
@@ -9769,17 +9770,11 @@ function refreshVeg(): void {
   // fills it is the far plants that get dropped — visiting the grid in raster
   // order let distant thickets eat the caps and leave the ground you are
   // actually looking at bare.
-  const ring: Array<[number, number]> = [];
-  for (let d = 0; d <= reach; d++) {
-    for (let gx = cx - d; gx <= cx + d; gx++) {
-      for (let gz = cz - d; gz <= cz + d; gz++) {
-        if (Math.max(Math.abs(gx - cx), Math.abs(gz - cz)) === d) ring.push([gx, gz]);
-      }
-    }
-  }
+  const ring = squareRings(cx, cz, reach);
   const ezCounts: Record<EzFamily, number> = ezRecord(() => 0);
   const ezVariant = new WeakMap<PlacedVegSite, number>();
   const ezNeed: Record<EzFamily, number[]> = ezRecord((f) => ezTiers[f].map(() => 0));
+  const ezNeedNear: Record<EzFamily, number[]> = ezRecord((f) => ezTiers[f].map(() => 0));
   for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) { t.n = 0; t.nNear = 0; t.nFar = 0; }
   ezPlaced = [];
   vegMark('ring');
@@ -9812,23 +9807,26 @@ function refreshVeg(): void {
     }
     vegMark('ezGather');
     for (const fam of EZ_FAMILIES) {
-      const list = cand[fam];
+      let list = cand[fam];
       const cap = ezCapFor(fam);
       if (list.length > cap) {
-        list.sort((p, q) => p[0] - q[0]);
-        list.length = cap;
+        list = nearestStable(list, cap, p => p[0]);
         ezEdge[fam] = cap > 0 ? Math.sqrt(list[cap - 1][0]) : 0;
       }
-      for (const [, v] of list) {
+      for (const [d2, v] of list) {
         ezAdmit.add(v);
         const vi = ezVariantAt(fam, v.x, v.z);
         ezVariant.set(v, vi);
         ezNeed[fam][vi] = (ezNeed[fam][vi] ?? 0) + 1;
+        if (d2 < shadowSpan * shadowSpan) ezNeedNear[fam][vi]++;
       }
       ezTiers[fam].forEach((t, vi) => {
         const need = ezNeed[fam][vi] ?? 0;
-        ensureVegCapacity(t.near, need);
-        ensureVegCapacity(t.far, need);
+        // These are disjoint populations, not two copies of the whole wood.
+        // Road vetoes can only reduce the admitted counts below these needs.
+        const nearNeed = ezNeedNear[fam][vi] ?? 0;
+        ensureVegCapacity(t.near, nearNeed);
+        ensureVegCapacity(t.far, need - nearNeed);
       });
     }
   }
@@ -9850,6 +9848,12 @@ function refreshVeg(): void {
         const d2v = dx * dx + dz * dz;
         const tree = isTreeKind(v.k);
         if (d2v > (tree ? treeR2 : vegR2)) continue;
+        // Admission and full pools already rule these sites out. Test before
+        // querying streamed roads: road clearance still runs for every site
+        // that can be drawn, including after new road data arrives.
+        if (EZ_ON && isEzKind(v.k)) {
+          if (!ezAdmit.has(v)) continue;
+        } else if (counts[v.k] >= VEG_CAP[v.k] * vegScale * (tree ? treePopulationScale : 1)) continue;
         // NOTHING GROWS ON THE TARMAC. `pushSite` already refuses a site on a
         // carriageway, but a cell is seeded ONCE and the roads through it
         // stream in afterwards — so every cell seeded before its own road
@@ -9875,7 +9879,7 @@ function refreshVeg(): void {
           if (!ezAdmit.has(v)) continue;
           const vi = ezVariant.get(v) ?? ezVariantAt(fam, v.x, v.z);
           const tier = ezTiers[fam][vi];
-          if (!tier || tier.n >= tier.near.instanceMatrix.count) continue;
+          if (!tier) continue;
           const y = groundAt(v.x, v.z);
           const formSy = clamp(1 + ((v.sy ?? 1) - 1) * treeFormScale, 0.18, 4.5);
           const formSw = clamp(1 + ((v.sw ?? 1) - 1) * treeFormScale, 0.18, 4.5);
@@ -9967,19 +9971,19 @@ function refreshVeg(): void {
     if (k === 'grass') continue;              // the sward keeps its own clock
     const m = vegMeshes[k];
     m.count = counts[k];
-    m.instanceMatrix.needsUpdate = true;
-    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+    uploadPrefix(m.instanceMatrix, m.count);
+    uploadPrefix(m.instanceColor, m.count);
   }
   trunks.count = trunkN;
-  trunks.instanceMatrix.needsUpdate = true;
+  uploadPrefix(trunks.instanceMatrix, trunkN);
   for (const fam of EZ_FAMILIES) {
     for (const t of ezTiers[fam]) {
       t.near.count = t.nNear;
-      t.near.instanceMatrix.needsUpdate = true;
-      if (t.near.instanceColor) t.near.instanceColor.needsUpdate = true;
+      uploadPrefix(t.near.instanceMatrix, t.nNear);
+      uploadPrefix(t.near.instanceColor, t.nNear);
       t.far.count = t.nFar;
-      t.far.instanceMatrix.needsUpdate = true;
-      if (t.far.instanceColor) t.far.instanceColor.needsUpdate = true;
+      uploadPrefix(t.far.instanceMatrix, t.nFar);
+      uploadPrefix(t.far.instanceColor, t.nFar);
     }
   }
   vegMark('upload');
@@ -31420,8 +31424,8 @@ function updatePois(): void {
   // means — so the mode only ever changes how much SCENERY rides along.
   const cap = poiVis === 1 ? 0 : poiVis === 3 ? 8 : 3;
   const near = pinned.concat(
-    all.filter((e) => !e.p.pinned && e.d < 3000 && !shadowed.has(e.p.name.toUpperCase()))
-      .sort((a, b) => a.d - b.d).slice(0, Math.max(0, cap - Math.min(2, pinned.length))),
+    nearestStable(all.filter((e) => !e.p.pinned && e.d < 3000 && !shadowed.has(e.p.name.toUpperCase())),
+      Math.max(0, cap - Math.min(2, pinned.length)), e => e.d),
   );
   camera.getWorldDirection(camFwd);
   poiDraw = [];

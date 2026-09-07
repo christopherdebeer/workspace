@@ -1,0 +1,257 @@
+function refreshVeg(): void {
+  const t0 = performance.now();
+  for (const k of Object.keys(vegPhase)) delete vegPhase[k];
+  vegPhaseAt = t0;
+  vegSeedNow = 0;
+  vegSeedMsNow = 0;
+  vegSeedDeferred = 0;
+  // What the FRAME has already spent on other heavy work comes out of the
+  // budget, so a refresh that lands on a terrain apply or a hydro build seeds
+  // little or nothing rather than stacking on top of it.
+  vegSeedLeft = VEG_SEED_BUDGET ? Math.max(0, VEG_SEED_MS - frameHeavyMs()) : Infinity;
+  const counts: Record<string, number> = { broadleaf: 0, conifer: 0, palm: 0, snag: 0, bush: 0, rock: 0, grass: 0,
+    acacia: 0, cactus: 0, fern: 0, log: 0, spire: 0 };
+  const activeRoles = emptyVegRoles();
+  let activeAnchors = 0;
+  let trunkN = 0;
+  const cx = Math.floor(state.x / VEG_CELL), cz = Math.floor(state.z / VEG_CELL);
+  const reach = Math.ceil(Math.max(VEG_RANGE, treeRange) / VEG_CELL);
+  const vegR2 = VEG_RANGE * VEG_RANGE;
+  const treeR2 = treeRange * treeRange;
+  // NEAREST FIRST. Walk cells in rings outward from the truck, so when a pool
+  // fills it is the far plants that get dropped — visiting the grid in raster
+  // order let distant thickets eat the caps and leave the ground you are
+  // actually looking at bare.
+  const ring: Array<[number, number]> = [];
+  for (let d = 0; d <= reach; d++) {
+    for (let gx = cx - d; gx <= cx + d; gx++) {
+      for (let gz = cz - d; gz <= cz + d; gz++) {
+        if (Math.max(Math.abs(gx - cx), Math.abs(gz - cz)) === d) ring.push([gx, gz]);
+      }
+    }
+  }
+  const ezCounts: Record<EzFamily, number> = ezRecord(() => 0);
+  const ezVariant = new WeakMap<PlacedVegSite, number>();
+  const ezNeed: Record<EzFamily, number[]> = ezRecord((f) => ezTiers[f].map(() => 0));
+  for (const fam of EZ_FAMILIES) for (const t of ezTiers[fam]) { t.n = 0; t.nNear = 0; t.nFar = 0; }
+  ezPlaced = [];
+  vegMark('ring');
+  // ── THE TREES ARE ADMITTED BY DISTANCE, NOT BY CELL ──
+  //
+  // The tree budget scales the tree caps to a few hundred, so in any wood
+  // the cap binds — and a cap that binds in RING order is a cap that
+  // rerolls: the rings are square, 220 m a step, cells within a ring come in
+  // grid order and sites within a cell in seed order, so crossing a cell
+  // boundary re-centred the rings and admitted a different subset of trees.
+  // Seen from the seat as vegetation popping in and out and rerolling as
+  // you drive. The tree kinds are gathered first and the nearest N of each
+  // admitted by true distance, so the admitted set changes only at its far
+  // edge, and the crowns fade toward the ground over the last third of that
+  // edge so a tree is a smudge before it is gone.
+  const ezAdmit = new Set<PlacedVegSite>();
+  const ezEdge: Record<EzFamily, number> = ezRecord(() => treeRange);
+  if (EZ_ON) {
+    const cand: Record<EzFamily, Array<[number, PlacedVegSite]>> = ezRecord(() => [] as Array<[number, PlacedVegSite]>);
+    for (const [gx, gz] of ring) {
+      seedCell(gx, gz);
+      const cell = vegGrid.get(`${gx},${gz}`);
+      if (!cell) continue;
+      for (const v of cell) {
+        if (!isEzKind(v.k)) continue;
+        const dx = v.x - state.x, dz = v.z - state.z;
+        const d2 = dx * dx + dz * dz;
+        if (d2 < treeR2) cand[v.k].push([d2, v]);
+      }
+    }
+    vegMark('ezGather');
+    for (const fam of EZ_FAMILIES) {
+      const list = cand[fam];
+      const cap = ezCapFor(fam);
+      if (list.length > cap) {
+        list.sort((p, q) => p[0] - q[0]);
+        list.length = cap;
+        ezEdge[fam] = cap > 0 ? Math.sqrt(list[cap - 1][0]) : 0;
+      }
+      for (const [, v] of list) {
+        ezAdmit.add(v);
+        const vi = ezVariantAt(fam, v.x, v.z);
+        ezVariant.set(v, vi);
+        ezNeed[fam][vi] = (ezNeed[fam][vi] ?? 0) + 1;
+      }
+      ezTiers[fam].forEach((t, vi) => {
+        const need = ezNeed[fam][vi] ?? 0;
+        ensureVegCapacity(t.near, need);
+        ensureVegCapacity(t.far, need);
+      });
+    }
+  }
+  vegMark('ezAdmit');
+  // Archetype trees (?ez=0, plus palms/acacias) and their trunks use the same
+  // real population ceiling. Pools only grow when an upper stop needs them.
+  for (const k of TREE_KINDS) {
+    if (EZ_ON && isEzKind(k)) continue;
+    ensureVegCapacity(vegMeshes[k], Math.ceil(VEG_CAP[k] * vegScale * treePopulationScale));
+  }
+  ensureVegCapacity(trunks, Math.ceil(3600 * vegScale * treePopulationScale));
+  for (const [gx, gz] of ring) {
+    {
+      seedCell(gx, gz);
+      const cell = vegGrid.get(`${gx},${gz}`);
+      if (!cell) continue;
+      for (const v of cell) {
+        const dx = v.x - state.x, dz = v.z - state.z;
+        const d2v = dx * dx + dz * dz;
+        const tree = isTreeKind(v.k);
+        if (d2v > (tree ? treeR2 : vegR2)) continue;
+        // NOTHING GROWS ON THE TARMAC. `pushSite` already refuses a site on a
+        // carriageway, but a cell is seeded ONCE and the roads through it
+        // stream in afterwards — so every cell seeded before its own road
+        // arrived kept a hedge down the middle of it. Tested again here, where
+        // the road is finally known, with a margin that also keeps scrub off
+        // the shoulder you drive the wheels along.
+        //
+        // Rocks are the exception, thinned rather than cleared: a boulder that
+        // has come down onto the road is a hazard worth meeting, and they are
+        // the one kind the truck already knows how to hit. A stable per-site
+        // hash keeps the same quarter of them every frame instead of a verge
+        // that flickers.
+        const on = onCarriageway(v.x, v.z, 1.2);
+        if (on.road || on.track) {
+          if (v.k !== 'rock') continue;
+          if ((((v.x * 73856093) ^ (v.z * 19349663)) >>> 0) % 4 !== 0) continue;
+        }
+        if (EZ_ON && isEzKind(v.k)) {
+          // A skeleton instead of the archetype and its trunk, stood at the
+          // height the archetype would have reached, crown included. The
+          // kind's cap and the far dissolve are the archetype's own.
+          const fam = v.k;
+          if (!ezAdmit.has(v)) continue;
+          const vi = ezVariant.get(v) ?? ezVariantAt(fam, v.x, v.z);
+          const tier = ezTiers[fam][vi];
+          if (!tier || tier.n >= tier.near.instanceMatrix.count) continue;
+          const y = groundAt(v.x, v.z);
+          const formSy = clamp(1 + ((v.sy ?? 1) - 1) * treeFormScale, 0.18, 4.5);
+          const formSw = clamp(1 + ((v.sw ?? 1) - 1) * treeFormScale, 0.18, 4.5);
+          const total = EZ_M_PER_SCALE[fam] * v.s * formSy * treeSizeScale;
+          const H = total / (1 + ezCrownReach(fam));
+          vegDummy.position.set(v.x, y, v.z);
+          vegDummy.rotation.set((v.tl ?? 0) * treeFormScale, v.rot, 0);
+          vegDummy.scale.set(H * formSw, H, H * formSw);
+          vegDummy.updateMatrix();
+          const casts = d2v < shadowSpan * shadowSpan;
+          const mesh = casts ? tier.near : tier.far;
+          const slot = casts ? tier.nNear++ : tier.nFar++;
+          mesh.setMatrixAt(slot, vegDummy.matrix);
+          // Distance over the ADMITTED edge, not the plant range: the budget's
+          // edge is where a tree vanishes, so that is where it must fade.
+          const tt = Math.sqrt(d2v) / Math.max(120, ezEdge[fam]);
+          if (vegRoleDebug) {
+            mesh.setColorAt(slot, VEG_ROLE_COL[v.anchor ? 'anchor' : v.role]);
+          } else if (tt > 0.66) {
+            const fmv = Math.min(1, (tt - 0.66) / 0.34);
+            const mixv = fmv * 0.7;
+            const [tr, tg, tb] = terrainPalette(y + baseElev, 0, sampleCover(v.x, v.z), v.x, v.z);
+            swardCol.setRGB(v.c.r + (tr - v.c.r) * mixv, v.c.g + (tg - v.c.g) * mixv, v.c.b + (tb - v.c.b) * mixv);
+            mesh.setColorAt(slot, swardCol);
+          } else mesh.setColorAt(slot, v.c);
+          tier.n++;
+          ezCounts[fam]++;
+          if (ezPlaced.length < 600) ezPlaced.push({ k: v.k, role: v.role, x: +v.x.toFixed(1), z: +v.z.toFixed(1), h: +v.h.toFixed(2), s: +v.s.toFixed(2), sy: +formSy.toFixed(2), sw: +formSw.toFixed(2), variant: vi, H: +H.toFixed(2), casts: casts ? 1 : 0 });
+          activeRoles[v.role]++;
+          if (v.anchor) activeAnchors++;
+          continue;
+        }
+        const mesh = vegMeshes[v.k];
+        const i = counts[v.k];
+        const kindScale = tree ? treePopulationScale : 1;
+        if (i >= VEG_CAP[v.k] * vegScale * kindScale) continue;
+        const y = groundAt(v.x, v.z);
+        const size = tree ? treeSizeScale : 1;
+        const form = tree ? treeFormScale : 1;
+        const siteS = v.s * size;
+        const siteH = v.h * size;
+        const formSy = clamp(1 + ((v.sy ?? 1) - 1) * form, 0.18, 4.5);
+        const formSw = clamp(1 + ((v.sw ?? 1) - 1) * form, 0.18, 4.5);
+        vegDummy.position.set(v.x, y + siteH, v.z);
+        vegDummy.rotation.set((v.tl ?? 0) * form, v.rot, 0);
+        vegDummy.scale.set(siteS * formSw, siteS * formSy, siteS);
+        vegDummy.updateMatrix();
+        mesh.setMatrixAt(i, vegDummy.matrix);
+        activeRoles[v.role]++;
+        if (v.anchor) activeAnchors++;
+        // The same dissolve the sward does, at the scatter's own horizon: the
+        // last ranks of scrub slide toward the colour of the ground they stand
+        // on instead of standing as saturated confetti against it (and instead
+        // of alpha, which sorts badly and reads as ghosts). Tall kinds keep
+        // more of themselves — a distant conifer is seen against the terrain
+        // BEHIND it, not under it.
+        const tt = Math.sqrt(d2v) / (tree ? treeRange : VEG_RANGE);
+        if (vegRoleDebug) {
+          mesh.setColorAt(i, VEG_ROLE_COL[v.anchor ? 'anchor' : v.role]);
+        } else if (tt > 0.5) {
+          // LINEAR, not squared: a squared ramp left scrub on a 70%-range
+          // ridge line at nine-tenths saturation — precisely the confetti the
+          // dissolve exists to kill. Linear starts telling at mid-range.
+          const fmv = (tt - 0.5) / 0.5;
+          const mixv = fmv * (v.h > 0 ? 0.55 : 0.85);
+          const [tr, tg, tb] = terrainPalette(y + baseElev, 0, sampleCover(v.x, v.z), v.x, v.z);
+          swardCol.setRGB(
+            v.c.r + (tr - v.c.r) * mixv,
+            v.c.g + (tg - v.c.g) * mixv,
+            v.c.b + (tb - v.c.b) * mixv,
+          );
+          mesh.setColorAt(i, swardCol);
+        } else mesh.setColorAt(i, v.c);
+        counts[v.k] = i + 1;
+        if (v.h > 0 && trunkN < trunks.instanceMatrix.count) {
+          vegDummy.position.set(v.x, y, v.z);
+          vegDummy.rotation.set(0, 0, 0);
+          // The trunk wears its crown's width, or a spreading acacia stands on
+          // a sapling's stem and a slender fir on a fencepost.
+          vegDummy.scale.set(siteS * 0.42 * formSw, trunkReach(v.k, siteH, siteS), siteS * 0.42 * formSw);
+          vegDummy.updateMatrix();
+          trunks.setMatrixAt(trunkN++, vegDummy.matrix);
+        }
+      }
+    }
+  }
+  vegMark('place');
+  for (const k of Object.keys(vegMeshes) as VegKind[]) {
+    if (k === 'grass') continue;              // the sward keeps its own clock
+    const m = vegMeshes[k];
+    m.count = counts[k];
+    m.instanceMatrix.needsUpdate = true;
+    if (m.instanceColor) m.instanceColor.needsUpdate = true;
+  }
+  trunks.count = trunkN;
+  trunks.instanceMatrix.needsUpdate = true;
+  for (const fam of EZ_FAMILIES) {
+    for (const t of ezTiers[fam]) {
+      t.near.count = t.nNear;
+      t.near.instanceMatrix.needsUpdate = true;
+      if (t.near.instanceColor) t.near.instanceColor.needsUpdate = true;
+      t.far.count = t.nFar;
+      t.far.instanceMatrix.needsUpdate = true;
+      if (t.far.instanceColor) t.far.instanceColor.needsUpdate = true;
+    }
+  }
+  vegMark('upload');
+  vegActiveRoles = activeRoles;
+  ezEdgeLast = ezRecord((f) => Math.round(ezEdge[f]));
+  refreshShrubs();
+  vegMark('shrubs');
+  vegActiveAnchors = activeAnchors;
+  vegMs = performance.now() - t0;
+  // Forget buckets far behind so a long drive cannot grow the site list
+  // without bound. They regenerate identically if you come back.
+  if (vegGrid.size > 900) {
+    for (const key of vegGrid.keys()) {
+      const [kx, kz] = key.split(',').map(Number);
+      if (Math.abs(kx - cx) > reach + 3 || Math.abs(kz - cz) > reach + 3) {
+        vegGrid.delete(key);
+        vegSeeded.delete(key);
+        vegSeedStats.delete(key);
+      }
+    }
+  }
+}
