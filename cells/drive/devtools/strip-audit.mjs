@@ -36,8 +36,8 @@ for (let i = 0; i < POLLS; i++) {
 }
 if (!settled) console.log(`[${el()}] NOT SETTLED after ${POLLS * 3}s: ${JSON.stringify(last)}`);
 const a = await q(() => window.__stripAudit(3000, 10));
-console.log(`[${el()}] strips ${a.strips} verts ${a.verts}: without ground ${a.vertsWithoutGround}; off the mesh >5m ${a.stripsOffGroundOver5m}; spanning >25m ${a.stripsSpanningOver25m}; fill ${JSON.stringify(a.fill)}`);
-for (const s of a.tallest) console.log(`  span ${s.span}m tile ${s.tile} verts ${s.verts} noTile ${s.noTile} worstOff ${s.worstOff}m at ${JSON.stringify(s.worstAt)} box ${JSON.stringify(s.box)}`);
+console.log(`[${el()}] strips ${a.strips} verts ${a.verts}: without ground ${a.vertsWithoutGround}; in the air >5m ${a.stripsInAirOver5m}; off the mesh either way >5m ${a.stripsOffGroundOver5m}; spanning >25m ${a.stripsSpanningOver25m}; fill ${JSON.stringify(a.fill)}`);
+for (const s of a.tallest) console.log(`  in air ${s.inAir}m at ${JSON.stringify(s.airAt)} tile ${s.tile} verts ${s.verts} noTile ${s.noTile} worstOff ${s.worstOff}m span ${s.span}m box ${JSON.stringify(s.box)}`);
 writeFileSync(join(OUT, `audit${process.env.TAG ? `-${process.env.TAG}` : REV ? '-ctl' : ''}.json`), JSON.stringify(a, null, 1));
 if (process.env.FRAME === '1') {
   await q(() => window.__draw(true));

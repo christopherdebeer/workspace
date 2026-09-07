@@ -1375,6 +1375,31 @@ What the numbers said, against what the seat said:
   reads is the wedge seam in the corner quadrant, which the union rule closes;
   corner transects with a mesh step over 0.5m in half a metre went 4 → 2.
 
+**THE SHEET TO THE SKY IS A STRIP SEATED ON GROUND THAT WAS NEVER THERE.**
+Reported from the cab at Glencairn (`?lat=-34.15515&lon=18.43619&h=14`, taken
+BEFORE any of the above shipped): a batter strip drawn as a dark sheet from
+the verge into the sky over a hillside and a sward that were fine underneath,
+while the HUD read RETRYING WORLD DATA. `sampleHeightRaw` answers 0 where no
+height tile is loaded — relative height 0, the ORIGIN'S elevation — and
+`flushBatter`'s steps reach thirty metres past the kerb into whatever tile is
+there, or is not: a bay flushed beside a tile on a retry reads the origin's
+elevation as the hillside and draws its face or bank to it. The stranded
+sweep guarded only the bay's own midpoint. A run that reaches unknown
+ground before it has met anything is now parked on that point
+(`waitX/waitZ/waitTiles`) and looked at again only when a height tile has
+landed somewhere; nothing is drawn meanwhile and the fascia keeps the road
+edge closed, as it does for every bay still waiting. `fillUnknown` counts
+the parkings. **Unverified at the spot**: `devtools/strip-audit.mjs` ran
+there twice through the relay, six minutes each, and the world never
+settled (8 of 25 vector tiles home), so the audit saw nine strips and not
+one vertex without a tile under it, before or after. The mechanism is the
+only path that can put a strip at the origin's elevation, and the guard
+withholds nothing a loaded world would have drawn; that is the evidence,
+and it is code reading, not a reproduction. `__stripAudit` reports the
+strips standing IN THE AIR over the mesh separately from those buried in
+it — the first cut took the absolute, and a cliff face lying inside the
+hill read the same as one standing in front of it.
+
 **Only three of the fixture's twenty tiles carry a corridor, and that is
 right.** The road box spans four z14 tiles; one is False Bay. The quiet path
 refines one tile a visit, only tiles a strip reaches, and stops when none are

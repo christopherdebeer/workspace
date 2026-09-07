@@ -27753,31 +27753,37 @@ function meshHeightAt(x: number, z: number): number | null {
  */
 (window as unknown as { __stripAudit?: object }).__stripAudit = (r = 800, top = 8): object => {
   const rows: object[] = [];
-  let strips = 0, verts = 0, noTile = 0, off5 = 0, tall = 0;
+  let strips = 0, verts = 0, noTile = 0, off5 = 0, tall = 0, air5 = 0;
   for (const d of drapedWays) {
     if (!d.mesh) continue;
     const mx = (d.x0 + d.x1) / 2, mz = (d.z0 + d.z1) / 2;
     if (Math.hypot(mx - state.x, mz - state.z) > r) continue;
     strips++;
     const pos = d.geo.attributes.position as THREE.BufferAttribute;
-    let nt = 0, worst = 0, lo = Infinity, hi = -Infinity;
-    let worstAt: number[] | null = null;
+    let nt = 0, worst = 0, air = 0, lo = Infinity, hi = -Infinity;
+    let worstAt: number[] | null = null, airAt: number[] | null = null;
     for (let i = 0; i < pos.count; i++) {
       const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
       verts++;
       lo = Math.min(lo, y); hi = Math.max(hi, y);
       if (!hasHeight(x, z)) { nt++; continue; }
-      const g = Math.abs(y - groundAt(x, z));
-      if (g > worst) { worst = g; worstAt = [+x.toFixed(1), +z.toFixed(1), +y.toFixed(1)]; }
+      // ABOVE the mesh is a sheet in the air; below it is buried and unseen.
+      // The first cut took the absolute and could not tell a cliff face
+      // standing in front of the hill from one lying inside it.
+      const dy = y - groundAt(x, z);
+      if (Math.abs(dy) > worst) { worst = Math.abs(dy); worstAt = [+x.toFixed(1), +z.toFixed(1), +y.toFixed(1)]; }
+      if (dy > air) { air = dy; airAt = [+x.toFixed(1), +z.toFixed(1), +y.toFixed(1)]; }
     }
     noTile += nt;
     if (worst > 5) off5++;
+    if (air > 5) air5++;
     if (hi - lo > 25) tall++;
     rows.push({ tile: d.tile ?? null, verts: pos.count, noTile: nt, worstOff: +worst.toFixed(1), worstAt,
+      inAir: +air.toFixed(1), airAt,
       span: +(hi - lo).toFixed(1), box: [Math.round(d.x0), Math.round(d.z0), Math.round(d.x1), Math.round(d.z1)] });
   }
-  rows.sort((p, q) => (q as { span: number }).span - (p as { span: number }).span);
-  return { strips, verts, vertsWithoutGround: noTile, stripsOffGroundOver5m: off5, stripsSpanningOver25m: tall,
+  rows.sort((p, q) => (q as { inAir: number }).inAir - (p as { inAir: number }).inAir);
+  return { strips, verts, vertsWithoutGround: noTile, stripsOffGroundOver5m: off5, stripsInAirOver5m: air5, stripsSpanningOver25m: tall,
     fill: { drawn: spanStats.fillDrawn, unmet: spanStats.fillUnmet, corridor: spanStats.fillCorridor, dropped: spanStats.fillDropped, stranded: spanStats.fillStranded,
       unknown: spanStats.fillUnknown, waiting: pendingBatter.filter((b) => b.waitTiles !== undefined).length, pending: pendingBatter.length },
     tallest: rows.slice(0, top) };
