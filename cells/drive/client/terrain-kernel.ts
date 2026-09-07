@@ -394,10 +394,37 @@ export function createTerrainKernel() {
     s.reach = r + far + 0.5;
     return out;
   }
-  /** The corridor profile at a point: the height the terrain takes there and
-   *  what it is — 0 ground, 1 floor, 2 cut face, 3 fill bank. */
-  /** The corridor profile at a point: the height the terrain takes there and
-   *  what it is — 0 ground, 1 floor, 2 cut face, 3 fill bank. */
+  /** The natural ground at a strip's crest, at the foot of (x,z) — the
+   *  structure test's witness: a crest standing DECK_GAP_T over it is a deck
+   *  in the air, and a deck gets no bank. */
+  function crestGround(S: TerrainStore, s: StripLike, x: number, z: number): number {
+    const dx = s.bx - s.ax, dz = s.bz - s.az, l2 = dx * dx + dz * dz || 1;
+    const tt = clamp(((x - s.ax) * dx + (z - s.az) * dz) / l2, 0, 1);
+    const px = s.ax + dx * tt, pz = s.az + dz * tt, l = Math.sqrt(l2);
+    const sgn = ((x - px) * (-dz / l) + (z - pz) * (dx / l)) >= 0 ? 1 : -1;
+    const r = s.hw + 0.6;
+    return S.sampleHeight(px + (-dz / l) * sgn * r, pz + (dx / l) * sgn * r);
+  }
+  /**
+   * The corridor profile at a point: the height the terrain takes there and
+   * what it is — 0 ground, 1 floor, 2 cut face, 3 fill bank.
+   *
+   * EVERY STRIP IN REACH HAS A SAY, NOT THE NEAREST ALONE. The first cut read
+   * the nearest strip's wedge and nobody else's, and between two roads that
+   * is wrong twice over. In the angle of a junction the answer flipped from
+   * one kerb's wedge to the other's along the bisector, so the corner carried
+   * whichever bank or face happened to be nearer, with a seam where they met.
+   * And between two terraced roads — Simon's Town's report spot, a road 2.9m
+   * above its neighbour and 2.5m from it — the lower road's cut face was the
+   * nearer wedge, so the mesh ran that face up the gap while the batter
+   * strip, drawn per bay from the upper kerb, laid the upper road's bank down
+   * the same gap: a bank standing 1.4m over the ground the wheels read,
+   * measured with __batterLine. Earthworks are a union. Every fill bank that
+   * stands over the ground is built and the highest of them IS the ground;
+   * every cut face is dug and the lowest of them is; and a fill stands on a
+   * cut, so where both apply the bank wins and stops at the lower road's
+   * shoulder — the retaining wall two terraces actually have.
+   */
   function corridorH(S: TerrainStore, x: number, z: number, N: number, cands?: Iterable<StripLike>): { h: number; k: number } {
     let list: Iterable<StripLike> | undefined = cands;
     if (!list) {
@@ -407,38 +434,43 @@ export function createTerrainKernel() {
     }
     let floor = Infinity;
     let near: StripLike | null = null, nearOut = Infinity, nearY = 0;
+    // The highest fill bank standing over the ground here, and the lowest cut
+    // face dug under it, over every strip whose wedge reaches this point.
+    let up = -Infinity, down = Infinity;
+    let wet: boolean | null = null;
     for (const s of list) {
       if (s.tk || s.tn || s.ya === undefined || s.yb === undefined) continue;
       const f = stripFloor(s, x, z);
-      if (f.out <= 0) floor = Math.min(floor, f.y - CUT_CLEAR);
-      if (f.out < nearOut) { nearOut = f.out; near = s; nearY = f.y - CUT_CLEAR; }
+      const y = f.y - CUT_CLEAR;
+      if (f.out <= 0) floor = Math.min(floor, y);
+      if (f.out < nearOut) { nearOut = f.out; near = s; nearY = y; }
+      if (f.out <= 0 || f.out > TOE_REACH) continue;
+      if (N > y) {
+        // A cut face, while it can still meet the hill: past CUT_REACH an
+        // unmet face has stepped up to the ground and says nothing.
+        const face = y + f.out * CUTF_K;
+        if (f.out < CUT_REACH_M && face < N) down = Math.min(down, face);
+      } else {
+        const bank = y - f.out * BANK_K;
+        if (bank <= N) continue;
+        // Water takes no bank, and neither does a deck standing in the air.
+        if (wet === null) wet = S.coverWater(x, z);
+        if (wet || y - crestGround(S, s, x, z) > DECK_GAP_T) continue;
+        up = Math.max(up, bank);
+      }
     }
     if (near === null) return { h: N, k: 0 };
-    // A structure stands clear of the ground: the crest of the nearest strip,
-    // at the foot of this point, against the ground there.
-    const dx = near.bx - near.ax, dz = near.bz - near.az, l2 = dx * dx + dz * dz || 1;
-    const tt = clamp(((x - near.ax) * dx + (z - near.az) * dz) / l2, 0, 1);
-    const px = near.ax + dx * tt, pz = near.az + dz * tt, l = Math.sqrt(l2);
-    const sgn = ((x - px) * (-dz / l) + (z - pz) * (dx / l)) >= 0 ? 1 : -1;
-    const r = near.hw + 0.6;
-    const crestN = S.sampleHeight(px + (-dz / l) * sgn * r, pz + (dx / l) * sgn * r);
-    const structure = nearY - crestN > DECK_GAP_T;
     if (floor < Infinity) {
       // Under a carriageway or its shoulder: the floor. Dug to it where the
       // ground stands above, raised to it where the ground falls away so an
       // embankment is solid — unless the road stands clear, or this is water.
       if (N >= floor) return { h: floor, k: 1 };
+      const structure = nearY - crestGround(S, near, x, z) > DECK_GAP_T;
       return structure || S.coverWater(x, z) ? { h: N, k: 0 } : { h: floor, k: 1 };
     }
-    const out = nearOut;
-    if (N > nearY) {
-      const face = nearY + out * CUTF_K;
-      if (out >= CUT_REACH_M && N > face) return { h: N, k: 0 };
-      return face < N ? { h: face, k: 2 } : { h: N, k: 0 };
-    }
-    if (structure || S.coverWater(x, z)) return { h: N, k: 0 };
-    const bank = nearY - out * BANK_K;
-    return bank > N ? { h: bank, k: 3 } : { h: N, k: 0 };
+    if (up > -Infinity) return { h: up, k: 3 };
+    if (down < Infinity) return { h: down, k: 2 };
+    return { h: N, k: 0 };
   }
   /** The triangles of each lattice cell of a terrain geometry: `offs[c]..offs[c+1]`
    *  index triples into `tris`. Two per cell on a plain grid, any number on a

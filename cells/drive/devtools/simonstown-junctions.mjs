@@ -21,6 +21,8 @@
  *
  *   node devtools/simonstown-junctions.mjs
  *   SIMONS_OUT=… FIX=at-campsbay REV=<sha> REFINE=0 FRAMES=0 node …
+   NODES=309.5,70.2 node …                      # one junction, for a before/after
+   SPOTS=302,84,210 REV=<sha> node …            # the control, stood where the run above stood
  *
  * `REFINE=0` runs the plain lattice with the carve and the strip — the path a
  * tile takes beyond REFINE_R and before the road stream is quiet — which is
@@ -82,7 +84,7 @@ console.log(`[${el()}] overlap: ${JSON.stringify({ ...numbers.overlap, worst: (n
 console.log(`[${el()}] steep: over20 ${numbers.steep.over20pct} over50 ${numbers.steep.over50pct} worst ${JSON.stringify(numbers.steep.worst.slice(0, 3))}`);
 for (const row of n.worst.slice(0, 8)) console.log(`  spread ${row.spread}m at (${row.x},${row.z}) arms ${row.arms} ways ${row.ways} boxed ${row.boxed} roadY ${row.roadY}: ${row.decks.map((k) => `${k.nm}#${k.fd}@${k.y}`).join(' | ')}`);
 for (const row of n.rails.slice(0, 8)) console.log(`  rail across at (${row.x},${row.z}) spread ${row.spread} pinned ${row.pinned} boxed ${row.boxed}: ${JSON.stringify(row.rails)}`);
-for (const row of n.worst.filter((r) => r.twist > 0.3).slice(0, 6)) console.log(`  box twist ${row.twist}m at (${row.x},${row.z}) spread ${row.spread}: ${row.decks.map((k) => `${k.nm}#${k.fd}@${k.y}`).join(' | ')}`);
+for (const row of (n.twisted ?? []).slice(0, 6)) console.log(`  box twist ${row.twist}m at (${row.x},${row.z}) spread ${row.spread}: ${JSON.stringify(row.twistAt)}`);
 for (const row of n.gaps.slice(0, 8)) console.log(`  kerb ledger at (${row.x},${row.z}): kerbs ${row.kerbs} met ${row.met} drewNothing ${row.clipNone} bare ${row.bare}`);
 
 // ── transects ──
@@ -150,9 +152,19 @@ const take = (list, tag, k) => {
     if (targets.filter((t) => t.tag.startsWith(tag)).length >= k) break;
   }
 };
-take(n.worst, 'spread', 4);
-take(n.rails, 'rail', 4);
-take(n.gaps, 'gap', 4);
+if (process.env.NODES) {
+  // Named nodes, for a before/after of one junction: the row nearest each x,z.
+  const all = [...n.worst, ...n.rails, ...n.gaps, ...(n.twisted ?? [])];
+  for (const [i, pair] of process.env.NODES.split(';').entries()) {
+    const [x, z] = pair.split(',').map(Number);
+    const row = all.slice().sort((p, q) => Math.hypot(p.x - x, p.z - z) - Math.hypot(q.x - x, q.z - z))[0];
+    if (row) targets.push({ tag: `node${i + 1}`, row });
+  }
+} else {
+  take(n.worst, 'spread', 4);
+  take(n.rails, 'rail', 4);
+  take(n.gaps, 'gap', 4);
+}
 for (const { tag, row } of targets) {
   const maxHw = Math.max(...row.decks.map((k) => k.hw));
   for (const k of row.decks) {
@@ -176,14 +188,18 @@ if (FRAMES) {
   await q(() => window.__draw(true));
   await d.page.waitForTimeout(4000);
   const spots = [['origin', 0, 0, 246, 'the report spot, as the seat saw it']];
-  for (const { tag, row } of targets.slice(0, 9)) {
+  // SPOTS=x,z,h;x,z,h photographs raw placements — the way to stand a control
+  // revision exactly where the working tree stood, whatever its probes rank.
+  const raw = process.env.SPOTS ? process.env.SPOTS.split(';').map((s) => s.split(',').map(Number)) : [];
+  for (const [i, [x, z, h]] of raw.entries()) spots.push([`spot${i + 1}`, x, z, h, `raw placement (${x},${z}) heading ${h}`]);
+  for (const { tag, row } of raw.length ? [] : targets.slice(0, 9)) {
     // Stand on the narrowest arm (the joiner), 22m out, facing the node. The
     // truck's forward is (sin h, -cos h); facing back along an arm's
     // direction u means h = atan2(-ux, uz).
     const arm = row.decks.slice().sort((a, b) => a.hw - b.hw || Math.abs(b.y - (row.roadY ?? b.y)) - Math.abs(a.y - (row.roadY ?? a.y)))[0];
     const px = row.x + arm.dir[0] * 22, pz = row.z + arm.dir[1] * 22;
     const h = (Math.atan2(-arm.dir[0], arm.dir[1]) * 180) / Math.PI;
-    spots.push([tag, px, pz, h, `${tag} at (${row.x},${row.z}) spread ${row.spread} rails ${row.rails.length} drewNothing ${row.clipNone} bare ${row.bare}`]);
+    spots.push([tag, px, pz, h, `${tag} at (${row.x},${row.z}) spread ${row.spread} rails ${row.rails.length} drewNothing ${row.clipNone} bare ${row.bare} — stood at (${px.toFixed(1)},${pz.toFixed(1)}) heading ${h.toFixed(0)}`]);
   }
   for (const [name, x, z, h, why] of spots) {
     console.log(`[${el()}] ${name}: ${why}`);
