@@ -12534,6 +12534,9 @@ const spanStats = {
   /** Kerbs on a tile that carries its corridor — the wedge is the mesh, so no
    *  strip — and strips taken down when their tile took its corridor. */
   fillCorridor: 0, fillDropped: 0,
+  /** Bays parked because the ground beyond their kerb is not loaded yet —
+   *  see the unknown-ground rule in flushBatter. Counted per attempt. */
+  fillUnknown: 0,
   /** Worst mitre stretch on the carriageway, as a multiple of the nominal
    *  half-width — how far the drawn kerb runs outside `Seg.hw` at the sharpest
    *  corner in the world. 1 is a straight road; the mitre is capped at 2.4. */
@@ -12587,7 +12590,12 @@ interface Batter { ax: number; az: number; bx: number; bz: number;
   /** Nothing adjoins this end — the run starts or stops here, so the earth
    *  needs a face rather than an open edge. */
   capA: boolean; capB: boolean;
-  fid: number; nm?: string; rail: boolean }
+  fid: number; nm?: string; rail: boolean;
+  /** The first step out from the kerb that had NO HEIGHT TILE under it, and
+   *  how many height tiles the world held when that was found — the bay is
+   *  parked on that point and only looked at again once a tile has landed
+   *  somewhere. See the unknown-ground rule in flushBatter. */
+  waitX?: number; waitZ?: number; waitTiles?: number }
 const pendingBatter: Batter[] = [];
 /**
  * WHAT HAPPENED AT EVERY KERB, so "batter or rail, consistently" is a claim
@@ -13033,6 +13041,14 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       pendingBatter[kept++] = b;         // not this tile — keep waiting
       continue;
     }
+    // A bay parked on unknown ground is not tried again until a height tile
+    // has landed somewhere and the point it stopped at has ground under it.
+    // Cheap by design: thousands of bays wait at the edge of the loaded ring,
+    // and the sweep visits every one of them many times a second.
+    if (b.waitTiles !== undefined && (heightTiles.size === b.waitTiles || !hasHeight(b.waitX as number, b.waitZ as number))) {
+      pendingBatter[kept++] = b;
+      continue;
+    }
     if (stranded) spanStats.fillStranded++;
     // ON A REFINED TILE THE WEDGE IS THE MESH. The strip would draw the same
     // bank or face a second time, from the kerb's own numbers rather than the
@@ -13056,7 +13072,7 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
     // every turning. Now the step is clipped to the last clear distance and the
     // batter is drawn up to it.
     let lim = REACH, clipped = false;
-    let met = false, wet = false;
+    let met = false, wet = false, unknown = false;
     let toe0 = -1, toe1 = -1;
     for (const d0 of STEPS) {
       let d = d0;
@@ -13077,6 +13093,28 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       const f = d / 2.2;                 // nx/nz carry 2.2m of reach
       const qx0 = b.ax + b.nxA * f, qz0 = b.az + b.nzA * f;
       const qx1 = b.bx + b.nxB * f, qz1 = b.bz + b.nzB * f;
+      // ── THE GROUND HAS TO BE THERE TO BE READ ──
+      //
+      // Where no height tile is loaded, `groundAt` answers the field's zero
+      // fallback: relative height 0, which is the ORIGIN'S elevation, not this
+      // hillside's. A step landing on that is a step landing wherever the
+      // player started, and the wedge is drawn to it: a face climbing to a
+      // hill a hundred metres up, or a bank falling to a valley that is not
+      // there. Reported from the cab at Glencairn as a dark sheet from the
+      // verge into the sky over a hillside that was fine underneath — a bay
+      // flushed while its neighbour tile was on a retry. Measured with
+      // __stripAudit at the same spot: strips with vertices standing on no
+      // tile at all, spanning tens of metres. The stranded sweep guards the
+      // bay's OWN point; the steps reach thirty metres past it. A run that
+      // reaches unknown ground before it has met anything is parked on that
+      // point and tried again only when a tile has landed; nothing is drawn,
+      // and the kerb's own fascia keeps the road edge closed meanwhile, as it
+      // does for every bay still waiting.
+      if (!hasHeight(qx0, qz0) || !hasHeight(qx1, qz1)) {
+        b.waitX = hasHeight(qx0, qz0) ? qx1 : qx0;
+        b.waitZ = hasHeight(qx0, qz0) ? qz1 : qz0;
+        unknown = true; break;
+      }
       // EARTH STOPS AT THE WATER. Letting the bank run all the way to the bed
       // turns every river crossing into a causeway — measured at Noordhoek, the
       // longer reach did exactly that to the Silvermine outflow, filling the
@@ -13157,6 +13195,16 @@ function flushBatter(t: HeightTile | null, sweepBefore = 0): void {
       if (on0 && on1) { met = true; break; }
       if (clipped) break;                // ran out of room, not out of slope
     }
+    // Unknown ground before the run met anything: parked, not drawn. A run
+    // that had already met the ground, or stopped against tarmac or water,
+    // broke out above and never gets here with `unknown` set.
+    if (unknown) {
+      b.waitTiles = heightTiles.size;
+      spanStats.fillUnknown++;
+      pendingBatter[kept++] = b;
+      continue;
+    }
+    b.waitTiles = undefined;
     const reached = pts.length ? Math.max(pts[pts.length - 1][0], pts[pts.length - 1][1]) : 0;
     // Logged with what was actually DRAWN, not with what was computed. Once a
     // run that never met anything stopped being emitted, `pts.length > 0` was
@@ -27694,6 +27742,46 @@ function meshHeightAt(x: number, z: number): number | null {
  * strip is drawn, which on a refined tile is the healthy answer, because
  * there the wedge IS the mesh.
  */
+/**
+ * EVERY BATTER STRIP, AGAINST THE GROUND IT CLAIMS TO STAND ON. Per strip: how
+ * many of its vertices have NO height tile under them at all (a bank or a
+ * face built or re-seated against the field's zero fallback, which is the
+ * origin's own elevation — the sheet to the sky reported from Glencairn),
+ * how far its worst vertex stands off the mesh, and its vertical span. A
+ * strip is a wedge a few metres tall; one spanning tens of metres is not
+ * earthworks, it is a picture of a number that was never ground.
+ */
+(window as unknown as { __stripAudit?: object }).__stripAudit = (r = 800, top = 8): object => {
+  const rows: object[] = [];
+  let strips = 0, verts = 0, noTile = 0, off5 = 0, tall = 0;
+  for (const d of drapedWays) {
+    if (!d.mesh) continue;
+    const mx = (d.x0 + d.x1) / 2, mz = (d.z0 + d.z1) / 2;
+    if (Math.hypot(mx - state.x, mz - state.z) > r) continue;
+    strips++;
+    const pos = d.geo.attributes.position as THREE.BufferAttribute;
+    let nt = 0, worst = 0, lo = Infinity, hi = -Infinity;
+    let worstAt: number[] | null = null;
+    for (let i = 0; i < pos.count; i++) {
+      const x = pos.getX(i), y = pos.getY(i), z = pos.getZ(i);
+      verts++;
+      lo = Math.min(lo, y); hi = Math.max(hi, y);
+      if (!hasHeight(x, z)) { nt++; continue; }
+      const g = Math.abs(y - groundAt(x, z));
+      if (g > worst) { worst = g; worstAt = [+x.toFixed(1), +z.toFixed(1), +y.toFixed(1)]; }
+    }
+    noTile += nt;
+    if (worst > 5) off5++;
+    if (hi - lo > 25) tall++;
+    rows.push({ tile: d.tile ?? null, verts: pos.count, noTile: nt, worstOff: +worst.toFixed(1), worstAt,
+      span: +(hi - lo).toFixed(1), box: [Math.round(d.x0), Math.round(d.z0), Math.round(d.x1), Math.round(d.z1)] });
+  }
+  rows.sort((p, q) => (q as { span: number }).span - (p as { span: number }).span);
+  return { strips, verts, vertsWithoutGround: noTile, stripsOffGroundOver5m: off5, stripsSpanningOver25m: tall,
+    fill: { drawn: spanStats.fillDrawn, unmet: spanStats.fillUnmet, corridor: spanStats.fillCorridor, dropped: spanStats.fillDropped, stranded: spanStats.fillStranded,
+      unknown: spanStats.fillUnknown, waiting: pendingBatter.filter((b) => b.waitTiles !== undefined).length, pending: pendingBatter.length },
+    tallest: rows.slice(0, top) };
+};
 (window as unknown as { __batterLine?: object }).__batterLine = (x0: number, z0: number, x1: number, z1: number, n = 24): object[] => {
   const strips = worldGroup.children.filter((m) => (m as THREE.Mesh).material === MAT.batter);
   const len = Math.hypot(x1 - x0, z1 - z0);
