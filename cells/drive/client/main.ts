@@ -31812,6 +31812,7 @@ const drone = {
  *  not lying in a field somewhere — a drone you have to go and collect is not
  *  plugged into anything, which is the whole cost of running it flat. */
 const droneHome = (): boolean => !drone.up && !drone.downed && !drone.falling;
+let droneYPrev = 0;   // last frame's height, for the climb rate the voice rides
 let droneMesh: THREE.Object3D | null = null;
 // THE PARTS THAT MOVE, held so the ceremony can move them. An airframe that
 // unfolds and spins up is the whole of a deploy worth watching, and none of it
@@ -33063,6 +33064,9 @@ function updateCps(): void {
 // nodes, no assets — and it must be armed by a gesture (iOS autoplay policy).
 (window as unknown as { __armAudio?: object }).__armAudio = (): string => { audio.arm(); return audio.state; };
 (window as unknown as { __mix?: object }).__mix = (): object => audio.mix();
+/** The LEVELS, dBFS at every tap — what the ear gets, where __mix is what
+ *  the gain nodes were told. See audio.levels(). */
+(window as unknown as { __levels?: object }).__levels = (): object => audio.levels();
 (window as unknown as { __impacts?: object }).__impacts = (): object => audio.impacts();
 /** WHY THE MIX SOUNDS ENCLOSED HERE — every input, the raw verdict at the
  *  point and the glided one the mixer was handed. A ceiling is the one
@@ -33410,6 +33414,14 @@ function roughNoise(x: number, z: number): number {
 // ringing at its own natural frequency instead of following the ground. That
 // ring is what reads as the truck bouncing down a hill.
 const SUSP = { k: 55, d: 8.5, ka: 40, da: 12.6, travel: 0.26, droop: 0.34 };
+/** THE SHAKE THE EAR GETS, 0..1. The body rides the smooth plane by design
+ *  (see the contacts in tick), so nothing in the picture says the ground is
+ *  rough and the ear is the only channel left — and it said nothing: over
+ *  washboard the only chassis sounds were two one-shots at the bump stops.
+ *  This is the washboard's RATE at the four wheels, which is exactly what
+ *  the dampers are being asked to do, and it drives the rattle bed. */
+let chassisShake = 0, chassisShakeRaw = 0;   // the second unscaled, for the probe
+const washPrev = [0, 0, 0, 0];
 // ── traction: what the tyres are allowed to decide ─────────────────
 /**
  * THE MODEL THIS GAME SHIPPED WITH NEVER LET THE TYRES DECIDE ANYTHING.
@@ -33826,10 +33838,15 @@ let ambSampledAt = 0, ambRiverL = 0, ambVegL = 0, ambFrothL = 0;
 /** The room the last sample found, which `encL` is easing toward. */
 let encTarget = 0;
 /** Radius and weight of each water-probe ring — see the ambience sampler. */
-const AMB_WATER_RINGS: ReadonlyArray<readonly [number, number]> =
-  [[24, 1], [60, 0.55], [120, 0.28]];
+const AMB_WATER_RINGS: ReadonlyArray<readonly [number, number, number]> =
+  [[24, 1, 6], [60, 0.8, 8], [120, 0.6, 12], [220, 0.35, 12]];
 /** Where the water is, in the TRUCK's frame: −1 hard left, +1 hard right. */
 let ambRiverAt = 0;
+/** The ground cover under and around the truck as GRASS, 0..1 — what the
+ *  sward voice answers to. Two named river banks measured silent had the
+ *  water 220 m off (the fourth ring above) and a meadow with no tree in it
+ *  was as quiet as a car park (this). */
+let ambGrassL = 0;
 /** How enclosed the truck is, 0 open sky and 1 inside a bore — glided, so a
  *  portal is an entrance rather than a switch. */
 let encL = 0;
@@ -35129,6 +35146,7 @@ function tick(now: number): void {
   const wheelWorld: Array<[number, number]> = [];
   const wheelSurf: Surface[] = [];
   let rawSum = 0;
+  let washRate = 0;   // metres of washboard the four wheels crossed this frame
   let wI = 0;
   // `wx` is the WEATHER everywhere else in this file and the WHEEL's offset
   // inside this loop, so the rain has to be read before the shadow falls.
@@ -35159,7 +35177,9 @@ function tick(now: number): void {
     const g = tyreHeight(wxw, wzw, sk, prevGround ?? groundAt(wxw, wzw));
     rawSum += g;
     smooth.push(g);
-    contacts.push(g + roughNoise(wxw, wzw) * sw.rough);
+    const wash = roughNoise(wxw, wzw) * sw.rough;
+    contacts.push(g + wash);
+    washRate += Math.abs(wash - washPrev[wI]); washPrev[wI] = wash;
     if (!Number.isFinite(g)) nanTraceAt('contact', { wI, wxw, wzw, sk, g, prevGround: prevGround ?? null, gnd: groundAt(wxw, wzw), rc: roadCeiling(wxw, wzw), sh: sampleHeight(wxw, wzw), ms: meshSurfaceAt(wxw, wzw), diag: meshDiag(wxw, wzw), tiles: heightTiles.size, meshes: terrainMeshes.size, sx: state.x, sz: state.z, h: state.heading });
     wI++;
   }
@@ -35170,6 +35190,16 @@ function tick(now: number): void {
   axleMu[0] = Math.min(wheelMu[0], wheelMu[1]) * 0.65 + ((wheelMu[0] + wheelMu[1]) / 2) * 0.35;
   axleMu[1] = Math.min(wheelMu[2], wheelMu[3]) * 0.65 + ((wheelMu[2] + wheelMu[3]) / 2) * 0.35;
   prevGround = rawSum / 4;
+  // In metres a second, MEASURED (soundscape-audit, Yosemite valley floor):
+  // open ground at 54 km/h asks the dampers for about 1.0, a graded track
+  // a third of that, tarmac under 0.2. The knee at 0.25 keeps tarmac silent
+  // and open ground at speed is the full bed; worn dampers rattle more,
+  // which is the suspension stock being audible for once.
+  const shakeRaw = dt > 0 ? washRate / (4 * dt) : 0;
+  chassisShakeRaw = shakeRaw;
+  const shakeT = Math.abs(state.speed) > 0.5
+    ? clamp((shakeRaw - 0.25) / 1.0, 0, 1) * (0.7 + 0.6 * (1 - rig.susp)) : 0;
+  chassisShake += (shakeT - chassisShake) * Math.min(1, dt * 8);
   const [cFL, cFR, cRL, cRR] = smooth;
   const ground = (cFL + cFR + cRL + cRR) / 4;
   const tY = ground + WHEEL_R; // axle-plane target
@@ -35630,24 +35660,39 @@ function tick(now: number): void {
     // WEIGHT and not a radius. Summing the wet probes' own directions then
     // gives the bearing for free — a SUM, not a nearest, so water on both
     // sides of a ford cancels to the middle, which is where it actually is.
-    let wetW = 0, flow = 0, bx = 0, bz = 0, near = 0;
-    for (const [rad, w] of AMB_WATER_RINGS) {
-      for (let i = 0; i < 6; i++) {
-        const a = (i / 6) * Math.PI * 2;
+    // …AND THE FAR RINGS ARE DENSER. Six probes on a 220 m ring are 230 m
+    // apart, which is how the Merced — a river twenty metres wide, in
+    // plain sight — went between every one of them: the audit measured
+    // `riverRaw 0.09` from a single wet probe on the 120 m ring and nothing
+    // beyond. Twelve on the outer rings, 38 probes in all, twice a second;
+    // each is a hydro sample and the whole ring is cheaper than one tree.
+    // The weights rose with it: a river you can see from the road at
+    // sixty metres is worth about −30 dBFS, not −42.
+    // AND THE NEAREST WET PROBE SETS THE LEVEL; the sum only adds breadth.
+    // A sum alone is a sum over how many probes happen to land in a river
+    // twenty metres wide: the Merced at 67 m scored one hit on the 120 m
+    // ring and read 0.15 (−40 dBFS) for a river in plain sight. The nearest
+    // ring's weight is what that distance is worth — −30 dBFS at sixty
+    // metres — and every further hit adds a little, so a lake on the beam
+    // is still wider than a brook.
+    let wetW = 0, maxW = 0, flow = 0, bx = 0, bz = 0, near = 0;
+    for (const [rad, w, n] of AMB_WATER_RINGS) {
+      for (let i = 0; i < n; i++) {
+        const a = (i / n) * Math.PI * 2;
         const wi = waterInfoAt(state.x + Math.sin(a) * rad, state.z + Math.cos(a) * rad);
         // `wi.wet`, NOT `depth > 0.06` — see waterInfoAt. The depth is a
         // default on dry land and this ring is the one caller asking whether
         // there IS any water, so the old test was true at every point on the
         // planet.
         if (!wi.wet || wi.depth <= 0.06) continue;
-        wetW += w;
+        wetW += w; maxW = Math.max(maxW, w);
         bx += Math.sin(a) * w; bz += Math.cos(a) * w;
         // FROTH IS A NEAR THING. Rapids two hundred metres off are a wash, not
         // a rattle, so only the inner ring opens the bright channel.
         if (rad === AMB_WATER_RINGS[0][0]) { near++; flow = Math.max(flow, wi.speed); }
       }
     }
-    ambRiverL = clamp(wetW / 3 + (surfKind === 'water' ? 0.4 : 0), 0, 1);
+    ambRiverL = clamp(maxW + wetW / 8 + (surfKind === 'water' ? 0.4 : 0), 0, 1);
     // Into the TRUCK's frame. Forward is (sin h, -cos h), so the right vector
     // is (cos h, sin h) — the dot with it is the ear the water is in.
     ambRiverAt = wetW === 0 || surfKind === 'water' ? 0
@@ -35665,6 +35710,17 @@ function tick(now: number): void {
     let fol = 0;
     for (const s of sites) if (s.k !== 'rock' && s.k !== 'spire') fol++;
     ambVegL = clamp(fol / 12, 0, 1);
+    // THE COVER, as grass: five WorldCover texels (here and 30 m out on four
+    // sides — a texel is 38 m). Grassland and crop hiss in the wind, a
+    // wetland and scrub less, a wood's floor a little, and built, bare,
+    // snow and water not at all.
+    let gr = 0;
+    for (const [ox, oz] of [[0, 0], [30, 0], [-30, 0], [0, 30], [0, -30]]) {
+      const c = sampleCover(state.x + ox, state.z + oz);
+      gr += c === COVER.grass ? 1 : c === COVER.crop ? 0.9 : c === COVER.wetland ? 0.7
+        : c === COVER.shrub ? 0.5 : c === COVER.moss ? 0.4 : c === COVER.tree ? 0.25 : 0;
+    }
+    ambGrassL = gr / 5;
   }
   const windAmb = clamp((live.on ? live.windKmh : 12) / 55, 0, 1);
   const bed = clamp(1 - Math.abs(state.speed) / 7, 0, 1) * (engineSt === 'on' ? 0.4 : 1);
@@ -35676,6 +35732,7 @@ function tick(now: number): void {
     wind: +windAmb.toFixed(2), veg: +ambVegL.toFixed(2), riverRaw: +ambRiverL.toFixed(2),
     froth: +ambFrothL.toFixed(2), engine: engineSt, brush: +brushAmt.toFixed(2),
     riverAt: +ambRiverAt.toFixed(2), enc: +encL.toFixed(3), encRaw: +encTarget.toFixed(3),
+    grass: +ambGrassL.toFixed(2), shake: +chassisShake.toFixed(2), shakeRaw: +chassisShakeRaw.toFixed(2),
     brushPeak: +(brushPeak = Math.max(brushPeak, brushAmt)).toFixed(2),
   };
   // THE GLIDE IS THE POINT. A portal is a hard edge in geometry and a soft one
@@ -35684,9 +35741,26 @@ function tick(now: number): void {
   // shorter, on the filter itself.
   if (encForceUntil > nowMs) encL = encForce;
   else encL += (encTarget - encL) * Math.min(1, dt * 2.5);
-  audio.space(encL, camMode === 'cab' ? 1 : 0);
+  // Parked with the key out is the one time the driver is listening, and the
+  // cab's shell opens for it — see space().
+  const parkedNow = engineSt !== 'on' && Math.abs(state.speed) < 0.5 ? 1 : 0;
+  audio.space(encL, camMode === 'cab' ? 1 : 0, parkedNow);
   audio.ambience(dbgAmb.rustle as number, dbgAmb.river as number, dbgAmb.birds as number,
-    windAmb, ambFrothL, ambRiverAt);
+    windAmb, ambFrothL, ambRiverAt, ambGrassL * Math.max(bed, 0.2));
+  // THE DRONE, HEARD — from wherever the listener is. In the drone view you
+  // are riding it; from the truck it is a machine some way off, on one side,
+  // working harder in a climb or a dash than in a hover. Spool 0 on the rack
+  // releases the voice, so the call is unconditional and cheap.
+  {
+    const own = camMode === 'drone';
+    const dx = drone.x - state.x, dz = drone.z - state.z;
+    const dist = Math.hypot(dx, drone.y - bodyY, dz);
+    const bearing = dist > 1 ? clamp((dx / dist) * Math.cos(state.heading) + (dz / dist) * Math.sin(state.heading), -1, 1) : 0;
+    const climb = dt > 0 ? Math.abs(drone.y - droneYPrev) / dt : 0;
+    droneYPrev = drone.y;
+    const load = clamp(climb / DRONE.CLIMB + Math.abs(drone.pitch) * 2 + Math.abs(drone.roll) * 1.5, 0, 1);
+    audio.drone(drone.spool, dist, load, bearing, own);
+  }
   // The squeal's raw inputs, photographed at the same instant the mixer
   // reads them — chasing "SLIP lit, tyre silent" needs the SIGNAL, not
   // another guess at the gain.
@@ -35694,7 +35768,7 @@ function tick(now: number): void {
     surf: surfKind, q: +surfQ.toFixed(2), kmh: +(state.speed * 3.6).toFixed(0) };
   audio.update(state.speed, throttle, surfKind, groundedF, wxL.rain, engRev, engGear, skid,
     surfKind === 'water' ? 0 : surfQ, wheelSlipL, windAmb,
-    engineSt === 'on' ? 1 : engineSt === 'crank' ? 0.35 : 0);
+    engineSt === 'on' ? 1 : engineSt === 'crank' ? 0.35 : 0, chassisShake);
   // The rig against the world: bodywork on a wall while moving, the hull's
   // wash through water, and the slap of arriving in it with any speed on.
   // The graze's floor rose from 0.4 to 0.55 of the mix: a lean along a rail

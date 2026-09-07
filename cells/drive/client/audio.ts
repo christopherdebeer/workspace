@@ -56,6 +56,96 @@ export function rainPattern(rate: number): Float32Array {
   return data;
 }
 
+/** THE GRAVEL BED, as a pattern: not steady noise but a few seconds of
+ *  individual stone impacts (sharp attack, short decay, random pitch), looped
+ *  and sped up with the truck so loose ground CRUNCHES rather than hisses.
+ *  Peak-normalised, so its loudness is a property of the gain and not of
+ *  the draw. */
+export function gritPattern(rate: number): Float32Array {
+  const gd = new Float32Array(rate * 4);
+  const grains = Math.floor(rate * 4 * 0.012); // ~530 stones/sec of loop
+  for (let g = 0; g < grains; g++) {
+    const at0 = Math.floor(Math.random() * (gd.length - 900));
+    const len = 60 + Math.floor(Math.random() * 700);
+    const amp = 0.25 + Math.random() * 0.75;
+    const ring = 0.04 + Math.random() * 0.5; // a little pitch per stone
+    for (let i = 0; i < len; i++) {
+      const env = Math.exp((-i / len) * 6);
+      gd[at0 + i] += (Math.random() * 2 - 1) * env * amp * 0.5 + Math.sin(i * ring) * env * amp * 0.12;
+    }
+  }
+  let peak = 0;
+  for (let i = 0; i < gd.length; i++) peak = Math.max(peak, Math.abs(gd[i]));
+  if (peak > 0) for (let i = 0; i < gd.length; i++) gd[i] /= peak;
+  return gd;
+}
+
+/**
+ * THE CHASSIS WORKING, as a pattern. Pins, trim, the tools in the tray and
+ * the tailgate on its catch: short rings at a few pitches, most of them
+ * bright, one in eight a low clunk of something heavier finding its stop.
+ * Looped, and sped up as the ground gets rougher, so washboard sounds like
+ * a truck being shaken rather than like more gravel. Deterministic, like
+ * the rain, so the same bed plays on every device.
+ */
+export function rattlePattern(rate: number): Float32Array {
+  const data = new Float32Array(Math.round(rate * 3));
+  let seed = 0x72617474;
+  const rand = (): number => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
+  for (let k = 0; k < 720; k++) {
+    const at0 = Math.floor(rand() * data.length);
+    const low = rand() < 0.12;
+    const hz = low ? 110 + rand() * 160 : 1600 + rand() * 4200;
+    const len = Math.round(rate * (low ? 0.02 + rand() * 0.04 : 0.003 + rand() * 0.01));
+    const amp = (low ? 0.5 : 0.22) + rand() * 0.5;
+    for (let i = 0; i < len; i++) {
+      const env = Math.exp(-5 * i / len);
+      data[(at0 + i) % data.length] += amp * env * (Math.sin(i * hz * Math.PI * 2 / rate) * 0.8 + (rand() * 2 - 1) * 0.2);
+    }
+  }
+  let peak = 0;
+  for (let i = 0; i < data.length; i++) peak = Math.max(peak, Math.abs(data[i]));
+  if (peak > 0) for (let i = 0; i < data.length; i++) data[i] /= peak;
+  return data;
+}
+
+/** The mix's ONE volume, applied last, before the limiter. Every decibel
+ *  target below is written for the far side of it, so a voice's number is
+ *  what the level probe reads and not what its gain node says. */
+export const MASTER = 0.55;
+/**
+ * ── WHAT A GAIN OF 1 IS WORTH, PER VOICE ──
+ *
+ * A gain number means nothing on its own. A voice is white noise through a
+ * filter, and a bandpass at 340 Hz passes one percent of the noise's energy
+ * where a highpass at 900 Hz passes ninety-six — so "river 0.16, wind 0.02"
+ * said the river was eight times the wind, and it was three decibels under
+ * it. Every level in the world's bed was tuned by those numbers and the
+ * whole bed sat forty decibels down, which from the seat was "little to
+ * nothing" parked beside a river with the engine off.
+ *
+ * These are the RMS levels each chain renders AT UNIT GAIN, measured by
+ * devtools/voice-levels.mjs — an offline render of the same chain — and
+ * they are what lets a target be written in decibels and read back by
+ * `levels()`. Re-measure when a filter moves; the devtool prints drift.
+ * The truck's own bus keeps its linear gains: those were adjusted from the
+ * seat over many rounds, and the ear was right even where the reading of
+ * the numbers was wrong.
+ */
+export const UNIT = {
+  wind: 0.58, rustle: 0.233, sward: 0.23, river: 0.095, rapids: 0.184, boil: 0.036,
+  rain: 0.58, bird: 0.707, rattle: 0.068, drone: 0.19,
+  // The two surface voices of the truck's bus, restated too: at their old
+  // gains the tarmac roar at 100 km/h rendered at −40 dBFS and the gravel
+  // at 40 km/h at −42, which is the surface feedback the doctrine calls
+  // "the loudest thing the truck does" being inaudible on a phone. The
+  // engine, squeal, scrape and brush keep their linear gains for now; their
+  // measured levels are in CLAUDE.md as the next list.
+  roar: 0.18, grit: 0.046,
+} as const;
+/** The gain that puts a voice at `dbfs` RMS after the master — see UNIT. */
+export const lvl = (unit: number, dbfs: number): number => Math.pow(10, dbfs / 20) / (unit * MASTER);
+
 export function createAudio() {
   const impactLog: Impact[] = [];
   let ctx: AudioContext | null = null;
@@ -70,7 +160,18 @@ export function createAudio() {
   let riverGain: GainNode, riverFilt: BiquadFilterNode;
   let brushGain: GainNode, brushFilt: BiquadFilterNode;
   let rainGain: GainNode, roofGain: GainNode;
-  let cabin = 0, enclosure = 0;
+  let swardGain: GainNode, swardFilt: BiquadFilterNode;
+  let boilGain: GainNode, boilSrc: AudioBufferSourceNode;
+  let rattleGain: GainNode, rattleFilt: BiquadFilterNode, rattleSrc: AudioBufferSourceNode;
+  let droneGain: GainNode, droneFilt: BiquadFilterNode, droneOscA: OscillatorNode, droneOscB: OscillatorNode,
+    droneOscC: OscillatorNode, whooshGain: GainNode, dronePan: StereoPannerNode | null = null;
+  let limiter: DynamicsCompressorNode;
+  /** Where the probe listens: one analyser per bus and per voice worth
+   *  asking about. An analyser costs nothing until it is read. */
+  const taps = new Map<string, AnalyserNode>();
+  let tapBuf: Float32Array<ArrayBuffer> | null = null;
+  let gustL = 0;                  // the wind's slow envelope, for the probe
+  let cabin = 0, enclosure = 0, parkedL = 0;
   let crashAt = 0, creakAt = 0;   // one-shot cooldowns — a scrape is not a drum roll
   let birdAt = 0;                 // next phrase, spaced by how alive the spot is
   let scrapeLast = 0;             // the scrape's live level, for the sidechain below
@@ -104,18 +205,35 @@ export function createAudio() {
     if (!Ctor) return;
     ctx = new Ctor();
     master = ctx.createGain();
-    master.gain.value = on ? 0.55 : 0;
-    master.connect(ctx.destination);
+    master.gain.value = on ? MASTER : 0;
+    // ── THE LIMITER IS WHAT LETS THE BED UP ──
+    //
+    // The master sat at 0.55 to leave headroom for a crash, and the world's
+    // bed paid for that headroom permanently: a river on its bank rendered
+    // at −41 dBFS, below what a phone speaker can say. A hard knee at the
+    // top catches the peaks instead, so the quiet things can be as loud as
+    // they are. A DynamicsCompressor applies its own make-up (about +3.5 dB
+    // for these settings, uniform over everything); `levels()` reads on
+    // BOTH sides of it so the targets are checked where they are written.
+    limiter = ctx.createDynamicsCompressor();
+    limiter.threshold.value = -4; limiter.knee.value = 2; limiter.ratio.value = 16;
+    limiter.attack.value = 0.003; limiter.release.value = 0.12;
+    master.connect(limiter); limiter.connect(ctx.destination);
+    const tap = (name: string, node: AudioNode): void => {
+      if (!ctx) return;
+      const an = ctx.createAnalyser(); an.fftSize = 2048; node.connect(an); taps.set(name, an);
+    };
+    tap('master', master); tap('out', limiter);
     // The world's bus, through the filter enclosure closes.
     outLP = ctx.createBiquadFilter(); outLP.type = 'lowpass';
     outLP.frequency.value = 20000; outLP.Q.value = 0.4;
     outBus = ctx.createGain(); outBus.gain.value = 1;
-    outBus.connect(outLP); outLP.connect(master);
+    outBus.connect(outLP); outLP.connect(master); tap('world', outLP);
     // The truck's bus, and the slap-back a hard ceiling gives it. 55 ms is a
     // road tunnel's own distance — long enough to hear as a separate return,
     // short enough not to read as a cathedral.
     nearBus = ctx.createGain(); nearBus.gain.value = 1;
-    nearBus.connect(master);
+    nearBus.connect(master); tap('truck', nearBus);
     slapDelay = ctx.createDelay(0.4); slapDelay.delayTime.value = 0.055;
     slapFb = ctx.createGain(); slapFb.gain.value = 0.36;
     slapSend = ctx.createGain(); slapSend.gain.value = 0;
@@ -129,7 +247,7 @@ export function createAudio() {
     // Engine: detuned saw + square through a lowpass that opens with revs.
     engFilt = ctx.createBiquadFilter(); engFilt.type = 'lowpass'; engFilt.frequency.value = 700;
     engGain = ctx.createGain(); engGain.gain.value = 0;
-    engFilt.connect(engGain); engGain.connect(nearBus);
+    engFilt.connect(engGain); engGain.connect(nearBus); tap('eng', engGain);
     engA = ctx.createOscillator(); engA.type = 'sawtooth'; engA.frequency.value = 40;
     engB = ctx.createOscillator(); engB.type = 'square'; engB.frequency.value = 60;
     const engMix = ctx.createGain(); engMix.gain.value = 0.5;
@@ -144,25 +262,30 @@ export function createAudio() {
     // stone impacts (sharp attack, short decay, random pitch), looped and
     // sped up with the truck so loose ground CRUNCHES rather than hisses.
     const gritBuf = ctx.createBuffer(1, ctx.sampleRate * 4, ctx.sampleRate);
-    const gd = gritBuf.getChannelData(0);
-    const grains = Math.floor(ctx.sampleRate * 4 * 0.012); // ~530 stones/sec of loop
-    for (let g = 0; g < grains; g++) {
-      const at = Math.floor(Math.random() * (gd.length - 900));
-      const len = 60 + Math.floor(Math.random() * 700);
-      const amp = 0.25 + Math.random() * 0.75;
-      const ring = 0.04 + Math.random() * 0.5; // a little pitch per stone
-      for (let i = 0; i < len; i++) {
-        const env = Math.exp((-i / len) * 6);
-        gd[at + i] += (Math.random() * 2 - 1) * env * amp * 0.5 + Math.sin(i * ring) * env * amp * 0.12;
-      }
-    }
-    let peak = 0;
-    for (let i = 0; i < gd.length; i++) peak = Math.max(peak, Math.abs(gd[i]));
-    if (peak > 0) for (let i = 0; i < gd.length; i++) gd[i] /= peak;
+    gritBuf.getChannelData(0).set(gritPattern(ctx.sampleRate));
     gritSrc = ctx.createBufferSource(); gritSrc.buffer = gritBuf; gritSrc.loop = true;
     gritFilt = ctx.createBiquadFilter(); gritFilt.type = 'bandpass'; gritFilt.frequency.value = 1400; gritFilt.Q.value = 0.5;
     gritGain = ctx.createGain(); gritGain.gain.value = 0;
-    gritSrc.connect(gritFilt); gritFilt.connect(gritGain); gritGain.connect(nearBus); gritSrc.start();
+    gritSrc.connect(gritFilt); gritFilt.connect(gritGain); gritGain.connect(nearBus); gritSrc.start(); tap('grit', gritGain);
+    // THE BOIL: fast water is not a hum, it is a great many small events —
+    // the same stone-impact pattern as the gravel, slowed to a third and
+    // held low, so rapids churn rather than hiss. Opens with froth only.
+    boilSrc = ctx.createBufferSource(); boilSrc.buffer = gritBuf; boilSrc.loop = true;
+    boilSrc.playbackRate.value = 0.36;
+    const boilFilt = ctx.createBiquadFilter(); boilFilt.type = 'bandpass';
+    boilFilt.frequency.value = 380; boilFilt.Q.value = 0.9;
+    boilGain = ctx.createGain(); boilGain.gain.value = 0;
+    boilSrc.connect(boilFilt); boilFilt.connect(boilGain); boilSrc.start();
+    // THE RATTLE: the chassis being shaken. See rattlePattern; the gain
+    // rides `shake` (the washboard at the four wheels) in update().
+    const rattleBuf = ctx.createBuffer(1, Math.round(ctx.sampleRate * 3), ctx.sampleRate);
+    rattleBuf.getChannelData(0).set(rattlePattern(ctx.sampleRate));
+    rattleSrc = ctx.createBufferSource(); rattleSrc.buffer = rattleBuf; rattleSrc.loop = true;
+    rattleFilt = ctx.createBiquadFilter(); rattleFilt.type = 'bandpass';
+    rattleFilt.frequency.value = 2400; rattleFilt.Q.value = 0.5;
+    rattleGain = ctx.createGain(); rattleGain.gain.value = 0;
+    rattleSrc.connect(rattleFilt); rattleFilt.connect(rattleGain); rattleGain.connect(nearBus); rattleSrc.start();
+    tap('rattle', rattleGain);
     // SQUEAL: a tyre that is sliding rather than rolling. Noise through a very
     // narrow bandpass, plus a thin sawtooth at the same pitch so it has an edge
     // — pure filtered noise reads as wind, not rubber.
@@ -180,7 +303,7 @@ export function createAudio() {
     const windSrc = ctx.createBufferSource(); windSrc.buffer = noiseBuf; windSrc.loop = true;
     windFilt = ctx.createBiquadFilter(); windFilt.type = 'highpass'; windFilt.frequency.value = 900;
     windGain = ctx.createGain(); windGain.gain.value = 0;
-    windSrc.connect(windFilt); windFilt.connect(windGain); windGain.connect(outBus); windSrc.start();
+    windSrc.connect(windFilt); windFilt.connect(windGain); windGain.connect(outBus); windSrc.start(); tap('wind', windGain);
     // Scrape: the continuous half of a collision — bodywork dragged along a
     // wall or rail. A mid bandpass with some bite; gain rides contact + speed.
     const scSrc = ctx.createBufferSource(); scSrc.buffer = noiseBuf; scSrc.loop = true;
@@ -202,7 +325,16 @@ export function createAudio() {
     rustleFilt = ctx.createBiquadFilter(); rustleFilt.type = 'bandpass';
     rustleFilt.frequency.value = 1750; rustleFilt.Q.value = 0.5;
     rustleGain = ctx.createGain(); rustleGain.gain.value = 0;
-    ruSrc.connect(rustleFilt); rustleFilt.connect(rustleGain); rustleGain.connect(outBus); ruSrc.start();
+    ruSrc.connect(rustleFilt); rustleFilt.connect(rustleGain); rustleGain.connect(outBus); ruSrc.start(); tap('rustle', rustleGain);
+    // SWARD: grass is not leaves. Thinner and higher than the rustle, a hiss
+    // rather than a flutter, and it answers to the ground cover under the
+    // truck rather than to the trees around it — a meadow with no tree in
+    // it used to be as silent as a car park.
+    const swSrc = ctx.createBufferSource(); swSrc.buffer = noiseBuf; swSrc.loop = true;
+    swardFilt = ctx.createBiquadFilter(); swardFilt.type = 'bandpass';
+    swardFilt.frequency.value = 3400; swardFilt.Q.value = 1.1;
+    swardGain = ctx.createGain(); swardGain.gain.value = 0;
+    swSrc.connect(swardFilt); swardFilt.connect(swardGain); swardGain.connect(outBus); swSrc.start(); tap('sward', swardGain);
     const rvSrc = ctx.createBufferSource(); rvSrc.buffer = noiseBuf; rvSrc.loop = true;
     riverFilt = ctx.createBiquadFilter(); riverFilt.type = 'bandpass';
     riverFilt.frequency.value = 470; riverFilt.Q.value = 0.8;
@@ -213,7 +345,30 @@ export function createAudio() {
     // river you were driving alongside sat in the middle of your head.
     try { riverPan = ctx.createStereoPanner(); } catch { riverPan = null; }
     if (riverPan) { riverGain.connect(riverPan); riverPan.connect(outBus); } else riverGain.connect(outBus);
-    rvSrc.start();
+    rvSrc.start(); tap('river', riverGain);
+    boilGain.connect(riverPan ?? outBus);   // the boil is the same water, from the same side
+    // THE DRONE. Four rotors are four blade-pass tones a hair apart — the
+    // beat between them is what a quad sounds like, and one clean tone is a
+    // dentist. A triangle an octave up gives the airframe some body, the
+    // bandpass keeps it a machine rather than a synth, and a thin whoosh of
+    // highpassed noise is the downwash. Pitch and level ride the spool and
+    // the load; distance and bearing are the caller's, see drone().
+    droneOscA = ctx.createOscillator(); droneOscA.type = 'sawtooth'; droneOscA.frequency.value = 90;
+    droneOscB = ctx.createOscillator(); droneOscB.type = 'sawtooth'; droneOscB.frequency.value = 92.4;
+    droneOscC = ctx.createOscillator(); droneOscC.type = 'triangle'; droneOscC.frequency.value = 181;
+    const droneMix = ctx.createGain(); droneMix.gain.value = 0.34;
+    droneOscA.connect(droneMix); droneOscB.connect(droneMix); droneOscC.connect(droneMix);
+    droneFilt = ctx.createBiquadFilter(); droneFilt.type = 'bandpass';
+    droneFilt.frequency.value = 720; droneFilt.Q.value = 0.7;
+    droneGain = ctx.createGain(); droneGain.gain.value = 0;
+    droneMix.connect(droneFilt); droneFilt.connect(droneGain);
+    const whSrc = ctx.createBufferSource(); whSrc.buffer = noiseBuf; whSrc.loop = true;
+    const whHP = ctx.createBiquadFilter(); whHP.type = 'highpass'; whHP.frequency.value = 2600;
+    whooshGain = ctx.createGain(); whooshGain.gain.value = 0;
+    whSrc.connect(whHP); whHP.connect(whooshGain); whooshGain.connect(droneGain); whSrc.start();
+    try { dronePan = ctx.createStereoPanner(); } catch { dronePan = null; }
+    if (dronePan) { droneGain.connect(dronePan); dronePan.connect(outBus); } else droneGain.connect(outBus);
+    droneOscA.start(); droneOscB.start(); droneOscC.start(); tap('drone', droneGain);
     // Rain has two scales: a fine outdoor wash and resolved drops on the
     // roof. Both are persistent voices; weather only changes their envelopes.
     const rainSrc = ctx.createBufferSource(); rainSrc.buffer = noiseBuf; rainSrc.loop = true;
@@ -252,6 +407,29 @@ export function createAudio() {
    * so a new voice cannot be written with the weaker half.
    */
   const live = (): boolean => !!ctx && !!master && ctx.state === 'running' && on;
+  /**
+   * THE BOX, RUNG. The truck's steel shell has two low modes any strike
+   * excites, and whatever hit it adds its own on top — a rail's bright
+   * tuning-fork set, a boulder's one dead thump. Shared by the crash and
+   * the landing, because a drop onto rock IS a collision the ground threw
+   * and it must sound like the same vehicle. Each mode is detuned noise
+   * through a resonant bandpass: the same wreck twice is a sample.
+   */
+  const ringModes = (t: number, f: number, modes: Array<[number, number, number, number]>): void => {
+    if (!ctx) return;
+    for (const [hz, q, amp, len] of modes) {
+      const src = ctx.createBufferSource();
+      src.buffer = noiseBuf; src.loop = true;
+      src.playbackRate.value = 0.82 + Math.random() * 0.36;
+      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass';
+      bp.frequency.value = hz; bp.Q.value = q;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(Math.min(0.6, amp * (0.4 + f)), t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + len + f * 0.5);
+      src.connect(bp); bp.connect(g); g.connect(nearBus);
+      src.start(t); src.stop(t + len + f * 0.55);
+    }
+  };
 
   const arm = (): void => {
     // ── MUTED MEANS NO CONTEXT AT ALL ──
@@ -314,6 +492,8 @@ export function createAudio() {
         grit: g(gritGain), wind: g(windGain), brush: g(brushGain),
         rain: g(rainGain), roof: g(roofGain), cabin, enclosure,
         rustle: g(rustleGain), river: g(riverGain), water: g(waterGain),
+        sward: g(swardGain), boil: g(boilGain), rattle: g(rattleGain), drone: g(droneGain),
+        gust: +gustL.toFixed(2), parked: parkedL,
         // The room, so a test can assert a tunnel rather than describe one.
         // Before `build()` these read as OPEN SKY rather than as zero: an
         // unbuilt filter is not a shut one, and a mix read before the first
@@ -321,6 +501,26 @@ export function createAudio() {
         out: outBus ? g(outBus) : 1, slap: g(slapSend),
         muffle: Math.round(outLP?.frequency.value ?? 20000),
         riverAt: +(riverPan?.pan.value ?? 0).toFixed(2) };
+    },
+    /**
+     * THE LEVELS, MEASURED — dBFS RMS over the last 43 ms at every tap. This
+     * is the number `mix()` was being read as and is not: a gain is what a
+     * node multiplies by, a level is what comes out, and per voice the two
+     * differ by up to 22 dB (see UNIT). `master` is before the limiter,
+     * where the targets are written; `out` is after it, what the speaker
+     * gets. Nothing is computed until this is called.
+     */
+    levels(): Record<string, number> {
+      const o: Record<string, number> = {};
+      if (!ctx) return o;
+      for (const [name, an] of taps) {
+        if (!tapBuf || tapBuf.length !== an.fftSize) tapBuf = new Float32Array(an.fftSize);
+        an.getFloatTimeDomainData(tapBuf);
+        let s2 = 0;
+        for (let i = 0; i < tapBuf.length; i++) s2 += tapBuf[i] * tapBuf[i];
+        o[name] = +(20 * Math.log10(Math.max(Math.sqrt(s2 / tapBuf.length), 1e-6))).toFixed(1);
+      }
+      return o;
     },
     /** Stand the graph down — a backgrounded tab must not keep an engine
      *  running in it. `arm()` brings it back. */
@@ -331,7 +531,7 @@ export function createAudio() {
       on = !on;
       try { localStorage.setItem('drive.mute', on ? '0' : '1'); } catch { /* fine */ }
       if (on) arm();
-      if (master && ctx) master.gain.setTargetAtTime(on ? 0.55 : 0, ctx.currentTime, 0.05);
+      if (master && ctx) master.gain.setTargetAtTime(on ? MASTER : 0, ctx.currentTime, 0.05);
       // MUTING GIVES THE HARDWARE BACK. A suspended context releases the audio
       // session, so turning the dial off mid-drive stops ducking whatever else
       // is playing rather than merely going quiet over the top of it.
@@ -349,7 +549,7 @@ export function createAudio() {
      * surface being crossed.
      */
     update(speed: number, throttle: number, surf: AudioSurface, grounded: number, rainAmt = 0, rev = 0, gear = 0, slip = 0,
-      q = 1, spin = 0, ambWind = 0, engF = 1): void {
+      q = 1, spin = 0, ambWind = 0, engF = 1, shake = 0): void {
       if (!live() || !ctx || !master) return;
       const t = ctx.currentTime, v = Math.abs(speed);
       // THE EVENT LEVELS FIRST, because the whole bed answers to them.
@@ -406,12 +606,36 @@ export function createAudio() {
         ? clamp(q, 0, 1) : 0.08;
       const wetRoad = clamp(rainAmt, 0, 1) * hard;
       roarFilt.frequency.setTargetAtTime(320 + hard * 830 + wetRoad * 850, t, 0.12);
-      roarGain.gain.setTargetAtTime(Math.min(v / 34, 1) * (0.26 - hard * 0.16 + wetRoad * 0.08) * grounded * duck, t, 0.1);
+      // IN DECIBELS: −31 dBFS at 100 km/h on dry tarmac; gravel is eight
+      // decibels over that and lower, wet tarmac five over and brighter —
+      // the same shape as before, normalised so the tarmac case is the one
+      // written down.
+      roarGain.gain.setTargetAtTime(
+        lvl(UNIT.roar, -31) * Math.min(v / 34, 1) * ((0.26 - hard * 0.16 + wetRoad * 0.08) / 0.1) * grounded * duck, t, 0.1);
       // The weather's wind blows even when parked. Rain has its own wash
       // and impacts now, so rainfall does not masquerade as stronger wind.
-      windFilt.frequency.setTargetAtTime(900 - ambWind * 250, t, 0.4);
-      windGain.gain.setTargetAtTime(
-        Math.min((v * v) / 2600, 0.9) * 0.13 + ambWind * 0.09, t, 0.15);
+      // ── AND IT GUSTS. A steady level is a fan; wind is an envelope that
+      // rises and falls over seconds, and the leaves answer it a moment
+      // late (see ambience). Two incommensurate sines of the clock, so the
+      // pattern never quite repeats and costs nothing.
+      const gust = 0.5 + 0.5 * (0.6 * Math.sin(t * 0.29 + 1.3) + 0.4 * Math.sin(t * 0.73));
+      gustL = gust;
+      windFilt.frequency.setTargetAtTime(900 - ambWind * 250 - gust * 200, t, 0.4);
+      // IN DECIBELS: −34 dBFS on a 12 km/h day and −26 at forty; the truck's
+      // own speed adds −28 at a hundred. The old linear numbers put the
+      // 12 km/h day at −44, which no phone can say.
+      const windAmb = Math.pow(clamp(ambWind / 0.73, 0, 1.6), 0.55);
+      const windSpeed = Math.min((v * v) / 2600, 0.9) * 3.2;
+      windGain.gain.setTargetAtTime(lvl(UNIT.wind, -26) * (windAmb + windSpeed) * (0.55 + 0.45 * gust), t, 0.15);
+      // THE CHASSIS, SHAKEN. `shake` is the washboard's rate at the four
+      // wheels — 0 on tarmac, 1 on open ground at speed, worn dampers folded
+      // in by the caller. The bed gets DENSER as well as louder, so rough
+      // ground is the truck being shaken rather than more gravel. −28 dBFS
+      // flat out, beside the grit and under the engine.
+      const sh = Math.pow(clamp(shake, 0, 1), 0.8);
+      rattleSrc.playbackRate.setTargetAtTime(0.7 + sh * 0.9, t, 0.15);
+      rattleFilt.frequency.setTargetAtTime(1900 + sh * 1300, t, 0.2);
+      rattleGain.gain.setTargetAtTime(lvl(UNIT.rattle, -28) * sh * grounded * duck, t, 0.08);
       const rain = clamp(rainAmt, 0, 1);
       rainGain.gain.setTargetAtTime(rain * 0.12, t, 0.45);
       // A roof overhead shelters the rig too. The cabin brings its own roof
@@ -429,8 +653,10 @@ export function createAudio() {
       // Off the tarmac the grit IS the feedback — it is how a surface change
       // announces itself before the handling does — and at 0.3 it sat under the
       // engine at every speed that mattered.
+      // IN DECIBELS: −29 dBFS at speed on open ground, a spinning wheel four
+      // over that. The old 0.46 rendered at −42, under everything.
       gritGain.gain.setTargetAtTime(
-        (Math.min(v / 12, 1) * 0.46 * loose + spin * 0.3 * (0.25 + 0.75 * loose)) * grounded * duck, t, 0.09);
+        lvl(UNIT.grit, -29) * (Math.min(v / 12, 1) * loose + spin * 0.65 * (0.25 + 0.75 * loose)) * grounded * duck, t, 0.09);
     },
     /** The starter: four compressions through a low filter, dying if the
      *  catch has not happened by the end — the engine's own voice takes over
@@ -469,15 +695,33 @@ export function createAudio() {
      *  much as the truck lets them be. `gusty` shifts the rustle's colour;
      *  birds are PHRASES, not a loop: a few whistled notes, spaced by how
      *  alive the spot is. */
-    ambience(rustle: number, river: number, birds: number, gusty: number, froth = 0, riverAt = 0): void {
+    ambience(rustle: number, river: number, birds: number, gusty: number, froth = 0, riverAt = 0, grass = 0): void {
       if (!live() || !ctx || !master || !rustleGain) return;
       const t = ctx.currentTime;
-      rustleGain.gain.setTargetAtTime(rustle * 0.14, t, 0.5);
+      // IN DECIBELS. `rustle` arrives as wind × foliage × the bed's duck, so
+      // 0.22 is full foliage on a 12 km/h day: −36 dBFS there, −27 at forty.
+      // The leaves ride the gust the wind set in update(), and the half-second
+      // glide is the lag between a gust arriving and a tree answering it.
+      rustleGain.gain.setTargetAtTime((rustle / 0.22) * lvl(UNIT.rustle, -34) * (0.5 + 0.5 * gustL), t, 0.5);
       rustleFilt.frequency.setTargetAtTime(1300 + gusty * 900, t, 0.8);
+      // GRASS. `grass` is the cover under and around the truck (with the
+      // same duck as the rustle); it hisses in the wind where leaves flutter,
+      // thinner and higher, and a meadow is no longer a car park.
+      swardGain.gain.setTargetAtTime(
+        grass * Math.pow(clamp(gusty / 0.73, 0, 1.6), 0.55) * lvl(UNIT.sward, -31) * (0.4 + 0.6 * gustL), t, 0.5);
+      swardFilt.frequency.setTargetAtTime(3000 + gusty * 1200, t, 0.8);
       // `froth` is the water's CHARACTER, from the same probes that found
       // it: 0 is still water lapping low and wide, 1 is rapids — brighter,
       // narrower, and a shade louder for the same nearness.
-      riverGain.gain.setTargetAtTime(river * (0.16 + froth * 0.12), t, 0.6);
+      // IN DECIBELS: −26 on the bank of still water. The rapids' own chain
+      // is five decibels hotter for the same gain before froth adds half
+      // again, and the boil (see build) comes in under it. Still water LAPS:
+      // the level breathes at the rate water moves against a bank, which is
+      // what stops a bandpass being a hum.
+      const lap = 0.5 + 0.5 * (0.7 * Math.sin(t * 0.62) + 0.3 * Math.sin(t * 1.7 + 0.8));
+      riverGain.gain.setTargetAtTime(
+        river * lvl(UNIT.river, -26) * (1 + froth * 0.5) * (1 - (1 - froth) * 0.3 * lap), t, 0.6);
+      boilGain.gain.setTargetAtTime(river * froth * lvl(UNIT.boil, -24), t, 0.6);
       // `riverAt` is −1 hard left through +1 hard right, in the TRUCK's frame,
       // and it glides slowly: water does not jump across the road, and a pan
       // that chases a noisy bearing is worse than no pan at all. Held short of
@@ -506,7 +750,9 @@ export function createAudio() {
               f0 * (0.82 + Math.random() * 0.4), at + 0.05 + Math.random() * 0.05);
             const g = ctx.createGain();
             g.gain.setValueAtTime(0.0001, at);
-            g.gain.exponentialRampToValueAtTime(0.008 + 0.035 * clamp(birds, 0, 1), at + 0.015);
+            // −27 dBFS at the peak of a phrase where it was −35: the one thing
+            // a parked driver could hear, and only just.
+            g.gain.exponentialRampToValueAtTime(0.02 + 0.09 * clamp(birds, 0, 1), at + 0.015);
             g.gain.exponentialRampToValueAtTime(0.0001, at + 0.05 + Math.random() * 0.07);
             osc.connect(g); g.connect(birdPan ?? outBus);
             const lastNote = i === notes - 1;
@@ -546,17 +792,26 @@ export function createAudio() {
       src.connect(bp); bp.connect(g); g.connect(nearBus);
       src.start(t); src.stop(t + 0.14);
     },
-    // A short filtered burst — landings, kerb strikes, scrapes.
+    /**
+     * A LANDING IS THE SAME BOX BEING HIT. The old thud was a lowpassed
+     * burst with none of the truck in it: its gain clamped at 0.5 from a
+     * fifth of the way up the range, so a hop and a drop were the same
+     * loudness, and a wall hit rang chassis modes a landing never had, as
+     * if two vehicles were involved. The burst is now the strike alone and
+     * the crash's own two modes carry the body, both scaled continuously
+     * with the force the suspension reported (0..3, see the bump stops).
+     */
     thud(force: number): void {
       if (!live() || !ctx || !master) return;
-      const t = ctx.currentTime;
+      const t = ctx.currentTime, f = clamp(force / 3, 0, 1);
       const src = ctx.createBufferSource(); src.buffer = noiseBuf; src.loop = true;
-      const bp = ctx.createBiquadFilter(); bp.type = 'lowpass'; bp.frequency.value = 220 + force * 180;
+      const bp = ctx.createBiquadFilter(); bp.type = 'lowpass'; bp.frequency.value = 220 + f * 540;
       const g = ctx.createGain();
-      g.gain.setValueAtTime(Math.min(0.5, force * 0.42), t);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.28);
+      g.gain.setValueAtTime(0.14 + f * 0.42, t);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.2 + f * 0.12);
       src.connect(bp); bp.connect(g); g.connect(nearBus);
-      src.start(t); src.stop(t + 0.3);
+      src.start(t); src.stop(t + 0.35);
+      ringModes(t, 0.25 + f * 0.75, [[58 + Math.random() * 16, 9, 0.42, 0.4], [132 + Math.random() * 30, 7, 0.26, 0.3]]);
     },
     // ── the rig meeting the world ──────────────────────────────────
     /**
@@ -626,16 +881,7 @@ export function createAudio() {
           [880 + Math.random() * 320, 13, 0.17, 0.7], [1650 + Math.random() * 500, 11, 0.09, 0.55]);
       }
       if (kind === 'stone') modes.push([64 + Math.random() * 18, 3, 0.5, 0.3]);
-      for (const [hz, q, amp, len] of modes) {
-        const src = noise();
-        const bp = ac.createBiquadFilter(); bp.type = 'bandpass';
-        bp.frequency.value = hz; bp.Q.value = q;
-        const g = ac.createGain();
-        g.gain.setValueAtTime(Math.min(0.6, amp * (0.4 + f)), t);
-        g.gain.exponentialRampToValueAtTime(0.0001, t + len + f * 0.5);
-        src.connect(bp); bp.connect(g); g.connect(nearBus);
-        src.start(t); src.stop(t + len + f * 0.55);
-      }
+      ringModes(t, f, modes);
       // 3 · THE BUCKLE. Metal yielding is PITCH THAT FALLS: the panel gives,
       // and what was ringing at one frequency is suddenly ringing lower. A
       // light knock buckles nothing, so this layer only shows up under load.
@@ -706,16 +952,21 @@ export function createAudio() {
       const now = performance.now();
       if (now - creakAt < 220) return;
       creakAt = now;
+      // −49 dBFS at its old level: a sawtooth sweeping OUT of a narrow
+      // bandpass, at a tenth of the gain, for 160 ms — the groan nobody had
+      // heard. A lowpass keeps the fundamental as it falls, and the level
+      // and length now say a chassis is working rather than a hinge.
       const t = ctx.currentTime;
       const osc = ctx.createOscillator(); osc.type = 'sawtooth';
-      osc.frequency.setValueAtTime(110 + force * 40, t);
-      osc.frequency.exponentialRampToValueAtTime(62, t + 0.14);
-      const bp = ctx.createBiquadFilter(); bp.type = 'bandpass'; bp.frequency.value = 260; bp.Q.value = 2.5;
+      osc.frequency.setValueAtTime(120 + force * 50, t);
+      osc.frequency.exponentialRampToValueAtTime(58, t + 0.24);
+      const lp = ctx.createBiquadFilter(); lp.type = 'lowpass'; lp.frequency.value = 420; lp.Q.value = 2;
       const g = ctx.createGain();
-      g.gain.setValueAtTime(force * 0.11, t);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.16);
-      osc.connect(bp); bp.connect(g); g.connect(nearBus);
-      osc.start(t); osc.stop(t + 0.18);
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(force * 0.3, t + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.3);
+      osc.connect(lp); lp.connect(g); g.connect(nearBus);
+      osc.start(t); osc.stop(t + 0.32);
     },
     /** Hitting water at speed: a broad wet slap, then the wash channel
      *  carries the rest. */
@@ -798,13 +1049,44 @@ export function createAudio() {
      * a moment after you leave, and snapping the filter at the portal reads as
      * a bug rather than as an entrance.
      */
-    space(enc: number, cab = 0): void {
-      cabin = clamp(cab, 0, 1); enclosure = clamp(enc, 0, 1);
+    space(enc: number, cab = 0, parked = 0): void {
+      cabin = clamp(cab, 0, 1); enclosure = clamp(enc, 0, 1); parkedL = clamp(parked, 0, 1);
       if (!live() || !ctx || !outBus) return;
       const t = ctx.currentTime, e = clamp(enc, 0, 1);
-      outLP.frequency.setTargetAtTime((20000 - e * 19100) * (1 - cabin * 0.76), t, 0.45);
-      outBus.gain.setTargetAtTime((1 - e * 0.6) * (1 - cabin * 0.42), t, 0.45);
+      // THE WINDOW COMES DOWN. Parked with the key out, the cab still took
+      // 4.7 dB off the world and shut it above 4.8 kHz — the one moment a
+      // driver stops to listen was the moment they could not. A driver who
+      // has stopped has the window down; the shell closes again as the
+      // engine catches and the truck moves off.
+      const cabF = cabin * (1 - parkedL * 0.8);
+      outLP.frequency.setTargetAtTime((20000 - e * 19100) * (1 - cabF * 0.76), t, 0.45);
+      outBus.gain.setTargetAtTime((1 - e * 0.6) * (1 - cabF * 0.42), t, 0.45);
       slapSend.gain.setTargetAtTime(e * 0.34, t, 0.45);
+    },
+    /**
+     * THE DRONE, HEARD. It never had a voice — every revision was searched.
+     * `spool` 0..1 is the rotors, `load` 0..1 how hard they are working (a
+     * climb, a dash, a lean), `dist` metres from the listener and `bearing`
+     * −1..1 which ear, in the truck's frame; `own` is the drone view, where
+     * the listener is riding it and distance does not apply. −20 dBFS on
+     * board at full spool; a hover ten metres off the rack is −26, forty
+     * metres is a mosquito, which is right for a small quad.
+     */
+    drone(spool: number, dist: number, load: number, bearing = 0, own = false): void {
+      if (!live() || !ctx || !droneGain) return;
+      const t = ctx.currentTime, sp = clamp(spool, 0, 1), ld = clamp(load, 0, 1);
+      // Blade-pass: four rotors a hair apart beat against each other, and
+      // the pitch climbs with the spool and again under load.
+      const f0 = 62 + sp * 58 + ld * 22;
+      droneOscA.frequency.setTargetAtTime(f0, t, 0.12);
+      droneOscB.frequency.setTargetAtTime(f0 * 1.027, t, 0.12);
+      droneOscC.frequency.setTargetAtTime(f0 * 2.01, t, 0.12);
+      const near = own ? 1 : 1 / (1 + Math.pow(Math.max(dist, 0) / 10, 2));
+      // Air takes the top off a distant machine before it takes the level.
+      droneFilt.frequency.setTargetAtTime((650 + sp * 500 + ld * 300) * (own ? 1 : 0.55 + 0.45 * near), t, 0.15);
+      droneGain.gain.setTargetAtTime(lvl(UNIT.drone, -20) * Math.pow(sp, 1.6) * (0.7 + 0.3 * ld) * near, t, 0.1);
+      whooshGain.gain.setTargetAtTime(sp * sp * (0.15 + ld * 0.25) * (own ? 1.4 : 1), t, 0.15);
+      if (dronePan) dronePan.pan.setTargetAtTime(own ? 0 : clamp(bearing, -1, 1) * 0.6, t, 0.3);
     },
     water(level: number): void {
       if (!live() || !ctx || !waterGain) return;

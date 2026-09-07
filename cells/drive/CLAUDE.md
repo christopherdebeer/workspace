@@ -3569,6 +3569,132 @@ level of 0.186 both ways. **Sixteen metres and not twenty-four**: the ring's six
 probes sit at fixed sixty-degree bearings on a 24 m circle, so a stand exactly
 on that circle catches one of them and a stand well inside it catches three.
 
+### The bed was forty decibels down, and the probe was reading gains
+
+Found from the seat: *"parked, engine off, next to a river, and I heard little
+to nothing."* Three measurements, none of them an ear, all in
+`devtools/voice-levels.mjs` and `devtools/soundscape-audit.mjs`:
+
+- **An offline render of every chain at unit gain.** The river on its bank
+  rendered at **−41.5 dBFS**, wind on a 12 km/h day −44, the rustle −48, a bird
+  −35 at the peak of a phrase; the engine idling −29 for scale, the landing
+  thud −34, the creak **−49**, the tarmac roar at 100 km/h −40 and the gravel
+  bed at 40 km/h −42. Anything under about −40 dBFS is gone on a phone speaker.
+  With the engine off the only thing left was an occasional faint bird, which
+  is exactly "little to nothing".
+- **The mixer's own gains at three named river spots, engine off.** The Senqu
+  ford and the "French river bank" both read `river 0`: the hydro field's
+  nearest water was outside the 120 m ring — 220 m off at the French bank,
+  none within 300 m at the Senqu. The Merced at 67 m read `river 0.015`, which
+  is −62 dBFS. Whether a spot fails on reach or on level, it fails.
+- **`__mix()` reports gains, and per voice a gain is worth up to 22 dB more or
+  less than another.** A gain is what a node multiplies by; white noise
+  through a 340 Hz bandpass keeps one percent of its energy where a 900 Hz
+  highpass keeps ninety-six. So "grit 0.38, engine 0.34" — the mix-audit's
+  reading of a gravel bed dominating the engine, recorded above as "the
+  loudest thing the truck does" — was a grit at −44 dBFS under an engine at
+  −31. The whole bed and half the truck were tuned by numbers that meant a
+  different thing on every channel, and two rounds of "raise it" changed
+  nothing from the seat because a raise of 0.1 on a chain that keeps one
+  percent is a raise of nothing.
+
+**WHAT A GAIN OF 1 IS WORTH is now a table.** `UNIT` in `audio.ts` is the RMS
+each chain renders at unit gain, measured by `voice-levels.mjs` (an offline
+render of the module's own pattern generators through the same filters), and
+`lvl(unit, dBFS)` turns a target into a gain. The devtool prints the drift
+between what it measures and what is recorded, so a moved filter shows up
+there before it shows up from the seat. Every world voice is written as a
+level now: the river **−26 dBFS** on the bank of still water (rapids five over
+that plus a boil at −24), wind **−34 on a 12 km/h day and −26 at forty**, the
+rustle −36 → −27 the same way, the new sward −40 → −34, birds −27 at the peak.
+The truck's two surface voices are restated too — roar −31 at 100 km/h on
+tarmac, grit −29 at speed on open ground — because they were the ones proved
+inaudible. **The engine, squeal, scrape and brush keep their linear gains**:
+measured, the engine idles at −29 (−38 through a 400 Hz highpass standing in
+for a phone — its energy is at 50–150 Hz) and the squeal at full is near −35,
+and those are the next list, not this one.
+
+**A LIMITER IS WHAT LETS THE BED UP.** The master sat at 0.55 to leave headroom
+for a crash and the world paid for that headroom permanently. A
+`DynamicsCompressor` at −4 dB threshold, ratio 16, catches the peaks instead;
+it adds about +3.5 dB of make-up uniformly, and `__levels()` reads on both
+sides of it (`master` where the targets are written, `out` what the speaker
+gets) so the targets are checked where they are stated.
+
+**`__levels()` IS THE INSTRUMENT `__mix()` WAS BEING USED AS** — dBFS RMS over
+the last 43 ms at an analyser on each bus and each voice worth asking about,
+computed only when called. `soundscape-audit.mjs` reads it through rest,
+rough ground and the drone. Numbers or it did not happen, and gains are not
+numbers.
+
+**And the soundscape got what the review said it lacked:**
+
+- **The ring reaches 220 m, the far rings are dense, and the NEAREST wet
+  probe sets the level.** Six probes on a 220 m ring are 230 m apart and a
+  river twenty metres wide goes between all of them; the first cut measured
+  the Merced at `riverRaw 0.09` from one hit on the 120 m ring. Twelve probes
+  on the outer rings (38 in all, twice a second, cheaper than one tree), and
+  the level is the nearest ring's weight (24 m 1, 60 m 0.8, 120 m 0.6,
+  220 m 0.35) plus a little for every further hit, so a lake on the beam is
+  still wider than a brook but a brook is no longer a lottery.
+- **Grass.** A meadow with no tree in it was as silent as a car park: `sward`
+  is a thin high band answering to five WorldCover texels under and around the
+  truck, in the wind, with the same duck as the rustle.
+- **Gusts.** Wind was a fan; it is an envelope now (two incommensurate sines of
+  the clock), and the leaves and the grass answer it half a second late.
+- **The river laps and the rapids boil.** Still water's level breathes at the
+  rate water moves against a bank; froth opens the gravel pattern slowed to a
+  third and held low, so fast water churns rather than hisses.
+- **The window comes down.** The cab's shell (Astra's cab mix) took 4.7 dB off
+  the world and shut it above 4.8 kHz with the key out — the one moment a
+  driver stops to listen. `space(enc, cab, parked)` opens it when stopped with
+  the engine off.
+- **The chassis rattles.** Over washboard the only chassis sounds were two
+  one-shots at the bump stops, because the body rides the smooth plane by
+  design and nothing else said the ground was rough. `chassisShake` is the
+  washboard's RATE at the four wheels — exactly what the dampers are being
+  asked to do: tarmac 0.3 m/s, a graded track 1.5, open ground at speed 4,
+  with a knee at 0.3 so tarmac stays silent and worn dampers rattling more —
+  and it drives a bed of pins, trim and tools (`rattlePattern`) that gets
+  denser as well as louder. −28 dBFS flat out, beside the grit.
+- **A landing is the same box being hit.** The thud's gain clamped at 0.5 from a
+  fifth of the way up its range (every landing the same loudness) and rang
+  none of the chassis modes a wall hit rings. `ringModes` is shared now: the
+  crash's two low modes carry the body of a landing too, scaled continuously
+  with the force the suspension reported.
+- **The creak can be heard.** −49 dBFS was a sawtooth sweeping OUT of a narrow
+  bandpass at a tenth of the gain for 160 ms. A lowpass keeps the fundamental
+  as it falls; three times the gain, twice the length.
+- **The drone has a voice.** It never had one — every revision was searched.
+  Four blade-pass tones a hair apart (the beat is what a quad sounds like),
+  a triangle an octave up for the body, a bandpass to keep it a machine, and
+  a thin highpassed whoosh for the downwash. Pitch and level ride the spool
+  and the load (a climb, a dash, a lean); from the truck it falls with the
+  square of distance and sits on the side it is on; on board it is −21 dBFS.
+
+**MEASURED AFTER, `soundscape-audit.mjs`, Yosemite valley floor, no page
+errors.** Parked with the engine off: the Merced at 67 m reads `riverRaw 0.67`
+off the port side and the river tap **−25.6 dBFS** (it was −62); wind −28,
+rustle −40 (this cell has little foliage), sward −44 (cover a quarter grass);
+the world bus −25, the speaker −28. Flat out on the valley floor at 85 km/h:
+`shakeRaw` 1.1 m/s, shake 0.55 with healthy dampers, **rattle −27.6, grit
+−25.9**, wind −21, the engine −13.4, the truck bus peaking at −12.7 — the
+engine is still seven to fourteen decibels over everything else under it,
+which is the ear-tuned bus's balance and the next thing to restate. The drone:
+in the harness the launch ceremony barely advanced in ten wall-clock seconds
+(spool 0 with the truck held stopped — the sim clock stops with it), so the
+on-board tap read −36 at the start of the spool-up; the full-spool levels
+(−21 on board, −27 ten metres off, −46 at forty) are the offline render's and
+the seat's report is the verification.
+
+**JUDGEMENT, NOT ANCHORS.** The targets are numbers written down so they can be
+moved, like the river's 0.28 before them. What is known: −40 dBFS is inaudible
+on a phone; a bed at −26 to −36 leaves the engine (−23 at 40 km/h) on top; the
+crash's strike still peaks near −10 and the limiter holds it. Whether −26 is
+the right river is the seat's call, and there is now an instrument for the seat
+to say so with. Still on the review's list: a surface change has no edge, the
+birds do not know where they are, and there is no engine load.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where
