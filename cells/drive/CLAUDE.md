@@ -1531,6 +1531,145 @@ What the second pass changed, and what it left:
   periodic tar patches; roundabout islands and crossroads fillets; nothing
   separating a deck from the road beneath it in the chart.
 
+## The buildings, and the tags that are not there
+
+The building review's headline is one measurement, and it should be the first
+thing anyone reaches for before proposing a building feature that reads a tag.
+**Counted over the three captures this game ships — 5,120 footprints:**
+
+| tag | Suresnes | Camps Bay | Simon's Town |
+|---|---|---|---|
+| `building:levels` | 6% | 0.3% | 0.2% |
+| `height` | 0.05% | 0% | 0% |
+| `roof:shape` | 1.4% | 0% | 0% |
+| `building:colour` / `:material` | 0% | 0% | 0% |
+| `building=yes` (untyped) | 80% | 89% | 90% |
+
+Seven buildings in five thousand carry a height. **The R55 note that restored
+this vocabulary measured Freiburg**, which is unusually well surveyed; the note
+is honest about its own source and was then read as a general fact. Everywhere
+anyone drives, `levels || 2` was not a fallback, it was the height of ~94% of
+every town — one value, 6.2m — and the roof default keyed off a `building=` word
+list left 99% of the world wearing a flat extrusion cap.
+
+So the rule for anything about buildings: **synthesise from what is always
+present** (the footprint's area and box, `builtUpAt`, the culture, the stand
+seed) and defer to a tag only where one exists. `massHeight` and the roof gate
+in `building()` are the worked examples. `building:colour`, `building:material`
+and `roof:colour` are kept in `KEEP_TAGS` and are 0% in all three captures —
+`registerPaint`'s mapped path and the ruin gate's colour exemption effectively
+never fire.
+
+- **A STAND NORM, NOT A PER-BUILDING HASH.** The same lesson as the tree atlas
+  ("a wood is one wood"): an independent draw per building is noise, and a
+  terrace at six unrelated heights reads as broken data. The 32m stand sets a
+  local norm and the building's own draw moves it half a storey.
+- **`intact` AND `ruin` CANNOT SEE THIS.** They are identical whether every
+  building is 6.2m or none is. The defect lives in the DISTRIBUTION, which is
+  why `buildStats.hist` (3m buckets) and `.roofs` exist. Read them, not the
+  counts.
+- **THE ROOF GATE OVERSHOT FIRST AND THE PROBE CAUGHT IT.** Gating on the
+  culture's pitch and a height ceiling alone put a roof on 98.7% of Suresnes,
+  1,474 hipped against 28 flat — as wrong as the 99% flat it replaced. Flat
+  roofs are specific and real: outbuildings, blocks, commercial sheds. Hipping
+  stays a minority choice even where the plan allows it, or a street reads as
+  stamped.
+- **`look.pitch` HAD BEEN COMPUTED AND READ BY NOTHING** since the cultures
+  shipped — snow-biased, reported by `__culture`, and the ridge came off
+  `min(du,dv)*0.45` regardless, so every building on earth had the same roof and
+  an adobe town's flat silhouette arrived only by the kind regex not matching.
+  If a probe reports a value, check something consumes it.
+- **STOREY HEIGHT BELONGS TO THE CULTURE** (`BuildCulture.storeyM`), beside the
+  wall texture. It is not one number: 2.7 against 3.3 over four floors is two
+  metres of silhouette.
+
+### The façade's surface, and three ways it went black
+
+- **GLASS WAS AN ABSOLUTE COLOUR, so on a dark wall the windows were LIGHTER
+  than the wall** and read as pale panels stuck on the building. The panes were
+  0.05–0.17 on the assumption the paint is pale limewash; a shaded face or any
+  dark paint inverts it. Photographed at Camps Bay as beige rectangles on oxide
+  red. The void is a fraction OF the wall now, which cannot invert. The
+  sun-catching reflection stays absolute — that is the SKY's brightness.
+- **A BUILDING AT NIGHT WAS A HOLE IN THE FRAME.** Measured at `?time=NIGHT`:
+  wall linear luminance **0.0052 (sRGB 13) against ground at 0.13**, and not one
+  lit window anywhere in the world. The skylight lift was `0.075 * dayF`, so the
+  one stand-in for the missing bounce left at dusk while the ground kept its
+  moonlight response. It has a night floor now, and `uFacNight` lights a share
+  of the bays. **The lit window goes to EMISSIVE, not to the diffuse colour** —
+  at night the diffuse is multiplied by almost no light, so tinting it changes
+  nothing, which is the trap that makes this look like it did not work. After:
+  0.0208 (sRGB 53) with a scatter of lit windows across the skyline.
+- **RUINS COULD NEVER JOIN `bldSkylit`** and are 42% of Suresnes' stock. They
+  carry weathering in VERTEX COLOURS, so `material.color` is white and
+  `emissive.copy(color)` would light every ruin in the world white. A mid
+  weathered tone stands in.
+- **A SOFFIT IS NOT A VOID.** Roofs were outside the lift, invisible while
+  nothing was pitched and a hard black band along every eave the moment most of
+  the stock was. **The mechanism is the one already written down for the
+  ribbons**: DoubleSide flips the shading normal toward the VIEWER, so a surface
+  seen from below points away from the sun and Lambert correctly clamps to zero.
+  The ribbons could answer it by CULLING — nobody is meant to see the underside
+  of a road — and a soffit cannot, because looking up at the eave is how you see
+  a house.
+
+**BUILDINGS ARE THE CHEAPEST THING IN THIS WORLD.** Measured with `__census`,
+settled: at Suresnes buildings are 126,590 triangles in **10 draw calls** and
+ruins 219,990 in 5, against vegetation's 1.86M — the whole built world is 11% of
+the scene's triangles, and 3% at Camps Bay. Pitched roofs on most of the stock
+cost **+3.5%** and no extra draw calls. Per-fragment work is the abundant
+resource here (the frame is ~148×320), so façade detail is close to free; what
+is scarce is per-vertex and per-draw, and neither is where the building bill is.
+
+### What ruled itself out, and the instruments that did it
+
+Three plausible causes of dark roofs, all measured innocent — worth knowing so
+nobody re-litigates them:
+
+- **NOT the batter's colour-times-map fault.** `__texmean` reports every
+  building texture's mean off its own canvas: 0.91–0.98. (`batterMean` exists
+  because that fault was real for the batter at 0.44.)
+- **NOT self-shadowing.** `?shadows=0` moves a roof sample by 4%.
+- **NOT inverted roof caps.** `__bldwind` (the buildings' answer to
+  `__ribbonwind`) reports 21.8% of building triangles facing down — and that is
+  the extrusion's FLOOR SLAB, which is meant to be there. Ruins read 0% down.
+
+### Framing a façade, and the sun that is not the clock
+
+- `devtools/building-survey.mjs` picks spots from `__plots()` and stands 26m
+  back looking AT a building. The visual survey frames JUNCTIONS — its spots are
+  node coordinates and its cab frames look down a carriageway — so before this
+  a wall was only ever whatever happened to be off to one side.
+- `devtools/facade-light.mjs` samples wall, ground and sky luminance;
+  `devtools/roof-light.mjs` does the roof, standing the truck ON a footprint so
+  the top view's centre is that roof.
+- **`?sunalt` FORCES ONLY THE SUN'S DIRECTION.** `dayF`, `sun.color`, the
+  twilight band and `uNight` are all still computed from the CLOCK's altitude
+  (`stepSun`), so a forced negative altitude is midday with the light raked
+  through the floor. The first three "night" frames of this review were noon.
+  Anything about brightness needs `?time=`, and that is a page load each.
+- **READING THE LIVE CANVAS BACK GIVES A BLACK IMAGE.** The renderer runs
+  without `preserveDrawingBuffer`, so the drawing buffer is gone by the time
+  anything outside the frame asks for it — measured as wall, ground and sky all
+  `[0,0,0]`, which reads as a black world and is a reading of nothing. Decode
+  the SCREENSHOT in Chromium instead, the route `imgdiff.mjs` takes.
+
+**Still standing, and not yet explained:** a large pure-black region in the
+Suresnes b1 cab frame, present before this work as well as after, on a surface
+that is not obviously a lifted wall or a lifted soffit. Worth one raycast.
+Also open: one bay grid for the planet (2.75m × 3.1m, fixed in `facade.ts`, no
+per-culture or per-class window rhythm), and no chimneys, parapets, cornices or
+balconies anywhere.
+
+**AND THE MARK TINS ARE STILL ABSOLUTE, which is the glass fault one surface
+over.** A tin is mixed in at `fadeMin + fadeVar` of its own colour regardless of
+the paint underneath, so on the oxide-red Camps Bay wall a tag reads as a bright
+tan blob rather than as paint on a wall. `graffiti.test.mjs` asserts no tin is
+bright enough to BLOOM and passes — that is an absolute test, and this is a
+CONTRAST problem, so the suite cannot see it. The fix is the same shape as the
+glass one: carry the tin toward the wall's own value rather than mixing a fixed
+colour over it.
+
 ## The labs
 
 `/lab` lists them; each is `/lab/<slug>`, registered in `client/labs.ts`.
