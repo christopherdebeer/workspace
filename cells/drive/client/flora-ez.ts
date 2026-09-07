@@ -506,9 +506,17 @@ export function ezMaterial(
             float ezB = ezNoise(vec3(vEzLocal.x * 150.0, vEzLocal.y * 14.0 + vEzJit * 37.0, vEzLocal.z * 150.0));
             diffuseColor.rgb *= 1.0 + (ezB - 0.5) * uEzBark;
           }
-        } else if (uEzEdge < 0.999) {
+        } else {
+          // Broad object-space depth survives pixel reduction: the sheltered
+          // interior receives less sky, while outer foliage keeps its colour.
+          // No emissive rim, additional texture, or extra draw pass.
+          float ezOuter = smoothstep(0.06, 0.42, length(vEzLocal.xz));
+          float ezUpper = smoothstep(0.30, 1.0, vEzLocal.y);
+          diffuseColor.rgb *= mix(0.74, 1.0, max(ezOuter, ezUpper));
+          if (uEzEdge < 0.999) {
           float ezNdv = abs(dot(normalize(normal), normalize(vViewPosition)));
           diffuseColor.rgb *= mix(uEzEdge, 1.0, smoothstep(0.0, 0.35, ezNdv));
+          }
         }`);
   };
   return mat;

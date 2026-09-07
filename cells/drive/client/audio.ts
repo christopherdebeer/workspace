@@ -404,14 +404,19 @@ export function createAudio() {
       // surface coarsens, and gone altogether on open ground.
       const hard = surf === 'water' ? 0 : surf === 'road' || surf === 'track'
         ? clamp(q, 0, 1) : 0.08;
-      roarFilt.frequency.setTargetAtTime(320 + hard * 830, t, 0.12);
-      roarGain.gain.setTargetAtTime(Math.min(v / 34, 1) * (0.26 - hard * 0.16) * grounded * duck, t, 0.1);
-      // Rain rides the wind channel: same filtered noise, opened up and
-      // lifted — and so does the WEATHER'S wind, which blows whether or not
-      // the truck moves: a parked truck on a gusty pass is not silent.
-      windFilt.frequency.setTargetAtTime(900 - rainAmt * 500 - ambWind * 250, t, 0.4);
+      const wetRoad = clamp(rainAmt, 0, 1) * hard;
+      roarFilt.frequency.setTargetAtTime(320 + hard * 830 + wetRoad * 850, t, 0.12);
+      roarGain.gain.setTargetAtTime(Math.min(v / 34, 1) * (0.26 - hard * 0.16 + wetRoad * 0.08) * grounded * duck, t, 0.1);
+      // The weather's wind blows even when parked. Rain has its own wash
+      // and impacts now, so rainfall does not masquerade as stronger wind.
+      windFilt.frequency.setTargetAtTime(900 - ambWind * 250, t, 0.4);
       windGain.gain.setTargetAtTime(
-        Math.min((v * v) / 2600, 0.9) * 0.13 + rainAmt * 0.16 + ambWind * 0.09, t, 0.15);
+        Math.min((v * v) / 2600, 0.9) * 0.13 + ambWind * 0.09, t, 0.15);
+      const rain = clamp(rainAmt, 0, 1);
+      rainGain.gain.setTargetAtTime(rain * 0.12, t, 0.45);
+      // A roof overhead shelters the rig too. The cabin brings its own roof
+      // closer to the ear; a tunnel must not amplify rain that cannot hit it.
+      roofGain.gain.setTargetAtTime(rain * (0.08 + cabin * 0.24) * (1 - enclosure), t, 0.45);
       // Gravel: absent on tarmac, dominant off it. Rate (playbackRate) AND
       // level rise with speed, so the crunch density tracks the wheels.
       // …and the grit is its complement, plus whatever the wheels are throwing
@@ -487,6 +492,11 @@ export function createAudio() {
           birdAt = nowP + 1500 + (Math.random() * 9000) / (0.15 + birds);
           const notes = 2 + Math.floor(Math.random() * 4);
           const base = 2300 + Math.random() * 1700;
+          // One location for the WHOLE phrase, rather than a new ear per
+          // note. Allocate only when a bird speaks and release after its tail.
+          let birdPan: StereoPannerNode | null = null;
+          try { birdPan = ctx.createStereoPanner(); } catch { /* mono fallback */ }
+          if (birdPan) { birdPan.pan.value = (Math.random() * 2 - 1) * 0.65; birdPan.connect(outBus); }
           let at = t + Math.random() * 0.2;
           for (let i = 0; i < notes; i++) {
             const osc = ctx.createOscillator(); osc.type = 'sine';
@@ -498,7 +508,9 @@ export function createAudio() {
             g.gain.setValueAtTime(0.0001, at);
             g.gain.exponentialRampToValueAtTime(0.008 + 0.035 * clamp(birds, 0, 1), at + 0.015);
             g.gain.exponentialRampToValueAtTime(0.0001, at + 0.05 + Math.random() * 0.07);
-            osc.connect(g); g.connect(outBus);
+            osc.connect(g); g.connect(birdPan ?? outBus);
+            const lastNote = i === notes - 1;
+            osc.onended = () => { osc.disconnect(); g.disconnect(); if (lastNote) birdPan?.disconnect(); };
             osc.start(at); osc.stop(at + 0.16);
             at += 0.07 + Math.random() * 0.12;
           }
@@ -786,11 +798,12 @@ export function createAudio() {
      * a moment after you leave, and snapping the filter at the portal reads as
      * a bug rather than as an entrance.
      */
-    space(enc: number): void {
+    space(enc: number, cab = 0): void {
+      cabin = clamp(cab, 0, 1); enclosure = clamp(enc, 0, 1);
       if (!live() || !ctx || !outBus) return;
       const t = ctx.currentTime, e = clamp(enc, 0, 1);
-      outLP.frequency.setTargetAtTime(20000 - e * 19100, t, 0.45);
-      outBus.gain.setTargetAtTime(1 - e * 0.6, t, 0.45);
+      outLP.frequency.setTargetAtTime((20000 - e * 19100) * (1 - cabin * 0.76), t, 0.45);
+      outBus.gain.setTargetAtTime((1 - e * 0.6) * (1 - cabin * 0.42), t, 0.45);
       slapSend.gain.setTargetAtTime(e * 0.34, t, 0.45);
     },
     water(level: number): void {
