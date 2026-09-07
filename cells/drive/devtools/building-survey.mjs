@@ -33,14 +33,21 @@ const FIXTURES = (process.env.BLDG_FIX ?? 'at-paris-west,at-campsbay').split(','
 // building line across a suburban street, which is the distance the façade is
 // actually judged at — not the ten metres a lab uses.
 const BACK = 26;
-const SUNS = [['high', 52], ['low', 9], ['night', -9]];
+// THE SUN'S HEIGHT AND THE TIME OF DAY ARE DIFFERENT LEVERS, and this tool got
+// it wrong first time round: `__sunalt(-9)` puts the sun below the horizon and
+// leaves dayF, the sky and uNight computed from the CLOCK, so the "night" frames
+// it wrote were midday with the light raked through the floor. Night needs
+// ?time=, which is a boot — so the clock is the outer loop and the sun's height
+// varies only within a daylit one.
+const CLOCK = process.env.BLDG_TIME ?? 'NOON';
+const SUNS = CLOCK === 'NIGHT' ? [['night', null]] : [['high', 52], ['low', 9]];
 
 const t0 = Date.now();
 const el = () => `${((Date.now() - t0) / 1000).toFixed(0)}s`;
 
 for (const fix of FIXTURES) {
   const d = await openDrive({
-    spot: `fixture=${fix}&cam=chase&time=NOON&cprobe=1&nodraw=1`,
+    spot: `fixture=${fix}&cam=chase&time=${CLOCK}&cprobe=1&nodraw=1`,
     tag: `bldg-${fix}`, settle: 0, bootTimeout: 150000, dpr: 2, rev: REV,
   });
   const q = (fn, ...a) => d.page.evaluate(fn, ...a);
@@ -109,28 +116,28 @@ for (const fix of FIXTURES) {
     const s = spots[i];
     await q((s) => { window.__place(s.x, s.z, s.h); window.__drive.speed = 0; }, s);
     for (const [tag, alt] of SUNS) {
-      await q((a) => window.__sunalt(a), alt);
+      if (alt !== null) await q((a) => window.__sunalt(a), alt);
       await q(() => window.__cam('cab'));
       await d.page.waitForTimeout(3500);
       await shot(`${OUT}/${fix}-b${i}-${tag}-cab.png`);
     }
-    // One chase frame per building at the low sun — the silhouette and the
-    // roofline, which is what a cab frame filled with one wall cannot show.
-    await q(() => window.__sunalt(9));
+    // One chase frame per building — the silhouette and the roofline, which is
+    // what a cab frame filled with one wall cannot show.
+    if (CLOCK !== 'NIGHT') await q(() => window.__sunalt(9));
     await q(() => window.__cam('chase'));
     await d.page.waitForTimeout(3500);
-    await shot(`${OUT}/${fix}-b${i}-low-chase.png`);
+    await shot(`${OUT}/${fix}-b${i}-${CLOCK === 'NIGHT' ? 'night' : 'low'}-chase.png`);
     console.log(`[${el()}] ${fix}: b${i} at ${s.x},${s.z} (footprint ${s.n} pts) done`);
   }
 
   // The planform, once: how much of the block is built, and how the stock is
   // massed. At 0.35 the frame is a couple of streets.
   await q(() => { window.__place(0, 0); window.__drive.speed = 0; });
-  await q(() => window.__sunalt(52));
+  if (CLOCK !== 'NIGHT') await q(() => window.__sunalt(52));
   await q(() => window.__cam('top'));
   await q(() => window.__zoom(0.35));
   await d.page.waitForTimeout(5000);
-  await shot(`${OUT}/${fix}-plan.png`);
+  await shot(`${OUT}/${fix}-plan-${CLOCK}.png`);
 
   console.log(`[${el()}] ${fix}: errors ${d.errors.length} ${JSON.stringify(d.errors.slice(0, 2))}`);
   await d.close();

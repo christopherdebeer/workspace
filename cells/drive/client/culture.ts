@@ -185,6 +185,17 @@ export interface BuildCulture {
   roofTex: RoofTex;
   /** Base roof pitch, 0..1, before snow load steepens it. */
   pitch: number;
+  /**
+   * FLOOR TO FLOOR, IN METRES — a tradition's storey, not a global constant.
+   *
+   * The renderer estimated every untagged building at `levels * 3.1`, one
+   * number for the planet. A storey is not one number: a Mediterranean or
+   * earth-built room runs tall for the shade, a northern timber house is built
+   * low to heat, and the difference between 2.7 and 3.2 over four floors is
+   * two metres of silhouette. It belongs to the culture for the same reason
+   * the wall texture does — this is what the place BUILDS like.
+   */
+  storeyM: number;
   affinity: number[];
 }
 
@@ -195,7 +206,7 @@ export const BUILD_CULTURES: BuildCulture[] = [
     key: 'limewash',
     wall: [0xefe9dc, 0xe8dfcc, 0xf2ede4, 0xe3d8c4, 0xefe2cc, 0xe9dcc6, 0xece5d2],
     roof: [0xa8613c, 0x9c5a38, 0xb06a42, 0x8f5334],
-    wallTex: 'render', roofTex: 'pantile', pitch: 0.42,
+    wallTex: 'render', roofTex: 'pantile', pitch: 0.42, storeyM: 3.0,
     affinity: [0.18, 0.5, 1.0, 0.25, 0.3],
   },
   {
@@ -204,7 +215,7 @@ export const BUILD_CULTURES: BuildCulture[] = [
     key: 'ochre',
     wall: [0xd9a05b, 0xc98a4e, 0xdcb173, 0xc07a52, 0xd69a76, 0xe0bc8c],
     roof: [0xa2593a, 0x93502f, 0xb06844],
-    wallTex: 'render', roofTex: 'pantile', pitch: 0.36,
+    wallTex: 'render', roofTex: 'pantile', pitch: 0.36, storeyM: 3.25,
     affinity: [1.0, 0.6, 0.55, 0.05, 0.15],
   },
   {
@@ -213,7 +224,7 @@ export const BUILD_CULTURES: BuildCulture[] = [
     key: 'stone',
     wall: [0xa8a49a, 0x9c968a, 0xb5b0a4, 0x8e8a80, 0xc0baac, 0x99927f],
     roof: [0x51565c, 0x464b51, 0x5c6167, 0x3e4349],
-    wallTex: 'stone', roofTex: 'slate', pitch: 0.72,
+    wallTex: 'stone', roofTex: 'slate', pitch: 0.72, storeyM: 2.85,
     affinity: [0.10, 0.05, 0.7, 0.85, 1.0],
   },
   {
@@ -222,7 +233,7 @@ export const BUILD_CULTURES: BuildCulture[] = [
     key: 'timber',
     wall: [0x7b4a38, 0x8a5340, 0x6d4132, 0x94604a, 0x5f3a2c, 0xa8705a],
     roof: [0x4a4a46, 0x565650, 0x40403c],
-    wallTex: 'timber', roofTex: 'shingle', pitch: 0.78,
+    wallTex: 'timber', roofTex: 'shingle', pitch: 0.78, storeyM: 2.7,
     affinity: [0.03, 0.1, 0.45, 1.0, 0.6],
   },
   {
@@ -232,7 +243,7 @@ export const BUILD_CULTURES: BuildCulture[] = [
     key: 'adobe',
     wall: [0xd8bf95, 0xcbb083, 0xe2cda8, 0xc0a375, 0xd5b98e, 0xb99a6c],
     roof: [0xc4ab84, 0xb89d76, 0xd0b891],
-    wallTex: 'adobe', roofTex: 'flat', pitch: 0.06,
+    wallTex: 'adobe', roofTex: 'flat', pitch: 0.06, storeyM: 3.3,
     affinity: [1.0, 0.75, 0.15, 0.0, 0.1],
   },
   {
@@ -240,7 +251,7 @@ export const BUILD_CULTURES: BuildCulture[] = [
     key: 'brick',
     wall: [0x8f5a48, 0x9c6552, 0x7d4d3e, 0xa87360, 0x86584a, 0x6f4438],
     roof: [0x5a4a44, 0x64534c, 0x4e3f3a],
-    wallTex: 'brick', roofTex: 'slate', pitch: 0.58,
+    wallTex: 'brick', roofTex: 'slate', pitch: 0.58, storeyM: 3.05,
     affinity: [0.05, 0.3, 1.0, 0.35, 0.12],
   },
 ];

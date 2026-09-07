@@ -25,7 +25,7 @@ import { URL_OWNED, qs, qsHas, switchRows } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt, paintFor, roadLookAt,
-  seedAt, snowLoad, stoneWalls, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
+  seedAt, snowLoad, stoneWalls, unitN, type BuildLook, type RoadCulture, type RoofTex, type WallTex } from './culture';
 import { pickInfrastructureRecipe, planSupportStations, type StructureRecipe } from './infrastructure';
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
 import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
@@ -51,7 +51,7 @@ const { BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, 
 import { createOverlays } from './overlays';
 import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
-import { facade } from './facade';
+import { facade, uFacNight } from './facade';
 import { startLab } from './labs';
 import { EZ_FAMILIES, EZ_M_PER_SCALE, EZ_PALETTE_N, FOLIAGE_WIND_UNIFORMS, ezCrownReach, ezLookU, ezMaterial, ezMeanTris, ezPalette, ezPickVariant, ezRecord, ezVariantFor, ezVariants, foliageWind, type EzFamily } from './flora-ez';
 import { openSurvey } from './survey-store';
@@ -7074,6 +7074,29 @@ for (const m of Object.values(MAT)) {
 // line up per building no matter what the terrain under it is doing.
 /** Wall materials that take the skylight lift below. */
 const bldSkylit: THREE.MeshLambertMaterial[] = [];
+/**
+ * ── AND THE ROOFS, BECAUSE A SOFFIT IS NOT A VOID ──
+ *
+ * Roof materials were left out of the lift, which did not show while 99% of the
+ * world wore a flat cap nobody could see the underside of. With pitched roofs
+ * on most of the stock it shows immediately: the eave overhang is a hard PURE
+ * BLACK band along every gable, photographed at Suresnes.
+ *
+ * The mechanism is already written down in this file for the ribbons (see the
+ * DS note): DoubleSide flips the shading normal toward the VIEWER, so a surface
+ * seen from below has its normal pointing away from the sun, Lambert clamps the
+ * diffuse to zero, and near-black is the correct output of what was asked for.
+ * The ribbons could answer it by CULLING — the underside of a road is never
+ * meant to be seen — and a soffit cannot, because looking up at the eave from
+ * the street is the normal way to see a house.
+ *
+ * So it takes the same stand-in for bounce the walls take, at a fraction of it:
+ * enough that a soffit reads as shaded timber rather than as a hole in the
+ * world, which the rendering doctrine forbids for the same reason it forbids
+ * the void through a terrain crack. Half, because a roof also goes square-on to
+ * a high sun and is the building surface nearest the bright-pass cut.
+ */
+const bldRoofSkylit: THREE.MeshLambertMaterial[] = [];
 // Building tints vary per way id so a block reads as parcels, not one slab.
 // Extrude material slots: [0]=caps (roof), [1]=side walls (darker).
 // WORN PAINT, not four shades of mud. The old set was four colours a few
@@ -7114,15 +7137,17 @@ const B_MATS = [
   const wall = new THREE.MeshLambertMaterial({ color: side, map: wallTexes[i % wallTexes.length], side: DS });
   facade(wall);
   bldSkylit.push(wall);
-  return [
-    // A roof is tile or felt, not paint, and it is the one surface that goes
-    // square-on to a high sun — so it takes the darkening the wall used to.
-    new THREE.MeshLambertMaterial({ color: new THREE.Color(c).multiplyScalar(0.78), map: roofTex, side: DS }),
-    wall,
-  ] as [THREE.Material, THREE.Material];
+  // A roof is tile or felt, not paint, and it is the one surface that goes
+  // square-on to a high sun — so it takes the darkening the wall used to.
+  const roof = new THREE.MeshLambertMaterial({ color: new THREE.Color(c).multiplyScalar(0.78), map: roofTex, side: DS });
+  bldRoofSkylit.push(roof);
+  return [roof, wall] as [THREE.Material, THREE.Material];
 });
 // Ruins carry their weathering in vertex colours instead of a map, so every
 // wall segment can rot at its own rate.
+/** The stand-in for the average of a ruin's vertex colours — see the skylight
+ *  lift, which cannot read them and would otherwise light a ruin white. */
+const RUIN_SKYLIT = new THREE.Color(0x6b6257);
 const ruinMat = new THREE.MeshLambertMaterial({ vertexColors: true, flatShading: true, side: DS });
 facade(ruinMat);
 // The far side of the ruin LOD: identical weathering, FRONT faces only.
@@ -17048,7 +17073,26 @@ function claimSolid(pts: Array<[number, number]>, top: number, rubble = false): 
 // the low-rise stock is an open shell: walls chewed down to varying heights,
 // whole bays collapsed, no roof, and something growing in the middle of it.
 // Towers stay intact — a twenty-storey open shell reads as a modelling bug.
-const buildStats = { intact: 0, ruin: 0, ruins: [] as Array<[number, number]> };
+/**
+ * `hist` and `roofs` are the MASSING instruments, and they exist because the
+ * counts above cannot see the thing that was wrong. A world where every
+ * building is 6.2m tall and a world with a range of heights report the same
+ * `intact` and the same `ruin`; the defect is in the DISTRIBUTION, so the
+ * distribution is what a probe has to answer. Heights in 3m buckets, and the
+ * roof shape actually chosen — including how many got none, which was 99%.
+ */
+const buildStats = {
+  intact: 0, ruin: 0, ruins: [] as Array<[number, number]>,
+  hist: [] as number[], roofs: {} as Record<string, number>,
+};
+/** One building's height and roof, for the massing histogram. */
+function noteMass(height: number, roof: string | undefined): void {
+  const b = Math.min(11, Math.floor(height / 3));
+  while (buildStats.hist.length < 12) buildStats.hist.push(0);
+  buildStats.hist[b]++;
+  const k = roof ?? 'flat';
+  buildStats.roofs[k] = (buildStats.roofs[k] ?? 0) + 1;
+}
 /** Which paint this building wears. HASHED, not `id % n`: OSM ids are handed
  *  out in creation order, so a terrace surveyed in one sitting has consecutive
  *  ids and the modulo painted it as a repeating stripe of the same few
@@ -17105,6 +17149,7 @@ function registerPaint(col: number): number | null {
   facade(wall);
   bldSkylit.push(wall);
   const roof = new THREE.MeshLambertMaterial({ color: side.clone().multiplyScalar(0.78), map: roofTex, side: DS });
+  bldRoofSkylit.push(roof);
   const paint = B_MATS_FLAT.length / 2;
   B_MATS_FLAT.push(roof, wall);
   extraPaint.set(col, paint);
@@ -17140,6 +17185,7 @@ function registerCulturePaint(wallCol: number, roofCol: number, wt: WallTex, rt:
   // brighter of the two surfaces.
   const roof = new THREE.MeshLambertMaterial({
     color: new THREE.Color(roofCol).multiplyScalar(0.78), map: ROOF_TEX[rt], side: DS });
+  bldRoofSkylit.push(roof);
   const paint = B_MATS_FLAT.length / 2;
   B_MATS_FLAT.push(roof, wall);
   culturePaint.set(key, paint);
@@ -17509,6 +17555,119 @@ function markForBuilding(x: number, z: number, kind: string): number {
   const look: MarkLook = markLookAt(cultEnv, x, z, climateAt(x, z).w, people);
   return packMark(look);
 }
+/**
+ * ── HOW TALL A BUILDING IS WHEN NOBODY SAID, WHICH IS ALMOST ALWAYS ──
+ *
+ * The estimate was `building:levels || 2`, times 3.1m. MEASURED over the three
+ * captures this game ships — 5,120 footprints between Suresnes, Camps Bay and
+ * Simon's Town — that default is what almost the whole world gets:
+ *
+ *   tag              Suresnes   Camps Bay   Simon's Town
+ *   building:levels        6%        0.3%        0.2%
+ *   height              0.05%          0%          0%
+ *   roof:shape           1.4%          0%          0%
+ *   building=yes          80%         89%         90%
+ *
+ * So ~94% of every town was EXACTLY 6.2 metres tall. That is the flat, one-value
+ * skyline the building review photographed, and no amount of surface detail
+ * fixes it: massing is what a town reads as from more than fifty metres away.
+ * The R55 note above this file's tag work was measured on Freiburg, which is an
+ * unusually well-surveyed city; everywhere else the vocabulary simply is not
+ * there, and a renderer that only varies where a surveyor typed something will
+ * be flat wherever anyone actually drives.
+ *
+ * The rule, then, is to SYNTHESISE from what is always present — the footprint
+ * itself, where it stands, and what the culture builds like — while still
+ * deferring completely to a real tag wherever one exists.
+ *
+ * ── WHY THE STAND SEED AND NOT JUST A HASH ──
+ *
+ * This is the lesson the tree atlas already paid for ("a wood is one wood"):
+ * hashing each building's own position gives every one an independent draw,
+ * which is not variety, it is noise — a terrace of houses at six different
+ * heights reads as broken data. Real streets are coherent at two scales, so the
+ * STAND (32m, about one terrace) sets a local norm and the building's own draw
+ * moves it by up to half a storey either way. Neighbours agree; the next block
+ * along does not.
+ *
+ * `builtUpAt` — road length in the neighbourhood, the same proxy the marks
+ * already use for how many people pass — is what separates a village from a
+ * city centre without needing a population raster.
+ *
+ * Deliberately NOT read: nothing here consults the ruin roll's generator. It
+ * gets its own, seeded off the same id by a different constant, so which
+ * buildings are ruins is byte-identical before and after this change and an
+ * A/B of the two is a comparison of MASSING alone.
+ */
+const MASS_CANOPY = new Set(['roof', 'carport']);
+const MASS_OUT = new Set(['shed', 'hut', 'garage', 'garages', 'cabin', 'stable',
+  'cowshed', 'greenhouse', 'bunker', 'container', 'kiosk', 'boathouse', 'sty']);
+const MASS_HALL = new Set(['barn', 'farm_auxiliary', 'warehouse', 'hangar', 'industrial',
+  'manufacture', 'works', 'depot', 'silo', 'storage_tank', 'sports_hall', 'supermarket']);
+const MASS_BLOCK = new Set(['apartments', 'flats', 'commercial', 'office', 'retail',
+  'hotel', 'school', 'hospital', 'civic', 'public', 'university', 'college',
+  'government', 'dormitory', 'residential']);
+/** The footprint's area and the short side of its oriented box — the two facts
+ *  about a plan that say what sort of building can stand on it. */
+function footprintSize(pts: Array<[number, number]>): { area: number; short: number } {
+  let a2 = 0, bi = 0, bl = -1;
+  for (let i = 0; i < pts.length; i++) {
+    const [x1, z1] = pts[i], [x2, z2] = pts[(i + 1) % pts.length];
+    a2 += x1 * z2 - x2 * z1;
+    const l = (x2 - x1) ** 2 + (z2 - z1) ** 2;
+    if (l > bl) { bl = l; bi = i; }
+  }
+  const area = Math.abs(a2) / 2;
+  const [ex1, ez1] = pts[bi], [ex2, ez2] = pts[(bi + 1) % pts.length];
+  const el = Math.hypot(ex2 - ex1, ez2 - ez1) || 1;
+  const ux = (ex2 - ex1) / el, uz = (ez2 - ez1) / el;
+  let v0 = Infinity, v1 = -Infinity;
+  for (const [x, z] of pts) {
+    const v = x * -uz + z * ux;
+    if (v < v0) v0 = v; if (v > v1) v1 = v;
+  }
+  return { area, short: Math.max(1, Math.min(el, v1 - v0)) };
+}
+function massHeight(
+  kind: string, pts: Array<[number, number]>, x: number, z: number, look: BuildLook, id: number,
+): number {
+  const { area, short } = footprintSize(pts);
+  const rm = mulberry32((Math.imul(id, 0x9e3779b1) ^ 0x5bf03635) >>> 0);
+  rm();                                     // the first draw off a hashed seed is poor
+  const norm = unitN(seedAt(cultEnv, x, z, 'stand'), 3);   // this terrace's own norm
+  const dens = builtUpAt(x, z);
+  const storey = look.culture.storeyM;
+  // A CANOPY IS NOT A BUILDING. `building=roof` is a bus shelter, a filling
+  // station, a lean-to over a yard — 37 of Simon's Town's 666 footprints — and
+  // every one of them was a six-metre windowless box.
+  if (MASS_CANOPY.has(kind)) return 2.4 + 0.9 * rm();
+  // An outbuilding is one low storey, and never taller than it is wide: a 3m
+  // garage at 3.5m is a tower.
+  if (MASS_OUT.has(kind)) return Math.min(2.5 + 1.1 * rm(), short * 1.15 + 1.4);
+  // A hall is ONE tall volume, not floors — and a farm's sheds agree with each
+  // other, so the stand norm carries more weight here than the individual draw.
+  if (MASS_HALL.has(kind)) return 5.4 + 4.6 * norm + 1.2 * (rm() - 0.5);
+  // Somewhere between one and three storeys, the stand deciding which.
+  const houseSt = 1 + (norm > 0.52 ? 1 : 0) + (rm() > 0.82 ? 1 : 0);
+  if (MASS_BLOCK.has(kind)) {
+    // A block's floor count follows its PLAN and its neighbourhood: a big
+    // footprint in a dense place is the one combination that means "tall".
+    const big = clamp((area - 140) / 420, 0, 1);
+    const st = clamp(2 + norm * 1.4 + dens * 2.6 + big * 2.4 + (rm() - 0.5) * 1.2, 2, 9);
+    return st * storey;
+  }
+  if (kind !== 'yes') return houseSt * storey;
+  // ── THE UNTYPED EIGHTY PER CENT ──
+  //
+  // `building=yes` is most of the planet and says nothing at all, so the plan
+  // has to answer for it. Under about 55m² nothing has floors — that is the
+  // garden shed, the garage, the outhouse — and the step is deliberately sharp,
+  // because in life it is: a shed is not a short house.
+  if (area < 55) return Math.min(2.6 + 1.1 * rm(), short * 1.2 + 1.5);
+  const big = clamp((area - 130) / 460, 0, 1);
+  const st = clamp(1 + norm * 1.5 + dens * 2.3 + big * 1.9 + (rm() - 0.5) * 1.1, 1, 9);
+  return st * storey;
+}
 function building(pts: Array<[number, number]>, id: number, tags: Record<string, string>): void {
   // Inside a landmark pad the authored geometry is the building. OSM's own
   // polygon for a pyramid extrudes into a flat-roofed prism through ours.
@@ -17521,7 +17680,11 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
     if (pts.length && inLandmarkPad(ctrX, ctrZ)) return;
   }
   const kind = tags.building ?? 'yes';
-  const levels = parseFloat(tags['building:levels'] ?? '') || 2;
+  const levels = parseFloat(tags['building:levels'] ?? '') || 0;
+  // THE LOOK IS NEEDED BEFORE THE HEIGHT NOW, because a storey is a property of
+  // the culture (see BuildCulture.storeyM) rather than a global 3.1m. It is a
+  // cached lookup on position and has no dependency on anything below.
+  const look = buildLook(ctrX, ctrZ);
   // ON THE LINE, nothing out here is intact. The Covers are where the built
   // world went — everything the domes did not take has stood empty since the
   // Leaving, so the campaign's world ruins every building outside a shell
@@ -17529,7 +17692,14 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   // mid-rise first: the ruin path's ragged-bay walls were designed around
   // low-rise stock, and a ninety-metre open shell reads as a bug, not a ruin.
   const surveyed = parseMetres(tags.height) ?? parseMetres(tags['building:height']);
-  const height = clamp(surveyed ?? levels * 3.1, 3, lineOn ? 26 : 90);
+  // THE DATA WINS WHEREVER THERE IS ANY. A surveyed height first, then a levels
+  // count at the culture's own storey — and only where OSM says nothing at all
+  // does massHeight synthesise one from the footprint. The floor is 2.2m rather
+  // than 3 so a canopy and a garage can actually be low; a building is still
+  // never shorter than a person can walk under.
+  const height = clamp(
+    surveyed ?? (levels > 0 ? levels * look.culture.storeyM : massHeight(kind, pts, ctrX, ctrZ, look, id)),
+    2.2, lineOn ? 26 : 90);
   const r = mulberry32((id * 2654435761) >>> 0);
   r(); // first draw off a hashed seed is poorly distributed
   // WHAT OSM SAYS FELL DOWN STAYS DOWN. Giza's home town maps 94% of its
@@ -17538,15 +17708,14 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   const forceRuin = kind === 'ruins' || kind === 'collapsed' || kind === 'construction';
   // Intact buildings hand their extrusion to the tile batch instead of
   // standing up a mesh each — see flushBuildings for why.
-  const intactSink = (paint: number, roof?: string) =>
+  const intactSink = (paint: number, roof?: string, ridge?: number) =>
     (geo: THREE.BufferGeometry, base: number, top: number): void => {
       const batch = openBldBatch();
       const arr = batch.intact.get(paint) ?? [];
       const mark = markForBuilding(ctrX, ctrZ, kind);
       arr.push({ geo, base, mark, pts });
       if (roof) {
-        const rg = roofGeo(pts, roof, top,
-          clamp(parseFloat(tags['roof:levels'] ?? '') * 2.6 || 0, 0, 9) || undefined);
+        const rg = roofGeo(pts, roof, top, ridge);
         if (rg) arr.push({ geo: rg, base, mark, pts });
       }
       batch.intact.set(paint, arr);
@@ -17572,7 +17741,6 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   // null once the material array is full, and a null paint index would put
   // `new Mesh(geo, undefined)` back in the scene — the unlit white slab that
   // cost half the world's buildings once already.
-  const look = buildLook(ctrX, ctrZ);
   const cultural = registerCulturePaint(
     paintFor(cultEnv, look, ctrX, ctrZ), look.roofCol, look.culture.wallTex, look.culture.roofTex);
   const paint = mapped ?? (TYPO_COL[kind] !== undefined ? registerPaint(TYPO_COL[kind]) : null)
@@ -17580,16 +17748,74 @@ function building(pts: Array<[number, number]>, id: number, tags: Record<string,
   // The roof. Explicit shape wins; a small house-shaped thing defaults to a
   // gable, which is what most of the world's housing stock wears whether or
   // not anyone typed it in.
+  //
+  // ── AND THE DEFAULT HAD TO STOP BEING A KIND STRING ──
+  //
+  // `roof:shape` is on 1.4% of Suresnes and 0% of the other two captures, so
+  // the default IS the roof for practically every building — and it was keyed
+  // on `building=` matching a list of house words, which is a tag that says
+  // `yes` 80-90% of the time. Result: 99% of the world wore a flat extrusion
+  // cap, which is the flat-topped skyline the review photographed.
+  //
+  // A pitch is a statement about the PLAN, and roofGeo already refuses plans
+  // that cannot carry one (rectangularity, span, ≤1400m² — "houses, not
+  // malls"). So the gate here is not "is this word a house", it is the two
+  // things the word cannot tell you: does this TRADITION pitch its roofs, and
+  // is this thing short enough to be roofed rather than capped.
   const roofShape = (() => {
     const rs = tags['roof:shape'];
     if (rs === 'gabled' || rs === 'hipped' || rs === 'pyramidal' || rs === 'skillion') return rs;
     if (rs) return undefined;                     // flat, dome, … — extrusion as-is
-    return /^(house|residential|detached|semidetached_house|bungalow|farm|barn|terrace|hut|cabin)$/.test(kind)
-      ? 'gabled' : undefined;
+    // THE CULTURE'S PITCH IS FINALLY LOAD-BEARING. It has been computed, snow-
+    // biased and reported by __culture since the cultures shipped, and consumed
+    // by nothing at all. Near zero it means a flat-roofed tradition — an adobe
+    // town's flat silhouette is the thing that says "somewhere hot" before any
+    // colour registers, and it was only ever arriving by accident of the kind
+    // regex above not matching.
+    if (look.pitch < 0.2) return undefined;
+    // A canopy is a sheet on posts and has no attic to roof.
+    if (MASS_CANOPY.has(kind)) return undefined;
+    const { area, short } = footprintSize(pts);
+    // Its own generator, seeded off the id by a constant nothing else uses, so
+    // the choice cannot shift the ruin roll or the massing draw and an A/B of
+    // any one of the three is a comparison of that one thing.
+    const rr = mulberry32((Math.imul(id, 0x85ebca6b) ^ 0x9e3779b9) >>> 0);
+    rr();
+    // ── MEASURED, AND THE FIRST CUT OVERSHOT ──
+    //
+    // Gating only on the culture's pitch and a height ceiling put a pitched roof
+    // on 98.7% of Suresnes — 1,474 hipped against 679 gabled and 28 flat — which
+    // is as wrong as the 99% flat it replaced, just in the other direction, and
+    // hipped is not even the common shape. Flat roofs are real and specific:
+    // they are what outbuildings, apartment blocks and commercial sheds wear.
+    //
+    // A LEAN-TO IS WHAT A SMALL OUTBUILDING WEARS. Not a hip — a hipped roof on
+    // a 6m² garden shed is a doll's house.
+    if (MASS_OUT.has(kind) || area < 55) return rr() < 0.55 ? 'skillion' : undefined;
+    // A barn is a long gable, and that is most of its silhouette.
+    if (MASS_HALL.has(kind)) return 'gabled';
+    // A BLOCK IS FLAT-TOPPED once it is genuinely a block. Below that a small
+    // "apartments" is a converted house and still wears a roof.
+    const block = MASS_BLOCK.has(kind) || height > 18
+      || (kind === 'yes' && area > 300 && builtUpAt(ctrX, ctrZ) > 0.5);
+    if (block) return area > 300 || height > 14 ? undefined : (rr() < 0.5 ? 'hipped' : 'gabled');
+    // A square plan CAN hip; a long one gables. Hipping stays the minority
+    // choice even where the plan allows it, because a street of hips reads as
+    // stamped — the squareness test comes free off the box roofGeo is about to
+    // compute anyway.
+    return area / (short * short) < 1.5 && area > 90 && rr() < 0.45 ? 'hipped' : 'gabled';
   })();
+  // THE RIDGE FOLLOWS THE TRADITION, NOT THE FOOTPRINT'S SIZE. `min(du,dv)*0.45`
+  // gave a 40°-ish roof to every building on earth regardless of where it stood;
+  // the pitch an alpine slate roof needs to shed snow and the pitch a Provençal
+  // pantile roof wants are genuinely different numbers, and snowLoad has already
+  // worked out which this is. `roof:levels` still wins where it exists.
+  const ridgeM = clamp(parseFloat(tags['roof:levels'] ?? '') * 2.6 || 0, 0, 9)
+    || clamp((footprintSize(pts).short / 2) * look.pitch, 1.2, 7);
   if (!lineOn && !forceRuin && (height > 24 || r() > 0.42 || TYPO_COL[kind] !== undefined || mapped !== null)) {
     buildStats.intact++;
-    polygon(pts, B_MATS[0], 0.9, height, 'solid', intactSink(paint, roofShape));
+    noteMass(height, roofShape);
+    polygon(pts, B_MATS[0], 0.9, height, 'solid', intactSink(paint, roofShape, ridgeM));
     // A house of worship grows its tower: a square campanile off the ring's
     // first corner, batched like any other footprint, wearing a pyramid.
     if ((kind === 'church' || kind === 'cathedral' || kind === 'chapel'
@@ -22411,8 +22637,28 @@ function stepWeather(now: number, dt: number): void {
   // missing bounce. Scaled by daylight so nothing glows at night, and sized
   // against the measured budget: a sunlit wall reaches ~0.6 x 0.85 = 0.51 and
   // this adds ~0.06, still clear of the 0.62 bright-pass cut.
-  const lift = 0.075 * dayF * (1 - wx.cloud * 0.3);
+  // AND A WALL MUST NOT GO TO NOTHING AFTER DARK. Measured at Suresnes with
+  // ?time=NIGHT: a wall at linear luminance 0.0052 (sRGB 13) against the ground
+  // beside it at 0.13 — twenty-five times darker than the dirt, which is not a
+  // dark building, it is a hole in the frame. The lift was `0.075 * dayF`, so
+  // the one term standing in for the missing bounce left entirely at dusk while
+  // the ground kept its moonlight response. A night floor is a quarter of a
+  // palette step: enough that a wall has a value and an edge, far below the 0.62
+  // bright-pass cut, and nothing about it glows.
+  const lift = (0.075 * dayF + 0.020 * (1 - dayF)) * (1 - wx.cloud * 0.3);
   for (const w of bldSkylit) w.emissive.copy(w.color).multiplyScalar(lift);
+  for (const rf of bldRoofSkylit) rf.emissive.copy(rf.color).multiplyScalar(lift * 0.5);
+  // RUINS COULD NEVER JOIN bldSkylit, and went black with nothing to catch it.
+  // They are 42% of Suresnes' stock and 37% of Camps Bay's, and they carry their
+  // weathering in VERTEX COLOURS — so `material.color` is plain white and
+  // `emissive.copy(color)` would light every ruin in the world at full white.
+  // A mid weathered tone stands in for the average of those vertex colours,
+  // which is what the wall materials get from their own paint.
+  const ruinLift = RUIN_SKYLIT.clone().multiplyScalar(lift);
+  ruinMat.emissive.copy(ruinLift);
+  ruinMatFar.emissive.copy(ruinLift);
+  // The façade's night term: how much night, and how many windows are lit.
+  uFacNight.value.x = 1 - dayF;
   // THE DIAL IS THE BASE; THE WEATHER ONLY MODULATES IT.
   //
   // This line used to ASSIGN the bloom, every frame, from the weather and the
@@ -28272,6 +28518,83 @@ function heightsOf(): number[] {
   const tot = up + down + side;
   return { meshes, up, down, side, total: tot,
     downPct: tot ? +((down / tot) * 100).toFixed(2) : 0 };
+};
+/**
+ * THE SAME QUESTION FOR THE BUILDINGS, and it has never been asked.
+ *
+ * `__ribbonwind` exists because DoubleSide flips the shading normal toward the
+ * VIEWER, so a face whose stored normal points the wrong way is not a geometry
+ * bug — it is a surface that Lambert correctly clamps to near-black. Every
+ * building material is `side: DS` on the claim (in the DS comment) that "the
+ * rotate+mirror extrusion leaves face orientation mixed", and that claim was
+ * measured for the ribbons and found FALSE there. Nobody measured it here,
+ * which matters now that the flat roofs are being read as black: a roof cap
+ * whose normal points down is exactly what that would look like.
+ *
+ * Split by class, because a wall and a cap are different questions — a wall
+ * SHOULD be sideways and a roof cap should point up.
+ */
+(window as unknown as { __bldwind?: object }).__bldwind = (): object => {
+  const tally = (): { up: number; down: number; side: number } => ({ up: 0, down: 0, side: 0 });
+  const out: Record<string, { up: number; down: number; side: number }> = {
+    building: tally(), ruin: tally(),
+  };
+  let meshes = 0;
+  worldGroup.traverse((o) => {
+    const m = o as THREE.Mesh;
+    if (!m.isMesh) return;
+    const mats = Array.isArray(m.material) ? m.material : [m.material];
+    const first = mats[0];
+    const kind = first === ruinMat || first === ruinMatFar ? 'ruin'
+      : B_MATS_FLAT.includes(first as THREE.Material) ? 'building' : null;
+    if (!kind) return;
+    const n = m.geometry.getAttribute('normal') as THREE.BufferAttribute | undefined;
+    if (!n) return;
+    meshes++;
+    // Per TRIANGLE, off its first vertex: a flat-shaded cap shares one normal
+    // across its three, and counting vertices would weight a fan by its size.
+    for (let i = 0; i < n.count; i += 3) {
+      const y = n.getY(i);
+      if (y > 0.35) out[kind].up++; else if (y < -0.35) out[kind].down++; else out[kind].side++;
+    }
+  });
+  const pct = (t: { up: number; down: number; side: number }): object => {
+    const s = t.up + t.down + t.side;
+    return { ...t, total: s, downPct: s ? +((t.down / s) * 100).toFixed(2) : 0 };
+  };
+  return { meshes, building: pct(out.building), ruin: pct(out.ruin) };
+};
+/**
+ * WHAT A BUILDING'S COLOUR IS ACTUALLY MULTIPLIED BY.
+ *
+ * `colour x map` renders at the map's MEAN, and this is the third time that
+ * has mattered here: it is why the batter strip drew dark sheets beside every
+ * desert road (see batterMean, which divides it back out) and it is the first
+ * thing to rule out when a roof reads too dark. A white-based canvas with
+ * speckle, course shadows, cracks and moss drawn over it is NOT 1.0, and the
+ * surfaces a roof is judged against — terrain, sward — carry no map at all.
+ *
+ * Read off the source canvases, once, because a mean asserted from the drawing
+ * code is a reading of the drawing code.
+ */
+let texMeanCache: Record<string, number> | null = null;
+(window as unknown as { __texmean?: object }).__texmean = (): object => {
+  if (texMeanCache) return texMeanCache;
+  const mean = (t: THREE.Texture): number => {
+    const cv = t.image as HTMLCanvasElement | undefined;
+    const ctx = cv?.getContext?.('2d');
+    if (!cv || !ctx) return -1;
+    const d = ctx.getImageData(0, 0, cv.width, cv.height).data;
+    let s = 0;
+    for (let i = 0; i < d.length; i += 4) s += 0.2126 * d[i] + 0.7152 * d[i + 1] + 0.0722 * d[i + 2];
+    return +(s / ((d.length / 4) * 255)).toFixed(4);
+  };
+  const out: Record<string, number> = {};
+  for (const [k, t] of Object.entries(WALL_TEX)) out[`wall:${k}`] = mean(t);
+  for (const [k, t] of Object.entries(ROOF_TEX)) out[`roof:${k}`] = mean(t);
+  out['wall:limewash0'] = mean(wallTexes[0]);
+  out['wall:limewash1'] = mean(wallTexes[1]);
+  return (texMeanCache = out);
 };
 (window as unknown as { __rewind?: object }).__rewind = (
   cmd?: 'begin' | 'show' | 'commit' | 'cancel', back = 0,

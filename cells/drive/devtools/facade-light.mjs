@@ -120,6 +120,13 @@ for (const clock of CLOCKS) {
   // answers fps, which is a different question and was the first thing this
   // asked by mistake.
   const state = await q(() => (window.__sky ? window.__sky() : null));
+  // THE MASSING IS A DISTRIBUTION, so the probe reports one: heights in 3m
+  // buckets and the roof shapes actually chosen. A world where every building is
+  // 6.2m and a world with a range of heights have identical intact/ruin counts.
+  const mass = await q(() => {
+    const b = window.__built();
+    return { intact: b.intact, ruin: b.ruin, hist: b.hist, roofs: b.roofs };
+  });
 
   const buf = await d.page.screenshot({ timeout: 120000 });
   writeFileSync(`${OUT}/${FIX}-${clock}.png`, buf);
@@ -138,6 +145,7 @@ for (const clock of CLOCKS) {
   console.log(`   ground ${JSON.stringify(px.ground)}`);
   console.log(`   sky    ${JSON.stringify(px.sky)}`);
   console.log(`   wall/ground luminance ratio ${(px.wall.lum / (px.ground.lum || 1e-6)).toFixed(2)}`);
+  console.log(`   mass ${JSON.stringify(mass)}`);
   console.log(`   state ${JSON.stringify(state)}`);
   console.log(`   errors ${d.errors.length} ${JSON.stringify(d.errors.slice(0, 2))}`);
   await d.close();
