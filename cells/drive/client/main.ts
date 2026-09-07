@@ -5404,6 +5404,7 @@ function buildTerrainMesh(t: HeightTile): void {
   }
   plainCost.mesh += performance.now() - p7;
   buildLog.push({ key, why: dirtyWhy.get(key) ?? 'load', corridor, refined: b.refined, at: Math.round(performance.now()) });
+  noteBuild(key, dirtyWhy.get(key) ?? 'load');
   if (buildLog.length > 400) buildLog.shift();
   dirtyWhy.delete(key);
 }
@@ -5511,6 +5512,7 @@ function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string
     if (terrainMeshes.has(nk)) { terrainDirty.add(nk); dirtyWhy.set(nk, `owner:${key}`); }
   }
   buildLog.push({ key, why, corridor: r.corridor, refined: r.refined, at: Math.round(performance.now()) });
+  noteBuild(key, why);
   if (buildLog.length > 400) buildLog.shift();
 }
 /** Post a tile's build to the worker; the reply lands as a mesh and runs the
@@ -5612,7 +5614,44 @@ function coverDirtiedTerrain(xs: number, zs: number, w: number, h: number): void
   }
 }
 function markTerrainDirty(key: string, why = 'mark'): void {
-  if (terrainMeshes.has(key)) { terrainDirty.add(key); dirtyWhy.set(key, why); }
+  if (!terrainMeshes.has(key)) return;
+  if (!terrainDirty.has(key)) dirtyAt.set(key, performance.now());
+  terrainDirty.add(key); dirtyWhy.set(key, why);
+}
+/** When each dirty tile was FIRST dirtied — the hold below reads it. */
+const dirtyAt = new Map<string, number>();
+/**
+ * A WAY-DIRTIED TILE WAITS A BREATH DURING A STREAM. In a city every vector
+ * tile that lands carries hundreds of ways, each of which dirties the terrain
+ * it crosses, and the tile rebuilt the instant the first landed was rebuilt
+ * again for the second, and the third — measured on the device over the CBD:
+ * 260 builds for 26 tiles in 85 s, a rebuild every third of a second, each
+ * 58 ms of main thread. Held for WAY_HOLD_MS after the FIRST way dirtied it,
+ * a tile collects everything that lands in that breath and builds once for
+ * all of it; when the stream is quiet nothing waits. Only `way` is held —
+ * a freshly loaded tile, a cover arrival, a border owner's rebuild and the
+ * corridor scan all build as before.
+ */
+const WAY_HOLD_MS = 1500;
+function heldWay(key: string, now: number): boolean {
+  return dirtyWhy.get(key) === 'way' && !osmStreamQuiet() && now - (dirtyAt.get(key) ?? 0) < WAY_HOLD_MS;
+}
+/** Builds per tile and per reason since boot, and the order tiles were first
+ *  fetched and first built — the stream audit's ledger (__streamAudit). */
+const buildCount = new Map<string, number>();
+const buildWhy: Record<string, number> = {};
+const firstBuilt: Array<{ key: string; at: number; x: number; z: number }> = [];
+const firstFetched: Array<{ key: string; at: number; x: number; z: number }> = [];
+const firstBuiltKeys = new Set<string>();
+function noteBuild(key: string, why: string): void {
+  buildCount.set(key, (buildCount.get(key) ?? 0) + 1);
+  const w = why.split(':')[0];
+  buildWhy[w] = (buildWhy[w] ?? 0) + 1;
+  if (firstBuiltKeys.has(key)) return;
+  const t = heightTiles.get(key);
+  if (!t) return;
+  firstBuiltKeys.add(key);
+  firstBuilt.push({ key, at: Math.round(performance.now()), x: t.xs + t.w / 2, z: t.zs + t.h / 2 });
 }
 /** Why each dirty tile was dirtied, and the last hundred builds — the
  *  instrument for a rebuild loop, which is invisible to a dirty-count poll. */
@@ -5624,15 +5663,30 @@ const buildLog: Array<{ key: string; why: string; corridor: boolean; refined: bo
 // Sampled, not exhaustive: terrain tiles are ~2km across and road vertices are
 // 12m apart, so walking every one of them would ask the same question a hundred
 // times per tile.
+//
+// THE TILES IT CROSSES, AND A NEIGHBOUR ONLY WHERE THE CUT REACHES ONE. This
+// marked a 3×3 of terrain tiles around every sample — nine tiles of two
+// kilometres, a six-kilometre box, for a road twelve metres wide whose
+// earthworks reach thirty. Every way that landed anywhere near the ring
+// dirtied the whole ring, so in a city the whole ring rebuilt for every vector
+// tile: 25 of 26 tiles dirty at once in the CBD telemetry, 260 builds in 85 s.
+// A way now dirties the tile under each sample and the neighbour across an
+// edge only when the sample stands within the corridor's reach of that edge.
 function dirtyTerrainAround(pts: Array<[number, number]>): void {
-  for (let i = 0; i < pts.length; i += 8) {
-    const [x, z] = pts[i];
+  const M = TOE_REACH + cutL;
+  const mark = (x: number, z: number): void => {
     const [tx, ty] = tileAt(origin.lat - z / M_LAT, origin.lon + x / origin.mLon, TERRAIN_Z);
-    for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) markTerrainDirty(`${tx + dx}/${ty + dy}`, 'way');
-  }
-  const [lx, lz] = pts[pts.length - 1];
-  const [tx, ty] = tileAt(origin.lat - lz / M_LAT, origin.lon + lx / origin.mLon, TERRAIN_Z);
-  markTerrainDirty(`${tx}/${ty}`, 'way');
+    markTerrainDirty(`${tx}/${ty}`, 'way');
+    const t = heightTiles.get(`${tx}/${ty}`);
+    if (!t) return;
+    const w = x - t.xs < M ? -1 : t.xs + t.w - x < M ? 1 : 0;
+    const n = z - t.zs < M ? -1 : t.zs + t.h - z < M ? 1 : 0;
+    if (w) markTerrainDirty(`${tx + w}/${ty}`, 'way');
+    if (n) markTerrainDirty(`${tx}/${ty + n}`, 'way');
+    if (w && n) markTerrainDirty(`${tx + w}/${ty + n}`, 'way');
+  };
+  for (let i = 0; i < pts.length; i += 8) mark(pts[i][0], pts[i][1]);
+  mark(pts[pts.length - 1][0], pts[pts.length - 1][1]);
 }
 // One rebuild at a time, and never two in the same fifth of a second. A tile is
 // ~9400 vertices, each sampling the heightfield and asking the road grid about
@@ -5683,17 +5737,36 @@ function flushTerrain(now: number): void {
     const t = heightTiles.get(key);
     if (t) { terrainAt = now; hydroRefeed(t, key); return; }
   }
-  // OWNERS FIRST. A tile owns its east and south edges, so the north-west-most
-  // dirty tile is built before any follower of it: a follower built first
-  // takes a row its owner is about to replace and builds twice. Sorted by
-  // row then column, a dirty set builds each tile once.
+  // NEAREST AND AHEAD FIRST, OWNER BEFORE FOLLOWER. This built the dirty set
+  // in raster order — row then column, so the north-west-most tile first —
+  // which is the cheapest way to build each owner before its followers (a
+  // follower built first takes a row its owner is about to replace and
+  // builds twice). It is also a build order that knows nothing about the
+  // truck: photographed over the CBD facing south, the ring filled from Table
+  // Bay northward while the tile under the wheels and the peninsula ahead
+  // waited in a queue of 29. The pick is the dirty tile cheapest in the
+  // stream's own wedge (wedgeCost: ahead is cheap, behind is dear), and then
+  // walks to its west or north owner while that owner is dirty too — the
+  // ownership rule kept locally, so the near tile builds within a hop or two
+  // rather than after the whole sea.
   if (tworker && !tworker.disabled && buildInFlight) return;
   while (terrainDirty.size) {
-    let key = '', best = Infinity;
+    let key = '', best = Infinity, heldN = 0;
     for (const k of terrainDirty) {
-      const i = k.indexOf('/');
-      const o = Number(k.slice(i + 1)) * 1e6 + Number(k.slice(0, i));
-      if (o < best) { best = o; key = k; }
+      if (heldWay(k, now)) { heldN++; continue; }
+      const t = heightTiles.get(k);
+      if (!t) { key = k; break; }
+      const c = wedgeCost(t.xs + t.w / 2, t.zs + t.h / 2);
+      if (c < best) { best = c; key = k; }
+    }
+    if (!key) { if (heldN) return; break; }
+    for (let hop = 0; hop < 2; hop++) {
+      const i = key.indexOf('/');
+      const tx = Number(key.slice(0, i)), ty = Number(key.slice(i + 1));
+      const west = `${tx - 1}/${ty}`, north = `${tx}/${ty - 1}`;
+      if (terrainDirty.has(west) && !heldWay(west, now)) key = west;
+      else if (terrainDirty.has(north) && !heldWay(north, now)) key = north;
+      else break;
     }
     terrainDirty.delete(key);
     const t = heightTiles.get(key);
@@ -5797,6 +5870,11 @@ function loadTerrainTile(x: number, y: number): Promise<void> {
   const key = `${x}/${y}`;
   const existing = terrainReady.get(key);
   if (existing) return existing;
+  {
+    const b = tileBounds(x, y, TERRAIN_Z);
+    const [cx, cz] = toLocal((b.latN + b.latS) / 2, (b.lonW + b.lonE) / 2);
+    firstFetched.push({ key, at: Math.round(performance.now()), x: cx, z: cz });
+  }
   const p = loadTerrainTileInner(x, y);
   terrainReady.set(key, p);
   return p;
@@ -12313,6 +12391,38 @@ function segOf(geo: THREE.BufferGeometry): number {
 };
 (window as unknown as { __refine?: object }).__refine = (): object => ({ on: REFINE, ...refineCost, plain: { ...plainCost } });
 (window as unknown as { __buildLog?: object }).__buildLog = (): object => buildLog.slice();
+/**
+ * THE STREAM, LAYER BY LAYER: what each asked for and in what order against
+ * the truck's distance and heading, how many times each terrain tile has
+ * been built and why, and what the last build's re-drape had to visit. The
+ * instrument for "did it load the sea before the road ahead" — the overlay
+ * shows the picture, this gives the ranks.
+ */
+(window as unknown as { __streamAudit?: object }).__streamAudit = (): object => {
+  const dist = (x: number, z: number): number => Math.round(Math.hypot(x - state.x, z - state.z));
+  const aheadOf = (x: number, z: number): boolean => (x - state.x) * osmFwdX + (z - state.z) * osmFwdZ > 0;
+  const order = (l: Array<{ key: string; at: number; x: number; z: number }>): object[] =>
+    l.map((f) => ({ key: f.key, at: f.at, d: dist(f.x, f.z), ahead: aheadOf(f.x, f.z) }));
+  const now = performance.now();
+  return {
+    terrain: {
+      tiles: terrainMeshes.size, builds: terrainBuilds, byWhy: { ...buildWhy },
+      perTile: [...buildCount].map(([key, n]) => ({ key, n })).sort((a, b) => b.n - a.n).slice(0, 10),
+      firstOrder: order(firstBuilt), fetchOrder: order(firstFetched),
+      dirty: terrainDirty.size, held: [...terrainDirty].filter((k) => heldWay(k, now)).length,
+    },
+    osm: {
+      ask: osmAsk.map((a) => {
+        const i = a.k.indexOf('/');
+        const [cx, cz] = tileCentreLocal(Number(a.k.slice(0, i)), Number(a.k.slice(i + 1)));
+        return { k: a.k, d: dist(cx, cz), ahead: a.ahead, cost: Math.round(wedgeCost(cx, cz)) };
+      }),
+      done: osmDone.size, inFlight: osmInFlight, queued: osmQueue.length,
+    },
+    far: { level: farZ, tiles: farMeshes.size, asked: farTiles.size, fetchOrder: order(farFetched) },
+    drapes: { drapes: terrainScan.drapes, ofDrapes: terrainScan.ofDrapes },
+  };
+};
 /** borderShared, shown its working: the neighbour's box, how many of this
  *  tile's points fell in it, and the first point that failed. */
 (window as unknown as { __bs?: object }).__bs = (key: string, nk: string): object | null => {
@@ -20321,10 +20431,15 @@ function streamWorld(ex: number, ez: number): void {
   // zoom 44 alike — so the chart was an aerial photograph of a 1.5km disc of
   // roads adrift in blank hillside.
   const tRing = clamp(Math.ceil(r / tileMetres(TERRAIN_Z)), TERRAIN_RING, TERRAIN_RING_MAX);
+  // RINGS OUTWARD, not raster order: forty-nine fetches leave together and
+  // the DEM gate serves them in the order asked, so a corner of the box was
+  // arriving before the ground under the wheels.
   if (FIXTURE) for (const [x, y] of fixtureTiles(TERRAIN_Z)) void loadTerrainTile(x, y);
   else {
-    for (let dx = -tRing; dx <= tRing; dx++)
-      for (let dy = -tRing; dy <= tRing; dy++) void loadTerrainTile(tx + dx, ty + dy);
+    for (let d = 0; d <= tRing; d++)
+      for (let dx = -d; dx <= d; dx++)
+        for (let dy = -d; dy <= d; dy++)
+          if (Math.max(Math.abs(dx), Math.abs(dy)) === d) void loadTerrainTile(tx + dx, ty + dy);
   }
   // Land cover, over the FULL terrain footprint rather than the road ring: it
   // paints the ground and plants the vegetation, so it has to reach as far as
@@ -20545,10 +20660,14 @@ function streamWorld(ex: number, ez: number): void {
     setFarLevel(FIXTURE ? FAR_LEVELS[0] : farLevelFor(sight));
     const [fx, fy] = tileAt(cLat, cLon, farZ);
     const fRing = clamp(Math.ceil(sight / tileMetres(farZ)), 1, FAR_RING_MAX);
+    // Rings outward here too: the shell's four-at-a-time gate is a FIFO, and
+    // raster order put the far corner of the sky ahead of the horizon.
     if (FIXTURE) for (const [x, y] of fixtureTiles(farZ)) void loadFarTile(x, y);
     else {
-      for (let dx = -fRing; dx <= fRing; dx++)
-        for (let dy = -fRing; dy <= fRing; dy++) void loadFarTile(fx + dx, fy + dy);
+      for (let d = 0; d <= fRing; d++)
+        for (let dx = -d; dx <= d; dx++)
+          for (let dy = -d; dy <= d; dy++)
+            if (Math.max(Math.abs(dx), Math.abs(dy)) === d) void loadFarTile(fx + dx, fy + dy);
     }
     // …and the cover to PAINT it, once the shell has grown past the fine
     // raster's own 7x7 ring. Below that the fine tiles already cover every
@@ -20854,11 +20973,17 @@ worldGroup.add(farGroup);
 // racing each other for sockets.
 let farInFlight = 0;
 const farQueue: Array<() => void> = [];
+const farFetched: Array<{ key: string; at: number; x: number; z: number }> = [];
 async function loadFarTile(x: number, y: number): Promise<void> {
   const z = farZ;
   const key = `${z}/${x}/${y}`;
   if (farTiles.has(key)) return;
   farTiles.add(key);
+  {
+    const b = tileBounds(x, y, z);
+    const [cx, cz] = toLocal((b.latN + b.latS) / 2, (b.lonW + b.lonE) / 2);
+    farFetched.push({ key, at: Math.round(performance.now()), x: cx, z: cz });
+  }
   if (farInFlight >= 4) await new Promise<void>((go) => farQueue.push(go));
   farInFlight++;
   const data = await fetchHeights(x, y, z).finally(() => {
