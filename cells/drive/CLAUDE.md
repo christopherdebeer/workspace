@@ -463,6 +463,47 @@ concurrent, and every one goes through the harness's curl relay. Budget three
 to five minutes per zoom step, and read `__far()` (meshes, asked, inFlight,
 queued, cover) rather than watching the picture.
 
+### The zoom range doubled at both ends
+
+Asked from the seat: pull in twice as close and twice as far. Each end is a
+different change and `devtools/zoom-reach.mjs` measures both (`NEAR=1` on a
+capture, the default live at the Cape and at Paris).
+
+- **The near end is a number and a picture.** `ZOOM_MIN` 0.25 → 0.125 puts the
+  chart camera 22m over the truck instead of 44: `viewRadius` 39m → 16m, a
+  frame about 23m across, which is one junction with its kerbs legible. The
+  near plane follows the orbit (`setNear(dist × 0.08)`) to 1.75m and nothing
+  in the chart stands inside it.
+- **The far end is a ladder, and every rung had to be there.** `SIGHT_MAX`
+  300km → 600km, so `ZOOM_MAX` (derived) 2292 → 4584. A z7 shell ring reaches
+  600km only below about 40° of latitude, so `FAR_LEVELS` gained z6 — same
+  cost, since `farSeg` already clamps z7 at 128 segments. Measured live:
+  Simon's Town picks z7 and Paris z6, both 25/25 tiles in 20s through a warm
+  relay. The overview gained z7 and the cell serves it (`OV_LEVELS`, and the
+  guard in `serveOverview`).
+- **A z7 OVERVIEW TILE IS THE NARROWEST ASK ON THE LADDER, BECAUSE IT WAS
+  MEASURED.** A 313km box asked for motorways and trunks alone came back from a
+  loaded mirror as 6,645 ways, 58k points, 7.6MB, in 65s — past the 44s the
+  handler can wait — and the same box's coastline on its own did not return in
+  100s. So z7 carries motorways and cities only, no rivers, no summits, no
+  coast; the shell's own cover paints the sea at that scale. A dense European
+  z7 tile may still take several stream passes to land; the bank then serves
+  it for ever. (`overpass-api.de` refuses this container's proxy outright; the
+  measurement came from the other two mirrors, with a User-Agent, which they
+  demand.)
+- **THE FAR OCEAN WAS PAINTED AS GRASSLAND, AT EITHER CEILING.** `__far().cover`
+  reads 16 of 25 shell tiles blind at the Cape with the z6 cover ring fully
+  home (`__cover().wide` 25/25) — the same on the pinned control at 300km.
+  WorldCover is a LAND map: its tiles stop a few tens of kilometres offshore
+  and answer 0 beyond, `sampleCoverShell` reads 0 as "no cover", and the bake
+  fell back to `coverMode`, the modal class of the country. Measured on one
+  pixel row through the truck: sea-blue at 30km west of Simon's Town,
+  grassland at 60. The coarse DEM carries bathymetry, so a coverless vertex
+  under the sea datum is water now: 60 to 150km west read [97,97,55] before
+  and [38,86,94] after, the land to the east unchanged. `hit` still counts
+  only real cover, so the blind count is unchanged and honest — it is
+  measuring the raster, not the paint.
+
 ## Capturing a real place as a fixture
 
 `devtools/capture-world.mjs NAME --lat= --lon= [--r=700]` pulls the three
@@ -1267,6 +1308,82 @@ vertex fans and the per-tile strip index that followed (Camps Bay then
 1.7×, 125ms a tile). Unbounded, Vélizy refined 60 tile builds at 2.4× and
 200ms each — the number that made the radius: the corridor is a near-field
 detail and a phone cannot rebuild a whole interchange's tiles at that price.
+
+## The joins at Simon's Town
+
+Reported from the seat at `-34.19511,18.44192` heading 246, four ways: the
+batter stops short of a join and leaves a gap; the arms of a junction do not
+meet on one closed plane; the batter is a picture the truck drives into; and a
+mis-joined arm can put a guard rail across the carriageway. Captured as
+`at-simonstown` (194 highways over 437m of relief in a 1.4km box) and measured
+with two probes before anything moved: `__nodes(r)` clusters every built
+fragment end into junctions and reads each one's deck spread, the parapets
+lying across its arms, whether the planner pinned it, and how far the box's
+corners stand off the arms' decks; `__batterLine(x0,z0,x1,z1,n)` walks a
+transect reading the drawn strip against the mesh the wheels read, the
+kernel's wedge and the tyre height. `devtools/simonstown-junctions.mjs` runs
+both, transects the arms and corner bisectors of the worst nodes, and
+photographs them; `REFINE=0` measures the plain-lattice path and `REV=<sha>`
+the control.
+
+What the numbers said, against what the seat said:
+
+- **The decks DO meet.** 136 junctions, spread over 10cm at 4, over 30cm at
+  1 (an unnamed car-park loop); every named road within 23cm. The pins work
+  here as they did at Camps Bay. "Not one closed plane" was not the decks.
+- **THE PARAPETS WERE THE HOST'S OWN KERB RAILS, RUN IN FROM BOTH SIDES TO
+  MEET IN THE MIDDLE OF THE TURNING.** Four of them — across Flagship Road,
+  Living Waters Close, Church Street and Blacks Lane, each a narrow joiner
+  meeting Runciman Drive or Saint George's Street — and the decks agreed at
+  all four to 4cm. `roadMeetsHere` decided the host's bay with the built grid
+  and the planner's pins, and at the moment a host bay builds a narrow joiner
+  has not built (a batch builds widest first), three of the four had no pin
+  (a crumb has no chain) and the fourth was pinned after the host had gone up
+  (a chain solves asynchronously). OSM's topology knew all four before any
+  of it built. `juncNodeGrid` keeps every registered node past the batch,
+  `roadMeetsHere` reads it first, and the rail count went 4 → 0 on both the
+  refined and the plain path.
+- **THE PICTURE THE TRUCK DRIVES INTO IS TWO ROADS' WEDGES DISAGREEING.** At
+  the report spot a road stands 2.9m above its neighbour and 2.5m from it.
+  The kernel's `corridorH` took the NEAREST strip's wedge — the lower road's
+  cut face — while the batter strip, built per bay from the upper kerb, laid
+  the upper road's bank down the same gap: +1.41m of strip over the wheels on
+  a refined tile, +2.2m on the plain path. Earthworks are a union now: the
+  highest fill bank standing over the ground, else the lowest cut face, a
+  fill standing on a cut and stopping at the lower road's shoulder — which is
+  the retaining wall two terraces have. Then two rules about the strip: on a
+  refined tile it draws nothing at all (`fillCorridor`) and the strips a tile
+  had before it took its corridor come down with the rebuild (`dropBatterFor`,
+  `fillDropped`), so refined transects went from strip on 132 of 197 to strip
+  on none; and on a PLAIN tile — beyond REFINE_R, or built while the roads
+  were landing — the wheels read the kernel's wedge about the drawn ground
+  (`wheelGround`), which is the strip's own rule, so the picture and the
+  ground agree: strips over the wheels by more than 30cm went 32 → 9 of
+  comparable transects, and the nine left are all within 0.7m of a kerb
+  inside `KERB_FAIR`, where the fairing to the deck is the wall. The two
+  rules must not be summed — a refined tile's mesh already carries the wedge.
+- **THE BOX WAS ONE TRIANGLE PER HULL EDGE.** `twist` reads each box corner
+  back through `roadHeightAt` against its own arm's deck at that distance,
+  grade-corrected (the first cut was not, and read a 30% arm's own fall as a
+  twist): 51 of 136 over 30cm, worst 1.59m, where Queens Road's corner (falling
+  at 11%) and the next corner on a side road climbing at 16% were spanned by
+  a single tilted triangle the ribbon came up through. Hull edges are walked
+  in 1.5m steps and each step takes the height of the road it stands on.
+- **"THE BATTER STOPS SHORT OF THE JOIN"** is the ledger's `junctionDrewNothing`
+  (126 of 136 joins): the host's bays across the mouth, whose first step lands
+  on the joiner's tarmac. That is the box's ground, not a gap. The gap the eye
+  reads is the wedge seam in the corner quadrant, which the union rule closes;
+  corner transects with a mesh step over 0.5m in half a metre went 4 → 2.
+
+**Only three of the fixture's twenty tiles carry a corridor, and that is
+right.** The road box spans four z14 tiles; one is False Bay. The quiet path
+refines one tile a visit, only tiles a strip reaches, and stops when none are
+left — read `__buildLog()`'s last build per tile before reading any of this
+as a failure to refine. The evaluation's first pass did.
+
+Same fixture, `through-node.test.mjs` and `fixture-world.test.mjs` green
+after; `__nodes` at Camps Bay is the next control to run before believing
+the union rule elsewhere.
 
 ## The visual survey
 
