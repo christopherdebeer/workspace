@@ -26664,6 +26664,168 @@ function ezStandReport(r: number): object {
   }
   return rows;
 };
+/**
+ * WHERE ARMS MEET, READ FROM WHAT WAS BUILT. One row per junction within r of
+ * a point (the truck by default), carrying the things the Simon's Town report
+ * names, measured: how far apart the arms' decks stand at the node (a shared
+ * plane is a spread of zero); whether a parapet lies across any arm's
+ * carriageway within reach of the node; and what the kerb ledger says about
+ * the earth beside the join. A node is a cluster of fragment ENDS — ribbon
+ * stations of profiled roads, merged within 1.5m — with three or more arms
+ * from two or more ways: `juncNodes`' own rule, read back off the road grid
+ * AFTER the build rather than off the batch before it, so it counts what a
+ * driver meets and not what OSM promised. `boxed` says whether flushJunctions
+ * put its box here. A node with a spread and a box is a box fanned from
+ * corners that disagree; a node with a rail across an arm is a mis-join the
+ * parapet rule (`roadMeetsHere`, GRADE_SEP) let through.
+ */
+(window as unknown as { __nodes?: object }).__nodes = (r = 400, px?: number, pz?: number, top = 12): object => {
+  const cx0 = px ?? state.x, cz0 = pz ?? state.z;
+  interface End { x: number; z: number; y: number; ux: number; uz: number; hw: number; nm: string; fd: number; wid: string }
+  const seen = new Set<Seg>();
+  const ends: End[] = [];
+  const c = Math.ceil(r / GRID);
+  for (let cx = -c; cx <= c; cx++) for (let cz = -c; cz <= c; cz++) {
+    for (const s of roadGrid.get(`${Math.floor(cx0 / GRID) + cx},${Math.floor(cz0 / GRID) + cz}`) ?? []) {
+      if (seen.has(s) || s.tk || s.ya === undefined || s.yb === undefined) continue;
+      seen.add(s);
+      const dx = s.bx - s.ax, dz = s.bz - s.az, l = Math.hypot(dx, dz) || 1;
+      // Each end's direction points INTO its own segment: away from the node.
+      const both: Array<[number, number, number, number, number]> = [
+        [s.ax, s.az, s.ya, dx / l, dz / l], [s.bx, s.bz, s.yb, -dx / l, -dz / l]];
+      for (const [ex, ez, ey, ux, uz] of both) {
+        if (Math.hypot(ex - cx0, ez - cz0) > r) continue;
+        ends.push({ x: ex, z: ez, y: ey, ux, uz, hw: s.hw, nm: s.nm ?? '?', fd: s.fd ?? -1, wid: s.wid ?? '' });
+      }
+    }
+  }
+  // Ends within MERGE of a seed end are one node: a 1.5m hash and a walk over
+  // the neighbouring cells, so a node straddling a cell edge is still one node.
+  // NOT transitive — the first cut grew a cluster from each member, and a
+  // tightly stationed bend (a car-park loop at 1.4m a station) chained into
+  // one "node" twenty metres long whose "spread" was the road's own grade.
+  const MERGE = 1.5;
+  const cells = new Map<string, End[]>();
+  for (const e of ends) {
+    const k = `${Math.floor(e.x / MERGE)},${Math.floor(e.z / MERGE)}`;
+    const a = cells.get(k); if (a) a.push(e); else cells.set(k, [e]);
+  }
+  const taken = new Set<End>();
+  const clusters: End[][] = [];
+  for (const e0 of ends) {
+    if (taken.has(e0)) continue;
+    const cl: End[] = [e0]; taken.add(e0);
+    const gx = Math.floor(e0.x / MERGE), gz = Math.floor(e0.z / MERGE);
+    for (let ix = -1; ix <= 1; ix++) for (let iz = -1; iz <= 1; iz++) {
+      for (const f of cells.get(`${gx + ix},${gz + iz}`) ?? []) {
+        if (taken.has(f) || Math.hypot(f.x - e0.x, f.z - e0.z) > MERGE) continue;
+        taken.add(f); cl.push(f);
+      }
+    }
+    clusters.push(cl);
+  }
+  interface Row { x: number; z: number; arms: number; ways: number; boxed: boolean; pinned: boolean; spread: number; twist: number; roadY: number | null;
+    decks: object[]; rails: object[]; kerbs: number; met: number; clipNone: number; bare: number }
+  const rows: Row[] = [];
+  for (const cl of clusters) {
+    const fds = new Set(cl.map((e) => e.fd));
+    if (cl.length < 3 || fds.size < 2) continue;
+    const nx = cl.reduce((a, e) => a + e.x, 0) / cl.length, nz = cl.reduce((a, e) => a + e.z, 0) / cl.length;
+    const ys = cl.map((e) => e.y);
+    const maxHw = Math.max(...cl.map((e) => e.hw));
+    // The key `juncNodes` used, from the OSM vertex on a half-metre grid; a
+    // built end can round into the neighbouring cell, so the eight around it
+    // are checked too.
+    let boxed = false;
+    for (let i = -1; i <= 1 && !boxed; i++) for (let j = -1; j <= 1 && !boxed; j++) {
+      if (juncBoxed.has(`${Math.round(nx * 2) + i},${Math.round(nz * 2) + j}`)) boxed = true;
+    }
+    // Did the PLANNER know this was a junction? `juncGrid` is what the parapet
+    // rule reads for a road that has not built yet; a node the planner never
+    // pinned — a crumb joiner has no chain — is one the host's rail decided
+    // about with only the built grid to go on.
+    let pinned = false;
+    for (let i = -1; i <= 1 && !pinned; i++) for (let j = -1; j <= 1 && !pinned; j++) {
+      for (const [jx, jz] of juncGrid.get(`${Math.floor(nx / GRID) + i},${Math.floor(nz / GRID) + j}`) ?? []) {
+        if (Math.hypot(jx - nx, jz - nz) <= 3) { pinned = true; break; }
+      }
+    }
+    // The box's own plane: each arm's two kerb corners at L along it, read
+    // back through `roadHeightAt` exactly as flushJunctions fans them, against
+    // that arm's deck at the node. A corner that lands on another arm's deck
+    // is a box fanned from the wrong road.
+    let twist = 0;
+    {
+      const L = maxHw + 0.5;
+      for (const e of cl) {
+        const px2 = -e.uz, pz2 = e.ux;
+        for (const s of [1, -1]) {
+          const cx2 = nx + e.ux * L + px2 * e.hw * s, cz2 = nz + e.uz * L + pz2 * e.hw * s;
+          const hy = roadHeightAt(cx2, cz2, 1.5);
+          if (hy !== null) twist = Math.max(twist, Math.abs(hy - e.y));
+        }
+      }
+    }
+    // A parapet across an arm: a wall the ribbon marked `sl`, not parallel to
+    // the arm, lying inside the arm's carriageway within maxHw + 8 of the node.
+    // A parapet along the arm's own kerb is parallel and never counts; one on
+    // the host's kerb that stops at the mouth's edge stands a half-width off
+    // the centreline and does not count either. What counts is a barrier the
+    // truck turning here would hit.
+    const rails: object[] = [];
+    const L2 = maxHw + 8;
+    for (const e of cl) {
+      const qx = nx + e.ux * L2, qz = nz + e.uz * L2;
+      const wseen = new Set<Seg>();
+      const mx = (nx + qx) / 2, mz = (nz + qz) / 2;
+      for (let i = -1; i <= 1; i++) for (let j = -1; j <= 1; j++) {
+        for (const w of wallGrid.get(`${Math.floor(mx / GRID) + i},${Math.floor(mz / GRID) + j}`) ?? []) {
+          if (!w.sl || wseen.has(w)) continue;
+          wseen.add(w);
+          const wdx = w.bx - w.ax, wdz = w.bz - w.az, wl = Math.hypot(wdx, wdz) || 1;
+          if (Math.abs((wdx / wl) * e.ux + (wdz / wl) * e.uz) > 0.82) continue;
+          if (segSegDist(nx, nz, qx, qz, w.ax, w.az, w.bx, w.bz) > Math.max(0.3, e.hw - 0.3)) continue;
+          rails.push({ arm: e.nm, fd: e.fd, at: [+((w.ax + w.bx) / 2).toFixed(1), +((w.az + w.bz) / 2).toFixed(1)],
+            len: +wl.toFixed(1), over: +((w.ya ?? 0) - e.y).toFixed(2) });
+        }
+      }
+    }
+    // The kerb ledger within reach of the node: bays that met the ground,
+    // bays that ran into another carriageway and drew nothing (the bare
+    // apron), and bays that are a drop with nothing on them.
+    const R2 = maxHw + 7;
+    let kerbs = 0, met = 0, clipNone = 0, bare = 0;
+    for (const g of edgeLog) {
+      if (Math.abs(g.x - nx) > R2 || Math.abs(g.z - nz) > R2 || Math.hypot(g.x - nx, g.z - nz) > R2) continue;
+      kerbs++;
+      if (g.met) met++;
+      else if (g.clip && !g.batter) clipNone++;
+      else if (!g.rail && !g.clip && !g.batter) bare++;
+    }
+    rows.push({ x: +nx.toFixed(1), z: +nz.toFixed(1), arms: cl.length, ways: fds.size, boxed, pinned,
+      spread: +(Math.max(...ys) - Math.min(...ys)).toFixed(2), twist: +twist.toFixed(2),
+      roadY: (() => { const y = roadHeightAt(nx, nz, 1.2); return y === null ? null : +y.toFixed(2); })(),
+      decks: cl.map((e) => ({ nm: e.nm, fd: e.fd, wid: e.wid, y: +e.y.toFixed(2), hw: e.hw, dir: [+e.ux.toFixed(3), +e.uz.toFixed(3)] })),
+      rails, kerbs, met, clipNone, bare });
+  }
+  rows.sort((a, b) => b.spread - a.spread);
+  const withRails = rows.filter((n) => n.rails.length);
+  const gaps = rows.filter((n) => n.bare > 0 || n.clipNone > 0)
+    .sort((a, b) => (b.bare * 3 + b.clipNone) - (a.bare * 3 + a.clipNone));
+  return {
+    nodes: rows.length, boxed: rows.filter((n) => n.boxed).length,
+    spreadOver10cm: rows.filter((n) => n.spread > 0.1).length,
+    spreadOver30cm: rows.filter((n) => n.spread > 0.3).length,
+    worstSpread: rows.length ? rows[0].spread : 0,
+    railsAcross: withRails.length,
+    unpinned: rows.filter((n) => !n.pinned).length,
+    twistOver30cm: rows.filter((n) => n.twist > 0.3).length,
+    worstTwist: rows.reduce((a, n) => Math.max(a, n.twist), 0),
+    joinsDrewNothing: rows.filter((n) => n.clipNone > 0).length,
+    joinsBare: rows.filter((n) => n.bare > 0).length,
+    worst: rows.slice(0, top), rails: withRails.slice(0, top), gaps: gaps.slice(0, top),
+  };
+};
 (window as unknown as { __kerbseams?: object }).__kerbseams = (r = 260): object => {
   interface End { x: number; z: number; y: number; ca: number; tx: number; tz: number; hw: number; nm: string; fd: number; wid: string }
   const seen = new Set<Seg>();
@@ -27335,6 +27497,40 @@ function meshHeightAt(x: number, z: number): number | null {
 // `__meshAt` (meshSurfaceAt) or `__vtxAt`; this is the raycast, for what a
 // raycast is for.
 (window as unknown as { __meshRay?: object }).__meshRay = meshHeightAt;
+/**
+ * A TRANSECT ACROSS A VERGE, for "does the batter act like terrain". At n+1
+ * points from (x0,z0) to (x1,z1): the drawn batter strip's surface (a raycast
+ * through every batter mesh, topmost hit), the terrain mesh the wheels read
+ * (`groundAt`), the natural field, the corridor kernel's own wedge and kind
+ * (0 ground, 1 floor, 2 cut face, 3 bank), and where a tyre would sit
+ * (`tyreHeight`, the suspension's own expression). `sink` is strip minus
+ * tyre: positive is a strip standing above the wheels — the truck drives into
+ * a picture — and negative is a strip the wheels fall through. Null where no
+ * strip is drawn, which on a refined tile is the healthy answer, because
+ * there the wedge IS the mesh.
+ */
+(window as unknown as { __batterLine?: object }).__batterLine = (x0: number, z0: number, x1: number, z1: number, n = 24): object[] => {
+  const strips = worldGroup.children.filter((m) => (m as THREE.Mesh).material === MAT.batter);
+  const len = Math.hypot(x1 - x0, z1 - z0);
+  const rows: object[] = [];
+  for (let i = 0; i <= n; i++) {
+    const t = n ? i / n : 0;
+    const x = x0 + (x1 - x0) * t, z = z0 + (z1 - z0) * t;
+    meshRayO.set(x, 4000, z); meshRay.set(meshRayO, meshRayD);
+    const hits = meshRay.intersectObjects(strips, false);
+    const bat = hits.length ? 4000 - hits[0].distance : null;
+    const g = groundAt(x, z), N = sampleHeight(x, z);
+    const ch = corridorH(x, z, N);
+    const e = roadEdge(x, z);
+    const ty = tyreHeight(x, z, 'ground', roadHeightAt(x, z, 3) ?? g);
+    rows.push({ d: +(len * t).toFixed(2), x: +x.toFixed(2), z: +z.toFixed(2),
+      batter: bat === null ? null : +bat.toFixed(2), ground: +g.toFixed(2), natural: +N.toFixed(2),
+      corridor: +ch.h.toFixed(2), kind: ch.k, tyre: +ty.toFixed(2),
+      out: e ? +e.out.toFixed(2) : null, deck: e ? +e.y.toFixed(2) : null,
+      sink: bat === null ? null : +(bat - ty).toFixed(2) });
+  }
+  return rows;
+};
 /** The sky's whole case file: where the sun is, what hour the world thinks it
  *  is, and whether the weather is a measurement or the synthetic chain. */
 (window as unknown as { __sky?: object }).__sky = (): object => ({

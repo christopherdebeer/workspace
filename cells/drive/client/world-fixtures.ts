@@ -819,6 +819,12 @@ export const CAPTURE_INDEX: readonly CaptureCard[] = [
     label: 'VÉLIZY — THE A 86 INTERCHANGE',
     note: 'Reported from the seat at 48.77736,2.22332 heading 281. The A 86 / N 118 interchange: 1,078 highways, 49 trunk_link and 20 motorway_link slip roads, lanes tags up to 5. THE LEVELS CASE. OSM says exactly where the flyovers are — 14 ways carry layer=1 or 2 with bridge=yes, 13 carry layer=-1 — and the game keeps the layer tag and never reads it: a tagged bridge is a chord between its two portals, not a deck above the road it crosses. Counted offline: 44 genuine grade-separated crossings in the box, 10 of them with a station of the flyover inside the 3m junction-pin radius of the road beneath, where the planner will weld the two decks together. Flat (44m of relief), so nothing here is terrain.',
   },
+  {
+    id: 'at-simonstown', file: 'world-simonstown.json', heading: 246,
+    eco: { id: 89, biome: 12, name: 'Fynbos shrubland', realm: 'Afrotropic' },
+    label: 'SIMON\'S TOWN — THE JOINS',
+    note: 'Reported from the seat at -34.19511,18.44192 heading 246: at the junctions the batter stops short of the join and leaves a gap, the arms do not meet on one closed plane, the batter is a picture the truck drives into rather than ground it stands on, and a mis-joined arm can put a guard rail across the carriageway. A steep peninsula suburb — 181 highways over 437m of relief in a 1.4km box — so nearly every junction is a joiner meeting a host on a cross-slope, which is where all four live.',
+  },
 ];
 
 /**
