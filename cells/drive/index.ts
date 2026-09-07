@@ -596,7 +596,10 @@ const OV_RE = /^\/~\/osm\/ov1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // the two coarse rungs get more headroom than z10 for the opposite reason: the
 // same narrow class set over 4x and 16x the ground. Measured on the first z9
 // tiles served: 19-24KB gzipped, nowhere near the cap.
-const OV_CAP: Record<number, number> = { 8: 8000, 9: 6000, 10: 3000, 11: 4500, 12: 6000, 13: 6000 };
+// z7 is a 313km box carrying motorways and trunks alone — the rung the chart
+// reaches past the z8 ring once its sight line was doubled to 600km. Given
+// the most headroom of all, for the same reason z8 has more than z10.
+const OV_CAP: Record<number, number> = { 7: 12000, 8: 8000, 9: 6000, 10: 3000, 11: 4500, 12: 6000, 13: 6000 };
 // These tiles are rare and cached forever, so they may spend upstream time a
 // fine tile cannot. Measured: a z10 coastal tile needs 11-18s of Overpass, and
 // the densest z12 boxes on the line want more — the fine budget's 5s-per-mirror
@@ -632,19 +635,34 @@ function overviewQuery(z: number, x: number, y: number): string {
   // it for secondaries and rail is what timed out: the classes climb as the
   // tiles shrink, and each level carries only what its scale can draw —
   // motorways at the scale of a region, tertiaries only at the tightest band.
-  const hw = z <= 10 ? 'motorway|trunk|primary'
+  // z7 IS THE WIDEST RUNG AND THE NARROWEST ASK, and the ask was measured
+  // before the rung was offered. A z7 box is 313km on a side; the Paris tile
+  // asked for motorways and trunks alone came back as 6,645 ways of 58k
+  // points, 7.6MB raw, in 65s from a loaded mirror — past the 44s this
+  // handler can wait — and the same box's coastline on its own did not return
+  // in 100s. Motorways alone are about half of that count. So z7 carries the
+  // motorways and the cities and nothing else: the shell's own cover raster
+  // paints the sea at that scale, and rivers, summits and coast stay on z8
+  // and finer, where the trim's tolerance (611m at z7) could draw them
+  // anyway. A dense European z7 tile may still take several stream passes to
+  // land; once it does the bank serves it for ever.
+  const hw = z <= 7 ? 'motorway'
+    : z <= 10 ? 'motorway|trunk|primary'
     : z === 11 ? 'motorway|trunk|primary|secondary'
     : 'motorway|trunk|primary|secondary|tertiary';
   const rail = z >= 11 ? `way["railway"="rail"](${bbox});` : '';
   const canal = z >= 11 ? '|canal' : '';
-  const place = z <= 10 ? 'city|town' : z === 11 ? 'city|town|village' : 'city|town|village|hamlet';
+  const river = z >= 8 ? `way["waterway"~"^(river${canal})$"](${bbox});` : '';
+  const coast = z >= 8 ? `way["natural"="coastline"](${bbox});` : '';
+  const peak = z >= 8 ? `node["natural"="peak"]["name"](${bbox});` : '';
+  const place = z <= 7 ? 'city' : z <= 10 ? 'city|town' : z === 11 ? 'city|town|village' : 'city|town|village|hamlet';
   return `[out:json][timeout:25];(
       way["highway"~"^(${hw})$"](${bbox});
       ${rail}
-      way["waterway"~"^(river${canal})$"](${bbox});
-      way["natural"="coastline"](${bbox});
+      ${river}
+      ${coast}
       node["place"~"^(${place})$"](${bbox});
-      node["natural"="peak"]["name"](${bbox});
+      ${peak}
     );out geom ${OV_CAP[z] ?? 6000};`;
 }
 /**
@@ -698,7 +716,7 @@ export function trimOverview(elements: RawWay[], z: number): Array<Record<string
 }
 async function serveOverview(path: string, m: RegExpMatchArray) {
   const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  if (z < 8 || z > 13 || x >= 2 ** z || y >= 2 ** z) {
+  if (z < 7 || z > 13 || x >= 2 ** z || y >= 2 ** z) {
     return respond(400, 'application/json', JSON.stringify({ error: 'overview tile out of range' }));
   }
   let elements: RawWay[];

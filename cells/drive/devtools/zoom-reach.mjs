@@ -71,10 +71,10 @@ if (process.env.NEAR === '1') {
     let last = null, still = 0;
     for (let i = 0; i < 60; i++) {
       await d.page.waitForTimeout(10000);
-      const f = await q(d, () => ({ far: window.__far(), ov: window.__ovroads() }));
+      const f = await q(d, () => ({ far: window.__far(), ov: window.__ovroads(), wide: window.__cover().wide }));
       const key = JSON.stringify([f.far.level, f.far.tiles, f.far.asked, f.ov.level, f.ov.tiles]);
       still = key === last ? still + 1 : 0; last = key;
-      console.log(`[${el()}] ${name} t+${(i + 1) * 10}s shell z${f.far.level} ${f.far.tiles}/${f.far.asked} tiles inFlight ${f.far.inFlight} queued ${f.far.queued} cover ${JSON.stringify(f.far.cover)} | ov z${f.ov.level} tiles ${f.ov.tiles} ways ${f.ov.ways} | radius ${f.far.radius}m`);
+      console.log(`[${el()}] ${name} t+${(i + 1) * 10}s shell z${f.far.level} ${f.far.tiles}/${f.far.asked} tiles inFlight ${f.far.inFlight} queued ${f.far.queued} cover ${JSON.stringify(f.far.cover)} | ov z${f.ov.level} tiles ${f.ov.tiles} ways ${f.ov.ways} | cover-wide z${f.wide.level} ${f.wide.tiles}/${f.wide.asked} | radius ${f.far.radius}m`);
       if (f.far.tiles >= 25 && f.far.inFlight === 0 && f.far.queued === 0 && still >= 2) { report[name] = f; break; }
       report[name] = f;
     }

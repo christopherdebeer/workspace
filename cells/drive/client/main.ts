@@ -163,15 +163,28 @@ const CAM = { base: 175, perKmh: 1.1, tilt: 70, fov: 55 };
  * then keep pulling against is worse than a lower one that means something.
  *
  * So the reach is the number that is chosen, and the ceiling is derived from
- * it. 300km is picked against the shell's own ladder: `farLevelFor` drops to
- * z7 past ~196km, and a 5x5 ring of z7 tiles spans 626km at the equator — room
- * to spare. Tiles shrink with cos(latitude), so the ring still covers 300km
- * out to about 61 degrees and falls short of it beyond, which is the same
- * honest degradation SIGHT_M documents for the near shell rather than a new
- * kind of failure.
+ * it. 300km was picked against the shell's own ladder: `farLevelFor` drops to
+ * z7 past ~196km, and a 5x5 ring of z7 tiles spans 783km at the equator, so
+ * the ring covered 300km out to about 67 degrees of latitude. DOUBLED to
+ * 600km, asked for from the seat: the same z7 ring reaches 600km only below
+ * about 40 degrees, which leaves out most of Europe and North America, so the
+ * shell's ladder gained a z6 rung — the same tile count at the same 128
+ * segments, since `farSeg` already clamps there at z7 — and covers 600km out
+ * to 67 degrees again. The chart's road layer follows with a z7 rung that the
+ * cell now serves (motorways and trunks only at that scale, see
+ * `overviewQuery`); beyond the latitude a level's ring reaches, the outer
+ * frame is the same honest degradation SIGHT_M documents for the near shell
+ * rather than a new kind of failure.
  */
-const SIGHT_MAX = 300000;
-const ZOOM_MIN = 0.25;
+const SIGHT_MAX = 600000;
+/**
+ * THE NEAR END, DOUBLED WITH THE FAR ONE. 0.25 put the chart camera 44m over
+ * the truck; 0.125 puts it 22m up, a frame about 23m across — the whole of a
+ * junction and its corners, which is the scale the joins are judged at from
+ * the chart. Nothing in the chart stands within 8% of the orbit distance
+ * (`setNear`), so the near plane simply follows it in to 1.75m.
+ */
+const ZOOM_MIN = 0.125;
 /**
  * The zoom at which the frustum's ground radius reaches SIGHT_MAX — the same
  * arithmetic `viewRadius` does, run backwards, at a standstill. Derived and
@@ -20399,7 +20412,11 @@ function streamWorld(ex: number, ez: number): void {
 // just driving visibly changed shape. z13 holds the first band (out to ~10km)
 // at ~60m cells, so fidelity steps down through the levels instead of falling
 // off a cliff at the edge of the fine ring.
-const FAR_LEVELS = [13, 11, 9, 7];
+// z6 is the 600km rung: a z7 ring falls short of SIGHT_MAX above ~40 degrees
+// of latitude, and z6 (1,565km at the equator) carries it to 67. Same cost
+// as z7 — `farSeg` clamps both at 128 segments — so the shell never grows
+// past the triangle budget the ladder was sized to.
+const FAR_LEVELS = [13, 11, 9, 7, 6];
 let farZ = FAR_LEVELS[0];
 const FAR_RING_MAX = 2;       // 5×5 coarse tiles at whichever level is current
 // METRES PER VERTEX, not segments, is what decides whether a massif has a
@@ -20624,7 +20641,19 @@ async function loadFarTile(x: number, y: number): Promise<void> {
     if (cv !== null) hit++;
     // …and where the raster does not reach, the average of what it does say
     // rather than nothing at all. See coverMode.
-    const [r, g, bb] = terrainPalette(raw, Math.hypot(du, dv) / Math.max(cell, 1), cv ?? coverMode, fwx, fwz);
+    //
+    // EXCEPT AT SEA. WorldCover is a LAND map: its tiles stop a few tens of
+    // kilometres off the coast and answer 0 beyond, which sampleCoverShell
+    // reads as "no cover". So every shell vertex over open ocean took the
+    // modal class of the country — grassland at the Cape — and the Atlantic
+    // was painted olive from about 40km out, at either ceiling. Measured on
+    // the chart at 600km: the same pixel row read sea-blue at 30km west of
+    // Simon's Town and grassland at 60. The coarse DEM carries bathymetry,
+    // so a vertex below the sea datum with no cover to say otherwise is
+    // water, whatever the mode is. `hit` still counts only real cover, so
+    // __far().cover keeps reporting how much of the raster the tile had.
+    const cvv = cv ?? (raw < seaSurfaceAbs() ? 80 : coverMode);
+    const [r, g, bb] = terrainPalette(raw, Math.hypot(du, dv) / Math.max(cell, 1), cvv, fwx, fwz);
     colors[i * 3] = r; colors[i * 3 + 1] = g; colors[i * 3 + 2] = bb;
     tr += r; tg += g; tb += bb;
   }
@@ -20665,7 +20694,10 @@ const FAR_DROP = 12;
 // cost of a rung is now a one-off rather than per-player. The query already
 // narrows itself for these: at z<=10 it asks for motorway/trunk/primary,
 // coastline, rivers, cities and towns, and nothing else.
-const OV_LEVELS = [13, 12, 11, 10, 9, 8];
+// z7 is served by the cell as motorway and trunk only (see `overviewQuery`
+// in index.ts): at 313km a tile it is the rung that keeps roads on the chart
+// past the z8 ring's ~390km, which the doubled SIGHT_MAX looks well beyond.
+const OV_LEVELS = [13, 12, 11, 10, 9, 8, 7];
 const OV_RING_MAX = 2;        // 5×5 tiles at whichever level is current
 /** How long the CHART waits, which is not how long the CELL takes. See the
  *  note in loadOvTile: an abandoned request still banks its tile. */
