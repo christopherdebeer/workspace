@@ -133,6 +133,34 @@ const TERRAIN_Z = 14;         // terrarium tile zoom (~2.4km/cos(lat), ~9.5m/px 
 // too big a difference to decide on someone else's behalf — so it is a dial,
 // starting where it always was.
 let terrainSeg = 128;
+/** THE LAST ERRORS, FOR THE DUMP. A shader that fails to link on a phone
+ *  says so only in a console nobody can open there; the world simply has a
+ *  hole in it. The last eight errors — window errors, rejected promises and
+ *  what three logs through console.error — ride the telemetry text and
+ *  `__errors()`. A shader log is thousands of lines of source; only its
+ *  first line and the lines that say ERROR are kept. */
+const errRing: string[] = [];
+function noteErr(kind: string, msg: string): void {
+  const lines = String(msg).split('\n');
+  const keep = [lines[0], ...lines.slice(1).filter((l) => /error/i.test(l)).slice(0, 4)];
+  const line = `${kind}: ${keep.join(' | ').replace(/\s+/g, ' ').slice(0, 500)}`;
+  if (errRing[errRing.length - 1] === line) return;
+  errRing.push(line);
+  if (errRing.length > 8) errRing.shift();
+}
+addEventListener('error', (e) => noteErr('error', `${e.message} @${(e.filename ?? '').split('/').pop()}:${e.lineno}`));
+addEventListener('unhandledrejection', (e) => {
+  const r = (e as PromiseRejectionEvent).reason as { message?: string } | string | undefined;
+  noteErr('reject', String(typeof r === 'object' && r ? r.message ?? r : r));
+});
+{
+  const ce = console.error.bind(console);
+  console.error = (...a: unknown[]): void => {
+    noteErr('console', a.map((v) => (v instanceof Error ? v.message : typeof v === 'string' ? v : (() => { try { return JSON.stringify(v); } catch { return String(v); } })())).join(' '));
+    ce(...a);
+  };
+}
+(window as unknown as { __errors?: object }).__errors = (): string[] => [...errRing];
 const OSM_Z = 16;             // overpass tile zoom (~600m — keeps per-query weight low)
 const OSM_RING = 1;           // load a (2R+1)² neighbourhood of vector tiles
 const TERRAIN_RING = 2;       // wider ring at the finer zoom keeps the horizon populated
@@ -34947,6 +34975,7 @@ function telemetryReport(): string {
   const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
   const L: string[] = [];
   L.push(`DRIVE TELEMETRY · ${new Date().toISOString().slice(0, 19)}Z · ${Math.round(secs)}s · ${location.search}`);
+  if (errRing.length) L.push(`errors ${errRing.length} · ${errRing.join(' ¶ ')}`);
   L.push(`device ${navigator.hardwareConcurrency ?? '?'} cores · dpr ${devicePixelRatio} · ${innerWidth}x${innerHeight} · ${gpu}`);
   L.push(`ua ${navigator.userAgent.slice(0, 90)}`);
   L.push(`settings tseg ${terrainSeg} · veg ${vegScale} · grass ${grassScale} · refine ${REFINE ? 'on' : 'off'} r${REFINE_R} · worker ${tworker && !tworker.disabled ? 'on' : 'off'} · luma ${lumaAsync ? 'async' : 'sync'}${mem ? ` · heap ${Math.round(mem.usedJSHeapSize / 1048576)}MB` : ''}`);
