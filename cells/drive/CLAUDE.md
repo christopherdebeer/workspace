@@ -3938,6 +3938,51 @@ the ground's own luminance, greener and bluer than it; from the bank it is
 the pale sky-reflecting sheet it was. Judgement, not anchors: the seat's
 next frame is the verification.
 
+### "On water" near the water — every input to the decision, painted on the ground
+
+The seat reported the readout saying WATER on grass "near" the river, and
+asked whether the physics' inputs align with what the hydro draws. They did
+not, and nothing showed them side by side. Five things can say water under
+the wheels — a carriageway's absence, a carved channel, the ocean mask, the
+hydro field's resting surface, the cover raster's class 80 — and the hydro
+draws by a sixth (coverage past the shader's ragged cut, AND the resting
+level above the ground). Two tools now, sharing one classifier
+(`wetClassAt`) so they cannot disagree:
+
+- **`?wetdebug=1`** (or `__wetdebug(true)`) paints the classes over the
+  768 m around the truck, 128 texels a side, repainted every two seconds
+  while on (57 ms a repaint; the terrain shader mixes it in after the clouds
+  and costs one uniform read when off). Legend: **blue** W drawn water and
+  the truck would be in it · **orange** D deck over water · **magenta** U the
+  field is wet but its surface is UNDER the ground · **yellow** E the
+  waterline band, where the shader's cut and the physics' 0.5 may part ·
+  **cyan** C carved channel with no hydro water, F a ford · **navy** O ocean
+  mask · **grey** c cover class 80 with nothing built · **red** X the physics
+  says water and nothing above explains it.
+- **`__wetmap(halfM, n)`** is the same as ASCII for the harness, truck at `@`.
+
+What it showed at both Senqu fixtures: the drawn river is a W band one or
+two texels wide inside a **magenta skirt** of U — texels the field calls wet
+(kind river, coverage 0.53–0.93) whose resting level sits 0.08 to 3.36 m
+BELOW the DEM. The field's sampler gates on coverage ≥ 0.5 and never asked
+whether the water clears the ground, so `hydroWet` said yes there, the
+readout said WATER, the wade played, and the truck drove on grass; the mesh
+drawn there is hidden by the ground, which is why the eye saw nothing. That
+skirt is exactly the seat's "on water near water". `hydroWet` now requires
+the resting level above the ground by 2 cm (the drawn water is the water),
+and the site panel's WATER row says `RIVER · 2.7M UNDER GROUND` rather than
+a depth when it is. Also seen: some U texels report a `water` surface — that
+is the carved channel's ribbon under a wet-but-buried field texel; the
+classifier gives U precedence over C, so a channel under a skirt reads
+magenta, not cyan.
+
+Verified: `tsc` clean, `switches.test` green (both `wetdebug` and `shore`
+now read through `qsOn`, the typed reader — the shore flag had been passing
+that test by a coincidental literal elsewhere), `boot.mjs` no page or GLSL
+errors, the ASCII maps at `at-senqu-top` and `at-senqu-ford`, an overlay
+frame from the top camera with the magenta blocks around the truck, the
+repaint leaving `surfQ` as it found it. Not verified from the seat.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where

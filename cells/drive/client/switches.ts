@@ -133,6 +133,8 @@ export const SWITCHES = [
     note: 'how far from the truck the terrain takes its road corridor' },
 
   // ── the A/Bs that keep an older path alive ──
+  { id: 'wetdebug', kind: 'toggle', marks: ['legacy'], fallback: 'off',
+    note: 'wetdebug=1 paints every input to the water decision on the ground around the truck — drawn water, water under the ground, the waterline band, channels, ocean, cover, decks over water' },
   { id: 'shore', kind: 'toggle', marks: ['legacy'], fallback: 'on',
     note: 'shore=0 leaves the water its frame colour and the banks their hillside grass — the A/B for the shoreline pass' },
   { id: 'ez', kind: 'toggle', marks: ['legacy'], fallback: 'skeletons',

@@ -21,8 +21,8 @@ import { createAudio, type ImpactKind } from './audio';
 import { coastKm } from './coast';
 import { clamp } from './num';
 import { nearestStable, squareRings, uploadPrefix } from './render-work';
-import { bankHabitat, sampleBankField } from './shoreline';
-import { URL_OWNED, qs, qsHas, switchRows } from './switches';
+import { WATERLINE_CUT, bankHabitat, sampleBankField } from './shoreline';
+import { URL_OWNED, qs, qsHas, qsOn, switchRows } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt, paintFor, roadLookAt,
@@ -1683,7 +1683,7 @@ const waterFromDials = (rec: Record<string, number>): boolean =>
 /** The shoreline pass as one switch, for the A/B: the water's local
  *  terrain colour and the sward's mineral and reed banks. `shore=0` is the
  *  frame colour and hillside grass to the waterline, as it was. */
-const SHORE_ON = !/[?&]shore=0/.test(location.search);
+const SHORE_ON = qsOn('shore', true);
 const HYDRO_ON = ((): boolean => {
   const q = /[?&]hydro=([01])/.exec(location.search);
   if (q) return q[1] === '1';
@@ -2385,7 +2385,20 @@ function hydroTick(nowMs: number): void {
  * reads a signed distance instead.
  */
 function hydroWet(x: number, z: number): boolean {
-  return HYDRO_ON && !!hydroSys?.sampleRestingSurface(x, z);
+  if (!HYDRO_ON || !hydroSys) return false;
+  const wet = hydroSys.sampleRestingSurface(x, z);
+  if (!wet) return false;
+  // ── AND THE WATER HAS TO BE ABOVE THE GROUND ──
+  //
+  // Coverage says a body is here; it does not say the body's surface is
+  // where the wheels are. A river's profile can put its resting level metres
+  // UNDER the DEM along a reach the DEM never resolved (the Senqu: −2.7 to
+  // −3.5 m at texels the field calls wet), and the mesh drawn there is
+  // hidden by the ground — so the seat saw WATER on the readout, felt the
+  // wade, and drove on grass. Reported as "registers on water near water".
+  // The drawn water is the water: the truck is in it only where the resting
+  // level clears the ground it stands on.
+  return !hasHeight(x, z) || wet.restingLevelM > sampleHeight(x, z) + baseElev + 0.02;
 }
 /**
  * ── THE OCEAN MASK, RESAMPLED INTO THE TILE'S OWN FRAME ──
@@ -5005,6 +5018,39 @@ const SUNM_GLSL = `
   }`;
 // (Pattern per SimonDev's "customizing materials": extend the built-ins by
 // splicing GLSL into their chunk includes rather than rewriting materials.)
+/**
+ * ── THE WET-DEBUG OVERLAY: EVERY INPUT TO "IS THE TRUCK IN WATER", ON THE GROUND ──
+ *
+ * The readout said WATER on grass. Five things can say water here — a
+ * carriageway's absence, a carved channel, the ocean mask, the hydro field's
+ * coverage, the cover raster's class 80 — and the hydro draws by a sixth
+ * (coverage past the shader's cut, AND the resting level above the ground).
+ * Nothing showed them side by side, so a disagreement between what the
+ * wheels felt and what the eye saw could only be argued about. This paints
+ * them, one colour each, over the 768 m around the truck, and the terrain
+ * shader mixes it in after everything else. Off, it costs one uniform read.
+ *
+ *   blue     drawn water, and the truck would be in it
+ *   orange   drawn water under a carriageway — a bridge or causeway deck
+ *   magenta  the field is wet here but its surface is UNDER the ground
+ *   yellow   the waterline band, where the shader's cut and the physics' 0.5 may part
+ *   cyan     a carved channel with no hydro water
+ *   navy     the ocean mask
+ *   grey     cover class 80 with no water built
+ *   red      the physics says water and none of the above explains it
+ */
+const WETDBG_N = 128;
+const wetDbgCv = document.createElement('canvas');
+wetDbgCv.width = wetDbgCv.height = WETDBG_N;
+const wetDbgCtx = wetDbgCv.getContext('2d') as CanvasRenderingContext2D;
+const wetDbgT = new THREE.CanvasTexture(wetDbgCv);
+wetDbgT.flipY = false; wetDbgT.minFilter = wetDbgT.magFilter = THREE.NearestFilter;
+const wetDbgU = {
+  uDbgWet: { value: wetDbgT as THREE.Texture }, uDbgOrg: { value: new THREE.Vector2() },
+  uDbgW: { value: 768 }, uDbgOn: { value: 0 },
+};
+let wetDbgOn = qsOn('wetdebug', false);
+let wetDbgAt = -1e9, wetDbgMs = 0;
 function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
   // THE SHADOW MAP HAS TO SEE THE FACES YOU CAN SEE. three's default for a
   // FrontSide material is to render BACK faces into the depth map — sound for a
@@ -5063,9 +5109,12 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
     sh.uniforms.uSunMW = envU.uSunMW;
     sh.uniforms.uSunMOn = envU.uSunMOn;
     sh.uniforms.uSunL = envU.uSunL;
+    sh.uniforms.uDbgWet = wetDbgU.uDbgWet; sh.uniforms.uDbgOrg = wetDbgU.uDbgOrg;
+    sh.uniforms.uDbgW = wetDbgU.uDbgW; sh.uniforms.uDbgOn = wetDbgU.uDbgOn;
     sh.fragmentShader = sh.fragmentShader
       .replace('#include <common>', `#include <common>
         varying vec3 vWorldP;
+        uniform sampler2D uDbgWet; uniform vec2 uDbgOrg; uniform float uDbgW; uniform float uDbgOn;
         uniform float uCloudS; uniform vec2 uWind;
         uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
         uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
@@ -5095,6 +5144,13 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
         float covL = texture2D(uWxTex, (hit - uWxMin) * uWxInv).r;
         float cs = clCov(clfbm(hit * uCloudScale + uWind), covL);
         gl_FragColor.rgb *= 1.0 - min(covL * 1.4, 1.0) * cs * 0.5;
+      }
+      if (uDbgOn > 0.5) {
+        vec2 duv = (vWorldP.xz - uDbgOrg) / uDbgW;
+        if (duv.x > 0.0 && duv.x < 1.0 && duv.y > 0.0 && duv.y < 1.0) {
+          vec4 dc = texture2D(uDbgWet, duv);
+          gl_FragColor.rgb = mix(gl_FragColor.rgb, dc.rgb, dc.a * 0.8);
+        }
       }`);
     if (opts.detail) {
       // World-space mottle (~30–80m blobs) breaks the flat-shaded banding of
@@ -26525,6 +26581,72 @@ function truckSpec(): Record<string, number> {
  *  offers; called with nothing it reports the view without changing it. The
  *  harness needs this to photograph what the field believes, which is the one
  *  question a screenshot of the surface cannot answer. */
+/** One letter per point: what says water here, and whether the eye would
+ *  see it. The overlay and `__wetmap` share this so they cannot disagree. */
+type WetClass = 'W' | 'D' | 'U' | 'E' | 'F' | 'C' | 'O' | 'c' | 'X' | '.';
+function wetClassAt(x: number, z: number): WetClass {
+  const surf = surfaceAt(x, z);
+  const wet = HYDRO_ON ? hydroSys?.sampleRestingSurface(x, z) : undefined;
+  const ground = hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
+  const above = !!wet && (!Number.isFinite(ground) || wet.restingLevelM > ground + 0.02);
+  const cut = WATERLINE_CUT(x, z);
+  const drawn = !!wet && above && wet.coverage >= cut;
+  const onDeck = surf === 'road' || surf === 'track';
+  if (wet && Math.abs(wet.coverage - 0.5) < 0.12 && above) return 'E';
+  if (drawn) return onDeck ? 'D' : surf === 'water' ? 'W' : 'X';
+  if (wet && !above) return 'U';
+  if (surf === 'water' && fordDepthAt(x, z) > FORD_MIN_M && onDeck) return 'F';
+  if (surf === 'water' && channelAt(x, z)) return 'C';
+  if (surf === 'water' && oceanAt(x, z)) return 'O';
+  if (surf === 'water') return 'X';
+  if (sampleCover(x, z) === COVER.water) return 'c';
+  return '.';
+}
+const WET_RGBA: Record<WetClass, string> = {
+  W: 'rgba(40,110,255,0.75)', D: 'rgba(255,150,30,0.8)', U: 'rgba(230,40,220,0.8)', E: 'rgba(250,230,40,0.7)',
+  F: 'rgba(30,220,255,0.85)', C: 'rgba(60,220,220,0.7)', O: 'rgba(20,30,140,0.7)', c: 'rgba(160,170,190,0.55)',
+  X: 'rgba(255,40,40,0.9)', '.': 'rgba(0,0,0,0)',
+};
+/** Repaint the overlay around the truck: 16k classifications, about 40 ms,
+ *  once a second and only while the switch is on. */
+function repaintWetDebug(): void {
+  const t0 = performance.now();
+  // surfaceAt writes surfQ as a side effect; sixteen thousand calls must
+  // not leave the truck standing on the last texel's quality.
+  const surfQWas = surfQ;
+  const half = wetDbgU.uDbgW.value / 2, step = wetDbgU.uDbgW.value / WETDBG_N;
+  const ox = state.x - half, oz = state.z - half;
+  wetDbgCtx.clearRect(0, 0, WETDBG_N, WETDBG_N);
+  for (let j = 0; j < WETDBG_N; j++) for (let i = 0; i < WETDBG_N; i++) {
+    const k = wetClassAt(ox + (i + 0.5) * step, oz + (j + 0.5) * step);
+    if (k === '.') continue;
+    wetDbgCtx.fillStyle = WET_RGBA[k];
+    wetDbgCtx.fillRect(i, j, 1, 1);
+  }
+  surfQ = surfQWas;
+  wetDbgU.uDbgOrg.value.set(ox, oz);
+  wetDbgT.needsUpdate = true;
+  wetDbgU.uDbgOn.value = 1;
+  wetDbgMs = performance.now() - t0;
+}
+/** The overlay, from a script or the address bar: `__wetdebug(true)`. */
+(window as unknown as { __wetdebug?: object }).__wetdebug = (on?: boolean): object => {
+  if (on !== undefined) { wetDbgOn = on; if (!on) wetDbgU.uDbgOn.value = 0; else wetDbgAt = -1e9; }
+  return { on: wetDbgOn, repaintMs: +wetDbgMs.toFixed(1), legend: 'W drawn water · D deck over water · U wet under the ground · E waterline band · F ford · C channel · O ocean · c cover-80 only · X unexplained' };
+};
+/** The same classes as an ASCII map for the harness, truck at @. */
+(window as unknown as { __wetmap?: object }).__wetmap = (halfM = 120, n = 25): string[] => {
+  const out: string[] = [];
+  for (let iz = 0; iz < n; iz++) {
+    let row = '';
+    for (let ix = 0; ix < n; ix++) {
+      const x = state.x - halfM + (ix / (n - 1)) * halfM * 2, z = state.z - halfM + (iz / (n - 1)) * halfM * 2;
+      row += ix === (n >> 1) && iz === (n >> 1) ? '@' : wetClassAt(x, z);
+    }
+    out.push(row);
+  }
+  return out;
+};
 (window as unknown as { __hydroview?: object }).__hydroview = (name?: HydroDebugView): string => {
   if (name) { hydroView = name; hydroSys?.setDebugView(name); }
   return hydroView;
@@ -31017,7 +31139,11 @@ function siteRecord(ex: number, ez: number, name: string): SiteRecord {
         + ` · ×${guild.scale.toFixed(2)} AT ${(guild.density * 100).toFixed(0)}%`
       : GUILD_ON ? 'BY CLIMATE' : 'BY CLIMATE (GUILDS OFF)'],
     ['GROUND', surf.toUpperCase()],
-    ['WATER', wet ? `${wet.kind.toUpperCase()} · ${wet.depthM.toFixed(1)}M DEEP` : oceanAt(ex, ez) ? 'OCEAN' : 'DRY'],
+    ['WATER', wet
+      ? (elevAbs !== null && wet.restingLevelM < elevAbs + 0.02
+        ? `${wet.kind.toUpperCase()} · ${(elevAbs - wet.restingLevelM).toFixed(1)}M UNDER GROUND`
+        : `${wet.kind.toUpperCase()} · ${wet.depthM.toFixed(1)}M DEEP`)
+      : oceanAt(ex, ez) ? 'OCEAN' : 'DRY'],
     ['RANGE', `${rangeText} ${compass8(dx, dz)}`],
     ['TILE', `${tile.tx}·${tile.ty} ${tile.st.toUpperCase()}`],
   ];
@@ -35789,6 +35915,7 @@ function tick(now: number): void {
   // Cheap and cached: a ring of water probes and a look at this cell's
   // foliage, twice a second. The bed is DUCKED by motion and by the engine
   // — it was always there; the idle was on top of it.
+  if (wetDbgOn && nowMs - wetDbgAt > 2000) { wetDbgAt = nowMs; repaintWetDebug(); }
   if (nowMs - ambSampledAt > 500) {
     ambSampledAt = nowMs;
     // THE RULE (the owner's): the bed plays what is ACTUALLY THERE, never a

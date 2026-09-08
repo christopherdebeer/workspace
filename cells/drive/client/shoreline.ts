@@ -28,6 +28,31 @@ export function bankHabitat(cover: number | null, moisture: number, tempC: numbe
   return { reeds, mineral, submerged, depth };
 }
 
+/** THE SAME PATCHES, IN TYPESCRIPT, for whatever must agree with the shader
+ *  about where the waterline is (the wet-debug overlay, the physics' idea of
+ *  the drawn edge). Float32 in the GPU and float64 here part in the low
+ *  bits, which at a two-metre wobble is nothing. */
+const fract = (v: number): number => v - Math.floor(v);
+export function bankHash(px: number, pz: number): number {
+  let hx = fract(px * 0.1031), hy = fract(pz * 0.1031), hz = fract(px * 0.1031);
+  const d = hx * (hy + 33.33) + hy * (hz + 33.33) + hz * (hx + 33.33);
+  hx += d; hy += d; hz += d;
+  return fract((hx + hy) * hz);
+}
+export function bankNoise(px: number, pz: number): number {
+  const ix = Math.floor(px), iz = Math.floor(pz);
+  let fx = px - ix, fz = pz - iz;
+  fx = fx * fx * (3 - 2 * fx); fz = fz * fz * (3 - 2 * fz);
+  const a = bankHash(ix, iz), b = bankHash(ix + 1, iz), c = bankHash(ix, iz + 1), d = bankHash(ix + 1, iz + 1);
+  return (a * (1 - fx) + b * fx) * (1 - fz) + (c * (1 - fx) + d * fx) * fz;
+}
+export function bankPatch(px: number, pz: number): number {
+  return bankNoise(px * 0.17, pz * 0.17) * 0.72 + bankNoise(px * 0.043, pz * 0.043) * 0.28;
+}
+/** The fragment cut the water shader applies to coverage at this point —
+ *  the one number the physics and the overlay must share with it. */
+export const WATERLINE_CUT = (px: number, pz: number): number => 0.5 + (bankPatch(px, pz) - 0.5) * 0.24;
+
 /** Continuous, stationary metre-space patches shared by hydro and sward.
  * No time or tile seed: streamed tiles cannot disagree at their boundaries. */
 export const BANK_GLSL = /* glsl */`
