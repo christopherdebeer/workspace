@@ -43,6 +43,7 @@ import { RoadProfileWorker } from './roadprofile-worker';
 import { inlandComponents, inlandMask, maskSignature } from './inland-water';
 import { pointInPolygon } from './hydro/geometry';
 import { HYDRO_BUILD_PROF } from './hydro/build-tile';
+import type { SceneShade } from './hydro/material';
 import { createTerrainKernel, type HeightTile, type CellTris, type StripLike, type BreakLine, type TerrainStore, type CarveLog, type MmPt, type CoverTile } from './terrain-kernel';
 import { TerrainWorker, type TerrainJob, type TerrainReply } from './terrain-worker';
 // THE TERRAIN KERNEL, instantiated once for the synchronous path and the
@@ -2297,6 +2298,32 @@ const hydroRev = new Map<string, number>();
 const hydroFrameOrigin = { x: 0, y: 0, z: 0 };
 const hydroFrameSky = { r: 0, g: 0, b: 0 };
 const hydroFrameTerrain = { r: 0, g: 0, b: 0 };
+/** THE LIGHT THE GROUND GETS, for the water (HydroFrame.sceneLight). The
+ *  ground is a Lambert surface: sun colour × intensity × its cosine, plus
+ *  the sky fill, plus the moon — and every one of those the sky update
+ *  already scales by hour, cloud and biome. The water shader used a curve
+ *  of its own that saturated at any sun over thirty degrees and knew nothing
+ *  of cloud, so under a hazy morning the valley halved and the river did
+ *  not. This is that irradiance on a flat surface as a ratio to THIS
+ *  biome's clear noon (the sun at 53°, cosine 0.8, on the flat) — 1 where the
+ *  palette was drawn, and the ground's own fraction everywhere else. */
+const hydroFrameLight = { r: 1, g: 1, b: 1 };
+const hydroFrameZenith = { r: 0.05, g: 0.12, b: 0.28 };
+const hydroRefSun = new THREE.Color(), hydroRefSky = new THREE.Color();
+function hydroLightFeed(): void {
+  hydroRefSun.setHex(biome.sun); hydroRefSky.setHex(biome.hemiSky);
+  const up = Math.max(0, LIGHT_DIR.y);
+  const mUp = Math.max(0, moon.position.y) / (moon.position.length() || 1);
+  const ch = (k: 'r' | 'g' | 'b'): number => {
+    const ref = biome.sunI * 0.8 * hydroRefSun[k] + biome.hemiI * hydroRefSky[k];
+    const now = sun.color[k] * sun.intensity * up + hemi.color[k] * hemi.intensity
+      + moon.color[k] * moon.intensity * mUp;
+    return now / Math.max(ref, 1e-3);
+  };
+  hydroFrameLight.r = ch('r'); hydroFrameLight.g = ch('g'); hydroFrameLight.b = ch('b');
+  const z = skyMat.uniforms.uZenith.value as THREE.Vector3;
+  hydroFrameZenith.r = z.x; hydroFrameZenith.g = z.y; hydroFrameZenith.b = z.z;
+}
 /** The world's wind, written where the sky and the grass already agree on it.
  *  12km/h is the calm-day default the deck drift uses. */
 const worldWind = { dirX: 0, dirZ: 1, kmh: 12 };
@@ -2337,6 +2364,7 @@ function hydroTick(nowMs: number): void {
   // answer (horizon toward zenith); groundTint is memoised on a 3m cell, so it
   // is a cached read per frame and recomputes only as the rig crosses a cell.
   // Persistent records keep this completion out of the frame's allocation path.
+  hydroLightFeed();
   const sky = wxU.uPudSky.value;
   const terrain = groundTint(state.x, state.z);
   hydroFrameSky.r = sky.x; hydroFrameSky.g = sky.y; hydroFrameSky.b = sky.z;
@@ -2351,6 +2379,8 @@ function hydroTick(nowMs: number): void {
     // here made hydro interpret midnight as daylight and stay cyan-white.
     sunDirection: { x: SUN_DIR.x, y: SUN_DIR.y, z: SUN_DIR.z },
     skyColour: hydroFrameSky,
+    sceneLight: hydroFrameLight,
+    zenithColour: hydroFrameZenith,
     terrainColour: hydroFrameTerrain,
     // The ground's colour AT THE FRAGMENT, from the grass's own field (see
     // HydroFrame.terrainField): the shallows at a crossing wore the road's
@@ -2549,6 +2579,29 @@ function hydroInputSig(feats: readonly HydroFeature[], ocean: OceanCoverage): st
   walk(ocean as unknown as Record<string, unknown>, 0);
   return `${oceanSig}|${ids.join(',')}`;
 }
+/** THE CLOUD DECK'S SHADOW, HANDED TO THE WATER — the same function the
+ *  terrain shades by (terrainFx), the same uniforms shared by reference, so
+ *  a cloud's shadow crosses a river instead of stopping at its bank. The
+ *  names are prefixed because hydro's own `uWind` is a vec3 of direction and
+ *  speed and the deck's drift is a vec2; one program cannot hold both. */
+function hydroSceneShade(): SceneShade {
+  return {
+    head: `${CLOUD_GLSL}
+      uniform sampler2D uCsTex; uniform vec2 uCsMin; uniform float uCsInv; uniform float uCsOn;
+      uniform vec2 uCsDrift; uniform vec2 uCsSkew; uniform float uCsDeckY; uniform float uCsScale;
+      float sceneShade(vec3 p) {
+        if (uCsOn < 0.005) return 1.0;
+        vec2 hit = p.xz + uCsSkew * max(uCsDeckY - p.y, 0.0);
+        float covL = texture2D(uCsTex, (hit - uCsMin) * uCsInv).r;
+        float cs = clCov(clfbm(hit * uCsScale + uCsDrift), covL);
+        return 1.0 - min(covL * 1.4, 1.0) * cs * 0.5;
+      }`,
+    uniforms: {
+      uCsTex: wxU.uWxTex, uCsMin: wxU.uWxMin, uCsInv: wxU.uWxInv, uCsOn: envU.uCloudS,
+      uCsDrift: envU.uWind, uCsSkew: envU.uSunSkew, uCsDeckY: envU.uDeckY, uCsScale: envU.uCloudScale,
+    },
+  };
+}
 function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
   if (!HYDRO_ON) return;
   if (!hydroSys) {
@@ -2558,7 +2611,7 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
     // …and it runs from OUR queue, one a frame at most, never in the same
     // frame as a terrain apply: measured 13ms a tile (max 41), which stacked
     // on the apply's 7ms in the promise job right behind it.
-    hydroSys = createHydroSystem({ oceanLevelM: seaSurfaceAbs(), scheduleBuild: (job) =>
+    hydroSys = createHydroSystem({ oceanLevelM: seaSurfaceAbs(), sceneShade: hydroSceneShade(), scheduleBuild: (job) =>
       new Promise((resolve, reject) => { hydroJobs.push({ job, resolve, reject }); }) });
     hydroSys.setDebugView(hydroView);
     worldGroup.add(hydroSys.object3d);
@@ -8843,11 +8896,19 @@ let swardRoadSeen = -1, swardGroundSeen = -1, swardFieldAt = 0, swardMaskMs = 0;
 let swardFieldReady = false;
 /** THE BANK, ON THE GROUND SIDE. The water shader draws its last wet metre
  *  as damp sediment and gravel; the ground beside it grew the same grass
- *  as the hillside, so the two met on a line. These are the bank's colours
- *  the sward mixes toward — the same gravel family the water draws — and
- *  the density reeds add in a sheltered, shallow margin. */
-const BANK_MINERAL: [number, number, number] = [0.36, 0.32, 0.22];
+ *  as the hillside, so the two met on a line. The sward mixes toward the
+ *  bank's mineral where the habitat says mineral, and reeds thicken a
+ *  sheltered, shallow margin at REED_M2 a square metre. */
 const BANK_REED: [number, number, number] = [0.40, 0.44, 0.20];
+/** THE BANK'S MINERAL, FROM THE GROUND IT IS IN. A fixed gravel tan drew a
+ *  beach around a grassland river in the chart; wet mineral ground is the
+ *  local palette a fifth darker and a fifth greyer — the rule the water
+ *  shader's `wetGround` applies to the bed, so the two meet in one colour
+ *  at the waterline instead of each bringing its own sand. */
+const bankMineralOf = (r: number, g: number, b: number): [number, number, number] => {
+  const l = (r + g + b) / 3;
+  return [(r + (l - r) * 0.22) * 0.78, (g + (l - g) * 0.22) * 0.78, (b + (l - b) * 0.22) * 0.78];
+};
 const REED_M2 = 0.7;
 /**
  * Roads: the mask's clock — AND IT HAS TO TICK ON THE GEOMETRY, NOT THE FETCH.
@@ -9012,7 +9073,8 @@ function swardRows(from: number, to: number): void {
         else {
           density = density * (1 - hab.mineral * 0.85) + hab.reeds * REED_M2 * lift;
           const mk = hab.mineral * 0.75, rk = hab.reeds * 0.5;
-          pr = pr + (BANK_MINERAL[0] - pr) * mk; pg = pg + (BANK_MINERAL[1] - pg) * mk; pb = pb + (BANK_MINERAL[2] - pb) * mk;
+          const [mr, mg, mb] = bankMineralOf(pr, pg, pb);
+          pr = pr + (mr - pr) * mk; pg = pg + (mg - pg) * mk; pb = pb + (mb - pb) * mk;
           pr = pr + (BANK_REED[0] - pr) * rk; pg = pg + (BANK_REED[1] - pg) * rk; pb = pb + (BANK_REED[2] - pb) * rk;
         }
       }
@@ -26646,6 +26708,13 @@ function repaintWetDebug(): void {
     out.push(row);
   }
   return out;
+};
+/** Zero one look term at a time to find which one paints a thing —
+ *  `__hydrotune({ shallowBedStrength: 0 })` — the chart's cream rim was
+ *  argued about for a unit before anyone could turn its candidates off. */
+(window as unknown as { __hydrotune?: object }).__hydrotune = (patch?: Parameters<NonNullable<typeof hydroSys>['setTuning']>[0]): object => {
+  if (patch && hydroSys) hydroSys.setTuning(patch);
+  return { ok: !!hydroSys, light: { ...hydroFrameLight }, zenith: { ...hydroFrameZenith }, terrain: { ...hydroFrameTerrain } };
 };
 (window as unknown as { __hydroview?: object }).__hydroview = (name?: HydroDebugView): string => {
   if (name) { hydroView = name; hydroSys?.setDebugView(name); }

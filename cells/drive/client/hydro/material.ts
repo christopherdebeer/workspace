@@ -17,6 +17,8 @@ export interface HydroFrameUniforms {
   uRigTrailCount: { value: number };
   uSunDirection: { value: THREE.Vector3 };
   uSkyColour: { value: THREE.Color };
+  uSceneLight: { value: THREE.Vector3 };
+  uZenith: { value: THREE.Color };
   uTerrainColour: { value: THREE.Color };
   uSwardCol: { value: THREE.Texture | null };
   uSwardOrg: { value: THREE.Vector2 };
@@ -62,6 +64,8 @@ export function createHydroFrameUniforms(): HydroFrameUniforms {
     uRigTrailCount: { value: 0 },
     uSunDirection: { value: new THREE.Vector3(0.45, 0.82, 0.35).normalize() },
     uSkyColour: { value: new THREE.Color(0.46, 0.58, 0.68) },
+    uSceneLight: { value: new THREE.Vector3(1, 1, 1) },
+    uZenith: { value: new THREE.Color(0.05, 0.12, 0.28) },
     uTerrainColour: { value: new THREE.Color(0.16, 0.20, 0.13) },
     uSwardCol: { value: null },
     uSwardOrg: { value: new THREE.Vector2() },
@@ -149,6 +153,13 @@ export function createHydroTextures(field: HydroTileField): HydroTileTextures {
   };
 }
 
+/** A SHADE THE SCENE OWNS. The terrain darkens under the cloud deck by a
+ *  function its host writes; the water has to darken by the SAME function or
+ *  a cloud's shadow stops at the bank. The host hands in GLSL declaring
+ *  `float sceneShade(vec3 renderPos)` and the uniforms it reads, shared by
+ *  reference; hydro itself stays ignorant of clouds. */
+export interface SceneShade { head: string; uniforms: Record<string, THREE.IUniform> }
+
 export function createHydroMaterial(
   field: HydroTileField,
   textures: HydroTileTextures,
@@ -163,6 +174,7 @@ export function createHydroMaterial(
    */
   flowing = false,
   surf = false,
+  shade?: SceneShade,
 ): THREE.ShaderMaterial {
   const centralScale = field.resolution / field.width;
   const offset = field.gutter / field.width;
@@ -172,9 +184,14 @@ export function createHydroMaterial(
     defines: {
       ...(flowing ? { HYDRO_FLOWING: 1 } : {}),
       ...(surf ? { HYDRO_SURF: 1 } : {}),
+      ...(shade ? { HYDRO_SCENE_SHADE: 1 } : {}),
     },
     vertexShader: HYDRO_VERTEX_SHADER,
-    fragmentShader: HYDRO_FRAGMENT_SHADER,
+    // The host's shade is spliced in ahead of main, after every declaration
+    // of hydro's own, so it can read nothing it was not handed.
+    fragmentShader: shade
+      ? HYDRO_FRAGMENT_SHADER.replace('void main() {', `${shade.head}\nvoid main() {`)
+      : HYDRO_FRAGMENT_SHADER,
     extensions: { derivatives: true },
     uniforms: {
       // ── FOG UNIFORMS, OR THE FIRST RENDERED TILE THROWS ──
@@ -222,7 +239,10 @@ export function createHydroMaterial(
       uRigTrailCount: frame.uRigTrailCount,
       uSunDirection: frame.uSunDirection,
       uSkyColour: frame.uSkyColour,
+      uSceneLight: frame.uSceneLight,
+      uZenith: frame.uZenith,
       uTerrainColour: frame.uTerrainColour,
+      ...(shade?.uniforms ?? {}),
       uSwardCol: frame.uSwardCol,
       uSwardOrg: frame.uSwardOrg,
       uSwardW: frame.uSwardW,

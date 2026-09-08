@@ -290,6 +290,8 @@ uniform vec4 uRigTrail[8];
 uniform float uRigTrailCount;
 uniform vec3 uSunDirection;
 uniform vec3 uSkyColour;
+uniform vec3 uSceneLight;
+uniform vec3 uZenith;
 uniform vec3 uTerrainColour;
 uniform sampler2D uSwardCol;
 uniform vec2 uSwardOrg;
@@ -370,6 +372,16 @@ vec4 rigTrailField(vec2 p, vec2 flow) {
 // which made the same cyan cut-out run through a green dusk and an ochre desert.
 // Match luminance later through the shared light response; here the terrain
 // supplies hue and sediment, most strongly for wetlands and narrow watercourses.
+// THE GROUND, WET. Every colour the water borrows from its bank — the first
+// centimetre of a shallow, silt, a gravel bar, the damp margin — is the local
+// ground darkened and greyed, never a sand constant: a grassland river has a
+// dark green-grey bed and a desert river a pale one, because their banks do.
+// The sward's bank paint applies the same rule on the ground side
+// (bankMineralOf in main.ts), so the two meet in one colour at the waterline.
+vec3 wetGround(vec3 t) {
+  return mix(t, vec3(dot(t, vec3(0.333))), 0.22) * 0.78;
+}
+
 vec3 palette(float kind, float depth, float turbidity, vec3 terrainC) {
   vec3 shallow = vec3(0.14, 0.33, 0.36);
   vec3 deep = vec3(0.03, 0.115, 0.16);
@@ -390,9 +402,21 @@ vec3 palette(float kind, float depth, float turbidity, vec3 terrainC) {
     deep = vec3(0.045, 0.14, 0.16);
     groundAffinity = 0.20;
   }
-  shallow = mix(shallow, vec3(0.30, 0.27, 0.16), turbidity * 0.44);
-  deep = mix(deep, vec3(0.13, 0.12, 0.08), turbidity * 0.32);
-  shallow = mix(shallow, terrainC * mix(0.92, 1.12, turbidity), groundAffinity);
+  vec3 wet = wetGround(terrainC);
+  // Silt is the bank's own soil in suspension.
+  shallow = mix(shallow, wet * 1.15, turbidity * 0.44);
+  deep = mix(deep, wet * 0.55, turbidity * 0.32);
+  if (kind > 2.5) {
+    // INLAND, THE EDGE OF THE WATER IS THE WET GROUND. The shallow constant
+    // stood at thirty percent ground and, lit by nothing but itself, drew a
+    // rim at every waterline in the chart brighter than any bank — the
+    // "beach" the seat saw around a grassland river at the Senqu. The first
+    // centimetre is the bank, darkened; the water's own tint arrives with
+    // depth, and sooner where silt hides the bottom.
+    shallow = mix(wet, shallow, mix(0.35, 0.6, turbidity));
+  } else {
+    shallow = mix(shallow, terrainC * mix(0.92, 1.12, turbidity), groundAffinity);
+  }
   deep = mix(deep, terrainC * 0.58, groundAffinity * 0.42);
   // Fresh water eats light faster than 0.5 a metre: at that constant a
   // river 1.3 m deep sat halfway to its deep colour and read from above as
@@ -581,6 +605,11 @@ void main() {
   bool nearWater = detailFade > 0.16;
   float detailLod = smoothstep(0.16, 0.34, detailFade);
   float foamLod = smoothstep(0.16, 0.26, detailFade);
+  // The bed's BROAD structure — bars and cobble beds, tens of metres — is
+  // what the chart sees from four hundred metres up and what an aerial
+  // photograph of any clear river is made of; only the pebbles and stones
+  // alias at that range. So the bed outlives the skin by a band.
+  float bedLod = smoothstep(0.05, 0.16, detailFade);
   // Grade supplies energy; depth decides whether that energy is a deep boil or
   // a shallow rapid. This is also the veil over the bed: aerated water hides
   // stones before turbid or deep water does.
@@ -732,6 +761,22 @@ void main() {
   float offshore = smoothstep(15.0, 70.0, shoreDist) * (1.0 - vFlowing);
   float visualDepth = mix(min(geometryField.a, 14.0),
     min(3.0 + shoreDist * 0.022, 14.0), offshore);
+  // A CHANNEL IS A TROUGH, NOT A SLAB. The field gives a river one depth per
+  // texel — and the floor build-tile lays under a narrow ribbon gives every
+  // texel of it the same 1.3 m — so from above the water was one flat tone
+  // bank to bank with no bed in it. Across the channel the bed falls to the
+  // thalweg: the margins are ankle-deep and show the ground through them,
+  // the middle keeps the texel's depth and goes dark. This is the shape of
+  // the bed, which is what the chart sees; the physics keeps the texel.
+  float bedDepth = geometryField.a;
+#ifdef HYDRO_FLOWING
+  if (vFlowing > 0.5) {
+    float across = clamp(abs(riverField.g), 0.0, 1.0);
+    float trough = mix(0.18, 1.0, sqrt(max(0.0, 1.0 - across * across)));
+    visualDepth *= trough;
+    bedDepth *= trough;
+  }
+#endif
   // LOOKING DOWN, YOU LOOK DEEPER. From the bank the eye skims the surface
   // and the column it sees into is short; from straight above (the chart)
   // it is the whole depth twice. The palette's depth scales with the view's
@@ -750,8 +795,8 @@ void main() {
   // and distance all remove the detail continuously.
   if (nearWater) {
     float clearDepthM = mix(3.4, 0.72, turbidity);
-    float bedVisibility = (1.0 - smoothstep(0.10, clearDepthM, geometryField.a))
-      * (1.0 - turbidity * 0.78) * detailLod
+    float bedVisibility = (1.0 - smoothstep(0.10, clearDepthM, bedDepth))
+      * (1.0 - turbidity * 0.78) * bedLod
       * mix(0.62, 1.0, vFlowing) * (1.0 - shallowRapid * 0.48)
       * clamp(uShallowBedStrength, 0.0, 3.0);
     // Deep water and opaque silt skip every bed-noise evaluation.
@@ -789,18 +834,23 @@ void main() {
       float stonePick = smoothstep(0.42, 0.76,
         hash21(stoneCell + vec2(11.0, seed * 31.0)));
       float bedStone = stoneShape * stonePick;
-      vec3 sediment = mix(terrainC * 0.88, vec3(0.31, 0.27, 0.17),
-        0.14 + turbidity * 0.28);
-      vec3 paleGravel = mix(sediment, vec3(0.39, 0.35, 0.24), 0.34);
-      vec3 bedColour = mix(sediment * 0.78, paleGravel * 1.08, gravelBar)
-        * (0.94 + (pebble - 0.5) * 0.30 + (bar - 0.5) * 0.24);
+      // The bed is the bank's own material: wet ground, and a bar's dry
+      // top at most a touch lighter than the ground beside it. The sand
+      // constants that stood here painted a beach into a grassland.
+      vec3 sediment = mix(terrainC * 0.88, wetGround(terrainC),
+        0.5 + turbidity * 0.3);
+      vec3 paleGravel = mix(sediment, terrainC * 1.06, 0.34);
+      // From above the bars and pools are the read, so their contrast opens
+      // with the view's overhead component; the fine grain fades with range.
+      vec3 bedColour = mix(sediment * mix(0.78, 0.64, overhead), paleGravel * mix(1.08, 1.16, overhead), gravelBar)
+        * (0.94 + ((pebble - 0.5) * 0.30 + (bar - 0.5) * 0.24) * detailLod);
       // Cobble is a darker aggregate in the sediment, not an object silhouette.
       // Protruding rocks are real production geometry and carry the stronger read.
       vec3 cobbleColour = mix(sediment * 0.62, terrainC * 0.76, 0.38);
       bedColour = mix(bedColour, cobbleColour,
-        cobble * mix(0.24, 0.12, turbidity));
+        cobble * mix(0.24, 0.12, turbidity) * (1.0 + 0.7 * overhead));
       bedColour = mix(bedColour, cobbleColour * 0.82,
-        bedStone * mix(0.46, 0.22, turbidity));
+        bedStone * mix(0.46, 0.22, turbidity) * detailLod);
       // THE BED IS SEEN THROUGH THE WATER, NOT BESIDE IT. The bed's colour
       // was mixed in as painted — dry sand at any depth it was visible at —
       // so a river a metre and a half deep read from above as a cream
@@ -809,7 +859,7 @@ void main() {
       // green and blue: at 1.3 m the bed keeps half its red and three
       // quarters of its blue and goes the dark olive a real riverbed is.
       // Silt shortens the path further.
-      bedColour *= exp(-vec3(0.62, 0.30, 0.20) * geometryField.a * (1.0 + turbidity * 2.5));
+      bedColour *= exp(-vec3(0.62, 0.30, 0.20) * bedDepth * (1.0 + turbidity * 2.5));
       colour = mix(colour, bedColour,
         clamp(bedVisibility * mix(0.84, 0.52, turbidity), 0.0, 0.86));
     }
@@ -841,7 +891,7 @@ void main() {
       * bankNear * detailLod * clamp(uRiverEdgeStrength, 0.0, 3.0);
     vec3 gravelBank = mix(
       terrainC * 0.72,
-      vec3(0.32, 0.28, 0.19),
+      wetGround(terrainC) * 1.1,
       0.28 + (1.0 - turbidity) * 0.18
     );
     colour = mix(colour, mix(dampTerrain, gravelBank, 0.52),
@@ -936,9 +986,24 @@ void main() {
   vec3 viewDirection = normalize(cameraPosition - vRenderPosition);
   float solarT = clamp((lightDirection.y + 0.22) / 0.82, 0.0, 1.0);
   float daylight = solarT * solarT * (3.0 - 2.0 * solarT);
-  float ambientLevel = mix(0.12, 0.82, daylight);
-  float directLight = max(0.0, dot(normal, lightDirection)) * daylight;
-  colour *= ambientLevel + directLight * 0.26;
+  // ── THE WATER IS LIT BY THE LIGHT THE GROUND IS LIT BY ──
+  //
+  // This was a curve of its own — 0.82 of ambient for any sun above thirty
+  // degrees and a quarter of a direct term — while the ground beside it is
+  // a Lambert surface under the scene's sun, sky fill and cloud deck. On a
+  // hazy morning the ground halved and the river did not, and the seat saw
+  // a band at twice the luminance of its valley. uSceneLight is the
+  // irradiance on a flat surface as a ratio to a clear noon, per channel
+  // (the host computes it from the same lights the ground uses); the
+  // ripple's facet still tilts the direct share, and the cloud deck's
+  // shadow crosses the water where the host supplies its function.
+  float facet = min(max(0.0, dot(normal, lightDirection)) / max(lightDirection.y, 0.1), 1.6);
+  float shade = 1.0;
+#ifdef HYDRO_SCENE_SHADE
+  shade = sceneShade(vRenderPosition);
+#endif
+  vec3 sceneLight = uSceneLight * (0.77 + 0.26 * facet) * shade;
+  colour *= sceneLight;
 
   // Scene fog is the horizon/sky proxy already maintained by Three. Explicit
   // frame colour can refine it without making integration mandatory.
@@ -952,8 +1017,11 @@ void main() {
   // more reflection at steep camera angles so water belongs to the visible sky
   // without turning into a glossy mirror.
   float skyEnergy = mix(0.40, 1.0, daylight);
-  vec3 reflectedSky = horizonColour * skyEnergy;
   float facing = clamp(dot(normal, viewDirection), 0.0, 1.0);
+  // LOOKING DOWN, THE WATER REFLECTS THE ZENITH. The horizon colour served
+  // every view angle, and from the chart that put the bright horizon band
+  // in a surface whose mirror points straight up at the darkest sky there is.
+  vec3 reflectedSky = mix(uZenith, horizonColour, pow(1.0 - facing, 0.5)) * skyEnergy * shade;
   float fresnel = 0.08 + 0.38 * pow(1.0 - facing, 3.0);
   // A turbulent river reflects the same sky over many unresolved microfacets,
   // which broadens and dims the return. Using the sea's mirror strength on the
@@ -963,10 +1031,10 @@ void main() {
 
   // In shallow/turbid water the bed and banks tint the returning light. This
   // is continuous environmental coupling, not a second time-of-day colour.
-  float terrainCoupling = (1.0 - smoothstep(0.45, 4.5, geometryField.a))
+  float terrainCoupling = (1.0 - smoothstep(0.45, 4.5, bedDepth))
     * mix(0.08, 0.28, turbidity);
   colour = mix(colour,
-    terrainC * mix(0.18, 0.9, daylight),
+    terrainC * sceneLight * 0.9,
     terrainCoupling);
 
   if (nearWater) {
@@ -976,7 +1044,7 @@ void main() {
     float glint = pow(max(0.0, dot(reflect(-lightDirection, normal), viewDirection)), 9.0);
     float sparkle = 0.55 + 0.9 * smoothstep(0.45, 0.85, grain);
     colour += vec3(1.0, 0.9, 0.7) * glint * sparkle * 0.11
-      * daylight * detailLod * mix(1.0, 0.46, vFlowing);
+      * daylight * shade * detailLod * mix(1.0, 0.46, vFlowing);
   }
 
   // ── FOAM IS PAID FOR ONLY WHERE FOAM CAN EXIST ──
@@ -1078,7 +1146,7 @@ void main() {
     float foam = clamp((lappingFoam + riverFoam + breakerFoam * 0.8 + spill
       + whitecap) * uFoamStrength, 0.0, 0.82) * foamLod;
     // Foam takes the scene's light too — white paint at midnight is a bug.
-    vec3 foamColour = vec3(0.84, 0.9, 0.88) * mix(0.14, 1.0, daylight);
+    vec3 foamColour = vec3(0.84, 0.9, 0.88) * sceneLight;
 #ifdef HYDRO_FLOWING
     if (vFlowing > 0.5) {
       // River aeration carries the water's own hue. Pure sea-foam white made a
@@ -1124,7 +1192,7 @@ void main() {
     }
     colour *= 1.0 + (rigTrailResponse.z * 0.24 + rigLiveTone * 0.08) * detailLod;
     float wake = clamp(liveFoam, 0.0, 0.76) * foamLod;
-    vec3 wakeFoam = vec3(0.84, 0.9, 0.88) * mix(0.14, 1.0, daylight);
+    vec3 wakeFoam = vec3(0.84, 0.9, 0.88) * sceneLight;
     colour = mix(colour, wakeFoam, wake);
   }
 

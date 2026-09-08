@@ -244,6 +244,15 @@ export interface HydroFrame {
    * day/night palette. Fog/horizon colour remains the shader-side fallback. */
   skyColour?: { r: number; g: number; b: number };
   terrainColour?: { r: number; g: number; b: number };
+  /** THE LIGHT THE GROUND GETS, as a ratio to the light the water's palette
+   *  was drawn under (a clear noon in the same biome): the sun on a flat
+   *  surface plus the sky fill plus the moon, per channel. 1 is that noon;
+   *  haze, a low sun and night take it down exactly as they take the ground
+   *  down. Omitted, the water keeps a daylight curve of its own. */
+  sceneLight?: { r: number; g: number; b: number };
+  /** The sky straight up, for what a chart sees reflected in flat water;
+   *  `skyColour` is the horizon side the seat sees. */
+  zenithColour?: { r: number; g: number; b: number };
   /** The vehicle, when it is IN the water: absolute x/z, velocity in m/s and
    *  how deep it is wading. Omit (or wadeM 0) and the surface ignores it —
    *  the water only answers a hull that is actually displacing it. */

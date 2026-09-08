@@ -11,6 +11,7 @@ import {
   type HydroFrameUniforms,
   type HydroTileGpuBinding,
   type HydroTileTextures,
+  type SceneShade,
 } from './material';
 import {
   DEFAULT_HYDRO_BUILD,
@@ -35,6 +36,9 @@ export interface HydroSystemOptions extends Partial<HydroBuildOptions> {
   rebuildsPerFrame?: number;
   /** Replace with a worker bridge without changing the public lifecycle. */
   scheduleBuild?: (job: () => HydroTileField) => Promise<HydroTileField>;
+  /** The scene's own darkening of a lit surface — the cloud deck's shadow —
+   *  so the water shades where the ground beside it shades. */
+  sceneShade?: SceneShade;
 }
 
 export interface HydroTileBinding extends HydroTileGpuBinding {
@@ -312,6 +316,7 @@ class DefaultHydroSystem implements HydroSystem {
   private readonly buildOptions: HydroBuildOptions;
   private readonly meshSegments: number;
   private readonly scheduleBuild: (job: () => HydroTileField) => Promise<HydroTileField>;
+  private readonly sceneShade: SceneShade | undefined;
   private readonly rebuildsPerFrame: number;
   private disposed = false;
   private tuning: HydroTuning = { ...DEFAULT_HYDRO_TUNING };
@@ -333,6 +338,7 @@ class DefaultHydroSystem implements HydroSystem {
     };
     this.registry = new HydroBodyRegistry(this.buildOptions.oceanLevelM);
     this.scheduleBuild = options.scheduleBuild ?? immediateBuild;
+    this.sceneShade = options.sceneShade;
     this.rebuildsPerFrame = Math.max(1, Math.floor(options.rebuildsPerFrame ?? 1));
     this.meshSegments = Math.max(4, Math.floor(options.meshResolution ?? 32));
     this.object3d.name = 'hydro-system';
@@ -439,6 +445,12 @@ class DefaultHydroSystem implements HydroSystem {
       this.frameUniforms.uSkyColour.value.setRGB(
         frame.skyColour.r, frame.skyColour.g, frame.skyColour.b,
       );
+    }
+    if (frame.sceneLight) {
+      this.frameUniforms.uSceneLight.value.set(frame.sceneLight.r, frame.sceneLight.g, frame.sceneLight.b);
+    }
+    if (frame.zenithColour) {
+      this.frameUniforms.uZenith.value.setRGB(frame.zenithColour.r, frame.zenithColour.g, frame.zenithColour.b);
     }
     if (frame.terrainColour) {
       this.frameUniforms.uTerrainColour.value.setRGB(
@@ -734,7 +746,7 @@ class DefaultHydroSystem implements HydroSystem {
       flowing: boolean,
       surf = false,
     ): void => {
-      const material = createHydroMaterial(field, textures, this.frameUniforms, flowing, surf);
+      const material = createHydroMaterial(field, textures, this.frameUniforms, flowing, surf, this.sceneShade);
       const mesh = new THREE.Mesh(geometry, material);
       mesh.scale.set(spanX, 1, spanZ);
       mesh.position.set(
