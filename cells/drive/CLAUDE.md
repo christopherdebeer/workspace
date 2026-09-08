@@ -3814,6 +3814,62 @@ cell exactly as it left it plus the branch's work plus one field it meant to
 write. Verified: `tsc` clean, hydro self-tests and the inland-water test
 green, `boot.mjs` no page errors, its own check script green.
 
+### The shoreline wired in, and what the crossing at the Joggemspruit actually is
+
+Reported from the seat at −30.72068, 27.75659 heading 66: *the shallows are a
+colour that does not match the bank, the water still meets the ground on a
+hard edge, and driving the road across the river raises no splash.* Captured
+as `at-senqu-ford` (`devtools/capture-world.mjs`): six highways and the
+Joggemspruit in 1.4 km of Drakensberg grassland at 1,800 m. The other agent's
+half-written `shoreline.ts` is finished here.
+
+- **The water takes the ground's colour AT THE FRAGMENT.** `uTerrainColour`
+  was `groundTint(state.x, state.z)` — the ground under the truck, one colour
+  for every shallow, bed and damp bank in view — so a river forty metres off
+  wore the road's tint. `HydroFrame.terrainField` carries the sward's colour
+  field (the terrain palette per 3 m texel over 768 m, already built for the
+  grass) and the fragment shader samples it as `terrainC` wherever the field
+  reaches, the frame colour standing in beyond. Every use in the bed, the
+  damp band, the gravel bank and the palette's ground affinity moved to it.
+- **The waterline is ragged, not rastered.** Coverage ramps over about one
+  18.75 m texel and a single cut through it is a straight line. The cut now
+  moves by a few metres either way on the shared bank patches (`BANK_GLSL`,
+  the same stationary metre-space noise on both sides), so the edge is the
+  same broken line for the water and the bank.
+- **The bank is on the ground side too.** `swardRows` asks `bankHabitat` for
+  every texel at the water: mineral pulls the sward's colour to the gravel
+  family the water draws and thins the grass (0.85), reeds thicken it in a
+  sheltered shallow margin (0.7 tufts/m²), and nothing grows under the
+  resting level. `HydroSystem.fieldAt` and the agent's bounded
+  `sampleBankField` find the nearest wet texel; `bankRevision` counts field
+  installs so the sward re-sweeps when the water builds. The sweep costs 26 ms
+  more per pass at this river (73 vs 47), spread over frames by the step
+  budget. `?shore=0` is the A/B.
+- **A road under water is a ford.** `surfaceAt` returned road wherever a
+  carriageway was, and the doctrine said why ("a road over a channel is a
+  culvert's deck or a bridge"). It now compares the hydro resting level with
+  the road deck: over it a bridge, under it by 0.12 m wading — splash, wash,
+  spray, wake — and `waterInfoAt` measures depth against the deck rather than
+  the bed the road was laid over. `__ford(x, z)` prints every term.
+
+**AND THE CROSSING IS NOT A FORD.** Measured on the fixture: the road deck at
+1,790.0 m, the river's resting level 1,788.6 m — the water is 1.4 m UNDER the
+carriageway. The DEM (8 m) does not resolve the channel, the road profile
+rides the DEM, the hydro profile solver found the bed lower, and the crossing
+is a culvert by construction (see the culverts section). No splash is what
+the geometry says; the fault the seat named is that the geometry should not
+say it here. OSM carries no `bridge` on that way and would carry `ford=yes`
+on a real drift; the tile keeps neither, and the mirror could not be asked
+(overpass through the proxy times out). The next unit is a drift: at a road ×
+river crossing with no bridge tag, dip the deck to the invert over the wet
+span with ramps, and build no culvert — a corridor-solver change, not a
+physics one. **Verified:** `tsc` clean, hydro and inland-water tests green,
+the agent's check green, `boot.mjs` no page errors, the probe's terms at the
+crossing, the wade firing off-road at the river (surface `water`, wash 0.2).
+**Not verified by eye:** the colour and the edge — the fixture's water at the
+crossing is under the road and the frames the harness could take do not show
+a bank close up. The seat's report against `?shore=0` is the verification.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where

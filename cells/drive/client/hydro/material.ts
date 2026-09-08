@@ -18,6 +18,9 @@ export interface HydroFrameUniforms {
   uSunDirection: { value: THREE.Vector3 };
   uSkyColour: { value: THREE.Color };
   uTerrainColour: { value: THREE.Color };
+  uSwardCol: { value: THREE.Texture | null };
+  uSwardOrg: { value: THREE.Vector2 };
+  uSwardW: { value: number };
   uDebugView: { value: number };
   uWaveAmplitude: { value: number };
   uWaveLength: { value: number };
@@ -60,6 +63,9 @@ export function createHydroFrameUniforms(): HydroFrameUniforms {
     uSunDirection: { value: new THREE.Vector3(0.45, 0.82, 0.35).normalize() },
     uSkyColour: { value: new THREE.Color(0.46, 0.58, 0.68) },
     uTerrainColour: { value: new THREE.Color(0.16, 0.20, 0.13) },
+    uSwardCol: { value: null },
+    uSwardOrg: { value: new THREE.Vector2() },
+    uSwardW: { value: 0 },
     uDebugView: { value: 0 },
     uWaveAmplitude: { value: 1 },
     uWaveLength: { value: 1 },
@@ -217,6 +223,9 @@ export function createHydroMaterial(
       uSunDirection: frame.uSunDirection,
       uSkyColour: frame.uSkyColour,
       uTerrainColour: frame.uTerrainColour,
+      uSwardCol: frame.uSwardCol,
+      uSwardOrg: frame.uSwardOrg,
+      uSwardW: frame.uSwardW,
       uDebugView: frame.uDebugView,
       uWaveAmplitude: frame.uWaveAmplitude,
       uWaveLength: frame.uWaveLength,

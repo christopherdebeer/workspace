@@ -21,7 +21,7 @@ import { createAudio, type ImpactKind } from './audio';
 import { coastKm } from './coast';
 import { clamp } from './num';
 import { nearestStable, squareRings, uploadPrefix } from './render-work';
-import { bankHabitat, BANK_GLSL } from './shoreline';
+import { bankHabitat, sampleBankField } from './shoreline';
 import { URL_OWNED, qs, qsHas, switchRows } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
@@ -1662,6 +1662,10 @@ function ecoPending(ex: number, ez: number): boolean {
  */
 const waterFromDials = (rec: Record<string, number>): boolean =>
   ((rec['v'] ?? 1) < 4 ? true : rec['water'] !== 0);
+/** The shoreline pass as one switch, for the A/B: the water's local
+ *  terrain colour and the sward's mineral and reed banks. `shore=0` is the
+ *  frame colour and hillside grass to the waterline, as it was. */
+const SHORE_ON = !/[?&]shore=0/.test(location.search);
 const HYDRO_ON = ((): boolean => {
   const q = /[?&]hydro=([01])/.exec(location.search);
   if (q) return q[1] === '1';
@@ -2330,6 +2334,10 @@ function hydroTick(nowMs: number): void {
     sunDirection: { x: SUN_DIR.x, y: SUN_DIR.y, z: SUN_DIR.z },
     skyColour: hydroFrameSky,
     terrainColour: hydroFrameTerrain,
+    // The ground's colour AT THE FRAGMENT, from the grass's own field (see
+    // HydroFrame.terrainField): the shallows at a crossing wore the road's
+    // tint from under the truck, forty metres from the bank they lay on.
+    terrainField: { texture: swardColT, originX: swardFX, originZ: swardFZ, widthM: swardFieldReady && SHORE_ON ? SWARD_FW : 0 },
     rig: {
       x: state.x, z: state.z,
       vx: Math.sin(state.heading) * state.speed,
@@ -8756,6 +8764,17 @@ let swardFieldMs = 0;
  * once the streaming settles it stops rebuilding on its own.
  */
 let swardRoadSeen = -1, swardGroundSeen = -1, swardFieldAt = 0, swardMaskMs = 0;
+/** True once a sweep has landed: before that the colour field is zeros and
+ *  the water must not sample it. */
+let swardFieldReady = false;
+/** THE BANK, ON THE GROUND SIDE. The water shader draws its last wet metre
+ *  as damp sediment and gravel; the ground beside it grew the same grass
+ *  as the hillside, so the two met on a line. These are the bank's colours
+ *  the sward mixes toward — the same gravel family the water draws — and
+ *  the density reeds add in a sheltered, shallow margin. */
+const BANK_MINERAL: [number, number, number] = [0.36, 0.32, 0.22];
+const BANK_REED: [number, number, number] = [0.40, 0.44, 0.20];
+const REED_M2 = 0.7;
 /**
  * Roads: the mask's clock — AND IT HAS TO TICK ON THE GEOMETRY, NOT THE FETCH.
  *
@@ -8898,12 +8917,32 @@ function swardRows(from: number, to: number): void {
       // ASPECT-ADJUSTED one, the shaded wall of a valley goes bare while the
       // sunny side opposite is still meadow.
       const eEff = elevEffAt(wx, wz);
-      const lift = swardLift(eEff, climateAt(wx, wz, eEff).treeline);
-      swardScratchF[k + 1] = seaOn && h + baseElev < seaSurfaceAbs() - SWARD_SHALLOW
+      const cl = climateAt(wx, wz, eEff);
+      const lift = swardLift(eEff, cl.treeline);
+      let density = seaOn && h + baseElev < seaSurfaceAbs() - SWARD_SHALLOW
         ? 0
         : (cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3)) * lift;
       const slope = Math.abs(groundAt(wx + SWARD_FM, wz) - h) / SWARD_FM;
-      const [pr, pg, pb] = terrainPalette(h + baseElev, slope, coverPaint(wx, wz), wx, wz);
+      let [pr, pg, pb] = terrainPalette(h + baseElev, slope, coverPaint(wx, wz), wx, wz);
+      // ── THE BANK (shoreline.ts). Only texels at the water ask: the field
+      // search is bounded but it is not free, and a hillside has no bank.
+      // Mineral pulls the colour to the gravel the water draws and thins
+      // the grass; reeds thicken it in a sheltered shallow margin; under
+      // the resting level nothing grows.
+      if (SHORE_ON && hydroSys && (cv === COVER.water || cv === COVER.wetland || cv === COVER.mangrove || nearWaterway(wx, wz, 14))) {
+        const f = hydroSys.fieldAt(wx, wz);
+        const bs = f ? sampleBankField(f, wx, wz, 12) : undefined;
+        const hab = bankHabitat(cv, cl.moisture, cl.tempC, slope, true, h + baseElev,
+          bs ? { kind: bs.kind, restingLevelM: bs.restingLevelM, depthM: bs.depthM, shoreDistanceM: bs.shoreDistanceM, flow: bs.flow } : undefined);
+        if (hab.submerged) density = 0;
+        else {
+          density = density * (1 - hab.mineral * 0.85) + hab.reeds * REED_M2 * lift;
+          const mk = hab.mineral * 0.75, rk = hab.reeds * 0.5;
+          pr = pr + (BANK_MINERAL[0] - pr) * mk; pg = pg + (BANK_MINERAL[1] - pg) * mk; pb = pb + (BANK_MINERAL[2] - pb) * mk;
+          pr = pr + (BANK_REED[0] - pr) * rk; pg = pg + (BANK_REED[1] - pg) * rk; pb = pb + (BANK_REED[2] - pb) * rk;
+        }
+      }
+      swardScratchF[k + 1] = density;
       swardScratchC[k] = Math.round(clamp(pr, 0, 1) * 255);
       swardScratchC[k + 1] = Math.round(clamp(pg, 0, 1) * 255);
       swardScratchC[k + 2] = Math.round(clamp(pb, 0, 1) * 255);
@@ -8966,6 +9005,7 @@ function swardStep(sync = false): void {
   swardField.needsUpdate = true;
   swardColT.needsUpdate = true;
   swardFX = swardPendX; swardFZ = swardPendZ;
+  swardFieldReady = true;
   swardU.uFieldOrg.value.set(swardFX, swardFZ);
   swardRow = -1;
   swardGroundSeen = swardGroundRev();
@@ -11037,8 +11077,18 @@ function surfaceAt(x: number, z: number): Surface {
     if (seg.tk) track = Math.max(track, seg.sq ?? Q_TRACK);
     else road = Math.max(road, seg.sq ?? Q_ROAD);
   }
-  if (road >= 0) { surfQ = road; return 'road'; }
-  if (track >= 0) { surfQ = track; return 'track'; }
+  // ── A ROAD UNDER WATER IS A FORD ──
+  //
+  // "A road over a channel is a culvert's deck or a bridge, and you are on
+  // it, not in the water under it" — true of a bridge, and a bridge's deck
+  // is built above the water. A gravel road that crosses the Joggemspruit
+  // at grade (no bridge tag, the hydro resting level 0.7 m over the deck)
+  // read as road, and the truck crossed a river with no splash, no wash and
+  // no wake, reported from the seat. The deck's height against the water's
+  // resting level is the whole test: over it you are on a bridge, under it
+  // you are wading, and the tag never has to be right.
+  if (road >= 0) { surfQ = road; return fordDepthAt(x, z) > FORD_MIN_M ? 'water' : 'road'; }
+  if (track >= 0) { surfQ = track; return fordDepthAt(x, z) > FORD_MIN_M ? 'water' : 'track'; }
   surfQ = Q_GROUND;
   {
     // The mask says "a water polygon is somewhere in this cell"; the polygons
@@ -16507,6 +16557,17 @@ const wiSet = new Set<Seg>();
  * `wet` is the honest answer to "is there water here"; `depth` keeps its
  * default so no existing caller changes behaviour.
  */
+/** Metres of water over the carriageway here, or 0: the resting level of
+ *  the hydro body against the road deck (surfaceAt's ford test). */
+const FORD_MIN_M = 0.12;
+function fordDepthAt(x: number, z: number): number {
+  if (!HYDRO_ON || !hydroSys) return 0;
+  const wet = hydroSys.sampleRestingSurface(x, z);
+  if (!wet) return 0;
+  const e = roadEdge(x, z);
+  const deck = e ? e.y : hasHeight(x, z) ? sampleHeight(x, z) : NaN;
+  return Number.isFinite(deck) ? wet.restingLevelM - (deck + baseElev) : 0;
+}
 function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: number; speed: number; wet: boolean } {
   // ── THE DRAWN WATER IS THE WATER ──
   //
@@ -16525,7 +16586,11 @@ function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: num
   // a carved bed but no built field yet — a tile mid-stream, or a culvert.
   const wet = hydroSys?.sampleRestingSurface(x, z);
   if (wet) {
-    const bed = hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
+    // THE FLOOR IS THE DECK ON A FORD: the wheels stand on the carriageway,
+    // not on the bed the road was laid over, so that is what the water is
+    // deep against.
+    const e = roadEdge(x, z);
+    const bed = e && e.out <= 0 ? e.y + baseElev : hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
     // The field's own depth channel is floored at the build's minimumDepth, so
     // prefer the honest level-minus-ground where the ground is known.
     const d = Number.isFinite(bed) ? wet.restingLevelM - bed : wet.depthM;
@@ -26100,7 +26165,18 @@ function applyHidden(): void {
   const px = x ?? state.x, pz = z ?? state.z;
   const wi = waterInfoAt(px, pz);
   return { surface: surfaceAt(px, pz), wet: wi.wet, depth: +wi.depth.toFixed(2), speed: +wi.speed.toFixed(2),
-    fx: +wi.fx.toFixed(2), fz: +wi.fz.toFixed(2) };
+    fx: +wi.fx.toFixed(2), fz: +wi.fz.toFixed(2), fordM: +fordDepthAt(px, pz).toFixed(2) };
+};
+/** Every term of the ford test at a point — the hydro sample, the road deck,
+ *  the datum — because "is this a ford" took more than one round to answer. */
+(window as unknown as { __ford?: object }).__ford = (x?: number, z?: number): object => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const wet = hydroSys?.sampleRestingSurface(px, pz);
+  const e = roadEdge(px, pz);
+  return { hydroOn: HYDRO_ON, surface: surfaceAt(px, pz),
+    wet: wet ? { kind: wet.kind, resting: +wet.restingLevelM.toFixed(2), depthM: +wet.depthM.toFixed(2), shore: +wet.shoreDistanceM.toFixed(1), coverage: +wet.coverage.toFixed(2) } : null,
+    edge: e ? { y: +e.y.toFixed(2), out: +e.out.toFixed(2), track: e.track } : null,
+    base: +baseElev.toFixed(2), ground: +sampleHeight(px, pz).toFixed(2), fordM: +fordDepthAt(px, pz).toFixed(2) };
 };
 (window as unknown as { __contact?: object }).__contact = (x: number, z: number): object => {
   const sk = surfaceAt(x, z);

@@ -820,6 +820,12 @@ export const CAPTURE_INDEX: readonly CaptureCard[] = [
     note: 'Reported from the seat at 48.77736,2.22332 heading 281. The A 86 / N 118 interchange: 1,078 highways, 49 trunk_link and 20 motorway_link slip roads, lanes tags up to 5. THE LEVELS CASE. OSM says exactly where the flyovers are — 14 ways carry layer=1 or 2 with bridge=yes, 13 carry layer=-1 — and the game keeps the layer tag and never reads it: a tagged bridge is a chord between its two portals, not a deck above the road it crosses. Counted offline: 44 genuine grade-separated crossings in the box, 10 of them with a station of the flyover inside the 3m junction-pin radius of the road beneath, where the planner will weld the two decks together. Flat (44m of relief), so nothing here is terrain.',
   },
   {
+    id: 'at-senqu-ford', file: 'world-senqu-ford.json', heading: 66,
+    eco: { id: 41, biome: 7, name: 'Drakensberg grasslands', realm: 'Afrotropic' },
+    label: 'SENQU — THE CROSSING',
+    note: 'Reported from the seat at -30.72068,27.75659 heading 66: the shallows are a colour that does not match the bank around them and the water still meets the ground on a hard edge, and driving the road across the river raises no splash and no wash. Six highways and the Senqu in a 1.4km box of Drakensberg grassland at 1,800m.',
+  },
+  {
     id: 'at-simonstown', file: 'world-simonstown.json', heading: 246,
     eco: { id: 89, biome: 12, name: 'Fynbos shrubland', realm: 'Afrotropic' },
     label: 'SIMON\'S TOWN — THE JOINS',

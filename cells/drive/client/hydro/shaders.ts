@@ -1,3 +1,4 @@
+import { BANK_GLSL } from '../shoreline';
 /**
  * ── QUIET WATER, BUILT TO SURVIVE THE QUANTISER ──
  *
@@ -290,6 +291,9 @@ uniform float uRigTrailCount;
 uniform vec3 uSunDirection;
 uniform vec3 uSkyColour;
 uniform vec3 uTerrainColour;
+uniform sampler2D uSwardCol;
+uniform vec2 uSwardOrg;
+uniform float uSwardW;
 uniform float uDebugView;
 uniform float uRippleStrength;
 uniform float uFoamStrength;
@@ -300,7 +304,7 @@ uniform float uTurbulenceStrength;
 uniform float uEddyStrength;
 uniform vec2 uHydroTexel;
 uniform vec2 uFieldMeters;
-
+${BANK_GLSL}
 varying vec2 vHydroUv;
 varying vec2 vAbsoluteXZ;
 varying vec3 vRenderPosition;
@@ -366,7 +370,7 @@ vec4 rigTrailField(vec2 p, vec2 flow) {
 // which made the same cyan cut-out run through a green dusk and an ochre desert.
 // Match luminance later through the shared light response; here the terrain
 // supplies hue and sediment, most strongly for wetlands and narrow watercourses.
-vec3 palette(float kind, float depth, float turbidity) {
+vec3 palette(float kind, float depth, float turbidity, vec3 terrainC) {
   vec3 shallow = vec3(0.14, 0.33, 0.36);
   vec3 deep = vec3(0.03, 0.115, 0.16);
   float groundAffinity = 0.12;
@@ -388,8 +392,8 @@ vec3 palette(float kind, float depth, float turbidity) {
   }
   shallow = mix(shallow, vec3(0.30, 0.27, 0.16), turbidity * 0.44);
   deep = mix(deep, vec3(0.13, 0.12, 0.08), turbidity * 0.32);
-  shallow = mix(shallow, uTerrainColour * mix(0.92, 1.12, turbidity), groundAffinity);
-  deep = mix(deep, uTerrainColour * 0.58, groundAffinity * 0.42);
+  shallow = mix(shallow, terrainC * mix(0.92, 1.12, turbidity), groundAffinity);
+  deep = mix(deep, terrainC * 0.58, groundAffinity * 0.42);
   float attenuation = 1.0 - exp(-max(depth, 0.0) * mix(0.5, 0.16, turbidity));
   return mix(shallow, deep, clamp(attenuation, 0.0, 1.0));
 }
@@ -496,7 +500,24 @@ void main() {
   // Coverage remains continuous until this one physical waterline. Dither
   // and palette quantisation belong to the global post pipeline; reproducing
   // either here creates a second, incompatible stipple at every river bank.
-  if (geometryField.r < 0.5) discard;
+  // THE WATERLINE IS RAGGED, NOT RASTERED. Coverage ramps over about one
+  // texel (18.75 m) and a single cut through it is a straight line the eye
+  // reads as the raster it is. The shared bank patches (shoreline.ts, the
+  // same noise the sward's banks use) move the cut by a few metres either
+  // way, so the edge is the same broken line on both sides of it.
+  if (geometryField.r < 0.5 + (bankPatch(vAbsoluteXZ) - 0.5) * 0.24) discard;
+  // THE GROUND'S OWN COLOUR, HERE. uTerrainColour is the ground under the
+  // truck; the sward's colour field is the palette at THIS fragment's XZ
+  // wherever it reaches (a 768 m square around the truck), and the frame
+  // colour stands in beyond it.
+  vec3 terrainC = uTerrainColour;
+  if (uSwardW > 1.0) {
+    vec2 su = (vAbsoluteXZ - uSwardOrg) / uSwardW;
+    if (su.x > 0.0 && su.x < 1.0 && su.y > 0.0 && su.y < 1.0) {
+      float inside = smoothstep(0.0, 0.05, min(min(su.x, 1.0 - su.x), min(su.y, 1.0 - su.y)));
+      terrainC = mix(uTerrainColour, texture2D(uSwardCol, su).rgb, inside);
+    }
+  }
 #endif
   vec4 dynamics = texture2D(uHydroDynamics, vHydroUv);
   float seed = materialField.g;
@@ -700,7 +721,7 @@ void main() {
   float offshore = smoothstep(15.0, 70.0, shoreDist) * (1.0 - vFlowing);
   float visualDepth = mix(min(geometryField.a, 14.0),
     min(3.0 + shoreDist * 0.022, 14.0), offshore);
-  vec3 colour = palette(kind, visualDepth, turbidity);
+  vec3 colour = palette(kind, visualDepth, turbidity, terrainC);
 
   // ── THE SHALLOW WATER HAS A FLOOR ──
   //
@@ -751,14 +772,14 @@ void main() {
       float stonePick = smoothstep(0.42, 0.76,
         hash21(stoneCell + vec2(11.0, seed * 31.0)));
       float bedStone = stoneShape * stonePick;
-      vec3 sediment = mix(uTerrainColour * 0.88, vec3(0.31, 0.27, 0.17),
+      vec3 sediment = mix(terrainC * 0.88, vec3(0.31, 0.27, 0.17),
         0.14 + turbidity * 0.28);
       vec3 paleGravel = mix(sediment, vec3(0.39, 0.35, 0.24), 0.34);
       vec3 bedColour = mix(sediment * 0.78, paleGravel * 1.08, gravelBar)
         * (0.94 + (pebble - 0.5) * 0.30 + (bar - 0.5) * 0.24);
       // Cobble is a darker aggregate in the sediment, not an object silhouette.
       // Protruding rocks are real production geometry and carry the stronger read.
-      vec3 cobbleColour = mix(sediment * 0.62, uTerrainColour * 0.76, 0.38);
+      vec3 cobbleColour = mix(sediment * 0.62, terrainC * 0.76, 0.38);
       bedColour = mix(bedColour, cobbleColour,
         cobble * mix(0.24, 0.12, turbidity));
       bedColour = mix(bedColour, cobbleColour * 0.82,
@@ -772,7 +793,7 @@ void main() {
   // contact stripe. Depth and distance both contribute, so the transition
   // remains broad at an ocean and compact at a river or pond.
   vec3 dampTerrain = mix(
-    uTerrainColour * mix(0.78, 0.9, 1.0 - turbidity),
+    terrainC * mix(0.78, 0.9, 1.0 - turbidity),
     colour,
     wetlandKind ? 0.34 : 0.22
   );
@@ -793,7 +814,7 @@ void main() {
     float bankPatch = smoothstep(0.22, 0.78, bankGrain * 0.42 + bankBar * 0.58)
       * bankNear * detailLod * clamp(uRiverEdgeStrength, 0.0, 3.0);
     vec3 gravelBank = mix(
-      uTerrainColour * 0.72,
+      terrainC * 0.72,
       vec3(0.32, 0.28, 0.19),
       0.28 + (1.0 - turbidity) * 0.18
     );
@@ -919,7 +940,7 @@ void main() {
   float terrainCoupling = (1.0 - smoothstep(0.45, 4.5, geometryField.a))
     * mix(0.08, 0.28, turbidity);
   colour = mix(colour,
-    uTerrainColour * mix(0.18, 0.9, daylight),
+    terrainC * mix(0.18, 0.9, daylight),
     terrainCoupling);
 
   if (nearWater) {

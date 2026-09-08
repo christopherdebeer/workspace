@@ -52,14 +52,14 @@ export interface HydroStats {
 
 export interface HydroSystem {
   readonly object3d: THREE.Object3D;
-  /** A PLACEHOLDER FOR ANOTHER AGENT'S WORK IN PROGRESS. The shoreline pass
-   *  (client/shoreline.ts, pulled from the cell half-written) ties the
-   *  sward's ground revision to this counter so reed and mineral banks
-   *  rebuild with the hydro field; the agent had not yet written the field
-   *  when its credits ran out. Declared here at zero so the snapshot
-   *  type-checks and deploys without clobbering it; it is that agent's to
-   *  make count. */
+  /** How many fields have been installed. The sward's ground revision adds
+   *  it, so reed and mineral banks (client/shoreline.ts) re-sweep when the
+   *  water they stand beside is built or rebuilt — started by another agent
+   *  as a placeholder, made to count here. */
   readonly bankRevision: number;
+  /** The built field under a point, for the bank sampler — undefined until
+   *  the tile has built or where there is no tile. */
+  fieldAt(x: number, z: number): HydroTileField | undefined;
   upsertTile(input: HydroTileInput): Promise<void>;
   removeTile(key: TileKey): void;
   setOceanLevelM(elevationM: number): void;
@@ -290,7 +290,22 @@ function worldToUv(field: HydroTileField): THREE.Matrix3 {
 
 class DefaultHydroSystem implements HydroSystem {
   readonly object3d = new THREE.Group();
-  readonly bankRevision = 0;   // see HydroSystem.bankRevision
+  private bankRev = 0;
+  get bankRevision(): number { return this.bankRev; }
+  /** The last tile answered, because the sward asks texel after texel. */
+  private fieldAtLast: TileRecord | null = null;
+  fieldAt(x: number, z: number): HydroTileField | undefined {
+    const inside = (r: TileRecord): boolean => {
+      const b = r.input.bounds;
+      return x >= b.minX && x < b.maxX && z >= b.minZ && z < b.maxZ;
+    };
+    const last = this.fieldAtLast;
+    if (last && last.field && inside(last) && this.records.get(last.input.key) === last) return last.field;
+    for (const r of this.records.values()) {
+      if (r.field && inside(r)) { this.fieldAtLast = r; return r.field; }
+    }
+    return undefined;
+  }
   private readonly records = new Map<TileKey, TileRecord>();
   private readonly registry: HydroBodyRegistry;
   private readonly frameUniforms: HydroFrameUniforms = createHydroFrameUniforms();
@@ -411,6 +426,10 @@ class DefaultHydroSystem implements HydroSystem {
     this.frameUniforms.uRig.value.set(rig?.x ?? 0, rig?.z ?? 0, rig?.vx ?? 0, rig?.vz ?? 0);
     this.frameUniforms.uRigWade.value = Math.max(0, rig?.wadeM ?? 0);
     this.updateRigTrail(frame.timeSeconds, rig);
+    const tf = frame.terrainField;
+    this.frameUniforms.uSwardCol.value = tf?.texture ? (tf.texture as THREE.Texture) : null;
+    this.frameUniforms.uSwardOrg.value.set(tf?.originX ?? 0, tf?.originZ ?? 0);
+    this.frameUniforms.uSwardW.value = tf?.texture ? Math.max(0, tf.widthM) : 0;
     if (frame.sunDirection) {
       this.frameUniforms.uSunDirection.value
         .set(frame.sunDirection.x, frame.sunDirection.y, frame.sunDirection.z)
@@ -682,6 +701,7 @@ class DefaultHydroSystem implements HydroSystem {
   private installField(record: TileRecord, field: HydroTileField): void {
     this.releaseGpu(record);
     record.field = field;
+    this.bankRev++;
     if (!field.hasWater) return;
     // The cull first: a tile can report water and still keep no cell, when the
     // coverage is a sliver the lattice cannot resolve. Building the textures

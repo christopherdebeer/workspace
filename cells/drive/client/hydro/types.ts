@@ -248,6 +248,13 @@ export interface HydroFrame {
    *  how deep it is wading. Omit (or wadeM 0) and the surface ignores it —
    *  the water only answers a hull that is actually displacing it. */
   rig?: { x: number; z: number; vx: number; vz: number; wadeM: number };
+  /** THE GROUND'S OWN COLOUR, LOCALLY. `terrainColour` is one colour for the
+   *  whole frame — the ground under the truck — and every shallow, bed and
+   *  damp bank in view took it, so a river forty metres off wore the road's
+   *  tint. This is the sward's colour field: the terrain palette per 3 m
+   *  texel over a square around the truck, already built for the grass.
+   *  `widthM` 0 means there is no field yet and the frame colour stands. */
+  terrainField?: { texture: object | null; originX: number; originZ: number; widthM: number };
 }
 
 export type HydroDebugView = 'surface' | 'coverage' | 'shore' | 'depth' | 'flow' | 'class';
