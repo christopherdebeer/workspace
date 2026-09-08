@@ -19,6 +19,7 @@ export interface HydroFrameUniforms {
   uSkyColour: { value: THREE.Color };
   uSceneLight: { value: THREE.Vector3 };
   uZenith: { value: THREE.Color };
+  uGroundGain: { value: THREE.Vector3 };
   uTerrainColour: { value: THREE.Color };
   uSwardCol: { value: THREE.Texture | null };
   uSwardOrg: { value: THREE.Vector2 };
@@ -66,6 +67,7 @@ export function createHydroFrameUniforms(): HydroFrameUniforms {
     uSkyColour: { value: new THREE.Color(0.46, 0.58, 0.68) },
     uSceneLight: { value: new THREE.Vector3(1, 1, 1) },
     uZenith: { value: new THREE.Color(0.05, 0.12, 0.28) },
+    uGroundGain: { value: new THREE.Vector3(0.49, 0.46, 0.43) },
     uTerrainColour: { value: new THREE.Color(0.16, 0.20, 0.13) },
     uSwardCol: { value: null },
     uSwardOrg: { value: new THREE.Vector2() },
@@ -241,6 +243,7 @@ export function createHydroMaterial(
       uSkyColour: frame.uSkyColour,
       uSceneLight: frame.uSceneLight,
       uZenith: frame.uZenith,
+      uGroundGain: frame.uGroundGain,
       uTerrainColour: frame.uTerrainColour,
       ...(shade?.uniforms ?? {}),
       uSwardCol: frame.uSwardCol,

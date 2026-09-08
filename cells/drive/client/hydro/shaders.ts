@@ -292,6 +292,7 @@ uniform vec3 uSunDirection;
 uniform vec3 uSkyColour;
 uniform vec3 uSceneLight;
 uniform vec3 uZenith;
+uniform vec3 uGroundGain;
 uniform vec3 uTerrainColour;
 uniform sampler2D uSwardCol;
 uniform vec2 uSwardOrg;
@@ -550,6 +551,19 @@ void main() {
       terrainC = mix(uTerrainColour, texture2D(uSwardCol, su).rgb, inside);
     }
   }
+  // ── THE GROUND'S COLOUR, AS THE GROUND DRAWS IT ──
+  //
+  // What arrives above is ALBEDO — the terrain palette, the vertex colour
+  // the Lambert ground multiplies by its light over π. Every colour this
+  // shader keeps as a constant is a LIT colour at a clear noon. Mixing the
+  // two as they came put a bank seen through a shallow, a gravel bar, the
+  // damp margin, at three times the brightness of the bank beside them —
+  // the cream rim at every waterline in the chart, ablation-proof because
+  // it was in the palette itself. uGroundGain is the ground's own gain at
+  // that noon (the host's irradiance over π), so from here the ground's
+  // colour and the water's constants share one scale, and the scene light
+  // below scales both alike.
+  terrainC *= uGroundGain;
   vec4 dynamics = texture2D(uHydroDynamics, vHydroUv);
   float seed = materialField.g;
   float turbidity = materialField.b;

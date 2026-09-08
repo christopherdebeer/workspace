@@ -490,6 +490,9 @@ class DefaultHydroSystem implements HydroSystem {
     if (frame.sceneLight) {
       this.frameUniforms.uSceneLight.value.set(frame.sceneLight.r, frame.sceneLight.g, frame.sceneLight.b);
     }
+    if (frame.groundGain) {
+      this.frameUniforms.uGroundGain.value.set(frame.groundGain.r, frame.groundGain.g, frame.groundGain.b);
+    }
     if (frame.zenithColour) {
       this.frameUniforms.uZenith.value.setRGB(frame.zenithColour.r, frame.zenithColour.g, frame.zenithColour.b);
     }

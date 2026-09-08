@@ -3983,6 +3983,80 @@ errors, the ASCII maps at `at-senqu-top` and `at-senqu-ford`, an overlay
 frame from the top camera with the magenta blocks around the truck, the
 repaint leaving `surfQ` as it found it. Not verified from the seat.
 
+### The chart's river wore a beach — the water was never lit by the scene
+
+The seat's frame at −30.70911, 27.75188 in the chart at 2.2 zoom, a hazy
+09:00: the river a band at twice the valley's luminance with a cream rim,
+and no bed in it. "The shallows and banks should be helping the river mesh
+merge with the surroundings; it's doing the opposite." Measured off the
+frame (sRGB luminance): ground 50–55, band 107–112, rim 129–150.
+
+**Ablation first.** `__hydrotune({ shallowBedStrength: 0 })` and friends zero
+one look term at a time (a probe added for this; the tuning setter had no
+window). Bed off, river edge off, foam and turbulence off, all off,
+`?shore=0` — the rim stayed at L 147–171 in every variant. It was not a
+term; it was the palette, and two things under it:
+
+- **The water lit itself.** Its light was a curve of its own — 0.82 of
+  ambient for any sun above thirty degrees, a quarter of a direct term,
+  nothing for cloud — while the ground beside it is a Lambert surface under
+  the scene's sun, sky fill and cloud deck. Under haze at a low sun the
+  ground fell to 0.64 of its noon and the river to 1.0. `HydroFrame.sceneLight`
+  is now the ground's irradiance on the flat (sun × cosine + sky fill + moon,
+  per channel) as a ratio to THIS biome's clear noon: 1.005 at noon, 0.81 /
+  0.86 / 0.94 under haze, 0.64 / 0.72 / 0.84 at a 32° sun under haze,
+  0.25 / 0.33 / 0.48 at night. The cloud deck's shadow reaches the water
+  through `SceneShade`: main.ts hands the hydro material the terrain's own
+  cloud GLSL and uniforms (prefixed `uCs*`, because hydro's `uWind` is a
+  vec3 and the deck's drift a vec2), spliced ahead of `main()`.
+- **The ground's colour arrived as albedo.** `terrainC` is the terrain
+  palette — the vertex colour the Lambert ground multiplies by its light
+  over π — and every constant in the water shader is a LIT colour at a clear
+  noon. Mixed as they came, a bank seen through a shallow, a gravel bar, the
+  damp margin, stood at three times the brightness of the bank beside them.
+  `uGroundGain` (E_ref / π ≈ 0.49, 0.46, 0.43) puts the ground's colour on
+  the constants' scale the moment it is sampled; the scene light then scales
+  both alike. This one line is most of the fix: the palette re-anchoring
+  below did nothing measurable without it.
+
+With those in place, the rest of the ask: inland, the first centimetre of
+water is the WET GROUND (`wetGround`: the local colour a fifth darker and a
+fifth greyer) and the water's tint arrives with depth; the bed's sediment,
+gravel bars and damp margin derive from `terrainC` in place of sand
+constants, and the sward's bank mineral applies the same rule
+(`bankMineralOf`) so the two meet in one colour at the waterline. **A channel
+is a trough:** across the ribbon the visual and bed depth fall from 0.18 of
+the texel's depth at the bank to all of it at the thalweg, so the margins
+show the bed and the middle goes dark — the shape the chart sees, while the
+physics keeps the texel. The bed's broad structure (`bedLod`) outlives the
+skin's 875 m; its bar contrast opens with the overhead component; the fine
+grain still fades with range. And a chart looks into the ZENITH, not the
+horizon band.
+
+| frame (harness, z 2.2) | ground L | rim L | mid L | mid / ground |
+|---|---|---|---|---|
+| noon clear, before | 109–123 | 158–169 | 122–140 | 1.05 |
+| noon clear, after | 108–123 | 113–126 | 97–105 | 0.85 |
+| haze noon, before | 86–101 | 147–162 | 117–133 | 1.30 |
+| haze noon, after | 75–89 | 80–93 | 68–75 | 0.85 |
+| haze, 32° sun, before | 97–101 | 149–157 | 117–124 | 1.20 |
+| haze, 32° sun, after | 86–101 | 85–95 | 72–79 | 0.80 |
+| night, after | 50–58 | 38–42 | 28–31 | 0.55 |
+
+Rim within the ground's range everywhere; the river reads as a darker band
+in its valley with a thalweg streak, blue-grey under haze, and it is still
+there at night under the chart's moon.
+
+Verified: `tsc` clean, hydro, inland-water and switches tests green, `boot`
+no page or GLSL errors, five chart renders and a chase render without a
+shader error, the profiles above. Not verified from the seat at the bank.
+`water-cover.test` fails five checks — it runs against the live cell's
+land-cover route and fails identically at fe0dae5, before any of this; not
+this unit's. Pulled and merged the owner's e21c3cd on the way ("sol attempt
+to fix": the physics samples the field at the shader's `WATERLINE_CUT`
+through `drawnHydroAt`, `sampleFieldSurface` extracted with a coverage-cut
+argument, `terrainC` hoisted out of the surf split) — no conflicts.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where

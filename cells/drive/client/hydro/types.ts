@@ -253,6 +253,13 @@ export interface HydroFrame {
   /** The sky straight up, for what a chart sees reflected in flat water;
    *  `skyColour` is the horizon side the seat sees. */
   zenithColour?: { r: number; g: number; b: number };
+  /** WHAT A UNIT OF GROUND ALBEDO DRAWS AS, at the reference noon: the
+   *  irradiance over π, per channel — the Lambert ground's own gain. The
+   *  water's palette constants are lit colours at that noon; the ground's
+   *  colour arrives as albedo. Multiplying the albedo by this puts the two
+   *  on one scale, so a bank seen through a shallow is the bank beside it
+   *  and not three times brighter. */
+  groundGain?: { r: number; g: number; b: number };
   /** The vehicle, when it is IN the water: absolute x/z, velocity in m/s and
    *  how deep it is wading. Omit (or wadeM 0) and the surface ignores it —
    *  the water only answers a hull that is actually displacing it. */

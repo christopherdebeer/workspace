@@ -2309,6 +2309,8 @@ const hydroFrameTerrain = { r: 0, g: 0, b: 0 };
  *  palette was drawn, and the ground's own fraction everywhere else. */
 const hydroFrameLight = { r: 1, g: 1, b: 1 };
 const hydroFrameZenith = { r: 0.05, g: 0.12, b: 0.28 };
+/** The ground's gain at the reference noon — E_ref / π — see HydroFrame.groundGain. */
+const hydroFrameGain = { r: 0.49, g: 0.46, b: 0.43 };
 const hydroRefSun = new THREE.Color(), hydroRefSky = new THREE.Color();
 function hydroLightFeed(): void {
   hydroRefSun.setHex(biome.sun); hydroRefSky.setHex(biome.hemiSky);
@@ -2318,6 +2320,7 @@ function hydroLightFeed(): void {
     const ref = biome.sunI * 0.8 * hydroRefSun[k] + biome.hemiI * hydroRefSky[k];
     const now = sun.color[k] * sun.intensity * up + hemi.color[k] * hemi.intensity
       + moon.color[k] * moon.intensity * mUp;
+    hydroFrameGain[k] = ref / Math.PI;
     return now / Math.max(ref, 1e-3);
   };
   hydroFrameLight.r = ch('r'); hydroFrameLight.g = ch('g'); hydroFrameLight.b = ch('b');
@@ -2381,6 +2384,7 @@ function hydroTick(nowMs: number): void {
     skyColour: hydroFrameSky,
     sceneLight: hydroFrameLight,
     zenithColour: hydroFrameZenith,
+    groundGain: hydroFrameGain,
     terrainColour: hydroFrameTerrain,
     // The ground's colour AT THE FRAGMENT, from the grass's own field (see
     // HydroFrame.terrainField): the shallows at a crossing wore the road's
@@ -26718,7 +26722,7 @@ function repaintWetDebug(): void {
  *  argued about for a unit before anyone could turn its candidates off. */
 (window as unknown as { __hydrotune?: object }).__hydrotune = (patch?: Parameters<NonNullable<typeof hydroSys>['setTuning']>[0]): object => {
   if (patch && hydroSys) hydroSys.setTuning(patch);
-  return { ok: !!hydroSys, light: { ...hydroFrameLight }, zenith: { ...hydroFrameZenith }, terrain: { ...hydroFrameTerrain } };
+  return { ok: !!hydroSys, light: { ...hydroFrameLight }, gain: { ...hydroFrameGain }, zenith: { ...hydroFrameZenith }, terrain: { ...hydroFrameTerrain } };
 };
 (window as unknown as { __hydroview?: object }).__hydroview = (name?: HydroDebugView): string => {
   if (name) { hydroView = name; hydroSys?.setDebugView(name); }
