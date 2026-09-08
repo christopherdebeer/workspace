@@ -38,7 +38,6 @@ export interface TerrainJob {
 export interface TerrainReply {
   id: number; key: string; epoch: number; error?: string; hydroOnly?: boolean;
   pos: Float32Array; uv: Float32Array; idx: Uint32Array; colors: Float32Array; normals: Float32Array;
-  cover: Uint8Array;
   kinds: Uint8Array | null; cellOffs: Int32Array; cellTris: Int32Array;
   border: Float64Array; normalMap: Uint8Array; refined: boolean; corridor: boolean;
   hydroElev: Float32Array | null;
@@ -126,12 +125,12 @@ function terrainWorkerMain(K: ReturnType<typeof createTerrainKernel>): void {
       }
       const reply: TerrainReply = {
         id: job.id, key: job.key, epoch: job.epoch,
-        pos: b.pos, uv: b.uv, idx: b.idx, colors: b.colors, cover: b.cover, normals: b.normals, kinds: b.kinds,
+        pos: b.pos, uv: b.uv, idx: b.idx, colors: b.colors, normals: b.normals, kinds: b.kinds,
         cellOffs: b.cellTris.offs, cellTris: b.cellTris.tris, border, normalMap, refined: b.refined, corridor: b.corridor,
         hydroElev, followers, workerMs: performance.now() - t0, carveLog: carveLog.get(job.key) ?? null,
         refineCost: { ...K.refineCost }, plainCost: { ...K.plainCost }, carveCost: { ...K.carveCost },
       };
-      const transfer = [b.pos.buffer, b.uv.buffer, b.idx.buffer, b.colors.buffer, b.cover.buffer, b.normals.buffer, b.cellTris.offs.buffer, b.cellTris.tris.buffer, normalMap.buffer] as unknown as Transferable[];
+      const transfer = [b.pos.buffer, b.uv.buffer, b.idx.buffer, b.colors.buffer, b.normals.buffer, b.cellTris.offs.buffer, b.cellTris.tris.buffer, normalMap.buffer] as unknown as Transferable[];
       if (b.kinds) transfer.push(b.kinds.buffer as unknown as Transferable);
       if (hydroElev) transfer.push(hydroElev.buffer as unknown as Transferable);
       (self as unknown as { postMessage(m: unknown, t: Transferable[]): void }).postMessage(reply, transfer);

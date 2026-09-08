@@ -22,7 +22,7 @@ import { coastKm } from './coast';
 import { clamp } from './num';
 import { nearestStable, squareRings, uploadPrefix } from './render-work';
 import { WATERLINE_CUT, bankHabitat, sampleBankField, BANK_GLSL } from './shoreline';
-import { URL_OWNED, qs, qsHas, qsNum, qsOn, switchRows } from './switches';
+import { URL_OWNED, qs, qsHas, qsOn, switchRows } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
 import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt, paintFor, roadLookAt,
@@ -5111,66 +5111,6 @@ const wetDbgU = {
 };
 let wetDbgOn = qsOn('wetdebug', false);
 let wetDbgAt = -1e9, wetDbgMs = 0;
-/**
- * ── GROUND DETAIL FROM THE SHADER'S OWN UVS ──
- *
- * The owner's question: can the terrain shader make its own UVs and draw
- * more detail than the mesh has, by cover class, without adding geometry?
- * It can — the fragment already knows where it is in the world (vWorldP),
- * and the tile now carries the ground's FAMILY per vertex (aCover, from the
- * same cover read that chose its colour). World metres are the UV: a pattern
- * per family, evaluated in place, modulates the vertex colour's luminance
- * within about two hundred metres of the camera and fades to nothing beyond,
- * where a metre is a pixel and any pattern is only aliasing. Luminance only,
- * so the palette and the biome's colour stay whose they are.
- *
- * The hash is the bank's integer-safe one (shoreline.ts): a metre-scale
- * pattern at ten kilometres from the origin is exactly where a fract-of-a-
- * product hash turns to noise in float32.
- *
- * `?tdetail=<strength>` — an exploration switch, off by default; `__tdetail`
- * moves it live. The cost is one branch and a few noise reads per terrain
- * fragment inside the near band, none outside it.
- */
-const tdU = { uTDetail: { value: qsNum('tdetail', 0) } };
-(window as unknown as { __tdetail?: object }).__tdetail = (k?: number): object => {
-  if (k !== undefined) tdU.uTDetail.value = clamp(k, 0, 3);
-  return { strength: tdU.uTDetail.value };
-};
-const TDETAIL_GLSL = /* glsl */`
-      if (uTDetail > 0.001) {
-        float tdD = length(cameraPosition - vWorldP);
-        // TWO BANDS. The fine band is the wheels' — sub-metre pattern, mostly
-        // under the sward's own blades. The broad band is where the blades
-        // thin out and the ground shows between them: metres-scale pattern
-        // from about forty metres to the far edge of the sward's reach.
-        float tdNear = 1.0 - smoothstep(70.0, 220.0, tdD);
-        float tdMid = smoothstep(40.0, 140.0, tdD) * (1.0 - smoothstep(300.0, 480.0, tdD));
-        if (tdNear + tdMid > 0.005) {
-          float tdFine = 1.0 - smoothstep(25.0, 90.0, tdD);
-          vec2 p = vWorldP.xz;
-          vec4 fam = vec4(vCover.xyz, 1.0 - vCover.w);
-          // sward: tussocks at 0.8 m, a blade-scale speckle at 0.3 m while close
-          float sw = (bankNoise(p * 1.25) - 0.5) * 0.7 + (bankHash(floor(p * 3.3)) - 0.5) * 0.3 * tdFine;
-          // scrub floor: broad litter-and-shade blotches at 2.2 m, finer at 0.6 m
-          float sc = (bankNoise(p * 0.45) - 0.5) * 0.8 + (bankNoise(p * 1.7) - 0.5) * 0.25 * tdFine;
-          // stone: 0.7 m cells with dark seams, each cell its own tone
-          vec2 sp = p * 1.4; vec2 sf = fract(sp) - 0.5;
-          float seam = smoothstep(0.30, 0.50, max(abs(sf.x), abs(sf.y)));
-          float st = (bankHash(floor(sp)) - 0.5) * 0.5 - seam * 0.45 * tdFine;
-          // field: furrows at 0.9 m, wandering with a slow drift
-          float fu = sin(p.x * 6.98 + bankNoise(p * 0.08) * 6.0) * 0.5 * (0.6 + 0.4 * bankNoise(p * 0.3));
-          float fine = dot(fam, vec4(sw, sc, st, fu));
-          // the broad band: clumps and bare patches at 3 m over an 8 m drift,
-          // scrub shade at 5 m, stone at 2.5 m cells, furrow bands at 6 m
-          float bsw = (bankNoise(p * 0.33) - 0.5) * 0.7 + (bankNoise(p * 0.12) - 0.5) * 0.5;
-          float bsc = (bankNoise(p * 0.2) - 0.5) * 0.9;
-          float bst = (bankHash(floor(p * 0.4)) - 0.5) * 0.6 + (bankNoise(p * 0.15) - 0.5) * 0.3;
-          float bfu = sin(p.x * 1.05 + bankNoise(p * 0.05) * 4.0) * 0.45;
-          float broad = dot(fam, vec4(bsw, bsc, bst, bfu));
-          diffuseColor.rgb *= 1.0 + (fine * 0.28 * tdNear + broad * 0.22 * tdMid) * uTDetail;
-        }
-      }`;
 function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
   // THE SHADOW MAP HAS TO SEE THE FACES YOU CAN SEE. three's default for a
   // FrontSide material is to render BACK faces into the depth map — sound for a
@@ -5273,22 +5213,14 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
         }
       }`);
     if (opts.detail) {
-      sh.uniforms.uTDetail = tdU.uTDetail;
-      sh.vertexShader = sh.vertexShader
-        .replace('#include <common>', '#include <common>\nattribute vec4 aCover; varying vec4 vCover;')
-        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCover = aCover;');
-      sh.fragmentShader = sh.fragmentShader
-        .replace('#include <common>', `#include <common>\nuniform float uTDetail; varying vec4 vCover;\n${BANK_GLSL}`);
       // World-space mottle (~30–80m blobs) breaks the flat-shaded banding of
-      // the vertex-colored terrain without any texture upload — and, inside
-      // the near band, the family's own detail (TDETAIL_GLSL).
+      // the vertex-colored terrain without any texture upload.
       sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
       {
         vec2 gp = vWorldP.xz;
         float gn = sin(gp.x * 0.131 + sin(gp.y * 0.093) * 2.0) * sin(gp.y * 0.117 + sin(gp.x * 0.071) * 2.0);
         diffuseColor.rgb *= 0.955 + 0.045 * gn;
-      }
-      ${TDETAIL_GLSL}`);
+      }`);
     }
   };
 }
@@ -5679,7 +5611,6 @@ function buildTerrainMesh(t: HeightTile): void {
   geo.setAttribute('position', new THREE.BufferAttribute(b.pos, 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(b.uv, 2));
   geo.setAttribute('color', new THREE.BufferAttribute(b.colors, 3));
-  geo.setAttribute('aCover', new THREE.BufferAttribute(b.cover, 4, true));
   geo.setAttribute('normal', new THREE.BufferAttribute(b.normals, 3));
   geo.setIndex(new THREE.BufferAttribute(b.idx, 1));
   cellTrisCache.set(geo, b.cellTris);
@@ -5794,7 +5725,6 @@ function applyTileBuild(t: HeightTile, key: string, r: TerrainReply, why: string
   geo.setAttribute('position', new THREE.BufferAttribute(r.pos, 3));
   geo.setAttribute('uv', new THREE.BufferAttribute(r.uv, 2));
   geo.setAttribute('color', new THREE.BufferAttribute(r.colors, 3));
-  geo.setAttribute('aCover', new THREE.BufferAttribute(r.cover, 4, true));
   geo.setAttribute('normal', new THREE.BufferAttribute(r.normals, 3));
   geo.setIndex(new THREE.BufferAttribute(r.idx, 1));
   cellTrisCache.set(geo, { seg: SEG, offs: r.cellOffs, tris: r.cellTris });

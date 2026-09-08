@@ -28,16 +28,8 @@ export interface CellTris { seg: number; offs: Int32Array; tris: Int32Array }
 export interface RefinedMesh { pos: Float32Array; uv: Float32Array; idx: Uint32Array; kinds: Uint8Array; cells: number; tris: number; cellTris: CellTris }
 export interface TileBuild {
   pos: Float32Array; uv: Float32Array; idx: Uint32Array; colors: Float32Array; normals: Float32Array;
-  /** THE GROUND'S FAMILY, PER VERTEX, for the shader's close-range detail
-   *  (see `aCover` in main.ts): x sward, y scrub floor, z stone, and w is
-   *  ONE MINUS field — so a geometry that carries no attribute at all, and
-   *  reads WebGL's default (0,0,0,1), reads as no family and draws nothing. */
-  cover: Uint8Array;
   kinds: Uint8Array | null; cellTris: CellTris; refined: boolean; corridor: boolean;
 }
-/** WorldCover class → detail family. Built and water are no family: the
- *  road and the water draw their own ground. */
-const COVER_FAMILY: Record<number, number> = { 30: 0, 100: 0, 90: 0, 10: 1, 20: 1, 95: 1, 60: 2, 70: 2, 40: 3 };
 /** The world, as the build asks it. Getters on the main thread; a mirror in a worker. */
 export interface TerrainStore {
   readonly heights: Map<string, HeightTile>;
@@ -1405,7 +1397,6 @@ export function createTerrainKernel() {
     const cxm = t.xs + t.w / 2, czm = t.zs + t.h / 2;
     const cell = t.w / SEG;
     const colors = new Float32Array(pos.length);
-    const cover = new Uint8Array((pos.length / 3) * 4);
     for (let i = 0; i < (refined ? 0 : (pos.length / 3)); i++) {
       const ex = pos[(i) * 3] + cxm, ez = pos[(i) * 3 + 2] + czm;
       const cv = S.sampleCover(ex, ez);
@@ -1485,14 +1476,7 @@ export function createTerrainKernel() {
       const kind = kinds ? kinds[i] : 0;
       let slope = Math.hypot(du, dv) / Math.max(cell, 1);
       if (kind === 2) slope = Math.max(slope, CUTF_K); else if (kind === 3) slope = Math.max(slope, BANK_K);
-      const cvp = S.coverPaint(ex, ez);
-      let [r, g, bb] = S.palette(elevAbs, slope, cvp, ex, ez);
-      {
-        const fam = cvp === null ? -1 : (COVER_FAMILY[cvp] ?? -1);
-        const c4 = i * 4;
-        cover[c4 + 3] = fam === 3 ? 0 : 255;
-        if (fam >= 0 && fam < 3) cover[c4 + fam] = 255;
-      }
+      let [r, g, bb] = S.palette(elevAbs, slope, S.coverPaint(ex, ez), ex, ez);
       if (kind === 2) { r += (EARTH_T[0] - r) * 0.6; g += (EARTH_T[1] - g) * 0.6; bb += (EARTH_T[2] - bb) * 0.6; }
       // …and then whoever actually drew this ground. The 38m raster says what is
       // growing across a landscape; an OSM area says where a particular wood
@@ -1510,7 +1494,7 @@ export function createTerrainKernel() {
     const p7 = performance.now();
     plainCost.builds++; plainCost.refine += p1 - p0; plainCost.heights += p2 - p1; plainCost.carve += p3 - p2; plainCost.channels += p4 - p3;
     plainCost.pins += p5 - p4; plainCost.colour += p6 - p5; plainCost.normals += p7 - p6;
-    return { pos, uv, idx, colors, cover, normals, kinds: refined ? refined.kinds : null, cellTris, refined: !!refined, corridor };
+    return { pos, uv, idx, colors, normals, kinds: refined ? refined.kinds : null, cellTris, refined: !!refined, corridor };
   }
 
   const M_LAT = 111320, TERRAIN_Z = 14;

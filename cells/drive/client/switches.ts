@@ -93,8 +93,6 @@ export const SWITCHES = [
     note: 'pin the sun’s altitude in degrees, −20..89' },
   { id: 'wx', kind: 'choice', marks: ['look', 'bench'], fallback: 'the live weather',
     note: 'pin the sky: clear, haze, rain or storm' },
-  { id: 'tdetail', kind: 'number', marks: ['look'], fallback: 'off',
-    note: 'tdetail=1 paints close-range ground detail in the terrain shader from world-space UVs by cover class, no geometry added; the number is the strength' },
   { id: 'fog', kind: 'number', marks: ['look', 'bench'], fallback: 'the live mist',
     note: 'pin the regional mist, 0..1' },
   { id: 'wet', kind: 'number', marks: ['look', 'bench'], fallback: 'the live ground',
