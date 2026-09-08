@@ -4192,6 +4192,23 @@ fixture comparison (`scratchpad/route-fixture.mjs` in the session) is the
 deterministic check. `autopilot-drive.test` fails three checks for want of
 a road under the truck at its live spot, before and after.
 
+### The route is a chip, not a line in the seat
+
+The owner's rule, after two Chapman's runs: the dotted plan belongs to the
+CHART only — no dots on the road from the seat, none on the minimap — and
+the active route belongs on the glass the way an active task does: a chip
+top-left, in the plan's mint, on the task's row (under the task chip when
+both are up; `--route-dy` is set by the overlay, not the stylesheet). A tap
+opens the card — ROUTE · name · "430M BY ROAD · 25.7KM ON FOOT" — with the
+one action a plan needs, CANCEL ROUTE, and an X that folds it back. The
+distance is what is left along the plan from the truck's nearest point,
+straight-line when there is no plan yet, memoised at 500 ms. `cancelRoute`
+drops the goal, the route, the job in flight and the ARRIVED toast;
+`__routecard('expand'|'collapse'|'cancel')` drives it from a test.
+
+Verified in the harness at Simon's Town: chip shown with a goal set, card on
+tap, cancel clears `__goal()` and `__route()`; no dots in the chase frame.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where

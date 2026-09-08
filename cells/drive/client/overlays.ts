@@ -36,6 +36,22 @@ export interface MissionCard {
   ok?: boolean;
 }
 export interface ToastCard { kicker: string; head: string; body: string }
+/**
+ * THE ROUTE, AS A THING YOU CAN PUT DOWN. A goal set from a site card drove
+ * the truck with nothing on the glass that said so, and nothing to take hold
+ * of to stop it — the plan was a line on the chart and a fact in a probe.
+ * Now it is a chip on the same top-left row as an active task, in the plan's
+ * own mint, that opens to a card with the one action a plan needs: CANCEL.
+ * The chart keeps the dotted line; the seat gets the chip.
+ */
+export interface RouteCard {
+  name: string;
+  /** What is left to drive, and by what — "12.3KM BY ROAD", "800M DIRECT". */
+  body: string;
+  /** Collapsed to the chip (the default); expanded shows the card. */
+  minimized: boolean;
+  chip: string;
+}
 
 /**
  * A STATION'S TERMINAL — the one screen in the game that belongs to the world
@@ -80,6 +96,7 @@ export interface SiteCard {
 
 export interface Overlays {
   mission(m: MissionCard | null): void;
+  route(r: RouteCard | null): void;
   toast(t: ToastCard | null): void;
   /** The in-range chip that opens the terminal; null when out of range. */
   prompt(label: string | null): void;
@@ -101,6 +118,9 @@ export function createOverlays(
   onSiteGo: () => void,
   onSiteClose: () => void,
   onSiteGoal: () => void,
+  onRouteExpand: () => void,
+  onRouteCollapse: () => void,
+  onRouteCancel: () => void,
 ): Overlays {
   const C = colors;
   const style = document.createElement('style');
@@ -169,6 +189,22 @@ export function createOverlays(
     padding: 4px 9px 3px; font: inherit; font-family: inherit; font-size: 10px;
     letter-spacing: 1px; display: none; }
   #ov-task .ico { font-family: '${ICON_FONT}'; font-weight: 900; margin-right: 0.5em; }
+  /* THE ROUTE'S CHIP shares the task's row and sits under it when both are
+     up: --route-dy is set by the renderer, not the stylesheet, because only
+     it knows whether the task chip is showing. Mint, the plan's colour. */
+  #ov-route { top: calc(env(safe-area-inset-top, 0px) + var(--rail-b, 160px) + var(--route-dy, 0px));
+    left: 10px; cursor: pointer;
+    color: ${C.good}; border: 1px solid ${C.dim}; --bk: ${C.good};
+    background-color: rgba(8,20,23,0.78);
+    padding: 4px 9px 3px; font: inherit; font-family: inherit; font-size: 10px;
+    letter-spacing: 1px; display: none; }
+  #ov-route .ico { font-family: '${ICON_FONT}'; font-weight: 900; margin-right: 0.5em; }
+  #ov-routecard { top: calc(env(safe-area-inset-top, 0px) + var(--msg-y, 88px)); left: 10px; right: 10px;
+    padding: 8px 12px 9px; border: 1px solid ${C.good}; background: rgba(8,20,23,0.86); display: none; }
+  #ov-routecard .cancel { margin: 8px auto 0; padding: 5px 20px 4px; cursor: pointer; display: block;
+    color: ${C.bad}; border: 1px solid ${C.bad}; background-color: rgba(220,90,80,0.08);
+    font: inherit; font-family: inherit; font-size: 11px; font-weight: 700;
+    letter-spacing: 2px; width: 100%; }
   /* The terminal prompt sits low-centre, above the stick's reach — a door,
      not a dialog. */
   #ov-term-go { bottom: calc(env(safe-area-inset-bottom, 0px) + 168px); left: 50%;
@@ -256,6 +292,32 @@ export function createOverlays(
   chip.append(chipIco, chipLab);
   chip.addEventListener('click', onExpand);
   document.body.appendChild(chip);
+  // THE ROUTE: its chip and its card, the same two states as the task.
+  const rchip = document.createElement('button');
+  rchip.id = 'ov-route';
+  rchip.className = 'ov ui bkt';
+  const rchipIco = document.createElement('span');
+  rchipIco.className = 'ico';
+  rchipIco.textContent = ICON.road;
+  const rchipLab = document.createElement('span');
+  rchip.append(rchipIco, rchipLab);
+  rchip.addEventListener('click', onRouteExpand);
+  document.body.appendChild(rchip);
+  const rc = card('ov-routecard');
+  rc.kicker.textContent = 'ROUTE';
+  rc.head.style.color = C.good;
+  const rx = document.createElement('div');
+  rx.className = 'x';
+  rx.textContent = 'X';
+  rx.addEventListener('click', (e) => { e.stopPropagation(); onRouteCollapse(); });
+  rc.root.appendChild(rx);
+  const rcancel = document.createElement('button');
+  rcancel.className = 'cancel bkt';
+  rcancel.style.setProperty('--bk', C.bad);
+  rcancel.textContent = 'CANCEL ROUTE';
+  rcancel.addEventListener('click', (e) => { e.stopPropagation(); onRouteCancel(); });
+  rc.root.appendChild(rcancel);
+  let rKey = '';
   const t = card('ov-toast');
   t.kicker.textContent = 'SURVEYED';
   t.head.style.color = C.good;
@@ -343,6 +405,25 @@ export function createOverlays(
       mab.style.display = mc.canSetAside ? 'block' : 'none';
       mok.style.display = mc.ok ? 'block' : 'none';
       m.root.style.display = 'block';
+    },
+    route(r) {
+      const taskUp = chip.style.display === 'block';
+      const key = r ? `${r.name}|${r.body}|${r.minimized}|${r.chip}|${taskUp}` : '';
+      if (key === rKey) return;
+      rKey = key;
+      if (!r) { rc.root.style.display = 'none'; rchip.style.display = 'none'; return; }
+      // Under the task's chip when that is up, on its row when it is not.
+      rchip.style.setProperty('--route-dy', taskUp ? '30px' : '0px');
+      if (r.minimized) {
+        rc.root.style.display = 'none';
+        rchipLab.textContent = r.chip;
+        rchip.style.display = 'block';
+        return;
+      }
+      rchip.style.display = 'none';
+      rc.head.textContent = r.name;
+      rc.body.textContent = r.body;
+      rc.root.style.display = 'block';
     },
     toast(tc) {
       const key = tc ? `${tc.head}|${tc.body}` : '';

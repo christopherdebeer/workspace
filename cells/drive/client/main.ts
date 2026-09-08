@@ -50,7 +50,7 @@ import { TerrainWorker, type TerrainJob, type TerrainReply } from './terrain-wor
 // probes; the worker builds its own from the same source (terrain-worker.ts).
 const K = createTerrainKernel();
 const { BANK_K, CUTF_K, CUT_REACH_M, TOE_REACH, DECK_GAP_T, EARTH_T, CUT_CLEAR, SEA_BED, AREA_MIX, refineCost, plainCost, carveCost, stripFloor, mmKey, mmIndex, mmNear, onTileEdge, plainLattice, cellTable } = K;
-import { createOverlays } from './overlays';
+import { createOverlays, type RouteCard } from './overlays';
 import { createSplash, SPLASH_TALL_MAX } from './splash';
 import { markLookAt, packMark, type MarkLook } from './graffiti';
 import { facade, uFacNight } from './facade';
@@ -12079,6 +12079,53 @@ function goalRebase(): void {
   const [gx, gz] = toLocal(goal.lat, goal.lon);
   goal.x = gx; goal.z = gz;
 }
+/** THE ROUTE ON THE GLASS — see overlays.ts RouteCard. A chip by default;
+ *  the card on a tap; CANCEL is the one action. The distance is what is left
+ *  along the plan where there is one, straight-line where there is not, and
+ *  the walk-in past the road's end is said separately. Memoised: the plan is
+ *  hundreds of points and the chip does not need it every frame. */
+let routeMin = true;
+let routeDistAt = -1e9, routeDistM = 0;
+function routeRemainingM(now: number): number {
+  if (!goal) return 0;
+  if (now - routeDistAt < 500) return routeDistM;
+  routeDistAt = now;
+  const rt = goalRoute;
+  if (rt && rt.length >= 2) {
+    let bi = 1, bt = 0, bd = Infinity;
+    for (let i = 1; i < rt.length; i++) {
+      const dx = rt[i][0] - rt[i - 1][0], dz = rt[i][1] - rt[i - 1][1];
+      const t = clamp(((state.x - rt[i - 1][0]) * dx + (state.z - rt[i - 1][1]) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+      const d = Math.hypot(state.x - (rt[i - 1][0] + dx * t), state.z - (rt[i - 1][1] + dz * t));
+      if (d < bd) { bd = d; bi = i; bt = t; }
+    }
+    let px = rt[bi - 1][0] + (rt[bi][0] - rt[bi - 1][0]) * bt, pz = rt[bi - 1][1] + (rt[bi][1] - rt[bi - 1][1]) * bt;
+    let run = bd;
+    for (let i = bi; i < rt.length; i++) { run += Math.hypot(rt[i][0] - px, rt[i][1] - pz); px = rt[i][0]; pz = rt[i][1]; }
+    routeDistM = run;
+  } else routeDistM = Math.hypot(goal.x - state.x, goal.z - state.z);
+  return routeDistM;
+}
+function routeCard(now: number): RouteCard {
+  const g = goal as Goal;
+  const d = routeRemainingM(now);
+  const byRoad = !!goalRoute && goalRoute.length >= 2;
+  const walk = byRoad && goalShortM > GOAL_WITHIN ? ` · ${fmtDist(goalShortM)} ON FOOT` : '';
+  return { name: g.name, minimized: routeMin,
+    body: `${fmtDist(d)} ${byRoad ? 'BY ROAD' : 'DIRECT'}${walk}`,
+    chip: `${g.name} · ${fmtDist(d)}` };
+}
+/** Put the plan down: no goal, no route, no job in flight, and the autopilot
+ *  falls back to the chain on its next frame. */
+function cancelRoute(): void {
+  goal = null; goalRoute = null; goalSolveFor = ''; routeJob = null; goalDone = null;
+  routeMin = true;
+}
+/** The route's card from a test: read it, or 'expand' | 'collapse' | 'cancel'. */
+(window as unknown as { __routecard?: object }).__routecard = (act?: 'expand' | 'collapse' | 'cancel'): object | null => {
+  if (act === 'expand') routeMin = false; else if (act === 'collapse') routeMin = true; else if (act === 'cancel') cancelRoute();
+  return goal ? routeCard(performance.now()) : null;
+};
 function setGoal(name: string, x: number, z: number): void {
   const [la, lo] = localToLatLon(x, z);
   goal = { name, lat: la, lon: lo, x, z };
@@ -32200,33 +32247,6 @@ function drawMinimap(): void {
       miniCtx.restore();
     }
   }
-  // THE PLAN ON THE MINIMAP: the whole solved route as mint dots, the coarse
-  // half fainter and at a longer stride, in the same rotated frame as the
-  // chart under it. Segments outside the window are skipped, not clipped.
-  {
-    const k = D / spanPx, lim = D * 0.75;
-    const dots = (pts: ReadonlyArray<readonly number[]>, colour: string, tier: boolean): void => {
-      miniCtx.fillStyle = colour;
-      for (let i = 1; i < pts.length; i++) {
-        const [ax, az] = pts[i - 1], [bx, bz] = pts[i];
-        const [ma, mza] = mapPt(ax, az), [mb, mzb] = mapPt(bx, bz);
-        const x1 = (ma - cx) * k, y1 = (mza - cz) * k, x2 = (mb - cx) * k, y2 = (mzb - cz) * k;
-        if (Math.max(Math.abs(x1), Math.abs(y1)) > lim && Math.max(Math.abs(x2), Math.abs(y2)) > lim) continue;
-        const len = Math.hypot(x2 - x1, y2 - y1);
-        if (len < 0.5) continue;
-        const far = tier && !!(pts[i - 1][2] || pts[i][2]), step = far ? 7 : 4;
-        miniCtx.globalAlpha = far ? 0.45 : 0.85;
-        for (let d = 0; d <= len; d += step) {
-          const t = d / len;
-          miniCtx.fillRect(Math.round(x1 + (x2 - x1) * t) - 1, Math.round(y1 + (y2 - y1) * t) - 1, 2, 2);
-        }
-      }
-      miniCtx.globalAlpha = 1;
-    };
-    // The task's leg in gold, the plan in mint — the chart's own two lines.
-    if (routeXZ.length >= 2 && mission && missionPhase === 'active') dots(routeXZ, UI.gold, false);
-    if (goalRoute && goalRoute.length >= 2) dots(goalRoute, UI.good, true);
-  }
   miniCtx.restore();
   // The car: an amber wedge, always centre. Heading-up it points straight up by
   // construction, because the chart under it has been turned by the same angle.
@@ -33539,40 +33559,6 @@ function refreshRoadLine(via: string | undefined, cur: string | undefined, now: 
     }
   }
 }
-/** THE PLAN, FROM THE SEAT. The chart drew the solved route as mint dots and
- *  the seat drew nothing, so a truck plainly steering down a plan showed no
- *  plan — reported from the Chapman's Peak run, where the autopilot was
- *  "clearly following one" and the seat never saw it. From the seat the
- *  driven part is what matters: the surveyed line ahead that the autopilot is
- *  steering on, as far as it may steer, projected through the camera onto the
- *  road. The chart still draws the whole plan; the minimap now does too. */
-const ROUTE_SHOW_M = 320;
-let routeAheadKey = ''; let routeAheadAt = -1e9;
-function refreshRouteAhead(now: number): void {
-  const key = `${goal?.name ?? ''}|${goalRoute?.length ?? 0}|${missionPhase}|${routeFor}|${routeXZ.length}`;
-  if (key === routeAheadKey && now - routeAheadAt < 250) return;
-  routeAheadKey = key; routeAheadAt = now;
-  roadLineWorld = [];
-  // WHAT THE AUTOPILOT DRIVES, in its own order (autoCourse): a mission's
-  // authored leg first, the solved plan second. The first cut drew only the
-  // plan, and on the Chapman's run — a mission, so the truck was on its leg
-  // — the seat saw nothing again. The leg is gold as it is on the chart, the
-  // plan mint; both dotted from the seat, because a solid line laid down
-  // the tarmac reads as a road marking.
-  const leg = routeAhead(state.x, state.z, ROUTE_SHOW_M);
-  const pts = leg && leg.length >= 2 ? leg
-    : goal && goalRoute ? goalAhead(state.x, state.z, ROUTE_SHOW_M) : null;
-  if (!pts || pts.length < 2) return;
-  const task = !!leg && leg.length >= 2;
-  const deckY = (x: number, z: number): number => (roadEdge(x, z)?.y ?? groundAt(x, z)) + 0.6;
-  let ay = deckY(pts[0][0], pts[0][1]);
-  for (let i = 1; i < pts.length; i++) {
-    const [ax, az] = pts[i - 1], [bx, bz] = pts[i];
-    const by = deckY(bx, bz);
-    roadLineWorld.push({ ax, ay, az, bx, by, bz, mx: (ax + bx) / 2, mz: (az + bz) / 2, task, route: true });
-    ay = by;
-  }
-}
 function projectRoadLine(): void {
   roadSegs = [];
   for (const s of roadLineWorld) {
@@ -33712,10 +33698,7 @@ function updateCps(): void {
   if (camMode === 'top') {
     refreshRoadLine(viaName, here?.name, now);
     projectRoadLine();
-  } else {
-    refreshRouteAhead(now);
-    projectRoadLine();
-  }
+  } else roadSegs = [];
   if (cpVis === 0) return;
   if (road) {
     for (const c of road.cps) {
@@ -40246,7 +40229,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // a 1px diagonal stroke antialiases into grey smear on this canvas. Gold is
   // the task's via; teal is the road under the wheels. Distance from the car
   // dims it in the same four bands as the pips riding on it.
-  if (roadSegs.length) {
+  if (camMode === 'top' && roadSegs.length) {
     for (let pass = 0; pass < 2; pass++) {
       for (const s of roadSegs) {
         const x1 = s.x1 / hudS, y1 = s.y1 / hudS, x2 = s.x2 / hudS, y2 = s.y2 / hudS;
@@ -40263,7 +40246,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         // metres — so it is drawn fainter and at a longer stride: still the
         // plan, visibly less certain, and never mistakable for a road anyone
         // has driven.
-        hctx.fillStyle = pass === 0 ? UI.ink : s.route && !s.task ? UI.good : UI.gold;
+        hctx.fillStyle = pass === 0 ? UI.ink : s.route ? UI.good : UI.gold;
         hctx.globalAlpha = (pass === 0 ? (s.route ? 0.45 : 0.7)
           : (s.route ? 0.5 : 0.6) + 0.35 * near) * (s.far ? 0.55 : 1);
         const n = Math.max(1, Math.round(Math.hypot(x2 - x1, y2 - y1) / 2));
@@ -41489,6 +41472,7 @@ function stepOverlays(): void {
     }
   }
   overlays.mission(mc);
+  overlays.route(goal ? routeCard(performance.now()) : null);
   overlays.prompt(stationNear && !stationOpen ? `${stationNear.st.name} · TERMINAL` : null);
   overlays.terminal(stationOpen ? terminalCard(stationOpen) : null);
   // THE SITE CARD, and the one rule that keeps two centred panels apart: a
@@ -42606,6 +42590,9 @@ const overlays = createOverlays(
     const fix = s.fix ? pois.get(s.fix) : null;
     setGoal(s.rec.name, fix ? fix.x : s.x, fix ? fix.z : s.z);
   },
+  () => { routeMin = false; },
+  () => { routeMin = true; },
+  () => cancelRoute(),
 );
 
 // ── boot ───────────────────────────────────────────────────────────
