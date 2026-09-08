@@ -32203,24 +32203,29 @@ function drawMinimap(): void {
   // THE PLAN ON THE MINIMAP: the whole solved route as mint dots, the coarse
   // half fainter and at a longer stride, in the same rotated frame as the
   // chart under it. Segments outside the window are skipped, not clipped.
-  if (goalRoute && goalRoute.length >= 2) {
+  {
     const k = D / spanPx, lim = D * 0.75;
-    miniCtx.fillStyle = UI.good;
-    for (let i = 1; i < goalRoute.length; i++) {
-      const [ax, az, at] = goalRoute[i - 1], [bx, bz, bt] = goalRoute[i];
-      const [ma, mza] = mapPt(ax, az), [mb, mzb] = mapPt(bx, bz);
-      const x1 = (ma - cx) * k, y1 = (mza - cz) * k, x2 = (mb - cx) * k, y2 = (mzb - cz) * k;
-      if (Math.max(Math.abs(x1), Math.abs(y1)) > lim && Math.max(Math.abs(x2), Math.abs(y2)) > lim) continue;
-      const len = Math.hypot(x2 - x1, y2 - y1);
-      if (len < 0.5) continue;
-      const far = !!(at || bt), step = far ? 7 : 4;
-      miniCtx.globalAlpha = far ? 0.45 : 0.85;
-      for (let d = 0; d <= len; d += step) {
-        const t = d / len;
-        miniCtx.fillRect(Math.round(x1 + (x2 - x1) * t) - 1, Math.round(y1 + (y2 - y1) * t) - 1, 2, 2);
+    const dots = (pts: ReadonlyArray<readonly number[]>, colour: string, tier: boolean): void => {
+      miniCtx.fillStyle = colour;
+      for (let i = 1; i < pts.length; i++) {
+        const [ax, az] = pts[i - 1], [bx, bz] = pts[i];
+        const [ma, mza] = mapPt(ax, az), [mb, mzb] = mapPt(bx, bz);
+        const x1 = (ma - cx) * k, y1 = (mza - cz) * k, x2 = (mb - cx) * k, y2 = (mzb - cz) * k;
+        if (Math.max(Math.abs(x1), Math.abs(y1)) > lim && Math.max(Math.abs(x2), Math.abs(y2)) > lim) continue;
+        const len = Math.hypot(x2 - x1, y2 - y1);
+        if (len < 0.5) continue;
+        const far = tier && !!(pts[i - 1][2] || pts[i][2]), step = far ? 7 : 4;
+        miniCtx.globalAlpha = far ? 0.45 : 0.85;
+        for (let d = 0; d <= len; d += step) {
+          const t = d / len;
+          miniCtx.fillRect(Math.round(x1 + (x2 - x1) * t) - 1, Math.round(y1 + (y2 - y1) * t) - 1, 2, 2);
+        }
       }
-    }
-    miniCtx.globalAlpha = 1;
+      miniCtx.globalAlpha = 1;
+    };
+    // The task's leg in gold, the plan in mint — the chart's own two lines.
+    if (routeXZ.length >= 2 && mission && missionPhase === 'active') dots(routeXZ, UI.gold, false);
+    if (goalRoute && goalRoute.length >= 2) dots(goalRoute, UI.good, true);
   }
   miniCtx.restore();
   // The car: an amber wedge, always centre. Heading-up it points straight up by
@@ -33544,19 +33549,27 @@ function refreshRoadLine(via: string | undefined, cur: string | undefined, now: 
 const ROUTE_SHOW_M = 320;
 let routeAheadKey = ''; let routeAheadAt = -1e9;
 function refreshRouteAhead(now: number): void {
-  const key = `${goal?.name ?? ''}|${goalRoute?.length ?? 0}`;
+  const key = `${goal?.name ?? ''}|${goalRoute?.length ?? 0}|${missionPhase}|${routeFor}|${routeXZ.length}`;
   if (key === routeAheadKey && now - routeAheadAt < 250) return;
   routeAheadKey = key; routeAheadAt = now;
   roadLineWorld = [];
-  if (!goal || !goalRoute) return;
-  const pts = goalAhead(state.x, state.z, ROUTE_SHOW_M);
+  // WHAT THE AUTOPILOT DRIVES, in its own order (autoCourse): a mission's
+  // authored leg first, the solved plan second. The first cut drew only the
+  // plan, and on the Chapman's run — a mission, so the truck was on its leg
+  // — the seat saw nothing again. The leg is gold as it is on the chart, the
+  // plan mint; both dotted from the seat, because a solid line laid down
+  // the tarmac reads as a road marking.
+  const leg = routeAhead(state.x, state.z, ROUTE_SHOW_M);
+  const pts = leg && leg.length >= 2 ? leg
+    : goal && goalRoute ? goalAhead(state.x, state.z, ROUTE_SHOW_M) : null;
   if (!pts || pts.length < 2) return;
+  const task = !!leg && leg.length >= 2;
   const deckY = (x: number, z: number): number => (roadEdge(x, z)?.y ?? groundAt(x, z)) + 0.6;
   let ay = deckY(pts[0][0], pts[0][1]);
   for (let i = 1; i < pts.length; i++) {
     const [ax, az] = pts[i - 1], [bx, bz] = pts[i];
     const by = deckY(bx, bz);
-    roadLineWorld.push({ ax, ay, az, bx, by, bz, mx: (ax + bx) / 2, mz: (az + bz) / 2, task: false, route: true });
+    roadLineWorld.push({ ax, ay, az, bx, by, bz, mx: (ax + bx) / 2, mz: (az + bz) / 2, task, route: true });
     ay = by;
   }
 }
@@ -40250,7 +40263,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
         // metres — so it is drawn fainter and at a longer stride: still the
         // plan, visibly less certain, and never mistakable for a road anyone
         // has driven.
-        hctx.fillStyle = pass === 0 ? UI.ink : s.route ? UI.good : UI.gold;
+        hctx.fillStyle = pass === 0 ? UI.ink : s.route && !s.task ? UI.good : UI.gold;
         hctx.globalAlpha = (pass === 0 ? (s.route ? 0.45 : 0.7)
           : (s.route ? 0.5 : 0.6) + 0.35 * near) * (s.far ? 0.55 : 1);
         const n = Math.max(1, Math.round(Math.hypot(x2 - x1, y2 - y1) / 2));

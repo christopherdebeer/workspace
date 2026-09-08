@@ -4146,6 +4146,52 @@ ahead from the seat, the plan on the inset, the chart as before. Not yet
 measured on the device: the next telemetry paste from a run with a goal is
 the verification, and it should show `routeSolve` under 4 ms a call.
 
+### The route solve in slices, and the plan drawn from the seat
+
+Telemetry from the seat on the Chapman's Peak run: `routeSolve` ninety-nine
+calls in eight minutes, 141 ms mean, 405 max, the top phase in fifty-one
+slow frames. Two faults: the re-solve key was written with the coarse
+tier's version and compared without it, so the two never matched and the
+solve ran on every tick of `GOAL_SOLVE_MS`; and a solve's budget is not a
+frame's — even cached and bounded, 140 ms is six dropped frames.
+
+- **The solve is a job** (`RouteJob`, `routeJobStep`): the fine survey, the
+  handover, the coarse tier, the portals and the walk are each resumable,
+  and a slice takes `ROUTE_SLICE_MS` (3 ms) of a frame. The route in force
+  stays in force until the next lands whole. `solveGoalRoute` is the same
+  job run to completion — the probe's and the bench's path, unchanged in
+  contract: on the Simon's Town fixture the job and the old function give
+  the identical route, and `far-route.test` passes with a mixed plan over
+  26 portals. The handover's percentile comes off a 10 m histogram, not a
+  sort of fifty thousand floats. THE BUDGET CHECK GOES BEFORE THE ITERATOR
+  IS ADVANCED in the portal phase — a node drawn and abandoned for the
+  frame would never be seen again.
+- **Tiles re-solve only where the plan is.** Each finished tile is noted
+  with its centre (`noteOsmDone`); with the truck on its route, new survey
+  re-solves only when a tile lies within `ROUTE_CORRIDOR_M` of the line.
+  A new goal, a swapped coarse network and a truck off its line re-solve
+  at once. The dump prints the solver's books (`route solves …`).
+- **The seat sees what the autopilot drives.** The mint dots were chart-only
+  by construction (`refreshRoadLine` ran in top mode alone). From the seat
+  `refreshRouteAhead` projects the DRIVEN line — a mission's authored leg
+  first (gold, as the chart draws it), the solved plan second (mint) — the
+  surveyed part ahead to `ROUTE_SHOW_M`, on the deck, dotted so it never
+  reads as a marking; the minimap draws both whole. The first cut drew only
+  the plan and the second run from the seat was a mission, so the seat saw
+  nothing again: `autoCourse` ranks the leg above the plan, and the line
+  has to rank the same way.
+- **The second run's dump had no solver line at all** because no goal was
+  held: a reel drive sets its goal in `startDrive`, a reload with `m=` arms
+  the mission and nothing else, and arrival clears it. That is the
+  autopilot on the leg, honestly, not the solver failing.
+
+Bench caveat: `far-route.test` runs on live roads and `__toroad` can land the
+truck on a small disconnected component (a first run: 107 nodes walked, 4
+portals, no coarse leg); the previous commit fails the same draw. The
+fixture comparison (`scratchpad/route-fixture.mjs` in the session) is the
+deterministic check. `autopilot-drive.test` fails three checks for want of
+a road under the truck at its live spot, before and after.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where
