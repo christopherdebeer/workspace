@@ -523,6 +523,14 @@ void main() {
   float seed = materialField.g;
   float turbidity = materialField.b;
   float energy = clamp(dynamics.w, 0.0, 1.0);
+  // DEEP WATER IS CALM WATER. Reach energy is the profile's slope, and a
+  // wide river carries the same drop with far less turbulence than a brook:
+  // the Senqu at a hundred metres across was foam from bank to bank, a white
+  // sheet from above, because every texel of it was scored as a 4% brook.
+  // The depth the tile builder now gives a channel (see build-tile) calms
+  // the foam, the rapids and the turbulence tone toward the middle; the
+  // riffles stay at the shallow margins where they belong.
+  energy *= mix(1.0, 0.3, smoothstep(0.9, 3.5, geometryField.a));
 #ifdef HYDRO_FLOWING
   // River space, texel-accurate — the mesh lattice can be wider than the
   // whole channel, so "n" has to come from the field, not from a varying.

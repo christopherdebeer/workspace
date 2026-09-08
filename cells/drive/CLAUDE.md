@@ -3870,6 +3870,48 @@ crossing, the wade firing off-road at the river (surface `water`, wash 0.2).
 crossing is under the road and the frames the harness could take do not show
 a bank close up. The seat's report against `?shore=0` is the verification.
 
+### From above, the Senqu was a pale sheet — and most of it was not water
+
+Asked for from the seat at −30.70685, 27.75090 in the chart at 0.8 zoom.
+Captured as `at-senqu-top` (class 80 in the box — the broad Senqu). Rendered
+in the harness (the top camera needs a 240 s screenshot timeout; a held truck
+stops the tick and the canvas with it, so shoot while rolling): the river was
+a cream sheet with raster-blob edges, lighter than the grassland around it,
+and `?shore=0` made no difference. Three findings, in the order they fell:
+
+- **The field called a hundred-metre river 8–40 cm deep and fast**, because
+  flowing depth is level minus ground and the DEM does not resolve a channel;
+  the shader honestly drew that as shallow rapid and visible bed from bank to
+  bank. `build-tile` now floors a flowing texel's depth by its distance from
+  its own shore (8 cm a metre, to 4 m), and the fragment shader calms reach
+  energy toward the middle of deep water (a wide river carries the same drop
+  with far less turbulence than a brook) so the riffles stay at the margins.
+  Measured: `fieldDepth` 0.08–0.39 → 1.31–1.86 at the probe texels; the
+  river's pixels went from (154,154,137) to (137,137,120) against ground at
+  (109,109,91) — greener and darker, still lighter than the ground.
+- **The wet mask here is a winding line one or two texels wide**, not a body:
+  `__hydromap` shows it, and every wet texel is 16 m from a dry one, which is
+  why the floor gives every one 1.3 m. The hydro is drawing the OSM waterway
+  LINE as a ribbon; the class-80 body around it was never built —
+  `landcover: feats 0, pixels 0` on a tile whose cover carries class 80 — and
+  the cream sheet the seat sees from above is the TERRAIN's own paint for
+  class-80 cover, at the cover raster's 22 m, with the narrow ribbon inside
+  it. That is why the shoreline pass could not touch it: there is no
+  shoreline there, only paint. A 3×3 majority pass now closes pinholes in
+  flowing coverage, and the sward's colour field paints class-80 texels as
+  the nearest bank class (`bankPaint`) so the water's local colour is the
+  bank's rather than the riverbed paint's; neither builds the body.
+- **The next unit is the body:** trace the class-80 component beside a
+  waterway line into a hydro river area (the tracer dropped it here —
+  `COVER_WATER_MIN_PX` 4 is not the filter, so it is `inlandComponents` or
+  the OSM-covered test, to be measured), union it with the ribbon, and the
+  depth floor then reaches metres in the middle. Until then, from above, a
+  wide river is a narrow river in a pale bed.
+
+Verified: `tsc` clean, hydro and inland-water tests green, the agent's check
+green, `boot.mjs` no page or GLSL errors, the field's depth at six probe
+texels, the pixel readings above. Not verified by eye at the bank.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where

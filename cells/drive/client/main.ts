@@ -1093,6 +1093,24 @@ function coverPaint(ex: number, ez: number): number | null {
   const alt = sampleCover(ex + (h1 - 0.5) * j, ez + (h2 - 0.5) * j);
   return alt === null || alt === COVER.water ? truth : alt;
 }
+/** THE BANK'S PAINT UNDER THE WATER. The sward's colour field is what the
+ *  water shader now reads as the ground's colour at the fragment, and inside
+ *  a river polygon the palette's own answer is the class-80 water paint —
+ *  so the shallows took the colour of a pale riverbed rather than of the
+ *  bank they lie against. A texel classed water paints as the nearest
+ *  non-water class on a ring around it, grass failing that. */
+function bankPaint(ex: number, ez: number): number | null {
+  const truth = sampleCover(ex, ez);
+  if (truth !== COVER.water) return coverPaint(ex, ez);
+  for (const r of [30, 60, 100]) {
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2;
+      const c = sampleCover(ex + Math.sin(a) * r, ez + Math.cos(a) * r);
+      if (c !== null && c !== COVER.water) return c;
+    }
+  }
+  return COVER.grass;
+}
 /** Is there any elevation data under this point at all? sampleHeight answers
  *  0 where there is none — "spawn level" — which is a fiction anything built
  *  against will be wrong by the depth of whatever basin it is crossing. */
@@ -8923,7 +8941,7 @@ function swardRows(from: number, to: number): void {
         ? 0
         : (cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3)) * lift;
       const slope = Math.abs(groundAt(wx + SWARD_FM, wz) - h) / SWARD_FM;
-      let [pr, pg, pb] = terrainPalette(h + baseElev, slope, coverPaint(wx, wz), wx, wz);
+      let [pr, pg, pb] = terrainPalette(h + baseElev, slope, bankPaint(wx, wz), wx, wz);
       // ── THE BANK (shoreline.ts). Only texels at the water ask: the field
       // search is bounded but it is not free, and a hillside has no bank.
       // Mineral pulls the colour to the gravel the water draws and thins

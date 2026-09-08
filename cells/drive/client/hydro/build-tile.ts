@@ -1128,6 +1128,32 @@ export function buildHydroTile(
     }
   }
 
+  // ── A RIVER FROM THE COVER RASTER IS ONE RIVER ──
+  //
+  // WorldCover's class 80 arrives as 22 m pixels traced into polygons, and at
+  // the field's 18.75 m texel that outline is a staircase with pinholes: the
+  // Senqu at a hundred metres wide came out as disjoint blobs — coverage 0.6
+  // in its own interior, every wet texel one cell from a dry one — drawn from
+  // above as separate pale patches with the terrain's own water paint
+  // showing between them, and every one of them ankle-deep because the
+  // shore was always a texel away. One 3×3 majority pass over flowing
+  // texels closes the pinholes and rounds the staircase: a texel whose
+  // neighbourhood is mostly wet is wet. Standing water keeps its outline;
+  // a pond's edge is its edge.
+  {
+    const src = coverage.slice();
+    for (let iz = 1; iz < height - 1; iz++) for (let ix = 1; ix < width - 1; ix++) {
+      const i = iz * width + ix;
+      if (kind[i] < HYDRO_KIND_ID.river || kind[i] > HYDRO_KIND_ID.canal) continue;
+      let sum = 0;
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+        const j = i + dz * width + dx;
+        sum += kind[j] === kind[i] || src[j] < 0.005 ? src[j] : 0;
+      }
+      const mean = sum / 9;
+      if (mean >= 0.5 && src[i] < mean) coverage[i] = Math.min(1, Math.max(coverage[i], mean * 1.15));
+    }
+  }
   const wet = new Uint8Array(count);
   const waterLevels: number[] = [];
   let hasWater = false;
@@ -1173,7 +1199,18 @@ export function buildHydroTile(
     geometry[i * 4] = coverage[i];
     geometry[i * 4 + 1] = clamp(signedCells * pixelM, -options.shoreDistanceLimitM, options.shoreDistanceLimitM);
     geometry[i * 4 + 2] = level[i] - elevationBaseM;
-    geometry[i * 4 + 3] = depth[i];
+    // ── A WIDE RIVER IS DEEP IN THE MIDDLE ──
+    //
+    // Flowing depth is level minus ground, and the DEM does not resolve a
+    // channel: the Senqu at a hundred metres wide came out 8 to 40 cm deep
+    // from bank to bank, which the shader honestly drew as a hundred metres
+    // of shallow rapid — a white sheet from above, a mudflat from the seat.
+    // Nothing in the data says how deep a river is, but its width does: a
+    // channel deepens with distance from its own shore, about 8 cm a metre,
+    // to four metres. Standing water keeps the basin the DEM gives it.
+    const shoreM = geometry[i * 4 + 1];
+    const flowingKind = kind[i] >= HYDRO_KIND_ID.river && kind[i] <= HYDRO_KIND_ID.canal;
+    geometry[i * 4 + 3] = flowingKind && shoreM > 0 ? Math.max(depth[i], Math.min(4, shoreM * 0.08)) : depth[i];
     dynamics[i * 4] = flowX[i];
     dynamics[i * 4 + 1] = flowZ[i];
     dynamics[i * 4 + 2] = fetch[i];
