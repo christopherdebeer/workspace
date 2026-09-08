@@ -1,5 +1,6 @@
 import { HydroBodyRegistry } from './body-registry';
 import { analyseHydroTile, buildHydroTile } from './build-tile';
+import { sampleFieldSurface } from './system';
 import { HYDRO_KIND_ID, type HydroFeature, type HydroTileInput } from './types';
 import { HYDRO_FRAGMENT_SHADER } from './shaders';
 
@@ -40,6 +41,13 @@ export function runHydroSelfTest(): void {
   'recent wetted vehicle positions leave an ageing surface trail');
   assert(!HYDRO_FRAGMENT_SHADER.includes('edgeDither'),
     'river coverage does not duplicate the global dither pipeline');
+  const coastalMain = HYDRO_FRAGMENT_SHADER.indexOf('bool coastalKind');
+  const terrainDeclaration = HYDRO_FRAGMENT_SHADER.indexOf(
+    'vec3 terrainC = uTerrainColour', coastalMain,
+  );
+  const surfBranch = HYDRO_FRAGMENT_SHADER.indexOf('#ifdef HYDRO_SURF', coastalMain);
+  assert(coastalMain >= 0 && terrainDeclaration > coastalMain && terrainDeclaration < surfBranch,
+    'terrain colour is declared for both coastal surf and inland shader variants');
 
   const pond: HydroFeature = {
     id: 'osm:pond', source: 'osm', kind: 'pond', taggedLevelM: -84.7,
@@ -189,6 +197,31 @@ export function runHydroSelfTest(): void {
   const visibleDiagonal = diagonalWet.reduce((sum, wet) => sum + wet, 0);
   assert(reached === visibleDiagonal,
     `sub-texel diagonal mask is 4-connected (${reached}/${visibleDiagonal} texels)`);
+  let transition = -1;
+  for (let i = 0; i < diagonalWet.length; i++) {
+    const coverage = diagonalField.geometry[i * 4];
+    if (coverage > .02 && coverage < .98
+      && diagonalField.material[i * 4] === HYDRO_KIND_ID.stream) {
+      transition = i;
+      break;
+    }
+  }
+  assert(transition >= 0, 'diagonal stream retains a fractional shoreline texel');
+  if (transition >= 0) {
+    const ix = transition % diagonalField.width;
+    const iz = Math.floor(transition / diagonalField.width);
+    const x = diagonalField.bounds.minX
+      + (ix - diagonalField.gutter) / (diagonalField.resolution - 1)
+      * (diagonalField.bounds.maxX - diagonalField.bounds.minX);
+    const z = diagonalField.bounds.minZ
+      + (iz - diagonalField.gutter) / (diagonalField.resolution - 1)
+      * (diagonalField.bounds.maxZ - diagonalField.bounds.minZ);
+    const coverage = diagonalField.geometry[transition * 4];
+    assert(!!sampleFieldSurface(diagonalField, x, z, coverage - .01),
+      'CPU sampling admits a shoreline texel below its caller-owned cut');
+    assert(!sampleFieldSurface(diagonalField, x, z, coverage + .01),
+      'CPU sampling rejects the same shoreline texel above its caller-owned cut');
+  }
   if (diagonalField.structure) {
     const wet = diagonalWet.findIndex(Boolean);
     assert(Math.abs(diagonalField.structure[wet * 4 + 3] - 2) < 0.01,
