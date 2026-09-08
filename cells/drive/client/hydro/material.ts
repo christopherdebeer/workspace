@@ -156,6 +156,7 @@ export function createHydroMaterial(
     },
     vertexShader: HYDRO_VERTEX_SHADER,
     fragmentShader: HYDRO_FRAGMENT_SHADER,
+    extensions: { derivatives: true },
     uniforms: {
       // ── FOG UNIFORMS, OR THE FIRST RENDERED TILE THROWS ──
       //

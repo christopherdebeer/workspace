@@ -179,7 +179,10 @@ void main() {
   float swellA = sin(dot(vAbsoluteXZ, windDir) * k - uTime * omega);
   float swellB = sin(dot(vAbsoluteXZ, secondaryDir) * k * 1.62
     - uTime * omega * 1.14 + 1.7);
-  float swell = swellA * 0.74 + swellB * 0.26;
+  // A swell arrives in sets. The envelope travels more slowly than the
+  // crests and varies amplitude only, preserving continuous wave phase.
+  float waveSet = 0.82 + 0.18 * sin(dot(vAbsoluteXZ, windDir) * k * 0.23 - uTime * omega * 0.31);
+  float swell = (swellA * 0.74 + swellB * 0.26) * waveSet;
 
   // Shore-following geometry is also macro scale. The 5-30m crest structure
   // belongs in the analytic normal and foam response, not a 75m vertex grid.
@@ -234,9 +237,9 @@ void main() {
   // moderate weather and gale into variations of the same shallow sheet.
   float windSea = smoothstep(0.5, 15.0, speed);
   float standingState = clamp(energy * (0.50 + windSea * 0.75), 0.0, 1.0);
-  float standingAmplitude = mix(0.012, 0.72, pow(standingState, 1.60))
+  float standingAmplitude = mix(0.012, 1.05, pow(standingState, 1.60))
     * (1.0 + vShoal * 0.62) * postBreak;
-  float riverAmplitude = mix(0.006, 0.16, pow(energy, 1.35));
+  float riverAmplitude = mix(0.006, 0.21, pow(energy, 1.35));
   float amplitude = mix(standingAmplitude, riverAmplitude, vFlowing)
     * uWaveAmplitude;
 
@@ -474,7 +477,16 @@ void main() {
 
   vec2 wind = normalize(uWind.xy + vec2(0.00001, 0.0));
   vec2 flow = dynamics.xy;
-  vec3 normal = vec3(0.0, 1.0, 0.0);
+  vec3 macroNormal = vec3(0.0, 1.0, 0.0);
+  // The broad wave must tilt the light as well as the silhouette. Evaluate
+  // derivatives before per-fragment branches; fine ripples add to this slope.
+  // WebGL1 without derivatives retains the previous analytic fallback.
+#if __VERSION__ >= 300 || defined(GL_OES_standard_derivatives)
+  vec3 faceNormal = cross(dFdx(vRenderPosition), dFdy(vRenderPosition));
+  if (faceNormal.y < 0.0) faceNormal = -faceNormal;
+  macroNormal = normalize(faceNormal + vec3(0.0, 0.000001, 0.0));
+#endif
+  vec3 normal = macroNormal;
   if (nearWater) {
 #ifdef HYDRO_FLOWING
     vec2 gradient = vFlowing > 0.5
@@ -503,9 +515,25 @@ void main() {
 #else
     vec2 gradient = rippleGradient(vAbsoluteXZ, flow, wind, energy, seed);
 #endif
+    // Rain disturbs the NORMAL, rather than painting white noise onto water.
+    // Each world cell has one staggered ring; its radius dies before touching
+    // the cell edge, so no neighbouring-cell search is needed. Only near,
+    // relatively calm water resolves drops at this pixel scale.
+    if (uRain > 0.02 && camDist < 90.0) {
+      vec2 dropCell = floor(vAbsoluteXZ / 3.0);
+      vec2 dropP = fract(vAbsoluteXZ / 3.0) - 0.5;
+      float age = fract(uTime * 0.72 + hash21(dropCell));
+      float radius = length(dropP);
+      float ring = (radius - age * 0.42) * 38.0;
+      float envelope = exp(-ring * ring * 0.18) * sin(age * 3.14159265)
+        * (1.0 - smoothstep(0.35, 0.48, radius));
+      gradient += dropP / max(0.02, radius) * sin(ring) * envelope
+        * uRain * (1.0 - energy * 0.72) * (1.0 - smoothstep(30.0, 90.0, camDist)) * 0.16;
+    }
     gradient = clamp(gradient, vec2(-2.0), vec2(2.0))
       * (1.0 + vTurbulence * 0.62) * detailLod;
-    normal = normalize(vec3(-gradient.x, 1.0, -gradient.y));
+    vec2 macroSlope = macroNormal.xz / max(0.25, macroNormal.y);
+    normal = normalize(vec3(macroSlope.x - gradient.x, 1.0, macroSlope.y - gradient.y));
   }
 
   // ── ONE SHORE WETNESS SIGNAL ──
@@ -734,7 +762,12 @@ void main() {
     float crestPick = smoothstep(0.6, 0.92, vWaveCrest);
     float fragmentNoise = smoothstep(0.42, 0.72,
       valueNoise(vec2(across * 0.14 + seed * 7.0, downstream * 0.05 - uTime * 0.3)));
-    float breakerFoam = (1.0 - vFlowing) * vBreaker * crestPick * fragmentNoise;
+    // The crest breaks first; the spent wash remains briefly behind it.
+    // It shares the shore phase and depth gate, not a second shore mesh.
+    float spentWash = smoothstep(-0.75, 0.35, vShorePhase)
+      * (1.0 - smoothstep(0.35, 0.92, vShorePhase));
+    float breakerFoam = (1.0 - vFlowing) * vBreaker
+      * max(crestPick, spentWash * 0.42) * fragmentNoise;
     // ── SPILLING CRESTS, JUST SEAWARD OF THE BREAK ──
     // Shoaling steepens a crest before the depth band catches it; its top
     // whitens faintly as it comes in. Gated by the same fragment noise as
@@ -754,9 +787,8 @@ void main() {
       * lapPulse * (coastalKind ? 0.48 : 0.20);
     float whitecap = (1.0 - vFlowing) * smoothstep(9.5, 17.0, uWind.z)
       * energy * crestPick * fragmentNoise * 0.5;
-    float rainPocks = smoothstep(0.42, 0.9, valueNoise(vAbsoluteXZ * 0.72 - uTime * 1.8)) * uRain;
     float foam = clamp((lappingFoam + riverFoam + breakerFoam * 0.8 + spill
-      + whitecap + rainPocks * 0.14) * uFoamStrength, 0.0, 0.82) * foamLod;
+      + whitecap) * uFoamStrength, 0.0, 0.82) * foamLod;
     // Foam takes the scene's light too — white paint at midnight is a bug.
     vec3 foamColour = vec3(0.84, 0.9, 0.88) * mix(0.14, 1.0, daylight);
     colour = mix(colour, foamColour, foam);

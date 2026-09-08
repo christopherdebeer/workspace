@@ -4485,7 +4485,10 @@ ${DITHER_GLSL}
     uniform float uFogTop; uniform float uFogAmt; uniform vec3 uFogC; uniform float uFogDeck;
     float wxFogD(vec3 pw){
       vec4 wxs = texture2D(uWxTex, (pw.xz - uWxMin) * uWxInv);
-      float slab = wxs.b * smoothstep(uFogTop, uFogTop - 55.0, pw.y);
+      // Broad terrain-space pockets keep a fog bank from reading as a slab.
+      // The weather field owns its travel; this detail adds no ray samples.
+      float pockets = 1.0 + sin(pw.x * 0.007 + sin(pw.z * 0.004)) * 0.23;
+      float slab = wxs.b * (1.0 - smoothstep(uFogTop - 55.0, uFogTop, pw.y)) * pockets;
       float cbase = smoothstep(0.55, 0.85, wxs.r) * smoothstep(uFogDeck - 180.0, uFogDeck, pw.y);
       return slab + cbase * 0.85 + wxs.g * 0.20;
     }
@@ -4558,7 +4561,9 @@ ${DITHER_GLSL}
           + wxFogD(camPos + dir * (tf * 0.55))
           + wxFogD(camPos + dir * (tf * 0.9))) / 3.0;
         float fogF = (1.0 - exp(-tf * fd * 0.0075)) * uFogAmt;
-        col = mix(col, uFogC, min(fogF, 0.965));
+        // Mist receives the same broad solar tint as the distant air.
+        vec3 mistColour = mix(uFogC, hazeAt(dir, uHazeWarm), 0.24);
+        col = mix(col, mistColour, min(fogF, 0.965));
       }
       // Never hand a negative (or NaN) to pow(): one bad fragment upstream
       // must not be able to punch a black hole through the finished frame.
@@ -35768,7 +35773,8 @@ function tick(now: number): void {
     surf: surfKind, q: +surfQ.toFixed(2), kmh: +(state.speed * 3.6).toFixed(0) };
   audio.update(state.speed, throttle, surfKind, groundedF, wxL.rain, engRev, engGear, skid,
     surfKind === 'water' ? 0 : surfQ, wheelSlipL, windAmb,
-    engineSt === 'on' ? 1 : engineSt === 'crank' ? 0.35 : 0, chassisShake);
+    engineSt === 'on' ? 1 : engineSt === 'crank' ? 0.35 : 0,
+    dt > 0 && surfKind !== 'water' ? chassisShake : 0, wxL.wet);
   // The rig against the world: bodywork on a wall while moving, the hull's
   // wash through water, and the slap of arriving in it with any speed on.
   // The graze's floor rose from 0.4 to 0.55 of the mix: a lean along a rail

@@ -3759,6 +3759,38 @@ the right river is the seat's call, and there is now an instrument for the seat
 to say so with. Still on the review's list: a surface change has no edge, the
 birds do not know where they are, and there is no engine load.
 
+### The hydro polish rebase — another agent, on the cell, after the lab
+
+Pulled 8 September, after the sound lab shipped: `HYDRO-REBASE-2026-09-08.md`
+and `client/hydro-rebase-check.mjs` are its own note and check, and the
+note says it kept this branch's mixer whole ("superseded local terrain/drone
+voices were intentionally not applied"), which is the first time a pull of
+another agent's cell has come back already rebased on ours. It had deployed
+itself before the pull — the live bundle carried its strings.
+
+- **Water.** Swells arrive in SETS (a slow envelope on amplitude only, phase
+  continuous); the high-energy standing amplitude rises **0.72 → 1.05 m** and
+  the river's 0.16 → 0.21 before the existing shoaling gates; the lighting
+  follows the displaced mesh's slope through `dFdx/dFdy` (WebGL1 without
+  derivatives keeps the analytic normal); rain PERTURBS THE NORMAL within
+  90 m as one staggered ring per 3 m cell instead of painting white pocks;
+  a spent wash lingers behind a breaker on the shore phase. No geometry or
+  draw-count change; the per-fragment cost is unmeasured on a phone and the
+  bigger sea is a judgement the seat has not yet seen.
+- **Air.** Fog gets broad terrain-space pockets and the mist takes the haze's
+  solar tint; a descending-edge `smoothstep(uFogTop, uFogTop − 55, y)` —
+  undefined in GLSL — is rewritten as the ascending expression it meant.
+- **Sound.** `update()` takes `surfaceWet` beside `rainAmt`, so the wet-road
+  roar follows the weather field's stored wetness (a shower stops before the
+  road dries) while rain still drives the drops and the roof; the rattle is
+  gated to zero below 0.5 m/s in the mixer as well as in main.ts, and
+  main.ts hands it 0 while wading. No new nodes.
+
+Verified here: `tsc` clean, its check green, `boot.mjs` no page errors,
+`hazeAt`/`uHazeWarm`, `wxL.wet`, `vRenderPosition`, `hash21` and `camDist`
+all in scope where used, `extensions.derivatives` still a field on this
+three's ShaderMaterial. Not verified: how it looks, or what it costs.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where

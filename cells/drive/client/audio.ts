@@ -694,7 +694,7 @@ export function createAudio() {
      * surface being crossed.
      */
     update(speed: number, throttle: number, surf: AudioSurface, grounded: number, rainAmt = 0, rev = 0, gear = 0, slip = 0,
-      q = 1, spin = 0, ambWind = 0, engF = 1, shake = 0): void {
+      q = 1, spin = 0, ambWind = 0, engF = 1, shake = 0, surfaceWet = rainAmt): void {
       if (!live() || !ctx || !master) return;
       const t = ctx.currentTime, v = Math.abs(speed);
       // THE EVENT LEVELS FIRST, because the whole bed answers to them.
@@ -749,7 +749,9 @@ export function createAudio() {
       // surface coarsens, and gone altogether on open ground.
       const hard = surf === 'water' ? 0 : surf === 'road' || surf === 'track'
         ? clamp(q, 0, 1) : 0.08;
-      const wetRoad = clamp(rainAmt, 0, 1) * hard;
+      // A shower stops before the road dries. Use the weather field's stored
+      // wetness; rain remains the input to the drops and roof voices below.
+      const wetRoad = clamp(surfaceWet, 0, 1) * hard;
       roarFilt.frequency.setTargetAtTime(320 + hard * 830 + wetRoad * 850, t, 0.12);
       // IN DECIBELS: −31 dBFS at 100 km/h on dry tarmac; gravel is eight
       // decibels over that and lower, wet tarmac five over and brighter —
@@ -779,7 +781,7 @@ export function createAudio() {
       // in by the caller. The bed gets DENSER as well as louder, so rough
       // ground is the truck being shaken rather than more gravel. −28 dBFS
       // flat out, beside the grit and under the engine.
-      const sh = Math.pow(clamp(shake, 0, 1), 0.8);
+      const sh = Math.pow(clamp(shake, 0, 1), 0.8) * clamp(v / 0.5, 0, 1);
       rattleSrc.playbackRate.setTargetAtTime(0.7 + sh * 0.9, t, 0.15);
       rattleFilt.frequency.setTargetAtTime(1600 + sh * 1000, t, 0.2);
       rattleGain.gain.setTargetAtTime(lvl(UNIT.rattle, TARGETS.rattle) * sh * grounded * duck * m('rattle'), t, 0.08);
