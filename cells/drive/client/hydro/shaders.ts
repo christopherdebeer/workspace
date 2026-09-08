@@ -394,7 +394,10 @@ vec3 palette(float kind, float depth, float turbidity, vec3 terrainC) {
   deep = mix(deep, vec3(0.13, 0.12, 0.08), turbidity * 0.32);
   shallow = mix(shallow, terrainC * mix(0.92, 1.12, turbidity), groundAffinity);
   deep = mix(deep, terrainC * 0.58, groundAffinity * 0.42);
-  float attenuation = 1.0 - exp(-max(depth, 0.0) * mix(0.5, 0.16, turbidity));
+  // Fresh water eats light faster than 0.5 a metre: at that constant a
+  // river 1.3 m deep sat halfway to its deep colour and read from above as
+  // a pale sage sandbar against dry grassland. Silt shortens the path.
+  float attenuation = 1.0 - exp(-max(depth, 0.0) * mix(0.85, 0.30, turbidity));
   return mix(shallow, deep, clamp(attenuation, 0.0, 1.0));
 }
 
@@ -729,7 +732,13 @@ void main() {
   float offshore = smoothstep(15.0, 70.0, shoreDist) * (1.0 - vFlowing);
   float visualDepth = mix(min(geometryField.a, 14.0),
     min(3.0 + shoreDist * 0.022, 14.0), offshore);
-  vec3 colour = palette(kind, visualDepth, turbidity, terrainC);
+  // LOOKING DOWN, YOU LOOK DEEPER. From the bank the eye skims the surface
+  // and the column it sees into is short; from straight above (the chart)
+  // it is the whole depth twice. The palette's depth scales with the view's
+  // overhead component, so the same river is its deep colour from the air
+  // and its shallow colour from the seat.
+  float overhead = clamp(normalize(cameraPosition - vRenderPosition).y, 0.0, 1.0);
+  vec3 colour = palette(kind, visualDepth * (1.0 + 0.9 * overhead), turbidity, terrainC);
 
   // ── THE SHALLOW WATER HAS A FLOOR ──
   //
@@ -792,6 +801,15 @@ void main() {
         cobble * mix(0.24, 0.12, turbidity));
       bedColour = mix(bedColour, cobbleColour * 0.82,
         bedStone * mix(0.46, 0.22, turbidity));
+      // THE BED IS SEEN THROUGH THE WATER, NOT BESIDE IT. The bed's colour
+      // was mixed in as painted — dry sand at any depth it was visible at —
+      // so a river a metre and a half deep read from above as a cream
+      // sandbar, which is what the seat saw at the Senqu. Light to the bed
+      // and back crosses the column twice, and water eats red long before
+      // green and blue: at 1.3 m the bed keeps half its red and three
+      // quarters of its blue and goes the dark olive a real riverbed is.
+      // Silt shortens the path further.
+      bedColour *= exp(-vec3(0.62, 0.30, 0.20) * geometryField.a * (1.0 + turbidity * 2.5));
       colour = mix(colour, bedColour,
         clamp(bedVisibility * mix(0.84, 0.52, turbidity), 0.0, 0.86));
     }

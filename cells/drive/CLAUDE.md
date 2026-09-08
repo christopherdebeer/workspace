@@ -3912,6 +3912,32 @@ Verified: `tsc` clean, hydro and inland-water tests green, the agent's check
 green, `boot.mjs` no page or GLSL errors, the field's depth at six probe
 texels, the pixel readings above. Not verified by eye at the bank.
 
+**THE SEAT'S FRAME SETTLED IT.** A screenshot from the phone at the same spot
+(09:00, haze, 60 fps) showed the band at 35–40 m — the truck for scale — and
+its edge stepped at the hydro field's own 18.75 m texel. The relay reached
+the live upstreams on a second try (four minutes; `__coverwater` reads the
+same two class-80 pixels the capture has, `WATER 0%` within 700 m), so the
+band IS the hydro river, the OSM line as a ribbon, drawn cream — not cover
+paint, and the fixture was faithful after all; the "cover body" the previous
+paragraph reaches for does not exist here. Then the pixels, sampled from the
+harness frame against ground at (109,109,91):
+
+| river pixel | before | depth floor + calm | bed through water | + attenuation, overhead |
+|---|---|---|---|---|
+| mid-band | (154,154,137) | (137,137,120) | (120,137,120) | (103,120,103) |
+| bend | (164,182,146) | (146,164,128) | (146,164,146) | (128,146,109) |
+
+Three more terms, each honest physics the shader had skipped: **the bed is
+seen through the water** (its colour now crosses the column twice, red eaten
+first — a 1.3 m riverbed goes dark olive instead of dry sand); **fresh water
+attenuates at 0.85 a metre, not 0.5** (silt shortens it further); and
+**looking down, you look deeper** — the palette's depth scales with the
+view's overhead component, so the chart sees the deep colour and the seat at
+the bank keeps the shallow one. From above the river is now a sage band at
+the ground's own luminance, greener and bluer than it; from the bank it is
+the pale sky-reflecting sheet it was. Judgement, not anchors: the seat's
+next frame is the verification.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where
