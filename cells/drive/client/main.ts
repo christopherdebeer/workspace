@@ -11540,171 +11540,371 @@ let graphCache: { g: Map<string, GraphNode>; key: string; x: number; z: number }
  *  a kilometre changes the 85th percentile hardly at all, and the solve is
  *  throttled to 2.5s anyway. */
 const GRAPH_MOVE = 250;
+/**
+ * ── THE SOLVE IS SLICED ──
+ *
+ * Measured on the Chapman's Peak run from the seat: ninety-nine solves in
+ * eight minutes, 141 ms each on average and 405 at worst, every one of them
+ * a frozen frame, and the top phase in fifty-one of the run's slow frames.
+ * The graph was cached and the walk was bounded, and it was still a stall,
+ * because "cheap for a solve" and "cheap for a frame" are different budgets:
+ * a solve is allowed a hundred milliseconds; a frame at forty a second has
+ * twenty-five for everything.
+ *
+ * So the solve is a JOB that runs in slices. The graph build (the survey's
+ * segments, the coarse tier past the handover, the portals across it) and
+ * the Dijkstra walk are each resumable: the job holds the iterator, the
+ * heap, the frontier, and `routeJobStep` runs it until a few milliseconds of
+ * the frame are spent, then hands the frame back. The route the truck is
+ * driving stays in force until the new one lands whole — a plan half-built
+ * is not a plan — and the graph it built is cached for the next job exactly
+ * as before. `solveGoalRoute` is the same job run to completion in one call,
+ * for the probe and the bench.
+ */
+const ROUTE_SLICE_MS = 3;
+interface RouteJob {
+  key: string; name: string; gx: number; gz: number;
+  /** Where the truck stood when the job began — the graph's handover frame. */
+  sx: number; sz: number;
+  phase: 'fine' | 'coarse' | 'portals' | 'walk' | 'done';
+  g: Map<string, GraphNode>; hash: Map<string, string[]>; seen: Set<Seg>; next: number;
+  cellIt: Iterator<Seg[]> | null; cell: Seg[] | null; si: number;
+  fineN: number; inner: number; budget: number; coarse: string[];
+  wayIt: Iterator<OvWay[]> | null; list: OvWay[] | null; wi: number; pi: number; pk: string | null;
+  chash: Map<string, string[]> | null; nodeIt: Iterator<[string, GraphNode]> | null; made: number;
+  walkOn: boolean; from: string | null; dist: Map<string, number>; prev: Map<string, string>;
+  done: Set<string>; heap: MinHeap; bestId: string | null; bestScore: number; bestGap: number;
+  cpuMs: number; graphMs: number; slices: number; maxSliceMs: number; startedAt: number; fromCache: boolean;
+}
+let routeJob: RouteJob | null = null;
+/** The node at this end, matched against one already placed or created. */
+function jobNode(j: RouteJob, x: number, z: number, y: number, coarse = false): string {
+  const cx = Math.floor(x / NODE_CELL), cz = Math.floor(z / NODE_CELL);
+  for (let ax = cx - 1; ax <= cx + 1; ax++) {
+    for (let az = cz - 1; az <= cz + 1; az++) {
+      for (const id of j.hash.get(`${ax},${az}`) ?? []) {
+        const n = j.g.get(id) as GraphNode;
+        // ACROSS THE TIERS TOO. When a coarse end really does land on a
+        // surveyed one it is the same junction and joining it is free and
+        // exact; the portals below exist for the ordinary case where the
+        // simplification has moved it a hundred metres.
+        if (Math.hypot(n.x - x, n.z - z) <= NODE_SNAP && Math.abs(n.y - y) <= NODE_DY) return id;
+      }
+    }
+  }
+  const id = `n${j.next++}`;
+  j.g.set(id, { x, z, y, c: coarse, to: [] });
+  const k = `${cx},${cz}`;
+  const arr = j.hash.get(k);
+  if (arr) arr.push(id); else j.hash.set(k, [id]);
+  return id;
+}
+function routeJobStart(): RouteJob {
+  // The graph probes (`__farnode`, `__ovroads`) build a graph with no goal
+  // set; the walk is never run for them, so the goal fields are inert.
+  const gl = goal ?? { name: '', x: 0, z: 0 };
+  const key = `${osmDone.size}|${ovWayV}`;
+  const c = graphCache;
+  const cached = !!c && c.key === key && Math.hypot(c.x - state.x, c.z - state.z) < GRAPH_MOVE;
+  if (cached) graphStat.cached = (graphStat.cached ?? 0) + 1;
+  return {
+    key: `${gl.name}|${osmDone.size}|${ovWayV}`, name: gl.name, gx: gl.x, gz: gl.z,
+    sx: state.x, sz: state.z,
+    phase: cached ? 'walk' : 'fine',
+    g: cached ? (c as { g: Map<string, GraphNode> }).g : new Map(), hash: new Map(), seen: new Set(), next: 0,
+    cellIt: null, cell: null, si: 0,
+    fineN: 0, inner: Infinity, budget: Infinity, coarse: [],
+    wayIt: null, list: null, wi: 0, pi: 0, pk: null,
+    chash: null, nodeIt: null, made: 0,
+    walkOn: false, from: null, dist: new Map(), prev: new Map(), done: new Set(), heap: new MinHeap(),
+    bestId: null, bestScore: Infinity, bestGap: Infinity,
+    cpuMs: 0, graphMs: 0, slices: 0, maxSliceMs: 0, startedAt: performance.now(), fromCache: cached,
+  };
+}
+/** The fine survey: every drivable segment in the road grid, one node per
+ *  matched end. Iterated live — a cell that gains segments after the
+ *  iterator has passed it is the next solve's business. */
+function jobFine(j: RouteJob, deadline: number): boolean {
+  if (!j.cellIt) j.cellIt = roadGrid.values();
+  let n = 0;
+  for (;;) {
+    if (!j.cell) { const r = j.cellIt.next(); if (r.done) return true; j.cell = r.value; j.si = 0; }
+    while (j.si < j.cell.length) {
+      const sg = j.cell[j.si++];
+      if (j.seen.has(sg) || sg.ya === undefined) continue;   // a wall is not a road
+      j.seen.add(sg);
+      const len = Math.hypot(sg.bx - sg.ax, sg.bz - sg.az);
+      if (len < 0.05) continue;
+      const ak = jobNode(j, sg.ax, sg.az, sg.ya ?? 0), bk = jobNode(j, sg.bx, sg.bz, sg.yb ?? sg.ya ?? 0);
+      if (ak === bk) continue;
+      const cost = len * (1 + (GOAL_NARROW - 1) * clamp((5 - sg.hw) / 4, 0, 1));
+      (j.g.get(ak) as GraphNode).to.push({ id: bk, cost });
+      (j.g.get(bk) as GraphNode).to.push({ id: ak, cost });
+      if ((++n & 63) === 0 && performance.now() > deadline) return false;
+    }
+    j.cell = null;
+  }
+}
+/** WHERE THE SURVEY ENDS IS A FACT, NOT A BUDGET. The handover was
+ *  `osmRingR * 0.8` — the radius the tile queue is WILLING to stream to — and
+ *  the roads it has actually got are another matter entirely. Measured: a
+ *  budget of 1541m over a surveyed network that petered out around 400m, so
+ *  the coarse tier began a kilometre beyond anything it could be joined to,
+ *  floated unreachable, and a 26km goal solved to a 380m route that was
+ *  25.7km short. That is not a rare case: it is every session's first minute,
+ *  and every sparsely mapped corner of the world.
+ *
+ *  So the handover follows the data and comes in to meet it. The 85th
+ *  percentile rather than the farthest node, because a single motorway spur
+ *  streamed along the corridor reaches much further than the coverage does
+ *  and would drag the handover out behind it. Where the survey is healthy
+ *  this lands on the budget and nothing changes; where it is thin the coarse
+ *  map arrives closer, which is the right way round — the less you know
+ *  finely, the sooner you should be reading the chart.
+ *
+ *  AND NO FLOOR UNDER IT. A floor was the obvious guard — do not put the
+ *  chart's roads under the wheels in a world that has streamed almost
+ *  nothing — and it broke the one property that makes this work. The edge
+ *  is a PERCENTILE, so fifteen per cent of the surveyed nodes lie beyond it
+ *  by construction and there is always something to portal from. A fixed
+ *  250m does not: measured on a network whose whole extent was inside that,
+ *  it put the handover past every node in the graph, left nothing on the
+ *  survey side of it, and made zero portals for the third run running. The
+ *  percentile is its own floor — a network three kilometres across puts the
+ *  edge at two and a half, not at a hundred metres — and where the survey
+ *  really is only a car park, the chart's roads are better than nothing.
+ *
+ *  The percentile comes off a ten-metre histogram, not a sort: sorting fifty
+ *  thousand distances is a ten-millisecond slice on a phone by itself. */
+function jobHandover(j: RouteJob): void {
+  j.fineN = j.g.size;
+  j.budget = osmRingR * OV_ROUTE_IN;
+  j.inner = j.budget;
+  if (Number.isFinite(j.budget) && j.fineN > 8) {
+    const BIN = 10, NB = 1024;
+    const hist = new Uint32Array(NB);
+    for (const n of j.g.values()) hist[Math.min(NB - 1, (Math.hypot(n.x - osmCarX, n.z - osmCarZ) / BIN) | 0)]++;
+    let acc = 0, edge = NB * BIN;
+    for (let b = 0; b < NB; b++) { acc += hist[b]; if (acc >= j.fineN * 0.85) { edge = (b + 1) * BIN; break; } }
+    j.inner = Math.min(j.budget, edge);
+  }
+}
+/** The coarse tier, and only where the fine one has given out. */
+function jobCoarse(j: RouteJob, deadline: number): boolean {
+  if (!Number.isFinite(j.inner)) return true;
+  if (!j.wayIt) j.wayIt = ovWays.values();
+  let n = 0;
+  for (;;) {
+    if (!j.list) { const r = j.wayIt.next(); if (r.done) return true; j.list = r.value; j.wi = 0; j.pi = 0; j.pk = null; }
+    while (j.wi < j.list.length) {
+      const w = j.list[j.wi];
+      const narrow = 1 + (GOAL_NARROW - 1) * clamp((5 - w.hw) / 4, 0, 1);
+      while (j.pi < w.pts.length) {
+        const [px, pz] = w.pts[j.pi++];
+        // Segment by segment against the handover, not way by way: a trunk
+        // road running from under the truck to the horizon belongs to the
+        // coarse graph for its far half and to the survey for its near one.
+        const out = Math.hypot(px - osmCarX, pz - osmCarZ) > j.inner;
+        if (!out) { j.pk = null; continue; }
+        const k = jobNode(j, px, pz, 0, true);
+        if (j.g.get(k)?.c) j.coarse.push(k);
+        if (j.pk && j.pk !== k) {
+          const q = j.g.get(j.pk) as GraphNode, nd = j.g.get(k) as GraphNode;
+          const cost = Math.hypot(nd.x - q.x, nd.z - q.z) * narrow * OV_COARSE_K;
+          if (cost > 0) { q.to.push({ id: k, cost }); nd.to.push({ id: j.pk, cost }); }
+        }
+        j.pk = k;
+        if ((++n & 63) === 0 && performance.now() > deadline) return false;
+      }
+      j.wi++; j.pi = 0; j.pk = null;
+    }
+    j.list = null;
+  }
+}
+/** ── the portals, built FROM THE SURVEY'S EDGE ──
+ *
+ *  The first cut walked the coarse nodes looking for a fine one nearby and
+ *  made none. Two things wrong with that. It scanned the shared 4m hash, so
+ *  a 420m reach is a 105-cell span and a hundred thousand lookups a node.
+ *  And the question was the wrong way round: what has to be joined is the
+ *  place the SURVEY runs out. Every fine node past the handover is a road
+ *  that, as far as the graph is concerned, ends in the middle of nowhere,
+ *  and each of those is exactly one portal's worth of question — where does
+ *  the coarse network pick this up? There are far fewer of them, and asking
+ *  from that side puts the join on the boundary rather than wherever the
+ *  two tiers happened to sample near each other. */
+function jobPortals(j: RouteJob, deadline: number): boolean {
+  if (!Number.isFinite(j.inner)) {
+    graphStat = { fine: j.fineN, coarse: 0, portals: 0, inner: 0, budget: 0, cached: graphStat.cached };
+    return true;
+  }
+  const cellR = Math.max(NODE_CELL, PORTAL_R / 2);
+  if (!j.chash) {
+    j.chash = new Map();
+    for (const ck of j.coarse) {
+      const n = j.g.get(ck) as GraphNode;
+      const k = `${Math.floor(n.x / cellR)},${Math.floor(n.z / cellR)}`;
+      const arr = j.chash.get(k);
+      if (arr) arr.push(ck); else j.chash.set(k, [ck]);
+    }
+    j.nodeIt = j.g.entries();
+  }
+  const it = j.nodeIt as Iterator<[string, GraphNode]>;
+  let n = 0;
+  while (j.made < PORTAL_MAX) {
+    // The budget is checked BEFORE the next node is drawn from the iterator:
+    // a node pulled and then abandoned for the frame would never be seen
+    // again, and the portal it might have made would be missing.
+    if ((++n & 255) === 0 && performance.now() > deadline) return false;
+    const r = it.next();
+    if (r.done) break;
+    const [fk, f] = r.value;
+    if (f.c) continue;
+    // Inside the handover the survey IS the map, and a portal there would let
+    // the router leave a road it can see for a smoothed line it cannot.
+    if (Math.hypot(f.x - osmCarX, f.z - osmCarZ) < j.inner) continue;
+    if (f.to.some((e) => (j.g.get(e.id) as GraphNode).c)) continue;    // already joined
+    let best: string | null = null, bd = PORTAL_R * PORTAL_R;
+    const cx = Math.floor(f.x / cellR), cz = Math.floor(f.z / cellR);
+    for (let ax = cx - 1; ax <= cx + 1; ax++) {
+      for (let az = cz - 1; az <= cz + 1; az++) {
+        for (const id of j.chash.get(`${ax},${az}`) ?? []) {
+          const nd = j.g.get(id) as GraphNode;
+          const d = (nd.x - f.x) ** 2 + (nd.z - f.z) ** 2;
+          if (d < bd) { bd = d; best = id; }
+        }
+      }
+    }
+    if (!best) continue;
+    const c = j.g.get(best) as GraphNode;
+    const cost = Math.sqrt(bd) * PORTAL_K;
+    f.to.push({ id: best, cost }); c.to.push({ id: fk, cost });
+    j.made++;
+  }
+  graphStat = { fine: j.fineN, coarse: j.g.size - j.fineN, portals: j.made,
+    inner: Math.round(j.inner), budget: Math.round(j.budget), cached: graphStat.cached };
+  return true;
+}
+/** ── AS CLOSE AS THE ROADS GET ──
+ *
+ *  Most places worth driving to are not ON the network. A trig point is up a
+ *  hillside, a lake's name sits in the middle of the water, a fix is dropped
+ *  wherever the thumb landed, and while the world streams even a town's pin
+ *  can be a kilometre from the nearest loaded road. Demanding a node within
+ *  some radius of the goal makes all of those unroutable, which is the same
+ *  failure as having no router at all.
+ *
+ *  So there is no target: the walk settles the whole reachable component
+ *  (bounded) and the best node is the one that gets CLOSEST to the goal,
+ *  with a light penalty on the drive itself so a hundred metres of gain is
+ *  not bought with ten kilometres of road. The last stretch is the driver's
+ *  — which is honest, because it is not a road.
+ *
+ *  ── AND IT STOPS WHEN NOTHING FURTHER CAN WIN ──
+ *
+ *  "Settle the whole reachable component" was affordable while the component
+ *  was a five-kilometre ring. With thirty kilometres of trunk road behind it
+ *  that is tens of thousands of nodes for every solve, and it is what put a
+ *  1237ms worst case on the device.
+ *
+ *  The bound is exact rather than a heuristic, and it has to be: the walk's
+ *  whole contract is that it finds the CLOSEST the roads get, so a prune that
+ *  can drop the winner is a wrong answer, not a slower one.
+ *
+ *  The score is `gap + cost·DETOUR`. Dijkstra pops in increasing cost, so
+ *  every node still unsettled has cost at least the popped node's c; and no
+ *  gap is ever negative. So no unsettled node can score below `c·DETOUR`, and
+ *  once that floor reaches the best score found the frontier holds nothing
+ *  that can win.
+ *
+ *  (The tempting tighter form — `DETOUR·(c + g)`, on the grounds that
+ *  reaching the goal from here costs at least g more — is NOT sound: the next
+ *  node need not lie beyond this one, and may sit on another branch already
+ *  nearer the goal. This one is weaker and true.)
+ *
+ *  It tightens as the answer improves, and it tightens where the waste was.
+ *  Twenty-six kilometres out with the goal still unreached the floor is far
+ *  below the best score and nothing is pruned; the moment a node lands 225m
+ *  from the goal, the floor is 1560 against a best of 1785 and four more
+ *  kilometres of driving is all that is left to explore. */
+function jobWalk(j: RouteJob, deadline: number): boolean {
+  if (!j.walkOn) {
+    j.walkOn = true;
+    // THE TRUCK STARTS ON THE SURVEY. Its nearest node has to be a fine one:
+    // beginning a route on a simplified line would hand the autopilot a first
+    // leg that is nowhere near the road it is actually standing on. And it is
+    // where the truck is NOW, not where it stood when the job began — a slow
+    // job lands on a truck that has driven on.
+    j.from = nearestNode(j.g, state.x, state.z, 120, true);
+    if (!j.from) return true;
+    j.dist.set(j.from, 0);
+    j.heap.push(0, j.from);
+  }
+  let n = 0;
+  while (j.heap.size && j.done.size < GOAL_MAX_NODES) {
+    const top = j.heap.pop() as { cost: number; id: string };
+    if (j.done.has(top.id)) continue;
+    j.done.add(top.id);
+    const nd = j.g.get(top.id);
+    if (!nd) continue;
+    const gap = Math.hypot(nd.x - j.gx, nd.z - j.gz);
+    const score = gap + top.cost * GOAL_DETOUR;
+    if (score < j.bestScore) { j.bestScore = score; j.bestId = top.id; j.bestGap = gap; }
+    if (top.cost * GOAL_DETOUR >= j.bestScore) break;
+    // Standing on it: nothing further can be closer.
+    if (gap < 4) break;
+    for (const e of nd.to) {
+      if (j.done.has(e.id)) continue;
+      const d2 = top.cost + e.cost;
+      if (d2 < (j.dist.get(e.id) ?? Infinity)) {
+        j.dist.set(e.id, d2); j.prev.set(e.id, top.id); j.heap.push(d2, e.id);
+      }
+    }
+    if ((++n & 127) === 0 && performance.now() > deadline) return false;
+  }
+  return true;
+}
+/** Run the job until the budget is spent or it is done. */
+function routeJobStep(j: RouteJob, budgetMs: number): void {
+  const t0 = performance.now();
+  const deadline = t0 + budgetMs;
+  j.slices++;
+  for (;;) {
+    if (j.phase === 'fine') {
+      if (!jobFine(j, deadline)) break;
+      jobHandover(j);
+      j.phase = 'coarse';
+    } else if (j.phase === 'coarse') {
+      if (!jobCoarse(j, deadline)) break;
+      j.phase = 'portals';
+    } else if (j.phase === 'portals') {
+      if (!jobPortals(j, deadline)) break;
+      graphCache = { g: j.g, key: `${osmDone.size}|${ovWayV}`, x: j.sx, z: j.sz };
+      j.graphMs = j.cpuMs + (performance.now() - t0);
+      j.phase = 'walk';
+    } else if (j.phase === 'walk') {
+      if (!jobWalk(j, deadline)) break;
+      j.phase = 'done';
+    } else break;
+  }
+  const ms = performance.now() - t0;
+  j.cpuMs += ms;
+  if (ms > j.maxSliceMs) j.maxSliceMs = ms;
+}
+/** The graph the last solve walked — for the probe and the harness. */
 function roadGraph(): Map<string, GraphNode> {
   const key = `${osmDone.size}|${ovWayV}`;
   const c = graphCache;
-  if (c && c.key === key && Math.hypot(c.x - state.x, c.z - state.z) < GRAPH_MOVE) {
-    graphStat.cached = (graphStat.cached ?? 0) + 1;
-    return c.g;
+  if (c && c.key === key && Math.hypot(c.x - state.x, c.z - state.z) < GRAPH_MOVE) return c.g;
+  const j = routeJobStart();
+  for (;;) {
+    if (j.phase === 'fine') { jobFine(j, Infinity); jobHandover(j); j.phase = 'coarse'; }
+    else if (j.phase === 'coarse') { jobCoarse(j, Infinity); j.phase = 'portals'; }
+    else if (j.phase === 'portals') { jobPortals(j, Infinity); break; }
+    else break;
   }
-  const built = buildRoadGraph();
-  graphCache = { g: built, key, x: state.x, z: state.z };
-  return built;
-}
-/** The carriageway as a graph — the fine survey, plus the coarse network
- *  beyond it, joined by portals across the handover. */
-function buildRoadGraph(): Map<string, GraphNode> {
-  const g = new Map<string, GraphNode>();
-  const hash = new Map<string, string[]>();      // 4m cell -> node ids
-  const seen = new Set<Seg>();
-  let next = 0;
-  /** The node at this end, matched against one already placed or created. */
-  const node = (x: number, z: number, y: number, coarse = false): string => {
-    const cx = Math.floor(x / NODE_CELL), cz = Math.floor(z / NODE_CELL);
-    for (let ax = cx - 1; ax <= cx + 1; ax++) {
-      for (let az = cz - 1; az <= cz + 1; az++) {
-        for (const id of hash.get(`${ax},${az}`) ?? []) {
-          const n = g.get(id) as GraphNode;
-          // ACROSS THE TIERS TOO. When a coarse end really does land on a
-          // surveyed one it is the same junction and joining it is free and
-          // exact; the portals below exist for the ordinary case where the
-          // simplification has moved it a hundred metres.
-          if (Math.hypot(n.x - x, n.z - z) <= NODE_SNAP && Math.abs(n.y - y) <= NODE_DY) return id;
-        }
-      }
-    }
-    const id = `n${next++}`;
-    g.set(id, { x, z, y, c: coarse, to: [] });
-    const k = `${cx},${cz}`;
-    const arr = hash.get(k);
-    if (arr) arr.push(id); else hash.set(k, [id]);
-    return id;
-  };
-  for (const cell of roadGrid.values()) {
-    for (const sg of cell) {
-      if (seen.has(sg) || sg.ya === undefined) continue;   // a wall is not a road
-      seen.add(sg);
-      const len = Math.hypot(sg.bx - sg.ax, sg.bz - sg.az);
-      if (len < 0.05) continue;
-      const ak = node(sg.ax, sg.az, sg.ya ?? 0), bk = node(sg.bx, sg.bz, sg.yb ?? sg.ya ?? 0);
-      if (ak === bk) continue;
-      const cost = len * (1 + (GOAL_NARROW - 1) * clamp((5 - sg.hw) / 4, 0, 1));
-      (g.get(ak) as GraphNode).to.push({ id: bk, cost });
-      (g.get(bk) as GraphNode).to.push({ id: ak, cost });
-    }
-  }
-  // ── the coarse tier, and only where the fine one has given out ──
-  //
-  // WHERE THE SURVEY ENDS IS A FACT, NOT A BUDGET. The handover was
-  // `osmRingR * 0.8` — the radius the tile queue is WILLING to stream to — and
-  // the roads it has actually got are another matter entirely. Measured: a
-  // budget of 1541m over a surveyed network that petered out around 400m, so
-  // the coarse tier began a kilometre beyond anything it could be joined to,
-  // floated unreachable, and a 26km goal solved to a 380m route that was
-  // 25.7km short. That is not a rare case: it is every session's first minute,
-  // and every sparsely mapped corner of the world.
-  //
-  // So the handover follows the data and comes in to meet it. The 85th
-  // percentile rather than the farthest node, because a single motorway spur
-  // streamed along the corridor reaches much further than the coverage does
-  // and would drag the handover out behind it. Where the survey is healthy
-  // this lands on the budget and nothing changes; where it is thin the coarse
-  // map arrives closer, which is the right way round — the less you know
-  // finely, the sooner you should be reading the chart.
-  const fineN = g.size;
-  const budget = osmRingR * OV_ROUTE_IN;
-  let inner = budget;
-  if (Number.isFinite(budget) && fineN > 8) {
-    const ds: number[] = [];
-    for (const n of g.values()) ds.push(Math.hypot(n.x - osmCarX, n.z - osmCarZ));
-    ds.sort((a, b) => a - b);
-    const edge = ds[Math.min(ds.length - 1, Math.floor(ds.length * 0.85))];
-    // AND NO FLOOR UNDER IT. A floor was the obvious guard — do not put the
-    // chart's roads under the wheels in a world that has streamed almost
-    // nothing — and it broke the one property that makes this work. The edge
-    // is a PERCENTILE, so fifteen per cent of the surveyed nodes lie beyond it
-    // by construction and there is always something to portal from. A fixed
-    // 250m does not: measured on a network whose whole extent was inside that,
-    // it put the handover past every node in the graph, left nothing on the
-    // survey side of it, and made zero portals for the third run running. The
-    // percentile is its own floor — a network three kilometres across puts the
-    // edge at two and a half, not at a hundred metres — and where the survey
-    // really is only a car park, the chart's roads are better than nothing.
-    inner = Math.min(budget, edge);
-  }
-  const coarse: string[] = [];
-  if (Number.isFinite(inner)) {
-    for (const list of ovWays.values()) {
-      for (const w of list) {
-        const narrow = 1 + (GOAL_NARROW - 1) * clamp((5 - w.hw) / 4, 0, 1);
-        let pk: string | null = null;
-        for (let i = 0; i < w.pts.length; i++) {
-          const [px, pz] = w.pts[i];
-          // Segment by segment against the handover, not way by way: a trunk
-          // road running from under the truck to the horizon belongs to the
-          // coarse graph for its far half and to the survey for its near one.
-          const out = Math.hypot(px - osmCarX, pz - osmCarZ) > inner;
-          if (!out) { pk = null; continue; }
-          const k = node(px, pz, 0, true);
-          if (g.get(k)?.c) coarse.push(k);
-          if (pk && pk !== k) {
-            const q = g.get(pk) as GraphNode, n = g.get(k) as GraphNode;
-            const cost = Math.hypot(n.x - q.x, n.z - q.z) * narrow * OV_COARSE_K;
-            if (cost > 0) { q.to.push({ id: k, cost }); n.to.push({ id: pk, cost }); }
-          }
-          pk = k;
-        }
-      }
-    }
-    // ── the portals, built FROM THE SURVEY'S EDGE ──
-    //
-    // The first cut walked the coarse nodes looking for a fine one nearby and
-    // made none. Two things wrong with that. It scanned the shared 4m hash, so
-    // a 420m reach is a 105-cell span and a hundred thousand lookups a node.
-    // And the question was the wrong way round: what has to be joined is the
-    // place the SURVEY runs out. Every fine node past the handover is a road
-    // that, as far as the graph is concerned, ends in the middle of nowhere,
-    // and each of those is exactly one portal's worth of question — where does
-    // the coarse network pick this up? There are far fewer of them, and asking
-    // from that side puts the join on the boundary rather than wherever the
-    // two tiers happened to sample near each other.
-    const cellR = Math.max(NODE_CELL, PORTAL_R / 2);
-    const chash = new Map<string, string[]>();
-    for (const ck of coarse) {
-      const n = g.get(ck) as GraphNode;
-      const k = `${Math.floor(n.x / cellR)},${Math.floor(n.z / cellR)}`;
-      const arr = chash.get(k);
-      if (arr) arr.push(ck); else chash.set(k, [ck]);
-    }
-    let made = 0;
-    for (const [fk, f] of g) {
-      if (made >= PORTAL_MAX) break;
-      if (f.c) continue;
-      // Inside the handover the survey IS the map, and a portal there would let
-      // the router leave a road it can see for a smoothed line it cannot.
-      if (Math.hypot(f.x - osmCarX, f.z - osmCarZ) < inner) continue;
-      if (f.to.some((e) => (g.get(e.id) as GraphNode).c)) continue;    // already joined
-      let best: string | null = null, bd = PORTAL_R * PORTAL_R;
-      const cx = Math.floor(f.x / cellR), cz = Math.floor(f.z / cellR);
-      for (let ax = cx - 1; ax <= cx + 1; ax++) {
-        for (let az = cz - 1; az <= cz + 1; az++) {
-          for (const id of chash.get(`${ax},${az}`) ?? []) {
-            const n = g.get(id) as GraphNode;
-            const d = (n.x - f.x) ** 2 + (n.z - f.z) ** 2;
-            if (d < bd) { bd = d; best = id; }
-          }
-        }
-      }
-      if (!best) continue;
-      const c = g.get(best) as GraphNode;
-      const cost = Math.sqrt(bd) * PORTAL_K;
-      f.to.push({ id: best, cost }); c.to.push({ id: fk, cost });
-      made++;
-    }
-    graphStat = { fine: fineN, coarse: g.size - fineN, portals: made,
-      inner: Math.round(inner), budget: Math.round(budget) };
-  } else graphStat = { fine: fineN, coarse: 0, portals: 0, inner: 0, budget: 0 };
-  return g;
+  graphCache = { g: j.g, key, x: state.x, z: state.z };
+  return j.g;
 }
 /** What the last graph was made of — read by __route. `inner` is where the
  *  handover actually fell and `budget` where the tile queue would have put it;
@@ -11733,117 +11933,101 @@ let goalSolveFor = '';
 /** `graphMs` against `ms` is the question the device telemetry asked and this
  *  could not answer: whether a half-second solve was the graph being rebuilt
  *  or the walk being unbounded. `walked` is how many nodes the walk actually
- *  settled, which is the other half of it. */
-const goalSolveStat = { runs: 0, ms: 0, graphMs: 0, walked: 0, nodes: 0, found: 0, failed: 0, last: '' };
-function solveGoalRoute(): void {
-  if (!goal) { goalRoute = null; goalSolveFor = ''; return; }
-  const t0 = performance.now();
+ *  settled, which is the other half of it. The totals, the slices and the
+ *  tile books are what the telemetry dump prints, so the next paste from a
+ *  device attributes the solver in one line. */
+const goalSolveStat = { runs: 0, ms: 0, graphMs: 0, walked: 0, nodes: 0, found: 0, failed: 0, last: '',
+  totalMs: 0, graphTotalMs: 0, maxMs: 0, slices: 0, maxSliceMs: 0, spanMs: 0, tilesSkipped: 0, tilesHit: 0 };
+/** The job has run its course: read the plan out of it. */
+function routeJobFinish(j: RouteJob): void {
   goalSolveStat.runs++;
-  const g = roadGraph();
-  goalSolveStat.graphMs = performance.now() - t0;
-  goalSolveStat.nodes = g.size;
-  // THE TRUCK STARTS ON THE SURVEY. Its nearest node has to be a fine one:
-  // beginning a route on a simplified line would hand the autopilot a first
-  // leg that is nowhere near the road it is actually standing on.
-  const from = nearestNode(g, state.x, state.z, 120, true);
-  goalSolveFor = `${goal.name}|${osmDone.size}|${ovWayV}`;
-  if (!from) {
+  goalSolveStat.ms = j.cpuMs;
+  goalSolveStat.graphMs = j.fromCache ? 0 : j.graphMs;
+  goalSolveStat.totalMs += j.cpuMs;
+  goalSolveStat.graphTotalMs += j.fromCache ? 0 : j.graphMs;
+  if (j.cpuMs > goalSolveStat.maxMs) goalSolveStat.maxMs = j.cpuMs;
+  goalSolveStat.slices += j.slices;
+  if (j.maxSliceMs > goalSolveStat.maxSliceMs) goalSolveStat.maxSliceMs = j.maxSliceMs;
+  goalSolveStat.spanMs = performance.now() - j.startedAt;
+  goalSolveStat.nodes = j.g.size;
+  goalSolveStat.walked = j.done.size;
+  goalSolveFor = j.key;
+  if (!j.from) {
     goalRoute = null;
     goalSolveStat.failed++;
     goalSolveStat.last = 'no road under the truck';
-    goalSolveStat.ms = performance.now() - t0;
     return;
   }
-  // ── AS CLOSE AS THE ROADS GET ──
-  //
-  // Most places worth driving to are not ON the network. A trig point is up a
-  // hillside, a lake's name sits in the middle of the water, a fix is dropped
-  // wherever the thumb landed, and while the world streams even a town's pin
-  // can be a kilometre from the nearest loaded road. Demanding a node within
-  // some radius of the goal makes all of those unroutable, which is the same
-  // failure as having no router at all.
-  //
-  // So there is no target: the walk settles the whole reachable component
-  // (bounded) and the best node is the one that gets CLOSEST to the goal,
-  // with a light penalty on the drive itself so a hundred metres of gain is
-  // not bought with ten kilometres of road. The last stretch is the driver's
-  // — which is honest, because it is not a road.
-  const dist = new Map<string, number>([[from, 0]]);
-  const prev = new Map<string, string>();
-  const done = new Set<string>();
-  const heap = new MinHeap();
-  heap.push(0, from);
-  let bestId: string | null = null, bestScore = Infinity, bestGap = Infinity;
-  // ── AND IT STOPS WHEN NOTHING FURTHER CAN WIN ──
-  //
-  // "Settle the whole reachable component" was affordable while the component
-  // was a five-kilometre ring. With thirty kilometres of trunk road behind it
-  // that is tens of thousands of nodes for every solve, and it is what put a
-  // 1237ms worst case on the device.
-  //
-  // The bound is exact rather than a heuristic, and it has to be: the walk's
-  // whole contract is that it finds the CLOSEST the roads get, so a prune that
-  // can drop the winner is a wrong answer, not a slower one.
-  //
-  // The score is `gap + cost·DETOUR`. Dijkstra pops in increasing cost, so
-  // every node still unsettled has cost at least the popped node's c; and no
-  // gap is ever negative. So no unsettled node can score below `c·DETOUR`, and
-  // once that floor reaches the best score found the frontier holds nothing
-  // that can win.
-  //
-  // (The tempting tighter form — `DETOUR·(c + g)`, on the grounds that
-  // reaching the goal from here costs at least g more — is NOT sound: the next
-  // node need not lie beyond this one, and may sit on another branch already
-  // nearer the goal. This one is weaker and true.)
-  //
-  // It tightens as the answer improves, and it tightens where the waste was.
-  // Twenty-six kilometres out with the goal still unreached the floor is far
-  // below the best score and nothing is pruned; the moment a node lands 225m
-  // from the goal, the floor is 1560 against a best of 1785 and four more
-  // kilometres of driving is all that is left to explore.
-  while (heap.size && done.size < GOAL_MAX_NODES) {
-    const top = heap.pop() as { cost: number; id: string };
-    if (done.has(top.id)) continue;
-    done.add(top.id);
-    const n = g.get(top.id);
-    if (!n) continue;
-    const gap = Math.hypot(n.x - goal.x, n.z - goal.z);
-    const score = gap + top.cost * GOAL_DETOUR;
-    if (score < bestScore) { bestScore = score; bestId = top.id; bestGap = gap; }
-    if (top.cost * GOAL_DETOUR >= bestScore) break;
-    // Standing on it: nothing further can be closer.
-    if (gap < 4) break;
-    for (const e of n.to) {
-      if (done.has(e.id)) continue;
-      const nd = top.cost + e.cost;
-      if (nd < (dist.get(e.id) ?? Infinity)) {
-        dist.set(e.id, nd); prev.set(e.id, top.id); heap.push(nd, e.id);
-      }
-    }
-  }
-  goalSolveStat.walked = done.size;
-  const to = bestId;
-  if (!to || to === from) {
+  const to = j.bestId;
+  if (!to || to === j.from) {
     goalRoute = null;
-    goalShortM = bestGap;
+    goalShortM = j.bestGap;
     goalSolveStat.failed++;
-    goalSolveStat.last = to ? 'already as close as the road gets' : `no path (${done.size} nodes)`;
-    goalSolveStat.ms = performance.now() - t0;
+    goalSolveStat.last = to ? 'already as close as the road gets' : `no path (${j.done.size} nodes)`;
     return;
   }
-  goalShortM = bestGap;
+  goalShortM = j.bestGap;
   const out: Array<[number, number, number]> = [];
-  for (let k: string | undefined = to; k !== undefined; k = prev.get(k)) {
-    const n = g.get(k);
+  for (let k: string | undefined = to; k !== undefined; k = j.prev.get(k)) {
+    const n = j.g.get(k);
     if (n) out.push([n.x, n.z, n.c ? 1 : 0]);
-    if (k === from) break;
+    if (k === j.from) break;
   }
   out.reverse();
   goalRoute = out.length >= 2 ? out : null;
   goalSolveStat.found++;
   const cn = out.filter((p) => p[2]).length;
-  goalSolveStat.last = `${out.length} nodes (${cn} coarse), ${Math.round(bestGap)}m short`;
-  goalSolveStat.ms = performance.now() - t0;
+  goalSolveStat.last = `${out.length} nodes (${cn} coarse), ${Math.round(j.bestGap)}m short`;
+}
+/** The whole solve in one call — the probe's and the bench's path. */
+function solveGoalRoute(): void {
+  routeJob = null;
+  if (!goal) { goalRoute = null; goalSolveFor = ''; return; }
+  const j = routeJobStart();
+  routeJobStep(j, Infinity);
+  routeJobFinish(j);
+}
+/**
+ * ── ONLY WHEN IT CAN MATTER ──
+ *
+ * The re-solve key carried the count of streamed tiles, so every tile that
+ * landed anywhere in the ring — behind the truck, across the bay, a suburb
+ * off to one side — re-solved a route that was under the wheels and going
+ * nowhere new. (And the key it was compared against was written without the
+ * coarse tier's version, so the two never matched and the solve ran on
+ * every tick of the timer regardless. Ninety-nine in eight minutes.)
+ *
+ * A tile can change the plan only where the plan is: on it, ahead of the
+ * truck where the coarse half is waiting to become fine, or at its far end.
+ * So each finished tile is noted with its centre, and a route that is still
+ * under the truck is re-solved for new survey only when one of those tiles
+ * comes within a corridor of the line. A new goal, a swapped coarse tier and
+ * a truck off its line are re-solved at once, as before.
+ */
+const ROUTE_CORRIDOR_M = 250;
+const osmFresh: Array<[number, number, number]> = [];
+function noteOsmDone(x: number, y: number): void {
+  const b = tileBounds(x, y, OSM_Z);
+  const [cx, cz] = toLocal((b.latN + b.latS) / 2, (b.lonW + b.lonE) / 2);
+  const half = Math.max((b.latN - b.latS) * M_LAT, (b.lonE - b.lonW) * M_LAT * Math.cos((b.latN * Math.PI) / 180)) / 2;
+  osmFresh.push([cx, cz, half]);
+}
+/** Does any tile finished since the last solve lie on the plan's corridor? */
+function freshTilesTouchRoute(): boolean {
+  const rt = goalRoute;
+  if (!rt || !osmFresh.length) return true;   // nothing recorded: be conservative
+  const tiles = osmFresh.splice(0);
+  for (const [tx, tz, half] of tiles) {
+    const reach = half + ROUTE_CORRIDOR_M;
+    for (let i = 1; i < rt.length; i++) {
+      const ax = rt[i - 1][0], az = rt[i - 1][1], bx = rt[i][0], bz = rt[i][1];
+      const dx = bx - ax, dz = bz - az;
+      const t = clamp(((tx - ax) * dx + (tz - az) * dz) / (dx * dx + dz * dz || 1), 0, 1);
+      if (Math.hypot(tx - (ax + dx * t), tz - (az + dz * t)) < reach) { goalSolveStat.tilesHit++; return true; }
+    }
+    goalSolveStat.tilesSkipped++;
+  }
+  return false;
 }
 /** Where we are on the solved route and what is left of it — the same shape
  *  `routeAhead` hands the autopilot for a mission leg. */
@@ -20540,7 +20724,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     await renderGated(x, y, cached);
     noteTileRender(key, 'cache', cached.length, unbuilt - before);
     if (unbuilt !== before) setTimeout(() => osmLoaded.delete(key), 3000);
-    else osmDone.add(key);
+    else { osmDone.add(key); noteOsmDone(x, y); }
     return;
   }
   osmNote(1);
@@ -20596,7 +20780,7 @@ async function loadOsmTile(x: number, y: number): Promise<void> {
     // be requested again once the elevation it needed has landed, or the road
     // is simply missing for the rest of the session.
     if (unbuilt !== before) setTimeout(() => osmLoaded.delete(key), 3000);
-    else osmDone.add(key);
+    else { osmDone.add(key); noteOsmDone(x, y); }
   } catch {
     if (++osmFails >= 2) osmDown = true;
     osmFailedAt.set(key, performance.now());
@@ -31845,17 +32029,40 @@ function stepAuto(dt: number, off: boolean): void {
   // thousands of nodes. On the timer, and only when the answer could have
   // changed — a different goal, or more road (osmDone) than the last solve
   // saw. A route that exists and is still under the truck is left alone.
+  if (!goal) routeJob = null;
   if (goal) {
     const now = performance.now();
-    const want = `${goal.name}|${osmDone.size}`;
-    const stale = goalSolveFor !== want
-      || (!goalRoute && now - goalSolveAt > GOAL_SOLVE_MS * 2)
-      || (!!goalRoute && !goalAhead(state.x, state.z, 60));
-    if (stale && now - goalSolveAt > GOAL_SOLVE_MS) {
-      goalSolveAt = now;
+    if (routeJob && routeJob.name !== goal.name) routeJob = null;   // the goal changed under it
+    if (routeJob) {
+      // A slice a frame until it lands; the route in force stays in force.
       const t0 = performance.now();
-      solveGoalRoute();
+      routeJobStep(routeJob, ROUTE_SLICE_MS);
+      if (routeJob.phase === 'done') { routeJobFinish(routeJob); routeJob = null; }
       profAdd('routeSolve', t0);
+    } else {
+      const want = `${goal.name}|${osmDone.size}|${ovWayV}`;
+      const onIt = !!goalRoute && !!goalAhead(state.x, state.z, 60);
+      let stale = goalSolveFor !== want
+        || (!goalRoute && now - goalSolveAt > GOAL_SOLVE_MS * 2)
+        || (!!goalRoute && !onIt);
+      if (stale && onIt && goalSolveFor !== want) {
+        // Only the survey grew, and the truck is on its plan: ask whether any
+        // of the new tiles could change it before paying for the answer.
+        const was = goalSolveFor.split('|'), is = want.split('|');
+        if (was[0] === is[0] && was[2] === is[2] && !freshTilesTouchRoute()) {
+          stale = false;
+          goalSolveFor = want;
+        }
+      }
+      if (stale && now - goalSolveAt > GOAL_SOLVE_MS) {
+        goalSolveAt = now;
+        osmFresh.length = 0;
+        routeJob = routeJobStart();
+        const t0 = performance.now();
+        routeJobStep(routeJob, ROUTE_SLICE_MS);
+        if (routeJob.phase === 'done') { routeJobFinish(routeJob); routeJob = null; }
+        profAdd('routeSolve', t0);
+      }
     }
   }
   // THE THUMB WINS. A tool that keeps driving while you are trying to take
@@ -31992,6 +32199,28 @@ function drawMinimap(): void {
       miniCtx.drawImage(fogCanvas, fsx, FOG_PX - fsz - fSpan, fSpan, fSpan, -D / 2, -D / 2, D, D);
       miniCtx.restore();
     }
+  }
+  // THE PLAN ON THE MINIMAP: the whole solved route as mint dots, the coarse
+  // half fainter and at a longer stride, in the same rotated frame as the
+  // chart under it. Segments outside the window are skipped, not clipped.
+  if (goalRoute && goalRoute.length >= 2) {
+    const k = D / spanPx, lim = D * 0.75;
+    miniCtx.fillStyle = UI.good;
+    for (let i = 1; i < goalRoute.length; i++) {
+      const [ax, az, at] = goalRoute[i - 1], [bx, bz, bt] = goalRoute[i];
+      const [ma, mza] = mapPt(ax, az), [mb, mzb] = mapPt(bx, bz);
+      const x1 = (ma - cx) * k, y1 = (mza - cz) * k, x2 = (mb - cx) * k, y2 = (mzb - cz) * k;
+      if (Math.max(Math.abs(x1), Math.abs(y1)) > lim && Math.max(Math.abs(x2), Math.abs(y2)) > lim) continue;
+      const len = Math.hypot(x2 - x1, y2 - y1);
+      if (len < 0.5) continue;
+      const far = !!(at || bt), step = far ? 7 : 4;
+      miniCtx.globalAlpha = far ? 0.45 : 0.85;
+      for (let d = 0; d <= len; d += step) {
+        const t = d / len;
+        miniCtx.fillRect(Math.round(x1 + (x2 - x1) * t) - 1, Math.round(y1 + (y2 - y1) * t) - 1, 2, 2);
+      }
+    }
+    miniCtx.globalAlpha = 1;
   }
   miniCtx.restore();
   // The car: an amber wedge, always centre. Heading-up it points straight up by
@@ -33305,6 +33534,32 @@ function refreshRoadLine(via: string | undefined, cur: string | undefined, now: 
     }
   }
 }
+/** THE PLAN, FROM THE SEAT. The chart drew the solved route as mint dots and
+ *  the seat drew nothing, so a truck plainly steering down a plan showed no
+ *  plan — reported from the Chapman's Peak run, where the autopilot was
+ *  "clearly following one" and the seat never saw it. From the seat the
+ *  driven part is what matters: the surveyed line ahead that the autopilot is
+ *  steering on, as far as it may steer, projected through the camera onto the
+ *  road. The chart still draws the whole plan; the minimap now does too. */
+const ROUTE_SHOW_M = 320;
+let routeAheadKey = ''; let routeAheadAt = -1e9;
+function refreshRouteAhead(now: number): void {
+  const key = `${goal?.name ?? ''}|${goalRoute?.length ?? 0}`;
+  if (key === routeAheadKey && now - routeAheadAt < 250) return;
+  routeAheadKey = key; routeAheadAt = now;
+  roadLineWorld = [];
+  if (!goal || !goalRoute) return;
+  const pts = goalAhead(state.x, state.z, ROUTE_SHOW_M);
+  if (!pts || pts.length < 2) return;
+  const deckY = (x: number, z: number): number => (roadEdge(x, z)?.y ?? groundAt(x, z)) + 0.6;
+  let ay = deckY(pts[0][0], pts[0][1]);
+  for (let i = 1; i < pts.length; i++) {
+    const [ax, az] = pts[i - 1], [bx, bz] = pts[i];
+    const by = deckY(bx, bz);
+    roadLineWorld.push({ ax, ay, az, bx, by, bz, mx: (ax + bx) / 2, mz: (az + bz) / 2, task: false, route: true });
+    ay = by;
+  }
+}
 function projectRoadLine(): void {
   roadSegs = [];
   for (const s of roadLineWorld) {
@@ -33444,7 +33699,10 @@ function updateCps(): void {
   if (camMode === 'top') {
     refreshRoadLine(viaName, here?.name, now);
     projectRoadLine();
-  } else roadSegs = [];
+  } else {
+    refreshRouteAhead(now);
+    projectRoadLine();
+  }
   if (cpVis === 0) return;
   if (road) {
     for (const c of road.cps) {
@@ -34889,6 +35147,7 @@ function telemetryReport(): string {
     const pa = Math.max(1, workerLedger.applied);
     L.push(`post split ms/build reseat ${(workerLedger.reseatMs / pa).toFixed(1)} redrape ${(workerLedger.redrapeMs / pa).toFixed(1)} hydro ${(workerLedger.hydroMs / pa).toFixed(1)} batter ${(workerLedger.batterMs / pa).toFixed(1)} culvert ${(workerLedger.culvertMs / pa).toFixed(1)} · post max ${Math.round(workerLedger.postMax)} · dropped ${workerLedger.dropped}`); }
   L.push(`terrain tiles ${terrainMeshes.size} · builds ${terrainBuilds} · dirty ${terrainDirty.size} · roads ${roadGrid.size} cells · ways ${seenWays.size} · osm inflight ${osmInFlight} queued ${osmQueue.length} · luma ${JSON.stringify({ async: lumaStat.async, sync: lumaStat.sync })}`);
+  { const r = goalSolveStat; if (r.runs) L.push(`route solves ${r.runs} (found ${r.found} failed ${r.failed}) · ms/solve ${(r.totalMs / r.runs).toFixed(0)} (graph ${(r.graphTotalMs / r.runs).toFixed(0)}) max ${Math.round(r.maxMs)} · slices ${r.slices} max ${r.maxSliceMs.toFixed(1)}ms · last span ${Math.round(r.spanMs)}ms · walked ${r.walked}/${r.nodes} (fine ${graphStat.fine} coarse ${graphStat.coarse} portals ${graphStat.portals}) · graph cached ${graphStat.cached ?? 0} · tiles skipped ${r.tilesSkipped} hit ${r.tilesHit} · last ${r.last}`); }
   { const w = swardLedger; L.push(`sward sweeps ${w.sweeps} · steps ${w.steps} ms ${(w.stepMs / Math.max(1, w.steps)).toFixed(1)} max ${Math.round(w.stepMax)} · deferred ${w.deferred} · mask ${w.masks} ms ${(w.maskMs / Math.max(1, w.masks)).toFixed(1)} max ${Math.round(w.maskMax)}`); }
   if (sessSlowLog.length) L.push(`slow frames (last ${sessSlowLog.length}): ` + sessSlowLog.map((f) => `${f.t}s ${f.ms}ms [${f.tops}]`).join(' · '));
   L.push('tree phases ms/call (max): ' + [...vegPhaseTotals].map(([k, v]) => `${k} ${(v.ms / Math.max(1, v.n)).toFixed(1)} (${Math.round(v.max)})`).join(' · '));
@@ -39974,7 +40233,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // a 1px diagonal stroke antialiases into grey smear on this canvas. Gold is
   // the task's via; teal is the road under the wheels. Distance from the car
   // dims it in the same four bands as the pips riding on it.
-  if (camMode === 'top' && roadSegs.length) {
+  if (roadSegs.length) {
     for (let pass = 0; pass < 2; pass++) {
       for (const s of roadSegs) {
         const x1 = s.x1 / hudS, y1 = s.y1 / hudS, x2 = s.x2 / hudS, y2 = s.y2 / hudS;

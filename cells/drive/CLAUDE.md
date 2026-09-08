@@ -4086,6 +4086,66 @@ Verified here: `tsc` clean, hydro, inland-water and switches tests green,
 `boot.mjs` no page or GLSL errors, the Senqu chart and seat frames rendered
 without errors and the wet map unchanged. Not judged by eye at the bank.
 
+### The route solve was a frozen frame every two and a half seconds
+
+Telemetry from the seat, the Chapman's Peak run to Noordhoek on an iPhone:
+`routeSolve` 99 calls in 484 s, 141 ms mean, 405 max, top of 51 of the 410
+slow frames and a quarter of all slow-frame time; the last forty seconds
+were a 300–480 ms stall every two to five seconds. The graph was cached and
+the walk was bounded (above) and it was still a stall, because a budget
+for a SOLVE and a budget for a FRAME are different numbers. Three things,
+and a fourth the seat noticed:
+
+- **The re-solve ran on every tick of its timer.** The key it compared
+  (`goal|osmDone`) was written without the coarse tier's version that the
+  solve recorded (`goal|osmDone|ovWayV`), so they never matched and `stale`
+  was always true. Fixed by making them the same string — and then gated:
+  **a tile can only change the plan where the plan is.** Every finished OSM
+  tile is noted with its centre (`noteOsmDone`), and while the truck is on
+  its route a survey-only change re-solves only if one of the new tiles
+  comes within `ROUTE_CORRIDOR_M` (250 m plus the tile's half-width) of the
+  route's polyline. A new goal, a swapped coarse tier and a truck off its
+  line re-solve at once, as before. The dump counts `tiles skipped / hit`.
+- **The solve is a job in slices.** `RouteJob` holds the graph build's
+  iterators (the road grid's cells, the coarse ways, the graph's own
+  entries for the portals), the handover, and the walk's heap and frontier;
+  `routeJobStep(job, ROUTE_SLICE_MS)` runs it until three milliseconds of
+  the frame are spent and hands the frame back. The route in force stays in
+  force until the new one lands whole. The budget is checked AFTER an item
+  is processed in every phase but the portals, where it is checked before
+  the iterator is advanced — a node pulled and abandoned for the frame
+  would never be seen again. Live iterators, not snapshots: a cell that
+  gains segments behind the cursor is the next solve's business. The
+  handover percentile comes off a ten-metre histogram; sorting fifty
+  thousand distances was a ten-millisecond slice on its own.
+  `solveGoalRoute` is the same job run to completion in one call — the
+  probe's and the bench's path, unchanged in contract: the Simon's Town
+  fixture solves identically before and after (48 nodes, walked 48, inner
+  489/490), and `far-route.test` passes (164 nodes, 104 coarse, 26 portals,
+  3.8 ms). A first run of that bench failed on the live roads with the
+  truck moved onto a 107-node component; the previous commit fails the
+  same way on a bad draw, which is what the fixture run was for.
+- **The dump attributes the solver.** One `route solves` line: count, found
+  and failed, ms a solve with the graph's share, the worst, slices and the
+  worst slice, the last solve's wall span, walked against nodes, the tiers
+  and portals, graph cache hits, tiles skipped and hit, and the last
+  answer.
+- **The plan was drawn on the chart and nowhere else.** `refreshRoadLine`
+  and the mint dots ran only in the top camera, so a truck plainly steering
+  down a plan showed no plan from the seat. `refreshRouteAhead` now builds
+  the driven line — `goalAhead` to 320 m, the surveyed half the autopilot
+  may steer on, at deck height plus 0.6 m — every 250 ms in any other
+  camera, and the same projection and the same dots draw it on the road
+  ahead in perspective. The minimap draws the whole plan as mint dots in
+  its rotated frame, the coarse half fainter and at a longer stride.
+
+Verified: `tsc` clean, `boot.mjs` no page errors, switches and autopilot
+suites green, the fixture comparison above, `far-route.test` green on a
+second draw, and the harness frames at Simon's Town — the dots up the road
+ahead from the seat, the plan on the inset, the chart as before. Not yet
+measured on the device: the next telemetry paste from a run with a goal is
+the verification, and it should show `routeSolve` under 4 ms a call.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where
