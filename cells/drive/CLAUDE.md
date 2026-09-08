@@ -4209,6 +4209,41 @@ drops the goal, the route, the job in flight and the ARRIVED toast;
 Verified in the harness at Simon's Town: chip shown with a goal set, card on
 tap, cancel clears `__goal()` and `__route()`; no dots in the chase frame.
 
+### Ground detail from the shader's own UVs — explored, in behind `?tdetail=`
+
+The owner asked whether the terrain shader could make its own UVs and draw
+more detail than the mesh has, by cover class, without adding geometry. It
+can, and the plumbing is in, off by default:
+
+- **The tile carries the ground's family per vertex** (`aCover`, four
+  normalised bytes from the kernel's own cover read: sward / scrub floor /
+  stone, and w is ONE MINUS field so a geometry with no attribute — the far
+  shell — reads WebGL's default (0,0,0,1) as no family and draws nothing).
+  Four bytes a vertex, transferred with the build.
+- **World metres are the UV.** In `terrainFx`'s detail variant the fragment
+  evaluates a pattern per family at `vWorldP.xz` and modulates the vertex
+  colour's LUMINANCE only, so the palette and the biome's colour stay whose
+  they are. The hash is the bank's integer-safe one (`BANK_GLSL`): a
+  fract-of-a-product hash is noise by ten kilometres from the origin.
+- **Two bands.** Fine (sub-metre) within seventy metres, broad (2–8 m) from
+  forty to about four hundred. The fine band turned out to be almost
+  entirely UNDER THE SWARD — at the Senqu, Simon's Town, Camps Bay and
+  Vélizy the blades cover the near ground and on/off frames were the same —
+  so the broad band is where it earns anything: where the blades thin, the
+  grassland beyond the track goes from a flat wash to clumps and bare
+  patches (ground rows differ by a mean of 4 levels with 13% of pixels
+  moved at strength 1.5; the sky rows by 0.2, so the signal is real and the
+  quantiser keeps most of it).
+- **Cost** is a branch and a handful of noise reads per terrain fragment
+  inside the bands, nothing outside them; on the phone the GPU's load is the
+  sward's overdraw, not this. Not measured on the device.
+
+`?tdetail=<strength>` (1 to 2 is the range worth looking at), `__tdetail(k)`
+live. If the seat likes it, the next step is a settings dial with a default
+near 1 and a per-biome strength — arid ground and fields have the most to
+gain and the least sward to hide it. Verified: `tsc`, switches test, boot
+with no GLSL errors, the frames above. Not judged on a device.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where
