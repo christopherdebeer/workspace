@@ -28487,6 +28487,37 @@ function heightsOf(): number[] {
 /** What the world is actually made of around the car, straight off WorldCover.
  *  The class under the wheels, and the mix over a radius — which is the number
  *  the biome is chosen from, so it is the one worth being able to read. */
+/** WHY A COVER RIVER IS NOT WATER. The tracer's components on every loaded
+ *  cover tile, and for each the reasons the feed keeps or drops it — the
+ *  Senqu from above was a cream sheet because the feed built nothing from a
+ *  tile whose cover plainly carries class 80, and that took more than one
+ *  round to see. */
+(window as unknown as { __coverwater?: object }).__coverwater = (): object => {
+  const tiles: object[] = [];
+  for (const [key, t] of coverTiles) {
+    const ocean = oceanMasks.get(key)?.grid.data ?? null;
+    const mask = inlandMask(t.data, ocean, 256 * 256);
+    let maskPx = 0;
+    for (let i = 0; i < mask.length; i++) maskPx += mask[i];
+    const comps = inlandComponents(mask, 256, 256, COVER_WATER_MIN_PX, 200);
+    const toX = (px: number): number => t.xs + (px / 256) * t.w;
+    const toZ = (pz: number): number => t.zs + (pz / 256) * t.h;
+    const ring = (r: number[]): Float64Array => {
+      const out = new Float64Array(r.length);
+      for (let i = 0; i < r.length; i += 2) { out[i] = toX(r[i]); out[i + 1] = toZ(r[i + 1]); }
+      return out;
+    };
+    tiles.push({ key, maskPx, comps: comps.length, oceanPx: oceanMasks.get(key)?.stats.ocean ?? null, fed: coverHydro.get(key) ?? null,
+      top: comps.slice(0, 8).map((c) => {
+        const outer = ring(c.outer), holes = c.holes.map(ring);
+        const minX = toX(c.minX), maxX = toX(c.maxX + 1), minZ = toZ(c.minY), maxZ = toZ(c.maxY + 1);
+        return { px: c.pixels, onEdge: c.onEdge, known: c.known, box: [Math.round(minX - state.x), Math.round(minZ - state.z), Math.round(maxX - state.x), Math.round(maxZ - state.z)],
+          osmFrac: +coverOsmFraction({ outer, holes }, minX, minZ, maxX, maxZ).toFixed(2),
+          flowing: coverFlowingCrosses(outer, minX, minZ, maxX, maxZ), slot: hydroFeats.has(`cover:${coverCompId(key, c)}`) };
+      }) });
+  }
+  return { tiles, feats: hydroFeats.size, traces: coverHydroTraces };
+};
 (window as unknown as { __cover?: object }).__cover = (radius = 3000, step = 120): object => {
   const here = sampleCover(state.x, state.z);
   const hist = new Map<number, number>();
