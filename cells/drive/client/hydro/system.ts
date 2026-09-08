@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { HydroBodyRegistry } from './body-registry';
 import { analyseHydroTile, buildHydroTile, type HydroTileAnalysis } from './build-tile';
 import { clamp, sampleElevation } from './geometry';
+import { sampleFieldSurface } from './field-sample';
 import {
   createHydroFrameUniforms,
   createHydroMaterial,
@@ -297,41 +298,7 @@ function worldToUv(field: HydroTileField): THREE.Matrix3 {
   );
 }
 
-/** Pure field sampling shared by the live system and the hydro self-test. */
-export function sampleFieldSurface(
-  field: HydroTileField,
-  x: number,
-  z: number,
-  coverageCut = 0.5,
-): HydroSample | undefined {
-  if (x < field.bounds.minX || x > field.bounds.maxX
-    || z < field.bounds.minZ || z > field.bounds.maxZ) return undefined;
-  const u = (x - field.bounds.minX)
-    / Math.max(Number.EPSILON, field.bounds.maxX - field.bounds.minX);
-  const v = (z - field.bounds.minZ)
-    / Math.max(Number.EPSILON, field.bounds.maxZ - field.bounds.minZ);
-  const ix = clamp(Math.round(field.gutter + u * (field.resolution - 1)), 0, field.width - 1);
-  const iz = clamp(Math.round(field.gutter + v * (field.resolution - 1)), 0, field.height - 1);
-  const i = iz * field.width + ix;
-  const coverage = field.geometry[i * 4];
-  const cut = Number.isFinite(coverageCut) ? clamp(coverageCut, 0, 1) : 0.5;
-  if (coverage < cut) return undefined;
-  const kindId = field.material[i * 4];
-  const kind = HYDRO_ID_KIND[kindId];
-  if (!kind) return undefined;
-  const flag = field.material[i * 4 + 3];
-  return {
-    kind,
-    coverage,
-    restingLevelM: field.elevationBaseM + field.geometry[i * 4 + 2],
-    shoreDistanceM: field.geometry[i * 4 + 1],
-    depthM: field.geometry[i * 4 + 3],
-    flow: [field.dynamics[i * 4], field.dynamics[i * 4 + 1]],
-    fetchM: field.dynamics[i * 4 + 2],
-    intermittent: (flag & HydroFlags.Intermittent) !== 0,
-    tidal: (flag & HydroFlags.Tidal) !== 0,
-  };
-}
+export { sampleFieldSurface } from './field-sample';
 
 class DefaultHydroSystem implements HydroSystem {
   readonly object3d = new THREE.Group();

@@ -211,10 +211,10 @@ export function runHydroSelfTest(): void {
     const ix = transition % diagonalField.width;
     const iz = Math.floor(transition / diagonalField.width);
     const x = diagonalField.bounds.minX
-      + (ix - diagonalField.gutter) / (diagonalField.resolution - 1)
+      + (ix - diagonalField.gutter + 0.5) / diagonalField.resolution
       * (diagonalField.bounds.maxX - diagonalField.bounds.minX);
     const z = diagonalField.bounds.minZ
-      + (iz - diagonalField.gutter) / (diagonalField.resolution - 1)
+      + (iz - diagonalField.gutter + 0.5) / diagonalField.resolution
       * (diagonalField.bounds.maxZ - diagonalField.bounds.minZ);
     const coverage = diagonalField.geometry[transition * 4];
     assert(!!sampleFieldSurface(diagonalField, x, z, coverage - .01),

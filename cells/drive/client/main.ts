@@ -21,7 +21,7 @@ import { createAudio, type ImpactKind } from './audio';
 import { coastKm } from './coast';
 import { clamp } from './num';
 import { nearestStable, squareRings, uploadPrefix } from './render-work';
-import { WATERLINE_CUT, bankHabitat, sampleBankField } from './shoreline';
+import { WATERLINE_CUT, bankHabitat, sampleBankField, BANK_GLSL } from './shoreline';
 import { URL_OWNED, qs, qsHas, qsOn, switchRows } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
@@ -2417,7 +2417,8 @@ function hydroTick(nowMs: number): void {
  * so the truck and the visible inland waterline agree on the same fragment.
  */
 function drawnHydroAt(x: number, z: number): HydroSample | undefined {
-  return hydroSys?.sampleRestingSurface(x, z, WATERLINE_CUT(x, z));
+  const wet = hydroSys?.sampleRestingSurface(x, z, 0.38);
+  return wet && wet.coverage >= WATERLINE_CUT(x, z, wet.kind) ? wet : undefined;
 }
 function hydroWet(x: number, z: number): boolean {
   if (!HYDRO_ON || !hydroSys) return false;
@@ -8914,7 +8915,8 @@ const bankMineralOf = (r: number, g: number, b: number): [number, number, number
   const l = (r + g + b) / 3;
   return [(r + (l - r) * 0.22) * 0.78, (g + (l - g) * 0.22) * 0.78, (b + (l - b) * 0.22) * 0.78];
 };
-const REED_M2 = 0.7;
+// This is before SWARD_LUSH: tall stalks need fewer slots than short grass.
+const REED_M2 = 0.14;
 /**
  * Roads: the mask's clock — AND IT HAS TO TICK ON THE GEOMETRY, NOT THE FETCH.
  *
@@ -9033,6 +9035,7 @@ const SWARD_ROWS = 8;
 const swardScratchF = new Float32Array(SWARD_F * SWARD_F * 4);
 const swardScratchC = new Uint8Array(SWARD_F * SWARD_F * 4);
 let swardRow = -1;                    // -1 idle, else the next row to fill
+let swardSweepRev = -1;
 let swardPendX = 0, swardPendZ = 0;   // origin the scratch is being built for
 function swardRows(from: number, to: number): void {
   for (let j = from; j < to; j++) {
@@ -9064,23 +9067,32 @@ function swardRows(from: number, to: number): void {
         : (cv === null ? 0.35 : (GRASS_M2[cv] ?? 0.3)) * lift;
       const slope = Math.abs(groundAt(wx + SWARD_FM, wz) - h) / SWARD_FM;
       let [pr, pg, pb] = terrainPalette(h + baseElev, slope, bankPaint(wx, wz), wx, wz);
-      // ── THE BANK (shoreline.ts). Only texels at the water ask: the field
-      // search is bounded but it is not free, and a hillside has no bank.
-      // Mineral pulls the colour to the gravel the water draws and thins
-      // the grass; reeds thicken it in a sheltered shallow margin; under
-      // the resting level nothing grows.
-      if (SHORE_ON && hydroSys && (cv === COVER.water || cv === COVER.wetland || cv === COVER.mangrove || nearWaterway(wx, wz, 14))) {
+      // B/A were spare floats. They carry reed/mineral suitability on the
+      // existing texture; the shader changes the nine-vertex tuft's form.
+      // Query the cached hydro tile even beside lakes: a channel-only gate
+      // misses every dry lake bank whose cover is grass rather than water.
+      swardScratchF[k + 2] = 0; swardScratchF[k + 3] = 0;
+      if (SHORE_ON && hydroSys && cv !== null) {
         const f = hydroSys.fieldAt(wx, wz);
         const bs = f ? sampleBankField(f, wx, wz, 12) : undefined;
-        const hab = bankHabitat(cv, cl.moisture, cl.tempC, slope, true, h + baseElev,
-          bs ? { kind: bs.kind, restingLevelM: bs.restingLevelM, depthM: bs.depthM, shoreDistanceM: bs.shoreDistanceM, flow: bs.flow } : undefined);
-        if (hab.submerged) density = 0;
-        else {
-          density = density * (1 - hab.mineral * 0.85) + hab.reeds * REED_M2 * lift;
+        const wetCover = cv === COVER.wetland || cv === COVER.mangrove;
+        if (bs || wetCover) {
+          // A north/south bank must be as steep as an east/west one.
+          // Pay the second ground read only in bank/wetland texels.
+          const bankSlope = Math.hypot(slope, (groundAt(wx, wz + SWARD_FM) - h) / SWARD_FM);
+          const hab = bankHabitat(cv, cl.moisture, cl.tempC, bankSlope, wetCover,
+            h + baseElev, bs);
+          swardScratchF[k + 2] = hab.reeds;
+          swardScratchF[k + 3] = hab.mineral;
+          // Signed density distinguishes submerged slots without another field:
+          // only emergents/minerals may occupy them, never ordinary grass.
+          const bankRate = hab.reeds * REED_M2 * lift + hab.mineral * 0.06;
+          density = hab.submerged ? -(bankRate + 0.00001)
+            : density * (1 - hab.mineral * 0.65) + bankRate;
           const mk = hab.mineral * 0.75, rk = hab.reeds * 0.5;
           const [mr, mg, mb] = bankMineralOf(pr, pg, pb);
-          pr = pr + (mr - pr) * mk; pg = pg + (mg - pg) * mk; pb = pb + (mb - pb) * mk;
-          pr = pr + (BANK_REED[0] - pr) * rk; pg = pg + (BANK_REED[1] - pg) * rk; pb = pb + (BANK_REED[2] - pb) * rk;
+          pr += (mr - pr) * mk; pg += (mg - pg) * mk; pb += (mb - pb) * mk;
+          pr += (BANK_REED[0] - pr) * rk; pg += (BANK_REED[1] - pg) * rk; pb += (BANK_REED[2] - pb) * rk;
         }
       }
       swardScratchF[k + 1] = density;
@@ -9121,6 +9133,7 @@ function swardStart(cx = state.x, cz = state.z): void {
   swardPendX = Math.round(cx / SWARD_FM) * SWARD_FM - SWARD_FW / 2;
   swardPendZ = Math.round(cz / SWARD_FM) * SWARD_FM - SWARD_FW / 2;
   swardRow = 0;
+  swardSweepRev = swardGroundRev();
   swardFieldMs = 0;
   swardSweepAt = performance.now();
   swardLedger.sweeps++;
@@ -9149,7 +9162,9 @@ function swardStep(sync = false): void {
   swardFieldReady = true;
   swardU.uFieldOrg.value.set(swardFX, swardFZ);
   swardRow = -1;
-  swardGroundSeen = swardGroundRev();
+  // A hydro build during this sweep still needs a follow-up; recording the
+  // completion revision would falsely claim the early rows saw the new water.
+  swardGroundSeen = swardSweepRev;
   refreshSwardField(false);           // the mask belongs to the new origin
   for (const b of swardBands) b.mesh.visible = true;
 }
@@ -9270,7 +9285,7 @@ interface SwardBand { mesh: THREE.Mesh; side: number; step: number; reach: numbe
   /** Where this band takes over from the one inside it, and hands on to the one
    *  outside: (in0,in1,out0,out1) metres. See the partition note in the shader. */
   uBlend: { value: THREE.Vector4 } }
-const SWARD_GLSL = `
+const SWARD_GLSL = BANK_GLSL + `
   // ── NOT fract(sin(...)), AND NOT ON WORLD METRES ──
   //
   // The sin hash is fine near the origin and falls apart away from it: sin's
@@ -9460,7 +9475,11 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
           : sCtx > 0.5 ? uFlowerStrayWood
           : uFlowerStrayOpen;
         float sFlowerChance = max(sPatchChance, sStrayChance);
-        bool sIsFlower = sH4 < sFlowerChance;
+        float sBankPatch = (sF.b + sF.a > 0.02) ? bankPatch(sP) : 0.5;
+        bool sIsReed = sH4 < sF.b * smoothstep(0.40, 0.70, sBankPatch) * 0.85;
+        bool sIsStone = !sIsReed && sH4 > 1.0 - sF.a
+          * (1.0 - smoothstep(0.30, 0.62, sBankPatch)) * 0.75;
+        bool sIsFlower = !sIsReed && !sIsStone && sH4 < sFlowerChance;
         bool sIsStrayFlower = sIsFlower && sH4 >= sPatchChance;
         // ONE SPECIES PER PATCH, not per blade — a drift of buttercups reads
         // as a drift because every blade in it agrees on the flower, and the
@@ -9490,7 +9509,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // under its own one-tuft-per-cell ceiling, which is what the three
         // rings were. See SWARD_FALL.
         float sG = pow(uSwardNear / max(sD, uSwardNear), uSwardFall);
-        float sKeep = sF.g * uStep * uStep * uDens * sW * sG;
+        float sKeep = abs(sF.g) * uStep * uStep * uDens * sW * sG;
         // ── BLADES THIN OUT, THEY DO NOT BLINK OUT ──
         //
         // Reported from the seat: blades visibly jump around at walking pace
@@ -9511,6 +9530,7 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         if (uSwardDbg == 2.0 || uSwardDbg == 3.0) sAlive = 1.0;
         bool sMaskOk = sBlocked < 0.5 || uSwardDbg == 1.0 || uSwardDbg == 3.0;
         bool sLive = sAlive > 0.01 && sMaskOk && sD < uGReach
+          && (sF.g >= 0.0 || sIsReed || sIsStone)
           && sUv.x > 0.002 && sUv.x < 0.998 && sUv.y > 0.002 && sUv.y < 0.998;
         float sT = clamp(sD / uGReach, 0.0, 1.0);
         float sAng = sH2 * 6.28318;
@@ -9544,6 +9564,20 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // is the same nine vertices either way: nothing is added, the cards
         // are simply put somewhere else when a flower is standing there.
         vec3 sPosL = position;
+        if (sIsReed) {
+          // Upright sedge/reed leaves with less lean; retain three distinct stalks.
+          sPosL.xz *= 0.42;
+          sPosL.y *= 1.9 + sSpecies * 0.20;
+        } else if (sIsStone) {
+          // Three triangular faces share a buried base and one raised apex.
+          // Same nine vertices as grass, with no extra mesh or instance buffer.
+          float a = aBlade * 2.0943951 + 0.7;
+          vec2 axis = vec2(cos(a), sin(a)), tangent = vec2(-axis.y, axis.x);
+          float side = dot(position.xz, tangent) > 0.0 ? 1.0 : -1.0;
+          sPosL = position.y > 0.01 ? vec3(0.025, 0.13, -0.018)
+            : vec3(axis.x*0.11 + tangent.x*side*0.190526, -0.015,
+                axis.y*0.11 + tangent.y*side*0.190526);
+        }
         if (sIsFlower) {
           float sTip = step(0.01, position.y);
           if (aBlade < 0.5) {
@@ -9570,7 +9604,10 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // take some of it back — a blade at two hundred metres drawn four times
         // the size subtends what a near one does, which is the whole reason an
         // eye accepts a thinner field out there.
-        vec3 sLp = sPosL * (0.45 + sSize * 1.30) * (1.0 + 3.2 * pow(sT, 0.75)) * sAlive;
+        // Reeds cannot grow into trees, nor gravel into boulders in the far band.
+        float sRangeScale = sIsStone ? 1.0 : sIsReed ? (1.0 + 0.35 * sT)
+          : (1.0 + 3.2 * pow(sT, 0.75));
+        vec3 sLp = sPosL * (0.45 + sSize * 1.30) * sRangeScale * sAlive;
         sLp.xz = vec2(sCa * sLp.x - sSa * sLp.z, sSa * sLp.x + sCa * sLp.z);
         // Wind, from the blade's WORLD position so a gust crosses the field as
         // one front rather than every tuft nodding on its own clock.
@@ -9585,7 +9622,8 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         float sGm = length(uGust);
         vec2 sGd = sGm > 1e-4 ? uGust / sGm : vec2(0.0, 1.0);
         float sPhase = dot(sP, sGd) * 0.42;
-        sLp.xz += uGust * (sLp.y * (0.55 + 0.45 * sin(uTime * 1.9 + sPhase)));
+        sLp.xz += uGust * (sIsStone ? 0.0 : (sIsReed ? 0.38 : 1.0))
+          * (sLp.y * (0.55 + 0.45 * sin(uTime * 1.9 + sPhase)));
         // A dead slot collapses to a point: zero area, so it costs its vertices
         // and not one fragment. Cheaper than a branch around the whole shader.
         vec3 transformed = sLive ? vec3(sP.x, sF.r, sP.y) + sLp : vec3(sP.x, sF.r, sP.y);
@@ -9630,6 +9668,9 @@ function swardMaterial(bandU: Record<string, { value: unknown }>): THREE.MeshLam
         // Root shade anchors stalks in their neighbours without extra geometry.
         // Flower heads receive their own colour below and remain clear.
         vSward *= mix(0.76, 1.0, smoothstep(0.0, 0.32, position.y));
+        if (sIsReed) vSward = mix(vSward, sGround * vec3(0.82,0.95,0.68), 0.45);
+        if (sIsStone) vSward = sGround * (0.80 + 0.26 * sSize)
+          * (0.84 + aBlade * 0.10);
         // FLOWER COLOUR, AND ONLY ON THE HEAD. sIsFlower, sCtx and sSpecies
         // were decided up at sD because the geometry above needed them too.
         //
@@ -26659,7 +26700,7 @@ function wetClassAt(x: number, z: number): WetClass {
   const wet = HYDRO_ON ? hydroSys?.sampleRestingSurface(x, z, 0.005) : undefined;
   const ground = hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
   const above = !!wet && (!Number.isFinite(ground) || wet.restingLevelM > ground + 0.02);
-  const cut = WATERLINE_CUT(x, z);
+  const cut = WATERLINE_CUT(x, z, wet?.kind);
   const drawn = !!wet && above && wet.coverage >= cut;
   const onDeck = surf === 'road' || surf === 'track';
   if (wet && Math.abs(wet.coverage - cut) < 0.12 && above) return 'E';

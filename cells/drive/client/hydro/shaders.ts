@@ -504,6 +504,9 @@ void main() {
   vec4 geometryField = texture2D(uHydroGeometry, vHydroUv);
   vec4 materialField = texture2D(uHydroMaterial, vHydroUv);
   float kind = floor(materialField.r * 255.0 + 0.5);
+  // Linear coverage can reach a texel whose nearest class is still unknown.
+  // The CPU cannot call that water either; don't render an unclassified skirt.
+  if (kind < 0.5) discard;
   // One physical waterline, represented by two meshes. The broad body keeps
   // the stable 0.5 cutoff. Only the fine coastal strip moves below it during
   // run-up; on retreat it overlaps the body rather than exposing a gap.
@@ -538,7 +541,10 @@ void main() {
   // reads as the raster it is. The shared bank patches (shoreline.ts, the
   // same noise the sward's banks use) move the cut by a few metres either
   // way, so the edge is the same broken line on both sides of it.
-  if (geometryField.r < 0.5 + (bankPatch(vAbsoluteXZ) - 0.5) * 0.24) discard;
+  // The coastal body shares the surf strip's 0.5 boundary; a ragged body
+  // cut there would reveal a gap whenever the separate surf mesh retreats.
+  float bodyCut = coastalKind ? 0.5 : 0.5 + (bankPatch(vAbsoluteXZ) - 0.5) * 0.24;
+  if (geometryField.r < bodyCut) discard;
   // THE GROUND'S OWN COLOUR, HERE. uTerrainColour is the ground under the
   // truck; the sward's colour field is the palette at THIS fragment's XZ
   // wherever it reaches (a 768 m square around the truck), and the frame
@@ -767,8 +773,12 @@ void main() {
   float shoreWetness = clamp(distanceWet * mix(0.62, 1.0, depthWet), 0.0, 1.0);
 #ifdef HYDRO_FLOWING
   if (vFlowing > 0.5 && flowingKind) {
-    float channelWet = smoothstep(0.0, 0.30, 1.0 - abs(riverField.g));
-    shoreWetness = mix(shoreWetness, channelWet, 0.82);
+    // Bank width follows metres and depth, not 30% of every channel.
+    float bankMetres = max(0.0, (1.0 - abs(riverField.g)) * riverField.a);
+    float bankSlope = geometryField.a / max(0.35, bankMetres);
+    float riverFadeM = clamp(0.42 / max(0.08, bankSlope), 0.45, 4.0);
+    float channelWet = smoothstep(0.0, riverFadeM, bankMetres);
+    shoreWetness = clamp(channelWet * mix(0.38, 1.0, depthWet), 0.0, 1.0);
   }
 #endif
 
