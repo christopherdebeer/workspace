@@ -507,6 +507,11 @@ void main() {
   // the stable 0.5 cutoff. Only the fine coastal strip moves below it during
   // run-up; on retreat it overlaps the body rather than exposing a gap.
   bool coastalKind = kind > 0.5 && kind < 2.5;
+  // Declared outside the surf split because both the broad body and the
+  // shoreline overlay use the same local ground colour later in the shader.
+  // Keep the texture sample after discard so rejected surf fragments pay
+  // nothing for it.
+  vec3 terrainC = uTerrainColour;
 #ifdef HYDRO_SURF
   if (!coastalKind || abs(geometryField.g) > 96.0) discard;
   float coverageCut = 0.5;
@@ -537,7 +542,7 @@ void main() {
   // truck; the sward's colour field is the palette at THIS fragment's XZ
   // wherever it reaches (a 768 m square around the truck), and the frame
   // colour stands in beyond it.
-  vec3 terrainC = uTerrainColour;
+#endif
   if (uSwardW > 1.0) {
     vec2 su = (vAbsoluteXZ - uSwardOrg) / uSwardW;
     if (su.x > 0.0 && su.x < 1.0 && su.y > 0.0 && su.y < 1.0) {
@@ -545,7 +550,6 @@ void main() {
       terrainC = mix(uTerrainColour, texture2D(uSwardCol, su).rgb, inside);
     }
   }
-#endif
   vec4 dynamics = texture2D(uHydroDynamics, vHydroUv);
   float seed = materialField.g;
   float turbidity = materialField.b;

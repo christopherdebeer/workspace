@@ -30,7 +30,7 @@ import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt
 import { pickInfrastructureRecipe, planSupportStations, type StructureRecipe } from './infrastructure';
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
 import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
-import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSystem, type OceanCoverage } from './hydro';
+import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSample, type HydroSystem, type OceanCoverage } from './hydro';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
@@ -2409,14 +2409,15 @@ function hydroTick(nowMs: number): void {
  * enough to check: it is the same order as the roadGrid scan immediately above
  * every call site.
  *
- * `sampleRestingSurface` returns undefined below half coverage, so this is the
- * classification answer and not the shoreline's soft edge. That is right for
- * "may the truck drive here" and wrong for shading, which is why the shader
- * reads a signed distance instead.
+ * The caller-owned coverage cut is the shader's shared stationary bank patch,
+ * so the truck and the visible inland waterline agree on the same fragment.
  */
+function drawnHydroAt(x: number, z: number): HydroSample | undefined {
+  return hydroSys?.sampleRestingSurface(x, z, WATERLINE_CUT(x, z));
+}
 function hydroWet(x: number, z: number): boolean {
   if (!HYDRO_ON || !hydroSys) return false;
-  const wet = hydroSys.sampleRestingSurface(x, z);
+  const wet = drawnHydroAt(x, z);
   if (!wet) return false;
   // ── AND THE WATER HAS TO BE ABOVE THE GROUND ──
   //
@@ -16698,7 +16699,7 @@ const wiSet = new Set<Seg>();
 const FORD_MIN_M = 0.12;
 function fordDepthAt(x: number, z: number): number {
   if (!HYDRO_ON || !hydroSys) return 0;
-  const wet = hydroSys.sampleRestingSurface(x, z);
+  const wet = drawnHydroAt(x, z);
   if (!wet) return 0;
   const e = roadEdge(x, z);
   const deck = e ? e.y : hasHeight(x, z) ? sampleHeight(x, z) : NaN;
@@ -16720,7 +16721,7 @@ function waterInfoAt(x: number, z: number): { depth: number; fx: number; fz: num
   // resting level and a depth at every texel of every body, ocean included.
   // Ask it first. The channel model stays as the fallback for water that has
   // a carved bed but no built field yet — a tile mid-stream, or a culvert.
-  const wet = hydroSys?.sampleRestingSurface(x, z);
+  const wet = drawnHydroAt(x, z);
   if (wet) {
     // THE FLOOR IS THE DECK ON A FORD: the wheels stand on the carriageway,
     // not on the bed the road was laid over, so that is what the water is
@@ -23675,7 +23676,7 @@ const WETFX_BOB = 0.2;
 interface WetFx { levelM: number; levelY: number; depthM: number; kind: string }
 let wetfxWhy = 'idle';
 function splashWet(x: number, z: number): WetFx | null {
-  const w = hydroSys?.sampleRestingSurface(x, z);
+  const w = drawnHydroAt(x, z);
   if (!w) { wetfxWhy = 'no-field'; return null; }
   const levelY = w.restingLevelM - baseElev;
   // Level over the DRAWN ground, the same honest depth waterInfoAt prefers.
@@ -26648,13 +26649,16 @@ function truckSpec(): Record<string, number> {
 type WetClass = 'W' | 'D' | 'U' | 'E' | 'F' | 'C' | 'O' | 'c' | 'X' | '.';
 function wetClassAt(x: number, z: number): WetClass {
   const surf = surfaceAt(x, z);
-  const wet = HYDRO_ON ? hydroSys?.sampleRestingSurface(x, z) : undefined;
+  // Ask below either possible shoreline cut so the overlay can show the
+  // whole transition band, including fragments the ragged cut admits below
+  // the canonical 0.5 field classification.
+  const wet = HYDRO_ON ? hydroSys?.sampleRestingSurface(x, z, 0.005) : undefined;
   const ground = hasHeight(x, z) ? sampleHeight(x, z) + baseElev : NaN;
   const above = !!wet && (!Number.isFinite(ground) || wet.restingLevelM > ground + 0.02);
   const cut = WATERLINE_CUT(x, z);
   const drawn = !!wet && above && wet.coverage >= cut;
   const onDeck = surf === 'road' || surf === 'track';
-  if (wet && Math.abs(wet.coverage - 0.5) < 0.12 && above) return 'E';
+  if (wet && Math.abs(wet.coverage - cut) < 0.12 && above) return 'E';
   if (drawn) return onDeck ? 'D' : surf === 'water' ? 'W' : 'X';
   if (wet && !above) return 'U';
   if (surf === 'water' && fordDepthAt(x, z) > FORD_MIN_M && onDeck) return 'F';

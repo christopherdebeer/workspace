@@ -72,7 +72,12 @@ export interface HydroSystem {
   getTuning(): Readonly<HydroTuning>;
   update(frame: HydroFrame): void;
   getTileBinding(key: TileKey): HydroTileBinding | undefined;
-  sampleRestingSurface(x: number, z: number): HydroSample | undefined;
+  /**
+   * Sample the field at a caller-owned coverage cut. The default preserves
+   * the field's canonical 0.5 classification; rendering/physics callers pass
+   * the same world-space shoreline cut used by the shader.
+   */
+  sampleRestingSurface(x: number, z: number, coverageCut?: number): HydroSample | undefined;
   /** Everything that decided the surface at a point: the texel, the bodies
    *  the tile holds and how each one's level was modelled. */
   debugAt(x: number, z: number): Record<string, unknown> | null;
@@ -290,6 +295,42 @@ function worldToUv(field: HydroTileField): THREE.Matrix3 {
     0, sz, offset - field.bounds.minZ * sz,
     0, 0, 1,
   );
+}
+
+/** Pure field sampling shared by the live system and the hydro self-test. */
+export function sampleFieldSurface(
+  field: HydroTileField,
+  x: number,
+  z: number,
+  coverageCut = 0.5,
+): HydroSample | undefined {
+  if (x < field.bounds.minX || x > field.bounds.maxX
+    || z < field.bounds.minZ || z > field.bounds.maxZ) return undefined;
+  const u = (x - field.bounds.minX)
+    / Math.max(Number.EPSILON, field.bounds.maxX - field.bounds.minX);
+  const v = (z - field.bounds.minZ)
+    / Math.max(Number.EPSILON, field.bounds.maxZ - field.bounds.minZ);
+  const ix = clamp(Math.round(field.gutter + u * (field.resolution - 1)), 0, field.width - 1);
+  const iz = clamp(Math.round(field.gutter + v * (field.resolution - 1)), 0, field.height - 1);
+  const i = iz * field.width + ix;
+  const coverage = field.geometry[i * 4];
+  const cut = Number.isFinite(coverageCut) ? clamp(coverageCut, 0, 1) : 0.5;
+  if (coverage < cut) return undefined;
+  const kindId = field.material[i * 4];
+  const kind = HYDRO_ID_KIND[kindId];
+  if (!kind) return undefined;
+  const flag = field.material[i * 4 + 3];
+  return {
+    kind,
+    coverage,
+    restingLevelM: field.elevationBaseM + field.geometry[i * 4 + 2],
+    shoreDistanceM: field.geometry[i * 4 + 1],
+    depthM: field.geometry[i * 4 + 3],
+    flow: [field.dynamics[i * 4], field.dynamics[i * 4 + 1]],
+    fetchM: field.dynamics[i * 4 + 2],
+    intermittent: (flag & HydroFlags.Intermittent) !== 0,
+    tidal: (flag & HydroFlags.Tidal) !== 0,
+  };
 }
 
 class DefaultHydroSystem implements HydroSystem {
@@ -534,35 +575,14 @@ class DefaultHydroSystem implements HydroSystem {
     return this.records.get(key)?.binding;
   }
 
-  sampleRestingSurface(x: number, z: number): HydroSample | undefined {
+  sampleRestingSurface(x: number, z: number, coverageCut = 0.5): HydroSample | undefined {
     // Active rings are small. If this grows, index records by the world tile
     // key already known to the caller rather than introducing another grid.
     for (const record of this.records.values()) {
       const field = record.field;
       if (!field || x < field.bounds.minX || x > field.bounds.maxX
         || z < field.bounds.minZ || z > field.bounds.maxZ) continue;
-      const u = (x - field.bounds.minX) / Math.max(Number.EPSILON, field.bounds.maxX - field.bounds.minX);
-      const v = (z - field.bounds.minZ) / Math.max(Number.EPSILON, field.bounds.maxZ - field.bounds.minZ);
-      const ix = clamp(Math.round(field.gutter + u * (field.resolution - 1)), 0, field.width - 1);
-      const iz = clamp(Math.round(field.gutter + v * (field.resolution - 1)), 0, field.height - 1);
-      const i = iz * field.width + ix;
-      const coverage = field.geometry[i * 4];
-      if (coverage < 0.5) continue;
-      const kindId = field.material[i * 4];
-      const kind = HYDRO_ID_KIND[kindId];
-      if (!kind) continue;
-      const flag = field.material[i * 4 + 3];
-      return {
-        kind,
-        coverage,
-        restingLevelM: field.elevationBaseM + field.geometry[i * 4 + 2],
-        shoreDistanceM: field.geometry[i * 4 + 1],
-        depthM: field.geometry[i * 4 + 3],
-        flow: [field.dynamics[i * 4], field.dynamics[i * 4 + 1]],
-        fetchM: field.dynamics[i * 4 + 2],
-        intermittent: (flag & HydroFlags.Intermittent) !== 0,
-        tidal: (flag & HydroFlags.Tidal) !== 0,
-      };
+      return sampleFieldSurface(field, x, z, coverageCut);
     }
     return undefined;
   }

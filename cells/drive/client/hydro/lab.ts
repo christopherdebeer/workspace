@@ -7,6 +7,7 @@ import {
 } from './build-tile';
 import { nearestSegment } from './geometry';
 import { createHydroSystem, type HydroSystem } from './system';
+import { bankHabitat, bankPatch, WATERLINE_CUT } from '../shoreline';
 import type {
   CoverageGrid, ElevationGrid, HydroDebugView, HydroFeature, HydroKind,
   HydroSample, HydroTileInput, HydroTuning, WorldBounds,
@@ -281,13 +282,21 @@ function page(): string {
  * exact profile this carve is based on.
  */
 function makeTerrain(f: Fixture, analysis: HydroTileAnalysis): THREE.Mesh {
-  const channels: Array<{ profile: Float32Array; halfW: number }> = [];
+  const channels: Array<{
+    profile: Float32Array;
+    halfW: number;
+    kind: 'river' | 'stream' | 'canal';
+  }> = [];
   for (let i = 0; i < f.features.length; i++) {
     const feature = f.features[i];
     if (feature.geometry.type !== 'line') continue;
     const profile = analysis.profiles.get(`${feature.id}#${i}`)
       ?? analysis.profiles.get(feature.id);
-    if (profile) channels.push({ profile, halfW: feature.geometry.widthM * 0.5 });
+    if (profile) channels.push({
+      profile,
+      halfW: feature.geometry.widthM * 0.5,
+      kind: feature.kind as 'river' | 'stream' | 'canal',
+    });
   }
   const carvedHeight = (x: number, z: number): number => {
     let ground = f.height(x, z);
@@ -314,18 +323,94 @@ function makeTerrain(f: Fixture, analysis: HydroTileAnalysis): THREE.Mesh {
   geometry.rotateX(-Math.PI / 2);
   const p = geometry.attributes.position as THREE.BufferAttribute;
   const colour = new Float32Array(p.count * 3);
-  const low = new THREE.Color(0x506352), high = new THREE.Color(0x967c55), scratch = new THREE.Color();
+  const low = new THREE.Color(0x506352), high = new THREE.Color(0x967c55);
+  const mineral = new THREE.Color(0x5c5238), damp = new THREE.Color(0x39483b);
+  const reed = new THREE.Color(0x667033);
+  const scratch = new THREE.Color();
   for (let i = 0; i < p.count; i++) {
-    const h = carvedHeight(p.getX(i), p.getZ(i));
+    const x = p.getX(i), z = p.getZ(i);
+    const h = carvedHeight(x, z);
     p.setY(i, h - f.originY);
     scratch.copy(low).lerp(high, Math.max(0, Math.min(1, .45 + (h - f.originY) / 70)));
+    let nearest: {
+      distanceM: number;
+      halfW: number;
+      surfaceM: number;
+      kind: 'river' | 'stream' | 'canal';
+      flow: [number, number];
+    } | undefined;
+    for (const channel of channels) {
+      const hit = nearestSegment(x, z, channel.profile, 3);
+      if (hit.segment < 0 || (nearest && hit.distanceM >= nearest.distanceM)) continue;
+      const a = hit.segment * 3, b = (hit.segment + 1) * 3;
+      const dx = channel.profile[b] - channel.profile[a];
+      const dz = channel.profile[b + 1] - channel.profile[a + 1];
+      const length = Math.max(.001, Math.hypot(dx, dz));
+      nearest = {
+        distanceM: hit.distanceM,
+        halfW: channel.halfW,
+        surfaceM: channel.profile[a + 2] * (1 - hit.t) + channel.profile[b + 2] * hit.t,
+        kind: channel.kind,
+        flow: [dx / length, dz / length],
+      };
+    }
+    if (nearest) {
+      const bankDistance = nearest.distanceM - nearest.halfW;
+      if (bankDistance > -.5 && bankDistance < 14) {
+        const slope = Math.min(.6, Math.hypot(
+          f.height(x + 2, z) - f.height(x - 2, z),
+          f.height(x, z + 2) - f.height(x, z - 2),
+        ) / 4);
+        const habitat = bankHabitat(null, .58, 14, slope, true, h, {
+          kind: nearest.kind,
+          restingLevelM: nearest.surfaceM,
+          depthM: Math.max(0, nearest.surfaceM - h),
+          shoreDistanceM: Math.max(0, bankDistance),
+          flow: nearest.flow,
+        });
+        const patch = bankPatch(x, z);
+        const bankFade = 1 - THREE.MathUtils.smoothstep(bankDistance, 7, 14);
+        const mineralWeight = habitat.mineral * bankFade
+          * THREE.MathUtils.smoothstep(patch, .18, .72);
+        const reedWeight = habitat.reeds * bankFade
+          * THREE.MathUtils.smoothstep(patch, .48, .82);
+        // A patch-varying damp fringe continues the shallow water's local
+        // terrain colour onto dry ground. It breaks the silhouette without
+        // alpha stipple, shader dithering, or a second fake water surface.
+        const wetWidth = 2.4 + patch * 3.8;
+        const dampWeight = 1 - THREE.MathUtils.smoothstep(bankDistance, 0, wetWidth);
+        scratch.lerp(damp, Math.min(.68, dampWeight * .68));
+        scratch.lerp(mineral, Math.min(.78, mineralWeight * .82));
+        scratch.lerp(reed, Math.min(.58, reedWeight * .58));
+      }
+    }
     colour[i*3] = scratch.r; colour[i*3+1] = scratch.g; colour[i*3+2] = scratch.b;
   }
   geometry.setAttribute('color', new THREE.BufferAttribute(colour, 3));
   geometry.computeVertexNormals();
-  return new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
-    vertexColors: true, roughness: .94, metalness: 0, flatShading: true,
+  const mesh = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({
+    vertexColors: true, roughness: .94, metalness: 0, flatShading: false,
   }));
+  // The production hydro shader samples the sward colour field beneath each
+  // fragment. Give the isolated lab the same evidence instead of a single
+  // fallback green, so shallow water and exposed banks share a palette.
+  const rgba = new Uint8Array(p.count * 4);
+  for (let i = 0; i < p.count; i++) {
+    rgba[i * 4] = Math.round(THREE.MathUtils.clamp(colour[i * 3], 0, 1) * 255);
+    rgba[i * 4 + 1] = Math.round(THREE.MathUtils.clamp(colour[i * 3 + 1], 0, 1) * 255);
+    rgba[i * 4 + 2] = Math.round(THREE.MathUtils.clamp(colour[i * 3 + 2], 0, 1) * 255);
+    rgba[i * 4 + 3] = 255;
+  }
+  const terrainField = new THREE.DataTexture(
+    rgba, 193, 193, THREE.RGBAFormat, THREE.UnsignedByteType,
+  );
+  terrainField.flipY = false;
+  terrainField.minFilter = THREE.LinearFilter;
+  terrainField.magFilter = THREE.LinearFilter;
+  terrainField.generateMipmaps = false;
+  terrainField.needsUpdate = true;
+  mesh.userData.terrainField = terrainField;
+  return mesh;
 }
 
 /** Protruding lab rocks use the analysed water profile for their waterline.
@@ -334,25 +419,33 @@ function makeTerrain(f: Fixture, analysis: HydroTileAnalysis): THREE.Mesh {
 function makeRiverDetails(f: Fixture, analysis: HydroTileAnalysis): THREE.Group {
   const group = new THREE.Group();
   group.name = 'hydro-lab-river-details';
-  if (!f.rocks?.length) return group;
-  const profiles = [...analysis.profiles.entries()]
-    .filter(([key]) => key.includes('#'))
-    .map(([, profile]) => profile);
-  const geometry = new THREE.IcosahedronGeometry(1, 1);
-  const material = new THREE.MeshStandardMaterial({
+  const channels: Array<{ profile: Float32Array; halfW: number; kind: string }> = [];
+  for (let i = 0; i < f.features.length; i++) {
+    const feature = f.features[i];
+    if (feature.geometry.type !== 'line') continue;
+    const profile = analysis.profiles.get(`${feature.id}#${i}`)
+      ?? analysis.profiles.get(feature.id);
+    if (profile) channels.push({
+      profile,
+      halfW: feature.geometry.widthM * .5,
+      kind: feature.kind,
+    });
+  }
+  const rockGeometry = new THREE.IcosahedronGeometry(1, 1);
+  const rockMaterial = new THREE.MeshStandardMaterial({
     color: 0x64675b, roughness: .98, metalness: 0, flatShading: true,
   });
-  for (const [x, z, radius, height] of f.rocks) {
+  for (const [x, z, radius, height] of f.rocks ?? []) {
     let surface = f.height(x, z) + FLOWING_NOMINAL_DEPTH_M;
     let nearest = Infinity;
-    for (const profile of profiles) {
+    for (const { profile } of channels) {
       const hit = nearestSegment(x, z, profile, 3);
       if (hit.segment < 0 || hit.distanceM >= nearest) continue;
       const a = hit.segment * 3, b = (hit.segment + 1) * 3;
       surface = profile[a + 2] * (1 - hit.t) + profile[b + 2] * hit.t;
       nearest = hit.distanceM;
     }
-    const rock = new THREE.Mesh(geometry, material);
+    const rock = new THREE.Mesh(rockGeometry, rockMaterial);
     rock.position.set(x, surface - f.originY - height * .42, z);
     rock.scale.set(radius, height, radius * .82);
     rock.rotation.y = ((x * 17.13 + z * 3.71) % 6.283 + 6.283) % 6.283;
@@ -360,9 +453,79 @@ function makeRiverDetails(f: Fixture, analysis: HydroTileAnalysis): THREE.Group 
     rock.castShadow = rock.receiveShadow = true;
     group.add(rock);
   }
+
+  // Lab-only bank witnesses. Production gets these habitats from the sward;
+  // the isolated page needs a few sparse forms so mineral margins and reed
+  // shelter remain legible without loading the entire terrain decoration stack.
+  const pebbleGeometry = new THREE.IcosahedronGeometry(1, 0);
+  const pebbleMaterial = new THREE.MeshStandardMaterial({
+    color: 0x706852, roughness: 1, metalness: 0, flatShading: true,
+  });
+  const reedGeometry = new THREE.ConeGeometry(.13, 1, 3);
+  const reedMaterial = new THREE.MeshStandardMaterial({
+    color: 0x69783d, roughness: .96, metalness: 0, flatShading: true,
+  });
+  for (const channel of channels) {
+    const profile = channel.profile;
+    for (let p = 3; p < profile.length; p += 3) {
+      const ax = profile[p - 3], az = profile[p - 2];
+      const bx = profile[p], bz = profile[p + 1];
+      const dx = bx - ax, dz = bz - az;
+      const length = Math.hypot(dx, dz);
+      if (length < .001) continue;
+      const tx = dx / length, tz = dz / length;
+      const nx = -tz, nz = tx;
+      const steps = Math.max(1, Math.floor(length / 14));
+      for (let step = 0; step < steps; step++) {
+        const t = (step + .5) / steps;
+        const cx = ax + dx * t, cz = az + dz * t;
+        const surfaceM = profile[p - 1] * (1 - t) + profile[p + 2] * t;
+        for (const side of [-1, 1]) {
+          const seed = bankPatch(cx + side * 19.7, cz - side * 8.3);
+          const offset = channel.halfW + 1.2 + seed * 5.5;
+          const x = cx + nx * side * offset, z = cz + nz * side * offset;
+          const groundM = f.height(x, z);
+          const slope = Math.min(.6, Math.hypot(
+            f.height(x + 2, z) - f.height(x - 2, z),
+            f.height(x, z + 2) - f.height(x, z - 2),
+          ) / 4);
+          const habitat = bankHabitat(null, .58, 14, slope, true, groundM, {
+            kind: channel.kind,
+            restingLevelM: surfaceM,
+            depthM: Math.max(0, surfaceM - groundM),
+            shoreDistanceM: offset - channel.halfW,
+            flow: [tx, tz],
+          });
+          if (!habitat.submerged && habitat.mineral * seed > .16) {
+            const pebble = new THREE.Mesh(pebbleGeometry, pebbleMaterial);
+            const radius = .28 + seed * .48;
+            pebble.position.set(x, groundM - f.originY + radius * .28, z);
+            pebble.scale.set(radius * 1.45, radius * .58, radius);
+            pebble.rotation.y = seed * Math.PI * 2;
+            pebble.castShadow = pebble.receiveShadow = true;
+            group.add(pebble);
+          }
+          const reedSeed = bankPatch(x - 31.2, z + 12.6);
+          if (!habitat.submerged && habitat.reeds * reedSeed > .22) {
+            const blade = new THREE.Mesh(reedGeometry, reedMaterial);
+            const height = 1 + reedSeed * 1.5;
+            blade.position.set(x + nx * .45, groundM - f.originY + height * .5, z + nz * .45);
+            blade.scale.set(1 + seed * .45, height, 1 + seed * .45);
+            blade.rotation.y = reedSeed * Math.PI * 2;
+            blade.castShadow = true;
+            group.add(blade);
+          }
+        }
+      }
+    }
+  }
   group.userData.dispose = (): void => {
-    geometry.dispose();
-    material.dispose();
+    rockGeometry.dispose();
+    rockMaterial.dispose();
+    pebbleGeometry.dispose();
+    pebbleMaterial.dispose();
+    reedGeometry.dispose();
+    reedMaterial.dispose();
   };
   return group;
 }
@@ -516,6 +679,7 @@ export async function startHydroLab(): Promise<void> {
 
   let hydro: HydroSystem | undefined;
   let terrain: THREE.Mesh | undefined;
+  let terrainField: THREE.DataTexture | undefined;
   let riverDetails: THREE.Group | undefined;
   let analysis: HydroTileAnalysis | undefined;
   let fixture = FIXTURES[0];
@@ -559,6 +723,8 @@ export async function startHydroLab(): Promise<void> {
     if (terrain) {
       terrain.removeFromParent(); terrain.geometry.dispose(); (terrain.material as THREE.Material).dispose();
     }
+    terrainField?.dispose();
+    terrainField = undefined;
     if (riverDetails) {
       riverDetails.removeFromParent();
       (riverDetails.userData.dispose as (() => void) | undefined)?.();
@@ -566,6 +732,7 @@ export async function startHydroLab(): Promise<void> {
     const input = tileInput(fixture, ++revision);
     analysis = analyseHydroTile(input);
     terrain = makeTerrain(fixture, analysis);
+    terrainField = terrain.userData.terrainField as THREE.DataTexture | undefined;
     terrain.visible = get<HTMLInputElement>('ground').checked;
     scene.add(terrain);
     riverDetails = makeRiverDetails(fixture, analysis);
@@ -670,7 +837,9 @@ export async function startHydroLab(): Promise<void> {
     ray.setFromCamera(pointer, camera);
     const hit = terrain ? ray.intersectObject(terrain, false)[0] : undefined;
     if (!hit) { probe.visible = false; inspected = ''; return; }
-    const s = hydro?.sampleRestingSurface(hit.point.x, hit.point.z);
+    const s = hydro?.sampleRestingSurface(
+      hit.point.x, hit.point.z, WATERLINE_CUT(hit.point.x, hit.point.z),
+    );
     inspected = sampleText(s, hit.point.x, hit.point.z);
     probe.position.set(hit.point.x, hit.point.y + .6, hit.point.z); probe.visible = true;
   };
@@ -792,6 +961,12 @@ export async function startHydroLab(): Promise<void> {
       rain: number('rain'),
       sunDirection: { x: sun.position.x, y: sun.position.y, z: sun.position.z },
       terrainColour: { r: .12, g: .16, b: .11 },
+      terrainField: terrainField ? {
+        texture: terrainField,
+        originX: BOUNDS.minX,
+        originZ: BOUNDS.minZ,
+        widthM: BOUNDS.maxX - BOUNDS.minX,
+      } : undefined,
       rig: demoRig ? {
         x: demoRig.x, z: demoRig.z, vx: demoRig.vx, vz: demoRig.vz, wadeM: .48,
       } : undefined,
@@ -813,6 +988,7 @@ export async function startHydroLab(): Promise<void> {
     hydro?.dispose();
     terrain?.geometry.dispose();
     (terrain?.material as THREE.Material | undefined)?.dispose();
+    terrainField?.dispose();
     (riverDetails?.userData.dispose as (() => void) | undefined)?.();
     rigMarker.geometry.dispose();
     (rigMarker.material as THREE.Material).dispose();
