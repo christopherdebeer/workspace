@@ -52,6 +52,14 @@ export interface HydroStats {
 
 export interface HydroSystem {
   readonly object3d: THREE.Object3D;
+  /** A PLACEHOLDER FOR ANOTHER AGENT'S WORK IN PROGRESS. The shoreline pass
+   *  (client/shoreline.ts, pulled from the cell half-written) ties the
+   *  sward's ground revision to this counter so reed and mineral banks
+   *  rebuild with the hydro field; the agent had not yet written the field
+   *  when its credits ran out. Declared here at zero so the snapshot
+   *  type-checks and deploys without clobbering it; it is that agent's to
+   *  make count. */
+  readonly bankRevision: number;
   upsertTile(input: HydroTileInput): Promise<void>;
   removeTile(key: TileKey): void;
   setOceanLevelM(elevationM: number): void;
@@ -282,6 +290,7 @@ function worldToUv(field: HydroTileField): THREE.Matrix3 {
 
 class DefaultHydroSystem implements HydroSystem {
   readonly object3d = new THREE.Group();
+  readonly bankRevision = 0;   // see HydroSystem.bankRevision
   private readonly records = new Map<TileKey, TileRecord>();
   private readonly registry: HydroBodyRegistry;
   private readonly frameUniforms: HydroFrameUniforms = createHydroFrameUniforms();

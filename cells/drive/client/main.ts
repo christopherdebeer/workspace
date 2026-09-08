@@ -21,6 +21,7 @@ import { createAudio, type ImpactKind } from './audio';
 import { coastKm } from './coast';
 import { clamp } from './num';
 import { nearestStable, squareRings, uploadPrefix } from './render-work';
+import { bankHabitat, BANK_GLSL } from './shoreline';
 import { URL_OWNED, qs, qsHas, switchRows } from './switches';
 import { ECO_Z, decodeEcoTile, ecoBiomeName, ecoLookup, ecoTileOf, type EcoHit, type EcoRegion } from './eco';
 import { guildAt, guildKind, pickMix, type Guild } from './guild';
@@ -8778,7 +8779,7 @@ let swardRoadSeen = -1, swardGroundSeen = -1, swardFieldAt = 0, swardMaskMs = 0;
  */
 const swardRoadRev = (): number => osmDone.size + roadGrid.size + waterPolys.size;
 /** Ground shape: the heights' clock — rebuilds, not tiles. See flushTerrain. */
-const swardGroundRev = (): number => terrainBuilds;
+const swardGroundRev = (): number => terrainBuilds + (hydroSys?.bankRevision ?? 0);
 const swardU = {
   uField: { value: swardField }, uSwardCol: { value: swardColT }, uSwardMask: { value: swardMaskT },
   uFieldOrg: { value: new THREE.Vector2() }, uFieldW: { value: SWARD_FW },

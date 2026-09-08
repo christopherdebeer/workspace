@@ -3791,6 +3791,29 @@ Verified here: `tsc` clean, its check green, `boot.mjs` no page errors,
 all in scope where used, `extensions.derivatives` still a field on this
 three's ShaderMaterial. Not verified: how it looks, or what it costs.
 
+### A half-written snapshot is carried forward, not over
+
+The shoreline pass arrived on the cell as a snapshot of an editor: an 87-line
+`client/shoreline.ts` (reed and mineral bank habitat from cover, moisture,
+temperature, slope and a hydro bank sample; stationary metre-space GLSL
+patches shared by hydro and the sward; a bounded bank-field sampler), one
+import in main.ts, and the sward's ground revision reading a `bankRevision`
+that the hydro system did not have yet. Its author ran out of credits there.
+Meanwhile the river work (`b5db0c7`: a cobble bed under clear shallows,
+shallow rapids, bend eddies, a rig trail on the water, a 4-connected mask for
+narrow diagonal streams, lab scenes with rocks) landed on the branch from the
+other session and had to ship.
+
+**The rule:** a deploy must not write over what another agent has on the
+cell, and it must not wait on it either. So the snapshot rides along — its
+file, its import, its revision line — and the one thing it lacked is declared
+as a PLACEHOLDER: `HydroSystem.bankRevision`, zero, commented as that agent's
+to make count. The tree type-checks, the bundle runs (an unused import is
+tree-shaken; the counter reads zero), and when the agent resumes it finds the
+cell exactly as it left it plus the branch's work plus one field it meant to
+write. Verified: `tsc` clean, hydro self-tests and the inland-water test
+green, `boot.mjs` no page errors, its own check script green.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where
