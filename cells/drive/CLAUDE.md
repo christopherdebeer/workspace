@@ -4057,6 +4057,35 @@ to fix": the physics samples the field at the shader's `WATERLINE_CUT`
 through `drawnHydroAt`, `sampleFieldSurface` extracted with a coverage-cut
 argument, `terrainC` hoisted out of the surf split) — no conflicts.
 
+### The bank pass pulled from the cell — texel centres, one hash, reeds and stones
+
+Pulled after v1788878839369 and committed as the other agent's work
+(9f9ee54): it builds on the chart unit above and keeps every rule of it.
+What it changes, for whoever reads the bank next:
+
+- **The field is sampled the way the GPU samples it.** `hydro/field-sample.ts`
+  interpolates geometry and dynamics bilinearly at texel CENTRES —
+  `(i − gutter + 0.5) · span / resolution` — and reads class and flags
+  nearest; the self-test and `sampleBankField` use the same centres. The
+  old `round((res − 1)·u)` was half a texel off the shader everywhere.
+- **One hash for the waterline, on both sides.** The bank patches' hash works
+  in float32's exact integer range; the fractional-multiply version diverged
+  by whole buckets between CPU and GPU at kilometre scales, so the physics
+  cut and the drawn cut could part. `WATERLINE_CUT` now takes the kind:
+  ocean and lagoon keep 0.5 because the surf strip shares that boundary.
+- **The sward grows the bank from its own tufts.** Reed and mineral
+  suitability ride the colour texture's two spare floats; a submerged slot
+  is a NEGATIVE density only an emergent may occupy; the same nine vertices
+  become an upright reed or a three-faced stone, damped in the wind and
+  never scaled up by range. `REED_M2` is 0.14 — before `SWARD_LUSH`, tall
+  stalks need fewer slots than short grass.
+- **A river's bank wetness follows metres and depth**, not thirty percent of
+  every channel; an unclassified texel is discarded before it draws a skirt.
+
+Verified here: `tsc` clean, hydro, inland-water and switches tests green,
+`boot.mjs` no page or GLSL errors, the Senqu chart and seat frames rendered
+without errors and the wet map unchanged. Not judged by eye at the bank.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where
