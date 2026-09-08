@@ -3687,6 +3687,25 @@ on-board tap read −36 at the start of the spool-up; the full-spool levels
 (−21 on board, −27 ten metres off, −46 at forty) are the offline render's and
 the seat's report is the verification.
 
+**THE GRIT WAS A BUBBLING BROOK.** First report from the seat after the deploy:
+*"not sure if it's the grit or rattle but it sounds like a bubbling brook."* It
+was the grit, and the diagnosis is in the pattern: every gravel grain had been
+given "a little pitch" — a sine ring with an exponential decay — and through
+the 900–2300 Hz bandpass it wore, a short pitched chirp that dies is the
+recipe for a water bubble. Nobody heard it in the year it sat at −42 dBFS;
+at −29 it was a brook on the first drive. Gravel is broadband and crackly and
+has no pitch, so `gritPattern` is crackles (one to eight milliseconds of
+noise, most small, a few large) over a few low crunches a second (a one-pole
+lowpass with mass), through a wide band at 2–4 kHz. **The pitched pattern is
+the rapids' now** — `bubblePattern` under the boil, where "a great many short
+chirps, dying" was right all along. The rattle had the other half of the same
+fault (seven hundred random sine tinkles — wind chimes) and is a BUZZ now:
+bursts of clicks at thirty to ninety a second with two inharmonic metal
+partials, swelling and dying, over low knocks — because what separates a
+rattle from a tinkle is the repetition. Both re-measured into `UNIT`; the
+targets did not move. Verified by arithmetic and the pattern's construction,
+not by an ear: the seat's next report is the verification.
+
 **JUDGEMENT, NOT ANCHORS.** The targets are numbers written down so they can be
 moved, like the river's 0.28 before them. What is known: −40 dBFS is inaudible
 on a phone; a bed at −26 to −36 leaves the engine (−23 at 40 km/h) on top; the

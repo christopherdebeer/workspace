@@ -39,7 +39,7 @@ const res = await page.evaluate(async () => {
   const filt = (ctx, type, f, q) => { const n = ctx.createBiquadFilter(); n.type = type; n.frequency.value = f; if (q !== undefined) n.Q.value = q; return n; };
   const src = (ctx, buf, rate = 1) => { const s = ctx.createBufferSource(); s.buffer = buf; s.loop = true; s.playbackRate.value = rate; return s; };
   const chain = (buf, type, f, q, rate = 1) => (ctx) => { const s = src(ctx, buf(ctx), rate); const n = filt(ctx, type, f, q); s.connect(n); n.connect(ctx.destination); s.start(); };
-  const grit = (ctx) => patBuf(ctx, A.gritPattern(SR)), rattle = (ctx) => patBuf(ctx, A.rattlePattern(SR));
+  const grit = (ctx) => patBuf(ctx, A.gritPattern(SR)), rattle = (ctx) => patBuf(ctx, A.rattlePattern(SR)), bubble = (ctx) => patBuf(ctx, A.bubblePattern(SR));
   // The same settings as build()/update()/ambience() at a 12 km/h day (ambWind 0.22).
   const voices = {
     wind: ['HP 745', chain(noiseBuf, 'highpass', 745)],
@@ -47,10 +47,10 @@ const res = await page.evaluate(async () => {
     sward: ['BP 3264 Q1.1', chain(noiseBuf, 'bandpass', 3264, 1.1)],
     river: ['still, BP 340 Q.8', chain(noiseBuf, 'bandpass', 340, 0.8)],
     rapids: ['froth 1, BP 860 Q.5', chain(noiseBuf, 'bandpass', 860, 0.5)],
-    boil: ['grit ×0.36, BP 380 Q.9', chain(grit, 'bandpass', 380, 0.9, 0.36)],
+    boil: ['bubble ×0.36, BP 380 Q.9', chain(bubble, 'bandpass', 380, 0.9, 0.36)],
     rain: ['HP 1800', chain(noiseBuf, 'highpass', 1800)],
     bird: ['sine 3k', (ctx) => { const o = ctx.createOscillator(); o.type = 'sine'; o.frequency.value = 3000; o.connect(ctx.destination); o.start(); }],
-    rattle: ['shake 1: ×1.6, BP 3200 Q.5', chain(rattle, 'bandpass', 3200, 0.5, 1.6)],
+    rattle: ['shake 1: ×1.6, BP 2600 Q.4', chain(rattle, 'bandpass', 2600, 0.4, 1.6)],
     drone: ['spool 1 load .5, 3 osc BP 1300 + whoosh', (ctx) => {
       const f0 = 62 + 58 + 11;
       const mk = (type, f) => { const o = ctx.createOscillator(); o.type = type; o.frequency.value = f; return o; };
@@ -63,7 +63,7 @@ const res = await page.evaluate(async () => {
     }],
     // the truck, for context (linear gains, ear-tuned)
     engine: ['idle: saw+sq LP 650', (ctx) => { const a = ctx.createOscillator(); a.type = 'sawtooth'; a.frequency.value = 51.6; const b = ctx.createOscillator(); b.type = 'square'; b.frequency.value = 77.4; const m = ctx.createGain(); m.gain.value = 0.5; const lp = filt(ctx, 'lowpass', 650); a.connect(lp); b.connect(m); m.connect(lp); lp.connect(ctx.destination); a.start(); b.start(); }],
-    grit: ['×0.98, BP 1190 Q.5', chain(grit, 'bandpass', 1190, 0.5, 0.977)],
+    grit: ['×0.98, BP 2600 Q.35', chain(grit, 'bandpass', 2600, 0.35, 0.977)],
     roarTar: ['tarmac BP 1150 Q.7', chain(noiseBuf, 'bandpass', 1150, 0.7)],
   };
   const unit = {};

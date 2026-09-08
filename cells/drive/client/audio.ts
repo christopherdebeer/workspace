@@ -56,57 +56,118 @@ export function rainPattern(rate: number): Float32Array {
   return data;
 }
 
-/** THE GRAVEL BED, as a pattern: not steady noise but a few seconds of
- *  individual stone impacts (sharp attack, short decay, random pitch), looped
- *  and sped up with the truck so loose ground CRUNCHES rather than hisses.
- *  Peak-normalised, so its loudness is a property of the gain and not of
- *  the draw. */
+/** A seeded generator, so a pattern is the same on every device and every
+ *  arm: the bed under the truck is a property of the game, not of the draw. */
+const seeded = (seed: number): (() => number) => {
+  let s0 = seed >>> 0;
+  return () => { s0 = (Math.imul(s0, 1664525) + 1013904223) >>> 0; return s0 / 4294967296; };
+};
+const normalise = (d: Float32Array): Float32Array => {
+  let peak = 0;
+  for (let i = 0; i < d.length; i++) peak = Math.max(peak, Math.abs(d[i]));
+  if (peak > 0) for (let i = 0; i < d.length; i++) d[i] /= peak;
+  return d;
+};
+
+/**
+ * THE GRAVEL BED, as a pattern. Not steady noise but individual stone
+ * events, looped and sped up with the truck so loose ground CRUNCHES rather
+ * than hisses. Two kinds of event and NO PITCH: a great many short CRACKLES
+ * (a stone against the tread — one to eight milliseconds, most of them small
+ * and a few of them large) and a few CRUNCHES a second (a stone rolling
+ * under the load — twenty to sixty milliseconds, low, with mass).
+ *
+ * THE FIRST CUT WAS A BUBBLING BROOK. It gave every stone "a little pitch",
+ * a sine ring with a decay, and through the low-mid bandpass it wore that is
+ * the recipe for a water bubble: a short pitched chirp, dying. Nobody heard
+ * it for as long as the bed sat at −42 dBFS; at −29 the first report from
+ * the seat was a brook. Gravel is broadband and crackly and has no pitch,
+ * so the pitch is gone from here and the pattern that had it is the rapids'
+ * now (`bubblePattern`), where it was right all along.
+ */
 export function gritPattern(rate: number): Float32Array {
   const gd = new Float32Array(rate * 4);
-  const grains = Math.floor(rate * 4 * 0.012); // ~530 stones/sec of loop
+  const rand = seeded(0x67726974);
+  const crackles = Math.floor(rate * 4 * 0.006);   // ~290 a second of loop
+  for (let g = 0; g < crackles; g++) {
+    const at0 = Math.floor(rand() * (gd.length - 600));
+    const len = Math.round(rate * (0.001 + rand() * 0.007));
+    const r = rand(), amp = 0.15 + r * r * 0.85;     // most small, a few large
+    for (let i = 0; i < len; i++) gd[at0 + i] += (rand() * 2 - 1) * Math.exp(-6 * i / len) * amp;
+  }
+  for (let g = 0; g < 28; g++) {                       // seven crunches a second
+    const at0 = Math.floor(rand() * (gd.length - 3200));
+    const len = Math.round(rate * (0.02 + rand() * 0.04));
+    const amp = 0.4 + rand() * 0.6, k = 0.1 + rand() * 0.1;   // a one-pole lowpass, ~800–1500 Hz
+    let lp = 0;
+    for (let i = 0; i < len; i++) { lp += ((rand() * 2 - 1) - lp) * k; gd[at0 + i] += lp * Math.exp(-4 * i / len) * amp * 2.5; }
+  }
+  return normalise(gd);
+}
+
+/** FAST WATER, as a pattern: a great many short pitched chirps, each dying
+ *  — which is what a bubble is, and what the gravel bed used to be made of
+ *  (see gritPattern). Slowed and held low under the rapids' wash it is the
+ *  boil; it is not under the wheels any more. */
+export function bubblePattern(rate: number): Float32Array {
+  const gd = new Float32Array(rate * 4);
+  const rand = seeded(0x62756262);
+  const grains = Math.floor(rate * 4 * 0.012);
   for (let g = 0; g < grains; g++) {
-    const at0 = Math.floor(Math.random() * (gd.length - 900));
-    const len = 60 + Math.floor(Math.random() * 700);
-    const amp = 0.25 + Math.random() * 0.75;
-    const ring = 0.04 + Math.random() * 0.5; // a little pitch per stone
+    const at0 = Math.floor(rand() * (gd.length - 900));
+    const len = 60 + Math.floor(rand() * 700);
+    const amp = 0.25 + rand() * 0.75;
+    const ring = 0.04 + rand() * 0.5;
     for (let i = 0; i < len; i++) {
       const env = Math.exp((-i / len) * 6);
-      gd[at0 + i] += (Math.random() * 2 - 1) * env * amp * 0.5 + Math.sin(i * ring) * env * amp * 0.12;
+      gd[at0 + i] += (rand() * 2 - 1) * env * amp * 0.5 + Math.sin(i * ring) * env * amp * 0.12;
     }
   }
-  let peak = 0;
-  for (let i = 0; i < gd.length; i++) peak = Math.max(peak, Math.abs(gd[i]));
-  if (peak > 0) for (let i = 0; i < gd.length; i++) gd[i] /= peak;
-  return gd;
+  return normalise(gd);
 }
 
 /**
- * THE CHASSIS WORKING, as a pattern. Pins, trim, the tools in the tray and
- * the tailgate on its catch: short rings at a few pitches, most of them
- * bright, one in eight a low clunk of something heavier finding its stop.
- * Looped, and sped up as the ground gets rougher, so washboard sounds like
- * a truck being shaken rather than like more gravel. Deterministic, like
- * the rain, so the same bed plays on every device.
+ * THE CHASSIS WORKING, as a pattern. A loose part BUZZES: a burst of clicks
+ * at thirty to ninety a second — each a millisecond of noise with two
+ * inharmonic metal partials — swelling and dying over a tenth to a third of
+ * a second, from several different parts of the truck; and under it the
+ * heavier things, a toolbox, the tailgate on its catch, as low knocks a few
+ * times a second. Looped, and sped up as the ground gets rougher, so
+ * washboard sounds like a truck being shaken rather than like more gravel.
+ *
+ * The first cut was seven hundred random sine tinkles at three to thirteen
+ * milliseconds — wind chimes, or the other half of the brook the gravel was
+ * making. What separates a rattle from a tinkle is the REPETITION: a panel
+ * on a loose fixing hits the same thing thirty times a second, and that
+ * periodicity is the whole character. Deterministic, like the rain.
  */
 export function rattlePattern(rate: number): Float32Array {
   const data = new Float32Array(Math.round(rate * 3));
-  let seed = 0x72617474;
-  const rand = (): number => { seed = (Math.imul(seed, 1664525) + 1013904223) >>> 0; return seed / 4294967296; };
-  for (let k = 0; k < 720; k++) {
-    const at0 = Math.floor(rand() * data.length);
-    const low = rand() < 0.12;
-    const hz = low ? 110 + rand() * 160 : 1600 + rand() * 4200;
-    const len = Math.round(rate * (low ? 0.02 + rand() * 0.04 : 0.003 + rand() * 0.01));
-    const amp = (low ? 0.5 : 0.22) + rand() * 0.5;
-    for (let i = 0; i < len; i++) {
-      const env = Math.exp(-5 * i / len);
-      data[(at0 + i) % data.length] += amp * env * (Math.sin(i * hz * Math.PI * 2 / rate) * 0.8 + (rand() * 2 - 1) * 0.2);
+  const rand = seeded(0x72617474);
+  for (let b = 0; b < 14; b++) {
+    const start = Math.floor(rand() * data.length);
+    const dur = Math.round(rate * (0.08 + rand() * 0.28));
+    const rep = Math.round(rate / (30 + rand() * 60));
+    const p1 = 2200 + rand() * 2600, p2 = p1 * (1.31 + rand() * 0.4);   // an inharmonic pair
+    const amp = 0.3 + rand() * 0.7;
+    for (let t = 0; t < dur; t += rep + Math.floor((rand() - 0.5) * rep * 0.3)) {
+      const env = Math.sin(Math.PI * t / dur);
+      const len = Math.round(rate * (0.002 + rand() * 0.004));
+      for (let i = 0; i < len; i++) {
+        const e = Math.exp(-7 * i / len), ph = i * Math.PI * 2 / rate;
+        data[(start + t + i) % data.length] += amp * env * e
+          * ((rand() * 2 - 1) * 0.5 + Math.sin(ph * p1) * 0.3 + Math.sin(ph * p2) * 0.2);
+      }
     }
   }
-  let peak = 0;
-  for (let i = 0; i < data.length; i++) peak = Math.max(peak, Math.abs(data[i]));
-  if (peak > 0) for (let i = 0; i < data.length; i++) data[i] /= peak;
-  return data;
+  for (let k = 0; k < 24; k++) {
+    const at0 = Math.floor(rand() * data.length);
+    const len = Math.round(rate * (0.02 + rand() * 0.025));
+    const amp = 0.5 + rand() * 0.5, kk = 0.05 + rand() * 0.06;   // a one-pole lowpass, ~400–850 Hz
+    let lp = 0;
+    for (let i = 0; i < len; i++) { lp += ((rand() * 2 - 1) - lp) * kk; data[(at0 + i) % data.length] += lp * Math.exp(-5 * i / len) * amp * 3; }
+  }
+  return normalise(data);
 }
 
 /** The mix's ONE volume, applied last, before the limiter. Every decibel
@@ -133,15 +194,15 @@ export const MASTER = 0.55;
  * the numbers was wrong.
  */
 export const UNIT = {
-  wind: 0.58, rustle: 0.233, sward: 0.23, river: 0.095, rapids: 0.184, boil: 0.036,
-  rain: 0.58, bird: 0.707, rattle: 0.068, drone: 0.19,
+  wind: 0.58, rustle: 0.233, sward: 0.23, river: 0.095, rapids: 0.184, boil: 0.037,
+  rain: 0.58, bird: 0.707, rattle: 0.043, drone: 0.19,
   // The two surface voices of the truck's bus, restated too: at their old
   // gains the tarmac roar at 100 km/h rendered at −40 dBFS and the gravel
   // at 40 km/h at −42, which is the surface feedback the doctrine calls
   // "the loudest thing the truck does" being inaudible on a phone. The
   // engine, squeal, scrape and brush keep their linear gains for now; their
   // measured levels are in CLAUDE.md as the next list.
-  roar: 0.18, grit: 0.046,
+  roar: 0.18, grit: 0.051,
 } as const;
 /** The gain that puts a voice at `dbfs` RMS after the master — see UNIT. */
 export const lvl = (unit: number, dbfs: number): number => Math.pow(10, dbfs / 20) / (unit * MASTER);
@@ -264,13 +325,18 @@ export function createAudio() {
     const gritBuf = ctx.createBuffer(1, ctx.sampleRate * 4, ctx.sampleRate);
     gritBuf.getChannelData(0).set(gritPattern(ctx.sampleRate));
     gritSrc = ctx.createBufferSource(); gritSrc.buffer = gritBuf; gritSrc.loop = true;
-    gritFilt = ctx.createBiquadFilter(); gritFilt.type = 'bandpass'; gritFilt.frequency.value = 1400; gritFilt.Q.value = 0.5;
+    // WIDE AND HIGH. A crunch is broadband — one to eight kilohertz of
+    // crackle over the low body of the crunches — and the old band (900 to
+    // 2300 Hz at Q 0.5) was the second half of what made it water.
+    gritFilt = ctx.createBiquadFilter(); gritFilt.type = 'bandpass'; gritFilt.frequency.value = 2400; gritFilt.Q.value = 0.35;
     gritGain = ctx.createGain(); gritGain.gain.value = 0;
     gritSrc.connect(gritFilt); gritFilt.connect(gritGain); gritGain.connect(nearBus); gritSrc.start(); tap('grit', gritGain);
     // THE BOIL: fast water is not a hum, it is a great many small events —
-    // the same stone-impact pattern as the gravel, slowed to a third and
-    // held low, so rapids churn rather than hiss. Opens with froth only.
-    boilSrc = ctx.createBufferSource(); boilSrc.buffer = gritBuf; boilSrc.loop = true;
+    // the pitched-chirp pattern (bubblePattern) slowed to a third and held
+    // low, so rapids churn rather than hiss. Opens with froth only.
+    const bubbleBuf = ctx.createBuffer(1, ctx.sampleRate * 4, ctx.sampleRate);
+    bubbleBuf.getChannelData(0).set(bubblePattern(ctx.sampleRate));
+    boilSrc = ctx.createBufferSource(); boilSrc.buffer = bubbleBuf; boilSrc.loop = true;
     boilSrc.playbackRate.value = 0.36;
     const boilFilt = ctx.createBiquadFilter(); boilFilt.type = 'bandpass';
     boilFilt.frequency.value = 380; boilFilt.Q.value = 0.9;
@@ -282,7 +348,7 @@ export function createAudio() {
     rattleBuf.getChannelData(0).set(rattlePattern(ctx.sampleRate));
     rattleSrc = ctx.createBufferSource(); rattleSrc.buffer = rattleBuf; rattleSrc.loop = true;
     rattleFilt = ctx.createBiquadFilter(); rattleFilt.type = 'bandpass';
-    rattleFilt.frequency.value = 2400; rattleFilt.Q.value = 0.5;
+    rattleFilt.frequency.value = 2000; rattleFilt.Q.value = 0.4;
     rattleGain = ctx.createGain(); rattleGain.gain.value = 0;
     rattleSrc.connect(rattleFilt); rattleFilt.connect(rattleGain); rattleGain.connect(nearBus); rattleSrc.start();
     tap('rattle', rattleGain);
@@ -634,7 +700,7 @@ export function createAudio() {
       // flat out, beside the grit and under the engine.
       const sh = Math.pow(clamp(shake, 0, 1), 0.8);
       rattleSrc.playbackRate.setTargetAtTime(0.7 + sh * 0.9, t, 0.15);
-      rattleFilt.frequency.setTargetAtTime(1900 + sh * 1300, t, 0.2);
+      rattleFilt.frequency.setTargetAtTime(1600 + sh * 1000, t, 0.2);
       rattleGain.gain.setTargetAtTime(lvl(UNIT.rattle, -28) * sh * grounded * duck, t, 0.08);
       const rain = clamp(rainAmt, 0, 1);
       rainGain.gain.setTargetAtTime(rain * 0.12, t, 0.45);
@@ -649,7 +715,7 @@ export function createAudio() {
       const loose = surf === 'water' ? 0.12
         : clamp(1 - Math.pow(clamp(q, 0, 1), 1.25), 0, 1) * (surf === 'ground' ? 1 : 0.92);
       gritSrc.playbackRate.setTargetAtTime(0.55 + Math.min(v / 26, 1.35), t, 0.12);
-      gritFilt.frequency.setTargetAtTime(surf === 'water' ? 700 : 900 + Math.min(v * 26, 1400), t, 0.15);
+      gritFilt.frequency.setTargetAtTime(surf === 'water' ? 900 : 2000 + Math.min(v * 40, 2000), t, 0.15);
       // Off the tarmac the grit IS the feedback — it is how a surface change
       // announces itself before the handling does — and at 0.3 it sat under the
       // engine at every speed that mattered.
