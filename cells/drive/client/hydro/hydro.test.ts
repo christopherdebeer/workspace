@@ -26,6 +26,20 @@ export function runHydroSelfTest(): void {
   assert(HYDRO_FRAGMENT_SHADER.includes('reflectedSky')
     && HYDRO_FRAGMENT_SHADER.includes('terrainCoupling'),
   'surface colour continuously includes sky reflection and shallow terrain tint');
+  assert(HYDRO_FRAGMENT_SHADER.includes('cobbleColour')
+    && HYDRO_FRAGMENT_SHADER.includes('bedVisibility'),
+  'clear shallows reveal a stable sediment, pebble and cobble bed');
+  assert(HYDRO_FRAGMENT_SHADER.includes('shallowRapid')
+    && HYDRO_FRAGMENT_SHADER.includes('rapidChop'),
+  'shallow high-energy reaches receive a distinct broken rapid response');
+  assert(HYDRO_FRAGMENT_SHADER.includes('riverEddyField')
+    && HYDRO_FRAGMENT_SHADER.includes('riverEddyTone'),
+  'bend-driven eddies affect both normals and restrained water tone');
+  assert(HYDRO_FRAGMENT_SHADER.includes('rigTrailField')
+    && HYDRO_FRAGMENT_SHADER.includes('uRigTrail[8]'),
+  'recent wetted vehicle positions leave an ageing surface trail');
+  assert(!HYDRO_FRAGMENT_SHADER.includes('edgeDither'),
+    'river coverage does not duplicate the global dither pipeline');
 
   const pond: HydroFeature = {
     id: 'osm:pond', source: 'osm', kind: 'pond', taggedLevelM: -84.7,
@@ -126,6 +140,59 @@ export function runHydroSelfTest(): void {
     assert(st[left * 4 + 1] * st[right * 4 + 1] < 0,
       `n changes sign across the channel (saw ${st[left * 4 + 1].toFixed(2)} / ${st[right * 4 + 1].toFixed(2)})`);
     assert(Math.abs(st[up * 4 + 3] - 4) < 0.01, 'half-width rides in the fourth channel');
+  }
+
+  // ── A SUB-TEXEL DIAGONAL IS STILL ONE RIVER ── production field texels are
+  // ~18.75m across while an unnamed stream defaults to 4m. If its visual mask
+  // marks only diagonal texels, those cells touch at corners and the shader's
+  // 0.5 cutoff tears the stream into islands. The raster must be 4-connected;
+  // its structure field still carries the authored 2m half-width.
+  const diagonal: HydroFeature = {
+    id: 'osm:diagonal', source: 'osm', kind: 'stream', intermittent: false, tidal: false,
+    geometry: { type: 'line', widthM: 4, points: ring(70, 70, 530, 530) },
+  };
+  const diagonalInput = constantInput([diagonal], 20);
+  const diagonalAnalysis = analyseHydroTile(diagonalInput);
+  const diagonalRegistry = new HydroBodyRegistry(0);
+  diagonalRegistry.updateTile(diagonalInput.key, diagonalAnalysis.observations);
+  const diagonalField = buildHydroTile(
+    diagonalInput, diagonalRegistry, diagonalAnalysis, { fieldResolution: 32 },
+  );
+  const diagonalWet = new Uint8Array(diagonalField.width * diagonalField.height);
+  let firstWet = -1;
+  for (let i = 0; i < diagonalWet.length; i++) {
+    diagonalWet[i] = diagonalField.geometry[i * 4] >= 0.5 ? 1 : 0;
+    if (firstWet < 0 && diagonalWet[i]) firstWet = i;
+  }
+  assert(firstWet >= 0, 'sub-texel diagonal stream reaches the visible cutoff');
+  const visited = new Uint8Array(diagonalWet.length);
+  const queue = [firstWet];
+  visited[firstWet] = 1;
+  let reached = 0;
+  while (queue.length) {
+    const i = queue.pop() as number;
+    reached++;
+    const x = i % diagonalField.width;
+    const z = Math.floor(i / diagonalField.width);
+    for (const n of [
+      x > 0 ? i - 1 : -1,
+      x + 1 < diagonalField.width ? i + 1 : -1,
+      z > 0 ? i - diagonalField.width : -1,
+      z + 1 < diagonalField.height ? i + diagonalField.width : -1,
+    ]) {
+      if (n >= 0 && diagonalWet[n] && !visited[n]) {
+        visited[n] = 1;
+        queue.push(n);
+      }
+    }
+  }
+  const visibleDiagonal = diagonalWet.reduce((sum, wet) => sum + wet, 0);
+  assert(reached === visibleDiagonal,
+    `sub-texel diagonal mask is 4-connected (${reached}/${visibleDiagonal} texels)`);
+  if (diagonalField.structure) {
+    const wet = diagonalWet.findIndex(Boolean);
+    assert(Math.abs(diagonalField.structure[wet * 4 + 3] - 2) < 0.01,
+      'visual continuity does not widen the authored river-space width');
   }
 
   // ── A BEND DOES NOT BREAK s ── an L-shaped river's s keeps counting along

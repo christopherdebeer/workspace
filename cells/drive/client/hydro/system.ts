@@ -291,6 +291,13 @@ class DefaultHydroSystem implements HydroSystem {
   private readonly rebuildsPerFrame: number;
   private disposed = false;
   private tuning: HydroTuning = { ...DEFAULT_HYDRO_TUNING };
+  private rigTrail: Array<{
+    x: number;
+    z: number;
+    born: number;
+    strength: number;
+  }> = [];
+  private wasWading = false;
 
   constructor(options: HydroSystemOptions = {}) {
     this.buildOptions = {
@@ -362,12 +369,20 @@ class DefaultHydroSystem implements HydroSystem {
       rippleStrength: finite(patch.rippleStrength, this.tuning.rippleStrength),
       foamStrength: finite(patch.foamStrength, this.tuning.foamStrength),
       shoreFade: finite(patch.shoreFade, this.tuning.shoreFade),
+      shallowBedStrength: finite(patch.shallowBedStrength, this.tuning.shallowBedStrength),
+      riverEdgeStrength: finite(patch.riverEdgeStrength, this.tuning.riverEdgeStrength),
+      turbulenceStrength: finite(patch.turbulenceStrength, this.tuning.turbulenceStrength),
+      eddyStrength: finite(patch.eddyStrength, this.tuning.eddyStrength),
     };
     this.frameUniforms.uWaveAmplitude.value = this.tuning.waveAmplitude;
     this.frameUniforms.uWaveLength.value = this.tuning.waveLength;
     this.frameUniforms.uRippleStrength.value = this.tuning.rippleStrength;
     this.frameUniforms.uFoamStrength.value = this.tuning.foamStrength;
     this.frameUniforms.uShoreFade.value = this.tuning.shoreFade;
+    this.frameUniforms.uShallowBedStrength.value = this.tuning.shallowBedStrength;
+    this.frameUniforms.uRiverEdgeStrength.value = this.tuning.riverEdgeStrength;
+    this.frameUniforms.uTurbulenceStrength.value = this.tuning.turbulenceStrength;
+    this.frameUniforms.uEddyStrength.value = this.tuning.eddyStrength;
   }
 
   getTuning(): Readonly<HydroTuning> { return { ...this.tuning }; }
@@ -386,6 +401,7 @@ class DefaultHydroSystem implements HydroSystem {
     const rig = frame.rig;
     this.frameUniforms.uRig.value.set(rig?.x ?? 0, rig?.z ?? 0, rig?.vx ?? 0, rig?.vz ?? 0);
     this.frameUniforms.uRigWade.value = Math.max(0, rig?.wadeM ?? 0);
+    this.updateRigTrail(frame.timeSeconds, rig);
     if (frame.sunDirection) {
       this.frameUniforms.uSunDirection.value
         .set(frame.sunDirection.x, frame.sunDirection.y, frame.sunDirection.z)
@@ -415,6 +431,63 @@ class DefaultHydroSystem implements HydroSystem {
         void this.queueBuild(key);
       }
     }
+  }
+
+  /**
+   * Eight points are enough to leave roughly 20–35m of broken wake without
+   * introducing a render target or a simulation texture. The newest live
+   * vehicle position is uploaded separately from the retained samples, so
+   * the first segment follows the truck continuously while older points keep
+   * ageing after it leaves the water.
+   */
+  private updateRigTrail(
+    time: number,
+    rig: HydroFrame['rig'],
+  ): void {
+    const wading = !!rig && rig.wadeM > 0.02;
+    this.rigTrail = this.rigTrail.filter((p) => time - p.born < 14);
+
+    if (wading && rig) {
+      const speed = Math.hypot(rig.vx, rig.vz);
+      const strength = clamp(rig.wadeM / 0.55, 0, 1)
+        * clamp(0.38 + speed * 0.09, 0.38, 1);
+      const latest = this.rigTrail[0];
+      const gap = latest ? Math.hypot(rig.x - latest.x, rig.z - latest.z) : Infinity;
+
+      // A fresh ford far from the previous one must not draw a segment across
+      // dry land. The old trail is discarded only in that discontinuous case.
+      if (!this.wasWading && latest && gap > 18) this.rigTrail = [];
+      if (!this.rigTrail.length || gap >= 3.2) {
+        this.rigTrail.unshift({ x: rig.x, z: rig.z, born: time, strength });
+      }
+    } else if (this.wasWading && rig) {
+      // Freeze the exit point into history. It remains visible while the
+      // vehicle climbs the bank instead of snapping away with uRigWade.
+      this.rigTrail.unshift({
+        x: rig.x,
+        z: rig.z,
+        born: time,
+        strength: this.rigTrail[0]?.strength ?? 0.45,
+      });
+    }
+    this.wasWading = wading;
+    this.rigTrail.length = Math.min(this.rigTrail.length, wading ? 7 : 8);
+
+    const upload = this.frameUniforms.uRigTrail.value;
+    let count = 0;
+    if (wading && rig) {
+      const speed = Math.hypot(rig.vx, rig.vz);
+      upload[count++].set(
+        rig.x, rig.z, 0,
+        clamp(rig.wadeM / 0.55, 0, 1) * clamp(0.38 + speed * 0.09, 0.38, 1),
+      );
+    }
+    for (const point of this.rigTrail) {
+      if (count >= upload.length) break;
+      upload[count++].set(point.x, point.z, Math.max(0, time - point.born), point.strength);
+    }
+    for (let i = count; i < upload.length; i++) upload[i].set(0, 0, 99, 0);
+    this.frameUniforms.uRigTrailCount.value = count;
   }
 
   getTileBinding(key: TileKey): HydroTileBinding | undefined {

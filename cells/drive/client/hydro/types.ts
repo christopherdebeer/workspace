@@ -258,6 +258,14 @@ export interface HydroTuning {
   rippleStrength: number;
   foamStrength: number;
   shoreFade: number;
+  /** Visibility of sediment, pebble and cobble detail through clear shallows. */
+  shallowBedStrength: number;
+  /** Width/contrast of the wet gravel and shallow-water river transition. */
+  riverEdgeStrength: number;
+  /** Riffle facets, boil and rapid response, independently of calm ripples. */
+  turbulenceStrength: number;
+  /** Bend-driven circulating surface structure on the inside of turns. */
+  eddyStrength: number;
 }
 
 export const DEFAULT_HYDRO_TUNING: HydroTuning = {
@@ -266,6 +274,10 @@ export const DEFAULT_HYDRO_TUNING: HydroTuning = {
   rippleStrength: 1,
   foamStrength: 1,
   shoreFade: 1,
+  shallowBedStrength: 1,
+  riverEdgeStrength: 1,
+  turbulenceStrength: 1,
+  eddyStrength: 1,
 };
 
 export interface HydroBuildOptions {

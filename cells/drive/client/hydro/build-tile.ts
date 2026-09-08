@@ -303,7 +303,9 @@ export function analyseHydroTile(input: HydroTileInput): HydroTileAnalysis {
  *
  * Standing water is untouched. A lake's flatness is not an approximation.
  */
-const FLOWING_NOMINAL_DEPTH_M = 0.6;
+/** Shared with the isolated lab's display carve so its terrain and the shipping
+ *  profile solver depict the same channel depth. */
+export const FLOWING_NOMINAL_DEPTH_M = 0.6;
 function bodyLevel(
   body: HydroBody,
   profile: Float32Array | undefined,
@@ -732,9 +734,14 @@ export function buildHydroTile(
   // is 4 m by default and a tile's texel is ~9 m, so its coverage peaked at
   // 0.66 on the centreline and the shore fade took the rest: a whole wooded
   // valley at George with two streams in its tile and no water in the field.
-  // The drawn half-width is at least most of a texel; the structure's own
-  // half-width (the cross-channel chart) stays the tagged one.
-  const drawnHalfW = (lineWidth: number): number => Math.max(lineWidth * 0.5, antialias * 0.8);
+  // The drawn half-width reaches just past half a texel's DIAGONAL. A narrow
+  // 45-degree stream otherwise lights only corner-touching texels; at the
+  // fragment shader's 0.5 cutoff those islands meet at one mathematical point
+  // and split on screen. The structure's own half-width (the cross-channel
+  // chart and physics width) stays the tagged one.
+  const continuousHalfW = Math.hypot(pixelX, pixelZ) * 0.51;
+  const drawnHalfW = (lineWidth: number): number =>
+    Math.max(lineWidth * 0.5, continuousHalfW);
 
   const coverage = new Float32Array(count);
   const level = new Float32Array(count);

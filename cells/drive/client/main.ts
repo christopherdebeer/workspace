@@ -7127,7 +7127,9 @@ const MAT = {
   // river read as strewn with paper. Whitewater belongs in the surface shader,
   // where it is already river-aligned, already shaded, and already keyed to the
   // same gradient the rocks are.
-  boulder: new THREE.MeshLambertMaterial({ color: 0x7d7a72, flatShading: true, vertexColors: true }),
+  // Vertex colours now carry the district's actual stone family; white keeps
+  // that colour intact instead of multiplying every rapid back toward one grey.
+  boulder: new THREE.MeshLambertMaterial({ color: 0xffffff, flatShading: true, vertexColors: true }),
   // A RIVER IS NOT A LAKE. Same look, different shader — see `riverize`.
   river: new THREE.MeshLambertMaterial({ map: waterTex, side: DS, polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -4 }),
   // (There was a `green` here, for landuse drapes. There are no landuse drapes
@@ -16846,9 +16848,23 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
    */
   if (rocks.length) {
     const rv: number[] = [], rc: number[] = [];
+    // One reach, one geology. Hillside boulders and stone buildings already use
+    // this district-scale family; rapid rocks were the last global grey left in
+    // the landscape. Individual stones vary inside the family's authored spans.
+    const rockAt = dense[n >> 1];
+    const rockClimate = climateAt(rockAt[0], rockAt[1]);
+    const rockFamily = STONE[bedrockAt(cultEnv, rockAt[0], rockAt[1],
+      STONE_MIX_ROWS, rockClimate.w)];
+    const rapidRockColour = new THREE.Color();
     for (const rk of rocks) {
       const [x0, z0] = dense[rk.st];
       const sides = 6;
+      const familyPick = clamp((rk.tone - 0.72) / 0.30, 0, 1) - 0.5;
+      rapidRockColour.setHSL(
+        rockFamily[0] + familyPick * rockFamily[1],
+        clamp(rockFamily[2] + (rnd(x0, z0, rk.k + 57) - 0.5) * rockFamily[3], 0, 1),
+        clamp(rockFamily[4] + familyPick * rockFamily[5], 0.04, 0.78),
+      );
       // A lump: one apex over a ragged ring. Flat-shaded, so this is enough.
       for (let e = 0; e < sides; e++) {
         const a0 = rk.spin + (e / sides) * Math.PI * 2, a1 = rk.spin + ((e + 1) / sides) * Math.PI * 2;
@@ -16857,7 +16873,13 @@ function waterRun(dense: Array<[number, number]>, width: number, name?: string):
         rv.push(rk.cx, rk.top, rk.cz,
           rk.cx + Math.cos(a0) * r0, rk.base, rk.cz + Math.sin(a0) * r0,
           rk.cx + Math.cos(a1) * r1, rk.base, rk.cz + Math.sin(a1) * r1);
-        for (let q = 0; q < 3; q++) rc.push(rk.tone, rk.tone * 0.99, rk.tone * 0.94);
+        // The submerged ring is darker than the dry crown, giving the rock a
+        // wet contact without another material or transparency pass.
+        rc.push(
+          rapidRockColour.r * 1.04, rapidRockColour.g * 1.04, rapidRockColour.b * 1.02,
+          rapidRockColour.r * 0.76, rapidRockColour.g * 0.78, rapidRockColour.b * 0.80,
+          rapidRockColour.r * 0.76, rapidRockColour.g * 0.78, rapidRockColour.b * 0.80,
+        );
       }
       // …and into the collision buckets. Something SOLID is in the river, and
       // the truck now knows it the way it knows a hillside boulder: a bite of

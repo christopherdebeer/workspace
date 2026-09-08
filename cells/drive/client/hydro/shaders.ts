@@ -285,6 +285,8 @@ uniform vec3 uWind;
 uniform float uRain;
 uniform vec4 uRig;
 uniform float uRigWade;
+uniform vec4 uRigTrail[8];
+uniform float uRigTrailCount;
 uniform vec3 uSunDirection;
 uniform vec3 uSkyColour;
 uniform vec3 uTerrainColour;
@@ -292,6 +294,10 @@ uniform float uDebugView;
 uniform float uRippleStrength;
 uniform float uFoamStrength;
 uniform float uShoreFade;
+uniform float uShallowBedStrength;
+uniform float uRiverEdgeStrength;
+uniform float uTurbulenceStrength;
+uniform float uEddyStrength;
 uniform vec2 uHydroTexel;
 uniform vec2 uFieldMeters;
 
@@ -321,6 +327,38 @@ float valueNoise(vec2 p) {
   f = f * f * (3.0 - 2.0 * f);
   return mix(mix(hash21(i), hash21(i + vec2(1.0, 0.0)), f.x),
              mix(hash21(i + vec2(0.0, 1.0)), hash21(i + 1.0), f.x), f.y);
+}
+
+// Recent wetted vehicle positions form a short wake polyline. Older points
+// spread, drift with the local current and fade over fourteen seconds. XY is
+// a normal slope and Z is water-coloured disturbance. Historical foam is
+// deliberately absent: aeration belongs at the live hull, not in dotted
+// capsules along every retained sample.
+vec4 rigTrailField(vec2 p, vec2 flow) {
+  vec2 slope = vec2(0.0);
+  float evidence = 0.0;
+  for (int i = 0; i < 7; i++) {
+    if (uRigTrailCount < float(i) + 1.5) continue;
+    vec4 a = uRigTrail[i];
+    vec4 b = uRigTrail[i + 1];
+    vec2 pa = a.xy + flow * a.z * 0.22;
+    vec2 pb = b.xy + flow * b.z * 0.22;
+    vec2 ab = pb - pa;
+    float t = clamp(dot(p - pa, ab) / max(0.04, dot(ab, ab)), 0.0, 1.0);
+    vec2 q = mix(pa, pb, t);
+    vec2 away = p - q;
+    float distanceM = length(away);
+    float age = mix(a.z, b.z, t);
+    float strength = mix(a.w, b.w, t);
+    float life = (1.0 - smoothstep(1.0, 14.0, age)) * strength;
+    float spread = 1.35 + age * 0.34;
+    float body = (1.0 - smoothstep(spread, spread + 2.8, distanceM)) * life;
+    float ring = cos(distanceM * 2.25 - age * 2.65);
+    vec2 radial = away / max(0.16, distanceM);
+    slope += radial * ring * body * 0.078;
+    evidence = max(evidence, body * (0.72 + ring * 0.12));
+  }
+  return vec4(slope, evidence, 0.0);
 }
 
 // Water keeps a recognisable class palette, but its colour belongs to the
@@ -394,6 +432,40 @@ vec2 rippleGradientRiver(float s, float crossM, vec2 flow, float energy, float s
   return (direction * cos(pSmall) * 1.5 * 0.68
     + crossDirection * cos(pCapillary) * 3.2 * 0.32) * amplitude;
 }
+
+// A bend sheds slow circulating cells on its inside bank. This returns the
+// slope in local (downstream, cross-stream) coordinates and a signed tonal
+// signal in Z. Cells have a fixed 58m chainage period: curvature controls
+// amplitude and side, never phase rate, so a changing bend cannot fold or
+// shear the pattern. Random activation and offset mean a bend gets one or two
+// broad crescents, not a row of repeated whirlpool symbols.
+vec3 riverEddyField(
+  float s, float crossM, float halfWidth, float curvature, float energy, float seed
+) {
+  float bend = smoothstep(0.0012, 0.010, abs(curvature));
+  float activeWater = smoothstep(0.08, 0.34, energy)
+    * (1.0 - smoothstep(0.78, 0.98, energy));
+  float side = curvature < 0.0 ? -1.0 : 1.0;
+  float period = 58.0;
+  float shiftedS = s + seed * 47.0;
+  float cell = floor(shiftedS / period);
+  float cellSeed = hash21(vec2(cell, floor(seed * 251.0) + 17.0));
+  float activeCell = smoothstep(0.30, 0.76, cellSeed);
+  float localS = mod(shiftedS, period) - period * 0.5
+    + (cellSeed - 0.5) * 15.0;
+  float centreCross = side * halfWidth * mix(0.48, 0.68, cellSeed);
+  vec2 local = vec2(localS / 17.0,
+    (crossM - centreCross) / max(3.2, halfWidth * 0.52));
+  float radius = length(local);
+  float envelope = (1.0 - smoothstep(0.32, 1.18, radius))
+    * bend * activeWater * activeCell * clamp(uEddyStrength, 0.0, 3.0);
+  vec2 tangent = vec2(-local.y, local.x) / max(0.12, radius);
+  float phase = atan(local.y, local.x) + radius * 1.15
+    - uTime * 0.34 + cellSeed * 6.283;
+  float circulation = 0.62 + sin(phase) * 0.38;
+  float tone = cos(phase + 0.9) * envelope;
+  return vec3(tangent * circulation * envelope, tone);
+}
 #endif
 
 void main() {
@@ -421,6 +493,9 @@ void main() {
   }
   if (geometryField.r < coverageCut) discard;
 #else
+  // Coverage remains continuous until this one physical waterline. Dither
+  // and palette quantisation belong to the global post pipeline; reproducing
+  // either here creates a second, incompatible stipple at every river bank.
   if (geometryField.r < 0.5) discard;
 #endif
   vec4 dynamics = texture2D(uHydroDynamics, vHydroUv);
@@ -474,6 +549,17 @@ void main() {
   bool nearWater = detailFade > 0.16;
   float detailLod = smoothstep(0.16, 0.34, detailFade);
   float foamLod = smoothstep(0.16, 0.26, detailFade);
+  // Grade supplies energy; depth decides whether that energy is a deep boil or
+  // a shallow rapid. This is also the veil over the bed: aerated water hides
+  // stones before turbid or deep water does.
+  float shallowRapid = vFlowing * smoothstep(0.48, 0.80, energy)
+    * (1.0 - smoothstep(0.62, 1.75, geometryField.a))
+    * clamp(uTurbulenceStrength, 0.0, 3.0);
+#ifdef HYDRO_FLOWING
+  float riverEddyTone = 0.0;
+#endif
+  vec4 rigTrailResponse = vec4(0.0);
+  float rigLiveTone = 0.0;
 
   vec2 wind = normalize(uWind.xy + vec2(0.00001, 0.0));
   vec2 flow = dynamics.xy;
@@ -499,7 +585,8 @@ void main() {
     if (vFlowing > 0.5 && energy > 0.16) {
       vec2 flowDirection = normalize(flow + vec2(0.00001, 0.0));
       vec2 acrossDirection = vec2(-flowDirection.y, flowDirection.x);
-      float work = smoothstep(0.16, 0.72, energy) * (0.7 + 0.6 * outerBank);
+      float work = smoothstep(0.20, 0.78, energy) * (0.72 + 0.46 * outerBank)
+        * clamp(uTurbulenceStrength, 0.0, 3.0);
       // Two FIXED-RATE layers — a riffle and a rapid — crossfaded by energy.
       // Crossfading the cosines keeps both phases continuous; crossfading
       // the phases (or scaling k by energy, as this used to) folds where
@@ -509,12 +596,49 @@ void main() {
       float facet = mix(slowFacet, fastFacet, smoothstep(0.3, 0.8, energy));
       float acrossPhase = riverCross * 0.35
         + sin(riverS * 0.103 - uTime * 0.56) * 1.3;
-      gradient += flowDirection * facet * work * (0.045 + energy * 0.13);
-      gradient += acrossDirection * cos(acrossPhase) * work * (0.025 + energy * 0.07);
+      gradient += flowDirection * facet * work * (0.022 + energy * 0.060);
+      gradient += acrossDirection * cos(acrossPhase) * work * (0.014 + energy * 0.032);
+
+      // On bends, a slower circulating normal lives beside the downstream
+      // riffles. It is strongest on the slack inside lane, while outer-bank
+      // turbulence remains the faster, breaking response above.
+      vec3 eddy = riverEddyField(
+        riverS, riverCross, max(riverField.a, 1.0), riverField.b, energy, seed
+      );
+      gradient += (flowDirection * eddy.x + acrossDirection * eddy.y) * 0.14;
+      riverEddyTone = eddy.z;
     }
 #else
     vec2 gradient = rippleGradient(vAbsoluteXZ, flow, wind, energy, seed);
 #endif
+    if (uRigTrailCount > 1.5) {
+      rigTrailResponse = rigTrailField(vAbsoluteXZ, flow);
+      gradient += rigTrailResponse.xy;
+    }
+    if (uRigWade > 0.02) {
+      vec2 fromRig = vAbsoluteXZ - uRig.xy;
+      float rigDistance = length(fromRig);
+      if (rigDistance < 24.0) {
+        float rigSpeed = length(uRig.zw);
+        float sub = smoothstep(0.02, 0.55, uRigWade);
+        vec2 radial = fromRig / max(0.16, rigDistance);
+        float ring = cos(rigDistance * 1.72 - uTime * (3.6 + rigSpeed * 0.12));
+        float ringEnvelope = (1.0 - smoothstep(2.2, 18.0, rigDistance))
+          * (1.0 - smoothstep(0.0, 2.0, rigDistance));
+        gradient += radial * ring * ringEnvelope * sub * 0.075;
+        if (rigSpeed > 0.3) {
+          vec2 vDir = uRig.zw / rigSpeed;
+          float ahead = dot(fromRig, vDir);
+          float lateral = dot(fromRig, vec2(-vDir.y, vDir.x));
+          float bow = (1.0 - smoothstep(0.8, 4.8, abs(ahead - 2.7)))
+            * (1.0 - smoothstep(1.0, 5.5, abs(lateral)))
+            * smoothstep(-0.6, 1.8, ahead);
+          gradient += vDir * bow * sub * min(1.0, rigSpeed / 5.0) * 0.11;
+          rigLiveTone = max(rigLiveTone, bow * sub * 0.7);
+        }
+        rigLiveTone = max(rigLiveTone, abs(ring) * ringEnvelope * sub * 0.34);
+      }
+    }
     // Rain disturbs the NORMAL, rather than painting white noise onto water.
     // Each world cell has one staggered ring; its radius dies before touching
     // the cell edge, so no neighbouring-cell search is needed. Only near,
@@ -531,7 +655,8 @@ void main() {
         * uRain * (1.0 - energy * 0.72) * (1.0 - smoothstep(30.0, 90.0, camDist)) * 0.16;
     }
     gradient = clamp(gradient, vec2(-2.0), vec2(2.0))
-      * (1.0 + vTurbulence * 0.62) * detailLod;
+      * (1.0 + vTurbulence * 0.34 * clamp(uTurbulenceStrength, 0.0, 3.0))
+      * detailLod;
     vec2 macroSlope = macroNormal.xz / max(0.25, macroNormal.y);
     normal = normalize(vec3(macroSlope.x - gradient.x, 1.0, macroSlope.y - gradient.y));
   }
@@ -577,6 +702,72 @@ void main() {
     min(3.0 + shoreDist * 0.022, 14.0), offshore);
   vec3 colour = palette(kind, visualDepth, turbidity);
 
+  // ── THE SHALLOW WATER HAS A FLOOR ──
+  //
+  // An opaque surface that only tints toward terrain still reads as a ribbon
+  // laid over the valley. Clear, shallow water instead returns a stable bed:
+  // broad sediment, finer pebble variation and darker cobble aggregates.
+  // Flowing water evaluates the pattern in (s,n), so gravel bars turn with the
+  // river; standing water uses world space. Turbidity, depth, rapid aeration
+  // and distance all remove the detail continuously.
+  if (nearWater) {
+    float clearDepthM = mix(3.4, 0.72, turbidity);
+    float bedVisibility = (1.0 - smoothstep(0.10, clearDepthM, geometryField.a))
+      * (1.0 - turbidity * 0.78) * detailLod
+      * mix(0.62, 1.0, vFlowing) * (1.0 - shallowRapid * 0.48)
+      * clamp(uShallowBedStrength, 0.0, 3.0);
+    // Deep water and opaque silt skip every bed-noise evaluation.
+    if (bedVisibility > 0.015) {
+      vec2 bedP = vAbsoluteXZ;
+      float grainScale = 1.0;
+#ifdef HYDRO_FLOWING
+      if (vFlowing > 0.5) {
+        bedP = vec2(riverS, riverCross);
+        float channelScale = clamp((riverField.a - 1.5) / 11.0, 0.0, 1.0);
+        grainScale = mix(0.72, 1.55, channelScale);
+      }
+#endif
+      float pebble = valueNoise(bedP * vec2(0.72, 0.96) / grainScale
+        + vec2(seed * 11.0, 2.4));
+      float bar = valueNoise(bedP * vec2(0.18, 0.29) / grainScale
+        - vec2(5.2, seed * 7.0));
+      // Broad gravel/sand patches survive the production camera and global
+      // quantiser; the finer pebble signal takes over only when close.
+      float gravelBar = valueNoise(bedP * vec2(0.062, 0.105) / grainScale
+        + vec2(seed * 3.0, -4.6));
+      float cobble = smoothstep(0.54, 0.79,
+        valueNoise(bedP * vec2(0.22, 0.31) / grainScale
+          + vec2(seed * 5.0, -8.0)));
+      // Individual rounded stones at 1.5–3m scale. This is albedo structure,
+      // not a coverage trick: the global post pass remains the only dither.
+      vec2 stoneP = bedP / (vec2(2.4, 1.85) * grainScale);
+      vec2 stoneCell = floor(stoneP);
+      vec2 stoneCentre = vec2(
+        hash21(stoneCell + vec2(seed * 19.0, 3.0)),
+        hash21(stoneCell + vec2(7.0, seed * 23.0))
+      );
+      float stoneShape = 1.0 - smoothstep(0.17, 0.39,
+        length((fract(stoneP) - stoneCentre) * vec2(1.0, 1.18)));
+      float stonePick = smoothstep(0.42, 0.76,
+        hash21(stoneCell + vec2(11.0, seed * 31.0)));
+      float bedStone = stoneShape * stonePick;
+      vec3 sediment = mix(uTerrainColour * 0.88, vec3(0.31, 0.27, 0.17),
+        0.14 + turbidity * 0.28);
+      vec3 paleGravel = mix(sediment, vec3(0.39, 0.35, 0.24), 0.34);
+      vec3 bedColour = mix(sediment * 0.78, paleGravel * 1.08, gravelBar)
+        * (0.94 + (pebble - 0.5) * 0.30 + (bar - 0.5) * 0.24);
+      // Cobble is a darker aggregate in the sediment, not an object silhouette.
+      // Protruding rocks are real production geometry and carry the stronger read.
+      vec3 cobbleColour = mix(sediment * 0.62, uTerrainColour * 0.76, 0.38);
+      bedColour = mix(bedColour, cobbleColour,
+        cobble * mix(0.24, 0.12, turbidity));
+      bedColour = mix(bedColour, cobbleColour * 0.82,
+        bedStone * mix(0.46, 0.22, turbidity));
+      colour = mix(colour, bedColour,
+        clamp(bedVisibility * mix(0.84, 0.52, turbidity), 0.0, 0.86));
+    }
+  }
+
   // The edge is damp terrain becoming shallow water, never a separately dark
   // contact stripe. Depth and distance both contribute, so the transition
   // remains broad at an ocean and compact at a river or pond.
@@ -585,6 +776,31 @@ void main() {
     colour,
     wetlandKind ? 0.34 : 0.22
   );
+#ifdef HYDRO_FLOWING
+  if (vFlowing > 0.5 && flowingKind) {
+    // The last wet metre contains gravel bars, damp sediment and broken
+    // reflected water rather than one dark contact stripe. This lies inside
+    // the opaque surface and meets the physical coverage waterline at the bank.
+    float bankNear = smoothstep(0.58, 1.06, abs(riverField.g));
+    float bankGrain = valueNoise(vec2(
+      riverS * 0.19 + seed * 13.0,
+      riverCross * 2.7 - riverS * 0.027
+    ));
+    float bankBar = valueNoise(vec2(
+      riverS * 0.052 - seed * 5.0,
+      riverCross * 0.82 + riverS * 0.009
+    ));
+    float bankPatch = smoothstep(0.22, 0.78, bankGrain * 0.42 + bankBar * 0.58)
+      * bankNear * detailLod * clamp(uRiverEdgeStrength, 0.0, 3.0);
+    vec3 gravelBank = mix(
+      uTerrainColour * 0.72,
+      vec3(0.32, 0.28, 0.19),
+      0.28 + (1.0 - turbidity) * 0.18
+    );
+    colour = mix(colour, mix(dampTerrain, gravelBank, 0.52),
+      clamp(bankPatch * 0.55, 0.0, 0.74));
+  }
+#endif
   float waterBlend = smoothstep(0.035, 0.96, shoreWetness);
   colour = mix(dampTerrain, colour, waterBlend);
 
@@ -634,6 +850,12 @@ void main() {
     float streakAmp = mix(smoothstep(3.0, 10.0, uWind.z) * 0.05,
       (0.05 + energy * 0.06), vFlowing);
     colour *= 1.0 + (streak - 0.5) * streakAmp * detailLod;
+#ifdef HYDRO_FLOWING
+    // A small tonal counterpart lets an eddy read under diffuse light, when
+    // its normal alone would disappear. It remains water-coloured and never
+    // crosses into white foam.
+    colour *= 1.0 + riverEddyTone * 0.09 * detailLod;
+#endif
   }
   // ── A FLAT FIELD DOES NOT SURVIVE THE QUANTISER ──
   //
@@ -686,6 +908,10 @@ void main() {
   vec3 reflectedSky = horizonColour * skyEnergy;
   float facing = clamp(dot(normal, viewDirection), 0.0, 1.0);
   float fresnel = 0.08 + 0.38 * pow(1.0 - facing, 3.0);
+  // A turbulent river reflects the same sky over many unresolved microfacets,
+  // which broadens and dims the return. Using the sea's mirror strength on the
+  // analytic rapid facets made each one a pale card over the valley.
+  fresnel *= mix(1.0, 0.58, vFlowing);
   colour = mix(colour, reflectedSky, fresnel);
 
   // In shallow/turbid water the bed and banks tint the returning light. This
@@ -702,7 +928,8 @@ void main() {
     // comes from MODULATING that quiet lobe by the advected grain.
     float glint = pow(max(0.0, dot(reflect(-lightDirection, normal), viewDirection)), 9.0);
     float sparkle = 0.55 + 0.9 * smoothstep(0.45, 0.85, grain);
-    colour += vec3(1.0, 0.9, 0.7) * glint * sparkle * 0.11 * daylight * detailLod;
+    colour += vec3(1.0, 0.9, 0.7) * glint * sparkle * 0.11
+      * daylight * detailLod * mix(1.0, 0.46, vFlowing);
   }
 
   // ── FOAM IS PAID FOR ONLY WHERE FOAM CAN EXIST ──
@@ -717,6 +944,7 @@ void main() {
     // shoaling crest for its spilling top. Both are cheap and both are the
     // texture that made "the river lacks detail" true.
     || (vFlowing > 0.5 && energy > 0.22)
+    || shallowRapid > 0.02
     || (vWaveCrest > 0.6 && geometryField.a < 6.0);
   if (nearWater && foamZone) {
     // ── FOAM: SPARSE, CAUSAL, BRIEF ──
@@ -739,17 +967,30 @@ void main() {
     // build-tile. Foam remains causal and persistent without two more texture
     // reads in every rapid fragment.
     float causalEnergy = energy;
-    float energyGate = smoothstep(0.55, 0.82, causalEnergy);
+    float energyGate = max(smoothstep(0.57, 0.84, causalEnergy),
+      shallowRapid * 0.56);
     float foamStreak = valueNoise(vec2(downstream * 0.16 - uTime * foamRate,
       across * 0.31 + seed * 13.0));
+    float foamBreak = smoothstep(0.54, 0.79,
+      valueNoise(vec2(downstream * 0.43 - uTime * 1.78,
+        across * 0.84 - seed * 9.0)));
     float riverFoam = vFlowing * energyGate
-      * smoothstep(0.64, 0.89, foamStreak + grain * 0.12) * 0.72;
+      * smoothstep(0.66, 0.90, foamStreak + grain * 0.10)
+      * foamBreak * 0.54 * clamp(uTurbulenceStrength, 0.0, 3.0);
+    // A second, shorter chop breaks shallow high-energy reaches into flecks.
+    // Deep energetic water keeps boil and long streaks; it does not become a
+    // uniformly white rapid merely because its profile is steep.
+    float rapidChop = shallowRapid * smoothstep(0.58, 0.84,
+      valueNoise(vec2(downstream * 0.28 - uTime * 1.72,
+        across * 0.52 + seed * 5.0)));
+    riverFoam = max(riverFoam, rapidChop * foamBreak * 0.22);
     // ── BOIL: THE TEXTURE OF WATER THAT IS WORKING BUT NOT BREAKING ──
     // Below the white-foam threshold a reach still churns; that reads as
     // luminance mottling riding the same advected streak field the foam
     // uses, never as white. This is what stands between "calm ribbon" and
     // "rapids" — the middle of the river's expressive range.
-    float boil = vFlowing * smoothstep(0.18, 0.5, causalEnergy) * (1.0 - energyGate);
+    float boil = vFlowing * smoothstep(0.18, 0.5, causalEnergy) * (1.0 - energyGate)
+      * clamp(uTurbulenceStrength, 0.0, 3.0);
 #ifdef HYDRO_FLOWING
     // The outside of a bend churns and whitens first — curvature × n.
     riverFoam *= 0.6 + 0.8 * outerBank;
@@ -791,49 +1032,53 @@ void main() {
       + whitecap) * uFoamStrength, 0.0, 0.82) * foamLod;
     // Foam takes the scene's light too — white paint at midnight is a bug.
     vec3 foamColour = vec3(0.84, 0.9, 0.88) * mix(0.14, 1.0, daylight);
+#ifdef HYDRO_FLOWING
+    if (vFlowing > 0.5) {
+      // River aeration carries the water's own hue. Pure sea-foam white made a
+      // rapid read as paint laid over its bed and bank.
+      foamColour = mix(colour * 1.18, foamColour, 0.56);
+    }
+#endif
     colour = mix(colour, foamColour, foam);
   }
 
   // ── THE WATER ANSWERS THE HULL ──
   //
-  // When the rig is actually wading (uRigWade > 0, a fact the drive model
-  // already computes), the surface responds: churned white around the hull,
-  // rings spreading from it, and a pair of trailing arms once it is moving.
-  // Every phase here is a function of DISTANCE TO THE RIG — a distance field,
-  // continuous by construction, the same legality argument as the shore
-  // wave. Dry frames skip the whole block on one uniform test, and the
-  // response fades inside ~26m, so it costs nothing except where the story
-  // is happening.
-  if (uRigWade > 0.02 && nearWater) {
+  // The live hull makes the immediate collar and arms; the retained trail
+  // leaves spreading, downstream-drifting evidence after the rig climbs out.
+  // Most old disturbance is water-coloured. Only its young broken core foams.
+  if ((uRigWade > 0.02 || uRigTrailCount > 1.5) && nearWater) {
     vec2 toHere = vAbsoluteXZ - uRig.xy;
     float rigDist = length(toHere);
-    if (rigDist < 26.0) {
+    float liveFoam = 0.0;
+    if (uRigWade > 0.02 && rigDist < 26.0) {
       float rigSpeed = length(uRig.zw);
       float sub = smoothstep(0.02, 0.55, uRigWade);
-      // Churn: the displaced collar at the hull, wider and whiter with speed.
-      float churn = (1.0 - smoothstep(1.2, 5.0, rigDist)) * (0.3 + min(rigSpeed, 8.0) * 0.09);
-      // Rings: crests expanding from the hull, dying with distance. Fordings
-      // are slow, so the rings are what read; at speed the arms take over.
-      float ringWave = sin(rigDist * 2.1 - uTime * 5.5);
-      float rings = smoothstep(0.55, 0.95, ringWave)
-        * (1.0 - smoothstep(3.0, 16.0, rigDist)) * 0.32
-        * (1.0 - smoothstep(2.0, 6.0, rigSpeed));
-      // Arms: two trailing streaks behind the velocity, the pixel-art cousin
-      // of a Kelvin wake. Only while moving; fragmented by the water's own
-      // grain so they read as churned water, not drawn lines.
-      float arms = 0.0;
+      float fragments = smoothstep(0.38, 0.74,
+        valueNoise(vAbsoluteXZ * 0.54 - uTime * vec2(0.13, 0.21)));
+      // Aeration belongs immediately beside the body: a fragmented collar,
+      // side splashes and a short stern churn. The spreading rings and wake
+      // arms are normal/tonal structure above, not white paint.
+      float churn = (1.0 - smoothstep(1.1, 4.2, rigDist))
+        * (0.26 + min(rigSpeed, 8.0) * 0.055) * fragments;
+      float sideSplash = 0.0;
+      float stern = 0.0;
       if (rigSpeed > 1.2) {
         vec2 vDir = uRig.zw / rigSpeed;
-        float behind = dot(toHere, -vDir);
+        float along = dot(toHere, vDir);
         float lateral = abs(dot(toHere, vec2(-vDir.y, vDir.x)));
-        arms = (1.0 - smoothstep(0.6, 2.2, abs(lateral - behind * 0.38)))
-          * smoothstep(0.5, 2.5, behind) * (1.0 - smoothstep(6.0, 24.0, behind))
-          * smoothstep(0.35, 0.7, grain) * 0.45;
+        sideSplash = (1.0 - smoothstep(0.18, 1.0, abs(lateral - 1.8)))
+          * (1.0 - smoothstep(2.2, 4.8, abs(along)))
+          * smoothstep(-2.8, 1.6, along) * fragments * 0.34;
+        stern = (1.0 - smoothstep(0.8, 3.4, length(toHere + vDir * 2.4)))
+          * smoothstep(0.42, 0.74, grain) * 0.42;
       }
-      float wake = clamp((churn + rings + arms) * sub, 0.0, 0.8) * foamLod;
-      vec3 wakeFoam = vec3(0.84, 0.9, 0.88) * mix(0.14, 1.0, daylight);
-      colour = mix(colour, wakeFoam, wake);
+      liveFoam = clamp((churn + sideSplash + stern) * sub, 0.0, 0.72);
     }
+    colour *= 1.0 + (rigTrailResponse.z * 0.24 + rigLiveTone * 0.08) * detailLod;
+    float wake = clamp(liveFoam, 0.0, 0.76) * foamLod;
+    vec3 wakeFoam = vec3(0.84, 0.9, 0.88) * mix(0.14, 1.0, daylight);
+    colour = mix(colour, wakeFoam, wake);
   }
 
   gl_FragColor = vec4(colour, 1.0);

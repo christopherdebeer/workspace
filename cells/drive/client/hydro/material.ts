@@ -12,6 +12,9 @@ export interface HydroFrameUniforms {
   uRig: { value: THREE.Vector4 };
   /** Wading depth in metres; 0 keeps the whole disturbance branch dark. */
   uRigWade: { value: number };
+  /** Newest first: absolute x/z, age seconds, disturbance strength. */
+  uRigTrail: { value: THREE.Vector4[] };
+  uRigTrailCount: { value: number };
   uSunDirection: { value: THREE.Vector3 };
   uSkyColour: { value: THREE.Color };
   uTerrainColour: { value: THREE.Color };
@@ -21,6 +24,10 @@ export interface HydroFrameUniforms {
   uRippleStrength: { value: number };
   uFoamStrength: { value: number };
   uShoreFade: { value: number };
+  uShallowBedStrength: { value: number };
+  uRiverEdgeStrength: { value: number };
+  uTurbulenceStrength: { value: number };
+  uEddyStrength: { value: number };
 }
 
 export interface HydroTileTextures {
@@ -48,6 +55,8 @@ export function createHydroFrameUniforms(): HydroFrameUniforms {
     uRain: { value: 0 },
     uRig: { value: new THREE.Vector4(0, 0, 0, 0) },
     uRigWade: { value: 0 },
+    uRigTrail: { value: Array.from({ length: 8 }, () => new THREE.Vector4()) },
+    uRigTrailCount: { value: 0 },
     uSunDirection: { value: new THREE.Vector3(0.45, 0.82, 0.35).normalize() },
     uSkyColour: { value: new THREE.Color(0.46, 0.58, 0.68) },
     uTerrainColour: { value: new THREE.Color(0.16, 0.20, 0.13) },
@@ -57,6 +66,10 @@ export function createHydroFrameUniforms(): HydroFrameUniforms {
     uRippleStrength: { value: 1 },
     uFoamStrength: { value: 1 },
     uShoreFade: { value: 1 },
+    uShallowBedStrength: { value: 1 },
+    uRiverEdgeStrength: { value: 1 },
+    uTurbulenceStrength: { value: 1 },
+    uEddyStrength: { value: 1 },
   };
 }
 
@@ -199,6 +212,8 @@ export function createHydroMaterial(
       uRain: frame.uRain,
       uRig: frame.uRig,
       uRigWade: frame.uRigWade,
+      uRigTrail: frame.uRigTrail,
+      uRigTrailCount: frame.uRigTrailCount,
       uSunDirection: frame.uSunDirection,
       uSkyColour: frame.uSkyColour,
       uTerrainColour: frame.uTerrainColour,
@@ -208,6 +223,10 @@ export function createHydroMaterial(
       uRippleStrength: frame.uRippleStrength,
       uFoamStrength: frame.uFoamStrength,
       uShoreFade: frame.uShoreFade,
+      uShallowBedStrength: frame.uShallowBedStrength,
+      uRiverEdgeStrength: frame.uRiverEdgeStrength,
+      uTurbulenceStrength: frame.uTurbulenceStrength,
+      uEddyStrength: frame.uEddyStrength,
     },
     // ── A SURFACE YOU CAN BE UNDERNEATH ──
     //
