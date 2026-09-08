@@ -28,13 +28,14 @@
  * Everything stateful stays in main.ts; this module gets a context of
  * getters and actions and owns only layout and the open/closed state.
  */
+import { RIG_MODELS, RIG_LOADOUTS, type RigModelId, type RigLoadoutId } from './rig-model';
 import { PIXEL_FONT, PIXEL_FONT_CSS, loadPixelFont } from './font';
 import { ICON, ICON_FONT, loadIcons } from './icons';
 
 // Screen indices are the probe API (__menutab) and predate the redesign:
 // 0 was the DRIVE tab and is now the splash hub; the rest keep their numbers.
-export const T_DRIVE = 0, T_SURVEY = 1, T_RIG = 2, T_WORLD = 3, T_SYSTEM = 4, T_LINE = 5, T_ABOUT = 6;
-const TITLES: Record<number, string> = { [T_SURVEY]: 'SURVEYS', [T_RIG]: 'RIG', [T_WORLD]: 'DRIVES', [T_SYSTEM]: 'SETTINGS', [T_LINE]: 'THE LINE', [T_ABOUT]: 'ABOUT' };
+export const T_DRIVE = 0, T_SURVEY = 1, T_RIG = 2, T_WORLD = 3, T_SYSTEM = 4, T_LINE = 5, T_ABOUT = 6, T_PROGRESS = 7;
+const TITLES: Record<number, string> = { [T_SURVEY]: 'SURVEYS', [T_RIG]: 'RIG', [T_WORLD]: 'DRIVES', [T_SYSTEM]: 'SETTINGS', [T_LINE]: 'THE LINE', [T_ABOUT]: 'ABOUT', [T_PROGRESS]: 'PROGRESS' };
 
 export interface Rect { x: number; y: number; w: number; h: number }
 
@@ -46,6 +47,8 @@ export interface DialGroupRef { title: string; dials: DialRef[] }
 type Tone = 'edge' | 'dim' | 'text' | 'soft' | 'gold' | 'hot' | 'good' | 'bad';
 
 export interface MenuCtx {
+  rigChoice(): { model: RigModelId; loadout: RigLoadoutId };
+  rigChoose(model: RigModelId, loadout: RigLoadoutId): void;
   colors: Record<Tone, string>;
   // ── live readouts ──
   place(): string;
@@ -353,11 +356,128 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     letter-spacing: 0.5px; }
   #menu .m-bay .cap { position: absolute; top: 3px; left: 5px; color: ${C.dim}; font-size: 10px; }
   #menu .m-bay .tag { position: absolute; bottom: 3px; left: 5px; color: ${C.gold}; font-size: 10px; }
+
+  /* The hub belongs to the glass: generous invisible hit areas, a small
+     amount of drawn ink. Keep the world and the truck as the hero. */
+  #menu button { text-shadow: inherit; border-radius: 0; touch-action: manipulation; }
+  #menu button:focus-visible { outline: 2px solid ${C.gold}; outline-offset: 3px; }
+  #menu.hub .m-nav { grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 8px; margin-top: 6px; }
+  #menu.hub .m-navrow { position: relative; border: 0; background: transparent;
+    min-height: 52px; padding: 8px 3px; gap: 4px; color: ${C.text}; }
+  #menu.hub .m-navrow::before, #menu.hub .m-navrow::after {
+    content: ''; position: absolute; width: 7px; height: 7px; pointer-events: none; }
+  #menu.hub .m-navrow::before { top: 0; left: 0; border-top: 1px solid ${C.edge}; border-left: 1px solid ${C.edge}; }
+  #menu.hub .m-navrow::after { bottom: 0; right: 0; border-bottom: 1px solid ${C.edge}; border-right: 1px solid ${C.edge}; }
+  #menu.hub .m-navrow .name { font-size: 10px; letter-spacing: 0.3px; }
+  #menu.hub .m-navrow .ico { font-size: 12px; color: ${C.gold}; }
+  #menu.hub .m-utilities { display: flex; justify-content: center; flex-wrap: wrap;
+    gap: 4px 16px; margin-top: 6px; border-top: 1px solid ${C.dim}; }
+  #menu.hub .m-utilities .m-navrow { flex-direction: row; min-height: 44px;
+    padding: 4px; gap: 6px; }
+  #menu.hub .m-utilities .m-navrow::before, #menu.hub .m-utilities .m-navrow::after { display: none; }
+  #menu.hub .m-utilities .name { font-size: 9px; color: ${C.soft}; }
+  #menu.hub .m-utilities .ico { font-size: 10px; color: ${C.soft}; }
+  #menu.hub .m-cta:first-child { position: relative; background: rgba(8,20,23,0.36);
+    border: 0; border-top: 1px solid ${C.gold}; border-bottom: 1px solid ${C.dim};
+    min-height: 56px; font-size: 20px; letter-spacing: 4px; text-align: left; padding: 10px 16px; }
+  #menu.hub .m-cta:first-child::after { content: '→'; float: right; color: ${C.gold}; }
+  #menu.hub .m-cta.alt { min-height: 44px; background: transparent; border: 0;
+    color: ${C.soft}; letter-spacing: 0.5px; }
+  #menu.hub button:active { background: rgba(190,152,77,0.22); transform: translateY(1px); }
+  @media (hover: hover) { #menu.hub button:hover { background-color: rgba(190,152,77,0.12); } }
+  #menu.hub[data-treatment=instrument] .m-nav { gap: 1px; border-block: 1px solid ${C.dim}; background: rgba(6,17,19,0.82); }
+  #menu.hub[data-treatment=instrument] .m-navrow::before { width: 3px; height: 3px; border: 0; background: ${C.gold}; top: 7px; left: 7px; }
+  #menu.hub[data-treatment=instrument] .m-navrow::after { display: none; }
+  #menu.hub[data-treatment=instrument] .m-navrow { border-right: 1px solid ${C.dim}; }
+  #menu.hub[data-treatment=instrument] .m-cta:first-child { background: rgba(6,17,19,0.9); border-left: 4px solid ${C.gold}; }
+  #menu.hub[data-treatment=docket] .m-nav { gap: 0; border-top: 1px dashed ${C.soft}; }
+  #menu.hub[data-treatment=docket] .m-navrow { align-items: flex-start; text-align: left; padding-left: 8px; }
+  #menu.hub[data-treatment=docket] .m-navrow::before { content: attr(data-index); border: 0; position: static; width: auto; height: auto; font-size: 9px; color: ${C.gold}; }
+  #menu.hub[data-treatment=docket] .m-navrow::after, #menu.hub[data-treatment=docket] .m-nav > .m-navrow > .ico { display: none; }
+  #menu.hub[data-treatment=docket] .m-cta:first-child { border-top-style: dashed; background: rgba(43,36,23,0.62); }
+  #menu .m-choice { display: flex; flex-wrap: wrap; gap: 6px; margin: 4px 0 10px; }
+  #menu .m-choice button { min-height: 44px; padding: 6px 10px; color: ${C.soft};
+    border: 1px solid ${C.dim}; background: transparent; cursor: pointer; font-size: 10px; }
+  #menu .m-choice button[aria-pressed=true] { color: ${C.gold}; border-color: ${C.gold}; background: rgba(190,152,77,0.12); }
+  @media (max-width: 370px) { #menu.hub .m-nav { gap: 3px; } #menu.hub .m-navrow .name { font-size: 9px; } }
+
+  /* Composition, not skins. These share semantic controls but reserve their
+     space differently: floating glass, a console, and an asymmetric docket. */
+  #menu.hub .m-panel { border: 0; padding-top: 0; }
+  #menu.hub .m-corner, #menu.hub .m-panel > .m-rule, #menu.hub .m-foot { display: none; }
+  #menu.hub .m-head { min-height: 44px; padding: 0 12px; }
+  #menu.hub .m-title { font-size: 11px; letter-spacing: 1px; }
+  #menu.hub .m-x { border: 0; color: ${C.soft}; }
+  #menu.hub .m-body { padding-top: 12px; }
+  #menu.hub .m-hero-head { max-width: 32em; flex-shrink: 0; }
+  #menu.hub .m-place { font-size: clamp(18px, 4.8vw, 30px); line-height: 1.35;
+    white-space: normal; text-wrap: balance; letter-spacing: 0.5px; }
+  #menu.hub .m-dimline { font-size: 9px; margin-top: 10px; color: ${C.soft}; }
+  #menu.hub .m-launch { display: grid; gap: 8px; flex-shrink: 0; margin-top: 8px; }
+  #menu.hub .m-actions { display: grid; gap: 0; }
+  #menu.hub .m-actions .m-cta { margin: 0; }
+  #menu.hub .m-dotlab { font-size: 9px; }
+  #menu.hub .m-utilities { margin: 0; gap: 0 10px; border: 0; }
+  #menu.hub .m-utilities .m-navrow { border: 0; }
+  #menu.hub .m-utilities .ico { display: none; }
+  #menu.hub .m-utilities .name { font-size: 8px; }
+  #menu.hub .m-actions .m-cta.alt { font-size: 8px; letter-spacing: 0; min-height: 44px; }
+  #menu.hub[data-treatment=glass] .m-launch { grid-template-areas: 'actions' 'nav' 'utilities'; gap: 8px; }
+  #menu.hub[data-treatment=glass] .m-actions { grid-area: actions; }
+  #menu.hub[data-treatment=glass] .m-nav { grid-area: nav; }
+  #menu.hub[data-treatment=glass] .m-utilities { grid-area: utilities; }
+  #menu.hub[data-treatment=glass] .m-actions .m-cta:first-child { background: none; border: 0;
+    padding: 4px 0; font-size: 32px; min-height: 56px; letter-spacing: 7px; }
+  #menu.hub[data-treatment=glass] .m-actions .m-cta:first-child .ico { display: none; }
+  #menu.hub[data-treatment=glass] .m-navrow { min-height: 44px; }
+  #menu.hub[data-treatment=glass] .m-navrow .ico { display: none; }
+  #menu.hub[data-treatment=instrument] .m-launch { grid-template-columns: 1.15fr 1fr;
+    padding: 12px; gap: 10px; background: rgba(6,17,19,0.88); border-top: 2px solid ${C.gold}; }
+  #menu.hub[data-treatment=instrument] .m-nav { grid-column: 1; grid-row: 1;
+    grid-template-columns: repeat(2,minmax(0,1fr)); border: 0; margin: 0; background: none; gap: 5px; }
+  #menu.hub[data-treatment=instrument] .m-nav > .m-navrow { border: 1px solid ${C.dim}; min-height: 57px; }
+  #menu.hub[data-treatment=instrument] .m-actions { grid-column: 2; grid-row: 1; align-content: stretch; }
+  #menu.hub[data-treatment=instrument] .m-actions .m-cta:first-child { display: flex; flex-direction: column;
+    justify-content: center; align-items: center; padding: 8px; border: 1px solid ${C.gold};
+    font-size: 20px; letter-spacing: 2px; background: rgba(190,152,77,0.10); }
+  #menu.hub[data-treatment=instrument] .m-actions .m-cta:first-child .ico { display: none; }
+  #menu.hub[data-treatment=instrument] .m-actions .m-cta.alt { line-height: 1.7; }
+  #menu.hub[data-treatment=instrument] .m-utilities { grid-column: 1 / -1; border-top: 1px solid ${C.dim}; }
+  #menu.hub[data-treatment=docket] .m-hero-head { border-left: 2px solid ${C.gold}; padding-left: 12px; }
+  #menu.hub[data-treatment=docket] .m-launch { grid-template-columns: 1fr 1.1fr; gap: 8px 18px;
+    border-top: 1px dashed ${C.gold}; padding-top: 8px; }
+  #menu.hub[data-treatment=docket] .m-nav { grid-column: 1; grid-row: 1;
+    display: flex; flex-direction: column; border: 0; margin: 0; }
+  #menu.hub[data-treatment=docket] .m-nav > .m-navrow { flex-direction: row; align-items: center;
+    justify-content: flex-start; min-height: 44px; gap: 12px; padding-left: 0; border-bottom: 1px solid ${C.dim}; }
+  #menu.hub[data-treatment=docket] .m-navrow .name { font-size: 11px; }
+  #menu.hub[data-treatment=docket] .m-actions { grid-column: 2; grid-row: 1; align-content: end; }
+  #menu.hub[data-treatment=docket] .m-actions .m-cta:first-child { border: 0;
+    background: none; font-size: 23px; padding: 12px 0; letter-spacing: 1px; }
+  #menu.hub[data-treatment=docket] .m-actions .m-cta:first-child .ico { display: none; }
+  #menu.hub[data-treatment=docket] .m-actions::before { content: 'DEPARTURE / READY WHEN YOU ARE';
+    color: ${C.soft}; font-size: 8px; line-height: 1.7; letter-spacing: 1px; margin-bottom: 20px; }
+  #menu.hub[data-treatment=docket] .m-utilities { grid-column: 1 / -1; justify-content: flex-start; }
+  @media (min-width: 760px) {
+    #menu.hub .m-launch { width: min(620px, 100%); }
+    #menu.hub[data-treatment=glass] .m-launch { align-self: center; }
+    #menu.hub[data-treatment=instrument] .m-launch { width: min(720px,100%); align-self: center; }
+    #menu.hub[data-treatment=docket] .m-launch { align-self: flex-start; }
+  }
+  @media (max-height: 580px) and (min-width: 600px) {
+    #menu.hub .m-hero-head { max-width: 48%; }
+    #menu.hub .m-launch { width: 48%; align-self: flex-end !important; }
+    #menu.hub .m-dots, #menu.hub .m-dotlab { display: none !important; }
+  }
   `;
   document.head.appendChild(style);
 
   const root = document.createElement('div');
   root.id = 'menu';
+  const treatments = ['glass', 'instrument', 'docket'] as const;
+  let treatment: string = 'glass';
+  try { const saved = localStorage.getItem('drive.menu-treatment'); if (treatments.some(t => t === saved)) treatment = saved!; } catch { /* default */ }
+  root.dataset.treatment = treatment;
   // The scrim, in four strips around a hole that is usually closed.
   const strips = Array.from({ length: 4 }, () => {
     const s = document.createElement('div');
@@ -403,7 +523,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       const t = el('div', 'm-title');
       t.append(el('span', 'at', '@c15r/'), 'drive');
       head.append(t, x);
-      subT.style.display = 'block';
+      subT.style.display = 'none';
     } else {
       const back = el('button', 'm-back', '< BACK');
       back.addEventListener('click', () => setTab(T_DRIVE));
@@ -538,8 +658,8 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     bindText(situation, ctx.situation);
     // One line of facts. The four-row ledger was a screen's worth of chrome
     // on a phone; the VALUES carry everything the labels were saying.
-    const kv = el('div', 'm-statline');
-    bindText(kv, () => ctx.driveStats().map(([, v]) => v).join(' · '));
+    const heroHead = el('div', 'm-hero-head');
+    heroHead.append(place, situation);
     const cta = el('button', 'm-cta');
     cta.append(ico(ICON.car), el('span', 'lab', 'DRIVE'));
     cta.addEventListener('click', () => { ctx.drive(); close(); });
@@ -553,10 +673,11 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       gps.style.color = col;
       gps.style.borderColor = col;
     });
-    const nav = el('div', 'm-nav');
-    // THE LINE leads the stack: the campaign is the game's spine, and the row
-    // says where you stand on it without demanding anything.
-    const lineRow = el('div', 'm-navrow');
+    const nav = el('nav', 'm-nav');
+    nav.setAttribute('aria-label', 'Explore Drive');
+    const utilities = el('div', 'm-utilities');
+    // THE LINE is an optional journey alongside the free-drive destinations.
+    const lineRow = el('button', 'm-navrow');
     const lnIco = ico(ICON.road), lnName = el('span', 'name', 'THE LINE'),
       lnSub = el('span', 'sub', ''), lnChev = el('span', 'chev', '>');
     lineRow.append(lnIco, lnName, lnSub, lnChev);
@@ -567,17 +688,17 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       lnName.style.color = ln.on ? C.good : C.text;
       lnChev.style.color = ln.on ? C.good : C.gold;
     });
-    nav.appendChild(lineRow);
+
     for (const [t, name, sub, icon] of [
       [T_RIG, 'RIG', 'TUNE AND DRESS THE TRUCK', ICON.truck],
       [T_WORLD, 'DRIVES', 'DESTINATIONS · SPOTS · ELSEWHERE', ICON.map],
       [T_SURVEY, 'SURVEYS', 'ROADS DRIVEN AND CLAIMED', ICON.flag],
       [T_SYSTEM, 'SETTINGS', 'RENDER · WORLD · SOUND', ICON.gear],
     ] as Array<[number, string, string, string]>) {
-      const row = el('div', 'm-navrow');
+      const row = el('button', 'm-navrow');
       row.append(ico(icon), el('span', 'name', name), el('span', 'sub', sub), el('span', 'chev', '>'));
       row.addEventListener('click', () => setTab(t));
-      nav.appendChild(row);
+      if (t === T_SYSTEM) utilities.appendChild(row); else nav.appendChild(row);
     }
     // …and SIGN IN, in the same stack rather than shouting above it. A player
     // who never taps it loses nothing, so it reads as one more section — but it
@@ -590,7 +711,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     // state it reported lives in SETTINGS beside the button that changes it,
     // which is where a status belongs. Signing out is a destructive tap and
     // does not belong on the screen you land on either.
-    const signRow = el('div', 'm-navrow');
+    const signRow = el('button', 'm-navrow');
     const signIco = ico(ICON.save), signName = el('span', 'name', ''),
       signSub = el('span', 'sub', ''), signChev = el('span', 'chev', '>');
     signRow.append(signIco, signName, signSub, signChev);
@@ -607,18 +728,25 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       signSub.style.color = C.dim;
       signChev.style.color = C.gold;
     });
-    nav.appendChild(signRow);
+    utilities.appendChild(signRow);
     // ABOUT, and it is not decoration: this world is built out of other
     // people's surveys — OpenStreetMap's roads, a dozen nations' elevation
     // data, ESA's land cover — and most of those are given on terms that ASK
     // to be credited. A game that ships them with no visible attribution is
     // taking something. It sits on the splash rather than three screens down
     // for the same reason the sign-in does.
-    const aboutRow = el('div', 'm-navrow');
+    const aboutRow = el('button', 'm-navrow');
     aboutRow.append(ico(ICON.map), el('span', 'name', 'ABOUT'),
       el('span', 'sub', 'WHOSE MAPS THIS IS BUILT FROM'), el('span', 'chev', '>'));
     aboutRow.addEventListener('click', () => setTab(T_ABOUT));
-    nav.appendChild(aboutRow);
+    utilities.appendChild(aboutRow);
+    const progress = el('button', 'm-navrow');
+    progress.append(el('span', 'name', 'PROGRESS'));
+    progress.addEventListener('click', () => setTab(T_PROGRESS));
+    utilities.appendChild(progress);
+    nav.appendChild(lineRow);
+    Array.from(nav.children).forEach((row, i) => (row as HTMLElement).dataset.index = `0${i + 1}`);
+    for (const b of [...Array.from(nav.children), ...Array.from(utilities.children)]) (b as HTMLButtonElement).type = 'button';
     // ── THE REEL, AS A CAROUSEL ──
     //
     // What stood here was a RETURN row that appeared only after the reel had
@@ -663,10 +791,13 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     // camera keeps the truck visible between the stats and the buttons.
     const spacer = el('div', '');
     spacer.style.flex = '1';
-    body.append(place, situation, kv, spacer, dots, dotAt, nav);
-    // DRIVE anchors the BOTTOM of the page — pinned in the foot, under the
-    // sections, always reachable without scrolling past it.
-    foot.append(cta, gps);
+    const launch = el('div', 'm-launch');
+    const actions = el('div', 'm-actions');
+    actions.append(cta, gps);
+    launch.append(nav, actions, utilities);
+    // One semantic order, three spatial compositions. The live camera reads
+    // the hero header and navigation bounds instead of guessing screen thirds.
+    body.append(heroHead, spacer, dots, dotAt, launch);
   }
 
   function renderSurveys(): void {
@@ -708,6 +839,21 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   // RIG leads with what you can CHANGE — the dials — then the drawings that
   // prove what you built against the sheet.
   function renderRig(): void {
+    const choice = ctx.rigChoice();
+    const choices = <T extends string>(label: string, values: T[], selected: T, hit: (value: T) => void): void => {
+      body.appendChild(el('div', 'm-sect', label));
+      const row = el('div', 'm-choice');
+      row.setAttribute('role', 'group'); row.setAttribute('aria-label', label);
+      for (const value of values) {
+        const b = el('button', '', value.toUpperCase()); b.type = 'button';
+        b.setAttribute('aria-pressed', String(value === selected));
+        b.addEventListener('click', () => { hit(value); render(); }); row.appendChild(b);
+      }
+      body.appendChild(row);
+    };
+    choices('MODEL', RIG_MODELS, choice.model, model => ctx.rigChoose(model, choice.loadout));
+    choices('EQUIPMENT', RIG_LOADOUTS, choice.loadout, loadout => ctx.rigChoose(choice.model, loadout));
+    body.appendChild(el('div', 'm-dimline', 'YOUR RIG · FREE DRIVE AND THE LINE'));
     const views = el('div', 'm-views');
     const chips: HTMLButtonElement[] = [];
     ctx.views().forEach((id, i) => {
@@ -968,7 +1114,13 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
       'kottke.org/plus/type/silkscreen'],
   ];
 
+  function renderProgress(): void {
+    body.append(el('div', 'm-sect', 'YOUR ROAD'), kvTable(ctx.driveStats));
+    body.append(el('div', 'm-sect', 'PROGRESS SYNC'), el('div', 'm-dimline', ctx.syncNote()));
+  }
+
   function renderAbout(): void {
+    body.appendChild(el('div', 'm-place', 'SOLARPUNK OPEN WORLD DRIVING SIM'));
     body.append(el('div', 'm-dimline',
       'A driving sim over the real world. The world is not ours — it is '
       + 'surveyed, measured and published by the people and institutions below, '
@@ -991,6 +1143,20 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   }
 
   function renderSettings(): void {
+    body.appendChild(el('div', 'm-sect', 'SPLASH TREATMENT'));
+    const variants = el('div', 'm-choice');
+    const names = ['GLASS BRACKETS', 'INSTRUMENT PANEL', 'ROUTE DOCKET'];
+    treatments.forEach((value, i) => {
+      const b = el('button', '', names[i]); b.type = 'button';
+      b.setAttribute('aria-pressed', String(value === treatment));
+      b.addEventListener('click', () => {
+        treatment = value; root.dataset.treatment = value;
+        try { localStorage.setItem('drive.menu-treatment', value); } catch { /* session choice survives */ }
+        setTab(T_DRIVE);
+      });
+      variants.appendChild(b);
+    });
+    body.appendChild(variants);
     body.appendChild(kvTable(ctx.systemRows));
     // ── EVERY SWITCH, WHETHER OR NOT IT IS ON ──
     //
@@ -1188,7 +1354,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     updaters = [];
     renderHead();
     ([
-      renderHome, renderSurveys, renderRig, renderDrives, renderSettings, renderLine, renderAbout,
+      renderHome, renderSurveys, renderRig, renderDrives, renderSettings, renderLine, renderAbout, renderProgress,
     ][tab] ?? renderHome)();
     // FILL THE VALUES BEFORE THE SCREEN IS SEEN. Everything dynamic here is
     // created empty and written by an updater, and the updaters only ran on the
