@@ -1781,6 +1781,7 @@ colour over it.
 | `roads` | the bench-search profile solver, as a section |
 | `flora` | the climate ladder **and** a real stand of the shipping plants |
 | `weather` | the 48×48 weather lattice, with time on a dial |
+| `sound` | the mixer with no world: every voice on a dial, every one-shot on a button, meters per tap, the gravel and rattle A/B, targets as sliders that COPY as the engine literal |
 | `world` | a chooser: the whole engine over an authored planet |
 | `flora-ez` | the shipping silhouettes against a reduced EZ-Tree skeleton, and the hybrid: EZ wood under Drive crowns (pulls `@dgreenheck/ez-tree` from esm.sh; see below) |
 
@@ -3687,6 +3688,15 @@ on-board tap read −36 at the start of the spool-up; the full-spool levels
 (−21 on board, −27 ten metres off, −46 at forty) are the offline render's and
 the seat's report is the verification.
 
+**A CORRECTION TO THE NUMBERS ABOVE, from the lab's first run:** the voice and
+bus taps sat before the master gain and `out` after the limiter, so the
+per-voice readings in that paragraph are 5.2 dB hotter than what reaches the
+speaker (the Merced's −25.6 is −30.8 at the ear; `master` and `out` were
+right). `levels()` applies the master to everything upstream of it now, so a
+voice's number is the number its target names; the lab's own run then read
+the still bank's river at −28, rapids' boil, open ground's grit and rattle,
+and the drone on board all within a decibel and a half of their targets.
+
 **THE GRIT WAS A BUBBLING BROOK.** First report from the seat after the deploy:
 *"not sure if it's the grit or rattle but it sounds like a bubbling brook."* It
 was the grit, and the diagnosis is in the pattern: every gravel grain had been
@@ -3705,6 +3715,41 @@ partials, swelling and dying, over low knocks — because what separates a
 rattle from a tinkle is the repetition. Both re-measured into `UNIT`; the
 targets did not move. Verified by arithmetic and the pattern's construction,
 not by an ear: the seat's next report is the verification.
+
+### The sound lab: the mixer with no world
+
+`/lab/sound` (`client/sound-lab.ts`). Asked for from the seat after the brook —
+*"do we need a soundscape lab so we can isolate and tune, with buttons to
+trigger the range of possible sounds and combinations thereof"* — and the
+answer was already in the mixer's shape: it owns no world state and takes
+every input as an argument, so the lab is `createAudio()` with dials where the
+world was, and the loop feeds it the SAME derived numbers main.ts does (the
+bed's duck by motion and engine, the rustle as wind × foliage × duck, the
+parked window), so a level read there is the level the game would make.
+
+- **Every continuous input on a dial**: the world's (wind, foliage, grass,
+  river, froth, side, birds, rain), the truck's (engine, throttle, speed,
+  surface, quality, slip, spin, grounded, shake, scrape, brush, wash), the
+  room's (tunnel, cab) and the drone's (spool, load, distance, side, on board).
+- **Every one-shot on a button** at the forces the world fires them at, a
+  **level meter per tap** with a peak that holds for a second and a half so a
+  thud can be read after it has gone, **scenes** for what the targets were
+  written for, the gravel and the rattle as an **A/B** against what they used
+  to be, a **mute per voice** with a solo mode.
+- **THE TARGETS ARE SLIDERS, AND COPY WRITES THE ENGINE LITERAL.** `TARGETS`
+  in audio.ts is exported and mutable; the lab moves it live and COPY puts
+  `export const TARGETS = {…}` on the clipboard with the scene and the levels
+  as a comment. A number found by ear on the phone becomes the engine's by
+  paste, which is the whole bargain the dials were built for.
+- **Phone-first.** The shared dial panel is a fixed column that covered the
+  meters and the buttons on a 390 px screen; below 640 px the main panel
+  comes first in the flow and the dials follow as a block.
+- `devtools/sound-lab.test.mjs` drives it without a finger: canvas painted,
+  the mixer arms, a still bank puts the river on the meter near its target,
+  open ground the grit and the rattle, the drone on board near its target, a
+  thud leaves a peak, a mute takes a voice away, the A/B swaps. All green,
+  no page errors. `mute()`, `bird()`, `pattern()` and `mutes()` exist for
+  the lab and nothing in the game calls them.
 
 **JUDGEMENT, NOT ANCHORS.** The targets are numbers written down so they can be
 moved, like the river's 0.28 before them. What is known: −40 dBFS is inaudible

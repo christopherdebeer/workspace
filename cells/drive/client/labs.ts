@@ -72,6 +72,12 @@ export const LABS: readonly LabEntry[] = [
     start: () => import('./flora-ez-lab').then((m) => m.startEzFloraLab()),
   },
   {
+    slug: 'sound',
+    label: 'SOUND',
+    note: 'The mixer with no world: every voice on a dial, every one-shot on a button, a level meter per tap, the gravel and the rattle as an A/B, and the decibel targets as sliders that COPY as the engine literal.',
+    start: () => import('./sound-lab').then((m) => m.startSoundLab()),
+  },
+  {
     slug: 'weather',
     label: 'WEATHER',
     note: 'Twelve kilometres of sky flat on a table: cover, rain, fog and the wet channel that remembers, with time on a dial.',
