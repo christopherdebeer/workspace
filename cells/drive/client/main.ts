@@ -42085,7 +42085,7 @@ function setClean(on: boolean): void {
  *  pass that asked. `__ovroads` answers the ROUTER's question (reach, ways,
  *  the handover); this answers "is the map coming". */
 (window as unknown as { __ov?: object }).__ov = (): object => ({
-  level: ovZ, want: ovWant, built: ovMeshes.size, asked: ovTiles.size,
+  level: ovZ, want: ovWant, have: ovMeshes.size, built: ovMeshes.size, asked: ovTiles.size,
   inFlight: ovInFlight, queued: ovQueue.length, retired: ovRetired.length,
   failing: [...ovFailedAt.values()].filter((t) => performance.now() - t < OV_RETRY_MS).length,
   retryMs: OV_RETRY_MS,

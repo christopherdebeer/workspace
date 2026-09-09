@@ -27,7 +27,7 @@ while (Date.now() - t0 < 600000) {
     const f = window.__far(), c = window.__cover(), o = window.__ov?.() ?? {}, cam = window.__cam();
     return { zoom: cam.zoom, dist: cam.dist, mpp: cam.mpp, viewR: f.radius,
       far: { z: f.level, tiles: f.tiles, asked: f.asked, retired: f.retired, inFlight: f.inFlight, blind: f.cover?.blind ?? null, mean: f.cover?.mean ?? null },
-      cover: c.wide, ov: { z: o.z ?? o.level ?? null, have: o.have ?? o.tiles ?? null, want: o.want ?? null, wire: o.wire ?? o.inFlight ?? null } };
+      cover: c.wide, ov: { z: o.level ?? null, have: o.have ?? null, want: o.want ?? null, wire: o.inFlight ?? null } };
   });
   const line = JSON.stringify(s);
   if (line !== last) { console.log(`  [+${((Date.now() - t0) / 1000).toFixed(0)}s] ${line}`); last = line; }
