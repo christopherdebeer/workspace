@@ -144,6 +144,65 @@ console.log('\nthe geometry, and its agreement with the bake:');
   check(g.getIndex().count === 64 * 32 * 6, `${g.getIndex().count / 3} triangles`);
 }
 
+// ── THE TAP: A RAY BACK TO A LAT/LON ──
+//
+// `globeHit` is the exact inverse of `latLonToUnit` through a rotation, and
+// that is precisely the kind of thing that can be wrong by a sign or a mirror
+// and still return plausible coordinates for the one case its author tried.
+// So it is asserted as a ROUND TRIP over a spread of places, at two spins, and
+// then on the two cases that are not places at all.
+{
+  const centre = new THREE.Vector3(0, -G.GLOBE_R - 800, 0);
+  // The eye 20,000km over the tangent point, which is the chart's own ceiling.
+  const eye = new THREE.Vector3(0, 20e6, 0);
+  for (const [spinLat, spinLon] of [[0, 0], [-34, 18.4], [41, -74]]) {
+    const q = G.globeOrientation(spinLat, spinLon);
+    let worst = 0, worstAt = '';
+    for (const [lat, lon] of [[0, 0], [45, 90], [-34, 18.4], [60, -120], [-70, 170], [12, -3]]) {
+      // Aim at where that place actually IS under this spin, then ask the ray
+      // what it hit. A round trip through the rotation, the intersection and
+      // the inverse, which is every step the gesture takes.
+      const p = G.latLonToUnit(lat, lon).multiplyScalar(G.GLOBE_R)
+        .applyQuaternion(q).add(centre);
+      // ONLY WHAT IS OVER THE HORIZON FROM THIS EYE, and the horizon is not a
+      // guess: from height h the visible cap reaches exactly where the
+      // surface normal's component toward the eye is R/(R+h), which at 20,000
+      // km is 0.2416 — 76 degrees of arc. The first cut of this filter used a
+      // round 0.2, which is 78.5 degrees and therefore BEYOND the horizon, and
+      // it duly failed by 2.9 degrees on the one place that landed in the
+      // sliver between: the ray toward a point behind the limb hits the near
+      // limb instead, correctly, and the round trip has nothing to round trip
+      // to. A tenth of a degree of margin keeps a grazing case off the knife
+      // edge, where the intersection is ill-conditioned for reasons that are
+      // arithmetic rather than geometric.
+      const eyeH = eye.y - (centre.y + G.GLOBE_R);
+      if (p.y < centre.y + G.GLOBE_R * (G.GLOBE_R / (G.GLOBE_R + eyeH) + 0.02)) continue;
+      const dir = p.clone().sub(eye).normalize();
+      const hit = G.globeHit(eye, dir, centre, q);
+      if (!hit) { worst = 1e9; worstAt = `${lat},${lon} missed`; continue; }
+      const dLat = Math.abs(hit.lat - lat);
+      const dLon = Math.abs((((hit.lon - lon) % 360) + 540) % 360 - 180);
+      if (Math.max(dLat, dLon) > worst) { worst = Math.max(dLat, dLon); worstAt = `${lat},${lon}`; }
+    }
+    check(worst < 1e-3, `spin ${spinLat},${spinLon}: every tap round-trips (worst ${worst.toFixed(6)}° at ${worstAt})`);
+  }
+  const q0 = G.globeOrientation(0, 0);
+  // THE NEAR FACE, NOT THE FAR ONE. A ray straight down the axis must answer
+  // with the place under the eye, never its antipode — the whole reason the
+  // quadratic takes the smaller root.
+  const down = G.globeHit(eye, new THREE.Vector3(0, -1, 0), centre, q0);
+  check(down !== null && Math.abs(down.lat) < 1e-6 && Math.abs(down.lon) < 1e-6,
+    `straight down is the tangent point, not its antipode (${down ? `${down.lat.toFixed(3)},${down.lon.toFixed(3)}` : 'null'})`);
+  // A TAP ON SPACE IS NULL. Sideways from the eye passes clean by the planet,
+  // and clamping that onto the limb would drop a mark nobody pointed at.
+  check(G.globeHit(eye, new THREE.Vector3(1, 0, 0), centre, q0) === null,
+    'a ray past the limb hits nothing');
+  // And a ray pointing away from a planet that is behind you is not a hit
+  // either, however real the roots are.
+  check(G.globeHit(eye, new THREE.Vector3(0, 1, 0), centre, q0) === null,
+    'a ray away from the planet hits nothing');
+}
+
 rmSync(BUNDLE, { force: true });
 console.log(fails ? `\n${fails} FAILURES` : '\nglobe: all ok');
 process.exit(fails ? 1 : 0);

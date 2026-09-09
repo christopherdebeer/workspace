@@ -4837,15 +4837,93 @@ southern Africa entire, with the Karoo, the Drakensberg's relief and the
 coastline correct; the 110,000 frame is the planet with its limb and its
 terminator.
 
-**WHAT IS NOT DONE, and is the next pass:** the gesture. Pan still slides the
-camera linearly rather than spinning the globe, so the far side of the world is
-reachable only by driving there. The shape of the fix is written down in
-`globe.ts`'s header — a view lat/lon that pan accumulates into, blended in by
-the same ramp the tilt uses, so the sphere stays tangent under the truck in the
-band where the shell is still on screen and becomes free to rotate above it.
-Also open: fine POI labels ("BERGRIVIER 1.3KM") still draw at planet zoom, and
-`NE_MIN_Z` could drop to serve trunk roads and capitals on the globe — the
-asset already holds them.
+### The planet's gestures, and the one test they all rest on
+
+A drag turns the Earth, a tap lands on it, and the fine world's labels stand
+down. Three changes, and every one of them is decided by the SAME question:
+does the streamed shell still cover the frame? `globeFree` is that question,
+the top-camera branch's `shellOn` is now literally `globeFree() === 0`, and
+`devtools/globe-spin.test.mjs` asserts both regimes from both sides.
+
+- **A SPIN IS NOT A PAN, AND MUST NOT BE STORED AS ONE.** The obvious
+  implementation accumulates the drag into `panX/panZ`. At planet zoom one
+  drag across the glass is thousands of kilometres of tangent plane — nine
+  million metres of `panX`, which the moment you zoomed back in would stand
+  the chart's camera nine thousand kilometres from the truck over a world that
+  has none of it streamed. `globeSpinLat/Lon` are degrees, and the globe's
+  POSITION never moves for them: the sphere stays tangent under the truck and
+  only its orientation changes, so what turns is the Earth under a fixed eye.
+- **THE RATE IS THE GEOMETRY'S** (`globeDegPerPx`): the ground the frame
+  covers, over R. `chartMpp` is metres per ART pixel and a finger is on SCREEN
+  pixels, so this divides by the frame's own height instead. The east
+  component of a drag is divided by the cosine of the tangent latitude —
+  floored at 0.25, about 76° — which is the spherical form of the same "is the
+  ground you grabbed still under your finger" rule `chartPlaneAt` answers for
+  the flat chart. A drag from the middle of the disc to its limb turns the
+  Earth about 115° rather than 180°, because the mapping is the tangent
+  plane's and linear; that is what makes a small drag near the middle feel
+  like the same gesture as a small drag on the flat chart one step below.
+- **AND `globeFree` IS A STEP, WHICH THE FIRST CUT WAS NOT.** A ramp over the
+  band above the hand-over is the obvious shape and is wrong, measured: at
+  z40,000 it stood at **0.801**, so a drag asking for ten degrees turned the
+  Earth eight. The rate is already exact, and scaling an exact rate by a
+  second ramp breaks the contract by a factor that changes with the zoom.
+  There is nothing left for a ramp to soften either — the shell it exists to
+  agree with is a hard switch itself, and above the hand-over the shell is
+  OFF. The step is invisible where it fires, and not by luck: the frame it
+  fires on is the one where the coarse ring covers the frame corner to corner,
+  so the planet snapping home is behind the shell just drawn over it.
+- **THE PIN, BECAUSE A SPUN GLOBE IS A GLOBE YOU CAN GET LOST ON.** The
+  truck's own lat/lon, a child of the globe group so it rides round the limb
+  and is occluded by the planet's depth, sized in art pixels (4.5) rather than
+  metres so it is a locator at every altitude, and lifted 0.1% of R — the
+  160-segment lattice chords 1.2km under the true surface, so a pin ON the
+  radius sinks into its own planet. Hidden below the hand-over, where it would
+  sit at the frame's centre saying what the whole chart already says.
+- **A DOUBLE TAP LANDS ON THE SPHERE** (`globeHit`, `globeTapAt`).
+  `chartToWorld` unprojects onto the tangent plane and marches the
+  heightfield, which past the plane's honest reach solves to a point tens of
+  thousands of kilometres out in a projection that stopped describing the
+  Earth around 1,500km — so above the hand-over the same ray is intersected
+  with the sphere and converted back through `toLocal`, the same
+  equirectangular convention every other layer on the chart is placed by. The
+  mark, its record and its RELOCATE therefore agree with each other. **The
+  NEAR root, always** — the far one is the back of the planet, so a tap on
+  Africa would answer with the Pacific, correctly and uselessly — and a ray
+  that misses returns null rather than being clamped to the limb, because a
+  tap on space is not a place.
+- **THE FINE PIN LAYER STANDS DOWN IN TWO STAGES, and they are different
+  claims.** Scenery is drawn from a 3km catchment, which is a fact about the
+  fine world; two pins inside it can only be told apart while that catchment
+  spans more than a label, so unpinned pins stop at `POI_SPREAD_PX` (16 art
+  pixels, 187 m/px, about a 60km frame). Pinned entries — a destination, the
+  rig, a downed drone, a dropped fix — survive that, because being far away is
+  the whole point of them. At PLANET zoom the entire table is inside one art
+  pixel of the frame's centre and the layer goes, checkpoints with it; the
+  globe's own pin is the only marker that means anything out there. Both lists
+  are CLEARED rather than skipped — a list merely not rebuilt stays painted
+  and stays tappable, which is the trap `poiVis === 0` already carries a note
+  about.
+
+**A TEST'S HORIZON IS NOT A ROUND NUMBER.** The tap round-trip filtered out
+places over the horizon with a hand-picked `y/R > 0.2` and failed by 2.9° on
+the one place that landed in the sliver it let through: from height h the
+visible cap reaches exactly `R/(R+h)`, which at 20,000km is 0.2416 — 76° — so
+0.2 is 78.5° and BEYOND it. The ray toward a point behind the limb hits the
+near limb instead, correctly, and the round trip had nothing to round trip to.
+
+**Measured** (`devtools/globe-spin.test.mjs`, Letsemeng, no page errors): at
+z40,000 the frame is 8,030km against a 5,424km ring, so the shell is off and
+`free` is 1; a 120px rightward drag turns the view 10.76° WEST and moves the
+latitude 0.000°; a 120px downward drag turns it 9.32° NORTH; the flat pan does
+not move at all in either. At z8 the same drag pans 180m and turns the planet
+0.000°, a spin banked at 40/80 decays to 0.02/0.05 in three seconds, and the
+pin is put away. The centre of an unspun planet taps to the truck's own point;
+the corner taps to nothing.
+
+**Still open:** `NE_MIN_Z` could drop to serve trunk roads and capitals on the
+globe — the asset already holds them — and the globe has no place names of its
+own, so between the shell's hand-over and the limb the chart is silent.
 
 ## The switch table
 

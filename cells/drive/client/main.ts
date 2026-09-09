@@ -30,7 +30,7 @@ import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt
 import { pickInfrastructureRecipe, planSupportStations, type StructureRecipe } from './infrastructure';
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
 import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
-import { GLOBE_R, globeGeometry, globeMaterial, globeOrientation, globeFar, latLonToUnit, subsolar } from './globe';
+import { GLOBE_R, globeGeometry, globeHit, globeMaterial, globeOrientation, globeFar, latLonToUnit, subsolar } from './globe';
 import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSample, type HydroSystem, type OceanCoverage } from './hydro';
 import { cleanEquipment, equipmentFor, type RigEquipmentId } from './rig-equipment';
 import { createRigModel, OVERLAND, RIG_MODELS, RIG_LOADOUTS, type RigModelId, type RigLoadoutId } from './rig-model';
@@ -21165,6 +21165,70 @@ function globeOn(): number {
   return clamp((chartMpp() - GLOBE_TILT_LO) / (GLOBE_TILT_HI - GLOBE_TILT_LO), 0, 1);
 }
 /**
+ * HOW FREE THE PLANET IS TO BE TURNED — 0 while the far shell still covers the
+ * frame, 1 once the planet owns it outright.
+ *
+ * This is NOT `globeOn`, and the difference is the whole reason it exists.
+ * `globeOn` is a LOOK ramp: it eases the tilt toward straight down and hands
+ * the sky over to space while both backdrops are still on screen, and neither
+ * of those can make the two disagree. A SPIN can. The far shell is the
+ * streamed world's own coarse ground, fixed under the truck; the globe is a
+ * texture on a sphere. Turn the sphere while the shell is drawn beside it and
+ * the two carry different places through neighbouring pixels — precisely the
+ * disagreement the backdrop design exists to avoid.
+ *
+ * So the spin is keyed on exactly the test the hand-over uses — the coarse
+ * ring's width against the frame's diagonal — and the top-camera branch's
+ * `shellOn` is now this returning 0, so the two cannot drift apart. Below it a
+ * drag pans the chart as it always has; above it a drag turns the Earth.
+ *
+ * ── AND IT IS A STEP, WHICH THE FIRST CUT WAS NOT ──
+ *
+ * A ramp over the band above the hand-over is the obvious shape and is wrong,
+ * measured: at the chart's z40,000 it stood at 0.801, so a drag asking the
+ * Earth for ten degrees turned it eight. `globeDegPerPx` is already exact —
+ * it is the arc the frame's own ground covers, which is what makes the place
+ * under the thumb keep up — and scaling an exact rate by a second ramp breaks
+ * that contract by a factor that changes with the zoom. There is nothing left
+ * for the ramp to soften either: the shell it exists to agree with is a hard
+ * switch itself, and above the hand-over the shell is OFF, so there is no
+ * second backdrop for a partial spin to half-agree with.
+ *
+ * The step is invisible where it happens, and that is not luck: the frame it
+ * fires on is the one where the ring covers the frame corner to corner, so the
+ * planet snapping home is behind the shell that has just been drawn over it.
+ *
+ * Zero wherever there is no planet to turn — a fixture, or the texture never
+ * arriving — because the shell keeps drawing there and a spin would have
+ * nothing to show for itself.
+ */
+function globeFree(): number {
+  if (camMode !== 'top' || !globeGroup.visible) return 0;
+  const ringM = (2 * FAR_RING_MAX + 1) * tileMetres(farZ);
+  return chartMpp() * Math.hypot(pixSize.x, pixSize.y) > ringM ? 1 : 0;
+}
+/**
+ * DEGREES OF ARC PER SCREEN PIXEL OF DRAG, at the point the sphere is tangent.
+ *
+ * `chartMpp` is metres per ART pixel — the 148x320 buffer everything about the
+ * look is keyed on — and a finger is on SCREEN pixels, so this divides by the
+ * frame's own height instead. Ground metres over the Earth's radius is the
+ * angle the surface turns through, which makes the place you grabbed follow
+ * your thumb exactly as it does on the flat chart: the same bargain
+ * `chartPlaneAt` strikes for the pan, one projection further out.
+ *
+ * It is a TANGENT-PLANE rate, so a drag from the centre of the disc to its
+ * limb turns the Earth by about 115 degrees rather than 180. That is the
+ * honest linear reading of a grab, and it is what makes a small drag near the
+ * middle of the planet feel like the same gesture as a small drag on the flat
+ * chart one zoom step below.
+ */
+function globeDegPerPx(): number {
+  const m = (2 * chartDist() * Math.tan(((camera.fov / 2) * Math.PI) / 180))
+    / Math.max(2, innerHeight);
+  return (m / GLOBE_R) * (180 / Math.PI);
+}
+/**
  * THE CHART'S TILT, WHICH IS NO LONGER A CONSTANT.
  *
  * 70° is an oblique look at a map, and it is right for one: it gives the
@@ -21933,12 +21997,62 @@ globeMesh.renderOrder = -5;
 // is outside every bounding test three would like to do — and it is never off
 // screen when it is on at all.
 globeMesh.frustumCulled = false;
+/**
+ * THE PIN, BECAUSE A SPUN GLOBE IS A GLOBE YOU CAN GET LOST ON.
+ *
+ * Unspun, the truck is at the top of the sphere and therefore at the centre of
+ * the frame, and a marker there says nothing. The moment a drag turns the
+ * Earth it is the only thing that does: it rides round with the surface, goes
+ * over the limb with it, and is occluded by the planet's own depth like
+ * anything else standing on it.
+ *
+ * SIZED IN ART PIXELS, not in metres. A marker at a fixed ground size is a
+ * continent at one zoom and invisible at the next; this one is `GLOBE_PIN_PX`
+ * across at every altitude, which is what a locator is for. The lift clears
+ * the sphere's own faceting — a 160-segment lattice chords 1.2km below the
+ * true surface at the equator, so a pin ON the radius would sink into its own
+ * planet — and 0.1% of R is 6.4km, under half an art pixel at any zoom the pin
+ * is drawn at.
+ */
+const GLOBE_PIN_PX = 4.5, GLOBE_PIN_LIFT = 1.001;
+const globePin = new THREE.Mesh(
+  new THREE.OctahedronGeometry(1, 0),
+  // Unlit and flat: this is an instrument, not a thing in the world, and it
+  // has to read against a sunlit ocean and a night side alike. The rig's own
+  // gold, so the chart names the truck in one colour everywhere.
+  new THREE.MeshBasicMaterial({ color: 0xf5c453, depthWrite: false }),
+);
+globePin.name = 'globe-pin';
+globePin.renderOrder = -4;       // after the planet, still under the world
 const globeGroup = new THREE.Group();
 globeGroup.name = 'globe';
 globeGroup.visible = false;
 globeGroup.add(globeMesh);
+globeGroup.add(globePin);
 worldGroup.add(globeGroup);
 let globeAsked = false, globeFailed = false;
+/**
+ * WHERE THE PLANET IS TURNED TO, IN DEGREES OFF THE TRUCK'S OWN POINT.
+ *
+ * Degrees, and NOT accumulated into `panX/panZ` — which is the first thing
+ * tried and is a trap. Pan is metres in the tangent plane, and at planet zoom
+ * one drag across the glass is thousands of kilometres: nine million metres of
+ * `panX`, which the moment you zoomed back in would put the chart's camera
+ * nine thousand kilometres from the truck, over a fine world that has none of
+ * it streamed and never will. A spin is not a pan. It is the same view of a
+ * different part of the sphere, and it has to be its own state.
+ *
+ * The globe's POSITION never moves for it either: the sphere stays tangent
+ * under the truck and only its orientation changes, so what turns is the Earth
+ * under a fixed eye rather than the eye around the Earth. That is what keeps
+ * the hand-over honest — see `globeFree`, which scales this to nothing
+ * wherever the shell is still drawn.
+ */
+let globeSpinLat = 0, globeSpinLon = 0;
+/** How far the spin may climb. Past about 85 degrees the tangent-point cosine
+ *  that scales a horizontal drag runs away, and a chart looking down on a pole
+ *  has no meaningful east to drag along anyway. */
+const GLOBE_SPIN_LAT_MAX = 85;
 /** Fetched once, on the first wide chart — not at boot. 317KB is not a cost
  *  anyone driving should pay, and the ez-tree lesson in CLAUDE.md is what
  *  happens when a wide-view asset lands in the boot path. */
@@ -21969,7 +22083,28 @@ function stepGlobe(): void {
   const vx = viewX(), vz = viewZ();
   const [gLat, gLon] = localToLatLon(vx, vz);
   globeGroup.position.set(vx, -(GLOBE_R + GLOBE_SINK), vz);
-  globeOrientation(gLat, gLon, globeGroup.quaternion);
+  // ── THE SPIN, SCALED BY THE HAND-OVER ──
+  //
+  // `globeFree` is 0 wherever the far shell still covers the frame, so the
+  // planet is tangent under the truck by construction exactly where a second
+  // backdrop could contradict it, and 1 where the planet is the only thing out
+  // there. The consequence at the other end is what makes the gesture safe:
+  // zooming back in puts the Earth home in the same frame the shell arrives
+  // in — behind it, so the snap is not seen — rather than leaving the chart
+  // parked over an ocean the fine world cannot stream.
+  const free = globeFree();
+  const sLat = clamp(gLat + globeSpinLat * free, -89.9, 89.9);
+  const sLon = gLon + globeSpinLon * free;
+  globeOrientation(sLat, sLon, globeGroup.quaternion);
+  // The pin marks the truck's TRUE point on the sphere, which is the top of it
+  // only while the spin is nothing. Hidden below the hand-over, where it would
+  // be a gold diamond sitting on the frame's centre saying what the whole
+  // chart already says.
+  globePin.visible = free > 0.001;
+  if (globePin.visible) {
+    latLonToUnit(gLat, gLon, globePin.position).multiplyScalar(GLOBE_R * GLOBE_PIN_LIFT);
+    globePin.scale.setScalar(GLOBE_PIN_PX * chartMpp());
+  }
   // THE SUN IS THE CLOCK'S, NOT THE WALL'S. `clockHour` is local solar time at
   // the origin's meridian — the same number the sky and the shadows are built
   // from — so the terminator moves when the time dial is dragged and holds
@@ -29794,12 +29929,42 @@ let texMeanCache: Record<string, number> | null = null;
     // Whether the streamed backdrop still covers the frame, which is what
     // decides who draws it — see the hand-over in the top-camera branch.
     shell: farGroup.visible,
+    // How free the planet is to be turned, and how far it has been. `spin` is
+    // what a drag banks; `applied` is what the frame actually drew, which is
+    // the product — read the pair, because a spin held while the shell is back
+    // is stored and shown nowhere, and that is the design rather than a fault.
+    free: +globeFree().toFixed(3),
+    spin: [+globeSpinLat.toFixed(2), +globeSpinLon.toFixed(2)],
+    applied: [+(globeSpinLat * globeFree()).toFixed(2), +(globeSpinLon * globeFree()).toFixed(2)],
+    degPerPx: +globeDegPerPx().toFixed(4),
+    pin: globePin.visible,
     ringKm: Math.round(((2 * FAR_RING_MAX + 1) * tileMetres(farZ)) / 1000),
     frameKm: Math.round((chartMpp() * Math.hypot(pixSize.x, pixSize.y)) / 1000),
     alt: Math.round(chartDist()), far: Math.round(camera.far),
     horizon: Math.round(Math.sqrt(chartDist() * chartDist() + 2 * GLOBE_R * chartDist())),
   };
 };
+/**
+ * TURN THE PLANET FROM THE CONSOLE. The gesture is a drag, and a drag is the
+ * one thing a harness whose frames are seconds apart cannot make convincingly
+ * — so the state it writes is writable directly, exactly as `__windset` exists
+ * because a calm day is the common case. Degrees off the truck's own point;
+ * no arguments reads it back.
+ *
+ * It writes the STORED spin, not the applied one: below the hand-over
+ * `globeFree` is 0 and the planet will not move, which is the design and is
+ * what `__globe().applied` is there to show.
+ */
+(window as unknown as { __globespin?: object }).__globespin = (lat?: number, lon?: number): object => {
+  if (lat !== undefined) globeSpinLat = clamp(lat, -GLOBE_SPIN_LAT_MAX, GLOBE_SPIN_LAT_MAX);
+  if (lon !== undefined) globeSpinLon = lon;
+  return { lat: +globeSpinLat.toFixed(3), lon: +globeSpinLon.toFixed(3), free: +globeFree().toFixed(3) };
+};
+/** Where a screen pixel lands ON THE PLANET, in world metres — null off the
+ *  globe or where the planet is not in charge. The tap gesture's own answer,
+ *  so a test can ask it without dispatching a double tap. */
+(window as unknown as { __globeat?: object }).__globeat =
+  (px: number, py: number): [number, number] | null => globeTapAt(px, py);
 (window as unknown as { __zoom?: object }).__zoom = (z: number): void => { zoomT = clamp(z, ZOOM_MIN, ZOOM_MAX); };
 /** How much GROUND the camera actually covers, by unprojecting the screen
  *  corners onto the car's ground plane. The honest answer to "how far out can
@@ -31531,6 +31696,43 @@ canvas.addEventListener('pointermove', (e) => {
   if (!prev || camMode !== 'top') return;
   const cur = { x: e.clientX, y: e.clientY };
   if (panPtrs.size === 1) {
+    // ── ABOVE THE HAND-OVER, A DRAG TURNS THE EARTH ──
+    //
+    // Below it this is a map and a drag slides it. Above it there is no map to
+    // slide: the streamed world is a point, the frame is a planet, and the
+    // only thing a finger can usefully do to a planet is roll it. So the same
+    // gesture spins the sphere, and `globeFree` is what decides which regime
+    // is in force — the very test the backdrop hand-over uses, so the gesture
+    // changes at the frame where the shell stops being drawn and never while
+    // both are on screen.
+    //
+    // The screen delta goes through the SAME rotation the flat pan applies
+    // below, so a turned chart drags identically in both regimes; only the
+    // units differ. The east component is divided by the cosine of the tangent
+    // latitude, which is what makes the ground keep up with the thumb as the
+    // view climbs toward a pole — the spherical form of the same "is the
+    // ground you grabbed still under your finger" rule `chartPlaneAt` answers
+    // for the flat chart. Floored at 0.25 (about 76 degrees) because that
+    // cosine goes to zero and an unfloored drag would run away in the last few
+    // degrees rather than merely being fast.
+    if (globeFree() > 0) {
+      const dpp = globeDegPerPx(), mr = mapRot();
+      const fx = -(cur.x - prev.x) * dpp, fy = -(cur.y - prev.y) * dpp;
+      const east = fx * Math.cos(mr) - fy * Math.sin(mr);
+      const south = fx * Math.sin(mr) + fy * Math.cos(mr);
+      const [tLat] = localToLatLon(viewX(), viewZ());
+      const cs = Math.max(0.25, Math.cos(((tLat + globeSpinLat) * Math.PI) / 180));
+      globeSpinLon += east / cs;
+      // The world is x = east, z = SOUTH, so a target moving south is latitude
+      // going down. Taking these two signs from the flat pan's own lines rather
+      // than from first principles is deliberate: that rotation was once a
+      // mirror (determinant −1 at every angle, horizontal right and vertical
+      // backwards), the failure is recorded in the fallback below, and a spin
+      // derived independently could reintroduce it on one axis only.
+      globeSpinLat = clamp(globeSpinLat - south, -GLOBE_SPIN_LAT_MAX, GLOBE_SPIN_LAT_MAX);
+      panPtrs.set(e.pointerId, cur);
+      return;
+    }
     // THE GROUND UNDER THE FINGER, BEFORE AND AFTER — no metres-per-pixel
     // guess at all. The old form scaled the drag by one constant for the whole
     // screen, and the chart is tilted 70 degrees: a pixel near the top of the
@@ -31629,6 +31831,28 @@ function chartPlaneAt(px: number, py: number, y0: number): [number, number] | nu
   const t = (y0 - camera.position.y) / ray.y;
   if (!Number.isFinite(t) || t <= 0 || t > 1e6) return null;
   return [camera.position.x + ray.x * t, camera.position.z + ray.z * t];
+}
+/**
+ * WHERE A CHART TAP LANDS WHEN THE CHART IS A PLANET.
+ *
+ * `chartToWorld` unprojects onto the tangent plane and marches the
+ * heightfield, both of which stop meaning anything past the plane's own honest
+ * reach (see `SIGHT_MAX` and the note in globe.ts). Above the hand-over the
+ * ray is intersected with the sphere instead and the answer converted back
+ * through `toLocal` — which is the SAME equirectangular convention every other
+ * layer on the chart is placed by, so the mark, its record and its RELOCATE
+ * all agree with each other and with the pin the tap landed on.
+ *
+ * Null where the planet is not in charge, and null for a tap on space beside
+ * the limb: a rim tap is not a place, and clamping it onto the edge would drop
+ * a mark somewhere nobody pointed at.
+ */
+function globeTapAt(px: number, py: number): [number, number] | null {
+  if (globeFree() <= 0) return null;
+  const dir = new THREE.Vector3((px / innerWidth) * 2 - 1, -(py / innerHeight) * 2 + 1, 0.5)
+    .unproject(camera).sub(camera.position).normalize();
+  const hit = globeHit(camera.position, dir, globeGroup.position, globeGroup.quaternion);
+  return hit ? toLocal(hit.lat, hit.lon) : null;
 }
 function chartToWorld(px: number, py: number): [number, number] {
   // Through the ACTUAL camera, not a metres-per-pixel guess about the screen
@@ -32008,33 +32232,46 @@ const endStick = (e: PointerEvent): void => {
         // mark dropped on a place you know nothing about is half a gesture.
         // The record carries the relocation, so marking and travelling stay
         // two deliberate acts while the middle one stops being blind.
-        const [wx, wz] = chartToWorld(e.clientX, e.clientY);
-        // A PIN IS A RECORD ALREADY. Landing on one opens it rather than
-        // burying it under a new mark of its own.
-        const pin = poiUnder(wx, wz, chartTapR());
-        if (pin) { openSite(pin.x, pin.z, pin.name, null); }
-        else {
-          const fix = dropFix(wx, wz);
-          openSite(wx, wz, fix.name, fix.name);
+        //
+        // AND ON THE PLANET IT IS A DIFFERENT SUM. `globeTapAt` intersects the
+        // sphere where the tangent plane has stopped meaning anything; a null
+        // from it with the planet in charge is a tap on SPACE beside the limb,
+        // which is not a place and gets no mark.
+        const g = globeTapAt(e.clientX, e.clientY);
+        if (g || globeFree() <= 0) {
+          const [wx, wz] = g ?? chartToWorld(e.clientX, e.clientY);
+          // A PIN IS A RECORD ALREADY. Landing on one opens it rather than
+          // burying it under a new mark of its own.
+          const pin = poiUnder(wx, wz, chartTapR());
+          if (pin) { openSite(pin.x, pin.z, pin.name, null); }
+          else {
+            const fix = dropFix(wx, wz);
+            openSite(wx, wz, fix.name, fix.name);
+          }
         }
       } else {
-        const [wx, wz] = chartToWorld(e.clientX, e.clientY);
-        // ON THE LINE a pin still opens — reading a place is not travelling to
-        // it, and the card's two travel actions are withheld there (see the
-        // site card). Empty ground still answers with the field query.
-        const pin = poiUnder(wx, wz, chartTapR());
-        if (pin) { openSite(pin.x, pin.z, pin.name, null); return; }
-        lastField = fieldQuery(wx, wz);
-        lineNudge = performance.now();
-        try { void navigator.clipboard?.writeText(lastField.json); } catch { /* the toast still answers */ }
-        // A DELIBERATE TAP IS AN ASK. A tile the stream never reached — or one
-        // sitting out an error backoff — gets requested on the spot, pinned so
-        // the ring gate cannot drop it for being far from the truck. The query
-        // stays pure for the harness (__field probes never poke); the gesture
-        // is what carries the intent.
-        if (lastField.state === 'unasked' || lastField.state === 'error') {
-          osmPinned.add(`${lastField.tx}/${lastField.ty}`);
-          void loadOsmTile(lastField.tx, lastField.ty);
+        const g = globeTapAt(e.clientX, e.clientY);
+        if (g || globeFree() <= 0) {
+          const [wx, wz] = g ?? chartToWorld(e.clientX, e.clientY);
+          // ON THE LINE a pin still opens — reading a place is not travelling
+          // to it, and the card's two travel actions are withheld there (see
+          // the site card). Empty ground still answers with the field query.
+          const pin = poiUnder(wx, wz, chartTapR());
+          if (pin) openSite(pin.x, pin.z, pin.name, null);
+          else {
+            lastField = fieldQuery(wx, wz);
+            lineNudge = performance.now();
+            try { void navigator.clipboard?.writeText(lastField.json); } catch { /* the toast still answers */ }
+            // A DELIBERATE TAP IS AN ASK. A tile the stream never reached — or
+            // one sitting out an error backoff — gets requested on the spot,
+            // pinned so the ring gate cannot drop it for being far from the
+            // truck. The query stays pure for the harness (__field probes
+            // never poke); the gesture is what carries the intent.
+            if (lastField.state === 'unasked' || lastField.state === 'error') {
+              osmPinned.add(`${lastField.tx}/${lastField.ty}`);
+              void loadOsmTile(lastField.tx, lastField.ty);
+            }
+          }
         }
       }
       tapAt = 0;
@@ -33407,6 +33644,11 @@ const fmtDist = (m: number): string => (m < 950 ? `${Math.round(m / 10) * 10}M` 
 // away exactly the moment they matter — you arrive at a place and it vanishes.
 // They now stay all the way in and switch to an in-range presentation instead.
 const POI_RANGE = 55;
+/** Art pixels a scenery pin's 3km catchment must span before two pins inside
+ *  it can be told apart at all. Sixteen is about a label's own height: below
+ *  that every pin in range is within one label of every other, which is a
+ *  stack of names rather than a map. */
+const POI_SPREAD_PX = 16;
 /**
  * ── HOW MUCH IS ON THE GLASS, AND TWO DOORS TO IT ──
  *
@@ -33503,6 +33745,17 @@ function updatePois(): void {
   // OFF is off — and it has to clear the list rather than skip the rebuild, or
   // the last frame's pins stay painted and tappable for ever.
   if (poiVis === 0) { poiDraw = []; return; }
+  // ── AND AT PLANET ZOOM, NONE OF IT AT ALL ──
+  //
+  // The planet is not the fine world's map. Once the globe owns the frame the
+  // ENTIRE pin table — pinned entries included — is inside one art pixel of
+  // its centre, so every marker is a claim about a place it cannot possibly
+  // distinguish. The globe's own gold pin is the one marker that means
+  // anything out there, and it says the thing all of these were reduced to
+  // saying: this is where you are. Both lists are CLEARED rather than skipped:
+  // a list that is merely not rebuilt stays painted and stays tappable, which
+  // is the bug the `poiVis === 0` line above already carries a note about.
+  if (globeFree() > 0) { poiDraw = []; cpDraw = []; return; }
   const all = [...pois.values()].filter((p) => !lineOn || LINE_KINDS.has(p.kind))
     .map((p) => ({ p, d: Math.hypot(p.x - vx, p.z - vz) }));
   // See POI_PIN_NEAR: a pin you are standing on is describing something already
@@ -33526,8 +33779,28 @@ function updatePois(): void {
   // pinned entries always come first and always survive — that is what pinned
   // means — so the mode only ever changes how much SCENERY rides along.
   const cap = poiVis === 1 ? 0 : poiVis === 3 ? 8 : 3;
+  // ── THE SCENERY GOES AS THE CHART OUTGROWS IT ──
+  //
+  // Every unpinned pin is drawn from a 3km catchment, which is a fact about the
+  // fine world. On a chart whose frame is a hundred kilometres across, three
+  // kilometres is a handful of art pixels: every label points at the same spot,
+  // they stack into a column of lanes down the glass, and not one of them says
+  // where anything is. Reported from the seat as fine labels — "BERGRIVIER
+  // 1.3KM" — still drawing at planet zoom.
+  //
+  // The rule is the catchment's own: two pins can only be told apart while the
+  // ground between them spans more than a label, so the scenery stops exactly
+  // where it stops being able to. `POI_SPREAD_PX` is stated in ART pixels
+  // because that is the buffer the picture is quantised into — see the
+  // rendering doctrine — and it is the one scale every wide-chart term here is
+  // keyed on (`chartMpp`).
+  //
+  // PINNED ENTRIES SURVIVE IT, because being far away is the whole point of a
+  // destination, the rig, a downed drone or a dropped fix.
+  const wideChart = chartMpp() * POI_SPREAD_PX > 3000;
   const near = pinned.concat(
-    nearestStable(all.filter((e) => !e.p.pinned && e.d < 3000 && !shadowed.has(e.p.name.toUpperCase())),
+    nearestStable(all.filter((e) => !e.p.pinned && !wideChart
+      && e.d < 3000 && !shadowed.has(e.p.name.toUpperCase())),
       Math.max(0, cap - Math.min(2, pinned.length)), e => e.d),
   );
   camera.getWorldDirection(camFwd);
@@ -36923,9 +37196,13 @@ function tick(now: number): void {
     // screen. `|| !globeGroup.visible` keeps the old behaviour wherever there
     // is no planet to hand to (a fixture, or the texture never arriving):
     // a coarse backdrop beats an empty frame.
-    const ringM = (2 * FAR_RING_MAX + 1) * tileMetres(farZ);
-    const covers = ringM > chartMpp() * Math.hypot(pixSize.x, pixSize.y);
-    const shellOn = zoomCur > 6 && (covers || !globeGroup.visible);
+    // ONE EXPRESSION, IN `globeFree`. The ring-against-diagonal test decides
+    // two things now — who draws the backdrop and whether a drag turns the
+    // planet — and they must never be able to disagree, because a spun globe
+    // under a shell that did not spin is the one failure this design exists to
+    // rule out. `globeFree` is 0 both where the ring covers and where there is
+    // no planet at all, which is exactly the pair of cases the shell draws in.
+    const shellOn = zoomCur > 6 && globeFree() === 0;
     farGroup.visible = shellOn;
     ovGroup.visible = shellOn;
     // …and where the coarse vectors are allowed to start showing. At driving
@@ -36947,6 +37224,14 @@ function tick(now: number): void {
     // fought every pan.
     if (!panPtrs.size && (stick || Math.abs(state.speed) > 6 || drone.up)) {
       const f = Math.exp(-2.5 * dt); panX *= f; panZ *= f;
+    }
+    // THE SPIN COMES HOME WHEREVER THE SHELL IS BACK. `globeFree` already
+    // scales it to nothing there, so this is hygiene rather than motion: it
+    // stops a spin banked at planet zoom springing the chart to the far side of
+    // the world the next time you pull out. Zooming in is a decision to come
+    // back, and it should be one the next zoom out respects.
+    if (globeFree() <= 0) {
+      const g = Math.exp(-2.5 * dt); globeSpinLat *= g; globeSpinLon *= g;
     }
     // THE CHART IS OVER WHOEVER IS CURRENT. Flying, that is the drone: opening
     // the map to find the drone and being shown the parked truck instead is the
@@ -42362,6 +42647,23 @@ function setClean(on: boolean): void {
     x: Math.round((clockRect.x + clockRect.w / 2) * hudS),
     y: Math.round((clockRect.y + clockRect.h / 2) * hudS),
   });
+/**
+ * WHAT THE PIN LAYER IS DRAWING, AND WHY IT IS NOT DRAWING MORE.
+ *
+ * A count on its own cannot say why it is zero, and there are now three
+ * different reasons: the visibility dial is off, the chart has outgrown the
+ * scenery's own catchment, or the planet has taken the frame. Each is correct
+ * in its own place and each looks exactly like the others from outside, which
+ * is the shape of question this file keeps recording as a lost round.
+ */
+(window as unknown as { __poidraw?: object }).__poidraw = (): object => ({
+  n: poiDraw.length,
+  pinned: poiDraw.filter((p) => p.pinned).length,
+  vis: poiVis,
+  mpp: +chartMpp().toFixed(1),
+  wide: chartMpp() * POI_SPREAD_PX > 3000,
+  planet: globeFree() > 0,
+});
 (window as unknown as { __poirects?: object }).__poirects = (): object =>
   poiRects.map((r) => ({
     name: r.name, kind: r.kind, rng: r.rng,

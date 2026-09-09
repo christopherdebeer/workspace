@@ -140,6 +140,53 @@ export function globeFar(dist: number): number {
   return Math.max(dist * 4, Math.sqrt(dist * dist + 2 * GLOBE_R * dist) * 1.1);
 }
 
+/**
+ * WHERE A RAY MEETS THE PLANET, as a lat/lon — the tap gesture's other half.
+ *
+ * A double tap on the chart unprojects onto the tangent PLANE, which is the
+ * right answer for a map and a meaningless one for a planet: at twenty
+ * thousand kilometres up a tap near the limb solves to a point tens of
+ * thousands of kilometres out in a plane that stopped describing the Earth
+ * around fifteen hundred. So above the hand-over the same ray is intersected
+ * with the sphere instead, and the answer comes back in the coordinates the
+ * world can actually travel to.
+ *
+ * THE NEAR ROOT, ALWAYS. Both roots are real for any ray through the planet
+ * and the far one is the point on the back of it — a tap on Africa would
+ * answer with the Pacific, correctly and uselessly. A ray that misses (a tap
+ * on space beside the limb) has no real root and returns null rather than
+ * being clamped onto the rim, because "you tapped nothing" is a real answer
+ * and a rim tap is not a place.
+ *
+ * The hit is taken back through the group's own rotation before it is read as
+ * a lat/lon, so this is correct whatever the spin has done — and it goes
+ * through the same mirrored frame `latLonToUnit` defines, as its exact
+ * inverse, which is what keeps a tap and the pin it lands on agreeing.
+ */
+export function globeHit(
+  from: THREE.Vector3, dir: THREE.Vector3,
+  centre: THREE.Vector3, quat: THREE.Quaternion,
+): { lat: number; lon: number } | null {
+  const ox = from.x - centre.x, oy = from.y - centre.y, oz = from.z - centre.z;
+  // dir is expected normalised, so a = 1 and the quadratic is the reduced form.
+  const b = ox * dir.x + oy * dir.y + oz * dir.z;
+  const c = ox * ox + oy * oy + oz * oz - GLOBE_R * GLOBE_R;
+  const disc = b * b - c;
+  if (disc < 0) return null;
+  const root = Math.sqrt(disc);
+  const t = -b - root >= 0 ? -b - root : -b + root;
+  if (t < 0) return null;                       // the planet is behind the eye
+  const p = new THREE.Vector3(ox + dir.x * t, oy + dir.y * t, oz + dir.z * t)
+    .applyQuaternion(quat.clone().invert())
+    .normalize();
+  return {
+    lat: (Math.asin(Math.max(-1, Math.min(1, p.y))) * 180) / Math.PI,
+    // −z, because the frame's longitude runs backwards by construction — see
+    // `latLonToUnit`, whose z is negated for exactly this reason.
+    lon: (Math.atan2(-p.z, p.x) * 180) / Math.PI,
+  };
+}
+
 /** A lat/lon lattice, so the texture's mapping is the one the bake wrote and
  *  not whichever way three's own sphere happens to run. */
 export function globeGeometry(seg = 128, rings = 64): THREE.BufferGeometry {
