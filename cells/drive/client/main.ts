@@ -2630,16 +2630,22 @@ function hydroSceneShade(): SceneShade {
     head: `${CLOUD_GLSL}
       uniform sampler2D uCsTex; uniform vec2 uCsMin; uniform float uCsInv; uniform float uCsOn;
       uniform vec2 uCsDrift; uniform vec2 uCsSkew; uniform float uCsDeckY; uniform float uCsScale;
+      uniform float uCsMpp;
       float sceneShade(vec3 p) {
         if (uCsOn < 0.005) return 1.0;
         vec2 hit = p.xz + uCsSkew * max(uCsDeckY - p.y, 0.0);
-        float covL = texture2D(uCsTex, (hit - uCsMin) * uCsInv).r;
-        float cs = clCov(clfbm(hit * uCsScale + uCsDrift), covL);
+        // The same edge and the same alias rule as the ground (terrainFx),
+        // or a river on the wide chart would keep the cross its banks lost.
+        vec2 wuv = (hit - uCsMin) * uCsInv;
+        float covL = mix(uCsOn, texture2D(uCsTex, wuv).r, clInLattice(wuv));
+        float alias = smoothstep(150.0, 600.0, uCsMpp);
+        float cs = mix(clCov(clfbm(hit * uCsScale + uCsDrift), covL), clCovMean(covL), alias);
         return 1.0 - min(covL * 1.4, 1.0) * cs * 0.5;
       }`,
     uniforms: {
       uCsTex: wxU.uWxTex, uCsMin: wxU.uWxMin, uCsInv: wxU.uWxInv, uCsOn: envU.uCloudS,
       uCsDrift: envU.uWind, uCsSkew: envU.uSunSkew, uCsDeckY: envU.uDeckY, uCsScale: envU.uCloudScale,
+      uCsMpp: envU.uMpp,
     },
   };
 }
@@ -3070,7 +3076,19 @@ const CLOUD_GLSL = `
   // reads as solid overhead is solid on the ground too.
   float clCov(float n, float cover){
     return smoothstep(0.60 - cover * 0.40, 0.90 - cover * 0.28, n);
-  }`;
+  }
+  // WHAT A CLOUD SHADOW AVERAGES TO once a pixel spans more than a patch of
+  // it: the mean of clCov over the noise, per cover, MEASURED off this very
+  // fbm (400k samples of the shader's own hash, in node) and fitted. Nothing
+  // downstream may reach for a cheaper guess here: the first port of the hash
+  // dropped a term and read a mean of 0.24 where the truth is 0.47, and a
+  // wide chart built on that would have swapped a speckle for a step.
+  float clCovMean(float cover){ return 0.013 + cover * (0.240 + 0.392 * cover); }
+  // THE LATTICE HAS AN EDGE. The weather field is 48 cells of 256m centred on
+  // the truck — 12.3km — and its texture clamps to its edge texel, so a read
+  // past the edge is the edge's value for ever. 1 inside, 0 outside, blended
+  // over the last few percent so the hand-over is a fade and not a line.
+  float clInLattice(vec2 uv){ vec2 e = abs(uv - 0.5) * 2.0; return 1.0 - smoothstep(0.92, 1.0, max(e.x, e.y)); }`;
 const skyMat = new THREE.ShaderMaterial({
   side: THREE.BackSide,
   depthWrite: false,
@@ -4949,6 +4967,14 @@ function reveal(ex: number, ez: number): void {
 // and the world is never dissolved at all.
 const envU = {
   uCloudS: { value: 0 },                       // cover, for cloud shadows
+  // METRES OF GROUND PER ART PIXEL, on the chart; 0 from the seat. What the
+  // world's fine terms — the 600m cloud noise, the 30-80m mottle — fade on
+  // once a pixel outspans them, because a term narrower than a pixel does not
+  // draw detail, it draws aliasing. A uniform rather than fwidth(): the chart
+  // looks straight down from one distance so one number is exact for the
+  // whole frame, it needs no derivatives extension on WebGL1, and from the
+  // seat nothing is ever wider than a pixel at the range the shell begins.
+  uMpp: { value: 0 },
   uWind: { value: new THREE.Vector2() },       // the deck's drift, shared with the sky
   // How far a point on the ground has to travel HORIZONTALLY to reach the deck,
   // per metre of altitude, going toward the sun: sunDir.xz / sunDir.y. Near
@@ -5232,6 +5258,7 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
   mat.onBeforeCompile = function (sh, renderer) {
     prev?.call(mat, sh, renderer);
     sh.uniforms.uCloudS = envU.uCloudS;
+    sh.uniforms.uMpp = envU.uMpp;
     sh.uniforms.uWind = envU.uWind;
     sh.uniforms.uWxTex = wxU.uWxTex;
     sh.uniforms.uWxMin = wxU.uWxMin;
@@ -5273,7 +5300,7 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
       .replace('#include <common>', `#include <common>
         varying vec3 vWorldP;
         uniform sampler2D uDbgWet; uniform vec2 uDbgOrg; uniform float uDbgW; uniform float uDbgOn;
-        uniform float uCloudS; uniform vec2 uWind;
+        uniform float uCloudS; uniform vec2 uWind; uniform float uMpp;
         uniform vec2 uSunSkew; uniform float uDeckY; uniform float uCloudScale;
         uniform sampler2D uWxTex; uniform vec2 uWxMin; uniform float uWxInv;
         ${CLOUD_GLSL}
@@ -5299,8 +5326,21 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
         // LOCAL cover at the hit, from the same field the dome reads — the
         // dark ground under the arriving front is the front, not the mean.
         // uCloudS keeps only its dial job: a gate, opened by any cover at all.
-        float covL = texture2D(uWxTex, (hit - uWxMin) * uWxInv).r;
-        float cs = clCov(clfbm(hit * uCloudScale + uWind), covL);
+        //
+        // …INSIDE THE LATTICE. Beyond its 12km the texture clamps to its edge
+        // texel, and on a 570km chart that painted the whole backdrop with
+        // the lattice's four corners and four edge rows: four flat quadrants
+        // and a cross of strips through the truck, reported from the seat as
+        // "checker/cross". Past the edge the honest value is the region's
+        // mean, which is what uCloudS is.
+        vec2 wuv = (hit - uWxMin) * uWxInv;
+        float covL = mix(uCloudS, texture2D(uWxTex, wuv).r, clInLattice(wuv));
+        // AND THE NOISE IS SUB-PIXEL PAST 600m A PIXEL. A cloud patch is about
+        // 600m (uCloudScale); at the chart's survey zooms a pixel is that or
+        // wider and the pattern can only alias — the speckle in the same
+        // report. Where a pixel outspans a patch the shadow is its mean.
+        float alias = smoothstep(150.0, 600.0, uMpp);
+        float cs = mix(clCov(clfbm(hit * uCloudScale + uWind), covL), clCovMean(covL), alias);
         gl_FragColor.rgb *= 1.0 - min(covL * 1.4, 1.0) * cs * 0.5;
       }
       if (uDbgOn > 0.5) {
@@ -5313,11 +5353,14 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
     if (opts.detail) {
       // World-space mottle (~30–80m blobs) breaks the flat-shaded banding of
       // the vertex-colored terrain without any texture upload.
+      // …and it is gone where a pixel outspans it. 30-80m blobs at a survey
+      // zoom of hundreds of metres a pixel are aliasing, not texture, and the
+      // far shell wears this material at exactly those zooms.
       sh.fragmentShader = sh.fragmentShader.replace('#include <color_fragment>', `#include <color_fragment>
       {
         vec2 gp = vWorldP.xz;
         float gn = sin(gp.x * 0.131 + sin(gp.y * 0.093) * 2.0) * sin(gp.y * 0.117 + sin(gp.x * 0.071) * 2.0);
-        diffuseColor.rgb *= 0.955 + 0.045 * gn;
+        diffuseColor.rgb *= 0.955 + 0.045 * gn * (1.0 - smoothstep(15.0, 60.0, uMpp));
       }`);
     }
   };
@@ -21611,6 +21654,12 @@ function setFarLevel(z: number): void {
   for (const m of farMeshes.values()) { m.position.y -= 18; farRetired.push(m); }
   farMeshes.clear();
   farTiles.clear();
+  // The retired level's bake records go with it. They were kept, and they
+  // are keyed by level so nothing collided — but `__far().cover` and `.tint`
+  // aggregate over the whole map, so a z7 shell reported z11's twenty-five
+  // records beside its own nine, and the first reading of the bake-level mix
+  // on the wide chart said "two levels on screen" about tiles that were not.
+  farCoverHit.clear(); farTint.clear(); farBakeZ.clear();
 }
 function dropRetiredFar(): void {
   for (const m of farRetired) { farGroup.remove(m); m.geometry.dispose(); }
@@ -23439,6 +23488,11 @@ function stepWeather(now: number, dt: number): void {
     const k = clamp(1 / sy, 0, 4);
     envU.uSunSkew.value.set(-SUN_DIR.x * k, -SUN_DIR.z * k);
   }
+  // The chart's ground scale: the frame's height in metres at the stand-off
+  // over its height in art pixels. `chartDist` is the one stand-off now.
+  envU.uMpp.value = camMode === 'top'
+    ? (2 * chartDist() * Math.tan((camera.fov / 2) * Math.PI / 180)) / Math.max(2, pixSize.y)
+    : 0;
   // ONE WIND, and it is the real one. Open-Meteo reports the direction the air
   // is coming FROM, so the deck travels toward bearing+180; the sample offset
   // runs the other way again, because shifting a noise field moves what you see
@@ -25943,6 +25997,9 @@ function tapeKeep(): string {
     // was exactly the half of the distance that was behaving. A reading here
     // at two speeds with the zoom held is the witness that it is gone.
     dist: camMode === 'top' ? Math.round(chartDist()) : null,
+    // Metres of ground per art pixel on the chart — what the alias fades on
+    // cloud noise and the mottle key off. 0 from the seat, by design.
+    mpp: +envU.uMpp.value.toFixed(1),
     kmh: Math.round(Math.abs(state.speed) * 3.6),
     // The lens, because a flight between rigs interpolates it and a pop there
     // is the one part of a crossing you cannot see in a position trace.
@@ -29585,6 +29642,47 @@ let texMeanCache: Record<string, number> | null = null;
       hit: +(farCoverHit.get(key) ?? 0).toFixed(2), coverZ: farBakeZ.get(key) ?? null,
       tint: t.map((c) => Math.round(c * 255)) })),
     coverZ: coverWideZ,
+    // THE SEAMS THEMSELVES. A global tint spread mixes real land variation
+    // (the Karoo is not the Highveld) with the defect (two tiles disagreeing
+    // where the land does not), and only the shared edges can tell them apart:
+    // for every pair of adjacent shell tiles at the current level, the mean
+    // vertex colour of the outermost row on each side of the border. A step
+    // there with the same ground under both is a bake disagreeing with itself.
+    seams: (() => {
+      const out: Array<{ a: string; b: string; d: number; edge: string }> = [];
+      const rowMean = (mesh: THREE.Mesh, side: 'E' | 'W' | 'N' | 'S'): [number, number, number] | null => {
+        const g = mesh.geometry;
+        const pos = g.getAttribute('position'), col = g.getAttribute('color');
+        if (!pos || !col) return null;
+        const bb = g.boundingBox ?? (g.computeBoundingBox(), g.boundingBox);
+        if (!bb) return null;
+        const acc = [0, 0, 0]; let n = 0;
+        const tol = Math.max(bb.max.x - bb.min.x, bb.max.z - bb.min.z) / 512;
+        for (let i = 0; i < pos.count; i++) {
+          const x = pos.getX(i), z = pos.getZ(i);
+          const on = side === 'E' ? bb.max.x - x < tol : side === 'W' ? x - bb.min.x < tol
+            : side === 'S' ? bb.max.z - z < tol : z - bb.min.z < tol;
+          if (!on) continue;
+          acc[0] += col.getX(i); acc[1] += col.getY(i); acc[2] += col.getZ(i); n++;
+        }
+        return n ? [acc[0] / n, acc[1] / n, acc[2] / n] : null;
+      };
+      for (const [key, mesh] of farMeshes) {
+        const [z, x, y] = key.split('/').map(Number);
+        if (z !== farZ) continue;
+        for (const [dx, dy, mine, theirs, edge] of [[1, 0, 'E', 'W', 'E'], [0, 1, 'S', 'N', 'S']] as Array<[number, number, 'E' | 'S', 'W' | 'N', string]>) {
+          const nk = `${z}/${x + dx}/${y + dy}`;
+          const nm = farMeshes.get(nk);
+          if (!nm) continue;
+          const a = rowMean(mesh, mine), b = rowMean(nm, theirs);
+          if (!a || !b) continue;
+          const d = Math.max(Math.abs(a[0] - b[0]), Math.abs(a[1] - b[1]), Math.abs(a[2] - b[2]));
+          out.push({ a: key, b: nk, d: +d.toFixed(3), edge });
+        }
+      }
+      out.sort((p, q) => q.d - p.d);
+      return { n: out.length, worst: out[0] ?? null, over05: out.filter((o) => o.d > 0.05).length, top: out.slice(0, 4) };
+    })(),
     // THE SEAM, as a number: the fine ring's own height beside the shell's,
     // sampled just outside where the fine world gives out. A cliff here is
     // the curve compensation failing, and it fails by kilometres driven.

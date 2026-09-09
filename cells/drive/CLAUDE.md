@@ -4586,6 +4586,89 @@ tile that cost a real Overpass query — which is far too much for 29% of coarse
 roads gaining a label the chart does not draw. If a future change to the bake
 alters what a tile DRAWS, that trade goes the other way.
 
+### The wide chart wore a checker and a cross, and it was the weather, not the shell
+
+Reported from the seat at −29.9872, 24.7765 on the wide chart: uniform in the
+splash, then once driving four quadrants of different tone with hard seams, one
+noisy and one flat, "as if we tile a texture". Two hypotheses were built and
+measured before the right one, and both are worth keeping because each was
+plausible and each has a witness now.
+
+**NOT THE SHELL'S BAKE.** The first suspect was `coverDirtiedFar` skipping any
+tile at hit > 0.98 when the wide-cover LEVEL moves — so tiles baked from the
+previous level's raster would stand beside tiles baked from the next, four
+times apart in resolution. `farBakeZ` records the level per tile now and
+`__far().perTile` lists it; `devtools/far-bake-levels.mjs` runs the spot two
+ways, arrived pinned wide and walked out from a driving zoom. Both paths end
+with the same nine z7 tiles, all baked under cover z6, tint spread 0.134 — and
+**that spread is the Karoo not being the Highveld**: the pinned harness frame
+has no seam in it at all. The mechanism is real (a walk that passes through
+z9 while the cover level is z8 can still do it) and it was not this.
+
+**NOT A TILE EDGE AT ALL.** The seat's frame, decoded properly (it is a 16-bit
+PNG; the forty-line decoder refused it and Chromium is the image library this
+repo has), puts the tile-debug's dotted z7 edges at x≈740 and y≈570/1140 and
+the 20-luma tone step at **x≈554** — on no shell edge and no cover edge, since
+cover tiles sit on the same grid. Whatever it was, it was keyed to the truck,
+not to the map.
+
+**IT WAS THE CLOUD SHADOWS.** `terrainFx` darkens the ground by the cloud deck
+overhead, reading the weather lattice at world position — and the lattice is
+48 cells of 256m, **12.3km**, centred on the truck, in a `DataTexture` with no
+wrap mode set, which in three is clamp-to-edge. On a 570km chart at 470m a
+pixel the lattice is a 26px square; everything else on screen read the
+lattice's EDGE TEXELS: four constant corners (the checker) and four
+one-dimensional edge rows extended to the screen's edge through the truck
+(the cross). The speckle was `clfbm` at `CLOUD_SCALE` — patches of about 600m,
+one to two pixels at that zoom, pure aliasing. And the splash was uniform
+because its sky read CLEAR: `uCloudS` was 0 and the whole term is behind
+`if (uCloudS > 0.005)`; a drive rolled the weather to haze and opened it. The
+far shell wears the same material, so the backdrop took it too.
+
+**MEASURED, same chart, same zoom, the sky pinned** (`?wx=`), quadrant luma /
+speckle sd:
+
+| | clear | haze, before | haze, after |
+|---|---|---|---|
+| LL | 101 / 6.2 | 93 / 7.6 | 90 / 6.7 |
+| LR | 101 / 8.7 | **74 / 12.7** | 90 / 8.3 |
+| UL | 107 / 9.2 | — | 97 / 9.1 |
+| UR | 105 / 7.2 | 83 / 11.2 | 97 / 8.4 |
+
+Before: a 19-luma step between the halves and the speckle doubled, the same
+signature as the seat's frame (left 80 against right 92, sd 9–10 against
+5–6, mirrored by which edge texels happened to carry cover). After: left and
+right agree to the unit; what remains is a 7-luma top-to-bottom gradient that
+is the haze itself — the chart is tilted 70°, so the far edge looks through
+more air — smooth, present nowhere in the clear frame, and correct.
+
+Three rules in the fix, and they generalise:
+
+- **BEYOND THE LATTICE, THE REGION'S MEAN.** `clInLattice(uv)` is 1 inside and
+  fades to 0 over the last eight percent; past it `covL` is `uCloudS`, which is
+  the regional cover the lattice was seeded from. A clamped texture is a
+  half-plane of somebody's edge; a mean is a fact about the region.
+- **A TERM NARROWER THAN A PIXEL DRAWS ALIASING, NOT DETAIL.** `uMpp` is metres
+  of ground per art pixel on the chart (0 from the seat, by design — nothing
+  there is wider than a pixel at the range the shell begins). Where a pixel
+  outspans a cloud patch (`smoothstep(150, 600, uMpp)`) the noise collapses to
+  its MEAN, `clCovMean(cover)`, and the 30–80m mottle fades over 15–60m. A
+  uniform, not `fwidth()`: the chart looks straight down from one distance so
+  one number is exact for the whole frame, and it needs no derivatives
+  extension on WebGL1.
+- **THE MEAN WAS MEASURED, AND THE FIRST MEASUREMENT WAS WRONG.** `clCovMean`
+  is a quadratic fitted to 400k samples of the shader's own `clfbm` under
+  `clCov`, ported to node. The first port fracted the hash's two components
+  before multiplying and read a noise mean of 0.24; the true one is 0.47, and
+  the fitted curve differs by a factor of six at full cover. A wide chart built
+  on the wrong mean would have swapped a speckle for a step at the alias
+  boundary. Port a shader by reading it twice.
+
+The water's `sceneShade` carries the same edge and the same alias rule, or a
+river on the wide chart would keep the cross its banks lost. `?wx=haze` on the
+wide chart is the two-minute check for any of this; `devtools/wide-cloud-ab.mjs`
+takes the pair of frames and `__cam().mpp` says what the fade is keyed on.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where

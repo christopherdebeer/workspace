@@ -36,12 +36,16 @@ async function settleFar(page, label, maxS = 420) {
       const f = window.__far(), c = window.__cover();
       return { level: f.level, tiles: f.tiles, asked: f.asked, retired: f.retired, inFlight: f.inFlight,
         coverZ: f.coverZ, wide: c.wide ?? null, blind: f.cover?.blind ?? null, spread: f.tint?.spread ?? null,
-        levels: [...new Set(f.perTile.map((t) => t.coverZ))].sort() };
+        levels: [...new Set(f.perTile.filter((t) => t.key.startsWith(`${f.level}/`)).map((t) => t.coverZ))].sort(),
+        seams: f.seams ? { n: f.seams.n, worst: f.seams.worst?.d ?? null, over05: f.seams.over05 } : null };
     });
     const line = JSON.stringify(s);
     if (line !== last) { console.log(`  [${label} +${((Date.now() - t0) / 1000).toFixed(0)}s] ${line}`); last = line; }
-    const home = s.tiles >= 25 && s.retired === 0 && s.inFlight === 0
-      && (s.wide === null || (s.wide.tiles ?? s.wide) >= 25);
+    // "Home" is everything ASKED having landed — the ring is 5x5 at the fine
+    // rungs and 3x3 at z7, and a gate written as "25" sat out its whole budget
+    // at the one rung this bench exists for.
+    const home = s.asked > 0 && s.tiles >= s.asked && s.retired === 0 && s.inFlight === 0
+      && (s.wide === null || s.wide.asked === 0 || s.wide.tiles >= s.wide.asked);
     if (home) { if (!homeAt) homeAt = Date.now(); else if (Date.now() - homeAt > 12000) break; }
     else homeAt = 0;
     await new Promise((r) => setTimeout(r, 2500));
@@ -57,7 +61,7 @@ async function run(kind) {
     // Let the driving-zoom world stand up first, then walk the zoom out in
     // steps the way a thumb does, so each far/cover level gets its turn.
     await settleFar(page, 'z2', 240);
-    for (const z of [12, 60, 300, WIDE]) {
+    for (const z of [12, 60, 300, 700, WIDE]) {
       await page.evaluate((zz) => window.__zoom(zz), z);
       // `__zoom` sets a TARGET that `zoomCur` eases toward at 8/s in the top
       // camera's frame step — the same trap chart-dist.mjs records. Settling
@@ -73,13 +77,15 @@ async function run(kind) {
     }
   }
   const far = await settleFar(page, 'final', 420);
+  const live = far.perTile.filter((t) => t.key.startsWith(`${far.level}/`));
   const levels = new Map();
-  for (const t of far.perTile) levels.set(t.coverZ, (levels.get(t.coverZ) ?? 0) + 1);
+  for (const t of live) levels.set(t.coverZ, (levels.get(t.coverZ) ?? 0) + 1);
   console.log(`  far level z${far.level}, tiles ${far.tiles}, wide cover level now z${far.coverZ}`);
   console.log(`  tiles by bake level: ${[...levels.entries()].map(([z, n]) => `z${z}:${n}`).join('  ')}`);
   console.log(`  cover: ${JSON.stringify(far.cover)}   tint spread: ${far.tint?.spread}`);
+  console.log(`  seams: ${JSON.stringify(far.seams)}`);
   const byLevel = {};
-  for (const t of far.perTile) (byLevel[t.coverZ] ??= []).push(t.tint);
+  for (const t of live) (byLevel[t.coverZ] ??= []).push(t.tint);
   for (const [z, tints] of Object.entries(byLevel)) {
     const mean = [0, 1, 2].map((c) => Math.round(tints.reduce((a, t) => a + t[c], 0) / tints.length));
     console.log(`    bake level z${z}: ${tints.length} tiles, mean tint rgb(${mean.join(',')})`);
