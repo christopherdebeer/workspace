@@ -1,3 +1,4 @@
+import { equipRig, equipmentFor, type RigEquipmentId } from './rig-equipment';
 import { createRanger } from './rig-ranger';
 import * as THREE from 'three';
 
@@ -20,12 +21,13 @@ export interface RigModel {
   cabMats: THREE.MeshLambertMaterial[];
   parts: THREE.Object3D[];
   anchors: { lamps: THREE.Vector3[]; eye: { x: number; y: number; z: number } };
+  setRegistration?(user?: string | null): boolean;
   dispose(): void;
 }
 
 /** No scene, campaign, storage or renderer globals. The host supplies its
  * weathering treatment; the model owns only the resources it constructs. */
-export function createRigModel(model: RigModelId, loadout: RigLoadoutId,
+function createRigBase(model: RigModelId, loadout: RigLoadoutId,
   bodywork: (material: THREE.Material, amount: number) => void): RigModel {
   if (model === 'ranger') return createRanger(loadout, bodywork);
   const { scaleX: SX, scaleY: SY, wheelRadius: WHEEL_R, wheelWidth: WHEEL_W,
@@ -122,7 +124,7 @@ const cabMats: THREE.MeshLambertMaterial[] = [];
   for (const sx of [-0.92, 0.92]) add(box(0.11, 0.34, 1.7), redMat, sx, 1.5, 1.2);
   add(box(1.9, 0.34, 0.12), redMat, 0, 1.5, 2.02);
   // Sand ladders strapped along the tub — pure silhouette texture at 320p.
-  for (const sx of [-1.0, 1.0]) add(box(0.07, 0.3, 1.45), cargoMat, sx, 1.5, 1.2);
+
   // ── wheel arches: ARCHES ──
   // Four rectangles over four round tyres was the most obviously wrong thing on
   // the side elevation. These are extruded annulus sectors, so the flare
@@ -161,70 +163,10 @@ const cabMats: THREE.MeshLambertMaterial[] = [];
   }
   // ── protection: bull bar, winch, rock sills, tow points ──
   add(box(2.0, 0.26, 0.2), steelMat, 0, 0.95, -2.2);
-  add(box(0.52, 0.24, 0.28), steelMat, 0, 1.0, -2.34);          // winch drum
-  for (const sx of [-0.62, 0.62]) add(box(0.12, 0.5, 0.12), steelMat, sx, 1.2, -2.2);
+
+
   for (const sx of [-1.03, 1.03]) add(box(0.13, 0.13, 2.5), steelMat, sx, 0.52, 0);
   add(box(1.7, 0.22, 0.16), steelMat, 0, 0.95, 2.16);
-  if (ranger) {
-    // A low rear utility canopy gives the roof a deliberate step. Pale repair
-    // panels and exposed lower rails read at driving distance without decals.
-    add(box(1.66, 0.52, 1.35), cargoMat, 0, 1.91, 1.28);
-    add(box(1.74, 0.08, 1.42), steelMat, 0, 2.21, 1.28);
-    for (const x of [-0.85, 0.85]) {
-      add(box(0.045, 0.30, 0.85), panelMat, x, 1.96, 1.26);
-      add(box(0.08, 0.10, 0.36), steelMat, x, 1.72, 1.28);
-      add(box(0.14, 0.23, 0.27), steelMat, x * 1.18, 1.92, -1.04);
-    }
-  }
-  // Equipment is a loadout, independent of campaign state. Recording these
-  // meshes separately lets another mode assemble the same physical rig.
-  const equipmentStart = car.children.length;
-  // ── roof rack, solar array, cargo ──
-  add(box(1.66, 0.07, 2.6), steelMat, 0, 2.26, -0.1);
-  for (const [px, pz] of [[-0.74, 1.08], [0.74, 1.08], [-0.74, -1.28], [0.74, -1.28]]) {
-    add(box(0.09, 0.16, 0.09), steelMat, px, 2.18, pz);
-  }
-  for (const cz of [-1.0, 0, 1.0]) add(box(1.62, 0.05, 0.09), steelMat, 0, 2.31, cz);
-  // SIX panels in a 2x3 array, framed by the rack showing through the gaps —
-  // the plan view of two big slabs read as one undifferentiated blue mass.
-  for (const px of [-0.4, 0.4]) for (const pz of [-1.06, -0.24, 0.58]) {
-    add(box(0.72, 0.05, 0.74), panelMat, px, 2.33, pz, -0.05);
-  }
-  for (const px of [-0.5, 0.5]) add(box(0.28, 0.38, 0.2), cargoMat, px, 2.48, 1.16); // jerry cans
-  add(box(1.2, 0.12, 0.14), steelMat, 0, 2.35, -1.42);           // light bar
-  for (const px of [-0.38, 0.38]) {
-    add(box(0.2, 0.15, 0.08), new THREE.MeshBasicMaterial({ color: 0xfff1cf }), px, 2.35, -1.5);
-  }
-  const roofEquipment = car.children.slice(equipmentStart);
-  if (loadout === 'light') {
-    for (const part of roofEquipment) {
-      car.remove(part);
-      const m = part as THREE.Mesh;
-      m.geometry.dispose();
-      // Shared materials are disposed with the complete rig below.
-      if (!cabMats.includes(m.material as THREE.MeshLambertMaterial)) (m.material as THREE.Material).dispose();
-    }
-  }
-  if (loadout === 'service') {
-    // Field-service fittings: removable survey case, mast and amber marker.
-    // They imply work without requiring a particular story or mission.
-    add(box(0.50, 0.37, 0.72), cargoMat, -0.46, 1.78, 1.12);
-    add(box(0.045, 0.60, 0.045), steelMat, -0.72, 2.30, 1.88);
-    add(box(0.22, 0.10, 0.18), hubMat, -0.72, 2.58, 1.88);
-  }
-  // ── spare on a swing-out carrier, ladder opposite, snorkel up the A-pillar ──
-  // OFF-CENTRE and smaller: dead-centre and full size it was a black hole where
-  // the back of the truck should be, and it buried both tail lights.
-  const spareGeo = new THREE.CylinderGeometry(0.5, 0.5, 0.28, 10);
-  spareGeo.rotateX(Math.PI / 2);
-  add(spareGeo, new THREE.MeshLambertMaterial({ color: 0x1c2026, flatShading: true }), 0.52, 1.42, 2.26);
-  const spareHub = new THREE.CylinderGeometry(0.19, 0.19, 0.32, 8);
-  spareHub.rotateX(Math.PI / 2);
-  add(spareHub, hubMat, 0.52, 1.42, 2.26);                       // pale centre, so it isn't a void
-  for (const sx of [-0.72, -0.3]) add(box(0.07, 0.95, 0.07), steelMat, sx, 1.75, 2.22); // ladder rails
-  for (const ry of [1.42, 1.76, 2.1]) add(box(0.5, 0.06, 0.06), steelMat, -0.51, ry, 2.22);
-  add(box(0.13, 1.15, 0.13), steelMat, 0.86, 1.75, -1.2);
-  add(box(0.13, 0.13, 0.42), steelMat, 0.86, 2.28, -1.36);
   // ── the face ── grille between the lamps, so the nose is not a blank slab.
   add(box(1.12, 0.34, 0.1), glassMat, 0, 1.28, -2.1);
   for (const gy of [1.18, 1.3, 1.42]) add(box(1.06, 0.05, 0.13), steelMat, 0, gy, -2.11);
@@ -274,4 +216,13 @@ const cabMats: THREE.MeshLambertMaterial[] = [];
       eye: { x: 0.42, y: 2.16, z: -0.95 } },
     dispose() { geometries.forEach(g => g.dispose()); materials.forEach(m => m.dispose()); },
   };
+}
+
+
+/** Legacy loadouts remain a migration/API convenience; the player's selected
+ * fittings are independent flags and the empty array really is bare. */
+export function createRigModel(model: RigModelId, loadout: RigLoadoutId,
+  bodywork: (material: THREE.Material, amount: number) => void,
+  equipment: readonly RigEquipmentId[] = equipmentFor(loadout)): RigModel {
+  return equipRig(createRigBase(model, loadout, bodywork), model, equipment);
 }

@@ -10,6 +10,7 @@ export function createRanger(loadout: RigLoadoutId,
   const root = new THREE.Group(); root.name = 'car'; root.rotation.order = 'YXZ';
   const paint = new THREE.MeshLambertMaterial({ color: 0xc4402c, flatShading: true });
   const shell = new THREE.MeshLambertMaterial({ color: 0xa49b7c, flatShading: true });
+  shell.color = paint.color; // All painted panels share the live colour, including custom swatches.
   const frame = new THREE.MeshLambertMaterial({ color: 0x303b38, flatShading: true });
   const glass = new THREE.MeshLambertMaterial({ color: 0x18353b, flatShading: true });
   const rubber = new THREE.MeshLambertMaterial({ color: 0x161d1c, flatShading: true });
@@ -73,16 +74,6 @@ export function createRanger(loadout: RigLoadoutId,
     box('tail-lamp',.12,.27,.04,x,.86,2.175,tailMat);
     box('tow-eye',.10,.12,.10,x,.36,-2.25,hub);
   }
-  if(loadout !== 'light') {
-    // Flush panels on the rear shoulder; no light bar or rack above the cab.
-    for(const z of [.14,.81,1.48]) box('solar',1.48,.055,.57,0,1.72,z,solar);
-    box('equipment-tray',1.10,.12,.56,0,.69,1.73,frame);
-  }
-  if(loadout === 'service') {
-    box('survey-case',.47,.29,.68,-.49,1.87,.44,frame);
-    box('mast',.035,.63,.035,.72,1.95,1.57,hub);
-    box('sensor',.18,.07,.17,.72,2.24,1.57,solar);
-  }
   const wheelPivots: THREE.Group[] = [], wheelMeshes: THREE.Mesh[] = [];
   for(const [x,z] of [[-.826,-1.55],[.826,-1.55],[-.826,1.55],[.826,1.55]]) {
     // Short angular eyebrows instead of the pickup's oversize round flares.
@@ -99,3 +90,4 @@ export function createRanger(loadout: RigLoadoutId,
     anchors:{lamps:[-.66,.66].map(x=>new THREE.Vector3(x,.73,-2.255)),eye:{x:.42,y:1.75,z:-1.43}},
     dispose(){geometries.forEach(g=>g.dispose());materials.forEach(m=>m.dispose());} };
 }
+

@@ -28,7 +28,8 @@
  * Everything stateful stays in main.ts; this module gets a context of
  * getters and actions and owns only layout and the open/closed state.
  */
-import { RIG_MODELS, RIG_LOADOUTS, type RigModelId, type RigLoadoutId } from './rig-model';
+import { RIG_EQUIPMENT, type RigEquipmentId } from './rig-equipment';
+import { RIG_MODELS, type RigModelId, type RigLoadoutId } from './rig-model';
 import { PIXEL_FONT, PIXEL_FONT_CSS, loadPixelFont } from './font';
 import { ICON, ICON_FONT, loadIcons } from './icons';
 
@@ -47,8 +48,9 @@ export interface DialGroupRef { title: string; dials: DialRef[] }
 type Tone = 'edge' | 'dim' | 'text' | 'soft' | 'gold' | 'hot' | 'good' | 'bad';
 
 export interface MenuCtx {
-  rigChoice(): { model: RigModelId; loadout: RigLoadoutId };
-  rigChoose(model: RigModelId, loadout: RigLoadoutId): void;
+  rigChoice(): { model: RigModelId; loadout: RigLoadoutId; equipment: RigEquipmentId[] };
+  rigChoose(model: RigModelId, loadout: RigLoadoutId, equipment?: RigEquipmentId[]): void;
+  registration(): string;
   colors: Record<Tone, string>;
   // ── live readouts ──
   place(): string;
@@ -172,6 +174,7 @@ export interface MenuCtx {
 }
 
 export interface MenuHandle {
+  rigLive(): boolean;
   open(tab?: number): void;
   close(): void;
   tab(): number | null;
@@ -469,6 +472,33 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     #menu.hub .m-launch { width: 48%; align-self: flex-end !important; }
     #menu.hub .m-dots, #menu.hub .m-dotlab { display: none !important; }
   }
+
+  /* The live rig stays above a scrollable fitting sheet. Scrolling thirteen
+     choices must never scroll the vehicle out of sight. Studio/elevations
+     remain available for measurement rather than replacing the world. */
+  #menu.rig-live .m-scrim { display: none !important; }
+  #menu.rig-live .m-panel { border: 0; }
+  #menu.rig-live .m-corner, #menu.rig-live .m-panel > .m-rule, #menu.rig-live .m-foot { display: none; }
+  #menu.rig-live .m-body { overflow: hidden; }
+  #menu .m-rig-plate { display: inline-block; align-self: flex-start; background: #ded1a3; color: #14221d;
+    padding: 2px 9px; text-shadow: none; letter-spacing: 2px; font-size: 11px; margin: 5px 0 0; }
+  #menu .m-rig-viewbar { margin: 4px 0; flex-shrink: 0; }
+  #menu .m-rig-viewbar button { font-size: 8px; padding: 4px 8px; }
+  #menu .m-rig-window { flex: 1 1 auto; min-height: 100px; pointer-events: none; }
+  #menu .m-rig-controls { padding: 8px 10px; border-top: 1px solid ${C.gold}; background: rgba(7,20,20,.85); }
+  #menu.rig-live .m-rig-controls { flex: 0 1 45%; min-height: 100px; overflow-y: auto; overscroll-behavior: contain; }
+  #menu .m-equipment-head { display: flex; align-items: center; gap: 8px; font-size: 9px; color: ${C.soft}; }
+  #menu .m-equipment-head span { margin-right: auto; }
+  #menu .m-equipment-head button { min-height: 44px; padding: 4px 10px; border: 1px solid ${C.dim};
+    color: ${C.gold}; background: transparent; cursor: pointer; }
+  #menu .m-equipment { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 2px 8px; margin: 6px 0 14px; }
+  #menu .m-fitting { display: flex; align-items: center; gap: 8px; min-height: 44px; font-size: 9px; cursor: pointer; }
+  #menu .m-fitting input { width: 18px; height: 18px; accent-color: ${C.gold}; margin: 0; flex-shrink: 0; }
+  #menu .m-fitting:has(input:checked) { color: ${C.gold}; }
+  #menu .m-measured { margin-top: 12px; }
+  #menu .m-measured summary { cursor: pointer; min-height: 44px; color: ${C.soft}; font-size: 10px; }
+  @media (min-width: 760px) { #menu.rig-live .m-rig-controls { align-self: flex-end; width: 360px; flex-basis: 50%; } }
+  @media (max-height: 550px) { #menu.rig-live .m-rig-controls { flex-basis: 40%; } #menu .m-rig-window { min-height: 45px; } }
   `;
   document.head.appendChild(style);
 
@@ -534,6 +564,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
 
   // ── state ──────────────────────────────────────────────────────────
   let tab: number | null = null;
+  let rigLive = true;
   let bayEl: HTMLElement | null = null;
   let bayGridFor = '';           // last grid applied, so refresh doesn't redo it
   let currentStatus: { s: string; bad: boolean } | null = null;   // the CURRENT row's transient state
@@ -621,7 +652,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     bay.appendChild(el('div', 'cap'));
     // The splash hero is a WINDOW, not a studio: the hole shows the live
     // scene — the rig in chase cam against wherever it stands — so no tag.
-    if (!hero) bay.appendChild(el('div', 'tag', 'DAK 23'));
+    if (!hero) { const tag = el('div', 'tag'); bindText(tag, ctx.registration); bay.appendChild(tag); }
     bayGridFor = '';
     return bay;
   };
@@ -839,40 +870,37 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   // RIG leads with what you can CHANGE — the dials — then the drawings that
   // prove what you built against the sheet.
   function renderRig(): void {
+    root.classList.toggle('rig-live', rigLive);
     const choice = ctx.rigChoice();
-    const choices = <T extends string>(label: string, values: T[], selected: T, hit: (value: T) => void): void => {
-      body.appendChild(el('div', 'm-sect', label));
-      const row = el('div', 'm-choice');
-      row.setAttribute('role', 'group'); row.setAttribute('aria-label', label);
-      for (const value of values) {
-        const b = el('button', '', value.toUpperCase()); b.type = 'button';
-        b.setAttribute('aria-pressed', String(value === selected));
-        b.addEventListener('click', () => { hit(value); render(); }); row.appendChild(b);
-      }
-      body.appendChild(row);
-    };
-    choices('MODEL', RIG_MODELS, choice.model, model => ctx.rigChoose(model, choice.loadout));
-    choices('EQUIPMENT', RIG_LOADOUTS, choice.loadout, loadout => ctx.rigChoose(choice.model, loadout));
-    body.appendChild(el('div', 'm-dimline', 'YOUR RIG · FREE DRIVE AND THE LINE'));
-    const views = el('div', 'm-views');
-    const chips: HTMLButtonElement[] = [];
-    ctx.views().forEach((id, i) => {
-      const b = el('button', `m-view${ctx.vehView() === i ? ' on' : ''}`, id);
-      b.addEventListener('click', () => {
-        ctx.setVehView(i);
-        chips.forEach((c, j) => c.classList.toggle('on', j === i));
+    const heading = el('div', 'm-hero-head');
+    const name = el('div', 'm-place', choice.model.toUpperCase());
+    const plate = el('div', 'm-rig-plate'); bindText(plate, ctx.registration);
+    heading.append(name, plate); body.appendChild(heading);
+    const viewbar = el('div', 'm-choice m-rig-viewbar');
+    for (const live of [true, false]) {
+      const b = el('button', '', live ? 'IN THE WORLD' : 'STUDIO / VIEWS'); b.type = 'button';
+      b.setAttribute('aria-pressed', String(rigLive === live));
+      b.addEventListener('click', () => { rigLive = live; render(); }); viewbar.appendChild(b);
+    }
+    body.appendChild(viewbar);
+    if (rigLive) { body.appendChild(el('div', 'm-rig-window')); }
+    else {
+      const views = el('div', 'm-views');
+      ctx.views().forEach((label, i) => {
+        const b = el('button', `m-view${ctx.vehView() === i ? ' on' : ''}`, label); b.type = 'button';
+        b.addEventListener('click', () => { ctx.setVehView(i); render(); }); views.appendChild(b);
       });
-      chips.push(b);
-      views.appendChild(b);
-    });
-    bayEl = mkBay();
-    body.append(views, bayEl);
-    for (const g of ctx.dialGroups('rig')) {
-      dialsInto(body, [g]);
-      if (g.title !== 'VEHICLE') continue;
-      // The custom swatch lives WITH the paint dial it overrides: any hex,
-      // native picker, persisted — and the preset dial clears it when cycled,
-      // so the updater keeps the swatch honest about what the truck wears.
+      bayEl = mkBay(); body.append(views, bayEl);
+    }
+    const controls = el('div', 'm-rig-controls'); body.appendChild(controls);
+    const models = el('div', 'm-choice');
+    for (const model of RIG_MODELS) {
+      const b = el('button', '', model.toUpperCase()); b.type = 'button';
+      b.setAttribute('aria-pressed', String(choice.model === model));
+      b.addEventListener('click', () => { const current = ctx.rigChoice(); ctx.rigChoose(model, current.loadout, current.equipment); render(); });
+      models.appendChild(b);
+    }
+    controls.append(el('div', 'm-sect', 'MODEL'), models);
       const row = el('div', 'm-dial');
       row.style.cursor = 'default';
       row.append(el('span', 'lab', 'PAINT · CUSTOM'));
@@ -884,7 +912,36 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
         if (document.activeElement !== input && input.value !== ctx.paint()) input.value = ctx.paint();
       });
       row.appendChild(input);
-      body.appendChild(row);
+      controls.appendChild(row);
+    const equipmentHead = el('div', 'm-equipment-head');
+    const count = el('span', '', '');
+    const updateCount = () => count.textContent = `${ctx.rigChoice().equipment.length} / ${RIG_EQUIPMENT.length} FITTED`;
+    updateCount(); equipmentHead.appendChild(count);
+    const boxes: HTMLInputElement[] = [];
+    const apply = (ids: RigEquipmentId[]) => {
+      const current = ctx.rigChoice(); ctx.rigChoose(current.model, current.loadout, ids);
+      const selected = ctx.rigChoice().equipment;
+      boxes.forEach((box,i) => box.checked = selected.includes(RIG_EQUIPMENT[i][0])); updateCount();
+    };
+    for (const all of [false, true]) {
+      const b = el('button', '', all ? 'ALL' : 'NONE'); b.type = 'button';
+      b.addEventListener('click', () => apply(all ? RIG_EQUIPMENT.map(([id])=>id) : [])); equipmentHead.appendChild(b);
+    }
+    const equipment = el('div', 'm-equipment');
+    for (const [id,label] of RIG_EQUIPMENT) {
+      const row = el('label', 'm-fitting');
+      const box = el('input', ''); box.type = 'checkbox'; box.checked = choice.equipment.includes(id);
+      box.addEventListener('change', () => {
+        const current = ctx.rigChoice().equipment;
+        apply(box.checked ? [...current,id] : current.filter(value=>value!==id));
+      });
+      boxes.push(box); row.append(box, el('span', '', label.toUpperCase())); equipment.appendChild(row);
+    }
+    controls.append(el('div', 'm-sect', 'EQUIPMENT'), equipmentHead, equipment);
+    for (const g of ctx.dialGroups('rig')) {
+      dialsInto(body, [g]);
+      if (g.title !== 'VEHICLE') continue;
+
     }
     const t = el('table', 'm-kv');
     {
@@ -895,13 +952,19 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
         const tr2 = el('tr', '');
         const built = el('td', '', d.built);
         built.style.color = d.ok ? C.good : C.hot;
+        updaters.push(() => {
+          const current = ctx.dims().find(value => value.k === d.k);
+          if (current) { built.textContent = current.built; built.style.color = current.ok ? C.good : C.hot; }
+        });
         const spec = el('td', '', d.spec);
         spec.style.color = C.dim;
         tr2.append(el('td', '', d.k), built, spec);
         t.appendChild(tr2);
       }
     }
-    body.append(el('div', 'm-sect', 'MEASURED'), t, el('div', 'm-sect', 'SHEET'), kvTable(ctx.specText));
+    const measured = el('details', 'm-measured');
+    measured.append(el('summary', '', 'DIMENSIONS & SPECIFICATION'), t, kvTable(ctx.specText));
+    controls.appendChild(measured);
   }
 
   function renderDrives(): void {
@@ -1372,6 +1435,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
     // The hub is CLEAR — the live scene is its background; the pages keep
     // the scrim (RIG punches its studio hole through it via bayRect).
     root.classList.toggle('hub', t === T_DRIVE);
+    root.classList.toggle('rig-live', t === T_RIG && rigLive);
     if (t !== T_RIG && t !== T_DRIVE) scrimFull();
     render();
   }
@@ -1391,7 +1455,7 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   }
 
   function bayRect(): Rect | null {
-    if ((tab !== T_RIG && tab !== T_DRIVE) || !bayEl || !bayEl.isConnected) return null;
+    if ((tab === T_RIG && rigLive) || (tab !== T_RIG && tab !== T_DRIVE) || !bayEl || !bayEl.isConnected) return null;
     const r = bayEl.getBoundingClientRect();
     if (r.width < 4 || r.height < 4) return null;
     // Aim the scrim's hole here. Clamp to the body's box so a half-scrolled
@@ -1440,5 +1504,5 @@ export function createMenu(ctx: MenuCtx): MenuHandle {
   // about to detach.
   setInterval(refresh, 400);
 
-  return { open, close, tab: () => tab, bayRect, refresh };
+  return { open, close, tab: () => tab, bayRect, refresh, rigLive: () => tab === T_RIG && rigLive };
 }

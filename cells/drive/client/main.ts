@@ -31,7 +31,10 @@ import { pickInfrastructureRecipe, planSupportStations, type StructureRecipe } f
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
 import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
 import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSample, type HydroSystem, type OceanCoverage } from './hydro';
+import { cleanEquipment, equipmentFor, type RigEquipmentId } from './rig-equipment';
 import { createRigModel, OVERLAND, RIG_MODELS, RIG_LOADOUTS, type RigModelId, type RigLoadoutId } from './rig-model';
+import { createWireMaterialPolicy } from './wire-material';
+import { createWildlifeWire } from './wildlife-wire';
 import { createMenu, T_DRIVE, T_RIG, type Rect as BayRect } from './menu';
 import { PIXEL_FONT, MICRO_FONT } from './font';
 import { ICON, ICON_FONT } from './icons';
@@ -3697,7 +3700,7 @@ const hubBandFrac = (now: number): number => {
   if (now - hubBand.at > 1000) {
     hubBand.at = now;
     const rule = document.querySelector('#menu .m-hero-head') || document.querySelector('#menu .m-rule');
-    const nav = document.querySelector('#menu .m-nav');
+    const nav = document.querySelector('#menu .m-rig-controls') || document.querySelector('#menu .m-nav');
     if (rule && nav) {
       const top = rule.getBoundingClientRect().bottom;
       const bot = nav.getBoundingClientRect().top;
@@ -4264,6 +4267,8 @@ function depthVisible(px3: number, py3: number, pz3: number): boolean {
 // truck is actually colliding with, not the paint over it.
 let xrayMode = 0;
 let xrayWireOn = false, xrayWireAt = 0;
+const wildlifeWire = createWildlifeWire();
+const wireMaterials = createWireMaterialPolicy();
 function xrayWire(now: number): void {
   const want = xrayMode === 2;
   if (!want && !xrayWireOn) return;
@@ -4277,29 +4282,30 @@ function xrayWire(now: number): void {
   // solid stays solid where lines would lie: the dome IS the light, and the
   // truck and its through-terrain silhouette are the subject.
   const keep = new Set<THREE.Object3D>([skyDome, car, xray, moon]);
+  // Protection follows shared materials too; traversal order must not let
+  // another mesh turn a vegetation material back into wire.
+  const solidMaterials = new Set<THREE.Material>();
+  scene.traverse((o) => {
+    if (!o.name.startsWith('veg') && o.name !== 'sward') return;
+    const material = (o as THREE.Mesh).material;
+    if (material) for (const m of Array.isArray(material) ? material : [material]) solidMaterials.add(m);
+  });
   scene.traverse((o) => {
     for (let p: THREE.Object3D | null = o; p; p = p.parent) if (keep.has(p)) return;
     if (!(o as THREE.Mesh).isMesh) return;
-    // VEGETATION STAYS SOLID. Its billboarded card kinds cut their leaf
-    // shape in the fragment shader — no alphaTest flag to test for — and
-    // wireframing them painted the raw quads as black boxes over Val
-    // Müstair twice (hunt3, both rounds: standing veg down deleted every
-    // box). Solid plants over a wireframed world still read; black cards
-    // do not.
-    if (o.name === 'veg') return;
-    const m = (o as THREE.Mesh).material as THREE.Material | THREE.Material[] | undefined;
+    // Keep the actual animated triangles, but avoid flat-shading derivatives
+    // on lines. Restore the exact shared lit material when WIRE stands down.
+    if (o.name === 'birds' || o.name === 'herds') {
+      wildlifeWire.apply(o as THREE.Mesh, want);
+      return;
+    }
+    // The vegetation family includes EZ near/far trees and shrubs, not just
+    // the older 'veg' mesh. Sward silhouettes also live in shader code.
+    const keepSolid = o.name.startsWith('veg') || o.name === 'sward';
+    const m = (o as THREE.Mesh).material;
     if (!m) return;
-    for (const mm of Array.isArray(m) ? m : [m]) {
-      if (!('wireframe' in mm)) continue;
-      // A CUTOUT KEEPS ITS CUTOUT. The leaf cards' shape lives in the
-      // fragment discard, not the geometry — wireframed they lose it and
-      // render as their raw quads, which the user photographed as solid
-      // black boxes over Val Müstair (hunt3: standing veg down deleted
-      // them). Alpha-tested and blended materials stay solid; trunks,
-      // rocks, critters and the ground strip to honest triangles.
-      const mt = mm as THREE.Material;
-      if (mt.alphaTest > 0 || mt.transparent) continue;
-      (mm as THREE.MeshBasicMaterial).wireframe = want;
+    for (const material of Array.isArray(m) ? m : [m]) {
+      wireMaterials.apply(material, want, keepSolid || solidMaterials.has(material));
     }
   });
 }
@@ -22646,12 +22652,15 @@ function bodywork(mat: THREE.Material, amount: number): void {
 // truck, discards a route, resets suspension, or touches campaign progress.
 let rigModelId: RigModelId = 'ranger';
 let rigLoadoutId: RigLoadoutId = 'expedition';
+let rigEquipment: RigEquipmentId[] = equipmentFor(rigLoadoutId);
+let rigPlateAt = 0;
 try {
   const saved = JSON.parse(localStorage.getItem('drive.rig-model') || '{}');
   if (RIG_MODELS.includes(saved.model)) rigModelId = saved.model;
   if (RIG_LOADOUTS.includes(saved.loadout)) rigLoadoutId = saved.loadout;
+  rigEquipment = Array.isArray(saved.equipment) ? cleanEquipment(saved.equipment) : equipmentFor(rigLoadoutId);
 } catch { /* A unavailable or old preference must not prevent driving. */ }
-let rigModel = createRigModel(rigModelId, rigLoadoutId, bodywork);
+let rigModel = createRigModel(rigModelId, rigLoadoutId, bodywork, rigEquipment);
 const car = rigModel.root;
 let bodyMat: THREE.MeshLambertMaterial | null = rigModel.bodyMat;
 let tailMat = rigModel.tailMat;
@@ -32238,7 +32247,7 @@ function ghostCab(on: boolean): void {
     m.transparent = on;
     // The BODY reads a touch stronger than the glass and trim: the bonnet is
     // the speed reference peripheral vision steers by, the rest is just frame.
-    m.opacity = on ? (m === bodyMat ? 0.3 : 0.16) : 1;
+    m.opacity = on ? (m.color === bodyMat?.color ? 0.3 : 0.16) : 1;
     m.depthWrite = !on;
   }
 }
@@ -35132,8 +35141,14 @@ function tick(now: number): void {
   // The splash's own clock: WALL time, because the sim's dt is zero exactly
   // when the menu is up — which is the only time the splash exists.
   const wallDt = clamp(raw / 1000, 0, 0.06);
+  // Username can arrive after the first frame or change on sign-out. Only a
+  // changed plate rebuilds its small glyph mesh and the derived silhouette.
+  if (now - rigPlateAt > 1000) {
+    rigPlateAt = now;
+    if (rigModel.setRegistration?.(sync.status().user)) rebuildRigSilhouette();
+  }
   {
-    const wantGold = menu.tab() === T_DRIVE && !lineOn && !real.on
+    const wantGold = (menu.tab() === T_DRIVE || (menu.tab() === T_RIG && menu.rigLive())) && !lineOn && !real.on
       && camMode !== 'top' && clockHeld === null;
     splashGold += ((wantGold ? 1 : 0) - splashGold) * Math.min(1, 0.9 * wallDt / 0.6);
     if (splashGold < 0.003) splashGold = 0;
@@ -36640,7 +36655,7 @@ function tick(now: number): void {
   // treated like one. Seeded from wherever the chase camera stood so entry is
   // a drift, not a cut; the truck sits LOW in frame because the aim point is
   // above its roof; the exit is the chase rig's own lerp easing back in.
-  if (menu.tab() === T_DRIVE && camMode !== 'top' && !drone.up && !real.on) {
+  if ((menu.tab() === T_RIG && menu.rigLive()) || (menu.tab() === T_DRIVE && camMode !== 'top' && !drone.up && !real.on)) {
     if (!splashOrbit.on) {
       splashOrbit.on = true;
       splashOrbit.a = Math.atan2(camera.position.x - state.x, camera.position.z - state.z);
@@ -42016,9 +42031,11 @@ function surveyLoaded(): Map<string, SurveyRoad> {
 /** Bind a fresh model to the stable simulation root, then rebuild the derived
  * silhouette and material treatments. Old GPU resources are released only
  * after no live graph references them. The same path serves both modes. */
-function selectRig(model: RigModelId, loadout: RigLoadoutId): void {
-  if (model === rigModelId && loadout === rigLoadoutId) return;
-  const next = createRigModel(model, loadout, bodywork);
+function selectRig(model: RigModelId, loadout: RigLoadoutId, equipment: RigEquipmentId[] = rigEquipment): void {
+  const selected = cleanEquipment(equipment);
+  if (model === rigModelId && loadout === rigLoadoutId && selected.join() === rigEquipment.join()) return;
+  const next = createRigModel(model, loadout, bodywork, selected);
+  next.setRegistration?.(sync.status().user);
   const old = rigModel;
   next.bodyMat.color.copy(bodyMat!.color);
   next.tailMat.color.copy(tailMat.color);
@@ -42031,7 +42048,7 @@ function selectRig(model: RigModelId, loadout: RigLoadoutId): void {
   }
   for (const part of old.parts) car.remove(part);
   for (const part of next.parts) car.add(part);
-  rigModel = next; rigModelId = model; rigLoadoutId = loadout;
+  rigModel = next; rigModelId = model; rigLoadoutId = loadout; rigEquipment = selected;
   bodyMat = next.bodyMat; tailMat = next.tailMat;
   wheelPivots.splice(0, wheelPivots.length, ...next.wheelPivots);
   wheelMeshes.splice(0, wheelMeshes.length, ...next.wheelMeshes);
@@ -42051,11 +42068,12 @@ function selectRig(model: RigModelId, loadout: RigLoadoutId): void {
   rebuildRigSilhouette();
   specCache = null;
   old.dispose();
-  try { localStorage.setItem('drive.rig-model', JSON.stringify({ model, loadout })); } catch { /* session still works */ }
+  try { localStorage.setItem('drive.rig-model', JSON.stringify({ model, loadout, equipment: selected })); } catch { /* session still works */ }
 }
 
 const menu = createMenu({
-  rigChoice: () => ({ model: rigModelId, loadout: rigLoadoutId }),
+  rigChoice: () => ({ model: rigModelId, loadout: rigLoadoutId, equipment: [...rigEquipment] }),
+  registration: () => rigModel.root.userData.registration || car.userData.registration || 'DRIVE-01',
   rigChoose: selectRig,
   colors: { edge: UI.edge, dim: UI.dim, text: UI.text, soft: UI.soft, gold: UI.gold, hot: UI.hot, good: UI.good, bad: UI.bad },
   place: () => (placeLine && placeLine !== '…' ? placeLine : 'LOCATING').toUpperCase(),
