@@ -37,7 +37,7 @@ await build({
   // /var/task.
   define: { __dirname: JSON.stringify(CELL) },
 });
-const { neWide, neWideTile, NE_SCALERANK, NE_PLACE_RANK, NE_MAX_Z } = await import(`file://${BUNDLE}?${Date.now()}`);
+const { neWide, neWideTile, NE_SCALERANK, NE_PLACE_RANK, NE_MAX_Z, NE_MIN_Z } = await import(`file://${BUNDLE}?${Date.now()}`);
 
 function tileOf(lat, lon, z) {
   const n = 2 ** z, la = (lat * Math.PI) / 180;
@@ -86,7 +86,7 @@ const SPOTS = [
 const RING = 2;                       // OV_RING_MAX in client/main.ts: 5x5
 for (const [name, lat, lon] of SPOTS) {
   const got = [];
-  for (const z of [7, 8, 9]) {
+  for (const z of [5, 6, 7, 8, 9]) {
     const [cx, cy] = tileOf(lat, lon, z);
     let n = 0;
     for (let dx = -RING; dx <= RING; dx++) {
@@ -100,7 +100,7 @@ for (const [name, lat, lon] of SPOTS) {
     }
     got.push(n);
   }
-  check(got.every((n) => n > 0), `${name.padEnd(16)} 5x5 ring at z7/z8/z9 = ${got.join('/')} features`);
+  check(got.every((n) => n > 0), `${name.padEnd(16)} 5x5 ring at z5/z6/z7/z8/z9 = ${got.join('/')} features`);
 }
 
 // ── THE LADDER IS A LADDER ─────────────────────────────────────────────
@@ -109,10 +109,17 @@ for (const [name, lat, lon] of SPOTS) {
 // what they admit, and a coarser rung must not be DENSER per unit area than a
 // finer one — which is the property "not a ladder" actually violates.
 console.log('\nthe rungs admit progressively more:');
-check(NE_SCALERANK[7] < NE_SCALERANK[8] && NE_SCALERANK[8] < NE_SCALERANK[9],
-  `scalerank cuts strictly increase: ${NE_SCALERANK[7]} < ${NE_SCALERANK[8]} < ${NE_SCALERANK[9]}`);
-check(NE_PLACE_RANK[7] < NE_PLACE_RANK[8] && NE_PLACE_RANK[8] < NE_PLACE_RANK[9],
-  `place rank cuts strictly increase: ${NE_PLACE_RANK[7]} < ${NE_PLACE_RANK[8]} < ${NE_PLACE_RANK[9]}`);
+{
+  const zs = [];
+  for (let z = NE_MIN_Z; z <= NE_MAX_Z; z++) zs.push(z);
+  // Non-decreasing, not strictly: NE ranks its roads 3-10 and nothing coarser,
+  // so z5 and z6 share a rank cut and z5 is narrowed by class instead. What a
+  // ladder must never do is admit MORE at a coarser rung.
+  const mono = (t) => zs.every((z, i) => i === 0 || t[zs[i - 1]] <= t[z]);
+  check(mono(NE_SCALERANK), `scalerank cuts never fall z${NE_MIN_Z}..z${NE_MAX_Z}: ${zs.map((z) => NE_SCALERANK[z]).join(' ≤ ')}`);
+  check(mono(NE_PLACE_RANK), `place rank cuts never fall: ${zs.map((z) => NE_PLACE_RANK[z]).join(' ≤ ')}`);
+  check(zs.every((z) => NE_SCALERANK[z] !== undefined && NE_PLACE_RANK[z] !== undefined), 'every served rung has a cut');
+}
 {
   // Same ground, three rungs: a z7 tile over Europe against the four z8 and
   // sixteen z9 tiles inside it. Feature count must rise, and the count PER TILE
@@ -222,6 +229,19 @@ console.log('\nthe empty ocean answers, and answers empty:');
 }
 
 check(NE_MAX_Z === 9, 'z10 and finer are still Overpass\'s job');
+check(NE_MIN_Z === 5, 'z5 is the widest rung the plane asks for; the globe lowers this');
+{
+  // A z5 tile is a thousand kilometres: the whole of southern Africa in four.
+  // It must carry the trunk network of a subcontinent and its capitals, and
+  // not a wall of everything.
+  const [x, y] = tileOf(-29.0, 25.0, 5);
+  const ways = neWideTile(5, x, y) ?? [];
+  const roads = ways.filter((w) => w.tags?.highway), places = ways.filter((w) => w.tags?.place);
+  console.log(`  z5 over southern Africa: ${roads.length} roads, ${places.length} places (${places.map((p) => p.tags.name).slice(0, 6).join(', ')})`);
+  check(roads.length > 5 && roads.length < 1500, `a z5 tile is a network, not a wall (${roads.length} roads)`);
+  check(roads.every((w) => w.tags.highway === 'motorway'), 'at z5 only motorways are drawn — the class cut where the rank has no rung');
+  check(places.length > 0 && places.length < 40, `a z5 tile names its capitals and little else (${places.length})`);
+}
 rmSync(BUNDLE, { force: true });
 rmSync(OUT, { recursive: true, force: true });
 console.log(fails ? `\n${fails} FAILURES` : '\nne-wide: all ok');

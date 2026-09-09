@@ -609,7 +609,7 @@ const OV_RE = /^\/~\/osm\/ov1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // rung's cap is now sized to the ask it actually makes: the coarse three are
 // fall-through values only, and z10's headroom rises because its query no
 // longer carries the class that was filling it.
-const OV_CAP: Record<number, number> = { 7: 12000, 8: 8000, 9: 6000, 10: 6000, 11: 4500, 12: 6000, 13: 6000 };
+const OV_CAP: Record<number, number> = { 5: 12000, 6: 12000, 7: 12000, 8: 8000, 9: 6000, 10: 6000, 11: 4500, 12: 6000, 13: 6000 };
 // These tiles are rare and cached forever, so they may spend upstream time a
 // fine tile cannot. Measured: a z10 coastal tile needs 11-18s of Overpass, and
 // the densest z12 boxes on the line want more — the fine budget's 5s-per-mirror
@@ -770,7 +770,9 @@ export function trimOverview(elements: RawWay[], z: number): Array<Record<string
 }
 async function serveOverview(path: string, m: RegExpMatchArray) {
   const [z, x, y] = [Number(m[1]), Number(m[2]), Number(m[3])];
-  if (z < 7 || z > 13 || x >= 2 ** z || y >= 2 ** z) {
+  // The floor is the bake's: every rung below z10 is Natural Earth's, and the
+  // widest it serves is one number in ne-wide.ts. The globe lowers it.
+  if (z < NE_MIN_Z || z > 13 || x >= 2 ** z || y >= 2 ** z) {
     return respond(400, 'application/json', JSON.stringify({ error: 'overview tile out of range' }));
   }
   // ── THE WIDE RUNGS DO NOT ASK ANYONE ───────────────────────────────
@@ -881,7 +883,7 @@ async function serveOverview(path: string, m: RegExpMatchArray) {
  */
 import { CAMPAIGN } from './campaigns/dakar';
 import { assembleRelationRings } from './osm-rings';
-import { neWideTile, neWideError, NE_MAX_Z } from './ne-wide';
+import { neWideTile, neWideError, NE_MAX_Z, NE_MIN_Z } from './ne-wide';
 
 const CAMPAIGN_V = CAMPAIGN.v;
 const CAMPAIGN_RE = /^\/~\/campaign\/(\d{1,4})$/;

@@ -64,11 +64,28 @@ interface RawWay {
  * `type: "Unknown"`, so a ladder written in NE's type vocabulary would have
  * been mostly guesswork.
  */
-export const NE_SCALERANK: Record<number, number> = { 7: 4, 8: 6, 9: 8 };
+//
+// THE ROAD LADDER HAS NO RUNG BELOW 3. Natural Earth ranks its roads 3-10 and
+// nothing coarser — measured off the bake (`scalerank: 3:10024 4:5707 …`), and
+// found the hard way when a z5 cut of "≤ 2" served the whole of southern Africa
+// as Johannesburg and no roads. So z5 and z6 share the rank cut, and z5 is
+// narrowed by CLASS instead (`NE_WIDE_CLASS`): motorways alone over a
+// thousand-kilometre tile, which is what a subcontinent's chart draws — the
+// same move `overviewQuery` made at z7 when it was Overpass's, for the same
+// reason. Places rank 0-10 and do have coarse rungs, but capitals alone is one
+// city per country, so z5 keeps z6's cut.
+export const NE_SCALERANK: Record<number, number> = { 5: 3, 6: 3, 7: 4, 8: 6, 9: 8 };
 /** The same idea for settlements: which places have earned a name at this box. */
-export const NE_PLACE_RANK: Record<number, number> = { 7: 3, 8: 5, 9: 7 };
-/** The rungs this module answers at all. Finer than z9 is still OSM's job. */
+export const NE_PLACE_RANK: Record<number, number> = { 5: 2, 6: 2, 7: 3, 8: 5, 9: 7 };
+/** A class cut on top of the rank cut, where the rank has run out of rungs:
+ *  at z ≤ this, only motorways. */
+export const NE_WIDE_CLASS_Z = 5;
+/** The rungs this module answers at all. Finer than z9 is still OSM's job;
+ *  wider than z5 is the globe's, when it comes — and lowering NE_MIN_Z is the
+ *  whole of what the overview needs to do for it, since the asset already
+ *  carries every road to scalerank 8 and every place to 7. */
 export const NE_MAX_Z = 9;
+export const NE_MIN_Z = 5;
 
 const HW = ['motorway', 'trunk', 'primary'];
 const ABS = 1e6, DEL = 1e4;
@@ -182,14 +199,15 @@ export function neWideTile(z: number, x: number, y: number): RawWay[] | null {
   const lonW = (x / n) * 360 - 180, lonE = ((x + 1) / n) * 360 - 180;
   const latOf = (i: number) => (Math.atan(Math.sinh(Math.PI * (1 - (2 * i) / n))) * 180) / Math.PI;
   const latN = latOf(y), latS = latOf(y + 1);
-  const srMax = NE_SCALERANK[z] ?? NE_SCALERANK[NE_MAX_Z];
-  const prMax = NE_PLACE_RANK[z] ?? NE_PLACE_RANK[NE_MAX_Z];
+  const srMax = NE_SCALERANK[z] ?? (z < NE_MIN_Z ? NE_SCALERANK[NE_MIN_Z] : NE_SCALERANK[NE_MAX_Z]);
+  const prMax = NE_PLACE_RANK[z] ?? (z < NE_MIN_Z ? NE_PLACE_RANK[NE_MIN_Z] : NE_PLACE_RANK[NE_MAX_Z]);
   const out: RawWay[] = [];
   const inside = (lo: number, la: number) => lo >= lonW && lo <= lonE && la >= latS && la <= latN;
 
   for (let i = 0; i < set.lines.length; i++) {
     const L = set.lines[i];
     if (L.sr > srMax) continue;
+    if (z <= NE_WIDE_CLASS_Z && L.hw !== 'motorway') continue;
     // The per-line bounding box, computed at decode, is what makes this a scan
     // worth doing at all: 41,000 lines tested by four comparisons each, and
     // only the handful that survive have their points walked.

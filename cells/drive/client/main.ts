@@ -213,7 +213,38 @@ const CAM = { base: 175, tilt: 70, fov: 55 };
  * frame is the same honest degradation SIGHT_M documents for the near shell
  * rather than a new kind of failure.
  */
-const SIGHT_MAX = 600000;
+//
+// …AND TO 1,500km, WITH A GLOBE IN VIEW. Asked for from the seat: zoom out to
+// the whole world, at dramatically lower detail. This is the first of two
+// steps and it is the cheap one — the tangent plane stretched as far as it
+// honestly goes. Three things were checked before the number moved:
+//
+// - the cell serves cover at z4 and z5 and terrarium serves DEM at z4 and z5
+//   (curled, 200s, 256² PNGs), so the ladders below can gain their rungs;
+// - the top camera's far plane is `dist * 4`, 8,000km at the new ceiling, and
+//   `farSeg` clamps at 128 segments from z7 down, so a z5 tile costs what a
+//   z7 tile does;
+// - the curvature drop is d²/2R: 28km at 600km, 177km at 1,500km, 700km at
+//   3,000km. The shell sinks that far at the frame's edge and the tilt
+//   compensation is first-order, which holds to about 1,500km and not much
+//   past it.
+//
+// WHAT BREAKS FIRST IS THE PROJECTION, and it is the reason there is a
+// second step. `toLocal` is equirectangular scaled by cos(origin.lat): a
+// z5 tile ten degrees north of the truck is drawn with the truck's cosine,
+// which at 30° is 8% too wide, and everything on it — roads, cover, coast —
+// is stretched with it, so the map stays internally consistent and becomes,
+// smoothly, a plate carrée centred where you stand. At 1,500km that is a
+// mild distortion at the frame's edge. At 3,000km it is a lie, and the honest
+// answer past it is not a wider plane but a SPHERE: a globe with a baked
+// base, the Natural Earth coast and trunks, and the truck as a pin, which
+// `GLOBE_FROM_M` marks the hand-over to. It is the ceiling for now — the
+// plane runs right up to it — and lowering it is how the globe arrives.
+const SIGHT_MAX = 1500000;
+/** Where the tangent plane stops being honest and a globe takes over. Not
+ *  read by anything yet: the second step's hook, placed beside the number it
+ *  will divide. See the note above. */
+const GLOBE_FROM_M = SIGHT_MAX;
 /**
  * THE NEAR END, DOUBLED WITH THE FAR ONE. 0.25 put the chart camera 44m over
  * the truck; 0.125 puts it 22m up, a frame about 23m across — the whole of a
@@ -1016,7 +1047,11 @@ function sampleCoverRaw(ex: number, ez: number): number | undefined {
 // leave the outer half of the widest view blind again for want of one more
 // rung. z6 covers 1,296km. The cell serves every one of these (measured z5
 // through z12, all 200, 2-15KB, 3-4s cold and cached for ever after).
-const COVER_WIDE_LEVELS = [10, 8, 6];
+// z4 is the 1,500km rung: a z5 shell ring is 2,710km across at 30°, and a z6
+// cover ring reaches 1,565 — two thirds of the shell blind at the ceiling
+// without it. A z4 cover tile is 2,504km on a side at 9.8km a pixel, which
+// at that zoom is a pixel and a half of chart.
+const COVER_WIDE_LEVELS = [10, 8, 6, 4];
 const COVER_WIDE_RING = 2;            // 5x5 tiles at whichever level is current
 let coverWideZ = 0;                   // 0 until the view is wide enough to want one
 const coverWide = new Map<string, CoverTile>();
@@ -21624,7 +21659,11 @@ function streamWorld(ex: number, ez: number): void {
 // of latitude, and z6 (1,565km at the equator) carries it to 67. Same cost
 // as z7 — `farSeg` clamps both at 128 segments — so the shell never grows
 // past the triangle budget the ladder was sized to.
-const FAR_LEVELS = [13, 11, 9, 7, 6];
+// z5 is the 1,500km rung. At 30° a z6 ring reaches 1,355km and the ceiling
+// asks for 1,500; z5's reaches 2,710. Same 25 tiles at the same 128 segments,
+// and a z5 raster is 4.2km a pixel — the terrain is a relief map by then, and
+// that is the honest degradation, not a new kind of failure.
+const FAR_LEVELS = [13, 11, 9, 7, 6, 5];
 let farZ = FAR_LEVELS[0];
 const FAR_RING_MAX = 2;       // 5×5 coarse tiles at whichever level is current
 // METRES PER VERTEX, not segments, is what decides whether a massif has a
@@ -21924,7 +21963,10 @@ const FAR_DROP = 12;
 // z7 is served by the cell as motorway and trunk only (see `overviewQuery`
 // in index.ts): at 313km a tile it is the rung that keeps roads on the chart
 // past the z8 ring's ~390km, which the doubled SIGHT_MAX looks well beyond.
-const OV_LEVELS = [13, 12, 11, 10, 9, 8, 7];
+// z6 and z5 come from the same Natural Earth bake as z7-z9 (`ne-wide.ts`):
+// scalerank ≤ 3 and ≤ 2, the trunk network of a subcontinent, and the
+// capitals. The asset already held them; the rungs are two entries.
+const OV_LEVELS = [13, 12, 11, 10, 9, 8, 7, 6, 5];
 const OV_RING_MAX = 2;        // 5×5 tiles at whichever level is current
 /** How long the CHART waits, which is not how long the CELL takes. See the
  *  note in loadOvTile: an abandoned request still banks its tile. */

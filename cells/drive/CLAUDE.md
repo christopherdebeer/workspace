@@ -4698,6 +4698,54 @@ carry the fix. `cells.get` is the witness (`deploy.phase`); a second
 duration and never was: verify the LIVE bundle for the symbol, and read
 `cells.get` before believing a deploy that outran the wait.
 
+### The reach is 1,500km, and the globe is the next step
+
+Asked from the seat: "what would it take to zoom out to view the full world,
+at dramatically lower detail?" Two steps, and this is the first. The tangent
+plane is stretched as far as it honestly goes; the second step is a sphere.
+
+**WHAT MOVED.** `SIGHT_MAX` 600km → 1,500km, and `ZOOM_MAX` follows because it
+is derived (≈11,460; the camera stands 2,000km up at the ceiling). Each ladder
+gained the rung that serves it: the far shell z5 (a z6 ring reaches 1,355km at
+30° and the ceiling asks 1,500; z5's reaches 2,710), the wide cover z4 (a z6
+cover ring reaches 1,565km against a z5 shell ring of 2,710, so two thirds of
+the shell would be blind without it), the overview z6 and z5 from the same
+Natural Earth bake as z7-z9 (scalerank ≤ 3 and ≤ 2, the trunk network of a
+subcontinent and its capitals — the asset already held them, and `NE_MIN_Z`
+is the one number the handler's range and the bake's cut both read).
+
+**CHECKED BEFORE THE NUMBER MOVED**, because a rung nobody has stood on is a
+rung that may not hold: the cell serves cover at z4 and z5 and terrarium
+serves DEM at z4 and z5 (curled, 200s, 256² PNGs); `demFloor` is Challenger
+Deep for anything coarser than z14, so a z5 tile that is mostly ocean is not
+refused; the top camera's far plane is `dist × 4`, 8,000km at the ceiling;
+`farSeg` clamps at 128 from z7 down, so a z5 tile costs what a z7 tile does.
+`devtools/reach-ceiling.mjs` arrives at the ceiling and reads every layer.
+
+**WHAT BREAKS FIRST IS THE PROJECTION, and it is why there is a second step.**
+`toLocal` is equirectangular scaled by cos(origin.lat). A z5 tile ten degrees
+north of the truck is placed with the truck's cosine — 8% too wide at 30° —
+and everything ON it (roads, cover, coast) is stretched with it, so the map
+stays internally consistent and becomes, smoothly, a plate carrée centred
+where you stand. At 1,500km that is a mild distortion at the frame's edge; at
+3,000km it is a lie. The curvature drop is the other limit: d²/2R is 177km at
+1,500km and the tilt compensation is first-order. `GLOBE_FROM_M` marks the
+hand-over and equals `SIGHT_MAX` for now: the plane runs right up to it, and
+lowering it is how the globe arrives.
+
+**WHAT THE GLOBE NEEDS, so it is written down while the plane is fresh:** a
+sphere of radius R with the camera at altitude past `GLOBE_FROM_M`; a baked
+global base (a WorldCover-tinted relief as one equirect PNG in `static/`, a
+few hundred KB); the Natural Earth 110m coast, already baked for the site
+model (`coast-baked.ts`); roads at scalerank ≤ 1-2 and capitals from
+`ne-wide.b64` by lowering `NE_MIN_Z`; the day/night terminator from
+`clockHour()`; the truck as a pin at its lat/lon; space and an atmosphere rim
+in place of the 20km sky dome (which is centred on the eye — see "anything
+hung around the eye is a function of the camera"); pan becoming rotate; and a
+cross-fade with the plane chart over a zoom band above `GLOBE_FROM_M`. It
+must not touch the fine world at all. `mppU` is already the one number the
+chart's scale-keyed terms read, and the globe sets it too.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where
