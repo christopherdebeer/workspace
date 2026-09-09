@@ -4468,12 +4468,123 @@ continent's coastline into a 156km tile, and it would be invisible in a way
 count. z7 already carries no coast, for a reason recorded as a timing.
 
 **THE THING TO BUILD FIRST IS NOT A FIX, IT IS A WITNESS.** `serveOverview`
-returns a bare 503 on every failure — mirror refused instantly, query too big,
-budget exhausted and cap tripped are one string. Nobody can tell them apart from
-outside, which is why this took two sessions to get wrong twice. The 503 body
-and a header should name the mirror tried, the milliseconds spent on each, and
-which of the four ways it ended. That is a small change and it makes the next
-investigation one curl rather than an afternoon of guessing.
+returned a bare 503 on every failure — mirror refused instantly, query too big,
+budget exhausted and cap tripped were one string. Nobody could tell them apart
+from outside, which is why this took two sessions to get wrong twice. The 503
+now carries `why` (`upstream` or `cap`), `src` and, on a coarse rung, why the
+bake did not answer.
+
+### …so the wide rungs stopped asking, and are served from a bake
+
+z7, z8 and z9 come from Natural Earth now (`ne-wide.ts`, baked by
+`devtools/bake-ne-roads.mjs` into `static/ne-wide.b64`). Not because the ladder
+was too dense — it was not, see above — but because a chart backdrop cannot
+depend on a third party answering a 156km bounding-box query inside the fifteen
+and a half seconds CloudFront will wait, whatever mood the mirrors are in.
+
+**AND OSM WAS THE WRONG SOURCE FOR THOSE RUNGS ANYWAY.** A z8 tile rendering
+into 256 art pixels is 600m a pixel. At that scale the chart wants the trunk
+network that makes a landform legible, which is a generalised cartographic
+product — and Natural Earth is one. Same source and the same shape as
+`bake-coast.mjs`, for the same reason: the answer is needed at a scale nothing
+this game streams can reach.
+
+**COVERAGE WAS THE ONE THING THAT COULD HAVE KILLED IT**, so it was measured
+before anything was written (`devtools/ne-roads-coverage.mjs`), in km of road
+per million km²: W Europe 42,911 and the eastern US 41,593 against Southern
+Africa 17,115, Central Asia 16,068, the Andes 12,733, the Sahel 8,186, SE Asia
+7,584, Australia 5,726. **That spread is real road density — Australia genuinely
+has fewer roads than Belgium — and nowhere is empty.** A wide chart that worked
+in France and was blank in the Karoo would have been the same failure wearing a
+new cause and no error message.
+
+**SCALERANK IS THE LADDER, AND CARTOGRAPHERS ALREADY BUILT IT.** 46% of NE's
+features carry `type: "Unknown"`, so a ladder in its type vocabulary would be
+guesswork; every feature carries `scalerank`, which is its own judgement of the
+zoom at which a road starts to matter. z7 takes ≤ 4, z8 ≤ 6, z9 ≤ 8. **The asset
+holds everything to 8 and the HANDLER applies the cut**, so moving a rung is an
+edit and a deploy rather than a re-bake and three megabytes back through the
+cells tools — which is precisely how the old middle rungs ossified into one
+class set over sixteen, four and one times the area.
+
+**IT SPEAKS OSM, SO THE CLIENT DOES NOT KNOW.** `neWideTile` returns the same
+`RawWay[]` an Overpass answer does, with `highway` and `place` tags, so
+`trimOverview`, `loadOvTile`, the ribbons and the coarse tier of the route
+solver are all unchanged, and the swap is undone by one condition. If the asset
+is missing from a deploy the rungs fall through to Overpass exactly as before —
+degraded, not broken — and the 503 says the bake is why.
+
+Three things worth keeping about how it is built:
+
+- **BASE64 TEXT, NOT A BINARY ASSET.** `cell-sync push` sends a binary in ONE
+  signed request and that request 403s past about a megabyte (the cliff that
+  once made a grown `main.ts` undeployable), because two independently-decoded
+  base64 chunks only concatenate when the first is a multiple of four. Text is
+  chunked with `appendToFile` and decoded whole at the far end, so the trap
+  cannot fire. 2.26MB does not fit under the binary cap by any means: measured,
+  even a 1200m simplify — twice the coarsest rung's own tolerance — is 1.19MB.
+  It pushed in 6 parts.
+- **THE BAKE TOLERANCE IS THE FINEST RUNG'S OWN, EXACTLY.** z9's trim tolerance
+  is 153m, so the bake simplifies at 150m: nothing is lost at any rung it
+  serves, and nothing is carried that every rung would immediately discard.
+- **THE ENCODER ROUNDS THE WAY THE DECODER WILL.** A line's first point is
+  absolute Int32 and the rest are Int16 deltas at 1e-4 degrees. Taking each
+  delta against the TRUE previous point lets the error random-walk — about 55m
+  after a hundred points; taking it against the point AS THE DECODER WILL
+  RECONSTRUCT IT bounds it at one step. Measured worst error 7.9m, against a
+  305m chart pixel at the finest rung it serves.
+
+**AND A ROAD'S IDENTITY IS NOT UNDER `name`.** The first bake shipped with
+place names and not one road name, which looked like the truth about the dataset
+and was not: counted over all 56,600 features, `name` is 19% and mostly a bare
+number, `local` 4% and national (`A61`, `N634`), `label` 6% and European
+(`E31`). It matters because the coarse route tier scores a candidate with
+`NAME_BONUS` for keeping the road's identity — the rule that stops a drive
+turning off onto a spur that happens to line up — so **a layer swap would have
+silently disabled a routing heuristic while every tile looked fine.**
+`local || label || name` gives 29% of baked roads an identity; Paris z9 reads
+A10 / A6 / A4 / A5 / N104 / N4.
+
+**MEASURED, LIVE, BEFORE AND AFTER**, same three tiles at three densities:
+
+| | z8 before | z8 after | z9 before | z9 after |
+|---|---|---|---|---|
+| Cape Town (city+coast) | 502 @ 16.0s | **200 @ 3.8s**, 21 ways | 502 @ 15.9s | **200 @ 4.5s**, 11 ways |
+| Namib (near-empty) | 502 @ 16.0s | **200 @ 3.8s** | 502 @ 16.0s | **200 @ 0.20s** |
+| S. Atlantic (nothing) | 502 @ 15.9s | **200 @ 4.3s**, empty | 502 @ 16.0s | **200 @ 0.17s** |
+
+The seconds are the cold Lambda decoding the asset; warm is 0.2s and **a
+re-ask is `Hit from cloudfront, age 4`** — the tiles bank now, which the old
+rungs never once did (the same z9 tile asked at 0s, 70s and 140s was 502 every
+time). `devtools/ne-wide.test.mjs` holds it in pure node: 41,068 lines decode in
+87ms, a dense Paris z9 slices in 1.2ms, and the 5×5 ring the chart actually asks
+for carries roads at every rung at all eight places the game is driven.
+
+**THE TEST'S FIRST CUT ASSERTED THE WRONG THING, and the failure was the
+useful kind.** It required a road in the TILE under each spot and failed at the
+Serengeti and the Sundarbans — correctly reporting that those 78km boxes hold no
+major road, which is a fact about the Serengeti and not a defect in anything. A
+plain is allowed to be empty. The chart is not, and **the chart never shows one
+tile**: `ovLevelFor` picks the rung so the 5×5 ring covers the view. An
+assertion about one tile was an assertion about the world; the assertion about
+the ring is one about what a player sees.
+
+**WHAT IS LEFT.** z10 is still Overpass's, now asking motorways and trunks
+alone over a 39km box (it asked for primaries too, over the same set as z8's
+156km box). It still failed at Cape Town on the day this shipped, because the
+upstream was degraded for every layer including cold fine tiles. The unfinished
+piece is the **pyramid**: build a z10 tile by merging its four z11 children from
+the bank and re-simplifying, so a rung the player has already zoomed through
+costs an S3 read rather than a live query. It needs a bank READ path in the
+handler, which does not exist yet — `putTile` writes and nothing reads.
+
+**AND THE BANK IS NOT VERSIONED PER CONTENT.** `~/osm/ov1/` tiles are stored
+`immutable` for a week, so the handful banked between the first bake and the
+name fix will serve nameless coarse roads until they expire. Bumping to `ov2`
+would have invalidated the whole overview bank — including every z11/z12/z13
+tile that cost a real Overpass query — which is far too much for 29% of coarse
+roads gaining a label the chart does not draw. If a future change to the bake
+alters what a tile DRAWS, that trade goes the other way.
 
 ## The switch table
 

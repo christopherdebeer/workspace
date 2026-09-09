@@ -118,6 +118,31 @@ function highwayOf(type, scalerank) {
   }
 }
 
+/**
+ * A ROAD'S IDENTITY IS NOT UNDER `name`, AND THE FIRST BAKE SHIPPED WITHOUT ANY.
+ *
+ * The tile it produced carried place names and not one road name, which looked
+ * like the truth about Natural Earth and is not. Counted over all 56,600
+ * features: `name` 19% and mostly a bare number ("83", "840"), `label` 6% and
+ * European ("E31", "E4"), `local` 4% and national ("A61", "N634"), `routeraw`
+ * 7% and a concatenation of the other two.
+ *
+ * It matters more than a label on a chart. The coarse tier of the route solver
+ * scores a candidate with `NAME_BONUS` for keeping the road's identity — the
+ * rule that stops a drive turning off onto a spur that happens to line up — and
+ * with every coarse way anonymous that term is silently inert. A layer swap
+ * that quietly disables a routing heuristic is exactly the kind of regression
+ * this file exists to not ship.
+ *
+ * `local` first because a national designation is what a driver and a router
+ * both mean by a road's name; `label` next for the E-roads that cross borders;
+ * `name` last, since a bare number is better than nothing but worse than either.
+ */
+function roadName(p) {
+  const pick = (v) => (v === null || v === undefined ? '' : String(v).trim());
+  return pick(p.local) || pick(p.label) || pick(p.name) || '';
+}
+
 const R = 6371000;
 const rad = (d) => (d * Math.PI) / 180;
 
@@ -173,7 +198,7 @@ for (const f of roads.features) {
     rawPts += part.length;
     const s = simplify(part, BAKE_TOL_M);
     keptPts += s.length;
-    lines.push({ sr, hw, name: p.name || p.label || '', pts: s });
+    lines.push({ sr, hw, name: roadName(p), pts: s });
   }
 }
 console.log(`roads: ${lines.length} lines, ${rawPts} -> ${keptPts} points (${(100 - (keptPts / rawPts) * 100).toFixed(0)}% dropped), ${dropped} features skipped`);

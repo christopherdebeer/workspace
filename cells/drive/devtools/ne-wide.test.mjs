@@ -178,6 +178,24 @@ console.log('\nthe answer is shaped like an Overpass answer:');
     'every road carries an OSM highway class the client already draws');
   check(places.every((w) => ['city', 'town'].includes(w.tags.place) && w.tags.name),
     'every place carries an OSM place class and a name');
+  // A ROAD'S NAME IS NOT DECORATION HERE. The coarse tier of the route solver
+  // scores a candidate with NAME_BONUS for keeping the road's identity, and the
+  // first bake of this asset carried none — every coarse way anonymous, that
+  // term silently inert, and the tile looking perfectly fine. Natural Earth
+  // keeps identity under `local` and `label`, not `name`; a fifth of the set
+  // has one, which is what a generalised layer can honestly offer.
+  const named = set.lines.filter((l) => l.name).length;
+  check(named / set.lines.length > 0.1,
+    `${((named / set.lines.length) * 100).toFixed(0)}% of baked roads carry an identity for the router to weigh`);
+}
+{
+  // And it has to survive into a real tile, not just the decode.
+  const [x, y] = tileOf(48.86, 2.35, 9);
+  const ways = (neWideTile(9, x, y) ?? []).filter((w) => w.tags?.highway);
+  const withName = ways.filter((w) => w.tags.name);
+  console.log(`  Paris z9: ${withName.length} of ${ways.length} roads named, e.g. ` +
+    `${[...new Set(withName.map((w) => w.tags.name))].slice(0, 6).join(' / ') || '(none)'}`);
+  check(withName.length > 0, 'a dense tile carries road identities through to the client');
   check(ways.every((w) => w.id < 0), 'ids are negative — ways and relations already share the positive space');
   check(new Set(ways.map((w) => w.id)).size === ways.length, 'ids are unique within a tile');
 }
