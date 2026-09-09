@@ -22049,10 +22049,28 @@ let globeAsked = false, globeFailed = false;
  * wherever the shell is still drawn.
  */
 let globeSpinLat = 0, globeSpinLon = 0;
-/** How far the spin may climb. Past about 85 degrees the tangent-point cosine
- *  that scales a horizontal drag runs away, and a chart looking down on a pole
- *  has no meaningful east to drag along anyway. */
+/**
+ * HOW FAR NORTH OR SOUTH THE VIEW MAY BE TURNED — a latitude the view reaches,
+ * NOT an offset the spin may hold, and the difference is a whole hemisphere.
+ *
+ * The first cut clamped the stored offset symmetrically at ±85, which sounds
+ * like the same thing and is not: the offset is measured from the TRUCK, so a
+ * rig in the Karoo at −30° could reach +55° and no further. Cape Town could
+ * not be used to look at the Arctic, which is most of the point of being able
+ * to turn the planet at all. The bound belongs on `gLat + spin`.
+ *
+ * 85 rather than 90 because the tangent-point cosine that scales a horizontal
+ * drag goes to zero at the pole, and a chart looking straight down on one has
+ * no meaningful east to drag along.
+ */
 const GLOBE_SPIN_LAT_MAX = 85;
+/** The spin's own bounds at this moment, which depend on where the truck is.
+ *  Both callers — the drag and the probe — go through here so they cannot
+ *  disagree about which hemisphere is reachable. */
+function globeSpinLatRange(): [number, number] {
+  const [tLat] = localToLatLon(viewX(), viewZ());
+  return [-GLOBE_SPIN_LAT_MAX - tLat, GLOBE_SPIN_LAT_MAX - tLat];
+}
 /** Fetched once, on the first wide chart — not at boot. 317KB is not a cost
  *  anyone driving should pay, and the ez-tree lesson in CLAUDE.md is what
  *  happens when a wide-view asset lands in the boot path. */
@@ -29956,7 +29974,7 @@ let texMeanCache: Record<string, number> | null = null;
  * what `__globe().applied` is there to show.
  */
 (window as unknown as { __globespin?: object }).__globespin = (lat?: number, lon?: number): object => {
-  if (lat !== undefined) globeSpinLat = clamp(lat, -GLOBE_SPIN_LAT_MAX, GLOBE_SPIN_LAT_MAX);
+  if (lat !== undefined) { const [lo, hi] = globeSpinLatRange(); globeSpinLat = clamp(lat, lo, hi); }
   if (lon !== undefined) globeSpinLon = lon;
   return { lat: +globeSpinLat.toFixed(3), lon: +globeSpinLon.toFixed(3), free: +globeFree().toFixed(3) };
 };
@@ -31723,13 +31741,14 @@ canvas.addEventListener('pointermove', (e) => {
       const [tLat] = localToLatLon(viewX(), viewZ());
       const cs = Math.max(0.25, Math.cos(((tLat + globeSpinLat) * Math.PI) / 180));
       globeSpinLon += east / cs;
+      const [loLat, hiLat] = globeSpinLatRange();
       // The world is x = east, z = SOUTH, so a target moving south is latitude
       // going down. Taking these two signs from the flat pan's own lines rather
       // than from first principles is deliberate: that rotation was once a
       // mirror (determinant −1 at every angle, horizontal right and vertical
       // backwards), the failure is recorded in the fallback below, and a spin
       // derived independently could reintroduce it on one axis only.
-      globeSpinLat = clamp(globeSpinLat - south, -GLOBE_SPIN_LAT_MAX, GLOBE_SPIN_LAT_MAX);
+      globeSpinLat = clamp(globeSpinLat - south, loLat, hiLat);
       panPtrs.set(e.pointerId, cur);
       return;
     }

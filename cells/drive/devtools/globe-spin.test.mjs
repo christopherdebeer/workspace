@@ -116,6 +116,24 @@ g = await globe();
 check(Math.abs(g.applied[0] - 20) < 0.01 && Math.abs(g.applied[1] + 60) < 0.01,
   `a spin of 20,-60 is applied whole (${g.applied})`);
 
+// THE WHOLE PLANET HAS TO BE REACHABLE FROM WHERE YOU ARE PARKED. The spin is
+// stored as an offset from the truck, so a bound written on the offset bounds
+// the wrong thing: at −30° a symmetric ±85 reaches +55° and stops, and Cape
+// Town cannot be used to look at the Arctic. The bound is on the LATITUDE the
+// view reaches, which is what this asks.
+{
+  await page.evaluate(() => window.__globespin(400, 0));
+  const far = await spin();
+  const at = (await globe()).at[0];
+  const reach = at + far.lat;
+  console.log(`  truck at ${at}°, spin clamped to ${far.lat}° — the view reaches ${reach.toFixed(1)}°`);
+  check(reach > 84 && reach < 86, `the north pole is reachable from ${at}° (view reaches ${reach.toFixed(1)}°)`);
+  await page.evaluate(() => window.__globespin(-400, 0));
+  const s2 = await spin();
+  const reach2 = at + s2.lat;
+  check(reach2 < -84 && reach2 > -86, `and the south pole too (${reach2.toFixed(1)}°)`);
+}
+
 console.log('\n=== the tap lands on the sphere ===');
 await page.evaluate(() => window.__globespin(0, 0));
 await page.waitForTimeout(600);

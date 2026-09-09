@@ -4873,6 +4873,13 @@ the top-camera branch's `shellOn` is now literally `globeFree() === 0`, and
   OFF. The step is invisible where it fires, and not by luck: the frame it
   fires on is the one where the coarse ring covers the frame corner to corner,
   so the planet snapping home is behind the shell just drawn over it.
+- **AND THE LATITUDE BOUND IS ON WHERE THE VIEW REACHES, NOT ON THE SPIN.**
+  The spin is an offset from the TRUCK, so a symmetric ±85 written on the
+  offset bounds the wrong thing: a rig in the Karoo at −30° could turn the
+  view to +55° and no further, and Cape Town could not be used to look at the
+  Arctic — which is most of the point of being able to turn the planet. The
+  clamp is `gLat + spin` within ±85 (85 and not 90 because the tangent-point
+  cosine that scales a horizontal drag goes to zero at a pole).
 - **THE PIN, BECAUSE A SPUN GLOBE IS A GLOBE YOU CAN GET LOST ON.** The
   truck's own lat/lon, a child of the globe group so it rides round the limb
   and is occluded by the planet's depth, sized in art pixels (4.5) rather than
@@ -4920,6 +4927,15 @@ not move at all in either. At z8 the same drag pans 180m and turns the planet
 0.000°, a spin banked at 40/80 decays to 0.02/0.05 in three seconds, and the
 pin is put away. The centre of an unspun planet taps to the truck's own point;
 the corner taps to nothing.
+
+**THE PIN'S BAND IS A GEOMETRY.** The sphere's radius on screen is R/mpp — 280
+art pixels at z40,000 against a 148×320 frame — so at that zoom the disc is far
+wider than the glass and a spin past about fifteen degrees carries the truck's
+point off it. At the ceiling (z110,000) the radius is 102 pixels and the whole
+disc fits, so the pin is on screen wherever it is on the near face. That is
+where a shot of it is worth taking (`SHOT=1`, and `SPIN=`/`SHOT_Z=` for the
+rest), and it is why there is no rim chip: the zoom that would need one is the
+zoom you would have left anyway.
 
 **Still open:** `NE_MIN_Z` could drop to serve trunk roads and capitals on the
 globe — the asset already holds them — and the globe has no place names of its
