@@ -21660,6 +21660,12 @@ const farMeshes = new Map<string, THREE.Mesh>();
  *  tone, the player sees a join. */
 const farCoverHit = new Map<string, number>();
 const farTint = new Map<string, [number, number, number]>();
+/** Which wide-cover LEVEL (coverWideZ, 0 for none) each shell tile was baked
+ *  under. A tile that read a full raster at one level reports hit 1.0 for ever,
+ *  and `hit` alone cannot tell it from a tile baked under the next level — so
+ *  two neighbours can both be "fully covered" from rasters four times apart in
+ *  resolution and disagree about the colour of the same country. */
+const farBakeZ = new Map<string, number>();
 /**
  * ── THE COARSE GROUND, KEPT AS DATA ──
  *
@@ -21719,7 +21725,7 @@ function coverDirtiedFar(modeMoved: boolean, x: number, z: number, w: number, h:
     }
     farGroup.remove(mesh); mesh.geometry.dispose();
     farMeshes.delete(key); farTiles.delete(key);
-    farCoverHit.delete(key); farTint.delete(key); farRasters.delete(key);
+    farCoverHit.delete(key); farTint.delete(key); farRasters.delete(key); farBakeZ.delete(key);
   }
 }
 const farGroup = new THREE.Group();
@@ -21817,6 +21823,7 @@ async function loadFarTile(x: number, y: number): Promise<void> {
   // WHAT THIS TILE KNEW WHEN IT WAS BAKED, and what it came out looking like.
   farCoverHit.set(key, hit / Math.max(1, pos.count));
   farTint.set(key, [tr / pos.count, tg / pos.count, tb / pos.count]);
+  farBakeZ.set(key, coverWideZ);
   geo.setAttribute('color', new THREE.BufferAttribute(colors, 3));
   geo.computeVertexNormals();
   const mesh = new THREE.Mesh(geo, NRM_SCALE > 0 ? farMatFor(data, w, key) : farMat);
@@ -24875,7 +24882,7 @@ async function worldHop(lat: number, lon: number, h = 0, opts: { mission?: strin
     // are SHARED and never touched.
     dropRetiredFar(); dropRetiredOv();
     for (const m of farMeshes.values()) { farGroup.remove(m); m.geometry.dispose(); }
-    farMeshes.clear(); farTiles.clear(); farCoverHit.clear(); farTint.clear(); farRasters.clear();
+    farMeshes.clear(); farTiles.clear(); farCoverHit.clear(); farTint.clear(); farRasters.clear(); farBakeZ.clear();
     for (const m of ovMeshes.values()) { ovGroup.remove(m); m.geometry.dispose(); }
     ovMeshes.clear(); ovTiles.clear(); ovPlaces.clear(); ovWays.clear(); ovWayV++;
     for (const child of [...worldGroup.children]) {
@@ -29571,6 +29578,13 @@ let texMeanCache: Record<string, number> | null = null;
       }
       return { n: v.length, spread: +spread.toFixed(3) };
     })(),
+    // PER TILE, because the aggregate could not see the fault it was built for:
+    // every tile at hit 1.0 and the spread wide is two cover LEVELS on one
+    // frame, and only the bake level says which tile came from which.
+    perTile: [...farTint.entries()].map(([key, t]) => ({ key,
+      hit: +(farCoverHit.get(key) ?? 0).toFixed(2), coverZ: farBakeZ.get(key) ?? null,
+      tint: t.map((c) => Math.round(c * 255)) })),
+    coverZ: coverWideZ,
     // THE SEAM, as a number: the fine ring's own height beside the shell's,
     // sampled just outside where the fine world gives out. A cliff here is
     // the curve compensation failing, and it fails by kilometres driven.
