@@ -4297,6 +4297,40 @@ one synchronous block, where no frame can pass — which is how the ramp above
 was proved, and is the general trick for anything with a time constant shorter
 than a harness frame.
 
+### The goal's banner, and a summit that has to hold its verdict
+
+Two from the seat, both about a thing appearing when it should not.
+
+- **THE BANNER COULD BE CANCELLED AND NOT PUT AWAY.** `.ov .x` ships
+  `display: none` and every card opts IN — the task card does it through
+  `dismissable` — so the route card's X was built, wired to the collapse and
+  invisible, leaving CANCEL ROUTE as the only way out of a plate you might
+  simply want off the glass. The X is turned on, and the two actions now carry
+  their right weights: the X folds the banner to its chip with the route
+  untouched, CANCEL ROUTE is the only thing that drops the goal.
+- **AND IT SAT IN THE MIDDLE OF THE ROAD.** Full width at the message rail,
+  growing DOWN from 33% of the screen with a full-width button under it —
+  measured 282-376px on an 844px phone. It is a compact centred plate now
+  (max-content, 195px measured) that hangs UPWARD off that same rail, so it
+  occupies 188-282px — the 22-33% band, clear of the road — and drops below
+  the task card instead when that owns the line. The height is measured after
+  the plate is shown, because a plate has no height until it is drawn.
+- **SELECTING A GOAL OPENS IT.** The banner is the receipt for a decision:
+  what, how far by road, and how much of the last of it is on foot. It is the
+  chip from then on.
+
+- **A SUMMIT'S LABEL NOW HAS TO EARN ITS PLACE.** The appear gate was 350ms,
+  which is under the noise — a peak coming out from behind a ridge at driving
+  speed, or one the depth map forgives for a frame, put its name up and took
+  it away again. `PEAK_ON_MS` is 2500 against `PEAK_OFF_MS` 900, deliberately
+  asymmetric: a label that has just left was probably real and is cheap to
+  restore, while one that flickers on is a claim the world has not settled
+  enough to make. Any flip restarts the clock, so a wavering summit never
+  latches at all. **And a peak arrives OFF** — the first sighting used to seed
+  `on` from its own first verdict, so a summit entering range on a lucky frame
+  was drawn instantly and the gate applied to everything except the case it
+  was written for.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where

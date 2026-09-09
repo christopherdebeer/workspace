@@ -199,9 +199,18 @@ export function createOverlays(
     padding: 4px 9px 3px; font: inherit; font-family: inherit; font-size: 10px;
     letter-spacing: 1px; display: none; }
   #ov-route .ico { font-family: '${ICON_FONT}'; font-weight: 900; margin-right: 0.5em; }
-  #ov-routecard { top: calc(env(safe-area-inset-top, 0px) + var(--msg-y, 88px)); left: 10px; right: 10px;
-    padding: 8px 12px 9px; border: 1px solid ${C.good}; background: rgba(8,20,23,0.86); display: none; }
-  #ov-routecard .cancel { margin: 8px auto 0; padding: 5px 20px 4px; cursor: pointer; display: block;
+  /* THE GOAL'S BANNER SITS IN THE TOP THIRD, on the message rail's own line —
+     a compact centred plate, not a full-width slab that grows down into the
+     middle of the road. With the rail free it hangs UPWARD off that line, so
+     it occupies roughly the 22-33% band and leaves the road clear; with the
+     task card already on the rail it drops below it instead. Either way the
+     offset is --rcard-dy, set by the renderer, because only it knows what
+     else is up and how tall the two plates measure. */
+  #ov-routecard { top: calc(env(safe-area-inset-top, 0px) + var(--msg-y, 88px) + var(--rcard-dy, 0px));
+    left: 50%; transform: translateX(-50%); width: max-content;
+    max-width: min(92vw, 400px); text-align: center;
+    padding: 6px 12px 8px; border: 1px solid ${C.good}; background: rgba(8,20,23,0.86); display: none; }
+  #ov-routecard .cancel { margin: 7px auto 0; padding: 4px 18px 3px; cursor: pointer; display: block;
     color: ${C.bad}; border: 1px solid ${C.bad}; background-color: rgba(220,90,80,0.08);
     font: inherit; font-family: inherit; font-size: 11px; font-weight: 700;
     letter-spacing: 2px; width: 100%; }
@@ -408,7 +417,8 @@ export function createOverlays(
     },
     route(r) {
       const taskUp = chip.style.display === 'block';
-      const key = r ? `${r.name}|${r.body}|${r.minimized}|${r.chip}|${taskUp}` : '';
+      const cardUp = m.root.style.display === 'block';
+      const key = r ? `${r.name}|${r.body}|${r.minimized}|${r.chip}|${taskUp}|${cardUp}` : '';
       if (key === rKey) return;
       rKey = key;
       if (!r) { rc.root.style.display = 'none'; rchip.style.display = 'none'; return; }
@@ -423,7 +433,18 @@ export function createOverlays(
       rchip.style.display = 'none';
       rc.head.textContent = r.name;
       rc.body.textContent = r.body;
+      // THE X HAS TO BE TURNED ON. `.ov .x` ships hidden and each card opts in
+      // — the task card does it through `dismissable` — so this one was built,
+      // wired and invisible: the banner could be cancelled and not put away,
+      // which is the opposite of the two actions' weights.
+      rx.style.display = 'block';
+      // Measured after it is shown, because a plate has no height until it is
+      // drawn: hang it off the rail (its own height up) when the rail is free,
+      // and below the task card when that owns the line.
+      rc.root.style.setProperty('--rcard-dy', '0px');
       rc.root.style.display = 'block';
+      rc.root.style.setProperty('--rcard-dy',
+        cardUp ? `${m.root.offsetHeight + 8}px` : `${-rc.root.offsetHeight}px`);
     },
     toast(tc) {
       const key = tc ? `${tc.head}|${tc.body}` : '';

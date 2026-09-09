@@ -12226,6 +12226,11 @@ function setGoal(name: string, x: number, z: number): void {
   const [la, lo] = localToLatLon(x, z);
   goal = { name, lat: la, lon: lo, x, z };
   goalAt = `${origin.lat.toFixed(4)},${origin.lon.toFixed(4)}`;
+  // THE BANNER IS THE RECEIPT. Choosing a destination is a decision worth one
+  // sentence back — what it is, how far by road, and how much of the last of
+  // it is on foot — so the card opens on select and the X puts it away. It is
+  // the chip from then on, and only CANCEL ROUTE drops the goal itself.
+  routeMin = false;
 }
 /**
  * How square a join may be and still be a candidate at all: about 83 degrees,
@@ -33316,11 +33321,29 @@ function updatePois(): void {
 const PEAK_SHOW = 3;
 /** Why each summit did or did not reach the glass this frame — see __peaks. */
 let peakGates = { cands: 0, near: 0, sunk: 0, belowEye: 0, kept: 0, behind: 0, frame: 0, blocked: 0, drawn: 0 };
-/** A summit must HOLD its verdict before the glass believes it — 350ms to
- *  appear, 900ms to go — and its screen point is smoothed, so a bobbing
- *  camera and a 120ms depth cadence cannot make a name blink or shiver.
- *  Coming back is cheaper than arriving: a label that just left was probably
- *  real. */
+/**
+ * A summit must HOLD its verdict before the glass believes it, and its screen
+ * point is smoothed, so a bobbing camera and a 120ms depth cadence cannot make
+ * a name blink or shiver.
+ *
+ * ── ARRIVING IS EXPENSIVE, LEAVING IS CHEAP ──
+ *
+ * The appear gate was 350ms, which is under the noise: a peak coming out from
+ * behind a ridge at driving speed, or one the depth map forgives for a frame
+ * or two, put its name on the glass and took it away again — reported from
+ * the seat as labels popping in and out. Two and a half seconds of a verdict
+ * that does not waver is the bar now. It is deliberately far longer than the
+ * 900ms it takes to lose one: a label that has just left was probably real
+ * and is cheap to restore, while a label that flickers on is a claim the
+ * world has not settled enough to make. A summit whose raw verdict wavers at
+ * all never latches, because every flip restarts the clock.
+ *
+ * AND A PEAK ARRIVES OFF. The first sighting used to seed `on` from its own
+ * first verdict, so a summit entering range on a lucky frame was drawn
+ * instantly and the gate applied to everything except the case it was written
+ * for. Every peak starts hidden and earns its label.
+ */
+const PEAK_ON_MS = 2500, PEAK_OFF_MS = 900;
 const peakSeen = new Map<string, { on: boolean; raw: boolean; rawAt: number; sx: number; sy: number }>();
 /** HUD pixels the summit triangle floats above the apex it points at. Four is
  *  the mark's own height, so this clears it completely without letting it
@@ -33448,9 +33471,9 @@ function updatePeaks(vx: number, vz: number): void {
       || (lumaPrimed && !depthVisible(e.p.x, e.p.ele - baseElev - curveDrop(e.p.x - vx, e.p.z - vz) + 6, e.p.z));
     const nowMs = performance.now();
     let st = peakSeen.get(e.p.name);
-    if (!st) { st = { on: !hidden, raw: !hidden, rawAt: nowMs, sx: e.sx, sy: e.sy }; peakSeen.set(e.p.name, st); }
+    if (!st) { st = { on: false, raw: !hidden, rawAt: nowMs, sx: e.sx, sy: e.sy }; peakSeen.set(e.p.name, st); }
     if (st.raw !== !hidden) { st.raw = !hidden; st.rawAt = nowMs; }
-    if (st.on !== st.raw && nowMs - st.rawAt > (st.raw ? 350 : 900)) st.on = st.raw;
+    if (st.on !== st.raw && nowMs - st.rawAt > (st.raw ? PEAK_ON_MS : PEAK_OFF_MS)) st.on = st.raw;
     st.sx += (e.sx - st.sx) * 0.25; st.sy += (e.sy - st.sy) * 0.25;
     if (!st.on) { peakGates.blocked++; continue; }
     drawn++;
