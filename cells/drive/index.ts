@@ -599,7 +599,17 @@ const OV_RE = /^\/~\/osm\/ov1\/(\d{1,2})\/(\d{1,7})\/(\d{1,7})$/;
 // z7 is a 313km box carrying motorways and trunks alone — the rung the chart
 // reaches past the z8 ring once its sight line was doubled to 600km. Given
 // the most headroom of all, for the same reason z8 has more than z10.
-const OV_CAP: Record<number, number> = { 7: 12000, 8: 8000, 9: 6000, 10: 3000, 11: 4500, 12: 6000, 13: 6000 };
+//
+// THE CAPS USED TO RUN THE WRONG WAY AGAINST THEIR OWN REASON. z8 was given
+// 8000 and z10 3000 on the stated grounds of "the same narrow class set over 4x
+// and 16x the ground" — but the class set at z8 was not narrower than z10's, it
+// was IDENTICAL, so sixteen times the area was given 2.7 times the headroom and
+// the tripwire fired on the rung it was least likely to be wrong about. With
+// z7-z9 served from the bake and z10 narrowed to motorways and trunks, each
+// rung's cap is now sized to the ask it actually makes: the coarse three are
+// fall-through values only, and z10's headroom rises because its query no
+// longer carries the class that was filling it.
+const OV_CAP: Record<number, number> = { 7: 12000, 8: 8000, 9: 6000, 10: 6000, 11: 4500, 12: 6000, 13: 6000 };
 // These tiles are rare and cached forever, so they may spend upstream time a
 // fine tile cannot. Measured: a z10 coastal tile needs 11-18s of Overpass, and
 // the densest z12 boxes on the line want more — the fine budget's 5s-per-mirror
@@ -627,7 +637,25 @@ const OV_UPSTREAM_MS = 44000;
 // and is now allowed to finish. The Overpass-side `timeout:25` gives up just
 // before we do, so a box that is truly too big returns a clean error rather
 // than a blind abort.
-const OV_ATTEMPT_MS = 26000;
+//
+// AND AT 26000 THE THIRD MIRROR WAS UNREACHABLE BY CONSTRUCTION. `askOverpass`
+// gives mirror one `min(attempt, left)` = 26s; on failure `left` is 18s, so
+// mirror two gets 18s; then `left` is under the 1500ms floor and the loop
+// breaks. Three mirrors were configured and two were ever tried — which matters
+// far more than it looks, because mirror health is not uniform: measured on
+// 2026-09-09, a ONE-BLOCK query returning 23 ways took 39.6s on kumi and 36.4s
+// on private.coffee against 1.6s on overpass-api.de. Two of the three were
+// saturated, and a rotation with no memory of health starts two thirds of tiles
+// on one of them.
+//
+// 18000 makes the sequence 18 + 18 + 8 and reaches all three. It is chosen
+// against the measurement that set the old number rather than away from it: the
+// case this window exists to protect is "a dense z12 tile near a metropolis
+// needs 11-18s of Overpass", and 18s still covers all of it. What it gives up
+// is the 18-26s tail on the FIRST mirror, in exchange for ever trying the
+// third — and with z7-z9 now served from the bake, the boxes still coming
+// through here are 39km and smaller.
+const OV_ATTEMPT_MS = 18000;
 function overviewQuery(z: number, x: number, y: number): string {
   const b = tileBounds(z, x, y);
   const bbox = `${b.latS},${b.lonW},${b.latN},${b.lonE}`;
@@ -646,15 +674,41 @@ function overviewQuery(z: number, x: number, y: number): string {
   // and finer, where the trim's tolerance (611m at z7) could draw them
   // anyway. A dense European z7 tile may still take several stream passes to
   // land; once it does the bank serves it for ever.
+  //
+  // ── AND z7-z9 NO LONGER COME THROUGH HERE AT ALL ──
+  //
+  // They are served from the Natural Earth bake (`ne-wide.ts`), so this
+  // function's real range is z10 to z13 and the ladder below is written for
+  // that. The z7 branch is kept because `serveOverview` falls through to
+  // Overpass if the baked asset is missing from a deploy, and a fall-through
+  // that asks a query nobody has thought about is not a fallback.
+  //
+  // THE MIDDLE OF THE LADDER WAS NEVER A LADDER. z8, z9 and z10 all asked for
+  // `motorway|trunk|primary` over boxes of 156, 78 and 39km — sixteen, four and
+  // one times the area for an identical ask. Only z7 was ever narrowed, and it
+  // was narrowed because somebody measured it. z10 is the rung that remains
+  // here and it now drops to motorways and trunks: at 39km across and 150m a
+  // chart pixel, a primary through a town is a scribble, and primaries are also
+  // where the count explodes, because OSM splits them at every junction and
+  // name change.
   const hw = z <= 7 ? 'motorway'
-    : z <= 10 ? 'motorway|trunk|primary'
+    : z <= 9 ? 'motorway|trunk'
+    : z === 10 ? 'motorway|trunk'
     : z === 11 ? 'motorway|trunk|primary|secondary'
     : 'motorway|trunk|primary|secondary|tertiary';
   const rail = z >= 11 ? `way["railway"="rail"](${bbox});` : '';
   const canal = z >= 11 ? '|canal' : '';
-  const river = z >= 8 ? `way["waterway"~"^(river${canal})$"](${bbox});` : '';
-  const coast = z >= 8 ? `way["natural"="coastline"](${bbox});` : '';
-  const peak = z >= 8 ? `node["natural"="peak"]["name"](${bbox});` : '';
+  const river = z >= 10 ? `way["waterway"~"^(river${canal})$"](${bbox});` : '';
+  // THE COASTLINE IS OFF BELOW z11, AND `out geom` IS WHY. It returns a matched
+  // way's WHOLE geometry, not the part inside the box, and a coastline way is
+  // not bounded by anything: one of them clipping the corner of a 39km tile can
+  // carry a continent's worth of vertices into it, invisibly, because the way
+  // COUNT stays at one. z7 already carried no coast for a measured reason ("the
+  // same box's coastline on its own did not return in 100s"); the reason does
+  // not stop applying at z8. The shell's own land cover paints the sea at every
+  // one of these scales, which is what made z7 safe to narrow.
+  const coast = z >= 11 ? `way["natural"="coastline"](${bbox});` : '';
+  const peak = z >= 10 ? `node["natural"="peak"]["name"](${bbox});` : '';
   const place = z <= 7 ? 'city' : z <= 10 ? 'city|town' : z === 11 ? 'city|town|village' : 'city|town|village|hamlet';
   return `[out:json][timeout:25];(
       way["highway"~"^(${hw})$"](${bbox});
@@ -719,6 +773,43 @@ async function serveOverview(path: string, m: RegExpMatchArray) {
   if (z < 7 || z > 13 || x >= 2 ** z || y >= 2 ** z) {
     return respond(400, 'application/json', JSON.stringify({ error: 'overview tile out of range' }));
   }
+  // ── THE WIDE RUNGS DO NOT ASK ANYONE ───────────────────────────────
+  //
+  // z7, z8 and z9 come from the Natural Earth bake in `ne-wide.ts`. They used
+  // to ask Overpass and could not be got: measured against this cell, a pure
+  // ocean tile — a box with nothing in it — 502'd at the edge exactly like a
+  // Cape Town city tile, and the same z9 tile asked at 0s, 70s and 140s came
+  // back 502 every time, so it was not filling in the background either.
+  //
+  // A tile from here is arithmetic over an already-loaded array: no upstream,
+  // no budget, no mirror, and the same answer every time. It still banks, so
+  // the edge serves it from S3 ever after and the Lambda is not asked twice.
+  //
+  // The fall-through is deliberate and is the whole safety of the swap: if the
+  // asset is missing from a deploy, `neWideTile` returns null and these rungs
+  // go back to Overpass exactly as before, degraded rather than broken.
+  const baked = z <= NE_MAX_Z ? neWideTile(z, x, y) : null;
+  if (baked) {
+    const payload = JSON.stringify({ v: 1, z, x, y, ways: trimOverview(baked, z) });
+    const gz = gzipSync(Buffer.from(payload, 'utf8'), { level: 9 });
+    try { await putTile(path, gz); } catch { /* best effort */ }
+    return {
+      statusCode: 200,
+      headers: {
+        'content-type': 'application/json; charset=utf-8',
+        'content-encoding': 'gzip',
+        'cache-control': 'public, max-age=604800, immutable',
+        'access-control-allow-origin': '*',
+        // Which source answered, so "is the bake live?" is a curl and not a
+        // deploy archaeology exercise. The old failures were one bare 503 for
+        // four different causes and that is most of why this took two sessions
+        // to diagnose wrongly twice.
+        'x-ov-src': 'ne',
+      },
+      body: gz.toString('base64'),
+      isBase64Encoded: true,
+    };
+  }
   let elements: RawWay[];
   try {
     // …AND THE ROTATION CARRIES A CLOCK, exactly as serveTile's does. Keyed to
@@ -729,15 +820,25 @@ async function serveOverview(path: string, m: RegExpMatchArray) {
     const rot = (x + y + z + Math.floor(Date.now() / 60000)) % OVERPASS_MIRRORS.length;
     elements = await askOverpass(overviewQuery(z, x, y), OV_UPSTREAM_MS, OV_ATTEMPT_MS, rot);
   } catch (err) {
-    return respond(503, 'application/json', JSON.stringify({ error: String((err as Error).message ?? err) }), {
-      'retry-after': '5', 'cache-control': 'no-store',
-    });
+    // THE 503 SAYS WHICH FAILURE THIS IS. It used to be one bare string for
+    // four different endings — mirror refused instantly, query timed out,
+    // budget exhausted, cap tripped — and nobody outside could tell them apart,
+    // which is most of why the wide chart was diagnosed wrongly twice. `why`
+    // and `src` are the difference between a curl and an afternoon.
+    return respond(503, 'application/json', JSON.stringify({
+      error: String((err as Error).message ?? err),
+      why: 'upstream', src: 'overpass', z,
+      // If this is a coarse rung it should never have got here: say so, because
+      // a silent fall-through to the path that does not work is the failure
+      // mode the bake was added to end.
+      ...(z <= NE_MAX_Z ? { bakeMissing: neWideError() ?? 'asset absent' } : {}),
+    }), { 'retry-after': '5', 'cache-control': 'no-store', 'x-ov-src': 'overpass' });
   }
   // The tripwire: a response AT the cap is a truncation, not an answer.
   if (elements.length >= (OV_CAP[z] ?? 6000)) {
-    return respond(503, 'application/json', JSON.stringify({ error: 'tile too dense for the overview cap' }), {
-      'retry-after': '60', 'cache-control': 'no-store',
-    });
+    return respond(503, 'application/json', JSON.stringify({
+      error: 'tile too dense for the overview cap', why: 'cap', src: 'overpass', z, cap: OV_CAP[z] ?? 6000,
+    }), { 'retry-after': '60', 'cache-control': 'no-store', 'x-ov-src': 'overpass' });
   }
   const payload = JSON.stringify({ v: 1, z, x, y, ways: trimOverview(elements, z) });
   const gz = gzipSync(Buffer.from(payload, 'utf8'), { level: 9 });
@@ -780,6 +881,7 @@ async function serveOverview(path: string, m: RegExpMatchArray) {
  */
 import { CAMPAIGN } from './campaigns/dakar';
 import { assembleRelationRings } from './osm-rings';
+import { neWideTile, neWideError, NE_MAX_Z } from './ne-wide';
 
 const CAMPAIGN_V = CAMPAIGN.v;
 const CAMPAIGN_RE = /^\/~\/campaign\/(\d{1,4})$/;
