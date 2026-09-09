@@ -311,6 +311,18 @@ export async function openDrive(opts = {}) {
         res.end(out.body);
       }).catch(() => { res.writeHead(503); res.end('{}'); });
     }
+    // THE PLANET, SERVED FROM THE FILE THE DEPLOY WOULD SERVE. The globe's
+    // base is a static asset, not a tile route, and the harness 404s anything
+    // it does not know — which would leave every wide-chart frame here with a
+    // textureless globe and no error, the exact shape of failure `loadEcoTile`
+    // needed this list for. Read off disk rather than proxied: it is in the
+    // repo, and a test should not need the deploy to be current.
+    else if (p === '/globe-base.png') {
+      try {
+        res.writeHead(200, { 'content-type': 'image/png' });
+        res.end(readFileSync(join(CELL, 'static', 'globe-base.png')));
+      } catch { res.writeHead(404); res.end('{}'); }
+    }
     else { res.writeHead(404); res.end('{}'); }
   });
   await new Promise((r) => server.listen(port, r));

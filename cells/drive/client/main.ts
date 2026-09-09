@@ -30,6 +30,7 @@ import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt
 import { pickInfrastructureRecipe, planSupportStations, type StructureRecipe } from './infrastructure';
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
 import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
+import { GLOBE_R, globeGeometry, globeMaterial, globeOrientation, globeFar, latLonToUnit, subsolar } from './globe';
 import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSample, type HydroSystem, type OceanCoverage } from './hydro';
 import { cleanEquipment, equipmentFor, type RigEquipmentId } from './rig-equipment';
 import { createRigModel, OVERLAND, RIG_MODELS, RIG_LOADOUTS, type RigModelId, type RigLoadoutId } from './rig-model';
@@ -259,10 +260,28 @@ const ZOOM_MIN = 0.125;
  * not typed in, so raising the reach raises the ceiling with it and the two
  * cannot come apart again.
  */
-const ZOOM_MAX = SIGHT_MAX / (CAM.base
+const ZOOM_PLANE_MAX = SIGHT_MAX / (CAM.base
   * Math.tan(((CAM.fov / 2) * Math.PI) / 180)
   * Math.max(1, 1 / Math.cos(((90 - CAM.tilt) * Math.PI) / 180))
   * 1.35);
+/**
+ * …AND THE PLANET'S CEILING IS ABOVE THE PLANE'S, WHICH RETIRES THE ARGUMENT
+ * THAT DERIVED IT.
+ *
+ * `ZOOM_PLANE_MAX` exists because a ceiling past the streamed disc bought
+ * nothing: "identical readings at zoom 458, 800 and 1600 — the clamp had
+ * saturated and the remaining 3.5x of ceiling bought nothing but empty frame".
+ * That premise held for as long as the frame past the disc was EMPTY. It is
+ * not any more: past it there is a planet, and more zoom buys more of it.
+ *
+ * The number is an altitude rather than a zoom. Earth's angular radius from
+ * height h is asin(R/(R+h)), and the chart's half-fov is 27.5°, so the whole
+ * disc first fits at h = 1.166R ≈ 7,430km. 20,000km is that with sky around
+ * it — the planet as an object you are looking at rather than one you are
+ * pressed against.
+ */
+const GLOBE_ALT_MAX = 20000000;
+const ZOOM_MAX = Math.max(ZOOM_PLANE_MAX, GLOBE_ALT_MAX / CAM.base);
 const CAR_R = 2.4;            // collision circle — a real car's half-diagonal plus a whisker
 
 // ── geo helpers (local metres around the spawn; x=east, z=south) ───
@@ -3123,6 +3142,9 @@ const skyMat = new THREE.ShaderMaterial({
   uniforms: {
     sunDir: { value: SUN_DIR },
     uZenith: { value: new THREE.Vector3() },
+    /** How far the chart has left the atmosphere behind: see the mix at the
+     *  end of the fragment, and `stepGlobe`'s caller for the ramp. */
+    uSpace: { value: 0 },
     uHorizon: { value: new THREE.Vector3() },
     uSunDisc: { value: new THREE.Vector3() },
     // ── REAL ANGULAR SIZES, FROM THE REAL EPHEMERIS ──
@@ -3161,7 +3183,7 @@ const skyMat = new THREE.ShaderMaterial({
   fragmentShader: `
     uniform vec3 sunDir; uniform vec3 uZenith; uniform vec3 uHorizon;
     uniform vec3 uSunDisc; uniform vec3 uBelow; uniform vec3 uHazeB;
-    uniform float uCloud; uniform float uTime;
+    uniform float uCloud; uniform float uTime; uniform float uSpace;
     uniform float uSunCos1; uniform float uSunCos0;
     uniform float uMoonCos1; uniform float uMoonCos0; uniform float uMoonSin;
     uniform float uLow; uniform vec3 uDusk; uniform float uNight; uniform vec3 moonDir;
@@ -3296,6 +3318,11 @@ const skyMat = new THREE.ShaderMaterial({
       // tile edges; hunted with the pick grid, which found dome-only rays
       // under every block.
       col = mix(mix(uBelow, uHazeB, 0.8), col, smoothstep(-0.06, 0.02, d.y));
+      // ABOVE THE PLANET THERE IS NO SKY. The dome is a 20km shell about the
+      // eye; from twenty thousand kilometres up it is a fiction, and what
+      // belongs around the limb is space. Mixed rather than switched, because
+      // the one thing a backdrop must not do is pop.
+      col = mix(col, vec3(0.012, 0.016, 0.030), uSpace);
       gl_FragColor = vec4(col, 1.0);
     }`,
 });
@@ -21117,6 +21144,43 @@ const SIGHT_M = 24000;
  * tap into it cannot come apart again. A zoom is a distance; that is all.
  */
 function chartDist(): number { return CAM.base * zoomCur; }
+/**
+ * METRES OF GROUND PER ART PIXEL on the chart, 0 from the seat.
+ *
+ * DERIVED ON DEMAND rather than read from `envU.uMpp`, which is written once a
+ * frame: the camera step, the streaming step and the tilt all want it, and
+ * which of them runs before the write is not a thing worth knowing. It is two
+ * multiplies and a tangent.
+ */
+function chartMpp(): number {
+  return camMode === 'top'
+    ? (2 * chartDist() * Math.tan(((camera.fov / 2) * Math.PI) / 180)) / Math.max(2, pixSize.y)
+    : 0;
+}
+/** How much of the frame the planet owns: 0 while the streamed world fills it,
+ *  1 once the chart is looking at a globe. The one ramp the wide view's terms
+ *  are keyed on. */
+const GLOBE_TILT_LO = 2500, GLOBE_TILT_HI = 9000;
+function globeOn(): number {
+  return clamp((chartMpp() - GLOBE_TILT_LO) / (GLOBE_TILT_HI - GLOBE_TILT_LO), 0, 1);
+}
+/**
+ * THE CHART'S TILT, WHICH IS NO LONGER A CONSTANT.
+ *
+ * 70° is an oblique look at a map, and it is right for one: it gives the
+ * ground some depth and keeps the truck's surroundings legible. It is wrong
+ * for a planet — a globe seen at 70° is a globe seen from underneath, with the
+ * pole you are standing near swung out of frame. So it eases toward straight
+ * down as the planet takes over.
+ *
+ * 89° AND NOT 90°: `lookAt` down the world's own up-axis is degenerate, and at
+ * 89° the camera still stands 1.7% of its distance to one side, which at any
+ * chart zoom is under a pixel of difference and keeps the matrix well
+ * conditioned. Every reader of the tilt takes this — the camera's own
+ * placement, `viewRadius`'s horizon stretch and the tap unproject — or they
+ * would disagree about where the ground under a finger is.
+ */
+function chartTilt(): number { return CAM.tilt + (89 - CAM.tilt) * globeOn(); }
 function viewRadius(): number {
   if (camMode !== 'top') return 900;
   const dist = chartDist();
@@ -21126,7 +21190,7 @@ function viewRadius(): number {
   // the whole planet. SIGHT_MAX is that cap, and ZOOM_MAX is derived from it —
   // so the clamp is now reached exactly at the ceiling instead of a third of
   // the way to it.
-  return Math.min(SIGHT_MAX, dist * halfV * Math.max(1, 1 / Math.cos(((90 - CAM.tilt) * Math.PI) / 180)) * 1.35);
+  return Math.min(SIGHT_MAX, dist * halfV * Math.max(1, 1 / Math.cos(((90 - chartTilt()) * Math.PI) / 180)) * 1.35);
 }
 // Two budgets, and they are budgets rather than radii because the cost of the
 // two layers is nothing alike. A terrain tile is a PNG and a mesh; an OSM tile
@@ -21834,6 +21898,87 @@ const farGroup = new THREE.Group();
 farGroup.name = 'far';
 farGroup.visible = false;
 worldGroup.add(farGroup);
+
+/**
+ * ── THE PLANET, UNDER EVERYTHING ──
+ *
+ * See client/globe.ts for why this is a backdrop rather than a mode. Two
+ * numbers here are load-bearing:
+ *
+ * THE SINK. The far shell drops by d²/2R, which is this sphere to second
+ * order, so the two surfaces very nearly coincide and would z-fight along
+ * every tile of the shell. The globe is dropped 800m so the shell always wins
+ * where both exist — the shell has real terrain and the globe has a 39km
+ * texel. 800m is under two pixels at the widest zoom the shell is even drawn
+ * at, and the depth buffer has metres to spare there (near:far is 1:50 at
+ * these altitudes), so it is invisible and decisive at once.
+ *
+ * RENDER ORDER −5, between the sky dome's −10 and the world's 0: the dome
+ * paints first with no depth write, the globe over it, the streamed world over
+ * that. The same sandwich the sky and the world have always been.
+ */
+const GLOBE_SINK = 800;
+/** Wide enough that the planet could be seen at all. Below it the streamed
+ *  shell covers the frame and 16k triangles would draw for nothing. */
+const GLOBE_MPP_ON = 500;
+const globeU = {
+  uBase: { value: null as THREE.Texture | null },
+  uSun: { value: new THREE.Vector3(1, 0, 0) },
+  uNight: { value: 0.14 },
+};
+const globeMesh = new THREE.Mesh(globeGeometry(160, 80), globeMaterial(globeU));
+globeMesh.name = 'globe';
+globeMesh.renderOrder = -5;
+// A sphere the size of the Earth, centred a planet's radius below the camera,
+// is outside every bounding test three would like to do — and it is never off
+// screen when it is on at all.
+globeMesh.frustumCulled = false;
+const globeGroup = new THREE.Group();
+globeGroup.name = 'globe';
+globeGroup.visible = false;
+globeGroup.add(globeMesh);
+worldGroup.add(globeGroup);
+let globeAsked = false, globeFailed = false;
+/** Fetched once, on the first wide chart — not at boot. 317KB is not a cost
+ *  anyone driving should pay, and the ez-tree lesson in CLAUDE.md is what
+ *  happens when a wide-view asset lands in the boot path. */
+function globeTexture(): void {
+  if (globeAsked) return;
+  globeAsked = true;
+  new THREE.TextureLoader().load(`${CELL_BASE}/globe-base.png`, (t) => {
+    // flipY OFF, because the bake's first row is +90° and the geometry's v=0
+    // is the north pole. With three's default the planet arrives upside down
+    // with every coastline still at the right coordinate, which is the sort of
+    // wrong that survives a coordinate check and not a glance.
+    t.flipY = false;
+    t.colorSpace = THREE.SRGBColorSpace;
+    t.wrapS = THREE.RepeatWrapping;          // or the dateline is a seam
+    t.minFilter = THREE.LinearMipmapLinearFilter;
+    t.magFilter = THREE.LinearFilter;
+    t.anisotropy = TEX_ANISO;
+    t.needsUpdate = true;
+    globeU.uBase.value = t;
+  }, undefined, () => { globeFailed = true; });
+}
+/** Where the planet is tangent, how it is turned, and where its sun stands. */
+function stepGlobe(): void {
+  const on = camMode === 'top' && chartMpp() > GLOBE_MPP_ON && !FIXTURE;
+  if (on) globeTexture();
+  globeGroup.visible = on && globeU.uBase.value !== null;
+  if (!globeGroup.visible) return;
+  const vx = viewX(), vz = viewZ();
+  const [gLat, gLon] = localToLatLon(vx, vz);
+  globeGroup.position.set(vx, -(GLOBE_R + GLOBE_SINK), vz);
+  globeOrientation(gLat, gLon, globeGroup.quaternion);
+  // THE SUN IS THE CLOCK'S, NOT THE WALL'S. `clockHour` is local solar time at
+  // the origin's meridian — the same number the sky and the shadows are built
+  // from — so the terminator moves when the time dial is dragged and holds
+  // when the clock is pinned. At the truck the globe's lighting and the
+  // world's agree by construction: the tangent frame's up IS the sphere's
+  // normal there.
+  const ss = subsolar(clockHour(), origin.lon);
+  latLonToUnit(ss.lat, ss.lon, globeU.uSun.value);
+}
 // Four at a time. Asking for a whole ring at once is a thundering herd against
 // one S3 bucket: a measured 49-tile request landed 9 meshes and left the rest
 // racing each other for sockets.
@@ -23546,9 +23691,7 @@ function stepWeather(now: number, dt: number): void {
   }
   // The chart's ground scale: the frame's height in metres at the stand-off
   // over its height in art pixels. `chartDist` is the one stand-off now.
-  envU.uMpp.value = camMode === 'top'
-    ? (2 * chartDist() * Math.tan((camera.fov / 2) * Math.PI / 180)) / Math.max(2, pixSize.y)
-    : 0;
+  envU.uMpp.value = chartMpp();
   // ONE WIND, and it is the real one. Open-Meteo reports the direction the air
   // is coming FROM, so the deck travels toward bearing+180; the sample offset
   // runs the other way again, because shifting a noise field moves what you see
@@ -29633,6 +29776,25 @@ let texMeanCache: Record<string, number> | null = null;
   }
   return { places, wayPts, total, totalPts, meshes: ovMeshes.size, shells: coverBuilt.size };
 };
+/** The planet: whether it is up, where it is tangent, where its sun stands,
+ *  and the two ramps the wide chart is keyed on. */
+(window as unknown as { __globe?: object }).__globe = (): object => {
+  const [gLat, gLon] = localToLatLon(viewX(), viewZ());
+  const ss = subsolar(clockHour(), origin.lon);
+  return {
+    shown: globeGroup.visible, tex: globeU.uBase.value !== null, asked: globeAsked, failed: globeFailed,
+    mpp: +chartMpp().toFixed(1), on: +globeOn().toFixed(3), tilt: +chartTilt().toFixed(1),
+    space: +(skyMat.uniforms.uSpace as { value: number }).value.toFixed(3),
+    at: [+gLat.toFixed(3), +gLon.toFixed(3)],
+    sun: { lat: +ss.lat.toFixed(2), lon: +ss.lon.toFixed(2) },
+    // The sun's height in the sky AT THE TRUCK, from the globe's own vectors.
+    // It is the one number that can be checked against the world's `__sky`,
+    // and if the two ever part it is this frame that is wrong.
+    sunAlt: +(Math.asin(clamp(latLonToUnit(gLat, gLon).dot(globeU.uSun.value), -1, 1)) * 180 / Math.PI).toFixed(2),
+    alt: Math.round(chartDist()), far: Math.round(camera.far),
+    horizon: Math.round(Math.sqrt(chartDist() * chartDist() + 2 * GLOBE_R * chartDist())),
+  };
+};
 (window as unknown as { __zoom?: object }).__zoom = (z: number): void => { zoomT = clamp(z, ZOOM_MIN, ZOOM_MAX); };
 /** How much GROUND the camera actually covers, by unprojecting the screen
  *  corners onto the car's ground plane. The honest answer to "how far out can
@@ -31563,7 +31725,7 @@ function chartToWorld(px: number, py: number): [number, number] {
     return [camera.position.x + bx * FIX_REACH, camera.position.z + bz * FIX_REACH];
   }
   const k = chartDist() / innerHeight;
-  const cz = Math.cos((CAM.tilt * Math.PI) / 180);
+  const cz = Math.cos((chartTilt() * Math.PI) / 180);
   return [
     state.x + panX + (px - innerWidth / 2) * k,
     state.z + panZ + (py - innerHeight / 2) * k / Math.max(0.2, cz),
@@ -36721,6 +36883,18 @@ function tick(now: number): void {
   // Two rigs. TOP: the chart view, tilted a touch for relief. CHASE: low and
   // behind, where speed is legible and the fog reads as a night horizon.
   const fwdX = Math.sin(state.heading), fwdZ = -Math.cos(state.heading);
+  // THE PLANET AND THE SKY, BEFORE THE BRANCH AND NOT INSIDE IT. Both of these
+  // stand themselves down off the chart, and both would be stranded ON by a
+  // camera change if they were only reached from the top branch — a backdrop
+  // left up is a black frame from the cab, and it would happen on the one
+  // frame nobody is looking at the chart to notice.
+  stepGlobe();
+  // The atmosphere gives out where the planet becomes an object: by 14km a
+  // pixel the frame is wider than the Earth's disc and what surrounds the limb
+  // is space, not sky. Below 6km a pixel the dome is still a horizon you are
+  // looking along. `chartMpp` is 0 off the chart, so this is 0 there.
+  (skyMat.uniforms.uSpace as { value: number }).value =
+    clamp((chartMpp() - 6000) / 8000, 0, 1);
   if (camMode === 'top') {
     zoomCur += (zoomT - zoomCur) * Math.min(1, 8 * dt);
     // The coarse shell is a backdrop for the wide view and nothing else: shown
@@ -36754,7 +36928,7 @@ function tick(now: number): void {
     // one thing the map must not do.
     const tvx = viewX(), tvz = viewZ();
     const dist = chartDist();
-    const tiltRad = (CAM.tilt * Math.PI) / 180;
+    const tiltRad = (chartTilt() * Math.PI) / 180;
     // THE CHART'S LINE WEIGHT, in metres, so that it is OV_PX pixels. The
     // camera orbits at `dist` and the world renders into pixSize.y lines, so
     // one art pixel is that much ground — and a ribbon is a fixed number of
@@ -36793,7 +36967,10 @@ function tick(now: number): void {
     // the flicker, and it gets worse the further out you zoom. Nothing is
     // within 8% of the orbit distance from a camera tilted 70° off the ground,
     // so this is free.
-    setNear(Math.max(1, dist * 0.08), Math.max(30000, dist * 4));
+    // THE FAR PLANE HAS TO CLEAR THE HORIZON, not four times the stand-off —
+    // see `globeFar`. Below about 800km up the two cross and `dist * 4` cuts
+    // the planet off mid-ocean.
+    setNear(Math.max(1, dist * 0.08), Math.max(30000, globeFar(dist)));
   } else if (camMode === 'drone') {
     // TWO VIEWS, the same two the rig has and chosen by the same chip. CHASE
     // trails it: far enough back that the drone is a legible object rather than

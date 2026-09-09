@@ -176,20 +176,26 @@ export function globeGeometry(seg = 128, rings = 64): THREE.BufferGeometry {
 
 export interface GlobeUniforms {
   uBase: { value: THREE.Texture | null };
-  /** The sun as a direction in the EARTH frame — see `subsolar`. */
+  /** The sun as a direction in the GLOBE frame — see `subsolar`. */
   uSun: { value: THREE.Vector3 };
-  /** 0 hides the globe entirely; ramps in as the chart passes the plane's
-   *  reach, so the backdrop does not pop into a driving-zoom frame. */
-  uOn: { value: number };
-  /** The night side's floor: cities are not modelled, so it is moonlight. */
+  /** The night side's floor: no city lights are modelled, so it is moonlight. */
   uNight: { value: number };
 }
+
+/**
+ * OPAQUE, AND THERE IS NO CROSS-FADE. The first cut carried a `uOn` and drew
+ * transparent so the backdrop could ease in — which is the instinct a MODE
+ * needs and this is not one. The globe is simply behind everything: while the
+ * chart is narrow the streamed shell covers it completely, and it becomes
+ * visible by the shell ceasing to reach, which is a fade the geometry performs
+ * for free and cannot get out of step with. All that is left is a visibility
+ * flag, so 16k triangles are not drawn at a driving zoom where nothing could
+ * see them.
+ */
 
 export function globeMaterial(u: GlobeUniforms): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: u as unknown as Record<string, THREE.IUniform>,
-    transparent: true,
-    depthWrite: true,
     vertexShader: `
       varying vec3 vN;
       varying vec3 vView;
@@ -204,13 +210,11 @@ export function globeMaterial(u: GlobeUniforms): THREE.ShaderMaterial {
     fragmentShader: `
       uniform sampler2D uBase;
       uniform vec3 uSun;
-      uniform float uOn;
       uniform float uNight;
       varying vec3 vN;
       varying vec3 vView;
       varying vec2 vUv;
       void main() {
-        if (uOn < 0.004) discard;
         vec3 base = texture2D(uBase, vUv).rgb;
         // THE TERMINATOR IS A BAND, NOT A LINE. Twilight on Earth is about
         // eighteen degrees of arc — the sun below the horizon and the sky
@@ -231,7 +235,7 @@ export function globeMaterial(u: GlobeUniforms): THREE.ShaderMaterial {
         // goes out.
         float rim = pow(1.0 - clamp(dot(vN, vView), 0.0, 1.0), 3.5);
         col += vec3(0.20, 0.34, 0.52) * rim * (0.25 + 0.75 * lit);
-        gl_FragColor = vec4(col, uOn);
+        gl_FragColor = vec4(col, 1.0);
       }`,
   });
 }
