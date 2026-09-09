@@ -263,7 +263,7 @@ const ZOOM_MIN = 0.125;
  */
 const ZOOM_PLANE_MAX = SIGHT_MAX / (CAM.base
   * Math.tan(((CAM.fov / 2) * Math.PI) / 180)
-  * Math.max(1, 1 / Math.cos(((90 - CAM.tilt) * Math.PI) / 180))
+  * Math.max(1, 1 / Math.cos(((89.9 - CAM.tilt) * Math.PI) / 180))
   * 1.35);
 /**
  * …AND THE PLANET'S CEILING IS ABOVE THE PLANE'S, WHICH RETIRES THE ARGUMENT
@@ -21246,14 +21246,36 @@ function globeDegPerPx(): number {
  * pole you are standing near swung out of frame. So it eases toward straight
  * down as the planet takes over.
  *
- * 89° AND NOT 90°: `lookAt` down the world's own up-axis is degenerate, and at
- * 89° the camera still stands 1.7% of its distance to one side, which at any
- * chart zoom is under a pixel of difference and keeps the matrix well
- * conditioned. Every reader of the tilt takes this — the camera's own
- * placement, `viewRadius`'s horizon stretch and the tap unproject — or they
- * would disagree about where the ground under a finger is.
+ * ── 89.9° AND NOT 90°, AND THE TENTH OF A DEGREE IS LOAD-BEARING ──
+ *
+ * The camera's sideways stand-off is `dist * cos(tilt)`. At exactly 90° that
+ * is 4e-10 metres, and the target it is added to is millions of metres from
+ * the origin — so the offset lands BELOW the ULP of a Float64 at that
+ * magnitude and is silently rounded away. What goes with it is the MAP
+ * ROTATION, because the rotation is carried entirely by which way that offset
+ * points: `lookAt` then falls into three's own degenerate guard, which nudges
+ * the look axis by a fixed 0.0001 that knows nothing about `mapRot`.
+ *
+ * MEASURED, swept over eight bearings at two magnitudes, and HOW WRONG it
+ * goes depends on how far the chart has browsed — which is the tell that this
+ * is rounding and not geometry. With the target at (1.2e6, −3.4e6) the two
+ * coordinates have ULPs a factor of two apart, so the offset's bearing is
+ * quantised: 45° drew 27°, 135° drew 153°, 225° drew 207°, 315° drew 333°,
+ * exact only on the four axes where one component is a clean zero. Browsed
+ * out to (1.1e7, −7.8e6) it is worse and simpler — the x component rounds
+ * away entirely and 45° draws 0°, the rotation gone. At 89.9° and at 89°
+ * every bearing is exact at both. `devtools/globe-navigation.test.cjs` holds
+ * the sweep, and it holds it AT THE WIDE TILT ON A BROWSED CHART, because
+ * either mistake makes it pass on the broken value.
+ *
+ * So the value is the largest one that still resolves: 89.9° stands the camera
+ * 12km to one side at planet zoom, which is 0.15% of an 8,000km frame and well
+ * under an art pixel, and it is a tenth of a degree away from the face-on
+ * globe view the ramp is reaching for. Every reader of the tilt takes this —
+ * the camera's own placement, `viewRadius`'s horizon stretch and the tap
+ * unproject — or they would disagree about where the ground under a finger is.
  */
-function chartTilt(): number { return CAM.tilt + (90 - CAM.tilt) * globeOn(); }
+function chartTilt(): number { return CAM.tilt + (89.9 - CAM.tilt) * globeOn(); }
 function viewRadius(): number {
   if (camMode !== 'top') return 900;
   const dist = chartDist();
@@ -22082,9 +22104,11 @@ let globeSpinLat = 0, globeSpinLon = 0;
  * no meaningful east to drag along.
  */
 const GLOBE_SPIN_LAT_MAX = 85;
-/** The spin's own bounds at this moment, which depend on where the truck is.
- *  Both callers — the drag and the probe — go through here so they cannot
- *  disagree about which hemisphere is reachable. */
+/** The spin's own bounds at this moment, which depend on where the chart is
+ *  focused. THE DRAG NO LONGER COMES THROUGH HERE: a drag writes the retained
+ *  focus directly (see `dragGlobe`), and `setChartFocus` does its own clamping,
+ *  so this now serves `__globespin` alone — the console's way of asking for a
+ *  place without a finger. Kept because that probe still has to be bounded. */
 function globeSpinLatRange(): [number, number] {
   const [tLat] = localToLatLon(viewX() + panX, viewZ() + panZ);
   return [-GLOBE_SPIN_LAT_MAX - tLat, GLOBE_SPIN_LAT_MAX - tLat];
@@ -29964,7 +29988,13 @@ let texMeanCache: Record<string, number> | null = null;
     shown: globeGroup.visible, tex: globeU.uBase.value !== null, asked: globeAsked, failed: globeFailed,
     mpp: +chartMpp().toFixed(1), on: +globeOn().toFixed(3), tilt: +chartTilt().toFixed(1),
     space: +(skyMat.uniforms.uSpace as { value: number }).value.toFixed(3),
-    at: [+gLat.toFixed(3), +gLon.toFixed(3)],
+    // THE RIG AND THE PLACE ARE NO LONGER THE SAME POINT. Since the chart
+    // retains a browsed focus, the sphere is tangent under `focus` while the
+    // pin stands at `rig` — reporting one number for both is how a browsed
+    // chart would look identical to a chart that had quietly moved the truck.
+    rig: [+gLat.toFixed(3), +gLon.toFixed(3)],
+    focus: localToLatLon(viewX() + panX, viewZ() + panZ).map((v) => +v.toFixed(3)),
+    remote: chartRemote(),
     sun: { lat: +ss.lat.toFixed(2), lon: +ss.lon.toFixed(2) },
     // The sun's height in the sky AT THE TRUCK, from the globe's own vectors.
     // It is the one number that can be checked against the world's `__sky`,
@@ -29981,7 +30011,11 @@ let texMeanCache: Record<string, number> | null = null;
     spin: [+globeSpinLat.toFixed(2), +globeSpinLon.toFixed(2)],
     applied: [+(globeSpinLat * globeFree()).toFixed(2), +(globeSpinLon * globeFree()).toFixed(2)],
     degPerPx: +globeDegPerPx().toFixed(4),
-    pin: globePin.visible,
+    // DRAWN, not merely flagged. `stepGlobe` returns early once the planet is
+    // off, so `globePin.visible` keeps whatever it last held — a stale `true`
+    // under a hidden group, which reads from outside exactly like a pin left
+    // on the glass. The group's own visibility is half the answer.
+    pin: globeGroup.visible && globePin.visible,
     ringKm: Math.round(((2 * FAR_RING_MAX + 1) * tileMetres(farZ)) / 1000),
     frameKm: Math.round((chartMpp() * Math.hypot(pixSize.x, pixSize.y)) / 1000),
     alt: Math.round(chartDist()), far: Math.round(camera.far),
@@ -37567,7 +37601,14 @@ function tick(now: number): void {
     }
   } else if (!camInit || camMode === 'cab' || camMode === 'top' || rewind.at !== null) {
     camera.position.copy(camPos); camInit = true;
-  } else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
+    // THE CHART SNAPS, AND THAT IS WHY THE LERP BELOW LOST ITS `top` ARM. The
+    // top camera used to ease toward `camPos` at 10/s while `camera.lookAt`
+    // aimed at the new target immediately, so the eye and the aim disagreed for
+    // the whole of a drag and the chart's ANGLE changed under a finger that had
+    // only asked it to move. Position and aim are set together now, so there is
+    // nothing left to ease — and with `top` handled here the else can no longer
+    // be it, which is what the compiler said when the arm stayed behind.
+  } else camera.position.lerp(camPos, 1 - Math.exp(-4.5 * dt));
   // WHAT THIS RIG LOOKS AT, as a point, so a flight can interpolate the aim as
   // well as the eye. Whipping the lens onto the new subject while the body
   // drifts across is the cut all over again, in the axis you notice most.

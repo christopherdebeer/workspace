@@ -1,25 +1,29 @@
 /**
- * THE GLOBE'S GESTURES: A DRAG TURNS IT, A TAP LANDS ON IT, AND NEITHER DOES
- * ANYTHING WHILE THE STREAMED SHELL IS STILL DRAWN.
+ * THE GLOBE'S GESTURES, IN A REAL PAGE: a drag moves the PLACE, a tap lands on
+ * the sphere, the rig never moves, and none of it happens while the streamed
+ * shell is still drawn.
  *
  *   node cells/drive/devtools/globe-spin.test.mjs
  *
- * The whole design rests on ONE claim — that the planet may only be turned
- * where nothing else is drawing the same ground — and that claim is not
- * visible in a frame: a spun globe under a shell that did not spin looks like
- * a globe, until you notice the coastline crossing the shell's edge twice.
- * So the regime is asserted from both sides. At planet zoom a drag must move
- * `__globespin` and must not move `__pan`; at a driving chart zoom the same
- * drag must do the exact opposite.
+ * ── THIS FILE ONCE ASSERTED THE OPPOSITE, AND THE HISTORY IS THE POINT ──
  *
- * The directions are asserted as FACTS ABOUT A MAP rather than as signs in the
- * code, for the reason the flat pan's own note records: its rotation was once
- * a mirror (determinant −1), horizontal came out right and vertical came out
- * backwards, and no single-axis check would have caught it. Drag the world
- * right and the ground follows your thumb, so the view moves WEST; drag it
- * down and the view moves NORTH.
+ * The first gesture pass made a drag a DISPOSABLE SPIN: an offset that was
+ * scaled to nothing below the hand-over and decayed home, so zooming in
+ * returned you to the truck. Reported from the seat as wrong, and it is:
+ * zooming in on a place you went looking for is not a request to be taken
+ * home. A drag now moves a RETAINED chart focus (panX/panZ) and the rig stays
+ * exactly where it is. Nine assertions here failed the day that landed —
+ * every one of them a faithful description of a contract that had been
+ * replaced. They are restated against the new one rather than relaxed; a test
+ * that survives a change of contract by being loosened is worse than one that
+ * fails.
  *
- * Numbers only by default. `SHOT=1` draws a frame of the spun planet so the
+ * `devtools/globe-navigation.test.cjs` covers the same rules exactly, in a VM
+ * over extracted function bodies. This one is the wiring: that the probes
+ * exist, that a real pointer reaches the real handler, that the page throws
+ * nothing. Neither replaces the other.
+ *
+ * Numbers only by default. `SHOT=1` draws a frame of the browsed planet so the
  * pin can be looked at, which costs a few minutes of software rendering.
  */
 import { openDrive, WORK } from './harness.mjs';
@@ -34,12 +38,24 @@ const { page, close } = await openDrive({ spot: `${SPOT}&z=${PLANET_Z}`, tag: 'g
 
 let fails = 0;
 const check = (ok, msg) => { if (!ok) { fails++; console.log(`  FAIL ${msg}`); } else console.log(`  ok   ${msg}`); };
+/** Longitudes are compared the short way round, or a browse across the
+ *  dateline reads as a 359-degree error. */
+const dLon = (a, b) => ((((a - b) % 360) + 540) % 360) - 180;
 
-/** `__zoom` sets a TARGET eased at 8/s, so a zoom change needs frames to pass
- *  — and in this harness a frame is a third of a second. Wait on the reading,
- *  never on a timeout. */
+/** `__zoom` sets a TARGET the zoom spring eases toward, so a zoom change needs
+ *  frames to pass — and in this harness a frame is a third of a second. Wait on
+ *  the reading, never on a timeout. */
+// AND IT MUST NOT ASK FOR A CAMERA IT ALREADY HAS. `setCam` clears panX/panZ
+// unconditionally — "pan is a glance, not a state to carry over", which is
+// right for LEAVING the chart and is what makes leaving return you to the rig.
+// A same-mode call still runs it, so a helper that politely re-asserted `top`
+// on every zoom step wiped the browsed focus before each reading and reported
+// the retained-place regression as unfixed. Cost four checks in this file.
 async function zoomTo(z) {
-  await page.evaluate((zz) => { window.__cam('top'); window.__zoom(zz); }, z);
+  await page.evaluate((zz) => {
+    if (window.__cam().mode !== 'top') window.__cam('top');
+    window.__zoom(zz);
+  }, z);
   for (let i = 0; i < 120; i++) {
     if (await page.evaluate((zz) => Math.abs(window.__cam().zoom - zz) < Math.max(0.05, zz * 0.02), z)) return true;
     await page.waitForTimeout(250);
@@ -57,16 +73,30 @@ async function drag(dx, dy) {
     await page.waitForTimeout(30);
   }
   await page.mouse.up();
-  await page.waitForTimeout(300);
+  await page.waitForTimeout(400);
 }
-const spin = () => page.evaluate(() => window.__globespin());
-const pan = () => page.evaluate(() => window.__pan());
 const globe = () => page.evaluate(() => window.__globe());
+const pan = () => page.evaluate(() => window.__pan());
+const rig = () => page.evaluate(() => [window.__drive.x, window.__drive.z]);
+/** Put the chart on a place without a finger, and let a globe frame consume it
+ *  into the retained focus — which is the one thing `__globespin` still does
+ *  now that a drag writes the focus directly. */
+// THE OFFSET IS FROM THE FOCUS, NOT FROM THE RIG. `stepGlobe` consumes the
+// spin into wherever the chart is already looking, so an offset measured from
+// the truck lands somewhere else entirely the moment the chart is not on it —
+// asked for 40N/140E from a chart parked at the south pole and got 15S/130E,
+// which is the sum, correctly.
+async function focusOn(lat, lon) {
+  const [fLat, fLon] = (await globe()).focus;
+  await page.evaluate(([a, b]) => window.__globespin(a, b), [lat - fLat, dLon(lon, fLon)]);
+  await page.waitForTimeout(900);
+  return (await globe()).focus;
+}
 
 console.log('\n=== the planet has the frame ===');
 await zoomTo(PLANET_Z);
 // The base texture is fetched on the first wide chart, and nothing is free to
-// turn until it has landed — `globeFree` is 0 with no planet to turn.
+// browse until it has landed — `globeFree` is 0 with no planet to browse.
 for (let i = 0; i < 60; i++) {
   if ((await globe()).tex) break;
   await page.waitForTimeout(500);
@@ -77,25 +107,35 @@ check(g.tex, 'the base texture landed');
 check(g.shown, 'the planet is drawn');
 check(!g.shell, 'the streamed shell has handed over');
 check(g.free === 1, `globeFree is 1 (${g.free})`);
-check(g.pin, 'the truck has a pin on it');
+check(g.pin, 'the rig has a pin on it');
 
-await page.evaluate(() => window.__globespin(0, 0));
-const pan0 = await pan();
+console.log('\n=== a drag moves the place, and ONLY the place ===');
+await focusOn(-29.9872, 24.7765);
+const rig0 = await rig();
+let f0 = (await globe()).focus;
 await drag(120, 0);
-let s = await spin();
-console.log(`  after a rightward drag: ${JSON.stringify(s)}`);
-check(s.lon < -1, `drag right turns the view WEST (lon ${s.lon}°)`);
-check(Math.abs(s.lat) < 0.5, `and barely moves the latitude (${s.lat}°)`);
-const panR = await pan();
-check(Math.abs(panR.x - pan0.x) < 1 && Math.abs(panR.z - pan0.z) < 1,
-  'and the flat pan does not move at all');
+let f1 = (await globe()).focus;
+console.log(`  rightward drag: ${JSON.stringify(f0)} -> ${JSON.stringify(f1)}`);
+check(dLon(f1[1], f0[1]) < -1, `drag right moves the view WEST (${dLon(f1[1], f0[1]).toFixed(2)}°)`);
+// A HORIZONTAL DRAG ON A SPHERE IS NOT A PARALLEL, so some latitude drift is
+// the geometry rather than a fault: the grabbed point is carried along the
+// great circle through it, and off the equator that curves. The assertion is
+// that the drag is DOMINANTLY longitudinal — measured 0.57° of latitude for
+// 10.23° of longitude, a twentieth, against the tenth allowed here.
+check(Math.abs(f1[0] - f0[0]) < 0.1 * Math.abs(dLon(f1[1], f0[1])),
+  `and stays on its parallel to a twentieth (${(f1[0] - f0[0]).toFixed(3)}° lat for ${dLon(f1[1], f0[1]).toFixed(2)}° lon)`);
+// THE ONE INVARIANT THE WHOLE REDESIGN RESTS ON. Browsing is looking, not
+// travelling: whatever the chart does, the rig and its fine world stay put.
+let rig1 = await rig();
+check(Math.hypot(rig1[0] - rig0[0], rig1[1] - rig0[1]) < 1,
+  `and the rig has not moved (${Math.hypot(rig1[0] - rig0[0], rig1[1] - rig0[1]).toFixed(2)}m)`);
 
-await page.evaluate(() => window.__globespin(0, 0));
+f0 = await focusOn(-29.9872, 24.7765);
 await drag(0, 120);
-s = await spin();
-console.log(`  after a downward drag: ${JSON.stringify(s)}`);
-check(s.lat > 1, `drag down turns the view NORTH (lat ${s.lat}°)`);
-check(Math.abs(s.lon) < 0.5, `and barely moves the longitude (${s.lon}°)`);
+f1 = (await globe()).focus;
+console.log(`  downward drag: ${JSON.stringify(f0)} -> ${JSON.stringify(f1)}`);
+check(f1[0] - f0[0] > 1, `drag down moves the view NORTH (${(f1[0] - f0[0]).toFixed(2)}°)`);
+check(Math.abs(dLon(f1[1], f0[1])) < 0.5, `and barely moves the longitude (${dLon(f1[1], f0[1]).toFixed(3)}°)`);
 
 // THE RATE IS THE GEOMETRY'S. A drag of the frame's own height must turn the
 // Earth by the arc that height covers on the ground — which is what makes the
@@ -108,38 +148,46 @@ const want = await page.evaluate(() => {
 check(Math.abs(g.degPerPx - want) / want < 0.02,
   `${g.degPerPx}°/px is the ground the frame covers (${want.toFixed(4)})`);
 
-// THE SPIN IS APPLIED HERE, WHOLE. `applied` is the product with `globeFree`,
-// and at 1 the two must agree — the other end of the same test is below.
-await page.evaluate(() => window.__globespin(20, -60));
-await page.waitForTimeout(500);
-g = await globe();
-check(Math.abs(g.applied[0] - 20) < 0.01 && Math.abs(g.applied[1] + 60) < 0.01,
-  `a spin of 20,-60 is applied whole (${g.applied})`);
+// The map is bounded at ±85: past it the cosine that scales a horizontal drag
+// runs away, and a chart looking straight down on a pole has no east.
+const north = await focusOn(400, 24.7765);
+check(north[0] > 84 && north[0] < 86, `the north pole is reachable (view reaches ${north[0]}°)`);
+const south = await focusOn(-400, 24.7765);
+check(south[0] < -84 && south[0] > -86, `and the south pole too (${south[0]}°)`);
 
-// THE WHOLE PLANET HAS TO BE REACHABLE FROM WHERE YOU ARE PARKED. The spin is
-// stored as an offset from the truck, so a bound written on the offset bounds
-// the wrong thing: at −30° a symmetric ±85 reaches +55° and stops, and Cape
-// Town cannot be used to look at the Arctic. The bound is on the LATITUDE the
-// view reaches, which is what this asks.
-{
-  await page.evaluate(() => window.__globespin(400, 0));
-  const far = await spin();
-  const at = (await globe()).at[0];
-  const reach = at + far.lat;
-  console.log(`  truck at ${at}°, spin clamped to ${far.lat}° — the view reaches ${reach.toFixed(1)}°`);
-  check(reach > 84 && reach < 86, `the north pole is reachable from ${at}° (view reaches ${reach.toFixed(1)}°)`);
-  await page.evaluate(() => window.__globespin(-400, 0));
-  const s2 = await spin();
-  const reach2 = at + s2.lat;
-  check(reach2 < -84 && reach2 > -86, `and the south pole too (${reach2.toFixed(1)}°)`);
+console.log('\n=== the place is RETAINED through a zoom in ===');
+// The regression the redesign exists for: browse somewhere, zoom in, and you
+// are still there. Zooming in is not a request to be taken home; only leaving
+// the chart is.
+const browsed = await focusOn(40, 140);
+check(Math.abs(browsed[0] - 40) < 1 && Math.abs(dLon(browsed[1], 140)) < 1,
+  `browsed to ${JSON.stringify(browsed)}`);
+for (const z of [110000, 15000, 1000, 8]) {
+  await zoomTo(z);
+  await page.waitForTimeout(900);
+  const f = (await pan()).focus;
+  check(Math.abs(f[0] - 40) < 1 && Math.abs(dLon(f[1], 140)) < 1,
+    `z${z}: still at ${f.map((v) => +v.toFixed(2))}`);
 }
+rig1 = await rig();
+check(Math.hypot(rig1[0] - rig0[0], rig1[1] - rig0[1]) < 1, 'and the rig never moved through any of it');
+check((await pan()).remote, 'the chart knows it is browsing remotely');
+
+console.log('\n=== leaving the chart returns to the rig ===');
+await page.evaluate(() => window.__cam('chase'));
+await page.waitForTimeout(600);
+await zoomTo(CHART_Z);
+await page.waitForTimeout(900);
+let p = await pan();
+check(Math.hypot(p.x, p.z) < 100, `the pan is home (${p.x}, ${p.z})`);
+check(!p.remote, 'and the chart is no longer remote');
 
 console.log('\n=== the tap lands on the sphere ===');
-await page.evaluate(() => window.__globespin(0, 0));
-await page.waitForTimeout(600);
-// Unspun, the truck is at the top of the sphere, so the frame's centre is the
-// truck's own point: the tap and the world must agree there or nothing
-// downstream of the tap can.
+await zoomTo(PLANET_Z);
+await focusOn(-29.9872, 24.7765);
+// With the chart focused on the rig, the frame's centre is the rig's own
+// point: the tap and the world must agree there or nothing downstream of the
+// tap can.
 const mid = await page.evaluate(() => {
   const w = window.__globeat(window.innerWidth / 2, window.innerHeight / 2);
   const d = window.__drive;
@@ -148,11 +196,11 @@ const mid = await page.evaluate(() => {
 console.log(`  centre tap ${JSON.stringify(mid)}`);
 check(mid.hit !== null, 'the centre of the frame is on the planet');
 check(mid.hit && Math.hypot(mid.hit[0] - mid.truck[0], mid.hit[1] - mid.truck[1]) < 40000,
-  'and it is the truck\'s own point');
+  'and it is the rig\'s own point');
 // A tap in the corner of a frame the planet does not fill is space, and space
 // is not a place.
-const corner = await page.evaluate(() => window.__globeat(6, 6));
-check(corner === null, 'a tap in the corner, past the limb, hits nothing');
+check(await page.evaluate(() => window.__globeat(6, 6)) === null,
+  'a tap in the corner, past the limb, hits nothing');
 
 console.log('\n=== the pin layer stands down ===');
 let pd = await page.evaluate(() => window.__poidraw());
@@ -165,49 +213,42 @@ await page.waitForTimeout(1500);
 g = await globe();
 check(g.free === 0, `globeFree is 0 (${g.free})`);
 check(g.shell, 'the shell is drawing again');
-check(!g.pin, 'and the pin is put away');
-// The spin decays home below the hand-over, so a spin banked at planet zoom
-// cannot spring the chart to the far side of the world on the next zoom out.
-await page.evaluate(() => window.__globespin(40, 80));
-await page.waitForTimeout(3000);
-s = await spin();
-check(Math.abs(s.lat) < 4 && Math.abs(s.lon) < 8, `a banked spin decays home (${s.lat}, ${s.lon})`);
+check(!g.pin, 'and the pin is not drawn');
 
-await page.evaluate(() => { window.__drive.speed = 0; window.__globespin(0, 0); });
+await page.evaluate(() => { window.__drive.speed = 0; });
 const panA = await pan();
 await drag(100, 0);
 const panB = await pan();
-s = await spin();
-console.log(`  pan ${JSON.stringify(panA)} -> ${JSON.stringify(panB)}, spin ${JSON.stringify(s)}`);
+console.log(`  pan ${JSON.stringify(panA)} -> ${JSON.stringify(panB)}`);
 check(Math.hypot(panB.x - panA.x, panB.z - panA.z) > 5, 'the same drag pans the chart');
-check(Math.abs(s.lat) < 0.01 && Math.abs(s.lon) < 0.01, 'and does not turn the planet');
+check(Math.abs(panB.focus[0] - panA.focus[0]) < 0.2, 'as a nudge, not a browse');
 pd = await page.evaluate(() => window.__poidraw());
 check(!pd.planet && !pd.wide, `the pin layer is back on (${JSON.stringify(pd)})`);
 
 // The scenery gate's own arithmetic, at the zoom it is stated at: a 3km
 // catchment must span POI_SPREAD_PX (16) art pixels, which is 187.5 m/px.
-for (const [z, want] of [[300, false], [900, true]]) {
+for (const [z, want2] of [[300, false], [900, true]]) {
   await zoomTo(z);
   await page.waitForTimeout(800);
   pd = await page.evaluate(() => window.__poidraw());
-  check(pd.wide === want, `z${z}: ${pd.mpp} m/px, scenery ${pd.wide ? 'off' : 'on'} (wanted ${want ? 'off' : 'on'})`);
+  check(pd.wide === want2, `z${z}: ${pd.mpp} m/px, scenery ${pd.wide ? 'off' : 'on'} (wanted ${want2 ? 'off' : 'on'})`);
 }
 
 // THE PIN'S OWN BAND IS A GEOMETRY, NOT A SETTING. The sphere's radius on
 // screen is R/mpp — 280 art pixels at z40,000 against a 148x320 frame, so at
-// that zoom the disc is far wider than the glass and a spin past about fifteen
-// degrees carries the truck's point off it. At the ceiling (z110,000) the
-// radius is 102 pixels and the whole disc fits, so the pin is on screen
+// that zoom the disc is far wider than the glass and a browse past about
+// fifteen degrees carries the rig's point off it. At the ceiling (z110,000)
+// the radius is 102 pixels and the whole disc fits, so the pin is on screen
 // wherever it is on the near face. That is why the default shot is taken at
 // the ceiling: it is the frame in which the pin can be judged at all.
 if (process.env.SHOT) {
-  const [sl, sn] = (process.env.SPIN ?? '20,-35').split(',').map(Number);
+  const [sl, sn] = (process.env.SPIN ?? '-10,-10').split(',').map(Number);
   await zoomTo(Number(process.env.SHOT_Z ?? 110000));
-  await page.evaluate(([a, b]) => window.__globespin(a, b), [sl, sn]);
+  await focusOn(sl, sn);
   await page.evaluate(() => window.__draw(true));
-  const f0 = await page.evaluate(() => window.__clock().frames);
+  const f0s = await page.evaluate(() => window.__clock().frames);
   for (let i = 0; i < 120; i++) {
-    if (await page.evaluate(() => window.__clock().frames) - f0 >= 4) break;
+    if (await page.evaluate(() => window.__clock().frames) - f0s >= 4) break;
     await page.waitForTimeout(500);
   }
   const shot = join(WORK, 'globe-spun.png');

@@ -4839,13 +4839,32 @@ terminator.
 
 ### The planet's gestures, and the one test they all rest on
 
-A drag turns the Earth, a tap lands on it, and the fine world's labels stand
+> **THE STORAGE RULE IN THIS SECTION WAS OVERTURNED THE NEXT DAY — see "Globe
+> navigation: retain the place, not a disposable spin" below.** A drag no
+> longer holds a disposable offset that decays home; it moves a RETAINED chart
+> focus, and zooming in keeps the place instead of returning to the rig. The
+> seat reported the behaviour described here as wrong, and it is: zooming in on
+> somewhere you went looking for is not a request to be taken home.
+>
+> What survives, and is why this section is kept rather than deleted: the
+> hand-over test, the rate derivation, the tap on the sphere, the pin, the
+> label gates, and every measurement below. The two bullets that are now
+> HISTORY rather than doctrine are marked in place.
+
+A drag moves the planet, a tap lands on it, and the fine world's labels stand
 down. Three changes, and every one of them is decided by the SAME question:
 does the streamed shell still cover the frame? `globeFree` is that question,
 the top-camera branch's `shellOn` is now literally `globeFree() === 0`, and
-`devtools/globe-spin.test.mjs` asserts both regimes from both sides.
+`devtools/globe-spin.test.mjs` asserts both regimes from both sides — restated
+against the retained-focus contract after nine of its assertions failed the
+day that landed. A test that survives a change of contract by being loosened
+is worse than one that fails.
 
-- **A SPIN IS NOT A PAN, AND MUST NOT BE STORED AS ONE.** The obvious
+- **A SPIN IS NOT A PAN, AND MUST NOT BE STORED AS ONE.** *(HISTORY: the
+  successor stores exactly that, in `panX/panZ`, and the objection below is
+  answered by never springing the pan home and by reading remote chart height
+  from the coarse raster. Kept because the arithmetic is still the reason a
+  retained focus needs `chartRemote` and `chartGround`.)* The obvious
   implementation accumulates the drag into `panX/panZ`. At planet zoom one
   drag across the glass is thousands of kilometres of tangent plane — nine
   million metres of `panX`, which the moment you zoomed back in would stand
@@ -4863,7 +4882,12 @@ the top-camera branch's `shellOn` is now literally `globeFree() === 0`, and
   Earth about 115° rather than 180°, because the mapping is the tangent
   plane's and linear; that is what makes a small drag near the middle feel
   like the same gesture as a small drag on the flat chart one step below.
-- **AND `globeFree` IS A STEP, WHICH THE FIRST CUT WAS NOT.** A ramp over the
+- **AND `globeFree` IS A STEP, WHICH THE FIRST CUT WAS NOT.** *(Still true, and
+  the successor tightened it further: it reads the FINAL shell's reach
+  (`farLevelFor(SIGHT_MAX)`) rather than the in-flight `farZ`, so a tile
+  landing mid-gesture cannot change which gesture a held finger owns, and it
+  measures the frame in screen pixels rather than art pixels so the PIXEL dial
+  cannot move it.)* A ramp over the
   band above the hand-over is the obvious shape and is wrong, measured: at
   z40,000 it stood at **0.801**, so a drag asking for ten degrees turned the
   Earth eight. The rate is already exact, and scaling an exact rate by a
@@ -4919,14 +4943,17 @@ visible cap reaches exactly `R/(R+h)`, which at 20,000km is 0.2416 — 76° — 
 0.2 is 78.5° and BEYOND it. The ray toward a point behind the limb hits the
 near limb instead, correctly, and the round trip had nothing to round trip to.
 
-**Measured** (`devtools/globe-spin.test.mjs`, Letsemeng, no page errors): at
-z40,000 the frame is 8,030km against a 5,424km ring, so the shell is off and
-`free` is 1; a 120px rightward drag turns the view 10.76° WEST and moves the
-latitude 0.000°; a 120px downward drag turns it 9.32° NORTH; the flat pan does
-not move at all in either. At z8 the same drag pans 180m and turns the planet
-0.000°, a spin banked at 40/80 decays to 0.02/0.05 in three seconds, and the
-pin is put away. The centre of an unspun planet taps to the truck's own point;
-the corner taps to nothing.
+**Measured on the disposable-spin build** (`devtools/globe-spin.test.mjs`,
+Letsemeng, no page errors): at z40,000 the frame is 8,030km against a 5,424km
+ring, so the shell is off and `free` is 1; a 120px rightward drag turned the
+view 10.76° WEST and moved the latitude 0.000°; a 120px downward drag turned it
+9.32° NORTH; the flat pan did not move at all in either. At z8 the same drag
+panned 180m and turned the planet 0.000°, a spin banked at 40/80 decayed to
+0.02/0.05 in three seconds, and the pin was put away. The centre of an unspun
+planet tapped to the truck's own point; the corner tapped to nothing. **The
+degrees and the hand-over carried to the retained-focus build unchanged; the
+decay and the flat-pan numbers did not, because that is the half that was
+replaced.**
 
 **THE PIN'S BAND IS A GEOMETRY.** The sphere's radius on screen is R/mpp — 280
 art pixels at z40,000 against a 148×320 frame — so at that zoom the disc is far
@@ -4936,6 +4963,59 @@ disc fits, so the pin is on screen wherever it is on the near face. That is
 where a shot of it is worth taking (`SHOT=1`, and `SPIN=`/`SHOT_Z=` for the
 rest), and it is why there is no rim chip: the zoom that would need one is the
 zoom you would have left anyway.
+
+### A 90° chart tilt loses the map rotation, and it is a rounding bug
+
+The retained-focus pass took `chartTilt`'s wide end from 89° to 90° for a
+"truly vertical globe view", and the comment beside it — which said 89 and not
+90, because looking down the world's own up-axis is degenerate — was left
+standing. The comment was right and the reason was better than it knew.
+
+**The camera's sideways stand-off is `dist * cos(tilt)`.** At 90° that is
+4e−10 metres, and the target it is added to is millions of metres from the
+origin, so the offset lands below the ULP of a Float64 at that magnitude and
+is rounded away. What goes with it is the MAP ROTATION, which is carried
+entirely by which way that offset points. `lookAt` then falls into three's own
+degenerate guard, a fixed 0.0001 nudge that knows nothing about `mapRot`.
+
+**Measured, eight bearings, two magnitudes** — and that the answer depends on
+the magnitude is the tell that this is arithmetic and not geometry. Target at
+(1.2e6, −3.4e6), where the two coordinates' ULPs are a factor of two apart, so
+the bearing is quantised: 45° drew 27°, 135° drew 153°, 225° drew 207°, 315°
+drew 333°, exact only on the four axes. Browsed out to (1.1e7, −7.8e6) it is
+worse and simpler: the x component rounds away entirely and 45° draws 0°, the
+rotation gone. **89.9° is exact at every bearing at both**, and stands the
+camera 12km to one side at planet zoom — 0.15% of an 8,000km frame, under an
+art pixel, a tenth of a degree from face-on.
+
+**AND THE REGRESSION CHECK PASSED ON THE BROKEN VALUE TWICE BEFORE IT WORKED.**
+First because it swept with the chart focused on its own origin, where the
+coordinates are small enough that 4e−10 still resolves; then because it ran
+after a block that had left `camMode` on `'chase'`, where `globeOn` is 0, the
+tilt is a flat 70 and the offset is kilometres. A test that does not fail on
+the bug it names is decoration — so it now asserts its own preconditions
+(`hypot(panX, panZ) > 1e6` and `chartTilt() > 85`) before it measures anything.
+
+**TWO TRAPS FOR THE NEXT TOOL THAT DRIVES THIS**, both of which cost checks in
+`globe-spin.test.mjs` the day the retained focus landed:
+
+- **`setCam` CLEARS THE PAN EVEN WHEN THE MODE IS ALREADY THE ONE ASKED FOR.**
+  "Pan is a glance, not a state to carry over" is right for LEAVING the chart —
+  it is what makes leaving return you to the rig — and a same-mode call still
+  runs it. A helper that politely re-asserted `top` before each zoom step wiped
+  the browsed focus before every reading and reported the retained-place
+  regression as unfixed. Ask for the mode only when it is not the mode you are
+  in.
+- **`__globespin` IS AN OFFSET FROM THE FOCUS, NOT FROM THE RIG.** `stepGlobe`
+  consumes it into wherever the chart is already looking, so a delta measured
+  from the truck lands on the sum: asked for 40N/140E from a chart parked at
+  the south pole and got 15S/130E, correctly.
+
+And a fact about the sphere rather than the code: **a horizontal drag is not a
+parallel.** The grabbed point is carried along the great circle through it, so
+off the equator the latitude drifts — measured 0.57° of latitude for 10.23° of
+longitude, a twentieth. Assert that a drag is DOMINANTLY longitudinal, never
+that it is purely so.
 
 **Still open:** `NE_MIN_Z` could drop to serve trunk roads and capitals on the
 globe — the asset already holds them — and the globe has no place names of its
