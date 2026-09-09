@@ -179,7 +179,10 @@ const CAR = { accel: 16, brake: 26, maxRev: 9, wheelbase: 2.9, steerMax: 0.6 };
 // because the zoom ceiling is DERIVED from it (see ZOOM_MAX): the widest
 // useful zoom is a fact about the frustum, and two copies of the number would
 // let the ceiling drift away from the lens it was computed for.
-const CAM = { base: 175, perKmh: 1.1, tilt: 70, fov: 55 };
+// `perKmh` was here — the chart's speed retreat — and is retired rather than
+// left at zero: see `chartDist`, which is now the one place the chart's stand-off
+// is computed. A constant nobody reads is the thing this file keeps warning about.
+const CAM = { base: 175, tilt: 70, fov: 55 };
 // 44 put the camera 6.8km up over a 4.8×8.3km view — a regional chart, but
 // only just, and the streaming never followed it out there. 260 reaches ~40km
 // across, which is a whole mountain range, a coastline, or the far end of a
@@ -20992,9 +20995,39 @@ const tileMetres = (z: number): number =>
 // is how this was found. 24km keeps z11 out to about 61 degrees — the whole of
 // the line, and then some — while the ring still reaches 34-41km on the ground.
 const SIGHT_M = 24000;
+/**
+ * HOW FAR THE CHART'S EYE STANDS OFF, AND IT IS THE ZOOM AND NOTHING ELSE.
+ *
+ * It used to carry `CAM.perKmh` — 1.1 metres of retreat per km/h — so a chart
+ * held at one zoom stood at a different height depending on how fast the truck
+ * was rolling under it. Reported from the seat as the chase camera's speed
+ * pull-back leaking into the chart; it is not that (chase has no such term —
+ * see the note by `fovKick`, which replaced the chase retreat with a lens kick
+ * precisely because backing away KILLS the sense of speed). This was the chart's
+ * own, and it was wrong on its own terms:
+ *
+ * - it broke ZOOM_MIN's promise. That constant exists to put the eye 22m over
+ *   the truck — "a frame about 23m across, the whole of a junction and its
+ *   corners, which is the scale the joins are judged at from the chart". At
+ *   100km/h the same zoom stood at 132m and at 180km/h at 220m, so the one
+ *   thing the minimum zoom is FOR was unreachable whenever the truck moved.
+ * - it broke ZOOM_MAX's derivation, which runs this arithmetic backwards and
+ *   says in its own docstring that it does so "at a standstill". Any speed at
+ *   the ceiling overshot SIGHT_MAX and was swallowed by the clamp in
+ *   `viewRadius` — the exact "the clamp saturated and the extra ceiling bought
+ *   nothing" failure SIGHT_MAX's note was written to end.
+ * - and the four places that computed it by hand did not agree: this one
+ *   exempted a flying drone, the streaming budget, the pan scale and the tap
+ *   unproject did not, so with the drone up and the truck moving the camera
+ *   stood at one distance while the map's own arithmetic believed another.
+ *
+ * One function now, so the frame, the tiles it streams, a drag across it and a
+ * tap into it cannot come apart again. A zoom is a distance; that is all.
+ */
+function chartDist(): number { return CAM.base * zoomCur; }
 function viewRadius(): number {
   if (camMode !== 'top') return 900;
-  const dist = CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh;
+  const dist = chartDist();
   const halfV = Math.tan(((camera.fov / 2) * Math.PI) / 180);
   // The far edge of a tilted frustum reaches further than the near edge; the
   // /cos term is that stretch, capped so a near-horizon tilt cannot ask for
@@ -25898,6 +25931,12 @@ function tapeKeep(): string {
 (window as unknown as { __cam?: object }).__cam = (m?: string): object => {
   if (m === 'cab' || m === 'chase' || m === 'drone' || m === 'top') setCam(m);
   return { mode: camMode, stick: !!stick, zoom: +zoomCur.toFixed(1),
+    // THE STAND-OFF, because the chart's speed retreat was invisible to every
+    // probe for as long as it existed: `__cam` reported the zoom, and the zoom
+    // was exactly the half of the distance that was behaving. A reading here
+    // at two speeds with the zoom held is the witness that it is gone.
+    dist: camMode === 'top' ? Math.round(chartDist()) : null,
+    kmh: Math.round(Math.abs(state.speed) * 3.6),
     // The lens, because a flight between rigs interpolates it and a pop there
     // is the one part of a crossing you cannot see in a position trace.
     fov: +camera.fov.toFixed(2), fly: +camFly.t.toFixed(3),
@@ -31180,7 +31219,7 @@ canvas.addEventListener('pointermove', (e) => {
       return;
     }
     // metres per screen px at the current viewing distance
-    const k = (CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh) / innerHeight;
+    const k = chartDist() / innerHeight;
     // A DRAG IS A SCREEN GESTURE. On a turned chart the world axes are no
     // longer the screen's, so the finger's delta is put through the same
     // rotation the view is drawn with — otherwise dragging left walks the map
@@ -31355,7 +31394,7 @@ function chartToWorld(px: number, py: number): [number, number] {
     }
     return [camera.position.x + bx * FIX_REACH, camera.position.z + bz * FIX_REACH];
   }
-  const k = (CAM.base * zoomCur + Math.abs(state.speed) * 3.6 * CAM.perKmh) / innerHeight;
+  const k = chartDist() / innerHeight;
   const cz = Math.cos((CAM.tilt * Math.PI) / 180);
   return [
     state.x + panX + (px - innerWidth / 2) * k,
@@ -36546,7 +36585,7 @@ function tick(now: number): void {
     // the map to find the drone and being shown the parked truck instead is the
     // one thing the map must not do.
     const tvx = viewX(), tvz = viewZ();
-    const dist = CAM.base * zoomCur + Math.abs(drone.up ? 0 : state.speed) * 3.6 * CAM.perKmh;
+    const dist = chartDist();
     const tiltRad = (CAM.tilt * Math.PI) / 180;
     // THE CHART'S LINE WEIGHT, in metres, so that it is OV_PX pixels. The
     // camera orbits at `dist` and the world renders into pixSize.y lines, so

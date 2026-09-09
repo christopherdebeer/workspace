@@ -4331,6 +4331,150 @@ Two from the seat, both about a thing appearing when it should not.
   was drawn instantly and the gate applied to everything except the case it
   was written for.
 
+### The chart stood off by speed, and the chase camera never did
+
+Reported from the seat as "we have camera pull back in chase mode (correct)
+but it appears to also apply in top/down chart view". Half of that is exactly
+backwards, and the half that is backwards is the interesting half.
+
+**CHASE HAS NO PULL-BACK.** It had one — `+0.26m per m/s` — and it was
+deliberately removed, because backing the camera away LOWERS the angular flow
+of everything near the eye, which is the strongest speed signal there is, and
+it read from the seat as "the game feels slow". What replaced it is `fovKick`:
+the 55° lens widens toward 63° as the rig approaches its top speed. That reads
+as a pull-back and is the opposite of one. The note is already by the code; it
+is repeated here because the seat's report was a reasonable reading of what the
+frame looks like, and the next person to go looking will start where the seat
+pointed.
+
+**THE CHART HAD ONE, AND NOTHING COULD SEE IT.** `CAM.perKmh`, 1.1 metres of
+orbit per km/h, in the top camera's stand-off. It was wrong on its own terms
+three ways over:
+
+- it broke `ZOOM_MIN`'s whole purpose. That constant exists to put the eye 22m
+  over the truck — "a frame about 23m across, the whole of a junction and its
+  corners, which is the scale the joins are judged at from the chart". At
+  100km/h the same zoom stood at 132m, at 180km/h at 220m. The one thing the
+  minimum zoom is FOR was unreachable whenever the truck was rolling.
+- it broke `ZOOM_MAX`'s derivation, which runs `viewRadius`'s arithmetic
+  backwards and says in its own docstring that it does so *at a standstill*. Any
+  speed at the ceiling overshot `SIGHT_MAX` and was swallowed by the clamp — the
+  exact "the clamp saturated and the extra ceiling bought nothing" failure that
+  `SIGHT_MAX`'s note was written to end.
+- and the four places that computed it did not agree. The camera exempted a
+  flying drone; the streaming budget, the pan scale and the tap unproject did
+  not. With the drone up and the truck moving, the eye stood at one distance
+  while the map's own arithmetic believed another.
+
+`chartDist()` is the one place now, and `CAM.perKmh` is retired rather than
+zeroed. **A constant nobody reads is the thing this file keeps warning about**,
+and this one had been read by four hand-written copies of one expression.
+
+**AND `__cam` COULD NOT HAVE CAUGHT IT.** It reported the zoom and not the
+stand-off — and the zoom was precisely the half of the distance that was
+behaving. It reports `dist` and `kmh` now. The general rule, again: a probe
+that reports the input and not the output cannot witness a term applied
+between them.
+
+`devtools/chart-dist.mjs` is the measurement, and it has a trap in it worth
+keeping. **The zoom and the speed live on different clocks.** `__zoom` sets a
+TARGET that `zoomCur` eases toward at 8/s, so changing it needs frames to pass;
+the speed term, if it were still there, is applied per frame from `state.speed`,
+so proving it gone needs NO frame to pass — `__drive` IS the sim's state object,
+and setting `speed` on it and reading `__cam()` in the same evaluate means the
+sim never gets the chance to put the speed back. The first cut ran the whole
+thing in one synchronous block and read `zoom 1 / dist 175` in all six rows: a
+real pass on the speed question and no test of the zoom question at all.
+Measured after, three zooms, four speeds each: 22m at 0.125, 385m at 2.2, 3495m
+at 20, identical at 0, 60, 120 and 180 km/h.
+
+### The wide chart does not load, and it is NOT that the tiles are too dense
+
+The standing diagnosis in this file — z8, z9 and z10 return 502 because their
+boxes are too dense for the class ladder, so narrow the ladder — **is not
+supported, and the measurement that was supposed to support it was measuring
+somebody else's queue.** Two controls overturned it, and both are the kind that
+should have been run first.
+
+**A PURE OCEAN TILE FAILS IDENTICALLY TO A CITY TILE.** Asked of the live cell,
+same rung, three densities:
+
+| | z10 | z9 | z8 |
+|---|---|---|---|
+| Cape Town (city + coast) | 503 @ 9.0s | 502 @ 15.9s | 502 @ 16.0s |
+| Namib (near-empty) | 502 @ 15.5s | 502 @ 16.0s | 502 @ 16.0s |
+| **South Atlantic (pure ocean)** | **502 @ 16.0s** | **502 @ 16.0s** | **502 @ 15.9s** |
+
+A mid-Atlantic z8 box contains essentially nothing. An empty answer cannot be
+slow because of how much it contains, so density is not the discriminator —
+whatever else is true. (The controls in the same run: Cape Town z12 serves 1,647
+ways / 201KB in 395ms and z7 784 ways / 89KB in 310ms, both from the bank, so
+the route, the bank and the edge are all healthy.)
+
+**AND A COLD FINE TILE FAILS TOO.** `~/osm/v3/` at z16 over the Karoo — a place
+nobody has driven, so a genuine miss — returned 503 in 12.8s, while the banked
+Cape Town z16 beside it served 135KB in 3.0s. **The upstream is degraded for
+this cell across every layer, not at the coarse rungs specially.** Nothing about
+the ladder can be concluded on a day like this one.
+
+**WHY THE ORIGINAL NUMBERS WERE WRONG.** The mirror health control, which is one
+query and had never been run: a ONE-CITY-BLOCK query returning 23 ways — a cost
+of essentially nothing —
+
+| mirror | one-block query | verdict |
+|---|---|---|
+| overpass.kumi.systems | **39.6s** | saturated |
+| overpass.private.coffee | **36.4s** | saturated |
+| overpass-api.de | **1.6s** | healthy, `Rate limit: 2` |
+
+Two of the cell's three mirrors are twenty-five times slower than the third on
+a query with no content. Every "this rung takes 35 seconds" reading in the
+previous investigation came off those two, so it was a reading of their queue
+and not of the box. **Measure the instrument before measuring with it** — the
+same lesson as the settle gate, one layer out.
+
+**WHAT IS STILL SOLID**, because it is arithmetic and code-reading rather than a
+timing, and each of these is worth fixing whatever Overpass is doing:
+
+- **The ladder is not a ladder in the middle.** z8, z9 and z10 all ask for
+  `motorway|trunk|primary`, over boxes of 156, 78 and 39km — 16x, 4x and 1x the
+  area. Only z7 was ever narrowed, and it was narrowed because it was measured.
+- **The caps are inverted against their own stated reason.** z8 gets 8000 and
+  z10 gets 3000, "the same narrow class set over 4x and 16x the ground" — but
+  the class set at z8 is not narrower than z10's, it is identical, so 16x the
+  area is given 2.7x the headroom.
+- **`OV_ATTEMPT_MS` (26s) is a silent hard gate.** A query that genuinely needs
+  30s never completes on ANY attempt, so the tile can never bank however many
+  times it is asked — and the design's whole answer to slowness is that the
+  Lambda outlives the edge and banks anyway. Confirmed against the live cell:
+  the same z9 tile asked at 0s, 70s and 140s returned 502 every time. It is not
+  filling in the background.
+- **At most two of the three mirrors are ever tried.** `askOverpass` gives
+  mirror one `min(26s, 44s)` = 26s; on failure `left` is 18s so mirror two gets
+  18s; then `left < 1500` and the loop breaks. The third mirror is unreachable
+  by construction whenever the first two time out.
+- **Mirror choice has no memory of health.** The rotation is `(x+y+z+minute) %
+  3`, so a mirror that has failed every request for an hour is asked exactly as
+  often as one that is answering. With two of three saturated, two thirds of
+  overview asks start by spending most of the budget on a mirror that will not
+  answer.
+- **The ring is 25 tiles at the rungs that cost most**, four in flight, against
+  a mirror whose per-IP limit is two concurrent queries.
+
+**UNVERIFIED AND WORTH ONE QUERY** when the service is well: `out geom` returns
+a matched way's WHOLE geometry, and a coastline or a large river way is not
+bounded by the box. If that is right, the coast clause at z8 and z9 can drag a
+continent's coastline into a 156km tile, and it would be invisible in a way
+count. z7 already carries no coast, for a reason recorded as a timing.
+
+**THE THING TO BUILD FIRST IS NOT A FIX, IT IS A WITNESS.** `serveOverview`
+returns a bare 503 on every failure — mirror refused instantly, query too big,
+budget exhausted and cap tripped are one string. Nobody can tell them apart from
+outside, which is why this took two sessions to get wrong twice. The 503 body
+and a header should name the mirror tried, the milliseconds spent on each, and
+which of the four ways it ended. That is a small change and it makes the next
+investigation one curl rather than an afternoon of guessing.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where
