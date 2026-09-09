@@ -4678,10 +4678,25 @@ was superseded by the rule above, which is simpler and what the seat asked for.
 The measurement is kept here because the next person to want a cloud's average
 on a wide surface will otherwise measure it wrong the same way.
 
+**Measured under the rule**, same pair of frames: haze UL 94 / UR 93 / LL 91 /
+LR 91, clear 103 / 103 / 100 / 99 — the quadrants within three luma either
+way, and the top-to-bottom gradient 3 under haze against 3–4 under a clear
+sky, so the aerial-perspective ramp took the 7-luma smear with it. The haze
+frame is nine luma darker overall, uniformly: that is the sky's own light
+under cloud, and it is supposed to be.
+
 The water's `sceneShade` carries the same edge and the same fade, or a river on
 the wide chart would keep the cross its banks lost. `?wx=haze` on the wide
 chart is the two-minute check for any of this; `devtools/wide-cloud-ab.mjs`
 takes the pair of frames and `__cam().mpp` says what the fade is keyed on.
+
+**AND THE DEPLOY STUCK.** The first deploy of this fix (v1788955892954) sat in
+`DEPLOYING` for forty minutes and the cell kept serving the build before it —
+the seat reported the artefact "still present" against a bundle that did not
+carry the fix. `cells.get` is the witness (`deploy.phase`); a second
+`push --deploy` was issued over it. cell-sync's 180s wait is not the deploy's
+duration and never was: verify the LIVE bundle for the symbol, and read
+`cells.get` before believing a deploy that outran the wait.
 
 ## The switch table
 
