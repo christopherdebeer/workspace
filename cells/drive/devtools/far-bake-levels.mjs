@@ -51,7 +51,7 @@ async function settleFar(page, label, maxS = 420) {
 
 async function run(kind) {
   const spot = kind === 'pinned' ? `${SPOT}&cam=top&z=${WIDE}&nodraw=1` : `${SPOT}&cam=top&z=2&nodraw=1`;
-  const { page, close } = await openDrive({ spot, tag: `farbake-${kind}`, menu: false, settle: 0 });
+  const { page, close } = await openDrive({ spot, tag: `farbake-${kind}`, menu: true, settle: 0 });
   console.log(`\n=== ${kind}: ${kind === 'pinned' ? 'arrived wide' : 'walks out z2 -> ' + WIDE} ===`);
   if (kind === 'ladder') {
     // Let the driving-zoom world stand up first, then walk the zoom out in
@@ -59,6 +59,16 @@ async function run(kind) {
     await settleFar(page, 'z2', 240);
     for (const z of [12, 60, 300, WIDE]) {
       await page.evaluate((zz) => window.__zoom(zz), z);
+      // `__zoom` sets a TARGET that `zoomCur` eases toward at 8/s in the top
+      // camera's frame step — the same trap chart-dist.mjs records. Settling
+      // the shell before the ease has arrived measures the previous level.
+      for (let i = 0; i < 80; i++) {
+        const got = await page.evaluate((zz) => Math.abs(window.__cam().zoom - zz) < Math.max(0.5, zz * 0.02), z);
+        if (got) break;
+        await new Promise((r) => setTimeout(r, 250));
+      }
+      const zc = await page.evaluate(() => window.__cam().zoom);
+      console.log(`  zoom asked ${z} -> ${zc}`);
       await settleFar(page, `z${z}`, 300);
     }
   }
@@ -75,7 +85,12 @@ async function run(kind) {
     console.log(`    bake level z${z}: ${tints.length} tiles, mean tint rgb(${mean.join(',')})`);
   }
   await page.evaluate(() => window.__draw(true));
-  await new Promise((r) => setTimeout(r, 4000));
+  const f0 = await page.evaluate(() => (window.__clock?.() ?? {}).frames ?? null);
+  for (let i = 0; i < 120; i++) {
+    const f = await page.evaluate(() => (window.__clock?.() ?? {}).frames ?? null);
+    if (f0 === null || (f !== null && f - f0 >= 4)) break;
+    await new Promise((r) => setTimeout(r, 500));
+  }
   const shot = join(WORK, `farbake-${kind}.png`);
   await page.screenshot({ path: shot, timeout: 240000 });
   console.log(`  frame: ${shot}`);
