@@ -4941,6 +4941,51 @@ zoom you would have left anyway.
 globe — the asset already holds them — and the globe has no place names of its
 own, so between the shell's hand-over and the limb the chart is silent.
 
+## Globe navigation: retain the place, not a disposable spin
+
+The seat reported that spinning the planet then zooming in returned to the
+truck, and that wide drags made the camera lurch. The earlier gesture notes
+above describe the old contract, not the current one: **zooming in is NOT a
+request to return to the rig**. Globe drags now update the chart's geographic
+focus through panX/panZ. The rig and its fine-world streamer are untouched;
+the existing far/overview streamer follows the retained chart focus. Explicitly
+leaving the chart still returns to the rig. Spin probe offsets are consumed
+into the focus on the next visible globe frame rather than decayed away.
+
+The camera used to lerp its position while aiming immediately at the new pan
+target. That changes its angle throughout a drag. TOP now sets position and
+aim together; zoom has one frame-independent logarithmic spring, with direct
+response during a two-finger pinch. Zoom is advanced before globe/shell
+ownership, removing their one-frame disagreement. Tilt uses altitude rather
+than art-pixel resolution, with a smoothstep into a truly vertical globe view.
+The hand-over uses the final shell's capacity, not a changing in-flight LOD.
+The invisible steering zone only accepts a near-rig, close-zoom first finger.
+
+Both far terrain and overview geometry now share an exact paraboloid shear
+centred under the browsed focus. The old rotation was a small-angle correction
+under the truck and could put distant browsed ground millions of metres below
+the chart. Remote chart height comes from the retained coarse raster. This is
+still **coarse remote browsing**, not a second fine-world simulation: street
+meshes remain around the rig, and the inherited origin-scaled equirectangular
+projection still distorts widths at latitudes far from the origin. A future
+full independent chart projection should address that separately, not move
+the truck as a side effect of looking somewhere else.
+
+Pinches include midpoint translation and a zoom-ratio anchor; globe drags use
+sphere intersections with bounded limb fallback. Longitude wraps and latitude
+is bounded to the map's +/-85 degrees. Large remote pans no longer spring
+back just because the rig or drone is moving.
+
+Checked with devtools/globe-navigation.test.cjs against the actual main.ts
+function bodies: retained 40N/140E through zoom 110000 to 1, stationary rig,
+dateline and polar clamps, rotated drags, hand-over independent of pixel/LOD,
+shared shell/road matrices, 30/60/120fps zoom agreement, and repeated pinches
+through the hand-over (return error 0.0252 degrees longitude at regional scale).
+Run with node devtools/globe-navigation.test.cjs; uses installed esbuild/three.
+Main syntax and the helper's types checked. This environment cannot create a
+WebGL context, so these are geometry/input regression checks, not a claim of
+on-device visual or touch-feel verification.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where

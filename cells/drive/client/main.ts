@@ -30,6 +30,7 @@ import { BUILD_CULTURES, ROAD_CULTURES, SCOPE, absMetres, bedrockAt, buildLookAt
 import { pickInfrastructureRecipe, planSupportStations, type StructureRecipe } from './infrastructure';
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
 import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
+import { smoothChartZoom, wrapLongitude, chartShellMatrix } from './globe-navigation';
 import { GLOBE_R, globeGeometry, globeHit, globeMaterial, globeOrientation, globeFar, latLonToUnit, subsolar } from './globe';
 import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSample, type HydroSystem, type OceanCoverage } from './hydro';
 import { cleanEquipment, equipmentFor, type RigEquipmentId } from './rig-equipment';
@@ -21160,9 +21161,13 @@ function chartMpp(): number {
 /** How much of the frame the planet owns: 0 while the streamed world fills it,
  *  1 once the chart is looking at a globe. The one ramp the wide view's terms
  *  are keyed on. */
-const GLOBE_TILT_LO = 2500, GLOBE_TILT_HI = 9000;
+// Camera geometry uses metres, not art pixels: changing PIXEL must not tilt
+// the camera or change which gesture a finger owns.
+const GLOBE_TILT_LO = 750000, GLOBE_TILT_HI = 2750000;
 function globeOn(): number {
-  return clamp((chartMpp() - GLOBE_TILT_LO) / (GLOBE_TILT_HI - GLOBE_TILT_LO), 0, 1);
+  if (camMode !== 'top') return 0;
+  const t = clamp((chartDist() - GLOBE_TILT_LO) / (GLOBE_TILT_HI - GLOBE_TILT_LO), 0, 1);
+  return t * t * (3 - 2 * t);
 }
 /**
  * HOW FREE THE PLANET IS TO BE TURNED — 0 while the far shell still covers the
@@ -21204,8 +21209,12 @@ function globeOn(): number {
  */
 function globeFree(): number {
   if (camMode !== 'top' || !globeGroup.visible) return 0;
-  const ringM = (2 * FAR_RING_MAX + 1) * tileMetres(farZ);
-  return chartMpp() * Math.hypot(pixSize.x, pixSize.y) > ringM ? 1 : 0;
+  // The final shell's reach is stable; the currently downloading LOD is not.
+  // Using farZ could change gesture ownership underneath a held finger.
+  const ringM = (2 * FAR_RING_MAX + 1) * tileMetres(farLevelFor(SIGHT_MAX));
+  const frameM = 2 * chartDist() * Math.tan(camera.fov * Math.PI / 360)
+    * Math.hypot(innerWidth, innerHeight) / Math.max(2, innerHeight);
+  return frameM > ringM ? 1 : 0;
 }
 /**
  * DEGREES OF ARC PER SCREEN PIXEL OF DRAG, at the point the sphere is tangent.
@@ -21244,7 +21253,7 @@ function globeDegPerPx(): number {
  * placement, `viewRadius`'s horizon stretch and the tap unproject — or they
  * would disagree about where the ground under a finger is.
  */
-function chartTilt(): number { return CAM.tilt + (89 - CAM.tilt) * globeOn(); }
+function chartTilt(): number { return CAM.tilt + (90 - CAM.tilt) * globeOn(); }
 function viewRadius(): number {
   if (camMode !== 'top') return 900;
   const dist = chartDist();
@@ -21620,7 +21629,7 @@ function streamWorld(ex: number, ez: number): void {
     // there. The stream pass refires every ~1.2s, so a pan starts filling on
     // the next tick.
     const [cLat, cLon] = camMode === 'top' && (panX !== 0 || panZ !== 0)
-      ? localToLatLon(ex + panX, ez + panZ) : [lat, lon];
+      ? localToLatLon(viewX() + panX, viewZ() + panZ) : [lat, lon];
     // THE BACKDROP STOPS WHERE THE FIXTURE DOES. A fixture answers the height
     // fetch from a formula or a clamped grid, so the coarse ring would happily
     // build 80km of extrapolated edge row and present it as a horizon — a
@@ -21876,6 +21885,15 @@ const curveDrop = (dx: number, dz: number): number => (dx * dx + dz * dz) / (2 *
  */
 const farAxis = new THREE.Vector3();
 function alignFarShell(): void {
+  if (camMode === 'top') {
+    farGroup.matrixAutoUpdate = ovGroup.matrixAutoUpdate = false;
+    chartShellMatrix(viewX() + panX, viewZ() + panZ, EARTH_R, farGroup.matrix);
+    ovGroup.matrix.copy(farGroup.matrix);
+    farGroup.matrixWorldNeedsUpdate = ovGroup.matrixWorldNeedsUpdate = true;
+    return;
+  }
+  farGroup.matrixAutoUpdate = ovGroup.matrixAutoUpdate = true;
+  ovGroup.position.set(0, 0, 0); ovGroup.rotation.set(0, 0, 0);
   const cx = viewX(), cz = viewZ();
   const d = Math.hypot(cx, cz);
   if (d < 1) { farGroup.rotation.set(0, 0, 0); farGroup.position.y = 0; return; }
@@ -22068,7 +22086,7 @@ const GLOBE_SPIN_LAT_MAX = 85;
  *  Both callers — the drag and the probe — go through here so they cannot
  *  disagree about which hemisphere is reachable. */
 function globeSpinLatRange(): [number, number] {
-  const [tLat] = localToLatLon(viewX(), viewZ());
+  const [tLat] = localToLatLon(viewX() + panX, viewZ() + panZ);
   return [-GLOBE_SPIN_LAT_MAX - tLat, GLOBE_SPIN_LAT_MAX - tLat];
 }
 /** Fetched once, on the first wide chart — not at boot. 317KB is not a cost
@@ -22094,11 +22112,18 @@ function globeTexture(): void {
 }
 /** Where the planet is tangent, how it is turned, and where its sun stands. */
 function stepGlobe(): void {
-  const on = camMode === 'top' && chartMpp() > GLOBE_MPP_ON && !FIXTURE;
+  const on = camMode === 'top' && chartDist() > 150000 && !FIXTURE;
   if (on) globeTexture();
   globeGroup.visible = on && globeU.uBase.value !== null;
   if (!globeGroup.visible) return;
-  const vx = viewX(), vz = viewZ();
+  // Spin is a change of chart focus, never a disposable offset. The rig stays
+  // where it is; the existing overview streamer follows panX/panZ.
+  if (globeSpinLat || globeSpinLon) {
+    const [lat, lon] = localToLatLon(viewX() + panX, viewZ() + panZ);
+    setChartFocus(lat + globeSpinLat, lon + globeSpinLon);
+    globeSpinLat = globeSpinLon = 0;
+  }
+  const vx = viewX() + panX, vz = viewZ() + panZ;
   const [gLat, gLon] = localToLatLon(vx, vz);
   globeGroup.position.set(vx, -(GLOBE_R + GLOBE_SINK), vz);
   // ── THE SPIN, SCALED BY THE HAND-OVER ──
@@ -22120,7 +22145,8 @@ function stepGlobe(): void {
   // chart already says.
   globePin.visible = free > 0.001;
   if (globePin.visible) {
-    latLonToUnit(gLat, gLon, globePin.position).multiplyScalar(GLOBE_R * GLOBE_PIN_LIFT);
+    const [rigLat, rigLon] = localToLatLon(viewX(), viewZ());
+    latLonToUnit(rigLat, rigLon, globePin.position).multiplyScalar(GLOBE_R * GLOBE_PIN_LIFT);
     globePin.scale.setScalar(GLOBE_PIN_PX * chartMpp());
   }
   // THE SUN IS THE CLOCK'S, NOT THE WALL'S. `clockHour` is local solar time at
@@ -31588,6 +31614,15 @@ let lift: { id: number; y0: number; dy: number } | null = null;
 // wheel zooms on desktop. Chase keeps the appear-where-the-thumb-lands stick
 // with second-finger brake.
 let panX = 0, panZ = 0, zoomT = 1, zoomCur = 1;
+function setChartFocus(lat: number, lon: number): void {
+  const [x, z] = toLocal(clamp(lat, -85, 85), wrapLongitude(lon));
+  panX = x - viewX(); panZ = z - viewZ();
+}
+/** Remote browsing never silently becomes driving or springs back to the rig. */
+function chartRemote(): boolean { return Math.hypot(panX, panZ) > 10000; }
+function chartGround(x: number, z: number): number {
+  return heightTileAt(x, z) ? sampleHeight(x, z) : (farRasterAt(x, z) ?? baseElev) - baseElev;
+}
 /** The height of the ground the current drag took hold of — the plane the pan
  *  resolves against. Null between gestures. */
 let panY: number | null = null;
@@ -31673,7 +31708,8 @@ canvas.addEventListener('pointerdown', (e) => {
     // the "janky" — not a dropped frame, a swallowed gesture. Tightened to the
     // truck itself, and the ring is SHOWN while it is held so a grab that lands
     // on it explains itself instead of just failing.
-    if (!stick && Math.hypot(e.clientX - h.x, e.clientY - h.y) <= STICK_R * 0.62) {
+    if (!stick && !panPtrs.size && zoomCur < 8 && !chartRemote()
+      && Math.hypot(e.clientX - h.x, e.clientY - h.y) <= STICK_R * 0.62) {
       stick = { id: e.pointerId, x0: h.x, y0: h.y, dx: 0, dy: 0, ax: 0, ay: 0 };
       stickBase.style.display = stickNub.style.display = 'block';
       stickBase.style.left = stickNub.style.left = `${h.x}px`;
@@ -31689,8 +31725,11 @@ canvas.addEventListener('pointerdown', (e) => {
       // grabbed ground ~74m out from under the finger. Taken under the finger
       // instead it is right by construction — and sampled ONCE, so the plane
       // cannot wobble mid-drag as the ray crosses a cliff.
-      const [gx, gz] = chartToWorld(e.clientX, e.clientY);
-      panY = groundAt(gx, gz);
+      if (panPtrs.size === 1) {
+        const [gx, gz] = globeFree() ? [viewX() + panX, viewZ() + panZ]
+          : chartToWorld(e.clientX, e.clientY);
+        panY = chartGround(gx, gz);
+      }
     }
     return;
   }
@@ -31734,21 +31773,7 @@ canvas.addEventListener('pointermove', (e) => {
     // cosine goes to zero and an unfloored drag would run away in the last few
     // degrees rather than merely being fast.
     if (globeFree() > 0) {
-      const dpp = globeDegPerPx(), mr = mapRot();
-      const fx = -(cur.x - prev.x) * dpp, fy = -(cur.y - prev.y) * dpp;
-      const east = fx * Math.cos(mr) - fy * Math.sin(mr);
-      const south = fx * Math.sin(mr) + fy * Math.cos(mr);
-      const [tLat] = localToLatLon(viewX(), viewZ());
-      const cs = Math.max(0.25, Math.cos(((tLat + globeSpinLat) * Math.PI) / 180));
-      globeSpinLon += east / cs;
-      const [loLat, hiLat] = globeSpinLatRange();
-      // The world is x = east, z = SOUTH, so a target moving south is latitude
-      // going down. Taking these two signs from the flat pan's own lines rather
-      // than from first principles is deliberate: that rotation was once a
-      // mirror (determinant −1 at every angle, horizontal right and vertical
-      // backwards), the failure is recorded in the fallback below, and a spin
-      // derived independently could reintroduce it on one axis only.
-      globeSpinLat = clamp(globeSpinLat - south, loLat, hiLat);
+      dragGlobe(prev.x, prev.y, cur.x, cur.y);
       panPtrs.set(e.pointerId, cur);
       return;
     }
@@ -31797,7 +31822,24 @@ canvas.addEventListener('pointermove', (e) => {
     if (other) {
       const d0 = Math.hypot(prev.x - other.x, prev.y - other.y);
       const d1 = Math.hypot(cur.x - other.x, cur.y - other.y);
-      if (d0 > 12 && d1 > 12) zoomT = clamp(zoomT * (d0 / d1), ZOOM_MIN, ZOOM_MAX); // survey a whole region
+      if (d0 > 12 && d1 > 12) {
+        const target = clamp(zoomT * d0 / d1, ZOOM_MIN, ZOOM_MAX);
+        const ratio = target / zoomT;
+        const mx0 = (prev.x + other.x) / 2, my0 = (prev.y + other.y) / 2;
+        const mx1 = (cur.x + other.x) / 2, my1 = (cur.y + other.y) / 2;
+        // Include the pinch midpoint's translation. On the plane, projecting
+        // the new midpoint back through the zoom ratio also keeps an off-centre
+        // pinch anchored, rather than pulling everything towards screen centre.
+        const px = innerWidth / 2 + (mx1 - innerWidth / 2) * ratio;
+        const py = innerHeight / 2 + (my1 - innerHeight / 2) * ratio;
+        if (globeFree()) dragGlobe(mx0, my0, px, py);
+        else {
+          const y = panY ?? chartGround(viewX() + panX, viewZ() + panZ);
+          const a = chartPlaneAt(mx0, my0, y), b = chartPlaneAt(px, py, y);
+          if (a && b) { panX += a[0] - b[0]; panZ += a[1] - b[1]; }
+        }
+        zoomT = target;
+      }
     }
   }
   panPtrs.set(e.pointerId, cur);
@@ -31827,7 +31869,8 @@ let tapAt = 0, tapX = 0, tapY = 0, tapSeen = 0;
 (window as unknown as { __chartat?: object }).__chartat =
   (px: number, py: number): [number, number] => chartToWorld(px, py);
 (window as unknown as { __pan?: object }).__pan = (): object =>
-  ({ x: +panX.toFixed(2), z: +panZ.toFixed(2), rot: +mapRot().toFixed(4), headingUp: mapHeadingUp });
+  ({ x: +panX.toFixed(2), z: +panZ.toFixed(2), rot: +mapRot().toFixed(4), headingUp: mapHeadingUp,
+    focus: localToLatLon(viewX() + panX, viewZ() + panZ), remote: chartRemote() });
 // endStick is bound to the canvas AND to the window, so one release runs it
 // twice with the SAME event object. Without this the second run sees a tap
 // zero milliseconds old at zero distance and teleports on a single tap.
@@ -31843,12 +31886,34 @@ let lastUp: Event | null = null;
  * Null when the ray cannot get there: aimed at or above the horizon, or so
  * shallow that the intersection flies off to somewhere the drag should not go.
  */
+/** The two rays see the same globe orientation. Their geographic difference
+ * moves the grabbed place to the new finger position, including a turned map.
+ * Near the limb a ray becomes ill-conditioned, so cap the step to a small
+ * multiple of the centre rate; off-disc drags retain that bounded rate. */
+function dragGlobe(x0: number, y0: number, x1: number, y1: number): void {
+  const at = (x: number, y: number) => {
+    const ray = new THREE.Vector3(x / innerWidth * 2 - 1, 1 - y / innerHeight * 2, 0.5)
+      .unproject(camera).sub(camera.position).normalize();
+    return globeHit(camera.position, ray, globeGroup.position, globeGroup.quaternion);
+  };
+  const a = at(x0, y0), b = at(x1, y1);
+  const [lat, lon] = localToLatLon(viewX() + panX, viewZ() + panZ);
+  const dpp = globeDegPerPx(), mr = mapRot();
+  const dx = -(x1 - x0) * dpp, dy = -(y1 - y0) * dpp;
+  const cs = Math.max(0.087, Math.cos(lat * Math.PI / 180));
+  const maxStep = Math.hypot(x1 - x0, y1 - y0) * dpp * 3;
+  const dLat = a && b ? clamp(a.lat - b.lat, -maxStep, maxStep)
+    : -(dx * Math.sin(mr) + dy * Math.cos(mr));
+  const dLon = a && b ? clamp(wrapLongitude(a.lon - b.lon), -maxStep / cs, maxStep / cs)
+    : (dx * Math.cos(mr) - dy * Math.sin(mr)) / cs;
+  setChartFocus(lat + dLat, lon + dLon);
+}
 function chartPlaneAt(px: number, py: number, y0: number): [number, number] | null {
   const ray = new THREE.Vector3((px / innerWidth) * 2 - 1, -(py / innerHeight) * 2 + 1, 0.5)
     .unproject(camera).sub(camera.position).normalize();
   if (ray.y > -1e-3) return null;
   const t = (y0 - camera.position.y) / ray.y;
-  if (!Number.isFinite(t) || t <= 0 || t > 1e6) return null;
+  if (!Number.isFinite(t) || t <= 0 || t > camera.far) return null;
   return [camera.position.x + ray.x * t, camera.position.z + ray.z * t];
 }
 /**
@@ -37185,15 +37250,17 @@ function tick(now: number): void {
   // camera change if they were only reached from the top branch — a backdrop
   // left up is a black frame from the cab, and it would happen on the one
   // frame nobody is looking at the chart to notice.
+  // Update the single zoom state BEFORE globe/shell ownership is evaluated.
+  // Previously the globe used last frame's zoom while the shell used this one.
+  if (camMode === 'top') zoomCur = panPtrs.size === 2 ? zoomT : smoothChartZoom(zoomCur, zoomT, dt);
   stepGlobe();
   // The atmosphere gives out where the planet becomes an object: by 14km a
   // pixel the frame is wider than the Earth's disc and what surrounds the limb
   // is space, not sky. Below 6km a pixel the dome is still a horizon you are
   // looking along. `chartMpp` is 0 off the chart, so this is 0 there.
   (skyMat.uniforms.uSpace as { value: number }).value =
-    clamp((chartMpp() - 6000) / 8000, 0, 1);
+    camMode === 'top' ? clamp((chartDist() - 1800000) / 2500000, 0, 1) : 0;
   if (camMode === 'top') {
-    zoomCur += (zoomT - zoomCur) * Math.min(1, 8 * dt);
     // The coarse shell is a backdrop for the wide view and nothing else: shown
     // only once the frustum reaches past the fine ring, so its seam is never
     // on screen at an angle that could reveal it. The overview vectors ride
@@ -37221,7 +37288,7 @@ function tick(now: number): void {
     // under a shell that did not spin is the one failure this design exists to
     // rule out. `globeFree` is 0 both where the ring covers and where there is
     // no planet at all, which is exactly the pair of cases the shell draws in.
-    const shellOn = zoomCur > 6 && globeFree() === 0;
+    const shellOn = (zoomCur > 6 || chartRemote()) && globeFree() === 0;
     farGroup.visible = shellOn;
     ovGroup.visible = shellOn;
     // …and where the coarse vectors are allowed to start showing. At driving
@@ -37241,16 +37308,9 @@ function tick(now: number): void {
     // toward the truck at 2.5/s while the thumb was still moving it, which is
     // the other half of what "janky" was describing — above 21km/h the chart
     // fought every pan.
-    if (!panPtrs.size && (stick || Math.abs(state.speed) > 6 || drone.up)) {
+    if (!panPtrs.size && !chartRemote() && globeFree() === 0
+      && (stick || Math.abs(state.speed) > 6 || drone.up)) {
       const f = Math.exp(-2.5 * dt); panX *= f; panZ *= f;
-    }
-    // THE SPIN COMES HOME WHEREVER THE SHELL IS BACK. `globeFree` already
-    // scales it to nothing there, so this is hygiene rather than motion: it
-    // stops a spin banked at planet zoom springing the chart to the far side of
-    // the world the next time you pull out. Zooming in is a decision to come
-    // back, and it should be one the next zoom out respects.
-    if (globeFree() <= 0) {
-      const g = Math.exp(-2.5 * dt); globeSpinLat *= g; globeSpinLon *= g;
     }
     // THE CHART IS OVER WHOEVER IS CURRENT. Flying, that is the drone: opening
     // the map to find the drone and being shown the parked truck instead is the
@@ -37274,7 +37334,7 @@ function tick(now: number): void {
     // moving 74m during a drag that was purely sideways. The map lurching as
     // you cross a shoreline is the "janky" from the other side. Smoothed, the
     // floor still follows the land and never steps off it.
-    const tgtRaw = sampleHeight(tvx + panX, tvz + panZ);
+    const tgtRaw = chartGround(tvx + panX, tvz + panZ);
     chartY = chartY === null ? tgtRaw : chartY + (tgtRaw - chartY) * Math.min(1, 2.2 * dt);
     const tgtY = chartY;
     // The camera stands OPPOSITE whatever screen-up is meant to point at: due
@@ -37505,7 +37565,7 @@ function tick(now: number): void {
       camInit = true;
       ghostCab(camMode === 'cab');
     }
-  } else if (!camInit || camMode === 'cab' || rewind.at !== null) {
+  } else if (!camInit || camMode === 'cab' || camMode === 'top' || rewind.at !== null) {
     camera.position.copy(camPos); camInit = true;
   } else camera.position.lerp(camPos, 1 - Math.exp(-(camMode === 'top' ? 10 : 4.5) * dt));
   // WHAT THIS RIG LOOKS AT, as a point, so a flight can interpolate the aim as
@@ -41575,7 +41635,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     const ranked = [...ovPlaces.values()].sort((a, b) => a.rank - b.rank);
     for (const p of ranked) {
       if (p.rank > maxRank || budget <= 0) break;
-      poiVec.set(p.x, p.y, p.z);
+      poiVec.set(p.x, p.y, p.z).applyMatrix4(ovGroup.matrix);
       if (poiView.copy(poiVec).applyMatrix4(camera.matrixWorldInverse).z > -1) continue;
       poiVec.project(camera);
       if (Math.abs(poiVec.x) > 0.96 || Math.abs(poiVec.y) > 0.92) continue;
