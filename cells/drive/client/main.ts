@@ -3676,7 +3676,33 @@ const cycleT0 = Date.now();
  * thumb on the clock is the most direct statement of intent this world gets
  * about its own light. Cleared by tapping the clock again.
  */
-let clockHeld: number | null = null;
+/**
+ * ── A SCRUB IS AN OFFSET, NOT A FREEZE ──
+ *
+ * This was `clockHeld`, an absolute hour, and `solarHour` returned it before
+ * it looked at anything else — so dragging the clock in CYCLE (the default,
+ * which runs the day at 24x) STOPPED THE DAY. Reported from the seat:
+ * "dragging should change the time as it does, but in cycle it should not
+ * stop it from ticking." Held as hours ADDED to whatever the mode's own
+ * clock says, the drag moves the sun and the mode keeps running underneath
+ * it — the day still turns from wherever you put it, LIVE still tracks the
+ * real sun, and a fixed hour (NOON, DUSK) behaves exactly as the old hold
+ * did, because its base does not move. Cleared by tapping the clock.
+ */
+let clockShift: number | null = null;
+/**
+ * ── AND A TAP RAMPS, IT DOES NOT CUT ──
+ *
+ * Tapping the clock steps the TIME dial to its next preset, which used to
+ * put the sun somewhere else between one frame and the next: dawn to noon is
+ * six hours of sky, shadow and colour arriving as a jump cut. The tap still
+ * changes the mode instantly — the dial is the dial — but the DISPLAYED hour
+ * eases from where the sun was to where the new mode wants it, by the short
+ * way round the face. The mechanism is the splash's golden-hour lean one
+ * paragraph down, which has eased the same number for months.
+ */
+const CLOCK_RAMP_MS = 1600;
+let clockRamp: { from: number; at: number } | null = null;
 /**
  * THE SPLASH LEANS INTO GOLDEN LIGHT. While the hub is open the displayed
  * hour eases toward the nearer golden hour — the world behind the menu is the
@@ -3716,8 +3742,10 @@ const hourDelta = (a: number, b: number): number => ((b - a + 36) % 24) - 12;
 /** The LOCAL SOLAR HOUR the world is living in right now — the one number the
  *  sun, the sky and the HUD clock must all agree on, so it is computed once
  *  and read three times rather than derived three ways. */
-function solarHour(): number {
-  if (clockHeld !== null) return clockHeld;
+/** The hour the MODE alone says — before a scrub, a ramp or the splash's
+ *  lean. Split out so a drag can be an offset from it and a ramp can ease
+ *  toward it while it moves. */
+function clockBase(): number {
   const mode = TIME_MODES[timeMode];
   // LIVE is the real sun at the real moment: real UTC plus the longitude.
   const base = mode === 'LIVE' ? ((Date.now() % 86400000) / 3600000 + origin.lon / 15 + 24) % 24
@@ -3729,6 +3757,39 @@ function solarHour(): number {
     : mode === 'CYCLE'
       ? (5.2 + ((Date.now() - cycleT0) / 3600000) * 24) % 24
       : TIME_HOUR[mode];
+  return base;
+}
+/**
+ * The hour the CLOCK says — the mode's own base, moved by a scrub and eased by
+ * a ramp — and deliberately NOT the splash's golden lean, which is applied on
+ * top of this by `solarHour`.
+ *
+ * THE SPLIT IS LOAD-BEARING AND WAS MEASURED. The tap's ramp first captured
+ * `solarHour()`, so the lean was inside the captured hour AND applied again to
+ * the blend's output: measured with a synchronous read either side of a tap,
+ * the sun moved 0.34h backwards in the instant the mode changed — a cut, which
+ * is the exact thing the ramp exists to prevent. A gesture captures THIS.
+ */
+function clockHour(): number {
+  // The mode's clock, moved by however far the thumb dragged it. The shift is
+  // constant, so a ticking mode goes on ticking from where it was put.
+  let base = clockBase();
+  if (clockShift !== null) base = (base + clockShift + 24) % 24;
+  // …and eased toward it from wherever the sun stood when the preset changed.
+  // Blending toward the LIVE base rather than a captured target is what lets a
+  // ramp into CYCLE land on a clock that has been running the whole time.
+  if (clockRamp !== null) {
+    const t = (performance.now() - clockRamp.at) / CLOCK_RAMP_MS;
+    if (t >= 1) clockRamp = null;
+    else {
+      const e = t * t * (3 - 2 * t);
+      base = (clockRamp.from + hourDelta(clockRamp.from, base) * e + 24) % 24;
+    }
+  }
+  return base;
+}
+function solarHour(): number {
+  const base = clockHour();
   if (splashGold < 0.003) { splashGoldH = null; return base; }
   // Chosen ONCE per approach, from whichever golden hour is nearer — and kept,
   // so the target cannot flip mid-ease and swing the sun across the sky.
@@ -3737,7 +3798,7 @@ function solarHour(): number {
   return (base + hourDelta(base, splashGoldH) * splashGold + 24) % 24;
 }
 function worldNow(): Date {
-  if (TIME_MODES[timeMode] === 'LIVE' && clockHeld === null) return new Date();
+  if (TIME_MODES[timeMode] === 'LIVE' && clockShift === null && clockRamp === null) return new Date();
   const now = new Date();
   const h = solarHour();
   // Local solar hour → UTC. Longitude is the whole of the conversion: the sun
@@ -20996,9 +21057,9 @@ const RETRY_WINDOW = 20000;
  * Cached for 200ms: the HUD asks every frame and the answer cannot change
  * faster than a fetch completes.
  */
-interface WorldWord { rank: number; hud: string; vectors: string; world: string }
+interface WorldWord { rank: number; hud: string; vectors: string; world: string; map: string }
 let worldWordAt = -1e9;
-let worldWord: WorldWord = { rank: 0, hud: '', vectors: 'LOADED', world: 'LOADED' };
+let worldWord: WorldWord = { rank: 0, hud: '', vectors: 'LOADED', world: 'LOADED', map: '' };
 function worldStatus(): WorldWord {
   const now = performance.now();
   if (now - worldWordAt < 200) return worldWord;
@@ -21044,8 +21105,22 @@ function worldStatus(): WorldWord {
   if (ahead) bits.push(`${ahead} AHEAD`);
   if (around + loose) bits.push(`${around + loose} AROUND`);
   if (retry) bits.push(`${retry} RETRY`);
+  // ── AND THE CHART'S OWN LAYER, WHICH HAD NO WORD AT ALL ──
+  //
+  // Three numbers and nothing derived: the level the zoom band chose, how many
+  // of this pass's ring have BUILT, and how many are on the wire. Empty once
+  // the ring is home, so the line disappears the moment it stops being news.
+  // A level change empties both sets by construction (setOvLevel), so zooming
+  // through a band reads as a fresh count rather than as a stall — which is
+  // the truth: the old level is still on screen, sunk, until the new one lands.
+  const ovHome = ovMeshes.size;
+  let ovRetry = 0;
+  for (const t of ovFailedAt.values()) if (now - t < OV_RETRY_MS) ovRetry++;
+  const map = !ovWant || ovHome >= ovWant ? ''
+    : `MAP z${ovZ} · ${ovHome}/${ovWant}`
+      + (ovInFlight ? ` · ${ovInFlight} ON THE WIRE` : ovRetry ? ` · ${ovRetry} RETRY` : '');
   worldWord = {
-    rank, hud,
+    rank, hud, map,
     vectors: osmDown
       ? `${osmDone.size ? `${osmDone.size} TILES · ` : 'NONE · '}${osmFails} FAILS · RETRYING${route}`
       : bits.length ? bits.join(' · ') + route
@@ -21342,9 +21417,17 @@ function streamWorld(ex: number, ez: number): void {
       setOvLevel(ovLevelFor(r));
       const [vx, vy] = tileAt(cLat, cLon, ovZ);
       const vRing = clamp(Math.ceil(r / tileMetres(ovZ)), 1, OV_RING_MAX);
+      // WHAT THIS PASS ASKED FOR, so the chart can say how much of it is home.
+      // Reported from the seat: "I open the chart and zoom out and it is not
+      // clear if or when the overview will load." It was not clear because
+      // nothing said — the fine vector layer has had a status line for years
+      // and this layer, which is the one the chart actually draws, streamed in
+      // silence behind a backdrop that looks the same empty as it does cold.
+      ovWant = (vRing * 2 + 1) ** 2;
+      ovAskedAt = performance.now();
       for (let dx = -vRing; dx <= vRing; dx++)
         for (let dy = -vRing; dy <= vRing; dy++) void loadOvTile(vx + dx, vy + dy);
-    }
+    } else ovWant = 0;
   }
   // ── the summits ──
   // OUTSIDE the view gates above — a mountain is a landmark from the driver's
@@ -21745,6 +21828,30 @@ let ovRetired: THREE.Mesh[] = [];
 /** Overview tiles that arrived with vectors but no heights to lay them on. */
 let ovDemless = 0;
 let ovInFlight = 0;
+/** How many tiles the last chart stream pass asked its ring for, and when —
+ *  the denominator of the MAP status word and of `__ov()`. Zero off the chart:
+ *  this layer is only ever streamed for the top camera. */
+let ovWant = 0, ovAskedAt = 0;
+/**
+ * ── A REFUSED OVERVIEW TILE BACKS OFF, AS THE FINE LAYER'S ALREADY DOES ──
+ *
+ * `loadOvTile` cleared its key on any failure so the next stream pass would
+ * retry — right for a cold tile filling behind the edge, and a request storm
+ * for a tile the route cannot answer at all. Measured against the live cell
+ * at Cape Town: z13, z12 and z11 return in 0.4–0.6s from the bank, while
+ * z10, z9 and z8 return 502 at the CloudFront edge's ~15.5s on EVERY ask,
+ * including after waiting past the Lambda's own 50s budget — so those tiles
+ * never bank and never will until the cell's query changes. Against that,
+ * the chart was re-asking a 25-tile ring every 1.2s for ever, four at a time,
+ * each burning an 11s abort: a permanent load on a route that cannot answer,
+ * and a status line that could never settle.
+ *
+ * The fine layer solved this years ago with `osmFailedAt` and RETRY_WINDOW.
+ * Same shape here, longer window, because an overview tile is cached for a
+ * week once it does land and there is nothing urgent about the retry.
+ */
+const ovFailedAt = new Map<string, number>();
+const OV_RETRY_MS = 45000;
 const ovQueue: Array<() => void> = [];
 const ovGroup = new THREE.Group();
 ovGroup.name = 'overview';
@@ -21965,6 +22072,8 @@ async function loadOvTile(x: number, y: number): Promise<void> {
   const z = ovZ;
   const key = `${z}/${x}/${y}`;
   if (ovTiles.has(key)) return;
+  const failed = ovFailedAt.get(key);
+  if (failed !== undefined && performance.now() - failed < OV_RETRY_MS) return;
   ovTiles.add(key);
   if (ovInFlight >= 4) await new Promise<void>((go) => ovQueue.push(go));
   ovInFlight++;
@@ -21987,9 +22096,13 @@ async function loadOvTile(x: number, y: number): Promise<void> {
     if (!res.ok) throw new Error(`ov HTTP ${res.status}`);
     const data = (await res.json()) as { ways?: Array<{ tags: Record<string, string>; geometry: Array<[number, number]> }> };
     if (z !== ovZ) { ovTiles.delete(key); return; }
+    ovFailedAt.delete(key);
     buildOvTile(key, x, y, z, data.ways ?? [], dem);
   } catch {
-    ovTiles.delete(key);      // a 503 is a cold tile filling; the next stream pass retries
+    // A 503 is a cold tile filling and a 502 is the edge giving up on one that
+    // may never fill; neither is worth asking again on the next 1.2s pass.
+    ovTiles.delete(key);
+    ovFailedAt.set(key, performance.now());
   } finally {
     clearTimeout(bail);
     ovInFlight--;
@@ -28738,6 +28851,14 @@ function meshHeightAt(x: number, z: number): number | null {
  *  is, and whether the weather is a measurement or the synthetic chain. */
 (window as unknown as { __sky?: object }).__sky = (): object => ({
   time: TIME_MODES[timeMode],
+  // THE HOUR THE WORLD IS LIVING IN, beside the mode that chose it and the two
+  // things a thumb can do to it. Without these the clock's gesture contract —
+  // a drag that offsets a running day, a tap that eases to the next preset —
+  // could only be judged by eye on a device.
+  hour: +solarHour().toFixed(4),
+  base: +clockBase().toFixed(4),
+  shift: clockShift === null ? null : +clockShift.toFixed(4),
+  ramping: clockRamp !== null,
   utc: worldNow().toISOString(),
   sunAltDeg: +((sunAlt * 180) / Math.PI).toFixed(1),
   sunAzDeg: +((((sunAz * 180) / Math.PI) % 360 + 360) % 360).toFixed(0),
@@ -32309,7 +32430,21 @@ const DRONE = {
   // recover-it-from-a-field consequence with it. A flight pack charged off the
   // house battery is also simply what an overlander with a drone actually has.
   KWH: 0.9,           // the flight pack, kWh — 9% of the rig's, per sortie
-  CHG: 4.1,           // kW the rig pushes into it while it sits on the rack
+  // ── AND IT FILLS IN A STOP, NOT A DRIVE ──
+  //
+  // The rate was 4.1 kW, which is thirteen minutes on the rack for sixty-two
+  // seconds of air: twelve times the sortie it pays for, so the drone was one
+  // flight a session and the rack was where it lived. Reported from the seat
+  // as "it should charge a lot quicker when docked". Stated as the FILL TIME
+  // rather than a power, because the fill time is the thing being chosen and
+  // the kW is what falls out of it — 36 kW, which is a real number for a
+  // pack this small and reads on the draw gauge as the brief spike it is.
+  //
+  // THE ENERGY IS UNCHANGED, and that is the point: a sortie still costs 0.9
+  // kWh out of the truck's 10, still stops at the reserve, and the array
+  // still pays it back. What changes is that you get it back at a viewpoint
+  // instead of a quarter of an hour later.
+  FILL_S: 90,         // seconds on the rack to fill a flat pack
   RSV: 0.15,          // …and the rig charge it will not draw the truck below
 };
 const drone = {
@@ -32993,7 +33128,17 @@ function updatePois(): void {
     .map((p) => ({ p, d: Math.hypot(p.x - vx, p.z - vz) }));
   // See POI_PIN_NEAR: a pin you are standing on is describing something already
   // filling the frame.
-  const pinned = all.filter((e) => e.p.pinned && e.d > POI_PIN_NEAR).sort((a, b) => a.d - b.d);
+  //
+  // …EXCEPT A DOWNED DRONE, WHICH IS THE ONE THING YOU CANNOT SEE. Every
+  // other pinned POI is a PLACE — a town, a mission's destination, the rig —
+  // and at sixty metres a place does fill the frame. A drone lying in fynbos
+  // is a shoebox in waist-high scrub, and the last sixty metres are exactly
+  // the ones you need the marker for: reported from the seat as the pin
+  // vanishing on the approach, which is the moment it stops being a bearing
+  // and starts being a search. It keeps its pin all the way to the pickup,
+  // and the pickup itself is what clears it (see droneStep).
+  const pinned = all.filter((e) => e.p.pinned
+    && (e.d > POI_PIN_NEAR || e.p.kind === 'drone')).sort((a, b) => a.d - b.d);
   // A pinned waypoint SHADOWS its namesake from the OSM stream: the mission's
   // ADMIN OFFICE and the mapped Admin Office are the same place, and two pins
   // 10m apart reading the same name is a defect, not information.
@@ -34287,7 +34432,7 @@ function stepRig(dt: number, v: number, q: number, sunUp: number): void {
     // Never more than the room left, or a long frame overfills the pack and the
     // rig pays for charge that was never stored.
     const room = ((1 - drone.batt) * DRONE.KWH * 3600) / dt;
-    rig.droneKw = Math.min(DRONE.CHG, room);
+    rig.droneKw = Math.min((DRONE.KWH * 3600) / DRONE.FILL_S, room);
     rig.drawKw += rig.droneKw;
     drone.batt = clamp(drone.batt + (rig.droneKw * (dt / 3600)) / DRONE.KWH, 0, 1);
   }
@@ -35149,7 +35294,7 @@ function tick(now: number): void {
   }
   {
     const wantGold = (menu.tab() === T_DRIVE || (menu.tab() === T_RIG && menu.rigLive())) && !lineOn && !real.on
-      && camMode !== 'top' && clockHeld === null;
+      && camMode !== 'top' && clockShift === null;
     splashGold += ((wantGold ? 1 : 0) - splashGold) * Math.min(1, 0.9 * wallDt / 0.6);
     if (splashGold < 0.003) splashGold = 0;
   }
@@ -40061,7 +40206,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     textEdgeS(hhmm, pad + 1, cy2, UI.gold);
     // The affordance: a pair of pips either side while a drag holds the sun,
     // so a scrubbed clock explains that it is an instrument and not a reading.
-    if (clockHeld !== null) {
+    if (clockShift !== null) {
       textSmall(hctx, '<', pad - 3 + 1, cy2 + 1, UI.dim);
       textSmall(hctx, '>', pad + 1 + textSW(hhmm) + 3, cy2 + 1, UI.dim);
     }
@@ -41026,8 +41171,13 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
     if (ws.rank >= 3) textEdgeS(ws.hud, pad + 1, infoY + 9, ws.rank === 5 ? UI.bad : UI.gold);
     else {
       const w = wayAt(state.x, state.z);
-      const line = w ? (w.on ? w.name.toUpperCase() : `NEAR ${w.name.toUpperCase()}`)
-        : ws.hud;
+      // ON THE CHART THE MAP IS THE NEWS. Zoomed out over a coarse backdrop
+      // the road under the wheels is not what the frame is about, and the one
+      // layer the chart draws had nothing to say for itself while it streamed.
+      // It yields the line back the moment the ring is home.
+      const line = camMode === 'top' && ws.map ? ws.map
+        : w ? (w.on ? w.name.toUpperCase() : `NEAR ${w.name.toUpperCase()}`)
+          : ws.hud;
       // The survey tally rides on the way line and takes its room first, so the
       // road name is what gets clipped. A count you cannot read is worse than a
       // name you can only half read.
@@ -41700,6 +41850,18 @@ function setClean(on: boolean): void {
     return { ways: ways.length, pts: ways.reduce((n, w) => n + w.length, 0), v: ovWayV };
   };
 /** The coarse network the chart fetched and the router now walks. */
+/** THE CHART'S OWN LAYER, AS THE SEAT SEES IT: what the zoom band asked for,
+ *  how much is home, how much is moving, and how long it has been since the
+ *  pass that asked. `__ovroads` answers the ROUTER's question (reach, ways,
+ *  the handover); this answers "is the map coming". */
+(window as unknown as { __ov?: object }).__ov = (): object => ({
+  level: ovZ, want: ovWant, built: ovMeshes.size, asked: ovTiles.size,
+  inFlight: ovInFlight, queued: ovQueue.length, retired: ovRetired.length,
+  failing: [...ovFailedAt.values()].filter((t) => performance.now() - t < OV_RETRY_MS).length,
+  retryMs: OV_RETRY_MS,
+  sinceAskMs: ovAskedAt ? Math.round(performance.now() - ovAskedAt) : null,
+  waitMs: OV_WAIT_MS, top: camMode === 'top', word: worldStatus().map,
+});
 (window as unknown as { __ovroads?: object }).__ovroads = (): object => {
   let ways = 0, pts = 0, far = 0;
   for (const l of ovWays.values()) {
@@ -41759,6 +41921,15 @@ function setClean(on: boolean): void {
 /** The live tap targets, in CANVAS pixels, so a test can aim a real pointer at
  *  a pin instead of trusting a probe to stand in for one. `live` is what the
  *  new rule says: whether this rect will actually consume a tap. */
+/** The clock's tap target in CANVAS pixels, so a test can aim a real pointer
+ *  at it rather than trusting a probe to stand in for the gesture — the same
+ *  bargain `__poirects` makes for the pins. Null while the clock is not drawn
+ *  (on the line, or with the chrome stripped). */
+(window as unknown as { __clockat?: object }).__clockat = (): object | null =>
+  (clockRect.w === 0 ? null : {
+    x: Math.round((clockRect.x + clockRect.w / 2) * hudS),
+    y: Math.round((clockRect.y + clockRect.h / 2) * hudS),
+  });
 (window as unknown as { __poirects?: object }).__poirects = (): object =>
   poiRects.map((r) => ({
     name: r.name, kind: r.kind, rng: r.rng,
@@ -41909,20 +42080,24 @@ function rewindUp(e: PointerEvent): boolean {
   if (!rewindPaused) { rewindPaused = true; hudFlash('HOLD'); }
   return true;
 }
-let clockDrag: { id: number; x0: number; h0: number; wasHeld: boolean; moved: boolean } | null = null;
+let clockDrag: { id: number; x0: number; s0: number; moved: boolean } | null = null;
 function clockDown(e: PointerEvent): boolean {
   if (lineOn || menu.tab() !== null || clockRect.w === 0) return false;
   const x = e.clientX / hudS, y = e.clientY / hudS;
   if (x < clockRect.x - 4 || x > clockRect.x + clockRect.w + 8
     || y < clockRect.y - 5 || y > clockRect.y + clockRect.h + 6) return false;
-  clockDrag = { id: e.pointerId, x0: e.clientX, h0: solarHour(), wasHeld: clockHeld !== null, moved: false };
+  // A THUMB ON THE CLOCK ADOPTS A RUNNING RAMP rather than fighting it: the
+  // ease is converted to the offset that holds the sun exactly where it is,
+  // so grabbing the dial mid-ramp does not snap the sky to the new preset.
+  if (clockRamp !== null) { clockShift = hourDelta(clockBase(), clockHour()); clockRamp = null; }
+  clockDrag = { id: e.pointerId, x0: e.clientX, s0: clockShift ?? 0, moved: false };
   return true;
 }
 function clockMove(e: PointerEvent): boolean {
   if (clockDrag?.id !== e.pointerId) return false;
   const dx = e.clientX - clockDrag.x0;
   if (Math.abs(dx) > 9) clockDrag.moved = true;
-  if (clockDrag.moved) clockHeld = ((clockDrag.h0 + (dx / innerWidth) * 12) % 24 + 24) % 24;
+  if (clockDrag.moved) clockShift = ((clockDrag.s0 + (dx / innerWidth) * 12) % 24 + 24) % 24;
   return true;
 }
 function clockUp(e: PointerEvent): boolean {
@@ -41934,10 +42109,14 @@ function clockUp(e: PointerEvent): boolean {
   if (!clockDrag.moved) {
     const d = DIALS.find((x) => x.key === 'time');
     if (d) {
+      // WHERE THE SUN IS NOW, read before the mode moves under it — the ramp
+      // eases from here to whatever the new preset turns out to be saying.
+      const from = clockHour();
       d.at = (d.at + 1) % d.opts.length;
       d.apply(d.at);
       saveDials();
-      clockHeld = null;
+      clockShift = null;
+      clockRamp = { from, at: performance.now() };
       hudFlash(`TIME ${d.opts[d.at]}`);
     }
   }

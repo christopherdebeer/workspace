@@ -4209,6 +4209,94 @@ drops the goal, the route, the job in flight and the ARRIVED toast;
 Verified in the harness at Simon's Town: chip shown with a goal set, card on
 tap, cancel clears `__goal()` and `__route()`; no dots in the chase frame.
 
+### Four small things from the seat, and one of them was not small
+
+- **THE DRONE FILLED IN THIRTEEN MINUTES.** 4.1 kW into a 0.9 kWh pack, for
+  sixty-two seconds of air: twelve times the sortie it pays for, so the drone
+  was one flight a session and the rack was where it lived. The rate is stated
+  as `DRONE.FILL_S` (90 s) now and the kW falls out of it (36), because the
+  fill time is the thing being chosen. **The energy is unchanged** — a sortie
+  still costs 0.9 kWh of the truck's 10, still stops at the reserve, and the
+  array still pays it back. Only the rate moved.
+
+- **DRAGGING THE CLOCK STOPPED THE DAY.** `clockHeld` was an ABSOLUTE hour and
+  `solarHour` returned it before it looked at anything else, so a scrub in
+  CYCLE (the default, 24x) froze the world at the dragged hour. It is
+  `clockShift` now — hours ADDED to whatever the mode's own clock says — so the
+  drag moves the sun and the mode goes on running underneath it. A fixed hour
+  behaves exactly as the old hold did, because its base does not move.
+
+- **AND A TAP CUT RATHER THAN RAMPED.** The tap still steps the TIME dial
+  instantly, but the displayed hour eases from where the sun was to where the
+  new mode wants it (`clockRamp`, 1.6 s, `hourDelta` so it takes the short way
+  round the face). **THE LAYERING IS LOAD-BEARING AND WAS MEASURED.** The first
+  cut captured `solarHour()`, which already carries the splash's golden lean,
+  and then the lean was applied again to the blend's output: with a synchronous
+  read either side of a tap the sun moved **0.34 h BACKWARDS in the instant the
+  mode changed** — a cut, which is the one thing the ramp exists to prevent.
+  `clockHour()` (base + shift + ramp, no lean) is what a gesture captures now;
+  `solarHour()` is that plus the lean. Same read after the split: the mode
+  jumped 3.37 h and **the sun moved 0.0000 h**.
+
+- **THE DOWNED DRONE'S PIN VANISHED AT SIXTY METRES.** `POI_PIN_NEAR` drops a
+  pinned POI you are closer than 60 m to, on the reasoning that a pin you are
+  standing on describes something already filling the frame. True of every
+  other pinned POI, because they are all PLACES; false of the one that is a
+  shoebox in waist-high scrub. The pickup radius is 9 m, so the whole 60→9 m
+  window — exactly the stretch where the marker stops being a bearing and
+  starts being a search — was blind. Kind `drone` is exempt from the near cull.
+
+**AND THE CHART'S OVERVIEW NEVER LOADS AT THREE OF ITS SEVEN LEVELS.** Asked as
+"I open the chart and zoom out and it is not clear if or when the overview will
+load". Measured against the live cell at Cape Town, one cold ask per level:
+
+| level | box | result |
+|---|---|---|
+| z13 / z12 / z11 | 5–20 km | **200** in 0.4–0.6 s, from the bank |
+| z10 / z9 / z8 | 39–156 km | **502 at the edge, ~15.5 s, every time** |
+| z7 | 313 km | **200** in 0.45 s |
+
+The 502s are not cold tiles filling. Re-asked immediately: 502. Re-asked after
+**75 s**, past the Lambda's own 50 s budget: 502. They never bank, because
+`putTile` runs only after Overpass answers, and `serveOverview` returns a
+bare 503 both when the upstream times out and when the answer hits `OV_CAP`.
+Asked of a mirror directly, the z10 box's **motorways, trunks and primaries
+alone come back at 3,000 ways in 35 s — exactly the z10 cap**, so the handler
+refuses it as too dense before the coastline, rivers and peaks are even
+counted. (The other clauses could not be timed cleanly: the mirror was
+returning 504s on queries that should be instant, so it was loaded. What is
+solid is the highway count and the round trip.)
+
+So the class ladder's own rule — "the classes climb as the tiles shrink" — is
+not actually kept in the middle: z8, z9 and z10 all ask for
+`motorway|trunk|primary`, over boxes of 156, 78 and 39 km. z7 was narrowed to
+motorways and cities when it was measured; z8–z10 never were. **The fix is
+cell-side and is not made here** — it wants the same measure-then-narrow pass
+z7 got, and a deploy of `index.ts` between measurements.
+
+Two things WERE fixed on the client, because they are the seat's experience of
+it rather than the cause:
+
+- **A REFUSED TILE BACKS OFF.** `loadOvTile` cleared its key on any failure, so
+  the chart re-asked a 25-tile ring every 1.2 s for ever, four at a time, each
+  burning an 11 s abort — a permanent load on a route that cannot answer.
+  `ovFailedAt` and `OV_RETRY_MS` (45 s), the shape `osmFailedAt` has had for
+  years on the fine layer.
+- **AND THE CHART SAYS WHAT IT IS DOING.** The fine vector layer has had a
+  status line for years; the one layer the chart actually draws streamed in
+  silence, and a backdrop that has not loaded looks exactly like one that
+  never will. `MAP z12 · 7/25 · 2 ON THE WIRE` (or `· 3 RETRY`) takes the info
+  line in top view while the ring is filling, and yields it back the moment it
+  is home. `__ov()` is the probe; `__clockat()` is the clock's tap target, so a
+  test can aim a real pointer at it the way `__poirects` lets one aim at a pin.
+
+**THE HARNESS CANNOT SEE A 1.6 s TRANSITION.** Its frames are seconds apart, so
+a `setTimeout(180)` returned after 4.2 s and the ramp had long finished by the
+first sample. What it CAN do is read either side of a dispatched gesture inside
+one synchronous block, where no frame can pass — which is how the ramp above
+was proved, and is the general trick for anything with a time constant shorter
+than a harness frame.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where
