@@ -42,7 +42,7 @@
  * ~750KB cell-sync binary cap — see the note in `ne-wide.ts` — and the bake
  * says so out loud if it does not.
  */
-import { mkdirSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdirSync, existsSync, readFileSync, writeFileSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { build } from 'esbuild';
@@ -61,11 +61,11 @@ const OUT_W = Number(process.env.W ?? 1024), OUT_H = OUT_W / 2;
 const CELL_BASE = 'https://c15r-drive.on.parc.land';
 
 // ── the game's own colour rules, imported rather than restated ───────────
-const BUNDLE = join(CELL, '.globe-climate.mjs');
+const BUNDLE = join(CACHE, 'globe-climate.mjs');
 await build({ entryPoints: [join(CELL, 'client/climate.ts')], outfile: BUNDLE,
   bundle: true, format: 'esm', platform: 'node', logLevel: 'error' });
 const { climCompute, groundColourAt, BIOME_ORDER } = await import(`file://${BUNDLE}?${Date.now()}`);
-const COASTB = join(CELL, '.globe-coast.mjs');
+const COASTB = join(CACHE, 'globe-coast.mjs');
 await build({ entryPoints: [join(CELL, 'client/coast.ts')], outfile: COASTB,
   bundle: true, format: 'esm', platform: 'node', logLevel: 'error' });
 const { onLand, coastKm } = await import(`file://${COASTB}?${Date.now()}`);
@@ -222,3 +222,7 @@ console.log(`\nwrote ${OUT}  ${KB.toFixed(0)}KB`);
 console.log(KB > 730
   ? `  !! OVER the ~750KB cell-sync binary cap — re-run with W=${OUT_W / 2}`
   : `  under the ~750KB binary cap, by ${(730 - KB).toFixed(0)}KB`);
+// The scratch bundles go in the cache, and the cache is outside the cell's
+// source tree — because `cell-sync push` sends EVERY file in the cell, so a
+// build artefact left beside the source is a build artefact on the Lambda.
+rmSync(BUNDLE, { force: true }); rmSync(COASTB, { force: true });
