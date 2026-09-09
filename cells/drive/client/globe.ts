@@ -197,11 +197,29 @@ export function globeMaterial(u: GlobeUniforms): THREE.ShaderMaterial {
   return new THREE.ShaderMaterial({
     uniforms: u as unknown as Record<string, THREE.IUniform>,
     vertexShader: `
+      // TWO NORMALS, IN TWO FRAMES, AND THE FIRST CUT USED ONE FOR BOTH.
+      //
+      // vN is the normal in the GLOBE's own frame — on a sphere centred at
+      // the origin that is just the normalised position — and it is what the
+      // sun is dotted with, because uSun is a globe-frame direction.
+      // vNv is the same normal in VIEW space, and it is what the limb is
+      // dotted with, because the view direction lives there.
+      //
+      // Using vN for both makes the fresnel compare an object-space normal
+      // with a view-space direction: a number with no meaning that happens to
+      // be large over most of the disc. It rendered as a blue veil over the
+      // whole planet, washing the continents flat and hiding the terminator
+      // completely — and it looked enough like atmospheric haze that the
+      // composite's fog of war and aerial perspective were both suspected and
+      // both measured innocent (uFow defaults to 0; the haze already stands
+      // down past the fine world) before the frames were read.
       varying vec3 vN;
+      varying vec3 vNv;
       varying vec3 vView;
       varying vec2 vUv;
       void main() {
         vN = normalize(position);
+        vNv = normalize(normalMatrix * position);
         vUv = uv;
         vec4 mv = modelViewMatrix * vec4(position, 1.0);
         vView = normalize(-mv.xyz);
@@ -212,6 +230,7 @@ export function globeMaterial(u: GlobeUniforms): THREE.ShaderMaterial {
       uniform vec3 uSun;
       uniform float uNight;
       varying vec3 vN;
+      varying vec3 vNv;
       varying vec3 vView;
       varying vec2 vUv;
       void main() {
@@ -223,17 +242,24 @@ export function globeMaterial(u: GlobeUniforms): THREE.ShaderMaterial {
         // is the one place on the globe where a soft edge is the honest one.
         float d = dot(vN, uSun);
         float lit = smoothstep(-0.31, 0.10, d);
+        // AND THE DAY SIDE TAKES THE SUN'S ANGLE, not a flat "it is daytime".
+        // The streamed shell beside it is Lambert ground under the same sun,
+        // so a globe lit evenly from terminator to terminator meets the shell
+        // at a step wherever the two are both on screen — which is the whole
+        // hand-over band. lam is that cosine, floored so the limb does not
+        // go to nothing before the terminator reaches it.
+        float lam = 0.42 + 0.58 * clamp(d, 0.0, 1.0);
         // Warmth along the terminator, for the same reason the sky has a
         // twilight band: the light that reaches it has come the long way
         // through the atmosphere.
         float dusk = (1.0 - abs(d) / 0.31) * step(abs(d), 0.31);
-        vec3 col = base * mix(uNight, 1.0, lit);
+        vec3 col = base * mix(uNight, lam, lit);
         col += base * vec3(0.28, 0.13, 0.04) * dusk * 0.6;
         // THE LIMB, which is the whole of the atmosphere this view can show.
         // Fresnel on the view, so it is a rim wherever you stand rather than a
         // ring painted at a fixed place — and lit, so the night side's limb
         // goes out.
-        float rim = pow(1.0 - clamp(dot(vN, vView), 0.0, 1.0), 3.5);
+        float rim = pow(1.0 - clamp(dot(vNv, vView), 0.0, 1.0), 3.5);
         col += vec3(0.20, 0.34, 0.52) * rim * (0.25 + 0.75 * lit);
         gl_FragColor = vec4(col, 1.0);
       }`,

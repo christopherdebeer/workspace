@@ -4746,6 +4746,107 @@ cross-fade with the plane chart over a zoom band above `GLOBE_FROM_M`. It
 must not touch the fine world at all. `mppU` is already the one number the
 chart's scale-keyed terms read, and the globe sets it too.
 
+### The planet: Tier 2, and what a globe costs
+
+Asked from the seat after Tier 1: the full world, at dramatically lower detail.
+The plane could not go further — `toLocal` is equirectangular scaled by
+cos(origin.lat) and the curve compensation is first-order — so past it there is
+a sphere. `client/globe.ts`, `static/globe-base.png`, `devtools/bake-globe.mjs`,
+`devtools/globe.test.mjs`, `devtools/globe-view.mjs`.
+
+**IT IS A BACKDROP, NOT A MODE, AND THAT IS THE WHOLE DESIGN.** The instinct is
+a globe VIEW with a cross-fade over a zoom band. It is not needed: the far
+shell already sinks by d²/2R, which IS the sphere to second order, so a sphere
+of the same radius centred one Earth radius under the truck passes through it.
+They agree where they overlap (2.5km apart at 1,500km — a sixth of a percent)
+and the globe simply fills whatever the streamed world does not, exactly as the
+shell fills what the fine ring does not. **The limb arrives on its own.** There
+is no transition to build, no two projections to keep registered, and nothing
+in the fine world changes. What DOES change is the camera: the tilt eases to
+straight down and the far plane has to clear the horizon.
+
+**THE BASE IS BAKED FROM THE GAME'S OWN RULES.** Every texel of the 1024×512
+equirect image is coloured by importing `client/climate.ts` and calling the
+same `climCompute` → `groundColourAt` the terrain painter calls, over AWS
+terrarium z4 and the cell's own cover z4. A NASA Blue Marble tile would be
+prettier and WRONG: this world's ground is `GROUND_RAMPS`, where the emerald
+comes from the plants standing on the sand rather than from the sand, and a
+photographic Earth would read as another game's map the moment you zoomed onto
+it from the shell. 317KB, under the ~750KB binary cap, fetched on the first
+wide chart and never at boot. Tiles cache under `node_modules/.cache`, so
+re-baking after a palette change costs no network.
+
+**FIVE FAULTS, AND THE ORDER THEY WERE FOUND IN IS THE USEFUL PART:**
+
+- **The frame is LEFT-HANDED and a sphere notices.** The world is `x = east,
+  z = south` ("north = -z (screen up)"), which is right for a chart and, in
+  three dimensions, left-handed as a geography: east × up is north, north is
+  −z, so x̂ × ŷ = −ẑ. A flat tangent plane never notices, because every layer
+  is placed by the same `toLocal` and a mirror about the map's own vertical is
+  invisible. **No rotation carries a physically-handed globe into that frame** —
+  only a reflection, and a reflected mesh draws its texture mirror-imaged, with
+  the Atlantic on the wrong side of Africa and every coordinate still checking
+  out. The test caught it as `det = −1`: five orientations returning `up`
+  = 0.0000 instead of 1. The mirror is taken ONCE, in the frame's definition
+  (`latLonToUnit` negates z), and a reflection applied to both a surface and
+  its light preserves every dot product, so the terminator is exactly where the
+  real Earth's is.
+- **The fresnel compared two different frames.** `vN` is the normal in the
+  globe's frame (what the sun is dotted with, because `uSun` is a globe-frame
+  vector) and the limb needs it in VIEW space. Using one for both makes a
+  number with no meaning that happens to be large over most of the disc: it
+  rendered as a blue veil over the whole planet, washing the continents flat
+  and hiding the terminator. **And it looked exactly like atmospheric haze** —
+  the composite's fog of war and aerial perspective were both suspected and
+  both measured innocent (`uFow` defaults to 0; the haze already stands down
+  past the fine world) before the shader was read. Two varyings now.
+- **The day side ignored the sun's angle.** `mix(uNight, 1.0, lit)` lights the
+  planet evenly from terminator to terminator, while the shell beside it is
+  Lambert ground under the same sun — so they meet at a step through the whole
+  hand-over band. With the cosine in, measured at 6km a pixel: shell/globe luma
+  **0.969**, which is as close as two different datasets get.
+- **`dist × 4` cut the planet off mid-ocean.** The horizon is √(h²+2Rh), which
+  grows as √h while 4h grows as h; they cross at h = R/8 ≈ 800km. At 200km up
+  the horizon is 1,609km and the far plane stood at 800. `globeFar`.
+- **A backtick in a GLSL comment, for the fifth time this file has said so.**
+
+**AND THE SHELL HANDS OVER WHEN IT STOPS COVERING THE FRAME.** The far shell is
+a 5×5 ring; past the zoom where that ring is narrower than the frame it is a
+RECTANGLE of coarse ground sitting on a planet. At 6km a pixel it is a flat
+grey-green smear over two thirds of the frame with a hard edge across the Cape,
+while the globe beside it carries a hillshaded coast and a real sea — the shell
+was built to back a 600km chart and is no longer the better picture at 1,500km
+and beyond. The rule is geometric and self-adjusting at every rung: **the ring
+draws while it is wider than the frame's DIAGONAL** (the corners are where a
+square ring under a rotated frame gives out first), and the planet draws above
+that, so no edge is ever on screen. Where there is no planet to hand to — a
+fixture, or the texture never arriving — the shell keeps drawing, because a
+coarse backdrop beats an empty frame.
+
+**Measured** (`devtools/globe-view.mjs`, Letsemeng at noon, `?wx=clear`):
+
+| zoom | altitude | m/px | tilt | shell | ring vs frame | space |
+|---|---|---|---|---|---|---|
+| 11,000 | 1,925km | 6,263 | 81° | on | 5,424 / 2,208km | 0.03 |
+| 40,000 | 7,000km | 22,774 | 89° | **off** | 5,424 / 8,029km | 1 |
+| 110,000 | 19,243km | 62,608 | 89° | off | 5,424 / 22,074km | 1 |
+
+At noon the sun reads over longitude 24.78 — the origin's own meridian, to two
+decimals — and 55.07° up. No page errors at any zoom. The 40,000 frame is
+southern Africa entire, with the Karoo, the Drakensberg's relief and the
+coastline correct; the 110,000 frame is the planet with its limb and its
+terminator.
+
+**WHAT IS NOT DONE, and is the next pass:** the gesture. Pan still slides the
+camera linearly rather than spinning the globe, so the far side of the world is
+reachable only by driving there. The shape of the fix is written down in
+`globe.ts`'s header — a view lat/lon that pan accumulates into, blended in by
+the same ramp the tilt uses, so the sphere stays tangent under the truck in the
+band where the shell is still on screen and becomes free to rotate above it.
+Also open: fine POI labels ("BERGRIVIER 1.3KM") still draw at planet zoom, and
+`NE_MIN_Z` could drop to serve trunk roads and capitals on the globe — the
+asset already holds them.
+
 ## The switch table
 
 Fifty-three query-string switches had grown up one at a time, each read where

@@ -29791,6 +29791,11 @@ let texMeanCache: Record<string, number> | null = null;
     // It is the one number that can be checked against the world's `__sky`,
     // and if the two ever part it is this frame that is wrong.
     sunAlt: +(Math.asin(clamp(latLonToUnit(gLat, gLon).dot(globeU.uSun.value), -1, 1)) * 180 / Math.PI).toFixed(2),
+    // Whether the streamed backdrop still covers the frame, which is what
+    // decides who draws it — see the hand-over in the top-camera branch.
+    shell: farGroup.visible,
+    ringKm: Math.round(((2 * FAR_RING_MAX + 1) * tileMetres(farZ)) / 1000),
+    frameKm: Math.round((chartMpp() * Math.hypot(pixSize.x, pixSize.y)) / 1000),
     alt: Math.round(chartDist()), far: Math.round(camera.far),
     horizon: Math.round(Math.sqrt(chartDist() * chartDist() + 2 * GLOBE_R * chartDist())),
   };
@@ -36901,8 +36906,28 @@ function tick(now: number): void {
     // only once the frustum reaches past the fine ring, so its seam is never
     // on screen at an angle that could reveal it. The overview vectors ride
     // the same gate: below it the fine world is the better map of itself.
-    farGroup.visible = zoomCur > 6;
-    ovGroup.visible = zoomCur > 6;
+    // ── AND THE BACKDROP HANDS OVER WHEN IT STOPS COVERING THE FRAME ──
+    //
+    // The shell is a 5x5 ring, so past the zoom where that ring is narrower
+    // than the frame it is a RECTANGLE of coarse ground on a planet — which is
+    // what it looked like: at 6km a pixel the shell is a flat grey-green smear
+    // over two thirds of the frame with a hard edge across the Cape, while the
+    // globe beside it carries a hillshaded coast and a real sea. The shell was
+    // built to back a 600km chart and it is no longer the better picture at
+    // 1,500km and beyond.
+    //
+    // The test is geometric and self-adjusting at every rung: the ring covers
+    // the frame while it is wider than the frame's DIAGONAL — the corners are
+    // where a square ring under a rotated frame gives out first. Below that
+    // the shell draws, above it the planet does, and no edge is ever on
+    // screen. `|| !globeGroup.visible` keeps the old behaviour wherever there
+    // is no planet to hand to (a fixture, or the texture never arriving):
+    // a coarse backdrop beats an empty frame.
+    const ringM = (2 * FAR_RING_MAX + 1) * tileMetres(farZ);
+    const covers = ringM > chartMpp() * Math.hypot(pixSize.x, pixSize.y);
+    const shellOn = zoomCur > 6 && (covers || !globeGroup.visible);
+    farGroup.visible = shellOn;
+    ovGroup.visible = shellOn;
     // …and where the coarse vectors are allowed to start showing. At driving
     // zooms, only where the fine ring has given out (`osmRingR`, measured by
     // the tile queue) — below it the fine world is the better map of itself.

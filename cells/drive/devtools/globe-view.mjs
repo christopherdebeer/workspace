@@ -11,7 +11,8 @@
 import { openDrive, WORK } from './harness.mjs';
 import { join } from 'node:path';
 
-const SPOT = 'lat=-29.9872&lon=24.7765&h=0&cam=top&wx=clear';
+const TIME = process.env.TIME ? `&time=${process.env.TIME}` : '';
+const SPOT = `lat=-29.9872&lon=24.7765&h=0&cam=top&wx=clear${TIME}`;
 const ZOOMS = (process.env.Z ?? '2200,11000,40000,110000').split(',').map(Number);
 const { page, close } = await openDrive({ spot: `${SPOT}&z=${ZOOMS[0]}`, tag: 'globe', menu: true, settle: 0 });
 
@@ -37,7 +38,7 @@ for (const z of ZOOMS) {
     if (await page.evaluate(() => window.__clock().frames) - f0 >= 4) break;
     await new Promise((r) => setTimeout(r, 500));
   }
-  const shot = join(WORK, `globe-${z}.png`);
+  const shot = join(WORK, `globe-${z}${process.env.TIME ? '-' + process.env.TIME : ''}.png`);
   await page.screenshot({ path: shot, timeout: 240000 });
   console.log(`  frame: ${shot}`);
   await page.evaluate(() => window.__draw(false));
