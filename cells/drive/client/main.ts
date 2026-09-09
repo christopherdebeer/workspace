@@ -2638,9 +2638,9 @@ function hydroSceneShade(): SceneShade {
         // or a river on the wide chart would keep the cross its banks lost.
         vec2 wuv = (hit - uCsMin) * uCsInv;
         float covL = mix(uCsOn, texture2D(uCsTex, wuv).r, clInLattice(wuv));
-        float alias = smoothstep(150.0, 600.0, uCsMpp);
-        float cs = mix(clCov(clfbm(hit * uCsScale + uCsDrift), covL), clCovMean(covL), alias);
-        return 1.0 - min(covL * 1.4, 1.0) * cs * 0.5;
+        float wide = 1.0 - smoothstep(15.0, 60.0, uCsMpp);
+        float cs = clCov(clfbm(hit * uCsScale + uCsDrift), covL);
+        return 1.0 - min(covL * 1.4, 1.0) * cs * 0.5 * wide;
       }`,
     uniforms: {
       uCsTex: wxU.uWxTex, uCsMin: wxU.uWxMin, uCsInv: wxU.uWxInv, uCsOn: envU.uCloudS,
@@ -3077,13 +3077,6 @@ const CLOUD_GLSL = `
   float clCov(float n, float cover){
     return smoothstep(0.60 - cover * 0.40, 0.90 - cover * 0.28, n);
   }
-  // WHAT A CLOUD SHADOW AVERAGES TO once a pixel spans more than a patch of
-  // it: the mean of clCov over the noise, per cover, MEASURED off this very
-  // fbm (400k samples of the shader's own hash, in node) and fitted. Nothing
-  // downstream may reach for a cheaper guess here: the first port of the hash
-  // dropped a term and read a mean of 0.24 where the truth is 0.47, and a
-  // wide chart built on that would have swapped a speckle for a step.
-  float clCovMean(float cover){ return 0.013 + cover * (0.240 + 0.392 * cover); }
   // THE LATTICE HAS AN EDGE. The weather field is 48 cells of 256m centred on
   // the truck — 12.3km — and its texture clamps to its edge texel, so a read
   // past the edge is the edge's value for ever. 1 inside, 0 outside, blended
@@ -4557,6 +4550,11 @@ let mblurPrimed = false;
 // argue about, and the yaw is the term that dominates in a corner.
 let mblurStepM = 0, mblurStepYaw = 0, mblurPrevYaw = 0;
 const camYaw = (): number => Math.atan2(-camera.matrixWorld.elements[8], -camera.matrixWorld.elements[10]);
+/** Metres of ground per art pixel on the chart, 0 from the seat — ONE object
+ *  held by reference by the composite, the terrain, the water and the far
+ *  shell, written once a frame beside the sun skew. Declared here because the
+ *  composite is built before `envU` is. */
+const mppU = { value: 0 };
 const compMat = new THREE.ShaderMaterial({
   uniforms: {
     sceneTex: { value: null },
@@ -4586,6 +4584,9 @@ const compMat = new THREE.ShaderMaterial({
     // evening.
     uHazeE: { value: 1400 },
     uHazeAmt: { value: 0.3 },
+    // Metres a pixel on the chart (shared by reference): what the aerial
+    // perspective fades on past the fine world. See `deep` below.
+    uMpp: mppU,
     /**
      * ── WHERE THE SKY BEGINS, IN METRES, NOT IN DEPTH ──
      *
@@ -4659,7 +4660,7 @@ const compMat = new THREE.ShaderMaterial({
     // cab and it moves when I look around" says the cause is in VIEW SPACE,
     // and the haze is the only thing here that is. 1 kills the view-angle
     // term, 2 kills the haze outright, 3 kills the sun lobe. See __haze.
-    uniform float uHazeDbg; uniform float uHazeWarm;
+    uniform float uHazeDbg; uniform float uHazeWarm; uniform float uMpp;
     uniform float uHazeE; uniform float uHazeAmt; uniform float uSkyD;
     vec3 srgb(vec3 c){ return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(vec3(0.0031308), c)); }
 ${DITHER_GLSL}
@@ -4750,7 +4751,17 @@ ${DITHER_GLSL}
         // keeps its haze. (Fog-of-war hiding is m-driven and unaffected.)
         float vFac = clamp(1.4 - abs(dir.y) * 1.3, 0.15, 1.0);
         if (uHazeDbg > 0.5 && uHazeDbg < 1.5) vFac = 1.0;
-        float deep = (1.0 - exp(-t / uHazeE)) * vFac * step(uHazeDbg, 1.5);
+        // …AND NONE OF IT ON A CHART WIDER THAN THE FINE WORLD. The floor of
+        // 0.15 was written for a survey view looking STRAIGHT down; the chart
+        // is tilted 70°, so its top edge looks 47° off vertical and takes
+        // three times the haze of its bottom edge — measured as a 7-luma
+        // gradient down the frame under ?wx=haze at a 250km view, absent
+        // under a clear sky. Aerial perspective at 500m is a fact; at 330km
+        // it is a smear over a map. The owner's rule, the same as the cloud
+        // shadows': off past the fine ring. uMpp is 0 from the seat, so the
+        // horizon keeps its haze.
+        float deep = (1.0 - exp(-t / uHazeE)) * vFac * step(uHazeDbg, 1.5)
+          * (1.0 - smoothstep(15.0, 60.0, uMpp));
         // THE BLUR IS PART OF THE AIR, so it answers to the same dial. It did
         // not: the dim term took uHazeAmt and this kept a hardcoded 0.3, so
         // HAZE OFF removed the milk and left the far field just as SOFT — a
@@ -4974,7 +4985,7 @@ const envU = {
   // looks straight down from one distance so one number is exact for the
   // whole frame, it needs no derivatives extension on WebGL1, and from the
   // seat nothing is ever wider than a pixel at the range the shell begins.
-  uMpp: { value: 0 },
+  uMpp: mppU,
   uWind: { value: new THREE.Vector2() },       // the deck's drift, shared with the sky
   // How far a point on the ground has to travel HORIZONTALLY to reach the deck,
   // per metre of altitude, going toward the sun: sunDir.xz / sunDir.y. Near
@@ -5335,13 +5346,16 @@ function terrainFx(mat: THREE.Material, opts: { detail?: boolean } = {}): void {
         // mean, which is what uCloudS is.
         vec2 wuv = (hit - uWxMin) * uWxInv;
         float covL = mix(uCloudS, texture2D(uWxTex, wuv).r, clInLattice(wuv));
-        // AND THE NOISE IS SUB-PIXEL PAST 600m A PIXEL. A cloud patch is about
-        // 600m (uCloudScale); at the chart's survey zooms a pixel is that or
-        // wider and the pattern can only alias — the speckle in the same
-        // report. Where a pixel outspans a patch the shadow is its mean.
-        float alias = smoothstep(150.0, 600.0, uMpp);
-        float cs = mix(clCov(clfbm(hit * uCloudScale + uWind), covL), clCovMean(covL), alias);
-        gl_FragColor.rgb *= 1.0 - min(covL * 1.4, 1.0) * cs * 0.5;
+        // AND NONE OF IT PAST THE FINE WORLD. The owner's rule: a chart wider
+        // than the fine ring shows no cloud shadow at all — not the noise,
+        // which is sub-pixel there, and not its mean either. uMpp is metres a
+        // pixel on the chart and 0 from the seat; 15m is a 3km view (the
+        // junction chart, where a cloud crossing the road is still a thing
+        // you watch) and 60m a 12km one, the fine ring's edge and the
+        // lattice's, so the term is gone before any pixel outspans a patch.
+        float wide = 1.0 - smoothstep(15.0, 60.0, uMpp);
+        float cs = clCov(clfbm(hit * uCloudScale + uWind), covL);
+        gl_FragColor.rgb *= 1.0 - min(covL * 1.4, 1.0) * cs * 0.5 * wide;
       }
       if (uDbgOn > 0.5) {
         vec2 duv = (vWorldP.xz - uDbgOrg) / uDbgW;

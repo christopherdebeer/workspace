@@ -4644,29 +4644,43 @@ more air — smooth, present nowhere in the clear frame, and correct.
 
 Three rules in the fix, and they generalise:
 
-- **BEYOND THE LATTICE, THE REGION'S MEAN.** `clInLattice(uv)` is 1 inside and
-  fades to 0 over the last eight percent; past it `covL` is `uCloudS`, which is
-  the regional cover the lattice was seeded from. A clamped texture is a
-  half-plane of somebody's edge; a mean is a fact about the region.
-- **A TERM NARROWER THAN A PIXEL DRAWS ALIASING, NOT DETAIL.** `uMpp` is metres
-  of ground per art pixel on the chart (0 from the seat, by design — nothing
-  there is wider than a pixel at the range the shell begins). Where a pixel
-  outspans a cloud patch (`smoothstep(150, 600, uMpp)`) the noise collapses to
-  its MEAN, `clCovMean(cover)`, and the 30–80m mottle fades over 15–60m. A
-  uniform, not `fwidth()`: the chart looks straight down from one distance so
-  one number is exact for the whole frame, and it needs no derivatives
-  extension on WebGL1.
-- **THE MEAN WAS MEASURED, AND THE FIRST MEASUREMENT WAS WRONG.** `clCovMean`
-  is a quadratic fitted to 400k samples of the shader's own `clfbm` under
-  `clCov`, ported to node. The first port fracted the hash's two components
-  before multiplying and read a noise mean of 0.24; the true one is 0.47, and
-  the fitted curve differs by a factor of six at full cover. A wide chart built
-  on the wrong mean would have swapped a speckle for a step at the alias
-  boundary. Port a shader by reading it twice.
+- **BEYOND THE LATTICE, THE REGION'S MEAN — from the seat.** `clInLattice(uv)`
+  is 1 inside and fades to 0 over the last eight percent; past it `covL` is
+  `uCloudS`, the regional cover the lattice was seeded from, so the far hills
+  under a clouded sky keep a gentle, physical dim with no edge. A clamped
+  texture is a half-plane of somebody's edge; a mean is a fact about the
+  region.
+- **AND NONE OF IT ON A CHART WIDER THAN THE FINE WORLD.** The owner's rule,
+  stated flat: no cloud shadows at zooms wider than the fine ring. `uMpp` is
+  metres of ground per art pixel on the chart (0 from the seat, by design —
+  nothing there is wider than a pixel at the range the shell begins); the
+  whole cloud term fades over `smoothstep(15, 60, uMpp)`, 15m being a 3km view
+  where a cloud crossing the road is still something you watch and 60m a 12km
+  one — the fine ring's edge and the lattice's — so it is gone before any
+  pixel outspans a 600m patch. The 30–80m mottle fades over the same range.
+  **The aerial perspective goes with it**: the composite's `deep` term had a
+  floor written for a survey view looking straight down, but the chart is
+  tilted 70°, so its top edge looks 47° off vertical and took three times the
+  haze of its bottom edge — measured as a 7-luma gradient down the frame under
+  `?wx=haze`, absent under a clear sky. Haze at 500m is a fact; at 330km it is
+  a smear over a map. One shared uniform (`mppU`), declared ahead of the
+  composite because the composite is built before `envU` is.
+- **A UNIFORM, NOT `fwidth()`.** The chart looks straight down from one
+  distance, so one number is exact for the whole frame, and it needs no
+  derivatives extension on WebGL1.
 
-The water's `sceneShade` carries the same edge and the same alias rule, or a
-river on the wide chart would keep the cross its banks lost. `?wx=haze` on the
-wide chart is the two-minute check for any of this; `devtools/wide-cloud-ab.mjs`
+A first cut collapsed the noise to its MEAN where a pixel outspanned a patch,
+rather than switching the term off, and the mean was measured off the shader's
+own `clfbm` in node (E[clCov] ≈ 0.013 + 0.240c + 0.392c²; the first port of the
+hash fracted its two components before multiplying and read a noise mean of
+0.24 for a true 0.47). It worked — left and right agreed to the unit — and it
+was superseded by the rule above, which is simpler and what the seat asked for.
+The measurement is kept here because the next person to want a cloud's average
+on a wide surface will otherwise measure it wrong the same way.
+
+The water's `sceneShade` carries the same edge and the same fade, or a river on
+the wide chart would keep the cross its banks lost. `?wx=haze` on the wide
+chart is the two-minute check for any of this; `devtools/wide-cloud-ab.mjs`
 takes the pair of frames and `__cam().mpp` says what the fade is keyed on.
 
 ## The switch table
