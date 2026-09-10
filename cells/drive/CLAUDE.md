@@ -5666,6 +5666,87 @@ every mode at 56 fps, indistinguishable from `legacy`, no page errors.
   worker at 334 ms a build (70 before) — both under the flag only, both
   awaiting a device dump on the fixed build.
 
+## The tile that popped out: invalidation forgets the commit, not the picture
+
+The Senqu report, chart z11.9 with tile debug on, `?substrate=render` (the
+switch persists — it is not `owned` — so a phone that tried it once is still
+on it): the z14 boxes "keep rendering and then popping out and rendering
+again". Status line `REBUILD 31 · COV Z10 25`, several 2 km squares filled
+navy. Read from the code, then measured.
+
+**The mechanism.** `markTerrainDirty` → `invalidateProductionSubstrateTile`,
+and in render mode that pulled every admitted mesh of the tile out of the
+world — terrain, carriageways, structures, rapid detail — and unrendered its
+water, the moment the tile was dirtied. The tile was then a hole until its
+rebuild landed (one heavy job a frame, a 100–400 ms `workerGap` between
+builds, thirty-one deep), the substrate re-assembled it (a microtask, or a
+retry ladder of 40 ms → 12 s when the commit was refused — 48 refusals in
+75 s here, most of them the hydro field not yet renderable), and the atomic
+commit put a whole new revision back. A cover raster landing over the fine
+ring dirties every tile under it at once, so this was a wave of holes, one
+per cover arrival. The legacy path never showed it: `applyTileBuild` swaps
+the mesh in the same call. **The navy is the globe.** The far shell would
+have shown through a fine hole (it sits 12 m under), but `coverDirtiedFar`
+removed the shell tile under the rig at the same cover arrival and forgot
+the ask, so both layers were gone together and the frame was the planet's
+own tint — the harness frame at 26 s is one flat dithered field edge to
+edge, with `far z11 25/25` back a moment later.
+
+**The rule now: the authority goes at once, the picture stays until the next
+one is admitted.** Invalidation forgets the four commits (and stands the
+rapid-rock colliders down — a rock the next revision moves must not still
+be hit); `productionSubstrate.remove` still drops contact to the legacy
+sampler, which reads the new build the moment it exists. Every commit
+function already kept its `previous` binding and, on a different revision,
+removed and disposed the old meshes in the call that added the new — that
+swap was always there, it was just never reached with anything to swap. The
+hydro system does the same in deferred mode: `installField` keeps the old
+field's parts, `renderField` swaps them on admission (`renderedField` is
+what the parts were built from — `parts.length` used to mean "rendered",
+and would have made the new field a no-op behind the old picture). The build
+slots leave a substrate-owned old mesh where it is (`retireTerrainSource`);
+the binding disposes it at the swap. The far shell: `coverDirtiedFar` marks
+a tile `farStale` and keeps its mesh and bake records, `loadFarTile` asks a
+stale key again, and the landing swaps the mesh in the same breath the new
+one is built; `farAsking` stops a second cover arrival during the fetch
+asking a third time.
+
+**Measured** (`scratchpad/holes.mjs`: the Senqu spot, top cam, render mode,
+NOON, 75 s at 200 ms, a hole = a built fine tile with no mesh in the world):
+
+| | samples with a hole | mean holes | max | invalidations | refusals |
+|---|---|---|---|---|---|
+| before (f57f15c) | **40%** (76/192) | 1.17 | 6 | 53 | 48 |
+| after | **0%** (0/187) | 0 | 0 | 52 | 39 |
+
+Same invalidations, same refusals: nothing about the churn changed, only
+what the churn takes off the screen. The `hydro-render-cutover`,
+`substrate-render`, `globe-navigation` and `fps-tap` tests pass; the
+`substrate-render` assertion `uncommittedVisibleTerrain === 0` still holds at
+its settled state — mid-rebuild that counter is now the stale-but-shown
+count, by design.
+
+**The instruments.** `auditGroundHoles` runs every frame over `terrainMeshes`
+(a ring is under a hundred keys): `holes` now, `unshown` (built, never yet
+admitted — first-admission latency, not a pop), `pops` (a tile that WAS
+shown going dark), hidden time and the longest stretch. `__tileholes()`
+carries them with the open holes and the far `asked/stale/inflight`; the
+dump has them as the `ground:` row under `chart`. A settled render mode reads
+`holes 0 · pop-outs 0`. **The tile-debug overlay has a key now**, two rows
+under its header (three when the shell boxes draw), in the marks' own inks:
+z16 WIRE (pulsing gold square, on the wire) · QUEUE (soft pip and its serving
+rank) · FAIL (red X, in its 30 s backoff) · DONE (green pip) · ASKED (dim
+dot, requested and unsettled); z14 MESH (teal box) · WAIT (gold, DEM asked)
+· REBUILD (orange, dirty); the shell SHELL (teal) · ASKED (gold). The
+header's words are the key's words.
+
+**What to take from it:** a remove-then-wait is a hole for as long as the
+wait, and the wait is the whole rebuild queue. Anything that replaces a
+visible thing asynchronously keeps the old one up until the new one is
+ready — the route solver learned this ("old route live until the new one
+lands"), the far level swap learned it (the retired ring), and the substrate
+commit had the swap written and was bypassed by its own invalidation.
+
 ## Globe navigation: retain the place, not a disposable spin
 
 The seat reported that spinning the planet then zooming in returned to the
