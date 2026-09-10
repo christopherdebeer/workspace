@@ -237,7 +237,16 @@ export function solveCoastField(input: CoastFieldInput): CoastField {
   const valid = (j: number, own: number): number => (T[j] >= INF ? own : T[j]);
   for (let z = 0; z < height; z++) for (let x = 0; x < width; x++) {
     const i = z * width + x;
-    if (!sea[i] || T[i] >= INF) { data[i * 4 + 3] = 1; continue; }
+    // A SEA TEXEL NO SHORE REACHED — a tile wholly at sea, whose gutter
+    // shows no land — carries the plain shore distance instead, which is
+    // the distance transform's own answer there (a clamp, well past the
+    // nearshore crossfade). Left at zero it would read as the waterline and
+    // put a full, phase-flat shore wave over the whole open tile.
+    if (!sea[i] || T[i] >= INF) {
+      if (sea[i]) data[i * 4] = Math.min(4000, toDry[i] * pixelM);
+      data[i * 4 + 3] = 1;
+      continue;
+    }
     const own = T[i];
     const gx = valid(z * width + Math.min(width - 1, x + 1), own) - valid(z * width + Math.max(0, x - 1), own);
     const gz = valid(Math.min(height - 1, z + 1) * width + x, own) - valid(Math.max(0, z - 1) * width + x, own);
@@ -248,6 +257,12 @@ export function solveCoastField(input: CoastFieldInput): CoastField {
     data[i * 4 + 3] = 1;
   }
   // ── EXPOSURE, ON A COARSE LATTICE ──
+  // The fan faces the OPEN SEA: down the distance to the mask's interior,
+  // where the tile has one. The travel's own gradient was tried first and
+  // pointed the fan at the beach from between a beach and a rock — a texel
+  // on the ridge between two shores has no seaward side by travel — so the
+  // surf zone at Camps Bay read a fifth as exposed as the water beyond it.
+  const toDeep = chamfer(interior, width, height, 1);
   const STRIDE = 4;
   const lw = Math.ceil(width / STRIDE), lh = Math.ceil(height / STRIDE);
   const lattice = new Float32Array(lw * lh).fill(1);
@@ -256,7 +271,13 @@ export function solveCoastField(input: CoastFieldInput): CoastField {
     const x = Math.min(width - 1, lx * STRIDE), z = Math.min(height - 1, lz * STRIDE);
     const i = z * width + x;
     if (!sea[i] || T[i] >= INF) continue;
-    const dx = data[i * 4 + 1], dz = data[i * 4 + 2];
+    let dx = data[i * 4 + 1], dz = data[i * 4 + 2];
+    if (toDeep[i] < 1e8) {
+      const gx = toDeep[z * width + Math.min(width - 1, x + 1)] - toDeep[z * width + Math.max(0, x - 1)];
+      const gz = toDeep[Math.min(height - 1, z + 1) * width + x] - toDeep[Math.max(0, z - 1) * width + x];
+      const gl = Math.hypot(gx, gz);
+      if (gl > 0) { dx = -gx / gl; dz = -gz / gl; }
+    }
     if (dx === 0 && dz === 0) continue;                 // deep interior: open by definition
     const base = Math.atan2(dz, dx);
     let sum = 0;

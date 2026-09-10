@@ -69,6 +69,14 @@ export function runCoastFieldTest(): void {
   assert(bayAt(44, 48)[0] > bayAt(30, 48)[0] && bayAt(30, 48)[0] > 0, 'travel grows out from the back of the bay');
   assert(bayAt(40, 10)[0] === 0 && bayAt(40, 10)[3] === 1, 'an arm of the bay is land');
 
+  // A tile wholly at sea, no shore in its grid: every texel carries the
+  // plain (clamped) distance, never a zero that would read as the waterline.
+  const open = solveCoastField(grid(n, pixelM, 0, 0.05));
+  for (const z of [0, 48, 95]) for (const x of [0, 48, 95]) {
+    assert(open.data[(z * n + x) * 4] >= 1000 && open.data[(z * n + x) * 4 + 3] === 1,
+      `open sea carries the distance clamp and full exposure (${open.data[(z * n + x) * 4].toFixed(0)})`);
+  }
+
   // The full build on a coastal tile carries the field, and it is cheap.
   const N = 33;
   const elev = new Float32Array(N * N), cov = new Uint8Array(N * N);

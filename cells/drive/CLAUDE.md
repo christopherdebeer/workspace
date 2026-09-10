@@ -5743,6 +5743,86 @@ ready — the route solver learned this ("old route live until the new one
 lands"), the far level swap learned it (the retired ring), and the substrate
 commit had the swap written and was bypassed by its own invalidation.
 
+## The coast field: the sea's crests ride travel time, and a harbour is quiet
+
+Gleaned from the ocean demo the seat was shown (its eikonal coast was the
+one piece worth taking — see the comparison in the session). The nearshore
+wave phased on the signed shore distance because a distance is continuous
+and its isolines are crest lines "to a first approximation" (the sea
+shader's own words). The approximation drew a crest the same sixty metres
+off a steep rock shore and off a shelving beach and wrapped a headland in
+contour lines. A real crest slows where the water shallows.
+
+**What was built** (`hydro/coast-field.ts`, wired in `build-tile`): per
+tile with sea or lagoon in it, the TRAVEL TIME from the waterline over the
+bathymetry — the eikonal |∇T| = 1/c(h) by monotone Godunov sweeps, c from
+the finite-depth dispersion for the shader's own swell wavelength (300 m on
+the open sea) — stored as T·c₀ in deep-water metres, so it IS the shore
+distance where the water is deep and grows faster over a shoal. The shader
+phases the nearshore crests on it in place of the distance; the dry side
+keeps signed shore distance, and the two meet at zero on the waterline, so
+the phase stays continuous and direction is still never inside it. The
+fourth channel is EXPOSURE: seven rays over ±72° about the open-sea
+direction, marched about a kilometre over the wet mask; land ends a ray,
+a shallow thins it, leaving the grid counts as open. It damps the shore
+wave, the offshore swell, the breakers, the spill and the standing-water
+chop. `?coast=0` builds none; `__hydroview('coast')` paints exposure red to
+green with a travel isoline every 30 m; `__coast(x, z)` reads a texel; the
+dump's hydro `buildProf.coast` carries the cost.
+
+**Four things the first cut got wrong, each caught by a number:**
+
+- **The crawl is capped at three times deep.** Half a metre of water
+  carries a 300 m swell at two metres a second against twenty-two, so the
+  last wet texel was worth ten texels of deep-water metres — a wavelength
+  and a half of phase inside the 18.75 m the field can resolve. Aliasing,
+  not shoaling. At three times the crests bunch to a third of their
+  offshore spacing, two texels apart at the tightest; the refraction needs
+  only the relative speeds across a section and keeps its shape.
+- **The sweep is a band; the far field is grown from it.** The whole grid
+  swept was 7 ms a tile warm at 140²; the shader phases on the travel only
+  inside its 120 m crossfade. Sixteen texels are swept and the sea beyond
+  is filled by a two-pass chamfer seeded with the band's values at the
+  deep step (the eikonal at constant speed, to the chamfer's four per
+  cent) — and the band texels are its seeds, never lowered by it, or a
+  deep step through a band texel erases the slowing the sweep put there
+  (the test caught that: "travel outruns distance, 131 vs 131"). Warm:
+  about 6 ms a mostly-sea tile on the desktop; the Cape fixtures' builds
+  read `coast` 2–4 ms a build averaged over every tile.
+- **A sea texel no shore reaches carries the plain distance.** A tile
+  wholly at sea has no source, and a zero there reads as the waterline —
+  a full, phase-flat shore wave over the whole open tile. It carries the
+  distance transform's own clamp instead, well past the crossfade, which
+  is what the phase read before.
+- **The exposure fan faces the open sea, not the travel's gradient.** From
+  between a beach and a rock the gradient points at the beach, and Camps
+  Bay's surf zone read a fifth as exposed as the water beyond it. The fan
+  now faces down the distance to the mask's interior.
+
+**And one thing the field found about the data.** Camps Bay's beach carries
+an OSM `natural=water` polygon three texels wide between the sand and the
+sea, and Simon's Town's harbour is one. Painted as LAKE (their tag) they
+kept the surf strip and the run-up off that shore — those compile for
+coastal kinds only — and gave the coast field a band with no sea in it:
+travel started 60 m out and measured from the polygon's rim. A standing-
+water area whose interior samples mostly read confirmed ocean is observed
+as a **lagoon** now (`seaTouching`, sampled the way `areaEvidence` samples a
+level); a lake behind a beach has no sample under the mask.
+
+**Measured at Simon's Town** (`scratchpad/coast-shots2.mjs`: the rig placed
+on the shore the field itself found): the harbour shore reads exposure
+**0.12**, the beach by the town **0.67**, the open False Bay shore
+**0.85**; with `coast=0` every wet texel reads 1. Travel at the harbour's
+waterline runs 47 → 62 → 88 m over the first 40 m of shore distance (the
+shelf's crawl), 33 → 46 at the town beach. Camps Bay's beach is not a
+visual case: the fixture's DEM there stands above the water, so the sea is
+under the sand until well offshore, and a shore frame shows grass. What
+this does NOT do: a directional swell (the wind turns the offshore swell;
+the coast field's refraction is from the shore outward), and shadowing of
+one bay by a headland in the next tile — each tile's field ends at its
+gutter. The demo's swash history, Jacobian whitecaps and footprint
+roughness are still to glean.
+
 ## The layer ladder, and the key that names it
 
 The first key sat on the scale bar's label — exactly the rows it was meant
