@@ -41,6 +41,52 @@ a confusing module error):
 5. Verify by fetching the live bundle and grepping for a symbol you just added:
    `curl -s https://c15r-drive.on.parc.land/app.js | grep -c mySymbol`
 
+**A DEPLOY THAT NEVER LEAVES `DEPLOYING` IS THE DEPLOYER OUT OF MEMORY, AND
+NOTHING TELLS YOU.** Root-caused on 2026-09-10 with `platform.logs
+{service: "cells"}`, which tails the cells service's own Lambda
+(`PlatformStack-CellsServiceFunction…`, 512 MB, 120 s). A deploy request is a
+`cell.deploy.requested` bus event handled by that function: it reads every
+file of the cell, bundles `index.ts`, transpiles `client/main.ts` into
+`app.js` and zips `static/`. For this cell that is a 2.5 MB `main.ts`, a
+3.2 MB `ne-wide.b64` and 6.4 MB of `static/` in all, and it runs at the
+function's ceiling EVERY time. The stuck deploy, v1789047456197:
+
+```
+REPORT RequestId: 22a3f9a9-…  Duration: 70369 ms   Max Memory Used: 512 MB
+  Status: error  Error Type: Runtime.OutOfMemory             (13:40:33Z)
+REPORT RequestId: 22a3f9a9-…  Duration: 120000 ms  Max Memory Used: 512 MB
+  Status: timeout                                            (13:44:47Z)
+```
+
+The second line is Lambda's own async retry of the same event, which found
+the same heap and hit the timeout instead. Neither failure path writes
+`deploy.phase`, so `cells.get` says `DEPLOYING` for as long as anyone looks
+and the cell serves the previous build; cell-sync's 180 s wait reports the
+same and is not wrong. The forty-minute stall recorded under the wide-chart
+cloud fix (v1788955892954) was this, seen without the logs.
+
+Three things to do with it:
+
+- **Read the REPORT line, not the phase.** `platform.logs` needs the
+  platform scope; the line to find is the one with `Status: error` or
+  `Status: timeout` beside a 512 MB `Max Memory Used`.
+- **Re-issue with `cells.deploy {cellId}`, not another push.** A push
+  resends 133 files through the cells tools to arrive at the same deploy
+  event; `cells.deploy` raises the event over the files already there. The
+  re-issue landed in 46 s — `Duration: 45994 ms  Max Memory Used: 512 MB`,
+  at the ceiling again, which is why the same input can fail one time and
+  land the next: it is the heap's timing, not a bad file. **And the version
+  it lands as is not the version requested** (requested 1789048207732,
+  deployed 1789048252332 — the deployer stamps its own completion), so wait
+  for `phase: DEPLOYED` or the live symbol, never for the requested number.
+- **The memory is the PLATFORM's function.** `cells.configureCell
+  {memoryMb}` sizes the cell's own runtime Lambda and does nothing for the
+  deployer. What the cell can do is shrink what the deployer must chew:
+  `main.ts` is the largest single transpile, `ne-wide.b64` is 3.2 MB carried
+  as a JS string and decoded whole, and close to 3 MB of fixtures under
+  `static/` ride along for nothing at deploy time. Any of those is a
+  cheaper fix than the next stuck deploy.
+
 ### THE TILE BANK IS ON NOW — AND WAS NOT, FOR A LONG TIME
 
 Every `~/` route ends in `putTile`, and `putTile` opens with
@@ -4777,7 +4823,9 @@ the seat reported the artefact "still present" against a bundle that did not
 carry the fix. `cells.get` is the witness (`deploy.phase`); a second
 `push --deploy` was issued over it. cell-sync's 180s wait is not the deploy's
 duration and never was: verify the LIVE bundle for the symbol, and read
-`cells.get` before believing a deploy that outran the wait.
+`cells.get` before believing a deploy that outran the wait. The mechanism was
+found the next time it happened — the deployer ran out of memory and no
+failure path writes the phase; see the deploy ritual at the top of this file.
 
 ### The reach is 1,500km, and the globe is the next step
 
