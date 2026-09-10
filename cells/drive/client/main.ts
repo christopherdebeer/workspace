@@ -31,6 +31,7 @@ import { pickInfrastructureRecipe, planSupportStations, type StructureRecipe } f
 import { buildOceanMask, maskAt, type MaskGrid, type MaskStats } from './oceanmask';
 import { demBad, demFloor, demPatch, demSpikes, repairDem } from './demrepair';
 import { smoothChartZoom, wrapLongitude, chartShellMatrix } from './globe-navigation';
+import { bitmapStats, withDecodedBitmap } from './decode-telemetry';
 import { GLOBE_R, globeGeometry, globeHit, globeMaterial, globeOrientation, globeFar, latLonToUnit, subsolar } from './globe';
 import { createHydroSystem, extractOsmHydro, pointInArea, type HydroDebugView, type HydroFeature, type HydroSample, type HydroSystem, type OceanCoverage } from './hydro';
 import { cleanEquipment, equipmentFor, type RigEquipmentId } from './rig-equipment';
@@ -606,7 +607,7 @@ const RAW_BITMAP: ImageBitmapOptions = { colorSpaceConversion: 'none', premultip
 /** Takes a Blob rather than the Response it came from: the raster cache stores
  *  bytes, and a cached tile must decode through exactly this path. */
 async function decodeTerrarium(blob: Blob, px: number): Promise<Float32Array> {
-  const bmp = await createImageBitmap(blob, RAW_BITMAP);
+  return withDecodedBitmap(blob, RAW_BITMAP, (bmp) => {
   const t0 = performance.now();
   const cv = typeof OffscreenCanvas !== 'undefined'
     ? new OffscreenCanvas(px, px)
@@ -619,6 +620,7 @@ async function decodeTerrarium(blob: Blob, px: number): Promise<Float32Array> {
   for (let i = 0; i < px * px; i++) out[i] = d[i * 4] * 256 + d[i * 4 + 1] + d[i * 4 + 2] / 256 - 32768;
   profAdd('tileDecode', t0);
   return out;
+  });
 }
 // ── MAPTERHORN: the same encoding, better ground ───────────────────
 // AWS's terrarium mosaic is unmaintained and, under this project's own tiles,
@@ -879,7 +881,7 @@ async function coverRaster(z: number, x: number, y: number): Promise<Uint8Array>
     blob = await res.blob();
   }
   try {
-    const bmp = await createImageBitmap(blob, RAW_BITMAP);
+    return await withDecodedBitmap(blob, RAW_BITMAP, (bmp) => {
     const t0 = performance.now();
     const cv = typeof OffscreenCanvas !== 'undefined'
       ? new OffscreenCanvas(256, 256)
@@ -909,6 +911,7 @@ async function coverRaster(z: number, x: number, y: number): Promise<Uint8Array>
     // would turn one bad minute upstream into a permanently blank ecology.
     if (!fromDisk) writeRaster(url, blob);
     return data;
+    });
   } catch (e) {
     // Bytes off the disk that will not decode are a permanent hole otherwise:
     // the caller waits twenty seconds and re-reads the same bad bytes for the
@@ -3620,35 +3623,29 @@ sun.shadow.bias = -0.0008;
 sun.shadow.normalBias = 0.25;
 scene.add(sun.target);
 /**
- * ── A SHADOW MAP THAT SLIDES UNDER THE WORLD IS A SHADOW MAP THAT CRAWLS ──
+ * TRANSPORT THE SHADOW GRID, DON'T KEEP ROTATING IT ABOUT WORLD ZERO.
  *
- * The box is re-centred on the truck every frame at whatever position the
- * physics produced, so its texel grid moves CONTINUOUSLY across ground that is
- * not moving. At MED that grid is 0.21m per texel: drive at 25m/s and every
- * shadow edge in the world is re-quantised onto a different lattice a hundred
- * times a second. Each edge steps back and forth by a texel, in no particular
- * order, and the whole scene appears to boil. Reported from the seat as
- * swimming, and it is the oldest artefact in shadow mapping.
+ * Absolute-coordinate texel snapping stabilises translation with a fixed sun,
+ * but a moving sun rotates that lattice around the world origin. A parked rig
+ * 10km out then crosses fractions of texels every frame although the centre's
+ * snap residual is zero. The seat confirmed that pinning TIME stops the crawl.
  *
- * The fix is equally old: move the box in WHOLE TEXELS. Project the centre
- * onto the light's own two lateral axes, round each to a multiple of the texel
- * size, and put it back. The box still follows you — it just arrives one texel
- * at a time, so a shadow edge that has not moved in the world does not move on
- * the map either.
+ * Use the PREVIOUS SNAPPED CENTRE as the next lattice anchor. Only the delta
+ * to the requested centre is quantised in the current light basis. With a
+ * fixed light, all lateral moves remain whole texels, just as before. With a
+ * turning light, rotation is about a point within half a texel per lateral
+ * axis of the rig, not one kilometres away. No angle quantisation, frozen
+ * shadow map, extra render pass or filter change: sunlight still moves freely.
  *
- * THE BASIS HAS TO BE THE ONE three ACTUALLY USES or the rounding is to the
- * wrong grid and buys nothing: Matrix4.lookAt takes z = eye − target (which is
- * SUN_DIR), x = up x z, y = z x x, with the degenerate nudge for a sun at the
- * zenith copied from the same function.
- *
- * The height matters too, and that is why this snaps in three dimensions
- * rather than two: the centre's y comes from sampleHeight under the truck, so
- * it wobbles with every metre of ground — and with the sun anywhere but
- * straight overhead, a vertical wobble is a LATERAL move on the shadow map.
+ * The depth component follows continuously; moving along the light direction
+ * does not change shadow UVs. The basis matches three's lookAt, including its
+ * zenith fallback. All positions/heights remain in world metres.
  */
 let SHADOW_SNAP = qs('shsnap') !== '0';
 const shadowAt = new THREE.Vector3();
 const shX = new THREE.Vector3(), shY = new THREE.Vector3(), shZ = new THREE.Vector3();
+const shadowAnchor = new THREE.Vector3(), shadowDelta = new THREE.Vector3();
+let shadowAnchored = false;
 let shadowPhase = 0;
 function snapShadowCentre(c: THREE.Vector3): void {
   shZ.copy(SUN_DIR).normalize();
@@ -3657,20 +3654,56 @@ function snapShadowCentre(c: THREE.Vector3): void {
   shX.normalize();
   shY.copy(shZ).cross(shX);
   const t = (2 * shadowSpan) / sun.shadow.mapSize.x;
-  const ax = c.dot(shX), ay = c.dot(shY);
+  if (!shadowAnchored) { shadowAnchor.copy(c); shadowAnchored = true; }
+  shadowDelta.copy(c).sub(shadowAnchor);
+  const ax = shadowDelta.dot(shX), ay = shadowDelta.dot(shY);
   const dx = Math.round(ax / t) * t - ax, dy = Math.round(ay / t) * t - ay;
   if (SHADOW_SNAP) c.addScaledVector(shX, dx).addScaledVector(shY, dy);
-  // MEASURED AFTER, NOT BEFORE. How far the centre that will actually be USED
-  // sits from the texel grid, in texels: uniform in [0, 0.7] while the snap is
-  // off and identically zero while it is on. Reporting the pre-snap residual
-  // instead would have been a restatement of the input — and was, for one run.
-  // Recomputed rather than assumed, so a basis that does not match the one
-  // three builds shows up here instead of silently buying nothing.
-  const bx = c.dot(shX), by = c.dot(shY);
+  // A LOCAL step residual now. __shadowmotion measures the actual matrix's
+  // fractional phase separately; zero here alone cannot prove a stable image.
+  shadowDelta.copy(c).sub(shadowAnchor);
+  const bx = shadowDelta.dot(shX), by = shadowDelta.dot(shY);
   shadowPhase = Math.hypot(bx / t - Math.round(bx / t), by / t - Math.round(by / t));
+  shadowAnchor.copy(c);
 }
 /** Every shadow-relevant object goes through here, so "what casts" is one list
  *  rather than a flag repeated at a dozen construction sites. */
+// Shadow diagnosis only: read the matrix AFTER rendering has updated it.
+// Compare the SAME world point in both grids, then remove whole-texel shifts:
+// a texel-snapped translation is harmless, whereas fractional phase changes
+// re-rasterise an unmoving silhouette. No light/pose/filter changes here.
+const shadowMotion = { samples: 0, phaseMax: 0, sunDegMax: 0, poseCmMax: 0, poseDegMax: 0 };
+const shadowPrev = { at: 0, ready: false, parked: false, matrix: new THREE.Matrix4(),
+  pos: new THREE.Vector3(), quat: new THREE.Quaternion(), dir: new THREE.Vector3() };
+const shadowP0 = new THREE.Vector3(), shadowP1 = new THREE.Vector3();
+function sampleShadowMotion(now: number): void {
+  if (now - shadowPrev.at < 100) return;
+  const on = renderer.shadowMap.enabled && sun.castShadow;
+  const parked = Math.abs(state.speed) < 0.05;
+  if (on && shadowPrev.ready && parked && shadowPrev.parked && now - shadowPrev.at < 1000) {
+    shadowP0.copy(car.position).applyMatrix4(shadowPrev.matrix);
+    shadowP1.copy(car.position).applyMatrix4(sun.shadow.matrix);
+    const dx = (shadowP1.x - shadowP0.x) * sun.shadow.mapSize.x;
+    const dy = (shadowP1.y - shadowP0.y) * sun.shadow.mapSize.y;
+    shadowMotion.samples++;
+    shadowMotion.phaseMax = Math.max(shadowMotion.phaseMax,
+      Math.hypot(dx - Math.round(dx), dy - Math.round(dy)));
+    shadowMotion.sunDegMax = Math.max(shadowMotion.sunDegMax,
+      SUN_DIR.angleTo(shadowPrev.dir) * 180 / Math.PI);
+    shadowMotion.poseCmMax = Math.max(shadowMotion.poseCmMax, car.position.distanceTo(shadowPrev.pos) * 100);
+    shadowMotion.poseDegMax = Math.max(shadowMotion.poseDegMax, car.quaternion.angleTo(shadowPrev.quat) * 180 / Math.PI);
+  }
+  shadowPrev.at = now; shadowPrev.ready = on; shadowPrev.parked = parked;
+  shadowPrev.matrix.copy(sun.shadow.matrix); shadowPrev.pos.copy(car.position);
+  shadowPrev.quat.copy(car.quaternion); shadowPrev.dir.copy(SUN_DIR);
+}
+(window as unknown as { __shadowmotion?: object }).__shadowmotion = (reset = false): object => {
+  const result = { ...shadowMotion, timeMode: TIME_MODES[timeMode], solarHour: solarHour(),
+    caster: sun.castShadow ? 'sun' : headSpot.castShadow ? 'headlight' : 'none',
+    map: sun.shadow.mapSize.x, span: shadowSpan, snap: SHADOW_SNAP };
+  if (reset) { Object.assign(shadowMotion, { samples: 0, phaseMax: 0, sunDegMax: 0, poseCmMax: 0, poseDegMax: 0 }); shadowPrev.ready = false; }
+  return result;
+};
 const shadowy = (o: THREE.Object3D, cast: boolean, receive: boolean): void => {
   o.castShadow = cast; o.receiveShadow = receive;
 };
@@ -34574,6 +34607,7 @@ for (const ev of ['pointerdown', 'touchend', 'click', 'keydown']) {
 let hidden = document.hidden;
 addEventListener('visibilitychange', () => {
   hidden = document.hidden;
+  profVisibility();
   // Backgrounding a tab is how a phone ends a session — the loop stops running,
   // so the debounced write has to happen on the way out or the last few
   // hundred metres are lost.
@@ -35847,6 +35881,7 @@ let inTick = false, tickStart = 0, tickMsCur = 0, attrIn = 0, attrOut = 0, markA
 let sessTick = 0, sessOff = 0, sessTickMax = 0;
 const tickRing = new Float32Array(4096);
 function profBump(name: string, d: number): void {
+  if (document.hidden) return;
   const e = frameProf.get(name);
   if (e) { e.ms += d; e.n++; if (d > e.max) e.max = d; } else frameProf.set(name, { ms: d, n: 1, max: d });
   const r = sessProf.get(name);
@@ -35854,6 +35889,7 @@ function profBump(name: string, d: number): void {
   curFrame.set(name, (curFrame.get(name) ?? 0) + d);
 }
 function profAdd(name: string, t0: number): void {
+  if (document.hidden) return;
   const d = performance.now() - t0;
   if (inTick) { attrIn += d; attrSinceMark += d; } else attrOut += d;
   profBump(name, d);
@@ -35864,6 +35900,7 @@ function profAdd(name: string, t0: number): void {
  *  wrapper around every statement. */
 function profMark(name: string): void {
   const now = performance.now();
+  if (document.hidden) { markAt = now; attrSinceMark = 0; return; }
   const d = Math.max(0, now - markAt - attrSinceMark);
   markAt = now; attrSinceMark = 0;
   attrIn += d;
@@ -35872,7 +35909,21 @@ function profMark(name: string): void {
 function profTickStart(): void { inTick = true; tickStart = markAt = performance.now(); attrSinceMark = 0; }
 function profTickEnd(name: string): void { profMark(name); tickMsCur = performance.now() - tickStart; inTick = false; }
 let profLast = 0;
+let profHiddenAt: number | null = document.hidden ? performance.now() : null;
+let profHiddenMs = 0, profResumes = 0;
+function profVisibility(): void {
+  const now = performance.now();
+  if (document.hidden) { profHiddenAt ??= now; }
+  else if (profHiddenAt !== null) {
+    profHiddenMs += now - profHiddenAt; profHiddenAt = null; profResumes++;
+  }
+  // Discard the boundary interval, not merely the simulation's dt. Otherwise
+  // returning from another app records its entire absence as one slow frame.
+  profLast = 0; tickMsCur = attrIn = attrOut = attrSinceMark = 0;
+  curFrame.clear();
+}
 function profFrame(now: number): void {
+  if (document.hidden) { profLast = 0; attrIn = attrOut = 0; curFrame.clear(); return; }
   profFrames++;
   if (profLast) {
     const fm = now - profLast;
@@ -35917,6 +35968,9 @@ function telemetryReport(): string {
   const mem = (performance as unknown as { memory?: { usedJSHeapSize: number } }).memory;
   const L: string[] = [];
   L.push(`DRIVE TELEMETRY · ${new Date().toISOString().slice(0, 19)}Z · ${Math.round(secs)}s · ${location.search}`);
+  L.push(`visibility: active frame time ${(sessWall / 1000).toFixed(1)}s · hidden ${((profHiddenMs + (profHiddenAt === null ? 0 : performance.now() - profHiddenAt)) / 1000).toFixed(1)}s · resumes ${profResumes} · boundary intervals excluded`);
+  L.push(`bitmap lifecycle: pending ${bitmapStats.pending} peak ${bitmapStats.peak} · completed ${bitmapStats.completed} failed ${bitmapStats.failed} closed ${bitmapStats.closed} · elapsed mean ${(bitmapStats.latencyMs / Math.max(1, bitmapStats.settled)).toFixed(1)}ms max ${bitmapStats.maxLatencyMs.toFixed(0)}ms (overlapping async latency, NOT CPU/GPU time)`);
+  L.push(`shadow stationary: samples ${shadowMotion.samples} · max/sample grid phase ${shadowMotion.phaseMax.toFixed(3)} texels · sun ${shadowMotion.sunDegMax.toFixed(4)}deg · pose ${shadowMotion.poseCmMax.toFixed(3)}cm/${shadowMotion.poseDegMax.toFixed(4)}deg · clock ${TIME_MODES[timeMode]} · map ${sun.shadow.mapSize.x} span ${shadowSpan}m · snap ${SHADOW_SNAP} · caster ${sun.castShadow ? 'sun' : headSpot.castShadow ? 'headlight' : 'none'}`);
   if (errRing.length) L.push(`errors ${errRing.length} · ${errRing.join(' ¶ ')}`);
   L.push(`device ${navigator.hardwareConcurrency ?? '?'} cores · dpr ${devicePixelRatio} · ${innerWidth}x${innerHeight} · ${gpu}`);
   L.push(`ua ${navigator.userAgent.slice(0, 90)}`);
@@ -37914,6 +37968,7 @@ function tick(now: number): void {
   // scene → target, two separable blur rounds at half res, composite to canvas
   renderer.setRenderTarget(rtScene);
   { const _p = performance.now(); renderer.render(scene, camera); profAdd('render', _p); }
+  { const _p = performance.now(); sampleShadowMotion(performance.now()); profAdd('shadowTelemetry', _p); }
   { const _p = performance.now(); composite(mblurAmt); profAdd('composite', _p); }
   // Kept every frame, blur or none: the jump guard above compares against it,
   // and a prev-camera that only updates while the effect is on would call the

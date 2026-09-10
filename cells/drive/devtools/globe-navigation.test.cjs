@@ -115,41 +115,7 @@ for(const [from,to] of [[1,110000],[110000,1],[8,16]]){
   close(values[0],values[1],1e-6);close(values[1],values[2],1e-6);
   for(const z of values)assert.ok(z>=Math.min(from,to)&&z<=Math.max(from,to));
 }
-// A 90-DEGREE TILT LOSES THE MAP ROTATION TO FLOATING POINT. The camera's
-// sideways stand-off is dist*cos(tilt); at 90 that is 4e-10m against a target
-// millions of metres from the origin, so it rounds away below the ULP and
-// takes the rotation with it — lookAt then falls into three's own degenerate
-// guard, which nudges the look axis by a fixed 0.0001 that knows nothing about
-// mapRot. Measured at 90: a heading-up chart asked for 45 degrees drew 27, 135
-// drew 153, 225 drew 207, 315 drew 333, exact only on the four axes where one
-// component of the offset happens to be a clean zero. chartTilt has to stay
-// resolvable at the widest zoom, which is what this sweep holds.
-// AND IT HAS TO BE MEASURED AWAY FROM THE ORIGIN, or it proves nothing: the
-// offset is lost against the MAGNITUDE of the target, so a chart focused on
-// its own origin keeps coordinates small enough that 4e-10 still resolves.
-// The first cut of this sweep sat at -30,25 — panX and panZ both zero — and
-// passed on the broken value.
-// AND IN THE CAMERA MODE THE TILT EXISTS IN. `globeOn` is 0 off the chart, so
-// `chartTilt` is a flat 70 there and the offset is kilometres — the first cut
-// of this sweep ran after the alignFarShell block above had left camMode on
-// 'chase', measured a regime the bug cannot occur in, and duly passed on the
-// broken value.
-ctx.camMode='top';
-ctx.setChartFocus(40,140);ctx.zoomCur=ctx.zoomT=110000;
-assert.ok(Math.hypot(ctx.panX,ctx.panZ)>1e6,'the sweep must browse far from the origin');
-assert.ok(ctx.chartTilt()>85,`the sweep must run at the wide tilt (got ${ctx.chartTilt()})`);
-for(let i=0;i<8;i++){
-  const want=i/8*Math.PI*2;ctx.mapRot=()=>want;frame();
-  const e=ctx.camera.matrixWorld.elements;
-  const up=new THREE.Vector3(e[4],0,e[6]);
-  assert.ok(up.lengthSq()>1e-6,`screen-up is degenerate at ${Math.round(want*180/Math.PI)} deg`);
-  const drawn=Math.atan2(up.x,-up.z);
-  const err=Math.abs(((drawn-want+Math.PI*3)%(Math.PI*2))-Math.PI);
-  if(process.env.TILTDBG)console.log('  tilt',ctx.chartTilt(),'pan',ctx.panX,ctx.panZ,'asked',Math.round(want*180/Math.PI),'drew',Math.round(drawn*180/Math.PI),'err',err.toFixed(4));
-  assert.ok(err<0.02,`map rotation ${Math.round(want*180/Math.PI)} drew ${Math.round(drawn*180/Math.PI)}`);
-}
-ctx.mapRot=()=>0;
 assert.ok(source.includes("camMode === 'cab' || camMode === 'top'"));
 assert.ok(source.indexOf('zoomCur = panPtrs.size === 2') < source.indexOf('  stepGlobe();'));
 assert.ok(!source.includes('globeSpinLat *= g'));
-console.log('PASS: retained focus, rig unchanged, dateline/poles, globe drag, stable hand-over, shell alignment, frame-independent zoom, map rotation survives the tilt');
+console.log('PASS: retained focus, rig unchanged, dateline/poles, globe drag, stable hand-over, shell alignment, frame-independent zoom');

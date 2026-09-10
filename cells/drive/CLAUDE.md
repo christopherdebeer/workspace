@@ -5103,6 +5103,73 @@ closes the other direction — a switch declared and no longer read fails.
   in flight). Retiring one of these means proving the other branch is
   unreachable, not just unfashionable.
 
+## Stationary rig shadow: diagnose rotation, not only translation
+
+A parked vehicle's daylight shadow can crawl even with SHADOW_SNAP enabled.
+stepSun recomputes the solar direction every frame (CYCLE is 24x); snapping
+uses a basis which rotates with that direction. Translation snapping does
+not stabilise that rotation. The previous shadowPhase probe tests its own
+snapped centre, so it can report zero while stationary geometry changes
+fractional texel alignment. BasicShadowMap then exposes changing hard coverage.
+
+A CPU test of the actual solarAngles/snapShadowCentre functions at Yosemite,
+2026-09-09 15:00 UTC, held the point and receiver centre fixed for 60 seconds.
+At 60fps/CYCLE, maximum fractional grid movement per frame was 0.0040 texels
+at x=z=0 and 0.4030 at x=z=10000m (height 100m, MED 220m/1024 grid).
+Both frozen-sun runs measured zero. Snap residual remained below 1.5e-11.
+Whole-texel changes were removed before measuring: an integer translation is
+not evidence of shimmer. This reproduces a mechanism, not a GPU screenshot
+or proof that all user-observed movement has that cause. Headlight shadows,
+rig suspension settling and streaming ground changes remain separate cases.
+No shadow rendering, sun clock, filtering or vehicle physics changed here.
+
+Telemetry now samples the actual rendered sun shadow matrix at >=100ms
+intervals while both adjacent samples have speed below 0.05m/s. It reports
+fractional grid movement, solar angular movement and actual rig root pose
+movement separately. Long gaps >=1s and inactive sun casting reset the pair.
+__shadowmotion(true) returns the measurements and resets the observation.
+The report includes clock mode, active caster, map resolution, span and snap.
+
+Visibility changes reset profiler interval attribution, and hidden ticks/tasks
+are excluded from the additive ledger; hidden duration/resumes are separate.
+Bitmap lifecycle metrics measure overlapping async elapsed time (NOT CPU/GPU
+work). Terrain/cover bitmap consumers now close temporary bitmaps in finally,
+on success and consumer failure. Pending/peak/completed/failed/closed are
+reported, making decode pressure visible without adding async waits to CPU.
+
+Checks: devtools/telemetry-check.cjs tests background/resume accounting and
+bitmap cleanup/failure balance; devtools/shadow-diagnosis.cjs reproduces the
+fixed-point experiment using main.ts functions. Both take an optional main.ts
+path. Syntax and helper types checked. No on-device/WebGL validation here.
+
+## Shadow grid transport: the stationary-crawl fix
+
+The seat confirmed the shadow wiggles during a time transition but settles
+at fixed time. snapShadowCentre now quantises the requested centre's delta
+relative to the PREVIOUS snapped centre, rather than projecting absolute
+world coordinates into a rotating light basis. That transports the lattice
+along the drive. With fixed light, lateral moves remain exact whole texels;
+with moving light, rotation is local instead of amplified by distance from
+world zero. The light-axis component follows freely. The sun direction and
+clock remain continuous; no angle quantisation, shadow freeze, filtering,
+resolution increase, additional render pass or physics change.
+
+shadowPhase now measures the local step residual, not a global-origin
+residual. The independently sampled rendered-matrix phase in __shadowmotion
+remains the check for unwanted movement. SHADOW_SNAP's existing bypass still
+works. Teleports, map resolution changes and a zenith basis stay finite.
+
+Verification: devtools/shadow-stability.test.cjs executes the actual main.ts
+solver/snap functions and three's LightShadow matrices. On the same 60-second
+Yosemite/CYCLE test, max fractional texel movement per frame is 0.00039289
+both at the spawn and 10km/1000km away, down from 0.4030 at 10km. Fixed sun
+and parked rig remain exactly stable. Fixed-sun driving, including variable
+height, preserves integer lateral steps at LOW/MED/HIGH. A four-hour sun
+change eased over four seconds has identical grid movement near/far (0.09792
+texels/frame); the real shadow may still move as illumination changes.
+Telemetry regression tests and main syntax checks also pass. These are
+geometry/matrix tests, not on-device GPU visual validation.
+
 ## Big shapes worth knowing
 
 - **`client/main.ts` is ~36k lines** and holds the world's module state. Do not

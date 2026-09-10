@@ -1,0 +1,24 @@
+const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm'),esbuild=require('esbuild');
+const path=require('node:path');
+const sourcePath=process.argv[2]||path.join(__dirname,'../client/main.ts');
+const s=fs.readFileSync(sourcePath,'utf8');
+let now=100;const doc={hidden:false};const c={document:doc,performance:{now:()=>now}};vm.createContext(c);
+const code=s.slice(s.indexOf('const frameProf = '),s.indexOf('function telemetryReport(): string'));
+vm.runInContext(esbuild.transformSync(code,{loader:'ts'}).code+'\nglobalThis.stats=()=>({sessFrames,sessWall,profHiddenMs,profResumes,slow:sessSlow,rows:[...sessProf]});',c);
+c.profFrame(now);c.profTickStart();now=105;c.profTickEnd('work');now=116;c.profFrame(now);
+assert.equal(c.stats().sessWall,16);
+doc.hidden=true;now=200;c.profVisibility();c.profTickStart();now=1000;c.profTickEnd('hiddenWork');c.profFrame(now);
+assert.ok(!c.stats().rows.some(r=>r[0]==='hiddenWork'));
+now=26200;doc.hidden=false;c.profVisibility();c.profFrame(now);c.profTickStart();now+=5;c.profTickEnd('work');now=26216;c.profFrame(now);
+assert.equal(c.stats().sessWall,32);assert.equal(c.stats().profHiddenMs,26000);assert.equal(c.stats().slow,0);assert.equal(c.stats().profResumes,1);
+(async()=>{
+  const code=esbuild.transformSync(fs.readFileSync(path.join(path.dirname(sourcePath),'decode-telemetry.ts'),'utf8'),{loader:'ts',format:'cjs'}).code;
+  let closed=0,fail=false;
+  const ctx={module:{exports:{}},exports:{},performance:{now:()=>now},createImageBitmap:async()=>{if(fail)throw Error('decode');return{close(){closed++}}}};
+  vm.createContext(ctx);vm.runInContext(code,ctx);const {withDecodedBitmap,bitmapStats}=ctx.module.exports;
+  assert.equal(await withDecodedBitmap({}, {},()=>42),42);assert.equal(closed,1);
+  await assert.rejects(withDecodedBitmap({}, {},()=>{throw Error('consumer')}));assert.equal(closed,2);
+  fail=true;await assert.rejects(withDecodedBitmap({}, {},()=>42));assert.equal(closed,2);
+  assert.equal(bitmapStats.pending,0);assert.equal(bitmapStats.settled,3);assert.equal(bitmapStats.failed,2);
+  console.log('PASS: background excluded, resume baseline, hidden work excluded, bitmap close on success/consumer failure, decode failure balanced');
+})().catch(e=>{console.error(e);process.exitCode=1});
