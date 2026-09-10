@@ -1,4 +1,5 @@
 import {
+  buildCulvertBoreGeometry,
   buildProductionHydroFixture,
   buildProductionSubstrateTile,
   buildRapidDetailField,
@@ -116,6 +117,33 @@ function assertCrossing(kind: CrossingKind): ResolvedSubstrateTile {
  * lab are inspecting one implementation rather than parallel demonstrations.
  */
 export function runSubstrateSelfTest(): void {
+  const culvertBore = buildCulvertBoreGeometry({
+    stations: [[0, 0], [10, 0], [20, 0]],
+    invertY: [1, .8, .6],
+    offsets: [[0, 2], [0, 2], [0, 2]],
+    start: 0,
+    end: 2,
+    heightM: 1.5,
+    family: 'box',
+  });
+  const twinCulvertBore = buildCulvertBoreGeometry({
+    stations: [[0, 0], [10, 0], [20, 0]],
+    invertY: [1, .8, .6],
+    offsets: [[0, 2], [0, 2], [0, 2]],
+    start: 0,
+    end: 2,
+    heightM: 1.5,
+    family: 'twin-cell',
+  });
+  assert(culvertBore.positions.length === 108
+    && twinCulvertBore.positions.length === 144,
+  'culvert builder must author three shell faces plus an optional divider');
+  close(culvertBore.lengthM, 20, 1e-6,
+    'culvert builder must retain exact run length');
+  assert([...culvertBore.positions, ...twinCulvertBore.positions]
+    .every(Number.isFinite),
+  'culvert geometry must remain numerically safe');
+
   const rapidStations = Array.from(
     { length: 20 },
     (_, index) => [index * 10, 0] as const,

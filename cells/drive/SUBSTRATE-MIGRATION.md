@@ -184,6 +184,12 @@ into the immutable substrate tile beside the detail render packet; activation,
 revision replacement and invalidation now consume that tile payload rather than
 the mutable authoring candidate registry.
 
+Culvert shell arrays have begun the same migration. Once crossing intent,
+clearance, conduit family and dimensions are resolved, the renderer-free
+`client/substrate/culvert-detail.ts` builder owns the exact side walls, soffit
+and optional twin-cell divider. Contextual recipe selection and decorative
+headwall boxes still live at the legacy crossing build boundary.
+
 ### 4. Cut rendering over as one unit — terrain, drive and hydro guarded
 
 Terrain, roads, river bed and water must be generated from the same substrate
@@ -294,9 +300,11 @@ the failed comparison can be reproduced.
   authoring boundary and retain no hidden mesh wrappers after commit. Rapid-bed
   placement, foam, facet/colour and collider generation has moved into the pure
   substrate package, and its collider witnesses are versioned in the production
-  tile. The remaining generation migration is to move the other array builders
-  and reach/road/terrain solve authorities into the substrate tile build, then
-  retire the legacy builder entry points and road drape registry.
+  tile. Culvert bore shell arrays are also substrate-built after the legacy
+  context resolver chooses their dimensions. The remaining generation migration
+  is to move the other array builders and reach/road/terrain solve authorities
+  into the substrate tile build, then retire the legacy builder entry points
+  and road drape registry.
 - Contact/evidence cutover remains query-gated; representative water drives,
   wheel-level telemetry and parity thresholds are not yet complete enough to
   make it the default.

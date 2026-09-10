@@ -118,6 +118,7 @@ import {
   buildRapidDetailField,
   buildRapidDetailMesh,
 } from './substrate/rapid-detail';
+import { buildCulvertBoreGeometry } from './substrate/culvert-detail';
 import {
   VehicleWaterEvidence,
   type VehicleWaterEvidenceSnapshot,
@@ -19961,33 +19962,23 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
   const W = Math.max(width, rig ? 4.4 : conduitRecipe.family === 'pipe' ? 1.6 : 2.2);
   culvertStats.runs++;
   if (rig) culvertStats.rigSized++;
-  const tv: number[] = [];
-  const push = (...p: number[]): void => {
-    tv.push(p[0], p[1], p[2], p[3], p[4], p[5], p[6], p[7], p[8],
-      p[3], p[4], p[5], p[9], p[10], p[11], p[6], p[7], p[8]);
-  };
   const off = mitreOffsets(dense, a, b, W / 2);
-  for (let i = a; i < b; i++) {
-    const [x0, z0] = dense[i], [x1, z1] = dense[i + 1];
-    culvertStats.m += Math.hypot(x1 - x0, z1 - z0) || 1;
-    const [ax2, az2] = off[i - a], [bx2, bz2] = off[i + 1 - a];
-    const yA = inv[i], yB = inv[i + 1];
-    const cA = yA + H, cB = yB + H;
-    push(x0 + ax2, yA, z0 + az2, x1 + bx2, yB, z1 + bz2, x0 + ax2, cA, z0 + az2, x1 + bx2, cB, z1 + bz2);
-    push(x0 - ax2, yA, z0 - az2, x1 - bx2, yB, z1 - bz2, x0 - ax2, cA, z0 - az2, x1 - bx2, cB, z1 - bz2);
-    push(x0 + ax2, cA, z0 + az2, x1 + bx2, cB, z1 + bz2, x0 - ax2, cA, z0 - az2, x1 - bx2, cB, z1 - bz2);
-    // Twin-cell is the same safe outer envelope with a central divider, so the
-    // visual family changes without changing the clearance calculation.
-    if (conduitRecipe.family === 'twin-cell') {
-      push(x0, yA, z0, x1, yB, z1, x0, cA, z0, x1, cB, z1);
-    }
-    // NOTHING GOES IN THE WALL GRID. A road tunnel's walls are solid because
-    // you drive BETWEEN them; a culvert is buried, and the only thing near
-    // enough to hit its walls is the traffic on the road over the top. Putting
-    // them in the grid gave every vehicle crossing the culvert a wall to bounce
-    // off, which is the fault this pass exists to fix — the geometry was never
-    // the whole problem, the collision was.
-  }
+  const bore = buildCulvertBoreGeometry({
+    stations: dense,
+    invertY: inv,
+    offsets: off,
+    start: a,
+    end: b,
+    heightM: H,
+    family: conduitRecipe.family,
+  });
+  culvertStats.m += bore.lengthM;
+  // NOTHING GOES IN THE WALL GRID. A road tunnel's walls are solid because
+  // you drive BETWEEN them; a culvert is buried, and the only thing near
+  // enough to hit its walls is the traffic on the road over the top. Putting
+  // them in the grid gave every vehicle crossing the culvert a wall to bounce
+  // off, which is the fault this pass exists to fix — the geometry was never
+  // the whole problem, the collision was.
   if (cover > culvertStats.deepest) culvertStats.deepest = cover;
   // Measured on the BUILT geometry, not on the sizing arithmetic — the point is
   // to catch a soffit in the tarmac however it got there.
@@ -19997,7 +19988,7 @@ function culvert(dense: Array<[number, number]>, inv: number[], g: number[],
     culvertStats.minUnder = Math.min(culvertStats.minUnder, deck - (inv[i] + H));
   }
   const geo = new THREE.BufferGeometry();
-  geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tv), 3));
+  geo.setAttribute('position', new THREE.BufferAttribute(bore.positions, 3));
   geo.computeVertexNormals();
   addStructureRenderGeometry(geo, MAT.tunnel, {
     userData: { culvert: true },
