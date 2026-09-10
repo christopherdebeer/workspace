@@ -218,8 +218,14 @@ The shared flowing-water shader now keeps the inland feather close to the
 terrain colour until it meets the opaque body, strengthens continuous
 shallow-edge terrain coupling, exposes a separate world-anchored pebble mask,
 makes bend eddies affect both normals and restrained water tone, and breaks
-rapid aeration into smaller flow-aligned patches. These are material/field
-responses only; no shader-local dither or quantisation was introduced.
+rapid aeration into connected flow-aligned tongues with sparse broken crests.
+The first rendered river fragment is now resolved from the same antialiased
+coverage cut that constrains terrain topology, then widens through signed shore
+distance and river-space depth into the shallow shelf. This prevents river N
+and raster coverage from producing differently shaped bright and dark edges at
+bends. The dry side uses the same metre-space wet-margin function in production
+sward paint and the hydro lab. These are continuous material/field responses
+only; no shader-local dither or quantisation was introduced.
 
 ### 5. Cut vehicle contact and evidence over together
 
@@ -278,6 +284,16 @@ No production renderer or physics cutover should occur until all of these hold:
 - visual review confirms cohesive banks, shallows, bed material, turbulence
   and vehicle evidence without material-local dither or quantisation.
 
+The current performance evidence is green. `hydro-resolution.test.mjs` measures
+the production flowing tier at 23.3 ms and 3.84 MiB per 256² field, with mean
+bank error improving from 2.53 m at 128² to 1.82 m. The production build-budget
+harness completes the terrain/road build in 16 yielded slices with a 7.3 ms
+longest main-thread hold; its software-render frame maximum is reported
+separately and is not attributed to tile construction. Substrate render and
+structure-render harnesses pass with zero page errors, exact flowing shoreline
+terrain constraints, one edge-blended body per committed flowing tile and
+atomic crossing packet admission.
+
 `SubstrateShadowMonitor.readyForCutover` is deliberately conservative. It
 stays false for wet disagreement rate at or above 0.1%, depth p95 above 0.10m,
 depth maximum above 0.25m, support p95 above 0.03m, unknown speed authority,
@@ -312,7 +328,9 @@ the failed comparison can be reproduced.
 - Observed production overlaps still need a full classification audit beyond
   the now-covered Senqu, Bixby and Chapman's Peak cases, especially untagged
   fords versus procedural bridges, before unresolved geometry can be retired.
-- Visual and performance gates still need production captures for cohesive
-  banks, shallows, bed material, turbulence, persistent evidence and seams.
+- Performance, field-memory and tile-build harnesses are green. Production
+  world captures still need to confirm cohesive banks, shallows, bed material,
+  turbulence, persistent evidence and seams under representative lighting and
+  global post-processing.
 - Duplicate legacy support, ford, shoreline and vehicle-water inference cannot
   be removed until default cutover and rollback observation are complete.
