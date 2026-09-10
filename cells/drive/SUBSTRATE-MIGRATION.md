@@ -146,12 +146,14 @@ Rendering now follows the same ownership rule for every local geometric layer.
 Legacy terrain, road, structure and riverbed-detail builders still author
 geometry during migration, but tile assembly no longer captures those meshes.
 Terrain publishes its renderer-neutral packet while the kernel result is
-applied. Profiled road ribbon decks now publish directly from their final
-merged arrays without constructing a temporary renderer mesh; mutable draped
-tracks and junctions still publish after terrain redrape at the legacy authoring
-boundary. Riverbed details publish their arrays after redrape, and structures
-publish at structure-batch completion. Any remaining road, structure and
-hydro-detail mesh wrappers are disposed immediately. Once terrain commits, its
+applied. Profiled road decks, mutable draped tracks, junction/apron surfaces,
+gallery and tunnel shells, luminaires and portal fittings now publish directly
+from their geometry arrays without constructing a temporary renderer mesh.
+Draped tracks retain only their `BufferGeometry` in the terrain re-seat
+registry; packet attributes share those arrays and are admitted only after
+redrape. Riverbed details publish their arrays after redrape, and structures
+publish at structure-batch completion. Remaining structure and hydro-detail
+mesh wrappers are disposed immediately. Once terrain commits, its
 packet-instantiated visible mesh replaces the temporary build mesh as the shared
 query/raycast authority. Consequently a settled render-mode tile retains zero
 hidden terrain, road, structure or hydro-detail source meshes. Terrain packet
@@ -165,8 +167,9 @@ hydro atomically. An asynchronous stale tile request can refuse that commit,
 but cannot discard a new road/detail packet while it waits for terrain redrape.
 Diagnostics expose direct/build-authored packet counts, retained source
 objects, bytes, conversion failures, rejection reasons and any accidentally
-visible source mesh; browser cutover requires publication parity, zero retained
-source meshes, source visibility and failures.
+visible source mesh; browser cutover requires publication parity, every road
+packet direct-authored, zero retained source meshes, source visibility and
+failures.
 
 ### 4. Cut rendering over as one unit — terrain, drive and hydro guarded
 

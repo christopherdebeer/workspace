@@ -14791,9 +14791,10 @@ function flushAprons(): void {
     g.setAttribute('position', new THREE.BufferAttribute(new Float32Array(v), 3));
     g.setAttribute('uv', new THREE.BufferAttribute(new Float32Array(u), 2));
     g.computeVertexNormals();
-    const mm = new THREE.Mesh(g, m);
-    if (m === MAT.stud) mm.userData.stud = true;   // so a probe can find them
-    addRoadRenderMesh(mm);
+    addRoadRenderGeometry(g, m, {
+      // So a probe can find the packet-instantiated studs.
+      userData: m === MAT.stud ? { stud: true } : undefined,
+    });
     v.length = 0; u.length = 0;
   }
 }
@@ -15054,6 +15055,12 @@ const substrateHydroDetailRenderMeshes = new Map<string, SubstrateRenderBinding>
 let productionHydroDetailPacketFailures = 0;
 let hydroDetailBatchMeshes: THREE.Mesh[] | null = null;
 let hydroDetailBatchRocks: RapidRock[] | null = null;
+const IDENTITY_RENDER_MATRIX = new Float32Array([
+  1, 0, 0, 0,
+  0, 1, 0, 0,
+  0, 0, 1, 0,
+  0, 0, 0, 1,
+]);
 function addRoadRenderMesh(mesh: THREE.Mesh): void {
   // Source geometry may be sampled into a substrate packet, but in render
   // cutover mode it must never be mistaken for the packet-owned scene mesh.
@@ -15063,6 +15070,59 @@ function addRoadRenderMesh(mesh: THREE.Mesh): void {
   } else {
     worldGroup.add(mesh);
   }
+}
+interface RoadRenderGeometryOptions {
+  name?: string;
+  matrix?: ArrayLike<number>;
+  retainGeometry?: boolean;
+  userData?: Readonly<Record<string, string | number | boolean>>;
+}
+/**
+ * Publish road arrays directly into the substrate packet. Mutable drapes keep
+ * their BufferGeometry for terrain re-seating, but do not need a renderer mesh
+ * merely to expose those arrays. Outside an owned substrate batch this creates
+ * the ordinary mesh and preserves the rollback path.
+ */
+function addRoadRenderGeometry(
+  geometry: THREE.BufferGeometry,
+  material: THREE.Material | readonly THREE.Material[],
+  options: RoadRenderGeometryOptions = {},
+): boolean {
+  const materials = Array.isArray(material) ? material : [material];
+  const matrix = options.matrix ?? IDENTITY_RENDER_MATRIX;
+  if (SUBSTRATE_RENDER_ON && ribBatchTerrainOwner && roadBatchPackets) {
+    const packet = productionRenderPacketFromGeometry({
+      name: options.name ?? '',
+      geometry,
+      material: materials,
+      matrix,
+      renderOrder: 0,
+      castShadow: false,
+      receiveShadow: false,
+      frustumCulled: true,
+      userData: {
+        ...(options.userData ?? {}),
+        substrateDirectAuthored: true,
+      },
+    }, false);
+    if (packet) {
+      roadBatchPackets.push(packet);
+      if (!options.retainGeometry) geometry.dispose();
+      return true;
+    }
+  }
+  const mesh = new THREE.Mesh(
+    geometry,
+    materials.length === 1 ? materials[0] : [...materials],
+  );
+  mesh.name = options.name ?? '';
+  Object.assign(mesh.userData, options.userData);
+  if (options.matrix) {
+    mesh.matrix.fromArray(Array.from(options.matrix));
+    mesh.matrixAutoUpdate = false;
+  }
+  addRoadRenderMesh(mesh);
+  return false;
 }
 function registerProductionRoadRenderBatch(
   owner: string,
@@ -15259,39 +15319,16 @@ function flushRibbons(): void {
     }
     for (const g of geos) g.dispose();
     smoothSoupNormals(out);
-    // PROFILED DRIVE DECKS AUTHOR THE SUBSTRATE PACKET DIRECTLY. Their merged
-    // arrays are final at this boundary: unlike a draped track they will never
-    // be rewritten by redrape. Creating a THREE.Mesh here only to read the
-    // same arrays back into a packet and dispose the wrapper made the legacy
-    // renderer an unnecessary intermediate authority.
-    let directlyAuthored = false;
-    if (drive && lift === null && SUBSTRATE_RENDER_ON
-      && ribBatchTerrainOwner && roadBatchPackets) {
-      const packet = productionRenderPacketFromGeometry({
+    // Both profiled decks and draped tracks author packets from their arrays.
+    // A drape keeps this BufferGeometry for terrain re-seating, but no source
+    // THREE.Mesh is needed merely to make those arrays packet-readable.
+    if (drive) {
+      addRoadRenderGeometry(out, mat, {
         name: 'ribbon',
-        geometry: out,
-        material: [mat],
-        matrix: new Float32Array([
-          1, 0, 0, 0,
-          0, 1, 0, 0,
-          0, 0, 1, 0,
-          0, 0, 0, 1,
-        ]),
-        renderOrder: 0,
-        castShadow: false,
-        receiveShadow: false,
-        frustumCulled: true,
-        userData: { ribbon: true, substrateDirectAuthored: true },
-      }, false);
-      if (packet) {
-        roadBatchPackets.push(packet);
-        directlyAuthored = true;
-        // No GPU object was created. Disposing the unused BufferGeometry
-        // wrapper does not detach the typed arrays now owned by the packet.
-        out.dispose();
-      }
-    }
-    if (!directlyAuthored) {
+        retainGeometry: lift !== null,
+        userData: { ribbon: true },
+      });
+    } else {
       const mesh = new THREE.Mesh(out, mat);
       mesh.userData.ribbon = true;
       // NAMED, because __census can only report what a mesh calls itself and
@@ -15299,8 +15336,7 @@ function flushRibbons(): void {
       // stock — both came back as `unnamed`. That is the census's one job, and
       // it made a mesh audit impossible to write as an assertion.
       mesh.name = 'ribbon';
-      if (drive) addRoadRenderMesh(mesh);
-      else worldGroup.add(mesh);
+      worldGroup.add(mesh);
     }
     // A DRAPED batch registers ONCE for re-seating, in place of the entries
     // its pieces would each have made: redrape and __drape both walk vertices
@@ -17526,10 +17562,17 @@ function ribbon(pts: Array<[number, number]>, width: number, mat: THREE.Material
     // one: is this a continuous surface, or a run of separate pieces that
     // happen to be adjacent.
     smoothSoupNormals(geo);
-    const ribbon = new THREE.Mesh(geo, mat);
-    ribbon.userData.ribbon = true;
-    if (drivable) addRoadRenderMesh(ribbon);
-    else worldGroup.add(ribbon);
+    if (drivable) {
+      addRoadRenderGeometry(geo, mat, {
+        name: 'ribbon',
+        retainGeometry: !flat,
+        userData: { ribbon: true },
+      });
+    } else {
+      const ribbon = new THREE.Mesh(geo, mat);
+      ribbon.userData.ribbon = true;
+      worldGroup.add(ribbon);
+    }
   }
   // A DRAPED way is registered to be re-seated whenever the terrain beneath it
   // is rebuilt. A PROFILED one is not: its deck is a solved alignment that the
@@ -17779,10 +17822,9 @@ function canopyRun(
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tv), 3));
   geo.computeVertexNormals();
-  const shell = new THREE.Mesh(geo, MAT.tunnel);
-  shell.userData.tunnel = true;
-  shell.userData.shellKind = 'gallery';
-  addRoadRenderMesh(shell);
+  addRoadRenderGeometry(geo, MAT.tunnel, {
+    userData: { tunnel: true, shellKind: 'gallery' },
+  });
 }
 // The carved space: side walls + ceiling along a tunnel run, portal lintels at
 // the mouths, and solid collision so the car can't drive out through the rock.
@@ -19950,10 +19992,10 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number
   const geo = new THREE.BufferGeometry();
   geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(tv), 3));
   geo.computeVertexNormals();
-  const tube = new THREE.Mesh(geo, MAT.tunnel);
-  tube.userData.tunnel = true; // so a probe can check none of it breaches the surface
-  tube.userData.shellKind = 'tunnel';
-  addRoadRenderMesh(tube);
+  addRoadRenderGeometry(geo, MAT.tunnel, {
+    // So a probe can check none of it breaches the surface.
+    userData: { tunnel: true, shellKind: 'tunnel' },
+  });
   // LUMINAIRES. A bore lit only by the emissive is uniform, and uniform is the
   // one thing a tunnel never looks like: what you actually see driving one is a
   // receding row of lamps, and it is the RHYTHM of them going past that tells
@@ -19994,7 +20036,7 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number
       // geometry pokes out through the hillside, and at a mouth — where the
       // ceiling is deliberately uncapped — a lamp would read as a breach the
       // shell does not have.
-      addRoadRenderMesh(new THREE.Mesh(lg, MAT.lamp));
+      addRoadRenderGeometry(lg, MAT.lamp);
     }
   }
   for (const end of [a, b]) {
@@ -20002,13 +20044,16 @@ function tunnelTube(dense: Array<[number, number]>, prof: number[], elev: number
     const [x0, z0] = dense[i0], [x1, z1] = dense[i1];
     const ang = Math.atan2(z1 - z0, x1 - x0);
     const rawPortal = recipe?.family === 'rock' || recipe?.family === 'gallery';
-    const lintel = new THREE.Mesh(new THREE.BoxGeometry(
+    const lintelGeometry = new THREE.BoxGeometry(
       width + (rawPortal ? 1.8 : 3), rawPortal ? 0.9 : 1.6, rawPortal ? 0.8 : 1.2,
-    ), MAT.portal);
+    );
     const [px, pz] = dense[end];
-    lintel.position.set(px, ceil(end) + 0.3, pz);
-    lintel.rotation.y = ang + Math.PI / 2; // across the road, not along it
-    addRoadRenderMesh(lintel);
+    const lintelMatrix = new THREE.Matrix4().makeRotationY(ang + Math.PI / 2);
+    lintelMatrix.setPosition(px, ceil(end) + 0.3, pz);
+    addRoadRenderGeometry(lintelGeometry, MAT.portal, {
+      // Across the road, not along it.
+      matrix: lintelMatrix.elements,
+    });
   }
 }
 // Everything a solid footprint owes the rest of the world: wall segments for

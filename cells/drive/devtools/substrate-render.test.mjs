@@ -110,7 +110,7 @@ ok('only substrate-owned carriageway packets enter the scene',
     && state.substrate?.render?.roadPacketMeshes > 0
     && state.substrate?.render?.roadDirectAuthoredPacketMeshes > 0
     && state.substrate?.render?.roadDirectAuthoredPacketMeshes
-      <= state.substrate?.render?.roadPacketMeshes
+      === state.substrate?.render?.roadPacketMeshes
     && state.substrate?.render?.roadRedrapeAuthoredPacketMeshes
       === state.substrate?.render?.roadPacketMeshes
     && state.substrate?.render?.retainedRoadSourceMeshes === 0

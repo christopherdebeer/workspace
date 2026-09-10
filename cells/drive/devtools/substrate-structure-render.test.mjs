@@ -84,6 +84,8 @@ ok('tile-owned drive packets retain indexed transformed tunnel geometry',
     && state.substrate?.render?.roadPacketBytes > 0
     && state.substrate?.render?.roadIndexedPackets > 0
     && state.substrate?.render?.roadTransformedPackets > 0
+    && state.substrate?.render?.roadDirectAuthoredPacketMeshes
+      === state.substrate?.render?.roadPacketMeshes
     && state.substrate?.render?.legacyRoadCandidateMeshes === 0
     && state.substrate?.render?.drivePacketFailures === 0,
   state.substrate?.render);
