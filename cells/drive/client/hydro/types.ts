@@ -251,6 +251,16 @@ export interface HydroTileField {
    * water at all.
    */
   waterBounds?: WorldBounds;
+  /**
+   * ── THE COAST FIELD ── travel time from the waterline in deep-water
+   * metres (R), the seaward direction (G, B) and exposure (A), per texel,
+   * for tiles with sea or lagoon in them — see coast-field.ts. The shader
+   * phases the nearshore crests on R instead of the shore distance, which
+   * puts refraction into the same continuous coordinate, and damps the
+   * shore wave, breakers and chop by A. Absent when the build was asked not
+   * to (`coastField: false`, `?coast=0`) or the tile has no coast.
+   */
+  coast?: Float32Array<ArrayBuffer>;
   bodyIds: readonly string[];
 }
 
@@ -319,7 +329,7 @@ export interface HydroFrame {
   terrainField?: { texture: object | null; originX: number; originZ: number; widthM: number };
 }
 
-export type HydroDebugView = 'surface' | 'coverage' | 'shore' | 'depth' | 'flow' | 'class';
+export type HydroDebugView = 'surface' | 'coverage' | 'shore' | 'depth' | 'flow' | 'class' | 'coast';
 
 export interface HydroTuning {
   waveAmplitude: number;
@@ -355,6 +365,8 @@ export interface HydroBuildOptions {
   oceanLevelM: number;
   shoreDistanceLimitM: number;
   minimumDepthM: number;
+  /** Solve the coast field (travel time and exposure) for coastal tiles. */
+  coastField: boolean;
 }
 
 export const DEFAULT_HYDRO_BUILD: HydroBuildOptions = {
@@ -368,6 +380,7 @@ export const DEFAULT_HYDRO_BUILD: HydroBuildOptions = {
   oceanLevelM: 0,
   shoreDistanceLimitM: 180,
   minimumDepthM: 0.08,
+  coastField: true,
 };
 
 export const HYDRO_KIND_ID: Record<HydroKind, number> = {

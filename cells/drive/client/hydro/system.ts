@@ -445,6 +445,7 @@ class DefaultHydroSystem implements HydroSystem {
       oceanLevelM: options.oceanLevelM ?? DEFAULT_HYDRO_BUILD.oceanLevelM,
       shoreDistanceLimitM: options.shoreDistanceLimitM ?? DEFAULT_HYDRO_BUILD.shoreDistanceLimitM,
       minimumDepthM: options.minimumDepthM ?? DEFAULT_HYDRO_BUILD.minimumDepthM,
+      coastField: options.coastField ?? DEFAULT_HYDRO_BUILD.coastField,
     };
     this.registry = new HydroBodyRegistry(this.buildOptions.oceanLevelM);
     this.scheduleBuild = options.scheduleBuild ?? immediateBuild;
@@ -501,7 +502,7 @@ class DefaultHydroSystem implements HydroSystem {
   }
 
   setDebugView(view: HydroDebugView): void {
-    const views: HydroDebugView[] = ['surface', 'coverage', 'shore', 'depth', 'flow', 'class'];
+    const views: HydroDebugView[] = ['surface', 'coverage', 'shore', 'depth', 'flow', 'class', 'coast'];
     this.frameUniforms.uDebugView.value = Math.max(0, views.indexOf(view));
   }
 

@@ -100,6 +100,9 @@ uniform sampler2D uHydroMaterial;
 #ifdef HYDRO_FLOWING
 uniform sampler2D uHydroStructure;
 #endif
+#ifdef HYDRO_COAST
+uniform sampler2D uHydroCoast;
+#endif
 uniform vec4 uFieldUv;
 uniform vec2 uHydroTexel;
 uniform vec2 uFieldMeters;
@@ -122,6 +125,7 @@ varying float vShorePhase;
 varying float vSurfaceWave;
 varying float vSurfaceEnergy;
 varying float vShoal;
+varying float vExposure;
 
 #include <common>
 #include <fog_pars_vertex>
@@ -150,6 +154,30 @@ void main() {
   float depth = max(0.0, geometryField.a);
   float signedShoreDist = geometryField.g;
   float shoreDist = max(0.0, signedShoreDist);
+  // ── THE NEARSHORE PHASE RIDES TRAVEL TIME, NOT DISTANCE ──
+  // Shore distance is continuous, so its isolines were the crests: a first
+  // approximation that draws a crest the same sixty metres off a steep rock
+  // shore and off a shelving beach, and wraps a headland in contour lines.
+  // A real crest slows where the water shallows. The coast field (build-
+  // tile, coast-field.ts) carries the travel time from the waterline over
+  // the bathymetry in DEEP-WATER METRES — the same continuous coordinate
+  // with refraction in it: equal to the distance where the water is deep,
+  // growing faster over a shoal so the crests bunch and turn parallel to the
+  // beach as they come in, bending round a headland instead of wrapping it.
+  // The dry side keeps signed shore distance (the run-up phase is untouched)
+  // and the two meet at zero on the waterline, so the phase stays
+  // continuous — direction is still never inside it. Its alpha is EXPOSURE,
+  // how much open sea the texel's seaward fan reaches: a harbour behind its
+  // arm is quiet, a bay is half, an open beach breaks at full height.
+#ifdef HYDRO_COAST
+  vec4 coast = texture2D(uHydroCoast, vHydroUv);
+  float phaseCoord = signedShoreDist < 0.0 ? signedShoreDist : max(0.0, coast.r);
+  float exposure = clamp(coast.a, 0.0, 1.0);
+#else
+  float phaseCoord = signedShoreDist;
+  float exposure = 1.0;
+#endif
+  vExposure = exposure;
   // Only ocean and lagoon coverage carries the terrain-relative coastal ramp.
   // Reading the already-bound material field at vertices lets the cheap
   // run-up approximation remain coastal rather than pulsing every pond bank.
@@ -186,7 +214,7 @@ void main() {
   // A swell arrives in sets. The envelope travels more slowly than the
   // crests and varies amplitude only, preserving continuous wave phase.
   float waveSet = 0.82 + 0.18 * sin(dot(vAbsoluteXZ, windDir) * k * 0.23 - uTime * omega * 0.31);
-  float swell = (swellA * 0.74 + swellB * 0.26) * waveSet;
+  float swell = (swellA * 0.74 + swellB * 0.26) * waveSet * mix(0.35, 1.0, exposure);
 
   // Shore-following geometry is also macro scale. The 5-30m crest structure
   // belongs in the analytic normal and foam response, not a 75m vertex grid.
@@ -194,11 +222,13 @@ void main() {
   float shoreK = 6.28318530718 / shoreWavelength;
   // Signed distance keeps the phase continuous through the waterline:
   // clamping the dry side to zero made every run-up vertex move in lockstep.
-  float shorePhase = signedShoreDist * shoreK + uTime * omega * 0.86;
+  float shorePhase = phaseCoord * shoreK + uTime * omega * 0.86;
   float steepen = 1.0 - smoothstep(0.8, 4.5, depth);
-  float shoreWave = sin(shorePhase)
-    + sin(shorePhase * 2.0) * 0.24 * steepen;
-  float nearShore = (1.0 - smoothstep(22.0, 120.0, shoreDist))
+  float shoreWave = (sin(shorePhase)
+    + sin(shorePhase * 2.0) * 0.24 * steepen) * mix(0.45, 1.0, exposure);
+  // The crossfade to the shore wave rides the same coordinate, so over a
+  // shoal the shore-following crests persist as far out as the slowing does.
+  float nearShore = (1.0 - smoothstep(22.0, 120.0, max(0.0, phaseCoord)))
     * (1.0 - vFlowing);
   float standingWave = mix(swell, shoreWave, nearShore);
   vShorePhase = sin(shorePhase);
@@ -227,7 +257,8 @@ void main() {
   // ── SHOAL, BREAK, THEN COLLAPSE ──
   float breakerDepth = mix(0.55, 2.7, energy);
   float depthDelta = (depth - breakerDepth) / max(0.28, breakerDepth * 0.48);
-  vBreaker = (1.0 - vFlowing) * exp(-depthDelta * depthDelta) * geometryField.r;
+  vBreaker = (1.0 - vFlowing) * exp(-depthDelta * depthDelta) * geometryField.r
+    * mix(0.15, 1.0, exposure);
   vShoal = (1.0 - vFlowing)
     * (1.0 - smoothstep(breakerDepth, max(breakerDepth + 0.1, 10.0), depth));
   float postBreak = mix(0.28, 1.0,
@@ -299,6 +330,9 @@ uniform sampler2D uHydroMaterial;
 #ifdef HYDRO_FLOWING
 uniform sampler2D uHydroStructure;
 #endif
+#ifdef HYDRO_COAST
+uniform sampler2D uHydroCoast;
+#endif
 uniform float uTime;
 uniform vec3 uWorldOrigin;
 uniform vec3 uWind;
@@ -339,6 +373,7 @@ varying float vShorePhase;
 varying float vSurfaceWave;
 varying float vSurfaceEnergy;
 varying float vShoal;
+varying float vExposure;
 
 #include <common>
 #include <fog_pars_fragment>
@@ -618,6 +653,9 @@ void main() {
   // the foam, the rapids and the turbulence tone toward the middle; the
   // riffles stay at the shallow margins where they belong.
   energy *= mix(1.0, 0.3, smoothstep(0.9, 3.5, geometryField.a));
+  // Sheltered sea is calmer sea: the chop and its foam gates follow exposure
+  // on standing water; a river's energy is its own.
+  energy *= mix(0.55, 1.0, mix(vExposure, 1.0, vFlowing));
 #ifdef HYDRO_FLOWING
   // River space, texel-accurate — the mesh lattice can be wider than the
   // whole channel, so "n" has to come from the field, not from a varying.
@@ -644,9 +682,20 @@ void main() {
     } else if (uDebugView < 4.5) {
       vec3 directionColour = vec3(dynamics.xy * 0.5 + 0.5, 0.28);
       debugColour = mix(directionColour, vec3(1.0, 0.24, 0.07), max(vTurbulence, vBreaker) * 0.88);
-    } else {
+    } else if (uDebugView < 5.5) {
       float hue = fract(kind * 0.173 + 0.07);
       debugColour = 0.55 + 0.45 * cos(6.28318 * (hue + vec3(0.0, 0.67, 0.33)));
+    } else {
+      // THE COAST FIELD: exposure red→green, an isoline of travel every 30 m
+      // (the crest lines the phase will draw), dry ground grey.
+#ifdef HYDRO_COAST
+      vec4 coast = texture2D(uHydroCoast, vHydroUv);
+      float band = smoothstep(0.38, 0.5, abs(fract(coast.r / 30.0) - 0.5));
+      debugColour = mix(vec3(0.75, 0.2, 0.15), vec3(0.15, 0.7, 0.35), coast.a) * mix(0.3, 1.0, band);
+      if (geometryField.g < 0.0) debugColour = vec3(0.25);
+#else
+      debugColour = vec3(0.1, 0.1, 0.3);
+#endif
     }
     gl_FragColor = vec4(debugColour, 1.0);
     #include <tonemapping_fragment>
@@ -1335,14 +1384,15 @@ void main() {
     float spentWash = smoothstep(-0.75, 0.35, vShorePhase)
       * (1.0 - smoothstep(0.35, 0.92, vShorePhase));
     float breakerFoam = (1.0 - vFlowing) * vBreaker
-      * max(crestPick, spentWash * 0.42) * fragmentNoise;
+      * max(crestPick, spentWash * 0.42) * fragmentNoise * mix(0.2, 1.0, vExposure);
     // ── SPILLING CRESTS, JUST SEAWARD OF THE BREAK ──
     // Shoaling steepens a crest before the depth band catches it; its top
     // whitens faintly as it comes in. Gated by the same fragment noise as
     // the breakers so the pre-surf stays broken patches, and by depth so
     // open-water crests never wear it.
     float spill = (1.0 - vFlowing) * smoothstep(0.78, 0.98, vWaveCrest)
-      * (1.0 - smoothstep(2.2, 6.0, geometryField.a)) * fragmentNoise * 0.35;
+      * (1.0 - smoothstep(2.2, 6.0, geometryField.a)) * fragmentNoise * 0.35
+      * mix(0.2, 1.0, vExposure);
     // Swash foam is a texture inside the SAME wetness band used by the body
     // colour and moving cutoff. It may break into flecks, but it cannot form a
     // detached second shoreline with a dark moat between itself and the sea.

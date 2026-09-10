@@ -143,6 +143,8 @@ export const SWITCHES = [
     note: 'fling=0 stops a lifted finger throwing the planet; on, a drag on the globe carries its speed past the lift and coasts to rest (the gesture-rate tests run with it off, and __fling(true) turns it on for the throw test)' },
   { id: 'widedither', kind: 'toggle', marks: ['look'], fallback: 'on',
     note: 'widedither=0 keeps the PATTERN dial\'s threshold on the wide chart; on, the tiled weave gives way to interleaved gradient noise past the fine ring (60m a pixel), where a 4x4 tile spread over a smooth ramp reads as blobs' },
+  { id: 'coast', kind: 'toggle', marks: ['look'], fallback: 'on',
+    note: 'coast=0 builds no coastal travel-time field: the nearshore crests phase on plain shore distance and no water is sheltered — the A/B for the refraction and exposure pass (hydro/coast-field.ts); __hydroview(\'coast\') paints the field' },
   { id: 'shore', kind: 'toggle', marks: ['legacy'], fallback: 'on',
     note: 'shore=0 leaves the water its frame colour and the banks their hillside grass — the A/B for the shoreline pass' },
   { id: 'ez', kind: 'toggle', marks: ['legacy'], fallback: 'skeletons',

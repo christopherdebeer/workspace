@@ -3007,6 +3007,9 @@ function hydroFeed(t: HeightTile, ready?: Float32Array | null): void {
       // flowing records avoids fourfold field memory across the dry ring.
       flowingFieldResolution: 256,
       deferRendering: SUBSTRATE_RENDER_ON,
+      // The coastal travel-time field (hydro/coast-field.ts): refraction in
+      // the nearshore phase and shelter in the surf. `?coast=0` is the A/B.
+      coastField: qsOn('coast', true),
       scheduleBuild: (job) =>
       new Promise((resolve, reject) => { hydroJobs.push({ job, resolve, reject }); }) });
     hydroSys.setDebugView(hydroView);
@@ -30030,6 +30033,23 @@ function tapeKeep(): string {
   const px = x ?? state.x, pz = z ?? state.z;
   return deferLog.filter((e) => Math.hypot(e.x - px, e.z - pz) <= r || Math.hypot(e.x1 - px, e.z1 - pz) <= r);
 };
+/** The coast field at a point — travel from the waterline in deep-water
+ *  metres against the plain shore distance, the seaward direction and the
+ *  exposure — so a harbour can be shown to be sheltered with a number. */
+(window as unknown as { __coast?: object }).__coast = (x?: number, z?: number): object | null => {
+  const px = x ?? state.x, pz = z ?? state.z;
+  const f = hydroSys?.fieldAt(px, pz);
+  if (!f) return null;
+  const u = (px - f.bounds.minX) / (f.bounds.maxX - f.bounds.minX);
+  const v = (pz - f.bounds.minZ) / (f.bounds.maxZ - f.bounds.minZ);
+  const ix = clamp(Math.round(u * f.resolution - 0.5) + f.gutter, 0, f.width - 1);
+  const iz = clamp(Math.round(v * f.resolution - 0.5) + f.gutter, 0, f.width - 1);
+  const i = (iz * f.width + ix) * 4;
+  return {
+    key: f.key, coast: !!f.coast, shoreM: +f.geometry[i + 1].toFixed(1), depth: +f.geometry[i + 3].toFixed(2),
+    ...(f.coast ? { travelM: +f.coast[i].toFixed(1), dir: [+f.coast[i + 1].toFixed(2), +f.coast[i + 2].toFixed(2)], exposure: +f.coast[i + 3].toFixed(2) } : {}),
+  };
+};
 (window as unknown as { __probe?: object }).__probe = (x: number, z: number, margin = 0.8) =>
   ({ surface: surfaceAt(x, z), terrain: sampleHeight(x, z), road: roadHeightAt(x, z, margin) });
 /** The three heights of a point, side by side — the DEM the hydro field is
@@ -31064,7 +31084,7 @@ function repaintWetDebug(): void {
     buildProf: (() => {
       const P = HYDRO_BUILD_PROF, b = Math.max(1, P.builds);
       const ms = (v: number): number => +(v / b).toFixed(1);
-      return { builds: P.builds, meanMs: ms(P.total), maxMs: Math.round(P.max), ocean: ms(P.ocean), analyse: ms(P.analyse), raster: ms(P.raster), texels: ms(P.texels), search: ms(P.search), sources: ms(P.sources), rest: ms(P.rest),
+      return { builds: P.builds, meanMs: ms(P.total), maxMs: Math.round(P.max), ocean: ms(P.ocean), analyse: ms(P.analyse), raster: ms(P.raster), texels: ms(P.texels), search: ms(P.search), sources: ms(P.sources), rest: ms(P.rest), coast: ms(P.coast),
         itemsPerBuild: +(P.items / b).toFixed(1), areaItems: +(P.areaItems / b).toFixed(1), flowingAreas: +(P.flowingAreas / b).toFixed(1), searchTexels: Math.round(P.searchTexels / b), paints: Math.round(P.paints / b) };
     })(),
     landcover: (() => {

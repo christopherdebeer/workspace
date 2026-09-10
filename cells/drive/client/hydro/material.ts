@@ -44,6 +44,7 @@ export interface HydroTileTextures {
    *  flowing water, and only ever bound by the flowing material variant. */
   structure?: THREE.DataTexture;
   waterfalls?: THREE.DataTexture;
+  coast?: THREE.DataTexture;
 }
 
 export interface HydroTileGpuBinding {
@@ -156,6 +157,11 @@ export function createHydroTextures(field: HydroTileField): HydroTileTextures {
     structure: field.structure ? configure(new THREE.DataTexture(
       field.structure, field.width, field.height, THREE.RGBAFormat, THREE.FloatType,
     ), true) : undefined,
+    // Travel time is locally linear like s; exposure is smooth by
+    // construction (a lattice read back bilinearly). Linear filtering.
+    coast: field.coast ? configure(new THREE.DataTexture(
+      field.coast, field.width, field.height, THREE.RGBAFormat, THREE.FloatType,
+    ), true) : undefined,
   };
 }
 
@@ -192,6 +198,9 @@ export function createHydroMaterial(
       ...(flowing ? { HYDRO_FLOWING: 1 } : {}),
       ...(flowing && textures.waterfalls ? { HYDRO_FALLS: 1 } : {}),
       ...(surf ? { HYDRO_SURF: 1 } : {}),
+      // The standing and surf variants read the coast field when the tile
+      // has one; the river variant has no sea to refract.
+      ...(!flowing && textures.coast ? { HYDRO_COAST: 1 } : {}),
       ...(edgeBlend ? { HYDRO_EDGE_BLEND: 1 } : {}),
       ...(shade ? { HYDRO_SCENE_SHADE: 1 } : {}),
     },
@@ -228,6 +237,7 @@ export function createHydroMaterial(
       // carrying the key costs nothing and keeps this call-site unbranched.
       uHydroStructure: { value: textures.structure ?? null },
       uHydroFalls: { value: textures.waterfalls ?? null },
+      uHydroCoast: { value: textures.coast ?? null },
       // Both the V flip and the water-rect sub-mapping live in one place —
       // see `fieldUvFor`.
       uFieldUv: { value: fieldUvFor(field, centralScale, offset) },
@@ -316,4 +326,5 @@ export function disposeHydroTextures(textures: HydroTileTextures): void {
   textures.material.dispose();
   textures.structure?.dispose();
   textures.waterfalls?.dispose();
+  textures.coast?.dispose();
 }

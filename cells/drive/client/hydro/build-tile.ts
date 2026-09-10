@@ -1,4 +1,5 @@
 import { riverDrops, sampleRiverDrop, type RiverDrop } from './waterfalls';
+import { solveCoastField, swellWavelengthM } from './coast-field';
 import { HydroBodyRegistry } from './body-registry';
 import {
   areaOfRing,
@@ -719,7 +720,7 @@ function areaCoverageRaster(
 /** WHERE A BUILD GOES, cumulative across the session: the instrument for a
  *  hydro build that costs more than its frame. Read via __hydro().buildProf. */
 export const HYDRO_BUILD_PROF = {
-  builds: 0, total: 0, max: 0, ocean: 0, analyse: 0, raster: 0, texels: 0, search: 0, sources: 0, rest: 0,
+  builds: 0, total: 0, max: 0, ocean: 0, analyse: 0, raster: 0, texels: 0, search: 0, sources: 0, rest: 0, coast: 0,
   items: 0, areaItems: 0, flowingAreas: 0, searchTexels: 0, paints: 0,
 };
 export function buildHydroTile(
@@ -867,11 +868,14 @@ export function buildHydroTile(
   const P = HYDRO_BUILD_PROF;
   const T0 = performance.now();
   let tMark = T0;
-  const lap = (k: 'ocean' | 'analyse' | 'sources' | 'rest'): void => { const now = performance.now(); P[k] += now - tMark; tMark = now; };
+  const lap = (k: 'ocean' | 'analyse' | 'sources' | 'rest' | 'coast'): void => { const now = performance.now(); P[k] += now - tMark; tMark = now; };
   const ocean = registry.get('hydro:ocean');
   // Which texels the CURRENT coverage actually answered — ocean or dry. The
   // rest are unknown and keep the previous field's verdict below.
   const answered = new Uint8Array(count);
+  // The mask's own interior, remembered for the coast field: depth there is
+  // fill, so the swell is solved as deep water over it.
+  const oceanInterior = new Uint8Array(count);
   if (ocean && input.oceanCoverage.status === 'ready') {
     // The grid maps over the span it declares — the tile padded by the
     // gutter, when the caller sampled that far — so gutter texels carry real
@@ -883,6 +887,7 @@ export function buildHydroTile(
       // <0.25 not yet known. See OceanCoverage in types.
       if (raw < 0.25) continue;
       answered[iz * width + ix] = 1;
+      if (raw >= 0.9) oceanInterior[iz * width + ix] = 1;
       if (raw >= 0.7) {
         // ── THE MASK RULES OFFSHORE; DEPTH SHAPES ONLY THE EDGE ──
         //
@@ -1299,6 +1304,25 @@ export function buildHydroTile(
   }
 
   lap('rest');
+  // ── THE COAST FIELD ── only where the tile holds sea or lagoon; the swell
+  // it is solved for is the shader's own for the body's fetch.
+  let coast: Float32Array<ArrayBuffer> | undefined;
+  if (options.coastField) {
+    const coastal = new Uint8Array(count);
+    let any = false, fetchMax = 0;
+    for (let i = 0; i < count; i++) {
+      if (!wet[i] || (kind[i] !== HYDRO_KIND_ID.ocean && kind[i] !== HYDRO_KIND_ID.lagoon)) continue;
+      coastal[i] = 1; any = true;
+      if (fetch[i] > fetchMax) fetchMax = fetch[i];
+    }
+    if (any) {
+      coast = solveCoastField({
+        width, height, pixelM, wet, coastal, interior: oceanInterior, depth, toDry,
+        swellWavelengthM: swellWavelengthM(fetchMax),
+      }).data;
+    }
+  }
+  lap('coast');
   { const d = performance.now() - T0; P.builds++; P.total += d; if (d > P.max) P.max = d; }
   return {
     key: input.key,
@@ -1317,6 +1341,7 @@ export function buildHydroTile(
     waterfalls,
     hasWater,
     waterBounds,
+    coast,
     bodyIds: [...bodyIds],
   };
 }
