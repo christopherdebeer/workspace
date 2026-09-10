@@ -5155,9 +5155,11 @@ own, so between the shell's hand-over and the limb the chart is silent.
 Asked from the seat with five frames from the Afsluitdijk: the chart should
 carry a scale bar, the representative fraction, and the zoom. It does now,
 under the clock's row at top-left (below the tile-debug lines when those are
-up): `500 KM · 1:16M · Z5.0` over the continent, `2 KM · 1:81K · Z12.6` over a
-district, `20 M · 1:816 · Z19.3` over a junction, with a bar of that round
-length under it. `chartScale()` is the arithmetic and `__scale()` reports it.
+up): `500 KM · 1:16M · z5.0` over the continent, `2 KM · 1:81K · z12.6` over a
+district, `20 M · 1:816 · z19.3` over a junction, with a bar of that round
+length under it. Lowercase z, as the tile-debug line writes `MAP z13`: the
+small font draws a capital Z and a 2 alike, and the seat read `24.9` for
+`Z4.9` on every one of five frames. `chartScale()` is the arithmetic and `__scale()` reports it.
 
 - **All three are the scale AT THE FRAME'S CENTRE**, which is the honest
   statement for a tilted perspective: the near edge is larger and the far

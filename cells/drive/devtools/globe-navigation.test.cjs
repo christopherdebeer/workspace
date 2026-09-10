@@ -19,7 +19,7 @@ const globe = loadTS('globe.ts');
 const source = fs.readFileSync(sourcePath, 'utf8');
 const names = ['localToLatLon', 'setChartFocus', 'chartRemote', 'chartDist', 'chartMpp',
   'globeOn', 'globeFree', 'globeDegPerPx', 'chartTilt', 'stepGlobe', 'dragGlobe',
-  'globeSpinLatRange', 'chartPlaneAt', 'sphereRTC', 'sphereLatLon'];
+  'globeSpinLatRange', 'chartPlaneAt', 'sphereRTC', 'sphereLatLon', 'capEyeUpdate', 'onNearCap'];
 const code = names.map(name => {
   const start = source.indexOf(`function ${name}(`);
   assert.ok(start >= 0, name);
@@ -32,7 +32,9 @@ const ctx = {THREE, ...nav, ...globe, Math, origin, M_LAT:111320,
   panX:0,panZ:0,globeSpinLat:0,globeSpinLon:0,zoomCur:40000,zoomT:40000,
   panY:0,panPtrs:new Map(),ZOOM_MIN:0.125,ZOOM_MAX:20000000/175,
   camMode:'top',CAM:{base:175,tilt:70},GLOBE_TILT_LO:750000,GLOBE_TILT_HI:2750000,
-  GLOBE_SINK:800,GLOBE_PIN_PX:4.5,GLOBE_PIN_LIFT:1.001,GLOBE_SPIN_LAT_MAX:85,
+  GLOBE_PIN_PX:4.5,GLOBE_PIN_LIFT:1.001,GLOBE_SPIN_LAT_MAX:85,
+  // the near-cap test's scratch objects and the hide set stepGlobe reads
+  capEye:new THREE.Vector3(),capQ:new THREE.Quaternion(),hideSet:new Set(),
   FAR_RING_MAX:2,SIGHT_MAX:1500000,EARTH_R:6371000,farZ:5,FIXTURE:false,
   innerWidth:390,innerHeight:844,pixSize:{x:148,y:320},
   planetGroup:new THREE.Group(),globeMesh:new THREE.Mesh(),globePin:new THREE.Mesh(),

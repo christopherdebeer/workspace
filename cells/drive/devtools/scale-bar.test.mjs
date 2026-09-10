@@ -36,7 +36,7 @@ for (const z of [1, 100, 19300]) {
   check(`z${z}: the zoom is the slippy zoom at the centre latitude`, close(2 ** sc.zoom * 256 * sc.mppCss, circ, 1e-4), { sc, circ });
   const series = /^[125]0*$/.test(String(sc.barM));
   check(`z${z}: the bar is a round length (${sc.bar})`, series && sc.barM >= 1, sc);
-  check(`z${z}: the label carries all three (${sc.label})`, sc.label.startsWith(sc.bar) && /1:/.test(sc.label) && /Z-?\d+\.\d/.test(sc.label), sc);
+  check(`z${z}: the label carries all three (${sc.label})`, sc.label.startsWith(sc.bar) && /1:/.test(sc.label) && /z-?\d+\.\d/.test(sc.label), sc);
   check(`z${z}: the bar is under two fifths of the HUD (${sc.barPx}px)`, sc.barPx >= 1, sc);
 }
 const errs = await page.evaluate(() => window.__pageErrors ?? []);

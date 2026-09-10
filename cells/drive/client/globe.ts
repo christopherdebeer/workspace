@@ -310,5 +310,18 @@ export function globeMaterial(u: GlobeUniforms): THREE.ShaderMaterial {
         col += vec3(0.20, 0.34, 0.52) * rim * (0.25 + 0.75 * lit);
         gl_FragColor = vec4(col, 1.0);
       }`,
+    // THE BACKDROP WRITES NO DEPTH. It is painted first (renderOrder −5) and
+    // everything streamed — the far shell, the overview, the fine world — is
+    // painted over it wherever it exists, by ORDER, so the shell can stand
+    // any distance inside or outside the sphere and still win. It has to:
+    // the shell's radius is R + elev − baseElev, the rig's own elevation
+    // baked into every far vertex, so from a rig at 2,300m the shell over a
+    // plain at 100m is 2.2km inside this sphere and over the sea floor 6km
+    // inside it. With depth on, a sink of any fixed size put the lattice's
+    // vertices through the shell somewhere (main.ts, at the globe mesh, has
+    // the frames). Nothing behind the planet is ever drawn — back faces are
+    // culled and the pin and the labels are gated by a near-cap test — so
+    // the depth was never doing anything a sphere needs.
+    depthWrite: false,
   });
 }

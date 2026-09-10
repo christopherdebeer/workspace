@@ -21379,7 +21379,7 @@ function chartScale(): { mppArt: number; mppCss: number; ratio: number; zoom: nu
   const short = (v: number): string => (v >= 10 ? String(Math.round(v)) : v.toFixed(1));
   const bar = barM >= 1000 ? `${barM / 1000} KM` : `${barM} M`;
   const rf = ratio < 1000 ? String(Math.round(ratio)) : ratio < 1e6 ? `${short(ratio / 1e3)}K` : `${short(ratio / 1e6)}M`;
-  return { mppArt, mppCss, ratio, zoom, barM, barPx, bar, label: `${bar} · 1:${rf} · Z${zoom.toFixed(1)}` };
+  return { mppArt, mppCss, ratio, zoom, barM, barPx, bar, label: `${bar} · 1:${rf} · z${zoom.toFixed(1)}` };
 }
 (window as unknown as { __scale?: object }).__scale = (): object => chartScale();
 /** How much of the frame the planet owns: 0 while the streamed world fills it,
@@ -22254,21 +22254,56 @@ planetGroup.add(farGroup);
  * ── THE PLANET, UNDER EVERYTHING ──
  *
  * See client/globe.ts for why this is a backdrop rather than a mode. Two
- * numbers here are load-bearing:
+ * rules here are load-bearing:
  *
- * THE SINK. The far shell is built on this very sphere now (see planetGroup),
- * so the two surfaces would coincide exactly and z-fight along every tile of
- * the shell. The globe MESH is dropped 800m beneath the frame so the shell
- * always wins where both exist — the shell has real terrain and the globe has
- * a 39km texel. 800m is under two pixels at the widest zoom the shell is even
- * drawn at, and the depth buffer has metres to spare there (near:far is 1:50
- * at these altitudes), so it is invisible and decisive at once.
+ * THE BACKDROP WRITES NO DEPTH, so the shell wins by ORDER and never by
+ * geometry. The far shell is built on this very sphere (see planetGroup) at
+ * R + elev − baseElev − FAR_DROP: its radius carries the RIG'S elevation, so
+ * browsed from a rig at 2,300m (Mariposa) the shell over India's plains stands
+ * 2.2km INSIDE the sphere and over the sea floor 6km inside it. The first
+ * answer was to sink the globe mesh a fixed 800m under the frame — right
+ * where the shell is at the rig's own height, and wrong everywhere lower than
+ * the rig by more than that: the 160×80 lattice chords 1.2km between its
+ * vertices, so the sphere stood through the shell in a disc around every
+ * vertex and sagged back under it at the cell centres — dark circles on a
+ * 2.25° lattice with four-pointed stars of shell between them over India, and
+ * bands along the parallels over Alberta, where the longitude chord is short
+ * and only the latitude one sags. Measured off the seat's frames by
+ * autocorrelation: 126 px, which is 2.25° of longitude at 20°N at the bar's
+ * own scale. No sink is right for every elevation the shell can carry, and
+ * none is needed: the globe is painted first, without depth, and everything
+ * streamed is painted over it wherever it exists. What the depth buffer used
+ * to do for the pin and the labels — hide the far side — is a near-cap test
+ * now (`onNearCap`).
  *
  * RENDER ORDER −5, between the sky dome's −10 and the world's 0: the dome
- * paints first with no depth write, the globe over it, the streamed world over
- * that. The same sandwich the sky and the world have always been.
+ * paints first with no depth write, the globe over it (no depth write either),
+ * the streamed world over that. The same sandwich the sky and the world have
+ * always been.
  */
-const GLOBE_SINK = 800;
+/**
+ * IS A POINT ON THE SPHERE ON THE NEAR CAP — in view of the eye and not
+ * behind the planet? From height h the cap reaches exactly R/(R+h), and the
+ * closed form is one dot product: a surface point P is visible from eye E
+ * about centre C iff (P−C)·(E−C) ≥ R². Exact at every altitude, and it is
+ * the test the labels and the pin need now that the backdrop writes no depth:
+ * a far-side point is still in FRONT of the camera, so the z test passed it,
+ * and a perspective projection of the far hemisphere lands INSIDE the disc,
+ * mirrored — every US city drawn over India with east and west swapped, from
+ * a rig at Mariposa, California being 163° of longitude from the Deccan. The
+ * point is in the PLANET's frame (the pin's position, a place's `sp`); the eye
+ * is taken back into that frame rather than the point out of it, so one
+ * transform serves the whole label loop.
+ */
+const capEye = new THREE.Vector3();
+const capQ = new THREE.Quaternion();
+function capEyeUpdate(): void {
+  capEye.copy(camera.position).sub(planetGroup.position)
+    .applyQuaternion(capQ.copy(planetGroup.quaternion).invert());
+}
+function onNearCap(p: THREE.Vector3): boolean {
+  return p.dot(capEye) >= GLOBE_R * GLOBE_R;
+}
 /** Wide enough that the planet could be seen at all. Below it the streamed
  *  shell covers the frame and 16k triangles would draw for nothing. */
 const GLOBE_MPP_ON = 500;
@@ -22290,8 +22325,8 @@ globeMesh.frustumCulled = false;
  * Unspun, the truck is at the top of the sphere and therefore at the centre of
  * the frame, and a marker there says nothing. The moment a drag turns the
  * Earth it is the only thing that does: it rides round with the surface, goes
- * over the limb with it, and is occluded by the planet's own depth like
- * anything else standing on it.
+ * over the limb with it, and is put away past the limb by the near-cap test
+ * (`onNearCap`) — the backdrop writes no depth, so nothing occludes it.
  *
  * SIZED IN ART PIXELS, not in metres. A marker at a fixed ground size is a
  * continent at one zoom and invisible at the next; this one is `GLOBE_PIN_PX`
@@ -22312,16 +22347,13 @@ const globePin = new THREE.Mesh(
 globePin.name = 'globe-pin';
 globePin.renderOrder = -4;       // after the planet, still under the world
 globeMesh.visible = false;
-// THE SINK IS THE MESH'S, NOT THE FRAME'S — and it is set in stepGlobe, along
-// the FOCUS'S OWN RADIAL, every frame. The frame's centre is exactly one
-// radius under the view so the shell's vertices land at the flat frame's
-// heights; the backdrop alone drops by GLOBE_SINK beneath it. Written here
-// once as `position.y = -GLOBE_SINK` it was wrong in a way that only the
-// southern hemisphere could show: the mesh's position is in the PLANET'S
-// frame, whose y is the pole axis, so that sank the globe toward the south
-// pole — 584m down at Romoos, and 400m UP at Letsemeng, where every one of
-// the lattice's vertices then stood through the Karoo shell as a small
-// diamond every 2.25 degrees. Measured on the day frame at zoom 11,000.
+// The mesh sits AT the planet's centre: no sink, see the note above. Two
+// sinks came before it and both are worth remembering. `position.y =
+// -GLOBE_SINK` sank it along the POLE axis (the mesh's position is in the
+// planet's frame), 584m down at Romoos and 400m UP at Letsemeng, where every
+// lattice vertex stood through the Karoo shell as a diamond every 2.25
+// degrees; a sink along the focus's radial fixed that hemisphere and left the
+// same lattice standing through every country lower than the rig.
 planetGroup.add(globeMesh);
 planetGroup.add(globePin);
 let globeAsked = false, globeFailed = false;
@@ -22417,13 +22449,9 @@ function stepGlobe(): void {
   // carries its own sink beneath it (GLOBE_SINK).
   planetGroup.position.set(vx, -GLOBE_R, vz);
   globeOrientation(clamp(gLat, -89.9, 89.9), gLon, planetGroup.quaternion);
-  // The backdrop's sink, along the radial under the view: minus the unit
-  // vector AT THE FOCUS, in the planet's frame, times GLOBE_SINK. Not
-  // `position.y` — see the note at the mesh.
-  latLonToUnit(gLat, gLon, globeMesh.position).multiplyScalar(-GLOBE_SINK);
   const on = camMode === 'top' && chartDist() > 150000 && !FIXTURE;
   if (on) globeTexture();
-  globeMesh.visible = on && globeU.uBase.value !== null;
+  globeMesh.visible = on && globeU.uBase.value !== null && !hideSet.has('globe');
   // The pin marks the truck's TRUE point on the sphere, which is the top of it
   // only while the chart is home. Hidden below the hand-over, where it would
   // be a gold diamond sitting on the frame's centre saying what the whole
@@ -22433,6 +22461,11 @@ function stepGlobe(): void {
     const [rigLat, rigLon] = localToLatLon(viewX(), viewZ());
     latLonToUnit(rigLat, rigLon, globePin.position).multiplyScalar(GLOBE_R * GLOBE_PIN_LIFT);
     globePin.scale.setScalar(GLOBE_PIN_PX * chartMpp());
+    // Past the limb it is behind the planet, and the planet writes no depth
+    // to hide it: the cap test does, off last frame's eye — a frame of lag on
+    // a limb crossing and nothing else.
+    capEyeUpdate();
+    globePin.visible = onNearCap(globePin.position);
   }
   if (!globeMesh.visible) return;
   // THE SUN IS THE CLOCK'S, NOT THE WALL'S. `clockHour` is local solar time at
@@ -22805,6 +22838,10 @@ function ovInkRefresh(): void {
  *  place; `sp` its point in the PLANET'S frame, which is what draws it. */
 interface OvPlace { name: string; x: number; z: number; y: number; sp: THREE.Vector3; rank: number }
 const ovPlaces = new Map<string, OvPlace>();
+/** The names the chart drew last frame, for `__ov().labels` — a test cannot
+ *  read the HUD canvas back, and "is San Francisco written over India" is a
+ *  question about what was DRAWN, not about what the table holds. */
+const ovLabelsDrawn: string[] = [];
 /**
  * ── THE COARSE ROAD NETWORK, KEPT ──
  *
@@ -27296,7 +27333,7 @@ function applyHidden(): void {
     }
   }
   return { hidden: [...hideSet],
-    layers: ['drape', 'synth', 'far', 'ov', 'sea', 'veg', 'terrain', 'critters', 'sward'],
+    layers: ['drape', 'synth', 'far', 'ov', 'globe', 'sea', 'veg', 'terrain', 'critters', 'sward'],
     counts: { drapes: drapes.length, synth: synthBodies.length, terrain: terrainMeshes.size } };
 };
 /**
@@ -30121,7 +30158,10 @@ function heightsOf(): number[] {
  *  passed a 'draw calls live' check. This counts ticks — read it twice. */
 (window as unknown as { __ticks?: object }).__ticks = (): number => tickN;
 (window as unknown as { __origin?: object }).__origin = (): object =>
-  ({ lat: +origin.lat.toFixed(5), lon: +origin.lon.toFixed(5) });
+  // baseElev is the datum every height in the flat frame is relative to — and
+  // the number the far shell carries in its radius on the sphere, which is why
+  // a rig at 2,300m browsing a plain at 100m matters (see the globe mesh).
+  ({ lat: +origin.lat.toFixed(5), lon: +origin.lon.toFixed(5), baseElev: +baseElev.toFixed(1), farDrop: FAR_DROP });
 /** What is actually STORED, as opposed to what is loaded — the two differ by
  *  every road whose tiles have not streamed in, which is the whole point of
  *  keeping the store separate from `survey`. */
@@ -38537,6 +38577,13 @@ const GLYPHS: Record<string, string> = {
   L: 'ggggggv', M: 'hrllhhh', N: 'hhpljhh', O: 'ehhhhhe', P: 'uhhuggg', Q: 'ehhhlid',
   R: 'uhhukih', S: 'fgge11u', T: 'v444444', U: 'hhhhhhe', V: 'hhhhha4', W: 'hhhllrh',
   X: 'hha4ahh', Y: 'hha4444', Z: 'v1248gv',
+  // THE ONE LOWERCASE LETTER, because Z and 2 are the same diagonal with one
+  // pixel of difference at the top, and the seat read the scale line's
+  // `Z4.9` as `24.9` on five frames out of five. A zoom is written `z5.0`
+  // (the tile-debug line's `MAP z13` always was), and until this row existed
+  // that fell back to the capital through `GLYPHS[ch.toUpperCase()]` and
+  // drew the same glyph. Five rows at x-height cannot be read as a digit.
+  z: '00v248v',
   '0': 'ehjlphe', '1': '4c4444e', '2': 'eh1248v', '3': 'v4221he', '4': '26aiv22',
   '5': 'vgu11he', '6': '68guhhe', '7': 'v124888', '8': 'ehhehhe', '9': 'ehhf12c',
   '.': '00000cc', ',': '0000c48', ':': '0cc0cc0', '/': '122488g', '-': '000v000',
@@ -42063,14 +42110,19 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
   // two names in one cell and the better-ranked one keeps it — and the whole
   // layer is separate from the HUD's nearest-three pins, which are a cockpit
   // instrument, not a map.
+  ovLabelsDrawn.length = 0;
   if (camMode === 'top' && ovGroup.visible && ovPlaces.size) {
     const r = viewRadius();
     const maxRank = r > 26000 ? 1 : r > 12000 ? 2 : 4;
+    capEyeUpdate();
     const cells = new Set<string>();
     let budget = 16;
     const ranked = [...ovPlaces.values()].sort((a, b) => a.rank - b.rank);
     for (const p of ranked) {
       if (p.rank > maxRank || budget <= 0) break;
+      // A place on the far side of the planet is still in front of the camera
+      // and projects INSIDE the disc, mirrored — see onNearCap.
+      if (!onNearCap(p.sp)) continue;
       // The place's point on the sphere, through the planet's own placement —
       // composed here rather than read off matrixWorld, which is a render old.
       poiVec.copy(p.sp).applyQuaternion(planetGroup.quaternion).add(planetGroup.position);
@@ -42087,6 +42139,7 @@ function drawHud(surf: Surface, sq: number, kmh: number, grip: number): void {
       const col = p.rank === 0 ? UI.gold : p.rank === 4 ? UI.dim : p.rank <= 1 ? UI.text : UI.soft;
       textEdgeP(label, clamp(Math.round(sx - w / 2), 2, HW - w - 2), clamp(Math.round(sy), 12, HH - 20), col);
       budget--;
+      ovLabelsDrawn.push(p.name);
     }
   }
   // ── the rig's own marker on the chart ──
@@ -43095,6 +43148,7 @@ function setClean(on: boolean): void {
   retryMs: OV_RETRY_MS,
   sinceAskMs: ovAskedAt ? Math.round(performance.now() - ovAskedAt) : null,
   waitMs: OV_WAIT_MS, top: camMode === 'top', word: worldStatus().map,
+  labels: [...ovLabelsDrawn],
 });
 (window as unknown as { __ovroads?: object }).__ovroads = (): object => {
   let ways = 0, pts = 0, far = 0;
