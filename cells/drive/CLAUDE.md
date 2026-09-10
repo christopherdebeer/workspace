@@ -5185,6 +5185,7 @@ add:
 | Z13.8 street (level 13) | 15.1% / +35 | 15.7% / +31 — unchanged by design, within streaming noise |
 | Z10.5 district (level 10) | 13.1% / +24 | 12.1% / +19 |
 | **Z7.8 country (level 7)** | **12.4% / +33** | **4.1% / +12** |
+| **Z4.9 continent (level 5, shell on)** | **41.5% / +51** | **13.8% / +24** |
 | Z4.5 (past the hand-over at 53N) | 1.3% / −13 | identical: no overview is drawn there in either build |
 
 **Two things the measurement found that the ladder does not fix.** Past the
