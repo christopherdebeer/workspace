@@ -22,9 +22,49 @@ const d = await openDrive({
   settle: 12000,
   bootTimeout: 90000,
 });
-await d.page.waitForTimeout(10000);
+// A fixed sleep can land while the outer ring is still reconciling. Resetting
+// the availability ledger in that window counts legitimate startup lookups
+// outside the admitted ring as vehicle-contact rollback, even though the
+// chosen wet tile is exact. Start the drive only after the same atomic render
+// state used by the cutover/visual gates has remained unchanged.
+let stableSignature = '';
+let stableSince = 0;
+let readiness;
+const settleDeadline = Date.now() + 70000;
+while (Date.now() < settleDeadline) {
+  readiness = await d.page.evaluate(() => ({
+    substrate: window.__substrate?.(),
+    hydro: window.__hydro?.(),
+    waterPoints: window.__substrateWaterPoints?.(96, 3000) ?? [],
+  }));
+  const render = readiness.substrate?.render;
+  const hydro = readiness.hydro?.stats;
+  const settled = readiness.substrate?.tiles?.tiles > 0
+    && readiness.waterPoints.length > 0
+    && render?.pendingReconciliations === 0
+    && render?.terrainCandidates === render?.terrainCommitted
+    && render?.retainedTerrainSourceMeshes === 0
+    && hydro?.pendingBuilds === 0
+    && hydro?.dirtyTiles === 0;
+  const signature = JSON.stringify([
+    readiness.substrate?.tiles?.revision,
+    readiness.substrate?.tiles?.tiles,
+    readiness.waterPoints.length,
+    render?.atomicCommits,
+    render?.terrainCommitted,
+    hydro?.tiles,
+  ]);
+  if (settled && signature === stableSignature) {
+    if (Date.now() - stableSince >= 1500) break;
+  } else {
+    stableSignature = signature;
+    stableSince = Date.now();
+  }
+  await d.page.waitForTimeout(250);
+}
 
-const points = await d.page.evaluate(() => window.__substrateWaterPoints?.(96, 3000) ?? []);
+const points = readiness?.waterPoints
+  ?? await d.page.evaluate(() => window.__substrateWaterPoints?.(96, 3000) ?? []);
 const fluidPoints = points.filter((point) => point.fluid)
   .sort((a, b) => (b.depthAboveSupportM ?? 0) - (a.depthAboveSupportM ?? 0));
 const wet = fluidPoints.find((point) => point.crossing === 'ford')
