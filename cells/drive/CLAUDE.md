@@ -5614,6 +5614,58 @@ the first assertion from being vacuous.
   profiler turned the needle into −1 and the assertion into a falsehood
   about ordering. The needle follows the wrapped call now.
 
+## The substrate's contact sampler was a linear scan, and it was on every URL
+
+The substrate migration (`SUBSTRATE-MIGRATION.md`, pulled from the branch on
+2026-09-10 and deployed the same hour) routes `surfaceAt`, `waterInfoAt`,
+`splashWet` and `tyreHeight` through `productionContactAt` on ORDINARY URLs —
+canonical contact is the default, `?substrate=legacy` the rollback,
+`?substrate=render` the guarded water renderer on top. The seat's first dump
+on it, under `render`: 14.6 fps, 59% of frames slow, the tick at 48.5 ms a
+frame — `stepWildlife` **14.5 ms every frame** (0.3 on the build before),
+`sim:suspension` 4.1 (0.1), `treeRefresh` 62 ms a call with `shrubs` at 31
+(12 and 4), `hydroBuild` 111 ms a build (5). The fixture A/B
+(`scratchpad/substrate-ab.mjs`: at-campsbay, chase, nodraw, 60 s a mode)
+put it on the DEFAULT path, not the flag: stepWildlife 0.8 → 4.9 ms a
+frame, sim:suspension 0.2 → 1.4, treeRefresh 12 → 40 with shrubs 3.6 → 30,
+and `render` the same plus a little.
+
+**The cause is two loops, not the design.** `tileAt` scanned every tile in
+the store for every query, and the sampler walked every drive segment of
+the tile for every query — validating each with an eight-element array
+allocated per segment per query — on a 2 km tile carrying thousands of
+them. The ground mesh beside it already had a cell index. Now each tile
+files its segments once, at its first sample, into 32 m cells by their
+reach (halfWidth + shoulder: the sampler keeps a segment only within that
+distance, and a box grown by it contains every such point), a query reads
+its own cell's list, validation happens at the filing, and `tileAt` keeps
+the last tile answered under the store revision it answered under — a
+wheel, an animal, a lattice point asks thousands of times inside one tile.
+The substrate's self-test is unchanged. Measured after, same A/B:
+default stepWildlife **4.9 → 0.6 ms a frame**, sim:suspension **1.4 →
+0.1**, treeRefresh **40 → 12 ms** with shrubs **30 → 2.4**; `render` the
+same (5.2 → 0.6, 1.4 → 0.1, 40 → 11.5) with its tick 11.0 → 3.8 ms a frame;
+every mode at 56 fps, indistinguishable from `legacy`, no page errors.
+
+**Two things to know from it:**
+
+- **A switch read round `qs` is on no list.** `?substrate=` was read with
+  `new URLSearchParams(location.search).get('substrate')`, so it was
+  declared nowhere, absent from SETTINGS and invisible to `switches.test`
+  — which is exactly what the typed reader was built to make impossible,
+  and it was walked round in one line. It is a `choice` switch now.
+- **A per-query cost is a device number.** The migration's own gates
+  ("frame time … within the existing production budgets") were green on a
+  harness build-budget run that measured the tile BUILD; nothing measured a
+  contact query, and a query that is cheap once is a frame when it is
+  called ten thousand times. The dump's phase rows are what caught it, on
+  the phone, in one paste; `stepWildlife` is the canary because it is the
+  caller with the most queries a frame. What is still unexplained: the
+  phone's `hydroBuild` at 111 ms a build under `render` (26 ms on the
+  fixture; the migration's 23.3 ms is a harness number too) and the terrain
+  worker at 334 ms a build (70 before) — both under the flag only, both
+  awaiting a device dump on the fixed build.
+
 ## Globe navigation: retain the place, not a disposable spin
 
 The seat reported that spinning the planet then zooming in returned to the
